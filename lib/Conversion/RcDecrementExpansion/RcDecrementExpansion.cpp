@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cassert>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/MapVector.h>
 #include <llvm/ADT/SmallVector.h>
@@ -14,6 +15,7 @@
 #include <mlir/IR/Block.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributes.h>
+#include <mlir/IR/SymbolTable.h>
 #include <mlir/IR/ValueRange.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
 #include <mlir/Pass/Pass.h>
@@ -38,22 +40,39 @@ namespace {
 
 class RcDecrementExpansionPattern
     : public mlir::OpRewritePattern<ReussirRcDecOp> {
+
+  bool inlineAll;
+
+  bool shouldInline(RcType type) const;
+
 public:
   RcDecrementExpansionPattern(mlir::MLIRContext *context, bool inlineAll)
       : mlir::OpRewritePattern<ReussirRcDecOp>(context), inlineAll(inlineAll) {}
 
-private:
-  bool inlineAll;
-
   mlir::LogicalResult
   matchAndRewrite(ReussirRcDecOp op,
                   mlir::PatternRewriter &rewriter) const override {
-    // TODO: Implement rc decrement expansion logic
-    // This is a placeholder implementation that uses inlineAll
-    (void)inlineAll; // Suppress unused variable warning
+    RcType type = op.getRcPtr().getType();
+    // No need to proceed if dec operation is applied to a rigid type.
+    if (type.getCapability() == Capability::rigid)
+      return mlir::success();
+    mlir::SymbolTable symTable(op->getParentOfType<mlir::ModuleOp>());
     return mlir::failure();
   }
 };
+
+bool RcDecrementExpansionPattern::shouldInline(RcType type) const {
+  if (inlineAll)
+    return true;
+
+  if (isTriviallyCopyable(type))
+    return true;
+
+  if (RecordType recType = llvm::dyn_cast<RecordType>(type.getElementType()))
+    return !recType.getName();
+
+  return false;
+}
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -81,6 +100,10 @@ struct RcDecrementExpansionPass
 void populateRcDecrementExpansionConversionPatterns(
     mlir::RewritePatternSet &patterns, bool inlineAll) {
   patterns.add<RcDecrementExpansionPattern>(patterns.getContext(), inlineAll);
+}
+
+mlir::FlatSymbolRefAttr getNameForRcDtor(RecordType type, bool isRigid) {
+  assert(type.getName() && "only named record types have destructors");
 }
 
 } // namespace reussir

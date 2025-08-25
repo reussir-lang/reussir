@@ -13,8 +13,11 @@
 #ifndef REUSSIR_CONVERSION_RCDECREMENTEXPANSION_H
 #define REUSSIR_CONVERSION_RCDECREMENTEXPANSION_H
 
+#include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/DialectConversion.h>
+
+#include "Reussir/IR/ReussirTypes.h"
 
 namespace reussir {
 
@@ -23,6 +26,8 @@ namespace reussir {
 
 void populateRcDecrementExpansionConversionPatterns(
     mlir::RewritePatternSet &patterns, bool inlineAll);
+
+mlir::FlatSymbolRefAttr getNameForRcDtor(RecordType type, bool isRigid);
 
 } // namespace reussir
 

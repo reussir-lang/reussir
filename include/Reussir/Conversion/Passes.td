@@ -94,7 +94,10 @@ def ReussirRcDecrementExpansionPass
     Option<"inlineAll", "inline-all", "bool", /*default=*/"false",
         "whether to inline all decrement operations">,
   ];
-  let dependentDialects = ["::reussir::ReussirDialect"];
+  let dependentDialects = ["::reussir::ReussirDialect", 
+                           "::mlir::func::FuncDialect", 
+                           "::mlir::arith::ArithDialect", 
+                           "::mlir::scf::SCFDialect"];
 }
 
 #endif // REUSSIR_CONVERSION_PASSES_TD
