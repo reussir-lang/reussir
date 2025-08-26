@@ -40,20 +40,9 @@ namespace reussir {
 
 namespace {
 
-class RcDecrementExpansionPattern
+struct RcDecrementExpansionPattern
     : public mlir::OpRewritePattern<ReussirRcDecOp> {
-
-  bool inlineAll;
-
-  bool shouldInline(RecordType type) const;
-
-  mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
-                                           RecordType type,
-                                           mlir::OpBuilder &builder) const;
-
-public:
-  RcDecrementExpansionPattern(mlir::MLIRContext *context, bool inlineAll)
-      : mlir::OpRewritePattern<ReussirRcDecOp>(context), inlineAll(inlineAll) {}
+  using mlir::OpRewritePattern<ReussirRcDecOp>::OpRewritePattern;
 
   mlir::LogicalResult
   matchAndRewrite(ReussirRcDecOp op,
@@ -79,14 +68,7 @@ public:
       rewriter.setInsertionPointToStart(ifOp.thenBlock());
       mlir::Value ref = rewriter.create<ReussirRcBorrowOp>(
           op.getLoc(), borrowedRefType, op.getRcPtr());
-      if (recType && !shouldInline(recType)) {
-        auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
-        auto dtor = createDtorIfNotExists(moduleOp, recType, rewriter);
-        rewriter.create<mlir::func::CallOp>(op.getLoc(), dtor, ref);
-      } else {
-        // insert drop inline
-        rewriter.create<ReussirRefDropOp>(op.getLoc(), ref);
-      }
+      rewriter.create<ReussirRefDropOp>(op.getLoc(), ref);
       mlir::Value token = rewriter.create<ReussirRcReinterpretOp>(
           op.getLoc(), tokenType, op.getRcPtr());
       mlir::Value nonnull = rewriter.create<ReussirNullableCreateOp>(
@@ -103,41 +85,6 @@ public:
     return mlir::success();
   }
 };
-
-bool RcDecrementExpansionPattern::shouldInline(RecordType type) const {
-  if (inlineAll)
-    return true;
-
-  if (isTriviallyCopyable(type))
-    return true;
-
-  return !type.getName();
-}
-
-mlir::func::FuncOp RcDecrementExpansionPattern::createDtorIfNotExists(
-    mlir::ModuleOp moduleOp, RecordType type, mlir::OpBuilder &builder) const {
-  mlir::SymbolTable symTable(moduleOp);
-  auto dtorName = type.getDtorName();
-  if (!dtorName)
-    llvm::report_fatal_error("only named record types have destructors");
-  if (auto funcOp = symTable.lookup<mlir::func::FuncOp>(dtorName.getValue()))
-    return funcOp;
-  mlir::OpBuilder::InsertionGuard guard(builder);
-  builder.setInsertionPointToStart(moduleOp.getBody());
-  RefType refType = builder.getType<RefType>(type);
-  auto dtor = builder.create<mlir::func::FuncOp>(
-      builder.getUnknownLoc(), dtorName.getValue(),
-      builder.getFunctionType({refType}, {}));
-  dtor.setPrivate();
-  dtor->setAttr("llvm.linkage", builder.getAttr<mlir::LLVM::LinkageAttr>(
-                                    mlir::LLVM::linkage::Linkage::LinkonceODR));
-  mlir::Block *entryBlock = dtor.addEntryBlock();
-  builder.setInsertionPointToStart(entryBlock);
-  auto ref = entryBlock->getArgument(0);
-  builder.create<ReussirRefDropOp>(builder.getUnknownLoc(), ref);
-  builder.create<mlir::func::ReturnOp>(builder.getUnknownLoc());
-  return dtor;
-}
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -152,10 +99,7 @@ struct RcDecrementExpansionPass
   void runOnOperation() override {
     mlir::ConversionTarget target(getContext());
     mlir::RewritePatternSet patterns(&getContext());
-
-    populateRcDecrementExpansionConversionPatterns(patterns, inlineAll);
-    populateDropExpansionConversionPatterns(patterns);
-
+    populateRcDecrementExpansionConversionPatterns(patterns);
     if (failed(
             mlir::applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
@@ -164,8 +108,8 @@ struct RcDecrementExpansionPass
 } // namespace
 
 void populateRcDecrementExpansionConversionPatterns(
-    mlir::RewritePatternSet &patterns, bool inlineAll) {
-  patterns.add<RcDecrementExpansionPattern>(patterns.getContext(), inlineAll);
+    mlir::RewritePatternSet &patterns) {
+  patterns.add<RcDecrementExpansionPattern>(patterns.getContext());
 }
 
 } // namespace reussir

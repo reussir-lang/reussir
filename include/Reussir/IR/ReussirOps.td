@@ -279,12 +279,16 @@ def ReussirRcDecOp : ReussirRcOp<"dec", []> {
     __reussir_release_rigid_object. There is no token shall be returned.
   }];
 
-  let arguments = (ins Arg<ReussirRcType, "Reference to decrement">:$rcPtr);
+  let arguments = (
+    ins Arg<ReussirRcType, "Reference to decrement">:$rcPtr
+  );
   let results =
       (outs Res<Optional<ReussirNullableTokenType>, "Nullable token">:$nullableToken);
 
   let assemblyFormat = [{
-    `(` $rcPtr `:` qualified(type($rcPtr)) `)` (`:` type($nullableToken)^)? attr-dict
+    `(` $rcPtr `:` qualified(type($rcPtr)) `)` 
+    (`:` type($nullableToken)^)? 
+    attr-dict
   }];
 
   let hasVerifier = 1;
@@ -626,15 +630,33 @@ def ReussirRefDropOp : ReussirReferenceOp<"drop", []> {
 
     If the reference if of flex capability, the drop operation will skip the destruction
     of elements with field capability.
+
+    When variant is specified, the inner element must be a variant record type and
+    the index must be inbound.
   }];
   let arguments = (
-    ins Arg<ReussirRefType, "reference to drop">:$ref
+    ins Arg<ReussirRefType, "reference to drop">:$ref,
+    UnitAttr:$inlined,
+    OptionalAttr<IndexAttr>:$variant 
   );
 
   let assemblyFormat = [{
     `(` $ref `:` qualified(type($ref)) `)` 
+    oilist (
+      `inlined` $inlined  | 
+      `variant` `[` $variant `]`
+    )
     attr-dict
   }];
+
+  let builders = [
+    OpBuilder<(ins "mlir::Value":$ref),
+    [{
+      return build($_builder, $_state, ref, false, nullptr);
+    }]>
+  ];
+
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//

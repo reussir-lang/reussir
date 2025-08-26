@@ -25,7 +25,7 @@ namespace reussir {
 #include "Reussir/Conversion/Passes.h.inc"
 
 void populateRcDecrementExpansionConversionPatterns(
-    mlir::RewritePatternSet &patterns, bool inlineAll);
+    mlir::RewritePatternSet &patterns);
 
 } // namespace reussir
 

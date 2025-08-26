@@ -1305,6 +1305,45 @@ mlir::LogicalResult ReussirClosureEvalOp::verify() {
   return mlir::success();
 }
 
+//===----------------------------------------------------------------------===//
+// Reussir Reference Drop Op
+//===----------------------------------------------------------------------===//
+// RefDropOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRefDropOp::verify() {
+  RefType refType = getRef().getType();
+  mlir::Type elementType = refType.getElementType();
+
+  // Check if variant attribute is specified
+  if (auto variantAttr = getVariant()) {
+    // When variant is specified, the inner element must be a variant record
+    // type
+    RecordType recordType = llvm::dyn_cast<RecordType>(elementType);
+    if (!recordType)
+      return emitOpError("when variant is specified, reference element type "
+                         "must be a record type, got: ")
+             << elementType;
+
+    // Check that the record is a variant record
+    if (!recordType.isVariant())
+      return emitOpError("when variant is specified, reference element type "
+                         "must be a variant record type");
+
+    // Check that the record is complete
+    if (!recordType.getComplete())
+      return emitOpError("cannot drop incomplete variant record");
+
+    // Check that the index is inbound
+    size_t variantIndex = variantAttr->getZExtValue();
+    size_t numVariants = recordType.getMembers().size();
+    if (variantIndex >= numVariants)
+      return emitOpError("variant index out of bounds: ")
+             << variantIndex << " >= " << numVariants;
+  }
+
+  return mlir::success();
+}
+
 //===-----------------------------------------------------------------------===//
 // Reussir Dialect Operations Registration
 //===-----------------------------------------------------------------------===//

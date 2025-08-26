@@ -1,3 +1,16 @@
+// RUN: %reussir-opt %s --reussir-rc-decrement-expansion --reussir-drop-expansion --reussir-drop-expansion='expand-decrement=1 outline-record=1' | %FileCheck %s
+
+// CHECK-DAG: func.func private @"core::intrinsic::drop_in_place<List>"
+// CHECK-DAG-SAME: attributes {llvm.linkage = #llvm.linkage<linkonce_odr>}
+
+// CHECK-DAG: scf.if
+
+// CHECK-DAG: reussir.record.dispatch
+
+// CHECK-DAG: func.call @"core::intrinsic::drop_in_place<List>"
+
+// CHECK-DAG: func.func @test_rc_dec_expansion
+
 !list_ = !reussir.record<variant "List" incomplete>
 !list_nil = !reussir.record<compound "List::Nil" { }>
 !list_cons = !reussir.record<compound "List::Cons" { i64, [shared] !list_ }>

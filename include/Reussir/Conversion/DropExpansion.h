@@ -20,7 +20,8 @@ namespace reussir {
 #define GEN_PASS_DECL_REUSSIRDROPEXPANSIONPASS
 #include "Reussir/Conversion/Passes.h.inc"
 
-void populateDropExpansionConversionPatterns(mlir::RewritePatternSet &patterns);
+void populateDropExpansionConversionPatterns(mlir::RewritePatternSet &patterns,
+                                             bool outlineRecord);
 
 } // namespace reussir
 
