@@ -142,6 +142,7 @@ def ReussirRecordType
         mlir::Type memberWithLargestAlignment;
       };
       LayoutInfo getElementRegionLayoutInfo(const mlir::DataLayout &dataLayout) const;
+      ::mlir::FlatSymbolRefAttr getDtorName() const;
     }];
 }
 

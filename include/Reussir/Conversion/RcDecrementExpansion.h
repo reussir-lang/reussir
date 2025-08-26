@@ -27,8 +27,6 @@ namespace reussir {
 void populateRcDecrementExpansionConversionPatterns(
     mlir::RewritePatternSet &patterns, bool inlineAll);
 
-mlir::FlatSymbolRefAttr getNameForRcDtor(RecordType type, bool isRigid);
-
 } // namespace reussir
 
 #endif // REUSSIR_CONVERSION_RCDECREMENTEXPANSION_H

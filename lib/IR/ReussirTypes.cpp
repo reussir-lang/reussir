@@ -16,6 +16,7 @@
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/StringSwitch.h>
+#include <llvm/ADT/Twine.h>
 #include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/Alignment.h>
 #include <llvm/Support/ErrorHandling.h>
@@ -477,6 +478,17 @@ bool RecordType::getComplete() const { return getImpl()->complete; }
 reussir::RecordKind RecordType::getKind() const { return getImpl()->kind; }
 reussir::Capability RecordType::getDefaultCapability() const {
   return getImpl()->defaultCapability;
+}
+
+::mlir::FlatSymbolRefAttr RecordType::getDtorName() const {
+  auto name = getName();
+  if (!name)
+    return nullptr;
+  auto prefix = llvm::Twine("core::intrinsic::drop_in_place<");
+  auto suffix = llvm::Twine(">");
+  auto recordName = name.getValue();
+  auto dtorName = (prefix + recordName + suffix).str();
+  return ::mlir::FlatSymbolRefAttr::get(getContext(), dtorName);
 }
 //===----------------------------------------------------------------------===//
 // RecordType Mutations

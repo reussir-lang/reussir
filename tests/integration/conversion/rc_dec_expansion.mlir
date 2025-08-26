@@ -1,0 +1,12 @@
+!list_ = !reussir.record<variant "List" incomplete>
+!list_nil = !reussir.record<compound "List::Nil" { }>
+!list_cons = !reussir.record<compound "List::Cons" { i64, [shared] !list_ }>
+!list = !reussir.record<variant "List" { !list_nil, !list_cons }>
+
+module attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i8, dense<8> : vector<2xi64>>> }  {
+  func.func @test_rc_dec_expansion(%arg0: !reussir.rc<!list>) {
+    %token = reussir.rc.dec (%arg0 : !reussir.rc<!list>) : !reussir.nullable<!reussir.token<align: 8, size: 32>>
+    reussir.token.free (%token :  !reussir.nullable<!reussir.token<align: 8, size: 32>>)
+    return
+  }
+}

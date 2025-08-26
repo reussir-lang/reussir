@@ -71,6 +71,39 @@ mlir::LogicalResult ReussirRcIncOp::verify() {
 
   return mlir::success();
 }
+
+//===----------------------------------------------------------------------===//
+// RcReinterpretOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRcReinterpretOp::verify() {
+  RcType rcType = getRcPtr().getType();
+  TokenType tokenType = getReinterpreted().getType();
+
+  // Get the RC box type for the RC pointer
+  RcBoxType rcBoxType = rcType.getInnerBoxType();
+
+  // Get the data layout to compute alignment and size
+  auto dataLayout = mlir::DataLayout::closest(getOperation());
+  auto alignment = dataLayout.getTypeABIAlignment(rcBoxType);
+  auto size = dataLayout.getTypeSize(rcBoxType);
+
+  if (!size.isFixed())
+    return emitOpError("RC box type must have a fixed size");
+
+  // Check that token alignment matches RC box alignment
+  if (tokenType.getAlign() != alignment)
+    return emitOpError("token alignment must match RC box alignment, ")
+           << "token alignment: " << tokenType.getAlign()
+           << ", RC box alignment: " << alignment;
+
+  // Check that token size matches RC box size
+  if (tokenType.getSize() != size)
+    return emitOpError("token size must match RC box size, ")
+           << "token size: " << tokenType.getSize()
+           << ", RC box size: " << size.getFixedValue();
+
+  return mlir::success();
+}
 //===----------------------------------------------------------------------===//
 // RcDecOp verification
 //===----------------------------------------------------------------------===//
@@ -150,9 +183,12 @@ mlir::LogicalResult ReussirRcCreateOp::verify() {
 mlir::LogicalResult ReussirRcBorrowOp::verify() {
   RcType rcType = getRcPtr().getType();
   RefType refType = getBorrowed().getType();
-  if (refType.getCapability() != rcType.getCapability())
-    return emitOpError(
-               "borrowed type capability must match RC type capability, ")
+
+  // Allow unspecified capability or matching capability
+  if (refType.getCapability() != reussir::Capability::unspecified &&
+      refType.getCapability() != rcType.getCapability())
+    return emitOpError("borrowed type capability must be unspecified or match "
+                       "RC type capability, ")
            << "borrowed type capability: "
            << stringifyCapability(refType.getCapability())
            << ", RC type capability: "

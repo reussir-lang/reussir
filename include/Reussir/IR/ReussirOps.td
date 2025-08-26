@@ -290,6 +290,23 @@ def ReussirRcDecOp : ReussirRcOp<"dec", []> {
   let hasVerifier = 1;
 }
 
+def ReussirRcFetchDecOp : ReussirRcOp<"fetch_dec", []> {
+  let summary = "Fetch and decrement a RC pointer";
+  let description = [{
+    `reussir.rc.fetch_dec` fetches a decrement operation from a RC pointer.
+
+    This serves as a low-level operation to implement the `reussir.rc.dec` operation.
+    It is not recommended to use this operation directly.
+  }];
+
+  let arguments = (ins Arg<ReussirRcType, "Reference to fetch and decrement">:$rcPtr);
+  let results = (outs Res<Index, "Reference count">:$refCount);
+
+  let assemblyFormat = [{
+    `(` $rcPtr `:` qualified(type($rcPtr)) `)` `:` type($refCount) attr-dict
+  }];
+}
+
 def ReussirRcCreateOp : ReussirRcOp<"create", []> {
   let summary = "Create a RC pointer";
   let description = [{
@@ -342,6 +359,23 @@ def ReussirRcCreateOp : ReussirRcOp<"create", []> {
   let hasVerifier = 1;
 }
 
+def ReussirRcReinterpretOp : ReussirRcOp<"reinterpret", []> {
+  let summary = "Reinterpret a Rc pointer into a token";
+  let description = [{
+    `reussir.rc.reinterpret` reinterprets a Rc pointer into a token.
+
+    The token layout must meet the underlying Rc box layout.
+  }];
+
+  let results =
+      (outs Res<ReussirTokenType, "reinterpreted token">:$reinterpreted);
+  let arguments = (ins Arg<ReussirRcType, "Rc pointer to reinterpret">:$rcPtr);
+  let assemblyFormat = [{
+    `(` $rcPtr `:` qualified(type($rcPtr)) `)` `:` qualified(type($reinterpreted)) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // Reussir RC Borrow Operation
 //===----------------------------------------------------------------------===//
@@ -350,8 +384,8 @@ def ReussirRcBorrowOp : ReussirRcOp<"borrow", []> {
   let description = [{
     `reussir.rc.borrow` borrows a RC pointer, which gives you an access reference 
     to the underlying value. The shared/flex/rigid capability from Rc will be inherited
-    by the borrowed reference. The borrow will not change the reference count of 
-    the RC pointer.
+    by the borrowed reference. Additionally, the result reference can be of unspecified
+    capability. The borrow will not change the reference count of the RC pointer.
     ```mlir
     %token = reussir.token.alloc : !reussir.token<align: 8, size: 8>
     %rc_ptr = reussir.rc.create 
