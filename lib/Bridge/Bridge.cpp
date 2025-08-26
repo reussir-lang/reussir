@@ -194,7 +194,7 @@ void compileForNativeMachine(std::string_view mlirTextureModule,
 // 2) Parse the incoming MLIR module from string.
 #if LLVM_VERSION_MAJOR >= 21
   // Since LLVM 21.1.0, the MLIR parser does not depend on null terminator.
-  OwningOpRef<ModuleOp> module = parseSourceString(mlirTextureModule, context);
+  OwningOpRef<ModuleOp> module = parseSourceString(mlirTextureModule, &context);
 #else
   llvm::SourceMgr sourceMgr;
   auto buffer =
