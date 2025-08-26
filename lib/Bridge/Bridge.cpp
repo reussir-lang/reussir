@@ -191,12 +191,17 @@ void compileForNativeMachine(std::string_view mlirTextureModule,
   context.loadAllAvailableDialects();
   logIfNeeded(options, LogLevel::Info, "Loaded all available dialects.");
 
-  // 2) Parse the incoming MLIR module from string.
+// 2) Parse the incoming MLIR module from string.
+#if LLVM_VERSION_MAJOR >= 21
+  // Since LLVM 21.1.0, the MLIR parser does not depend on null terminator.
+  OwningOpRef<ModuleOp> module = parseSourceString(mlirTextureModule, context);
+#else
   llvm::SourceMgr sourceMgr;
   auto buffer =
       llvm::MemoryBuffer::getMemBufferCopy(mlirTextureModule, sourceName);
   sourceMgr.AddNewSourceBuffer(std::move(buffer), llvm::SMLoc());
   OwningOpRef<ModuleOp> module = parseSourceFile<ModuleOp>(sourceMgr, &context);
+#endif
 
   if (!module) {
     logIfNeeded(options, LogLevel::Error,
