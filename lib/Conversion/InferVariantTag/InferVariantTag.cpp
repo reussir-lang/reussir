@@ -1,32 +1,16 @@
-#include <algorithm>
-#include <cassert>
-#include <llvm/ADT/ArrayRef.h>
-#include <llvm/ADT/MapVector.h>
-#include <llvm/ADT/SmallVector.h>
-#include <llvm/ADT/Twine.h>
-#include <llvm/ADT/TypeSwitch.h>
-#include <llvm/ADT/iterator_range.h>
-#include <llvm/Support/Casting.h>
-#include <llvm/Support/Debug.h>
-#include <llvm/Support/ErrorHandling.h>
-#include <llvm/Support/LogicalResult.h>
-#include <mlir/Dialect/Func/IR/FuncOps.h>
-#include <mlir/Dialect/LLVMIR/LLVMAttrs.h>
-#include <mlir/IR/Attributes.h>
-#include <mlir/IR/Block.h>
-#include <mlir/IR/Builders.h>
-#include <mlir/IR/BuiltinAttributes.h>
-#include <mlir/IR/SymbolTable.h>
-#include <mlir/IR/ValueRange.h>
-#include <mlir/Interfaces/DataLayoutInterfaces.h>
-#include <mlir/Pass/Pass.h>
-#include <mlir/Transforms/GreedyPatternRewriteDriver.h>
-
 #include "Reussir/Conversion/InferVariantTag.h"
+#include "Reussir/Analysis/AliasAnalysis.h"
 #include "Reussir/IR/ReussirDialect.h"
-#include "Reussir/IR/ReussirEnumAttrs.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
+
+#include <llvm/Support/Casting.h>
+#include <mlir/Analysis/AliasAnalysis.h>
+#include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/IR/BuiltinAttributes.h>
+#include <mlir/IR/Dominance.h>
+#include <mlir/IR/Value.h>
+#include <mlir/Pass/Pass.h>
 
 namespace reussir {
 
@@ -34,51 +18,69 @@ namespace reussir {
 #include "Reussir/Conversion/Passes.h.inc"
 
 //===----------------------------------------------------------------------===//
-// Conversion patterns
-//===----------------------------------------------------------------------===//
-
-namespace {
-
-// Placeholder pattern for variant tag inference
-// TODO: Implement actual variant tag inference logic
-struct InferVariantTagPattern
-    : public mlir::OpRewritePattern<ReussirRefDropOp> {
-  using mlir::OpRewritePattern<ReussirRefDropOp>::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(ReussirRefDropOp op,
-                  mlir::PatternRewriter &rewriter) const override {
-    // TODO: Implement variant tag inference logic
-    // This is a placeholder implementation that does nothing for now
-    return mlir::success();
-  }
-};
-
-} // namespace
-
-//===----------------------------------------------------------------------===//
 // InferVariantTagPass
 //===----------------------------------------------------------------------===//
 
 namespace {
 struct InferVariantTagPass
-    : public impl::ReussirInferVariantTagPassBase<
-          InferVariantTagPass> {
+    : public impl::ReussirInferVariantTagPassBase<InferVariantTagPass> {
   using Base::Base;
-  void runOnOperation() override {
-    mlir::ConversionTarget target(getContext());
-    mlir::RewritePatternSet patterns(&getContext());
-    populateInferVariantTagConversionPatterns(patterns);
-    if (failed(
-            mlir::applyPatternsGreedily(getOperation(), std::move(patterns))))
-      signalPassFailure();
-  }
+  void runOnOperation() override { runTagInference(getOperation()); }
 };
 } // namespace
 
-void populateInferVariantTagConversionPatterns(
-    mlir::RewritePatternSet &patterns) {
-  patterns.add<InferVariantTagPattern>(patterns.getContext());
+void runTagInference(mlir::func::FuncOp func) {
+  // Initialize analyses
+  mlir::AliasAnalysis aliasAnalysis(func);
+  mlir::DominanceInfo dominanceInfo(func);
+  registerAliasAnalysisImplementations(aliasAnalysis);
+
+  // Collect all coercion operations in the function
+  llvm::SmallVector<ReussirRecordCoerceOp> coercionOps;
+  func.walk([&](ReussirRecordCoerceOp op) { coercionOps.push_back(op); });
+
+  // Process each block
+  for (mlir::Block &block : func.getBody()) {
+    if (block.empty())
+      continue;
+
+    // Find coercion operations that dominate this block
+    llvm::DenseMap<mlir::TypedValue<RefType>, int64_t> referenceTags;
+
+    for (ReussirRecordCoerceOp coercionOp : coercionOps)
+      if (dominanceInfo.dominates(coercionOp.getOperation(),
+                                  &block.getOperations().front()))
+        referenceTags[coercionOp.getVariant()] =
+            coercionOp.getTag().getZExtValue();
+
+    mlir::Region *region = block.getParent();
+    while (region && region->getParentOp() != func) {
+      ReussirRecordDispatchOp dispatchOp =
+          llvm::dyn_cast<ReussirRecordDispatchOp>(region->getParentOp());
+      if (dispatchOp) {
+        size_t regionIdx = region->getRegionNumber();
+        mlir::DenseI64ArrayAttr regionTags =
+            llvm::cast<mlir::DenseI64ArrayAttr>(
+                dispatchOp.getTagSets()[regionIdx]);
+        if (regionTags.size() == 1)
+          referenceTags[dispatchOp.getVariant()] = regionTags[0];
+      }
+      region = region->getParentRegion();
+    }
+
+    for (mlir::Operation &op : block) {
+      if (auto dropOp = llvm::dyn_cast<ReussirRefDropOp>(&op)) {
+        mlir::TypedValue<RefType> refToDrop = dropOp.getRef();
+        for (const auto &[ref, tag] : referenceTags)
+          if (aliasAnalysis.alias(refToDrop, ref) ==
+              mlir::AliasResult::MustAlias) {
+            dropOp.setVariantAttr(mlir::IntegerAttr::get(
+                mlir::IndexType::get(dropOp.getContext()), tag));
+            break;
+          }
+      }
+    }
+  }
 }
 
 } // namespace reussir

@@ -113,7 +113,7 @@ def ReussirRcDecrementExpansionPass
 // InferVariantTag
 //===----------------------------------------------------------------------===//
 def ReussirInferVariantTagPass
-    : Pass<"reussir-infer-variant-tag"> {
+    : Pass<"reussir-infer-variant-tag", "::mlir::func::FuncOp"> {
   let summary = "infer variant tags for drop operations";
   let description = [{
     `reussir-infer-variant-tag` infers variant tags for drop operations.
