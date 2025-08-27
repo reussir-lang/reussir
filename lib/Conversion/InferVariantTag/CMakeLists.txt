@@ -3,6 +3,7 @@ add_mlir_conversion_library(MLIRReussirInferVariantTag
 
   DEPENDS
   MLIRReussirConversionPassIncGen
+  MLIRReussirAliasAnalysis
 
   LINK_COMPONENTS
   Core
@@ -11,4 +12,5 @@ add_mlir_conversion_library(MLIRReussirInferVariantTag
   MLIRReussir
   MLIRFuncDialect
   MLIRTransforms
+  MLIRReussirAliasAnalysis
 )

@@ -40,20 +40,20 @@ void runTagInference(mlir::func::FuncOp func) {
   func.walk([&](ReussirRecordCoerceOp op) { coercionOps.push_back(op); });
 
   // Process each block
-  for (mlir::Block &block : func.getBody()) {
-    if (block.empty())
-      continue;
+  func.walk([&](mlir::Block *block) {
+    if (block->empty())
+      return;
 
     // Find coercion operations that dominate this block
     llvm::DenseMap<mlir::TypedValue<RefType>, int64_t> referenceTags;
 
     for (ReussirRecordCoerceOp coercionOp : coercionOps)
       if (dominanceInfo.dominates(coercionOp.getOperation(),
-                                  &block.getOperations().front()))
+                                  &block->getOperations().front()))
         referenceTags[coercionOp.getVariant()] =
             coercionOp.getTag().getZExtValue();
 
-    mlir::Region *region = block.getParent();
+    mlir::Region *region = block->getParent();
     while (region && region->getParentOp() != func) {
       ReussirRecordDispatchOp dispatchOp =
           llvm::dyn_cast<ReussirRecordDispatchOp>(region->getParentOp());
@@ -68,7 +68,7 @@ void runTagInference(mlir::func::FuncOp func) {
       region = region->getParentRegion();
     }
 
-    for (mlir::Operation &op : block) {
+    for (mlir::Operation &op : *block) {
       if (auto dropOp = llvm::dyn_cast<ReussirRefDropOp>(&op)) {
         mlir::TypedValue<RefType> refToDrop = dropOp.getRef();
         for (const auto &[ref, tag] : referenceTags)
@@ -80,7 +80,7 @@ void runTagInference(mlir::func::FuncOp func) {
           }
       }
     }
-  }
+  });
 }
 
 } // namespace reussir

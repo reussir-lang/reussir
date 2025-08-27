@@ -116,6 +116,9 @@ mlir::LogicalResult ReussirRcDecOp::verify() {
       return emitOpError("rigid RC decrement cannot return a token");
     return mlir::success();
   }
+  if (getNullableToken() == nullptr)
+    return emitOpError("nullable token must be provided for non-rigid RC "
+                       "decrement");
   NullableType nullableType = getNullableToken().getType();
   TokenType tokenType = llvm::dyn_cast<TokenType>(nullableType.getPtrTy());
   RcBoxType rcBoxType = RcType.getInnerBoxType();
