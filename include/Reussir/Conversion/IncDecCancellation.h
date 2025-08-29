@@ -1,4 +1,4 @@
-//===-- IncDecCancelation.h - Reussir inc/dec cancellation -*- c++ -*-===//
+//===-- IncDecCancellation.h - Reussir inc/dec cancellation -*- c++ -*-===//
 //
 // Part of the Reussir project, dual licensed under the Apache License v2.0 or
 // the MIT License.
@@ -10,8 +10,8 @@
 // decrement operations in Reussir.
 //
 //===----------------------------------------------------------------------===//
-#ifndef REUSSIR_CONVERSION_INCDECCANCELATION_H
-#define REUSSIR_CONVERSION_INCDECCANCELATION_H
+#ifndef REUSSIR_CONVERSION_INCDECCANCELLATION_H
+#define REUSSIR_CONVERSION_INCDECCANCELLATION_H
 
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/Pass/Pass.h>
@@ -21,11 +21,11 @@
 
 namespace reussir {
 
-#define GEN_PASS_DECL_REUSSIRINCDECCANCELATIONPASS
+#define GEN_PASS_DECL_REUSSIRINCDECCANCELLATIONPASS
 #include "Reussir/Conversion/Passes.h.inc"
 
-void runIncDecCancelation(mlir::ModuleOp module);
+void runIncDecCancellation(mlir::ModuleOp module);
 
 } // namespace reussir
 
-#endif // REUSSIR_CONVERSION_INCDECCANCELATION_H
+#endif // REUSSIR_CONVERSION_INCDECCANCELLATION_H

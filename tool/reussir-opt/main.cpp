@@ -30,7 +30,7 @@ int main(int argc, char **argv) {
     return reussir::createReussirInferVariantTagPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return reussir::createReussirIncDecCancelationPass();
+    return reussir::createReussirIncDecCancellationPass();
   });
   return failed(mlir::MlirOptMain(
       argc, argv, "Reussir analysis and optimization driver\n", registry));

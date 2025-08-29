@@ -123,9 +123,9 @@ def ReussirInferVariantTagPass
 }
 
 //===----------------------------------------------------------------------===//
-// IncDecCancelation
+// IncDecCancellation
 //===----------------------------------------------------------------------===//
-def ReussirIncDecCancelationPass
+def ReussirIncDecCancellationPass
     : Pass<"reussir-inc-dec-cancellation", "::mlir::ModuleOp"> {
   let summary = "cancel out adjacent increment and decrement operations";
   let description = [{

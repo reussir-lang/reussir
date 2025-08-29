@@ -1,26 +1,26 @@
-#include "Reussir/Conversion/IncDecCancelation.h"
+#include "Reussir/Conversion/IncDecCancellation.h"
 #include "Reussir/IR/ReussirDialect.h"
 
 #include <mlir/Pass/Pass.h>
 
 namespace reussir {
 
-#define GEN_PASS_DEF_REUSSIRINCDECCANCELATIONPASS
+#define GEN_PASS_DEF_REUSSIRINCDECCANCELLATIONPASS
 #include "Reussir/Conversion/Passes.h.inc"
 
 //===----------------------------------------------------------------------===//
-// IncDecCancelationPass
+// IncDecCancellationPass
 //===----------------------------------------------------------------------===//
 
 namespace {
-struct IncDecCancelationPass
-    : public impl::ReussirIncDecCancelationPassBase<IncDecCancelationPass> {
+struct IncDecCancellationPass
+    : public impl::ReussirIncDecCancellationPassBase<IncDecCancellationPass> {
   using Base::Base;
-  void runOnOperation() override { runIncDecCancelation(getOperation()); }
+  void runOnOperation() override { runIncDecCancellation(getOperation()); }
 };
 } // namespace
 
-void runIncDecCancelation(mlir::ModuleOp module) {
+void runIncDecCancellation(mlir::ModuleOp module) {
   // TODO: Implement inc/dec cancellation logic
 }
 

@@ -1,5 +1,5 @@
-add_mlir_conversion_library(MLIRReussirIncDecCancelation
-  IncDecCancelation.cpp
+add_mlir_conversion_library(MLIRReussirIncDecCancellation
+  IncDecCancellation.cpp
 
   DEPENDS
   MLIRReussirConversionPassIncGen
