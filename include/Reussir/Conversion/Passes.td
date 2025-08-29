@@ -122,4 +122,17 @@ def ReussirInferVariantTagPass
   let dependentDialects = ["::reussir::ReussirDialect"];
 }
 
+//===----------------------------------------------------------------------===//
+// IncDecCancelation
+//===----------------------------------------------------------------------===//
+def ReussirIncDecCancelationPass
+    : Pass<"reussir-inc-dec-cancelation", "::mlir::ModuleOp"> {
+  let summary = "cancel out adjacent increment and decrement operations";
+  let description = [{
+    `reussir-inc-dec-cancelation` cancels out adjacent increment and decrement
+    operations.
+  }];
+
+  let dependentDialects = ["::reussir::ReussirDialect"];
+}
 #endif // REUSSIR_CONVERSION_PASSES_TD

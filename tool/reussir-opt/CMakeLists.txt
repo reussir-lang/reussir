@@ -11,6 +11,8 @@ add_mlir_tool(reussir-opt
     MLIRReussirSCFOpsLowering
     MLIRReussirDropExpansion
     MLIRReussirRcDecrementExpansion
+    MLIRReussirInferVariantTag
+    MLIRReussirIncDecCancelation
     ${dialect_libs}
     ${conversion_libs}
     ${extension_libs}
@@ -23,6 +25,8 @@ target_link_libraries(reussir-opt
     MLIRReussirSCFOpsLowering
     MLIRReussirDropExpansion
     MLIRReussirRcDecrementExpansion
+    MLIRReussirInferVariantTag
+    MLIRReussirIncDecCancelation
     ${dialect_libs} 
     ${conversion_libs} 
     ${extension_libs} 
