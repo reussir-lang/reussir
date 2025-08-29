@@ -8,45 +8,47 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        llvm-version: [20, 21]
-        
+        llvm-version: [20, 21, 22]
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+
+    runs-on: ${{ matrix.os }}
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Setup Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v1
-      with:
-        toolchain: nightly
-        profile: minimal
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly
+          profile: minimal
 
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake ninja-build wget
-        sudo pip install lit --break-system-packages
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build wget
+          sudo pip install lit --break-system-packages
 
-    - name: Install LLVM ${{ matrix.llvm-version }}
-      run: |
-        wget https://apt.llvm.org/llvm.sh
-        chmod +x llvm.sh
-        sudo ./llvm.sh ${{ matrix.llvm-version }} all
-        sudo apt-get install -y \
-          libmlir-${{ matrix.llvm-version }}-dev \
-          mlir-${{ matrix.llvm-version }}-tools \
-          llvm-${{ matrix.llvm-version }}-dev \
-          llvm-${{ matrix.llvm-version }}-tools
+      - name: Install LLVM ${{ matrix.llvm-version }}
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh ${{ matrix.llvm-version }} all
+          sudo apt-get install -y \
+            libmlir-${{ matrix.llvm-version }}-dev \
+            mlir-${{ matrix.llvm-version }}-tools \
+            llvm-${{ matrix.llvm-version }}-dev \
+            llvm-${{ matrix.llvm-version }}-tools
 
-    - name: ccache
-      uses: hendrikmuhs/ccache-action@v1.2
-      with:
-        variant: sccache
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          variant: sccache
 
-    - name: Configure CMake
-      run: |
+      - name: Configure CMake
+        run: |
           env RUSTC_WRAPPER=sccache \
           cmake -B build \
           -G Ninja \
@@ -61,11 +63,8 @@ jobs:
           -DLLVM_DIR=/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/llvm \
           -DMLIR_DIR=/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/mlir
 
-    - name: Build
-      run: |
-        cmake --build build --parallel
+      - name: Build
+        run: cmake --build build --parallel
 
-    - name: Run tests
-      run: |
-        cd build
-        cmake --build . --target check
+      - name: Run tests
+        run: cmake --build build --target check
