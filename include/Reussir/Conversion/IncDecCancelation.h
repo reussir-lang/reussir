@@ -1,4 +1,4 @@
-//===-- IncDecCancelation.h - Reussir inc/dec cancelation -*- c++ -*-===//
+//===-- IncDecCancelation.h - Reussir inc/dec cancellation -*- c++ -*-===//
 //
 // Part of the Reussir project, dual licensed under the Apache License v2.0 or
 // the MIT License.
