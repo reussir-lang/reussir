@@ -20,7 +20,7 @@ struct IncDecCancellationPass
 };
 } // namespace
 
-void runIncDecCancellation(mlir::ModuleOp module) {
+void runIncDecCancellation(mlir::func::FuncOp func) {
   // TODO: Implement inc/dec cancellation logic
 }
 

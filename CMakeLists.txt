@@ -29,7 +29,11 @@ include(cmake/FindMLIR.cmake)
 message(STATUS "include dirs for llvm and mlir: ${MLIR_INCLUDE_DIRS};${LLVM_INCLUDE_DIRS}")
 set(MLIR_TABLEGEN_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/include)
 message(STATUS "Tablegen output directory: ${MLIR_TABLEGEN_OUTPUT_DIR}")
-include_directories(include ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS} ${MLIR_TABLEGEN_OUTPUT_DIR})
+
+# Include Immer
+include(cmake/Immer.cmake)
+
+include_directories(include ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS} ${MLIR_TABLEGEN_OUTPUT_DIR} ${immer_SOURCE_DIR})
 
 # Subdirectories
 add_subdirectory(include)
