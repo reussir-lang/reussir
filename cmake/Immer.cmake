@@ -1,5 +1,9 @@
 include(FetchContent)
 
+set(CMAKE_DISABLE_FIND_PACKAGE_Boost ON)
+set(CMAKE_DISABLE_FIND_PACKAGE_BoehmGC ON)
+set(CMAKE_WARN_DEPRECATED OFF)
+
 FetchContent_Declare(
   immer
   GIT_REPOSITORY https://github.com/arximboldi/immer.git

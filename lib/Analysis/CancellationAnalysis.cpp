@@ -1,5 +1,10 @@
+#include <algorithm>
 #include <llvm/ADT/DenseSet.h>
+#include <llvm/ADT/ScopeExit.h>
+#include <llvm/ADT/SmallSet.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/Support/raw_ostream.h>
+#include <mlir/Analysis/AliasAnalysis.h>
 #include <mlir/IR/Block.h>
 #include <mlir/IR/Operation.h>
 #include <mlir/IR/Region.h>
@@ -7,102 +12,192 @@
 #include <mlir/Support/LLVM.h>
 
 #include "Reussir/Analysis/CancellationAnalysis.h"
+#include "Reussir/IR/ReussirOps.h"
 
 namespace reussir {
 
 using namespace mlir;
 
 //===----------------------------------------------------------------------===//
-// IncrementLattice Implementation
+// IncOpSequenceLattice Implementation
 //===----------------------------------------------------------------------===//
 
-// TODO: Implement IncrementLattice implementation
+UnsyncFlexVector<ReussirRcIncOp>
+    reussir::IncOpSequenceLattice::EMPTY_SEQUENCE{};
+
+std::optional<reussir::UnsyncFlexVector<reussir::ReussirRcIncOp>>
+reussir::IncOpSequenceLattice::join(
+    std::optional<UnsyncFlexVector<ReussirRcIncOp>> lhs,
+    std::optional<UnsyncFlexVector<ReussirRcIncOp>> rhs) {
+  if (lhs == std::nullopt)
+    return rhs;
+  if (rhs == std::nullopt)
+    return lhs;
+  if (lhs->empty() || rhs->empty())
+    return EMPTY_SEQUENCE;
+  if (lhs->identity() == rhs->identity())
+    return lhs;
+  llvm::SmallSet<ReussirRcIncOp, 8> lhsSet;
+  UnsyncFlexVector<ReussirRcIncOp> orderedIntersection;
+  auto lhsIter = lhs->begin();
+  bool exactMatch = lhs->size() == rhs->size();
+  for (auto &op : *rhs) {
+    // We process the intersection lazily.
+    // If we find that lhs and rhs exactly matches, we don't create a new
+    // flex vector.
+    if (exactMatch) {
+      // Failed to find an exact match: initialize the process for computing
+      // a new flex vector of the intersection.
+      if (*lhsIter != op) {
+        exactMatch = false;
+        for (auto iter = lhsIter; iter != lhs->end(); ++iter)
+          lhsSet.insert(*iter);
+        orderedIntersection = lhs->take(lhsIter - lhs->begin());
+      }
+      ++lhsIter;
+      continue;
+    }
+    if (lhsSet.contains(op))
+      orderedIntersection = orderedIntersection.push_back(op);
+  }
+  return exactMatch ? lhs : orderedIntersection;
+}
+
+mlir::ChangeResult reussir::IncOpSequenceLattice::join(
+    const mlir::dataflow::AbstractDenseLattice &rhs) {
+  auto updatedSequence =
+      join(sequence, static_cast<const IncOpSequenceLattice &>(rhs).sequence);
+  return unify(updatedSequence);
+}
+
+void reussir::IncOpSequenceLattice::print(llvm::raw_ostream &os) const {
+  if (isUninitialized())
+    os << "uninitialized";
+  else {
+    os << '[';
+    llvm::interleaveComma(*sequence, os);
+    os << ']';
+  }
+}
+
+mlir::ChangeResult reussir::IncOpSequenceLattice::setToEmpty() {
+  auto guard = llvm::make_scope_exit([&] { sequence = EMPTY_SEQUENCE; });
+  if (sequence && sequence->empty())
+    return mlir::ChangeResult::NoChange;
+  return mlir::ChangeResult::Change;
+}
+
+mlir::ChangeResult
+reussir::IncOpSequenceLattice::unify(std::optional<UnsyncFlexVector<Op>> rhs) {
+  mlir::ChangeResult result = mlir::ChangeResult::Change;
+  if (sequence == std::nullopt && rhs == std::nullopt)
+    result = mlir::ChangeResult::NoChange;
+  else if (sequence != std::nullopt && rhs != std::nullopt)
+    result = (sequence->identity() == rhs->identity() || *sequence == *rhs)
+                 ? mlir::ChangeResult::NoChange
+                 : mlir::ChangeResult::Change;
+  if (result == mlir::ChangeResult::Change)
+    sequence = rhs;
+  return result;
+};
+
+mlir::ChangeResult
+reussir::IncOpSequenceLattice::unify(const AbstractDenseLattice &rhs) {
+  return unify(static_cast<const IncOpSequenceLattice &>(rhs).sequence);
+}
+
+mlir::ChangeResult
+reussir::IncOpSequenceLattice::setAsAppend(const IncOpSequenceLattice &prefix,
+                                           Op op) {
+  if (prefix.isUninitialized())
+    return unify(std::nullopt);
+  if (prefix.isEmpty())
+    return unify(UnsyncFlexVector<Op>{op});
+  if (std::find(prefix.sequence->begin(), prefix.sequence->end(), op) !=
+      prefix.sequence->end())
+    return unify(prefix.sequence);
+  return unify(prefix.sequence->push_back(op));
+}
+
+mlir::ChangeResult
+reussir::IncOpSequenceLattice::setAsRemove(const IncOpSequenceLattice &prefix,
+                                           mlir::TypedValue<RcType> rcPtr,
+                                           mlir::AliasAnalysis &aliasAnalysis) {
+  if (prefix.isUninitialized())
+    return unify(std::nullopt);
+  if (prefix.isEmpty())
+    return setToEmpty();
+  auto removeCandidate =
+      std::find_if(prefix.sequence->begin(), prefix.sequence->end(),
+                   [&aliasAnalysis, rcPtr](ReussirRcIncOp op) {
+                     return aliasAnalysis.alias(op.getRcPtr(), rcPtr) ==
+                            AliasResult::MustAlias;
+                   });
+  if (removeCandidate == prefix.sequence->end())
+    return unify(prefix.sequence);
+  return unify(
+      prefix.sequence->erase(removeCandidate - prefix.sequence->begin()));
+}
+
+mlir::ChangeResult reussir::IncOpSequenceLattice::setAsRemoveAll(
+    const IncOpSequenceLattice &prefix,
+    llvm::ArrayRef<mlir::TypedValue<RcType>> rcPtrs,
+    mlir::AliasAnalysis &aliasAnalysis) {
+  if (prefix.isUninitialized())
+    return unify(std::nullopt);
+  if (prefix.isEmpty())
+    return unify(std::nullopt);
+  UnsyncFlexVector<ReussirRcIncOp> updatedSequence = *prefix.sequence;
+  for (auto rcPtr : rcPtrs) {
+    auto removeCandidate =
+        std::find_if(updatedSequence.begin(), updatedSequence.end(),
+                     [&aliasAnalysis, rcPtr](ReussirRcIncOp op) {
+                       return aliasAnalysis.alias(op.getRcPtr(), rcPtr) ==
+                              AliasResult::MustAlias;
+                     });
+    if (removeCandidate != updatedSequence.end())
+      updatedSequence =
+          updatedSequence.erase(removeCandidate - updatedSequence.begin());
+  }
+  return unify(updatedSequence);
+}
 
 //===----------------------------------------------------------------------===//
 // CancellationAnalysis Implementation
 //===----------------------------------------------------------------------===//
-
-void CancellationAnalysis::setToEntryState(IncrementLattice *lattice) {
-  // TODO: Set the entry state for a block
-  // This should initialize the lattice to an empty state
-  // FIXME: Implement entry state logic
+mlir::LogicalResult reussir::CancellationAnalysis::visitOperation(
+    mlir::Operation *op, const IncOpSequenceLattice &before,
+    IncOpSequenceLattice *after) {
+  // TODO: Implement operation transfer function
+  if (auto incOp = dyn_cast<ReussirRcIncOp>(op))
+    propagateIfChanged(after, after->setAsAppend(before, incOp));
+  else if (auto decOp = dyn_cast<ReussirRcDecOp>(op))
+    propagateIfChanged(
+        after, after->setAsRemove(before, decOp.getRcPtr(), aliasAnalysis));
+  else
+    propagateIfChanged(after, after->unify(before));
+  return mlir::success();
 }
 
-void CancellationAnalysis::visitOperation(Operation *op,
-                                          const IncrementLattice *input,
-                                          IncrementLattice *output) {
-  // TODO: Visit an operation to update the lattice
-  // This should:
-  // 1. Copy input lattice to output
-  // 2. Add any increment operations found in this operation
-  // 3. Remove any decrement operations that can cancel with existing increments
-  // FIXME: Implement operation visit logic
+void reussir::CancellationAnalysis::visitCallControlFlowTransfer(
+    mlir::CallOpInterface call, mlir::dataflow::CallControlFlowAction action,
+    const IncOpSequenceLattice &before, IncOpSequenceLattice *after) {
+  DenseForwardDataFlowAnalysis::visitCallControlFlowTransfer(call, action,
+                                                             before, after);
+  // Remove all alisaed inc RC operations from lattice
+  if (action == mlir::dataflow::CallControlFlowAction::ExitCallee) {
+    llvm::SmallVector<mlir::TypedValue<RcType>> rcPtrs;
+    for (mlir::Value operand : call->getOperands())
+      if (auto rcValue = llvm::dyn_cast<mlir::TypedValue<RcType>>(operand))
+        rcPtrs.push_back(rcValue);
+    propagateIfChanged(after,
+                       after->setAsRemoveAll(before, rcPtrs, aliasAnalysis));
+  }
 }
 
-void CancellationAnalysis::visitBlock(Block *block,
-                                      const IncrementLattice *input,
-                                      IncrementLattice *output) {
-  // TODO: Visit a block to update the lattice
-  // This should process all operations in the block sequentially
-  // FIXME: Implement block visit logic
-}
-
-void CancellationAnalysis::visitRegion(Region *region,
-                                       const IncrementLattice *input,
-                                       IncrementLattice *output) {
-  // TODO: Visit a region to update the lattice
-  // This should handle control flow joins and region boundaries
-  // FIXME: Implement region visit logic
-}
-
-CancellationAnalysis::IncrementLattice
-CancellationAnalysis::getLatticeElement(Value value) {
-  // TODO: Get the lattice element for a value
-  // This should return the current lattice state for the given value
-  // FIXME: Implement lattice element retrieval
-  return IncrementLattice{};
-}
-
-bool CancellationAnalysis::canCancel(Operation *increment,
-                                     Operation *decrement) {
-  // TODO: Check if an increment operation can be cancelled with a decrement
-  // operation This should use AliasAnalysis to determine if the operations
-  // operate on the same value
-  // FIXME: Implement cancellation check logic
-  return false;
-}
-
-llvm::DenseSet<Operation *>
-CancellationAnalysis::getCancellableIncrements(Operation *op) {
-  // TODO: Get the set of increment operations that can be cancelled at a
-  // program point This should return all increments that have matching
-  // decrements
-  // FIXME: Implement cancellable increments logic
-  return llvm::DenseSet<Operation *>{};
-}
-
-bool CancellationAnalysis::isIncrementOp(Operation *op) {
-  // TODO: Check if an operation is an increment operation
-  // This should identify Reussir increment operations (e.g., rc_inc, ref_inc)
-  // FIXME: Implement increment operation detection
-  return false;
-}
-
-bool CancellationAnalysis::isDecrementOp(Operation *op) {
-  // TODO: Check if an operation is a decrement operation
-  // This should identify Reussir decrement operations (e.g., rc_dec, ref_dec)
-  // FIXME: Implement decrement operation detection
-  return false;
-}
-
-llvm::SmallVector<Operation *>
-CancellationAnalysis::findCancellingDecrements(Operation *increment,
-                                               Block *block) {
-  // TODO: Find decrement operations that can cancel with a given increment
-  // This should search the block for decrements that can cancel with the
-  // increment
-  // FIXME: Implement decrement search logic
-  return llvm::SmallVector<Operation *>{};
+void reussir::CancellationAnalysis::setToEntryState(
+    IncOpSequenceLattice *lattice) {
+  propagateIfChanged(lattice, lattice->setToEmpty());
 }
 
 } // namespace reussir

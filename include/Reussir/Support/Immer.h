@@ -1,0 +1,32 @@
+#pragma once
+
+#include <functional>
+#ifndef REUSSIR_SUPPORT_IMMER_H
+#define REUSSIR_SUPPORT_IMMER_H
+
+#include <immer/flex_vector.hpp>
+#include <immer/heap/heap_policy.hpp>
+#include <immer/memory_policy.hpp>
+#include <immer/set.hpp>
+#include <llvm/ADT/Hashing.h>
+
+namespace reussir {
+using UnsyncImmerPolicy =
+    immer::memory_policy<immer::unsafe_free_list_heap_policy<immer::cpp_heap>,
+                         immer::unsafe_refcount_policy, immer::no_lock_policy>;
+template <typename T>
+using UnsyncFlexVector = immer::flex_vector<T, UnsyncImmerPolicy>;
+
+class LLVMHasher {
+public:
+  template <typename T> size_t operator()(const T &value) const {
+    return llvm::hash_value(value);
+  }
+};
+
+template <typename T>
+using UnsyncSet =
+    immer::set<T, LLVMHasher, std::equal_to<T>, UnsyncImmerPolicy>;
+} // namespace reussir
+
+#endif // REUSSIR_SUPPORT_IMMER_H

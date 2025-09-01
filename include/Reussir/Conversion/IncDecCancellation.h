@@ -54,7 +54,7 @@ namespace reussir {
 //   region. Hence, we also know the exact postpone target for the increment
 //   operation. That is the last block where it is live across while it still
 //   gets removed in the joint lattice.
-void runIncDecCancellation(mlir::func::FuncOp func);
+llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func);
 
 } // namespace reussir
 

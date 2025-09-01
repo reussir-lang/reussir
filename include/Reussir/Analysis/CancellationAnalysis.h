@@ -2,10 +2,22 @@
 #define REUSSIR_ANALYSIS_CANCELLATIONANALYSIS_H
 
 #include "Reussir/IR/ReussirOps.h"
-#include <immer/flex_vector.hpp>
-#include <llvm/ADT/DenseSet.h>
+#include "Reussir/IR/ReussirTypes.h"
+#include "Reussir/Support/Immer.h"
+
+#include <algorithm>
+#include <cstddef>
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/SmallSet.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/Support/raw_ostream.h>
+#include <mlir/Analysis/AliasAnalysis.h>
+#include <mlir/Analysis/DataFlow/DenseAnalysis.h>
+#include <mlir/Analysis/DataFlowFramework.h>
+#include <mlir/IR/Block.h>
 #include <mlir/IR/Operation.h>
+#include <mlir/Interfaces/CallInterfaces.h>
+#include <mlir/Interfaces/ControlFlowInterfaces.h>
 #include <mlir/Support/LLVM.h>
 
 namespace mlir {
@@ -17,60 +29,109 @@ class Region;
 
 namespace reussir {
 
+class RcAliasCluster {
+  mlir::AliasAnalysis &aliasAnalysis;
+  llvm::SmallVector<mlir::TypedValue<RcType>> rcPtrs;
+
+  void populate(mlir::TypedValue<RcType> rcPtr) {
+    auto iter = std::find_if(rcPtrs.begin(), rcPtrs.end(),
+                             [&](mlir::TypedValue<RcType> ptr) {
+                               return aliasAnalysis.alias(rcPtr, ptr) ==
+                                      mlir::AliasResult::MustAlias;
+                             });
+    if (iter != rcPtrs.end())
+      return;
+    rcPtrs.push_back(rcPtr);
+  }
+
+public:
+  RcAliasCluster(mlir::AliasAnalysis &aliasAnalysis, mlir::Operation *op)
+      : aliasAnalysis(aliasAnalysis) {
+    op->walk([&](mlir::Operation *op) {
+      for (mlir::Value result : op->getResults())
+        if (auto rcPtr = result.getType().dyn_cast<RcType>())
+          populate(result.cast<mlir::TypedValue<RcType>>());
+
+      for (mlir::Value operand : op->getOperands())
+        if (auto rcPtr = operand.getType().dyn_cast<RcType>())
+          populate(operand.cast<mlir::TypedValue<RcType>>());
+    });
+    op->walk([&](mlir::Block *blk) {
+      for (mlir::Value arg : blk->getArguments())
+        if (auto rcPtr = arg.getType().dyn_cast<RcType>())
+          populate(arg.cast<mlir::TypedValue<RcType>>());
+    });
+  }
+
+  size_t getCluster(mlir::TypedValue<RcType> rcPtr) const {
+    auto iter = std::find_if(rcPtrs.begin(), rcPtrs.end(),
+                             [&](mlir::TypedValue<RcType> ptr) {
+                               return aliasAnalysis.alias(rcPtr, ptr) ==
+                                      mlir::AliasResult::MustAlias;
+                             });
+    return iter - rcPtrs.begin();
+  }
+
+  size_t size() const { return rcPtrs.size(); }
+};
 /// Analysis that tracks increment and decrement operations for cancellation
 /// optimization.
-class CancellationAnalysis {
+
+class IncOpSequenceLattice : public mlir::dataflow::AbstractDenseLattice {
+  using Op = ReussirRcIncOp;
+  std::optional<UnsyncFlexVector<Op>> sequence = std::nullopt;
+  static UnsyncFlexVector<Op> EMPTY_SEQUENCE;
+  mlir::ChangeResult unify(std::optional<UnsyncFlexVector<Op>> rhs);
+
 public:
-  CancellationAnalysis() = default;
+  using AbstractDenseLattice::AbstractDenseLattice;
+  size_t size() const { return sequence->size(); }
+  bool isUninitialized() const { return sequence == std::nullopt; }
+  bool isEmpty() const { return sequence->empty(); }
+  static std::optional<UnsyncFlexVector<Op>>
+  join(std::optional<UnsyncFlexVector<Op>> lhs,
+       std::optional<UnsyncFlexVector<Op>> rhs);
+  mlir::ChangeResult join(const AbstractDenseLattice &rhs) override;
+  void print(llvm::raw_ostream &os) const override;
+  mlir::ChangeResult setToEmpty();
+  mlir::ChangeResult setAsAppend(const IncOpSequenceLattice &prefix, Op op);
+  mlir::ChangeResult setAsRemove(const IncOpSequenceLattice &prefix,
+                                 mlir::TypedValue<RcType> rcPtr,
+                                 mlir::AliasAnalysis &aliasAnalysis);
+  mlir::ChangeResult unify(const AbstractDenseLattice &rhs);
+  mlir::ChangeResult
+  setAsRemoveAll(const IncOpSequenceLattice &prefix,
+                 llvm::ArrayRef<mlir::TypedValue<RcType>> rcPtrs,
+                 mlir::AliasAnalysis &aliasAnalysis);
+};
 
-  /// Lattice element representing increment operations at a program point
-  class IncrementLattice {
-  public:
-    IncrementLattice() = default;
-    IncrementLattice(const IncrementLattice &) = default;
-    IncrementLattice &operator=(const IncrementLattice &) = default;
+class CancellationAnalysis
+    : public mlir::dataflow::DenseForwardDataFlowAnalysis<
+          IncOpSequenceLattice> {
+public:
+  CancellationAnalysis(mlir::DataFlowSolver &solver,
+                       mlir::AliasAnalysis &aliasAnalysis)
+      : DenseForwardDataFlowAnalysis(solver), aliasAnalysis(aliasAnalysis) {}
 
-  private:
-    immer::flex_vector<ReussirRcIncOp> increments;
-  };
+  /// Visit an operation with the dense lattice before its execution.
+  /// This function is expected to set the dense lattice after its execution
+  /// and trigger change propagation in case of change.
+  mlir::LogicalResult visitOperation(mlir::Operation *op,
+                                     const IncOpSequenceLattice &before,
+                                     IncOpSequenceLattice *after) override;
 
-  /// Set the entry state for a block or region
-  void setToEntryState(IncrementLattice *lattice);
+  /// Hook for customizing the behavior of lattice propagation along the call
+  /// control flow edges.
+  void visitCallControlFlowTransfer(
+      mlir::CallOpInterface call, mlir::dataflow::CallControlFlowAction action,
+      const IncOpSequenceLattice &before, IncOpSequenceLattice *after) override;
 
-  /// Visit an operation to update the lattice
-  void visitOperation(mlir::Operation *op, const IncrementLattice *input,
-                      IncrementLattice *output);
+protected:
+  /// Set the dense lattice at control flow entry point and propagate an update
+  /// if it changed.
+  void setToEntryState(IncOpSequenceLattice *lattice) override;
 
-  /// Visit a block to update the lattice
-  void visitBlock(mlir::Block *block, const IncrementLattice *input,
-                  IncrementLattice *output);
-
-  /// Visit a region to update the lattice
-  void visitRegion(mlir::Region *region, const IncrementLattice *input,
-                   IncrementLattice *output);
-
-  /// Get the lattice element for a value
-  IncrementLattice getLatticeElement(mlir::Value value);
-
-  /// Check if an increment operation can be cancelled with a decrement
-  /// operation
-  bool canCancel(mlir::Operation *increment, mlir::Operation *decrement);
-
-  /// Get the set of increment operations that can be cancelled at a program
-  /// point
-  llvm::DenseSet<mlir::Operation *>
-  getCancellableIncrements(mlir::Operation *op);
-
-private:
-  /// Check if an operation is an increment operation
-  bool isIncrementOp(mlir::Operation *op);
-
-  /// Check if an operation is a decrement operation
-  bool isDecrementOp(mlir::Operation *op);
-
-  /// Find decrement operations that can cancel with a given increment
-  llvm::SmallVector<mlir::Operation *>
-  findCancellingDecrements(mlir::Operation *increment, mlir::Block *block);
+  mlir::AliasAnalysis &aliasAnalysis;
 };
 
 } // namespace reussir
