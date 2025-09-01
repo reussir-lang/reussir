@@ -6,6 +6,7 @@
 
 #include <immer/flex_vector.hpp>
 #include <immer/heap/heap_policy.hpp>
+#include <immer/map.hpp>
 #include <immer/memory_policy.hpp>
 #include <immer/set.hpp>
 #include <llvm/ADT/Hashing.h>
@@ -17,16 +18,13 @@ using UnsyncImmerPolicy =
 template <typename T>
 using UnsyncFlexVector = immer::flex_vector<T, UnsyncImmerPolicy>;
 
-class LLVMHasher {
-public:
-  template <typename T> size_t operator()(const T &value) const {
-    return llvm::hash_value(value);
-  }
-};
-
 template <typename T>
 using UnsyncSet =
-    immer::set<T, LLVMHasher, std::equal_to<T>, UnsyncImmerPolicy>;
+    immer::set<T, std::hash<T>, std::equal_to<T>, UnsyncImmerPolicy>;
+
+template <typename K, typename V>
+using UnsyncMap =
+    immer::map<K, V, std::hash<K>, std::equal_to<K>, UnsyncImmerPolicy>;
 } // namespace reussir
 
 #endif // REUSSIR_SUPPORT_IMMER_H

@@ -1,8 +1,10 @@
 #include <algorithm>
+#include <cstddef>
 #include <llvm/ADT/DenseSet.h>
-#include <llvm/ADT/ScopeExit.h>
-#include <llvm/ADT/SmallSet.h>
+#include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/TypeSwitch.h>
+#include <llvm/IR/Type.h>
 #include <llvm/Support/raw_ostream.h>
 #include <mlir/Analysis/AliasAnalysis.h>
 #include <mlir/IR/Block.h>
@@ -19,184 +21,154 @@ namespace reussir {
 using namespace mlir;
 
 //===----------------------------------------------------------------------===//
-// IncOpSequenceLattice Implementation
+// RcAliasCluster Implementation
 //===----------------------------------------------------------------------===//
 
-UnsyncFlexVector<ReussirRcIncOp>
-    reussir::IncOpSequenceLattice::EMPTY_SEQUENCE{};
+void RcAliasCluster::populate(TypedValue<RcType> rcPtr) {
+  auto iter =
+      std::find_if(rcPtrs.begin(), rcPtrs.end(), [&](TypedValue<RcType> ptr) {
+        return aliasAnalysis.alias(rcPtr, ptr) == AliasResult::MustAlias;
+      });
+  if (iter != rcPtrs.end())
+    return;
+  rcPtrs.push_back(rcPtr);
+}
 
-std::optional<reussir::UnsyncFlexVector<reussir::ReussirRcIncOp>>
-reussir::IncOpSequenceLattice::join(
-    std::optional<UnsyncFlexVector<ReussirRcIncOp>> lhs,
-    std::optional<UnsyncFlexVector<ReussirRcIncOp>> rhs) {
-  if (lhs == std::nullopt)
-    return rhs;
-  if (rhs == std::nullopt)
+RcAliasCluster::RcAliasCluster(AliasAnalysis &aliasAnalysis, Operation *op)
+    : aliasAnalysis(aliasAnalysis) {
+  // Initialize by iterating all RC pointers involved in operations
+  op->walk([&](Operation *op) {
+    for (Value result : op->getResults())
+      if (auto rcPtr = result.dyn_cast<TypedValue<RcType>>())
+        populate(rcPtr);
+
+    for (Value operand : op->getOperands())
+      if (auto rcPtr = operand.dyn_cast<TypedValue<RcType>>())
+        populate(rcPtr);
+  });
+}
+
+size_t RcAliasCluster::getCluster(TypedValue<RcType> rcPtr) const {
+  auto iter =
+      std::find_if(rcPtrs.begin(), rcPtrs.end(), [&](TypedValue<RcType> ptr) {
+        return aliasAnalysis.alias(rcPtr, ptr) == AliasResult::MustAlias;
+      });
+  return iter - rcPtrs.begin();
+}
+
+//===----------------------------------------------------------------------===//
+// RcIncLattice Implementation
+//===----------------------------------------------------------------------===//
+ChangeResult RcIncLattice::unify(RcIncMap rhs) {
+  if (pendingIncrement == rhs)
+    return ChangeResult::NoChange;
+  pendingIncrement = rhs;
+  return ChangeResult::Change;
+}
+
+size_t RcIncLattice::getIncCount(const RcIncMap &map, size_t clusterIndex) {
+  if (auto iter = map.find(clusterIndex))
+    return *iter;
+  return 0;
+}
+
+RcIncLattice::RcIncMap RcIncLattice::join(RcIncMap lhs, RcIncMap rhs) {
+  if (lhs == rhs)
     return lhs;
-  if (lhs->empty() || rhs->empty())
-    return EMPTY_SEQUENCE;
-  if (lhs->identity() == rhs->identity())
-    return lhs;
-  llvm::SmallSet<ReussirRcIncOp, 8> lhsSet;
-  UnsyncFlexVector<ReussirRcIncOp> orderedIntersection;
-  auto lhsIter = lhs->begin();
-  bool exactMatch = lhs->size() == rhs->size();
-  for (auto &op : *rhs) {
-    // We process the intersection lazily.
-    // If we find that lhs and rhs exactly matches, we don't create a new
-    // flex vector.
-    if (exactMatch) {
-      // Failed to find an exact match: initialize the process for computing
-      // a new flex vector of the intersection.
-      if (*lhsIter != op) {
-        exactMatch = false;
-        for (auto iter = lhsIter; iter != lhs->end(); ++iter)
-          lhsSet.insert(*iter);
-        orderedIntersection = lhs->take(lhsIter - lhs->begin());
-      }
-      ++lhsIter;
-      continue;
-    }
-    if (lhsSet.contains(op))
-      orderedIntersection = orderedIntersection.push_back(op);
+  RcIncMap result{};
+  for (auto [clusterIndex, count] : lhs) {
+    auto rhsCount = getIncCount(rhs, clusterIndex);
+    size_t minCount = std::min(count, rhsCount);
+    if (minCount > 0)
+      result = result.insert({clusterIndex, minCount});
   }
-  return exactMatch ? lhs : orderedIntersection;
-}
-
-mlir::ChangeResult reussir::IncOpSequenceLattice::join(
-    const mlir::dataflow::AbstractDenseLattice &rhs) {
-  auto updatedSequence =
-      join(sequence, static_cast<const IncOpSequenceLattice &>(rhs).sequence);
-  return unify(updatedSequence);
-}
-
-void reussir::IncOpSequenceLattice::print(llvm::raw_ostream &os) const {
-  if (isUninitialized())
-    os << "uninitialized";
-  else {
-    os << '[';
-    llvm::interleaveComma(*sequence, os);
-    os << ']';
-  }
-}
-
-mlir::ChangeResult reussir::IncOpSequenceLattice::setToEmpty() {
-  auto guard = llvm::make_scope_exit([&] { sequence = EMPTY_SEQUENCE; });
-  if (sequence && sequence->empty())
-    return mlir::ChangeResult::NoChange;
-  return mlir::ChangeResult::Change;
-}
-
-mlir::ChangeResult
-reussir::IncOpSequenceLattice::unify(std::optional<UnsyncFlexVector<Op>> rhs) {
-  mlir::ChangeResult result = mlir::ChangeResult::Change;
-  if (sequence == std::nullopt && rhs == std::nullopt)
-    result = mlir::ChangeResult::NoChange;
-  else if (sequence != std::nullopt && rhs != std::nullopt)
-    result = (sequence->identity() == rhs->identity() || *sequence == *rhs)
-                 ? mlir::ChangeResult::NoChange
-                 : mlir::ChangeResult::Change;
-  if (result == mlir::ChangeResult::Change)
-    sequence = rhs;
   return result;
-};
-
-mlir::ChangeResult
-reussir::IncOpSequenceLattice::unify(const AbstractDenseLattice &rhs) {
-  return unify(static_cast<const IncOpSequenceLattice &>(rhs).sequence);
 }
 
-mlir::ChangeResult
-reussir::IncOpSequenceLattice::setAsAppend(const IncOpSequenceLattice &prefix,
-                                           Op op) {
-  if (prefix.isUninitialized())
-    return unify(std::nullopt);
-  if (prefix.isEmpty())
-    return unify(UnsyncFlexVector<Op>{op});
-  if (std::find(prefix.sequence->begin(), prefix.sequence->end(), op) !=
-      prefix.sequence->end())
-    return unify(prefix.sequence);
-  return unify(prefix.sequence->push_back(op));
+ChangeResult RcIncLattice::join(const AbstractDenseLattice &rhs) {
+  auto rhsLattice = static_cast<const RcIncLattice &>(rhs);
+  return unify(join(pendingIncrement, rhsLattice.pendingIncrement));
 }
 
-mlir::ChangeResult
-reussir::IncOpSequenceLattice::setAsRemove(const IncOpSequenceLattice &prefix,
-                                           mlir::TypedValue<RcType> rcPtr,
-                                           mlir::AliasAnalysis &aliasAnalysis) {
-  if (prefix.isUninitialized())
-    return unify(std::nullopt);
-  if (prefix.isEmpty())
-    return setToEmpty();
-  auto removeCandidate =
-      std::find_if(prefix.sequence->begin(), prefix.sequence->end(),
-                   [&aliasAnalysis, rcPtr](ReussirRcIncOp op) {
-                     return aliasAnalysis.alias(op.getRcPtr(), rcPtr) ==
-                            AliasResult::MustAlias;
-                   });
-  if (removeCandidate == prefix.sequence->end())
-    return unify(prefix.sequence);
-  return unify(
-      prefix.sequence->erase(removeCandidate - prefix.sequence->begin()));
+void RcIncLattice::print(raw_ostream &os) const {
+  os << "{";
+  llvm::interleaveComma(pendingIncrement, os, [&](auto pair) {
+    os << std::get<0>(pair) << ": " << std::get<1>(pair);
+  });
+  os << "}";
 }
 
-mlir::ChangeResult reussir::IncOpSequenceLattice::setAsRemoveAll(
-    const IncOpSequenceLattice &prefix,
-    llvm::ArrayRef<mlir::TypedValue<RcType>> rcPtrs,
-    mlir::AliasAnalysis &aliasAnalysis) {
-  if (prefix.isUninitialized())
-    return unify(std::nullopt);
-  if (prefix.isEmpty())
-    return unify(std::nullopt);
-  UnsyncFlexVector<ReussirRcIncOp> updatedSequence = *prefix.sequence;
-  for (auto rcPtr : rcPtrs) {
-    auto removeCandidate =
-        std::find_if(updatedSequence.begin(), updatedSequence.end(),
-                     [&aliasAnalysis, rcPtr](ReussirRcIncOp op) {
-                       return aliasAnalysis.alias(op.getRcPtr(), rcPtr) ==
-                              AliasResult::MustAlias;
-                     });
-    if (removeCandidate != updatedSequence.end())
-      updatedSequence =
-          updatedSequence.erase(removeCandidate - updatedSequence.begin());
-  }
-  return unify(updatedSequence);
+ChangeResult RcIncLattice::setToEmpty() { return unify(RcIncMap()); }
+
+ChangeResult RcIncLattice::setAsAppend(const AbstractDenseLattice &prefix,
+                                       size_t clusterIndex) {
+  auto prefixLattice = static_cast<const RcIncLattice &>(prefix);
+  RcIncMap result = prefixLattice.pendingIncrement.update(
+      clusterIndex, [](size_t count) { return count + 1; });
+  return unify(result);
+}
+
+ChangeResult RcIncLattice::setAsRemove(const AbstractDenseLattice &prefix,
+                                       size_t clusterIndex) {
+  auto prefixLattice = static_cast<const RcIncLattice &>(prefix);
+  auto count = getIncCount(prefixLattice.pendingIncrement, clusterIndex);
+  if (count == 0)
+    return ChangeResult::NoChange;
+  if (count == 1)
+    return unify(pendingIncrement.erase(clusterIndex));
+  return unify(prefixLattice.pendingIncrement.update(
+      clusterIndex, [](size_t count) { return count - 1; }));
+}
+
+ChangeResult RcIncLattice::setAsCopy(const AbstractDenseLattice &rhs) {
+  auto rhsLattice = static_cast<const RcIncLattice &>(rhs);
+  return unify(rhsLattice.pendingIncrement);
 }
 
 //===----------------------------------------------------------------------===//
 // CancellationAnalysis Implementation
 //===----------------------------------------------------------------------===//
-mlir::LogicalResult reussir::CancellationAnalysis::visitOperation(
-    mlir::Operation *op, const IncOpSequenceLattice &before,
-    IncOpSequenceLattice *after) {
-  // TODO: Implement operation transfer function
-  if (auto incOp = dyn_cast<ReussirRcIncOp>(op))
-    propagateIfChanged(after, after->setAsAppend(before, incOp));
-  else if (auto decOp = dyn_cast<ReussirRcDecOp>(op))
-    propagateIfChanged(
-        after, after->setAsRemove(before, decOp.getRcPtr(), aliasAnalysis));
+
+LogicalResult CancellationAnalysis::visitOperation(Operation *op,
+                                                   const RcIncLattice &before,
+                                                   RcIncLattice *after) {
+  return llvm::TypeSwitch<Operation *, LogicalResult>(op)
+      .Case<ReussirRcIncOp>([&](ReussirRcIncOp op) {
+        auto clusterIndex = aliasCluster.getCluster(op.getRcPtr());
+        propagateIfChanged(after, after->setAsAppend(before, clusterIndex));
+        return success();
+      })
+      .Case<ReussirRcDecOp>([&](ReussirRcDecOp op) {
+        auto clusterIndex = aliasCluster.getCluster(op.getRcPtr());
+        propagateIfChanged(after, after->setAsRemove(before, clusterIndex));
+        return success();
+      })
+      .Default([&](Operation *) {
+        propagateIfChanged(after, after->setAsCopy(before));
+        return success();
+      });
+}
+
+void CancellationAnalysis::visitCallControlFlowTransfer(
+    CallOpInterface call, dataflow::CallControlFlowAction action,
+    const RcIncLattice &before, RcIncLattice *after) {
+  // Brute forcelly forbid all cancellable consideration if there is a function
+  // call.
+  if (action == dataflow::CallControlFlowAction::ExitCallee)
+    propagateIfChanged(after, after->setToEmpty());
+}
+
+void CancellationAnalysis::visitRegionBranchControlFlowTransfer(
+    RegionBranchOpInterface branch, std::optional<unsigned> regionFrom,
+    std::optional<unsigned> regionTo, const RcIncLattice &before,
+    RcIncLattice *after) {
+  if (regionFrom)
+    join(after, before);
   else
-    propagateIfChanged(after, after->unify(before));
-  return mlir::success();
+    propagateIfChanged(after, after->setAsCopy(before));
 }
 
-void reussir::CancellationAnalysis::visitCallControlFlowTransfer(
-    mlir::CallOpInterface call, mlir::dataflow::CallControlFlowAction action,
-    const IncOpSequenceLattice &before, IncOpSequenceLattice *after) {
-  DenseForwardDataFlowAnalysis::visitCallControlFlowTransfer(call, action,
-                                                             before, after);
-  // Remove all alisaed inc RC operations from lattice
-  if (action == mlir::dataflow::CallControlFlowAction::ExitCallee) {
-    llvm::SmallVector<mlir::TypedValue<RcType>> rcPtrs;
-    for (mlir::Value operand : call->getOperands())
-      if (auto rcValue = llvm::dyn_cast<mlir::TypedValue<RcType>>(operand))
-        rcPtrs.push_back(rcValue);
-    propagateIfChanged(after,
-                       after->setAsRemoveAll(before, rcPtrs, aliasAnalysis));
-  }
-}
-
-void reussir::CancellationAnalysis::setToEntryState(
-    IncOpSequenceLattice *lattice) {
+void CancellationAnalysis::setToEntryState(RcIncLattice *lattice) {
   propagateIfChanged(lattice, lattice->setToEmpty());
 }
 
