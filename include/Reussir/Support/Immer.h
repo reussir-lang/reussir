@@ -1,9 +1,9 @@
 #pragma once
 
-#include <functional>
 #ifndef REUSSIR_SUPPORT_IMMER_H
 #define REUSSIR_SUPPORT_IMMER_H
 
+#include <functional>
 #include <immer/flex_vector.hpp>
 #include <immer/heap/heap_policy.hpp>
 #include <immer/map.hpp>
