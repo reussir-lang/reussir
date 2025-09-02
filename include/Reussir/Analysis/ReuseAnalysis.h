@@ -11,8 +11,15 @@
 #ifndef REUSSIR_ANALYSIS_REUSEANALYSIS_H
 #define REUSSIR_ANALYSIS_REUSEANALYSIS_H
 
+#include "Reussir/Support/Immer.h"
+
+#include <mlir/Analysis/DataFlow/DenseAnalysis.h>
+#include <mlir/Analysis/DataFlowFramework.h>
 #include <mlir/Pass/AnalysisManager.h>
 
-namespace reussir {} // namespace reussir
+namespace reussir {
+class AliveTokenLattice : public mlir::dataflow::AbstractDenseLattice {};
+
+} // namespace reussir
 
 #endif // REUSSIR_ANALYSIS_REUSEANALYSIS_H

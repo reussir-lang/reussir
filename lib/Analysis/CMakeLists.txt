@@ -4,7 +4,7 @@ add_mlir_library(MLIRReussirAnalysis
   AliasAnalysis.cpp
   ReuseAnalysis.cpp
   LINK_LIBS PUBLIC
-    # immer
+    immer
     MLIRAnalysis
     MLIRIR
     MLIRSupport
