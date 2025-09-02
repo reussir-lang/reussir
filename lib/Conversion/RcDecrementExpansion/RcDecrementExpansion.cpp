@@ -81,6 +81,7 @@ struct RcDecrementExpansionPattern
           op.getLoc(), op.getNullableToken().getType(), nullptr);
       rewriter.create<mlir::scf::YieldOp>(op.getLoc(), null->getResults());
     }
+    ifOp->setAttr(kExpandedDecrementAttr, rewriter.getUnitAttr());
     rewriter.replaceOp(op, ifOp);
     return mlir::success();
   }

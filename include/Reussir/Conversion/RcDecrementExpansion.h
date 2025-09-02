@@ -13,6 +13,7 @@
 #ifndef REUSSIR_CONVERSION_RCDECREMENTEXPANSION_H
 #define REUSSIR_CONVERSION_RCDECREMENTEXPANSION_H
 
+#include <llvm/ADT/StringRef.h>
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/DialectConversion.h>
@@ -20,6 +21,10 @@
 #include "Reussir/IR/ReussirTypes.h"
 
 namespace reussir {
+
+/// Attribute name used to mark expanded decrement operations
+constexpr llvm::StringLiteral kExpandedDecrementAttr =
+    "reussir.expanded_decrement";
 
 #define GEN_PASS_DECL_REUSSIRRCDECREMENTEXPANSIONPASS
 #include "Reussir/Conversion/Passes.h.inc"

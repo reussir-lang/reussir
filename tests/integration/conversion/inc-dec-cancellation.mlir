@@ -1,4 +1,5 @@
-// RUN: %reussir-opt %s --reussir-rc-decrement-expansion --reussir-drop-expansion --reussir-drop-expansion='expand-decrement=1 outline-record=1' | %FileCheck %s
+// RUN: %reussir-opt %s --reussir-rc-decrement-expansion --reussir-drop-expansion --reussir-drop-expansion='expand-decrement=1 outline-record=1' | %FileCheck %s --check-prefix=CHECK-BEFORE
+// RUN: %reussir-opt %s --reussir-rc-decrement-expansion --reussir-drop-expansion --reussir-drop-expansion='expand-decrement=1 outline-record=1' --reussir-inc-dec-cancellation | %FileCheck %s --check-prefix=CHECK-AFTER
 
 
 
@@ -28,3 +29,11 @@ module attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> :
     return %res : !reussir.rc<!list>
   }
 }
+
+// CHECK-BEFORE-DAG: reussir.rc.inc(%3 : !reussir.rc<!reussir.record<variant "List"
+// CHECK-BEFORE-DAG: {reussir.expanded_decrement}
+// CHECK-BEFORE-DAG: %4 = reussir.rc.fetch_dec(%arg0 : !reussir.rc<!reussir.record<variant "List"
+
+// CHECK-AFTER-DAG: reussir.rc.inc(%3 : !reussir.rc<!reussir.record<variant "List"
+// CHECK-AFTER-NOT: {reussir.expanded_decrement}
+// CHECK-AFTER-NOT: %4 = reussir.rc.dec(%arg0 : !reussir.rc<!reussir.record<variant "List"
