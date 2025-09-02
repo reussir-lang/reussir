@@ -1,3 +1,10 @@
+//===-- string_view.h - String view utilities -------------------*- C++ -*-===//
+//
+// Part of the Reussir project, dual licensed under the Apache License v2.0 or
+// the MIT License.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+//===----------------------------------------------------------------------===//
 
 #pragma once
 #include "rust/cxx.h"

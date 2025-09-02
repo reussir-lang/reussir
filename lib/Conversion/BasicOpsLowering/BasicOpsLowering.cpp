@@ -1,3 +1,11 @@
+//===-- BasicOpsLowering.cpp - Reussir basic ops lowering impl --*- C++ -*-===//
+//
+// Part of the Reussir project, dual licensed under the Apache License v2.0 or
+// the MIT License.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+//===----------------------------------------------------------------------===//
+
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/Casting.h>

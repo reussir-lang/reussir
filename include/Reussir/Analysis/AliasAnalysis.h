@@ -1,3 +1,13 @@
+//===-- AliasAnalysis.h - Reussir alias analysis header ---------*- C++ -*-===//
+//
+// Part of the Reussir project, dual licensed under the Apache License v2.0 or
+// the MIT License.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+//===----------------------------------------------------------------------===//
+
+#pragma once
+
 #ifndef REUSSIR_ANALYSIS_ALIASANALYSIS_H
 #define REUSSIR_ANALYSIS_ALIASANALYSIS_H
 
