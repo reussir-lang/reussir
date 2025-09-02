@@ -31,7 +31,7 @@ set(MLIR_TABLEGEN_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/include)
 message(STATUS "Tablegen output directory: ${MLIR_TABLEGEN_OUTPUT_DIR}")
 
 # Include Immer
-include(cmake/Immer.cmake)
+#include(cmake/Immer.cmake)
 
 include_directories(include ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS} ${MLIR_TABLEGEN_OUTPUT_DIR} ${immer_SOURCE_DIR})
 
