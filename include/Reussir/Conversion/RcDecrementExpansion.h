@@ -10,6 +10,9 @@
 // operations.
 //
 //===----------------------------------------------------------------------===//
+
+#pragma once
+
 #ifndef REUSSIR_CONVERSION_RCDECREMENTEXPANSION_H
 #define REUSSIR_CONVERSION_RCDECREMENTEXPANSION_H
 

@@ -1,3 +1,11 @@
+//===-- RcDecrementExpansion.cpp -------------------------------*- C++ -*-===//
+//
+// Part of the Reussir project, dual licensed under the Apache License v2.0 or
+// the MIT License.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+//===----------------------------------------------------------------------===//
+
 #include <algorithm>
 #include <cassert>
 #include <llvm/ADT/ArrayRef.h>

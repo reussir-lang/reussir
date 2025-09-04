@@ -1,3 +1,11 @@
+//===-- IncDecCancellation.cpp ----------------------------------*- C++ -*-===//
+//
+// Part of the Reussir project, dual licensed under the Apache License v2.0 or
+// the MIT License.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+//===----------------------------------------------------------------------===//
+
 #include "Reussir/Conversion/IncDecCancellation.h"
 #include "Reussir/Analysis/AliasAnalysis.h"
 #include "Reussir/Conversion/RcDecrementExpansion.h"
@@ -7,6 +15,7 @@
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/Dominance.h>
 #include <mlir/IR/Value.h>
+#include <mlir/IR/Visitors.h>
 #include <mlir/Interfaces/CallInterfaces.h>
 #include <mlir/Interfaces/ControlFlowInterfaces.h>
 #include <mlir/Pass/Pass.h>
@@ -30,16 +39,21 @@ struct IncDecCancellationPass
   }
 };
 
-ReussirRcDecOp hasShallowAliasedRcDec(mlir::TypedValue<RcType> rcPtr,
-                                      mlir::AliasAnalysis &aliasAnalysis,
-                                      mlir::Block *block) {
-  for (const auto &op : *block)
-    if (auto rcDecOp = llvm::dyn_cast<ReussirRcDecOp>(&op))
-      if (aliasAnalysis.alias(rcDecOp.getRcPtr(), rcPtr) ==
-          mlir::AliasResult::MustAlias)
-        return rcDecOp;
-
-  return nullptr;
+ReussirRcDecOp findPostDominantAliasedRcDec(
+    mlir::TypedValue<RcType> rcPtr, mlir::AliasAnalysis &aliasAnalysis,
+    mlir::PostDominanceInfo &postDominanceInfo, mlir::Region &dropRegion) {
+  ReussirRcDecOp fusionTarget{};
+  dropRegion.walk([&](ReussirRcDecOp decOp) {
+    auto aliasResult = aliasAnalysis.alias(decOp.getRcPtr(), rcPtr);
+    if (postDominanceInfo.postDominates(decOp->getBlock(),
+                                        &dropRegion.front()) &&
+        aliasResult == mlir::AliasResult::MustAlias) {
+      fusionTarget = decOp;
+      return mlir::WalkResult::interrupt();
+    }
+    return mlir::WalkResult::advance();
+  });
+  return fusionTarget;
 }
 
 void eraseOrReplaceDecOp(ReussirRcDecOp decOp) {
@@ -59,6 +73,7 @@ void eraseOrReplaceDecOp(ReussirRcDecOp decOp) {
 llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func) {
   mlir::AliasAnalysis aliasAnalysis(func);
   registerAliasAnalysisImplementations(aliasAnalysis);
+  mlir::PostDominanceInfo postDominanceInfo(func);
   llvm::SmallVector<ReussirRcIncOp> incOps;
   func->walk([&](ReussirRcIncOp op) { incOps.push_back(op); });
   for (auto op : incOps) {
@@ -69,8 +84,9 @@ llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func) {
         // This is a similar situation as other aborting cases.
         if (!ifOp->hasAttr(kExpandedDecrementAttr))
           break;
-        ReussirRcDecOp decOp = hasShallowAliasedRcDec(
-            op.getRcPtr(), aliasAnalysis, ifOp.thenBlock());
+        ReussirRcDecOp decOp = findPostDominantAliasedRcDec(
+            op.getRcPtr(), aliasAnalysis, postDominanceInfo,
+            ifOp.getThenRegion());
         if (decOp) {
           op->moveBefore(ifOp.elseYield());
           eraseOrReplaceDecOp(decOp);

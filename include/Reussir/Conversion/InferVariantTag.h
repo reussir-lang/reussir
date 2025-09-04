@@ -10,6 +10,9 @@
 // drop operations.
 //
 //===----------------------------------------------------------------------===//
+
+#pragma once
+
 #ifndef REUSSIR_CONVERSION_INFERVARIANTTAG_H
 #define REUSSIR_CONVERSION_INFERVARIANTTAG_H
 

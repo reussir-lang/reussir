@@ -10,6 +10,9 @@
 // decrement operations in Reussir.
 //
 //===----------------------------------------------------------------------===//
+
+#pragma once
+
 #ifndef REUSSIR_CONVERSION_INCDECCANCELLATION_H
 #define REUSSIR_CONVERSION_INCDECCANCELLATION_H
 

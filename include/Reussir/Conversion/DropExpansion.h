@@ -9,6 +9,9 @@
 // This header file provides expansion patterns for Reussir drop operations.
 //
 //===----------------------------------------------------------------------===//
+
+#pragma once
+
 #ifndef REUSSIR_CONVERSION_DROPEXPANSION_H
 #define REUSSIR_CONVERSION_DROPEXPANSION_H
 
