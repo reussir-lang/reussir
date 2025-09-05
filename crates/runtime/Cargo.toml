@@ -1,0 +1,13 @@
+[package]
+name = "reussir-rt"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+backtrace = { version = "0.3.75" }
+hashbrown = { version = "0.16.0" }
+stacker = { version = "0.1.21" }
+
+
+[lib]
+crate-type = ["cdylib", "staticlib"]

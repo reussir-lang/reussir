@@ -4,6 +4,7 @@ members = [
     "crates/bridge",
     "crates/core",
     "crates/front",
+    "crates/runtime",
     "crates/sema",
     "crates/utils",
     "tool/rrc",
