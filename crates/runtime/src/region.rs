@@ -14,6 +14,7 @@ enum PackedStatusTag {
     Rank = 0b01,
     Rc = 0b10,
     Disposing = 0b11,
+    #[allow(unused)]
     Parent = 0xFF,
 }
 
@@ -64,7 +65,20 @@ impl PackedStatus {
     }
 }
 
-struct Header {}
+struct VTable {
+    pub drop_in_place: Option<unsafe extern "C" fn(*mut u8)>,
+    pub clone_into: Option<unsafe extern "C" fn(*const u8, *mut u8)>,
+    pub align: usize,
+    pub size: usize,
+    pub scan_count: usize,
+}
+
+#[repr(C)]
+struct Header {
+    status: PackedStatus,
+    next: *mut Self,
+    vtable: *mut VTable,
+}
 
 #[cfg(test)]
 mod tests {
