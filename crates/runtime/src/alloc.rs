@@ -30,6 +30,9 @@ pub unsafe extern "C" fn __reussir_reallocate(
     new_size: usize,
 ) -> *mut u8 {
     if ptr.is_null() || old_align != new_align {
+        if !ptr.is_null() {
+            unsafe { __reussir_deallocate(ptr, old_align, old_size) };
+        }
         return unsafe { __reussir_allocate(new_align, new_size) };
     }
     let layout = unsafe { Layout::from_size_align(old_size, old_align).unwrap_unchecked() };
