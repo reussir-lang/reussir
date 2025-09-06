@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, ptr::NonNull};
+use std::{alloc::Layout, num::NonZeroUsize, ptr::NonNull};
 
 const STATUS_BITS: usize = 2;
 const STATUS_MASK: usize = (1 << STATUS_BITS) - 1;
@@ -71,6 +71,19 @@ struct VTable {
     pub align: usize,
     pub size: usize,
     pub scan_count: usize,
+    pub scan_offsets: *const usize,
+}
+
+impl VTable {
+    pub fn scan_count(&self) -> usize {
+        self.scan_count
+    }
+    pub fn scan_iter(&self, base: NonNull<Header>) -> impl Iterator<Item = NonNull<Header>> {
+        let slice = unsafe { std::slice::from_raw_parts(self.scan_offsets, self.scan_count) };
+        slice.iter().filter_map(move |offset| unsafe {
+            NonNull::new(base.as_ptr().add(*offset) as *mut Header)
+        })
+    }
 }
 
 #[repr(C)]
@@ -78,6 +91,16 @@ struct Header {
     status: PackedStatus,
     next: *mut Self,
     vtable: *mut VTable,
+}
+
+impl Default for Header {
+    fn default() -> Self {
+        Self {
+            status: PackedStatus::pack(Status::Unmarked),
+            next: std::ptr::null_mut(),
+            vtable: std::ptr::null_mut(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -163,7 +186,7 @@ mod tests {
     #[test]
     fn test_pack_unpack_parent() {
         // Create a dummy header on the stack for testing
-        let header = Header {};
+        let header = Header::default();
         let ptr = NonNull::from(&header);
         let original = Status::Parent(ptr);
         let packed = PackedStatus::pack(original);
@@ -183,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_pack_unpack_round_trip_all_variants() {
-        let header = Header {};
+        let header = Header::default();
         let ptr = NonNull::from(&header);
 
         // Test each variant individually to avoid ownership issues
