@@ -65,6 +65,7 @@ impl PackedStatus {
     }
 }
 
+#[repr(C)]
 struct VTable {
     pub drop_in_place: Option<unsafe extern "C" fn(*mut u8)>,
     pub clone_into: Option<unsafe extern "C" fn(*const u8, *mut u8)>,
@@ -74,23 +75,23 @@ struct VTable {
     pub scan_offsets: *const usize,
 }
 
-impl VTable {
-    pub fn scan_count(&self) -> usize {
-        self.scan_count
-    }
-    pub fn scan_iter(&self, base: NonNull<Header>) -> impl Iterator<Item = NonNull<Header>> {
-        let slice = unsafe { std::slice::from_raw_parts(self.scan_offsets, self.scan_count) };
-        slice.iter().filter_map(move |offset| unsafe {
-            NonNull::new(base.as_ptr().add(*offset) as *mut Header)
-        })
-    }
-}
-
 #[repr(C)]
 struct Header {
     status: PackedStatus,
     next: *mut Self,
     vtable: *mut VTable,
+}
+
+impl Header {
+    pub fn scan_iter(&self) -> impl Iterator<Item = NonNull<Header>> {
+        let table = unsafe { &*self.vtable };
+        let slice = unsafe { std::slice::from_raw_parts(table.scan_offsets, table.scan_count) };
+        let base = NonNull::from(self);
+        slice.iter().filter_map(move |offset| {
+            let ptr = unsafe { base.byte_offset(*offset as isize).cast::<*mut Header>() };
+            NonNull::new(unsafe { ptr.read() })
+        })
+    }
 }
 
 impl Default for Header {
