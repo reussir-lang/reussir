@@ -1,4 +1,7 @@
-use std::{alloc::Layout, num::NonZeroUsize, ptr::NonNull};
+use std::{num::NonZeroUsize, os::linux::raw::stat, ptr::NonNull};
+
+use smallvec::SmallVec;
+pub mod rusty;
 
 const STATUS_BITS: usize = 2;
 const STATUS_MASK: usize = (1 << STATUS_BITS) - 1;
@@ -27,28 +30,8 @@ enum Status {
     Parent(NonNull<Header>),
 }
 
-impl PackedStatus {
-    pub fn unpack(self) -> Status {
-        if self.0 as isize > 0 {
-            let ptr = std::ptr::with_exposed_provenance_mut(self.0);
-            let ptr = unsafe { NonNull::new_unchecked(ptr) };
-            return Status::Parent(ptr);
-        }
-        match self.0 & STATUS_MASK {
-            0 => Status::Unmarked,
-            1 => {
-                let rank = (self.0 & !HIGHEST_BIT) >> STATUS_BITS;
-                Status::Rank(unsafe { NonZeroUsize::new_unchecked(rank) })
-            }
-            2 => {
-                let rc = (self.0 & !HIGHEST_BIT) >> STATUS_BITS;
-                Status::Rc(unsafe { NonZeroUsize::new_unchecked(rc) })
-            }
-            3 => Status::Disposing,
-            _ => unsafe { std::hint::unreachable_unchecked() },
-        }
-    }
-    pub fn pack(status: Status) -> Self {
+impl From<Status> for PackedStatus {
+    fn from(status: Status) -> Self {
         match status {
             Status::Parent(ptr) => Self(ptr.as_ptr().expose_provenance()),
             Status::Unmarked => Self(PackedStatusTag::Unmarked as usize | HIGHEST_BIT),
@@ -65,12 +48,32 @@ impl PackedStatus {
     }
 }
 
+impl From<PackedStatus> for Status {
+    fn from(packed: PackedStatus) -> Self {
+        if packed.0 as isize > 0 {
+            let ptr = std::ptr::with_exposed_provenance_mut(packed.0);
+            let ptr = unsafe { NonNull::new_unchecked(ptr) };
+            return Status::Parent(ptr);
+        }
+        match packed.0 & STATUS_MASK {
+            0 => Status::Unmarked,
+            1 => {
+                let rank = (packed.0 & !HIGHEST_BIT) >> STATUS_BITS;
+                Status::Rank(unsafe { NonZeroUsize::new_unchecked(rank) })
+            }
+            2 => {
+                let rc = (packed.0 & !HIGHEST_BIT) >> STATUS_BITS;
+                Status::Rc(unsafe { NonZeroUsize::new_unchecked(rc) })
+            }
+            3 => Status::Disposing,
+            _ => unsafe { std::hint::unreachable_unchecked() },
+        }
+    }
+}
+
 #[repr(C)]
-struct VTable {
-    pub drop_in_place: Option<unsafe extern "C" fn(*mut u8)>,
-    pub clone_into: Option<unsafe extern "C" fn(*const u8, *mut u8)>,
-    pub align: usize,
-    pub size: usize,
+pub struct VTable {
+    pub drop: Option<unsafe extern "C" fn(*mut u8)>,
     pub scan_count: usize,
     pub scan_offsets: *const usize,
 }
@@ -83,21 +86,73 @@ struct Header {
 }
 
 impl Header {
-    pub fn scan_iter(&self) -> impl Iterator<Item = NonNull<Header>> {
-        let table = unsafe { &*self.vtable };
+    pub fn children(this: NonNull<Self>) -> impl Iterator<Item = NonNull<Header>> {
+        let table = unsafe { &*this.as_ref().vtable };
         let slice = unsafe { std::slice::from_raw_parts(table.scan_offsets, table.scan_count) };
-        let base = NonNull::from(self);
-        slice.iter().filter_map(move |offset| {
-            let ptr = unsafe { base.byte_offset(*offset as isize).cast::<*mut Header>() };
+        slice.iter().copied().filter_map(move |offset| {
+            let ptr = unsafe { this.byte_add(offset).cast::<*mut Header>() };
             NonNull::new(unsafe { ptr.read() })
         })
+    }
+
+    pub unsafe fn drop(this: NonNull<Self>) {
+        let table = unsafe { &*this.as_ref().vtable };
+        if let Some(drop_fn) = table.drop {
+            unsafe { drop_fn(this.as_ptr() as *mut u8) };
+        }
+    }
+
+    unsafe fn find(mut cursor: NonNull<Self>) -> NonNull<Self> {
+        while let Status::Parent(parent) = unsafe { cursor.as_ref().status }.into() {
+            let parent_status = unsafe { parent.as_ref().status };
+            if let Status::Parent(..) = parent_status.into() {
+                unsafe { cursor.as_mut().status = parent_status };
+            }
+            cursor = parent;
+        }
+        cursor
+    }
+
+    unsafe fn rank(this: NonNull<Self>) -> NonZeroUsize {
+        let status = unsafe { this.as_ref().status };
+        if let Status::Rank(rank) = status.into() {
+            rank
+        } else {
+            unsafe { std::hint::unreachable_unchecked() }
+        }
+    }
+
+    unsafe fn union(mut r1: NonNull<Self>, mut r2: NonNull<Self>) -> bool {
+        r1 = unsafe { Self::find(r1) };
+        r2 = unsafe { Self::find(r2) };
+        if r1 == r2 {
+            return false;
+        }
+        let rank1 = unsafe { Self::rank(r1) };
+        let rank2 = unsafe { Self::rank(r2) };
+        if rank1 > rank2 {
+            std::mem::swap(&mut r1, &mut r2);
+        } else if rank1 == rank2 {
+            unsafe { r1.as_mut().status = Status::Rank(rank1.saturating_add(1)).into() };
+        }
+        unsafe { r2.as_mut().status = Status::Parent(r1).into() };
+        true
+    }
+
+    pub unsafe fn dispose(this: NonNull<Self>) {}
+    pub unsafe fn freeze(this: NonNull<Self>) {
+        type Pending = SmallVec<[NonNull<Header>; 16]>;
+        let mut pending = Pending::new();
+        fn freeze_recursive(this: NonNull<Header>, pending: &mut Pending) {
+            stacker::maybe_grow(4096, 32768, move || {})
+        }
     }
 }
 
 impl Default for Header {
     fn default() -> Self {
         Self {
-            status: PackedStatus::pack(Status::Unmarked),
+            status: Status::Unmarked.into(),
             next: std::ptr::null_mut(),
             vtable: std::ptr::null_mut(),
         }
@@ -111,8 +166,8 @@ mod tests {
     #[test]
     fn test_pack_unpack_unmarked() {
         let original = Status::Unmarked;
-        let packed = PackedStatus::pack(original);
-        let unpacked = packed.unpack();
+        let packed: PackedStatus = original.into();
+        let unpacked: Status = packed.into();
 
         match unpacked {
             Status::Unmarked => (),
@@ -123,8 +178,8 @@ mod tests {
     #[test]
     fn test_pack_unpack_disposing() {
         let original = Status::Disposing;
-        let packed = PackedStatus::pack(original);
-        let unpacked = packed.unpack();
+        let packed: PackedStatus = original.into();
+        let unpacked: Status = packed.into();
 
         match unpacked {
             Status::Disposing => (),
@@ -140,8 +195,8 @@ mod tests {
         for &value in &test_values {
             let rank = NonZeroUsize::new(value).unwrap();
             let original = Status::Rank(rank);
-            let packed = PackedStatus::pack(original);
-            let unpacked = packed.unpack();
+            let packed: PackedStatus = original.into();
+            let unpacked: Status = packed.into();
 
             match unpacked {
                 Status::Rank(unpacked_rank) => {
@@ -166,8 +221,8 @@ mod tests {
         for &value in &test_values {
             let rc = NonZeroUsize::new(value).unwrap();
             let original = Status::Rc(rc);
-            let packed = PackedStatus::pack(original);
-            let unpacked = packed.unpack();
+            let packed: PackedStatus = original.into();
+            let unpacked: Status = packed.into();
 
             match unpacked {
                 Status::Rc(unpacked_rc) => {
@@ -190,8 +245,8 @@ mod tests {
         let header = Header::default();
         let ptr = NonNull::from(&header);
         let original = Status::Parent(ptr);
-        let packed = PackedStatus::pack(original);
-        let unpacked = packed.unpack();
+        let packed: PackedStatus = original.into();
+        let unpacked: Status = packed.into();
 
         match unpacked {
             Status::Parent(unpacked_ptr) => {
@@ -214,8 +269,8 @@ mod tests {
 
         // Test Unmarked
         let original = Status::Unmarked;
-        let packed = PackedStatus::pack(original);
-        let unpacked = packed.unpack();
+        let packed: PackedStatus = original.into();
+        let unpacked: Status = packed.into();
         assert!(
             matches!(unpacked, Status::Unmarked),
             "Unmarked variant failed"
@@ -223,8 +278,8 @@ mod tests {
 
         // Test Disposing
         let original = Status::Disposing;
-        let packed = PackedStatus::pack(original);
-        let unpacked = packed.unpack();
+        let packed: PackedStatus = original.into();
+        let unpacked: Status = packed.into();
         assert!(
             matches!(unpacked, Status::Disposing),
             "Disposing variant failed"
@@ -232,8 +287,8 @@ mod tests {
 
         // Test Rank
         let original = Status::Rank(NonZeroUsize::new(42).unwrap());
-        let packed = PackedStatus::pack(original);
-        let unpacked = packed.unpack();
+        let packed: PackedStatus = original.into();
+        let unpacked: Status = packed.into();
         match unpacked {
             Status::Rank(val) => assert_eq!(val.get(), 42, "Rank value mismatch"),
             _ => panic!("Expected Rank variant"),
@@ -241,8 +296,8 @@ mod tests {
 
         // Test Rc
         let original = Status::Rc(NonZeroUsize::new(100).unwrap());
-        let packed = PackedStatus::pack(original);
-        let unpacked = packed.unpack();
+        let packed: PackedStatus = original.into();
+        let unpacked: Status = packed.into();
         match unpacked {
             Status::Rc(val) => assert_eq!(val.get(), 100, "Rc value mismatch"),
             _ => panic!("Expected Rc variant"),
@@ -250,8 +305,8 @@ mod tests {
 
         // Test Parent
         let original = Status::Parent(ptr);
-        let packed = PackedStatus::pack(original);
-        let unpacked = packed.unpack();
+        let packed: PackedStatus = original.into();
+        let unpacked: Status = packed.into();
         match unpacked {
             Status::Parent(unp_ptr) => {
                 assert_eq!(ptr.as_ptr(), unp_ptr.as_ptr(), "Parent pointer mismatch")
