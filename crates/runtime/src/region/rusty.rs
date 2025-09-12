@@ -4,7 +4,7 @@ use crate::region::{Header, VTable};
 
 // For rust side interoperability
 #[repr(C)]
-pub struct RegionalObject<T> {
+pub struct RegionalRcBox<T> {
     header: Header,
     data: ManuallyDrop<T>,
 }
@@ -13,7 +13,7 @@ pub unsafe trait RegionalObjectTrait: Sized + Clone {
     const SCAN_OFFSETS: &'static [usize];
     unsafe extern "C" fn drop(ptr: *mut u8) {
         if let Some(ptr) = NonNull::new(ptr) {
-            let mut obj = ptr.cast::<RegionalObject<Self>>();
+            let mut obj = ptr.cast::<RegionalRcBox<Self>>();
             unsafe { ManuallyDrop::drop(&mut obj.as_mut().data) };
         }
     }
@@ -23,3 +23,8 @@ pub unsafe trait RegionalObjectTrait: Sized + Clone {
         scan_offsets: Self::SCAN_OFFSETS.as_ptr(),
     };
 }
+
+#[repr(transparent)]
+pub struct RegionalRc<T: RegionalObjectTrait> (NonNull<RegionalRcBox<T>>);
+
+
