@@ -112,7 +112,12 @@ struct Header {
 impl Header {
     pub unsafe fn children(this: NonNull<Self>) -> impl Iterator<Item = NonNull<Header>> {
         let table = unsafe { &*this.as_ref().vtable };
-        let slice = unsafe { std::slice::from_raw_parts(table.scan_offsets, table.scan_count) };
+        static EMPTY: [usize; 0] = [];
+        let slice = if table.scan_count > 0 && !table.scan_offsets.is_null() {
+            unsafe { std::slice::from_raw_parts(table.scan_offsets, table.scan_count) }
+        } else {
+            &EMPTY
+        };
         slice.iter().copied().filter_map(move |offset| {
             let ptr = unsafe { this.byte_add(offset).cast::<*mut Header>() };
             NonNull::new(unsafe { ptr.read() })
@@ -376,6 +381,27 @@ mod tests {
                 assert_eq!(ptr.as_ptr(), unp_ptr.as_ptr(), "Parent pointer mismatch")
             }
             _ => panic!("Expected Parent variant"),
+        }
+    }
+
+    #[test]
+    fn freeze_singleton() {
+        let empty_table = VTable {
+            drop: None,
+            scan_count: 0,
+            scan_offsets: std::ptr::null(),
+        };
+        let mut header = Header {
+            status: Status::Unmarked.into(),
+            next: std::ptr::null_mut(),
+            vtable: &empty_table as *const VTable as *mut VTable,
+        };
+        let ptr = NonNull::from(&mut header);
+        unsafe { Header::freeze(ptr) };
+        let status: Status = header.status.into();
+        match status {
+            Status::Rc(rc) => assert_eq!(rc.get(), 1, "Expected RC to be 1"),
+            _ => panic!("Expected Rc status, got {:?}", status),
         }
     }
 }
