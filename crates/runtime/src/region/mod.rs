@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, os::linux::raw::stat, ptr::NonNull};
+use std::{num::NonZeroUsize, ptr::NonNull};
 
 use smallvec::SmallVec;
 pub mod rusty;
@@ -10,7 +10,23 @@ const MAX_VALUE: usize = usize::MAX >> (STATUS_BITS + 1);
 
 #[repr(transparent)]
 #[derive(Copy, Clone)]
-struct PackedStatus(usize);
+struct PackedStatus(*mut Header);
+
+impl PackedStatus {
+    pub fn increase(&mut self) {
+        debug_assert!({
+            let status: Status = (*self).into();
+            matches!(status, Status::Rc(_) | Status::Rank(_))
+        });
+        self.0 = self.0.map_addr(|addr| addr + (1 << STATUS_BITS));
+    }
+}
+
+impl PackedStatus {
+    pub fn from_scalar(scalar: usize) -> Self {
+       Self(std::ptr::without_provenance_mut(scalar))
+    }
+}
 
 enum PackedStatusTag {
     Unmarked = 0b00,
@@ -30,39 +46,47 @@ enum Status {
     Parent(NonNull<Header>),
 }
 
+impl Status {
+    pub fn rank1() -> Self {
+        Status::Rank(unsafe { NonZeroUsize::new_unchecked(1) })
+    }
+    pub fn rc1() -> Self {
+        Status::Rc(unsafe { NonZeroUsize::new_unchecked(1) })
+    }
+}
+
 impl From<Status> for PackedStatus {
     fn from(status: Status) -> Self {
         match status {
-            Status::Parent(ptr) => Self(ptr.as_ptr().expose_provenance()),
-            Status::Unmarked => Self(PackedStatusTag::Unmarked as usize | HIGHEST_BIT),
+            Status::Parent(ptr) => Self(ptr.as_ptr()),
+            Status::Unmarked => Self::from_scalar(PackedStatusTag::Unmarked as usize | HIGHEST_BIT),
             Status::Rank(non_zero) => {
                 debug_assert!(non_zero.get() <= MAX_VALUE, "Rank value too large to pack");
-                Self((non_zero.get() << STATUS_BITS) | PackedStatusTag::Rank as usize | HIGHEST_BIT)
+                Self::from_scalar((non_zero.get() << STATUS_BITS) | PackedStatusTag::Rank as usize | HIGHEST_BIT)
             }
             Status::Rc(non_zero) => {
                 debug_assert!(non_zero.get() <= MAX_VALUE, "RC value too large to pack");
-                Self((non_zero.get() << STATUS_BITS) | PackedStatusTag::Rc as usize | HIGHEST_BIT)
+                Self::from_scalar((non_zero.get() << STATUS_BITS) | PackedStatusTag::Rc as usize | HIGHEST_BIT)
             }
-            Status::Disposing => Self(PackedStatusTag::Disposing as usize | HIGHEST_BIT),
+            Status::Disposing => Self::from_scalar(PackedStatusTag::Disposing as usize | HIGHEST_BIT),
         }
     }
 }
 
 impl From<PackedStatus> for Status {
     fn from(packed: PackedStatus) -> Self {
-        if packed.0 as isize > 0 {
-            let ptr = std::ptr::with_exposed_provenance_mut(packed.0);
-            let ptr = unsafe { NonNull::new_unchecked(ptr) };
+        if packed.0.addr() as isize > 0 {
+            let ptr = unsafe { NonNull::new_unchecked(packed.0) };
             return Status::Parent(ptr);
         }
-        match packed.0 & STATUS_MASK {
+        match packed.0.addr() & STATUS_MASK {
             0 => Status::Unmarked,
             1 => {
-                let rank = (packed.0 & !HIGHEST_BIT) >> STATUS_BITS;
+                let rank = (packed.0.addr() & !HIGHEST_BIT) >> STATUS_BITS;
                 Status::Rank(unsafe { NonZeroUsize::new_unchecked(rank) })
             }
             2 => {
-                let rc = (packed.0 & !HIGHEST_BIT) >> STATUS_BITS;
+                let rc = (packed.0.addr() & !HIGHEST_BIT) >> STATUS_BITS;
                 Status::Rc(unsafe { NonZeroUsize::new_unchecked(rc) })
             }
             3 => Status::Disposing,
@@ -86,7 +110,7 @@ struct Header {
 }
 
 impl Header {
-    pub fn children(this: NonNull<Self>) -> impl Iterator<Item = NonNull<Header>> {
+    pub unsafe fn children(this: NonNull<Self>) -> impl Iterator<Item = NonNull<Header>> {
         let table = unsafe { &*this.as_ref().vtable };
         let slice = unsafe { std::slice::from_raw_parts(table.scan_offsets, table.scan_count) };
         slice.iter().copied().filter_map(move |offset| {
@@ -133,7 +157,9 @@ impl Header {
         if rank1 > rank2 {
             std::mem::swap(&mut r1, &mut r2);
         } else if rank1 == rank2 {
-            unsafe { r1.as_mut().status = Status::Rank(rank1.saturating_add(1)).into() };
+            unsafe {
+                r1.as_mut().status.increase();
+            };
         }
         unsafe { r2.as_mut().status = Status::Parent(r1).into() };
         true
@@ -142,10 +168,48 @@ impl Header {
     pub unsafe fn dispose(this: NonNull<Self>) {}
     pub unsafe fn freeze(this: NonNull<Self>) {
         type Pending = SmallVec<[NonNull<Header>; 16]>;
+        const RED_ZONE_SIZE: usize = 4096;
+        const BUMP_SIZE: usize = 32768;
         let mut pending = Pending::new();
-        fn freeze_recursive(this: NonNull<Header>, pending: &mut Pending) {
-            stacker::maybe_grow(4096, 32768, move || {})
+        fn freeze_recursive(mut this: NonNull<Header>, pending: &mut Pending) {
+            stacker::maybe_grow(RED_ZONE_SIZE, BUMP_SIZE, move || {
+                let status: Status = unsafe { Header::find(this).as_ref().status }.into();
+                match status {
+                    Status::Unmarked => {
+                        unsafe {
+                            this.as_mut().status = Status::rank1().into();
+                        }
+                        pending.push(this);
+                        unsafe {
+                            for child in Header::children(this) {
+                                freeze_recursive(child, pending);
+                            }
+                        }
+                        if let Some(peek) = pending.last().copied() {
+                            if core::ptr::eq(peek.as_ptr(), this.as_ptr()) {
+                                pending.pop();
+                                unsafe {
+                                    Header::find(this).as_mut().status = Status::rc1().into()
+                                };
+                            }
+                        }
+                    }
+                    Status::Rc(_) => unsafe { Header::find(this).as_mut().status.increase() },
+                    Status::Rank(_) => loop {
+                        while pending
+                            .last()
+                            .copied()
+                            .map(|p| unsafe { Header::union(this, p) })
+                            .unwrap_or(false)
+                        {
+                            pending.pop();
+                        }
+                    },
+                    _ => (),
+                }
+            })
         }
+        freeze_recursive(this, &mut pending);
     }
 }
 
