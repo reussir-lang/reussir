@@ -2,6 +2,8 @@ use std::{alloc::Layout, num::NonZeroUsize, ptr::NonNull};
 
 use num_enum::TryFromPrimitive;
 use smallvec::SmallVec;
+
+use crate::region::rusty::Region;
 pub mod rusty;
 
 const STATUS_BITS: usize = 2;
@@ -300,6 +302,64 @@ impl Default for Header {
             status: Status::Unmarked.into(),
             next: std::ptr::null_mut(),
             vtable: std::ptr::null_mut(),
+        }
+    }
+}
+
+/*
+  addRuntimeFunction(body, "__reussir_freeze_flex_object", {llvmPtrType},
+                     {llvmPtrType});
+  addRuntimeFunction(body, "__reussir_cleanup_region", {llvmPtrType},
+                     {llvmPtrType});
+  addRuntimeFunction(body, "__reussir_acquire_rigid_object", {llvmPtrType}, {});
+  addRuntimeFunction(body, "__reussir_release_rigid_object", {llvmPtrType}, {});
+*/
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_freeze_flex_object(ptr: *mut u8) -> *mut u8 {
+    unsafe {
+        match NonNull::new(ptr) {
+            Some(ptr) => {
+                Header::freeze(ptr.cast());
+                ptr.as_ptr()
+            }
+            None => crate::panic!("Invalid pointer passed to __reussir_freeze_flex_object"),
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_cleanup_region(ptr: *mut u8) {
+    unsafe {
+        match NonNull::new(ptr) {
+            Some(ptr) => {
+                Region::clean(ptr.cast().as_ref());
+            }
+            None => crate::panic!("Invalid pointer passed to __reussir_cleanup_region"),
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_acquire_rigid_object(ptr: *mut u8) {
+    unsafe {
+        match NonNull::new(ptr) {
+            Some(ptr) => {
+                Header::acquire(ptr.cast());
+            }
+            None => crate::panic!("Invalid pointer passed to __reussir_acquire_rigid_object"),
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_release_rigid_object(ptr: *mut u8) {
+    unsafe {
+        match NonNull::new(ptr) {
+            Some(ptr) => {
+                Header::release(ptr.cast());
+            }
+            None => crate::panic!("Invalid pointer passed to __reussir_release_rigid_object"),
         }
     }
 }
