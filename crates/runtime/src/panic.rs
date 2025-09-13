@@ -1,7 +1,7 @@
 use std::slice;
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __reussir_panic(message: *const u8, length: usize) -> ! {
+pub unsafe extern "C" fn __reussir_panic(message: *const u8, length: usize) -> ! {
     let slice = unsafe { slice::from_raw_parts(message, length) };
     let message = String::from_utf8_lossy(slice);
     let bt = backtrace::Backtrace::new();
