@@ -35,27 +35,5 @@ jobs:
         toolchain: nightly
         components: rust-src, miri
 
-    - name: Cache cargo registry
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-miri-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-miri-
-
     - name: Run Miri tests on reussir-rt
-      run: |
-        cd crates/runtime
-        cargo miri test --verbose
-
-    - name: Upload Miri logs (if tests fail)
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: miri-logs-reussir-rt
-        path: |
-          target/miri/
-        retention-days: 7
+      run: cargo miri test -p reussir-rt
