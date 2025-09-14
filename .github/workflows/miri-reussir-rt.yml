@@ -1,0 +1,78 @@
+name: Miri Tests - reussir-rt
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'crates/runtime/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'crates/runtime/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  # schedule:
+  #   # Run daily at 2 AM UTC
+  #   - cron: '0 2 * * *'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  miri-test:
+    name: Miri Test (reussir-rt)
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: nightly
+        components: rust-src, miri
+
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-miri-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-miri-
+
+    - name: Set up environment for Miri
+      run: |
+        # Configure Miri environment
+        export MIRI_SYSROOT=$(rustc +nightly --print sysroot)
+        
+        # Set Miri environment variables for better error reporting
+        export MIRI_BACKTRACE=1
+        export MIRI_LOG=warn
+        
+        echo "MIRI_SYSROOT=$MIRI_SYSROOT" >> $GITHUB_ENV
+        echo "MIRI_BACKTRACE=1" >> $GITHUB_ENV
+        echo "MIRI_LOG=warn" >> $GITHUB_ENV
+
+    - name: Run Miri tests on reussir-rt
+      run: |
+        cd crates/runtime
+        cargo miri test --verbose
+        
+        # Also run doctests with Miri if any exist
+        cargo miri test --doc --verbose
+
+
+    - name: Upload Miri logs (if tests fail)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: miri-logs-reussir-rt
+        path: |
+          target/miri/
+        retention-days: 7
