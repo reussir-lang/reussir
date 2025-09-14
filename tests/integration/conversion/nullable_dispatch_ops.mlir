@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-lowering-scf-ops --reussir-lowering-basic-ops --convert-scf-to-cf --convert-to-llvm | \
+// RUN: %reussir-opt %s --reussir-lowering-scf-ops --reussir-lowering-basic-ops --convert-scf-to-cf --convert-to-llvm --reconcile-unrealized-casts | \
 // RUN: %mlir-translate --mlir-to-llvmir | %FileCheck %s
 
 module {
