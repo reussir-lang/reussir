@@ -46,19 +46,6 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-miri-
 
-    - name: Set up environment for Miri
-      run: |
-        # Configure Miri environment
-        export MIRI_SYSROOT=$(rustc +nightly --print sysroot)
-        
-        # Set Miri environment variables for better error reporting
-        export MIRI_BACKTRACE=1
-        export MIRI_LOG=warn
-        
-        echo "MIRI_SYSROOT=$MIRI_SYSROOT" >> $GITHUB_ENV
-        echo "MIRI_BACKTRACE=1" >> $GITHUB_ENV
-        echo "MIRI_LOG=warn" >> $GITHUB_ENV
-
     - name: Run Miri tests on reussir-rt
       run: |
         cd crates/runtime
