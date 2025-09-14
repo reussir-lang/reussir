@@ -557,6 +557,22 @@ void ReussirRecordDispatchOp::getSuccessorRegions(
 }
 
 //===----------------------------------------------------------------------===//
+// Reussir Region VTable Op
+//===----------------------------------------------------------------------===//
+// RegionVTableOp SymbolUserOpInterface
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRegionVTableOp::verifySymbolUses(
+    mlir::SymbolTableCollection &symbolTable) {
+  if (getDropAttr()) {
+    auto funcOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
+        getOperation(), getDropAttr());
+    if (!funcOp)
+      return emitOpError("drop function not found: ") << getDropAttr();
+  }
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Record Dispatch Op
 //===----------------------------------------------------------------------===//
 // RecordDispatchOp verification
