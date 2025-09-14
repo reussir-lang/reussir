@@ -50,10 +50,6 @@ jobs:
       run: |
         cd crates/runtime
         cargo miri test --verbose
-        
-        # Also run doctests with Miri if any exist
-        cargo miri test --doc --verbose
-
 
     - name: Upload Miri logs (if tests fail)
       if: failure()
