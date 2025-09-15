@@ -2,6 +2,7 @@ use std::ptr::NonNull;
 
 use crate::region::Header;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Instruction {
     /// Load and yield current position as a header pointer,
     /// then advance the instr pointer by 1.
@@ -13,24 +14,33 @@ pub enum Instruction {
     End,
     /// Advance the cursor by the given number of bytes.
     Advance(u32),
+    /// Advance the instruction pointer by a given amount
+    Jump(u32),
 }
 
-const END_TAG: u32 = 0b00;
-const VARIANT_TAG: u32 = 0b01;
-const FIELD_TAG: u32 = 0b10;
-const ADVANCE_TAG: u32 = 0b11;
+const END_VALUE: i32 = 0;
+const VARIANT_VALUE: i32 = -1;
+const FIELD_VALUE: i32 = -2;
 
+#[derive(Clone, Copy)]
 #[repr(C)]
-pub struct PackedInstr(u32);
+pub struct PackedInstr(i32);
+
+impl std::fmt::Debug for PackedInstr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let instr: Instruction = (*self).into();
+        write!(f, "{instr:?}")
+    }
+}
 
 impl From<PackedInstr> for Instruction {
     fn from(value: PackedInstr) -> Self {
-        match value.0 & 0b11 {
-            END_TAG => Instruction::End,
-            VARIANT_TAG => Instruction::Variant,
-            FIELD_TAG => Instruction::Field,
-            ADVANCE_TAG => Instruction::Advance(value.0 >> 2),
-            _ => unreachable!(),
+        match value.0 {
+            END_VALUE => Instruction::End,
+            VARIANT_VALUE => Instruction::Variant,
+            FIELD_VALUE => Instruction::Field,
+            val if val > 0 => Instruction::Advance(val as u32),
+            val => Instruction::Jump((-val) as u32 - 3),
         }
     }
 }
@@ -44,10 +54,17 @@ impl From<Instruction> for PackedInstr {
 impl Instruction {
     pub const fn pack(self) -> PackedInstr {
         match self {
-            Instruction::End => PackedInstr(END_TAG),
-            Instruction::Variant => PackedInstr(VARIANT_TAG),
-            Instruction::Field => PackedInstr(FIELD_TAG),
-            Instruction::Advance(bytes) => PackedInstr((bytes << 2) | ADVANCE_TAG),
+            Instruction::End => PackedInstr(END_VALUE),
+            Instruction::Variant => PackedInstr(VARIANT_VALUE),
+            Instruction::Field => PackedInstr(FIELD_VALUE),
+            Instruction::Advance(bytes) => {
+                debug_assert!(bytes > 0);
+                PackedInstr(bytes as i32)
+            }
+            Instruction::Jump(instrs) => {
+                debug_assert!(instrs > 0);
+                PackedInstr(-(instrs as i32) - 3)
+            }
         }
     }
 }
@@ -78,6 +95,9 @@ impl Scanner {
                     Instruction::Advance(bytes) => {
                         self.cursor = self.cursor.byte_add(bytes as usize);
                         self.instr = self.instr.add(1);
+                    }
+                    Instruction::Jump(instrs) => {
+                        self.instr = self.instr.add(instrs as usize);
                     }
                 }
             }

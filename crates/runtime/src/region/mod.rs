@@ -136,7 +136,8 @@ impl VTable {
         let header_layout = Layout::new::<Header>();
         unsafe {
             let object_layout = Layout::from_size_align_unchecked(self.size, self.alignment);
-            header_layout.extend(object_layout).unwrap_unchecked()
+            let (layout, offset) = header_layout.extend(object_layout).unwrap_unchecked();
+            (layout.pad_to_align(), offset)
         }
     }
 }
