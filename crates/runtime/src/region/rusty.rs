@@ -13,16 +13,16 @@ pub unsafe trait RegionalObjectTrait: Sized {
     const SCAN_OFFSETS: &'static [usize];
     unsafe extern "C" fn drop(ptr: *mut u8) {
         if let Some(ptr) = NonNull::new(ptr) {
-            let mut obj = ptr.cast::<RegionalRcBox<Self>>();
-            unsafe { ManuallyDrop::drop(&mut obj.as_mut().data) };
+            let mut obj = ptr.cast::<ManuallyDrop<Self>>();
+            unsafe { ManuallyDrop::drop(obj.as_mut()) };
         }
     }
     const VTABLE: VTable = VTable {
         drop: Some(Self::drop),
         scan_count: Self::SCAN_OFFSETS.len(),
         scan_offsets: Self::SCAN_OFFSETS.as_ptr(),
-        size: std::mem::size_of::<RegionalRcBox<Self>>(),
-        alignment: std::mem::align_of::<RegionalRcBox<Self>>(),
+        size: std::mem::size_of::<Self>(),
+        alignment: std::mem::align_of::<Self>(),
     };
 }
 
@@ -167,10 +167,8 @@ mod tests {
     }
 
     unsafe impl RegionalObjectTrait for ListNode {
-        const SCAN_OFFSETS: &'static [usize] = &[
-            offset_of!(ListNode, prev) + offset_of!(RegionalRcBox<Self>, data),
-            offset_of!(ListNode, next) + offset_of!(RegionalRcBox<Self>, data),
-        ];
+        const SCAN_OFFSETS: &'static [usize] =
+            &[offset_of!(ListNode, prev), offset_of!(ListNode, next)];
     }
 
     #[test]

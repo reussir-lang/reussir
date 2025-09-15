@@ -128,6 +128,16 @@ pub struct VTable {
     pub alignment: usize,
 }
 
+impl VTable {
+    pub fn extended_layout(&self) -> (Layout, usize) {
+        let header_layout = Layout::new::<Header>();
+        unsafe {
+            let object_layout = Layout::from_size_align_unchecked(self.size, self.alignment);
+            header_layout.extend(object_layout).unwrap_unchecked()
+        }
+    }
+}
+
 #[repr(C)]
 struct Header {
     status: PackedStatus,
@@ -144,21 +154,34 @@ impl Header {
         } else {
             &EMPTY
         };
+        let object_ptr = unsafe { Self::get_object_ptr(this) };
         slice.iter().copied().filter_map(move |offset| {
-            let ptr = unsafe { this.byte_add(offset).cast::<*mut Header>() };
+            let ptr = unsafe { object_ptr.byte_add(offset).cast::<*mut Header>() };
             NonNull::new(unsafe { ptr.read() })
         })
     }
 
+    pub unsafe fn get_object_ptr(this: NonNull<Self>) -> NonNull<u8> {
+        unsafe {
+            let (_, offset) = (&*this.as_ref().vtable).extended_layout();
+            this.byte_add(offset).cast()
+        }
+    }
+
+    pub unsafe fn get_total_layout(this: NonNull<Self>) -> Layout {
+        let (layout, _) = unsafe { (&*this.as_ref().vtable).extended_layout() };
+        layout
+    }
+
     pub unsafe fn drop(this: NonNull<Self>) {
+        let object_ptr = unsafe { Self::get_object_ptr(this) };
         let table = unsafe { &*this.as_ref().vtable };
         if let Some(drop_fn) = table.drop {
-            unsafe { drop_fn(this.as_ptr() as *mut u8) };
+            unsafe { drop_fn(object_ptr.as_ptr()) };
         }
     }
     pub unsafe fn deallocate(this: NonNull<Self>) {
-        let table = unsafe { &*this.as_ref().vtable };
-        let layout = Layout::from_size_align(table.size, table.alignment).unwrap();
+        let layout = unsafe { Self::get_total_layout(this) };
         unsafe { std::alloc::dealloc(this.as_ptr() as *mut u8, layout) };
     }
 
