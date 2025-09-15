@@ -3,8 +3,12 @@ use std::{alloc::Layout, num::NonZeroUsize, ptr::NonNull};
 use num_enum::TryFromPrimitive;
 use smallvec::SmallVec;
 
-use crate::region::rusty::Region;
+use crate::region::{
+    rusty::Region,
+    scanner::{PackedInstr, Scanner},
+};
 pub mod rusty;
+mod scanner;
 
 const STATUS_BITS: usize = 2;
 const STATUS_MASK: usize = (1 << STATUS_BITS) - 1;
@@ -122,8 +126,7 @@ impl From<PackedStatus> for Status {
 #[repr(C)]
 pub struct VTable {
     pub drop: Option<unsafe extern "C" fn(*mut u8)>,
-    pub scan_count: usize,
-    pub scan_offsets: *const usize,
+    pub scan_instrs: *const PackedInstr,
     pub size: usize,
     pub alignment: usize,
 }
@@ -139,7 +142,7 @@ impl VTable {
 }
 
 #[repr(C)]
-struct Header {
+pub struct Header {
     status: PackedStatus,
     next: *mut Self,
     vtable: *mut VTable,
@@ -147,18 +150,7 @@ struct Header {
 
 impl Header {
     pub unsafe fn children(this: NonNull<Self>) -> impl Iterator<Item = NonNull<Header>> {
-        let table = unsafe { &*this.as_ref().vtable };
-        static EMPTY: [usize; 0] = [];
-        let slice = if table.scan_count > 0 && !table.scan_offsets.is_null() {
-            unsafe { std::slice::from_raw_parts(table.scan_offsets, table.scan_count) }
-        } else {
-            &EMPTY
-        };
-        let object_ptr = unsafe { Self::get_object_ptr(this) };
-        slice.iter().copied().filter_map(move |offset| {
-            let ptr = unsafe { object_ptr.byte_add(offset).cast::<*mut Header>() };
-            NonNull::new(unsafe { ptr.read() })
-        })
+        unsafe { Scanner::new(this).into_iter().flatten() }
     }
 
     pub unsafe fn get_object_ptr(this: NonNull<Self>) -> NonNull<u8> {
@@ -547,8 +539,7 @@ mod tests {
     fn freeze_singleton() {
         let empty_table = VTable {
             drop: None,
-            scan_count: 0,
-            scan_offsets: std::ptr::null(),
+            scan_instrs: std::ptr::null(),
             size: std::mem::size_of::<Header>(),
             alignment: std::mem::align_of::<Header>(),
         };

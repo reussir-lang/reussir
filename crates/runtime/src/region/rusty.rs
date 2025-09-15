@@ -1,6 +1,9 @@
 use std::{cell::Cell, mem::ManuallyDrop, ptr::NonNull};
 
-use crate::region::{Header, Status, VTable};
+use crate::region::{
+    Header, Status, VTable,
+    scanner::{Instruction, PackedInstr},
+};
 
 // For rust side interoperability
 #[repr(C)]
@@ -10,7 +13,7 @@ pub struct RegionalRcBox<T> {
 }
 
 pub unsafe trait RegionalObjectTrait: Sized {
-    const SCAN_OFFSETS: &'static [usize];
+    const SCAN_INSTRS: &'static [PackedInstr];
     unsafe extern "C" fn drop(ptr: *mut u8) {
         if let Some(ptr) = NonNull::new(ptr) {
             let mut obj = ptr.cast::<ManuallyDrop<Self>>();
@@ -19,8 +22,7 @@ pub unsafe trait RegionalObjectTrait: Sized {
     }
     const VTABLE: VTable = VTable {
         drop: Some(Self::drop),
-        scan_count: Self::SCAN_OFFSETS.len(),
-        scan_offsets: Self::SCAN_OFFSETS.as_ptr(),
+        scan_instrs: Self::SCAN_INSTRS.as_ptr(),
         size: std::mem::size_of::<Self>(),
         alignment: std::mem::align_of::<Self>(),
     };
@@ -134,7 +136,7 @@ macro_rules! impl_regional_object_traits_for_primitive {
     ($($ty:ty),*) => {
         $(
             unsafe impl RegionalObjectTrait for $ty {
-                const SCAN_OFFSETS: &'static [usize] = &[];
+                const SCAN_INSTRS: &'static [PackedInstr] = &[Instruction::End.pack()];
                 unsafe extern "C" fn drop(_ptr: *mut u8) {
                 }
             }
@@ -167,8 +169,12 @@ mod tests {
     }
 
     unsafe impl RegionalObjectTrait for ListNode {
-        const SCAN_OFFSETS: &'static [usize] =
-            &[offset_of!(ListNode, prev), offset_of!(ListNode, next)];
+        const SCAN_INSTRS: &'static [PackedInstr] = &[
+            Instruction::Field.pack(), // prev
+            Instruction::Advance(offset_of!(ListNode, next) as u32).pack(),
+            Instruction::Field.pack(), // next
+            Instruction::End.pack(),
+        ];
     }
 
     #[test]
