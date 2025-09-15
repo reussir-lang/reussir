@@ -45,6 +45,7 @@ pub fn validate_module_prefix(prefix: &str) -> Vec<String> {
 }
 
 #[derive(CommandParser)]
+#[command(long_about = include_str!("rrc-art.txt"))]
 struct Options {
     /// The input file to compile. If not provided, the input will be read from stdin.
     #[arg(short, long)]
