@@ -39,6 +39,7 @@ include_directories(include ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS} ${MLIR_TAB
 add_subdirectory(include)
 add_subdirectory(lib)
 add_subdirectory(tool)
+add_subdirectory(crates)
 
 if (REUSSIR_ENABLE_TESTS)
   enable_testing()
