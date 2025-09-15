@@ -297,22 +297,15 @@ mod tests {
         //   foo1             bar2 (value: 200)
         //    |               /            \
         //    v              v              v
-        //   bar3         foo2            baz (empty)
+        //   bar3         foo2            baz (shared)
         //  (300)          |
         //   |             v
         //   v           foo3 -> back to bar1 (circular)
-        //  baz
+        //  baz (shared)
 
         // Create the deepest nodes first
         let baz_leaf = region.create(Variants {
             tag: 2, // Baz variant
-            storage: VariantsStorage {
-                baz: ManuallyDrop::new(Baz),
-            },
-        });
-
-        let baz_leaf2 = region.create(Variants {
-            tag: 2, // Another Baz variant
             storage: VariantsStorage {
                 baz: ManuallyDrop::new(Baz),
             },
@@ -354,7 +347,7 @@ mod tests {
         let bar2 = region.create(Variants {
             tag: 1, // Bar variant
             storage: VariantsStorage {
-                bar: ManuallyDrop::new(Bar(Some(foo2), 200, Some(baz_leaf2))),
+                bar: ManuallyDrop::new(Bar(Some(foo2), 200, Some(baz_leaf))),
             },
         });
 
@@ -468,7 +461,7 @@ mod tests {
             let foo2_frozen = bar2_frozen_data.0.as_ref().unwrap();
             let foo3_frozen = &foo2_frozen.deref().storage.foo.0.as_ref().unwrap();
             let bar1_circular_frozen = &foo3_frozen.deref().storage.foo.0.as_ref().unwrap();
-            let bar1_circular_data = &bar1_circular_frozen.deref().storage.bar;
+            let bar1_circular_data = &*bar1_circular_frozen.deref().storage.bar;
             assert_eq!(bar1_circular_data.1, 100); // Circular reference preserved
         }
 
@@ -480,14 +473,14 @@ mod tests {
             // Verify cloned references work
             assert_eq!(cloned_root.deref().tag, 0);
             assert_eq!(cloned_bar1.deref().tag, 1);
-            let cloned_bar1_data = &cloned_bar1.deref().storage.bar;
+            let cloned_bar1_data = &*cloned_bar1.deref().storage.bar;
             assert_eq!(cloned_bar1_data.1, 100);
 
             // Test read_field
             let root_data = frozen_root.deref();
             let bar1_via_read = root_data.storage.foo.0.as_ref().unwrap().read_field();
             assert_eq!(bar1_via_read.deref().tag, 1);
-            let bar1_read_data = &bar1_via_read.deref().storage.bar;
+            let bar1_read_data = &*bar1_via_read.deref().storage.bar;
             assert_eq!(bar1_read_data.1, 100);
         }
     }
