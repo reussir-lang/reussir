@@ -1,13 +1,17 @@
 find_package(GTest REQUIRED)
 
 # Add unit test executable
-add_executable(reussir_unit_tests
-  test_main.cpp
-  # Add more test files here as needed
-)
+add_executable(reussir-ut)
+
+file(GLOB module_files "*.cppm")
+file(GLOB source_files "*.cpp")
+target_sources(
+    reussir-ut
+    PRIVATE FILE_SET CXX_MODULES FILES ${module_files} 
+    PRIVATE ${source_files})
 
 # Link against required libraries
-target_link_libraries(reussir_unit_tests
+target_link_libraries(reussir-ut
   PRIVATE
     MLIRReussir
     gtest
@@ -17,7 +21,7 @@ target_link_libraries(reussir_unit_tests
 )
 
 # Include necessary directories
-target_include_directories(reussir_unit_tests
+target_include_directories(reussir-ut
   PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${MLIR_INCLUDE_DIRS}
@@ -25,4 +29,5 @@ target_include_directories(reussir_unit_tests
 )
 
 # Register with CTest
-gtest_discover_tests(reussir_unit_tests)
+enable_testing()
+gtest_discover_tests(reussir-ut)
