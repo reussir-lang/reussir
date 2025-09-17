@@ -282,9 +282,6 @@ mod tests {
     fn test_complex_foo_bar_baz_variants() {
         let region = Region::new();
 
-        println!("{:?}", Variants::SCAN_INSTRS);
-        std::io::stdout().flush().unwrap();
-
         // Create a complex interconnected structure using the existing Foo, Bar, Baz variants
         // Structure: Create a circular reference pattern and tree-like structure
         //
