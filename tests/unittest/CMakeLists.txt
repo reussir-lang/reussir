@@ -1,4 +1,6 @@
+# Find GTest
 find_package(GTest REQUIRED)
+include(GoogleTest)
 
 # Add unit test executable
 add_executable(reussir-ut)
@@ -29,5 +31,4 @@ target_include_directories(reussir-ut
 )
 
 # Register with CTest
-enable_testing()
 gtest_discover_tests(reussir-ut)

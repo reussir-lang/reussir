@@ -33,12 +33,16 @@ message(STATUS "Tablegen output directory: ${MLIR_TABLEGEN_OUTPUT_DIR}")
 # Include Immer
 include(cmake/Immer.cmake)
 
-# Include GTest
-if (REUSSIR_ENABLE_TESTS)
-  include(cmake/gtest.cmake)
-endif()
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${MLIR_TABLEGEN_OUTPUT_DIR}
+    ${immer_SOURCE_DIR}
+)
 
-include_directories(include ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS} ${MLIR_TABLEGEN_OUTPUT_DIR} ${immer_SOURCE_DIR})
+include_directories(SYSTEM
+    ${MLIR_INCLUDE_DIRS}
+    ${LLVM_INCLUDE_DIRS}
+)
 
 # Subdirectories
 add_subdirectory(include)

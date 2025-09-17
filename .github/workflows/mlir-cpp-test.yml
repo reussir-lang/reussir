@@ -28,19 +28,20 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build wget
+          sudo apt-get install -y cmake ninja-build wget libgtest-dev libgmock-dev
           sudo pip install lit --break-system-packages
 
       - name: Install LLVM ${{ matrix.llvm-version }}
         run: |
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
-          sudo ./llvm.sh ${{ matrix.llvm-version }} all
+          sudo ./llvm.sh ${{ matrix.llvm-version }}
           sudo apt-get install -y \
             libmlir-${{ matrix.llvm-version }}-dev \
             mlir-${{ matrix.llvm-version }}-tools \
             llvm-${{ matrix.llvm-version }}-dev \
             llvm-${{ matrix.llvm-version }}-tools
+          
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2
@@ -66,5 +67,11 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
-      - name: Run tests
+      - name: Run Unit Tests
+        run: |
+          cmake --build build --target reussir-ut
+          ctest --test-dir build --output-on-failure
+
+      - name: Run Integration Tests
         run: cmake --build build --target check
+

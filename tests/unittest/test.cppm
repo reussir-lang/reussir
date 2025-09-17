@@ -1,6 +1,5 @@
 module;
 
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/BuiltinOps.h>
