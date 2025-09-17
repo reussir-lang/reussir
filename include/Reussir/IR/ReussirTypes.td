@@ -143,9 +143,9 @@ def ReussirRecordType
       };
       LayoutInfo getElementRegionLayoutInfo(const mlir::DataLayout &dataLayout) const;
       ::mlir::FlatSymbolRefAttr getDtorName() const;
-      void emitScannerInstructions(
+      size_t emitScannerInstructions(
         llvm::SmallVectorImpl<int32_t> &buffer,
-        const mlir::DataLayout &dataLayout, std::optional<size_t> syncSize) const;
+        const mlir::DataLayout &dataLayout, const scanner::EmitState &EmitState) const;
       bool hasNoRegionalFields() const;
     }];
 }

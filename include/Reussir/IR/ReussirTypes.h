@@ -74,6 +74,10 @@ inline Instr decode(int32_t code) {
   else
     return Advance{static_cast<uint32_t>(code)};
 }
+struct EmitState {
+  size_t cursorPosition = 0;
+  size_t scannedBytes = 0;
+};
 } // namespace scanner
 } // namespace reussir
 

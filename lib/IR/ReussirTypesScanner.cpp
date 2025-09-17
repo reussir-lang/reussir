@@ -26,14 +26,15 @@
 #include "Reussir/IR/ReussirTypes.h"
 
 namespace reussir {
-void RecordType::emitScannerInstructions(llvm::SmallVectorImpl<int32_t> &buffer,
-                                         const mlir::DataLayout &dataLayout,
-                                         std::optional<size_t> syncSize) const {
+size_t
+RecordType::emitScannerInstructions(llvm::SmallVectorImpl<int32_t> &buffer,
+                                    const mlir::DataLayout &dataLayout,
+                                    const scanner::EmitState &EmitState) const {
   // TODO: Implement scanner instructions emission
   using namespace scanner;
   if (isCompound()) {
-    size_t currentFieldPosition = 0;
-    size_t cursorPosition = 0;
+    size_t scannedBytes = EmitState.scannedBytes;
+    size_t cursorPosition = EmitState.cursorPosition;
     for (auto [rawMember, cap] :
          llvm::zip(getMembers(), getMemberCapabilities())) {
       if (!rawMember)
@@ -50,46 +51,97 @@ void RecordType::emitScannerInstructions(llvm::SmallVectorImpl<int32_t> &buffer,
         llvm_unreachable("RecordType must have a fixed size");
       uint64_t memberSizeInBytes = memberSize.getFixedValue();
       uint64_t memberAlignment = dataLayout.getTypeABIAlignment(member);
-      currentFieldPosition =
-          llvm::alignTo(currentFieldPosition, memberAlignment);
+      scannedBytes = llvm::alignTo(scannedBytes, memberAlignment);
       if (cap == Capability::field) {
-        if (cursorPosition < currentFieldPosition) {
-          buffer.push_back(advance(currentFieldPosition - cursorPosition));
-          cursorPosition = currentFieldPosition;
+        if (cursorPosition < scannedBytes) {
+          buffer.push_back(advance(scannedBytes - cursorPosition));
+          cursorPosition = scannedBytes;
         }
         buffer.push_back(field());
-      }
-      RecordType nestedRecordType = llvm::dyn_cast<RecordType>(rawMember);
-
-      if (cap == Capability::value && nestedRecordType &&
-          !nestedRecordType.hasNoRegionalFields()) {
-        // nested record can be arbitrarily complicated.
-        // To avoid further complexity, we always first align current cursor
-        // to a current field position and also require the nested record
-        // to ends at a known boundary. The nested routine always ends in a
-        // single trailing instruction. All other ending parts jumps to that
-        // instruction.
-        if (cursorPosition < currentFieldPosition) {
-          buffer.push_back(advance(currentFieldPosition - cursorPosition));
-          cursorPosition = currentFieldPosition;
+      } else {
+        RecordType nestedRecordType = llvm::dyn_cast<RecordType>(rawMember);
+        if (cap == Capability::value && nestedRecordType &&
+            !nestedRecordType.hasNoRegionalFields()) {
+          size_t newCursorPosition = nestedRecordType.emitScannerInstructions(
+              buffer, dataLayout,
+              {/*cursorPosition=*/cursorPosition,
+               /*scannedBytes=*/scannedBytes});
+          buffer.pop_back();
+          cursorPosition = newCursorPosition;
         }
-        nestedRecordType.emitScannerInstructions(buffer, dataLayout,
-                                                 memberSizeInBytes);
-        buffer.pop_back();
-        cursorPosition += memberSizeInBytes;
       }
-      currentFieldPosition += memberSizeInBytes;
+      scannedBytes += memberSizeInBytes;
     }
-    if (syncSize && *syncSize > cursorPosition)
-      buffer.push_back(advance(*syncSize - cursorPosition));
     buffer.push_back(end());
-    return;
+    return cursorPosition;
   }
 
   // Variant record
+  // For variant, we always emit a variant instruction at the start followed by
+  // a skip table. All variants join at the final end instruction. There is no
+  // early termination for variants.
+  // The layout is as follows:
+  // | variant | skip | skip | skip | ... | end |
+  size_t scannedBytes = EmitState.scannedBytes;
+  size_t cursorPosition = EmitState.cursorPosition;
   auto indexTy = mlir::IndexType::get(getContext());
+  auto indexSize = dataLayout.getTypeSize(indexTy).getFixedValue();
   buffer.push_back(variant());
-  buffer.push_back(advance(dataLayout.getTypeSize(indexTy)));
+  scannedBytes += indexSize;
+  auto layoutInfo = getElementRegionLayoutInfo(dataLayout);
+  scannedBytes = llvm::alignTo(scannedBytes, layoutInfo.alignment);
+  size_t currentSkip = buffer.size();
+  size_t currentVariantStart = currentSkip + getMembers().size();
+  const size_t expectedEnd = scannedBytes + layoutInfo.size;
+  // reserve space for skip instructions
+  buffer.append(getMembers().size(), end());
+  llvm::SmallVector<size_t> rewriteEndToSkip;
+  for (auto [rawMember, cap] :
+       llvm::zip(getMembers(), getMemberCapabilities())) {
+    if (cap == Capability::field) {
+      // this is a direct field
+      if (cursorPosition < scannedBytes)
+        buffer.push_back(advance(scannedBytes - cursorPosition));
+      buffer.push_back(field());
+      // Scanned bytes is the local cursor position
+      if (scannedBytes < expectedEnd)
+        buffer.push_back(advance(expectedEnd - scannedBytes));
+      rewriteEndToSkip.push_back(buffer.size());
+      buffer.push_back(end());
+    } else {
+      auto recordType = llvm::dyn_cast_or_null<RecordType>(rawMember);
+      if (cap == Capability::value && recordType &&
+          !recordType.hasNoRegionalFields()) {
+        // we need to scan nested record
+        size_t newCursorPosition = recordType.emitScannerInstructions(
+            buffer, dataLayout,
+            {/*cursorPosition=*/cursorPosition,
+             /*scannedBytes=*/scannedBytes});
+        buffer.pop_back(); // remove the nested end
+        if (newCursorPosition < expectedEnd)
+          buffer.push_back(advance(expectedEnd - newCursorPosition));
+        rewriteEndToSkip.push_back(buffer.size());
+        buffer.push_back(end());
+      } else {
+        // there is nothing to scan, but we do need to skip to the end
+        if (cursorPosition < expectedEnd)
+          buffer.push_back(advance(expectedEnd - cursorPosition));
+        rewriteEndToSkip.push_back(buffer.size());
+        buffer.push_back(end());
+      }
+    }
+
+    // update skips
+    buffer[currentSkip++] = skip(currentVariantStart - currentSkip);
+    currentVariantStart = buffer.size();
+  }
+
+  // Rewrite all end placeholder to skip to end
+  rewriteEndToSkip.pop_back(); // last end is real end
+  size_t skipTarget = buffer.size() - 1;
+  for (size_t idx : rewriteEndToSkip)
+    buffer[idx] = skip(skipTarget - idx);
+  return expectedEnd;
 }
 
 } // namespace reussir

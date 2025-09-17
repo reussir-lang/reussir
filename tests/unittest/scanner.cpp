@@ -11,7 +11,7 @@ TEST_F(ReussirTest, SimpleRecordScanner) {
       [](mlir::ModuleOp module, reussir::RecordType type) {
         llvm::SmallVector<int32_t> buffer;
         mlir::DataLayout dataLayout = mlir::DataLayout(module);
-        type.emitScannerInstructions(buffer, dataLayout, std::nullopt);
+        type.emitScannerInstructions(buffer, dataLayout, {});
         llvm::SmallVector<int32_t> expected = {
             scanner::advance(16), scanner::field(), scanner::end()};
         EXPECT_EQ(buffer, expected);
@@ -34,10 +34,54 @@ TEST_F(ReussirTest, NestedRecordScanner) {
       [](mlir::ModuleOp module, reussir::RecordType type) {
         llvm::SmallVector<int32_t> buffer;
         mlir::DataLayout dataLayout = mlir::DataLayout(module);
-        type.emitScannerInstructions(buffer, dataLayout, std::nullopt);
+        type.emitScannerInstructions(buffer, dataLayout, {});
         llvm::SmallVector<int32_t> expected = {
-            scanner::advance(16), scanner::advance(8),  scanner::field(),
-            scanner::advance(8),  scanner::advance(16), scanner::field(),
+            scanner::advance(24), scanner::field(), scanner::advance(24),
+            scanner::field(), scanner::end()};
+        EXPECT_EQ(buffer, expected);
+      });
+}
+
+TEST_F(ReussirTest, VariantRecordScanner) {
+  withType<reussir::RecordType>(
+      SIMPLE_LAYOUT,
+      R"(!reussir.record<variant "Test" {
+        [field] i32, 
+        i64, 
+        [value] !reussir.record<compound "Nested" {
+          i8, 
+          [field] i16
+        }>,
+        f128,
+        [value] !reussir.record<compound "Nested2" {
+          [field] i16,
+          f128, 
+          [field] i16
+        }>
+      }>)",
+      [](mlir::ModuleOp module, reussir::RecordType type) {
+        llvm::SmallVector<int32_t> buffer;
+        mlir::DataLayout dataLayout = mlir::DataLayout(module);
+        type.emitScannerInstructions(buffer, dataLayout, {});
+        llvm::SmallVector<int32_t> expected = {
+            scanner::variant(),
+            // skip table
+            scanner::skip(5), scanner::skip(8), scanner::skip(9),
+            scanner::skip(12), scanner::skip(13),
+            // first variant
+            scanner::advance(16), scanner::field(), scanner::advance(48),
+            scanner::skip(14),
+            // second variant
+            scanner::advance(64), scanner::skip(12),
+            // third variant
+            scanner::advance(24), scanner::field(), scanner::advance(40),
+            scanner::skip(8),
+            // fourth variant
+            scanner::advance(64), scanner::skip(6),
+            // fifth variant
+            scanner::advance(16), scanner::field(), scanner::advance(32),
+            scanner::field(), scanner::advance(16),
+            // final end
             scanner::end()};
         EXPECT_EQ(buffer, expected);
       });
