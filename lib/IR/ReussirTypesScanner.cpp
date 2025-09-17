@@ -30,7 +30,6 @@ size_t
 RecordType::emitScannerInstructions(llvm::SmallVectorImpl<int32_t> &buffer,
                                     const mlir::DataLayout &dataLayout,
                                     const scanner::EmitState &EmitState) const {
-  // TODO: Implement scanner instructions emission
   using namespace scanner;
   if (isCompound()) {
     size_t scannedBytes = EmitState.scannedBytes;
