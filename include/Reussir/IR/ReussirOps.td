@@ -731,17 +731,13 @@ def ReussirRegionVTableOp
   }];
   let arguments = (ins
     SymbolNameAttr:$sym_name,
-    OptionalAttr<FlatSymbolRefAttr>:$drop,
-    OptionalAttr<DenseI64ArrayAttr>:$scan_offsets,
-    IndexAttr:$size,
-    IndexAttr:$alignment
+    TypeAttr:$type,
+    OptionalAttr<FlatSymbolRefAttr>:$drop
   );
   let assemblyFormat = [{
     $sym_name `{`
-      `size` `(` $size `)`
-      `alignment` `(` $alignment `)`
+      `type` `(` $type `)`
       ( `drop` `(` $drop^ `)` )?
-      ( `scan_offsets` $scan_offsets^ )?
     `}` attr-dict
   }];
 }

@@ -592,6 +592,13 @@ mlir::LogicalResult ReussirRegionVTableOp::verifySymbolUses(
     if (refType.getCapability() != reussir::Capability::unspecified)
       return emitOpError("drop function input parameter must have unspecified capability, got: ")
              << stringifyCapability(refType.getCapability());
+    
+    // Check that the drop function input reference element type matches the type attribute
+    mlir::Type elementType = refType.getElementType();
+    mlir::Type vtableType = getTypeAttr().getValue();
+    if (elementType != vtableType)
+      return emitOpError("drop function input reference element type must match vtable type attribute, got: ")
+             << elementType << " but expected: " << vtableType;
   }
   return mlir::success();
 }
