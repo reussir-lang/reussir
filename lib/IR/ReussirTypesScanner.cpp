@@ -20,7 +20,6 @@
 #include <mlir/Dialect/LLVMIR/LLVMTypes.h>
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
-#include <optional>
 
 #include "Reussir/IR/ReussirEnumAttrs.h"
 #include "Reussir/IR/ReussirTypes.h"
