@@ -490,6 +490,12 @@ reussir::Capability RecordType::getDefaultCapability() const {
   auto dtorName = (prefix + recordName + suffix).str();
   return ::mlir::FlatSymbolRefAttr::get(getContext(), dtorName);
 }
+
+bool RecordType::hasNoRegionalFields() const {
+  return llvm::none_of(getMemberCapabilities(),
+                       [](Capability cap) { return cap == Capability::field; });
+}
+
 //===----------------------------------------------------------------------===//
 // RecordType Mutations
 //===----------------------------------------------------------------------===//

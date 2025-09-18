@@ -557,6 +557,46 @@ void ReussirRecordDispatchOp::getSuccessorRegions(
 }
 
 //===----------------------------------------------------------------------===//
+// Reussir Region VTable Op
+//===----------------------------------------------------------------------===//
+// RegionVTableOp SymbolUserOpInterface
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRegionVTableOp::verifySymbolUses(
+    mlir::SymbolTableCollection &symbolTable) {
+  if (getDropAttr()) {
+    auto funcOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
+        getOperation(), getDropAttr());
+    if (!funcOp)
+      return emitOpError("drop function not found: ") << getDropAttr();
+    
+    // Check that the drop function has the correct signature:
+    // single input parameter of RefType with unspecified capability, zero outputs
+    mlir::FunctionType funcType = funcOp.getFunctionType();
+    
+    // Must have exactly one input and zero outputs
+    if (funcType.getNumInputs() != 1)
+      return emitOpError("drop function must have exactly one input parameter, got: ")
+             << funcType.getNumInputs();
+    
+    if (funcType.getNumResults() != 0)
+      return emitOpError("drop function must have zero outputs, got: ")
+             << funcType.getNumResults();
+    
+    // Input parameter must be RefType with unspecified capability
+    mlir::Type inputType = funcType.getInput(0);
+    RefType refType = llvm::dyn_cast<RefType>(inputType);
+    if (!refType)
+      return emitOpError("drop function input parameter must be RefType, got: ")
+             << inputType;
+    
+    if (refType.getCapability() != reussir::Capability::unspecified)
+      return emitOpError("drop function input parameter must have unspecified capability, got: ")
+             << stringifyCapability(refType.getCapability());
+  }
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Record Dispatch Op
 //===----------------------------------------------------------------------===//
 // RecordDispatchOp verification

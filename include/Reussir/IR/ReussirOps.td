@@ -700,6 +700,52 @@ def ReussirRegionYieldOp
   let hasVerifier = 1;
 }
 
+def ReussirRegionVTableOp 
+    : ReussirRegionOp<"vtable", [
+        Symbol, DeclareOpInterfaceMethods<SymbolUserOpInterface>
+    ]> {
+  let summary = "Create a vtable for a region";
+  let description = [{
+    `reussir.region.vtable` creates a vtable for objects managed via flex/rigid
+    reference. The vtable contains the drop functions and the layout of the object.
+    ```rust
+    #[repr(C)]
+    pub struct VTable {
+      pub drop: Option<unsafe extern "C" fn(*mut u8)>,
+      pub scan_count: usize,
+      pub scan_offsets: *const usize,
+      pub size: usize,
+      pub alignment: usize,
+    }
+    ```
+    The size and alignment includes the header of the object.
+    ```rust
+    #[repr(C)]
+    struct Header {
+        status: PackedStatus,
+        next: *mut Self,
+        vtable: *mut VTable,
+    }
+    ```
+    Similarly, all offsets are relative to the header start (not the object start).
+  }];
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    OptionalAttr<FlatSymbolRefAttr>:$drop,
+    OptionalAttr<DenseI64ArrayAttr>:$scan_offsets,
+    IndexAttr:$size,
+    IndexAttr:$alignment
+  );
+  let assemblyFormat = [{
+    $sym_name `{`
+      `size` `(` $size `)`
+      `alignment` `(` $alignment `)`
+      ( `drop` `(` $drop^ `)` )?
+      ( `scan_offsets` $scan_offsets^ )?
+    `}` attr-dict
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Reussir Scf Placeholder Operations
 //===----------------------------------------------------------------------===//
