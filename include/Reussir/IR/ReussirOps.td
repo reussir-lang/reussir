@@ -311,7 +311,9 @@ def ReussirRcFetchDecOp : ReussirRcOp<"fetch_dec", []> {
   }];
 }
 
-def ReussirRcCreateOp : ReussirRcOp<"create", []> {
+def ReussirRcCreateOp : ReussirRcOp<"create", [
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
   let summary = "Create a RC pointer";
   let description = [{
     `reussir.rc.create` creates a RC pointer from a value.
@@ -349,14 +351,21 @@ def ReussirRcCreateOp : ReussirRcOp<"create", []> {
     ```
   }];
 
-  let arguments = (ins Arg<AnyType, "value">:$value, ReussirTokenType:$token,
-      Optional<ReussirRegionType>:$region);
+  let arguments = (ins 
+      Arg<AnyType, "value">:$value, 
+      ReussirTokenType:$token,
+      Optional<ReussirRegionType>:$region,
+      OptionalAttr<FlatSymbolRefAttr>:$vtable
+  );
   let results = (outs Res<ReussirRcType, "Created RC pointer">:$rcPtr);
 
   let assemblyFormat = [{
     `value` `(` $value `:` type($value) `)` 
     `token` `(` $token `:` type($token) `)`
-    ( `region` `(` $region^ `:` type($region) `)` )? 
+    oilist ( 
+      `region` `(` $region `:` type($region) `)` 
+    | `vtable` `(` $vtable `)`
+    )
     `:` qualified(type($rcPtr)) attr-dict
   }];
 
