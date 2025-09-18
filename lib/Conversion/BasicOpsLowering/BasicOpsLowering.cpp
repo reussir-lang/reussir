@@ -752,6 +752,38 @@ struct ReussirRcDecOpConversionPattern
     return mlir::failure();
   }
 };
+
+struct ReussirRcFreezeOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirRcFreezeOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRcFreezeOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // Call the runtime function __reussir_freeze_flex_object
+    mlir::Type llvmPtrType =
+        mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    rewriter.replaceOpWithNewOp<mlir::func::CallOp>(
+        op, "__reussir_freeze_flex_object", mlir::TypeRange{llvmPtrType},
+        mlir::ValueRange{adaptor.getRcPtr()});
+    return mlir::success();
+  }
+};
+
+struct ReussirRegionCleanupOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirRegionCleanupOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRegionCleanupOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // Call the runtime function __reussir_freeze_flex_object
+    rewriter.replaceOpWithNewOp<mlir::func::CallOp>(
+        op, "__reussir_cleanup_region", mlir::TypeRange{},
+        mlir::ValueRange{adaptor.getRegion()});
+    return mlir::success();
+  }
+};
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -822,7 +854,7 @@ struct BasicOpsLoweringPass
         ReussirNullableCoerceOp, ReussirRcIncOp, ReussirRcCreateOp,
         ReussirRcDecOp, ReussirRcBorrowOp, ReussirRecordCompoundOp,
         ReussirRecordVariantOp, ReussirRefProjectOp, ReussirRecordTagOp,
-        ReussirRecordCoerceOp, ReussirRegionVTableOp>();
+        ReussirRecordCoerceOp, ReussirRegionVTableOp, ReussirRcFreezeOp>();
     target.addLegalDialect<mlir::LLVM::LLVMDialect>();
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
@@ -847,6 +879,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirRecordVariantConversionPattern,
       ReussirReferenceProjectConversionPattern,
       ReussirRecordTagConversionPattern, ReussirRecordCoerceConversionPattern,
-      ReussirRegionVTableOpConversionPattern>(converter, patterns.getContext());
+      ReussirRegionVTableOpConversionPattern,
+      ReussirRcFreezeOpConversionPattern>(converter, patterns.getContext());
 }
 } // namespace reussir
