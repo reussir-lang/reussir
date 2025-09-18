@@ -15,8 +15,12 @@
 #ifndef REUSSIR_CONVERSION_DROPEXPANSION_H
 #define REUSSIR_CONVERSION_DROPEXPANSION_H
 
+#include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/IR/Builders.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/DialectConversion.h>
+
+#include "Reussir/IR/ReussirTypes.h"
 
 namespace reussir {
 
@@ -25,6 +29,10 @@ namespace reussir {
 
 void populateDropExpansionConversionPatterns(mlir::RewritePatternSet &patterns,
                                              bool outlineRecord);
+
+mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
+                                         RecordType type,
+                                         mlir::OpBuilder &builder);
 
 } // namespace reussir
 

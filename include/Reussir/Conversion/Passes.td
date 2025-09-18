@@ -56,6 +56,24 @@ def ReussirSCFOpsLoweringPass
 }
 
 //===----------------------------------------------------------------------===//
+// AttachRegionVtables
+//===----------------------------------------------------------------------===//
+def ReussirRegionPatternsPass
+    : ReussirLoweringPass<"region-patterns"> {
+  let summary = "attach vtables to regions";
+  let description = [{
+    `reussir-lowering-region-patterns` will do the following converions:
+    1. attaches vtables to regions.
+    2. convert region run operations to memref alloca_scope operations.
+    3. convert yield operations to freeze operations.
+  }];
+  let dependentDialects = [
+    "::reussir::ReussirDialect", 
+    "::mlir::memref::MemRefDialect"
+  ];
+}
+
+//===----------------------------------------------------------------------===//
 // DropExpansion
 //===----------------------------------------------------------------------===//
 def ReussirDropExpansionPass

@@ -240,6 +240,41 @@ mlir::LogicalResult ReussirRcBorrowOp::verify() {
 
   return mlir::success();
 }
+
+//===----------------------------------------------------------------------===//
+// RcFreezeOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRcFreezeOp::verify() {
+  RcType inputRcType = getRcPtr().getType();
+  RcType outputRcType = getFrozen().getType();
+
+  // Check that input RC has flex capability
+  if (inputRcType.getCapability() != reussir::Capability::flex)
+    return emitOpError("input RC pointer must have flex capability, ")
+           << "got: " << stringifyCapability(inputRcType.getCapability());
+
+  // Check that output RC has rigid capability
+  if (outputRcType.getCapability() != reussir::Capability::rigid)
+    return emitOpError("output RC pointer must have rigid capability, ")
+           << "got: " << stringifyCapability(outputRcType.getCapability());
+
+  // Check that element types match
+  if (inputRcType.getElementType() != outputRcType.getElementType())
+    return emitOpError("input and output RC element types must match, ")
+           << "input element type: " << inputRcType.getElementType()
+           << ", output element type: " << outputRcType.getElementType();
+
+  // Check that atomic kinds match
+  if (inputRcType.getAtomicKind() != outputRcType.getAtomicKind())
+    return emitOpError("input and output RC atomic kinds must match, ")
+           << "input atomic kind: "
+           << stringifyAtomicKind(inputRcType.getAtomicKind())
+           << ", output atomic kind: "
+           << stringifyAtomicKind(outputRcType.getAtomicKind());
+
+  return mlir::success();
+}
+
 //===----------------------------------------------------------------------===//
 // Reussir Record Operations
 //===----------------------------------------------------------------------===//
@@ -253,7 +288,6 @@ mlir::LogicalResult ReussirRecordCompoundOp::verify() {
     return emitOpError("compound type must be a compound record");
   if (compoundType.getMembers().size() != getFields().size())
     return emitOpError("number of fields must match number of members");
-  bool hasFieldCapability = false;
   for (auto [field, member, memberCapability] :
        llvm::zip(getFields(), compoundType.getMembers(),
                  compoundType.getMemberCapabilities())) {
@@ -264,10 +298,7 @@ mlir::LogicalResult ReussirRecordCompoundOp::verify() {
       return emitOpError("field type must match projected member type, ")
              << "field type: " << field.getType()
              << ", projected member type: " << projectedType;
-    hasFieldCapability |= (memberCapability == Capability::field);
   }
-  if (hasFieldCapability)
-    return emitOpError("TODO: check this is nested in a region operation");
   return mlir::success();
 }
 
