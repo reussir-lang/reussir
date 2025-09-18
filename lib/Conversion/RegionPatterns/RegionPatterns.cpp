@@ -8,7 +8,6 @@
 
 #include <llvm/Support/Casting.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
-#include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/PatternMatch.h>
@@ -19,7 +18,7 @@
 
 #include "Reussir/Conversion/DropExpansion.h"
 #include "Reussir/Conversion/RegionPatterns.h"
-#include "Reussir/IR/ReussirDialect.h"
+#include "Reussir/IR/ReussirDialect.h.inc"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
 
@@ -82,35 +81,37 @@ struct RegionInlinePattern : public mlir::OpRewritePattern<ReussirRegionRunOp> {
   mlir::LogicalResult
   matchAndRewrite(ReussirRegionRunOp op,
                   mlir::PatternRewriter &rewriter) const override {
-    auto allocaScope = rewriter.create<mlir::memref::AllocaScopeOp>(
-        op.getLoc(), op.getResultTypes());
-    mlir::Block *block = rewriter.createBlock(&allocaScope.getBodyRegion());
-    rewriter.setInsertionPointToStart(block);
     auto region = rewriter.create<ReussirRegionCreateOp>(
         op.getLoc(), RegionType::get(op->getContext()));
     auto yieldOp =
         llvm::cast<ReussirRegionYieldOp>(op.getBody().front().getTerminator());
-    rewriter.inlineBlockBefore(&op.getBody().front(), allocaScope.getBody(),
-                               allocaScope.getBody()->end(),
-                               region->getResults());
+    rewriter.inlineBlockBefore(&op.getBody().front(), op, region->getResults());
     auto yieldValue = yieldOp.getValue();
     auto rcType =
         yieldValue ? llvm::dyn_cast<RcType>(yieldValue.getType()) : nullptr;
-    mlir::memref::AllocaScopeReturnOp finalizer;
+
+    // Remove the yield op
+    rewriter.eraseOp(yieldOp);
+
+    // Create the final value based on the yield value
+    mlir::Value finalValue;
     if (rcType && rcType.getCapability() == Capability::flex) {
       auto freezeOp = rewriter.create<ReussirRcFreezeOp>(
           op.getLoc(), op->getResult(0).getType(), yieldValue);
-      finalizer =
-          rewriter.replaceOpWithNewOp<mlir::memref::AllocaScopeReturnOp>(
-              yieldOp, freezeOp.getResult());
+      finalValue = freezeOp.getResult();
     } else {
-      finalizer =
-          rewriter.replaceOpWithNewOp<mlir::memref::AllocaScopeReturnOp>(
-              yieldOp, yieldOp->getOperands());
+      finalValue = yieldValue;
     }
-    rewriter.setInsertionPoint(finalizer);
+
+    // Create cleanup operation
+    rewriter.setInsertionPoint(op);
     rewriter.create<ReussirRegionCleanupOp>(op.getLoc(), region);
-    rewriter.replaceOp(op, allocaScope.getResults());
+
+    // Replace the whole RegionRunOp with the final value
+    if (finalValue)
+      rewriter.replaceOp(op, finalValue);
+    else
+      rewriter.eraseOp(op);
     return mlir::success();
   }
 };

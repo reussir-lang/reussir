@@ -7,9 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/Debug.h>
+#include <llvm/Support/LogicalResult.h>
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h>
 #include <mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h>
@@ -24,7 +26,9 @@
 #include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/IR/Block.h>
 #include <mlir/IR/BuiltinAttributes.h>
+#include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/BuiltinTypes.h>
+#include <mlir/IR/PatternMatch.h>
 #include <mlir/IR/ValueRange.h>
 #include <mlir/Pass/Pass.h>
 
@@ -683,11 +687,10 @@ struct ReussirRegionVTableOpConversionPattern
                                          {});
       mlir::LLVM::LLVMArrayType arrayType = mlir::LLVM::LLVMArrayType::get(
           mlir::IntegerType::get(rewriter.getContext(), 32), buffer.size());
-      auto arrayAttr =
-          mlir::DenseI32ArrayAttr::get(rewriter.getContext(), buffer);
+      auto dataAttr = rewriter.getI32TensorAttr(buffer);
       scannerOp = rewriter.create<mlir::LLVM::GlobalOp>(
           op.getLoc(), arrayType, /*isConstant=*/true,
-          mlir::LLVM::Linkage::LinkonceODR, arrayName, arrayAttr);
+          mlir::LLVM::Linkage::LinkonceODR, arrayName, dataAttr);
     }
     mlir::LLVM::GlobalOp vtableOp = rewriter.create<mlir::LLVM::GlobalOp>(
         op.getLoc(), vtableType, /*isConstant=*/true,
@@ -784,6 +787,24 @@ struct ReussirRegionCleanupOpConversionPattern
     return mlir::success();
   }
 };
+
+struct ReussirRegionCreateOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirRegionCreateOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRegionCreateOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // Call the runtime function __reussir_create_region
+    auto ptrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto converter = static_cast<const LLVMTypeConverter *>(typeConverter);
+    auto one = rewriter.create<mlir::arith::ConstantOp>(
+        op.getLoc(), mlir::IntegerAttr::get(converter->getIndexType(), 1));
+    rewriter.replaceOpWithNewOp<mlir::LLVM::AllocaOp>(op, ptrType, ptrType,
+                                                      one);
+    return mlir::success();
+  }
+};
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -810,8 +831,7 @@ void addRuntimeFunctions(mlir::ModuleOp module,
   auto indexType = mlir::IndexType::get(ctx);
   addRuntimeFunction(body, "__reussir_freeze_flex_object", {llvmPtrType},
                      {llvmPtrType});
-  addRuntimeFunction(body, "__reussir_cleanup_region", {llvmPtrType},
-                     {llvmPtrType});
+  addRuntimeFunction(body, "__reussir_cleanup_region", {llvmPtrType}, {});
   addRuntimeFunction(body, "__reussir_acquire_rigid_object", {llvmPtrType}, {});
   addRuntimeFunction(body, "__reussir_release_rigid_object", {llvmPtrType}, {});
   addRuntimeFunction(body, "__reussir_allocate", {indexType, indexType},
@@ -843,7 +863,6 @@ struct BasicOpsLoweringPass
     mlir::populateFuncToLLVMFuncOpConversionPattern(converter, patterns);
     mlir::populateFuncToLLVMConversionPatterns(converter, patterns);
     mlir::arith::populateArithToLLVMConversionPatterns(converter, patterns);
-    mlir::populateFinalizeMemRefToLLVMConversionPatterns(converter, patterns);
     addRuntimeFunctions(getOperation(), converter);
     target.addIllegalDialect<mlir::func::FuncDialect,
                              mlir::arith::ArithDialect>();
@@ -854,7 +873,8 @@ struct BasicOpsLoweringPass
         ReussirNullableCoerceOp, ReussirRcIncOp, ReussirRcCreateOp,
         ReussirRcDecOp, ReussirRcBorrowOp, ReussirRecordCompoundOp,
         ReussirRecordVariantOp, ReussirRefProjectOp, ReussirRecordTagOp,
-        ReussirRecordCoerceOp, ReussirRegionVTableOp, ReussirRcFreezeOp>();
+        ReussirRecordCoerceOp, ReussirRegionVTableOp, ReussirRcFreezeOp,
+        ReussirRegionCleanupOp, ReussirRegionCreateOp>();
     target.addLegalDialect<mlir::LLVM::LLVMDialect>();
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
@@ -880,6 +900,8 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirReferenceProjectConversionPattern,
       ReussirRecordTagConversionPattern, ReussirRecordCoerceConversionPattern,
       ReussirRegionVTableOpConversionPattern,
-      ReussirRcFreezeOpConversionPattern>(converter, patterns.getContext());
+      ReussirRcFreezeOpConversionPattern,
+      ReussirRegionCleanupOpConversionPattern,
+      ReussirRegionCreateOpConversionPattern>(converter, patterns.getContext());
 }
 } // namespace reussir
