@@ -9,8 +9,7 @@ module @test {
   
   // expected-error @+1 {{drop function must have zero outputs, got: 1}}
   reussir.region.vtable @vtable1 {
-    size(8)
-    alignment(8)
+    type(i32)
     drop(@drop_func_with_return)
   }
 }

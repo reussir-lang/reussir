@@ -1,13 +1,7 @@
 // RUN: %reussir-opt %s | %FileCheck %s
 module @test {
-  // CHECK: func.func private @drop_func
-  func.func private @drop_func(%ptr : !reussir.ref<i32>) -> () {
-    return
-  }
-  
   // CHECK: reussir.region.vtable @vtable1
   reussir.region.vtable @vtable1 {
     type(i32)
-    drop(@drop_func)
   }
 }

@@ -10,8 +10,11 @@ message(STATUS "mlir-translate path: ${mlir_translate_path}")
 find_file(opt_path opt HINTS ${LLVM_TOOLS_BINARY_DIR} REQUIRED)
 message(STATUS "opt path: ${opt_path}")
 
+find_file(llc_path llc HINTS ${LLVM_TOOLS_BINARY_DIR} REQUIRED)
+message(STATUS "llc path: ${llc_path}")
+
 configure_file(lit.site.cfg.py.in lit.site.cfg.py @ONLY)
 
 add_custom_target(check
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/lit "${CMAKE_CURRENT_BINARY_DIR}" -v
-  DEPENDS reussir-opt rrc)
+  DEPENDS reussir-opt rrc reussir-rt)

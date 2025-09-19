@@ -311,7 +311,9 @@ def ReussirRcFetchDecOp : ReussirRcOp<"fetch_dec", []> {
   }];
 }
 
-def ReussirRcCreateOp : ReussirRcOp<"create", []> {
+def ReussirRcCreateOp : ReussirRcOp<"create", [
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
   let summary = "Create a RC pointer";
   let description = [{
     `reussir.rc.create` creates a RC pointer from a value.
@@ -349,18 +351,31 @@ def ReussirRcCreateOp : ReussirRcOp<"create", []> {
     ```
   }];
 
-  let arguments = (ins Arg<AnyType, "value">:$value, ReussirTokenType:$token,
-      Optional<ReussirRegionType>:$region);
+  let arguments = (ins 
+      Arg<AnyType, "value">:$value, 
+      ReussirTokenType:$token,
+      Optional<ReussirRegionType>:$region,
+      OptionalAttr<FlatSymbolRefAttr>:$vtable
+  );
   let results = (outs Res<ReussirRcType, "Created RC pointer">:$rcPtr);
 
   let assemblyFormat = [{
     `value` `(` $value `:` type($value) `)` 
     `token` `(` $token `:` type($token) `)`
-    ( `region` `(` $region^ `:` type($region) `)` )? 
+    oilist ( 
+      `region` `(` $region `:` type($region) `)` 
+    | `vtable` `(` $vtable `)`
+    )
     `:` qualified(type($rcPtr)) attr-dict
   }];
 
   let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    bool needsVTable() {
+      auto recordType = llvm::dyn_cast<RecordType>(getValue().getType());
+      return getRegion() && recordType && !isTriviallyCopyable(recordType);
+    }
+  }];
 }
 
 def ReussirRcReinterpretOp : ReussirRcOp<"reinterpret", []> {
@@ -376,6 +391,21 @@ def ReussirRcReinterpretOp : ReussirRcOp<"reinterpret", []> {
   let arguments = (ins Arg<ReussirRcType, "Rc pointer to reinterpret">:$rcPtr);
   let assemblyFormat = [{
     `(` $rcPtr `:` qualified(type($rcPtr)) `)` `:` qualified(type($reinterpreted)) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+// The following is an intermediate placeholder for regional rc freezing
+def ReussirRcFreezeOp : ReussirRcOp<"freeze", []> {
+  let summary = "Freeze a Rc pointer into a reference";
+  let description = [{
+    `reussir.rc.freeze` freezes a Rc pointer into a reference.
+  }];
+
+  let results = (outs Res<ReussirRcType, "frozen rc">:$frozen);
+  let arguments = (ins Arg<ReussirRcType, "Rc pointer to freeze">:$rcPtr);
+  let assemblyFormat = [{
+    `(` $rcPtr `:` qualified(type($rcPtr)) `)` `:` qualified(type($frozen)) attr-dict
   }];
   let hasVerifier = 1;
 }
@@ -687,8 +717,9 @@ def ReussirRegionRunOp
 
 def ReussirRegionYieldOp
     : ReussirRegionOp<
-          "yield", [ReturnLike, Terminator,
-                    ParentOneOf<["::reussir::ReussirRegionRunOp"]>]> {
+          "yield", [Terminator,
+                    ParentOneOf<["::reussir::ReussirRegionRunOp"]>,
+                    ]> {
   let summary = "Yield a value from a region";
   let description = [{
     `reussir.region.yield` yields a value from a region.
@@ -731,18 +762,42 @@ def ReussirRegionVTableOp
   }];
   let arguments = (ins
     SymbolNameAttr:$sym_name,
-    OptionalAttr<FlatSymbolRefAttr>:$drop,
-    OptionalAttr<DenseI64ArrayAttr>:$scan_offsets,
-    IndexAttr:$size,
-    IndexAttr:$alignment
+    TypeAttr:$type,
+    OptionalAttr<FlatSymbolRefAttr>:$drop
   );
   let assemblyFormat = [{
     $sym_name `{`
-      `size` `(` $size `)`
-      `alignment` `(` $alignment `)`
+      `type` `(` $type `)`
       ( `drop` `(` $drop^ `)` )?
-      ( `scan_offsets` $scan_offsets^ )?
     `}` attr-dict
+  }];
+}
+
+// The following are intermediate placeholder operations for high-level constructs
+// that should be lowered before code generation.
+def ReussirRegionCreateOp
+    : ReussirRegionOp<"create", []> {
+  let summary = "Create a region";
+  let description = [{
+    `reussir.region.create` creates a region. This is just a alloca operation
+    for a pointer type.
+  }];
+  let results = (outs Res<ReussirRegionType, "created region">:$region);
+  let assemblyFormat = [{
+    `:` qualified(type($region)) attr-dict
+  }];
+}
+
+def ReussirRegionCleanupOp
+    : ReussirRegionOp<"cleanup", []> {
+  let summary = "Cleanup a region";
+  let description = [{
+    `reussir.region.cleanup` cleans up a region. This is a placeholder for
+    runtime function call to cleanup the region.
+  }];
+  let arguments = (ins Arg<ReussirRegionType, "region to cleanup">:$region);
+  let assemblyFormat = [{
+    `(` $region `:` type($region) `)` attr-dict
   }];
 }
 

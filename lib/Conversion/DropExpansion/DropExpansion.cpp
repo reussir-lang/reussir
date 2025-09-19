@@ -74,7 +74,7 @@ private:
     for (auto [idx, pair] : llvm::enumerate(llvm::zip(
              recordType.getMembers(), recordType.getMemberCapabilities()))) {
       auto [memberTy, memberCap] = pair;
-      if (memberCap == Capability::field && refCap == Capability::flex)
+      if (memberCap == Capability::field)
         continue;
       auto projectedTy = getProjectedType(memberTy, memberCap, refCap);
       if (isTriviallyCopyable(projectedTy))
@@ -111,8 +111,7 @@ private:
           &dispatcher.getRegions()[idx], dispatcher.getRegions()[idx].begin(),
           {projectedRefTy}, {op.getLoc()});
       rewriter.setInsertionPointToStart(block);
-      if ((memberCap != Capability::field || refCap != Capability::flex) &&
-          !isTriviallyCopyable(projectedTy))
+      if (memberCap != Capability::field && !isTriviallyCopyable(projectedTy))
         rewriter.create<ReussirRefDropOp>(op.getLoc(), block->getArgument(0),
                                           true, nullptr);
 
@@ -170,34 +169,6 @@ private:
     }
     rewriter.eraseOp(op);
     return mlir::success();
-  }
-
-  mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
-                                           RecordType type,
-                                           mlir::OpBuilder &builder) const {
-    mlir::SymbolTable symTable(moduleOp);
-    auto dtorName = type.getDtorName();
-    if (!dtorName)
-      llvm::report_fatal_error("only named record types have destructors");
-    if (auto funcOp = symTable.lookup<mlir::func::FuncOp>(dtorName.getValue()))
-      return funcOp;
-    mlir::OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPointToStart(moduleOp.getBody());
-    RefType refType = builder.getType<RefType>(type);
-    auto dtor = builder.create<mlir::func::FuncOp>(
-        builder.getUnknownLoc(), dtorName.getValue(),
-        builder.getFunctionType({refType}, {}));
-    dtor.setPrivate();
-    dtor->setAttr("llvm.linkage",
-                  builder.getAttr<mlir::LLVM::LinkageAttr>(
-                      mlir::LLVM::linkage::Linkage::LinkonceODR));
-    mlir::Block *entryBlock = dtor.addEntryBlock();
-    builder.setInsertionPointToStart(entryBlock);
-    auto ref = entryBlock->getArgument(0);
-    builder.create<ReussirRefDropOp>(builder.getUnknownLoc(), ref, true,
-                                     nullptr);
-    builder.create<mlir::func::ReturnOp>(builder.getUnknownLoc());
-    return dtor;
   }
 
   bool outlineRecord;
@@ -259,6 +230,36 @@ public:
   }
 };
 } // namespace
+
+//===----------------------------------------------------------------------===//
+// Exposed utility
+//===----------------------------------------------------------------------===//
+
+mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
+                                         RecordType type,
+                                         mlir::OpBuilder &builder) {
+  mlir::SymbolTable symTable(moduleOp);
+  auto dtorName = type.getDtorName();
+  if (!dtorName)
+    llvm::report_fatal_error("only named record types have destructors");
+  if (auto funcOp = symTable.lookup<mlir::func::FuncOp>(dtorName.getValue()))
+    return funcOp;
+  mlir::OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(moduleOp.getBody());
+  RefType refType = builder.getType<RefType>(type);
+  auto dtor = builder.create<mlir::func::FuncOp>(
+      builder.getUnknownLoc(), dtorName.getValue(),
+      builder.getFunctionType({refType}, {}));
+  dtor.setPrivate();
+  dtor->setAttr("llvm.linkage", builder.getAttr<mlir::LLVM::LinkageAttr>(
+                                    mlir::LLVM::linkage::Linkage::LinkonceODR));
+  mlir::Block *entryBlock = dtor.addEntryBlock();
+  builder.setInsertionPointToStart(entryBlock);
+  auto ref = entryBlock->getArgument(0);
+  builder.create<ReussirRefDropOp>(builder.getUnknownLoc(), ref, true, nullptr);
+  builder.create<mlir::func::ReturnOp>(builder.getUnknownLoc());
+  return dtor;
+}
 
 //===----------------------------------------------------------------------===//
 // DropExpansionPass

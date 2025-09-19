@@ -8,8 +8,7 @@ module @test {
   
   // expected-error @+1 {{drop function input parameter must have unspecified capability, got: shared}}
   reussir.region.vtable @vtable1 {
-    size(8)
-    alignment(8)
+    type(i32)
     drop(@drop_func_wrong_capability)
   }
 }

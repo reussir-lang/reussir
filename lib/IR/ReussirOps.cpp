@@ -179,6 +179,33 @@ mlir::LogicalResult ReussirRcCreateOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// RcCreateOp SymbolUserOpInterface
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult
+ReussirRcCreateOp::verifySymbolUses(mlir::SymbolTableCollection &symbolTable) {
+  if (getVtableAttr()) {
+    // When vtable is provided, region argument must also exist
+    if (!getRegion())
+      return emitOpError(
+          "when vtable is provided, region argument must also exist");
+
+    // Look up the vtable symbol
+    auto vtableOp = symbolTable.lookupNearestSymbolFrom<ReussirRegionVTableOp>(
+        getOperation(), getVtableAttr());
+    if (!vtableOp)
+      return emitOpError("vtable symbol not found: ") << getVtableAttr();
+
+    // Check that the vtable's type attribute matches the value input's type
+    mlir::Type vtableType = vtableOp.getTypeAttr().getValue();
+    mlir::Type valueType = getValue().getType();
+    if (vtableType != valueType)
+      return emitOpError("vtable type attribute must match value input type, ")
+             << "vtable type: " << vtableType << ", value type: " << valueType;
+  }
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Borrow Operation
 //===----------------------------------------------------------------------===//
 // BorrowOp verification
@@ -213,6 +240,41 @@ mlir::LogicalResult ReussirRcBorrowOp::verify() {
 
   return mlir::success();
 }
+
+//===----------------------------------------------------------------------===//
+// RcFreezeOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRcFreezeOp::verify() {
+  RcType inputRcType = getRcPtr().getType();
+  RcType outputRcType = getFrozen().getType();
+
+  // Check that input RC has flex capability
+  if (inputRcType.getCapability() != reussir::Capability::flex)
+    return emitOpError("input RC pointer must have flex capability, ")
+           << "got: " << stringifyCapability(inputRcType.getCapability());
+
+  // Check that output RC has rigid capability
+  if (outputRcType.getCapability() != reussir::Capability::rigid)
+    return emitOpError("output RC pointer must have rigid capability, ")
+           << "got: " << stringifyCapability(outputRcType.getCapability());
+
+  // Check that element types match
+  if (inputRcType.getElementType() != outputRcType.getElementType())
+    return emitOpError("input and output RC element types must match, ")
+           << "input element type: " << inputRcType.getElementType()
+           << ", output element type: " << outputRcType.getElementType();
+
+  // Check that atomic kinds match
+  if (inputRcType.getAtomicKind() != outputRcType.getAtomicKind())
+    return emitOpError("input and output RC atomic kinds must match, ")
+           << "input atomic kind: "
+           << stringifyAtomicKind(inputRcType.getAtomicKind())
+           << ", output atomic kind: "
+           << stringifyAtomicKind(outputRcType.getAtomicKind());
+
+  return mlir::success();
+}
+
 //===----------------------------------------------------------------------===//
 // Reussir Record Operations
 //===----------------------------------------------------------------------===//
@@ -226,7 +288,6 @@ mlir::LogicalResult ReussirRecordCompoundOp::verify() {
     return emitOpError("compound type must be a compound record");
   if (compoundType.getMembers().size() != getFields().size())
     return emitOpError("number of fields must match number of members");
-  bool hasFieldCapability = false;
   for (auto [field, member, memberCapability] :
        llvm::zip(getFields(), compoundType.getMembers(),
                  compoundType.getMemberCapabilities())) {
@@ -237,10 +298,7 @@ mlir::LogicalResult ReussirRecordCompoundOp::verify() {
       return emitOpError("field type must match projected member type, ")
              << "field type: " << field.getType()
              << ", projected member type: " << projectedType;
-    hasFieldCapability |= (memberCapability == Capability::field);
   }
-  if (hasFieldCapability)
-    return emitOpError("TODO: check this is nested in a region operation");
   return mlir::success();
 }
 
@@ -568,30 +626,42 @@ mlir::LogicalResult ReussirRegionVTableOp::verifySymbolUses(
         getOperation(), getDropAttr());
     if (!funcOp)
       return emitOpError("drop function not found: ") << getDropAttr();
-    
+
     // Check that the drop function has the correct signature:
-    // single input parameter of RefType with unspecified capability, zero outputs
+    // single input parameter of RefType with unspecified capability, zero
+    // outputs
     mlir::FunctionType funcType = funcOp.getFunctionType();
-    
+
     // Must have exactly one input and zero outputs
     if (funcType.getNumInputs() != 1)
-      return emitOpError("drop function must have exactly one input parameter, got: ")
+      return emitOpError(
+                 "drop function must have exactly one input parameter, got: ")
              << funcType.getNumInputs();
-    
+
     if (funcType.getNumResults() != 0)
       return emitOpError("drop function must have zero outputs, got: ")
              << funcType.getNumResults();
-    
+
     // Input parameter must be RefType with unspecified capability
     mlir::Type inputType = funcType.getInput(0);
     RefType refType = llvm::dyn_cast<RefType>(inputType);
     if (!refType)
       return emitOpError("drop function input parameter must be RefType, got: ")
              << inputType;
-    
+
     if (refType.getCapability() != reussir::Capability::unspecified)
-      return emitOpError("drop function input parameter must have unspecified capability, got: ")
+      return emitOpError("drop function input parameter must have unspecified "
+                         "capability, got: ")
              << stringifyCapability(refType.getCapability());
+
+    // Check that the drop function input reference element type matches the
+    // type attribute
+    mlir::Type elementType = refType.getElementType();
+    mlir::Type vtableType = getTypeAttr().getValue();
+    if (elementType != vtableType)
+      return emitOpError("drop function input reference element type must "
+                         "match vtable type attribute, got: ")
+             << elementType << " but expected: " << vtableType;
   }
   return mlir::success();
 }

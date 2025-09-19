@@ -8,8 +8,7 @@ module @test {
   
   // expected-error @+1 {{drop function must have exactly one input parameter, got: 0}}
   reussir.region.vtable @vtable1 {
-    size(8)
-    alignment(8)
+    type(i32)
     drop(@drop_func_no_inputs)
   }
 }
