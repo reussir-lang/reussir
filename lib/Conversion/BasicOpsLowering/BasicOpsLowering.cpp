@@ -544,10 +544,14 @@ struct ReussirRcCreateOpConversionPattern
                                                        regionPtr);
     auto null = rewriter.create<mlir::LLVM::ZeroOp>(op.getLoc(), llvmPtrType);
 
-    mlir::Value vtable = op.needsVTable()
-                             ? rewriter.create<mlir::LLVM::AddressOfOp>(
-                                   op.getLoc(), llvmPtrType, *op.getVtable())
-                             : null.getRes();
+    mlir::Value vtable;
+    if (op.needsVTable()) {
+      if (!op.getVtable())
+        return op->emitError("vtable is required but not provided");
+      vtable = rewriter.create<mlir::LLVM::AddressOfOp>(
+          op.getLoc(), llvmPtrType, *op.getVtable());
+    } else
+      vtable = null.getRes();
 
     auto statePtr = rewriter.create<mlir::LLVM::GEPOp>(
         op.getLoc(), llvmPtrType, convertedBoxType, adaptor.getToken(),
@@ -713,14 +717,14 @@ struct ReussirRegionVTableOpConversionPattern
       dropPtr = rewriter.create<mlir::LLVM::ZeroOp>(op.getLoc(), llvmPtrType);
     }
     auto sizeVal = rewriter.create<mlir::arith::ConstantOp>(
-        op.getLoc(), mlir::IntegerAttr::get(
-                         indexType, converter->getDataLayout().getTypeSize(
-                                        vtableOp.getType())));
+        op.getLoc(),
+        mlir::IntegerAttr::get(
+            indexType, converter->getDataLayout().getTypeSize(op.getType())));
     auto alignVal = rewriter.create<mlir::arith::ConstantOp>(
         op.getLoc(),
-        mlir::IntegerAttr::get(indexType,
-                               converter->getDataLayout().getTypeABIAlignment(
-                                   vtableOp.getType())));
+        mlir::IntegerAttr::get(
+            indexType,
+            converter->getDataLayout().getTypeABIAlignment(op.getType())));
     auto undef = rewriter.create<mlir::LLVM::UndefOp>(op.getLoc(), vtableType);
     auto withDrop = rewriter.create<mlir::LLVM::InsertValueOp>(
         op.getLoc(), undef, dropPtr, 0);
