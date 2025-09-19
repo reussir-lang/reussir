@@ -111,8 +111,7 @@ private:
           &dispatcher.getRegions()[idx], dispatcher.getRegions()[idx].begin(),
           {projectedRefTy}, {op.getLoc()});
       rewriter.setInsertionPointToStart(block);
-      if ((memberCap != Capability::field || refCap != Capability::flex) &&
-          !isTriviallyCopyable(projectedTy))
+      if (memberCap != Capability::field && !isTriviallyCopyable(projectedTy))
         rewriter.create<ReussirRefDropOp>(op.getLoc(), block->getArgument(0),
                                           true, nullptr);
 
