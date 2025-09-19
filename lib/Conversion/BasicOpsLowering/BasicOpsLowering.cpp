@@ -523,9 +523,9 @@ struct ReussirRcCreateOpConversionPattern
     auto elementPtr = rewriter.create<mlir::LLVM::GEPOp>(
         op.getLoc(), llvmPtrType, convertedBoxType, adaptor.getToken(),
         llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
-    rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), one, elementPtr);
+    rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), one, refcntPtr);
     rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), adaptor.getValue(),
-                                         refcntPtr);
+                                         elementPtr);
     rewriter.replaceOp(op, adaptor.getToken());
     return mlir::success();
   }
