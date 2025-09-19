@@ -1,3 +1,17 @@
+// RUN: %reussir-opt \
+// RUN:   -reussir-lowering-region-patterns \
+// RUN:   -reussir-drop-expansion \
+// RUN:   -reussir-lowering-basic-ops \
+// RUN:   -o %t.mlir %s
+// RUN: %FileCheck %s --check-prefix=CHECK-MLIR < %t.mlir
+// RUN: %mlir-translate --mlir-to-llvmir %t.mlir | \
+// RUN:   %FileCheck %s --check-prefix=CHECK-LLVM
+// RUN: %mlir-translate --mlir-to-llvmir %t.mlir | \
+// RUN:   %opt -S -O3 | \
+// RUN:   %llc -relocation-model=pic -filetype=obj -o %t.o
+// RUN: %cc %S/region_vtable.c %t.o -o %t.exe -L%library_path -lreussir-rt \
+// RUN:    -Wl,-rpath,%library_path
+// RUN: %t.exe
 !node = !reussir.record<compound "Node" { [field] !reussir.record<compound "Node">, i64, [field] !reussir.record<compound "Node"> }>
 
 module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>>} {
@@ -21,3 +35,21 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
     return
   }
 }
+
+// CHECK-MLIR-DAG: llvm.func @__reussir_allocate
+// CHECK-MLIR-DAG: llvm.func @__reussir_freeze_flex_object
+// CHECK-MLIR-DAG: llvm.func @__reussir_cleanup_region
+// CHECK-MLIR-DAG: llvm.func @__reussir_release_rigid_object
+// CHECK-MLIR-DAG: llvm.call @__reussir_allocate
+// CHECK-MLIR-DAG: llvm.call @__reussir_freeze_flex_object
+// CHECK-MLIR-DAG: llvm.call @__reussir_cleanup_region
+// CHECK-MLIR-DAG: llvm.call @__reussir_release_rigid_object
+
+// CHECK-LLVM-DAG: declare ptr @__reussir_allocate
+// CHECK-LLVM-DAG: declare ptr @__reussir_freeze_flex_object
+// CHECK-LLVM-DAG: declare void @__reussir_cleanup_region
+// CHECK-LLVM-DAG: declare void @__reussir_release_rigid_object
+// CHECK-LLVM-DAG: call ptr @__reussir_allocate
+// CHECK-LLVM-DAG: call ptr @__reussir_freeze_flex_object
+// CHECK-LLVM-DAG: call void @__reussir_cleanup_region
+// CHECK-LLVM-DAG: call void @__reussir_release_rigid_object
