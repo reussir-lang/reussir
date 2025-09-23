@@ -863,7 +863,46 @@ def ReussirClosureCreateOp : ReussirClosureOp<"create", [
     For the outlined form, outlinedVtable is required. No region is allowed.
     Target vtable shall present as a vtable operation within the same module and
     the vtable shall match the signature of the closure.
-    (TODO: add vtable operation and verification).
+    
+    A closure looks like the following:
+    ```c++
+    struct Closure {
+      size_t refcnt;
+      void* vtable;
+      size_t cursor;
+      // trailing payload
+    }
+    ```
+    When applying a new argument of type T. We first align the cursor to T's alignment
+    , store the argument at the (ptr + aligned cursor) address, and then
+    bump the cursor by T's size.
+
+    Before each application, we check if the closure has a single reference. If so, 
+    we do the operation inplace. Otherwise, we create a new closure using the clone
+    function inside the vtable.
+
+    Each evaluation of the closure consumes one reference.
+
+    The clone operation takes both the closure pointer, the cursor, and the new storage. It consists
+    of several if statements:
+
+    ```c++
+    if (cursor > offsetof(Closure, payload[0])) {
+      // clone payload[0]
+    } 
+
+    if (cursor > offsetof(Closure, payload[1])) {
+      // clone payload[1]
+    } 
+
+    if (cursor > offsetof(Closure, payload[2])) {
+      // clone payload[2]
+    } 
+
+    // ...
+    ```
+
+    Similarly, the drop operation consists of if protected drop functions.
   }];
   let arguments = (ins
     ReussirTokenType:$token,
