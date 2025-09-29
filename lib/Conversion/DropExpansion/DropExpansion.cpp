@@ -71,9 +71,8 @@ private:
                       ReussirRefDropOp op,
                       mlir::PatternRewriter &rewriter) const {
     assert(recordType.isCompound());
-    for (auto [idx, pair] : llvm::enumerate(llvm::zip(
-             recordType.getMembers(), recordType.getMemberCapabilities()))) {
-      auto [memberTy, memberCap] = pair;
+    for (auto [idx, memberTy, memberCap] : llvm::enumerate(
+             recordType.getMembers(), recordType.getMemberCapabilities())) {
       if (memberCap == Capability::field)
         continue;
       auto projectedTy = getProjectedType(memberTy, memberCap, refCap);
@@ -101,9 +100,8 @@ private:
     auto tagSetsAttr = rewriter.getArrayAttr(tagSets);
     auto dispatcher = rewriter.create<ReussirRecordDispatchOp>(
         op.getLoc(), mlir::Type{}, op.getRef(), tagSetsAttr, tagSets.size());
-    for (auto [idx, pair] : llvm::enumerate(llvm::zip(
-             recordType.getMembers(), recordType.getMemberCapabilities()))) {
-      auto [memberTy, memberCap] = pair;
+    for (auto [idx, memberTy, memberCap] : llvm::enumerate(
+             recordType.getMembers(), recordType.getMemberCapabilities())) {
       auto projectedTy = getProjectedType(memberTy, memberCap, refCap);
       RefType projectedRefTy =
           RefType::get(op.getContext(), projectedTy, refCap);

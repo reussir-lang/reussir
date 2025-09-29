@@ -1509,11 +1509,9 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
 
           if (recordType.getKind() == RecordKind::compound) {
             // For compound types, recursively apply to each field
-            for (auto [i, memberPair] : llvm::enumerate(
-                     llvm::zip(recordType.getMembers(),
-                               recordType.getMemberCapabilities()))) {
-              auto [actualMemberType, actualMemberCap] = memberPair;
-
+            for (auto [i, actualMemberType, actualMemberCap] :
+                 llvm::enumerate(recordType.getMembers(),
+                                 recordType.getMemberCapabilities())) {
               auto projectedType = getProjectedType(
                   actualMemberType, actualMemberCap, refType.getCapability());
               if (isTriviallyCopyable(projectedType))
@@ -1541,10 +1539,9 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
 
             // Create regions for each variant and apply ownership acquisition
             // in each region
-            for (auto [i, variantPair] : llvm::enumerate(
-                     llvm::zip(recordType.getMembers(),
-                               recordType.getMemberCapabilities()))) {
-              auto [actualVariantType, actualVariantCap] = variantPair;
+            for (auto [i, actualVariantType, actualVariantCap] :
+                 llvm::enumerate(recordType.getMembers(),
+                                 recordType.getMemberCapabilities())) {
 
               auto projectedType = getProjectedType(
                   actualVariantType, actualVariantCap, refType.getCapability());

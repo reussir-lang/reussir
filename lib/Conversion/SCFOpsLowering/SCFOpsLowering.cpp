@@ -168,9 +168,8 @@ public:
       }
       rewriter.create<mlir::scf::YieldOp>(op.getLoc(), poisonValues);
     }
-    for (auto [idx, zipped] : llvm::enumerate(
-             llvm::zip(op.getTagSets(), indexSwitchOp.getCaseRegions()))) {
-      auto [tagSet, region] = zipped;
+    for (auto [idx, tagSet, region] :
+         llvm::enumerate(op.getTagSets(), indexSwitchOp.getCaseRegions())) {
       mlir::DenseI64ArrayAttr tagArray =
           llvm::cast<mlir::DenseI64ArrayAttr>(tagSet);
       llvm::SmallVector<mlir::Value, 1> args;
