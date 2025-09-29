@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 #pragma once
+#include <mlir/IR/Builders.h>
 #ifndef REUSSIR_IR_REUSSIRTYPES_H
 #define REUSSIR_IR_REUSSIRTYPES_H
 

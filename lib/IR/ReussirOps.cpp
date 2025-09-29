@@ -16,9 +16,11 @@
 #include <llvm/ADT/SmallVector.h>
 
 #include <llvm/ADT/StringSwitch.h>
+#include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/LogicalResult.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/Attributes.h>
+#include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/OpImplementation.h>
 #include <mlir/IR/Operation.h>
@@ -1455,6 +1457,111 @@ mlir::LogicalResult ReussirRefDropOp::verify() {
   }
 
   return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
+// emitOwnershipAcquisition
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
+                                             mlir::OpBuilder &builder,
+                                             mlir::Location loc) {
+  mlir::OpBuilder::InsertionGuard guard(builder);
+  mlir::Type type = value.getType();
+
+  return llvm::TypeSwitch<mlir::Type, mlir::LogicalResult>(type)
+      // For Rc types, emit an Inc operation
+      .Case<RcType>([&](RcType) {
+        builder.create<ReussirRcIncOp>(loc, value);
+        return mlir::success();
+      })
+      // TODO: Handle closure types
+      // For Ref types, check what they point to and handle accordingly
+      .Case<RefType>([&](RefType refType) {
+        mlir::Type elementType = refType.getElementType();
+
+        if (isTriviallyCopyable(elementType))
+          return mlir::success();
+
+        // If reference points to an RC pointer, load it and recursively apply
+        if (llvm::isa<RcType>(elementType)) {
+          auto loadedValue =
+              builder.create<ReussirRefLoadOp>(loc, elementType, value);
+          return emitOwnershipAcquisition(loadedValue, builder, loc);
+        }
+
+        // If reference points to a record, handle fields directly
+        if (auto recordType = llvm::dyn_cast<RecordType>(elementType)) {
+          // The value is already a reference, so we can use it directly
+
+          if (recordType.getKind() == RecordKind::compound) {
+            // For compound types, recursively apply to each field
+            for (auto [i, memberPair] : llvm::enumerate(
+                     llvm::zip(recordType.getMembers(),
+                               recordType.getMemberCapabilities()))) {
+              auto [actualMemberType, actualMemberCap] = memberPair;
+
+              auto projectedType = getProjectedType(
+                  actualMemberType, actualMemberCap, refType.getCapability());
+              if (isTriviallyCopyable(projectedType))
+                continue;
+              auto fieldRef = builder.create<ReussirRefProjectOp>(
+                  loc, RefType::get(builder.getContext(), projectedType), value,
+                  builder.getIndexAttr(i));
+
+              if (emitOwnershipAcquisition(fieldRef, builder, loc).failed())
+                return mlir::failure();
+            }
+          } else if (recordType.getKind() == RecordKind::variant) {
+            // For variant types, emit a RecordDispatch operation
+            // First prepare the tag sets
+            llvm::SmallVector<mlir::Attribute> tagSetAttrs;
+            for (auto i : llvm::seq<int64_t>(0, recordType.getMembers().size()))
+              tagSetAttrs.push_back(builder.getDenseI64ArrayAttr({i}));
+
+            auto tagSetsAttr = builder.getArrayAttr(tagSetAttrs);
+
+            // Create the dispatch operation with the correct number of regions
+            auto dispatchOp = builder.create<ReussirRecordDispatchOp>(
+                loc, mlir::Type{}, value, tagSetsAttr,
+                recordType.getMembers().size());
+
+            // Create regions for each variant and apply ownership acquisition
+            // in each region
+            for (auto [i, variantPair] : llvm::enumerate(
+                     llvm::zip(recordType.getMembers(),
+                               recordType.getMemberCapabilities()))) {
+              auto [actualVariantType, actualVariantCap] = variantPair;
+
+              auto projectedType = getProjectedType(
+                  actualVariantType, actualVariantCap, refType.getCapability());
+
+              // Create a block for this variant region
+              RefType projectedRefTy =
+                  RefType::get(builder.getContext(), projectedType);
+              auto *block = builder.createBlock(
+                  &dispatchOp.getRegions()[i],
+                  dispatchOp.getRegions()[i].begin(), {projectedRefTy}, {loc});
+
+              // Set insertion point to the block
+              builder.setInsertionPointToStart(block);
+              if (!isTriviallyCopyable(projectedType)) {
+                if (emitOwnershipAcquisition(block->getArgument(0), builder,
+                                             loc)
+                        .failed())
+                  return mlir::failure();
+              }
+
+              // Add a terminator
+              builder.create<ReussirScfYieldOp>(loc, nullptr);
+            }
+          }
+        }
+
+        // For other reference types, this is a no-op
+        return mlir::success();
+      })
+      // For other types, return failure
+      .Default([&](mlir::Type) { return mlir::failure(); });
 }
 
 //===-----------------------------------------------------------------------===//

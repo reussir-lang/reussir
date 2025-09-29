@@ -5,8 +5,8 @@ include(GoogleTest)
 # Add unit test executable
 add_executable(reussir-ut)
 
-file(GLOB module_files "*.cppm")
-file(GLOB source_files "*.cpp")
+file(GLOB_RECURSE module_files "*.cppm")
+file(GLOB_RECURSE source_files "*.cpp")
 target_sources(
     reussir-ut
     PRIVATE FILE_SET CXX_MODULES FILES ${module_files} 
