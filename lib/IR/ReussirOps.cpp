@@ -1489,7 +1489,6 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
         builder.create<ReussirRcIncOp>(loc, value);
         return mlir::success();
       })
-      // TODO: Handle closure types
       // For Ref types, check what they point to and handle accordingly
       .Case<RefType>([&](RefType refType) {
         mlir::Type elementType = refType.getElementType();
