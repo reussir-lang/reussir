@@ -827,11 +827,6 @@ MLIR_DATA_LAYOUT_EXPAND_PREFERRED_ALIGN(
         const { return getABIAlignment(dataLayout, params); })
 
 //===----------------------------------------------------------------------===//
-// ClosureType DataLayoutInterface
-//===----------------------------------------------------------------------===//
-REUSSIR_POINTER_LIKE_DATA_LAYOUT_INTERFACE(ClosureType)
-
-//===----------------------------------------------------------------------===//
 // ClosureType Parse/Print
 //===----------------------------------------------------------------------===//
 mlir::Type ClosureType::parse(mlir::AsmParser &parser) {
@@ -922,25 +917,34 @@ mlir::Type getProjectedType(mlir::Type type, Capability fieldCap,
 //===----------------------------------------------------------------------===//
 // ClosureBoxType DataLayoutInterface
 //===----------------------------------------------------------------------===//
-llvm::TypeSize
-ClosureBoxType::getTypeSizeInBits(const mlir::DataLayout &dataLayout,
-                                  mlir::DataLayoutEntryListRef params) const {
-  // ClosureBox structure: { Closure header, PayloadTypes... }
-  // Closure header is 3 pointers: { void* vtable, void* arg_start, void*
-  // arg_cursor }
-  auto ptrTy = mlir::LLVM::LLVMPointerType::get(getContext());
-  llvm::SmallVector<mlir::Type> members = {ptrTy, ptrTy, ptrTy};
-  llvm::SmallVector<Capability> memberCapabilities = {
-      Capability::value, Capability::value, Capability::value};
+
+namespace {
+std::optional<std::tuple<llvm::TypeSize, llvm::Align, mlir::Type>>
+deriveLayoutForClosureBox(mlir::MLIRContext *context,
+                          llvm::ArrayRef<mlir::Type> payloadTypes,
+                          const mlir::DataLayout &dataLayout) {
+  auto ptrTy = mlir::LLVM::LLVMPointerType::get(context);
+  auto indexTy = mlir::IndexType::get(context);
+  llvm::SmallVector<mlir::Type> members = {ptrTy, indexTy};
+  llvm::SmallVector<Capability> memberCapabilities = {Capability::value,
+                                                      Capability::value};
 
   // Add payload types
-  for (auto payloadType : getPayloadTypes()) {
+  for (auto payloadType : payloadTypes) {
     members.push_back(payloadType);
     memberCapabilities.push_back(Capability::value);
   }
 
-  auto derived = deriveCompoundSizeAndAlignment(getContext(), members,
-                                                memberCapabilities, dataLayout);
+  return deriveCompoundSizeAndAlignment(context, members, memberCapabilities,
+                                        dataLayout);
+}
+} // namespace
+
+llvm::TypeSize
+ClosureBoxType::getTypeSizeInBits(const mlir::DataLayout &dataLayout,
+                                  mlir::DataLayoutEntryListRef params) const {
+  auto derived =
+      deriveLayoutForClosureBox(getContext(), getPayloadTypes(), dataLayout);
   if (!derived)
     llvm_unreachable("ClosureBoxType must have a fixed size");
   auto [sizeInBytes, _x, _y] = *derived;
@@ -950,20 +954,8 @@ ClosureBoxType::getTypeSizeInBits(const mlir::DataLayout &dataLayout,
 uint64_t
 ClosureBoxType::getABIAlignment(const mlir::DataLayout &dataLayout,
                                 mlir::DataLayoutEntryListRef params) const {
-  auto ptrTy = mlir::LLVM::LLVMPointerType::get(getContext());
-  auto indexTy = mlir::IndexType::get(getContext());
-  llvm::SmallVector<mlir::Type> members = {indexTy, ptrTy, ptrTy, ptrTy};
-  llvm::SmallVector<Capability> memberCapabilities = {
-      Capability::value, Capability::value, Capability::value,
-      Capability::value};
-  // Add payload types
-  for (auto payloadType : getPayloadTypes()) {
-    members.push_back(payloadType);
-    memberCapabilities.push_back(Capability::value);
-  }
-
-  auto derived = deriveCompoundSizeAndAlignment(getContext(), members,
-                                                memberCapabilities, dataLayout);
+  auto derived =
+      deriveLayoutForClosureBox(getContext(), getPayloadTypes(), dataLayout);
   if (!derived)
     llvm_unreachable("ClosureBoxType must have a fixed alignment");
   auto [_x, alignment, _y] = *derived;

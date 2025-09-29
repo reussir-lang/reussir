@@ -976,7 +976,7 @@ mlir::ParseResult ReussirClosureCreateOp::parse(mlir::OpAsmParser &parser,
   mlir::FlatSymbolRefAttr vtableAttr [[maybe_unused]];
   std::unique_ptr<mlir::Region> bodyRegion = std::make_unique<mlir::Region>();
   TokenType tokenType;
-  ClosureType closureType;
+  RcType closureType;
   enum class Keyword {
     vtable,
     body,
@@ -990,6 +990,8 @@ mlir::ParseResult ReussirClosureCreateOp::parse(mlir::OpAsmParser &parser,
     return mlir::failure();
   if (parser.parseCustomTypeWithFallback(closureType))
     return mlir::failure();
+  if (!llvm::isa<ClosureType>(closureType.getElementType()))
+    return parser.emitError(operationLoc, "expected a Rc closure type");
   if (parser.parseLBrace())
     return mlir::failure();
   // Parse order insensitive fields (vtable, body, token)
@@ -1060,7 +1062,7 @@ mlir::ParseResult ReussirClosureCreateOp::parse(mlir::OpAsmParser &parser,
 void ReussirClosureCreateOp::print(mlir::OpAsmPrinter &p) {
   // Print return type
   p << " -> ";
-  p.printStrippedAttrOrType(getClosure().getType());
+  p.printType(getClosure().getType());
   p << " {";
   p.increaseIndent();
 
@@ -1097,10 +1099,11 @@ void ReussirClosureCreateOp::print(mlir::OpAsmPrinter &p) {
 mlir::LogicalResult ReussirClosureCreateOp::verify() {
   bool outlinedFlag = isOutlined();
   bool inlinedFlag = isInlined();
-  ClosureType closureType = getClosure().getType();
+  ClosureType closureType =
+      llvm::cast<ClosureType>(getClosure().getType().getElementType());
   if (!outlinedFlag && !inlinedFlag)
     return emitOpError("closure must be outlined or inlined");
-  ClosureBoxType closureBoxType = getClosureBoxType();
+  RcBoxType closureBoxType = getRcClosureBoxType();
   auto dataLayout = mlir::DataLayout::closest(this->getOperation());
   auto closureBoxSize = dataLayout.getTypeSize(closureBoxType);
   auto closureBoxAlignment = dataLayout.getTypeABIAlignment(closureBoxType);
@@ -1140,7 +1143,8 @@ mlir::LogicalResult ReussirClosureCreateOp::verifySymbolUses(
         getOperation(), getVtableAttr());
     if (!vtableOp)
       return emitOpError("virtual table not found: ") << getVtableAttr();
-    if (vtableOp.getClosureAttr().getValue() != getClosure().getType())
+    if (vtableOp.getClosureAttr().getValue() !=
+        getClosure().getType().getElementType())
       return emitOpError("virtual table closure type mismatch");
   }
   return mlir::success();
@@ -1158,8 +1162,14 @@ bool ReussirClosureCreateOp::isInlined() {
 }
 
 ClosureBoxType ReussirClosureCreateOp::getClosureBoxType() {
-  ClosureType closureType = getClosure().getType();
+  ClosureType closureType =
+      llvm::cast<ClosureType>(getClosure().getType().getElementType());
   return ClosureBoxType::get(getContext(), closureType.getInputTypes());
+}
+
+RcBoxType ReussirClosureCreateOp::getRcClosureBoxType() {
+  ClosureBoxType closureBoxType = getClosureBoxType();
+  return RcBoxType::get(getContext(), closureBoxType);
 }
 
 mlir::FlatSymbolRefAttr ReussirClosureCreateOp::getTrivialForwardingTarget() {
@@ -1188,7 +1198,8 @@ mlir::FlatSymbolRefAttr ReussirClosureCreateOp::getTrivialForwardingTarget() {
     return nullptr;
 
   // Get the closure type to check argument types
-  ClosureType closureType = getClosure().getType();
+  ClosureType closureType =
+      llvm::cast<ClosureType>(getClosure().getType().getElementType());
   auto closureInputTypes = closureType.getInputTypes();
   auto closureOutputType = closureType.getOutputType();
 
@@ -1296,7 +1307,8 @@ mlir::LogicalResult ReussirClosureYieldOp::verify() {
         "closure yield must be inside a closure create operation");
 
   // Get the closure type to determine if it has a return value
-  ClosureType closureType = parentOp.getClosure().getType();
+  ClosureType closureType =
+      llvm::cast<ClosureType>(parentOp.getClosure().getType().getElementType());
   mlir::Type expectedReturnType = closureType.getOutputType();
 
   // Check consistency between yield value and closure return type
@@ -1329,7 +1341,8 @@ mlir::LogicalResult ReussirClosureYieldOp::verify() {
 // ClosureApplyOp verification
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirClosureApplyOp::verify() {
-  ClosureType closureType = getClosure().getType();
+  ClosureType closureType =
+      llvm::cast<ClosureType>(getClosure().getType().getElementType());
   mlir::Type argType = getArg().getType();
 
   // Get the input types of the closure
@@ -1347,7 +1360,8 @@ mlir::LogicalResult ReussirClosureApplyOp::verify() {
            << ", expected type: " << expectedArgType;
 
   // Verify the result type
-  ClosureType resultType = getApplied().getType();
+  ClosureType resultType =
+      llvm::cast<ClosureType>(getApplied().getType().getElementType());
 
   // The result closure should have one less input type
   auto expectedInputTypes = inputTypes.drop_front(1);
@@ -1386,7 +1400,8 @@ mlir::LogicalResult ReussirClosureApplyOp::verify() {
 // ClosureEvalOp verification
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirClosureEvalOp::verify() {
-  ClosureType closureType = getClosure().getType();
+  ClosureType closureType =
+      llvm::cast<ClosureType>(getClosure().getType().getElementType());
 
   // Check that the closure has no input types (fully applied)
   auto inputTypes = closureType.getInputTypes();

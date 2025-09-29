@@ -909,7 +909,7 @@ def ReussirClosureCreateOp : ReussirClosureOp<"create", [
     OptionalAttr<FlatSymbolRefAttr>:$vtable
   );
   let regions = (region MaxSizedRegion<1>:$body);
-  let results = (outs Res<ReussirClosureType, "created closure">:$closure);
+  let results = (outs Res<RcClosureType, "created closure">:$closure);
 
   let hasCustomAssemblyFormat = 1;
 
@@ -920,6 +920,7 @@ def ReussirClosureCreateOp : ReussirClosureOp<"create", [
     bool isInlined();
     // get the payload box for the closure
     ::reussir::ClosureBoxType getClosureBoxType();
+    ::reussir::RcBoxType getRcClosureBoxType();
 
     // Return the target function is the closure is trivially forwarding.
     // Return null otherwise.
@@ -1001,12 +1002,12 @@ def ReussirClosureApplyOp : ReussirClosureOp<"apply", []> {
   let hasVerifier = 1;
   let arguments = (ins
     Arg<AnyType, "argument to apply">:$arg,
-    Arg<ReussirClosureType, "closure to apply">:$closure
+    Arg<RcClosureType, "closure to apply">:$closure
   );
-  let results = (outs Res<ReussirClosureType, "applied closure">:$applied);
+  let results = (outs Res<RcClosureType, "applied closure">:$applied);
   let assemblyFormat = [{
-    `(` $arg `:` type($arg) `)` `to` `(` $closure `:` type($closure) `)`
-    `:` type($applied) attr-dict
+    `(` $arg `:` type($arg) `)` `to` `(` $closure `:` qualified(type($closure)) `)`
+    `:` qualified(type($applied)) attr-dict
   }];
 }
 
@@ -1018,10 +1019,10 @@ def ReussirClosureEvalOp : ReussirClosureOp<"eval", []> {
     This operation takes a fully applied closure and evaluates it.
     The output is the result of the closure if exists.
   }];
-  let arguments = (ins Arg<ReussirClosureType, "closure to evaluate">:$closure);
+  let arguments = (ins Arg<RcClosureType, "closure to evaluate">:$closure);
   let results = (outs Res<Optional<AnyType>, "result of the closure">:$result);
   let assemblyFormat = [{
-    `(` $closure `:` type($closure) `)` (`:` type($result)^)? attr-dict
+    `(` $closure `:` qualified(type($closure)) `)` (`:` qualified(type($result))^)? attr-dict
   }];
   let hasVerifier = 1;
 }

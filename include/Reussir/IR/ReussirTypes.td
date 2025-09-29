@@ -221,6 +221,10 @@ def ReussirRcType
   let extraClassDeclaration = [{
     using Base::verifyInvariants;
     mlir::Type getElementType() const { return getEleTy(); }
+    bool isRegional() const {
+      return getCapability() == Capability::flex ||
+             getCapability() == Capability::rigid;
+    }
     RcBoxType getInnerBoxType() const;
   }];
 }
@@ -342,13 +346,13 @@ def ReussirRcBoxType
 // Reussir Closure Type
 //===----------------------------------------------------------------------===//
 def ReussirClosureType
-    : ReussirType<"Closure", "closure", [DeclareTypeInterfaceMethods<DataLayoutTypeInterface>]> {
+    : ReussirType<"Closure", "closure"> {
   let summary = "Reussir Closure Type";
   let description = [{
     `reussir.closure` represents a closure. 
-    It is a pointer to the underlying closure box.
-    
-    A closure is a special kind of rc type.
+    A closure must be within a shared Rc type. The RC pointer points to a 
+    RcBox wrapping a ClosureBox. The ClosureBox contains the payload values
+    captured by the closure.
   }];
   let parameters = (ins
     ArrayRefParameter<"::mlir::Type">:$inputTypes,
@@ -365,9 +369,7 @@ def ReussirClosureBoxType
     following C++ struct:
     ```c++
     struct ClosureBox {
-      size_t ref_count;
       void* vtable;
-      void* arg_start;
       void* arg_cursor;
       PayloadTypes... payload;
     }
@@ -378,20 +380,17 @@ def ReussirClosureBoxType
   );
   let assemblyFormat = "`<` $payloadTypes `>`";
   let extraClassDeclaration = [{
-    static constexpr size_t getRefCountIndex() {
-      return 0;
-    }
-    static constexpr size_t getVTableIndex() {
-      return 1;
-    }
-    static constexpr size_t getArgStartIndex() {
-      return 2;
-    }
-    static constexpr size_t getArgCursorIndex() {
-      return 3;
-    }
+    static constexpr size_t VTABLE_INDEX = 0;
+    static constexpr size_t ARG_CURSOR_INDEX = 1;
   }];
 }
+
+def RcClosureType : Type<CPred<[{
+  ::llvm::isa<::reussir::RcType>($_self) && 
+  ::llvm::isa<::reussir::ClosureType>(
+    ::llvm::cast<::reussir::RcType>($_self).getElementType()) &&
+  !::llvm::cast<::reussir::RcType>($_self).isRegional()
+  }]>, "Reussir rc closure type", "::reussir::RcType">;
 
 ///===----------------------------------------------------------------------===//
 // Special Type Constraints
