@@ -11,6 +11,7 @@
 #include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/Debug.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/LogicalResult.h>
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h>
@@ -30,6 +31,7 @@
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/IR/PatternMatch.h>
+#include <mlir/IR/Value.h>
 #include <mlir/IR/ValueRange.h>
 #include <mlir/Pass/Pass.h>
 
@@ -812,6 +814,14 @@ struct ReussirRegionCreateOpConversionPattern
   }
 };
 
+mlir::TypedValue<RcType>
+ensureClosureUniqueness(mlir::TypedValue<RcType> closure) {
+  ClosureType closureType = llvm::dyn_cast<ClosureType>(closure.getType());
+  if (!closureType)
+    llvm::report_fatal_error("expected a closure type");
+  llvm_unreachable("TODO: implement closure uniqueness check");
+}
+
 struct ReussirClosureApplyOpConversionPattern
     : public mlir::OpConversionPattern<ReussirClosureApplyOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -860,7 +870,7 @@ public:
   mlir::LogicalResult
   matchAndRewrite(ReussirClosureApplyOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-
+    // First, align the
     return mlir::success();
   }
 };
