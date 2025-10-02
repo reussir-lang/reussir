@@ -25,6 +25,7 @@
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/IR/Block.h>
+#include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/BuiltinTypes.h>
@@ -33,6 +34,7 @@
 #include <mlir/Pass/Pass.h>
 
 #include "Reussir/Conversion/BasicOpsLowering.h"
+#include "Reussir/Conversion/TypeConverter.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirEnumAttrs.h"
 #include "Reussir/IR/ReussirOps.h"
@@ -806,6 +808,59 @@ struct ReussirRegionCreateOpConversionPattern
         op.getLoc(), mlir::IntegerAttr::get(converter->getIndexType(), 1));
     rewriter.replaceOpWithNewOp<mlir::LLVM::AllocaOp>(op, ptrType, ptrType,
                                                       one);
+    return mlir::success();
+  }
+};
+
+struct ReussirClosureApplyOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirClosureApplyOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+private:
+  mlir::Value emitPointerAlign(mlir::Value ptr, mlir::Type type,
+                               mlir::OpBuilder &builder) const {
+    const LLVMTypeConverter *converter =
+        static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    auto alignment = converter->getDataLayout().getTypeABIAlignment(type);
+    auto addr = builder.create<mlir::LLVM::PtrToIntOp>(
+        ptr.getLoc(), converter->getIndexType(), ptr);
+    auto mask = builder.create<mlir::arith::ConstantOp>(
+        ptr.getLoc(),
+        mlir::IntegerAttr::get(converter->getIndexType(), alignment - 1));
+    auto zero = builder.create<mlir::arith::ConstantOp>(
+        ptr.getLoc(), mlir::IntegerAttr::get(converter->getIndexType(), 0));
+    auto negAddr = builder.create<mlir::arith::SubIOp>(
+        ptr.getLoc(), converter->getIndexType(), zero, addr);
+    auto offset = builder.create<mlir::arith::AndIOp>(
+        ptr.getLoc(), converter->getIndexType(), negAddr, mask);
+    auto alignedAddr = builder.create<mlir::arith::AddIOp>(
+        ptr.getLoc(), converter->getIndexType(), addr, offset,
+        mlir::arith::IntegerOverflowFlags::nuw);
+    return builder.create<mlir::LLVM::IntToPtrOp>(ptr.getLoc(), ptr.getType(),
+                                                  alignedAddr);
+  }
+
+  mlir::Value emitPointerBump(mlir::Value ptr, mlir::Type type,
+                              mlir::OpBuilder &builder) const {
+    const LLVMTypeConverter *converter =
+        static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    auto size = converter->getDataLayout().getTypeSize(type);
+    auto addr = builder.create<mlir::LLVM::PtrToIntOp>(
+        ptr.getLoc(), converter->getIndexType(), ptr);
+    auto sizeVal = builder.create<mlir::arith::ConstantOp>(
+        ptr.getLoc(), mlir::IntegerAttr::get(converter->getIndexType(), size));
+    auto newAddr = builder.create<mlir::arith::AddIOp>(
+        ptr.getLoc(), converter->getIndexType(), addr, sizeVal,
+        mlir::arith::IntegerOverflowFlags::nuw);
+    return builder.create<mlir::LLVM::IntToPtrOp>(ptr.getLoc(), ptr.getType(),
+                                                  newAddr);
+  }
+
+public:
+  mlir::LogicalResult
+  matchAndRewrite(ReussirClosureApplyOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+
     return mlir::success();
   }
 };
