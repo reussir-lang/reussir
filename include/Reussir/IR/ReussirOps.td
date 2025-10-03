@@ -1027,4 +1027,20 @@ def ReussirClosureEvalOp : ReussirClosureOp<"eval", []> {
   let hasVerifier = 1;
 }
 
+def ReussirClosureUniqifyOp : ReussirClosureOp<"uniqify", []> {
+  let summary = "Make a unique closure from a closure";
+  let description = [{
+    `reussir.closure.uniqify` makes a unique closure from a closure.
+
+    This operation make sure that the closure is uniquely owned. This is needed
+    for certain operations such as application.
+  }];
+  let arguments = (ins Arg<RcClosureType, "closure to specialize">:$closure);
+  let results = (outs Res<RcClosureType, "specialized closure">:$uniqified);
+  let assemblyFormat = [{
+    `(` $closure `:` qualified(type($closure)) `)` `:` qualified(type($uniqified)) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 #endif // REUSSIR_IR_REUSSIROPS_TD

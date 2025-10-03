@@ -1436,6 +1436,25 @@ mlir::LogicalResult ReussirClosureEvalOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// Reussir Closure Uniqify Op
+//===----------------------------------------------------------------------===//
+// ClosureUniqifyOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirClosureUniqifyOp::verify() {
+  // Get the input and output closure types
+  mlir::Type inputClosureType = getClosure().getType();
+  mlir::Type outputClosureType = getUniqified().getType();
+
+  // Check that input and output types are the same
+  if (inputClosureType != outputClosureType)
+    return emitOpError("input and output closure types must be the same, ")
+           << "input type: " << inputClosureType
+           << ", output type: " << outputClosureType;
+
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Reference Drop Op
 //===----------------------------------------------------------------------===//
 // RefDropOp verification
