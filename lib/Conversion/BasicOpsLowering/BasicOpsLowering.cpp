@@ -15,6 +15,7 @@
 #include <llvm/Support/LogicalResult.h>
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h>
+#include <mlir/Conversion/LLVMCommon/TypeConverter.h>
 #include <mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
@@ -815,10 +816,26 @@ struct ReussirRegionCreateOpConversionPattern
 };
 
 mlir::TypedValue<RcType>
-ensureClosureUniqueness(mlir::TypedValue<RcType> closure) {
-  ClosureType closureType = llvm::dyn_cast<ClosureType>(closure.getType());
+ensureClosureUniqueness(RcType rcClosureType, mlir::Value adaptorValue,
+                        mlir::LLVMTypeConverter const &converter,
+                        mlir::Region &region, mlir::OpBuilder &builder) {
+  ClosureType closureType =
+      llvm::dyn_cast<ClosureType>(rcClosureType.getElementType());
   if (!closureType)
     llvm::report_fatal_error("expected a closure type");
+  auto boxType = rcClosureType.getInnerBoxType();
+  auto rnfCntPtr = builder.create<mlir::LLVM::GEPOp>(
+      adaptorValue.getLoc(),
+      mlir::LLVM::LLVMPointerType::get(builder.getContext()),
+      converter.convertType(boxType), adaptorValue,
+      llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
+  auto refCnt = builder.create<mlir::LLVM::LoadOp>(
+      adaptorValue.getLoc(), converter.getIndexType(), rnfCntPtr);
+  auto one = builder.create<mlir::arith::ConstantOp>(
+      adaptorValue.getLoc(),
+      mlir::IntegerAttr::get(converter.getIndexType(), 1));
+  auto isUnique = builder.create<mlir::arith::CmpIOp>(
+      adaptorValue.getLoc(), mlir::arith::CmpIPredicate::eq, refCnt, one);
   llvm_unreachable("TODO: implement closure uniqueness check");
 }
 

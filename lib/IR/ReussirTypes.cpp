@@ -690,8 +690,12 @@ RcType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
 RcBoxType RcType::getInnerBoxType() const {
   bool isFlexOrRigid = getCapability() == ::reussir::Capability::flex ||
                        getCapability() == ::reussir::Capability::rigid;
+  mlir::Type eleTy = getElementType();
+  if (auto closureTy = llvm::dyn_cast<ClosureType>(eleTy))
+    eleTy = ClosureBoxType::get(getContext(), closureTy.getInputTypes());
   return RcBoxType::get(getContext(), getEleTy(), isFlexOrRigid);
 }
+
 //===----------------------------------------------------------------------===//
 // RcType DataLayoutInterface
 //===----------------------------------------------------------------------===//
