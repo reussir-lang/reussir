@@ -359,6 +359,11 @@ def ReussirClosureType
     OptionalParameter<"::mlir::Type">:$outputType
   );
   let hasCustomAssemblyFormat = 1;
+  let extraClassDeclaration = [{
+    static constexpr size_t VTABLE_DROP_INDEX = 0;
+    static constexpr size_t VTABLE_CLONE_INDEX = 1;
+    static constexpr size_t VTABLE_EVALUATE_INDEX = 2;
+  }];
 }
 
 def ReussirClosureBoxType
