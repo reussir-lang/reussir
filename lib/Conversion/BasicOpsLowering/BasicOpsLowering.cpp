@@ -863,7 +863,42 @@ public:
   mlir::LogicalResult
   matchAndRewrite(ReussirClosureApplyOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    // First, align the
+    auto rcClosureBox = op.getType().getInnerBoxType();
+    auto structType = typeConverter->convertType(rcClosureBox);
+    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+
+    // This operation assumes that the closure is already uniquely owned.
+    // First, use GEP[0, 1, 1] and load op to read the cursor
+    // RcBox {
+    //    size_t refcnt;
+    //    {
+    //        void* vtable;
+    //        void* cursor;
+    //        // trailing payload
+    //    };
+    // }
+    auto cursorPtr = rewriter.create<mlir::LLVM::GEPOp>(
+        op.getLoc(), llvmPtrType, structType, adaptor.getClosure(),
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1, 1});
+    auto cursor = rewriter.create<mlir::LLVM::LoadOp>(op.getLoc(), llvmPtrType,
+                                                      cursorPtr);
+
+    // Second, align the cursor to current input type's TypeABIAlignment.
+    auto inputType = typeConverter->convertType(op.getArg().getType());
+    auto alignedCursor = emitPointerAlign(cursor, inputType, rewriter);
+
+    // Third, copy the input value to the aligned cursor.
+    rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), adaptor.getArg(),
+                                         alignedCursor);
+
+    // Fourth, bump the cursor by the input type's size.
+    auto newCursor = emitPointerBump(alignedCursor, inputType, rewriter);
+
+    // Fifth, store the new cursor back to the RcBox.
+    rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), newCursor, cursorPtr);
+
+    // Return the same closure pointer (in-place modification)
+    rewriter.replaceOp(op, adaptor.getClosure());
     return mlir::success();
   }
 };
@@ -936,7 +971,7 @@ struct BasicOpsLoweringPass
         ReussirRcDecOp, ReussirRcBorrowOp, ReussirRecordCompoundOp,
         ReussirRecordVariantOp, ReussirRefProjectOp, ReussirRecordTagOp,
         ReussirRecordCoerceOp, ReussirRegionVTableOp, ReussirRcFreezeOp,
-        ReussirRegionCleanupOp, ReussirRegionCreateOp>();
+        ReussirRegionCleanupOp, ReussirRegionCreateOp, ReussirClosureApplyOp>();
     target.addLegalDialect<mlir::LLVM::LLVMDialect>();
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
@@ -964,6 +999,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirRegionVTableOpConversionPattern,
       ReussirRcFreezeOpConversionPattern,
       ReussirRegionCleanupOpConversionPattern,
-      ReussirRegionCreateOpConversionPattern>(converter, patterns.getContext());
+      ReussirRegionCreateOpConversionPattern,
+      ReussirClosureApplyOpConversionPattern>(converter, patterns.getContext());
 }
 } // namespace reussir
