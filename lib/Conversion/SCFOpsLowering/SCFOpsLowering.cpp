@@ -202,6 +202,36 @@ public:
   }
 };
 
+struct ReussirClosureUniqifyOpRewritePattern
+    : public mlir::OpRewritePattern<ReussirClosureUniqifyOp> {
+  using OpRewritePattern::OpRewritePattern;
+  mlir::LogicalResult
+  matchAndRewrite(ReussirClosureUniqifyOp op,
+                  mlir::PatternRewriter &rewriter) const override {
+    // Create a check operation to see if the closure is unique
+    auto isUnique = rewriter.create<reussir::ReussirRcIsUniqueOp>(
+        op.getLoc(), op.getClosure());
+
+    // Create an SCF if-else operation
+    auto scfIfOp = rewriter.create<mlir::scf::IfOp>(
+        op.getLoc(), op->getResultTypes(), isUnique, /*addThenRegion=*/true,
+        /*addElseRegion=*/true);
+
+    // In the then region (closure is unique), just return the original closure
+    rewriter.setInsertionPointToStart(&scfIfOp.getThenRegion().front());
+    rewriter.create<mlir::scf::YieldOp>(op.getLoc(), op.getClosure());
+
+    // In the else region (closure is not unique), clone the closure
+    rewriter.setInsertionPointToStart(&scfIfOp.getElseRegion().front());
+    auto cloned = rewriter.create<reussir::ReussirClosureCloneOp>(
+        op.getLoc(), op.getClosure().getType(), op.getClosure());
+    rewriter.create<mlir::scf::YieldOp>(op.getLoc(), cloned.getResult());
+
+    rewriter.replaceOp(op, scfIfOp);
+    return mlir::success();
+  }
+};
+
 struct ReussirScfYieldOpRewritePattern
     : public mlir::OpRewritePattern<ReussirScfYieldOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -236,7 +266,7 @@ struct SCFOpsLoweringPass
 
     // Illegal operations
     target.addIllegalOp<ReussirNullableDispatchOp, ReussirRecordDispatchOp,
-                        ReussirScfYieldOp>();
+                        ReussirScfYieldOp, ReussirClosureUniqifyOp>();
 
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
@@ -250,6 +280,7 @@ void populateSCFOpsLoweringConversionPatterns(
   // Add conversion patterns for Reussir SCF operations
   patterns.add<ReussirNullableDispatchOpRewritePattern,
                ReussirRecordDispatchOpRewritePattern,
+               ReussirClosureUniqifyOpRewritePattern,
                ReussirScfYieldOpRewritePattern>(patterns.getContext());
 }
 

@@ -441,6 +441,21 @@ def ReussirRcBorrowOp : ReussirRcOp<"borrow", []> {
 }
 
 //===----------------------------------------------------------------------===//
+// Rc IsUnique Operation
+//===----------------------------------------------------------------------===//
+def ReussirRcIsUniqueOp : ReussirRcOp<"is_unique", []> {
+  let summary = "Check if a RC pointer is unique";
+  let description = [{
+    `reussir.rc.is_unique` checks if a RC pointer is unique.
+  }];
+  let arguments = (ins Arg<ReussirRcType, "RC pointer to check">:$rcPtr);
+  let results = (outs Res<I1, "Is unique">:$isUnique);
+  let assemblyFormat = [{
+    `(` $rcPtr `:` qualified(type($rcPtr)) `)` `:` type($isUnique) attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Record Operations
 //===----------------------------------------------------------------------===//
 class ReussirRecordOp<string mnemonic, list<Trait> traits>
@@ -1030,10 +1045,11 @@ def ReussirClosureEvalOp : ReussirClosureOp<"eval", []> {
 def ReussirClosureUniqifyOp : ReussirClosureOp<"uniqify", []> {
   let summary = "Make a unique closure from a closure";
   let description = [{
-    `reussir.closure.uniqify` makes a unique closure from a closure.
+    `reussir.closure.uniqify` makes sure a unique closure from a closure.
 
-    This operation make sure that the closure is uniquely owned. This is needed
-    for certain operations such as application.
+    This is a SCF operation that will expand into rc.is_unique operation guarded
+    scf if-else statement. If the original value is unique, the operation will
+    call the clone operation.
   }];
   let arguments = (ins Arg<RcClosureType, "closure to specialize">:$closure);
   let results = (outs Res<RcClosureType, "specialized closure">:$uniqified);
@@ -1043,4 +1059,20 @@ def ReussirClosureUniqifyOp : ReussirClosureOp<"uniqify", []> {
   let hasVerifier = 1;
 }
 
+def ReussirClosureCloneOp : ReussirClosureOp<"clone", []> {
+  let summary = "Clone a closure";
+  let description = [{
+    `reussir.closure.clone` clones a closure.
+
+    Since we typically have no way to understand the full closure, the memory layout
+    and other configuration related operations are handled inside the vtable clone operation.
+    This call just lowers into a function call to the clone operation via vtable.
+  }];
+  let arguments = (ins Arg<RcClosureType, "closure to clone">:$closure);
+  let results = (outs Res<RcClosureType, "cloned closure">:$cloned);
+  let assemblyFormat = [{
+    `(` $closure `:` qualified(type($closure)) `)` `:` qualified(type($cloned)) attr-dict
+  }];
+  let hasVerifier = 1;
+}
 #endif // REUSSIR_IR_REUSSIROPS_TD
