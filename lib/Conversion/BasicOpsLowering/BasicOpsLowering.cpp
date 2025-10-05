@@ -825,6 +825,8 @@ private:
     const LLVMTypeConverter *converter =
         static_cast<const LLVMTypeConverter *>(getTypeConverter());
     auto alignment = converter->getDataLayout().getTypeABIAlignment(type);
+    if (alignment <= 1)
+      return ptr;
     auto addr = builder.create<mlir::LLVM::PtrToIntOp>(
         ptr.getLoc(), converter->getIndexType(), ptr);
     auto mask = builder.create<mlir::arith::ConstantOp>(
@@ -848,6 +850,8 @@ private:
     const LLVMTypeConverter *converter =
         static_cast<const LLVMTypeConverter *>(getTypeConverter());
     auto size = converter->getDataLayout().getTypeSize(type);
+    if (size == 0)
+      return ptr;
     auto addr = builder.create<mlir::LLVM::PtrToIntOp>(
         ptr.getLoc(), converter->getIndexType(), ptr);
     auto sizeVal = builder.create<mlir::arith::ConstantOp>(

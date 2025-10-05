@@ -79,8 +79,6 @@ LLVMTypeConverter::LLVMTypeConverter(mlir::ModuleOp op)
     members.push_back(
         mlir::LLVM::LLVMPointerType::get(&getContext())); // vtable
     members.push_back(
-        mlir::LLVM::LLVMPointerType::get(&getContext())); // arg_start
-    members.push_back(
         mlir::LLVM::LLVMPointerType::get(&getContext())); // arg_cursor
     return mlir::LLVM::LLVMStructType::getLiteral(&getContext(), members);
   });
