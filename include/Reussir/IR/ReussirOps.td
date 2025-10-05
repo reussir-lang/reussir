@@ -453,6 +453,7 @@ def ReussirRcIsUniqueOp : ReussirRcOp<"is_unique", []> {
   let assemblyFormat = [{
     `(` $rcPtr `:` qualified(type($rcPtr)) `)` `:` type($isUnique) attr-dict
   }];
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//

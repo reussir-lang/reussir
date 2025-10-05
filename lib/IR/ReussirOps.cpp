@@ -278,6 +278,21 @@ mlir::LogicalResult ReussirRcFreezeOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// RcIsUniqueOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRcIsUniqueOp::verify() {
+  RcType rcType = getRcPtr().getType();
+
+  // Check that RC pointer is not regional (i.e., has shared capability)
+  if (rcType.isRegional())
+    return emitOpError("isUnique can only be applied to non-regional RC "
+                       "(shared capability), ")
+           << "got: " << stringifyCapability(rcType.getCapability());
+
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Record Operations
 //===----------------------------------------------------------------------===//
 // RecordCompoundOp verification

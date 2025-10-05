@@ -782,6 +782,41 @@ struct ReussirRcFreezeOpConversionPattern
   }
 };
 
+struct ReussirRcIsUniqueOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirRcIsUniqueOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRcIsUniqueOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    RcType rcPtrTy = op.getRcPtr().getType();
+
+    RcBoxType rcBoxType = rcPtrTy.getInnerBoxType();
+    auto convertedBoxType = getTypeConverter()->convertType(rcBoxType);
+    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto indexType = static_cast<const LLVMTypeConverter *>(getTypeConverter())
+                         ->getIndexType();
+
+    // GEP [0, 0] to locate refcnt
+    auto refcntPtr = rewriter.create<mlir::LLVM::GEPOp>(
+        op.getLoc(), llvmPtrType, convertedBoxType, adaptor.getRcPtr(),
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
+
+    // Load refcnt
+    auto refcnt =
+        rewriter.create<mlir::LLVM::LoadOp>(op.getLoc(), indexType, refcntPtr);
+
+    // Compare with 1 (unique means refcnt == 1)
+    auto one = rewriter.create<mlir::arith::ConstantOp>(
+        op.getLoc(), mlir::IntegerAttr::get(indexType, 1));
+    auto isUnique = rewriter.create<mlir::arith::CmpIOp>(
+        op.getLoc(), mlir::arith::CmpIPredicate::eq, refcnt, one);
+
+    rewriter.replaceOp(op, isUnique);
+    return mlir::success();
+  }
+};
+
 struct ReussirRegionCleanupOpConversionPattern
     : public mlir::OpConversionPattern<ReussirRegionCleanupOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -842,7 +877,7 @@ private:
         ptr.getLoc(), converter->getIndexType(), addr, offset,
         mlir::arith::IntegerOverflowFlags::nuw);
     return builder.create<mlir::LLVM::IntToPtrOp>(ptr.getLoc(), ptr.getType(),
-                                                  alignedAddr);
+                                                  alignedAddr.getResult());
   }
 
   mlir::Value emitPointerBump(mlir::Value ptr, mlir::Type type,
@@ -860,7 +895,7 @@ private:
         ptr.getLoc(), converter->getIndexType(), addr, sizeVal,
         mlir::arith::IntegerOverflowFlags::nuw);
     return builder.create<mlir::LLVM::IntToPtrOp>(ptr.getLoc(), ptr.getType(),
-                                                  newAddr);
+                                                  newAddr.getResult());
   }
 
 public:
@@ -972,10 +1007,11 @@ struct BasicOpsLoweringPass
         ReussirTokenReallocOp, ReussirRefLoadOp, ReussirRefStoreOp,
         ReussirRefSpilledOp, ReussirNullableCheckOp, ReussirNullableCreateOp,
         ReussirNullableCoerceOp, ReussirRcIncOp, ReussirRcCreateOp,
-        ReussirRcDecOp, ReussirRcBorrowOp, ReussirRecordCompoundOp,
-        ReussirRecordVariantOp, ReussirRefProjectOp, ReussirRecordTagOp,
-        ReussirRecordCoerceOp, ReussirRegionVTableOp, ReussirRcFreezeOp,
-        ReussirRegionCleanupOp, ReussirRegionCreateOp, ReussirClosureApplyOp>();
+        ReussirRcDecOp, ReussirRcBorrowOp, ReussirRcIsUniqueOp,
+        ReussirRecordCompoundOp, ReussirRecordVariantOp, ReussirRefProjectOp,
+        ReussirRecordTagOp, ReussirRecordCoerceOp, ReussirRegionVTableOp,
+        ReussirRcFreezeOp, ReussirRegionCleanupOp, ReussirRegionCreateOp,
+        ReussirClosureApplyOp>();
     target.addLegalDialect<mlir::LLVM::LLVMDialect>();
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
@@ -995,7 +1031,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirNullableCreateConversionPattern,
       ReussirNullableCoerceConversionPattern, ReussirRcIncConversionPattern,
       ReussirRcDecOpConversionPattern, ReussirRcCreateOpConversionPattern,
-      ReussirRcBorrowOpConversionPattern,
+      ReussirRcBorrowOpConversionPattern, ReussirRcIsUniqueOpConversionPattern,
       ReussirRecordCompoundConversionPattern,
       ReussirRecordVariantConversionPattern,
       ReussirReferenceProjectConversionPattern,
