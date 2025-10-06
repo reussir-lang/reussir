@@ -234,7 +234,7 @@ void compileForNativeMachine(std::string_view mlirTextureModule,
 
   llvm::TargetOptions targetOptions;
 #if LLVM_VERSION_MAJOR >= 22
-  llvm::Triple targetTriple = triple;
+  llvm::Triple targetTriple = llvm::StringRef{triple};
 #else
   llvm::StringRef targetTriple = triple;
 #endif
