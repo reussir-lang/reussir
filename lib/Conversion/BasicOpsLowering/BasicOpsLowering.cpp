@@ -14,9 +14,11 @@
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/LogicalResult.h>
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
+#include <mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h>
 #include <mlir/Conversion/LLVMCommon/TypeConverter.h>
 #include <mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h>
+#include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMAttrs.h>
@@ -1051,6 +1053,7 @@ struct BasicOpsLoweringPass
     mlir::populateFuncToLLVMFuncOpConversionPattern(converter, patterns);
     mlir::populateFuncToLLVMConversionPatterns(converter, patterns);
     mlir::arith::populateArithToLLVMConversionPatterns(converter, patterns);
+    mlir::cf::populateControlFlowToLLVMConversionPatterns(converter, patterns);
     addRuntimeFunctions(getOperation(), converter);
     target.addIllegalDialect<mlir::func::FuncDialect,
                              mlir::arith::ArithDialect>();
