@@ -233,8 +233,13 @@ void compileForNativeMachine(std::string_view mlirTextureModule,
   }
 
   llvm::TargetOptions targetOptions;
+#if LLVM_VERSION_MAJOR >= 22
+  llvm::Triple targetTriple = triple;
+#else
+  llvm::StringRef targetTriple = triple;
+#endif
   auto tm = std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
-      llvm::StringRef{triple}, cpu, llvm::StringRef{featuresStr}, targetOptions,
+      targetTriple, cpu, llvm::StringRef{featuresStr}, targetOptions,
       std::nullopt, std::nullopt, toLlvmOptLevel(options.opt)));
 
   if (!tm) {
