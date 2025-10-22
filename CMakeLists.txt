@@ -33,6 +33,9 @@ message(STATUS "Tablegen output directory: ${MLIR_TABLEGEN_OUTPUT_DIR}")
 # Include Immer
 include(cmake/Immer.cmake)
 
+# Include TPDE
+include(cmake/TPDE.cmake)
+
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${MLIR_TABLEGEN_OUTPUT_DIR}

@@ -1,8 +1,15 @@
 // RUN: %rrc -i %s -o %t.rr.o --target object --opt-level aggressive
 // RUN: %cc -c %S/fib.c -o %t.c.o
 // RUN: %cc %t.rr.o %t.c.o -o %t
-// RUN: %t | %FileCheck %s
+// RUN: %t | %FileCheck %s --check-prefix=CHECK
+//
+// RUN: %rrc -i %s -o %t.tpde.rr.o --target object --opt-level tpde
+// RUN: %cc -c %S/fib.c -o %t.tpde.c.o
+// RUN: %cc %t.tpde.rr.o %t.tpde.c.o -o %t.tpde
+// RUN: %t.tpde | %FileCheck %s --check-prefix=TPDE
+//
 // CHECK: 267914296
+// TPDE: 267914296
 
 pub fn fibonacci(n: u64) -> u64 { 
     if n < 2u64 { 

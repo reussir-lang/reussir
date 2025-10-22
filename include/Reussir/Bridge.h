@@ -18,7 +18,7 @@
 
 namespace reussir {
 enum class OutputTarget { LLVMIR, ASM, Object };
-enum class OptOption { None, Default, Aggressive, Size };
+enum class OptOption { None, Default, Aggressive, Size, TPDE };
 enum class LogLevel { Error, Warning, Info, Debug, Trace };
 struct CompileOptions {
   OutputTarget target;

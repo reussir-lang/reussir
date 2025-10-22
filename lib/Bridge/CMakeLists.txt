@@ -24,4 +24,5 @@ add_mlir_library(MLIRReussirBridge
     MLIRReussir
     MLIRReussirBasicOpsLowering
     MLIRReussirSCFOpsLowering
+    tpde::tpde_llvm
 )

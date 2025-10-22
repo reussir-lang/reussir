@@ -24,6 +24,8 @@ pub enum OptOption {
     Aggressive,
     #[strum(serialize = "size")]
     Size,
+    #[strum(serialize = "tpde")]
+    TPDE,
 }
 
 #[derive(Copy, Clone, EnumString)]

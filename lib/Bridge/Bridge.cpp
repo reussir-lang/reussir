@@ -62,8 +62,9 @@
 #include <mlir/Target/LLVMIR/Export.h>
 #include <mlir/Target/LLVMIR/Import.h>
 #include <mlir/Transforms/Passes.h>
-#include <optional>
 #include <string>
+#include <tpde-llvm/LLVMCompiler.hpp>
+#include <vector>
 
 #include "Reussir/Bridge.h"
 #include "Reussir/Conversion/BasicOpsLowering.h"
@@ -88,6 +89,8 @@ llvm::CodeGenOptLevel toLlvmOptLevel(OptOption opt) {
     return llvm::CodeGenOptLevel::Aggressive;
   case OptOption::Size:
     return llvm::CodeGenOptLevel::Less;
+  case OptOption::TPDE:
+    return llvm::CodeGenOptLevel::Default;
   }
   llvm_unreachable("unknown optimization level");
 }
@@ -138,6 +141,8 @@ void runNPMOptimization(llvm::Module &llvmModule,
   case OptOption::Size:
     optLevel = llvm::OptimizationLevel::Os;
     break;
+  case OptOption::TPDE:
+    return;
   }
 
   // Create the default optimization pipeline for the specified level
@@ -146,6 +151,19 @@ void runNPMOptimization(llvm::Module &llvmModule,
   // Run the optimization
   mpm.run(llvmModule, mam);
   logIfNeeded(options, LogLevel::Info, "Applied NPM optimization passes.");
+}
+bool writeBufferToFile(const void *data, size_t size, std::string_view filename,
+                       const CompileOptions &options) {
+  std::error_code ec;
+  llvm::raw_fd_ostream outStream(filename, ec, llvm::sys::fs::OF_None);
+  if (ec) {
+    logIfNeeded(options, LogLevel::Error,
+                llvm::Twine("Failed to open output file: ") + ec.message());
+    return false;
+  }
+  outStream.write(static_cast<const char *>(data), size);
+  outStream.flush();
+  return true;
 }
 void emitModule(llvm::Module &llvmModule, llvm::TargetMachine &tm,
                 std::string_view filename, const CompileOptions &options) {
@@ -233,7 +251,7 @@ void compileForNativeMachine(std::string_view mlirTextureModule,
   }
 
   llvm::TargetOptions targetOptions;
-#if LLVM_VERSION_MAJOR >= 22
+#if LLVM_VERSION_MAJOR >= 21
   auto targetTriple = llvm::Triple{llvm::StringRef{triple}};
 #else
   llvm::StringRef targetTriple = triple;
@@ -286,24 +304,55 @@ void compileForNativeMachine(std::string_view mlirTextureModule,
   }
 
   // Run NPM optimization passes
-  runNPMOptimization(*llvmModule, options);
+  if (options.opt != OptOption::TPDE) {
+    runNPMOptimization(*llvmModule, options);
 
-  if (options.target == OutputTarget::LLVMIR) {
-    std::error_code ec;
-    llvm::raw_fd_ostream outStream(outputFile, ec, llvm::sys::fs::OF_None);
-    if (ec) {
-      logIfNeeded(options, LogLevel::Error,
-                  llvm::Twine("Failed to open output file: ") + ec.message());
+    if (options.target == OutputTarget::LLVMIR) {
+      std::error_code ec;
+      llvm::raw_fd_ostream outStream(outputFile, ec, llvm::sys::fs::OF_None);
+      if (ec) {
+        logIfNeeded(options, LogLevel::Error,
+                    llvm::Twine("Failed to open output file: ") + ec.message());
+        return;
+      }
+      llvmModule->print(outStream, nullptr);
+      outStream.flush();
+      logIfNeeded(options, LogLevel::Info,
+                  llvm::Twine("Successfully wrote LLVM IR to output file: ") +
+                      outputFile);
       return;
     }
-    llvmModule->print(outStream, nullptr);
-    outStream.flush();
-    logIfNeeded(options, LogLevel::Info,
-                llvm::Twine("Successfully wrote LLVM IR to output file: ") +
-                    outputFile);
-    return;
+    emitModule(*llvmModule, *tm, outputFile, options);
+  } else {
+    // TPDE compilation path
+    if (options.target != OutputTarget::Object) {
+      logIfNeeded(
+          options, LogLevel::Error,
+          "TPDE compilation requires Object output target (not ASM or LLVMIR)");
+      return;
+    }
+
+    auto compiler =
+        tpde_llvm::LLVMCompiler::create(llvm::Triple{llvm::StringRef{triple}});
+    if (!compiler) {
+      logIfNeeded(options, LogLevel::Error,
+                  "Failed to create TPDE compiler (triple unsupported)");
+      return;
+    }
+
+    logIfNeeded(options, LogLevel::Info, "Starting TPDE compilation.");
+    std::vector<uint8_t> buf;
+    if (compiler->compile_to_elf(*llvmModule, buf)) {
+      // Compilation successful, buf contains object file
+      if (writeBufferToFile(buf.data(), buf.size(), outputFile, options)) {
+        logIfNeeded(options, LogLevel::Info,
+                    llvm::Twine("Successfully compiled with TPDE to: ") +
+                        outputFile);
+      }
+    } else {
+      logIfNeeded(options, LogLevel::Error, "TPDE compilation failed");
+    }
   }
-  emitModule(*llvmModule, *tm, outputFile, options);
 }
 
 } // namespace reussir
