@@ -3,6 +3,12 @@ get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 get_property(extension_libs GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
 get_property(translation_libs GLOBAL PROPERTY MLIR_TRANSLATION_LIBS)
 
+# Conditionally add TPDE to link libraries
+set(TPDE_LINK_LIB "")
+if(REUSSIR_HAS_TPDE)
+  set(TPDE_LINK_LIB tpde::tpde_llvm)
+endif()
+
 add_mlir_library(MLIRReussirBridge
   SHARED
   Bridge.cpp
@@ -24,5 +30,10 @@ add_mlir_library(MLIRReussirBridge
     MLIRReussir
     MLIRReussirBasicOpsLowering
     MLIRReussirSCFOpsLowering
-    tpde::tpde_llvm
+    ${TPDE_LINK_LIB}
 )
+
+# Define REUSSIR_HAS_TPDE for the Bridge library
+if(REUSSIR_HAS_TPDE)
+  target_compile_definitions(MLIRReussirBridge PRIVATE REUSSIR_HAS_TPDE)
+endif()

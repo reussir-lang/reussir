@@ -33,8 +33,15 @@ message(STATUS "Tablegen output directory: ${MLIR_TABLEGEN_OUTPUT_DIR}")
 # Include Immer
 include(cmake/Immer.cmake)
 
-# Include TPDE
-include(cmake/TPDE.cmake)
+# Include TPDE only for LLVM < 22
+if(LLVM_PACKAGE_VERSION VERSION_LESS "22.0.0")
+  message(STATUS "LLVM version < 22, including TPDE support")
+  include(cmake/TPDE.cmake)
+  set(REUSSIR_HAS_TPDE ON)
+else()
+  message(STATUS "LLVM version >= 22, TPDE not supported")
+  set(REUSSIR_HAS_TPDE OFF)
+endif()
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include

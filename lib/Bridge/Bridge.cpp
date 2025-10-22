@@ -63,7 +63,9 @@
 #include <mlir/Target/LLVMIR/Import.h>
 #include <mlir/Transforms/Passes.h>
 #include <string>
+#ifdef REUSSIR_HAS_TPDE
 #include <tpde-llvm/LLVMCompiler.hpp>
+#endif
 #include <vector>
 
 #include "Reussir/Bridge.h"
@@ -152,6 +154,7 @@ void runNPMOptimization(llvm::Module &llvmModule,
   mpm.run(llvmModule, mam);
   logIfNeeded(options, LogLevel::Info, "Applied NPM optimization passes.");
 }
+#ifdef REUSSIR_HAS_TPDE
 bool writeBufferToFile(const void *data, size_t size, std::string_view filename,
                        const CompileOptions &options) {
   std::error_code ec;
@@ -165,6 +168,7 @@ bool writeBufferToFile(const void *data, size_t size, std::string_view filename,
   outStream.flush();
   return true;
 }
+#endif
 void emitModule(llvm::Module &llvmModule, llvm::TargetMachine &tm,
                 std::string_view filename, const CompileOptions &options) {
   std::error_code ec;
@@ -325,6 +329,7 @@ void compileForNativeMachine(std::string_view mlirTextureModule,
     emitModule(*llvmModule, *tm, outputFile, options);
   } else {
     // TPDE compilation path
+#ifdef REUSSIR_HAS_TPDE
     if (options.target != OutputTarget::Object) {
       logIfNeeded(
           options, LogLevel::Error,
@@ -352,6 +357,30 @@ void compileForNativeMachine(std::string_view mlirTextureModule,
     } else {
       logIfNeeded(options, LogLevel::Error, "TPDE compilation failed");
     }
+#else
+    // TPDE not available, fallback to default optimization pipeline
+    logIfNeeded(options, LogLevel::Warning,
+                "TPDE optimization requested but not available (LLVM >= 22). "
+                "Falling back to default optimization level.");
+    runNPMOptimization(*llvmModule, options);
+
+    if (options.target == OutputTarget::LLVMIR) {
+      std::error_code ec;
+      llvm::raw_fd_ostream outStream(outputFile, ec, llvm::sys::fs::OF_None);
+      if (ec) {
+        logIfNeeded(options, LogLevel::Error,
+                    llvm::Twine("Failed to open output file: ") + ec.message());
+        return;
+      }
+      llvmModule->print(outStream, nullptr);
+      outStream.flush();
+      logIfNeeded(options, LogLevel::Info,
+                  llvm::Twine("Successfully wrote LLVM IR to output file: ") +
+                      outputFile);
+      return;
+    }
+    emitModule(*llvmModule, *tm, outputFile, options);
+#endif
   }
 }
 
