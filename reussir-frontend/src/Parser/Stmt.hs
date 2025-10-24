@@ -8,15 +8,6 @@ import Parser.Types
 import Parser.Types.Expr
 import Parser.Types.Stmt
 
-openParen :: Parser ()
-openParen = char '(' *> space
-
-closeParen :: Parser ()
-closeParen = char ')' *> space
-
-comma :: Parser ()
-comma = char ',' *> space
-
 parseTypedParam :: Parser (Identifier, Typename)
 parseTypedParam = do 
     name <- parseIdentifier <* char ':' <* space 
@@ -35,15 +26,6 @@ parseFuncDef = do
     let vis = case vism of { Nothing -> Private; Just () -> Public }
 
     return (Function vis name (fromMaybe [] args) ret body)
-
-parseFuncCall :: Parser Stmt
-parseFuncCall = do
-    name <- parseIdentifier <* openParen
-    args <- optional ((:) <$> parseExpr <*> many (comma *> parseExpr)) <* closeParen
-
-    return $ FuncCall name $ case args of
-        Nothing -> []
-        Just as -> as
 
 parseGlobalStmt :: Parser AnyGlobalStmt
 parseGlobalStmt = AnyGlobalStmt <$> parseFuncDef

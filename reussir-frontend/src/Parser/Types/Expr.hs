@@ -22,4 +22,5 @@ data Expr
     | If Expr Expr Expr
     | Cast Typename Expr
     | LetIn Identifier Expr Expr
+    | FuncCall Identifier [Expr]
     deriving Show

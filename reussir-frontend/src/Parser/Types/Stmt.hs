@@ -11,6 +11,4 @@ data GlobalStmt (t :: GlobalStmtTy) where
 
 data AnyGlobalStmt = forall t . AnyGlobalStmt (GlobalStmt t)
 
-data Stmt
-    = FunctionStmt (GlobalStmt FuncStmt)
-    | FuncCall Identifier [Expr]
+data Stmt = FunctionStmt (GlobalStmt FuncStmt)

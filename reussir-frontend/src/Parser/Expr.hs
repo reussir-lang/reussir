@@ -12,6 +12,15 @@ import Parser.Types.Expr
 semicolon :: Parser ()
 semicolon = char ';' *> space
 
+openParen :: Parser ()
+openParen = char '(' *> space
+
+closeParen :: Parser ()
+closeParen = char ')' *> space
+
+comma :: Parser ()
+comma = char ',' *> space
+
 openBody :: Parser ()
 openBody = char '{' *> space
 
@@ -71,6 +80,12 @@ parseLetIn = do
 
     return (LetIn name value body)
 
+parseFuncCall :: Parser Expr
+parseFuncCall = do 
+    name <- parseIdentifier
+    args <- openParen *> parseExpr `sepBy` comma <* closeParen
+    return (FuncCall name args)
+
 parseConstant :: Parser Constant
 parseConstant = try (ConstDouble <$> parseDouble)
             <|>     (ConstInt    <$> parseInt)
@@ -122,6 +137,7 @@ parseExprTerm = choice
     [ char '(' *> parseExpr <* char ')' <* space
     , parseIf
     , parseLetIn
+    , try parseFuncCall
     , ConstExpr <$> parseConstant
     ]
 
