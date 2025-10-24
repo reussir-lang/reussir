@@ -1,7 +1,10 @@
 module Parser.Types.Expr where
 
+newtype Identifier = Identifier String deriving Show
+
 data Constant
     = ConstInt Int
+    | ConstID Identifier
     | ConstDouble Double
     | ConstString String
     | ConstBool Bool

@@ -9,6 +9,13 @@ import Data.Functor
 import Parser.Types
 import Parser.Types.Expr
 
+parseIdentifier :: Parser Identifier
+parseIdentifier = do 
+    first <- letterChar
+    rest  <- many (alphaNumChar <|> char '_') <* space
+
+    return $ Identifier (first : rest)
+
 parseInt :: Parser Int 
 parseInt = read <$> some digitChar <* space
 
@@ -32,6 +39,7 @@ parseConstant = try (ConstDouble <$> parseDouble)
             <|>     (ConstInt    <$> parseInt)
             <|>     (ConstString <$> parseString)
             <|>     (ConstBool   <$> parseBool)
+            <|>     (ConstID     <$> parseIdentifier)
 
 prefixOp :: Char -> UnaryOp -> Operator Parser Expr
 prefixOp symbol op = Prefix (char symbol *> space $> UnaryOpExpr op)
