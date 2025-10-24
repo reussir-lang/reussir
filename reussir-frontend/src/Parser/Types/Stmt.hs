@@ -1,7 +1,5 @@
 module Parser.Types.Stmt where
 
-import Data.List.NonEmpty
-
 import Parser.Types.Expr
 
 data FunctionVis = Public | Private

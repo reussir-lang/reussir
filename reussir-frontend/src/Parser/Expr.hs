@@ -61,11 +61,14 @@ parseConstant = try (ConstDouble <$> parseDouble)
             <|>     (ConstBool   <$> parseBool)
             <|>     (ConstID     <$> parseIdentifier)
 
-prefixOp :: Char -> UnaryOp -> Operator Parser Expr
-prefixOp symbol op = Prefix (char symbol *> space $> UnaryOpExpr op)
+prefixOp :: String -> UnaryOp -> Operator Parser Expr
+prefixOp symbol op = Prefix (string symbol *> space $> UnaryOpExpr op)
 
-infixLOp :: Char -> BinaryOp -> Operator Parser Expr
-infixLOp symbol op = InfixL (char symbol *> space $> BinOpExpr op)
+infixLOp :: String -> BinaryOp -> Operator Parser Expr
+infixLOp symbol op = InfixL (string symbol *> space $> BinOpExpr op)
+
+infixNOp :: String -> BinaryOp -> Operator Parser Expr 
+infixNOp symbol op = InfixN (string symbol *> space $> BinOpExpr op)
 
 castOp :: Operator Parser Expr
 castOp = Postfix $ do 
@@ -73,14 +76,26 @@ castOp = Postfix $ do
     return (Cast ty)
 
 exprOpTable :: [[Operator Parser Expr]]
-exprOpTable = [ [ prefixOp '-' Negate
+exprOpTable = [ [ prefixOp "-" Negate
+                , prefixOp "!" Not
                 , castOp
                 ]
-              , [ infixLOp '*' Mul
-                , infixLOp '/' Div
+              , [ infixLOp "*" Mul
+                , infixLOp "/" Div
                 ]
-              , [ infixLOp '+' Add
-                , infixLOp '-' Sub
+              , [ infixLOp "+" Add
+                , infixLOp "-" Sub
+                ]
+              , [ infixNOp ">" Gt
+                , infixNOp "<" Lt
+                , infixNOp ">=" Gte
+                , infixNOp "<=" Lte
+                , infixNOp "==" Equ
+                , infixNOp "!=" Neq
+                ]
+              , [ infixLOp "&&" And
+                ]
+              , [ infixLOp "||" Or
                 ]
               ]
 
