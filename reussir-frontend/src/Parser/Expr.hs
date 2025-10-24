@@ -99,6 +99,7 @@ exprOpTable = [ [ prefixOp "-" Negate
                 ]
               , [ infixLOp "*" Mul
                 , infixLOp "/" Div
+                , infixLOp "%" Mod
                 ]
               , [ infixLOp "+" Add
                 , infixLOp "-" Sub

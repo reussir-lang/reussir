@@ -11,7 +11,8 @@ data Constant
     | ConstBool Bool
     deriving Show
 
-data BinaryOp = Add | Sub | Mul | Div | Lt | Gt | Lte | Gte | Equ | Neq | And | Or deriving Show
+data BinaryOp = Add | Sub | Mul | Div | Mod | Lt | Gt | Lte | Gte | Equ | Neq 
+              | And | Or deriving Show
 data UnaryOp  = Negate | Not deriving Show
 
 data Expr
