@@ -12,7 +12,7 @@ main = getArgs >>= \case
         contents <- readFile infile
         case parse parseProg infile contents of 
             Left err -> putStrLn (errorBundlePretty err)
-            Right p  -> print p
+            Right p  -> mapM_ print p
     _ -> do 
         putStrLn "Usage: frontend <infile>"
         exitFailure

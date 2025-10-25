@@ -2,9 +2,9 @@ module Parser.Types.Stmt where
 
 import Parser.Types.Expr
 
-data FunctionVis = Public | Private deriving Show
+data Visibility = Public | Private deriving Show
 
 data Stmt 
-    = Function FunctionVis Identifier [(Identifier, Typename)] (Maybe Typename) Expr
-    | Struct FunctionVis Identifier [Typename]
+    = Function Visibility Identifier [(Identifier, Typename)] (Maybe Typename) Expr
+    | Struct Visibility Identifier [Typename]
     deriving Show

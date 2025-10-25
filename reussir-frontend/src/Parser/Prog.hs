@@ -7,5 +7,5 @@ import Parser.Types.Stmt
 type Prog = [Stmt]
 
 parseProg :: Parser Prog 
-parseProg = many parseStmt <* eof
+parseProg = many parseStmt -- <* eof
 
