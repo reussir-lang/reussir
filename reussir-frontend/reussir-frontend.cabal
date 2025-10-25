@@ -63,6 +63,7 @@ executable reussir-frontend
     -- Modules included in this executable, other than Main.
     other-modules:    Parser.Expr
                       Parser.Stmt
+                      Parser.Prog
                       Parser.Types
                       Parser.Types.Expr
                       Parser.Types.Stmt

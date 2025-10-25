@@ -1,18 +1,18 @@
 module Main where
 
-import Parser.Expr
+import Parser.Prog
 import Parser.Types
 
-import System.IO
+import System.Environment
+import System.Exit
 
 main :: IO ()
-main = do 
-    hSetBuffering stdout NoBuffering   
-    putStr "Enter expr > "
-
-    input <- getLine
-
-    case parse parseExpr "<stdin>" input of 
-        Left err -> putStrLn (errorBundlePretty err)
-        Right es -> print es
-
+main = getArgs >>= \case 
+    [infile] -> do 
+        contents <- readFile infile
+        case parse parseProg infile contents of 
+            Left err -> putStrLn (errorBundlePretty err)
+            Right p  -> print p
+    _ -> do 
+        putStrLn "Usage: frontend <infile>"
+        exitFailure
