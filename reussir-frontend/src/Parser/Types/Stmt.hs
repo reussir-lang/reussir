@@ -14,6 +14,6 @@ deriving instance Show (GlobalStmt t)
 data AnyGlobalStmt = forall t . AnyGlobalStmt (GlobalStmt t)
 
 instance Show AnyGlobalStmt where
-    show (AnyGlobalStmt e@(Function {})) = show e
+    show (AnyGlobalStmt e) = show e
 
 data Stmt = FunctionStmt (GlobalStmt FuncStmt)
