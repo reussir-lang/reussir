@@ -73,24 +73,6 @@
           packages = buildInputs;
           shellHook = shellHook;
         };
-
-        packages.default = pkgs.stdenv.mkDerivation {
-          pname = "reussir";
-          version = "dev";
-          src = self;
-          nativeBuildInputs = buildInputs;
-
-          buildPhase = ''
-            cmake -S . -B build -GNinja -DCMAKE_BUILD_TYPE=Release \
-              -DMLIR_TABLEGEN_EXE=${llvmPkgs.tblgen}/bin/mlir-tblgen
-            cmake --build build
-          '';
-
-          installPhase = ''
-            mkdir -p $out/bin
-            cp -r build/bin/* $out/bin/ || true
-          '';
-        };
       }
     );
 }
