@@ -21,7 +21,7 @@
         # Haskell GHC 9.10.2
         haskellPkgs = pkgs.haskell.packages.ghc9102;
 
-        # Stable Rust toolchain from Nix
+        # Nightly Rust toolchain from Nix
         rustToolchain = pkgs.rust-bin.nightly."2025-10-01".default.override {
           extensions = [ "rust-src" "rustfmt" "clippy" ];
           targets = [ "x86_64-unknown-linux-gnu" ];
