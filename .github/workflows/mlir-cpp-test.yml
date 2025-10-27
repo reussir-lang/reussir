@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build wget libgtest-dev libgmock-dev
+          sudo apt-get install -y cmake ninja-build wget libgtest-dev libgmock-dev libspdlog-dev
           sudo pip install lit --break-system-packages
 
       - name: Install LLVM ${{ matrix.llvm-version }}
