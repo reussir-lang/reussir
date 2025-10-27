@@ -112,10 +112,6 @@ The Rust components can be built independently:
 ```bash
 # Build all Rust crates
 cargo build --release
-
-# Build specific components
-cargo build --release -p rrc
-cargo build --release -p reussir-bridge
 ```
 
 ### Combined Build
@@ -130,7 +126,6 @@ ninja
 
 This will build:
 - `reussir-opt`: MLIR optimization tool
-- `rrc`: Reussir compiler
 - `reussir-rt`: Runtime library
 - All Rust crates and dependencies
 
@@ -180,125 +175,20 @@ cargo test -p reussir-bridge
 
 ## Usage
 
-### The `rrc` Compiler
-
-The `rrc` (Reussir Compiler) is the main compiler binary with the following CLI options:
-
-#### Basic Usage
-```bash
-rrc -i input.rr -o output.o
-```
-
-#### Command Line Options
-
-| Option | Short | Description | Default |
-|--------|-------|-------------|---------|
-| `--input-file` | `-i` | Input file to compile (or stdin if not provided) | - |
-| `--output-file` | `-o` | Output file path | **Required** |
-| `--opt-level` | `-O` | Optimization level | `default` |
-| `--log-level` | `-l` | Logging verbosity | `warning` |
-| `--module-prefix` | `-m` | Module prefix for generated code | - |
-| `--target` | `-t` | Output target format | `object` |
-
-#### Optimization Levels
-- `none`: No optimization
-- `default`: Standard optimization
-- `aggressive`: Maximum optimization
-- `size`: Optimize for size
-- `tpde`: TPDE-specific optimization (LLVM < 22 only)
-
-#### Log Levels
-- `error`: Only error messages
-- `warning`: Warnings and errors (default)
-- `info`: Informational messages
-- `debug`: Debug information
-- `trace`: Maximum verbosity
-
-#### Output Targets
-- `object`: Native object file
-- `asm`: Assembly code
-- `llvmir`: LLVM IR
-- `mlir`: MLIR dialect
-
-#### Examples
-
-```bash
-# Compile to object file
-rrc -i program.rr -o program.o
-
-# Compile with debug info and MLIR output
-rrc -i program.rr -o program.mlir -t mlir -l debug
-
-# Compile with aggressive optimization
-rrc -i program.rr -o program.o -O aggressive
-
-# Compile from stdin
-echo "pub fn main() -> i32 { 42 }" | rrc -o program.o
-
-# Compile with module prefix
-rrc -i program.rr -o program.o -m "my::module"
-```
-
-### Example Reussir Code
-
-```rust
-// Simple function
-pub fn fibonacci(n: i32) -> i32 {
-    if n <= 1 {
-        n
-    } else {
-        fibonacci(n - 1) + fibonacci(n - 2)
-    }
-}
-
-// Struct definition
-pub struct Point {
-    x: f64,
-    y: f64,
-}
-
-// Enum with variants
-pub enum List<T> {
-    Nil,
-    Cons(T, List<T>)
-}
-
-// Function with closure
-pub fn create_adder(x: i32) -> fn(i32) -> i32 {
-    |y: i32| x + y
-}
-```
-
 ## Project Structure
 
 ```
 reussir/
-├── crates/                 # Rust components
-│   ├── bridge/            # C++/Rust bridge
-│   ├── core/              # Core IR and types
-│   ├── front/             # Parser and lexer
-│   ├── runtime/           # Runtime library
-│   ├── sema/              # Semantic analysis
-│   └── utils/              # Utility functions
+├── runtime/               # Runtime library
 ├── include/               # C++ headers
 ├── lib/                   # C++ implementation
 ├── tool/                  # Compiler tools
 │   ├── reussir-opt/       # MLIR optimization tool
-│   └── rrc/               # Main compiler
 ├── tests/                 # Test suites
 │   ├── integration/       # Integration tests
 │   └── unittest/          # Unit tests
 └── docs/                  # Documentation
 ```
-
-### Key Components
-
-- **Frontend** (`crates/front/`): Lexer, parser, and AST
-- **Semantic Analysis** (`crates/sema/`): Type checking and analysis
-- **Core IR** (`crates/core/`): Intermediate representation
-- **Runtime** (`crates/runtime/`): Memory management and runtime support
-- **Bridge** (`crates/bridge/`): C++/Rust interop
-- **MLIR Integration** (`lib/`): MLIR dialect and passes
 
 ## Development
 
