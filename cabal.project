@@ -1,0 +1,20 @@
+-- Reussir Cabal Project File
+-- Manages Haskell frontend components
+
+packages:
+  frontend/reussir-bridge
+
+-- Common build options
+with-compiler: ghc
+
+-- Optimization settings
+optimization: True
+
+-- Documentation
+documentation: False
+
+-- Tests
+tests: True
+
+-- Benchmarks
+benchmarks: False

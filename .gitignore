@@ -7,3 +7,4 @@
 rustc-ice-*
 .envrc
 .direnv
+dist-*

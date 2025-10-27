@@ -19,7 +19,7 @@
         llvmPkgs = pkgs.llvmPackages_21;
 
         # Haskell GHC 9.10.2
-        haskellPkgs = pkgs.haskell.packages.ghc9102;
+        haskellPkgs = pkgs.haskell.packages.ghc910;
 
         # Nightly Rust toolchain from Nix
         rustToolchain = pkgs.rust-bin.nightly."2025-10-01".default.override {
@@ -31,7 +31,7 @@
           llvmPkgs.llvm llvmPkgs.mlir llvmPkgs.clang llvmPkgs.libclang
           llvmPkgs.tblgen llvmPkgs.lldb
           python313Packages.lit python313Packages.filecheck
-          haskellPkgs.ghc cabal-install haskell-language-server
+          haskellPkgs.ghc cabal-install haskellPkgs.haskell-language-server
           rustToolchain
         ];
 
@@ -50,7 +50,6 @@
 
           # Add toolchains to PATH (Rust and MLIR first)
           export PATH="${rustToolchain}/bin:${llvmPkgs.llvm}/bin:${llvmPkgs.mlir}/bin:${llvmPkgs.tblgen}/bin:${pkgs.python313Packages.lit}/bin:${pkgs.python313Packages.filecheck}/bin:$PATH"
-
           echo "=== Reussir development environment loaded ==="
           echo "LLVM version: ${llvmPkgs.llvm.version}"
           echo "MLIR TableGen: $MLIR_TABLEGEN_EXE_OVERRIDE"
