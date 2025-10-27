@@ -3,6 +3,7 @@
 
 packages:
   frontend/reussir-bridge
+  frontend/reussir-codegen
 
 -- Common build options
 with-compiler: ghc
