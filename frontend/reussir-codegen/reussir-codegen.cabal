@@ -59,7 +59,10 @@ library
     import:           warnings
 
     -- Modules exported by the library.
-    exposed-modules:  Reussir.Codegen
+    exposed-modules:  
+        Reussir.Codegen.Context
+        Reussir.Codegen.IR
+        Reussir.Codegen.Intrinsics
 
     -- Modules included in this library but not exported.
     -- other-modules:

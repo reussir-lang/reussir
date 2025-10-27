@@ -1,6 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Reussir.Codegen where
+module Reussir.Codegen.Context (
+    Context,
+    Codegen,
+    emptyContext,
+    runCodegen,
+    Emission(emit),
+    emitCG,
+)
+where
 
 import Control.Monad.State.Strict qualified as S
 import Data.Text.Lazy qualified as T
