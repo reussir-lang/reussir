@@ -27,7 +27,7 @@
         };
 
         buildInputs = with pkgs; [
-          cmake ninja gnumake pkg-config git
+          cmake ninja gnumake pkg-config git libffi
           llvmPkgs.llvm llvmPkgs.mlir llvmPkgs.clang llvmPkgs.libclang
           llvmPkgs.tblgen llvmPkgs.lldb
           python313Packages.lit python313Packages.filecheck
