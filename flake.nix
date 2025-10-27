@@ -27,7 +27,7 @@
         };
 
         buildInputs = with pkgs; [
-          cmake ninja gnumake pkg-config git libffi
+          cmake ninja gnumake pkg-config git libffi spdlog
           llvmPkgs.llvm llvmPkgs.mlir llvmPkgs.clang llvmPkgs.libclang
           llvmPkgs.tblgen llvmPkgs.lldb
           python313Packages.lit python313Packages.filecheck
@@ -67,7 +67,7 @@
       {
         devShells.default = pkgs.mkShell {
           name = "reussir-dev";
-          stdenv = llvmPkgs.stdenv; # ensures libc/include correctness
+          stdenv = llvmPkgs.libcxxStdenv; # ensures libc/include correctness
           packages = buildInputs;
           shellHook = shellHook;
         };
