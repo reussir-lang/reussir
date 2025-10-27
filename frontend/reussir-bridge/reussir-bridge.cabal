@@ -88,6 +88,7 @@ library
     
     -- Add linker options for dynamic library loading
     ghc-options: -optl-Wl,-rpath,$ORIGIN/../../../build/lib
+    include-dirs: ../../include
 
 test-suite reussir-bridge-test
     -- Import common warning flags.

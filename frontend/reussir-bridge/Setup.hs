@@ -1,4 +1,4 @@
-import Control.Monad (unless, when)
+import Control.Monad (unless)
 import Distribution.PackageDescription
 import Distribution.Simple
 import Distribution.Simple.LocalBuildInfo
@@ -11,149 +11,111 @@ import System.Exit
 import System.FilePath
 import System.Process
 
+-------------------------------------------------------------------------------
+-- Entry point (FIXED)
+-------------------------------------------------------------------------------
 main :: IO ()
-main =
-  defaultMainWithHooks
-    simpleUserHooks
-      { confHook = myConfHook,
-        buildHook = myBuildHook,
-        cleanHook = myCleanHook
-      }
+main = defaultMainWithHooks simpleUserHooks
+  { confHook  = myConfHook
+  , buildHook = myBuildHook
+  , cleanHook = myCleanHook
+  }
 
--- Get the project root directory (two levels up from this package)
-getProjectRoot :: IO FilePath
-getProjectRoot = do
-  currentDir <- getCurrentDirectory
-  -- frontend/reussir-bridge -> frontend -> project root
-  return $ takeDirectory (takeDirectory currentDir)
+-------------------------------------------------------------------------------
+-- Path helpers
+-------------------------------------------------------------------------------
+getProjectRoot, getBuildDir :: IO FilePath
+getProjectRoot = takeDirectory . takeDirectory <$> getCurrentDirectory
+getBuildDir    = (</> "build") <$> getProjectRoot
 
--- Get the build directory path
-getBuildDir :: IO FilePath
-getBuildDir = do
-  projectRoot <- getProjectRoot
-  return $ projectRoot </> "build"
-
--- Check if CMake build directory exists and is configured
+-------------------------------------------------------------------------------
+-- CMake helpers
+-------------------------------------------------------------------------------
 isCMakeConfigured :: FilePath -> IO Bool
-isCMakeConfigured buildDir = do
-  exists <- doesDirectoryExist buildDir
-  if exists
-    then doesFileExist (buildDir </> "CMakeCache.txt")
-    else return False
+isCMakeConfigured dir = do
+  exists <- doesDirectoryExist dir
+  if exists then doesFileExist (dir </> "CMakeCache.txt") else pure False
 
--- Configure CMake if not already done
 configureCMake :: Verbosity -> IO ()
-configureCMake verbosity = do
-  projectRoot <- getProjectRoot
-  buildDir <- getBuildDir
-  configured <- isCMakeConfigured buildDir
+configureCMake v = do
+  root <- getProjectRoot
+  bdir <- getBuildDir
+  conf <- isCMakeConfigured bdir
+  unless conf $ do
+    notice v "Configuring CMake project..."
+    createDirectoryIfMissing True bdir
+    let args = [ "-GNinja"
+               , "-DCMAKE_BUILD_TYPE=Release"
+               , "-DREUSSIR_ENABLE_TESTS=OFF"
+               , root ]
+    (code, _out, err) <- readCreateProcessWithExitCode (proc "cmake" args){cwd=Just bdir} ""
+    case code of
+      ExitSuccess   -> notice v "CMake configuration successful"
+      ExitFailure n -> die' v ("CMake failed (" ++ show n ++ "):\n" ++ err)
 
-  unless configured $ do
-    notice verbosity "Configuring CMake project..."
-    createDirectoryIfMissing True buildDir
-
-    let cmakeArgs =
-          [ "-GNinja",
-            "-DCMAKE_BUILD_TYPE=Release",
-            "-DREUSSIR_ENABLE_TESTS=OFF",
-            projectRoot
-          ]
-        cmakeProc = (proc "cmake" cmakeArgs) {cwd = Just buildDir}
-
-    (exitCode, _, stderr) <- readCreateProcessWithExitCode cmakeProc ""
-    case exitCode of
-      ExitSuccess -> notice verbosity "CMake configuration successful"
-      ExitFailure code -> do
-        die' verbosity $ "CMake configuration failed with code " ++ show code ++ "\n" ++ stderr
-
--- Build the MLIRReussirBridge library
 buildMLIRReussirBridge :: Verbosity -> IO FilePath
-buildMLIRReussirBridge verbosity = do
-  buildDir <- getBuildDir
-
-  notice verbosity "Building MLIRReussirBridge library..."
-
-  let ninjaArgs = ["MLIRReussirBridge"]
-      ninjaProc = (proc "ninja" ninjaArgs) {cwd = Just buildDir}
-
-  (exitCode, stdout, stderr) <- readCreateProcessWithExitCode ninjaProc ""
-  case exitCode of
+buildMLIRReussirBridge v = do
+  bdir <- getBuildDir
+  notice v "Building MLIRReussirBridge..."
+  (code, out, err) <- readCreateProcessWithExitCode (proc "ninja" ["MLIRReussirBridge"]){cwd=Just bdir} ""
+  unless (null out) (notice v ("Ninja stdout:\n" ++ out))
+  unless (null err) (notice v ("Ninja stderr:\n" ++ err))
+  case code of
     ExitSuccess -> do
-      notice verbosity "MLIRReussirBridge build successful"
-      -- Return the path to the built library
-      return $ buildDir </> "lib" </> "libMLIRReussirBridge.so"
-    ExitFailure code -> do
-      die' verbosity $ "Ninja build failed with code " ++ show code ++ "\n" ++ stdout ++ "\n" ++ stderr
+      notice v "MLIRReussirBridge build successful"
+      pure (bdir </> "lib" </> "libMLIRReussirBridge.so")
+    ExitFailure n -> die' v ("Ninja failed (" ++ show n ++ "):\n" ++ err)
 
--- Custom configuration hook
-myConfHook :: (GenericPackageDescription, HookedBuildInfo) -> ConfigFlags -> IO LocalBuildInfo
-myConfHook (pkg_descr, pbi) flags = do
-  let verbosity = fromFlag $ configVerbosity flags
+-------------------------------------------------------------------------------
+-- Hooks
+-------------------------------------------------------------------------------
+myConfHook :: (GenericPackageDescription, HookedBuildInfo)
+            -> ConfigFlags -> IO LocalBuildInfo
+myConfHook (pkg, pbi) flags = do
+  let v = fromFlag (configVerbosity flags)
 
-  -- Configure CMake
-  configureCMake verbosity
+  configureCMake v
+  libPath <- buildMLIRReussirBridge v
+  exists <- doesFileExist libPath
+  unless exists $ die' v ("Library not found: " ++ libPath)
 
-  -- Call the default configuration
-  lbi <- confHook simpleUserHooks (pkg_descr, pbi) flags
+  root <- getProjectRoot
+  bdir <- getBuildDir
+  let hookedLib = emptyBuildInfo
+        { extraLibDirs = map makeSymbolicPath [bdir </> "lib"]
+        , extraLibs    = ["MLIRReussirBridge"]
+        , includeDirs  = map makeSymbolicPath [root </> "include", bdir </> "include"]
+        , ldOptions    = ["-Wl,-rpath," ++ (bdir </> "lib")]
+        }
+      newPbi = (Just hookedLib, snd pbi)
 
-  -- Get build directory
-  buildDir <- getBuildDir
-  projectRoot <- getProjectRoot
+  -- Step 1: Run Cabal’s default configuration
+  lbi <- confHook simpleUserHooks (pkg, newPbi) flags
 
-  -- Add extra library directories and libraries
-  let libDirs = map makeSymbolicPath [buildDir </> "lib"]
-      libs = ["MLIRReussirBridge"]
-      includeDirs =
-        map
-          makeSymbolicPath
-          [ projectRoot </> "include",
-            buildDir </> "include"
-          ]
-      -- Add rpath so the library can be found at runtime
-      ldOpts = ["-Wl,-rpath," ++ (buildDir </> "lib")]
+  -- Step 2: Force patch the library’s BuildInfo so FFI stubs also see -I/-L
+  let pkgDesc = localPkgDescr lbi
+      fixLib bi =
+        bi { includeDirs  = includeDirs bi ++ map makeSymbolicPath [root </> "include", bdir </> "include"]
+           , extraLibDirs = extraLibDirs bi ++ map makeSymbolicPath [bdir </> "lib"]
+           , extraLibs    = extraLibs bi ++ ["MLIRReussirBridge"]
+           , ldOptions    = ldOptions bi ++ ["-Wl,-rpath," ++ (bdir </> "lib")]
+           }
+      pkgDesc' = updatePackageDescription (Just (fixLib emptyBuildInfo), []) pkgDesc
+  pure lbi { localPkgDescr = pkgDesc' }
 
-  -- Update the local build info with our custom settings
-  let updateLib lib =
-        lib
-          { libBuildInfo =
-              (libBuildInfo lib)
-                { extraLibDirs = extraLibDirs (libBuildInfo lib) ++ libDirs,
-                  extraLibs = extraLibs (libBuildInfo lib) ++ libs,
-                  includeDirs = includeDirs ++ Distribution.PackageDescription.includeDirs (libBuildInfo lib),
-                  ldOptions = ldOptions (libBuildInfo lib) ++ ldOpts
-                }
-          }
-
-  let updatedPkgDescr = case library (localPkgDescr lbi) of
-        Nothing -> localPkgDescr lbi
-        Just lib -> (localPkgDescr lbi) {library = Just (updateLib lib)}
-
-  return lbi {localPkgDescr = updatedPkgDescr}
-
--- Custom build hook
+-------------------------------------------------------------------------------
 myBuildHook :: PackageDescription -> LocalBuildInfo -> UserHooks -> BuildFlags -> IO ()
-myBuildHook pkg_descr lbi hooks flags = do
-  let verbosity = fromFlag $ buildVerbosity flags
+myBuildHook pkg lbi hooks flags = do
+  let v = fromFlag (buildVerbosity flags)
+  bdir <- getBuildDir
+  configured <- isCMakeConfigured bdir
+  unless configured (configureCMake v)
+  _ <- buildMLIRReussirBridge v
+  buildHook simpleUserHooks pkg lbi hooks flags
 
-  -- Build the C++ library first
-  libPath <- buildMLIRReussirBridge verbosity
-
-  -- Verify the library was built
-  libExists <- doesFileExist libPath
-  unless libExists $ do
-    die' verbosity $ "Failed to build library: " ++ libPath
-
-  notice verbosity $ "MLIRReussirBridge library available at: " ++ libPath
-
-  -- Now build the Haskell package
-  buildHook simpleUserHooks pkg_descr lbi hooks flags
-
--- Custom clean hook
+-------------------------------------------------------------------------------
 myCleanHook :: PackageDescription -> () -> UserHooks -> CleanFlags -> IO ()
-myCleanHook pkg_descr unit hooks flags = do
-  let verbosity = fromFlag $ cleanVerbosity flags
-
-  notice verbosity "Cleaning MLIRReussirBridge (skipping - managed by CMake)..."
-
-  -- Call the default clean
-  cleanHook simpleUserHooks pkg_descr unit hooks flags
+myCleanHook pkg () hooks flags = do
+  let v = fromFlag (cleanVerbosity flags)
+  notice v "Cleaning MLIRReussirBridge (skipping actual CMake clean)."
+  cleanHook simpleUserHooks pkg () hooks flags
