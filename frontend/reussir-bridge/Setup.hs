@@ -1,5 +1,3 @@
-{-# LANGUAGE CPP #-}
-
 import Control.Monad (unless, when)
 import Distribution.PackageDescription
 import Distribution.Simple
