@@ -43,13 +43,21 @@ maintainer:         yifanzhu@rochester.edu
 -- A copyright notice.
 -- copyright:
 category:           Language
-build-type:         Simple
+build-type:         Custom
 
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files:    CHANGELOG.md
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:
+
+custom-setup
+  setup-depends:
+      base >= 4.20.1.0
+    , Cabal >= 3.14
+    , directory >= 1.3
+    , filepath >= 1.4
+    , process >= 1.6
 
 common warnings
     ghc-options: -Wall
@@ -68,13 +76,18 @@ library
     -- other-extensions:
 
     -- Other library packages from which modules are imported.
-    build-depends:    base ^>=4.20.1.0
+    build-depends:    
+        base ^>=4.20.1.0,
+        bytestring ^>=0.12
 
     -- Directories containing source files.
     hs-source-dirs:   src
 
     -- Base language which the package is written in.
     default-language: GHC2024
+    
+    -- Add linker options for dynamic library loading
+    ghc-options: -optl-Wl,-rpath,$ORIGIN/../../../build/lib
 
 test-suite reussir-bridge-test
     -- Import common warning flags.
@@ -101,4 +114,6 @@ test-suite reussir-bridge-test
     -- Test dependencies.
     build-depends:
         base ^>=4.20.1.0,
-        reussir-bridge
+        reussir-bridge,
+        temporary ^>=1.3,
+        filepath ^>=1.4
