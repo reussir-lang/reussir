@@ -20,7 +20,8 @@ tests = testGroup "Tests" [unitTests]
 
 runEmptyCodegenAsText :: C.Codegen () -> T.Text
 runEmptyCodegenAsText codegen =
-  let (_, finalCtx) = S.runState codegen (C.emptyContext "module" "output.mlir" B.OptDefault B.OutputObject B.LogInfo)
+  let spec = C.TargetSpec "module" "output.mlir" B.OptDefault B.OutputObject B.LogInfo
+      (_, finalCtx) = S.runState codegen (C.emptyContext spec)
    in TB.toLazyText (C.builder finalCtx)
 
 runCodegenForICall :: I.IntrinsicCall -> T.Text
