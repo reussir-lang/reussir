@@ -110,4 +110,11 @@ test-suite reussir-codegen-test
     -- Test dependencies.
     build-depends:
         base ^>=4.20.2.0,
-        reussir-codegen
+        tasty ^>=1.5,
+        tasty-hunit,
+        tasty-quickcheck,
+        tasty-smallcheck,
+        reussir-codegen,
+        mtl,
+        text,
+        reussir-bridge
