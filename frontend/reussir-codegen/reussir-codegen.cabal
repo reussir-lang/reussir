@@ -63,6 +63,8 @@ library
         Reussir.Codegen.Context
         Reussir.Codegen.IR
         Reussir.Codegen.Intrinsics
+        Reussir.Codegen.Value
+        Reussir.Codegen.Type
 
     -- Modules included in this library but not exported.
     -- other-modules:

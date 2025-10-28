@@ -1,10 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Reussir.Codegen.Intrinsics where
-import Data.Int (Int8)
 import Reussir.Codegen.Context qualified as C
-import Data.Bits (Bits(..))
-import Data.Text.Lazy.Builder qualified as TB
+import Reussir.Codegen.Value (Value)
 
 data IntOFFlag = IONone | IONsw | IONuw
     deriving (Eq, Show)
@@ -99,21 +97,75 @@ instance C.Emission CmpFPredicate where
     emit CFUno        = "uno"
     emit CFAlwaysTrue  = "always_true"
 
-data Arith 
-    = AddI IntOFFlag
-    | SubI IntOFFlag
-    | MulI IntOFFlag
-    | Addf FastMathFlag
-    | Subf FastMathFlag
-    | Cmpi CmpIPredicate
-    | Cmpf CmpFPredicate
-    | Divsi
-    | Divui
-    | Muli IntOFFlag
-    | Remsi
-    | Remui
+data RoundingMode 
+    = ToNearestEven
+    | Downward
+    | Upward
+    | TowardZero
+    | ToNearestAwayFromZero
     deriving (Eq, Show)
 
+instance C.Emission RoundingMode where
+    emit ToNearestEven         = "rne"
+    emit Downward              = "rd"
+    emit Upward                = "ru"
+    emit TowardZero            = "rz"
+    emit ToNearestAwayFromZero = "rna"
+
+data Arith 
+    = Addf FastMathFlag
+    | Addi IntOFFlag
+    | AdduiExtended
+    | Andi
+    | Bitcast
+    | Ceildivsi
+    | Ceildivui
+    | Cmpf CmpFPredicate FastMathFlag
+    | Cmpi CmpIPredicate
+    | Divf FastMathFlag
+    | Divsi
+    | Divui
+    | Extf FastMathFlag
+    | Extsi
+    | Extui
+    | Floordivsi
+    | Fptosi
+    | Fptoui
+    | IndexCast
+    | IndexCastui
+    | Maximumf FastMathFlag
+    | Maxnumf FastMathFlag
+    | Maxsi
+    | Maxui
+    | Minimumf FastMathFlag
+    | Minsi
+    | Minui
+    | Mulf FastMathFlag
+    | Muli IntOFFlag
+    | MulsiExtended
+    | MuluiExtended
+    | Negf FastMathFlag
+    | Ori
+    | Remf FastMathFlag
+    | Remsi
+    | Remui
+    | ScalingExtf FastMathFlag
+    | ScalingTruncf RoundingMode FastMathFlag
+    | Select
+    | Shli IntOFFlag
+    | Shrsi
+    | Shrui
+    | Sitofp
+    | Subf FastMathFlag
+    | Subi IntOFFlag
+    | Truncf RoundingMode FastMathFlag
+    | Trunci IntOFFlag
+    | Uitofp
+    | Xori
+    deriving (Eq, Show)
+
+arithCodegen :: Arith -> [Value] -> [Value] -> C.Codegen ()
+arithCodegen = undefined  -- Implementation would go here
 
 data Intrinsic 
     = Arith Arith
