@@ -67,7 +67,9 @@ library
         Reussir.Codegen.Type
 
     -- Modules included in this library but not exported.
-    -- other-modules:
+    other-modules:
+        Reussir.Codegen.Intrinsic.Arith
+        Reussir.Codegen.Intrinsic.Math
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:

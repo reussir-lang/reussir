@@ -31,11 +31,11 @@ data Type
   deriving (Eq, Show)
 
 instance Emission PrimitiveInt where
-    emit PrimInt8 = "i8"
-    emit PrimInt16 = "i16"
-    emit PrimInt32 = "i32"
-    emit PrimInt64 = "i64"
-    emit PrimInt128 = "i128"
+  emit PrimInt8 = "i8"
+  emit PrimInt16 = "i16"
+  emit PrimInt32 = "i32"
+  emit PrimInt64 = "i64"
+  emit PrimInt128 = "i128"
 
 instance Emission PrimitiveFloat where
   emit PrimFloat8 = "f8"
