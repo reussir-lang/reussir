@@ -12,6 +12,7 @@ module Reussir.Codegen.Context
     emitSpace,
     emitIndentation,
     emitLine,
+    incIndentation,
   )
 where
 
@@ -87,3 +88,12 @@ emitLine codegen = do
   a <- codegen
   emitBuilder "\n"
   pure a
+
+incIndentation :: Codegen a -> Codegen a
+incIndentation codegen = do
+  S.modify' $ \ctx ->
+    ctx {indentation = indentation ctx + 1}
+  res <- codegen
+  S.modify' $ \ctx ->
+    ctx {indentation = indentation ctx - 1}
+  return res

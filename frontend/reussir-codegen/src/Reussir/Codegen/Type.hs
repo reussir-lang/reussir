@@ -10,7 +10,7 @@ where
 
 import Reussir.Codegen.Context (Emission (emit))
 
-data PrimitiveInt = PrimInt8 | PrimInt16 | PrimInt32 | PrimInt64 | PrimInt128
+data PrimitiveInt = PrimInt8 | PrimInt16 | PrimInt32 | PrimInt64 | PrimInt128 | PrimIndex
   deriving (Eq, Show)
 
 data PrimitiveFloat = PrimFloat8 | PrimFloat16 | PrimBFloat16 | PrimFloat32 | PrimFloat64 | PrimFloat128
@@ -36,6 +36,7 @@ instance Emission PrimitiveInt where
   emit PrimInt32 = "i32"
   emit PrimInt64 = "i64"
   emit PrimInt128 = "i128"
+  emit PrimIndex = "index"
 
 instance Emission PrimitiveFloat where
   emit PrimFloat8 = "f8"
