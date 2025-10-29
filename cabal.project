@@ -5,6 +5,9 @@ packages:
   frontend/reussir-bridge
   frontend/reussir-codegen
 
+package *
+  ghc-options: -O2 -fobject-determinism
+
 -- Common build options
 with-compiler: ghc
 

@@ -18,8 +18,8 @@
         # LLVM 21 + MLIR
         llvmPkgs = pkgs.llvmPackages_21;
 
-        # Haskell GHC 9.10.2
-        haskellPkgs = pkgs.haskell.packages.ghc910;
+        # Haskell GHC 9.12
+        haskellPkgs = pkgs.haskell.packages.ghc912;
 
         # Nightly Rust toolchain from Nix
         rustToolchain = pkgs.rust-bin.nightly."2025-10-01".default.override {
