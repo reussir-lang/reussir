@@ -25,6 +25,9 @@ iofIsNone :: IntOFFlag -> Bool
 iofIsNone (IntOFFlag 0) = True
 iofIsNone _ = False
 
+iofNone :: IntOFFlag
+iofNone = IntOFFlag 0
+
 instance C.Emission IntOFFlag where
   emit (IntOFFlag x) = doEmit (x .&. 0b11)
     where
@@ -219,6 +222,17 @@ binaryIntArithCodegen mnemonic iof (vA, _) (vB, _) (resVal, resTy) = C.emitLine 
 arithCodegen :: Arith -> [TypedValue] -> [TypedValue] -> C.Codegen ()
 arithCodegen (Addf fmf) [a, b] [res] = binaryFloatArithCodegen "addf" fmf a b res
 arithCodegen (Addi iof) [a, b] [res] = binaryIntArithCodegen "addi" iof a b res
+arithCodegen AdduiExtended [(valA, _), (valB, _)] [(resVal, resTy), (oFlag, oFlagTy)] = C.emitLine $ do
+  C.emitBuilder $ C.emit resVal <> "," <> C.emit oFlag <> " = " <> "arith.addui_extended "
+  C.emitBuilder $ C.emit valA <> ", " <> C.emit valB
+  C.emitBuilder $ " : " <> C.emit resTy <> ", " <> C.emit oFlagTy
+arithCodegen Andi [a, b] [res] = binaryIntArithCodegen "andi" iofNone a b res
+arithCodegen Bitcast [(valIn, tyIn)] [(valOut, tyOut)] = C.emitLine $ do
+  C.emitBuilder $ C.emit valOut <> " = " <> "arith.bitcast "
+  C.emitBuilder $ C.emit valIn
+  C.emitBuilder $ " : " <> C.emit tyIn <> " to " <> C.emit tyOut
+arithCodegen Ceildivsi [a, b] [res] = binaryIntArithCodegen "ceildivsi" iofNone a b res
+arithCodegen Ceildivui [a, b] [res] = binaryIntArithCodegen "ceildivui" iofNone a b res
 arithCodegen (Subf fmf) [a, b] [res] = binaryFloatArithCodegen "subf" fmf a b res
 arithCodegen (Subi iof) [a, b] [res] = binaryIntArithCodegen "subi" iof a b res
 arithCodegen (Mulf fmf) [a, b] [res] = binaryFloatArithCodegen "mulf" fmf a b res
