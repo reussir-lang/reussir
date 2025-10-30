@@ -26,6 +26,11 @@ set(CMAKE_CXX_STANDARD 23)
 # Find LLVM and MLIR
 include(cmake/FindLLVM.cmake)
 include(cmake/FindMLIR.cmake)
+if(DEFINED ENV{NIX_STORE})
+  message(STATUS "Detected Nix environment; injecting MLIR/LLVM include flags to walk around scan-deps issue")
+  set(CMAKE_CXX_FLAGS
+      "${CMAKE_CXX_FLAGS} -I${MLIR_INCLUDE_DIRS} -I${LLVM_INCLUDE_DIRS}")
+endif()
 message(STATUS "include dirs for llvm and mlir: ${MLIR_INCLUDE_DIRS};${LLVM_INCLUDE_DIRS}")
 set(MLIR_TABLEGEN_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/include)
 message(STATUS "Tablegen output directory: ${MLIR_TABLEGEN_OUTPUT_DIR}")

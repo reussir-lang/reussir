@@ -29,7 +29,7 @@
         buildInputs = with pkgs; [
           cmake ninja gnumake pkg-config git libffi spdlog
           llvmPkgs.llvm llvmPkgs.mlir llvmPkgs.clang llvmPkgs.libclang
-          llvmPkgs.tblgen llvmPkgs.lldb
+          llvmPkgs.tblgen llvmPkgs.lldb gtest
           python313Packages.lit python313Packages.filecheck
           haskellPkgs.ghc cabal-install haskellPkgs.haskell-language-server
           rustToolchain
