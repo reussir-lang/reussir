@@ -11,6 +11,7 @@ module Reussir.Codegen.Intrinsics
     Intrinsic (..),
     IntrinsicCall (..),
     arithCodegen,
+    mathCodegen,
     intrinsicCallCodegen,
   )
 where
@@ -25,7 +26,7 @@ import Reussir.Codegen.Intrinsic.Arith
     RoundingMode (..),
     arithCodegen,
   )
-import Reussir.Codegen.Intrinsic.Math (Math (..))
+import Reussir.Codegen.Intrinsic.Math (Math (..), mathCodegen)
 import Reussir.Codegen.Value (TypedValue)
 
 data Intrinsic
@@ -44,4 +45,5 @@ data IntrinsicCall
 intrinsicCallCodegen :: IntrinsicCall -> C.Codegen ()
 intrinsicCallCodegen (IntrinsicCall (Arith arith) args rets) =
   arithCodegen arith args rets
-intrinsicCallCodegen _ = error "intrinsicCallCodegen: Not implemented for this intrinsic"
+intrinsicCallCodegen (IntrinsicCall (Math math) args rets) =
+  mathCodegen math args rets

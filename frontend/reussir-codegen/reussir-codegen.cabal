@@ -97,6 +97,7 @@ test-suite reussir-codegen-test
     -- Modules included in this executable, other than Main.
     other-modules:
         Test.Codegen.Intrinsic.Arith
+        Test.Codegen.Intrinsic.Math
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
