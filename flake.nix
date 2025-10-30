@@ -18,8 +18,11 @@
         # LLVM 21 + MLIR
         llvmPkgs = pkgs.llvmPackages_21;
 
-        # Haskell GHC 9.12
-        haskellPkgs = pkgs.haskell.packages.ghc912;
+        # Haskell GHC 9.10.3
+        haskellPkgs = pkgs.haskell.packages.ghc9103;
+
+        # Python 3.13
+        pythonPkgs = pkgs.python313Packages;
 
         # Nightly Rust toolchain from Nix
         rustToolchain = pkgs.rust-bin.nightly."2025-10-01".default.override {
@@ -27,11 +30,16 @@
         };
 
         buildInputs = with pkgs; [
-          cmake ninja gnumake pkg-config git libffi spdlog
+          # General dependencies
+          cmake ninja gnumake pkg-config git libffi spdlog gtest
+          # LLVM dependencies
           llvmPkgs.llvm llvmPkgs.mlir llvmPkgs.clang llvmPkgs.libclang
-          llvmPkgs.tblgen llvmPkgs.lldb gtest
-          python313Packages.lit python313Packages.filecheck
-          haskellPkgs.ghc cabal-install haskellPkgs.haskell-language-server
+          llvmPkgs.tblgen llvmPkgs.lldb
+          # Python dependencies
+          pythonPkgs.lit pythonPkgs.filecheck
+          # Haskell dependencies
+          haskellPkgs.ghc haskellPkgs.cabal-install haskellPkgs.haskell-language-server
+          # Rust dependencies
           rustToolchain
         ];
 
