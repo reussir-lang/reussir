@@ -8,6 +8,7 @@ module Reussir.Codegen.Intrinsic.Arith
     RoundingMode (..),
     Arith (..),
     arithCodegen,
+    fmfIsNone,
   )
 where
 

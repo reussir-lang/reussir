@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Reussir.Codegen.Intrinsics
   ( IntOFFlag (..),
     FastMathFlag (..),

@@ -250,7 +250,7 @@ mathTests =
       testCase "FMA Codegen with FastMath" $
         runCodegenForICall (fma64 3 1 2 4 $ I.FastMathFlag 127) @?= "%3 = math.fma %1, %2, %4 fastmath<fast> : f64\n",
       testCase "FPOWI Codegen" $
-        runCodegenForICall (fpowi64 3 1 2 $ I.FastMathFlag 0) @?= "%3 = math.fpowi %1, %2 : f64\n",
+        runCodegenForICall (fpowi64 3 1 2 $ I.FastMathFlag 0) @?= "%3 = math.fpowi %1, %2 : f64, i32\n",
       testCase "IPOWI Codegen" $
         runCodegenForICall (ipowi32 3 1 2) @?= "%3 = math.ipowi %1, %2 : i32\n",
       testCase "CTLZ Codegen" $

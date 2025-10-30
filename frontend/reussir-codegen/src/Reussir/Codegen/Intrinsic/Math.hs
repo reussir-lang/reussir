@@ -9,12 +9,8 @@ where
 import Control.Monad (unless)
 import Data.Text.Lazy.Builder qualified as TB
 import Reussir.Codegen.Context qualified as C
-import Reussir.Codegen.Intrinsic.Arith (FastMathFlag (..))
+import Reussir.Codegen.Intrinsic.Arith (FastMathFlag (..), fmfIsNone)
 import Reussir.Codegen.Value (TypedValue)
-
-fmfIsNone :: FastMathFlag -> Bool
-fmfIsNone (FastMathFlag 0) = True
-fmfIsNone _ = False
 
 data Math
   = Absf FastMathFlag
@@ -100,6 +96,14 @@ binaryIntMathCodegen mnemonic (vA, _) (vB, _) (resVal, resTy) = C.emitLine $ do
   C.emitBuilder $ C.emit vA <> ", " <> C.emit vB
   C.emitBuilder $ " : " <> C.emit resTy
 
+-- Special codegen for fpowi which has type signature: : type($lhs), type($rhs)
+fpowiMathCodegen :: FastMathFlag -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
+fpowiMathCodegen fmf (vA, tyA) (vB, tyB) (resVal, _) = C.emitLine $ do
+  C.emitBuilder $ C.emit resVal <> " = " <> "math.fpowi "
+  C.emitBuilder $ C.emit vA <> ", " <> C.emit vB
+  fmfCodegen fmf
+  C.emitBuilder $ " : " <> C.emit tyA <> ", " <> C.emit tyB
+
 -- | Generate MLIR assembly for math operations.
 -- This function dispatches to the appropriate code generator based on the operation type.
 mathCodegen :: Math -> [TypedValue] -> [TypedValue] -> C.Codegen ()
@@ -156,7 +160,7 @@ mathCodegen Cttz [inVal] [res] = unaryIntMathCodegen "cttz" inVal res
 
 mathCodegen (Atan2 fmf) [a, b] [res] = binaryFloatMathCodegen "atan2" fmf a b res
 mathCodegen (Copysign fmf) [a, b] [res] = binaryFloatMathCodegen "copysign" fmf a b res
-mathCodegen (Fpowi fmf) [a, b] [res] = binaryFloatMathCodegen "fpowi" fmf a b res
+mathCodegen (Fpowi fmf) [a, b] [res] = fpowiMathCodegen fmf a b res
 mathCodegen (Powf fmf) [a, b] [res] = binaryFloatMathCodegen "powf" fmf a b res
 
 -- ============================================================================
