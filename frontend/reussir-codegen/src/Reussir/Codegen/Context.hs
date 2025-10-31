@@ -15,6 +15,10 @@ module Reussir.Codegen.Context
     Path (..),
     pathSingleton,
     pathList,
+    logDebug,
+    logInfo,
+    logWarning,
+    logError,
   )
 where
 
@@ -26,6 +30,8 @@ import Data.Text.Lazy.Builder qualified as TB
 import Reussir.Bridge qualified as B
 import Data.Interned.Text (InternedText)
 import Data.Interned (Uninternable(unintern), intern)
+import System.Log.Logger (getLogger, logL)
+import System.Log (Priority(..))
 
 data TargetSpec = TargetSpec
   { programName :: T.Text,
@@ -42,7 +48,7 @@ data Context = MkCtx
     builder :: TB.Builder
   }
 
-type Codegen a = S.State Context a
+type Codegen a = S.StateT Context IO a
 
 emptyContext :: TargetSpec -> Context
 emptyContext spec =
@@ -54,7 +60,7 @@ emptyContext spec =
 
 runCodegen :: Context -> Codegen a -> IO a
 runCodegen initCtx codegen = do
-  let (result, finalCtx) = S.runState codegen initCtx
+  (result, finalCtx) <- S.runStateT codegen initCtx
   let mlirModule = TB.toLazyText (builder finalCtx)
   let spec = targetSpec finalCtx
   B.compileForNativeMachine
@@ -115,3 +121,24 @@ incIndentation codegen = do
   S.modify' $ \ctx ->
     ctx {indentation = indentation ctx - 1}
   return res
+
+logDebug :: String -> Codegen ()
+logDebug msg = do
+  logger <- S.liftIO $ getLogger "Reussir.Codegen"
+  S.liftIO $ logL logger DEBUG msg
+
+
+logInfo :: String -> Codegen ()
+logInfo msg = do
+  logger <- S.liftIO $ getLogger "Reussir.Codegen"
+  S.liftIO $ logL logger INFO msg
+
+logWarning :: String -> Codegen ()
+logWarning msg = do
+  logger <- S.liftIO $ getLogger "Reussir.Codegen"
+  S.liftIO $ logL logger WARNING msg
+
+logError :: String -> Codegen ()
+logError msg = do
+  logger <- S.liftIO $ getLogger "Reussir.Codegen"
+  S.liftIO $ logL logger ERROR msg
