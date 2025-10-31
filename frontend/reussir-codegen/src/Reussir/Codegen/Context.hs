@@ -122,23 +122,19 @@ incIndentation codegen = do
     ctx {indentation = indentation ctx - 1}
   return res
 
-logDebug :: String -> Codegen ()
-logDebug msg = do
+logWithPriority :: Priority -> String -> Codegen ()
+logWithPriority priority msg = do
   logger <- S.liftIO $ getLogger "Reussir.Codegen"
-  S.liftIO $ logL logger DEBUG msg
+  S.liftIO $ logL logger priority msg
 
+logDebug :: String -> Codegen ()
+logDebug msg = logWithPriority DEBUG msg
 
 logInfo :: String -> Codegen ()
-logInfo msg = do
-  logger <- S.liftIO $ getLogger "Reussir.Codegen"
-  S.liftIO $ logL logger INFO msg
+logInfo msg = logWithPriority INFO msg
 
 logWarning :: String -> Codegen ()
-logWarning msg = do
-  logger <- S.liftIO $ getLogger "Reussir.Codegen"
-  S.liftIO $ logL logger WARNING msg
+logWarning msg = logWithPriority WARNING msg
 
 logError :: String -> Codegen ()
-logError msg = do
-  logger <- S.liftIO $ getLogger "Reussir.Codegen"
-  S.liftIO $ logL logger ERROR msg
+logError msg = logWithPriority ERROR msg

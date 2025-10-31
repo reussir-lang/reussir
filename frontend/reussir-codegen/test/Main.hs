@@ -10,7 +10,6 @@ initializeCodegenLogger = do
   logger <- getLogger "Reussir.Codegen"
   -- Turn this to DEBUG to see codegen logs
   saveGlobalLogger $ setLevel WARNING logger 
-  return ()
 
 main :: IO ()
 main = initializeCodegenLogger >> defaultMain tests
