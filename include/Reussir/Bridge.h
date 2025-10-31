@@ -51,6 +51,9 @@ void reussir_bridge_compile_for_native_machine(const char *mlir_module,
                                                ReussirOptOption opt,
                                                ReussirLogLevel log_level);
 
+const char * reussir_bridge_alloc_native_target_triple();
+void reussir_bridge_free_native_target_triple(const char *triple);
+
 #ifdef __cplusplus
 }
 #endif

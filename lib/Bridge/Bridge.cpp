@@ -396,4 +396,11 @@ void reussir_bridge_compile_for_native_machine(const char *mlir_module,
   reussir::reussir_bridge_compile_for_native_machine(
       mlir_module, source_name, output_file, target, opt, log_level);
 }
+const char * reussir_bridge_alloc_native_target_triple() {
+  llvm::InitializeNativeTarget();
+  return strdup(llvm::sys::getDefaultTargetTriple().c_str());
+}
+void reussir_bridge_free_native_target_triple(const char *triple) {
+  free((void *)triple);
+}
 }
