@@ -15,7 +15,7 @@ module Reussir.Codegen.Intrinsics
 where
 
 import Reussir.Codegen.Context qualified as C
-import Reussir.Codegen.Intrinsic.Arith
+import Reussir.Codegen.Intrinsics.Arith
   ( Arith (..),
     CmpFPredicate (..),
     CmpIPredicate (..),
@@ -24,8 +24,9 @@ import Reussir.Codegen.Intrinsic.Arith
     RoundingMode (..),
     arithCodegen,
   )
-import Reussir.Codegen.Intrinsic.Math (Math (..), mathCodegen)
+import Reussir.Codegen.Intrinsics.Math (Math (..), mathCodegen)
 import Reussir.Codegen.Value (TypedValue)
+import Reussir.Codegen.Context (logDebug)
 
 data Intrinsic
   = Arith Arith
@@ -41,7 +42,9 @@ data IntrinsicCall
   deriving (Eq, Show)
 
 intrinsicCallCodegen :: IntrinsicCall -> C.Codegen ()
-intrinsicCallCodegen (IntrinsicCall (Arith arith) args rets) =
+intrinsicCallCodegen (IntrinsicCall (Arith arith) args rets) = do
+  logDebug $ "Generating code for arithmetic intrinsic"
   arithCodegen arith args rets
-intrinsicCallCodegen (IntrinsicCall (Math math) args rets) =
+intrinsicCallCodegen (IntrinsicCall (Math math) args rets) = do
+  logDebug $ "Generating code for math intrinsic"
   mathCodegen math args rets

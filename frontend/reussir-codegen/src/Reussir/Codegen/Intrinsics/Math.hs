@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Reussir.Codegen.Intrinsic.Math
+module Reussir.Codegen.Intrinsics.Math
   ( Math (..),
     mathCodegen,
   )
@@ -9,7 +9,7 @@ where
 import Control.Monad (unless)
 import Data.Text.Lazy.Builder qualified as TB
 import Reussir.Codegen.Context qualified as C
-import Reussir.Codegen.Intrinsic.Arith (FastMathFlag (..), fmfIsNone)
+import Reussir.Codegen.Intrinsics.Arith (FastMathFlag (..), fmfIsNone)
 import Reussir.Codegen.Value (TypedValue)
 
 data Math

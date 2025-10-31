@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Reussir.Codegen.Intrinsic.Arith
+module Reussir.Codegen.Intrinsics.Arith
   ( IntOFFlag (..),
     FastMathFlag (..),
     CmpIPredicate (..),

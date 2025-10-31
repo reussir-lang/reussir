@@ -68,8 +68,8 @@ library
 
     -- Modules included in this library but not exported.
     other-modules:
-        Reussir.Codegen.Intrinsic.Arith
-        Reussir.Codegen.Intrinsic.Math
+        Reussir.Codegen.Intrinsics.Arith
+        Reussir.Codegen.Intrinsics.Math
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -80,6 +80,7 @@ library
         mtl ^>=2.3.1,
         text ^>=2.1.3,
         intern ^>=0.9.6,
+        hslogger ^>=1.3.2,
         reussir-bridge
 
     -- Directories containing source files.
@@ -97,8 +98,8 @@ test-suite reussir-codegen-test
 
     -- Modules included in this executable, other than Main.
     other-modules:
-        Test.Codegen.Intrinsic.Arith
-        Test.Codegen.Intrinsic.Math
+        Test.Codegen.Intrinsics.Arith
+        Test.Codegen.Intrinsics.Math
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -122,4 +123,5 @@ test-suite reussir-codegen-test
         reussir-codegen,
         mtl,
         text,
-        reussir-bridge
+        reussir-bridge,
+        hslogger
