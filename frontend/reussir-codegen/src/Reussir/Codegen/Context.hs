@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-
 module Reussir.Codegen.Context
   ( TargetSpec (..),
     Context (..),
@@ -13,14 +12,20 @@ module Reussir.Codegen.Context
     emitIndentation,
     emitLine,
     incIndentation,
+    Path (..),
+    pathSingleton,
+    pathList,
   )
 where
 
 import Control.Monad.State.Strict qualified as S
 import Data.Int (Int64)
+import Data.Text qualified as ST
 import Data.Text.Lazy qualified as T
 import Data.Text.Lazy.Builder qualified as TB
 import Reussir.Bridge qualified as B
+import Data.Interned.Text (InternedText)
+import Data.Interned (Uninternable(unintern), intern)
 
 data TargetSpec = TargetSpec
   { programName :: T.Text,
@@ -60,6 +65,19 @@ runCodegen initCtx codegen = do
     (optimization spec)
     (logLevel spec)
   pure result
+
+newtype Path = Path [InternedText]
+  deriving (Eq, Show)
+
+instance Emission Path where
+  emit (Path segments) =
+    TB.fromLazyText $ T.intercalate "::" (map (T.fromStrict . unintern) segments)
+
+pathSingleton :: Show a => a -> Path
+pathSingleton x = Path [intern (ST.pack (show x))]
+
+pathList :: Show a => [a] -> Path
+pathList xs = Path (map (intern . ST.pack . show) xs)
 
 class Emission a where
   emit :: a -> TB.Builder

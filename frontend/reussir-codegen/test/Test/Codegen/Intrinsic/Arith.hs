@@ -28,19 +28,19 @@ runCodegenForICall icall =
   runEmptyCodegenAsText (I.intrinsicCallCodegen icall)
 
 primitiveI32 :: TT.Type
-primitiveI32 = TT.TypePrimitive (TT.PrimInt TT.PrimInt32)
+primitiveI32 = TT.TypePrim (TT.PrimInt TT.PrimInt32)
 
 primitiveI64 :: TT.Type
-primitiveI64 = TT.TypePrimitive (TT.PrimInt TT.PrimInt64)
+primitiveI64 = TT.TypePrim (TT.PrimInt TT.PrimInt64)
 
 primitiveF32 :: TT.Type
-primitiveF32 = TT.TypePrimitive (TT.PrimFloat TT.PrimFloat32)
+primitiveF32 = TT.TypePrim (TT.PrimFloat TT.PrimFloat32)
 
 primitiveF64 :: TT.Type
-primitiveF64 = TT.TypePrimitive (TT.PrimFloat TT.PrimFloat64)
+primitiveF64 = TT.TypePrim (TT.PrimFloat TT.PrimFloat64)
 
 primitiveF128 :: TT.Type
-primitiveF128 = TT.TypePrimitive (TT.PrimFloat TT.PrimFloat128)
+primitiveF128 = TT.TypePrim (TT.PrimFloat TT.PrimFloat128)
 
 -- Helper functions for arith operations
 addi32 :: Int64 -> Int64 -> Int64 -> I.IntOFFlag -> I.IntrinsicCall

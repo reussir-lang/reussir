@@ -79,6 +79,7 @@ library
         base >=4.20.2.0 && <4.22,
         mtl ^>=2.3.1,
         text ^>=2.1.3,
+        intern ^>=0.9.6,
         reussir-bridge
 
     -- Directories containing source files.

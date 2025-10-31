@@ -4,11 +4,14 @@ module Reussir.Codegen.Type
   ( PrimitiveFloat (..),
     PrimitiveInt (..),
     Primitive (..),
+    Atomicity (..),
+    Capability (..),
     Type (..),
   )
 where
 
-import Reussir.Codegen.Context (Emission (emit))
+import Reussir.Codegen.Context (Emission (emit), Path)
+import Data.Int (Int64)
 
 data PrimitiveInt = PrimInt8 | PrimInt16 | PrimInt32 | PrimInt64 | PrimInt128 | PrimIndex
   deriving (Eq, Show)
@@ -24,10 +27,28 @@ data Primitive
   deriving (Eq, Show)
 
 data Type
-  = TypePrimitive Primitive
-  | TypePointer Type
+  = TypePrim Primitive
   | TypeTensor Type [Int]
-  | TypeFunction [Type] Type
+  | TypeClosure [Type] Type
+  | TypeRc {
+      rcInner :: Type,
+      rcAtomicity :: Atomicity,
+      rcCapability :: Capability
+    }
+  | TypeRef {
+      refInner :: Type,
+      refAtomicity :: Atomicity,
+      refCapability :: Capability
+    }
+  | TypeExpr {
+      tyExprPath :: Path,
+      tyExprArgs :: [Type]
+    }
+  | TypeNullable Type
+  | TypeToken {
+      tokenAlignment :: Int64,
+      tokenSize :: Int64
+   } 
   deriving (Eq, Show)
 
 instance Emission PrimitiveInt where
@@ -53,5 +74,18 @@ instance Emission Primitive where
   emit PrimUnit = "none"
 
 instance Emission Type where
-  emit (TypePrimitive prim) = emit prim
+  emit (TypePrim prim) = emit prim
   emit _ = error "Emission for non-primitive types not implemented yet"
+
+data Atomicity = Atomic | NonAtomic
+  deriving (Eq, Show)
+
+data Capability = Unspecified | Shared | Value | Flex | Rigid
+  deriving (Eq, Show)
+
+type RecordField = (Type, Capability)
+data Record = Record
+  { defaultCapability :: Capability,
+    fields :: [(String, RecordField)]
+  }
+  deriving (Eq, Show)
