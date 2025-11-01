@@ -23,6 +23,7 @@
 #include "Reussir/IR/ReussirAttrs.h"
 #include "Reussir/IR/ReussirEnumAttrs.h"
 #include "Reussir/IR/ReussirTypes.h"
+#include "Reussir/IR/ReussirInterfaces.h"
 
 #define GET_OP_CLASSES
 #include "Reussir/IR/ReussirOps.h.inc"

@@ -17,6 +17,7 @@ include "mlir/IR/BuiltinAttributes.td"
 include "Reussir/IR/ReussirDialect.td"
 include "Reussir/IR/ReussirAttrs.td"
 include "Reussir/IR/ReussirTypes.td"
+include "Reussir/IR/ReussirInterfaces.td"
 
 class ReussirOp<string mnemonic, list<Trait> traits>
     : Op<ReussirDialect, mnemonic, traits>;
@@ -312,18 +313,20 @@ def ReussirRcFetchDecOp : ReussirRcOp<"fetch_dec", []> {
 }
 
 def ReussirRcCreateOp : ReussirRcOp<"create", [
-  DeclareOpInterfaceMethods<SymbolUserOpInterface>
+  AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+  DeclareOpInterfaceMethods<TokenAcceptorInterface>
 ]> {
   let summary = "Create a RC pointer";
   let description = [{
     `reussir.rc.create` creates a RC pointer from a value.
-    The memory resource must be provided by a token. It addtionally accepts
+    The memory resource can be provided by an optional token. It additionally accepts
     a region argument.
 
     RC pointer created solely from token has shared capability, while RC pointer 
     created with region has flex capability.
 
-    The token layout must meet the underlying Rc box layout.
+    When a token is provided, its layout must meet the underlying Rc box layout.
 
     The created RC pointer will have reference count 1.
 
@@ -353,7 +356,7 @@ def ReussirRcCreateOp : ReussirRcOp<"create", [
 
   let arguments = (ins 
       Arg<AnyType, "value">:$value, 
-      ReussirTokenType:$token,
+      Optional<ReussirTokenType>:$token,
       Optional<ReussirRegionType>:$region,
       OptionalAttr<FlatSymbolRefAttr>:$vtable
   );
@@ -361,9 +364,9 @@ def ReussirRcCreateOp : ReussirRcOp<"create", [
 
   let assemblyFormat = [{
     `value` `(` $value `:` type($value) `)` 
-    `token` `(` $token `:` type($token) `)`
     oilist ( 
-      `region` `(` $region `:` type($region) `)` 
+      `token` `(` $token `:` type($token) `)`
+    | `region` `(` $region `:` type($region) `)` 
     | `vtable` `(` $vtable `)`
     )
     `:` qualified(type($rcPtr)) attr-dict
@@ -850,17 +853,18 @@ class ReussirClosureOp<string mnemonic, list<Trait> traits>
 
 
 def ReussirClosureCreateOp : ReussirClosureOp<"create", [
-  IsolatedFromAbove, DeclareOpInterfaceMethods<SymbolUserOpInterface>
+  IsolatedFromAbove, DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+  DeclareOpInterfaceMethods<TokenAcceptorInterface>
 ]> {
   let summary = "Create a closure";
   let description = [{
     `reussir.closure.create` creates a closure. 
     A closure is always wrapped in an rc pointer.
 
-    The operation takes two form, either inlined or outlined. Token is required
-    in both cases. The token shall match the layout of the a RcBox with 
-    ClosureHeader and Payload, where the payload is the space for all arguments.
-    This allows a closure to be partially applied.
+    The operation takes two form, either inlined or outlined. An optional token
+    can be provided in both cases. When provided, the token shall match the layout
+    of a RcBox with ClosureHeader and Payload, where the payload is the space for
+    all arguments. This allows a closure to be partially applied.
 
     For the inlined form, the body region is required. The body region must 
     accept a list of arguments, each of which matches one of the closure 
@@ -921,7 +925,7 @@ def ReussirClosureCreateOp : ReussirClosureOp<"create", [
     Similarly, the drop operation consists of if protected drop functions.
   }];
   let arguments = (ins
-    ReussirTokenType:$token,
+    Optional<ReussirTokenType>:$token,
     OptionalAttr<FlatSymbolRefAttr>:$vtable
   );
   let regions = (region MaxSizedRegion<1>:$body);
