@@ -149,7 +149,6 @@ mlir::LogicalResult ReussirRcDecOp::verify() {
 // RcCreateOp verification
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRcCreateOp::verify() {
-  TokenType tokenType = getToken().getType();
   RcType RcType = getRcPtr().getType();
   mlir::Type valueType = getValue().getType();
   if (valueType != RcType.getElementType())
@@ -162,22 +161,39 @@ mlir::LogicalResult ReussirRcCreateOp::verify() {
     return emitOpError("RC type capability must be ")
            << stringifyCapability(expectedCap) << ", but got "
            << stringifyCapability(RcType.getCapability());
-  auto rcBoxType =
-      RcBoxType::get(getContext(), valueType, getRegion() != nullptr);
+  
+  // Only verify token layout if token is present
+  if (getToken()) {
+    TokenType tokenType = getToken().getType();
+    auto rcBoxType =
+        RcBoxType::get(getContext(), valueType, getRegion() != nullptr);
+    auto dataLayout = mlir::DataLayout::closest(getOperation());
+    auto alignment = dataLayout.getTypeABIAlignment(rcBoxType);
+    auto size = dataLayout.getTypeSize(rcBoxType);
+    if (!size.isFixed())
+      return emitOpError("RC type must have a fixed size");
+    if (tokenType.getAlign() != alignment)
+      return emitOpError("token alignment must match RC type alignment, ")
+             << "token alignment: " << tokenType.getAlign()
+             << ", RC type alignment: " << alignment;
+    if (tokenType.getSize() != size)
+      return emitOpError("token size must match RC type size, ")
+             << "token size: " << tokenType.getSize()
+             << ", RC type size: " << size.getFixedValue();
+  }
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
+// RcCreateOp TokenAcceptor Interface
+//===----------------------------------------------------------------------===//
+TokenType ReussirRcCreateOp::getTokenType() {
+  auto rcBoxType = RcBoxType::get(
+      getContext(), getValue().getType(), getRegion() != nullptr);
   auto dataLayout = mlir::DataLayout::closest(getOperation());
   auto alignment = dataLayout.getTypeABIAlignment(rcBoxType);
   auto size = dataLayout.getTypeSize(rcBoxType);
-  if (!size.isFixed())
-    return emitOpError("RC type must have a fixed size");
-  if (tokenType.getAlign() != alignment)
-    return emitOpError("token alignment must match RC type alignment, ")
-           << "token alignment: " << tokenType.getAlign()
-           << ", RC type alignment: " << alignment;
-  if (tokenType.getSize() != size)
-    return emitOpError("token size must match RC type size, ")
-           << "token size: " << tokenType.getSize()
-           << ", RC type size: " << size.getFixedValue();
-  return mlir::success();
+  return TokenType::get(getContext(), alignment, size.getFixedValue());
 }
 
 //===----------------------------------------------------------------------===//
@@ -1060,16 +1076,18 @@ mlir::ParseResult ReussirClosureCreateOp::parse(mlir::OpAsmParser &parser,
   if (parser.parseRBrace())
     return mlir::failure();
 
-  if (!appeared[static_cast<size_t>(Keyword::token)])
-    return parser.emitError(operationLoc, "token is required");
-
+  // Token is now optional
   if (vtableAttr)
     result.addAttribute("vtable", vtableAttr);
   result.addRegion(std::move(bodyRegion));
   result.addTypes(closureType);
-  if (llvm::failed(parser.resolveOperands({tokenOperand}, tokenType,
-                                          operationLoc, result.operands)))
-    return mlir::failure();
+  
+  // Only resolve token operands if token was present
+  if (appeared[static_cast<size_t>(Keyword::token)]) {
+    if (llvm::failed(parser.resolveOperands({tokenOperand}, tokenType,
+                                            operationLoc, result.operands)))
+      return mlir::failure();
+  }
 
   return mlir::success();
 }
@@ -1082,13 +1100,15 @@ void ReussirClosureCreateOp::print(mlir::OpAsmPrinter &p) {
   p.increaseIndent();
 
   // Print order insensitive fields: token, vtable, body
-  // Token is required
-  p.printNewline();
-  p << " token (";
-  p.printOperand(getToken());
-  p << " : ";
-  p.printStrippedAttrOrType(getToken().getType());
-  p << ")";
+  // Print token if present
+  if (getToken()) {
+    p.printNewline();
+    p << " token (";
+    p.printOperand(getToken());
+    p << " : ";
+    p.printStrippedAttrOrType(getToken().getType());
+    p << ")";
+  }
 
   // Print vtable if present
   if (getVtableAttr()) {
@@ -1118,19 +1138,24 @@ mlir::LogicalResult ReussirClosureCreateOp::verify() {
       llvm::cast<ClosureType>(getClosure().getType().getElementType());
   if (!outlinedFlag && !inlinedFlag)
     return emitOpError("closure must be outlined or inlined");
-  RcBoxType closureBoxType = getRcClosureBoxType();
-  auto dataLayout = mlir::DataLayout::closest(this->getOperation());
-  auto closureBoxSize = dataLayout.getTypeSize(closureBoxType);
-  auto closureBoxAlignment = dataLayout.getTypeABIAlignment(closureBoxType);
-  TokenType tokenType = getToken().getType();
-  if (closureBoxSize != tokenType.getSize())
-    return emitOpError("closure box size must match token size")
-           << ", closure box size: " << closureBoxSize.getFixedValue()
-           << ", token size: " << tokenType.getSize();
-  if (closureBoxAlignment != tokenType.getAlign())
-    return emitOpError("closure box alignment must match token alignment")
-           << ", closure box alignment: " << closureBoxAlignment
-           << ", token alignment: " << tokenType.getAlign();
+  
+  // Only verify token layout if token is present
+  if (getToken()) {
+    RcBoxType closureBoxType = getRcClosureBoxType();
+    auto dataLayout = mlir::DataLayout::closest(this->getOperation());
+    auto closureBoxSize = dataLayout.getTypeSize(closureBoxType);
+    auto closureBoxAlignment = dataLayout.getTypeABIAlignment(closureBoxType);
+    TokenType tokenType = getToken().getType();
+    if (closureBoxSize != tokenType.getSize())
+      return emitOpError("closure box size must match token size")
+             << ", closure box size: " << closureBoxSize.getFixedValue()
+             << ", token size: " << tokenType.getSize();
+    if (closureBoxAlignment != tokenType.getAlign())
+      return emitOpError("closure box alignment must match token alignment")
+             << ", closure box alignment: " << closureBoxAlignment
+             << ", token alignment: " << tokenType.getAlign();
+  }
+  
   // Check that region arguments match the closure input types
   if (inlinedFlag) {
     auto types = getBody().getArgumentTypes();
@@ -1146,6 +1171,17 @@ mlir::LogicalResult ReussirClosureCreateOp::verify() {
           "inlined closure body arguments must match the closure input types");
   }
   return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
+// ClosureCreateOp TokenAcceptor Interface
+//===----------------------------------------------------------------------===//
+TokenType ReussirClosureCreateOp::getTokenType() {
+  auto rcBoxType = getRcClosureBoxType();
+  auto dataLayout = mlir::DataLayout::closest(getOperation());
+  auto alignment = dataLayout.getTypeABIAlignment(rcBoxType);
+  auto size = dataLayout.getTypeSize(rcBoxType);
+  return TokenType::get(getContext(), alignment, size.getFixedValue());
 }
 
 //===----------------------------------------------------------------------===//

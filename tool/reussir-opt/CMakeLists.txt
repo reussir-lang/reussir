@@ -14,6 +14,7 @@ add_mlir_tool(reussir-opt
     MLIRReussirRcDecrementExpansion
     MLIRReussirInferVariantTag
     MLIRReussirIncDecCancellation
+    MLIRReussirTokenAllocation
     ${dialect_libs}
     ${conversion_libs}
     ${extension_libs}
@@ -29,6 +30,7 @@ target_link_libraries(reussir-opt
     MLIRReussirRcDecrementExpansion
     MLIRReussirInferVariantTag
     MLIRReussirIncDecCancellation
+    MLIRReussirTokenAllocation
     ${dialect_libs} 
     ${conversion_libs} 
     ${extension_libs} 

@@ -11,6 +11,11 @@ mlir_tablegen(ReussirEnumAttrs.cpp.inc -gen-enum-defs)
 mlir_tablegen(ReussirAttrs.h.inc --gen-attrdef-decls)
 mlir_tablegen(ReussirAttrs.cpp.inc -gen-attrdef-defs)
 
+# Interface definitions
+set(LLVM_TARGET_DEFINITIONS ReussirInterfaces.td)
+mlir_tablegen(ReussirInterfaces.h.inc -gen-op-interface-decls)
+mlir_tablegen(ReussirInterfaces.cpp.inc -gen-op-interface-defs)
+
 # Operation and types
 set(LLVM_TARGET_DEFINITIONS ReussirOps.td)
 mlir_tablegen(ReussirOps.h.inc -gen-op-decls)
