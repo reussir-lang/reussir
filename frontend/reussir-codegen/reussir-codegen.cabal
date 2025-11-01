@@ -73,6 +73,7 @@ library
         Reussir.Codegen.Type.Data
         Reussir.Codegen.Type.Emission
         Reussir.Codegen.Type.Record
+        Reussir.Codegen.Type.Mangle
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -104,6 +105,7 @@ test-suite reussir-codegen-test
     other-modules:
         Test.Codegen.Intrinsics.Arith
         Test.Codegen.Intrinsics.Math
+        Test.Codegen.Type.Mangle
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -128,4 +130,5 @@ test-suite reussir-codegen-test
         mtl,
         text,
         reussir-bridge,
-        hslogger
+        hslogger,
+        intern
