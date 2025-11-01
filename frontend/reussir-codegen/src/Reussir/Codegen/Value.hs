@@ -13,4 +13,4 @@ newtype Value = Value Int64
 type TypedValue = (Value, Type)
 
 instance Emission Value where
-  emit (Value v) = "%" <> TB.fromString (show v)
+  emit (Value v) = pure $ "%" <> TB.fromString (show v)

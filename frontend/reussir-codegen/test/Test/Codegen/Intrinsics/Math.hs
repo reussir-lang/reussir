@@ -276,4 +276,3 @@ mathTests =
         runCodegenForICall (sincos64 3 4 1 $ I.FastMathFlag 5)
           @@?= "%3, %4 = math.sincos %1 fastmath<reassoc ninf> : f64\n"
     ]
-

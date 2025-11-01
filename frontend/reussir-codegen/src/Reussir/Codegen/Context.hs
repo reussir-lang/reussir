@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+
 module Reussir.Codegen.Context
   ( TargetSpec (..),
     Context (..),
@@ -24,14 +25,14 @@ where
 
 import Control.Monad.State.Strict qualified as S
 import Data.Int (Int64)
+import Data.Interned (Uninternable (unintern), intern)
+import Data.Interned.Text (InternedText)
 import Data.Text qualified as ST
 import Data.Text.Lazy qualified as T
 import Data.Text.Lazy.Builder qualified as TB
 import Reussir.Bridge qualified as B
-import Data.Interned.Text (InternedText)
-import Data.Interned (Uninternable(unintern), intern)
+import System.Log (Priority (..))
 import System.Log.Logger (getLogger, logL)
-import System.Log (Priority(..))
 
 data TargetSpec = TargetSpec
   { programName :: T.Text,
@@ -77,23 +78,27 @@ newtype Path = Path [InternedText]
 
 instance Emission Path where
   emit (Path segments) =
-    TB.fromLazyText $ T.intercalate "::" (map (T.fromStrict . unintern) segments)
+    pure $
+      TB.fromLazyText $
+        T.intercalate "::" (map (T.fromStrict . unintern) segments)
 
-pathSingleton :: Show a => a -> Path
+pathSingleton :: (Show a) => a -> Path
 pathSingleton x = Path [intern (ST.pack (show x))]
 
-pathList :: Show a => [a] -> Path
+pathList :: (Show a) => [a] -> Path
 pathList xs = Path (map (intern . ST.pack . show) xs)
 
 class Emission a where
-  emit :: a -> TB.Builder
+  emit :: a -> Codegen TB.Builder
 
 instance Emission TB.Builder where
-  emit = id
+  emit = pure
 
 emitCG :: (Emission a) => a -> Codegen ()
-emitCG item = S.modify' $ \ctx ->
-  ctx {builder = builder ctx <> emit item}
+emitCG item = do
+  change <- emit item
+  S.modify' $ \ctx ->
+    ctx {builder = builder ctx <> change}
 
 emitBuilder :: TB.Builder -> Codegen ()
 emitBuilder = emitCG

@@ -61,48 +61,73 @@ data Math
 
 fmfCodegen :: FastMathFlag -> C.Codegen ()
 fmfCodegen fmf = unless (fmfIsNone fmf) $ do
-  C.emitBuilder $ " fastmath<" <> C.emit fmf <> ">"
+  fmf' <- C.emit fmf
+  C.emitBuilder $ " fastmath<" <> fmf' <> ">"
 
 unaryFloatMathCodegen :: TB.Builder -> FastMathFlag -> TypedValue -> TypedValue -> C.Codegen ()
 unaryFloatMathCodegen mnemonic fmf (inVal, _inTy) (resVal, resTy) = C.emitLine $ do
-  C.emitBuilder $ C.emit resVal <> " = " <> "math." <> mnemonic <> " "
-  C.emitBuilder $ C.emit inVal
+  resVal' <- C.emit resVal
+  C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
+  inVal' <- C.emit inVal
+  C.emitBuilder $ inVal'
   fmfCodegen fmf
-  C.emitBuilder $ " : " <> C.emit resTy
+  resTy' <- C.emit resTy
+  C.emitBuilder $ " : " <> resTy'
 
 unaryIntMathCodegen :: TB.Builder -> TypedValue -> TypedValue -> C.Codegen ()
 unaryIntMathCodegen mnemonic (inVal, _inTy) (resVal, resTy) = C.emitLine $ do
-  C.emitBuilder $ C.emit resVal <> " = " <> "math." <> mnemonic <> " "
-  C.emitBuilder $ C.emit inVal
-  C.emitBuilder $ " : " <> C.emit resTy
+  resVal' <- C.emit resVal
+  C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
+  inVal' <- C.emit inVal
+  C.emitBuilder $ inVal'
+  resTy' <- C.emit resTy
+  C.emitBuilder $ " : " <> resTy'
 
 binaryFloatMathCodegen :: TB.Builder -> FastMathFlag -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
 binaryFloatMathCodegen mnemonic fmf (vA, _) (vB, _) (resVal, resTy) = C.emitLine $ do
-  C.emitBuilder $ C.emit resVal <> " = " <> "math." <> mnemonic <> " "
-  C.emitBuilder $ C.emit vA <> ", " <> C.emit vB
+  resVal' <- C.emit resVal
+  C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
+  vA' <- C.emit vA
+  vB' <- C.emit vB
+  C.emitBuilder $ vA' <> ", " <> vB'
   fmfCodegen fmf
-  C.emitBuilder $ " : " <> C.emit resTy
+  resTy' <- C.emit resTy
+  C.emitBuilder $ " : " <> resTy'
 
 ternaryFloatMathCodegen :: TB.Builder -> FastMathFlag -> TypedValue -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
 ternaryFloatMathCodegen mnemonic fmf (vA, _) (vB, _) (vC, _) (resVal, resTy) = C.emitLine $ do
-  C.emitBuilder $ C.emit resVal <> " = " <> "math." <> mnemonic <> " "
-  C.emitBuilder $ C.emit vA <> ", " <> C.emit vB <> ", " <> C.emit vC
+  resVal' <- C.emit resVal
+  C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
+  vA' <- C.emit vA
+  vB' <- C.emit vB
+  vC' <- C.emit vC
+  C.emitBuilder $ vA' <> ", " <> vB' <> ", " <> vC'
   fmfCodegen fmf
-  C.emitBuilder $ " : " <> C.emit resTy
+  resTy' <- C.emit resTy
+  C.emitBuilder $ " : " <> resTy'
 
 binaryIntMathCodegen :: TB.Builder -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
 binaryIntMathCodegen mnemonic (vA, _) (vB, _) (resVal, resTy) = C.emitLine $ do
-  C.emitBuilder $ C.emit resVal <> " = " <> "math." <> mnemonic <> " "
-  C.emitBuilder $ C.emit vA <> ", " <> C.emit vB
-  C.emitBuilder $ " : " <> C.emit resTy
+  resVal' <- C.emit resVal
+  C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
+  vA' <- C.emit vA
+  vB' <- C.emit vB
+  C.emitBuilder $ vA' <> ", " <> vB'
+  resTy' <- C.emit resTy
+  C.emitBuilder $ " : " <> resTy'
 
 -- Special codegen for fpowi which has type signature: : type($lhs), type($rhs)
 fpowiMathCodegen :: FastMathFlag -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
 fpowiMathCodegen fmf (vA, tyA) (vB, tyB) (resVal, _) = C.emitLine $ do
-  C.emitBuilder $ C.emit resVal <> " = " <> "math.fpowi "
-  C.emitBuilder $ C.emit vA <> ", " <> C.emit vB
+  resVal' <- C.emit resVal
+  C.emitBuilder $ resVal' <> " = " <> "math.fpowi "
+  vA' <- C.emit vA
+  vB' <- C.emit vB
+  C.emitBuilder $ vA' <> ", " <> vB'
   fmfCodegen fmf
-  C.emitBuilder $ " : " <> C.emit tyA <> ", " <> C.emit tyB
+  tyA' <- C.emit tyA
+  tyB' <- C.emit tyB
+  C.emitBuilder $ " : " <> tyA' <> ", " <> tyB'
 
 -- | Generate MLIR assembly for math operations.
 -- This function dispatches to the appropriate code generator based on the operation type.
@@ -144,7 +169,6 @@ mathCodegen (Sqrt fmf) [inVal] [res] = unaryFloatMathCodegen "sqrt" fmf inVal re
 mathCodegen (Tan fmf) [inVal] [res] = unaryFloatMathCodegen "tan" fmf inVal res
 mathCodegen (Tanh fmf) [inVal] [res] = unaryFloatMathCodegen "tanh" fmf inVal res
 mathCodegen (Trunc fmf) [inVal] [res] = unaryFloatMathCodegen "trunc" fmf inVal res
-
 -- ============================================================================
 -- Unary Integer Operations (without FastMathFlag)
 -- ============================================================================
@@ -153,7 +177,6 @@ mathCodegen Absi [inVal] [res] = unaryIntMathCodegen "absi" inVal res
 mathCodegen Ctlz [inVal] [res] = unaryIntMathCodegen "ctlz" inVal res
 mathCodegen Ctpop [inVal] [res] = unaryIntMathCodegen "ctpop" inVal res
 mathCodegen Cttz [inVal] [res] = unaryIntMathCodegen "cttz" inVal res
-
 -- ============================================================================
 -- Binary Floating-Point Operations (with FastMathFlag)
 -- ============================================================================
@@ -162,28 +185,29 @@ mathCodegen (Atan2 fmf) [a, b] [res] = binaryFloatMathCodegen "atan2" fmf a b re
 mathCodegen (Copysign fmf) [a, b] [res] = binaryFloatMathCodegen "copysign" fmf a b res
 mathCodegen (Fpowi fmf) [a, b] [res] = fpowiMathCodegen fmf a b res
 mathCodegen (Powf fmf) [a, b] [res] = binaryFloatMathCodegen "powf" fmf a b res
-
 -- ============================================================================
 -- Binary Integer Operations (without FastMathFlag)
 -- ============================================================================
 
 mathCodegen Ipowi [a, b] [res] = binaryIntMathCodegen "ipowi" a b res
-
 -- ============================================================================
 -- Ternary Floating-Point Operations (with FastMathFlag)
 -- ============================================================================
 
 mathCodegen (Fma fmf) [a, b, c] [res] = ternaryFloatMathCodegen "fma" fmf a b c res
-
 -- ============================================================================
 -- Special Operations (multiple results)
 -- ============================================================================
 
 mathCodegen (Sincos fmf) [(inVal, inTy)] [(sinRes, _sinTy), (cosRes, _cosTy)] = C.emitLine $ do
-  C.emitBuilder $ C.emit sinRes <> ", " <> C.emit cosRes <> " = " <> "math.sincos "
-  C.emitBuilder $ C.emit inVal
+  sinRes' <- C.emit sinRes
+  cosRes' <- C.emit cosRes
+  C.emitBuilder $ sinRes' <> ", " <> cosRes' <> " = " <> "math.sincos "
+  inVal' <- C.emit inVal
+  C.emitBuilder $ inVal'
   fmfCodegen fmf
-  C.emitBuilder $ " : " <> C.emit inTy
+  inTy' <- C.emit inTy
+  C.emitBuilder $ " : " <> inTy'
 
 -- ============================================================================
 -- Fallback
