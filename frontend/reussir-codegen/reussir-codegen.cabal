@@ -70,6 +70,9 @@ library
     other-modules:
         Reussir.Codegen.Intrinsics.Arith
         Reussir.Codegen.Intrinsics.Math
+        Reussir.Codegen.Type.Data
+        Reussir.Codegen.Type.Emission
+        Reussir.Codegen.Type.Record
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:

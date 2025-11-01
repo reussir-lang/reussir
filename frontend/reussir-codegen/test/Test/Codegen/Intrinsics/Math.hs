@@ -20,7 +20,7 @@ import Test.Tasty.HUnit
 runEmptyCodegenAsText :: C.Codegen () -> IO T.Text
 runEmptyCodegenAsText codegen = do
   let spec = C.TargetSpec "module" "output.mlir" B.OptDefault B.OutputObject B.LogInfo
-  (_, finalCtx) <- S.runStateT codegen (C.emptyContext spec)
+  (_, finalCtx) <- S.runStateT (C.genState codegen) (C.emptyContext spec)
   return $ TB.toLazyText (C.builder finalCtx)
 
 runCodegenForICall :: I.IntrinsicCall -> IO T.Text

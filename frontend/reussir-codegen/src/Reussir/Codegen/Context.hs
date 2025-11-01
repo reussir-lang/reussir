@@ -1,9 +1,12 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Reussir.Codegen.Context
   ( TargetSpec (..),
     Context (..),
+    CodegenT (..),
     Codegen,
+    genState,
     emptyContext,
     runCodegen,
     Emission (emit),
@@ -49,7 +52,13 @@ data Context = MkCtx
     builder :: TB.Builder
   }
 
-type Codegen a = S.StateT Context IO a
+newtype CodegenT m a = Codegen {genStateT :: S.StateT Context m a}
+  deriving (Functor, Applicative, Monad, S.MonadState Context, S.MonadIO, S.MonadTrans)
+
+type Codegen = CodegenT IO
+
+genState :: Codegen a -> S.StateT Context IO a
+genState = genStateT
 
 emptyContext :: TargetSpec -> Context
 emptyContext spec =
@@ -61,7 +70,7 @@ emptyContext spec =
 
 runCodegen :: Context -> Codegen a -> IO a
 runCodegen initCtx codegen = do
-  (result, finalCtx) <- S.runStateT codegen initCtx
+  (result, finalCtx) <- S.runStateT (genState codegen) initCtx
   let mlirModule = TB.toLazyText (builder finalCtx)
   let spec = targetSpec finalCtx
   B.compileForNativeMachine
