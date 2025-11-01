@@ -7,6 +7,11 @@ module Reussir.Codegen.Type.Data
     Atomicity (..),
     Capability (..),
     Type (..),
+    Rc (..),
+    Ref (..),
+    Expr (..),
+    Closure (..),
+    Tensor (..),
   )
 where
 
@@ -25,25 +30,24 @@ data Primitive
   | PrimUnit
   deriving (Eq, Show)
 
+data Rc = Rc { rcBoxInner :: Type, rcBoxAtomicity :: Atomicity, rcBoxCapability :: Capability }
+  deriving (Eq, Show)
+data Ref = Ref { refInner :: Type, refAtomicity :: Atomicity, refCapability :: Capability }
+  deriving (Eq, Show)
+data Expr = Expr { exprPath :: Path, exprArgs :: [Type] }
+  deriving (Eq, Show)
+data Closure = Closure { closureArgs :: [Type], closureReturnType :: Type }
+  deriving (Eq, Show)
+data Tensor = Tensor { tensorEleTy :: Type, tensorDimensions :: [Int] }
+  deriving (Eq, Show)
+
 data Type
   = TypePrim Primitive
-  | TypeTensor Type [Int]
-  | TypeClosure [Type] Type
-  | TypeRc
-      { rcInner :: Type,
-        rcAtomicity :: Atomicity,
-        rcCapability :: Capability
-      }
-  | TypeRef
-      { refInner :: Type,
-        refAtomicity :: Atomicity,
-        refCapability :: Capability
-      }
-  | TypeExpr
-      { tyExprPath :: Path,
-        tyExprArgs :: [Type]
-      }
-  | TypeNullable Type
+  | TypeTensor Tensor
+  | TypeClosure Closure
+  | TypeRc Rc
+  | TypeRef Ref
+  | TypeExpr Expr
   deriving (Eq, Show)
 
 data Atomicity = Atomic | NonAtomic
