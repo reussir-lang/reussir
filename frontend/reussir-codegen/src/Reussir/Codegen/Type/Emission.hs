@@ -8,10 +8,14 @@ import Data.Text.Lazy.Builder qualified as TB
 import Reussir.Codegen.Context.Codegen
 import Reussir.Codegen.Context.Emission (Emission (emit))
 import Reussir.Codegen.Type.Data (
+    Atomicity (..),
     Capability (..),
+    Closure (..),
     Primitive (..),
     PrimitiveFloat (..),
     PrimitiveInt (..),
+    Rc (..),
+    Ref (..),
     Type (..),
  )
 import Reussir.Codegen.Type.Mangle (mangleTypeWithPrefix)
@@ -39,17 +43,45 @@ instance Emission Primitive where
     emit PrimBool = pure "i1"
     emit PrimUnit = pure "()"
 
+-- Helper functions for emitting capabilities and atomicity
+emitCapability :: Capability -> TB.Builder
+emitCapability Shared = " shared"
+emitCapability Value = " value"
+emitCapability Unspecified = ""
+emitCapability Flex = " flex"
+emitCapability Rigid = " rigid"
+emitCapability Field = " field"
+
+emitAtomicity :: Atomicity -> TB.Builder
+emitAtomicity NonAtomic = " normal"
+emitAtomicity Atomic = " atomic"
+
+-- Notice that toplevel is with respect to record emission. So for other types, the function should pass through the toplevel flag.
 emitTy :: Bool -> Type -> Codegen TB.Builder
 emitTy _ (TypePrim prim) = emit prim
-emitTy _ (TypeRc _rc) = error "Emission for Rc not yet implemented"
-emitTy _ (TypeRef _ref) = error "Emission for Ref not yet implemented"
-emitTy _ (TypeClosure _closure) = error "Emission for Closure not yet implemented"
-emitTy _ (TypeTensor _tensor) = error "Emission for Tensor not yet implemented"
+emitTy toplevel (TypeRc (Rc ty atm cap)) = do
+    ty' <- emitTy toplevel ty
+    pure $ "!reussir.rc<" <> ty' <> emitCapability cap <> emitAtomicity atm <> ">"
+-- !reussir.ref<index capability atomic>
+emitTy toplevel (TypeRef (Ref ty atm cap)) = do
+    ty' <- emitTy toplevel ty
+    pure $ "!reussir.ref<" <> ty' <> emitCapability cap <> emitAtomicity atm <> ">"
+-- !reussir.closure<(i32) -> i32>
+emitTy toplevel (TypeClosure (Closure args returnTy)) = do
+    args' <- mapM (emitTy toplevel) args
+    let concatArgs' = TB.fromLazyText $ T.intercalate ", " (map TB.toLazyText args')
+    case returnTy of
+        TypePrim PrimUnit -> pure $ "!reussir.closure<(" <> concatArgs' <> ")>"
+        _ -> do
+            returnTy' <- emitTy toplevel returnTy
+            pure $ "!reussir.closure<(" <> concatArgs' <> ") -> " <> returnTy' <> ">"
 emitTy toplevel ty@(TypeExpr expr) = do
     record <- getRecord expr
     case record of
         Just r -> emitRecord toplevel (Just $ TB.toLazyText $ mangleTypeWithPrefix ty) r
         Nothing -> error "Record not found for expression"
+-- TODO: backend does not support tensor emission yet
+emitTy _ (TypeTensor _tensor) = error "Emission for Tensor not yet implemented"
 
 instance Emission Type where
     emit = emitTy True
@@ -99,6 +131,7 @@ emitRecord
         translateCapability Unspecified = ""
         translateCapability Flex = "[flex]"
         translateCapability Rigid = "[rigid]"
+        translateCapability Field = "[field]"
 
         emitField :: RecordField -> Codegen TB.Builder
         emitField (field, capability) = do

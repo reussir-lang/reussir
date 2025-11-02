@@ -57,5 +57,5 @@ data Type
 data Atomicity = Atomic | NonAtomic
     deriving (Eq, Show, Hashable, Generic)
 
-data Capability = Unspecified | Shared | Value | Flex | Rigid
+data Capability = Unspecified | Shared | Value | Flex | Rigid | Field
     deriving (Eq, Show, Hashable, Generic)
