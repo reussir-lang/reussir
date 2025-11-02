@@ -52,6 +52,7 @@ data Type
     | TypeRc Rc
     | TypeRef Ref
     | TypeExpr Expr
+    | TypeNullable Type
     deriving (Eq, Show, Hashable, Generic)
 
 data Atomicity = Atomic | NonAtomic

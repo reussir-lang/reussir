@@ -80,6 +80,9 @@ emitTy toplevel ty@(TypeExpr expr) = do
     case record of
         Just r -> emitRecord toplevel (Just $ TB.toLazyText $ mangleTypeWithPrefix ty) r
         Nothing -> error "Record not found for expression"
+emitTy toplevel (TypeNullable ty) = do
+    ty' <- emitTy toplevel ty
+    pure $ "!reussir.nullable<" <> ty' <> ">"
 -- TODO: backend does not support tensor emission yet
 emitTy _ (TypeTensor _tensor) = error "Emission for Tensor not yet implemented"
 

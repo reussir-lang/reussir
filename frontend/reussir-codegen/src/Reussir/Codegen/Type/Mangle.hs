@@ -285,6 +285,23 @@ mangleExpr (Expr path args) =
     "N" <> manglePathSegments path <> (if null args then "" else "I" <> foldMap mangleType args <> "E") <> "E"
 
 -- ================================================================
+-- Nullable Type Mangling
+-- ================================================================
+--
+-- Format: "8Nullable" I <inner-type> E
+--   Where <inner-type> is the mangled type of the inner pointer
+--
+-- Examples:
+--   Nullable<i32> -> "8NullableI3i32E"
+--   Nullable<f64> -> "8NullableI3f64E"
+
+{- | Mangle nullable types.
+  Format: "8Nullable" I <inner-type> E
+-}
+mangleNullable :: Type -> TB.Builder
+mangleNullable ty = "8Nullable" <> "I" <> mangleType ty <> "E"
+
+-- ================================================================
 -- Type Mangling Dispatcher
 -- ================================================================
 
@@ -298,6 +315,7 @@ mangleType (TypeRc rc) = mangleRc rc
 mangleType (TypeRef ref) = mangleRef ref
 mangleType (TypeClosure c) = mangleClosure c
 mangleType (TypeExpr e) = mangleExpr e
+mangleType (TypeNullable ty) = mangleNullable ty
 
 -- ================================================================
 -- Prefix for External Linkage
