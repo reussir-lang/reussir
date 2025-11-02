@@ -29,6 +29,15 @@ runCodegenAsText codegen = do
 primitiveI32 :: TT.Type
 primitiveI32 = TT.TypePrim (TT.PrimInt TT.PrimInt32)
 
+primitiveI64 :: TT.Type
+primitiveI64 = TT.TypePrim (TT.PrimInt TT.PrimInt64)
+
+primitiveF32 :: TT.Type
+primitiveF32 = TT.TypePrim (TT.PrimFloat TT.PrimFloat32)
+
+primitiveUnit :: TT.Type
+primitiveUnit = TT.TypePrim TT.PrimUnit
+
 -- | Create a path from segments
 mkPath :: [String] -> Path
 mkPath segments = Path (map (intern . T.toStrict . T.pack) segments)
@@ -189,6 +198,65 @@ testVariantWithCapabilities = testCase "Variant type with different capabilities
     assertBool "Should contain [value] capability" $ "[value]" `isInfixOf` resultStr
     assertBool "Should contain variant record" $ "!reussir.record<variant" `isInfixOf` resultStr
 
+-- | Test: RC types with different capabilities and atomicity
+testRcTypes :: TestTree
+testRcTypes = testCase "RC types with capabilities" $ do
+    result <- runCodegenAsText $ do
+        C.emitBuilder "!i32_rc = "
+        C.emitBuilder =<< emitTy' (TT.TypeRc (TT.Rc primitiveI32 TT.NonAtomic TT.Shared))
+        C.emitBuilder "\n"
+        C.emitBuilder "!i64_rc_atomic = "
+        C.emitBuilder =<< emitTy' (TT.TypeRc (TT.Rc primitiveI64 TT.Atomic TT.Value))
+        C.emitBuilder "\n"
+
+    let resultStr = T.unpack result
+
+    assertBool "Should contain reussir.rc" $ "!reussir.rc<" `isInfixOf` resultStr
+    assertBool "Should contain shared capability" $ " shared" `isInfixOf` resultStr
+    assertBool "Should contain atomic" $ " atomic" `isInfixOf` resultStr
+
+-- | Test: Ref types with different capabilities
+testRefTypes :: TestTree
+testRefTypes = testCase "Ref types with capabilities" $ do
+    result <- runCodegenAsText $ do
+        C.emitBuilder "!i32_ref = "
+        C.emitBuilder =<< emitTy' (TT.TypeRef (TT.Ref primitiveI32 TT.NonAtomic TT.Flex))
+        C.emitBuilder "\n"
+        C.emitBuilder "!f32_ref_rigid = "
+        C.emitBuilder =<< emitTy' (TT.TypeRef (TT.Ref primitiveF32 TT.Atomic TT.Rigid))
+        C.emitBuilder "\n"
+
+    let resultStr = T.unpack result
+
+    assertBool "Should contain reussir.ref" $ "!reussir.ref<" `isInfixOf` resultStr
+    assertBool "Should contain flex capability" $ " flex" `isInfixOf` resultStr
+    assertBool "Should contain rigid capability" $ " rigid" `isInfixOf` resultStr
+
+-- | Test: Closure types
+testClosureTypes :: TestTree
+testClosureTypes = testCase "Closure types" $ do
+    result <- runCodegenAsText $ do
+        C.emitBuilder "!closure_no_args = "
+        C.emitBuilder =<< emitTy' (TT.TypeClosure (TT.Closure [] primitiveUnit))
+        C.emitBuilder "\n"
+        C.emitBuilder "!closure_i32_to_i64 = "
+        C.emitBuilder =<< emitTy' (TT.TypeClosure (TT.Closure [primitiveI32] primitiveI64))
+        C.emitBuilder "\n"
+        C.emitBuilder "!closure_multi_args = "
+        C.emitBuilder =<< emitTy' (TT.TypeClosure (TT.Closure [primitiveI32, primitiveF32] primitiveUnit))
+        C.emitBuilder "\n"
+
+    let resultStr = T.unpack result
+
+    assertBool "Should contain reussir.closure" $ "!reussir.closure<" `isInfixOf` resultStr
+    assertBool "Should contain () for unit return" $ ")>" `isInfixOf` resultStr
+    assertBool "Should contain -> for non-unit return" $ " -> " `isInfixOf` resultStr
+    assertBool "Should contain multiple arguments" $ "i32, f32" `isInfixOf` resultStr
+
+-- Helper to emit types
+emitTy' :: TT.Type -> C.Codegen TB.Builder
+emitTy' ty = C.emit ty
+
 isInfixOf :: String -> String -> Bool
 isInfixOf needle haystack = T.pack needle `T.isInfixOf` T.pack haystack
 
@@ -199,4 +267,7 @@ moduleTests =
         [ testRecursiveListType
         , testSimpleCompoundType
         , testVariantWithCapabilities
+        , testRcTypes
+        , testRefTypes
+        , testClosureTypes
         ]
