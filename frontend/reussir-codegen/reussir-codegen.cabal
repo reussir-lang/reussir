@@ -61,18 +61,22 @@ library
     -- Modules exported by the library.
     exposed-modules:  
         Reussir.Codegen.Context
+        Reussir.Codegen.Context.Path
         Reussir.Codegen.IR
         Reussir.Codegen.Intrinsics
         Reussir.Codegen.Value
         Reussir.Codegen.Type
+        Reussir.Codegen.Type.Record
 
     -- Modules included in this library but not exported.
     other-modules:
+        Reussir.Codegen.Context.Codegen
+        Reussir.Codegen.Context.Emission
+        Reussir.Codegen.Context.Module
         Reussir.Codegen.Intrinsics.Arith
         Reussir.Codegen.Intrinsics.Math
         Reussir.Codegen.Type.Data
         Reussir.Codegen.Type.Emission
-        Reussir.Codegen.Type.Record
         Reussir.Codegen.Type.Mangle
 
     -- LANGUAGE extensions used by modules in this package.
@@ -86,6 +90,7 @@ library
         intern ^>=0.9.6,
         hslogger ^>=1.3.2,
         hashtables ^>=1.4.2,
+        hashable ^>=1.5.0,
         reussir-bridge
 
     -- Directories containing source files.
@@ -106,6 +111,7 @@ test-suite reussir-codegen-test
         Test.Codegen.Intrinsics.Arith
         Test.Codegen.Intrinsics.Math
         Test.Codegen.Type.Mangle
+        Test.Codegen.Context.Module
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:

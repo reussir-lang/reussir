@@ -1,9 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Reussir.Codegen.Intrinsics.Math
-  ( Math (..),
+module Reussir.Codegen.Intrinsics.Math (
+    Math (..),
     mathCodegen,
-  )
+)
 where
 
 import Control.Monad (unless)
@@ -13,124 +13,125 @@ import Reussir.Codegen.Intrinsics.Arith (FastMathFlag (..), fmfIsNone)
 import Reussir.Codegen.Value (TypedValue)
 
 data Math
-  = Absf FastMathFlag
-  | Absi
-  | Acos FastMathFlag
-  | Acosh FastMathFlag
-  | Asin FastMathFlag
-  | Asinh FastMathFlag
-  | Atan FastMathFlag
-  | Atan2 FastMathFlag
-  | Atanh FastMathFlag
-  | Cbrt FastMathFlag
-  | Ceil FastMathFlag
-  | Copysign FastMathFlag
-  | Cos FastMathFlag
-  | Cosh FastMathFlag
-  | Ctlz
-  | Ctpop
-  | Cttz
-  | Erf FastMathFlag
-  | Erfc FastMathFlag
-  | Exp FastMathFlag
-  | Exp2 FastMathFlag
-  | Expm1 FastMathFlag
-  | Floor FastMathFlag
-  | Fma FastMathFlag
-  | Fpowi FastMathFlag
-  | Ipowi
-  | Isfinite FastMathFlag
-  | Isinf FastMathFlag
-  | Isnan FastMathFlag
-  | Isnormal FastMathFlag
-  | Log10 FastMathFlag
-  | Log1p FastMathFlag
-  | Log2 FastMathFlag
-  | Powf FastMathFlag
-  | Round FastMathFlag
-  | Roundeven FastMathFlag
-  | Rsqrt FastMathFlag
-  | Sin FastMathFlag
-  | Sincos FastMathFlag
-  | Sinh FastMathFlag
-  | Sqrt FastMathFlag
-  | Tan FastMathFlag
-  | Tanh FastMathFlag
-  | Trunc FastMathFlag
-  deriving (Eq, Show)
+    = Absf FastMathFlag
+    | Absi
+    | Acos FastMathFlag
+    | Acosh FastMathFlag
+    | Asin FastMathFlag
+    | Asinh FastMathFlag
+    | Atan FastMathFlag
+    | Atan2 FastMathFlag
+    | Atanh FastMathFlag
+    | Cbrt FastMathFlag
+    | Ceil FastMathFlag
+    | Copysign FastMathFlag
+    | Cos FastMathFlag
+    | Cosh FastMathFlag
+    | Ctlz
+    | Ctpop
+    | Cttz
+    | Erf FastMathFlag
+    | Erfc FastMathFlag
+    | Exp FastMathFlag
+    | Exp2 FastMathFlag
+    | Expm1 FastMathFlag
+    | Floor FastMathFlag
+    | Fma FastMathFlag
+    | Fpowi FastMathFlag
+    | Ipowi
+    | Isfinite FastMathFlag
+    | Isinf FastMathFlag
+    | Isnan FastMathFlag
+    | Isnormal FastMathFlag
+    | Log10 FastMathFlag
+    | Log1p FastMathFlag
+    | Log2 FastMathFlag
+    | Powf FastMathFlag
+    | Round FastMathFlag
+    | Roundeven FastMathFlag
+    | Rsqrt FastMathFlag
+    | Sin FastMathFlag
+    | Sincos FastMathFlag
+    | Sinh FastMathFlag
+    | Sqrt FastMathFlag
+    | Tan FastMathFlag
+    | Tanh FastMathFlag
+    | Trunc FastMathFlag
+    deriving (Eq, Show)
 
 fmfCodegen :: FastMathFlag -> C.Codegen ()
 fmfCodegen fmf = unless (fmfIsNone fmf) $ do
-  fmf' <- C.emit fmf
-  C.emitBuilder $ " fastmath<" <> fmf' <> ">"
+    fmf' <- C.emit fmf
+    C.emitBuilder $ " fastmath<" <> fmf' <> ">"
 
 unaryFloatMathCodegen :: TB.Builder -> FastMathFlag -> TypedValue -> TypedValue -> C.Codegen ()
 unaryFloatMathCodegen mnemonic fmf (inVal, _inTy) (resVal, resTy) = C.emitLine $ do
-  resVal' <- C.emit resVal
-  C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
-  inVal' <- C.emit inVal
-  C.emitBuilder $ inVal'
-  fmfCodegen fmf
-  resTy' <- C.emit resTy
-  C.emitBuilder $ " : " <> resTy'
+    resVal' <- C.emit resVal
+    C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
+    inVal' <- C.emit inVal
+    C.emitBuilder $ inVal'
+    fmfCodegen fmf
+    resTy' <- C.emit resTy
+    C.emitBuilder $ " : " <> resTy'
 
 unaryIntMathCodegen :: TB.Builder -> TypedValue -> TypedValue -> C.Codegen ()
 unaryIntMathCodegen mnemonic (inVal, _inTy) (resVal, resTy) = C.emitLine $ do
-  resVal' <- C.emit resVal
-  C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
-  inVal' <- C.emit inVal
-  C.emitBuilder $ inVal'
-  resTy' <- C.emit resTy
-  C.emitBuilder $ " : " <> resTy'
+    resVal' <- C.emit resVal
+    C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
+    inVal' <- C.emit inVal
+    C.emitBuilder $ inVal'
+    resTy' <- C.emit resTy
+    C.emitBuilder $ " : " <> resTy'
 
 binaryFloatMathCodegen :: TB.Builder -> FastMathFlag -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
 binaryFloatMathCodegen mnemonic fmf (vA, _) (vB, _) (resVal, resTy) = C.emitLine $ do
-  resVal' <- C.emit resVal
-  C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
-  vA' <- C.emit vA
-  vB' <- C.emit vB
-  C.emitBuilder $ vA' <> ", " <> vB'
-  fmfCodegen fmf
-  resTy' <- C.emit resTy
-  C.emitBuilder $ " : " <> resTy'
+    resVal' <- C.emit resVal
+    C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
+    vA' <- C.emit vA
+    vB' <- C.emit vB
+    C.emitBuilder $ vA' <> ", " <> vB'
+    fmfCodegen fmf
+    resTy' <- C.emit resTy
+    C.emitBuilder $ " : " <> resTy'
 
 ternaryFloatMathCodegen :: TB.Builder -> FastMathFlag -> TypedValue -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
 ternaryFloatMathCodegen mnemonic fmf (vA, _) (vB, _) (vC, _) (resVal, resTy) = C.emitLine $ do
-  resVal' <- C.emit resVal
-  C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
-  vA' <- C.emit vA
-  vB' <- C.emit vB
-  vC' <- C.emit vC
-  C.emitBuilder $ vA' <> ", " <> vB' <> ", " <> vC'
-  fmfCodegen fmf
-  resTy' <- C.emit resTy
-  C.emitBuilder $ " : " <> resTy'
+    resVal' <- C.emit resVal
+    C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
+    vA' <- C.emit vA
+    vB' <- C.emit vB
+    vC' <- C.emit vC
+    C.emitBuilder $ vA' <> ", " <> vB' <> ", " <> vC'
+    fmfCodegen fmf
+    resTy' <- C.emit resTy
+    C.emitBuilder $ " : " <> resTy'
 
 binaryIntMathCodegen :: TB.Builder -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
 binaryIntMathCodegen mnemonic (vA, _) (vB, _) (resVal, resTy) = C.emitLine $ do
-  resVal' <- C.emit resVal
-  C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
-  vA' <- C.emit vA
-  vB' <- C.emit vB
-  C.emitBuilder $ vA' <> ", " <> vB'
-  resTy' <- C.emit resTy
-  C.emitBuilder $ " : " <> resTy'
+    resVal' <- C.emit resVal
+    C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
+    vA' <- C.emit vA
+    vB' <- C.emit vB
+    C.emitBuilder $ vA' <> ", " <> vB'
+    resTy' <- C.emit resTy
+    C.emitBuilder $ " : " <> resTy'
 
 -- Special codegen for fpowi which has type signature: : type($lhs), type($rhs)
 fpowiMathCodegen :: FastMathFlag -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
 fpowiMathCodegen fmf (vA, tyA) (vB, tyB) (resVal, _) = C.emitLine $ do
-  resVal' <- C.emit resVal
-  C.emitBuilder $ resVal' <> " = " <> "math.fpowi "
-  vA' <- C.emit vA
-  vB' <- C.emit vB
-  C.emitBuilder $ vA' <> ", " <> vB'
-  fmfCodegen fmf
-  tyA' <- C.emit tyA
-  tyB' <- C.emit tyB
-  C.emitBuilder $ " : " <> tyA' <> ", " <> tyB'
+    resVal' <- C.emit resVal
+    C.emitBuilder $ resVal' <> " = " <> "math.fpowi "
+    vA' <- C.emit vA
+    vB' <- C.emit vB
+    C.emitBuilder $ vA' <> ", " <> vB'
+    fmfCodegen fmf
+    tyA' <- C.emit tyA
+    tyB' <- C.emit tyB
+    C.emitBuilder $ " : " <> tyA' <> ", " <> tyB'
 
--- | Generate MLIR assembly for math operations.
--- This function dispatches to the appropriate code generator based on the operation type.
+{- | Generate MLIR assembly for math operations.
+This function dispatches to the appropriate code generator based on the operation type.
+-}
 mathCodegen :: Math -> [TypedValue] -> [TypedValue] -> C.Codegen ()
 -- ============================================================================
 -- Unary Floating-Point Operations (with FastMathFlag)
@@ -200,14 +201,14 @@ mathCodegen (Fma fmf) [a, b, c] [res] = ternaryFloatMathCodegen "fma" fmf a b c 
 -- ============================================================================
 
 mathCodegen (Sincos fmf) [(inVal, inTy)] [(sinRes, _sinTy), (cosRes, _cosTy)] = C.emitLine $ do
-  sinRes' <- C.emit sinRes
-  cosRes' <- C.emit cosRes
-  C.emitBuilder $ sinRes' <> ", " <> cosRes' <> " = " <> "math.sincos "
-  inVal' <- C.emit inVal
-  C.emitBuilder $ inVal'
-  fmfCodegen fmf
-  inTy' <- C.emit inTy
-  C.emitBuilder $ " : " <> inTy'
+    sinRes' <- C.emit sinRes
+    cosRes' <- C.emit cosRes
+    C.emitBuilder $ sinRes' <> ", " <> cosRes' <> " = " <> "math.sincos "
+    inVal' <- C.emit inVal
+    C.emitBuilder $ inVal'
+    fmfCodegen fmf
+    inTy' <- C.emit inTy
+    C.emitBuilder $ " : " <> inTy'
 
 -- ============================================================================
 -- Fallback

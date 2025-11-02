@@ -8,9 +8,9 @@ import Reussir.Codegen.Context (Emission (emit))
 import Reussir.Codegen.Type (Type)
 
 newtype Value = Value Int64
-  deriving (Eq, Show)
+    deriving (Eq, Show)
 
 type TypedValue = (Value, Type)
 
 instance Emission Value where
-  emit (Value v) = pure $ "%" <> TB.fromString (show v)
+    emit (Value v) = pure $ "%" <> TB.fromString (show v)

@@ -1,5 +1,5 @@
-module Reussir.Codegen.Type
-  ( PrimitiveFloat (..),
+module Reussir.Codegen.Type (
+    PrimitiveFloat (..),
     PrimitiveInt (..),
     Primitive (..),
     Atomicity (..),
@@ -13,12 +13,12 @@ module Reussir.Codegen.Type
     Tensor (..),
     Expr (..),
     mangleType,
-    mangleTypeWithPrefix
-  )
+    mangleTypeWithPrefix,
+)
 where
 
-import Reussir.Codegen.Type.Data
-  ( Atomicity (..),
+import Reussir.Codegen.Type.Data (
+    Atomicity (..),
     Capability (..),
     Closure (..),
     Expr (..),
@@ -29,7 +29,7 @@ import Reussir.Codegen.Type.Data
     Ref (..),
     Tensor (..),
     Type (..),
-  )
+ )
+import Reussir.Codegen.Type.Emission ()
 import Reussir.Codegen.Type.Mangle (mangleType, mangleTypeWithPrefix)
 import Reussir.Codegen.Type.Record
-import Reussir.Codegen.Type.Emission ()
