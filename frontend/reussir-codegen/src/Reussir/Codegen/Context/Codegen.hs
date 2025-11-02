@@ -16,6 +16,7 @@ module Reussir.Codegen.Context.Codegen (
     setRecordEmissionState,
     getRecordEmissionState,
     getRecord,
+    withLocation,
 )
 where
 
@@ -25,6 +26,7 @@ import Data.Int (Int64)
 import Data.Text.Lazy qualified as T
 import Data.Text.Lazy.Builder qualified as TB
 import Reussir.Bridge qualified as B
+import Reussir.Codegen.Location (Location)
 import Reussir.Codegen.Type.Data qualified as TT
 import Reussir.Codegen.Type.Record (Record)
 
@@ -43,6 +45,9 @@ data Context = MkCtx
     , builder :: TB.Builder
     , typeInstances :: TypeInstances
     , recordEmissions :: RecordEmissions
+    , locForLine :: Maybe Int64
+    , outlineLocs :: OutlineLocs
+    , allocatedLocs :: Int64
     }
 
 newtype CodegenT m a = Codegen {genStateT :: S.StateT Context m a}
@@ -56,6 +61,8 @@ data RecordEmissionState
     | RecordEmissionIncomplete -- Emission in progress
     | RecordEmissionPending -- Emission not started yet
     deriving (Eq, Show)
+
+type OutlineLocs = H.CuckooHashTable Int64 Location
 type RecordEmissions = H.CuckooHashTable T.Text RecordEmissionState
 
 genState :: Codegen a -> S.StateT Context IO a
@@ -65,6 +72,7 @@ emptyContext :: TargetSpec -> IO Context
 emptyContext spec = do
     table <- H.new
     recordEmissions <- H.new
+    outlineLocs <- H.new
     return
         MkCtx
             { targetSpec = spec
@@ -72,6 +80,9 @@ emptyContext spec = do
             , builder = mempty
             , typeInstances = table
             , recordEmissions = recordEmissions
+            , locForLine = Nothing
+            , outlineLocs = outlineLocs
+            , allocatedLocs = 0
             }
 
 -- | Increment indentation level for a block of code.
@@ -110,3 +121,20 @@ getRecord expr = do
         H.lookup (typeInstances ctx) expr >>= \case
             Just record -> pure $ Just record
             Nothing -> pure Nothing
+
+allocLocation :: Location -> Codegen Int64
+allocLocation loc = do
+    allocatedLocs <- S.gets allocatedLocs
+    S.modify' $ \ctx -> ctx{allocatedLocs = allocatedLocs + 1}
+    locs <- S.gets outlineLocs
+    S.liftIO $ H.insert locs allocatedLocs loc
+    pure allocatedLocs
+
+withLocation :: Location -> Codegen () -> Codegen ()
+withLocation loc codegen = do
+    l <- allocLocation loc
+    backup <- S.gets locForLine
+    S.modify' $ \ctx -> ctx{locForLine = Just l}
+    codegen
+    S.modify' $ \ctx -> ctx{locForLine = backup}
+    pure ()

@@ -4,6 +4,7 @@ import System.Log.Logger (Priority (WARNING), getLogger, saveGlobalLogger, setLe
 import Test.Codegen.Context.Module qualified as Module
 import Test.Codegen.Intrinsics.Arith qualified as Arith
 import Test.Codegen.Intrinsics.Math qualified as Math
+import Test.Codegen.Location qualified as Location
 import Test.Codegen.Type.Mangle qualified as Mangle
 import Test.Tasty
 
@@ -23,5 +24,6 @@ tests =
         [ Arith.arithTests
         , Math.mathTests
         , Mangle.mangleTests
+        , Location.locationTests
         , Module.moduleTests
         ]
