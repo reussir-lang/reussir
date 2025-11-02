@@ -12,11 +12,13 @@ module Reussir.Codegen.Context.Emission (
 where
 
 import Control.Monad.State.Strict qualified as S
+import Data.Foldable (for_)
 import Data.Interned (Uninternable (unintern))
 import Data.Text.Lazy qualified as T
 import Data.Text.Lazy.Builder qualified as TB
 import Reussir.Codegen.Context.Codegen (Codegen, Context (..))
 import Reussir.Codegen.Context.Path (Path (..))
+import Reussir.Codegen.Location (Location (..))
 
 {- | The Emission class provides a way to convert values to Text.Builder
   within the Codegen monad. This is used for emitting MLIR text.
@@ -55,6 +57,9 @@ emitLine :: Codegen a -> Codegen a
 emitLine codegen = do
     emitIndentation
     a <- codegen
+    loc <- S.gets locForLine
+    for_ loc $ \l -> do
+        emitBuilder $ " loc(" <> "#loc" <> TB.fromString (show l) <> ")"
     emitBuilder "\n"
     pure a
 
@@ -66,3 +71,43 @@ instance Emission Path where
         pure $
             TB.fromLazyText $
                 T.intercalate "::" (map (T.fromStrict . unintern) segments)
+
+-- callsite-location ::= `callsite` `(` location `at` location `)`
+-- filelinecol-location ::= string-literal `:` integer-literal `:`
+--                         integer-literal
+--                         (`to` (integer-literal ?) `:` integer-literal ?)
+--    A single file line location: file:line;
+--    A single file line col location: file:line:column;
+--    A single line range: file:line:column to :column;
+--    A single file range: file:line:column to line:column;
+-- fusion-metadata ::= `<` attribute-value `>`
+-- fused-location ::= `fused` fusion-metadata? `[` (location (`,` location)* )? `]`
+-- name-location ::= string-literal (`(` location `)`)?
+-- unknown-location ::= `?`
+instance Emission Location where
+    emit loc = wrapLoc <$> emitInner loc
+      where
+        wrapLoc inner = "loc(" <> inner <> ")"
+        emitInner (CallSiteLoc callee' caller') = do
+            calleeInner <- emitInner callee'
+            callerInner <- emitInner caller'
+            pure $ "callsite(" <> calleeInner <> " at " <> callerInner <> ")"
+        emitInner (FileLineColRange fname startL startC endL endC) = do
+            let filePart = TB.fromString (show fname) <> ":" <> TB.fromString (show startL) <> ":" <> TB.fromString (show startC)
+            if startL == endL && startC == endC
+                then pure filePart
+                else pure $ filePart <> " to " <> TB.fromString (show endL) <> ":" <> TB.fromString (show endC)
+        emitInner (FusedLoc metadata' locations') = do
+            locationsInner <- mapM emitInner locations'
+            let locsPart = TB.fromLazyText $ T.intercalate ", " (map TB.toLazyText locationsInner)
+            case metadata' of
+                Just meta -> pure $ "fused<" <> TB.fromString (show meta) <> ">[" <> locsPart <> "]"
+                Nothing -> pure $ "fused[" <> locsPart <> "]"
+        emitInner UnknownLoc = pure "?"
+        emitInner (NameLoc locName' childLoc') = do
+            let namePart = TB.fromString (show locName')
+            case childLoc' of
+                Just child -> do
+                    childInner <- emitInner child
+                    pure $ namePart <> "(" <> childInner <> ")"
+                Nothing -> pure namePart

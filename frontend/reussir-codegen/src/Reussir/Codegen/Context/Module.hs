@@ -24,6 +24,7 @@ import Reussir.Codegen.Context.Codegen (
     setRecordEmissionState,
  )
 import Reussir.Codegen.Context.Emission (
+    Emission (emit),
     emitBuilder,
  )
 import Reussir.Codegen.Type.Data (Type (TypeExpr))
@@ -68,6 +69,14 @@ emitTypeAlias = do
                 emitBuilder $ "!" <> mangled <> " = " <> record' <> "\n"
                 setRecordEmissionState mangled' RecordEmissionComplete
 
+emitOutlineLocs :: Codegen ()
+emitOutlineLocs = do
+    ctx <- S.get
+    locs <- S.liftIO $ H.toList (outlineLocs ctx)
+    forM_ locs $ \(l, loc) -> do
+        loc' <- emit loc
+        emitBuilder $ "#loc" <> TB.fromString (show l) <> " = " <> loc' <> "\n"
+
 -- | Emit a complete MLIR module with the given body.
 emitModule :: Codegen () -> Codegen ()
 emitModule body = do
@@ -77,3 +86,4 @@ emitModule body = do
     emitBuilder $ "module @" <> TB.fromString name <> " {\n"
     incIndentation body
     emitBuilder "}\n"
+    emitOutlineLocs

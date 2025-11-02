@@ -67,6 +67,7 @@ library
         Reussir.Codegen.Value
         Reussir.Codegen.Type
         Reussir.Codegen.Type.Record
+        Reussir.Codegen.Location
 
     -- Modules included in this library but not exported.
     other-modules:
@@ -112,6 +113,7 @@ test-suite reussir-codegen-test
         Test.Codegen.Intrinsics.Math
         Test.Codegen.Type.Mangle
         Test.Codegen.Context.Module
+        Test.Codegen.Location
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
