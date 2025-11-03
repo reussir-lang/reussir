@@ -11,11 +11,11 @@ module Reussir.Codegen.Context.Emission (
 )
 where
 
-import Control.Monad.State.Strict qualified as S
 import Data.Foldable (for_)
 import Data.Interned (Uninternable (unintern))
 import Data.Text.Lazy qualified as T
 import Data.Text.Lazy.Builder qualified as TB
+import Effectful.State.Static.Local qualified as E
 import Reussir.Codegen.Context.Codegen (Codegen, Context (..))
 import Reussir.Codegen.Context.Path (Path (..))
 import Reussir.Codegen.Location (Location (..))
@@ -33,7 +33,7 @@ instance Emission TB.Builder where
 emitCG :: (Emission a) => a -> Codegen ()
 emitCG item = do
     change <- emit item
-    S.modify' $ \ctx ->
+    E.modify $ \ctx ->
         ctx{builder = builder ctx <> change}
 
 -- | Emit a Text.Builder directly.
@@ -47,7 +47,7 @@ emitSpace = emitBuilder " "
 -- | Emit indentation based on the current indentation level.
 emitIndentation :: Codegen ()
 emitIndentation = do
-    indentLevel <- S.gets indentation
+    indentLevel <- E.gets indentation
     emitBuilder $ TB.fromLazyText $ T.replicate indentLevel "\t"
 
 {- | Emit code with indentation and a newline.
@@ -57,7 +57,7 @@ emitLine :: Codegen a -> Codegen a
 emitLine codegen = do
     emitIndentation
     a <- codegen
-    loc <- S.gets locForLine
+    loc <- E.gets locForLine
     for_ loc $ \l -> do
         emitBuilder $ " loc(" <> "#loc" <> TB.fromString (show l) <> ")"
     emitBuilder "\n"

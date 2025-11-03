@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Reussir.Codegen.Intrinsics (
     IntOFFlag (..),
     FastMathFlag (..),
@@ -14,7 +16,7 @@ module Reussir.Codegen.Intrinsics (
 )
 where
 
-import Reussir.Codegen.Context (logDebug)
+import Log qualified as L
 import Reussir.Codegen.Context qualified as C
 import Reussir.Codegen.Intrinsics.Arith (
     Arith (..),
@@ -43,8 +45,8 @@ data IntrinsicCall
 
 intrinsicCallCodegen :: IntrinsicCall -> C.Codegen ()
 intrinsicCallCodegen (IntrinsicCall (Arith arith) args rets) = do
-    logDebug $ "Generating code for arithmetic intrinsic"
+    L.logTrace_ "Generating code for arithmetic intrinsic"
     arithCodegen arith args rets
 intrinsicCallCodegen (IntrinsicCall (Math math) args rets) = do
-    logDebug $ "Generating code for math intrinsic"
+    L.logTrace_ "Generating code for math intrinsic"
     mathCodegen math args rets

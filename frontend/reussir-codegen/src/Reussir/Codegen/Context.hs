@@ -3,9 +3,7 @@
 module Reussir.Codegen.Context (
     TargetSpec (..),
     Context (..),
-    CodegenT (..),
     Codegen,
-    genState,
     emptyContext,
     runCodegen,
     emitModule,
@@ -19,23 +17,22 @@ module Reussir.Codegen.Context (
     Path (..),
     pathSingleton,
     pathList,
-    logDebug,
-    logInfo,
-    logWarning,
-    logError,
     addTypeInstance,
+    runCodegenToBackend,
 )
 where
 
-import Control.Monad.State.Strict qualified as S
+import Effectful ((:>))
+import Effectful qualified as E
+import Effectful.Log qualified as L
+import Effectful.Reader.Static qualified as E
+import Effectful.State.Static.Local qualified as E
 import Reussir.Codegen.Context.Codegen (
     Codegen,
-    CodegenT (..),
     Context (..),
     TargetSpec (..),
     addTypeInstance,
     emptyContext,
-    genState,
     incIndentation,
  )
 import Reussir.Codegen.Context.Emission (
@@ -48,25 +45,11 @@ import Reussir.Codegen.Context.Emission (
  )
 import Reussir.Codegen.Context.Module (
     emitModule,
-    runCodegen,
+    runCodegenToBackend,
  )
 import Reussir.Codegen.Context.Path (Path (..), pathList, pathSingleton)
-import System.Log (Priority (..))
-import System.Log.Logger (getLogger, logL)
 
-logWithPriority :: Priority -> String -> Codegen ()
-logWithPriority priority msg = do
-    logger <- S.liftIO $ getLogger "Reussir.Codegen"
-    S.liftIO $ logL logger priority msg
-
-logDebug :: String -> Codegen ()
-logDebug msg = logWithPriority DEBUG msg
-
-logInfo :: String -> Codegen ()
-logInfo msg = logWithPriority INFO msg
-
-logWarning :: String -> Codegen ()
-logWarning msg = logWithPriority WARNING msg
-
-logError :: String -> Codegen ()
-logError msg = logWithPriority ERROR msg
+runCodegen :: (E.IOE :> es, L.Log :> es) => TargetSpec -> Codegen a -> E.Eff es a
+runCodegen spec codegen = do
+    initCtx <- emptyContext
+    E.inject $ E.runReader spec $ E.evalState initCtx $ codegen

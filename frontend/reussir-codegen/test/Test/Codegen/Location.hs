@@ -5,22 +5,26 @@ module Test.Codegen.Location (
 )
 where
 
-import Control.Monad.State.Strict qualified as S
+import Data.Text.Internal.Builder qualified as T
 import Data.Text.Lazy qualified as T
 import Data.Text.Lazy.Builder qualified as TB
+import Effectful qualified as E
+import Effectful.Log qualified as L
+import Log (defaultLogLevel)
+import Log.Backend.StandardOutput qualified as L
 import Reussir.Bridge qualified as B
+import Reussir.Codegen.Context (runCodegen)
 import Reussir.Codegen.Context qualified as C
 import Reussir.Codegen.Location
 import Test.Tasty
 import Test.Tasty.HUnit
 
 -- Helper to run codegen and extract the builder as text
-runCodegenAsText :: C.Codegen TB.Builder -> IO T.Text
+runCodegenAsText :: C.Codegen T.Builder -> IO T.Text
 runCodegenAsText codegen = do
     let spec = C.TargetSpec "test_module" "output.mlir" B.OptDefault B.OutputObject B.LogInfo
-    ctx <- C.emptyContext spec
-    (result, _) <- S.runStateT (C.genState codegen) ctx
-    return $ TB.toLazyText result
+    fmap TB.toLazyText $ L.withStdOutLogger $ \logger -> do
+        E.runEff $ L.runLog "Test.Codegen.Location" logger defaultLogLevel $ runCodegen spec codegen
 
 -- Test: UnknownLoc
 testUnknownLoc :: TestTree

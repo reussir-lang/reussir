@@ -5,11 +5,16 @@ module Test.Codegen.Intrinsics.Math (
 )
 where
 
-import Control.Monad.State.Strict qualified as S
 import Data.Int (Int64)
 import Data.Text.Lazy qualified as T
 import Data.Text.Lazy.Builder qualified as TB
+import Effectful qualified as E
+import Effectful.Log qualified as L
+import Effectful.State.Static.Local qualified as E
+import Log (defaultLogLevel)
+import Log.Backend.StandardOutput qualified as L
 import Reussir.Bridge qualified as B
+import Reussir.Codegen.Context (runCodegen)
 import Reussir.Codegen.Context qualified as C
 import Reussir.Codegen.Intrinsics qualified as I
 import Reussir.Codegen.Type qualified as TT
@@ -17,16 +22,17 @@ import Reussir.Codegen.Value qualified as V
 import Test.Tasty
 import Test.Tasty.HUnit
 
-runEmptyCodegenAsText :: C.Codegen () -> IO T.Text
-runEmptyCodegenAsText codegen = do
-    let spec = C.TargetSpec "module" "output.mlir" B.OptDefault B.OutputObject B.LogInfo
-    ctx <- C.emptyContext spec
-    (_, finalCtx) <- S.runStateT (C.genState codegen) ctx
-    return $ TB.toLazyText (C.builder finalCtx)
+runCodegenAsText :: C.Codegen () -> IO T.Text
+runCodegenAsText codegen = do
+    let spec = C.TargetSpec "test_module" "output.mlir" B.OptDefault B.OutputObject B.LogInfo
+    L.withStdOutLogger $ \logger -> do
+        E.runEff $ L.runLog "Test.Codegen.Intrinsics.Math" logger defaultLogLevel $ runCodegen spec $ do
+            codegen
+            E.gets (TB.toLazyText . C.builder)
 
 runCodegenForICall :: I.IntrinsicCall -> IO T.Text
 runCodegenForICall icall =
-    runEmptyCodegenAsText (I.intrinsicCallCodegen icall)
+    runCodegenAsText (I.intrinsicCallCodegen icall)
 
 primitiveI32 :: TT.Type
 primitiveI32 = TT.TypePrim (TT.PrimInt TT.PrimInt32)
