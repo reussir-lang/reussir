@@ -16,7 +16,9 @@ import Control.Monad (unless)
 import Data.Bits ((.&.))
 import Data.Int (Int8)
 import Data.Scientific (Scientific)
-import Data.Text.Lazy.Builder qualified as TB
+import Data.Text.Builder.Linear qualified as TB
+import Data.Text.Lazy qualified as TT
+import Data.Text.Lazy.Builder qualified as TTB
 import Data.Text.Lazy.Builder.Scientific (scientificBuilder)
 import Reussir.Codegen.Context qualified as C
 import Reussir.Codegen.Value (TypedValue)
@@ -454,7 +456,8 @@ arithCodegen (ScalingTruncf rm fmf) [(inVal, inTy), (sVal, sTy)] [(resVal, resTy
 -- Constant value
 arithCodegen (Constant value) [] [(res, ty)] = C.emitLine $ do
     resVal' <- C.emit res
-    C.emitBuilder $ resVal' <> " = arith.constant " <> scientificBuilder value
+    let !value' = TB.fromText $ TT.toStrict $ TTB.toLazyText $ scientificBuilder value
+    C.emitBuilder $ resVal' <> " = arith.constant " <> value'
     ty' <- C.emit ty
     C.emitBuilder $ " : " <> ty'
 

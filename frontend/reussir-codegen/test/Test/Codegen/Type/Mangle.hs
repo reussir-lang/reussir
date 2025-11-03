@@ -6,8 +6,7 @@ module Test.Codegen.Type.Mangle (
 where
 
 import Data.Interned (intern)
-import Data.Text.Lazy qualified as T
-import Data.Text.Lazy.Builder qualified as TB
+import Data.Text.Builder.Linear qualified as TB
 import Reussir.Codegen.Context (Path (..))
 import Reussir.Codegen.Type (
     Atomicity (..),
@@ -27,43 +26,39 @@ import Reussir.Codegen.Type (
 import Test.Tasty
 import Test.Tasty.HUnit
 
--- Helper to convert Builder to String for comparison
-builderToString :: TB.Builder -> String
-builderToString = T.unpack . TB.toLazyText
-
 -- Test primitive types
 primitiveTests :: TestTree
 primitiveTests =
     testGroup
         "Primitive Types"
         [ testCase "i8" $
-            builderToString (mangleType (TypePrim (PrimInt PrimInt8))) @?= "2i8"
+            TB.runBuilder (mangleType (TypePrim (PrimInt PrimInt8))) @?= "2i8"
         , testCase "i16" $
-            builderToString (mangleType (TypePrim (PrimInt PrimInt16))) @?= "3i16"
+            TB.runBuilder (mangleType (TypePrim (PrimInt PrimInt16))) @?= "3i16"
         , testCase "i32" $
-            builderToString (mangleType (TypePrim (PrimInt PrimInt32))) @?= "3i32"
+            TB.runBuilder (mangleType (TypePrim (PrimInt PrimInt32))) @?= "3i32"
         , testCase "i64" $
-            builderToString (mangleType (TypePrim (PrimInt PrimInt64))) @?= "3i64"
+            TB.runBuilder (mangleType (TypePrim (PrimInt PrimInt64))) @?= "3i64"
         , testCase "i128" $
-            builderToString (mangleType (TypePrim (PrimInt PrimInt128))) @?= "4i128"
+            TB.runBuilder (mangleType (TypePrim (PrimInt PrimInt128))) @?= "4i128"
         , testCase "index" $
-            builderToString (mangleType (TypePrim (PrimInt PrimIndex))) @?= "5index"
+            TB.runBuilder (mangleType (TypePrim (PrimInt PrimIndex))) @?= "5index"
         , testCase "f8" $
-            builderToString (mangleType (TypePrim (PrimFloat PrimFloat8))) @?= "2f8"
+            TB.runBuilder (mangleType (TypePrim (PrimFloat PrimFloat8))) @?= "2f8"
         , testCase "f16" $
-            builderToString (mangleType (TypePrim (PrimFloat PrimFloat16))) @?= "3f16"
+            TB.runBuilder (mangleType (TypePrim (PrimFloat PrimFloat16))) @?= "3f16"
         , testCase "bf16" $
-            builderToString (mangleType (TypePrim (PrimFloat PrimBFloat16))) @?= "4bf16"
+            TB.runBuilder (mangleType (TypePrim (PrimFloat PrimBFloat16))) @?= "4bf16"
         , testCase "f32" $
-            builderToString (mangleType (TypePrim (PrimFloat PrimFloat32))) @?= "3f32"
+            TB.runBuilder (mangleType (TypePrim (PrimFloat PrimFloat32))) @?= "3f32"
         , testCase "f64" $
-            builderToString (mangleType (TypePrim (PrimFloat PrimFloat64))) @?= "3f64"
+            TB.runBuilder (mangleType (TypePrim (PrimFloat PrimFloat64))) @?= "3f64"
         , testCase "f128" $
-            builderToString (mangleType (TypePrim (PrimFloat PrimFloat128))) @?= "4f128"
+            TB.runBuilder (mangleType (TypePrim (PrimFloat PrimFloat128))) @?= "4f128"
         , testCase "bool" $
-            builderToString (mangleType (TypePrim PrimBool)) @?= "b"
+            TB.runBuilder (mangleType (TypePrim PrimBool)) @?= "b"
         , testCase "unit" $
-            builderToString (mangleType (TypePrim PrimUnit)) @?= "v"
+            TB.runBuilder (mangleType (TypePrim PrimUnit)) @?= "v"
         ]
 
 -- Test tensor types
@@ -72,11 +67,11 @@ tensorTests =
     testGroup
         "Tensor Types"
         [ testCase "int[3]" $
-            builderToString
+            TB.runBuilder
                 (mangleType (TypeTensor (Tensor (TypePrim (PrimInt PrimInt32)) [3])))
                 @?= "6TensorIA3_3i32E"
         , testCase "float[10][20]" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeTensor
                         (Tensor (TypePrim (PrimFloat PrimFloat64)) [10, 20])
@@ -84,11 +79,11 @@ tensorTests =
                 )
                 @?= "6TensorIA10_A20_3f64E"
         , testCase "bool[]" $
-            builderToString
+            TB.runBuilder
                 (mangleType (TypeTensor (Tensor (TypePrim PrimBool) [])))
                 @?= "6TensorIA_bE"
         , testCase "i64[2][3][4]" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeTensor
                         (Tensor (TypePrim (PrimInt PrimInt64)) [2, 3, 4])
@@ -103,7 +98,7 @@ rcTests =
     testGroup
         "Rc Types"
         [ testCase "Rc<i32>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeRc
                         ( Rc
@@ -115,7 +110,7 @@ rcTests =
                 )
                 @?= "2RcI3i32E"
         , testCase "AtomicRc<i64>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeRc
                         ( Rc
@@ -127,7 +122,7 @@ rcTests =
                 )
                 @?= "8AtomicRcI3i64E"
         , testCase "FlexRc<f32>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeRc
                         ( Rc
@@ -139,7 +134,7 @@ rcTests =
                 )
                 @?= "6FlexRcI3f32E"
         , testCase "RigidRc<f64>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeRc
                         ( Rc
@@ -151,7 +146,7 @@ rcTests =
                 )
                 @?= "7RigidRcI3f64E"
         , testCase "AtomicFlexRc<bool>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeRc
                         ( Rc
@@ -163,7 +158,7 @@ rcTests =
                 )
                 @?= "12AtomicFlexRcIbE"
         , testCase "AtomicRigidRc<unit>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeRc
                         ( Rc
@@ -182,7 +177,7 @@ refTests =
     testGroup
         "Ref Types"
         [ testCase "Ref<i32>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeRef
                         ( Ref
@@ -194,7 +189,7 @@ refTests =
                 )
                 @?= "3RefI3i32E"
         , testCase "AtomicRef<i64>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeRef
                         ( Ref
@@ -206,7 +201,7 @@ refTests =
                 )
                 @?= "9AtomicRefI3i64E"
         , testCase "FlexRef<f32>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeRef
                         ( Ref
@@ -218,7 +213,7 @@ refTests =
                 )
                 @?= "7FlexRefI3f32E"
         , testCase "RigidRef<f64>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeRef
                         ( Ref
@@ -230,7 +225,7 @@ refTests =
                 )
                 @?= "8RigidRefI3f64E"
         , testCase "AtomicFlexRef<bool>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeRef
                         ( Ref
@@ -242,7 +237,7 @@ refTests =
                 )
                 @?= "13AtomicFlexRefIbE"
         , testCase "AtomicRigidRef<unit>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeRef
                         ( Ref
@@ -261,7 +256,7 @@ closureTests =
     testGroup
         "Closure Types"
         [ testCase "Closure() -> i32" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeClosure
                         ( Closure
@@ -272,7 +267,7 @@ closureTests =
                 )
                 @?= "7ClosureIF3i32vEE"
         , testCase "Closure(i32) -> i64" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeClosure
                         ( Closure
@@ -283,7 +278,7 @@ closureTests =
                 )
                 @?= "7ClosureIF3i643i32EE"
         , testCase "Closure(i32, f64) -> bool" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeClosure
                         ( Closure
@@ -296,7 +291,7 @@ closureTests =
                 )
                 @?= "7ClosureIFb3i323f64EE"
         , testCase "Closure(Rc<i32>) -> Ref<i64>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeClosure
                         ( Closure
@@ -326,7 +321,7 @@ exprTests =
     testGroup
         "Expr Types"
         [ testCase "Expr(My::Path)" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeExpr
                         ( Expr
@@ -337,7 +332,7 @@ exprTests =
                 )
                 @?= "N2My4PathE"
         , testCase "Expr(My::Path<i32>)" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeExpr
                         ( Expr
@@ -348,7 +343,7 @@ exprTests =
                 )
                 @?= "N2My4PathI3i32EE"
         , testCase "Expr(Long::Namespace::Type<i32, f64>)" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeExpr
                         ( Expr
@@ -368,11 +363,11 @@ prefixTests =
     testGroup
         "Mangle Type With Prefix"
         [ testCase "mangleTypeWithPrefix for i32" $
-            builderToString
+            TB.runBuilder
                 (mangleTypeWithPrefix (TypePrim (PrimInt PrimInt32)))
                 @?= "_Z3i32"
         , testCase "mangleTypeWithPrefix for Rc<i64>" $
-            builderToString
+            TB.runBuilder
                 ( mangleTypeWithPrefix
                     ( TypeRc
                         ( Rc
@@ -384,7 +379,7 @@ prefixTests =
                 )
                 @?= "_Z2RcI3i64E"
         , testCase "mangleTypeWithPrefix for Closure(i32) -> bool" $
-            builderToString
+            TB.runBuilder
                 ( mangleTypeWithPrefix
                     ( TypeClosure
                         ( Closure
@@ -402,7 +397,7 @@ nestedTests =
     testGroup
         "Nested/Complex Types"
         [ testCase "Rc<Tensor<i32[10]>>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeRc
                         ( Rc
@@ -416,7 +411,7 @@ nestedTests =
                 )
                 @?= "2RcI6TensorIA10_3i32EE"
         , testCase "Ref<Rc<i64>>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeRef
                         ( Ref
@@ -434,7 +429,7 @@ nestedTests =
                 )
                 @?= "3RefI2RcI3i64EE"
         , testCase "Closure(Rc<i32>, Ref<f64>) -> Tensor<bool[5]>" $
-            builderToString
+            TB.runBuilder
                 ( mangleType
                     ( TypeClosure
                         ( Closure

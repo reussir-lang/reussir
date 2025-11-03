@@ -6,8 +6,8 @@ module Test.Codegen.Intrinsics.Arith (
 where
 
 import Data.Int (Int64)
-import Data.Text.Lazy qualified as T
-import Data.Text.Lazy.Builder qualified as TB
+import Data.Text qualified as T
+import Data.Text.Builder.Linear qualified as TB
 import Effectful qualified as E
 import Effectful.Log qualified as L
 import Effectful.State.Static.Local qualified as E
@@ -28,7 +28,7 @@ runCodegenAsText codegen = do
     L.withStdOutLogger $ \logger -> do
         E.runEff $ L.runLog "Test.Codegen.Intrinsics.Arith" logger defaultLogLevel $ runCodegen spec $ do
             codegen
-            E.gets (TB.toLazyText . C.builder)
+            E.gets (TB.runBuilder . C.builder)
 
 runCodegenForICall :: I.IntrinsicCall -> IO T.Text
 runCodegenForICall icall =

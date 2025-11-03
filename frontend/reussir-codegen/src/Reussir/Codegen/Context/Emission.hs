@@ -1,4 +1,5 @@
-{-# LANGUAGE OverloadedStrings, LinearTypes #-}
+{-# LANGUAGE LinearTypes #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Reussir.Codegen.Context.Emission (
@@ -9,12 +10,12 @@ module Reussir.Codegen.Context.Emission (
     emitIndentation,
     emitLine,
     intercalate,
-    fromString,
 )
 where
 
 import Data.Foldable (for_)
 import Data.Interned (Uninternable (unintern))
+import Data.String (fromString)
 import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
 import Effectful.State.Static.Local qualified as E
@@ -75,7 +76,7 @@ intercalate sep (x : xs) = x <> sep <> intercalate sep xs
 -}
 instance Emission Path where
     emit (Path segments) =
-        pure $ intercalate "::" (map (TB.fromText .unintern) segments)
+        pure $ intercalate "::" (map (TB.fromText . unintern) segments)
 
 -- callsite-location ::= `callsite` `(` location `at` location `)`
 -- filelinecol-location ::= string-literal `:` integer-literal `:`
@@ -98,10 +99,10 @@ instance Emission Location where
             callerInner <- emitInner caller'
             pure $ "callsite(" <> calleeInner <> " at " <> callerInner <> ")"
         emitInner (FileLineColRange fname startL startC endL endC) = do
-            let filePart = fromString (show fname) <> ":" <> fromString (show startL) <> ":" <> fromString (show startC)
+            let filePart = fromString (show fname) <> ":" <> TB.fromDec startL <> ":" <> TB.fromDec startC
             if startL == endL && startC == endC
                 then pure filePart
-                else pure $ filePart <> " to " <> fromString (show endL) <> ":" <> fromString (show endC)
+                else pure $ filePart <> " to " <> TB.fromDec endL <> ":" <> TB.fromDec endC
         emitInner (FusedLoc metadata' locations') = do
             locationsInner <- mapM emitInner locations'
             let locsPart = intercalate ", " locationsInner

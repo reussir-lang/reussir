@@ -143,4 +143,5 @@ test-suite reussir-codegen-test
         intern,
         effectful,
         log-effectful,
+        text-builder-linear,
         log-base

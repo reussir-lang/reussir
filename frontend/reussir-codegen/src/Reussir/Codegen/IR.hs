@@ -16,11 +16,11 @@ module Reussir.Codegen.IR (
 import Control.Monad (unless, when)
 import Data.Foldable (forM_)
 import Data.Int (Int64)
-import Data.Text.Internal.Builder qualified as TB
-import Data.Text.Lazy qualified as T
+import Data.Text qualified as T
+import Data.Text.Builder.Linear qualified as TB
 import Reussir.Codegen.Context (Emission (emit), Path, emitIndentation, emitLine, incIndentation)
 import Reussir.Codegen.Context.Codegen (Codegen, getNewBlockId, incIndentationBy, withLocation)
-import Reussir.Codegen.Context.Emission (emitBuilder)
+import Reussir.Codegen.Context.Emission (emitBuilder, intercalate)
 import Reussir.Codegen.Intrinsics (IntrinsicCall, intrinsicCallCodegen)
 import Reussir.Codegen.Location (Location)
 import Reussir.Codegen.Type.Data qualified as TT
@@ -285,17 +285,17 @@ blockCodegen printArgs blk = incIndentation $ do
     when printArgs $ do
         blkId <- getNewBlockId
         emitIndentation
-        emitBuilder $ "^bb" <> TB.fromString (show blkId)
+        emitBuilder $ "^bb" <> TB.fromDec blkId
         unless (null (blkArgs blk)) $ do
-            argList <- mapM (fmap TB.toLazyText . fmtTypedValue) (blkArgs blk)
-            emitBuilder $ "(" <> TB.fromLazyText (T.intercalate ", " argList) <> ")"
+            argList <- mapM fmtTypedValue (blkArgs blk)
+            emitBuilder $ "(" <> intercalate ", " argList <> ")"
         emitBuilder ":\n"
     let innerIndent = if printArgs then 1 else 0
     incIndentationBy innerIndent $ forM_ (blkBody blk) instrCodegen
     emitLine $ emitBuilder "}"
 
 instrCodegen :: Instr -> Codegen ()
-instrCodegen (Panic message) = emitLine $ emitBuilder $ "reussir.panic " <> TB.fromLazyText message
+instrCodegen (Panic message) = emitLine $ emitBuilder $ "reussir.panic " <> TB.fromText message
 instrCodegen (ICall intrinsic) = intrinsicCallCodegen intrinsic
 instrCodegen (WithLoc loc instr) = withLocation loc (instrCodegen instr)
 instrCodegen _ = error "Not implemented"

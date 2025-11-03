@@ -6,8 +6,8 @@ module Test.Codegen.Context.Module (
 where
 
 import Data.Interned (intern)
-import Data.Text.Lazy qualified as T
-import Data.Text.Lazy.Builder qualified as TB
+import Data.Text qualified as T
+import Data.Text.Builder.Linear qualified as TB
 import Effectful qualified as E
 import Effectful.Log qualified as L
 import Effectful.State.Static.Local qualified as E
@@ -29,7 +29,7 @@ runCodegenAsText codegen = do
     L.withStdOutLogger $ \logger -> do
         E.runEff $ L.runLog "Test.Codegen.Context.Module" logger defaultLogLevel $ runCodegen spec $ do
             codegen
-            E.gets (TB.toLazyText . C.builder)
+            E.gets (TB.runBuilder . C.builder)
 
 -- | Helper types
 primitiveI32 :: TT.Type
@@ -46,7 +46,7 @@ primitiveUnit = TT.TypePrim TT.PrimUnit
 
 -- | Create a path from segments
 mkPath :: [String] -> Path
-mkPath segments = Path (map (intern . T.toStrict . T.pack) segments)
+mkPath segments = Path (map (intern . T.pack) segments)
 
 -- | Test: Recursive List type with Cons and Nil variants
 testRecursiveListType :: TestTree

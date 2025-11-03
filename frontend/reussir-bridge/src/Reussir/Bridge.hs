@@ -1,8 +1,8 @@
 {-# LANGUAGE CApiFFI #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
 
-module Reussir.Bridge
-  ( -- * Output Target
+module Reussir.Bridge (
+    -- * Output Target
     OutputTarget (..),
     outputTargetToC,
 
@@ -16,9 +16,11 @@ module Reussir.Bridge
 
     -- * Compilation
     compileForNativeMachine,
-  )
+)
 where
 
+import Data.ByteString (ByteString)
+import Data.ByteString.Unsafe (unsafeUseAsCString)
 import Foreign.C.String
 import Foreign.C.Types
 
@@ -28,13 +30,13 @@ import Foreign.C.Types
 
 -- | Output target for compilation
 data OutputTarget
-  = -- | LLVM IR output
-    OutputLLVMIR
-  | -- | Assembly output
-    OutputASM
-  | -- | Object file output
-    OutputObject
-  deriving (Eq, Show, Enum)
+    = -- | LLVM IR output
+      OutputLLVMIR
+    | -- | Assembly output
+      OutputASM
+    | -- | Object file output
+      OutputObject
+    deriving (Eq, Show, Enum)
 
 -- | Convert Haskell OutputTarget to C enum value
 outputTargetToC :: OutputTarget -> CInt
@@ -44,17 +46,17 @@ outputTargetToC OutputObject = 2
 
 -- | Optimization option
 data OptOption
-  = -- | No optimization
-    OptNone
-  | -- | Default optimization (O2)
-    OptDefault
-  | -- | Aggressive optimization (O3)
-    OptAggressive
-  | -- | Optimize for size (Os)
-    OptSize
-  | -- | TPDE optimization (if available)
-    OptTPDE
-  deriving (Eq, Show, Enum)
+    = -- | No optimization
+      OptNone
+    | -- | Default optimization (O2)
+      OptDefault
+    | -- | Aggressive optimization (O3)
+      OptAggressive
+    | -- | Optimize for size (Os)
+      OptSize
+    | -- | TPDE optimization (if available)
+      OptTPDE
+    deriving (Eq, Show, Enum)
 
 -- | Convert Haskell OptOption to C enum value
 optOptionToC :: OptOption -> CInt
@@ -66,17 +68,17 @@ optOptionToC OptTPDE = 4
 
 -- | Log level
 data LogLevel
-  = -- | Error messages only
-    LogError
-  | -- | Warnings and errors
-    LogWarning
-  | -- | Informational messages
-    LogInfo
-  | -- | Debug messages
-    LogDebug
-  | -- | Trace messages (most verbose)
-    LogTrace
-  deriving (Eq, Show, Enum)
+    = -- | Error messages only
+      LogError
+    | -- | Warnings and errors
+      LogWarning
+    | -- | Informational messages
+      LogInfo
+    | -- | Debug messages
+      LogDebug
+    | -- | Trace messages (most verbose)
+      LogTrace
+    deriving (Eq, Show, Enum)
 
 -- | Convert Haskell LogLevel to C enum value
 logLevelToC :: LogLevel -> CInt
@@ -91,64 +93,65 @@ logLevelToC LogTrace = 4
 -------------------------------------------------------------------------------
 
 foreign import capi "Reussir/Bridge.h reussir_bridge_compile_for_native_machine"
-  c_reussir_bridge_compile_for_native_machine ::
-    -- | mlir_module
-    CString ->
-    -- | source_name
-    CString ->
-    -- | output_file
-    CString ->
-    -- | target (ReussirOutputTarget)
-    CInt ->
-    -- | opt (ReussirOptOption)
-    CInt ->
-    -- | log_level (ReussirLogLevel)
-    CInt ->
-    IO ()
+    c_reussir_bridge_compile_for_native_machine ::
+        -- | mlir_module
+        CString ->
+        -- | source_name
+        CString ->
+        -- | output_file
+        CString ->
+        -- | target (ReussirOutputTarget)
+        CInt ->
+        -- | opt (ReussirOptOption)
+        CInt ->
+        -- | log_level (ReussirLogLevel)
+        CInt ->
+        IO ()
 
 -------------------------------------------------------------------------------
 -- Haskell API
 -------------------------------------------------------------------------------
 
--- | Compile MLIR module for the native machine target
---
--- This function takes an MLIR module as a string, compiles it to the specified
--- output format with the given optimization level, and writes the result to
--- the output file.
---
--- Example:
---
--- @
--- compileForNativeMachine
---   "module {}"
---   "example.mlir"
---   "output.o"
---   OutputObject
---   OptDefault
---   LogInfo
--- @
+{- | Compile MLIR module for the native machine target
+
+This function takes an MLIR module as a string, compiles it to the specified
+output format with the given optimization level, and writes the result to
+the output file.
+
+Example:
+
+@
+compileForNativeMachine
+  "module {}"
+  "example.mlir"
+  "output.o"
+  OutputObject
+  OptDefault
+  LogInfo
+@
+-}
 compileForNativeMachine ::
-  -- | MLIR module content (must be null-terminated or will be null-terminated)
-  String ->
-  -- | Source name (for diagnostics)
-  String ->
-  -- | Output file path
-  FilePath ->
-  -- | Output target format
-  OutputTarget ->
-  -- | Optimization level
-  OptOption ->
-  -- | Log level
-  LogLevel ->
-  IO ()
+    -- | MLIR module content (must be null-terminated or will be null-terminated)
+    ByteString ->
+    -- | Source name (for diagnostics)
+    String ->
+    -- | Output file path
+    FilePath ->
+    -- | Output target format
+    OutputTarget ->
+    -- | Optimization level
+    OptOption ->
+    -- | Log level
+    LogLevel ->
+    IO ()
 compileForNativeMachine mlirModule sourceName outputFile target opt logLevel =
-  withCString mlirModule $ \mlirPtr ->
-    withCString sourceName $ \sourceNamePtr ->
-      withCString outputFile $ \outputFilePtr ->
-        c_reussir_bridge_compile_for_native_machine
-          mlirPtr
-          sourceNamePtr
-          outputFilePtr
-          (outputTargetToC target)
-          (optOptionToC opt)
-          (logLevelToC logLevel)
+    unsafeUseAsCString mlirModule $ \mlirPtr ->
+        withCString sourceName $ \sourceNamePtr ->
+            withCString outputFile $ \outputFilePtr ->
+                c_reussir_bridge_compile_for_native_machine
+                    mlirPtr
+                    sourceNamePtr
+                    outputFilePtr
+                    (outputTargetToC target)
+                    (optOptionToC opt)
+                    (logLevelToC logLevel)

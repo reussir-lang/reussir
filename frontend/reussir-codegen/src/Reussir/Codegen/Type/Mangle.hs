@@ -4,8 +4,8 @@ module Reussir.Codegen.Type.Mangle (mangleType, mangleTypeWithPrefix) where
 
 import Data.Interned (unintern)
 import Data.Interned.Text (InternedText)
-import Data.Text.Lazy qualified as T
-import Data.Text.Lazy.Builder qualified as TB
+import Data.Text qualified as T
+import Data.Text.Builder.Linear qualified as TB
 import Reussir.Codegen.Context.Path (Path (..))
 import Reussir.Codegen.Type.Data (
     Atomicity (..),
@@ -53,9 +53,9 @@ import Reussir.Codegen.Type.Data (
   Example: "My" -> "2My", "Path" -> "4Path"
 -}
 manglePathSegment :: InternedText -> TB.Builder
-manglePathSegment text = TB.fromString (show (T.length text')) <> TB.fromString (T.unpack text')
+manglePathSegment text = TB.fromDec (T.length text') <> TB.fromText text'
   where
-    text' = T.fromStrict (unintern text)
+    text' = unintern text
 
 {- | Mangle all segments of a path.
   Format: <segment1><segment2>...
@@ -154,7 +154,7 @@ mangleTensor :: Tensor -> TB.Builder
 mangleTensor (Tensor eleTy dimensions) =
     "6Tensor"
         <> "I"
-        <> (if null dimensions then "A_" else foldMap (\d -> "A" <> TB.fromString (show d) <> "_") dimensions)
+        <> (if null dimensions then "A_" else foldMap (\d -> "A" <> TB.fromDec d <> "_") dimensions)
         <> mangleType eleTy
         <> "E"
 

@@ -3,7 +3,7 @@
 module Reussir.Codegen.Location where
 
 import Data.Int (Int64)
-import Data.Text.Lazy qualified as T
+import Data.Text qualified as T
 
 data Location
     = CallSiteLoc {callee :: Location, caller :: Location}

@@ -9,8 +9,9 @@ where
 -- Import Emission instances for Type
 import Control.Monad (forM_)
 import Data.HashTable.IO qualified as H
-import Data.Text.Lazy qualified as T
-import Data.Text.Lazy.Builder qualified as TB
+import Data.String (fromString)
+import Data.Text qualified as T
+import Data.Text.Builder.Linear qualified as TB
 import Effectful as E
 import Effectful.Log qualified as L
 import Effectful.Reader.Static qualified as E
@@ -33,7 +34,6 @@ import Reussir.Codegen.Context.Emission (
 import Reussir.Codegen.Type.Data (Type (TypeExpr))
 import Reussir.Codegen.Type.Emission (emitRecord)
 import Reussir.Codegen.Type.Mangle (mangleTypeWithPrefix)
-import qualified Data.Text.Builder.Linear as TB
 
 -- | Run a Codegen action with an initial context and compile the result.
 runCodegenToBackend :: (E.IOE :> es, L.Log :> es) => TargetSpec -> Codegen () -> Eff es ()
@@ -43,7 +43,7 @@ runCodegenToBackend spec codegen = do
     let mlirModule = TB.runBuilderBS $ builder finalCtx
     E.liftIO $
         B.compileForNativeMachine
-            intercalate
+            mlirModule
             (T.unpack (programName spec))
             (outputPath spec)
             (outputTarget spec)
@@ -59,12 +59,12 @@ emitTypeAlias = do
     -- Set all to pending first
     forM_ instances' $ \(expr, _) -> do
         let mangled = mangleTypeWithPrefix (TypeExpr expr)
-        let mangled' = TB.toLazyText mangled
+        let mangled' = TB.runBuilder mangled
         setRecordEmissionState mangled' RecordEmissionPending
     -- Now emit each one
     forM_ instances' $ \(expr, record) -> do
         let mangled = mangleTypeWithPrefix (TypeExpr expr)
-        let mangled' = TB.toLazyText mangled
+        let mangled' = TB.runBuilder mangled
         -- Check if already complete
         status <- getRecordEmissionState mangled'
         case status of
@@ -81,13 +81,13 @@ emitOutlineLocs = do
     locs <- E.liftIO $ H.toList (outlineLocs ctx)
     forM_ locs $ \(l, loc) -> do
         loc' <- emit loc
-        emitBuilder $ "#loc" <> TB.fromString (show l) <> " = " <> loc' <> "\n"
+        emitBuilder $ "#loc" <> TB.fromDec l <> " = " <> loc' <> "\n"
 
 -- | Emit a complete MLIR module with the given body.
 emitModule :: Codegen () -> Codegen ()
 emitModule body = do
     emitTypeAlias
-    name <- fmap (TB.fromString . show) $ E.asks programName
+    name <- fmap (fromString . show) $ E.asks programName
     emitBuilder $ "module @" <> name <> " {\n"
     incIndentation body
     emitBuilder "}\n"

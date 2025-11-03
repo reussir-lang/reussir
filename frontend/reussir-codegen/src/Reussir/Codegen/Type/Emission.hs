@@ -3,10 +3,11 @@
 
 module Reussir.Codegen.Type.Emission (emitRecord) where
 
-import Data.Text.Lazy qualified as T
-import Data.Text.Lazy.Builder qualified as TB
+import Data.String (fromString)
+import Data.Text qualified as T
+import Data.Text.Builder.Linear qualified as TB
 import Reussir.Codegen.Context.Codegen
-import Reussir.Codegen.Context.Emission (Emission (emit))
+import Reussir.Codegen.Context.Emission (Emission (emit), intercalate)
 import Reussir.Codegen.Type.Data (
     Atomicity (..),
     Capability (..),
@@ -69,7 +70,7 @@ emitTy toplevel (TypeRef (Ref ty atm cap)) = do
 -- !reussir.closure<(i32) -> i32>
 emitTy toplevel (TypeClosure (Closure args returnTy)) = do
     args' <- mapM (emitTy toplevel) args
-    let concatArgs' = TB.fromLazyText $ T.intercalate ", " (map TB.toLazyText args')
+    let concatArgs' = intercalate ", " args'
     case returnTy of
         TypePrim PrimUnit -> pure $ "!reussir.closure<(" <> concatArgs' <> ")>"
         _ -> do
@@ -78,7 +79,7 @@ emitTy toplevel (TypeClosure (Closure args returnTy)) = do
 emitTy toplevel ty@(TypeExpr expr) = do
     record <- getRecord expr
     case record of
-        Just r -> emitRecord toplevel (Just $ TB.toLazyText $ mangleTypeWithPrefix ty) r
+        Just r -> emitRecord toplevel (Just $ TB.runBuilder $ mangleTypeWithPrefix ty) r
         Nothing -> error "Record not found for expression"
 emitTy toplevel (TypeNullable ty) = do
     ty' <- emitTy toplevel ty
@@ -123,10 +124,10 @@ emitRecord
         emitRecordGuard (Just n) = do
             status <- getRecordEmissionState n
             case status of
-                RecordEmissionComplete -> pure $ Just $ "!" <> TB.fromLazyText n
+                RecordEmissionComplete -> pure $ Just $ "!" <> TB.fromText n
                 RecordEmissionIncomplete -> do
                     kind' <- emit kind
-                    pure $ Just $ "!reussir.record<" <> kind' <> " " <> TB.fromString (show n) <> ">"
+                    pure $ Just $ "!reussir.record<" <> kind' <> " " <> fromString (show n) <> ">"
                 RecordEmissionPending -> pure Nothing
 
         translateCapability :: Capability -> TB.Builder
@@ -148,10 +149,10 @@ emitRecord
         doEmit :: Codegen TB.Builder
         doEmit = do
             name' <- case name of
-                Just n -> pure $ " \"" <> TB.fromLazyText n <> "\" "
+                Just n -> pure $ " \"" <> TB.fromText n <> "\" "
                 Nothing -> pure " "
             kind' <- emit kind
             let defaultCapability' = translateCapability defaultCapability
-            fields' <- mapM (fmap TB.toLazyText . emitField) fields
-            let concatFields' = (TB.fromLazyText $ T.intercalate ", " fields')
+            fields' <- mapM emitField fields
+            let concatFields' = intercalate ", " fields'
             pure $ "!reussir.record<" <> kind' <> name' <> defaultCapability' <> "{" <> concatFields' <> "}>"
