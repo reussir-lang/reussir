@@ -33,16 +33,17 @@ import Reussir.Codegen.Context.Emission (
 import Reussir.Codegen.Type.Data (Type (TypeExpr))
 import Reussir.Codegen.Type.Emission (emitRecord)
 import Reussir.Codegen.Type.Mangle (mangleTypeWithPrefix)
+import qualified Data.Text.Builder.Linear as TB
 
 -- | Run a Codegen action with an initial context and compile the result.
 runCodegenToBackend :: (E.IOE :> es, L.Log :> es) => TargetSpec -> Codegen () -> Eff es ()
 runCodegenToBackend spec codegen = do
     initCtx <- emptyContext
     finalCtx <- E.inject $ E.runReader spec $ E.execState initCtx $ codegen
-    let mlirModule = TB.toLazyText (builder finalCtx)
+    let mlirModule = TB.runBuilderBS $ builder finalCtx
     E.liftIO $
         B.compileForNativeMachine
-            (T.unpack mlirModule)
+            intercalate
             (T.unpack (programName spec))
             (outputPath spec)
             (outputTarget spec)

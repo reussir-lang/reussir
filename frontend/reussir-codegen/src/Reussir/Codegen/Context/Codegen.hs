@@ -23,8 +23,8 @@ where
 
 import Data.HashTable.IO qualified as H
 import Data.Int (Int64)
-import Data.Text.Lazy qualified as T
-import Data.Text.Lazy.Builder qualified as TB
+import Data.Text qualified as T
+import Data.Text.Builder.Linear qualified as TB
 import Effectful as E (Eff, IOE, MonadIO (liftIO), (:>))
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader)

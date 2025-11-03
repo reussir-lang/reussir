@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, LinearTypes #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Reussir.Codegen.Context.Emission (
@@ -8,13 +8,15 @@ module Reussir.Codegen.Context.Emission (
     emitSpace,
     emitIndentation,
     emitLine,
+    intercalate,
+    fromString,
 )
 where
 
 import Data.Foldable (for_)
 import Data.Interned (Uninternable (unintern))
-import Data.Text.Lazy qualified as T
-import Data.Text.Lazy.Builder qualified as TB
+import Data.Text qualified as T
+import Data.Text.Builder.Linear qualified as TB
 import Effectful.State.Static.Local qualified as E
 import Reussir.Codegen.Context.Codegen (Codegen, Context (..))
 import Reussir.Codegen.Context.Path (Path (..))
@@ -48,7 +50,7 @@ emitSpace = emitBuilder " "
 emitIndentation :: Codegen ()
 emitIndentation = do
     indentLevel <- E.gets indentation
-    emitBuilder $ TB.fromLazyText $ T.replicate indentLevel "\t"
+    emitBuilder $ TB.fromText $ T.replicate (fromIntegral indentLevel) "\t"
 
 {- | Emit code with indentation and a newline.
   This is used to emit complete lines of code.
@@ -59,18 +61,21 @@ emitLine codegen = do
     a <- codegen
     loc <- E.gets locForLine
     for_ loc $ \l -> do
-        emitBuilder $ " loc(" <> "#loc" <> TB.fromString (show l) <> ")"
+        emitBuilder $ " loc(" <> "#loc" <> TB.fromText (T.pack $ show l) <> ")"
     emitBuilder "\n"
     pure a
+
+intercalate :: TB.Builder -> [TB.Builder] -> TB.Builder
+intercalate _ [] = mempty
+intercalate _ [x] = x
+intercalate sep (x : xs) = x <> sep <> intercalate sep xs
 
 {- | Emission instance for Path.
   This is defined here (not in Context.Path) to avoid cyclic dependencies.
 -}
 instance Emission Path where
     emit (Path segments) =
-        pure $
-            TB.fromLazyText $
-                T.intercalate "::" (map (T.fromStrict . unintern) segments)
+        pure $ intercalate "::" (map (TB.fromText .unintern) segments)
 
 -- callsite-location ::= `callsite` `(` location `at` location `)`
 -- filelinecol-location ::= string-literal `:` integer-literal `:`
@@ -93,19 +98,19 @@ instance Emission Location where
             callerInner <- emitInner caller'
             pure $ "callsite(" <> calleeInner <> " at " <> callerInner <> ")"
         emitInner (FileLineColRange fname startL startC endL endC) = do
-            let filePart = TB.fromString (show fname) <> ":" <> TB.fromString (show startL) <> ":" <> TB.fromString (show startC)
+            let filePart = fromString (show fname) <> ":" <> fromString (show startL) <> ":" <> fromString (show startC)
             if startL == endL && startC == endC
                 then pure filePart
-                else pure $ filePart <> " to " <> TB.fromString (show endL) <> ":" <> TB.fromString (show endC)
+                else pure $ filePart <> " to " <> fromString (show endL) <> ":" <> fromString (show endC)
         emitInner (FusedLoc metadata' locations') = do
             locationsInner <- mapM emitInner locations'
-            let locsPart = TB.fromLazyText $ T.intercalate ", " (map TB.toLazyText locationsInner)
+            let locsPart = intercalate ", " locationsInner
             case metadata' of
-                Just meta -> pure $ "fused<" <> TB.fromString (show meta) <> ">[" <> locsPart <> "]"
+                Just meta -> pure $ "fused<" <> fromString (show meta) <> ">[" <> locsPart <> "]"
                 Nothing -> pure $ "fused[" <> locsPart <> "]"
         emitInner UnknownLoc = pure "?"
         emitInner (NameLoc locName' childLoc') = do
-            let namePart = TB.fromString (show locName')
+            let namePart = fromString (show locName')
             case childLoc' of
                 Just child -> do
                     childInner <- emitInner child
