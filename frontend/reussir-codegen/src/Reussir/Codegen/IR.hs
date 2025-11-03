@@ -258,7 +258,6 @@ data Function = Function
     { funcLinkage :: Linkage
     , funcLLVMVisibility :: LLVMVisibility
     , funcMLIRVisibility :: MLIRVisibility
-    , funcPrivate :: Bool
     , funcBody :: Maybe Block
     , funcArgs :: [TypedValue]
     , funcLoc :: Maybe Location
