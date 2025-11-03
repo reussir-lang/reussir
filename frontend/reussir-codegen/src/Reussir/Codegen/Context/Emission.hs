@@ -67,10 +67,13 @@ emitLine codegen = do
     emitBuilder "\n"
     pure a
 
+{- | Intercalate a list of builders with a separator.
+  This is used to emit a list of builders with a separator.
+-}
 intercalate :: TB.Builder -> [TB.Builder] -> TB.Builder
 intercalate _ [] = mempty
 intercalate _ [x] = x
-intercalate sep (x : xs) = x <> sep <> intercalate sep xs
+intercalate sep (x : xs) = let !rest = intercalate sep xs in x <> sep <> rest
 
 {- | Emission instance for Path.
   This is defined here (not in Context.Path) to avoid cyclic dependencies.
