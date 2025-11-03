@@ -74,7 +74,7 @@ cmpf128 predicate flag src1 src2 dst =
 constant :: T.Text -> Int64 -> I.IntrinsicCall
 constant value dst =
     I.IntrinsicCall
-        (I.Arith (I.Constant value))
+        (I.Arith (I.Constant $ read $ T.unpack value))
         []
         [(V.Value dst, primitiveF128)]
 
