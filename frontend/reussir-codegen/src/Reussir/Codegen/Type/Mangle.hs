@@ -316,6 +316,7 @@ mangleType (TypeRef ref) = mangleRef ref
 mangleType (TypeClosure c) = mangleClosure c
 mangleType (TypeExpr e) = mangleExpr e
 mangleType (TypeNullable ty) = mangleNullable ty
+mangleType TypeRegion = "6Region"
 
 -- ================================================================
 -- Prefix for External Linkage

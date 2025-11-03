@@ -53,6 +53,7 @@ data Type
     | TypeRef Ref
     | TypeExpr Expr
     | TypeNullable Type
+    | TypeRegion -- Region handle
     deriving (Eq, Show, Hashable, Generic)
 
 data Atomicity = Atomic | NonAtomic

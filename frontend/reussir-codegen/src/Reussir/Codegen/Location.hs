@@ -23,3 +23,4 @@ data Location
         { locName :: T.Text
         , childLoc :: Maybe Location
         }
+    deriving (Show)
