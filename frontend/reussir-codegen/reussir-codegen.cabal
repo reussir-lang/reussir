@@ -93,6 +93,7 @@ library
         effectful ^>= 2.6.1,
         log-effectful ^>= 1.0.0,
         log-base ^>= 0.12,
+        scientific ^>= 0.3.8,
         reussir-bridge
 
     -- Directories containing source files.

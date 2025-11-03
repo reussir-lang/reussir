@@ -15,8 +15,9 @@ where
 import Control.Monad (unless)
 import Data.Bits ((.&.))
 import Data.Int (Int8)
-import Data.Text.Lazy qualified as T
+import Data.Scientific (Scientific)
 import Data.Text.Lazy.Builder qualified as TB
+import Data.Text.Lazy.Builder.Scientific (scientificBuilder)
 import Reussir.Codegen.Context qualified as C
 import Reussir.Codegen.Value (TypedValue)
 
@@ -158,7 +159,7 @@ data Arith
     | Ceildivui
     | Cmpf CmpFPredicate FastMathFlag
     | Cmpi CmpIPredicate
-    | Constant T.Text
+    | Constant Scientific
     | Divf FastMathFlag
     | Divsi
     | Divui
@@ -453,7 +454,7 @@ arithCodegen (ScalingTruncf rm fmf) [(inVal, inTy), (sVal, sTy)] [(resVal, resTy
 -- Constant value
 arithCodegen (Constant value) [] [(res, ty)] = C.emitLine $ do
     resVal' <- C.emit res
-    C.emitBuilder $ resVal' <> " = arith.constant " <> TB.fromLazyText value
+    C.emitBuilder $ resVal' <> " = arith.constant " <> scientificBuilder value
     ty' <- C.emit ty
     C.emitBuilder $ " : " <> ty'
 
