@@ -63,7 +63,7 @@ emitLine codegen = do
     a <- codegen
     loc <- E.gets locForLine
     for_ loc $ \l -> do
-        emitBuilder $ " loc(" <> "#loc" <> TB.fromText (T.pack $ show l) <> ")"
+        emitBuilder $ " loc(" <> "#loc" <> TB.fromDec l <> ")"
     emitBuilder "\n"
     pure a
 
