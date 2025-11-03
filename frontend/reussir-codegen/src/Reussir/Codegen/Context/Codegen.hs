@@ -10,11 +10,14 @@ module Reussir.Codegen.Context.Codegen (
     RecordEmissionState (..),
     emptyContext,
     incIndentation,
+    incIndentationBy,
     addTypeInstance,
     setRecordEmissionState,
     getRecordEmissionState,
     getRecord,
     withLocation,
+    getNewBlockId,
+    startOverBlockCounter,
 )
 where
 
@@ -49,6 +52,7 @@ data Context = MkCtx
     , locForLine :: Maybe Int64
     , outlineLocs :: OutlineLocs
     , allocatedLocs :: Int64
+    , allocatedBlocks :: Int64
     }
 
 type Codegen = Eff '[State Context, Reader TargetSpec, IOE, Log]
@@ -77,6 +81,7 @@ emptyContext = do
             , locForLine = Nothing
             , outlineLocs = outlineLocs
             , allocatedLocs = 0
+            , allocatedBlocks = 0
             }
 
 -- | Increment indentation level for a block of code.
@@ -85,6 +90,14 @@ incIndentation codegen = do
     E.modify $ \ctx -> ctx{indentation = indentation ctx + 1}
     res <- codegen
     E.modify $ \ctx -> ctx{indentation = indentation ctx - 1}
+    return res
+
+-- | Increment indentation level for a block of code.
+incIndentationBy :: Int64 -> Codegen a -> Codegen a
+incIndentationBy n codegen = do
+    E.modify $ \ctx -> ctx{indentation = indentation ctx + n}
+    res <- codegen
+    E.modify $ \ctx -> ctx{indentation = indentation ctx - n}
     return res
 
 -- | Add a type instance to the context.
@@ -134,3 +147,12 @@ withLocation loc codegen = do
     E.modify $ \ctx -> ctx{locForLine = Just l}
     codegen
     E.modify $ \ctx -> ctx{locForLine = backup}
+
+getNewBlockId :: Codegen Int64
+getNewBlockId = do
+    allocatedBlocks <- E.gets allocatedBlocks
+    E.modify $ \ctx -> ctx{allocatedBlocks = allocatedBlocks + 1}
+    pure allocatedBlocks
+
+startOverBlockCounter :: Codegen ()
+startOverBlockCounter = E.modify $ \ctx -> ctx{allocatedBlocks = 0}
