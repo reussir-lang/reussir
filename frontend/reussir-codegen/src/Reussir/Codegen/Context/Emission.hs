@@ -18,6 +18,7 @@ import Data.Interned (Uninternable (unintern))
 import Data.String (fromString)
 import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
+import Data.Text.Builder.Linear.Buffer qualified as TBB
 import Effectful.State.Static.Local qualified as E
 import Reussir.Codegen.Context.Codegen (Codegen, Context (..))
 import Reussir.Codegen.Context.Path (Path (..))
@@ -51,7 +52,7 @@ emitSpace = emitBuilder " "
 emitIndentation :: Codegen ()
 emitIndentation = do
     indentLevel <- E.gets indentation
-    emitBuilder $ TB.fromText $ T.replicate (fromIntegral indentLevel) "\t"
+    emitBuilder $ TB.Builder $ TBB.appendChars (fromIntegral indentLevel) '\t'
 
 {- | Emit code with indentation and a newline.
   This is used to emit complete lines of code.
