@@ -16,7 +16,6 @@ where
 import Data.Foldable (for_)
 import Data.Interned (Uninternable (unintern))
 import Data.String (fromString)
-import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
 import Data.Text.Builder.Linear.Buffer qualified as TBB
 import Effectful.State.Static.Local qualified as E
