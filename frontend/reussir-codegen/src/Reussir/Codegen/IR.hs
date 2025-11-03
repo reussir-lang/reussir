@@ -9,14 +9,17 @@ module Reussir.Codegen.IR (
     Linkage (..),
     LLVMVisibility (..),
     MLIRVisibility (..),
+    YieldKind (..),
     instrCodegen,
 ) where
 
+import Control.Monad (unless, when)
+import Data.Foldable (forM_)
 import Data.Int (Int64)
 import Data.Text.Internal.Builder qualified as TB
 import Data.Text.Lazy qualified as T
-import Reussir.Codegen.Context (Path, emitLine)
-import Reussir.Codegen.Context.Codegen (Codegen, withLocation)
+import Reussir.Codegen.Context (Emission (emit), Path, emitIndentation, emitLine, incIndentation)
+import Reussir.Codegen.Context.Codegen (Codegen, getNewBlockId, incIndentationBy, withLocation)
 import Reussir.Codegen.Context.Emission (emitBuilder)
 import Reussir.Codegen.Intrinsics (IntrinsicCall, intrinsicCallCodegen)
 import Reussir.Codegen.Location (Location)
@@ -37,6 +40,9 @@ data Block = Block
     { blkArgs :: [TypedValue]
     , blkBody :: [Instr]
     }
+    deriving (Show)
+
+data YieldKind = YieldClosure | YieldRegion | YieldScf
     deriving (Show)
 
 newtype VariantDispData = VariantDispData [([Int64], Block)]
@@ -197,17 +203,13 @@ data Instr
         { regionRunBody :: Block
         , regionRunRes :: Maybe TypedValue
         }
-    | -- | reussir.region.yield: Yield a value from a region
-      RegionYield (Maybe TypedValue)
-    | -- | reussir.scf.yield: Terminate a high-level structured control flow operation
-      ScfYield (Maybe TypedValue)
+    | -- | generic yield operation for regions and closures
+      Yield YieldKind (Maybe TypedValue)
     | -- | reussir.closure.create: Create a closure (inlined with body or outlined with vtable)
       ClosureCreate
         { closureCreateBody :: Block
         , closureCreateRes :: TypedValue
         }
-    | -- | reussir.closure.yield: Yield from a closure body
-      ClosureYield (Maybe TypedValue)
     | -- | reussir.closure.apply: Apply an argument to a closure (partial application)
       ClosureApply
         { closureApplyTarget :: TypedValue
@@ -270,6 +272,27 @@ data Function = Function
     , result :: TT.Type
     }
     deriving (Show)
+
+fmtTypedValue :: TypedValue -> Codegen TB.Builder
+fmtTypedValue (val, ty) = do
+    val' <- emit val
+    ty' <- emit ty
+    return $ val' <> " : " <> ty'
+
+blockCodegen :: Bool -> Block -> Codegen ()
+blockCodegen printArgs blk = incIndentation $ do
+    emitLine $ emitBuilder "{"
+    when printArgs $ do
+        blkId <- getNewBlockId
+        emitIndentation
+        emitBuilder $ "^bb" <> TB.fromString (show blkId)
+        unless (null (blkArgs blk)) $ do
+            argList <- mapM (fmap TB.toLazyText . fmtTypedValue) (blkArgs blk)
+            emitBuilder $ "(" <> TB.fromLazyText (T.intercalate ", " argList) <> ")"
+        emitBuilder ":\n"
+    let innerIndent = if printArgs then 1 else 0
+    incIndentationBy innerIndent $ forM_ (blkBody blk) instrCodegen
+    emitLine $ emitBuilder "}"
 
 instrCodegen :: Instr -> Codegen ()
 instrCodegen (Panic message) = emitLine $ emitBuilder $ "reussir.panic " <> TB.fromLazyText message
