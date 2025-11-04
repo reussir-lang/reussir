@@ -309,5 +309,190 @@ irTests =
                 assertBool "Outline location should come after marker" $ comesAfter "========= trailing locs =========" "#loc0 = " resultStr
                 assertBool "Should contain unknown location in outline" $ "?" `isInfixOf` resultStr || "loc(?)" `isInfixOf` resultStr
             ]
+        , testGroup
+            "RcInc"
+            [ testCase "RcInc Codegen" $ do
+                result <- runCodegenForInstr (IR.RcInc (typedVal 1 rcI32))
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.rc.inc" $ "reussir.rc.inc" `isInfixOf` resultStr
+                assertBool "Should contain input %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain rc type" $ "reussir.rc" `isInfixOf` resultStr || "rc" `isInfixOf` resultStr
+                assertBool "Input should come in parentheses" $ "(%1" `isInfixOf` resultStr
+            ]
+        , testGroup
+            "RcCreate"
+            [ testCase "RcCreate Codegen without region" $ do
+                result <- runCodegenForInstr
+                    ( IR.RcCreate
+                        (typedVal 1 primitiveI32)
+                        Nothing
+                        (typedVal 2 rcI32)
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.rc.create" $ "reussir.rc.create" `isInfixOf` resultStr
+                assertBool "Should contain result %2" $ "%2 = " `isInfixOf` resultStr
+                assertBool "Should contain value parameter" $ "value(" `isInfixOf` resultStr
+                assertBool "Should contain input %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain i32 type" $ "i32" `isInfixOf` resultStr
+                assertBool "Should contain rc type" $ "reussir.rc" `isInfixOf` resultStr || "rc" `isInfixOf` resultStr
+                assertBool "Result should come before operation" $ comesAfter "%2 = " "reussir.rc.create" resultStr
+                assertBool "Should not contain region parameter" $ not ("region(" `isInfixOf` resultStr)
+            , testCase "RcCreate Codegen with region" $ do
+                let regionType = TT.TypeRegion
+                result <- runCodegenForInstr
+                    ( IR.RcCreate
+                        (typedVal 1 primitiveI32)
+                        (Just (typedVal 3 regionType))
+                        (typedVal 2 rcI32)
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.rc.create" $ "reussir.rc.create" `isInfixOf` resultStr
+                assertBool "Should contain result %2" $ "%2 = " `isInfixOf` resultStr
+                assertBool "Should contain value parameter" $ "value(" `isInfixOf` resultStr
+                assertBool "Should contain input %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain region parameter" $ "region(" `isInfixOf` resultStr
+                assertBool "Should contain region value %3" $ "%3" `isInfixOf` resultStr
+                assertBool "Should contain region type" $ "reussir.region" `isInfixOf` resultStr || "region" `isInfixOf` resultStr
+                assertBool "Should contain rc type" $ "reussir.rc" `isInfixOf` resultStr || "rc" `isInfixOf` resultStr
+                assertBool "value should come before region" $ comesAfter "value(" "region(" resultStr
+            ]
+        , testGroup
+            "RcFreeze"
+            [ testCase "RcFreeze Codegen" $ do
+                let refType = TT.TypeRef (TT.Ref primitiveI32 TT.NonAtomic TT.Shared)
+                result <- runCodegenForInstr
+                    ( IR.RcFreeze
+                        (typedVal 1 rcI32)
+                        (typedVal 2 refType)
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.rc.freeze" $ "reussir.rc.freeze" `isInfixOf` resultStr
+                assertBool "Should contain result %2" $ "%2 = " `isInfixOf` resultStr
+                assertBool "Should contain input %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain rc type" $ "reussir.rc" `isInfixOf` resultStr || "rc" `isInfixOf` resultStr
+                assertBool "Should contain ref type" $ "reussir.ref" `isInfixOf` resultStr || "ref" `isInfixOf` resultStr
+                assertBool "Input should come in parentheses" $ "(%1" `isInfixOf` resultStr
+                assertBool "Result should come before operation" $ comesAfter "%2 = " "reussir.rc.freeze" resultStr
+            ]
+        , testGroup
+            "RcBorrow"
+            [ testCase "RcBorrow Codegen" $ do
+                let refType = TT.TypeRef (TT.Ref primitiveI32 TT.NonAtomic TT.Shared)
+                result <- runCodegenForInstr
+                    ( IR.RcBorrow
+                        (typedVal 1 rcI32)
+                        (typedVal 2 refType)
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.rc.borrow" $ "reussir.rc.borrow" `isInfixOf` resultStr
+                assertBool "Should contain result %2" $ "%2 = " `isInfixOf` resultStr
+                assertBool "Should contain input %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain rc type" $ "reussir.rc" `isInfixOf` resultStr || "rc" `isInfixOf` resultStr
+                assertBool "Should contain ref type" $ "reussir.ref" `isInfixOf` resultStr || "ref" `isInfixOf` resultStr
+                assertBool "Input should come in parentheses" $ "(%1" `isInfixOf` resultStr
+                assertBool "Result should come before operation" $ comesAfter "%2 = " "reussir.rc.borrow" resultStr
+            ]
+        , testGroup
+            "RcIsUnique"
+            [ testCase "RcIsUnique Codegen" $ do
+                result <- runCodegenForInstr
+                    ( IR.RcIsUnique
+                        (typedVal 1 rcI32)
+                        (typedVal 2 primitiveBool)
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.rc.is_unique" $ "reussir.rc.is_unique" `isInfixOf` resultStr
+                assertBool "Should contain result %2" $ "%2 = " `isInfixOf` resultStr
+                assertBool "Should contain input %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain rc type" $ "reussir.rc" `isInfixOf` resultStr || "rc" `isInfixOf` resultStr
+                assertBool "Should contain boolean type or i1" $ "i1" `isInfixOf` resultStr || "bool" `isInfixOf` resultStr
+                assertBool "Input should come in parentheses" $ "(%1" `isInfixOf` resultStr
+                assertBool "Result should come before operation" $ comesAfter "%2 = " "reussir.rc.is_unique" resultStr
+            ]
+        , testGroup
+            "CompoundCreate"
+            [ testCase "CompoundCreate Codegen with single field" $ do
+                result <- runCodegenForInstr
+                    ( IR.CompoundCreate
+                        [typedVal 1 primitiveI32]
+                        (typedVal 2 primitiveI64)
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.record.compound" $ "reussir.record.compound" `isInfixOf` resultStr
+                assertBool "Should contain result %2" $ "%2 = " `isInfixOf` resultStr
+                assertBool "Should contain field value %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain i32 type" $ "i32" `isInfixOf` resultStr
+                assertBool "Should contain i64 type" $ "i64" `isInfixOf` resultStr
+                assertBool "Result should come before operation" $ comesAfter "%2 = " "reussir.record.compound" resultStr
+            , testCase "CompoundCreate Codegen with multiple fields" $ do
+                result <- runCodegenForInstr
+                    ( IR.CompoundCreate
+                        [typedVal 1 primitiveI32, typedVal 2 primitiveI64, typedVal 3 primitiveBool]
+                        (typedVal 4 rcI32)
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.record.compound" $ "reussir.record.compound" `isInfixOf` resultStr
+                assertBool "Should contain result %4" $ "%4 = " `isInfixOf` resultStr
+                assertBool "Should contain all field values" $ "%1" `isInfixOf` resultStr && "%2" `isInfixOf` resultStr && "%3" `isInfixOf` resultStr
+                assertBool "Should contain i32 type" $ "i32" `isInfixOf` resultStr
+                assertBool "Should contain i64 type" $ "i64" `isInfixOf` resultStr
+                assertBool "Should contain boolean type or i1" $ "i1" `isInfixOf` resultStr || "bool" `isInfixOf` resultStr
+                assertBool "Should contain rc type" $ "reussir.rc" `isInfixOf` resultStr || "rc" `isInfixOf` resultStr
+            , testCase "CompoundCreate Codegen with empty fields" $ do
+                result <- runCodegenForInstr
+                    ( IR.CompoundCreate
+                        []
+                        (typedVal 1 primitiveI32)
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.record.compound" $ "reussir.record.compound" `isInfixOf` resultStr
+                assertBool "Should contain result %1" $ "%1 = " `isInfixOf` resultStr
+                assertBool "Should contain i32 type" $ "i32" `isInfixOf` resultStr
+            ]
+        , testGroup
+            "VariantCreate"
+            [ testCase "VariantCreate Codegen with tag 0" $ do
+                result <- runCodegenForInstr
+                    ( IR.VariantCreate
+                        0
+                        (typedVal 1 primitiveI32)
+                        (typedVal 2 primitiveI64)
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.record.variant" $ "reussir.record.variant" `isInfixOf` resultStr
+                assertBool "Should contain result %2" $ "%2 = " `isInfixOf` resultStr
+                assertBool "Should contain tag [0]" $ "[0]" `isInfixOf` resultStr
+                assertBool "Should contain value %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain i32 type" $ "i32" `isInfixOf` resultStr
+                assertBool "Should contain i64 type" $ "i64" `isInfixOf` resultStr
+                assertBool "Result should come before operation" $ comesAfter "%2 = " "reussir.record.variant" resultStr
+            , testCase "VariantCreate Codegen with tag 42" $ do
+                result <- runCodegenForInstr
+                    ( IR.VariantCreate
+                        42
+                        (typedVal 1 primitiveBool)
+                        (typedVal 2 rcI32)
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.record.variant" $ "reussir.record.variant" `isInfixOf` resultStr
+                assertBool "Should contain result %2" $ "%2 = " `isInfixOf` resultStr
+                assertBool "Should contain tag [42]" $ "[42]" `isInfixOf` resultStr
+                assertBool "Should contain value %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain boolean type or i1" $ "i1" `isInfixOf` resultStr || "bool" `isInfixOf` resultStr
+                assertBool "Should contain rc type" $ "reussir.rc" `isInfixOf` resultStr || "rc" `isInfixOf` resultStr
+                assertBool "Tag should come before value" $ comesAfter "[42]" "%1" resultStr
+            , testCase "VariantCreate Codegen with large tag" $ do
+                result <- runCodegenForInstr
+                    ( IR.VariantCreate
+                        999
+                        (typedVal 1 primitiveI32)
+                        (typedVal 2 primitiveI64)
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.record.variant" $ "reussir.record.variant" `isInfixOf` resultStr
+                assertBool "Should contain result %2" $ "%2 = " `isInfixOf` resultStr
+                assertBool "Should contain tag [999]" $ "[999]" `isInfixOf` resultStr
+                assertBool "Should contain value %1" $ "%1" `isInfixOf` resultStr
+            ]
         ]
 

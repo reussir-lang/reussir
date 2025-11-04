@@ -163,14 +163,12 @@ data Instr
         }
     | -- | reussir.record.compound: Create a compound record from field values
       CompoundCreate
-        { compoundCreateExpr :: TT.Expr
-        , compoundCreateFields :: [TypedValue]
+        { compoundCreateFields :: [TypedValue]
         , compoundCreateRes :: TypedValue
         }
     | -- | reussir.record.variant: Create a variant record with a tag and value
       VariantCreate
-        { variantCreateExpr :: TT.Expr
-        , variantCreateTag :: Int64
+        { variantCreateTag :: Int64
         , variantCreateValue :: TypedValue
         , variantCreateRes :: TypedValue
         }
@@ -328,24 +326,108 @@ nullableDispCodegen nullDispVal nullDispNonnull nullDispNull nullDispRes = do
     isSingleton [_] = True
     isSingleton _ = False
 
+rcCreateCodegen :: TypedValue -> Maybe TypedValue -> TypedValue -> Codegen ()
+rcCreateCodegen rcCreateVal rcCreateRegion (resVal, resTy) = emitLine $ do
+    rcCreateVal' <- fmtTypedValue rcCreateVal
+    resVal' <- emit resVal
+    resTy' <- emit resTy
+    emitBuilder $ resVal' <> " = reussir.rc.create value(" <> rcCreateVal' <> ") "
+    for_ rcCreateRegion $ fmtTypedValue >=> \x -> emitBuilder $ "region(" <> x <> ") "
+    emitBuilder $ ": " <> resTy'
+
+rcFreezeCodegen :: TypedValue -> TypedValue -> Codegen ()
+rcFreezeCodegen rcFreezeVal (resVal, resTy) = emitLine $ do
+    rcFreezeVal' <- fmtTypedValue rcFreezeVal
+    resVal' <- emit resVal
+    resTy' <- emit resTy
+    emitBuilder $ resVal' <> " = reussir.rc.freeze (" <> rcFreezeVal' <> ") : " <> resTy'
+
+rcBorrowCodegen :: TypedValue -> TypedValue -> Codegen ()
+rcBorrowCodegen rcBorrowVal (resVal, resTy) = emitLine $ do
+    rcBorrowVal' <- fmtTypedValue rcBorrowVal
+    resVal' <- emit resVal
+    resTy' <- emit resTy
+    emitBuilder $ resVal' <> " = reussir.rc.borrow (" <> rcBorrowVal' <> ") : " <> resTy'
+
+rcIsUniqueCodegen :: TypedValue -> TypedValue -> Codegen ()
+rcIsUniqueCodegen rcIsUniqueVal (resVal, resTy) = emitLine $ do
+    rcIsUniqueVal' <- fmtTypedValue rcIsUniqueVal
+    resVal' <- emit resVal
+    resTy' <- emit resTy
+    unless (isBoolType resTy) $ logAttention_ "non-boolean rc.is_unique result"
+    emitBuilder $ resVal' <> " = reussir.rc.is_unique (" <> rcIsUniqueVal' <> ") : " <> resTy'
+
+panicCodegen :: T.Text -> Codegen ()
+panicCodegen message = emitBuilderLine $ "reussir.panic " <> fromString (show message)
+
+returnCodegen :: Maybe TypedValue -> Codegen ()
+returnCodegen result = emitLine $ do
+    emitBuilder "func.return"
+    for_ result $ fmtTypedValue >=> emitBuilder . (" " <>)
+
+nullableCheckCodegen :: TypedValue -> TypedValue -> Codegen ()
+nullableCheckCodegen nullChkVal (resVal, resTy) = emitBuilderLineM $ do
+    nullChkVal' <- fmtTypedValue nullChkVal
+    nullChkResVal <- emit resVal
+    nullChkresTy <- emit resTy
+    unless (isBoolType resTy) $ logAttention_ "non-boolean nullable.check result"
+    return $ nullChkResVal <> " = reussir.nullable.check (" <> nullChkVal' <> ") : " <> nullChkresTy
+
+nullableCreateCodegen :: Maybe TypedValue -> TypedValue -> Codegen ()
+nullableCreateCodegen nullCreateVal (resVal, resTy) = emitBuilderLineM $ do
+    nullCreateVal' <- maybe mempty (fmap (\x -> " (" <> x <> ")") <$> fmtTypedValue) nullCreateVal
+    nullCreateResVal <- emit resVal
+    nullCreateresTy <- emit resTy
+    return $ nullCreateResVal <> " = reussir.nullable.create" <> nullCreateVal' <> " : " <> nullCreateresTy
+
+rcIncCodegen :: TypedValue -> Codegen ()
+rcIncCodegen rcIncVal = emitBuilderLineM $ do
+    rcIncVal' <- fmtTypedValue rcIncVal
+    return $ "reussir.rc.inc (" <> rcIncVal' <> ")"
+
+compoundCreateCodegen :: [TypedValue] -> TypedValue -> Codegen ()
+compoundCreateCodegen fields (resVal, resTy) = emitBuilderLineM $ do
+    fieldVals <- mapM (emit . fst) fields
+    fieldTys <- mapM (emit . snd) fields
+    resVal' <- emit resVal
+    resTy' <- emit resTy
+    return $
+        resVal'
+            <> " = reussir.record.compound ("
+            <> intercalate ", " fieldVals
+            <> " : "
+            <> intercalate ", " fieldTys
+            <> ") : "
+            <> resTy'
+
+variantCreateCodegen :: Int64 -> TypedValue -> TypedValue -> Codegen ()
+variantCreateCodegen tag value (resVal, resTy) = emitBuilderLineM $ do
+    value' <- fmtTypedValue value
+    resVal' <- emit resVal
+    resTy' <- emit resTy
+    return $
+        resVal'
+            <> " = reussir.record.variant ["
+            <> TB.fromDec tag
+            <> "] ("
+            <> value'
+            <> ") : "
+            <> resTy'
+
 instrCodegen :: Instr -> Codegen ()
 instrCodegen (ICall intrinsic) = intrinsicCallCodegen intrinsic
 instrCodegen (FCall funcCall) = funcCallCodegen funcCall
-instrCodegen (Panic message) = emitBuilderLine $ "reussir.panic " <> fromString (show message)
-instrCodegen (Return result) = emitLine $ do
-    emitBuilder "func.return"
-    for_ result $ fmtTypedValue >=> emitBuilder . (" " <>)
-instrCodegen (NullableCheck nullChkVal nullChkRes) = emitBuilderLineM $ do
-    nullChkVal' <- fmtTypedValue nullChkVal
-    nullChkResVal <- emit (fst nullChkRes)
-    nullChkresTy <- emit (snd nullChkRes)
-    unless (isBoolType (snd nullChkRes)) $ logAttention_ "non-boolean nullable.check result"
-    return $ nullChkResVal <> " = reussir.nullable.check (" <> nullChkVal' <> ") : " <> nullChkresTy
-instrCodegen (NullableCreate nullCreateVal nullCreateRes) = emitBuilderLineM $ do
-    nullCreateVal' <- maybe mempty (fmap (\x -> " (" <> x <> ")") <$> fmtTypedValue) nullCreateVal
-    nullCreateResVal <- emit (fst nullCreateRes)
-    nullCreateresTy <- emit (snd nullCreateRes)
-    return $ nullCreateResVal <> " = reussir.nullable.create" <> nullCreateVal' <> " : " <> nullCreateresTy
-instrCodegen (NullableDispatch nullDispVal nullDispNonnull nullDispNull nullDispRes) = nullableDispCodegen nullDispVal nullDispNonnull nullDispNull nullDispRes
+instrCodegen (Panic message) = panicCodegen message
+instrCodegen (Return result) = returnCodegen result
+instrCodegen (NullableCheck nullChkVal nullChkRes) = nullableCheckCodegen nullChkVal nullChkRes
+instrCodegen (NullableCreate nullCreateVal nullCreateRes) = nullableCreateCodegen nullCreateVal nullCreateRes
+instrCodegen (NullableDispatch val nnul nul res) = nullableDispCodegen val nnul nul res
+instrCodegen (RcInc rcIncVal) = rcIncCodegen rcIncVal
+instrCodegen (RcCreate i r o) = rcCreateCodegen i r o
+instrCodegen (RcFreeze i o) = rcFreezeCodegen i o
+instrCodegen (RcBorrow i o) = rcBorrowCodegen i o
+instrCodegen (RcIsUnique i o) = rcIsUniqueCodegen i o
+instrCodegen (CompoundCreate fields res) = compoundCreateCodegen fields res
+instrCodegen (VariantCreate tag value res) = variantCreateCodegen tag value res
 instrCodegen (WithLoc loc instr) = withLocation loc (instrCodegen instr)
 instrCodegen _ = error "Not implemented"
