@@ -200,29 +200,81 @@ data Instr
         , refStoreVal :: TypedValue
         }
     | -- | reussir.region.run: Execute a region (inner region accepts !reussir.region argument)
+      --
+      -- Syntax: [%res =] reussir.region.run [-> result_type] {
+      --           ^bb0(%region : !reussir.region):
+      --             ...
+      --             reussir.region.yield [%val]
+      --         }
+      -- Constraints: inner region must accept one !reussir.region argument
+      --              can optionally yield a flex value which becomes rigid after execution
+      --              cannot be nested in the same function
       RegionRun
         { regionRunBody :: Block
         , regionRunRes :: Maybe TypedValue
         }
-    | -- | generic yield operation for regions and closures
+    | -- | Yield operations for different contexts
+      --
+      -- reussir.region.yield - Yield from a region
+      --   Syntax: reussir.region.yield [%value : !reussir.rc<T flex>]
+      --   Constraints: must be inside region.run
+      --                value is optional and must be !reussir.rc<T flex> if present
+      --
+      -- reussir.closure.yield - Yield from a closure body
+      --   Syntax: reussir.closure.yield [%value : T]
+      --   Constraints: must be inside closure.create
+      --                value type must match closure return type
+      --                value is optional only if closure has no return type
+      --
+      -- scf.yield - Yield from high-level SCF operations
+      --   Syntax: reussir.scf.yield [%value : T]
+      --   Constraints: must be inside nullable.dispatch or record.dispatch
+      --                value type must match parent operation's result type
+      --                value is optional only if parent has no result
       Yield YieldKind (Maybe TypedValue)
     | -- | reussir.closure.create: Create a closure (inlined with body or outlined with vtable)
+      --
+      -- Syntax: %closure = reussir.closure.create [token(%t : !reussir.token<...>)] [vtable(@symbol)] {
+      --           ^bb0(%arg1 : T1, %arg2 : T2, ...):
+      --             ...
+      --             reussir.closure.yield [%result : R]
+      --         }
+      -- Constraints: closure is always wrapped in !reussir.rc pointer
+      --              inlined form: body region required, no vtable attribute
+      --              outlined form: vtable attribute required, no body region
+      --              token layout must match RcBox with ClosureHeader and Payload
       ClosureCreate
         { closureCreateBody :: Block
         , closureCreateRes :: TypedValue
         }
     | -- | reussir.closure.apply: Apply an argument to a closure (partial application)
+      --
+      -- Syntax: %applied = reussir.closure.apply (%arg : T) to (%closure : !reussir.closure<(T, ...) -> R>)
+      --           : !reussir.closure<(...) -> R>
+      -- Constraints: closure must have at least one unapplied argument
+      --              arg type must match the next expected argument type
+      --              result closure has one fewer argument
       ClosureApply
         { closureApplyTarget :: TypedValue
         , closureApplyArg :: TypedValue
         , closureApplyRes :: TypedValue
         }
     | -- | reussir.closure.eval: Evaluate a fully-applied closure
+      --
+      -- Syntax: [%result =] reussir.closure.eval (%closure : !reussir.closure<() -> R>) [: R]
+      -- Constraints: closure must be fully applied (no remaining arguments)
+      --              consumes one reference to the closure
+      --              result type must match closure return type
       ClosureEval
         { closureEvalTarget :: TypedValue
         , closureEvalRes :: TypedValue
         }
-    | -- | reussir.closure.uniqify: Ensure unique closure ownership
+    | -- | reussir.closure.uniqify: Ensure unique closure ownership (high-level SCF)
+      --
+      -- Syntax: %unique = reussir.closure.uniqify (%closure : !reussir.closure<T>) : !reussir.closure<T>
+      -- Constraints: expands to rc.is_unique guarded scf.if-else
+      --              clones closure if not unique (refcount > 1)
+      --              returns original closure if unique
       ClosureUniqify
         { closureUniqifyTarget :: TypedValue
         , closureUniqifyRes :: TypedValue
@@ -428,6 +480,30 @@ refSpillCodegen = emitUnaryOp "reussir.ref.spill"
 refLoadCodegen :: TypedValue -> TypedValue -> Codegen ()
 refLoadCodegen = emitUnaryOp "reussir.ref.load"
 
+refStoreCodegen :: TypedValue -> TypedValue -> Codegen ()
+refStoreCodegen target value = emitBuilderLineM $ do
+    target' <- fmtTypedValue target
+    value' <- fmtTypedValue value
+    return $ "reussir.ref.store (" <> target' <> ") (" <> value' <> ")"
+
+regionRunCodegen :: Block -> Maybe TypedValue -> Codegen ()
+regionRunCodegen regionRunBody regionRunRes = do
+    emitIndentation
+    for_ regionRunRes $ emit . fst >=> emitBuilder . (<> " = ")
+    emitBuilder "reussir.region.run "
+    for_ regionRunRes $ emit . snd >=> emitBuilder . (" -> " <>)
+    blockCodegen True regionRunBody
+
+yieldCodegen :: YieldKind -> Maybe TypedValue -> Codegen ()
+yieldCodegen kind result = emitBuilderLineM $ do
+    result' <- maybe mempty fmtTypedValue result
+    return $ opName <> result'
+  where
+    opName = case kind of
+        YieldClosure -> "reussir.closure.yield"
+        YieldRegion -> "reussir.region.yield"
+        YieldScf -> "scf.yield"
+
 instrCodegen :: Instr -> Codegen ()
 instrCodegen (ICall intrinsic) = intrinsicCallCodegen intrinsic
 instrCodegen (FCall funcCall) = funcCallCodegen funcCall
@@ -446,5 +522,8 @@ instrCodegen (VariantCreate tag value res) = variantCreateCodegen tag value res
 instrCodegen (RefProject val field res) = refProjectCodegen val field res
 instrCodegen (RefSpill val res) = refSpillCodegen val res
 instrCodegen (RefLoad val res) = refLoadCodegen val res
+instrCodegen (RefStore target value) = refStoreCodegen target value
+instrCodegen (RegionRun body res) = regionRunCodegen body res
+instrCodegen (Yield kind result) = yieldCodegen kind result
 instrCodegen (WithLoc loc instr) = withLocation loc (instrCodegen instr)
 instrCodegen _ = error "Not implemented"

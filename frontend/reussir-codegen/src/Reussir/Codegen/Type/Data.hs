@@ -14,6 +14,7 @@ module Reussir.Codegen.Type.Data (
     Expr (..),
     Closure (..),
     Tensor (..),
+    isRefType,
     isBoolType,
 )
 where
@@ -66,3 +67,7 @@ data Capability = Unspecified | Shared | Value | Flex | Rigid | Field
 isBoolType :: Type -> Bool
 isBoolType (TypePrim PrimBool) = True
 isBoolType _ = False
+
+isRefType :: Type -> Bool
+isRefType (TypeRef _) = True
+isRefType _ = False
