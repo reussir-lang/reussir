@@ -9,6 +9,8 @@ module Reussir.Codegen.Context.Emission (
     emitSpace,
     emitIndentation,
     emitLine,
+    emitBuilderLineM,
+    emitBuilderLine,
     intercalate,
 )
 where
@@ -65,6 +67,18 @@ emitLine codegen = do
         emitBuilder $ " loc(" <> "#loc" <> TB.fromDec l <> ")"
     emitBuilder "\n"
     pure a
+
+{- | Emit code with indentation and a newline.
+  This is used to emit complete lines of code.
+-}
+emitBuilderLineM :: Codegen TB.Builder -> Codegen ()
+emitBuilderLineM codegen = emitLine $ codegen >>= emitBuilder
+
+{- | Emit code with indentation and a newline.
+  This is used to emit complete lines of code.
+-}
+emitBuilderLine :: TB.Builder -> Codegen ()
+emitBuilderLine builder = emitBuilderLineM (pure builder)
 
 {- | Intercalate a list of builders with a separator.
   This is used to emit a list of builders with a separator.

@@ -18,6 +18,7 @@ module Reussir.Codegen.Context.Codegen (
     withLocation,
     getNewBlockId,
     startOverBlockCounter,
+    withoutLocation,
 )
 where
 
@@ -145,6 +146,13 @@ withLocation loc codegen = do
     l <- allocLocation loc
     backup <- E.gets locForLine
     E.modify $ \ctx -> ctx{locForLine = Just l}
+    codegen
+    E.modify $ \ctx -> ctx{locForLine = backup}
+
+withoutLocation :: Codegen () -> Codegen ()
+withoutLocation codegen = do
+    backup <- E.gets locForLine
+    E.modify $ \ctx -> ctx{locForLine = Nothing}
     codegen
     E.modify $ \ctx -> ctx{locForLine = backup}
 

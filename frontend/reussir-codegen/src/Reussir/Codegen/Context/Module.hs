@@ -2,6 +2,7 @@
 
 module Reussir.Codegen.Context.Module (
     runCodegenToBackend,
+    emitOutlineLocs,
     emitModule,
 )
 where

@@ -7,6 +7,7 @@ module Reussir.Codegen.Context (
     emptyContext,
     runCodegen,
     emitModule,
+    emitOutlineLocs,
     Emission (emit),
     emitCG,
     emitBuilder,
@@ -45,6 +46,7 @@ import Reussir.Codegen.Context.Emission (
  )
 import Reussir.Codegen.Context.Module (
     emitModule,
+    emitOutlineLocs,
     runCodegenToBackend,
  )
 import Reussir.Codegen.Context.Path (Path (..), pathList, pathSingleton)

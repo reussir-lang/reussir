@@ -1,0 +1,313 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+module Test.Codegen.IR (
+    irTests,
+)
+where
+
+import Data.Int (Int64)
+import Data.Text qualified as T
+import Data.Text.Builder.Linear qualified as TB
+import Effectful qualified as E
+import Effectful.Log qualified as L
+import Effectful.State.Static.Local qualified as E
+import Log (defaultLogLevel)
+import Log.Backend.StandardOutput qualified as L
+import Reussir.Bridge qualified as B
+import Reussir.Codegen.Context (runCodegen)
+import Reussir.Codegen.Context qualified as C
+import Reussir.Codegen.Context.Path (pathSingleton)
+import Reussir.Codegen.IR qualified as IR
+import Reussir.Codegen.Intrinsics qualified as I
+import Reussir.Codegen.Location qualified as Loc
+import Reussir.Codegen.Type qualified as TT
+import Reussir.Codegen.Value qualified as V
+import Test.Tasty
+import Test.Tasty.HUnit
+
+runCodegenAsText :: C.Codegen () -> IO T.Text
+runCodegenAsText codegen = do
+    let spec = C.TargetSpec "test_module" "output.mlir" B.OptDefault B.OutputObject B.LogInfo
+    L.withStdOutLogger $ \logger -> do
+        E.runEff $ L.runLog "Test.Codegen.IR" logger defaultLogLevel $ runCodegen spec $ do
+            codegen
+            C.emitBuilder "========= trailing locs =========\n"
+            C.emitOutlineLocs
+            E.gets (TB.runBuilder . C.builder)
+
+runCodegenForInstr :: IR.Instr -> IO T.Text
+runCodegenForInstr instr =
+    runCodegenAsText (IR.instrCodegen instr)
+
+primitiveI32 :: TT.Type
+primitiveI32 = TT.TypePrim (TT.PrimInt TT.PrimInt32)
+
+primitiveBool :: TT.Type
+primitiveBool = TT.TypePrim TT.PrimBool
+
+primitiveI64 :: TT.Type
+primitiveI64 = TT.TypePrim (TT.PrimInt TT.PrimInt64)
+
+-- RC I32 type (non-nullable)
+rcI32 :: TT.Type
+rcI32 = TT.TypeRc (TT.Rc primitiveI32 TT.NonAtomic TT.Shared)
+
+-- Nullable RC I32 type
+nullableRcI32 :: TT.Type
+nullableRcI32 = TT.TypeNullable rcI32
+
+-- Helper functions for creating test values
+val :: Int64 -> V.Value
+val = V.Value
+
+typedVal :: Int64 -> TT.Type -> V.TypedValue
+typedVal v t = (val v, t)
+
+-- Helper function for creating blocks
+emptyBlock :: IR.Block
+emptyBlock = IR.Block{blkArgs = [], blkBody = []}
+
+blockWithArgs :: [V.TypedValue] -> [IR.Instr] -> IR.Block
+blockWithArgs args body = IR.Block{blkArgs = args, blkBody = body}
+
+-- Helper function for creating intrinsic calls
+intrinsicCall :: I.IntrinsicCall -> IR.Instr
+intrinsicCall = IR.ICall
+
+-- Helper function for creating function calls
+funcCall :: C.Path -> [V.TypedValue] -> Maybe V.TypedValue -> IR.Instr
+funcCall target args result = IR.FCall (IR.FuncCall target args result)
+
+-- Helper function for creating nullable operations
+nullableCheck :: V.TypedValue -> V.TypedValue -> IR.Instr
+nullableCheck val' res = IR.NullableCheck val' res
+
+nullableCreate :: Maybe V.TypedValue -> V.TypedValue -> IR.Instr
+nullableCreate val' res = IR.NullableCreate val' res
+
+nullableDispatch :: V.TypedValue -> IR.Block -> IR.Block -> Maybe V.TypedValue -> IR.Instr
+nullableDispatch val' nonnull nullBlock result = IR.NullableDispatch val' nonnull nullBlock result
+
+-- Helper function for creating location
+fileLocation :: T.Text -> Int64 -> Int64 -> Int64 -> Int64 -> Loc.Location
+fileLocation filename startLine startCol endLine endCol =
+    Loc.FileLineColRange filename startLine startCol endLine endCol
+
+-- Helper to check if a string is present in the output
+isInfixOf :: String -> String -> Bool
+isInfixOf needle haystack = T.pack needle `T.isInfixOf` T.pack haystack
+
+-- Helper to check relative positions - ensures needle2 comes after needle1
+comesAfter :: String -> String -> String -> Bool
+comesAfter needle1 needle2 haystack =
+    isInfixOf needle1 haystack && isInfixOf needle2 haystack
+        && case (T.breakOn (T.pack needle1) (T.pack haystack), T.breakOn (T.pack needle2) (T.pack haystack)) of
+            ((before1, _), (before2, _)) -> T.length before2 > T.length before1
+
+irTests :: TestTree
+irTests =
+    testGroup
+        "IR.Codegen"
+        [ testGroup
+            "ICall"
+            [ testCase "ICall Codegen" $ do
+                result <- runCodegenForInstr
+                    ( intrinsicCall
+                        ( I.IntrinsicCall
+                            (I.Arith (I.Addi (I.IntOFFlag 0)))
+                            [typedVal 1 primitiveI32, typedVal 2 primitiveI32]
+                            [typedVal 3 primitiveI32]
+                        )
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain arith.addi" $ "arith.addi" `isInfixOf` resultStr
+                assertBool "Should contain result %3" $ "%3" `isInfixOf` resultStr
+                assertBool "Should contain args %1 and %2" $ "%1" `isInfixOf` resultStr && "%2" `isInfixOf` resultStr
+                assertBool "Should contain i32 type" $ "i32" `isInfixOf` resultStr
+                assertBool "Result should come before operation" $ "%3 = " `isInfixOf` resultStr
+            ]
+        , testGroup
+            "FCall"
+            [ testCase "FCall Codegen without result" $ do
+                result <- runCodegenForInstr
+                    (funcCall (pathSingleton "test_func") [typedVal 1 primitiveI32] Nothing)
+                let resultStr = T.unpack result
+                assertBool "Should contain func.call" $ "func.call" `isInfixOf` resultStr
+                assertBool "Should contain test_func" $ "test_func" `isInfixOf` resultStr
+                assertBool "Should contain arg %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain i32 type" $ "i32" `isInfixOf` resultStr
+                assertBool "Should not contain result assignment" $ not (" = func.call" `isInfixOf` resultStr)
+            , testCase "FCall Codegen with result" $ do
+                result <- runCodegenForInstr
+                    (funcCall (pathSingleton "test_func") [typedVal 1 primitiveI32] (Just (typedVal 2 primitiveI32)))
+                let resultStr = T.unpack result
+                assertBool "Should contain func.call" $ "func.call" `isInfixOf` resultStr
+                assertBool "Should contain result %2" $ "%2 = " `isInfixOf` resultStr
+                assertBool "Should contain test_func" $ "test_func" `isInfixOf` resultStr
+                assertBool "Should contain arg %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain return type ->" $ " -> " `isInfixOf` resultStr
+                assertBool "Result should come before func.call" $ comesAfter "%2 = " "func.call" resultStr
+            , testCase "FCall Codegen with multiple args" $ do
+                result <- runCodegenForInstr
+                    ( funcCall
+                        (pathSingleton "test_func")
+                        [typedVal 1 primitiveI32, typedVal 2 primitiveI64]
+                        (Just (typedVal 3 primitiveBool))
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain func.call" $ "func.call" `isInfixOf` resultStr
+                assertBool "Should contain result %3" $ "%3 = " `isInfixOf` resultStr
+                assertBool "Should contain test_func" $ "test_func" `isInfixOf` resultStr
+                assertBool "Should contain both args" $ "%1" `isInfixOf` resultStr && "%2" `isInfixOf` resultStr
+                assertBool "Should contain i32 and i64 types" $ "i32" `isInfixOf` resultStr && "i64" `isInfixOf` resultStr
+                assertBool "Should contain return type" $ " -> " `isInfixOf` resultStr
+            ]
+        , testGroup
+            "Panic"
+            [ testCase "Panic Codegen" $ do
+                result <- runCodegenForInstr (IR.Panic "error message")
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.panic" $ "reussir.panic" `isInfixOf` resultStr
+                assertBool "Should contain error message" $ "error message" `isInfixOf` resultStr
+            , testCase "Panic Codegen with empty message" $ do
+                result <- runCodegenForInstr (IR.Panic "")
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.panic" $ "reussir.panic" `isInfixOf` resultStr
+            ]
+        , testGroup
+            "Return"
+            [ testCase "Return Codegen without value" $ do
+                result <- runCodegenForInstr (IR.Return Nothing)
+                let resultStr = T.unpack result
+                assertBool "Should contain func.return" $ "func.return" `isInfixOf` resultStr
+            , testCase "Return Codegen with value" $ do
+                result <- runCodegenForInstr (IR.Return (Just (typedVal 1 primitiveI32)))
+                let resultStr = T.unpack result
+                assertBool "Should contain func.return" $ "func.return" `isInfixOf` resultStr
+                assertBool "Should contain %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain i32 type" $ "i32" `isInfixOf` resultStr
+                assertBool "Value should come after return" $ comesAfter "func.return" "%1" resultStr
+            ]
+        , testGroup
+            "NullableCheck"
+            [ testCase "NullableCheck Codegen" $ do
+                result <- runCodegenForInstr
+                    (nullableCheck (typedVal 1 nullableRcI32) (typedVal 2 primitiveBool))
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.nullable.check" $ "reussir.nullable.check" `isInfixOf` resultStr
+                assertBool "Should contain result %2" $ "%2 = " `isInfixOf` resultStr
+                assertBool "Should contain nullable type" $ "nullable" `isInfixOf` resultStr || "!reussir.nullable" `isInfixOf` resultStr
+                assertBool "Should contain input %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain boolean type or i1" $ "i1" `isInfixOf` resultStr || "bool" `isInfixOf` resultStr
+                assertBool "Result should come before operation" $ comesAfter "%2 = " "reussir.nullable.check" resultStr
+            ]
+        , testGroup
+            "NullableCreate"
+            [ testCase "NullableCreate Codegen without value" $ do
+                result <- runCodegenForInstr
+                    (nullableCreate Nothing (typedVal 1 nullableRcI32))
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.nullable.create" $ "reussir.nullable.create" `isInfixOf` resultStr
+                assertBool "Should contain result %1" $ "%1 = " `isInfixOf` resultStr
+                assertBool "Should contain nullable type" $ "nullable" `isInfixOf` resultStr || "!reussir.nullable" `isInfixOf` resultStr
+                assertBool "Should contain type annotation" $ " : " `isInfixOf` resultStr
+                assertBool "Should not contain value argument" $ not ("(%2" `isInfixOf` resultStr)
+            , testCase "NullableCreate Codegen with value" $ do
+                result <- runCodegenForInstr
+                    (nullableCreate (Just (typedVal 2 rcI32)) (typedVal 1 nullableRcI32))
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.nullable.create" $ "reussir.nullable.create" `isInfixOf` resultStr
+                assertBool "Should contain result %1" $ "%1 = " `isInfixOf` resultStr
+                assertBool "Should contain value %2" $ "%2" `isInfixOf` resultStr
+                assertBool "Should contain nullable type" $ "nullable" `isInfixOf` resultStr || "!reussir.nullable" `isInfixOf` resultStr
+                assertBool "Should contain rc type" $ "reussir.rc" `isInfixOf` resultStr || "rc" `isInfixOf` resultStr
+                assertBool "Value should come before nullable type" $ comesAfter "%2" "nullable" resultStr || comesAfter "%2" "!reussir.nullable" resultStr
+            ]
+        , testGroup
+            "NullableDispatch"
+            [ testCase "NullableDispatch Codegen without result" $ do
+                result <- runCodegenForInstr
+                    ( nullableDispatch
+                        (typedVal 1 nullableRcI32)
+                        (blockWithArgs [typedVal 2 rcI32] [])
+                        emptyBlock
+                        Nothing
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.nullable.dispatch" $ "reussir.nullable.dispatch" `isInfixOf` resultStr
+                assertBool "Should contain input %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain nullable type" $ "nullable" `isInfixOf` resultStr || "!reussir.nullable" `isInfixOf` resultStr
+                assertBool "Should contain nonnull region" $ "nonnull" `isInfixOf` resultStr
+                assertBool "Should contain null region" $ "null" `isInfixOf` resultStr
+                assertBool "Should contain block arguments" $ "%2" `isInfixOf` resultStr
+                assertBool "nonnull should come before null" $ comesAfter "nonnull ->" "null ->" resultStr
+            , testCase "NullableDispatch Codegen with result" $ do
+                result <- runCodegenForInstr
+                    ( nullableDispatch
+                        (typedVal 1 nullableRcI32)
+                        (blockWithArgs [typedVal 2 rcI32] [])
+                        emptyBlock
+                        (Just (typedVal 3 primitiveI32))
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.nullable.dispatch" $ "reussir.nullable.dispatch" `isInfixOf` resultStr
+                assertBool "Should contain result %3" $ "%3" `isInfixOf` resultStr
+                assertBool "Should contain return type ->" $ " -> " `isInfixOf` resultStr
+                assertBool "Should contain input %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain nonnull region" $ "nonnull" `isInfixOf` resultStr
+                assertBool "Should contain null region" $ "null" `isInfixOf` resultStr
+                assertBool "Should contain i32 return type" $ "i32" `isInfixOf` resultStr
+            , testCase "NullableDispatch Codegen with instructions in blocks" $ do
+                result <- runCodegenForInstr
+                    ( nullableDispatch
+                        (typedVal 1 nullableRcI32)
+                        (blockWithArgs [typedVal 2 rcI32] [IR.Return (Just (typedVal 2 primitiveI32))])
+                        (blockWithArgs [] [IR.Return Nothing])
+                        Nothing
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.nullable.dispatch" $ "reussir.nullable.dispatch" `isInfixOf` resultStr
+                assertBool "Should contain func.return in nonnull block" $ "func.return" `isInfixOf` resultStr
+                assertBool "Should contain %2 in return" $ "%2" `isInfixOf` resultStr
+                assertBool "Should contain nonnull region" $ "nonnull" `isInfixOf` resultStr
+                assertBool "Should contain null region" $ "null" `isInfixOf` resultStr
+                assertBool "nonnull should come before null" $ comesAfter "nonnull ->" "null ->" resultStr
+            ]
+        , testGroup
+            "WithLoc"
+            [ testCase "WithLoc Codegen with FileLineColRange" $ do
+                result <- runCodegenForInstr
+                    ( IR.WithLoc
+                        (fileLocation "test.hs" 10 5 10 15)
+                        (IR.Return (Just (typedVal 1 primitiveI32)))
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain func.return" $ "func.return" `isInfixOf` resultStr
+                assertBool "Should contain %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain location reference" $ "loc(" `isInfixOf` resultStr
+                assertBool "Should contain #loc0" $ "#loc0" `isInfixOf` resultStr
+                assertBool "Location should come after instruction" $ comesAfter "func.return" "loc" resultStr
+                assertBool "Should contain trailing locs marker" $ "========= trailing locs =========" `isInfixOf` resultStr
+                assertBool "Should contain outline location definition" $ "#loc0 = " `isInfixOf` resultStr
+                assertBool "Outline location should come after marker" $ comesAfter "========= trailing locs =========" "#loc0 = " resultStr
+                assertBool "Should contain file location in outline" $ "test.hs" `isInfixOf` resultStr
+                assertBool "Should contain line/column info in outline" $ "10:5" `isInfixOf` resultStr || "10:5 to 10:15" `isInfixOf` resultStr
+            , testCase "WithLoc Codegen with UnknownLoc" $ do
+                result <- runCodegenForInstr
+                    ( IR.WithLoc
+                        Loc.UnknownLoc
+                        (IR.Panic "error")
+                    )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.panic" $ "reussir.panic" `isInfixOf` resultStr
+                assertBool "Should contain error" $ "error" `isInfixOf` resultStr
+                assertBool "Should contain location reference" $ "loc(" `isInfixOf` resultStr
+                assertBool "Should contain #loc0" $ "#loc0" `isInfixOf` resultStr
+                assertBool "Location should come after instruction" $ comesAfter "reussir.panic" "loc" resultStr
+                assertBool "Should contain trailing locs marker" $ "========= trailing locs =========" `isInfixOf` resultStr
+                assertBool "Should contain outline location definition" $ "#loc0 = " `isInfixOf` resultStr
+                assertBool "Outline location should come after marker" $ comesAfter "========= trailing locs =========" "#loc0 = " resultStr
+                assertBool "Should contain unknown location in outline" $ "?" `isInfixOf` resultStr || "loc(?)" `isInfixOf` resultStr
+            ]
+        ]
+

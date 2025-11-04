@@ -13,16 +13,19 @@ module Reussir.Codegen.IR (
     instrCodegen,
 ) where
 
-import Control.Monad (unless, when)
-import Data.Foldable (forM_)
+import Control.Monad (unless, when, (>=>))
+import Data.Foldable (forM_, for_)
 import Data.Int (Int64)
+import Data.String (IsString (fromString))
 import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
+import Effectful.Log (logAttention_)
 import Reussir.Codegen.Context (Emission (emit), Path, emitIndentation, emitLine, incIndentation)
-import Reussir.Codegen.Context.Codegen (Codegen, getNewBlockId, incIndentationBy, withLocation)
-import Reussir.Codegen.Context.Emission (emitBuilder, intercalate)
+import Reussir.Codegen.Context.Codegen (Codegen, getNewBlockId, incIndentationBy, withLocation, withoutLocation)
+import Reussir.Codegen.Context.Emission (emitBuilder, emitBuilderLine, emitBuilderLineM, intercalate)
 import Reussir.Codegen.Intrinsics (IntrinsicCall, intrinsicCallCodegen)
 import Reussir.Codegen.Location (Location)
+import Reussir.Codegen.Type.Data (isBoolType)
 import Reussir.Codegen.Type.Data qualified as TT
 import Reussir.Codegen.Value (TypedValue)
 
@@ -32,7 +35,7 @@ Unlike intrinsic calls, function calls cannot have multiple results.
 data FuncCall = FuncCall
     { target :: Path
     , args :: [TypedValue]
-    , results :: TypedValue
+    , results :: Maybe TypedValue
     }
     deriving (Show)
 
@@ -280,22 +283,69 @@ fmtTypedValue (val, ty) = do
     return $ val' <> " : " <> ty'
 
 blockCodegen :: Bool -> Block -> Codegen ()
-blockCodegen printArgs blk = incIndentation $ do
-    emitLine $ emitBuilder "{"
-    when printArgs $ do
-        blkId <- getNewBlockId
+blockCodegen printArgs blk = do
+    emitBuilder "{\n"
+    incIndentation $ do
+        when printArgs $ do
+            blkId <- getNewBlockId
+            emitIndentation
+            emitBuilder $ "^bb" <> TB.fromDec blkId
+            unless (null (blkArgs blk)) $ do
+                argList <- mapM fmtTypedValue (blkArgs blk)
+                emitBuilder $ "(" <> intercalate ", " argList <> ")"
+            emitBuilder ":\n"
+        let innerIndent = if printArgs then 1 else 0
+        incIndentationBy innerIndent $ forM_ (blkBody blk) instrCodegen
+    emitBuilderLine "}"
+
+funcCallCodegen :: FuncCall -> Codegen ()
+funcCallCodegen (FuncCall target args result) = emitLine $ do
+    argList <- mapM fmtTypedValue args
+    for_ result $ emit . fst >=> emitBuilder . (<> " = ")
+    emitBuilder $ "func.call @" <> fromString (show target) <> "(" <> intercalate ", " argList <> ")"
+    for_ result $ emit . snd >=> emitBuilder . (" -> " <>)
+
+nullableDispCodegen :: TypedValue -> Block -> Block -> Maybe TypedValue -> Codegen ()
+nullableDispCodegen nullDispVal nullDispNonnull nullDispNull nullDispRes = do
+    emitIndentation
+    for_ nullDispRes $ emit . fst >=> emitBuilder . (<> " = ")
+    nullDispVal' <- fmtTypedValue nullDispVal
+    emitBuilder $ "reussir.nullable.dispatch (" <> nullDispVal' <> ")"
+    for_ nullDispRes $ emit . snd >=> emitBuilder . (" -> " <>)
+    emitBuilder " {\n"
+    unless (isSingleton (blkArgs nullDispNonnull)) $ logAttention_ "nonnull region must have exactly one argument"
+    unless (null (blkArgs nullDispNull)) $ logAttention_ "null region must have no arguments"
+    incIndentation $ withoutLocation $ do
         emitIndentation
-        emitBuilder $ "^bb" <> TB.fromDec blkId
-        unless (null (blkArgs blk)) $ do
-            argList <- mapM fmtTypedValue (blkArgs blk)
-            emitBuilder $ "(" <> intercalate ", " argList <> ")"
-        emitBuilder ":\n"
-    let innerIndent = if printArgs then 1 else 0
-    incIndentationBy innerIndent $ forM_ (blkBody blk) instrCodegen
-    emitLine $ emitBuilder "}"
+        emitBuilder "nonnull -> "
+        blockCodegen True nullDispNonnull
+        emitIndentation
+        emitBuilder "null -> "
+        blockCodegen True nullDispNull
+    emitBuilderLine "}"
+  where
+    isSingleton :: [a] -> Bool
+    isSingleton [_] = True
+    isSingleton _ = False
 
 instrCodegen :: Instr -> Codegen ()
-instrCodegen (Panic message) = emitLine $ emitBuilder $ "reussir.panic " <> TB.fromText message
 instrCodegen (ICall intrinsic) = intrinsicCallCodegen intrinsic
+instrCodegen (FCall funcCall) = funcCallCodegen funcCall
+instrCodegen (Panic message) = emitBuilderLine $ "reussir.panic " <> fromString (show message)
+instrCodegen (Return result) = emitLine $ do
+    emitBuilder "func.return"
+    for_ result $ fmtTypedValue >=> emitBuilder . (" " <>)
+instrCodegen (NullableCheck nullChkVal nullChkRes) = emitBuilderLineM $ do
+    nullChkVal' <- fmtTypedValue nullChkVal
+    nullChkResVal <- emit (fst nullChkRes)
+    nullChkresTy <- emit (snd nullChkRes)
+    unless (isBoolType (snd nullChkRes)) $ logAttention_ "non-boolean nullable.check result"
+    return $ nullChkResVal <> " = reussir.nullable.check (" <> nullChkVal' <> ") : " <> nullChkresTy
+instrCodegen (NullableCreate nullCreateVal nullCreateRes) = emitBuilderLineM $ do
+    nullCreateVal' <- maybe mempty (fmap (\x -> " (" <> x <> ")") <$> fmtTypedValue) nullCreateVal
+    nullCreateResVal <- emit (fst nullCreateRes)
+    nullCreateresTy <- emit (snd nullCreateRes)
+    return $ nullCreateResVal <> " = reussir.nullable.create" <> nullCreateVal' <> " : " <> nullCreateresTy
+instrCodegen (NullableDispatch nullDispVal nullDispNonnull nullDispNull nullDispRes) = nullableDispCodegen nullDispVal nullDispNonnull nullDispNull nullDispRes
 instrCodegen (WithLoc loc instr) = withLocation loc (instrCodegen instr)
 instrCodegen _ = error "Not implemented"

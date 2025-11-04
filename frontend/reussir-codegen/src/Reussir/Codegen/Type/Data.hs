@@ -14,6 +14,7 @@ module Reussir.Codegen.Type.Data (
     Expr (..),
     Closure (..),
     Tensor (..),
+    isBoolType,
 )
 where
 
@@ -61,3 +62,7 @@ data Atomicity = Atomic | NonAtomic
 
 data Capability = Unspecified | Shared | Value | Flex | Rigid | Field
     deriving (Eq, Show, Hashable, Generic)
+
+isBoolType :: Type -> Bool
+isBoolType (TypePrim PrimBool) = True
+isBoolType _ = False
