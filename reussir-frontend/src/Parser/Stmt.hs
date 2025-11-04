@@ -38,7 +38,23 @@ parseFuncDef = do
 
     return (Function vis name (fromMaybe [] args) ret body)
 
+parseEnumConstructor :: Parser (Identifier, [Typename])
+parseEnumConstructor = do 
+    name <- parseIdentifier 
+    tys  <- optional $ openParen *> parseTypename `sepBy` comma <* closeParen
+    return (name, fromMaybe [] tys)
+
+parseEnumDec :: Parser Stmt
+parseEnumDec = do 
+    vis    <- parseVis 
+    name   <- string "enum" *> space *> parseIdentifier
+    tyvars <- openAngle *> parseIdentifier `sepBy` comma <* closeAngle
+    body   <- openBody *> parseEnumConstructor `sepBy` comma <* closeBody
+
+    return (Enum vis name tyvars body)
+
 parseStmt :: Parser Stmt
 parseStmt = try parseFuncDef
         <|> try parseStructDec
+        <|> try parseEnumDec
 
