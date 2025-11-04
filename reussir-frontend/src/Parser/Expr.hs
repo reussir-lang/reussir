@@ -5,9 +5,13 @@ module Parser.Expr where
 import Control.Monad.Combinators.Expr
 
 import Data.Functor
+import Data.Maybe
 
 import Parser.Types
 import Parser.Types.Expr
+
+colon :: Parser ()
+colon = char ':' *> space
 
 semicolon :: Parser ()
 semicolon = char ';' *> space
@@ -27,11 +31,24 @@ openBody = char '{' *> space
 closeBody :: Parser ()
 closeBody = char '}' *> space
 
+openAngle :: Parser ()
+openAngle = char '<' *> space
+
+closeAngle :: Parser ()
+closeAngle = char '>' *> space
+
 parseBody :: Parser Expr
 parseBody = openBody *> parseExpr <* closeBody
 
 parseTypename :: Parser Typename
-parseTypename = fmap (\(Identifier name) -> Typename name) parseIdentifier
+parseTypename = do 
+    prefix <- fmap unIdentifier parseIdentifier
+    suffix <- optional parseTypenameParams
+
+    return (Typename prefix (fromMaybe [] suffix))
+
+parseTypenameParams :: Parser [Typename]
+parseTypenameParams = openAngle *> parseTypename `sepBy1` comma <* closeAngle
 
 parseIdentifier :: Parser Identifier
 parseIdentifier = do 
@@ -85,6 +102,14 @@ parseFuncCall = do
     name <- parseIdentifier
     args <- openParen *> parseExpr `sepBy` comma <* closeParen
     return (FuncCall name args)
+
+parseLambda :: Parser Expr 
+parseLambda = do 
+    name <- char '|' *> space *> parseIdentifier
+    ty   <- colon *> parseTypename <* char '|' <* space 
+    body <- parseExpr
+
+    return (Lambda name ty body)
 
 parseConstant :: Parser Constant
 parseConstant = try (ConstDouble <$> parseDouble)
@@ -142,4 +167,4 @@ parseExprTerm = choice
     ]
 
 parseExpr :: Parser Expr
-parseExpr = makeExprParser parseExprTerm exprOpTable
+parseExpr = parseLambda <|> makeExprParser parseExprTerm exprOpTable

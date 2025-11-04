@@ -1,7 +1,8 @@
 module Parser.Types.Expr where
 
-newtype Identifier = Identifier String deriving Show
-newtype Typename = Typename String deriving Show
+newtype Identifier = Identifier { unIdentifier :: String } deriving Show
+
+data Typename = Typename String [Typename] deriving Show
 
 data Constant
     = ConstInt Int
@@ -23,4 +24,5 @@ data Expr
     | Cast Typename Expr
     | LetIn Identifier Expr Expr
     | FuncCall Identifier [Expr]
+    | Lambda Identifier Typename Expr
     deriving Show
