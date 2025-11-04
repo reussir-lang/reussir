@@ -280,6 +280,14 @@ fmtTypedValue (val, ty) = do
     ty' <- emit ty
     return $ val' <> " : " <> ty'
 
+-- | Common pattern for operations: res = operation (input) : resType
+emitUnaryOp :: TB.Builder -> TypedValue -> TypedValue -> Codegen ()
+emitUnaryOp opName inputVal (resVal, resTy) = emitLine $ do
+    inputVal' <- fmtTypedValue inputVal
+    resVal' <- emit resVal
+    resTy' <- emit resTy
+    emitBuilder $ resVal' <> " = " <> opName <> " (" <> inputVal' <> ") : " <> resTy'
+
 blockCodegen :: Bool -> Block -> Codegen ()
 blockCodegen printArgs blk = do
     emitBuilder "{\n"
@@ -336,26 +344,15 @@ rcCreateCodegen rcCreateVal rcCreateRegion (resVal, resTy) = emitLine $ do
     emitBuilder $ ": " <> resTy'
 
 rcFreezeCodegen :: TypedValue -> TypedValue -> Codegen ()
-rcFreezeCodegen rcFreezeVal (resVal, resTy) = emitLine $ do
-    rcFreezeVal' <- fmtTypedValue rcFreezeVal
-    resVal' <- emit resVal
-    resTy' <- emit resTy
-    emitBuilder $ resVal' <> " = reussir.rc.freeze (" <> rcFreezeVal' <> ") : " <> resTy'
+rcFreezeCodegen = emitUnaryOp "reussir.rc.freeze"
 
 rcBorrowCodegen :: TypedValue -> TypedValue -> Codegen ()
-rcBorrowCodegen rcBorrowVal (resVal, resTy) = emitLine $ do
-    rcBorrowVal' <- fmtTypedValue rcBorrowVal
-    resVal' <- emit resVal
-    resTy' <- emit resTy
-    emitBuilder $ resVal' <> " = reussir.rc.borrow (" <> rcBorrowVal' <> ") : " <> resTy'
+rcBorrowCodegen = emitUnaryOp "reussir.rc.borrow"
 
 rcIsUniqueCodegen :: TypedValue -> TypedValue -> Codegen ()
-rcIsUniqueCodegen rcIsUniqueVal (resVal, resTy) = emitLine $ do
-    rcIsUniqueVal' <- fmtTypedValue rcIsUniqueVal
-    resVal' <- emit resVal
-    resTy' <- emit resTy
+rcIsUniqueCodegen rcIsUniqueVal res@(_, resTy) = do
     unless (isBoolType resTy) $ logAttention_ "non-boolean rc.is_unique result"
-    emitBuilder $ resVal' <> " = reussir.rc.is_unique (" <> rcIsUniqueVal' <> ") : " <> resTy'
+    emitUnaryOp "reussir.rc.is_unique" rcIsUniqueVal res
 
 panicCodegen :: T.Text -> Codegen ()
 panicCodegen message = emitBuilderLine $ "reussir.panic " <> fromString (show message)
@@ -366,12 +363,9 @@ returnCodegen result = emitLine $ do
     for_ result $ fmtTypedValue >=> emitBuilder . (" " <>)
 
 nullableCheckCodegen :: TypedValue -> TypedValue -> Codegen ()
-nullableCheckCodegen nullChkVal (resVal, resTy) = emitBuilderLineM $ do
-    nullChkVal' <- fmtTypedValue nullChkVal
-    nullChkResVal <- emit resVal
-    nullChkresTy <- emit resTy
+nullableCheckCodegen nullChkVal res@(_, resTy) = do
     unless (isBoolType resTy) $ logAttention_ "non-boolean nullable.check result"
-    return $ nullChkResVal <> " = reussir.nullable.check (" <> nullChkVal' <> ") : " <> nullChkresTy
+    emitUnaryOp "reussir.nullable.check" nullChkVal res
 
 nullableCreateCodegen :: Maybe TypedValue -> TypedValue -> Codegen ()
 nullableCreateCodegen nullCreateVal (resVal, resTy) = emitBuilderLineM $ do
@@ -414,6 +408,26 @@ variantCreateCodegen tag value (resVal, resTy) = emitBuilderLineM $ do
             <> ") : "
             <> resTy'
 
+refProjectCodegen :: TypedValue -> Int64 -> TypedValue -> Codegen ()
+refProjectCodegen val field (resVal, resTy) = emitBuilderLineM $ do
+    val' <- fmtTypedValue val
+    resVal' <- emit resVal
+    resTy' <- emit resTy
+    return $
+        resVal'
+            <> " = reussir.ref.project ("
+            <> val'
+            <> ") ["
+            <> TB.fromDec field
+            <> "] : "
+            <> resTy'
+
+refSpillCodegen :: TypedValue -> TypedValue -> Codegen ()
+refSpillCodegen = emitUnaryOp "reussir.ref.spill"
+
+refLoadCodegen :: TypedValue -> TypedValue -> Codegen ()
+refLoadCodegen = emitUnaryOp "reussir.ref.load"
+
 instrCodegen :: Instr -> Codegen ()
 instrCodegen (ICall intrinsic) = intrinsicCallCodegen intrinsic
 instrCodegen (FCall funcCall) = funcCallCodegen funcCall
@@ -429,5 +443,8 @@ instrCodegen (RcBorrow i o) = rcBorrowCodegen i o
 instrCodegen (RcIsUnique i o) = rcIsUniqueCodegen i o
 instrCodegen (CompoundCreate fields res) = compoundCreateCodegen fields res
 instrCodegen (VariantCreate tag value res) = variantCreateCodegen tag value res
+instrCodegen (RefProject val field res) = refProjectCodegen val field res
+instrCodegen (RefSpill val res) = refSpillCodegen val res
+instrCodegen (RefLoad val res) = refLoadCodegen val res
 instrCodegen (WithLoc loc instr) = withLocation loc (instrCodegen instr)
 instrCodegen _ = error "Not implemented"
