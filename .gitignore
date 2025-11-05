@@ -5,3 +5,6 @@
 /build
 .cache
 rustc-ice-*
+.envrc
+.direnv
+dist-*

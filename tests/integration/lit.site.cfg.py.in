@@ -8,7 +8,6 @@ config.test_output_root = r'@CMAKE_CURRENT_BINARY_DIR@'
 config.mlir_translate_path = r'@mlir_translate_path@'
 config.opt_path = r'@opt_path@'
 config.llc_path = r'@llc_path@'
-config.rrc_path = r'@CMAKE_RUNTIME_OUTPUT_DIRECTORY@/rrc'
 config.cc_path = r'@CMAKE_C_COMPILER@'
 config.library_path = r'@CMAKE_LIBRARY_OUTPUT_DIRECTORY@'
 

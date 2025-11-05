@@ -3,6 +3,9 @@ get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 get_property(extension_libs GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
 get_property(translation_libs GLOBAL PROPERTY MLIR_TRANSLATION_LIBS)
 
+# Find spdlog
+find_package(spdlog REQUIRED)
+
 # Conditionally add TPDE to link libraries
 set(TPDE_LINK_LIB "")
 if(REUSSIR_HAS_TPDE)
@@ -30,6 +33,7 @@ add_mlir_library(MLIRReussirBridge
     MLIRReussir
     MLIRReussirBasicOpsLowering
     MLIRReussirSCFOpsLowering
+    spdlog::spdlog
     ${TPDE_LINK_LIB}
 )
 

@@ -68,6 +68,8 @@
 #endif
 #include <vector>
 
+#include <spdlog/spdlog.h>
+
 #include "Reussir/Bridge.h"
 #include "Reussir/Conversion/BasicOpsLowering.h"
 #include "Reussir/Conversion/SCFOpsLowering.h"
@@ -77,21 +79,36 @@ using namespace mlir;
 
 namespace reussir {
 namespace {
-void logIfNeeded(const CompileOptions &options, LogLevel lvl, llvm::Twine msg) {
-  if (options.backendLog && lvl <= options.logLevel)
-    options.backendLog(msg.str(), lvl);
+void setSpdlogLevel(ReussirLogLevel level) {
+  switch (level) {
+  case REUSSIR_LOG_ERROR:
+    spdlog::set_level(spdlog::level::err);
+    break;
+  case REUSSIR_LOG_WARNING:
+    spdlog::set_level(spdlog::level::warn);
+    break;
+  case REUSSIR_LOG_INFO:
+    spdlog::set_level(spdlog::level::info);
+    break;
+  case REUSSIR_LOG_DEBUG:
+    spdlog::set_level(spdlog::level::debug);
+    break;
+  case REUSSIR_LOG_TRACE:
+    spdlog::set_level(spdlog::level::trace);
+    break;
+  }
 }
-llvm::CodeGenOptLevel toLlvmOptLevel(OptOption opt) {
+llvm::CodeGenOptLevel toLlvmOptLevel(ReussirOptOption opt) {
   switch (opt) {
-  case OptOption::None:
+  case REUSSIR_OPT_NONE:
     return llvm::CodeGenOptLevel::None;
-  case OptOption::Default:
+  case REUSSIR_OPT_DEFAULT:
     return llvm::CodeGenOptLevel::Default;
-  case OptOption::Aggressive:
+  case REUSSIR_OPT_AGGRESSIVE:
     return llvm::CodeGenOptLevel::Aggressive;
-  case OptOption::Size:
+  case REUSSIR_OPT_SIZE:
     return llvm::CodeGenOptLevel::Less;
-  case OptOption::TPDE:
+  case REUSSIR_OPT_TPDE:
     return llvm::CodeGenOptLevel::Default;
   }
   llvm_unreachable("unknown optimization level");
@@ -109,9 +126,8 @@ void createLoweringPipeline(mlir::PassManager &pm) {
   pm.addPass(createCSEPass());
   pm.addPass(createCanonicalizerPass());
 }
-void runNPMOptimization(llvm::Module &llvmModule,
-                        const CompileOptions &options) {
-  if (options.opt == OptOption::None) {
+void runNPMOptimization(llvm::Module &llvmModule, ReussirOptOption opt) {
+  if (opt == REUSSIR_OPT_NONE) {
     return;
   }
 
@@ -131,19 +147,19 @@ void runNPMOptimization(llvm::Module &llvmModule,
 
   // Configure optimization level
   llvm::OptimizationLevel optLevel;
-  switch (options.opt) {
-  case OptOption::None:
+  switch (opt) {
+  case REUSSIR_OPT_NONE:
     return; // Already handled above
-  case OptOption::Default:
+  case REUSSIR_OPT_DEFAULT:
     optLevel = llvm::OptimizationLevel::O2;
     break;
-  case OptOption::Aggressive:
+  case REUSSIR_OPT_AGGRESSIVE:
     optLevel = llvm::OptimizationLevel::O3;
     break;
-  case OptOption::Size:
+  case REUSSIR_OPT_SIZE:
     optLevel = llvm::OptimizationLevel::Os;
     break;
-  case OptOption::TPDE:
+  case REUSSIR_OPT_TPDE:
     return;
   }
 
@@ -152,16 +168,14 @@ void runNPMOptimization(llvm::Module &llvmModule,
 
   // Run the optimization
   mpm.run(llvmModule, mam);
-  logIfNeeded(options, LogLevel::Info, "Applied NPM optimization passes.");
+  spdlog::info("Applied NPM optimization passes.");
 }
 #ifdef REUSSIR_HAS_TPDE
-bool writeBufferToFile(const void *data, size_t size, std::string_view filename,
-                       const CompileOptions &options) {
+bool writeBufferToFile(const void *data, size_t size, const char *filename) {
   std::error_code ec;
   llvm::raw_fd_ostream outStream(filename, ec, llvm::sys::fs::OF_None);
   if (ec) {
-    logIfNeeded(options, LogLevel::Error,
-                llvm::Twine("Failed to open output file: ") + ec.message());
+    spdlog::error("Failed to open output file: {}", ec.message());
     return false;
   }
   outStream.write(static_cast<const char *>(data), size);
@@ -169,22 +183,20 @@ bool writeBufferToFile(const void *data, size_t size, std::string_view filename,
   return true;
 }
 #endif
-void emitModule(llvm::Module &llvmModule, llvm::TargetMachine &tm,
-                std::string_view filename, const CompileOptions &options) {
+void emitModuleEnv(llvm::Module &llvmModule, llvm::TargetMachine &tm,
+                const char *filename, ReussirOutputTarget target) {
   std::error_code ec;
   llvm::raw_fd_ostream dest(filename, ec, llvm::sys::fs::OF_None);
   if (ec) {
-    logIfNeeded(options, LogLevel::Error,
-                llvm::Twine("Could not open file: ") + ec.message());
+    spdlog::error("Could not open file: {}", ec.message());
     return;
   }
   llvm::legacy::PassManager pass;
   if (tm.addPassesToEmitFile(pass, dest, nullptr,
-                             options.target == OutputTarget::ASM
+                             target == REUSSIR_OUTPUT_ASM
                                  ? llvm::CodeGenFileType::AssemblyFile
                                  : llvm::CodeGenFileType::ObjectFile)) {
-    logIfNeeded(options, LogLevel::Error,
-                "TargetMachine can't emit this file type");
+    spdlog::error("TargetMachine can't emit this file type");
     return;
   }
 
@@ -193,15 +205,18 @@ void emitModule(llvm::Module &llvmModule, llvm::TargetMachine &tm,
 }
 } // namespace
 
-void compileForNativeMachine(std::string_view mlirTextureModule,
-                             std::string_view sourceName,
-                             std::string_view outputFile,
-                             CompileOptions options) {
+void reussir_bridge_compile_for_native_machine(const char *mlir_module,
+                                               const char *source_name,
+                                               const char *output_file,
+                                               ReussirOutputTarget target,
+                                               ReussirOptOption opt,
+                                               ReussirLogLevel log_level) {
+  setSpdlogLevel(log_level);
   // Initialize native target so we can query TargetMachine for layout/triple.
   llvm::InitializeNativeTarget();
   llvm::InitializeNativeTargetAsmPrinter();
   llvm::InitializeNativeTargetAsmParser();
-  logIfNeeded(options, LogLevel::Info, "Initialized native target.");
+  spdlog::info("Initialized native target.");
 
   // 1) Build a registry and MLIR context with required dialects.
   DialectRegistry registry;
@@ -212,27 +227,25 @@ void compileForNativeMachine(std::string_view mlirTextureModule,
   registerBuiltinDialectTranslation(registry);
   MLIRContext context(registry);
   context.loadAllAvailableDialects();
-  logIfNeeded(options, LogLevel::Info, "Loaded all available dialects.");
+  spdlog::info("Loaded all available dialects.");
 
 // 2) Parse the incoming MLIR module from string.
 #if LLVM_VERSION_MAJOR >= 21
   // Since LLVM 21.1.0, the MLIR parser does not depend on null terminator.
   OwningOpRef<ModuleOp> module =
-      parseSourceString<ModuleOp>(mlirTextureModule, &context, sourceName);
+      parseSourceString<ModuleOp>(mlir_module, &context, source_name);
 #else
   llvm::SourceMgr sourceMgr;
-  auto buffer =
-      llvm::MemoryBuffer::getMemBufferCopy(mlirTextureModule, sourceName);
+  auto buffer = llvm::MemoryBuffer::getMemBufferCopy(mlir_module, source_name);
   sourceMgr.AddNewSourceBuffer(std::move(buffer), llvm::SMLoc());
   OwningOpRef<ModuleOp> module = parseSourceFile<ModuleOp>(sourceMgr, &context);
 #endif
 
   if (!module) {
-    logIfNeeded(options, LogLevel::Error,
-                "Failed to parse MLIR module from provided string.");
+    spdlog::error("Failed to parse MLIR module from provided string.");
     return;
   }
-  logIfNeeded(options, LogLevel::Info, "Parsed MLIR module successfully.");
+  spdlog::info("Parsed MLIR module successfully.");
 
   // 3) Query native target triple, CPU and features via LLVM C API, then
   //    create an LLVM TargetMachine to derive the data layout string.
@@ -246,11 +259,10 @@ void compileForNativeMachine(std::string_view mlirTextureModule,
     features.AddFeature(str, enable);
   std::string featuresStr = features.getString();
   std::string error;
-  const llvm::Target *target =
+  const llvm::Target *llvmTarget =
       llvm::TargetRegistry::lookupTarget(triple, error);
-  if (!target) {
-    logIfNeeded(options, LogLevel::Error,
-                llvm::Twine("LLVM target lookup failed: ") + error);
+  if (!llvmTarget) {
+    spdlog::error("LLVM target lookup failed: {}", error);
     return;
   }
 
@@ -260,13 +272,13 @@ void compileForNativeMachine(std::string_view mlirTextureModule,
 #else
   llvm::StringRef targetTriple = triple;
 #endif
-  auto tm = std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
-      targetTriple, cpu, llvm::StringRef{featuresStr}, targetOptions,
-      std::nullopt, std::nullopt, toLlvmOptLevel(options.opt)));
+  auto tm =
+      std::unique_ptr<llvm::TargetMachine>(llvmTarget->createTargetMachine(
+          targetTriple, cpu, llvm::StringRef{featuresStr}, targetOptions,
+          std::nullopt, std::nullopt, toLlvmOptLevel(opt)));
 
   if (!tm) {
-    logIfNeeded(options, LogLevel::Error,
-                "Failed to create LLVM TargetMachine.");
+    spdlog::error("Failed to create LLVM TargetMachine.");
     return;
   }
 
@@ -280,59 +292,52 @@ void compileForNativeMachine(std::string_view mlirTextureModule,
   module->getOperation()->setAttr(mlir::DLTIDialect::kDataLayoutAttrName,
                                   dlSpec);
 
-  logIfNeeded(options, LogLevel::Debug, llvm::Twine("Host triple: ") + triple);
-  logIfNeeded(options, LogLevel::Debug,
-              llvm::Twine("CPU: ") + cpu + ", features: " + featuresStr);
-  logIfNeeded(options, LogLevel::Debug,
-              llvm::Twine("Data layout: ") + dl.getStringRepresentation());
+  spdlog::debug("Host triple: {}", triple);
+  spdlog::debug("CPU: {}, features: {}", cpu.str(), featuresStr);
+  spdlog::debug("Data layout: {}", dl.getStringRepresentation());
 
   // Remaining lowering/codegen will be added later.
   mlir::PassManager pm(&context);
   createLoweringPipeline(pm);
   if (pm.run(module->getOperation()).failed()) {
-    logIfNeeded(options, LogLevel::Error,
-                "Failed to lower MLIR module to LLVM dialect.");
+    spdlog::error("Failed to lower MLIR module to LLVM dialect.");
     return;
   }
-  logIfNeeded(options, LogLevel::Info, "Successfully lowered MLIR module.");
+  spdlog::info("Successfully lowered MLIR module.");
 
   // 4) Convert the MLIR module to LLVM IR.
   llvm::LLVMContext llvmCtx;
   std::unique_ptr<llvm::Module> llvmModule =
-      translateModuleToLLVMIR(module->getOperation(), llvmCtx, sourceName);
+      translateModuleToLLVMIR(module->getOperation(), llvmCtx, source_name);
 
   if (!llvmModule) {
-    logIfNeeded(options, LogLevel::Error,
-                "Failed to translate MLIR module to LLVM IR.");
+    spdlog::error("Failed to translate MLIR module to LLVM IR.");
     return;
   }
 
   // Run NPM optimization passes
-  if (options.opt != OptOption::TPDE) {
-    runNPMOptimization(*llvmModule, options);
+  if (opt != REUSSIR_OPT_TPDE) {
+    runNPMOptimization(*llvmModule, opt);
 
-    if (options.target == OutputTarget::LLVMIR) {
+    if (target == REUSSIR_OUTPUT_LLVMIR) {
       std::error_code ec;
-      llvm::raw_fd_ostream outStream(outputFile, ec, llvm::sys::fs::OF_None);
+      llvm::raw_fd_ostream outStream(output_file, ec, llvm::sys::fs::OF_None);
       if (ec) {
-        logIfNeeded(options, LogLevel::Error,
-                    llvm::Twine("Failed to open output file: ") + ec.message());
+        spdlog::error("Failed to open output file: {}", ec.message());
         return;
       }
       llvmModule->print(outStream, nullptr);
       outStream.flush();
-      logIfNeeded(options, LogLevel::Info,
-                  llvm::Twine("Successfully wrote LLVM IR to output file: ") +
-                      outputFile);
+      spdlog::info("Successfully wrote LLVM IR to output file: {}",
+                   output_file);
       return;
     }
-    emitModule(*llvmModule, *tm, outputFile, options);
+    emitModuleEnv(*llvmModule, *tm, output_file, target);
   } else {
     // TPDE compilation path
 #ifdef REUSSIR_HAS_TPDE
-    if (options.target != OutputTarget::Object) {
-      logIfNeeded(
-          options, LogLevel::Error,
+    if (target != REUSSIR_OUTPUT_OBJECT) {
+      spdlog::error(
           "TPDE compilation requires Object output target (not ASM or LLVMIR)");
       return;
     }
@@ -340,48 +345,55 @@ void compileForNativeMachine(std::string_view mlirTextureModule,
     auto compiler =
         tpde_llvm::LLVMCompiler::create(llvm::Triple{llvm::StringRef{triple}});
     if (!compiler) {
-      logIfNeeded(options, LogLevel::Error,
-                  "Failed to create TPDE compiler (triple unsupported)");
+      spdlog::error("Failed to create TPDE compiler (triple unsupported)");
       return;
     }
 
-    logIfNeeded(options, LogLevel::Info, "Starting TPDE compilation.");
+    spdlog::info("Starting TPDE compilation.");
     std::vector<uint8_t> buf;
     if (compiler->compile_to_elf(*llvmModule, buf)) {
       // Compilation successful, buf contains object file
-      if (writeBufferToFile(buf.data(), buf.size(), outputFile, options)) {
-        logIfNeeded(options, LogLevel::Info,
-                    llvm::Twine("Successfully compiled with TPDE to: ") +
-                        outputFile);
+      if (writeBufferToFile(buf.data(), buf.size(), output_file)) {
+        spdlog::info("Successfully compiled with TPDE to: {}", output_file);
       }
     } else {
-      logIfNeeded(options, LogLevel::Error, "TPDE compilation failed");
+      spdlog::error("TPDE compilation failed");
     }
 #else
     // TPDE not available, fallback to default optimization pipeline
-    logIfNeeded(options, LogLevel::Warning,
-                "TPDE optimization requested but not available (LLVM >= 22). "
-                "Falling back to default optimization level.");
-    runNPMOptimization(*llvmModule, options);
+    spdlog::warn("TPDE optimization requested but not available (LLVM >= 22). "
+                 "Falling back to default optimization level.");
+    runNPMOptimization(*llvmModule, opt);
 
-    if (options.target == OutputTarget::LLVMIR) {
+    if (target == REUSSIR_OUTPUT_LLVMIR) {
       std::error_code ec;
-      llvm::raw_fd_ostream outStream(outputFile, ec, llvm::sys::fs::OF_None);
+      llvm::raw_fd_ostream outStream(output_file, ec, llvm::sys::fs::OF_None);
       if (ec) {
-        logIfNeeded(options, LogLevel::Error,
-                    llvm::Twine("Failed to open output file: ") + ec.message());
+        spdlog::error("Failed to open output file: {}", ec.message());
         return;
       }
       llvmModule->print(outStream, nullptr);
       outStream.flush();
-      logIfNeeded(options, LogLevel::Info,
-                  llvm::Twine("Successfully wrote LLVM IR to output file: ") +
-                      outputFile);
+      spdlog::info("Successfully wrote LLVM IR to output file: {}",
+                   output_file);
       return;
     }
-    emitModule(*llvmModule, *tm, outputFile, options);
+    emitModuleEnv(*llvmModule, *tm, output_file, target);
 #endif
   }
 }
 
 } // namespace reussir
+
+// C API wrapper
+extern "C" {
+void reussir_bridge_compile_for_native_machine(const char *mlir_module,
+                                               const char *source_name,
+                                               const char *output_file,
+                                               ReussirOutputTarget target,
+                                               ReussirOptOption opt,
+                                               ReussirLogLevel log_level) {
+  reussir::reussir_bridge_compile_for_native_machine(
+      mlir_module, source_name, output_file, target, opt, log_level);
+}
+}

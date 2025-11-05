@@ -4,15 +4,11 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'crates/runtime/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
+      - 'runtime/**'
   pull_request:
     branches: [ main ]
     paths:
-      - 'crates/runtime/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
+      - 'runtime/**'
   # schedule:
   #   # Run daily at 2 AM UTC
   #   - cron: '0 2 * * *'
@@ -36,4 +32,6 @@ jobs:
         components: rust-src, miri
 
     - name: Run Miri tests on reussir-rt
-      run: cargo miri test -p reussir-rt
+      run: |
+        cd runtime
+        cargo miri test -p reussir-rt

@@ -11,5 +11,3 @@ add_mlir_dialect_library(MLIRReussir
   LINK_LIBS PUBLIC
     ${dialect_libs}
 )
-
-
