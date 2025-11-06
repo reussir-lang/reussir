@@ -16,6 +16,8 @@ module Reussir.Codegen.Type.Data (
     isRefType,
     isBoolType,
     isVoidType,
+    isIntegralType,
+    isFloatType,
 )
 where
 
@@ -170,3 +172,11 @@ isRefType _ = False
 isVoidType :: Type -> Bool
 isVoidType (TypePrim PrimUnit) = True
 isVoidType _ = False
+
+isIntegralType :: Type -> Bool
+isIntegralType (TypePrim (PrimInt _)) = True
+isIntegralType _ = False
+
+isFloatType :: Type -> Bool
+isFloatType (TypePrim (PrimFloat _)) = True
+isFloatType _ = False

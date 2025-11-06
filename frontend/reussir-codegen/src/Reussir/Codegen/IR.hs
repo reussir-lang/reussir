@@ -24,12 +24,12 @@ import Effectful.Log (logAttention_)
 import Reussir.Codegen.Context (Emission (emit), emitIndentation, emitLine, incIndentation)
 import Reussir.Codegen.Context.Codegen (Codegen, getNewBlockId, incIndentationBy, withLocation, withoutLocation)
 import Reussir.Codegen.Context.Emission (emitBuilder, emitBuilderLine, emitBuilderLineM, emitLocIfPresent, intercalate)
+import Reussir.Codegen.Context.Symbol (Symbol, symbolBuilder)
 import Reussir.Codegen.Intrinsics (IntrinsicCall, intrinsicCallCodegen)
 import Reussir.Codegen.Location (Location)
 import Reussir.Codegen.Type.Data (isBoolType, isVoidType)
 import Reussir.Codegen.Type.Data qualified as TT
 import Reussir.Codegen.Value (TypedValue)
-import Reussir.Codegen.Context.Symbol (Symbol, symbolBuilder)
 
 {- | A function call instruction.
 Unlike intrinsic calls, function calls cannot have multiple results.
@@ -382,11 +382,14 @@ blockCodegen printArgs blk = do
 
 funcCallCodegen :: FuncCall -> Codegen ()
 funcCallCodegen (FuncCall target args result) = emitLine $ do
-    argList <- mapM fmtTypedValue args
+    argList <- mapM (emit . fst) args
+    tyList <- mapM (emit . snd) args
     for_ result $ emit . fst >=> emitBuilder . (<> " = ")
     let target' = symbolBuilder target
     emitBuilder $ "func.call @\"" <> target' <> "\"(" <> intercalate ", " argList <> ")"
-    for_ result $ emit . snd >=> emitBuilder . (" -> " <>)
+    emitBuilder $ " : (" <> intercalate ", " tyList <> ")"
+    retTy <- maybe mempty (emit . snd) result
+    emitBuilder $ " -> (" <> retTy <> ")"
 
 nullableDispCodegen :: TypedValue -> Block -> Block -> Maybe TypedValue -> Codegen ()
 nullableDispCodegen nullDispVal nullDispNonnull nullDispNull nullDispRes = do
@@ -527,7 +530,7 @@ regionRunCodegen regionRunBody regionRunRes = do
 
 yieldCodegen :: YieldKind -> Maybe TypedValue -> Codegen ()
 yieldCodegen kind result = emitBuilderLineM $ do
-    result' <- maybe mempty fmtTypedValue result
+    result' <- maybe mempty (fmap (" " <>) . fmtTypedValue) result
     return $ opName <> result'
   where
     opName = case kind of
@@ -573,11 +576,11 @@ ifThenElseCodegen (condVal, _) thenBlock elseBlock result = do
     emitIndentation
     for_ result $ emit . fst >=> emitBuilder . (<> " = ")
     condVal' <- emit condVal
-    emitBuilder $ "scf.if (" <> condVal' <> ")"
+    emitBuilder $ "scf.if " <> condVal'
     for_ result $ emit . snd >=> emitBuilder . (" -> " <>)
     withoutLocation $ blockCodegen True thenBlock
     for_ elseBlock $ \blk -> withoutLocation $ do
-        emitBuilder "else"
+        emitBuilder " else "
         blockCodegen True blk
     emitLocIfPresent
     emitBuilder "\n"
