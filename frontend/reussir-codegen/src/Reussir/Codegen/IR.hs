@@ -142,6 +142,8 @@ data Instr
         }
     | -- | reussir.rc.inc: Increment the reference count of a RC pointer
       RcInc TypedValue
+    | -- | reussir.rc.dec: Decrement the reference count of a RC pointer
+      RcDec TypedValue
     | -- | reussir.rc.create: Create a RC pointer from a value (with optional token/region)
       RcCreate
         { rcCreateVal :: TypedValue
@@ -463,6 +465,11 @@ rcIncCodegen rcIncVal = emitBuilderLineM $ do
     rcIncVal' <- fmtTypedValue rcIncVal
     return $ "reussir.rc.inc (" <> rcIncVal' <> ")"
 
+rcDecCodegen :: TypedValue -> Codegen ()
+rcDecCodegen rcDecVal = emitBuilderLineM $ do
+    rcDecVal' <- fmtTypedValue rcDecVal
+    return $ "reussir.rc.dec (" <> rcDecVal' <> ")"
+
 compoundCreateCodegen :: [TypedValue] -> TypedValue -> Codegen ()
 compoundCreateCodegen fields (resVal, resTy) = emitBuilderLineM $ do
     fieldVals <- mapM (emit . fst) fields
@@ -614,6 +621,7 @@ instrCodegen (NullableCheck nullChkVal nullChkRes) = nullableCheckCodegen nullCh
 instrCodegen (NullableCreate nullCreateVal nullCreateRes) = nullableCreateCodegen nullCreateVal nullCreateRes
 instrCodegen (NullableDispatch val nnul nul res) = nullableDispCodegen val nnul nul res
 instrCodegen (RcInc rcIncVal) = rcIncCodegen rcIncVal
+instrCodegen (RcDec rcDecVal) = rcDecCodegen rcDecVal
 instrCodegen (RcCreate i r o) = rcCreateCodegen i r o
 instrCodegen (RcFreeze i o) = rcFreezeCodegen i o
 instrCodegen (RcBorrow i o) = rcBorrowCodegen i o
