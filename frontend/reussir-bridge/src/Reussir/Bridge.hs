@@ -26,8 +26,7 @@ module Reussir.Bridge (
 )
 where
 
-import Data.ByteString (ByteString)
-import Data.ByteString.Unsafe (unsafeUseAsCString)
+import Data.ByteString (ByteString, useAsCString)
 import Data.ByteString.Unsafe qualified as BSU
 import Foreign.C.String
 import Foreign.C.Types
@@ -116,8 +115,8 @@ compileForNativeMachine mlirModule sourceName outputFile target opt logLevel = d
     targetFeatures <- getNativeTargetFeatures
     compileProgram
         Program
-            { mlirModule = mlirModule
-            , sourceName = sourceName
+            { mlirModule
+            , sourceName
             , outputFile = outputFile
             , outputTarget = target
             , opt = opt
@@ -276,12 +275,12 @@ compileProgram
         , targetCodeModel = targetCodeModel
         , targetRelocationModel = targetRelocationModel
         } =
-        unsafeUseAsCString mlirModule $ \mlirPtr ->
+        useAsCString mlirModule $ \mlirPtr ->
             withCString sourceName $ \sourceNamePtr ->
                 withCString outputFile $ \outputFilePtr ->
-                    unsafeUseAsCString targetTriple $ \targetTriplePtr ->
-                        unsafeUseAsCString targetCPU $ \targetCPUPtr ->
-                            unsafeUseAsCString featuresMap $ \featuresPtr ->
+                    useAsCString targetTriple $ \targetTriplePtr ->
+                        useAsCString targetCPU $ \targetCPUPtr ->
+                            useAsCString featuresMap $ \featuresPtr ->
                                 c_reussir_bridge_compile_for_target
                                     mlirPtr
                                     sourceNamePtr
