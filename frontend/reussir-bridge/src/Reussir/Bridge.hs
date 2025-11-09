@@ -17,37 +17,20 @@ module Reussir.Bridge (
     -- * Compilation
     compileForNativeMachine,
     compileProgram,
-
-    -- * Target Information
-    FeaturesMap,
-    enableFeature,
-    disableFeature,
-    removeFeature,
-    emptyFeaturesMap,
-    isFeatureEnabled,
-    isFeatureDisabled,
-    containsFeature,
     CodeModel (..),
     RelocationModel (..),
     Program (..),
     hasTPDE,
     getNativeTargetTriple,
     getNativeTargetCPU,
-    getNativeTargetFeatureMap,
 )
 where
 
 import Data.ByteString (ByteString)
 import Data.ByteString.Unsafe (unsafeUseAsCString)
 import Data.ByteString.Unsafe qualified as BSU
-import Data.HashMap.Strict (HashMap)
-import Data.HashMap.Strict qualified as H
-import Data.Int (Int8)
-import Foreign (withArray0)
 import Foreign.C.String
 import Foreign.C.Types
-import Foreign.Marshal (peekArray0)
-import Foreign.Ptr (Ptr, nullPtr)
 
 -------------------------------------------------------------------------------
 -- C Enums
@@ -130,7 +113,7 @@ compileForNativeMachine ::
 compileForNativeMachine mlirModule sourceName outputFile target opt logLevel = do
     targetTriple <- getNativeTargetTriple
     targetCPU <- getNativeTargetCPU
-    targetFeatures <- getNativeTargetFeatureMap
+    targetFeatures <- getNativeTargetFeatures
     compileProgram
         Program
             { mlirModule = mlirModule
@@ -145,47 +128,6 @@ compileForNativeMachine mlirModule sourceName outputFile target opt logLevel = d
             , targetCodeModel = CodeModelDefault
             , targetRelocationModel = RelocationModelDefault
             }
-
---------------------------------------------------------------------------------
--- Feature Flags
---------------------------------------------------------------------------------
-
-newtype FeaturesMap = FeaturesMap (HashMap ByteString Bool)
-    deriving (Eq, Show)
-
-enableFeature :: FeaturesMap -> ByteString -> FeaturesMap
-enableFeature (FeaturesMap features) feature = FeaturesMap (H.insert feature True features)
-
-disableFeature :: FeaturesMap -> ByteString -> FeaturesMap
-disableFeature (FeaturesMap features) feature = FeaturesMap (H.insert feature False features)
-
-removeFeature :: FeaturesMap -> ByteString -> FeaturesMap
-removeFeature (FeaturesMap features) feature = FeaturesMap (H.delete feature features)
-
-emptyFeaturesMap :: FeaturesMap
-emptyFeaturesMap = FeaturesMap H.empty
-
-isFeatureEnabled :: FeaturesMap -> ByteString -> Bool
-isFeatureEnabled (FeaturesMap features) feature = H.lookupDefault False feature features
-
-isFeatureDisabled :: FeaturesMap -> ByteString -> Bool
-isFeatureDisabled (FeaturesMap features) feature = H.lookupDefault True feature features
-
-containsFeature :: FeaturesMap -> ByteString -> Bool
-containsFeature (FeaturesMap features) feature = H.member feature features
-
-featureNamesToC :: [ByteString] -> (Ptr CString -> IO a) -> IO a
-featureNamesToC bsList action =
-    go bsList [] $ \cstrs ->
-        withArray0 nullPtr cstrs action
-  where
-    go [] acc cont = cont (reverse acc)
-    go (b : bs) acc cont =
-        BSU.unsafeUseAsCString b $ \cstr ->
-            go bs (cstr : acc) cont
-
-featureFlagsToC :: [Bool] -> (Ptr Int8 -> IO a) -> IO a
-featureFlagsToC = withArray0 (-1) . map (\b -> if b then 1 else 0)
 
 --------------------------------------------------------------------------------
 -- Code Model
@@ -252,7 +194,7 @@ data Program = Program
     , logLevel :: LogLevel
     , targetTriple :: ByteString
     , targetCPU :: ByteString
-    , targetFeatures :: FeaturesMap
+    , targetFeatures :: ByteString
     , targetCodeModel :: CodeModel
     , targetRelocationModel :: RelocationModel
     }
@@ -269,9 +211,6 @@ foreign import capi "Reussir/Bridge.h reussir_bridge_has_tpde"
 foreign import capi "Reussir/Bridge.h reussir_bridge_get_default_target_triple"
     c_reussir_bridge_get_default_target_triple :: IO CString
 
-foreign import ccall "free"
-    c_free :: Ptr a -> IO ()
-
 -- need to free to free the CString
 foreign import capi "Reussir/Bridge.h reussir_bridge_get_default_target_cpu"
     c_reussir_bridge_get_default_target_cpu :: IO CString
@@ -279,11 +218,7 @@ foreign import capi "Reussir/Bridge.h reussir_bridge_get_default_target_cpu"
 -- need to free to first free the CString, then free the Array
 -- terminated by nullPtr
 foreign import capi "Reussir/Bridge.h reussir_bridge_get_default_target_features"
-    c_reussir_bridge_get_default_target_features :: IO (Ptr CString)
-
--- terminated by -1
-foreign import capi "Reussir/Bridge.h reussir_bridge_get_default_target_feature_flags"
-    c_reussir_bridge_get_default_target_feature_flags :: IO (Ptr Int8)
+    c_reussir_bridge_get_default_target_features :: IO CString
 
 foreign import capi "Reussir/Bridge.h reussir_bridge_compile_for_target"
     c_reussir_bridge_compile_for_target ::
@@ -303,10 +238,8 @@ foreign import capi "Reussir/Bridge.h reussir_bridge_compile_for_target"
         CString ->
         -- | target CPU
         CString ->
-        -- | target feature names (null-terminated array)
-        Ptr CString ->
-        -- | target feature flags (0/1, terminated by -1)
-        Ptr Int8 ->
+        -- | target feature string
+        CString ->
         -- | target code model
         CInt ->
         -- | target relocation model
@@ -323,17 +256,10 @@ getNativeTargetCPU = do
     targetCPU <- c_reussir_bridge_get_default_target_cpu
     BSU.unsafePackMallocCString targetCPU
 
-getNativeTargetFeatureMap :: IO FeaturesMap
-getNativeTargetFeatureMap = do
-    featureNames <- c_reussir_bridge_get_default_target_features
-    featureFlags <- c_reussir_bridge_get_default_target_feature_flags
-    unmarshalled <- peekArray0 nullPtr featureNames
-    names <- mapM BSU.unsafePackMallocCString unmarshalled
-    c_free featureNames -- free array wrapper
-    unmarshalledFeatureFlags <- peekArray0 (-1) featureFlags
-    let flags = map (== 1) unmarshalledFeatureFlags
-    c_free featureFlags -- free array wrapper
-    return (FeaturesMap (H.fromList $ zip names flags))
+getNativeTargetFeatures :: IO ByteString
+getNativeTargetFeatures = do
+    targetFeatures <- c_reussir_bridge_get_default_target_features
+    BSU.unsafePackMallocCString targetFeatures
 
 compileProgram :: Program -> IO ()
 compileProgram
@@ -346,30 +272,25 @@ compileProgram
         , logLevel = logLevel
         , targetTriple = targetTriple
         , targetCPU = targetCPU
-        , targetFeatures = FeaturesMap featuresMap
+        , targetFeatures = featuresMap
         , targetCodeModel = targetCodeModel
         , targetRelocationModel = targetRelocationModel
-        } = do
+        } =
         unsafeUseAsCString mlirModule $ \mlirPtr ->
             withCString sourceName $ \sourceNamePtr ->
                 withCString outputFile $ \outputFilePtr ->
                     unsafeUseAsCString targetTriple $ \targetTriplePtr ->
-                        unsafeUseAsCString targetCPU $ \targetCPUPtr -> do
-                            let keyVals = H.toList featuresMap
-                            let keys = map fst keyVals
-                            let vals = map snd keyVals
-                            featureNamesToC keys $ \featureNamesPtr ->
-                                featureFlagsToC vals $ \featureFlagsPtr ->
-                                    c_reussir_bridge_compile_for_target
-                                        mlirPtr
-                                        sourceNamePtr
-                                        outputFilePtr
-                                        (outputTargetToC outputTarget)
-                                        (optOptionToC opt)
-                                        (logLevelToC logLevel)
-                                        targetTriplePtr
-                                        targetCPUPtr
-                                        featureNamesPtr
-                                        featureFlagsPtr
-                                        (codeModelToC targetCodeModel)
-                                        (relocationModelToC targetRelocationModel)
+                        unsafeUseAsCString targetCPU $ \targetCPUPtr ->
+                            unsafeUseAsCString featuresMap $ \featuresPtr ->
+                                c_reussir_bridge_compile_for_target
+                                    mlirPtr
+                                    sourceNamePtr
+                                    outputFilePtr
+                                    (outputTargetToC outputTarget)
+                                    (optOptionToC opt)
+                                    (logLevelToC logLevel)
+                                    targetTriplePtr
+                                    targetCPUPtr
+                                    featuresPtr
+                                    (codeModelToC targetCodeModel)
+                                    (relocationModelToC targetRelocationModel)

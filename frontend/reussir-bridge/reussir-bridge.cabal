@@ -78,8 +78,7 @@ library
     -- Other library packages from which modules are imported.
     build-depends:    
         base >=4.20.1.0 && <4.22,
-        bytestring ^>=0.12,
-        unordered-containers ^>= 0.2.20
+        bytestring ^>=0.12
 
     -- Directories containing source files.
     hs-source-dirs:   src

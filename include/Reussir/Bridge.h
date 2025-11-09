@@ -72,20 +72,15 @@ char *reussir_bridge_get_default_target_triple(void);
 // Get default target CPU (caller must free with free())
 char *reussir_bridge_get_default_target_cpu(void);
 
-// Get default target features as array of strings (terminated by NULL)
-// Caller must free each string and the array itself
-char **reussir_bridge_get_default_target_features(void);
-
-// Get default target feature flags as array of int8_t (0 or 1, terminated by
-// -1) Caller must free the array
-int8_t *reussir_bridge_get_default_target_feature_flags(void);
+// Get the features string
+char *reussir_bridge_get_default_target_features(void);
 
 // Compile for a specific target
 void reussir_bridge_compile_for_target(
     const char *mlir_module, const char *source_name, const char *output_file,
     ReussirOutputTarget target, ReussirOptOption opt, ReussirLogLevel log_level,
-    const char *target_triple, const char *target_cpu, char **target_features,
-    int8_t *target_feature_flags, ReussirCodeModel code_model,
+    const char *target_triple, const char *target_cpu,
+    const char *target_features, ReussirCodeModel code_model,
     ReussirRelocationModel reloc_model);
 
 #ifdef __cplusplus

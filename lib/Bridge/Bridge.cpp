@@ -262,46 +262,24 @@ char *reussir_bridge_get_default_target_cpu() {
   return strdup(cpu.data());
 }
 
-char **reussir_bridge_get_default_target_features() {
+char *reussir_bridge_get_default_target_features() {
   llvm::InitializeNativeTarget();
   llvm::StringMap<bool> featuresMap = llvm::sys::getHostCPUFeatures();
-  // Allocate array of pointers (NULL terminated)
-  char **result =
-      static_cast<char **>(malloc(sizeof(char *) * (featuresMap.size() + 1)));
-  if (!result)
-    return nullptr;
 
-  size_t idx = 0;
+  // Build features string from arrays
+  llvm::SubtargetFeatures features;
   for (const auto &[str, enable] : featuresMap) {
-    result[idx] = strdup(str.data());
-    idx++;
+    features.AddFeature(str, enable);
   }
-  result[idx] = nullptr; // NULL terminator
-  return result;
-}
-
-int8_t *reussir_bridge_get_default_target_feature_flags() {
-  llvm::InitializeNativeTarget();
-  llvm::StringMap<bool> featuresMap = llvm::sys::getHostCPUFeatures();
-  // Allocate array of int8_t (0 or 1, terminated by -1)
-  int8_t *result = static_cast<int8_t *>(malloc(featuresMap.size() + 1));
-  if (!result)
-    return nullptr;
-
-  size_t idx = 0;
-  for (const auto &[str, enable] : featuresMap) {
-    result[idx] = enable ? 1 : 0;
-    idx++;
-  }
-  result[idx] = -1; // terminator
-  return result;
+  std::string featuresStr = features.getString();
+  return strdup(featuresStr.c_str());
 }
 
 void reussir_bridge_compile_for_target(
     const char *mlir_module, const char *source_name, const char *output_file,
     ReussirOutputTarget target, ReussirOptOption opt, ReussirLogLevel log_level,
-    const char *target_triple, const char *target_cpu, char **target_features,
-    int8_t *target_feature_flags, ReussirCodeModel code_model,
+    const char *target_triple, const char *target_cpu,
+    const char *target_features, ReussirCodeModel code_model,
     ReussirRelocationModel reloc_model) {
   setSpdlogLevel(log_level);
   // Initialize native target so we can query TargetMachine for layout/triple.
@@ -345,17 +323,6 @@ void reussir_bridge_compile_for_target(
   std::string triple = target_triple;
   llvm::StringRef cpu = target_cpu;
 
-  // Build features string from arrays
-  llvm::SubtargetFeatures features;
-  if (target_features && target_feature_flags) {
-    size_t idx = 0;
-    while (target_features[idx] != nullptr && target_feature_flags[idx] != -1) {
-      bool enable = (target_feature_flags[idx] != 0);
-      features.AddFeature(target_features[idx], enable);
-      idx++;
-    }
-  }
-  std::string featuresStr = features.getString();
   std::string error;
   const llvm::Target *llvmTarget =
       llvm::TargetRegistry::lookupTarget(triple, error);
@@ -372,7 +339,7 @@ void reussir_bridge_compile_for_target(
 #endif
   auto tm =
       std::unique_ptr<llvm::TargetMachine>(llvmTarget->createTargetMachine(
-          targetTriple, cpu, llvm::StringRef{featuresStr}, targetOptions,
+          targetTriple, cpu, target_features, targetOptions,
           toRelocModel(reloc_model), toCodeModel(code_model),
           toLlvmOptLevel(opt)));
 
@@ -392,7 +359,7 @@ void reussir_bridge_compile_for_target(
                                   dlSpec);
 
   spdlog::debug("Host triple: {}", triple);
-  spdlog::debug("CPU: {}, features: {}", cpu.str(), featuresStr);
+  spdlog::debug("CPU: {}, features: {}", cpu.str(), target_features);
   spdlog::debug("Data layout: {}", dl.getStringRepresentation());
 
   // Remaining lowering/codegen will be added later.
@@ -496,23 +463,18 @@ char *reussir_bridge_get_default_target_cpu() {
   return reussir::reussir_bridge_get_default_target_cpu();
 }
 
-char **reussir_bridge_get_default_target_features() {
+char *reussir_bridge_get_default_target_features() {
   return reussir::reussir_bridge_get_default_target_features();
-}
-
-int8_t *reussir_bridge_get_default_target_feature_flags() {
-  return reussir::reussir_bridge_get_default_target_feature_flags();
 }
 
 void reussir_bridge_compile_for_target(
     const char *mlir_module, const char *source_name, const char *output_file,
     ReussirOutputTarget target, ReussirOptOption opt, ReussirLogLevel log_level,
-    const char *target_triple, const char *target_cpu, char **target_features,
-    int8_t *target_feature_flags, ReussirCodeModel code_model,
+    const char *target_triple, const char *target_cpu,
+    const char *target_features, ReussirCodeModel code_model,
     ReussirRelocationModel reloc_model) {
   reussir::reussir_bridge_compile_for_target(
       mlir_module, source_name, output_file, target, opt, log_level,
-      target_triple, target_cpu, target_features, target_feature_flags,
-      code_model, reloc_model);
+      target_triple, target_cpu, target_features, code_model, reloc_model);
 }
 }
