@@ -16,13 +16,31 @@ module Reussir.Bridge (
 
     -- * Compilation
     compileForNativeMachine,
+
+    -- * Target Information
+    FeaturesMap,
+    enableFeature,
+    disableFeature,
+    removeFeature,
+    emptyFeaturesMap,
+    isFeatureEnabled,
+    isFeatureDisabled,
+    containsFeature,
+    CodeModel (..),
+    RelocationModel (..),
+    Target (..),
 )
 where
 
 import Data.ByteString (ByteString)
 import Data.ByteString.Unsafe (unsafeUseAsCString)
+import Data.ByteString.Unsafe qualified as BSU
+import Data.HashMap.Strict (HashMap)
+import Data.HashMap.Strict qualified as H
+import Foreign (withArray0)
 import Foreign.C.String
 import Foreign.C.Types
+import Foreign.Ptr (Ptr, nullPtr)
 
 -------------------------------------------------------------------------------
 -- C Enums
@@ -155,3 +173,129 @@ compileForNativeMachine mlirModule sourceName outputFile target opt logLevel =
                     (outputTargetToC target)
                     (optOptionToC opt)
                     (logLevelToC logLevel)
+
+--------------------------------------------------------------------------------
+-- Feature Flags
+--------------------------------------------------------------------------------
+
+newtype FeaturesMap = FeaturesMap (HashMap ByteString Bool)
+    deriving (Eq, Show)
+
+enableFeature :: FeaturesMap -> ByteString -> FeaturesMap
+enableFeature (FeaturesMap features) feature = FeaturesMap (H.insert feature True features)
+
+disableFeature :: FeaturesMap -> ByteString -> FeaturesMap
+disableFeature (FeaturesMap features) feature = FeaturesMap (H.insert feature False features)
+
+removeFeature :: FeaturesMap -> ByteString -> FeaturesMap
+removeFeature (FeaturesMap features) feature = FeaturesMap (H.delete feature features)
+
+emptyFeaturesMap :: FeaturesMap
+emptyFeaturesMap = FeaturesMap H.empty
+
+isFeatureEnabled :: FeaturesMap -> ByteString -> Bool
+isFeatureEnabled (FeaturesMap features) feature = H.lookupDefault False feature features
+
+isFeatureDisabled :: FeaturesMap -> ByteString -> Bool
+isFeatureDisabled (FeaturesMap features) feature = H.lookupDefault True feature features
+
+containsFeature :: FeaturesMap -> ByteString -> Bool
+containsFeature (FeaturesMap features) feature = H.member feature features
+
+featureNamesToC :: [ByteString] -> (Ptr CString -> IO a) -> IO a
+featureNamesToC bsList action =
+    go bsList [] $ \cstrs ->
+        withArray0 nullPtr cstrs action
+  where
+    go [] acc cont = cont (reverse acc)
+    go (b : bs) acc cont =
+        BSU.unsafeUseAsCString b $ \cstr ->
+            go bs (cstr : acc) cont
+
+featureFlagsToC :: [Bool] -> (Ptr CChar -> IO a) -> IO a
+featureFlagsToC = withArray0 (-1) . map (\b -> if b then 1 else 0)
+
+--------------------------------------------------------------------------------
+-- Code Model
+--------------------------------------------------------------------------------
+data CodeModel
+    = -- | Tiny code model
+      CodeModelTiny
+    | -- | Small code model
+      CodeModelSmall
+    | -- | Kernel code model
+      CodeModelKernel
+    | -- | Medium code model
+      CodeModelMedium
+    | -- | Large code model
+      CodeModelLarge
+    deriving (Eq, Show, Enum)
+
+codeModelToC :: CodeModel -> CInt
+codeModelToC CodeModelTiny = 0
+codeModelToC CodeModelSmall = 1
+codeModelToC CodeModelKernel = 2
+codeModelToC CodeModelMedium = 3
+codeModelToC CodeModelLarge = 4
+
+--------------------------------------------------------------------------------
+-- Relocation Model
+--------------------------------------------------------------------------------
+-- Static, PIC_, DynamicNoPIC, ROPI, RWPI, ROPI_RWPI
+data RelocationModel
+    = -- | Static relocation model
+      RelocationModelStatic
+    | -- | PIC relocation model
+      RelocationModelPIC
+    | -- | Dynamic relocation model
+      RelocationModelDynamic
+    | -- | ROPI relocation model
+      RelocationModelROPI
+    | -- | RWPI relocation model
+      RelocationModelRWPI
+    | -- | ROPI_RWPI relocation model
+      RelocationModelROPI_RWPI
+    deriving (Eq, Show, Enum)
+
+relocationModelToC :: RelocationModel -> CInt
+relocationModelToC RelocationModelStatic = 0
+relocationModelToC RelocationModelPIC = 1
+relocationModelToC RelocationModelDynamic = 2
+relocationModelToC RelocationModelROPI = 3
+relocationModelToC RelocationModelRWPI = 4
+relocationModelToC RelocationModelROPI_RWPI = 5
+
+data Target = Target
+    { targetTriple :: ByteString
+    , targetCPU :: ByteString
+    , targetFeatures :: FeaturesMap
+    , targetCodeModel :: Maybe CodeModel
+    , targetRelocationModel :: Maybe RelocationModel
+    }
+    deriving (Eq, Show)
+
+foreign import capi "Reussir/Bridge.h reussir_bridge_compile_for_target"
+    c_reussir_bridge_compile_for_target ::
+        -- | mlir_module
+        CString ->
+        -- | source_name
+        CString ->
+        -- | output_file
+        CString ->
+        -- | opt (ReussirOptOption)
+        CInt ->
+        -- | log_level (ReussirLogLevel)
+        CInt ->
+        -- | target triple
+        CString ->
+        -- | target CPU
+        CString ->
+        -- | target feature names
+        Ptr CString ->
+        -- | target feature flags
+        Ptr Bool ->
+        -- | target code model
+        CInt ->
+        -- | target relocation model
+        CInt ->
+        IO ()
