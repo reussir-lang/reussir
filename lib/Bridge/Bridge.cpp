@@ -184,7 +184,7 @@ bool writeBufferToFile(const void *data, size_t size, const char *filename) {
 }
 #endif
 void emitModuleEnv(llvm::Module &llvmModule, llvm::TargetMachine &tm,
-                const char *filename, ReussirOutputTarget target) {
+                   const char *filename, ReussirOutputTarget target) {
   std::error_code ec;
   llvm::raw_fd_ostream dest(filename, ec, llvm::sys::fs::OF_None);
   if (ec) {
@@ -203,20 +203,113 @@ void emitModuleEnv(llvm::Module &llvmModule, llvm::TargetMachine &tm,
   pass.run(llvmModule);
   dest.flush();
 }
+std::optional<llvm::CodeModel::Model> toCodeModel(ReussirCodeModel model) {
+  switch (model) {
+  case REUSSIR_CODE_MODEL_TINY:
+    return llvm::CodeModel::Tiny;
+  case REUSSIR_CODE_MODEL_SMALL:
+    return llvm::CodeModel::Small;
+  case REUSSIR_CODE_MODEL_KERNEL:
+    return llvm::CodeModel::Kernel;
+  case REUSSIR_CODE_MODEL_MEDIUM:
+    return llvm::CodeModel::Medium;
+  case REUSSIR_CODE_MODEL_LARGE:
+    return llvm::CodeModel::Large;
+  case REUSSIR_CODE_MODEL_DEFAULT:
+    return std::nullopt;
+  }
+  llvm_unreachable("unknown code model");
+}
+
+std::optional<llvm::Reloc::Model> toRelocModel(ReussirRelocationModel model) {
+  switch (model) {
+  case REUSSIR_RELOC_MODEL_STATIC:
+    return llvm::Reloc::Static;
+  case REUSSIR_RELOC_MODEL_PIC:
+    return llvm::Reloc::PIC_;
+  case REUSSIR_RELOC_MODEL_DYNAMIC:
+    return llvm::Reloc::DynamicNoPIC;
+  case REUSSIR_RELOC_MODEL_ROPI:
+    return llvm::Reloc::ROPI;
+  case REUSSIR_RELOC_MODEL_RWPI:
+    return llvm::Reloc::RWPI;
+  case REUSSIR_RELOC_MODEL_ROPI_RWPI:
+    return llvm::Reloc::ROPI_RWPI;
+  case REUSSIR_RELOC_MODEL_DEFAULT:
+    return std::nullopt;
+  }
+  llvm_unreachable("unknown relocation model");
+}
 } // namespace
 
-void reussir_bridge_compile_for_native_machine(const char *mlir_module,
-                                               const char *source_name,
-                                               const char *output_file,
-                                               ReussirOutputTarget target,
-                                               ReussirOptOption opt,
-                                               ReussirLogLevel log_level) {
+int reussir_bridge_has_tpde() {
+#ifdef REUSSIR_HAS_TPDE
+  return 1;
+#else
+  return 0;
+#endif
+}
+
+char *reussir_bridge_get_default_target_triple() {
+  llvm::InitializeNativeTarget();
+  std::string triple = llvm::sys::getDefaultTargetTriple();
+  return strdup(triple.c_str());
+}
+
+char *reussir_bridge_get_default_target_cpu() {
+  llvm::InitializeNativeTarget();
+  llvm::StringRef cpu = llvm::sys::getHostCPUName();
+  return strdup(cpu.data());
+}
+
+char **reussir_bridge_get_default_target_features() {
+  llvm::InitializeNativeTarget();
+  llvm::StringMap<bool> featuresMap = llvm::sys::getHostCPUFeatures();
+  // Allocate array of pointers (NULL terminated)
+  char **result =
+      static_cast<char **>(malloc(sizeof(char *) * (featuresMap.size() + 1)));
+  if (!result)
+    return nullptr;
+
+  size_t idx = 0;
+  for (const auto &[str, enable] : featuresMap) {
+    result[idx] = strdup(str.data());
+    idx++;
+  }
+  result[idx] = nullptr; // NULL terminator
+  return result;
+}
+
+int8_t *reussir_bridge_get_default_target_feature_flags() {
+  llvm::InitializeNativeTarget();
+  llvm::StringMap<bool> featuresMap = llvm::sys::getHostCPUFeatures();
+  // Allocate array of int8_t (0 or 1, terminated by -1)
+  int8_t *result = static_cast<int8_t *>(malloc(featuresMap.size() + 1));
+  if (!result)
+    return nullptr;
+
+  size_t idx = 0;
+  for (const auto &[str, enable] : featuresMap) {
+    result[idx] = enable ? 1 : 0;
+    idx++;
+  }
+  result[idx] = -1; // terminator
+  return result;
+}
+
+void reussir_bridge_compile_for_target(
+    const char *mlir_module, const char *source_name, const char *output_file,
+    ReussirOutputTarget target, ReussirOptOption opt, ReussirLogLevel log_level,
+    const char *target_triple, const char *target_cpu, char **target_features,
+    int8_t *target_feature_flags, ReussirCodeModel code_model,
+    ReussirRelocationModel reloc_model) {
   setSpdlogLevel(log_level);
   // Initialize native target so we can query TargetMachine for layout/triple.
-  llvm::InitializeNativeTarget();
-  llvm::InitializeNativeTargetAsmPrinter();
-  llvm::InitializeNativeTargetAsmParser();
-  spdlog::info("Initialized native target.");
+  // llvm::InitializeNativeTarget();
+  llvm::InitializeAllTargets();
+  llvm::InitializeAllAsmPrinters();
+  llvm::InitializeAllAsmParsers();
+  spdlog::info("Initialized all targets.");
 
   // 1) Build a registry and MLIR context with required dialects.
   DialectRegistry registry;
@@ -247,16 +340,21 @@ void reussir_bridge_compile_for_native_machine(const char *mlir_module,
   }
   spdlog::info("Parsed MLIR module successfully.");
 
-  // 3) Query native target triple, CPU and features via LLVM C API, then
+  // 3) Query target triple, CPU and features, then
   //    create an LLVM TargetMachine to derive the data layout string.
-  std::string triple = llvm::sys::getDefaultTargetTriple();
+  std::string triple = target_triple;
+  llvm::StringRef cpu = target_cpu;
 
-  llvm::StringRef cpu = llvm::sys::getHostCPUName();
-  llvm::StringMap<bool> featuresMap = llvm::sys::getHostCPUFeatures();
-
+  // Build features string from arrays
   llvm::SubtargetFeatures features;
-  for (const auto &[str, enable] : featuresMap)
-    features.AddFeature(str, enable);
+  if (target_features && target_feature_flags) {
+    size_t idx = 0;
+    while (target_features[idx] != nullptr && target_feature_flags[idx] != -1) {
+      bool enable = (target_feature_flags[idx] != 0);
+      features.AddFeature(target_features[idx], enable);
+      idx++;
+    }
+  }
   std::string featuresStr = features.getString();
   std::string error;
   const llvm::Target *llvmTarget =
@@ -275,7 +373,8 @@ void reussir_bridge_compile_for_native_machine(const char *mlir_module,
   auto tm =
       std::unique_ptr<llvm::TargetMachine>(llvmTarget->createTargetMachine(
           targetTriple, cpu, llvm::StringRef{featuresStr}, targetOptions,
-          std::nullopt, std::nullopt, toLlvmOptLevel(opt)));
+          toRelocModel(reloc_model), toCodeModel(code_model),
+          toLlvmOptLevel(opt)));
 
   if (!tm) {
     spdlog::error("Failed to create LLVM TargetMachine.");
@@ -387,13 +486,33 @@ void reussir_bridge_compile_for_native_machine(const char *mlir_module,
 
 // C API wrapper
 extern "C" {
-void reussir_bridge_compile_for_native_machine(const char *mlir_module,
-                                               const char *source_name,
-                                               const char *output_file,
-                                               ReussirOutputTarget target,
-                                               ReussirOptOption opt,
-                                               ReussirLogLevel log_level) {
-  reussir::reussir_bridge_compile_for_native_machine(
-      mlir_module, source_name, output_file, target, opt, log_level);
+int reussir_bridge_has_tpde() { return reussir::reussir_bridge_has_tpde(); }
+
+char *reussir_bridge_get_default_target_triple() {
+  return reussir::reussir_bridge_get_default_target_triple();
+}
+
+char *reussir_bridge_get_default_target_cpu() {
+  return reussir::reussir_bridge_get_default_target_cpu();
+}
+
+char **reussir_bridge_get_default_target_features() {
+  return reussir::reussir_bridge_get_default_target_features();
+}
+
+int8_t *reussir_bridge_get_default_target_feature_flags() {
+  return reussir::reussir_bridge_get_default_target_feature_flags();
+}
+
+void reussir_bridge_compile_for_target(
+    const char *mlir_module, const char *source_name, const char *output_file,
+    ReussirOutputTarget target, ReussirOptOption opt, ReussirLogLevel log_level,
+    const char *target_triple, const char *target_cpu, char **target_features,
+    int8_t *target_feature_flags, ReussirCodeModel code_model,
+    ReussirRelocationModel reloc_model) {
+  reussir::reussir_bridge_compile_for_target(
+      mlir_module, source_name, output_file, target, opt, log_level,
+      target_triple, target_cpu, target_features, target_feature_flags,
+      code_model, reloc_model);
 }
 }

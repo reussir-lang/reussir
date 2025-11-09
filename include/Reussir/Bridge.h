@@ -15,6 +15,7 @@
 #define REUSSIR_BRIDGE_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,13 +44,49 @@ typedef enum ReussirLogLevel {
   REUSSIR_LOG_TRACE = 4
 } ReussirLogLevel;
 
-// currently, we only support compiling for native machine target
-void reussir_bridge_compile_for_native_machine(const char *mlir_module,
-                                               const char *source_name,
-                                               const char *output_file,
-                                               ReussirOutputTarget target,
-                                               ReussirOptOption opt,
-                                               ReussirLogLevel log_level);
+typedef enum ReussirCodeModel {
+  REUSSIR_CODE_MODEL_TINY = 0,
+  REUSSIR_CODE_MODEL_SMALL = 1,
+  REUSSIR_CODE_MODEL_KERNEL = 2,
+  REUSSIR_CODE_MODEL_MEDIUM = 3,
+  REUSSIR_CODE_MODEL_LARGE = 4,
+  REUSSIR_CODE_MODEL_DEFAULT = 5
+} ReussirCodeModel;
+
+typedef enum ReussirRelocationModel {
+  REUSSIR_RELOC_MODEL_STATIC = 0,
+  REUSSIR_RELOC_MODEL_PIC = 1,
+  REUSSIR_RELOC_MODEL_DYNAMIC = 2,
+  REUSSIR_RELOC_MODEL_ROPI = 3,
+  REUSSIR_RELOC_MODEL_RWPI = 4,
+  REUSSIR_RELOC_MODEL_ROPI_RWPI = 5,
+  REUSSIR_RELOC_MODEL_DEFAULT = 6
+} ReussirRelocationModel;
+
+// Query if TPDE support is compiled in
+int reussir_bridge_has_tpde(void);
+
+// Get default target triple (caller must free with free())
+char *reussir_bridge_get_default_target_triple(void);
+
+// Get default target CPU (caller must free with free())
+char *reussir_bridge_get_default_target_cpu(void);
+
+// Get default target features as array of strings (terminated by NULL)
+// Caller must free each string and the array itself
+char **reussir_bridge_get_default_target_features(void);
+
+// Get default target feature flags as array of int8_t (0 or 1, terminated by
+// -1) Caller must free the array
+int8_t *reussir_bridge_get_default_target_feature_flags(void);
+
+// Compile for a specific target
+void reussir_bridge_compile_for_target(
+    const char *mlir_module, const char *source_name, const char *output_file,
+    ReussirOutputTarget target, ReussirOptOption opt, ReussirLogLevel log_level,
+    const char *target_triple, const char *target_cpu, char **target_features,
+    int8_t *target_feature_flags, ReussirCodeModel code_model,
+    ReussirRelocationModel reloc_model);
 
 #ifdef __cplusplus
 }

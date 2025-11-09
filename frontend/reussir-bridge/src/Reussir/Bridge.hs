@@ -16,6 +16,7 @@ module Reussir.Bridge (
 
     -- * Compilation
     compileForNativeMachine,
+    compileProgram,
 
     -- * Target Information
     FeaturesMap,
@@ -28,7 +29,11 @@ module Reussir.Bridge (
     containsFeature,
     CodeModel (..),
     RelocationModel (..),
-    Target (..),
+    Program (..),
+    hasTPDE,
+    getNativeTargetTriple,
+    getNativeTargetCPU,
+    getNativeTargetFeatureMap,
 )
 where
 
@@ -37,9 +42,11 @@ import Data.ByteString.Unsafe (unsafeUseAsCString)
 import Data.ByteString.Unsafe qualified as BSU
 import Data.HashMap.Strict (HashMap)
 import Data.HashMap.Strict qualified as H
+import Data.Int (Int8)
 import Foreign (withArray0)
 import Foreign.C.String
 import Foreign.C.Types
+import Foreign.Marshal (peekArray0)
 import Foreign.Ptr (Ptr, nullPtr)
 
 -------------------------------------------------------------------------------
@@ -106,48 +113,6 @@ logLevelToC LogInfo = 2
 logLevelToC LogDebug = 3
 logLevelToC LogTrace = 4
 
--------------------------------------------------------------------------------
--- FFI Imports
--------------------------------------------------------------------------------
-
-foreign import capi "Reussir/Bridge.h reussir_bridge_compile_for_native_machine"
-    c_reussir_bridge_compile_for_native_machine ::
-        -- | mlir_module
-        CString ->
-        -- | source_name
-        CString ->
-        -- | output_file
-        CString ->
-        -- | target (ReussirOutputTarget)
-        CInt ->
-        -- | opt (ReussirOptOption)
-        CInt ->
-        -- | log_level (ReussirLogLevel)
-        CInt ->
-        IO ()
-
--------------------------------------------------------------------------------
--- Haskell API
--------------------------------------------------------------------------------
-
-{- | Compile MLIR module for the native machine target
-
-This function takes an MLIR module as a string, compiles it to the specified
-output format with the given optimization level, and writes the result to
-the output file.
-
-Example:
-
-@
-compileForNativeMachine
-  "module {}"
-  "example.mlir"
-  "output.o"
-  OutputObject
-  OptDefault
-  LogInfo
-@
--}
 compileForNativeMachine ::
     -- | MLIR module content (must be null-terminated or will be null-terminated)
     ByteString ->
@@ -162,17 +127,24 @@ compileForNativeMachine ::
     -- | Log level
     LogLevel ->
     IO ()
-compileForNativeMachine mlirModule sourceName outputFile target opt logLevel =
-    unsafeUseAsCString mlirModule $ \mlirPtr ->
-        withCString sourceName $ \sourceNamePtr ->
-            withCString outputFile $ \outputFilePtr ->
-                c_reussir_bridge_compile_for_native_machine
-                    mlirPtr
-                    sourceNamePtr
-                    outputFilePtr
-                    (outputTargetToC target)
-                    (optOptionToC opt)
-                    (logLevelToC logLevel)
+compileForNativeMachine mlirModule sourceName outputFile target opt logLevel = do
+    targetTriple <- getNativeTargetTriple
+    targetCPU <- getNativeTargetCPU
+    targetFeatures <- getNativeTargetFeatureMap
+    compileProgram
+        Program
+            { mlirModule = mlirModule
+            , sourceName = sourceName
+            , outputFile = outputFile
+            , outputTarget = target
+            , opt = opt
+            , logLevel = logLevel
+            , targetTriple = targetTriple
+            , targetCPU = targetCPU
+            , targetFeatures = targetFeatures
+            , targetCodeModel = CodeModelDefault
+            , targetRelocationModel = RelocationModelDefault
+            }
 
 --------------------------------------------------------------------------------
 -- Feature Flags
@@ -212,7 +184,7 @@ featureNamesToC bsList action =
         BSU.unsafeUseAsCString b $ \cstr ->
             go bs (cstr : acc) cont
 
-featureFlagsToC :: [Bool] -> (Ptr CChar -> IO a) -> IO a
+featureFlagsToC :: [Bool] -> (Ptr Int8 -> IO a) -> IO a
 featureFlagsToC = withArray0 (-1) . map (\b -> if b then 1 else 0)
 
 --------------------------------------------------------------------------------
@@ -229,6 +201,8 @@ data CodeModel
       CodeModelMedium
     | -- | Large code model
       CodeModelLarge
+    | -- | Default code model
+      CodeModelDefault
     deriving (Eq, Show, Enum)
 
 codeModelToC :: CodeModel -> CInt
@@ -237,6 +211,7 @@ codeModelToC CodeModelSmall = 1
 codeModelToC CodeModelKernel = 2
 codeModelToC CodeModelMedium = 3
 codeModelToC CodeModelLarge = 4
+codeModelToC CodeModelDefault = 5
 
 --------------------------------------------------------------------------------
 -- Relocation Model
@@ -255,6 +230,8 @@ data RelocationModel
       RelocationModelRWPI
     | -- | ROPI_RWPI relocation model
       RelocationModelROPI_RWPI
+    | -- | Default relocation model
+      RelocationModelDefault
     deriving (Eq, Show, Enum)
 
 relocationModelToC :: RelocationModel -> CInt
@@ -264,15 +241,49 @@ relocationModelToC RelocationModelDynamic = 2
 relocationModelToC RelocationModelROPI = 3
 relocationModelToC RelocationModelRWPI = 4
 relocationModelToC RelocationModelROPI_RWPI = 5
+relocationModelToC RelocationModelDefault = 6
 
-data Target = Target
-    { targetTriple :: ByteString
+data Program = Program
+    { mlirModule :: ByteString
+    , sourceName :: String
+    , outputFile :: FilePath
+    , outputTarget :: OutputTarget
+    , opt :: OptOption
+    , logLevel :: LogLevel
+    , targetTriple :: ByteString
     , targetCPU :: ByteString
     , targetFeatures :: FeaturesMap
-    , targetCodeModel :: Maybe CodeModel
-    , targetRelocationModel :: Maybe RelocationModel
+    , targetCodeModel :: CodeModel
+    , targetRelocationModel :: RelocationModel
     }
     deriving (Eq, Show)
+
+--------------------------------------------------------------------------------
+-- C API
+--------------------------------------------------------------------------------
+
+foreign import capi "Reussir/Bridge.h reussir_bridge_has_tpde"
+    hasTPDE :: IO Bool
+
+-- need to free to free the CString
+foreign import capi "Reussir/Bridge.h reussir_bridge_get_default_target_triple"
+    c_reussir_bridge_get_default_target_triple :: IO CString
+
+foreign import ccall "free"
+    c_free :: Ptr a -> IO ()
+
+-- need to free to free the CString
+foreign import capi "Reussir/Bridge.h reussir_bridge_get_default_target_cpu"
+    c_reussir_bridge_get_default_target_cpu :: IO CString
+
+-- need to free to first free the CString, then free the Array
+-- terminated by nullPtr
+foreign import capi "Reussir/Bridge.h reussir_bridge_get_default_target_features"
+    c_reussir_bridge_get_default_target_features :: IO (Ptr CString)
+
+-- terminated by -1
+foreign import capi "Reussir/Bridge.h reussir_bridge_get_default_target_feature_flags"
+    c_reussir_bridge_get_default_target_feature_flags :: IO (Ptr Int8)
 
 foreign import capi "Reussir/Bridge.h reussir_bridge_compile_for_target"
     c_reussir_bridge_compile_for_target ::
@@ -282,6 +293,8 @@ foreign import capi "Reussir/Bridge.h reussir_bridge_compile_for_target"
         CString ->
         -- | output_file
         CString ->
+        -- | target (ReussirOutputTarget)
+        CInt ->
         -- | opt (ReussirOptOption)
         CInt ->
         -- | log_level (ReussirLogLevel)
@@ -290,12 +303,73 @@ foreign import capi "Reussir/Bridge.h reussir_bridge_compile_for_target"
         CString ->
         -- | target CPU
         CString ->
-        -- | target feature names
+        -- | target feature names (null-terminated array)
         Ptr CString ->
-        -- | target feature flags
-        Ptr Bool ->
+        -- | target feature flags (0/1, terminated by -1)
+        Ptr Int8 ->
         -- | target code model
         CInt ->
         -- | target relocation model
         CInt ->
         IO ()
+
+getNativeTargetTriple :: IO ByteString
+getNativeTargetTriple = do
+    targetTriple <- c_reussir_bridge_get_default_target_triple
+    BSU.unsafePackMallocCString targetTriple
+
+getNativeTargetCPU :: IO ByteString
+getNativeTargetCPU = do
+    targetCPU <- c_reussir_bridge_get_default_target_cpu
+    BSU.unsafePackMallocCString targetCPU
+
+getNativeTargetFeatureMap :: IO FeaturesMap
+getNativeTargetFeatureMap = do
+    featureNames <- c_reussir_bridge_get_default_target_features
+    featureFlags <- c_reussir_bridge_get_default_target_feature_flags
+    unmarshalled <- peekArray0 nullPtr featureNames
+    names <- mapM BSU.unsafePackMallocCString unmarshalled
+    c_free featureNames -- free array wrapper
+    unmarshalledFeatureFlags <- peekArray0 (-1) featureFlags
+    let flags = map (== 1) unmarshalledFeatureFlags
+    c_free featureFlags -- free array wrapper
+    return (FeaturesMap (H.fromList $ zip names flags))
+
+compileProgram :: Program -> IO ()
+compileProgram
+    Program
+        { mlirModule = mlirModule
+        , sourceName = sourceName
+        , outputFile = outputFile
+        , outputTarget = outputTarget
+        , opt = opt
+        , logLevel = logLevel
+        , targetTriple = targetTriple
+        , targetCPU = targetCPU
+        , targetFeatures = FeaturesMap featuresMap
+        , targetCodeModel = targetCodeModel
+        , targetRelocationModel = targetRelocationModel
+        } = do
+        unsafeUseAsCString mlirModule $ \mlirPtr ->
+            withCString sourceName $ \sourceNamePtr ->
+                withCString outputFile $ \outputFilePtr ->
+                    unsafeUseAsCString targetTriple $ \targetTriplePtr ->
+                        unsafeUseAsCString targetCPU $ \targetCPUPtr -> do
+                            let keyVals = H.toList featuresMap
+                            let keys = map fst keyVals
+                            let vals = map snd keyVals
+                            featureNamesToC keys $ \featureNamesPtr ->
+                                featureFlagsToC vals $ \featureFlagsPtr ->
+                                    c_reussir_bridge_compile_for_target
+                                        mlirPtr
+                                        sourceNamePtr
+                                        outputFilePtr
+                                        (outputTargetToC outputTarget)
+                                        (optOptionToC opt)
+                                        (logLevelToC logLevel)
+                                        targetTriplePtr
+                                        targetCPUPtr
+                                        featureNamesPtr
+                                        featureFlagsPtr
+                                        (codeModelToC targetCodeModel)
+                                        (relocationModelToC targetRelocationModel)
