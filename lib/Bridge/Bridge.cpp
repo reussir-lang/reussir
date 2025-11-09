@@ -259,7 +259,7 @@ char *reussir_bridge_get_default_target_triple() {
 char *reussir_bridge_get_default_target_cpu() {
   llvm::InitializeNativeTarget();
   llvm::StringRef cpu = llvm::sys::getHostCPUName();
-  return strdup(cpu.data());
+  return strdup(cpu.str().c_str());
 }
 
 char *reussir_bridge_get_default_target_features() {
@@ -358,7 +358,7 @@ void reussir_bridge_compile_for_target(
   module->getOperation()->setAttr(mlir::DLTIDialect::kDataLayoutAttrName,
                                   dlSpec);
 
-  spdlog::debug("Host triple: {}", triple);
+  spdlog::debug("Target triple: {}", triple);
   spdlog::debug("CPU: {}, features: {}", cpu.str(), target_features);
   spdlog::debug("Data layout: {}", dl.getStringRepresentation());
 
