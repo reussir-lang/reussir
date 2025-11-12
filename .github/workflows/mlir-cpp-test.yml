@@ -40,6 +40,7 @@ jobs:
             mlir-${{ matrix.llvm-version }}-tools \
             llvm-${{ matrix.llvm-version }}-dev \
             llvm-${{ matrix.llvm-version }}-tools
+          echo "LD_LIBRARY_PATH=/usr/lib/llvm-${{ matrix.llvm-version }}/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
           
 
       - name: ccache
