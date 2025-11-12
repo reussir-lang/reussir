@@ -82,7 +82,6 @@ void reussir_bridge_compile_for_target(
     const char *target_triple, const char *target_cpu,
     const char *target_features, ReussirCodeModel code_model,
     ReussirRelocationModel reloc_model);
-
 #ifdef __cplusplus
 }
 #endif

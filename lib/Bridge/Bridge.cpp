@@ -427,7 +427,7 @@ void reussir_bridge_compile_for_target(
     }
 #else
     // TPDE not available, fallback to default optimization pipeline
-    spdlog::warn("TPDE optimization requested but not available (LLVM >= 22). "
+    spdlog::warn("TPDE optimization requested but not available (it requires LLVM < 22 and ELF target). "
                  "Falling back to default optimization level.");
     runNPMOptimization(*llvmModule, opt);
 
