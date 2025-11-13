@@ -69,3 +69,13 @@ jobs:
       - name: Test Haskell frontend
         shell: pwsh
         run: cabal test all -j
+
+      - name: Display test logs on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          Write-Host "========== Test Logs =========="
+          Get-ChildItem -Path dist-newstyle -Filter "*.log" -Recurse -File | ForEach-Object {
+            Write-Host "`n========== $($_.FullName) =========="
+            Get-Content $_.FullName
+          }
