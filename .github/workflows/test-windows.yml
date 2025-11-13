@@ -1,4 +1,4 @@
-name: MLIR C++ Test (Windows)
+name: Test (Windows)
 
 on:
   push:
@@ -51,3 +51,19 @@ jobs:
       - name: Run Integration Tests
         shell: msys2 {0}
         run: cmake --build build --target check
+
+      - name: Setup GHCup
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: 9.10.3
+          cabal: latest
+
+      - name: Build Haskell frontend
+        shell: msys2 {0}
+        run: |
+          cabal update
+          cabal build all -j
+
+      - name: Test Haskell frontend
+        shell: msys2 {0}
+        run: cabal test all -j
