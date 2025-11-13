@@ -32,7 +32,7 @@ getBuildDir    = (</> "build") <$> getProjectRoot
 -- Get the library file name based on the platform
 getLibraryFileName :: String -> String
 getLibraryFileName name = case os of
-  "mingw32" -> name <.> "dll"  -- Windows
+  "mingw32" -> "lib" ++ name <.> "dll"  -- Windows (CMake adds lib prefix)
   "darwin"  -> "lib" ++ name <.> "dylib"  -- macOS
   _         -> "lib" ++ name <.> "so"  -- Linux/Unix
 
@@ -88,7 +88,6 @@ buildMLIRReussirBridge v = do
       -- Try multiple possible locations for the library
       let possiblePaths = [ libDir </> libFileName
                           , binDir </> libFileName
-                          , libDir </> ("lib" ++ libFileName)
                           ]
       
       foundPath <- findFirstExisting possiblePaths
