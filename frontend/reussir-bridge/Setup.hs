@@ -121,11 +121,16 @@ myConfHook (pkg, pbi) flags = do
   root <- getProjectRoot
   bdir <- getBuildDir
   let libDir = takeDirectory libPath  -- Use the actual directory where the library was found
+      -- Only add rpath on Linux platforms (not Windows or macOS)
+      rpathOpts = case os of
+        "mingw32" -> []  -- Windows doesn't use rpath
+        "darwin"  -> []  -- macOS uses different runtime path mechanism
+        _         -> ["-Wl,-rpath," ++ libDir]  -- Linux/Unix
       hookedLib = emptyBuildInfo
         { extraLibDirs = map makeSymbolicPath [libDir]
         , extraLibs    = ["MLIRReussirBridge"]
         , includeDirs  = map makeSymbolicPath [root </> "include", bdir </> "include"]
-        , ldOptions    = ["-Wl,-rpath," ++ libDir]
+        , ldOptions    = rpathOpts
         }
       newPbi = (Just hookedLib, snd pbi)
 
@@ -138,7 +143,7 @@ myConfHook (pkg, pbi) flags = do
         bi { includeDirs  = includeDirs bi ++ map makeSymbolicPath [root </> "include", bdir </> "include"]
            , extraLibDirs = extraLibDirs bi ++ map makeSymbolicPath [libDir]
            , extraLibs    = extraLibs bi ++ ["MLIRReussirBridge"]
-           , ldOptions    = ldOptions bi ++ ["-Wl,-rpath," ++ libDir]
+           , ldOptions    = ldOptions bi ++ rpathOpts
            }
       pkgDesc' = updatePackageDescription (Just (fixLib emptyBuildInfo), []) pkgDesc
   pure lbi { localPkgDescr = pkgDesc' }
