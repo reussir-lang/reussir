@@ -1,0 +1,53 @@
+name: MLIR C++ Test (Windows)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-2025
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: clang64
+          update: true
+          install: >-
+            mingw-w64-clang-x86_64-toolchain
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-mlir
+            mingw-w64-clang-x86_64-spdlog
+            mingw-w64-clang-x86_64-gtest
+            mingw-w64-clang-x86_64-python
+            mingw-w64-clang-x86_64-python-pip
+            mingw-w64-clang-x86_64-rust
+
+      - name: Install Python dependencies
+        shell: msys2 {0}
+        run: |
+          pip install lit
+
+      - name: Configure CMake
+        shell: msys2 {0}
+        run: |
+          cmake -B build \
+          -G Ninja \
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+          -DREUSSIR_ENABLE_PEDANTIC=ON \
+          -DREUSSIR_ENABLE_TESTS=ON
+
+      - name: Build
+        shell: msys2 {0}
+        run: cmake --build build --parallel
+
+      - name: Run Integration Tests
+        shell: msys2 {0}
+        run: cmake --build build --target check
