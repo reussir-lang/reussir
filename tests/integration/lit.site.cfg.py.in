@@ -10,6 +10,7 @@ config.opt_path = r'@opt_path@'
 config.llc_path = r'@llc_path@'
 config.cc_path = r'@CMAKE_C_COMPILER@'
 config.library_path = r'@CMAKE_LIBRARY_OUTPUT_DIRECTORY@'
+config.extra_sys_libs = r'@extra_sys_libs@'
 
 lit_config.load_config(
         config, os.path.join(config.test_root, "lit.cfg.py"))
