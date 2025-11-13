@@ -59,11 +59,9 @@ jobs:
           cabal: latest
 
       - name: Build Haskell frontend
-        shell: msys2 {0}
         run: |
           cabal update
           cabal build all -j
 
       - name: Test Haskell frontend
-        shell: msys2 {0}
         run: cabal test all -j
