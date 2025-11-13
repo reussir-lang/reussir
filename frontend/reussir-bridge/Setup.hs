@@ -1,4 +1,4 @@
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Distribution.PackageDescription
 import Distribution.Simple
 import Distribution.Simple.LocalBuildInfo
@@ -72,8 +72,39 @@ buildMLIRReussirBridge v = do
     ExitSuccess -> do
       notice v "MLIRReussirBridge build successful"
       let libFileName = getLibraryFileName "MLIRReussirBridge"
-      pure (bdir </> "lib" </> libFileName)
+          libDir = bdir </> "lib"
+          binDir = bdir </> "bin"
+      
+      -- Debug: List contents of lib and bin directories
+      libExists <- doesDirectoryExist libDir
+      binExists <- doesDirectoryExist binDir
+      when libExists $ do
+        libContents <- listDirectory libDir
+        notice v ("Contents of " ++ libDir ++ ":\n" ++ unlines libContents)
+      when binExists $ do
+        binContents <- listDirectory binDir
+        notice v ("Contents of " ++ binDir ++ ":\n" ++ unlines binContents)
+      
+      -- Try multiple possible locations for the library
+      let possiblePaths = [ libDir </> libFileName
+                          , binDir </> libFileName
+                          , libDir </> ("lib" ++ libFileName)
+                          ]
+      
+      foundPath <- findFirstExisting possiblePaths
+      case foundPath of
+        Just path -> do
+          notice v ("Found library at: " ++ path)
+          pure path
+        Nothing -> die' v ("Library not found. Searched in: " ++ show possiblePaths)
     ExitFailure n -> die' v ("Ninja failed (" ++ show n ++ "):\n" ++ err)
+
+-- Helper function to find the first existing file from a list
+findFirstExisting :: [FilePath] -> IO (Maybe FilePath)
+findFirstExisting [] = pure Nothing
+findFirstExisting (p:ps) = do
+  exists <- doesFileExist p
+  if exists then pure (Just p) else findFirstExisting ps
 
 -------------------------------------------------------------------------------
 -- Hooks
@@ -85,16 +116,16 @@ myConfHook (pkg, pbi) flags = do
 
   configureCMake v
   libPath <- buildMLIRReussirBridge v
-  exists <- doesFileExist libPath
-  unless exists $ die' v ("Library not found: " ++ libPath)
+  -- Library existence is already checked in buildMLIRReussirBridge
 
   root <- getProjectRoot
   bdir <- getBuildDir
-  let hookedLib = emptyBuildInfo
-        { extraLibDirs = map makeSymbolicPath [bdir </> "lib"]
+  let libDir = takeDirectory libPath  -- Use the actual directory where the library was found
+      hookedLib = emptyBuildInfo
+        { extraLibDirs = map makeSymbolicPath [libDir]
         , extraLibs    = ["MLIRReussirBridge"]
         , includeDirs  = map makeSymbolicPath [root </> "include", bdir </> "include"]
-        , ldOptions    = ["-Wl,-rpath," ++ (bdir </> "lib")]
+        , ldOptions    = ["-Wl,-rpath," ++ libDir]
         }
       newPbi = (Just hookedLib, snd pbi)
 
@@ -105,9 +136,9 @@ myConfHook (pkg, pbi) flags = do
   let pkgDesc = localPkgDescr lbi
       fixLib bi =
         bi { includeDirs  = includeDirs bi ++ map makeSymbolicPath [root </> "include", bdir </> "include"]
-           , extraLibDirs = extraLibDirs bi ++ map makeSymbolicPath [bdir </> "lib"]
+           , extraLibDirs = extraLibDirs bi ++ map makeSymbolicPath [libDir]
            , extraLibs    = extraLibs bi ++ ["MLIRReussirBridge"]
-           , ldOptions    = ldOptions bi ++ ["-Wl,-rpath," ++ (bdir </> "lib")]
+           , ldOptions    = ldOptions bi ++ ["-Wl,-rpath," ++ libDir]
            }
       pkgDesc' = updatePackageDescription (Just (fixLib emptyBuildInfo), []) pkgDesc
   pure lbi { localPkgDescr = pkgDesc' }
