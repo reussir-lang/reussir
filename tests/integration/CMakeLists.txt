@@ -17,6 +17,9 @@ find_llvm_tool(llc_path llc)
 
 if (WIN32)
   set(extra_sys_libs "-lucrt -lntdll -lws2_32 -ladvapi32 -lbcrypt -luserenv")
+  set(REUSSIR_LIBRARY_PATH ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+else()
+  set(REUSSIR_LIBRARY_PATH ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
 endif()
 
 configure_file(lit.site.cfg.py.in lit.site.cfg.py @ONLY)
