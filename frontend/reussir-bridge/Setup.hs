@@ -41,7 +41,7 @@ getLibDir :: FilePath -> FilePath
 getLibDir bdir = if isWindows then bdir </> "bin" else bdir </> "lib"
 
 getSharedLibName :: String -> String
-getSharedLibName name = if isWindows then name ++ ".dll" else "lib" ++ name ++ ".so"
+getSharedLibName name = "lib" + if isWindows then name ++ ".dll" else name ++ ".so"
 
 -------------------------------------------------------------------------------
 -- CMake helpers
