@@ -9,6 +9,7 @@ import Distribution.Verbosity
 import System.Directory
 import System.Exit
 import System.FilePath
+import System.Info (os)
 import System.Process
 
 -------------------------------------------------------------------------------
@@ -27,6 +28,13 @@ main = defaultMainWithHooks simpleUserHooks
 getProjectRoot, getBuildDir :: IO FilePath
 getProjectRoot = takeDirectory . takeDirectory <$> getCurrentDirectory
 getBuildDir    = (</> "build") <$> getProjectRoot
+
+-- Get the library file name based on the platform
+getLibraryFileName :: String -> String
+getLibraryFileName name = case os of
+  "mingw32" -> name <.> "dll"  -- Windows
+  "darwin"  -> "lib" ++ name <.> "dylib"  -- macOS
+  _         -> "lib" ++ name <.> "so"  -- Linux/Unix
 
 -------------------------------------------------------------------------------
 -- CMake helpers
@@ -63,7 +71,8 @@ buildMLIRReussirBridge v = do
   case code of
     ExitSuccess -> do
       notice v "MLIRReussirBridge build successful"
-      pure (bdir </> "lib" </> "libMLIRReussirBridge.so")
+      let libFileName = getLibraryFileName "MLIRReussirBridge"
+      pure (bdir </> "lib" </> libFileName)
     ExitFailure n -> die' v ("Ninja failed (" ++ show n ++ "):\n" ++ err)
 
 -------------------------------------------------------------------------------
