@@ -18,13 +18,19 @@ add_custom_target(reussir-rt-build ALL
 )
 
 # Custom target to copy the libraries
+if (WIN32)
+    set(REUSSIR_RT_SHARED reussir_rt.dll)
+else()
+    set(REUSSIR_RT_SHARED libreussir_rt.so)
+endif()
+
 add_custom_target(reussir-rt-install ALL
     COMMAND ${CMAKE_COMMAND} -E copy
         ${CMAKE_BINARY_DIR}/target/${CARGO_PROFILE_DIR}/libreussir_rt.a
         ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/libreussir-rt.a
     COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/target/${CARGO_PROFILE_DIR}/libreussir_rt.so
-        ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/libreussir-rt.so
+        ${CMAKE_BINARY_DIR}/target/${CARGO_PROFILE_DIR}/${REUSSIR_RT_SHARED}
+        ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${REUSSIR_RT_SHARED}
     COMMENT "Installing reussir-rt libraries"
     DEPENDS reussir-rt-build
 )
