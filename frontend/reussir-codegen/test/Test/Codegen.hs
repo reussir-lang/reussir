@@ -105,7 +105,7 @@ createSimpleModule =
         , C.moduleSpec =
             TargetSpec
                 "test_module"
-                "/tmp/output.o"
+                "output.o"
                 B.OptDefault
                 B.OutputObject
                 B.LogWarning
@@ -146,7 +146,7 @@ createTensor2x2Module =
         , C.moduleSpec =
             TargetSpec
                 "tensor_module"
-                "/tmp/tensor.o"
+                "tensor.o"
                 B.OptAggressive
                 B.OutputObject
                 B.LogWarning
@@ -738,7 +738,7 @@ createFibonacciModule =
         , C.moduleSpec =
             TargetSpec
                 "fibonacci_module"
-                "/tmp/fibonacci.o"
+                "fibonacci.o"
                 B.OptAggressive
                 B.OutputObject
                 B.LogWarning
@@ -777,13 +777,16 @@ codegenTests =
         , testGroup
             "emitModuleToBackend"
             [ testCase "emitModuleToBackend executes without error" $ do
-                let module' = createSimpleModule
-                result <-
-                    L.withStdOutLogger $ \logger -> do
-                        E.runEff $ L.runLog "Test.Codegen" logger defaultLogLevel $ do
-                            C.emitModuleToBackend module'
-                            pure True
-                assertBool "Should complete successfully" result
+                withSystemTempDirectory "reussir-test" $ \tmpDir -> do
+                    let outputPath = tmpDir ++ "/output.o"
+                    let origSpec = C.moduleSpec createSimpleModule
+                    let module' = createSimpleModule{C.moduleSpec = origSpec{outputPath = outputPath}}
+                    result <-
+                        L.withStdOutLogger $ \logger -> do
+                            E.runEff $ L.runLog "Test.Codegen" logger defaultLogLevel $ do
+                                C.emitModuleToBackend module'
+                                pure True
+                    assertBool "Should complete successfully" result
             ]
         , testGroup
             "fibonacci"
@@ -803,13 +806,16 @@ codegenTests =
                 assertBool "Should contain arith.addi" $ "arith.addi" `isInfixOf` resultStr
                 assertBool "Should contain arith.subi" $ "arith.subi" `isInfixOf` resultStr
             , testCase "emitModuleToBackend executes fibonacci module with aggressive optimization" $ do
-                let module' = createFibonacciModule
-                result <-
-                    L.withStdOutLogger $ \logger -> do
-                        E.runEff $ L.runLog "Test.Codegen" logger defaultLogLevel $ do
-                            C.emitModuleToBackend module'
-                            pure True
-                assertBool "Should complete successfully" result
+                withSystemTempDirectory "reussir-test" $ \tmpDir -> do
+                    let fibonacciPath = tmpDir ++ "/fibonacci.o"
+                    let origSpec = C.moduleSpec createFibonacciModule
+                    let module' = createFibonacciModule{C.moduleSpec = origSpec{outputPath = fibonacciPath}}
+                    result <-
+                        L.withStdOutLogger $ \logger -> do
+                            E.runEff $ L.runLog "Test.Codegen" logger defaultLogLevel $ do
+                                C.emitModuleToBackend module'
+                                pure True
+                    assertBool "Should complete successfully" result
             ]
         , testGroup
             "tensor2x2"
@@ -826,13 +832,16 @@ codegenTests =
                 assertBool "Should contain value capability" $ "value" `isInfixOf` resultStr
                 assertBool "Should contain four f64 fields" $ T.count "f64" (T.pack resultStr) >= 4
             , testCase "emitModuleToBackend executes tensor2x2 module without error" $ do
-                let module' = createTensor2x2Module
-                result <-
-                    L.withStdOutLogger $ \logger -> do
-                        E.runEff $ L.runLog "Test.Codegen" logger defaultLogLevel $ do
-                            C.emitModuleToBackend module'
-                            pure True
-                assertBool "Should complete successfully" result
+                withSystemTempDirectory "reussir-test" $ \tmpDir -> do
+                    let tensorPath = tmpDir ++ "/tensor.o"
+                    let origSpec = C.moduleSpec createTensor2x2Module
+                    let module' = createTensor2x2Module{C.moduleSpec = origSpec{outputPath = tensorPath}}
+                    result <-
+                        L.withStdOutLogger $ \logger -> do
+                            E.runEff $ L.runLog "Test.Codegen" logger defaultLogLevel $ do
+                                C.emitModuleToBackend module'
+                                pure True
+                    assertBool "Should complete successfully" result
             , testCase "tensor2x2 fibonacci computation produces correct result" $ do
                 withSystemTempDirectory "reussir-test" $ \tmpDir -> do
                     let tensorObjPath = tmpDir ++ "/tensor.o"
