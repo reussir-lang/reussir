@@ -24,6 +24,7 @@ import Reussir.Codegen.Value qualified as V
 import System.Exit (ExitCode (ExitSuccess))
 import System.IO ()
 import System.IO qualified as IO
+import System.IO.Temp (withSystemTempDirectory)
 import System.Process (readProcessWithExitCode)
 import Test.Tasty
 import Test.Tasty.HUnit
@@ -833,27 +834,32 @@ codegenTests =
                             pure True
                 assertBool "Should complete successfully" result
             , testCase "tensor2x2 fibonacci computation produces correct result" $ do
-                let module' = createTensor2x2Module
-                -- Emit the object file
-                _ <-
-                    L.withStdOutLogger $ \logger -> do
-                        E.runEff $ L.runLog "Test.Codegen" logger defaultLogLevel $ do
-                            C.emitModuleToBackend module'
-                -- Write the C file
-                let cSource = "extern double _Z13fibnacci_fast(unsigned long long);\nint main() {\n        double value = _Z13fibnacci_fast(42);\n        __builtin_printf(\"%.0f\\n\", value);\n        return 0;\n}\n"
-                IO.writeFile "/tmp/tensor.c" cSource
-                -- Compile the executable
-                (exitCode1, _, _) <-
-                    readProcessWithExitCode "cc" ["/tmp/tensor.c", "/tmp/tensor.o", "-O3", "-o", "/tmp/tensor_exec"] ""
-                -- Run the executable and capture output
-                (exitCode2, output, _) <-
-                    readProcessWithExitCode "/tmp/tensor_exec" [] ""
-                -- Check that compilation succeeded
-                assertBool "Compilation should succeed" (exitCode1 == ExitSuccess)
-                -- Check that execution succeeded
-                assertBool "Execution should succeed" (exitCode2 == ExitSuccess)
-                -- Check that the output is the expected value
-                let outputStr = filter (/= '\r') output -- Remove carriage returns
-                assertEqual "Fibonacci(42) should be 267914296" "267914296\n" outputStr
+                withSystemTempDirectory "reussir-test" $ \tmpDir -> do
+                    let tensorObjPath = tmpDir ++ "/tensor.o"
+                    let tensorCPath = tmpDir ++ "/tensor.c"
+                    let tensorExecPath = tmpDir ++ "/tensor_exec"
+                    let origSpec = C.moduleSpec createTensor2x2Module
+                    let module' = createTensor2x2Module{C.moduleSpec = origSpec{outputPath = tensorObjPath}}
+                    -- Emit the object file
+                    _ <-
+                        L.withStdOutLogger $ \logger -> do
+                            E.runEff $ L.runLog "Test.Codegen" logger defaultLogLevel $ do
+                                C.emitModuleToBackend module'
+                    -- Write the C file
+                    let cSource = "extern double _Z13fibnacci_fast(unsigned long long);\nint main() {\n        double value = _Z13fibnacci_fast(42);\n        __builtin_printf(\"%.0f\\n\", value);\n        return 0;\n}\n"
+                    IO.writeFile tensorCPath cSource
+                    -- Compile the executable
+                    (exitCode1, _, _) <-
+                        readProcessWithExitCode "cc" [tensorCPath, tensorObjPath, "-O3", "-o", tensorExecPath] ""
+                    -- Run the executable and capture output
+                    (exitCode2, output, _) <-
+                        readProcessWithExitCode tensorExecPath [] ""
+                    -- Check that compilation succeeded
+                    assertBool "Compilation should succeed" (exitCode1 == ExitSuccess)
+                    -- Check that execution succeeded
+                    assertBool "Execution should succeed" (exitCode2 == ExitSuccess)
+                    -- Check that the output is the expected value
+                    let outputStr = filter (/= '\r') output -- Remove carriage returns
+                    assertEqual "Fibonacci(42) should be 267914296" "267914296\n" outputStr
             ]
         ]
