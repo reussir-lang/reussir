@@ -346,9 +346,6 @@ struct ReussirReferenceProjectConversionPattern
 
     // Get the reference pointer (already converted by the type converter)
     mlir::Value refPtr = adaptor.getRef();
-    mlir::Value index = rewriter.create<mlir::arith::ConstantOp>(
-        loc, rewriter.getIndexAttr(op.getIndex().getZExtValue()));
-
     // Get the result type (should be a pointer type after conversion)
     mlir::Type resultType = converter->convertType(op.getProjected().getType());
     auto llvmPtrType = llvm::dyn_cast<mlir::LLVM::LLVMPointerType>(resultType);
@@ -363,7 +360,7 @@ struct ReussirReferenceProjectConversionPattern
     llvm::SmallVector<mlir::LLVM::GEPArg> gepArgs;
     auto gepOp = rewriter.create<mlir::LLVM::GEPOp>(
         loc, llvmPtrType, elementType, refPtr,
-        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, index});
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, op.getIndex().getZExtValue()});
 
     rewriter.replaceOp(op, gepOp);
     return mlir::success();
