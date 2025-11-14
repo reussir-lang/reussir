@@ -83,10 +83,10 @@ jobs:
         shell: pwsh
         run: |
           cabal update
-          cabal build all -j --ghc-options="-static -optl-static"
+          cabal build all -j
 
       - name: Test Haskell frontend
         shell: pwsh
         run: |
           chcp.com 65001
-          cabal test all -j --ghc-options="-static -optl-static"
+          cabal test all -j
