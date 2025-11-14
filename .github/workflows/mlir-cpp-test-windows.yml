@@ -51,3 +51,24 @@ jobs:
       - name: Run Integration Tests
         shell: msys2 {0}
         run: cmake --build build --target check
+
+      - name: Setup GHCup MSYSTEM
+        shell: msys2 {0}
+        run: |
+          echo "GHCUP_MSYS2_ENV=CLANG64" >> $GITHUB_ENV
+
+      - name: Setup GHCup
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: 9.10.3
+          cabal: latest
+
+      - name: Build Haskell frontend
+        shell: pwsh
+        run: |
+          cabal update
+          cabal build all -j
+
+      - name: Test Haskell frontend
+        shell: pwsh
+        run: cabal test all -j
