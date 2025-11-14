@@ -147,4 +147,5 @@ test-suite reussir-codegen-test
         log-effectful,
         text-builder-linear,
         log-base,
-        process
+        process,
+        temporary ^>=1.3

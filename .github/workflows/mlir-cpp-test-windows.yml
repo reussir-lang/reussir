@@ -14,7 +14,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install vcredist140
+        shell: pwsh
+        run: |
+          choco install vcredist140 -y
+
       - name: Setup MSYS2
+        id: msys2
         uses: msys2/setup-msys2@v2
         with:
           msystem: clang64
@@ -48,6 +54,16 @@ jobs:
         shell: msys2 {0}
         run: cmake --build build --parallel
 
+      - name: Add paths to Windows PATH
+        shell: pwsh
+        run: |
+          $msys2Path = "${{ steps.msys2.outputs.msys2-location }}/clang64/bin"
+          $buildPath = "${{ github.workspace }}/build/bin"
+          $downlevelPath = "c:/Windows/System32/downlevel"
+          echo "$msys2Path" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "$buildPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "$downlevelPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Run Integration Tests
         shell: msys2 {0}
         run: cmake --build build --target check
@@ -71,4 +87,6 @@ jobs:
 
       - name: Test Haskell frontend
         shell: pwsh
-        run: cabal test all -j --ghc-options="-static -optl-static"
+        run: |
+          chcp.com 65001
+          cabal test all -j --ghc-options="-static -optl-static"
