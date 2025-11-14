@@ -17,21 +17,18 @@ jobs:
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
         with:
-          msystem: mingw64
+          msystem: clang64
           update: true
           install: >-
-            mingw-w64-x86_64-toolchain
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-mlir
-            mingw-w64-x86_64-spdlog
-            mingw-w64-x86_64-gtest
-            mingw-w64-x86_64-python
-            mingw-w64-x86_64-python-pip
-            mingw-w64-x86_64-rust
-            mingw-w64-x86_64-clang
-            mingw-w64-x86_64-llvm
-            mingw-w64-x86_64-lld
+            mingw-w64-clang-x86_64-toolchain
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-mlir
+            mingw-w64-clang-x86_64-spdlog
+            mingw-w64-clang-x86_64-gtest
+            mingw-w64-clang-x86_64-python
+            mingw-w64-clang-x86_64-python-pip
+            mingw-w64-clang-x86_64-rust
 
       - name: Install Python dependencies
         shell: msys2 {0}
@@ -43,11 +40,8 @@ jobs:
         run: |
           cmake -B build \
           -G Ninja \
-          -DCMAKE_CXX_COMPILER=clang++ \
-          -DCMAKE_C_COMPILER=clang \
-          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo \
           -DREUSSIR_ENABLE_PEDANTIC=ON \
-          -DLLVM_USE_LINKER=lld \
           -DREUSSIR_ENABLE_TESTS=ON
 
       - name: Build
