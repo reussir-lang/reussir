@@ -95,13 +95,20 @@ typedef void (*ASTFreeFn)(ASTStablePtr);
 // An opaque handle for the JIT engine.
 typedef void *ReussirJIT;
 
-ReussirJIT reussir_bridge_jit_create(ASTCallbackFn callback,
+// Create a new JIT engine.
+ReussirJIT reussir_bridge_jit_create(ASTCallbackFn ast_callback_fn,
+                                     ASTFreeFn ast_free_fn,
                                      ReussirOptOption opt);
+// Destroy the JIT engine.
 void reussir_bridge_jit_destroy(ReussirJIT jit);
-bool reussir_bridge_jit_add_symbols(ReussirJIT jit, ASTStablePtr ast,
-                                    const char *symbol_names[],
-                                    uint8_t symbol_flags[],
-                                    size_t symbol_count);
+// Add a module that should be loaded lazily.
+bool reussir_bridge_jit_add_lazy_module(ReussirJIT jit, ASTStablePtr ast,
+                                        const char *symbol_names[],
+                                        uint8_t symbol_flags[],
+                                        size_t symbol_count);
+// Add a module that should be loaded immediately.
+bool reussir_bridge_jit_add_module(ReussirJIT jit, const char *texture);
+// Lookup a symbol in the JIT engine.
 void *reussir_bridge_jit_lookup_symbol(ReussirJIT jit, const char *symbol_name);
 
 #ifdef __cplusplus
