@@ -1,4 +1,4 @@
-name: MLIR C++ Test (Windows)
+name: MinGW Clang64 Full Pipeline
 
 on:
   push:

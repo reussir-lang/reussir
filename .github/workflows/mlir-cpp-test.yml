@@ -1,4 +1,4 @@
-name: MLIR C++ Test
+name: MLIR Backend MultiArch
 
 on:
   push:
@@ -47,6 +47,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           variant: sccache
+          key: ${{ matrix.os }}-${{ matrix.llvm-version }}
 
       - name: Configure CMake
         run: |

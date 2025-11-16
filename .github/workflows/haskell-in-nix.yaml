@@ -1,4 +1,4 @@
-name: CI
+name: NIX Frontend Pipeline
 
 on:
   push:
