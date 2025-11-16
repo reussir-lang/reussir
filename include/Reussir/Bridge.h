@@ -11,12 +11,12 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
-#include <cstddef>
 #ifndef REUSSIR_BRIDGE_H
 #define REUSSIR_BRIDGE_H
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -88,6 +88,8 @@ void reussir_bridge_compile_for_target(
 typedef void *ASTStablePtr;
 // A callback function that returns the MLIR IR of the AST.
 // This callback took away the ownership of the ASTStablePtr.
+// The callback shall use reussir_bridge_alloc_byte_buffer to allocate the
+// memory.
 typedef const char *(*ASTCallbackFn)(ASTStablePtr);
 // A callback function that frees the ASTStablePtr. This is used when the AST
 // unit is never materialized.
@@ -103,13 +105,19 @@ ReussirJIT reussir_bridge_jit_create(ASTCallbackFn ast_callback_fn,
 void reussir_bridge_jit_destroy(ReussirJIT jit);
 // Add a module that should be loaded lazily.
 bool reussir_bridge_jit_add_lazy_module(ReussirJIT jit, ASTStablePtr ast,
-                                        const char *symbol_names[],
+                                        char *symbol_names[],
                                         uint8_t symbol_flags[],
                                         size_t symbol_count);
-// Add a module that should be loaded immediately.
+// Add a module that should be loaded immediately. This function does not clean
+// up texture.
 bool reussir_bridge_jit_add_module(ReussirJIT jit, const char *texture);
 // Lookup a symbol in the JIT engine.
-void *reussir_bridge_jit_lookup_symbol(ReussirJIT jit, const char *symbol_name);
+void *reussir_bridge_jit_lookup_symbol(ReussirJIT jit, const char *symbol_name,
+                                       bool mangled);
+
+static inline char *reussir_bridge_alloc_byte_buffer(size_t size) {
+  return (char *)malloc(size);
+}
 
 #ifdef __cplusplus
 }

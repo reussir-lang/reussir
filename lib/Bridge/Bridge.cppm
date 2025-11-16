@@ -242,14 +242,16 @@ std::optional<llvm::Reloc::Model> toRelocModel(ReussirRelocationModel model) {
   llvm_unreachable("unknown relocation model");
 }
 
-mlir::MLIRContext buildMLIRContext() {
+std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
   DialectRegistry registry;
   registry.insert<reussir::ReussirDialect, DLTIDialect, LLVM::LLVMDialect,
                   arith::ArithDialect, memref::MemRefDialect, scf::SCFDialect,
                   ub::UBDialect, func::FuncDialect, cf::ControlFlowDialect>();
   registerLLVMDialectTranslation(registry);
   registerBuiltinDialectTranslation(registry);
-  return mlir::MLIRContext(registry);
+  auto context = std::make_unique<mlir::MLIRContext>(registry);
+  context->loadAllAvailableDialects();
+  return context;
 }
 
 std::unique_ptr<mlir::PassManager>
@@ -347,7 +349,8 @@ void reussir_bridge_compile_for_target(
   spdlog::info("Initialized all targets.");
 
   // Build a registry and MLIR context with required dialects.
-  mlir::MLIRContext context = buildMLIRContext();
+  auto context = buildMLIRContext();
+  spdlog::info("Built MLIR context.");
 
   // Query target triple, CPU and features, then
   //    create an LLVM TargetMachine to derive the data layout string.
@@ -361,7 +364,7 @@ void reussir_bridge_compile_for_target(
     spdlog::error("LLVM target lookup failed: {}", error);
     return;
   }
-
+  spdlog::info("LLVM target lookup succeeded.");
   llvm::TargetOptions targetOptions;
 #if LLVM_VERSION_MAJOR >= 21
   auto targetTriple = llvm::Triple{llvm::StringRef{triple}};
@@ -378,19 +381,19 @@ void reussir_bridge_compile_for_target(
     spdlog::error("Failed to create LLVM TargetMachine.");
     return;
   }
-
+  spdlog::info("LLVM TargetMachine created.");
   const llvm::DataLayout dl = tm->createDataLayout();
 
   spdlog::debug("Target triple: {}", triple);
   spdlog::debug("CPU: {}, features: {}", cpu.str(), target_features);
   spdlog::debug("Data layout: {}", dl.getStringRepresentation());
 
-  auto pm = buildPassManager(context);
+  auto pm = buildPassManager(*context);
 
   // 4) Convert the MLIR module to LLVM IR.
   llvm::LLVMContext llvmCtx;
   std::unique_ptr<llvm::Module> llvmModule =
-      translateToModule(mlir_module, llvmCtx, context, *pm, dl, source_name);
+      translateToModule(mlir_module, llvmCtx, *context, *pm, dl, source_name);
 
   if (!llvmModule) {
     spdlog::error("Failed to translate MLIR module to LLVM IR.");

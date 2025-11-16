@@ -28,8 +28,12 @@ module Reussir.Bridge (
     hasTPDE,
     getNativeTargetTriple,
     getNativeTargetCPU,
+
+    -- * JIT Engine
+    module Reussir.Bridge.JITEngine,
 )
 where
 
 import Reussir.Bridge.Compiler
+import Reussir.Bridge.JITEngine
 import Reussir.Bridge.Types

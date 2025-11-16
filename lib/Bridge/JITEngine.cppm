@@ -32,7 +32,10 @@ module;
 #include <mlir/Pass/PassManager.h>
 #include <optional>
 #include <spdlog/spdlog.h>
+
+#ifdef REUSSIR_HAS_TPDE
 #include <tpde-llvm/OrcCompiler.hpp>
+#endif
 
 #include "Reussir/Bridge.h"
 
@@ -49,8 +52,8 @@ class ReussirASTLayer;
 class ReussirASTMaterializationUnit final : public MaterializationUnit {
 public:
   ReussirASTMaterializationUnit(ReussirASTLayer &ast_layer, ASTStablePtr ast,
-                                SmallVector<std::string> symbol_names,
-                                SmallVector<uint8_t> symbol_flags);
+                                ArrayRef<char *> symbol_names,
+                                ArrayRef<uint8_t> symbol_flags);
 
   void
   materialize(std::unique_ptr<MaterializationResponsibility> resp) override;
@@ -62,8 +65,6 @@ public:
 private:
   ReussirASTLayer &ast_layer;
   ASTStablePtr ast;
-  SmallVector<std::string> symbol_names;
-  SmallVector<uint8_t> symbol_flags;
 
   void discard([[maybe_unused]] const JITDylib &dylib,
                [[maybe_unused]] const SymbolStringPtr &Sym) override {
@@ -82,22 +83,17 @@ public:
         pm(pm), data_layout(data_layout) {}
 
   Error add(ResourceTrackerSP resource_tracker, ASTStablePtr ast,
-            const char *symbol_names[], uint8_t symbol_flags[],
-            size_t symbol_count) {
-    llvm::ArrayRef<const char *> raw_names(symbol_names, symbol_count);
-    llvm::ArrayRef<uint8_t> raw_flags(symbol_flags, symbol_count);
-    SmallVector<std::string> symbol_names_str(raw_names);
-    SmallVector<uint8_t> symbol_flags_vec(raw_flags);
+            ArrayRef<char *> symbol_names, ArrayRef<uint8_t> symbol_flags) {
     return resource_tracker->getJITDylib().define(
         std::make_unique<ReussirASTMaterializationUnit>(
-            *this, ast, std::move(symbol_names_str),
-            std::move(symbol_flags_vec)));
+            *this, ast, symbol_names, symbol_flags));
   };
 
   void emit(std::unique_ptr<MaterializationResponsibility> resp,
             ASTStablePtr ast) {
     auto texture = ast_callback_fn(ast);
     emit(std::move(resp), texture);
+    free(const_cast<char *>(texture));
   }
 
   void emit(std::unique_ptr<MaterializationResponsibility> resp,
@@ -112,7 +108,7 @@ public:
   }
 
   MaterializationUnit::Interface
-  getInterface(ASTStablePtr ast, llvm::ArrayRef<std::string> symbol_names,
+  getInterface(ASTStablePtr ast, llvm::ArrayRef<char *> symbol_names,
                llvm::ArrayRef<uint8_t> symbol_flags) {
     MangleAndInterner mangle(inner_layer.getExecutionSession(), data_layout);
     SymbolFlagsMap symbols;
@@ -144,15 +140,15 @@ ReussirASTMaterializationUnit::~ReussirASTMaterializationUnit() {
 void ReussirASTMaterializationUnit::materialize(
     std::unique_ptr<MaterializationResponsibility> resp) {
   ast_layer.emit(std::move(resp), ast);
+  ast = nullptr;
 }
 
 ReussirASTMaterializationUnit::ReussirASTMaterializationUnit(
-    ReussirASTLayer &ast_layer, ASTStablePtr ast,
-    SmallVector<std::string> symbol_names, SmallVector<uint8_t> symbol_flags)
+    ReussirASTLayer &ast_layer, ASTStablePtr ast, ArrayRef<char *> symbol_names,
+    ArrayRef<uint8_t> symbol_flags)
     : MaterializationUnit(
           ast_layer.getInterface(ast, symbol_names, symbol_flags)),
-      ast_layer(ast_layer), ast(ast), symbol_names(symbol_names),
-      symbol_flags(symbol_flags) {}
+      ast_layer(ast_layer), ast(ast) {}
 
 IRCompileLayer createCompilerLayer(llvm::orc::JITTargetMachineBuilder jtmb,
                                    ReussirOptOption opt, ExecutionSession &es,
@@ -180,7 +176,7 @@ private:
   RTDyldObjectLinkingLayer object_layer;
   IRCompileLayer compile_layer;
   IRTransformLayer optimize_layer;
-  mlir::MLIRContext context;
+  std::unique_ptr<mlir::MLIRContext> context;
   std::unique_ptr<mlir::PassManager> pm;
   llvm::orc::ThreadSafeContext ts_context;
   ReussirASTLayer ast_layer;
@@ -215,10 +211,10 @@ public:
               return optimizeModule(std::move(tsm), resp, opt);
             }),
         context(bridge::buildMLIRContext()),
-        pm(bridge::buildPassManager(context)),
+        pm(bridge::buildPassManager(*context)),
         ts_context(std::make_unique<llvm::LLVMContext>()),
         ast_layer(ast_callback_fn, ast_free_fn, optimize_layer, ts_context,
-                  context, *pm, data_layout),
+                  *context, *pm, data_layout),
         main_dynlib(execution_session->createBareJITDylib("<main>")) {
     main_dynlib.addGenerator(
         cantFail(DynamicLibrarySearchGenerator::GetForCurrentProcess(
@@ -240,24 +236,28 @@ public:
       resource_tracker = main_dynlib.getDefaultResourceTracker();
 
     auto unique_module = ts_context.withContextDo([&](LLVMContext *llvmCtx) {
-      return bridge::translateToModule(texture, *llvmCtx, context, *pm,
+      return bridge::translateToModule(texture, *llvmCtx, *context, *pm,
                                        data_layout);
     });
     auto concurrentModule =
         ThreadSafeModule(std::move(unique_module), ts_context);
     return optimize_layer.add(resource_tracker, std::move(concurrentModule));
   }
-  Error addModule(ASTStablePtr ast, const char *symbol_names[],
+  Error addModule(ASTStablePtr ast, char *symbol_names[],
                   uint8_t symbol_flags[], size_t symbol_count,
                   ResourceTrackerSP resource_tracker = nullptr) {
     if (!resource_tracker)
       resource_tracker = main_dynlib.getDefaultResourceTracker();
-    return ast_layer.add(resource_tracker, ast, symbol_names, symbol_flags,
-                         symbol_count);
+    llvm::ArrayRef<char *> raw_names(symbol_names, symbol_count);
+    llvm::ArrayRef<uint8_t> raw_flags(symbol_flags, symbol_count);
+    return ast_layer.add(resource_tracker, ast, raw_names, raw_flags);
   }
-  Expected<ExecutorSymbolDef> lookup(StringRef Name) {
-    return execution_session->lookup({&main_dynlib},
-                                     mangle_and_interner(Name.str()));
+  Expected<ExecutorSymbolDef> lookup(StringRef Name, bool mangled) {
+    if (mangled) {
+      return execution_session->lookup({&main_dynlib},
+                                       mangle_and_interner(Name.str()));
+    }
+    return execution_session->lookup({&main_dynlib}, Name.str());
   }
 };
 } // namespace
@@ -310,7 +310,7 @@ export extern "C" {
     delete static_cast<reussir::JITEngine *>(jit);
   }
   bool reussir_bridge_jit_add_lazy_module(
-      ReussirJIT jit, ASTStablePtr ast, const char *symbol_names[],
+      ReussirJIT jit, ASTStablePtr ast, char *symbol_names[],
       uint8_t symbol_flags[], size_t symbol_count) {
     if (static_cast<reussir::JITEngine *>(jit)->addModule(
             ast, symbol_names, symbol_flags, symbol_count)) {
@@ -326,9 +326,10 @@ export extern "C" {
     }
     return true;
   }
-  void *reussir_bridge_jit_lookup_symbol(ReussirJIT jit,
-                                         const char *symbol_name) {
-    auto def = static_cast<reussir::JITEngine *>(jit)->lookup(symbol_name);
+  void *reussir_bridge_jit_lookup_symbol(
+      ReussirJIT jit, const char *symbol_name, bool mangled) {
+    auto def =
+        static_cast<reussir::JITEngine *>(jit)->lookup(symbol_name, mangled);
     if (!def) {
       spdlog::error("Failed to lookup symbol: {}", symbol_name);
       return nullptr;

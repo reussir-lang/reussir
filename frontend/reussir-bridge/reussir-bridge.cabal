@@ -72,7 +72,8 @@ library
     -- Modules included in this library but not exported.
     other-modules:
         Reussir.Bridge.Types,
-        Reussir.Bridge.Compiler
+        Reussir.Bridge.Compiler,
+        Reussir.Bridge.JITEngine
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -119,4 +120,5 @@ test-suite reussir-bridge-test
         base >=4.20.1.0 && <4.22,
         reussir-bridge,
         temporary ^>=1.3,
-        filepath ^>=1.4
+        filepath ^>=1.4,
+        bytestring ^>=0.12
