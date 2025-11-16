@@ -159,7 +159,7 @@ IRCompileLayer createCompilerLayer(llvm::orc::JITTargetMachineBuilder jtmb,
         es, base,
         std::make_unique<tpde_llvm::ConcurrentOrcCompiler>(std::move(jtmb))};
 #else
-    spdlog::warning("TPDE is not supported on this platform");
+    spdlog::warn("TPDE is not supported on this platform");
 #endif
   }
   return {es, base, std::make_unique<llvm::orc::ConcurrentIRCompiler>(jtmb)};
