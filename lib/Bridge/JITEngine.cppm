@@ -38,7 +38,8 @@ namespace reussir {
 namespace {
 using namespace llvm;
 using namespace llvm::orc;
-
+using SString =
+    SmallString<CalculateSmallVectorDefaultInlinedElements<char>::value>;
 class ReussirASTLayer;
 
 // Holding a pointer to the AST.
@@ -56,6 +57,8 @@ public:
 private:
   ReussirASTLayer &ast_layer;
   ASTStablePtr ast;
+  std::vector<SString> symbol_names;
+  std::vector<uint8_t> symbol_flags;
 
   void discard([[maybe_unused]] const JITDylib &dylib,
                [[maybe_unused]] const SymbolStringPtr &Sym) override {

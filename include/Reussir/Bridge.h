@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
+#include <cstddef>
 #ifndef REUSSIR_BRIDGE_H
 #define REUSSIR_BRIDGE_H
 
@@ -97,8 +98,10 @@ typedef void *ReussirJIT;
 ReussirJIT reussir_bridge_jit_create(ASTCallbackFn callback,
                                      ReussirOptOption opt);
 void reussir_bridge_jit_destroy(ReussirJIT jit);
-bool reussir_bridge_jit_add_symbol(ReussirJIT jit, ASTStablePtr ast,
-                                   const char *symbol_name);
+bool reussir_bridge_jit_add_symbols(ReussirJIT jit, ASTStablePtr ast,
+                                    const char *symbol_names[],
+                                    uint8_t symbol_flags[],
+                                    size_t symbol_count);
 void *reussir_bridge_jit_lookup_symbol(ReussirJIT jit, const char *symbol_name);
 
 #ifdef __cplusplus
