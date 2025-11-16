@@ -8,7 +8,6 @@
 //
 // This file implements the JIT engine for Reussir.
 //===----------------------------------------------------------------------===//
-#include <optional>
 module;
 #include <llvm/ADT/StringRef.h>
 #include <llvm/ExecutionEngine/Orc/CompileOnDemandLayer.h>
@@ -28,6 +27,7 @@ module;
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/LegacyPassManager.h>
+#include <optional>
 
 #include "Reussir/Bridge.h"
 
@@ -38,8 +38,6 @@ namespace reussir {
 namespace {
 using namespace llvm;
 using namespace llvm::orc;
-using SString =
-    SmallString<CalculateSmallVectorDefaultInlinedElements<char>::value>;
 class ReussirASTLayer;
 
 // Holding a pointer to the AST.
@@ -57,7 +55,7 @@ public:
 private:
   ReussirASTLayer &ast_layer;
   ASTStablePtr ast;
-  std::vector<SString> symbol_names;
+  std::vector<std::string> symbol_names;
   std::vector<uint8_t> symbol_flags;
 
   void discard([[maybe_unused]] const JITDylib &dylib,
