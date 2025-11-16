@@ -82,6 +82,25 @@ void reussir_bridge_compile_for_target(
     const char *target_triple, const char *target_cpu,
     const char *target_features, ReussirCodeModel code_model,
     ReussirRelocationModel reloc_model);
+
+// An opaque stable pointer for AST.
+typedef void *ASTStablePtr;
+// A callback function that returns the MLIR IR of the AST.
+// This callback took away the ownership of the ASTStablePtr.
+typedef const char *(*ASTCallbackFn)(ASTStablePtr);
+// A callback function that frees the ASTStablePtr. This is used when the AST
+// unit is never materialized.
+typedef void (*ASTFreeFn)(ASTStablePtr);
+// An opaque handle for the JIT engine.
+typedef void *ReussirJIT;
+
+ReussirJIT reussir_bridge_jit_create(ASTCallbackFn callback,
+                                     ReussirOptOption opt);
+void reussir_bridge_jit_destroy(ReussirJIT jit);
+bool reussir_bridge_jit_add_symbol(ReussirJIT jit, ASTStablePtr ast,
+                                   const char *symbol_name);
+void *reussir_bridge_jit_lookup_symbol(ReussirJIT jit, const char *symbol_name);
+
 #ifdef __cplusplus
 }
 #endif
