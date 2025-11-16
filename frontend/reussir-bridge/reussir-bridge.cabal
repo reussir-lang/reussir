@@ -70,7 +70,9 @@ library
     exposed-modules:  Reussir.Bridge
 
     -- Modules included in this library but not exported.
-    -- other-modules:
+    other-modules:
+        Reussir.Bridge.Types,
+        Reussir.Bridge.Compiler
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
