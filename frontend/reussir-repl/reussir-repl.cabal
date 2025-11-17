@@ -71,6 +71,12 @@ executable reussir-repl
     build-depends:    
         base ^>=4.20.2.0,
         haskeline ^>=0.8.4,
+        effectful ^>= 2.6.1,
+        log-effectful ^>= 1.0.0,
+        log-base ^>= 0.12,
+        bytestring ^>=0.12,
+        text ^>=2.1.3,
+        reussir-codegen,
         reussir-bridge
 
     -- Directories containing source files.

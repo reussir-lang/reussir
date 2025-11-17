@@ -28,6 +28,7 @@ module;
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/LegacyPassManager.h>
+#include <llvm/Support/TargetSelect.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/Pass/PassManager.h>
 #include <optional>
@@ -272,6 +273,9 @@ export extern "C" {
                                        ASTFreeFn ast_free_fn,
                                        ReussirOptOption opt) {
     using namespace llvm::orc;
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+    llvm::InitializeNativeTargetAsmParser();
     auto epc = SelfExecutorProcessControl::Create();
     if (!epc) {
       spdlog::error("Failed to create SelfExecutorProcessControl");
