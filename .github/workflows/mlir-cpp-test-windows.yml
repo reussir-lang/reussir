@@ -41,6 +41,8 @@ jobs:
         run: |
           pip install lit
           rustup default nightly
+          rustup target add x86_64-pc-windows-gnullvm
+          rustup default nightly-x86_64-pc-windows-gnullvm
           rustup component add rust-src rustfmt clippy rustc-dev llvm-tools-preview
 
       - name: Configure CMake
