@@ -1,6 +1,7 @@
 module;
 
 #include <array>
+#include <llvm/ADT/SmallString.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Bitcode/BitcodeReader.h>
@@ -62,7 +63,14 @@ compileRustSource(llvm::LLVMContext &context, llvm::StringRef sourceCode,
   llvm::StringRef rustcPath = findRustCompiler();
   llvm::StringRef rustcDepsPath = findRustCompilerDeps();
   if (rustcPath.empty() || rustcDepsPath.empty()) {
-    llvm::errs() << "Could not find reussir-rustc or its dependencies\n";
+    llvm::SmallString<16> cwd;
+    auto code = llvm::sys::fs::current_path(cwd);
+    if (code) {
+      cwd = "<unknown>";
+    }
+    llvm::errs() << "Could not find reussir-rustc or its dependencies, current "
+                    "working directory: "
+                 << cwd << "\n";
     return nullptr;
   }
   // Create a temporary file for the source code
