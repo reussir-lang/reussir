@@ -70,7 +70,9 @@ jobs:
 
       - name: Run Integration Tests
         shell: msys2 {0}
-        run: cmake --build build --target check
+        run: |
+          export PATH="$PATH:${{ github.workspace }}/build/bin"
+          cmake --build build --target check
 
       - name: Setup GHCup MSYSTEM
         shell: msys2 {0}
