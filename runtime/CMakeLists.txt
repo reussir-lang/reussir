@@ -18,12 +18,6 @@ add_custom_target(reussir-rt-build ALL
 )
 
 # Custom target to copy the libraries
-if (WIN32)
-    set(REUSSIR_RT_SHARED reussir_rt.dll)
-else()
-    set(REUSSIR_RT_SHARED libreussir_rt.so)
-endif()
-
 if(WIN32)
     set(REUSSIR_RT_OUTPUT_DIR ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 else()
@@ -31,15 +25,9 @@ else()
 endif()
 
 add_custom_target(reussir-rt-install ALL
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/target/${CARGO_PROFILE_DIR}/libreussir_rt.a
-        ${REUSSIR_RT_OUTPUT_DIR}/libreussir_rt.a
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_BINARY_DIR}/target/${CARGO_PROFILE_DIR}/deps
         ${REUSSIR_RT_OUTPUT_DIR}/reussir_rt_deps
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/target/${CARGO_PROFILE_DIR}/${REUSSIR_RT_SHARED}
-        ${REUSSIR_RT_OUTPUT_DIR}/${REUSSIR_RT_SHARED}
     COMMAND ${CMAKE_COMMAND} -E copy
         ${CMAKE_BINARY_DIR}/target/${CARGO_PROFILE_DIR}/reussir-rustc${CMAKE_EXECUTABLE_SUFFIX}
         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/reussir-rustc${CMAKE_EXECUTABLE_SUFFIX}
