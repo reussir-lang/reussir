@@ -21,7 +21,7 @@ import Test.Tasty.HUnit
 -- Helper to run codegen and extract the builder as text
 runCodegenAsText :: C.Codegen TB.Builder -> IO T.Text
 runCodegenAsText codegen = do
-    let spec = C.TargetSpec "test_module" "output.mlir" B.OptDefault B.OutputObject B.LogInfo
+    let spec = TargetSpec{programName = "test_module", outputPath = "output.mlir", optimization = OptDefault, outputTarget = OutputObject, logLevel = LogInfo}
     fmap TB.runBuilder $ L.withStdOutLogger $ \logger -> do
         E.runEff $ L.runLog "Test.Codegen.Location" logger defaultLogLevel $ runCodegen spec codegen
 
