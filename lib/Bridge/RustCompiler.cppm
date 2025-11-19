@@ -33,7 +33,7 @@ constexpr std::array<llvm::StringRef, 10> RUSTC_DEPS_HINTS = {
 } // namespace
 
 export llvm::StringRef findRustCompiler() {
-  // first check if RUESSIR_RUSTC is set
+  // first check if REUSSIR_RUSTC is set
   if (const char *env_p = std::getenv("REUSSIR_RUSTC"))
     return env_p;
   // locate reussir-rustc in known paths
@@ -46,7 +46,7 @@ export llvm::StringRef findRustCompiler() {
 }
 
 export llvm::StringRef findRustCompilerDeps() {
-  // first check if RUESSIR_RUSTC_DEPS is set
+  // first check if REUSSIR_RUSTC_DEPS is set
   if (const char *env_p = std::getenv("REUSSIR_RUSTC_DEPS"))
     return env_p;
   for (const auto &path : RUSTC_DEPS_HINTS) {

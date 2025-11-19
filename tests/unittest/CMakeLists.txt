@@ -36,5 +36,7 @@ target_include_directories(reussir-ut
     ${LLVM_INCLUDE_DIRS}
 )
 
+add_dependencies(reussir-ut reussir-rt)
+
 # Register with CTest
 gtest_discover_tests(reussir-ut)
