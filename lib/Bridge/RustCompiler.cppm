@@ -8,6 +8,7 @@ module;
 #include <llvm/IR/Module.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/Path.h>
 #include <llvm/Support/Program.h>
 
 export module Reussir.RustCompiler;
@@ -16,6 +17,12 @@ export module Reussir.RustCompiler;
 #define EXEC_SUFFIX ".exe"
 #else
 #define EXEC_SUFFIX ""
+#endif
+
+#ifdef _WIN32
+#define LIB_NAME "reussir_rt.dll"
+#else
+#define LIB_NAME "libreussir_rt.so"
 #endif
 
 namespace reussir {
@@ -32,20 +39,17 @@ constexpr std::array<llvm::StringRef, 9> RUSTC_HINTS = {
     "/opt/reussir/bin/rustc" EXEC_SUFFIX,
 };
 constexpr std::array<llvm::StringRef, 14> RUSTC_DEPS_HINTS = {
-    "reussir_rt_deps",
-    "build/lib/reussir_rt_deps",
-    "lib/reussir_rt_deps",
-    "../lib/reussir_rt_deps",
-    "../../lib/reussir_rt_deps",
-    "../../../lib/reussir_rt_deps",
-    "build/bin/reussir_rt_deps",
-    "bin/reussir_rt_deps",
-    "../bin/reussir_rt_deps",
-    "../../bin/reussir_rt_deps",
-    "../../../bin/reussir_rt_deps",
-    "/usr/lib/reussir_rt_deps",
-    "/usr/local/lib/reussir_rt_deps",
-    "/opt/reussir/lib/reussir_rt_deps",
+    "lib/" LIB_NAME,
+    "../lib/" LIB_NAME,
+    "../../lib/" LIB_NAME,
+    "../../../lib/" LIB_NAME,
+    "bin/" LIB_NAME,
+    "../bin/" LIB_NAME,
+    "../../bin/" LIB_NAME,
+    "../../../bin/" LIB_NAME,
+    "/usr/lib/" LIB_NAME,
+    "/usr/local/lib/" LIB_NAME,
+    "/opt/reussir/lib/" LIB_NAME,
 };
 } // namespace
 
@@ -68,7 +72,7 @@ export llvm::StringRef findRustCompilerDeps() {
     return env_p;
   for (const auto &path : RUSTC_DEPS_HINTS) {
     if (llvm::sys::fs::exists(path))
-      return path;
+      return llvm::sys::path::parent_path(path);
   }
   return "";
 }

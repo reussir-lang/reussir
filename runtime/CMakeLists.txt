@@ -27,7 +27,7 @@ endif()
 add_custom_target(reussir-rt-install ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_BINARY_DIR}/target/${CARGO_PROFILE_DIR}/deps
-        ${REUSSIR_RT_OUTPUT_DIR}/reussir_rt_deps
+        ${REUSSIR_RT_OUTPUT_DIR}
     COMMENT "Installing reussir-rt libraries"
     DEPENDS reussir-rt-build
 )
