@@ -12,10 +12,16 @@ target_sources(
     PRIVATE FILE_SET CXX_MODULES FILES ${module_files} 
     PRIVATE ${source_files})
 
+target_compile_options(reussir-ut
+  PRIVATE
+    -fno-exceptions
+)
+
 # Link against required libraries
 target_link_libraries(reussir-ut
   PRIVATE
     MLIRReussir
+    MLIRReussirBridge
     gtest
     gtest_main
     gmock
@@ -29,6 +35,8 @@ target_include_directories(reussir-ut
     ${MLIR_INCLUDE_DIRS}
     ${LLVM_INCLUDE_DIRS}
 )
+
+add_dependencies(reussir-ut reussir-rt)
 
 # Register with CTest
 gtest_discover_tests(reussir-ut)

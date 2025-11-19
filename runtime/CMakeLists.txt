@@ -28,14 +28,31 @@ add_custom_target(reussir-rt-install ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_BINARY_DIR}/target/${CARGO_PROFILE_DIR}/deps
         ${REUSSIR_RT_OUTPUT_DIR}/reussir_rt_deps
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/target/${CARGO_PROFILE_DIR}/reussir-rustc${CMAKE_EXECUTABLE_SUFFIX}
-        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/reussir-rustc${CMAKE_EXECUTABLE_SUFFIX}
     COMMENT "Installing reussir-rt libraries"
+    DEPENDS reussir-rt-build
+)
+
+# get rustc sysroot
+execute_process(
+    COMMAND rustc --print sysroot
+    OUTPUT_VARIABLE RUST_SYSROOT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+message(STATUS "Rust sysroot = ${RUST_SYSROOT}")
+
+add_custom_target(reussir-rust-install ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${RUST_SYSROOT}/bin"
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${RUST_SYSROOT}/lib"
+        "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
+    COMMENT "Installing rust libraries and tools"
     DEPENDS reussir-rt-build
 )
 
 # Main reussir-rt target that depends on the complete build process
 add_custom_target(reussir-rt ALL
-    DEPENDS reussir-rt-install
+    DEPENDS reussir-rt-install reussir-rust-install
 )

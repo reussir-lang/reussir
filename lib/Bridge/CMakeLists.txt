@@ -37,7 +37,7 @@ add_mlir_library(MLIRReussirBridge
 )
 file(GLOB_RECURSE module_files "*.cppm")
 target_sources(MLIRReussirBridge
-  PRIVATE FILE_SET CXX_MODULES FILES ${module_files} 
+  PUBLIC FILE_SET CXX_MODULES FILES ${module_files} 
 )
 
 # Define REUSSIR_HAS_TPDE for the Bridge library
