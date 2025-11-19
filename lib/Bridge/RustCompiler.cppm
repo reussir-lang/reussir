@@ -15,15 +15,11 @@ export module Reussir.RustCompiler;
 namespace reussir {
 namespace {
 constexpr std::array<llvm::StringRef, 9> RUSTC_HINTS = {
-    "/usr/bin/reussir-rustc",         "/usr/local/bin/reussir-rustc",
-    "/opt/reussir/bin/reussir-rustc", "reussir-rustc",
-    "build/bin/reussir-rustc",        "bin/reussir-rustc",
-    "../bin/reussir-rustc",           "../../bin/reussir-rustc",
-    "../../../bin/reussir-rustc"};
+    "rustc",          "build/bin/rustc",      "bin/rustc",
+    "../bin/rustc",   "../../bin/rustc",      "../../../bin/rustc",
+    "/usr/bin/rustc", "/usr/local/bin/rustc", "/opt/reussir/bin/rustc",
+};
 constexpr std::array<llvm::StringRef, 14> RUSTC_DEPS_HINTS = {
-    "/usr/lib/reussir_rt_deps",
-    "/usr/local/lib/reussir_rt_deps",
-    "/opt/reussir/lib/reussir_rt_deps",
     "reussir_rt_deps",
     "build/lib/reussir_rt_deps",
     "lib/reussir_rt_deps",
@@ -34,14 +30,18 @@ constexpr std::array<llvm::StringRef, 14> RUSTC_DEPS_HINTS = {
     "bin/reussir_rt_deps",
     "../bin/reussir_rt_deps",
     "../../bin/reussir_rt_deps",
-    "../../../bin/reussir_rt_deps"};
+    "../../../bin/reussir_rt_deps",
+    "/usr/lib/reussir_rt_deps",
+    "/usr/local/lib/reussir_rt_deps",
+    "/opt/reussir/lib/reussir_rt_deps",
+};
 } // namespace
 
 export llvm::StringRef findRustCompiler() {
   // first check if REUSSIR_RUSTC is set
   if (const char *env_p = std::getenv("REUSSIR_RUSTC"))
     return env_p;
-  // locate reussir-rustc in known paths
+  // locate rustc in known paths
   for (const auto &path : RUSTC_HINTS) {
     if (llvm::sys::fs::exists(path))
       return path;
@@ -72,7 +72,7 @@ compileRustSource(llvm::LLVMContext &context, llvm::StringRef sourceCode,
     if (code) {
       cwd = "<unknown>";
     }
-    llvm::errs() << "Could not find reussir-rustc or its dependencies, current "
+    llvm::errs() << "Could not find rustc or its dependencies, current "
                     "working directory: "
                  << cwd << "\n";
     return nullptr;
@@ -89,14 +89,18 @@ compileRustSource(llvm::LLVMContext &context, llvm::StringRef sourceCode,
   llvm::raw_fd_ostream srcStream(srcFile->FD, /*shouldClose=*/true);
   srcStream << sourceCode;
   srcStream.close();
+  std::string rtLib =
+      "reussir_rt=" + std::string(rustcDepsPath.str()) + "/libreussir_rt.rlib";
   // Prepare rustc command
-  llvm::SmallVector<llvm::StringRef, 16> args = {"reussir-rustc",
+  llvm::SmallVector<llvm::StringRef, 16> args = {"rustc",
                                                  srcFile->TmpName,
                                                  "--crate-type",
                                                  "cdylib",
                                                  "--emit=llvm-bc",
                                                  "-L",
                                                  rustcDepsPath,
+                                                 "--extern",
+                                                 rtLib,
                                                  "-o",
                                                  resultBitcodeFile->TmpName};
   for (const auto &arg : additionalArgs)
