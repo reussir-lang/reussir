@@ -44,6 +44,9 @@ impl<T> Rc<T> {
     pub fn is_unique(&self) -> bool {
         self.count_ref().get() == 1
     }
+    pub fn as_ref<'a>(&'a self) -> RcRef<'a, T> {
+        RcRef(ManuallyDrop::new(Self(self.0)), PhantomData)
+    }
 }
 
 impl<T> Clone for Rc<T> {
