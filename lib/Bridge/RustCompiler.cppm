@@ -14,13 +14,13 @@ export module Reussir.RustCompiler;
 
 namespace reussir {
 namespace {
-constexpr std::array<llvm::StringRef, 7> RUSTC_HINTS = {
+constexpr std::array<llvm::StringRef, 9> RUSTC_HINTS = {
     "/usr/bin/reussir-rustc",         "/usr/local/bin/reussir-rustc",
     "/opt/reussir/bin/reussir-rustc", "reussir-rustc",
     "build/bin/reussir-rustc",        "bin/reussir-rustc",
-    "../bin/reussir-rustc",
-};
-constexpr std::array<llvm::StringRef, 10> RUSTC_DEPS_HINTS = {
+    "../bin/reussir-rustc",           "../../bin/reussir-rustc",
+    "../../../bin/reussir-rustc"};
+constexpr std::array<llvm::StringRef, 14> RUSTC_DEPS_HINTS = {
     "/usr/lib/reussir_rt_deps",
     "/usr/local/lib/reussir_rt_deps",
     "/opt/reussir/lib/reussir_rt_deps",
@@ -28,9 +28,13 @@ constexpr std::array<llvm::StringRef, 10> RUSTC_DEPS_HINTS = {
     "build/lib/reussir_rt_deps",
     "lib/reussir_rt_deps",
     "../lib/reussir_rt_deps",
+    "../../lib/reussir_rt_deps",
+    "../../../lib/reussir_rt_deps",
     "build/bin/reussir_rt_deps",
     "bin/reussir_rt_deps",
-    "../bin/reussir_rt_deps"};
+    "../bin/reussir_rt_deps",
+    "../../bin/reussir_rt_deps",
+    "../../../bin/reussir_rt_deps"};
 } // namespace
 
 export llvm::StringRef findRustCompiler() {
