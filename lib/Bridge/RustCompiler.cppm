@@ -12,12 +12,24 @@ module;
 
 export module Reussir.RustCompiler;
 
+#ifdef _WIN32
+#define EXEC_SUFFIX ".exe"
+#else
+#define EXEC_SUFFIX ""
+#endif
+
 namespace reussir {
 namespace {
 constexpr std::array<llvm::StringRef, 9> RUSTC_HINTS = {
-    "rustc",          "build/bin/rustc",      "bin/rustc",
-    "../bin/rustc",   "../../bin/rustc",      "../../../bin/rustc",
-    "/usr/bin/rustc", "/usr/local/bin/rustc", "/opt/reussir/bin/rustc",
+    "rustc" EXEC_SUFFIX,
+    "build/bin/rustc" EXEC_SUFFIX,
+    "bin/rustc" EXEC_SUFFIX,
+    "../bin/rustc" EXEC_SUFFIX,
+    "../../bin/rustc" EXEC_SUFFIX,
+    "../../../bin/rustc" EXEC_SUFFIX,
+    "/usr/bin/rustc" EXEC_SUFFIX,
+    "/usr/local/bin/rustc" EXEC_SUFFIX,
+    "/opt/reussir/bin/rustc" EXEC_SUFFIX,
 };
 constexpr std::array<llvm::StringRef, 14> RUSTC_DEPS_HINTS = {
     "reussir_rt_deps",
