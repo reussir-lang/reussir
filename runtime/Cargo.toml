@@ -13,6 +13,6 @@ stacker = { version = "0.1.21" }
 [lib]
 crate-type = ["dylib", "staticlib", "rlib"]
 
-# [[bin]]
-# name = "reussir-rustc"
-# path = "utils/rustc.rs"
+[[bin]]
+name = "reussir-rustc"
+path = "utils/rustc.rs"
