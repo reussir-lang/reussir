@@ -18,3 +18,9 @@ name = "reussir-rustc"
 path = "utils/rustc.rs"
 test = false
 bench = false
+
+[profile.dev]
+rpath = true
+
+[profile.release]
+rpath = true
