@@ -67,7 +67,7 @@ class ReussirCompilePolymorphicFFIPass
           os << "type " << name << " = " << typePrefix << "<" << innerName
              << ">\n";
         })
-        .Default([&](RecordType ty) {
+        .Case<RecordType>([&](RecordType ty) {
           mlir::DataLayout dataLayout(getOperation());
           mlir::SymbolTable symbolTable(getOperation());
           bool withoutCleanup = !isTopLevel || isTriviallyCopyable(ty);
@@ -83,6 +83,9 @@ class ReussirCompilePolymorphicFFIPass
             os << "struct " << name << "([u8; " << dataLayout.getTypeSize(ty)
                << "]);\n";
           }
+        })
+        .Default([&](mlir::Type ty) {
+          llvm::report_fatal_error("unsupported type in FFI generation");
         });
   }
 
