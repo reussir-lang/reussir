@@ -15,6 +15,9 @@
 #define REUSSIR_IR_REUSSIROPS_H
 
 #include <mlir/Bytecode/BytecodeOpInterface.h>
+#include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/IR/Builders.h>
+#include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/Interfaces/ControlFlowInterfaces.h>
 #include <mlir/Interfaces/InferTypeOpInterface.h>
@@ -22,8 +25,8 @@
 
 #include "Reussir/IR/ReussirAttrs.h"
 #include "Reussir/IR/ReussirEnumAttrs.h"
-#include "Reussir/IR/ReussirTypes.h"
 #include "Reussir/IR/ReussirInterfaces.h"
+#include "Reussir/IR/ReussirTypes.h"
 
 #define GET_OP_CLASSES
 #include "Reussir/IR/ReussirOps.h.inc"
@@ -52,6 +55,32 @@ namespace reussir {
 mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
                                              mlir::OpBuilder &builder,
                                              mlir::Location loc);
+
+//===----------------------------------------------------------------------===//
+// createDtorIfNotExists
+//===----------------------------------------------------------------------===//
+//
+// Creates a destructor function for the given record type if it doesn't already
+// exist. The destructor takes a reference to the record type and performs the
+// drop operation. Returns the existing destructor if one is already present.
+//
+//===----------------------------------------------------------------------===//
+mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
+                                         RecordType type,
+                                         mlir::OpBuilder &builder);
+
+//===----------------------------------------------------------------------===//
+// emitOwnershipAcquisitionFuncIfNotExists
+//===----------------------------------------------------------------------===//
+//
+// Creates a function that performs ownership acquisition for the given
+// record type if it doesn't already exist. The function takes a reference to
+// the type and performs the acquisition operation. Returns the existing
+// function if one is already present. The RecordType must be a named type.
+//
+//===----------------------------------------------------------------------===//
+mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
+    mlir::ModuleOp moduleOp, RecordType type, mlir::OpBuilder &builder);
 } // namespace reussir
 
 #endif // REUSSIR_IR_REUSSIROPS_H

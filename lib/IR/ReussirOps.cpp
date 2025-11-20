@@ -17,13 +17,16 @@
 
 #include <llvm/ADT/StringSwitch.h>
 #include <llvm/ADT/TypeSwitch.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/LogicalResult.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/Dialect/LLVMIR/LLVMAttrs.h>
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/OpImplementation.h>
 #include <mlir/IR/Operation.h>
+#include <mlir/IR/SymbolTable.h>
 #include <mlir/IR/Types.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
 
@@ -1766,6 +1769,78 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
       })
       // For other types, return failure
       .Default([&](mlir::Type) { return mlir::failure(); });
+}
+
+//===----------------------------------------------------------------------===//
+// createDtorIfNotExists
+//===----------------------------------------------------------------------===//
+mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
+                                         RecordType type,
+                                         mlir::OpBuilder &builder) {
+  mlir::SymbolTable symTable(moduleOp);
+  auto dtorName = type.getDtorName();
+  if (!dtorName)
+    llvm::report_fatal_error("only named record types have destructors");
+  std::string funcName = dtorName.getValue().str();
+  if (auto funcOp = symTable.lookup<mlir::func::FuncOp>(funcName))
+    return funcOp;
+  mlir::OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(moduleOp.getBody());
+  RefType refType = builder.getType<RefType>(type);
+  auto dtor = builder.create<mlir::func::FuncOp>(
+      builder.getUnknownLoc(), funcName,
+      builder.getFunctionType({refType}, {}));
+  dtor.setPrivate();
+  dtor->setAttr("llvm.linkage", builder.getAttr<mlir::LLVM::LinkageAttr>(
+                                    mlir::LLVM::linkage::Linkage::LinkonceODR));
+  mlir::Block *entryBlock = dtor.addEntryBlock();
+  builder.setInsertionPointToStart(entryBlock);
+  auto ref = entryBlock->getArgument(0);
+  builder.create<ReussirRefDropOp>(builder.getUnknownLoc(), ref, true, nullptr);
+  builder.create<mlir::func::ReturnOp>(builder.getUnknownLoc());
+  return dtor;
+}
+
+//===----------------------------------------------------------------------===//
+// emitOwnershipAcquisitionFuncIfNotExists
+//===----------------------------------------------------------------------===//
+mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
+    mlir::ModuleOp moduleOp, RecordType type, mlir::OpBuilder &builder) {
+  mlir::SymbolTable symTable(moduleOp);
+  auto acquireName = type.getAcquireName();
+  if (!acquireName)
+    llvm::report_fatal_error(
+        "only named record types have ownership acquisition functions");
+  std::string funcName = acquireName.getValue().str();
+
+  if (auto funcOp = symTable.lookup<mlir::func::FuncOp>(funcName))
+    return funcOp;
+
+  mlir::OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(moduleOp.getBody());
+
+  // Construct RefType from RecordType
+  RefType refType = builder.getType<RefType>(type);
+
+  auto funcOp = builder.create<mlir::func::FuncOp>(
+      builder.getUnknownLoc(), funcName,
+      builder.getFunctionType({refType}, {}));
+  funcOp.setPrivate();
+  funcOp->setAttr("llvm.linkage",
+                  builder.getAttr<mlir::LLVM::LinkageAttr>(
+                      mlir::LLVM::linkage::Linkage::LinkonceODR));
+
+  mlir::Block *entryBlock = funcOp.addEntryBlock();
+  builder.setInsertionPointToStart(entryBlock);
+  auto ref = entryBlock->getArgument(0);
+
+  if (emitOwnershipAcquisition(ref, builder, builder.getUnknownLoc())
+          .failed()) {
+    llvm::report_fatal_error("failed to emit ownership acquisition");
+  }
+
+  builder.create<mlir::func::ReturnOp>(builder.getUnknownLoc());
+  return funcOp;
 }
 
 //===-----------------------------------------------------------------------===//

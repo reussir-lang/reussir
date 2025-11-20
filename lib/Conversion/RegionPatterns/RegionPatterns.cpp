@@ -16,7 +16,6 @@
 #include <mlir/Transforms/DialectConversion.h>
 #include <mlir/Transforms/GreedyPatternRewriteDriver.h>
 
-#include "Reussir/Conversion/DropExpansion.h"
 #include "Reussir/Conversion/RegionPatterns.h"
 #include "Reussir/IR/ReussirDialect.h.inc"
 #include "Reussir/IR/ReussirOps.h"

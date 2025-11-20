@@ -491,6 +491,17 @@ reussir::Capability RecordType::getDefaultCapability() const {
   return ::mlir::FlatSymbolRefAttr::get(getContext(), dtorName);
 }
 
+::mlir::FlatSymbolRefAttr RecordType::getAcquireName() const {
+  auto name = getName();
+  if (!name)
+    return nullptr;
+  auto prefix = llvm::Twine("core::intrinsic::acquire_in_place<");
+  auto suffix = llvm::Twine(">");
+  auto recordName = name.getValue();
+  auto acquireName = (prefix + recordName + suffix).str();
+  return ::mlir::FlatSymbolRefAttr::get(getContext(), acquireName);
+}
+
 bool RecordType::hasNoRegionalFields() const {
   return llvm::none_of(getMemberCapabilities(),
                        [](Capability cap) { return cap == Capability::field; });
