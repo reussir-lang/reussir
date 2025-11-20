@@ -8,3 +8,4 @@ rustc-ice-*
 .envrc
 .direnv
 dist-*
+.clice
