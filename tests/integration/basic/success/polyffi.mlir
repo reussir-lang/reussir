@@ -9,22 +9,9 @@ module @test {
 
   // Test with moduleTexture only
   func.func @polyffi_texture_only() {
-    reussir.polyffi texture("module content")
-    func.return
-  }
-
-  // Test with compiledModule only
-  func.func @polyffi_compiled_only() {
-    reussir.polyffi compiled(dense_resource<blob1> : tensor<24xi8>)
+    reussir.polyffi texture("module content") substitutions({})
     func.return
   }
 }
 
 
-{-#
-dialect_resources: {
-    builtin: {
-      blob1: "0x08000000010000000000000002000000000000000300000000000000"
-    }
-  }
-#-}

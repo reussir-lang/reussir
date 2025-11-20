@@ -1628,49 +1628,6 @@ mlir::LogicalResult ReussirRefDropOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
-// Reussir Poly FFI Op
-//===----------------------------------------------------------------------===//
-// ReussirPolyFFIOp verification
-//===----------------------------------------------------------------------===//
-mlir::LogicalResult ReussirPolyFFIOp::verify() {
-  auto moduleTexture = getModuleTextureAttr();
-  auto compiledModule = getCompiledModuleAttr();
-  auto substitutions = getSubstitutionsAttr();
-
-  // Check for empty string in moduleTexture
-  if (moduleTexture && moduleTexture.getValue().empty())
-    return emitOpError("moduleTexture cannot be empty");
-
-  // Check for empty array in compiledModule
-  if (compiledModule && compiledModule.empty())
-    return emitOpError("compiledModule cannot be empty");
-
-  // Check for empty dictionary in substitutions
-  if (substitutions && substitutions.empty())
-    return emitOpError("substitutions cannot be empty");
-
-  // Check that either moduleTexture or compiledModule is specified, but not
-  // both (after checking for empty values)
-  bool hasModuleTexture = moduleTexture != nullptr;
-  bool hasCompiledModule = compiledModule != nullptr;
-
-  if (!hasModuleTexture && !hasCompiledModule)
-    return emitOpError(
-        "either moduleTexture or compiledModule must be specified");
-
-  if (hasModuleTexture && hasCompiledModule)
-    return emitOpError("cannot specify both moduleTexture and compiledModule");
-
-  // Check that when compiledModule is specified, substitutions cannot be
-  // specified
-  if (hasCompiledModule && substitutions)
-    return emitOpError(
-        "substitutions cannot be specified when compiledModule is used");
-
-  return mlir::success();
-}
-
-//===----------------------------------------------------------------------===//
 // emitOwnershipAcquisition
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,

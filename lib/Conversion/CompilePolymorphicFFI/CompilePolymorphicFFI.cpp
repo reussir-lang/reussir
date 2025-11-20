@@ -104,10 +104,8 @@ public:
 
   void runOnOperation() override {
     llvm::SmallVector<ReussirPolyFFIOp> uncompiledOps;
-    getOperation().walk([&](ReussirPolyFFIOp op) {
-      if (!op.getCompiledModule().has_value())
-        uncompiledOps.push_back(op);
-    });
+    getOperation().walk(
+        [&](ReussirPolyFFIOp op) { uncompiledOps.push_back(op); });
   }
 };
 
