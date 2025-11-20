@@ -82,6 +82,15 @@ class ReussirCompilePolymorphicFFIPass
                << "))]\n";
             os << "struct " << name << "([u8; " << dataLayout.getTypeSize(ty)
                << "]);\n";
+            os << "extern \"C\" {\n";
+            os << "#[link_name = \"" << ty.getDtorName().getValue() << "\"]\n"
+               << "unsafe fn " << "drop_in_place" << "(ptr: *mut " << name
+               << ");\n";
+            os << "#[link_name = \"" << ty.getAcquireName().getValue()
+               << "\"]\n"
+               << "unsafe fn " << "acquire_in_place" << "(ptr: *mut " << name
+               << ");\n";
+            os << "}\n";
           }
         })
         .Default([&](mlir::Type ty) {
