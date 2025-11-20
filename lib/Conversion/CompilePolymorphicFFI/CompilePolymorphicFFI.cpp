@@ -53,16 +53,21 @@ class ReussirCompilePolymorphicFFIPass
         .Case<mlir::IntegerType, mlir::FloatType, mlir::IndexType>(
             [&](mlir::Type ty) { os << ty; })
         .Case<RcType>([&](RcType rcType) {
-          if (rcType.getCapability() != Capability::shared)
-            llvm::report_fatal_error("rc with other capabilities is not yet "
+          if (rcType.getCapability() != Capability::shared &&
+              rcType.getCapability() != Capability::rigid)
+            llvm::report_fatal_error("rc with other capabilities is not "
                                      "supported in FFI generation");
+          llvm::StringRef typePrefix =
+              (rcType.getCapability() == Capability::shared)
+                  ? "::reussir_rt::rc::Rc"
+                  : "::reussir_rt::region::rusty::RigidRc";
           llvm::Twine innerName = name + "Pointee";
           formatInto(os, mlir::TypeAttr::get(rcType.getElementType()),
                      innerName, false);
-          os << "type " << name << " = ::reussir_rt::rc::Rc<" << innerName
+          os << "type " << name << " = " << typePrefix << "<" << innerName
              << ">\n";
         })
-        .Default([&](mlir::Type ty) {
+        .Default([&](RecordType ty) {
           mlir::DataLayout dataLayout(getOperation());
           mlir::SymbolTable symbolTable(getOperation());
           bool withoutCleanup = !isTopLevel || isTriviallyCopyable(ty);
