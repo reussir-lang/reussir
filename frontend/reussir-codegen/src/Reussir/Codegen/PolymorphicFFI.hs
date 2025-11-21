@@ -6,6 +6,7 @@ module Reussir.Codegen.PolymorphicFFI (
     polyFFICodegen,
 ) where
 
+import Data.Int (Int64)
 import Data.String (fromString)
 import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
@@ -16,7 +17,8 @@ import Reussir.Codegen.Type.Emission ()
 
 data PolymorphicFFIAttr
     = PolyFFITypeParam T.Text Type
-    | PolyFFIStrParam T.Text T.Text Type
+    | PolyFFIStrParam T.Text T.Text
+    | PolyFFIIntParam T.Text Int64
 
 data PolymorphicFFI = PolymorphicFFI
     { polyFFITemplate :: T.Text
@@ -55,7 +57,11 @@ emitSubstitution (PolyFFITypeParam key ty) = do
     let key' = TB.fromText key
     ty' <- emit ty
     return $ key' <> " = " <> ty'
-emitSubstitution (PolyFFIStrParam key strVal _ty) = do
+emitSubstitution (PolyFFIStrParam key strVal) = do
     let key' = TB.fromText key
     let strVal' = "\"" <> TB.fromText strVal <> "\""
     return $ key' <> " = " <> strVal'
+emitSubstitution (PolyFFIIntParam key intVal) = do
+    let key' = TB.fromText key
+    let intVal' = TB.fromDec intVal
+    return $ key' <> " = " <> intVal'

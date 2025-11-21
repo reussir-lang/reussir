@@ -18,8 +18,6 @@
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
 #include "Reussir/RustCompiler.h"
-#include "mlir/IR/AsmState.h"
-#include "mlir/IR/BuiltinAttributes.h"
 
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/TypeSwitch.h>
@@ -29,9 +27,11 @@
 #include <memory>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/IR/AsmState.h>
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributeInterfaces.h>
+#include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/BuiltinDialect.h>
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/IR/OwningOpRef.h>
@@ -106,7 +106,7 @@ static void formatInto(mlir::ModuleOp moduleOp, llvm::raw_ostream &os,
             os << "impl Clone for " << name << " {\n";
             os << "    fn clone(&self) -> Self {\n";
             os << "        let mut raw_data = ::std::mem::MaybeUninit::uninit();\n";
-            os << "        unsafe { ::std::ptr::copy_nonoverlapping(self, raw_data.as_mut_ptr(), " << dataLayout.getTypeSize(ty) << ") };\n";
+            os << "        unsafe { ::std::ptr::copy_nonoverlapping(self, raw_data.as_mut_ptr(), 1) };\n";
             os << "        unsafe { acquire_in_place(raw_data.as_mut_ptr()) };\n";
             os << "        unsafe { raw_data.assume_init() }\n";
             os << "    }\n";

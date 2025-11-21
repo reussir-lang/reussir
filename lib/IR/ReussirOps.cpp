@@ -1854,14 +1854,14 @@ mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
 std::unique_ptr<llvm::Module>
 gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
                       llvm::StringRef dataLayout) {
-  // Step 1: Collect all polyffi operations with compiledModule
+  // Collect all polyffi operations with compiledModule
   llvm::SmallVector<ReussirPolyFFIOp> opsWithCompiledModule;
   moduleOp.walk([&](ReussirPolyFFIOp op) {
     if (op.getCompiledModule())
       opsWithCompiledModule.push_back(op);
   });
 
-  // Step 4: Handle empty case - create an empty module if no compiledModule is
+  // Handle empty case - create an empty module if no compiledModule is
   // found
   if (opsWithCompiledModule.empty()) {
     auto module = std::make_unique<llvm::Module>("empty", context);
@@ -1869,7 +1869,7 @@ gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
     return module;
   }
 
-  // Step 2 & 3: Parse bitcode and link all modules together
+  // Parse bitcode and link all modules together
   std::unique_ptr<llvm::Module> finalModule;
 
   for (auto op : opsWithCompiledModule) {
@@ -1920,7 +1920,7 @@ gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
     }
   }
 
-  // Step 5: Erase all the polyffi operations collected in step 1
+  // Erase all the polyffi operations collected in step 1
   for (auto op : opsWithCompiledModule)
     op.erase();
 
