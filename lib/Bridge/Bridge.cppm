@@ -266,8 +266,8 @@ buildPassManager(mlir::MLIRContext &context) {
 std::unique_ptr<llvm::Module>
 translateToModule(llvm::StringRef texture, llvm::LLVMContext &llvmCtx,
                   mlir::MLIRContext &context, mlir::PassManager &pm,
-                  const llvm::DataLayout &dl,
-                  llvm::StringRef source_name = "") {
+                  const llvm::DataLayout &dl, llvm::StringRef source_name = "",
+                  bool optimizeFFI = false) {
 #if LLVM_VERSION_MAJOR >= 21
   // Since LLVM 21.1.0, the MLIR parser does not depend on null terminator.
   OwningOpRef<ModuleOp> module =
@@ -291,7 +291,7 @@ translateToModule(llvm::StringRef texture, llvm::LLVMContext &llvmCtx,
   module->getOperation()->setAttr(mlir::DLTIDialect::kDataLayoutAttrName,
                                   dlSpec);
   // first, compile polymorphic FFI
-  if (failed(compilePolymorphicFFI(*module))) {
+  if (failed(compilePolymorphicFFI(*module, optimizeFFI))) {
     spdlog::error("Failed to compile polymorphic FFI.");
     return nullptr;
   }
@@ -421,7 +421,8 @@ void reussir_bridge_compile_for_target(
   // 4) Convert the MLIR module to LLVM IR.
   llvm::LLVMContext llvmCtx;
   std::unique_ptr<llvm::Module> llvmModule =
-      translateToModule(mlir_module, llvmCtx, *context, *pm, dl, source_name);
+      translateToModule(mlir_module, llvmCtx, *context, *pm, dl, source_name,
+                        opt == REUSSIR_OPT_AGGRESSIVE);
 
   if (!llvmModule) {
     spdlog::error("Failed to translate MLIR module to LLVM IR.");

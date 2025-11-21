@@ -180,8 +180,8 @@ static std::string monomorphize(mlir::ModuleOp moduleOp, ReussirPolyFFIOp op) {
 //===----------------------------------------------------------------------===//
 // CompilePolymorphicFFI Standalone Function
 //===----------------------------------------------------------------------===//
-
-mlir::LogicalResult compilePolymorphicFFI(mlir::ModuleOp moduleOp) {
+mlir::LogicalResult compilePolymorphicFFI(mlir::ModuleOp moduleOp,
+                                          bool optimized) {
   llvm::LLVMContext context;
   llvm::SmallVector<ReussirPolyFFIOp> uncompiledOps;
   moduleOp.walk([&](ReussirPolyFFIOp op) {
@@ -189,14 +189,14 @@ mlir::LogicalResult compilePolymorphicFFI(mlir::ModuleOp moduleOp) {
       uncompiledOps.push_back(op);
   });
 
+  llvm::SmallVector<llvm::StringRef> additionalArgs;
+  if (optimized)
+    additionalArgs.push_back("-O");
+
   for (ReussirPolyFFIOp op : uncompiledOps) {
     std::string monomorphized = monomorphize(moduleOp, op);
-    std::unique_ptr<llvm::Module> module =
-        compileRustSource(context, monomorphized);
-    if (!module)
-      return mlir::failure();
     std::unique_ptr<llvm::MemoryBuffer> bitcode =
-        compileRustSourceToBitcode(context, monomorphized);
+        compileRustSourceToBitcode(context, monomorphized, additionalArgs);
     if (!bitcode)
       return mlir::failure();
     llvm::ArrayRef<char> buffer(bitcode->getBufferStart(),
@@ -228,7 +228,7 @@ public:
       ReussirCompilePolymorphicFFIPass>::ReussirCompilePolymorphicFFIPassBase;
 
   void runOnOperation() override {
-    if (failed(compilePolymorphicFFI(getOperation())))
+    if (failed(compilePolymorphicFFI(getOperation(), optimized)))
       return signalPassFailure();
   }
 };

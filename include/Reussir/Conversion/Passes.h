@@ -29,7 +29,8 @@ namespace reussir {
 // monomorphizing their templates and compiling them to LLVM bitcode.
 //
 //===----------------------------------------------------------------------===//
-mlir::LogicalResult compilePolymorphicFFI(mlir::ModuleOp moduleOp);
+mlir::LogicalResult compilePolymorphicFFI(mlir::ModuleOp moduleOp,
+                                          bool optimized = false);
 
 } // namespace reussir
 

@@ -1,5 +1,6 @@
 #include "Reussir/RustCompiler.h"
 #include <array>
+#include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallString.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
@@ -103,21 +104,19 @@ compileRustSourceToBitcode(llvm::LLVMContext &context,
   llvm::raw_fd_ostream srcStream(srcFile->FD, /*shouldClose=*/true);
   srcStream << sourceCode;
   srcStream.close();
-  std::string rtLib =
-      "reussir_rt=" + std::string(rustcDepsPath.str()) + "/libreussir_rt.rlib";
   // Prepare rustc command
-  llvm::SmallVector<llvm::StringRef, 16> args = {"rustc",
+  llvm::SmallVector<llvm::StringRef, 24> args = {"rustc",
+                                                 "-A",
+                                                 "warnings",
                                                  srcFile->TmpName,
                                                  "--crate-type",
                                                  "cdylib",
                                                  "--emit=llvm-bc",
                                                  "-L",
                                                  rustcDepsPath,
-                                                 "--extern",
-                                                 rtLib,
                                                  "-o",
                                                  resultBitcodeFile->TmpName};
-  for (const auto &arg : additionalArgs)
+  for (auto arg : additionalArgs)
     args.push_back(arg);
   // Execute rustc
   int code = llvm::sys::ExecuteAndWait(rustcPath, args);
@@ -132,8 +131,7 @@ compileRustSourceToBitcode(llvm::LLVMContext &context,
                  << bufferOrErr.getError().message() << "\n";
     return {};
   }
-
-  return std::move(bufferOrErr.get());
+  return std::move(*bufferOrErr);
 }
 
 std::unique_ptr<llvm::Module>
