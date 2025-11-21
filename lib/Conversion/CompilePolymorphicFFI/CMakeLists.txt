@@ -3,6 +3,7 @@ add_mlir_conversion_library(MLIRReussirCompilePolymorphicFFI
 
   DEPENDS
   MLIRReussirConversionPassIncGen
+  ReussirRustCompiler
 
   LINK_COMPONENTS
   Core
@@ -10,4 +11,6 @@ add_mlir_conversion_library(MLIRReussirCompilePolymorphicFFI
   LINK_LIBS PUBLIC
   MLIRReussir
   MLIRTransforms
+  MLIRTargetLLVMIRImport
+  ReussirRustCompiler
 )
