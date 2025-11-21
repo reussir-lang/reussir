@@ -169,4 +169,23 @@ def ReussirTokenInstantiationPass
 
   let dependentDialects = ["::reussir::ReussirDialect"];
 }
+
+//===----------------------------------------------------------------------===//
+// Compile Polymorphic FFI
+//===----------------------------------------------------------------------===//
+def ReussirCompilePolymorphicFFIPass
+    : Pass<"reussir-compile-polymorphic-ffi", "::mlir::ModuleOp"> {
+  let summary = "compile polymorphic FFI calls";
+  let description = [{
+    `reussir-compile-polymorphic-ffi` compiles polymorphic FFI template
+    into concrete LLVM bitcode and embeds them into the module.
+  }];
+  let options = [
+    Option<"optimized", "optimized", "bool", /*default=*/"false",
+        "enable optimizations when compiling FFI templates">,
+  ];
+  let dependentDialects = ["::reussir::ReussirDialect", 
+                           "::mlir::func::FuncDialect", 
+                           "::mlir::scf::SCFDialect"];
+}
 #endif // REUSSIR_CONVERSION_PASSES_TD

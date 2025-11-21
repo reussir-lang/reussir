@@ -30,10 +30,6 @@ namespace reussir {
 void populateDropExpansionConversionPatterns(mlir::RewritePatternSet &patterns,
                                              bool outlineRecord);
 
-mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
-                                         RecordType type,
-                                         mlir::OpBuilder &builder);
-
 } // namespace reussir
 
 #endif // REUSSIR_CONVERSION_DROPEXPANSION_H

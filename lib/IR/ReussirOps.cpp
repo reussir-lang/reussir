@@ -17,13 +17,21 @@
 
 #include <llvm/ADT/StringSwitch.h>
 #include <llvm/ADT/TypeSwitch.h>
+#include <llvm/Bitcode/BitcodeReader.h>
+#include <llvm/IR/Module.h>
+#include <llvm/Linker/Linker.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/LogicalResult.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/raw_ostream.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/Dialect/LLVMIR/LLVMAttrs.h>
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/OpImplementation.h>
 #include <mlir/IR/Operation.h>
+#include <mlir/IR/SymbolTable.h>
 #include <mlir/IR/Types.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
 
@@ -1766,6 +1774,157 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
       })
       // For other types, return failure
       .Default([&](mlir::Type) { return mlir::failure(); });
+}
+
+//===----------------------------------------------------------------------===//
+// createDtorIfNotExists
+//===----------------------------------------------------------------------===//
+mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
+                                         RecordType type,
+                                         mlir::OpBuilder &builder) {
+  mlir::SymbolTable symTable(moduleOp);
+  auto dtorName = type.getDtorName();
+  if (!dtorName)
+    llvm::report_fatal_error("only named record types have destructors");
+  std::string funcName = dtorName.getValue().str();
+  if (auto funcOp = symTable.lookup<mlir::func::FuncOp>(funcName))
+    return funcOp;
+  mlir::OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(moduleOp.getBody());
+  RefType refType = builder.getType<RefType>(type);
+  auto dtor = builder.create<mlir::func::FuncOp>(
+      builder.getUnknownLoc(), funcName,
+      builder.getFunctionType({refType}, {}));
+  dtor.setPrivate();
+  dtor->setAttr("llvm.linkage", builder.getAttr<mlir::LLVM::LinkageAttr>(
+                                    mlir::LLVM::linkage::Linkage::LinkonceODR));
+  mlir::Block *entryBlock = dtor.addEntryBlock();
+  builder.setInsertionPointToStart(entryBlock);
+  auto ref = entryBlock->getArgument(0);
+  builder.create<ReussirRefDropOp>(builder.getUnknownLoc(), ref, true, nullptr);
+  builder.create<mlir::func::ReturnOp>(builder.getUnknownLoc());
+  return dtor;
+}
+
+//===----------------------------------------------------------------------===//
+// emitOwnershipAcquisitionFuncIfNotExists
+//===----------------------------------------------------------------------===//
+mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
+    mlir::ModuleOp moduleOp, RecordType type, mlir::OpBuilder &builder) {
+  mlir::SymbolTable symTable(moduleOp);
+  auto acquireName = type.getAcquireName();
+  if (!acquireName)
+    llvm::report_fatal_error(
+        "only named record types have ownership acquisition functions");
+  std::string funcName = acquireName.getValue().str();
+
+  if (auto funcOp = symTable.lookup<mlir::func::FuncOp>(funcName))
+    return funcOp;
+
+  mlir::OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(moduleOp.getBody());
+
+  // Construct RefType from RecordType
+  RefType refType = builder.getType<RefType>(type);
+
+  auto funcOp = builder.create<mlir::func::FuncOp>(
+      builder.getUnknownLoc(), funcName,
+      builder.getFunctionType({refType}, {}));
+  funcOp.setPrivate();
+  funcOp->setAttr("llvm.linkage",
+                  builder.getAttr<mlir::LLVM::LinkageAttr>(
+                      mlir::LLVM::linkage::Linkage::LinkonceODR));
+
+  mlir::Block *entryBlock = funcOp.addEntryBlock();
+  builder.setInsertionPointToStart(entryBlock);
+  auto ref = entryBlock->getArgument(0);
+
+  if (emitOwnershipAcquisition(ref, builder, builder.getUnknownLoc())
+          .failed()) {
+    llvm::report_fatal_error("failed to emit ownership acquisition");
+  }
+
+  builder.create<mlir::func::ReturnOp>(builder.getUnknownLoc());
+  return funcOp;
+}
+
+//===----------------------------------------------------------------------===//
+// gatherCompiledModules
+//===----------------------------------------------------------------------===//
+std::unique_ptr<llvm::Module>
+gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
+                      llvm::StringRef dataLayout) {
+  // Collect all polyffi operations with compiledModule
+  llvm::SmallVector<ReussirPolyFFIOp> opsWithCompiledModule;
+  moduleOp.walk([&](ReussirPolyFFIOp op) {
+    if (op.getCompiledModule())
+      opsWithCompiledModule.push_back(op);
+  });
+
+  // Handle empty case - create an empty module if no compiledModule is
+  // found
+  if (opsWithCompiledModule.empty()) {
+    auto module = std::make_unique<llvm::Module>("empty", context);
+    module->setDataLayout(dataLayout);
+    return module;
+  }
+
+  // Parse bitcode and link all modules together
+  std::unique_ptr<llvm::Module> finalModule;
+
+  for (auto op : opsWithCompiledModule) {
+    // Extract bitcode from DenseElementsAttr
+    auto compiledModuleOpt = op.getCompiledModule();
+    if (!compiledModuleOpt)
+      continue;
+
+    mlir::DenseElementsAttr bitcodeAttr =
+        llvm::dyn_cast<mlir::DenseElementsAttr>(*compiledModuleOpt);
+    if (!bitcodeAttr) {
+      llvm::errs() << "compiledModule is not a DenseElementsAttr\n";
+      return nullptr;
+    }
+
+    // Get the raw bitcode data
+    llvm::ArrayRef<char> bitcodeData = bitcodeAttr.getRawData();
+
+    // Create a MemoryBuffer from the bitcode data
+    std::unique_ptr<llvm::MemoryBuffer> memBuffer =
+        llvm::MemoryBuffer::getMemBuffer(
+            llvm::StringRef(bitcodeData.data(), bitcodeData.size()),
+            "compiledModule", /*RequiresNullTerminator=*/false);
+
+    // Parse the bitcode
+    llvm::Expected<std::unique_ptr<llvm::Module>> moduleOrErr =
+        llvm::parseBitcodeFile(memBuffer->getMemBufferRef(), context);
+
+    if (!moduleOrErr) {
+      llvm::errs() << "Failed to parse bitcode from polyffi op: "
+                   << llvm::toString(moduleOrErr.takeError()) << "\n";
+      return nullptr;
+    }
+
+    std::unique_ptr<llvm::Module> parsedModule = std::move(*moduleOrErr);
+    parsedModule->setDataLayout(dataLayout);
+
+    // Link into final module
+    if (!finalModule) {
+      // First module becomes the base
+      finalModule = std::move(parsedModule);
+    } else {
+      // Link subsequent modules into the final module
+      if (llvm::Linker::linkModules(*finalModule, std::move(parsedModule))) {
+        llvm::errs() << "Failed to link LLVM modules\n";
+        return nullptr;
+      }
+    }
+  }
+
+  // Erase all the polyffi operations collected in step 1
+  for (auto op : opsWithCompiledModule)
+    op.erase();
+
+  return finalModule;
 }
 
 //===-----------------------------------------------------------------------===//

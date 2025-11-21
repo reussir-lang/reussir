@@ -14,11 +14,24 @@
 #ifndef REUSSIR_CONVERSION_PASSES_H
 #define REUSSIR_CONVERSION_PASSES_H
 
+#include <mlir/IR/BuiltinOps.h>
 #include <mlir/Pass/Pass.h>
 
 namespace reussir {
 #define GEN_PASS_DECL
 #include "Reussir/Conversion/Passes.h.inc"
+
+//===----------------------------------------------------------------------===//
+// CompilePolymorphicFFI Standalone Function
+//===----------------------------------------------------------------------===//
+//
+// Compiles all uncompiled polymorphic FFI operations in the module by
+// monomorphizing their templates and compiling them to LLVM bitcode.
+//
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult compilePolymorphicFFI(mlir::ModuleOp moduleOp,
+                                          bool optimized = false);
+
 } // namespace reussir
 
 #endif // REUSSIR_CONVERSION_PASSES_H

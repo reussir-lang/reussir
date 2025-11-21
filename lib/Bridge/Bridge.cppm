@@ -14,6 +14,7 @@ module;
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/PassManager.h>
+#include <llvm/Linker/Linker.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CodeGen.h>
@@ -29,7 +30,6 @@ module;
 #include <llvm/Transforms/IPO/AlwaysInliner.h>
 #include <llvm/Transforms/IPO/FunctionAttrs.h>
 #include <llvm/Transforms/IPO/Inliner.h>
-
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Scalar/ADCE.h>
 #include <llvm/Transforms/Utils.h>
@@ -72,8 +72,10 @@ module;
 
 #include "Reussir/Bridge.h"
 #include "Reussir/Conversion/BasicOpsLowering.h"
+#include "Reussir/Conversion/Passes.h"
 #include "Reussir/Conversion/SCFOpsLowering.h"
 #include "Reussir/IR/ReussirDialect.h"
+#include "Reussir/IR/ReussirOps.h"
 
 export module Reussir.Bridge;
 
@@ -264,8 +266,8 @@ buildPassManager(mlir::MLIRContext &context) {
 std::unique_ptr<llvm::Module>
 translateToModule(llvm::StringRef texture, llvm::LLVMContext &llvmCtx,
                   mlir::MLIRContext &context, mlir::PassManager &pm,
-                  const llvm::DataLayout &dl,
-                  llvm::StringRef source_name = "") {
+                  const llvm::DataLayout &dl, llvm::StringRef source_name = "",
+                  bool optimizeFFI = false) {
 #if LLVM_VERSION_MAJOR >= 21
   // Since LLVM 21.1.0, the MLIR parser does not depend on null terminator.
   OwningOpRef<ModuleOp> module =
@@ -288,6 +290,20 @@ translateToModule(llvm::StringRef texture, llvm::LLVMContext &llvmCtx,
       mlir::translateDataLayout(dl, &context);
   module->getOperation()->setAttr(mlir::DLTIDialect::kDataLayoutAttrName,
                                   dlSpec);
+  // first, compile polymorphic FFI
+  if (failed(compilePolymorphicFFI(*module, optimizeFFI))) {
+    spdlog::error("Failed to compile polymorphic FFI.");
+    return nullptr;
+  }
+  spdlog::info("Successfully compiled polymorphic FFI.");
+  // gather compiled modules
+  std::unique_ptr<llvm::Module> compiledModules =
+      gatherCompiledModules(*module, llvmCtx, dl.getStringRepresentation());
+  if (!compiledModules) {
+    spdlog::error("Failed to gather compiled modules.");
+    return nullptr;
+  }
+  spdlog::info("Successfully gathered compiled modules.");
   // run the lowering pipeline
   if (pm.run(module->getOperation()).failed()) {
     spdlog::error("Failed to lower MLIR module to LLVM dialect.");
@@ -295,7 +311,19 @@ translateToModule(llvm::StringRef texture, llvm::LLVMContext &llvmCtx,
   }
   spdlog::info("Successfully lowered MLIR module.");
   // finalize as LLVM IR
-  return translateModuleToLLVMIR(module->getOperation(), llvmCtx, texture);
+  auto mainModule =
+      translateModuleToLLVMIR(module->getOperation(), llvmCtx, texture);
+  if (!mainModule) {
+    spdlog::error("Failed to translate MLIR module to LLVM IR.");
+    return nullptr;
+  }
+  // link the compiled modules to the main module
+  if (llvm::Linker::linkModules(*mainModule, std::move(compiledModules))) {
+    spdlog::error("Failed to link compiled modules to main module.");
+    return nullptr;
+  }
+  spdlog::info("Successfully linked compiled modules to main module.");
+  return mainModule;
 }
 } // namespace bridge
 
@@ -393,7 +421,8 @@ void reussir_bridge_compile_for_target(
   // 4) Convert the MLIR module to LLVM IR.
   llvm::LLVMContext llvmCtx;
   std::unique_ptr<llvm::Module> llvmModule =
-      translateToModule(mlir_module, llvmCtx, *context, *pm, dl, source_name);
+      translateToModule(mlir_module, llvmCtx, *context, *pm, dl, source_name,
+                        opt == REUSSIR_OPT_AGGRESSIVE);
 
   if (!llvmModule) {
     spdlog::error("Failed to translate MLIR module to LLVM IR.");

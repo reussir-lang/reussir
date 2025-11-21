@@ -15,6 +15,7 @@
 
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/OpBase.td"
+include "mlir/IR/RegionKindInterface.td"
 include "Reussir/IR/ReussirDialect.td"
 include "Reussir/IR/ReussirAttrs.td"
 include "Reussir/IR/ReussirTypes.td"

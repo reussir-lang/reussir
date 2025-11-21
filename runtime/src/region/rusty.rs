@@ -29,17 +29,17 @@ pub unsafe trait RegionalObjectTrait: Sized {
 }
 
 #[repr(transparent)]
-pub struct RegionalRc<T: RegionalObjectTrait>(NonNull<RegionalRcBox<T>>);
+pub struct RegionalRc<T>(NonNull<RegionalRcBox<T>>);
 
-impl<T: RegionalObjectTrait> Copy for RegionalRc<T> {}
+impl<T> Copy for RegionalRc<T> {}
 
-impl<T: RegionalObjectTrait> Clone for RegionalRc<T> {
+impl<T> Clone for RegionalRc<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T: RegionalObjectTrait> RegionalRc<T> {
+impl<T> RegionalRc<T> {
     pub unsafe fn deref_mut(&mut self) -> &mut T {
         unsafe { &mut self.0.as_mut().data }
     }
@@ -60,15 +60,15 @@ impl<T: RegionalObjectTrait> RegionalRc<T> {
 }
 
 #[repr(transparent)]
-pub struct RigidRc<T: RegionalObjectTrait>(RegionalRc<T>);
+pub struct RigidRc<T>(RegionalRc<T>);
 
-impl<T: RegionalObjectTrait> RigidRc<T> {
+impl<T> RigidRc<T> {
     pub unsafe fn deref(&self) -> &T {
         unsafe { self.0.deref() }
     }
 }
 
-impl<T: RegionalObjectTrait> Clone for RigidRc<T> {
+impl<T> Clone for RigidRc<T> {
     fn clone(&self) -> Self {
         unsafe {
             Header::acquire(self.0.header());
@@ -77,7 +77,7 @@ impl<T: RegionalObjectTrait> Clone for RigidRc<T> {
     }
 }
 
-impl<T: RegionalObjectTrait> Drop for RigidRc<T> {
+impl<T> Drop for RigidRc<T> {
     fn drop(&mut self) {
         unsafe {
             Header::release(self.0.header());
@@ -150,7 +150,7 @@ impl_regional_object_traits_for_primitive!(
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Write, mem::offset_of};
+    use std::mem::offset_of;
 
     use super::*;
 

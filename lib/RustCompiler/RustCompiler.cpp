@@ -1,5 +1,6 @@
 #include "Reussir/RustCompiler.h"
 #include <array>
+#include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallString.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
@@ -74,9 +75,10 @@ llvm::StringRef findRustCompilerDeps() {
   return "";
 }
 
-std::unique_ptr<llvm::Module>
-compileRustSource(llvm::LLVMContext &context, llvm::StringRef sourceCode,
-                  llvm::ArrayRef<llvm::StringRef> additionalArgs) {
+std::unique_ptr<llvm::MemoryBuffer>
+compileRustSourceToBitcode(llvm::LLVMContext &context,
+                           llvm::StringRef sourceCode,
+                           llvm::ArrayRef<llvm::StringRef> additionalArgs) {
   llvm::StringRef rustcPath = findRustCompiler();
   llvm::StringRef rustcDepsPath = findRustCompilerDeps();
   if (rustcPath.empty() || rustcDepsPath.empty()) {
@@ -99,24 +101,23 @@ compileRustSource(llvm::LLVMContext &context, llvm::StringRef sourceCode,
     llvm::errs() << "Could not create temporary files for Rust compilation\n";
     return nullptr;
   }
-  llvm::raw_fd_ostream srcStream(srcFile->FD, /*shouldClose=*/true);
-  srcStream << sourceCode;
-  srcStream.close();
-  std::string rtLib =
-      "reussir_rt=" + std::string(rustcDepsPath.str()) + "/libreussir_rt.rlib";
+  {
+    llvm::raw_fd_ostream srcStream(srcFile->FD, /*shouldClose=*/false);
+    srcStream << sourceCode;
+  }
   // Prepare rustc command
-  llvm::SmallVector<llvm::StringRef, 16> args = {"rustc",
+  llvm::SmallVector<llvm::StringRef, 24> args = {"rustc",
+                                                 "-A",
+                                                 "warnings",
                                                  srcFile->TmpName,
                                                  "--crate-type",
                                                  "cdylib",
                                                  "--emit=llvm-bc",
                                                  "-L",
                                                  rustcDepsPath,
-                                                 "--extern",
-                                                 rtLib,
                                                  "-o",
                                                  resultBitcodeFile->TmpName};
-  for (const auto &arg : additionalArgs)
+  for (auto arg : additionalArgs)
     args.push_back(arg);
   // Execute rustc
   int code = llvm::sys::ExecuteAndWait(rustcPath, args);
@@ -124,17 +125,37 @@ compileRustSource(llvm::LLVMContext &context, llvm::StringRef sourceCode,
     llvm::errs() << "Rust compilation failed with exit code " << code << "\n";
     return nullptr;
   }
+  if (auto err = srcFile->discard())
+    llvm::errs() << "Failed to discard source file\n";
   // Load the bitcode file into a buffer
-  auto bufferOrErr = llvm::MemoryBuffer::getFile(resultBitcodeFile->TmpName);
-  if (!bufferOrErr) {
-    llvm::errs() << "Failed to read bitcode file: "
-                 << bufferOrErr.getError().message() << "\n";
-    return nullptr;
+  std::unique_ptr<llvm::MemoryBuffer> buffer;
+  {
+    auto bufferOrErr = llvm::MemoryBuffer::getFile(resultBitcodeFile->TmpName);
+    if (!bufferOrErr) {
+      llvm::errs() << "Failed to read bitcode file: "
+                   << bufferOrErr.getError().message() << "\n";
+      return {};
+    }
+#ifdef _WIN32
+    buffer = llvm::MemoryBuffer::getMemBufferCopy((*bufferOrErr)->getBuffer());
+#else
+    buffer = std::move(*bufferOrErr);
+#endif
   }
+  if (auto err = resultBitcodeFile->discard())
+    llvm::errs() << "Failed to discard bitcode file\n";
+  return buffer;
+}
 
-  llvm::Expected<std::unique_ptr<llvm::Module>> moduleOrErr =
-      llvm::parseBitcodeFile(bufferOrErr.get()->getMemBufferRef(), context);
-
+std::unique_ptr<llvm::Module>
+compileRustSource(llvm::LLVMContext &context, llvm::StringRef sourceCode,
+                  llvm::ArrayRef<llvm::StringRef> additionalArgs) {
+  std::unique_ptr<llvm::MemoryBuffer> bitcode =
+      compileRustSourceToBitcode(context, sourceCode, additionalArgs);
+  if (!bitcode)
+    return nullptr;
+  auto moduleOrErr =
+      llvm::parseBitcodeFile(bitcode->getMemBufferRef(), context);
   if (!moduleOrErr) {
     llvm::errs() << "Failed to parse bitcode file: "
                  << llvm::toString(moduleOrErr.takeError()) << "\n";
