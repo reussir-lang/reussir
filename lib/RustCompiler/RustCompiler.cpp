@@ -101,9 +101,10 @@ compileRustSourceToBitcode(llvm::LLVMContext &context,
     llvm::errs() << "Could not create temporary files for Rust compilation\n";
     return nullptr;
   }
-  llvm::raw_fd_ostream srcStream(srcFile->FD, /*shouldClose=*/true);
-  srcStream << sourceCode;
-  srcStream.close();
+  {
+    llvm::raw_fd_ostream srcStream(srcFile->FD, /*shouldClose=*/false);
+    srcStream << sourceCode;
+  }
   // Prepare rustc command
   llvm::SmallVector<llvm::StringRef, 24> args = {"rustc",
                                                  "-A",
@@ -124,14 +125,22 @@ compileRustSourceToBitcode(llvm::LLVMContext &context,
     llvm::errs() << "Rust compilation failed with exit code " << code << "\n";
     return nullptr;
   }
+  if (auto err = srcFile->discard())
+    llvm::errs() << "Failed to discard source file\n";
   // Load the bitcode file into a buffer
-  auto bufferOrErr = llvm::MemoryBuffer::getFile(resultBitcodeFile->TmpName);
-  if (!bufferOrErr) {
-    llvm::errs() << "Failed to read bitcode file: "
-                 << bufferOrErr.getError().message() << "\n";
-    return {};
+  std::unique_ptr<llvm::MemoryBuffer> buffer;
+  {
+    auto bufferOrErr = llvm::MemoryBuffer::getFile(resultBitcodeFile->TmpName);
+    if (!bufferOrErr) {
+      llvm::errs() << "Failed to read bitcode file: "
+                   << bufferOrErr.getError().message() << "\n";
+      return {};
+    }
+    buffer = llvm::MemoryBuffer::getMemBufferCopy((*bufferOrErr)->getBuffer());
   }
-  return std::move(*bufferOrErr);
+  if (auto err = resultBitcodeFile->discard())
+    llvm::errs() << "Failed to discard bitcode file\n";
+  return buffer;
 }
 
 std::unique_ptr<llvm::Module>
