@@ -74,9 +74,10 @@ llvm::StringRef findRustCompilerDeps() {
   return "";
 }
 
-std::unique_ptr<llvm::Module>
-compileRustSource(llvm::LLVMContext &context, llvm::StringRef sourceCode,
-                  llvm::ArrayRef<llvm::StringRef> additionalArgs) {
+std::unique_ptr<llvm::MemoryBuffer>
+compileRustSourceToBitcode(llvm::LLVMContext &context,
+                           llvm::StringRef sourceCode,
+                           llvm::ArrayRef<llvm::StringRef> additionalArgs) {
   llvm::StringRef rustcPath = findRustCompiler();
   llvm::StringRef rustcDepsPath = findRustCompilerDeps();
   if (rustcPath.empty() || rustcDepsPath.empty()) {
@@ -129,12 +130,21 @@ compileRustSource(llvm::LLVMContext &context, llvm::StringRef sourceCode,
   if (!bufferOrErr) {
     llvm::errs() << "Failed to read bitcode file: "
                  << bufferOrErr.getError().message() << "\n";
-    return nullptr;
+    return {};
   }
 
-  llvm::Expected<std::unique_ptr<llvm::Module>> moduleOrErr =
-      llvm::parseBitcodeFile(bufferOrErr.get()->getMemBufferRef(), context);
+  return std::move(bufferOrErr.get());
+}
 
+std::unique_ptr<llvm::Module>
+compileRustSource(llvm::LLVMContext &context, llvm::StringRef sourceCode,
+                  llvm::ArrayRef<llvm::StringRef> additionalArgs) {
+  std::unique_ptr<llvm::MemoryBuffer> bitcode =
+      compileRustSourceToBitcode(context, sourceCode, additionalArgs);
+  if (!bitcode)
+    return nullptr;
+  auto moduleOrErr =
+      llvm::parseBitcodeFile(bitcode->getMemBufferRef(), context);
   if (!moduleOrErr) {
     llvm::errs() << "Failed to parse bitcode file: "
                  << llvm::toString(moduleOrErr.takeError()) << "\n";

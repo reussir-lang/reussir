@@ -14,6 +14,7 @@
 #ifndef REUSSIR_IR_REUSSIROPS_H
 #define REUSSIR_IR_REUSSIROPS_H
 
+#include <llvm/IR/Module.h>
 #include <mlir/Bytecode/BytecodeOpInterface.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/Builders.h>
@@ -81,6 +82,17 @@ mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
 //===----------------------------------------------------------------------===//
 mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
     mlir::ModuleOp moduleOp, RecordType type, mlir::OpBuilder &builder);
+
+//===----------------------------------------------------------------------===//
+// gatherCompiledModules
+//===----------------------------------------------------------------------===//
+//
+// Gathers all the compiled modules from the polymorphic FFI operations.
+//
+//===----------------------------------------------------------------------===//
+std::unique_ptr<llvm::Module> gatherCompiledModules(mlir::ModuleOp moduleOp,
+                                                    llvm::LLVMContext &context,
+                                                    llvm::StringRef dataLayout);
 } // namespace reussir
 
 #endif // REUSSIR_IR_REUSSIROPS_H

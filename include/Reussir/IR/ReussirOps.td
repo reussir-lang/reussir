@@ -15,6 +15,7 @@
 
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/OpBase.td"
+include "mlir/IR/RegionKindInterface.td"
 include "Reussir/IR/ReussirDialect.td"
 include "Reussir/IR/ReussirAttrs.td"
 include "Reussir/IR/ReussirTypes.td"
@@ -1101,14 +1102,20 @@ def ReussirPolyFFIOp : ReussirOp<"polyffi", []> {
   }];
 
   let arguments = (ins
-    StrAttr:$moduleTexture,
-    DictionaryAttr:$substitutions
+    OptionalAttr<StrAttr>:$moduleTexture,
+    OptionalAttr<ElementsAttr>:$compiledModule,
+    OptionalAttr<DictionaryAttr>:$substitutions
   );
 
   let assemblyFormat = [{
-    `texture` `(` $moduleTexture `)`
-    `substitutions` `(` $substitutions `)` attr-dict
+    oilist (
+      `texture` `(` $moduleTexture `)`
+    | `compiled` `(` $compiledModule `)`
+    | `substitutions` `(` $substitutions `)`
+    ) attr-dict
   }];
+
+  let hasVerifier = 1;
 }
 
 #endif // REUSSIR_IR_REUSSIROPS_TD

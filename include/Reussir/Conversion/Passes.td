@@ -184,6 +184,8 @@ def ReussirCompilePolymorphicFFIPass
     Option<"optimized", "optimized", "bool", /*default=*/"false",
         "enable optimizations when compiling FFI templates">,
   ];
-  let dependentDialects = ["::reussir::ReussirDialect"];
+  let dependentDialects = ["::reussir::ReussirDialect", 
+                           "::mlir::func::FuncDialect", 
+                           "::mlir::scf::SCFDialect"];
 }
 #endif // REUSSIR_CONVERSION_PASSES_TD
