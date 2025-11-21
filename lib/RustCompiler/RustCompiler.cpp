@@ -136,7 +136,11 @@ compileRustSourceToBitcode(llvm::LLVMContext &context,
                    << bufferOrErr.getError().message() << "\n";
       return {};
     }
+#ifdef _WIN32
     buffer = llvm::MemoryBuffer::getMemBufferCopy((*bufferOrErr)->getBuffer());
+#else
+    buffer = std::move(*bufferOrErr);
+#endif
   }
   if (auto err = resultBitcodeFile->discard())
     llvm::errs() << "Failed to discard bitcode file\n";

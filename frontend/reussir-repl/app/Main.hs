@@ -55,6 +55,7 @@ createSimpleModule function =
                 OutputObject
                 LogWarning
         , recordInstances = []
+        , polymorphicFFIs = []
         }
 
 type NamedExpr = (String, Expr)
