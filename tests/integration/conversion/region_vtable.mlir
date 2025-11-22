@@ -4,9 +4,9 @@
 // RUN:   -reussir-lowering-basic-ops \
 // RUN:   -o %t.mlir %s
 // RUN: %FileCheck %s --check-prefix=CHECK-MLIR < %t.mlir
-// RUN: %mlir-translate --mlir-to-llvmir %t.mlir | \
+// RUN: %reussir-translate --mlir-to-llvmir %t.mlir | \
 // RUN:   %FileCheck %s --check-prefix=CHECK-LLVM
-// RUN: %mlir-translate --mlir-to-llvmir %t.mlir | \
+// RUN: %reussir-translate --mlir-to-llvmir %t.mlir | \
 // RUN:   %opt -S -O3 | \
 // RUN:   %llc -relocation-model=pic -filetype=obj -o %t.o
 // RUN: %cc %S/region_vtable.c %t.o -o %t.exe -L%library_path -lreussir_rt \

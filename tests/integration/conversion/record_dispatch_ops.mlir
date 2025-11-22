@@ -1,5 +1,5 @@
 // RUN: %reussir-opt %s --reussir-lowering-scf-ops --reussir-lowering-basic-ops --convert-scf-to-cf --convert-to-llvm --reconcile-unrealized-casts | \
-// RUN: %mlir-translate --mlir-to-llvmir | %FileCheck %s
+// RUN: %reussir-translate --mlir-to-llvmir | %FileCheck %s
 
 !option_some = !reussir.record<compound "Option::Some" {i32}>
 !option_none = !reussir.record<compound "Option::None" {}>

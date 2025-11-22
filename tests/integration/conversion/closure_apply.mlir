@@ -1,5 +1,5 @@
 // RUN: %reussir-opt %s --reussir-lowering-basic-ops | \
-// RUN: %mlir-translate --mlir-to-llvmir | %FileCheck %s
+// RUN: %reussir-translate --mlir-to-llvmir | %FileCheck %s
 
 // Test closure apply operation lowering pattern
 module attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i8, dense<8> : vector<2xi64>>> } {

@@ -1,5 +1,5 @@
 // RUN: %reussir-opt %s --reussir-lowering-basic-ops | \
-// RUN: %mlir-translate --mlir-to-llvmir | %FileCheck %s
+// RUN: %reussir-translate --mlir-to-llvmir | %FileCheck %s
 
 !nullable = !reussir.nullable<!reussir.ref<i64>>
 module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>>} {

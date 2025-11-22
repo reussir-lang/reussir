@@ -11,7 +11,6 @@ endfunction()
 
 find_llvm_tool(filecheck_path FileCheck)
 find_llvm_tool(not_path not)
-find_llvm_tool(mlir_translate_path mlir-translate)
 find_llvm_tool(opt_path opt)
 find_llvm_tool(llc_path llc)
 
@@ -46,5 +45,5 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 add_custom_target(check
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/lit "${CMAKE_CURRENT_BINARY_DIR}" -v
-  DEPENDS reussir-opt reussir-rt)
+  DEPENDS reussir-opt reussir-rt reussir-translate)
 

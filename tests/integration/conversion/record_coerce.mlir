@@ -1,5 +1,5 @@
 // RUN: %reussir-opt %s --reussir-lowering-basic-ops | \
-// RUN: %mlir-translate --mlir-to-llvmir | %FileCheck %s
+// RUN: %reussir-translate --mlir-to-llvmir | %FileCheck %s
 
 !variant_record = !reussir.record<variant "test_variant" {i32, i64, f32}>
 

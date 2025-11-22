@@ -1,5 +1,5 @@
 // RUN: %reussir-opt %s --reussir-lowering-basic-ops | \
-// RUN: %mlir-translate --mlir-to-llvmir | %FileCheck %s
+// RUN: %reussir-translate --mlir-to-llvmir | %FileCheck %s
 
 !test_struct = !reussir.record<compound "TestStruct" {i64, i64}>
 

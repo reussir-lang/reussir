@@ -1,5 +1,5 @@
 // RUN: %reussir-opt %s --reussir-lowering-basic-ops | \
-// RUN: %mlir-translate --mlir-to-llvmir | %FileCheck %s
+// RUN: %reussir-translate --mlir-to-llvmir | %FileCheck %s
 
 module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>>} {
   func.func @nullable_coerce_token(%nullable: !reussir.nullable<!reussir.token<align: 8, size: 64>>) -> !reussir.token<align: 8, size: 64> {

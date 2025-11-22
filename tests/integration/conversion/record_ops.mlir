@@ -1,5 +1,5 @@
 // RUN: %reussir-opt %s --reussir-lowering-basic-ops | \
-// RUN: %mlir-translate --mlir-to-llvmir | %FileCheck %s
+// RUN: %reussir-translate --mlir-to-llvmir | %FileCheck %s
 
 !list_incomplete = !reussir.record<variant "List" incomplete>
 !cons = !reussir.record<compound "List::Cons" { i32, [shared] !list_incomplete }>

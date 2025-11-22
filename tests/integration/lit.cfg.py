@@ -10,13 +10,14 @@ config.test_exec_root = os.path.join(config.test_output_root, 'test')
 
 config.substitutions.append((r'%reussir-opt',
                              os.path.join(config.binary_path, 'reussir-opt')))
+config.substitutions.append((r'%reussir-translate',
+                             os.path.join(config.binary_path, 'reussir-translate')))
 
 # Add C compiler substitution using CMake's C compiler
 config.substitutions.append((r'%cc', config.cc_path))
 
 config.substitutions.append((r'%FileCheck', config.filecheck_path))
 config.substitutions.append((r'%not', config.not_path))
-config.substitutions.append((r'%mlir-translate', config.mlir_translate_path))
 config.substitutions.append((r'%opt', config.opt_path))
 config.substitutions.append((r'%library_path', config.library_path))
 config.substitutions.append((r'%llc', config.llc_path))
