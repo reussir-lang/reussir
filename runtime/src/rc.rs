@@ -61,7 +61,7 @@ impl<T> Drop for Rc<T> {
     fn drop(&mut self) {
         let count = self.count_ref().get();
         self.count_ref().set(count - 1);
-        if count == 0 {
+        if count == 1 {
             _ = unsafe { Box::from_raw(self.0) };
         }
     }
@@ -91,5 +91,16 @@ impl<T> std::ops::Deref for RcRef<'_, T> {
 
     fn deref(&self) -> &Self::Target {
         self.0.data_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rc() {
+        let rc = Rc::new(123);
+        assert_eq!(*rc, 123);
     }
 }
