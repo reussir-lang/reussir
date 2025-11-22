@@ -116,6 +116,9 @@ static void formatInto(mlir::ModuleOp moduleOp, llvm::raw_ostream &os,
           emitOwnershipAcquisitionFuncIfNotExists(moduleOp, ty, builder);
         }
       })
+      .Case<FFIObjectType>([&](FFIObjectType ty) {
+        os << "\ntype " << name << " = " << ty.getFfiName().getValue() << ";\n";
+      })
       .Default([](mlir::Type) {
         llvm::report_fatal_error("unsupported type in FFI generation");
       });

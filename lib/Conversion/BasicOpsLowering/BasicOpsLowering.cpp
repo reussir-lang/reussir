@@ -794,6 +794,13 @@ struct ReussirRcDecOpConversionPattern
           mlir::ValueRange{adaptor.getRcPtr()});
       return mlir::success();
     }
+    if (auto eleTy = mlir::dyn_cast<FFIObjectType>(rcPtrTy.getElementType())) {
+      mlir::FlatSymbolRefAttr cleanupHook = eleTy.getCleanupHook();
+      rewriter.replaceOpWithNewOp<mlir::func::CallOp>(
+          op, cleanupHook, mlir::TypeRange{},
+          mlir::ValueRange{adaptor.getRcPtr()});
+      return mlir::success();
+    }
     return mlir::failure();
   }
 };

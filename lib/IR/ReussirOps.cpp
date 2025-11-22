@@ -159,7 +159,29 @@ mlir::LogicalResult ReussirRcDecOp::verify() {
 bool ReussirRcDecOp::shouldProduceToken() {
   RcType rcType = getRcPtr().getType();
   // Only shared capability RC pointers produce tokens
-  return rcType.getCapability() == reussir::Capability::shared;
+  return rcType.getCapability() == reussir::Capability::shared &&
+         !mlir::isa<FFIObjectType, ClosureType>(rcType.getElementType());
+}
+
+//===----------------------------------------------------------------------===//
+// RcDecOp SymbolUserOpInterface
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult
+ReussirRcDecOp::verifySymbolUses(mlir::SymbolTableCollection &symbolTable) {
+  RcType rcType = getRcPtr().getType();
+  if (auto eleTy = mlir::dyn_cast<FFIObjectType>(rcType.getElementType())) {
+    auto funcOp = symbolTable.lookupSymbolIn<mlir::func::FuncOp>(
+        getOperation(), eleTy.getCleanupHook());
+    if (!funcOp)
+      return emitOpError("cleanup hook not found: ") << eleTy.getCleanupHook();
+    if (funcOp.getFunctionType().getNumInputs() != 1 ||
+        funcOp.getFunctionType().getNumResults() != 0 ||
+        funcOp.getFunctionType().getInput(0) != rcType)
+      return emitOpError(
+          "cleanup hook must be a function with one argument and no return "
+          "type, and the argument type must match the RC element type");
+  }
+  return mlir::success();
 }
 
 bool ReussirRcDecOp::isNullable() {
@@ -531,9 +553,9 @@ mlir::LogicalResult ReussirRefProjectOp::verify() {
            << expectedProjectedType << ", got "
            << projectedType.getElementType();
 
-  // Check that the projected reference has the same capability as the original
-  // reference. Or if the refType is flex, then the projected type can be field
-  // if target is field.
+  // Check that the projected reference has the same capability as the
+  // original reference. Or if the refType is flex, then the projected type
+  // can be field if target is field.
   bool isOfSameCapability =
       projectedType.getCapability() == refType.getCapability();
   bool projectFieldOutOfFlex =
@@ -682,7 +704,8 @@ void ReussirRegionRunOp::getSuccessorRegions(
 void ReussirNullableDispatchOp::getSuccessorRegions(
     mlir::RegionBranchPoint point,
     llvm::SmallVectorImpl<mlir::RegionSuccessor> &regions) {
-  // If the predecessor is the parent operation, branch into one of the regions.
+  // If the predecessor is the parent operation, branch into one of the
+  // regions.
   if (point.isParent()) {
     regions.emplace_back(&getNonNullRegion());
     regions.emplace_back(&getNullRegion());
@@ -702,7 +725,8 @@ void ReussirNullableDispatchOp::getSuccessorRegions(
 void ReussirRecordDispatchOp::getSuccessorRegions(
     mlir::RegionBranchPoint point,
     llvm::SmallVectorImpl<mlir::RegionSuccessor> &regions) {
-  // If the predecessor is the parent operation, branch into one of the regions.
+  // If the predecessor is the parent operation, branch into one of the
+  // regions.
   if (point.isParent()) {
     for (mlir::Region &region : getRegions())
       regions.emplace_back(&region);
@@ -982,7 +1006,8 @@ mlir::LogicalResult ReussirNullableCoerceOp::verify() {
   NullableType nullableType = getNullable().getType();
   mlir::Type coercedType = getNonnull().getType();
 
-  // Check that the coerced type is the same as the PtrTy of the nullable input
+  // Check that the coerced type is the same as the PtrTy of the nullable
+  // input
   mlir::Type expectedType = nullableType.getPtrTy();
   if (coercedType != expectedType)
     return emitOpError("coerced type must match nullable pointer type, ")
@@ -1012,8 +1037,8 @@ mlir::LogicalResult ReussirNullableDispatchOp::verify() {
 
   mlir::Type nonNullArgType = nonNullBlock.getArgument(0).getType();
   if (nonNullArgType != innerType)
-    return emitOpError(
-               "nonnull region argument type must match nullable inner type, ")
+    return emitOpError("nonnull region argument type must match nullable "
+                       "inner type, ")
            << "argument type: " << nonNullArgType
            << ", expected type: " << innerType;
 
@@ -1236,8 +1261,8 @@ mlir::LogicalResult ReussirClosureCreateOp::verify() {
                        auto [argTy, type] = argAndType;
                        return argTy != type;
                      }))
-      return emitOpError(
-          "inlined closure body arguments must match the closure input types");
+      return emitOpError("inlined closure body arguments must match the "
+                         "closure input types");
   }
   return mlir::success();
 }
@@ -1323,7 +1348,8 @@ mlir::FlatSymbolRefAttr ReussirClosureCreateOp::getTrivialForwardingTarget() {
   auto closureInputTypes = closureType.getInputTypes();
   auto closureOutputType = closureType.getOutputType();
 
-  // Check if the call operation has the same number of arguments as the closure
+  // Check if the call operation has the same number of arguments as the
+  // closure
   auto callArgs = callOp.getOperands();
   if (callArgs.size() != closureInputTypes.size())
     return nullptr;
@@ -1447,8 +1473,8 @@ mlir::LogicalResult ReussirClosureYieldOp::verify() {
   } else {
     // Closure has no return type, so yield must not provide a value
     if (getValue())
-      return emitOpError(
-                 "closure has no return type but yield provides value of type ")
+      return emitOpError("closure has no return type but yield provides "
+                         "value of type ")
              << getValue().getType();
   }
 
@@ -1733,7 +1759,8 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
 
             auto tagSetsAttr = builder.getArrayAttr(tagSetAttrs);
 
-            // Create the dispatch operation with the correct number of regions
+            // Create the dispatch operation with the correct number of
+            // regions
             auto dispatchOp = builder.create<ReussirRecordDispatchOp>(
                 loc, mlir::Type{}, value, tagSetsAttr,
                 recordType.getMembers().size());

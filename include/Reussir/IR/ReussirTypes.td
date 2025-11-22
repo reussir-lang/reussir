@@ -391,6 +391,20 @@ def ReussirClosureBoxType
   }];
 }
 
+def ReussirFFIObjectType
+    : ReussirType<"FFIObject", "ffi_object", []> {
+  let summary = "Reussir FFIObject Object Type";
+  let description = [{
+    `reussir.ffi_object` is a special opaque type that is always
+    behind a RC pointer. Its dec operation, however, is handled by an FFI call.
+  }];
+  let parameters = (ins
+    "::mlir::StringAttr":$ffiName,
+    "::mlir::FlatSymbolRefAttr":$cleanupHook
+  );
+  let assemblyFormat = "`<` $ffiName `,` $cleanupHook `>`";
+}
+
 def RcClosureType : Type<CPred<[{
   ::llvm::isa<::reussir::RcType>($_self) && 
   ::llvm::isa<::reussir::ClosureType>(

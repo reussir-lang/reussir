@@ -49,6 +49,18 @@ impl<T> Nullable<T> {
         let result = std::mem::replace(self, Self::null());
         result.to_option()
     }
+    pub fn as_ref(&self) -> Option<&T> {
+        match self.ptr {
+            Some(ptr) => Some(unsafe { NonNull::from(&ptr).cast::<T>().as_ref() }),
+            None => None,
+        }
+    }
+    pub fn as_deref<U>(&self) -> Option<&U>
+    where
+        T: std::ops::Deref<Target = U>,
+    {
+        self.as_ref().map(|v| v.deref())
+    }
 }
 
 impl<T> Drop for Nullable<T> {

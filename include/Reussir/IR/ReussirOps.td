@@ -268,7 +268,8 @@ def ReussirRcIncOp : ReussirRcOp<"inc", []> {
 }
 
 def ReussirRcDecOp : ReussirRcOp<"dec", [
-  DeclareOpInterfaceMethods<TokenProducerInterface>
+  DeclareOpInterfaceMethods<TokenProducerInterface>,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>
 ]> {
   let summary = "Decrement reference count";
   let description = [{

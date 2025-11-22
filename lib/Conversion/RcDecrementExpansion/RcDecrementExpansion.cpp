@@ -57,7 +57,9 @@ struct RcDecrementExpansionPattern
                   mlir::PatternRewriter &rewriter) const override {
     RcType type = op.getRcPtr().getType();
     // No need to proceed if dec operation is applied to a rigid type.
-    if (type.getCapability() == Capability::rigid)
+    // Also delay the FFI object type clean up until basic ops lowering pass.
+    if (type.getCapability() == Capability::rigid ||
+        mlir::isa<FFIObjectType>(type.getElementType()))
       return mlir::success();
 
     auto prevRcCount =
