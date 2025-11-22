@@ -2,6 +2,7 @@ use crate::option::Option;
 use crate::rc::{Rc, RcRef};
 type StdVec<T> = std::vec::Vec<T>;
 
+#[derive(Clone)]
 #[repr(transparent)]
 pub struct Vec<T: Clone>(Rc<StdVec<T>>);
 

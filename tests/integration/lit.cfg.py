@@ -1,4 +1,5 @@
 import lit.formats
+import sys
 
 config.name = 'Reussir'
 config.test_format = lit.formats.ShTest(True)
@@ -22,3 +23,10 @@ config.substitutions.append((r'%opt', config.opt_path))
 config.substitutions.append((r'%library_path', config.library_path))
 config.substitutions.append((r'%llc', config.llc_path))
 config.substitutions.append((r'%extra_sys_libs', config.extra_sys_libs))
+config.substitutions.append((r'%lli', config.lli_path))
+
+# TODO: should we support macos?
+if sys.platform == 'windows':
+    config.substitutions.append((r'%reussir_rt', 'reussir_rt.dll'))
+else:
+    config.substitutions.append((r'%reussir_rt', 'libreussir_rt.so'))

@@ -504,14 +504,21 @@ struct ReussirRcIncConversionPattern
           mlir::ValueRange{adaptor.getRcPtr()});
       return mlir::success();
     }
-
-    RcBoxType rcBoxType = rcPtrTy.getInnerBoxType();
-    // GEP [0].1
-    auto convertedBoxType = getTypeConverter()->convertType(rcBoxType);
-    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
-    auto refcntPtr = rewriter.create<mlir::LLVM::GEPOp>(
-        op.getLoc(), llvmPtrType, convertedBoxType, adaptor.getRcPtr(),
-        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
+    mlir::Value refcntPtr;
+    // If inner element type is a FFI object, we do not reuse gep to expose the
+    // struct.
+    if (auto eleTy = mlir::dyn_cast<FFIObjectType>(rcPtrTy.getElementType())) {
+      refcntPtr = adaptor.getRcPtr();
+    } else {
+      RcBoxType rcBoxType = rcPtrTy.getInnerBoxType();
+      // GEP [0].1
+      auto convertedBoxType = getTypeConverter()->convertType(rcBoxType);
+      auto llvmPtrType =
+          mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+      refcntPtr = rewriter.create<mlir::LLVM::GEPOp>(
+          op.getLoc(), llvmPtrType, convertedBoxType, adaptor.getRcPtr(),
+          llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
+    }
     auto indexType = static_cast<const LLVMTypeConverter *>(getTypeConverter())
                          ->getIndexType();
     auto one = rewriter.create<mlir::arith::ConstantOp>(

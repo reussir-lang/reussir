@@ -13,6 +13,7 @@ find_llvm_tool(filecheck_path FileCheck)
 find_llvm_tool(not_path not)
 find_llvm_tool(opt_path opt)
 find_llvm_tool(llc_path llc)
+find_llvm_tool(lli_path lli)
 
 if (WIN32)
   set(extra_sys_libs "-lucrt -lntdll -lws2_32 -ladvapi32 -lbcrypt -luserenv")
@@ -21,6 +22,7 @@ else()
   set(REUSSIR_LIBRARY_PATH ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
 endif()
 
+find_program(rustc_path ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/rustc${CMAKE_EXECUTABLE_SUFFIX})
 configure_file(lit.site.cfg.py.in lit.site.cfg.py @ONLY)
 
 if(DEFINED ENV{MSYSTEM_PREFIX})

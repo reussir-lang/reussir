@@ -57,6 +57,12 @@ static void formatInto(mlir::ModuleOp moduleOp, llvm::raw_ostream &os,
       .Case<mlir::IntegerType, mlir::FloatType, mlir::IndexType>(
           [&](mlir::Type ty) { os << ty; })
       .Case<RcType>([&](RcType rcType) {
+        if (auto eleTy =
+                mlir::dyn_cast<FFIObjectType>(rcType.getElementType())) {
+          os << "\ntype " << name << " = " << eleTy.getFfiName().getValue()
+             << ";\n";
+          return;
+        }
         if (rcType.getCapability() != Capability::shared &&
             rcType.getCapability() != Capability::rigid)
           llvm::report_fatal_error("rc with other capabilities is not "
@@ -70,7 +76,7 @@ static void formatInto(mlir::ModuleOp moduleOp, llvm::raw_ostream &os,
                    mlir::TypeAttr::get(rcType.getElementType()), innerName,
                    false);
         os << "\ntype " << name << " = " << typePrefix << "<" << innerName
-           << ">\n";
+           << ">;\n";
       })
       .Case<RecordType>([&](RecordType ty) {
         mlir::DataLayout dataLayout(moduleOp);
@@ -116,9 +122,6 @@ static void formatInto(mlir::ModuleOp moduleOp, llvm::raw_ostream &os,
           emitOwnershipAcquisitionFuncIfNotExists(moduleOp, ty, builder);
         }
       })
-      .Case<FFIObjectType>([&](FFIObjectType ty) {
-        os << "\ntype " << name << " = " << ty.getFfiName().getValue() << ";\n";
-      })
       .Default([](mlir::Type) {
         llvm::report_fatal_error("unsupported type in FFI generation");
       });
@@ -152,7 +155,9 @@ static std::string monomorphize(mlir::ModuleOp moduleOp, ReussirPolyFFIOp op) {
       } else {
         inSubstitution = false;
         llvm::StringRef key = text.substr(cursor, index - cursor);
-        mlir::Attribute attr = op.getSubstitutions()->get(key);
+        mlir::Attribute attr = op.getSubstitutions()
+                                   ? op.getSubstitutions()->get(key)
+                                   : mlir::Attribute();
         if (!attr) {
           os << SUBSTART << key << SUBEND;
         } else {
