@@ -118,7 +118,10 @@ llvm::CodeGenOptLevel toLlvmOptLevel(ReussirOptOption opt) {
   llvm_unreachable("unknown optimization level");
 }
 void createLoweringPipeline(mlir::PassManager &pm) {
-  pm.addPass(createReussirCompilePolymorphicFFIPass());
+  // Using interface to compile polymorphic FFI does not really work,
+  // so we comment it out for now.
+  // TODO: Uncomment this when we have a way to compile polymorphic FFI
+  // pm.addPass(createReussirCompilePolymorphicFFIPass());
   pm.addPass(reussir::createReussirSCFOpsLoweringPass());
 #if LLVM_VERSION_MAJOR >= 21
   pm.addPass(createSCFToControlFlowPass());
@@ -291,8 +294,23 @@ translateToModule(llvm::StringRef texture, llvm::LLVMContext &llvmCtx,
       mlir::translateDataLayout(dl, &context);
   module->getOperation()->setAttr(mlir::DLTIDialect::kDataLayoutAttrName,
                                   dlSpec);
+  // first, compile polymorphic FFI
+  if (failed(compilePolymorphicFFI(*module, optimizeFFI))) {
+    spdlog::error("Failed to compile polymorphic FFI.");
+    return nullptr;
+  }
   spdlog::info("Successfully compiled polymorphic FFI.");
-  // run the lowering pipeline
+
+  // gather compiled modules
+  std::unique_ptr<llvm::Module> compiledModules =
+      gatherCompiledModules(*module, llvmCtx, dl.getStringRepresentation());
+  if (!compiledModules) {
+    spdlog::error("Failed to gather compiled modules.");
+    return nullptr;
+  }
+
+  spdlog::info("Successfully gathered compiled modules.");
+  // run the lowering pipeline on the main module
   if (pm.run(module->getOperation()).failed()) {
     spdlog::error("Failed to lower MLIR module to LLVM dialect.");
     return nullptr;
@@ -303,6 +321,12 @@ translateToModule(llvm::StringRef texture, llvm::LLVMContext &llvmCtx,
       translateModuleToLLVMIR(module->getOperation(), llvmCtx, texture);
   if (!mainModule) {
     spdlog::error("Failed to translate MLIR module to LLVM IR.");
+    return nullptr;
+  }
+
+  // link the compiled modules to the main module
+  if (llvm::Linker::linkModules(*mainModule, std::move(compiledModules))) {
+    spdlog::error("Failed to link compiled modules to main module.");
     return nullptr;
   }
   spdlog::info("Successfully linked compiled modules to main module.");

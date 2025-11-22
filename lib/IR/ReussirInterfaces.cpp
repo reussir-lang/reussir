@@ -24,50 +24,51 @@
 #include "Reussir/IR/ReussirInterfaces.cpp.inc"
 
 namespace reussir {
-namespace {
-using namespace mlir;
-struct ReussirLLVMTranslation : public mlir::LLVMTranslationDialectInterface {
-  using LLVMTranslationDialectInterface::LLVMTranslationDialectInterface;
+// namespace {
+// using namespace mlir;
+// struct ReussirLLVMTranslation : public mlir::LLVMTranslationDialectInterface
+// {
+//   using LLVMTranslationDialectInterface::LLVMTranslationDialectInterface;
 
-  LogicalResult
-  convertOperation(Operation *op, llvm::IRBuilderBase &builder,
-                   LLVM::ModuleTranslation &state) const override {
-    if (auto polyffi = dyn_cast<ReussirPolyFFIOp>(op)) {
-      if (!polyffi.getCompiledModule())
-        return op->emitError("PolyFFI operation has no compiled module");
-      auto denseI8array =
-          dyn_cast<DenseElementsAttr>(*polyffi.getCompiledModule());
-      if (!denseI8array)
-        return op->emitError("compiledModule is not a DenseElementsAttr");
-      llvm::ArrayRef<char> bitcodeData = denseI8array.getRawData();
-      std::unique_ptr<llvm::MemoryBuffer> memBuffer =
-          llvm::MemoryBuffer::getMemBuffer(
-              llvm::StringRef(bitcodeData.data(), bitcodeData.size()));
-      llvm::Expected<std::unique_ptr<llvm::Module>> moduleOrErr =
-          llvm::parseBitcodeFile(memBuffer->getMemBufferRef(),
-                                 state.getLLVMContext());
-      if (!moduleOrErr)
-        return op->emitError("PolyFFI operation has invalid bitcode");
-      std::unique_ptr<llvm::Module> innerModule = std::move(*moduleOrErr);
-      auto layout = state.getLLVMModule()->getDataLayout();
-      innerModule->setDataLayout(layout);
-      bool flag = llvm::Linker::linkModules(*state.getLLVMModule(),
-                                            std::move(innerModule));
-      if (flag)
-        return op->emitError("PolyFFI operation cannot be linked");
-      return success();
-    }
-    return failure();
-  }
-};
-} // namespace
+//   LogicalResult
+//   convertOperation(Operation *op, llvm::IRBuilderBase &builder,
+//                    LLVM::ModuleTranslation &state) const override {
+//     if (auto polyffi = dyn_cast<ReussirPolyFFIOp>(op)) {
+//       if (!polyffi.getCompiledModule())
+//         return op->emitError("PolyFFI operation has no compiled module");
+//       auto denseI8array =
+//           dyn_cast<DenseElementsAttr>(*polyffi.getCompiledModule());
+//       if (!denseI8array)
+//         return op->emitError("compiledModule is not a DenseElementsAttr");
+//       llvm::ArrayRef<char> bitcodeData = denseI8array.getRawData();
+//       std::unique_ptr<llvm::MemoryBuffer> memBuffer =
+//           llvm::MemoryBuffer::getMemBuffer(
+//               llvm::StringRef(bitcodeData.data(), bitcodeData.size()));
+//       llvm::Expected<std::unique_ptr<llvm::Module>> moduleOrErr =
+//           llvm::parseBitcodeFile(memBuffer->getMemBufferRef(),
+//                                  state.getLLVMContext());
+//       if (!moduleOrErr)
+//         return op->emitError("PolyFFI operation has invalid bitcode");
+//       std::unique_ptr<llvm::Module> innerModule = std::move(*moduleOrErr);
+//       auto layout = state.getLLVMModule()->getDataLayout();
+//       innerModule->setDataLayout(layout);
+//       bool flag = llvm::Linker::linkModules(*state.getLLVMModule(),
+//                                             std::move(innerModule));
+//       if (flag)
+//         return op->emitError("PolyFFI operation cannot be linked");
+//       return success();
+//     }
+//     return failure();
+//   }
+// };
+// } // namespace
 void ReussirDialect::registerInterfaces() {
-  addInterfaces<ReussirLLVMTranslation>();
+  // addInterfaces<ReussirLLVMTranslation>();
 }
-void registerReussirDialectTranslation(DialectRegistry &registry) {
-  registry.insert<ReussirDialect>();
-  registry.addExtension(+[](MLIRContext *ctx, ReussirDialect *dialect) {
-    dialect->addInterfaces<ReussirLLVMTranslation>();
-  });
-}
+// void registerReussirDialectTranslation(DialectRegistry &registry) {
+//   registry.insert<ReussirDialect>();
+//   registry.addExtension(+[](MLIRContext *ctx, ReussirDialect *dialect) {
+//     dialect->addInterfaces<ReussirLLVMTranslation>();
+//   });
+// }
 } // namespace reussir

@@ -154,7 +154,7 @@ struct ReussirRcReinterpretConversionPattern
   }
 };
 
-struct ReussirRcFetcjDectConversionPattern
+struct ReussirRcFetchDectConversionPattern
     : public mlir::OpConversionPattern<ReussirRcFetchDecOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -1132,6 +1132,6 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirClosureApplyOpConversionPattern,
       ReussirClosureCloneOpConversionPattern,
       ReussirRcReinterpretConversionPattern,
-      ReussirRcFetcjDectConversionPattern>(converter, patterns.getContext());
+      ReussirRcFetchDectConversionPattern>(converter, patterns.getContext());
 }
 } // namespace reussir

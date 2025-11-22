@@ -1856,4 +1856,71 @@ void ReussirDialect::registerOperations() {
 #include "Reussir/IR/ReussirOps.cpp.inc"
       >();
 }
+
+//===----------------------------------------------------------------------===//
+// gatherCompiledModules
+//===----------------------------------------------------------------------===//
+std::unique_ptr<llvm::Module>
+gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
+                      llvm::StringRef dataLayout) {
+  // Collect all polyffi operations with compiledModule
+  llvm::SmallVector<ReussirPolyFFIOp> opsWithCompiledModule;
+  moduleOp.walk([&](ReussirPolyFFIOp op) {
+    if (op.getCompiledModule())
+      opsWithCompiledModule.push_back(op);
+  });
+  // Handle empty case - create an empty module if no compiledModule is
+  // found
+  if (opsWithCompiledModule.empty()) {
+    auto module = std::make_unique<llvm::Module>("empty", context);
+    module->setDataLayout(dataLayout);
+    return module;
+  }
+  // Parse bitcode and link all modules together
+  std::unique_ptr<llvm::Module> finalModule;
+  for (auto op : opsWithCompiledModule) {
+    // Extract bitcode from DenseElementsAttr
+    auto compiledModuleOpt = op.getCompiledModule();
+    if (!compiledModuleOpt)
+      continue;
+    mlir::DenseElementsAttr bitcodeAttr =
+        llvm::dyn_cast<mlir::DenseElementsAttr>(*compiledModuleOpt);
+    if (!bitcodeAttr) {
+      llvm::errs() << "compiledModule is not a DenseElementsAttr\n";
+      return nullptr;
+    }
+    // Get the raw bitcode data
+    llvm::ArrayRef<char> bitcodeData = bitcodeAttr.getRawData();
+    // Create a MemoryBuffer from the bitcode data
+    std::unique_ptr<llvm::MemoryBuffer> memBuffer =
+        llvm::MemoryBuffer::getMemBuffer(
+            llvm::StringRef(bitcodeData.data(), bitcodeData.size()),
+            "compiledModule", /*RequiresNullTerminator=*/false);
+    // Parse the bitcode
+    llvm::Expected<std::unique_ptr<llvm::Module>> moduleOrErr =
+        llvm::parseBitcodeFile(memBuffer->getMemBufferRef(), context);
+    if (!moduleOrErr) {
+      llvm::errs() << "Failed to parse bitcode from polyffi op: "
+                   << llvm::toString(moduleOrErr.takeError()) << "\n";
+      return nullptr;
+    }
+    std::unique_ptr<llvm::Module> parsedModule = std::move(*moduleOrErr);
+    parsedModule->setDataLayout(dataLayout);
+    // Link into final module
+    if (!finalModule) {
+      // First module becomes the base
+      finalModule = std::move(parsedModule);
+    } else {
+      // Link subsequent modules into the final module
+      if (llvm::Linker::linkModules(*finalModule, std::move(parsedModule))) {
+        llvm::errs() << "Failed to link LLVM modules\n";
+        return nullptr;
+      }
+    }
+  }
+  // Erase all the polyffi operations collected in step 1
+  for (auto op : opsWithCompiledModule)
+    op.erase();
+  return finalModule;
+}
 } // namespace reussir

@@ -6,16 +6,19 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "Reussir/IR/ReussirDialect.h"
+#include "Reussir/IR/ReussirOps.h"
+#include <llvm/Linker/Linker.h>
 #include <mlir/IR/DialectRegistry.h>
 #include <mlir/InitAllDialects.h>
 #include <mlir/InitAllExtensions.h>
 #include <mlir/InitAllTranslations.h>
+#include <mlir/Interfaces/DataLayoutInterfaces.h>
 #include <mlir/Support/LogicalResult.h>
 #include <mlir/Target/LLVMIR/Dialect/All.h>
+#include <mlir/Target/LLVMIR/Export.h>
 #include <mlir/Tools/mlir-translate/MlirTranslateMain.h>
 #include <mlir/Tools/mlir-translate/Translation.h>
-
-#include "Reussir/IR/ReussirDialect.h"
 
 int main(int argc, char **argv) {
   mlir::registerAllTranslations();
@@ -23,17 +26,25 @@ int main(int argc, char **argv) {
       "reussir-to-llvmir", "Translate MLIR to LLVMIR",
       [](mlir::Operation *op, llvm::raw_ostream &output) {
         llvm::LLVMContext llvmContext;
-        auto llvmModule = translateModuleToLLVMIR(op, llvmContext);
+        mlir::ModuleOp moduleOp = mlir::cast<mlir::ModuleOp>(op);
+        std::unique_ptr<llvm::Module> polyffiModule =
+            reussir::gatherCompiledModules(moduleOp, llvmContext, "");
+        if (!polyffiModule)
+          return mlir::failure();
+        auto llvmModule = translateModuleToLLVMIR(moduleOp, llvmContext);
         if (!llvmModule)
           return mlir::failure();
-
+        polyffiModule->setDataLayout(llvmModule->getDataLayout());
+        if (llvm::Linker::linkModules(*llvmModule, std::move(polyffiModule)))
+          return mlir::failure();
         llvmModule->removeDebugIntrinsicDeclarations();
         llvmModule->print(output, nullptr);
         return mlir::success();
       },
       [](mlir::DialectRegistry &registry) {
-        registry.insert<mlir::DLTIDialect, mlir::func::FuncDialect>();
-        reussir::registerReussirDialectTranslation(registry);
+        registry.insert<mlir::DLTIDialect, mlir::func::FuncDialect,
+                        reussir::ReussirDialect>();
+        // reussir::registerReussirDialectTranslation(registry);
         mlir::registerAllToLLVMIRTranslations(registry);
       });
   return failed(
