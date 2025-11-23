@@ -1,6 +1,6 @@
 // RUN: %reussir-opt --reussir-compile-polymorphic-ffi=optimized %s --reussir-lowering-basic-ops | %reussir-translate --reussir-to-llvmir | %lli --load %library_path/%reussir_rt
 !Vecf64 = !reussir.rc<!reussir.ffi_object<"::reussir_rt::collections::vec::Vec<f64>", @__reussir_polyffi_Vec_f64_drop>>
-!VecVec64 = !reussir.rc<!reussir.ffi_object<"::reussir_rt::collections::vec::Vec<::reussir_rt::collections::vec::Vec<f64>>", @__reussir_polyffi_Vec_f64_drop>>
+!VecVec64 = !reussir.rc<!reussir.ffi_object<"::reussir_rt::collections::vec::Vec<::reussir_rt::collections::vec::Vec<f64>>", @__reussir_polyffi_Vec_NestedVec_drop>>
 module {
     reussir.polyffi 
         texture("extern crate reussir_rt; use reussir_rt::collections::vec::Vec; #[unsafe(no_mangle)] pub unsafe extern \"C\" fn __reussir_polyffi_Vec_[:typename:]_new() -> Vec<[:typename:]> {Vec::new()} #[unsafe(no_mangle)] pub unsafe extern \"C\" fn __reussir_polyffi_Vec_[:typename:]_drop(_ : Vec<[:typename:]>) {} #[unsafe(no_mangle)] pub unsafe extern \"C\" fn __reussir_polyffi_Vec_[:typename:]_push(vec : Vec<[:typename:]>, ele: [:typename:]) -> Vec<[:typename:]> {Vec::push(vec, ele)}")
@@ -18,15 +18,15 @@ module {
         // single test
         %0 = func.call @__reussir_polyffi_Vec_f64_new() : () -> !Vecf64
         reussir.rc.inc ( %0 : !Vecf64 )
-        func.call @__reussir_polyffi_Vec_f64_drop(%0) : (!Vecf64) -> ()
-        func.call @__reussir_polyffi_Vec_f64_drop(%0) : (!Vecf64) -> ()
+        reussir.rc.dec ( %0 : !Vecf64 )
+        reussir.rc.dec ( %0 : !Vecf64 )
         // nested test
         %1 = func.call @__reussir_polyffi_Vec_NestedVec_new() : () -> !VecVec64
         %2 = func.call @__reussir_polyffi_Vec_f64_new() : () -> !Vecf64
         reussir.rc.inc ( %2 : !Vecf64 )
         %3 = func.call @__reussir_polyffi_Vec_NestedVec_push(%1, %2) : (!VecVec64, !Vecf64) -> (!VecVec64)
         %4 = func.call @__reussir_polyffi_Vec_NestedVec_push(%3, %2) : (!VecVec64, !Vecf64) -> (!VecVec64)
-        func.call @__reussir_polyffi_Vec_NestedVec_drop(%4) : (!VecVec64) -> ()
+        reussir.rc.dec ( %4 : !VecVec64 )
         // return
         %c0 = arith.constant 0 : i32
         func.return %c0 : i32

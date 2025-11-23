@@ -170,7 +170,7 @@ mlir::LogicalResult
 ReussirRcDecOp::verifySymbolUses(mlir::SymbolTableCollection &symbolTable) {
   RcType rcType = getRcPtr().getType();
   if (auto eleTy = mlir::dyn_cast<FFIObjectType>(rcType.getElementType())) {
-    auto funcOp = symbolTable.lookupSymbolIn<mlir::func::FuncOp>(
+    auto funcOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
         getOperation(), eleTy.getCleanupHook());
     if (!funcOp)
       return emitOpError("cleanup hook not found: ") << eleTy.getCleanupHook();
