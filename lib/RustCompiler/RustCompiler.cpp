@@ -10,6 +10,7 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/Path.h>
 #include <llvm/Support/Program.h>
+#include <system_error>
 
 #ifdef _WIN32
 #define EXEC_SUFFIX ".exe"
@@ -93,30 +94,33 @@ compileRustSourceToBitcode(llvm::LLVMContext &context,
     return nullptr;
   }
   // Create a temporary file for the source code
-  auto srcFile =
-      llvm::sys::fs::TempFile::create("reussir_rust_module_%%%%%%.rs");
-  auto resultBitcodeFile =
-      llvm::sys::fs::TempFile::create("reussir_rust_module_%%%%%%.bc");
-  if (!srcFile || !resultBitcodeFile) {
+  llvm::SmallString<32> srcFilePath;
+  llvm::SmallString<32> resultBitcodeFilePath;
+  std::error_code srcFileCode = llvm::sys::fs::createUniqueFile(
+      "reussir_rust_module_%%%%%%.rs", srcFilePath);
+  std::error_code resultBitcodeFileCode = llvm::sys::fs::createUniqueFile(
+      "reussir_rust_module_%%%%%%.bc", resultBitcodeFilePath);
+  if (srcFileCode || resultBitcodeFileCode) {
     llvm::errs() << "Could not create temporary files for Rust compilation\n";
     return nullptr;
   }
   {
-    llvm::raw_fd_ostream srcStream(srcFile->FD, /*shouldClose=*/false);
+    int fd = -1;
+    std::error_code code = llvm::sys::fs::openFileForWrite(srcFilePath, fd);
+    if (code) {
+      llvm::errs() << "Could not open temporary file for writing: "
+                   << code.message() << "\n";
+      return nullptr;
+    }
+    llvm::raw_fd_ostream srcStream(fd, /*shouldClose=*/true);
     srcStream << sourceCode;
+    srcStream.flush();
   }
   // Prepare rustc command
-  llvm::SmallVector<llvm::StringRef, 24> args = {"rustc",
-                                                 "-A",
-                                                 "warnings",
-                                                 srcFile->TmpName,
-                                                 "--crate-type",
-                                                 "cdylib",
-                                                 "--emit=llvm-bc",
-                                                 "-L",
-                                                 rustcDepsPath,
-                                                 "-o",
-                                                 resultBitcodeFile->TmpName};
+  llvm::SmallVector<llvm::StringRef, 24> args = {
+      "rustc",        "-A",     "warnings",           srcFilePath,
+      "--crate-type", "cdylib", "--emit=llvm-bc",     "-L",
+      rustcDepsPath,  "-o",     resultBitcodeFilePath};
   for (auto arg : additionalArgs)
     args.push_back(arg);
   // Execute rustc
@@ -128,12 +132,12 @@ compileRustSourceToBitcode(llvm::LLVMContext &context,
     llvm::errs() << "\n";
     return nullptr;
   }
-  if (auto err = srcFile->discard())
+  if (auto err = llvm::sys::fs::remove(srcFilePath))
     llvm::errs() << "Failed to discard source file\n";
   // Load the bitcode file into a buffer
   std::unique_ptr<llvm::MemoryBuffer> buffer;
   {
-    auto bufferOrErr = llvm::MemoryBuffer::getFile(resultBitcodeFile->TmpName);
+    auto bufferOrErr = llvm::MemoryBuffer::getFile(resultBitcodeFilePath);
     if (!bufferOrErr) {
       llvm::errs() << "Failed to read bitcode file: "
                    << bufferOrErr.getError().message() << "\n";
@@ -145,7 +149,7 @@ compileRustSourceToBitcode(llvm::LLVMContext &context,
     buffer = std::move(*bufferOrErr);
 #endif
   }
-  if (auto err = resultBitcodeFile->discard())
+  if (auto err = llvm::sys::fs::remove(resultBitcodeFilePath))
     llvm::errs() << "Failed to discard bitcode file\n";
   return buffer;
 }
