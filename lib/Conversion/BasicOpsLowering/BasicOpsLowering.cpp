@@ -260,6 +260,8 @@ struct ReussirRefSpilledConversionPattern
 
     // Store the value to the allocated space
     rewriter.create<mlir::LLVM::StoreOp>(loc, value, allocaOp);
+    rewriter.create<mlir::LLVM::InvariantStartOp>(
+        loc, converter->getDataLayout().getTypeSize(valueType), allocaOp);
 
     // Return the pointer to the allocated space
     rewriter.replaceOp(op, allocaOp);
@@ -333,7 +335,8 @@ struct ReussirRecordVariantConversionPattern
     // Allocate stack space for the struct
     auto allocaOp = rewriter.create<mlir::LLVM::AllocaOp>(
         loc, ptrType, llvmStructType, one, alignment);
-
+    size_t structSize = converter->getDataLayout().getTypeSize(llvmStructType);
+    rewriter.create<mlir::LLVM::LifetimeStartOp>(loc, structSize, allocaOp);
     // Get a pointer to the tag field (index 0) and store the tag
     auto tagPtr = rewriter.create<mlir::LLVM::GEPOp>(
         loc, ptrType, llvmStructType, allocaOp,
@@ -345,11 +348,10 @@ struct ReussirRecordVariantConversionPattern
         loc, ptrType, llvmStructType, allocaOp,
         llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
     rewriter.create<mlir::LLVM::StoreOp>(loc, value, valuePtr);
-
     // Load the complete struct from the allocated space
     auto result =
         rewriter.create<mlir::LLVM::LoadOp>(loc, llvmStructType, allocaOp);
-
+    rewriter.create<mlir::LLVM::LifetimeEndOp>(loc, structSize, allocaOp);
     rewriter.replaceOp(op, result);
     return mlir::success();
   }
