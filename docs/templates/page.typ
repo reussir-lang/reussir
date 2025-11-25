@@ -1,6 +1,6 @@
 // This is important for shiroa to produce a responsive layout
 // and multiple targets.
-#import "@preview/shiroa:0.2.3": (
+#import "@preview/shiroa:0.3.0": (
   get-page-width, html-support, is-html-target, is-pdf-target, is-web-target, plain-text, shiroa-sys-target, templates,
 )
 #import templates: *
@@ -49,7 +49,7 @@
   description: none,
   plain-body: none,
   web-theme: "starlight",
-  starlight: "@preview/shiroa-starlight:0.2.3",
+  starlight: "@preview/shiroa-starlight:0.3.0",
 ) = if is-html-target and web-theme == "starlight" {
   import starlight: starlight
 
