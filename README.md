@@ -1,254 +1,262 @@
-# Reussir
+<p align="center">
+  <img src="misc/logos/reussir_banner_1600x800.svg" alt="Reussir Logo" width="600">
+</p>
 
-Reussir is a programming language compiler built on LLVM and MLIR, featuring a Rust-like syntax with advanced memory management capabilities.
+<h1 align="center">Reussir</h1>
 
-## Table of Contents
+<p align="center">
+  <strong>A programming language with region-based memory management</strong>
+</p>
 
-- [Installation](#installation)
-- [Dependencies](#dependencies)
-- [Building](#building)
-- [Testing](#testing)
-- [Usage](#usage)
-- [Project Structure](#project-structure)
+<p align="center">
+  <em>Built on LLVM/MLIR + Rust + Haskell</em>
+</p>
 
-## Installation
+<p align="center">
+  <a href="#quickstart">Quickstart</a> •
+  <a href="#building">Building</a> •
+  <a href="#testing">Testing</a> •
+  <a href="#project-structure">Project Structure</a> •
+  <a href="#contributing">Contributing</a>
+</p>
 
-### System Dependencies
+---
 
-Reussir requires the following system dependencies:
+## Overview
 
-- **LLVM 20+** and **MLIR** (part of LLVM)
-- **CMake 3.31+**
-- **Rust toolchain** (latest stable)
-- **C++ compiler** with C++23 support
-- **Python 3** (for test infrastructure)
+Reussir is a programming language compiler featuring Rust-like syntax with advanced region-based memory management. The compiler is implemented as a multi-language project:
 
-### Installing Dependencies
+- **MLIR Backend** — C++ with LLVM 21/22 and MLIR for IR transformations and code generation
+- **Runtime** — Rust for the runtime library with reference counting and region management
+- **Frontend** — Haskell for parsing, type checking, and MLIR code generation
 
-#### Ubuntu/Debian
+## Quickstart
+
+### Using Nix (Recommended)
+
+The fastest way to get started is with [Nix](https://nixos.org/). Nix provides a fully reproducible development environment with all dependencies pre-configured.
+
 ```bash
-# Install LLVM and MLIR (version 20+)
-sudo apt update
-sudo apt install llvm-20-dev mlir-20-dev
+# Clone the repository
+git clone https://github.com/your-org/reussir.git
+cd reussir
 
-# Install CMake and build tools
-sudo apt install cmake build-essential
+# Enter the development shell (all dependencies included!)
+nix develop
 
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-
-# Install Python and lit (for testing)
-sudo apt install python3 python3-pip
-pip3 install lit
+# Build everything
+mkdir -p build && cd build
+cmake -GNinja -DCMAKE_BUILD_TYPE=Release ..
+ninja
 ```
 
-#### macOS
+The Nix development shell automatically provides:
+
+| Component | Version |
+|-----------|---------|
+| LLVM + MLIR | 21 |
+| GHC | 9.10.3 |
+| Rust | nightly-2025-11-07 |
+| Python | 3.13 |
+| CMake + Ninja | latest |
+
+### Using direnv (Optional)
+
+If you have [direnv](https://direnv.net/) installed, the environment loads automatically:
+
 ```bash
-# Install LLVM and MLIR via Homebrew
-brew install llvm@20
-
-# Install CMake
-brew install cmake
-
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-
-# Install Python and lit
-brew install python3
-pip3 install lit
-```
-
-#### Arch Linux
-```bash
-# Install LLVM and MLIR
-sudo pacman -S llvm mlir
-
-# Install CMake and build tools
-sudo pacman -S cmake base-devel
-
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-
-# Install Python and lit
-sudo pacman -S python python-pip
-pip install lit
+cd reussir
+echo "use flake" > .envrc
+direnv allow  # One-time setup
+# Environment loads automatically on cd
 ```
 
 ## Building
 
-### CMake Build (C++ Components)
+### Full Build (C++ Backend + Rust Runtime)
 
-1. **Configure the build:**
 ```bash
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-```
-
-2. **Build the project:**
-```bash
-cmake --build . --parallel
-```
-
-**Alternative with Ninja (faster builds):**
-```bash
-# Configure with Ninja generator
-cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release
-# Build with Ninja
+# From project root with Nix shell active
+mkdir -p build && cd build
+cmake -GNinja -DCMAKE_BUILD_TYPE=Release ..
 ninja
 ```
 
-3. **Install (optional):**
+This builds:
+- `reussir-opt` — MLIR optimization and transformation tool
+- `reussir-translate` — MLIR to LLVM IR translation tool
+- `reussir-rt` — Rust runtime library
+
+### Haskell Frontend
+
+The Haskell frontend consists of four packages managed by Cabal:
+
+| Package | Description |
+|---------|-------------|
+| `reussir-parser` | Lexer and parser for Reussir syntax |
+| `reussir-codegen` | MLIR code generation from AST |
+| `reussir-bridge` | FFI bridge to the C++ MLIR infrastructure |
+| `reussir-repl` | Interactive REPL for experimentation |
+
+**Build all Haskell packages:**
+
 ```bash
-cmake --install .
+cabal update
+cabal build all -j
 ```
 
-### Cargo Build (Rust Components)
-
-The Rust components can be built independently:
+**Run the REPL:**
 
 ```bash
-# Build all Rust crates
-cargo build --release
+cabal run reussir-repl
 ```
 
-### Combined Build
+### Development Build
 
-The project uses both CMake and Cargo. The recommended approach is to use CMake which will handle both:
+For development with debug symbols and extra warnings:
 
 ```bash
-mkdir build && cd build
-cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -GNinja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DREUSSIR_ENABLE_PEDANTIC=ON \
+  -DREUSSIR_ENABLE_TESTS=ON \
+  ..
 ninja
 ```
-
-This will build:
-- `reussir-opt`: MLIR optimization tool
-- `reussir-rt`: Runtime library
-- All Rust crates and dependencies
 
 ## Testing
 
-### Running Tests
+### C++ / MLIR Tests
 
-The project includes comprehensive test suites:
-
-#### Integration Tests (MLIR/LLVM)
 ```bash
-# From the build directory
-ninja check
+# Unit tests
+cmake --build build --target reussir-ut
+ctest --test-dir build --output-on-failure
 
-# Or directly with lit
-./tests/integration/lit tests/integration/ -v
+# Integration tests (lit-based)
+cmake --build build --target check
 ```
 
-#### Unit Tests (C++)
+### Haskell Tests
+
 ```bash
-# From the build directory
-ctest --verbose
+cabal test all -j
 ```
 
-#### Rust Tests
+### Rust Runtime Tests
+
 ```bash
-# Run all Rust tests
+cd runtime
 cargo test
 
-# Run tests for specific crate
-cargo test -p reussir-core
-cargo test -p reussir-bridge
+# Run with Miri for undefined behavior detection
+cargo miri test
 ```
-
-### Test Structure
-
-- **Integration Tests**: Located in `tests/integration/`
-  - `basic/success/`: Tests that should pass
-  - `basic/failure/`: Tests that should fail with specific errors
-  - `conversion/`: MLIR conversion tests
-  - `compilation/`: End-to-end compilation tests
-
-- **Unit Tests**: Located in `tests/unittest/`
-  - C++ unit tests for core functionality
-
-- **Rust Tests**: Embedded in each crate's source files
-
-## Usage
 
 ## Project Structure
 
 ```
 reussir/
-├── runtime/               # Runtime library
-├── include/               # C++ headers
-├── lib/                   # C++ implementation
-├── tool/                  # Compiler tools
-│   ├── reussir-opt/       # MLIR optimization tool
-├── tests/                 # Test suites
-│   ├── integration/       # Integration tests
-│   └── unittest/          # Unit tests
-└── docs/                  # Documentation
+├── frontend/                 # Haskell frontend
+│   ├── reussir-parser/       # Parser and lexer
+│   ├── reussir-codegen/      # MLIR code generation
+│   ├── reussir-bridge/       # C++/MLIR FFI bridge
+│   └── reussir-repl/         # Interactive REPL
+├── include/                  # C++ headers
+│   └── Reussir/
+│       ├── IR/               # MLIR dialect definitions
+│       ├── Conversion/       # Conversion passes
+│       └── Analysis/         # Analysis passes
+├── lib/                      # C++ implementation
+│   ├── IR/                   # Dialect implementation
+│   ├── Conversion/           # Pass implementations
+│   └── Bridge/               # JIT engine and bridges
+├── runtime/                  # Rust runtime library
+│   └── src/
+│       ├── rc.rs             # Reference counting
+│       ├── region/           # Region-based allocation
+│       └── collections/      # Runtime collections
+├── tool/                     # Compiler tools
+│   ├── reussir-opt/          # MLIR optimizer
+│   └── reussir-translate/    # MLIR translator
+├── tests/
+│   ├── integration/          # lit-based integration tests
+│   └── unittest/             # C++ unit tests
+├── flake.nix                 # Nix flake configuration
+└── cabal.project             # Cabal project file
 ```
 
-## Development
+## Dependencies
 
-### Building for Development
+### Via Nix (Recommended)
+
+All dependencies are managed through `flake.nix`. Simply run `nix develop` to get a complete environment.
+
+### Manual Installation
+
+If you prefer not to use Nix:
+
+| Dependency | Version | Notes |
+|------------|---------|-------|
+| LLVM + MLIR | 21+ | Core compiler infrastructure |
+| CMake | 3.31+ | Build system |
+| Ninja | any | Build tool |
+| Rust | nightly | Runtime library |
+| GHC | 9.10.3 | Haskell frontend |
+| Cabal | 3.12+ | Haskell build tool |
+| Python | 3.11+ | Test infrastructure (lit) |
+
+**Ubuntu 24.04:**
 
 ```bash
-# Debug build with all warnings
-mkdir build-debug && cd build-debug
-cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Debug -DREUSSIR_ENABLE_PEDANTIC=ON
-ninja
+# LLVM 21
+wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh
+sudo ./llvm.sh 21
+sudo apt install libmlir-21-dev mlir-21-tools llvm-21-dev
 
-# Rust development
-cargo build
+# Build tools
+sudo apt install cmake ninja-build libgtest-dev libspdlog-dev
+pip install lit
+
+# Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup default nightly
+
+# Haskell (via GHCup)
+curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
+ghcup install ghc 9.10.3
+ghcup install cabal latest
 ```
 
-### VSCode Settings
+## CI/CD
 
-Recommended workspace settings for VSCode are captured in `.vscode/settings.json`:
+The project runs automated tests on every push:
 
-```json
-{
-    "cmake.generator": "Ninja",
-    "cmake.configureSettings": {
-        "CMAKE_CXX_COMPILER": "clang++",
-        "CMAKE_C_COMPILER": "clang"
-    },
-    "editor.formatOnSave": true,
-    "files.insertFinalNewline": true,
-    "haskell.formattingProvider": "fourmolu",
-    "tinymist.rootPath": "${workspaceFolder}/www"
-}
-```
-
-### Running Specific Tests
-
-```bash
-# Run specific integration test
-./tests/integration/lit tests/integration/basic/success/record.mlir -v
-
-# Run specific Rust test
-cargo test -p reussir-core test_name
-
-# Run C++ unit tests
-cd build && ctest -R test_name
-```
+| Workflow | Platform | Description |
+|----------|----------|-------------|
+| MLIR Backend | Ubuntu 24.04 (x64/ARM) | LLVM 21 & 22 builds |
+| MinGW Clang64 | Windows 2025 | Full pipeline with MSYS2 |
+| Haskell Frontend | Ubuntu 24.04 ARM | Cabal build & test in Nix |
+| Miri Tests | Ubuntu Latest | Runtime UB detection |
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Run the test suite: `ninja check`
+4. Ensure all tests pass:
+   ```bash
+   cmake --build build --target check  # Integration tests
+   ctest --test-dir build              # Unit tests
+   cabal test all -j                   # Haskell tests
+   ```
 5. Submit a pull request
 
 ## License
 
-The Reussir Project is licensed under either the Apache License, Version 2.0, 
-or the MIT License, at your option.
+The Reussir Project is dual-licensed under:
 
-If you choose to apply the Apache License, Version 2.0, you may additionally 
-include the LLVM exceptions, at your discretion.
+- **Apache License, Version 2.0** (with optional LLVM exceptions)
+- **MIT License**
 
-Please refer to [LICENSE](LICENSE) for detailed descriptions.
+Choose whichever license works best for your use case. See [LICENSE](LICENSE) for details.
