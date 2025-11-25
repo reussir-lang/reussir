@@ -35,8 +35,8 @@ impl<T> Rc<T> {
     pub fn data_ref(&self) -> &T {
         unsafe { &*self.get_box().as_ref().data.get() }
     }
-    pub fn data_ptr(&self) -> NonNull<T> {
-        NonNull::from(self.data_ref())
+    pub fn data_mut(&mut self) -> &mut T {
+        unsafe { &mut *self.get_box().as_mut().data.get() }
     }
     pub fn count_ref(&self) -> &Cell<usize> {
         unsafe { &self.get_box().as_ref().count }
@@ -69,11 +69,11 @@ impl<T> Drop for Rc<T> {
 impl<T: Clone> Rc<T> {
     pub fn make_mut(&mut self) -> &mut T {
         if self.is_unique() {
-            unsafe { self.data_ptr().as_mut() }
+            self.data_mut()
         } else {
             let data = self.data_ref().clone();
             *self = Self::new(data);
-            unsafe { self.data_ptr().as_mut() }
+            self.data_mut()
         }
     }
 }
@@ -102,5 +102,12 @@ mod tests {
     fn test_rc() {
         let rc = Rc::new(123);
         assert_eq!(*rc, 123);
+    }
+
+    #[test]
+    fn test_mut_rc() {
+        let mut rc = Rc::new(123);
+        *rc.make_mut() = 456;
+        assert_eq!(*rc, 456);
     }
 }
