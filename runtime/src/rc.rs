@@ -35,7 +35,7 @@ impl<T> Rc<T> {
     pub fn data_ref(&self) -> &T {
         unsafe { &*self.get_box().as_ref().data.get() }
     }
-    pub fn data_mut(&mut self) -> &mut T {
+    pub unsafe fn data_mut(&mut self) -> &mut T {
         unsafe { &mut *self.get_box().as_mut().data.get() }
     }
     pub fn count_ref(&self) -> &Cell<usize> {
@@ -68,13 +68,11 @@ impl<T> Drop for Rc<T> {
 }
 impl<T: Clone> Rc<T> {
     pub fn make_mut(&mut self) -> &mut T {
-        if self.is_unique() {
-            self.data_mut()
-        } else {
+        if !self.is_unique() {
             let data = self.data_ref().clone();
             *self = Self::new(data);
-            self.data_mut()
         }
+        unsafe { self.data_mut() }
     }
 }
 
