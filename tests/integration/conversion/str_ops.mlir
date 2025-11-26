@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-lowering-basic-ops
+// RUN: %reussir-opt %s --reussir-lowering-basic-ops | %FileCheck %s
 module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>>} {
   // CHECK: llvm.mlir.global linkonce_odr constant @hello("Hello, World!\00") {addr_space = 0 : i32}
   reussir.str.global @hello = "Hello, World!"
@@ -8,7 +8,7 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
 
   // CHECK-LABEL: llvm.func @test_str_literal() -> !llvm.struct<(ptr, i64)>
   // CHECK: %[[ADDR:.*]] = llvm.mlir.addressof @hello : !llvm.ptr
-  // CHECK: %[[LEN:.*]] = arith.constant 13 : i64
+  // CHECK: %[[LEN:.*]] = llvm.mlir.constant(13 : i64) : i64
   // CHECK: %[[UNDEF:.*]] = llvm.mlir.undef : !llvm.struct<(ptr, i64)>
   // CHECK: %[[WITH_PTR:.*]] = llvm.insertvalue %[[ADDR]], %[[UNDEF]][0]
   // CHECK: %[[WITH_LEN:.*]] = llvm.insertvalue %[[LEN]], %[[WITH_PTR]][1]
@@ -19,11 +19,10 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
   }
 
   // CHECK-LABEL: llvm.func @test_empty_str_literal() -> !llvm.struct<(ptr, i64)>
-  // CHECK: %[[ADDR:.*]] = llvm.mlir.addressof @empty : !llvm.ptr
-  // CHECK: %[[LEN:.*]] = arith.constant 0 : i64
+  // CHECK: %[[ADDR2:.*]] = llvm.mlir.addressof @empty : !llvm.ptr
+  // CHECK: %[[LEN2:.*]] = llvm.mlir.constant(0 : i64) : i64
   func.func @test_empty_str_literal() -> !reussir.str<global> {
     %str = reussir.str.literal @empty : !reussir.str<global>
     return %str : !reussir.str<global>
   }
 }
-
