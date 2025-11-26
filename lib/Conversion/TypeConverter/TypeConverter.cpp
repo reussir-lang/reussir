@@ -99,6 +99,14 @@ LLVMTypeConverter::LLVMTypeConverter(mlir::ModuleOp op)
     members.push_back(convertType(type.getElementType()));
     return mlir::LLVM::LLVMStructType::getLiteral(&getContext(), members);
   });
+
+  // Str types
+  addConversion([this](StrType type) {
+    auto indexTy = getIndexType();
+    auto ptrTy = mlir::LLVM::LLVMPointerType::get(&getContext());
+    return mlir::LLVM::LLVMStructType::getLiteral(&getContext(),
+                                                  {ptrTy, indexTy});
+  });
 }
 
 std::optional<llvm::LogicalResult> LLVMTypeConverter::convertRecordType(

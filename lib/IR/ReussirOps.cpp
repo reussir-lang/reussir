@@ -1874,6 +1874,31 @@ mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
   builder.create<mlir::func::ReturnOp>(builder.getUnknownLoc());
   return funcOp;
 }
+
+//===----------------------------------------------------------------------===//
+// StrLiteralOp SymbolUserOpInterface
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirStrLiteralOp::verifySymbolUses(
+    mlir::SymbolTableCollection &symbolTable) {
+  auto strGlobalOp = symbolTable.lookupNearestSymbolFrom<ReussirStrGlobalOp>(
+      getOperation(), getSymNameAttr());
+  if (!strGlobalOp)
+    return emitOpError("referenced symbol is not a reussir.str.global: ")
+           << getSymNameAttr();
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
+// StrLiteralOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirStrLiteralOp::verify() {
+  StrType strType = getLiteral().getType();
+  if (strType.getLifeScope() != LifeScope::global)
+    return emitOpError("literal type must have global lifescope, got: ")
+           << stringifyLifeScope(strType.getLifeScope());
+  return mlir::success();
+}
+
 //===-----------------------------------------------------------------------===//
 // Reussir Dialect Operations Registration
 //===-----------------------------------------------------------------------===//

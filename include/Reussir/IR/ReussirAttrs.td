@@ -57,4 +57,15 @@ def RecordKind
     : I32EnumAttr<"RecordKind", "record kind", [RK_Struct, RK_Enum]> {
   let cppNamespace = "::reussir";
 }
+
+//===----------------------------------------------------------------------===//
+// LifeScope Attributes
+//===----------------------------------------------------------------------===//
+def LS_Global : I32EnumAttrCase<"global", 0>;
+def LS_Local : I32EnumAttrCase<"local", 1>;
+
+def LifeScope
+    : I32EnumAttr<"LifeScope", "life scope", [LS_Global, LS_Local]> {
+  let cppNamespace = "::reussir";
+}
 #endif // REUSSIR_IR_REUSSIRATTRS_TD

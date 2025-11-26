@@ -1067,6 +1067,84 @@ struct ReussirClosureCloneOpConversionPattern
     return mlir::success();
   }
 };
+
+struct ReussirStrGlobalOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirStrGlobalOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirStrGlobalOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    llvm::StringRef payload = op.getPayload();
+
+    // Create an LLVM array type for the string (including null terminator)
+    auto i8Type = mlir::IntegerType::get(rewriter.getContext(), 8);
+    auto arrayType = mlir::LLVM::LLVMArrayType::get(i8Type, payload.size() + 1);
+
+    // Create the string attribute with null terminator
+    std::string payloadWithNull = payload.str();
+    payloadWithNull.push_back('\0');
+    auto stringAttr = rewriter.getStringAttr(payloadWithNull);
+
+    // Create LLVM global op
+    rewriter.replaceOpWithNewOp<mlir::LLVM::GlobalOp>(
+        op, arrayType, /*isConstant=*/true, mlir::LLVM::Linkage::LinkonceODR,
+        op.getSymName(), stringAttr);
+
+    return mlir::success();
+  }
+};
+
+struct ReussirStrLiteralOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirStrLiteralOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirStrLiteralOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+
+    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto indexType = converter->getIndexType();
+
+    // The result type is a struct { ptr, index } representing { data, len }
+    auto structType = mlir::LLVM::LLVMStructType::getLiteral(
+        rewriter.getContext(), {llvmPtrType, indexType});
+
+    // Look up the global string to get its length
+    auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
+    auto globalOp =
+        moduleOp.lookupSymbol<mlir::LLVM::GlobalOp>(op.getSymName());
+    if (!globalOp)
+      return op.emitOpError("referenced global string not found");
+
+    // Get the string length from the array type (minus null terminator)
+    auto arrayType =
+        llvm::dyn_cast<mlir::LLVM::LLVMArrayType>(globalOp.getType());
+    if (!arrayType)
+      return op.emitOpError("global is not an array type");
+    size_t strLen = arrayType.getNumElements() - 1; // exclude null terminator
+
+    // Get address of the global string
+    auto strPtr = rewriter.create<mlir::LLVM::AddressOfOp>(loc, llvmPtrType,
+                                                           op.getSymName());
+
+    // Create the length constant
+    auto lenVal = rewriter.create<mlir::arith::ConstantOp>(
+        loc, mlir::IntegerAttr::get(indexType, strLen));
+
+    // Build the struct { ptr, len }
+    auto undef = rewriter.create<mlir::LLVM::UndefOp>(loc, structType);
+    auto withPtr =
+        rewriter.create<mlir::LLVM::InsertValueOp>(loc, undef, strPtr, 0);
+    auto withLen =
+        rewriter.create<mlir::LLVM::InsertValueOp>(loc, withPtr, lenVal, 1);
+
+    rewriter.replaceOp(op, withLen);
+    return mlir::success();
+  }
+};
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -1139,7 +1217,7 @@ struct BasicOpsLoweringPass
         ReussirRecordTagOp, ReussirRecordCoerceOp, ReussirRegionVTableOp,
         ReussirRcFreezeOp, ReussirRegionCleanupOp, ReussirRegionCreateOp,
         ReussirRcReinterpretOp, ReussirClosureApplyOp, ReussirClosureCloneOp,
-        ReussirRcFetchDecOp>();
+        ReussirRcFetchDecOp, ReussirStrGlobalOp, ReussirStrLiteralOp>();
     target.addLegalDialect<mlir::LLVM::LLVMDialect>();
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
@@ -1171,6 +1249,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirClosureApplyOpConversionPattern,
       ReussirClosureCloneOpConversionPattern,
       ReussirRcReinterpretConversionPattern,
-      ReussirRcFetchDectConversionPattern>(converter, patterns.getContext());
+      ReussirRcFetchDectConversionPattern, ReussirStrGlobalOpConversionPattern,
+      ReussirStrLiteralOpConversionPattern>(converter, patterns.getContext());
 }
 } // namespace reussir

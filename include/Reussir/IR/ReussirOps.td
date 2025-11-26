@@ -1119,4 +1119,37 @@ def ReussirPolyFFIOp : ReussirOp<"polyffi", []> {
   let hasVerifier = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Reussir Str Operations
+//===----------------------------------------------------------------------===//
+
+class ReussirStrOp<string mnemonic, list<Trait> traits>
+    : ReussirOp<"str."#mnemonic, traits>;
+
+def ReussirStrGlobalOp : ReussirStrOp<"global", [Symbol]> {
+  let summary = "Create a global string literal";
+  let description = [{
+    `reussir.str.global` operation create a string literal in global storage.
+  }];
+  let arguments = (ins SymbolNameAttr:$sym_name, StrAttr:$payload);
+  let assemblyFormat = [{
+    $sym_name `=` $payload attr-dict
+  }];
+}
+
+def ReussirStrLiteralOp : ReussirStrOp<"literal", [
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Create a global string literal";
+  let description = [{
+    `reussir.str.literal` creates a reference to a global string literal.
+  }];
+  let arguments = (ins FlatSymbolRefAttr:$sym_name);
+  let results = (outs Res<ReussirStrType, "literal type">:$literal);
+  let assemblyFormat = [{
+    $sym_name `:` type($literal) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 #endif // REUSSIR_IR_REUSSIROPS_TD

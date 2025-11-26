@@ -405,6 +405,24 @@ def ReussirFFIObjectType
   let assemblyFormat = "`<` $ffiName `,` $cleanupHook `>`";
 }
 
+def ReussirStrType
+  : ReussirType<"Str", "str", []> {
+  let summary = "Reussir String Reference Type";
+  let description = [{
+    `reussir.str` is for str reference. Unlike rust, it only has two variants:
+    - *global*: can be materialized
+    - *local*: should not be materialized
+  }];
+  let parameters = (ins
+    "::reussir::LifeScope":$lifeScope
+  );
+  let assemblyFormat = "`<` $lifeScope `>`";
+}
+
+///===---------------------------------------------------------------------===//
+// Special Type Constraints
+//===----------------------------------------------------------------------===//
+
 def RcClosureType : Type<CPred<[{
   ::llvm::isa<::reussir::RcType>($_self) && 
   ::llvm::isa<::reussir::ClosureType>(
@@ -412,9 +430,6 @@ def RcClosureType : Type<CPred<[{
   !::llvm::cast<::reussir::RcType>($_self).isRegional()
   }]>, "Reussir rc closure type", "::reussir::RcType">;
 
-///===----------------------------------------------------------------------===//
-// Special Type Constraints
-//===----------------------------------------------------------------------===//
 def ReussirNullableTokenType
     : Type<
           /*predicate*/ Concat<
