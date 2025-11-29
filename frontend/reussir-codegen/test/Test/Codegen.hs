@@ -12,7 +12,7 @@ import Effectful.Log qualified as L
 import Log (defaultLogLevel)
 import Log.Backend.StandardOutput qualified as L
 import Reussir.Bridge qualified as B
-import Reussir.Codegen (RecordInstance (..))
+import Reussir.Codegen (RecordInstance (..), emptyModule)
 import Reussir.Codegen qualified as C
 import Reussir.Codegen.Context (TargetSpec (..))
 import Reussir.Codegen.Context.Symbol (Symbol, verifiedSymbol)
@@ -100,19 +100,9 @@ createAddF32Function =
 -- Create a simple module with the add_f32 function
 createSimpleModule :: C.Module
 createSimpleModule =
-    C.Module
-        { C.moduleFunctions = [createAddF32Function]
-        , C.moduleSpec =
-            TargetSpec
-                "test_module"
-                "output.o"
-                B.OptDefault
-                B.OutputObject
-                B.LogWarning
-        , C.recordInstances = []
-        , C.polymorphicFFIs = []
-        , C.globals = []
-        }
+    (emptyModule spec){C.moduleFunctions = [createAddF32Function]}
+  where
+    spec = TargetSpec "test_module" "output.o" B.OptDefault B.OutputObject B.LogWarning
 
 -- Create the Tensor2x2 record type symbol
 tensor2x2Symbol :: Symbol
@@ -143,15 +133,8 @@ defaultRef t = TT.TypeRef (TT.Ref t TT.NonAtomic TT.Unspecified)
 -- Four f64 fields, all with Value capability
 createTensor2x2Module :: C.Module
 createTensor2x2Module =
-    C.Module
+    (emptyModule spec)
         { C.moduleFunctions = [createMatmulFunction, createPowImplFunction, createPowFunction, createFibonacciFastFunction]
-        , C.moduleSpec =
-            TargetSpec
-                "tensor_module"
-                "tensor.o"
-                B.OptAggressive
-                B.OutputObject
-                B.LogWarning
         , C.recordInstances =
             [ RecordInstance
                 ( tensor2x2Symbol
@@ -167,9 +150,9 @@ createTensor2x2Module =
                     }
                 )
             ]
-        , C.polymorphicFFIs = []
-        , C.globals = []
         }
+  where
+    spec = TargetSpec "tensor_module" "tensor.o" B.OptAggressive B.OutputObject B.LogWarning
 
 -- Create matmul function: _ZN9Tensor2x2I3f64E6matmulE
 -- Takes two Tensor2x2, returns Tensor2x2
@@ -737,19 +720,9 @@ createFibonacciFunction =
 -- Create a module with the fibonacci function using aggressive optimization
 createFibonacciModule :: C.Module
 createFibonacciModule =
-    C.Module
-        { C.moduleFunctions = [createFibonacciFunction]
-        , C.moduleSpec =
-            TargetSpec
-                "fibonacci_module"
-                "fibonacci.o"
-                B.OptAggressive
-                B.OutputObject
-                B.LogWarning
-        , C.recordInstances = []
-        , C.polymorphicFFIs = []
-        , C.globals = []
-        }
+    (emptyModule spec){C.moduleFunctions = [createFibonacciFunction]}
+  where
+    spec = TargetSpec "fibonacci_module" "fibonacci.o" B.OptAggressive B.OutputObject B.LogWarning
 
 codegenTests :: TestTree
 codegenTests =

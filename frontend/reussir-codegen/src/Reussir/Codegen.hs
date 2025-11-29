@@ -3,6 +3,7 @@ module Reussir.Codegen (
     RecordInstance (..),
     PolymorphicFFI (..),
     PolymorphicFFIAttr (..),
+    emptyModule,
     moduleCodegen,
     emitModuleToText,
     emitModuleToBackend,
@@ -31,6 +32,19 @@ data Module = Module
     , polymorphicFFIs :: [PolymorphicFFI]
     , globals :: [Global]
     }
+
+{- | Create an empty module with the given target specification.
+All list fields (functions, recordInstances, polymorphicFFIs, globals) are empty.
+-}
+emptyModule :: TargetSpec -> Module
+emptyModule spec =
+    Module
+        { moduleFunctions = []
+        , moduleSpec = spec
+        , recordInstances = []
+        , polymorphicFFIs = []
+        , globals = []
+        }
 
 -- | Emit a complete MLIR module with the given body.
 moduleCodegen :: Module -> Codegen ()

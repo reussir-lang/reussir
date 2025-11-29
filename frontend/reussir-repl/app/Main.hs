@@ -27,7 +27,7 @@ import System.Console.Haskeline.IO
 
 -- Reussir
 import Reussir.Bridge (LogLevel (..), OptOption (..), OutputTarget (..), ReussirJIT, addModule, lookupSymbol, withJIT)
-import Reussir.Codegen (Module (..), emitModuleToText)
+import Reussir.Codegen (Module (..), emitModuleToText, emptyModule)
 import Reussir.Codegen.Context (TargetSpec (..))
 import Reussir.Codegen.Context.Symbol (verifiedSymbol)
 import Reussir.Codegen.IR qualified as IR
@@ -45,19 +45,9 @@ data Expr
 
 createSimpleModule :: IR.Function -> Module
 createSimpleModule function =
-    Module
-        { moduleFunctions = [function]
-        , moduleSpec =
-            TargetSpec
-                "jit_module"
-                "output.o"
-                OptDefault
-                OutputObject
-                LogWarning
-        , recordInstances = []
-        , polymorphicFFIs = []
-        , globals = []
-        }
+    (emptyModule spec){moduleFunctions = [function]}
+  where
+    spec = TargetSpec "jit_module" "output.o" OptDefault OutputObject LogWarning
 
 type NamedExpr = (String, Expr)
 
