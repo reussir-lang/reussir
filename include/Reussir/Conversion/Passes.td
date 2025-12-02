@@ -171,6 +171,23 @@ def ReussirTokenInstantiationPass
 }
 
 //===----------------------------------------------------------------------===//
+// ClosureOutlining
+//===----------------------------------------------------------------------===//
+def ReussirClosureOutliningPass
+    : Pass<"reussir-closure-outlining", "::mlir::ModuleOp"> {
+  let summary = "outline closures from Reussir operations";
+  let description = [{
+    `reussir-closure-outlining` outlines closures from Reussir operations.
+    This is required to instantiate closures for further lowering.
+  }];
+
+  let dependentDialects = ["::reussir::ReussirDialect",
+                           "::mlir::func::FuncDialect",
+                           "::mlir::LLVM::LLVMDialect"
+                          ];
+}
+
+//===----------------------------------------------------------------------===//
 // Compile Polymorphic FFI
 //===----------------------------------------------------------------------===//
 def ReussirCompilePolymorphicFFIPass
