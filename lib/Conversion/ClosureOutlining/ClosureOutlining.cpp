@@ -12,7 +12,10 @@
 #include "Reussir/Conversion/ClosureOutlining.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "llvm/ADT/Twine.h"
 
 #include <llvm/ADT/StringMap.h>
 #include <llvm/ADT/StringSet.h>
@@ -64,80 +67,128 @@ struct ClosureOutliningPass
   /// - Return type matching the closure's output type (if any)
   /// - Body cloned from the closure's region with yield replaced by return
   mlir::func::FuncOp createFunctionAndInlineRegion(ReussirClosureCreateOp op,
-                                                   llvm::StringRef name,
-                                                   mlir::IRRewriter &rewriter) {
-    mlir::ModuleOp moduleOp = getOperation();
-    mlir::OpBuilder builder(moduleOp.getBodyRegion());
-    builder.setInsertionPointToEnd(moduleOp.getBody());
+                                                   llvm::Twine name,
+                                                   mlir::IRRewriter &rewriter);
 
-    // Get the closure type to determine function signature
-    ClosureType closureType =
-        llvm::cast<ClosureType>(op.getClosure().getType().getElementType());
-    auto inputTypes = closureType.getInputTypes();
-    mlir::Type outputType = closureType.getOutputType();
+  /// Create the closure drop function.
+  mlir::func::FuncOp createClosureDropFunction(ReussirClosureCreateOp op,
+                                               llvm::Twine name,
+                                               mlir::IRRewriter &rewriter);
 
-    // Build function type
-    llvm::SmallVector<mlir::Type> resultTypes;
-    if (outputType)
-      resultTypes.push_back(outputType);
-    mlir::FunctionType funcType =
-        builder.getFunctionType(inputTypes, resultTypes);
+  /// Create the closure clone function
+  mlir::func::FuncOp createClosureCloneFunction(ReussirClosureCreateOp op,
+                                                llvm::Twine name,
+                                                mlir::IRRewriter &rewriter);
 
-    // Create the function
-    auto funcOp =
-        builder.create<mlir::func::FuncOp>(op.getLoc(), name, funcType);
-    funcOp.setPrivate();
-    funcOp->setAttr("llvm.linkage",
-                    mlir::LLVM::LinkageAttr::get(
-                        builder.getContext(), mlir::LLVM::Linkage::Internal));
-
-    // Create entry block for the function and inline the closure's single block
-    mlir::Block *entryBlock = funcOp.addEntryBlock();
-    mlir::Block &closureBlock = op.getBody().front();
-
-    // Inline the closure block into the function entry block
-    rewriter.inlineBlockBefore(&closureBlock, entryBlock, entryBlock->end(),
-                               entryBlock->getArguments());
-
-    // Replace all ReussirClosureYieldOp with func.return
-    funcOp.walk([&](ReussirClosureYieldOp yieldOp) {
-      mlir::OpBuilder returnBuilder(yieldOp);
-      if (yieldOp.getValue())
-        returnBuilder.create<mlir::func::ReturnOp>(yieldOp.getLoc(),
-                                                   yieldOp.getValue());
-      else
-        returnBuilder.create<mlir::func::ReturnOp>(yieldOp.getLoc());
-
-      yieldOp.erase();
-    });
-
-    return funcOp;
-  }
-
-  void runOnOperation() override {
-    mlir::ModuleOp moduleOp = getOperation();
-    llvm::SmallVector<ReussirClosureCreateOp> closureCreateOps;
-    moduleOp.walk([&](ReussirClosureCreateOp op) {
-      if (op.isInlined())
-        closureCreateOps.push_back(op);
-    });
-    ClosureNameUniquifier nameUniquifier;
-    mlir::IRRewriter rewriter(moduleOp.getContext());
-    for (auto op : closureCreateOps) {
-      auto name = nameUniquifier.uniquify(op);
-      // First, create a function, inline the region into the function and
-      // change the yield op to return op during the translation.
-      mlir::func::FuncOp function =
-          createFunctionAndInlineRegion(op, name, rewriter);
-      (void)function; // TODO: Use function to update the closure op
-
-      // Second, create closure's clone and drop functions
-      // Third, create vtable operation
-      // Fourth, update the closure to use outlined version (e.g. remove the
-      // region and set vtable attribute)
-    }
-  }
+  void runOnOperation() override;
 };
+
+void ClosureOutliningPass::runOnOperation() {
+  mlir::ModuleOp moduleOp = getOperation();
+  llvm::SmallVector<ReussirClosureCreateOp> closureCreateOps;
+  moduleOp.walk([&](ReussirClosureCreateOp op) {
+    if (op.isInlined())
+      closureCreateOps.push_back(op);
+  });
+  ClosureNameUniquifier nameUniquifier;
+  mlir::IRRewriter rewriter(moduleOp.getContext());
+  for (auto op : closureCreateOps) {
+    auto name = nameUniquifier.uniquify(op);
+    // First, create a function, inline the region into the function and
+    // change the yield op to return op during the translation.
+    mlir::func::FuncOp function =
+        createFunctionAndInlineRegion(op, name, rewriter);
+    (void)function; // TODO: Use function to update the closure op
+
+    // Second, create closure's clone and drop functions
+    // Third, create vtable operation
+    // Fourth, update the closure to use outlined version (e.g. remove the
+    // region and set vtable attribute)
+  }
+}
+
+mlir::func::FuncOp ClosureOutliningPass::createFunctionAndInlineRegion(
+    ReussirClosureCreateOp op, llvm::Twine name, mlir::IRRewriter &rewriter) {
+  mlir::OpBuilder::InsertionGuard guard(rewriter);
+  std::string invokeName = (name + "_invoke").str();
+  mlir::ModuleOp moduleOp = getOperation();
+  rewriter.setInsertionPointToEnd(moduleOp.getBody());
+
+  // Get the closure type to determine function signature
+  ClosureType closureType =
+      llvm::cast<ClosureType>(op.getClosure().getType().getElementType());
+  auto inputTypes = closureType.getInputTypes();
+  mlir::Type outputType = closureType.getOutputType();
+
+  // Build function type
+  llvm::SmallVector<mlir::Type> resultTypes;
+  if (outputType)
+    resultTypes.push_back(outputType);
+  mlir::FunctionType funcType =
+      rewriter.getFunctionType(inputTypes, resultTypes);
+
+  // Create the function
+  auto funcOp =
+      rewriter.create<mlir::func::FuncOp>(op.getLoc(), invokeName, funcType);
+  funcOp.setPrivate();
+  funcOp->setAttr("llvm.linkage",
+                  mlir::LLVM::LinkageAttr::get(rewriter.getContext(),
+                                               mlir::LLVM::Linkage::Internal));
+
+  // Create entry block for the function and inline the closure's single block
+  mlir::Block *entryBlock = funcOp.addEntryBlock();
+  mlir::Block &closureBlock = op.getBody().front();
+  rewriter.setInsertionPointToStart(entryBlock);
+  // Inline the closure block into the function entry block
+  rewriter.inlineBlockBefore(&closureBlock, entryBlock, entryBlock->end(),
+                             entryBlock->getArguments());
+
+  // Replace all ReussirClosureYieldOp with func.return
+  funcOp.walk([&](ReussirClosureYieldOp yieldOp) {
+    mlir::OpBuilder returnBuilder(yieldOp);
+    if (yieldOp.getValue())
+      returnBuilder.create<mlir::func::ReturnOp>(yieldOp.getLoc(),
+                                                 yieldOp.getValue());
+    else
+      returnBuilder.create<mlir::func::ReturnOp>(yieldOp.getLoc());
+
+    yieldOp.erase();
+  });
+
+  return funcOp;
+}
+
+mlir::func::FuncOp ClosureOutliningPass::createClosureDropFunction(
+    ReussirClosureCreateOp op, llvm::Twine name, mlir::IRRewriter &rewriter) {
+  mlir::OpBuilder::InsertionGuard guard(rewriter);
+  std::string dropName = (name + "_drop").str();
+  mlir::ModuleOp moduleOp = getOperation();
+  ClosureBoxType closureBoxType = op.getClosureBoxType();
+  RcBoxType rcBoxType = op.getRcClosureBoxType();
+  RefType refType = RefType::get(rewriter.getContext(), rcBoxType);
+  // transparently use RcType as refType of the Rc-wrapped closure box
+  mlir::FunctionType funcType =
+      rewriter.getFunctionType(llvm::ArrayRef<mlir::Type>{refType}, {});
+  auto funcOp =
+      rewriter.create<mlir::func::FuncOp>(op.getLoc(), dropName, funcType);
+  funcOp.setPrivate();
+  funcOp->setAttr("llvm.linkage",
+                  mlir::LLVM::LinkageAttr::get(rewriter.getContext(),
+                                               mlir::LLVM::Linkage::Internal));
+  // Create entry block for the function and inline the closure's single block
+  mlir::Block *entryBlock = funcOp.addEntryBlock();
+  mlir::Block &closureBlock = op.getBody().front();
+  rewriter.setInsertionPointToStart(entryBlock);
+  auto arg = entryBlock->getArgument(0);
+  // +---- RcBox
+  //  |---- count
+  //  +---- ClosureBox
+  //   |---- vtable
+  //   |---- cursor
+  //   +---- payload
+  return nullptr;
+}
+
 } // namespace
 
 } // namespace reussir

@@ -939,8 +939,7 @@ deriveLayoutForClosureBox(mlir::MLIRContext *context,
                           llvm::ArrayRef<mlir::Type> payloadTypes,
                           const mlir::DataLayout &dataLayout) {
   auto ptrTy = mlir::LLVM::LLVMPointerType::get(context);
-  auto indexTy = mlir::IndexType::get(context);
-  llvm::SmallVector<mlir::Type> members = {ptrTy, indexTy};
+  llvm::SmallVector<mlir::Type> members = {ptrTy, ptrTy};
   llvm::SmallVector<Capability> memberCapabilities = {Capability::value,
                                                       Capability::value};
 
