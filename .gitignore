@@ -9,3 +9,4 @@ rustc-ice-*
 .direnv
 dist-*
 .clice
+.DS_Store

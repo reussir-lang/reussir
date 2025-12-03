@@ -23,15 +23,25 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 23)
 
+# Configure clang-scan-deps for C++20 modules in Nix environment
+if(DEFINED ENV{CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS})
+  set(CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS $ENV{CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS})
+  message(STATUS "Using wrapped clang-scan-deps: ${CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS}")
+endif()
+
 # Find LLVM and MLIR
+# Skip libstdc++ version check - we use libc++ on macOS
+set(LLVM_COMPILER_CHECKED ON)
 include(cmake/FindLLVM.cmake)
 include(cmake/FindMLIR.cmake)
 if(DEFINED ENV{NIX_STORE})
   find_package(GTest REQUIRED)
-  message(STATUS "Detected Nix environment; injecting MLIR/LLVM/GTest include flags to walk around scan-deps issue")
+  find_package(spdlog REQUIRED)
+  message(STATUS "Detected Nix environment; injecting include flags to work around scan-deps issue")
   get_target_property(GTEST_INCLUDE_DIRS GTest::gtest INTERFACE_INCLUDE_DIRECTORIES)
+  get_target_property(SPDLOG_INCLUDE_DIRS spdlog::spdlog INTERFACE_INCLUDE_DIRECTORIES)
   set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -I${MLIR_INCLUDE_DIRS} -I${LLVM_INCLUDE_DIRS} -I${GTEST_INCLUDE_DIRS}")
+      "${CMAKE_CXX_FLAGS} -I${MLIR_INCLUDE_DIRS} -I${LLVM_INCLUDE_DIRS} -I${GTEST_INCLUDE_DIRS} -I${SPDLOG_INCLUDE_DIRS}")
 endif()
 message(STATUS "include dirs for llvm and mlir: ${MLIR_INCLUDE_DIRS};${LLVM_INCLUDE_DIRS}")
 set(MLIR_TABLEGEN_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/include)
