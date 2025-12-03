@@ -713,6 +713,23 @@ def ReussirRefDropOp : ReussirReferenceOp<"drop", []> {
   let hasVerifier = 1;
 }
 
+def ReussirRefDiffOp : ReussirReferenceOp<"diff", []> {
+  let summary = "Compute difference between two reference pointers";
+  let description = [{
+    `reussir.ref.diff` computes the difference (target - base) between two refernece pointers.
+  }];
+  let arguments = (ins 
+    Arg<ReussirRefType, "base reference">:$base,
+    Arg<ReussirRefType, "target reference">:$target
+  );
+  let results = (outs
+    Res<Index, "difference">:$difference
+  );
+  let assemblyFormat = [{
+    $base `,` $target `:` functional-type(operands, results) attr-dict
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Reussir Region Operations
 //===----------------------------------------------------------------------===//
@@ -1071,6 +1088,23 @@ def ReussirClosureUniqifyOp : ReussirClosureOp<"uniqify", []> {
 
 def ReussirClosureCloneOp : ReussirClosureOp<"clone", []> {
   let summary = "Clone a closure";
+  let description = [{
+    `reussir.closure.clone` clones a closure.
+
+    Since we typically have no way to understand the full closure, the memory layout
+    and other configuration related operations are handled inside the vtable clone operation.
+    This call just lowers into a function call to the clone operation via vtable.
+  }];
+  let arguments = (ins Arg<RcClosureType, "closure to clone">:$closure);
+  let results = (outs Res<RcClosureType, "cloned closure">:$cloned);
+  let assemblyFormat = [{
+    `(` $closure `:` qualified(type($closure)) `)` `:` qualified(type($cloned)) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def ReussirClosureInspectPayloadOp : ReussirClosureOp<"inspect_payload", []> {
+  let summary = "Inspect closure payload";
   let description = [{
     `reussir.closure.clone` clones a closure.
 
