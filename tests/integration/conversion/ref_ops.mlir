@@ -50,8 +50,19 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
   // CHECK-LABEL: llvm.func @reference_diff(%arg0: !llvm.ptr, %arg1: !llvm.ptr) -> i64
   // CHECK: %[[base:[0-9]+]] = llvm.ptrtoint %arg0 : !llvm.ptr to i64
   // CHECK: %[[target:[0-9]+]] = llvm.ptrtoint %arg1 : !llvm.ptr to i64
-  // CHECK: %[[diff:[0-9]+]] = llvm.sub %[[target]], %[[base]] overflow<nsw, nuw> : i64
+  // CHECK: %[[diff:[0-9]+]] = llvm.sub %[[target]], %[[base]] overflow<nsw> : i64
   // CHECK: llvm.return %[[diff]] : i64
+  // CHECK: }
+
+  func.func @reference_cmp(%lhs: !reussir.ref<i64>, %rhs: !reussir.ref<i64>) -> i1 {
+      %flag = reussir.ref.cmp eq %lhs, %rhs : (!reussir.ref<i64>, !reussir.ref<i64>) -> i1
+      return %flag : i1
+  }
+  // CHECK-LABEL: llvm.func @reference_cmp(%arg0: !llvm.ptr, %arg1: !llvm.ptr) -> i1
+  // CHECK: %[[lhs:[0-9]+]] = llvm.ptrtoint %arg0 : !llvm.ptr to i64
+  // CHECK: %[[rhs:[0-9]+]] = llvm.ptrtoint %arg1 : !llvm.ptr to i64
+  // CHECK: %[[cmp:[0-9]+]] = llvm.icmp "eq" %[[lhs]], %[[rhs]] : i64
+  // CHECK: llvm.return %[[cmp]] : i1
   // CHECK: }
 
 }

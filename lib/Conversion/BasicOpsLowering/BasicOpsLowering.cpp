@@ -1192,6 +1192,29 @@ struct ReussirRefDiffConversionPattern
     return mlir::success();
   }
 };
+
+struct ReussirRefCmpConversionPattern
+    : public mlir::OpConversionPattern<ReussirRefCmpOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRefCmpOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    auto indexType = converter->getIndexType();
+
+    // Convert lhs and rhs pointers to integers
+    mlir::Value lhsInt = rewriter.create<mlir::LLVM::PtrToIntOp>(
+        op.getLoc(), indexType, adaptor.getLhs());
+    mlir::Value rhsInt = rewriter.create<mlir::LLVM::PtrToIntOp>(
+        op.getLoc(), indexType, adaptor.getRhs());
+
+    // Perform the comparison
+    rewriter.replaceOpWithNewOp<mlir::arith::CmpIOp>(op, op.getPredicate(),
+                                                     lhsInt, rhsInt);
+    return mlir::success();
+  }
+};
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -1257,15 +1280,16 @@ struct BasicOpsLoweringPass
     target.addIllegalOp<
         ReussirTokenAllocOp, ReussirTokenFreeOp, ReussirTokenReinterpretOp,
         ReussirTokenReallocOp, ReussirRefLoadOp, ReussirRefStoreOp,
-        ReussirRefSpilledOp, ReussirRefDiffOp, ReussirNullableCheckOp,
-        ReussirNullableCreateOp, ReussirNullableCoerceOp, ReussirRcIncOp,
-        ReussirRcCreateOp, ReussirRcDecOp, ReussirRcBorrowOp,
-        ReussirRcIsUniqueOp, ReussirRecordCompoundOp, ReussirRecordVariantOp,
-        ReussirRefProjectOp, ReussirRecordTagOp, ReussirRecordCoerceOp,
-        ReussirRegionVTableOp, ReussirRcFreezeOp, ReussirRegionCleanupOp,
-        ReussirRegionCreateOp, ReussirRcReinterpretOp, ReussirClosureApplyOp,
-        ReussirClosureCloneOp, ReussirClosureInspectPayloadOp,
-        ReussirRcFetchDecOp, ReussirStrGlobalOp, ReussirStrLiteralOp>();
+        ReussirRefSpilledOp, ReussirRefDiffOp, ReussirRefCmpOp,
+        ReussirNullableCheckOp, ReussirNullableCreateOp,
+        ReussirNullableCoerceOp, ReussirRcIncOp, ReussirRcCreateOp,
+        ReussirRcDecOp, ReussirRcBorrowOp, ReussirRcIsUniqueOp,
+        ReussirRecordCompoundOp, ReussirRecordVariantOp, ReussirRefProjectOp,
+        ReussirRecordTagOp, ReussirRecordCoerceOp, ReussirRegionVTableOp,
+        ReussirRcFreezeOp, ReussirRegionCleanupOp, ReussirRegionCreateOp,
+        ReussirRcReinterpretOp, ReussirClosureApplyOp, ReussirClosureCloneOp,
+        ReussirClosureInspectPayloadOp, ReussirRcFetchDecOp, ReussirStrGlobalOp,
+        ReussirStrLiteralOp>();
     target.addLegalDialect<mlir::LLVM::LLVMDialect>();
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
@@ -1281,7 +1305,8 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirTokenReinterpretConversionPattern,
       ReussirTokenReallocConversionPattern, ReussirRefLoadConversionPattern,
       ReussirRefStoreConversionPattern, ReussirRefSpilledConversionPattern,
-      ReussirRefDiffConversionPattern, ReussirNullableCheckConversionPattern,
+      ReussirRefDiffConversionPattern, ReussirRefCmpConversionPattern,
+      ReussirNullableCheckConversionPattern,
       ReussirNullableCreateConversionPattern,
       ReussirNullableCoerceConversionPattern, ReussirRcIncConversionPattern,
       ReussirRcDecOpConversionPattern, ReussirRcCreateOpConversionPattern,

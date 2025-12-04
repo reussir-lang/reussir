@@ -16,6 +16,7 @@
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/RegionKindInterface.td"
+include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "Reussir/IR/ReussirDialect.td"
 include "Reussir/IR/ReussirAttrs.td"
 include "Reussir/IR/ReussirTypes.td"
@@ -727,6 +728,24 @@ def ReussirRefDiffOp : ReussirReferenceOp<"diff", []> {
   );
   let assemblyFormat = [{
     $base `,` $target `:` functional-type(operands, results) attr-dict
+  }];
+}
+
+def ReussirRefCmpOp : ReussirReferenceOp<"cmp", []> {
+  let summary = "Compare the address numeric value of two references";
+  let description = [{
+    `reussir.ref.cmp` computes the difference (target - base) between two refernece pointers.
+  }];
+  let arguments = (ins 
+    Arith_CmpIPredicateAttr:$predicate,
+    Arg<ReussirRefType, "left-hand side">:$lhs,
+    Arg<ReussirRefType, "right-hand side">:$rhs
+  );
+  let results = (outs
+    Res<I1, "compare result">:$flag
+  );
+  let assemblyFormat = [{
+    $predicate $lhs `,` $rhs `:` functional-type(operands, results) attr-dict
   }];
 }
 
