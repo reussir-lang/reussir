@@ -749,6 +749,26 @@ def ReussirRefCmpOp : ReussirReferenceOp<"cmp", []> {
   }];
 }
 
+def ReussirRefMemcpyOp : ReussirReferenceOp<"memcpy", []> {
+  let summary = "Non-overlapping memory copy between two references";
+  let description = [{
+    `reussir.ref.memcpy` performs a non-overlapping memory copy from the source
+    reference to the destination reference. The element types of both references
+    must be identical.
+
+    This is a low-level operation that does not perform any reference counting
+    or ownership transfer. It simply copies the bytes from source to destination.
+  }];
+  let arguments = (ins 
+    Arg<ReussirRefType, "source reference">:$src,
+    Arg<ReussirRefType, "destination reference">:$dst
+  );
+  let assemblyFormat = [{
+    $src `to` $dst `:` type($src) `to` type($dst) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // Reussir Region Operations
 //===----------------------------------------------------------------------===//

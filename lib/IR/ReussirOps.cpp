@@ -625,6 +625,22 @@ mlir::LogicalResult ReussirRefStoreOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// RefMemcpyOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRefMemcpyOp::verify() {
+  RefType srcType = getSrc().getType();
+  RefType dstType = getDst().getType();
+
+  // Check that element types are identical
+  if (srcType.getElementType() != dstType.getElementType())
+    return emitOpError("source and destination element types must be identical, ")
+           << "source element type: " << srcType.getElementType()
+           << ", destination element type: " << dstType.getElementType();
+
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Region Operations
 //===----------------------------------------------------------------------===//
 // RegionRunOp verification

@@ -65,4 +65,13 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
   // CHECK: llvm.return %[[cmp]] : i1
   // CHECK: }
 
+  func.func @reference_memcpy(%src: !reussir.ref<i64>, %dst: !reussir.ref<i64>) {
+      reussir.ref.memcpy %src to %dst : !reussir.ref<i64> to !reussir.ref<i64>
+      return
+  }
+  // CHECK-LABEL: llvm.func @reference_memcpy(%arg0: !llvm.ptr, %arg1: !llvm.ptr)
+  // CHECK: "llvm.intr.memcpy.inline"(%arg1, %arg0) <{isVolatile = false, len = 8 : index}> : (!llvm.ptr, !llvm.ptr) -> ()
+  // CHECK: llvm.return
+  // CHECK: }
+
 }

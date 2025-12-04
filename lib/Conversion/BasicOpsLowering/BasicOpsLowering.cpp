@@ -1240,6 +1240,28 @@ struct ReussirRefCmpConversionPattern
     return mlir::success();
   }
 };
+
+struct ReussirRefMemcpyConversionPattern
+    : public mlir::OpConversionPattern<ReussirRefMemcpyOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRefMemcpyOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+
+    // Get the element type and its size
+    RefType srcType = op.getSrc().getType();
+    mlir::Type elementType = converter->convertType(srcType.getElementType());
+    size_t size = converter->getDataLayout().getTypeSize(elementType);
+
+    // Create LLVM memcpy intrinsic (non-overlapping, so isVolatile = false)
+    rewriter.replaceOpWithNewOp<mlir::LLVM::MemcpyInlineOp>(
+        op, adaptor.getDst(), adaptor.getSrc(), rewriter.getIndexAttr(size),
+        /*isVolatile=*/false);
+    return mlir::success();
+  }
+};
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -1306,7 +1328,7 @@ struct BasicOpsLoweringPass
         ReussirTokenAllocOp, ReussirTokenFreeOp, ReussirTokenReinterpretOp,
         ReussirTokenReallocOp, ReussirRefLoadOp, ReussirRefStoreOp,
         ReussirRefSpilledOp, ReussirRefDiffOp, ReussirRefCmpOp,
-        ReussirNullableCheckOp, ReussirNullableCreateOp,
+        ReussirRefMemcpyOp, ReussirNullableCheckOp, ReussirNullableCreateOp,
         ReussirNullableCoerceOp, ReussirRcIncOp, ReussirRcCreateOp,
         ReussirRcDecOp, ReussirRcBorrowOp, ReussirRcIsUniqueOp,
         ReussirRecordCompoundOp, ReussirRecordVariantOp, ReussirRefProjectOp,
@@ -1331,7 +1353,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirTokenReallocConversionPattern, ReussirRefLoadConversionPattern,
       ReussirRefStoreConversionPattern, ReussirRefSpilledConversionPattern,
       ReussirRefDiffConversionPattern, ReussirRefCmpConversionPattern,
-      ReussirNullableCheckConversionPattern,
+      ReussirRefMemcpyConversionPattern, ReussirNullableCheckConversionPattern,
       ReussirNullableCreateConversionPattern,
       ReussirNullableCoerceConversionPattern, ReussirRcIncConversionPattern,
       ReussirRcDecOpConversionPattern, ReussirRcCreateOpConversionPattern,
