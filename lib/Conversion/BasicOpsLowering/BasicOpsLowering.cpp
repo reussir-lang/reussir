@@ -1188,9 +1188,7 @@ struct ReussirRefDiffConversionPattern
 
     // Compute difference: target - base
     rewriter.replaceOpWithNewOp<mlir::arith::SubIOp>(
-        op, targetInt, baseInt,
-        mlir::arith::IntegerOverflowFlags::nsw |
-            mlir::arith::IntegerOverflowFlags::nuw);
+        op, targetInt, baseInt, mlir::arith::IntegerOverflowFlags::nsw);
     return mlir::success();
   }
 };
