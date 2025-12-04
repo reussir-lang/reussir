@@ -154,12 +154,11 @@ mlir::func::FuncOp ClosureOutliningPass::createFunctionAndInlineRegion(
   auto inputTypes = closureType.getInputTypes();
   mlir::Type outputType = closureType.getOutputType();
   ClosureBoxType closureBoxType = op.getClosureBoxType();
+  RcType specializedRcType = RcType::get(rewriter.getContext(), closureBoxType);
 
-  // Build function type: payload types + input types -> output type
-  // The function directly takes the closure's block arguments
+  // Build function type: Rc<ClosureBox> + input types -> output type
   llvm::SmallVector<mlir::Type> argTypes;
-  auto payloadTypes = closureBoxType.getPayloadTypes();
-  argTypes.append(payloadTypes.begin(), payloadTypes.end());
+  argTypes.push_back(specializedRcType);
   argTypes.append(inputTypes.begin(), inputTypes.end());
 
   llvm::SmallVector<mlir::Type> resultTypes;
@@ -178,23 +177,79 @@ mlir::func::FuncOp ClosureOutliningPass::createFunctionAndInlineRegion(
   // Create entry block for the function
   mlir::Block *entryBlock = funcOp.addEntryBlock();
   rewriter.setInsertionPointToStart(entryBlock);
+  mlir::Location loc = op.getLoc();
 
-  // Build the block arguments for inlining directly from function arguments
+  // === PROLOGUE: Borrow the Rc and load all fields ===
+  mlir::Value rcPtr = entryBlock->getArgument(0);
+
+  // Borrow the rc to get a reference to the closure box
+  RefType closureBoxRefType =
+      rewriter.getType<RefType>(closureBoxType, Capability::unspecified);
+  mlir::Value closureBoxRef =
+      rewriter.create<ReussirRcBorrowOp>(loc, closureBoxRefType, rcPtr);
+
+  // Load all payload fields from the closure box
+  auto payloadTypes = closureBoxType.getPayloadTypes();
   llvm::SmallVector<mlir::Value> blockArgs;
-  for (auto arg : entryBlock->getArguments()) {
-    blockArgs.push_back(arg);
+  for (size_t i = 0; i < payloadTypes.size(); ++i) {
+    mlir::Type payloadType = payloadTypes[i];
+    RefType payloadRefType =
+        rewriter.getType<RefType>(payloadType, Capability::unspecified);
+
+    // Get reference to this payload field
+    mlir::Value payloadRef = rewriter.create<ReussirClosureInspectPayloadOp>(
+        loc, payloadRefType, rewriter.getIndexAttr(i), closureBoxRef);
+
+    // Load the payload value
+    mlir::Value payloadValue =
+        rewriter.create<ReussirRefLoadOp>(loc, payloadType, payloadRef);
+    blockArgs.push_back(payloadValue);
   }
+
+  // Add the input arguments (from function args after rcPtr)
+  for (size_t i = 1; i < entryBlock->getNumArguments(); ++i)
+    blockArgs.push_back(entryBlock->getArgument(i));
 
   // Inline the closure block into the function entry block
   mlir::Block &closureBlock = op.getBody().front();
   rewriter.inlineBlockBefore(&closureBlock, entryBlock, entryBlock->end(),
                              blockArgs);
 
-  // Replace all ReussirClosureYieldOp with func.return
+  // === EPILOGUE: Replace yield with fetch_dec + conditional free + return ===
   funcOp.walk([&](ReussirClosureYieldOp yieldOp) {
     rewriter.setInsertionPoint(yieldOp);
     mlir::Location yieldLoc = yieldOp.getLoc();
 
+    // Fetch dec on the rc pointer
+    auto fetchDec = rewriter.create<ReussirRcFetchDecOp>(yieldLoc, rcPtr);
+
+    // If fetch_dec result is 1, free the token
+    auto one = rewriter.create<mlir::arith::ConstantIndexOp>(yieldLoc, 1);
+    auto isOne = rewriter.create<mlir::arith::CmpIOp>(
+        yieldLoc, mlir::arith::CmpIPredicate::eq, fetchDec.getRefCount(), one);
+
+    auto ifOp =
+        rewriter.create<mlir::scf::IfOp>(yieldLoc, mlir::TypeRange{}, isOne,
+                                         /*addThenRegion=*/true,
+                                         /*addElseRegion=*/false);
+
+    // Inside the then block: free the token
+    rewriter.setInsertionPointToStart(ifOp.thenBlock());
+
+    // Compute TokenType from RcBoxType using DataLayout
+    RcBoxType rcBoxType = specializedRcType.getInnerBoxType();
+    mlir::DataLayout dataLayout = mlir::DataLayout::closest(funcOp);
+    size_t size = dataLayout.getTypeSize(rcBoxType).getFixedValue();
+    size_t align = dataLayout.getTypeABIAlignment(rcBoxType);
+    TokenType tokenType = TokenType::get(rewriter.getContext(), align, size);
+
+    mlir::Value token =
+        rewriter.create<ReussirRcReinterpretOp>(yieldLoc, tokenType, rcPtr);
+    rewriter.create<ReussirTokenFreeOp>(yieldLoc, token);
+    rewriter.create<mlir::scf::YieldOp>(yieldLoc);
+
+    // After the if, create the return
+    rewriter.setInsertionPointAfter(ifOp);
     if (yieldOp.getValue())
       rewriter.create<mlir::func::ReturnOp>(yieldLoc, yieldOp.getValue());
     else
