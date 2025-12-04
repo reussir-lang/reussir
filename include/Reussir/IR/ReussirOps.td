@@ -1111,11 +1111,12 @@ def ReussirClosureInspectPayloadOp : ReussirClosureOp<"inspect_payload", []> {
     that achieves the conversion from ClosureBox reference to subfield reference.
   }];
   let arguments = (ins 
+    IndexAttr:$payloadIndex,
     Arg<ReussirClosureBoxRefType, "reference to closure box">:$closureBoxRef);
   let results = (outs Res<ReussirRefType, "subfield reference">:$payloadRef);
   let assemblyFormat = [{
-    `(` $closureBoxRef `:` qualified(type($closureBoxRef)) `)` `:` 
-    qualified(type($payloadRef)) attr-dict
+    `[` $payloadIndex `]` `(` $closureBoxRef `)` `:` 
+    functional-type(operands, results) attr-dict
   }];
 }
 
