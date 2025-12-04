@@ -383,6 +383,16 @@ mlir::func::FuncOp ClosureOutliningPass::createClosureCloneFunction(
   // Use ClosureAllocaOp to create a place for assembling new closure
   RefType closureBoxRefType =
       rewriter.getType<RefType>(closureBoxType, Capability::unspecified);
+
+  // Allocate token for RcBox<ClosureBox>
+  RcBoxType rcBoxType = specializedRcType.getInnerBoxType();
+  mlir::DataLayout dataLayout = mlir::DataLayout::closest(funcOp);
+  size_t size = dataLayout.getTypeSize(rcBoxType).getFixedValue();
+  size_t align = dataLayout.getTypeABIAlignment(rcBoxType);
+  TokenType tokenType = TokenType::get(rewriter.getContext(), align, size);
+  mlir::Value token = rewriter.create<ReussirTokenAllocOp>(loc, tokenType);
+
+  // Allocate assemble space on stack first
   mlir::Value dstClosureBoxRef =
       rewriter.create<ReussirClosureAllocaOp>(loc, closureBoxRefType);
 
@@ -397,10 +407,16 @@ mlir::func::FuncOp ClosureOutliningPass::createClosureCloneFunction(
   mlir::Value srcCursorRef = rewriter.create<ReussirClosureCursorOp>(
       loc, cursorRefType, rewriter.getIndexAttr(0), srcClosureBoxRef);
 
+  // Transfer the closure box contents, including header and applied arguments
+  rewriter.create<ReussirClosureTransferOp>(loc, srcClosureBoxRef,
+                                            dstClosureBoxRef);
+
   // For each payload field, check if cursor is greater than the field
   // pointer and if so, copy the data and emit ownership acquisition
   for (size_t i = 0; i < payloadTypes.size(); ++i) {
     mlir::Type payloadType = payloadTypes[i];
+    if (isTriviallyCopyable(payloadType))
+      continue;
     RefType payloadRefType =
         rewriter.getType<RefType>(payloadType, Capability::unspecified);
 
@@ -424,26 +440,13 @@ mlir::func::FuncOp ClosureOutliningPass::createClosureCloneFunction(
         /*addElseRegion=*/false);
     rewriter.setInsertionPointToStart(copyIfOp.thenBlock());
 
-    // Load from source and store to destination
-    rewriter.create<ReussirRefMemcpyOp>(loc, srcPayloadRef, dstPayloadRef);
-
     // Emit ownership acquisition for non-trivially copyable types
-    if (!isTriviallyCopyable(payloadType) &&
-        emitOwnershipAcquisition(dstPayloadRef, rewriter, loc).failed())
+    if (emitOwnershipAcquisition(dstPayloadRef, rewriter, loc).failed())
       funcOp.emitError("failed to emit ownership acquisition for payload");
 
     rewriter.create<mlir::scf::YieldOp>(loc);
     rewriter.setInsertionPointAfter(copyIfOp);
   }
-
-  // Allocate token for RcBox<ClosureBox>
-  RcBoxType rcBoxType = specializedRcType.getInnerBoxType();
-  mlir::DataLayout dataLayout = mlir::DataLayout::closest(funcOp);
-  size_t size = dataLayout.getTypeSize(rcBoxType).getFixedValue();
-  size_t align = dataLayout.getTypeABIAlignment(rcBoxType);
-  TokenType tokenType = TokenType::get(rewriter.getContext(), align, size);
-
-  mlir::Value token = rewriter.create<ReussirTokenAllocOp>(loc, tokenType);
 
   // Load the closure box value from the alloca
   mlir::Value closureBoxValue =

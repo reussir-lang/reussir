@@ -1331,6 +1331,52 @@ struct ReussirClosureCursorOpConversionPattern
   }
 };
 
+struct ReussirClosureTransferOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirClosureTransferOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirClosureTransferOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto indexType = converter->getIndexType();
+
+    // Get the ClosureBox type from the source reference
+    RefType srcRefType = op.getSrc().getType();
+    ClosureBoxType closureBoxType =
+        llvm::cast<ClosureBoxType>(srcRefType.getElementType());
+    auto structType = converter->convertType(closureBoxType);
+
+    // 1. Extract the cursor pointer from src
+    // GEP[0, 1] to access the cursor field
+    auto cursorPtrSlot = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, llvmPtrType, structType, adaptor.getSrc(),
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0,
+                                           ClosureBoxType::ARG_CURSOR_INDEX});
+    auto cursor =
+        rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, cursorPtrSlot);
+
+    // 2. Compute the offset from src to cursor
+    // Convert pointers to integers
+    mlir::Value srcInt = rewriter.create<mlir::LLVM::PtrToIntOp>(
+        loc, indexType, adaptor.getSrc());
+    mlir::Value cursorInt =
+        rewriter.create<mlir::LLVM::PtrToIntOp>(loc, indexType, cursor);
+
+    // Compute offset: cursor - src
+    mlir::Value offset = rewriter.create<mlir::arith::SubIOp>(
+        loc, cursorInt, srcInt, mlir::arith::IntegerOverflowFlags::nsw);
+    // Call llvm.memcpy intrinsic
+    rewriter.create<mlir::LLVM::MemcpyOp>(loc, adaptor.getDst(),
+                                          adaptor.getSrc(), offset, false);
+
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
 struct ReussirClosureAllocaOpConversionPattern
     : public mlir::OpConversionPattern<ReussirClosureAllocaOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -1580,9 +1626,9 @@ struct BasicOpsLoweringPass
         ReussirRcFreezeOp, ReussirRegionCleanupOp, ReussirRegionCreateOp,
         ReussirRcReinterpretOp, ReussirClosureApplyOp, ReussirClosureCloneOp,
         ReussirClosureEvalOp, ReussirClosureInspectPayloadOp,
-        ReussirClosureCursorOp, ReussirClosureAllocaOp, ReussirClosureVtableOp,
-        ReussirClosureCreateOp, ReussirRcFetchDecOp, ReussirStrGlobalOp,
-        ReussirStrLiteralOp>();
+        ReussirClosureCursorOp, ReussirClosureTransferOp,
+        ReussirClosureAllocaOp, ReussirClosureVtableOp, ReussirClosureCreateOp,
+        ReussirRcFetchDecOp, ReussirStrGlobalOp, ReussirStrLiteralOp>();
     target.addLegalDialect<mlir::LLVM::LLVMDialect>();
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
@@ -1617,6 +1663,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirClosureEvalOpConversionPattern,
       ReussirClosureInspectPayloadOpConversionPattern,
       ReussirClosureCursorOpConversionPattern,
+      ReussirClosureTransferOpConversionPattern,
       ReussirClosureAllocaOpConversionPattern,
       ReussirClosureVtableOpConversionPattern,
       ReussirClosureCreateOpConversionPattern,

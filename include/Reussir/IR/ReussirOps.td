@@ -1176,6 +1176,20 @@ def ReussirClosureAllocaOp : ReussirClosureOp<"alloca", []> {
   }];
 }
 
+def ReussirClosureTransferOp : ReussirClosureOp<"transfer", []> {
+  let summary = "Transfer bytes between closure boxes";
+  let description = [{
+    `reussir.closure.transfer` copy bytes between two closure boxes.
+  }];
+  let arguments = (ins 
+    Arg<ReussirClosureBoxRefType, "source reference">:$src,
+    Arg<ReussirClosureBoxRefType, "destination reference">:$dst
+  );
+  let assemblyFormat = [{
+    $src `to` $dst `:` type($src) `to` type($dst) attr-dict
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Reussir Poly FFI Operations
 //===----------------------------------------------------------------------===//
