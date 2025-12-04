@@ -802,6 +802,112 @@ struct ReussirRegionVTableOpConversionPattern
   }
 };
 
+struct ReussirClosureVtableOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirClosureVtableOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirClosureVtableOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::LLVM::LLVMPointerType llvmPtrType =
+        mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+
+    // Create LLVM struct type for vtable: { void*, void*, void* }
+    // representing { drop, clone, evaluate } function pointers
+    mlir::LLVM::LLVMStructType vtableType =
+        mlir::LLVM::LLVMStructType::getLiteral(
+            rewriter.getContext(), {llvmPtrType, llvmPtrType, llvmPtrType});
+
+    // Create the global vtable
+    mlir::LLVM::GlobalOp vtableOp = rewriter.create<mlir::LLVM::GlobalOp>(
+        op.getLoc(), vtableType, /*isConstant=*/true,
+        mlir::LLVM::Linkage::Internal, op.getSymName(), nullptr);
+
+    // Create initializer block
+    mlir::Block *initBlock =
+        rewriter.createBlock(&vtableOp.getInitializerRegion());
+    rewriter.setInsertionPointToEnd(initBlock);
+
+    // Get addresses of the three functions
+    auto dropPtr = rewriter.create<mlir::LLVM::AddressOfOp>(
+        op.getLoc(), llvmPtrType, op.getDrop());
+    auto clonePtr = rewriter.create<mlir::LLVM::AddressOfOp>(
+        op.getLoc(), llvmPtrType, op.getClone());
+    auto funcPtr = rewriter.create<mlir::LLVM::AddressOfOp>(
+        op.getLoc(), llvmPtrType, op.getFunc());
+
+    // Build the struct { drop, clone, evaluate }
+    auto undef = rewriter.create<mlir::LLVM::UndefOp>(op.getLoc(), vtableType);
+    auto withDrop = rewriter.create<mlir::LLVM::InsertValueOp>(
+        op.getLoc(), undef, dropPtr, ClosureType::VTABLE_DROP_INDEX);
+    auto withClone = rewriter.create<mlir::LLVM::InsertValueOp>(
+        op.getLoc(), withDrop, clonePtr, ClosureType::VTABLE_CLONE_INDEX);
+    auto withFunc = rewriter.create<mlir::LLVM::InsertValueOp>(
+        op.getLoc(), withClone, funcPtr, ClosureType::VTABLE_EVALUATE_INDEX);
+
+    rewriter.create<mlir::LLVM::ReturnOp>(op.getLoc(), withFunc);
+    rewriter.replaceOp(op, vtableOp);
+    return mlir::success();
+  }
+};
+
+struct ReussirClosureCreateOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirClosureCreateOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirClosureCreateOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // Only handle outlined closures (vtable must be present, body must be
+    // empty)
+    if (!op.isOutlined())
+      return op.emitOpError("closure create must be outlined before lowering");
+
+    mlir::Location loc = op.getLoc();
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto indexType = converter->getIndexType();
+
+    // Get the RcBox<ClosureBox> type
+    RcBoxType rcBoxType = op.getRcClosureBoxType();
+    auto convertedRcBoxType = converter->convertType(rcBoxType);
+
+    // Token is the pointer to RcBox<ClosureBox>
+    mlir::Value tokenPtr = adaptor.getToken();
+
+    // 1. Assign refcnt (GEP[0, 0]) to 1
+    auto refcntPtr = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, llvmPtrType, convertedRcBoxType, tokenPtr,
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
+    auto one = rewriter.create<mlir::arith::ConstantOp>(
+        loc, mlir::IntegerAttr::get(indexType, 1));
+    rewriter.create<mlir::LLVM::StoreOp>(loc, one, refcntPtr);
+
+    // 2. Assign vtable (GEP[0, 1, 0]) to address of the vtable
+    auto vtablePtrSlot = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, llvmPtrType, convertedRcBoxType, tokenPtr,
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1, ClosureBoxType::VTABLE_INDEX});
+    auto vtableAddr = rewriter.create<mlir::LLVM::AddressOfOp>(loc, llvmPtrType,
+                                                               *op.getVtable());
+    rewriter.create<mlir::LLVM::StoreOp>(loc, vtableAddr, vtablePtrSlot);
+
+    // 3. Assign cursor (GEP[0, 1, 1]) to the value of GEP[0, 1, 2]
+    //    (cursor points to the start of payload area)
+    auto cursorSlot = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, llvmPtrType, convertedRcBoxType, tokenPtr,
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1,
+                                           ClosureBoxType::ARG_CURSOR_INDEX});
+    auto payloadStart = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, llvmPtrType, convertedRcBoxType, tokenPtr,
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1, 2});
+    rewriter.create<mlir::LLVM::StoreOp>(loc, payloadStart, cursorSlot);
+
+    // Replace with the token pointer (which is now a valid RcPtr<Closure>)
+    rewriter.replaceOp(op, tokenPtr);
+    return mlir::success();
+  }
+};
+
 struct ReussirRcDecOpConversionPattern
     : public mlir::OpConversionPattern<ReussirRcDecOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -823,6 +929,52 @@ struct ReussirRcDecOpConversionPattern
       rewriter.replaceOpWithNewOp<mlir::func::CallOp>(
           op, cleanupHook, mlir::TypeRange{},
           mlir::ValueRange{adaptor.getRcPtr()});
+      return mlir::success();
+    }
+    if (auto closureTy =
+            mlir::dyn_cast<ClosureType>(rcPtrTy.getElementType())) {
+      mlir::Location loc = op.getLoc();
+      auto llvmPtrType =
+          mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+
+      // Get the RcBox<ClosureBox> type
+      RcBoxType rcBoxType = rcPtrTy.getInnerBoxType();
+      auto convertedBoxType = getTypeConverter()->convertType(rcBoxType);
+
+      // GEP [0, 1, VTABLE_INDEX] to get the vtable pointer slot
+      auto vtablePtr = rewriter.create<mlir::LLVM::GEPOp>(
+          loc, llvmPtrType, convertedBoxType, adaptor.getRcPtr(),
+          llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1,
+                                             ClosureBoxType::VTABLE_INDEX});
+
+      // Load the vtable pointer
+      auto vtable =
+          rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, vtablePtr);
+
+      // Create LLVM struct type for vtable: { void*, void*, void* }
+      // representing { drop, clone, evaluate } function pointers
+      mlir::LLVM::LLVMStructType vtableType =
+          mlir::LLVM::LLVMStructType::getLiteral(
+              rewriter.getContext(), {llvmPtrType, llvmPtrType, llvmPtrType});
+
+      // GEP [0, VTABLE_DROP_INDEX] to get the drop function pointer
+      auto dropPtr = rewriter.create<mlir::LLVM::GEPOp>(
+          loc, llvmPtrType, vtableType, vtable,
+          llvm::ArrayRef<mlir::LLVM::GEPArg>{0,
+                                             ClosureType::VTABLE_DROP_INDEX});
+
+      // Load the drop function pointer
+      auto dropFunc =
+          rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, dropPtr);
+
+      // Create function type for drop: void (*)(void*)
+      auto voidType = mlir::LLVM::LLVMVoidType::get(rewriter.getContext());
+      auto funcType =
+          mlir::LLVM::LLVMFunctionType::get(voidType, {llvmPtrType});
+
+      // Call the drop function with the RC pointer as argument
+      rewriter.replaceOpWithNewOp<mlir::LLVM::CallOp>(
+          op, funcType, mlir::ValueRange{dropFunc, adaptor.getRcPtr()});
       return mlir::success();
     }
     return mlir::failure();
@@ -1066,6 +1218,68 @@ struct ReussirClosureCloneOpConversionPattern
   }
 };
 
+struct ReussirClosureEvalOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirClosureEvalOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirClosureEvalOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+
+    // Get the RC closure box type and convert it to LLVM struct type
+    RcType rcClosureType = op.getClosure().getType();
+    auto rcClosureBox = rcClosureType.getInnerBoxType();
+    auto structType = converter->convertType(rcClosureBox);
+
+    // GEP [0, 1, VTABLE_INDEX] to get the vtable pointer slot
+    auto vtablePtr = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, llvmPtrType, structType, adaptor.getClosure(),
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1, ClosureBoxType::VTABLE_INDEX});
+
+    // Load the vtable pointer
+    auto vtable =
+        rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, vtablePtr);
+
+    // Create LLVM struct type for vtable: { void*, void*, void* }
+    // representing { drop, clone, evaluate } function pointers
+    mlir::LLVM::LLVMStructType vtableType =
+        mlir::LLVM::LLVMStructType::getLiteral(
+            rewriter.getContext(), {llvmPtrType, llvmPtrType, llvmPtrType});
+
+    // GEP [0, VTABLE_EVALUATE_INDEX] to get the evaluate function pointer
+    auto evalPtr = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, llvmPtrType, vtableType, vtable,
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0,
+                                           ClosureType::VTABLE_EVALUATE_INDEX});
+
+    // Load the evaluate function pointer
+    auto evalFunc =
+        rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, evalPtr);
+
+    // Determine if the closure has a return value
+    mlir::Type resultType = op.getResult().getType();
+    if (resultType) {
+      // Closure has a return value: T (*)(void*)
+      mlir::Type llvmResultType = converter->convertType(resultType);
+      auto funcType =
+          mlir::LLVM::LLVMFunctionType::get(llvmResultType, {llvmPtrType});
+      rewriter.replaceOpWithNewOp<mlir::LLVM::CallOp>(
+          op, funcType, mlir::ValueRange{evalFunc, adaptor.getClosure()});
+    } else {
+      // Closure has no return value: void (*)(void*)
+      auto voidType = mlir::LLVM::LLVMVoidType::get(rewriter.getContext());
+      auto funcType =
+          mlir::LLVM::LLVMFunctionType::get(voidType, {llvmPtrType});
+      rewriter.replaceOpWithNewOp<mlir::LLVM::CallOp>(
+          op, funcType, mlir::ValueRange{evalFunc, adaptor.getClosure()});
+    }
+    return mlir::success();
+  }
+};
+
 struct ReussirClosureInspectPayloadOpConversionPattern
     : public mlir::OpConversionPattern<ReussirClosureInspectPayloadOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -1286,7 +1500,8 @@ struct ReussirRefMemcpyConversionPattern
 
     // Create LLVM memcpy intrinsic (non-overlapping, so isVolatile = false)
     rewriter.replaceOpWithNewOp<mlir::LLVM::MemcpyInlineOp>(
-        op, adaptor.getDst(), adaptor.getSrc(), rewriter.getIndexAttr(size),
+        op, adaptor.getDst(), adaptor.getSrc(),
+        rewriter.getIntegerAttr(converter->getIndexType(), size),
         /*isVolatile=*/false);
     return mlir::success();
   }
@@ -1364,8 +1579,9 @@ struct BasicOpsLoweringPass
         ReussirRecordTagOp, ReussirRecordCoerceOp, ReussirRegionVTableOp,
         ReussirRcFreezeOp, ReussirRegionCleanupOp, ReussirRegionCreateOp,
         ReussirRcReinterpretOp, ReussirClosureApplyOp, ReussirClosureCloneOp,
-        ReussirClosureInspectPayloadOp, ReussirClosureCursorOp,
-        ReussirClosureAllocaOp, ReussirRcFetchDecOp, ReussirStrGlobalOp,
+        ReussirClosureEvalOp, ReussirClosureInspectPayloadOp,
+        ReussirClosureCursorOp, ReussirClosureAllocaOp, ReussirClosureVtableOp,
+        ReussirClosureCreateOp, ReussirRcFetchDecOp, ReussirStrGlobalOp,
         ReussirStrLiteralOp>();
     target.addLegalDialect<mlir::LLVM::LLVMDialect>();
     if (failed(applyPartialConversion(getOperation(), target,
@@ -1398,9 +1614,12 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirRegionCreateOpConversionPattern,
       ReussirClosureApplyOpConversionPattern,
       ReussirClosureCloneOpConversionPattern,
+      ReussirClosureEvalOpConversionPattern,
       ReussirClosureInspectPayloadOpConversionPattern,
       ReussirClosureCursorOpConversionPattern,
       ReussirClosureAllocaOpConversionPattern,
+      ReussirClosureVtableOpConversionPattern,
+      ReussirClosureCreateOpConversionPattern,
       ReussirRcReinterpretConversionPattern,
       ReussirRcFetchDectConversionPattern, ReussirStrGlobalOpConversionPattern,
       ReussirStrLiteralOpConversionPattern>(converter, patterns.getContext());

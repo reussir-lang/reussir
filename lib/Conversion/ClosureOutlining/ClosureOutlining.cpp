@@ -11,6 +11,7 @@
 
 #include "Reussir/Conversion/ClosureOutlining.h"
 #include "Reussir/IR/ReussirDialect.h"
+#include "Reussir/IR/ReussirEnumAttrs.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -110,34 +111,25 @@ void ClosureOutliningPass::runOnOperation() {
     // Third, create vtable operation
     rewriter.setInsertionPointToEnd(moduleOp.getBody());
     std::string vtableName = name + "_vtable";
-    ClosureType closureType =
-        llvm::cast<ClosureType>(op.getClosure().getType().getElementType());
-    ClosureBoxType closureBoxType = op.getClosureBoxType();
 
     // Create the vtable operation
     mlir::FlatSymbolRefAttr dropAttr = mlir::FlatSymbolRefAttr::get(
         rewriter.getContext(), dropFunction.getName());
     mlir::FlatSymbolRefAttr cloneAttr = mlir::FlatSymbolRefAttr::get(
         rewriter.getContext(), cloneFunction.getName());
-    // mlir::FlatSymbolRefAttr evaluateAttr = mlir::FlatSymbolRefAttr::get(
-    //     rewriter.getContext(), evaluateFunction.getName());
-    // mlir::FlatSymbolRefAttr funcAttr = mlir::FlatSymbolRefAttr::get(
-    //     rewriter.getContext(), evaluateFunction.getName());
+    mlir::FlatSymbolRefAttr evaluateAttr = mlir::FlatSymbolRefAttr::get(
+        rewriter.getContext(), evaluateFunction.getName());
 
-    // rewriter.create<ReussirClosureVtableOp>(
-    //     op.getLoc(), rewriter.getStringAttr(vtableName), funcAttr, dropAttr,
-    //     cloneAttr, mlir::TypeAttr::get(closureType));
+    rewriter.create<ReussirClosureVtableOp>(op.getLoc(),
+                                            rewriter.getStringAttr(vtableName),
+                                            evaluateAttr, dropAttr, cloneAttr);
 
-    // // Fourth, update the closure to use
-    // // outlined version (e.g. remove the
-    // // region and set vtable attribute)
-    // mlir::FlatSymbolRefAttr vtableAttr =
-    //     mlir::FlatSymbolRefAttr::get(rewriter.getContext(), vtableName);
-    // op.setVtableAttr(vtableAttr);
-
-    // // Clear the body region to make it
-    // // outlined
-    // op.getBody().getBlocks().clear();
+    // Fourth, update the closure to use
+    // outlined version (e.g. remove the
+    // region and set vtable attribute)
+    mlir::FlatSymbolRefAttr vtableAttr =
+        mlir::FlatSymbolRefAttr::get(rewriter.getContext(), vtableName);
+    op.setVtableAttr(vtableAttr);
   }
 }
 
@@ -151,20 +143,15 @@ mlir::func::FuncOp ClosureOutliningPass::createFunctionAndInlineRegion(
   // Get the closure type to determine function signature
   ClosureType closureType =
       llvm::cast<ClosureType>(op.getClosure().getType().getElementType());
-  auto inputTypes = closureType.getInputTypes();
   mlir::Type outputType = closureType.getOutputType();
   ClosureBoxType closureBoxType = op.getClosureBoxType();
   RcType specializedRcType = RcType::get(rewriter.getContext(), closureBoxType);
 
-  // Build function type: Rc<ClosureBox> + input types -> output type
-  llvm::SmallVector<mlir::Type> argTypes;
-  argTypes.push_back(specializedRcType);
-  argTypes.append(inputTypes.begin(), inputTypes.end());
-
   llvm::SmallVector<mlir::Type> resultTypes;
   if (outputType)
     resultTypes.push_back(outputType);
-  mlir::FunctionType funcType = rewriter.getFunctionType(argTypes, resultTypes);
+  mlir::FunctionType funcType =
+      rewriter.getFunctionType(specializedRcType, resultTypes);
 
   // Create the function
   auto funcOp =
@@ -269,7 +256,8 @@ mlir::func::FuncOp ClosureOutliningPass::createClosureDropFunction(
   rewriter.setInsertionPointToEnd(moduleOp.getBody());
   ClosureBoxType closureBoxType = op.getClosureBoxType();
 
-  RcType specializedRcType = RcType::get(rewriter.getContext(), closureBoxType);
+  RcType specializedRcType =
+      RcType::get(rewriter.getContext(), closureBoxType, Capability::shared);
   // transparently use RcType as refType of the Rc-wrapped closure box
   mlir::FunctionType funcType = rewriter.getFunctionType(
       llvm::ArrayRef<mlir::Type>{specializedRcType}, {});
@@ -373,7 +361,8 @@ mlir::func::FuncOp ClosureOutliningPass::createClosureCloneFunction(
   rewriter.setInsertionPointToEnd(moduleOp.getBody());
   ClosureBoxType closureBoxType = op.getClosureBoxType();
 
-  RcType specializedRcType = RcType::get(rewriter.getContext(), closureBoxType);
+  RcType specializedRcType =
+      RcType::get(rewriter.getContext(), closureBoxType, Capability::shared);
   // Clone function takes Rc<ClosureBox> and returns Rc<ClosureBox>
   mlir::FunctionType funcType =
       rewriter.getFunctionType(llvm::ArrayRef<mlir::Type>{specializedRcType},
@@ -435,7 +424,7 @@ mlir::func::FuncOp ClosureOutliningPass::createClosureCloneFunction(
         /*addElseRegion=*/false);
     rewriter.setInsertionPointToStart(copyIfOp.thenBlock());
 
-    // Use RefMemcpyOp to transfer the data
+    // Load from source and store to destination
     rewriter.create<ReussirRefMemcpyOp>(loc, srcPayloadRef, dstPayloadRef);
 
     // Emit ownership acquisition for non-trivially copyable types
