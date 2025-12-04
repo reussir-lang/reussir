@@ -1098,7 +1098,8 @@ def ReussirClosureCloneOp : ReussirClosureOp<"clone", []> {
   let arguments = (ins Arg<RcClosureType, "closure to clone">:$closure);
   let results = (outs Res<RcClosureType, "cloned closure">:$cloned);
   let assemblyFormat = [{
-    `(` $closure `:` qualified(type($closure)) `)` `:` qualified(type($cloned)) attr-dict
+    `(` $closure `:` qualified(type($closure)) `)` `:` qualified(type($cloned)) 
+    attr-dict
   }];
   let hasVerifier = 1;
 }
@@ -1106,18 +1107,16 @@ def ReussirClosureCloneOp : ReussirClosureOp<"clone", []> {
 def ReussirClosureInspectPayloadOp : ReussirClosureOp<"inspect_payload", []> {
   let summary = "Inspect closure payload";
   let description = [{
-    `reussir.closure.clone` clones a closure.
-
-    Since we typically have no way to understand the full closure, the memory layout
-    and other configuration related operations are handled inside the vtable clone operation.
-    This call just lowers into a function call to the clone operation via vtable.
+    `reussir.closure.inspect_payload` serves as an low-level intermediate operation
+    that achieves the conversion from ClosureBox reference to subfield reference.
   }];
-  let arguments = (ins Arg<RcClosureType, "closure to clone">:$closure);
-  let results = (outs Res<RcClosureType, "cloned closure">:$cloned);
+  let arguments = (ins 
+    Arg<ReussirClosureBoxRefType, "reference to closure box">:$closureBoxRef);
+  let results = (outs Res<ReussirRefType, "subfield reference">:$payloadRef);
   let assemblyFormat = [{
-    `(` $closure `:` qualified(type($closure)) `)` `:` qualified(type($cloned)) attr-dict
+    `(` $closureBoxRef `:` qualified(type($closureBoxRef)) `)` `:` 
+    qualified(type($payloadRef)) attr-dict
   }];
-  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
