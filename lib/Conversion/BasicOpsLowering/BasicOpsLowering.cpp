@@ -274,11 +274,9 @@ struct ReussirRefSpilledConversionPattern
 
     // Store the value to the allocated space
     rewriter.create<mlir::LLVM::StoreOp>(loc, value, allocaOp);
-    rewriter.create<mlir::LLVM::InvariantStartOp>(
-        loc, converter->getDataLayout().getTypeABIAlignment(valueType),
+    rewriter.replaceOpWithNewOp<mlir::LLVM::InvariantStartOp>(
+        op, converter->getDataLayout().getTypeABIAlignment(valueType),
         allocaOp);
-    // Return the pointer to the allocated space
-    rewriter.replaceOp(op, allocaOp);
 
     return mlir::success();
   }
@@ -1145,6 +1143,31 @@ struct ReussirStrLiteralOpConversionPattern
     return mlir::success();
   }
 };
+
+struct ReussirRefDiffConversionPattern
+    : public mlir::OpConversionPattern<ReussirRefDiffOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRefDiffOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    auto indexType = converter->getIndexType();
+
+    // Convert base and target pointers to integers
+    mlir::Value baseInt = rewriter.create<mlir::LLVM::PtrToIntOp>(
+        op.getLoc(), indexType, adaptor.getBase());
+    mlir::Value targetInt = rewriter.create<mlir::LLVM::PtrToIntOp>(
+        op.getLoc(), indexType, adaptor.getTarget());
+
+    // Compute difference: target - base
+    rewriter.replaceOpWithNewOp<mlir::arith::SubIOp>(
+        op, targetInt, baseInt,
+        mlir::arith::IntegerOverflowFlags::nsw |
+            mlir::arith::IntegerOverflowFlags::nuw);
+    return mlir::success();
+  }
+};
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -1210,14 +1233,15 @@ struct BasicOpsLoweringPass
     target.addIllegalOp<
         ReussirTokenAllocOp, ReussirTokenFreeOp, ReussirTokenReinterpretOp,
         ReussirTokenReallocOp, ReussirRefLoadOp, ReussirRefStoreOp,
-        ReussirRefSpilledOp, ReussirNullableCheckOp, ReussirNullableCreateOp,
-        ReussirNullableCoerceOp, ReussirRcIncOp, ReussirRcCreateOp,
-        ReussirRcDecOp, ReussirRcBorrowOp, ReussirRcIsUniqueOp,
-        ReussirRecordCompoundOp, ReussirRecordVariantOp, ReussirRefProjectOp,
-        ReussirRecordTagOp, ReussirRecordCoerceOp, ReussirRegionVTableOp,
-        ReussirRcFreezeOp, ReussirRegionCleanupOp, ReussirRegionCreateOp,
-        ReussirRcReinterpretOp, ReussirClosureApplyOp, ReussirClosureCloneOp,
-        ReussirRcFetchDecOp, ReussirStrGlobalOp, ReussirStrLiteralOp>();
+        ReussirRefSpilledOp, ReussirRefDiffOp, ReussirNullableCheckOp,
+        ReussirNullableCreateOp, ReussirNullableCoerceOp, ReussirRcIncOp,
+        ReussirRcCreateOp, ReussirRcDecOp, ReussirRcBorrowOp,
+        ReussirRcIsUniqueOp, ReussirRecordCompoundOp, ReussirRecordVariantOp,
+        ReussirRefProjectOp, ReussirRecordTagOp, ReussirRecordCoerceOp,
+        ReussirRegionVTableOp, ReussirRcFreezeOp, ReussirRegionCleanupOp,
+        ReussirRegionCreateOp, ReussirRcReinterpretOp, ReussirClosureApplyOp,
+        ReussirClosureCloneOp, ReussirRcFetchDecOp, ReussirStrGlobalOp,
+        ReussirStrLiteralOp>();
     target.addLegalDialect<mlir::LLVM::LLVMDialect>();
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
@@ -1233,7 +1257,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirTokenReinterpretConversionPattern,
       ReussirTokenReallocConversionPattern, ReussirRefLoadConversionPattern,
       ReussirRefStoreConversionPattern, ReussirRefSpilledConversionPattern,
-      ReussirNullableCheckConversionPattern,
+      ReussirRefDiffConversionPattern, ReussirNullableCheckConversionPattern,
       ReussirNullableCreateConversionPattern,
       ReussirNullableCoerceConversionPattern, ReussirRcIncConversionPattern,
       ReussirRcDecOpConversionPattern, ReussirRcCreateOpConversionPattern,
