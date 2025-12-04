@@ -1002,12 +1002,6 @@ def ReussirClosureCreateOp : ReussirClosureOp<"create", [
     // get the payload box for the closure
     ::reussir::ClosureBoxType getClosureBoxType();
     ::reussir::RcBoxType getRcClosureBoxType();
-
-    // Return the target function is the closure is trivially forwarding.
-    // Return null otherwise.
-    // A closure is trivially forwarding if the only operation it does is to
-    // call a function with exactly the same argument order and return the result.
-    ::mlir::FlatSymbolRefAttr getTrivialForwardingTarget();
   }];
 
   let hasVerifier = 1;
@@ -1040,25 +1034,19 @@ def ReussirClosureVtableOp : ReussirClosureOp<"vtable", [
   let description = [{
     `reussir.closure.vtable` creates a vtable for closures. The VTable is in charge of
     record the function pointer and corresponding drop and clone functions.
-
-    Drop and clone functions are be null if closure payload is trivially copyable.
   }];
   let arguments = (ins
     SymbolNameAttr:$sym_name,
     FlatSymbolRefAttr:$func,
-    OptionalAttr<FlatSymbolRefAttr>:$drop,
-    OptionalAttr<FlatSymbolRefAttr>:$clone,
-    TypeAttrOf<ReussirClosureType>:$closure
+    FlatSymbolRefAttr:$drop,
+    FlatSymbolRefAttr:$clone
   );
 
   let assemblyFormat = [{
     $sym_name `{`
       `func` `(` $func `)`
-      `closure` `(` $closure `)`
-      oilist
-      ( `drop` `(` $drop `)` 
-      | `clone` `(` $clone `)` 
-      ) 
+      `drop` `(` $drop `)` 
+      `clone` `(` $clone `)` 
     `}` attr-dict
   }];
 }
