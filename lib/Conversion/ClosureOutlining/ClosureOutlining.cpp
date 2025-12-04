@@ -20,8 +20,10 @@
 #include <llvm/ADT/StringMap.h>
 #include <llvm/ADT/StringSet.h>
 #include <llvm/Support/xxhash.h>
+#include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/PatternMatch.h>
 
 namespace reussir {
@@ -43,7 +45,7 @@ public:
     llvm::SmallString<128> buffer;
     auto function = op->getParentOfType<mlir::func::FuncOp>();
     auto moduleOp = function->getParentOfType<mlir::ModuleOp>();
-    buffer.append(moduleOp.getName() ? *moduleOp.getName() : "<unamed>");
+    buffer.append(moduleOp.getName() ? *moduleOp.getName() : "<anonymous>");
     buffer.append(function.getName());
     std::stringstream ss;
     auto [high, lower] = llvm::xxh3_128bits(llvm::ArrayRef(
@@ -101,6 +103,10 @@ void ClosureOutliningPass::runOnOperation() {
     (void)function; // TODO: Use function to update the closure op
 
     // Second, create closure's clone and drop functions
+    // mlir::func::FuncOp cloneFunction =
+    //     createClosureCloneFunction(op, name, rewriter);
+    mlir::func::FuncOp dropFunction =
+        createClosureDropFunction(op, name, rewriter);
     // Third, create vtable operation
     // Fourth, update the closure to use outlined version (e.g. remove the
     // region and set vtable attribute)
@@ -163,30 +169,103 @@ mlir::func::FuncOp ClosureOutliningPass::createClosureDropFunction(
   mlir::OpBuilder::InsertionGuard guard(rewriter);
   std::string dropName = (name + "_drop").str();
   mlir::ModuleOp moduleOp = getOperation();
+  rewriter.setInsertionPointToEnd(moduleOp.getBody());
   ClosureBoxType closureBoxType = op.getClosureBoxType();
-  RcBoxType rcBoxType = op.getRcClosureBoxType();
-  RefType refType = RefType::get(rewriter.getContext(), rcBoxType);
+
+  RcType specializedRcType = RcType::get(rewriter.getContext(), closureBoxType);
   // transparently use RcType as refType of the Rc-wrapped closure box
-  mlir::FunctionType funcType =
-      rewriter.getFunctionType(llvm::ArrayRef<mlir::Type>{refType}, {});
+  mlir::FunctionType funcType = rewriter.getFunctionType(
+      llvm::ArrayRef<mlir::Type>{specializedRcType}, {});
   auto funcOp =
       rewriter.create<mlir::func::FuncOp>(op.getLoc(), dropName, funcType);
   funcOp.setPrivate();
   funcOp->setAttr("llvm.linkage",
                   mlir::LLVM::LinkageAttr::get(rewriter.getContext(),
                                                mlir::LLVM::Linkage::Internal));
-  // Create entry block for the function and inline the closure's single block
+
+  // Create entry block for the function
   mlir::Block *entryBlock = funcOp.addEntryBlock();
-  mlir::Block &closureBlock = op.getBody().front();
   rewriter.setInsertionPointToStart(entryBlock);
-  auto arg = entryBlock->getArgument(0);
-  // +---- RcBox
-  //  |---- count
-  //  +---- ClosureBox
-  //   |---- vtable
-  //   |---- cursor
-  //   +---- payload
-  return nullptr;
+  mlir::Value rcPtr = entryBlock->getArgument(0);
+  mlir::Location loc = op.getLoc();
+
+  // First, fetch dec on the rc pointer
+  auto fetchDec = rewriter.create<ReussirRcFetchDecOp>(loc, rcPtr);
+
+  // If fetch_dec result is 1, we then drop the closure box
+  auto one = rewriter.create<mlir::arith::ConstantIndexOp>(loc, 1);
+  auto isOne = rewriter.create<mlir::arith::CmpIOp>(
+      loc, mlir::arith::CmpIPredicate::eq, fetchDec.getRefCount(), one);
+
+  auto ifOp = rewriter.create<mlir::scf::IfOp>(loc, mlir::TypeRange{}, isOne,
+                                               /*addThenRegion=*/true,
+                                               /*addElseRegion=*/false);
+
+  // Inside the then block: drop the closure box contents
+  rewriter.setInsertionPointToStart(ifOp.thenBlock());
+
+  // Use rc.borrow to get a reference to the closure box
+  RefType closureBoxRefType =
+      rewriter.getType<RefType>(closureBoxType, Capability::unspecified);
+  mlir::Value closureBoxRef =
+      rewriter.create<ReussirRcBorrowOp>(loc, closureBoxRefType, rcPtr);
+
+  // Extract the cursor pointer from the closure box
+  auto payloadTypes = closureBoxType.getPayloadTypes();
+  RefType cursorRefType =
+      rewriter.getType<RefType>(rewriter.getI8Type(), Capability::unspecified);
+  mlir::Value cursorRef = rewriter.create<ReussirClosureCursorOp>(
+      loc, cursorRefType, rewriter.getIndexAttr(0), closureBoxRef);
+
+  // For each payload field, check if cursor is strictly greater than the field
+  // pointer and if so, add a drop operation for the field
+  for (size_t i = 0; i < payloadTypes.size(); ++i) {
+    mlir::Type payloadType = payloadTypes[i];
+    if (isTriviallyCopyable(payloadType))
+      continue;
+    RefType payloadRefType =
+        rewriter.getType<RefType>(payloadType, Capability::unspecified);
+
+    // Get reference to this payload field
+    mlir::Value payloadRef = rewriter.create<ReussirClosureInspectPayloadOp>(
+        loc, payloadRefType, rewriter.getIndexAttr(i), closureBoxRef);
+
+    // Compare cursor with payload reference: if cursor > payload, the field
+    // was initialized and needs to be dropped
+    auto cursorGtPayload = rewriter.create<ReussirRefCmpOp>(
+        loc, rewriter.getI1Type(), mlir::arith::CmpIPredicate::ugt, cursorRef,
+        payloadRef);
+
+    // Conditionally drop the field if it was initialized
+    auto dropIfOp = rewriter.create<mlir::scf::IfOp>(
+        loc, mlir::TypeRange{}, cursorGtPayload, /*addThenRegion=*/true,
+        /*addElseRegion=*/false);
+    rewriter.setInsertionPointToStart(dropIfOp.thenBlock());
+    rewriter.create<ReussirRefDropOp>(loc, payloadRef);
+    rewriter.create<mlir::scf::YieldOp>(loc);
+    rewriter.setInsertionPointAfter(dropIfOp);
+  }
+
+  // Free the token after dropping all fields
+  // Compute TokenType from RcBoxType using DataLayout
+  RcBoxType rcBoxType = specializedRcType.getInnerBoxType();
+  mlir::DataLayout dataLayout = mlir::DataLayout::closest(funcOp);
+  size_t size = dataLayout.getTypeSize(rcBoxType).getFixedValue();
+  size_t align = dataLayout.getTypeABIAlignment(rcBoxType);
+  TokenType tokenType = TokenType::get(rewriter.getContext(), align, size);
+
+  mlir::Value token =
+      rewriter.create<ReussirRcReinterpretOp>(loc, tokenType, rcPtr);
+  rewriter.create<ReussirTokenFreeOp>(loc, token);
+
+  // Yield from the outer if
+  rewriter.create<mlir::scf::YieldOp>(loc);
+
+  // Return from the function (after the if)
+  rewriter.setInsertionPointAfter(ifOp);
+  rewriter.create<mlir::func::ReturnOp>(loc);
+
+  return funcOp;
 }
 
 } // namespace
