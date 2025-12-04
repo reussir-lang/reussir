@@ -1176,6 +1176,18 @@ def ReussirClosureCursorOp : ReussirClosureOp<"cursor", []> {
   let hasVerifier = 1;
 }
 
+def ReussirClosureAllocaOp : ReussirClosureOp<"alloca", []> {
+  let summary = "Allocate memory for a closure box";
+  let description = [{
+    `reussir.closure.alloca` operation allocates memory for a closure box.
+    This is for locally assembling closure boxes before wrapping them into rc pointers.
+  }];
+  let results = (outs Res<ReussirClosureBoxRefType, "reference to closure box">:$closureBoxRef);
+  let assemblyFormat = [{
+   `:` qualified(type($closureBoxRef)) attr-dict
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Reussir Poly FFI Operations
 //===----------------------------------------------------------------------===//

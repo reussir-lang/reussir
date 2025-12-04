@@ -1117,6 +1117,35 @@ struct ReussirClosureCursorOpConversionPattern
   }
 };
 
+struct ReussirClosureAllocaOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirClosureAllocaOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirClosureAllocaOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+
+    // Get the ClosureBox type from the result reference type
+    RefType refType = op.getClosureBoxRef().getType();
+    ClosureBoxType closureBoxType =
+        llvm::cast<ClosureBoxType>(refType.getElementType());
+
+    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto structType = converter->convertType(closureBoxType);
+    auto alignment =
+        converter->getDataLayout().getTypePreferredAlignment(structType);
+
+    // Allocate stack space using llvm.alloca
+    auto indexType = converter->getIndexType();
+    auto one = rewriter.create<mlir::arith::ConstantOp>(
+        op.getLoc(), mlir::IntegerAttr::get(indexType, 1));
+    rewriter.replaceOpWithNewOp<mlir::LLVM::AllocaOp>(
+        op, llvmPtrType, structType, one, alignment);
+    return mlir::success();
+  }
+};
+
 struct ReussirStrGlobalOpConversionPattern
     : public mlir::OpConversionPattern<ReussirStrGlobalOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -1336,7 +1365,8 @@ struct BasicOpsLoweringPass
         ReussirRcFreezeOp, ReussirRegionCleanupOp, ReussirRegionCreateOp,
         ReussirRcReinterpretOp, ReussirClosureApplyOp, ReussirClosureCloneOp,
         ReussirClosureInspectPayloadOp, ReussirClosureCursorOp,
-        ReussirRcFetchDecOp, ReussirStrGlobalOp, ReussirStrLiteralOp>();
+        ReussirClosureAllocaOp, ReussirRcFetchDecOp, ReussirStrGlobalOp,
+        ReussirStrLiteralOp>();
     target.addLegalDialect<mlir::LLVM::LLVMDialect>();
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
@@ -1370,6 +1400,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirClosureCloneOpConversionPattern,
       ReussirClosureInspectPayloadOpConversionPattern,
       ReussirClosureCursorOpConversionPattern,
+      ReussirClosureAllocaOpConversionPattern,
       ReussirRcReinterpretConversionPattern,
       ReussirRcFetchDectConversionPattern, ReussirStrGlobalOpConversionPattern,
       ReussirStrLiteralOpConversionPattern>(converter, patterns.getContext());
