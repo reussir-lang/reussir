@@ -1139,6 +1139,23 @@ def ReussirClosureInspectPayloadOp : ReussirClosureOp<"inspect_payload", []> {
   }];
 }
 
+def ReussirClosureCursorOp : ReussirClosureOp<"cursor", []> {
+  let summary = "Extract cursor pointer as a reference to i8";
+  let description = [{
+    `reussir.closure.cursor` operation extracts the cursor pointer from the
+    closure box pointer as an i8 reference.
+  }];
+  let arguments = (ins 
+    IndexAttr:$payloadIndex,
+    Arg<ReussirClosureBoxRefType, "reference to closure box">:$closureBoxRef);
+  let results = (outs Res<ReussirRefType, "i8 reference">:$cursor);
+  let assemblyFormat = [{
+   `(` $closureBoxRef `:` qualified(type($closureBoxRef)) `)` `:`
+    qualified(type($cursor)) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // Reussir Poly FFI Operations
 //===----------------------------------------------------------------------===//

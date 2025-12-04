@@ -1620,6 +1620,21 @@ mlir::LogicalResult ReussirClosureCloneOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// ClosureCursorOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirClosureCursorOp::verify() {
+  RefType cursorRefType = getCursor().getType();
+  mlir::Type elementType = cursorRefType.getElementType();
+
+  // Check that the element type is i8
+  if (!elementType.isInteger(8))
+    return emitOpError("cursor element type must be i8, ")
+           << "got: " << elementType;
+
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Reference Drop Op
 //===----------------------------------------------------------------------===//
 // RefDropOp verification
