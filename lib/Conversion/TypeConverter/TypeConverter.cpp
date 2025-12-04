@@ -104,8 +104,9 @@ LLVMTypeConverter::LLVMTypeConverter(mlir::ModuleOp op)
   // ClosureBox types
   addConversion([this](ClosureBoxType type) {
     llvm::SmallVector<mlir::Type> members;
-    members.push_back(getIndexType());
-    members.push_back(mlir::LLVM::LLVMPointerType::get(&getContext()));
+    auto ptrTy = mlir::LLVM::LLVMPointerType::get(&getContext());
+    members.push_back(ptrTy);
+    members.push_back(ptrTy);
     for (auto payloadType : type.getPayloadTypes())
       members.push_back(convertType(payloadType));
     return mlir::LLVM::LLVMStructType::getLiteral(&getContext(), members);
