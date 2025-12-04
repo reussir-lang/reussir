@@ -1,5 +1,4 @@
-//===-- ClosureOutlining.cpp - Reussir closure outlining impl ----*- C++
-//-*-===//
+//===-- ClosureOutlining.cpp ------------------------------------*- C++ -*-===//
 //
 // Part of the Reussir project, dual licensed under the Apache License v2.0 or
 // the MIT License.

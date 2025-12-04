@@ -1323,10 +1323,11 @@ struct ReussirClosureCursorOpConversionPattern
 
     // GEP[0, 1] to access the cursor field
     // ClosureBox layout: { vtable (0), cursor (1), payload... (2+) }
-    rewriter.replaceOpWithNewOp<mlir::LLVM::GEPOp>(
-        op, llvmPtrType, structType, adaptor.getClosureBoxRef(),
+    auto cursor = rewriter.create<mlir::LLVM::GEPOp>(
+        op->getLoc(), llvmPtrType, structType, adaptor.getClosureBoxRef(),
         llvm::ArrayRef<mlir::LLVM::GEPArg>{0,
                                            ClosureBoxType::ARG_CURSOR_INDEX});
+    rewriter.replaceOpWithNewOp<mlir::LLVM::LoadOp>(op, llvmPtrType, cursor);
     return mlir::success();
   }
 };
