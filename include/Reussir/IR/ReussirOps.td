@@ -26,6 +26,23 @@ class ReussirOp<string mnemonic, list<Trait> traits>
     : Op<ReussirDialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
+// Generic Operations
+//===----------------------------------------------------------------------===//
+
+def ReussirPanicOp : ReussirOp<"panic", []> {
+  let summary = "Panic the program";
+  let description = [{
+    `reussir.panic` panics the program
+  }];
+
+  let arguments = (ins Arg<StrAttr, "message">:$message);
+
+  let assemblyFormat = [{
+    $message attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Token Operation
 //===----------------------------------------------------------------------===//
 

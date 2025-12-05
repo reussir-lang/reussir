@@ -13,6 +13,7 @@
 #include <llvm/Support/Debug.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/LogicalResult.h>
+#include <llvm/Support/xxhash.h>
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h>
@@ -68,6 +69,66 @@ void addLifetimeOrInvariantOp(mlir::OpBuilder &rewriter, mlir::Location loc,
   rewriter.create<Op>(loc, size, value);
 #endif
 }
+
+struct ReussirPanicConversionPattern
+    : public mlir::OpConversionPattern<ReussirPanicOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirPanicOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto indexType = converter->getIndexType();
+
+    // Get the panic message
+    llvm::StringRef message = op.getMessage();
+
+    // Create a unique symbol name for the global string using xxh128
+    llvm::ArrayRef<uint8_t> messageBytes(
+        reinterpret_cast<const uint8_t *>(message.data()), message.size());
+    llvm::XXH128_hash_t hash = llvm::xxh3_128bits(messageBytes);
+    std::string globalName = "__panic_message_" + llvm::utohexstr(hash.high64) +
+                             "_" + llvm::utohexstr(hash.low64);
+
+    // Get or create the global string constant
+    auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
+    auto existingGlobal =
+        moduleOp.lookupSymbol<mlir::LLVM::GlobalOp>(globalName);
+
+    if (!existingGlobal) {
+      // Create an LLVM array type for the string (no null terminator needed)
+      auto i8Type = mlir::IntegerType::get(rewriter.getContext(), 8);
+      auto arrayType = mlir::LLVM::LLVMArrayType::get(i8Type, message.size());
+
+      // Create the string attribute
+      auto stringAttr = rewriter.getStringAttr(message);
+
+      // Insert global at module level
+      mlir::OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(moduleOp.getBody());
+      rewriter.create<mlir::LLVM::GlobalOp>(loc, arrayType, /*isConstant=*/true,
+                                            mlir::LLVM::Linkage::LinkonceODR,
+                                            globalName, stringAttr);
+    }
+
+    // Get address of the global string
+    auto strPtr =
+        rewriter.create<mlir::LLVM::AddressOfOp>(loc, llvmPtrType, globalName);
+
+    // Create the length constant
+    auto lenVal = rewriter.create<mlir::arith::ConstantOp>(
+        loc, mlir::IntegerAttr::get(indexType, message.size()));
+
+    // Call __reussir_panic(ptr, len) - this function does not return
+    rewriter.replaceOpWithNewOp<mlir::func::CallOp>(
+        op, "__reussir_panic", mlir::TypeRange{},
+        mlir::ValueRange{strPtr, lenVal});
+
+    return mlir::success();
+  }
+};
 
 struct ReussirTokenAllocConversionPattern
     : public mlir::OpConversionPattern<ReussirTokenAllocOp> {
@@ -1605,7 +1666,7 @@ void addRuntimeFunctions(mlir::ModuleOp module,
                      {llvmPtrType});
   // currently this will abort execution after printing the message and
   // stacktrace. No unwinding is attempted yet.
-  addRuntimeFunction(body, "__reussir_panic", {llvmPtrType}, {});
+  addRuntimeFunction(body, "__reussir_panic", {llvmPtrType, indexType}, {});
 }
 } // namespace
 
@@ -1643,7 +1704,8 @@ struct BasicOpsLoweringPass
         ReussirClosureEvalOp, ReussirClosureInspectPayloadOp,
         ReussirClosureCursorOp, ReussirClosureTransferOp,
         ReussirClosureAllocaOp, ReussirClosureVtableOp, ReussirClosureCreateOp,
-        ReussirRcFetchDecOp, ReussirStrGlobalOp, ReussirStrLiteralOp>();
+        ReussirRcFetchDecOp, ReussirStrGlobalOp, ReussirStrLiteralOp,
+        ReussirPanicOp>();
     target.addLegalDialect<mlir::LLVM::LLVMDialect>();
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
@@ -1684,6 +1746,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirClosureCreateOpConversionPattern,
       ReussirRcReinterpretConversionPattern,
       ReussirRcFetchDectConversionPattern, ReussirStrGlobalOpConversionPattern,
-      ReussirStrLiteralOpConversionPattern>(converter, patterns.getContext());
+      ReussirStrLiteralOpConversionPattern, ReussirPanicConversionPattern>(
+      converter, patterns.getContext());
 }
 } // namespace reussir
