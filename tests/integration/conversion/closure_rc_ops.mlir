@@ -16,7 +16,7 @@
 // RUN: %t.exe
 
 // Test closure operations: uniqify, rc.inc, rc.dec, and closures with multiple arguments
-module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>>} {
+module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>>} {
   // Helper: create a closure that adds 1 to its argument
   func.func private @create_add_one_closure() -> !reussir.rc<!reussir.closure<(i32) -> i32>> attributes { llvm.linkage = #llvm.linkage<internal> } {
     %token = reussir.token.alloc : !reussir.token<align: 8, size: 32>
@@ -34,9 +34,9 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
 
   // Helper: create a closure that adds two arguments together
   func.func private @create_two_arg_closure() -> !reussir.rc<!reussir.closure<(i32, i32) -> i32>> attributes { llvm.linkage = #llvm.linkage<internal> } {
-    %token = reussir.token.alloc : !reussir.token<align: 8, size: 40>
+    %token = reussir.token.alloc : !reussir.token<align: 8, size: 32>
     %closure = reussir.closure.create -> !reussir.rc<!reussir.closure<(i32, i32) -> i32>> {
-      token(%token : !reussir.token<align: 8, size: 40>)
+      token(%token : !reussir.token<align: 8, size: 32>)
       body {
         ^bb0(%v0 : i32, %v1 : i32):
           %add = arith.addi %v0, %v1 : i32 
