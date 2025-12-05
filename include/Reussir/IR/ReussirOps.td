@@ -1181,16 +1181,20 @@ def ReussirClosureCursorOp : ReussirClosureOp<"cursor", []> {
   let hasVerifier = 1;
 }
 
-def ReussirClosureAllocaOp : ReussirClosureOp<"alloca", []> {
-  let summary = "Allocate memory for a closure box";
+def ReussirClosureInstantiateOp : ReussirClosureOp<"instantiate", []> {
+  let summary = "Instantiate a token into an Rc wrapped closure box";
   let description = [{
-    `reussir.closure.alloca` operation allocates memory for a closure box.
-    This is for locally assembling closure boxes before wrapping them into rc pointers.
+    `reussir.closure.instantiate` operation instantiate a token into a special
+    RC-wrapped payload box and setting the refcnt to 1.
   }];
-  let results = (outs Res<ReussirClosureBoxRefType, "reference to closure box">:$closureBoxRef);
+  let arguments = (ins
+    Arg<ReussirTokenType, "source token">:$token
+  );
+  let results = (outs Res<ReussirRcType, "pointer to the payload box">:$closureBoxRc);
   let assemblyFormat = [{
-   `:` qualified(type($closureBoxRef)) attr-dict
+    `(` $token `:` qualified(type($token)) `)` `:` qualified(type($closureBoxRc)) attr-dict
   }];
+  let hasVerifier = 1;
 }
 
 def ReussirClosureTransferOp : ReussirClosureOp<"transfer", []> {

@@ -392,8 +392,12 @@ mlir::func::FuncOp ClosureOutliningPass::createClosureCloneFunction(
   mlir::Value token = rewriter.create<ReussirTokenAllocOp>(loc, tokenType);
 
   // Allocate assemble space on stack first
+  mlir::Value dstRc = rewriter.create<ReussirClosureInstantiateOp>(
+      loc, specializedRcType, token);
+
+  // Borrow the destination closure box
   mlir::Value dstClosureBoxRef =
-      rewriter.create<ReussirClosureAllocaOp>(loc, closureBoxRefType);
+      rewriter.create<ReussirRcBorrowOp>(loc, closureBoxRefType, dstRc);
 
   // Borrow the source closure box
   mlir::Value srcClosureBoxRef =
@@ -447,17 +451,8 @@ mlir::func::FuncOp ClosureOutliningPass::createClosureCloneFunction(
     rewriter.setInsertionPointAfter(copyIfOp);
   }
 
-  // Load the closure box value from the alloca
-  mlir::Value closureBoxValue =
-      rewriter.create<ReussirRefLoadOp>(loc, closureBoxType, dstClosureBoxRef);
-
-  // Create the new Rc pointer using RcCreateOp
-  mlir::Value newRcPtr = rewriter.create<ReussirRcCreateOp>(
-      loc, specializedRcType, closureBoxValue, token,
-      /*region=*/mlir::Value{}, /*vtable=*/mlir::FlatSymbolRefAttr{});
-
-  // Return the new Rc pointer
-  rewriter.create<mlir::func::ReturnOp>(loc, newRcPtr);
+  // Return the destination Rc pointer
+  rewriter.create<mlir::func::ReturnOp>(loc, dstRc);
 
   return funcOp;
 }

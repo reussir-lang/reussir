@@ -1552,6 +1552,28 @@ mlir::LogicalResult ReussirClosureCursorOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// ClosureInstantiateOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirClosureInstantiateOp::verify() {
+  RcType rcType = getClosureBoxRc().getType();
+  TokenType tokenType = getToken().getType();
+  ClosureBoxType closureBoxType =
+      llvm::dyn_cast<ClosureBoxType>(rcType.getElementType());
+  if (!closureBoxType)
+    return emitOpError("rc type must be a closure box type, got: ") << rcType;
+
+  RcBoxType rcBoxType = rcType.getInnerBoxType();
+  auto dataLayout = mlir::DataLayout::closest(getOperation());
+  // Check that the token type is a valid token type
+  if (tokenType.getAlign() != dataLayout.getTypeABIAlignment(rcBoxType) ||
+      tokenType.getSize() != dataLayout.getTypeSize(rcBoxType))
+    return emitOpError("token type must match rc box type, got: ")
+           << tokenType << " and " << rcBoxType;
+
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Reference Drop Op
 //===----------------------------------------------------------------------===//
 // RefDropOp verification
