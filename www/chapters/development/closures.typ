@@ -276,11 +276,6 @@ It is rather complicated to compile closures. The overall procedure is as follow
   Closure object cleanup also aligns with other `Rc` managed objects. The backend takes care of the
   destruction logic.
 
-- The backend has the feature to detect if a closure is a trivially forwarding closure, that is,
-  the only operation it does is to call a function with exactly the same argument order and return the result.
-  In the case of trivially forwarding closures, the backend can inline the closure body directly into the caller.
-  To lift a function into a closure, the frontend compiler should just create a trivially forwarding closure.
-
 === Future Work
 
 - Add escape analysis and avoid allocations when possible. Heap memory tokens can possibly be eliminated by using stack memory.

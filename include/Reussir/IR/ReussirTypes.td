@@ -455,4 +455,10 @@ def ReussirRcClosureType
       ::llvm::cast<::reussir::RcType>($_self).getElementType())
     }]>, "Reussir rc closure type", "::reussir::RcType">;
 
+def ReussirClosureBoxRefType
+    : Type<CPred<[{
+    ::llvm::isa<::reussir::ClosureBoxType>(
+      ::llvm::cast<::reussir::RefType>($_self).getElementType())
+    }]>, "Reussir closure box reference type", "::reussir::RefType">;
+
 #endif // REUSSIR_IR_REUSSIRTYPES_TD

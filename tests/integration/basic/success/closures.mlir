@@ -32,9 +32,14 @@ module attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> :
     return %add : i32
   }
 
+  func.func private @placeholder() {
+    return
+  }
+
   reussir.closure.vtable @VTable {
     func(@add_one)
-    closure(!reussir.closure<(i32) -> i32>)
+    drop(@placeholder)
+    clone(@placeholder)
   }
   
 

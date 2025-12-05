@@ -26,10 +26,15 @@ module attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> :
 // CHECK:   %[[GEP_CLONE:.*]] = llvm.getelementptr %[[VTABLE]][0, 1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(ptr, ptr, ptr)>
 // CHECK:   %[[CLONE_FUNC:.*]] = llvm.load %[[GEP_CLONE]] : !llvm.ptr -> !llvm.ptr
 // CHECK:   %[[CLONED:.*]] = llvm.call %[[CLONE_FUNC]](%[[INPUT]]) : !llvm.ptr, (!llvm.ptr) -> !llvm.ptr
+// CHECK:   %[[GEP_VTABLE2:.*]] = llvm.getelementptr %[[INPUT]][0, 1, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(i64, struct<(ptr, ptr)>)>
+// CHECK:   %[[VTABLE2:.*]] = llvm.load %[[GEP_VTABLE2]] : !llvm.ptr -> !llvm.ptr
+// CHECK:   %[[GEP_DROP:.*]] = llvm.getelementptr %[[VTABLE2]][0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(ptr, ptr, ptr)>
+// CHECK:   %[[DROP_FUNC:.*]] = llvm.load %[[GEP_DROP]] : !llvm.ptr -> !llvm.ptr
+// CHECK:   llvm.call %[[DROP_FUNC]](%[[INPUT]]) : !llvm.ptr, (!llvm.ptr) -> ()
 // CHECK:   llvm.br ^[[JOIN]](%[[CLONED]] : !llvm.ptr)
-// CHECK: ^[[JOIN]](%9: !llvm.ptr):  // 2 preds: ^bb1, ^bb2
+// CHECK: ^[[JOIN]](%[[JOIN_ARG:[0-9]+]]: !llvm.ptr):  // 2 preds: ^bb1, ^bb2
 // CHECK:   llvm.br ^[[FINAL:bb[0-9]+]]
 // CHECK: ^[[FINAL]]:  // pred: ^[[JOIN]]
-// CHECK:   llvm.return %9 : !llvm.ptr
+// CHECK:   llvm.return %[[JOIN_ARG]] : !llvm.ptr
 // CHECK: }
 

@@ -26,7 +26,7 @@
 
         # Nightly Rust toolchain from Nix
         rustToolchain = pkgs.rust-bin.nightly."2025-11-07".default.override {
-          extensions = [ "rust-src" "rustfmt" "clippy" "rustc-dev" "llvm-tools-preview" ];
+          extensions = [ "rust-src" "rustfmt" "clippy" "rustc-dev" "llvm-tools-preview" "miri" ];
         };
 
         buildInputs = with pkgs; [

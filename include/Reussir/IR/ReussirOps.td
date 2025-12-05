@@ -16,6 +16,7 @@
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/RegionKindInterface.td"
+include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "Reussir/IR/ReussirDialect.td"
 include "Reussir/IR/ReussirAttrs.td"
 include "Reussir/IR/ReussirTypes.td"
@@ -23,6 +24,23 @@ include "Reussir/IR/ReussirInterfaces.td"
 
 class ReussirOp<string mnemonic, list<Trait> traits>
     : Op<ReussirDialect, mnemonic, traits>;
+
+//===----------------------------------------------------------------------===//
+// Generic Operations
+//===----------------------------------------------------------------------===//
+
+def ReussirPanicOp : ReussirOp<"panic", []> {
+  let summary = "Panic the program";
+  let description = [{
+    `reussir.panic` panics the program
+  }];
+
+  let arguments = (ins Arg<StrAttr, "message">:$message);
+
+  let assemblyFormat = [{
+    $message attr-dict
+  }];
+}
 
 //===----------------------------------------------------------------------===//
 // Reussir Token Operation
@@ -713,6 +731,61 @@ def ReussirRefDropOp : ReussirReferenceOp<"drop", []> {
   let hasVerifier = 1;
 }
 
+def ReussirRefDiffOp : ReussirReferenceOp<"diff", []> {
+  let summary = "Compute difference between two reference pointers";
+  let description = [{
+    `reussir.ref.diff` computes the difference (target - base) between two refernece pointers.
+  }];
+  let arguments = (ins 
+    Arg<ReussirRefType, "base reference">:$base,
+    Arg<ReussirRefType, "target reference">:$target
+  );
+  let results = (outs
+    Res<Index, "difference">:$difference
+  );
+  let assemblyFormat = [{
+    $base `,` $target `:` functional-type(operands, results) attr-dict
+  }];
+}
+
+def ReussirRefCmpOp : ReussirReferenceOp<"cmp", []> {
+  let summary = "Compare the address numeric value of two references";
+  let description = [{
+    `reussir.ref.cmp` computes the difference (target - base) between two refernece pointers.
+  }];
+  let arguments = (ins 
+    Arith_CmpIPredicateAttr:$predicate,
+    Arg<ReussirRefType, "left-hand side">:$lhs,
+    Arg<ReussirRefType, "right-hand side">:$rhs
+  );
+  let results = (outs
+    Res<I1, "compare result">:$flag
+  );
+  let assemblyFormat = [{
+    $predicate $lhs `,` $rhs `:` functional-type(operands, results) attr-dict
+  }];
+}
+
+def ReussirRefMemcpyOp : ReussirReferenceOp<"memcpy", []> {
+  let summary = "Non-overlapping memory copy between two references";
+  let description = [{
+    `reussir.ref.memcpy` performs a non-overlapping memory copy from the source
+    reference to the destination reference. The element types of both references
+    must be identical.
+
+    This is a low-level operation that does not perform any reference counting
+    or ownership transfer. It simply copies the bytes from source to destination.
+  }];
+  let arguments = (ins 
+    Arg<ReussirRefType, "source reference">:$src,
+    Arg<ReussirRefType, "destination reference">:$dst
+  );
+  let assemblyFormat = [{
+    $src `to` $dst `:` type($src) `to` type($dst) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // Reussir Region Operations
 //===----------------------------------------------------------------------===//
@@ -946,12 +1019,6 @@ def ReussirClosureCreateOp : ReussirClosureOp<"create", [
     // get the payload box for the closure
     ::reussir::ClosureBoxType getClosureBoxType();
     ::reussir::RcBoxType getRcClosureBoxType();
-
-    // Return the target function is the closure is trivially forwarding.
-    // Return null otherwise.
-    // A closure is trivially forwarding if the only operation it does is to
-    // call a function with exactly the same argument order and return the result.
-    ::mlir::FlatSymbolRefAttr getTrivialForwardingTarget();
   }];
 
   let hasVerifier = 1;
@@ -984,25 +1051,19 @@ def ReussirClosureVtableOp : ReussirClosureOp<"vtable", [
   let description = [{
     `reussir.closure.vtable` creates a vtable for closures. The VTable is in charge of
     record the function pointer and corresponding drop and clone functions.
-
-    Drop and clone functions are be null if closure payload is trivially copyable.
   }];
   let arguments = (ins
     SymbolNameAttr:$sym_name,
     FlatSymbolRefAttr:$func,
-    OptionalAttr<FlatSymbolRefAttr>:$drop,
-    OptionalAttr<FlatSymbolRefAttr>:$clone,
-    TypeAttrOf<ReussirClosureType>:$closure
+    FlatSymbolRefAttr:$drop,
+    FlatSymbolRefAttr:$clone
   );
 
   let assemblyFormat = [{
     $sym_name `{`
       `func` `(` $func `)`
-      `closure` `(` $closure `)`
-      oilist
-      ( `drop` `(` $drop `)` 
-      | `clone` `(` $clone `)` 
-      ) 
+      `drop` `(` $drop `)` 
+      `clone` `(` $clone `)` 
     `}` attr-dict
   }];
 }
@@ -1081,9 +1142,73 @@ def ReussirClosureCloneOp : ReussirClosureOp<"clone", []> {
   let arguments = (ins Arg<RcClosureType, "closure to clone">:$closure);
   let results = (outs Res<RcClosureType, "cloned closure">:$cloned);
   let assemblyFormat = [{
-    `(` $closure `:` qualified(type($closure)) `)` `:` qualified(type($cloned)) attr-dict
+    `(` $closure `:` qualified(type($closure)) `)` `:` qualified(type($cloned)) 
+    attr-dict
   }];
   let hasVerifier = 1;
+}
+
+def ReussirClosureInspectPayloadOp : ReussirClosureOp<"inspect_payload", []> {
+  let summary = "Inspect closure payload";
+  let description = [{
+    `reussir.closure.inspect_payload` serves as an low-level intermediate operation
+    that achieves the conversion from ClosureBox reference to subfield reference.
+  }];
+  let arguments = (ins 
+    IndexAttr:$payloadIndex,
+    Arg<ReussirClosureBoxRefType, "reference to closure box">:$closureBoxRef);
+  let results = (outs Res<ReussirRefType, "subfield reference">:$payloadRef);
+  let assemblyFormat = [{
+    `[` $payloadIndex `]` `(` $closureBoxRef `)` `:` 
+    functional-type(operands, results) attr-dict
+  }];
+}
+
+def ReussirClosureCursorOp : ReussirClosureOp<"cursor", []> {
+  let summary = "Extract cursor pointer as a reference to i8";
+  let description = [{
+    `reussir.closure.cursor` operation extracts the cursor pointer from the
+    closure box pointer as an i8 reference.
+  }];
+  let arguments = (ins 
+    IndexAttr:$payloadIndex,
+    Arg<ReussirClosureBoxRefType, "reference to closure box">:$closureBoxRef);
+  let results = (outs Res<ReussirRefType, "i8 reference">:$cursor);
+  let assemblyFormat = [{
+   `(` $closureBoxRef `:` qualified(type($closureBoxRef)) `)` `:`
+    qualified(type($cursor)) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def ReussirClosureInstantiateOp : ReussirClosureOp<"instantiate", []> {
+  let summary = "Instantiate a token into an Rc wrapped closure box";
+  let description = [{
+    `reussir.closure.instantiate` operation instantiate a token into a special
+    RC-wrapped payload box and setting the refcnt to 1.
+  }];
+  let arguments = (ins
+    Arg<ReussirTokenType, "source token">:$token
+  );
+  let results = (outs Res<ReussirRcType, "pointer to the payload box">:$closureBoxRc);
+  let assemblyFormat = [{
+    `(` $token `:` qualified(type($token)) `)` `:` qualified(type($closureBoxRc)) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def ReussirClosureTransferOp : ReussirClosureOp<"transfer", []> {
+  let summary = "Transfer bytes between closure boxes";
+  let description = [{
+    `reussir.closure.transfer` copy bytes between two closure boxes.
+  }];
+  let arguments = (ins 
+    Arg<ReussirClosureBoxRefType, "source reference">:$src,
+    Arg<ReussirClosureBoxRefType, "destination reference">:$dst
+  );
+  let assemblyFormat = [{
+    $src `to` $dst `:` type($src) `to` type($dst) attr-dict
+  }];
 }
 
 //===----------------------------------------------------------------------===//

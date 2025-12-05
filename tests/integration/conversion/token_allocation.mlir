@@ -31,11 +31,6 @@ module attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> :
     return %rc : !reussir.rc<i64 flex>
   }
 
-  reussir.closure.vtable @VTable {
-    func(@add_one)
-    closure(!reussir.closure<(i32) -> i32>)
-  }
-
   func.func private @add_one(%v0 : i32) -> i32 {
     %one = arith.constant 1 : i32
     %add = arith.addi %v0, %one : i32
@@ -54,17 +49,6 @@ module attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> :
           %add = arith.addi %v0, %one : i32
           reussir.closure.yield %add : i32
       }
-    }
-    return %closure : !reussir.rc<!reussir.closure<(i32) -> i32>>
-  }
-
-  // Test: closure.create without token should get token allocated (outlined)
-  // CHECK-LABEL: func.func @closure_create_without_token_outlined
-  // CHECK-NEXT: reussir.token.alloc
-  // CHECK-NEXT: reussir.closure.create
-  func.func @closure_create_without_token_outlined() -> !reussir.rc<!reussir.closure<(i32) -> i32>> {
-    %closure = reussir.closure.create -> !reussir.rc<!reussir.closure<(i32) -> i32>> {
-      vtable(@VTable)
     }
     return %closure : !reussir.rc<!reussir.closure<(i32) -> i32>>
   }

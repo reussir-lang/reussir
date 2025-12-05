@@ -6,7 +6,7 @@ pub unsafe extern "C" fn __reussir_panic(message: *const u8, length: usize) -> !
     let message = String::from_utf8_lossy(slice);
     let bt = backtrace::Backtrace::new();
     eprintln!("Panic: {}", message);
-    eprintln!("Backtrace: {:#?}", bt);
+    eprintln!("Backtrace:\n{:#?}", bt);
     std::process::abort()
 }
 

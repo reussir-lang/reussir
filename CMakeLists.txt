@@ -43,13 +43,18 @@ include(cmake/Immer.cmake)
 # Detect object format
 include(cmake/ObjectFormat.cmake)
 
-# Include TPDE only for ELF object format
-if(TARGET_OBJECT_FORMAT STREQUAL "ELF")
-  message(STATUS "ELF object format detected, including TPDE support")
+# Include TPDE only for ELF object format and LLVM <= 21
+
+if(TARGET_OBJECT_FORMAT STREQUAL "ELF" AND LLVM_PACKAGE_VERSION VERSION_LESS_EQUAL "21.9.9")
+  message(STATUS "ELF object format detected and LLVM <= 21, including TPDE support")
   include(cmake/TPDE.cmake)
   set(REUSSIR_HAS_TPDE ON)
 else()
-  message(STATUS "Non-ELF object format detected, TPDE not supported")
+  if(TARGET_OBJECT_FORMAT STREQUAL "ELF")
+    message(STATUS "ELF object format detected but LLVM > 21, TPDE not supported")
+  else()
+    message(STATUS "Non-ELF object format detected, TPDE not supported")
+  endif()
   set(REUSSIR_HAS_TPDE OFF)
 endif()
 
