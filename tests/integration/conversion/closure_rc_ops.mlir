@@ -117,7 +117,7 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
   }
 
   // Test 4: Closure with multiple partial applications
-  func.func private @test_multi_arg_closure() -> i32 attributes { llvm.linkage = #llvm.linkage<external> } {
+  func.func private @test_multi_arg_closure() -> i32 attributes { llvm.linkage = #llvm.linkage<internal> } {
     %c100 = arith.constant 100 : i32
     %c50 = arith.constant 50 : i32
     %c150 = arith.constant 150 : i32
