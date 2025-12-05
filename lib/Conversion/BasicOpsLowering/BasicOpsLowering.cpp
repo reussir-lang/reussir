@@ -1374,6 +1374,19 @@ struct ReussirClosureTransferOpConversionPattern
     rewriter.create<mlir::LLVM::MemcpyOp>(loc, adaptor.getDst(),
                                           adaptor.getSrc(), offset, false);
 
+    // Update cursor to (dst + offset)
+    auto newCursor = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, llvmPtrType, rewriter.getI8Type(), adaptor.getDst(), offset);
+
+    // Get the cursor slot in the destination closure box
+    auto dstCursorSlot = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, llvmPtrType, structType, adaptor.getDst(),
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0,
+                                           ClosureBoxType::ARG_CURSOR_INDEX});
+
+    // Store the new cursor to the destination's cursor slot
+    rewriter.create<mlir::LLVM::StoreOp>(loc, newCursor, dstCursorSlot);
+
     rewriter.eraseOp(op);
     return mlir::success();
   }
