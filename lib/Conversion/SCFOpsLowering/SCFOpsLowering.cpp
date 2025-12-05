@@ -221,10 +221,13 @@ struct ReussirClosureUniqifyOpRewritePattern
     rewriter.setInsertionPointToStart(&scfIfOp.getThenRegion().front());
     rewriter.create<mlir::scf::YieldOp>(op.getLoc(), op.getClosure());
 
-    // In the else region (closure is not unique), clone the closure
+    // In the else region (closure is not unique), clone the closure, dec the
+    // original rc pointer
     rewriter.setInsertionPointToStart(&scfIfOp.getElseRegion().front());
     auto cloned = rewriter.create<reussir::ReussirClosureCloneOp>(
         op.getLoc(), op.getClosure().getType(), op.getClosure());
+    rewriter.create<reussir::ReussirRcDecOp>(op.getLoc(), mlir::Type{},
+                                             op.getClosure());
     rewriter.create<mlir::scf::YieldOp>(op.getLoc(), cloned.getResult());
 
     rewriter.replaceOp(op, scfIfOp);

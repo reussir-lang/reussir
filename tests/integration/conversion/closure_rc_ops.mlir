@@ -106,7 +106,7 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
     
     // Decrement the original closure's refcount (we're done with the extra reference)
     reussir.rc.dec (%closure : !reussir.rc<!reussir.closure<(i32) -> i32>>)
-    
+
     // Apply and evaluate the uniqified (cloned) closure: 32 + 1 = 33
     %applied = reussir.closure.apply (%c32 : i32) to (%uniqified : !reussir.rc<!reussir.closure<(i32) -> i32>>) : !reussir.rc<!reussir.closure<() -> i32>>
     %result = reussir.closure.eval (%applied : !reussir.rc<!reussir.closure<() -> i32>>) : i32
