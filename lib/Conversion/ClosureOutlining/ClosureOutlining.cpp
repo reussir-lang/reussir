@@ -37,10 +37,10 @@ namespace reussir {
 
 namespace {
 class ClosureNameUniquifier {
-  llvm::StringMap<size_t> nameOccurences;
+  llvm::StringMap<size_t> nameOccurrences;
 
 public:
-  ClosureNameUniquifier() {}
+  ClosureNameUniquifier() = default;
   std::string uniquify(ReussirClosureCreateOp op) {
     llvm::SmallString<128> buffer;
     auto function = op->getParentOfType<mlir::func::FuncOp>();
@@ -52,9 +52,9 @@ public:
         reinterpret_cast<const uint8_t *>(buffer.data()), buffer.size()));
     ss << "reussir_closure_" << std::hex << high << '_' << std::hex << lower;
     std::string name = ss.str();
-    if (nameOccurences[name]++) {
+    if (nameOccurrences[name]++) {
       name.append("_");
-      name.append(std::to_string(nameOccurences[name]));
+      name.append(std::to_string(nameOccurrences[name]));
     }
     return name;
   }
