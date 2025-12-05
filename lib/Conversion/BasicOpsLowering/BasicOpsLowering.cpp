@@ -1322,7 +1322,8 @@ struct ReussirClosureEvalOpConversionPattern
         rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, evalPtr);
 
     // Determine if the closure has a return value
-    mlir::Type resultType = op.getResult().getType();
+    mlir::Type resultType =
+        op.getResult() ? op.getResult().getType() : mlir::Type{};
     if (resultType) {
       // Closure has a return value: T (*)(void*)
       mlir::Type llvmResultType = converter->convertType(resultType);
