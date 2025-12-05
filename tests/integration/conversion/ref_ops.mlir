@@ -30,7 +30,7 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
   // CHECK: %1 = llvm.alloca %0 x i64 {alignment = 8 : i64} : (i64) -> !llvm.ptr
   // CHECK: llvm.store %arg0, %1 : i64, !llvm.ptr
   // CHECK: %2 = llvm.intr.invariant.start 8, %1 : !llvm.ptr
-  // CHECK: %3 = llvm.load %2 : !llvm.ptr -> i64
+  // CHECK: %3 = llvm.load %1 : !llvm.ptr -> i64
   // CHECK: llvm.return %3 : i64
   // CHECK: }
 

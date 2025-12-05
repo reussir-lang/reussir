@@ -274,9 +274,10 @@ struct ReussirRefSpilledConversionPattern
 
     // Store the value to the allocated space
     rewriter.create<mlir::LLVM::StoreOp>(loc, value, allocaOp);
-    rewriter.replaceOpWithNewOp<mlir::LLVM::InvariantStartOp>(
-        op, converter->getDataLayout().getTypeABIAlignment(valueType),
+    rewriter.create<mlir::LLVM::InvariantStartOp>(
+        loc, converter->getDataLayout().getTypeABIAlignment(valueType),
         allocaOp);
+    rewriter.replaceOp(op, allocaOp);
 
     return mlir::success();
   }
