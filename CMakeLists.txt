@@ -46,7 +46,7 @@ include(cmake/ObjectFormat.cmake)
 # Include TPDE only for ELF object format and LLVM <= 21
 
 if(TARGET_OBJECT_FORMAT STREQUAL "ELF")
-  message(STATUS "ELF object format detected and LLVM <= 21, including TPDE support")
+  message(STATUS "ELF object format detected, including TPDE support")
   include(cmake/TPDE.cmake)
   set(REUSSIR_HAS_TPDE ON)
 else()
