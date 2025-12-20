@@ -7,7 +7,7 @@ set(CMAKE_WARN_DEPRECATED OFF)
 FetchContent_Declare(
   immer
   GIT_REPOSITORY https://github.com/arximboldi/immer.git
-  GIT_TAG df6ef46d97e1fe81f397015b9aeb32505cef653b
+  GIT_TAG 06d94ce48a02b11d3b225083a820f82c3d3ef462
 )
 
 # Set all Immer build options to OFF
