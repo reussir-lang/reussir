@@ -205,4 +205,17 @@ def ReussirCompilePolymorphicFFIPass
                            "::mlir::func::FuncDialect", 
                            "::mlir::scf::SCFDialect"];
 }
+
+//===----------------------------------------------------------------------===//
+// TokenReuse
+//===----------------------------------------------------------------------===//
+def ReussirTokenReusePass
+    : Pass<"reussir-token-reuse", "::mlir::func::FuncOp"> {
+  let summary = "reuse tokens for operations";
+  let description = [{
+    `reussir-token-reuse` reuses tokens for operations.
+  }];
+
+  let dependentDialects = ["::reussir::ReussirDialect"];
+}
 #endif // REUSSIR_CONVERSION_PASSES_TD

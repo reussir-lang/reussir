@@ -52,6 +52,9 @@ int main(int argc, char **argv) {
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return reussir::createReussirClosureOutliningPass();
   });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return reussir::createReussirTokenReusePass();
+  });
   return failed(mlir::MlirOptMain(
       argc, argv, "Reussir analysis and optimization driver\n", registry));
 }

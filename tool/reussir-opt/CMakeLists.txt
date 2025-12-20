@@ -16,6 +16,7 @@ add_mlir_tool(reussir-opt
     MLIRReussirIncDecCancellation
     MLIRReussirTokenInstantiation
     MLIRReussirCompilePolymorphicFFI
+    MLIRReussirTokenReuse
     ${dialect_libs}
     ${conversion_libs}
     ${extension_libs}
@@ -33,6 +34,7 @@ target_link_libraries(reussir-opt
     MLIRReussirIncDecCancellation
     MLIRReussirTokenInstantiation
     MLIRReussirCompilePolymorphicFFI
+    MLIRReussirTokenReuse
     ${dialect_libs} 
     ${conversion_libs} 
     ${extension_libs} 
