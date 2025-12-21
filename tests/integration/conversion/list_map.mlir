@@ -8,9 +8,9 @@
 // RUN: --reussir-drop-expansion \
 // RUN: --reussir-lowering-scf-ops \
 // RUN: --reussir-inc-dec-cancellation \
-// RUN: --reussir-token-reuse \
 // RUN: --reussir-drop-expansion='expand-decrement=1 outline-record=1' \
 // RUN: --reussir-token-reuse \
+// RUN: --reussir-lowering-scf-ops \
 // RUN: --reussir-compile-polymorphic-ffi \
 // RUN: --convert-scf-to-cf \
 // RUN: --reussir-lowering-basic-ops | \
@@ -21,7 +21,7 @@
 // RUN: %cc %t.o %S/print_i64.c -o %t.exe -L%library_path -lreussir_rt \
 // RUN:    -Wl,-rpath,%library_path %extra_sys_libs
 // RUN: %t.exe | %FileCheck %s
-// CHECK: 01232345
+// CHECK: 01235432
 !rc_i64 = !reussir.rc<i64>
 !list_cons = !reussir.record<compound "list.cons" {[shared] i64, [shared] !reussir.record<variant "list" incomplete>}>
 !list_nil = !reussir.record<compound "list.nil" {}>
@@ -132,6 +132,41 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
         }
         func.return %res : !rc_list
     }
+    func.func @reverse_impl(%list: !rc_list, %acc: !rc_list) -> !rc_list 
+        attributes { llvm.linkage = #llvm.linkage<internal> }
+    {
+        %list_ref = reussir.rc.borrow (%list : !rc_list) : !reussir.ref<!list>
+        %res = reussir.record.dispatch (%list_ref : !reussir.ref<!list>) -> !rc_list {
+            [0] -> {
+                ^bb0(%cons_ref: !reussir.ref<!list_cons>):
+                %head_ref = reussir.ref.project (%cons_ref : !reussir.ref<!list_cons>) [0] : !reussir.ref<!rc_i64>
+                %head_rc = reussir.ref.load (%head_ref : !reussir.ref<!rc_i64>) : !rc_i64
+                reussir.rc.inc (%head_rc : !rc_i64)
+                %tail_ref = reussir.ref.project (%cons_ref : !reussir.ref<!list_cons>) [1] : !reussir.ref<!rc_list>
+                %tail_rc = reussir.ref.load (%tail_ref : !reussir.ref<!rc_list>) : !rc_list
+                reussir.rc.inc (%tail_rc : !rc_list)
+                %to_free = reussir.rc.dec (%list : !rc_list) : !nullable_token_rc_list
+                %new_cons = reussir.record.compound(%head_rc, %acc : !rc_i64, !rc_list) : !list_cons
+                %new_list = reussir.record.variant[0] (%new_cons : !list_cons) : !list
+                %new_acc = reussir.rc.create value(%new_list : !list) : !rc_list
+                %res_list = func.call @reverse_impl(%tail_rc, %new_acc) : (!rc_list, !rc_list) -> !rc_list
+                reussir.scf.yield %res_list : !rc_list
+            }
+            [1] -> {
+                ^bb1(%nil_ref: !reussir.ref<!list_nil>):
+                reussir.rc.dec (%list : !rc_list)
+                reussir.scf.yield %acc : !rc_list
+            }
+        }
+        func.return %res : !rc_list
+    }
+    func.func @reverse(%list: !rc_list) -> !rc_list {
+        %nil = reussir.record.compound : !list_nil
+        %nil_variant = reussir.record.variant[1] (%nil : !list_nil) : !list
+        %nil_rc = reussir.rc.create value(%nil_variant : !list) : !rc_list
+        %res = func.call @reverse_impl(%list, %nil_rc) : (!rc_list, !rc_list) -> !rc_list
+        func.return %res : !rc_list
+    }
     func.func @main() -> i32 {
         %list = func.call @list_0123() : () -> !rc_list
         reussir.rc.inc (%list : !rc_list)
@@ -141,7 +176,8 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
         reussir.rc.inc (%closure : !closure)
         %applied_once = func.call @apply(%closure, %list) : (!closure, !rc_list) -> !rc_list
         %applied_twice = func.call @apply(%closure, %applied_once) : (!closure, !rc_list) -> !rc_list
-        func.call @print_list(%applied_twice) : (!rc_list) -> ()
+        %reversed = func.call @reverse(%applied_twice) : (!rc_list) -> !rc_list
+        func.call @print_list(%reversed) : (!rc_list) -> ()
         %zero = arith.constant 0 : i32
         func.return %zero : i32
     }

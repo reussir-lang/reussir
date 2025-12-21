@@ -246,6 +246,37 @@ struct ReussirScfYieldOpRewritePattern
   }
 };
 
+struct ReussirTokenEnsureOpRewritePattern
+    : public mlir::OpRewritePattern<ReussirTokenEnsureOp> {
+  using OpRewritePattern::OpRewritePattern;
+  mlir::LogicalResult
+  matchAndRewrite(ReussirTokenEnsureOp op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto nullableDispatchOp = rewriter.create<ReussirNullableDispatchOp>(
+        op.getLoc(), op.getType(), op.getNullableToken());
+
+    {
+      mlir::Block *thenBlock =
+          rewriter.createBlock(&nullableDispatchOp.getNonNullRegion(), {},
+                               op.getType(), {op.getLoc()});
+      rewriter.setInsertionPointToStart(thenBlock);
+      rewriter.create<mlir::scf::YieldOp>(op.getLoc(),
+                                          thenBlock->getArgument(0));
+    }
+    {
+      mlir::Block *elseBlock =
+          rewriter.createBlock(&nullableDispatchOp.getNullRegion());
+      rewriter.setInsertionPointToStart(elseBlock);
+      auto allocatedToken =
+          rewriter.create<ReussirTokenAllocOp>(op.getLoc(), op.getType());
+      rewriter.create<mlir::scf::YieldOp>(op.getLoc(),
+                                          allocatedToken->getResults());
+    }
+    rewriter.replaceOp(op, nullableDispatchOp);
+    return mlir::success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -269,7 +300,8 @@ struct SCFOpsLoweringPass
 
     // Illegal operations
     target.addIllegalOp<ReussirNullableDispatchOp, ReussirRecordDispatchOp,
-                        ReussirScfYieldOp, ReussirClosureUniqifyOp>();
+                        ReussirScfYieldOp, ReussirClosureUniqifyOp,
+                        ReussirTokenEnsureOp>();
 
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
@@ -281,10 +313,12 @@ struct SCFOpsLoweringPass
 void populateSCFOpsLoweringConversionPatterns(
     mlir::RewritePatternSet &patterns) {
   // Add conversion patterns for Reussir SCF operations
-  patterns.add<ReussirNullableDispatchOpRewritePattern,
-               ReussirRecordDispatchOpRewritePattern,
-               ReussirClosureUniqifyOpRewritePattern,
-               ReussirScfYieldOpRewritePattern>(patterns.getContext());
+  patterns
+      .add<ReussirNullableDispatchOpRewritePattern,
+           ReussirRecordDispatchOpRewritePattern,
+           ReussirClosureUniqifyOpRewritePattern,
+           ReussirScfYieldOpRewritePattern, ReussirTokenEnsureOpRewritePattern>(
+          patterns.getContext());
 }
 
 } // namespace reussir

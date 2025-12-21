@@ -13,8 +13,6 @@
 #include "Reussir/IR/ReussirInterfaces.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "llvm/Support/Casting.h"
 
 #include <bit>
 #include <cstddef>
@@ -24,7 +22,10 @@
 #include <immer/set.hpp>
 #pragma GCC diagnostic pop
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/Support/Casting.h>
 #include <llvm/Support/xxhash.h>
+#include <mlir/Dialect/Arith/IR/Arith.h>
+#include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/Dominance.h>
 #include <mlir/IR/PatternMatch.h>
 #include <mlir/IR/Value.h>
@@ -135,16 +136,15 @@ bool possiblyInplaceReallocable(size_t oldAlign, size_t oldSize,
 // heuristic == 0: can reuse via realloc
 // heuristic > 0 : can reuse via ensure, larger is better
 // TODO: consider appreantly non-exclusive cases.
-int hueristic(TokenProducer producer, TokenAcceptor consumer,
-              mlir::AliasAnalysis &aliasAnalyzer) {
+int hueristic(TokenType producedType, mlir::TypedValue<RcType> producerRc,
+              TokenAcceptor consumer, mlir::AliasAnalysis &aliasAnalyzer) {
   // Under perfect match, we measure the locality score.
-  if (producer.getTokenType() == consumer.getTokenType()) {
-    ReussirRcDecOp dec = dyn_cast<ReussirRcDecOp>(producer.getOperation());
+  if (producedType == consumer.getTokenType()) {
     ReussirRcCreateOp create =
         dyn_cast<ReussirRcCreateOp>(consumer.getOperation());
     int localityScore = 1;
     // First, we do a very coarse grained copy avoidance analysis.
-    if (dec && create &&
+    if (producerRc && create &&
         mlir::isa<RecordType>(create.getRcPtr().getType().getElementType())) {
       // Check if any record field is assembled from a projection whose source
       // is aliased with the producer.
@@ -179,18 +179,17 @@ int hueristic(TokenProducer producer, TokenAcceptor consumer,
           if (auto borrow = llvm::dyn_cast_if_present<ReussirRcBorrowOp>(
                   root.getDefiningOp()))
             localityScore +=
-                aliasAnalyzer.alias(borrow.getRcPtr(), dec.getRcPtr()) ==
+                aliasAnalyzer.alias(borrow.getRcPtr(), producerRc) ==
                 mlir::AliasResult::MustAlias;
         }
       }
     }
     return localityScore;
   }
-  TokenType producerType = producer.getTokenType();
   TokenType consumerType = consumer.getTokenType();
-  size_t oldSize = producerType.getSize();
+  size_t oldSize = producedType.getSize();
   size_t newSize = consumerType.getSize();
-  size_t oldAlign = producerType.getAlign();
+  size_t oldAlign = producedType.getAlign();
   size_t newAlign = consumerType.getAlign();
   return possiblyInplaceReallocable(oldAlign, oldSize, newAlign, newSize) ? 0
                                                                           : -1;
@@ -304,6 +303,7 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
       }
 
       if (auto acceptor = dyn_cast<TokenAcceptor>(op)) {
+
         auto allocOp = llvm::dyn_cast_if_present<ReussirTokenAllocOp>(
             acceptor.getToken().getDefiningOp());
         if (allocOp && allocOp.getToken().hasOneUse()) {
@@ -314,11 +314,38 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
           for (auto tokenVal : availableTokens) {
             if (auto producer =
                     dyn_cast_or_null<TokenProducer>(tokenVal.getDefiningOp())) {
-              int score = hueristic(producer, acceptor, aliasAnalyzer);
+              ReussirRcDecOp producerAsDec =
+                  dyn_cast<ReussirRcDecOp>(producer.getOperation());
+              mlir::TypedValue<RcType> producerRc =
+                  producerAsDec ? producerAsDec.getRcPtr() : nullptr;
+              int score = hueristic(producer.getTokenType(), producerRc,
+                                    acceptor, aliasAnalyzer);
               if (score >= 0 && score > bestScore) {
                 bestScore = score;
                 bestToken = tokenVal;
                 bestRealloc = (score == 0);
+              }
+            }
+            if (auto scfIf = dyn_cast_or_null<mlir::scf::IfOp>(
+                    tokenVal.getDefiningOp())) {
+              if (scfIf->hasAttr(kExpandedDecrementAttr)) {
+                TokenType producedType = cast<TokenType>(
+                    cast<NullableType>(scfIf.getResult(0).getType())
+                        .getPtrTy());
+                mlir::Value condition = scfIf.getCondition();
+                auto cmp = cast<mlir::arith::CmpIOp>(condition.getDefiningOp());
+                auto rcFetchDec =
+                    llvm::dyn_cast_if_present<ReussirRcFetchDecOp>(
+                        cmp.getLhs().getDefiningOp());
+                mlir::TypedValue<RcType> producerRc =
+                    rcFetchDec ? rcFetchDec.getRcPtr() : nullptr;
+                int score = hueristic(producedType, producerRc, acceptor,
+                                      aliasAnalyzer);
+                if (score >= 0 && score > bestScore) {
+                  bestScore = score;
+                  bestToken = tokenVal;
+                  bestRealloc = (score == 0);
+                }
               }
             }
           }
