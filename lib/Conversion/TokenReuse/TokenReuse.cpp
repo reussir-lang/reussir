@@ -203,13 +203,7 @@ struct ValueHash {
     return llvm::xxHash64(bytes);
   }
 };
-
-using UnsyncPolicy =
-    immer::memory_policy<immer::default_heap_policy,
-                         immer::unsafe_refcount_policy, immer::no_lock_policy>;
-
-using ValueSet = immer::set<mlir::Value, ValueHash, std::equal_to<mlir::Value>,
-                            UnsyncPolicy>;
+using ValueSet = immer::set<mlir::Value, ValueHash, std::equal_to<mlir::Value>>;
 
 ValueSet intersect(const ValueSet &lhs, const ValueSet &rhs) {
   if (lhs.empty())
