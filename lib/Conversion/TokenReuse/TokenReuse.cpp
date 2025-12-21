@@ -12,15 +12,19 @@
 #include "Reussir/IR/ReussirInterfaces.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
+#include "immer/lock/no_lock_policy.hpp"
+#include "immer/memory_policy.hpp"
 #include "llvm/Support/raw_ostream.h"
 
 #include <bit>
 #include <cstddef>
+#include <functional>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#include <immer/flex_vector.hpp>
+#include <immer/set.hpp>
 #pragma GCC diagnostic pop
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/Support/xxhash.h>
 #include <mlir/IR/Dominance.h>
 #include <mlir/IR/PatternMatch.h>
 #include <mlir/IR/Value.h>
@@ -192,30 +196,32 @@ int hueristic(TokenProducer producer, TokenAcceptor consumer,
                                                                           : -1;
 }
 
-immer::flex_vector<mlir::Value>
-intersect(immer::flex_vector<mlir::Value> lhs,
-          const immer::flex_vector<mlir::Value> &rhs) {
+struct ValueHash {
+  uint64_t operator()(mlir::Value v) const {
+    void *ptr = v.getAsOpaquePointer();
+    auto bytes = std::bit_cast<std::array<uint8_t, sizeof(void *)>>(ptr);
+    return llvm::xxHash64(bytes);
+  }
+};
+
+using UnsyncPolicy =
+    immer::memory_policy<immer::default_heap_policy,
+                         immer::unsafe_refcount_policy, immer::no_lock_policy>;
+
+using ValueSet = immer::set<mlir::Value, ValueHash, std::equal_to<mlir::Value>,
+                            UnsyncPolicy>;
+
+ValueSet intersect(const ValueSet &lhs, const ValueSet &rhs) {
   if (lhs.empty())
     return lhs;
   if (rhs.empty())
     return rhs;
 
-  for (size_t i = lhs.size(); i > 0; --i) {
-    size_t idx = i - 1;
-    mlir::Value val = lhs[idx];
-    bool found = false;
-    // TODO: it should be fine for now.... Re consider this if we really
-    // have performance issue.
-    for (auto otherVal : rhs) {
-      if (val == otherVal) {
-        found = true;
-        break;
-      }
-    }
-    if (!found)
-      lhs = lhs.erase(idx);
-  }
-  return lhs;
+  ValueSet res = lhs;
+  for (auto val : lhs)
+    if (!rhs.count(val))
+      res = res.erase(val);
+  return res;
 }
 
 struct Reuse {
@@ -229,10 +235,11 @@ struct Free {
 };
 struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
   using Base::Base;
-  immer::flex_vector<mlir::Value> oneShotTokenReuse(
-      mlir::Region &region, immer::flex_vector<mlir::Value> availableTokens,
-      llvm::SmallVectorImpl<Reuse> &reuses, llvm::SmallVectorImpl<Free> &frees,
-      mlir::AliasAnalysis &aliasAnalyzer, mlir::DominanceInfo &domInfo) {
+  ValueSet oneShotTokenReuse(mlir::Region &region, ValueSet availableTokens,
+                             llvm::SmallVectorImpl<Reuse> &reuses,
+                             llvm::SmallVectorImpl<Free> &frees,
+                             mlir::AliasAnalysis &aliasAnalyzer,
+                             mlir::DominanceInfo &domInfo) {
     if (region.empty())
       return availableTokens;
 
@@ -253,7 +260,7 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
           oneShotTokenReuse(nestedRegion, {}, reuses, frees, aliasAnalyzer,
                             domInfo);
       } else if (auto branchOp = dyn_cast<mlir::RegionBranchOpInterface>(op)) {
-        llvm::SmallVector<immer::flex_vector<mlir::Value>> branchResults;
+        llvm::SmallVector<ValueSet> branchResults;
         for (auto &nestedRegion : op.getRegions())
           branchResults.push_back(
               oneShotTokenReuse(nestedRegion, availableTokens, reuses, frees,
@@ -264,20 +271,13 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
           // effective intersect with available token at parent
           // this rule out inner-scope created tokens from escaping parent
           // scope.
-          immer::flex_vector<mlir::Value> intersection = availableTokens;
+          ValueSet intersection = availableTokens;
           for (size_t i = 0; i < branchResults.size(); ++i)
             intersection = intersect(intersection, branchResults[i]);
 
           for (size_t i = 0; i < branchResults.size(); ++i) {
             for (auto val : branchResults[i]) {
-              bool inIntersection = false;
-              for (auto common : intersection) {
-                if (val == common) {
-                  inIntersection = true;
-                  break;
-                }
-              }
-              if (!inIntersection) {
+              if (!intersection.count(val)) {
                 mlir::Block &block = op.getRegion(i).front();
                 frees.push_back({val, block.getTerminator()});
               }
@@ -297,7 +297,7 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
             return {};
           }
           if (token.use_empty())
-            availableTokens = availableTokens.push_back(token);
+            availableTokens = availableTokens.insert(token);
         }
       }
 
@@ -306,25 +306,24 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
             acceptor.getToken().getDefiningOp());
         if (allocOp && allocOp.getToken().hasOneUse()) {
           int bestScore = -1;
-          int bestIdx = -1;
+          mlir::Value bestToken{};
           bool bestRealloc = false;
 
-          for (size_t i = 0; i < availableTokens.size(); ++i) {
-            mlir::Value tokenVal = availableTokens[i];
+          for (auto tokenVal : availableTokens) {
             if (auto producer =
                     dyn_cast_or_null<TokenProducer>(tokenVal.getDefiningOp())) {
               int score = hueristic(producer, acceptor, aliasAnalyzer);
               if (score >= 0 && score > bestScore) {
                 bestScore = score;
-                bestIdx = i;
+                bestToken = tokenVal;
                 bestRealloc = (score == 0);
               }
             }
           }
 
-          if (bestIdx != -1) {
-            mlir::Value selectedToken = availableTokens[bestIdx];
-            availableTokens = availableTokens.erase(bestIdx);
+          if (bestToken) {
+            mlir::Value selectedToken = bestToken;
+            availableTokens = availableTokens.erase(bestToken);
             reuses.push_back({selectedToken, bestRealloc, acceptor});
           }
         }
@@ -341,12 +340,11 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
     }
 
     mlir::Operation *terminator = region.front().getTerminator();
-    for (size_t i = availableTokens.size(); i > 0; --i) {
-      size_t idx = i - 1;
-      mlir::Value token = availableTokens[idx];
-      if (!domInfo.properlyDominates(token, region.getParentOp())) {
+    for (auto token : availableTokens) {
+      if (!region.getParentOp() ||
+          !domInfo.properlyDominates(token, region.getParentOp())) {
         frees.push_back({token, terminator});
-        availableTokens = availableTokens.erase(idx);
+        availableTokens = availableTokens.erase(token);
       }
     }
     return availableTokens;
