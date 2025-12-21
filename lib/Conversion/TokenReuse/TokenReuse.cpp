@@ -21,8 +21,7 @@
 #include <immer/flex_vector.hpp>
 #pragma GCC diagnostic pop
 #include <llvm/ADT/SmallVector.h>
-#include <llvm/Support/Casting.h>
-#include <mlir/IR/Operation.h>
+#include <mlir/IR/Dominance.h>
 #include <mlir/IR/PatternMatch.h>
 #include <mlir/IR/Value.h>
 #include <mlir/IR/ValueRange.h>
@@ -234,17 +233,24 @@ using Set = struct TokenReusePass
   immer::flex_vector<mlir::Value> oneShotTokenReuse(
       mlir::Region &region, immer::flex_vector<mlir::Value> availableTokens,
       llvm::SmallVectorImpl<Reuse> &reuses, llvm::SmallVectorImpl<Free> &frees,
-      mlir::AliasAnalysis &aliasAnalyzer) {
+      mlir::AliasAnalysis &aliasAnalyzer, mlir::DominanceInfo &domInfo) {
     if (region.empty())
       return availableTokens;
+
+    if (!region.hasOneBlock()) {
+      region.getParentOp()->emitOpError()
+          << "Token reuse pass only supports single block regions (SCF)";
+      signalPassFailure();
+      return {};
+    }
 
     for (auto &op : region.front()) {
       if (auto branchOp = dyn_cast<mlir::RegionBranchOpInterface>(op)) {
         llvm::SmallVector<immer::flex_vector<mlir::Value>> branchResults;
-        for (auto &nestedRegion : op.getRegions()) {
-          branchResults.push_back(oneShotTokenReuse(
-              nestedRegion, availableTokens, reuses, frees, aliasAnalyzer));
-        }
+        for (auto &nestedRegion : op.getRegions())
+          branchResults.push_back(
+              oneShotTokenReuse(nestedRegion, availableTokens, reuses, frees,
+                                aliasAnalyzer, domInfo));
         if (branchResults.empty()) {
           llvm::errs() << "[WARN] RegionBranch with no regions?\n";
         } else {
@@ -253,8 +259,11 @@ using Set = struct TokenReusePass
                        const immer::flex_vector<mlir::Value> &b) {
                       return a.size() < b.size();
                     });
-          immer::flex_vector<mlir::Value> intersection = branchResults[0];
-          for (size_t i = 1; i < branchResults.size(); ++i)
+          // effective intersect with available token at parent
+          // this rule out inner-scope created tokens from escaping parent
+          // scope.
+          immer::flex_vector<mlir::Value> intersection = availableTokens;
+          for (size_t i = 0; i < branchResults.size(); ++i)
             intersection = intersect(intersection, branchResults[i]);
 
           for (size_t i = 0; i < branchResults.size(); ++i) {
@@ -282,7 +291,8 @@ using Set = struct TokenReusePass
           frees.push_back({token, &op});
         availableTokens = {};
         for (auto &nestedRegion : op.getRegions())
-          oneShotTokenReuse(nestedRegion, {}, reuses, frees, aliasAnalyzer);
+          oneShotTokenReuse(nestedRegion, {}, reuses, frees, aliasAnalyzer,
+                            domInfo);
       }
 
       if (auto producer = dyn_cast<TokenProducer>(op)) {
@@ -337,6 +347,16 @@ using Set = struct TokenReusePass
         }
       }
     }
+
+    mlir::Operation *terminator = region.front().getTerminator();
+    for (size_t i = availableTokens.size(); i > 0; --i) {
+      size_t idx = i - 1;
+      mlir::Value token = availableTokens[idx];
+      if (!domInfo.properlyDominates(token, region.getParentOp())) {
+        frees.push_back({token, terminator});
+        availableTokens = availableTokens.erase(idx);
+      }
+    }
     return availableTokens;
   }
 
@@ -345,13 +365,10 @@ using Set = struct TokenReusePass
     llvm::SmallVector<Free> frees;
     mlir::AliasAnalysis aliasAnalyzer(getOperation());
     reussir::registerAliasAnalysisImplementations(aliasAnalyzer);
+    mlir::DominanceInfo domInfo(getOperation());
 
     for (auto &region : getOperation()->getRegions()) {
-      auto remaining =
-          oneShotTokenReuse(region, {}, reuses, frees, aliasAnalyzer);
-      for (auto token : remaining)
-        if (!region.empty())
-          frees.push_back({token, region.back().getTerminator()});
+      oneShotTokenReuse(region, {}, reuses, frees, aliasAnalyzer, domInfo);
     }
 
     mlir::IRRewriter rewriter(getOperation());
