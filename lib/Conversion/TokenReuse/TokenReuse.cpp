@@ -300,7 +300,9 @@ using Set = struct TokenReusePass
       }
 
       if (auto acceptor = dyn_cast<TokenAcceptor>(op)) {
-        if (!acceptor.hasToken()) {
+        auto allocOp = llvm::dyn_cast_if_present<ReussirTokenAllocOp>(
+            acceptor.getToken().getDefiningOp());
+        if (allocOp && allocOp.getToken().hasOneUse()) {
           int bestScore = -1;
           int bestIdx = -1;
           bool bestRealloc = false;
@@ -366,6 +368,11 @@ using Set = struct TokenReusePass
         newToken = rewriter.create<ReussirTokenEnsureOp>(
             reuse.anchor->getLoc(), targetType, reuse.token);
       reuse.anchor.assignToken(newToken);
+      auto allocOp = llvm::cast<ReussirTokenAllocOp>(
+          reuse.anchor.getToken().getDefiningOp());
+      assert(allocOp->hasOneUse() &&
+             "TokenAlloc should have only one use after reuse");
+      rewriter.eraseOp(allocOp);
     }
 
     for (const auto &free : frees) {
