@@ -285,7 +285,7 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
           availableTokens = intersection;
         }
         if (auto scfIf = dyn_cast<mlir::scf::IfOp>(op))
-          if (scfIf->hasAttr(kExpandedDecrementAttr))
+          if (scfIf->hasAttr(kExpandedDecrementAttr) && scfIf->use_empty())
             availableTokens = availableTokens.insert(scfIf.getResult(0));
       }
 

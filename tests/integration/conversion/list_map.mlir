@@ -2,12 +2,14 @@
 // RUN: --reussir-token-instantiation \
 // RUN: --reussir-closure-outlining \
 // RUN: --reussir-lowering-region-patterns \
+// RUN: --reussir-inc-dec-cancellation \
 // RUN: --reussir-rc-decrement-expansion \
 // RUN: --reussir-infer-variant-tag \
 // RUN: --reussir-drop-expansion \
-// RUN: --reussir-drop-expansion='expand-decrement=1 outline-record=1' \
-// RUN: --reussir-inc-dec-cancellation \
 // RUN: --reussir-lowering-scf-ops \
+// RUN: --reussir-inc-dec-cancellation \
+// RUN: --reussir-token-reuse \
+// RUN: --reussir-drop-expansion='expand-decrement=1 outline-record=1' \
 // RUN: --reussir-token-reuse \
 // RUN: --reussir-compile-polymorphic-ffi \
 // RUN: --convert-scf-to-cf \
@@ -18,7 +20,7 @@
 // RUN: %llc -relocation-model=pic -filetype=obj -o %t.o
 // RUN: %cc %t.o %S/print_i64.c -o %t.exe -L%library_path -lreussir_rt \
 // RUN:    -Wl,-rpath,%library_path %extra_sys_libs
-// RUN: %t.exe | FileCheck %s
+// RUN: %t.exe | %FileCheck %s
 // CHECK: 01232345
 !rc_i64 = !reussir.rc<i64>
 !list_cons = !reussir.record<compound "list.cons" {[shared] i64, [shared] !reussir.record<variant "list" incomplete>}>
