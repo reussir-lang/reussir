@@ -137,7 +137,7 @@ int hueristic(TokenProducer producer, TokenAcceptor consumer,
   if (producer.getTokenType() == consumer.getTokenType()) {
     ReussirRcDecOp dec = dyn_cast<ReussirRcDecOp>(producer.getOperation());
     ReussirRcCreateOp create =
-        dyn_cast<ReussirRcCreateOp>(producer.getOperation());
+        dyn_cast<ReussirRcCreateOp>(consumer.getOperation());
     int localityScore = 1;
     // First, we do a very coarse grained copy avoidance analysis.
     if (dec && create &&
@@ -227,8 +227,7 @@ struct Free {
   mlir::Value token;
   mlir::Operation *anchor;
 };
-using Set = struct TokenReusePass
-    : public impl::ReussirTokenReusePassBase<TokenReusePass> {
+struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
   using Base::Base;
   immer::flex_vector<mlir::Value> oneShotTokenReuse(
       mlir::Region &region, immer::flex_vector<mlir::Value> availableTokens,
@@ -245,7 +244,15 @@ using Set = struct TokenReusePass
     }
 
     for (auto &op : region.front()) {
-      if (auto branchOp = dyn_cast<mlir::RegionBranchOpInterface>(op)) {
+      if (isa<mlir::CallOpInterface>(op) ||
+          isa<mlir::LoopLikeOpInterface>(op)) {
+        for (auto token : availableTokens)
+          frees.push_back({token, &op});
+        availableTokens = {};
+        for (auto &nestedRegion : op.getRegions())
+          oneShotTokenReuse(nestedRegion, {}, reuses, frees, aliasAnalyzer,
+                            domInfo);
+      } else if (auto branchOp = dyn_cast<mlir::RegionBranchOpInterface>(op)) {
         llvm::SmallVector<immer::flex_vector<mlir::Value>> branchResults;
         for (auto &nestedRegion : op.getRegions())
           branchResults.push_back(
@@ -254,11 +261,6 @@ using Set = struct TokenReusePass
         if (branchResults.empty()) {
           llvm::errs() << "[WARN] RegionBranch with no regions?\n";
         } else {
-          std::sort(branchResults.begin(), branchResults.end(),
-                    [](const immer::flex_vector<mlir::Value> &a,
-                       const immer::flex_vector<mlir::Value> &b) {
-                      return a.size() < b.size();
-                    });
           // effective intersect with available token at parent
           // this rule out inner-scope created tokens from escaping parent
           // scope.
@@ -283,16 +285,6 @@ using Set = struct TokenReusePass
           }
           availableTokens = intersection;
         }
-      }
-
-      if (isa<mlir::CallOpInterface>(op) ||
-          isa<mlir::LoopLikeOpInterface>(op)) {
-        for (auto token : availableTokens)
-          frees.push_back({token, &op});
-        availableTokens = {};
-        for (auto &nestedRegion : op.getRegions())
-          oneShotTokenReuse(nestedRegion, {}, reuses, frees, aliasAnalyzer,
-                            domInfo);
       }
 
       if (auto producer = dyn_cast<TokenProducer>(op)) {
@@ -378,6 +370,7 @@ using Set = struct TokenReusePass
       TokenType targetType = reuse.anchor.getTokenType();
 
       mlir::Value newToken;
+      mlir::Value oldToken = reuse.anchor.getToken();
       if (reuse.realloc)
         newToken = rewriter.create<ReussirTokenReallocOp>(
             reuse.anchor->getLoc(), targetType, reuse.token);
@@ -385,10 +378,7 @@ using Set = struct TokenReusePass
         newToken = rewriter.create<ReussirTokenEnsureOp>(
             reuse.anchor->getLoc(), targetType, reuse.token);
       reuse.anchor.assignToken(newToken);
-      auto allocOp = llvm::cast<ReussirTokenAllocOp>(
-          reuse.anchor.getToken().getDefiningOp());
-      assert(allocOp->hasOneUse() &&
-             "TokenAlloc should have only one use after reuse");
+      auto allocOp = llvm::cast<ReussirTokenAllocOp>(oldToken.getDefiningOp());
       rewriter.eraseOp(allocOp);
     }
 
