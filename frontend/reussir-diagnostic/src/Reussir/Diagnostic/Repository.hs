@@ -1,4 +1,8 @@
-module Reussir.Diagnostic.Repository where
+module Reussir.Diagnostic.Repository (
+    Repository,
+    createRepository,
+    lookupRepository,
+) where
 
 import Data.Function ((&))
 import Data.HashMap.Lazy as LazyHM
@@ -26,10 +30,10 @@ createRepository paths = do
         pure (p, File p text (fromFile text))
     pure . Repository $ LazyHM.fromList files
 
-lookup ::
+lookupRepository ::
     Repository ->
     (FilePath, Int64, Int64) ->
     [SelectedLine]
-lookup (Repository table) (path, s, e) =
+lookupRepository (Repository table) (path, s, e) =
     LazyHM.lookup path table
         & maybe [] (\f -> selectLines (fileLineCache f) s e)

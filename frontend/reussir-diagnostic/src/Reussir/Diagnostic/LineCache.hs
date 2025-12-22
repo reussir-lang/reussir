@@ -13,8 +13,8 @@ data SelectedLine = SelectedLine
     , lineText :: LazyText.Text
     , lineStartOffset :: Int64
     , lineEndOffset :: Int64
-    , lineScopeStart :: Int64
-    , lineScopeEnd :: Int64
+    , lineColStart :: Int64 -- inclusive
+    , lineColEnd :: Int64 -- inclusive
     }
     deriving (Show, Eq)
 
@@ -35,14 +35,14 @@ selectLines (LineCache cache) charStart charEnd
             , lineText = txt
             , lineStartOffset = start
             , lineEndOffset = lineEnd
-            , lineScopeStart = scopeStart
-            , lineScopeEnd = scopeEnd
+            , lineColStart = scopeStart
+            , lineColEnd = scopeEnd
             }
         | (lineNo, (start_, txt)) <- zip [1 ..] (IntMap.toAscList cache)
         , let start = fromIntegral start_
         , let lineEnd = start + LazyText.length txt
         , lineEnd > charStart
         , start < charEnd
-        , let scopeStart = max 0 (charStart - start)
+        , let scopeStart = 1 + max 0 (charStart - start)
         , let scopeEnd = min (LazyText.length txt) (charEnd - start)
         ]
