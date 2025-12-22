@@ -3,6 +3,7 @@
 module Reussir.Diagnostic.Display where
 
 import Data.Int (Int64)
+import Data.Maybe (isJust)
 import Data.String (fromString)
 import Data.Text.Builder.Linear (Builder, fromChar, fromText, runBuilder)
 import Data.Text.IO qualified as TextIO
@@ -25,9 +26,9 @@ verticalLine :: TableCodec -> Char
 verticalLine Standard = '|'
 verticalLine Extended = '│'
 
-horitonzalLine :: TableCodec -> Char
-horitonzalLine Standard = '-'
-horitonzalLine Extended = '─'
+horizontalLine :: TableCodec -> Char
+horizontalLine Standard = '-'
+horizontalLine Extended = '─'
 
 dashedVerticalLine :: TableCodec -> Char
 dashedVerticalLine Standard = '|'
@@ -111,6 +112,7 @@ data FormatEnv = FormatEnv
     , indentationWidth :: Int64
     , ignoreSGR :: Bool
     , repository :: Repository
+    , skipNextIndent :: Bool
     }
     deriving (Show)
 
@@ -127,11 +129,12 @@ createFmtEnv tc indentWidth ignore repo =
         , indentationWidth = indentWidth
         , ignoreSGR = ignore
         , repository = repo
+        , skipNextIndent = False
         }
 
 incIndentation :: FormatEnv -> FormatEnv
 incIndentation env =
-    env{indentation = indentation env + indentationWidth env}
+    env{indentation = indentation env + indentationWidth env, skipNextIndent = False}
 
 sgrBuilder :: [SGR] -> FormatEnv -> Builder -> Builder
 sgrBuilder sgr env builder =
@@ -156,16 +159,19 @@ labelToBuilder env label =
     sgrBuilder [labelToSGR label] env (labelToBuilderText env label)
 
 indentBuilder :: FormatEnv -> Builder
-indentBuilder env = fromString (replicate (fromIntegral (indentation env)) ' ')
+indentBuilder env =
+    if skipNextIndent env
+        then mempty
+        else fromString (replicate (fromIntegral (indentation env)) ' ')
 
 formatToBuilder :: FormatEnv -> Report -> Builder
 formatToBuilder _ ReportNil = mempty
 formatToBuilder env (ReportSeq r1 r2) =
-    formatToBuilder env r1 <> "\n" <> formatToBuilder env r2
+    formatToBuilder env r1 <> "\n" <> formatToBuilder (env{skipNextIndent = False}) r2
 formatToBuilder env (Nested rpt) =
     formatToBuilder (incIndentation env) rpt
 formatToBuilder env (Labeled label rpt) =
-    indentBuilder env <> labelToBuilder env label <> fromChar ' ' <> formatToBuilder env rpt
+    indentBuilder env <> labelToBuilder env label <> fromChar ' ' <> formatToBuilder (env{skipNextIndent = True}) rpt
 formatToBuilder env (FormattedText segments) =
     indentBuilder env <> mconcat [sgrBuilder sgr env (fromText $ textContent txt) | txt <- segments, let sgr = textFormats txt]
 formatToBuilder env (CodeRef ref maybeText) =
@@ -204,7 +210,7 @@ formatToBuilder env (CodeRef ref maybeText) =
 
     gutter :: Maybe Int64 -> Builder
     gutter maybeLineNum =
-        indentBuilder env
+        indentBuilder (env{skipNextIndent = False})
             <> sgrBuilder
                 [ANSI.SetColor ANSI.Foreground ANSI.Dull ANSI.White]
                 env
@@ -263,21 +269,22 @@ formatToBuilder env (CodeRef ref maybeText) =
     renderCaret :: Builder
     renderCaret =
         case selectedLines of
-            [line] ->
-                let start = (lineColStart line) - 1
-                    len = fromIntegral (lineColEnd line) - start
-                    spaces = fromString (replicate (fromIntegral start) ' ')
-                    connector =
-                        if len == 1
-                            then fromChar (bottomTee (formatConfigTableCodec env))
-                            else
-                                fromChar (roundLLCorner (formatConfigTableCodec env))
-                                    <> fromString (replicate (fromIntegral len - 2) (horitonzalLine (formatConfigTableCodec env)))
-                                    <> fromChar (roundLRCorner (formatConfigTableCodec env))
-                    msg = case maybeText of
-                        Nothing -> mempty
-                        Just twf -> fromChar ' ' <> sgrBuilder (textFormats twf) env (fromText (textContent twf))
-                 in gutter Nothing <> spaces <> sgrBuilder (codeFormats ref) env connector <> msg
+            [line]
+                | isJust maybeText ->
+                    let start = (lineColStart line) - 1
+                        len = fromIntegral (lineColEnd line) - start
+                        spaces = fromString (replicate (fromIntegral start) ' ')
+                        connector =
+                            if len == 1
+                                then fromChar (bottomTee (formatConfigTableCodec env))
+                                else
+                                    fromChar (roundLLCorner (formatConfigTableCodec env))
+                                        <> fromString (replicate (fromIntegral len - 2) (horizontalLine (formatConfigTableCodec env)))
+                                        <> fromChar (roundLRCorner (formatConfigTableCodec env))
+                        msg = case maybeText of
+                            Nothing -> mempty
+                            Just twf -> fromChar ' ' <> sgrBuilder (textFormats twf) env (fromText (textContent twf))
+                     in gutter Nothing <> spaces <> sgrBuilder (codeFormats ref) env connector <> msg
             _ ->
                 case maybeText of
                     Nothing -> mempty
