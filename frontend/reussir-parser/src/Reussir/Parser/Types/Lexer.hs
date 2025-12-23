@@ -29,7 +29,7 @@ instance Show Identifier where
 -- Useful for tracking the location of parsed elements in the source code.
 data WithSpan a = WithSpan
     { spanValue :: a                                  -- ^ The wrapped value
-    , spanStartOffset :: {-# UNPACK #-} !Int64        -- ^ The byte offset where the span starts
-    , spanEndOffset :: {-# UNPACK #-} !Int64          -- ^ The byte offset where the span ends
+    , spanStartOffset :: {-# UNPACK #-} !Int64        -- ^ The character offset where the span starts
+    , spanEndOffset :: {-# UNPACK #-} !Int64          -- ^ The character offset where the span ends
     }
     deriving (Show)
