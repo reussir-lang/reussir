@@ -3,11 +3,7 @@ module Reussir.Parser.Types.Expr where
 import Data.List
 import Data.Scientific (Scientific)
 import Data.Text qualified as T
-
-newtype Identifier = Identifier {unIdentifier :: T.Text}
-
-instance Show Identifier where
-    show (Identifier name) = '$' : T.unpack name
+import Reussir.Parser.Types.Type (Identifier (..))
 
 data Typename = Typename Identifier [Typename] | Arr Typename Typename
 

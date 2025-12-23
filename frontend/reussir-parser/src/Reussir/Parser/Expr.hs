@@ -11,6 +11,7 @@ import Data.Scientific (Scientific)
 import Data.Text qualified as T
 import Reussir.Parser.Types
 import Reussir.Parser.Types.Expr
+import Reussir.Parser.Types.Type (Identifier (..))
 import Text.Megaparsec.Char.Lexer (charLiteral)
 import Text.Megaparsec.Char.Lexer qualified as Lexer
 import Unicode.Char qualified as U

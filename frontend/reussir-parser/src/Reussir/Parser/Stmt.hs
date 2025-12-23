@@ -7,6 +7,7 @@ import Reussir.Parser.Expr
 import Reussir.Parser.Types
 import Reussir.Parser.Types.Expr
 import Reussir.Parser.Types.Stmt
+import Reussir.Parser.Types.Type (Identifier)
 
 parseVis :: Parser Visibility
 parseVis =
