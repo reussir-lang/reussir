@@ -1,15 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# OPTIONS_GHC -Wno-orphans #-}
 
 module Reussir.Parser.LexerSpec (spec) where
 
-import Reussir.Parser.Lexer
-import Reussir.Parser.Types.Lexer
+import Data.Either (isLeft)
+
 import Test.Hspec
 import Test.Hspec.Megaparsec
 import Text.Megaparsec
 
-import Data.Either (isLeft)
+import Reussir.Parser.Lexer
+import Reussir.Parser.Types.Lexer
 
 spec :: Spec
 spec = do
