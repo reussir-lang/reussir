@@ -5,11 +5,13 @@ import Data.List (intercalate)
 import Data.Text qualified as T
 
 newtype Identifier = Identifier {unIdentifier :: T.Text}
+    deriving (Eq)
 
 data Path = Path
     { pathBasename :: Identifier
     , pathSegments :: [Identifier]
     }
+    deriving (Eq)
 
 instance Show Path where
     show (Path base segs) =
@@ -19,8 +21,8 @@ instance Show Identifier where
     show (Identifier name) = '$' : T.unpack name
 
 data WithSpan a = WithSpan
-    { wsValue :: a
-    , spanStartOffset :: {-# UNPACK #-}  !Int64
+    { spanValue :: a
+    , spanStartOffset :: {-# UNPACK #-} !Int64
     , spanEndOffset :: {-# UNPACK #-} !Int64
     }
     deriving (Show)

@@ -4,7 +4,7 @@ import Data.Functor (($>))
 import Data.Scientific (Scientific)
 import Data.Text qualified as T
 import Reussir.Parser.Types
-import Reussir.Parser.Types.Lexer (Identifier (..), WithSpan (..))
+import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
 import Text.Megaparsec.Char.Lexer (charLiteral)
 import Text.Megaparsec.Char.Lexer qualified as Lexer
 import Unicode.Char qualified as U
@@ -83,3 +83,11 @@ withSpan p = do
     val <- p
     end <- fmap fromIntegral getOffset
     return $ WithSpan val start end
+
+-- `::` separated identifiers, e.g., `std::io::File`
+parsePath :: Parser Path
+parsePath = do
+    ids <- parseIdentifier `sepBy1` doubleColon
+    let segments = init ids
+    let basename = last ids
+    return (Path basename segments)
