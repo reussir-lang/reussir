@@ -12,8 +12,13 @@ instance Show Identifier where
 data Typename = Typename Identifier [Typename] | Arr Typename Typename
 
 instance Show Typename where
-    show (Typename name []) = '@' : show name
-    show (Typename name args) = '@' : show name ++ "<" ++ intercalate ", " (map show args) ++ ">"
+    show (Typename name []) = '@' : T.unpack (unIdentifier name)
+    show (Typename name args) =
+        '@'
+            : T.unpack (unIdentifier name)
+            ++ "<"
+            ++ intercalate ", " (map show args)
+            ++ ">"
     show (Arr a b) = "(" ++ show a ++ " -> " ++ show b ++ ")"
 
 data Pattern = Pattern Identifier Identifier [Identifier]
