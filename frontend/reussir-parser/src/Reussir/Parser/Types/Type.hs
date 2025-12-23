@@ -2,21 +2,7 @@ module Reussir.Parser.Types.Type where
 
 import Data.Int (Int8)
 import Data.List (intercalate)
-import Data.Text qualified as T
-
-newtype Identifier = Identifier {unIdentifier :: T.Text}
-
-data Path = Path
-    { pathBasename :: Identifier
-    , pathSegments :: [Identifier]
-    }
-
-instance Show Path where
-    show (Path base segs) =
-        intercalate "::" (map show (segs ++ [base]))
-
-instance Show Identifier where
-    show (Identifier name) = '$' : T.unpack name
+import Reussir.Parser.Types.Lexer (Path (..))
 
 data IntegralType
     = Signed {-# UNPACK #-} !Int8
@@ -27,23 +13,21 @@ instance Show IntegralType where
     show (Unsigned bits) = "u" ++ show bits
 
 data FloatingPointType
-    = FP16
-    | FP32
-    | FP64
-    | FP128
+    = IEEEFloat !Int8
+    | BFloat16
+    | Float8 -- TODO
 
 instance Show FloatingPointType where
-    show FP16 = "f16"
-    show FP32 = "f32"
-    show FP64 = "f64"
-    show FP128 = "f128"
+    show (IEEEFloat bits) = "f" ++ show bits
+    show BFloat16 = "bfloat16"
+    show Float8 = "float8"
 
 data Type
     = TypeExpr Path [Type]
     | TypeIntegral IntegralType
     | TypeFP FloatingPointType
     | TypeBool
-    | TypeString
+    | TypeStr
     | TypeUnit
 
 instance Show Type where
@@ -56,5 +40,5 @@ instance Show Type where
     show (TypeIntegral it) = show it
     show (TypeFP fpt) = show fpt
     show TypeBool = "bool"
-    show TypeString = "string"
+    show TypeStr = "str"
     show TypeUnit = "unit"

@@ -61,13 +61,16 @@ executable reussir-frontend
     main-is:          Main.hs
 
     -- Modules included in this executable, other than Main.
-    other-modules:    Reussir.Parser.Expr
+    other-modules:    Reussir.Parser.Lexer
+                      Reussir.Parser.Type
+                      Reussir.Parser.Expr
                       Reussir.Parser.Stmt
                       Reussir.Parser.Prog
                       Reussir.Parser.Types
                       Reussir.Parser.Types.Expr
                       Reussir.Parser.Types.Stmt
                       Reussir.Parser.Types.Type
+                      Reussir.Parser.Types.Lexer
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
