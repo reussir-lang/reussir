@@ -6,6 +6,5 @@ import Reussir.Parser.Types.Stmt
 
 type Prog = [Stmt]
 
-parseProg :: Parser Prog 
+parseProg :: Parser Prog
 parseProg = space *> many parseStmt <* eof
-

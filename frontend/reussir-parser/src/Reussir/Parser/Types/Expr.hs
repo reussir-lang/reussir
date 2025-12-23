@@ -2,7 +2,7 @@ module Reussir.Parser.Types.Expr where
 
 import Data.List
 
-newtype Identifier = Identifier { unIdentifier :: String }
+newtype Identifier = Identifier {unIdentifier :: String}
 
 instance Show Identifier where
     show (Identifier name) = '$' : name
@@ -10,9 +10,9 @@ instance Show Identifier where
 data Typename = Typename String [Typename] | Arr Typename Typename
 
 instance Show Typename where
-    show (Typename name [])   = '@' : name
+    show (Typename name []) = '@' : name
     show (Typename name args) = '@' : name ++ "<" ++ intercalate ", " (map show args) ++ ">"
-    show (Arr a b)            = "(" ++ show a ++ " -> " ++ show b ++ ")"
+    show (Arr a b) = "(" ++ show a ++ " -> " ++ show b ++ ")"
 
 data Pattern = Pattern Identifier Identifier [Identifier]
 
@@ -25,11 +25,24 @@ data Constant
     | ConstDouble Double
     | ConstString String
     | ConstBool Bool
-    deriving Show
+    deriving (Show)
 
-data BinaryOp = Add | Sub | Mul | Div | Mod | Lt | Gt | Lte | Gte | Equ | Neq 
-              | And | Or deriving Show
-data UnaryOp  = Negate | Not deriving Show
+data BinaryOp
+    = Add
+    | Sub
+    | Mul
+    | Div
+    | Mod
+    | Lt
+    | Gt
+    | Lte
+    | Gte
+    | Equ
+    | Neq
+    | And
+    | Or
+    deriving (Show)
+data UnaryOp = Negate | Not deriving (Show)
 
 data Expr
     = ConstExpr Constant
@@ -41,4 +54,4 @@ data Expr
     | FuncCall Identifier [Expr]
     | Lambda Identifier Typename Expr
     | Match Expr [(Pattern, Expr)]
-    deriving Show
+    deriving (Show)
