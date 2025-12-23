@@ -91,7 +91,12 @@ parseFloatSuffix :: Parser ()
 parseFloatSuffix = choice [string ('f' : show @Int s) | s <- [16, 32, 64]] *> space
 
 parseInt :: Parser Int
-parseInt = read <$> some digitChar <* optional parseIntSuffix <* space
+parseInt = try $ do
+    n <- some digitChar
+    notFollowedBy (char '.' <|> char 'e' <|> char 'E')
+    _ <- optional parseIntSuffix
+    space
+    return (read n)
 
 parseDouble :: Parser Scientific
 parseDouble = Lexer.scientific <* optional parseFloatSuffix <* space
@@ -152,8 +157,8 @@ parseMatch = do
 
 parseConstant :: Parser Constant
 parseConstant =
-    try (ConstDouble <$> parseDouble)
-        <|> (ConstInt <$> parseInt)
+    try (ConstInt <$> parseInt)
+        <|> (ConstDouble <$> parseDouble)
         <|> (ConstString <$> parseString)
         <|> (ConstBool <$> parseBool)
         <|> (ConstID <$> parseIdentifier)
