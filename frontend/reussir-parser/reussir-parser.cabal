@@ -75,6 +75,9 @@ executable reussir-frontend
     build-depends:    base ^>=4.20.0.0,
                       megaparsec,
                       parser-combinators,
+                      scientific,
+                      text,
+                      unicode-data,
                       inline-c,
                       inline-c-cpp
 

@@ -1,17 +1,19 @@
 module Reussir.Parser.Types.Expr where
 
 import Data.List
+import Data.Scientific (Scientific)
+import Data.Text qualified as T
 
-newtype Identifier = Identifier {unIdentifier :: String}
+newtype Identifier = Identifier {unIdentifier :: T.Text}
 
 instance Show Identifier where
-    show (Identifier name) = '$' : name
+    show (Identifier name) = '$' : T.unpack name
 
-data Typename = Typename String [Typename] | Arr Typename Typename
+data Typename = Typename Identifier [Typename] | Arr Typename Typename
 
 instance Show Typename where
-    show (Typename name []) = '@' : name
-    show (Typename name args) = '@' : name ++ "<" ++ intercalate ", " (map show args) ++ ">"
+    show (Typename name []) = '@' : show name
+    show (Typename name args) = '@' : show name ++ "<" ++ intercalate ", " (map show args) ++ ">"
     show (Arr a b) = "(" ++ show a ++ " -> " ++ show b ++ ")"
 
 data Pattern = Pattern Identifier Identifier [Identifier]
@@ -22,8 +24,8 @@ instance Show Pattern where
 data Constant
     = ConstInt Int
     | ConstID Identifier
-    | ConstDouble Double
-    | ConstString String
+    | ConstDouble Scientific
+    | ConstString T.Text
     | ConstBool Bool
     deriving (Show)
 

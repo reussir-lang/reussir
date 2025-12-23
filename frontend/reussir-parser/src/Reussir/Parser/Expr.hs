@@ -7,8 +7,13 @@ import Control.Monad.Combinators.Expr
 import Data.Functor
 import Data.Maybe
 
+import Data.Scientific (Scientific)
+import Data.Text qualified as T
 import Reussir.Parser.Types
 import Reussir.Parser.Types.Expr
+import Text.Megaparsec.Char.Lexer (charLiteral)
+import Text.Megaparsec.Char.Lexer qualified as Lexer
+import Unicode.Char qualified as U
 
 colon :: Parser ()
 colon = char ':' *> space
@@ -56,7 +61,7 @@ parsePattern = do
 
 parseTypenameTerm :: Parser Typename
 parseTypenameTerm = do
-    prefix <- fmap unIdentifier parseIdentifier
+    prefix <- parseIdentifier
     suffix <- optional parseTypenameParams
 
     return (Typename prefix (fromMaybe [] suffix))
@@ -75,10 +80,9 @@ parseTypenameParams = openAngle *> parseTypename `sepBy1` comma <* closeAngle
 
 parseIdentifier :: Parser Identifier
 parseIdentifier = do
-    first <- letterChar <|> char '_'
-    rest <- many (alphaNumChar <|> char '_') <* space
-
-    return $ Identifier (first : rest)
+    first <- satisfy U.isXIDStart
+    rest <- many (satisfy U.isXIDContinue) <* space
+    pure $ Identifier $ T.pack (first : rest)
 
 parseIntSuffix :: Parser ()
 parseIntSuffix = choice [string ('u' : show @Int s) | s <- [8, 16, 32, 64]] *> space
@@ -89,14 +93,12 @@ parseFloatSuffix = choice [string ('f' : show @Int s) | s <- [16, 32, 64]] *> sp
 parseInt :: Parser Int
 parseInt = read <$> some digitChar <* optional parseIntSuffix <* space
 
-parseDouble :: Parser Double
-parseDouble = do
-    first <- some digitChar
-    rest <- char '.' *> some digitChar <* optional parseFloatSuffix <* space
-    return $ read (first ++ "." ++ rest)
+parseDouble :: Parser Scientific
+parseDouble = Lexer.scientific <* optional parseFloatSuffix <* space
 
-parseString :: Parser String
-parseString = char '"' *> some asciiChar <* char '"' <* space
+parseString :: Parser T.Text
+parseString =
+    T.pack <$> (char '"' *> manyTill charLiteral (char '"') <* space)
 
 parseBool :: Parser Bool
 parseBool =
