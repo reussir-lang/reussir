@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Reussir.Parser.Lexer where
 
 import Data.Functor (($>))
@@ -49,10 +51,10 @@ parseIdentifier = do
     pure $ Identifier $ T.pack (first : rest)
 
 parseIntSuffix :: Parser ()
-parseIntSuffix = choice [string ('u' : show @Int s) | s <- [8, 16, 32, 64]] *> space
+parseIntSuffix = choice [string $ T.pack ('u' : show @Int s) | s <- [8, 16, 32, 64]] *> space
 
 parseFloatSuffix :: Parser ()
-parseFloatSuffix = choice [string ('f' : show @Int s) | s <- [16, 32, 64]] *> space
+parseFloatSuffix = choice [string $ T.pack ('f' : show @Int s) | s <- [16, 32, 64]] *> space
 
 parseInt :: Parser Int
 parseInt = try $ do

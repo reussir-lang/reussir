@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Reussir.Parser.Expr where
 
@@ -7,6 +8,7 @@ import Control.Monad.Combinators.Expr
 import Data.Functor
 import Data.Maybe
 
+import Data.Text qualified as T
 import Reussir.Parser.Lexer
 import Reussir.Parser.Types
 import Reussir.Parser.Types.Expr
@@ -90,13 +92,13 @@ parseConstant =
         <|> (ConstString <$> parseString)
         <|> (ConstBool <$> parseBool)
 
-prefixOp :: String -> UnaryOp -> Operator Parser Expr
+prefixOp :: T.Text -> UnaryOp -> Operator Parser Expr
 prefixOp symbol op = Prefix (string symbol *> space $> UnaryOpExpr op)
 
-infixLOp :: String -> BinaryOp -> Operator Parser Expr
+infixLOp :: T.Text -> BinaryOp -> Operator Parser Expr
 infixLOp symbol op = InfixL (string symbol *> space $> BinOpExpr op)
 
-infixNOp :: String -> BinaryOp -> Operator Parser Expr
+infixNOp :: T.Text -> BinaryOp -> Operator Parser Expr
 infixNOp symbol op = InfixN (string symbol *> space $> BinOpExpr op)
 
 castOp :: Operator Parser Expr

@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Reussir.Parser.Stmt where
 
 import Data.Maybe

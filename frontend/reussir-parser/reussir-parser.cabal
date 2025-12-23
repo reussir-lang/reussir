@@ -107,6 +107,7 @@ executable reussir-frontend
     -- Other library packages from which modules are imported.
     build-depends:    base ^>=4.20.0.0,
                       reussir-parser,
+                      text,
                       megaparsec
 
     -- Directories containing source files.
