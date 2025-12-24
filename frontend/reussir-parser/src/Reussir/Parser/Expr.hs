@@ -61,7 +61,7 @@ parseLetIn = do
 
 parseFuncCall :: Parser Expr
 parseFuncCall = do
-    name <- parseIdentifier
+    name <- parsePath
     args <- openParen *> parseExpr `sepBy` comma <* closeParen
     return (FuncCall name args)
 
@@ -147,7 +147,7 @@ parseExprTerm =
         , parseMatch
         , try parseFuncCall
         , ConstExpr <$> parseConstant
-        , Var <$> parseIdentifier
+        , Var <$> parsePath
         ]
 
 parseExpr :: Parser Expr

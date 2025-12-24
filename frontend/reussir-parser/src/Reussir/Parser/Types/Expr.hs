@@ -3,7 +3,7 @@ module Reussir.Parser.Types.Expr where
 import Data.List
 import Data.Scientific (Scientific)
 import Data.Text qualified as T
-import Reussir.Parser.Types.Lexer (Identifier (..))
+import Reussir.Parser.Types.Lexer (Identifier (..), Path)
 
 data Typename = Typename Identifier [Typename] | Arr Typename Typename
 
@@ -53,8 +53,8 @@ data Expr
     | If Expr Expr Expr
     | Cast Typename Expr
     | LetIn Identifier Expr Expr
-    | FuncCall Identifier [Expr]
+    | FuncCall Path [Expr]
     | Lambda Identifier Typename Expr
     | Match Expr [(Pattern, Expr)]
-    | Var Identifier
+    | Var Path
     deriving (Show)
