@@ -1,11 +1,15 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Reussir.Parser.Stmt where
 
 import Data.Maybe
 
 import Reussir.Parser.Expr
+import Reussir.Parser.Lexer
 
 import Reussir.Parser.Types
 import Reussir.Parser.Types.Expr
+import Reussir.Parser.Types.Lexer (Identifier)
 import Reussir.Parser.Types.Stmt
 
 parseVis :: Parser Visibility

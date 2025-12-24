@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Reussir.Parser.Expr where
 
@@ -7,46 +8,10 @@ import Control.Monad.Combinators.Expr
 import Data.Functor
 import Data.Maybe
 
-import Data.Scientific (Scientific)
 import Data.Text qualified as T
+import Reussir.Parser.Lexer
 import Reussir.Parser.Types
 import Reussir.Parser.Types.Expr
-import Text.Megaparsec.Char.Lexer (charLiteral)
-import Text.Megaparsec.Char.Lexer qualified as Lexer
-import Unicode.Char qualified as U
-
-colon :: Parser ()
-colon = char ':' *> space
-
-semicolon :: Parser ()
-semicolon = char ';' *> space
-
-doubleColon :: Parser ()
-doubleColon = string "::" *> space
-
-openParen :: Parser ()
-openParen = char '(' *> space
-
-closeParen :: Parser ()
-closeParen = char ')' *> space
-
-comma :: Parser ()
-comma = char ',' *> space
-
-openBody :: Parser ()
-openBody = char '{' *> space
-
-closeBody :: Parser ()
-closeBody = char '}' *> space
-
-openAngle :: Parser ()
-openAngle = char '<' *> space
-
-closeAngle :: Parser ()
-closeAngle = char '>' *> space
-
-rightArrow :: Parser ()
-rightArrow = string "->" *> space
 
 parseBody :: Parser Expr
 parseBody = openBody *> parseExpr <* closeBody
@@ -77,41 +42,6 @@ parseTypename = try parseTypenameArrow <|> parseTypenameTerm
 
 parseTypenameParams :: Parser [Typename]
 parseTypenameParams = openAngle *> parseTypename `sepBy1` comma <* closeAngle
-
-parseIdentifier :: Parser Identifier
-parseIdentifier = do
-    first <- satisfy U.isXIDStart
-    rest <- many (satisfy U.isXIDContinue) <* space
-    pure $ Identifier $ T.pack (first : rest)
-
-parseIntSuffix :: Parser ()
-parseIntSuffix = choice [string ('u' : show @Int s) | s <- [8, 16, 32, 64]] *> space
-
-parseFloatSuffix :: Parser ()
-parseFloatSuffix = choice [string ('f' : show @Int s) | s <- [16, 32, 64]] *> space
-
-parseInt :: Parser Int
-parseInt = try $ do
-    n <- some digitChar
-    notFollowedBy (char '.' <|> char 'e' <|> char 'E')
-    _ <- optional parseIntSuffix
-    space
-    return (read n)
-
-parseDouble :: Parser Scientific
-parseDouble = Lexer.scientific <* optional parseFloatSuffix <* space
-
-parseString :: Parser T.Text
-parseString =
-    T.pack <$> (char '"' *> manyTill charLiteral (char '"') <* space)
-
-parseBool :: Parser Bool
-parseBool =
-    choice
-        [ string "true" $> True
-        , string "false" $> False
-        ]
-        <* space
 
 parseIf :: Parser Expr
 parseIf = do
@@ -161,15 +91,14 @@ parseConstant =
         <|> (ConstDouble <$> parseDouble)
         <|> (ConstString <$> parseString)
         <|> (ConstBool <$> parseBool)
-        <|> (ConstID <$> parseIdentifier)
 
-prefixOp :: String -> UnaryOp -> Operator Parser Expr
+prefixOp :: T.Text -> UnaryOp -> Operator Parser Expr
 prefixOp symbol op = Prefix (string symbol *> space $> UnaryOpExpr op)
 
-infixLOp :: String -> BinaryOp -> Operator Parser Expr
+infixLOp :: T.Text -> BinaryOp -> Operator Parser Expr
 infixLOp symbol op = InfixL (string symbol *> space $> BinOpExpr op)
 
-infixNOp :: String -> BinaryOp -> Operator Parser Expr
+infixNOp :: T.Text -> BinaryOp -> Operator Parser Expr
 infixNOp symbol op = InfixN (string symbol *> space $> BinOpExpr op)
 
 castOp :: Operator Parser Expr
@@ -218,6 +147,7 @@ parseExprTerm =
         , parseMatch
         , try parseFuncCall
         , ConstExpr <$> parseConstant
+        , Var <$> parseIdentifier
         ]
 
 parseExpr :: Parser Expr

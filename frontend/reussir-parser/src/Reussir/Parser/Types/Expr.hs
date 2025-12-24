@@ -3,11 +3,7 @@ module Reussir.Parser.Types.Expr where
 import Data.List
 import Data.Scientific (Scientific)
 import Data.Text qualified as T
-
-newtype Identifier = Identifier {unIdentifier :: T.Text}
-
-instance Show Identifier where
-    show (Identifier name) = '$' : T.unpack name
+import Reussir.Parser.Types.Lexer (Identifier (..))
 
 data Typename = Typename Identifier [Typename] | Arr Typename Typename
 
@@ -28,7 +24,6 @@ instance Show Pattern where
 
 data Constant
     = ConstInt Int
-    | ConstID Identifier
     | ConstDouble Scientific
     | ConstString T.Text
     | ConstBool Bool
@@ -61,4 +56,5 @@ data Expr
     | FuncCall Identifier [Expr]
     | Lambda Identifier Typename Expr
     | Match Expr [(Pattern, Expr)]
+    | Var Identifier
     deriving (Show)
