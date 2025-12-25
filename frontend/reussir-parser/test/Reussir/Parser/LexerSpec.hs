@@ -2,8 +2,6 @@
 
 module Reussir.Parser.LexerSpec (spec) where
 
-import Data.Either (isLeft)
-
 import Test.Hspec
 import Test.Hspec.Megaparsec
 import Text.Megaparsec
@@ -24,7 +22,7 @@ spec = do
             parse parsePath "" "std::io::File" `shouldParse` Path (Identifier "File") [Identifier "std", Identifier "io"]
 
         it "fails on empty input" $ do
-            parse parsePath "" "" `shouldSatisfy` isLeft
+            parse parsePath "" "" `shouldFailWith` err 0 ueof
 
         it "fails on trailing double colon" $ do
-            parse parsePath "" "std::" `shouldSatisfy` isLeft
+            parse parsePath "" "std::" `shouldFailWith` err 5 (ueof <> (elabel "white space"))
