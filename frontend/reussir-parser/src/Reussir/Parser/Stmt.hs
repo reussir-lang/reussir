@@ -7,10 +7,11 @@ import Data.Maybe
 import Reussir.Parser.Expr
 import Reussir.Parser.Lexer
 
+import Reussir.Parser.Type (parseType)
 import Reussir.Parser.Types
-import Reussir.Parser.Types.Expr
 import Reussir.Parser.Types.Lexer (Identifier)
 import Reussir.Parser.Types.Stmt
+import Reussir.Parser.Types.Type (Type)
 
 parseVis :: Parser Visibility
 parseVis =
@@ -18,10 +19,10 @@ parseVis =
         Just () -> return Public
         Nothing -> return Private
 
-parseTypedParam :: Parser (Identifier, Typename)
+parseTypedParam :: Parser (Identifier, Type)
 parseTypedParam = do
     name <- parseIdentifier <* char ':' <* space
-    ty <- parseTypename
+    ty <- parseType
 
     return (name, ty)
 
@@ -29,7 +30,7 @@ parseStructDec :: Parser Stmt
 parseStructDec = do
     vis <- parseVis
     name <- string "struct" *> space *> parseIdentifier
-    types <- openParen *> parseTypename `sepBy` comma <* closeParen
+    types <- openParen *> parseType `sepBy` comma <* closeParen
 
     return (Struct vis name types)
 
@@ -39,15 +40,15 @@ parseFuncDef = do
     name <- string "fn" *> space *> parseIdentifier
     tyargs <- optional $ openAngle *> parseIdentifier `sepBy` comma <* closeAngle
     args <- openParen *> optional (parseTypedParam `sepBy` comma)
-    ret <- closeParen *> optional (string "->" *> space *> parseTypename)
+    ret <- closeParen *> optional (string "->" *> space *> parseType)
     body <- parseBody
 
     return (Function vis name (fromMaybe [] tyargs) (fromMaybe [] args) ret body)
 
-parseEnumConstructor :: Parser (Identifier, [Typename])
+parseEnumConstructor :: Parser (Identifier, [Type])
 parseEnumConstructor = do
     name <- parseIdentifier
-    tys <- optional $ openParen *> parseTypename `sepBy` comma <* closeParen
+    tys <- optional $ openParen *> parseType `sepBy` comma <* closeParen
     return (name, fromMaybe [] tys)
 
 parseEnumDec :: Parser Stmt
@@ -60,7 +61,10 @@ parseEnumDec = do
     return (Enum vis name tyvars body)
 
 parseStmt :: Parser Stmt
-parseStmt =
+parseStmt = SpannedStmt <$> withSpan parseStmtInner
+
+parseStmtInner :: Parser Stmt
+parseStmtInner =
     try parseFuncDef
         <|> try parseStructDec
         <|> try parseEnumDec

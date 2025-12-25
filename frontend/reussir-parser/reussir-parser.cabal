@@ -68,6 +68,7 @@ library
                       Reussir.Parser.Types.Stmt
                       Reussir.Parser.Types.Type
                       Reussir.Parser.Types.Lexer
+                      Reussir.Parser.Pretty
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -83,7 +84,9 @@ library
                       text,
                       unicode-data,
                       inline-c,
-                      inline-c-cpp
+                      inline-c-cpp,
+                      prettyprinter ^>= 1.7.1,
+                      prettyprinter-ansi-terminal
 
     -- Directories containing source files.
     hs-source-dirs:   src
@@ -108,7 +111,9 @@ executable reussir-frontend
     build-depends:    base ^>=4.20.0.0,
                       reussir-parser,
                       text,
-                      megaparsec
+                      megaparsec,
+                      prettyprinter,
+                      prettyprinter-ansi-terminal
 
     -- Directories containing source files.
     hs-source-dirs:   app
@@ -133,6 +138,7 @@ test-suite reussir-parser-test
     main-is:          Main.hs
 
     other-modules:    Reussir.Parser.LexerSpec
+                      Reussir.Parser.TypeSpec
 
     -- Test dependencies.
     build-depends:
