@@ -18,3 +18,10 @@ substituteMeta original subst = go original
     go (TypeMeta meta) = case subst meta of
         Just t -> t
         Nothing -> TypeMeta meta
+
+-- check if a type is concrete (meta-free)
+isConcrete :: Type -> Bool
+isConcrete (TypeExpr _ args) = all isConcrete args
+isConcrete (TypeArrow t1 t2) = isConcrete t1 && isConcrete t2
+isConcrete (TypeMeta _) = False
+isConcrete _ = True

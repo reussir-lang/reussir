@@ -16,4 +16,7 @@ data MetaVar = MetaVar
     , metaBounds :: [Path]
     }
 
-newtype MetaState = MetaState {getStateRef :: IORef' (Seq.Seq MetaVar)}
+data MetaState = MetaState
+    { getStateRef :: IORef' (Seq.Seq MetaVar)
+    , concreteFlow :: H.CuckooHashTable MetaID [Type]
+    }
