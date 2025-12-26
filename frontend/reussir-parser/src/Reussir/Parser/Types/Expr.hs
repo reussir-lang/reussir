@@ -6,7 +6,7 @@ import Data.Text qualified as T
 import Reussir.Parser.Types.Lexer (Identifier (..), Path, WithSpan)
 import Reussir.Parser.Types.Type (Type)
 
-data Pattern = Pattern Identifier Identifier [Identifier]
+data Pattern = Pattern Identifier Identifier [Identifier] deriving (Eq)
 
 instance Show Pattern where
     show (Pattern ns name es) = show ns ++ "::" ++ show name ++ "(" ++ intercalate ", " (map show es) ++ ")"
@@ -16,7 +16,7 @@ data Constant
     | ConstDouble Scientific
     | ConstString T.Text
     | ConstBool Bool
-    deriving (Show)
+    deriving (Show, Eq)
 
 data BinaryOp
     = Add
@@ -32,8 +32,8 @@ data BinaryOp
     | Neq
     | And
     | Or
-    deriving (Show)
-data UnaryOp = Negate | Not deriving (Show)
+    deriving (Show, Eq)
+data UnaryOp = Negate | Not deriving (Show, Eq)
 
 data Expr
     = ConstExpr Constant
@@ -47,4 +47,4 @@ data Expr
     | Match Expr [(Pattern, Expr)]
     | Var Path
     | SpannedExpr (WithSpan Expr)
-    deriving (Show)
+    deriving (Show, Eq)

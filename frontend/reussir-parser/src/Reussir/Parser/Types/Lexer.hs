@@ -40,4 +40,4 @@ data WithSpan a = WithSpan
     , spanEndOffset :: {-# UNPACK #-} !Int64
     -- ^ The character offset where the span ends
     }
-    deriving (Show)
+    deriving (Show, Eq)
