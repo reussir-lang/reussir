@@ -1,9 +1,9 @@
--- | Module for type representations in the Reussir parser.
-module Reussir.Parser.Types.Type where
+module Reussir.Core.Types.Type where
 
 import Data.Int (Int8)
 import Data.List (intercalate)
-import Reussir.Parser.Types.Lexer (Path (..), WithSpan (..))
+import Reussir.Core.Types.MetaID (MetaID)
+import Reussir.Parser.Types.Lexer (Path (..))
 
 {- | Represents integral types with a specific bit width.
 Integral types can be either signed or unsigned.
@@ -55,20 +55,9 @@ data Type
       TypeUnit
     | -- | Arrow type
       TypeArrow Type Type
-    | -- | Spanned
-      TypeSpanned (WithSpan Type)
-
-instance Eq Type where
-    (TypeExpr p1 a1) == (TypeExpr p2 a2) = p1 == p2 && a1 == a2
-    (TypeIntegral i1) == (TypeIntegral i2) = i1 == i2
-    (TypeFP f1) == (TypeFP f2) = f1 == f2
-    TypeBool == TypeBool = True
-    TypeStr == TypeStr = True
-    TypeUnit == TypeUnit = True
-    (TypeArrow a1 b1) == (TypeArrow a2 b2) = a1 == a2 && b1 == b2
-    (TypeSpanned w1) == t2 = spanValue w1 == t2
-    t1 == (TypeSpanned w2) = t1 == spanValue w2
-    _ == _ = False
+    | -- | Meta Variable
+      TypeMeta MetaID
+    deriving (Eq)
 
 instance Show Type where
     show (TypeExpr path []) = show path
@@ -83,4 +72,4 @@ instance Show Type where
     show TypeStr = "str"
     show TypeUnit = "unit"
     show (TypeArrow a b) = "(" ++ show a ++ " -> " ++ show b ++ ")"
-    show (TypeSpanned ws) = show (spanValue ws)
+    show (TypeMeta meta) = show meta
