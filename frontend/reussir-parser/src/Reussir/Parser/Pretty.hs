@@ -167,6 +167,14 @@ instance PrettyColored Capability where
     prettyColored Rigid = keyword "rigid"
     prettyColored Field = keyword "field"
 
+instance PrettyColored Capability where
+    prettyColored Unspecified = emptyDoc
+    prettyColored Shared = keyword "shared"
+    prettyColored Value = keyword "value"
+    prettyColored Flex = keyword "flex"
+    prettyColored Rigid = keyword "rigid"
+    prettyColored Field = keyword "field"
+
 instance PrettyColored Visibility where
     prettyColored Public = keyword "pub" <> space
     prettyColored Private = emptyDoc
