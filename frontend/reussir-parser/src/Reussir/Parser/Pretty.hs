@@ -121,6 +121,14 @@ instance PrettyColored Expr where
     prettyColored (Var path) = prettyColored path
     prettyColored (SpannedExpr w) = prettyColored (spanValue w)
 
+instance PrettyColored Capability where
+    prettyColored Unspecified = emptyDoc
+    prettyColored Shared = keyword "shared"
+    prettyColored Value = keyword "value"
+    prettyColored Flex = keyword "flex"
+    prettyColored Rigid = keyword "rigid"
+    prettyColored Field = keyword "field"
+
 instance PrettyColored Visibility where
     prettyColored Public = keyword "pub" <> space
     prettyColored Private = emptyDoc
@@ -140,9 +148,10 @@ instance PrettyColored Stmt where
         prettyArg (n, t) = prettyColored n <> operator ":" <+> prettyColored t
         prettyRet Nothing = emptyDoc
         prettyRet (Just t) = operator "->" <+> prettyColored t
-    prettyColored (RecordStmt (Record name tyParams fields kind vis)) =
+    prettyColored (RecordStmt (Record name tyParams fields kind vis cap)) =
         prettyColored vis
             <> keyword (case kind of StructKind -> "struct"; EnumKind -> "enum")
+            <> (case cap of Unspecified -> emptyDoc; _ -> space <> brackets (prettyColored cap))
                 <+> prettyColored name
             <> prettyGenerics tyParams
             <> case fields of

@@ -29,6 +29,7 @@ data Record = Record
     , recordFields :: RecordFields
     , recordKind :: RecordKind
     , recordVisibility :: Visibility
+    , recordDefaultCap :: Capability
     }
     deriving (Show, Eq)
 

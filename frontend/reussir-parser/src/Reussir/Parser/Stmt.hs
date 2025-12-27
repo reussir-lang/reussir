@@ -46,9 +46,11 @@ parseCapKeyword =
 parseStructDec :: Parser Stmt
 parseStructDec = do
     vis <- parseVis
-    name <- string "struct" *> space *> parseIdentifier
+    _ <- string "struct" *> space
+    cap <- parseCapability
+    name <- parseIdentifier
     fields <- try parseNamedFields <|> parseUnnamedFields
-    return $ RecordStmt $ Record name [] fields StructKind vis
+    return $ RecordStmt $ Record name [] fields StructKind vis cap
 
 parseUnnamedFields :: Parser RecordFields
 parseUnnamedFields = do
@@ -97,7 +99,7 @@ parseEnumDec = do
     body <- openBody *> parseEnumConstructor `sepBy` comma <* closeBody
 
     let fields = Variants body
-    return $ RecordStmt $ Record name tyvars fields EnumKind vis
+    return $ RecordStmt $ Record name tyvars fields EnumKind vis Unspecified
 
 parseStmt :: Parser Stmt
 parseStmt = SpannedStmt <$> withSpan parseStmtInner

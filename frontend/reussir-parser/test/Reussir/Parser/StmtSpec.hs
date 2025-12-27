@@ -23,6 +23,7 @@ spec = do
                         (Unnamed [(TypeIntegral (Signed 32), Unspecified), (TypeIntegral (Signed 32), Unspecified)])
                         StructKind
                         Private
+                        Unspecified
                     )
 
         it "parses public struct" $
@@ -34,6 +35,7 @@ spec = do
                         (Unnamed [(TypeIntegral (Signed 32), Unspecified), (TypeIntegral (Signed 32), Unspecified)])
                         StructKind
                         Public
+                        Unspecified
                     )
 
         it "parses named struct" $
@@ -45,6 +47,7 @@ spec = do
                         (Named [(Identifier "x", TypeIntegral (Signed 32), Unspecified), (Identifier "y", TypeIntegral (Signed 32), Unspecified)])
                         StructKind
                         Private
+                        Unspecified
                     )
 
         it "parses named struct with capabilities" $
@@ -56,6 +59,7 @@ spec = do
                         (Named [(Identifier "x", TypeIntegral (Signed 32), Shared), (Identifier "y", TypeIntegral (Signed 32), Value)])
                         StructKind
                         Private
+                        Unspecified
                     )
 
         it "parses unnamed struct with capabilities" $
@@ -67,6 +71,19 @@ spec = do
                         (Unnamed [(TypeIntegral (Signed 32), Shared), (TypeIntegral (Signed 32), Value)])
                         StructKind
                         Private
+                        Unspecified
+                    )
+
+        it "parses struct with default capability" $
+            parse parseStructDec "" "struct [value] Point (i32, i32)"
+                `shouldParse` RecordStmt
+                    ( Record
+                        (Identifier "Point")
+                        []
+                        (Unnamed [(TypeIntegral (Signed 32), Unspecified), (TypeIntegral (Signed 32), Unspecified)])
+                        StructKind
+                        Private
+                        Value
                     )
 
     describe "parseEnumDec" $ do
@@ -83,6 +100,7 @@ spec = do
                         )
                         EnumKind
                         Private
+                        Unspecified
                     )
 
         it "parses public enum" $
@@ -98,4 +116,5 @@ spec = do
                         )
                         EnumKind
                         Public
+                        Unspecified
                     )
