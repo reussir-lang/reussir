@@ -146,7 +146,7 @@ instance PrettyColored Stmt where
                 <+> prettyColored name
             <> prettyGenerics tyParams
             <> case fields of
-                Unamed fs -> parens (commaSep (map (prettyColored . fst) fs))
+                Unnamed fs -> parens (commaSep (map (prettyColored . fst) fs))
                 Variants vs -> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyVariant vs))) <> hardline)
                 Named fs -> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyField fs))) <> hardline)
       where

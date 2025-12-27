@@ -53,7 +53,7 @@ parseStructDec = do
 parseUnnamedFields :: Parser RecordFields
 parseUnnamedFields = do
     types <- openParen *> parseFieldType `sepBy` comma <* closeParen
-    return $ Unamed types
+    return $ Unnamed types
   where
     parseFieldType = do
         cap <- parseCapability

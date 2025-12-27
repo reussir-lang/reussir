@@ -8,7 +8,7 @@ data Visibility = Public | Private deriving (Show, Eq)
 
 data RecordFields
     = Named [(Identifier, Type, Capability)]
-    | Unamed [(Type, Capability)]
+    | Unnamed [(Type, Capability)]
     | Variants [(Identifier, [Type])]
     deriving (Show, Eq)
 

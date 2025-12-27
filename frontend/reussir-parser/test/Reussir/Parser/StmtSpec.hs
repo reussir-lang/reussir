@@ -20,7 +20,7 @@ spec = do
                     ( Record
                         (Identifier "Point")
                         []
-                        (Unamed [(TypeIntegral (Signed 32), Unspecified), (TypeIntegral (Signed 32), Unspecified)])
+                        (Unnamed [(TypeIntegral (Signed 32), Unspecified), (TypeIntegral (Signed 32), Unspecified)])
                         StructKind
                         Private
                     )
@@ -31,7 +31,7 @@ spec = do
                     ( Record
                         (Identifier "Point")
                         []
-                        (Unamed [(TypeIntegral (Signed 32), Unspecified), (TypeIntegral (Signed 32), Unspecified)])
+                        (Unnamed [(TypeIntegral (Signed 32), Unspecified), (TypeIntegral (Signed 32), Unspecified)])
                         StructKind
                         Public
                     )
@@ -64,7 +64,7 @@ spec = do
                     ( Record
                         (Identifier "Point")
                         []
-                        (Unamed [(TypeIntegral (Signed 32), Shared), (TypeIntegral (Signed 32), Value)])
+                        (Unnamed [(TypeIntegral (Signed 32), Shared), (TypeIntegral (Signed 32), Value)])
                         StructKind
                         Private
                     )
