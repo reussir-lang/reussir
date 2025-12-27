@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 module Reussir.Parser.Expr where
 
@@ -13,6 +14,8 @@ import Reussir.Parser.Lexer
 import Reussir.Parser.Type (parseType)
 import Reussir.Parser.Types
 import Reussir.Parser.Types.Expr
+import Reussir.Parser.Types.Lexer (Identifier)
+import Reussir.Parser.Types.Type (Type)
 
 parseBody :: Parser Expr
 parseBody = openBody *> parseExpr <* closeBody
@@ -36,16 +39,16 @@ parseIf = do
 parseLetIn :: Parser Expr
 parseLetIn = do
     name <- string "let" *> space *> parseIdentifier
+    ty <- optional (colon *> parseTypeWithCap)
     value <- char '=' *> space *> parseExpr <* semicolon
     body <- parseExpr
 
-    return (LetIn name value body)
-
-parseFuncCall :: Parser Expr
-parseFuncCall = do
-    name <- parsePath
-    args <- openParen *> parseExpr `sepBy` comma <* closeParen
-    return (FuncCall name args)
+    return (LetIn name ty value body)
+  where
+    parseTypeWithCap = do
+        cap <- parseCapability
+        ty <- parseType
+        return (ty, cap)
 
 parseLambda :: Parser Expr
 parseLambda = do
@@ -73,6 +76,65 @@ parseConstant =
         <|> (ConstDouble <$> parseDouble)
         <|> (ConstString <$> parseString)
         <|> (ConstBool <$> parseBool)
+
+parseTypeArg :: Parser (Maybe Type)
+parseTypeArg = (char '_' *> space $> Nothing) <|> (Just <$> parseType)
+
+parseCtorArg :: Parser (Maybe Identifier, Expr)
+parseCtorArg =
+    try
+        ( do
+            id' <- parseIdentifier
+            colon
+            e <- parseExpr
+            return (Just id', e)
+        )
+        <|> ( do
+                e <- parseExpr
+                return (Nothing, e)
+            )
+
+parseCtorArgs :: Parser [(Maybe Identifier, Expr)]
+parseCtorArgs =
+    choice
+        [ openBody *> parseCtorArg `sepBy` comma <* closeBody
+        , do
+            exprs <- openParen *> parseExpr `sepBy` comma <* closeParen
+            return $ map (Nothing,) exprs
+        , pure []
+        ]
+
+parseRegionalExpr :: Parser Expr
+parseRegionalExpr = do
+    _ <- string "regional" *> space
+    body <- parseBody
+    return (RegionalExpr body)
+
+parsePathBasedExpr :: Parser Expr
+parsePathBasedExpr = do
+    path <- parsePath
+    tyArgs <- optional (openAngle *> parseTypeArg `sepBy` comma <* closeAngle)
+
+    isVariant <- optional doubleColon
+
+    case isVariant of
+        Just _ -> do
+            v <- parseIdentifier
+            args <- parseCtorArgs
+            return $ CtorCallExpr $ CtorCall path (Just v) (fromMaybe [] tyArgs) args
+        Nothing -> do
+            lookAheadChar <- optional (lookAhead anySingle)
+            case lookAheadChar of
+                Just '{' -> do
+                    args <- openBody *> parseCtorArg `sepBy` comma <* closeBody
+                    return $ CtorCallExpr $ CtorCall path Nothing (fromMaybe [] tyArgs) args
+                Just '(' -> do
+                    args <- openParen *> parseExpr `sepBy` comma <* closeParen
+                    return $ FuncCallExpr $ FuncCall path (fromMaybe [] tyArgs) args
+                _ -> do
+                    case tyArgs of
+                        Just ts -> return $ CtorCallExpr $ CtorCall path Nothing ts []
+                        Nothing -> return $ Var path
 
 prefixOp :: T.Text -> UnaryOp -> Operator Parser Expr
 prefixOp symbol op = Prefix (string symbol *> space $> UnaryOpExpr op)
@@ -127,9 +189,9 @@ parseExprTerm =
         , parseIf
         , parseLetIn
         , parseMatch
-        , try parseFuncCall
+        , parseRegionalExpr
+        , parsePathBasedExpr
         , ConstExpr <$> parseConstant
-        , Var <$> parsePath
         ]
 
 parseExpr :: Parser Expr

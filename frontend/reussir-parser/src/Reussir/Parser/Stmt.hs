@@ -9,6 +9,7 @@ import Reussir.Parser.Lexer
 
 import Reussir.Parser.Type (parseType)
 import Reussir.Parser.Types
+import Reussir.Parser.Types.Capability (Capability (..))
 import Reussir.Parser.Types.Lexer (Identifier)
 import Reussir.Parser.Types.Stmt
 import Reussir.Parser.Types.Type (Type)
@@ -19,29 +20,13 @@ parseVis =
         Just () -> return Public
         Nothing -> return Private
 
-parseTypedParam :: Parser (Identifier, Type)
+parseTypedParam :: Parser (Identifier, Type, Capability)
 parseTypedParam = do
     name <- parseIdentifier <* char ':' <* space
+    cap <- parseCapability
     ty <- parseType
 
-    return (name, ty)
-
-parseCapability :: Parser Capability
-parseCapability =
-    optional (char '[' *> space *> parseCapKeyword <* char ']' <* space) >>= \case
-        Nothing -> return Unspecified
-        Just c -> return c
-
-parseCapKeyword :: Parser Capability
-parseCapKeyword =
-    choice
-        [ string "shared" >> return Shared
-        , string "value" >> return Value
-        , string "flex" >> return Flex
-        , string "rigid" >> return Rigid
-        , string "field" >> return Field
-        ]
-        <* space
+    return (name, ty, cap)
 
 parseStructDec :: Parser Stmt
 parseStructDec = do
@@ -77,13 +62,19 @@ parseNamedField = do
 parseFuncDef :: Parser Stmt
 parseFuncDef = do
     vis <- parseVis
+    isRegional <- isJust <$> optional (string "regional" *> space)
     name <- string "fn" *> space *> parseIdentifier
     tyargs <- optional $ openAngle *> parseIdentifier `sepBy` comma <* closeAngle
     args <- openParen *> optional (parseTypedParam `sepBy` comma)
-    ret <- closeParen *> optional (string "->" *> space *> parseType)
+    ret <- closeParen *> optional (string "->" *> space *> parseRetType)
     body <- parseBody
 
-    return (Function vis name (fromMaybe [] tyargs) (fromMaybe [] args) ret body)
+    return (FunctionStmt $ Function vis name (fromMaybe [] tyargs) (fromMaybe [] args) ret isRegional body)
+  where
+    parseRetType = do
+        cap <- parseCapability
+        ty <- parseType
+        return (ty, cap)
 
 parseEnumConstructor :: Parser (Identifier, [Type])
 parseEnumConstructor = do

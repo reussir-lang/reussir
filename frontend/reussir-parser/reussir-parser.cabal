@@ -68,6 +68,7 @@ library
                       Reussir.Parser.Types.Stmt
                       Reussir.Parser.Types.Type
                       Reussir.Parser.Types.Lexer
+                      Reussir.Parser.Types.Capability
                       Reussir.Parser.Pretty
 
     -- Modules included in this library but not exported.
@@ -140,6 +141,7 @@ test-suite reussir-parser-test
     other-modules:    Reussir.Parser.LexerSpec
                       Reussir.Parser.TypeSpec
                       Reussir.Parser.StmtSpec
+                      Reussir.Parser.ExprSpec
 
     -- Test dependencies.
     build-depends:

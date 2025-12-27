@@ -3,6 +3,7 @@ module Reussir.Parser.Types.Expr where
 import Data.List
 import Data.Scientific (Scientific)
 import Data.Text qualified as T
+import Reussir.Parser.Types.Capability (Capability)
 import Reussir.Parser.Types.Lexer (Identifier (..), Path, WithSpan)
 import Reussir.Parser.Types.Type (Type)
 
@@ -35,16 +36,33 @@ data BinaryOp
     deriving (Show, Eq)
 data UnaryOp = Negate | Not deriving (Show, Eq)
 
+data CtorCall = CtorCall
+    { ctorName :: Path
+    , ctorVariant :: Maybe Identifier -- For enum variants
+    , ctorTyArgs :: [Maybe Type] -- underscore represented as Nothing
+    , ctorArgs :: [(Maybe Identifier, Expr)]
+    }
+    deriving (Show, Eq)
+
+data FuncCall = FuncCall
+    { funcCallName :: Path
+    , funcCallTyArgs :: [Maybe Type]
+    , funcCallArgs :: [Expr]
+    }
+    deriving (Show, Eq)
+
 data Expr
     = ConstExpr Constant
     | BinOpExpr BinaryOp Expr Expr
     | UnaryOpExpr UnaryOp Expr
     | If Expr Expr Expr
     | Cast Type Expr
-    | LetIn Identifier Expr Expr
-    | FuncCall Path [Expr]
+    | LetIn Identifier (Maybe (Type, Capability)) Expr Expr
     | Lambda Identifier Type Expr
     | Match Expr [(Pattern, Expr)]
     | Var Path
     | SpannedExpr (WithSpan Expr)
+    | FuncCallExpr FuncCall -- foo<i32, _> (arg1, arg2) -- notice the difference between variant ctor calls
+    | RegionalExpr Expr -- regional { ... }
+    | CtorCallExpr CtorCall -- std::Foo {1, 2} / Foo<i32> {x: 1, y: 2} / List<i32>::Nil / List<i32>::Cons(1, xs)
     deriving (Show, Eq)

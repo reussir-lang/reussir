@@ -3,6 +3,7 @@ module Reussir.Parser.Types.Lexer where
 
 import Data.Int (Int64)
 import Data.List (intercalate)
+import Data.String (IsString (..))
 import Data.Text qualified as T
 
 {- | Represents an identifier in the source code.
@@ -10,6 +11,9 @@ Wraps a Text value containing the identifier's name.
 -}
 newtype Identifier = Identifier {unIdentifier :: T.Text}
     deriving (Eq)
+
+instance IsString Identifier where
+    fromString = Identifier . T.pack
 
 {- | Represents a namespace-qualified path (e.g., std::io::File).
 The path is stored in a way that separates the basename from the segments.
