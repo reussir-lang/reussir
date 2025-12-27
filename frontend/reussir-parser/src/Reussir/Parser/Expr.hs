@@ -150,12 +150,25 @@ castOp = Postfix $ do
     ty <- string "as" *> space *> parseType
     return (Cast ty)
 
+parseAccess :: Parser Access
+parseAccess =
+    dot
+        *> ( (Named <$> parseIdentifier)
+                <|> (Unnamed . read <$> (some digitChar <* space))
+           )
+
+accessOp :: Operator Parser Expr
+accessOp = Postfix $ do
+    accesses <- some parseAccess
+    return (`AccessChain` accesses)
+
 exprOpTable :: [[Operator Parser Expr]]
 exprOpTable =
     [
         [ prefixOp "-" Negate
         , prefixOp "!" Not
         , castOp
+        , accessOp
         ]
     ,
         [ infixLOp "*" Mul

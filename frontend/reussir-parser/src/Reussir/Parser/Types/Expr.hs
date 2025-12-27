@@ -1,5 +1,6 @@
 module Reussir.Parser.Types.Expr where
 
+import Data.Int (Int64)
 import Data.List
 import Data.Scientific (Scientific)
 import Data.Text qualified as T
@@ -51,6 +52,11 @@ data FuncCall = FuncCall
     }
     deriving (Show, Eq)
 
+data Access
+    = Named Identifier
+    | Unnamed Int64
+    deriving (Show, Eq)
+
 data Expr
     = ConstExpr Constant
     | BinOpExpr BinaryOp Expr Expr
@@ -65,4 +71,5 @@ data Expr
     | FuncCallExpr FuncCall -- foo<i32, _> (arg1, arg2) -- notice the difference between variant ctor calls
     | RegionalExpr Expr -- regional { ... }
     | CtorCallExpr CtorCall -- std::Foo {1, 2} / Foo<i32> {x: 1, y: 2} / List<i32>::Nil / List<i32>::Cons(1, xs)
+    | AccessChain Expr [Access] -- foo.bar.baz.0.1
     deriving (Show, Eq)

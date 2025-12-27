@@ -9,9 +9,11 @@ import Data.Maybe (isJust, isNothing)
 import Prettyprinter
 import Prettyprinter.Render.Terminal
 import Reussir.Parser.Types.Capability
-import Reussir.Parser.Types.Expr
+import Reussir.Parser.Types.Expr hiding (Named, Unnamed)
+import Reussir.Parser.Types.Expr qualified as E
 import Reussir.Parser.Types.Lexer
-import Reussir.Parser.Types.Stmt
+import Reussir.Parser.Types.Stmt hiding (Named, Unnamed)
+import Reussir.Parser.Types.Stmt qualified as S
 import Reussir.Parser.Types.Type
 
 -- Helper functions for styles
@@ -91,6 +93,10 @@ instance PrettyColored Pattern where
     prettyColored (Pattern ns name args) =
         prettyColored ns <> "::" <> prettyColored name <> parens (commaSep (map prettyColored args))
 
+instance PrettyColored Access where
+    prettyColored (E.Named i) = "." <> prettyColored i
+    prettyColored (E.Unnamed i) = "." <> pretty i
+
 instance PrettyColored Expr where
     prettyColored (ConstExpr c) = prettyColored c
     prettyColored (BinOpExpr op e1 e2) = parens (prettyColored e1 <+> prettyColored op <+> prettyColored e2)
@@ -135,6 +141,7 @@ instance PrettyColored Expr where
     prettyColored (Var path) = prettyColored path
     prettyColored (SpannedExpr w) = prettyColored (spanValue w)
     prettyColored (RegionalExpr e) = keyword "regional" <+> braces (prettyColored e)
+    prettyColored (AccessChain e accesses) = prettyColored e <> mconcat (map prettyColored accesses)
     prettyColored (CtorCallExpr (CtorCall path variant tys args)) =
         prettyColored path
             <> (if null tys then mempty else angles (commaSep (map prettyTyArg tys)))
@@ -189,9 +196,9 @@ instance PrettyColored Stmt where
                 <+> prettyColored name
             <> prettyGenerics tyParams
             <> case fields of
-                Unnamed fs -> parens (commaSep (map (prettyColored . fst) fs))
-                Variants vs -> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyVariant vs))) <> hardline)
-                Named fs -> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyField fs))) <> hardline)
+                S.Unnamed fs -> parens (commaSep (map (prettyColored . fst) fs))
+                S.Variants vs -> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyVariant vs))) <> hardline)
+                S.Named fs -> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyField fs))) <> hardline)
       where
         prettyGenerics [] = emptyDoc
         prettyGenerics gs = angles (commaSep (map prettyColored gs))

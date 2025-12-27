@@ -1,0 +1,38 @@
+struct [value] Matrix {
+    m00: u64, 
+    m01: u64,
+    m10: u64, 
+    m11: u64
+}
+
+fn matmul(a : Matrix, b : Matrix) -> Matrix {
+    let m00 = a.m00 * b.m00 + a.m01 * b.m10;
+    let m01 = a.m00 * b.m01 + a.m01 * b.m11;
+    let m10 = a.m10 * b.m00 + a.m11 * b.m10;
+    let m11 = a.m10 * b.m01 + a.m11 * b.m11;
+    Matrix { m00 : m00, m01 : m01, m10 : m10, m11 : m11 }
+}
+
+fn fibonacci_logarithmic_impl(
+    n: u64,
+    a: Matrix,
+    b: Matrix
+) -> u64 {
+    if n == 0 {
+        a.m01
+    } else {
+        if n % 2 == 1 {
+            fibonacci_logarithmic_impl(
+                n / 2,
+                matmul(a, b),
+                matmul(b, b)
+            )
+        } else {
+            fibonacci_logarithmic_impl(
+                n / 2u64,
+                a,
+                matmul(b, b)
+            )
+        }
+    }
+}

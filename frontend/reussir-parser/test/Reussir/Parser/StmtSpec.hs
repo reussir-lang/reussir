@@ -8,7 +8,7 @@ import Text.Megaparsec
 
 import Reussir.Parser.Stmt
 import Reussir.Parser.Types.Capability (Capability (..))
-import Reussir.Parser.Types.Expr
+import Reussir.Parser.Types.Expr hiding (Named, Unnamed)
 import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
 import Reussir.Parser.Types.Stmt
 import Reussir.Parser.Types.Type
@@ -25,6 +25,7 @@ stripExprSpans (Lambda n t e) = Lambda n t (stripExprSpans e)
 stripExprSpans (Match e cases) = Match (stripExprSpans e) (map (\(p, ex) -> (p, stripExprSpans ex)) cases)
 stripExprSpans (RegionalExpr e) = RegionalExpr (stripExprSpans e)
 stripExprSpans (CtorCallExpr (CtorCall p v tys args)) = CtorCallExpr (CtorCall p v tys (map (\(i, e) -> (i, stripExprSpans e)) args))
+stripExprSpans (AccessChain e accesses) = AccessChain (stripExprSpans e) accesses
 stripExprSpans e = e
 
 stripStmtSpans :: Stmt -> Stmt
