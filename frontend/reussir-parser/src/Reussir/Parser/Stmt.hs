@@ -26,13 +26,51 @@ parseTypedParam = do
 
     return (name, ty)
 
+parseCapability :: Parser Capability
+parseCapability =
+    optional (char '[' *> space *> parseCapKeyword <* char ']' <* space) >>= \case
+        Nothing -> return Unspecified
+        Just c -> return c
+
+parseCapKeyword :: Parser Capability
+parseCapKeyword =
+    choice
+        [ string "shared" >> return Shared
+        , string "value" >> return Value
+        , string "flex" >> return Flex
+        , string "rigid" >> return Rigid
+        , string "field" >> return Field
+        ]
+        <* space
+
 parseStructDec :: Parser Stmt
 parseStructDec = do
     vis <- parseVis
     name <- string "struct" *> space *> parseIdentifier
-    types <- openParen *> parseType `sepBy` comma <* closeParen
+    fields <- try parseNamedFields <|> parseUnnamedFields
+    return $ RecordStmt $ Record name [] fields StructKind vis
 
-    return (Struct vis name types)
+parseUnnamedFields :: Parser RecordFields
+parseUnnamedFields = do
+    types <- openParen *> parseFieldType `sepBy` comma <* closeParen
+    return $ Unnamed types
+  where
+    parseFieldType = do
+        cap <- parseCapability
+        ty <- parseType
+        return (ty, cap)
+
+parseNamedFields :: Parser RecordFields
+parseNamedFields = do
+    fields <- openBody *> parseNamedField `sepBy` comma <* closeBody
+    return $ Named fields
+
+parseNamedField :: Parser (Identifier, Type, Capability)
+parseNamedField = do
+    name <- parseIdentifier <* colon
+    cap <- parseCapability
+    ty <- parseType
+    return (name, ty, cap)
 
 parseFuncDef :: Parser Stmt
 parseFuncDef = do
@@ -58,7 +96,8 @@ parseEnumDec = do
     tyvars <- openAngle *> parseIdentifier `sepBy` comma <* closeAngle
     body <- openBody *> parseEnumConstructor `sepBy` comma <* closeBody
 
-    return (Enum vis name tyvars body)
+    let fields = Variants body
+    return $ RecordStmt $ Record name tyvars fields EnumKind vis
 
 parseStmt :: Parser Stmt
 parseStmt = SpannedStmt <$> withSpan parseStmtInner

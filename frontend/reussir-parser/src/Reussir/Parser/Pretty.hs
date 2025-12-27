@@ -140,14 +140,20 @@ instance PrettyColored Stmt where
         prettyArg (n, t) = prettyColored n <> operator ":" <+> prettyColored t
         prettyRet Nothing = emptyDoc
         prettyRet (Just t) = operator "->" <+> prettyColored t
-    prettyColored (Struct vis name fields) =
-        prettyColored vis <> keyword "struct" <+> prettyColored name <+> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyColored fields))) <> hardline)
-    prettyColored (Enum vis name args variants) =
-        prettyColored vis <> keyword "enum" <+> prettyColored name <> prettyArgs args <+> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyVariant variants))) <> hardline)
+    prettyColored (RecordStmt (Record name tyParams fields kind vis)) =
+        prettyColored vis
+            <> keyword (case kind of StructKind -> "struct"; EnumKind -> "enum")
+                <+> prettyColored name
+            <> prettyGenerics tyParams
+            <> case fields of
+                Unnamed fs -> parens (commaSep (map (prettyColored . fst) fs))
+                Variants vs -> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyVariant vs))) <> hardline)
+                Named fs -> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyField fs))) <> hardline)
       where
-        prettyArgs [] = emptyDoc
-        prettyArgs as = angles (commaSep (map prettyColored as))
+        prettyGenerics [] = emptyDoc
+        prettyGenerics gs = angles (commaSep (map prettyColored gs))
         prettyVariant (n, ts) = prettyColored n <> if null ts then emptyDoc else parens (commaSep (map prettyColored ts))
+        prettyField (n, t, _) = prettyColored n <> operator ":" <+> prettyColored t
     prettyColored (SpannedStmt w) = prettyColored (spanValue w)
 
 commaSep :: [Doc AnsiStyle] -> Doc AnsiStyle

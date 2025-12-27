@@ -139,6 +139,7 @@ test-suite reussir-parser-test
 
     other-modules:    Reussir.Parser.LexerSpec
                       Reussir.Parser.TypeSpec
+                      Reussir.Parser.StmtSpec
 
     -- Test dependencies.
     build-depends:
