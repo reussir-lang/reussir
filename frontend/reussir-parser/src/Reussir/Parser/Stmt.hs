@@ -29,8 +29,10 @@ parseTypedParam = do
     return (name, ty, cap)
 
 parseStructDec :: Parser Stmt
-parseStructDec = do
-    vis <- parseVis
+parseStructDec = parseVis >>= parseStructDecRest
+
+parseStructDecRest :: Visibility -> Parser Stmt
+parseStructDecRest vis = do
     _ <- string "struct" *> space
     cap <- parseCapability
     name <- parseIdentifier
@@ -60,8 +62,10 @@ parseNamedField = do
     return (name, ty, cap)
 
 parseFuncDef :: Parser Stmt
-parseFuncDef = do
-    vis <- parseVis
+parseFuncDef = parseVis >>= parseFuncDefRest
+
+parseFuncDefRest :: Visibility -> Parser Stmt
+parseFuncDefRest vis = do
     isRegional <- isJust <$> optional (string "regional" *> space)
     name <- string "fn" *> space *> parseIdentifier
     tyargs <- optional $ openAngle *> parseIdentifier `sepBy` comma <* closeAngle
@@ -83,8 +87,10 @@ parseEnumConstructor = do
     return (name, fromMaybe [] tys)
 
 parseEnumDec :: Parser Stmt
-parseEnumDec = do
-    vis <- parseVis
+parseEnumDec = parseVis >>= parseEnumDecRest
+
+parseEnumDecRest :: Visibility -> Parser Stmt
+parseEnumDecRest vis = do
     name <- string "enum" *> space *> parseIdentifier
     tyvars <- openAngle *> parseIdentifier `sepBy` comma <* closeAngle
     body <- openBody *> parseEnumConstructor `sepBy` comma <* closeBody
@@ -96,7 +102,10 @@ parseStmt :: Parser Stmt
 parseStmt = SpannedStmt <$> withSpan parseStmtInner
 
 parseStmtInner :: Parser Stmt
-parseStmtInner =
-    try parseFuncDef
-        <|> try parseStructDec
-        <|> try parseEnumDec
+parseStmtInner = do
+    vis <- parseVis
+    choice
+        [ parseFuncDefRest vis <?> "function definition"
+        , parseStructDecRest vis <?> "struct declaration"
+        , parseEnumDecRest vis <?> "enum declaration"
+        ]

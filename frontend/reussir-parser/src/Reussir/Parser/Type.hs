@@ -17,13 +17,13 @@ parseType = TypeSpanned <$> withSpan parseArrowType
 parseTypeAtom :: Parser Type
 parseTypeAtom =
     choice
-        [ parseIntegralType
-        , parseFPType
-        , string "bool" *> notFollowedBy (satisfy U.isXIDContinue) *> space $> TypeBool
-        , string "str" *> notFollowedBy (satisfy U.isXIDContinue) *> space $> TypeStr
-        , string "unit" *> notFollowedBy (satisfy U.isXIDContinue) *> space $> TypeUnit
-        , parseTypeExpr
-        , between (string "(" *> space) (string ")" *> space) parseType
+        [ parseIntegralType <?> "integral type"
+        , parseFPType <?> "floating point type"
+        , (string "bool" *> notFollowedBy (satisfy U.isXIDContinue) *> space $> TypeBool) <?> "bool"
+        , (string "str" *> notFollowedBy (satisfy U.isXIDContinue) *> space $> TypeStr) <?> "str"
+        , (string "unit" *> notFollowedBy (satisfy U.isXIDContinue) *> space $> TypeUnit) <?> "unit"
+        , parseTypeExpr <?> "type expression"
+        , (between (string "(" *> space) (string ")" *> space) parseType) <?> "parenthesized type"
         ]
 
 parseIntegralType :: Parser Type
