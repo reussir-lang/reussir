@@ -52,7 +52,7 @@ or user-defined types with optional type parameters.
 -}
 data Type
     = -- | User-defined type with a path and optional type parameters
-      TypeExpr Path [Type]
+      TypeRecord Path [Type]
     | -- | Integral type (signed or unsigned)
       TypeIntegral IntegralType
     | -- | Floating-point type
@@ -76,8 +76,8 @@ data Type
     deriving (Eq)
 
 instance Show Type where
-    show (TypeExpr path []) = show path
-    show (TypeExpr path args) =
+    show (TypeRecord path []) = show path
+    show (TypeRecord path args) =
         show path
             ++ "<"
             ++ intercalate ", " (map show args)

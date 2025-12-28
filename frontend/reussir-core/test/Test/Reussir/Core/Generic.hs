@@ -39,11 +39,11 @@ runGeneric = runEff . runPrim
 mkPath :: String -> Path
 mkPath s = Path (Identifier (T.pack s)) []
 
-mkTypeExpr :: String -> [Type] -> Type
-mkTypeExpr s args = TypeExpr (mkPath s) args
+mkTypeRecord :: String -> [Type] -> Type
+mkTypeRecord s args = TypeRecord (mkPath s) args
 
 mkBasic :: String -> Type
-mkBasic s = mkTypeExpr s []
+mkBasic s = mkTypeRecord s []
 
 testGraph1 :: Assertion
 testGraph1 = runGeneric $ do
@@ -52,7 +52,7 @@ testGraph1 = runGeneric $ do
     let [a, b, c, d] = vars
 
     addDirectLink a b state
-    addCtorLink b c (mkTypeExpr "R" [TypeGeneric b]) state
+    addCtorLink b c (mkTypeRecord "R" [TypeGeneric b]) state
     addDirectLink c d state
     addDirectLink d b state
 
@@ -80,7 +80,7 @@ testGraph3 = runGeneric $ do
 
     addDirectLink v1 v2 state
     addDirectLink v2 v3 state
-    addCtorLink v3 v4 (mkTypeExpr "S" [TypeGeneric v3]) state
+    addCtorLink v3 v4 (mkTypeRecord "S" [TypeGeneric v3]) state
     addDirectLink v4 v2 state
 
     res <- detectGrowingCycles state
@@ -109,7 +109,7 @@ testGraph5 = runGeneric $ do
     vars <- mapM (\n -> newGenericVar n Nothing [] state) ["A", "B"]
     let [a, b] = vars
 
-    addCtorLink a b (mkTypeExpr "List" [TypeGeneric a]) state
+    addCtorLink a b (mkTypeRecord "List" [TypeGeneric a]) state
     addConcreteFlow a (mkBasic "Int") state
 
     res <- solveGeneric state
@@ -118,7 +118,7 @@ testGraph5 = runGeneric $ do
     solA <- liftIO $ H.lookup sol a
     solB <- liftIO $ H.lookup sol b
     liftIO $ solA @?= Just [mkBasic "Int"]
-    liftIO $ solB @?= Just [mkTypeExpr "List" [mkBasic "Int"]]
+    liftIO $ solB @?= Just [mkTypeRecord "List" [mkBasic "Int"]]
 
 testGraph6 :: Assertion
 testGraph6 = runGeneric $ do
@@ -146,7 +146,7 @@ testGraph7 = runGeneric $ do
     vars <- mapM (\n -> newGenericVar n Nothing [] state) ["A", "B"]
     let [a, b] = vars
 
-    addCtorLink a b (mkTypeExpr "Pair" [TypeGeneric a, TypeGeneric a]) state
+    addCtorLink a b (mkTypeRecord "Pair" [TypeGeneric a, TypeGeneric a]) state
     addConcreteFlow a (mkBasic "Int") state
     addConcreteFlow a (mkBasic "Bool") state
 
@@ -154,7 +154,7 @@ testGraph7 = runGeneric $ do
     liftIO $ assertBool "Should have solution" (isJust res)
     let sol = fromJust res
     solB <- liftIO $ H.lookup sol b
-    let expected = (sortOn show) [mkTypeExpr "Pair" [mkBasic "Int", mkBasic "Int"], mkTypeExpr "Pair" [mkBasic "Bool", mkBasic "Bool"]]
+    let expected = (sortOn show) [mkTypeRecord "Pair" [mkBasic "Int", mkBasic "Int"], mkTypeRecord "Pair" [mkBasic "Bool", mkBasic "Bool"]]
     liftIO $ fmap (sortOn show) solB @?= Just expected
 
 testGraph8 :: Assertion
@@ -163,7 +163,7 @@ testGraph8 = runGeneric $ do
     vars <- mapM (\n -> newGenericVar n Nothing [] state) ["A"]
     let [a] = vars
 
-    addCtorLink a a (mkTypeExpr "List" [TypeGeneric a]) state
+    addCtorLink a a (mkTypeRecord "List" [TypeGeneric a]) state
     addConcreteFlow a (mkBasic "Int") state
 
     res <- solveGeneric state
@@ -176,8 +176,8 @@ testGraph9 = runGeneric $ do
     let [a, b, c] = vars
 
     addDirectLink b a state
-    addCtorLink a c (mkTypeExpr "Pair" [TypeGeneric a, TypeGeneric b]) state
-    addCtorLink b c (mkTypeExpr "Pair" [TypeGeneric a, TypeGeneric b]) state
+    addCtorLink a c (mkTypeRecord "Pair" [TypeGeneric a, TypeGeneric b]) state
+    addCtorLink b c (mkTypeRecord "Pair" [TypeGeneric a, TypeGeneric b]) state
 
     addConcreteFlow a (mkBasic "Int") state
     addConcreteFlow b (mkBasic "Bool") state
@@ -186,7 +186,7 @@ testGraph9 = runGeneric $ do
     liftIO $ assertBool "Should have solution" (isJust res)
     let sol = fromJust res
     solC <- liftIO $ H.lookup sol c
-    let expected = (sortOn show) [mkTypeExpr "Pair" [mkBasic "Int", mkBasic "Bool"], mkTypeExpr "Pair" [mkBasic "Bool", mkBasic "Bool"]]
+    let expected = (sortOn show) [mkTypeRecord "Pair" [mkBasic "Int", mkBasic "Bool"], mkTypeRecord "Pair" [mkBasic "Bool", mkBasic "Bool"]]
     liftIO $ fmap (sortOn show) solC @?= Just expected
 
 testGraph10 :: Assertion
@@ -196,10 +196,10 @@ testGraph10 = runGeneric $ do
     let [a, b, c, d] = vars
 
     addDirectLink b a state
-    addCtorLink a c (mkTypeExpr "Pair" [TypeGeneric a, TypeGeneric b]) state
-    addCtorLink b c (mkTypeExpr "Pair" [TypeGeneric a, TypeGeneric b]) state
-    addCtorLink c d (mkTypeExpr "Pair" [TypeGeneric c, TypeGeneric a]) state
-    addCtorLink a d (mkTypeExpr "Pair" [TypeGeneric c, TypeGeneric a]) state
+    addCtorLink a c (mkTypeRecord "Pair" [TypeGeneric a, TypeGeneric b]) state
+    addCtorLink b c (mkTypeRecord "Pair" [TypeGeneric a, TypeGeneric b]) state
+    addCtorLink c d (mkTypeRecord "Pair" [TypeGeneric c, TypeGeneric a]) state
+    addCtorLink a d (mkTypeRecord "Pair" [TypeGeneric c, TypeGeneric a]) state
 
     addConcreteFlow a (mkBasic "Int") state
     addConcreteFlow b (mkBasic "Bool") state
@@ -208,14 +208,14 @@ testGraph10 = runGeneric $ do
     liftIO $ assertBool "Should have solution" (isJust res)
     let sol = fromJust res
     solD <- liftIO $ H.lookup sol d
-    let c1 = mkTypeExpr "Pair" [mkBasic "Int", mkBasic "Bool"]
-        c2 = mkTypeExpr "Pair" [mkBasic "Bool", mkBasic "Bool"]
+    let c1 = mkTypeRecord "Pair" [mkBasic "Int", mkBasic "Bool"]
+        c2 = mkTypeRecord "Pair" [mkBasic "Bool", mkBasic "Bool"]
         expected =
             sortOn
                 show
-                [ mkTypeExpr "Pair" [c1, mkBasic "Int"]
-                , mkTypeExpr "Pair" [c1, mkBasic "Bool"]
-                , mkTypeExpr "Pair" [c2, mkBasic "Int"]
-                , mkTypeExpr "Pair" [c2, mkBasic "Bool"]
+                [ mkTypeRecord "Pair" [c1, mkBasic "Int"]
+                , mkTypeRecord "Pair" [c1, mkBasic "Bool"]
+                , mkTypeRecord "Pair" [c2, mkBasic "Int"]
+                , mkTypeRecord "Pair" [c2, mkBasic "Bool"]
                 ]
     liftIO $ fmap (sortOn show) solD @?= Just expected
