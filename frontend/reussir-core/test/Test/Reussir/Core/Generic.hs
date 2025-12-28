@@ -3,7 +3,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns -Wno-orphans #-}
 
-module Test.Reussir.Core.Meta where
+module Test.Reussir.Core.Generic where
 
 import Data.HashTable.IO qualified as H
 import Data.List (sortOn)
@@ -11,7 +11,7 @@ import Data.Maybe (fromJust, isJust)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Prim
-import Reussir.Core.Meta
+import Reussir.Core.Generic
 import Reussir.Core.Types.Type
 import Reussir.Parser.Types.Lexer (Identifier (..), Path (..))
 import Test.Tasty
@@ -20,21 +20,21 @@ import Test.Tasty.HUnit
 tests :: TestTree
 tests =
     testGroup
-        "Reussir.Core.Meta"
+        "Reussir.Core.Generic"
         [ testCase "detectGrowingCycles - Graph 1 (Growing Cycle)" testGraph1
         , testCase "detectGrowingCycles - Graph 2 (Non-Growing Cycle)" testGraph2
         , testCase "detectGrowingCycles - Graph 3 (Complex Growing Cycle)" testGraph3
-        , testCase "solveMeta - Graph 4 (Simple Flow)" testGraph4
-        , testCase "solveMeta - Graph 5 (Ctor Flow)" testGraph5
-        , testCase "solveMeta - Graph 6 (Cycle)" testGraph6
-        , testCase "solveMeta - Graph 7 (Multiple Subs)" testGraph7
-        , testCase "solveMeta - Graph 8 (Growing Cycle)" testGraph8
-        , testCase "solveMeta - Graph 9 (Consistent Instantiation)" testGraph9
-        , testCase "solveMeta - Graph 10 (Nested Pairs)" testGraph10
+        , testCase "solveGeneric - Graph 4 (Simple Flow)" testGraph4
+        , testCase "solveGeneric - Graph 5 (Ctor Flow)" testGraph5
+        , testCase "solveGeneric - Graph 6 (Cycle)" testGraph6
+        , testCase "solveGeneric - Graph 7 (Multiple Subs)" testGraph7
+        , testCase "solveGeneric - Graph 8 (Growing Cycle)" testGraph8
+        , testCase "solveGeneric - Graph 9 (Consistent Instantiation)" testGraph9
+        , testCase "solveGeneric - Graph 10 (Nested Pairs)" testGraph10
         ]
 
-runMeta :: Eff '[Prim, IOE] a -> IO a
-runMeta = runEff . runPrim
+runGeneric :: Eff '[Prim, IOE] a -> IO a
+runGeneric = runEff . runPrim
 
 mkPath :: String -> Path
 mkPath s = Path (Identifier (T.pack s)) []
@@ -46,13 +46,13 @@ mkBasic :: String -> Type
 mkBasic s = mkTypeExpr s []
 
 testGraph1 :: Assertion
-testGraph1 = runMeta $ do
-    state <- emptyMetaState
-    vars <- mapM (\n -> newMetaVar n Nothing [] state) ["A", "B", "C", "D"]
+testGraph1 = runGeneric $ do
+    state <- emptyGenericState
+    vars <- mapM (\n -> newGenericVar n Nothing [] state) ["A", "B", "C", "D"]
     let [a, b, c, d] = vars
 
     addDirectLink a b state
-    addCtorLink b c (mkTypeExpr "R" [TypeMeta b]) state
+    addCtorLink b c (mkTypeExpr "R" [TypeGeneric b]) state
     addDirectLink c d state
     addDirectLink d b state
 
@@ -60,12 +60,12 @@ testGraph1 = runMeta $ do
     liftIO $ assertBool "Should detect growing cycle" (isJust res)
 
 testGraph2 :: Assertion
-testGraph2 = runMeta $ do
-    state <- emptyMetaState
-    vars <- mapM (\n -> newMetaVar n Nothing [] state) ["X", "Y", "Z"]
+testGraph2 = runGeneric $ do
+    state <- emptyGenericState
+    vars <- mapM (\n -> newGenericVar n Nothing [] state) ["X", "Y", "Z"]
     let [x, y, z] = vars
 
-    addCtorLink x y (TypeArrow (mkBasic "Int") (TypeMeta x)) state
+    addCtorLink x y (TypeArrow (mkBasic "Int") (TypeGeneric x)) state
     addDirectLink y z state
     addDirectLink z y state
 
@@ -73,29 +73,29 @@ testGraph2 = runMeta $ do
     liftIO $ assertBool "Should NOT detect growing cycle" (not (isJust res))
 
 testGraph3 :: Assertion
-testGraph3 = runMeta $ do
-    state <- emptyMetaState
-    vars <- mapM (\n -> newMetaVar n Nothing [] state) ["1", "2", "3", "4"]
+testGraph3 = runGeneric $ do
+    state <- emptyGenericState
+    vars <- mapM (\n -> newGenericVar n Nothing [] state) ["1", "2", "3", "4"]
     let [v1, v2, v3, v4] = vars
 
     addDirectLink v1 v2 state
     addDirectLink v2 v3 state
-    addCtorLink v3 v4 (mkTypeExpr "S" [TypeMeta v3]) state
+    addCtorLink v3 v4 (mkTypeExpr "S" [TypeGeneric v3]) state
     addDirectLink v4 v2 state
 
     res <- detectGrowingCycles state
     liftIO $ assertBool "Should detect growing cycle" (isJust res)
 
 testGraph4 :: Assertion
-testGraph4 = runMeta $ do
-    state <- emptyMetaState
-    vars <- mapM (\n -> newMetaVar n Nothing [] state) ["A", "B"]
+testGraph4 = runGeneric $ do
+    state <- emptyGenericState
+    vars <- mapM (\n -> newGenericVar n Nothing [] state) ["A", "B"]
     let [a, b] = vars
 
     addDirectLink a b state
     addConcreteFlow a (mkBasic "Int") state
 
-    res <- solveMeta state
+    res <- solveGeneric state
     liftIO $ assertBool "Should have solution" (isJust res)
     let sol = fromJust res
     solA <- liftIO $ H.lookup sol a
@@ -104,15 +104,15 @@ testGraph4 = runMeta $ do
     liftIO $ solB @?= Just [mkBasic "Int"]
 
 testGraph5 :: Assertion
-testGraph5 = runMeta $ do
-    state <- emptyMetaState
-    vars <- mapM (\n -> newMetaVar n Nothing [] state) ["A", "B"]
+testGraph5 = runGeneric $ do
+    state <- emptyGenericState
+    vars <- mapM (\n -> newGenericVar n Nothing [] state) ["A", "B"]
     let [a, b] = vars
 
-    addCtorLink a b (mkTypeExpr "List" [TypeMeta a]) state
+    addCtorLink a b (mkTypeExpr "List" [TypeGeneric a]) state
     addConcreteFlow a (mkBasic "Int") state
 
-    res <- solveMeta state
+    res <- solveGeneric state
     liftIO $ assertBool "Should have solution" (isJust res)
     let sol = fromJust res
     solA <- liftIO $ H.lookup sol a
@@ -121,9 +121,9 @@ testGraph5 = runMeta $ do
     liftIO $ solB @?= Just [mkTypeExpr "List" [mkBasic "Int"]]
 
 testGraph6 :: Assertion
-testGraph6 = runMeta $ do
-    state <- emptyMetaState
-    vars <- mapM (\n -> newMetaVar n Nothing [] state) ["A", "B"]
+testGraph6 = runGeneric $ do
+    state <- emptyGenericState
+    vars <- mapM (\n -> newGenericVar n Nothing [] state) ["A", "B"]
     let [a, b] = vars
 
     addDirectLink a b state
@@ -131,7 +131,7 @@ testGraph6 = runMeta $ do
     addConcreteFlow a (mkBasic "Int") state
     addConcreteFlow b (mkBasic "Bool") state
 
-    res <- solveMeta state
+    res <- solveGeneric state
     liftIO $ assertBool "Should have solution" (isJust res)
     let sol = fromJust res
     solA <- liftIO $ H.lookup sol a
@@ -141,16 +141,16 @@ testGraph6 = runMeta $ do
     liftIO $ fmap (sortOn show) solB @?= Just expected
 
 testGraph7 :: Assertion
-testGraph7 = runMeta $ do
-    state <- emptyMetaState
-    vars <- mapM (\n -> newMetaVar n Nothing [] state) ["A", "B"]
+testGraph7 = runGeneric $ do
+    state <- emptyGenericState
+    vars <- mapM (\n -> newGenericVar n Nothing [] state) ["A", "B"]
     let [a, b] = vars
 
-    addCtorLink a b (mkTypeExpr "Pair" [TypeMeta a, TypeMeta a]) state
+    addCtorLink a b (mkTypeExpr "Pair" [TypeGeneric a, TypeGeneric a]) state
     addConcreteFlow a (mkBasic "Int") state
     addConcreteFlow a (mkBasic "Bool") state
 
-    res <- solveMeta state
+    res <- solveGeneric state
     liftIO $ assertBool "Should have solution" (isJust res)
     let sol = fromJust res
     solB <- liftIO $ H.lookup sol b
@@ -158,31 +158,31 @@ testGraph7 = runMeta $ do
     liftIO $ fmap (sortOn show) solB @?= Just expected
 
 testGraph8 :: Assertion
-testGraph8 = runMeta $ do
-    state <- emptyMetaState
-    vars <- mapM (\n -> newMetaVar n Nothing [] state) ["A"]
+testGraph8 = runGeneric $ do
+    state <- emptyGenericState
+    vars <- mapM (\n -> newGenericVar n Nothing [] state) ["A"]
     let [a] = vars
 
-    addCtorLink a a (mkTypeExpr "List" [TypeMeta a]) state
+    addCtorLink a a (mkTypeExpr "List" [TypeGeneric a]) state
     addConcreteFlow a (mkBasic "Int") state
 
-    res <- solveMeta state
+    res <- solveGeneric state
     liftIO $ assertBool "Should NOT have solution (growing cycle)" (not (isJust res))
 
 testGraph9 :: Assertion
-testGraph9 = runMeta $ do
-    state <- emptyMetaState
-    vars <- mapM (\n -> newMetaVar n Nothing [] state) ["A", "B", "C"]
+testGraph9 = runGeneric $ do
+    state <- emptyGenericState
+    vars <- mapM (\n -> newGenericVar n Nothing [] state) ["A", "B", "C"]
     let [a, b, c] = vars
 
     addDirectLink b a state
-    addCtorLink a c (mkTypeExpr "Pair" [TypeMeta a, TypeMeta b]) state
-    addCtorLink b c (mkTypeExpr "Pair" [TypeMeta a, TypeMeta b]) state
+    addCtorLink a c (mkTypeExpr "Pair" [TypeGeneric a, TypeGeneric b]) state
+    addCtorLink b c (mkTypeExpr "Pair" [TypeGeneric a, TypeGeneric b]) state
 
     addConcreteFlow a (mkBasic "Int") state
     addConcreteFlow b (mkBasic "Bool") state
 
-    res <- solveMeta state
+    res <- solveGeneric state
     liftIO $ assertBool "Should have solution" (isJust res)
     let sol = fromJust res
     solC <- liftIO $ H.lookup sol c
@@ -190,21 +190,21 @@ testGraph9 = runMeta $ do
     liftIO $ fmap (sortOn show) solC @?= Just expected
 
 testGraph10 :: Assertion
-testGraph10 = runMeta $ do
-    state <- emptyMetaState
-    vars <- mapM (\n -> newMetaVar n Nothing [] state) ["A", "B", "C", "D"]
+testGraph10 = runGeneric $ do
+    state <- emptyGenericState
+    vars <- mapM (\n -> newGenericVar n Nothing [] state) ["A", "B", "C", "D"]
     let [a, b, c, d] = vars
 
     addDirectLink b a state
-    addCtorLink a c (mkTypeExpr "Pair" [TypeMeta a, TypeMeta b]) state
-    addCtorLink b c (mkTypeExpr "Pair" [TypeMeta a, TypeMeta b]) state
-    addCtorLink c d (mkTypeExpr "Pair" [TypeMeta c, TypeMeta a]) state
-    addCtorLink a d (mkTypeExpr "Pair" [TypeMeta c, TypeMeta a]) state
+    addCtorLink a c (mkTypeExpr "Pair" [TypeGeneric a, TypeGeneric b]) state
+    addCtorLink b c (mkTypeExpr "Pair" [TypeGeneric a, TypeGeneric b]) state
+    addCtorLink c d (mkTypeExpr "Pair" [TypeGeneric c, TypeGeneric a]) state
+    addCtorLink a d (mkTypeExpr "Pair" [TypeGeneric c, TypeGeneric a]) state
 
     addConcreteFlow a (mkBasic "Int") state
     addConcreteFlow b (mkBasic "Bool") state
 
-    res <- solveMeta state
+    res <- solveGeneric state
     liftIO $ assertBool "Should have solution" (isJust res)
     let sol = fromJust res
     solD <- liftIO $ H.lookup sol d

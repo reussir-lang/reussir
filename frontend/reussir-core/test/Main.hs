@@ -1,8 +1,8 @@
 module Main (main) where
 
+import Test.Reussir.Core.Generic qualified as Generic
 import Test.Tasty
 import Test.Tasty.HUnit
-import Test.Reussir.Core.Meta qualified as Meta
 
 main :: IO ()
 main = defaultMain tests
@@ -15,5 +15,5 @@ tests =
             "Unit tests"
             [ testCase "placeholder" $ True @?= True
             ]
-        , Meta.tests
+        , Generic.tests
         ]

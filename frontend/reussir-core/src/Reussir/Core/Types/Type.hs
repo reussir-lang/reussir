@@ -2,7 +2,7 @@ module Reussir.Core.Types.Type where
 
 import Data.Int (Int8)
 import Data.List (intercalate)
-import Reussir.Core.Types.MetaID (MetaID)
+import Reussir.Core.Types.GenericID (GenericID)
 import Reussir.Parser.Types.Lexer (Path (..))
 
 {- | Represents integral types with a specific bit width.
@@ -36,6 +36,15 @@ instance Show FloatingPointType where
     show BFloat16 = "bfloat16"
     show Float8 = "float8"
 
+{- | Represents a local hole identifier in the Reussir type system.
+Holes are placeholders for types to be inferred later.
+-}
+newtype HoleID = HoleID {holeIDValue :: Int}
+    deriving (Eq, Ord)
+
+instance Show HoleID where
+    show (HoleID val) = "?" ++ show val
+
 {- | Represents a type in the Reussir type system.
 Types can be primitives (integral, floating-point, bool, string, unit)
 or user-defined types with optional type parameters.
@@ -55,8 +64,10 @@ data Type
       TypeUnit
     | -- | Arrow type
       TypeArrow Type Type
-    | -- | Meta Variable
-      TypeMeta MetaID
+    | -- | Generic Variable (meta from interface, awaiting for instantiation)
+      TypeGeneric GenericID
+    | -- | Local hole (meta local to function, to be solved during type inference)
+      TypeHole HoleID
     deriving (Eq)
 
 instance Show Type where
@@ -72,4 +83,5 @@ instance Show Type where
     show TypeStr = "str"
     show TypeUnit = "unit"
     show (TypeArrow a b) = "(" ++ show a ++ " -> " ++ show b ++ ")"
-    show (TypeMeta meta) = show meta
+    show (TypeGeneric generic) = show generic
+    show (TypeHole hole) = show hole

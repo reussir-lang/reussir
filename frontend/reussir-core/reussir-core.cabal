@@ -61,11 +61,11 @@ library
     -- Modules exported by the library.
     exposed-modules:  
         Reussir.Core
-        Reussir.Core.Meta
+        Reussir.Core.Generic
         Reussir.Core.Type
         Reussir.Core.Types
-        Reussir.Core.Types.Meta
-        Reussir.Core.Types.MetaID
+        Reussir.Core.Types.Generic
+        Reussir.Core.Types.GenericID
         Reussir.Core.Types.Type
 
     -- Modules included in this library but not exported.
@@ -99,7 +99,7 @@ test-suite reussir-core-test
 
     -- Modules included in this executable, other than Main.
     other-modules:
-        Test.Reussir.Core.Meta
+        Test.Reussir.Core.Generic
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
