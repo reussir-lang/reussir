@@ -86,6 +86,7 @@ library
                       unicode-data,
                       inline-c,
                       inline-c-cpp,
+                      hashable,
                       prettyprinter ^>= 1.7.1,
                       prettyprinter-ansi-terminal
 

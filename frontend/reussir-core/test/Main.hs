@@ -1,5 +1,6 @@
 module Main (main) where
 
+import Test.Reussir.Core.Class qualified as Class
 import Test.Reussir.Core.Generic qualified as Generic
 import Test.Reussir.Core.Tyck qualified as Tyck
 import Test.Tasty
@@ -18,4 +19,5 @@ tests =
             ]
         , Generic.tests
         , Tyck.tests
+        , Class.tests
         ]

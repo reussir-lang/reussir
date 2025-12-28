@@ -1,6 +1,7 @@
 -- | Module for lexer-level types used in the Reussir parser.
 module Reussir.Parser.Types.Lexer where
 
+import Data.Hashable (Hashable (..))
 import Data.Int (Int64)
 import Data.List (intercalate)
 import Data.String (IsString (..))
@@ -10,7 +11,10 @@ import Data.Text qualified as T
 Wraps a Text value containing the identifier's name.
 -}
 newtype Identifier = Identifier {unIdentifier :: T.Text}
-    deriving (Eq)
+    deriving (Eq, Ord)
+
+instance Hashable Identifier where
+    hashWithSalt salt (Identifier name) = hashWithSalt salt name
 
 instance IsString Identifier where
     fromString = Identifier . T.pack
@@ -24,7 +28,11 @@ data Path = Path
     , pathSegments :: [Identifier]
     -- ^ The namespace segments in order (e.g., ["std", "io"] in "std::io::File")
     }
-    deriving (Eq)
+    deriving (Eq, Ord)
+
+instance Hashable Path where
+    hashWithSalt salt (Path base segs) =
+        salt `hashWithSalt` base `hashWithSalt` segs
 
 instance Show Path where
     show (Path base segs) =
