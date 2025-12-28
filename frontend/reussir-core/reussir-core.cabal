@@ -88,7 +88,8 @@ library
                       hashable,
                       xxhash-ffi,
                       scientific,
-                      hashtables
+                      hashtables,
+                      ansi-terminal-types
 
     -- Directories containing source files.
     hs-source-dirs:   src
@@ -106,6 +107,7 @@ test-suite reussir-core-test
     -- Modules included in this executable, other than Main.
     other-modules:
         Test.Reussir.Core.Generic
+        Test.Reussir.Core.Tyck
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
