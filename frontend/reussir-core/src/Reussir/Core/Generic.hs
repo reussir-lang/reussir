@@ -1,15 +1,15 @@
 {- |
-Module      : Reussir.Core.Meta
-Description : Meta-variable constraint graph, growing-cycle detection, and solution propagation.
+Module      : Reussir.Core.Generic
+Description : Generic-variable constraint graph, growing-cycle detection, and solution propagation.
 
-This module implements a small constraint solver over *meta variables* (unification-ish
-placeholders) by building a directed graph of "flows" between metas and optionally
+This module implements a small constraint solver over *generic variables* (unification-ish
+placeholders) by building a directed graph of "flows" between generics and optionally
 annotating edges with a constructor / type template.
 
 The key ideas:
 
-1. We maintain a directed graph over 'MetaID's.
-   Each node is a meta variable, and each directed edge @u -> v@ means:
+1. We maintain a directed graph over 'GenericID's.
+   Each node is a generic variable, and each directed edge @u -> v@ means:
    "information about @u@ flows into @v@".
 
 2. Edges optionally carry a constructor (a 'Type' template):
@@ -17,7 +17,7 @@ The key ideas:
    - @u -[Just t]-> v@: constructor flow (solutions of @u@ can be /used to instantiate/ @t@
      and the instantiated result flows into @v@)
 
-3. We also record direct evidence of concrete types per meta via 'addConcreteFlow'.
+3. We also record direct evidence of concrete types per generic via 'addConcreteFlow'.
 
 4. A /growing cycle/ is a directed cycle that contains at least one constructor edge.
    Such a cycle implies an infinite growth (e.g. @a = List a = List (List a) = ...@),
@@ -26,7 +26,7 @@ The key ideas:
 
 5. If there is no growing cycle:
    - SCCs (strongly connected components) formed only by non-constructor edges represent
-     metas that must share the same solution set.
+     generics that must share the same solution set.
    - We compute SCCs, process them in a topological order, and propagate/instantiate
      types along incoming edges.
 
@@ -36,21 +36,21 @@ Graph model
 ===========
 
 Nodes:
-  - Each meta variable is a node identified by 'MetaID'.
+  - Each generic variable is a node identified by 'GenericID'.
 
 Edges:
   - @u -> v@ (plain edge): solutions(u) ⊆ solutions(v)
-  - @u -(t)-> v@ (ctor edge): instantiate template @t@ using solutions of metas referenced
+  - @u -(t)-> v@ (ctor edge): instantiate template @t@ using solutions of generics referenced
     inside @t@ (including possibly @u@ and others), and add those instantiated types to
     solutions(v).
 
 Concrete evidence:
-  - A meta can be seeded with concrete types (only if 'isConcrete' holds).
+  - A generic can be seeded with concrete types (only if 'isConcrete' holds).
 
 Example (ASCII)
 ---------------
 
-Suppose we have metas: m0, m1, m2
+Suppose we have generics: m0, m1, m2
 
 Plain edges:
   m0 -----> m1
@@ -100,7 +100,7 @@ Then:
 
 This returns *one* witness ctor-edge in some growing cycle.
 
-solveMeta
+solveGeneric
 ---------
 
 1) Reject if any growing cycle exists.
@@ -117,11 +117,11 @@ solveMeta
 
 5) Process SCCs in topological order:
    For each SCC:
-     - Let nodes = all metas in this SCC.
+     - Let nodes = all generics in this SCC.
      - baseTypes = union of existing solutions already present for nodes
      - flowTypes = union of contributions from incoming edges from outside the SCC
        * For plain edges: solutions(u)
-       * For ctor edges: instantiate(template) using solutions of metas appearing in template
+       * For ctor edges: instantiate(template) using solutions of generics appearing in template
      - allTypes = nub(baseTypes ++ flowTypes)
      - Write allTypes as the solution set for each node in SCC.
 
@@ -129,12 +129,12 @@ Instantiation details
 ---------------------
 
 instantiate template t:
-  - collectVars t = all MetaID occurring in t (as TypeMeta nodes)
-  - for each collected meta v, look up its solution set sol[v] (possibly empty)
+  - collectVars t = all GenericID occurring in t (as TypeGeneric nodes)
+  - for each collected generic v, look up its solution set sol[v] (possibly empty)
   - generateAssignments builds the Cartesian product of choices for all vars
-  - substituteMeta uses each assignment to produce a fully instantiated Type
+  - substituteGeneric uses each assignment to produce a fully instantiated Type
 
-Note: if some meta in template has no solutions yet, it contributes no assignments and thus
+Note: if some generic in template has no solutions yet, it contributes no assignments and thus
 produces no instantiated results. This naturally delays ctor instantiation until prerequisites
 arrive from earlier SCCs.
 
@@ -143,8 +143,8 @@ arrive from earlier SCCs.
 Performance notes
 =================
 
-- We store meta vars in a Seq inside an IORef for append-only allocation.
-- Each MetaVar stores its outgoing edges in a mutable HashTable.
+- We store generic vars in a Seq inside an IORef for append-only allocation.
+- Each GenericVar stores its outgoing edges in a mutable HashTable.
 - We use a HashTable for solution maps as well.
 - SCC computation uses Data.Graph over an adjacency list snapshot (O(V+E)).
 - Instantiation can blow up combinatorially due to Cartesian products; this is intended
@@ -152,7 +152,7 @@ Performance notes
 
 -------------------------------------------------------------------------------
 -}
-module Reussir.Core.Meta where
+module Reussir.Core.Generic where
 
 import Control.Monad (forM, forM_, when)
 import Data.Graph (flattenSCC, stronglyConnComp)
@@ -166,59 +166,59 @@ import Data.Text qualified as T
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (modifyIORef', newIORef', readIORef')
-import Reussir.Core.Type (isConcrete, substituteMeta)
-import Reussir.Core.Types.Meta
-import Reussir.Core.Types.MetaID
+import Reussir.Core.Type (isConcrete, substituteGeneric)
+import Reussir.Core.Types.Generic
+import Reussir.Core.Types.GenericID
 import Reussir.Core.Types.Type (Type (..))
 import Reussir.Parser.Types.Lexer (Path)
 
 {- |
-Create an empty 'MetaState'.
+Create an empty 'GenericState'.
 
 This allocates:
-  - an IORef holding a Seq of all allocated 'MetaVar' records
+  - an IORef holding a Seq of all allocated 'GenericVar' records
   - a hash table for 'concreteFlow' seeding
 
 Allocation model
 ----------------
-Meta vars are allocated by appending to a Seq. Their 'MetaID' is the index in that Seq
-at allocation time. This means IDs are stable for the lifetime of the MetaState.
+Generic vars are allocated by appending to a Seq. Their 'GenericID' is the index in that Seq
+at allocation time. This means IDs are stable for the lifetime of the GenericState.
 -}
-emptyMetaState :: (IOE :> es, Prim :> es) => Eff es MetaState
-emptyMetaState = MetaState <$> newIORef' Seq.empty <*> liftIO H.new
+emptyGenericState :: (IOE :> es, Prim :> es) => Eff es GenericState
+emptyGenericState = GenericState <$> newIORef' Seq.empty <*> liftIO H.new
 
 {- |
-Allocate a new meta variable and append it to the global sequence.
+Allocate a new generic variable and append it to the global sequence.
 
 Parameters:
-  * metaName   : pretty/debug name
-  * metaSpan   : (start,end) span in source, if available
-  * metaBounds : a list of paths used as bounds/constraints (domain-specific)
+  * genericName   : pretty/debug name
+  * genericSpan   : (start,end) span in source, if available
+  * genericBounds : a list of paths used as bounds/constraints (domain-specific)
   * state      : global state
 
 Returns:
-  A fresh 'MetaID' corresponding to its index in the internal Seq.
+  A fresh 'GenericID' corresponding to its index in the internal Seq.
 
 Notes:
-  Each meta var has its own mutable hash table of outgoing edges ('metaLinks').
+  Each generic var has its own mutable hash table of outgoing edges ('genericLinks').
 -}
-newMetaVar ::
+newGenericVar ::
     (IOE :> es, Prim :> es) =>
     T.Text ->
     Maybe (Int64, Int64) ->
     [Path] ->
-    MetaState ->
-    Eff es MetaID
-newMetaVar metaName metaSpan metaBounds state = do
+    GenericState ->
+    Eff es GenericID
+newGenericVar genericName genericSpan genericBounds state = do
     links <- liftIO H.new
-    let var = MetaVar{metaName, metaSpan, metaLinks = links, metaBounds}
+    let var = GenericVar{genericName, genericSpan, genericLinks = links, genericBounds}
         ref = getStateRef state
     varID <- fromIntegral . Seq.length <$> readIORef' ref
     modifyIORef' ref (Seq.|> var)
-    pure $ MetaID varID
+    pure $ GenericID varID
 
 {- |
-Add an edge @src -> tgt@ into the meta graph.
+Add an edge @src -> tgt@ into the generic graph.
 
 If @mType@ is:
   * Nothing    : plain flow edge
@@ -226,33 +226,33 @@ If @mType@ is:
 
 Semantics:
   - plain: solutions(src) flow into solutions(tgt)
-  - ctor : instantiate tyTpl with current solutions for metas occurring inside tyTpl,
+  - ctor : instantiate tyTpl with current solutions for generics occurring inside tyTpl,
            and the instantiated results flow into solutions(tgt)
 
 Implementation:
-  Outgoing edges are stored in 'metaLinks' of the source node.
+  Outgoing edges are stored in 'genericLinks' of the source node.
 -}
 addLink ::
     (IOE :> es, Prim :> es) =>
-    MetaID ->
-    MetaID ->
+    GenericID ->
+    GenericID ->
     Maybe Type ->
-    MetaState ->
+    GenericState ->
     Eff es ()
-addLink (MetaID srcID) (MetaID tgtID) mType state = do
+addLink (GenericID srcID) (GenericID tgtID) mType state = do
     let ref = getStateRef state
     vars <- readIORef' ref
     let var = Seq.index vars (fromIntegral srcID)
-    liftIO $ H.insert (metaLinks var) (MetaID tgtID) mType
+    liftIO $ H.insert (genericLinks var) (GenericID tgtID) mType
 
 {- |
 Add a plain flow edge @src -> tgt@.
 -}
 addDirectLink ::
     (IOE :> es, Prim :> es) =>
-    MetaID ->
-    MetaID ->
-    MetaState ->
+    GenericID ->
+    GenericID ->
+    GenericState ->
     Eff es ()
 addDirectLink src tgt state = addLink src tgt Nothing state
 
@@ -261,66 +261,66 @@ Add a constructor edge @src -(tyTpl)-> tgt@.
 -}
 addCtorLink ::
     (IOE :> es, Prim :> es) =>
-    MetaID ->
-    MetaID ->
+    GenericID ->
+    GenericID ->
     Type ->
-    MetaState ->
+    GenericState ->
     Eff es ()
 addCtorLink src tgt mType state = addLink src tgt (Just mType) state
 
 {- |
-Get the human-friendly name of a meta variable.
+Get the human-friendly name of a generic variable.
 -}
 getName ::
     (IOE :> es, Prim :> es) =>
-    MetaID ->
-    MetaState ->
+    GenericID ->
+    GenericState ->
     Eff es T.Text
-getName (MetaID varID) state = do
+getName (GenericID varID) state = do
     let ref = getStateRef state
     vars <- readIORef' ref
     let var = Seq.index vars (fromIntegral varID)
-    pure $ metaName var
+    pure $ genericName var
 
 {- |
-Get the source span of a meta variable, if any.
+Get the source span of a generic variable, if any.
 -}
 getSpan ::
     (IOE :> es, Prim :> es) =>
-    MetaID ->
-    MetaState ->
+    GenericID ->
+    GenericState ->
     Eff es (Maybe (Int64, Int64))
-getSpan (MetaID varID) state = do
+getSpan (GenericID varID) state = do
     let ref = getStateRef state
     vars <- readIORef' ref
     let var = Seq.index vars (fromIntegral varID)
-    pure $ metaSpan var
+    pure $ genericSpan var
 
 {- |
-Seed a meta variable with a concrete type.
+Seed a generic variable with a concrete type.
 
 This only inserts the type if 'isConcrete ty' holds.
-If the meta has an existing list in 'concreteFlow', we cons onto it.
+If the generic has an existing list in 'concreteFlow', we cons onto it.
 
-This is an *input* to the solver: it represents "we already learned that this meta
+This is an *input* to the solver: it represents "we already learned that this generic
 can be (or must be) this concrete type".
 
 Note:
-  We store a list of concrete types per meta, allowing multiple candidates.
+  We store a list of concrete types per generic, allowing multiple candidates.
 -}
 addConcreteFlow ::
     (IOE :> es, Prim :> es) =>
-    MetaID ->
+    GenericID ->
     Type ->
-    MetaState ->
+    GenericState ->
     Eff es ()
-addConcreteFlow metaID ty state = do
+addConcreteFlow genericID ty state = do
     when (isConcrete ty) $ do
         let table = concreteFlow state
-        existing <- liftIO $ H.lookup table metaID
+        existing <- liftIO $ H.lookup table genericID
         case existing of
-            Nothing -> liftIO $ H.insert table metaID [ty]
-            Just tys -> liftIO $ H.insert table metaID (ty : tys)
+            Nothing -> liftIO $ H.insert table genericID [ty]
+            Just tys -> liftIO $ H.insert table genericID (ty : tys)
 
 -- Internal DFS visitation state used by 'detectGrowingCycles'.
 data VisitState
@@ -334,14 +334,14 @@ If such a cycle exists, returns /one witness constructor edge/ that is part of s
 Why this matters
 ----------------
 A constructor edge is like a "type grows by applying a constructor".
-If you can return to the same meta through a path that includes a constructor edge,
+If you can return to the same generic through a path that includes a constructor edge,
 you can keep growing types indefinitely:
 
   a  ->  ...  ->  a
   where some edge is (List _), (Pair _ _), (Arrow _ _), ...
 
 This is the classic "occurs check" style failure in unification, generalized to a graph
-with multiple metas.
+with multiple generics.
 
 What is returned
 ----------------
@@ -351,7 +351,7 @@ The returned triple @(src, tgt, mCtor)@ is always an edge that has a constructor
 Algorithm sketch (DFS + latest ctor edge)
 -----------------------------------------
 We run DFS over all nodes, maintaining:
-  - visited map: MetaID -> VisitState (Visiting depth | Done)
+  - visited map: GenericID -> VisitState (Visiting depth | Done)
   - depth: current DFS depth
   - latestCtorDepth: depth at which we last traversed a ctor edge on the current recursion path
   - latestCtorEdge: that edge (u,v,Just t)
@@ -363,11 +363,11 @@ When exploring edge (u -> v):
 -}
 detectGrowingCycles ::
     (IOE :> es, Prim :> es) =>
-    MetaState ->
-    Eff es (Maybe (MetaID, MetaID, Maybe Type))
+    GenericState ->
+    Eff es (Maybe (GenericID, GenericID, Maybe Type))
 detectGrowingCycles state = do
     vars <- readIORef' (getStateRef state)
-    let nodes = [MetaID (fromIntegral i) | i <- [0 .. Seq.length vars - 1]]
+    let nodes = [GenericID (fromIntegral i) | i <- [0 .. Seq.length vars - 1]]
 
     let loop [] _ = pure Nothing
         loop (n : ns) visited = do
@@ -382,9 +382,9 @@ detectGrowingCycles state = do
 
         dfs u depth latestCtorDepth latestCtorEdge visited = do
             let visited' = Map.insert u (Visiting depth) visited
-            let var = Seq.index vars (fromIntegral (case u of MetaID i -> i))
+            let var = Seq.index vars (fromIntegral (case u of GenericID i -> i))
 
-            edgesList <- liftIO $ H.toList (metaLinks var)
+            edgesList <- liftIO $ H.toList (genericLinks var)
 
             let processEdges [] vMap = pure (Nothing, Map.insert u Done vMap)
                 processEdges ((v, ctor) : es) vMap = do
@@ -414,18 +414,18 @@ detectGrowingCycles state = do
 
     loop nodes Map.empty
 
-{- | Solves the meta variable constraints and returns a map @MetaID -> [Type]@.
+{- | Solves the generic variable constraints and returns a map @GenericID -> [Type]@.
 
 Return value:
   - @Nothing@ if a growing cycle is detected.
-  - @Just table@ where table maps each meta to a list of possible fully instantiated types.
+  - @Just table@ where table maps each generic to a list of possible fully instantiated types.
 
 High-level procedure
 --------------------
 1. Reject if there is a growing cycle (see 'detectGrowingCycles').
 
 2. Otherwise:
-   - Compute SCCs in the meta graph.
+   - Compute SCCs in the generic graph.
    - Process SCCs in topological order.
    - Each SCC shares one solution set (we assign the same list to each node in SCC).
    - For each SCC, collect:
@@ -440,7 +440,7 @@ Important detail:
 Instantiation along ctor edges
 ------------------------------
 If we have incoming edge @u -(tTpl)-> v@ (and u is outside the SCC):
-  - We instantiate @tTpl@ by substituting each meta appearing in @tTpl@ with each of its
+  - We instantiate @tTpl@ by substituting each generic appearing in @tTpl@ with each of its
     current solutions (cartesian product).
   - Each instantiated result is added to solutions(v) (and thus to the SCC’s shared set).
 
@@ -449,11 +449,11 @@ This is why the solver returns *lists* of types: it explicitly enumerates altern
 Caveat:
   Instantiation may be large (cartesian product). That's intended for codegen enumeration.
 -}
-solveMeta ::
+solveGeneric ::
     (IOE :> es, Prim :> es) =>
-    MetaState ->
-    Eff es (Maybe (H.CuckooHashTable MetaID [Type]))
-solveMeta state = do
+    GenericState ->
+    Eff es (Maybe (H.CuckooHashTable GenericID [Type]))
+solveGeneric state = do
     cycle' <- detectGrowingCycles state
     if isJust cycle'
         then pure Nothing
@@ -461,13 +461,13 @@ solveMeta state = do
   where
     runSolve = do
         vars <- readIORef' (getStateRef state)
-        let allNodes = [MetaID (fromIntegral i) | i <- [0 .. Seq.length vars - 1]]
+        let allNodes = [GenericID (fromIntegral i) | i <- [0 .. Seq.length vars - 1]]
 
         -- Build adjacency list for SCC
         -- stronglyConnComp expects triples (node, key, [key]).
         adjList <- forM allNodes $ \u -> do
-            let var = Seq.index vars (fromIntegral (case u of MetaID i -> i))
-            edges <- liftIO $ H.toList (metaLinks var)
+            let var = Seq.index vars (fromIntegral (case u of GenericID i -> i))
+            edges <- liftIO $ H.toList (genericLinks var)
             let neighbors = map fst edges
             pure (u, u, neighbors)
 
@@ -475,17 +475,17 @@ solveMeta state = do
         let topo = reverse sccs
 
         -- Build reverse graph: for each v, store incoming edges (u, ctorAnn)
-        incomingEdges <- liftIO (H.new :: IO (H.CuckooHashTable MetaID [(MetaID, Maybe Type)]))
+        incomingEdges <- liftIO (H.new :: IO (H.CuckooHashTable GenericID [(GenericID, Maybe Type)]))
         forM_ allNodes $ \u -> do
-            let var = Seq.index vars (fromIntegral (case u of MetaID i -> i))
-            edges <- liftIO $ H.toList (metaLinks var)
+            let var = Seq.index vars (fromIntegral (case u of GenericID i -> i))
+            edges <- liftIO $ H.toList (genericLinks var)
             forM_ edges $ \(v, ctor) -> do
                 prev <- liftIO $ H.lookup incomingEdges v
                 let new = (u, ctor) : fromMaybe [] prev
                 liftIO $ H.insert incomingEdges v new
 
         -- Initialize solution with concrete flow
-        currentSol <- liftIO (H.new :: IO (H.CuckooHashTable MetaID [Type]))
+        currentSol <- liftIO (H.new :: IO (H.CuckooHashTable GenericID [Type]))
         concrete <- liftIO $ H.toList (concreteFlow state)
         forM_ concrete $ \(k, v) -> liftIO $ H.insert currentSol k v
 
@@ -516,7 +516,7 @@ solveMeta state = do
     --      and we want only "external" contributions to compute it.
     --    - Else:
     --        * plain edge: take solutions(u)
-    --        * ctor edge : instantiate template with solutions of metas appearing in it
+    --        * ctor edge : instantiate template with solutions of generics appearing in it
     --
     getIncomingTypes sol incomingEdges sccNodes node = do
         edges <- liftIO $ H.lookup incomingEdges node
@@ -538,28 +538,28 @@ solveMeta state = do
                 Just t -> instantiate t sol
 
     -- \|
-    --    Instantiate a template type by enumerating solutions for all metas occurring inside it.
+    --    Instantiate a template type by enumerating solutions for all generics occurring inside it.
     --
     --    Steps:
-    --      1) collectVars t: list all MetaID referenced as TypeMeta in t
-    --      2) generateAssignments: cartesian product picking one concrete type per meta
-    --      3) substituteMeta: apply assignment env to t, producing fully instantiated types
+    --      1) collectVars t: list all GenericID referenced as TypeGeneric in t
+    --      2) generateAssignments: cartesian product picking one concrete type per generic
+    --      3) substituteGeneric: apply assignment env to t, producing fully instantiated types
     --
     instantiate t sol = do
         let vars = nub $ collectVars t
         assignments <- generateAssignments vars sol
-        pure $ map (\env -> substituteMeta t (\m -> Map.lookup m env)) assignments
+        pure $ map (\env -> substituteGeneric t (\m -> Map.lookup m env)) assignments
 
-    -- Collect all metas referenced in a Type tree.
-    collectVars (TypeMeta m) = [m]
+    -- Collect all generics referenced in a Type tree.
+    collectVars (TypeGeneric m) = [m]
     collectVars (TypeExpr _ args) = concatMap collectVars args
     collectVars (TypeArrow t1 t2) = collectVars t1 ++ collectVars t2
     collectVars _ = []
 
     -- \|
-    --    Enumerate all environments (MetaID -> Type) for the given meta variables.
+    --    Enumerate all environments (GenericID -> Type) for the given generic variables.
     --
-    --    If some meta has no known solution yet (lookup returns Nothing or empty list),
+    --    If some generic has no known solution yet (lookup returns Nothing or empty list),
     --    it yields no assignments and thus blocks instantiation (returns []).
     generateAssignments [] _ = pure [Map.empty]
     generateAssignments (v : vs) sol = do
