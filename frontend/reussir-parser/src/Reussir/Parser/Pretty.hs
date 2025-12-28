@@ -63,6 +63,7 @@ instance PrettyColored Type where
     prettyColored TypeUnit = typeName "unit"
     prettyColored (TypeArrow t1 t2) = parens (prettyColored t1 <+> "->" <+> prettyColored t2)
     prettyColored (TypeSpanned w) = prettyColored (spanValue w)
+    prettyColored TypeBottom = typeName "⊥"
 
 instance PrettyColored Constant where
     prettyColored (ConstInt n) = literal (pretty n)

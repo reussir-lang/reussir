@@ -55,6 +55,8 @@ data Type
       TypeUnit
     | -- | Arrow type
       TypeArrow Type Type
+    | -- | Bottom type
+      TypeBottom
     | -- | Spanned
       TypeSpanned (WithSpan Type)
 
@@ -84,3 +86,4 @@ instance Show Type where
     show TypeUnit = "unit"
     show (TypeArrow a b) = "(" ++ show a ++ " -> " ++ show b ++ ")"
     show (TypeSpanned ws) = show (spanValue ws)
+    show TypeBottom = "⊥"

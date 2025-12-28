@@ -25,6 +25,7 @@ substituteGenericOrHole original subst = go original
         Nothing -> TypeGeneric generic
     go (TypeRc t cap) = TypeRc (go t) cap
     go (TypeRef t cap) = TypeRef (go t) cap
+    go TypeBottom = TypeBottom
 
 substituteGeneric ::
     Type ->

@@ -73,6 +73,8 @@ data Type
       TypeRc Type Capability
     | -- | Reference type (projected)
       TypeRef Type Capability
+    | -- | Bottom type
+      TypeBottom
     deriving (Eq)
 
 instance Show Type where
@@ -93,3 +95,4 @@ instance Show Type where
     show (TypeGeneric generic) = show generic
     show (TypeHole hole) = show hole
     show (TypeRef t cap) = "&" ++ show cap ++ " " ++ show t
+    show TypeBottom = "⊥"

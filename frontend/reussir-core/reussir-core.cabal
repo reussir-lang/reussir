@@ -67,6 +67,8 @@ library
         Reussir.Core.Types.Generic
         Reussir.Core.Types.GenericID
         Reussir.Core.Types.Type
+        Reussir.Core.Types.Expr
+        Reussir.Core.Tyck
 
     -- Modules included in this library but not exported.
     -- other-modules:
