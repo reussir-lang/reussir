@@ -1,6 +1,6 @@
 module Reussir.Core.Class where
 
-import Control.Monad (forM_, when)
+import Control.Monad (filterM, forM_, when)
 import Data.HashTable.IO qualified as H
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
@@ -12,7 +12,7 @@ import Data.Sequence (Seq (..), (<|))
 import Data.Sequence qualified as Seq
 import Data.Set qualified as Set
 import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
-import Reussir.Core.Types.Class (Class, ClassDAG (..), ClassNode (..))
+import Reussir.Core.Types.Class (Class, ClassDAG (..), ClassNode (..), TypeBound)
 
 newDAG :: (IOE :> es) => Eff es ClassDAG
 newDAG = do
@@ -210,3 +210,29 @@ isSuperClass dag parent child = do
 
             -- Start DFS from the child
             search (Seq.singleton child) Set.empty
+
+meetClass :: (IOE :> es) => ClassDAG -> Class -> Class -> Eff es TypeBound
+meetClass dag c1 c2 = do
+    sup12 <- isSuperClass dag c1 c2
+    if sup12
+        then pure [c2]
+        else do
+            sup21 <- isSuperClass dag c2 c1
+            if sup21
+                then pure [c1]
+                else pure [c1, c2]
+
+meetBound :: (IOE :> es) => ClassDAG -> TypeBound -> TypeBound -> Eff es TypeBound
+meetBound dag b1 b2 = do
+    let candidates = Set.toList $ Set.fromList (b1 ++ b2)
+    filterM
+        ( \c -> do
+            -- Keep c if it is NOT a superclass of any other candidate c'
+            -- i.e. for all c' != c, not (isSuperClass c c')
+            -- Equivalently: not (exists c' != c s.t. isSuperClass c c')
+            isRedundant <- existsM (\c' -> if c == c' then pure False else isSuperClass dag c c') candidates
+            pure (not isRedundant)
+        )
+        candidates
+  where
+    existsM p xs = or <$> mapM p xs

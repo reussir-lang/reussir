@@ -25,3 +25,5 @@ data ClassDAG = ClassDAG
     , classes :: H.CuckooHashTable Class ClassNode
     }
     deriving (Show)
+
+type TypeBound = [Class]
