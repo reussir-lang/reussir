@@ -16,6 +16,7 @@ import Reussir.Core.Types.Type qualified as Sem
 import Reussir.Diagnostic (Repository, addDummyFile, createRepository, displayReport)
 import Reussir.Parser.Expr (parseExpr)
 import Reussir.Parser.Types.Expr qualified as Syn
+import System.IO (hPutStrLn)
 import Test.Tasty
 import Test.Tasty.HUnit (Assertion, testCase, (@?=))
 import Text.Megaparsec (parse)
@@ -45,9 +46,9 @@ runTyck repo tyck = runEff $ do
     state <- emptyTranslationState "<dummy input>"
     (res, s) <- runState state $ inject tyck
     forM_ (translationReports s) $ \report -> do
-        liftIO $ putStrLn ""
+        liftIO $ hPutStrLn stderr ""
         displayReport report repo 0 stderr
-        liftIO $ putStrLn ""
+        liftIO $ hPutStrLn stderr ""
     pure res
 
 parseToExpr :: T.Text -> IO Syn.Expr
