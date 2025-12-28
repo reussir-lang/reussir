@@ -63,7 +63,6 @@ spec = do
         it "parses function call" $
             (stripExprSpans <$> parse parsePathBasedExpr "" "foo(1, 2)")
                 `shouldParse` FuncCallExpr (FuncCall (Path "foo" []) [] [ConstExpr (ConstInt 1), ConstExpr (ConstInt 2)])
-
         it "parses function call with type args" $
             (stripExprSpans <$> parse parsePathBasedExpr "" "foo<i32, _>(1)")
                 `shouldParse` FuncCallExpr (FuncCall (Path "foo" []) [Just (TypeIntegral (Signed 32)), Nothing] [ConstExpr (ConstInt 1)])

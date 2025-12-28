@@ -32,7 +32,7 @@ data Function = Function
     , funcParams :: [(Identifier, Type, Capability)]
     , funcReturnType :: Maybe (Type, Capability)
     , funcIsRegional :: Bool
-    , funcBody :: Expr
+    , funcBody :: Maybe Expr
     }
     deriving (Show, Eq)
 
