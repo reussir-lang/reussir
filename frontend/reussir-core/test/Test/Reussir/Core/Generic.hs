@@ -65,7 +65,7 @@ testGraph2 = runGeneric $ do
     vars <- mapM (\n -> newGenericVar n Nothing [] state) ["X", "Y", "Z"]
     let [x, y, z] = vars
 
-    addCtorLink x y (TypeArrow (mkBasic "Int") (TypeGeneric x)) state
+    addCtorLink x y (TypeClosure [mkBasic "Int"] (TypeGeneric x)) state
     addDirectLink y z state
     addDirectLink z y state
 

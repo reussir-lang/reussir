@@ -3,6 +3,7 @@ module Reussir.Core.Types.Type where
 import Data.Int (Int8)
 import Data.List (intercalate)
 import Reussir.Core.Types.GenericID (GenericID)
+import Reussir.Parser.Types.Capability (Capability)
 import Reussir.Parser.Types.Lexer (Path (..))
 
 {- | Represents integral types with a specific bit width.
@@ -62,12 +63,16 @@ data Type
       TypeStr
     | -- | Unit type (similar to void)
       TypeUnit
-    | -- | Arrow type
-      TypeArrow Type Type
+    | -- | Closure type
+      TypeClosure [Type] Type
     | -- | Generic Variable (meta from interface, awaiting for instantiation)
       TypeGeneric GenericID
     | -- | Local hole (meta local to function, to be solved during type inference)
       TypeHole HoleID
+    | -- | Rc type (boxed object)
+      TypeRc Type Capability
+    | -- | Reference type (projected)
+      TypeRef Type Capability
     deriving (Eq)
 
 instance Show Type where
@@ -82,6 +87,9 @@ instance Show Type where
     show TypeBool = "bool"
     show TypeStr = "str"
     show TypeUnit = "unit"
-    show (TypeArrow a b) = "(" ++ show a ++ " -> " ++ show b ++ ")"
+    show (TypeClosure args ret) =
+        "(" ++ intercalate ", " (map show args) ++ ") -> " ++ show ret
+    show (TypeRc t cap) = "Rc<" ++ show t ++ ", " ++ show cap ++ ">"
     show (TypeGeneric generic) = show generic
     show (TypeHole hole) = show hole
+    show (TypeRef t cap) = "&" ++ show cap ++ " " ++ show t

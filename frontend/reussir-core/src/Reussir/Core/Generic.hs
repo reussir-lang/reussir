@@ -553,7 +553,9 @@ solveGeneric state = do
     -- Collect all generics referenced in a Type tree.
     collectVars (TypeGeneric m) = [m]
     collectVars (TypeExpr _ args) = concatMap collectVars args
-    collectVars (TypeArrow t1 t2) = collectVars t1 ++ collectVars t2
+    collectVars (TypeClosure args ret) = concatMap collectVars args ++ collectVars ret
+    collectVars (TypeRc t _) = collectVars t
+    collectVars (TypeRef t _) = collectVars t
     collectVars _ = []
 
     -- \|
