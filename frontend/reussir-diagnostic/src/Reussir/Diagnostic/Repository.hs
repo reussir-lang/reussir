@@ -1,5 +1,6 @@
 module Reussir.Diagnostic.Repository (
     Repository,
+    addDummyFile,
     createRepository,
     lookupRepository,
 ) where
@@ -7,6 +8,7 @@ module Reussir.Diagnostic.Repository (
 import Data.Function ((&))
 import Data.HashMap.Lazy as LazyHM
 import Data.Int (Int64)
+import Data.Text (StrictText)
 import Data.Text.Lazy qualified as LazyText
 import Data.Text.Lazy.IO qualified as LazyTextIO
 import Data.Traversable (forM)
@@ -29,6 +31,12 @@ createRepository paths = do
         text <- liftIO $ LazyTextIO.readFile p
         pure (p, File p text (fromFile text))
     pure . Repository $ LazyHM.fromList files
+
+addDummyFile :: Repository -> FilePath -> StrictText -> Repository
+addDummyFile (Repository table) path content =
+    let lazyContent = LazyText.fromStrict content
+        file = File path lazyContent (fromFile lazyContent)
+     in Repository $ LazyHM.insert path file table
 
 lookupRepository ::
     Repository ->

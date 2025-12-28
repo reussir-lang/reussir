@@ -126,9 +126,11 @@ test-suite reussir-core-test
         base ^>=4.20.2.0,
         reussir-core,
         reussir-parser,
+        reussir-diagnostic,
         tasty,
         tasty-hunit,
         effectful,
         text,
         containers,
+        megaparsec,
         hashtables

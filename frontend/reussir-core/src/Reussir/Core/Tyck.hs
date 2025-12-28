@@ -51,6 +51,18 @@ data TranslationState = TranslationState
     }
     deriving (Show)
 
+emptyTranslationState :: (IOE :> es) => FilePath -> Eff es TranslationState
+emptyTranslationState currentFile = do
+    table <- liftIO $ H.new
+    let stringUniqifier = StringUniqifier table
+    return $
+        TranslationState
+            { currentSpan = Nothing
+            , currentFile
+            , stringUniqifier
+            , translationReports = []
+            }
+
 type Tyck = Eff '[IOE, State.State TranslationState] -- TODO: Define effects used in type checking
 
 exprWithSpan :: Sem.Type -> Sem.ExprKind -> Tyck Sem.Expr
@@ -133,6 +145,15 @@ inferType (Syn.UnaryOpExpr Syn.Negate subExpr) = do
     let callTarget = Intrinsic.Arith $ Arith.Subi Arith.iofNone
     let call = Sem.IntrinsicCall callTarget [zero, subExpr']
     exprWithSpan ty call
+inferType (Syn.BinOpExpr op lhs rhs) = inferTypeBinOp op lhs rhs
+inferType (Syn.SpannedExpr (WithSpan subExpr start end)) = do
+    oldSpan <- currentSpan <$> State.get
+    State.modify $ \st -> st{currentSpan = Just (start, end)}
+    res <- inferType subExpr
+    State.modify $ \st -> st{currentSpan = oldSpan}
+    return res
+inferType e = error $ "unimplemented inference for:\n\t" ++ show e
+
 -- Binary operations
 --          T <- x, y -> T, T = int/float
 --  ────────────────────────────────────────────────── -- TODO: better bound
@@ -141,11 +162,25 @@ inferType (Syn.UnaryOpExpr Syn.Negate subExpr) = do
 --          T <- x, y -> T, T = int/float
 --  ────────────────────────────────────────────────── -- TODO: better bound
 --    bool <- (x == y) / (x != y) / (x < y) ...
-inferType (Syn.BinOpExpr op lhs rhs) = do
+-- Short-circuit operations
+--          x-> bool, y -> bool
+--  ────────────────────────────────────────────────── -- TODO: better bound
+--    bool <- (x || y) / (x && y)
+inferTypeBinOp :: Syn.BinaryOp -> Syn.Expr -> Syn.Expr -> Tyck Sem.Expr
+inferTypeBinOp Syn.And lhs rhs = do
+    lhs' <- checkType lhs Sem.TypeBool
+    rhs' <- checkType rhs Sem.TypeBool
+    false <- exprWithSpan Sem.TypeBool $ Sem.Constant 0
+    exprWithSpan Sem.TypeBool $ Sem.ScfIfExpr lhs' rhs' false
+inferTypeBinOp Syn.Or lhs rhs = do
+    lhs' <- checkType lhs Sem.TypeBool
+    rhs' <- checkType rhs Sem.TypeBool
+    true <- exprWithSpan Sem.TypeBool $ Sem.Constant 1
+    exprWithSpan Sem.TypeBool $ Sem.ScfIfExpr lhs' true rhs'
+inferTypeBinOp op lhs rhs = do
     lhs' <- inferType lhs
     let lhsTy = Sem.exprType lhs'
     rhs' <- checkType rhs lhsTy
-
     case lhsTy of
         Sem.TypeIntegral (Sem.Signed _) -> handleIntOp op lhs' rhs' lhsTy True
         Sem.TypeIntegral (Sem.Unsigned _) -> handleIntOp op lhs' rhs' lhsTy False
@@ -223,15 +258,14 @@ inferType (Syn.BinOpExpr op lhs rhs) = do
             Nothing -> do
                 reportError "Unsupported floating point binary operation"
                 exprWithSpan Sem.TypeBottom Sem.Poison
-inferType (Syn.SpannedExpr (WithSpan subExpr start end)) = do
-    oldSpan <- currentSpan <$> State.get
-    State.modify $ \st -> st{currentSpan = Just (start, end)}
-    res <- inferType subExpr
-    State.modify $ \st -> st{currentSpan = oldSpan}
-    return res
-inferType _ = undefined
 
 checkType :: Syn.Expr -> Sem.Type -> Tyck Sem.Expr
+checkType (Syn.SpannedExpr (WithSpan subExpr start end)) ty = do
+    oldSpan <- currentSpan <$> State.get
+    State.modify $ \st -> st{currentSpan = Just (start, end)}
+    res <- checkType subExpr ty
+    State.modify $ \st -> st{currentSpan = oldSpan}
+    return res
 checkType expr ty = do
     -- this is apparently not complete. We need to handle lambda/unification
     expr' <- inferType expr

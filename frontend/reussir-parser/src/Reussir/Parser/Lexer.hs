@@ -145,12 +145,15 @@ parseString =
 
 -- | Parse a boolean literal ('true' or 'false').
 parseBool :: Parser Bool
-parseBool =
-    choice
-        [ string "true" $> True
-        , string "false" $> False
-        ]
-        <* space
+parseBool = try $ do
+    b <-
+        choice
+            [ string "true" $> True
+            , string "false" $> False
+            ]
+    notFollowedBy (satisfy U.isXIDContinue)
+    space
+    return b
 
 parseCapability :: Parser Capability
 parseCapability =

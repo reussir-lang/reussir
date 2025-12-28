@@ -10,6 +10,7 @@ data ExprKind
     = GlobalStr StringToken
     | Constant Scientific
     | IntrinsicCall Intrinsic [Expr]
+    | ScfIfExpr Expr Expr Expr
     | Poison
     deriving (Show, Eq)
 

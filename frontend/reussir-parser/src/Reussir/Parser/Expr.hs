@@ -198,17 +198,16 @@ exprOpTable =
 parseExprTerm :: Parser Expr
 parseExprTerm =
     choice
-        [ (char '(' *> parseExpr <* char ')' <* space) <?> "parenthesized expression"
+        [ (char '(' *> space *> parseExpr <* space <* char ')' <* space) <?> "parenthesized expression"
         , parseIf <?> "if expression"
         , parseLetIn <?> "let binding"
         , parseMatch <?> "match expression"
         , parseRegionalExpr <?> "regional expression"
-        , parsePathBasedExpr <?> "variable or function call"
         , ConstExpr <$> parseConstant <?> "constant"
+        , SpannedExpr <$> withSpan parsePathBasedExpr <?> "variable or function call"
         ]
 
 parseExpr :: Parser Expr
-parseExpr = SpannedExpr <$> withSpan parseExprInner
-
-parseExprInner :: Parser Expr
-parseExprInner = parseLambda <|> makeExprParser parseExprTerm exprOpTable
+parseExpr =
+    (SpannedExpr <$> withSpan parseLambda)
+        <|> makeExprParser (SpannedExpr <$> withSpan parseExprTerm) exprOpTable
