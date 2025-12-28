@@ -9,6 +9,7 @@ module Reussir.Codegen.Intrinsics.Arith (
     Arith (..),
     arithCodegen,
     fmfIsNone,
+    iofNone,
 )
 where
 

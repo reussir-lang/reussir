@@ -68,6 +68,7 @@ library
         Reussir.Core.Types.GenericID
         Reussir.Core.Types.Type
         Reussir.Core.Types.Expr
+        Reussir.Core.Types.String
         Reussir.Core.Tyck
 
     -- Modules included in this library but not exported.
@@ -80,10 +81,13 @@ library
     build-depends:    base ^>=4.20.2.0,
                       reussir-parser,
                       reussir-diagnostic,
+                      reussir-codegen,
                       effectful,
                       text,
                       containers,
                       hashable,
+                      xxhash-ffi,
+                      scientific,
                       hashtables
 
     -- Directories containing source files.
