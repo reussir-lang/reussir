@@ -188,7 +188,9 @@ instance PrettyColored Stmt where
             <> prettyGenerics generics
             <> parens (commaSep (map prettyArg args))
                 <+> prettyRet retType
-                <+> braces (nest 4 (hardline <> prettyColored body) <> hardline)
+                <+> case body of
+                    Just b -> braces (nest 4 (hardline <> prettyColored b) <> hardline)
+                    Nothing -> operator ";"
       where
         prettyGenerics [] = emptyDoc
         prettyGenerics gs = angles (commaSep (map prettyColored gs))

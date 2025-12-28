@@ -30,7 +30,7 @@ stripExprSpans e = e
 
 stripStmtSpans :: Stmt -> Stmt
 stripStmtSpans (SpannedStmt (WithSpan s _ _)) = stripStmtSpans s
-stripStmtSpans (FunctionStmt f) = FunctionStmt (f{funcBody = stripExprSpans (funcBody f)})
+stripStmtSpans (FunctionStmt f) = FunctionStmt (f{funcBody = fmap stripExprSpans (funcBody f)})
 stripStmtSpans s = s
 
 spec :: Spec
@@ -46,7 +46,7 @@ spec = do
                         []
                         Nothing
                         False
-                        (ConstExpr (ConstInt 0))
+                        (Just (ConstExpr (ConstInt 0)))
                     )
 
         it "parses function with capabilities" $
@@ -59,7 +59,7 @@ spec = do
                         [(Identifier "x", TypeIntegral (Signed 32), Shared)]
                         (Just (TypeIntegral (Signed 32), Value))
                         False
-                        (ConstExpr (ConstInt 0))
+                        (Just (ConstExpr (ConstInt 0)))
                     )
 
         it "parses regional function" $
@@ -72,7 +72,20 @@ spec = do
                         []
                         Nothing
                         True
-                        (ConstExpr (ConstInt 0))
+                        (Just (ConstExpr (ConstInt 0)))
+                    )
+
+        it "parses extern function" $
+            (stripStmtSpans <$> parse parseFuncDef "" "fn foo();")
+                `shouldParse` FunctionStmt
+                    ( Function
+                        Private
+                        (Identifier "foo")
+                        []
+                        []
+                        Nothing
+                        False
+                        Nothing
                     )
 
     describe "parseStructDec" $ do

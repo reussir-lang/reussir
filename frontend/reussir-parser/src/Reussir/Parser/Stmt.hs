@@ -71,7 +71,7 @@ parseFuncDefRest vis = do
     tyargs <- optional $ openAngle *> parseIdentifier `sepBy` comma <* closeAngle
     args <- openParen *> optional (parseTypedParam `sepBy` comma)
     ret <- closeParen *> optional (string "->" *> space *> parseRetType)
-    body <- parseBody
+    body <- (Just <$> parseBody) <|> (Nothing <$ semicolon)
 
     return (FunctionStmt $ Function vis name (fromMaybe [] tyargs) (fromMaybe [] args) ret isRegional body)
   where
