@@ -14,7 +14,7 @@ import Effectful.Prim (Prim)
 import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen.Intrinsics qualified as Intrinsic
 import Reussir.Codegen.Intrinsics.Arith qualified as Arith
-import Reussir.Core.Class (addClass, newDAG)
+import Reussir.Core.Class (addClass, newDAG, populateDAG)
 import Reussir.Core.Types.Class (Class (..), ClassDAG)
 import Reussir.Core.Types.Expr qualified as Sem
 import Reussir.Core.Types.String (StringToken, StringUniqifier (..))
@@ -66,6 +66,7 @@ emptyTranslationState currentFile = do
     addClass numClass [] typeClassDAG
     addClass floatClass [numClass] typeClassDAG
     addClass intClass [numClass] typeClassDAG
+    populateDAG typeClassDAG
     return $
         TranslationState
             { currentSpan = Nothing
