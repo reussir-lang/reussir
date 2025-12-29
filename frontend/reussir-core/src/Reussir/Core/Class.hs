@@ -12,7 +12,7 @@ import Data.Ord (comparing)
 import Data.Sequence (Seq (..), (<|))
 import Data.Sequence qualified as Seq
 import Data.Set qualified as Set
-import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
+import Effectful (Eff, IOE, MonadIO (liftIO), subsume, (:>))
 import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (modifyIORef', newIORef', readIORef', writeIORef')
 import Reussir.Core.Types.Class (Class, ClassDAG (..), ClassNode (..), TypeBound)
@@ -275,5 +275,18 @@ meetBound dag b1 b2 = do
             pure (not isRedundant)
         )
         candidates
+  where
+    existsM p xs = or <$> mapM p xs
+
+subsumeBound ::
+    (IOE :> es, Prim :> es) =>
+    ClassDAG ->
+    TypeBound ->
+    TypeBound ->
+    Eff es Bool
+subsumeBound dag existing target = do
+    results <- forM target $ \t -> do
+        existsM (\e -> isSuperClass dag t e) existing
+    pure $ and results
   where
     existsM p xs = or <$> mapM p xs

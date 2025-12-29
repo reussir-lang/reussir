@@ -6,10 +6,23 @@ import Reussir.Codegen.Intrinsics (Intrinsic)
 import Reussir.Core.Types.String (StringToken)
 import Reussir.Core.Types.Type (Type)
 
+data ArithOp
+    = Add
+    | Sub
+    | Mul
+    | Div
+    | Mod
+    deriving (Show, Eq)
+
+data CmpOp = Lt | Gt | Lte | Gte | Equ | Neq deriving (Show, Eq)
+
 data ExprKind
     = GlobalStr StringToken
     | Constant Scientific
     | IntrinsicCall Intrinsic [Expr]
+    | Negate Expr
+    | Arith Expr ArithOp Expr
+    | Cmp Expr CmpOp Expr
     | ScfIfExpr Expr Expr Expr
     | Poison
     deriving (Show, Eq)

@@ -2,7 +2,7 @@
 
 module Reussir.Core.Tyck where
 
-import Control.Monad (forM_, when)
+import Control.Monad (forM_, when, zipWithM)
 import Data.Digest.XXHash.FFI (XXH3 (XXH3))
 import Data.Function ((&))
 import Data.HashSet qualified as HashSet
@@ -17,7 +17,7 @@ import Effectful.Prim.IORef.Strict (IORef', newIORef', readIORef', writeIORef')
 import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen.Intrinsics qualified as Intrinsic
 import Reussir.Codegen.Intrinsics.Arith qualified as Arith
-import Reussir.Core.Class (addClass, isSuperClass, meetBound, newDAG, populateDAG)
+import Reussir.Core.Class (addClass, isSuperClass, meetBound, newDAG, populateDAG, subsumeBound)
 import Reussir.Core.Type qualified as Sem
 import Reussir.Core.Types.Class (Class (..), ClassDAG, TypeBound)
 import Reussir.Core.Types.Expr qualified as Sem
@@ -191,7 +191,7 @@ unify ty1 ty2 = do
         -- Integral and FloatingPoint bounds cannot be satisfied in the same time
         pure True
     unifyForced (Sem.TypeHole hID) ty = do
-        (rootID, unifState) <- findHoleUnifState hID
+        (_, unifState) <- findHoleUnifState hID
         unifState' <- readIORef' unifState
         case unifState' of
             UnSolvedUFRoot rnk bnds -> do
@@ -200,12 +200,56 @@ unify ty1 ty2 = do
                 -- and should be delayed
                 tyClassTable <- State.gets typeClassTable
                 isSatisfy <- satisfyBounds tyClassTable ty bnds
-                if isSatisfy
-                    then do
-                        writeIORef' unifState (SolvedUFRoot rnk ty)
-                        pure True
-                    else pure False
+                when isSatisfy $
+                    writeIORef' unifState (SolvedUFRoot rnk ty)
+                return isSatisfy
             _ -> error "unreachable: cannot be solved or non-root here"
+    unifyForced ty (Sem.TypeHole hID) = unifyForced (Sem.TypeHole hID) ty
+    unifyForced (Sem.TypeRecord path1 args1) (Sem.TypeRecord path2 args2)
+        | path1 == path2 && length args1 == length args2 = do
+            results <- zipWithM unify args1 args2
+            return $ and results
+        | otherwise = return False
+    unifyForced Sem.TypeBool Sem.TypeBool = return True
+    unifyForced Sem.TypeStr Sem.TypeStr = return True
+    unifyForced Sem.TypeUnit Sem.TypeUnit = return True
+    unifyForced (Sem.TypeIntegral it1) (Sem.TypeIntegral it2) = return (it1 == it2)
+    unifyForced (Sem.TypeFP fpt1) (Sem.TypeFP fpt2) = return (fpt1 == fpt2)
+    -- TODO: covariance/contravariance?
+    unifyForced (Sem.TypeClosure args1 ret1) (Sem.TypeClosure args2 ret2)
+        | length args1 == length args2 = do
+            argsResults <- zipWithM unify args1 args2
+            retResult <- unify ret1 ret2
+            return $ and (retResult : argsResults)
+        | otherwise = return False
+    unifyForced (Sem.TypeRc t1 cap1) (Sem.TypeRc t2 cap2)
+        | cap1 == cap2 = unify t1 t2
+        | otherwise = return False
+    unifyForced (Sem.TypeRef t1 cap1) (Sem.TypeRef t2 cap2)
+        | cap1 == cap2 = unify t1 t2
+        | otherwise = return False
+    -- auto coercion from bottom
+    unifyForced Sem.TypeBottom _ = return True
+    unifyForced _ Sem.TypeBottom = return True
+    unifyForced (Sem.TypeGeneric g1) (Sem.TypeGeneric g2) = return (g1 == g2)
+    unifyForced _ _ = return False
+
+satisfyBoundsGeneral :: Sem.Type -> TypeBound -> Tyck Bool
+satisfyBoundsGeneral ty bnds = do
+    tyClassTable <- State.gets typeClassTable
+    case ty of
+        Sem.TypeHole hID -> do
+            (_, unifState) <- findHoleUnifState hID
+            unifState' <- readIORef' unifState
+            case unifState' of
+                UnSolvedUFRoot _ bnds' -> do
+                    dag <- State.gets typeClassDAG
+                    subsumeBound dag bnds' bnds
+                SolvedUFRoot _ tySolved -> do
+                    forced <- force tySolved
+                    satisfyBoundsGeneral forced bnds
+                UFNode{} -> error "unreachable: cannot be non-root here"
+        x -> satisfyBounds tyClassTable x bnds
 
 populatePrimitives :: (IOE :> es, Prim :> es) => Sem.TypeClassTable -> ClassDAG -> Eff es ()
 populatePrimitives typeClassTable typeClassDAG = do
@@ -294,19 +338,34 @@ reportError msg = do
                 Labeled Error (FormattedText [defaultText msg])
     addReport report
 
+dispatchNum :: Sem.Type -> (Tyck Sem.Expr) -> (Tyck Sem.Expr) -> (Tyck Sem.Expr) -> Tyck (Maybe Sem.Expr)
+dispatchNum ty intAction fpAction genericAction = do
+    isInt <- satisfyBoundsGeneral ty [Class $ Path "Integral" []]
+    if isInt
+        then Just <$> intAction
+        else do
+            isFP <- satisfyBoundsGeneral ty [Class $ Path "FloatingPoint" []]
+            if isFP
+                then Just <$> fpAction
+                else do
+                    isNum <- satisfyBoundsGeneral ty [Class $ Path "Num" []]
+                    if isNum
+                        then Just <$> genericAction
+                        else return Nothing
+
 inferType :: Syn.Expr -> Tyck Sem.Expr
---
---  ───────────────────
---       int <- 123
+--       u fresh integral
+--  ───────────────────────────
+--           u <- 123
 inferType (Syn.ConstExpr (Syn.ConstInt value)) = do
-    let ty = Sem.TypeIntegral $ Sem.Signed 64 -- TODO: we force i64 for now
-    exprWithSpan ty $ Sem.Constant (fromIntegral value)
---
---  ─────────────────────
---       f64 <- 1.23
+    hole <- introduceNewHole Nothing Nothing [Class $ Path "Integral" []]
+    exprWithSpan hole $ Sem.Constant (fromIntegral value)
+--      u fresh fp
+--  ───────────────────────────
+--       u <- 1.23
 inferType (Syn.ConstExpr (Syn.ConstDouble value)) = do
-    let ty = Sem.TypeFP $ Sem.IEEEFloat 64 -- TODO: we force f64 for now
-    exprWithSpan ty $ Sem.Constant (realToFrac value)
+    hole <- introduceNewHole Nothing Nothing [Class $ Path "FloatingPoint" []]
+    exprWithSpan hole $ Sem.Constant (realToFrac value)
 --
 --  ─────────────────────
 --     str <- "string"
@@ -330,16 +389,34 @@ inferType (Syn.UnaryOpExpr Syn.Not subExpr) = do
     let call =
             Sem.IntrinsicCall (Intrinsic.Arith Arith.Xori) [subExpr', one]
     exprWithSpan ty call
---     x -> int
+--     u <- x, num u
 --  ─────────────────────
---    int <- (-x)
+--      u <- (-x)
 inferType (Syn.UnaryOpExpr Syn.Negate subExpr) = do
-    let ty = Sem.TypeIntegral $ Sem.Signed 64 -- TODO: we force i64 for now
-    subExpr' <- checkType subExpr ty
-    zero <- exprWithSpan ty $ Sem.Constant 0
-    let callTarget = Intrinsic.Arith $ Arith.Subi Arith.iofNone
-    let call = Sem.IntrinsicCall callTarget [zero, subExpr']
-    exprWithSpan ty call
+    subExpr' <- inferType subExpr
+    let ty = Sem.exprType subExpr'
+    ty' <- force ty
+    exprRes <-
+        dispatchNum
+            ty'
+            ( do
+                zero <- exprWithSpan ty' $ Sem.Constant 0
+                let callTarget = Intrinsic.Arith $ Arith.Subi Arith.iofNone
+                let call = Sem.IntrinsicCall callTarget [zero, subExpr']
+                exprWithSpan ty' call
+            )
+            ( do
+                zero <- exprWithSpan ty' $ Sem.Constant 0.0
+                let callTarget = Intrinsic.Arith $ Arith.Subf (Arith.FastMathFlag 0)
+                let call = Sem.IntrinsicCall callTarget [zero, subExpr']
+                exprWithSpan ty' call
+            )
+            (exprWithSpan ty' $ Sem.Negate subExpr')
+    case exprRes of
+        Just res -> return res
+        Nothing -> do
+            reportError "Type of expression is not a Num type"
+            exprWithSpan Sem.TypeBottom Sem.Poison
 inferType (Syn.BinOpExpr op lhs rhs) = inferTypeBinOp op lhs rhs
 inferType (Syn.SpannedExpr (WithSpan subExpr start end)) = do
     oldSpan <- currentSpan <$> State.get
@@ -350,11 +427,11 @@ inferType (Syn.SpannedExpr (WithSpan subExpr start end)) = do
 inferType e = error $ "unimplemented inference for:\n\t" ++ show e
 
 -- Binary operations
---          T <- x, y -> T, T = int/float
+--          T <- x, y -> T, num T
 --  ────────────────────────────────────────────────── -- TODO: better bound
 --    T <- (x + y) / (x - y) / (x * y) / (x / y) ...
 -- Comparison operations
---          T <- x, y -> T, T = int/float
+--          T <- x, y -> T, num T
 --  ────────────────────────────────────────────────── -- TODO: better bound
 --    bool <- (x == y) / (x != y) / (x < y) ...
 -- Short-circuit operations
@@ -465,7 +542,8 @@ checkType expr ty = do
     -- this is apparently not complete. We need to handle lambda/unification
     expr' <- inferType expr
     let exprTy = Sem.exprType expr'
-    if exprTy /= ty
+    unification <- unify exprTy ty
+    if not unification
         then do
             reportError $
                 "Type mismatch: expected "
