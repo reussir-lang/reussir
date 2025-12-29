@@ -1,6 +1,7 @@
 -- | Module for lexer-level types used in the Reussir parser.
 module Reussir.Parser.Types.Lexer where
 
+import Data.Digest.XXHash.FFI (XXH3 (..))
 import Data.Hashable (Hashable (..))
 import Data.Int (Int64)
 import Data.List (intercalate)
@@ -14,7 +15,7 @@ newtype Identifier = Identifier {unIdentifier :: T.Text}
     deriving (Eq, Ord)
 
 instance Hashable Identifier where
-    hashWithSalt salt (Identifier name) = hashWithSalt salt name
+    hashWithSalt salt (Identifier name) = hashWithSalt salt (XXH3 name)
 
 instance IsString Identifier where
     fromString = Identifier . T.pack
