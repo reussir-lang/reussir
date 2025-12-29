@@ -2,9 +2,10 @@
 
 module Reussir.Core.Tyck where
 
-import Control.Monad (forM_)
+import Control.Monad (forM_, when)
 import Data.Digest.XXHash.FFI (XXH3 (XXH3))
 import Data.Function ((&))
+import Data.HashSet qualified as HashSet
 import Data.HashTable.IO qualified as H
 import Data.Hashable (Hashable (hash))
 import Data.Int (Int64)
@@ -12,12 +13,13 @@ import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.Prim (Prim)
+import Effectful.Prim.IORef.Strict (IORef', newIORef', readIORef', writeIORef')
 import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen.Intrinsics qualified as Intrinsic
 import Reussir.Codegen.Intrinsics.Arith qualified as Arith
-import Reussir.Core.Class (addClass, newDAG, populateDAG)
+import Reussir.Core.Class (addClass, isSuperClass, meetBound, newDAG, populateDAG)
 import Reussir.Core.Type qualified as Sem
-import Reussir.Core.Types.Class (Class (..), ClassDAG)
+import Reussir.Core.Types.Class (Class (..), ClassDAG, TypeBound)
 import Reussir.Core.Types.Expr qualified as Sem
 import Reussir.Core.Types.String (StringToken, StringUniqifier (..))
 import Reussir.Core.Types.Type qualified as Sem
@@ -48,6 +50,17 @@ strToToken str (StringUniqifier table) = do
             liftIO $ H.insert table h (Seq.singleton str)
             return (h, 0)
 
+data UnificationState
+    = UnSolvedUFRoot {-# UNPACK #-} !Int TypeBound
+    | SolvedUFRoot !Int Sem.Type
+    | UFNode {-# UNPACK #-} !Sem.HoleID
+
+data HoleState = HoleState
+    { holeName :: Maybe T.Text
+    , holeSpan :: Maybe (Int64, Int64)
+    , holeUnification :: IORef' UnificationState
+    }
+
 data TranslationState = TranslationState
     { currentSpan :: Maybe (Int64, Int64)
     , currentFile :: FilePath
@@ -55,8 +68,144 @@ data TranslationState = TranslationState
     , translationReports :: [Report]
     , typeClassDAG :: ClassDAG
     , typeClassTable :: Sem.TypeClassTable
+    , holes :: Seq.Seq HoleState
     }
-    deriving (Show)
+
+-- Introduce a new hole into the translation state
+introduceNewHole ::
+    Maybe T.Text ->
+    Maybe (Int64, Int64) ->
+    TypeBound ->
+    Tyck Sem.Type
+introduceNewHole holeName holeSpan bound = do
+    st <- State.gets holes
+    let holeID = fromIntegral $ Seq.length st
+    holeUnification <- newIORef' $ UnSolvedUFRoot holeID bound
+    let holeState = HoleState{holeName, holeSpan, holeUnification}
+    State.modify $ \s -> s{holes = st Seq.|> holeState}
+    return $ Sem.TypeHole $ Sem.HoleID holeID
+
+-- Clear all holes from the translation state, this is used for process a new
+-- function
+clearHoles :: Tyck ()
+clearHoles = do
+    State.modify $ \s -> s{holes = mempty}
+
+-- Find unification state of a hole
+findHoleUnifState :: Sem.HoleID -> Tyck (Sem.HoleID, IORef' UnificationState)
+findHoleUnifState hID@(Sem.HoleID idx) = do
+    holesSeq <- State.gets holes
+    let holeState = Seq.index holesSeq idx
+    unifState <- readIORef' (holeUnification holeState)
+    case unifState of
+        UnSolvedUFRoot{} -> return (hID, holeUnification holeState)
+        SolvedUFRoot{} -> return (hID, holeUnification holeState)
+        UFNode parentID -> do
+            (rootID, rootState) <- findHoleUnifState parentID
+            when (parentID /= rootID) $ do
+                writeIORef' (holeUnification holeState) (UFNode rootID)
+            return (rootID, rootState)
+
+-- This function list all variant on purpose to make it easier to add changes later on
+force :: Sem.Type -> Tyck Sem.Type
+force (Sem.TypeHole holeID) = do
+    (newId, unifState) <- findHoleUnifState holeID
+    unifState' <- readIORef' unifState
+    case unifState' of
+        SolvedUFRoot rk ty -> do
+            ty' <- force ty
+            writeIORef' unifState (SolvedUFRoot rk ty')
+            return ty'
+        UnSolvedUFRoot{} -> return $ Sem.TypeHole newId
+        UFNode{} -> error "unreachable: findHoleUnifState should have returned root"
+force (Sem.TypeRecord path args) = do
+    args' <- mapM force args
+    return $ Sem.TypeRecord path args'
+force (Sem.TypeClosure args ret) =
+    Sem.TypeClosure <$> mapM force args <*> force ret
+force (Sem.TypeRc t cap) = Sem.TypeRc <$> force t <*> pure cap
+force (Sem.TypeRef t cap) = Sem.TypeRef <$> force t <*> pure cap
+force Sem.TypeBottom = return Sem.TypeBottom
+force g@(Sem.TypeGeneric _) = return g
+force Sem.TypeUnit = return Sem.TypeUnit
+force Sem.TypeStr = return Sem.TypeStr
+force Sem.TypeBool = return Sem.TypeBool
+force int@(Sem.TypeIntegral _) = return int
+force fp@(Sem.TypeFP _) = return fp
+
+rnkOfUnifState :: UnificationState -> Int
+rnkOfUnifState (UnSolvedUFRoot rnk _) = rnk
+rnkOfUnifState (SolvedUFRoot rnk _) = rnk
+rnkOfUnifState (UFNode _) = error "unreachable: UFNode has no rank"
+
+-- This is used after force, so both holes are unsolved
+unifyTwoHoles :: Sem.HoleID -> Sem.HoleID -> Tyck ()
+unifyTwoHoles hID1 hID2 = do
+    (rootID1, unifState1) <- findHoleUnifState hID1
+    (rootID2, unifState2) <- findHoleUnifState hID2
+    unifState1' <- readIORef' unifState1
+    unifState2' <- readIORef' unifState2
+    let unifRnk1 = rnkOfUnifState unifState1'
+    let unifRnk2 = rnkOfUnifState unifState2'
+    let (minRnkState, minRnkStateRef, minRnk, maxRnkID, maxRnkState, maxRnkStateRef, maxRnk) =
+            if unifRnk1 <= unifRnk2
+                then (unifState1', unifState1, unifRnk1, rootID2, unifState2', unifState2, unifRnk2)
+                else (unifState2', unifState2, unifRnk2, rootID1, unifState1', unifState1, unifRnk1)
+    case (minRnkState, maxRnkState) of
+        (UnSolvedUFRoot _ bnds, UnSolvedUFRoot _ bnds') -> do
+            let newRnk =
+                    if minRnk == maxRnk
+                        then minRnk + 1
+                        else minRnk
+            dag <- State.gets typeClassDAG
+            newBound <- meetBound dag bnds bnds'
+            writeIORef' maxRnkStateRef (UnSolvedUFRoot newRnk newBound)
+            writeIORef' minRnkStateRef (UFNode maxRnkID)
+        _ -> error "unreachable: unifyTwoHoles called on solved holes"
+
+satisfyBounds :: Sem.TypeClassTable -> Sem.Type -> [Class] -> Tyck Bool
+satisfyBounds tyClassTable ty bounds = do
+    dag <- State.gets typeClassDAG
+    tyClasses <- Sem.getClassesOfType tyClassTable ty
+    let candidates = HashSet.toList tyClasses
+
+    let checkBound b = do
+            -- Check if any candidate 'c' satisfies 'isSuperClass dag b c'
+            -- isSuperClass returns Eff es Bool
+            results <- mapM (isSuperClass dag b) candidates
+            return $ or results
+
+    boundChecks <- mapM checkBound bounds
+    return $ and boundChecks
+
+-- unification
+unify :: Sem.Type -> Sem.Type -> Tyck Bool
+unify ty1 ty2 = do
+    ty1' <- force ty1
+    ty2' <- force ty2
+    unifyForced ty1' ty2'
+  where
+    unifyForced (Sem.TypeHole hID1) (Sem.TypeHole hID2) = do
+        unifyTwoHoles hID1 hID2
+        -- TODO: may be we should detect some trivial error here. e.g.
+        -- Integral and FloatingPoint bounds cannot be satisfied in the same time
+        pure True
+    unifyForced (Sem.TypeHole hID) ty = do
+        (rootID, unifState) <- findHoleUnifState hID
+        unifState' <- readIORef' unifState
+        case unifState' of
+            UnSolvedUFRoot rnk bnds -> do
+                -- check if ty satisfies bounds
+                -- TODO: for now, we simply check if type has Class, this is not enough
+                -- and should be delayed
+                tyClassTable <- State.gets typeClassTable
+                isSatisfy <- satisfyBounds tyClassTable ty bnds
+                if isSatisfy
+                    then do
+                        writeIORef' unifState (SolvedUFRoot rnk ty)
+                        pure True
+                    else pure False
+            _ -> error "unreachable: cannot be solved or non-root here"
 
 populatePrimitives :: (IOE :> es, Prim :> es) => Sem.TypeClassTable -> ClassDAG -> Eff es ()
 populatePrimitives typeClassTable typeClassDAG = do
@@ -106,6 +255,7 @@ emptyTranslationState currentFile = do
             , translationReports = []
             , typeClassDAG
             , typeClassTable
+            , holes = mempty
             }
 
 type Tyck = Eff '[IOE, Prim, State.State TranslationState] -- TODO: Define effects used in type checking

@@ -57,6 +57,13 @@ isConcrete (TypeGeneric _) = False
 isConcrete (TypeHole _) = False
 isConcrete _ = True
 
+-- check if a type is free of holes
+isHoleFree :: Type -> Bool
+isHoleFree (TypeRecord _ args) = all isHoleFree args
+isHoleFree (TypeClosure args ret) = all isHoleFree args && isHoleFree ret
+isHoleFree (TypeHole _) = False
+isHoleFree _ = True
+
 emptyTypeClassTable :: (IOE :> es) => Eff es TypeClassTable
 emptyTypeClassTable = do
     ht <- liftIO H.new
