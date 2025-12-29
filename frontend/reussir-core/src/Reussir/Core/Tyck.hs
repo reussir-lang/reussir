@@ -10,9 +10,12 @@ import Data.Int (Int64)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Effectful (Eff, IOE, liftIO, (:>))
+import Effectful.Prim (Prim)
 import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen.Intrinsics qualified as Intrinsic
 import Reussir.Codegen.Intrinsics.Arith qualified as Arith
+import Reussir.Core.Class (addClass, newDAG)
+import Reussir.Core.Types.Class (Class (..), ClassDAG)
 import Reussir.Core.Types.Expr qualified as Sem
 import Reussir.Core.Types.String (StringToken, StringUniqifier (..))
 import Reussir.Core.Types.Type qualified as Sem
@@ -25,7 +28,7 @@ import Reussir.Diagnostic.Report (
     defaultText,
  )
 import Reussir.Parser.Types.Expr qualified as Syn
-import Reussir.Parser.Types.Lexer (WithSpan (..))
+import Reussir.Parser.Types.Lexer (Path (Path), WithSpan (..))
 import System.Console.ANSI.Types qualified as ANSI
 
 strToToken :: (IOE :> es) => T.Text -> StringUniqifier -> Eff es StringToken
@@ -48,22 +51,31 @@ data TranslationState = TranslationState
     , currentFile :: FilePath
     , stringUniqifier :: StringUniqifier
     , translationReports :: [Report]
+    , typeClassDAG :: ClassDAG
     }
     deriving (Show)
 
-emptyTranslationState :: (IOE :> es) => FilePath -> Eff es TranslationState
+emptyTranslationState :: (IOE :> es, Prim :> es) => FilePath -> Eff es TranslationState
 emptyTranslationState currentFile = do
     table <- liftIO $ H.new
     let stringUniqifier = StringUniqifier table
+    typeClassDAG <- newDAG
+    let numClass = Class $ Path "Num" []
+    let floatClass = Class $ Path "FloatingPoint" []
+    let intClass = Class $ Path "Integral" []
+    addClass numClass [] typeClassDAG
+    addClass floatClass [numClass] typeClassDAG
+    addClass intClass [numClass] typeClassDAG
     return $
         TranslationState
             { currentSpan = Nothing
             , currentFile
             , stringUniqifier
             , translationReports = []
+            , typeClassDAG
             }
 
-type Tyck = Eff '[IOE, State.State TranslationState] -- TODO: Define effects used in type checking
+type Tyck = Eff '[IOE, Prim, State.State TranslationState] -- TODO: Define effects used in type checking
 
 exprWithSpan :: Sem.Type -> Sem.ExprKind -> Tyck Sem.Expr
 exprWithSpan exprType exprKind = do

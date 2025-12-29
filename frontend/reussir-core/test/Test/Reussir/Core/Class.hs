@@ -1,8 +1,9 @@
 module Test.Reussir.Core.Class (tests) where
 
-import Data.Text (pack)
 import Data.Set qualified as Set
+import Data.Text (pack)
 import Effectful (liftIO, runEff)
+import Effectful.Prim (runPrim)
 import Reussir.Core.Class
 import Reussir.Core.Types.Class
 import Reussir.Parser.Types.Lexer (Identifier (..), Path (..))
@@ -24,7 +25,7 @@ tests =
         ]
 
 testSingleInheritance :: Assertion
-testSingleInheritance = runEff $ do
+testSingleInheritance = runEff . runPrim $ do
     dag <- newDAG
     let cA = mkClass "A"
         cB = mkClass "B"
@@ -55,7 +56,7 @@ testSingleInheritance = runEff $ do
     liftIO $ assertBool "C not super of B" (not resCB)
 
 testMultipleInheritance :: Assertion
-testMultipleInheritance = runEff $ do
+testMultipleInheritance = runEff . runPrim $ do
     dag <- newDAG
     let cA = mkClass "A"
         cB = mkClass "B"
@@ -82,7 +83,7 @@ testMultipleInheritance = runEff $ do
     liftIO $ assertBool "B is super of D" resBD
 
 testDiamondInheritance :: Assertion
-testDiamondInheritance = runEff $ do
+testDiamondInheritance = runEff . runPrim $ do
     dag <- newDAG
     let cA = mkClass "A"
         cB = mkClass "B"
@@ -106,67 +107,65 @@ testDiamondInheritance = runEff $ do
     liftIO $ assertBool "C is super of D" resCD
 
 testMeetClass :: Assertion
-testMeetClass = runEff $ do
+testMeetClass = runEff . runPrim $ do
     dag <- newDAG
     let cA = mkClass "A"
         cB = mkClass "B"
         cC = mkClass "C"
-    
+
     addClass cA [] dag
     addClass cB [cA] dag -- B <: A
-    addClass cC [] dag   -- C unrelated
-    
+    addClass cC [] dag -- C unrelated
     populateDAG dag
-    
+
     -- A meet B -> B (since B <: A)
     resAB <- meetClass dag cA cB
     liftIO $ resAB @?= [cB]
-    
+
     -- B meet A -> B
     resBA <- meetClass dag cB cA
     liftIO $ resBA @?= [cB]
-    
+
     -- A meet C -> [A, C] (or [C, A])
     resAC <- meetClass dag cA cC
     liftIO $ Set.fromList resAC @?= Set.fromList [cA, cC]
 
 testMeetBound :: Assertion
-testMeetBound = runEff $ do
+testMeetBound = runEff . runPrim $ do
     dag <- newDAG
     let cA = mkClass "A"
         cB = mkClass "B"
         cC = mkClass "C"
         cD = mkClass "D"
         cE = mkClass "E"
-    
+
     addClass cA [] dag
     addClass cB [cA] dag -- B <: A
     addClass cC [cB] dag -- C <: B <: A
-    addClass cD [] dag   -- D unrelated
+    addClass cD [] dag -- D unrelated
     addClass cE [cD] dag -- E <: D
-    
     populateDAG dag
-    
+
     -- {A} meet {B} -> {B}
     res1 <- meetBound dag [cA] [cB]
     liftIO $ res1 @?= [cB]
-    
+
     -- {A} meet {C} -> {C}
     res2 <- meetBound dag [cA] [cC]
     liftIO $ res2 @?= [cC]
-    
+
     -- {B} meet {C} -> {C}
     res3 <- meetBound dag [cB] [cC]
     liftIO $ res3 @?= [cC]
-    
+
     -- {A, D} meet {B} -> {B, D} (A is super of B, D unrelated)
     res4 <- meetBound dag [cA, cD] [cB]
     liftIO $ Set.fromList res4 @?= Set.fromList [cB, cD]
-    
+
     -- {A} meet {D} -> {A, D}
     res5 <- meetBound dag [cA] [cD]
     liftIO $ Set.fromList res5 @?= Set.fromList [cA, cD]
-    
+
     -- {A, D} meet {B, E} -> {B, E} (A super of B, D super of E)
     res6 <- meetBound dag [cA, cD] [cB, cE]
     liftIO $ Set.fromList res6 @?= Set.fromList [cB, cE]

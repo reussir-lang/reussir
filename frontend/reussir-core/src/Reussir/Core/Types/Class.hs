@@ -1,10 +1,10 @@
 module Reussir.Core.Types.Class where
 
+import Data.Array (Array)
 import Data.HashTable.IO qualified as H
 import Data.Hashable (Hashable (..))
 import Data.Int (Int64)
-import Data.Array (Array)
-import Data.IORef (IORef)
+import Effectful.Prim.IORef.Strict (IORef')
 import Reussir.Parser.Types.Lexer (Path)
 
 newtype Class = Class Path
@@ -27,8 +27,8 @@ data ClassDAG = ClassDAG
     , idMap :: H.CuckooHashTable Int Class
     , nodeMap :: H.CuckooHashTable Int ClassNode
     , chainHeadMap :: H.CuckooHashTable ChainID Int
-    , counter :: IORef Int
-    , finalizedGraph :: IORef (Maybe (Array Int ClassNode))
+    , counter :: IORef' Int
+    , finalizedGraph :: IORef' (Maybe (Array Int ClassNode))
     }
 
 instance Show ClassDAG where

@@ -3,7 +3,6 @@ module Reussir.Core.Class where
 import Control.Monad (filterM, forM, forM_, when)
 import Data.Array (Array, listArray, (!))
 import Data.HashTable.IO qualified as H
-import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Int (Int64)
 import Data.IntSet qualified as IntSet
 import Data.List (maximumBy)
@@ -14,16 +13,18 @@ import Data.Sequence (Seq (..), (<|))
 import Data.Sequence qualified as Seq
 import Data.Set qualified as Set
 import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
+import Effectful.Prim (Prim)
+import Effectful.Prim.IORef.Strict (modifyIORef', newIORef', readIORef', writeIORef')
 import Reussir.Core.Types.Class (Class, ClassDAG (..), ClassNode (..), TypeBound)
 
-newDAG :: (IOE :> es) => Eff es ClassDAG
+newDAG :: (IOE :> es, Prim :> es) => Eff es ClassDAG
 newDAG = do
     nm <- liftIO H.new
     im <- liftIO H.new
     nmap <- liftIO H.new
     chm <- liftIO H.new
-    cnt <- liftIO $ newIORef 0
-    fg <- liftIO $ newIORef Nothing
+    cnt <- newIORef' 0
+    fg <- newIORef' Nothing
     pure $
         ClassDAG
             { nameMap = nm
@@ -34,14 +35,14 @@ newDAG = do
             , finalizedGraph = fg
             }
 
-getClassID :: (IOE :> es) => ClassDAG -> Class -> Eff es Int
+getClassID :: (IOE :> es, Prim :> es) => ClassDAG -> Class -> Eff es Int
 getClassID dag cls = do
     maybeID <- liftIO $ H.lookup (nameMap dag) cls
     case maybeID of
         Just i -> pure i
         Nothing -> do
-            i <- liftIO $ do
-                c <- readIORef (counter dag)
+            i <- do
+                c <- readIORef' (counter dag)
                 modifyIORef' (counter dag) (+ 1)
                 pure c
             liftIO $ H.insert (nameMap dag) cls i
@@ -49,7 +50,7 @@ getClassID dag cls = do
             pure i
 
 addClass ::
-    (IOE :> es) =>
+    (IOE :> es, Prim :> es) =>
     Class ->
     [Class] ->
     ClassDAG ->
@@ -75,7 +76,7 @@ addClass cls parentCls dag = do
     The "heavy" edges are selected based on the subtree size within the spanning forest.
 -}
 populateDAG ::
-    (IOE :> es) =>
+    (IOE :> es, Prim :> es) =>
     ClassDAG ->
     Eff es ()
 populateDAG dag = do
@@ -106,7 +107,7 @@ populateDAG dag = do
     let sizeMap = foldr (\r m -> snd (buildSizeMap r m)) Map.empty roots
 
     -- 3. Decompose into Chains
-    chainIDCounter <- liftIO $ newIORef (0 :: Int64)
+    chainIDCounter <- newIORef' (0 :: Int64)
 
     let decompose cid currentChainID currentPos = do
             -- Update node in DAG
@@ -134,23 +135,23 @@ populateDAG dag = do
                     -- Start new chains for other children
                     forM_ children $ \c -> do
                         when (c /= heavyChild) $ do
-                            newID <- liftIO $ do
+                            newID <- do
                                 modifyIORef' chainIDCounter (+ 1)
-                                readIORef chainIDCounter
+                                readIORef' chainIDCounter
                             decompose c newID 0
 
     -- Run decomposition from roots
     forM_ roots $ \r -> do
-        newID <- liftIO $ do
+        newID <- do
             modifyIORef' chainIDCounter (+ 1)
-            readIORef chainIDCounter
+            readIORef' chainIDCounter
         decompose r newID 0
 
     -- 4. Finalize Graph into Array
-    maxID <- liftIO $ readIORef (counter dag)
+    maxID <- readIORef' (counter dag)
     -- Note: maxID is the count, so IDs are 0 .. maxID-1
     if maxID == 0
-        then liftIO $ writeIORef (finalizedGraph dag) (Just (listArray (0, -1) []))
+        then writeIORef' (finalizedGraph dag) (Just (listArray (0, -1) []))
         else do
             -- We need to construct the array.
             -- We iterate 0..maxID-1 and lookup in nodeMap.
@@ -165,9 +166,8 @@ populateDAG dag = do
                 case maybeNode of
                     Just n -> pure n
                     Nothing -> pure $ ClassNode (-1, -1) [] -- Dummy node
-            
             let arr = listArray (0, maxID - 1) nodes
-            liftIO $ writeIORef (finalizedGraph dag) (Just arr)
+            writeIORef' (finalizedGraph dag) (Just arr)
 
 {- |
     Checks if a class is a superclass of another class.
@@ -182,7 +182,7 @@ populateDAG dag = do
     @isSuperClass dag parent child@ returns 'True' if @parent@ is an ancestor of @child@ (or equal), 'False' otherwise.
 -}
 isSuperClass ::
-    (IOE :> es) =>
+    (IOE :> es, Prim :> es) =>
     ClassDAG ->
     Class ->
     Class ->
@@ -190,10 +190,10 @@ isSuperClass ::
 isSuperClass dag parent child = do
     maybeParentID <- liftIO $ H.lookup (nameMap dag) parent
     maybeChildID <- liftIO $ H.lookup (nameMap dag) child
-    
+
     case (maybeParentID, maybeChildID) of
         (Just parentID, Just childID) -> do
-            maybeArr <- liftIO $ readIORef (finalizedGraph dag)
+            maybeArr <- readIORef' (finalizedGraph dag)
             case maybeArr of
                 Just arr -> pure $ isSuperClassFast arr parentID childID
                 Nothing -> isSuperClassSlow dag parentID childID
@@ -206,7 +206,7 @@ isSuperClassFast arr parentID childID = search (Seq.singleton childID) IntSet.em
     -- But we need to be careful about bounds if IDs are somehow out of sync, but they shouldn't be.
     targetNode = arr ! parentID
     (targetChain, targetPos) = chain targetNode
-    
+
     search Empty _ = False
     search (u :<| worklist) visited
         | u == parentID = True
@@ -214,15 +214,15 @@ isSuperClassFast arr parentID childID = search (Seq.singleton childID) IntSet.em
         | otherwise =
             let node = arr ! u
                 (uChain, uPos) = chain node
-            in if uChain == targetChain
-                then
-                    if targetPos <= uPos
-                        then True
-                        else search worklist (IntSet.insert u visited)
-                else
-                    let ps = parents node
-                        worklist' = foldr (<|) worklist ps
-                    in search worklist' (IntSet.insert u visited)
+             in if uChain == targetChain
+                    then
+                        if targetPos <= uPos
+                            then True
+                            else search worklist (IntSet.insert u visited)
+                    else
+                        let ps = parents node
+                            worklist' = foldr (<|) worklist ps
+                         in search worklist' (IntSet.insert u visited)
 
 isSuperClassSlow :: (IOE :> es) => ClassDAG -> Int -> Int -> Eff es Bool
 isSuperClassSlow dag parentID childID = do
@@ -252,7 +252,7 @@ isSuperClassSlow dag parentID childID = do
                                         search worklist' (IntSet.insert u visited)
             search (Seq.singleton childID) IntSet.empty
 
-meetClass :: (IOE :> es) => ClassDAG -> Class -> Class -> Eff es TypeBound
+meetClass :: (IOE :> es, Prim :> es) => ClassDAG -> Class -> Class -> Eff es TypeBound
 meetClass dag c1 c2 = do
     sup12 <- isSuperClass dag c1 c2
     if sup12
@@ -263,7 +263,7 @@ meetClass dag c1 c2 = do
                 then pure [c1]
                 else pure [c1, c2]
 
-meetBound :: (IOE :> es) => ClassDAG -> TypeBound -> TypeBound -> Eff es TypeBound
+meetBound :: (IOE :> es, Prim :> es) => ClassDAG -> TypeBound -> TypeBound -> Eff es TypeBound
 meetBound dag b1 b2 = do
     let candidates = Set.toList $ Set.fromList (b1 ++ b2)
     filterM

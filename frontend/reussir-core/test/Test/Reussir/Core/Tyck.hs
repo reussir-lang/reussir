@@ -8,6 +8,7 @@ import Control.Monad (forM_)
 import Data.Text qualified as T
 import Effectful
 import Effectful.FileSystem.IO (stderr)
+import Effectful.Prim (runPrim)
 import Effectful.State.Static.Local (runState)
 import Reussir.Core.Tyck (TranslationState (translationReports), Tyck, emptyTranslationState, inferType)
 import Reussir.Core.Types.Expr (Expr (exprType))
@@ -42,7 +43,7 @@ tests =
         ]
 
 runTyck :: Repository -> Tyck a -> IO a
-runTyck repo tyck = runEff $ do
+runTyck repo tyck = runEff . runPrim $ do
     state <- emptyTranslationState "<dummy input>"
     (res, s) <- runState state $ inject tyck
     forM_ (translationReports s) $ \report -> do
