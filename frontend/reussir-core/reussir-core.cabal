@@ -91,6 +91,7 @@ library
                       xxhash-ffi,
                       scientific,
                       hashtables,
+                      array,
                       ansi-terminal-types
 
     -- Directories containing source files.

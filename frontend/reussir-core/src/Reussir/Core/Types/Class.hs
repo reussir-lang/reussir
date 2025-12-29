@@ -3,6 +3,8 @@ module Reussir.Core.Types.Class where
 import Data.HashTable.IO qualified as H
 import Data.Hashable (Hashable (..))
 import Data.Int (Int64)
+import Data.Array (Array)
+import Data.IORef (IORef)
 import Reussir.Parser.Types.Lexer (Path)
 
 newtype Class = Class Path
@@ -16,14 +18,20 @@ type ChainPos = Int64
 
 data ClassNode = ClassNode
     { chain :: (ChainID, ChainPos)
-    , parents :: [Class]
+    , parents :: [Int]
     }
     deriving (Show, Eq)
 
 data ClassDAG = ClassDAG
-    { chainHead :: H.CuckooHashTable Int64 Class
-    , classes :: H.CuckooHashTable Class ClassNode
+    { nameMap :: H.CuckooHashTable Class Int
+    , idMap :: H.CuckooHashTable Int Class
+    , nodeMap :: H.CuckooHashTable Int ClassNode
+    , chainHeadMap :: H.CuckooHashTable ChainID Int
+    , counter :: IORef Int
+    , finalizedGraph :: IORef (Maybe (Array Int ClassNode))
     }
-    deriving (Show)
+
+instance Show ClassDAG where
+    show _ = "<ClassDAG>"
 
 type TypeBound = [Class]

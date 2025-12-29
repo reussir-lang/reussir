@@ -1,9 +1,11 @@
 module Reussir.Core.Class where
 
-import Control.Monad (filterM, forM_, when)
+import Control.Monad (filterM, forM, forM_, when)
+import Data.Array (Array, listArray, (!))
 import Data.HashTable.IO qualified as H
-import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Int (Int64)
+import Data.IntSet qualified as IntSet
 import Data.List (maximumBy)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (listToMaybe)
@@ -16,13 +18,35 @@ import Reussir.Core.Types.Class (Class, ClassDAG (..), ClassNode (..), TypeBound
 
 newDAG :: (IOE :> es) => Eff es ClassDAG
 newDAG = do
-    chainHeadTable <- liftIO H.new
-    classesTable <- liftIO H.new
+    nm <- liftIO H.new
+    im <- liftIO H.new
+    nmap <- liftIO H.new
+    chm <- liftIO H.new
+    cnt <- liftIO $ newIORef 0
+    fg <- liftIO $ newIORef Nothing
     pure $
         ClassDAG
-            { chainHead = chainHeadTable
-            , classes = classesTable
+            { nameMap = nm
+            , idMap = im
+            , nodeMap = nmap
+            , chainHeadMap = chm
+            , counter = cnt
+            , finalizedGraph = fg
             }
+
+getClassID :: (IOE :> es) => ClassDAG -> Class -> Eff es Int
+getClassID dag cls = do
+    maybeID <- liftIO $ H.lookup (nameMap dag) cls
+    case maybeID of
+        Just i -> pure i
+        Nothing -> do
+            i <- liftIO $ do
+                c <- readIORef (counter dag)
+                modifyIORef' (counter dag) (+ 1)
+                pure c
+            liftIO $ H.insert (nameMap dag) cls i
+            liftIO $ H.insert (idMap dag) i cls
+            pure i
 
 addClass ::
     (IOE :> es) =>
@@ -31,8 +55,10 @@ addClass ::
     ClassDAG ->
     Eff es ()
 addClass cls parentCls dag = do
-    let node = ClassNode{chain = (-1, -1), parents = parentCls}
-    liftIO $ H.insert (classes dag) cls node
+    clsID <- getClassID dag cls
+    parentIDs <- mapM (getClassID dag) parentCls
+    let node = ClassNode{chain = (-1, -1), parents = parentIDs}
+    liftIO $ H.insert (nodeMap dag) clsID node
 
 {- |
     Populates the 'ClassDAG' with chain decomposition information.
@@ -53,19 +79,19 @@ populateDAG ::
     ClassDAG ->
     Eff es ()
 populateDAG dag = do
-    entries <- liftIO $ H.toList (classes dag)
+    entries <- liftIO $ H.toList (nodeMap dag)
 
     -- 1. Build Spanning Forest (Parent -> Children)
     -- We pick the first parent as the tree parent.
     let (childrenMap, roots) = foldr buildTree (Map.empty, []) entries
-        buildTree (cls, node) (cm, rs) =
+        buildTree (cid, node) (cm, rs) =
             case listToMaybe (parents node) of
-                Nothing -> (cm, cls : rs)
-                Just p -> (Map.insertWith (++) p [cls] cm, rs)
+                Nothing -> (cm, cid : rs)
+                Just p -> (Map.insertWith (++) p [cid] cm, rs)
 
     -- 2. Compute Subtree Sizes
-    let buildSizeMap cls m =
-            let children = Map.findWithDefault [] cls childrenMap
+    let buildSizeMap cid m =
+            let children = Map.findWithDefault [] cid childrenMap
                 (s, m') =
                     foldr
                         ( \c (accSize, accMap) ->
@@ -75,27 +101,27 @@ populateDAG dag = do
                         (0, m)
                         children
                 mySize = (1 :: Int) + s
-             in (mySize, Map.insert cls mySize m')
+             in (mySize, Map.insert cid mySize m')
 
     let sizeMap = foldr (\r m -> snd (buildSizeMap r m)) Map.empty roots
 
     -- 3. Decompose into Chains
     chainIDCounter <- liftIO $ newIORef (0 :: Int64)
 
-    let decompose cls currentChainID currentPos = do
+    let decompose cid currentChainID currentPos = do
             -- Update node in DAG
-            maybeNode <- liftIO $ H.lookup (classes dag) cls
+            maybeNode <- liftIO $ H.lookup (nodeMap dag) cid
             case maybeNode of
                 Nothing -> pure ()
                 Just node -> do
                     let newNode = node{chain = (currentChainID, currentPos)}
-                    liftIO $ H.insert (classes dag) cls newNode
+                    liftIO $ H.insert (nodeMap dag) cid newNode
 
             -- If head of chain, update chainHead
             when (currentPos == 0) $ do
-                liftIO $ H.insert (chainHead dag) currentChainID cls
+                liftIO $ H.insert (chainHeadMap dag) currentChainID cid
 
-            let children = Map.findWithDefault [] cls childrenMap
+            let children = Map.findWithDefault [] cid childrenMap
             case children of
                 [] -> pure ()
                 _ -> do
@@ -120,6 +146,29 @@ populateDAG dag = do
             readIORef chainIDCounter
         decompose r newID 0
 
+    -- 4. Finalize Graph into Array
+    maxID <- liftIO $ readIORef (counter dag)
+    -- Note: maxID is the count, so IDs are 0 .. maxID-1
+    if maxID == 0
+        then liftIO $ writeIORef (finalizedGraph dag) (Just (listArray (0, -1) []))
+        else do
+            -- We need to construct the array.
+            -- We iterate 0..maxID-1 and lookup in nodeMap.
+            -- If a node is missing (e.g. referenced but not defined), we need a placeholder or error.
+            -- Assuming all referenced classes are defined or we handle it.
+            -- If a class ID exists (assigned in getClassID), but addClass was never called for it,
+            -- it won't be in nodeMap.
+            -- We should probably insert a dummy node or handle it.
+            -- Let's insert a dummy node for missing IDs to avoid crash.
+            nodes <- forM [0 .. maxID - 1] $ \i -> do
+                maybeNode <- liftIO $ H.lookup (nodeMap dag) i
+                case maybeNode of
+                    Just n -> pure n
+                    Nothing -> pure $ ClassNode (-1, -1) [] -- Dummy node
+            
+            let arr = listArray (0, maxID - 1) nodes
+            liftIO $ writeIORef (finalizedGraph dag) (Just arr)
+
 {- |
     Checks if a class is a superclass of another class.
 
@@ -139,77 +188,69 @@ isSuperClass ::
     Class ->
     Eff es Bool
 isSuperClass dag parent child = do
-    -- Look up the target parent node.
-    -- If it does not exist in the DAG, it cannot be a superclass.
-    maybeParentNode <- liftIO $ H.lookup (classes dag) parent
+    maybeParentID <- liftIO $ H.lookup (nameMap dag) parent
+    maybeChildID <- liftIO $ H.lookup (nameMap dag) child
+    
+    case (maybeParentID, maybeChildID) of
+        (Just parentID, Just childID) -> do
+            maybeArr <- liftIO $ readIORef (finalizedGraph dag)
+            case maybeArr of
+                Just arr -> pure $ isSuperClassFast arr parentID childID
+                Nothing -> isSuperClassSlow dag parentID childID
+        _ -> pure False
+
+isSuperClassFast :: Array Int ClassNode -> Int -> Int -> Bool
+isSuperClassFast arr parentID childID = search (Seq.singleton childID) IntSet.empty
+  where
+    -- We can access array directly.
+    -- But we need to be careful about bounds if IDs are somehow out of sync, but they shouldn't be.
+    targetNode = arr ! parentID
+    (targetChain, targetPos) = chain targetNode
+    
+    search Empty _ = False
+    search (u :<| worklist) visited
+        | u == parentID = True
+        | IntSet.member u visited = search worklist visited
+        | otherwise =
+            let node = arr ! u
+                (uChain, uPos) = chain node
+            in if uChain == targetChain
+                then
+                    if targetPos <= uPos
+                        then True
+                        else search worklist (IntSet.insert u visited)
+                else
+                    let ps = parents node
+                        worklist' = foldr (<|) worklist ps
+                    in search worklist' (IntSet.insert u visited)
+
+isSuperClassSlow :: (IOE :> es) => ClassDAG -> Int -> Int -> Eff es Bool
+isSuperClassSlow dag parentID childID = do
+    maybeParentNode <- liftIO $ H.lookup (nodeMap dag) parentID
     case maybeParentNode of
         Nothing -> pure False
         Just parentNode -> do
-            -- Extract chain metadata of the target parent.
-            -- (chain id, position in chain)
             let (targetChain, targetPos) = chain parentNode
-
-            -- DFS search using an explicit worklist (Seq)
-            --
-            -- worklist : nodes that still need to be explored
-            -- visited  : nodes already explored (prevents re-visiting in DAG)
-            let search :: (IOE :> es) => Seq Class -> Set.Set Class -> Eff es Bool
-                -- No more nodes to explore ⇒ parent not reachable
-                search Empty _ = pure False
-                -- Pop next node from the front of the worklist
+            let search Empty _ = pure False
                 search (u :<| worklist) visited
-                    -- Found the parent directly
-                    | u == parent =
-                        pure True
-                    -- Already visited ⇒ skip to next
-                    | Set.member u visited =
-                        search worklist visited
+                    | u == parentID = pure True
+                    | IntSet.member u visited = search worklist visited
                     | otherwise = do
-                        maybeNode <- liftIO $ H.lookup (classes dag) u
+                        maybeNode <- liftIO $ H.lookup (nodeMap dag) u
                         case maybeNode of
-                            -- Defensive case: node missing from DAG
-                            -- Mark visited and continue
-                            Nothing ->
-                                search worklist (Set.insert u visited)
+                            Nothing -> search worklist (IntSet.insert u visited)
                             Just node -> do
                                 let (uChain, uPos) = chain node
-
-                                -- FAST PATH:
-                                -- If current node lies on the same HLD chain
-                                -- as the target parent, we can decide immediately.
                                 if uChain == targetChain
                                     then
-                                        -- Chain positions increase downward.
-                                        -- If parent position ≤ u position,
-                                        -- parent must be an ancestor of u.
                                         if targetPos <= uPos
                                             then pure True
-                                            -- Otherwise, parent is below u on the chain.
-                                            -- Since we only move upward in the DAG,
-                                            -- this branch cannot reach parent.
-                                            else
-                                                search
-                                                    worklist
-                                                    (Set.insert u visited)
+                                            else search worklist (IntSet.insert u visited)
                                     else do
-                                        -- GENERAL DAG CASE:
-                                        -- We cannot decide based on chain info.
-                                        -- Explore all parents of u.
                                         let ps = parents node
-
-                                        -- Push parents to the *front* of the worklist
-                                        -- to preserve DFS-like traversal.
-                                        --
-                                        -- foldr (<|) ensures O(#parents) total cost,
-                                        -- avoiding any list append or Seq concatenation.
                                         let worklist' = foldr (<|) worklist ps
-
-                                        search
-                                            worklist'
-                                            (Set.insert u visited)
-
-            -- Start DFS from the child
-            search (Seq.singleton child) Set.empty
+                                        search worklist' (IntSet.insert u visited)
+            search (Seq.singleton childID) IntSet.empty
 
 meetClass :: (IOE :> es) => ClassDAG -> Class -> Class -> Eff es TypeBound
 meetClass dag c1 c2 = do
