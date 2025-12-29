@@ -86,6 +86,7 @@ library
                       reussir-codegen,
                       effectful,
                       text,
+                      unordered-containers,
                       containers,
                       hashable,
                       xxhash-ffi,

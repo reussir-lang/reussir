@@ -2,6 +2,7 @@
 
 module Reussir.Core.Tyck where
 
+import Control.Monad (forM_)
 import Data.Digest.XXHash.FFI (XXH3 (XXH3))
 import Data.Function ((&))
 import Data.HashTable.IO qualified as H
@@ -15,6 +16,7 @@ import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen.Intrinsics qualified as Intrinsic
 import Reussir.Codegen.Intrinsics.Arith qualified as Arith
 import Reussir.Core.Class (addClass, newDAG, populateDAG)
+import Reussir.Core.Type qualified as Sem
 import Reussir.Core.Types.Class (Class (..), ClassDAG)
 import Reussir.Core.Types.Expr qualified as Sem
 import Reussir.Core.Types.String (StringToken, StringUniqifier (..))
@@ -52,14 +54,12 @@ data TranslationState = TranslationState
     , stringUniqifier :: StringUniqifier
     , translationReports :: [Report]
     , typeClassDAG :: ClassDAG
+    , typeClassTable :: Sem.TypeClassTable
     }
     deriving (Show)
 
-emptyTranslationState :: (IOE :> es, Prim :> es) => FilePath -> Eff es TranslationState
-emptyTranslationState currentFile = do
-    table <- liftIO $ H.new
-    let stringUniqifier = StringUniqifier table
-    typeClassDAG <- newDAG
+populatePrimitives :: (IOE :> es, Prim :> es) => Sem.TypeClassTable -> ClassDAG -> Eff es ()
+populatePrimitives typeClassTable typeClassDAG = do
     let numClass = Class $ Path "Num" []
     let floatClass = Class $ Path "FloatingPoint" []
     let intClass = Class $ Path "Integral" []
@@ -67,6 +67,37 @@ emptyTranslationState currentFile = do
     addClass floatClass [numClass] typeClassDAG
     addClass intClass [numClass] typeClassDAG
     populateDAG typeClassDAG
+
+    let fpTypes =
+            [ Sem.IEEEFloat 16
+            , Sem.IEEEFloat 32
+            , Sem.IEEEFloat 64
+            , Sem.BFloat16
+            , Sem.Float8
+            ]
+    forM_ fpTypes $ \fp ->
+        Sem.addClassToType typeClassTable (Sem.TypeFP fp) floatClass
+
+    let intTypes =
+            [ Sem.Signed 8
+            , Sem.Signed 16
+            , Sem.Signed 32
+            , Sem.Signed 64
+            , Sem.Unsigned 8
+            , Sem.Unsigned 16
+            , Sem.Unsigned 32
+            , Sem.Unsigned 64
+            ]
+    forM_ intTypes $ \it ->
+        Sem.addClassToType typeClassTable (Sem.TypeIntegral it) intClass
+
+emptyTranslationState :: (IOE :> es, Prim :> es) => FilePath -> Eff es TranslationState
+emptyTranslationState currentFile = do
+    table <- liftIO $ H.new
+    let stringUniqifier = StringUniqifier table
+    typeClassDAG <- newDAG
+    typeClassTable <- Sem.emptyTypeClassTable
+    populatePrimitives typeClassTable typeClassDAG
     return $
         TranslationState
             { currentSpan = Nothing
@@ -74,6 +105,7 @@ emptyTranslationState currentFile = do
             , stringUniqifier
             , translationReports = []
             , typeClassDAG
+            , typeClassTable
             }
 
 type Tyck = Eff '[IOE, Prim, State.State TranslationState] -- TODO: Define effects used in type checking

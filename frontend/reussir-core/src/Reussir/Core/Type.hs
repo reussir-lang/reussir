@@ -1,6 +1,10 @@
 module Reussir.Core.Type where
 
+import Data.HashSet qualified as HashSet
+import Data.HashTable.IO qualified as H
+import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
 import Reussir.Core.Types
+import Reussir.Core.Types.Class (Class)
 
 type GenenricOrHole = Either GenericID HoleID
 
@@ -52,3 +56,41 @@ isConcrete (TypeClosure args ret) = all isConcrete args && isConcrete ret
 isConcrete (TypeGeneric _) = False
 isConcrete (TypeHole _) = False
 isConcrete _ = True
+
+emptyTypeClassTable :: (IOE :> es) => Eff es TypeClassTable
+emptyTypeClassTable = do
+    ht <- liftIO H.new
+    pure $ TypeClassTable ht
+
+addClassToType ::
+    (IOE :> es) =>
+    TypeClassTable ->
+    Type ->
+    Class ->
+    Eff es ()
+addClassToType (TypeClassTable ht) t cls = liftIO $ do
+    mClasses <- H.lookup ht t
+    case mClasses of
+        Just classes -> H.insert ht t (HashSet.insert cls classes)
+        Nothing -> H.insert ht t (HashSet.singleton cls)
+
+getClassesOfType ::
+    (IOE :> es) =>
+    TypeClassTable ->
+    Type ->
+    Eff es (HashSet.HashSet Class)
+getClassesOfType (TypeClassTable ht) t = do
+    mClasses <- liftIO $ H.lookup ht t
+    case mClasses of
+        Just classes -> pure classes
+        Nothing -> pure HashSet.empty
+
+typeHasClass ::
+    (IOE :> es) =>
+    TypeClassTable ->
+    Type ->
+    Class ->
+    Eff es Bool
+typeHasClass table t cls = do
+    classes <- getClassesOfType table t
+    pure $ HashSet.member cls classes
