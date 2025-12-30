@@ -12,7 +12,7 @@ import Data.Ord (comparing)
 import Data.Sequence (Seq (..), (<|))
 import Data.Sequence qualified as Seq
 import Data.Set qualified as Set
-import Effectful (Eff, IOE, MonadIO (liftIO), subsume, (:>))
+import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
 import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (modifyIORef', newIORef', readIORef', writeIORef')
 import Reussir.Core.Types.Class (Class, ClassDAG (..), ClassNode (..), TypeBound)

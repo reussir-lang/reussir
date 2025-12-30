@@ -15,8 +15,6 @@ import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (IORef', newIORef', readIORef', writeIORef')
 import Effectful.State.Static.Local qualified as State
-import Reussir.Codegen.Intrinsics qualified as Intrinsic
-import Reussir.Codegen.Intrinsics.Arith qualified as Arith
 import Reussir.Core.Class (addClass, isSuperClass, meetBound, newDAG, populateDAG, subsumeBound)
 import Reussir.Core.Type qualified as Sem
 import Reussir.Core.Types.Class (Class (..), ClassDAG, TypeBound)
@@ -163,8 +161,8 @@ unifyTwoHoles hID1 hID2 = do
             writeIORef' minRnkStateRef (UFNode maxRnkID)
         _ -> error "unreachable: unifyTwoHoles called on solved holes"
 
-satisfyBounds :: Sem.TypeClassTable -> Sem.Type -> [Class] -> Tyck Bool
-satisfyBounds tyClassTable ty bounds = do
+exactTypeSatisfyBounds :: Sem.TypeClassTable -> Sem.Type -> [Class] -> Tyck Bool
+exactTypeSatisfyBounds tyClassTable ty bounds = do
     dag <- State.gets typeClassDAG
     tyClasses <- Sem.getClassesOfType tyClassTable ty
     let candidates = HashSet.toList tyClasses
@@ -199,7 +197,7 @@ unify ty1 ty2 = do
                 -- TODO: for now, we simply check if type has Class, this is not enough
                 -- and should be delayed
                 tyClassTable <- State.gets typeClassTable
-                isSatisfy <- satisfyBounds tyClassTable ty bnds
+                isSatisfy <- exactTypeSatisfyBounds tyClassTable ty bnds
                 when isSatisfy $
                     writeIORef' unifState (SolvedUFRoot rnk ty)
                 return isSatisfy
@@ -234,8 +232,8 @@ unify ty1 ty2 = do
     unifyForced (Sem.TypeGeneric g1) (Sem.TypeGeneric g2) = return (g1 == g2)
     unifyForced _ _ = return False
 
-satisfyBoundsGeneral :: Sem.Type -> TypeBound -> Tyck Bool
-satisfyBoundsGeneral ty bnds = do
+satisfyBounds :: Sem.Type -> TypeBound -> Tyck Bool
+satisfyBounds ty bnds = do
     tyClassTable <- State.gets typeClassTable
     case ty of
         Sem.TypeHole hID -> do
@@ -247,9 +245,9 @@ satisfyBoundsGeneral ty bnds = do
                     subsumeBound dag bnds' bnds
                 SolvedUFRoot _ tySolved -> do
                     forced <- force tySolved
-                    satisfyBoundsGeneral forced bnds
+                    satisfyBounds forced bnds
                 UFNode{} -> error "unreachable: cannot be non-root here"
-        x -> satisfyBounds tyClassTable x bnds
+        x -> exactTypeSatisfyBounds tyClassTable x bnds
 
 populatePrimitives :: (IOE :> es, Prim :> es) => Sem.TypeClassTable -> ClassDAG -> Eff es ()
 populatePrimitives typeClassTable typeClassDAG = do
@@ -338,21 +336,6 @@ reportError msg = do
                 Labeled Error (FormattedText [defaultText msg])
     addReport report
 
-dispatchNum :: Sem.Type -> (Tyck Sem.Expr) -> (Tyck Sem.Expr) -> (Tyck Sem.Expr) -> Tyck (Maybe Sem.Expr)
-dispatchNum ty intAction fpAction genericAction = do
-    isInt <- satisfyBoundsGeneral ty [Class $ Path "Integral" []]
-    if isInt
-        then Just <$> intAction
-        else do
-            isFP <- satisfyBoundsGeneral ty [Class $ Path "FloatingPoint" []]
-            if isFP
-                then Just <$> fpAction
-                else do
-                    isNum <- satisfyBoundsGeneral ty [Class $ Path "Num" []]
-                    if isNum
-                        then Just <$> genericAction
-                        else return Nothing
-
 inferType :: Syn.Expr -> Tyck Sem.Expr
 --       u fresh integral
 --  ───────────────────────────
@@ -385,10 +368,7 @@ inferType (Syn.ConstExpr (Syn.ConstBool value)) = do
 inferType (Syn.UnaryOpExpr Syn.Not subExpr) = do
     let ty = Sem.TypeBool
     subExpr' <- checkType subExpr ty
-    one <- exprWithSpan ty $ Sem.Constant 1
-    let call =
-            Sem.IntrinsicCall (Intrinsic.Arith Arith.Xori) [subExpr', one]
-    exprWithSpan ty call
+    exprWithSpan ty $ Sem.Not subExpr'
 --     u <- x, num u
 --  ─────────────────────
 --      u <- (-x)
@@ -396,26 +376,14 @@ inferType (Syn.UnaryOpExpr Syn.Negate subExpr) = do
     subExpr' <- inferType subExpr
     let ty = Sem.exprType subExpr'
     ty' <- force ty
-    exprRes <-
-        dispatchNum
+    satisfyNumBound <-
+        satisfyBounds
             ty'
-            ( do
-                zero <- exprWithSpan ty' $ Sem.Constant 0
-                let callTarget = Intrinsic.Arith $ Arith.Subi Arith.iofNone
-                let call = Sem.IntrinsicCall callTarget [zero, subExpr']
-                exprWithSpan ty' call
-            )
-            ( do
-                zero <- exprWithSpan ty' $ Sem.Constant 0.0
-                let callTarget = Intrinsic.Arith $ Arith.Subf (Arith.FastMathFlag 0)
-                let call = Sem.IntrinsicCall callTarget [zero, subExpr']
-                exprWithSpan ty' call
-            )
-            (exprWithSpan ty' $ Sem.Negate subExpr')
-    case exprRes of
-        Just res -> return res
-        Nothing -> do
-            reportError "Type of expression is not a Num type"
+            [Class $ Path "Num" []]
+    if satisfyNumBound
+        then exprWithSpan ty' $ Sem.Negate subExpr'
+        else do
+            reportError "Unary negation applied to non-numeric type"
             exprWithSpan Sem.TypeBottom Sem.Poison
 inferType (Syn.BinOpExpr op lhs rhs) = inferTypeBinOp op lhs rhs
 inferType (Syn.SpannedExpr (WithSpan subExpr start end)) = do
@@ -436,7 +404,7 @@ inferType e = error $ "unimplemented inference for:\n\t" ++ show e
 --    bool <- (x == y) / (x != y) / (x < y) ...
 -- Short-circuit operations
 --          x-> bool, y -> bool
---  ────────────────────────────────────────────────── -- TODO: better bound
+--  ──────────────────────────────────────────────────
 --    bool <- (x || y) / (x && y)
 inferTypeBinOp :: Syn.BinaryOp -> Syn.Expr -> Syn.Expr -> Tyck Sem.Expr
 inferTypeBinOp Syn.And lhs rhs = do
@@ -449,86 +417,51 @@ inferTypeBinOp Syn.Or lhs rhs = do
     rhs' <- checkType rhs Sem.TypeBool
     true <- exprWithSpan Sem.TypeBool $ Sem.Constant 1
     exprWithSpan Sem.TypeBool $ Sem.ScfIfExpr lhs' true rhs'
-inferTypeBinOp op lhs rhs = do
-    lhs' <- inferType lhs
-    let lhsTy = Sem.exprType lhs'
-    rhs' <- checkType rhs lhsTy
-    case lhsTy of
-        Sem.TypeIntegral (Sem.Signed _) -> handleIntOp op lhs' rhs' lhsTy True
-        Sem.TypeIntegral (Sem.Unsigned _) -> handleIntOp op lhs' rhs' lhsTy False
-        Sem.TypeFP _ -> handleFPOp op lhs' rhs' lhsTy
-        _ -> do
-            reportError $ "Unsupported type for binary operation: " <> T.pack (show lhsTy)
-            exprWithSpan Sem.TypeBottom Sem.Poison
+inferTypeBinOp op lhs rhs = case convertOp op of
+    Left arithOp -> inferArithOp arithOp
+    Right cmpOp -> inferCmpOp cmpOp
   where
-    handleIntOp op' lhs' rhs' ty isSigned = do
-        let (intrinsic, resTy) = case op' of
-                Syn.Add -> (Just $ Intrinsic.Arith $ Arith.Addi Arith.iofNone, ty)
-                Syn.Sub -> (Just $ Intrinsic.Arith $ Arith.Subi Arith.iofNone, ty)
-                Syn.Mul -> (Just $ Intrinsic.Arith $ Arith.Muli Arith.iofNone, ty)
-                Syn.Div ->
-                    ( Just $
-                        Intrinsic.Arith $
-                            if isSigned then Arith.Divsi else Arith.Divui
-                    , ty
-                    )
-                Syn.Mod ->
-                    ( Just $
-                        Intrinsic.Arith $
-                            if isSigned then Arith.Remsi else Arith.Remui
-                    , ty
-                    )
-                Syn.Equ -> (Just $ Intrinsic.Arith $ Arith.Cmpi Arith.CIEq, Sem.TypeBool)
-                Syn.Neq -> (Just $ Intrinsic.Arith $ Arith.Cmpi Arith.CINe, Sem.TypeBool)
-                Syn.Lt ->
-                    ( Just $
-                        Intrinsic.Arith $
-                            Arith.Cmpi (if isSigned then Arith.CISlt else Arith.CIUlt)
-                    , Sem.TypeBool
-                    )
-                Syn.Gt ->
-                    ( Just $
-                        Intrinsic.Arith $
-                            Arith.Cmpi (if isSigned then Arith.CISgt else Arith.CIUgt)
-                    , Sem.TypeBool
-                    )
-                Syn.Lte ->
-                    ( Just $
-                        Intrinsic.Arith $
-                            Arith.Cmpi (if isSigned then Arith.CISle else Arith.CIUle)
-                    , Sem.TypeBool
-                    )
-                Syn.Gte ->
-                    ( Just $
-                        Intrinsic.Arith $
-                            Arith.Cmpi (if isSigned then Arith.CISge else Arith.CIUge)
-                    , Sem.TypeBool
-                    )
-                _ -> (Nothing, Sem.TypeBottom)
-        case intrinsic of
-            Just intr -> exprWithSpan resTy $ Sem.IntrinsicCall intr [lhs', rhs']
-            Nothing -> do
-                reportError "Unsupported integer binary operation"
+    -- TODO: for now, we do not allow a == b/a != b for booleans
+    convertOp :: Syn.BinaryOp -> Either Sem.ArithOp Sem.CmpOp
+    convertOp Syn.Add = Left Sem.Add
+    convertOp Syn.Sub = Left Sem.Sub
+    convertOp Syn.Mul = Left Sem.Mul
+    convertOp Syn.Div = Left Sem.Div
+    convertOp Syn.Mod = Left Sem.Mod
+    convertOp Syn.Lt = Right Sem.Lt
+    convertOp Syn.Gt = Right Sem.Gt
+    convertOp Syn.Lte = Right Sem.Lte
+    convertOp Syn.Gte = Right Sem.Gte
+    convertOp Syn.Equ = Right Sem.Equ
+    convertOp Syn.Neq = Right Sem.Neq
+    convertOp _ = error "unreachable: convertOp called on logical op"
+    inferArithOp arithOp = do
+        lhs' <- inferType lhs
+        let lhsTy = Sem.exprType lhs'
+        satisfyNumBound <-
+            satisfyBounds
+                lhsTy
+                [Class $ Path "Num" []]
+        if satisfyNumBound
+            then do
+                rhs' <- checkType rhs lhsTy
+                exprWithSpan lhsTy $ Sem.Arith lhs' arithOp rhs'
+            else do
+                reportError "Binary arithmetic operation applied to non-numeric type"
                 exprWithSpan Sem.TypeBottom Sem.Poison
-
-    handleFPOp op' lhs' rhs' ty = do
-        let (intrinsic, resTy) = case op' of
-                Syn.Add -> (Just $ Intrinsic.Arith $ Arith.Addf (Arith.FastMathFlag 0), ty)
-                Syn.Sub -> (Just $ Intrinsic.Arith $ Arith.Subf (Arith.FastMathFlag 0), ty)
-                Syn.Mul -> (Just $ Intrinsic.Arith $ Arith.Mulf (Arith.FastMathFlag 0), ty)
-                Syn.Div -> (Just $ Intrinsic.Arith $ Arith.Divf (Arith.FastMathFlag 0), ty)
-                Syn.Mod -> (Just $ Intrinsic.Arith $ Arith.Remf (Arith.FastMathFlag 0), ty)
-                Syn.Equ -> (Just $ Intrinsic.Arith $ Arith.Cmpf Arith.CFOeq (Arith.FastMathFlag 0), Sem.TypeBool)
-                Syn.Neq -> (Just $ Intrinsic.Arith $ Arith.Cmpf Arith.CFOne (Arith.FastMathFlag 0), Sem.TypeBool)
-                Syn.Lt -> (Just $ Intrinsic.Arith $ Arith.Cmpf Arith.CFOlt (Arith.FastMathFlag 0), Sem.TypeBool)
-                Syn.Gt -> (Just $ Intrinsic.Arith $ Arith.Cmpf Arith.CFOgt (Arith.FastMathFlag 0), Sem.TypeBool)
-                Syn.Lte -> (Just $ Intrinsic.Arith $ Arith.Cmpf Arith.CFOle (Arith.FastMathFlag 0), Sem.TypeBool)
-                Syn.Gte -> (Just $ Intrinsic.Arith $ Arith.Cmpf Arith.CFOge (Arith.FastMathFlag 0), Sem.TypeBool)
-                _ -> (Nothing, Sem.TypeBottom)
-        case intrinsic of
-            Just intr -> exprWithSpan resTy $ Sem.IntrinsicCall intr [lhs', rhs']
-            Nothing -> do
-                reportError "Unsupported floating point binary operation"
+    inferCmpOp cmpOp = do
+        lhs' <- inferType lhs
+        let lhsTy = Sem.exprType lhs'
+        satisfyNumBound <-
+            satisfyBounds
+                lhsTy
+                [Class $ Path "Num" []]
+        if satisfyNumBound
+            then do
+                rhs' <- checkType rhs lhsTy
+                exprWithSpan Sem.TypeBool $ Sem.Cmp lhs' cmpOp rhs'
+            else do
+                reportError "Comparison operation applied to non-numeric type"
                 exprWithSpan Sem.TypeBottom Sem.Poison
 
 checkType :: Syn.Expr -> Sem.Type -> Tyck Sem.Expr

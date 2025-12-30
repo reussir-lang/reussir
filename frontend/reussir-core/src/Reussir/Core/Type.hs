@@ -101,3 +101,11 @@ typeHasClass ::
 typeHasClass table t cls = do
     classes <- getClassesOfType table t
     pure $ HashSet.member cls classes
+
+isIntegralType :: Type -> Bool
+isIntegralType (TypeIntegral _) = True
+isIntegralType _ = False
+
+isFPType :: Type -> Bool
+isFPType (TypeFP _) = True
+isFPType _ = False

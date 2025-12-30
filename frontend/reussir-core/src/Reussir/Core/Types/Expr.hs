@@ -2,7 +2,6 @@ module Reussir.Core.Types.Expr where
 
 import Data.Int (Int64)
 import Data.Scientific (Scientific)
-import Reussir.Codegen.Intrinsics (Intrinsic)
 import Reussir.Core.Types.String (StringToken)
 import Reussir.Core.Types.Type (Type)
 
@@ -19,8 +18,8 @@ data CmpOp = Lt | Gt | Lte | Gte | Equ | Neq deriving (Show, Eq)
 data ExprKind
     = GlobalStr StringToken
     | Constant Scientific
-    | IntrinsicCall Intrinsic [Expr]
     | Negate Expr
+    | Not Expr
     | Arith Expr ArithOp Expr
     | Cmp Expr CmpOp Expr
     | ScfIfExpr Expr Expr Expr
