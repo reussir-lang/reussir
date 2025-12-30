@@ -47,17 +47,21 @@ tests =
         , testCase "Comparison Type Inference" testComparison
         , testCase "Logical And Type Inference" testLogicalAnd
         , testCase "Logical Or Type Inference" testLogicalOr
+        , testCase "Casting Type Inference" testCasting
         ]
 
-runTyck :: Repository -> Tyck a -> IO a
-runTyck repo tyck = runEff . runPrim $ do
+runTyck :: Repository -> (a -> Tyck.Tyck b) -> Tyck a -> IO b
+runTyck repo conti tyck = runEff . runPrim $ do
     state <- emptyTranslationState "<dummy input>"
-    (res, s) <- runState state $ inject tyck
-    forM_ (translationReports s) $ \report -> do
-        liftIO $ hPutStrLn stderr ""
-        displayReport report repo 0 stderr
-        liftIO $ hPutStrLn stderr ""
-    pure res
+    (out, _) <- runState state $ do
+        res <- inject tyck
+        s <- State.get
+        forM_ (translationReports s) $ \report -> do
+            liftIO $ hPutStrLn stderr ""
+            displayReport report repo 0 stderr
+            liftIO $ hPutStrLn stderr ""
+        inject $ conti res
+    return out
 
 parseToExpr :: T.Text -> IO Syn.Expr
 parseToExpr input = case parse parseExpr "<dummy input>" input of
@@ -77,7 +81,7 @@ parseAndInferType input action = do
     repository <- runEff $ createRepository []
     let repo = addDummyFile repository "<dummy input>" input
     expr <- parseToExpr input
-    runTyck repo $ do
+    runTyck repo action $ do
         typedExpr <- inferType expr
         ty <- Tyck.force $ Sem.exprType typedExpr
         typeBound <- case ty of
@@ -88,7 +92,7 @@ parseAndInferType input action = do
                     Sem.UnSolvedUFRoot _ bound -> pure bound
                     _ -> mempty
             _ -> mempty
-        action $ TypedExprAndBounds typedExpr typeBound
+        return $ TypedExprAndBounds typedExpr typeBound
 
 shouldSubsumeBound :: Sem.TypeBound -> Sem.TypeBound -> Tyck.Tyck ()
 shouldSubsumeBound a b = do
@@ -175,3 +179,8 @@ testLogicalOr :: Assertion
 testLogicalOr = do
     parseAndInferType "true || ( 1 + 1 > 5 )" $ \expr ->
         liftIO $ Sem.exprType (typedExpr expr) @?= Sem.TypeBool
+
+testCasting :: Assertion
+testCasting = do
+    parseAndInferType "( 1 + 1 ) as f64" $ \expr -> do
+        liftIO $ Sem.exprType (typedExpr expr) @?= Sem.TypeFP (Sem.IEEEFloat 64)

@@ -22,6 +22,7 @@ data ExprKind
     | Not Expr
     | Arith Expr ArithOp Expr
     | Cmp Expr CmpOp Expr
+    | Cast Expr Type
     | ScfIfExpr Expr Expr Expr
     | Poison
     deriving (Show, Eq)

@@ -31,6 +31,7 @@ import Reussir.Diagnostic.Report (
  )
 import Reussir.Parser.Types.Expr qualified as Syn
 import Reussir.Parser.Types.Lexer (Path (Path), WithSpan (..))
+import Reussir.Parser.Types.Type qualified as Syn
 import System.Console.ANSI.Types qualified as ANSI
 
 strToToken :: (IOE :> es) => T.Text -> StringUniqifier -> Eff es StringToken
@@ -336,6 +337,37 @@ reportError msg = do
                 Labeled Error (FormattedText [defaultText msg])
     addReport report
 
+-- convert syntax type to semantic type
+evalType :: Syn.Type -> Tyck Sem.Type
+evalType (Syn.TypeSpanned s) = evalType (spanValue s)
+-- TODO: should check if record exists or not
+evalType (Syn.TypeExpr path args) = do
+    args' <- mapM evalType args
+    return $ Sem.TypeRecord path args'
+evalType (Syn.TypeIntegral (Syn.Signed n)) = return $ Sem.TypeIntegral (Sem.Signed n)
+evalType (Syn.TypeIntegral (Syn.Unsigned n)) = return $ Sem.TypeIntegral (Sem.Unsigned n)
+evalType (Syn.TypeFP (Syn.IEEEFloat n)) = return $ Sem.TypeFP (Sem.IEEEFloat n)
+evalType (Syn.TypeFP Syn.BFloat16) = return $ Sem.TypeFP Sem.BFloat16
+evalType (Syn.TypeFP Syn.Float8) = return $ Sem.TypeFP Sem.Float8
+evalType Syn.TypeBool = return Sem.TypeBool
+evalType Syn.TypeStr = return Sem.TypeStr
+evalType Syn.TypeUnit = return Sem.TypeUnit
+evalType Syn.TypeBottom = return Sem.TypeBottom
+evalType (Syn.TypeArrow t1 t2) = do
+    t1' <- evalType t1
+    (args, ret) <- unfoldArrow t2
+    return $ Sem.TypeClosure (t1' : args) ret
+  where
+    unfoldArrow :: Syn.Type -> Tyck ([Sem.Type], Sem.Type)
+    unfoldArrow (Syn.TypeArrow a b) = do
+        a' <- evalType a
+        (args, ret) <- unfoldArrow b
+        return (a' : args, ret)
+    unfoldArrow (Syn.TypeSpanned s) = unfoldArrow (spanValue s)
+    unfoldArrow t = do
+        t' <- evalType t
+        return ([], t')
+
 inferType :: Syn.Expr -> Tyck Sem.Expr
 --       u fresh integral
 --  ───────────────────────────
@@ -386,6 +418,46 @@ inferType (Syn.UnaryOpExpr Syn.Negate subExpr) = do
             reportError "Unary negation applied to non-numeric type"
             exprWithSpan Sem.TypeBottom Sem.Poison
 inferType (Syn.BinOpExpr op lhs rhs) = inferTypeBinOp op lhs rhs
+-- If-else operation
+--           cond -> bool, T <- x, y -> T
+--  ──────────────────────────────────────────────────
+--             T <- if cond then x else y
+inferType (Syn.If condExpr thenExpr elseExpr) = do
+    condExpr' <- checkType condExpr Sem.TypeBool
+    thenExpr' <- inferType thenExpr
+    let ty = Sem.exprType thenExpr'
+    elseExpr' <- checkType elseExpr ty
+    exprWithSpan ty $ Sem.ScfIfExpr condExpr' thenExpr' elseExpr'
+-- Casting operation
+-- Hole (trait casting as an annotation)
+--             H <- x, hole H, H -> T
+--  ──────────────────────────────────────────────────
+--                  T <- x as T
+-- Non-Hole (type casting)
+--                  T' <- x, num T'
+--  ──────────────────────────────────────────────────
+--                   T <- x as T
+inferType (Syn.Cast targetType subExpr) = do
+    targetType' <- evalType targetType
+    innerExpr <- inferType subExpr
+    innerTy <- force $ Sem.exprType innerExpr
+    let numCast = do
+            satisfyNumBound <-
+                satisfyBounds
+                    innerTy
+                    [Class $ Path "Num" []]
+            if satisfyNumBound
+                then exprWithSpan targetType' $ Sem.Cast innerExpr targetType'
+                else do
+                    reportError "Type cast failed due to unsatisfied bounds"
+                    exprWithSpan Sem.TypeBottom Sem.Poison
+    case innerTy of
+        Sem.TypeHole _ -> do
+            unification <- unify innerTy targetType'
+            if unification
+                then return innerExpr
+                else numCast
+        _ -> numCast
 inferType (Syn.SpannedExpr (WithSpan subExpr start end)) = do
     oldSpan <- currentSpan <$> State.get
     State.modify $ \st -> st{currentSpan = Just (start, end)}
