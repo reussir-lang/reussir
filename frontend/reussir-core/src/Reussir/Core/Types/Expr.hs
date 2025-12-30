@@ -4,6 +4,8 @@ import Data.Int (Int64)
 import Data.Scientific (Scientific)
 import Reussir.Core.Types.String (StringToken)
 import Reussir.Core.Types.Type (Type)
+import Reussir.Parser.Types.Capability (Capability)
+import Reussir.Parser.Types.Lexer (Identifier, WithSpan)
 
 data ArithOp
     = Add
@@ -15,6 +17,8 @@ data ArithOp
 
 data CmpOp = Lt | Gt | Lte | Gte | Equ | Neq deriving (Show, Eq)
 
+newtype VarID = VarID {unVarID :: Int} deriving (Show, Eq)
+
 data ExprKind
     = GlobalStr StringToken
     | Constant Scientific
@@ -24,6 +28,9 @@ data ExprKind
     | Cmp Expr CmpOp Expr
     | Cast Expr Type
     | ScfIfExpr Expr Expr Expr
+    | Var VarID
+    | RcWrap Expr Capability
+    | Let (WithSpan (VarID, Identifier)) Expr Expr
     | Poison
     deriving (Show, Eq)
 

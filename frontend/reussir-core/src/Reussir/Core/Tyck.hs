@@ -29,8 +29,9 @@ import Reussir.Diagnostic.Report (
     defaultCodeRef,
     defaultText,
  )
+import Reussir.Parser.Types.Capability (Capability)
 import Reussir.Parser.Types.Expr qualified as Syn
-import Reussir.Parser.Types.Lexer (Path (Path), WithSpan (..))
+import Reussir.Parser.Types.Lexer (Identifier, Path (Path), WithSpan (..), unIdentifier)
 import Reussir.Parser.Types.Type qualified as Syn
 import System.Console.ANSI.Types qualified as ANSI
 
@@ -60,6 +61,12 @@ data HoleState = HoleState
     , holeUnification :: IORef' UnificationState
     }
 
+data VarDef = VarDef
+    { varName :: Identifier
+    , varSpan :: Maybe (Int64, Int64)
+    , varType :: Sem.Type
+    }
+
 data TranslationState = TranslationState
     { currentSpan :: Maybe (Int64, Int64)
     , currentFile :: FilePath
@@ -68,7 +75,49 @@ data TranslationState = TranslationState
     , typeClassDAG :: ClassDAG
     , typeClassTable :: Sem.TypeClassTable
     , holes :: Seq.Seq HoleState
+    , variableStates :: Seq.Seq VarDef
+    , variableNameMap :: H.CuckooHashTable Identifier Sem.VarID
     }
+
+withVariable :: Identifier -> Maybe (Int64, Int64) -> Sem.Type -> (Sem.VarID -> Tyck a) -> Tyck a
+withVariable varName varSpan varType cont = do
+    varMap <- State.gets variableNameMap
+    backup <- liftIO $ H.lookup varMap varName
+    varID <- newVariable varName varSpan varType
+    result <- cont varID
+    case backup of
+        Just oldVarID -> liftIO $ H.insert varMap varName oldVarID
+        Nothing -> liftIO $ H.delete varMap varName
+    pure result
+
+newVariable :: Identifier -> Maybe (Int64, Int64) -> Sem.Type -> Tyck Sem.VarID
+newVariable varName varSpan varType = do
+    st <- State.gets variableStates
+    let varID = Sem.VarID $ fromIntegral $ Seq.length st
+    let varDef = VarDef{varName, varSpan, varType}
+    State.modify $ \s ->
+        s
+            { variableStates = st Seq.|> varDef
+            }
+    nameMap <- State.gets variableNameMap
+    liftIO $ H.insert nameMap varName varID
+    return varID
+
+getVarType :: Sem.VarID -> Tyck Sem.Type
+getVarType (Sem.VarID idx) = do
+    vars <- State.gets variableStates
+    let varDef = Seq.index vars (fromIntegral idx)
+    return $ varType varDef
+
+getVarTypeViaName :: Identifier -> Tyck Sem.Type
+getVarTypeViaName varName = do
+    nameMap <- State.gets variableNameMap
+    mVarID <- liftIO $ H.lookup nameMap varName
+    case mVarID of
+        Just varID -> getVarType varID
+        Nothing -> do
+            reportError $ "Variable not found: " <> (unIdentifier varName)
+            return Sem.TypeBottom
 
 -- Introduce a new hole into the translation state
 introduceNewHole ::
@@ -286,6 +335,7 @@ populatePrimitives typeClassTable typeClassDAG = do
 emptyTranslationState :: (IOE :> es, Prim :> es) => FilePath -> Eff es TranslationState
 emptyTranslationState currentFile = do
     table <- liftIO $ H.new
+    variableNameMap <- liftIO $ H.new
     let stringUniqifier = StringUniqifier table
     typeClassDAG <- newDAG
     typeClassTable <- Sem.emptyTypeClassTable
@@ -299,6 +349,8 @@ emptyTranslationState currentFile = do
             , typeClassDAG
             , typeClassTable
             , holes = mempty
+            , variableStates = mempty
+            , variableNameMap
             }
 
 type Tyck = Eff '[IOE, Prim, State.State TranslationState] -- TODO: Define effects used in type checking
@@ -458,6 +510,36 @@ inferType (Syn.Cast targetType subExpr) = do
                 then return innerExpr
                 else numCast
         _ -> numCast
+-- Let-in expr
+-- Untyped:
+--               C |- T <- e1; C, x:T |- T' <- e2
+--  ──────────────────────────────────────────────────
+--                 T <- let x = e1 in e2
+-- Typed (no capability annotations):
+--               C |- x -> T;  C, x:T |- T' <- e2
+--  ──────────────────────────────────────────────────
+--                 T <- let x: T = e1 in e2
+-- Notice, however, we may have capability annotations.
+-- If capability annotations are present, we need to check if the type of e1 align
+-- with Rc capability, if so, we directly use e1; otherwise, we insert a RcWrap operation.
+
+inferType (Syn.LetIn varName Nothing valueExpr bodyExpr) = do
+    valueExpr' <- inferType valueExpr
+    let valueTy = Sem.exprType valueExpr'
+    valueTy' <- force valueTy
+    case mVarType of
+        Just annotType -> do
+            annotType' <- evalType annotType
+            _ <- checkType valueExpr annotType'
+            withVariable varName Nothing annotType' $ \varID -> do
+                bodyExpr' <- inferType bodyExpr
+                let bodyTy = Sem.exprType bodyExpr'
+                exprWithSpan bodyTy $ Sem.LetIn varID valueExpr' bodyExpr'
+        Nothing -> do
+            withVariable varName Nothing valueTy' $ \varID -> do
+                bodyExpr' <- inferType bodyExpr
+                let bodyTy = Sem.exprType bodyExpr'
+                exprWithSpan bodyTy $ Sem.LetIn varID valueExpr' bodyExpr'
 inferType (Syn.SpannedExpr (WithSpan subExpr start end)) = do
     oldSpan <- currentSpan <$> State.get
     State.modify $ \st -> st{currentSpan = Just (start, end)}
