@@ -7,7 +7,7 @@ namespace reussir {
 TEST_F(ReussirTest, SimpleRecordScanner) {
   withType<reussir::RecordType>(
       SIMPLE_LAYOUT,
-      R"(!reussir.record<compound "Test" {i32, i64, [field] f128}>)",
+      R"(!reussir.record<compound "Test" [regional] {i32, i64, [field] f128}>)",
       [](mlir::ModuleOp module, reussir::RecordType type) {
         llvm::SmallVector<int32_t> buffer;
         mlir::DataLayout dataLayout = mlir::DataLayout(module);
@@ -21,10 +21,10 @@ TEST_F(ReussirTest, SimpleRecordScanner) {
 TEST_F(ReussirTest, NestedRecordScanner) {
   withType<reussir::RecordType>(
       SIMPLE_LAYOUT,
-      R"(!reussir.record<compound "Test" {
+      R"(!reussir.record<compound "Test" [regional] {
         i32, 
         i64, 
-        [value] !reussir.record<compound "Nested" {
+        !reussir.record<compound "Nested" [value] {
           i8, 
           [field] i16
         }>,
@@ -45,15 +45,15 @@ TEST_F(ReussirTest, NestedRecordScanner) {
 TEST_F(ReussirTest, VariantRecordScanner) {
   withType<reussir::RecordType>(
       SIMPLE_LAYOUT,
-      R"(!reussir.record<variant "Test" {
+      R"(!reussir.record<variant "Test" [regional] {
         [field] i32, 
         i64, 
-        [value] !reussir.record<compound "Nested" {
+        !reussir.record<compound "Nested" [value]  {
           i8, 
           [field] i16
         }>,
         f128,
-        [value] !reussir.record<compound "Nested2" {
+        !reussir.record<compound "Nested2" [value] {
           [field] i16,
           f128, 
           [field] i16
