@@ -1,18 +1,18 @@
 // RUN: %reussir-opt %s --reussir-lowering-scf-ops --reussir-lowering-basic-ops --convert-scf-to-cf --convert-to-llvm --reconcile-unrealized-casts | \
 // RUN: %reussir-translate --mlir-to-llvmir | %FileCheck %s
 
-!option_some = !reussir.record<compound "Option::Some" {i32}>
-!option_none = !reussir.record<compound "Option::None" {}>
+!option_some = !reussir.record<compound "Option::Some" [value] {i32}>
+!option_none = !reussir.record<compound "Option::None" [value]{}>
 !option = !reussir.record<variant "Option" {!option_some, !option_none}>
 
-!result_ok = !reussir.record<compound "Result::Ok" {i32}>
-!result_err = !reussir.record<compound "Result::Err" {i32}>
+!result_ok = !reussir.record<compound "Result::Ok" [value] {i32}>
+!result_err = !reussir.record<compound "Result::Err" [value] {i32}>
 !result = !reussir.record<variant "Result" {!result_ok, !result_err}>
 
-!foo_a = !reussir.record<compound "Foo::A" {}>
-!foo_b = !reussir.record<compound "Foo::B" {}>
-!foo_c = !reussir.record<compound "Foo::C" {}>
-!foo_d = !reussir.record<compound "Foo::D" {}>
+!foo_a = !reussir.record<compound "Foo::A" [value] {}>
+!foo_b = !reussir.record<compound "Foo::B" [value] {}>
+!foo_c = !reussir.record<compound "Foo::C" [value] {}>
+!foo_d = !reussir.record<compound "Foo::D" [value] {}>
 !foo = !reussir.record<variant "Foo" {!foo_a, !foo_b, !foo_c, !foo_d}>
 
 module {

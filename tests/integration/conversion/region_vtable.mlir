@@ -12,7 +12,7 @@
 // RUN: %cc %S/region_vtable.c %t.o -o %t.exe -L%library_path -lreussir_rt \
 // RUN:    -Wl,-rpath,%library_path %extra_sys_libs
 // RUN: %t.exe
-!node = !reussir.record<compound "Node" { [field] !reussir.record<compound "Node">, i64, [field] !reussir.record<compound "Node"> }>
+!node = !reussir.record<compound "Node" [regional] { [field] !reussir.record<compound "Node">, i64, [field] !reussir.record<compound "Node"> }>
 
 module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>>} {
   func.func @test() {

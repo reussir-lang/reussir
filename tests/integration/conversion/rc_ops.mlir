@@ -3,9 +3,9 @@
 
 !nullable = !reussir.nullable<!reussir.ref<i64>>
 !list_incomplete = !reussir.record<variant "List" incomplete>
-!cons = !reussir.record<compound "List::Cons" { f128, [shared] !list_incomplete }>
-!nil = !reussir.record<compound "List::Nil" {}>
-!padding = !reussir.record<compound "List::Padding" { i64, i64, i64, i64, i64, i64, i64, i64 }>
+!cons = !reussir.record<compound "List::Cons" [value] { f128, !list_incomplete }>
+!nil = !reussir.record<compound "List::Nil" [value] {}>
+!padding = !reussir.record<compound "List::Padding" [value] { i64, i64, i64, i64, i64, i64, i64, i64 }>
 !list = !reussir.record<variant "List" {!cons, !nil, !padding}>
 module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i8, dense<8> : vector<2xi64>>> } {
   // CHECK-LABEL: define void @rc_inc(ptr %0) {
