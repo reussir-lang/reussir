@@ -1,7 +1,7 @@
 // RUN: %reussir-opt %s -verify-diagnostics
 
 // Define a variant record type with 2 variants
-!variant_record = !reussir.record<variant "Test" { [value] i32, [value] i64 }>
+!variant_record = !reussir.record<variant "Test" { i32, i64 }>
 
 module {
   func.func @test_variant_out_of_bounds(%ref : !reussir.ref<!variant_record>) {

@@ -172,8 +172,8 @@ bool isTriviallyCopyable(mlir::Type type) {
           return false;
 
         // All members must be trivially copyable
-        for (auto [member, cap] : llvm::zip(recordType.getMembers(),
-                                            recordType.getMemberCapabilities()))
+        for (auto [member, cap] :
+             llvm::zip(recordType.getMembers(), recordType.getMemberIsField()))
           if (!isTriviallyCopyable(
                   getProjectedType(member, cap, Capability::value)))
             return false;
@@ -197,32 +197,35 @@ bool isTriviallyCopyable(mlir::Type type) {
 std::optional<std::tuple<llvm::TypeSize, llvm::Align, mlir::Type>>
 deriveCompoundSizeAndAlignment(mlir::MLIRContext *context,
                                llvm::ArrayRef<mlir::Type> members,
-                               llvm::ArrayRef<Capability> memberCapabilities,
-                               const mlir::DataLayout &dataLayout) {
+                               llvm::ArrayRef<bool> memberIsField,
+                               const mlir::DataLayout &dataLayout,
+                               bool memBoxInternal) {
   auto ptrTy = mlir::LLVM::LLVMPointerType::get(context);
   llvm::TypeSize resultSize = llvm::TypeSize::getFixed(0);
   llvm::Align resultAlignment{1};
   mlir::Type memberWithLargestAlignment;
-  if (memberCapabilities.size() != members.size())
+  if (memberIsField.size() != members.size())
     llvm::report_fatal_error(
         "Number of member capabilities must match number of members");
-  for (auto [rawMember, rawCapability] :
-       llvm::zip(members, memberCapabilities)) {
+  for (auto [rawMember, isField] : llvm::zip(members, memberIsField)) {
     if (!rawMember)
       continue;
-    Capability capability = rawCapability;
-    if (auto recordTy = llvm::dyn_cast<RecordType>(rawMember)) {
-      if (capability == Capability::unspecified)
-        capability = recordTy.getDefaultCapability();
-      if (capability == Capability::unspecified)
-        capability = Capability::shared;
-    }
     mlir::Type member;
-    if (capability == Capability::flex || capability == Capability::rigid ||
-        capability == Capability::shared || capability == Capability::field)
+    auto recordTy = llvm::dyn_cast<RecordType>(rawMember);
+    // A member is stored as a pointer if:
+    // 1. it is a mutable field (isField == true)
+    // 2. it is a referential record (either shared or regional)
+    // 3. if this layout is derived for memory box internal layout, we force
+    //    expand the structure in place.
+    if (!memBoxInternal &&
+        (isField ||
+         (recordTy &&
+          (recordTy.getDefaultCapability() == Capability::shared ||
+           recordTy.getDefaultCapability() == Capability::regional))))
       member = ptrTy;
     else
       member = rawMember;
+
     llvm::TypeSize memberSize = dataLayout.getTypeSize(member);
     if (!memberSize.isFixed())
       return std::nullopt;
@@ -248,17 +251,16 @@ deriveCompoundSizeAndAlignment(mlir::MLIRContext *context,
 llvm::LogicalResult
 RecordType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
                    llvm::ArrayRef<mlir::Type> members,
-                   llvm::ArrayRef<reussir::Capability> memberCapabilities,
-                   mlir::StringAttr name, bool complete,
-                   reussir::RecordKind kind,
+                   llvm::ArrayRef<bool> memberIsField, mlir::StringAttr name,
+                   bool complete, reussir::RecordKind kind,
                    reussir::Capability defaultCapability) {
-  if (memberCapabilities.size() != members.size()) {
+  if (memberIsField.size() != members.size()) {
     emitError() << "Number of member capabilities must match number of members";
     return mlir::failure();
   }
   for (size_t i = 0; i < members.size(); ++i) {
-    const auto &member = members[i];
-    const auto &capability = memberCapabilities[i];
+    const auto member = members[i];
+    const auto isField = memberIsField[i];
 
     if (!member) {
       emitError() << "Members must not be null";
@@ -271,16 +273,16 @@ RecordType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
       return mlir::failure();
     }
 
-    if (capability == reussir::Capability::flex) {
-      emitError() << "Flex capability is not allowed in record members";
+    if (isField && defaultCapability == Capability::shared) {
+      emitError() << "Field capability is not allowed in shared record";
       return mlir::failure();
     }
   }
   if (complete && defaultCapability != reussir::Capability::shared &&
       defaultCapability != reussir::Capability::value &&
-      defaultCapability != reussir::Capability::unspecified) {
+      defaultCapability != reussir::Capability::regional) {
     emitError()
-        << "Default capability must be either Shared, Value, or Default";
+        << "Record capability must be either Shared, Value, or Regional";
     return mlir::failure();
   }
   return mlir::success();
@@ -294,7 +296,7 @@ mlir::Type RecordType::parse(mlir::AsmParser &parser) {
   const llvm::SMLoc loc = parser.getCurrentLocation();
   const Location encLoc = parser.getEncodedSourceLoc(loc);
   llvm::SmallVector<mlir::Type> members;
-  llvm::SmallVector<reussir::Capability> memberCapabilities;
+  llvm::SmallVector<bool> memberIsField;
   Capability defaultCapability;
   RecordKind kind;
   StringAttr name;
@@ -337,9 +339,8 @@ mlir::Type RecordType::parse(mlir::AsmParser &parser) {
     }
   }
 
-  auto parseOptionalCapability = [kind](mlir::AsmParser &parser,
-                                        bool forField =
-                                            true) -> FailureOr<Capability> {
+  auto parseOptionalCapability = [](mlir::AsmParser &parser,
+                                    bool forField) -> FailureOr<Capability> {
     if (parser.parseOptionalLSquare().succeeded()) {
       FailureOr<std::optional<Capability>> capOrError =
           FieldParser<std::optional<Capability>>::parse(parser);
@@ -350,9 +351,7 @@ mlir::Type RecordType::parse(mlir::AsmParser &parser) {
       if (capOrError->has_value())
         return capOrError->value();
     }
-    return (kind == RecordKind::variant && forField)
-               ? reussir::Capability::value
-               : reussir::Capability::unspecified;
+    return forField ? Capability::unspecified : Capability::shared;
   };
   // Start parsing member fields.
   if (parser.parseOptionalKeyword("incomplete").failed()) {
@@ -367,22 +366,22 @@ mlir::Type RecordType::parse(mlir::AsmParser &parser) {
 
     // Now parse the members and their capabilities.
     const auto delimiter = AsmParser::Delimiter::Braces;
-    const auto parseElementFn = [&parser, &members, &memberCapabilities,
+    const auto parseElementFn = [&parser, &members, &memberIsField,
                                  &parseOptionalCapability]() -> ParseResult {
       FailureOr<reussir::Capability> capOrError =
           parseOptionalCapability(parser, true);
       if (failed(capOrError))
         return mlir::failure();
       else {
-        if (*capOrError == reussir::Capability::flex ||
-            *capOrError == reussir::Capability::rigid) {
+        if (*capOrError != reussir::Capability::field &&
+            *capOrError != reussir::Capability::unspecified) {
           parser.emitError(
               parser.getCurrentLocation(),
-              "flex or rigid capabilities are not allowed in record members");
+              "only field capability is allowed for record members");
           return mlir::failure();
         }
       }
-      memberCapabilities.push_back(capOrError.value());
+      memberIsField.push_back(*capOrError == reussir::Capability::field);
       return parser.parseType(members.emplace_back());
     };
     if (parser.parseCommaSeparatedList(delimiter, parseElementFn).failed())
@@ -395,23 +394,23 @@ mlir::Type RecordType::parse(mlir::AsmParser &parser) {
   // Start creating the record type.
   RecordType result;
   ArrayRef<Type> membersRef{members};
-  ArrayRef<reussir::Capability> memberCapabilitiesRef{memberCapabilities};
+  ArrayRef<bool> memberIsFieldRef{memberIsField};
 
   if (name && incomplete) {
     // Named incomplete record.
     result = getChecked(encLoc, context, name, kind);
   } else if (!name && !incomplete) {
     // Anonymous complete record.
-    result = getChecked(encLoc, context, membersRef, memberCapabilitiesRef,
-                        kind, defaultCapability);
+    result = getChecked(encLoc, context, membersRef, memberIsFieldRef, kind,
+                        defaultCapability);
   } else if (!incomplete) {
     // Named complete record.
-    result = getChecked(encLoc, context, membersRef, memberCapabilitiesRef,
-                        name, kind, defaultCapability);
+    result = getChecked(encLoc, context, membersRef, memberIsFieldRef, name,
+                        kind, defaultCapability);
     // If the record has a self-reference, its type already exists in a
     // incomplete state. In this case, we must complete it.
     if (result && !result.getComplete())
-      result.complete(membersRef, memberCapabilitiesRef, defaultCapability);
+      result.complete(membersRef, memberIsFieldRef, defaultCapability);
   } else { // anonymous & incomplete
     parser.emitError(loc, "anonymous records must be complete");
     return {};
@@ -442,19 +441,16 @@ void RecordType::print(::mlir::AsmPrinter &printer) const {
   if (!getComplete())
     printer << "incomplete";
   else {
-    if (getDefaultCapability() != reussir::Capability::unspecified)
+    if (getDefaultCapability() != reussir::Capability::shared)
       printer << '[' << getDefaultCapability() << "] ";
     printer << '{';
     if (!getMembers().empty()) {
-      llvm::interleaveComma(llvm::zip(getMembers(), getMemberCapabilities()),
-                            printer, [&](auto memberAndCap) {
-                              auto [member, cap] = memberAndCap;
-                              auto defaultCapability =
-                                  reussir::Capability::unspecified;
-                              if (getKind() == RecordKind::variant)
-                                defaultCapability = reussir::Capability::value;
-                              if (cap != defaultCapability)
-                                printer << '[' << cap << "] ";
+      llvm::interleaveComma(llvm::zip(getMembers(), getMemberIsField()),
+                            printer, [&](auto memberAndCapIsField) {
+                              auto [member, capIsField] = memberAndCapIsField;
+                              if (capIsField)
+                                printer << '[' << reussir::Capability::field
+                                        << "] ";
                               printer << member;
                             });
     }
@@ -470,8 +466,8 @@ void RecordType::print(::mlir::AsmPrinter &printer) const {
 llvm::ArrayRef<mlir::Type> RecordType::getMembers() const {
   return getImpl()->members;
 }
-llvm::ArrayRef<reussir::Capability> RecordType::getMemberCapabilities() const {
-  return getImpl()->memberCapabilities;
+llvm::ArrayRef<bool> RecordType::getMemberIsField() const {
+  return getImpl()->memberIsField;
 }
 mlir::StringAttr RecordType::getName() const { return getImpl()->name; }
 bool RecordType::getComplete() const { return getImpl()->complete; }
@@ -503,17 +499,16 @@ reussir::Capability RecordType::getDefaultCapability() const {
 }
 
 bool RecordType::hasNoRegionalFields() const {
-  return llvm::none_of(getMemberCapabilities(),
-                       [](Capability cap) { return cap == Capability::field; });
+  return llvm::none_of(getMemberIsField(),
+                       [](bool isField) { return isField; });
 }
 
 //===----------------------------------------------------------------------===//
 // RecordType Mutations
 //===----------------------------------------------------------------------===//
-void RecordType::complete(
-    llvm::ArrayRef<mlir::Type> members,
-    llvm::ArrayRef<reussir::Capability> memberCapabilities,
-    reussir::Capability defaultCapability) {
+void RecordType::complete(llvm::ArrayRef<mlir::Type> members,
+                          llvm::ArrayRef<bool> memberCapabilities,
+                          reussir::Capability defaultCapability) {
   if (mutate(members, memberCapabilities, defaultCapability).failed())
     llvm_unreachable("failed to complete record");
 }
@@ -525,7 +520,7 @@ RecordType::LayoutInfo RecordType::getElementRegionLayoutInfo(
     const mlir::DataLayout &dataLayout) const {
   if (isCompound()) {
     auto derived = deriveCompoundSizeAndAlignment(
-        getContext(), getMembers(), getMemberCapabilities(), dataLayout);
+        getContext(), getMembers(), getMemberIsField(), dataLayout);
     if (!derived)
       llvm_unreachable("RecordType must have a fixed size");
     auto [sizeInBytes, alignment, memberWithLargestAlignment] = *derived;
@@ -534,11 +529,11 @@ RecordType::LayoutInfo RecordType::getElementRegionLayoutInfo(
   llvm::TypeSize largestSize = llvm::TypeSize::getZero();
   llvm::Align largestAlignment = llvm::Align(1);
   mlir::Type memberWithLargestAlignment;
-  for (auto [rawMember, cap] :
-       llvm::zip(getMembers(), getMemberCapabilities())) {
+  for (auto [rawMember, isField] :
+       llvm::zip(getMembers(), getMemberIsField())) {
     if (!rawMember)
       continue;
-    mlir::Type member = getProjectedType(rawMember, cap, Capability::value);
+    mlir::Type member = getProjectedType(rawMember, isField, Capability::value);
     llvm::TypeSize memberSize = dataLayout.getTypeSize(member);
     if (!memberSize.isFixed())
       llvm_unreachable("RecordType must have a fixed size");
@@ -803,15 +798,13 @@ llvm::TypeSize
 RcBoxType::getTypeSizeInBits(const mlir::DataLayout &dataLayout,
                              mlir::DataLayoutEntryListRef params) const {
   mlir::IndexType type = mlir::IndexType::get(getContext());
-  auto derived = isRegional()
-                     ? deriveCompoundSizeAndAlignment(
-                           getContext(), {type, type, type, getEleTy()},
-                           {Capability::value, Capability::value,
-                            Capability::value, Capability::value},
-                           dataLayout)
-                     : deriveCompoundSizeAndAlignment(
-                           getContext(), {type, getEleTy()},
-                           {Capability::value, Capability::value}, dataLayout);
+  auto derived =
+      isRegional()
+          ? deriveCompoundSizeAndAlignment(
+                getContext(), {type, type, type, getEleTy()},
+                {false, false, false, false}, dataLayout, true)
+          : deriveCompoundSizeAndAlignment(getContext(), {type, getEleTy()},
+                                           {false, false}, dataLayout, true);
   if (!derived)
     llvm_unreachable("RcBoxType must have a fixed size");
   auto [sizeInBytes, _x, _y] = *derived;
@@ -821,15 +814,13 @@ RcBoxType::getTypeSizeInBits(const mlir::DataLayout &dataLayout,
 uint64_t RcBoxType::getABIAlignment(const mlir::DataLayout &dataLayout,
                                     mlir::DataLayoutEntryListRef params) const {
   mlir::IndexType type = mlir::IndexType::get(getContext());
-  auto derived = isRegional()
-                     ? deriveCompoundSizeAndAlignment(
-                           getContext(), {type, type, type, getEleTy()},
-                           {Capability::value, Capability::value,
-                            Capability::value, Capability::value},
-                           dataLayout)
-                     : deriveCompoundSizeAndAlignment(
-                           getContext(), {type, getEleTy()},
-                           {Capability::value, Capability::value}, dataLayout);
+  auto derived =
+      isRegional()
+          ? deriveCompoundSizeAndAlignment(
+                getContext(), {type, type, type, getEleTy()},
+                {false, false, false, false}, dataLayout, true)
+          : deriveCompoundSizeAndAlignment(getContext(), {type, getEleTy()},
+                                           {false, false}, dataLayout, true);
   if (!derived)
     llvm_unreachable("RcBoxType must have a fixed alignment");
   auto [_x, alignment, _y] = *derived;
@@ -897,22 +888,25 @@ void ClosureType::print(mlir::AsmPrinter &printer) const {
 //===----------------------------------------------------------------------===//
 // getProjectedType
 //===----------------------------------------------------------------------===//
-mlir::Type getProjectedType(mlir::Type type, Capability fieldCap,
-                            Capability refCap) {
-  fieldCap = llvm::TypeSwitch<mlir::Type, Capability>(type)
-                 .Case<RecordType>([&](RecordType type) -> Capability {
-                   if (fieldCap == Capability::unspecified)
-                     fieldCap = type.getDefaultCapability();
-                   if (fieldCap == Capability::unspecified)
-                     fieldCap = Capability::shared;
-                   return fieldCap;
-                 })
-                 .Default([fieldCap](mlir::Type) {
-                   return fieldCap == Capability::unspecified
-                              ? Capability::value
-                              : fieldCap;
-                 });
-  if (fieldCap == Capability::field) {
+// According to specification, a struct field can either be annotated as field
+// or not.
+// If it is annotated with field, the target type must be a record with regional
+// capability. In this case, the projected type is a nullable rc pointer, whose
+// capability is decided via the reference capability.
+// Otherwise, if the field is a shared referential record, the projected type
+// is a rc pointer. Or it can be a rigid rc pointer if the field record is
+// regional.
+// Otherwise, we directly return the type.
+mlir::Type getProjectedType(mlir::Type type, bool fieldCap, Capability refCap) {
+  Capability targetCap =
+      llvm::TypeSwitch<mlir::Type, Capability>(type)
+          .Case<RecordType>([fieldCap](RecordType type) -> Capability {
+            if (fieldCap)
+              return Capability::field;
+            return type.getDefaultCapability();
+          })
+          .Default([](mlir::Type) { return Capability::unspecified; });
+  if (targetCap == Capability::field) {
     // Target capability is rigid unless the reference capability is flex
     RcType rcTy = RcType::get(type.getContext(), type,
                               refCap == Capability::flex ? Capability::flex
@@ -920,13 +914,11 @@ mlir::Type getProjectedType(mlir::Type type, Capability fieldCap,
     NullableType nullableTy = NullableType::get(type.getContext(), rcTy);
     return nullableTy;
   }
-  if (fieldCap == Capability::shared)
+  if (targetCap == Capability::shared)
     return RcType::get(type.getContext(), type, Capability::shared);
-  if (fieldCap == Capability::rigid)
+  if (targetCap == Capability::regional)
     return RcType::get(type.getContext(), type, Capability::rigid);
-  if (fieldCap == Capability::value)
-    return type;
-  llvm_unreachable("invalid field capability");
+  return type;
 }
 
 //===----------------------------------------------------------------------===//
@@ -940,17 +932,16 @@ deriveLayoutForClosureBox(mlir::MLIRContext *context,
                           const mlir::DataLayout &dataLayout) {
   auto ptrTy = mlir::LLVM::LLVMPointerType::get(context);
   llvm::SmallVector<mlir::Type> members = {ptrTy, ptrTy};
-  llvm::SmallVector<Capability> memberCapabilities = {Capability::value,
-                                                      Capability::value};
+  llvm::SmallVector<bool> memberCapabilities = {false, false};
 
   // Add payload types
   for (auto payloadType : payloadTypes) {
     members.push_back(payloadType);
-    memberCapabilities.push_back(Capability::value);
+    memberCapabilities.push_back(false);
   }
-
+  // This is not the memory box but the payload argument
   return deriveCompoundSizeAndAlignment(context, members, memberCapabilities,
-                                        dataLayout);
+                                        dataLayout, /*memBoxInternal=*/false);
 }
 } // namespace
 

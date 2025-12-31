@@ -33,13 +33,16 @@ RecordType::emitScannerInstructions(llvm::SmallVectorImpl<int32_t> &buffer,
   if (isCompound()) {
     size_t scannedBytes = EmitState.scannedBytes;
     size_t cursorPosition = EmitState.cursorPosition;
-    for (auto [rawMember, cap] :
-         llvm::zip(getMembers(), getMemberCapabilities())) {
+    for (auto [rawMember, isField] :
+         llvm::zip(getMembers(), getMemberIsField())) {
       if (!rawMember)
         continue;
       mlir::Type member;
-      if (cap == Capability::flex || cap == Capability::rigid ||
-          cap == Capability::shared || cap == Capability::field)
+      auto recordTy = llvm::dyn_cast<RecordType>(rawMember);
+      if (isField ||
+          (recordTy &&
+           (recordTy.getDefaultCapability() == Capability::shared ||
+            recordTy.getDefaultCapability() == Capability::regional)))
         member = mlir::LLVM::LLVMPointerType::get(getContext());
       else
         member = rawMember;
@@ -50,7 +53,7 @@ RecordType::emitScannerInstructions(llvm::SmallVectorImpl<int32_t> &buffer,
       uint64_t memberSizeInBytes = memberSize.getFixedValue();
       uint64_t memberAlignment = dataLayout.getTypeABIAlignment(member);
       scannedBytes = llvm::alignTo(scannedBytes, memberAlignment);
-      if (cap == Capability::field) {
+      if (isField) {
         if (cursorPosition < scannedBytes) {
           buffer.push_back(advance(scannedBytes - cursorPosition));
           cursorPosition = scannedBytes;
@@ -58,7 +61,8 @@ RecordType::emitScannerInstructions(llvm::SmallVectorImpl<int32_t> &buffer,
         buffer.push_back(field());
       } else {
         RecordType nestedRecordType = llvm::dyn_cast<RecordType>(rawMember);
-        if (cap == Capability::value && nestedRecordType &&
+        if (!isField && nestedRecordType &&
+            nestedRecordType.getDefaultCapability() == Capability::value &&
             !nestedRecordType.hasNoRegionalFields()) {
           size_t newCursorPosition = nestedRecordType.emitScannerInstructions(
               buffer, dataLayout,
@@ -94,9 +98,9 @@ RecordType::emitScannerInstructions(llvm::SmallVectorImpl<int32_t> &buffer,
   // reserve space for skip instructions
   buffer.append(getMembers().size(), end());
   llvm::SmallVector<size_t> rewriteEndToSkip;
-  for (auto [rawMember, cap] :
-       llvm::zip(getMembers(), getMemberCapabilities())) {
-    if (cap == Capability::field) {
+  for (auto [rawMember, isField] :
+       llvm::zip(getMembers(), getMemberIsField())) {
+    if (isField) {
       // this is a direct field
       if (cursorPosition < scannedBytes)
         buffer.push_back(advance(scannedBytes - cursorPosition));
@@ -108,7 +112,11 @@ RecordType::emitScannerInstructions(llvm::SmallVectorImpl<int32_t> &buffer,
       buffer.push_back(end());
     } else {
       auto recordType = llvm::dyn_cast_or_null<RecordType>(rawMember);
-      if (cap == Capability::value && recordType &&
+      // that if the record is directly nested as a value and has mutable fields
+      // to scan (TODO: this should not be possible but let's be conservative
+      // here)
+      if (!isField && recordType &&
+          recordType.getDefaultCapability() == Capability::value &&
           !recordType.hasNoRegionalFields()) {
         // we need to scan nested record
         size_t newCursorPosition = recordType.emitScannerInstructions(

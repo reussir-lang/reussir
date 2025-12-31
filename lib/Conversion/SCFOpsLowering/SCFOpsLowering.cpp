@@ -183,7 +183,7 @@ public:
             llvm::cast<RecordType>(variantRef.getElementType());
         mlir::Type targetVariantType =
             getProjectedType(recordType.getMembers()[tagArray[0]],
-                             recordType.getMemberCapabilities()[tagArray[0]],
+                             recordType.getMemberIsField()[tagArray[0]],
                              variantRef.getCapability());
         RefType coercedType =
             RefType::get(rewriter.getContext(), targetVariantType,

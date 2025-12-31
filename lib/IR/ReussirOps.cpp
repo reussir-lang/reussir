@@ -404,7 +404,7 @@ mlir::LogicalResult ReussirRecordCompoundOp::verify() {
     return emitOpError("number of fields must match number of members");
   for (auto [field, member, memberCapability] :
        llvm::zip(getFields(), compoundType.getMembers(),
-                 compoundType.getMemberCapabilities())) {
+                 compoundType.getMemberIsField())) {
     // Since this is assemble phase, assume flex ref capability.
     mlir::Type projectedType =
         reussir::getProjectedType(member, memberCapability, Capability::flex);
@@ -431,14 +431,14 @@ mlir::LogicalResult ReussirRecordVariantOp::verify() {
   if (tag >= variantType.getMembers().size())
     return emitOpError("tag out of bounds");
   mlir::Type targetVariantType = variantType.getMembers()[tag];
-  Capability targetVariantCapability = variantType.getMemberCapabilities()[tag];
+  bool targetVariantIsIsField = variantType.getMemberIsField()[tag];
   mlir::Type projectedType = reussir::getProjectedType(
-      targetVariantType, targetVariantCapability, Capability::flex);
+      targetVariantType, targetVariantIsIsField, Capability::flex);
   if (projectedType != getValue().getType())
     return emitOpError("value type must match projected type, ")
            << "value type: " << getValue().getType()
            << ", projected type: " << projectedType;
-  if (targetVariantCapability == Capability::flex)
+  if (targetVariantIsIsField)
     return emitOpError("TODO: check this is nested in a region operation");
   return mlir::success();
 }
@@ -499,7 +499,7 @@ mlir::LogicalResult ReussirRecordCoerceOp::verify() {
 
   // Get the target variant element type at the specified tag position
   mlir::Type targetVariantElementType = getProjectedType(
-      recordType.getMembers()[tag], recordType.getMemberCapabilities()[tag],
+      recordType.getMembers()[tag], recordType.getMemberIsField()[tag],
       variantRefType.getCapability());
 
   // Check that the output reference element type matches the target variant
@@ -542,12 +542,12 @@ mlir::LogicalResult ReussirRefProjectOp::verify() {
 
   // Get the member type and capability at the specified index
   mlir::Type memberType = recordType.getMembers()[index];
-  Capability memberCapability = recordType.getMemberCapabilities()[index];
+  bool memberIsField = recordType.getMemberIsField()[index];
 
   // Calculate the expected projected type based on the member type, member
   // capability, and reference capability
   mlir::Type expectedProjectedType = reussir::getProjectedType(
-      memberType, memberCapability, refType.getCapability());
+      memberType, memberIsField, refType.getCapability());
 
   // Check that the projected type matches the expected type
   if (expectedProjectedType != projectedType.getElementType())
@@ -562,8 +562,7 @@ mlir::LogicalResult ReussirRefProjectOp::verify() {
       projectedType.getCapability() == refType.getCapability();
   bool projectFieldOutOfFlex =
       projectedType.getCapability() == Capability::field &&
-      refType.getCapability() == Capability::flex &&
-      memberCapability == Capability::field;
+      refType.getCapability() == Capability::flex && memberIsField;
   if (!isOfSameCapability && !projectFieldOutOfFlex)
     return emitOpError(
                "projected reference capability must match original "
@@ -883,9 +882,9 @@ mlir::LogicalResult ReussirRecordDispatchOp::verify() {
                << i << " must have exactly one argument for single tag";
 
       int64_t tag = tagSet[0];
-      mlir::Type expectedType = getProjectedType(
-          members[tag], recordType.getMemberCapabilities()[tag],
-          variantRefType.getCapability());
+      mlir::Type expectedType =
+          getProjectedType(members[tag], recordType.getMemberIsField()[tag],
+                           variantRefType.getCapability());
       mlir::Type actualType = block.getArgument(0).getType();
 
       // The argument should be a reference to the member type
@@ -1692,9 +1691,8 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
 
           if (recordType.getKind() == RecordKind::compound) {
             // For compound types, recursively apply to each field
-            for (auto [i, actualMemberType, actualMemberCap] :
-                 llvm::enumerate(recordType.getMembers(),
-                                 recordType.getMemberCapabilities())) {
+            for (auto [i, actualMemberType, actualMemberCap] : llvm::enumerate(
+                     recordType.getMembers(), recordType.getMemberIsField())) {
               auto projectedType = getProjectedType(
                   actualMemberType, actualMemberCap, refType.getCapability());
               if (isTriviallyCopyable(projectedType))
@@ -1725,7 +1723,7 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
             // in each region
             for (auto [i, actualVariantType, actualVariantCap] :
                  llvm::enumerate(recordType.getMembers(),
-                                 recordType.getMemberCapabilities())) {
+                                 recordType.getMemberIsField())) {
 
               auto projectedType = getProjectedType(
                   actualVariantType, actualVariantCap, refType.getCapability());

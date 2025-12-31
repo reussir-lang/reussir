@@ -28,7 +28,7 @@ namespace detail {
 //===----------------------------------------------------------------------===//
 //
 // We manually define the storage class for RecordType to handle
-// self-references in the members and memberCapabilities arrays. Named
+// self-references in the members and memberIsField arrays. Named
 // structures can be initialized as incomplete such that they can be referred
 // by their own.
 //
@@ -36,7 +36,7 @@ namespace detail {
 
 struct RecordTypeStorage : public mlir::TypeStorage {
   llvm::ArrayRef<mlir::Type> members;
-  llvm::ArrayRef<reussir::Capability> memberCapabilities;
+  llvm::ArrayRef<bool> memberIsField;
   mlir::StringAttr name;
   bool complete;
   reussir::RecordKind kind;
@@ -45,11 +45,10 @@ struct RecordTypeStorage : public mlir::TypeStorage {
   using KeyTy = RecordTypeStorage;
 
   RecordTypeStorage(llvm::ArrayRef<mlir::Type> members,
-                    llvm::ArrayRef<reussir::Capability> memberCapabilities,
-                    mlir::StringAttr name, bool complete,
-                    reussir::RecordKind kind,
+                    llvm::ArrayRef<bool> memberIsField, mlir::StringAttr name,
+                    bool complete, reussir::RecordKind kind,
                     reussir::Capability defaultCapability)
-      : members(members), memberCapabilities(memberCapabilities), name(name),
+      : members(members), memberIsField(memberIsField), name(name),
         complete(complete), kind(kind), defaultCapability(defaultCapability) {}
 
   RecordTypeStorage(const KeyTy &key) = default;
@@ -59,8 +58,7 @@ struct RecordTypeStorage : public mlir::TypeStorage {
   bool operator==(const KeyTy &other) const {
     if (name)
       return name == other.name && kind == other.kind;
-    return members == other.members &&
-           memberCapabilities == other.memberCapabilities &&
+    return members == other.members && memberIsField == other.memberIsField &&
            kind == other.kind && defaultCapability == other.defaultCapability &&
            complete == other.complete;
   }
@@ -68,7 +66,7 @@ struct RecordTypeStorage : public mlir::TypeStorage {
   static llvm::hash_code hashKey(const KeyTy &key) {
     if (key.name)
       return llvm::hash_combine(key.name, key.kind);
-    return llvm::hash_combine(key.members, key.memberCapabilities, key.kind,
+    return llvm::hash_combine(key.members, key.memberIsField, key.kind,
                               key.defaultCapability, key.complete);
   }
 
@@ -83,11 +81,10 @@ struct RecordTypeStorage : public mlir::TypeStorage {
   /// mutations. Anonymous records are always complete and cannot be mutated.
   /// This method does not fail if a mutation of a complete record does not
   /// change the record.
-  llvm::LogicalResult
-  mutate(mlir::TypeStorageAllocator &allocator,
-         llvm::ArrayRef<mlir::Type> members,
-         llvm::ArrayRef<reussir::Capability> memberCapabilities,
-         reussir::Capability defaultCapability) {
+  llvm::LogicalResult mutate(mlir::TypeStorageAllocator &allocator,
+                             llvm::ArrayRef<mlir::Type> members,
+                             llvm::ArrayRef<bool> memberIsField,
+                             reussir::Capability defaultCapability) {
 
     // Anonymous records cannot mutate.
     if (!name)
@@ -96,12 +93,12 @@ struct RecordTypeStorage : public mlir::TypeStorage {
     // Mutation of complete records are allowed if they change nothing.
     if (complete)
       return llvm::success(members == this->members &&
-                           memberCapabilities == this->memberCapabilities &&
+                           memberIsField == this->memberIsField &&
                            defaultCapability == this->defaultCapability);
 
     // Mutate incomplete records.
     this->members = allocator.copyInto(members);
-    this->memberCapabilities = allocator.copyInto(memberCapabilities);
+    this->memberIsField = allocator.copyInto(memberIsField);
     this->defaultCapability = defaultCapability;
     this->complete = true;
     return llvm::success();

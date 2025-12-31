@@ -86,7 +86,7 @@ def ReussirRecordType
   }];
 
   let parameters = (ins OptionalArrayRefParameter<"mlir::Type">:$members,
-      OptionalArrayRefParameter<"reussir::Capability">:$memberCapabilities,
+      OptionalArrayRefParameter<"bool">:$memberIsField,
       OptionalParameter<"mlir::StringAttr">:$name, "bool":$complete,
       "reussir::RecordKind":$kind, "reussir::Capability":$defaultCapability);
 
@@ -99,11 +99,11 @@ def ReussirRecordType
   let builders = [
       // Create an identified and complete record type.
       TypeBuilder<(ins "llvm::ArrayRef<mlir::Type>":$members,
-                      "llvm::ArrayRef<reussir::Capability>":$memberCapabilities,
+                      "llvm::ArrayRef<bool>":$memberIsField,
                       "mlir::StringAttr":$name, "reussir::RecordKind":$kind,
                       "reussir::Capability":$defaultCapability),
                   [{
-      return $_get($_ctxt, members, memberCapabilities, name, /*complete=*/true,
+      return $_get($_ctxt, members, memberIsField, name, /*complete=*/true,
                        kind, defaultCapability);
     }]>,
 
@@ -112,7 +112,7 @@ def ReussirRecordType
                   [{
       return $_get($_ctxt, 
         /* members= */ llvm::ArrayRef<Type>{}, 
-        /* memberCapabilities= */ llvm::ArrayRef<reussir::Capability>{},
+        /* memberIsField= */ llvm::ArrayRef<bool>{},
         name,
         /* complete= */ false, 
         kind,
@@ -121,11 +121,11 @@ def ReussirRecordType
 
       // Create an anonymous record type (always complete).
       TypeBuilder<(ins "llvm::ArrayRef<mlir::Type>":$members,
-                      "llvm::ArrayRef<reussir::Capability>":$memberCapabilities,
+                      "llvm::ArrayRef<bool>":$memberIsField,
                       "reussir::RecordKind":$kind,
                       "reussir::Capability":$defaultCapability),
                   [{
-      return $_get($_ctxt, members, memberCapabilities, mlir::StringAttr{}, /*complete=*/true,
+      return $_get($_ctxt, members, memberIsField, mlir::StringAttr{}, /*complete=*/true,
                       kind, defaultCapability);
     }]>];
 
@@ -134,7 +134,7 @@ def ReussirRecordType
       bool isCompound() const { return getKind() == RecordKind::compound; };
       bool isVariant() const { return getKind() == RecordKind::variant; };
       void complete(llvm::ArrayRef<mlir::Type> members, 
-                    llvm::ArrayRef<reussir::Capability> memberCapabilities,
+                    llvm::ArrayRef<bool> memberIsField,
                     reussir::Capability defaultCapability);
       struct LayoutInfo {
         llvm::TypeSize size;

@@ -48,8 +48,10 @@ the following capability:
 
 == Changes to Origianl Design
 
-1. there is no longer `Unspecified (U)` capability at the view of backend.
-2. a record now has fixed capability, which make it easier to do type inference.
+1. There is no longer `Unspecified (U)` capability at the view of frotend. However,
+   the backend may still have this attribute for the ease of handling situations
+   where capabilities are not related.
+2. A record now has fixed capability, which make it easier to do type inference.
 
 == TODOs
 

@@ -71,11 +71,11 @@ private:
                       ReussirRefDropOp op,
                       mlir::PatternRewriter &rewriter) const {
     assert(recordType.isCompound());
-    for (auto [idx, memberTy, memberCap] : llvm::enumerate(
-             recordType.getMembers(), recordType.getMemberCapabilities())) {
-      if (memberCap == Capability::field)
+    for (auto [idx, memberTy, memberIsField] : llvm::enumerate(
+             recordType.getMembers(), recordType.getMemberIsField())) {
+      if (memberIsField)
         continue;
-      auto projectedTy = getProjectedType(memberTy, memberCap, refCap);
+      auto projectedTy = getProjectedType(memberTy, false, refCap);
       if (isTriviallyCopyable(projectedTy))
         continue;
       RefType projectedRefTy =
@@ -100,16 +100,16 @@ private:
     auto tagSetsAttr = rewriter.getArrayAttr(tagSets);
     auto dispatcher = rewriter.create<ReussirRecordDispatchOp>(
         op.getLoc(), mlir::Type{}, op.getRef(), tagSetsAttr, tagSets.size());
-    for (auto [idx, memberTy, memberCap] : llvm::enumerate(
-             recordType.getMembers(), recordType.getMemberCapabilities())) {
-      auto projectedTy = getProjectedType(memberTy, memberCap, refCap);
+    for (auto [idx, memberTy, memberIsField] : llvm::enumerate(
+             recordType.getMembers(), recordType.getMemberIsField())) {
+      auto projectedTy = getProjectedType(memberTy, memberIsField, refCap);
       RefType projectedRefTy =
           RefType::get(op.getContext(), projectedTy, refCap);
       mlir::Block *block = rewriter.createBlock(
           &dispatcher.getRegions()[idx], dispatcher.getRegions()[idx].begin(),
           {projectedRefTy}, {op.getLoc()});
       rewriter.setInsertionPointToStart(block);
-      if (memberCap != Capability::field && !isTriviallyCopyable(projectedTy))
+      if (!memberIsField && !isTriviallyCopyable(projectedTy))
         rewriter.create<ReussirRefDropOp>(op.getLoc(), block->getArgument(0),
                                           true, nullptr);
 

@@ -1,10 +1,10 @@
 // RUN: %reussir-opt %s | %reussir-opt | %FileCheck %s
 // Test basic reference drop operations
-!test = !reussir.record<compound "Test" { [shared] i64, [shared] i64, [field] i64 }>
-!inner = !reussir.record<variant "Inner" { [value] i64, [shared] i64 }>
+!test = !reussir.record<compound "Test" [regional] {i64, i64, [field] i64 }>
+!inner = !reussir.record<variant "Inner" [value] { i64, i64 }>
 !tree_ = !reussir.record<variant "Tree" incomplete>
-!branch = !reussir.record<compound "Tree::Branch" { [shared] !tree_, [value] !inner, [shared] !tree_ }>
-!leaf = !reussir.record<compound "Tree::Leaf" { }>
+!branch = !reussir.record<compound "Tree::Branch" [value] { !tree_, !inner, !tree_ }>
+!leaf = !reussir.record<compound "Tree::Leaf" [value] { }>
 !tree = !reussir.record<variant "Tree" { !branch, !leaf }>
 module {
   // CHECK: func.func @drop_basic(%arg0: !reussir.ref<i32>)
