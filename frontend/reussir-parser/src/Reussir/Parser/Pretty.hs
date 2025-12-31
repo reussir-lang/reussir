@@ -187,11 +187,11 @@ instance PrettyColored Stmt where
       where
         prettyGenerics [] = emptyDoc
         prettyGenerics gs = angles (commaSep (map prettyColored gs))
-        prettyArg (n, t, cap) = prettyColored n <> operator ":" <+> prettyCap cap <> prettyColored t
+        prettyArg (n, t, flx) = prettyColored n <> operator ":" <+> prettyFlex flx <> prettyColored t
         prettyRet Nothing = emptyDoc
-        prettyRet (Just (t, cap)) = operator "->" <+> prettyCap cap <> prettyColored t
-        prettyCap Unspecified = emptyDoc
-        prettyCap c = brackets (prettyColored c) <> space
+        prettyRet (Just (t, flx)) = operator "->" <+> prettyFlex flx <> prettyColored t
+        prettyFlex False = emptyDoc
+        prettyFlex True = brackets (keyword "flex") <> space
     prettyColored (RecordStmt (Record name tyParams fields kind vis cap)) =
         prettyColored vis
             <> keyword (case kind of StructKind -> "struct"; EnumKind -> "enum")
@@ -199,14 +199,17 @@ instance PrettyColored Stmt where
                 <+> prettyColored name
             <> prettyGenerics tyParams
             <> case fields of
-                S.Unnamed fs -> parens (commaSep (map (prettyColored . fst) fs))
+                S.Unnamed fs -> parens (commaSep (map prettyUnnamedField fs))
                 S.Variants vs -> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyVariant vs))) <> hardline)
                 S.Named fs -> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyField fs))) <> hardline)
       where
         prettyGenerics [] = emptyDoc
         prettyGenerics gs = angles (commaSep (map prettyColored gs))
         prettyVariant (n, ts) = prettyColored n <> if null ts then emptyDoc else parens (commaSep (map prettyColored ts))
-        prettyField (n, t, _) = prettyColored n <> operator ":" <+> prettyColored t
+        prettyField (n, t, fld) = prettyColored n <> operator ":" <+> prettyFieldFlag fld <> prettyColored t
+        prettyUnnamedField (t, fld) = prettyFieldFlag fld <> prettyColored t
+        prettyFieldFlag False = emptyDoc
+        prettyFieldFlag True = brackets (keyword "field") <> space
     prettyColored (SpannedStmt w) = prettyColored (spanValue w)
 
 commaSep :: [Doc AnsiStyle] -> Doc AnsiStyle

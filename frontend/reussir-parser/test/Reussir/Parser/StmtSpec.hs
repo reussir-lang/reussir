@@ -50,14 +50,14 @@ spec = do
                     )
 
         it "parses function with capabilities" $
-            (stripStmtSpans <$> parse parseFuncDef "" "fn foo(x: [shared] i32) -> [value] i32 { 0 }")
+            (stripStmtSpans <$> parse parseFuncDef "" "fn foo(x: [flex] i32) -> [flex] i32 { 0 }")
                 `shouldParse` FunctionStmt
                     ( Function
                         Private
                         (Identifier "foo")
                         []
-                        [(Identifier "x", TypeIntegral (Signed 32), Shared)]
-                        (Just (TypeIntegral (Signed 32), Value))
+                        [(Identifier "x", TypeIntegral (Signed 32), True)]
+                        (Just (TypeIntegral (Signed 32), True))
                         False
                         (Just (ConstExpr (ConstInt 0)))
                     )
@@ -95,7 +95,7 @@ spec = do
                     ( Record
                         (Identifier "Point")
                         []
-                        (Unnamed [(TypeIntegral (Signed 32), Unspecified), (TypeIntegral (Signed 32), Unspecified)])
+                        (Unnamed [(TypeIntegral (Signed 32), False), (TypeIntegral (Signed 32), False)])
                         StructKind
                         Private
                         Unspecified
@@ -107,7 +107,7 @@ spec = do
                     ( Record
                         (Identifier "Point")
                         []
-                        (Unnamed [(TypeIntegral (Signed 32), Unspecified), (TypeIntegral (Signed 32), Unspecified)])
+                        (Unnamed [(TypeIntegral (Signed 32), False), (TypeIntegral (Signed 32), False)])
                         StructKind
                         Public
                         Unspecified
@@ -119,31 +119,31 @@ spec = do
                     ( Record
                         (Identifier "Point")
                         []
-                        (Named [(Identifier "x", TypeIntegral (Signed 32), Unspecified), (Identifier "y", TypeIntegral (Signed 32), Unspecified)])
+                        (Named [(Identifier "x", TypeIntegral (Signed 32), False), (Identifier "y", TypeIntegral (Signed 32), False)])
                         StructKind
                         Private
                         Unspecified
                     )
 
         it "parses named struct with capabilities" $
-            parse parseStructDec "" "struct Point { x: [shared] i32, y: [value] i32 }"
+            parse parseStructDec "" "struct Point { x: [field] i32, y: [field] i32 }"
                 `shouldParse` RecordStmt
                     ( Record
                         (Identifier "Point")
                         []
-                        (Named [(Identifier "x", TypeIntegral (Signed 32), Shared), (Identifier "y", TypeIntegral (Signed 32), Value)])
+                        (Named [(Identifier "x", TypeIntegral (Signed 32), True), (Identifier "y", TypeIntegral (Signed 32), True)])
                         StructKind
                         Private
                         Unspecified
                     )
 
         it "parses unnamed struct with capabilities" $
-            parse parseStructDec "" "struct Point ([shared] i32, [value] i32)"
+            parse parseStructDec "" "struct Point ([field] i32, [field] i32)"
                 `shouldParse` RecordStmt
                     ( Record
                         (Identifier "Point")
                         []
-                        (Unnamed [(TypeIntegral (Signed 32), Shared), (TypeIntegral (Signed 32), Value)])
+                        (Unnamed [(TypeIntegral (Signed 32), True), (TypeIntegral (Signed 32), True)])
                         StructKind
                         Private
                         Unspecified
@@ -155,7 +155,7 @@ spec = do
                     ( Record
                         (Identifier "Point")
                         []
-                        (Unnamed [(TypeIntegral (Signed 32), Unspecified), (TypeIntegral (Signed 32), Unspecified)])
+                        (Unnamed [(TypeIntegral (Signed 32), False), (TypeIntegral (Signed 32), False)])
                         StructKind
                         Private
                         Value
