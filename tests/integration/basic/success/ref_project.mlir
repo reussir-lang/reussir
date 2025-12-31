@@ -3,9 +3,9 @@
 
 // Define a simple record type with multiple fields
 !point = !reussir.record<compound "Point" {i32, i32}>
-
+!cell = !reussir.record<compound "MutBox" [regional] {i32}>
 // Define a record with different capability fields
-!complex = !reussir.record<compound "Complex" {i64, [field] i32, [shared] i64}>
+!complex = !reussir.record<compound "Complex" [regional] {i64, [field] !cell, i64}>
 
 module {
   // Test basic projection of a simple record
@@ -31,13 +31,13 @@ module {
   // When projecting a field capability member under a rigid reference, 
   // the projected type becomes a nullable rigid rc pointer
   func.func @project_complex(%ref : !reussir.ref<!complex rigid>) -> 
-    !reussir.ref<!reussir.nullable<!reussir.rc<i32 rigid>> rigid> {
+    !reussir.ref<!reussir.nullable<!reussir.rc<!cell rigid>> rigid> {
     %field0 = reussir.ref.project (%ref : !reussir.ref<!complex rigid>) [0] 
         : !reussir.ref<i64 rigid>
     %field1 = reussir.ref.project (%ref : !reussir.ref<!complex rigid>) [1] 
-        : !reussir.ref<!reussir.nullable<!reussir.rc<i32 rigid>> rigid>
+        : !reussir.ref<!reussir.nullable<!reussir.rc<!cell rigid>> rigid>
     %field2 = reussir.ref.project (%ref : !reussir.ref<!complex rigid>) [2] 
-        : !reussir.ref<!reussir.rc<i64 shared> rigid>
-    return %field1 : !reussir.ref<!reussir.nullable<!reussir.rc<i32 rigid>> rigid>
+        : !reussir.ref<i64 rigid>
+    return %field1 : !reussir.ref<!reussir.nullable<!reussir.rc<!cell rigid>> rigid>
   }
 }
