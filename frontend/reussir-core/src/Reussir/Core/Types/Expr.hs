@@ -30,7 +30,13 @@ data ExprKind
     | ScfIfExpr Expr Expr Expr
     | Var VarID
     | RcWrap Expr Capability
-    | Let (WithSpan (VarID, Identifier)) Expr Expr
+    | Let
+        { letVarSpan :: (Int64, Int64)
+        , letVarID :: VarID
+        , letVarName :: Identifier
+        , letVarExpr :: Expr
+        , letBodyExpr :: Expr
+        }
     | Poison
     deriving (Show, Eq)
 

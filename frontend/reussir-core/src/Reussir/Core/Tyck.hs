@@ -29,7 +29,6 @@ import Reussir.Diagnostic.Report (
     defaultCodeRef,
     defaultText,
  )
-import Reussir.Parser.Types.Capability (Capability)
 import Reussir.Parser.Types.Expr qualified as Syn
 import Reussir.Parser.Types.Lexer (Identifier, Path (Path), WithSpan (..), unIdentifier)
 import Reussir.Parser.Types.Type qualified as Syn
@@ -523,23 +522,14 @@ inferType (Syn.Cast targetType subExpr) = do
 -- If capability annotations are present, we need to check if the type of e1 align
 -- with Rc capability, if so, we directly use e1; otherwise, we insert a RcWrap operation.
 
-inferType (Syn.LetIn varName Nothing valueExpr bodyExpr) = do
-    valueExpr' <- inferType valueExpr
-    let valueTy = Sem.exprType valueExpr'
-    valueTy' <- force valueTy
-    case mVarType of
-        Just annotType -> do
-            annotType' <- evalType annotType
-            _ <- checkType valueExpr annotType'
-            withVariable varName Nothing annotType' $ \varID -> do
-                bodyExpr' <- inferType bodyExpr
-                let bodyTy = Sem.exprType bodyExpr'
-                exprWithSpan bodyTy $ Sem.LetIn varID valueExpr' bodyExpr'
-        Nothing -> do
-            withVariable varName Nothing valueTy' $ \varID -> do
-                bodyExpr' <- inferType bodyExpr
-                let bodyTy = Sem.exprType bodyExpr'
-                exprWithSpan bodyTy $ Sem.LetIn varID valueExpr' bodyExpr'
+-- inferType (Syn.LetIn varName Nothing valueExpr bodyExpr) = do
+--     valueExpr' <- inferType valueExpr
+--     let valueTy = Sem.exprType valueExpr'
+--     valueTy' <- force valueTy
+--     withVariable varName Nothing valueTy' $ \varID -> do
+--         bodyExpr' <- inferType bodyExpr
+--         let bodyTy = Sem.exprType bodyExpr'
+--         exprWithSpan bodyTy $ Sem.LetIn varID valueExpr' bodyExpr'
 inferType (Syn.SpannedExpr (WithSpan subExpr start end)) = do
     oldSpan <- currentSpan <$> State.get
     State.modify $ \st -> st{currentSpan = Just (start, end)}
