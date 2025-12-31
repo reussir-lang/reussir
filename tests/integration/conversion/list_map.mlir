@@ -22,9 +22,10 @@
 // RUN:    -Wl,-rpath,%library_path %extra_sys_libs
 // RUN: %t.exe | %FileCheck %s
 // CHECK: 01235432
-!rc_i64 = !reussir.rc<i64>
-!list_cons = !reussir.record<compound "list.cons" {[shared] i64, [shared] !reussir.record<variant "list" incomplete>}>
-!list_nil = !reussir.record<compound "list.nil" {}>
+!cell = !reussir.record<compound "Cell" {i64}>
+!rc_i64 = !reussir.rc<!cell>
+!list_cons = !reussir.record<compound "list.cons" [value] {!cell, !reussir.record<variant "list" incomplete>}>
+!list_nil = !reussir.record<compound "list.nil" [value] {}>
 !list = !reussir.record<variant "list" {!list_cons, !list_nil}>
 !rc_list = !reussir.rc<!list>
 !token_rc_i64 = !reussir.token<align: 8, size: 16>
@@ -38,10 +39,12 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
         %init = reussir.closure.create -> !reussir.rc<!reussir.closure<(i64, !rc_i64) -> !rc_i64>> {
             body {
                 ^bb0(%arg0 : i64, %arg2 : !rc_i64):
-                %borrow = reussir.rc.borrow (%arg2 : !rc_i64) : !reussir.ref<i64>
+                %borrow_ = reussir.rc.borrow (%arg2 : !rc_i64) : !reussir.ref<!cell>
+                %borrow = reussir.ref.project (%borrow_ : !reussir.ref<!cell>) [0] : !reussir.ref<i64>
                 %loaded = reussir.ref.load (%borrow : !reussir.ref<i64>) : i64
-                %added = arith.addi %loaded, %arg0 : i64
-                %new_rc = reussir.rc.create value(%added : i64) : !rc_i64
+                %added_ = arith.addi %loaded, %arg0 : i64
+                %added = reussir.record.compound(%added_ : i64) : !cell
+                %new_rc = reussir.rc.create value(%added : !cell) : !rc_i64
                 reussir.closure.yield %new_rc : !rc_i64
             }
         }
@@ -53,7 +56,8 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
     func.func private @cons(%data: i64, %tail: !rc_list) -> !rc_list attributes {
         llvm.linkage = #llvm.linkage<internal>
     } {
-        %rc = reussir.rc.create value(%data : i64) : !rc_i64
+        %cell = reussir.record.compound(%data : i64) : !cell
+        %rc = reussir.rc.create value(%cell : !cell) : !rc_i64
         %cons = reussir.record.compound(%rc, %tail : !rc_i64, !rc_list) : !list_cons
         %list = reussir.record.variant[0] (%cons : !list_cons) : !list
         %res = reussir.rc.create value(%list : !list) : !rc_list
@@ -84,7 +88,8 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
                 ^bb0(%cons_ref: !reussir.ref<!list_cons>):
                 %head_ref = reussir.ref.project (%cons_ref : !reussir.ref<!list_cons>) [0] : !reussir.ref<!rc_i64>
                 %head_rc = reussir.ref.load (%head_ref : !reussir.ref<!rc_i64>) : !rc_i64
-                %head_val_ref = reussir.rc.borrow (%head_rc : !rc_i64) : !reussir.ref<i64>
+                %head_val_ref_ = reussir.rc.borrow (%head_rc : !rc_i64) : !reussir.ref<!cell>
+                %head_val_ref = reussir.ref.project (%head_val_ref_ : !reussir.ref<!cell>) [0] : !reussir.ref<i64>
                 %head = reussir.ref.load (%head_val_ref : !reussir.ref<i64>) : i64
                 %tail_ref = reussir.ref.project (%cons_ref : !reussir.ref<!list_cons>) [1] : !reussir.ref<!rc_list>
                 %tail_rc = reussir.ref.load (%tail_ref : !reussir.ref<!rc_list>) : !rc_list
