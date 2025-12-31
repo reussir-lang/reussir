@@ -28,7 +28,7 @@ TEST_F(ReussirValueTransformTest, RefToRcAcquisition) {
 
 TEST_F(ReussirValueTransformTest, RefToCompoundRecordAcquisition) {
   testValueAcquisition(
-      "!reussir.ref<!reussir.record<compound \"Point\" {i32, [shared] i64}>>",
+      R"(!reussir.ref<!reussir.record<compound "Point" {i32, !reussir.record<compound "inner" {i64}>}>>)",
       [](mlir::func::FuncOp funcOp) {
         auto &block = funcOp.getFunctionBody().front();
 
@@ -50,9 +50,10 @@ TEST_F(ReussirValueTransformTest, RefToCompoundRecordAcquisition) {
 
 TEST_F(ReussirValueTransformTest, RefToVariantRecordAcquisition) {
   testValueAcquisition(
-      "!reussir.ref<!reussir.record<variant \"Option\" "
-      "{!reussir.record<compound \"Option::None\" {}>, "
-      "!reussir.record<compound \"Option::Some\" {[shared] i32}>}>>",
+      "!reussir.ref<!reussir.record<variant \"Option\" [value] "
+      "{!reussir.record<compound \"Option::None\" [value] {}>, "
+      "!reussir.record<compound \"Option::Some\" [value] "
+      "{i32,!reussir.record<compound \"inner\" {i64}>}>}>>",
       [](mlir::func::FuncOp funcOp) {
         auto &block = funcOp.getFunctionBody().front();
         auto &ops = block.getOperations();
