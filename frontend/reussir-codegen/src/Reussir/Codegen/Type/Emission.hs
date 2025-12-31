@@ -50,6 +50,7 @@ emitCapability Unspecified = ""
 emitCapability Flex = " flex"
 emitCapability Rigid = " rigid"
 emitCapability Field = " field"
+emitCapability Regional = " regional"
 
 emitAtomicity :: Atomicity -> TB.Builder
 emitAtomicity NonAtomic = " normal"
@@ -138,6 +139,7 @@ emitRecord
         translateCapability Flex = "[flex]"
         translateCapability Rigid = "[rigid]"
         translateCapability Field = "[field]"
+        translateCapability Regional = "[regional]"
 
         emitField :: RecordField -> Codegen TB.Builder
         emitField field = do
