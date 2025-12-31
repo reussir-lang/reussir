@@ -39,16 +39,16 @@ parseIf = do
 parseLetIn :: Parser Expr
 parseLetIn = do
     name <- string "let" *> space *> parseIdentifier
-    ty <- optional (colon *> parseTypeWithCap)
+    ty <- optional (colon *> parseTypeWithFlex)
     value <- char '=' *> space *> parseExpr <* semicolon
     body <- parseExpr
 
     return (LetIn name ty value body)
   where
-    parseTypeWithCap = do
-        cap <- parseCapability
+    parseTypeWithFlex = do
+        flexFlag <- optional (char '[' *> space *> string "flex" <* space <* char ']' <* space)
         ty <- parseType
-        return (ty, cap)
+        return (ty, isJust flexFlag)
 
 parseLambda :: Parser Expr
 parseLambda = do

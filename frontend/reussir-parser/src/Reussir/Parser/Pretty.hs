@@ -124,9 +124,8 @@ instance PrettyColored Expr where
                 <> prettyColored e2
       where
         prettyTy Nothing = emptyDoc
-        prettyTy (Just (t, cap)) = operator ":" <+> prettyCap cap <> prettyColored t
-        prettyCap Unspecified = emptyDoc
-        prettyCap c = brackets (prettyColored c) <> space
+        prettyTy (Just (t, True)) = operator ":" <+> "[flex]" <> prettyColored t
+        prettyTy (Just (t, False)) = operator ":" <+> prettyColored t
     prettyColored (FuncCallExpr (FuncCall path tys args)) =
         prettyColored path
             <> (if null tys then mempty else angles (commaSep (map prettyTyArg tys)))
