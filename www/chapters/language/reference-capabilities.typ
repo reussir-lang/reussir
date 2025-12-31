@@ -19,10 +19,10 @@ the type is unboxed and always being passed by value.
 A record type can have one of the following capabilities:
 
 - `Value (V)`: similar to primitive types, the record is not boxed and being
-  passsed/stored as values across interfaces.
+  passed/stored as values across interfaces.
 - `Shared (S)`: the record is boxed and passed as `RcPtr`.
 - `Regional (RE)`: the record can only be created within regional expression.
-  Depending on the reference's capability, it can be mutate within region (`Flex (F)`).
+  Depending on the reference's capability, it can be mutated within region (`Flex (F)`).
   Or it can be referenced outside region (`Rigid (R)`).
 
 == About Fields
@@ -46,14 +46,14 @@ the following capability:
 3. `Rigid (R)`: a rigid reference to regional data which is already frozen.
 
 
-== Changes to Origianl Design
+== Changes to Original Design
 
-1. There is no longer `Unspecified (U)` capability at the view of frotend. However,
+1. There is no longer `Unspecified (U)` capability at the view of frontend. However,
    the backend may still have this attribute for the ease of handling situations
    where capabilities are not related.
-2. A record now has fixed capability, which make it easier to do type inference.
+2. A record now has fixed capability, which makes it easier to do type inference.
 
 == TODOs
 
 - Describe atomic/nonatomic axis.
-- Consider adding more axis.
+- Consider adding more axes.
