@@ -1,12 +1,16 @@
 module Reussir.Codegen.Type.Record (
-    RecordField,
+    RecordField (..),
     Record (..),
     RecordKind (..),
 ) where
 
 import Reussir.Codegen.Type.Data (Capability, Type)
 
-type RecordField = (Type, Capability)
+data RecordField = RecordField
+    { fieldType :: Type
+    , fieldIsMutable :: Bool
+    }
+    deriving (Eq, Show)
 
 data RecordKind = Compound | Variant
     deriving (Eq, Show)

@@ -18,7 +18,7 @@ import Reussir.Codegen.Type.Data (
     Ref (..),
     Type (..),
  )
-import Reussir.Codegen.Type.Record (Record (..), RecordField, RecordKind (..))
+import Reussir.Codegen.Type.Record (Record (..), RecordField (..), RecordKind (..))
 
 instance Emission PrimitiveInt where
     emit PrimInt8 = pure "i8"
@@ -140,12 +140,11 @@ emitRecord
         translateCapability Field = "[field]"
 
         emitField :: RecordField -> Codegen TB.Builder
-        emitField (field, capability) = do
-            let capability' = translateCapability capability
-            field' <- emitTy False field
-            if capability == Unspecified
-                then pure field'
-                else pure $ capability' <> " " <> field'
+        emitField field = do
+            field' <- emitTy False $ fieldType field
+            if fieldIsMutable field
+                then pure $ "[field] " <> field'
+                else pure field'
 
         doEmit :: Codegen TB.Builder
         doEmit = do
