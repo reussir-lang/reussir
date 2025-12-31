@@ -40,10 +40,12 @@ def CAP_Shared : I32EnumAttrCase<"shared", 2>;
 def CAP_Flex : I32EnumAttrCase<"flex", 3>;
 def CAP_Rigid : I32EnumAttrCase<"rigid", 4>;
 def CAP_Field : I32EnumAttrCase<"field", 5>;
+def CAP_Regional : I32EnumAttrCase<"regional", 6>;
+
 
 def Capability : I32EnumAttr<"Capability", "capability",
                              [CAP_Default, CAP_Value, CAP_Shared, CAP_Flex,
-                              CAP_Rigid, CAP_Field]> {
+                              CAP_Rigid, CAP_Field, CAP_Regional]> {
   let cppNamespace = "::reussir";
 }
 

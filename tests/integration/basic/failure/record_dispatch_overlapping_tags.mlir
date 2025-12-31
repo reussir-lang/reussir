@@ -1,8 +1,8 @@
 // RUN: %reussir-opt %s -verify-diagnostics
 
 // Define variant record types for testing dispatch
-!option_some = !reussir.record<compound "Option::Some" {i32}>
-!option_none = !reussir.record<compound "Option::None" {}>
+!option_some = !reussir.record<compound "Option::Some" [value] {i32}>
+!option_none = !reussir.record<compound "Option::None" [value] {}>
 !option = !reussir.record<variant "Option" {!option_some, !option_none}>
 
 module {

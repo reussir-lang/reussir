@@ -15,11 +15,11 @@ import Log.Backend.StandardOutput qualified as L
 import Reussir.Bridge qualified as B
 import Reussir.Codegen.Context (runCodegen)
 import Reussir.Codegen.Context qualified as C
+import Reussir.Codegen.Context.Symbol (verifiedSymbol)
 import Reussir.Codegen.Type qualified as TT
-import Reussir.Codegen.Type.Record (Record (..), RecordKind (..))
+import Reussir.Codegen.Type.Record (Record (..), RecordField (..), RecordKind (..))
 import Test.Tasty
 import Test.Tasty.HUnit
-import Reussir.Codegen.Context.Symbol (verifiedSymbol)
 
 -- | Helper to run codegen and extract the builder as text
 runCodegenAsText :: C.Codegen () -> IO T.Text
@@ -43,12 +43,15 @@ primitiveF32 = TT.TypePrim (TT.PrimFloat TT.PrimFloat32)
 primitiveUnit :: TT.Type
 primitiveUnit = TT.TypePrim TT.PrimUnit
 
+normalField :: TT.Type -> TT.RecordField
+normalField fieldType = RecordField{fieldType, fieldIsMutable = False}
+
 -- | Test: Recursive List type with Cons and Nil variants
 testRecursiveListType :: TestTree
 testRecursiveListType = testCase "Recursive List type with Cons and Nil" $ do
     -- Construct the recursive List type:
-    -- List::Cons { i32, [shared] !list }
-    -- List::Nil {}
+    -- List::Cons [value] { i32, !list }
+    -- List::Nil [value] {}
     -- List { !cons, !nil }
 
     -- The list type (for recursive reference)
@@ -60,10 +63,12 @@ testRecursiveListType = testCase "Recursive List type with Cons and Nil" $ do
             Record
                 { kind = Compound
                 , fields =
-                    [ (primitiveI32, TT.Unspecified)
-                    , (listType, TT.Shared)
-                    ]
-                , defaultCapability = TT.Unspecified
+                    map
+                        normalField
+                        [ primitiveI32
+                        , listType
+                        ]
+                , defaultCapability = TT.Value
                 }
 
     -- Nil variant: {}
@@ -71,7 +76,7 @@ testRecursiveListType = testCase "Recursive List type with Cons and Nil" $ do
             Record
                 { kind = Compound
                 , fields = []
-                , defaultCapability = TT.Unspecified
+                , defaultCapability = TT.Value
                 }
 
     -- List type: variant with cons and nil
@@ -83,10 +88,12 @@ testRecursiveListType = testCase "Recursive List type with Cons and Nil" $ do
             Record
                 { kind = Variant
                 , fields =
-                    [ (consType, TT.Unspecified)
-                    , (nilType, TT.Unspecified)
-                    ]
-                , defaultCapability = TT.Unspecified
+                    map
+                        normalField
+                        [ consType
+                        , nilType
+                        ]
+                , defaultCapability = TT.Shared
                 }
 
     result <- runCodegenAsText $ do
@@ -124,10 +131,12 @@ testSimpleCompoundType = testCase "Simple compound type" $ do
             Record
                 { kind = Compound
                 , fields =
-                    [ (primitiveI32, TT.Unspecified) -- x
-                    , (primitiveI32, TT.Unspecified) -- y
-                    ]
-                , defaultCapability = TT.Unspecified
+                    map
+                        normalField
+                        [ primitiveI32 -- x
+                        , primitiveI32 -- y
+                        ]
+                , defaultCapability = TT.Shared
                 }
 
     result <- runCodegenAsText $ do
@@ -147,8 +156,8 @@ testVariantWithCapabilities = testCase "Variant type with different capabilities
     let someRecord =
             Record
                 { kind = Compound
-                , fields = [(primitiveI32, TT.Value)]
-                , defaultCapability = TT.Unspecified
+                , fields = [normalField primitiveI32]
+                , defaultCapability = TT.Value
                 }
 
     -- None {}
@@ -156,7 +165,7 @@ testVariantWithCapabilities = testCase "Variant type with different capabilities
             Record
                 { kind = Compound
                 , fields = []
-                , defaultCapability = TT.Unspecified
+                , defaultCapability = TT.Value
                 }
 
     -- Option { !some, !none }
@@ -169,10 +178,12 @@ testVariantWithCapabilities = testCase "Variant type with different capabilities
             Record
                 { kind = Variant
                 , fields =
-                    [ (someType, TT.Unspecified)
-                    , (noneType, TT.Unspecified)
-                    ]
-                , defaultCapability = TT.Unspecified
+                    map
+                        normalField
+                        [ someType
+                        , noneType
+                        ]
+                , defaultCapability = TT.Value
                 }
 
     result <- runCodegenAsText $ do

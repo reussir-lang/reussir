@@ -1,8 +1,8 @@
 // RUN: %reussir-opt %s --reussir-rc-decrement-expansion --reussir-infer-variant-tag | %FileCheck %s
 
 !list_ = !reussir.record<variant "List" incomplete>
-!list_nil = !reussir.record<compound "List::Nil" { }>
-!list_cons = !reussir.record<compound "List::Cons" { i64, [shared] !list_ }>
+!list_nil = !reussir.record<compound "List::Nil" [value] { }>
+!list_cons = !reussir.record<compound "List::Cons" [value] { i64, !list_ }>
 !list = !reussir.record<variant "List" { !list_nil, !list_cons }>
 
 module {

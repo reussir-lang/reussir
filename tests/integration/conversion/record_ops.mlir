@@ -2,16 +2,16 @@
 // RUN: %reussir-translate --mlir-to-llvmir | %FileCheck %s
 
 !list_incomplete = !reussir.record<variant "List" incomplete>
-!cons = !reussir.record<compound "List::Cons" { i32, [shared] !list_incomplete }>
-!nil = !reussir.record<compound "List::Nil" {}>
+!cons = !reussir.record<compound "List::Cons" [value] { i32, !list_incomplete }>
+!nil = !reussir.record<compound "List::Nil" [value] {}>
 !list = !reussir.record<variant "List" {!cons, !nil}>
 
-!option_some = !reussir.record<compound "Option::Some" {i32}>
-!option_none = !reussir.record<compound "Option::None" {}>
+!option_some = !reussir.record<compound "Option::Some" [value] {i32}>
+!option_none = !reussir.record<compound "Option::None" [value] {}>
 !option = !reussir.record<variant "Option" {!option_some, !option_none}>
 
-!result_ok = !reussir.record<compound "Result::Ok" {i32}>
-!result_err = !reussir.record<compound "Result::Err" {i32}>
+!result_ok = !reussir.record<compound "Result::Ok" [value] {i32}>
+!result_err = !reussir.record<compound "Result::Err" [value] {i32}>
 !result = !reussir.record<variant "Result" {!result_ok, !result_err}>
 
 module {

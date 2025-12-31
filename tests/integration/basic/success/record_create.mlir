@@ -1,7 +1,7 @@
 // RUN: %reussir-opt %s | %reussir-opt 
 !list_incomplete = !reussir.record<variant "List" incomplete>
-!cons = !reussir.record<compound "List::Cons" { i32, [shared] !list_incomplete }>
-!nil = !reussir.record<compound "List::Nil" {}>
+!cons = !reussir.record<compound "List::Cons" [value] { i32, !list_incomplete }>
+!nil = !reussir.record<compound "List::Nil" [value] {}>
 !list = !reussir.record<variant "List" {!cons, !nil}>
 
 module {

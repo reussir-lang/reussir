@@ -30,12 +30,12 @@ namespace reussir {
 std::optional<std::tuple<llvm::TypeSize, llvm::Align, mlir::Type>>
 deriveCompoundSizeAndAlignment(mlir::MLIRContext *context,
                                llvm::ArrayRef<mlir::Type> members,
-                               llvm::ArrayRef<Capability> memberCapabilities,
-                               const mlir::DataLayout &dataLayout);
+                               llvm::ArrayRef<bool> memberIsField,
+                               const mlir::DataLayout &dataLayout,
+                               bool memBoxInternal = false);
 bool isNonNullPointerType(mlir::Type type);
 bool isTriviallyCopyable(mlir::Type type);
-mlir::Type getProjectedType(mlir::Type type, Capability fieldCap,
-                            Capability refCap);
+mlir::Type getProjectedType(mlir::Type type, bool fieldCap, Capability refCap);
 
 namespace scanner {
 inline int32_t end() {

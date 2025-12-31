@@ -19,7 +19,7 @@ import Reussir.Codegen.Context.Symbol (Symbol, verifiedSymbol)
 import Reussir.Codegen.IR qualified as IR
 import Reussir.Codegen.Intrinsics qualified as I
 import Reussir.Codegen.Type qualified as TT
-import Reussir.Codegen.Type.Record (Record (..), RecordKind (..))
+import Reussir.Codegen.Type.Record (Record (..), RecordField (..), RecordKind (..))
 import Reussir.Codegen.Value qualified as V
 import System.Exit (ExitCode (ExitSuccess))
 import System.IO ()
@@ -44,6 +44,9 @@ primitiveI128 = TT.TypePrim (TT.PrimInt TT.PrimInt128)
 
 primitiveBool :: TT.Type
 primitiveBool = TT.TypePrim TT.PrimBool
+
+normalField :: TT.Type -> TT.RecordField
+normalField fieldType = RecordField{fieldType, fieldIsMutable = False}
 
 -- Helper functions for creating test values
 val :: Int64 -> V.Value
@@ -139,13 +142,15 @@ createTensor2x2Module =
             [ RecordInstance
                 ( tensor2x2Symbol
                 , Record
-                    { defaultCapability = TT.Unspecified
+                    { defaultCapability = TT.Value
                     , fields =
-                        [ (primitiveF64, TT.Value)
-                        , (primitiveF64, TT.Value)
-                        , (primitiveF64, TT.Value)
-                        , (primitiveF64, TT.Value)
-                        ]
+                        map
+                            normalField
+                            [ primitiveF64
+                            , primitiveF64
+                            , primitiveF64
+                            , primitiveF64
+                            ]
                     , kind = Compound
                     }
                 )

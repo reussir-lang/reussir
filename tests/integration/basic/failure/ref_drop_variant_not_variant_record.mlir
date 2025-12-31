@@ -1,7 +1,7 @@
 // RUN: %reussir-opt %s -verify-diagnostics
 
 // Define a compound record type (not variant)
-!compound_record = !reussir.record<compound "Test" { [value] i32, [value] i64 }>
+!compound_record = !reussir.record<compound "Test" { i32, i64 }>
 
 module {
   func.func @test_variant_not_variant_record(%ref : !reussir.ref<!compound_record>) {

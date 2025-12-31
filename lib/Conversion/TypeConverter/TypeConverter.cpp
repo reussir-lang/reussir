@@ -156,7 +156,7 @@ std::optional<llvm::LogicalResult> LLVMTypeConverter::convertRecordType(
     }
   } else {
     for (auto [member, capability] :
-         llvm::zip(type.getMembers(), type.getMemberCapabilities())) {
+         llvm::zip(type.getMembers(), type.getMemberIsField())) {
       mlir::Type projectedType =
           getProjectedType(member, capability, Capability::unspecified);
       members.push_back(convertType(projectedType));
