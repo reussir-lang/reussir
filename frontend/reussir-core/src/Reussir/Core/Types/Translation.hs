@@ -7,6 +7,7 @@ import Data.Text qualified as T
 import Effectful.Prim.IORef.Strict (IORef')
 import Reussir.Core.Types.Class (ClassDAG, TypeBound)
 import Reussir.Core.Types.Expr (VarID)
+import Reussir.Core.Types.Function (FunctionTable)
 import Reussir.Core.Types.Record (Record)
 import Reussir.Core.Types.String (StringUniqifier)
 import Reussir.Core.Types.Type (HoleID, Type, TypeClassTable)
@@ -41,4 +42,5 @@ data TranslationState = TranslationState
     , variableStates :: Seq.Seq VarDef
     , variableNameMap :: H.CuckooHashTable Identifier VarID
     , knownRecords :: H.CuckooHashTable Path Record
+    , functions :: FunctionTable
     }

@@ -2,7 +2,7 @@
 
 module Reussir.Core.Tyck where
 
-import Control.Monad (foldM)
+import Control.Monad (foldM, zipWithM)
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
 import Data.List (elemIndex)
@@ -18,8 +18,11 @@ import Reussir.Core.Types.Record qualified as Sem
 import Reussir.Core.Types.Translation
 import Reussir.Core.Types.Type qualified as Sem
 
+import Reussir.Core.Function (getFunctionProto)
+import Reussir.Core.Types.Function (FunctionProto (..))
 import Reussir.Parser.Types.Expr qualified as Syn
 import Reussir.Parser.Types.Lexer (Path (..), WithSpan (..), pathBasename, pathSegments, unIdentifier)
+import Reussir.Parser.Types.Type qualified as Syn
 
 inferType :: Syn.Expr -> Tyck Sem.Expr
 --       u fresh integral
@@ -219,6 +222,69 @@ inferType (Syn.AccessChain baseExpr projs) = do
             _ -> do
                 reportError "Accessing field of non-record type"
                 return (Sem.TypeBottom, indices)
+-- Function call:
+--            C |- f : (T1, T2, ..., Tn) -> T, C |- ei : Ti
+--  ──────────────────────────────────────────────────────────────────────
+--               C |- T <- f(e1, e2, ..., en)
+inferType (Syn.FuncCallExpr (Syn.FuncCall path tyArgs argExprs)) = do
+    -- Lookup function
+    functionTable <- State.gets functions
+    tyArgs' <- mapM tyArgOrMetaHole tyArgs
+    callee <- getFunctionProto path functionTable
+    case callee of
+        Just proto -> do
+            let numGenerics = length (funcGenerics proto)
+            checkTypeArgsNum numGenerics $ do
+                let genericMap = functionGenericMap proto tyArgs'
+                let instantiatedArgTypes = map (\(_, ty) -> substituteTypeParams ty genericMap) (funcParams proto)
+                let expectedNumParams = length instantiatedArgTypes
+                checkArgsNum expectedNumParams $ do
+                    argExprs' <- zipWithM checkType argExprs instantiatedArgTypes
+                    let instantiatedRetType = substituteTypeParams (funcReturnType proto) genericMap
+                    exprWithSpan instantiatedRetType $
+                        Sem.FuncCall
+                            { Sem.funcCallTarget = path
+                            , Sem.funcCallArgs = argExprs'
+                            , Sem.funcCallTyArgs = tyArgs'
+                            }
+        Nothing -> do
+            reportError $ "Function not found: " <> T.pack (show path)
+            exprWithSpan Sem.TypeBottom Sem.Poison
+  where
+    tyArgOrMetaHole :: Maybe Syn.Type -> Tyck Sem.Type
+    tyArgOrMetaHole (Just ty) = evalType ty
+    tyArgOrMetaHole Nothing = introduceNewHole Nothing Nothing []
+
+    checkArgsNum :: Int -> Tyck Sem.Expr -> Tyck Sem.Expr
+    checkArgsNum expectedNum argAction = do
+        if expectedNum /= length argExprs
+            then do
+                reportError $
+                    "Function "
+                        <> T.pack (show path)
+                        <> " expects "
+                        <> T.pack (show expectedNum)
+                        <> " arguments, but got "
+                        <> T.pack (show (length argExprs))
+                exprWithSpan Sem.TypeBottom Sem.Poison
+            else argAction
+    checkTypeArgsNum :: Int -> Tyck Sem.Expr -> Tyck Sem.Expr
+    checkTypeArgsNum expectedNum paramAction = do
+        if expectedNum /= length tyArgs
+            then do
+                reportError $
+                    "Function "
+                        <> T.pack (show path)
+                        <> " expects "
+                        <> T.pack (show expectedNum)
+                        <> " type arguments, but got "
+                        <> T.pack (show (length tyArgs))
+                exprWithSpan Sem.TypeBottom Sem.Poison
+            else paramAction
+    functionGenericMap :: FunctionProto -> [Sem.Type] -> IntMap.IntMap Sem.Type
+    functionGenericMap proto assignedTypes =
+        let genericIDs = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
+         in IntMap.fromList $ zip genericIDs assignedTypes
 inferType (Syn.SpannedExpr (WithSpan subExpr start end)) = do
     oldSpan <- currentSpan <$> State.get
     State.modify $ \st -> st{currentSpan = Just (start, end)}

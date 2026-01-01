@@ -5,25 +5,27 @@
 module Test.Reussir.Core.Tyck where
 
 import Control.Monad (forM_)
+import Data.HashTable.IO qualified as H
 import Data.Text qualified as T
 import Effectful
 import Effectful.FileSystem.IO (stderr)
 import Effectful.Prim (runPrim)
-import Effectful.Prim.IORef.Strict (readIORef')
+import Effectful.Prim.IORef.Strict (newIORef', readIORef')
 import Effectful.State.Static.Local (runState)
 import Effectful.State.Static.Local qualified as State
 import Reussir.Core.Class (subsumeBound)
-import Reussir.Core.Tyck (inferType)
 import Reussir.Core.Translation (Tyck, emptyTranslationState)
-import Reussir.Core.Types.Translation (TranslationState (translationReports))
-import Reussir.Core.Types.Record qualified as Sem
-import Reussir.Core.Types.Translation qualified as Sem
 import Reussir.Core.Translation qualified as Tyck
-import Reussir.Core.Types.Translation qualified as Tyck
+import Reussir.Core.Tyck (inferType)
 import Reussir.Core.Types.Class (Class (..))
 import Reussir.Core.Types.Class qualified as Sem
 import Reussir.Core.Types.Expr qualified as Sem
+import Reussir.Core.Types.Function (FunctionProto (..), FunctionTable (..))
 import Reussir.Core.Types.GenericID (GenericID (..))
+import Reussir.Core.Types.Record qualified as Sem
+import Reussir.Core.Types.Translation (TranslationState (translationReports))
+import Reussir.Core.Types.Translation qualified as Sem
+import Reussir.Core.Types.Translation qualified as Tyck
 import Reussir.Core.Types.Type qualified as Sem
 import Reussir.Diagnostic (Repository, addDummyFile, createRepository, displayReport)
 import Reussir.Parser.Expr (parseExpr)
@@ -59,6 +61,7 @@ tests =
         , testCase "Let-In With Type Annotation" testLetInWithType
         , testCase "Record Access" testRecordAccess
         , testCase "Generic Record Access" testGenericRecordAccess
+        , testCase "Function Call" testFuncCall
         ]
 
 runTyck :: Repository -> (a -> Tyck.Tyck b) -> Tyck a -> IO b
@@ -262,3 +265,36 @@ testGenericRecordAccess = do
         let boxType = Sem.TypeRecord recordPath [Sem.TypeIntegral (Sem.Signed 32)]
         Tyck.withVariable "b" Nothing boxType $ \_ -> do
             inferType expr
+
+addFunctionDefinition :: Path -> FunctionProto -> Tyck.Tyck ()
+addFunctionDefinition path proto = do
+    functions <- State.gets Tyck.functions
+    liftIO $ H.insert (functionProtos functions) path proto
+
+testFuncCall :: Assertion
+testFuncCall = do
+    let funcName = "add"
+    let funcPath = Path funcName []
+    let input = "add(1, 2)"
+    expr <- parseToExpr input
+
+    repository <- runEff $ createRepository []
+    let repo = addDummyFile repository "<dummy input>" input
+    let check res = liftIO $ do
+            Sem.exprType res @?= Sem.TypeIntegral (Sem.Signed 32)
+
+    runTyck repo check $ do
+        funcBodyRef <- newIORef' Nothing
+        let proto =
+                FunctionProto
+                    { funcVisibility = Public
+                    , funcName = funcName
+                    , funcGenerics = []
+                    , funcParams = [("a", Sem.TypeIntegral (Sem.Signed 32)), ("b", Sem.TypeIntegral (Sem.Signed 32))]
+                    , funcReturnType = Sem.TypeIntegral (Sem.Signed 32)
+                    , funcIsRegional = False
+                    , funcBody = funcBodyRef
+                    , funcSpan = Nothing
+                    }
+        addFunctionDefinition funcPath proto
+        inferType expr

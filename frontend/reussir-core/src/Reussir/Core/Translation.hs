@@ -17,6 +17,7 @@ import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (IORef', newIORef', readIORef', writeIORef')
 import Effectful.State.Static.Local qualified as State
 import Reussir.Core.Class (addClass, isSuperClass, meetBound, newDAG, populateDAG, subsumeBound)
+import Reussir.Core.Function (newFunctionTable)
 import Reussir.Core.Type qualified as Sem
 import Reussir.Core.Types.Class (Class (..), ClassDAG, TypeBound)
 import Reussir.Core.Types.Expr qualified as Sem
@@ -317,6 +318,7 @@ emptyTranslationState currentFile = do
     typeClassTable <- Sem.emptyTypeClassTable
     populatePrimitives typeClassTable typeClassDAG
     knownRecords <- liftIO $ H.new
+    functions <- newFunctionTable
     return $
         TranslationState
             { currentSpan = Nothing
@@ -329,6 +331,7 @@ emptyTranslationState currentFile = do
             , variableStates = mempty
             , variableNameMap
             , knownRecords -- TODO: currently empty
+            , functions
             }
 
 exprWithSpan :: Sem.Type -> Sem.ExprKind -> Tyck Sem.Expr
