@@ -9,6 +9,7 @@ data Capability
     | Flex
     | Rigid
     | Field
+    | Regional
     deriving (Show, Eq)
 
 instance Hashable Capability where
@@ -18,3 +19,4 @@ instance Hashable Capability where
     hashWithSalt salt Flex = hashWithSalt salt (3 :: Int)
     hashWithSalt salt Rigid = hashWithSalt salt (4 :: Int)
     hashWithSalt salt Field = hashWithSalt salt (5 :: Int)
+    hashWithSalt salt Regional = hashWithSalt salt (6 :: Int)

@@ -38,7 +38,7 @@ parseIf = do
 
 parseLetIn :: Parser Expr
 parseLetIn = do
-    name <- string "let" *> space *> parseIdentifier
+    name <- string "let" *> space *> withSpan parseIdentifier
     ty <- optional (colon *> parseTypeWithFlex)
     value <- char '=' *> space *> parseExpr <* semicolon
     body <- parseExpr

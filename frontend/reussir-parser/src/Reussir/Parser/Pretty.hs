@@ -115,7 +115,7 @@ instance PrettyColored Expr where
     prettyColored (LetIn name tyVal e1 e2) =
         group $
             keyword "let"
-                <+> prettyColored name
+                <+> prettyColored (spanValue name)
                 <> prettyTy tyVal
                     <+> operator "="
                     <+> prettyColored e1
@@ -166,6 +166,7 @@ instance PrettyColored Capability where
     prettyColored Flex = keyword "flex"
     prettyColored Rigid = keyword "rigid"
     prettyColored Field = keyword "field"
+    prettyColored Regional = keyword "regional"
 
 instance PrettyColored Visibility where
     prettyColored Public = keyword "pub" <> space

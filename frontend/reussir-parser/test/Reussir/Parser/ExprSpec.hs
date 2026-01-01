@@ -32,7 +32,7 @@ spec = do
         it "parses simple let" $
             (stripExprSpans <$> parse parseLetIn "" "let x = 1; x")
                 `shouldParse` LetIn
-                    "x"
+                    (WithSpan "x" 4 4)
                     Nothing
                     (ConstExpr (ConstInt 1))
                     (Var (Path "x" []))
@@ -40,7 +40,7 @@ spec = do
         it "parses let with type" $
             (stripExprSpans <$> parse parseLetIn "" "let x: i32 = 1; x")
                 `shouldParse` LetIn
-                    "x"
+                    (WithSpan "x" 4 4)
                     (Just (TypeIntegral (Signed 32), False))
                     (ConstExpr (ConstInt 1))
                     (Var (Path "x" []))
@@ -48,7 +48,7 @@ spec = do
         it "parses let with type and capability" $
             (stripExprSpans <$> parse parseLetIn "" "let x: [flex] i32 = 1; x")
                 `shouldParse` LetIn
-                    "x"
+                    (WithSpan "x" 4 4)
                     (Just (TypeIntegral (Signed 32), True))
                     (ConstExpr (ConstInt 1))
                     (Var (Path "x" []))
