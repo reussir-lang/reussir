@@ -7,7 +7,6 @@ import Test.Hspec.Megaparsec
 import Text.Megaparsec
 
 import Reussir.Parser.Expr
-import Reussir.Parser.Types.Capability (Capability (..))
 import Reussir.Parser.Types.Expr
 import Reussir.Parser.Types.Lexer (Path (..), WithSpan (..))
 import Reussir.Parser.Types.Type
@@ -42,15 +41,15 @@ spec = do
             (stripExprSpans <$> parse parseLetIn "" "let x: i32 = 1; x")
                 `shouldParse` LetIn
                     "x"
-                    (Just (TypeIntegral (Signed 32), Unspecified))
+                    (Just (TypeIntegral (Signed 32), False))
                     (ConstExpr (ConstInt 1))
                     (Var (Path "x" []))
 
         it "parses let with type and capability" $
-            (stripExprSpans <$> parse parseLetIn "" "let x: [shared] i32 = 1; x")
+            (stripExprSpans <$> parse parseLetIn "" "let x: [flex] i32 = 1; x")
                 `shouldParse` LetIn
                     "x"
-                    (Just (TypeIntegral (Signed 32), Shared))
+                    (Just (TypeIntegral (Signed 32), True))
                     (ConstExpr (ConstInt 1))
                     (Var (Path "x" []))
 

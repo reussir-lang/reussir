@@ -20,13 +20,19 @@ parseVis =
         Just () -> return Public
         Nothing -> return Private
 
-parseTypedParam :: Parser (Identifier, Type, Capability)
+parseFieldFlag :: Parser Bool
+parseFieldFlag = option False (True <$ (char '[' *> space *> string "field" <* space <* char ']' <* space))
+
+parseFlexFlag :: Parser Bool
+parseFlexFlag = option False (True <$ (char '[' *> space *> string "flex" <* space <* char ']' <* space))
+
+parseTypedParam :: Parser (Identifier, Type, Bool)
 parseTypedParam = do
     name <- parseIdentifier <* char ':' <* space
-    cap <- parseCapability
+    flx <- parseFlexFlag
     ty <- parseType
 
-    return (name, ty, cap)
+    return (name, ty, flx)
 
 parseStructDec :: Parser Stmt
 parseStructDec = parseVis >>= parseStructDecRest
@@ -45,21 +51,21 @@ parseUnnamedFields = do
     return $ Unnamed types
   where
     parseFieldType = do
-        cap <- parseCapability
+        fld <- parseFieldFlag
         ty <- parseType
-        return (ty, cap)
+        return (ty, fld)
 
 parseNamedFields :: Parser RecordFields
 parseNamedFields = do
     fields <- openBody *> parseNamedField `sepBy` comma <* closeBody
     return $ Named fields
 
-parseNamedField :: Parser (Identifier, Type, Capability)
+parseNamedField :: Parser (Identifier, Type, Bool)
 parseNamedField = do
     name <- parseIdentifier <* colon
-    cap <- parseCapability
+    fld <- parseFieldFlag
     ty <- parseType
-    return (name, ty, cap)
+    return (name, ty, fld)
 
 parseFuncDef :: Parser Stmt
 parseFuncDef = parseVis >>= parseFuncDefRest
@@ -76,9 +82,9 @@ parseFuncDefRest vis = do
     return (FunctionStmt $ Function vis name (fromMaybe [] tyargs) (fromMaybe [] args) ret isRegional body)
   where
     parseRetType = do
-        cap <- parseCapability
+        flx <- parseFlexFlag
         ty <- parseType
-        return (ty, cap)
+        return (ty, flx)
 
 parseEnumConstructor :: Parser (Identifier, [Type])
 parseEnumConstructor = do

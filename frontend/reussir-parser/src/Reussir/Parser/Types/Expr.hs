@@ -4,7 +4,6 @@ import Data.Int (Int64)
 import Data.List
 import Data.Scientific (Scientific)
 import Data.Text qualified as T
-import Reussir.Parser.Types.Capability (Capability)
 import Reussir.Parser.Types.Lexer (Identifier (..), Path, WithSpan)
 import Reussir.Parser.Types.Type (Type)
 
@@ -57,13 +56,15 @@ data Access
     | Unnamed Int64
     deriving (Show, Eq)
 
+type FlexFlag = Bool
+
 data Expr
     = ConstExpr Constant
     | BinOpExpr BinaryOp Expr Expr
     | UnaryOpExpr UnaryOp Expr
     | If Expr Expr Expr
     | Cast Type Expr
-    | LetIn Identifier (Maybe (Type, Capability)) Expr Expr
+    | LetIn Identifier (Maybe (Type, FlexFlag)) Expr Expr
     | Lambda Identifier Type Expr
     | Match Expr [(Pattern, Expr)]
     | Var Path

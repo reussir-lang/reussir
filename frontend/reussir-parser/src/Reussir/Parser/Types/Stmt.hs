@@ -7,9 +7,12 @@ import Reussir.Parser.Types.Type (Type)
 
 data Visibility = Public | Private deriving (Show, Eq)
 
+type FieldFlag = Bool
+type FlexFlag = Bool
+
 data RecordFields
-    = Named [(Identifier, Type, Capability)]
-    | Unnamed [(Type, Capability)]
+    = Named [(Identifier, Type, FieldFlag)]
+    | Unnamed [(Type, FieldFlag)]
     | Variants [(Identifier, [Type])]
     deriving (Show, Eq)
 
@@ -29,8 +32,8 @@ data Function = Function
     { funcVisibility :: Visibility
     , funcName :: Identifier
     , funcGenerics :: [Identifier]
-    , funcParams :: [(Identifier, Type, Capability)]
-    , funcReturnType :: Maybe (Type, Capability)
+    , funcParams :: [(Identifier, Type, FlexFlag)]
+    , funcReturnType :: Maybe (Type, FlexFlag)
     , funcIsRegional :: Bool
     , funcBody :: Maybe Expr
     }
