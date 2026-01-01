@@ -30,6 +30,7 @@ data ExprKind
     | ScfIfExpr Expr Expr Expr
     | Var VarID
     | RcWrap Expr Capability
+    | ProjChain Expr [Int]
     | Let
         { letVarSpan :: Maybe (Int64, Int64)
         , letVarID :: VarID

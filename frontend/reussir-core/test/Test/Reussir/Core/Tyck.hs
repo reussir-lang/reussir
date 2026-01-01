@@ -19,11 +19,14 @@ import Reussir.Core.Tyck qualified as Tyck
 import Reussir.Core.Types.Class (Class (..))
 import Reussir.Core.Types.Class qualified as Sem
 import Reussir.Core.Types.Expr qualified as Sem
+import Reussir.Core.Types.GenericID (GenericID (..))
 import Reussir.Core.Types.Type qualified as Sem
 import Reussir.Diagnostic (Repository, addDummyFile, createRepository, displayReport)
 import Reussir.Parser.Expr (parseExpr)
+import Reussir.Parser.Types.Capability (Capability (..))
 import Reussir.Parser.Types.Expr qualified as Syn
 import Reussir.Parser.Types.Lexer (Path (..))
+import Reussir.Parser.Types.Stmt (Visibility (..))
 import System.IO (hPutStrLn)
 import Test.Tasty
 import Test.Tasty.HUnit (Assertion, assertBool, testCase, (@?=))
@@ -50,6 +53,8 @@ tests =
         , testCase "Casting Type Inference" testCasting
         , testCase "Let-In Without Type Annotation" testLetInWithoutType
         , testCase "Let-In With Type Annotation" testLetInWithType
+        , testCase "Record Access" testRecordAccess
+        , testCase "Generic Record Access" testGenericRecordAccess
         ]
 
 runTyck :: Repository -> (a -> Tyck.Tyck b) -> Tyck a -> IO b
@@ -196,3 +201,60 @@ testLetInWithType :: Assertion
 testLetInWithType = do
     parseAndInferType "let x : i32 = 42; x + 1" $ \expr -> do
         liftIO $ Sem.exprType (typedExpr expr) @?= Sem.TypeIntegral (Sem.Signed 32)
+
+testRecordAccess :: Assertion
+testRecordAccess = do
+    let recordName = "Point"
+    let recordPath = Path recordName []
+    let record =
+            Sem.Record
+                { Sem.recordName = recordName
+                , Sem.recordTyParams = []
+                , Sem.recordFields = Sem.Named [("x", Sem.TypeIntegral (Sem.Signed 32), False), ("y", Sem.TypeIntegral (Sem.Signed 32), False)]
+                , Sem.recordKind = Sem.StructKind
+                , Sem.recordVisibility = Public
+                , Sem.recordDefaultCap = Value
+                }
+
+    let input = "p.x"
+    expr <- parseToExpr input
+
+    repository <- runEff $ createRepository []
+    let repo = addDummyFile repository "<dummy input>" input
+
+    let check res = liftIO $ do
+            Sem.exprType res @?= Sem.TypeIntegral (Sem.Signed 32)
+
+    runTyck repo check $ do
+        Tyck.addRecordDefinition recordPath record
+        let pointType = Sem.TypeRecord recordPath []
+        Tyck.withVariable "p" Nothing pointType $ \_ -> do
+            inferType expr
+
+testGenericRecordAccess :: Assertion
+testGenericRecordAccess = do
+    let recordName = "Box"
+    let recordPath = Path recordName []
+    let gid = GenericID 0
+    let record =
+            Sem.Record
+                { Sem.recordName = recordName
+                , Sem.recordTyParams = [("T", gid)]
+                , Sem.recordFields = Sem.Named [("inner", Sem.TypeGeneric gid, False)]
+                , Sem.recordKind = Sem.StructKind
+                , Sem.recordVisibility = Public
+                , Sem.recordDefaultCap = Value
+                }
+
+    let input = "b.inner"
+    expr <- parseToExpr input
+
+    repository <- runEff $ createRepository []
+    let repo = addDummyFile repository "<dummy input>" input
+
+    runTyck repo (\res -> liftIO $ Sem.exprType res @?= Sem.TypeIntegral (Sem.Signed 32)) $ do
+        Tyck.addRecordDefinition recordPath record
+        -- Box<i32>
+        let boxType = Sem.TypeRecord recordPath [Sem.TypeIntegral (Sem.Signed 32)]
+        Tyck.withVariable "b" Nothing boxType $ \_ -> do
+            inferType expr

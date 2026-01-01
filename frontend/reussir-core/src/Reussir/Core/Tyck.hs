@@ -2,13 +2,15 @@
 
 module Reussir.Core.Tyck where
 
-import Control.Monad (forM_, when, zipWithM)
+import Control.Monad (foldM, forM_, when, zipWithM)
 import Data.Digest.XXHash.FFI (XXH3 (XXH3))
 import Data.Function ((&))
 import Data.HashSet qualified as HashSet
 import Data.HashTable.IO qualified as H
 import Data.Hashable (Hashable (hash))
 import Data.Int (Int64)
+import Data.IntMap.Strict qualified as IntMap
+import Data.List (elemIndex)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Effectful (Eff, IOE, liftIO, (:>))
@@ -19,6 +21,7 @@ import Reussir.Core.Class (addClass, isSuperClass, meetBound, newDAG, populateDA
 import Reussir.Core.Type qualified as Sem
 import Reussir.Core.Types.Class (Class (..), ClassDAG, TypeBound)
 import Reussir.Core.Types.Expr qualified as Sem
+import Reussir.Core.Types.GenericID (GenericID (..))
 import Reussir.Core.Types.String (StringToken, StringUniqifier (..))
 import Reussir.Core.Types.Type qualified as Sem
 import Reussir.Diagnostic (Label (Error), Report (..))
@@ -67,10 +70,6 @@ data VarDef = VarDef
     , varType :: Sem.Type
     }
 
-data Record = Record
-    { recordDefaultCapability :: Capability -- TODO: add more fields
-    }
-
 data TranslationState = TranslationState
     { currentSpan :: Maybe (Int64, Int64)
     , currentFile :: FilePath
@@ -81,7 +80,7 @@ data TranslationState = TranslationState
     , holes :: Seq.Seq HoleState
     , variableStates :: Seq.Seq VarDef
     , variableNameMap :: H.CuckooHashTable Identifier Sem.VarID
-    , knownRecords :: H.CuckooHashTable Path Record
+    , knownRecords :: H.CuckooHashTable Path Sem.Record
     }
 
 withVariable :: Identifier -> Maybe (Int64, Int64) -> Sem.Type -> (Sem.VarID -> Tyck a) -> Tyck a
@@ -404,7 +403,7 @@ evalType (Syn.TypeExpr path args) = do
     knownRecords <- State.gets knownRecords
     mRecord <- liftIO $ H.lookup knownRecords path
     case mRecord of
-        Just record -> case recordDefaultCapability record of
+        Just record -> case Sem.recordDefaultCap record of
             Value -> return $ Sem.TypeRecord path args'
             Shared -> return $ Sem.TypeRc (Sem.TypeRecord path args') Shared
             Regional -> return $ Sem.TypeRc (Sem.TypeRecord path args') Regional
@@ -452,6 +451,24 @@ evalTypeWithFlexivity t isFlexible = do
         _ -> do
             reportError "Capability annotations can only be applied to record types"
             return Sem.TypeBottom
+
+addRecordDefinition :: Path -> Sem.Record -> Tyck ()
+addRecordDefinition path record = do
+    records <- State.gets knownRecords
+    liftIO $ H.insert records path record
+
+substituteTypeParams :: Sem.Type -> IntMap.IntMap Sem.Type -> Sem.Type
+substituteTypeParams ty subst = go ty
+  where
+    go (Sem.TypeGeneric (GenericID gid)) =
+        case IntMap.lookup (fromIntegral gid) subst of
+            Just t -> t
+            Nothing -> Sem.TypeGeneric (GenericID gid)
+    go (Sem.TypeRecord path args) = Sem.TypeRecord path (map go args)
+    go (Sem.TypeClosure args ret) = Sem.TypeClosure (map go args) (go ret)
+    go (Sem.TypeRc t cap) = Sem.TypeRc (go t) cap
+    go (Sem.TypeRef t cap) = Sem.TypeRef (go t) cap
+    go t = t
 
 inferType :: Syn.Expr -> Tyck Sem.Expr
 --       u fresh integral
@@ -581,6 +598,7 @@ inferType (Syn.LetIn (WithSpan varName vnsStart vnsEnd) (Just (ty, flex)) valueE
                 , Sem.letBodyExpr = bodyExpr'
                 , Sem.letVarSpan = Just (vnsStart, vnsEnd)
                 }
+
 -- Variable:
 --
 --  ──────────────────────
@@ -592,6 +610,64 @@ inferType (Syn.Var varName) = do
             (varId, varType) <- lookupVar baseName
             exprWithSpan varType $ Sem.Var varId
         _ -> error "unimplemented yet"
+-- Project:
+--     C, record R, I : T, I in R |- R <- e
+--  ────────────────────────────────────────
+--     C, record R, I : T, I in R |- T <- e.I
+-- Access a field of a record
+-- Notabily, a record may be inferred as a raw type or a rc wrapped type
+-- in the latter case, the record itself is the immediate inner type of the rc.
+inferType (Syn.AccessChain baseExpr projs) = do
+    baseExpr' <- inferType baseExpr
+    let baseTy = Sem.exprType baseExpr'
+    baseTy' <- force baseTy
+
+    (finalTy, indices) <- foldM resolveAccess (baseTy', []) projs
+
+    exprWithSpan finalTy $ Sem.ProjChain baseExpr' (reverse indices)
+  where
+    resolveAccess (currentTy, indices) access = do
+        currentTy' <- force currentTy
+        let innerTy = case currentTy' of
+                Sem.TypeRc t _ -> t
+                t -> t
+
+        case innerTy of
+            Sem.TypeRecord path args -> do
+                knownRecords <- State.gets knownRecords
+                mRecord <- liftIO $ H.lookup knownRecords path
+                case mRecord of
+                    Just record -> do
+                        let subst = IntMap.fromList $ zip (map (\(_, GenericID gid) -> fromIntegral gid) $ Sem.recordTyParams record) args
+                        case (Sem.recordFields record, access) of
+                            (Sem.Named fields, Syn.Named name) -> do
+                                case elemIndex name (map (\(n, _, _) -> n) fields) of
+                                    Just idx -> do
+                                        let (_, fieldTy, _) = fields !! idx
+                                        let fieldTy' = substituteTypeParams fieldTy subst
+                                        return (fieldTy', idx : indices)
+                                    Nothing -> do
+                                        reportError $ "Field not found: " <> unIdentifier name
+                                        return (Sem.TypeBottom, indices)
+                            (Sem.Unnamed fields, Syn.Unnamed idx) -> do
+                                let idxInt = fromIntegral idx
+                                if idxInt >= 0 && idxInt < length fields
+                                    then do
+                                        let (fieldTy, _) = fields !! idxInt
+                                        let fieldTy' = substituteTypeParams fieldTy subst
+                                        return (fieldTy', idxInt : indices)
+                                    else do
+                                        reportError $ "Field index out of bounds: " <> T.pack (show idx)
+                                        return (Sem.TypeBottom, indices)
+                            _ -> do
+                                reportError "Invalid access type for record kind"
+                                return (Sem.TypeBottom, indices)
+                    Nothing -> do
+                        reportError $ "Unknown record: " <> T.pack (show path)
+                        return (Sem.TypeBottom, indices)
+            _ -> do
+                reportError "Accessing field of non-record type"
+                return (Sem.TypeBottom, indices)
 inferType (Syn.SpannedExpr (WithSpan subExpr start end)) = do
     oldSpan <- currentSpan <$> State.get
     State.modify $ \st -> st{currentSpan = Just (start, end)}
