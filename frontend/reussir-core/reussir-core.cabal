@@ -72,6 +72,9 @@ library
         Reussir.Core.Types.Expr
         Reussir.Core.Types.String
         Reussir.Core.Tyck
+        Reussir.Core.Types.Record
+        Reussir.Core.Types.Translation
+        Reussir.Core.Translation
 
     -- Modules included in this library but not exported.
     -- other-modules:

@@ -13,9 +13,13 @@ import Effectful.Prim.IORef.Strict (readIORef')
 import Effectful.State.Static.Local (runState)
 import Effectful.State.Static.Local qualified as State
 import Reussir.Core.Class (subsumeBound)
-import Reussir.Core.Tyck (TranslationState (translationReports), Tyck, emptyTranslationState, inferType)
-import Reussir.Core.Tyck qualified as Sem
-import Reussir.Core.Tyck qualified as Tyck
+import Reussir.Core.Tyck (inferType)
+import Reussir.Core.Translation (Tyck, emptyTranslationState)
+import Reussir.Core.Types.Translation (TranslationState (translationReports))
+import Reussir.Core.Types.Record qualified as Sem
+import Reussir.Core.Types.Translation qualified as Sem
+import Reussir.Core.Translation qualified as Tyck
+import Reussir.Core.Types.Translation qualified as Tyck
 import Reussir.Core.Types.Class (Class (..))
 import Reussir.Core.Types.Class qualified as Sem
 import Reussir.Core.Types.Expr qualified as Sem

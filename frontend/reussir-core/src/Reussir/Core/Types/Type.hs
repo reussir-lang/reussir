@@ -8,8 +8,7 @@ import Data.List (intercalate)
 import Reussir.Core.Types.Class
 import Reussir.Core.Types.GenericID (GenericID)
 import Reussir.Parser.Types.Capability (Capability)
-import Reussir.Parser.Types.Lexer (Identifier, Path (..))
-import Reussir.Parser.Types.Stmt (Visibility)
+import Reussir.Parser.Types.Lexer (Path (..))
 
 {- | Represents integral types with a specific bit width.
 Integral types can be either signed or unsigned.
@@ -149,23 +148,3 @@ newtype TypeClassTable = TypeClassTable
     { unTypeClassTable :: H.CuckooHashTable Type (HashSet Class)
     }
     deriving (Show)
-
-type FieldFlag = Bool
-
-data RecordFields
-    = Named [(Identifier, Type, FieldFlag)]
-    | Unnamed [(Type, FieldFlag)]
-    | Variants [(Identifier, [Type])]
-    deriving (Show, Eq)
-
-data RecordKind = StructKind | EnumKind deriving (Show, Eq)
-
-data Record = Record
-    { recordName :: Identifier
-    , recordTyParams :: [(Identifier, GenericID)]
-    , recordFields :: RecordFields
-    , recordKind :: RecordKind
-    , recordVisibility :: Visibility
-    , recordDefaultCap :: Capability
-    }
-    deriving (Show, Eq)
