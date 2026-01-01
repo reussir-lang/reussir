@@ -48,6 +48,8 @@ tests =
         , testCase "Logical And Type Inference" testLogicalAnd
         , testCase "Logical Or Type Inference" testLogicalOr
         , testCase "Casting Type Inference" testCasting
+        , testCase "Let-In Without Type Annotation" testLetInWithoutType
+        , testCase "Let-In With Type Annotation" testLetInWithType
         ]
 
 runTyck :: Repository -> (a -> Tyck.Tyck b) -> Tyck a -> IO b
@@ -184,3 +186,13 @@ testCasting :: Assertion
 testCasting = do
     parseAndInferType "( 1 + 1 ) as f64" $ \expr -> do
         liftIO $ Sem.exprType (typedExpr expr) @?= Sem.TypeFP (Sem.IEEEFloat 64)
+
+testLetInWithoutType :: Assertion
+testLetInWithoutType = do
+    parseAndInferType "let x = 42 as i32; x + 1" $ \expr -> do
+        liftIO $ Sem.exprType (typedExpr expr) @?= Sem.TypeIntegral (Sem.Signed 32)
+
+testLetInWithType :: Assertion
+testLetInWithType = do
+    parseAndInferType "let x : i32 = 42; x + 1" $ \expr -> do
+        liftIO $ Sem.exprType (typedExpr expr) @?= Sem.TypeIntegral (Sem.Signed 32)

@@ -5,7 +5,7 @@ import Data.Scientific (Scientific)
 import Reussir.Core.Types.String (StringToken)
 import Reussir.Core.Types.Type (Type)
 import Reussir.Parser.Types.Capability (Capability)
-import Reussir.Parser.Types.Lexer (Identifier, WithSpan)
+import Reussir.Parser.Types.Lexer (Identifier)
 
 data ArithOp
     = Add
@@ -31,7 +31,7 @@ data ExprKind
     | Var VarID
     | RcWrap Expr Capability
     | Let
-        { letVarSpan :: (Int64, Int64)
+        { letVarSpan :: Maybe (Int64, Int64)
         , letVarID :: VarID
         , letVarName :: Identifier
         , letVarExpr :: Expr

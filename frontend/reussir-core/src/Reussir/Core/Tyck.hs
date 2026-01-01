@@ -29,8 +29,9 @@ import Reussir.Diagnostic.Report (
     defaultCodeRef,
     defaultText,
  )
+import Reussir.Parser.Types.Capability (Capability (..))
 import Reussir.Parser.Types.Expr qualified as Syn
-import Reussir.Parser.Types.Lexer (Identifier, Path (Path), WithSpan (..), unIdentifier)
+import Reussir.Parser.Types.Lexer (Identifier, Path (Path, pathBasename), WithSpan (..), pathSegments, unIdentifier)
 import Reussir.Parser.Types.Type qualified as Syn
 import System.Console.ANSI.Types qualified as ANSI
 
@@ -66,6 +67,10 @@ data VarDef = VarDef
     , varType :: Sem.Type
     }
 
+data Record = Record
+    { recordDefaultCapability :: Capability -- TODO: add more fields
+    }
+
 data TranslationState = TranslationState
     { currentSpan :: Maybe (Int64, Int64)
     , currentFile :: FilePath
@@ -76,6 +81,7 @@ data TranslationState = TranslationState
     , holes :: Seq.Seq HoleState
     , variableStates :: Seq.Seq VarDef
     , variableNameMap :: H.CuckooHashTable Identifier Sem.VarID
+    , knownRecords :: H.CuckooHashTable Path Record
     }
 
 withVariable :: Identifier -> Maybe (Int64, Int64) -> Sem.Type -> (Sem.VarID -> Tyck a) -> Tyck a
@@ -108,15 +114,15 @@ getVarType (Sem.VarID idx) = do
     let varDef = Seq.index vars (fromIntegral idx)
     return $ varType varDef
 
-getVarTypeViaName :: Identifier -> Tyck Sem.Type
-getVarTypeViaName varName = do
+lookupVar :: Identifier -> Tyck (Sem.VarID, Sem.Type)
+lookupVar varName = do
     nameMap <- State.gets variableNameMap
     mVarID <- liftIO $ H.lookup nameMap varName
     case mVarID of
-        Just varID -> getVarType varID
+        Just varID -> getVarType varID >>= \ty -> pure (varID, ty)
         Nothing -> do
             reportError $ "Variable not found: " <> (unIdentifier varName)
-            return Sem.TypeBottom
+            return (Sem.VarID (-1), Sem.TypeBottom)
 
 -- Introduce a new hole into the translation state
 introduceNewHole ::
@@ -339,6 +345,7 @@ emptyTranslationState currentFile = do
     typeClassDAG <- newDAG
     typeClassTable <- Sem.emptyTypeClassTable
     populatePrimitives typeClassTable typeClassDAG
+    knownRecords <- liftIO $ H.new
     return $
         TranslationState
             { currentSpan = Nothing
@@ -350,6 +357,7 @@ emptyTranslationState currentFile = do
             , holes = mempty
             , variableStates = mempty
             , variableNameMap
+            , knownRecords -- TODO: currently empty
             }
 
 type Tyck = Eff '[IOE, Prim, State.State TranslationState] -- TODO: Define effects used in type checking
@@ -391,10 +399,21 @@ reportError msg = do
 -- convert syntax type to semantic type
 evalType :: Syn.Type -> Tyck Sem.Type
 evalType (Syn.TypeSpanned s) = evalType (spanValue s)
--- TODO: should check if record exists or not
 evalType (Syn.TypeExpr path args) = do
     args' <- mapM evalType args
-    return $ Sem.TypeRecord path args'
+    knownRecords <- State.gets knownRecords
+    mRecord <- liftIO $ H.lookup knownRecords path
+    case mRecord of
+        Just record -> case recordDefaultCapability record of
+            Value -> return $ Sem.TypeRecord path args'
+            Shared -> return $ Sem.TypeRc (Sem.TypeRecord path args') Shared
+            Regional -> return $ Sem.TypeRc (Sem.TypeRecord path args') Regional
+            cap -> do
+                reportError $ "Unsupported capability: " <> T.pack (show cap)
+                return Sem.TypeBottom
+        Nothing -> do
+            reportError $ "Unknown record: " <> T.pack (show path)
+            return Sem.TypeBottom
 evalType (Syn.TypeIntegral (Syn.Signed n)) = return $ Sem.TypeIntegral (Sem.Signed n)
 evalType (Syn.TypeIntegral (Syn.Unsigned n)) = return $ Sem.TypeIntegral (Sem.Unsigned n)
 evalType (Syn.TypeFP (Syn.IEEEFloat n)) = return $ Sem.TypeFP (Sem.IEEEFloat n)
@@ -418,6 +437,21 @@ evalType (Syn.TypeArrow t1 t2) = do
     unfoldArrow t = do
         t' <- evalType t
         return ([], t')
+
+evalTypeWithFlexivity :: Syn.Type -> Bool -> Tyck Sem.Type
+evalTypeWithFlexivity t isFlexible = do
+    t' <- evalType t
+    case t' of
+        Sem.TypeRc ty Regional -> do
+            if isFlexible
+                then return $ Sem.TypeRc ty Flex
+                else return $ Sem.TypeRc ty Rigid
+        Sem.TypeRc _ _ -> do
+            reportError "Non-regional types cannot have capability annotations"
+            return Sem.TypeBottom
+        _ -> do
+            reportError "Capability annotations can only be applied to record types"
+            return Sem.TypeBottom
 
 inferType :: Syn.Expr -> Tyck Sem.Expr
 --       u fresh integral
@@ -518,18 +552,46 @@ inferType (Syn.Cast targetType subExpr) = do
 --               C |- x -> T;  C, x:T |- T' <- e2
 --  ──────────────────────────────────────────────────
 --                 T <- let x: T = e1 in e2
--- Notice, however, we may have capability annotations.
--- If capability annotations are present, we need to check if the type of e1 align
--- with Rc capability, if so, we directly use e1; otherwise, we insert a RcWrap operation.
-
--- inferType (Syn.LetIn varName Nothing valueExpr bodyExpr) = do
---     valueExpr' <- inferType valueExpr
---     let valueTy = Sem.exprType valueExpr'
---     valueTy' <- force valueTy
---     withVariable varName Nothing valueTy' $ \varID -> do
---         bodyExpr' <- inferType bodyExpr
---         let bodyTy = Sem.exprType bodyExpr'
---         exprWithSpan bodyTy $ Sem.LetIn varID valueExpr' bodyExpr'
+inferType (Syn.LetIn (WithSpan varName vnsStart vnsEnd) Nothing valueExpr bodyExpr) = do
+    valueExpr' <- inferType valueExpr
+    let valueTy = Sem.exprType valueExpr'
+    valueTy' <- force valueTy
+    withVariable varName (Just (vnsStart, vnsEnd)) valueTy' $ \varID -> do
+        bodyExpr' <- inferType bodyExpr
+        let bodyTy = Sem.exprType bodyExpr'
+        exprWithSpan bodyTy $
+            Sem.Let
+                { Sem.letVarID = varID
+                , Sem.letVarName = varName
+                , Sem.letVarExpr = valueExpr'
+                , Sem.letBodyExpr = bodyExpr'
+                , Sem.letVarSpan = Just (vnsStart, vnsEnd)
+                }
+inferType (Syn.LetIn (WithSpan varName vnsStart vnsEnd) (Just (ty, flex)) valueExpr bodyExpr) = do
+    annotatedType' <- if flex then evalTypeWithFlexivity ty True else evalType ty
+    valueExpr' <- checkType valueExpr annotatedType'
+    withVariable varName (Just (vnsStart, vnsEnd)) annotatedType' $ \varID -> do
+        bodyExpr' <- inferType bodyExpr
+        let bodyTy = Sem.exprType bodyExpr'
+        exprWithSpan bodyTy $
+            Sem.Let
+                { Sem.letVarID = varID
+                , Sem.letVarName = varName
+                , Sem.letVarExpr = valueExpr'
+                , Sem.letBodyExpr = bodyExpr'
+                , Sem.letVarSpan = Just (vnsStart, vnsEnd)
+                }
+-- Variable:
+--
+--  ──────────────────────
+--     C, x:T |- T <- x
+inferType (Syn.Var varName) = do
+    let baseName = pathBasename varName
+    case pathSegments varName of
+        [] -> do
+            (varId, varType) <- lookupVar baseName
+            exprWithSpan varType $ Sem.Var varId
+        _ -> error "unimplemented yet"
 inferType (Syn.SpannedExpr (WithSpan subExpr start end)) = do
     oldSpan <- currentSpan <$> State.get
     State.modify $ \st -> st{currentSpan = Just (start, end)}
