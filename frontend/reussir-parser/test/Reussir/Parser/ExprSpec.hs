@@ -99,3 +99,8 @@ spec = do
         it "parses mixed access" $
             (stripExprSpans <$> parse parseExpr "" "foo.bar.0.baz")
                 `shouldParse` AccessChain (Var (Path "foo" [])) [Named "bar", Unnamed 0, Named "baz"]
+
+    describe "parseExpr" $ do
+        it "parses less than or equal with potential type arg ambiguity" $
+            (stripExprSpans <$> parse parseExpr "" "n <= 1")
+                `shouldParse` BinOpExpr Lte (Var (Path "n" [])) (ConstExpr (ConstInt 1))

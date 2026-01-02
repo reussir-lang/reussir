@@ -29,7 +29,7 @@ fn fibonacci_logarithmic_impl(
             )
         } else {
             fibonacci_logarithmic_impl(
-                n / 2u64,
+                n / 2,
                 a,
                 matmul(b, b)
             )
