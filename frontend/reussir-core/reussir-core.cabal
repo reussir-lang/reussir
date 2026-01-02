@@ -162,6 +162,7 @@ executable reussir-tyck
         effectful,
         megaparsec,
         prettyprinter,
+        hashtables,
         prettyprinter-ansi-terminal
     hs-source-dirs:   app
     default-language: GHC2024

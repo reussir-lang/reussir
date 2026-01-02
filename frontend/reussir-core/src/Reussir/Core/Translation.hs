@@ -2,7 +2,7 @@
 
 module Reussir.Core.Translation where
 
-import Control.Monad (forM_, unless, when, zipWithM)
+import Control.Monad (forM_, unless, when, zipWithM, zipWithM_)
 import Data.Digest.XXHash.FFI (XXH3 (XXH3))
 import Data.Function ((&))
 import Data.HashMap.Strict qualified as HashMap
@@ -11,6 +11,7 @@ import Data.HashTable.IO qualified as H
 import Data.Hashable (Hashable (hash))
 import Data.Int (Int64)
 import Data.IntMap.Strict qualified as IntMap
+import Data.IntSet qualified as IntSet
 import Data.Maybe (isJust)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
@@ -20,7 +21,14 @@ import Effectful.Prim.IORef.Strict (IORef', newIORef', readIORef', writeIORef')
 import Effectful.State.Static.Local qualified as State
 import Reussir.Core.Class (addClass, isSuperClass, meetBound, newDAG, populateDAG, subsumeBound)
 import Reussir.Core.Function (newFunctionTable)
-import Reussir.Core.Generic (emptyGenericState, newGenericVar)
+import Reussir.Core.Generic (
+    addConcreteFlow,
+    addCtorLink,
+    addDirectLink,
+    emptyGenericState,
+    newGenericVar,
+    solveGeneric,
+ )
 import Reussir.Core.Type qualified as Sem
 import Reussir.Core.Types.Class (Class (..), ClassDAG, TypeBound)
 import Reussir.Core.Types.Expr qualified as Sem
@@ -663,7 +671,114 @@ getGenericBound (GenericID gid) = do
 --    i. if the type is directly a generic, we use addDirectLink
 --    ii. otherwise we use addCtorLink
 analyzeGenericFlowInExpr :: Sem.Expr -> Tyck ()
-analyzeGenericFlowInExpr = undefined
+analyzeGenericFlowInExpr expr = do
+    case Sem.exprKind expr of
+        Sem.FuncCall target tyArgs args -> do
+            -- Analyze arguments
+            mapM_ analyzeGenericFlowInExpr args
 
+            -- Analyze generic flow
+            functionTable <- State.gets functions
+            mProto <- liftIO $ H.lookup (Sem.functionProtos functionTable) target
+            case mProto of
+                Just proto -> do
+                    let generics = Sem.funcGenerics proto
+                    analyzeGenericInstantiationFlow generics tyArgs
+                Nothing -> pure () -- Should have been caught by type checker
+        Sem.CtorCall target tyArgs _ args -> do
+            -- Analyze arguments
+            mapM_ analyzeGenericFlowInExpr args
+
+            -- Analyze generic flow
+            knownRecords <- State.gets knownRecords
+            mRecord <- liftIO $ H.lookup knownRecords target
+            case mRecord of
+                Just record -> do
+                    let generics = Sem.recordTyParams record
+                    analyzeGenericInstantiationFlow generics tyArgs
+                Nothing -> pure () -- Should have been caught by type checker
+
+        -- Recursive cases
+        Sem.Negate e -> analyzeGenericFlowInExpr e
+        Sem.Not e -> analyzeGenericFlowInExpr e
+        Sem.Arith e1 _ e2 -> analyzeGenericFlowInExpr e1 >> analyzeGenericFlowInExpr e2
+        Sem.Cmp e1 _ e2 -> analyzeGenericFlowInExpr e1 >> analyzeGenericFlowInExpr e2
+        Sem.Cast e _ -> analyzeGenericFlowInExpr e
+        Sem.ScfIfExpr e1 e2 e3 -> do
+            analyzeGenericFlowInExpr e1
+            analyzeGenericFlowInExpr e2
+            analyzeGenericFlowInExpr e3
+        Sem.RcWrap e _ -> analyzeGenericFlowInExpr e
+        Sem.ProjChain e _ -> analyzeGenericFlowInExpr e
+        Sem.Let _ _ _ val body -> do
+            analyzeGenericFlowInExpr val
+            analyzeGenericFlowInExpr body
+
+        -- Base cases
+        Sem.GlobalStr _ -> pure ()
+        Sem.Constant _ -> pure ()
+        Sem.Var _ -> pure ()
+        Sem.Poison -> pure ()
+analyzeGenericInstantiationFlow :: [(Identifier, GenericID)] -> [Sem.Type] -> Tyck ()
+analyzeGenericInstantiationFlow genericParams tyArgs = do
+    genericState <- State.gets generics
+    zipWithM_
+        ( \(_, gid) ty -> do
+            if Sem.isConcrete ty
+                then addConcreteFlow gid ty genericState
+                else do
+                    let srcGenerics = Sem.collectGenerics IntSet.empty ty
+                    let srcGenericIDs = map (GenericID . fromIntegral) $ IntSet.toList srcGenerics
+                    forM_ srcGenericIDs $ \srcID -> do
+                        case ty of
+                            Sem.TypeGeneric g | g == srcID -> addDirectLink srcID gid genericState
+                            _ -> addCtorLink srcID gid ty genericState
+        )
+        genericParams
+        tyArgs
+
+analyzeGenericFlowInType :: Sem.Type -> Tyck ()
+analyzeGenericFlowInType (Sem.TypeRecord path args) = do
+    knownRecords <- State.gets knownRecords
+    mRecord <- liftIO $ H.lookup knownRecords path
+    case mRecord of
+        Just record -> do
+            let generics = Sem.recordTyParams record
+            analyzeGenericInstantiationFlow generics args
+        Nothing -> pure ()
+    mapM_ analyzeGenericFlowInType args
+analyzeGenericFlowInType (Sem.TypeClosure args ret) = do
+    mapM_ analyzeGenericFlowInType args
+    analyzeGenericFlowInType ret
+analyzeGenericFlowInType (Sem.TypeRc t _) = analyzeGenericFlowInType t
+analyzeGenericFlowInType (Sem.TypeRef t _) = analyzeGenericFlowInType t
+analyzeGenericFlowInType _ = pure ()
+
+analyzeGenericFlowInRecord :: Sem.Record -> Tyck ()
+analyzeGenericFlowInRecord record = do
+    let types = case Sem.recordFields record of
+            Sem.Named fs -> map (\(_, t, _) -> t) fs
+            Sem.Unnamed fs -> map (\(t, _) -> t) fs
+            Sem.Variants vs -> concatMap snd vs
+    mapM_ analyzeGenericFlowInType types
+
+-- Analyze generic flow for the whole translation module.
 analyzeGenericFlow :: Tyck ()
-analyzeGenericFlow = undefined
+analyzeGenericFlow = do
+    functionTable <- State.gets functions
+    protos <- liftIO $ H.toList (Sem.functionProtos functionTable)
+    forM_ protos $ \(_, proto) -> do
+        mBody <- readIORef' (Sem.funcBody proto)
+        case mBody of
+            Just body -> analyzeGenericFlowInExpr body
+            Nothing -> pure ()
+
+    knownRecords <- State.gets knownRecords
+    records <- liftIO $ H.toList knownRecords
+    forM_ records $ \(_, record) -> analyzeGenericFlowInRecord record
+
+solveAllGenerics :: Tyck (Maybe (H.CuckooHashTable GenericID [Sem.Type]))
+solveAllGenerics = do
+    analyzeGenericFlow
+    genericState <- State.gets generics
+    solveGeneric genericState

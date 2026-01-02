@@ -46,7 +46,7 @@ checkFuncType func = do
                     -- this is so sketchy....
                     case Stmt.funcBody func of
                         Just body -> do
-                            wellTyped <- checkType body (funcReturnType proto)
+                            wellTyped <- checkType body (funcReturnType proto) >>= wellTypedExpr
                             writeIORef' (funcBody proto) (Just wellTyped)
                             return wellTyped
                         Nothing -> exprWithSpan (funcReturnType proto) (Sem.Poison)
