@@ -3,7 +3,9 @@ module Reussir.Core.Function where
 import Data.HashTable.IO qualified as H
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.Prim (Prim)
-import Reussir.Core.Types.Function (FunctionProto, FunctionTable (..))
+import Effectful.Prim.IORef.Strict (writeIORef')
+import Reussir.Core.Types.Expr (Expr)
+import Reussir.Core.Types.Function (FunctionProto (..), FunctionTable (..))
 import Reussir.Parser.Types.Lexer (Path)
 
 addFunctionProto :: (IOE :> es) => Path -> FunctionProto -> FunctionTable -> Eff es ()
@@ -14,9 +16,12 @@ getFunctionProto :: (IOE :> es) => Path -> FunctionTable -> Eff es (Maybe Functi
 getFunctionProto path (FunctionTable table) = do
     liftIO $ H.lookup table path
 
-addFunctionBody :: (IOE :> es, Prim :> es) => Path -> FunctionProto -> FunctionTable -> Eff es ()
-addFunctionBody path proto (FunctionTable table) = do
-    liftIO $ H.insert table path proto
+addFunctionBody :: (IOE :> es, Prim :> es) => Path -> Maybe Expr -> FunctionTable -> Eff es ()
+addFunctionBody path body (FunctionTable table) = do
+    mProto <- liftIO $ H.lookup table path
+    case mProto of
+        Just proto -> writeIORef' (funcBody proto) body
+        Nothing -> return ()
 
 newFunctionTable :: (IOE :> es) => Eff es FunctionTable
 newFunctionTable = FunctionTable <$> liftIO H.new

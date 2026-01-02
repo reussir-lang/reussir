@@ -226,7 +226,7 @@ inferType (Syn.AccessChain baseExpr projs) = do
 --            C |- f : (T1, T2, ..., Tn) -> T, C |- ei : Ti
 --  ──────────────────────────────────────────────────────────────────────
 --               C |- T <- f(e1, e2, ..., en)
-inferType (Syn.FuncCallExpr (Syn.FuncCall path tyArgs argExprs)) = do
+inferType (Syn.FuncCallExpr (Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallTyArgs = tyArgs, Syn.funcCallArgs = argExprs})) = do
     -- Lookup function
     functionTable <- State.gets functions
     tyArgs' <- mapM tyArgOrMetaHole tyArgs

@@ -2,7 +2,6 @@ module Reussir.Core.Types.Expr where
 
 import Data.Int (Int64)
 import Data.Scientific (Scientific)
-import Reussir.Codegen.IR (FuncCall)
 import Reussir.Core.Types.String (StringToken)
 import Reussir.Core.Types.Type (Type)
 import Reussir.Parser.Types.Capability (Capability)
