@@ -19,6 +19,9 @@ import Reussir.Parser.Prog (parseProg)
 import Reussir.Parser.Types.Lexer (Identifier (..), WithSpan (..), unIdentifier)
 import Reussir.Parser.Types.Stmt qualified as Syn
 import System.IO (hPutStrLn)
+import Reussir.Core.Pretty (prettyColored)
+import Prettyprinter.Render.Terminal (putDoc)
+import Prettyprinter (hardline)
 
 data Args = Args
     { inputFile :: FilePath
@@ -67,7 +70,7 @@ main = do
             case result of
                 Just expr | null (translationReports finalState) -> do
                     putStrLn "Type check succeeded without errors."
-                    putStrLn $ show expr
+                    putDoc (prettyColored expr <> hardline)
                     exitSuccess
                 _ -> do
                     forM_ (translationReports finalState) $ \report -> do

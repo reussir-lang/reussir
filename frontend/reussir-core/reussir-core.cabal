@@ -77,6 +77,7 @@ library
         Reussir.Core.Types.Translation
         Reussir.Core.Translation
         Reussir.Core.Function
+        Reussir.Core.Pretty
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -98,7 +99,9 @@ library
                       scientific,
                       hashtables,
                       array,
-                      ansi-terminal-types
+                      ansi-terminal-types,
+                      prettyprinter,
+                      prettyprinter-ansi-terminal
 
     -- Directories containing source files.
     hs-source-dirs:   src
@@ -156,6 +159,8 @@ executable reussir-tyck
         optparse-applicative,
         text,
         effectful,
-        megaparsec
+        megaparsec,
+        prettyprinter,
+        prettyprinter-ansi-terminal
     hs-source-dirs:   app
     default-language: GHC2024
