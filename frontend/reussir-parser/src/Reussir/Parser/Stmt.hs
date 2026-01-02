@@ -10,7 +10,7 @@ import Reussir.Parser.Lexer
 import Reussir.Parser.Type (parseType)
 import Reussir.Parser.Types
 import Reussir.Parser.Types.Capability (Capability (..))
-import Reussir.Parser.Types.Lexer (Identifier)
+import Reussir.Parser.Types.Lexer (Identifier, Path)
 import Reussir.Parser.Types.Stmt
 import Reussir.Parser.Types.Type (Type)
 
@@ -42,8 +42,9 @@ parseStructDecRest vis = do
     _ <- string "struct" *> space
     cap <- parseCapability
     name <- parseIdentifier
+    tyvars <- optional $ openAngle *> parseGenericParam `sepBy` comma <* closeAngle
     fields <- try parseNamedFields <|> parseUnnamedFields
-    return $ RecordStmt $ Record name [] fields StructKind vis cap
+    return $ RecordStmt $ Record name (fromMaybe [] tyvars) fields StructKind vis cap
 
 parseUnnamedFields :: Parser RecordFields
 parseUnnamedFields = do
@@ -70,11 +71,17 @@ parseNamedField = do
 parseFuncDef :: Parser Stmt
 parseFuncDef = parseVis >>= parseFuncDefRest
 
+parseGenericParam :: Parser (Identifier, [Path])
+parseGenericParam = do
+    name <- parseIdentifier
+    bounds <- optional (char ':' *> space *> parsePath `sepBy` (char '+' *> space))
+    return (name, fromMaybe [] bounds)
+
 parseFuncDefRest :: Visibility -> Parser Stmt
 parseFuncDefRest vis = do
     isRegional <- isJust <$> optional (string "regional" *> space)
     name <- string "fn" *> space *> parseIdentifier
-    tyargs <- optional $ openAngle *> parseIdentifier `sepBy` comma <* closeAngle
+    tyargs <- optional $ openAngle *> parseGenericParam `sepBy` comma <* closeAngle
     args <- openParen *> optional (parseTypedParam `sepBy` comma)
     ret <- closeParen *> optional (string "->" *> space *> parseRetType)
     body <- (Just <$> parseBody) <|> (Nothing <$ semicolon)
@@ -98,7 +105,7 @@ parseEnumDec = parseVis >>= parseEnumDecRest
 parseEnumDecRest :: Visibility -> Parser Stmt
 parseEnumDecRest vis = do
     name <- string "enum" *> space *> parseIdentifier
-    tyvars <- openAngle *> parseIdentifier `sepBy` comma <* closeAngle
+    tyvars <- openAngle *> parseGenericParam `sepBy` comma <* closeAngle
     body <- openBody *> parseEnumConstructor `sepBy` comma <* closeBody
 
     let fields = Variants body

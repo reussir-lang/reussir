@@ -167,7 +167,7 @@ spec = do
                 `shouldParse` RecordStmt
                     ( Record
                         (Identifier "Option")
-                        [Identifier "T"]
+                        [(Identifier "T", [])]
                         ( Variants
                             [ (Identifier "Some", [TypeExpr (Path (Identifier "T") []) []])
                             , (Identifier "None", [])
@@ -183,7 +183,7 @@ spec = do
                 `shouldParse` RecordStmt
                     ( Record
                         (Identifier "Result")
-                        [Identifier "T", Identifier "E"]
+                        [(Identifier "T", []), (Identifier "E", [])]
                         ( Variants
                             [ (Identifier "Ok", [TypeExpr (Path (Identifier "T") []) []])
                             , (Identifier "Err", [TypeExpr (Path (Identifier "E") []) []])

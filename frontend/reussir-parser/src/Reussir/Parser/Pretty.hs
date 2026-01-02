@@ -186,7 +186,8 @@ instance PrettyColored Stmt where
                     Nothing -> operator ";"
       where
         prettyGenerics [] = emptyDoc
-        prettyGenerics gs = angles (commaSep (map prettyColored gs))
+        prettyGenerics gs = angles (commaSep (map prettyGeneric gs))
+        prettyGeneric (n, bounds) = prettyColored n <> if null bounds then emptyDoc else operator ":" <+> concatWith (surround (operator "+")) (map prettyColored bounds)
         prettyArg (n, t, flx) = prettyColored n <> operator ":" <+> prettyFlex flx <> prettyColored t
         prettyRet Nothing = emptyDoc
         prettyRet (Just (t, flx)) = operator "->" <+> prettyFlex flx <> prettyColored t
@@ -204,7 +205,8 @@ instance PrettyColored Stmt where
                 S.Named fs -> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyField fs))) <> hardline)
       where
         prettyGenerics [] = emptyDoc
-        prettyGenerics gs = angles (commaSep (map prettyColored gs))
+        prettyGenerics gs = angles (commaSep (map prettyGeneric gs))
+        prettyGeneric (n, bounds) = prettyColored n <> if null bounds then emptyDoc else operator ":" <+> concatWith (surround (operator "+")) (map prettyColored bounds)
         prettyVariant (n, ts) = prettyColored n <> if null ts then emptyDoc else parens (commaSep (map prettyColored ts))
         prettyField (n, t, fld) = prettyColored n <> operator ":" <+> prettyFieldFlag fld <> prettyColored t
         prettyUnnamedField (t, fld) = prettyFieldFlag fld <> prettyColored t

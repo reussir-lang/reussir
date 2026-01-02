@@ -2,7 +2,7 @@
 
 module Reussir.Core.Tyck where
 
-import Control.Monad (foldM, zipWithM)
+import Control.Monad (foldM, unless, zipWithM)
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
 import Data.List (elemIndex, find)
@@ -12,7 +12,7 @@ import Effectful (liftIO)
 import Effectful.State.Static.Local qualified as State
 
 import Reussir.Core.Translation
-import Reussir.Core.Types.Class (Class (..))
+import Reussir.Core.Types.Class (Class (..), TypeBound)
 import Reussir.Core.Types.Expr qualified as Sem
 import Reussir.Core.Types.GenericID (GenericID (..))
 import Reussir.Core.Types.Record qualified as Sem
@@ -56,9 +56,14 @@ checkFuncType func = do
         withVariable pName Nothing ty $ \_ -> withParams ps action
 
 -- Helper function for convert type args into semantic counterparts
-tyArgOrMetaHole :: Maybe Syn.Type -> Tyck Sem.Type
-tyArgOrMetaHole (Just ty) = evalType ty
-tyArgOrMetaHole Nothing = introduceNewHole Nothing Nothing []
+tyArgOrMetaHole :: Maybe Syn.Type -> TypeBound -> Tyck Sem.Type
+tyArgOrMetaHole (Just ty) bounds = do
+    ty' <- evalType ty
+    satisfied <- satisfyBounds ty' bounds
+    unless satisfied $ do
+        reportError "Type argument does not satisfy the required bounds"
+    pure ty'
+tyArgOrMetaHole Nothing bounds = introduceNewHole Nothing Nothing bounds
 
 inferType :: Syn.Expr -> Tyck Sem.Expr
 --       u fresh integral
@@ -265,12 +270,13 @@ inferType (Syn.AccessChain baseExpr projs) = do
 inferType (Syn.FuncCallExpr (Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallTyArgs = tyArgs, Syn.funcCallArgs = argExprs})) = do
     -- Lookup function
     functionTable <- State.gets functions
-    tyArgs' <- mapM tyArgOrMetaHole tyArgs
     callee <- getFunctionProto path functionTable
     case callee of
         Just proto -> do
             let numGenerics = length (funcGenerics proto)
             checkTypeArgsNum numGenerics $ do
+                bounds <- mapM (\(_, gid) -> getGenericBound gid) (funcGenerics proto)
+                tyArgs' <- zipWithM tyArgOrMetaHole tyArgs bounds
                 let genericMap = functionGenericMap proto tyArgs'
                 let instantiatedArgTypes = map (\(_, ty) -> substituteTypeParams ty genericMap) (funcParams proto)
                 let expectedNumParams = length instantiatedArgTypes
@@ -342,7 +348,8 @@ inferType
                 reportError $ "Record not found: " <> T.pack (show ctorCallTarget)
                 exprWithSpan Sem.TypeBottom Sem.Poison
             Just record -> do
-                tyArgs' <- mapM tyArgOrMetaHole ctorTyArgs
+                bounds <- mapM (\(_, gid) -> getGenericBound gid) (Sem.recordTyParams record)
+                tyArgs' <- zipWithM tyArgOrMetaHole ctorTyArgs bounds
                 let numGenerics = length (Sem.recordTyParams record)
                 checkTypeArgsNum numGenerics $ do
                     let genericMap = recordGenericMap record tyArgs'

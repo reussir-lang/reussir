@@ -2,7 +2,7 @@ module Reussir.Parser.Types.Stmt where
 
 import Reussir.Parser.Types.Capability (Capability)
 import Reussir.Parser.Types.Expr (Expr)
-import Reussir.Parser.Types.Lexer (Identifier, WithSpan)
+import Reussir.Parser.Types.Lexer (Identifier, Path, WithSpan)
 import Reussir.Parser.Types.Type (Type)
 
 data Visibility = Public | Private deriving (Show, Eq)
@@ -20,7 +20,7 @@ data RecordKind = StructKind | EnumKind deriving (Show, Eq)
 
 data Record = Record
     { recordName :: Identifier
-    , recordTyParams :: [Identifier]
+    , recordTyParams :: [(Identifier, [Path])]
     , recordFields :: RecordFields
     , recordKind :: RecordKind
     , recordVisibility :: Visibility
@@ -31,7 +31,7 @@ data Record = Record
 data Function = Function
     { funcVisibility :: Visibility
     , funcName :: Identifier
-    , funcGenerics :: [Identifier]
+    , funcGenerics :: [(Identifier, [Path])]
     , funcParams :: [(Identifier, Type, FlexFlag)]
     , funcReturnType :: Maybe (Type, FlexFlag)
     , funcIsRegional :: Bool

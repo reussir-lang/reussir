@@ -25,6 +25,7 @@ import Reussir.Core.Type qualified as Sem
 import Reussir.Core.Types.Class (Class (..), ClassDAG, TypeBound)
 import Reussir.Core.Types.Expr qualified as Sem
 import Reussir.Core.Types.Function qualified as Sem
+import Reussir.Core.Types.Generic (GenericState (getStateRef), GenericVar (genericBounds))
 import Reussir.Core.Types.GenericID (GenericID (..))
 import Reussir.Core.Types.Record qualified as Sem
 import Reussir.Core.Types.String (StringToken, StringUniqifier (..))
@@ -360,10 +361,10 @@ withGenericContext newGenerics action = do
     State.modify $ \st -> st{genericNameMap = oldMap}
     return result
 
-translateGeneric :: Identifier -> Tyck (Identifier, GenericID)
-translateGeneric identifier = do
+translateGeneric :: (Identifier, [Path]) -> Tyck (Identifier, GenericID)
+translateGeneric (identifier, bounds) = do
     st <- State.gets generics
-    gid <- newGenericVar identifier Nothing [] st -- TODO: handle span and bounds
+    gid <- newGenericVar identifier Nothing bounds st -- TODO: handle span
     return (identifier, gid)
 
 scanStmt :: Syn.Stmt -> Tyck ()
@@ -640,3 +641,13 @@ substituteTypeParams ty subst = go ty
     go (Sem.TypeRc t cap) = Sem.TypeRc (go t) cap
     go (Sem.TypeRef t cap) = Sem.TypeRef (go t) cap
     go t = t
+
+getGenericBound :: GenericID -> Tyck TypeBound
+getGenericBound (GenericID gid) = do
+    genericsState <- State.gets generics
+    varState <- readIORef' (getStateRef genericsState)
+    case Seq.lookup (fromIntegral gid) varState of
+        Just var -> return $ map Class $ genericBounds var
+        Nothing -> do
+            reportError $ "Generic ID not found: " <> T.pack (show gid)
+            return []

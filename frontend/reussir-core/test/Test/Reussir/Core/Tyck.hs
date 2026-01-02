@@ -14,9 +14,10 @@ import Effectful.Prim.IORef.Strict (newIORef', readIORef')
 import Effectful.State.Static.Local (runState)
 import Effectful.State.Static.Local qualified as State
 import Reussir.Core.Class (subsumeBound)
-import Reussir.Core.Translation (Tyck, emptyTranslationState)
+import Reussir.Core.Generic (newGenericVar)
+import Reussir.Core.Translation (Tyck, emptyTranslationState, wellTypedExpr)
 import Reussir.Core.Translation qualified as Tyck
-import Reussir.Core.Tyck (inferType)
+import Reussir.Core.Tyck (checkType, inferType)
 import Reussir.Core.Types.Class (Class (..))
 import Reussir.Core.Types.Class qualified as Sem
 import Reussir.Core.Types.Expr qualified as Sem
@@ -26,6 +27,7 @@ import Reussir.Core.Types.Record qualified as Sem
 import Reussir.Core.Types.Translation (TranslationState (translationReports))
 import Reussir.Core.Types.Translation qualified as Sem
 import Reussir.Core.Types.Translation qualified as Tyck
+import Reussir.Core.Types.Type (IntegralType (Signed))
 import Reussir.Core.Types.Type qualified as Sem
 import Reussir.Diagnostic (Repository, addDummyFile, createRepository, displayReport)
 import Reussir.Parser.Expr (parseExpr)
@@ -62,6 +64,7 @@ tests =
         , testCase "Record Access" testRecordAccess
         , testCase "Generic Record Access" testGenericRecordAccess
         , testCase "Function Call" testFuncCall
+        , testCase "Function Call with Generic Hole" testGenericFuncCall
         ]
 
 runTyck :: Repository -> (a -> Tyck.Tyck b) -> Tyck a -> IO b
@@ -298,3 +301,33 @@ testFuncCall = do
                     }
         addFunctionDefinition funcPath proto
         inferType expr
+
+testGenericFuncCall :: Assertion
+testGenericFuncCall = do
+    let funcName = "add"
+    let funcPath = Path funcName []
+    let input = "add<_>(1, 2)"
+    expr <- parseToExpr input
+
+    repository <- runEff $ createRepository []
+    let repo = addDummyFile repository "<dummy input>" input
+    let check res = liftIO $ do
+            Sem.exprType res @?= Sem.TypeIntegral (Sem.Signed 32)
+
+    runTyck repo check $ do
+        funcBodyRef <- newIORef' Nothing
+        state <- State.gets Tyck.generics
+        generic <- newGenericVar "T" Nothing [Path "Num" []] state
+        let proto =
+                FunctionProto
+                    { funcVisibility = Public
+                    , funcName = funcName
+                    , funcGenerics = [("T", generic)]
+                    , funcParams = [("a", Sem.TypeGeneric generic), ("b", Sem.TypeGeneric generic)]
+                    , funcReturnType = Sem.TypeGeneric generic
+                    , funcIsRegional = False
+                    , funcBody = funcBodyRef
+                    , funcSpan = Nothing
+                    }
+        addFunctionDefinition funcPath proto
+        checkType expr (Sem.TypeIntegral $ Signed 32) >>= wellTypedExpr
