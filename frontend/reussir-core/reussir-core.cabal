@@ -121,6 +121,7 @@ test-suite reussir-core-test
         Test.Reussir.Core.Class
         Test.Reussir.Core.Generic
         Test.Reussir.Core.Tyck
+        Test.Reussir.Core.Type
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:

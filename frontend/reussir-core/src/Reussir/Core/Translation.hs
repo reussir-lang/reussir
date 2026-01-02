@@ -654,3 +654,16 @@ getGenericBound (GenericID gid) = do
         Nothing -> do
             reportError $ "Generic ID not found: " <> T.pack (show gid)
             return []
+
+-- Recursively analyze generic flow in an expression
+-- We focus on function call and ctor call: at each call site, we examine:
+-- 1. If a type fulfills isConcrete, we use addConcreteFlow to add this type as
+--    a concrete instance to the generic variable.
+-- 2. If otherwise, we add a flow edge from the types generics (collectGenerics) to the callee generic
+--    i. if the type is directly a generic, we use addDirectLink
+--    ii. otherwise we use addCtorLink
+analyzeGenericFlowInExpr :: Sem.Expr -> Tyck ()
+analyzeGenericFlowInExpr = undefined
+
+analyzeGenericFlow :: Tyck ()
+analyzeGenericFlow = undefined
