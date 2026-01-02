@@ -36,3 +36,9 @@ fn fibonacci_logarithmic_impl<T : Integral>(
         }
     }
 }
+
+fn fibonacci_u64(n : u64) -> u64 {
+    let x = Matrix<_> { m00 : 0, m01 : 1, m10 : 1, m11 : 1 };
+    let eye = Matrix<_> { m00 : 1, m01 : 0, m10 : 0, m11 : 1 };
+    fibonacci_logarithmic_impl<_>(n, eye, x)
+}
