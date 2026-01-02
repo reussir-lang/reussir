@@ -113,7 +113,7 @@ parseRegionalExpr = do
 parsePathBasedExpr :: Parser Expr
 parsePathBasedExpr = do
     path <- parsePath
-    tyArgs <- optional (openAngle *> parseTypeArg `sepBy` comma <* closeAngle)
+    tyArgs <- optional (try (openAngle *> parseTypeArg `sepBy` comma <* closeAngle))
 
     isVariant <- optional doubleColon
 

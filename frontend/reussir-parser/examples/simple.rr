@@ -8,7 +8,7 @@ pub fn test(data : i32) -> i32 -> i32 {
 }
 pub fn length<T>(xs: List<T>) -> u64 {
     match xs {
-        List::Nil => 0u64,
-        List::Cons(_, ys) => 1u64 + length(ys)
+        List::Nil => 0,
+        List::Cons(_, ys) => 1 + length(ys)
     }
 }
