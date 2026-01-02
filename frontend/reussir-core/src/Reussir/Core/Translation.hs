@@ -568,6 +568,57 @@ evalTypeWithFlexivity t isFlexible = do
             reportError "Capability annotations can only be applied to record types"
             return Sem.TypeBottom
 
+forceAndCheckHoles :: Sem.Type -> Tyck Sem.Type
+forceAndCheckHoles ty = do
+    ty' <- force ty
+    case ty' of
+        Sem.TypeHole _ -> do
+            reportError "Unsolved type hole"
+            return ty'
+        Sem.TypeRecord path args -> do
+            args' <- mapM forceAndCheckHoles args
+            return $ Sem.TypeRecord path args'
+        Sem.TypeClosure args ret -> do
+            args' <- mapM forceAndCheckHoles args
+            ret' <- forceAndCheckHoles ret
+            return $ Sem.TypeClosure args' ret'
+        Sem.TypeRc t cap -> do
+            t' <- forceAndCheckHoles t
+            return $ Sem.TypeRc t' cap
+        Sem.TypeRef t cap -> do
+            t' <- forceAndCheckHoles t
+            return $ Sem.TypeRef t' cap
+        _ -> return ty'
+
+wellTypedExpr :: Sem.Expr -> Tyck Sem.Expr
+wellTypedExpr expr = do
+    ty' <- forceAndCheckHoles (Sem.exprType expr)
+    kind' <- case Sem.exprKind expr of
+        Sem.GlobalStr s -> return $ Sem.GlobalStr s
+        Sem.Constant c -> return $ Sem.Constant c
+        Sem.Negate e -> Sem.Negate <$> wellTypedExpr e
+        Sem.Not e -> Sem.Not <$> wellTypedExpr e
+        Sem.Arith e1 op e2 -> Sem.Arith <$> wellTypedExpr e1 <*> pure op <*> wellTypedExpr e2
+        Sem.Cmp e1 op e2 -> Sem.Cmp <$> wellTypedExpr e1 <*> pure op <*> wellTypedExpr e2
+        Sem.Cast e t -> do
+            e' <- wellTypedExpr e
+            t' <- forceAndCheckHoles t
+            return $ Sem.Cast e' t'
+        Sem.ScfIfExpr e1 e2 e3 -> Sem.ScfIfExpr <$> wellTypedExpr e1 <*> wellTypedExpr e2 <*> wellTypedExpr e3
+        Sem.Var v -> return $ Sem.Var v
+        Sem.RcWrap e cap -> Sem.RcWrap <$> wellTypedExpr e <*> pure cap
+        Sem.ProjChain e idxs -> Sem.ProjChain <$> wellTypedExpr e <*> pure idxs
+        Sem.Let span' varID name val body -> do
+            val' <- wellTypedExpr val
+            body' <- wellTypedExpr body
+            return $ Sem.Let span' varID name val' body'
+        Sem.FuncCall target tyArgs args -> do
+            tyArgs' <- mapM forceAndCheckHoles tyArgs
+            args' <- mapM wellTypedExpr args
+            return $ Sem.FuncCall target tyArgs' args'
+        Sem.Poison -> return Sem.Poison
+    return $ expr{Sem.exprType = ty', Sem.exprKind = kind'}
+
 addRecordDefinition :: Path -> Sem.Record -> Tyck ()
 addRecordDefinition path record = do
     records <- State.gets knownRecords

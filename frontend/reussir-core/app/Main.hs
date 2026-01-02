@@ -11,7 +11,7 @@ import System.Exit (exitFailure, exitSuccess)
 import Text.Megaparsec (errorBundlePretty, runParser)
 
 import GHC.IO.Handle.FD (stderr)
-import Reussir.Core.Translation (emptyTranslationState, scanStmt)
+import Reussir.Core.Translation (emptyTranslationState, scanStmt, wellTypedExpr)
 import Reussir.Core.Tyck (checkFuncType)
 import Reussir.Core.Types.Translation (TranslationState (..))
 import Reussir.Diagnostic (createRepository, displayReport)
@@ -19,6 +19,9 @@ import Reussir.Parser.Prog (parseProg)
 import Reussir.Parser.Types.Lexer (Identifier (..), WithSpan (..), unIdentifier)
 import Reussir.Parser.Types.Stmt qualified as Syn
 import System.IO (hPutStrLn)
+import Reussir.Core.Pretty (prettyColored)
+import Prettyprinter.Render.Terminal (putDoc)
+import Prettyprinter (hardline)
 
 data Args = Args
     { inputFile :: FilePath
@@ -57,7 +60,7 @@ main = do
 
                 case targetFunc of
                     Just f -> do
-                        expr <- inject $ checkFuncType f
+                        expr <- inject $ checkFuncType f >>= wellTypedExpr
                         return (Just expr)
                     Nothing -> do
                         liftIO $ putStrLn "Function not found"
@@ -67,7 +70,7 @@ main = do
             case result of
                 Just expr | null (translationReports finalState) -> do
                     putStrLn "Type check succeeded without errors."
-                    putStrLn $ show expr
+                    putDoc (prettyColored expr <> hardline)
                     exitSuccess
                 _ -> do
                     forM_ (translationReports finalState) $ \report -> do

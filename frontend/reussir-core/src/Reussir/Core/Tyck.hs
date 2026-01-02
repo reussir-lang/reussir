@@ -402,7 +402,7 @@ checkType (Syn.SpannedExpr (WithSpan subExpr start end)) ty = do
 checkType expr ty = do
     -- this is apparently not complete. We need to handle lambda/unification
     expr' <- inferType expr
-    let exprTy = Sem.exprType expr'
+    exprTy <- force $ Sem.exprType expr'
     unification <- unify exprTy ty
     if not unification
         then do
