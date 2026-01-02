@@ -162,7 +162,6 @@ import Data.List (nub)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust)
 import Data.Sequence qualified as Seq
-import Data.Text qualified as T
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (modifyIORef', newIORef', readIORef')
@@ -170,7 +169,7 @@ import Reussir.Core.Type (isConcrete, substituteGeneric)
 import Reussir.Core.Types.Generic
 import Reussir.Core.Types.GenericID
 import Reussir.Core.Types.Type (Type (..))
-import Reussir.Parser.Types.Lexer (Path)
+import Reussir.Parser.Types.Lexer (Identifier, Path)
 
 {- |
 Create an empty 'GenericState'.
@@ -204,7 +203,7 @@ Notes:
 -}
 newGenericVar ::
     (IOE :> es, Prim :> es) =>
-    T.Text ->
+    Identifier ->
     Maybe (Int64, Int64) ->
     [Path] ->
     GenericState ->
@@ -275,7 +274,7 @@ getName ::
     (IOE :> es, Prim :> es) =>
     GenericID ->
     GenericState ->
-    Eff es T.Text
+    Eff es Identifier
 getName (GenericID varID) state = do
     let ref = getStateRef state
     vars <- readIORef' ref

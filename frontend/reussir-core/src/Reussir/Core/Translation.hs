@@ -2,14 +2,16 @@
 
 module Reussir.Core.Translation where
 
-import Control.Monad (forM_, when, zipWithM)
+import Control.Monad (forM_, unless, when, zipWithM)
 import Data.Digest.XXHash.FFI (XXH3 (XXH3))
 import Data.Function ((&))
+import Data.HashMap.Strict qualified as HashMap
 import Data.HashSet qualified as HashSet
 import Data.HashTable.IO qualified as H
 import Data.Hashable (Hashable (hash))
 import Data.Int (Int64)
 import Data.IntMap.Strict qualified as IntMap
+import Data.Maybe (isJust)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Effectful (Eff, IOE, liftIO, (:>))
@@ -18,9 +20,11 @@ import Effectful.Prim.IORef.Strict (IORef', newIORef', readIORef', writeIORef')
 import Effectful.State.Static.Local qualified as State
 import Reussir.Core.Class (addClass, isSuperClass, meetBound, newDAG, populateDAG, subsumeBound)
 import Reussir.Core.Function (newFunctionTable)
+import Reussir.Core.Generic (emptyGenericState, newGenericVar)
 import Reussir.Core.Type qualified as Sem
 import Reussir.Core.Types.Class (Class (..), ClassDAG, TypeBound)
 import Reussir.Core.Types.Expr qualified as Sem
+import Reussir.Core.Types.Function qualified as Sem
 import Reussir.Core.Types.GenericID (GenericID (..))
 import Reussir.Core.Types.Record qualified as Sem
 import Reussir.Core.Types.String (StringToken, StringUniqifier (..))
@@ -34,8 +38,10 @@ import Reussir.Diagnostic.Report (
     defaultCodeRef,
     defaultText,
  )
+import Reussir.Parser.Prog qualified as Syn
 import Reussir.Parser.Types.Capability (Capability (..))
-import Reussir.Parser.Types.Lexer (Identifier, Path (..), WithSpan (..), unIdentifier)
+import Reussir.Parser.Types.Lexer (Identifier, Path (..), WithSpan (..), pathBasename, unIdentifier)
+import Reussir.Parser.Types.Stmt qualified as Syn
 import Reussir.Parser.Types.Type qualified as Syn
 import System.Console.ANSI.Types qualified as ANSI
 
@@ -313,12 +319,14 @@ emptyTranslationState :: (IOE :> es, Prim :> es) => FilePath -> Eff es Translati
 emptyTranslationState currentFile = do
     table <- liftIO $ H.new
     variableNameMap <- liftIO $ H.new
+    let genericNameMap = HashMap.empty
     let stringUniqifier = StringUniqifier table
     typeClassDAG <- newDAG
     typeClassTable <- Sem.emptyTypeClassTable
     populatePrimitives typeClassTable typeClassDAG
     knownRecords <- liftIO $ H.new
     functions <- newFunctionTable
+    generics <- emptyGenericState
     return $
         TranslationState
             { currentSpan = Nothing
@@ -330,9 +338,127 @@ emptyTranslationState currentFile = do
             , holes = mempty
             , variableStates = mempty
             , variableNameMap
-            , knownRecords -- TODO: currently empty
+            , genericNameMap
+            , knownRecords
             , functions
+            , generics
             }
+
+{- |
+Execute a computation with a set of generic variables in scope.
+This temporarily updates the 'genericNameMap' in the translation state.
+If a generic name shadows an existing one, the old one is restored after the computation.
+-}
+withGenericContext :: [(Identifier, GenericID)] -> Tyck a -> Tyck a
+withGenericContext newGenerics action = do
+    oldMap <- State.gets genericNameMap
+    let newMap = foldl' (\m (k, v) -> HashMap.insert k v m) oldMap newGenerics
+    State.modify $ \st -> st{genericNameMap = newMap}
+
+    result <- action
+
+    State.modify $ \st -> st{genericNameMap = oldMap}
+    return result
+
+translateGeneric :: Identifier -> Tyck (Identifier, GenericID)
+translateGeneric identifier = do
+    st <- State.gets generics
+    gid <- newGenericVar identifier Nothing [] st -- TODO: handle span and bounds
+    return (identifier, gid)
+
+scanStmt :: Syn.Stmt -> Tyck ()
+scanStmt (Syn.SpannedStmt s) = do
+    backup <- State.gets currentSpan
+    State.modify $ \st -> st{currentSpan = Just (spanStartOffset s, spanEndOffset s)}
+    scanStmt (spanValue s)
+    State.modify $ \st -> st{currentSpan = backup}
+scanStmt (Syn.RecordStmt record) = do
+    let name = Syn.recordName record
+    let tyParams = Syn.recordTyParams record
+
+    -- Translate generics
+    genericsList <- mapM translateGeneric tyParams
+
+    -- Translate fields/variants within generic context
+    withGenericContext genericsList $ do
+        fields <- case Syn.recordFields record of
+            Syn.Named fs -> do
+                fs' <- mapM (\(n, t, f) -> (n,,f) <$> evalType t) fs
+                return $ Sem.Named fs'
+            Syn.Unnamed fs -> do
+                fs' <- mapM (\(t, f) -> (,f) <$> evalType t) fs
+                return $ Sem.Unnamed fs'
+            Syn.Variants vs -> do
+                vs' <- mapM (\(n, ts) -> (n,) <$> mapM evalType ts) vs
+                return $ Sem.Variants vs'
+
+        let kind = case Syn.recordKind record of
+                Syn.StructKind -> Sem.StructKind
+                Syn.EnumKind -> Sem.EnumKind
+
+        let semRecord =
+                Sem.Record
+                    { Sem.recordName = name
+                    , Sem.recordTyParams = genericsList
+                    , Sem.recordFields = fields
+                    , Sem.recordKind = kind
+                    , Sem.recordVisibility = Syn.recordVisibility record
+                    , Sem.recordDefaultCap = Syn.recordDefaultCap record
+                    }
+
+        let path = Path name [] -- TODO: handle module path
+        addRecordDefinition path semRecord
+scanStmt
+    ( Syn.FunctionStmt
+            Syn.Function
+                { Syn.funcVisibility = funcVisibility
+                , Syn.funcName = funcName
+                , Syn.funcGenerics = funcGenerics
+                , Syn.funcParams = funcParams
+                , Syn.funcReturnType = funcReturnType
+                , Syn.funcIsRegional = funcIsRegional
+                }
+        ) = do
+        genericsList <- mapM translateGeneric funcGenerics
+        withGenericContext genericsList $ do
+            paramsList <- mapM translateParam funcParams
+            funcReturnType' <-
+                mapM
+                    (\(ty, flex) -> if flex then evalTypeWithFlexivity ty True else evalType ty)
+                    funcReturnType
+            let returnTy = case funcReturnType' of
+                    Just ty -> ty
+                    Nothing -> Sem.TypeUnit
+            pendingFuncBody <- newIORef' Nothing
+            funcSpan <- State.gets currentSpan
+            let proto =
+                    Sem.FunctionProto
+                        { Sem.funcVisibility = funcVisibility
+                        , Sem.funcName = funcName
+                        , Sem.funcGenerics = genericsList
+                        , Sem.funcParams = paramsList
+                        , Sem.funcReturnType = returnTy
+                        , Sem.funcIsRegional = funcIsRegional
+                        , Sem.funcBody = pendingFuncBody
+                        , Sem.funcSpan = funcSpan
+                        }
+            -- TODO: handle module path
+            let funcPath = Path funcName []
+            functionTable <- State.gets functions
+            existed <- isJust <$> liftIO (H.lookup (Sem.functionProtos functionTable) funcPath)
+            if existed
+                then
+                    reportError $
+                        "Function already defined: " <> unIdentifier funcName
+                else liftIO $ H.insert (Sem.functionProtos functionTable) funcPath proto
+      where
+        translateParam :: (Identifier, Syn.Type, Syn.FlexFlag) -> Tyck (Identifier, Sem.Type)
+        translateParam (paramName, ty, flex) = do
+            ty' <- if flex then evalTypeWithFlexivity ty True else evalType ty
+            return (paramName, ty')
+
+scanProg :: Syn.Prog -> Tyck ()
+scanProg = flip forM_ scanStmt
 
 exprWithSpan :: Sem.Type -> Sem.ExprKind -> Tyck Sem.Expr
 exprWithSpan exprType exprKind = do
@@ -373,19 +499,36 @@ evalType :: Syn.Type -> Tyck Sem.Type
 evalType (Syn.TypeSpanned s) = evalType (spanValue s)
 evalType (Syn.TypeExpr path args) = do
     args' <- mapM evalType args
-    knownRecords <- State.gets knownRecords
-    mRecord <- liftIO $ H.lookup knownRecords path
-    case mRecord of
-        Just record -> case Sem.recordDefaultCap record of
-            Value -> return $ Sem.TypeRecord path args'
-            Shared -> return $ Sem.TypeRc (Sem.TypeRecord path args') Shared
-            Regional -> return $ Sem.TypeRc (Sem.TypeRecord path args') Regional
-            cap -> do
-                reportError $ "Unsupported capability: " <> T.pack (show cap)
-                return Sem.TypeBottom
+
+    -- Check if it's a generic variable
+    mGeneric <- case path of
+        Path name [] -> do
+            genericMap <- State.gets genericNameMap
+            return $ HashMap.lookup name genericMap
+        _ -> return Nothing
+
+    case mGeneric of
+        Just gid -> do
+            unless (null args) $ do
+                reportError $
+                    "Generic type "
+                        <> unIdentifier (pathBasename path)
+                        <> " cannot have type arguments"
+            return $ Sem.TypeGeneric gid
         Nothing -> do
-            reportError $ "Unknown record: " <> T.pack (show path)
-            return Sem.TypeBottom
+            knownRecords <- State.gets knownRecords
+            mRecord <- liftIO $ H.lookup knownRecords path
+            case mRecord of
+                Just record -> case Sem.recordDefaultCap record of
+                    Value -> return $ Sem.TypeRecord path args'
+                    Shared -> return $ Sem.TypeRc (Sem.TypeRecord path args') Shared
+                    Regional -> return $ Sem.TypeRc (Sem.TypeRecord path args') Regional
+                    cap -> do
+                        reportError $ "Unsupported capability: " <> T.pack (show cap)
+                        return Sem.TypeBottom
+                Nothing -> do
+                    reportError $ "Unknown type: " <> T.pack (show path)
+                    return Sem.TypeBottom
 evalType (Syn.TypeIntegral (Syn.Signed n)) = return $ Sem.TypeIntegral (Sem.Signed n)
 evalType (Syn.TypeIntegral (Syn.Unsigned n)) = return $ Sem.TypeIntegral (Sem.Unsigned n)
 evalType (Syn.TypeFP (Syn.IEEEFloat n)) = return $ Sem.TypeFP (Sem.IEEEFloat n)

@@ -18,11 +18,40 @@ import Reussir.Core.Types.Record qualified as Sem
 import Reussir.Core.Types.Translation
 import Reussir.Core.Types.Type qualified as Sem
 
+import Effectful.Prim.IORef.Strict (writeIORef')
 import Reussir.Core.Function (getFunctionProto)
-import Reussir.Core.Types.Function (FunctionProto (..))
+import Reussir.Core.Types.Function (FunctionProto (..), FunctionTable (..))
 import Reussir.Parser.Types.Expr qualified as Syn
 import Reussir.Parser.Types.Lexer (Path (..), WithSpan (..), pathBasename, pathSegments, unIdentifier)
+import Reussir.Parser.Types.Stmt qualified as Stmt
 import Reussir.Parser.Types.Type qualified as Syn
+
+checkFuncType :: Stmt.Function -> Tyck Sem.Expr
+checkFuncType func = do
+    let name = Stmt.funcName func
+    let path = Path name []
+    funcTable <- State.gets functions
+    mProto <- liftIO $ H.lookup (functionProtos funcTable) path
+    case mProto of
+        Nothing -> do
+            reportError $ "Function not found in table: " <> unIdentifier name
+            exprWithSpan Sem.TypeBottom Sem.Poison
+        Just proto -> do
+            let generics = funcGenerics proto
+            withGenericContext generics $ do
+                let params = funcParams proto
+                withParams params $ do
+                    -- this is so sketchy....
+                    case Stmt.funcBody func of
+                        Just body -> do
+                            wellTyped <- checkType body (funcReturnType proto)
+                            writeIORef' (funcBody proto) (Just wellTyped)
+                            return wellTyped
+                        Nothing -> exprWithSpan (funcReturnType proto) (Sem.Poison)
+  where
+    withParams [] action = action
+    withParams ((pName, ty) : ps) action =
+        withVariable pName Nothing ty $ \_ -> withParams ps action
 
 inferType :: Syn.Expr -> Tyck Sem.Expr
 --       u fresh integral

@@ -144,3 +144,18 @@ test-suite reussir-core-test
         containers,
         megaparsec,
         hashtables
+
+executable reussir-tyck
+    import:           warnings
+    main-is:          Main.hs
+    build-depends:
+        base ^>=4.20.2.0,
+        reussir-core,
+        reussir-parser,
+        reussir-diagnostic,
+        optparse-applicative,
+        text,
+        effectful,
+        megaparsec
+    hs-source-dirs:   app
+    default-language: GHC2024
