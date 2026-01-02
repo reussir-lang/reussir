@@ -519,7 +519,7 @@ inferTypeBinOp op lhs rhs = case convertOp op of
                 rhs' <- checkType rhs lhsTy
                 exprWithSpan lhsTy $ Sem.Arith lhs' arithOp rhs'
             else do
-                reportError "Binary arithmetic operation applied to non-numeric type"
+                reportError $ "Binary arithmetic operation applied to non-numeric type: " <> T.show lhsTy
                 exprWithSpan Sem.TypeBottom Sem.Poison
     inferCmpOp cmpOp = do
         lhs' <- inferType lhs

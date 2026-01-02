@@ -230,8 +230,7 @@ unify ty1 ty2 = do
                 -- check if ty satisfies bounds
                 -- TODO: for now, we simply check if type has Class, this is not enough
                 -- and should be delayed
-                tyClassTable <- State.gets typeClassTable
-                isSatisfy <- exactTypeSatisfyBounds tyClassTable ty bnds
+                isSatisfy <- satisfyBounds ty bnds
                 when isSatisfy $
                     writeIORef' unifState (SolvedUFRoot rnk ty)
                 return isSatisfy
@@ -281,6 +280,10 @@ satisfyBounds ty bnds = do
                     forced <- force tySolved
                     satisfyBounds forced bnds
                 UFNode{} -> error "unreachable: cannot be non-root here"
+        Sem.TypeGeneric gID -> do
+            bounds <- getGenericBound gID
+            dag <- State.gets typeClassDAG
+            subsumeBound dag bounds bnds
         x -> exactTypeSatisfyBounds tyClassTable x bnds
 
 populatePrimitives :: (IOE :> es, Prim :> es) => Sem.TypeClassTable -> ClassDAG -> Eff es ()

@@ -1,0 +1,38 @@
+struct [value] Matrix<T : Num> {
+    m00: T, 
+    m01: T,
+    m10: T, 
+    m11: T
+}
+
+fn matmul<T : Num>(a : Matrix<T>, b : Matrix<T>) -> Matrix<T> {
+    let m00 = a.m00 * b.m00 + a.m01 * b.m10;
+    let m01 = a.m00 * b.m01 + a.m01 * b.m11;
+    let m10 = a.m10 * b.m00 + a.m11 * b.m10;
+    let m11 = a.m10 * b.m01 + a.m11 * b.m11;
+    Matrix<T> { m00 : m00, m01 : m01, m10 : m10, m11 : m11 }
+}
+
+fn fibonacci_logarithmic_impl<T : Integral>(
+    n: T,
+    a: Matrix<T>,
+    b: Matrix<T>
+) -> T {
+    if n == 0 {
+        a.m01
+    } else {
+        if n % 2 == 1 {
+            fibonacci_logarithmic_impl<T>(
+                n / 2,
+                matmul<_>(a, b),
+                matmul<T>(b, b)
+            )
+        } else {
+            fibonacci_logarithmic_impl<_>(
+                n / 2,
+                a,
+                matmul<T>(b, b)
+            )
+        }
+    }
+}
