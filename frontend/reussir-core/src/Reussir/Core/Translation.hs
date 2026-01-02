@@ -616,6 +616,10 @@ wellTypedExpr expr = do
             tyArgs' <- mapM forceAndCheckHoles tyArgs
             args' <- mapM wellTypedExpr args
             return $ Sem.FuncCall target tyArgs' args'
+        Sem.CtorCall path tyArgs variant args -> do
+            tyArgs' <- mapM forceAndCheckHoles tyArgs
+            args' <- mapM wellTypedExpr args
+            return $ Sem.CtorCall path tyArgs' variant args'
         Sem.Poison -> return Sem.Poison
     return $ expr{Sem.exprType = ty', Sem.exprKind = kind'}
 

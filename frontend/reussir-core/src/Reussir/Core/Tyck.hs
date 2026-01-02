@@ -5,7 +5,8 @@ module Reussir.Core.Tyck where
 import Control.Monad (foldM, zipWithM)
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
-import Data.List (elemIndex)
+import Data.List (elemIndex, find)
+import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Effectful (liftIO)
 import Effectful.State.Static.Local qualified as State
@@ -21,6 +22,7 @@ import Reussir.Core.Types.Type qualified as Sem
 import Effectful.Prim.IORef.Strict (writeIORef')
 import Reussir.Core.Function (getFunctionProto)
 import Reussir.Core.Types.Function (FunctionProto (..), FunctionTable (..))
+import Reussir.Parser.Types.Capability qualified as Cap
 import Reussir.Parser.Types.Expr qualified as Syn
 import Reussir.Parser.Types.Lexer (Path (..), WithSpan (..), pathBasename, pathSegments, unIdentifier)
 import Reussir.Parser.Types.Stmt qualified as Stmt
@@ -52,6 +54,11 @@ checkFuncType func = do
     withParams [] action = action
     withParams ((pName, ty) : ps) action =
         withVariable pName Nothing ty $ \_ -> withParams ps action
+
+-- Helper function for convert type args into semantic counterparts
+tyArgOrMetaHole :: Maybe Syn.Type -> Tyck Sem.Type
+tyArgOrMetaHole (Just ty) = evalType ty
+tyArgOrMetaHole Nothing = introduceNewHole Nothing Nothing []
 
 inferType :: Syn.Expr -> Tyck Sem.Expr
 --       u fresh integral
@@ -280,10 +287,6 @@ inferType (Syn.FuncCallExpr (Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallT
             reportError $ "Function not found: " <> T.pack (show path)
             exprWithSpan Sem.TypeBottom Sem.Poison
   where
-    tyArgOrMetaHole :: Maybe Syn.Type -> Tyck Sem.Type
-    tyArgOrMetaHole (Just ty) = evalType ty
-    tyArgOrMetaHole Nothing = introduceNewHole Nothing Nothing []
-
     checkArgsNum :: Int -> Tyck Sem.Expr -> Tyck Sem.Expr
     checkArgsNum expectedNum argAction = do
         if expectedNum /= length argExprs
@@ -314,6 +317,141 @@ inferType (Syn.FuncCallExpr (Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallT
     functionGenericMap proto assignedTypes =
         let genericIDs = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
          in IntMap.fromList $ zip genericIDs assignedTypes
+-- Ctor call:
+--   C |- record R, default-cap R = value, R : (T1, T2, ..., Tn), C |- ei -> Ti
+--  ────────────────────────────────────────────────────────────────────────────
+--               C |- R <- R(e1, e2, ..., en)
+-- Similarly for shared capability, we have
+--                   .....
+-- ────────────────────────────────────────────
+--    C |- Rc[shared] R <- R(e1, e2, ..., en)
+-- For now, we do not support regional capability.
+inferType
+    ( Syn.CtorCallExpr
+            Syn.CtorCall
+                { Syn.ctorArgs = ctorArgs
+                , Syn.ctorName = ctorCallTarget
+                , Syn.ctorTyArgs = ctorTyArgs
+                , Syn.ctorVariant = ctorVariant
+                }
+        ) = do
+        records <- State.gets knownRecords
+        mRecord <- liftIO $ H.lookup records ctorCallTarget
+        case mRecord of
+            Nothing -> do
+                reportError $ "Record not found: " <> T.pack (show ctorCallTarget)
+                exprWithSpan Sem.TypeBottom Sem.Poison
+            Just record -> do
+                tyArgs' <- mapM tyArgOrMetaHole ctorTyArgs
+                let numGenerics = length (Sem.recordTyParams record)
+                checkTypeArgsNum numGenerics $ do
+                    let genericMap = recordGenericMap record tyArgs'
+                    -- Find variant index if target variant is specified
+                    -- Check if the ctor call style fulfills the variant/compound style in the same time
+                    (fields, variantIdx) <- case (Sem.recordFields record, ctorVariant) of
+                        (Sem.Named fs, Nothing) -> return (map (\(n, t, f) -> (Just n, t, f)) fs, Nothing)
+                        (Sem.Unnamed fs, Nothing) -> return (map (\(t, f) -> (Nothing, t, f)) fs, Nothing)
+                        (Sem.Variants vs, Just vName) -> case elemIndex vName (map fst vs) of
+                            Just idx -> let (_, ts) = vs !! idx in return (map (\t -> (Nothing, t, False)) ts, Just idx)
+                            Nothing -> do
+                                reportError $ "Variant not found: " <> unIdentifier vName
+                                return ([], Nothing)
+                        (Sem.Variants _, Nothing) -> do
+                            reportError "Expected variant for enum type"
+                            return ([], Nothing)
+                        (_, Just _) -> do
+                            reportError "Unexpected variant for non-enum type"
+                            return ([], Nothing)
+
+                    let expectedNumParams = length fields
+                    checkArgsNum expectedNumParams $ do
+                        -- Reconstruct an ordered list of syntatic expressions in the same order as required in the record
+                        orderedArgsExprs <-
+                            if isJust ctorVariant || case Sem.recordFields record of Sem.Unnamed _ -> True; _ -> False
+                                then return $ map (Just . snd) ctorArgs
+                                else do
+                                    let hasNamedArgs = any (isJust . fst) ctorArgs
+                                    if hasNamedArgs
+                                        then
+                                            mapM
+                                                ( \(mName, _, _) -> case mName of
+                                                    Just name -> case find (\(aName, _) -> aName == Just name) ctorArgs of
+                                                        Just (_, expr) -> return $ Just expr
+                                                        Nothing -> do
+                                                            reportError $ "Missing argument for field: " <> unIdentifier name
+                                                            pure Nothing
+                                                    Nothing -> error "Named field has no name?"
+                                                )
+                                                fields
+                                        else return $ map (Just . snd) ctorArgs
+                        argExprs' <-
+                            zipWithM
+                                ( \expr (_, ty, flag) -> do
+                                    -- TODO: this is wrong.
+                                    let ty' = substituteTypeParams ty genericMap
+                                    let expectedTy = case (flag, ty') of
+                                            (True, Sem.TypeRc innerTy Cap.Regional) ->
+                                                Sem.TypeRc innerTy Cap.Flex
+                                            (True, _) -> error "internal error: should not reach here"
+                                            (False, _) -> ty'
+                                    case expr of
+                                        Just expr' -> checkType expr' expectedTy
+                                        Nothing -> do
+                                            exprWithSpan Sem.TypeBottom Sem.Poison
+                                )
+                                orderedArgsExprs
+                                fields
+
+                        let recordTy = Sem.TypeRecord ctorCallTarget tyArgs'
+                        let ctorCall =
+                                Sem.CtorCall
+                                    { Sem.ctorCallTarget = ctorCallTarget
+                                    , Sem.ctorCallTyArgs = tyArgs'
+                                    , Sem.ctorCallVariant = variantIdx
+                                    , Sem.ctorCallArgs = argExprs'
+                                    }
+
+                        let defaultCap = Sem.recordDefaultCap record
+
+                        if defaultCap == Cap.Regional
+                            then error "Regional capability not supported yet"
+                            else
+                                if defaultCap == Cap.Value
+                                    then exprWithSpan recordTy ctorCall
+                                    else do
+                                        innerExpr <- exprWithSpan recordTy ctorCall
+                                        exprWithSpan (Sem.TypeRc recordTy defaultCap) (Sem.RcWrap innerExpr defaultCap)
+      where
+        recordGenericMap :: Sem.Record -> [Sem.Type] -> IntMap.IntMap Sem.Type
+        recordGenericMap record assignedTypes =
+            let genericIDs = map (\(_, GenericID gid) -> fromIntegral gid) (Sem.recordTyParams record)
+             in IntMap.fromList $ zip genericIDs assignedTypes
+        checkArgsNum :: Int -> Tyck Sem.Expr -> Tyck Sem.Expr
+        checkArgsNum expectedNum argAction = do
+            if expectedNum /= length ctorArgs
+                then do
+                    reportError $
+                        "Record "
+                            <> T.pack (show ctorCallTarget)
+                            <> " expects "
+                            <> T.pack (show expectedNum)
+                            <> " arguments, but got "
+                            <> T.pack (show (length ctorArgs))
+                    exprWithSpan Sem.TypeBottom Sem.Poison
+                else argAction
+        checkTypeArgsNum :: Int -> Tyck Sem.Expr -> Tyck Sem.Expr
+        checkTypeArgsNum expectedNum paramAction = do
+            if expectedNum /= length ctorTyArgs
+                then do
+                    reportError $
+                        "Record "
+                            <> T.pack (show ctorCallTarget)
+                            <> " expects "
+                            <> T.pack (show expectedNum)
+                            <> " type arguments, but got "
+                            <> T.pack (show (length ctorTyArgs))
+                    exprWithSpan Sem.TypeBottom Sem.Poison
+                else paramAction
 inferType (Syn.SpannedExpr (WithSpan subExpr start end)) = do
     oldSpan <- currentSpan <$> State.get
     State.modify $ \st -> st{currentSpan = Just (start, end)}

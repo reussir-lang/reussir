@@ -110,6 +110,11 @@ instance PrettyColored Expr where
                     prettyColored path
                         <> (if null tyArgs then mempty else angles (commaSep (map prettyColored tyArgs)))
                         <> parens (commaSep (map prettyColored args))
+                CtorCall path tyArgs variant args ->
+                    prettyColored path
+                        <> (if null tyArgs then mempty else angles (commaSep (map prettyColored tyArgs)))
+                        <> (case variant of Nothing -> mempty; Just v -> "::#" <> pretty v)
+                        <> parens (commaSep (map prettyColored args))
                 Poison -> keyword "poison"
          in kindDoc <+> comment (":" <+> prettyColored (exprType expr))
 

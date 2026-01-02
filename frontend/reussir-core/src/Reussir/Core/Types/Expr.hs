@@ -29,7 +29,7 @@ data ExprKind
     | Cast Expr Type
     | ScfIfExpr Expr Expr Expr
     | Var VarID
-    | RcWrap Expr Capability
+    | RcWrap Expr Capability -- TODO: add regional token
     | ProjChain Expr [Int]
     | Let
         { letVarSpan :: Maybe (Int64, Int64)
@@ -44,6 +44,12 @@ data ExprKind
         , funcCallArgs :: [Expr]
         }
     | Poison
+    | CtorCall
+        { ctorCallTarget :: Path
+        , ctorCallTyArgs :: [Type]
+        , ctorCallVariant :: Maybe Int
+        , ctorCallArgs :: [Expr]
+        }
     deriving (Show, Eq)
 
 data Expr = Expr
