@@ -387,7 +387,6 @@ inferType
                         argExprs' <-
                             zipWithM
                                 ( \expr (_, ty, flag) -> do
-                                    -- TODO: this is wrong.
                                     let ty' = substituteTypeParams ty genericMap
                                     let expectedTy = case (flag, ty') of
                                             (True, Sem.TypeRc innerTy Cap.Regional) ->
