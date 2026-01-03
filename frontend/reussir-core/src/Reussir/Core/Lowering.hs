@@ -62,7 +62,7 @@ manglePath :: Path -> T.Text
 manglePath (Path name components) =
     T.intercalate "$$" (map unIdentifier components ++ [unIdentifier name])
 
--- TODO: appearantly not correct, need to develop a mangle scheme
+-- TODO: apparantly not correct, need to develop a mangle scheme
 manglePathWithTyArgs :: (HasCallStack) => Path -> [Sem.Type] -> Lowering IR.Symbol
 manglePathWithTyArgs path tyArgs = do
     instantiatedArgs <- mapM canonicalType tyArgs
@@ -129,7 +129,7 @@ lookupLocation (start, end) = do
                             ++ show end
                 Just (a, b, c, d) -> pure $ Just $ IR.FileLineColRange (T.pack path) a b c d
 
--- span to localtion
+-- span to location
 withLocation :: IR.Instr -> Maybe (Int64, Int64) -> Lowering IR.Instr
 withLocation instr Nothing = pure instr
 withLocation instr (Just locSpan) = do
@@ -468,10 +468,10 @@ lowerExprInBlock _ _ _ = error "Not yet implemented"
 -- 1. set generic assignment to the lowering state
 -- 2. create function name with converted types using manglePathWithTyArgs
 -- 3. if the function has no body, this is an external declaration
---    it should have avaibale-externally linkage, default llvm visibility
+--    it should have available-externally linkage, default llvm visibility
 --    and private mlir visibility
 -- 4. otherwise, the function is defined in this module. For now we always set
---    external linkage, default llvm visibility and public mlir visibility
+--    weak_odr linkage, default llvm visibility and public mlir visibility
 -- 5. translate the function span via repository lookup
 -- 6. If the function body is provided, lower the body into a block:
 --    - the block arguments are function params

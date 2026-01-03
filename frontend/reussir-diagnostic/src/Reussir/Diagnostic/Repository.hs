@@ -52,7 +52,7 @@ lookupRepositoryAsRange ::
     (FilePath, Int64, Int64) ->
     Maybe (Int64, Int64, Int64, Int64)
 lookupRepositoryAsRange repo (path, s, e) = do
-    lines' <- Just $ lookupRepository repo (path, s, e)
+    let lines' = lookupRepository repo (path, s, e)
     case lines' of
         [] -> Nothing
         x : xs -> do
