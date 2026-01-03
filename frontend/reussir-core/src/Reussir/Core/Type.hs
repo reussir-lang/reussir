@@ -112,6 +112,14 @@ isFPType :: Type -> Bool
 isFPType (TypeFP _) = True
 isFPType _ = False
 
+isSignedIntegral :: Type -> Bool
+isSignedIntegral (TypeIntegral (Signed _)) = True
+isSignedIntegral _ = False
+
+isUnsignedIntegral :: Type -> Bool
+isUnsignedIntegral (TypeIntegral (Unsigned _)) = True
+isUnsignedIntegral _ = False
+
 containsGeneric :: Type -> GenericID -> Bool
 containsGeneric (TypeRecord _ args) gid = any (`containsGeneric` gid) args
 containsGeneric (TypeClosure args ret) gid = any (`containsGeneric` gid) args || containsGeneric ret gid

@@ -67,6 +67,7 @@ library
         Reussir.Codegen.Intrinsics.Arith
         Reussir.Codegen.Value
         Reussir.Codegen.Type
+        Reussir.Codegen.Type.Data
         Reussir.Codegen.Type.Record
         Reussir.Codegen.Location
         Reussir.Codegen.PolymorphicFFI
@@ -79,7 +80,6 @@ library
         Reussir.Codegen.Context.Emission
         Reussir.Codegen.Context.Module
         Reussir.Codegen.Intrinsics.Math
-        Reussir.Codegen.Type.Data
         Reussir.Codegen.Type.Emission
 
     -- LANGUAGE extensions used by modules in this package.

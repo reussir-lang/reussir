@@ -3,6 +3,7 @@ module Reussir.Diagnostic.Repository (
     addDummyFile,
     createRepository,
     lookupRepository,
+    lookupRepositoryAsRange,
 ) where
 
 import Data.Function ((&))
@@ -13,7 +14,7 @@ import Data.Text.Lazy qualified as LazyText
 import Data.Text.Lazy.IO qualified as LazyTextIO
 import Data.Traversable (forM)
 import Effectful (Eff, IOE, liftIO, (:>))
-import Reussir.Diagnostic.LineCache (LineCache, SelectedLine, fromFile, selectLines)
+import Reussir.Diagnostic.LineCache (LineCache, SelectedLine (lineColEnd, lineColStart, lineNumber), fromFile, selectLines)
 
 data File = File
     { filePath :: FilePath
@@ -45,3 +46,20 @@ lookupRepository ::
 lookupRepository (Repository table) (path, s, e) =
     LazyHM.lookup path table
         & maybe [] (\f -> selectLines (fileLineCache f) s e)
+
+lookupRepositoryAsRange ::
+    Repository ->
+    (FilePath, Int64, Int64) ->
+    Maybe (Int64, Int64, Int64, Int64)
+lookupRepositoryAsRange repo (path, s, e) = do
+    lines' <- Just $ lookupRepository repo (path, s, e)
+    case lines' of
+        [] -> Nothing
+        x : xs -> do
+            let lastLine = last xs
+            Just
+                ( lineNumber x
+                , lineColStart x
+                , lineNumber lastLine
+                , lineColEnd lastLine
+                )

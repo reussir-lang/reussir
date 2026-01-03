@@ -72,12 +72,14 @@ library
         Reussir.Core.Types.Type
         Reussir.Core.Types.Expr
         Reussir.Core.Types.String
+        Reussir.Core.Types.Lowering
         Reussir.Core.Tyck
         Reussir.Core.Types.Record
         Reussir.Core.Types.Translation
         Reussir.Core.Translation
         Reussir.Core.Function
         Reussir.Core.Pretty
+        Reussir.Core.Lowering
 
     -- Modules included in this library but not exported.
     -- other-modules:
