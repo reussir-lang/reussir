@@ -7,7 +7,6 @@ import Data.Foldable (Foldable (..))
 import Data.HashTable.IO qualified as H
 import Data.Int (Int64, Int8)
 import Data.IntMap.Strict qualified as IntMap
-import Data.Maybe (fromJust)
 import Data.Scientific (Scientific)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
@@ -120,7 +119,14 @@ lookupLocation (start, end) = do
         Just path -> do
             repo <- State.gets srcRepository
             case lookupRepositoryAsRange repo (path, start, end) of
-                Nothing -> error "Failed to lookup source location"
+                Nothing ->
+                    error $
+                        "Failed to lookup source location for path "
+                            ++ show path
+                            ++ " in byte range "
+                            ++ show start
+                            ++ "-"
+                            ++ show end
                 Just (a, b, c, d) -> pure $ Just $ IR.FileLineColRange (T.pack path) a b c d
 
 -- span to localtion
@@ -617,8 +623,10 @@ translateModule gSln = do
                 State.modify $ \s -> s{currentModule = updatedMod}
             else do
                 assignments <- forM (funcGenerics proto) $ \(_, gid) -> do
-                    assignment <- fromJust <$> liftIO (H.lookup gSln gid)
-                    return assignment
+                    mAssignment <- liftIO (H.lookup gSln gid)
+                    case mAssignment of
+                        Just assignment -> return assignment
+                        Nothing -> error $ "Generic solution not found for generic ID: " ++ show gid
                 let gids = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
                 let crossProd = sequence assignments
                 forM_ crossProd $ \assignment -> do
@@ -642,8 +650,10 @@ translateModule gSln = do
                 State.modify $ \s -> s{currentModule = updatedMod}
             else do
                 assignments <- forM (recordTyParams record) $ \(_, gid) -> do
-                    assignment <- fromJust <$> liftIO (H.lookup gSln gid)
-                    return assignment
+                    mAssignment <- liftIO (H.lookup gSln gid)
+                    case mAssignment of
+                        Just assignment -> return assignment
+                        Nothing -> error $ "Generic solution not found for generic ID: " ++ show gid
                 let gids = map (\(_, GenericID gid) -> fromIntegral gid) (recordTyParams record)
                 let crossProd = sequence assignments
                 forM_ crossProd $ \assignment -> do
