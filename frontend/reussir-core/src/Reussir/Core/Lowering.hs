@@ -3,23 +3,33 @@
 module Reussir.Core.Lowering where
 
 import Data.Foldable (Foldable (..))
+import Data.HashTable.IO qualified as H
 import Data.Int (Int64, Int8)
 import Data.IntMap.Strict qualified as IntMap
+import Data.Maybe (fromJust)
 import Data.Scientific (Scientific)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
+import Effectful (liftIO)
+import Effectful.Prim.IORef.Strict (readIORef')
 import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen.Context.Symbol qualified as IR
 import Reussir.Codegen.IR qualified as IR
 import Reussir.Codegen.Intrinsics qualified as IR
 import Reussir.Codegen.Intrinsics.Arith qualified as Arith
 import Reussir.Codegen.Location qualified as IR
+import Reussir.Codegen.Type (Capability)
 import Reussir.Codegen.Type qualified as IR
 import Reussir.Codegen.Type.Data qualified as IRType
 import Reussir.Codegen.Value (Value (Value))
 import Reussir.Codegen.Value qualified as IR
 import Reussir.Core.Types.Expr qualified as Sem
-import Reussir.Core.Types.Lowering (Lowering, LoweringState (currentBlock, moduleFile, srcRepository, valueCounter, varMap))
+import Reussir.Core.Types.Function (FunctionProto (..))
+import Reussir.Core.Types.Function qualified as Sem
+import Reussir.Core.Types.GenericID (GenericID (..))
+import Reussir.Core.Types.Lowering (GenericAssignment, Lowering, LoweringState (currentBlock, moduleFile, srcRepository, translationState, valueCounter, varMap), genericAssignment)
+import Reussir.Core.Types.Record (Record (recordFields), RecordFields (Named, Unnamed))
+import Reussir.Core.Types.Translation (TranslationState (knownRecords))
 import Reussir.Core.Types.Type qualified as Sem
 import Reussir.Diagnostic.Repository (lookupRepositoryAsRange)
 import Reussir.Parser.Types.Lexer (Identifier (unIdentifier), Path (..))
@@ -30,8 +40,8 @@ manglePath (Path name components) =
     T.intercalate "$$" (map unIdentifier components ++ [unIdentifier name])
 
 -- TODO: appearantly not correct, need to develop a mangle scheme
-mangleRecord :: Path -> [Sem.Type] -> IR.Symbol
-mangleRecord path tyArgs =
+manglePathWithTyArgs :: Path -> [Sem.Type] -> IR.Symbol
+manglePathWithTyArgs path tyArgs =
     let base = manglePath path
         args = T.intercalate "$" (map T.show tyArgs)
      in IR.verifiedSymbol $
@@ -52,8 +62,12 @@ convertType (Sem.TypeClosure args ret) = do
     ret' <- convertType ret
     pure $ IR.TypeClosure $ IR.Closure args' ret'
 convertType (Sem.TypeRecord path tyArgs) = do
-    let symbol = mangleRecord path tyArgs
+    let symbol = manglePathWithTyArgs path tyArgs
     pure $ IR.TypeExpr symbol
+convertType (Sem.TypeGeneric (GenericID gid)) = do
+    ty <- IntMap.lookup (fromIntegral gid) <$> State.gets genericAssignment
+    let ty' = fromJust ty -- Should not be Nothing in this case if the program is well typed
+    convertType ty'
 convertType _ = error "Not yet implemented"
 
 -- TODO: fix i128, it is not parsed in frontend anyway
@@ -71,19 +85,25 @@ convertFloat 32 = pure $ IR.TypePrim (IR.PrimFloat IR.PrimFloat32)
 convertFloat 64 = pure $ IR.TypePrim (IR.PrimFloat IR.PrimFloat64)
 convertFloat w = error $ "Unsupported float width: " ++ show w
 
+lookupLocation :: (Int64, Int64) -> Lowering (Maybe IR.Location)
+lookupLocation (start, end) = do
+    modPath <- State.gets moduleFile
+    case modPath of
+        Nothing -> pure Nothing
+        Just path -> do
+            repo <- State.gets srcRepository
+            case lookupRepositoryAsRange repo (path, start, end) of
+                Nothing -> error "Failed to lookup source location"
+                Just (a, b, c, d) -> pure $ Just $ IR.FileLineColRange (T.pack path) a b c d
+
 -- span to localtion
 withLocation :: IR.Instr -> Maybe (Int64, Int64) -> Lowering IR.Instr
 withLocation instr Nothing = pure instr
-withLocation instr (Just (start, end)) = do
-    modPath <- State.gets moduleFile
-    case modPath of
+withLocation instr (Just locSpan) = do
+    loc <- lookupLocation locSpan
+    case loc of
         Nothing -> pure instr
-        Just path -> do
-            repo <- State.gets srcRepository
-            (a, b, c, d) <- case lookupRepositoryAsRange repo (path, start, end) of
-                Nothing -> error "Failed to lookup source location"
-                Just r -> pure r
-            pure $ flip IR.WithLoc instr $ IR.FileLineColRange (T.pack path) a b c d
+        Just l -> pure $ IR.WithLoc l instr
 
 addIRInstr :: IR.Instr -> Maybe (Int64, Int64) -> Lowering ()
 addIRInstr instr mSpan = do
@@ -102,6 +122,10 @@ createConstant ty val mSpan = do
     let instr = IR.ICall $ IR.IntrinsicCall (IR.Arith (Arith.Constant val)) [] [(value', ty)]
     addIRInstr instr mSpan
     pure value'
+
+-- TODO: handle atomicity
+mkRefType :: IR.Type -> Capability -> IR.Type
+mkRefType ty cap = IR.TypeRef $ IR.Ref ty IR.NonAtomic cap
 
 lowerExpr :: Sem.Expr -> Lowering IR.Value
 lowerExpr (Sem.Expr kind span' ty) = lowerExprInBlock kind ty span'
@@ -318,4 +342,144 @@ lowerExprInBlock (Sem.ScfIfExpr condExpr thenExpr elseExpr) ty exprSpan = do
                 $ Just (resultVal, returnTy)
     addIRInstr ifInstr exprSpan
     pure resultVal
+lowerExprInBlock Sem.Poison ty exprSpan = do
+    ty' <- convertType ty
+    value <- nextValue
+    let intrinsicCall = IR.IntrinsicCall IR.UBPoison [] [(value, ty')]
+    let instr = IR.ICall intrinsicCall
+    addIRInstr instr exprSpan
+    pure value
+-- TODO: erase unit and allow zero return funcall
+lowerExprInBlock (Sem.FuncCall callee tyArgs args) ty exprSpan = do
+    calleeSymbol <- pure $ manglePathWithTyArgs callee tyArgs
+    argVals <- mapM lowerExpr args
+    argTys <- mapM (convertType . Sem.exprType) args
+    let typedArgs = zip argVals argTys
+    retTy <- convertType ty
+    retVal <- nextValue
+    let instr = IR.FCall $ IR.FuncCall calleeSymbol typedArgs $ Just (retVal, retTy)
+    addIRInstr instr exprSpan
+    pure retVal
+-- Compound CtorCall
+-- No need to handle ty args in this level as the ty already encode enough information
+lowerExprInBlock (Sem.CtorCall _ _ Nothing args) ty exprSpan = do
+    argVals <- mapM lowerExpr args
+    argTys <- mapM (convertType . Sem.exprType) args
+    let typedArgs = zip argVals argTys
+    retTy <- convertType ty
+    retVal <- nextValue
+    let instr = IR.CompoundCreate typedArgs (retVal, retTy)
+    addIRInstr instr exprSpan
+    pure retVal
+-- Variant CtorCall: TODO, need to reword the translation from upper level
+lowerExprInBlock (Sem.CtorCall _ _ (Just _) _) _ _ =
+    error "TODO: need to rework the codegen representation"
+-- Projection
+-- TODO: handle chain of projection
+lowerExprInBlock (Sem.ProjChain _ []) _ _ =
+    error "empty project chain?"
+lowerExprInBlock (Sem.ProjChain baseExpr [index]) _ exprSpan = do
+    baseExpr' <- lowerExpr baseExpr
+    let baseExprTy = Sem.exprType baseExpr
+    baseExprTy' <- convertType baseExprTy
+    let refTy = mkRefType baseExprTy' IR.Unspecified
+    spilledVal <- nextValue
+    let spilledInstr = IR.RefSpill (baseExpr', baseExprTy') (spilledVal, refTy)
+    addIRInstr spilledInstr exprSpan
+    case baseExprTy of
+        Sem.TypeRecord recordName _ -> do
+            recordTable <- State.gets (knownRecords . translationState)
+            record <- liftIO $ H.lookup recordTable recordName
+            case record of
+                Nothing -> error $ "Record type not found during lowering: " ++ show recordName
+                Just record' -> do
+                    let fieldTy = lookupFieldType $ recordFields record'
+                    fieldTy' <- convertType fieldTy
+                    let fieldRefTy = mkRefType fieldTy' IR.Unspecified
+                    projVal <- nextValue
+                    let projInstr = IR.RefProject (spilledVal, refTy) (fromIntegral index) (projVal, fieldRefTy)
+                    addIRInstr projInstr exprSpan
+                    loadVal <- nextValue
+                    let loadInstr = IR.RefLoad (projVal, fieldTy') (loadVal, fieldTy')
+                    addIRInstr loadInstr exprSpan
+                    pure loadVal
+        _ -> error "non-value record projection is not handled yet"
+  where
+    lookupFieldType :: RecordFields -> Sem.Type
+    lookupFieldType (Named fields) =
+        let (_, ty', _) = fields !! (fromIntegral index) in ty'
+    lookupFieldType (Unnamed fields) =
+        fst $ fields !! (fromIntegral index)
+    lookupFieldType _ = error "cannot project out of variant"
 lowerExprInBlock _ _ _ = error "Not yet implemented"
+
+-- Translate a function into backend function under generic assignment
+-- 1. set generic assignment to the lowering state and empty the variables
+-- 2. create function name with converted types using manglePathWithTyArgs
+-- 3. if the function has no body, this is an external declaration
+--    it should have avaibale-externally linkage, default llvm visibility
+--    and private mlir visibility
+-- 4. otherwise, the function is defined in this module. For now we always set
+--    external linkage, default llvm visibility and public mlir visibility
+-- 5. translate the function span via repository lookup
+-- 6. If the function body is provided, lower the body into a block:
+--    - the block arguments are function params
+--    - introduce function params as variables in the lowering state
+--    - lower the function body expression
+--    - finalize the block with a return instruction
+translateFunction :: Path -> FunctionProto -> (Int64, Int64) -> GenericAssignment -> Lowering IR.Function
+translateFunction path proto locSpan assignment = do
+    State.modify $ \s -> s{genericAssignment = assignment, varMap = IntMap.empty}
+
+    let generics = Sem.funcGenerics proto
+    let tyArgs =
+            map
+                ( \(_, GenericID gid) ->
+                    case IntMap.lookup (fromIntegral gid) assignment of
+                        Just ty -> ty
+                        Nothing -> error $ "Generic ID not found in assignment: " ++ show gid
+                )
+                generics
+    let symbol = manglePathWithTyArgs path tyArgs
+
+    mBody <- readIORef' (Sem.funcBody proto)
+    let (linkage, llvmVis, mlirVis) = case mBody of
+            Nothing -> (IR.LnkAvailableExternally, IR.LLVMVisDefault, IR.MLIRVisPrivate)
+            Just _ -> (IR.LnkExternal, IR.LLVMVisDefault, IR.MLIRVisPublic)
+
+    loc <- lookupLocation locSpan
+    retTy <- convertType (Sem.funcReturnType proto)
+
+    (bodyBlock, args) <- case mBody of
+        Nothing -> pure (Nothing, [])
+        Just bodyExpr -> do
+            let params = Sem.funcParams proto
+            paramValues <-
+                mapM
+                    ( \(_, ty) -> do
+                        irTy <- convertType ty
+                        val <- nextValue
+                        pure (val, irTy)
+                    )
+                    params
+
+            let varMapUpdates = zip [0 ..] paramValues
+            State.modify $ \s -> s{varMap = IntMap.fromList varMapUpdates}
+
+            block <- lowerExprAsBlock bodyExpr paramValues $ \retVal -> do
+                let retInstr = IR.Return (Just (retVal, retTy))
+                addIRInstr retInstr (Sem.exprSpan bodyExpr)
+
+            pure (Just block, paramValues)
+
+    pure $
+        IR.Function
+            { IR.funcLinkage = linkage
+            , IR.funcLLVMVisibility = llvmVis
+            , IR.funcMLIRVisibility = mlirVis
+            , IR.funcBody = bodyBlock
+            , IR.funcArgs = args
+            , IR.funcLoc = loc
+            , IR.funcResult = retTy
+            , IR.funcSymbol = symbol
+            }
