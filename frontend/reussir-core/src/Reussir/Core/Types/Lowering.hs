@@ -28,8 +28,8 @@ data LoweringState = LoweringState
     , valueCounter :: Int64
     , varMap :: IntMap.IntMap TypedValue
     , translationState :: TranslationState
-    , currentModule :: IR.Module
     , genericAssignment :: GenericAssignment
+    , currentModule :: IR.Module
     }
 
 type Lowering = Eff '[IOE, Prim, State.State LoweringState]

@@ -218,7 +218,7 @@ testRecordAccess = do
     let recordPath = Path recordName []
     let record =
             Sem.Record
-                { Sem.recordName = recordName
+                { Sem.recordName = Path recordName []
                 , Sem.recordTyParams = []
                 , Sem.recordFields = Sem.Named [("x", Sem.TypeIntegral (Sem.Signed 32), False), ("y", Sem.TypeIntegral (Sem.Signed 32), False)]
                 , Sem.recordKind = Sem.StructKind
@@ -248,7 +248,7 @@ testGenericRecordAccess = do
     let gid = GenericID 0
     let record =
             Sem.Record
-                { Sem.recordName = recordName
+                { Sem.recordName = Path recordName []
                 , Sem.recordTyParams = [("T", gid)]
                 , Sem.recordFields = Sem.Named [("inner", Sem.TypeGeneric gid, False)]
                 , Sem.recordKind = Sem.StructKind

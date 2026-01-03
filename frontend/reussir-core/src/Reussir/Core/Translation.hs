@@ -416,7 +416,7 @@ scanStmt (Syn.RecordStmt record) = do
 
         let semRecord =
                 Sem.Record
-                    { Sem.recordName = name
+                    { Sem.recordName = Path name [] -- TODO: handle module path
                     , Sem.recordTyParams = genericsList
                     , Sem.recordFields = fields
                     , Sem.recordKind = kind
@@ -783,7 +783,7 @@ analyzeGenericFlow = do
     records <- liftIO $ H.toList knownRecords
     forM_ records $ \(_, record) -> analyzeGenericFlowInRecord record
 
-solveAllGenerics :: Tyck (Maybe (H.CuckooHashTable GenericID [Sem.Type]))
+solveAllGenerics :: Tyck (Maybe GenericSolution)
 solveAllGenerics = do
     analyzeGenericFlow
     genericState <- State.gets generics

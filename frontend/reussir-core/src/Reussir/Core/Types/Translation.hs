@@ -49,3 +49,5 @@ data TranslationState = TranslationState
     , functions :: FunctionTable
     , generics :: GenericState
     }
+
+type GenericSolution = H.CuckooHashTable GenericID [Type]

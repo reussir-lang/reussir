@@ -3,7 +3,7 @@ module Reussir.Core.Types.Record where
 import Reussir.Core.Types.GenericID (GenericID)
 import Reussir.Core.Types.Type (Type)
 import Reussir.Parser.Types.Capability (Capability)
-import Reussir.Parser.Types.Lexer (Identifier)
+import Reussir.Parser.Types.Lexer (Identifier, Path)
 import Reussir.Parser.Types.Stmt (Visibility)
 
 type FieldFlag = Bool
@@ -17,7 +17,7 @@ data RecordFields
 data RecordKind = StructKind | EnumKind deriving (Show, Eq)
 
 data Record = Record
-    { recordName :: Identifier
+    { recordName :: Path
     , recordTyParams :: [(Identifier, GenericID)]
     , recordFields :: RecordFields
     , recordKind :: RecordKind

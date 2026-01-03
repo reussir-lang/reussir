@@ -168,3 +168,21 @@ executable reussir-tyck
         prettyprinter-ansi-terminal
     hs-source-dirs:   app
     default-language: GHC2024
+
+executable reussir-compiler
+    import:           warnings
+    main-is:          Compiler.hs
+    build-depends:
+        base ^>=4.20.2.0,
+        reussir-core,
+        reussir-parser,
+        reussir-codegen,
+        reussir-bridge,
+        optparse-applicative,
+        text,
+        effectful,
+        megaparsec,
+        log-effectful,
+        log-base
+    hs-source-dirs:   app
+    default-language: GHC2024

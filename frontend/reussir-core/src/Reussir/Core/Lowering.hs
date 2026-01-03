@@ -2,6 +2,7 @@
 
 module Reussir.Core.Lowering where
 
+import Control.Monad (forM, forM_)
 import Data.Foldable (Foldable (..))
 import Data.HashTable.IO qualified as H
 import Data.Int (Int64, Int8)
@@ -13,7 +14,10 @@ import Data.Text qualified as T
 import Effectful (liftIO)
 import Effectful.Prim.IORef.Strict (readIORef')
 import Effectful.State.Static.Local qualified as State
+import Reussir.Codegen qualified as IR
+import Reussir.Codegen.Context.Symbol (verifiedSymbol)
 import Reussir.Codegen.Context.Symbol qualified as IR
+import Reussir.Codegen.Global qualified as IR
 import Reussir.Codegen.IR qualified as IR
 import Reussir.Codegen.Intrinsics qualified as IR
 import Reussir.Codegen.Intrinsics.Arith qualified as Arith
@@ -21,18 +25,36 @@ import Reussir.Codegen.Location qualified as IR
 import Reussir.Codegen.Type (Capability)
 import Reussir.Codegen.Type qualified as IR
 import Reussir.Codegen.Type.Data qualified as IRType
+import Reussir.Codegen.Type.Record qualified as IRRecord
 import Reussir.Codegen.Value (Value (Value))
 import Reussir.Codegen.Value qualified as IR
+import Reussir.Core.Generic (GenericSolution)
 import Reussir.Core.Types.Expr qualified as Sem
-import Reussir.Core.Types.Function (FunctionProto (..))
+import Reussir.Core.Types.Function (FunctionProto (..), functionProtos)
 import Reussir.Core.Types.Function qualified as Sem
-import Reussir.Core.Types.GenericID (GenericID (..))
-import Reussir.Core.Types.Lowering (GenericAssignment, Lowering, LoweringState (currentBlock, moduleFile, srcRepository, translationState, valueCounter, varMap), genericAssignment)
-import Reussir.Core.Types.Record (Record (recordFields), RecordFields (Named, Unnamed))
-import Reussir.Core.Types.Translation (TranslationState (knownRecords))
+import Reussir.Core.Types.GenericID (GenericID (GenericID))
+import Reussir.Core.Types.Lowering (GenericAssignment, Lowering, LoweringState (..), genericAssignment)
+import Reussir.Core.Types.Record (Record (recordFields), RecordFields (Named, Unnamed), recordTyParams)
+import Reussir.Core.Types.Record qualified as Sem
+import Reussir.Core.Types.String (StringToken, StringUniqifier (StringUniqifier))
+import Reussir.Core.Types.Translation (TranslationState (knownRecords, stringUniqifier), functions)
 import Reussir.Core.Types.Type qualified as Sem
-import Reussir.Diagnostic.Repository (lookupRepositoryAsRange)
+import Reussir.Diagnostic.Repository (Repository, lookupRepositoryAsRange)
+import Reussir.Parser.Types.Capability qualified as SemCap
 import Reussir.Parser.Types.Lexer (Identifier (unIdentifier), Path (..))
+
+createLoweringState :: Repository -> IR.Module -> TranslationState -> LoweringState
+createLoweringState repo mod' transState =
+    LoweringState
+        { currentBlock = Seq.empty
+        , moduleFile = Nothing
+        , srcRepository = repo
+        , valueCounter = 0
+        , varMap = IntMap.empty
+        , translationState = transState
+        , genericAssignment = IntMap.empty
+        , currentModule = mod'
+        }
 
 -- TODO: currently not mangled at all
 manglePath :: Path -> T.Text
@@ -47,7 +69,7 @@ manglePathWithTyArgs path tyArgs =
      in IR.verifiedSymbol $
             if T.null args
                 then base
-                else base <> "$" <> args <> "$"
+                else base <> "$LT" <> args <> "$$GT"
 
 convertType :: Sem.Type -> Lowering IR.Type
 convertType Sem.TypeBool = pure $ IR.TypePrim IR.PrimBool
@@ -66,8 +88,9 @@ convertType (Sem.TypeRecord path tyArgs) = do
     pure $ IR.TypeExpr symbol
 convertType (Sem.TypeGeneric (GenericID gid)) = do
     ty <- IntMap.lookup (fromIntegral gid) <$> State.gets genericAssignment
-    let ty' = fromJust ty -- Should not be Nothing in this case if the program is well typed
-    convertType ty'
+    case ty of
+        Just ty' -> convertType ty'
+        Nothing -> error $ "Unresolved generic type: T" ++ show gid
 convertType _ = error "Not yet implemented"
 
 -- TODO: fix i128, it is not parsed in frontend anyway
@@ -400,7 +423,7 @@ lowerExprInBlock (Sem.ProjChain baseExpr [index]) _ exprSpan = do
                     let projInstr = IR.RefProject (spilledVal, refTy) (fromIntegral index) (projVal, fieldRefTy)
                     addIRInstr projInstr exprSpan
                     loadVal <- nextValue
-                    let loadInstr = IR.RefLoad (projVal, fieldTy') (loadVal, fieldTy')
+                    let loadInstr = IR.RefLoad (projVal, fieldRefTy) (loadVal, fieldTy')
                     addIRInstr loadInstr exprSpan
                     pure loadVal
         _ -> error "non-value record projection is not handled yet"
@@ -414,7 +437,7 @@ lowerExprInBlock (Sem.ProjChain baseExpr [index]) _ exprSpan = do
 lowerExprInBlock _ _ _ = error "Not yet implemented"
 
 -- Translate a function into backend function under generic assignment
--- 1. set generic assignment to the lowering state and empty the variables
+-- 1. set generic assignment to the lowering state
 -- 2. create function name with converted types using manglePathWithTyArgs
 -- 3. if the function has no body, this is an external declaration
 --    it should have avaibale-externally linkage, default llvm visibility
@@ -429,8 +452,7 @@ lowerExprInBlock _ _ _ = error "Not yet implemented"
 --    - finalize the block with a return instruction
 translateFunction :: Path -> FunctionProto -> (Int64, Int64) -> GenericAssignment -> Lowering IR.Function
 translateFunction path proto locSpan assignment = do
-    State.modify $ \s -> s{genericAssignment = assignment, varMap = IntMap.empty}
-
+    State.modify $ \s -> s{genericAssignment = assignment, valueCounter = 0}
     let generics = Sem.funcGenerics proto
     let tyArgs =
             map
@@ -445,7 +467,7 @@ translateFunction path proto locSpan assignment = do
     mBody <- readIORef' (Sem.funcBody proto)
     let (linkage, llvmVis, mlirVis) = case mBody of
             Nothing -> (IR.LnkAvailableExternally, IR.LLVMVisDefault, IR.MLIRVisPrivate)
-            Just _ -> (IR.LnkExternal, IR.LLVMVisDefault, IR.MLIRVisPublic)
+            Just _ -> (IR.LnkWeakODR, IR.LLVMVisDefault, IR.MLIRVisPublic)
 
     loc <- lookupLocation locSpan
     retTy <- convertType (Sem.funcReturnType proto)
@@ -483,3 +505,140 @@ translateFunction path proto locSpan assignment = do
             , IR.funcResult = retTy
             , IR.funcSymbol = symbol
             }
+
+convertCapability :: SemCap.Capability -> IR.Capability
+convertCapability SemCap.Unspecified = IRType.Unspecified
+convertCapability SemCap.Shared = IRType.Shared
+convertCapability SemCap.Value = IRType.Value
+convertCapability SemCap.Flex = IRType.Flex
+convertCapability SemCap.Rigid = IRType.Rigid
+convertCapability SemCap.Field = IRType.Field
+convertCapability SemCap.Regional = IRType.Regional
+
+-- Translate a record into backend record instance under generic assignment
+-- 1. set generic assignment to the lowering state
+-- 2. translate type parameters and use path together with type params to get the symbol
+-- 3. convert record fields to name erased record fields in IR type system
+translateRecord :: Path -> Sem.Record -> GenericAssignment -> Lowering IR.RecordInstance
+translateRecord path record assignment = do
+    State.modify $ \s -> s{genericAssignment = assignment}
+
+    let generics = Sem.recordTyParams record
+    let tyArgs =
+            map
+                ( \(_, GenericID gid) ->
+                    case IntMap.lookup (fromIntegral gid) assignment of
+                        Just ty -> ty
+                        Nothing -> error $ "Generic ID not found in assignment: " ++ show gid
+                )
+                generics
+    let symbol = manglePathWithTyArgs path tyArgs
+
+    let semKind = Sem.recordKind record
+    let irKind = case semKind of
+            Sem.StructKind -> IRRecord.Compound
+            Sem.EnumKind -> IRRecord.Variant
+
+    irFields <- case (semKind, Sem.recordFields record) of
+        (Sem.StructKind, Sem.Named fields) ->
+            mapM
+                ( \(_, ty, mutable) -> do
+                    irTy <- convertType ty
+                    pure $ IRRecord.RecordField irTy mutable
+                )
+                fields
+        (Sem.StructKind, Sem.Unnamed fields) ->
+            mapM
+                ( \(ty, mutable) -> do
+                    irTy <- convertType ty
+                    pure $ IRRecord.RecordField irTy mutable
+                )
+                fields
+        (Sem.EnumKind, Sem.Variants variants) ->
+            mapM
+                ( \(_, tys) -> do
+                    irTy <- case tys of
+                        [] -> pure $ IR.TypePrim IR.PrimUnit
+                        [ty] -> convertType ty
+                        _ -> error "Multiple fields in variant not supported yet"
+                    pure $ IRRecord.RecordField irTy False -- Variants are immutable?
+                )
+                variants
+        _ -> error "Mismatched record kind and fields"
+
+    let irRecord =
+            IRRecord.Record
+                { IRRecord.defaultCapability = convertCapability (Sem.recordDefaultCap record)
+                , IRRecord.fields = irFields
+                , IRRecord.kind = irKind
+                }
+
+    pure $ IR.RecordInstance (symbol, irRecord)
+
+mangleStrToken :: StringToken -> IR.Symbol
+mangleStrToken (x, y) = verifiedSymbol $ T.concat ["str$$", T.show x, "$$", T.show y]
+
+translateModule :: GenericSolution -> Lowering ()
+translateModule gSln = do
+    -- Add function per instantiation
+    functionTable <- State.gets (functionProtos . functions . translationState)
+    functionList <- liftIO $ H.toList functionTable
+    forM_ functionList $ \(path, proto) -> do
+        if null (funcGenerics proto)
+            then do
+                let span' = case Sem.funcSpan proto of
+                        Just s -> s
+                        Nothing -> (0, 0)
+                func <- translateFunction path proto span' IntMap.empty
+                mod' <- State.gets currentModule
+                let updatedMod = mod'{IR.moduleFunctions = func : IR.moduleFunctions mod'}
+                State.modify $ \s -> s{currentModule = updatedMod}
+            else do
+                assignments <- forM (funcGenerics proto) $ \(_, gid) -> do
+                    assignment <- fromJust <$> liftIO (H.lookup gSln gid)
+                    return assignment
+                liftIO $ putStrLn $ "Translating function: " ++ show path ++ " with " ++ show (length assignments) ++ " generic parameters: " ++ show (funcGenerics proto)
+                let gids = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
+                let crossProd = sequence assignments
+                forM_ crossProd $ \assignment -> do
+                    let localAssignment = IntMap.fromList $ zip gids assignment
+                    liftIO $ putStrLn ("  with assignment: " ++ show localAssignment)
+                    let span' = case Sem.funcSpan proto of
+                            Just s -> s
+                            Nothing -> (0, 0)
+                    func <- translateFunction path proto span' localAssignment
+                    mod' <- State.gets currentModule
+                    let updatedMod = mod'{IR.moduleFunctions = func : IR.moduleFunctions mod'}
+                    State.modify $ \s -> s{currentModule = updatedMod}
+    recordTable <- State.gets (knownRecords . translationState)
+    recordList <- liftIO $ H.toList recordTable
+    -- Add record instance per instantiation
+    forM_ recordList $ \(path, record) -> do
+        if null (recordTyParams record)
+            then do
+                recInst <- translateRecord path record IntMap.empty
+                mod' <- State.gets currentModule
+                let updatedMod = mod'{IR.recordInstances = recInst : IR.recordInstances mod'}
+                State.modify $ \s -> s{currentModule = updatedMod}
+            else do
+                assignments <- forM (recordTyParams record) $ \(_, gid) -> do
+                    assignment <- fromJust <$> liftIO (H.lookup gSln gid)
+                    return assignment
+                let gids = map (\(_, GenericID gid) -> fromIntegral gid) (recordTyParams record)
+                let crossProd = sequence assignments
+                forM_ crossProd $ \assignment -> do
+                    let localAssignment = IntMap.fromList $ zip gids assignment
+                    recInst <- translateRecord path record localAssignment
+                    mod' <- State.gets currentModule
+                    let updatedMod = mod'{IR.recordInstances = recInst : IR.recordInstances mod'}
+                    State.modify $ \s -> s{currentModule = updatedMod}
+    -- Add string token
+    StringUniqifier storage <- State.gets (stringUniqifier . translationState)
+    strList <- liftIO $ H.toList storage
+    forM_ strList $ \(fstComponent, strSeq) ->
+        forM_ (zip [0 ..] (toList strSeq)) $ \(sndComponent, strVal) -> do
+            let symbol = mangleStrToken (fstComponent, sndComponent)
+            mod' <- State.gets currentModule
+            let global = IR.GlobalString symbol strVal
+            let updatedMod = mod'{IR.globals = global : IR.globals mod'}
+            State.modify $ \s -> s{currentModule = updatedMod}
