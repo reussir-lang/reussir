@@ -56,6 +56,12 @@ import System.Console.ANSI.Types qualified as ANSI
 
 type Tyck = Eff '[IOE, Prim, State.State TranslationState]
 
+clearLocals :: Tyck ()
+clearLocals = do
+    clearHoles
+    emptyMap <- liftIO H.new
+    State.modify $ \s -> s{variableStates = mempty, variableNameMap = emptyMap}
+
 strToToken :: (IOE :> es) => T.Text -> StringUniqifier -> Eff es StringToken
 strToToken str (StringUniqifier table) = do
     let h = hash (XXH3 str)

@@ -30,6 +30,8 @@ import Reussir.Parser.Types.Type qualified as Syn
 
 checkFuncType :: Stmt.Function -> Tyck Sem.Expr
 checkFuncType func = do
+    clearLocals
+    clearHoles
     let name = Stmt.funcName func
     let path = Path name []
     funcTable <- State.gets functions
