@@ -56,7 +56,7 @@ lookupRepositoryAsRange repo (path, s, e) = do
     case lines' of
         [] -> Nothing
         x : xs -> do
-            let lastLine = last xs
+            let lastLine = last (x : xs)
             Just
                 ( lineNumber x
                 , lineColStart x
