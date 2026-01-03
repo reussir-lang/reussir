@@ -360,6 +360,8 @@ When exploring edge (u -> v):
     * If current edge is ctor, it is a growing cycle.
     * Else, if latestCtorDepth > vDepth, then latestCtorEdge lies within the cycle segment.
 -}
+type Cycle = (GenericID, GenericID, Maybe Type)
+
 detectGrowingCycles ::
     (IOE :> es, Prim :> es) =>
     GenericState ->
@@ -448,15 +450,19 @@ This is why the solver returns *lists* of types: it explicitly enumerates altern
 Caveat:
   Instantiation may be large (cartesian product). That's intended for codegen enumeration.
 -}
+type GenericSolution = H.CuckooHashTable GenericID [Type]
+
 solveGeneric ::
     (IOE :> es, Prim :> es) =>
     GenericState ->
-    Eff es (Maybe (H.CuckooHashTable GenericID [Type]))
+    Eff es (Either GenericSolution Cycle)
 solveGeneric state = do
     cycle' <- detectGrowingCycles state
-    if isJust cycle'
-        then pure Nothing
-        else Just <$> runSolve
+    case cycle' of
+        Just edge -> pure $ Right edge
+        Nothing -> do
+            sol <- runSolve
+            pure $ Left sol
   where
     runSolve = do
         vars <- readIORef' (getStateRef state)

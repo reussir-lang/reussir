@@ -781,4 +781,16 @@ solveAllGenerics :: Tyck (Maybe (H.CuckooHashTable GenericID [Sem.Type]))
 solveAllGenerics = do
     analyzeGenericFlow
     genericState <- State.gets generics
-    solveGeneric genericState
+    sln <- solveGeneric genericState
+    case sln of
+        Right (x, y, ty) -> do
+            -- TODO: better format report
+            reportError $
+                "Growing edge detected between generic variables: "
+                    <> T.pack (show x)
+                    <> " -> "
+                    <> T.pack (show y)
+                    <> " via type "
+                    <> T.pack (show ty)
+            return Nothing
+        Left table -> return (Just table)
