@@ -10,29 +10,39 @@ import Options.Applicative
 import System.Exit (exitFailure, exitSuccess)
 import Text.Megaparsec (errorBundlePretty, runParser)
 
+import Data.HashTable.IO qualified as H
 import GHC.IO.Handle.FD (stderr)
-import Reussir.Core.Translation (emptyTranslationState, scanStmt, wellTypedExpr)
+import Prettyprinter (hardline)
+import Prettyprinter.Render.Terminal (putDoc)
+import Reussir.Core.Pretty (prettyColored)
+import Reussir.Core.Translation (emptyTranslationState, scanStmt, solveAllGenerics)
 import Reussir.Core.Tyck (checkFuncType)
+import Reussir.Core.Types.Expr (Expr)
+import Reussir.Core.Types.GenericID (GenericID)
 import Reussir.Core.Types.Translation (TranslationState (..))
+import Reussir.Core.Types.Type (Type)
 import Reussir.Diagnostic (createRepository, displayReport)
 import Reussir.Parser.Prog (parseProg)
 import Reussir.Parser.Types.Lexer (Identifier (..), WithSpan (..), unIdentifier)
 import Reussir.Parser.Types.Stmt qualified as Syn
 import System.IO (hPutStrLn)
-import Reussir.Core.Pretty (prettyColored)
-import Prettyprinter.Render.Terminal (putDoc)
-import Prettyprinter (hardline)
 
 data Args = Args
     { inputFile :: FilePath
-    , funcName :: String
+    , funcName :: Maybe String
     }
 
 argsParser :: Parser Args
 argsParser =
     Args
         <$> strArgument (metavar "FILE" <> help "Input file")
-        <*> strArgument (metavar "FUNCTION" <> help "Function name to check")
+        <*> optional (strArgument (metavar "FUNCTION" <> help "Function name to check"))
+
+data Result = SingleSuccess Expr | ModuleSuccess [(GenericID, [Type])] | Failed
+
+unspanStmt :: Syn.Stmt -> Syn.Stmt
+unspanStmt (Syn.SpannedStmt s) = unspanStmt (spanValue s)
+unspanStmt stmt = stmt
 
 main :: IO ()
 main = do
@@ -49,28 +59,47 @@ main = do
             (result, finalState) <- runEff $ runPrim $ runState initState $ do
                 -- Scan all statements
                 forM_ prog $ \stmt -> inject $ scanStmt stmt
-
                 -- Find the function
-                let targetName = T.pack (funcName args)
-                let findFunc (Syn.FunctionStmt f) | unIdentifier (Syn.funcName f) == targetName = Just f
-                    findFunc (Syn.SpannedStmt s) = findFunc (spanValue s)
-                    findFunc _ = Nothing
-
-                let targetFunc = foldr (\stmt acc -> acc <|> findFunc stmt) Nothing prog
-
-                case targetFunc of
-                    Just f -> do
-                        expr <- inject $ checkFuncType f >>= wellTypedExpr
-                        return (Just expr)
+                case funcName args of
                     Nothing -> do
-                        liftIO $ putStrLn "Function not found"
-                        return Nothing
+                        forM_ prog $ \stmt -> do
+                            case unspanStmt stmt of
+                                Syn.FunctionStmt f -> do
+                                    expr <- inject $ checkFuncType f
+                                    liftIO $ putStrLn $ "Function " ++ T.unpack (unIdentifier (Syn.funcName f)) ++ " type checked successfully:"
+                                    liftIO $ putDoc (prettyColored expr <> hardline)
+                                    liftIO $ putStrLn ""
+                                    pure ()
+                                _ -> return ()
+                        slns <- inject solveAllGenerics
+                        case slns of
+                            Just instances -> ModuleSuccess <$> liftIO (H.toList instances)
+                            Nothing -> pure Failed
+                    Just name -> do
+                        let targetName = T.pack name
+                        let findFunc (Syn.FunctionStmt f) | unIdentifier (Syn.funcName f) == targetName = Just f
+                            findFunc (Syn.SpannedStmt s) = findFunc (spanValue s)
+                            findFunc _ = Nothing
 
-            mapM_ print (translationReports finalState)
+                        let targetFunc = foldr (\stmt acc -> acc <|> findFunc stmt) Nothing prog
+
+                        case targetFunc of
+                            Just f -> do
+                                expr <- inject $ checkFuncType f
+                                return (SingleSuccess expr)
+                            Nothing -> do
+                                liftIO $ putStrLn "Function not found"
+                                return Failed
             case result of
-                Just expr | null (translationReports finalState) -> do
+                SingleSuccess expr | null (translationReports finalState) -> do
                     putStrLn "Type check succeeded without errors."
                     putDoc (prettyColored expr <> hardline)
+                    exitSuccess
+                ModuleSuccess instances -> do
+                    forM_ instances $ \(gid, types) -> do
+                        putStrLn $ "Generic " ++ show gid ++ " should be instantiated to:"
+                        forM_ types $ \ty ->
+                            putDoc (prettyColored ty <> hardline)
                     exitSuccess
                 _ -> do
                     forM_ (translationReports finalState) $ \report -> do

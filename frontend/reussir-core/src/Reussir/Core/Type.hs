@@ -2,6 +2,8 @@ module Reussir.Core.Type where
 
 import Data.HashSet qualified as HashSet
 import Data.HashTable.IO qualified as H
+import Data.IntSet (IntSet)
+import Data.IntSet qualified as IntSet
 import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
 import Reussir.Core.Types
 import Reussir.Core.Types.Class (Class)
@@ -109,3 +111,19 @@ isIntegralType _ = False
 isFPType :: Type -> Bool
 isFPType (TypeFP _) = True
 isFPType _ = False
+
+containsGeneric :: Type -> GenericID -> Bool
+containsGeneric (TypeRecord _ args) gid = any (`containsGeneric` gid) args
+containsGeneric (TypeClosure args ret) gid = any (`containsGeneric` gid) args || containsGeneric ret gid
+containsGeneric (TypeGeneric generic) gid = generic == gid
+containsGeneric (TypeRc t _) gid = containsGeneric t gid
+containsGeneric (TypeRef t _) gid = containsGeneric t gid
+containsGeneric _ _ = False
+
+collectGenerics :: IntSet -> Type -> IntSet
+collectGenerics set (TypeRecord _ args) = foldl' collectGenerics set args
+collectGenerics set (TypeClosure args ret) = foldl' collectGenerics (collectGenerics set ret) args
+collectGenerics set (TypeGeneric (GenericID gid)) = IntSet.insert (fromIntegral gid) set
+collectGenerics set (TypeRc t _) = collectGenerics set t
+collectGenerics set (TypeRef t _) = collectGenerics set t
+collectGenerics set _ = set

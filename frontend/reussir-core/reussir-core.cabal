@@ -121,6 +121,7 @@ test-suite reussir-core-test
         Test.Reussir.Core.Class
         Test.Reussir.Core.Generic
         Test.Reussir.Core.Tyck
+        Test.Reussir.Core.Type
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -161,6 +162,7 @@ executable reussir-tyck
         effectful,
         megaparsec,
         prettyprinter,
+        hashtables,
         prettyprinter-ansi-terminal
     hs-source-dirs:   app
     default-language: GHC2024
