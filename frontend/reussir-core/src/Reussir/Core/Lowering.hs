@@ -14,6 +14,7 @@ import Data.Text qualified as T
 import Effectful (liftIO)
 import Effectful.Prim.IORef.Strict (readIORef')
 import Effectful.State.Static.Local qualified as State
+import GHC.Stack (HasCallStack)
 import Reussir.Codegen qualified as IR
 import Reussir.Codegen.Context.Symbol (verifiedSymbol)
 import Reussir.Codegen.Context.Symbol qualified as IR
@@ -29,6 +30,7 @@ import Reussir.Codegen.Type.Record qualified as IRRecord
 import Reussir.Codegen.Value (Value (Value))
 import Reussir.Codegen.Value qualified as IR
 import Reussir.Core.Generic (GenericSolution)
+import Reussir.Core.Type (substituteGeneric)
 import Reussir.Core.Types.Expr qualified as Sem
 import Reussir.Core.Types.Function (FunctionProto (..), functionProtos)
 import Reussir.Core.Types.Function qualified as Sem
@@ -62,16 +64,18 @@ manglePath (Path name components) =
     T.intercalate "$$" (map unIdentifier components ++ [unIdentifier name])
 
 -- TODO: appearantly not correct, need to develop a mangle scheme
-manglePathWithTyArgs :: Path -> [Sem.Type] -> IR.Symbol
-manglePathWithTyArgs path tyArgs =
+manglePathWithTyArgs :: (HasCallStack) => Path -> [Sem.Type] -> Lowering IR.Symbol
+manglePathWithTyArgs path tyArgs = do
+    instantiatedArgs <- mapM canonicalType tyArgs
     let base = manglePath path
-        args = T.intercalate "$" (map T.show tyArgs)
-     in IR.verifiedSymbol $
+        args = T.intercalate "$" (map T.show instantiatedArgs)
+    return $
+        IR.verifiedSymbol $
             if T.null args
                 then base
                 else base <> "$LT" <> args <> "$$GT"
 
-convertType :: Sem.Type -> Lowering IR.Type
+convertType :: (HasCallStack) => Sem.Type -> Lowering IR.Type
 convertType Sem.TypeBool = pure $ IR.TypePrim IR.PrimBool
 convertType Sem.TypeUnit = pure $ IR.TypePrim IR.PrimUnit
 convertType (Sem.TypeIntegral (Sem.Signed w)) = convertIntegral w
@@ -84,7 +88,7 @@ convertType (Sem.TypeClosure args ret) = do
     ret' <- convertType ret
     pure $ IR.TypeClosure $ IR.Closure args' ret'
 convertType (Sem.TypeRecord path tyArgs) = do
-    let symbol = manglePathWithTyArgs path tyArgs
+    symbol <- manglePathWithTyArgs path tyArgs
     pure $ IR.TypeExpr symbol
 convertType (Sem.TypeGeneric (GenericID gid)) = do
     ty <- IntMap.lookup (fromIntegral gid) <$> State.gets genericAssignment
@@ -179,6 +183,11 @@ withVar (Sem.VarID vid) val action = do
     State.modify $ \s -> s{varMap = backup}
     pure res
 
+canonicalType :: Sem.Type -> Lowering Sem.Type
+canonicalType ty = do
+    assignment <- State.gets genericAssignment
+    return $ substituteGeneric ty (\(GenericID gid') -> IntMap.lookup (fromIntegral gid') assignment)
+
 -- TODO: span information is not being used to generate debug info
 lowerExprInBlock :: Sem.ExprKind -> Sem.Type -> Maybe (Int64, Int64) -> Lowering IR.Value
 lowerExprInBlock (Sem.Constant value) ty exprSpan = do
@@ -214,26 +223,27 @@ lowerExprInBlock (Sem.Negate (Sem.Expr innerKind innerSpan innerTy)) ty exprSpan
 lowerExprInBlock (Sem.Arith lhs op rhs) ty exprSpan = do
     lhsVal <- lowerExpr lhs
     rhsVal <- lowerExpr rhs
-    irType <- convertType ty
+    ty' <- canonicalType ty
+    irType <- convertType ty'
     let intrinsic = case op of
-            Sem.Add -> case ty of
+            Sem.Add -> case ty' of
                 Sem.TypeFP _ -> IR.Arith $ Arith.Addf (Arith.FastMathFlag 0)
                 Sem.TypeIntegral _ -> IR.Arith $ Arith.Addi Arith.iofNone
                 _ -> error "Unsupported type for Add"
-            Sem.Sub -> case ty of
+            Sem.Sub -> case ty' of
                 Sem.TypeFP _ -> IR.Arith $ Arith.Subf (Arith.FastMathFlag 0)
                 Sem.TypeIntegral _ -> IR.Arith $ Arith.Subi Arith.iofNone
                 _ -> error "Unsupported type for Sub"
-            Sem.Mul -> case ty of
+            Sem.Mul -> case ty' of
                 Sem.TypeFP _ -> IR.Arith $ Arith.Mulf (Arith.FastMathFlag 0)
                 Sem.TypeIntegral _ -> IR.Arith $ Arith.Muli Arith.iofNone
                 _ -> error "Unsupported type for Mul"
-            Sem.Div -> case ty of
+            Sem.Div -> case ty' of
                 Sem.TypeFP _ -> IR.Arith $ Arith.Divf (Arith.FastMathFlag 0)
                 Sem.TypeIntegral (Sem.Signed _) -> IR.Arith Arith.Divsi
                 Sem.TypeIntegral (Sem.Unsigned _) -> IR.Arith Arith.Divui
                 _ -> error "Unsupported type for Div"
-            Sem.Mod -> case ty of
+            Sem.Mod -> case ty' of
                 Sem.TypeFP _ -> IR.Arith $ Arith.Remf (Arith.FastMathFlag 0)
                 Sem.TypeIntegral (Sem.Signed _) -> IR.Arith Arith.Remsi
                 Sem.TypeIntegral (Sem.Unsigned _) -> IR.Arith Arith.Remui
@@ -245,7 +255,7 @@ lowerExprInBlock (Sem.Arith lhs op rhs) ty exprSpan = do
 lowerExprInBlock (Sem.Cmp lhs op rhs) ty exprSpan = do
     lhsVal <- lowerExpr lhs
     rhsVal <- lowerExpr rhs
-    let lhsTy = Sem.exprType lhs
+    lhsTy <- canonicalType (Sem.exprType lhs)
     lhsIRTy <- convertType lhsTy
 
     let intrinsic = case lhsTy of
@@ -274,7 +284,7 @@ lowerExprInBlock (Sem.Cmp lhs op rhs) ty exprSpan = do
                 Sem.Equ -> IR.Arith $ Arith.Cmpi Arith.CIEq
                 Sem.Neq -> IR.Arith $ Arith.Cmpi Arith.CINe
                 _ -> error "Ordered comparison on Bool"
-            _ -> error "Unsupported type for Cmp"
+            _ -> error $ "Unsupported type for Cmp " ++ show lhsIRTy
 
     resVal <- nextValue
     irType <- convertType ty
@@ -283,13 +293,14 @@ lowerExprInBlock (Sem.Cmp lhs op rhs) ty exprSpan = do
     pure resVal
 lowerExprInBlock (Sem.Cast innerExpr targetTy) _ exprSpan = do
     innerVal <- lowerExpr innerExpr
-    let innerSemTy = Sem.exprType innerExpr
+    innerSemTy <- canonicalType $ Sem.exprType innerExpr
     innerIRTy <- convertType innerSemTy
     targetIRTy <- convertType targetTy
+    targetTy' <- canonicalType targetTy
 
     if innerIRTy == targetIRTy
         then pure innerVal
-        else case (innerSemTy, targetTy) of
+        else case (innerSemTy, targetTy') of
             (Sem.TypeIntegral _, Sem.TypeBool) -> do
                 zero <- createConstant innerIRTy 0 exprSpan
                 resVal <- nextValue
@@ -297,7 +308,7 @@ lowerExprInBlock (Sem.Cast innerExpr targetTy) _ exprSpan = do
                 addIRInstr call exprSpan
                 pure resVal
             _ -> do
-                let intrinsic = case (innerSemTy, targetTy) of
+                let intrinsic = case (innerSemTy, targetTy') of
                         (Sem.TypeIntegral (Sem.Signed w1), Sem.TypeIntegral (Sem.Signed w2))
                             | w1 < w2 -> IR.Arith Arith.Extsi
                             | w1 > w2 -> IR.Arith $ Arith.Trunci Arith.iofNone
@@ -374,7 +385,7 @@ lowerExprInBlock Sem.Poison ty exprSpan = do
     pure value
 -- TODO: erase unit and allow zero return funcall
 lowerExprInBlock (Sem.FuncCall callee tyArgs args) ty exprSpan = do
-    calleeSymbol <- pure $ manglePathWithTyArgs callee tyArgs
+    calleeSymbol <- manglePathWithTyArgs callee tyArgs
     argVals <- mapM lowerExpr args
     argTys <- mapM (convertType . Sem.exprType) args
     let typedArgs = zip argVals argTys
@@ -410,14 +421,25 @@ lowerExprInBlock (Sem.ProjChain baseExpr [index]) _ exprSpan = do
     let spilledInstr = IR.RefSpill (baseExpr', baseExprTy') (spilledVal, refTy)
     addIRInstr spilledInstr exprSpan
     case baseExprTy of
-        Sem.TypeRecord recordName _ -> do
+        Sem.TypeRecord recordName tyArgs -> do
             recordTable <- State.gets (knownRecords . translationState)
             record <- liftIO $ H.lookup recordTable recordName
             case record of
                 Nothing -> error $ "Record type not found during lowering: " ++ show recordName
                 Just record' -> do
+                    let generics = recordTyParams record'
+                    let gids = map (\(_, GenericID gid) -> fromIntegral gid) generics
+                    let newAssignment = IntMap.fromList $ zip gids tyArgs
+
+                    oldAssignment <- State.gets genericAssignment
+                    let combinedAssignment = IntMap.union newAssignment oldAssignment
+                    State.modify $ \s -> s{genericAssignment = combinedAssignment}
+
                     let fieldTy = lookupFieldType $ recordFields record'
                     fieldTy' <- convertType fieldTy
+
+                    State.modify $ \s -> s{genericAssignment = oldAssignment}
+
                     let fieldRefTy = mkRefType fieldTy' IR.Unspecified
                     projVal <- nextValue
                     let projInstr = IR.RefProject (spilledVal, refTy) (fromIntegral index) (projVal, fieldRefTy)
@@ -462,7 +484,7 @@ translateFunction path proto locSpan assignment = do
                         Nothing -> error $ "Generic ID not found in assignment: " ++ show gid
                 )
                 generics
-    let symbol = manglePathWithTyArgs path tyArgs
+    symbol <- manglePathWithTyArgs path tyArgs
 
     mBody <- readIORef' (Sem.funcBody proto)
     let (linkage, llvmVis, mlirVis) = case mBody of
@@ -532,7 +554,7 @@ translateRecord path record assignment = do
                         Nothing -> error $ "Generic ID not found in assignment: " ++ show gid
                 )
                 generics
-    let symbol = manglePathWithTyArgs path tyArgs
+    symbol <- manglePathWithTyArgs path tyArgs
 
     let semKind = Sem.recordKind record
     let irKind = case semKind of
@@ -597,12 +619,10 @@ translateModule gSln = do
                 assignments <- forM (funcGenerics proto) $ \(_, gid) -> do
                     assignment <- fromJust <$> liftIO (H.lookup gSln gid)
                     return assignment
-                liftIO $ putStrLn $ "Translating function: " ++ show path ++ " with " ++ show (length assignments) ++ " generic parameters: " ++ show (funcGenerics proto)
                 let gids = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
                 let crossProd = sequence assignments
                 forM_ crossProd $ \assignment -> do
                     let localAssignment = IntMap.fromList $ zip gids assignment
-                    liftIO $ putStrLn ("  with assignment: " ++ show localAssignment)
                     let span' = case Sem.funcSpan proto of
                             Just s -> s
                             Nothing -> (0, 0)

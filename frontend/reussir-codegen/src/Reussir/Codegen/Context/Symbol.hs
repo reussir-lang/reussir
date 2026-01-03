@@ -11,8 +11,9 @@ import Data.Hashable (Hashable)
 import Data.Interned (Uninternable (unintern), intern)
 import Data.Interned.Text (InternedText)
 import Data.Text qualified as T
-import Unicode.Char.Identifiers (isXIDStart, isXIDContinue)
-import qualified Data.Text.Builder.Linear as TB
+import Data.Text.Builder.Linear qualified as TB
+import Effectful.Dispatch.Dynamic (HasCallStack)
+import Unicode.Char.Identifiers (isXIDContinue, isXIDStart)
 
 newtype Symbol = Symbol InternedText
     deriving (Eq, Show, Hashable)
@@ -23,11 +24,10 @@ symbolText (Symbol s) = unintern s
 symbolBuilder :: Symbol -> TB.Builder
 symbolBuilder (Symbol s) = TB.fromText (unintern s)
 
-verifiedSymbol :: T.Text -> Symbol
+verifiedSymbol :: (HasCallStack) => T.Text -> Symbol
 verifiedSymbol txt = case T.uncons txt of
     Just (c, t) | isValidStart c && T.all isValidChar t -> Symbol (intern txt)
     _ -> error $ "Invalid symbol: " <> T.unpack txt
-    where
-        isValidStart ch = isXIDStart ch || ch == '_'
-        isValidChar ch = isXIDContinue ch || ch == '$'
-  
+  where
+    isValidStart ch = isXIDStart ch || ch == '_'
+    isValidChar ch = isXIDContinue ch || ch == '$'
