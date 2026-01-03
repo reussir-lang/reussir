@@ -33,6 +33,7 @@ import Reussir.Codegen.Value (TypedValue)
 data Intrinsic
     = Arith Arith
     | Math Math
+    | UBPoison
     deriving (Eq, Show)
 
 data IntrinsicCall
@@ -50,3 +51,10 @@ intrinsicCallCodegen (IntrinsicCall (Arith arith) args rets) = do
 intrinsicCallCodegen (IntrinsicCall (Math math) args rets) = do
     L.logTrace_ "Generating code for math intrinsic"
     mathCodegen math args rets
+intrinsicCallCodegen (IntrinsicCall UBPoison _ [(resVal, resTy)]) = do
+    L.logTrace_ "Generating code for UB poison intrinsic"
+    resTy' <- C.emit resTy
+    resVal' <- C.emit resVal
+    C.emitBuilder $ resVal' <> " = " <> "ub.poison : " <> resTy'
+intrinsicCallCodegen (IntrinsicCall UBPoison _ _) =
+    error "UBPoison intrinsic must have exactly one result"
