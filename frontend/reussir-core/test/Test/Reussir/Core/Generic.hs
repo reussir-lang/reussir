@@ -5,9 +5,10 @@
 
 module Test.Reussir.Core.Generic where
 
+import Data.Either (fromLeft, isLeft, isRight)
 import Data.HashTable.IO qualified as H
 import Data.List (sortOn)
-import Data.Maybe (fromJust, isJust)
+import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Prim
@@ -96,8 +97,9 @@ testGraph4 = runGeneric $ do
     addConcreteFlow a (mkBasic "Int") state
 
     res <- solveGeneric state
-    liftIO $ assertBool "Should have solution" (isJust res)
-    let sol = fromJust res
+    liftIO $ assertBool "Should have solution" (isLeft res)
+    emptySol <- liftIO H.new
+    let sol = fromLeft emptySol res
     solA <- liftIO $ H.lookup sol a
     solB <- liftIO $ H.lookup sol b
     liftIO $ solA @?= Just [mkBasic "Int"]
@@ -113,8 +115,9 @@ testGraph5 = runGeneric $ do
     addConcreteFlow a (mkBasic "Int") state
 
     res <- solveGeneric state
-    liftIO $ assertBool "Should have solution" (isJust res)
-    let sol = fromJust res
+    liftIO $ assertBool "Should have solution" (isLeft res)
+    emptySol <- liftIO H.new
+    let sol = fromLeft emptySol res
     solA <- liftIO $ H.lookup sol a
     solB <- liftIO $ H.lookup sol b
     liftIO $ solA @?= Just [mkBasic "Int"]
@@ -132,8 +135,9 @@ testGraph6 = runGeneric $ do
     addConcreteFlow b (mkBasic "Bool") state
 
     res <- solveGeneric state
-    liftIO $ assertBool "Should have solution" (isJust res)
-    let sol = fromJust res
+    liftIO $ assertBool "Should have solution" (isLeft res)
+    emptySol <- liftIO H.new
+    let sol = fromLeft emptySol res
     solA <- liftIO $ H.lookup sol a
     solB <- liftIO $ H.lookup sol b
     let expected = sortOn show [mkBasic "Int", mkBasic "Bool"]
@@ -151,8 +155,9 @@ testGraph7 = runGeneric $ do
     addConcreteFlow a (mkBasic "Bool") state
 
     res <- solveGeneric state
-    liftIO $ assertBool "Should have solution" (isJust res)
-    let sol = fromJust res
+    liftIO $ assertBool "Should have solution" (isLeft res)
+    emptySol <- liftIO H.new
+    let sol = fromLeft emptySol res
     solB <- liftIO $ H.lookup sol b
     let expected = (sortOn show) [mkTypeRecord "Pair" [mkBasic "Int", mkBasic "Int"], mkTypeRecord "Pair" [mkBasic "Bool", mkBasic "Bool"]]
     liftIO $ fmap (sortOn show) solB @?= Just expected
@@ -167,7 +172,7 @@ testGraph8 = runGeneric $ do
     addConcreteFlow a (mkBasic "Int") state
 
     res <- solveGeneric state
-    liftIO $ assertBool "Should NOT have solution (growing cycle)" (not (isJust res))
+    liftIO $ assertBool "Should NOT have solution (growing cycle)" (isRight res)
 
 testGraph9 :: Assertion
 testGraph9 = runGeneric $ do
@@ -183,8 +188,9 @@ testGraph9 = runGeneric $ do
     addConcreteFlow b (mkBasic "Bool") state
 
     res <- solveGeneric state
-    liftIO $ assertBool "Should have solution" (isJust res)
-    let sol = fromJust res
+    liftIO $ assertBool "Should have solution" (isLeft res)
+    emptySol <- liftIO H.new
+    let sol = fromLeft emptySol res
     solC <- liftIO $ H.lookup sol c
     let expected = (sortOn show) [mkTypeRecord "Pair" [mkBasic "Int", mkBasic "Bool"], mkTypeRecord "Pair" [mkBasic "Bool", mkBasic "Bool"]]
     liftIO $ fmap (sortOn show) solC @?= Just expected
@@ -205,8 +211,9 @@ testGraph10 = runGeneric $ do
     addConcreteFlow b (mkBasic "Bool") state
 
     res <- solveGeneric state
-    liftIO $ assertBool "Should have solution" (isJust res)
-    let sol = fromJust res
+    liftIO $ assertBool "Should have solution" (isLeft res)
+    emptySol <- liftIO H.new
+    let sol = fromLeft emptySol res
     solD <- liftIO $ H.lookup sol d
     let c1 = mkTypeRecord "Pair" [mkBasic "Int", mkBasic "Bool"]
         c2 = mkTypeRecord "Pair" [mkBasic "Bool", mkBasic "Bool"]
