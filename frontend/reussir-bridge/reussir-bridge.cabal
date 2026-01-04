@@ -67,7 +67,9 @@ library
     import:           warnings
 
     -- Modules exported by the library.
-    exposed-modules:  Reussir.Bridge
+    exposed-modules:
+        Reussir.Bridge,
+        Reussir.Bridge.Logging
 
     -- Modules included in this library but not exported.
     other-modules:
@@ -81,7 +83,10 @@ library
     -- Other library packages from which modules are imported.
     build-depends:    
         base >=4.20.1.0 && <4.22,
-        bytestring ^>=0.12
+        bytestring ^>=0.12,
+        log-base,
+        unliftio,
+        text
 
     -- Directories containing source files.
     hs-source-dirs:   src

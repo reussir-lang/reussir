@@ -797,5 +797,5 @@ solveAllGenerics = do
                     <> T.pack (show ty)
             return Nothing
         Left table -> do
-            L.logTrace_ "Generic solving succeeded"
+            L.logInfo_ "Generic solving succeeded"
             return (Just table)

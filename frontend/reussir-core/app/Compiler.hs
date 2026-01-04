@@ -8,7 +8,6 @@ import Effectful (liftIO, runEff)
 import Effectful.Log qualified as L
 import Effectful.Prim (runPrim)
 import Log (LogLevel (..))
-import Log.Backend.StandardOutput qualified as L
 import Options.Applicative
 import System.Exit (exitFailure)
 import Text.Megaparsec (errorBundlePretty, runParser)
@@ -88,7 +87,7 @@ main = do
                         , logLevel = argLogLevel args
                         }
 
-            L.withStdOutLogger $ \logger -> do
+            B.withReussirLogger (argLogLevel args) "reussir-compiler" $ \logger -> do
                 runEff $ L.runLog "reussir-compiler" logger (toEffLogLevel (argLogLevel args)) $ do
                     irModule <- runPrim $ translateProgToModule (argInputFile args) spec prog
                     case outputTarget of

@@ -119,6 +119,14 @@ static inline char *reussir_bridge_alloc_byte_buffer(size_t size) {
   return (char *)malloc(size);
 }
 
+typedef void *ReussirLogger;
+
+ReussirLogger reussir_bridge_create_stdout_logger(ReussirLogLevel level,
+                                                  char *name);
+void reussir_bridge_destroy_logger(ReussirLogger logger);
+void reussir_bridge_log_with_level(ReussirLogger logger, ReussirLogLevel level,
+                                   const char *message);
+
 #ifdef __cplusplus
 }
 #endif

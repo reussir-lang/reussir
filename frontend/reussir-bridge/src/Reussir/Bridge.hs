@@ -31,9 +31,13 @@ module Reussir.Bridge (
 
     -- * JIT Engine
     module Reussir.Bridge.JITEngine,
+
+    -- * Logging
+    module Reussir.Bridge.Logging,
 )
 where
 
 import Reussir.Bridge.Compiler
 import Reussir.Bridge.JITEngine
+import Reussir.Bridge.Logging
 import Reussir.Bridge.Types
