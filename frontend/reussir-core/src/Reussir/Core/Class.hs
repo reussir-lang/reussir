@@ -1,3 +1,41 @@
+{- |
+Module      : Reussir.Core.Class
+Description : Simple Type Class system representation with DAG.
+
+
+Introduction
+=============
+
+This module currently provides a draft implementation of a simple type class
+system, where classes form a Directed Acyclic Graph (DAG) via inheritance.
+
+Currently, there is no support for type parameters for classes and each class
+is simply represented by its name (`Path`).
+
+Let A, B, .... be type classes.
+
+We defined the relation `superclass` as follows:
+A `superclass` B if:
+  - A == B, or
+  - there exists a directed path in the DAG from B to A.
+
+Based on the `superclass` relation, we define the following operation:
+
+    [A1, A2, ..] `meet` [B1, B2, ..] = minimal set of classes C such that
+    for each Ai, there exists Cj in C where Cj `superclass` Ai,
+    and for each Bi, there exists Cj in C where Cj `superclass` Bi.
+
+And the relation:
+
+    [A1, A2, ..] `subsume` [B1, B2, ..] if for each Bi, there exists Aj where Aj    `superclass` Bi.
+
+Implementation
+==============
+
+This module provides a representation of the DAG in multiple chains, decomposed
+in a similar manner as the heavy-light decomposition for trees, but using
+spanning tree size as the graph may not form a tree.
+-}
 module Reussir.Core.Class where
 
 import Control.Monad (filterM, forM, forM_, when)

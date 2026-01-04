@@ -50,7 +50,7 @@ translateProgToModule filePath spec prog = do
         Just solutions -> do
             -- Lowering to IR.Module
             L.logTrace_ (T.pack "translateProgToModule: lowering to IR")
-            let loweringState = createLoweringState repository emptyMod state'
+            let loweringState = createLoweringState filePath repository emptyMod state'
             loweringState' <- execState loweringState $ inject $ translateModule solutions
             return (currentModule loweringState')
   where
