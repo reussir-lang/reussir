@@ -6,6 +6,7 @@ import Data.Int (Int64)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Effectful.Prim.IORef.Strict (IORef')
+import Reussir.Bridge qualified as B
 import Reussir.Core.Types.Class (ClassDAG, TypeBound)
 import Reussir.Core.Types.Expr (VarID)
 import Reussir.Core.Types.Function (FunctionTable)
@@ -37,6 +38,7 @@ data VarDef = VarDef
 data TranslationState = TranslationState
     { currentSpan :: Maybe (Int64, Int64)
     , currentFile :: FilePath
+    , translationLogLevel :: B.LogLevel
     , stringUniqifier :: StringUniqifier
     , translationReports :: [Report]
     , typeClassDAG :: ClassDAG

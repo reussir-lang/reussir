@@ -17,9 +17,11 @@ import Data.Maybe (fromMaybe, isJust)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Effectful (Eff, IOE, liftIO, (:>))
+import Effectful.Log qualified as L
 import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (IORef', newIORef', readIORef', writeIORef')
 import Effectful.State.Static.Local qualified as State
+import Reussir.Bridge qualified as B
 import Reussir.Core.Class (addClass, isSuperClass, meetBound, newDAG, populateDAG, subsumeBound)
 import Reussir.Core.Function (newFunctionTable)
 import Reussir.Core.Generic (
@@ -55,7 +57,7 @@ import Reussir.Parser.Types.Stmt qualified as Syn
 import Reussir.Parser.Types.Type qualified as Syn
 import System.Console.ANSI.Types qualified as ANSI
 
-type Tyck = Eff '[IOE, Prim, State.State TranslationState]
+type Tyck = Eff '[IOE, Prim, L.Log, State.State TranslationState]
 
 clearLocals :: Tyck ()
 clearLocals = do
@@ -330,8 +332,8 @@ populatePrimitives typeClassTable typeClassDAG = do
     forM_ intTypes $ \it ->
         Sem.addClassToType typeClassTable (Sem.TypeIntegral it) intClass
 
-emptyTranslationState :: (IOE :> es, Prim :> es) => FilePath -> Eff es TranslationState
-emptyTranslationState currentFile = do
+emptyTranslationState :: (IOE :> es, Prim :> es) => B.LogLevel -> FilePath -> Eff es TranslationState
+emptyTranslationState translationLogLevel currentFile = do
     table <- liftIO $ H.new
     variableNameMap <- liftIO $ H.new
     let genericNameMap = HashMap.empty
@@ -346,6 +348,7 @@ emptyTranslationState currentFile = do
         TranslationState
             { currentSpan = Nothing
             , currentFile
+            , translationLogLevel
             , stringUniqifier
             , translationReports = []
             , typeClassDAG
@@ -779,6 +782,7 @@ analyzeGenericFlow = do
 
 solveAllGenerics :: Tyck (Maybe GenericSolution)
 solveAllGenerics = do
+    L.logTrace_ "Solving all generics"
     analyzeGenericFlow
     genericState <- State.gets generics
     solveGeneric genericState >>= \case
@@ -792,4 +796,6 @@ solveAllGenerics = do
                     <> " via type "
                     <> T.pack (show ty)
             return Nothing
-        Left table -> return (Just table)
+        Left table -> do
+            L.logTrace_ "Generic solving succeeded"
+            return (Just table)

@@ -3,14 +3,16 @@
 
 module Reussir.Core.Tyck where
 
-import Control.Monad (foldM, unless, zipWithM)
+import Control.Monad (foldM, unless, when, zipWithM)
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
 import Data.List (elemIndex, find)
 import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Effectful (liftIO)
+import Effectful.Log qualified as L
 import Effectful.State.Static.Local qualified as State
+import Reussir.Bridge qualified as B
 
 import Reussir.Core.Translation
 import Reussir.Core.Types.Class (Class (..), TypeBound)
@@ -31,6 +33,7 @@ import Reussir.Parser.Types.Type qualified as Syn
 
 checkFuncType :: Stmt.Function -> Tyck Sem.Expr
 checkFuncType func = do
+    L.logTrace_ $ "Tyck: checking function " <> unIdentifier (Stmt.funcName func)
     clearLocals
     clearHoles
     let name = Stmt.funcName func
@@ -42,11 +45,16 @@ checkFuncType func = do
             exprWithSpan Sem.TypeBottom Sem.Poison
         Just proto -> do
             let generics = funcGenerics proto
+            L.logTrace_ $
+                "Tyck: entering function generic context (generics="
+                    <> T.pack (show (length generics))
+                    <> ")"
             withGenericContext generics $ do
                 let params = funcParams proto
                 withParams params $ do
                     case Stmt.funcBody func of
                         Just body -> do
+                            L.logTrace_ $ "Tyck: checking function body for " <> unIdentifier name
                             wellTyped <- checkType body (funcReturnType proto) >>= wellTypedExpr
                             writeIORef' (funcBody proto) (Just wellTyped)
                             return wellTyped
@@ -268,6 +276,7 @@ inferType (Syn.AccessChain baseExpr projs) = do
 --  ──────────────────────────────────────────────────────────────────────
 --               C |- T <- f(e1, e2, ..., en)
 inferType (Syn.FuncCallExpr (Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallTyArgs = tyArgs, Syn.funcCallArgs = argExprs})) = do
+    L.logTrace_ $ "Tyck: infer func call " <> T.pack (show path)
     -- Lookup function
     functionTable <- State.gets functions
     getFunctionProto path functionTable >>= \case
@@ -276,6 +285,11 @@ inferType (Syn.FuncCallExpr (Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallT
             checkTypeArgsNum numGenerics $ do
                 bounds <- mapM (\(_, gid) -> getGenericBound gid) (funcGenerics proto)
                 tyArgs' <- zipWithM tyArgOrMetaHole tyArgs bounds
+                logTraceWhen $
+                    "Tyck: instantiated call generics for "
+                        <> T.pack (show path)
+                        <> ": "
+                        <> T.pack (show tyArgs')
                 let genericMap = functionGenericMap proto tyArgs'
                 let instantiatedArgTypes = map (\(_, ty) -> substituteTypeParams ty genericMap) (funcParams proto)
                 let expectedNumParams = length instantiatedArgTypes
@@ -340,6 +354,7 @@ inferType
                 , Syn.ctorVariant = ctorVariant
                 }
         ) = do
+        L.logTrace_ $ "Tyck: infer ctor call " <> T.pack (show ctorCallTarget)
         records <- State.gets knownRecords
         liftIO (H.lookup records ctorCallTarget) >>= \case
             Nothing -> do
@@ -348,6 +363,11 @@ inferType
             Just record -> do
                 bounds <- mapM (\(_, gid) -> getGenericBound gid) (Sem.recordTyParams record)
                 tyArgs' <- zipWithM tyArgOrMetaHole ctorTyArgs bounds
+                logTraceWhen $
+                    "Tyck: instantiated ctor generics for "
+                        <> T.pack (show ctorCallTarget)
+                        <> ": "
+                        <> T.pack (show tyArgs')
                 let numGenerics = length (Sem.recordTyParams record)
                 checkTypeArgsNum numGenerics $ do
                     let genericMap = recordGenericMap record tyArgs'
@@ -542,6 +562,7 @@ checkType (Syn.SpannedExpr (WithSpan subExpr start end)) ty = do
     State.modify $ \st -> st{currentSpan = oldSpan}
     return res
 checkType expr ty = do
+    L.logTrace_ $ "Tyck: checkType expected=" <> T.pack (show ty)
     -- this is apparently not complete. We need to handle lambda/unification
     expr' <- inferType expr
     exprTy <- force $ Sem.exprType expr'
@@ -555,3 +576,8 @@ checkType expr ty = do
                     <> T.pack (show exprTy)
             exprWithSpan Sem.TypeBottom Sem.Poison
         else return expr'
+
+logTraceWhen :: T.Text -> Tyck ()
+logTraceWhen msg = do
+    lvl <- State.gets translationLogLevel
+    when (lvl == B.LogDebug || lvl == B.LogTrace) $ L.logTrace_ msg

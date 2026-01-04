@@ -9,6 +9,7 @@ import Data.Int (Int64)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Sequence (Seq)
 import Effectful (Eff, IOE)
+import Effectful.Log qualified as L
 import Effectful.Prim.IORef.Strict (Prim)
 import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen qualified as IR
@@ -32,4 +33,4 @@ data LoweringState = LoweringState
     , currentModule :: IR.Module
     }
 
-type Lowering = Eff '[IOE, Prim, State.State LoweringState]
+type Lowering = Eff '[IOE, Prim, L.Log, State.State LoweringState]

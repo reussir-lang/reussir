@@ -1,7 +1,9 @@
 module Reussir.Core where
 
 import Control.Monad (forM_)
+import Data.Text qualified as T
 import Effectful (Eff, IOE, inject, (:>))
+import Effectful.Log qualified as L
 import Effectful.Prim (Prim)
 import Effectful.State.Static.Local (execState, runState)
 import GHC.IO.Handle.FD (stderr)
@@ -19,20 +21,23 @@ import Reussir.Parser.Types.Lexer (WithSpan (spanValue))
 import Reussir.Parser.Types.Stmt qualified as Syn
 
 translateProgToModule ::
-    (IOE :> es, Prim :> es) => FilePath -> IR.TargetSpec -> Syn.Prog -> Eff es IR.Module
+    (IOE :> es, Prim :> es, L.Log :> es) => FilePath -> IR.TargetSpec -> Syn.Prog -> Eff es IR.Module
 translateProgToModule filePath spec prog = do
+    L.logTrace_ $ T.pack "translateProgToModule: scanning statements for " <> T.pack filePath
     repository <- createRepository [filePath]
-    translationState <- emptyTranslationState filePath
+    translationState <- emptyTranslationState (IR.logLevel spec) filePath
     -- first scanAllStmt to build index
     state <- execState translationState $ inject $ do
         mapM_ scanStmt prog
     -- now translate all functions
     (genericSolutions, state') <- runState state $ do
+        L.logTrace_ (T.pack "translateProgToModule: type checking functions")
         forM_ prog $ \stmt -> case stripSpan stmt of
             Syn.FunctionStmt f -> do
                 _ <- inject $ checkFuncType f
                 return ()
             _ -> return ()
+        L.logTrace_ (T.pack "translateProgToModule: solving generics")
         inject solveAllGenerics
 
     -- report all diagnostics
@@ -44,6 +49,7 @@ translateProgToModule filePath spec prog = do
         Nothing -> return emptyMod
         Just solutions -> do
             -- Lowering to IR.Module
+            L.logTrace_ (T.pack "translateProgToModule: lowering to IR")
             let loweringState = createLoweringState repository emptyMod state'
             loweringState' <- execState loweringState $ inject $ translateModule solutions
             return (currentModule loweringState')

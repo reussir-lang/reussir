@@ -4,8 +4,11 @@ import Control.Monad (forM_)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Effectful (inject, liftIO, runEff)
+import Effectful.Log qualified as L
 import Effectful.Prim (runPrim)
 import Effectful.State.Static.Local (runState)
+import Log (LogLevel (..))
+import Log.Backend.StandardOutput qualified as L
 import Options.Applicative
 import System.Exit (exitFailure, exitSuccess)
 import Text.Megaparsec (errorBundlePretty, runParser)
@@ -14,6 +17,7 @@ import Data.HashTable.IO qualified as H
 import GHC.IO.Handle.FD (stderr)
 import Prettyprinter (hardline)
 import Prettyprinter.Render.Terminal (putDoc)
+import Reussir.Bridge qualified as B
 import Reussir.Core.Pretty (prettyColored)
 import Reussir.Core.Translation (emptyTranslationState, scanStmt, solveAllGenerics)
 import Reussir.Core.Tyck (checkFuncType)
@@ -40,6 +44,17 @@ argsParser =
 
 data Result = SingleSuccess Expr | ModuleSuccess [(GenericID, [Type])] | Failed
 
+tyckBridgeLogLevel :: B.LogLevel
+tyckBridgeLogLevel = B.LogWarning
+
+toEffLogLevel :: B.LogLevel -> LogLevel
+toEffLogLevel = \case
+    B.LogError -> LogAttention
+    B.LogWarning -> LogAttention
+    B.LogInfo -> LogInfo
+    B.LogDebug -> LogTrace
+    B.LogTrace -> LogTrace
+
 unspanStmt :: Syn.Stmt -> Syn.Stmt
 unspanStmt (Syn.SpannedStmt s) = unspanStmt (spanValue s)
 unspanStmt stmt = stmt
@@ -54,42 +69,44 @@ main = do
             exitFailure
         Right prog -> do
             -- Setup translation state
-            initState <- runEff $ runPrim $ emptyTranslationState (inputFile args)
             repository <- runEff $ createRepository [inputFile args]
-            (result, finalState) <- runEff $ runPrim $ runState initState $ do
-                -- Scan all statements
-                forM_ prog $ \stmt -> inject $ scanStmt stmt
-                -- Find the function
-                case funcName args of
-                    Nothing -> do
-                        forM_ prog $ \stmt -> do
-                            case unspanStmt stmt of
-                                Syn.FunctionStmt f -> do
-                                    expr <- inject $ checkFuncType f
-                                    liftIO $ putStrLn $ "Function " ++ T.unpack (unIdentifier (Syn.funcName f)) ++ " type checked successfully:"
-                                    liftIO $ putDoc (prettyColored expr <> hardline)
-                                    liftIO $ putStrLn ""
-                                    pure ()
-                                _ -> return ()
-                        slns <- inject solveAllGenerics
-                        case slns of
-                            Just instances -> ModuleSuccess <$> liftIO (H.toList instances)
-                            Nothing -> pure Failed
-                    Just name -> do
-                        let targetName = T.pack name
-                        let findFunc (Syn.FunctionStmt f) | unIdentifier (Syn.funcName f) == targetName = Just f
-                            findFunc (Syn.SpannedStmt s) = findFunc (spanValue s)
-                            findFunc _ = Nothing
-
-                        let targetFunc = foldr (\stmt acc -> acc <|> findFunc stmt) Nothing prog
-
-                        case targetFunc of
-                            Just f -> do
-                                expr <- inject $ checkFuncType f
-                                return (SingleSuccess expr)
+            (result, finalState) <- L.withStdOutLogger $ \logger -> do
+                runEff $ L.runLog (T.pack "reussir-tyck") logger (toEffLogLevel tyckBridgeLogLevel) $ do
+                    initState <- runPrim $ emptyTranslationState tyckBridgeLogLevel (inputFile args)
+                    runPrim $ runState initState $ do
+                        -- Scan all statements
+                        forM_ prog $ \stmt -> inject $ scanStmt stmt
+                        -- Find the function
+                        case funcName args of
                             Nothing -> do
-                                liftIO $ putStrLn "Function not found"
-                                return Failed
+                                forM_ prog $ \stmt -> do
+                                    case unspanStmt stmt of
+                                        Syn.FunctionStmt f -> do
+                                            expr <- inject $ checkFuncType f
+                                            liftIO $ putStrLn $ "Function " ++ T.unpack (unIdentifier (Syn.funcName f)) ++ " type checked successfully:"
+                                            liftIO $ putDoc (prettyColored expr <> hardline)
+                                            liftIO $ putStrLn ""
+                                            pure ()
+                                        _ -> return ()
+                                slns <- inject solveAllGenerics
+                                case slns of
+                                    Just instances -> ModuleSuccess <$> liftIO (H.toList instances)
+                                    Nothing -> pure Failed
+                            Just name -> do
+                                let targetName = T.pack name
+                                let findFunc (Syn.FunctionStmt f) | unIdentifier (Syn.funcName f) == targetName = Just f
+                                    findFunc (Syn.SpannedStmt s) = findFunc (spanValue s)
+                                    findFunc _ = Nothing
+
+                                let targetFunc = foldr (\stmt acc -> acc <|> findFunc stmt) Nothing prog
+
+                                case targetFunc of
+                                    Just f -> do
+                                        expr <- inject $ checkFuncType f
+                                        return (SingleSuccess expr)
+                                    Nothing -> do
+                                        liftIO $ putStrLn "Function not found"
+                                        return Failed
             case result of
                 SingleSuccess expr | null (translationReports finalState) -> do
                     putStrLn "Type check succeeded without errors."

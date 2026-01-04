@@ -9,10 +9,13 @@ import Data.HashTable.IO qualified as H
 import Data.Text qualified as T
 import Effectful
 import Effectful.FileSystem.IO (stderr)
+import Effectful.Log qualified as L
 import Effectful.Prim (runPrim)
 import Effectful.Prim.IORef.Strict (newIORef', readIORef')
 import Effectful.State.Static.Local (runState)
 import Effectful.State.Static.Local qualified as State
+import Log (LogLevel (..))
+import Log.Backend.StandardOutput qualified as L
 import Reussir.Core.Class (subsumeBound)
 import Reussir.Core.Generic (newGenericVar)
 import Reussir.Core.Translation (Tyck, emptyTranslationState, wellTypedExpr)
@@ -30,6 +33,7 @@ import Reussir.Core.Types.Translation qualified as Tyck
 import Reussir.Core.Types.Type (IntegralType (Signed))
 import Reussir.Core.Types.Type qualified as Sem
 import Reussir.Diagnostic (Repository, addDummyFile, createRepository, displayReport)
+import Reussir.Bridge qualified as B
 import Reussir.Parser.Expr (parseExpr)
 import Reussir.Parser.Types.Capability (Capability (..))
 import Reussir.Parser.Types.Expr qualified as Syn
@@ -68,17 +72,21 @@ tests =
         ]
 
 runTyck :: Repository -> (a -> Tyck.Tyck b) -> Tyck a -> IO b
-runTyck repo conti tyck = runEff . runPrim $ do
-    state <- emptyTranslationState "<dummy input>"
-    (out, _) <- runState state $ do
-        res <- inject tyck
-        s <- State.get
-        forM_ (translationReports s) $ \report -> do
-            liftIO $ hPutStrLn stderr ""
-            displayReport report repo 0 stderr
-            liftIO $ hPutStrLn stderr ""
-        inject $ conti res
-    return out
+runTyck repo conti tyck =
+    L.withStdOutLogger $ \logger ->
+        runEff $
+            L.runLog "Test.Reussir.Core.Tyck" logger LogAttention $
+                runPrim $ do
+                    state <- emptyTranslationState B.LogWarning "<dummy input>"
+                    (out, _) <- runState state $ do
+                        res <- inject tyck
+                        s <- State.get
+                        forM_ (translationReports s) $ \report -> do
+                            liftIO $ hPutStrLn stderr ""
+                            displayReport report repo 0 stderr
+                            liftIO $ hPutStrLn stderr ""
+                        inject $ conti res
+                    return out
 
 parseToExpr :: T.Text -> IO Syn.Expr
 parseToExpr input = case parse parseExpr "<dummy input>" input of

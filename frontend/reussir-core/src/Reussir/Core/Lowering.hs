@@ -12,6 +12,7 @@ import Data.Scientific (Scientific)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Effectful (liftIO)
+import Effectful.Log qualified as L
 import Effectful.Prim.IORef.Strict (readIORef')
 import Effectful.State.Static.Local qualified as State
 import GHC.Stack (HasCallStack)
@@ -479,6 +480,12 @@ lowerExprInBlock _ _ _ = error "Not yet implemented"
 --    - finalize the block with a return instruction
 translateFunction :: Path -> FunctionProto -> (Int64, Int64) -> GenericAssignment -> Lowering IR.Function
 translateFunction path proto locSpan assignment = do
+    L.logTrace_ $
+        "Lowering: translateFunction "
+            <> T.pack (show path)
+            <> " (assignment="
+            <> T.pack (show (IntMap.size assignment))
+            <> ")"
     State.modify $ \s -> s{genericAssignment = assignment, valueCounter = 0}
     let generics = Sem.funcGenerics proto
     let tyArgs =
@@ -492,6 +499,11 @@ translateFunction path proto locSpan assignment = do
     symbol <- manglePathWithTyArgs path tyArgs
 
     mBody <- readIORef' (Sem.funcBody proto)
+    L.logTrace_ $
+        "Lowering: function body present="
+            <> case mBody of
+                Nothing -> "false"
+                Just _ -> "true"
     let (linkage, llvmVis, mlirVis) = case mBody of
             Nothing -> (IR.LnkAvailableExternally, IR.LLVMVisDefault, IR.MLIRVisPrivate)
             Just _ -> (IR.LnkWeakODR, IR.LLVMVisDefault, IR.MLIRVisPublic)
@@ -548,6 +560,12 @@ convertCapability SemCap.Regional = IRType.Regional
 -- 3. convert record fields to name erased record fields in IR type system
 translateRecord :: Path -> Sem.Record -> GenericAssignment -> Lowering IR.RecordInstance
 translateRecord path record assignment = do
+    L.logTrace_ $
+        "Lowering: translateRecord "
+            <> T.pack (show path)
+            <> " (assignment="
+            <> T.pack (show (IntMap.size assignment))
+            <> ")"
     State.modify $ \s -> s{genericAssignment = assignment}
 
     let generics = Sem.recordTyParams record
@@ -607,9 +625,11 @@ mangleStrToken (x, y) = verifiedSymbol $ T.concat ["str$$", T.show x, "$$", T.sh
 
 translateModule :: GenericSolution -> Lowering ()
 translateModule gSln = do
+    L.logTrace_ "Lowering: translateModule start"
     -- Add function per instantiation
     functionTable <- State.gets (functionProtos . functions . translationState)
     functionList <- liftIO $ H.toList functionTable
+    L.logTrace_ $ "Lowering: functions to translate=" <> T.pack (show (length functionList))
     forM_ functionList $ \(path, proto) -> do
         if null (funcGenerics proto)
             then do
@@ -638,6 +658,7 @@ translateModule gSln = do
                     State.modify $ \s -> s{currentModule = updatedMod}
     recordTable <- State.gets (knownRecords . translationState)
     recordList <- liftIO $ H.toList recordTable
+    L.logTrace_ $ "Lowering: records to translate=" <> T.pack (show (length recordList))
     -- Add record instance per instantiation
     forM_ recordList $ \(path, record) -> do
         if null (recordTyParams record)
@@ -662,6 +683,7 @@ translateModule gSln = do
     -- Add string token
     StringUniqifier storage <- State.gets (stringUniqifier . translationState)
     strList <- liftIO $ H.toList storage
+    L.logTrace_ $ "Lowering: string buckets=" <> T.pack (show (length strList))
     forM_ strList $ \(fstComponent, strSeq) ->
         forM_ (zip [0 ..] (toList strSeq)) $ \(sndComponent, strVal) -> do
             let symbol = mangleStrToken (fstComponent, sndComponent)

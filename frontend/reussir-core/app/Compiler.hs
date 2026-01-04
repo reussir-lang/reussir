@@ -7,7 +7,7 @@ import Data.Text.IO qualified as TIO
 import Effectful (liftIO, runEff)
 import Effectful.Log qualified as L
 import Effectful.Prim (runPrim)
-import Log (defaultLogLevel)
+import Log (LogLevel (..))
 import Log.Backend.StandardOutput qualified as L
 import Options.Applicative
 import System.Exit (exitFailure)
@@ -89,7 +89,7 @@ main = do
                         }
 
             L.withStdOutLogger $ \logger -> do
-                runEff $ L.runLog "reussir-compiler" logger defaultLogLevel $ do
+                runEff $ L.runLog "reussir-compiler" logger (toEffLogLevel (argLogLevel args)) $ do
                     irModule <- runPrim $ translateProgToModule (argInputFile args) spec prog
                     case outputTarget of
                         MLIR -> do
@@ -98,6 +98,13 @@ main = do
                         Backend _ ->
                             C.emitModuleToBackend irModule
   where
+    toEffLogLevel :: B.LogLevel -> LogLevel
+    toEffLogLevel = \case
+        B.LogError -> LogAttention
+        B.LogWarning -> LogAttention
+        B.LogInfo -> LogInfo
+        B.LogDebug -> LogTrace
+        B.LogTrace -> LogTrace
     opts =
         info
             (argsParser <**> helper)
