@@ -46,11 +46,11 @@ import Reussir.Diagnostic.Repository (Repository, lookupRepositoryAsRange)
 import Reussir.Parser.Types.Capability qualified as SemCap
 import Reussir.Parser.Types.Lexer (Identifier (unIdentifier), Path (..))
 
-createLoweringState :: Repository -> IR.Module -> TranslationState -> LoweringState
-createLoweringState repo mod' transState =
+createLoweringState :: FilePath -> Repository -> IR.Module -> TranslationState -> LoweringState
+createLoweringState moduleFile repo mod' transState =
     LoweringState
         { currentBlock = Seq.empty
-        , moduleFile = Nothing
+        , moduleFile = moduleFile
         , srcRepository = repo
         , valueCounter = 0
         , varMap = IntMap.empty
@@ -114,20 +114,18 @@ convertFloat w = error $ "Unsupported float width: " ++ show w
 
 lookupLocation :: (Int64, Int64) -> Lowering (Maybe IR.Location)
 lookupLocation (start, end) = do
-    State.gets moduleFile >>= \case
-        Nothing -> pure Nothing
-        Just path -> do
-            repo <- State.gets srcRepository
-            case lookupRepositoryAsRange repo (path, start, end) of
-                Nothing ->
-                    error $
-                        "Failed to lookup source location for path "
-                            ++ show path
-                            ++ " in byte range "
-                            ++ show start
-                            ++ "-"
-                            ++ show end
-                Just (a, b, c, d) -> pure $ Just $ IR.FileLineColRange (T.pack path) a b c d
+    path <- State.gets moduleFile
+    repo <- State.gets srcRepository
+    case lookupRepositoryAsRange repo (path, start, end) of
+        Nothing ->
+            error $
+                "Failed to lookup source location for path "
+                    ++ show path
+                    ++ " in byte range "
+                    ++ show start
+                    ++ "-"
+                    ++ show end
+        Just (a, b, c, d) -> pure $ Just $ IR.FileLineColRange (T.pack path) a b c d
 
 -- span to location
 withLocation :: IR.Instr -> Maybe (Int64, Int64) -> Lowering IR.Instr

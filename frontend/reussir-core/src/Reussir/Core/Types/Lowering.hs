@@ -24,7 +24,7 @@ type GenericAssignment = IntMap.IntMap Sem.Type
 
 data LoweringState = LoweringState
     { currentBlock :: BlockBuilder
-    , moduleFile :: Maybe FilePath
+    , moduleFile :: FilePath
     , srcRepository :: Repository
     , valueCounter :: Int64
     , varMap :: IntMap.IntMap TypedValue
