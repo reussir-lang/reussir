@@ -22,8 +22,8 @@ import Data.Text.Builder.Linear qualified as TB
 import Data.Text.Builder.Linear.Buffer qualified as TBB
 import Effectful.State.Static.Local qualified as E
 import Reussir.Codegen.Context.Codegen (Codegen, Context (..))
-import Reussir.Codegen.Location (Location (..))
 import Reussir.Codegen.Context.Symbol (Symbol, symbolText)
+import Reussir.Codegen.Location (DGBMetaInfo (..), Location (..))
 
 {- | The Emission class provides a way to convert values to Text.Builder
   within the Codegen monad. This is used for emitting MLIR text.
@@ -137,3 +137,7 @@ instance Emission Location where
                     childInner <- emitInner child
                     pure $ namePart <> "(" <> childInner <> ")"
                 Nothing -> pure namePart
+
+instance Emission DGBMetaInfo where
+    emit (DBGRawMeta text) = pure $ fromString (show text)
+    emit _ = pure "<not-yet-implemented>"
