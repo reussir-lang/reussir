@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Reussir.Core.Translation where
@@ -12,7 +13,7 @@ import Data.Hashable (Hashable (hash))
 import Data.Int (Int64)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Effectful (Eff, IOE, liftIO, (:>))
@@ -66,16 +67,13 @@ strToToken :: (IOE :> es) => T.Text -> StringUniqifier -> Eff es StringToken
 strToToken str (StringUniqifier table) = do
     let h = hash (XXH3 str)
     bucket <- liftIO $ H.lookup table h
-    case bucket of
-        Just seqs -> case Seq.elemIndexL str seqs of
-            Just idx -> return (h, fromIntegral idx)
-            Nothing -> do
-                let newSeqs = seqs Seq.|> str
-                liftIO $ H.insert table h newSeqs
-                return (h, fromIntegral (Seq.length newSeqs - 1))
+    let seqs = fromMaybe Seq.empty bucket
+    case Seq.elemIndexL str seqs of
+        Just idx -> return (h, fromIntegral idx)
         Nothing -> do
-            liftIO $ H.insert table h (Seq.singleton str)
-            return (h, 0)
+            let newSeqs = seqs Seq.|> str
+            liftIO $ H.insert table h newSeqs
+            return (h, fromIntegral (Seq.length newSeqs - 1))
 
 withVariable :: Identifier -> Maybe (Int64, Int64) -> Sem.Type -> (Sem.VarID -> Tyck a) -> Tyck a
 withVariable varName varSpan varType cont = do
@@ -110,8 +108,7 @@ getVarType (Sem.VarID idx) = do
 lookupVar :: Identifier -> Tyck (Sem.VarID, Sem.Type)
 lookupVar varName = do
     nameMap <- State.gets variableNameMap
-    mVarID <- liftIO $ H.lookup nameMap varName
-    case mVarID of
+    liftIO (H.lookup nameMap varName) >>= \case
         Just varID -> getVarType varID >>= \ty -> pure (varID, ty)
         Nothing -> do
             reportError $ "Variable not found: " <> (unIdentifier varName)
@@ -535,8 +532,7 @@ evalType (Syn.TypeExpr path args) = do
             return $ Sem.TypeGeneric gid
         Nothing -> do
             knownRecords <- State.gets knownRecords
-            mRecord <- liftIO $ H.lookup knownRecords path
-            case mRecord of
+            liftIO (H.lookup knownRecords path) >>= \case
                 Just record -> case Sem.recordDefaultCap record of
                     Value -> return $ Sem.TypeRecord path args'
                     Shared -> return $ Sem.TypeRc (Sem.TypeRecord path args') Shared
@@ -685,8 +681,7 @@ analyzeGenericFlowInExpr expr = do
 
             -- Analyze generic flow
             functionTable <- State.gets functions
-            mProto <- liftIO $ H.lookup (Sem.functionProtos functionTable) target
-            case mProto of
+            liftIO (H.lookup (Sem.functionProtos functionTable) target) >>= \case
                 Just proto -> do
                     let generics = Sem.funcGenerics proto
                     analyzeGenericInstantiationFlow generics tyArgs
@@ -697,8 +692,7 @@ analyzeGenericFlowInExpr expr = do
 
             -- Analyze generic flow
             knownRecords <- State.gets knownRecords
-            mRecord <- liftIO $ H.lookup knownRecords target
-            case mRecord of
+            liftIO (H.lookup knownRecords target) >>= \case
                 Just record -> do
                     let generics = Sem.recordTyParams record
                     analyzeGenericInstantiationFlow generics tyArgs
@@ -787,8 +781,7 @@ solveAllGenerics :: Tyck (Maybe GenericSolution)
 solveAllGenerics = do
     analyzeGenericFlow
     genericState <- State.gets generics
-    sln <- solveGeneric genericState
-    case sln of
+    solveGeneric genericState >>= \case
         Right (x, y, ty) -> do
             -- TODO: better format report
             reportError $

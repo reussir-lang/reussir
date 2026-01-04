@@ -116,7 +116,10 @@ instance PrettyColored Expr where
                         <> (case variant of Nothing -> mempty; Just v -> "::#" <> pretty v)
                         <> parens (commaSep (map prettyColored args))
                 Poison -> keyword "poison"
-         in kindDoc <+> comment (":" <+> prettyColored (exprType expr))
+         in case exprKind expr of
+                Let _ _ _ _ _ -> kindDoc
+                ScfIfExpr _ _ _ -> kindDoc
+                _ -> kindDoc <+> comment (":" <+> prettyColored (exprType expr))
 
 commaSep :: [Doc AnsiStyle] -> Doc AnsiStyle
 commaSep = concatWith (surround (comma <> space))

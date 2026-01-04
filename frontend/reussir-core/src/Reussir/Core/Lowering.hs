@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Reussir.Core.Lowering where
@@ -90,8 +91,7 @@ convertType (Sem.TypeRecord path tyArgs) = do
     symbol <- manglePathWithTyArgs path tyArgs
     pure $ IR.TypeExpr symbol
 convertType (Sem.TypeGeneric (GenericID gid)) = do
-    ty <- IntMap.lookup (fromIntegral gid) <$> State.gets genericAssignment
-    case ty of
+    State.gets (IntMap.lookup (fromIntegral gid) . genericAssignment) >>= \case
         Just ty' -> convertType ty'
         Nothing -> error $ "Unresolved generic type: T" ++ show gid
 convertType _ = error "Not yet implemented"
@@ -113,8 +113,7 @@ convertFloat w = error $ "Unsupported float width: " ++ show w
 
 lookupLocation :: (Int64, Int64) -> Lowering (Maybe IR.Location)
 lookupLocation (start, end) = do
-    modPath <- State.gets moduleFile
-    case modPath of
+    State.gets moduleFile >>= \case
         Nothing -> pure Nothing
         Just path -> do
             repo <- State.gets srcRepository
@@ -623,8 +622,7 @@ translateModule gSln = do
                 State.modify $ \s -> s{currentModule = updatedMod}
             else do
                 assignments <- forM (funcGenerics proto) $ \(_, gid) -> do
-                    mAssignment <- liftIO (H.lookup gSln gid)
-                    case mAssignment of
+                    liftIO (H.lookup gSln gid) >>= \case
                         Just assignment -> return assignment
                         Nothing -> error $ "Generic solution not found for generic ID: " ++ show gid
                 let gids = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
@@ -650,8 +648,7 @@ translateModule gSln = do
                 State.modify $ \s -> s{currentModule = updatedMod}
             else do
                 assignments <- forM (recordTyParams record) $ \(_, gid) -> do
-                    mAssignment <- liftIO (H.lookup gSln gid)
-                    case mAssignment of
+                    liftIO (H.lookup gSln gid) >>= \case
                         Just assignment -> return assignment
                         Nothing -> error $ "Generic solution not found for generic ID: " ++ show gid
                 let gids = map (\(_, GenericID gid) -> fromIntegral gid) (recordTyParams record)

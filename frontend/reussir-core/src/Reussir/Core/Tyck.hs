@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Reussir.Core.Tyck where
@@ -35,8 +36,7 @@ checkFuncType func = do
     let name = Stmt.funcName func
     let path = Path name []
     funcTable <- State.gets functions
-    mProto <- liftIO $ H.lookup (functionProtos funcTable) path
-    case mProto of
+    liftIO (H.lookup (functionProtos funcTable) path) >>= \case
         Nothing -> do
             reportError $ "Function not found in table: " <> unIdentifier name
             exprWithSpan Sem.TypeBottom Sem.Poison
@@ -45,7 +45,6 @@ checkFuncType func = do
             withGenericContext generics $ do
                 let params = funcParams proto
                 withParams params $ do
-                    -- this is so sketchy....
                     case Stmt.funcBody func of
                         Just body -> do
                             wellTyped <- checkType body (funcReturnType proto) >>= wellTypedExpr
@@ -232,8 +231,7 @@ inferType (Syn.AccessChain baseExpr projs) = do
         case innerTy of
             Sem.TypeRecord path args -> do
                 knownRecords <- State.gets knownRecords
-                mRecord <- liftIO $ H.lookup knownRecords path
-                case mRecord of
+                liftIO (H.lookup knownRecords path) >>= \case
                     Just record -> do
                         let subst = IntMap.fromList $ zip (map (\(_, GenericID gid) -> fromIntegral gid) $ Sem.recordTyParams record) args
                         case (Sem.recordFields record, access) of
@@ -272,8 +270,7 @@ inferType (Syn.AccessChain baseExpr projs) = do
 inferType (Syn.FuncCallExpr (Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallTyArgs = tyArgs, Syn.funcCallArgs = argExprs})) = do
     -- Lookup function
     functionTable <- State.gets functions
-    callee <- getFunctionProto path functionTable
-    case callee of
+    getFunctionProto path functionTable >>= \case
         Just proto -> do
             let numGenerics = length (funcGenerics proto)
             checkTypeArgsNum numGenerics $ do
@@ -344,8 +341,7 @@ inferType
                 }
         ) = do
         records <- State.gets knownRecords
-        mRecord <- liftIO $ H.lookup records ctorCallTarget
-        case mRecord of
+        liftIO (H.lookup records ctorCallTarget) >>= \case
             Nothing -> do
                 reportError $ "Record not found: " <> T.pack (show ctorCallTarget)
                 exprWithSpan Sem.TypeBottom Sem.Poison
