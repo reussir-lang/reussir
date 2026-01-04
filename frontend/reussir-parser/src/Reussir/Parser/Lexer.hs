@@ -31,10 +31,6 @@ module Reussir.Parser.Lexer (
     -- * Capabilities
     parseCapability,
 
-    -- * Type suffixes
-    parseIntSuffix,
-    parseFloatSuffix,
-
     -- * Utilities
     withSpan,
 ) where
@@ -107,18 +103,6 @@ parseIdentifier = do
     rest <- many (satisfy U.isXIDContinue) <* space
     pure $ Identifier $ T.pack (first : rest)
 
-{- | Parse an integer type suffix (u8, u16, u32, u64).
-Consumes the suffix followed by whitespace.
--}
-parseIntSuffix :: Parser ()
-parseIntSuffix = choice [string $ T.pack ('u' : show @Int s) | s <- [8, 16, 32, 64]] *> space
-
-{- | Parse a floating-point type suffix (f16, f32, f64).
-Consumes the suffix followed by whitespace.
--}
-parseFloatSuffix :: Parser ()
-parseFloatSuffix = choice [string $ T.pack ('f' : show @Int s) | s <- [16, 32, 64]] *> space
-
 {- | Parse an integer literal with optional type suffix.
 Does not accept floating-point notation (rejects '.' and 'e'/'E').
 -}
@@ -126,7 +110,6 @@ parseInt :: Parser Int
 parseInt = try $ do
     n <- some digitChar
     notFollowedBy (char '.' <|> char 'e' <|> char 'E')
-    _ <- optional parseIntSuffix
     space
     return (read n)
 
@@ -134,7 +117,7 @@ parseInt = try $ do
 Returns a 'Scientific' value for arbitrary precision.
 -}
 parseDouble :: Parser Scientific
-parseDouble = Lexer.scientific <* optional parseFloatSuffix <* space
+parseDouble = Lexer.scientific <* space
 
 {- | Parse a string literal enclosed in double quotes.
 Supports escape sequences via 'charLiteral'.
