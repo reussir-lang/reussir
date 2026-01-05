@@ -111,18 +111,18 @@ def Reussir_DBGRecordMember : ReussirAttr<"DBGRecordMember", "dbg_record_member"
 def Reussir_DBGRecordType : ReussirAttr<"DBGRecordType", "dbg_recordtype"> {
   let description = "Debug record type attribute";
   let parameters = (ins 
-    ArrayRefParameter<"::reussir::DBGRecordMemberAttr">:$members,
+    "::mlir::ArrayAttr":$members,
     "bool":$isVariant,
     "::mlir::Type":$underlyingType,
     "::mlir::StringAttr":$dbgName
   );
   let assemblyFormat = [{
-    `{` 
+    `<` 
         `members` `:` $members `,`
         `is_variant` `:` $isVariant `,`
         `underlying_type` `:` $underlyingType `,`
         `dbg_name` `:` $dbgName
-    `}`
+    `>`
   }];
 }
 def Reussir_DBGSubprogram : ReussirAttr<"DBGSubprogram", "dbg_subprogram"> {
