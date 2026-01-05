@@ -18,12 +18,15 @@ where
 
 import Data.Foldable (for_)
 import Data.String (fromString)
+import Data.Text qualified as T
+import Data.Text.Builder.Linear (fromText)
 import Data.Text.Builder.Linear qualified as TB
 import Data.Text.Builder.Linear.Buffer qualified as TBB
 import Effectful.State.Static.Local qualified as E
 import Reussir.Codegen.Context.Codegen (Codegen, Context (..))
 import Reussir.Codegen.Context.Symbol (Symbol, symbolText)
-import Reussir.Codegen.Location (DGBMetaInfo (..), Location (..))
+import Reussir.Codegen.Location (DBGType (..), DGBMetaInfo (..), Location (..))
+import Reussir.Codegen.Type.Data (PrimitiveFloat (..), PrimitiveInt (..))
 
 {- | The Emission class provides a way to convert values to Text.Builder
   within the Codegen monad. This is used for emitting MLIR text.
@@ -142,4 +145,45 @@ instance Emission Location where
 
 instance Emission DGBMetaInfo where
     emit (DBGRawMeta text) = pure $ fromString (show text)
-    emit _ = pure "<not-yet-implemented>"
+    emit (DBGLocalVar ty name) = do
+        ty' <- emit ty
+        pure $ "#reussir.dbg_localvar<type: " <> ty' <> ", name: " <> fromString (show name) <> ">"
+    emit (DBGFunction rawName tyParams) = do
+        tyParams' <- mapM emit tyParams
+        let paramsBuilder = intercalate ", " tyParams'
+        pure $ "#reussir.dbg_subprogram<raw_name: " <> fromString (show rawName) <> ", type_params: [" <> paramsBuilder <> "]>"
+
+emitDbgInteger :: TB.Builder -> PrimitiveInt -> T.Text -> Codegen TB.Builder
+emitDbgInteger signness signlessTy name = do
+    let ty = case signlessTy of
+            PrimInt8 -> "i8"
+            PrimInt16 -> "i16"
+            PrimInt32 -> "i32"
+            PrimInt64 -> "i64"
+            PrimInt128 -> "i128"
+            PrimIndex -> "index"
+    pure $ "#reussir.dbg_inttype<signed: " <> signness <> " , " <> ty <> ", name : " <> fromText (T.show name) <> ">"
+
+instance Emission DBGType where
+    emit (Signed primInt name) = emitDbgInteger "true" primInt name
+    emit (Unsigned primInt name) = emitDbgInteger "false" primInt name
+    emit (FP primFloat name) = do
+        let ty = case primFloat of
+                PrimFloat8 -> "f8"
+                PrimFloat16 -> "f16"
+                PrimBFloat16 -> "bf16"
+                PrimFloat32 -> "f32"
+                PrimFloat64 -> "f64"
+                PrimFloat128 -> "f128"
+        pure $ "#reussir.dbg_fptype<" <> ty <> ", name : " <> fromText (T.show name) <> ">"
+    emit (Record name members rep isVariant) = do
+        let rep_reference = "!" <> TB.fromText (symbolText rep)
+        members' <- mapM emitMember members
+        let memberBuilders = intercalate ", " members'
+        let isVariant' = if isVariant then "true" else "false"
+        pure $ "#reussir.dbg_recordtype<members: [" <> memberBuilders <> "], is_variant: " <> isVariant' <> ", underlying_type: " <> rep_reference <> ", dbg_name: " <> fromText (T.show name) <> ">"
+      where
+        emitMember :: (T.Text, DBGType) -> Codegen TB.Builder
+        emitMember (memberName, memberType) = do
+            memberType' <- emit memberType
+            pure $ "#reussir.dbg_record_member<name: " <> fromText (T.show memberName) <> ", type: " <> memberType' <> ">"

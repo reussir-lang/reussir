@@ -24,6 +24,8 @@ import Reussir.Codegen.Global qualified as IR
 import Reussir.Codegen.IR qualified as IR
 import Reussir.Codegen.Intrinsics qualified as IR
 import Reussir.Codegen.Intrinsics.Arith qualified as Arith
+import Reussir.Codegen.Location (DGBMetaInfo (DBGLocalVar))
+import Reussir.Codegen.Location qualified as DBG
 import Reussir.Codegen.Location qualified as IR
 import Reussir.Codegen.Type (Capability)
 import Reussir.Codegen.Type qualified as IR
@@ -37,7 +39,7 @@ import Reussir.Core.Types.Expr qualified as Sem
 import Reussir.Core.Types.Function (FunctionProto (..), functionProtos)
 import Reussir.Core.Types.Function qualified as Sem
 import Reussir.Core.Types.GenericID (GenericID (GenericID))
-import Reussir.Core.Types.Lowering (GenericAssignment, Lowering, LoweringState (..), genericAssignment)
+import Reussir.Core.Types.Lowering (GenericAssignment, Lowering, LoweringSpan (..), LoweringState (..), genericAssignment)
 import Reussir.Core.Types.Record (Record (recordFields), RecordFields (Named, Unnamed), recordTyParams)
 import Reussir.Core.Types.Record qualified as Sem
 import Reussir.Core.Types.String (StringToken, StringUniqifier (StringUniqifier))
@@ -48,6 +50,93 @@ import Reussir.Parser.Types.Capability qualified as SemCap
 import Reussir.Parser.Types.Lexer (Identifier (unIdentifier), Path (..))
 import System.Directory (canonicalizePath)
 import System.FilePath (takeDirectory, takeFileName)
+
+typeAsDbgType :: Sem.Type -> Lowering (Maybe IR.DBGType)
+typeAsDbgType ty = do
+    ty' <- canonicalType ty
+    case ty' of
+        Sem.TypeIntegral (Sem.Signed w) -> pure $ do
+            prim <- convertIntegralToPrim w
+            pure $ IR.Signed prim (T.pack $ "i" ++ show w)
+        Sem.TypeIntegral (Sem.Unsigned w) -> pure $ do
+            prim <- convertIntegralToPrim w
+            pure $ IR.Unsigned prim (T.pack $ "u" ++ show w)
+        Sem.TypeFP fpt -> pure $ do
+            prim <- convertFloatToPrim fpt
+            pure $ IR.FP prim (T.pack $ show fpt)
+        Sem.TypeRecord path args -> do
+            recordTable <- State.gets (knownRecords . translationState)
+            record <- liftIO $ H.lookup recordTable path
+            case record of
+                Nothing -> pure Nothing
+                Just rec -> do
+                    symbol <- manglePathWithTyArgs path args
+                    let generics = Sem.recordTyParams rec
+                        gids = map (\(_, GenericID gid) -> fromIntegral gid) generics
+                        assignment = IntMap.fromList $ zip gids args
+
+                        subst t = substituteGeneric t (\(GenericID gid') -> IntMap.lookup (fromIntegral gid') assignment)
+
+                        processField (name, fieldTy) = do
+                            let fieldTy' = subst fieldTy
+                            mDbgTy <- typeAsDbgType fieldTy'
+                            pure $ fmap (\d -> (name, d)) mDbgTy
+
+                    fields <- case Sem.recordFields rec of
+                        Sem.Named fs -> do
+                            let mapped = map (\(id', t, _) -> (unIdentifier id', t)) fs
+                            mapM processField mapped
+                        Sem.Unnamed fs -> do
+                            let mapped = zipWith (\i (t, _) -> (T.show i, t)) [0 :: Int ..] fs
+                            mapM processField mapped
+                        Sem.Variants vs -> do
+                            let mapVariant (id', tys) = case tys of
+                                    [] -> (unIdentifier id', Sem.TypeUnit)
+                                    [t] -> (unIdentifier id', t)
+                                    _ -> (unIdentifier id', Sem.TypeBottom)
+                            let mapped = map mapVariant vs
+                            mapM processField mapped
+
+                    if any isNothing fields
+                        then pure Nothing
+                        else
+                            pure $
+                                Just $
+                                    DBG.Record
+                                        { DBG.dbgRecordName = unmangledPath path
+                                        , DBG.dbgRecordFields = catMaybes fields
+                                        , DBG.dbgRecordRep = symbol
+                                        , DBG.dbgRecordIsVariant = case Sem.recordKind rec of
+                                            Sem.EnumKind -> True
+                                            _ -> False
+                                        }
+        _ -> pure Nothing
+  where
+    convertIntegralToPrim :: Int8 -> Maybe IRType.PrimitiveInt
+    convertIntegralToPrim 8 = Just IRType.PrimInt8
+    convertIntegralToPrim 16 = Just IRType.PrimInt16
+    convertIntegralToPrim 32 = Just IRType.PrimInt32
+    convertIntegralToPrim 64 = Just IRType.PrimInt64
+    convertIntegralToPrim _ = Nothing
+
+    convertFloatToPrim :: Sem.FloatingPointType -> Maybe IRType.PrimitiveFloat
+    convertFloatToPrim (Sem.IEEEFloat 16) = Just IRType.PrimFloat16
+    convertFloatToPrim (Sem.IEEEFloat 32) = Just IRType.PrimFloat32
+    convertFloatToPrim (Sem.IEEEFloat 64) = Just IRType.PrimFloat64
+    convertFloatToPrim Sem.BFloat16 = Just IRType.PrimBFloat16
+    convertFloatToPrim Sem.Float8 = Just IRType.PrimFloat8
+    convertFloatToPrim _ = Nothing
+
+    unmangledPath :: Path -> T.Text
+    unmangledPath (Path name components) =
+        T.intercalate "::" (map unIdentifier components ++ [unIdentifier name])
+
+    isNothing Nothing = True
+    isNothing _ = False
+
+    catMaybes [] = []
+    catMaybes (Just x : xs) = x : catMaybes xs
+    catMaybes (Nothing : xs) = catMaybes xs
 
 createLoweringState :: (IOE :> es) => FilePath -> Repository -> IR.Module -> TranslationState -> Eff es LoweringState
 createLoweringState moduleFile repo mod' transState = do
@@ -140,15 +229,20 @@ lookupLocation (start, end) = do
         Just (a, b, c, d) -> pure $ Just $ IR.FileLineColRange base a b c d
 
 -- span to location
-withLocation :: IR.Instr -> Maybe (Int64, Int64) -> Lowering IR.Instr
-withLocation instr Nothing = pure instr
-withLocation instr (Just locSpan) = do
+withLocation :: IR.Instr -> LoweringSpan -> Lowering IR.Instr
+withLocation instr NoSpan = pure instr
+withLocation instr (LineSpan locSpan) = do
     loc <- lookupLocation locSpan
     case loc of
         Nothing -> pure instr
         Just l -> pure $ IR.WithLoc l instr
+withLocation instr (FusedSpan locSpan dbgMeta) = do
+    loc <- lookupLocation locSpan
+    case loc of
+        Nothing -> pure instr
+        Just l -> pure $ IR.WithLoc (IR.FusedLoc (Just dbgMeta) [l]) instr
 
-addIRInstr :: IR.Instr -> Maybe (Int64, Int64) -> Lowering ()
+addIRInstr :: IR.Instr -> LoweringSpan -> Lowering ()
 addIRInstr instr mSpan = do
     instr' <- withLocation instr mSpan
     State.modify $ \s -> s{currentBlock = currentBlock s Seq.|> instr'}
@@ -159,7 +253,7 @@ nextValue = do
     State.modify $ \s -> s{valueCounter = next + 1}
     pure $ Value $ fromIntegral next
 
-createConstant :: IR.Type -> Scientific -> Maybe (Int64, Int64) -> Lowering IR.Value
+createConstant :: IR.Type -> Scientific -> LoweringSpan -> Lowering IR.Value
 createConstant ty val mSpan = do
     value' <- nextValue
     let instr = IR.ICall $ IR.IntrinsicCall (IR.Arith (Arith.Constant val)) [] [(value', ty)]
@@ -171,7 +265,8 @@ mkRefType :: IR.Type -> Capability -> IR.Type
 mkRefType ty cap = IR.TypeRef $ IR.Ref ty IR.NonAtomic cap
 
 lowerExpr :: Sem.Expr -> Lowering IR.Value
-lowerExpr (Sem.Expr kind span' ty) = lowerExprInBlock kind ty span'
+lowerExpr (Sem.Expr kind Nothing ty) = lowerExprInBlock kind ty NoSpan
+lowerExpr (Sem.Expr kind (Just span') ty) = lowerExprInBlock kind ty (LineSpan span')
 
 -- lower expression as a block with given block arguments and finalizer
 lowerExprAsBlock ::
@@ -205,7 +300,7 @@ canonicalType ty = do
     return $ substituteGeneric ty (\(GenericID gid') -> IntMap.lookup (fromIntegral gid') assignment)
 
 -- TODO: span information is not being used to generate debug info
-lowerExprInBlock :: Sem.ExprKind -> Sem.Type -> Maybe (Int64, Int64) -> Lowering IR.Value
+lowerExprInBlock :: Sem.ExprKind -> Sem.Type -> LoweringSpan -> Lowering IR.Value
 lowerExprInBlock (Sem.Constant value) ty exprSpan = do
     let arithConstant = Arith.Constant value
     irType <- convertType ty
@@ -221,8 +316,8 @@ lowerExprInBlock (Sem.Not inner) ty exprSpan = do
     let call = IR.ICall $ IR.IntrinsicCall (IR.Arith Arith.Xori) [(innerValue, irType), (one, irType)] [(value', irType)]
     addIRInstr call exprSpan
     pure value'
-lowerExprInBlock (Sem.Negate (Sem.Expr innerKind innerSpan innerTy)) ty exprSpan = do
-    innerValue <- lowerExprInBlock innerKind innerTy innerSpan
+lowerExprInBlock (Sem.Negate innerExpr) ty exprSpan = do
+    innerValue <- lowerExpr innerExpr
     irType <- convertType ty
     if IRType.isFloatType irType
         then do
@@ -359,13 +454,19 @@ lowerExprInBlock
             { Sem.letVarID = varID
             , Sem.letVarExpr = varExpr
             , Sem.letBodyExpr = bodyExpr
+            , Sem.letVarName = name
             }
         )
     _
-    _ = do
-        varValue <- lowerExpr varExpr
+    exprSpan = do
+        varSpan' <- case Sem.exprSpan varExpr of
+            Nothing -> pure NoSpan
+            Just span' ->
+                maybe NoSpan (\dbgTy -> FusedSpan span' $ DBGLocalVar dbgTy (unIdentifier name))
+                    <$> typeAsDbgType (Sem.exprType varExpr)
+        varValue <- lowerExprInBlock (Sem.exprKind varExpr) (Sem.exprType varExpr) varSpan'
         varIRType <- convertType (Sem.exprType varExpr)
-        withVar varID (varValue, varIRType) $ lowerExpr bodyExpr
+        withVar varID (varValue, varIRType) $ lowerExprInBlock (Sem.exprKind bodyExpr) (Sem.exprType bodyExpr) exprSpan
 lowerExprInBlock (Sem.Var varID) _ _ = do
     varMap' <- State.gets varMap
     case IntMap.lookup (fromIntegral $ Sem.unVarID varID) varMap' of
@@ -519,6 +620,29 @@ translateFunction path proto locSpan assignment = do
             Just _ -> (IR.LnkWeakODR, IR.LLVMVisDefault, IR.MLIRVisPublic)
 
     loc <- lookupLocation locSpan
+    loc' <- forM loc $ \span' -> do
+        let convertGenerics [] = pure (Just [])
+            convertGenerics (t : ts) = do
+                mTy <- typeAsDbgType t
+                case mTy of
+                    Nothing -> pure Nothing
+                    Just ty -> do
+                        rest <- convertGenerics ts
+                        pure $ (ty :) <$> rest
+
+        mAssignedGenerics <- convertGenerics tyArgs
+        let unmangledPath :: Path -> T.Text
+            unmangledPath (Path name components) =
+                T.intercalate "::" (map unIdentifier components ++ [unIdentifier name])
+        case mAssignedGenerics of
+            Nothing -> pure span'
+            Just assignedGenerics -> do
+                let functionMeta =
+                        IR.DBGFunction
+                            { DBG.dbgFuncRawName = unmangledPath path
+                            , DBG.dbgFuncTyParams = assignedGenerics
+                            }
+                return $ IR.FusedLoc (Just functionMeta) [span']
     retTy <- convertType (Sem.funcReturnType proto)
 
     (bodyBlock, args) <- case mBody of
@@ -539,7 +663,9 @@ translateFunction path proto locSpan assignment = do
 
             block <- lowerExprAsBlock bodyExpr paramValues $ \retVal -> do
                 let retInstr = IR.Return (Just (retVal, retTy))
-                addIRInstr retInstr (Sem.exprSpan bodyExpr)
+                addIRInstr retInstr $ case Sem.exprSpan bodyExpr of
+                    Just span' -> LineSpan span'
+                    Nothing -> NoSpan
 
             pure (Just block, paramValues)
 
@@ -550,7 +676,7 @@ translateFunction path proto locSpan assignment = do
             , IR.funcMLIRVisibility = mlirVis
             , IR.funcBody = bodyBlock
             , IR.funcArgs = args
-            , IR.funcLoc = loc
+            , IR.funcLoc = loc'
             , IR.funcResult = retTy
             , IR.funcSymbol = symbol
             }

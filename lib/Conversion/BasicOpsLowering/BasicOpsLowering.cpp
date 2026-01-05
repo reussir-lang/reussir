@@ -1764,14 +1764,12 @@ RetType translateDBGAttrToLLVM(mlir::ModuleOp moduleOp, mlir::Attribute dbgAttr,
                 dataLayout.getTypeSizeInBits(recAttr.getUnderlyingType());
             auto alignInBits =
                 dataLayout.getTypeABIAlignment(recAttr.getUnderlyingType()) * 8;
-            auto emptyExpr =
-                mlir::LLVM::DIExpressionAttr::get(moduleOp.getContext(), {});
             return mlir::LLVM::DICompositeTypeAttr::get(
                 moduleOp.getContext(), llvm::dwarf::DW_TAG_class_type,
                 recAttr.getDbgName(), /*file=*/diFile, /*line=*/0, diCU,
                 /*baseType=*/nullptr, /*flags=*/mlir::LLVM::DIFlags::Zero,
-                sizeInBits, alignInBits, members, emptyExpr, emptyExpr,
-                emptyExpr, emptyExpr);
+                sizeInBits, alignInBits, members, nullptr, nullptr, nullptr,
+                nullptr);
           })
           .template Case<DBGSubprogramAttr>(
               [&](DBGSubprogramAttr spAttr) -> mlir::Attribute {

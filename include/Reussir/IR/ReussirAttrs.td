@@ -98,13 +98,11 @@ def Reussir_DBGRecordMember : ReussirAttr<"DBGRecordMember", "dbg_record_member"
   let description = "Debug record type attribute";
   let parameters = (
     ins "::mlir::StringAttr":$name,
-    "::mlir::Attribute":$typeAttr,
-    "bool":$isMutable
+    "::mlir::Attribute":$typeAttr
   );
   let assemblyFormat = [{
     `<` `name` `:` $name `,` 
-        `type` `:` $typeAttr `,` 
-        `is_mutable` `:` $isMutable 
+        `type` `:` $typeAttr
     `>`
   }];
 }
