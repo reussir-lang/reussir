@@ -318,7 +318,7 @@ translateToModule(llvm::StringRef texture, llvm::LLVMContext &llvmCtx,
   spdlog::info("Successfully lowered MLIR module.");
   // finalize as LLVM IR
   auto mainModule =
-      translateModuleToLLVMIR(module->getOperation(), llvmCtx, texture);
+      translateModuleToLLVMIR(module->getOperation(), llvmCtx, source_name);
   if (!mainModule) {
     spdlog::error("Failed to translate MLIR module to LLVM IR.");
     return nullptr;

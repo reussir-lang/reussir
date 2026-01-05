@@ -1706,7 +1706,7 @@ template <typename RetType = mlir::Attribute>
 RetType translateDBGAttrToLLVM(mlir::ModuleOp moduleOp, mlir::Attribute dbgAttr,
                                mlir::LLVM::DIFileAttr diFile,
                                mlir::LLVM::DICompileUnitAttr diCU,
-                               mlir::func::FuncOp funcOp,
+                               mlir::LLVM::LLVMFuncOp funcOp,
                                mlir::LLVM::DIScopeAttr funcScope) {
   mlir::DataLayout dataLayout{moduleOp};
   return llvm::dyn_cast_if_present<RetType>(
@@ -1757,7 +1757,7 @@ RetType translateDBGAttrToLLVM(mlir::ModuleOp moduleOp, mlir::Attribute dbgAttr,
                   moduleOp->getContext(), llvm::dwarf::DW_TAG_member,
                   memberAttr.getName(), memberTy, sizeInBits, alignInBytes * 8,
                   currentOffset * 8,
-                  /*address space=*/0, /*extraData=*/nullptr));
+                  /*address space=*/std::nullopt, /*extraData=*/nullptr));
               currentOffset += sizeInBits / 8;
             }
             auto sizeInBits =
@@ -1832,7 +1832,8 @@ void lowerFusedDBGAttributeInLocations(mlir::ModuleOp moduleOp) {
       llvm::dwarf::DW_LANG_C_plus_plus_20, llvmDIFIleAttr,
       mlir::StringAttr::get(context, "reussir"), true,
       mlir::LLVM::DIEmissionKind::Full);
-  moduleOp->walk([&](mlir::func::FuncOp funcOp) {
+  mlir::OpBuilder builder(moduleOp);
+  moduleOp->walk([&](mlir::LLVM::LLVMFuncOp funcOp) {
     mlir::LocationAttr funcLoc = funcOp->getLoc();
     if (auto fused =
             llvm::dyn_cast_if_present<mlir::FusedLocWith<DBGSubprogramAttr>>(
@@ -1854,9 +1855,16 @@ void lowerFusedDBGAttributeInLocations(mlir::ModuleOp moduleOp) {
               moduleOp, innerFused.getMetadata(), llvmDIFIleAttr,
               dbgCompileUnitAttr, funcOp, subprogram);
           if (translated) {
+            if (auto localVar = mlir::dyn_cast<mlir::LLVM::DILocalVariableAttr>(
+                    translated)) {
+              auto value = op->getResult(0);
+              builder.setInsertionPointAfterValue(value);
+              builder.create<mlir::LLVM::DbgValueOp>(op->getLoc(), value,
+                                                     localVar);
+            }
             auto updatedInnerLoc =
                 mlir::FusedLoc::get(context, fused.getLocations(), translated);
-            funcOp->setLoc(updatedInnerLoc);
+            op->setLoc(updatedInnerLoc);
           }
         }
       });
@@ -1874,39 +1882,42 @@ struct BasicOpsLoweringPass
     : public impl::ReussirBasicOpsLoweringPassBase<BasicOpsLoweringPass> {
   using Base::Base;
   void runOnOperation() override {
+    {
+      mlir::LLVMConversionTarget target(getContext());
+      mlir::RewritePatternSet patterns(&getContext());
+      LLVMTypeConverter converter(getOperation());
+      populateBasicOpsLoweringToLLVMConversionPatterns(converter, patterns);
+      mlir::populateFuncToLLVMFuncOpConversionPattern(converter, patterns);
+      mlir::populateFuncToLLVMConversionPatterns(converter, patterns);
+      mlir::arith::populateArithToLLVMConversionPatterns(converter, patterns);
+      mlir::cf::populateControlFlowToLLVMConversionPatterns(converter,
+                                                            patterns);
+      mlir::ub::populateUBToLLVMConversionPatterns(converter, patterns);
+      addRuntimeFunctions(getOperation(), converter);
+      target.addIllegalDialect<mlir::func::FuncDialect,
+                               mlir::arith::ArithDialect>();
+      target.addIllegalOp<
+          ReussirTokenAllocOp, ReussirTokenFreeOp, ReussirTokenReinterpretOp,
+          ReussirTokenReallocOp, ReussirRefLoadOp, ReussirRefStoreOp,
+          ReussirRefSpilledOp, ReussirRefDiffOp, ReussirRefCmpOp,
+          ReussirRefMemcpyOp, ReussirNullableCheckOp, ReussirNullableCreateOp,
+          ReussirNullableCoerceOp, ReussirRcIncOp, ReussirRcCreateOp,
+          ReussirRcDecOp, ReussirRcBorrowOp, ReussirRcIsUniqueOp,
+          ReussirRecordCompoundOp, ReussirRecordVariantOp, ReussirRefProjectOp,
+          ReussirRecordTagOp, ReussirRecordCoerceOp, ReussirRegionVTableOp,
+          ReussirRcFreezeOp, ReussirRegionCleanupOp, ReussirRegionCreateOp,
+          ReussirRcReinterpretOp, ReussirClosureApplyOp, ReussirClosureCloneOp,
+          ReussirClosureEvalOp, ReussirClosureInspectPayloadOp,
+          ReussirClosureCursorOp, ReussirClosureTransferOp,
+          ReussirClosureInstantiateOp, ReussirClosureVtableOp,
+          ReussirClosureCreateOp, ReussirRcFetchDecOp, ReussirStrGlobalOp,
+          ReussirStrLiteralOp, ReussirPanicOp>();
+      target.addLegalDialect<mlir::LLVM::LLVMDialect>();
+      if (failed(applyPartialConversion(getOperation(), target,
+                                        std::move(patterns))))
+        signalPassFailure();
+    }
     lowerFusedDBGAttributeInLocations(getOperation());
-    mlir::LLVMConversionTarget target(getContext());
-    mlir::RewritePatternSet patterns(&getContext());
-    LLVMTypeConverter converter(getOperation());
-    populateBasicOpsLoweringToLLVMConversionPatterns(converter, patterns);
-    mlir::populateFuncToLLVMFuncOpConversionPattern(converter, patterns);
-    mlir::populateFuncToLLVMConversionPatterns(converter, patterns);
-    mlir::arith::populateArithToLLVMConversionPatterns(converter, patterns);
-    mlir::cf::populateControlFlowToLLVMConversionPatterns(converter, patterns);
-    mlir::ub::populateUBToLLVMConversionPatterns(converter, patterns);
-    addRuntimeFunctions(getOperation(), converter);
-    target.addIllegalDialect<mlir::func::FuncDialect,
-                             mlir::arith::ArithDialect>();
-    target.addIllegalOp<
-        ReussirTokenAllocOp, ReussirTokenFreeOp, ReussirTokenReinterpretOp,
-        ReussirTokenReallocOp, ReussirRefLoadOp, ReussirRefStoreOp,
-        ReussirRefSpilledOp, ReussirRefDiffOp, ReussirRefCmpOp,
-        ReussirRefMemcpyOp, ReussirNullableCheckOp, ReussirNullableCreateOp,
-        ReussirNullableCoerceOp, ReussirRcIncOp, ReussirRcCreateOp,
-        ReussirRcDecOp, ReussirRcBorrowOp, ReussirRcIsUniqueOp,
-        ReussirRecordCompoundOp, ReussirRecordVariantOp, ReussirRefProjectOp,
-        ReussirRecordTagOp, ReussirRecordCoerceOp, ReussirRegionVTableOp,
-        ReussirRcFreezeOp, ReussirRegionCleanupOp, ReussirRegionCreateOp,
-        ReussirRcReinterpretOp, ReussirClosureApplyOp, ReussirClosureCloneOp,
-        ReussirClosureEvalOp, ReussirClosureInspectPayloadOp,
-        ReussirClosureCursorOp, ReussirClosureTransferOp,
-        ReussirClosureInstantiateOp, ReussirClosureVtableOp,
-        ReussirClosureCreateOp, ReussirRcFetchDecOp, ReussirStrGlobalOp,
-        ReussirStrLiteralOp, ReussirPanicOp>();
-    target.addLegalDialect<mlir::LLVM::LLVMDialect>();
-    if (failed(applyPartialConversion(getOperation(), target,
-                                      std::move(patterns))))
-      signalPassFailure();
   }
 };
 } // namespace
