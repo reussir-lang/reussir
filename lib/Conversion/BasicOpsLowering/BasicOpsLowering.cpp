@@ -55,6 +55,7 @@
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/TypeSize.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace reussir {
 #define GEN_PASS_DEF_REUSSIRBASICOPSLOWERINGPASS
@@ -1786,7 +1787,7 @@ RetType translateDBGAttrToLLVM(mlir::ModuleOp moduleOp, mlir::Attribute dbgAttr,
                 // TODO: function type is not emitted now
                 auto emptyRoutine = mlir::LLVM::DISubroutineTypeAttr::get(
                     moduleOp.getContext(), {});
-                return mlir::LLVM::DISubprogramAttr::get(
+                auto res = mlir::LLVM::DISubprogramAttr::get(
                     moduleOp.getContext(),
                     mlir::DistinctAttr::create(
                         mlir::UnitAttr::get(moduleOp.getContext())),
@@ -1796,6 +1797,8 @@ RetType translateDBGAttrToLLVM(mlir::ModuleOp moduleOp, mlir::Attribute dbgAttr,
                     diCU, diFile, spAttr.getRawName(), linkageName, diFile, 0,
                     0, mlir::LLVM::DISubprogramFlags::Definition, emptyRoutine,
                     {}, {});
+
+                return res;
               })
           .template Case<DBGLocalVarAttr>(
               [&](DBGLocalVarAttr localVarAttr) -> mlir::Attribute {
@@ -1836,6 +1839,7 @@ void lowerFusedDBGAttributeInLocations(mlir::ModuleOp moduleOp) {
     if (auto fused =
             llvm::dyn_cast_if_present<mlir::FusedLocWith<DBGSubprogramAttr>>(
                 funcLoc)) {
+
       auto subprogram = translateDBGAttrToLLVM<mlir::LLVM::DISubprogramAttr>(
           moduleOp, fused.getMetadata(), llvmDIFIleAttr, dbgCompileUnitAttr,
           funcOp, nullptr);
@@ -1872,6 +1876,7 @@ struct BasicOpsLoweringPass
     : public impl::ReussirBasicOpsLoweringPassBase<BasicOpsLoweringPass> {
   using Base::Base;
   void runOnOperation() override {
+    lowerFusedDBGAttributeInLocations(getOperation());
     mlir::LLVMConversionTarget target(getContext());
     mlir::RewritePatternSet patterns(&getContext());
     LLVMTypeConverter converter(getOperation());
@@ -1904,7 +1909,6 @@ struct BasicOpsLoweringPass
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
       signalPassFailure();
-    lowerFusedDBGAttributeInLocations(getOperation());
   }
 };
 } // namespace

@@ -129,7 +129,7 @@ def Reussir_DBGSubprogram : ReussirAttr<"DBGSubprogram", "dbg_subprogram"> {
   let description = "Debug subprogram attribute";
   let parameters = (ins
     "::mlir::StringAttr":$rawName,
-    ArrayRefParameter<"::mlir::Attribute">:$typeParams
+    "::mlir::ArrayAttr":$typeParams
     
   );
   let assemblyFormat = [{
