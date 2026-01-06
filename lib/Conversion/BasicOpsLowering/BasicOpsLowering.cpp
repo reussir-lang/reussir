@@ -1745,7 +1745,7 @@ RetType translateDBGAttrToLLVM(mlir::ModuleOp moduleOp, mlir::Attribute dbgAttr,
               auto memberTy = translateDBGAttrToLLVM<mlir::LLVM::DITypeAttr>(
                   moduleOp, memberAttr.getTypeAttr(), diFile, diCU, funcOp,
                   funcScope);
-              if (!memberAttr)
+              if (!memberTy)
                 return nullptr;
               auto memberUnderlyingTy =
                   getUnderlyingTypeFromDbgAttr(memberAttr.getTypeAttr());
