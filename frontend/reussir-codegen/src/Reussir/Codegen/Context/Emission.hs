@@ -25,7 +25,7 @@ import Data.Text.Builder.Linear.Buffer qualified as TBB
 import Effectful.State.Static.Local qualified as E
 import Reussir.Codegen.Context.Codegen (Codegen, Context (..))
 import Reussir.Codegen.Context.Symbol (Symbol, symbolText)
-import Reussir.Codegen.Location (DBGType (..), DGBMetaInfo (..), Location (..))
+import Reussir.Codegen.Location (DBGMetaInfo (..), DBGType (..), Location (..))
 import Reussir.Codegen.Type.Data (PrimitiveFloat (..), PrimitiveInt (..))
 
 {- | The Emission class provides a way to convert values to Text.Builder
@@ -143,7 +143,7 @@ instance Emission Location where
                     pure $ namePart <> "(" <> childInner <> ")"
                 Nothing -> pure namePart
 
-instance Emission DGBMetaInfo where
+instance Emission DBGMetaInfo where
     emit (DBGRawMeta text) = pure $ fromString (show text)
     emit (DBGLocalVar ty name) = do
         ty' <- emit ty

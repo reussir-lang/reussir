@@ -24,7 +24,7 @@ import Reussir.Codegen.Global qualified as IR
 import Reussir.Codegen.IR qualified as IR
 import Reussir.Codegen.Intrinsics qualified as IR
 import Reussir.Codegen.Intrinsics.Arith qualified as Arith
-import Reussir.Codegen.Location (DGBMetaInfo (DBGLocalVar))
+import Reussir.Codegen.Location (DBGMetaInfo (DBGLocalVar))
 import Reussir.Codegen.Location qualified as DBG
 import Reussir.Codegen.Location qualified as IR
 import Reussir.Codegen.Type (Capability)

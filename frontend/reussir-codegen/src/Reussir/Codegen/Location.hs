@@ -27,7 +27,7 @@ data DBGType
     | FP PrimitiveFloat T.Text
     deriving (Show)
 
-data DGBMetaInfo
+data DBGMetaInfo
     = DBGFunction
         { dbgFuncRawName :: T.Text
         , dbgFuncTyParams :: [DBGType]
@@ -49,7 +49,7 @@ data Location
         , endColumn :: Int64
         }
     | FusedLoc
-        { metadata :: Maybe DGBMetaInfo -- currently only used text for meta
+        { metadata :: Maybe DBGMetaInfo -- currently only used text for meta
         , locations :: [Location]
         }
     | UnknownLoc
@@ -59,5 +59,5 @@ data Location
         }
     deriving (Show)
 
-instance IsString DGBMetaInfo where
+instance IsString DBGMetaInfo where
     fromString s = DBGRawMeta (T.pack s)

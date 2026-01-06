@@ -16,7 +16,7 @@ import Effectful.Prim.IORef.Strict (Prim)
 import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen qualified as IR
 import Reussir.Codegen.IR qualified as IR
-import Reussir.Codegen.Location (DGBMetaInfo)
+import Reussir.Codegen.Location (DBGMetaInfo)
 import Reussir.Codegen.Value (TypedValue)
 import Reussir.Core.Types.Translation (TranslationState)
 import Reussir.Core.Types.Type qualified as Sem
@@ -43,4 +43,4 @@ type Lowering = Eff '[IOE, Prim, L.Log, State.State LoweringState]
 data LoweringSpan
     = NoSpan
     | LineSpan (Int64, Int64)
-    | FusedSpan (Int64, Int64) DGBMetaInfo
+    | FusedSpan (Int64, Int64) DBGMetaInfo
