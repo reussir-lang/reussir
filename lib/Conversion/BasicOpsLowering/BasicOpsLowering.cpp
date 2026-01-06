@@ -1708,6 +1708,10 @@ RetType translateDBGAttrToLLVM(mlir::ModuleOp moduleOp, mlir::Attribute dbgAttr,
                                mlir::LLVM::DICompileUnitAttr diCU,
                                mlir::LLVM::LLVMFuncOp funcOp,
                                mlir::LLVM::DIScopeAttr funcScope) {
+#ifdef _WIN32
+  // Skip DI transformation on Windows
+  return RetType{};
+#endif
   mlir::DataLayout dataLayout{moduleOp};
   return llvm::dyn_cast_if_present<RetType>(
       llvm::TypeSwitch<mlir::Attribute, mlir::Attribute>(dbgAttr)

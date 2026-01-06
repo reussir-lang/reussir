@@ -844,11 +844,11 @@ codegenTests =
                     -- Compile the executable
                     (exitCode1, _, _) <-
                         readProcessWithExitCode "cc" [tensorCPath, tensorObjPath, "-O3", "-o", tensorExecPath] ""
+                    -- Check that compilation succeeded
+                    assertBool "Compilation should succeed" (exitCode1 == ExitSuccess)
                     -- Run the executable and capture output
                     (exitCode2, output, _) <-
                         readProcessWithExitCode tensorExecPath [] ""
-                    -- Check that compilation succeeded
-                    assertBool "Compilation should succeed" (exitCode1 == ExitSuccess)
                     -- Check that execution succeeded
                     assertBool "Execution should succeed" (exitCode2 == ExitSuccess)
                     -- Check that the output is the expected value
