@@ -22,7 +22,7 @@ import System.Console.Haskeline.IO
 
 -- Reussir
 import Reussir.Bridge (LogLevel (..), OptOption (..), ReussirJIT, addModule, lookupSymbol, withJIT)
-import Reussir.Core.REPL (ReplState, initReplState, addDefinition, compileExpression, ReplError(..))
+import Reussir.Core.REPL (ReplState(..), initReplState, addDefinition, compileExpression, ReplError(..))
 import Reussir.Parser.Prog (ReplInput(..), parseReplInput)
 
 -- | Placeholder callback for lazy module loading
@@ -43,37 +43,36 @@ main =
             state <- initReplState LogWarning "<repl>"
             -- Use () as the AST type since we're not using lazy modules
             withJIT placeholderCallback OptTPDE $ \jit ->
-                loop jit state 0 hd >> closeInput hd
+                loop jit state hd >> closeInput hd
         )
   where
-    loop :: ReussirJIT () -> ReplState -> Int64 -> InputState -> IO ()
-    loop jit state n hd = do
+    loop :: ReussirJIT () -> ReplState -> InputState -> IO ()
+    loop jit state hd = do
         minput <- queryInput hd (getInputLine "λ> ")
         case minput of
             Nothing -> return ()
             Just "quit" -> return ()
             Just ":q" -> return ()
-            Just "" -> loop jit state n hd
+            Just "" -> loop jit state hd
             Just input -> do
-                result <- processInput jit state n input
+                result <- processInput jit state input
                 case result of
                     Left errMsg -> do
                         queryInput hd $ outputStrLn errMsg
-                        loop jit state n hd
+                        loop jit state hd
                     Right (output, state') -> do
                         case output of
                             Just msg -> queryInput hd $ outputStrLn msg
                             Nothing -> return ()
-                        loop jit state' (n + 1) hd
+                        loop jit state' hd
 
 -- | Process a single line of REPL input
 processInput ::
     ReussirJIT () ->
     ReplState ->
-    Int64 ->
     String ->
     IO (Either String (Maybe String, ReplState))
-processInput jit state n input = do
+processInput jit state input = do
     catch
         ( case runParser parseReplInput "<repl>" (T.pack input) of
             Left err -> return $ Left $ errorBundlePretty err
@@ -93,7 +92,9 @@ processInput jit state n input = do
                         Left (CompilationError msg) -> return $ Left $ "Compilation error: " ++ msg
                         Right (moduleBytes, state') -> do
                             -- JIT compile and execute
-                            executeResult <- executeModule jit moduleBytes n
+                            -- Use replCounter - 1 since compileExpression increments after generating the name
+                            let exprCounter = fromIntegral (replCounter state' - 1)
+                            executeResult <- executeModule jit moduleBytes exprCounter
                             case executeResult of
                                 Left msg -> return $ Left msg
                                 Right resultStr -> return $ Right (Just resultStr, state')

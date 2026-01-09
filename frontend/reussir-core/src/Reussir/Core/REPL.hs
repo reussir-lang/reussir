@@ -16,14 +16,14 @@ import Data.Text.Encoding qualified as TE
 import Effectful (Eff, IOE, inject, runEff, (:>))
 import Effectful.Log qualified as L
 import Effectful.Prim (Prim, runPrim)
-import Effectful.State.Static.Local (execState, runState)
+import Effectful.State.Static.Local (runState)
 import GHC.IO.Handle.FD (stderr)
 import Log (LogLevel (..))
 import Log.Backend.StandardOutput qualified as LogStd
 import Reussir.Bridge qualified as B
 import Reussir.Codegen qualified as IR
 import Reussir.Codegen.Context (TargetSpec (..))
-import Reussir.Core.Lowering (createLoweringState, lowerExpr)
+import Reussir.Core.Lowering (createLoweringState)
 import Reussir.Core.Translation
     ( emptyTranslationState
     , scanStmt
@@ -32,7 +32,7 @@ import Reussir.Core.Translation
     )
 import Reussir.Core.Tyck (checkFuncType, inferType)
 import Reussir.Core.Types.Expr qualified as Sem
-import Reussir.Core.Types.Lowering (LoweringState, currentModule)
+import Reussir.Core.Types.Lowering (LoweringState)
 import Reussir.Core.Types.Translation (TranslationState (..), GenericSolution)
 import Reussir.Diagnostic.Display (displayReport)
 import Reussir.Diagnostic.Repository (Repository, createRepository)
@@ -162,13 +162,16 @@ lowerExpressionToModule ::
     LoweringState ->
     Eff es T.Text
 lowerExpressionToModule _semExpr _wrapperName _solution _loweringState = do
-    -- TODO: This needs more work to properly lower expressions
+    -- TODO: This needs more work to properly lower expressions.
     -- Need to:
     -- 1. Create a synthetic function that wraps the expression
     -- 2. Lower that function using translateFunction
     -- 3. Emit the module to MLIR text
-    -- For now, return a placeholder
-    return "// REPL expression compilation not yet fully implemented"
+    --
+    -- NOTE: REPL expression compilation is not yet fully implemented.
+    -- We still return a valid (but effectively empty) MLIR module so that
+    -- downstream consumers do not fail on malformed MLIR.
+    return "module {\n  // REPL expression compilation not yet fully implemented\n}\n"
 
 toEffLogLevel :: B.LogLevel -> LogLevel
 toEffLogLevel B.LogError = LogAttention
