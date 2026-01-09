@@ -80,6 +80,7 @@ library
         Reussir.Core.Function
         Reussir.Core.Pretty
         Reussir.Core.Lowering
+        Reussir.Core.REPL
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -108,7 +109,8 @@ library
                       prettyprinter,
                       prettyprinter-ansi-terminal,
                       directory,
-                      filepath
+                      filepath,
+                      bytestring
 
     -- Directories containing source files.
     hs-source-dirs:   src

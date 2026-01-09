@@ -76,6 +76,9 @@ executable reussir-repl
         log-base ^>= 0.12,
         bytestring ^>=0.12,
         text ^>=2.1.3,
+        megaparsec,
+        reussir-parser,
+        reussir-core,
         reussir-codegen,
         reussir-bridge
 
