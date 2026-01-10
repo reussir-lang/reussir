@@ -9,6 +9,7 @@ import Data.Foldable (Foldable (..))
 import Data.HashTable.IO qualified as H
 import Data.Int (Int64, Int8)
 import Data.IntMap.Strict qualified as IntMap
+import Data.Maybe (catMaybes)
 import Data.Scientific (Scientific)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
@@ -133,10 +134,6 @@ typeAsDbgType ty = do
 
     isNothing Nothing = True
     isNothing _ = False
-
-    catMaybes [] = []
-    catMaybes (Just x : xs) = x : catMaybes xs
-    catMaybes (Nothing : xs) = catMaybes xs
 
 createLoweringState :: (IOE :> es) => FilePath -> Repository -> IR.Module -> TranslationState -> Eff es LoweringState
 createLoweringState moduleFile repo mod' transState = do
@@ -671,9 +668,6 @@ translateFunction path proto locSpan assignment = do
 
     -- Generate debug info for function parameters
     let params = Sem.funcParams proto
-    let catMaybes [] = []
-        catMaybes (Just x : xs) = x : catMaybes xs
-        catMaybes (Nothing : xs) = catMaybes xs
     dbgArgs <- case mBody of
         Nothing -> pure []
         Just _ -> do

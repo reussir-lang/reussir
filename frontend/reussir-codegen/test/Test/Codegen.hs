@@ -82,6 +82,7 @@ createAddF32Function =
         , funcSymbol = verifiedSymbol "add_f32"
         , funcArgs = [f32val 0, f32val 1]
         , funcResult = primitiveF32
+        , funcDbgArgs = []
         , funcLoc = Nothing
         , funcBody =
             Just
@@ -171,6 +172,7 @@ createMatmulFunction =
         , funcSymbol = verifiedSymbol "_ZN9Tensor2x2I3f64E6matmulE"
         , funcArgs = [tensor2x2val 0, tensor2x2val 1] -- a: Tensor2x2, b: Tensor2x2
         , funcResult = tensor2x2Type
+        , funcDbgArgs = []
         , funcLoc = Nothing
         , funcBody =
             Just
@@ -345,6 +347,7 @@ createPowImplFunction =
         , funcSymbol = verifiedSymbol "_ZN9Tensor2x2I3f64E8pow_implI3u64EE"
         , funcArgs = [tensor2x2val 0, i64val 1, tensor2x2val 2] -- base, exp, acc
         , funcResult = tensor2x2Type
+        , funcDbgArgs = []
         , funcLoc = Nothing
         , funcBody =
             Just
@@ -501,6 +504,7 @@ createPowFunction =
         , funcSymbol = verifiedSymbol "_ZN9Tensor2x2I3f64E3powI3u64EE"
         , funcArgs = [tensor2x2val 0, i64val 1] -- base, exp
         , funcResult = tensor2x2Type
+        , funcDbgArgs = []
         , funcLoc = Nothing
         , funcBody =
             Just
@@ -553,6 +557,7 @@ createFibonacciFastFunction =
         , funcSymbol = verifiedSymbol "_Z13fibnacci_fast"
         , funcArgs = [i64val 0] -- n: i64
         , funcResult = primitiveF64
+        , funcDbgArgs = []
         , funcLoc = Nothing
         , funcBody =
             Just
@@ -623,6 +628,7 @@ createFibonacciFunction =
         , funcSymbol = verifiedSymbol "fibonacci"
         , funcArgs = [i128val 0] -- n: i128
         , funcResult = primitiveI128
+        , funcDbgArgs = []
         , funcLoc = Nothing
         , funcBody =
             Just
