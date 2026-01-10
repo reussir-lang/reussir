@@ -69,6 +69,8 @@ tests =
         , testCase "Generic Record Access" testGenericRecordAccess
         , testCase "Function Call" testFuncCall
         , testCase "Function Call with Generic Hole" testGenericFuncCall
+        , testCase "Function Call with Empty Type Args" testGenericFuncCallEmptyTypeArgs
+        , testCase "Ctor Call with Empty Type Args" testGenericCtorCallEmptyTypeArgs
         ]
 
 runTyck :: Repository -> (a -> Tyck.Tyck b) -> Tyck a -> IO b
@@ -339,3 +341,64 @@ testGenericFuncCall = do
                     }
         addFunctionDefinition funcPath proto
         checkType expr (Sem.TypeIntegral $ Signed 32) >>= wellTypedExpr
+
+-- Test for issue #117: Allow empty type argument list as syntax sugar
+-- This tests that `add(1, 2)` works for a generic function without explicit `<_>`
+testGenericFuncCallEmptyTypeArgs :: Assertion
+testGenericFuncCallEmptyTypeArgs = do
+    let funcName = "add"
+    let funcPath = Path funcName []
+    -- Note: no <_> type arguments - empty list should be treated as all holes
+    let input = "add(1, 2)"
+    expr <- parseToExpr input
+
+    repository <- runEff $ createRepository []
+    let repo = addDummyFile repository "<dummy input>" input
+    let check res = liftIO $ do
+            Sem.exprType res @?= Sem.TypeIntegral (Sem.Signed 32)
+
+    runTyck repo check $ do
+        funcBodyRef <- newIORef' Nothing
+        state <- State.gets Tyck.generics
+        generic <- newGenericVar "T" Nothing [Path "Num" []] state
+        let proto =
+                FunctionProto
+                    { funcVisibility = Public
+                    , funcName = funcName
+                    , funcGenerics = [("T", generic)]
+                    , funcParams = [("a", Sem.TypeGeneric generic), ("b", Sem.TypeGeneric generic)]
+                    , funcReturnType = Sem.TypeGeneric generic
+                    , funcIsRegional = False
+                    , funcBody = funcBodyRef
+                    , funcSpan = Nothing
+                    }
+        addFunctionDefinition funcPath proto
+        checkType expr (Sem.TypeIntegral $ Signed 32) >>= wellTypedExpr
+
+-- Test for issue #117: Allow empty type argument list for ctor calls
+-- This tests that `Box { inner: 42 }` works without explicit `<_>`
+testGenericCtorCallEmptyTypeArgs :: Assertion
+testGenericCtorCallEmptyTypeArgs = do
+    let recordName = "Box"
+    let recordPath = Path recordName []
+    let gid = GenericID 0
+    let record =
+            Sem.Record
+                { Sem.recordName = Path recordName []
+                , Sem.recordTyParams = [("T", gid)]
+                , Sem.recordFields = Sem.Named [("inner", Sem.TypeGeneric gid, False)]
+                , Sem.recordKind = Sem.StructKind
+                , Sem.recordVisibility = Public
+                , Sem.recordDefaultCap = Value
+                }
+
+    -- Note: no <_> type arguments - empty list should be treated as all holes
+    let input = "Box { inner: 42 }"
+    expr <- parseToExpr input
+
+    repository <- runEff $ createRepository []
+    let repo = addDummyFile repository "<dummy input>" input
+
+    runTyck repo (\res -> liftIO $ Sem.exprType res @?= Sem.TypeRecord recordPath [Sem.TypeIntegral (Sem.Signed 32)]) $ do
+        Tyck.addRecordDefinition recordPath record
+        checkType expr (Sem.TypeRecord recordPath [Sem.TypeIntegral (Sem.Signed 32)]) >>= wellTypedExpr

@@ -282,9 +282,13 @@ inferType (Syn.FuncCallExpr (Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallT
     getFunctionProto path functionTable >>= \case
         Just proto -> do
             let numGenerics = length (funcGenerics proto)
-            checkTypeArgsNum numGenerics $ do
+            -- Allow empty type argument list as syntax sugar for all holes
+            let paddedTyArgs = if null tyArgs && numGenerics > 0
+                               then replicate numGenerics Nothing
+                               else tyArgs
+            checkTypeArgsNum numGenerics paddedTyArgs $ do
                 bounds <- mapM (\(_, gid) -> getGenericBound gid) (funcGenerics proto)
-                tyArgs' <- zipWithM tyArgOrMetaHole tyArgs bounds
+                tyArgs' <- zipWithM tyArgOrMetaHole paddedTyArgs bounds
                 logTraceWhen $
                     "Tyck: instantiated call generics for "
                         <> T.pack (show path)
@@ -319,9 +323,9 @@ inferType (Syn.FuncCallExpr (Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallT
                         <> T.pack (show (length argExprs))
                 exprWithSpan Sem.TypeBottom Sem.Poison
             else argAction
-    checkTypeArgsNum :: Int -> Tyck Sem.Expr -> Tyck Sem.Expr
-    checkTypeArgsNum expectedNum paramAction = do
-        if expectedNum /= length tyArgs
+    checkTypeArgsNum :: Int -> [Maybe Syn.Type] -> Tyck Sem.Expr -> Tyck Sem.Expr
+    checkTypeArgsNum expectedNum actualTyArgs paramAction = do
+        if expectedNum /= length actualTyArgs
             then do
                 reportError $
                     "Function "
@@ -329,7 +333,7 @@ inferType (Syn.FuncCallExpr (Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallT
                         <> " expects "
                         <> T.pack (show expectedNum)
                         <> " type arguments, but got "
-                        <> T.pack (show (length tyArgs))
+                        <> T.pack (show (length actualTyArgs))
                 exprWithSpan Sem.TypeBottom Sem.Poison
             else paramAction
     functionGenericMap :: FunctionProto -> [Sem.Type] -> IntMap.IntMap Sem.Type
@@ -361,15 +365,19 @@ inferType
                 reportError $ "Record not found: " <> T.pack (show ctorCallTarget)
                 exprWithSpan Sem.TypeBottom Sem.Poison
             Just record -> do
+                let numGenerics = length (Sem.recordTyParams record)
+                -- Allow empty type argument list as syntax sugar for all holes
+                let paddedTyArgs = if null ctorTyArgs && numGenerics > 0
+                                   then replicate numGenerics Nothing
+                                   else ctorTyArgs
                 bounds <- mapM (\(_, gid) -> getGenericBound gid) (Sem.recordTyParams record)
-                tyArgs' <- zipWithM tyArgOrMetaHole ctorTyArgs bounds
+                tyArgs' <- zipWithM tyArgOrMetaHole paddedTyArgs bounds
                 logTraceWhen $
                     "Tyck: instantiated ctor generics for "
                         <> T.pack (show ctorCallTarget)
                         <> ": "
                         <> T.pack (show tyArgs')
-                let numGenerics = length (Sem.recordTyParams record)
-                checkTypeArgsNum numGenerics $ do
+                checkTypeArgsNum numGenerics paddedTyArgs $ do
                     let genericMap = recordGenericMap record tyArgs'
                     -- Find variant index if target variant is specified
                     -- Check if the ctor call style fulfills the variant/compound style in the same time
@@ -463,9 +471,9 @@ inferType
                             <> T.pack (show (length ctorArgs))
                     exprWithSpan Sem.TypeBottom Sem.Poison
                 else argAction
-        checkTypeArgsNum :: Int -> Tyck Sem.Expr -> Tyck Sem.Expr
-        checkTypeArgsNum expectedNum paramAction = do
-            if expectedNum /= length ctorTyArgs
+        checkTypeArgsNum :: Int -> [Maybe Syn.Type] -> Tyck Sem.Expr -> Tyck Sem.Expr
+        checkTypeArgsNum expectedNum actualTyArgs paramAction = do
+            if expectedNum /= length actualTyArgs
                 then do
                     reportError $
                         "Record "
@@ -473,7 +481,7 @@ inferType
                             <> " expects "
                             <> T.pack (show expectedNum)
                             <> " type arguments, but got "
-                            <> T.pack (show (length ctorTyArgs))
+                            <> T.pack (show (length actualTyArgs))
                     exprWithSpan Sem.TypeBottom Sem.Poison
                 else paramAction
 inferType (Syn.SpannedExpr (WithSpan subExpr start end)) = do

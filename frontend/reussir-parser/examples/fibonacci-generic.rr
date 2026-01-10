@@ -24,7 +24,7 @@ fn fibonacci_logarithmic_impl<T : Integral>(
         if n % 2 == 1 {
             fibonacci_logarithmic_impl<T>(
                 n / 2,
-                matmul<_>(a, b),
+                matmul(a, b),
                 matmul<T>(b, b)
             )
         } else {
