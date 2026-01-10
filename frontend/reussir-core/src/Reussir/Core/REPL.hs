@@ -1,13 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | REPL-specific state management for incremental definitions
-module Reussir.Core.REPL
-    ( ReplState (..)
-    , ReplError (..)
-    , initReplState
-    , addDefinition
-    , compileExpression
-    ) where
+module Reussir.Core.REPL (
+    ReplState (..),
+    ReplError (..),
+    initReplState,
+    addDefinition,
+    compileExpression,
+) where
 
 import Control.Monad (forM_)
 import Data.ByteString (ByteString)
@@ -16,37 +16,39 @@ import Data.Text.Encoding qualified as TE
 import Effectful (Eff, IOE, inject, runEff, (:>))
 import Effectful.Log qualified as L
 import Effectful.Prim (Prim, runPrim)
-import Effectful.State.Static.Local (runState)
+import Effectful.State.Static.Local (execState, runState)
+import Effectful.State.Static.Local qualified as State
 import GHC.IO.Handle.FD (stderr)
 import Log (LogLevel (..))
 import Log.Backend.StandardOutput qualified as LogStd
 import Reussir.Bridge qualified as B
 import Reussir.Codegen qualified as IR
 import Reussir.Codegen.Context (TargetSpec (..))
-import Reussir.Core.Lowering (createLoweringState)
-import Reussir.Core.Translation
-    ( emptyTranslationState
-    , scanStmt
-    , solveAllGenerics
-    , wellTypedExpr
-    )
+import Reussir.Codegen.Context.Symbol qualified as IR
+import Reussir.Codegen.IR qualified as IR
+import Reussir.Core.Lowering (addIRInstr, convertType, createLoweringState, lowerExpr, materializeCurrentBlock)
+import Reussir.Core.Translation (
+    emptyTranslationState,
+    scanStmt,
+    solveAllGenerics,
+    wellTypedExpr,
+ )
 import Reussir.Core.Tyck (checkFuncType, inferType)
 import Reussir.Core.Types.Expr qualified as Sem
-import Reussir.Core.Types.Lowering (LoweringState)
-import Reussir.Core.Types.Translation (TranslationState (..), GenericSolution)
+import Reussir.Core.Types.Lowering (LoweringSpan (..), LoweringState (..))
+import Reussir.Core.Types.Translation (GenericSolution, TranslationState (..))
 import Reussir.Diagnostic.Display (displayReport)
-import Reussir.Diagnostic.Repository (Repository, createRepository)
+import Reussir.Diagnostic.Repository (Repository, addDummyFile, createRepository)
 import Reussir.Parser.Types.Expr qualified as Syn
 import Reussir.Parser.Types.Lexer (WithSpan (spanValue))
 import Reussir.Parser.Types.Stmt qualified as Syn
-
 
 -- | REPL state containing the accumulated translation state
 data ReplState = ReplState
     { replTranslationState :: TranslationState
     , replRepository :: Repository
     , replLogLevel :: B.LogLevel
-    , replCounter :: Int  -- Counter for unique names
+    , replCounter :: Int -- Counter for unique names
     }
 
 -- | Errors that can occur during REPL operations
@@ -63,12 +65,13 @@ initReplState logLevel filePath = do
         translationState <- emptyTranslationState logLevel filePath
         -- Use empty repository - we don't need source files for REPL mode
         repository <- createRepository []
-        return ReplState
-            { replTranslationState = translationState
-            , replRepository = repository
-            , replLogLevel = logLevel
-            , replCounter = 0
-            }
+        return
+            ReplState
+                { replTranslationState = translationState
+                , replRepository = repository
+                , replLogLevel = logLevel
+                , replCounter = 0
+                }
 
 -- | Add a statement (struct or function definition) to the REPL state
 addDefinition :: ReplState -> Syn.Stmt -> IO (Either ReplError ReplState)
@@ -87,7 +90,7 @@ addDefinition state stmt = do
 
             -- Check for errors
             if null (translationReports state')
-                then return $ Right state { replTranslationState = state' }
+                then return $ Right state{replTranslationState = state'}
                 else do
                     -- Display errors
                     forM_ (translationReports state') $ \report ->
@@ -100,10 +103,13 @@ addDefinition state stmt = do
     stripSpan (Syn.SpannedStmt s) = stripSpan (spanValue s)
     stripSpan s = s
 
--- | Compile an expression and return the MLIR text
--- This creates a wrapper function around the expression and compiles it
-compileExpression :: ReplState -> Syn.Expr -> IO (Either ReplError (ByteString, ReplState))
-compileExpression state expr = do
+{- | Compile an expression and return the MLIR text
+This creates a wrapper function around the expression and compiles it
+-}
+compileExpression :: ReplState -> T.Text -> Syn.Expr -> IO (Either ReplError (ByteString, ReplState))
+compileExpression state sourceText expr = do
+    -- Add the source text to the repository so location lookups work
+    let updatedRepo = addDummyFile (replRepository state) "<repl>" sourceText
     LogStd.withStdOutLogger $ \logger -> do
         runEff $ L.runLog "Reussir.REPL" logger logLevel $ runPrim $ do
             -- Type check the expression
@@ -128,32 +134,35 @@ compileExpression state expr = do
                             -- Create wrapper function and compile
                             let counter = replCounter state
                             let wrapperName = "__repl_expr_" <> T.pack (show counter)
-                            let spec = TargetSpec
-                                    { programName = "repl_module"
-                                    , outputPath = "<repl>"
-                                    , optimization = B.OptTPDE
-                                    , outputTarget = B.OutputObject
-                                    , logLevel = replLogLevel state
-                                    , moduleFilePath = "<repl>"
-                                    }
+                            let spec =
+                                    TargetSpec
+                                        { programName = "repl_module"
+                                        , outputPath = "<repl>"
+                                        , optimization = B.OptTPDE
+                                        , outputTarget = B.OutputObject
+                                        , logLevel = replLogLevel state
+                                        , moduleFilePath = "<repl>"
+                                        }
                             let emptyMod = IR.emptyModule spec
 
-                            -- Create lowering state
-                            loweringState <- createLoweringState "<repl>" (replRepository state) emptyMod state''
+                            -- Create lowering state with updated repository
+                            loweringState <- createLoweringState "<repl>" updatedRepo emptyMod state''
 
                             -- Lower to module (placeholder for now)
                             mlirText <- lowerExpressionToModule result wrapperName solution loweringState
 
-                            let newState = state
-                                    { replTranslationState = state''
-                                    , replCounter = counter + 1
-                                    }
+                            let newState =
+                                    state
+                                        { replTranslationState = state''
+                                        , replCounter = counter + 1
+                                        }
                             return $ Right (TE.encodeUtf8 mlirText, newState)
   where
     logLevel = toEffLogLevel (replLogLevel state)
 
--- | Helper to lower an expression to a module with a wrapper function
--- Takes the type-checked semantic expression, not syntactic expression
+{- | Helper to lower an expression to a module with a wrapper function
+Takes the type-checked semantic expression, not syntactic expression
+-}
 lowerExpressionToModule ::
     (IOE :> es, Prim :> es, L.Log :> es) =>
     Sem.Expr ->
@@ -161,17 +170,49 @@ lowerExpressionToModule ::
     GenericSolution ->
     LoweringState ->
     Eff es T.Text
-lowerExpressionToModule _semExpr _wrapperName _solution _loweringState = do
-    -- TODO: This needs more work to properly lower expressions.
-    -- Need to:
-    -- 1. Create a synthetic function that wraps the expression
-    -- 2. Lower that function using translateFunction
-    -- 3. Emit the module to MLIR text
-    --
-    -- NOTE: REPL expression compilation is not yet fully implemented.
-    -- We still return a valid (but effectively empty) MLIR module so that
-    -- downstream consumers do not fail on malformed MLIR.
-    return "module {\n  // REPL expression compilation not yet fully implemented\n}\n"
+lowerExpressionToModule semExpr wrapperName _solution loweringState = do
+    -- Run the lowering to generate the IR instructions
+    loweringState' <- execState loweringState $ inject $ do
+        -- Lower the expression to get the result value
+        resultVal <- lowerExpr semExpr
+
+        -- Convert the expression type to IR type
+        resultType <- convertType (Sem.exprType semExpr)
+
+        -- Add return instruction
+        addIRInstr (IR.Return (Just (resultVal, resultType))) NoSpan
+
+        -- Materialize the block (no block arguments for the wrapper function)
+        block <- materializeCurrentBlock []
+
+        -- Create the wrapper function symbol
+        let symbol = IR.verifiedSymbol wrapperName
+
+        -- Create the function
+        let wrapperFunc =
+                IR.Function
+                    { IR.funcLinkage = IR.LnkExternal
+                    , IR.funcLLVMVisibility = IR.LLVMVisDefault
+                    , IR.funcMLIRVisibility = IR.MLIRVisPublic
+                    , IR.funcBody = Just block
+                    , IR.funcArgs = [] -- No arguments for REPL expression wrapper
+                    , IR.funcDbgArgs = []
+                    , IR.funcLoc = Nothing
+                    , IR.funcResult = resultType
+                    , IR.funcSymbol = symbol
+                    }
+
+        -- Add the function to the module
+        State.modify $ \s ->
+            s
+                { currentModule =
+                    (currentModule s)
+                        { IR.moduleFunctions = wrapperFunc : IR.moduleFunctions (currentModule s)
+                        }
+                }
+
+    -- Emit the module to MLIR text
+    IR.emitModuleToText (currentModule loweringState')
 
 toEffLogLevel :: B.LogLevel -> LogLevel
 toEffLogLevel B.LogError = LogAttention

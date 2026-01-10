@@ -22,11 +22,12 @@ import System.Console.Haskeline.IO
 
 -- Reussir
 import Reussir.Bridge (LogLevel (..), OptOption (..), ReussirJIT, addModule, lookupSymbol, withJIT)
-import Reussir.Core.REPL (ReplState(..), initReplState, addDefinition, compileExpression, ReplError(..))
-import Reussir.Parser.Prog (ReplInput(..), parseReplInput)
+import Reussir.Core.REPL (ReplError (..), ReplState (..), addDefinition, compileExpression, initReplState)
+import Reussir.Parser.Prog (ReplInput (..), parseReplInput)
 
--- | Placeholder callback for lazy module loading
--- This would be used if we want to do lazy compilation of ASTs
+{- | Placeholder callback for lazy module loading
+This would be used if we want to do lazy compilation of ASTs
+-}
 placeholderCallback :: () -> IO ByteString
 placeholderCallback _ = return ""
 
@@ -39,7 +40,7 @@ main =
     bracketOnError
         (initializeInput defaultSettings)
         cancelInput
-        (\hd -> do
+        ( \hd -> do
             state <- initReplState LogWarning "<repl>"
             -- Use () as the AST type since we're not using lazy modules
             withJIT placeholderCallback OptTPDE $ \jit ->
@@ -85,7 +86,7 @@ processInput jit state input = do
                         Left (CompilationError msg) -> return $ Left $ "Compilation error: " ++ msg
                         Right state' -> return $ Right (Just "Definition added.", state')
                 ReplExpr expr -> do
-                    result <- compileExpression state expr
+                    result <- compileExpression state (T.pack input) expr
                     case result of
                         Left (TypeCheckError msg) -> return $ Left $ "Type error: " ++ msg
                         Left (ParseError msg) -> return $ Left $ "Parse error: " ++ msg
