@@ -61,6 +61,8 @@ integral-type   → "a"                                    -- i8
                 | "t"                                    -- u16
                 | "m"                                    -- u32
                 | "y"                                    -- u64
+                | "C" "4" "i128"                         -- i128
+                | "C" "4" "u128"                         -- u128
 
 float-type      → "f"                                    -- f32
                 | "d"                                    -- f64
@@ -262,14 +264,16 @@ instance Manglable FloatingPointType where
 
 BNF:
 @
-integral-type   → "a"        -- i8 (Signed 8)
-                | "s"        -- i16 (Signed 16)
-                | "l"        -- i32 (Signed 32)
-                | "x"        -- i64 (Signed 64)
-                | "h"        -- u8 (Unsigned 8)
-                | "t"        -- u16 (Unsigned 16)
-                | "m"        -- u32 (Unsigned 32)
-                | "y"        -- u64 (Unsigned 64)
+integral-type   → "a"            -- i8 (Signed 8)
+                | "s"            -- i16 (Signed 16)
+                | "l"            -- i32 (Signed 32)
+                | "x"            -- i64 (Signed 64)
+                | "h"            -- u8 (Unsigned 8)
+                | "t"            -- u16 (Unsigned 16)
+                | "m"            -- u32 (Unsigned 32)
+                | "y"            -- u64 (Unsigned 64)
+                | "C" "4" "i128" -- i128 (Signed 128)
+                | "C" "4" "u128" -- u128 (Unsigned 128)
 @
 -}
 instance Manglable IntegralType where
@@ -277,11 +281,13 @@ instance Manglable IntegralType where
     mangle (Signed 16) = "s" -- i16 → s
     mangle (Signed 32) = "l" -- i32 → l
     mangle (Signed 64) = "x" -- i64 → x
+    mangle (Signed 128) = "C4i128" -- i128 → C4i128
     mangle (Signed _) = error "Unsupported signed integer type"
     mangle (Unsigned 8) = "h" -- u8 → h
     mangle (Unsigned 16) = "t" -- u16 → t
     mangle (Unsigned 32) = "m" -- u32 → m
     mangle (Unsigned 64) = "y" -- u64 → y
+    mangle (Unsigned 128) = "C4u128" -- u128 → C4u128
     mangle (Unsigned _) = error "Unsupported unsigned integer type"
 
 {- | Capability mangling.
