@@ -107,21 +107,21 @@ main = do
                                     Nothing -> do
                                         liftIO $ putStrLn "Function not found"
                                         return Failed
+            forM_ (translationReports finalState) $ \report -> do
+                runEff $ displayReport report repository 0 stderr
+                hPutStrLn stderr ""
             case result of
                 SingleSuccess expr | null (translationReports finalState) -> do
                     putStrLn "Type check succeeded without errors."
                     putDoc (prettyColored expr <> hardline)
                     exitSuccess
-                ModuleSuccess instances -> do
+                ModuleSuccess instances | null (translationReports finalState) -> do
                     forM_ instances $ \(gid, types) -> do
                         putStrLn $ "Generic " ++ show gid ++ " should be instantiated to:"
                         forM_ types $ \ty ->
                             putDoc (prettyColored ty <> hardline)
                     exitSuccess
                 _ -> do
-                    forM_ (translationReports finalState) $ \report -> do
-                        runEff $ displayReport report repository 0 stderr
-                        hPutStrLn stderr ""
                     exitFailure
   where
     opts =
