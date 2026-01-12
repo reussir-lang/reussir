@@ -36,6 +36,7 @@ data LoweringState = LoweringState
     , translationState :: TranslationState
     , genericAssignment :: GenericAssignment
     , currentModule :: IR.Module
+    , regionHandle :: Maybe TypedValue
     }
 
 type Lowering = Eff '[IOE, Prim, L.Log, State.State LoweringState]

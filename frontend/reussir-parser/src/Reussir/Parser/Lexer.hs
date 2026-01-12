@@ -152,6 +152,7 @@ parseCapKeyword =
         , string "flex" >> return Flex
         , string "rigid" >> return Rigid
         , string "field" >> return Field
+        , string "regional" >> return Regional
         ]
         <* space
 

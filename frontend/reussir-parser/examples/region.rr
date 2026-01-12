@@ -1,0 +1,20 @@
+
+fn trivial() -> u64 {
+    regional {
+        1
+    }
+}
+
+struct [regional] Cell<T> {
+    value: T
+}
+
+struct [regional] Container<T> {
+    cell: [field] Cell<T>
+}
+
+fn freeze_cell() -> Cell<u64> {
+    regional {
+        Cell{value: 1}
+    }
+}

@@ -177,6 +177,7 @@ createLoweringState moduleFile repo mod' transState = do
             , genericAssignment = IntMap.empty
             , currentModule = mod'
             , moduleFullPath = moduleFile
+            , regionHandle = Nothing
             }
 
 mangleRecordSymbol :: Path -> [Sem.Type] -> Lowering IR.Symbol
@@ -289,6 +290,20 @@ lowerExprAsBlock expr blkArgs finalizer = do
     res <- materializeCurrentBlock blkArgs
     State.modify $ \s -> s{currentBlock = backupBlock}
     pure res
+
+lowerRegionalExpr :: Sem.Expr -> IR.Type -> LoweringSpan -> Lowering IR.Value
+lowerRegionalExpr bodyExpr regionTy regionSpan = do
+    regionVal <- nextValue
+    bodyTy <- convertType $ Sem.exprType bodyExpr
+    handleValue <- nextValue
+    let handle = (handleValue, IR.TypeRegion)
+    State.modify $ \s -> s{regionHandle = Just handle}
+    bodyBlock <- lowerExprAsBlock bodyExpr [handle] $ \bodyVal -> do
+        addIRInstr (IR.Yield IR.YieldRegion $ Just (bodyVal, bodyTy)) regionSpan
+    State.modify $ \s -> s{regionHandle = Nothing}
+    let instr = IR.RegionRun bodyBlock $ Just (regionVal, regionTy)
+    addIRInstr instr regionSpan
+    pure regionVal
 
 materializeCurrentBlock :: [IR.TypedValue] -> Lowering IR.Block
 materializeCurrentBlock blkArgs = do
@@ -622,6 +637,9 @@ lowerExprInBlock (Sem.ProjChain baseExpr [index]) _ exprSpan = do
     lookupFieldType (Unnamed fields) =
         fst $ fields !! (fromIntegral index)
     lookupFieldType _ = error "cannot project out of variant"
+lowerExprInBlock (Sem.RunRegion bodyExpr) regionTy exprSpan = do
+    regionTy' <- convertType regionTy
+    lowerRegionalExpr bodyExpr regionTy' exprSpan
 lowerExprInBlock _ _ _ = error "Not yet implemented"
 
 -- Translate a function into backend function under generic assignment

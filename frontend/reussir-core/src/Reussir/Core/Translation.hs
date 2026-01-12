@@ -392,6 +392,7 @@ emptyTranslationState translationLogLevel currentFile = do
             , knownRecords
             , functions
             , generics
+            , insideRegion = False
             }
 
 {- |
@@ -474,7 +475,7 @@ scanStmt
             paramsList <- mapM translateParam funcParams
             funcReturnType' <-
                 mapM
-                    (\(ty, flex) -> if flex then evalTypeWithFlexivity ty True else evalType ty)
+                    (\(ty, flex) -> evalTypeWithFlexivity ty flex)
                     funcReturnType
             let returnTy = case funcReturnType' of
                     Just ty -> ty
@@ -506,7 +507,7 @@ scanStmt
         translateParam ::
             (Identifier, Syn.Type, Syn.FlexFlag) -> Tyck (Identifier, Sem.Type)
         translateParam (paramName, ty, flex) = do
-            ty' <- if flex then evalTypeWithFlexivity ty True else evalType ty
+            ty' <- evalTypeWithFlexivity ty flex
             return (paramName, ty')
 
 scanProg :: Syn.Prog -> Tyck ()
@@ -573,7 +574,8 @@ evalType (Syn.TypeExpr path args) = do
                 Just record -> case Sem.recordDefaultCap record of
                     Value -> return $ Sem.TypeRecord path args'
                     Shared -> return $ Sem.TypeRc (Sem.TypeRecord path args') Shared
-                    Regional -> return $ Sem.TypeRc (Sem.TypeRecord path args') Regional
+                    Regional -> do
+                        return $ Sem.TypeRc (Sem.TypeRecord path args') Regional
                     cap -> do
                         reportError $ "Unsupported capability: " <> T.pack (show cap)
                         return Sem.TypeBottom
@@ -612,12 +614,7 @@ evalTypeWithFlexivity t isFlexible = do
             if isFlexible
                 then return $ Sem.TypeRc ty Flex
                 else return $ Sem.TypeRc ty Rigid
-        Sem.TypeRc _ _ -> do
-            reportError "Non-regional types cannot have capability annotations"
-            return Sem.TypeBottom
-        _ -> do
-            reportError "Capability annotations can only be applied to record types"
-            return Sem.TypeBottom
+        _ -> return t'
 
 forceAndCheckHoles :: Sem.Type -> Tyck Sem.Type
 forceAndCheckHoles ty = do
@@ -672,6 +669,7 @@ wellTypedExpr expr = do
             args' <- mapM wellTypedExpr args
             return $ Sem.CtorCall path tyArgs' variant args'
         Sem.Poison -> return Sem.Poison
+        Sem.RunRegion e -> Sem.RunRegion <$> wellTypedExpr e
     return $ expr{Sem.exprType = ty', Sem.exprKind = kind'}
 
 addRecordDefinition :: Path -> Sem.Record -> Tyck ()
@@ -750,7 +748,7 @@ analyzeGenericFlowInExpr expr = do
         Sem.Let _ _ _ val body -> do
             analyzeGenericFlowInExpr val
             analyzeGenericFlowInExpr body
-
+        Sem.RunRegion e -> analyzeGenericFlowInExpr e
         -- Base cases
         Sem.GlobalStr _ -> pure ()
         Sem.Constant _ -> pure ()

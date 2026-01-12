@@ -50,6 +50,7 @@ data TranslationState = TranslationState
     , knownRecords :: H.CuckooHashTable Path Record
     , functions :: FunctionTable
     , generics :: GenericState
+    , insideRegion :: Bool
     }
 
 type GenericSolution = H.CuckooHashTable GenericID [Type]

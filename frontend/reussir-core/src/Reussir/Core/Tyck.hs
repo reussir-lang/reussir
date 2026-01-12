@@ -31,6 +31,28 @@ import Reussir.Parser.Types.Lexer (Path (..), WithSpan (..), pathBasename, pathS
 import Reussir.Parser.Types.Stmt qualified as Stmt
 import Reussir.Parser.Types.Type qualified as Syn
 
+inferWithRegion :: Syn.Expr -> Tyck Sem.Expr
+inferWithRegion bodyExpr = do
+    L.logTrace_ "infer region expression"
+    alreadyInsideRegion <- State.gets insideRegion
+    when alreadyInsideRegion $ do
+        reportError "Cannot create nested region"
+    State.modify $ \s -> s{insideRegion = True}
+    result <- inferType bodyExpr
+    State.modify $ \s -> s{insideRegion = alreadyInsideRegion}
+    freeze result
+  where
+    freeze :: Sem.Expr -> Tyck Sem.Expr
+    freeze expr = case Sem.exprType expr of
+        Sem.TypeRc inner Cap.Flex -> do
+            let rigidRc = Sem.TypeRc inner Cap.Rigid
+            exprWithSpan rigidRc $ Sem.RunRegion expr
+        Sem.TypeBottom -> exprWithSpan Sem.TypeBottom Sem.Poison
+        Sem.TypeRecord{} -> do
+            reportError "Currently, only managed objects can be returned from regions"
+            exprWithSpan Sem.TypeBottom Sem.Poison
+        _ -> exprWithSpan (Sem.exprType expr) $ Sem.RunRegion expr
+
 checkFuncType :: Stmt.Function -> Tyck Sem.Expr
 checkFuncType func = do
     L.logTrace_ $ "Tyck: checking function " <> unIdentifier (Stmt.funcName func)
@@ -189,7 +211,7 @@ inferType (Syn.LetIn (WithSpan varName vnsStart vnsEnd) Nothing valueExpr bodyEx
                 , Sem.letVarSpan = Just (vnsStart, vnsEnd)
                 }
 inferType (Syn.LetIn (WithSpan varName vnsStart vnsEnd) (Just (ty, flex)) valueExpr bodyExpr) = do
-    annotatedType' <- if flex then evalTypeWithFlexivity ty True else evalType ty
+    annotatedType' <- evalTypeWithFlexivity ty flex
     valueExpr' <- checkType valueExpr annotatedType'
     withVariable varName (Just (vnsStart, vnsEnd)) annotatedType' $ \varID -> do
         bodyExpr' <- inferType bodyExpr
@@ -202,7 +224,11 @@ inferType (Syn.LetIn (WithSpan varName vnsStart vnsEnd) (Just (ty, flex)) valueE
                 , Sem.letBodyExpr = bodyExpr'
                 , Sem.letVarSpan = Just (vnsStart, vnsEnd)
                 }
-
+-- Regional expression:
+--  no Region in C, C + region | T <- e
+--  ─────────────────────────────────────
+--     C |- freeze T <- region e
+inferType (Syn.RegionalExpr bodyExpr) = inferWithRegion bodyExpr
 -- Variable:
 --
 --  ──────────────────────
@@ -283,9 +309,10 @@ inferType (Syn.FuncCallExpr (Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallT
         Just proto -> do
             let numGenerics = length (funcGenerics proto)
             -- Allow empty type argument list as syntax sugar for all holes
-            let paddedTyArgs = if null tyArgs && numGenerics > 0
-                               then replicate numGenerics Nothing
-                               else tyArgs
+            let paddedTyArgs =
+                    if null tyArgs && numGenerics > 0
+                        then replicate numGenerics Nothing
+                        else tyArgs
             checkTypeArgsNum numGenerics paddedTyArgs $ do
                 bounds <- mapM (\(_, gid) -> getGenericBound gid) (funcGenerics proto)
                 tyArgs' <- zipWithM tyArgOrMetaHole paddedTyArgs bounds
@@ -367,9 +394,10 @@ inferType
             Just record -> do
                 let numGenerics = length (Sem.recordTyParams record)
                 -- Allow empty type argument list as syntax sugar for all holes
-                let paddedTyArgs = if null ctorTyArgs && numGenerics > 0
-                                   then replicate numGenerics Nothing
-                                   else ctorTyArgs
+                let paddedTyArgs =
+                        if null ctorTyArgs && numGenerics > 0
+                            then replicate numGenerics Nothing
+                            else ctorTyArgs
                 bounds <- mapM (\(_, gid) -> getGenericBound gid) (Sem.recordTyParams record)
                 tyArgs' <- zipWithM tyArgOrMetaHole paddedTyArgs bounds
                 logTraceWhen $
@@ -443,16 +471,20 @@ inferType
                                     , Sem.ctorCallArgs = argExprs'
                                     }
 
-                        let defaultCap = Sem.recordDefaultCap record
+                        let defaultCap = case Sem.recordDefaultCap record of
+                                Cap.Regional -> Cap.Flex
+                                cap -> cap
 
-                        if defaultCap == Cap.Regional
-                            then error "Regional capability not supported yet"
-                            else
-                                if defaultCap == Cap.Value
-                                    then exprWithSpan recordTy ctorCall
-                                    else do
-                                        innerExpr <- exprWithSpan recordTy ctorCall
-                                        exprWithSpan (Sem.TypeRc recordTy defaultCap) (Sem.RcWrap innerExpr defaultCap)
+                        when (defaultCap == Cap.Flex) $ do
+                            insideRegion' <- State.gets insideRegion
+                            unless insideRegion' $ do
+                                reportError "Flex capability not allowed outside of regional scope"
+
+                        if defaultCap == Cap.Value
+                            then exprWithSpan recordTy ctorCall
+                            else do
+                                innerExpr <- exprWithSpan recordTy ctorCall
+                                exprWithSpan (Sem.TypeRc recordTy defaultCap) (Sem.RcWrap innerExpr defaultCap)
       where
         recordGenericMap :: Sem.Record -> [Sem.Type] -> IntMap.IntMap Sem.Type
         recordGenericMap record assignedTypes =
@@ -573,6 +605,7 @@ checkType expr ty = do
     L.logTrace_ $ "Tyck: checkType expected=" <> T.pack (show ty)
     -- this is apparently not complete. We need to handle lambda/unification
     expr' <- inferType expr
+    L.logTrace_ $ "Tyck: inferred type=" <> T.pack (show $ Sem.exprType expr')
     exprTy <- force $ Sem.exprType expr'
     unification <- unify exprTy ty
     if not unification

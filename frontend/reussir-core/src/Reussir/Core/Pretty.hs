@@ -116,6 +116,7 @@ instance PrettyColored Expr where
                         <> (case variant of Nothing -> mempty; Just v -> "::#" <> pretty v)
                         <> parens (commaSep (map prettyColored args))
                 Poison -> keyword "poison"
+                RunRegion e -> keyword "run_region" <> braces (prettyColored e)
          in case exprKind expr of
                 Let _ _ _ _ _ -> kindDoc
                 ScfIfExpr _ _ _ -> kindDoc

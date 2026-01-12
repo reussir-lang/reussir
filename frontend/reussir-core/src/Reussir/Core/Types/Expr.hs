@@ -29,7 +29,8 @@ data ExprKind
     | Cast Expr Type
     | ScfIfExpr Expr Expr Expr
     | Var VarID
-    | RcWrap Expr Capability -- TODO: add regional token
+    | RcWrap Expr Capability
+    | RunRegion Expr
     | ProjChain Expr [Int]
     | Let
         { letVarSpan :: Maybe (Int64, Int64)
