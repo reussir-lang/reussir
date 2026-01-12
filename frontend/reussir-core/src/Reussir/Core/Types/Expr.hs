@@ -43,6 +43,7 @@ data ExprKind
         { funcCallTarget :: Path
         , funcCallTyArgs :: [Type]
         , funcCallArgs :: [Expr]
+        , funcCallRegional :: Bool
         }
     | Poison
     | CtorCall

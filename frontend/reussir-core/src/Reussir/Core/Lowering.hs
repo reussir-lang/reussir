@@ -9,7 +9,7 @@ import Data.Foldable (Foldable (..))
 import Data.HashTable.IO qualified as H
 import Data.Int (Int16, Int64)
 import Data.IntMap.Strict qualified as IntMap
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, maybeToList)
 import Data.Scientific (Scientific)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
@@ -180,8 +180,8 @@ createLoweringState moduleFile repo mod' transState = do
             , regionHandle = Nothing
             }
 
-mangleRecordSymbol :: Path -> [Sem.Type] -> Lowering IR.Symbol
-mangleRecordSymbol path tyArgs = do
+mangleSymbol :: Path -> [Sem.Type] -> Lowering IR.Symbol
+mangleSymbol path tyArgs = do
     instantiatedArgs <- mapM canonicalType tyArgs
     return $ IR.verifiedSymbol $ mangleABIName (Sem.TypeRecord path instantiatedArgs)
 
@@ -198,13 +198,26 @@ convertType (Sem.TypeClosure args ret) = do
     ret' <- convertType ret
     pure $ IR.TypeClosure $ IR.Closure args' ret'
 convertType (Sem.TypeRecord path tyArgs) = do
-    symbol <- mangleRecordSymbol path tyArgs
+    symbol <- mangleSymbol path tyArgs
     pure $ IR.TypeExpr symbol
 convertType (Sem.TypeGeneric (GenericID gid)) = do
     State.gets (IntMap.lookup (fromIntegral gid) . genericAssignment) >>= \case
         Just ty' -> convertType ty'
         Nothing -> error $ "Unresolved generic type: T" ++ show gid
-convertType _ = error "Not yet implemented"
+convertType (Sem.TypeRc ty cap) = do
+    inner <- convertType ty
+    pure $
+        IR.TypeRc
+            IR.Rc
+                { IR.rcBoxInner = inner
+                , IR.rcBoxCapability = case cap of
+                    SemCap.Rigid -> IR.Rigid
+                    SemCap.Flex -> IR.Flex
+                    SemCap.Shared -> IR.Shared
+                    _ -> error $ "Invalid capability: " ++ show cap
+                , IR.rcBoxAtomicity = IR.NonAtomic -- TODO: implement atomicity
+                }
+convertType unknownTy = error $ "Not yet implemented for type: " ++ show unknownTy
 
 -- TODO: fix i128, it is not parsed in frontend anyway
 convertIntegral :: Int16 -> Lowering IR.Type
@@ -565,14 +578,19 @@ lowerExprInBlock Sem.Poison ty exprSpan = do
     addIRInstr instr exprSpan
     pure value
 -- TODO: erase unit and allow zero return funcall
-lowerExprInBlock (Sem.FuncCall callee tyArgs args) ty exprSpan = do
-    calleeSymbol <- mangleRecordSymbol callee tyArgs
+lowerExprInBlock (Sem.FuncCall callee tyArgs args regional) ty exprSpan = do
+    -- if a function is regional, its first argument is the region handle
+    handle <-
+        if regional
+            then maybeToList <$> State.gets regionHandle
+            else pure []
+    calleeSymbol <- mangleSymbol callee tyArgs
     argVals <- mapM lowerExpr args
     argTys <- mapM (convertType . Sem.exprType) args
     let typedArgs = zip argVals argTys
     retTy <- convertType ty
     retVal <- nextValue
-    let instr = IR.FCall $ IR.FuncCall calleeSymbol typedArgs $ Just (retVal, retTy)
+    let instr = IR.FCall $ IR.FuncCall calleeSymbol (handle <> typedArgs) $ Just (retVal, retTy)
     addIRInstr instr exprSpan
     pure retVal
 -- Compound CtorCall
@@ -640,7 +658,19 @@ lowerExprInBlock (Sem.ProjChain baseExpr [index]) _ exprSpan = do
 lowerExprInBlock (Sem.RunRegion bodyExpr) regionTy exprSpan = do
     regionTy' <- convertType regionTy
     lowerRegionalExpr bodyExpr regionTy' exprSpan
-lowerExprInBlock _ _ _ = error "Not yet implemented"
+lowerExprInBlock (Sem.RcWrap bodyExpr cap) ty exprSpan = do
+    handle <- State.gets regionHandle
+    inner <- lowerExpr bodyExpr
+    innerTy <- convertType (Sem.exprType bodyExpr)
+    ty' <- convertType ty
+    let handle' = case cap of
+            SemCap.Flex -> handle
+            _ -> Nothing
+    resultVal <- nextValue
+    let instr = IR.RcCreate (inner, innerTy) handle' (resultVal, ty')
+    addIRInstr instr exprSpan
+    pure resultVal
+lowerExprInBlock kind _ _ = error $ "Not yet implemented for kind: " ++ show kind
 
 -- Translate a function into backend function under generic assignment
 -- 1. set generic assignment to the lowering state
@@ -679,7 +709,7 @@ translateFunction path proto locSpan assignment = do
                         Nothing -> error $ "Generic ID not found in assignment: " ++ show gid
                 )
                 generics
-    symbol <- mangleRecordSymbol path tyArgs
+    symbol <- mangleSymbol path tyArgs
 
     mBody <- readIORef' (Sem.funcBody proto)
     L.logTrace_ $
@@ -797,7 +827,7 @@ translateRecord path record assignment = do
                         Nothing -> error $ "Generic ID not found in assignment: " ++ show gid
                 )
                 generics
-    symbol <- mangleRecordSymbol path tyArgs
+    symbol <- mangleSymbol path tyArgs
 
     let semKind = Sem.recordKind record
     let irKind = case semKind of

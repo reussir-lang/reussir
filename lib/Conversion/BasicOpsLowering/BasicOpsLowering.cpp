@@ -677,6 +677,8 @@ struct ReussirRcCreateOpConversionPattern
     // Implement the lowering for normal reference counted objects
     if (rcPtrTy.getAtomicKind() == AtomicKind::atomic)
       return op->emitError("TODO: atomic rc create");
+    if (!op.getToken())
+      return op->emitError("token is required but not provided");
     auto convertedBoxType = getTypeConverter()->convertType(rcBoxType);
     auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
     auto regionPtr = adaptor.getRegion();

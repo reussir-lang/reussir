@@ -659,9 +659,7 @@ mlir::LogicalResult ReussirRegionRunOp::verify() {
     return emitOpError("region must have at most one result");
   if (mlir::Value result = getResult()) {
     RcType rcType = llvm::dyn_cast<RcType>(result.getType());
-    if (!rcType)
-      return emitOpError("region result must be of RC type (for now)");
-    if (rcType.getCapability() != reussir::Capability::rigid &&
+    if (rcType && rcType.getCapability() != reussir::Capability::rigid &&
         rcType.getCapability() != reussir::Capability::shared)
       return emitOpError("region result must be of rigid or shared RC type");
   }
@@ -684,13 +682,14 @@ mlir::LogicalResult ReussirRegionYieldOp::verify() {
   if (getValue() != nullptr) {
     if (parentOp->getNumResults() != 1)
       return emitOpError("region must have exactly one result");
-    RcType rcType = getValue().getType();
-    if (rcType.getCapability() == reussir::Capability::flex)
-      rcType = RcType::get(getContext(), rcType.getElementType(),
-                           reussir::Capability::rigid);
-    if (rcType != parentOp->getResult(0).getType())
+    mlir::Type valueType = getValue().getType();
+    auto rcType = llvm::dyn_cast<RcType>(valueType);
+    if (rcType && rcType.getCapability() == reussir::Capability::flex)
+      valueType = RcType::get(getContext(), rcType.getElementType(),
+                              reussir::Capability::rigid);
+    if (valueType != parentOp->getResult(0).getType())
       return emitOpError("value type must match region result type, ")
-             << "value type: " << rcType
+             << "value type: " << valueType
              << ", region result type: " << parentOp->getResult(0).getType();
   } else if (parentOp->getNumResults() != 0)
     return emitOpError("region must have no result");

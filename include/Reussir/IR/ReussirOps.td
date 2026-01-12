@@ -821,7 +821,7 @@ def ReussirRegionYieldOp
   let description = [{
     `reussir.region.yield` yields a value from a region.
   }];
-  let arguments = (ins Arg<Optional<ReussirRcType>, "value to yield">:$value);
+  let arguments = (ins Arg<Optional<AnyType>, "value to yield">:$value);
   let assemblyFormat = [{
     ( $value^ `:` type($value) )? attr-dict
   }];

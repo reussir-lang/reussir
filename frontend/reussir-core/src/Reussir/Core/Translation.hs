@@ -660,10 +660,10 @@ wellTypedExpr expr = do
             val' <- wellTypedExpr val
             body' <- wellTypedExpr body
             return $ Sem.Let span' varID name val' body'
-        Sem.FuncCall target tyArgs args -> do
+        Sem.FuncCall target tyArgs args regional -> do
             tyArgs' <- mapM forceAndCheckHoles tyArgs
             args' <- mapM wellTypedExpr args
-            return $ Sem.FuncCall target tyArgs' args'
+            return $ Sem.FuncCall target tyArgs' args' regional
         Sem.CtorCall path tyArgs variant args -> do
             tyArgs' <- mapM forceAndCheckHoles tyArgs
             args' <- mapM wellTypedExpr args
@@ -710,7 +710,7 @@ getGenericBound (GenericID gid) = do
 analyzeGenericFlowInExpr :: Sem.Expr -> Tyck ()
 analyzeGenericFlowInExpr expr = do
     case Sem.exprKind expr of
-        Sem.FuncCall target tyArgs args -> do
+        Sem.FuncCall target tyArgs args _ -> do
             -- Analyze arguments
             mapM_ analyzeGenericFlowInExpr args
 

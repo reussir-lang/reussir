@@ -106,9 +106,10 @@ instance PrettyColored Expr where
                             <+> keyword "in"
                             <> line
                             <> prettyColored body
-                FuncCall path tyArgs args ->
+                FuncCall path tyArgs args regional ->
                     prettyColored path
                         <> (if null tyArgs then mempty else angles (commaSep (map prettyColored tyArgs)))
+                        <> (if regional then "[regional]" else mempty)
                         <> parens (commaSep (map prettyColored args))
                 CtorCall path tyArgs variant args ->
                     prettyColored path

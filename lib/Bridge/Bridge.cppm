@@ -118,11 +118,30 @@ llvm::CodeGenOptLevel toLlvmOptLevel(ReussirOptOption opt) {
   llvm_unreachable("unknown optimization level");
 }
 void createLoweringPipeline(mlir::PassManager &pm) {
-  // Using interface to compile polymorphic FFI does not really work,
-  // so we comment it out for now.
-  // TODO: Uncomment this when we have a way to compile polymorphic FFI
-  // pm.addPass(createReussirCompilePolymorphicFFIPass());
+  // match the pipeline in list_map.mlir
+  pm.addNestedPass<mlir::func::FuncOp>(
+      reussir::createReussirTokenInstantiationPass());
+  pm.addPass(reussir::createReussirClosureOutliningPass());
+  pm.addPass(reussir::createReussirRegionPatternsPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      reussir::createReussirIncDecCancellationPass());
+  pm.addPass(reussir::createReussirRcDecrementExpansionPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      reussir::createReussirInferVariantTagPass());
+  pm.addPass(reussir::createReussirDropExpansionPass());
   pm.addPass(reussir::createReussirSCFOpsLoweringPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      reussir::createReussirIncDecCancellationPass());
+
+  reussir::ReussirDropExpansionPassOptions options;
+  options.expandDecrement = true;
+  options.outlineRecord = true;
+  pm.addPass(reussir::createReussirDropExpansionPass(options));
+
+  pm.addNestedPass<mlir::func::FuncOp>(reussir::createReussirTokenReusePass());
+  pm.addPass(reussir::createReussirSCFOpsLoweringPass());
+  pm.addPass(reussir::createReussirCompilePolymorphicFFIPass());
+
 #if LLVM_VERSION_MAJOR >= 21
   pm.addPass(createSCFToControlFlowPass());
 #else

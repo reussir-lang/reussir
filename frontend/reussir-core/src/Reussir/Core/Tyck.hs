@@ -299,7 +299,12 @@ inferType (Syn.AccessChain baseExpr projs) = do
                 return (Sem.TypeBottom, indices)
 -- Function call:
 --            C |- f : (T1, T2, ..., Tn) -> T, C |- ei : Ti
---  ──────────────────────────────────────────────────────────────────────
+--  ────────────────────────────────────────────────────────────────────────────
+--               C |- T <- f(e1, e2, ..., en)
+--
+--            C + region |- f : [regional] (T1, T2, ..., Tn) -> T
+--            C + region |- ei : Ti
+--  ─────────────────────────────────────────────────────────────────────────────────────
 --               C |- T <- f(e1, e2, ..., en)
 inferType (Syn.FuncCallExpr (Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallTyArgs = tyArgs, Syn.funcCallArgs = argExprs})) = do
     L.logTrace_ $ "Tyck: infer func call " <> T.pack (show path)
@@ -313,6 +318,9 @@ inferType (Syn.FuncCallExpr (Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallT
                     if null tyArgs && numGenerics > 0
                         then replicate numGenerics Nothing
                         else tyArgs
+            insideRegion' <- State.gets insideRegion
+            when (not insideRegion' && funcIsRegional proto) $ do
+                reportError "Cannot call regional function outside of region"
             checkTypeArgsNum numGenerics paddedTyArgs $ do
                 bounds <- mapM (\(_, gid) -> getGenericBound gid) (funcGenerics proto)
                 tyArgs' <- zipWithM tyArgOrMetaHole paddedTyArgs bounds
@@ -332,6 +340,7 @@ inferType (Syn.FuncCallExpr (Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallT
                             { Sem.funcCallTarget = path
                             , Sem.funcCallArgs = argExprs'
                             , Sem.funcCallTyArgs = tyArgs'
+                            , Sem.funcCallRegional = funcIsRegional proto
                             }
         Nothing -> do
             reportError $ "Function not found: " <> T.pack (show path)
