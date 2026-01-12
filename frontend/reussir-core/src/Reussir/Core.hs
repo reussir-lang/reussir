@@ -1,8 +1,11 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Reussir.Core where
 
 import Control.Monad (forM_)
 import Data.Text qualified as T
-import Effectful (Eff, IOE, inject, (:>))
+import Data.Text.IO (hPutStrLn)
+import Effectful (Eff, IOE, inject, liftIO, (:>))
 import Effectful.Log qualified as L
 import Effectful.Prim (Prim)
 import Effectful.State.Static.Local (execState, runState)
@@ -43,6 +46,7 @@ translateProgToModule filePath spec prog = do
     -- report all diagnostics
     forM_ (translationReports state') $ \report -> do
         displayReport report repository 0 stderr
+        liftIO $ hPutStrLn stderr ""
 
     let emptyMod = IR.emptyModule spec
     case genericSolutions of

@@ -106,7 +106,7 @@ parseCtorArgs =
 
 parseRegionalExpr :: Parser Expr
 parseRegionalExpr = do
-    _ <- string "regional" *> space
+    _ <- try (string "regional" *> space *> lookAhead (char '{'))
     body <- parseBody
     return (RegionalExpr body)
 

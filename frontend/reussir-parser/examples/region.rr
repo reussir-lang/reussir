@@ -18,3 +18,14 @@ fn freeze_cell() -> Cell<u64> {
         Cell{value: 1}
     }
 }
+
+fn freeze_cell_with_let_expr() -> Cell<u64> {
+    regional {
+        let x : [flex] Cell<u64> = regional_function(42);
+        x
+    }
+}
+
+regional fn regional_function(x : u64) -> [flex] Cell<u64> {
+    Cell{value: x}
+}

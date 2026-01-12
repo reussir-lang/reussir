@@ -750,6 +750,12 @@ translateFunction path proto locSpan assignment = do
     (bodyBlock, args) <- case mBody of
         Nothing -> pure (Nothing, [])
         Just bodyExpr -> do
+            regionParam <-
+                if funcIsRegional proto
+                    then do
+                        handle <- nextValue
+                        pure $ Just (handle, IR.TypeRegion)
+                    else pure Nothing
             let params = Sem.funcParams proto
             paramValues <-
                 mapM
@@ -759,17 +765,16 @@ translateFunction path proto locSpan assignment = do
                         pure (val, irTy)
                     )
                     params
-
             let varMapUpdates = zip [0 ..] paramValues
-            State.modify $ \s -> s{varMap = IntMap.fromList varMapUpdates}
-
-            block <- lowerExprAsBlock bodyExpr paramValues $ \retVal -> do
+            State.modify $ \s -> s{varMap = IntMap.fromList varMapUpdates, regionHandle = regionParam}
+            let argValues = maybeToList regionParam <> paramValues
+            block <- lowerExprAsBlock bodyExpr argValues $ \retVal -> do
                 let retInstr = IR.Return (Just (retVal, retTy))
                 addIRInstr retInstr $ case Sem.exprSpan bodyExpr of
                     Just span' -> LineSpan span'
                     Nothing -> NoSpan
 
-            pure (Just block, paramValues)
+            pure (Just block, argValues)
 
     -- Generate debug info for function parameters
     let params = Sem.funcParams proto
