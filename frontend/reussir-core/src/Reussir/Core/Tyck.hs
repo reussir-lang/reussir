@@ -71,7 +71,7 @@ checkFuncType func = do
                 "Tyck: entering function generic context (generics="
                     <> T.pack (show (length generics))
                     <> ")"
-            State.modify $ \s -> s{insideRegion = Stmt.funcIsRegional func}
+            State.modify $ \s -> s{insideRegion = Stmt.funcIsRegional func, exprCounter = 0}
             withGenericContext generics $ do
                 let params = funcParams proto
                 withParams params $ do

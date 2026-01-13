@@ -51,6 +51,7 @@ data TranslationState = TranslationState
     , functions :: FunctionTable
     , generics :: GenericState
     , insideRegion :: Bool
+    , exprCounter :: Int
     }
 
 type GenericSolution = H.CuckooHashTable GenericID [Type]

@@ -41,6 +41,7 @@ import Reussir.Core.Generic (
  )
 import Reussir.Core.Type qualified as Sem
 import Reussir.Core.Types.Class (Class (..), ClassDAG, TypeBound)
+import Reussir.Core.Types.Expr (ExprID (ExprID))
 import Reussir.Core.Types.Expr qualified as Sem
 import Reussir.Core.Types.Function qualified as Sem
 import Reussir.Core.Types.Generic (
@@ -393,6 +394,7 @@ emptyTranslationState translationLogLevel currentFile = do
             , functions
             , generics
             , insideRegion = False
+            , exprCounter = 0
             }
 
 {- |
@@ -515,8 +517,10 @@ scanProg = flip forM_ scanStmt
 
 exprWithSpan :: Sem.Type -> Sem.ExprKind -> Tyck Sem.Expr
 exprWithSpan exprType exprKind = do
-    exprSpan <- currentSpan <$> State.get
-    return $ Sem.Expr{exprKind, exprSpan, exprType}
+    exprSpan <- State.gets currentSpan
+    exprID <- ExprID <$> State.gets exprCounter
+    State.modify $ \st -> st{exprCounter = exprCounter st + 1}
+    return $ Sem.Expr{exprKind, exprSpan, exprType, exprID}
 
 allocateNewString :: T.Text -> Tyck StringToken
 allocateNewString str = do

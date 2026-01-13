@@ -1,5 +1,6 @@
 module Reussir.Core.Types.Expr where
 
+import Data.Hashable
 import Data.Int (Int64)
 import Data.Scientific (Scientific)
 import Reussir.Core.Types.String (StringToken)
@@ -54,9 +55,12 @@ data ExprKind
         }
     deriving (Show, Eq)
 
+newtype ExprID = ExprID {unExprID :: Int} deriving (Show, Eq, Hashable)
+
 data Expr = Expr
     { exprKind :: ExprKind
     , exprSpan :: Maybe (Int64, Int64)
     , exprType :: Type
+    , exprID :: ExprID -- unique identifier for each expression inside a function
     }
     deriving (Show, Eq)

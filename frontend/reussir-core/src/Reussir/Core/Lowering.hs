@@ -289,8 +289,8 @@ mkRefType :: IR.Type -> Capability -> IR.Type
 mkRefType ty cap = IR.TypeRef $ IR.Ref ty IR.NonAtomic cap
 
 lowerExpr :: Sem.Expr -> Lowering IR.Value
-lowerExpr (Sem.Expr kind Nothing ty) = lowerExprInBlock kind ty NoSpan
-lowerExpr (Sem.Expr kind (Just span') ty) = lowerExprInBlock kind ty (LineSpan span')
+lowerExpr (Sem.Expr kind Nothing ty _) = lowerExprInBlock kind ty NoSpan
+lowerExpr (Sem.Expr kind (Just span') ty _) = lowerExprInBlock kind ty (LineSpan span')
 
 -- lower expression as a block with given block arguments and finalizer
 lowerExprAsBlock ::
