@@ -10,7 +10,7 @@ import Data.HashTable.IO qualified as H
 import Data.Int (Int16, Int64)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Maybe (catMaybes, maybeToList)
-import Data.Scientific (Scientific)
+import Data.Scientific (Scientific, toBoundedInteger)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Effectful (Eff, IOE, liftIO, (:>))
@@ -25,6 +25,7 @@ import Reussir.Codegen.Global qualified as IR
 import Reussir.Codegen.IR qualified as IR
 import Reussir.Codegen.Intrinsics qualified as IR
 import Reussir.Codegen.Intrinsics.Arith qualified as Arith
+import Reussir.Codegen.Intrinsics.Math qualified as Math
 import Reussir.Codegen.Location (DBGMetaInfo (DBGFuncArg, DBGLocalVar))
 import Reussir.Codegen.Location qualified as DBG
 import Reussir.Codegen.Location qualified as IR
@@ -242,14 +243,7 @@ lookupLocation (start, end) = do
     path <- State.gets moduleFullPath
     repo <- State.gets srcRepository
     case lookupRepositoryAsRange repo (path, start, end) of
-        Nothing ->
-            error $
-                "Failed to lookup source location for path "
-                    ++ show path
-                    ++ " in byte range "
-                    ++ show start
-                    ++ "-"
-                    ++ show end
+        Nothing -> pure Nothing
         Just (a, b, c, d) -> pure $ Just $ IR.FileLineColRange base a b c d
 
 -- span to location
@@ -578,6 +572,110 @@ lowerExprInBlock Sem.Poison ty exprSpan = do
     addIRInstr instr exprSpan
     pure value
 -- TODO: erase unit and allow zero return funcall
+lowerExprInBlock (Sem.FuncCall (Path name ["core", "intrinsic", "math"]) _ args _) ty exprSpan = do
+    let floatUnary =
+            [ "absf"
+            , "acos"
+            , "acosh"
+            , "asin"
+            , "asinh"
+            , "atan"
+            , "atanh"
+            , "cbrt"
+            , "ceil"
+            , "cos"
+            , "cosh"
+            , "erf"
+            , "erfc"
+            , "exp"
+            , "exp2"
+            , "expm1"
+            , "floor"
+            , "log10"
+            , "log1p"
+            , "log2"
+            , "round"
+            , "roundeven"
+            , "rsqrt"
+            , "sin"
+            , "sinh"
+            , "sqrt"
+            , "tan"
+            , "tanh"
+            , "trunc"
+            ]
+    let checks = ["isfinite", "isinf", "isnan", "isnormal"]
+    let floatBinary = ["atan2", "copysign", "powf"]
+
+    let (valArgs, fmf) =
+            if name `elem` floatUnary || name `elem` checks || name == "fma" || name == "fpowi" || name `elem` floatBinary
+                then
+                    let (vals, flag) = (init args, last args)
+                        val = case Sem.exprKind flag of
+                            Sem.Constant c -> case toBoundedInteger c of
+                                Just i -> Arith.FastMathFlag (fromIntegral (i :: Int))
+                                Nothing -> Arith.FastMathFlag 0
+                            _ -> Arith.FastMathFlag 0
+                     in (vals, val)
+                else (args, Arith.FastMathFlag 0)
+
+    argVals <- mapM lowerExpr valArgs
+    argTys <- mapM (convertType . Sem.exprType) valArgs
+    let typedArgs = zip argVals argTys
+
+    resTy <- convertType ty
+    resVal <- nextValue
+    let typedRes = (resVal, resTy)
+
+    let mnemonic = case unIdentifier name of
+            "absf" -> Math.Absf fmf
+            "acos" -> Math.Acos fmf
+            "acosh" -> Math.Acosh fmf
+            "asin" -> Math.Asin fmf
+            "asinh" -> Math.Asinh fmf
+            "atan" -> Math.Atan fmf
+            "atanh" -> Math.Atanh fmf
+            "cbrt" -> Math.Cbrt fmf
+            "ceil" -> Math.Ceil fmf
+            "cos" -> Math.Cos fmf
+            "cosh" -> Math.Cosh fmf
+            "erf" -> Math.Erf fmf
+            "erfc" -> Math.Erfc fmf
+            "exp" -> Math.Exp fmf
+            "exp2" -> Math.Exp2 fmf
+            "expm1" -> Math.Expm1 fmf
+            "floor" -> Math.Floor fmf
+            "isfinite" -> Math.Isfinite fmf
+            "isinf" -> Math.Isinf fmf
+            "isnan" -> Math.Isnan fmf
+            "isnormal" -> Math.Isnormal fmf
+            "log10" -> Math.Log10 fmf
+            "log1p" -> Math.Log1p fmf
+            "log2" -> Math.Log2 fmf
+            "round" -> Math.Round fmf
+            "roundeven" -> Math.Roundeven fmf
+            "rsqrt" -> Math.Rsqrt fmf
+            "sin" -> Math.Sin fmf
+            "sinh" -> Math.Sinh fmf
+            "sqrt" -> Math.Sqrt fmf
+            "tan" -> Math.Tan fmf
+            "tanh" -> Math.Tanh fmf
+            "trunc" -> Math.Trunc fmf
+            "atan2" -> Math.Atan2 fmf
+            "copysign" -> Math.Copysign fmf
+            "powf" -> Math.Powf fmf
+            "fma" -> Math.Fma fmf
+            "fpowi" -> Math.Fpowi fmf
+            "absi" -> Math.Absi
+            "ctlz" -> Math.Ctlz
+            "ctpop" -> Math.Ctpop
+            "cttz" -> Math.Cttz
+            "ipowi" -> Math.Ipowi
+            _ -> error $ "Unknown math intrinsic: " <> show name
+
+    let instr = IR.ICall $ IR.IntrinsicCall (IR.Math mnemonic) typedArgs [typedRes]
+    addIRInstr instr exprSpan
+    pure resVal
 lowerExprInBlock (Sem.FuncCall callee tyArgs args regional) ty exprSpan = do
     -- if a function is regional, its first argument is the region handle
     handle <-
@@ -901,31 +999,34 @@ translateModule gSln = do
     L.logTrace_ $
         "Lowering: functions to translate=" <> T.pack (show (length functionList))
     forM_ functionList $ \(path, proto) -> do
-        if null (funcGenerics proto)
-            then do
-                let span' = case Sem.funcSpan proto of
-                        Just s -> s
-                        Nothing -> (0, 0)
-                func <- translateFunction path proto span' IntMap.empty
-                mod' <- State.gets currentModule
-                let updatedMod = mod'{IR.moduleFunctions = func : IR.moduleFunctions mod'}
-                State.modify $ \s -> s{currentModule = updatedMod}
-            else do
-                assignments <- forM (funcGenerics proto) $ \(_, gid) -> do
-                    liftIO (H.lookup gSln gid) >>= \case
-                        Just assignment -> return assignment
-                        Nothing -> error $ "Generic solution not found for generic ID: " ++ show gid
-                let gids = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
-                let crossProd = sequence assignments
-                forM_ crossProd $ \assignment -> do
-                    let localAssignment = IntMap.fromList $ zip gids assignment
-                    let span' = case Sem.funcSpan proto of
-                            Just s -> s
-                            Nothing -> (0, 0)
-                    func <- translateFunction path proto span' localAssignment
-                    mod' <- State.gets currentModule
-                    let updatedMod = mod'{IR.moduleFunctions = func : IR.moduleFunctions mod'}
-                    State.modify $ \s -> s{currentModule = updatedMod}
+        case path of
+            Path _ ["core", "intrinsic", "math"] -> pure () -- Skip math intrinsics
+            _ ->
+                if null (funcGenerics proto)
+                    then do
+                        let span' = case Sem.funcSpan proto of
+                                Just s -> s
+                                Nothing -> (0, 0)
+                        func <- translateFunction path proto span' IntMap.empty
+                        mod' <- State.gets currentModule
+                        let updatedMod = mod'{IR.moduleFunctions = func : IR.moduleFunctions mod'}
+                        State.modify $ \s -> s{currentModule = updatedMod}
+                    else do
+                        assignments <- forM (funcGenerics proto) $ \(_, gid) -> do
+                            liftIO (H.lookup gSln gid) >>= \case
+                                Just assignment -> return assignment
+                                Nothing -> error $ "Generic solution not found for generic ID: " ++ show gid
+                        let gids = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
+                        let crossProd = sequence assignments
+                        forM_ crossProd $ \assignment -> do
+                            let localAssignment = IntMap.fromList $ zip gids assignment
+                            let span' = case Sem.funcSpan proto of
+                                    Just s -> s
+                                    Nothing -> (0, 0)
+                            func <- translateFunction path proto span' localAssignment
+                            mod' <- State.gets currentModule
+                            let updatedMod = mod'{IR.moduleFunctions = func : IR.moduleFunctions mod'}
+                            State.modify $ \s -> s{currentModule = updatedMod}
     recordTable <- State.gets (knownRecords . translationState)
     recordList <- liftIO $ H.toList recordTable
     L.logTrace_ $

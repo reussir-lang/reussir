@@ -26,7 +26,6 @@ import Reussir.Core.Types.Class (Class (..))
 import Reussir.Core.Types.Class qualified as Sem
 import Reussir.Core.Types.Expr qualified as Sem
 import Reussir.Core.Types.Function (FunctionProto (..), FunctionTable (..))
-import Reussir.Core.Types.GenericID (GenericID (..))
 import Reussir.Core.Types.Record qualified as Sem
 import Reussir.Core.Types.Translation (TranslationState (translationReports))
 import Reussir.Core.Types.Translation qualified as Sem
@@ -253,19 +252,6 @@ testRecordAccess = do
 
 testGenericRecordAccess :: Assertion
 testGenericRecordAccess = do
-    let recordName = "Box"
-    let recordPath = Path recordName []
-    let gid = GenericID 0
-    let record =
-            Sem.Record
-                { Sem.recordName = Path recordName []
-                , Sem.recordTyParams = [("T", gid)]
-                , Sem.recordFields = Sem.Named [("inner", Sem.TypeGeneric gid, False)]
-                , Sem.recordKind = Sem.StructKind
-                , Sem.recordVisibility = Public
-                , Sem.recordDefaultCap = Value
-                }
-
     let input = "b.inner"
     expr <- parseToExpr input
 
@@ -273,6 +259,20 @@ testGenericRecordAccess = do
     let repo = addDummyFile repository "<dummy input>" input
 
     runTyck repo (\res -> liftIO $ Sem.exprType res @?= Sem.TypeIntegral (Sem.Signed 32)) $ do
+        let recordName = "Box"
+        let recordPath = Path recordName []
+        state <- State.gets Tyck.generics
+        gid <- newGenericVar "T" Nothing [] state
+        let record =
+                Sem.Record
+                    { Sem.recordName = Path recordName []
+                    , Sem.recordTyParams = [("T", gid)]
+                    , Sem.recordFields = Sem.Named [("inner", Sem.TypeGeneric gid, False)]
+                    , Sem.recordKind = Sem.StructKind
+                    , Sem.recordVisibility = Public
+                    , Sem.recordDefaultCap = Value
+                    }
+
         Tyck.addRecordDefinition recordPath record
         -- Box<i32>
         let boxType = Sem.TypeRecord recordPath [Sem.TypeIntegral (Sem.Signed 32)]
@@ -379,19 +379,6 @@ testGenericFuncCallEmptyTypeArgs = do
 -- This tests that `Box { inner: 42 }` works without explicit `<_>`
 testGenericCtorCallEmptyTypeArgs :: Assertion
 testGenericCtorCallEmptyTypeArgs = do
-    let recordName = "Box"
-    let recordPath = Path recordName []
-    let gid = GenericID 0
-    let record =
-            Sem.Record
-                { Sem.recordName = Path recordName []
-                , Sem.recordTyParams = [("T", gid)]
-                , Sem.recordFields = Sem.Named [("inner", Sem.TypeGeneric gid, False)]
-                , Sem.recordKind = Sem.StructKind
-                , Sem.recordVisibility = Public
-                , Sem.recordDefaultCap = Value
-                }
-
     -- Note: no <_> type arguments - empty list should be treated as all holes
     let input = "Box { inner: 42 }"
     expr <- parseToExpr input
@@ -399,8 +386,20 @@ testGenericCtorCallEmptyTypeArgs = do
     repository <- runEff $ createRepository []
     let repo = addDummyFile repository "<dummy input>" input
 
+    let recordName = "Box"
+    let recordPath = Path recordName []
+
     runTyck repo (\res -> liftIO $ Sem.exprType res @?= Sem.TypeRecord recordPath [Sem.TypeIntegral (Sem.Signed 32)]) $ do
         state <- State.gets Tyck.generics
-        _ <- newGenericVar "T" Nothing [Path "Num" []] state
+        gid <- newGenericVar "T" Nothing [Path "Num" []] state
+        let record =
+                Sem.Record
+                    { Sem.recordName = Path recordName []
+                    , Sem.recordTyParams = [("T", gid)]
+                    , Sem.recordFields = Sem.Named [("inner", Sem.TypeGeneric gid, False)]
+                    , Sem.recordKind = Sem.StructKind
+                    , Sem.recordVisibility = Public
+                    , Sem.recordDefaultCap = Value
+                    }
         Tyck.addRecordDefinition recordPath record
         checkType expr (Sem.TypeRecord recordPath [Sem.TypeIntegral (Sem.Signed 32)]) >>= wellTypedExpr

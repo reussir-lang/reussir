@@ -64,7 +64,7 @@ import Reussir.Diagnostic.Report (
 import Reussir.Parser.Prog qualified as Syn
 import Reussir.Parser.Types.Capability (Capability (..))
 import Reussir.Parser.Types.Lexer (
-    Identifier,
+    Identifier (..),
     Path (..),
     WithSpan (..),
     pathBasename,
@@ -364,6 +364,91 @@ populatePrimitives typeClassTable typeClassDAG = do
     forM_ intTypes $ \it ->
         Sem.addClassToType typeClassTable (Sem.TypeIntegral it) intClass
 
+populateIntrinsics ::
+    (IOE :> es, Prim :> es) =>
+    Sem.FunctionTable ->
+    GenericState ->
+    Eff es ()
+populateIntrinsics functionTable genericState = do
+    let floatBound = [Path "FloatingPoint" []]
+    let intBound = [Path "Integral" []]
+
+    let addFunc name bounds params retTy = do
+            gid <- newGenericVar "T" Nothing bounds genericState
+            let generics = [("T", gid)]
+            let paramTys = map (\t -> Sem.substituteGeneric t (\g -> if g == GenericID 0 then Just (Sem.TypeGeneric gid) else Nothing)) params
+            let retTy' = Sem.substituteGeneric retTy (\g -> if g == GenericID 0 then Just (Sem.TypeGeneric gid) else Nothing)
+            pendingBody <- newIORef' Nothing
+            let proto =
+                    Sem.FunctionProto
+                        { Sem.funcVisibility = Syn.Public
+                        , Sem.funcName = name
+                        , Sem.funcGenerics = generics
+                        , Sem.funcParams = zipWith (\i t -> (Identifier (T.pack $ "arg" <> show i), t)) [0 :: Int ..] paramTys
+                        , Sem.funcReturnType = retTy'
+                        , Sem.funcIsRegional = False
+                        , Sem.funcBody = pendingBody
+                        , Sem.funcSpan = Nothing
+                        }
+            let path = Path name ["core", "intrinsic", "math"]
+            liftIO $ H.insert (Sem.functionProtos functionTable) path proto
+
+    let t = Sem.TypeGeneric (GenericID 0)
+    let u32 = Sem.TypeIntegral (Sem.Unsigned 32)
+    -- Float Unary
+    let floatUnary =
+            [ "absf"
+            , "acos"
+            , "acosh"
+            , "asin"
+            , "asinh"
+            , "atan"
+            , "atanh"
+            , "cbrt"
+            , "ceil"
+            , "cos"
+            , "cosh"
+            , "erf"
+            , "erfc"
+            , "exp"
+            , "exp2"
+            , "expm1"
+            , "floor"
+            , "log10"
+            , "log1p"
+            , "log2"
+            , "round"
+            , "roundeven"
+            , "rsqrt"
+            , "sin"
+            , "sinh"
+            , "sqrt"
+            , "tan"
+            , "tanh"
+            , "trunc"
+            ]
+    forM_ floatUnary $ \name -> addFunc name floatBound [t, u32] t
+
+    let checks = ["isfinite", "isinf", "isnan", "isnormal"]
+    forM_ checks $ \name -> addFunc name floatBound [t, u32] Sem.TypeBool
+
+    -- Float Binary
+    let floatBinary = ["atan2", "copysign", "powf"]
+    forM_ floatBinary $ \name -> addFunc name floatBound [t, t, u32] t
+
+    -- Float Ternary
+    addFunc "fma" floatBound [t, t, t, u32] t
+
+    -- Float Special
+    addFunc "fpowi" floatBound [t, Sem.TypeIntegral (Sem.Signed 32), u32] t
+
+    -- Int Unary
+    let intUnary = ["absi", "ctlz", "ctpop", "cttz"]
+    forM_ intUnary $ \name -> addFunc name intBound [t] t
+
+    -- Int Binary
+    addFunc "ipowi" intBound [t, t] t
+
 emptyTranslationState ::
     (IOE :> es, Prim :> es) => B.LogLevel -> FilePath -> Eff es TranslationState
 emptyTranslationState translationLogLevel currentFile = do
@@ -377,6 +462,7 @@ emptyTranslationState translationLogLevel currentFile = do
     knownRecords <- liftIO $ H.new
     functions <- newFunctionTable
     generics <- emptyGenericState
+    populateIntrinsics functions generics
     return $
         TranslationState
             { currentSpan = Nothing
@@ -685,6 +771,57 @@ wellTypedExpr expr = do
         Sem.FuncCall target tyArgs args regional -> do
             tyArgs' <- mapM forceAndCheckHoles tyArgs
             args' <- mapM wellTypedExpr args
+            -- Check for intrinsic flags
+            case target of
+                Path name ["core", "intrinsic", "math"] -> do
+                    let floatUnary =
+                            [ "absf"
+                            , "acos"
+                            , "acosh"
+                            , "asin"
+                            , "asinh"
+                            , "atan"
+                            , "atanh"
+                            , "cbrt"
+                            , "ceil"
+                            , "cos"
+                            , "cosh"
+                            , "erf"
+                            , "erfc"
+                            , "exp"
+                            , "exp2"
+                            , "expm1"
+                            , "floor"
+                            , "log10"
+                            , "log1p"
+                            , "log2"
+                            , "round"
+                            , "roundeven"
+                            , "rsqrt"
+                            , "sin"
+                            , "sinh"
+                            , "sqrt"
+                            , "tan"
+                            , "tanh"
+                            , "trunc"
+                            ]
+                    let checks = ["isfinite", "isinf", "isnan", "isnormal"]
+                    let floatBinary = ["atan2", "copysign", "powf"]
+                    let hasFlag =
+                            (name `elem` floatUnary)
+                                || (name `elem` checks)
+                                || (name `elem` floatBinary)
+                                || name == "fma"
+                                || name == "fpowi"
+                    if hasFlag
+                        then do
+                            let flagArg = last args'
+                            case Sem.exprKind flagArg of
+                                Sem.Constant _ -> return ()
+                                _ -> reportError "Intrinsic flag must be a constant literal"
+                        else return ()
+                _ -> return ()
+
             return $ Sem.FuncCall target tyArgs' args' regional
         Sem.CompoundCall path tyArgs args -> do
             tyArgs' <- mapM forceAndCheckHoles tyArgs
