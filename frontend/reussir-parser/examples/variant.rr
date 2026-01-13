@@ -15,3 +15,7 @@ enum RcOption<T> {
 fn bar() -> RcOption<i32> {
     RcOption::None{}
 }
+
+fn baz() -> RcOption<i32> {
+    RcOption::Some {1}
+}
