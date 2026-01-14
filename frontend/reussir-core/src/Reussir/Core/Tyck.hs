@@ -427,6 +427,87 @@ inferType (Syn.FuncCallExpr (Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallT
     functionGenericMap proto assignedTypes =
         let genericIDs = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
          in IntMap.fromList $ zip genericIDs assignedTypes
+-- Nullable::Null constructor call:
+-- Special handling for Nullable::Null to produce NullableCall Nothing
+--  ─────────────────────────────────────────────────────
+--    C |- Nullable[T] <- Nullable::Null[T]()
+inferType
+    ( Syn.CtorCallExpr
+            Syn.CtorCall
+                { Syn.ctorArgs = []
+                , Syn.ctorName = Path "Null" ["Nullable"]
+                , Syn.ctorTyArgs = ctorTyArgs
+                }
+        ) = do
+        L.logTrace_ "Tyck: infer Nullable::Null ctor call"
+        let ptrLikeBound = [Class $ Path "PtrLike" []]
+        -- We need to resolve the type argument for T
+        tyArgs' <- case ctorTyArgs of
+            [Just ty] -> do
+                ty' <- evalType ty
+                satisfied <- satisfyBounds ty' ptrLikeBound
+                unless satisfied $ do
+                    reportError "Nullable::Null type argument does not satisfy PtrLike bound"
+                return [ty']
+            [Nothing] -> do
+                hole <- introduceNewHole Nothing Nothing ptrLikeBound
+                return [hole]
+            [] -> do
+                hole <- introduceNewHole Nothing Nothing ptrLikeBound
+                return [hole]
+            _ -> do
+                reportError "Nullable::Null expects exactly 1 type argument"
+                return []
+        let nullableTy = Sem.TypeRecord (Path "Nullable" []) tyArgs'
+        exprWithSpan nullableTy $ Sem.NullableCall Nothing
+-- Nullable::NonNull constructor call:
+-- Special handling for Nullable::NonNull to produce NullableCall (Just e)
+--  ─────────────────────────────────────────────────────
+--    C |- Nullable[T] <- Nullable::NonNull[T](e)
+inferType
+    ( Syn.CtorCallExpr
+            Syn.CtorCall
+                { Syn.ctorArgs = [(_, innerExpr)]
+                , Syn.ctorName = Path "NonNull" ["Nullable"]
+                , Syn.ctorTyArgs = ctorTyArgs
+                }
+        ) = do
+        L.logTrace_ "Tyck: infer Nullable::NonNull ctor call"
+        let ptrLikeBound = [Class $ Path "PtrLike" []]
+        -- First infer the type of the inner expression
+        innerExpr' <- inferType innerExpr
+        let innerTy = Sem.exprType innerExpr'
+        -- Handle type argument: it may be explicit, a hole, or inferred from innerTy
+        tyArgs' <- case ctorTyArgs of
+            [Just ty] -> do
+                ty' <- evalType ty
+                satisfied <- satisfyBounds ty' ptrLikeBound
+                unless satisfied $ do
+                    reportError "Nullable::NonNull type argument does not satisfy PtrLike bound"
+                -- Unify the expected type with the inner type
+                unification <- unify innerTy ty'
+                if not unification
+                    then do
+                        reportError "Type mismatch in Nullable::NonNull"
+                        return [Sem.TypeBottom]
+                    else return [ty']
+            [Nothing] -> do
+                -- Infer from inner expression type, but check bounds
+                satisfied <- satisfyBounds innerTy ptrLikeBound
+                unless satisfied $ do
+                    reportError "Nullable::NonNull type argument does not satisfy PtrLike bound"
+                return [innerTy]
+            [] -> do
+                -- Infer from inner expression type, but check bounds
+                satisfied <- satisfyBounds innerTy ptrLikeBound
+                unless satisfied $ do
+                    reportError "Nullable::NonNull type argument does not satisfy PtrLike bound"
+                return [innerTy]
+            _ -> do
+                reportError "Nullable::NonNull expects exactly 1 type argument"
+                return []
+        let nullableTy = Sem.TypeRecord (Path "Nullable" []) tyArgs'
+        exprWithSpan nullableTy $ Sem.NullableCall (Just innerExpr')
 -- Ctor call:
 --   C |- record R, default-cap R = value, R : (T1, T2, ..., Tn), C |- ei -> Ti
 --  ────────────────────────────────────────────────────────────────────────────

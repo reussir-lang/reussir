@@ -58,6 +58,7 @@ data ExprKind
         , variantCallVariant :: Int
         , variantCallArg :: Expr
         }
+    | NullableCall (Maybe Expr)
     deriving (Show, Eq)
 
 newtype ExprID = ExprID {unExprID :: Int} deriving (Show, Eq, Hashable)

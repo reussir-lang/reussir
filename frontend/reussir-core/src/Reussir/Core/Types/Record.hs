@@ -11,7 +11,7 @@ type FieldFlag = Bool
 data RecordFields
     = Named [(Identifier, Type, FieldFlag)]
     | Unnamed [(Type, FieldFlag)]
-    | Variants [(Identifier, [Type])]
+    | Variants [Identifier]
     deriving (Show, Eq)
 
 data RecordKind

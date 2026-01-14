@@ -1,0 +1,11 @@
+struct RcBox<T> {
+    value: T
+}
+
+fn foo() -> Nullable<RcBox<i32>> {
+    Nullable::NonNull {RcBox{value: 1}}
+}
+
+fn bar() -> Nullable<RcBox<f64>> {
+    Nullable::Null {}
+}
