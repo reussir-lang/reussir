@@ -476,6 +476,7 @@ emptyTranslationState translationLogLevel currentFile = do
     functions <- newFunctionTable
     generics <- emptyGenericState
     populateIntrinsics functions generics
+    addNullable generics knownRecords
     return $
         TranslationState
             { currentSpan = Nothing
@@ -518,42 +519,43 @@ translateGeneric (identifier, bounds) = do
     gid <- newGenericVar identifier Nothing bounds st -- TODO: handle span
     return (identifier, gid)
 
--- addNullable :: Syn.Type -> Tyck ()
--- addNullable t = do
---     st <- State.gets generics
---     genericID <- newGenericVar "T" Nothing [] st
---     let nullPath = Path "Null" ["Nullable"]
---         nonnullPath = Path "NonNull" ["Nullable"]
---         nullablePath = Path "Nullable" []
---         typeGeneric = Sem.TypeGeneric genericID
---         nullVariant =
---             Sem.Record
---                 { Sem.recordName = nullPath
---                 , Sem.recordTyParams = [("Ptr", genericID)]
---                 , Sem.recordFields = Sem.Unnamed []
---                 , Sem.recordKind = Sem.EnumVariant nullablePath 0
---                 , Sem.recordVisibility = Syn.Public
---                 , Sem.recordDefaultCap = Value
---                 }
---         nonnullVariant =
---             Sem.Record
---                 { Sem.recordName = nonnullPath
---                 , Sem.recordTyParams = [("Ptr", genericID)]
---                 , Sem.recordFields = Sem.Unnamed [(typeGeneric, False)]
---                 , Sem.recordKind = Sem.EnumVariant nullablePath 1
---                 , Sem.recordVisibility = Syn.Public
---                 , Sem.recordDefaultCap = Value
---                 }
---         nullableEnum =
---             Sem.Record
---                 { Sem.recordName = nullablePath
---                 , Sem.recordTyParams = [("Ptr", genericID)]
---                 , Sem.recordFields = undefined
---                 , Sem.recordKind = Sem.EnumKind
---                 , Sem.recordVisibility = Syn.Public
---                 , Sem.recordDefaultCap = Value
---                 }
---     undefined
+addNullable :: (IOE :> es, Prim :> es) => GenericState -> H.CuckooHashTable Path Sem.Record -> Eff es ()
+addNullable st records = do
+    genericID <- newGenericVar "T" Nothing [] st
+    let nullPath = Path "Null" ["Nullable"]
+        nonnullPath = Path "NonNull" ["Nullable"]
+        nullablePath = Path "Nullable" []
+        typeGeneric = Sem.TypeGeneric genericID
+        nullVariant =
+            Sem.Record
+                { Sem.recordName = nullPath
+                , Sem.recordTyParams = [("Ptr", genericID)]
+                , Sem.recordFields = Sem.Unnamed []
+                , Sem.recordKind = Sem.EnumVariant nullablePath 0
+                , Sem.recordVisibility = Syn.Public
+                , Sem.recordDefaultCap = Value
+                }
+        nonnullVariant =
+            Sem.Record
+                { Sem.recordName = nonnullPath
+                , Sem.recordTyParams = [("Ptr", genericID)]
+                , Sem.recordFields = Sem.Unnamed [(typeGeneric, False)]
+                , Sem.recordKind = Sem.EnumVariant nullablePath 1
+                , Sem.recordVisibility = Syn.Public
+                , Sem.recordDefaultCap = Value
+                }
+        nullableEnum =
+            Sem.Record
+                { Sem.recordName = nullablePath
+                , Sem.recordTyParams = [("Ptr", genericID)]
+                , Sem.recordFields = Sem.Variants ["Null", "NonNull"]
+                , Sem.recordKind = Sem.EnumKind
+                , Sem.recordVisibility = Syn.Public
+                , Sem.recordDefaultCap = Value
+                }
+    liftIO $ H.insert records nullablePath nullableEnum
+    liftIO $ H.insert records nullPath nullVariant
+    liftIO $ H.insert records nonnullPath nonnullVariant
 
 scanStmt :: Syn.Stmt -> Tyck ()
 scanStmt (Syn.SpannedStmt s) = do
@@ -841,6 +843,7 @@ wellTypedExpr expr = withMaybeSpan (Sem.exprSpan expr) $ do
             return $ Sem.VariantCall path tyArgs' variant arg'
         Sem.Poison -> return Sem.Poison
         Sem.RunRegion e -> Sem.RunRegion <$> wellTypedExpr e
+        Sem.NullableCall e -> Sem.NullableCall <$> mapM wellTypedExpr e
     return $ expr{Sem.exprType = ty', Sem.exprKind = kind'}
 
 addRecordDefinition :: Path -> Sem.Record -> Tyck ()
@@ -936,6 +939,9 @@ analyzeGenericFlowInExpr expr = do
         Sem.Constant _ -> pure ()
         Sem.Var _ -> pure ()
         Sem.Poison -> pure ()
+        Sem.NullableCall (Just e) -> analyzeGenericFlowInExpr e
+        Sem.NullableCall Nothing -> pure ()
+
 analyzeGenericInstantiationFlow ::
     [(Identifier, GenericID)] -> [Sem.Type] -> Tyck ()
 analyzeGenericInstantiationFlow genericParams tyArgs = do

@@ -195,6 +195,9 @@ convertType (Sem.TypeClosure args ret) = do
     args' <- mapM convertType args
     ret' <- convertType ret
     pure $ IR.TypeClosure $ IR.Closure args' ret'
+convertType (Sem.TypeRecord (Path "Nullable" []) [ty]) = do
+    inner <- convertType ty
+    pure $ IR.TypeNullable inner
 convertType (Sem.TypeRecord path tyArgs) = do
     symbol <- mangleSymbol path tyArgs
     pure $ IR.TypeExpr symbol
@@ -711,7 +714,6 @@ lowerExprInBlock (Sem.CompoundCall _ _ args) ty exprSpan = do
     let instr = IR.CompoundCreate typedArgs (retVal, retTy)
     addIRInstr instr exprSpan
     pure retVal
--- Variant CtorCall
 lowerExprInBlock (Sem.VariantCall _ _ variant arg) ty exprSpan = do
     argVal <- lowerExpr arg
     argTy <- convertType (Sem.exprType arg)
@@ -862,6 +864,20 @@ lowerExprInBlock (Sem.RcWrap bodyExpr cap) ty exprSpan = do
             _ -> Nothing
     resultVal <- nextValue
     let instr = IR.RcCreate (inner, innerTy) handle' (resultVal, ty')
+    addIRInstr instr exprSpan
+    pure resultVal
+lowerExprInBlock (Sem.NullableCall Nothing) ty exprSpan = do
+    ty' <- convertType ty
+    resultVal <- nextValue
+    let instr = IR.NullableCreate Nothing (resultVal, ty')
+    addIRInstr instr exprSpan
+    pure resultVal
+lowerExprInBlock (Sem.NullableCall bodyExpr) ty exprSpan = do
+    ty' <- convertType ty
+    body <- mapM lowerExpr bodyExpr
+    bodyTy <- mapM convertType $ fmap Sem.exprType bodyExpr
+    resultVal <- nextValue
+    let instr = IR.NullableCreate ((,) <$> body <*> bodyTy) (resultVal, ty')
     addIRInstr instr exprSpan
     pure resultVal
 lowerExprInBlock kind _ _ = error $ "Not yet implemented for kind: " ++ show kind
@@ -1122,25 +1138,30 @@ translateModule gSln = do
         "Lowering: records to translate=" <> T.pack (show (length recordList))
     -- Add record instance per instantiation
     forM_ recordList $ \(path, record) -> do
-        if null (recordTyParams record)
-            then do
-                recInst <- translateRecord path record IntMap.empty
-                mod' <- State.gets currentModule
-                let updatedMod = mod'{IR.recordInstances = recInst : IR.recordInstances mod'}
-                State.modify $ \s -> s{currentModule = updatedMod}
-            else do
-                assignments <- forM (recordTyParams record) $ \(_, gid) -> do
-                    liftIO (H.lookup gSln gid) >>= \case
-                        Just assignment -> return assignment
-                        Nothing -> error $ "Generic solution not found for generic ID: " ++ show gid
-                let gids = map (\(_, GenericID gid) -> fromIntegral gid) (recordTyParams record)
-                let crossProd = sequence assignments
-                forM_ crossProd $ \assignment -> do
-                    let localAssignment = IntMap.fromList $ zip gids assignment
-                    recInst <- translateRecord path record localAssignment
-                    mod' <- State.gets currentModule
-                    let updatedMod = mod'{IR.recordInstances = recInst : IR.recordInstances mod'}
-                    State.modify $ \s -> s{currentModule = updatedMod}
+        case path of
+            Path "Nullable" [] -> pure ()
+            Path "Null" ["Nullable"] -> pure ()
+            Path "NonNull" ["Nullable"] -> pure ()
+            _ ->
+                if null (recordTyParams record)
+                    then do
+                        recInst <- translateRecord path record IntMap.empty
+                        mod' <- State.gets currentModule
+                        let updatedMod = mod'{IR.recordInstances = recInst : IR.recordInstances mod'}
+                        State.modify $ \s -> s{currentModule = updatedMod}
+                    else do
+                        assignments <- forM (recordTyParams record) $ \(_, gid) -> do
+                            liftIO (H.lookup gSln gid) >>= \case
+                                Just assignment -> return assignment
+                                Nothing -> error $ "Generic solution not found for generic ID: " ++ show gid
+                        let gids = map (\(_, GenericID gid) -> fromIntegral gid) (recordTyParams record)
+                        let crossProd = sequence assignments
+                        forM_ crossProd $ \assignment -> do
+                            let localAssignment = IntMap.fromList $ zip gids assignment
+                            recInst <- translateRecord path record localAssignment
+                            mod' <- State.gets currentModule
+                            let updatedMod = mod'{IR.recordInstances = recInst : IR.recordInstances mod'}
+                            State.modify $ \s -> s{currentModule = updatedMod}
     -- Add string token
     StringUniqifier storage <- State.gets (stringUniqifier . translationState)
     strList <- liftIO $ H.toList storage

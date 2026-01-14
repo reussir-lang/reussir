@@ -122,6 +122,8 @@ instance PrettyColored Expr where
                         <> parens (prettyColored arg)
                 Poison -> keyword "poison"
                 RunRegion e -> keyword "run_region" <> braces (prettyColored e)
+                NullableCall (Just e) -> keyword "nonnull" <> braces (prettyColored e)
+                NullableCall Nothing -> keyword "null"
          in case exprKind expr of
                 Let _ _ _ _ _ -> kindDoc
                 ScfIfExpr _ _ _ -> kindDoc
