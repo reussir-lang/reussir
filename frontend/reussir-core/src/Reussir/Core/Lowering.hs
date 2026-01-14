@@ -112,13 +112,10 @@ typeAsDbgType ty = do
                             let mapped = zipWith (\i (t, _) -> (T.show i, t)) [0 :: Int ..] fs
                             mapM processField mapped
                         Sem.Variants vs -> do
-                            let mapVariant (id', tys) = case tys of
-                                    [] -> (unIdentifier id', Sem.TypeUnit)
-                                    [t] -> (unIdentifier id', t)
-                                    _ -> (unIdentifier id', Sem.TypeBottom)
-                            let mapped = map mapVariant vs
+                            mapped <- forM vs $ \variant -> do
+                                variantTy <- canonicalVariant rec variant
+                                pure $ (unIdentifier variant, variantTy)
                             mapM processField mapped
-
                     if any isNothing fields
                         then pure Nothing
                         else
@@ -333,6 +330,18 @@ canonicalType ty = do
         substituteGeneric
             ty
             (\(GenericID gid') -> IntMap.lookup (fromIntegral gid') assignment)
+
+canonicalVariant :: Sem.Record -> Identifier -> Lowering Sem.Type
+canonicalVariant parent variantID = do
+    assignment <- State.gets genericAssignment
+    let recordName = Sem.recordName parent
+        recordBase = pathBasename recordName
+        recordSegs = pathSegments recordName
+    recordTyParams <- forM (Sem.recordTyParams parent) $ \(_, GenericID gid') -> do
+        case IntMap.lookup (fromIntegral gid') assignment of
+            Nothing -> pure $ Sem.TypeGeneric $ GenericID $ fromIntegral gid'
+            Just ty -> pure ty
+    pure $ Sem.TypeRecord (Path variantID (recordBase : recordSegs)) recordTyParams
 
 -- TODO: span information is not being used to generate debug info
 lowerExprInBlock ::
@@ -1042,7 +1051,7 @@ translateRecord path record assignment = do
                 fields
         (Sem.EnumKind, Sem.Variants variants) ->
             mapM
-                ( \(name, _) -> do
+                ( \name -> do
                     let segments = pathBasename path : pathSegments path
                     sym <- mangleSymbol (Path name segments) tyArgs
                     pure $ IRRecord.RecordField (IR.TypeExpr sym) False

@@ -518,6 +518,43 @@ translateGeneric (identifier, bounds) = do
     gid <- newGenericVar identifier Nothing bounds st -- TODO: handle span
     return (identifier, gid)
 
+-- addNullable :: Syn.Type -> Tyck ()
+-- addNullable t = do
+--     st <- State.gets generics
+--     genericID <- newGenericVar "T" Nothing [] st
+--     let nullPath = Path "Null" ["Nullable"]
+--         nonnullPath = Path "NonNull" ["Nullable"]
+--         nullablePath = Path "Nullable" []
+--         typeGeneric = Sem.TypeGeneric genericID
+--         nullVariant =
+--             Sem.Record
+--                 { Sem.recordName = nullPath
+--                 , Sem.recordTyParams = [("Ptr", genericID)]
+--                 , Sem.recordFields = Sem.Unnamed []
+--                 , Sem.recordKind = Sem.EnumVariant nullablePath 0
+--                 , Sem.recordVisibility = Syn.Public
+--                 , Sem.recordDefaultCap = Value
+--                 }
+--         nonnullVariant =
+--             Sem.Record
+--                 { Sem.recordName = nonnullPath
+--                 , Sem.recordTyParams = [("Ptr", genericID)]
+--                 , Sem.recordFields = Sem.Unnamed [(typeGeneric, False)]
+--                 , Sem.recordKind = Sem.EnumVariant nullablePath 1
+--                 , Sem.recordVisibility = Syn.Public
+--                 , Sem.recordDefaultCap = Value
+--                 }
+--         nullableEnum =
+--             Sem.Record
+--                 { Sem.recordName = nullablePath
+--                 , Sem.recordTyParams = [("Ptr", genericID)]
+--                 , Sem.recordFields = undefined
+--                 , Sem.recordKind = Sem.EnumKind
+--                 , Sem.recordVisibility = Syn.Public
+--                 , Sem.recordDefaultCap = Value
+--                 }
+--     undefined
+
 scanStmt :: Syn.Stmt -> Tyck ()
 scanStmt (Syn.SpannedStmt s) = do
     backup <- State.gets currentSpan
@@ -537,16 +574,17 @@ scanStmt (Syn.RecordStmt record) = do
 
     -- Translate fields/variants within generic context
     withGenericContext genericsList $ do
-        fields <- case Syn.recordFields record of
+        (fields, variants) <- case Syn.recordFields record of
             Syn.Named fs -> do
                 fs' <- mapM (\(n, t, f) -> (n,,f) <$> evalTypeUnwrapRc t) fs
-                return $ Sem.Named fs'
+                return $ (Sem.Named fs', Nothing)
             Syn.Unnamed fs -> do
                 fs' <- mapM (\(t, f) -> (,f) <$> evalTypeUnwrapRc t) fs
-                return $ Sem.Unnamed fs'
+                return $ (Sem.Unnamed fs', Nothing)
             Syn.Variants vs -> do
                 vs' <- mapM (\(n, ts) -> (n,) <$> mapM evalTypeUnwrapRc ts) vs
-                return $ Sem.Variants vs'
+                let names = map (\(n, _) -> n) vs'
+                return $ (Sem.Variants names, Just vs')
 
         let kind = case Syn.recordKind record of
                 Syn.StructKind -> Sem.StructKind
@@ -564,8 +602,8 @@ scanStmt (Syn.RecordStmt record) = do
 
         -- For variant, we add each sub-variant as a record, with recordName
         -- extended with variant name and value capability.
-        case fields of
-            Sem.Variants vs -> do
+        case variants of
+            Just vs -> do
                 forM_ (zip [0 ..] vs) $ \(variantIdx, (variantName, variantFields)) -> do
                     let variantPath = Path variantName [name] -- TODO: handle module path
                     let variantRecord =
@@ -939,7 +977,8 @@ analyzeGenericFlowInRecord record = do
     let types = case Sem.recordFields record of
             Sem.Named fs -> map (\(_, t, _) -> t) fs
             Sem.Unnamed fs -> map (\(t, _) -> t) fs
-            Sem.Variants vs -> concatMap snd vs
+            -- no need to proceed to variants since variant share the same generics as parent record
+            Sem.Variants _ -> mempty
     mapM_ analyzeGenericFlowInType types
 
 -- Analyze generic flow for the whole translation module.
