@@ -866,12 +866,6 @@ lowerExprInBlock (Sem.RcWrap bodyExpr cap) ty exprSpan = do
     let instr = IR.RcCreate (inner, innerTy) handle' (resultVal, ty')
     addIRInstr instr exprSpan
     pure resultVal
-lowerExprInBlock (Sem.NullableCall Nothing) ty exprSpan = do
-    ty' <- convertType ty
-    resultVal <- nextValue
-    let instr = IR.NullableCreate Nothing (resultVal, ty')
-    addIRInstr instr exprSpan
-    pure resultVal
 lowerExprInBlock (Sem.NullableCall bodyExpr) ty exprSpan = do
     ty' <- convertType ty
     body <- mapM lowerExpr bodyExpr
