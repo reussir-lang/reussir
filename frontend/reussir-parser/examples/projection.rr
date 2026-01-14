@@ -1,0 +1,27 @@
+struct [value] Point {
+    x : u64,
+    y : u64
+}
+struct [value] Box<T> {
+    val : T
+}
+struct [shared] RcBox<T> {
+    val : T
+}
+
+pub fn rc_project(rc : RcBox<u32>) -> u32 {
+    rc.val
+}
+
+pub fn rc_project_chained(rc : RcBox<RcBox<u32>>) -> u32 {
+    rc.val.val
+}
+
+pub fn rc_project_chained_2(rc :  RcBox<RcBox<RcBox<u32>>>) -> u32 {
+    rc.val.val.val
+}
+
+pub fn mixed_chain(rc :  Box<RcBox<RcBox<RcBox<Box<Box<u32>>>>>>) -> u32 {
+    rc.val.val.val.val.val.val
+}
+

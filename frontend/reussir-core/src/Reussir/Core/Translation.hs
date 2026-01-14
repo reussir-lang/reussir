@@ -39,6 +39,7 @@ import Reussir.Core.Generic (
     newGenericVar,
     solveGeneric,
  )
+import Reussir.Core.Type
 import Reussir.Core.Type qualified as Sem
 import Reussir.Core.Types.Class (Class (..), ClassDAG, TypeBound)
 import Reussir.Core.Types.Expr (ExprID (ExprID))
@@ -530,17 +531,21 @@ scanStmt (Syn.RecordStmt record) = do
     -- Translate generics
     genericsList <- mapM translateGeneric tyParams
 
+    let evalTypeUnwrapRc x = do
+            x' <- evalType x
+            return $ stripAllRc x'
+
     -- Translate fields/variants within generic context
     withGenericContext genericsList $ do
         fields <- case Syn.recordFields record of
             Syn.Named fs -> do
-                fs' <- mapM (\(n, t, f) -> (n,,f) <$> evalType t) fs
+                fs' <- mapM (\(n, t, f) -> (n,,f) <$> evalTypeUnwrapRc t) fs
                 return $ Sem.Named fs'
             Syn.Unnamed fs -> do
-                fs' <- mapM (\(t, f) -> (,f) <$> evalType t) fs
+                fs' <- mapM (\(t, f) -> (,f) <$> evalTypeUnwrapRc t) fs
                 return $ Sem.Unnamed fs'
             Syn.Variants vs -> do
-                vs' <- mapM (\(n, ts) -> (n,) <$> mapM evalType ts) vs
+                vs' <- mapM (\(n, ts) -> (n,) <$> mapM evalTypeUnwrapRc ts) vs
                 return $ Sem.Variants vs'
 
         let kind = case Syn.recordKind record of
@@ -943,6 +948,8 @@ analyzeGenericFlow = do
     functionTable <- State.gets functions
     protos <- liftIO $ H.toList (Sem.functionProtos functionTable)
     forM_ protos $ \(_, proto) -> do
+        forM_ (Sem.funcParams proto) $ \(_, paramType) -> do
+            analyzeGenericFlowInType paramType
         mBody <- readIORef' (Sem.funcBody proto)
         case mBody of
             Just body -> analyzeGenericFlowInExpr body
