@@ -9,3 +9,17 @@ fn foo() -> Nullable<RcBox<i32>> {
 fn bar() -> Nullable<RcBox<f64>> {
     Nullable::Null {}
 }
+
+struct [regional] Data {
+    value: u64
+}
+
+struct [regional] RegBox {
+    value: [field] Data
+}
+
+fn baz(reg : RegBox) -> Nullable<Data> {
+    reg.value
+}
+
+

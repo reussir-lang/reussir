@@ -814,16 +814,17 @@ lowerExprInBlock (Sem.ProjChain baseExpr indices) _ exprSpan = do
                     let combinedAssignment = IntMap.union newAssignment oldAssignment
                     State.modify $ \s -> s{genericAssignment = combinedAssignment}
 
-                    let fieldTy = lookupFieldType idx $ recordFields record'
-                    fieldTy' <- convertType fieldTy
+                    let (fieldTy, nullable) = lookupFieldType idx $ recordFields record'
+                    fieldTy' <- projectType nullable fieldTy
+                    fieldTy'' <- convertType fieldTy'
 
                     State.modify $ \s -> s{genericAssignment = oldAssignment}
 
-                    let fieldRefTy = mkRefType fieldTy' IR.Unspecified
+                    let fieldRefTy = mkRefType fieldTy'' IR.Unspecified
                     projVal <- nextValue
                     let projInstr = IR.RefProject (refVal, refTy) (fromIntegral idx) (projVal, fieldRefTy)
                     addIRInstr projInstr mSpan
-                    pure (projVal, fieldRefTy, fieldTy')
+                    pure (projVal, fieldRefTy, fieldTy'')
         _ -> error $ "projectField called on non-record type: " ++ show compositeTy
 
     -- Get the semantic field type at given index
@@ -837,19 +838,21 @@ lowerExprInBlock (Sem.ProjChain baseExpr indices) _ exprSpan = do
                 let generics = recordTyParams record'
                 let gids = map (\(_, GenericID gid) -> fromIntegral gid) generics
                 let assignment = IntMap.fromList $ zip gids tyArgs
-                let fieldTy = lookupFieldType idx $ recordFields record'
+                let (fieldTy, _) = lookupFieldType idx $ recordFields record'
+                -- TODO: similar to the previous projection issue, we don't know the correct capability here. For now, we force rigid projection.
                 -- Substitute generics in field type
-                pure $
-                    substituteGeneric
-                        fieldTy
-                        (\(GenericID gid') -> IntMap.lookup (fromIntegral gid') assignment)
+                let canonicalized =
+                        substituteGeneric
+                            fieldTy
+                            (\(GenericID gid') -> IntMap.lookup (fromIntegral gid') assignment)
+                pure canonicalized
     getFieldSemType ty _ = error $ "getFieldSemType called on non-record: " ++ show ty
 
-    lookupFieldType :: Int -> RecordFields -> Sem.Type
+    lookupFieldType :: Int -> RecordFields -> (Sem.Type, Bool)
     lookupFieldType idx (Named fields) =
-        let (_, ty', _) = fields !! idx in ty'
+        let (_, ty', nullable) = fields !! idx in (ty', nullable)
     lookupFieldType idx (Unnamed fields) =
-        fst $ fields !! idx
+        let (ty', nullable) = fields !! idx in (ty', nullable)
     lookupFieldType _ _ = error "cannot project out of variant"
 lowerExprInBlock (Sem.RunRegion bodyExpr) regionTy exprSpan = do
     regionTy' <- convertType regionTy
@@ -1167,3 +1170,23 @@ translateModule gSln = do
             let global = IR.GlobalString symbol strVal
             let updatedMod = mod'{IR.globals = global : IR.globals mod'}
             State.modify $ \s -> s{currentModule = updatedMod}
+
+-- TODO: we need to discuss how to deal with generic. We need to leave a stuck here ....
+-- TODO: we need keep the flexibility of current reference to decide the actually projection.
+projectType :: Bool -> Sem.Type -> Lowering Sem.Type
+projectType _ x@(Sem.TypeGeneric _) = do
+    L.logAttention_ "cannot project generic for now"
+    pure x
+projectType nullable ty@(Sem.TypeRecord path _) = do
+    record <- State.gets translationState
+    record' <- liftIO $ H.lookup (knownRecords record) path
+    case record' of
+        Nothing -> error "not possible to have undefined record at this point"
+        Just recordDef -> do
+            let defaultCap = Sem.recordDefaultCap recordDef
+            case defaultCap of
+                SemCap.Shared -> return $ Sem.TypeRc ty SemCap.Shared
+                SemCap.Regional | nullable -> return $ Sem.TypeRecord (Path "Nullable" []) [Sem.TypeRc ty SemCap.Rigid]
+                SemCap.Regional -> return $ Sem.TypeRc ty SemCap.Regional
+                _ -> return ty
+projectType _ ty = return ty

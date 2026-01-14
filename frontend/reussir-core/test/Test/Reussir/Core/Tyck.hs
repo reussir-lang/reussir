@@ -208,7 +208,7 @@ testLogicalOr = do
 
 testCasting :: Assertion
 testCasting = do
-    parseAndInferType "( 1 + 1 ) as f64" $ \expr -> do
+    parseAndInferType "(( 1 + 1 ) as i32) as f64" $ \expr -> do
         liftIO $ Sem.exprType (typedExpr expr) @?= Sem.TypeFP (Sem.IEEEFloat 64)
 
 testLetInWithoutType :: Assertion

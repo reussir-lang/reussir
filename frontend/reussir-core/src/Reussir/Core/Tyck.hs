@@ -6,7 +6,7 @@ module Reussir.Core.Tyck where
 import Control.Monad (foldM, unless, when, zipWithM)
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
-import Data.List (elemIndex, find)
+import Data.List (find)
 import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Effectful (liftIO)
@@ -96,6 +96,25 @@ tyArgOrMetaHole (Just ty) bounds = do
         reportError "Type argument does not satisfy the required bounds"
     pure ty'
 tyArgOrMetaHole Nothing bounds = introduceNewHole Nothing Nothing bounds
+
+{- | Helper to find a named field in a list of fields.
+Returns the index and the type of the field if found.
+-}
+findFieldBy :: (x -> Bool) -> [x] -> Maybe (Int, x)
+findFieldBy key fields = go 0 fields
+  where
+    go _ [] = Nothing
+    go i (x : rest)
+        | key x = Just (i, x)
+        | otherwise = go (i + 1) rest
+
+-- | Helper to safely index into a list.
+safeIndex :: [a] -> Int -> Maybe a
+safeIndex [] _ = Nothing
+safeIndex (x : _) 0 = Just x
+safeIndex (_ : xs) n
+    | n < 0 = Nothing
+    | otherwise = safeIndex xs (n - 1)
 
 inferType :: Syn.Expr -> Tyck Sem.Expr
 --       u fresh integral
@@ -271,22 +290,21 @@ inferType (Syn.AccessChain baseExpr projs) = do
                         let subst = IntMap.fromList $ zip (map (\(_, GenericID gid) -> fromIntegral gid) $ Sem.recordTyParams record) args
                         case (Sem.recordFields record, access) of
                             (Sem.Named fields, Syn.Named name) -> do
-                                case elemIndex name (map (\(n, _, _) -> n) fields) of
-                                    Just idx -> do
-                                        let (_, fieldTy, _) = fields !! idx
-                                        let fieldTy' = substituteTypeParams fieldTy subst
+                                case findFieldBy (\(n, _, _) -> n == name) fields of
+                                    Just (idx, (_, fieldTy, nullable)) -> do
+                                        fieldTy' <- projectType nullable $ substituteTypeParams fieldTy subst
+                                        L.logTrace_ $ "Field type: " <> T.pack (show fieldTy')
                                         return (fieldTy', idx : indices)
                                     Nothing -> do
                                         reportError $ "Field not found: " <> unIdentifier name
                                         return (Sem.TypeBottom, indices)
                             (Sem.Unnamed fields, Syn.Unnamed idx) -> do
                                 let idxInt = fromIntegral idx
-                                if idxInt >= 0 && idxInt < length fields
-                                    then do
-                                        let (fieldTy, _) = fields !! idxInt
-                                        let fieldTy' = substituteTypeParams fieldTy subst
+                                case safeIndex fields idxInt of
+                                    Just (fieldTy, nullable) -> do
+                                        fieldTy' <- projectType nullable $ substituteTypeParams fieldTy subst
                                         return (fieldTy', idxInt : indices)
-                                    else do
+                                    Nothing -> do
                                         reportError $ "Field index out of bounds: " <> T.pack (show idx)
                                         return (Sem.TypeBottom, indices)
                             _ -> do
@@ -781,3 +799,25 @@ logTraceWhen :: T.Text -> Tyck ()
 logTraceWhen msg = do
     lvl <- State.gets translationLogLevel
     when (lvl == B.LogDebug || lvl == B.LogTrace) $ L.logTrace_ msg
+
+-- TODO: we need to discuss how to deal with generic. We need to leave a stuck here ....
+-- TODO: we need keep the flexibility of current reference to decide the actually projection.
+projectType :: Bool -> Sem.Type -> Tyck Sem.Type
+projectType _ x@(Sem.TypeGeneric _) = do
+    L.logAttention_ "cannot project generic for now"
+    pure x
+projectType nullable ty@(Sem.TypeRecord path _) = do
+    record <- State.gets knownRecords
+    record' <- liftIO $ H.lookup record path
+    case record' of
+        Nothing -> do
+            reportError $ "Unknown record: " <> T.pack (show path)
+            return Sem.TypeBottom
+        Just recordDef -> do
+            let defaultCap = Sem.recordDefaultCap recordDef
+            case defaultCap of
+                Cap.Shared -> return $ Sem.TypeRc ty Cap.Shared
+                Cap.Regional | nullable -> return $ Sem.TypeRecord (Path "Nullable" []) [Sem.TypeRc ty Cap.Rigid]
+                Cap.Regional -> return $ Sem.TypeRc ty Cap.Rigid
+                _ -> return ty
+projectType _ ty = return ty

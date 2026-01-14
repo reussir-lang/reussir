@@ -788,6 +788,10 @@ evalTypeWithFlexivity t isFlexible = do
             if isFlexible
                 then return $ Sem.TypeRc ty Flex
                 else return $ Sem.TypeRc ty Rigid
+        Sem.TypeRecord (Path "Nullable" []) [Sem.TypeRc ty Regional] -> do
+            if isFlexible
+                then return $ Sem.TypeRecord (Path "Nullable" []) [Sem.TypeRc ty Flex]
+                else return $ Sem.TypeRecord (Path "Nullable" []) [Sem.TypeRc ty Rigid]
         _ -> return t'
 
 forceAndCheckHoles :: Sem.Type -> Tyck Sem.Type
