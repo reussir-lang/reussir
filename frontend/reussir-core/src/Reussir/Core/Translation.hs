@@ -258,7 +258,11 @@ exactTypeSatisfyBounds tyClassTable ty bounds = do
     tyClasses <- Sem.getClassesOfType tyClassTable ty
     let candidates = HashSet.toList tyClasses
 
-    let checkBound b = do
+    let checkBound (Class (Path "PtrLike" [])) = case ty of
+            Sem.TypeRef _ _ -> return True -- TODO: do we really need to care about this?
+            Sem.TypeRc _ _ -> return True
+            _ -> return False
+        checkBound b = do
             -- Check if any candidate 'c' satisfies 'isSuperClass dag b c'
             -- isSuperClass returns Eff es Bool
             results <- mapM (isSuperClass dag b) candidates
@@ -290,6 +294,7 @@ unify ty1 ty2 = do
                 isSatisfy <- satisfyBounds ty bnds
                 when isSatisfy $
                     writeIORef' unifState (SolvedUFRoot rnk ty)
+                unless isSatisfy $ reportError "Type does not satisfy bounds"
                 return isSatisfy
             _ -> error "unreachable: cannot be solved or non-root here"
     unifyForced ty (Sem.TypeHole hID) = unifyForced (Sem.TypeHole hID) ty
@@ -349,6 +354,9 @@ populatePrimitives typeClassTable typeClassDAG = do
     let numClass = Class $ Path "Num" []
     let floatClass = Class $ Path "FloatingPoint" []
     let intClass = Class $ Path "Integral" []
+    let ptrLikeClass = Class $ Path "PtrLike" []
+
+    addClass ptrLikeClass [] typeClassDAG
     addClass numClass [] typeClassDAG
     addClass floatClass [numClass] typeClassDAG
     addClass intClass [numClass] typeClassDAG
@@ -521,7 +529,7 @@ translateGeneric (identifier, bounds) = do
 
 addNullable :: (IOE :> es, Prim :> es) => GenericState -> H.CuckooHashTable Path Sem.Record -> Eff es ()
 addNullable st records = do
-    genericID <- newGenericVar "T" Nothing [] st
+    genericID <- newGenericVar "T" Nothing [Path "PtrLike" []] st
     let nullPath = Path "Null" ["Nullable"]
         nonnullPath = Path "NonNull" ["Nullable"]
         nullablePath = Path "Nullable" []
@@ -995,6 +1003,7 @@ analyzeGenericFlow = do
     forM_ protos $ \(_, proto) -> do
         forM_ (Sem.funcParams proto) $ \(_, paramType) -> do
             analyzeGenericFlowInType paramType
+        analyzeGenericFlowInType (Sem.funcReturnType proto)
         mBody <- readIORef' (Sem.funcBody proto)
         case mBody of
             Just body -> analyzeGenericFlowInExpr body

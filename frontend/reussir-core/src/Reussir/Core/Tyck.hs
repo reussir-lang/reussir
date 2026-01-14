@@ -440,16 +440,20 @@ inferType
                 }
         ) = do
         L.logTrace_ "Tyck: infer Nullable::Null ctor call"
+        let ptrLikeBound = [Class $ Path "PtrLike" []]
         -- We need to resolve the type argument for T
         tyArgs' <- case ctorTyArgs of
             [Just ty] -> do
                 ty' <- evalType ty
+                satisfied <- satisfyBounds ty' ptrLikeBound
+                unless satisfied $ do
+                    reportError "Nullable::Null type argument does not satisfy PtrLike bound"
                 return [ty']
             [Nothing] -> do
-                hole <- introduceNewHole Nothing Nothing []
+                hole <- introduceNewHole Nothing Nothing ptrLikeBound
                 return [hole]
             [] -> do
-                hole <- introduceNewHole Nothing Nothing []
+                hole <- introduceNewHole Nothing Nothing ptrLikeBound
                 return [hole]
             _ -> do
                 reportError "Nullable::Null expects exactly 1 type argument"
@@ -469,6 +473,7 @@ inferType
                 }
         ) = do
         L.logTrace_ "Tyck: infer Nullable::NonNull ctor call"
+        let ptrLikeBound = [Class $ Path "PtrLike" []]
         -- First infer the type of the inner expression
         innerExpr' <- inferType innerExpr
         let innerTy = Sem.exprType innerExpr'
@@ -476,6 +481,9 @@ inferType
         tyArgs' <- case ctorTyArgs of
             [Just ty] -> do
                 ty' <- evalType ty
+                satisfied <- satisfyBounds ty' ptrLikeBound
+                unless satisfied $ do
+                    reportError "Nullable::NonNull type argument does not satisfy PtrLike bound"
                 -- Unify the expected type with the inner type
                 unification <- unify innerTy ty'
                 if not unification
@@ -484,10 +492,16 @@ inferType
                         return [Sem.TypeBottom]
                     else return [ty']
             [Nothing] -> do
-                -- Infer from inner expression type
+                -- Infer from inner expression type, but check bounds
+                satisfied <- satisfyBounds innerTy ptrLikeBound
+                unless satisfied $ do
+                    reportError "Nullable::NonNull type argument does not satisfy PtrLike bound"
                 return [innerTy]
             [] -> do
-                -- Infer from inner expression type
+                -- Infer from inner expression type, but check bounds
+                satisfied <- satisfyBounds innerTy ptrLikeBound
+                unless satisfied $ do
+                    reportError "Nullable::NonNull type argument does not satisfy PtrLike bound"
                 return [innerTy]
             _ -> do
                 reportError "Nullable::NonNull expects exactly 1 type argument"
