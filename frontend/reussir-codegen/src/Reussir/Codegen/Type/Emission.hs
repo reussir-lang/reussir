@@ -79,7 +79,7 @@ emitTy toplevel (TypeExpr sym) = do
     record <- getRecord sym
     case record of
         Just r -> emitRecord toplevel (Just sym) r
-        Nothing -> error "Record not found for expression"
+        Nothing -> error $ "Record not found for expression: " <> show sym
 emitTy toplevel (TypeNullable ty) = do
     ty' <- emitTy toplevel ty
     pure $ "!reussir.nullable<" <> ty' <> ">"

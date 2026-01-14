@@ -37,7 +37,7 @@ import Reussir.Codegen.Value (Value (Value))
 import Reussir.Codegen.Value qualified as IR
 import Reussir.Core.Generic (GenericSolution)
 import Reussir.Core.Mangle (mangleABIName)
-import Reussir.Core.Type (substituteGeneric)
+import Reussir.Core.Type (stripAllRc, substituteGeneric)
 import Reussir.Core.Types.Expr qualified as Sem
 import Reussir.Core.Types.Function (FunctionProto (..), functionProtos)
 import Reussir.Core.Types.Function qualified as Sem
@@ -89,7 +89,7 @@ typeAsDbgType ty = do
             case record of
                 Nothing -> pure Nothing
                 Just rec -> do
-                    let symbol = IR.verifiedSymbol $ mangleABIName (Sem.TypeRecord path args)
+                    symbol <- mangleSymbol path args
                     let generics = Sem.recordTyParams rec
                         gids = map (\(_, GenericID gid) -> fromIntegral gid) generics
                         assignment = IntMap.fromList $ zip gids args
@@ -183,7 +183,7 @@ createLoweringState moduleFile repo mod' transState = do
 
 mangleSymbol :: Path -> [Sem.Type] -> Lowering IR.Symbol
 mangleSymbol path tyArgs = do
-    instantiatedArgs <- mapM canonicalType tyArgs
+    instantiatedArgs <- mapM canonicalType $ map stripAllRc tyArgs
     return $ IR.verifiedSymbol $ mangleABIName (Sem.TypeRecord path instantiatedArgs)
 
 convertType :: (HasCallStack) => Sem.Type -> Lowering IR.Type
@@ -712,19 +712,83 @@ lowerExprInBlock (Sem.VariantCall _ _ variant arg) ty exprSpan = do
     let instr = IR.VariantCreate (fromIntegral variant) typedArg (retVal, retTy)
     addIRInstr instr exprSpan
     pure retVal
--- Projection
--- TODO: handle chain of projection
+-- Projection chain handling
+-- For chains like a.x.y.z:
+-- - Consecutive TypeRecord fields: chain RefProject without intermediate loads
+-- - Rc fields: RefLoad the Rc, then RcBorrow to get inner reference
 lowerExprInBlock (Sem.ProjChain _ []) _ _ =
     error "empty project chain?"
-lowerExprInBlock (Sem.ProjChain baseExpr [index]) _ exprSpan = do
+lowerExprInBlock (Sem.ProjChain baseExpr indices) _ exprSpan = do
     baseExpr' <- lowerExpr baseExpr
     let baseExprTy = Sem.exprType baseExpr
     baseExprTy' <- convertType baseExprTy
-    let refTy = mkRefType baseExprTy' IR.Unspecified
-    spilledVal <- nextValue
-    let spilledInstr = IR.RefSpill (baseExpr', baseExprTy') (spilledVal, refTy)
-    addIRInstr spilledInstr exprSpan
-    case baseExprTy of
+    refVal <- nextValue
+    -- Initial reference: Spill for record, Borrow for Rc
+    (refInstr, compositeTy, refTy) <- case baseExprTy of
+        Sem.TypeRc innerTy _ -> do
+            innerTy' <- convertType innerTy
+            let refTy = mkRefType innerTy' IR.Unspecified
+            pure (IR.RcBorrow (baseExpr', baseExprTy') (refVal, refTy), innerTy, refTy)
+        _ -> do
+            let refTy = mkRefType baseExprTy' IR.Unspecified
+            pure (IR.RefSpill (baseExpr', baseExprTy') (refVal, refTy), baseExprTy, refTy)
+    addIRInstr refInstr exprSpan
+    -- Fold over indices
+    (finalRefVal, finalRefTy, finalFieldTy) <-
+        foldProjIndices refVal refTy compositeTy indices exprSpan
+    -- Final load
+    loadVal <- nextValue
+    let loadInstr = IR.RefLoad (finalRefVal, finalRefTy) (loadVal, finalFieldTy)
+    addIRInstr loadInstr exprSpan
+    pure loadVal
+  where
+    -- Fold over projection indices, returning (refVal, refTy, fieldIRTy)
+    foldProjIndices ::
+        IR.Value ->
+        IR.Type ->
+        Sem.Type ->
+        [Int] ->
+        LoweringSpan ->
+        Lowering (IR.Value, IR.Type, IR.Type)
+    foldProjIndices _refVal _refTy _compositeTy [] _ =
+        error "foldProjIndices called with empty index list"
+    foldProjIndices refVal refTy compositeTy [idx] mSpan = do
+        -- Last index: project and return for final load
+        (projVal, projRefTy, fieldTy') <- projectField refVal refTy compositeTy idx mSpan
+        pure (projVal, projRefTy, fieldTy')
+    foldProjIndices refVal refTy compositeTy (idx : rest) mSpan = do
+        -- Get field type to determine how to proceed
+        (projVal, projRefTy, fieldTy') <- projectField refVal refTy compositeTy idx mSpan
+        -- Check if the field itself is an Rc or a direct record
+        fieldSemTy <- getFieldSemType compositeTy idx
+        case fieldSemTy of
+            Sem.TypeRc innerTy _ -> do
+                -- Field is Rc: load the Rc, borrow it, then continue with inner
+                loadVal <- nextValue
+                let loadInstr = IR.RefLoad (projVal, projRefTy) (loadVal, fieldTy')
+                addIRInstr loadInstr mSpan
+                -- Borrow the Rc
+                innerIRTy <- convertType innerTy
+                let innerRefTy = mkRefType innerIRTy IR.Unspecified
+                borrowVal <- nextValue
+                let borrowInstr = IR.RcBorrow (loadVal, fieldTy') (borrowVal, innerRefTy)
+                addIRInstr borrowInstr mSpan
+                foldProjIndices borrowVal innerRefTy innerTy rest mSpan
+            Sem.TypeRecord{} ->
+                -- Field is direct record: continue projecting without load
+                foldProjIndices projVal projRefTy fieldSemTy rest mSpan
+            _ ->
+                error $ "Cannot project through non-record, non-Rc type: " ++ show fieldSemTy
+
+    -- Project to a field and return (projVal, projRefTy, fieldIRTy)
+    projectField ::
+        IR.Value ->
+        IR.Type ->
+        Sem.Type ->
+        Int ->
+        LoweringSpan ->
+        Lowering (IR.Value, IR.Type, IR.Type)
+    projectField refVal refTy compositeTy idx mSpan = case compositeTy of
         Sem.TypeRecord recordName tyArgs -> do
             recordTable <- State.gets (knownRecords . translationState)
             record <- liftIO $ H.lookup recordTable recordName
@@ -739,27 +803,43 @@ lowerExprInBlock (Sem.ProjChain baseExpr [index]) _ exprSpan = do
                     let combinedAssignment = IntMap.union newAssignment oldAssignment
                     State.modify $ \s -> s{genericAssignment = combinedAssignment}
 
-                    let fieldTy = lookupFieldType $ recordFields record'
+                    let fieldTy = lookupFieldType idx $ recordFields record'
                     fieldTy' <- convertType fieldTy
 
                     State.modify $ \s -> s{genericAssignment = oldAssignment}
 
                     let fieldRefTy = mkRefType fieldTy' IR.Unspecified
                     projVal <- nextValue
-                    let projInstr = IR.RefProject (spilledVal, refTy) (fromIntegral index) (projVal, fieldRefTy)
-                    addIRInstr projInstr exprSpan
-                    loadVal <- nextValue
-                    let loadInstr = IR.RefLoad (projVal, fieldRefTy) (loadVal, fieldTy')
-                    addIRInstr loadInstr exprSpan
-                    pure loadVal
-        _ -> error "non-value record projection is not handled yet"
-  where
-    lookupFieldType :: RecordFields -> Sem.Type
-    lookupFieldType (Named fields) =
-        let (_, ty', _) = fields !! (fromIntegral index) in ty'
-    lookupFieldType (Unnamed fields) =
-        fst $ fields !! (fromIntegral index)
-    lookupFieldType _ = error "cannot project out of variant"
+                    let projInstr = IR.RefProject (refVal, refTy) (fromIntegral idx) (projVal, fieldRefTy)
+                    addIRInstr projInstr mSpan
+                    pure (projVal, fieldRefTy, fieldTy')
+        _ -> error $ "projectField called on non-record type: " ++ show compositeTy
+
+    -- Get the semantic field type at given index
+    getFieldSemType :: Sem.Type -> Int -> Lowering Sem.Type
+    getFieldSemType (Sem.TypeRecord recordName tyArgs) idx = do
+        recordTable <- State.gets (knownRecords . translationState)
+        record <- liftIO $ H.lookup recordTable recordName
+        case record of
+            Nothing -> error $ "Record type not found: " ++ show recordName
+            Just record' -> do
+                let generics = recordTyParams record'
+                let gids = map (\(_, GenericID gid) -> fromIntegral gid) generics
+                let assignment = IntMap.fromList $ zip gids tyArgs
+                let fieldTy = lookupFieldType idx $ recordFields record'
+                -- Substitute generics in field type
+                pure $
+                    substituteGeneric
+                        fieldTy
+                        (\(GenericID gid') -> IntMap.lookup (fromIntegral gid') assignment)
+    getFieldSemType ty _ = error $ "getFieldSemType called on non-record: " ++ show ty
+
+    lookupFieldType :: Int -> RecordFields -> Sem.Type
+    lookupFieldType idx (Named fields) =
+        let (_, ty', _) = fields !! idx in ty'
+    lookupFieldType idx (Unnamed fields) =
+        fst $ fields !! idx
+    lookupFieldType _ _ = error "cannot project out of variant"
 lowerExprInBlock (Sem.RunRegion bodyExpr) regionTy exprSpan = do
     regionTy' <- convertType regionTy
     lowerRegionalExpr bodyExpr regionTy' exprSpan
@@ -961,14 +1041,13 @@ translateRecord path record assignment = do
                 )
                 fields
         (Sem.EnumKind, Sem.Variants variants) ->
-            pure $
-                map
-                    ( \(name, _) ->
-                        let segments = pathBasename path : pathSegments path
-                            sym = IR.verifiedSymbol $ mangleABIName (Sem.TypeRecord (Path name segments) tyArgs)
-                         in IRRecord.RecordField (IR.TypeExpr sym) False
-                    )
-                    variants
+            mapM
+                ( \(name, _) -> do
+                    let segments = pathBasename path : pathSegments path
+                    sym <- mangleSymbol (Path name segments) tyArgs
+                    pure $ IRRecord.RecordField (IR.TypeExpr sym) False
+                )
+                variants
         (Sem.EnumVariant{}, Sem.Unnamed fields) ->
             mapM
                 ( \(ty, mutable) -> do

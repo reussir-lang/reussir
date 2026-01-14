@@ -135,3 +135,10 @@ collectGenerics set (TypeGeneric (GenericID gid)) = IntSet.insert (fromIntegral 
 collectGenerics set (TypeRc t _) = collectGenerics set t
 collectGenerics set (TypeRef t _) = collectGenerics set t
 collectGenerics set _ = set
+
+stripAllRc :: Type -> Type
+stripAllRc (TypeRc t _) = stripAllRc t
+stripAllRc (TypeRecord path args) = TypeRecord path (map stripAllRc args)
+stripAllRc (TypeClosure args ret) = TypeClosure (map stripAllRc args) (stripAllRc ret)
+stripAllRc (TypeRef t cap) = TypeRef (stripAllRc t) cap
+stripAllRc t = t

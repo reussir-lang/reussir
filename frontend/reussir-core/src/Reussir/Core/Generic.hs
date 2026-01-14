@@ -165,7 +165,7 @@ import Data.Sequence qualified as Seq
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (modifyIORef', newIORef', readIORef')
-import Reussir.Core.Type (isConcrete, substituteGeneric)
+import Reussir.Core.Type (isConcrete, stripAllRc, substituteGeneric)
 import Reussir.Core.Types.Generic
 import Reussir.Core.Types.GenericID
 import Reussir.Core.Types.Type (Type (..))
@@ -242,7 +242,7 @@ addLink (GenericID srcID) (GenericID tgtID) mType state = do
     let ref = getStateRef state
     vars <- readIORef' ref
     let var = Seq.index vars (fromIntegral srcID)
-    liftIO $ H.insert (genericLinks var) (GenericID tgtID) mType
+    liftIO $ H.insert (genericLinks var) (GenericID tgtID) (fmap stripAllRc mType)
 
 {- |
 Add a plain flow edge @src -> tgt@.
@@ -314,12 +314,13 @@ addConcreteFlow ::
     GenericState ->
     Eff es ()
 addConcreteFlow genericID ty state = do
-    when (isConcrete ty) $ do
+    let ty' = stripAllRc ty
+    when (isConcrete ty') $ do
         let table = concreteFlow state
         existing <- liftIO $ H.lookup table genericID
         case existing of
-            Nothing -> liftIO $ H.insert table genericID [ty]
-            Just tys -> liftIO $ H.insert table genericID (ty : tys)
+            Nothing -> liftIO $ H.insert table genericID [ty']
+            Just tys -> liftIO $ H.insert table genericID (ty' : tys)
 
 -- Internal DFS visitation state used by 'detectGrowingCycles'.
 data VisitState
