@@ -69,7 +69,7 @@ instance Hashable Type where
     hashWithSalt salt (TypeHole hole) =
         salt `hashWithSalt` (8 :: Int) `hashWithSalt` hole
     hashWithSalt salt TypeBottom =
-        salt `hashWithSalt` (11 :: Int)
+        salt `hashWithSalt` (9 :: Int)
 
 instance Show Type where
     show (TypeRecord path []) = show path
