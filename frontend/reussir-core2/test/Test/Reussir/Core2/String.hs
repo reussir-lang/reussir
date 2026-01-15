@@ -19,4 +19,9 @@ tests =
             token <- runEff $ allocateStrToken "hello world" uniqifier
             let mangled = mangleStringToToken token
             mangled @?= "_RNvC22REUSSIR_STRING_LITERAL43_6ePC0crWWyKBhtr8ziHr7FQSE1YdqqtkbZ0Na5dOXec"
+            token' <- runEff $ allocateStrToken "hello world" uniqifier
+            token' @?= token
+            token'' <- runEff $ allocateStrToken "hello, world" uniqifier
+            let mangled' = mangleStringToToken token''
+            mangled' @=? "_RNvC22REUSSIR_STRING_LITERAL43B3WRDvCVYrIFGcfOj4Y3eVYrWcHAjM0IGjxdoy5PWCw"
         ]

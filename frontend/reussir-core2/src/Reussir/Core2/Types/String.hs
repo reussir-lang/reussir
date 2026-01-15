@@ -6,6 +6,7 @@ import Data.Text qualified as T
 import Data.Word (Word64)
 
 newtype StringToken = StringToken (Word64, Word64, Word64, Word64)
+    deriving (Show, Eq)
 
 newtype StringUniqifier = StringUniqifier
     { stringStorage :: H.CuckooHashTable (XXH3 T.Text) StringToken
