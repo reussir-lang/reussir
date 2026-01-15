@@ -126,6 +126,12 @@ ReussirLogger reussir_bridge_create_stdout_logger(ReussirLogLevel level,
 void reussir_bridge_destroy_logger(ReussirLogger logger);
 void reussir_bridge_log_with_level(ReussirLogger logger, ReussirLogLevel level,
                                    const char *message);
+typedef struct {
+  uint64_t values[4];
+} ReussirStringHash;
+
+void reussir_bridge_hash_bytes(const uint8_t *str, size_t len,
+                               ReussirStringHash *out);
 
 #ifdef __cplusplus
 }

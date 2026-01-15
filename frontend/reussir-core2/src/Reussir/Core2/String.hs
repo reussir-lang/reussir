@@ -12,11 +12,12 @@ where
 import Data.Bits ((.|.))
 import Data.Digest.XXHash.FFI (XXH3 (XXH3))
 import Data.HashTable.IO qualified as H
-import Data.Hashable (Hashable (hashWithSalt))
 import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
+import Data.Text.Encoding qualified as T
 import Data.Word (Word64)
 import Effectful (Eff, IOE, liftIO, (:>))
+import Reussir.Bridge (StringHash (..), hashBytes)
 import Reussir.Core2.Types.String (StringToken (StringToken), StringUniqifier (..))
 
 data Int256
@@ -83,15 +84,6 @@ encodeB62 n0 = go n0 mempty 0
 newInt256 :: (Word64, Word64, Word64, Word64) -> Int256
 newInt256 (a, b, c, d) = Int256 a b c d
 
-strSalt0 :: Int
-strSalt0 = fromIntegral (0xce021d562d083a5e :: Word64)
-strSalt1 :: Int
-strSalt1 = fromIntegral (0x612641935c33db21 :: Word64)
-strSalt2 :: Int
-strSalt2 = fromIntegral (0x5db731d63c1b4a28 :: Word64)
-strSalt3 :: Int
-strSalt3 = fromIntegral (0x969b6912f32bd45e :: Word64)
-
 allocateStrToken :: (IOE :> es) => T.Text -> StringUniqifier -> Eff es StringToken
 allocateStrToken str (StringUniqifier table) = do
     let xxh3Str = XXH3 str
@@ -99,11 +91,9 @@ allocateStrToken str (StringUniqifier table) = do
     case bucket of
         Just token -> return token
         Nothing -> do
-            let slotOne = fromIntegral $ hashWithSalt strSalt0 xxh3Str
-            let slotTwo = fromIntegral $ hashWithSalt strSalt1 xxh3Str
-            let slotThree = fromIntegral $ hashWithSalt strSalt2 xxh3Str
-            let slotFour = fromIntegral $ hashWithSalt strSalt3 xxh3Str
-            let token = StringToken (slotOne, slotTwo, slotThree, slotFour)
+            let bytes = T.encodeUtf8 str
+            StringHash a b c d <- liftIO $ hashBytes bytes
+            let token = StringToken (a, b, c, d)
             liftIO $ H.insert table xxh3Str token
             return token
 
