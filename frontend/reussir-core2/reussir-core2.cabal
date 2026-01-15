@@ -1,0 +1,117 @@
+cabal-version:      3.14
+name:               reussir-core2
+version:            0.1.0.0
+license:            (Apache-2.0 OR MIT)
+license-file:       LICENSE
+author:             Schrodinger ZHU Yifan
+maintainer:         i@zhuyi.fan
+category:           Language
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+
+common warnings
+    ghc-options: -Wall
+
+library
+    import:           warnings
+    exposed-modules:  
+        Reussir.Core2
+        Reussir.Core2.Types.GenericID
+        Reussir.Core2.Types.Class
+        Reussir.Core2.Types.FP
+        Reussir.Core2.Types.Integral
+        Reussir.Core2.Types.Semi.Record
+        Reussir.Core2.Types.Semi.Type
+        Reussir.Core2.Types.Semi
+        Reussir.Core2.Types.Generic
+        Reussir.Core2.Generic
+        Reussir.Core2.Class
+        Reussir.Core2.Types
+        Reussir.Core2.Semi.Type
+        Reussir.Core2.Semi
+    build-depends:    base ^>=4.20.2.0,
+                      reussir-bridge,
+                      reussir-parser,
+                      reussir-diagnostic,
+                      reussir-codegen,
+                      effectful,
+                      log-effectful,
+                      log-base,
+                      text,
+                      unordered-containers,
+                      containers,
+                      hashable,
+                      xxhash-ffi,
+                      scientific,
+                      hashtables,
+                      array,
+                      ansi-terminal-types,
+                      prettyprinter,
+                      prettyprinter-ansi-terminal,
+                      directory,
+                      filepath,
+                      bytestring,
+                      text-builder-linear,
+                      punycode
+    hs-source-dirs:   src
+    default-language: GHC2024
+
+executable reussir-tyck2
+    import:           warnings
+    main-is:          Main.hs
+    build-depends:
+        base ^>=4.20.2.0,
+        reussir-core2,
+        reussir-bridge,
+        reussir-parser,
+        reussir-diagnostic,
+        optparse-applicative,
+        text,
+        effectful,
+        log-effectful,
+        log-base,
+        megaparsec,
+        prettyprinter,
+        hashtables,
+        prettyprinter-ansi-terminal
+    hs-source-dirs:   app
+    default-language: GHC2024
+
+executable reussir-compiler2
+    import:           warnings
+    main-is:          Compiler.hs
+    build-depends:
+        base ^>=4.20.2.0,
+        reussir-core2,
+        reussir-parser,
+        reussir-codegen,
+        reussir-bridge,
+        optparse-applicative,
+        text,
+        effectful,
+        megaparsec,
+        log-effectful,
+        log-base
+    hs-source-dirs:   app
+    default-language: GHC2024
+
+test-suite reussir-core2-test
+    import:           warnings
+    default-language: GHC2024
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          Main.hs
+    other-modules:
+        Test.Reussir.Core2.Generic
+        Test.Reussir.Core2.Class
+    build-depends:
+        base ^>=4.20.2.0,
+        reussir-core2,
+        tasty,
+        tasty-hunit,
+        containers,
+        text,
+        effectful,
+        effectful-core,
+        reussir-parser,
+        hashtables
