@@ -23,6 +23,7 @@ library
         Reussir.Core2.Types.String
         Reussir.Core2.Types.Semi.Record
         Reussir.Core2.Types.Semi.Type
+        Reussir.Core2.Types.Semi.Unification
         Reussir.Core2.Types.Semi
         Reussir.Core2.Types.Generic
         Reussir.Core2.Generic
@@ -30,6 +31,7 @@ library
         Reussir.Core2.Types
         Reussir.Core2.String
         Reussir.Core2.Semi.Type
+        Reussir.Core2.Semi.Unification
         Reussir.Core2.Semi
     build-depends:    base ^>=4.20.2.0,
                       reussir-bridge,
