@@ -32,6 +32,7 @@ library
         Reussir.Core2.String
         Reussir.Core2.Semi.Type
         Reussir.Core2.Semi.Unification
+        Reussir.Core2.Semi.Mangle
         Reussir.Core2.Semi
     build-depends:    base ^>=4.20.2.0,
                       reussir-bridge,
@@ -109,6 +110,7 @@ test-suite reussir-core2-test
         Test.Reussir.Core2.Generic
         Test.Reussir.Core2.Class
         Test.Reussir.Core2.String
+        Test.Reussir.Core2.Semi.Mangle
     build-depends:
         base ^>=4.20.2.0,
         reussir-core2,
@@ -119,4 +121,5 @@ test-suite reussir-core2-test
         effectful,
         effectful-core,
         reussir-parser,
-        hashtables
+        hashtables,
+        text-builder-linear

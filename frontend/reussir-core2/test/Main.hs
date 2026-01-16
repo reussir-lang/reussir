@@ -3,6 +3,7 @@ module Main where
 import Reussir.Core2 (hello)
 import Test.Reussir.Core2.Class qualified as Class
 import Test.Reussir.Core2.Generic qualified as Generic
+import Test.Reussir.Core2.Semi.Mangle qualified as Mangle
 import Test.Reussir.Core2.String qualified as String
 import Test.Tasty
 import Test.Tasty.HUnit
@@ -19,4 +20,5 @@ tests =
         , Generic.tests
         , Class.tests
         , String.tests
+        , Mangle.tests
         ]

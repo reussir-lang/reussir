@@ -19,3 +19,5 @@ data GenericState = GenericState
     { getStateRef :: IORef' (Seq.Seq GenericVar)
     , concreteFlow :: H.CuckooHashTable GenericID [Type]
     }
+
+type GenericSolution = H.CuckooHashTable GenericID [Type]

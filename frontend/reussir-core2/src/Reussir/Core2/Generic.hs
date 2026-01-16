@@ -296,8 +296,6 @@ This is why the solver returns *lists* of types: it explicitly enumerates altern
 Caveat:
   Instantiation may be large (cartesian product). That's intended for codegen enumeration.
 -}
-type GenericSolution = H.CuckooHashTable GenericID [Type]
-
 solveGeneric ::
     (IOE :> es, Prim :> es) =>
     GenericState ->
