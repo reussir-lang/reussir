@@ -4,6 +4,7 @@ module Reussir.Core2.Semi.Unification where
 
 import Control.Monad (when, zipWithM)
 import Data.Int (Int64)
+import Data.Maybe (catMaybes)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Effectful (Eff, IOE, (:>))
@@ -19,9 +20,17 @@ import Reussir.Core2.Class (meetBound)
 import Reussir.Core2.Types.Class (ClassDAG, TypeBound)
 import Reussir.Core2.Types.Semi.Type (HoleID (..), Type (..))
 import Reussir.Core2.Types.Semi.Unification (
+    ErrorKind (..),
+    Failure (..),
     HoleState (..),
     HoleTable (..),
     UnificationState (..),
+ )
+import Reussir.Diagnostic (Report (..))
+import Reussir.Diagnostic.Report (
+    addBoldToText,
+    defaultCodeRef,
+    defaultText,
  )
 
 introduceNewHole ::
@@ -139,20 +148,44 @@ force TypeBool = return TypeBool
 force int@(TypeIntegral _) = return int
 force fp@(TypeFP _) = return fp
 
+getHoleState :: (Prim :> es, Reader HoleTable :> es) => HoleID -> Eff es HoleState
+getHoleState (HoleID idx) = do
+    table <- ask
+    holesSeq <- readIORef' $ holes table
+    return $ Seq.index holesSeq idx
+
 -- unification
 unify ::
     (IOE :> es, Prim :> es, Reader HoleTable :> es, Reader ClassDAG :> es) =>
-    (Type -> TypeBound -> Eff es Bool) -> Type -> Type -> Eff es [T.Text]
+    (Type -> TypeBound -> Eff es Bool) -> Type -> Type -> Eff es (Maybe Failure)
 unify satisfyBounds ty1 ty2 = do
     ty1' <- force ty1
     ty2' <- force ty2
     unifyForced ty1' ty2'
   where
+    failMismatch t1 t2 ctx =
+        return $
+            Just $
+                Failure
+                    { errorKind = URMisMatchedType t1 t2
+                    , unificationContext = ctx
+                    , innerFailures = []
+                    }
+
+    failMismatchNested t1 t2 ctx inner =
+        return $
+            Just $
+                Failure
+                    { errorKind = URMisMatchedType t1 t2
+                    , unificationContext = ctx
+                    , innerFailures = inner
+                    }
+
     unifyForced (TypeHole hID1) (TypeHole hID2) = do
         unifyTwoHoles hID1 hID2
         -- TODO: may be we should detect some trivial error here. e.g.
         -- Integral and FloatingPoint bounds cannot be satisfied in the same time
-        pure []
+        pure Nothing
     unifyForced (TypeHole hID) ty = do
         (_, unifState) <- findHoleUnifState hID
         unifState' <- readIORef' unifState
@@ -165,32 +198,99 @@ unify satisfyBounds ty1 ty2 = do
                 when isSatisfy $
                     writeIORef' unifState (SolvedUFRoot rnk ty)
                 if isSatisfy
-                    then return []
-                    else return ["Type does not satisfy bounds"]
+                    then return Nothing
+                    else do
+                        holeState <- getHoleState hID
+                        return $
+                            Just $
+                                Failure
+                                    { errorKind =
+                                        URMisMatchedBounds
+                                            { candidateType = ty
+                                            , candidateBounds = bnds
+                                            , candidateHoleSpan = holeSpan holeState
+                                            , candidateHoleName = holeName holeState
+                                            }
+                                    , unificationContext = "Type does not satisfy bounds"
+                                    , innerFailures = []
+                                    }
             _ -> error "unreachable: cannot be solved or non-root here"
-    unifyForced ty (TypeHole hID) = unifyForced (TypeHole hID) ty
-    unifyForced (TypeRecord path1 args1) (TypeRecord path2 args2)
+    unifyForced t1 t2@(TypeHole _) = unifyForced t2 t1
+    unifyForced t1@(TypeRecord path1 args1) t2@(TypeRecord path2 args2)
         | path1 == path2 && length args1 == length args2 = do
             results <- zipWithM (unify satisfyBounds) args1 args2
-            return $ concat results
-        | otherwise = return ["Cannot unify two record types with different path or arity"]
-    unifyForced TypeBool TypeBool = return []
-    unifyForced TypeStr TypeStr = return []
-    unifyForced TypeUnit TypeUnit = return []
-    unifyForced (TypeIntegral it1) (TypeIntegral it2) =
-        if it1 == it2 then return [] else return ["Cannot unify two integer types with different kind"]
-    unifyForced (TypeFP fpt1) (TypeFP fpt2) =
-        if fpt1 == fpt2 then return [] else return ["Cannot unify two floating point types with different kind"]
+            let failures = catMaybes results
+            if null failures
+                then return Nothing
+                else failMismatchNested t1 t2 "failed to unify record components" failures
+        | otherwise =
+            failMismatch t1 t2 $
+                "failed to unify record path " <> T.pack (show path1) <> " with " <> T.pack (show path2)
+    unifyForced TypeBool TypeBool = return Nothing
+    unifyForced TypeStr TypeStr = return Nothing
+    unifyForced TypeUnit TypeUnit = return Nothing
+    unifyForced t1@(TypeIntegral it1) t2@(TypeIntegral it2) =
+        if it1 == it2
+            then return Nothing
+            else failMismatch t1 t2 "failed to unify integral types"
+    unifyForced t1@(TypeFP fpt1) t2@(TypeFP fpt2) =
+        if fpt1 == fpt2
+            then return Nothing
+            else failMismatch t1 t2 "failed to unify floating point types"
     -- TODO: covariance/contravariance?
-    unifyForced (TypeClosure args1 ret1) (TypeClosure args2 ret2)
+    unifyForced t1@(TypeClosure args1 ret1) t2@(TypeClosure args2 ret2)
         | length args1 == length args2 = do
             argsResults <- zipWithM (unify satisfyBounds) args1 args2
             retResult <- unify satisfyBounds ret1 ret2
-            return $ concat (retResult : argsResults)
-        | otherwise = return ["Cannot unify two closure types with different arity"]
+            let failures = catMaybes (retResult : argsResults)
+            if null failures
+                then return Nothing
+                else failMismatchNested t1 t2 "failed to unify closure types" failures
+        | otherwise = failMismatch t1 t2 "failed to unify closure types with different arity"
     -- auto coercion from bottom
-    unifyForced TypeBottom _ = return []
-    unifyForced _ TypeBottom = return []
-    unifyForced (TypeGeneric g1) (TypeGeneric g2) =
-        if g1 == g2 then return [] else return ["Cannot unify two generic types with different name"]
-    unifyForced _ _ = return ["Cannot unify two types with different kind"]
+    unifyForced TypeBottom _ = return Nothing
+    unifyForced _ TypeBottom = return Nothing
+    unifyForced t1@(TypeGeneric g1) t2@(TypeGeneric g2) =
+        if g1 == g2
+            then return Nothing
+            else
+                failMismatch t1 t2 $
+                    "failed to unify generic types " <> T.pack (show g1) <> " with " <> T.pack (show g2)
+    unifyForced t1 t2 = failMismatch t1 t2 "Cannot unify two types with different kind"
+
+errorToReport :: Failure -> FilePath -> Report
+errorToReport failure path = go True failure
+  where
+    go isTop f =
+        let headReport = renderFailure f path
+            children = foldMap (go False) (innerFailures f)
+         in if isTop && not (null (innerFailures f))
+                then headReport <> Nested children
+                else headReport <> children
+
+    renderFailure f p =
+        let contextMsg = FormattedText [defaultText (unificationContext f <> ": ")]
+            kindReport = case errorKind f of
+                URMisMatchedType t1 t2 ->
+                    FormattedText
+                        [ defaultText "Expected: "
+                        , addBoldToText $ defaultText (T.pack $ show t1)
+                        , defaultText ", Actual: "
+                        , addBoldToText $ defaultText (T.pack $ show t2)
+                        ]
+                URMisMatchedBounds ty bnds hSpan name ->
+                    let msg =
+                            FormattedText
+                                [ defaultText "Type "
+                                , addBoldToText $ defaultText (T.pack $ show ty)
+                                , defaultText " does not satisfy bounds "
+                                , addBoldToText $ defaultText (T.pack $ show bnds)
+                                ]
+                        loc = case hSpan of
+                            Just (s, e) ->
+                                let hint = FormattedText [defaultText "The meta hole was introduced at the following place"]
+                                    ref = CodeRef (defaultCodeRef p s e) (fmap defaultText name)
+                                 in hint <> Nested ref
+                            Nothing -> mempty
+                     in msg <> loc
+         in contextMsg <> kindReport

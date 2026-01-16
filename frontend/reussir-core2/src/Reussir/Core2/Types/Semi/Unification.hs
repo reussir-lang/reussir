@@ -21,3 +21,18 @@ data HoleState = HoleState
 newtype HoleTable = HoleTable
     { holes :: IORef' (Seq.Seq HoleState)
     }
+
+data ErrorKind
+    = URMisMatchedBounds
+        { candidateType :: Type
+        , candidateBounds :: TypeBound
+        , candidateHoleSpan :: Maybe (Int64, Int64)
+        , candidateHoleName :: Maybe T.Text
+        }
+    | URMisMatchedType Type Type
+
+data Failure = Failure
+    { errorKind :: ErrorKind
+    , unificationContext :: T.Text
+    , innerFailures :: [Failure]
+    }
