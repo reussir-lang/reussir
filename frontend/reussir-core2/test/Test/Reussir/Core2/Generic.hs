@@ -41,7 +41,7 @@ mkPath :: String -> Path
 mkPath s = Path (Identifier (T.pack s)) []
 
 mkTypeRecord :: String -> [Type] -> Type
-mkTypeRecord s args = TypeRecord (mkPath s) args
+mkTypeRecord s args = TypeRecord (mkPath s) args False
 
 mkBasic :: String -> Type
 mkBasic s = mkTypeRecord s []

@@ -1,0 +1,20 @@
+module Reussir.Core2.Types.Semi.Variable where
+
+import Data.HashTable.IO qualified as H
+import Data.Int (Int64)
+import Data.Sequence qualified as Seq
+import Effectful.Prim.IORef.Strict (IORef')
+import Reussir.Core2.Types.Semi.Type (Type)
+import Reussir.Core2.Types.UniqueID (VarID)
+import Reussir.Parser.Types.Lexer
+
+data VarDef = VarDef
+    { varName :: Identifier
+    , varSpan :: Maybe (Int64, Int64)
+    , varType :: Type
+    }
+
+data VarTable = VarTable
+    { localBindings :: H.CuckooHashTable Identifier VarID
+    , uniqueBindings :: IORef' (Seq.Seq VarDef)
+    }

@@ -17,7 +17,7 @@ substituteGenericOrHole ::
     Type
 substituteGenericOrHole original subst = go original
   where
-    go (TypeRecord path args) = TypeRecord path (map go args)
+    go (TypeRecord path args flex) = TypeRecord path (map go args) flex
     go (TypeIntegral it) = TypeIntegral it
     go (TypeFP fpt) = TypeFP fpt
     go TypeBool = TypeBool
@@ -52,7 +52,7 @@ substituteHole original subst = substituteGenericOrHole original f
 
 -- check if a type is concrete (generic-free)
 isConcrete :: Type -> Bool
-isConcrete (TypeRecord _ args) = all isConcrete args
+isConcrete (TypeRecord _ args _) = all isConcrete args
 isConcrete (TypeClosure args ret) = all isConcrete args && isConcrete ret
 isConcrete (TypeGeneric _) = False
 isConcrete (TypeHole _) = False
@@ -60,7 +60,7 @@ isConcrete _ = True
 
 -- check if a type is free of holes
 isHoleFree :: Type -> Bool
-isHoleFree (TypeRecord _ args) = all isHoleFree args
+isHoleFree (TypeRecord _ args _) = all isHoleFree args
 isHoleFree (TypeClosure args ret) = all isHoleFree args && isHoleFree ret
 isHoleFree (TypeHole _) = False
 isHoleFree _ = True
@@ -120,13 +120,13 @@ isUnsignedIntegral (TypeIntegral (Unsigned _)) = True
 isUnsignedIntegral _ = False
 
 containsGeneric :: Type -> GenericID -> Bool
-containsGeneric (TypeRecord _ args) gid = any (`containsGeneric` gid) args
+containsGeneric (TypeRecord _ args _) gid = any (`containsGeneric` gid) args
 containsGeneric (TypeClosure args ret) gid = any (`containsGeneric` gid) args || containsGeneric ret gid
 containsGeneric (TypeGeneric generic) gid = generic == gid
 containsGeneric _ _ = False
 
 collectGenerics :: IntSet -> Type -> IntSet
-collectGenerics set (TypeRecord _ args) = foldl' collectGenerics set args
+collectGenerics set (TypeRecord _ args _) = foldl' collectGenerics set args
 collectGenerics set (TypeClosure args ret) = foldl' collectGenerics (collectGenerics set ret) args
 collectGenerics set (TypeGeneric (GenericID gid)) = IntSet.insert (fromIntegral gid) set
 collectGenerics set _ = set

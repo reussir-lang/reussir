@@ -352,8 +352,8 @@ instance Manglable Type where
     mangle (TypeGeneric _) = error "Unsupported generic type in ABI mangle"
     -- Holes should be resolved before mangling
     mangle (TypeHole _) = error "Unsupported hole type in ABI mangle"
-    -- TypeRecord: mangle path with type arguments
-    mangle (TypeRecord path tyArgs) = manglePathWithArgs path tyArgs
+    -- TypeRecord: mangle path with type arguments (flexivity is ignored)
+    mangle (TypeRecord path tyArgs _) = manglePathWithArgs path tyArgs
 
 {- | Generate a complete ABI-mangled name.
 

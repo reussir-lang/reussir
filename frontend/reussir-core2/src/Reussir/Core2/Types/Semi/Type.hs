@@ -6,8 +6,8 @@ import Data.Hashable (Hashable (..))
 import Data.List (intercalate)
 import Reussir.Core2.Types.Class
 import Reussir.Core2.Types.FP
-import Reussir.Core2.Types.GenericID (GenericID)
 import Reussir.Core2.Types.Integral
+import Reussir.Core2.Types.UniqueID (GenericID)
 import Reussir.Parser.Types.Lexer (Path (..))
 
 {- | Represents a local hole identifier in the Reussir type system.
@@ -28,7 +28,11 @@ or user-defined types with optional type parameters.
 -}
 data Type
     = -- | User-defined type with a path and optional type parameters
-      TypeRecord Path [Type]
+      TypeRecord
+        { tyRecPath :: Path
+        , tyRecParams :: [Type]
+        , tyRecFlex :: Bool -- only relevant if Path points to a regional object
+        }
     | -- | Integral type (signed or unsigned)
       TypeIntegral IntegralType
     | -- | Floating-point type
@@ -50,8 +54,12 @@ data Type
     deriving (Eq)
 
 instance Hashable Type where
-    hashWithSalt salt (TypeRecord path args) =
-        salt `hashWithSalt` (0 :: Int) `hashWithSalt` path `hashWithSalt` args
+    hashWithSalt salt (TypeRecord path args flex) =
+        salt
+            `hashWithSalt` (0 :: Int)
+            `hashWithSalt` path
+            `hashWithSalt` args
+            `hashWithSalt` flex
     hashWithSalt salt (TypeIntegral it) =
         salt `hashWithSalt` (1 :: Int) `hashWithSalt` it
     hashWithSalt salt (TypeFP fpt) =
@@ -72,9 +80,9 @@ instance Hashable Type where
         salt `hashWithSalt` (9 :: Int)
 
 instance Show Type where
-    show (TypeRecord path []) = show path
-    show (TypeRecord path args) =
-        show path
+    show (TypeRecord path [] flex) = (if flex then "†" else "") <> show path
+    show (TypeRecord path args flex) =
+        (if flex then "†" else "") <> show path
             ++ "<"
             ++ intercalate ", " (map show args)
             ++ ">"

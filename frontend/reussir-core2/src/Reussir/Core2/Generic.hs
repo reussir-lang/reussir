@@ -13,8 +13,8 @@ import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (modifyIORef', newIORef', readIORef')
 import Reussir.Core2.Semi.Type (isConcrete, substituteGeneric)
 import Reussir.Core2.Types.Generic
-import Reussir.Core2.Types.GenericID
 import Reussir.Core2.Types.Semi.Type (Type (..))
+import Reussir.Core2.Types.UniqueID (GenericID (..))
 import Reussir.Parser.Types.Lexer (Identifier, Path)
 
 {- |
@@ -401,7 +401,7 @@ solveGeneric state = do
 
     -- Collect all generics referenced in a Type tree.
     collectVars (TypeGeneric m) = [m]
-    collectVars (TypeRecord _ args) = concatMap collectVars args
+    collectVars (TypeRecord _ args _) = concatMap collectVars args
     collectVars (TypeClosure args ret) = concatMap collectVars args ++ collectVars ret
     collectVars _ = []
 

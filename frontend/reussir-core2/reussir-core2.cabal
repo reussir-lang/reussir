@@ -16,7 +16,6 @@ library
     import:           warnings
     exposed-modules:  
         Reussir.Core2
-        Reussir.Core2.Types.GenericID
         Reussir.Core2.Types.Class
         Reussir.Core2.Types.FP
         Reussir.Core2.Types.Integral
@@ -24,12 +23,18 @@ library
         Reussir.Core2.Types.Semi.Record
         Reussir.Core2.Types.Semi.Type
         Reussir.Core2.Types.Semi.Unification
+        Reussir.Core2.Types.Semi.Expr
+        Reussir.Core2.Types.Semi.Variable
         Reussir.Core2.Types.Semi
+        Reussir.Core2.Types.Operator
+        Reussir.Core2.Types.Function
         Reussir.Core2.Types.Generic
+        Reussir.Core2.Types.UniqueID
         Reussir.Core2.Generic
         Reussir.Core2.Class
         Reussir.Core2.Types
         Reussir.Core2.String
+        Reussir.Core2.Semi.Variable
         Reussir.Core2.Semi.Type
         Reussir.Core2.Semi.Unification
         Reussir.Core2.Semi.Mangle

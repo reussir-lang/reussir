@@ -135,9 +135,9 @@ force (TypeHole holeID) = do
         UnSolvedUFRoot{} -> return $ TypeHole newId
         UFNode{} ->
             error "unreachable: findHoleUnifState should have returned root"
-force (TypeRecord path args) = do
+force (TypeRecord path args flex) = do
     args' <- mapM force args
-    return $ TypeRecord path args'
+    return $ TypeRecord path args' flex
 force (TypeClosure args ret) =
     TypeClosure <$> mapM force args <*> force ret
 force TypeBottom = return TypeBottom
@@ -216,7 +216,8 @@ unify satisfyBounds ty1 ty2 = do
                                     }
             _ -> error "unreachable: cannot be solved or non-root here"
     unifyForced t1 t2@(TypeHole _) = unifyForced t2 t1
-    unifyForced t1@(TypeRecord path1 args1) t2@(TypeRecord path2 args2)
+    -- flexivity is irrelevant for unification, the type inferrence carries flexivity towards top level
+    unifyForced t1@(TypeRecord path1 args1 _) t2@(TypeRecord path2 args2 _)
         | path1 == path2 && length args1 == length args2 = do
             results <- zipWithM (unify satisfyBounds) args1 args2
             let failures = catMaybes results
