@@ -3,11 +3,12 @@
 module Reussir.Core2.Semi.Unification where
 
 import Control.Monad (when, zipWithM)
+import Data.HashSet qualified as HashSet
 import Data.Int (Int64)
 import Data.Maybe (catMaybes)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, (:>))
 import Effectful.Prim.IORef.Strict (
     IORef',
     Prim,
@@ -15,17 +16,22 @@ import Effectful.Prim.IORef.Strict (
     readIORef',
     writeIORef',
  )
-import Effectful.Reader.Static (Reader, ask)
-import Reussir.Core2.Class (meetBound)
-import Reussir.Core2.Types.Class (ClassDAG, TypeBound)
+import Effectful.Reader.Static (ask)
+import Reussir.Core2.Class (isSuperClass, meetBound, subsumeBound)
+import Reussir.Core2.Semi.Type (getClassesOfType)
+import Reussir.Core2.Types (GenericVar (..))
+import Reussir.Core2.Types.Class (Class (..), TypeBound)
+import Reussir.Core2.Types.Generic (GenericState (..))
 import Reussir.Core2.Types.Semi.Type (HoleID (..), Type (..))
 import Reussir.Core2.Types.Semi.Unification (
     ErrorKind (..),
     Failure (..),
     HoleState (..),
     HoleTable (..),
+    UnificationEff,
     UnificationState (..),
  )
+import Reussir.Core2.Types.UniqueID (GenericID (..))
 import Reussir.Diagnostic (Report (..))
 import Reussir.Diagnostic.Report (
     addBoldToText,
@@ -34,11 +40,10 @@ import Reussir.Diagnostic.Report (
  )
 
 introduceNewHole ::
-    (Prim :> es, Reader HoleTable :> es) =>
     Maybe T.Text ->
     Maybe (Int64, Int64) ->
     TypeBound ->
-    Eff es Type
+    UnificationEff Type
 introduceNewHole holeName holeSpan bound = do
     table <- ask
     holes' <- readIORef' $ holes table
@@ -52,9 +57,8 @@ clearHoles :: (Prim :> es) => HoleTable -> Eff es ()
 clearHoles table = writeIORef' (holes table) mempty
 
 findHoleUnifState ::
-    (Prim :> es, Reader HoleTable :> es) =>
     HoleID ->
-    Eff es (HoleID, IORef' UnificationState)
+    UnificationEff (HoleID, IORef' UnificationState)
 findHoleUnifState hID@(HoleID idx) = do
     table <- ask
     holesSeq <- readIORef' $ holes table
@@ -75,8 +79,7 @@ rnkOfUnifState (SolvedUFRoot rnk _) = rnk
 rnkOfUnifState (UFNode _) = error "unreachable: UFNode has no rank"
 
 unifyTwoHoles ::
-    (IOE :> es, Prim :> es, Reader ClassDAG :> es, Reader HoleTable :> es) =>
-    HoleID -> HoleID -> Eff es ()
+    HoleID -> HoleID -> UnificationEff ()
 unifyTwoHoles hID1 hID2 = do
     (rootID1, unifState1) <- findHoleUnifState hID1
     (rootID2, unifState2) <- findHoleUnifState hID2
@@ -123,7 +126,7 @@ unifyTwoHoles hID1 hID2 = do
             writeIORef' minRnkStateRef (UFNode maxRnkID)
         _ -> error "unreachable: unifyTwoHoles called on solved holes"
 
-force :: (Prim :> es, Reader HoleTable :> es) => Type -> Eff es Type
+force :: Type -> UnificationEff Type
 force (TypeHole holeID) = do
     (newId, unifState) <- findHoleUnifState holeID
     unifState' <- readIORef' unifState
@@ -148,17 +151,61 @@ force TypeBool = return TypeBool
 force int@(TypeIntegral _) = return int
 force fp@(TypeFP _) = return fp
 
-getHoleState :: (Prim :> es, Reader HoleTable :> es) => HoleID -> Eff es HoleState
+getHoleState :: HoleID -> UnificationEff HoleState
 getHoleState (HoleID idx) = do
     table <- ask
     holesSeq <- readIORef' $ holes table
     return $ Seq.index holesSeq idx
 
+getGenericBound :: GenericID -> UnificationEff TypeBound
+getGenericBound (GenericID gid) = do
+    genericsState <- ask
+    varState <- readIORef' (getStateRef genericsState)
+    case Seq.lookup (fromIntegral gid) varState of
+        Just var -> return $ map Class $ genericBounds var
+        Nothing -> error "unreachable: getGenericBound called on non-existent generic"
+
+exactTypeSatisfyBounds :: Type -> [Class] -> UnificationEff Bool
+exactTypeSatisfyBounds ty bounds = do
+    tyClassTable <- ask
+    dag <- ask
+    tyClasses <- getClassesOfType tyClassTable ty
+    let candidates = HashSet.toList tyClasses
+
+    let checkBound b = do
+            -- Check if any candidate 'c' satisfies 'isSuperClass dag b c'
+            -- isSuperClass returns Eff es Bool
+            results <- mapM (isSuperClass dag b) candidates
+            return $ or results
+
+    boundChecks <- mapM checkBound bounds
+    return $ and boundChecks
+
+satisfyBounds ::
+    Type -> TypeBound -> UnificationEff Bool
+satisfyBounds ty bnds = do
+    case ty of
+        TypeHole hID -> do
+            (_, unifState) <- findHoleUnifState hID
+            unifState' <- readIORef' unifState
+            case unifState' of
+                UnSolvedUFRoot _ bnds' -> do
+                    dag <- ask
+                    subsumeBound dag bnds' bnds
+                SolvedUFRoot _ tySolved -> do
+                    forced <- force tySolved
+                    satisfyBounds forced bnds
+                UFNode{} -> error "unreachable: cannot be non-root here"
+        TypeGeneric gID -> do
+            bounds <- getGenericBound gID
+            dag <- ask
+            subsumeBound dag bounds bnds
+        x -> exactTypeSatisfyBounds x bnds
+
 -- unification
 unify ::
-    (IOE :> es, Prim :> es, Reader HoleTable :> es, Reader ClassDAG :> es) =>
-    (Type -> TypeBound -> Eff es Bool) -> Type -> Type -> Eff es (Maybe Failure)
-unify satisfyBounds ty1 ty2 = do
+    Type -> Type -> UnificationEff (Maybe Failure)
+unify ty1 ty2 = do
     ty1' <- force ty1
     ty2' <- force ty2
     unifyForced ty1' ty2'
@@ -219,7 +266,7 @@ unify satisfyBounds ty1 ty2 = do
     -- flexivity is irrelevant for unification, the type inferrence carries flexivity towards top level
     unifyForced t1@(TypeRecord path1 args1 _) t2@(TypeRecord path2 args2 _)
         | path1 == path2 && length args1 == length args2 = do
-            results <- zipWithM (unify satisfyBounds) args1 args2
+            results <- zipWithM unify args1 args2
             let failures = catMaybes results
             if null failures
                 then return Nothing
@@ -241,8 +288,8 @@ unify satisfyBounds ty1 ty2 = do
     -- TODO: covariance/contravariance?
     unifyForced t1@(TypeClosure args1 ret1) t2@(TypeClosure args2 ret2)
         | length args1 == length args2 = do
-            argsResults <- zipWithM (unify satisfyBounds) args1 args2
-            retResult <- unify satisfyBounds ret1 ret2
+            argsResults <- zipWithM unify args1 args2
+            retResult <- unify ret1 ret2
             let failures = catMaybes (retResult : argsResults)
             if null failures
                 then return Nothing

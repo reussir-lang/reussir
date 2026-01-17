@@ -18,3 +18,8 @@ data VarTable = VarTable
     { localBindings :: H.CuckooHashTable Identifier VarID
     , uniqueBindings :: IORef' (Seq.Seq VarDef)
     }
+
+data ChangeLog = ChangeLog
+    { prevLocal :: (Identifier, Maybe VarID)
+    , prevUnique :: Seq.Seq VarDef
+    }

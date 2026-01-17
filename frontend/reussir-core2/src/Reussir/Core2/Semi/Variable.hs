@@ -6,7 +6,11 @@ import Data.Sequence qualified as Seq
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.Prim.IORef.Strict (Prim, readIORef', writeIORef')
 import Reussir.Core2.Types.Semi.Type (Type)
-import Reussir.Core2.Types.Semi.Variable (VarDef (..), VarTable (..))
+import Reussir.Core2.Types.Semi.Variable (
+    ChangeLog (..),
+    VarDef (..),
+    VarTable (..),
+ )
 import Reussir.Core2.Types.UniqueID (VarID (..))
 import Reussir.Parser.Types.Lexer (Identifier)
 
@@ -19,15 +23,17 @@ newVariable ::
     Maybe (Int64, Int64) ->
     Type ->
     VarTable ->
-    Eff es VarID
+    Eff es (VarID, ChangeLog)
 newVariable varName varSpan varType varTable = do
     uniqueBinds <- readIORef' $ uniqueBindings varTable
     let varID = VarID $ fromIntegral $ Seq.length uniqueBinds
         varDef = VarDef{varName, varSpan, varType}
         localBinds = localBindings varTable
     writeIORef' (uniqueBindings varTable) $ uniqueBinds Seq.|> varDef
+    prevLocal <- liftIO $ (,) varName <$> H.lookup localBinds varName
     liftIO $ H.insert localBinds varName varID
-    return varID
+    let changeLog = ChangeLog{prevLocal, prevUnique = uniqueBinds}
+    return (varID, changeLog)
 
 -- | Get the type of a variable, assuming it exists
 getVarType :: (Prim :> es) => VarID -> VarTable -> Eff es Type
@@ -44,3 +50,12 @@ lookupVar varName varTable = do
         Just varID -> getVarType varID varTable >>= \ty -> pure (Just (varID, ty))
         Nothing -> do
             return Nothing
+
+-- | Rollback the variable table to the given change log
+rollbackVar :: (IOE :> es, Prim :> es) => ChangeLog -> VarTable -> Eff es ()
+rollbackVar changeLog varTable = do
+    let localBinds = localBindings varTable
+    case prevLocal changeLog of
+        (name, Just varID) -> liftIO $ H.insert localBinds name varID
+        (name, Nothing) -> liftIO $ H.delete localBinds name
+    writeIORef' (uniqueBindings varTable) $ prevUnique changeLog
