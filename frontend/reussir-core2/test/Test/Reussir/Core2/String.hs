@@ -5,7 +5,7 @@ module Test.Reussir.Core2.String where
 import Data.HashTable.IO qualified as H
 import Effectful (runEff)
 import Reussir.Core2.String (allocateStrToken, mangleStringToToken)
-import Reussir.Core2.Types.String (StringUniqifier (..))
+import Reussir.Core2.Data.String (StringUniqifier (..))
 import Test.Tasty
 import Test.Tasty.HUnit
 

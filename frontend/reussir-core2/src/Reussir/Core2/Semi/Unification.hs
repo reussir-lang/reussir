@@ -18,12 +18,11 @@ import Effectful.Prim.IORef.Strict (
  )
 import Effectful.Reader.Static (ask)
 import Reussir.Core2.Class (isSuperClass, meetBound, subsumeBound)
-import Reussir.Core2.Semi.Type (getClassesOfType)
-import Reussir.Core2.Types (GenericVar (..))
-import Reussir.Core2.Types.Class (Class (..), TypeBound)
-import Reussir.Core2.Types.Generic (GenericState (..))
-import Reussir.Core2.Types.Semi.Type (HoleID (..), Type (..))
-import Reussir.Core2.Types.Semi.Unification (
+import Reussir.Core2.Data (GenericVar (..))
+import Reussir.Core2.Data.Class (Class (..), TypeBound)
+import Reussir.Core2.Data.Generic (GenericState (..))
+import Reussir.Core2.Data.Semi.Type (HoleID (..), Type (..))
+import Reussir.Core2.Data.Semi.Unification (
     ErrorKind (..),
     Failure (..),
     HoleState (..),
@@ -31,7 +30,8 @@ import Reussir.Core2.Types.Semi.Unification (
     UnificationEff,
     UnificationState (..),
  )
-import Reussir.Core2.Types.UniqueID (GenericID (..))
+import Reussir.Core2.Data.UniqueID (GenericID (..))
+import Reussir.Core2.Semi.Type (getClassesOfType)
 import Reussir.Diagnostic (Report (..))
 import Reussir.Diagnostic.Report (
     addBoldToText,

@@ -1,4 +1,4 @@
-module Reussir.Core2.Types.Class where
+module Reussir.Core2.Data.Class where
 
 import Data.Array (Array)
 import Data.HashTable.IO qualified as H

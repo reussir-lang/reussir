@@ -126,14 +126,14 @@ Examples:
   * @foo::bar@ → @NvC3foo3bar@
   * @a::b::c@ → @NvNvC1a1b1c@
 
-== Generic Types
+== Generic Data
 
 Generic type applications use the @I...E@ wrapper:
 
   * @Foo\<T\>@ → @IC3Foo⟨mangled T⟩E@
   * @Foo\<T, U\>@ → @IC3Foo⟨mangled T⟩⟨mangled U⟩E@
 
-== Special Types
+== Special Data
 
   * @Rc\<T, Cap\>@ → @IC2Rc⟨mangled T⟩⟨mangled Cap⟩E@
   * @Ref\<T, Cap\>@ → @IC3Ref⟨mangled T⟩⟨mangled Cap⟩E@
@@ -147,9 +147,9 @@ import Data.Text qualified as T
 import Data.Text.Builder.Linear as TB
 import Data.Text.Encoding qualified as TE
 import Data.Text.Punycode qualified as Punycode
-import Reussir.Core2.Types.FP (FloatingPointType (..))
-import Reussir.Core2.Types.Integral (IntegralType (..))
-import Reussir.Core2.Types.Semi.Type (Type (..))
+import Reussir.Core2.Data.FP (FloatingPointType (..))
+import Reussir.Core2.Data.Integral (IntegralType (..))
+import Reussir.Core2.Data.Semi.Type (Type (..))
 import Reussir.Parser.Types.Lexer
 
 -- | Typeclass for types that can be mangled into a symbol representation.

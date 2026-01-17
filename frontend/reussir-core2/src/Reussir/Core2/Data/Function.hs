@@ -1,11 +1,11 @@
-module Reussir.Core2.Types.Function where
+module Reussir.Core2.Data.Function where
 
 import Data.HashTable.IO qualified as H
 import Effectful.Prim.IORef.Strict (IORef')
 import GHC.Int (Int64)
-import Reussir.Core2.Types.Semi.Expr qualified as Semi
-import Reussir.Core2.Types.Semi.Type qualified as Semi
-import Reussir.Core2.Types.UniqueID (GenericID)
+import Reussir.Core2.Data.Semi.Expr qualified as Semi
+import Reussir.Core2.Data.Semi.Type qualified as Semi
+import Reussir.Core2.Data.UniqueID (GenericID)
 import Reussir.Parser.Types.Lexer (Identifier, Path)
 import Reussir.Parser.Types.Stmt (Visibility)
 

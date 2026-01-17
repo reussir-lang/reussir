@@ -1,7 +1,7 @@
-module Reussir.Core2.Types.Semi.Record where
+module Reussir.Core2.Data.Semi.Record where
 
-import Reussir.Core2.Types.Semi.Type (Type)
-import Reussir.Core2.Types.UniqueID (GenericID)
+import Reussir.Core2.Data.Semi.Type (Type)
+import Reussir.Core2.Data.UniqueID (GenericID)
 import Reussir.Parser.Types.Capability (Capability)
 import Reussir.Parser.Types.Lexer (Identifier, Path)
 import Reussir.Parser.Types.Stmt (Visibility)

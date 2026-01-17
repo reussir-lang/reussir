@@ -13,7 +13,7 @@ import Data.Text qualified as T
 import Effectful
 import Effectful.Prim
 import Reussir.Core2.Generic
-import Reussir.Core2.Types.Semi.Type
+import Reussir.Core2.Data.Semi.Type
 import Reussir.Parser.Types.Lexer (Identifier (..), Path (..))
 import Test.Tasty
 import Test.Tasty.HUnit

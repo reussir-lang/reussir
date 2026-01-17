@@ -1,4 +1,4 @@
-module Reussir.Core2.Types.UniqueID where
+module Reussir.Core2.Data.UniqueID where
 
 import Data.Hashable (Hashable)
 import Data.Int (Int64)

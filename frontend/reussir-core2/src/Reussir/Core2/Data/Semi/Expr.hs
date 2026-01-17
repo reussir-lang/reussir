@@ -1,10 +1,10 @@
-module Reussir.Core2.Types.Semi.Expr where
+module Reussir.Core2.Data.Semi.Expr where
 
 import Data.Hashable
 import Data.Int (Int64)
 import Data.Scientific (Scientific)
-import Reussir.Core2.Types.Semi.Type (Type)
-import Reussir.Core2.Types.String (StringToken)
+import Reussir.Core2.Data.Semi.Type (Type)
+import Reussir.Core2.Data.String (StringToken)
 import Reussir.Parser.Types.Capability (Capability)
 import Reussir.Parser.Types.Lexer (Identifier, Path)
 

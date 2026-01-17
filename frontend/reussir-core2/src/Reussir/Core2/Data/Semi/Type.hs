@@ -1,13 +1,13 @@
-module Reussir.Core2.Types.Semi.Type where
+module Reussir.Core2.Data.Semi.Type where
 
 import Data.HashSet (HashSet)
 import Data.HashTable.IO qualified as H
 import Data.Hashable (Hashable (..))
 import Data.List (intercalate)
-import Reussir.Core2.Types.Class
-import Reussir.Core2.Types.FP
-import Reussir.Core2.Types.Integral
-import Reussir.Core2.Types.UniqueID (GenericID)
+import Reussir.Core2.Data.Class
+import Reussir.Core2.Data.FP
+import Reussir.Core2.Data.Integral
+import Reussir.Core2.Data.UniqueID (GenericID)
 import Reussir.Parser.Types.Lexer (Path (..))
 
 {- | Represents a local hole identifier in the Reussir type system.
@@ -23,7 +23,7 @@ instance Show HoleID where
     show (HoleID val) = "?" ++ show val
 
 {- | Represents a type in the Reussir type system.
-Types can be primitives (integral, floating-point, bool, string, unit)
+Data can be primitives (integral, floating-point, bool, string, unit)
 or user-defined types with optional type parameters.
 -}
 data Type

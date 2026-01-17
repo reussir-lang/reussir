@@ -5,13 +5,13 @@ import Data.Int (Int64)
 import Data.Sequence qualified as Seq
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.Prim.IORef.Strict (Prim, readIORef', writeIORef')
-import Reussir.Core2.Types.Semi.Type (Type)
-import Reussir.Core2.Types.Semi.Variable (
+import Reussir.Core2.Data.Semi.Type (Type)
+import Reussir.Core2.Data.Semi.Variable (
     ChangeLog (..),
     VarDef (..),
     VarTable (..),
  )
-import Reussir.Core2.Types.UniqueID (VarID (..))
+import Reussir.Core2.Data.UniqueID (VarID (..))
 import Reussir.Parser.Types.Lexer (Identifier)
 
 {- |

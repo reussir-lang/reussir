@@ -1,4 +1,4 @@
-module Reussir.Core2.Types.FP where
+module Reussir.Core2.Data.FP where
 
 import Data.Hashable (Hashable (..))
 import Data.Int (Int16)

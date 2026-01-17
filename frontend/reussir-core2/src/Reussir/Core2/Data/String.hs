@@ -1,4 +1,4 @@
-module Reussir.Core2.Types.String where
+module Reussir.Core2.Data.String where
 
 import Data.Digest.XXHash.FFI (XXH3)
 import Data.HashTable.IO qualified as H

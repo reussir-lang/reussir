@@ -1,4 +1,4 @@
-module Reussir.Core2.Types.Integral where
+module Reussir.Core2.Data.Integral where
 
 import Data.Hashable (Hashable (..))
 import Data.Int (Int16)

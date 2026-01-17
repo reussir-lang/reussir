@@ -5,9 +5,9 @@ import Data.HashTable.IO qualified as H
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
-import Reussir.Core2.Types
-import Reussir.Core2.Types.Class (Class)
-import Reussir.Core2.Types.Integral (IntegralType (..))
+import Reussir.Core2.Data
+import Reussir.Core2.Data.Class (Class)
+import Reussir.Core2.Data.Integral (IntegralType (..))
 
 type GenenricOrHole = Either GenericID HoleID
 

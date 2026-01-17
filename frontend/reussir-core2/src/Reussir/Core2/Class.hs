@@ -15,7 +15,7 @@ import Data.Set qualified as Set
 import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
 import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (modifyIORef', newIORef', readIORef', writeIORef')
-import Reussir.Core2.Types.Class (Class, ClassDAG (..), ClassNode (..), TypeBound)
+import Reussir.Core2.Data.Class (Class, ClassDAG (..), ClassNode (..), TypeBound)
 
 newDAG :: (IOE :> es, Prim :> es) => Eff es ClassDAG
 newDAG = do

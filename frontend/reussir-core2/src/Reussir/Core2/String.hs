@@ -18,7 +18,7 @@ import Data.Text.Encoding qualified as T
 import Data.Word (Word64)
 import Effectful (Eff, IOE, liftIO, (:>))
 import Reussir.Bridge (StringHash (..), hashBytes)
-import Reussir.Core2.Types.String (StringToken (StringToken), StringUniqifier (..))
+import Reussir.Core2.Data.String (StringToken (StringToken), StringUniqifier (..))
 
 data Int256
     = Int256

@@ -11,10 +11,10 @@ import Data.Sequence qualified as Seq
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (modifyIORef', newIORef', readIORef')
+import Reussir.Core2.Data.Generic
+import Reussir.Core2.Data.Semi.Type (Type (..))
+import Reussir.Core2.Data.UniqueID (GenericID (..))
 import Reussir.Core2.Semi.Type (isConcrete, substituteGeneric)
-import Reussir.Core2.Types.Generic
-import Reussir.Core2.Types.Semi.Type (Type (..))
-import Reussir.Core2.Types.UniqueID (GenericID (..))
 import Reussir.Parser.Types.Lexer (Identifier, Path)
 
 {- |
@@ -346,7 +346,7 @@ solveGeneric state = do
                     res <- liftIO $ H.lookup currentSol n
                     pure $ fromMaybe [] res
 
-                -- 2) Types contributed by incoming edges from outside this SCC
+                -- 2) Data contributed by incoming edges from outside this SCC
                 flowTypes <- fmap concat $ forM nodes $ \n ->
                     getIncomingTypes currentSol incomingEdges nodes n
 
