@@ -12,6 +12,7 @@ module Reussir.Core2.Semi.Context (
     evalType,
     scanProg,
     scanStmt,
+    forceAndCheckHoles,
 ) where
 
 import Control.Monad (forM_, unless)
@@ -36,13 +37,13 @@ import Reussir.Core2.Data.Function (FunctionProto (..), FunctionTable (..))
 import Reussir.Core2.Data.Integral (IntegralType (..))
 import Reussir.Core2.Data.Semi (Flexivity (..), LocalSemiContext (..), Record (..), SemiContext (..), Type (..))
 import Reussir.Core2.Data.Semi qualified as Semi
-import Reussir.Core2.Data.Semi.Unification (UnificationEff)
+import Reussir.Core2.Data.Semi.Unification (HoleState (..), UnificationEff)
 import Reussir.Core2.Data.String (StringUniqifier (StringUniqifier))
 import Reussir.Core2.Data.UniqueID (GenericID (..), VarID)
 import Reussir.Core2.Function (newFunctionTable)
 import Reussir.Core2.Generic (emptyGenericState, newGenericVar)
 import Reussir.Core2.Semi.Type (addClassToType, emptyTypeClassTable, substituteGeneric)
-import Reussir.Core2.Semi.Unification (newHoleTable)
+import Reussir.Core2.Semi.Unification (force, getHoleState, newHoleTable)
 import Reussir.Core2.Semi.Variable (newVariable, newVariableTable, rollbackVar)
 import Reussir.Diagnostic (Label (..))
 import Reussir.Diagnostic.Report (Report (..), addForegroundColorToCodeRef, addForegroundColorToText, annotatedCodeRef, defaultCodeRef, defaultText)
@@ -488,3 +489,45 @@ scanStmt
 
 scanProg :: Syn.Prog -> SemiEff ()
 scanProg = flip forM_ scanStmt
+
+forceAndCheckHoles :: Type -> SemiEff Type
+forceAndCheckHoles ty = do
+    ty' <- runUnification $ force ty
+    case ty' of
+        TypeHole holeID -> do
+            holeState <- runUnification $ getHoleState holeID
+            currentSpan' <- State.gets currentSpan
+            file <- State.gets currentFile
+
+            let outerReport =
+                    case currentSpan' of
+                        Just (start, end) ->
+                            let cr =
+                                    defaultCodeRef file start end
+                                        & addForegroundColorToCodeRef ANSI.Red ANSI.Vivid
+                                msgText =
+                                    defaultText "Unsolved type hole"
+                                        & addForegroundColorToText ANSI.Red ANSI.Vivid
+                             in Labeled Error (FormattedText [defaultText "Type Error"])
+                                    <> Nested (annotatedCodeRef cr msgText)
+                        Nothing ->
+                            Labeled Error (FormattedText [defaultText "Unsolved type hole"])
+
+            let holeReport =
+                    case holeSpan holeState of
+                        Just (hStart, hEnd) ->
+                            let cr = defaultCodeRef file hStart hEnd
+                                msgText = defaultText "Hole introduced here"
+                             in Nested (annotatedCodeRef cr msgText)
+                        Nothing -> mempty
+
+            addErrReport (outerReport <> holeReport)
+            return ty'
+        TypeRecord path args flex -> do
+            args' <- mapM forceAndCheckHoles args
+            return $ TypeRecord path args' flex
+        TypeClosure args ret -> do
+            args' <- mapM forceAndCheckHoles args
+            ret' <- forceAndCheckHoles ret
+            return $ TypeClosure args' ret'
+        _ -> return ty'
