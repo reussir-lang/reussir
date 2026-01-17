@@ -354,6 +354,7 @@ instance Manglable Type where
     mangle (TypeHole _) = error "Unsupported hole type in ABI mangle"
     -- TypeRecord: mangle path with type arguments (flexivity is ignored)
     mangle (TypeRecord path tyArgs _) = manglePathWithArgs path tyArgs
+    mangle (TypeNullable t) = manglePathWithArgs (Path "Nullable" []) [t]
 
 {- | Generate a complete ABI-mangled name.
 

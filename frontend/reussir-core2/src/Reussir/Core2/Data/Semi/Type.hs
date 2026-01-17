@@ -7,20 +7,23 @@ import Data.List (intercalate)
 import Reussir.Core2.Data.Class
 import Reussir.Core2.Data.FP
 import Reussir.Core2.Data.Integral
-import Reussir.Core2.Data.UniqueID (GenericID)
+import Reussir.Core2.Data.UniqueID (GenericID, HoleID)
 import Reussir.Parser.Types.Lexer (Path (..))
 
-{- | Represents a local hole identifier in the Reussir type system.
-Holes are placeholders for types to be inferred later.
--}
-newtype HoleID = HoleID {holeIDValue :: Int}
+data Flexivity = Irrelavent | Regional | Flex | Rigid
     deriving (Eq, Ord)
 
-instance Hashable HoleID where
-    hashWithSalt salt (HoleID val) = hashWithSalt salt val
+instance Hashable Flexivity where
+    hashWithSalt salt Irrelavent = salt `hashWithSalt` (0 :: Int)
+    hashWithSalt salt Regional = salt `hashWithSalt` (1 :: Int)
+    hashWithSalt salt Flex = salt `hashWithSalt` (2 :: Int)
+    hashWithSalt salt Rigid = salt `hashWithSalt` (3 :: Int)
 
-instance Show HoleID where
-    show (HoleID val) = "?" ++ show val
+instance Show Flexivity where
+    show Irrelavent = ""
+    show Regional = "[regional]"
+    show Flex = "[flex]"
+    show Rigid = "[rigid]"
 
 {- | Represents a type in the Reussir type system.
 Data can be primitives (integral, floating-point, bool, string, unit)
@@ -31,7 +34,7 @@ data Type
       TypeRecord
         { tyRecPath :: Path
         , tyRecParams :: [Type]
-        , tyRecFlex :: Bool -- only relevant if Path points to a regional object
+        , tyRecFlex :: Flexivity
         }
     | -- | Integral type (signed or unsigned)
       TypeIntegral IntegralType
@@ -51,6 +54,8 @@ data Type
       TypeHole HoleID
     | -- | Bottom type
       TypeBottom
+    | -- | Type of a nullable region
+      TypeNullable Type
     deriving (Eq)
 
 instance Hashable Type where
@@ -78,11 +83,13 @@ instance Hashable Type where
         salt `hashWithSalt` (8 :: Int) `hashWithSalt` hole
     hashWithSalt salt TypeBottom =
         salt `hashWithSalt` (9 :: Int)
+    hashWithSalt salt (TypeNullable t) =
+        salt `hashWithSalt` (10 :: Int) `hashWithSalt` t
 
 instance Show Type where
-    show (TypeRecord path [] flex) = (if flex then "†" else "") <> show path
+    show (TypeRecord path [] flex) = show flex <> " " <> show path
     show (TypeRecord path args flex) =
-        (if flex then "†" else "") <> show path
+        show flex <> " " <> show path
             ++ "<"
             ++ intercalate ", " (map show args)
             ++ ">"
@@ -96,6 +103,7 @@ instance Show Type where
     show (TypeGeneric generic) = show generic
     show (TypeHole hole) = show hole
     show TypeBottom = "⊥"
+    show (TypeNullable t) = "Nullable<" <> show t <> ">"
 
 newtype TypeClassTable = TypeClassTable
     { unTypeClassTable :: H.CuckooHashTable Type (HashSet Class)

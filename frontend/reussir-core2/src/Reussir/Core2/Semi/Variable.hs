@@ -4,7 +4,7 @@ import Data.HashTable.IO qualified as H
 import Data.Int (Int64)
 import Data.Sequence qualified as Seq
 import Effectful (Eff, IOE, liftIO, (:>))
-import Effectful.Prim.IORef.Strict (Prim, readIORef', writeIORef')
+import Effectful.Prim.IORef.Strict (Prim, newIORef', readIORef', writeIORef')
 import Reussir.Core2.Data.Semi.Type (Type)
 import Reussir.Core2.Data.Semi.Variable (
     ChangeLog (..),
@@ -13,6 +13,12 @@ import Reussir.Core2.Data.Semi.Variable (
  )
 import Reussir.Core2.Data.UniqueID (VarID (..))
 import Reussir.Parser.Types.Lexer (Identifier)
+
+newVariableTable :: (IOE :> es, Prim :> es) => Eff es VarTable
+newVariableTable = do
+    localBindings <- liftIO $ H.new
+    uniqueBindings <- newIORef' mempty
+    return $ VarTable{localBindings, uniqueBindings}
 
 {- |
     Create a new variable and return its ID

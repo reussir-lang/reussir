@@ -3,22 +3,11 @@ module Reussir.Core2.Data.Semi.Expr where
 import Data.Hashable
 import Data.Int (Int64)
 import Data.Scientific (Scientific)
+import Reussir.Core2.Data.Operator (ArithOp, CmpOp)
 import Reussir.Core2.Data.Semi.Type (Type)
 import Reussir.Core2.Data.String (StringToken)
-import Reussir.Parser.Types.Capability (Capability)
+import Reussir.Core2.Data.UniqueID (VarID)
 import Reussir.Parser.Types.Lexer (Identifier, Path)
-
-data ArithOp
-    = Add
-    | Sub
-    | Mul
-    | Div
-    | Mod
-    deriving (Show, Eq)
-
-data CmpOp = Lt | Gt | Lte | Gte | Equ | Neq deriving (Show, Eq)
-
-newtype VarID = VarID {unVarID :: Int} deriving (Show, Eq)
 
 data ExprKind
     = GlobalStr StringToken
@@ -30,7 +19,6 @@ data ExprKind
     | Cast Expr Type
     | ScfIfExpr Expr Expr Expr
     | Var VarID
-    | RcWrap Expr Capability
     | Regional Expr
     | ProjChain Expr [Int]
     | Assign Expr Int Expr -- for now, we only allow single-field assignment

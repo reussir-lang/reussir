@@ -31,6 +31,7 @@ substituteGenericOrHole original subst = go original
         Just t -> t
         Nothing -> TypeGeneric generic
     go TypeBottom = TypeBottom
+    go (TypeNullable t) = TypeNullable (go t)
 
 substituteGeneric ::
     Type ->

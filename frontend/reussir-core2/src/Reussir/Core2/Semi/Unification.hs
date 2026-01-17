@@ -18,10 +18,10 @@ import Effectful.Prim.IORef.Strict (
  )
 import Effectful.Reader.Static (ask)
 import Reussir.Core2.Class (isSuperClass, meetBound, subsumeBound)
-import Reussir.Core2.Data (GenericVar (..))
+import Reussir.Core2.Data (Flexivity (Flex, Rigid), GenericVar (..))
 import Reussir.Core2.Data.Class (Class (..), TypeBound)
 import Reussir.Core2.Data.Generic (GenericState (..))
-import Reussir.Core2.Data.Semi.Type (HoleID (..), Type (..))
+import Reussir.Core2.Data.Semi.Type (Type (..))
 import Reussir.Core2.Data.Semi.Unification (
     ErrorKind (..),
     Failure (..),
@@ -30,7 +30,7 @@ import Reussir.Core2.Data.Semi.Unification (
     UnificationEff,
     UnificationState (..),
  )
-import Reussir.Core2.Data.UniqueID (GenericID (..))
+import Reussir.Core2.Data.UniqueID (GenericID (..), HoleID (..))
 import Reussir.Core2.Semi.Type (getClassesOfType)
 import Reussir.Diagnostic (Report (..))
 import Reussir.Diagnostic.Report (
@@ -38,6 +38,9 @@ import Reussir.Diagnostic.Report (
     defaultCodeRef,
     defaultText,
  )
+
+newHoleTable :: (Prim :> es) => Eff es HoleTable
+newHoleTable = HoleTable <$> newIORef' mempty
 
 introduceNewHole ::
     Maybe T.Text ->
@@ -150,6 +153,7 @@ force TypeStr = return TypeStr
 force TypeBool = return TypeBool
 force int@(TypeIntegral _) = return int
 force fp@(TypeFP _) = return fp
+force (TypeNullable t) = TypeNullable <$> force t
 
 getHoleState :: HoleID -> UnificationEff HoleState
 getHoleState (HoleID idx) = do
@@ -264,12 +268,23 @@ unify ty1 ty2 = do
             _ -> error "unreachable: cannot be solved or non-root here"
     unifyForced t1 t2@(TypeHole _) = unifyForced t2 t1
     -- flexivity is irrelevant for unification, the type inferrence carries flexivity towards top level
-    unifyForced t1@(TypeRecord path1 args1 _) t2@(TypeRecord path2 args2 _)
+    unifyForced t1@(TypeRecord path1 args1 flex1) t2@(TypeRecord path2 args2 flex2)
         | path1 == path2 && length args1 == length args2 = do
             results <- zipWithM unify args1 args2
+            let flexCannotMatch = (flex1 == Flex && flex2 == Rigid) || (flex1 == Rigid && flex2 == Flex)
             let failures = catMaybes results
             if null failures
-                then return Nothing
+                then
+                    if flexCannotMatch
+                        then
+                            pure $
+                                Just $
+                                    Failure
+                                        { errorKind = URMisMatchedType t1 t2
+                                        , unificationContext = "failed to unify record components"
+                                        , innerFailures = []
+                                        }
+                        else pure Nothing
                 else failMismatchNested t1 t2 "failed to unify record components" failures
         | otherwise =
             failMismatch t1 t2 $

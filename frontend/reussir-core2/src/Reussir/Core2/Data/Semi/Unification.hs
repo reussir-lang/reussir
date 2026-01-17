@@ -8,7 +8,8 @@ import Effectful.Prim.IORef.Strict (IORef', Prim)
 import Effectful.Reader.Static (Reader)
 import Reussir.Core2.Data.Class (ClassDAG, TypeBound)
 import Reussir.Core2.Data.Generic (GenericState)
-import Reussir.Core2.Data.Semi.Type (HoleID, Type, TypeClassTable)
+import Reussir.Core2.Data.Semi.Type (Type, TypeClassTable)
+import Reussir.Core2.Data.UniqueID (HoleID)
 
 data UnificationState
     = UnSolvedUFRoot {-# UNPACK #-} !Int TypeBound

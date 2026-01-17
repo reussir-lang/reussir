@@ -35,6 +35,7 @@ library
         Reussir.Core2.Class
         Reussir.Core2.Data
         Reussir.Core2.String
+        Reussir.Core2.Function
         Reussir.Core2.Semi.Variable
         Reussir.Core2.Semi.Type
         Reussir.Core2.Semi.Unification

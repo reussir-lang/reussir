@@ -1,6 +1,6 @@
 module Reussir.Core2.Data.UniqueID where
 
-import Data.Hashable (Hashable)
+import Data.Hashable (Hashable (hashWithSalt))
 import Data.Int (Int64)
 
 newtype GenericID = GenericID {genericIDValue :: Int64}
@@ -20,3 +20,15 @@ newtype ExprID = ExprID {unExprID :: Int}
 
 instance Show ExprID where
     show (ExprID val) = "ε" ++ show val
+
+{- | Represents a local hole identifier in the Reussir type system.
+Holes are placeholders for types to be inferred later.
+-}
+newtype HoleID = HoleID {holeIDValue :: Int}
+    deriving (Eq, Ord)
+
+instance Hashable HoleID where
+    hashWithSalt salt (HoleID val) = hashWithSalt salt val
+
+instance Show HoleID where
+    show (HoleID val) = "?" ++ show val

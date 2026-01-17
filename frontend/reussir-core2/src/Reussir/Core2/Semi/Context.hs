@@ -7,35 +7,50 @@ module Reussir.Core2.Semi.Context (
     runUnification,
     addErrReport,
     addErrReportMsg,
+    emptySemiContext,
+    emptyLocalSemiContext,
+    evalType,
+    scanProg,
+    scanStmt,
 ) where
 
-import Control.Monad (forM_)
+import Control.Monad (forM_, unless)
 import Data.Function ((&))
+import Data.HashMap.Strict qualified as HashMap
 import Data.HashTable.IO qualified as H
 import Data.Int (Int64)
+import Data.Maybe (isJust)
 import Data.Text qualified as T
-import Effectful (inject, liftIO)
+import Effectful (Eff, IOE, inject, liftIO, (:>))
 import Effectful.Log qualified as L
+import Effectful.Prim.IORef (Prim)
 import Effectful.Prim.IORef.Strict (newIORef')
 import Effectful.Reader.Static (runReader)
 import Effectful.State.Static.Local qualified as State
-import Reussir.Core2.Class (addClass, populateDAG)
-import Reussir.Core2.Data (SemiEff)
-import Reussir.Core2.Data.Class (Class (Class))
+import Reussir.Bridge qualified as B
+import Reussir.Core2.Class (addClass, newDAG, populateDAG)
+import Reussir.Core2.Data (GenericState, RecordFields (..), RecordKind (..), SemiEff, TypeClassTable)
+import Reussir.Core2.Data.Class (Class (Class), ClassDAG)
 import Reussir.Core2.Data.FP (FloatingPointType (..))
 import Reussir.Core2.Data.Function (FunctionProto (..), FunctionTable (..))
 import Reussir.Core2.Data.Integral (IntegralType (..))
-import Reussir.Core2.Data.Semi (SemiContext (..), Type (..))
+import Reussir.Core2.Data.Semi (Flexivity (..), LocalSemiContext (..), Record (..), SemiContext (..), Type (..))
 import Reussir.Core2.Data.Semi qualified as Semi
 import Reussir.Core2.Data.Semi.Unification (UnificationEff)
+import Reussir.Core2.Data.String (StringUniqifier (StringUniqifier))
 import Reussir.Core2.Data.UniqueID (GenericID (..), VarID)
-import Reussir.Core2.Generic (newGenericVar)
-import Reussir.Core2.Semi.Type (addClassToType, substituteGeneric)
-import Reussir.Core2.Semi.Variable (newVariable, rollbackVar)
+import Reussir.Core2.Function (newFunctionTable)
+import Reussir.Core2.Generic (emptyGenericState, newGenericVar)
+import Reussir.Core2.Semi.Type (addClassToType, emptyTypeClassTable, substituteGeneric)
+import Reussir.Core2.Semi.Unification (newHoleTable)
+import Reussir.Core2.Semi.Variable (newVariable, newVariableTable, rollbackVar)
 import Reussir.Diagnostic (Label (..))
 import Reussir.Diagnostic.Report (Report (..), addForegroundColorToCodeRef, addForegroundColorToText, annotatedCodeRef, defaultCodeRef, defaultText)
-import Reussir.Parser.Types.Lexer (Identifier (..), Path (Path))
+import Reussir.Parser.Prog qualified as Syn
+import Reussir.Parser.Types.Capability qualified as Syn
+import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
 import Reussir.Parser.Types.Stmt qualified as Syn
+import Reussir.Parser.Types.Type qualified as Syn
 import System.Console.ANSI.Types qualified as ANSI
 
 withSpan :: (Int64, Int64) -> SemiEff a -> SemiEff a
@@ -82,10 +97,9 @@ addErrReport report = do
 
 addErrReportMsg :: T.Text -> SemiEff ()
 addErrReportMsg msg = do
-    st <- State.get
-    let span' = currentSpan st
+    span' <- State.gets currentSpan
     L.logTrace_ $ "reporting error at span: " <> T.pack (show span')
-    let file = currentFile st
+    file <- State.gets currentFile
     let report = case span' of
             Just (start, end) ->
                 let cr =
@@ -100,10 +114,8 @@ addErrReportMsg msg = do
                 Labeled Error (FormattedText [defaultText msg])
     addErrReport report
 
-populatePrimitives :: SemiEff ()
-populatePrimitives = do
-    typeClassTable <- State.gets typeClassTable
-    typeClassDAG <- State.gets typeClassDAG
+populatePrimitives :: (IOE :> es, Prim :> es) => TypeClassTable -> ClassDAG -> Eff es ()
+populatePrimitives typeClassTable typeClassDAG = do
     let numClass = Class $ Path "Num" []
     let floatClass = Class $ Path "FloatingPoint" []
     let intClass = Class $ Path "Integral" []
@@ -138,10 +150,8 @@ populatePrimitives = do
     forM_ intTypes $ \it ->
         addClassToType typeClassTable (TypeIntegral it) intClass
 
-populateIntrinsics :: SemiEff ()
-populateIntrinsics = do
-    functionTable <- State.gets functions
-    genericState <- State.gets generics
+populateIntrinsics :: (IOE :> es, Prim :> es) => FunctionTable -> GenericState -> Eff es ()
+populateIntrinsics functionTable genericState = do
     let floatBound = [Path "FloatingPoint" []]
     let intBound = [Path "Integral" []]
 
@@ -220,3 +230,261 @@ populateIntrinsics = do
 
     -- Int Binary
     addMathFunc "ipowi" intBound [t, t] t
+
+-- | Initialize the semi context with the given log level and file path
+emptySemiContext ::
+    (IOE :> es, Prim :> es) => B.LogLevel -> FilePath -> Eff es SemiContext
+emptySemiContext translationLogLevel currentFile = do
+    table <- liftIO $ H.new
+    let stringUniqifier = StringUniqifier table
+    typeClassDAG <- newDAG
+    typeClassTable <- emptyTypeClassTable
+    populatePrimitives typeClassTable typeClassDAG
+    knownRecords <- liftIO $ H.new
+    functions <- newFunctionTable
+    generics <- emptyGenericState
+    populateIntrinsics functions generics
+    return $
+        SemiContext
+            { currentFile
+            , translationLogLevel
+            , stringUniqifier
+            , translationReports = []
+            , typeClassDAG
+            , typeClassTable
+            , knownRecords
+            , functions
+            , generics
+            , translationHasFailed = False
+            }
+
+-- | empty local context
+emptyLocalSemiContext :: (IOE :> es, Prim :> es) => Eff es LocalSemiContext
+emptyLocalSemiContext = do
+    holeTable <- newHoleTable
+    varTable <- newVariableTable
+    let genericNameMap = HashMap.empty
+    return $
+        LocalSemiContext
+            { currentSpan = Nothing
+            , holeTable
+            , varTable
+            , genericNameMap
+            , insideRegion = False
+            , exprCounter = 0
+            }
+
+{- |
+Execute a computation with a set of generic variables in scope.
+This temporarily updates the 'genericNameMap' in the translation state.
+If a generic name shadows an existing one, the old one is restored after the computation.
+-}
+withGenericContext :: [(Identifier, GenericID)] -> SemiEff a -> SemiEff a
+withGenericContext newGenerics action = do
+    oldMap <- State.gets genericNameMap
+    let newMap = foldl' (\m (k, v) -> HashMap.insert k v m) oldMap newGenerics
+    State.modify $ \st -> st{genericNameMap = newMap}
+    result <- action
+    State.modify $ \st -> st{genericNameMap = oldMap}
+    return result
+
+translateGeneric :: (Identifier, [Path]) -> SemiEff (Identifier, GenericID)
+translateGeneric (identifier, bounds) = do
+    st <- State.gets generics
+    gid <- newGenericVar identifier Nothing bounds st -- TODO: handle span
+    return (identifier, gid)
+
+-- convert syntax type to semantic type without the consideration of memory modality
+evalType :: Syn.Type -> SemiEff Type
+evalType (Syn.TypeSpanned s) = evalType (spanValue s)
+evalType (Syn.TypeExpr path args) = do
+    args' <- mapM evalType args
+
+    -- Check if it's a generic variable
+    mGeneric <- case path of
+        Path name [] -> do
+            genericMap <- State.gets genericNameMap
+            return $ HashMap.lookup name genericMap
+        _ -> return Nothing
+
+    case mGeneric of
+        Just gid -> do
+            unless (null args) $ do
+                addErrReportMsg $
+                    "Generic type "
+                        <> unIdentifier (pathBasename path)
+                        <> " cannot have type arguments"
+            return $ TypeGeneric gid
+        Nothing -> do
+            knownRecords <- State.gets knownRecords
+            liftIO (H.lookup knownRecords path) >>= \case
+                Just record -> case recordDefaultCap record of
+                    Syn.Value -> return $ TypeRecord path args' Irrelavent
+                    Syn.Shared -> return $ TypeRecord path args' Irrelavent
+                    Syn.Regional -> return $ TypeRecord path args' Regional
+                    cap -> do
+                        addErrReportMsg $ "Unsupported capability " <> T.pack (show cap) <> " for record " <> T.pack (show path)
+                        return TypeBottom
+                Nothing -> do
+                    addErrReportMsg $ "Unknown type: " <> T.pack (show path)
+                    return TypeBottom
+evalType (Syn.TypeIntegral (Syn.Signed n)) = return $ TypeIntegral (Signed n)
+evalType (Syn.TypeIntegral (Syn.Unsigned n)) = return $ TypeIntegral (Unsigned n)
+evalType (Syn.TypeFP (Syn.IEEEFloat n)) = return $ TypeFP (IEEEFloat n)
+evalType (Syn.TypeFP Syn.BFloat16) = return $ TypeFP BFloat16
+evalType (Syn.TypeFP Syn.Float8) = return $ TypeFP Float8
+evalType Syn.TypeBool = return TypeBool
+evalType Syn.TypeStr = return TypeStr
+evalType Syn.TypeUnit = return TypeUnit
+evalType Syn.TypeBottom = return TypeBottom
+evalType (Syn.TypeArrow t1 t2) = do
+    t1' <- evalType t1
+    (args, ret) <- unfoldArrow t2
+    return $ TypeClosure (t1' : args) ret
+  where
+    unfoldArrow :: Syn.Type -> SemiEff ([Type], Type)
+    unfoldArrow (Syn.TypeArrow a b) = do
+        a' <- evalType a
+        (args, ret) <- unfoldArrow b
+        return (a' : args, ret)
+    unfoldArrow (Syn.TypeSpanned s) = unfoldArrow (spanValue s)
+    unfoldArrow t = do
+        t' <- evalType t
+        return ([], t')
+
+-- | Convert a type to a type with explicit flexivity
+evalTypeWithFlexivity :: Syn.Type -> Bool -> SemiEff Type
+evalTypeWithFlexivity t isFlexible = do
+    t' <- evalType t
+    case t' of
+        TypeRecord path args Regional -> do
+            if isFlexible
+                then return $ TypeRecord path args Flex
+                else return $ TypeRecord path args Rigid
+        TypeNullable (TypeRecord path args Regional) -> do
+            if isFlexible
+                then return $ TypeNullable (TypeRecord path args Flex)
+                else return $ TypeNullable (TypeRecord path args Rigid)
+        _ -> return t'
+
+-- | Add a record definition to the known records table
+addRecordDefinition :: Path -> Record -> SemiEff ()
+addRecordDefinition path record = do
+    records <- State.gets knownRecords
+    liftIO $ H.insert records path record
+
+-- | The initial scan to build up the index of functions and records
+scanStmt :: Syn.Stmt -> SemiEff ()
+scanStmt (Syn.SpannedStmt s) = do
+    backup <- State.gets currentSpan
+    State.modify $ \st -> st{currentSpan = Just (spanStartOffset s, spanEndOffset s)}
+    scanStmt (spanValue s)
+    State.modify $ \st -> st{currentSpan = backup}
+scanStmt (Syn.RecordStmt record) = do
+    let name = Syn.recordName record
+    let tyParams = Syn.recordTyParams record
+
+    -- Translate generics
+    genericsList <- mapM translateGeneric tyParams
+
+    -- Translate fields/variants within generic context
+    withGenericContext genericsList $ do
+        (fields, variants) <- case Syn.recordFields record of
+            Syn.Named fs -> do
+                fs' <- mapM (\(n, t, f) -> (n,,f) <$> evalType t) fs
+                return $ (Named fs', Nothing)
+            Syn.Unnamed fs -> do
+                fs' <- mapM (\(t, f) -> (,f) <$> evalType t) fs
+                return $ (Unnamed fs', Nothing)
+            Syn.Variants vs -> do
+                vs' <- mapM (\(n, ts) -> (n,) <$> mapM evalType ts) vs
+                let names = map (\(n, _) -> n) vs'
+                return $ (Variants names, Just vs')
+
+        let kind = case Syn.recordKind record of
+                Syn.StructKind -> StructKind
+                Syn.EnumKind -> EnumKind
+
+        let semRecord =
+                Record
+                    { recordName = Path name [] -- TODO: handle module path
+                    , recordTyParams = genericsList
+                    , recordFields = fields
+                    , recordKind = kind
+                    , recordVisibility = Syn.recordVisibility record
+                    , recordDefaultCap = Syn.recordDefaultCap record
+                    }
+
+        -- For variant, we add each sub-variant as a record, with recordName
+        -- extended with variant name and value capability.
+        case variants of
+            Just vs -> do
+                forM_ (zip [0 ..] vs) $ \(variantIdx, (variantName, variantFields)) -> do
+                    let variantPath = Path variantName [name] -- TODO: handle module path
+                    let variantRecord =
+                            Record
+                                { recordName = variantPath
+                                , recordTyParams = genericsList -- share same generics as parent
+                                , recordFields = Unnamed (map (,False) variantFields)
+                                , recordKind = EnumVariant{variantParent = Path name [], variantIdx}
+                                , recordVisibility = Syn.recordVisibility record
+                                , recordDefaultCap = Syn.Value
+                                }
+                    addRecordDefinition variantPath variantRecord
+            _ -> return ()
+
+        let path = Path name [] -- TODO: handle module path
+        addRecordDefinition path semRecord
+scanStmt
+    ( Syn.FunctionStmt
+            Syn.Function
+                { Syn.funcVisibility = funcVisibility
+                , Syn.funcName = funcName
+                , Syn.funcGenerics = funcGenerics
+                , Syn.funcParams = funcParams
+                , Syn.funcReturnType = funcReturnType
+                , Syn.funcIsRegional = funcIsRegional
+                }
+        ) = do
+        genericsList <- mapM translateGeneric funcGenerics
+        withGenericContext genericsList $ do
+            paramsList <- mapM translateParam funcParams
+            funcReturnType' <-
+                mapM
+                    (\(ty, flex) -> evalTypeWithFlexivity ty flex)
+                    funcReturnType
+            let returnTy = case funcReturnType' of
+                    Just ty -> ty
+                    Nothing -> TypeUnit
+            pendingFuncBody <- newIORef' Nothing
+            funcSpan <- State.gets currentSpan
+            let proto =
+                    FunctionProto
+                        { funcVisibility = funcVisibility
+                        , funcName = funcName
+                        , funcGenerics = genericsList
+                        , funcParams = paramsList
+                        , funcReturnType = returnTy
+                        , funcIsRegional = funcIsRegional
+                        , funcBody = pendingFuncBody
+                        , funcSpan = funcSpan
+                        }
+            -- TODO: handle module path
+            let funcPath = Path funcName []
+            functionTable <- State.gets functions
+            existed <-
+                isJust <$> liftIO (H.lookup (functionProtos functionTable) funcPath)
+            if existed
+                then
+                    addErrReportMsg $
+                        "Function already defined: " <> unIdentifier funcName
+                else liftIO $ H.insert (functionProtos functionTable) funcPath proto
+      where
+        translateParam ::
+            (Identifier, Syn.Type, Syn.FlexFlag) -> SemiEff (Identifier, Type)
+        translateParam (paramName, ty, flex) = do
+            ty' <- evalTypeWithFlexivity ty flex
+            return (paramName, ty')
+
+scanProg :: Syn.Prog -> SemiEff ()
+scanProg = flip forM_ scanStmt
