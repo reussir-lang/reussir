@@ -87,17 +87,20 @@ jobs:
       - name: Run Integration Tests
         shell: msys2 {0}
         run: |
+          . /c/ghcup/env
           export PATH="$PATH:${{ github.workspace }}/build/bin"
           cmake --build build --target check
 
       - name: Build Haskell frontend
         shell: msys2 {0}
         run: |
+          . /c/ghcup/env
           cabal update
           cabal build all -j
 
       - name: Test Haskell frontend
         shell: msys2 {0}
         run: |
+          . /c/ghcup/env
           chcp.com 65001
           cabal test all -j
