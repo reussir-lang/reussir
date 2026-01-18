@@ -494,7 +494,6 @@ inferType
                 }
         ) = do
         L.logTrace_ "Tyck: infer Nullable::Null ctor call"
-        -- We omit the
         ty' <- case ctorTyArgs of
             [Just ty] -> do
                 ty' <- evalType ty
