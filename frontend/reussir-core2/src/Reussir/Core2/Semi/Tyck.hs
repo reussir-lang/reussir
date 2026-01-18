@@ -665,19 +665,8 @@ inferTypeForIntrinsicCall Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallTyAr
 
                             let retTy = if isCheck then TypeBool else floatTy
 
-                            -- Construct IntrinsicCall
-                            -- Use the inferred/checked types for tyArgs
-                            -- We need to reconstruct tyArgs as [Type]
-                            -- Since we have a single floatTy, we can use it.
-                            -- But wait, the IntrinsicCall constructor in Expr.hs
-                            -- { intrinsicCallTarget :: Path, intrinsicCallArgs :: [Expr] }
-                            -- It doesn't seem to store tyArgs.
-                            -- Let's check Expr.hs definition again.
-                            -- Yes, IntrinsicCall only has target and args.
-                            -- The type information is carried by the arguments and return type.
-
-                            -- However, the args' list to IntrinsicCall should likely include the fully processed arguments
-                            -- including the flag.
+                            -- Construct IntrinsicCall. Type arguments are not stored explicitly;
+                            -- type information is carried by the (already checked) arguments and return type.
                             let finalArgs = args' ++ [flagArg']
 
                             Just
