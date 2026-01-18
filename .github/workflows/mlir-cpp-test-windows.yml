@@ -41,18 +41,16 @@ jobs:
         run: |
           echo "GHCUP_MSYS2_ENV=CLANG64" >> $GITHUB_ENV
 
-      - name: Setup GHCup
-        uses: haskell/ghcup-setup@v1
-        with:
-          ghc: 9.10.3
-          cabal: latest
-
-      - name: Cabal update
+      - name: Setup GHCup Without Silly Upstream
         shell: msys2 {0}
         run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
           . /c/ghcup/env
-          echo ". /c/ghcup/env" >> ~/.bashrc
-          cabal update
+          ghcup set ghc 9.10.3
+          ghcup set cabal latest
+          ghcup install ghc 9.10.3
+          ghcup install cabal latest
+          
 
       - name: Install Rust and Python dependencies
         shell: msys2 {0}
@@ -93,13 +91,13 @@ jobs:
           cmake --build build --target check
 
       - name: Build Haskell frontend
-        shell: pwsh
+        shell: msys2 {0}
         run: |
           cabal update
           cabal build all -j
 
       - name: Test Haskell frontend
-        shell: pwsh
+        shell: msys2 {0}
         run: |
           chcp.com 65001
           cabal test all -j
