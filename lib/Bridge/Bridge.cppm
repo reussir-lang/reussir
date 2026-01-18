@@ -17,6 +17,7 @@ module;
 #include <llvm/Linker/Linker.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/BLAKE3.h>
 #include <llvm/Support/CodeGen.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/SourceMgr.h>
@@ -551,5 +552,10 @@ export extern "C" {
     reussir::reussir_bridge_compile_for_target(
         mlir_module, source_name, output_file, target, opt, log_level,
         target_triple, target_cpu, target_features, code_model, reloc_model);
+  }
+
+  void reussir_bridge_hash_bytes(const uint8_t *str, size_t len,
+                                 ReussirStringHash *out) {
+    *out = std::bit_cast<ReussirStringHash>(llvm::BLAKE3::hash<32>({str, len}));
   }
 }
