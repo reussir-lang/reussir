@@ -141,6 +141,7 @@ instance PrettyColored Expr where
     prettyColored (SpannedExpr w) = prettyColored (spanValue w)
     prettyColored (RegionalExpr e) = keyword "regional" <+> braces (prettyColored e)
     prettyColored (AccessChain e accesses) = prettyColored e <> mconcat (map prettyColored accesses)
+    prettyColored (AccessExpr e access) = prettyColored e <> prettyColored access
     prettyColored (CtorCallExpr (CtorCall path tys args)) =
         prettyColored path
             <> (if null tys then mempty else angles (commaSep (map prettyTyArg tys)))

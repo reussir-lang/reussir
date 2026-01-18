@@ -71,5 +71,6 @@ data Expr
     | RegionalExpr Expr -- regional { ... }
     | CtorCallExpr CtorCall -- std::Foo {1, 2} / Foo<i32> {x: 1, y: 2} / List<i32>::Nil / List<i32>::Cons(1, xs)
     | AccessChain Expr [Access] -- foo.bar.baz.0.1
+    | AccessExpr Expr Access -- foo.bar
     | SpannedExpr (WithSpan Expr)
     deriving (Show, Eq)

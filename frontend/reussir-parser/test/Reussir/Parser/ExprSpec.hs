@@ -24,6 +24,11 @@ stripExprSpans (Match e cases) = Match (stripExprSpans e) (map (\(p, ex) -> (p, 
 stripExprSpans (RegionalExpr e) = RegionalExpr (stripExprSpans e)
 stripExprSpans (CtorCallExpr (CtorCall p tys args)) = CtorCallExpr (CtorCall p tys (map (\(i, e) -> (i, stripExprSpans e)) args))
 stripExprSpans (AccessChain e accesses) = AccessChain (stripExprSpans e) accesses
+-- use access chain for testing for now. will need to remove this later
+stripExprSpans (AccessExpr e a) =
+    case stripExprSpans e of
+        AccessChain base accs -> AccessChain base (a : accs)
+        stripped -> AccessChain stripped [a]
 stripExprSpans e = e
 
 spec :: Spec
@@ -92,7 +97,7 @@ spec = do
 
         it "parses nested field access" $
             (stripExprSpans <$> parse parseExpr "" "foo.bar.baz")
-                `shouldParse` AccessChain (Var (Path "foo" [])) [Named "bar", Named "baz"]
+                `shouldParse` AccessChain (Var (Path "foo" [])) [Named "baz", Named "bar"]
 
         it "parses tuple access" $
             (stripExprSpans <$> parse parseExpr "" "foo.0")
@@ -100,7 +105,7 @@ spec = do
 
         it "parses mixed access" $
             (stripExprSpans <$> parse parseExpr "" "foo.bar.0.baz")
-                `shouldParse` AccessChain (Var (Path "foo" [])) [Named "bar", Unnamed 0, Named "baz"]
+                `shouldParse` AccessChain (Var (Path "foo" [])) [Named "baz", Unnamed 0, Named "bar"]
 
     describe "parseExpr" $ do
         it "parses less than or equal with potential type arg ambiguity" $

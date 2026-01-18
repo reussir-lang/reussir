@@ -150,8 +150,8 @@ parseAccess =
 
 accessOp :: Operator Parser Expr
 accessOp = Postfix $ do
-    accesses <- some parseAccess
-    return (`AccessChain` accesses)
+    access <- some parseAccess
+    return $ \expr -> foldl' AccessExpr expr access
 
 exprOpTable :: [[Operator Parser Expr]]
 exprOpTable =
