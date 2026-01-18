@@ -325,6 +325,11 @@ unify ty1 ty2 = do
             else
                 failMismatch t1 t2 $
                     "failed to unify generic types " <> T.pack (show g1) <> " with " <> T.pack (show g2)
+    unifyForced (TypeNullable t1) (TypeNullable t2) = do
+        failure <- unify t1 t2
+        case failure of
+            Just e -> return $ Just e
+            Nothing -> return Nothing
     unifyForced t1 t2 = failMismatch t1 t2 "Cannot unify two types with different kind"
 
 errorToReport :: Failure -> FilePath -> Report

@@ -2,6 +2,7 @@ module Reussir.Core2.Semi.Type where
 
 import Data.HashSet qualified as HashSet
 import Data.HashTable.IO qualified as H
+import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
@@ -131,3 +132,9 @@ collectGenerics set (TypeRecord _ args _) = foldl' collectGenerics set args
 collectGenerics set (TypeClosure args ret) = foldl' collectGenerics (collectGenerics set ret) args
 collectGenerics set (TypeGeneric (GenericID gid)) = IntSet.insert (fromIntegral gid) set
 collectGenerics set _ = set
+
+substituteGenericMap :: Type -> IntMap.IntMap Type -> Type
+substituteGenericMap ty subst = substituteGenericOrHole ty f
+  where
+    f (Left (GenericID generic)) = IntMap.lookup (fromIntegral generic) subst
+    f (Right _) = Nothing

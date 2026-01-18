@@ -20,7 +20,7 @@ data ExprKind
     | ScfIfExpr Expr Expr Expr
     | Var VarID
     | RegionRun Expr
-    | ProjChain Expr [Int]
+    | Proj Expr Int
     | Assign Expr Int Expr -- for now, we only allow single-field assignment
     | Let
         { letVarSpan :: Maybe (Int64, Int64)
@@ -48,6 +48,10 @@ data ExprKind
         , variantCallArg :: Expr
         }
     | NullableCall (Maybe Expr)
+    | IntrinsicCall
+        { intrinsicCallTarget :: Path
+        , intrinsicCallArgs :: [Expr]
+        }
     deriving (Show, Eq)
 
 newtype ExprID = ExprID {unExprID :: Int} deriving (Show, Eq, Hashable)

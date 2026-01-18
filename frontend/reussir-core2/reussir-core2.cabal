@@ -43,6 +43,7 @@ library
         Reussir.Core2.Semi.Context
         Reussir.Core2.Semi.Tyck
         Reussir.Core2.Semi.FlowAnalysis
+        Reussir.Core2.Semi.Pretty
         Reussir.Core2.Semi
     build-depends:    base ^>=4.20.2.0,
                       reussir-bridge,
@@ -71,9 +72,9 @@ library
     hs-source-dirs:   src
     default-language: GHC2024
 
-executable reussir-tyck2
+executable reussir-semi-elab
     import:           warnings
-    main-is:          Main.hs
+    main-is:          SemiElab.hs
     build-depends:
         base ^>=4.20.2.0,
         reussir-core2,

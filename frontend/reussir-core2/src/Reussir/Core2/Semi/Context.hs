@@ -14,8 +14,9 @@ module Reussir.Core2.Semi.Context (
     scanProg,
     scanStmt,
     exprWithSpan,
-    refreshLocalContext,
+    withFreshLocalContext,
     withGenericContext,
+    addErrReportMsgSeq,
 ) where
 
 import Control.Monad (forM_, unless)
@@ -30,10 +31,11 @@ import Effectful.Log qualified as L
 import Effectful.Prim.IORef (Prim)
 import Effectful.Prim.IORef.Strict (newIORef')
 import Effectful.Reader.Static (runReader)
+import Effectful.State.Static.Local (runState)
 import Effectful.State.Static.Local qualified as State
 import Reussir.Bridge qualified as B
 import Reussir.Core2.Class (addClass, newDAG, populateDAG)
-import Reussir.Core2.Data (GenericState, RecordFields (..), RecordKind (..), SemiEff, TypeClassTable)
+import Reussir.Core2.Data (GlobalSemiEff, RecordFields (..), RecordKind (..), SemiEff, TypeClassTable)
 import Reussir.Core2.Data.Class (Class (Class), ClassDAG)
 import Reussir.Core2.Data.FP (FloatingPointType (..))
 import Reussir.Core2.Data.Function (FunctionProto (..), FunctionTable (..))
@@ -46,7 +48,7 @@ import Reussir.Core2.Data.String (StringUniqifier (StringUniqifier))
 import Reussir.Core2.Data.UniqueID (GenericID (..), VarID)
 import Reussir.Core2.Function (newFunctionTable)
 import Reussir.Core2.Generic (emptyGenericState, newGenericVar)
-import Reussir.Core2.Semi.Type (addClassToType, emptyTypeClassTable, substituteGeneric)
+import Reussir.Core2.Semi.Type (addClassToType, emptyTypeClassTable)
 import Reussir.Core2.Semi.Unification (newHoleTable)
 import Reussir.Core2.Semi.Variable (newVariable, newVariableTable, rollbackVar)
 import Reussir.Diagnostic (Label (..))
@@ -95,13 +97,13 @@ runUnification eff = do
                 runReader genericState $
                     inject eff
 
-addErrReport :: Report -> SemiEff ()
+addErrReport :: Report -> GlobalSemiEff ()
 addErrReport report = do
     State.modify $ \st ->
         st{translationReports = report : translationReports st, translationHasFailed = True}
 
-addErrReportMsg :: T.Text -> SemiEff ()
-addErrReportMsg msg = do
+addErrReportMsgSeq :: T.Text -> Maybe Report -> SemiEff ()
+addErrReportMsgSeq msg additonal = do
     span' <- State.gets currentSpan
     L.logTrace_ $ "reporting error at span: " <> T.pack (show span')
     file <- State.gets currentFile
@@ -113,11 +115,17 @@ addErrReportMsg msg = do
                     msgText =
                         defaultText msg
                             & addForegroundColorToText ANSI.Red ANSI.Vivid
-                 in Labeled Error (FormattedText [defaultText "Type Error"])
+                 in Labeled Error (FormattedText [defaultText "Elaboration Error"])
                         <> Nested (annotatedCodeRef cr msgText)
             Nothing ->
                 Labeled Error (FormattedText [defaultText msg])
-    addErrReport report
+    let report' = case additonal of
+            Just add' -> report <> add'
+            Nothing -> report
+    inject $ addErrReport report'
+
+addErrReportMsg :: T.Text -> SemiEff ()
+addErrReportMsg msg = addErrReportMsgSeq msg Nothing
 
 populatePrimitives :: (IOE :> es, Prim :> es) => TypeClassTable -> ClassDAG -> Eff es ()
 populatePrimitives typeClassTable typeClassDAG = do
@@ -155,87 +163,6 @@ populatePrimitives typeClassTable typeClassDAG = do
     forM_ intTypes $ \it ->
         addClassToType typeClassTable (TypeIntegral it) intClass
 
-populateIntrinsics :: (IOE :> es, Prim :> es) => FunctionTable -> GenericState -> Eff es ()
-populateIntrinsics functionTable genericState = do
-    let floatBound = [Path "FloatingPoint" []]
-    let intBound = [Path "Integral" []]
-
-    let addFunc namespace name bounds params retTy = do
-            gid <- newGenericVar "T" Nothing bounds genericState
-            let generics = [("T", gid)]
-            let paramTys = map (\t -> substituteGeneric t (\g -> if g == GenericID 0 then Just (TypeGeneric gid) else Nothing)) params
-            let retTy' = substituteGeneric retTy (\g -> if g == GenericID 0 then Just (TypeGeneric gid) else Nothing)
-            pendingBody <- newIORef' Nothing
-            let proto =
-                    FunctionProto
-                        { funcVisibility = Syn.Public
-                        , funcName = name
-                        , funcGenerics = generics
-                        , funcParams = zipWith (\i t -> (Identifier (T.pack $ "arg" <> show i), t)) [0 :: Int ..] paramTys
-                        , funcReturnType = retTy'
-                        , funcIsRegional = False
-                        , funcBody = pendingBody
-                        , funcSpan = Nothing
-                        }
-            let path = Path name namespace
-            liftIO $ H.insert (functionProtos functionTable) path proto
-    let addMathFunc = addFunc ["core", "intrinsic", "math"]
-    let t = TypeGeneric (GenericID 0)
-    let u32 = TypeIntegral (Unsigned 32)
-    -- Float Unary
-    let floatUnary =
-            [ "absf"
-            , "acos"
-            , "acosh"
-            , "asin"
-            , "asinh"
-            , "atan"
-            , "atanh"
-            , "cbrt"
-            , "ceil"
-            , "cos"
-            , "cosh"
-            , "erf"
-            , "erfc"
-            , "exp"
-            , "exp2"
-            , "expm1"
-            , "floor"
-            , "log10"
-            , "log1p"
-            , "log2"
-            , "round"
-            , "roundeven"
-            , "rsqrt"
-            , "sin"
-            , "sinh"
-            , "sqrt"
-            , "tan"
-            , "tanh"
-            , "trunc"
-            ]
-    forM_ floatUnary $ \name -> addMathFunc name floatBound [t, u32] t
-
-    let checks = ["isfinite", "isinf", "isnan", "isnormal"]
-    forM_ checks $ \name -> addMathFunc name floatBound [t, u32] TypeBool
-
-    -- Float Binary
-    let floatBinary = ["atan2", "copysign", "powf"]
-    forM_ floatBinary $ \name -> addMathFunc name floatBound [t, t, u32] t
-
-    -- Float Ternary
-    addMathFunc "fma" floatBound [t, t, t, u32] t
-
-    -- Float Special
-    addMathFunc "fpowi" floatBound [t, TypeIntegral (Signed 32), u32] t
-
-    -- Int Unary
-    let intUnary = ["absi", "ctlz", "ctpop", "cttz"]
-    forM_ intUnary $ \name -> addMathFunc name intBound [t] t
-
-    -- Int Binary
-    addMathFunc "ipowi" intBound [t, t] t
-
 -- | Initialize the semi context with the given log level and file path
 emptySemiContext ::
     (IOE :> es, Prim :> es) => B.LogLevel -> FilePath -> Eff es SemiContext
@@ -248,7 +175,6 @@ emptySemiContext translationLogLevel currentFile = do
     knownRecords <- liftIO $ H.new
     functions <- newFunctionTable
     generics <- emptyGenericState
-    populateIntrinsics functions generics
     return $
         SemiContext
             { currentFile
@@ -302,6 +228,13 @@ translateGeneric (identifier, bounds) = do
 -- convert syntax type to semantic type without the consideration of memory modality
 evalType :: Syn.Type -> SemiEff Type
 evalType (Syn.TypeSpanned s) = evalType (spanValue s)
+evalType (Syn.TypeExpr (Path "Nullable" []) args) = do
+    arg <- case args of
+        [arg] -> evalType arg
+        _ -> do
+            addErrReportMsg "Nullable type must have exactly one type argument"
+            return TypeBottom
+    return $ TypeNullable arg
 evalType (Syn.TypeExpr path args) = do
     args' <- mapM evalType args
 
@@ -324,8 +257,8 @@ evalType (Syn.TypeExpr path args) = do
             knownRecords <- State.gets knownRecords
             liftIO (H.lookup knownRecords path) >>= \case
                 Just record -> case recordDefaultCap record of
-                    Syn.Value -> return $ TypeRecord path args' Irrelavent
-                    Syn.Shared -> return $ TypeRecord path args' Irrelavent
+                    Syn.Value -> return $ TypeRecord path args' Irrelevant
+                    Syn.Shared -> return $ TypeRecord path args' Irrelevant
                     Syn.Regional -> return $ TypeRecord path args' Regional
                     cap -> do
                         addErrReportMsg $ "Unsupported capability " <> T.pack (show cap) <> " for record " <> T.pack (show path)
@@ -379,13 +312,16 @@ addRecordDefinition path record = do
     liftIO $ H.insert records path record
 
 -- | The initial scan to build up the index of functions and records
-scanStmt :: Syn.Stmt -> SemiEff ()
-scanStmt (Syn.SpannedStmt s) = do
+scanStmt :: Syn.Stmt -> GlobalSemiEff ()
+scanStmt stmt = withFreshLocalContext $ scanStmtImpl stmt
+
+scanStmtImpl :: Syn.Stmt -> SemiEff ()
+scanStmtImpl (Syn.SpannedStmt s) = do
     backup <- State.gets currentSpan
     State.modify $ \st -> st{currentSpan = Just (spanStartOffset s, spanEndOffset s)}
-    scanStmt (spanValue s)
+    scanStmtImpl (spanValue s)
     State.modify $ \st -> st{currentSpan = backup}
-scanStmt (Syn.RecordStmt record) = do
+scanStmtImpl (Syn.RecordStmt record) = do
     let name = Syn.recordName record
     let tyParams = Syn.recordTyParams record
 
@@ -440,7 +376,7 @@ scanStmt (Syn.RecordStmt record) = do
 
         let path = Path name [] -- TODO: handle module path
         addRecordDefinition path semRecord
-scanStmt
+scanStmtImpl
     ( Syn.FunctionStmt
             Syn.Function
                 { Syn.funcVisibility = funcVisibility
@@ -491,7 +427,7 @@ scanStmt
             ty' <- evalTypeWithFlexivity ty flex
             return (paramName, ty')
 
-scanProg :: Syn.Prog -> SemiEff ()
+scanProg :: Syn.Prog -> GlobalSemiEff ()
 scanProg = flip forM_ scanStmt
 
 exprWithSpan :: Type -> ExprKind -> SemiEff Expr
@@ -501,5 +437,8 @@ exprWithSpan exprType exprKind = do
     State.modify $ \st -> st{exprCounter = exprCounter st + 1}
     return $ Expr{exprKind, exprSpan, exprType, exprID}
 
-refreshLocalContext :: SemiEff ()
-refreshLocalContext = emptyLocalSemiContext >>= State.put
+withFreshLocalContext :: SemiEff a -> GlobalSemiEff a
+withFreshLocalContext cont = do
+    localCtx <- emptyLocalSemiContext
+    (res, _) <- runState localCtx $ inject cont
+    return res

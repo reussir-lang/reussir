@@ -13,13 +13,14 @@ import Effectful.State.Static.Local qualified as State
 import Reussir.Core2.Data (GenericSolution)
 import Reussir.Core2.Data.Function (FunctionProto (..), FunctionTable (..))
 import Reussir.Core2.Data.Semi (Record (..), RecordFields (..))
-import Reussir.Core2.Data.Semi.Context (SemiContext (..), SemiEff)
+import Reussir.Core2.Data.Semi.Context (GlobalSemiEff, SemiContext (..))
 import Reussir.Core2.Data.Semi.Expr (Expr (..), ExprKind (..))
 import Reussir.Core2.Data.Semi.Type (Type (..))
 import Reussir.Core2.Data.UniqueID (GenericID (..))
 import Reussir.Core2.Generic (addConcreteFlow, addCtorLink, addDirectLink, solveGeneric)
-import Reussir.Core2.Semi (addErrReportMsg)
+import Reussir.Core2.Semi.Context (addErrReport)
 import Reussir.Core2.Semi.Type (collectGenerics, isConcrete)
+import Reussir.Diagnostic.Report (Report (..), defaultText)
 import Reussir.Parser.Types.Lexer (Identifier)
 
 -- Recursively analyze generic flow in an expression
@@ -29,7 +30,7 @@ import Reussir.Parser.Types.Lexer (Identifier)
 -- 2. If otherwise, we add a flow edge from the types generics (collectGenerics) to the callee generic
 --    i. if the type is directly a generic, we use addDirectLink
 --    ii. otherwise we use addCtorLink
-analyzeGenericFlowInExpr :: Expr -> SemiEff ()
+analyzeGenericFlowInExpr :: Expr -> GlobalSemiEff ()
 analyzeGenericFlowInExpr expr = do
     case exprKind expr of
         FuncCall target tyArgs args _ -> do
@@ -76,7 +77,7 @@ analyzeGenericFlowInExpr expr = do
             analyzeGenericFlowInExpr e1
             analyzeGenericFlowInExpr e2
             analyzeGenericFlowInExpr e3
-        ProjChain e _ -> analyzeGenericFlowInExpr e
+        Proj e _ -> analyzeGenericFlowInExpr e
         Let _ _ _ val body -> do
             analyzeGenericFlowInExpr val
             analyzeGenericFlowInExpr body
@@ -89,9 +90,10 @@ analyzeGenericFlowInExpr expr = do
         NullableCall (Just e) -> analyzeGenericFlowInExpr e
         NullableCall Nothing -> pure ()
         Assign dst _ src -> analyzeGenericFlowInExpr dst >> analyzeGenericFlowInExpr src
+        IntrinsicCall _ args -> mapM_ analyzeGenericFlowInExpr args
 
 analyzeGenericInstantiationFlow ::
-    [(Identifier, GenericID)] -> [Type] -> SemiEff ()
+    [(Identifier, GenericID)] -> [Type] -> GlobalSemiEff ()
 analyzeGenericInstantiationFlow genericParams tyArgs = do
     genericState <- State.gets generics
     zipWithM_
@@ -109,7 +111,7 @@ analyzeGenericInstantiationFlow genericParams tyArgs = do
         genericParams
         tyArgs
 
-analyzeGenericFlowInType :: Type -> SemiEff ()
+analyzeGenericFlowInType :: Type -> GlobalSemiEff ()
 analyzeGenericFlowInType (TypeRecord path args _) = do
     knownRecords <- State.gets knownRecords
     mRecord <- liftIO $ H.lookup knownRecords path
@@ -124,7 +126,7 @@ analyzeGenericFlowInType (TypeClosure args ret) = do
     analyzeGenericFlowInType ret
 analyzeGenericFlowInType _ = pure ()
 
-analyzeGenericFlowInRecord :: Record -> SemiEff ()
+analyzeGenericFlowInRecord :: Record -> GlobalSemiEff ()
 analyzeGenericFlowInRecord record = do
     let types = case recordFields record of
             Named fs -> map (\(_, t, _) -> t) fs
@@ -134,7 +136,7 @@ analyzeGenericFlowInRecord record = do
     mapM_ analyzeGenericFlowInType types
 
 -- Analyze generic flow for the whole translation module.
-analyzeGenericFlow :: SemiEff ()
+analyzeGenericFlow :: GlobalSemiEff ()
 analyzeGenericFlow = do
     functionTable <- State.gets functions
     protos <- liftIO $ H.toList (functionProtos functionTable)
@@ -151,7 +153,7 @@ analyzeGenericFlow = do
     records <- liftIO $ H.toList knownRecords
     forM_ records $ \(_, record) -> analyzeGenericFlowInRecord record
 
-solveAllGenerics :: SemiEff (Maybe GenericSolution)
+solveAllGenerics :: GlobalSemiEff (Maybe GenericSolution)
 solveAllGenerics = do
     L.logTrace_ "Solving all generics"
     analyzeGenericFlow
@@ -159,13 +161,16 @@ solveAllGenerics = do
     solveGeneric genericState >>= \case
         Right (x, y, ty) -> do
             -- TODO: better format report
-            addErrReportMsg $
-                "Growing edge detected between generic variables: "
-                    <> T.pack (show x)
-                    <> " -> "
-                    <> T.pack (show y)
-                    <> " via type "
-                    <> T.pack (show ty)
+            addErrReport $
+                FormattedText $
+                    [ defaultText $
+                        "Growing edge detected between generic variables: "
+                            <> T.pack (show x)
+                            <> " -> "
+                            <> T.pack (show y)
+                            <> " via type "
+                            <> T.pack (show ty)
+                    ]
             return Nothing
         Left table -> do
             L.logInfo_ "Generic solving succeeded"

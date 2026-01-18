@@ -3,5 +3,5 @@ fn cos(x : f64) -> f64 {
 }
 
 fn sin(x : f64) -> f64 {
-    core::intrinsic::math::sin(x, 127)
+    core::intrinsic::math::sin(1.0, 127)
 }

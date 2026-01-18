@@ -10,17 +10,17 @@ import Reussir.Core2.Data.Integral
 import Reussir.Core2.Data.UniqueID (GenericID, HoleID)
 import Reussir.Parser.Types.Lexer (Path (..))
 
-data Flexivity = Irrelavent | Regional | Flex | Rigid
+data Flexivity = Irrelevant | Regional | Flex | Rigid
     deriving (Eq, Ord)
 
 instance Hashable Flexivity where
-    hashWithSalt salt Irrelavent = salt `hashWithSalt` (0 :: Int)
+    hashWithSalt salt Irrelevant = salt `hashWithSalt` (0 :: Int)
     hashWithSalt salt Regional = salt `hashWithSalt` (1 :: Int)
     hashWithSalt salt Flex = salt `hashWithSalt` (2 :: Int)
     hashWithSalt salt Rigid = salt `hashWithSalt` (3 :: Int)
 
 instance Show Flexivity where
-    show Irrelavent = ""
+    show Irrelevant = ""
     show Regional = "[regional]"
     show Flex = "[flex]"
     show Rigid = "[rigid]"

@@ -9,7 +9,7 @@ Description : Name mangling scheme for Reussir.
 This module implements the name mangling scheme for Reussir, borrowing heavily
 from Rust's v0 symbol format. Mangled names are used to generate unique,
 linker-safe symbols for functions, types, and other entities. The mangling is
-applied to semi-types as Rc will be irrelavent to the interface.
+applied to semi-types as Rc will be Irrelevant to the interface.
 
 = Complete BNF Grammar
 

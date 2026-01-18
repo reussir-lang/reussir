@@ -1,6 +1,7 @@
 module Reussir.Core2.Data.Semi.Context (
     SemiContext (..),
     LocalSemiContext (..),
+    GlobalSemiEff,
     SemiEff,
 ) where
 
@@ -52,4 +53,5 @@ data SemiContext = SemiContext
     , generics :: GenericState
     }
 
+type GlobalSemiEff = Eff '[IOE, Prim, Log, State SemiContext]
 type SemiEff = Eff '[IOE, Prim, Log, State SemiContext, State LocalSemiContext]
