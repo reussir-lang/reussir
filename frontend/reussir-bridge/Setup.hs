@@ -7,6 +7,7 @@ import Distribution.Simple.Utils
 import Distribution.Utils.Path (makeSymbolicPath)
 import Distribution.Verbosity
 import System.Directory
+import System.Environment (lookupEnv)
 import System.Exit
 import System.FilePath
 import System.Info (os)
@@ -27,8 +28,26 @@ main =
 -------------------------------------------------------------------------------
 -- Path helpers
 -------------------------------------------------------------------------------
-getProjectRoot, getBuildDir :: IO FilePath
-getProjectRoot = takeDirectory . takeDirectory <$> getCurrentDirectory
+getProjectRoot :: IO FilePath
+getProjectRoot = do
+    mRoot <- lookupEnv "REUSSIR_PROJECT_ROOT"
+    case mRoot of
+        Just root -> return root
+        Nothing -> getCurrentDirectory >>= findProjectRoot
+  where
+    findProjectRoot :: FilePath -> IO FilePath
+    findProjectRoot dir = do
+        let marker = dir </> "cabal.project"
+        exists <- doesFileExist marker
+        if exists
+            then return dir
+            else do
+                let parent = takeDirectory dir
+                if parent == dir
+                    then fail "Could not find project root (cabal.project not found). Please set REUSSIR_PROJECT_ROOT."
+                    else findProjectRoot parent
+
+getBuildDir :: IO FilePath
 getBuildDir = (</> "build") <$> getProjectRoot
 
 -------------------------------------------------------------------------------
