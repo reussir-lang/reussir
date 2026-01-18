@@ -80,7 +80,7 @@ analyzeGenericFlowInExpr expr = do
         Let _ _ _ val body -> do
             analyzeGenericFlowInExpr val
             analyzeGenericFlowInExpr body
-        Regional e -> analyzeGenericFlowInExpr e
+        RegionRun e -> analyzeGenericFlowInExpr e
         -- Base cases
         GlobalStr _ -> pure ()
         Constant _ -> pure ()

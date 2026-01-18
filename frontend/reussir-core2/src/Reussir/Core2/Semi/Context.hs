@@ -13,6 +13,7 @@ module Reussir.Core2.Semi.Context (
     scanProg,
     scanStmt,
     forceAndCheckHoles,
+    elimTypeHoles,
 ) where
 
 import Control.Monad (forM_, unless)
@@ -37,6 +38,7 @@ import Reussir.Core2.Data.Function (FunctionProto (..), FunctionTable (..))
 import Reussir.Core2.Data.Integral (IntegralType (..))
 import Reussir.Core2.Data.Semi (Flexivity (..), LocalSemiContext (..), Record (..), SemiContext (..), Type (..))
 import Reussir.Core2.Data.Semi qualified as Semi
+import Reussir.Core2.Data.Semi.Expr (Expr (..), ExprKind (..))
 import Reussir.Core2.Data.Semi.Unification (HoleState (..), UnificationEff)
 import Reussir.Core2.Data.String (StringUniqifier (StringUniqifier))
 import Reussir.Core2.Data.UniqueID (GenericID (..), VarID)
@@ -531,3 +533,43 @@ forceAndCheckHoles ty = do
             ret' <- forceAndCheckHoles ret
             return $ TypeClosure args' ret'
         _ -> return ty'
+
+-- | eliminate type holes from the expression
+elimTypeHoles :: Expr -> SemiEff Expr
+elimTypeHoles expr = withMaybeSpan (exprSpan expr) $ do
+    ty' <- forceAndCheckHoles (exprType expr)
+    kind' <- case exprKind expr of
+        GlobalStr s -> return $ GlobalStr s
+        Constant c -> return $ Constant c
+        Negate e -> Negate <$> elimTypeHoles e
+        Not e -> Not <$> elimTypeHoles e
+        Arith e1 op e2 -> Arith <$> elimTypeHoles e1 <*> pure op <*> elimTypeHoles e2
+        Cmp e1 op e2 -> Cmp <$> elimTypeHoles e1 <*> pure op <*> elimTypeHoles e2
+        Cast e t -> do
+            e' <- elimTypeHoles e
+            t' <- forceAndCheckHoles t
+            return $ Cast e' t'
+        ScfIfExpr e1 e2 e3 -> ScfIfExpr <$> elimTypeHoles e1 <*> elimTypeHoles e2 <*> elimTypeHoles e3
+        Var v -> return $ Var v
+        ProjChain e idxs -> ProjChain <$> elimTypeHoles e <*> pure idxs
+        Let span' varID name val body -> do
+            val' <- elimTypeHoles val
+            body' <- elimTypeHoles body
+            return $ Let span' varID name val' body'
+        FuncCall target tyArgs args regional -> do
+            tyArgs' <- mapM forceAndCheckHoles tyArgs
+            args' <- mapM elimTypeHoles args
+            return $ FuncCall target tyArgs' args' regional
+        CompoundCall path tyArgs args -> do
+            tyArgs' <- mapM forceAndCheckHoles tyArgs
+            args' <- mapM elimTypeHoles args
+            return $ CompoundCall path tyArgs' args'
+        VariantCall path tyArgs variant arg -> do
+            tyArgs' <- mapM forceAndCheckHoles tyArgs
+            arg' <- elimTypeHoles arg
+            return $ VariantCall path tyArgs' variant arg'
+        Poison -> return Poison
+        NullableCall e -> NullableCall <$> mapM elimTypeHoles e
+        RegionRun e -> RegionRun <$> elimTypeHoles e
+        Assign e idx e' -> Assign <$> elimTypeHoles e <*> pure idx <*> elimTypeHoles e'
+    return $ expr{exprType = ty', exprKind = kind'}

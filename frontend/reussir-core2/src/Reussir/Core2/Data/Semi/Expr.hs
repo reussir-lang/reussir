@@ -19,7 +19,7 @@ data ExprKind
     | Cast Expr Type
     | ScfIfExpr Expr Expr Expr
     | Var VarID
-    | Regional Expr
+    | RegionRun Expr
     | ProjChain Expr [Int]
     | Assign Expr Int Expr -- for now, we only allow single-field assignment
     | Let

@@ -12,8 +12,8 @@ import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Prim
-import Reussir.Core2.Generic
 import Reussir.Core2.Data.Semi.Type
+import Reussir.Core2.Generic
 import Reussir.Parser.Types.Lexer (Identifier (..), Path (..))
 import Test.Tasty
 import Test.Tasty.HUnit
@@ -41,7 +41,7 @@ mkPath :: String -> Path
 mkPath s = Path (Identifier (T.pack s)) []
 
 mkTypeRecord :: String -> [Type] -> Type
-mkTypeRecord s args = TypeRecord (mkPath s) args False
+mkTypeRecord s args = TypeRecord (mkPath s) args Irrelavent
 
 mkBasic :: String -> Type
 mkBasic s = mkTypeRecord s []
