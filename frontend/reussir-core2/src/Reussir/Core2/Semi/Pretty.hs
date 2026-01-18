@@ -61,13 +61,6 @@ instance PrettyColored Type where
     prettyColored TypeBottom = typeName "⊥"
     prettyColored (TypeNullable t) = typeName "Nullable" <> angles (prettyColored t)
 
--- TypeRc and TypeRef no longer exist directly or are structured differently?
--- Checked Type.hs: TypeNullable exists. TypeRc/TypeRef seem gone from Semi/Type.hs list or I missed them.
--- Double checking Type.hs content from memory/history:
--- TypeRecord, TypeIntegral, TypeFP, TypeBool, TypeStr, TypeUnit, TypeClosure, TypeHole, TypeGeneric, TypeBottom, TypeNullable.
--- So Rc and Ref are indeed gone or handled via records/capabilities?
--- Proceeding with what matches Type.hs
-
 instance PrettyColored ArithOp where
     prettyColored Add = operator "+"
     prettyColored Sub = operator "-"
