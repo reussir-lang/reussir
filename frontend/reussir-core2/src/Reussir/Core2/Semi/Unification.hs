@@ -206,6 +206,12 @@ satisfyBounds ty bnds = do
             subsumeBound dag bounds bnds
         x -> exactTypeSatisfyBounds x bnds
 
+typeHasExactBound :: Type -> Class -> UnificationEff Bool
+typeHasExactBound ty bound = do
+    tyClassTable <- ask
+    tyClasses <- getClassesOfType tyClassTable ty
+    return $ HashSet.member bound tyClasses
+
 -- unification
 unify ::
     Type -> Type -> UnificationEff (Maybe Failure)

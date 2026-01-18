@@ -10,10 +10,12 @@ module Reussir.Core2.Semi.Context (
     emptySemiContext,
     emptyLocalSemiContext,
     evalType,
+    evalTypeWithFlexivity,
     scanProg,
     scanStmt,
-    forceAndCheckHoles,
-    elimTypeHoles,
+    exprWithSpan,
+    refreshLocalContext,
+    withGenericContext,
 ) where
 
 import Control.Monad (forM_, unless)
@@ -38,14 +40,14 @@ import Reussir.Core2.Data.Function (FunctionProto (..), FunctionTable (..))
 import Reussir.Core2.Data.Integral (IntegralType (..))
 import Reussir.Core2.Data.Semi (Flexivity (..), LocalSemiContext (..), Record (..), SemiContext (..), Type (..))
 import Reussir.Core2.Data.Semi qualified as Semi
-import Reussir.Core2.Data.Semi.Expr (Expr (..), ExprKind (..))
-import Reussir.Core2.Data.Semi.Unification (HoleState (..), UnificationEff)
+import Reussir.Core2.Data.Semi.Expr
+import Reussir.Core2.Data.Semi.Unification (UnificationEff)
 import Reussir.Core2.Data.String (StringUniqifier (StringUniqifier))
 import Reussir.Core2.Data.UniqueID (GenericID (..), VarID)
 import Reussir.Core2.Function (newFunctionTable)
 import Reussir.Core2.Generic (emptyGenericState, newGenericVar)
 import Reussir.Core2.Semi.Type (addClassToType, emptyTypeClassTable, substituteGeneric)
-import Reussir.Core2.Semi.Unification (force, getHoleState, newHoleTable)
+import Reussir.Core2.Semi.Unification (newHoleTable)
 import Reussir.Core2.Semi.Variable (newVariable, newVariableTable, rollbackVar)
 import Reussir.Diagnostic (Label (..))
 import Reussir.Diagnostic.Report (Report (..), addForegroundColorToCodeRef, addForegroundColorToText, annotatedCodeRef, defaultCodeRef, defaultText)
@@ -492,84 +494,12 @@ scanStmt
 scanProg :: Syn.Prog -> SemiEff ()
 scanProg = flip forM_ scanStmt
 
-forceAndCheckHoles :: Type -> SemiEff Type
-forceAndCheckHoles ty = do
-    ty' <- runUnification $ force ty
-    case ty' of
-        TypeHole holeID -> do
-            holeState <- runUnification $ getHoleState holeID
-            currentSpan' <- State.gets currentSpan
-            file <- State.gets currentFile
+exprWithSpan :: Type -> ExprKind -> SemiEff Expr
+exprWithSpan exprType exprKind = do
+    exprSpan <- State.gets currentSpan
+    exprID <- ExprID <$> State.gets exprCounter
+    State.modify $ \st -> st{exprCounter = exprCounter st + 1}
+    return $ Expr{exprKind, exprSpan, exprType, exprID}
 
-            let outerReport =
-                    case currentSpan' of
-                        Just (start, end) ->
-                            let cr =
-                                    defaultCodeRef file start end
-                                        & addForegroundColorToCodeRef ANSI.Red ANSI.Vivid
-                                msgText =
-                                    defaultText "Unsolved type hole"
-                                        & addForegroundColorToText ANSI.Red ANSI.Vivid
-                             in Labeled Error (FormattedText [defaultText "Type Error"])
-                                    <> Nested (annotatedCodeRef cr msgText)
-                        Nothing ->
-                            Labeled Error (FormattedText [defaultText "Unsolved type hole"])
-
-            let holeReport =
-                    case holeSpan holeState of
-                        Just (hStart, hEnd) ->
-                            let cr = defaultCodeRef file hStart hEnd
-                                msgText = defaultText "Hole introduced here"
-                             in Nested (annotatedCodeRef cr msgText)
-                        Nothing -> mempty
-
-            addErrReport (outerReport <> holeReport)
-            return ty'
-        TypeRecord path args flex -> do
-            args' <- mapM forceAndCheckHoles args
-            return $ TypeRecord path args' flex
-        TypeClosure args ret -> do
-            args' <- mapM forceAndCheckHoles args
-            ret' <- forceAndCheckHoles ret
-            return $ TypeClosure args' ret'
-        _ -> return ty'
-
--- | eliminate type holes from the expression
-elimTypeHoles :: Expr -> SemiEff Expr
-elimTypeHoles expr = withMaybeSpan (exprSpan expr) $ do
-    ty' <- forceAndCheckHoles (exprType expr)
-    kind' <- case exprKind expr of
-        GlobalStr s -> return $ GlobalStr s
-        Constant c -> return $ Constant c
-        Negate e -> Negate <$> elimTypeHoles e
-        Not e -> Not <$> elimTypeHoles e
-        Arith e1 op e2 -> Arith <$> elimTypeHoles e1 <*> pure op <*> elimTypeHoles e2
-        Cmp e1 op e2 -> Cmp <$> elimTypeHoles e1 <*> pure op <*> elimTypeHoles e2
-        Cast e t -> do
-            e' <- elimTypeHoles e
-            t' <- forceAndCheckHoles t
-            return $ Cast e' t'
-        ScfIfExpr e1 e2 e3 -> ScfIfExpr <$> elimTypeHoles e1 <*> elimTypeHoles e2 <*> elimTypeHoles e3
-        Var v -> return $ Var v
-        ProjChain e idxs -> ProjChain <$> elimTypeHoles e <*> pure idxs
-        Let span' varID name val body -> do
-            val' <- elimTypeHoles val
-            body' <- elimTypeHoles body
-            return $ Let span' varID name val' body'
-        FuncCall target tyArgs args regional -> do
-            tyArgs' <- mapM forceAndCheckHoles tyArgs
-            args' <- mapM elimTypeHoles args
-            return $ FuncCall target tyArgs' args' regional
-        CompoundCall path tyArgs args -> do
-            tyArgs' <- mapM forceAndCheckHoles tyArgs
-            args' <- mapM elimTypeHoles args
-            return $ CompoundCall path tyArgs' args'
-        VariantCall path tyArgs variant arg -> do
-            tyArgs' <- mapM forceAndCheckHoles tyArgs
-            arg' <- elimTypeHoles arg
-            return $ VariantCall path tyArgs' variant arg'
-        Poison -> return Poison
-        NullableCall e -> NullableCall <$> mapM elimTypeHoles e
-        RegionRun e -> RegionRun <$> elimTypeHoles e
-        Assign e idx e' -> Assign <$> elimTypeHoles e <*> pure idx <*> elimTypeHoles e'
-    return $ expr{exprType = ty', exprKind = kind'}
+refreshLocalContext :: SemiEff ()
+refreshLocalContext = emptyLocalSemiContext >>= State.put

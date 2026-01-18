@@ -41,6 +41,7 @@ library
         Reussir.Core2.Semi.Unification
         Reussir.Core2.Semi.Mangle
         Reussir.Core2.Semi.Context
+        Reussir.Core2.Semi.Tyck
         Reussir.Core2.Semi.FlowAnalysis
         Reussir.Core2.Semi
     build-depends:    base ^>=4.20.2.0,
