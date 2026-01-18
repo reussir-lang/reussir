@@ -25,4 +25,8 @@ spec = do
             parse parsePath "" "" `shouldFailWith` err 0 ueof
 
         it "fails on trailing double colon" $ do
-            parse parsePath "" "std::" `shouldFailWith` err 5 (ueof <> (elabel "white space"))
+            parse parsePath "" "std::" `shouldFailWith` err 5 ueof
+
+    describe "comments" $ do
+        it "skips line comments" $ do
+            parse (parseIdentifier <* eof) "" "foo // this is a comment" `shouldParse` Identifier "foo"

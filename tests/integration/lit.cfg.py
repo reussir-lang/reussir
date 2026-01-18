@@ -4,7 +4,7 @@ import sys
 config.name = 'Reussir'
 config.test_format = lit.formats.ShTest(True)
 
-config.suffixes = ['.mlir']
+config.suffixes = ['.mlir', '.rr']
 
 config.test_source_root = os.path.dirname(__file__)
 config.test_exec_root = os.path.join(config.test_output_root, 'test')
@@ -24,6 +24,7 @@ config.substitutions.append((r'%library_path', config.library_path))
 config.substitutions.append((r'%llc', config.llc_path))
 config.substitutions.append((r'%extra_sys_libs', config.extra_sys_libs))
 config.substitutions.append((r'%lli', config.lli_path))
+config.substitutions.append((r'%reussir-semi-elab', config.reussir_semi_elab_path))
 
 # TODO: should we support macos?
 if sys.platform == 'windows':

@@ -1,3 +1,4 @@
+// RUN: %reussir-semi-elab %s
 enum [value] Option<T> {
     Some(T),
     None

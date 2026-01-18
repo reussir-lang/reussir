@@ -1,3 +1,4 @@
+// RUN: %reussir-semi-elab %s
 fn cos(x : f64) -> f64 {
     core::intrinsic::math::cos(x, 1)
 }

@@ -1,3 +1,4 @@
+// RUN: %reussir-semi-elab %s
 struct RcBox<T> {
     value: T
 }

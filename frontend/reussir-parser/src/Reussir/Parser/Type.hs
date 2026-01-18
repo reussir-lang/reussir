@@ -6,8 +6,8 @@ module Reussir.Parser.Type where
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Functor (($>))
 import Data.Maybe (fromMaybe)
-import Reussir.Parser.Lexer (closeAngle, comma, openAngle, parsePath, withSpan)
-import Reussir.Parser.Types
+import Reussir.Parser.Lexer (closeAngle, comma, openAngle, parsePath, space, withSpan)
+import Reussir.Parser.Types hiding (space)
 import Reussir.Parser.Types.Type (FloatingPointType (..), IntegralType (..), Type (..))
 import Unicode.Char qualified as U
 

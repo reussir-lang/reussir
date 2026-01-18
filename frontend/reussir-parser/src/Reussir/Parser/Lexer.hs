@@ -5,6 +5,7 @@ Provides parsers for tokens, literals, and basic syntactic elements.
 -}
 module Reussir.Parser.Lexer (
     -- * Delimiters and operators
+    space,
     colon,
     semicolon,
     doubleColon,
@@ -38,12 +39,17 @@ module Reussir.Parser.Lexer (
 import Data.Functor (($>))
 import Data.Scientific (Scientific)
 import Data.Text qualified as T
-import Reussir.Parser.Types
+import Reussir.Parser.Types hiding (space)
 import Reussir.Parser.Types.Capability (Capability (..))
 import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
+import Text.Megaparsec.Char qualified as C
 import Text.Megaparsec.Char.Lexer (charLiteral)
 import Text.Megaparsec.Char.Lexer qualified as Lexer
 import Unicode.Char qualified as U
+
+-- | Space consumer that skips whitespace and line comments starting with "//".
+space :: Parser ()
+space = Lexer.space C.space1 (Lexer.skipLineComment "//") empty
 
 -- | Parse a colon ':' followed by whitespace.
 colon :: Parser ()

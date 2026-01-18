@@ -1,4 +1,4 @@
-
+// RUN: %reussir-semi-elab %s
 fn trivial() -> u64 {
     regional {
         1

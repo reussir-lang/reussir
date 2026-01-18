@@ -1,8 +1,9 @@
 module Reussir.Parser.Prog where
 
 import Reussir.Parser.Expr (parseExpr)
+import Reussir.Parser.Lexer (space)
 import Reussir.Parser.Stmt
-import Reussir.Parser.Types
+import Reussir.Parser.Types hiding (space)
 import Reussir.Parser.Types.Expr (Expr)
 import Reussir.Parser.Types.Stmt
 
@@ -15,8 +16,9 @@ parseProg = space *> many parseStmt <* eof
 data ReplInput = ReplStmt Stmt | ReplExpr Expr
     deriving (Show, Eq)
 
--- | Parse REPL input: try statement first, then expression.
--- Uses 'try' on parseStmt to allow backtracking if it fails.
+{- | Parse REPL input: try statement first, then expression.
+Uses 'try' on parseStmt to allow backtracking if it fails.
+-}
 parseReplInput :: Parser ReplInput
 parseReplInput = space *> (try stmtInput <|> exprInput) <* eof
   where

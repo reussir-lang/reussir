@@ -1,3 +1,4 @@
+// RUN: %reussir-semi-elab %s
 struct [value] Matrix<T : Num> {
     m00: T, 
     m01: T,

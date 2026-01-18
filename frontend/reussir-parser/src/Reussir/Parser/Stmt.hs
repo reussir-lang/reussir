@@ -8,7 +8,7 @@ import Reussir.Parser.Expr
 import Reussir.Parser.Lexer
 
 import Reussir.Parser.Type (parseType)
-import Reussir.Parser.Types
+import Reussir.Parser.Types hiding (space)
 import Reussir.Parser.Types.Capability (Capability (Shared))
 import Reussir.Parser.Types.Lexer (Identifier, Path)
 import Reussir.Parser.Types.Stmt

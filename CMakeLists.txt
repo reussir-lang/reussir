@@ -70,6 +70,7 @@ add_subdirectory(include)
 add_subdirectory(lib)
 add_subdirectory(tool)
 add_subdirectory(runtime)
+add_subdirectory(frontend)
 
 if (REUSSIR_ENABLE_TESTS)
   enable_testing()

@@ -12,7 +12,7 @@ import Data.Maybe
 import Data.Text qualified as T
 import Reussir.Parser.Lexer
 import Reussir.Parser.Type (parseType)
-import Reussir.Parser.Types
+import Reussir.Parser.Types hiding (space)
 import Reussir.Parser.Types.Expr
 import Reussir.Parser.Types.Lexer (Identifier)
 import Reussir.Parser.Types.Type (Type)
