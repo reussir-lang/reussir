@@ -47,6 +47,12 @@ jobs:
           ghc: 9.10.3
           cabal: latest
 
+      - name: Setup Cabal PATH
+        shell: pwsh
+        run: |
+          $cabalPath = (Get-Command cabal).Source | Split-Path -Parent
+          echo "$cabalPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Cabal update
         shell: msys2 {0}
         run: cabal update
