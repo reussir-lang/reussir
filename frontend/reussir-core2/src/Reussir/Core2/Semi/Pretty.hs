@@ -97,7 +97,6 @@ instance PrettyColored Expr where
                             <> nest 4 (line <> prettyColored e)
                 Var (VarID i) -> variable $ "v" <> pretty i
                 -- RcWrap removed
-                -- ProjChain replaced by Proj
                 Proj e idx -> prettyColored e <> "." <> pretty idx
                 Assign e1 idx e2 -> prettyColored e1 <> "." <> pretty idx <+> operator "=" <+> prettyColored e2
                 Let _ (VarID vid) name val body ->
