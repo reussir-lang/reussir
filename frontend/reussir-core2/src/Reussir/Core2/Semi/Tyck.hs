@@ -499,7 +499,7 @@ inferType
             [Just ty] -> do
                 ty' <- evalType ty
                 return ty'
-            [Nothing] -> introduceNewHoleInContext [] -- TODO: loclate the exact span of the type arg
+            [Nothing] -> introduceNewHoleInContext [] -- TODO: locate the exact span of the type arg
             [] -> introduceNewHoleInContext []
             _ -> do
                 addErrReportMsg "Nullable::Null expects exactly 1 type argument"
