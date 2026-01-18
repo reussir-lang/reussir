@@ -44,12 +44,11 @@ jobs:
       - name: Setup GHCup Without Silly Upstream
         shell: msys2 {0}
         run: |
+          export BOOTSTRAP_HASKELL_GHC_VERSION=9.10.3
+          export BOOTSTRAP_HASKELL_CABAL_VERSION=latest
           curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
           . /c/ghcup/env
-          ghcup set ghc 9.10.3
-          ghcup set cabal latest
-          ghcup install ghc 9.10.3
-          ghcup install cabal latest
+          cabal update
           
 
       - name: Install Rust and Python dependencies
