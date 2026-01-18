@@ -47,14 +47,12 @@ jobs:
           ghc: 9.10.3
           cabal: latest
 
-      - name: Setup GHCup for MSYS2
-        shell: pwsh
-        run: |
-          Add-Content -Path "$env:USERPROFILE\.bashrc" -Value '[ -f "/c/ghcup/env" ] && . "/c/ghcup/env" # ghcup-env'
-
       - name: Cabal update
         shell: msys2 {0}
-        run: cabal update
+        run: |
+          . /c/ghcup/env
+          echo ". /c/ghcup/env" >> ~/.bashrc
+          cabal update
 
       - name: Install Rust and Python dependencies
         shell: msys2 {0}
