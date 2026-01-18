@@ -68,7 +68,7 @@ library
                       filepath,
                       bytestring,
                       text-builder-linear,
-                      punycode
+                      idn
     hs-source-dirs:   src
     default-language: GHC2024
 

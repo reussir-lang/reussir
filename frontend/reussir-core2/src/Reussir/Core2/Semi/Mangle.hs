@@ -145,7 +145,6 @@ import Data.Char (isAscii)
 import Data.Char qualified as C
 import Data.Text qualified as T
 import Data.Text.Builder.Linear as TB
-import Data.Text.Encoding qualified as TE
 import Data.Text.Punycode qualified as Punycode
 import Reussir.Core2.Data.FP (FloatingPointType (..))
 import Reussir.Core2.Data.Integral (IntegralType (..))
@@ -226,7 +225,9 @@ instance Manglable Identifier where
              in TB.fromDec (T.length name) <> sep <> TB.fromText name
         | otherwise =
             -- Unicode: u + length + [_] + punycode'(identifier)
-            let encoded = TE.decodeASCII $ Punycode.encode name
+            let encoded = case Punycode.encode name of
+                    Left err -> error $ "Punycode encoding failed: " <> show err
+                    Right res -> res
                 -- Replace '-' with '_' in the punycode output
                 punycode' = T.map (\c -> if c == '-' then '_' else c) encoded
                 sep = if startsWithDigitOrUnderscore punycode' then TB.fromChar '_' else mempty
