@@ -47,11 +47,10 @@ jobs:
           ghc: 9.10.3
           cabal: latest
 
-      - name: Setup Cabal PATH
+      - name: Setup GHCup for MSYS2
         shell: pwsh
         run: |
-          $cabalPath = (Get-Command cabal).Source | Split-Path -Parent
-          echo "$cabalPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Add-Content -Path "$env:USERPROFILE\.bashrc" -Value '[ -f "/c/ghcup/env" ] && . "/c/ghcup/env" # ghcup-env'
 
       - name: Cabal update
         shell: msys2 {0}
