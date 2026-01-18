@@ -504,6 +504,23 @@ def ReussirRecordCompoundOp : ReussirRecordOp<"compound", []> {
   let hasVerifier = 1;
 }
 
+def ReussirRecordExtractOp : ReussirRecordOp<"extract", []> {
+  let summary = "Extract a field from a record";
+  let description = [{
+    `reussir.record.extract` extracts a field from a record.
+  }];
+
+  let arguments = (ins Arg<ReussirRecordType, "Record to extract from">:$record,
+      Arg<IndexAttr, "field index">:$index);
+  let results = (outs Res<AnyType, "Extracted field">:$field);
+
+  let assemblyFormat = [{
+    `(` $record `:` qualified(type($record)) `)` `[` $index `]` `:` qualified(type($field)) attr-dict
+  }];
+
+  let hasVerifier = 1;
+}
+
 def ReussirRecordVariantOp : ReussirRecordOp<"variant", []> {
   let summary = "Create a variant record";
   let description = [{

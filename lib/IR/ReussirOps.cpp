@@ -1852,6 +1852,23 @@ mlir::LogicalResult ReussirStrLiteralOp::verify() {
   return mlir::success();
 }
 
+//===----------------------------------------------------------------------===//
+// RegionRunOp RegionBranchOpInterface implementation
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRecordExtractOp::verify() {
+  auto recordType = getRecord().getType();
+  auto members = recordType.getMembers();
+  size_t indexVal = getIndex().getZExtValue();
+  if (members.size() < indexVal)
+    return emitOpError("index out of bounds");
+  auto memberType = members[indexVal];
+  auto projectedType = getProjectedType(
+      memberType, recordType.getMemberIsField()[indexVal], Capability::value);
+  if (projectedType != getField().getType())
+    return emitOpError("projected type mismatch");
+  return mlir::success();
+}
+
 //===-----------------------------------------------------------------------===//
 // Reussir Dialect Operations Registration
 //===-----------------------------------------------------------------------===//
