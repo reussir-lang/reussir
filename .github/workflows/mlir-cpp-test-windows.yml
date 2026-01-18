@@ -36,6 +36,21 @@ jobs:
             mingw-w64-clang-x86_64-python-pip
             mingw-w64-clang-x86_64-rustup
 
+      - name: Setup GHCup MSYSTEM
+        shell: msys2 {0}
+        run: |
+          echo "GHCUP_MSYS2_ENV=CLANG64" >> $GITHUB_ENV
+
+      - name: Setup GHCup
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: 9.10.3
+          cabal: latest
+
+      - name: Cabal update
+        shell: msys2 {0}
+        run: cabal update
+
       - name: Install Rust and Python dependencies
         shell: msys2 {0}
         run: |
@@ -73,17 +88,6 @@ jobs:
         run: |
           export PATH="$PATH:${{ github.workspace }}/build/bin"
           cmake --build build --target check
-
-      - name: Setup GHCup MSYSTEM
-        shell: msys2 {0}
-        run: |
-          echo "GHCUP_MSYS2_ENV=CLANG64" >> $GITHUB_ENV
-
-      - name: Setup GHCup
-        uses: haskell/ghcup-setup@v1
-        with:
-          ghc: 9.10.3
-          cabal: latest
 
       - name: Build Haskell frontend
         shell: pwsh
