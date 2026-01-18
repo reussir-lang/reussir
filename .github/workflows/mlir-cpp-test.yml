@@ -25,6 +25,11 @@ jobs:
           toolchain: nightly
           components: rust-src, rustfmt, clippy, rustc-dev, llvm-tools-preview
 
+      - name: Setup GHC
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: 9.10.3
+          cabal: latest
 
       - name: Install dependencies
         run: |

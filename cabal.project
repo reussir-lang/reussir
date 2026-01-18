@@ -5,9 +5,7 @@ packages:
   frontend/reussir-bridge
   frontend/reussir-codegen
   frontend/reussir-parser
-  frontend/reussir-repl
   frontend/reussir-diagnostic
-  frontend/reussir-core
   frontend/reussir-core2
 
 -- Common build options
