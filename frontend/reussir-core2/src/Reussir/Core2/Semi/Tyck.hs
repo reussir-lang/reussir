@@ -911,7 +911,7 @@ inferTypeForNormalCtorCall
 
                     let expectedNumParams = length fields
                     checkArgsNum expectedNumParams $ do
-                        -- Reconstruct an ordered list of syntatic expressions in the same order as required in the record
+                        -- Reconstruct an ordered list of syntactic expressions in the same order as required in the record
                         orderedArgsExprs <-
                             if isJust variantInfo || case recordFields record of Unnamed _ -> True; _ -> False
                                 then return $ map (Just . snd) ctorArgs
