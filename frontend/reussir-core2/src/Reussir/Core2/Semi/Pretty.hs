@@ -138,6 +138,7 @@ instance PrettyColored Expr where
                     prettyColored path
                         <> parens (commaSep (map prettyColored args))
          in case exprKind expr of
+                Var _ -> kindDoc
                 Let _ _ _ _ _ -> kindDoc
                 ScfIfExpr _ _ _ -> kindDoc
                 _ -> kindDoc <+> comment (":" <+> prettyColored (exprType expr))
