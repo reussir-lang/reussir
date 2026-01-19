@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
@@ -5,16 +6,28 @@ module Reussir.Core2.Semi.Pretty (
     PrettyColored (..),
 ) where
 
+import Effectful (Eff, IOE, (:>))
+import Effectful.Prim (Prim)
+import Effectful.Prim.IORef.Strict (readIORef')
 import Prettyprinter
 import Prettyprinter.Render.Terminal
 import Reussir.Core2.Data.FP (FloatingPointType (..))
+import Reussir.Core2.Data.Function (FunctionProto (..))
 import Reussir.Core2.Data.Integral (IntegralType (..))
 import Reussir.Core2.Data.Operator (ArithOp (..), CmpOp (..))
 import Reussir.Core2.Data.Semi.Expr (Expr (..), ExprKind (..))
+import Reussir.Core2.Data.Semi.Record (
+    FieldFlag,
+    Record (..),
+    RecordFields (..),
+    RecordKind (..),
+ )
 import Reussir.Core2.Data.Semi.Type (Flexivity (..), Type (..))
 import Reussir.Core2.Data.String (StringToken (..))
 import Reussir.Core2.Data.UniqueID (GenericID (..), HoleID (..), VarID (..))
-import Reussir.Parser.Pretty (PrettyColored (..))
+import Reussir.Parser.Types.Capability qualified as Cap
+import Reussir.Parser.Types.Lexer (Identifier (..), Path (..))
+import Reussir.Parser.Types.Stmt (Visibility (..))
 
 -- Helper functions for styles
 keyword :: Doc AnsiStyle -> Doc AnsiStyle
@@ -35,113 +48,285 @@ operator = annotate (color Cyan)
 comment :: Doc AnsiStyle -> Doc AnsiStyle
 comment = annotate (color Black <> bold) -- Using bright black (gray) for types/comments
 
+class PrettyColored a where
+    prettyColored :: (IOE :> es, Prim :> es) => a -> Eff es (Doc AnsiStyle)
+
 -- Instances
 
+instance PrettyColored Identifier where
+    prettyColored (Identifier t) = pure $ variable (pretty t)
+
+instance PrettyColored Path where
+    prettyColored (Path base segs) = do
+        segsDocs <- mapM prettyColored segs
+        baseDoc <- prettyColored base
+        pure $ concatWith (surround "::") (segsDocs ++ [baseDoc])
+
+instance PrettyColored Cap.Capability where
+    prettyColored Cap.Unspecified = pure mempty
+    prettyColored Cap.Shared = pure $ keyword "shared"
+    prettyColored Cap.Value = pure $ keyword "value"
+    prettyColored Cap.Flex = pure $ keyword "flex"
+    prettyColored Cap.Rigid = pure $ keyword "rigid"
+    prettyColored Cap.Field = pure $ keyword "field"
+    prettyColored Cap.Regional = pure $ keyword "regional"
+
+instance PrettyColored Visibility where
+    prettyColored Public = pure $ keyword "pub" <> space
+    prettyColored Private = pure mempty
+
 instance PrettyColored IntegralType where
-    prettyColored (Signed n) = typeName $ "i" <> pretty n
-    prettyColored (Unsigned n) = typeName $ "u" <> pretty n
+    prettyColored (Signed n) = pure $ typeName $ "i" <> pretty n
+    prettyColored (Unsigned n) = pure $ typeName $ "u" <> pretty n
 
 instance PrettyColored FloatingPointType where
-    prettyColored (IEEEFloat n) = typeName $ "f" <> pretty n
-    prettyColored BFloat16 = typeName "bfloat16"
-    prettyColored Float8 = typeName "float8"
+    prettyColored (IEEEFloat n) = pure $ typeName $ "f" <> pretty n
+    prettyColored BFloat16 = pure $ typeName "bfloat16"
+    prettyColored Float8 = pure $ typeName "float8"
 
 instance PrettyColored Flexivity where
-    prettyColored Irrelevant = mempty
-    prettyColored Flex = brackets $ keyword "flex"
-    prettyColored Rigid = brackets $ keyword "rigid"
-    prettyColored Regional = brackets $ keyword "regional"
+    prettyColored Irrelevant = pure mempty
+    prettyColored Flex = pure $ brackets $ keyword "flex"
+    prettyColored Rigid = pure $ brackets $ keyword "rigid"
+    prettyColored Regional = pure $ brackets $ keyword "regional"
 
 instance PrettyColored Type where
-    prettyColored (TypeRecord path args flex) =
+    prettyColored (TypeRecord path args flex) = do
+        pathDoc <- prettyColored path
+        flexDoc <- prettyColored flex
+        argsDocs <- mapM prettyColored args
         -- Flexivity currently ignored in pretty printing
-        prettyColored path <> prettyColored flex <> if null args then mempty else angles (commaSep (map prettyColored args))
+        pure $ pathDoc <> flexDoc <> if null args then mempty else angles (commaSep argsDocs)
     prettyColored (TypeIntegral t) = prettyColored t
     prettyColored (TypeFP t) = prettyColored t
-    prettyColored TypeBool = typeName "bool"
-    prettyColored TypeStr = typeName "str"
-    prettyColored TypeUnit = typeName "unit"
-    prettyColored (TypeClosure args ret) = parens (commaSep (map prettyColored args)) <+> "->" <+> prettyColored ret
-    prettyColored (TypeGeneric (GenericID i)) = typeName $ "T" <> pretty i
-    prettyColored (TypeHole (HoleID i)) = typeName $ "?" <> pretty i
-    prettyColored TypeBottom = typeName "⊥"
-    prettyColored (TypeNullable t) = typeName "Nullable" <> angles (prettyColored t)
+    prettyColored TypeBool = pure $ typeName "bool"
+    prettyColored TypeStr = pure $ typeName "str"
+    prettyColored TypeUnit = pure $ typeName "unit"
+    prettyColored (TypeClosure args ret) = do
+        argsDocs <- mapM prettyColored args
+        retDoc <- prettyColored ret
+        pure $ parens (commaSep argsDocs) <+> "->" <+> retDoc
+    prettyColored (TypeGeneric (GenericID i)) = pure $ typeName $ "T" <> pretty i
+    prettyColored (TypeHole (HoleID i)) = pure $ typeName $ "?" <> pretty i
+    prettyColored TypeBottom = pure $ typeName "⊥"
+    prettyColored (TypeNullable t) = do
+        tDoc <- prettyColored t
+        pure $ typeName "Nullable" <> angles tDoc
 
 instance PrettyColored ArithOp where
-    prettyColored Add = operator "+"
-    prettyColored Sub = operator "-"
-    prettyColored Mul = operator "*"
-    prettyColored Div = operator "/"
-    prettyColored Mod = operator "%"
+    prettyColored Add = pure $ operator "+"
+    prettyColored Sub = pure $ operator "-"
+    prettyColored Mul = pure $ operator "*"
+    prettyColored Div = pure $ operator "/"
+    prettyColored Mod = pure $ operator "%"
 
 instance PrettyColored CmpOp where
-    prettyColored Lt = operator "<"
-    prettyColored Gt = operator ">"
-    prettyColored Lte = operator "<="
-    prettyColored Gte = operator ">="
-    prettyColored Equ = operator "=="
-    prettyColored Neq = operator "!="
+    prettyColored Lt = pure $ operator "<"
+    prettyColored Gt = pure $ operator ">"
+    prettyColored Lte = pure $ operator "<="
+    prettyColored Gte = pure $ operator ">="
+    prettyColored Equ = pure $ operator "=="
+    prettyColored Neq = pure $ operator "!="
 
 instance PrettyColored Expr where
-    prettyColored expr =
-        let kindDoc = case exprKind expr of
-                GlobalStr (StringToken (u1, u2, u3, u4)) -> literal $ "str_token(" <> pretty u1 <> ", " <> pretty u2 <> ", " <> pretty u3 <> ", " <> pretty u4 <> ")"
-                Constant n -> literal (pretty (show n))
-                Negate e -> operator "-" <> parens (prettyColored e)
-                Not e -> operator "!" <> parens (prettyColored e)
-                Arith e1 op e2 -> parens (prettyColored e1 <+> prettyColored op <+> prettyColored e2)
-                Cmp e1 op e2 -> parens (prettyColored e1 <+> prettyColored op <+> prettyColored e2)
-                Cast e t -> keyword "cast" <> angles (prettyColored t) <> parens (prettyColored e)
-                ScfIfExpr c t e ->
+    prettyColored expr = do
+        kindDoc <- case exprKind expr of
+            GlobalStr (StringToken (u1, u2, u3, u4)) -> pure $ literal $ "str_token(" <> pretty u1 <> ", " <> pretty u2 <> ", " <> pretty u3 <> ", " <> pretty u4 <> ")"
+            Constant n -> pure $ literal (pretty (show n))
+            Negate e -> do
+                eDoc <- prettyColored e
+                pure $ operator "-" <> parens eDoc
+            Not e -> do
+                eDoc <- prettyColored e
+                pure $ operator "!" <> parens eDoc
+            Arith e1 op e2 -> do
+                e1Doc <- prettyColored e1
+                opDoc <- prettyColored op
+                e2Doc <- prettyColored e2
+                pure $ parens (e1Doc <+> opDoc <+> e2Doc)
+            Cmp e1 op e2 -> do
+                e1Doc <- prettyColored e1
+                opDoc <- prettyColored op
+                e2Doc <- prettyColored e2
+                pure $ parens (e1Doc <+> opDoc <+> e2Doc)
+            Cast e t -> do
+                eDoc <- prettyColored e
+                tDoc <- prettyColored t
+                pure $ keyword "cast" <> angles tDoc <> parens eDoc
+            ScfIfExpr c t e -> do
+                cDoc <- prettyColored c
+                tDoc <- prettyColored t
+                eDoc <- prettyColored e
+                pure $
                     group $
                         keyword "if"
-                            <+> prettyColored c
+                            <+> cDoc
                             <+> keyword "then"
-                            <> nest 4 (line <> prettyColored t)
+                            <> nest 4 (line <> tDoc)
                             <> line
                             <> keyword "else"
-                            <> nest 4 (line <> prettyColored e)
-                Var (VarID i) -> variable $ "v" <> pretty i
-                Proj e idx -> prettyColored e <> "." <> pretty idx
-                Assign e1 idx e2 -> prettyColored e1 <> "." <> pretty idx <+> operator "=" <+> prettyColored e2
-                Let _ (VarID vid) name val body ->
+                            <> nest 4 (line <> eDoc)
+            Var (VarID i) -> pure $ variable $ "v" <> pretty i
+            Proj e idx -> do
+                eDoc <- prettyColored e
+                pure $ eDoc <> "." <> pretty idx
+            Assign e1 idx e2 -> do
+                e1Doc <- prettyColored e1
+                e2Doc <- prettyColored e2
+                pure $ e1Doc <> "." <> pretty idx <+> operator "=" <+> e2Doc
+            Let _ (VarID vid) name val body -> do
+                nameDoc <- prettyColored name
+                valTypeDoc <- prettyColored (exprType val)
+                valDoc <- prettyColored val
+                bodyDoc <- prettyColored body
+                pure $
                     group $
                         keyword "let"
                             <+> variable ("v" <> pretty vid)
-                            <+> parens (prettyColored name)
+                            <+> parens nameDoc
                             <+> operator ":"
-                            <+> prettyColored (exprType val)
+                            <+> valTypeDoc
                             <+> operator "="
-                            <+> prettyColored val
+                            <+> valDoc
                             <+> keyword "in"
                             <> line
-                            <> prettyColored body
-                FuncCall path tyArgs args regional ->
-                    prettyColored path
-                        <> (if null tyArgs then mempty else angles (commaSep (map prettyColored tyArgs)))
+                            <> bodyDoc
+            FuncCall path tyArgs args regional -> do
+                pathDoc <- prettyColored path
+                tyArgsDocs <- mapM prettyColored tyArgs
+                argsDocs <- mapM prettyColored args
+                pure $
+                    pathDoc
+                        <> (if null tyArgs then mempty else angles (commaSep tyArgsDocs))
                         <> (if regional then "[regional]" else mempty)
-                        <> parens (commaSep (map prettyColored args))
-                CompoundCall path tyArgs args ->
-                    prettyColored path
-                        <> (if null tyArgs then mempty else angles (commaSep (map prettyColored tyArgs)))
-                        <> parens (commaSep (map prettyColored args))
-                VariantCall path tyArgs variant arg ->
-                    prettyColored path
-                        <> (if null tyArgs then mempty else angles (commaSep (map prettyColored tyArgs)))
+                        <> parens (commaSep argsDocs)
+            CompoundCall path tyArgs args -> do
+                pathDoc <- prettyColored path
+                tyArgsDocs <- mapM prettyColored tyArgs
+                argsDocs <- mapM prettyColored args
+                pure $
+                    pathDoc
+                        <> (if null tyArgs then mempty else angles (commaSep tyArgsDocs))
+                        <> parens (commaSep argsDocs)
+            VariantCall path tyArgs variant arg -> do
+                pathDoc <- prettyColored path
+                tyArgsDocs <- mapM prettyColored tyArgs
+                argDoc <- prettyColored arg
+                pure $
+                    pathDoc
+                        <> (if null tyArgs then mempty else angles (commaSep tyArgsDocs))
                         <> brackets (pretty variant)
-                        <> parens (prettyColored arg)
-                Poison -> keyword "poison"
-                RegionRun e -> keyword "run_region" <> braces (prettyColored e)
-                NullableCall (Just e) -> keyword "nonnull" <> braces (prettyColored e)
-                NullableCall Nothing -> keyword "null"
-                IntrinsicCall path args ->
-                    prettyColored path
-                        <> parens (commaSep (map prettyColored args))
-         in case exprKind expr of
-                Var _ -> kindDoc
-                Let _ _ _ _ _ -> kindDoc
-                ScfIfExpr _ _ _ -> kindDoc
-                _ -> kindDoc <+> comment (":" <+> prettyColored (exprType expr))
+                        <> parens argDoc
+            Poison -> pure $ keyword "poison"
+            RegionRun e -> do
+                eDoc <- prettyColored e
+                pure $ keyword "run_region" <> braces eDoc
+            NullableCall (Just e) -> do
+                eDoc <- prettyColored e
+                pure $ keyword "nonnull" <> braces eDoc
+            NullableCall Nothing -> pure $ keyword "null"
+            IntrinsicCall path args -> do
+                pathDoc <- prettyColored path
+                argsDocs <- mapM prettyColored args
+                pure $
+                    pathDoc
+                        <> parens (commaSep argsDocs)
+
+        case exprKind expr of
+            Var _ -> pure kindDoc
+            Let _ _ _ _ _ -> pure kindDoc
+            ScfIfExpr _ _ _ -> pure kindDoc
+            _ -> do
+                tyDoc <- prettyColored (exprType expr)
+                pure $ kindDoc <+> comment (":" <+> tyDoc)
+
+instance PrettyColored Record where
+    prettyColored (Record name tyParams fields kind vis cap) = do
+        visDoc <- prettyColored vis
+        capDoc <- prettyColored cap
+        nameDoc <- prettyColored name
+        genericsDoc <- prettyGenerics tyParams
+        fieldsDoc <- prettyFields fields
+        pure $
+            visDoc
+                <> keyword (case kind of StructKind -> "struct"; EnumKind -> "enum"; EnumVariant _ _ -> "enum_variant")
+                <> (case cap of Cap.Unspecified -> mempty; _ -> space <> brackets capDoc)
+                    <+> nameDoc
+                <> genericsDoc
+                <> fieldsDoc
+      where
+        prettyGenerics [] = pure mempty
+        prettyGenerics gs = do
+            gsDocs <- mapM prettyGeneric gs
+            pure $ angles (commaSep gsDocs)
+
+        prettyGeneric (n, GenericID gid) = do
+            nDoc <- prettyColored n
+            pure $ nDoc <> "@" <> pretty gid
+
+        prettyFields (Unnamed fs) = do
+            fsDocs <- mapM prettyUnnamedField fs
+            pure $ parens (commaSep fsDocs)
+        prettyFields (Variants vs) = do
+            vsDocs <- mapM prettyColored vs
+            pure $ braces (nest 4 (hardline <> vsep (punctuate comma vsDocs)) <> hardline)
+        prettyFields (Named fs) = do
+            fsDocs <- mapM prettyField fs
+            pure $ braces (nest 4 (hardline <> vsep (punctuate comma fsDocs)) <> hardline)
+
+        prettyField (n, t, fld) = do
+            nDoc <- prettyColored n
+            fldDoc <- prettyFieldFlag fld
+            tDoc <- prettyColored t
+            pure $ nDoc <> operator ":" <+> fldDoc <> tDoc
+
+        prettyUnnamedField (t, fld) = do
+            fldDoc <- prettyFieldFlag fld
+            tDoc <- prettyColored t
+            pure $ fldDoc <> tDoc
+
+        prettyFieldFlag :: (IOE :> es, Prim :> es) => FieldFlag -> Eff es (Doc AnsiStyle)
+        prettyFieldFlag False = pure mempty
+        prettyFieldFlag True = pure $ brackets (keyword "field") <> space
+
+instance PrettyColored FunctionProto where
+    prettyColored (FunctionProto vis name generics params retType isRegional bodyRef _span) = do
+        visDoc <- prettyColored vis
+        nameDoc <- prettyColored name
+        genericsDoc <- prettyGenerics generics
+        paramsDoc <- mapM prettyArg params
+        retDoc <- prettyColored retType
+        bodyExpr <- readIORef' bodyRef
+        bodyDoc <- case bodyExpr of
+            Just b -> do
+                bDoc <- prettyColored b
+                pure $ braces (nest 4 (hardline <> bDoc) <> hardline)
+            Nothing -> pure $ operator ";"
+
+        pure $
+            visDoc
+                <> (if isRegional then keyword "regional" <> space else mempty)
+                <> keyword "fn"
+                    <+> nameDoc
+                <> genericsDoc
+                <> parens (commaSep paramsDoc)
+                    <+> operator "->"
+                    <+> retDoc
+                    <+> bodyDoc
+      where
+        prettyGenerics [] = pure mempty
+        prettyGenerics gs = do
+            gsDocs <- mapM prettyGeneric gs
+            pure $ angles (commaSep gsDocs)
+
+        prettyGeneric (n, GenericID gid) = do
+            nDoc <- prettyColored n
+            pure $ nDoc <> "@" <> pretty gid
+
+        prettyArg (n, t) = do
+            nDoc <- prettyColored n
+            tDoc <- prettyColored t
+            pure $ nDoc <> operator ":" <+> tDoc
 
 commaSep :: [Doc AnsiStyle] -> Doc AnsiStyle
 commaSep = concatWith (surround (comma <> space))

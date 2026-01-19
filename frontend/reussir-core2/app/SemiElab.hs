@@ -1,50 +1,43 @@
 module Main where
 
 import Control.Monad (forM_)
+import Data.HashTable.IO qualified as H
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Effectful (inject, liftIO, runEff)
 import Effectful.Log qualified as L
 import Effectful.Prim (runPrim)
 import Effectful.State.Static.Local (runState)
+import Effectful.State.Static.Local qualified as State
+import GHC.IO.Handle.FD (stderr)
 import Log (LogLevel (..))
 import Log.Backend.StandardOutput qualified as L
 import Options.Applicative
-import System.Exit (exitFailure, exitSuccess)
-import Text.Megaparsec (errorBundlePretty, runParser)
-
-import Data.HashTable.IO qualified as H
-import Effectful.State.Static.Local qualified as State
-import GHC.IO.Handle.FD (stderr)
 import Prettyprinter (hardline)
 import Prettyprinter.Render.Terminal (putDoc)
 import Reussir.Bridge qualified as B
+import Reussir.Core2.Data.Function (FunctionTable (..))
 import Reussir.Core2.Data.Semi.Context (SemiContext (..))
-import Reussir.Core2.Data.Semi.Expr (Expr)
-import Reussir.Core2.Data.Semi.Type (Type)
-import Reussir.Core2.Data.UniqueID (GenericID)
 import Reussir.Core2.Semi.Context (emptySemiContext, scanStmt)
 import Reussir.Core2.Semi.FlowAnalysis (solveAllGenerics)
 import Reussir.Core2.Semi.Pretty (prettyColored)
 import Reussir.Core2.Semi.Tyck (checkFuncType)
 import Reussir.Diagnostic (createRepository, displayReport)
 import Reussir.Parser.Prog (parseProg)
-import Reussir.Parser.Types.Lexer (Identifier (..), WithSpan (..), unIdentifier)
+import Reussir.Parser.Types.Lexer (WithSpan (..))
 import Reussir.Parser.Types.Stmt qualified as Syn
+import System.Exit (exitFailure, exitSuccess)
 import System.IO (hPutStrLn)
+import Text.Megaparsec (errorBundlePretty, runParser)
 
 data Args = Args
     { inputFile :: FilePath
-    , funcName :: Maybe String
     }
 
 argsParser :: Parser Args
 argsParser =
     Args
         <$> strArgument (metavar "FILE" <> help "Input file")
-        <*> optional (strArgument (metavar "FUNCTION" <> help "Function name to check"))
-
-data Result = SingleSuccess Expr | ModuleSuccess [(GenericID, [Type])] | Failed
 
 tyckBridgeLogLevel :: B.LogLevel
 tyckBridgeLogLevel = B.LogWarning
@@ -58,7 +51,7 @@ toEffLogLevel = \case
     B.LogTrace -> LogTrace
 
 unspanStmt :: Syn.Stmt -> Syn.Stmt
-unspanStmt (Syn.SpannedStmt s) = unspanStmt (spanValue s)
+unspanStmt (Syn.SpannedStmt (WithSpan s _ _)) = unspanStmt s
 unspanStmt stmt = stmt
 
 main :: IO ()
@@ -72,64 +65,55 @@ main = do
         Right prog -> do
             -- Setup translation state
             repository <- runEff $ createRepository [inputFile args]
-            (result, finalState) <- L.withStdOutLogger $ \logger -> do
+            ((), finalState) <- L.withStdOutLogger $ \logger -> do
                 runEff $ L.runLog (T.pack "reussir-tyck") logger (toEffLogLevel tyckBridgeLogLevel) $ do
                     initState <- runPrim $ emptySemiContext tyckBridgeLogLevel (inputFile args)
                     runPrim $ runState initState $ do
                         -- Scan all statements
                         forM_ prog $ \stmt -> inject $ scanStmt stmt
-                        -- Find the function
-                        case funcName args of
-                            Nothing -> do
-                                forM_ prog $ \stmt -> do
-                                    case unspanStmt stmt of
-                                        Syn.FunctionStmt f -> do
-                                            expr <- inject $ checkFuncType f
-                                            hasFailed <- State.gets translationHasFailed
-                                            if hasFailed
-                                                then
-                                                    liftIO $ putStrLn $ "Function " ++ T.unpack (unIdentifier (Syn.funcName f)) ++ " type checked failed:"
-                                                else do
-                                                    liftIO $ putStrLn $ "Function " ++ T.unpack (unIdentifier (Syn.funcName f)) ++ " type checked successfully:"
-                                                    liftIO $ putDoc (prettyColored expr <> hardline)
-                                                    liftIO $ putStrLn ""
-                                            pure ()
-                                        _ -> return ()
-                                slns <- inject solveAllGenerics
-                                case slns of
-                                    Just instances -> ModuleSuccess <$> liftIO (H.toList instances)
-                                    Nothing -> pure Failed
-                            Just name -> do
-                                let targetName = T.pack name
-                                let findFunc (Syn.FunctionStmt f) | unIdentifier (Syn.funcName f) == targetName = Just f
-                                    findFunc (Syn.SpannedStmt s) = findFunc (spanValue s)
-                                    findFunc _ = Nothing
 
-                                let targetFunc = foldr (\stmt acc -> acc <|> findFunc stmt) Nothing prog
+                        -- Elaborate all functions
+                        forM_ prog $ \stmt -> do
+                            case unspanStmt stmt of
+                                Syn.FunctionStmt f -> do
+                                    _ <- inject $ checkFuncType f
+                                    return ()
+                                _ -> return ()
 
-                                case targetFunc of
-                                    Just f -> do
-                                        expr <- inject $ checkFuncType f
-                                        return (SingleSuccess expr)
-                                    Nothing -> do
-                                        liftIO $ putStrLn "Function not found"
-                                        return Failed
+                        -- Solve generics
+                        slns <- inject solveAllGenerics
+                        case slns of
+                            Just instances -> do
+                                liftIO $ putStrLn "\n;; Instantiated Generics"
+                                instList <- liftIO $ H.toList instances
+                                forM_ instList $ \(gid, types) -> do
+                                    liftIO $ putStrLn $ "Generic " ++ show gid ++ " should be instantiated to:"
+                                    forM_ types $ \ty -> do
+                                        doc <- prettyColored ty
+                                        liftIO $ putDoc (doc <> hardline)
+                            Nothing -> pure ()
+
+                        liftIO $ putStrLn ";; Elaborated Records"
+                        knownRecs <- State.gets knownRecords
+                        recs <- liftIO $ H.toList knownRecs
+                        forM_ recs $ \(_, record) -> do
+                            doc <- prettyColored record
+                            liftIO $ putDoc (doc <> hardline)
+
+                        liftIO $ putStrLn "\n;; Elaborated Functions"
+                        funcsTbl <- State.gets functions
+                        funcs <- liftIO $ H.toList (functionProtos funcsTbl)
+                        forM_ funcs $ \(_, proto) -> do
+                            doc <- prettyColored proto
+                            liftIO $ putDoc (doc <> hardline)
+
             forM_ (translationReports finalState) $ \report -> do
                 runEff $ displayReport report repository 0 stderr
                 hPutStrLn stderr ""
-            case result of
-                SingleSuccess expr | null (translationReports finalState) -> do
-                    putStrLn "Type check succeeded without errors."
-                    putDoc (prettyColored expr <> hardline)
-                    exitSuccess
-                ModuleSuccess instances | null (translationReports finalState) -> do
-                    forM_ instances $ \(gid, types) -> do
-                        putStrLn $ "Generic " ++ show gid ++ " should be instantiated to:"
-                        forM_ types $ \ty ->
-                            putDoc (prettyColored ty <> hardline)
-                    exitSuccess
-                _ -> do
-                    exitFailure
+
+            if null (translationReports finalState)
+                then exitSuccess
+                else exitFailure
   where
     opts =
         info
