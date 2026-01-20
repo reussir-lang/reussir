@@ -7,6 +7,7 @@ import Data.Maybe
 import Reussir.Parser.Expr
 import Reussir.Parser.Lexer
 
+import Data.Vector.Strict qualified as V
 import Reussir.Parser.Type (parseType)
 import Reussir.Parser.Types hiding (space)
 import Reussir.Parser.Types.Capability (Capability (Shared))
@@ -49,7 +50,7 @@ parseStructDecRest vis = do
 parseUnnamedFields :: Parser RecordFields
 parseUnnamedFields = do
     types <- openParen *> parseFieldType `sepBy` comma <* closeParen
-    return $ Unnamed types
+    return $ Unnamed (V.fromList types)
   where
     parseFieldType = do
         fld <- parseFieldFlag
@@ -59,7 +60,7 @@ parseUnnamedFields = do
 parseNamedFields :: Parser RecordFields
 parseNamedFields = do
     fields <- openBody *> parseNamedField `sepBy` comma <* closeBody
-    return $ Named fields
+    return $ Named (V.fromList fields)
 
 parseNamedField :: Parser (Identifier, Type, Bool)
 parseNamedField = do
@@ -93,11 +94,11 @@ parseFuncDefRest vis = do
         ty <- parseType
         return (ty, flx)
 
-parseEnumConstructor :: Parser (Identifier, [Type])
+parseEnumConstructor :: Parser (Identifier, V.Vector Type)
 parseEnumConstructor = do
     name <- parseIdentifier
-    tys <- optional $ openParen *> parseType `sepBy` comma <* closeParen
-    return (name, fromMaybe [] tys)
+    tys <- fmap V.fromList <$> optional (openParen *> parseType `sepBy` comma <* closeParen)
+    return (name, fromMaybe V.empty tys)
 
 parseEnumDec :: Parser Stmt
 parseEnumDec = parseVis >>= parseEnumDecRest
@@ -110,7 +111,7 @@ parseEnumDecRest vis = do
     tyvars <- openAngle *> parseGenericParam `sepBy` comma <* closeAngle
     body <- openBody *> parseEnumConstructor `sepBy` comma <* closeBody
 
-    let fields = Variants body
+    let fields = Variants $ V.fromList body
     return $ RecordStmt $ Record name tyvars fields EnumKind vis cap
 
 parseStmt :: Parser Stmt

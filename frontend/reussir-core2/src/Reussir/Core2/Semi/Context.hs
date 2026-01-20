@@ -26,6 +26,7 @@ import Data.HashTable.IO qualified as H
 import Data.Int (Int64)
 import Data.Maybe (isJust)
 import Data.Text qualified as T
+import Data.Vector.Strict qualified as V
 import Effectful (Eff, IOE, inject, liftIO, (:>))
 import Effectful.Log qualified as L
 import Effectful.Prim.IORef (Prim)
@@ -351,14 +352,14 @@ scanStmtImpl (Syn.RecordStmt record) = do
     withGenericContext genericsList $ do
         (fields, variants) <- case Syn.recordFields record of
             Syn.Named fs -> do
-                fs' <- mapM (\(n, t, f) -> (n,,f) <$> evalType t) fs
+                fs' <- V.mapM (\(n, t, f) -> (n,,f) <$> evalType t) fs
                 return $ (Named fs', Nothing)
             Syn.Unnamed fs -> do
-                fs' <- mapM (\(t, f) -> (,f) <$> evalType t) fs
+                fs' <- V.mapM (\(t, f) -> (,f) <$> evalType t) fs
                 return $ (Unnamed fs', Nothing)
             Syn.Variants vs -> do
-                vs' <- mapM (\(n, ts) -> (n,) <$> mapM evalType ts) vs
-                let names = map (\(n, _) -> n) vs'
+                vs' <- V.mapM (\(n, ts) -> (n,) <$> mapM evalType ts) vs
+                let names = V.map (\(n, _) -> n) vs'
                 return $ (Variants names, Just vs')
 
         let kind = case Syn.recordKind record of
@@ -379,13 +380,13 @@ scanStmtImpl (Syn.RecordStmt record) = do
         -- extended with variant name and value capability.
         case variants of
             Just vs -> do
-                forM_ (zip [0 ..] vs) $ \(variantIdx, (variantName, variantFields)) -> do
+                V.iforM_ vs $ \variantIdx (variantName, variantFields) -> do
                     let variantPath = Path variantName [name] -- TODO: handle module path
                     let variantRecord =
                             Record
                                 { recordName = variantPath
                                 , recordTyParams = genericsList -- share same generics as parent
-                                , recordFields = Unnamed (map (,False) variantFields)
+                                , recordFields = Unnamed (V.map (,False) variantFields)
                                 , recordKind = EnumVariant{variantParent = Path name [], variantIdx}
                                 , recordVisibility = Syn.recordVisibility record
                                 , recordDefaultCap = Syn.Value

@@ -238,25 +238,6 @@ tyArgOrMetaHole (Just ty) bounds = do
     pure ty'
 tyArgOrMetaHole Nothing bounds = introduceNewHoleInContext bounds
 
-{- | Helper to find a named field in a list of fields.
-Returns the index and the type of the field if found.
--}
-findFieldBy :: (x -> Bool) -> [x] -> Maybe (Int, x)
-findFieldBy key fields = go 0 fields
-  where
-    go _ [] = Nothing
-    go i (x : rest)
-        | key x = Just (i, x)
-        | otherwise = go (i + 1) rest
-
--- | Helper to safely index into a list.
-safeIndex :: [a] -> Int -> Maybe a
-safeIndex [] _ = Nothing
-safeIndex (x : _) 0 = Just x
-safeIndex (_ : xs) n
-    | n < 0 = Nothing
-    | otherwise = safeIndex xs (n - 1)
-
 inferType :: Syn.Expr -> SemiEff Expr
 --            U is fresh in Г
 --  ───────────────────────────────────
@@ -447,8 +428,9 @@ inferType (Syn.AccessChain baseExpr accesses) = do
                         let subst = IntMap.fromList $ zip (map (\(_, GenericID gid) -> fromIntegral gid) $ recordTyParams record) args
                         case (recordFields record, access) of
                             (Named fields, Access.Named name) -> do
-                                case findFieldBy (\(n, _, _) -> n == name) fields of
-                                    Just (idx, (_, fieldTy, nullable)) -> do
+                                case V.findIndex (\(n, _, _) -> n == name) fields of
+                                    Just idx -> do
+                                        let (_, fieldTy, nullable) = fields `V.unsafeIndex` idx
                                         fieldTy' <- projectType nullable $ substituteGenericMap fieldTy subst
                                         L.logTrace_ $ "Field type: " <> T.pack (show fieldTy')
                                         return (fieldTy', idx : acc)
@@ -457,7 +439,7 @@ inferType (Syn.AccessChain baseExpr accesses) = do
                                         return (TypeBottom, -1 : acc)
                             (Unnamed fields, Access.Unnamed idx) -> do
                                 let idxInt = fromIntegral idx
-                                case safeIndex fields idxInt of
+                                case fields V.!? idxInt of
                                     Just (fieldTy, nullable) -> do
                                         fieldTy' <- projectType nullable $ substituteGenericMap fieldTy subst
                                         return (fieldTy', idxInt : acc)
@@ -885,9 +867,9 @@ inferTypeForNormalCtorCall
                     let genericMap = recordGenericMap record tyArgs'
 
                     (fields, variantInfo) <- case (recordKind record, recordFields record) of
-                        (StructKind, Named fs) -> return (map (\(n, t, f) -> (Just n, t, f)) fs, Nothing)
-                        (StructKind, Unnamed fs) -> return (map (\(t, f) -> (Nothing, t, f)) fs, Nothing)
-                        (EnumVariant parentPath idx, Unnamed fs) -> return (map (\(t, f) -> (Nothing, t, f)) fs, Just (parentPath, idx))
+                        (StructKind, Named fs) -> return (V.toList $ V.map (\(n, t, f) -> (Just n, t, f)) fs, Nothing)
+                        (StructKind, Unnamed fs) -> return (V.toList $ V.map (\(t, f) -> (Nothing, t, f)) fs, Nothing)
+                        (EnumVariant parentPath idx, Unnamed fs) -> return (V.toList $ V.map (\(t, f) -> (Nothing, t, f)) fs, Just (parentPath, idx))
                         (EnumVariant _ _, Named _) -> do
                             -- This should be unreachable based on current translation logic
                             addErrReportMsg "Enum variant cannot have named fields yet"

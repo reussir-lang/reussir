@@ -6,6 +6,7 @@ import Control.Monad (forM_, zipWithM_)
 import Data.HashTable.IO qualified as H
 import Data.IntSet qualified as IntSet
 import Data.Text qualified as T
+import Data.Vector.Strict qualified as V
 import Effectful (liftIO)
 import Effectful.Log qualified as L
 import Effectful.Prim.IORef.Strict (readIORef')
@@ -127,13 +128,11 @@ analyzeGenericFlowInType (TypeClosure args ret) = do
 analyzeGenericFlowInType _ = pure ()
 
 analyzeGenericFlowInRecord :: Record -> GlobalSemiEff ()
-analyzeGenericFlowInRecord record = do
-    let types = case recordFields record of
-            Named fs -> map (\(_, t, _) -> t) fs
-            Unnamed fs -> map (\(t, _) -> t) fs
-            -- no need to proceed to variants since variant share the same generics as parent record
-            Variants _ -> mempty
-    mapM_ analyzeGenericFlowInType types
+analyzeGenericFlowInRecord record = case recordFields record of
+    Named fs -> V.forM_ fs $ \(_, t, _) -> analyzeGenericFlowInType t
+    Unnamed fs -> V.forM_ fs $ \(t, _) -> analyzeGenericFlowInType t
+    -- no need to proceed to variants since variant share the same generics as parent record
+    Variants _ -> pure ()
 
 -- Analyze generic flow for the whole translation module.
 analyzeGenericFlow :: GlobalSemiEff ()

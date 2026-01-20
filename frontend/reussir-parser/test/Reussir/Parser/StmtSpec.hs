@@ -6,6 +6,7 @@ import Test.Hspec
 import Test.Hspec.Megaparsec
 import Text.Megaparsec
 
+import Data.Vector.Strict qualified as V
 import Reussir.Parser.Stmt
 import Reussir.Parser.Types.Capability (Capability (..))
 import Reussir.Parser.Types.Expr hiding (Named, Unnamed)
@@ -95,7 +96,7 @@ spec = do
                     ( Record
                         (Identifier "Point")
                         []
-                        (Unnamed [(TypeIntegral (Signed 32), False), (TypeIntegral (Signed 32), False)])
+                        (Unnamed $ V.fromList [(TypeIntegral (Signed 32), False), (TypeIntegral (Signed 32), False)])
                         StructKind
                         Private
                         Shared
@@ -107,7 +108,7 @@ spec = do
                     ( Record
                         (Identifier "Point")
                         []
-                        (Unnamed [(TypeIntegral (Signed 32), False), (TypeIntegral (Signed 32), False)])
+                        (Unnamed $ V.fromList [(TypeIntegral (Signed 32), False), (TypeIntegral (Signed 32), False)])
                         StructKind
                         Public
                         Shared
@@ -119,7 +120,7 @@ spec = do
                     ( Record
                         (Identifier "Point")
                         []
-                        (Named [(Identifier "x", TypeIntegral (Signed 32), False), (Identifier "y", TypeIntegral (Signed 32), False)])
+                        (Named $ V.fromList [(Identifier "x", TypeIntegral (Signed 32), False), (Identifier "y", TypeIntegral (Signed 32), False)])
                         StructKind
                         Private
                         Shared
@@ -131,7 +132,7 @@ spec = do
                     ( Record
                         (Identifier "Point")
                         []
-                        (Named [(Identifier "x", TypeIntegral (Signed 32), True), (Identifier "y", TypeIntegral (Signed 32), True)])
+                        (Named $ V.fromList [(Identifier "x", TypeIntegral (Signed 32), True), (Identifier "y", TypeIntegral (Signed 32), True)])
                         StructKind
                         Private
                         Shared
@@ -143,7 +144,7 @@ spec = do
                     ( Record
                         (Identifier "Point")
                         []
-                        (Unnamed [(TypeIntegral (Signed 32), True), (TypeIntegral (Signed 32), True)])
+                        (Unnamed $ V.fromList [(TypeIntegral (Signed 32), True), (TypeIntegral (Signed 32), True)])
                         StructKind
                         Private
                         Shared
@@ -155,7 +156,7 @@ spec = do
                     ( Record
                         (Identifier "Point")
                         []
-                        (Unnamed [(TypeIntegral (Signed 32), False), (TypeIntegral (Signed 32), False)])
+                        (Unnamed $ V.fromList [(TypeIntegral (Signed 32), False), (TypeIntegral (Signed 32), False)])
                         StructKind
                         Private
                         Value
@@ -168,10 +169,11 @@ spec = do
                     ( Record
                         (Identifier "Option")
                         [(Identifier "T", [])]
-                        ( Variants
-                            [ (Identifier "Some", [TypeExpr (Path (Identifier "T") []) []])
-                            , (Identifier "None", [])
-                            ]
+                        ( Variants $
+                            V.fromList
+                                [ (Identifier "Some", V.fromList [TypeExpr (Path (Identifier "T") []) []])
+                                , (Identifier "None", V.empty)
+                                ]
                         )
                         EnumKind
                         Private
@@ -184,10 +186,11 @@ spec = do
                     ( Record
                         (Identifier "Result")
                         [(Identifier "T", []), (Identifier "E", [])]
-                        ( Variants
-                            [ (Identifier "Ok", [TypeExpr (Path (Identifier "T") []) []])
-                            , (Identifier "Err", [TypeExpr (Path (Identifier "E") []) []])
-                            ]
+                        ( Variants $
+                            V.fromList
+                                [ (Identifier "Ok", V.fromList [TypeExpr (Path (Identifier "T") []) []])
+                                , (Identifier "Err", V.fromList [TypeExpr (Path (Identifier "E") []) []])
+                                ]
                         )
                         EnumKind
                         Public

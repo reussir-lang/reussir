@@ -6,6 +6,7 @@ module Reussir.Core2.Semi.Pretty (
     PrettyColored (..),
 ) where
 
+import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
 import Effectful (Eff, IOE, (:>))
 import Effectful.Prim (Prim)
@@ -266,13 +267,13 @@ instance PrettyColored Record where
             pure $ nDoc <> "@" <> pretty gid
 
         prettyFields (Unnamed fs) = do
-            fsDocs <- mapM prettyUnnamedField fs
+            fsDocs <- mapM prettyUnnamedField (V.toList fs)
             pure $ parens (commaSep fsDocs)
         prettyFields (Variants vs) = do
-            vsDocs <- mapM prettyColored vs
+            vsDocs <- mapM prettyColored (V.toList vs)
             pure $ braces (nest 4 (hardline <> vsep (punctuate comma vsDocs)) <> hardline)
         prettyFields (Named fs) = do
-            fsDocs <- mapM prettyField fs
+            fsDocs <- mapM prettyField (V.toList fs)
             pure $ braces (nest 4 (hardline <> vsep (punctuate comma fsDocs)) <> hardline)
 
         prettyField (n, t, fld) = do

@@ -194,19 +194,19 @@ instance PrettyColored Stmt where
                 <+> prettyColored name
             <> prettyGenerics tyParams
             <> case fields of
-                S.Unnamed fs -> parens (commaSep (map prettyUnnamedField fs))
-                S.Variants vs -> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyVariant vs))) <> hardline)
-                S.Named fs -> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyField fs))) <> hardline)
+                S.Unnamed fs -> parens (commaSep (V.map prettyUnnamedField fs))
+                S.Variants vs -> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyVariant $ V.toList vs))) <> hardline)
+                S.Named fs -> braces (nest 4 (hardline <> vsep (punctuate comma (map prettyField $ V.toList fs))) <> hardline)
       where
         prettyGenerics [] = emptyDoc
         prettyGenerics gs = angles (commaSep (map prettyGeneric gs))
         prettyGeneric (n, bounds) = prettyColored n <> if null bounds then emptyDoc else operator ":" <+> concatWith (surround (operator "+")) (map prettyColored bounds)
-        prettyVariant (n, ts) = prettyColored n <> if null ts then emptyDoc else parens (commaSep (map prettyColored ts))
+        prettyVariant (n, ts) = prettyColored n <> if null ts then emptyDoc else parens (commaSep (V.map prettyColored ts))
         prettyField (n, t, fld) = prettyColored n <> operator ":" <+> prettyFieldFlag fld <> prettyColored t
         prettyUnnamedField (t, fld) = prettyFieldFlag fld <> prettyColored t
         prettyFieldFlag False = emptyDoc
         prettyFieldFlag True = brackets (keyword "field") <> space
     prettyColored (SpannedStmt w) = prettyColored (spanValue w)
 
-commaSep :: [Doc AnsiStyle] -> Doc AnsiStyle
+commaSep :: (Foldable t) => t (Doc AnsiStyle) -> Doc AnsiStyle
 commaSep = concatWith (surround (comma <> space))

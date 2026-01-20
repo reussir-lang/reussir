@@ -1,5 +1,6 @@
 module Reussir.Parser.Types.Stmt where
 
+import Data.Vector.Strict qualified as V
 import Reussir.Parser.Types.Capability (Capability)
 import Reussir.Parser.Types.Expr (Expr)
 import Reussir.Parser.Types.Lexer (Identifier, Path, WithSpan)
@@ -11,9 +12,9 @@ type FieldFlag = Bool
 type FlexFlag = Bool
 
 data RecordFields
-    = Named [(Identifier, Type, FieldFlag)]
-    | Unnamed [(Type, FieldFlag)]
-    | Variants [(Identifier, [Type])]
+    = Named (V.Vector (Identifier, Type, FieldFlag))
+    | Unnamed (V.Vector (Type, FieldFlag))
+    | Variants (V.Vector (Identifier, V.Vector Type))
     deriving (Show, Eq)
 
 data RecordKind = StructKind | EnumKind deriving (Show, Eq)
