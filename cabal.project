@@ -12,7 +12,7 @@ packages:
 with-compiler: ghc
 
 -- Optimization settings
-optimization: True
+optimization: 2
 
 -- Documentation
 documentation: False
