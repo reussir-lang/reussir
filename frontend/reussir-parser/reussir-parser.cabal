@@ -98,7 +98,7 @@ library
     -- Base language which the package is written in.
     default-language: GHC2024
 
-executable reussir-frontend
+executable reussir-parser
     -- Import common warning flags.
     import:           warnings
 
