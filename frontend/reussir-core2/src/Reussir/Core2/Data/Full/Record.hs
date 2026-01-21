@@ -2,6 +2,7 @@ module Reussir.Core2.Data.Full.Record where
 
 import Data.HashTable.IO qualified as H
 
+import Data.Int (Int64)
 import Data.Vector.Strict qualified as V
 import Reussir.Codegen.Context.Symbol (Symbol)
 import Reussir.Codegen.Type.Data (Capability)
@@ -31,6 +32,7 @@ data Record = Record
     , recordFields :: RecordFields -- Instantiated fields
     , recordKind :: RecordKind -- Instantiated kind
     , recordDefaultCap :: Capability -- The default capability
+    , recordSpan :: Maybe (Int64, Int64)
     }
     deriving (Show, Eq)
 

@@ -1,5 +1,6 @@
 module Reussir.Core2.Data.Semi.Record where
 
+import Data.Int (Int64)
 import Data.Vector.Strict qualified as V
 import Reussir.Core2.Data.Semi.Type (Type)
 import Reussir.Core2.Data.UniqueID (GenericID)
@@ -28,5 +29,6 @@ data Record = Record
     , recordKind :: RecordKind
     , recordVisibility :: Visibility
     , recordDefaultCap :: Capability
+    , recordSpan :: Maybe (Int64, Int64)
     }
     deriving (Show, Eq)

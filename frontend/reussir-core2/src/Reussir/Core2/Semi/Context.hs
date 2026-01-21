@@ -365,6 +365,8 @@ scanStmtImpl (Syn.RecordStmt record) = do
                 Syn.StructKind -> StructKind
                 Syn.EnumKind -> EnumKind
 
+        recSpan <- State.gets currentSpan
+
         let semRecord =
                 Record
                     { recordName = Path name [] -- TODO: handle module path
@@ -373,6 +375,7 @@ scanStmtImpl (Syn.RecordStmt record) = do
                     , recordKind = kind
                     , recordVisibility = Syn.recordVisibility record
                     , recordDefaultCap = Syn.recordDefaultCap record
+                    , recordSpan = recSpan
                     }
 
         -- For variant, we add each sub-variant as a record, with recordName
@@ -390,6 +393,7 @@ scanStmtImpl (Syn.RecordStmt record) = do
                                 , recordKind = EnumVariant{variantParent = Path name [], variantIdx}
                                 , recordVisibility = Syn.recordVisibility record
                                 , recordDefaultCap = Syn.Value
+                                , recordSpan = Just (s, e)
                                 }
                     addRecordDefinition variantPath variantRecord
             _ -> return ()

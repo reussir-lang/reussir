@@ -6,7 +6,6 @@ module Reussir.Core2.Full.Record where
 import Control.Monad
 import Data.Either (partitionEithers)
 import Data.HashTable.IO qualified as H
-import Data.Int (Int64)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Maybe (fromMaybe)
 import Data.Traversable (for)
@@ -29,8 +28,8 @@ import Prelude hiding (span)
 -- Assume that tyArgs is concrete
 
 -- Assume that tyArgs is concrete
-instantiateRecord :: (IOE :> es) => (Int64, Int64) -> [Semi.Type] -> SemiRecordTable -> Semi.Record -> Eff es (Either [Error] Record)
-instantiateRecord span tyArgs semiRecords (Semi.Record path tyParams fields kind _ cap) = do
+instantiateRecord :: (IOE :> es) => [Semi.Type] -> SemiRecordTable -> Semi.Record -> Eff es (Either [Error] Record)
+instantiateRecord tyArgs semiRecords (Semi.Record path tyParams fields kind _ cap recSpan) = do
     let mangledName = mangleABIName (Semi.TypeRecord path tyArgs Semi.Irrelevant)
     let symbol = verifiedSymbol mangledName
     let genericMap =
@@ -59,8 +58,11 @@ instantiateRecord span tyArgs semiRecords (Semi.Record path tyParams fields kind
                         , recordFields = fds
                         , recordKind = kind'
                         , recordDefaultCap = cap'
+                        , recordSpan = recSpan
                         }
   where
+    span = fromMaybe (0, 0) recSpan
+
     -- Field does not allow rc wrapper as it will uses capability to decide the projected type.
     removeTopLevelRc :: Type -> Type
     removeTopLevelRc (TypeRc ty _) = ty
@@ -165,8 +167,7 @@ convertSemiRecordTable semiRecords genericState = do
             error "No solutions found for generic parameters"
         -- Instantiate and insert for each combination
         results <- for argCombinations \args -> do
-            -- TODO: Use actual span from Semi.Record or context if available. Currently using (0,0) as placeholder.
-            instantiated <- instantiateRecord (0, 0) args semiRecords record
+            instantiated <- instantiateRecord args semiRecords record
             case instantiated of
                 Right rec -> do
                     liftIO $ H.insert fullTable (recordName rec) rec

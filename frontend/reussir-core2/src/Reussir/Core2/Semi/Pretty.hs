@@ -243,7 +243,7 @@ instance PrettyColored Expr where
                 pure $ kindDoc <+> comment (":" <+> tyDoc)
 
 instance PrettyColored Record where
-    prettyColored (Record name tyParams fields kind vis cap) = do
+    prettyColored (Record name tyParams fields kind vis cap _) = do
         visDoc <- prettyColored vis
         capDoc <- prettyColored cap
         nameDoc <- prettyColored name
