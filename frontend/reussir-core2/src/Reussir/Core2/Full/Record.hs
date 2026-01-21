@@ -11,12 +11,20 @@ import Data.Maybe (fromMaybe)
 import Data.Traversable (for)
 import Data.Vector.Strict qualified as V
 import Effectful (Eff, IOE, liftIO, (:>))
+import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen.Context.Symbol (verifiedSymbol)
 import Reussir.Codegen.Type (Capability (Regional))
+import Reussir.Core2.Data.Full.Context
 import Reussir.Core2.Data.Full.Error (Error (..), ErrorKind (..))
-import Reussir.Core2.Data.Full.Record (FieldFlag, FullRecordTable, Record (..), RecordFields (..), RecordKind (..), SemiRecordTable)
+import Reussir.Core2.Data.Full.Record (
+    FieldFlag,
+    Record (..),
+    RecordFields (..),
+    RecordKind (..),
+    SemiRecordTable,
+ )
 import Reussir.Core2.Data.Full.Type (Type (..))
-import Reussir.Core2.Data.Generic (GenericState (..))
+import Reussir.Core2.Data.Generic (GenericSolution)
 import Reussir.Core2.Data.Semi.Record qualified as Semi
 import Reussir.Core2.Data.Semi.Type qualified as Semi
 import Reussir.Core2.Data.UniqueID (GenericID (..))
@@ -138,17 +146,16 @@ instantiateRecord tyArgs semiRecords (Semi.Record path tyParams fields kind _ ca
             pure $ Right $ Variants vs'
 
 convertSemiRecordTable ::
-    (IOE :> es) =>
     SemiRecordTable ->
-    GenericState ->
-    Eff es ([Error], FullRecordTable)
-convertSemiRecordTable semiRecords genericState = do
-    fullTable <- liftIO H.new
+    GenericSolution ->
+    GlobalFullEff [Error]
+convertSemiRecordTable semiRecords genericSolution = do
+    State.modify $ \st -> st{ctxSemiRecords = semiRecords}
+    fullTable <- State.gets ctxRecords
     -- Iterate over all semi records
     recordList <- liftIO $ H.toList semiRecords
     results <- for recordList (processRecord fullTable)
-    let errors = concatMap fst results
-    pure (errors, fullTable)
+    pure $ concatMap fst results
   where
     processRecord fullTable (_, record) = do
         let tyParams = Semi.recordTyParams record
@@ -158,13 +165,11 @@ convertSemiRecordTable semiRecords genericState = do
                 else do
                     -- Retrieve solutions for each generic parameter
                     paramSolutions <- for tyParams \(_, GenericID gid) -> do
-                        solutions <- liftIO $ H.lookup (concreteFlow genericState) (GenericID gid)
+                        solutions <- liftIO $ H.lookup genericSolution (GenericID gid)
                         pure $ fromMaybe [] solutions
 
                     -- Compute cross-product
                     pure $ sequence paramSolutions
-        when (null argCombinations) $ do
-            error "No solutions found for generic parameters"
         -- Instantiate and insert for each combination
         results <- for argCombinations \args -> do
             instantiated <- instantiateRecord args semiRecords record

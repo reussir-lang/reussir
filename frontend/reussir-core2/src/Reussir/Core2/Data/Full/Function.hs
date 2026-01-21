@@ -1,5 +1,6 @@
 module Reussir.Core2.Data.Full.Function where
 
+import Data.HashTable.IO qualified as H
 import Data.Int (Int64)
 import Reussir.Codegen.Context.Symbol (Symbol)
 import Reussir.Core2.Data.Full.Expr qualified as Full
@@ -19,3 +20,5 @@ data Function = Function
     , funcBody :: Maybe Full.Expr
     , funcSpan :: Maybe (Int64, Int64)
     }
+
+type FunctionTable = H.CuckooHashTable Symbol Function

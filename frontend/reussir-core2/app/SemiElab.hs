@@ -13,11 +13,11 @@ import GHC.IO.Handle.FD (stderr)
 import Log (LogLevel (..))
 import Log.Backend.StandardOutput qualified as L
 import Options.Applicative
-import Prettyprinter (hardline)
+import Prettyprinter (hardline, unAnnotate)
 import Prettyprinter.Render.Terminal (putDoc)
 import Reussir.Bridge qualified as B
-import Reussir.Core2.Data.Semi.Function (FunctionTable (..))
 import Reussir.Core2.Data.Semi.Context (SemiContext (..))
+import Reussir.Core2.Data.Semi.Function (FunctionTable (..))
 import Reussir.Core2.Semi.Context (emptySemiContext, scanStmt)
 import Reussir.Core2.Semi.FlowAnalysis (solveAllGenerics)
 import Reussir.Core2.Semi.Pretty (prettyColored)
@@ -27,7 +27,7 @@ import Reussir.Parser.Prog (parseProg)
 import Reussir.Parser.Types.Lexer (WithSpan (..))
 import Reussir.Parser.Types.Stmt qualified as Syn
 import System.Exit (exitFailure, exitSuccess)
-import System.IO (hPutStrLn)
+import System.IO (hIsTerminalDevice, hPutStrLn, stdout)
 import Text.Megaparsec (errorBundlePretty, runParser)
 
 data Args = Args
@@ -80,6 +80,12 @@ main = do
                                     return ()
                                 _ -> return ()
 
+                        let putDoc' doc = do
+                                isTTy <- liftIO $ hIsTerminalDevice stdout
+                                if isTTy
+                                    then liftIO $ putDoc (doc <> hardline)
+                                    else liftIO $ putDoc (unAnnotate doc <> hardline)
+
                         -- Solve generics
                         slns <- inject solveAllGenerics
                         case slns of
@@ -90,7 +96,7 @@ main = do
                                     liftIO $ putStrLn $ "Generic " ++ show gid ++ " should be instantiated to:"
                                     forM_ types $ \ty -> do
                                         doc <- prettyColored ty
-                                        liftIO $ putDoc (doc <> hardline)
+                                        liftIO $ putDoc' (doc <> hardline)
                             Nothing -> pure ()
 
                         liftIO $ putStrLn ";; Elaborated Records"
@@ -98,14 +104,14 @@ main = do
                         recs <- liftIO $ H.toList knownRecs
                         forM_ recs $ \(_, record) -> do
                             doc <- prettyColored record
-                            liftIO $ putDoc (doc <> hardline)
+                            liftIO $ putDoc' (doc <> hardline)
 
                         liftIO $ putStrLn "\n;; Elaborated Functions"
                         funcsTbl <- State.gets functions
                         funcs <- liftIO $ H.toList (functionProtos funcsTbl)
                         forM_ funcs $ \(_, proto) -> do
                             doc <- prettyColored proto
-                            liftIO $ putDoc (doc <> hardline)
+                            liftIO $ putDoc' (doc <> hardline)
 
             forM_ (translationReports finalState) $ \report -> do
                 runEff $ displayReport report repository 0 stderr

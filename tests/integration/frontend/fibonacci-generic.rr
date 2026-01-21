@@ -1,4 +1,12 @@
 // RUN: %reussir-semi-elab %s
+// RUN: %reussir-full-elab %s | %FileCheck %s
+
+// CHECK-DAG: struct _RIC6MatrixyE (aka Matrix<u64>){
+// CHECK-NEXT-DAG: m00: u64,
+// CHECK-NEXT-DAG: m01: u64,
+// CHECK-NEXT-DAG: m10: u64,
+// CHECK-NEXT-DAG: m11: u64
+// CHECK-NEXT-DAG: }
 struct [value] Matrix<T : Num> {
     m00: T, 
     m01: T,
@@ -6,6 +14,13 @@ struct [value] Matrix<T : Num> {
     m11: T
 }
 
+// CHECK-DAG: fn _RIC6matmulyE<u64>(a: _RIC6MatrixyE, b: _RIC6MatrixyE) -> _RIC6MatrixyE {
+// CHECK-NEXT-DAG: let v2 (m00) : u64 = ((v0.0 : u64 * v1.0 : u64) : u64 + (v0.1 : u64 * v1.2 : u64) : u64) : u64 in
+// CHECK-NEXT-DAG: let v3 (m01) : u64 = ((v0.0 : u64 * v1.1 : u64) : u64 + (v0.1 : u64 * v1.3 : u64) : u64) : u64 in
+// CHECK-NEXT-DAG: let v4 (m10) : u64 = ((v0.2 : u64 * v1.0 : u64) : u64 + (v0.3 : u64 * v1.2 : u64) : u64) : u64 in
+// CHECK-NEXT-DAG: let v5 (m11) : u64 = ((v0.2 : u64 * v1.1 : u64) : u64 + (v0.3 : u64 * v1.3 : u64) : u64) : u64 in
+// CHECK-NEXT-DAG: compound(v2, v3, v4, v5) : _RIC6MatrixyE
+// CHECK-NEXT-DAG: }
 fn matmul<T : Num>(a : Matrix<T>, b : Matrix<T>) -> Matrix<T> {
     let m00 = a.m00 * b.m00 + a.m01 * b.m10;
     let m01 = a.m00 * b.m01 + a.m01 * b.m11;

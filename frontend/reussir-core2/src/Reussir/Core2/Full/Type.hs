@@ -4,7 +4,6 @@ import Data.Either (partitionEithers)
 import Data.HashTable.IO qualified as H
 import Data.Int (Int64)
 import Data.IntMap.Strict qualified as IntMap
-import Data.Maybe (fromMaybe)
 import Effectful (Eff, IOE, liftIO, (:>))
 import Reussir.Codegen.Context.Symbol (verifiedSymbol)
 import Reussir.Codegen.Type (Capability (..))
@@ -38,7 +37,10 @@ convertSemiType span genericMap semiRecords semiType = do
                 mangledSymbol = mangleABIName (Semi.TypeRecord path instantiatedTyArgs flex)
                 symbol = verifiedSymbol mangledSymbol
             record <- liftIO $ H.lookup semiRecords path
-            let defaultCap = fromMaybe Syn.Value (fmap Semi.recordDefaultCap record)
+            record' <- case record of
+                Nothing -> error $ "Record " ++ show path ++ " not found in semi records"
+                Just r -> pure r
+            let defaultCap = Semi.recordDefaultCap record'
             case (defaultCap, flex) of
                 (Syn.Value, _) -> pure $ Right $ TypeRecord symbol
                 (Syn.Shared, Semi.Irrelevant) -> pure $ Right $ TypeRc (TypeRecord symbol) Shared
