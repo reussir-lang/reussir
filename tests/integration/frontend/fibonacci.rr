@@ -1,4 +1,37 @@
 // RUN: %reussir-elab --mode semi %s
+// RUN: %reussir-elab --mode full %s | %FileCheck %s
+
+// CHECK-DAG: pub fn _RC14fibonacci_iter(n: u64) -> u64 {
+// CHECK-NEXT-DAG: fibonacci_iter_impl(v0, 0.0 : u64, 1.0 : u64) : u64
+// CHECK-NEXT-DAG: }
+
+// CHECK-DAG: fn _RC26fibonacci_logarithmic_impl(n: u64, a00: u64, a01: u64, a10: u64, a11: u64, b00: u64, b01: u64, b10: u64, b11: u64) -> u64 {
+// CHECK-NEXT-DAG: if (v0 == 0.0 : u64) : bool then
+// CHECK-NEXT-DAG: v2
+// CHECK-NEXT-DAG: else
+// CHECK-NEXT-DAG: if ((v0 % 2.0 : u64) : u64 == 1.0 : u64) : bool then
+// CHECK-NEXT-DAG: let v9 (na00) : u64 = ((v1 * v5) : u64 + (v2 * v7) : u64) : u64 in
+// CHECK-NEXT-DAG: let v10 (na01) : u64 = ((v1 * v6) : u64 + (v2 * v8) : u64) : u64 in
+// CHECK-NEXT-DAG: let v11 (na10) : u64 = ((v3 * v5) : u64 + (v4 * v7) : u64) : u64 in
+// CHECK-NEXT-DAG: let v12 (na11) : u64 = ((v3 * v6) : u64 + (v4 * v8) : u64) : u64 in
+// CHECK-NEXT-DAG: fibonacci_logarithmic_impl((v0 / 2.0 : u64) : u64, v9, v10, v11, v12, ((v5 * v5) : u64 + (v6 * v7) : u64) : u64, ((v5 * v6) : u64 + (v6 * v8) : u64) : u64, ((v7 * v5) : u64 + (v8 * v7) : u64) : u64, ((v7 * v6) : u64 + (v8 * v8) : u64) : u64) : u64
+// CHECK-NEXT-DAG: else
+// CHECK-NEXT-DAG: fibonacci_logarithmic_impl((v0 / 2.0 : u64) : u64, v1, v2, v3, v4, ((v5 * v5) : u64 + (v6 * v7) : u64) : u64, ((v5 * v6) : u64 + (v6 * v8) : u64) : u64, ((v7 * v5) : u64 + (v8 * v7) : u64) : u64, ((v7 * v6) : u64 + (v8 * v8) : u64) : u64) : u64
+// CHECK-NEXT-DAG: }
+
+// CHECK-DAG: pub fn _RC9fibonacci(n: u64) -> u64 {
+// CHECK-NEXT-DAG: if (v0 <= 1.0 : u64) : bool then
+// CHECK-NEXT-DAG: v0
+// CHECK-NEXT-DAG: else
+// CHECK-NEXT-DAG: (fibonacci((v0 - 1.0 : u64) : u64) : u64 + fibonacci((v0 - 2.0 : u64) : u64) : u64) : u64
+// CHECK-NEXT-DAG: }
+
+// CHECK-DAG: fn _RC19fibonacci_iter_impl(n: u64, acc0: u64, acc1: u64) -> u64 {
+// CHECK-NEXT-DAG: if (v0 == 0.0 : u64) : bool then
+// CHECK-NEXT-DAG: v1
+// CHECK-NEXT-DAG: else
+// CHECK-NEXT-DAG: fibonacci_iter_impl((v0 - 1.0 : u64) : u64, v2, (v1 + v2) : u64) : u64
+// CHECK-NEXT-DAG: }
 pub fn fibonacci(n: u64) -> u64 {
     if n <= 1 {
         n

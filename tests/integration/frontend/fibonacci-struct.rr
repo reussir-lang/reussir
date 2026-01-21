@@ -1,4 +1,30 @@
 // RUN: %reussir-elab --mode semi %s
+// RUN: %reussir-elab --mode full %s | %FileCheck %s
+
+// CHECK-DAG: struct _RC6Matrix (aka Matrix){
+// CHECK-NEXT-DAG: m00: u64,
+// CHECK-NEXT-DAG: m01: u64,
+// CHECK-NEXT-DAG: m10: u64,
+// CHECK-NEXT-DAG: m11: u64
+// CHECK-NEXT-DAG: }
+
+// CHECK-DAG: fn _RC26fibonacci_logarithmic_impl(n: u64, a: _RC6Matrix, b: _RC6Matrix) -> u64 {
+// CHECK-NEXT-DAG: if (v0 == 0.0 : u64) : bool then
+// CHECK-NEXT-DAG: v1.1 : u64
+// CHECK-NEXT-DAG: else
+// CHECK-NEXT-DAG: if ((v0 % 2.0 : u64) : u64 == 1.0 : u64) : bool then
+// CHECK-NEXT-DAG: fibonacci_logarithmic_impl((v0 / 2.0 : u64) : u64, matmul(v1, v2) : _RC6Matrix, matmul(v2, v2) : _RC6Matrix) : u64
+// CHECK-NEXT-DAG: else
+// CHECK-NEXT-DAG: fibonacci_logarithmic_impl((v0 / 2.0 : u64) : u64, v1, matmul(v2, v2) : _RC6Matrix) : u64
+// CHECK-NEXT-DAG: }
+
+// CHECK-DAG: fn _RC6matmul(a: _RC6Matrix, b: _RC6Matrix) -> _RC6Matrix {
+// CHECK-NEXT-DAG: let v2 (m00) : u64 = ((v0.0 : u64 * v1.0 : u64) : u64 + (v0.1 : u64 * v1.2 : u64) : u64) : u64 in
+// CHECK-NEXT-DAG: let v3 (m01) : u64 = ((v0.0 : u64 * v1.1 : u64) : u64 + (v0.1 : u64 * v1.3 : u64) : u64) : u64 in
+// CHECK-NEXT-DAG: let v4 (m10) : u64 = ((v0.2 : u64 * v1.0 : u64) : u64 + (v0.3 : u64 * v1.2 : u64) : u64) : u64 in
+// CHECK-NEXT-DAG: let v5 (m11) : u64 = ((v0.2 : u64 * v1.1 : u64) : u64 + (v0.3 : u64 * v1.3 : u64) : u64) : u64 in
+// CHECK-NEXT-DAG: compound(v2, v3, v4, v5) : _RC6Matrix
+// CHECK-NEXT-DAG: }
 struct [value] Matrix {
     m00: u64, 
     m01: u64,

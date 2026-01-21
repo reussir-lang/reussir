@@ -1,4 +1,29 @@
 // RUN: %reussir-elab --mode semi %s
+// RUN: %reussir-elab --mode full %s | %FileCheck %s
+
+// CHECK-DAG: struct _RC4Data (aka Data){
+// CHECK-NEXT-DAG: value: u64
+// CHECK-NEXT-DAG: }
+
+// CHECK-DAG: struct _RC6RegBox (aka RegBox){
+// CHECK-NEXT-DAG: value: [field] _RC4Data
+// CHECK-NEXT-DAG: }
+
+// CHECK-DAG: struct _RIC5RcBoxlE (aka RcBox<i32>){
+// CHECK-NEXT-DAG: value: i32
+// CHECK-NEXT-DAG: }
+
+// CHECK-DAG: fn _RC3baz(reg: Rc<_RC6RegBox, Rigid>) -> Nullable<Rc<_RC4Data, Rigid>> {
+// CHECK-NEXT-DAG: v0.0 : Nullable<Rc<_RC4Data, Regional>>
+// CHECK-NEXT-DAG: }
+
+// CHECK-DAG: fn _RC3foo() -> Nullable<Rc<_RIC5RcBoxlE, Shared>> {
+// CHECK-NEXT-DAG: nonnull{rc_wrap(compound(1.0 : i32) : _RIC5RcBoxlE) : Rc<_RIC5RcBoxlE, Shared>} : Nullable<Rc<_RIC5RcBoxlE, Shared>>
+// CHECK-NEXT-DAG: }
+
+// CHECK-DAG: fn _RC3bar() -> Nullable<Rc<_RIC5RcBoxdE, Shared>> {
+// CHECK-NEXT-DAG: null : Nullable<Rc<_RIC5RcBoxdE, Shared>>
+// CHECK-NEXT-DAG: }
 struct RcBox<T> {
     value: T
 }

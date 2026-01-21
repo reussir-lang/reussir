@@ -1,4 +1,13 @@
 // RUN: %reussir-elab --mode semi %s
+// RUN: %reussir-elab --mode full %s | %FileCheck %s
+
+// CHECK-DAG: fn _RC3cos(x: f64) -> f64 {
+// CHECK-NEXT-DAG: intrinsic<core::intrinsic::math::cos>(v0, 1.0 : i32) : f64
+// CHECK-NEXT-DAG: }
+
+// CHECK-DAG: fn _RC3sin(x: f64) -> f64 {
+// CHECK-NEXT-DAG: intrinsic<core::intrinsic::math::sin>(v0, 127.0 : i32) : f64
+// CHECK-NEXT-DAG: }
 fn cos(x : f64) -> f64 {
     core::intrinsic::math::cos(x, 1)
 }
