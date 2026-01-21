@@ -76,18 +76,13 @@ instantiateRecord tyArgs semiRecords (Semi.Record path tyParams fields kind _ ca
     removeTopLevelRc (TypeRc ty _) = ty
     removeTopLevelRc ty = ty
 
-    isRecord :: Type -> Bool
-    isRecord (TypeRecord _) = True
-    isRecord _ = False
-
     isRegional :: Type -> Bool
     isRegional (TypeRc _ Regional) = True
     isRegional _ = False
 
     validateField :: (IOE :> es') => Type -> FieldFlag -> Int -> Eff es' (Either Error ())
     validateField fullTy isMutable idx = do
-        let dimTy = removeTopLevelRc fullTy
-        if isMutable && isRecord dimTy && not (isRegional fullTy)
+        if isMutable && not (isRegional fullTy)
             then
                 pure $
                     Left $

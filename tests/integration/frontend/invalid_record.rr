@@ -1,0 +1,11 @@
+// RUN: %reussir-semi-elab %s
+// RUN: %not %reussir-full-elab %s
+
+
+struct [regional] Matrix<T> {
+    m00: [field] T 
+}
+
+fn test() -> Matrix<u64> {
+    regional {Matrix{ m00 : 0 }}
+}
