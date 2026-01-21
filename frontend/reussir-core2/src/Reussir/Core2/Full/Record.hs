@@ -3,6 +3,7 @@
 
 module Reussir.Core2.Full.Record where
 
+import Control.Monad
 import Data.Either (partitionEithers)
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
@@ -128,14 +129,19 @@ convertSemiRecordTable semiRecords genericState = do
   where
     processRecord fullTable (_, record) = do
         let tyParams = Semi.recordTyParams record
-        -- Retrieve solutions for each generic parameter
-        paramSolutions <- for tyParams \(_, GenericID gid) -> do
-            solutions <- liftIO $ H.lookup (concreteFlow genericState) (GenericID gid)
-            pure $ fromMaybe [] solutions
+        argCombinations <-
+            if null tyParams
+                then pure [[]]
+                else do
+                    -- Retrieve solutions for each generic parameter
+                    paramSolutions <- for tyParams \(_, GenericID gid) -> do
+                        solutions <- liftIO $ H.lookup (concreteFlow genericState) (GenericID gid)
+                        pure $ fromMaybe [] solutions
 
-        -- Compute cross-product
-        let argCombinations = sequence paramSolutions
-
+                    -- Compute cross-product
+                    pure $ sequence paramSolutions
+        when (null argCombinations) $ do
+            error "No solutions found for generic parameters"
         -- Instantiate and insert for each combination
         results <- for argCombinations \args -> do
             instantiated <- instantiateRecord args semiRecords record
