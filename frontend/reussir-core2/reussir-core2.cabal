@@ -89,32 +89,11 @@ library
     hs-source-dirs:   src
     default-language: GHC2024
 
-executable reussir-semi-elab
+executable reussir-elab
     import:           warnings
-    main-is:          SemiElab.hs
+    main-is:          Elab.hs
     build-depends:
-        base ^>=4.20.2.0,
-        reussir-core2,
-        reussir-bridge,
-        reussir-parser,
-        reussir-diagnostic,
-        optparse-applicative,
-        text,
-        effectful,
-        log-effectful,
-        log-base,
-        megaparsec,
-        prettyprinter,
-        hashtables,
-        prettyprinter-ansi-terminal
-    hs-source-dirs:   app
-    default-language: GHC2024
-
-executable reussir-full-elab
-    import:           warnings
-    main-is:          FullElab.hs
-    build-depends:
-        base ^>=4.20.2.0,
+        base >=4.20.2.0,
         reussir-core2,
         reussir-bridge,
         reussir-parser,

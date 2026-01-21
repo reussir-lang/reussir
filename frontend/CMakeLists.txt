@@ -7,5 +7,4 @@ function(add_frontend_target target_name)
     add_dependencies(${target_name} MLIRReussirBridge)
 endfunction()
 
-add_frontend_target(reussir-semi-elab)
-add_frontend_target(reussir-full-elab)
+add_frontend_target(reussir-elab)

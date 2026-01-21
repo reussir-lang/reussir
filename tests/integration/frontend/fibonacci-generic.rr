@@ -1,5 +1,5 @@
-// RUN: %reussir-semi-elab %s
-// RUN: %reussir-full-elab %s | %FileCheck %s
+// RUN: %reussir-elab --mode semi %s
+// RUN: %reussir-elab --mode full %s | %FileCheck %s
 
 // CHECK-DAG: struct _RIC6MatrixyE (aka Matrix<u64>){
 // CHECK-NEXT-DAG: m00: u64,

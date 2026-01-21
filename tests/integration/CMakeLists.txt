@@ -23,8 +23,7 @@ else()
 endif()
 
 set(rustc_path ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/rustc${CMAKE_EXECUTABLE_SUFFIX})
-set(reussir_semi_elab_path ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/reussir-semi-elab${CMAKE_EXECUTABLE_SUFFIX})
-set(reussir_full_elab_path ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/reussir-full-elab${CMAKE_EXECUTABLE_SUFFIX})
+set(reussir_elab_path ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/reussir-elab${CMAKE_EXECUTABLE_SUFFIX})
 configure_file(lit.site.cfg.py.in lit.site.cfg.py @ONLY)
 
 if(DEFINED ENV{MSYSTEM_PREFIX})
@@ -49,5 +48,5 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 add_custom_target(check
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/lit "${CMAKE_CURRENT_BINARY_DIR}" -v
-  DEPENDS reussir-opt reussir-rt reussir-translate reussir-semi-elab)
+  DEPENDS reussir-opt reussir-rt reussir-translate reussir-elab)
 

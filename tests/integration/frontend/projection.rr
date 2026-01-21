@@ -1,4 +1,4 @@
-// RUN: %reussir-semi-elab %s
+// RUN: %reussir-elab --mode semi %s
 struct [value] Point {
     x : u64,
     y : u64

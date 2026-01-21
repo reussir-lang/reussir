@@ -1,5 +1,5 @@
-// RUN: %reussir-semi-elab %s
-// RUN: %not %reussir-full-elab %s
+// RUN: %reussir-elab --mode semi %s
+// RUN: %not %reussir-elab --mode full %s
 
 
 struct [regional] Matrix<T> {

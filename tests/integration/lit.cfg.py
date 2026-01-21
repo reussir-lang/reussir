@@ -24,8 +24,7 @@ config.substitutions.append((r'%library_path', config.library_path))
 config.substitutions.append((r'%llc', config.llc_path))
 config.substitutions.append((r'%extra_sys_libs', config.extra_sys_libs))
 config.substitutions.append((r'%lli', config.lli_path))
-config.substitutions.append((r'%reussir-semi-elab', config.reussir_semi_elab_path))
-config.substitutions.append((r'%reussir-full-elab', config.reussir_full_elab_path))
+config.substitutions.append((r'%reussir-elab', config.reussir_elab_path))
 
 # TODO: should we support macos?
 if sys.platform == 'windows':
