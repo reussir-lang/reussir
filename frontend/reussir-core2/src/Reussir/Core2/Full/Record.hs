@@ -10,6 +10,7 @@ import Data.IntMap.Strict qualified as IntMap
 import Data.Maybe (fromMaybe)
 import Data.Traversable (for)
 import Data.Vector.Strict qualified as V
+import Data.Vector.Strict.Mutable qualified as MV
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen.Context.Symbol (verifiedSymbol)
@@ -95,50 +96,63 @@ instantiateRecord tyArgs semiRecords (Semi.Record path tyParams fields kind _ ca
             else pure $ Right ()
 
     instantiateField :: (IOE :> es') => IntMap.IntMap Semi.Type -> Semi.RecordFields -> Eff es' (Either [Error] RecordFields)
-    instantiateField genericMap fieldsToInstantiate = case fieldsToInstantiate of
-        Semi.Named fs -> do
-            results <- for (zip [0 ..] (V.toList fs)) \(idx, WithSpan (name, ty, f) start end) -> do
-                rawTyResult <- convertSemiType (start, end) genericMap semiRecords ty
+    instantiateField genericMap fieldsToInstantiate = do
+        let
+            convertAndValidate acc idx ty f span' mName mv = do
+                rawTyResult <- convertSemiType span' genericMap semiRecords ty
                 case rawTyResult of
-                    Left errs -> pure $ Left errs
+                    Left errs -> pure $ case acc of
+                        Left existing -> Left (existing ++ errs)
+                        Right () -> Left errs
                     Right rawTy -> do
                         validation <- validateField rawTy f idx
                         case validation of
-                            Left err -> pure $ Left [err]
+                            Left err -> pure $ case acc of
+                                Left existing -> Left (existing ++ [err])
+                                Right () -> Left [err]
                             Right () -> do
                                 let ty' = removeTopLevelRc rawTy
-                                pure $ Right (Just name, ty', f)
-            let (errors, successes) = partitionEithers results
-            case errors of
-                (_ : _) -> pure $ Left (concat errors)
-                [] -> pure $ Right (Components (V.fromList successes))
-        Semi.Unnamed fs -> do
-            results <- for (zip [0 ..] (V.toList fs)) \(idx, WithSpan (ty, f) start end) -> do
-                rawTyResult <- convertSemiType (start, end) genericMap semiRecords ty
-                case rawTyResult of
-                    Left errs -> pure $ Left errs
-                    Right rawTy -> do
-                        validation <- validateField rawTy f idx
-                        case validation of
-                            Left err -> pure $ Left [err]
-                            Right () -> do
-                                let ty' = removeTopLevelRc rawTy
-                                pure $ Right (Nothing, ty', f)
-            let (errors, successes) = partitionEithers results
-            case errors of
-                (_ : _) -> pure $ Left (concat errors)
-                [] -> pure $ Right (Components (V.fromList successes))
-        Semi.Variants vs -> do
-            -- Variants usually don't have types to instantiate in this context unless they are enum variants with payloads?
-            -- Semi.Variants contains identifiers.
-            let (Path base segments) = path
-            let parentSegments = segments ++ [base]
-            vs' <- for vs \(WithSpan v _ _) -> do
-                let vPath = Path v parentSegments
-                let vTy = Semi.TypeRecord vPath tyArgs Semi.Irrelevant
-                let vSymbol = verifiedSymbol $ mangleABIName vTy
-                pure vSymbol
-            pure $ Right $ Variants vs'
+                                liftIO $ MV.write mv idx (mName, ty', f)
+                                pure acc
+
+            finalizeResult result mv = case result of
+                Left errs -> pure $ Left errs
+                Right () -> do
+                    frozen <- liftIO $ V.freeze mv
+                    pure $ Right (Components frozen)
+
+        case fieldsToInstantiate of
+            Semi.Named fs -> do
+                mv <- liftIO $ MV.new (V.length fs)
+                result <-
+                    V.ifoldM
+                        ( \acc idx (WithSpan (name, ty, f) start end) ->
+                            convertAndValidate acc idx ty f (start, end) (Just name) mv
+                        )
+                        (Right ())
+                        fs
+                finalizeResult result mv
+            Semi.Unnamed fs -> do
+                mv <- liftIO $ MV.new (V.length fs)
+                result <-
+                    V.ifoldM
+                        ( \acc idx (WithSpan (ty, f) start end) ->
+                            convertAndValidate acc idx ty f (start, end) Nothing mv
+                        )
+                        (Right ())
+                        fs
+                finalizeResult result mv
+            Semi.Variants vs -> do
+                -- Variants usually don't have types to instantiate in this context unless they are enum variants with payloads?
+                -- Semi.Variants contains identifiers.
+                let (Path base segments) = path
+                let parentSegments = segments ++ [base]
+                vs' <- for vs \(WithSpan v _ _) -> do
+                    let vPath = Path v parentSegments
+                    let vTy = Semi.TypeRecord vPath tyArgs Semi.Irrelevant
+                    let vSymbol = verifiedSymbol $ mangleABIName vTy
+                    pure vSymbol
+                pure $ Right $ Variants vs'
 
 convertSemiRecordTable ::
     SemiRecordTable ->
