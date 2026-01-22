@@ -339,8 +339,22 @@ lowerExprInBlock (Full.RegionRun bodyExpr) ty = do
 -- - Consecutive TypeRecord fields: chain RefProject without intermediate loads
 -- - Rc fields: RefLoad the Rc, then RcBorrow to get inner reference
 lowerExprInBlock (Full.Proj baseExpr indices) _ = undefined
-lowerExprInBlock (Full.RcWrap innerExpr) ty = undefined
-lowerExprInBlock kind ty = error $ "Detailed lowerExprInBlock implementation missing for " ++ show kind
+lowerExprInBlock (Full.RcWrap innerExpr) ty@(Full.TypeRc _ cap) = do
+    innerVal <- lowerExpr innerExpr
+    regionHandle <- case cap of
+        IR.Flex -> State.gets regionHandle
+        _ -> pure Nothing
+    retVal <- nextValue
+    retTy <- inject $ convertType ty
+    let instr = IR.RcCreate innerVal regionHandle (retVal, retTy)
+    addIRInstr instr
+    pure (retVal, retTy)
+lowerExprInBlock kind ty =
+    error $
+        "Detailed lowerExprInBlock implementation missing for "
+            ++ show kind
+            ++ " : "
+            ++ show ty
 
 lowerIntrinsicCallInBlock :: Path -> [Full.Expr] -> Full.Type -> LoweringEff IR.TypedValue
 lowerIntrinsicCallInBlock (Path name ["core", "intrinsic", "math"]) args ty = do
