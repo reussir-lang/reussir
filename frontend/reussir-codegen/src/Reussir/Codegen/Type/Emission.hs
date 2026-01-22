@@ -3,6 +3,7 @@
 
 module Reussir.Codegen.Type.Emission (emitRecord) where
 
+import Control.Monad (forM_, unless)
 import Data.Text.Builder.Linear qualified as TB
 import Reussir.Codegen.Context.Codegen
 import Reussir.Codegen.Context.Emission (Emission (emit), intercalate)
@@ -112,10 +113,11 @@ emitRecord
             Just finished -> pure finished
             Nothing -> do
                 -- Set state to Incomplete before emitting (for recursive protection)
-                case name of
-                    Nothing -> pure ()
-                    Just n -> setRecordEmissionState n RecordEmissionIncomplete
-                doEmit
+                forM_ name $ \n -> setRecordEmissionState n RecordEmissionIncomplete
+                res <- doEmit
+                unless toplevel $ forM_ name $ \n ->
+                    setRecordEmissionState n RecordEmissionPending
+                pure res
       where
         -- check if we can directly use alias or we really need to emit a record
         emitRecordGuard :: Maybe Symbol -> Codegen (Maybe TB.Builder)
