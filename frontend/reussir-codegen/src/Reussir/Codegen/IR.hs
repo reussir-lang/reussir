@@ -170,6 +170,12 @@ data Instr
         { compoundCreateFields :: [TypedValue]
         , compoundCreateRes :: TypedValue
         }
+    | -- | reussir.record.extract: Extract a field from a compound record
+      RecordExtract
+        { recordExtractVal :: TypedValue
+        , recordExtractFieldIdx :: Int64
+        , recordExtractRes :: TypedValue
+        }
     | -- | reussir.record.variant: Create a variant record with a tag and value
       VariantCreate
         { variantCreateTag :: Int64
@@ -582,6 +588,20 @@ closureEvalCodegen target result = emitLine $ do
 closureUniqifyCodegen :: TypedValue -> TypedValue -> Codegen ()
 closureUniqifyCodegen = emitUnaryOp "reussir.closure.uniqify"
 
+recordExtractCodegen :: TypedValue -> Int64 -> TypedValue -> Codegen ()
+recordExtractCodegen val fieldIdx (resVal, resTy) = emitBuilderLineM $ do
+    val' <- fmtTypedValue val
+    resVal' <- emit resVal
+    resTy' <- emit resTy
+    return $
+        resVal'
+            <> " = reussir.record.extract ("
+            <> val'
+            <> ") ["
+            <> TB.fromDec fieldIdx
+            <> "] : "
+            <> resTy'
+
 ifThenElseCodegen :: TypedValue -> Block -> Maybe Block -> Maybe TypedValue -> Codegen ()
 ifThenElseCodegen (condVal, _) thenBlock elseBlock result = do
     emitIndentation
@@ -645,6 +665,7 @@ instrCodegen (ClosureEval target res) = closureEvalCodegen target res
 instrCodegen (ClosureUniqify target res) = closureUniqifyCodegen target res
 instrCodegen (IfThenElse cond thenBlock elseBlock res) = ifThenElseCodegen cond thenBlock elseBlock res
 instrCodegen (WithLoc loc instr) = withLocation loc (instrCodegen instr)
+instrCodegen (RecordExtract val field res) = recordExtractCodegen val field res
 
 wrapLinkage :: TB.Builder -> Codegen TB.Builder
 wrapLinkage builder = pure $ "#llvm.linkage<" <> builder <> ">"

@@ -2,9 +2,7 @@
 
 module Reussir.Core2.Lowering.Transform where
 
-import Control.Monad (when)
 import Data.HashTable.IO qualified as H
-import Data.Int (Int64)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Maybe (maybeToList)
 import Data.Scientific (Scientific, toBoundedInteger)
@@ -19,8 +17,7 @@ import Reussir.Codegen.IR qualified as IR
 import Reussir.Codegen.Intrinsics qualified as IR
 import Reussir.Codegen.Intrinsics.Arith qualified as Arith
 import Reussir.Codegen.Intrinsics.Math qualified as Math
-import Reussir.Codegen.Location (DBGMetaInfo (DBGFuncArg, DBGLocalVar))
-import Reussir.Codegen.Location qualified as DBG
+import Reussir.Codegen.Location qualified as IR
 import Reussir.Codegen.Type qualified as IR
 import Reussir.Codegen.Type.Data qualified as IRType
 import Reussir.Codegen.Value qualified as IR
@@ -251,7 +248,7 @@ lowerExprInBlock
                 Nothing -> action
                 Just (start, end) -> do
                     dbgTy <- typeAsDbgType (Full.exprType varExpr)
-                    let meta = (\d -> DBGLocalVar d (unIdentifier name)) <$> dbgTy
+                    let meta = (\d -> IR.DBGLocalVar d (unIdentifier name)) <$> dbgTy
                     case meta of
                         Nothing -> action
                         Just m ->
@@ -339,12 +336,10 @@ lowerExprInBlock (Full.RegionRun bodyExpr) ty = do
     pure (regionVal, regionTy)
 
 -- Projection chain handling
--- For chains like a.x.y.z:
--- - Consecutive TypeRecord fields: chain RefProject without intermediate loads
--- - Rc fields: RefLoad the Rc, then RcBorrow to get inner reference
 lowerExprInBlock (Full.Proj baseExpr indices) _ = do
     baseVal <- lowerExpr baseExpr
-    UV.foldM' handleProjection baseVal indices
+    projVal <- UV.foldM' handleProjection baseVal indices
+    loadIfRef projVal
 lowerExprInBlock (Full.RcWrap innerExpr) ty@(Full.TypeRc _ cap) = do
     innerVal <- lowerExpr innerExpr
     regionHandle <- case cap of
@@ -467,17 +462,38 @@ lowerIntrinsicCallInBlock (Path name ["core", "intrinsic", "math"]) args ty = do
     pure (resVal, resTy)
 lowerIntrinsicCallInBlock path _ _ = error $ "Not implemented: " <> show path
 
-handleProjection :: IR.TypedValue -> Int -> LoweringEff IR.TypedValue
-handleProjection (val, valTy) index = do
+loadIfRef :: IR.TypedValue -> LoweringEff IR.TypedValue
+loadIfRef ref@(_, valTy) = do
     case valTy of
-        -- IR.TypeRc (IR.Rc eleTy atm cap) -> do
-        --     let instr = IR.RefProject val index
-        --     addIRInstr instr
-        --     pure instr
-        -- IR.TypeExpr sym -> do
-        --     let instr = IR.RefProject val index
-        --     addIRInstr instr
-        --     pure instr
+        IR.TypeRef (IR.Ref innerTy _atm cap) -> do
+            resVal <- nextValue
+            let innerRef = mkRefType innerTy cap
+            let instr = IR.RefLoad ref (resVal, innerRef)
+            addIRInstr instr
+            pure (resVal, innerRef)
+        _ -> pure ref
+
+handleProjection :: IR.TypedValue -> Int -> LoweringEff IR.TypedValue
+handleProjection base@(_, valTy) index = do
+    case valTy of
+        IR.TypeRef (IR.Ref innerTy _atm cap) -> do
+            resVal <- nextValue
+            let innerRef = mkRefType innerTy cap
+            let instr = IR.RefProject base (fromIntegral index) (resVal, innerRef)
+            addIRInstr instr
+            pure (resVal, innerRef)
+        IR.TypeRc (IR.Rc innerTy _atm cap) -> do
+            let borrowedRef = mkRefType innerTy cap
+            resVal <- nextValue
+            let instr = IR.RcBorrow base (resVal, borrowedRef)
+            addIRInstr instr
+            handleProjection (resVal, borrowedRef) index
+        IR.TypeExpr sym -> do
+            projTy <- projectedType sym index
+            resVal <- nextValue
+            let instr = IR.RecordExtract base (fromIntegral index) (resVal, projTy)
+            addIRInstr instr
+            pure (resVal, projTy)
         _ -> error "projection not supported"
   where
     projectedType :: Symbol -> Int -> LoweringEff IR.Type
@@ -485,10 +501,12 @@ handleProjection (val, valTy) index = do
         table <- Reader.asks recordInstances
         record <- liftIO $ H.lookup table sym
         case record of
-            Just record' | Full.Components fs <- Full.recordFields record' -> do
-                let (_, ty, flag) = fs V.! idx
-                ty' <- inject $ convertType ty
-                if flag
-                    then pure $ IR.TypeNullable ty'
-                    else pure ty'
+            Just record'
+                | Full.StructKind <- Full.recordKind record'
+                , Full.Components fs <- Full.recordFields record' -> do
+                    let (_, ty, flag) = fs V.! idx
+                    ty' <- inject $ convertType ty
+                    if flag
+                        then pure $ IR.TypeNullable ty'
+                        else pure ty'
             _ -> error $ "invalid record for projection: " <> show sym
