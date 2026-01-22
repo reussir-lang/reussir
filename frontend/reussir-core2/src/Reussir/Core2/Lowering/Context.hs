@@ -111,24 +111,23 @@ assocLocation instr = do
 
 withLocationSpan :: (Int64, Int64) -> LoweringEff a -> LoweringEff a
 withLocationSpan spanInfo action = do
-    state <- State.get
-    let span' = currentSpan state
-    State.put $ state{currentSpan = span'{spanInfo = Just spanInfo}}
+    span' <- State.gets currentSpan
+    State.modify $ \s -> s{currentSpan = span'{spanInfo = Just spanInfo}}
     result <- action
-    State.put state
+    State.modify $ \s -> s{currentSpan = span'}
     pure result
 
 withLocationMetaData :: IR.DBGMetaInfo -> LoweringEff a -> LoweringEff a
 withLocationMetaData metaInfo action = do
-    state <- State.get
-    let span' = currentSpan state
-    State.put $ state{currentSpan = span'{metaInfo = Just metaInfo}}
+    span' <- State.gets currentSpan
+    State.modify $ \s -> s{currentSpan = span'{metaInfo = Just metaInfo}}
     result <- action
-    State.put state
+    State.modify $ \s -> s{currentSpan = span'}
     pure result
 
 addIRInstr :: IR.Instr -> LoweringEff ()
 addIRInstr instr = do
+    logTrace_ $ "Adding IR instruction: " <> T.pack (show instr)
     instr' <- assocLocation instr
     State.modify $ \s -> s{currentBlock = currentBlock s Seq.|> instr'}
 

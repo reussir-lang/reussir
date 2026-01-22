@@ -2,14 +2,17 @@
 
 module Reussir.Core2.Lowering.Expr where
 
+import Control.Monad (when)
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
 import Data.Maybe (maybeToList)
 import Data.Scientific (Scientific, toBoundedInteger)
 import Data.Sequence qualified as Seq
+import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
 import Effectful (inject, liftIO)
+import Effectful.Log qualified as L
 import Effectful.Reader.Static qualified as Reader
 import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen.Context.Symbol (Symbol)
@@ -55,6 +58,13 @@ lowerExprAsBlock expr blkArgs finalizer = do
     lastVal <- lowerExpr expr
     finalizer lastVal
     res <- materializeCurrentBlock blkArgs
+    when (null $ IR.blkBody res) $
+        L.logAttention_ $
+            "Lowered empty block: "
+                <> T.show res
+                <> " from:\n\
+                   \t"
+                <> T.show expr
     State.modify $ \s -> s{currentBlock = backupBlock}
     pure res
 
@@ -350,6 +360,13 @@ lowerExprInBlock (Full.RcWrap innerExpr) ty@(Full.TypeRc _ cap) = do
     let instr = IR.RcCreate innerVal regionHandle (retVal, retTy)
     addIRInstr instr
     pure (retVal, retTy)
+lowerExprInBlock (Full.NullableCall maybeExpr) ty = do
+    retVal <- nextValue
+    retTy <- inject $ convertType ty
+    maybeExpr' <- mapM lowerExpr maybeExpr
+    let instr = IR.NullableCreate maybeExpr' (retVal, retTy)
+    addIRInstr instr
+    pure (retVal, retTy)
 lowerExprInBlock kind ty =
     error $
         "Detailed lowerExprInBlock implementation missing for "
@@ -465,23 +482,29 @@ lowerIntrinsicCallInBlock path _ _ = error $ "Not implemented: " <> show path
 loadIfRef :: IR.TypedValue -> LoweringEff IR.TypedValue
 loadIfRef ref@(_, valTy) = do
     case valTy of
-        IR.TypeRef (IR.Ref innerTy _atm cap) -> do
+        IR.TypeRef (IR.Ref innerTy _atm _cap) -> do
             resVal <- nextValue
-            let innerRef = mkRefType innerTy cap
-            let instr = IR.RefLoad ref (resVal, innerRef)
+            let instr = IR.RefLoad ref (resVal, innerTy)
             addIRInstr instr
-            pure (resVal, innerRef)
+            pure (resVal, innerTy)
         _ -> pure ref
 
 handleProjection :: IR.TypedValue -> Int -> LoweringEff IR.TypedValue
 handleProjection base@(_, valTy) index = do
     case valTy of
-        IR.TypeRef (IR.Ref innerTy _atm cap) -> do
+        IR.TypeRef (IR.Ref (IR.TypeExpr sym) atm cap) -> do
             resVal <- nextValue
-            let innerRef = mkRefType innerTy cap
-            let instr = IR.RefProject base (fromIntegral index) (resVal, innerRef)
+            projTy <- projectedType cap atm sym index
+            let projRef = mkRefType projTy cap
+            let instr = IR.RefProject base (fromIntegral index) (resVal, projRef)
             addIRInstr instr
-            pure (resVal, innerRef)
+            pure (resVal, projRef)
+        IR.TypeRef (IR.Ref (IR.TypeRc (IR.Rc innerTy _ _)) atm' cap') -> do
+            resVal <- nextValue
+            let res = (resVal, IR.TypeRc (IR.Rc innerTy atm' cap'))
+            let instr = IR.RefLoad base res
+            addIRInstr instr
+            handleProjection res index
         IR.TypeRc (IR.Rc innerTy _atm cap) -> do
             let borrowedRef = mkRefType innerTy cap
             resVal <- nextValue
@@ -489,15 +512,15 @@ handleProjection base@(_, valTy) index = do
             addIRInstr instr
             handleProjection (resVal, borrowedRef) index
         IR.TypeExpr sym -> do
-            projTy <- projectedType sym index
+            projTy <- projectedType IRType.Unspecified IRType.NonAtomic sym index
             resVal <- nextValue
             let instr = IR.RecordExtract base (fromIntegral index) (resVal, projTy)
             addIRInstr instr
             pure (resVal, projTy)
-        _ -> error "projection not supported"
+        _ -> error $ "projection not supported for base type " <> show valTy
   where
-    projectedType :: Symbol -> Int -> LoweringEff IR.Type
-    projectedType sym idx = do
+    projectedType :: IR.Capability -> IR.Atomicity -> Symbol -> Int -> LoweringEff IR.Type
+    projectedType cap atm sym idx = do
         table <- Reader.asks recordInstances
         record <- liftIO $ H.lookup table sym
         case record of
@@ -506,7 +529,16 @@ handleProjection base@(_, valTy) index = do
                 , Full.Components fs <- Full.recordFields record' -> do
                     let (_, ty, flag) = fs V.! idx
                     ty' <- inject $ convertType ty
-                    if flag
-                        then pure $ IR.TypeNullable ty'
-                        else pure ty'
+                    case ty of
+                        Full.TypeRecord fieldSym -> do
+                            fieldRecord <- liftIO $ H.lookup table fieldSym
+                            case fieldRecord of
+                                Just fr -> case Full.recordDefaultCap fr of
+                                    IRType.Value -> pure ty'
+                                    IRType.Regional | flag -> pure $ IR.TypeNullable (IR.TypeRc $ IR.Rc ty' atm cap)
+                                    IRType.Regional -> pure $ IR.TypeRc $ IR.Rc ty' atm IRType.Rigid
+                                    IRType.Shared -> pure $ IR.TypeRc $ IR.Rc ty' atm IRType.Shared
+                                    other -> error $ "projectedType: unsupported capability " <> show other
+                                Nothing -> error $ "projectedType: record not found " <> show fieldSym
+                        _ -> pure ty'
             _ -> error $ "invalid record for projection: " <> show sym

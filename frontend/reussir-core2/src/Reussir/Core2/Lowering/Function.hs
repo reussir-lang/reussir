@@ -6,7 +6,9 @@ import Control.Monad (forM)
 
 import Data.IntMap.Strict qualified as IntMap
 import Data.Maybe (catMaybes, maybeToList)
+import Data.Text qualified as T
 import Effectful (inject)
+import Effectful.Log qualified as L
 import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen qualified as IR
 import Reussir.Codegen.IR qualified as IR
@@ -59,8 +61,11 @@ lowerFunction func = do
 
     (bodyBlock, args) <- withFreshLocalContext $ do
         case mBody of
-            Nothing -> pure (Nothing, [])
+            Nothing -> do
+                L.logTrace_ $ "Lowering function " <> T.show symbol <> " with no body"
+                pure (Nothing, [])
             Just bodyExpr -> do
+                L.logTrace_ $ "Lowering function " <> T.show symbol <> " with body"
                 regionParam <-
                     if Full.funcIsRegional func
                         then do
@@ -84,7 +89,6 @@ lowerFunction func = do
                         }
 
                 let argValues = maybeToList regionParam ++ paramValues
-
                 block <- lowerExprAsBlock bodyExpr argValues $ \(retVal, _) -> do
                     let retInstr = IR.Return (Just (retVal, retTy))
                     case Full.exprSpan bodyExpr of

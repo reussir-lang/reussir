@@ -125,6 +125,8 @@ analyzeGenericFlowInType (TypeRecord path args _) = do
 analyzeGenericFlowInType (TypeClosure args ret) = do
     mapM_ analyzeGenericFlowInType args
     analyzeGenericFlowInType ret
+analyzeGenericFlowInType (TypeNullable inner) =
+    analyzeGenericFlowInType inner
 analyzeGenericFlowInType _ = pure ()
 
 analyzeGenericFlowInRecord :: Record -> GlobalSemiEff ()

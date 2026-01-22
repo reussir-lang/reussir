@@ -113,7 +113,7 @@ executable reussir-elab
     hs-source-dirs:   app
     default-language: GHC2024
 
-executable reussir-compiler2
+executable reussir-compiler
     import:           warnings
     main-is:          Compiler.hs
     build-depends:
