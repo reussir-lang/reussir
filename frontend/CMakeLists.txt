@@ -8,3 +8,4 @@ function(add_frontend_target target_name)
 endfunction()
 
 add_frontend_target(reussir-elab)
+add_frontend_target(reussir-compiler)

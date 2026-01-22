@@ -14,6 +14,7 @@ config.lli_path = r'@lli_path@'
 config.environment['REUSSIR_RUSTC'] = r'@rustc_path@'
 config.environment['REUSSIR_RUSTC_DEPS'] = r'@REUSSIR_LIBRARY_PATH@'
 config.reussir_elab_path = r'@reussir_elab_path@'
+config.reussir_compiler_path = r'@reussir_compiler_path@'
 
 lit_config.load_config(
         config, os.path.join(config.test_root, "lit.cfg.py"))

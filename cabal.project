@@ -6,7 +6,7 @@ packages:
   frontend/reussir-codegen
   frontend/reussir-parser
   frontend/reussir-diagnostic
-  frontend/reussir-core2
+  frontend/reussir-core
 
 -- Common build options
 with-compiler: ghc

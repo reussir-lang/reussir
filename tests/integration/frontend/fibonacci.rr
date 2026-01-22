@@ -1,5 +1,8 @@
 // RUN: %reussir-elab --mode semi %s
 // RUN: %reussir-elab --mode full %s | %FileCheck %s
+// RUN: %reussir-compiler %s -o %t.o
+// RUN: %cc %t.o %S/fibonacci.c -DFIB_SYMBOL=_RC14fibonacci_iter -o %t.exe
+// RUN: %t.exe
 
 // CHECK-DAG: pub fn _RC14fibonacci_iter(n: u64) -> u64 {
 // CHECK-NEXT-DAG: _RC19fibonacci_iter_impl(v0, 0.0 : u64, 1.0 : u64) : u64
