@@ -107,11 +107,11 @@ instantiateRecord tyArgs semiRecords (Semi.Record path tyParams fields kind _ ca
                             Left err -> pure $ Left [err]
                             Right () -> do
                                 let ty' = removeTopLevelRc rawTy
-                                pure $ Right (name, ty', f)
+                                pure $ Right (Just name, ty', f)
             let (errors, successes) = partitionEithers results
             case errors of
                 (_ : _) -> pure $ Left (concat errors)
-                [] -> pure $ Right (Named (V.fromList successes))
+                [] -> pure $ Right (Components (V.fromList successes))
         Semi.Unnamed fs -> do
             results <- for (zip [0 ..] (V.toList fs)) \(idx, WithSpan (ty, f) start end) -> do
                 rawTyResult <- convertSemiType (start, end) genericMap semiRecords ty
@@ -123,11 +123,11 @@ instantiateRecord tyArgs semiRecords (Semi.Record path tyParams fields kind _ ca
                             Left err -> pure $ Left [err]
                             Right () -> do
                                 let ty' = removeTopLevelRc rawTy
-                                pure $ Right (ty', f)
+                                pure $ Right (Nothing, ty', f)
             let (errors, successes) = partitionEithers results
             case errors of
                 (_ : _) -> pure $ Left (concat errors)
-                [] -> pure $ Right (Unnamed (V.fromList successes))
+                [] -> pure $ Right (Components (V.fromList successes))
         Semi.Variants vs -> do
             -- Variants usually don't have types to instantiate in this context unless they are enum variants with payloads?
             -- Semi.Variants contains identifiers.

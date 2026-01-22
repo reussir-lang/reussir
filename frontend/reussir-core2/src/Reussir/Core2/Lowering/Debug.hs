@@ -3,7 +3,7 @@
 module Reussir.Core2.Lowering.Debug where
 
 import Data.HashTable.IO qualified as H
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
 import Effectful (Eff, IOE, liftIO, (:>))
@@ -46,11 +46,12 @@ typeAsDbgType ty = case ty of
             Just rec -> do
                 let rawPath = recordRawPath rec
                 fields <- case recordFields rec of
-                    Named fs -> do
-                        let mapped = V.toList $ V.map (\(id', t, _) -> (unIdentifier id', t)) fs
-                        mapM processField mapped
-                    Unnamed fs -> do
-                        let mapped = zipWith (\i (t, _) -> (T.pack $ show i, t)) [0 :: Int ..] (V.toList fs)
+                    Components fs -> do
+                        let mapped =
+                                V.toList $
+                                    V.imap
+                                        (\i (id', t, _) -> (fromMaybe (T.pack $ show i) (fmap unIdentifier id'), t))
+                                        fs
                         mapM processField mapped
                     Variants vs -> do
                         -- vs is Vector Symbol

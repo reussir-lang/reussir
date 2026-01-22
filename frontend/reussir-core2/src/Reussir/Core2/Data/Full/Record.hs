@@ -14,8 +14,7 @@ import Reussir.Parser.Types.Lexer (Identifier, Path)
 type FieldFlag = Bool
 
 data RecordFields
-    = Named (V.Vector (Identifier, Type, FieldFlag))
-    | Unnamed (V.Vector (Type, FieldFlag))
+    = Components (V.Vector (Maybe Identifier, Type, FieldFlag))
     | Variants (V.Vector Symbol)
     deriving (Show, Eq)
 

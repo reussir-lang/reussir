@@ -6,18 +6,24 @@
 // CHECK-NEXT-DAG: _RINvC6Option4NonelE
 // CHECK-NEXT-DAG: }
 
-// CHECK-DAG: enum_variant _RINvC6Option4SomelE (aka Option::Some<i32>)(i32)
+// CHECK-DAG: enum_variant _RINvC6Option4SomelE (aka Option::Some<i32>){
+// CHECK-NEXT-DAG: [0]: i32
+// CHECK-NEXT-DAG: }
 
 // CHECK-DAG: enum _RIC8RcOptionlE (aka RcOption<i32>){
 // CHECK-NEXT-DAG: _RINvC8RcOption4SomelE,
 // CHECK-NEXT-DAG: _RINvC8RcOption4NonelE
 // CHECK-NEXT-DAG: }
 
-// CHECK-DAG: enum_variant _RINvC6Option4NonelE (aka Option::None<i32>)()
+// CHECK-DAG: enum_variant _RINvC6Option4NonelE (aka Option::None<i32>){
+// CHECK-NEXT-DAG: }
 
-// CHECK-DAG: enum_variant _RINvC8RcOption4SomelE (aka RcOption::Some<i32>)(i32)
+// CHECK-DAG: enum_variant _RINvC8RcOption4SomelE (aka RcOption::Some<i32>){
+// CHECK-NEXT-DAG: [0]: i32
+// CHECK-NEXT-DAG: }
 
-// CHECK-DAG: enum_variant _RINvC8RcOption4NonelE (aka RcOption::None<i32>)()
+// CHECK-DAG: enum_variant _RINvC8RcOption4NonelE (aka RcOption::None<i32>){
+// CHECK-NEXT-DAG: }
 
 // CHECK-DAG: fn _RC3baz() -> Rc<_RIC8RcOptionlE, Shared> {
 // CHECK-NEXT-DAG: rc_wrap(variant[0](compound(1.0 : i32) : _RINvC8RcOption4SomelE) : _RIC8RcOptionlE) : Rc<_RIC8RcOptionlE, Shared>

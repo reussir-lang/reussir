@@ -2,15 +2,19 @@
 
 module Reussir.Core2.Lowering.Transform where
 
+import Control.Monad (when)
+import Data.HashTable.IO qualified as H
 import Data.Int (Int64)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Maybe (maybeToList)
 import Data.Scientific (Scientific, toBoundedInteger)
 import Data.Sequence qualified as Seq
+import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
-import Effectful (inject)
+import Effectful (inject, liftIO)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.State.Static.Local qualified as State
+import Reussir.Codegen.Context.Symbol (Symbol)
 import Reussir.Codegen.IR qualified as IR
 import Reussir.Codegen.Intrinsics qualified as IR
 import Reussir.Codegen.Intrinsics.Arith qualified as Arith
@@ -25,7 +29,7 @@ import Reussir.Core2.Data.Full.Expr qualified as Full
 import Reussir.Core2.Data.Full.Record qualified as Full
 import Reussir.Core2.Data.Full.Type qualified as Full
 import Reussir.Core2.Data.Integral qualified as Int
-import Reussir.Core2.Data.Lowering.Context (LocalLoweringContext (..), LoweringEff)
+import Reussir.Core2.Data.Lowering.Context (LocalLoweringContext (..), LoweringContext (recordInstances), LoweringEff)
 import Reussir.Core2.Data.Operator qualified as Sem
 import Reussir.Core2.Data.UniqueID (VarID (..))
 import Reussir.Core2.Lowering.Context (addIRInstr, materializeCurrentBlock, nextValue, withLocationMetaData, withLocationSpan, withVar)
@@ -338,7 +342,9 @@ lowerExprInBlock (Full.RegionRun bodyExpr) ty = do
 -- For chains like a.x.y.z:
 -- - Consecutive TypeRecord fields: chain RefProject without intermediate loads
 -- - Rc fields: RefLoad the Rc, then RcBorrow to get inner reference
-lowerExprInBlock (Full.Proj baseExpr indices) _ = undefined
+lowerExprInBlock (Full.Proj baseExpr indices) _ = do
+    baseVal <- lowerExpr baseExpr
+    UV.foldM' handleProjection baseVal indices
 lowerExprInBlock (Full.RcWrap innerExpr) ty@(Full.TypeRc _ cap) = do
     innerVal <- lowerExpr innerExpr
     regionHandle <- case cap of
@@ -460,3 +466,29 @@ lowerIntrinsicCallInBlock (Path name ["core", "intrinsic", "math"]) args ty = do
     addIRInstr instr
     pure (resVal, resTy)
 lowerIntrinsicCallInBlock path _ _ = error $ "Not implemented: " <> show path
+
+handleProjection :: IR.TypedValue -> Int -> LoweringEff IR.TypedValue
+handleProjection (val, valTy) index = do
+    case valTy of
+        -- IR.TypeRc (IR.Rc eleTy atm cap) -> do
+        --     let instr = IR.RefProject val index
+        --     addIRInstr instr
+        --     pure instr
+        -- IR.TypeExpr sym -> do
+        --     let instr = IR.RefProject val index
+        --     addIRInstr instr
+        --     pure instr
+        _ -> error "projection not supported"
+  where
+    projectedType :: Symbol -> Int -> LoweringEff IR.Type
+    projectedType sym idx = do
+        table <- Reader.asks recordInstances
+        record <- liftIO $ H.lookup table sym
+        case record of
+            Just record' | Full.Components fs <- Full.recordFields record' -> do
+                let (_, ty, flag) = fs V.! idx
+                ty' <- inject $ convertType ty
+                if flag
+                    then pure $ IR.TypeNullable ty'
+                    else pure ty'
+            _ -> error $ "invalid record for projection: " <> show sym

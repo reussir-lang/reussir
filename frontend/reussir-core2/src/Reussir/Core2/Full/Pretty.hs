@@ -289,26 +289,20 @@ instance PrettyColored Record where
             gsDocs <- mapM prettyColored gs
             pure $ angles (commaSep gsDocs)
 
-        prettyFields (Named fs) = do
-            fsDocs <- mapM prettyField (V.toList fs)
+        prettyFields (Components fs) = do
+            fsDocs <- V.toList <$> V.imapM prettyField fs
             pure $ braces (nest 4 (hardline <> vsep (punctuate comma fsDocs)) <> hardline)
-        prettyFields (Unnamed fs) = do
-            fsDocs <- mapM prettyUnnamedField (V.toList fs)
-            pure $ parens (commaSep fsDocs)
         prettyFields (Variants vs) = do
-            vsDocs <- mapM prettyColored (V.toList vs)
+            vsDocs <- V.toList <$> V.mapM prettyColored vs
             pure $ braces (nest 4 (hardline <> vsep (punctuate comma vsDocs)) <> hardline)
 
-        prettyField (n, t, fld) = do
-            nDoc <- prettyColored n
+        prettyField idx (n, t, fld) = do
+            nDoc <- case n of
+                Just ident -> prettyColored ident
+                Nothing -> pure $ brackets (pretty idx)
             fldDoc <- prettyFieldFlag fld
             tDoc <- prettyColored t
             pure $ nDoc <> operator ":" <+> fldDoc <> tDoc
-
-        prettyUnnamedField (t, fld) = do
-            fldDoc <- prettyFieldFlag fld
-            tDoc <- prettyColored t
-            pure $ fldDoc <> tDoc
 
         prettyFieldFlag :: (IOE :> es, Prim :> es) => FieldFlag -> Eff es (Doc AnsiStyle)
         prettyFieldFlag False = pure mempty
