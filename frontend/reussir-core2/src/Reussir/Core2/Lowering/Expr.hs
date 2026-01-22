@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Reussir.Core2.Lowering.Transform where
+module Reussir.Core2.Lowering.Expr where
 
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap

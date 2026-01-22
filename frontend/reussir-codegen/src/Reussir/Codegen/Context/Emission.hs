@@ -90,10 +90,13 @@ emitBuilderLine builder = emitBuilderLineM (pure builder)
 {- | Intercalate a list of builders with a separator.
   This is used to emit a list of builders with a separator.
 -}
-intercalate :: TB.Builder -> [TB.Builder] -> TB.Builder
-intercalate _ [] = mempty
-intercalate _ [x] = x
-intercalate sep (x : xs) = let !rest = intercalate sep xs in x <> sep <> rest
+intercalate :: (Foldable f) => TB.Builder -> f TB.Builder -> TB.Builder
+intercalate sep =
+    snd . foldl' step (True, mempty)
+  where
+    step (first, acc) x
+        | first = (False, x)
+        | otherwise = (False, acc <> sep <> x)
 
 {- | Emission instance for Path.
   This is defined here (not in Context.Path) to avoid cyclic dependencies.

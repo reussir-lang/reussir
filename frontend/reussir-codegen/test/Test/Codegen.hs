@@ -7,6 +7,7 @@ where
 
 import Data.Int (Int64)
 import Data.Text qualified as T
+import Data.Vector.Strict qualified as V
 import Effectful qualified as E
 import Effectful.Log qualified as L
 import Log (defaultLogLevel)
@@ -145,13 +146,14 @@ createTensor2x2Module =
                 , Record
                     { defaultCapability = TT.Value
                     , fields =
-                        map
-                            normalField
-                            [ primitiveF64
-                            , primitiveF64
-                            , primitiveF64
-                            , primitiveF64
-                            ]
+                        V.fromList $
+                            map
+                                normalField
+                                [ primitiveF64
+                                , primitiveF64
+                                , primitiveF64
+                                , primitiveF64
+                                ]
                     , kind = Compound
                     }
                 )

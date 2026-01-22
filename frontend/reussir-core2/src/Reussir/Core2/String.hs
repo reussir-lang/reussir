@@ -5,7 +5,7 @@ module Reussir.Core2.String (
     StringUniqifier,
     allocateStrToken,
     getAllStrings,
-    mangleStringToToken,
+    mangleStringToken,
 )
 where
 
@@ -102,8 +102,8 @@ getAllStrings (StringUniqifier table) = do
     kvPairs <- liftIO $ H.toList table
     return $ map (\(XXH3 str, token) -> (str, token)) kvPairs
 
-mangleStringToToken :: StringToken -> T.Text
-mangleStringToToken (StringToken (w1, w2, w3, w4)) =
+mangleStringToken :: StringToken -> T.Text
+mangleStringToken (StringToken (w1, w2, w3, w4)) =
     let (builder, count, isNum) = encodeB62 $ newInt256 (w1, w2, w3, w4)
         sep = if isNum then "_" else ""
      in TB.runBuilder $ "_RNvC22REUSSIR_STRING_LITERAL" <> TB.fromDec count <> sep <> builder

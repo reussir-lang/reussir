@@ -100,7 +100,8 @@ library
         unicode-data ^>=0.8.0,
         reussir-bridge,
         directory,
-        filepath
+        filepath,
+        vector
 
     -- Directories containing source files.
     hs-source-dirs:   src
@@ -152,4 +153,5 @@ test-suite reussir-codegen-test
         text-builder-linear,
         log-base,
         process,
-        temporary ^>=1.3
+        temporary ^>=1.3,
+        vector

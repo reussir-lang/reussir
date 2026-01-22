@@ -32,20 +32,24 @@ import Data.Vector.Unboxed qualified as UV
 import Effectful (MonadIO (liftIO), inject)
 import Effectful.Log qualified as L
 import Effectful.Prim.IORef.Strict (writeIORef')
-import Reussir.Core2.Data (Flexivity (..), GenericID (..), GlobalSemiEff, Record (..))
 import Reussir.Core2.Data.Class (Class (Class), TypeBound)
 import Reussir.Core2.Data.Integral (IntegralType (..))
 import Reussir.Core2.Data.Operator (ArithOp (..), CmpOp (..))
-import Reussir.Core2.Data.Semi (
+import Reussir.Core2.Data.Semi.Context (
+    GlobalSemiEff,
     LocalSemiContext (..),
     SemiContext (..),
     SemiEff,
-    Type (..),
  )
 import Reussir.Core2.Data.Semi.Expr (Expr (..), ExprKind (..))
 import Reussir.Core2.Data.Semi.Function (FunctionProto (..), FunctionTable (..))
-import Reussir.Core2.Data.Semi.Record (RecordFields (..), RecordKind (..))
+import Reussir.Core2.Data.Semi.Record (Record (..), RecordFields (..), RecordKind (..))
+import Reussir.Core2.Data.Semi.Type (
+    Flexivity (..),
+    Type (..),
+ )
 import Reussir.Core2.Data.Semi.Unification (HoleState (..))
+import Reussir.Core2.Data.UniqueID (GenericID (..))
 import Reussir.Core2.Semi.Context (
     addErrReport,
     addErrReportMsg,

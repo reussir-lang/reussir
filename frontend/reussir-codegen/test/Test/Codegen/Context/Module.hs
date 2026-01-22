@@ -7,6 +7,7 @@ where
 
 import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
+import Data.Vector.Strict qualified as V
 import Effectful qualified as E
 import Effectful.Log qualified as L
 import Effectful.State.Static.Local qualified as E
@@ -63,11 +64,12 @@ testRecursiveListType = testCase "Recursive List type with Cons and Nil" $ do
             Record
                 { kind = Compound
                 , fields =
-                    map
-                        normalField
-                        [ primitiveI32
-                        , listType
-                        ]
+                    V.fromList $
+                        map
+                            normalField
+                            [ primitiveI32
+                            , listType
+                            ]
                 , defaultCapability = TT.Value
                 }
 
@@ -75,7 +77,7 @@ testRecursiveListType = testCase "Recursive List type with Cons and Nil" $ do
     let nilRecord =
             Record
                 { kind = Compound
-                , fields = []
+                , fields = mempty
                 , defaultCapability = TT.Value
                 }
 
@@ -88,11 +90,12 @@ testRecursiveListType = testCase "Recursive List type with Cons and Nil" $ do
             Record
                 { kind = Variant
                 , fields =
-                    map
-                        normalField
-                        [ consType
-                        , nilType
-                        ]
+                    V.fromList $
+                        map
+                            normalField
+                            [ consType
+                            , nilType
+                            ]
                 , defaultCapability = TT.Shared
                 }
 
@@ -131,11 +134,12 @@ testSimpleCompoundType = testCase "Simple compound type" $ do
             Record
                 { kind = Compound
                 , fields =
-                    map
-                        normalField
-                        [ primitiveI32 -- x
-                        , primitiveI32 -- y
-                        ]
+                    V.fromList $
+                        map
+                            normalField
+                            [ primitiveI32 -- x
+                            , primitiveI32 -- y
+                            ]
                 , defaultCapability = TT.Shared
                 }
 
@@ -156,7 +160,7 @@ testVariantWithCapabilities = testCase "Variant type with different capabilities
     let someRecord =
             Record
                 { kind = Compound
-                , fields = [normalField primitiveI32]
+                , fields = V.fromList [normalField primitiveI32]
                 , defaultCapability = TT.Value
                 }
 
@@ -164,7 +168,7 @@ testVariantWithCapabilities = testCase "Variant type with different capabilities
     let noneRecord =
             Record
                 { kind = Compound
-                , fields = []
+                , fields = mempty
                 , defaultCapability = TT.Value
                 }
 
@@ -178,11 +182,12 @@ testVariantWithCapabilities = testCase "Variant type with different capabilities
             Record
                 { kind = Variant
                 , fields =
-                    map
-                        normalField
-                        [ someType
-                        , noneType
-                        ]
+                    V.fromList $
+                        map
+                            normalField
+                            [ someType
+                            , noneType
+                            ]
                 , defaultCapability = TT.Value
                 }
 

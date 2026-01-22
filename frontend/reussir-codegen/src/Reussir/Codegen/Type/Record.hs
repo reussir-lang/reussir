@@ -4,6 +4,7 @@ module Reussir.Codegen.Type.Record (
     RecordKind (..),
 ) where
 
+import Data.Vector.Strict qualified as V
 import Reussir.Codegen.Type.Data (Capability, Type)
 
 data RecordField = RecordField
@@ -17,7 +18,7 @@ data RecordKind = Compound | Variant
 
 data Record = Record
     { defaultCapability :: Capability
-    , fields :: [RecordField]
+    , fields :: V.Vector RecordField
     , kind :: RecordKind
     }
     deriving (Eq, Show)

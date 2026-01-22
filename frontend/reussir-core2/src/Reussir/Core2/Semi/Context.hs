@@ -36,26 +36,20 @@ import Effectful.State.Static.Local (runState)
 import Effectful.State.Static.Local qualified as State
 import Reussir.Bridge qualified as B
 import Reussir.Core2.Class (addClass, newDAG, populateDAG)
-import Reussir.Core2.Data (
-    GlobalSemiEff,
-    RecordFields (..),
-    RecordKind (..),
-    SemiEff,
-    TypeClassTable,
- )
 import Reussir.Core2.Data.Class (Class (Class), ClassDAG)
 import Reussir.Core2.Data.FP (FloatingPointType (..))
 import Reussir.Core2.Data.Integral (IntegralType (..))
-import Reussir.Core2.Data.Semi (
-    Flexivity (..),
+import Reussir.Core2.Data.Semi.Context (
+    GlobalSemiEff,
     LocalSemiContext (..),
-    Record (..),
     SemiContext (..),
-    Type (..),
+    SemiEff,
  )
-import Reussir.Core2.Data.Semi qualified as Semi
 import Reussir.Core2.Data.Semi.Expr
 import Reussir.Core2.Data.Semi.Function (FunctionProto (..), FunctionTable (..))
+import Reussir.Core2.Data.Semi.Record
+import Reussir.Core2.Data.Semi.Type (Flexivity (..), Type (..), TypeClassTable)
+import Reussir.Core2.Data.Semi.Type qualified as Semi
 import Reussir.Core2.Data.Semi.Unification (UnificationEff)
 import Reussir.Core2.Data.String (StringUniqifier (StringUniqifier))
 import Reussir.Core2.Data.UniqueID (ExprID (..), GenericID (..), VarID)

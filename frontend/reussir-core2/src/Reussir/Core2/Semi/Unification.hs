@@ -18,10 +18,9 @@ import Effectful.Prim.IORef.Strict (
  )
 import Effectful.Reader.Static (ask)
 import Reussir.Core2.Class (isSuperClass, meetBound, subsumeBound)
-import Reussir.Core2.Data (Flexivity (Flex, Rigid), GenericVar (..))
 import Reussir.Core2.Data.Class (Class (..), TypeBound)
-import Reussir.Core2.Data.Generic (GenericState (..))
-import Reussir.Core2.Data.Semi.Type (Type (..))
+import Reussir.Core2.Data.Generic (GenericState (..), GenericVar (..))
+import Reussir.Core2.Data.Semi.Type (Flexivity (Flex, Rigid), Type (..))
 import Reussir.Core2.Data.Semi.Unification (
     ErrorKind (..),
     Failure (..),

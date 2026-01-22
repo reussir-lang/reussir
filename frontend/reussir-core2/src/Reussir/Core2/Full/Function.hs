@@ -50,6 +50,15 @@ convertSemiFunction proto genericMap typeArgs = do
                     pure Nothing
                 Right t -> pure $ Just (name, t)
 
+        -- Convert Instantiated Type Args
+        instantiatedTyArgs <- for typeArgs \ty -> do
+            tyResult <- convertSemiType span genericMap semiRecords ty
+            case tyResult of
+                Left errs -> do
+                    mapM_ (inject . addError) errs
+                    pure TypeBottom
+                Right t -> pure t
+
         -- Convert Return Type
         retTypeResult <- convertSemiType span genericMap semiRecords (Semi.funcReturnType proto)
         retType <- case retTypeResult of
@@ -75,7 +84,7 @@ convertSemiFunction proto genericMap typeArgs = do
                             { funcVisibility = Semi.funcVisibility proto
                             , funcName = symbol
                             , funcRawPath = funcPath
-                            , funcInstantiatedTyArgs = typeArgs
+                            , funcInstantiatedTyArgs = instantiatedTyArgs
                             , funcParams = ps
                             , funcReturnType = retType
                             , funcIsRegional = Semi.funcIsRegional proto

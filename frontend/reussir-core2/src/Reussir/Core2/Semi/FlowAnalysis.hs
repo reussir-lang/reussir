@@ -11,11 +11,11 @@ import Effectful (liftIO)
 import Effectful.Log qualified as L
 import Effectful.Prim.IORef.Strict (readIORef')
 import Effectful.State.Static.Local qualified as State
-import Reussir.Core2.Data (GenericSolution)
-import Reussir.Core2.Data.Semi (Record (..), RecordFields (..))
+import Reussir.Core2.Data.Generic (GenericSolution)
 import Reussir.Core2.Data.Semi.Context (GlobalSemiEff, SemiContext (..))
 import Reussir.Core2.Data.Semi.Expr (Expr (..), ExprKind (..))
 import Reussir.Core2.Data.Semi.Function (FunctionProto (..), FunctionTable (..))
+import Reussir.Core2.Data.Semi.Record (Record (..), RecordFields (..))
 import Reussir.Core2.Data.Semi.Type (Type (..))
 import Reussir.Core2.Data.UniqueID (GenericID (..))
 import Reussir.Core2.Generic (addConcreteFlow, addCtorLink, addDirectLink, solveGeneric)

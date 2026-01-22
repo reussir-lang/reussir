@@ -6,9 +6,10 @@ import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
-import Reussir.Core2.Data
 import Reussir.Core2.Data.Class (Class)
 import Reussir.Core2.Data.Integral (IntegralType (..))
+import Reussir.Core2.Data.Semi.Type (Type (..), TypeClassTable (..))
+import Reussir.Core2.Data.UniqueID (GenericID (..), HoleID)
 
 type GenenricOrHole = Either GenericID HoleID
 
