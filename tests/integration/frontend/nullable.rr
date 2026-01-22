@@ -1,5 +1,6 @@
 // RUN: %reussir-elab --mode semi %s
 // RUN: %reussir-elab --mode full %s | %FileCheck %s
+// RUN: %reussir-compiler %s -o %t.o
 
 // CHECK-DAG: struct _RC4Data (aka Data){
 // CHECK-NEXT-DAG: value: u64

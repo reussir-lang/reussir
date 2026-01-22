@@ -1,5 +1,6 @@
 // RUN: %reussir-elab --mode semi %s
 // RUN: %reussir-elab --mode full %s | %FileCheck %s
+// RUN: %reussir-compiler %s -o %t.o
 
 // CHECK-DAG: struct _RIC3BoxIC3BoxmEE (aka Box<Box<u32>>){
 // CHECK-NEXT-DAG: val: _RIC3BoxmE
