@@ -244,29 +244,29 @@ lowerExprInBlock (Full.Cast innerExpr targetTy) _ = do
                             IR.IntrinsicCall intrinsic [(innerVal, innerIRTy)] [(resVal, targetIRTy)]
                 addIRInstr call
                 pure $ Just (resVal, targetIRTy)
-lowerExprInBlock
-    ( Full.Let
-            { Full.letVarID = varID
-            , Full.letVarExpr = varExpr
-            , Full.letBodyExpr = bodyExpr
-            , Full.letVarName = name
-            , Full.letVarSpan = varSpan
-            }
-        )
-    _ = do
-        let makeDbgTy action = case varSpan of
-                Nothing -> action
-                Just (start, end) -> do
-                    dbgTy <- typeAsDbgType (Full.exprType varExpr)
-                    let meta = (\d -> IR.DBGLocalVar d (unIdentifier name)) <$> dbgTy
-                    case meta of
-                        Nothing -> action
-                        Just m ->
-                            withLocationSpan (start, end) $
-                                withLocationMetaData m action
-        varValue <- makeDbgTy $ tyValOrICE <$> lowerExpr varExpr
-        withVar varID varValue $
-            lowerExpr bodyExpr
+-- lowerExprInBlock
+--     ( Full.Let
+--             { Full.letVarID = varID
+--             , Full.letVarExpr = varExpr
+--             , Full.letBodyExpr = bodyExpr
+--             , Full.letVarName = name
+--             , Full.letVarSpan = varSpan
+--             }
+--         )
+--     _ = do
+--         let makeDbgTy action = case varSpan of
+--                 Nothing -> action
+--                 Just (start, end) -> do
+--                     dbgTy <- typeAsDbgType (Full.exprType varExpr)
+--                     let meta = (\d -> IR.DBGLocalVar d (unIdentifier name)) <$> dbgTy
+--                     case meta of
+--                         Nothing -> action
+--                         Just m ->
+--                             withLocationSpan (start, end) $
+--                                 withLocationMetaData m action
+--         varValue <- makeDbgTy $ tyValOrICE <$> lowerExpr varExpr
+--         withVar varID varValue $
+--             lowerExpr bodyExpr
 lowerExprInBlock (Full.Var (VarID varID)) _ = do
     varMap' <- State.gets @LocalLoweringContext varMap
     case IntMap.lookup (fromIntegral varID) varMap' of

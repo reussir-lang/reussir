@@ -213,11 +213,10 @@ instance PrettyColored Expr where
                 e1Doc <- prettyColored e1
                 e2Doc <- prettyColored e2
                 pure $ e1Doc <> "." <> pretty idx <+> operator "=" <+> e2Doc
-            Let _ (VarID vid) name val body -> do
+            Let _ (VarID vid) name val -> do
                 nameDoc <- prettyColored name
                 valTypeDoc <- prettyColored (exprType val)
                 valDoc <- prettyColored val
-                bodyDoc <- prettyColored body
                 pure $
                     group $
                         keyword "let"
@@ -227,9 +226,6 @@ instance PrettyColored Expr where
                             <+> valTypeDoc
                             <+> operator "="
                             <+> valDoc
-                            <+> keyword "in"
-                            <> line
-                            <> bodyDoc
             FuncCall symbol args regional -> do
                 symbolDoc <- prettyColored symbol
                 argsDocs <- mapM prettyColored args
@@ -263,10 +259,14 @@ instance PrettyColored Expr where
             RcWrap e -> do
                 eDoc <- prettyColored e
                 pure $ keyword "rc_wrap" <> parens eDoc
+            Sequence subexprs -> do
+                subexprsDocs <- mapM prettyColored subexprs
+                pure $ braces (nest 4 (hardline <> vsep (punctuate semi subexprsDocs)) <> hardline)
 
         case exprKind expr of
             Var _ -> pure kindDoc
-            Let _ _ _ _ _ -> pure kindDoc
+            Let _ _ _ _ -> pure kindDoc
+            Sequence _ -> pure kindDoc
             ScfIfExpr _ _ _ -> pure kindDoc
             _ -> do
                 tyDoc <- prettyColored (exprType expr)

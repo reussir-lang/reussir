@@ -76,8 +76,7 @@ convertSemiExpr semiExpr = do
                     >>= exprWithSpan ty
             SemiExpr.Let{..} -> do
                 varExpr' <- convertSemiExpr letVarExpr
-                bodyExpr' <- convertSemiExpr letBodyExpr
-                exprWithSpan ty $ Let letVarSpan letVarID letVarName varExpr' bodyExpr'
+                exprWithSpan ty $ Let letVarSpan letVarID letVarName varExpr'
             SemiExpr.FuncCall{..} -> do
                 gMap <- State.gets genericMap
                 let instantiatedTyArgs = map (flip Semi.substituteGenericMap gMap) funcCallTyArgs
@@ -98,6 +97,9 @@ convertSemiExpr semiExpr = do
             SemiExpr.IntrinsicCall{..} -> do
                 args' <- mapM convertSemiExpr intrinsicCallArgs
                 exprWithSpan ty $ IntrinsicCall intrinsicCallTarget args'
+            SemiExpr.Sequence es -> do
+                es' <- mapM convertSemiExpr es
+                exprWithSpan ty $ Sequence es'
 
 hoistRcWrapping :: Type -> ExprKind -> FullEff Expr
 hoistRcWrapping ty e = do

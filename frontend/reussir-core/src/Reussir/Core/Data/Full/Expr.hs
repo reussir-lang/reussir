@@ -28,7 +28,6 @@ data ExprKind
         , letVarID :: VarID
         , letVarName :: Identifier
         , letVarExpr :: Expr
-        , letBodyExpr :: Expr
         }
     | FuncCall
         { funcCallTarget :: Symbol
@@ -44,6 +43,7 @@ data ExprKind
         , intrinsicCallArgs :: [Expr]
         }
     | RcWrap Expr
+    | Sequence [Expr]
     deriving (Show, Eq)
 
 data Expr = Expr
