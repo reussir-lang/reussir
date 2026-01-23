@@ -371,6 +371,31 @@ lowerExprInBlock (Full.NullableCall maybeExpr) ty = do
     let instr = IR.NullableCreate maybeExpr' (retVal, retTy)
     addIRInstr instr
     pure $ Just (retVal, retTy)
+lowerExprInBlock (Full.Sequence exprs) _ = do
+    -- Lower a sequence of expressions, processing Let bindings and returning the last value
+    lowerSequence exprs
+  where
+    lowerSequence [] = pure Nothing
+    lowerSequence [e] = lowerExpr e
+    lowerSequence (Full.Expr (Full.Let varID name varExpr varSpan) _ _ _ : rest) = do
+        -- Lower the let expression and bind the variable
+        let makeDbgTy action = case varSpan of
+                Nothing -> action
+                Just (start, end) -> do
+                    dbgTy <- typeAsDbgType (Full.exprType varExpr)
+                    let meta = (\d -> IR.DBGLocalVar d (unIdentifier name)) <$> dbgTy
+                    case meta of
+                        Nothing -> action
+                        Just m ->
+                            withLocationSpan (start, end) $
+                                withLocationMetaData m action
+        varValue <- makeDbgTy $ tyValOrICE <$> lowerExpr varExpr
+        withVar varID varValue $
+            lowerSequence rest
+    lowerSequence (e : rest) = do
+        -- Lower non-Let expression (for side effects) and continue
+        _ <- lowerExpr e
+        lowerSequence rest
 lowerExprInBlock kind ty =
     error $
         "Detailed lowerExprInBlock implementation missing for "

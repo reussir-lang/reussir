@@ -222,7 +222,11 @@ checkFuncType func = withFreshLocalContext $ do
                     case Syn.funcBody func of
                         Just body -> do
                             L.logTrace_ $ "Tyck: checking function body for " <> unIdentifier name
-                            wellTyped <- checkType body (funcReturnType proto) >>= elimTypeHoles
+                            -- Wrap the body in an ExprSeq to enable sequence environment for let expressions
+                            let bodyInSeq = case body of
+                                    Syn.ExprSeq _ -> body
+                                    _ -> Syn.ExprSeq [body]
+                            wellTyped <- checkType bodyInSeq (funcReturnType proto) >>= elimTypeHoles
                             writeIORef' (funcBody proto) (Just wellTyped)
                             return wellTyped
                         Nothing -> exprWithSpan (funcReturnType proto) (Poison)
