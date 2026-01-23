@@ -991,6 +991,8 @@ inferTypeForSequence [] state = do
         subexprs@(x : _) -> do
             let exprTy = exprType x
             exprWithSpan exprTy $ Sequence (reverse subexprs)
+inferTypeForSequence (Syn.SpannedExpr (WithSpan expr start end) : es) state = do
+    withSpan (start, end) $ inferTypeForSequence (expr : es) state
 inferTypeForSequence
     ((Syn.Let (WithSpan varName vnsStart vnsEnd) Nothing valueExpr) : es)
     state = do

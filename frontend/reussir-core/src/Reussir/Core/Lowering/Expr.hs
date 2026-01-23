@@ -244,29 +244,13 @@ lowerExprInBlock (Full.Cast innerExpr targetTy) _ = do
                             IR.IntrinsicCall intrinsic [(innerVal, innerIRTy)] [(resVal, targetIRTy)]
                 addIRInstr call
                 pure $ Just (resVal, targetIRTy)
--- lowerExprInBlock
---     ( Full.Let
---             { Full.letVarID = varID
---             , Full.letVarExpr = varExpr
---             , Full.letBodyExpr = bodyExpr
---             , Full.letVarName = name
---             , Full.letVarSpan = varSpan
---             }
---         )
---     _ = do
---         let makeDbgTy action = case varSpan of
---                 Nothing -> action
---                 Just (start, end) -> do
---                     dbgTy <- typeAsDbgType (Full.exprType varExpr)
---                     let meta = (\d -> IR.DBGLocalVar d (unIdentifier name)) <$> dbgTy
---                     case meta of
---                         Nothing -> action
---                         Just m ->
---                             withLocationSpan (start, end) $
---                                 withLocationMetaData m action
---         varValue <- makeDbgTy $ tyValOrICE <$> lowerExpr varExpr
---         withVar varID varValue $
---             lowerExpr bodyExpr
+lowerExprInBlock
+    ( Full.Let
+            {
+            }
+        )
+    _ = error "Should not lower Let as a standalone expression"
+lowerExprInBlock (Full.Sequence subexprs) _ = lowerSequenceExprInBlock subexprs Nothing
 lowerExprInBlock (Full.Var (VarID varID)) _ = do
     varMap' <- State.gets @LocalLoweringContext varMap
     case IntMap.lookup (fromIntegral varID) varMap' of
@@ -276,13 +260,11 @@ lowerExprInBlock (Full.ScfIfExpr condExpr thenExpr elseExpr) ty = do
     (condVal, irType) <- tyValOrICE <$> lowerExpr condExpr
     returnTy <- inject $ convertType ty
     thenBlock <- lowerExprAsBlock thenExpr [] $ \thenVal -> do
-        let (thenVal', _) = tyValOrICE thenVal
-        let retInstr = IR.Yield IR.YieldScf $ Just (thenVal', returnTy)
+        let retInstr = IR.Yield IR.YieldScf $ thenVal
         addIRInstr retInstr
 
     elseBlock <- lowerExprAsBlock elseExpr [] $ \elseVal -> do
-        let (elseVal', _) = tyValOrICE elseVal
-        let retInstr = IR.Yield IR.YieldScf $ Just (elseVal', returnTy)
+        let retInstr = IR.Yield IR.YieldScf $ elseVal
         addIRInstr retInstr
 
     resultVal <- nextValue
@@ -341,8 +323,7 @@ lowerExprInBlock (Full.RegionRun bodyExpr) ty = do
     State.modify $ \s -> s{regionHandle = Just handle}
 
     bodyBlock <- lowerExprAsBlock bodyExpr [handle] $ \bodyRes -> do
-        let (bodyVal, bodyTy) = tyValOrICE bodyRes
-        addIRInstr (IR.Yield IR.YieldRegion $ Just (bodyVal, bodyTy))
+        addIRInstr (IR.Yield IR.YieldRegion bodyRes)
 
     State.modify $ \s -> s{regionHandle = Nothing}
     let instr = IR.RegionRun bodyBlock $ Just (regionVal, regionTy)
@@ -546,3 +527,29 @@ handleProjection base@(_, valTy) index = do
                                 Nothing -> error $ "projectedType: record not found " <> show fieldSym
                         _ -> pure ty'
             _ -> error $ "invalid record for projection: " <> show sym
+
+lowerSequenceExprInBlock :: [Full.Expr] -> ExprResult -> LoweringEff ExprResult
+lowerSequenceExprInBlock [] res = pure res
+lowerSequenceExprInBlock (e : es) _ =
+    case Full.exprKind e of
+        Full.Let
+            { Full.letVarID = varID
+            , Full.letVarExpr = varExpr
+            , Full.letVarName = name
+            , Full.letVarSpan = varSpan
+            } -> do
+                let makeDbgTy action = case varSpan of
+                        Nothing -> action
+                        Just (start, end) -> do
+                            dbgTy <- typeAsDbgType (Full.exprType varExpr)
+                            let meta = (\d -> IR.DBGLocalVar d (unIdentifier name)) <$> dbgTy
+                            case meta of
+                                Nothing -> action
+                                Just m ->
+                                    withLocationSpan (start, end) $
+                                        withLocationMetaData m action
+                varValue <- makeDbgTy $ tyValOrICE <$> lowerExpr varExpr
+                withVar varID varValue $ lowerSequenceExprInBlock es Nothing
+        kind -> do
+            res' <- lowerExprInBlock kind (Full.exprType e)
+            lowerSequenceExprInBlock es res'
