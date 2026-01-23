@@ -114,13 +114,13 @@ spec = do
             (stripExprSpans <$> parse parseExprSeq "" "{ let x = 1; x }")
                 `shouldParse` ExprSeq
                     [ Let
-                        (WithSpan "x" 6 8) -- dummy span, will be stripped but LetIn ctor used in spec has span arg?
+                        (WithSpan "x" 6 8) -- dummy span; span information is stripped by stripExprSpans, but the Let constructor still requires it
                         Nothing
                         (ConstExpr (ConstInt 1))
                     , Var (Path "x" [])
                     ]
-        -- Wait, if let consumes 'x', then it's ONE expression.
-        -- { let x=1; x } -> ExprSeq [Let ... x]
+        -- In this grammar, "{ let x = 1; x }" is parsed as a sequence of two expressions: a let-binding and a
+        -- subsequent reference to x, which is why the expected value is ExprSeq [Let ..., Var (Path "x" [])].
 
         it "parses longer sequence" $
             (stripExprSpans <$> parse parseExprSeq "" "{ 1; 2; 3 }")
