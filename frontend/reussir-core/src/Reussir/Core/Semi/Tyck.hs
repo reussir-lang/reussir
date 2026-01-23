@@ -21,7 +21,7 @@ import Data.Function ((&))
 import Effectful.State.Static.Local qualified as State
 import System.Console.ANSI.Types qualified as ANSI
 
-import Control.Monad (forM_, unless, when, zipWithM)
+import Control.Monad (unless, when, zipWithM)
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
 import Data.List (find)
@@ -49,7 +49,6 @@ import Reussir.Core.Data.Semi.Type (
     Type (..),
  )
 import Reussir.Core.Data.Semi.Unification (HoleState (..))
-import Reussir.Core.Data.Semi.Variable (ChangeLog)
 import Reussir.Core.Data.UniqueID (GenericID (..))
 import Reussir.Core.Semi.Context (
     addErrReport,
@@ -63,11 +62,12 @@ import Reussir.Core.Semi.Context (
     withGenericContext,
     withMaybeSpan,
     withSpan,
+    withVariable,
  )
 import Reussir.Core.Semi.Function (getFunctionProto)
 import Reussir.Core.Semi.Type (substituteGenericMap)
 import Reussir.Core.Semi.Unification (errorToReport, force, getGenericBound, getHoleState, introduceNewHole, satisfyBounds, unify)
-import Reussir.Core.Semi.Variable (lookupVar, newVariable, rollbackVar)
+import Reussir.Core.Semi.Variable (lookupVar, newVariable)
 import Reussir.Core.String (allocateStrToken)
 import Reussir.Diagnostic (Label (..))
 import Reussir.Diagnostic.Report (
@@ -499,7 +499,7 @@ inferType
         exprWithSpan nullableTy $ NullableCall (Just innerExpr')
 inferType (Syn.CtorCallExpr call) = inferTypeForNormalCtorCall call
 inferType (Syn.ExprSeq exprs) = do
-    inferTypeForSequence exprs SequenceInferState{exprs = [], varChangeLogs = []}
+    inferTypeForSequence exprs []
 -- Advance the span in the context and continue on inner expression
 inferType (Syn.SpannedExpr (WithSpan expr start end)) =
     withSpan (start, end) $ inferType expr
@@ -972,75 +972,48 @@ inferTypeForNormalCtorCall
                     exprWithSpan TypeBottom Poison
                 else paramAction
 
-data SequenceInferState = SequenceInferState
-    { exprs :: [Expr]
-    , varChangeLogs :: [ChangeLog]
-    }
-
-undoChangeLogs :: [ChangeLog] -> SemiEff ()
-undoChangeLogs logs = do
-    varTable <- State.gets varTable
-    forM_ logs $ \changeLog -> do
-        rollbackVar changeLog varTable
-
-inferTypeForSequence :: [Syn.Expr] -> SequenceInferState -> SemiEff Expr
-inferTypeForSequence [] state = do
-    undoChangeLogs $ varChangeLogs state
-    case exprs state of
+inferTypeForSequence :: [Syn.Expr] -> [Expr] -> SemiEff Expr
+inferTypeForSequence [] exprs = do
+    case exprs of
         [] -> exprWithSpan TypeBottom Poison
         subexprs@(x : _) -> do
             let exprTy = exprType x
             exprWithSpan exprTy $ Sequence (reverse subexprs)
-inferTypeForSequence (Syn.SpannedExpr (WithSpan expr start end) : es) state = do
-    withSpan (start, end) $ inferTypeForSequence (expr : es) state
+inferTypeForSequence (Syn.SpannedExpr (WithSpan expr start end) : es) exprs = do
+    withSpan (start, end) $ inferTypeForSequence (expr : es) exprs
 inferTypeForSequence
     ((Syn.Let (WithSpan varName vnsStart vnsEnd) Nothing valueExpr) : es)
-    state = do
+    exprs = do
         valueExpr' <- inferType valueExpr
         let valueTy = exprType valueExpr'
         valueTy' <- runUnification $ force valueTy
-        varTable <- State.gets varTable
-        (varID, changeLog) <- newVariable varName (Just (vnsStart, vnsEnd)) valueTy' varTable
-        expr <-
-            exprWithSpan TypeUnit $
-                Let
-                    { letVarID = varID
-                    , letVarName = varName
-                    , letVarExpr = valueExpr'
-                    , letVarSpan = Just (vnsStart, vnsEnd)
-                    }
-        let prevExprs = exprs state
-        let prevLogs = varChangeLogs state
-        inferTypeForSequence es $
-            state
-                { exprs = expr : prevExprs
-                , varChangeLogs = changeLog : prevLogs
-                }
+        withVariable varName (Just (vnsStart, vnsEnd)) valueTy' $ \varID -> do
+            expr <-
+                exprWithSpan TypeUnit $
+                    Let
+                        { letVarID = varID
+                        , letVarName = varName
+                        , letVarExpr = valueExpr'
+                        , letVarSpan = Just (vnsStart, vnsEnd)
+                        }
+            inferTypeForSequence es $ expr : exprs
 inferTypeForSequence
     ((Syn.Let (WithSpan varName vnsStart vnsEnd) (Just (ty, flex)) valueExpr) : es)
-    state = do
+    exprs = do
         annotatedType' <- evalTypeWithFlexivity ty flex
         valueExpr' <- checkType valueExpr annotatedType'
         let valueTy = exprType valueExpr'
         valueTy' <- runUnification $ force valueTy
-        varTable <- State.gets varTable
-        (varID, changeLog) <- newVariable varName (Just (vnsStart, vnsEnd)) valueTy' varTable
-        expr <-
-            exprWithSpan TypeUnit $
-                Let
-                    { letVarID = varID
-                    , letVarName = varName
-                    , letVarExpr = valueExpr'
-                    , letVarSpan = Just (vnsStart, vnsEnd)
-                    }
-        let prevExprs = exprs state
-        let prevLogs = varChangeLogs state
-        inferTypeForSequence es $
-            state
-                { exprs = expr : prevExprs
-                , varChangeLogs = changeLog : prevLogs
-                }
-inferTypeForSequence (e : es) state = do
+        withVariable varName (Just (vnsStart, vnsEnd)) valueTy' $ \varID -> do
+            expr <-
+                exprWithSpan TypeUnit $
+                    Let
+                        { letVarID = varID
+                        , letVarName = varName
+                        , letVarExpr = valueExpr'
+                        , letVarSpan = Just (vnsStart, vnsEnd)
+                        }
+            inferTypeForSequence es $ expr : exprs
+inferTypeForSequence (e : es) exprs = do
     e' <- inferType e
-    let prevExprs = exprs state
-    inferTypeForSequence es $ state{exprs = e' : prevExprs}
+    inferTypeForSequence es $ e' : exprs
