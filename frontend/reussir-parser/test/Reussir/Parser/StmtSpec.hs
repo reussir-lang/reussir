@@ -20,13 +20,14 @@ stripExprSpans (BinOpExpr op e1 e2) = BinOpExpr op (stripExprSpans e1) (stripExp
 stripExprSpans (UnaryOpExpr op e) = UnaryOpExpr op (stripExprSpans e)
 stripExprSpans (If e1 e2 e3) = If (stripExprSpans e1) (stripExprSpans e2) (stripExprSpans e3)
 stripExprSpans (Cast t e) = Cast t (stripExprSpans e)
-stripExprSpans (LetIn n t e1 e2) = LetIn n t (stripExprSpans e1) (stripExprSpans e2)
+stripExprSpans (Let n t e) = Let n t (stripExprSpans e)
 stripExprSpans (FuncCallExpr (FuncCall p tys es)) = FuncCallExpr (FuncCall p tys (map stripExprSpans es))
 stripExprSpans (Lambda n t e) = Lambda n t (stripExprSpans e)
 stripExprSpans (Match e cases) = Match (stripExprSpans e) (fmap (\(p, ex) -> (p, stripExprSpans ex)) cases)
 stripExprSpans (RegionalExpr e) = RegionalExpr (stripExprSpans e)
 stripExprSpans (CtorCallExpr (CtorCall p tys args)) = CtorCallExpr (CtorCall p tys (map (\(i, e) -> (i, stripExprSpans e)) args))
 stripExprSpans (AccessChain e accesses) = AccessChain (stripExprSpans e) accesses
+stripExprSpans (ExprSeq es) = ExprSeq (map stripExprSpans es)
 stripExprSpans e = e
 
 stripStmtSpans :: Stmt -> Stmt
@@ -54,7 +55,7 @@ spec = do
                         []
                         Nothing
                         False
-                        (Just (ConstExpr (ConstInt 0)))
+                        (Just (ExprSeq [ConstExpr (ConstInt 0)]))
                     )
 
         it "parses function with capabilities" $
@@ -67,7 +68,7 @@ spec = do
                         [(Identifier "x", TypeIntegral (Signed 32), True)]
                         (Just (TypeIntegral (Signed 32), True))
                         False
-                        (Just (ConstExpr (ConstInt 0)))
+                        (Just (ExprSeq [ConstExpr (ConstInt 0)]))
                     )
 
         it "parses regional function" $
@@ -80,7 +81,7 @@ spec = do
                         []
                         Nothing
                         True
-                        (Just (ConstExpr (ConstInt 0)))
+                        (Just (ExprSeq [ConstExpr (ConstInt 0)]))
                     )
 
         it "parses extern function" $

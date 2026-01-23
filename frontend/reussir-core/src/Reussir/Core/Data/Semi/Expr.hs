@@ -27,8 +27,8 @@ data ExprKind
         , letVarID :: VarID
         , letVarName :: Identifier
         , letVarExpr :: Expr
-        , letBodyExpr :: Expr
         }
+    | Sequence [Expr]
     | FuncCall
         { funcCallTarget :: Path
         , funcCallTyArgs :: [Type]

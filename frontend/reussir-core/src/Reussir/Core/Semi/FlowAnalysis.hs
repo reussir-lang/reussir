@@ -79,9 +79,10 @@ analyzeGenericFlowInExpr expr = do
             analyzeGenericFlowInExpr e2
             analyzeGenericFlowInExpr e3
         Proj e _ -> analyzeGenericFlowInExpr e
-        Let _ _ _ val body -> do
+        Let _ _ _ val -> do
             analyzeGenericFlowInExpr val
-            analyzeGenericFlowInExpr body
+        Sequence subexprs -> do
+            mapM_ analyzeGenericFlowInExpr subexprs
         RegionRun e -> analyzeGenericFlowInExpr e
         -- Base cases
         GlobalStr _ -> pure ()

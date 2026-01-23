@@ -3,7 +3,6 @@
 module Reussir.Core.Semi.Context (
     withSpan,
     withMaybeSpan,
-    withVariable,
     runUnification,
     addErrReport,
     addErrReportMsg,
@@ -50,15 +49,14 @@ import Reussir.Core.Data.Semi.Expr
 import Reussir.Core.Data.Semi.Function (FunctionProto (..), FunctionTable (..))
 import Reussir.Core.Data.Semi.Record
 import Reussir.Core.Data.Semi.Type (Flexivity (..), Type (..), TypeClassTable)
-import Reussir.Core.Data.Semi.Type qualified as Semi
 import Reussir.Core.Data.Semi.Unification (UnificationEff)
 import Reussir.Core.Data.String (StringUniqifier (StringUniqifier))
-import Reussir.Core.Data.UniqueID (ExprID (..), GenericID (..), VarID)
+import Reussir.Core.Data.UniqueID (ExprID (..), GenericID (..))
 import Reussir.Core.Generic (emptyGenericState, newGenericVar)
 import Reussir.Core.Semi.Function (newFunctionTable)
 import Reussir.Core.Semi.Type (addClassToType, emptyTypeClassTable)
 import Reussir.Core.Semi.Unification (newHoleTable)
-import Reussir.Core.Semi.Variable (newVariable, newVariableTable, rollbackVar)
+import Reussir.Core.Semi.Variable (newVariableTable)
 import Reussir.Diagnostic (Label (..))
 import Reussir.Diagnostic.Report (
     Report (..),
@@ -86,19 +84,6 @@ withSpan span' cont = do
 withMaybeSpan :: Maybe (Int64, Int64) -> SemiEff a -> SemiEff a
 withMaybeSpan Nothing cont = cont
 withMaybeSpan (Just span') cont = withSpan span' cont
-
-withVariable ::
-    Identifier ->
-    Maybe (Int64, Int64) ->
-    Semi.Type ->
-    (VarID -> SemiEff a) ->
-    SemiEff a
-withVariable varName varSpan varType cont = do
-    vt <- State.gets varTable
-    (varID, changeLog) <- newVariable varName varSpan varType vt
-    result <- cont varID
-    rollbackVar changeLog vt
-    pure result
 
 runUnification :: UnificationEff a -> SemiEff a
 runUnification eff = do

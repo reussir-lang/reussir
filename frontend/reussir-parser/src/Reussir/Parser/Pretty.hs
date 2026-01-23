@@ -112,16 +112,13 @@ instance PrettyColored Expr where
                 <> keyword "else"
                 <> nest 4 (line <> prettyColored e3)
     prettyColored (Cast t e) = keyword "cast" <> angles (prettyColored t) <> parens (prettyColored e)
-    prettyColored (LetIn name tyVal e1 e2) =
+    prettyColored (Let name tyVal e1) =
         group $
             keyword "let"
                 <+> prettyColored (spanValue name)
                 <> prettyTy tyVal
                     <+> operator "="
                     <+> prettyColored e1
-                    <+> keyword "in"
-                <> line
-                <> prettyColored e2
       where
         prettyTy Nothing = emptyDoc
         prettyTy (Just (t, True)) = operator ":" <+> brackets (keyword "flex") <+> prettyColored t
@@ -138,6 +135,7 @@ instance PrettyColored Expr where
         keyword "match" <+> prettyColored e <+> braces (nest 4 (hardline <> vsep (map prettyCase $ V.toList cases)) <> hardline)
       where
         prettyCase (p, expr) = prettyColored p <+> operator "=>" <+> prettyColored expr
+    prettyColored (ExprSeq es) = braces (nest 4 (hardline <> vsep (punctuate semi (map prettyColored es))) <> hardline)
     prettyColored (Var path) = prettyColored path
     prettyColored (SpannedExpr w) = prettyColored (spanValue w)
     prettyColored (RegionalExpr e) = keyword "regional" <+> braces (prettyColored e)

@@ -64,7 +64,8 @@ data Expr
     | UnaryOpExpr UnaryOp Expr
     | If Expr Expr Expr
     | Cast Type Expr
-    | LetIn (WithSpan Identifier) (Maybe (Type, FlexFlag)) Expr Expr
+    | Let (WithSpan Identifier) (Maybe (Type, FlexFlag)) Expr
+    | ExprSeq [Expr]
     | Lambda Identifier Type Expr
     | Match Expr (Vector (Pattern, Expr))
     | Var Path

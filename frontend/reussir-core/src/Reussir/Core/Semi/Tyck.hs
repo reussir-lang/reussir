@@ -21,7 +21,7 @@ import Data.Function ((&))
 import Effectful.State.Static.Local qualified as State
 import System.Console.ANSI.Types qualified as ANSI
 
-import Control.Monad (unless, when, zipWithM)
+import Control.Monad (forM_, unless, when, zipWithM)
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
 import Data.List (find)
@@ -49,6 +49,7 @@ import Reussir.Core.Data.Semi.Type (
     Type (..),
  )
 import Reussir.Core.Data.Semi.Unification (HoleState (..))
+import Reussir.Core.Data.Semi.Variable (ChangeLog)
 import Reussir.Core.Data.UniqueID (GenericID (..))
 import Reussir.Core.Semi.Context (
     addErrReport,
@@ -62,12 +63,11 @@ import Reussir.Core.Semi.Context (
     withGenericContext,
     withMaybeSpan,
     withSpan,
-    withVariable,
  )
 import Reussir.Core.Semi.Function (getFunctionProto)
 import Reussir.Core.Semi.Type (substituteGenericMap)
 import Reussir.Core.Semi.Unification (errorToReport, force, getGenericBound, getHoleState, introduceNewHole, satisfyBounds, unify)
-import Reussir.Core.Semi.Variable (lookupVar)
+import Reussir.Core.Semi.Variable (lookupVar, newVariable, rollbackVar)
 import Reussir.Core.String (allocateStrToken)
 import Reussir.Diagnostic (Label (..))
 import Reussir.Diagnostic.Report (
@@ -153,10 +153,9 @@ elimTypeHoles expr = withMaybeSpan (exprSpan expr) $ do
         ScfIfExpr e1 e2 e3 -> ScfIfExpr <$> elimTypeHoles e1 <*> elimTypeHoles e2 <*> elimTypeHoles e3
         Var v -> return $ Var v
         Proj e idx -> Proj <$> elimTypeHoles e <*> pure idx
-        Let span' varID name val body -> do
+        Let span' varID name val -> do
             val' <- elimTypeHoles val
-            body' <- elimTypeHoles body
-            return $ Let span' varID name val' body'
+            return $ Let span' varID name val'
         FuncCall target tyArgs args regional -> do
             tyArgs' <- mapM forceAndCheckHoles tyArgs
             args' <- mapM elimTypeHoles args
@@ -174,6 +173,7 @@ elimTypeHoles expr = withMaybeSpan (exprSpan expr) $ do
         RegionRun e -> RegionRun <$> elimTypeHoles e
         Assign e idx e' -> Assign <$> elimTypeHoles e <*> pure idx <*> elimTypeHoles e'
         IntrinsicCall path args -> IntrinsicCall path <$> mapM elimTypeHoles args
+        Sequence subexprs -> Sequence <$> mapM elimTypeHoles subexprs
     return $ expr{exprType = ty', exprKind = kind'}
 
 -- | Infer the type of an expression that is inside a region
@@ -204,6 +204,7 @@ checkFuncType func = withFreshLocalContext $ do
     let name = Syn.funcName func
     let path = Path name [] -- TODO: handle module prefix later on
     funcTable <- State.gets functions
+    varTable <- State.gets varTable
     liftIO (H.lookup (functionProtos funcTable) path) >>= \case
         Nothing -> do
             addErrReportMsg $ "Function not found in table: " <> unIdentifier name
@@ -217,7 +218,7 @@ checkFuncType func = withFreshLocalContext $ do
             State.modify $ \s -> s{insideRegion = Syn.funcIsRegional func}
             withGenericContext generics $ do
                 let params = funcParams proto
-                withParams params $ do
+                withParams params varTable $ do
                     case Syn.funcBody func of
                         Just body -> do
                             L.logTrace_ $ "Tyck: checking function body for " <> unIdentifier name
@@ -226,9 +227,10 @@ checkFuncType func = withFreshLocalContext $ do
                             return wellTyped
                         Nothing -> exprWithSpan (funcReturnType proto) (Poison)
   where
-    withParams [] action = action
-    withParams ((pName, ty) : ps) action =
-        withVariable pName Nothing ty $ \_ -> withParams ps action
+    withParams [] _ action = action
+    withParams ((pName, ty) : ps) varTable action = do
+        _ <- newVariable pName Nothing ty varTable -- no need to rollback
+        withParams ps varTable action
 
 -- Helper function for convert type args into semantic counterparts.
 -- For placeholder type args (represented as Nothing), we always introduce a
@@ -361,35 +363,10 @@ inferType (Syn.Cast targetType subExpr) = do
 --               Г |- x -> T;  Г, x:T |- T' <- e2
 --  ──────────────────────────────────────────────────
 --                 T <- let x: T = e1 in e2
-inferType (Syn.LetIn (WithSpan varName vnsStart vnsEnd) Nothing valueExpr bodyExpr) = do
-    valueExpr' <- inferType valueExpr
-    let valueTy = exprType valueExpr'
-    valueTy' <- runUnification $ force valueTy
-    withVariable varName (Just (vnsStart, vnsEnd)) valueTy' $ \varID -> do
-        bodyExpr' <- inferType bodyExpr
-        let bodyTy = exprType bodyExpr'
-        exprWithSpan bodyTy $
-            Let
-                { letVarID = varID
-                , letVarName = varName
-                , letVarExpr = valueExpr'
-                , letBodyExpr = bodyExpr'
-                , letVarSpan = Just (vnsStart, vnsEnd)
-                }
-inferType (Syn.LetIn (WithSpan varName vnsStart vnsEnd) (Just (ty, flex)) valueExpr bodyExpr) = do
-    annotatedType' <- evalTypeWithFlexivity ty flex
-    valueExpr' <- checkType valueExpr annotatedType'
-    withVariable varName (Just (vnsStart, vnsEnd)) annotatedType' $ \varID -> do
-        bodyExpr' <- inferType bodyExpr
-        let bodyTy = exprType bodyExpr'
-        exprWithSpan bodyTy $
-            Let
-                { letVarID = varID
-                , letVarName = varName
-                , letVarExpr = valueExpr'
-                , letBodyExpr = bodyExpr'
-                , letVarSpan = Just (vnsStart, vnsEnd)
-                }
+inferType (Syn.Let{}) = do
+    addErrReportMsg "Let expression in a non sequence environment is not supported"
+    exprWithSpan TypeBottom Poison
+
 -- Regional expression:
 --  no Region in Г          Г + region, T | T <- e
 --  ──────────────────────────────────────────────────
@@ -521,6 +498,8 @@ inferType
         let nullableTy = TypeNullable expectedTy
         exprWithSpan nullableTy $ NullableCall (Just innerExpr')
 inferType (Syn.CtorCallExpr call) = inferTypeForNormalCtorCall call
+inferType (Syn.ExprSeq exprs) = do
+    inferTypeForSequence exprs SequenceInferState{exprs = [], varChangeLogs = []}
 -- Advance the span in the context and continue on inner expression
 inferType (Syn.SpannedExpr (WithSpan expr start end)) =
     withSpan (start, end) $ inferType expr
@@ -992,3 +971,74 @@ inferTypeForNormalCtorCall
                             <> T.pack (show (length actualTyArgs))
                     exprWithSpan TypeBottom Poison
                 else paramAction
+
+data SequenceInferState = SequenceInferState
+    { exprs :: [Expr]
+    , varChangeLogs :: [ChangeLog]
+    }
+
+undoChangeLogs :: [ChangeLog] -> SemiEff ()
+undoChangeLogs logs = do
+    varTable <- State.gets varTable
+    forM_ logs $ \changeLog -> do
+        rollbackVar changeLog varTable
+
+inferTypeForSequence :: [Syn.Expr] -> SequenceInferState -> SemiEff Expr
+inferTypeForSequence [] state = do
+    undoChangeLogs $ varChangeLogs state
+    case exprs state of
+        [] -> exprWithSpan TypeBottom Poison
+        subexprs@(x : _) -> do
+            let exprTy = exprType x
+            exprWithSpan exprTy $ Sequence (reverse subexprs)
+inferTypeForSequence
+    ((Syn.Let (WithSpan varName vnsStart vnsEnd) Nothing valueExpr) : es)
+    state = do
+        valueExpr' <- inferType valueExpr
+        let valueTy = exprType valueExpr'
+        valueTy' <- runUnification $ force valueTy
+        varTable <- State.gets varTable
+        (varID, changeLog) <- newVariable varName (Just (vnsStart, vnsEnd)) valueTy' varTable
+        expr <-
+            exprWithSpan TypeUnit $
+                Let
+                    { letVarID = varID
+                    , letVarName = varName
+                    , letVarExpr = valueExpr'
+                    , letVarSpan = Just (vnsStart, vnsEnd)
+                    }
+        let prevExprs = exprs state
+        let prevLogs = varChangeLogs state
+        inferTypeForSequence es $
+            state
+                { exprs = expr : prevExprs
+                , varChangeLogs = changeLog : prevLogs
+                }
+inferTypeForSequence
+    ((Syn.Let (WithSpan varName vnsStart vnsEnd) (Just (ty, flex)) valueExpr) : es)
+    state = do
+        annotatedType' <- evalTypeWithFlexivity ty flex
+        valueExpr' <- checkType valueExpr annotatedType'
+        let valueTy = exprType valueExpr'
+        valueTy' <- runUnification $ force valueTy
+        varTable <- State.gets varTable
+        (varID, changeLog) <- newVariable varName (Just (vnsStart, vnsEnd)) valueTy' varTable
+        expr <-
+            exprWithSpan TypeUnit $
+                Let
+                    { letVarID = varID
+                    , letVarName = varName
+                    , letVarExpr = valueExpr'
+                    , letVarSpan = Just (vnsStart, vnsEnd)
+                    }
+        let prevExprs = exprs state
+        let prevLogs = varChangeLogs state
+        inferTypeForSequence es $
+            state
+                { exprs = expr : prevExprs
+                , varChangeLogs = changeLog : prevLogs
+                }
+inferTypeForSequence (e : es) state = do
+    e' <- inferType e
+    let prevExprs = exprs state
+    inferTypeForSequence es $ state{exprs = e' : prevExprs}

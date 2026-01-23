@@ -19,7 +19,10 @@ import Reussir.Parser.Types.Lexer (Identifier)
 import Reussir.Parser.Types.Type (Type)
 
 parseBody :: Parser Expr
-parseBody = openBody *> parseExpr <* closeBody
+parseBody = parseExprSeq
+
+parseExprSeq :: Parser Expr
+parseExprSeq = ExprSeq <$> (openBody *> parseExpr `sepEndBy` semicolon <* closeBody)
 
 parsePattern :: Parser Pattern
 parsePattern = do
@@ -41,10 +44,8 @@ parseLetIn :: Parser Expr
 parseLetIn = do
     name <- string "let" *> space *> withSpan parseIdentifier
     ty <- optional (colon *> parseTypeWithFlex)
-    value <- char '=' *> space *> parseExpr <* semicolon
-    body <- parseExpr
-
-    return (LetIn name ty value body)
+    value <- char '=' *> space *> parseExpr
+    return (Let name ty value)
   where
     parseTypeWithFlex = do
         flexFlag <- optional (char '[' *> space *> string "flex" <* space <* char ']' <* space)
@@ -197,6 +198,7 @@ parseExprTerm =
         , parseRegionalExpr <?> "regional expression"
         , ConstExpr <$> parseConstant <?> "constant"
         , SpannedExpr <$> withSpan parsePathBasedExpr <?> "variable or function call"
+        , parseExprSeq <?> "expression sequence"
         ]
 
 parseExpr :: Parser Expr
