@@ -31,7 +31,7 @@ import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
 import Effectful (MonadIO (liftIO), inject)
 import Effectful.Log qualified as L
-import Effectful.Prim.IORef.Strict (writeIORef')
+import Effectful.Prim.IORef.Strict (readIORef', writeIORef')
 import Reussir.Core.Data.Class (Class (Class), TypeBound)
 import Reussir.Core.Data.Integral (IntegralType (..))
 import Reussir.Core.Data.Operator (ArithOp (..), CmpOp (..))
@@ -430,8 +430,9 @@ inferType (Syn.AccessChain baseExpr accesses) = do
                 liftIO (H.lookup knownRecords path) >>= \case
                     Just record -> do
                         let subst = IntMap.fromList $ zip (map (\(_, GenericID gid) -> fromIntegral gid) $ recordTyParams record) args
-                        case (recordFields record, access) of
-                            (Named fields, Access.Named name) -> do
+                        fieldsMaybe <- readIORef' (recordFields record)
+                        case (fieldsMaybe, access) of
+                            (Just (Named fields), Access.Named name) -> do
                                 case V.findIndex (\(WithSpan (n, _, _) _ _) -> n == name) fields of
                                     Just idx -> do
                                         let WithSpan (_, fieldTy, nullable) _ _ = fields `V.unsafeIndex` idx
@@ -441,7 +442,7 @@ inferType (Syn.AccessChain baseExpr accesses) = do
                                     Nothing -> do
                                         addErrReportMsg $ "Field not found: " <> unIdentifier name
                                         return (TypeBottom, -1 : acc)
-                            (Unnamed fields, Access.Unnamed idx) -> do
+                            (Just (Unnamed fields), Access.Unnamed idx) -> do
                                 let idxInt = fromIntegral idx
                                 case fields V.!? idxInt of
                                     Just (WithSpan (fieldTy, nullable) _ _) -> do
@@ -450,6 +451,9 @@ inferType (Syn.AccessChain baseExpr accesses) = do
                                     Nothing -> do
                                         addErrReportMsg $ "Field index out of bounds: " <> T.pack (show idx)
                                         return (TypeBottom, -1 : acc)
+                            (Nothing, _) -> do
+                                addErrReportMsg "Record fields not populated"
+                                return (TypeBottom, -1 : acc)
                             _ -> do
                                 addErrReportMsg "Invalid access type for record kind"
                                 return (TypeBottom, -1 : acc)
@@ -870,16 +874,20 @@ inferTypeForNormalCtorCall
                 checkTypeArgsNum numGenerics paddedTyArgs $ do
                     let genericMap = recordGenericMap record tyArgs'
 
-                    (fields, variantInfo) <- case (recordKind record, recordFields record) of
-                        (StructKind, Named fs) -> return (V.toList $ V.map (\(WithSpan (n, t, f) _ _) -> (Just n, t, f)) fs, Nothing)
-                        (StructKind, Unnamed fs) -> return (V.toList $ V.map (\(WithSpan (t, f) _ _) -> (Nothing, t, f)) fs, Nothing)
-                        (EnumVariant parentPath idx, Unnamed fs) -> return (V.toList $ V.map (\(WithSpan (t, f) _ _) -> (Nothing, t, f)) fs, Just (parentPath, idx))
-                        (EnumVariant _ _, Named _) -> do
+                    fieldsMaybe <- readIORef' (recordFields record)
+                    (fields, variantInfo) <- case (recordKind record, fieldsMaybe) of
+                        (StructKind, Just (Named fs)) -> return (V.toList $ V.map (\(WithSpan (n, t, f) _ _) -> (Just n, t, f)) fs, Nothing)
+                        (StructKind, Just (Unnamed fs)) -> return (V.toList $ V.map (\(WithSpan (t, f) _ _) -> (Nothing, t, f)) fs, Nothing)
+                        (EnumVariant parentPath idx, Just (Unnamed fs)) -> return (V.toList $ V.map (\(WithSpan (t, f) _ _) -> (Nothing, t, f)) fs, Just (parentPath, idx))
+                        (EnumVariant _ _, Just (Named _)) -> do
                             -- This should be unreachable based on current translation logic
                             addErrReportMsg "Enum variant cannot have named fields yet"
                             return ([], Nothing)
                         (EnumKind, _) -> do
                             addErrReportMsg "Cannot instantiate Enum directly"
+                            return ([], Nothing)
+                        (_, Nothing) -> do
+                            addErrReportMsg "Record fields not populated"
                             return ([], Nothing)
                         _ -> do
                             addErrReportMsg "Invalid record kind/fields combination"
@@ -889,7 +897,7 @@ inferTypeForNormalCtorCall
                     checkArgsNum expectedNumParams $ do
                         -- Reconstruct an ordered list of syntactic expressions in the same order as required in the record
                         orderedArgsExprs <-
-                            if isJust variantInfo || case recordFields record of Unnamed _ -> True; _ -> False
+                            if isJust variantInfo || case fieldsMaybe of Just (Unnamed _) -> True; _ -> False
                                 then return $ map (Just . snd) ctorArgs
                                 else do
                                     let hasNamedArgs = any (isJust . fst) ctorArgs

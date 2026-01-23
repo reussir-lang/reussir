@@ -2,6 +2,7 @@ module Reussir.Core.Data.Semi.Record where
 
 import Data.Int (Int64)
 import Data.Vector.Strict qualified as V
+import Effectful.Prim.IORef.Strict (IORef')
 import Reussir.Core.Data.Semi.Type (Type)
 import Reussir.Core.Data.UniqueID (GenericID)
 import Reussir.Parser.Types.Capability (Capability)
@@ -25,10 +26,10 @@ data RecordKind
 data Record = Record
     { recordName :: Path
     , recordTyParams :: [(Identifier, GenericID)]
-    , recordFields :: RecordFields
+    , recordFields :: IORef' (Maybe RecordFields)
     , recordKind :: RecordKind
     , recordVisibility :: Visibility
     , recordDefaultCap :: Capability
     , recordSpan :: Maybe (Int64, Int64)
     }
-    deriving (Show, Eq)
+    deriving (Eq)

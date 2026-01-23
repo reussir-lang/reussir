@@ -13,6 +13,7 @@ module Reussir.Core.Semi.Context (
     evalTypeWithFlexivity,
     scanProg,
     scanStmt,
+    populateRecordFields,
     exprWithSpan,
     withFreshLocalContext,
     withGenericContext,
@@ -30,7 +31,7 @@ import Data.Vector.Strict qualified as V
 import Effectful (Eff, IOE, inject, liftIO, (:>))
 import Effectful.Log qualified as L
 import Effectful.Prim.IORef (Prim)
-import Effectful.Prim.IORef.Strict (newIORef')
+import Effectful.Prim.IORef.Strict (newIORef', writeIORef')
 import Effectful.Reader.Static (runReader)
 import Effectful.State.Static.Local (runState)
 import Effectful.State.Static.Local qualified as State
@@ -341,59 +342,47 @@ scanStmtImpl (Syn.RecordStmt record) = do
     -- Translate generics
     genericsList <- mapM translateGeneric tyParams
 
-    -- Translate fields/variants within generic context
-    withGenericContext genericsList $ do
-        (fields, variants) <- case Syn.recordFields record of
-            Syn.Named fs -> do
-                fs' <- V.mapM (\(WithSpan (n, t, f) s e) -> (\(n', t', f') -> WithSpan (n', t', f') s e) <$> ((n,,f) <$> evalType t)) fs
-                return (Named fs', Nothing)
-            Syn.Unnamed fs -> do
-                fs' <- V.mapM (\(WithSpan (t, f) s e) -> (\(t', f') -> WithSpan (t', f') s e) <$> ((,f) <$> evalType t)) fs
-                return (Unnamed fs', Nothing)
-            Syn.Variants vs -> do
-                vs' <- V.mapM (\(WithSpan (n, ts) s e) -> (\(n', ts') -> WithSpan (n', ts') s e) <$> ((n,) <$> mapM evalType ts)) vs
-                let names = V.map (\(WithSpan (n, _) s e) -> WithSpan n s e) vs'
-                return (Variants names, Just vs')
+    recSpan <- State.gets currentSpan
 
-        let kind = case Syn.recordKind record of
-                Syn.StructKind -> StructKind
-                Syn.EnumKind -> EnumKind
+    -- Create the main record with empty fields
+    fieldsRef <- newIORef' Nothing
 
-        recSpan <- State.gets currentSpan
+    let kind = case Syn.recordKind record of
+            Syn.StructKind -> StructKind
+            Syn.EnumKind -> EnumKind
 
-        let semRecord =
-                Record
-                    { recordName = Path name [] -- TODO: handle module path
-                    , recordTyParams = genericsList
-                    , recordFields = fields
-                    , recordKind = kind
-                    , recordVisibility = Syn.recordVisibility record
-                    , recordDefaultCap = Syn.recordDefaultCap record
-                    , recordSpan = recSpan
-                    }
+    let semRecord =
+            Record
+                { recordName = Path name [] -- TODO: handle module path
+                , recordTyParams = genericsList
+                , recordFields = fieldsRef
+                , recordKind = kind
+                , recordVisibility = Syn.recordVisibility record
+                , recordDefaultCap = Syn.recordDefaultCap record
+                , recordSpan = recSpan
+                }
 
-        -- For variant, we add each sub-variant as a record, with recordName
-        -- extended with variant name and value capability.
-        case variants of
-            Just vs -> do
-                V.iforM_ vs $ \variantIdx (WithSpan (variantName, variantFields) s e) -> do
-                    let variantPath = Path variantName [name] -- TODO: handle module path
-                    let fieldsWithSpan = V.map (\t -> WithSpan (t, False) s e) variantFields
-                    let variantRecord =
-                            Record
-                                { recordName = variantPath
-                                , recordTyParams = genericsList -- share same generics as parent
-                                , recordFields = Unnamed fieldsWithSpan
-                                , recordKind = EnumVariant{variantParent = Path name [], variantIdx}
-                                , recordVisibility = Syn.recordVisibility record
-                                , recordDefaultCap = Syn.Value
-                                , recordSpan = Just (s, e)
-                                }
-                    addRecordDefinition variantPath variantRecord
-            _ -> return ()
+    -- For variants, we add each sub-variant as a record
+    case Syn.recordFields record of
+        Syn.Variants vs -> do
+            V.iforM_ vs $ \variantIdx (WithSpan (variantName, _) s e) -> do
+                let variantPath = Path variantName [name] -- TODO: handle module path
+                variantFieldsRef <- newIORef' Nothing
+                let variantRecord =
+                        Record
+                            { recordName = variantPath
+                            , recordTyParams = genericsList -- share same generics as parent
+                            , recordFields = variantFieldsRef
+                            , recordKind = EnumVariant{variantParent = Path name [], variantIdx}
+                            , recordVisibility = Syn.recordVisibility record
+                            , recordDefaultCap = Syn.Value
+                            , recordSpan = Just (s, e)
+                            }
+                addRecordDefinition variantPath variantRecord
+        _ -> return ()
 
-        let path = Path name [] -- TODO: handle module path
-        addRecordDefinition path semRecord
+    let path = Path name [] -- TODO: handle module path
+    addRecordDefinition path semRecord
 scanStmtImpl
     ( Syn.FunctionStmt
             Syn.Function
@@ -447,6 +436,51 @@ scanStmtImpl
 
 scanProg :: Syn.Prog -> GlobalSemiEff ()
 scanProg = flip forM_ scanStmt
+
+populateRecordFields :: Syn.Stmt -> GlobalSemiEff ()
+populateRecordFields stmt = withFreshLocalContext $ populateRecordFieldsImpl stmt
+
+populateRecordFieldsImpl :: Syn.Stmt -> SemiEff ()
+populateRecordFieldsImpl (Syn.SpannedStmt s) = do
+    withSpan (spanStartOffset s, spanEndOffset s) $ populateRecordFieldsImpl (spanValue s)
+populateRecordFieldsImpl (Syn.RecordStmt record) = do
+    let name = Syn.recordName record
+    let path = Path name [] -- TODO: handle module path
+    knownRecords <- State.gets knownRecords
+    mRecord <- liftIO $ H.lookup knownRecords path
+
+    case mRecord of
+        Nothing -> addErrReportMsg $ "Internal error: record not found during field population: " <> unIdentifier name
+        Just rec -> do
+            let existingGenerics = recordTyParams rec
+
+            withGenericContext existingGenerics $ do
+                (fields, variants) <- case Syn.recordFields record of
+                    Syn.Named fs -> do
+                        fs' <- V.mapM (\(WithSpan (n, t, f) s e) -> (\(n', t', f') -> WithSpan (n', t', f') s e) <$> ((n,,f) <$> evalType t)) fs
+                        return (Named fs', Nothing)
+                    Syn.Unnamed fs -> do
+                        fs' <- V.mapM (\(WithSpan (t, f) s e) -> (\(t', f') -> WithSpan (t', f') s e) <$> ((,f) <$> evalType t)) fs
+                        return (Unnamed fs', Nothing)
+                    Syn.Variants vs -> do
+                        vs' <- V.mapM (\(WithSpan (n, ts) s e) -> (\(n', ts') -> WithSpan (n', ts') s e) <$> ((n,) <$> mapM evalType ts)) vs
+                        let names = V.map (\(WithSpan (n, _) s e) -> WithSpan n s e) vs'
+                        return (Variants names, Just vs')
+
+                writeIORef' (recordFields rec) (Just fields)
+
+                case variants of
+                    Just vs -> do
+                        V.forM_ vs $ \(WithSpan (variantName, variantFields) s e) -> do
+                            let variantPath = Path variantName [name]
+                            mVariantRecord <- liftIO $ H.lookup knownRecords variantPath
+                            case mVariantRecord of
+                                Nothing -> addErrReportMsg $ "Internal error: variant record not found: " <> unIdentifier variantName
+                                Just vRec -> do
+                                    let fieldsWithSpan = V.map (\t -> WithSpan (t, False) s e) variantFields
+                                    writeIORef' (recordFields vRec) (Just (Unnamed fieldsWithSpan))
+                    Nothing -> return ()
+populateRecordFieldsImpl _ = return ()
 
 exprWithSpan :: Type -> ExprKind -> SemiEff Expr
 exprWithSpan exprType exprKind = do

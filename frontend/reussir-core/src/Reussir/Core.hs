@@ -18,7 +18,7 @@ import Reussir.Core.Data.Semi.Context (SemiContext (translationReports))
 import Reussir.Core.Full.Conversion (convertCtx)
 import Reussir.Core.Lowering.Context
 import Reussir.Core.Lowering.Module (lowerModule)
-import Reussir.Core.Semi.Context (emptySemiContext, scanStmt)
+import Reussir.Core.Semi.Context (emptySemiContext, populateRecordFields, scanStmt)
 import Reussir.Core.Semi.FlowAnalysis (solveAllGenerics)
 import Reussir.Core.Semi.Tyck (checkFuncType)
 import Reussir.Diagnostic.Display (displayReport)
@@ -44,6 +44,9 @@ translateProgToModule spec prog = do
         (slns, finalSemiState) <- runPrim $ runState initSemiState $ do
             -- Scan all statements
             forM_ prog $ \stmt -> inject $ scanStmt stmt
+
+            -- Populate record fields
+            forM_ prog $ \stmt -> inject $ populateRecordFields stmt
 
             -- Elaborate all functions
             forM_ prog $ \stmt -> do

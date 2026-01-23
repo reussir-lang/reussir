@@ -22,7 +22,7 @@ import Reussir.Core.Data.Semi.Function (FunctionTable (..))
 import Reussir.Core.Full.Context (reportAllErrors)
 import Reussir.Core.Full.Conversion (convertCtx)
 import Reussir.Core.Full.Pretty qualified as Full
-import Reussir.Core.Semi.Context (emptySemiContext, scanStmt)
+import Reussir.Core.Semi.Context (emptySemiContext, populateRecordFields, scanStmt)
 import Reussir.Core.Semi.FlowAnalysis (solveAllGenerics)
 import Reussir.Core.Semi.Pretty qualified as Semi
 import Reussir.Core.Semi.Tyck (checkFuncType)
@@ -105,6 +105,9 @@ runSemiElab args prog = do
                 -- Scan all statements
                 forM_ prog $ \stmt -> inject $ scanStmt stmt
 
+                -- Populate record fields
+                forM_ prog $ \stmt -> inject $ populateRecordFields stmt
+
                 -- Elaborate all functions
                 forM_ prog $ \stmt -> do
                     case unspanStmt stmt of
@@ -164,6 +167,9 @@ runFullElab args prog = do
             ((slns), finalSemiState) <- runPrim $ runState initSemiState $ do
                 -- Scan all statements
                 forM_ prog $ \stmt -> inject $ scanStmt stmt
+
+                -- Populate record fields
+                forM_ prog $ \stmt -> inject $ populateRecordFields stmt
 
                 -- Elaborate all functions
                 forM_ prog $ \stmt -> do

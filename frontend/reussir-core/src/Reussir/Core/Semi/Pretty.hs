@@ -243,12 +243,15 @@ instance PrettyColored Expr where
                 pure $ kindDoc <+> comment (":" <+> tyDoc)
 
 instance PrettyColored Record where
-    prettyColored (Record name tyParams fields kind vis cap _) = do
+    prettyColored (Record name tyParams fieldsRef kind vis cap _) = do
         visDoc <- prettyColored vis
         capDoc <- prettyColored cap
         nameDoc <- prettyColored name
         genericsDoc <- prettyGenerics tyParams
-        fieldsDoc <- prettyFields fields
+        fieldsMaybe <- readIORef' fieldsRef
+        fieldsDoc <- case fieldsMaybe of
+            Just f -> prettyFields f
+            Nothing -> pure $ comment "<un-elaborated>"
         pure $
             visDoc
                 <> keyword (case kind of StructKind -> "struct"; EnumKind -> "enum"; EnumVariant _ _ -> "enum_variant")

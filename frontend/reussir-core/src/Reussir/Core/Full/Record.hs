@@ -12,6 +12,7 @@ import Data.Traversable (for)
 import Data.Vector.Strict qualified as V
 import Data.Vector.Strict.Mutable qualified as MV
 import Effectful (Eff, IOE, liftIO, (:>))
+import Effectful.Prim.IORef.Strict (Prim, readIORef')
 import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen.Context.Symbol (verifiedSymbol)
 import Reussir.Codegen.Type (Capability (Regional))
@@ -37,8 +38,13 @@ import Prelude hiding (span)
 -- Assume that tyArgs is concrete
 
 -- Assume that tyArgs is concrete
-instantiateRecord :: (IOE :> es) => [Semi.Type] -> SemiRecordTable -> Semi.Record -> Eff es (Either [Error] Record)
-instantiateRecord tyArgs semiRecords (Semi.Record path tyParams fields kind _ cap recSpan) = do
+instantiateRecord :: (IOE :> es, Prim :> es) => [Semi.Type] -> SemiRecordTable -> Semi.Record -> Eff es (Either [Error] Record)
+instantiateRecord tyArgs semiRecords (Semi.Record path tyParams fieldsRef kind _ cap recSpan) = do
+    fieldsMaybe <- readIORef' fieldsRef
+    let fields = case fieldsMaybe of
+            Just f -> f
+            Nothing -> error "Record fields not populated! This is a bug in the compiler."
+
     let mangledName = mangleABIName (Semi.TypeRecord path tyArgs Semi.Irrelevant)
     let symbol = verifiedSymbol mangledName
     let genericMap =

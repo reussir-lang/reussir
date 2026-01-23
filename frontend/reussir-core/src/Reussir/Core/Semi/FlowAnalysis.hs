@@ -130,11 +130,14 @@ analyzeGenericFlowInType (TypeNullable inner) =
 analyzeGenericFlowInType _ = pure ()
 
 analyzeGenericFlowInRecord :: Record -> GlobalSemiEff ()
-analyzeGenericFlowInRecord record = case recordFields record of
-    Named fs -> V.forM_ fs $ \(WithSpan (_, t, _) _ _) -> analyzeGenericFlowInType t
-    Unnamed fs -> V.forM_ fs $ \(WithSpan (t, _) _ _) -> analyzeGenericFlowInType t
-    -- no need to proceed to variants since variant share the same generics as parent record
-    Variants _ -> pure ()
+analyzeGenericFlowInRecord record = do
+    fieldsMaybe <- readIORef' (recordFields record)
+    case fieldsMaybe of
+        Just (Named fs) -> V.forM_ fs $ \(WithSpan (_, t, _) _ _) -> analyzeGenericFlowInType t
+        Just (Unnamed fs) -> V.forM_ fs $ \(WithSpan (t, _) _ _) -> analyzeGenericFlowInType t
+        -- no need to proceed to variants since variant share the same generics as parent record
+        Just (Variants _) -> pure ()
+        Nothing -> pure ()
 
 -- Analyze generic flow for the whole translation module.
 analyzeGenericFlow :: GlobalSemiEff ()
