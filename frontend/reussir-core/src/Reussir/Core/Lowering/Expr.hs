@@ -377,7 +377,7 @@ lowerExprInBlock (Full.Sequence exprs) _ = do
   where
     lowerSequence [] = pure Nothing
     lowerSequence [e] = lowerExpr e
-    lowerSequence (Full.Expr (Full.Let varID name varExpr varSpan) _ _ _ : rest) = do
+    lowerSequence (Full.Expr{exprKind = Full.Let varID name varExpr varSpan} : rest) = do
         -- Lower the let expression and bind the variable
         let makeDbgTy action = case varSpan of
                 Nothing -> action
