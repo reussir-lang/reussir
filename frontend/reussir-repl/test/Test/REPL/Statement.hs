@@ -24,29 +24,32 @@ foreign import ccall "dynamic"
 
 tests :: TestTree
 tests =
-    testGroup
-        "Statement Processing"
-        [ testGroup
-            "Function Definitions"
-            [ testCase "Simple function" testSimpleFunction
-            , testCase "Function with parameters" testFunctionWithParams
-            , testCase "Function with multiple parameters" testFunctionMultiParams
-            , testCase "Recursive function" testRecursiveFunction
-            , testCase "Multiple functions" testMultipleFunctions
-            ]
-        , testGroup
-            "Parse Errors"
-            [ testCase "Invalid syntax returns error" testInvalidSyntax
-            ]
-        , testGroup
-            "Define and Evaluate"
-            [ testCase "Define function and call with literal" testDefineAndCallLiteral
-            , testCase "Define function and call with expression" testDefineAndCallExpr
-            , testCase "Define multiple functions and call" testDefineMultipleAndCall
-            , testCase "Define add function and evaluate" testDefineAddAndEvaluate
-            , testCase "Define square function and evaluate" testDefineSquareAndEvaluate
-            ]
-        ]
+    if os == "mingw32"
+        then testGroup "Statement Processing (skipped on Windows)" []
+        else
+            testGroup
+                "Statement Processing"
+                [ testGroup
+                    "Function Definitions"
+                    [ testCase "Simple function" testSimpleFunction
+                    , testCase "Function with parameters" testFunctionWithParams
+                    , testCase "Function with multiple parameters" testFunctionMultiParams
+                    , testCase "Recursive function" testRecursiveFunction
+                    , testCase "Multiple functions" testMultipleFunctions
+                    ]
+                , testGroup
+                    "Parse Errors"
+                    [ testCase "Invalid syntax returns error" testInvalidSyntax
+                    ]
+                , testGroup
+                    "Define and Evaluate"
+                    [ testCase "Define function and call with literal" testDefineAndCallLiteral
+                    , testCase "Define function and call with expression" testDefineAndCallExpr
+                    , testCase "Define multiple functions and call" testDefineMultipleAndCall
+                    , testCase "Define add function and evaluate" testDefineAddAndEvaluate
+                    , testCase "Define square function and evaluate" testDefineSquareAndEvaluate
+                    ]
+                ]
 
 -- Helper to parse and add a statement
 parseAndAdd :: ReplState -> T.Text -> IO (Either ReplError ReplState)
@@ -64,7 +67,6 @@ testSimpleFunction = do
         Right state' -> do
             -- Counter should still be 0 (only incremented on expression eval)
             replCounter state' @?= 0
-
 
 testFunctionWithParams :: Assertion
 testFunctionWithParams = do
@@ -218,14 +220,8 @@ defineMultipleAndEval' funcDefs exprText = do
                     Left err -> return $ Left $ "Definition error: " ++ show err
                     Right s' -> addAllDefs s' defs
 
-skipOnWindows :: IO () -> IO ()
-skipOnWindows action =
-    if os == "mingw32"
-        then putStrLn "Skipped on Windows"
-        else action
-
 testDefineAndCallLiteral :: Assertion
-testDefineAndCallLiteral = skipOnWindows $ do
+testDefineAndCallLiteral = do
     result <-
         defineAndEval
             "fn constant() -> i64 { 42 }"
@@ -235,7 +231,7 @@ testDefineAndCallLiteral = skipOnWindows $ do
         Right val -> val @?= 42
 
 testDefineAndCallExpr :: Assertion
-testDefineAndCallExpr = skipOnWindows $ do
+testDefineAndCallExpr = do
     result <-
         defineAndEval
             "fn double(x: i64) -> i64 { x * 2 }"
@@ -245,7 +241,7 @@ testDefineAndCallExpr = skipOnWindows $ do
         Right val -> val @?= 42
 
 testDefineMultipleAndCall :: Assertion
-testDefineMultipleAndCall = skipOnWindows $ do
+testDefineMultipleAndCall = do
     result <-
         defineMultipleAndEval
             [ "fn helper(x: i64) -> i64 { x + 1 }"
@@ -257,7 +253,7 @@ testDefineMultipleAndCall = skipOnWindows $ do
         Right val -> val @?= 42 -- (20 + 1) * 2 = 42
 
 testDefineAddAndEvaluate :: Assertion
-testDefineAddAndEvaluate = skipOnWindows $ do
+testDefineAddAndEvaluate = do
     result <-
         defineAndEval
             "fn add(x: i64, y: i64) -> i64 { x + y }"
@@ -267,7 +263,7 @@ testDefineAddAndEvaluate = skipOnWindows $ do
         Right val -> val @?= 42 -- 17 + 25 = 42
 
 testDefineSquareAndEvaluate :: Assertion
-testDefineSquareAndEvaluate = skipOnWindows $ do
+testDefineSquareAndEvaluate = do
     result <-
         defineAndEval
             "fn square(x: i64) -> i64 { x * x }"
