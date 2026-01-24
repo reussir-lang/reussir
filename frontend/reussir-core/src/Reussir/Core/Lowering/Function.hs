@@ -33,7 +33,7 @@ lowerFunction func = do
     let span' = Full.funcSpan func
 
     let (linkage, llvmVis, mlirVis) = case mBody of
-            Nothing -> (IR.LnkAvailableExternally, IR.LLVMVisDefault, IR.MLIRVisPrivate)
+            Nothing -> (IR.LnkExternal, IR.LLVMVisDefault, IR.MLIRVisPublic)
             Just _ -> (IR.LnkWeakODR, IR.LLVMVisDefault, IR.MLIRVisPublic)
 
     -- Handle Location and Debug Info for Function

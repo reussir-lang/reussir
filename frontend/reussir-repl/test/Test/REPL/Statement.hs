@@ -64,8 +64,7 @@ testSimpleFunction = do
         Right state' -> do
             -- Counter should still be 0 (only incremented on expression eval)
             replCounter state' @?= 0
-            -- Mode should be unchanged
-            getReplMode state' @?= StmtMode
+
 
 testFunctionWithParams :: Assertion
 testFunctionWithParams = do

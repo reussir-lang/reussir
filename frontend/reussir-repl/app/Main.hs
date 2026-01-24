@@ -13,6 +13,7 @@ import Foreign.Ptr (castPtrToFunPtr)
 
 -- Text
 import Data.Text qualified as T
+import Options.Applicative
 
 -- Megaparsec
 import Text.Megaparsec (errorBundlePretty, runParser)
@@ -22,21 +23,19 @@ import System.Console.Haskeline
 import System.Console.Haskeline.IO
 
 -- Reussir
-import Reussir.Bridge (LogLevel (..), OptOption (..), ReussirJIT, addModule, lookupSymbol, withJIT)
+import Reussir.Bridge (ReussirJIT, addModule, lookupSymbol, withJIT)
+import Reussir.Bridge qualified as B
 import Reussir.Core.REPL (
     ReplError (..),
-    ReplMode (..),
+    ReplError (..),
     ReplState (..),
     ResultKind (..),
     addDefinition,
     compileExpression,
-    getReplMode,
     initReplState,
-    setReplMode,
  )
 import Reussir.Parser.Expr (parseExpr)
 import Reussir.Parser.Prog (ReplInput (..), parseReplInput)
-import Reussir.Parser.Stmt (parseStmt)
 import Reussir.Parser.Types.Expr qualified as P
 
 --------------------------------------------------------------------------------
@@ -93,9 +92,46 @@ placeholderCallback _ = return ""
 -- Main REPL Entry Point
 --------------------------------------------------------------------------------
 
+-- | Command line arguments
+data Args = Args
+    { argOptLevel :: B.OptOption
+    , argLogLevel :: B.LogLevel
+    }
+
+argsParser :: Parser Args
+argsParser =
+    Args
+        <$> option parseOptLevel (long "opt-level" <> short 'O' <> value B.OptTPDE <> help "Optimization level (none, default, aggressive, size, tpde)")
+        <*> option parseLogLevel (long "log-level" <> short 'l' <> value B.LogWarning <> help "Log level (error, warning, info, debug, trace)")
+
+parseOptLevel :: ReadM B.OptOption
+parseOptLevel = eitherReader $ \s -> case s of
+    "none" -> Right B.OptNone
+    "default" -> Right B.OptDefault
+    "aggressive" -> Right B.OptAggressive
+    "size" -> Right B.OptSize
+    "tpde" -> Right B.OptTPDE
+    _ -> Left $ "Unknown optimization level: " ++ s
+
+parseLogLevel :: ReadM B.LogLevel
+parseLogLevel = eitherReader $ \s -> case s of
+    "error" -> Right B.LogError
+    "warning" -> Right B.LogWarning
+    "info" -> Right B.LogInfo
+    "debug" -> Right B.LogDebug
+    "trace" -> Right B.LogTrace
+    _ -> Left $ "Unknown log level: " ++ s
+
+opts :: ParserInfo Args
+opts = info (argsParser <**> helper)
+    ( fullDesc
+   <> progDesc "Reussir REPL"
+   <> header "reussir-repl - Read-Eval-Print Loop for Reussir" )
+
 -- | Main REPL entry point
 main :: IO ()
-main =
+main = do
+    args <- execParser opts
     bracketOnError
         (initializeInput defaultSettings)
         cancelInput
@@ -103,10 +139,9 @@ main =
             putStrLn "Reussir REPL v0.1.0"
             putStrLn "Type :help for available commands, :q to quit"
             putStrLn ""
-            state <- initReplState LogWarning "<repl>"
+            state <- initReplState (argLogLevel args) "<repl>"
             -- Use () as the AST type since we're not using lazy modules
-            -- Note: Using OptDefault instead of OptTPDE due to a bug in TPDE with function calls
-            withJIT placeholderCallback OptDefault $ \jit ->
+            withJIT placeholderCallback (argOptLevel args) $ \jit ->
                 loop jit state hd >> closeInput hd
         )
 
@@ -132,16 +167,6 @@ processCommand _jit state cmd hd = case words cmd of
     [":help"] -> do
         queryInput hd $ outputStrLn helpText
         return $ Just state
-    [":mode"] -> do
-        let mode = getReplMode state
-        queryInput hd $ outputStrLn $ "Current mode: " ++ show mode
-        return $ Just state
-    [":stmt"] -> do
-        queryInput hd $ outputStrLn "Switched to statement mode"
-        return $ Just $ setReplMode StmtMode state
-    [":eval"] -> do
-        queryInput hd $ outputStrLn "Switched to eval mode"
-        return $ Just $ setReplMode EvalMode state
     [":clear"] -> do
         -- Re-initialize the REPL state
         newState <- initReplState (replLogLevel state) (replFilePath state)
@@ -158,13 +183,9 @@ helpText = unlines
     [ "Available commands:"
     , "  :help      Show this help message"
     , "  :q, :quit  Exit the REPL"
-    , "  :stmt      Switch to statement mode (add definitions)"
-    , "  :eval      Switch to eval mode (evaluate expressions)"
-    , "  :mode      Show current mode"
     , "  :clear     Clear the context and start fresh"
     , ""
-    , "In statement mode, input is parsed as function/record definitions."
-    , "In eval mode, input is parsed as expressions to evaluate."
+    , "Input is automatically parsed as either definitions or expressions."
     ]
 
 --------------------------------------------------------------------------------
@@ -174,9 +195,7 @@ helpText = unlines
 -- | The main REPL loop
 loop :: ReussirJIT () -> ReplState -> InputState -> IO ()
 loop jit state hd = do
-    let prompt = case getReplMode state of
-            StmtMode -> "λ> "
-            EvalMode -> "ε> "
+    let prompt = "λ> "
     minput <- queryInput hd (getInputLine prompt)
     case minput of
         Nothing -> return ()
@@ -209,11 +228,9 @@ processInput ::
     ReplState ->
     String ->
     IO (Either String (Maybe String, ReplState))
-processInput jit state input = do
+processInput jit state input =
     catch
-        ( case getReplMode state of
-            StmtMode -> processAutoDetect jit state input
-            EvalMode -> processExpression jit state input
+        ( processAutoDetect jit state input
         )
         (\(e :: SomeException) -> return $ Left $ "Error: " ++ show e)
 
@@ -285,8 +302,8 @@ executeModule ::
 executeModule jit moduleBytes n resultKind = do
     let funcName = "__repl_expr_" ++ show n
     let packedName = fromString funcName
-    flag <- addModule jit moduleBytes
-    if flag
+    success <- addModule jit moduleBytes
+    if success
         then do
             sym <- lookupSymbol jit packedName False
             if sym /= nullPtr

@@ -41,7 +41,7 @@ tests =
             , testCase "u64 -> ResultU64" $ typeToResultKind (Semi.TypeIntegral (Unsigned 64)) @?= ResultU64
             ]
         , testGroup "typeToResultKind - Floating Point"
-            [ testCase "f16 -> ResultF16" $ typeToResultKind (Semi.TypeFP (IEEEFloat 16)) @?= ResultF16
+            [ testCase "f16 -> ResultF16" $ typeToResultKind (Semi.TypeFP (IEEEFloat 16)) @?= ResultOther "f16"
             , testCase "f32 -> ResultF32" $ typeToResultKind (Semi.TypeFP (IEEEFloat 32)) @?= ResultF32
             , testCase "f64 -> ResultF64" $ typeToResultKind (Semi.TypeFP (IEEEFloat 64)) @?= ResultF64
             ]

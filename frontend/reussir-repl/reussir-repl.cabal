@@ -70,6 +70,7 @@ executable reussir-repl
     -- Other library packages from which modules are imported.
     build-depends:    
         base ^>=4.20.2.0,
+        optparse-applicative,
         haskeline ^>=0.8.4,
         effectful ^>= 2.6.1,
         log-effectful ^>= 1.0.0,
