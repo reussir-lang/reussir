@@ -13,7 +13,6 @@ import Reussir.Bridge (LogLevel (..), OptOption (..), addModule, lookupSymbol, w
 import Reussir.Core.REPL
 import Reussir.Parser.Expr (parseExpr)
 import Reussir.Parser.Stmt (parseStmt)
-import System.Info (os)
 import Test.Tasty
 import Test.Tasty.HUnit
 import Text.Megaparsec (runParser)
@@ -24,32 +23,29 @@ foreign import ccall "dynamic"
 
 tests :: TestTree
 tests =
-    if os == "mingw32"
-        then testGroup "Statement Processing (skipped on Windows)" []
-        else
-            testGroup
-                "Statement Processing"
-                [ testGroup
-                    "Function Definitions"
-                    [ testCase "Simple function" testSimpleFunction
-                    , testCase "Function with parameters" testFunctionWithParams
-                    , testCase "Function with multiple parameters" testFunctionMultiParams
-                    , testCase "Recursive function" testRecursiveFunction
-                    , testCase "Multiple functions" testMultipleFunctions
-                    ]
-                , testGroup
-                    "Parse Errors"
-                    [ testCase "Invalid syntax returns error" testInvalidSyntax
-                    ]
-                , testGroup
-                    "Define and Evaluate"
-                    [ testCase "Define function and call with literal" testDefineAndCallLiteral
-                    , testCase "Define function and call with expression" testDefineAndCallExpr
-                    , testCase "Define multiple functions and call" testDefineMultipleAndCall
-                    , testCase "Define add function and evaluate" testDefineAddAndEvaluate
-                    , testCase "Define square function and evaluate" testDefineSquareAndEvaluate
-                    ]
-                ]
+    testGroup
+        "Statement Processing"
+        [ testGroup
+            "Function Definitions"
+            [ testCase "Simple function" testSimpleFunction
+            , testCase "Function with parameters" testFunctionWithParams
+            , testCase "Function with multiple parameters" testFunctionMultiParams
+            , testCase "Recursive function" testRecursiveFunction
+            , testCase "Multiple functions" testMultipleFunctions
+            ]
+        , testGroup
+            "Parse Errors"
+            [ testCase "Invalid syntax returns error" testInvalidSyntax
+            ]
+        , testGroup
+            "Define and Evaluate"
+            [ testCase "Define function and call with literal" testDefineAndCallLiteral
+            , testCase "Define function and call with expression" testDefineAndCallExpr
+            , testCase "Define multiple functions and call" testDefineMultipleAndCall
+            , testCase "Define add function and evaluate" testDefineAddAndEvaluate
+            , testCase "Define square function and evaluate" testDefineSquareAndEvaluate
+            ]
+        ]
 
 -- Helper to parse and add a statement
 parseAndAdd :: ReplState -> T.Text -> IO (Either ReplError ReplState)

@@ -5,9 +5,9 @@ module Main (main) where
 -- Base libraries
 import Control.Exception (SomeException, bracketOnError, catch)
 import Data.ByteString (ByteString)
-import Data.Int (Int8, Int16, Int32, Int64)
+import Data.Int (Int16, Int32, Int64, Int8)
 import Data.String (IsString (fromString))
-import Data.Word (Word8, Word16, Word32, Word64)
+import Data.Word (Word16, Word32, Word64, Word8)
 import Foreign (FunPtr, Ptr, nullPtr)
 import Foreign.Ptr (castPtrToFunPtr)
 
@@ -27,14 +27,12 @@ import Reussir.Bridge (ReussirJIT, addModule, lookupSymbol, withJIT)
 import Reussir.Bridge qualified as B
 import Reussir.Core.REPL (
     ReplError (..),
-    ReplError (..),
     ReplState (..),
     ResultKind (..),
     addDefinition,
     compileExpression,
     initReplState,
  )
-import Reussir.Parser.Expr (parseExpr)
 import Reussir.Parser.Prog (ReplInput (..), parseReplInput)
 import Reussir.Parser.Types.Expr qualified as P
 
@@ -123,10 +121,13 @@ parseLogLevel = eitherReader $ \s -> case s of
     _ -> Left $ "Unknown log level: " ++ s
 
 opts :: ParserInfo Args
-opts = info (argsParser <**> helper)
-    ( fullDesc
-   <> progDesc "Reussir REPL"
-   <> header "reussir-repl - Read-Eval-Print Loop for Reussir" )
+opts =
+    info
+        (argsParser <**> helper)
+        ( fullDesc
+            <> progDesc "Reussir REPL"
+            <> header "reussir-repl - Read-Eval-Print Loop for Reussir"
+        )
 
 -- | Main REPL entry point
 main :: IO ()
@@ -151,7 +152,7 @@ main = do
 
 -- | Check if input is a REPL command
 isCommand :: String -> Bool
-isCommand (':':_) = True
+isCommand (':' : _) = True
 isCommand _ = False
 
 -- | Process REPL commands
@@ -179,14 +180,15 @@ processCommand _jit state cmd hd = case words cmd of
 
 -- | Help text for REPL commands
 helpText :: String
-helpText = unlines
-    [ "Available commands:"
-    , "  :help      Show this help message"
-    , "  :q, :quit  Exit the REPL"
-    , "  :clear     Clear the context and start fresh"
-    , ""
-    , "Input is automatically parsed as either definitions or expressions."
-    ]
+helpText =
+    unlines
+        [ "Available commands:"
+        , "  :help      Show this help message"
+        , "  :q, :quit  Exit the REPL"
+        , "  :clear     Clear the context and start fresh"
+        , ""
+        , "Input is automatically parsed as either definitions or expressions."
+        ]
 
 --------------------------------------------------------------------------------
 -- Main REPL Loop
@@ -204,7 +206,7 @@ loop jit state hd = do
             | isCommand input -> do
                 mState <- processCommand jit state input hd
                 case mState of
-                    Nothing -> return ()  -- Exit
+                    Nothing -> return () -- Exit
                     Just state' -> loop jit state' hd
             | otherwise -> do
                 result <- processInput jit state input
@@ -230,8 +232,7 @@ processInput ::
     IO (Either String (Maybe String, ReplState))
 processInput jit state input =
     catch
-        ( processAutoDetect jit state input
-        )
+        (processAutoDetect jit state input)
         (\(e :: SomeException) -> return $ Left $ "Error: " ++ show e)
 
 -- | Auto-detect whether input is a statement or expression
@@ -253,17 +254,6 @@ processAutoDetect jit state input = do
                 Right state' -> return $ Right (Just "Definition added.", state')
         Right (ReplExpr expr) -> do
             processExpressionParsed jit state input expr
-
--- | Process input as an expression (evaluate)
-processExpression ::
-    ReussirJIT () ->
-    ReplState ->
-    String ->
-    IO (Either String (Maybe String, ReplState))
-processExpression jit state input = do
-    case runParser parseExpr "<repl>" (T.pack input) of
-        Left err -> return $ Left $ errorBundlePretty err
-        Right expr -> processExpressionParsed jit state input expr
 
 -- | Process a pre-parsed expression
 processExpressionParsed ::
@@ -293,11 +283,11 @@ processExpressionParsed jit state input expr = do
 --------------------------------------------------------------------------------
 
 -- | Execute a compiled module in the JIT and return the result
-executeModule :: 
-    ReussirJIT () -> 
-    ByteString -> 
-    Int64 -> 
-    ResultKind -> 
+executeModule ::
+    ReussirJIT () ->
+    ByteString ->
+    Int64 ->
+    ResultKind ->
     IO (Either String String)
 executeModule jit moduleBytes n resultKind = do
     let funcName = "__repl_expr_" ++ show n
@@ -359,5 +349,5 @@ executeWithResultKind sym resultKind = case resultKind of
     ResultOther tyName -> do
         -- For non-primitive types, we can't easily print the value
         -- Just indicate the expression was evaluated
-        _ <- callI64Func (castPtrToFunPtr sym)  -- Execute to trigger side effects
+        _ <- callI64Func (castPtrToFunPtr sym) -- Execute to trigger side effects
         return $ "expr evaluated as " ++ T.unpack tyName
