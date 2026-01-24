@@ -47,7 +47,7 @@ import Foreign.Marshal.Array (withArrayLen)
 import Foreign.Ptr
 import Foreign.StablePtr (castStablePtrToPtr, deRefStablePtr, newStablePtr)
 import Foreign.Storable (pokeByteOff)
-import Reussir.Bridge.Types (OptOption (..), optOptionToC)
+import Reussir.Bridge.Types (LogLevel (..), OptOption (..), logLevelToC, optOptionToC)
 
 --------------------------------------------------------------------------------
 -- Opaque Types
@@ -80,6 +80,8 @@ foreign import capi "Reussir/Bridge.h reussir_bridge_jit_create"
         -- | ast_free_fn
         FunPtr (FreeFn a) ->
         -- | opt (ReussirOptOption)
+        CInt ->
+        -- | level (ReussirLogLevel)
         CInt ->
         IO RawPtr
 
@@ -217,8 +219,8 @@ copyBSInto dst bs =
         pokeByteOff dst len (0 :: CChar)
 
 -- | Create a new JIT engine.
-withJIT :: ASTCallback a -> OptOption -> (ReussirJIT a -> IO b) -> IO b
-withJIT astCallback optOption continuation = do
+withJIT :: ASTCallback a -> OptOption -> LogLevel -> (ReussirJIT a -> IO b) -> IO b
+withJIT astCallback optOption logOption continuation = do
     freeFn <- mkFreeFn $ \stablePtr -> do
         freeStablePtr stablePtr
     callbackFn <- mkCallbackFn $ \stablePtr -> do
@@ -228,7 +230,8 @@ withJIT astCallback optOption continuation = do
         copyBSInto buffer bytes
         return buffer
     let optOptionC = optOptionToC optOption
-    jit <- c_reussir_bridge_jit_create callbackFn freeFn optOptionC
+    let logOptionC = logLevelToC logOption
+    jit <- c_reussir_bridge_jit_create callbackFn freeFn optOptionC logOptionC
     res <- continuation (ReussirJIT jit)
     c_reussir_bridge_jit_destroy jit
     pure res

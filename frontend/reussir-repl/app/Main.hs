@@ -141,7 +141,7 @@ main = do
             putStrLn ""
             state <- initReplState (argLogLevel args) "<repl>"
             -- Use () as the AST type since we're not using lazy modules
-            withJIT placeholderCallback (argOptLevel args) $ \jit ->
+            withJIT placeholderCallback (argOptLevel args) (argLogLevel args) $ \jit ->
                 loop jit state hd >> closeInput hd
         )
 

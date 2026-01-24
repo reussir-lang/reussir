@@ -45,12 +45,12 @@ bridgeTests =
             "JITEngine"
             [ testCase "Create empty JIT engine" $ do
                 putStrLn ""
-                withJIT (const $ pure "") OptDefault (const $ pure ())
+                withJIT (const $ pure "") OptDefault LogInfo (const $ pure ())
                 -- If no exception was thrown, the test passes
                 assertBool "JIT creation should succeed" True
             , testCase "Add a function to the JIT engine" $ do
                 putStrLn ""
-                withJIT (const $ pure "") OptAggressive $ \jit -> do
+                withJIT (const $ pure "") OptAggressive LogInfo $ \jit -> do
                     res <- addModule jit moduleWithToAdd
                     assertBool "Failed to add module" res
                     ptr <- lookupSymbol jit "add" False
@@ -60,7 +60,7 @@ bridgeTests =
                     assertEqual "1 + 2 should equal 3" 3 three
             , testCase "Add a function to the JIT engine lazily" $ do
                 putStrLn ""
-                withJIT (const $ pure moduleWithToAdd) OptTPDE $ \jit -> do
+                withJIT (const $ pure moduleWithToAdd) OptTPDE LogInfo $ \jit -> do
                     res <- addLazyModule jit () [("add", symbolFlagExported)]
                     assertBool "Failed to add lazy module" res
                     ptr <- lookupSymbol jit "add" True -- lazily added symbols are mangled

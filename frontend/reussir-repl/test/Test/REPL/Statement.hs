@@ -157,7 +157,7 @@ defineAndEval' funcDef exprText = do
                                 Right (moduleBytes, state', _) -> do
                                     let counter = replCounter state' - 1
                                     let funcName = "__repl_expr_" ++ show counter
-                                    withJIT placeholderCallback OptDefault $ \jit -> do
+                                    withJIT placeholderCallback OptDefault LogInfo $ \jit -> do
                                         flag <- addModule jit moduleBytes
                                         if flag
                                             then do
@@ -196,7 +196,7 @@ defineMultipleAndEval' funcDefs exprText = do
                         Right (moduleBytes, state', _) -> do
                             let counter = replCounter state' - 1
                             let funcName = "__repl_expr_" ++ show counter
-                            withJIT placeholderCallback OptDefault $ \jit -> do
+                            withJIT placeholderCallback OptDefault LogInfo $ \jit -> do
                                 flag <- addModule jit moduleBytes
                                 if flag
                                     then do
