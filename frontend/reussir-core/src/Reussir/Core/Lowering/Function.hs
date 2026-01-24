@@ -33,7 +33,7 @@ lowerFunction func = do
     let span' = Full.funcSpan func
 
     let (linkage, llvmVis, mlirVis) = case mBody of
-            Nothing -> (IR.LnkAvailableExternally, IR.LLVMVisDefault, IR.MLIRVisPrivate)
+            Nothing -> (IR.LnkExternal, IR.LLVMVisDefault, IR.MLIRVisPrivate)
             Just _ -> (IR.LnkWeakODR, IR.LLVMVisDefault, IR.MLIRVisPublic)
 
     -- Handle Location and Debug Info for Function
@@ -60,35 +60,39 @@ lowerFunction func = do
     retTy <- convertType (Full.funcReturnType func)
 
     (bodyBlock, args) <- withFreshLocalContext $ do
+        -- Generate parameters (region + normal)
+        regionParam <-
+            if Full.funcIsRegional func
+                then do
+                    handle <- nextValue
+                    pure $ Just (handle, IR.TypeRegion)
+                else pure Nothing
+
+        let params = Full.funcParams func
+        paramValues <- forM params $ \(_, ty) -> do
+            irTy <- inject $ convertType ty
+            val <- nextValue
+            pure (val, irTy)
+
+        -- Update varMap assuming implicit numbering 0..N-1 for parameters
+        -- regionParam is NOT in varMap (handled via regionHandle state)
+        let varMapUpdates = zip [0 ..] paramValues
+        State.modify $ \s ->
+            s
+                { varMap = IntMap.fromList [(i, v) | (i, v) <- varMapUpdates]
+                , regionHandle = regionParam
+                }
+
+        let argValues = maybeToList regionParam ++ paramValues
+
         case mBody of
             Nothing -> do
                 L.logTrace_ $ "Lowering function " <> T.show symbol <> " with no body"
-                pure (Nothing, [])
+                -- Return argValues so the declaration has the correct signature
+                pure (Nothing, argValues)
             Just bodyExpr -> do
                 L.logTrace_ $ "Lowering function " <> T.show symbol <> " with body"
-                regionParam <-
-                    if Full.funcIsRegional func
-                        then do
-                            handle <- nextValue
-                            pure $ Just (handle, IR.TypeRegion)
-                        else pure Nothing
 
-                let params = Full.funcParams func
-                paramValues <- forM params $ \(_, ty) -> do
-                    irTy <- inject $ convertType ty
-                    val <- nextValue
-                    pure (val, irTy)
-
-                -- Update varMap assuming implicit numbering 0..N-1 for parameters
-                -- regionParam is NOT in varMap (handled via regionHandle state)
-                let varMapUpdates = zip [0 ..] paramValues
-                State.modify $ \s ->
-                    s
-                        { varMap = IntMap.fromList [(i, v) | (i, v) <- varMapUpdates]
-                        , regionHandle = regionParam
-                        }
-
-                let argValues = maybeToList regionParam ++ paramValues
                 block <- lowerExprAsBlock bodyExpr argValues $ \bodyRes -> do
                     let retInstr = IR.Return bodyRes
                     case Full.exprSpan bodyExpr of

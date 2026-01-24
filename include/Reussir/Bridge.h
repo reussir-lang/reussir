@@ -100,7 +100,8 @@ typedef void *ReussirJIT;
 // Create a new JIT engine.
 ReussirJIT reussir_bridge_jit_create(ASTCallbackFn ast_callback_fn,
                                      ASTFreeFn ast_free_fn,
-                                     ReussirOptOption opt);
+                                     ReussirOptOption opt,
+                                     ReussirLogLevel level);
 // Destroy the JIT engine.
 void reussir_bridge_jit_destroy(ReussirJIT jit);
 // Add a module that should be loaded lazily.

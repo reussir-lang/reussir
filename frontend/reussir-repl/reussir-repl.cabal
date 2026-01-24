@@ -70,6 +70,7 @@ executable reussir-repl
     -- Other library packages from which modules are imported.
     build-depends:    
         base ^>=4.20.2.0,
+        optparse-applicative,
         haskeline ^>=0.8.4,
         effectful ^>= 2.6.1,
         log-effectful ^>= 1.0.0,
@@ -87,3 +88,26 @@ executable reussir-repl
 
     -- Base language which the package is written in.
     default-language: GHC2024
+
+test-suite reussir-repl-test
+    import:           warnings
+    type:             exitcode-stdio-1.0
+    main-is:          Main.hs
+    other-modules:
+        Test.REPL.State
+        Test.REPL.Expression
+        Test.REPL.Statement
+        Test.REPL.TypeResolution
+        Test.REPL.Integration
+    hs-source-dirs:   test
+    default-language: GHC2024
+    build-depends:
+        base ^>=4.20.2.0,
+        tasty,
+        tasty-hunit,
+        text ^>=2.1.3,
+        bytestring ^>=0.12,
+        megaparsec,
+        reussir-parser,
+        reussir-core,
+        reussir-bridge

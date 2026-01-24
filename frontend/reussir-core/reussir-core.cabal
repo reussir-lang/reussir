@@ -16,6 +16,7 @@ library
     import:           warnings
     exposed-modules:  
         Reussir.Core
+        Reussir.Core.REPL
         Reussir.Core.Data.Class
         Reussir.Core.Data.FP
         Reussir.Core.Data.Integral
