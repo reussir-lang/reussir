@@ -67,6 +67,7 @@ import Reussir.Core.Full.Record (convertSemiRecordTable)
 import Reussir.Core.Full.Type (convertSemiType)
 import Reussir.Core.Lowering.Context (createLoweringContext, runLoweringToModule)
 import Reussir.Core.Lowering.Function (lowerFunction)
+import Reussir.Core.Lowering.Record (lowerRecord)
 import Reussir.Core.Semi.Context (
     emptyLocalSemiContext,
     emptySemiContext,
@@ -466,6 +467,13 @@ generateExpressionModule funcName semiExpr exprType logLevel state = do
             compiledFuncs <- map fst <$> liftIO (H.toList (replCompiledFunctions state))
 
             irModule <- runLoweringToModule loweringCtx $ do
+                -- Lower all records first
+                allRecords <- liftIO $ H.toList (ctxRecords finalFullCtx)
+                forM_ allRecords $ \(_, record) -> lowerRecord record
+
+                -- TODO: Lower all strings
+
+                -- Lower all functions
                 forM_ allFuncs $ \(_, func) -> do
                     if Full.funcName func `elem` compiledFuncs
                         then do
