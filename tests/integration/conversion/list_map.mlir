@@ -19,7 +19,7 @@
 // RUN: %opt -O3 |\
 // RUN: %llc -relocation-model=pic -filetype=obj -o %t.o
 // RUN: %cc %t.o %S/print_i64.c -o %t.exe -L%library_path -lreussir_rt \
-// RUN:    -Wl,-rpath,%library_path %extra_sys_libs
+// RUN:    %rpath_flag %extra_sys_libs
 // RUN: %t.exe | %FileCheck %s
 // CHECK: 01235432
 !cell = !reussir.record<compound "Cell" {i64}>

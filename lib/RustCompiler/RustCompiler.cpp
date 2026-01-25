@@ -20,6 +20,8 @@
 
 #ifdef _WIN32
 #define LIB_NAME "reussir_rt.dll"
+#elif defined(__APPLE__)
+#define LIB_NAME "libreussir_rt.dylib"
 #else
 #define LIB_NAME "libreussir_rt.so"
 #endif

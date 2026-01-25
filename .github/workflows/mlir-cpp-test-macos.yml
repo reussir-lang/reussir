@@ -1,0 +1,91 @@
+name: macOS Full Pipeline (Homebrew)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14]  # ARM64 macOS runner
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Homebrew dependencies
+        run: |
+          brew update
+          brew install cmake ninja llvm spdlog googletest python@3
+          pip3 install lit --break-system-packages
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly
+          components: rust-src, rustfmt, clippy, rustc-dev, llvm-tools-preview
+
+      - name: Setup GHC
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: 9.10.3
+          cabal: latest
+
+      - name: Setup Cabal
+        run: cabal update
+
+      - name: Setup environment paths
+        run: |
+          LLVM_PREFIX=$(brew --prefix llvm)
+          echo "LLVM_PREFIX=${LLVM_PREFIX}" >> $GITHUB_ENV
+          echo "${LLVM_PREFIX}/bin" >> $GITHUB_PATH
+          echo "DYLD_LIBRARY_PATH=${LLVM_PREFIX}/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          variant: sccache
+          key: ${{ matrix.os }}-llvm
+
+      - name: Configure CMake
+        run: |
+          env RUSTC_WRAPPER=sccache \
+          cmake -B build \
+          -G Ninja \
+          -DCMAKE_CXX_COMPILER="${LLVM_PREFIX}/bin/clang++" \
+          -DCMAKE_C_COMPILER="${LLVM_PREFIX}/bin/clang" \
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+          -DREUSSIR_ENABLE_PEDANTIC=ON \
+          -DREUSSIR_ENABLE_TESTS=ON \
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+          -DLLVM_DIR="${LLVM_PREFIX}/lib/cmake/llvm" \
+          -DMLIR_DIR="${LLVM_PREFIX}/lib/cmake/mlir"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run Unit Tests
+        run: |
+          cmake --build build --target reussir-ut
+          ctest --test-dir build --output-on-failure
+
+      - name: Run Integration Tests
+        run: |
+          export DYLD_LIBRARY_PATH="${GITHUB_WORKSPACE}/build/lib:${LLVM_PREFIX}/lib:$DYLD_LIBRARY_PATH"
+          cmake --build build --target check
+
+      - name: Build Haskell frontend
+        run: |
+          export DYLD_LIBRARY_PATH="${GITHUB_WORKSPACE}/build/lib:${LLVM_PREFIX}/lib:$DYLD_LIBRARY_PATH"
+          cabal build all -j
+
+      - name: Test Haskell frontend
+        run: |
+          export DYLD_LIBRARY_PATH="${GITHUB_WORKSPACE}/build/lib:${LLVM_PREFIX}/lib:$DYLD_LIBRARY_PATH"
+          cabal test all -j

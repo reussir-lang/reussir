@@ -10,7 +10,7 @@
 // RUN:   %opt -S -O3 | \
 // RUN:   %llc -relocation-model=pic -filetype=obj -o %t.o
 // RUN: %cc %S/region_vtable.c %t.o -o %t.exe -L%library_path -lreussir_rt \
-// RUN:    -Wl,-rpath,%library_path %extra_sys_libs
+// RUN:    %rpath_flag %extra_sys_libs
 // RUN: %t.exe
 !node = !reussir.record<compound "Node" [regional] { [field] !reussir.record<compound "Node">, i64, [field] !reussir.record<compound "Node"> }>
 

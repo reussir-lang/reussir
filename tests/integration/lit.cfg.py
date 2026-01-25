@@ -24,6 +24,7 @@ config.substitutions.append((r'%library_path', config.library_path))
 config.substitutions.append((r'%llc', config.llc_path))
 config.substitutions.append((r'%extra_sys_libs', config.extra_sys_libs))
 config.substitutions.append((r'%lli', config.lli_path))
+config.substitutions.append((r'%rpath_flag', config.rpath_flag))
 config.substitutions.append((r'%reussir-elab', config.reussir_elab_path))
 config.substitutions.append((r'%reussir-compiler', config.reussir_compiler_path))
 config.substitutions.append((r'%reussir-repl', config.reussir_repl_path))
@@ -31,5 +32,7 @@ config.substitutions.append((r'%reussir-repl', config.reussir_repl_path))
 # TODO: should we support macos?
 if sys.platform == 'windows':
     config.substitutions.append((r'%reussir_rt', 'reussir_rt.dll'))
+elif sys.platform == 'darwin':
+    config.substitutions.append((r'%reussir_rt', 'libreussir_rt.dylib'))
 else:
     config.substitutions.append((r'%reussir_rt', 'libreussir_rt.so'))

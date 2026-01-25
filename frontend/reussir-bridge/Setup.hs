@@ -56,11 +56,17 @@ getBuildDir = (</> "build") <$> getProjectRoot
 isWindows :: Bool
 isWindows = os == "mingw32"
 
+isDarwin :: Bool
+isDarwin = os == "darwin"
+
 getLibDir :: FilePath -> FilePath
 getLibDir bdir = if isWindows then bdir </> "bin" else bdir </> "lib"
 
 getSharedLibName :: String -> String
-getSharedLibName name = "lib" ++ if isWindows then name ++ ".dll" else name ++ ".so"
+getSharedLibName name
+    | isWindows = "lib" ++ name ++ ".dll"
+    | isDarwin  = "lib" ++ name ++ ".dylib"
+    | otherwise = "lib" ++ name ++ ".so"
 
 -------------------------------------------------------------------------------
 -- CMake helpers
@@ -120,7 +126,10 @@ myConfHook (pkg, pbi) flags = do
     root <- getProjectRoot
     bdir <- getBuildDir
     let libDir = getLibDir bdir
-        rpathOpts = if isWindows then [] else ["-Wl,-rpath," ++ libDir]
+        rpathOpts
+            | isWindows = []
+            | isDarwin  = ["-Wl,-rpath,@loader_path/../lib", "-Wl,-rpath," ++ libDir]
+            | otherwise = ["-Wl,-rpath," ++ libDir]
         hookedLib =
             emptyBuildInfo
                 { extraLibDirs = map makeSymbolicPath [libDir]
