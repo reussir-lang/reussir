@@ -29,6 +29,7 @@ jobs:
         with:
           path: |
             ~/.cache/cabal
+            ~/.local/state/cabal
             dist-newstyle
             ~/.ghcup
           key: ${{ runner.os }}-${{ runner.arch }}-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
