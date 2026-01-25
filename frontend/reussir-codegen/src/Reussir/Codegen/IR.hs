@@ -318,6 +318,11 @@ data Instr
         }
     | -- | Attach location information to an instruction
       WithLoc Location Instr
+    | -- | reussir.str.literal: Create a reference to a global string literal
+      StrLiteral
+        { strLitSym :: Symbol
+        , strLitRes :: TypedValue
+        }
     deriving (Show)
 
 data Linkage
@@ -633,8 +638,15 @@ variantDispCodegen val (VariantDispData cases) result = do
     emitBuilder " {\n"
     incIndentation $ forM_ cases $ uncurry variantDispCaseCodegen
     emitBuilder "}"
-    emitLocIfPresent
-    emitBuilder "\n"
+
+-- | Generate reussir.str.literal operation
+-- Syntax: %res = reussir.str.literal @sym : !reussir.str<global>
+strLiteralCodegen :: Symbol -> TypedValue -> Codegen ()
+strLiteralCodegen sym (resVal, resTy) = emitBuilderLineM $ do
+    resVal' <- emit resVal
+    resTy' <- emit resTy
+    sym' <- emit sym
+    pure $ resVal' <> " = reussir.str.literal @" <> sym' <> " : " <> resTy'
 
 instrCodegen :: Instr -> Codegen ()
 instrCodegen (ICall intrinsic) = intrinsicCallCodegen intrinsic
@@ -666,6 +678,7 @@ instrCodegen (ClosureUniqify target res) = closureUniqifyCodegen target res
 instrCodegen (IfThenElse cond thenBlock elseBlock res) = ifThenElseCodegen cond thenBlock elseBlock res
 instrCodegen (WithLoc loc instr) = withLocation loc (instrCodegen instr)
 instrCodegen (RecordExtract val field res) = recordExtractCodegen val field res
+instrCodegen (StrLiteral sym res) = strLiteralCodegen sym res
 
 wrapLinkage :: TB.Builder -> Codegen TB.Builder
 wrapLinkage builder = pure $ "#llvm.linkage<" <> builder <> ">"

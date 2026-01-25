@@ -18,6 +18,6 @@ data Global
 
 globalCodegen :: Global -> Codegen ()
 globalCodegen (GlobalString sym content) = emitBuilderLineM $ do
-    let opName = "reussir.global.string"
+    let opName = "reussir.str.global"
     sym' <- emit sym
     return $ opName <> " @" <> sym' <> " = " <> (TB.fromText $ T.show content)

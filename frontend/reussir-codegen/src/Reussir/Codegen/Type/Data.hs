@@ -154,6 +154,7 @@ data Type
     | TypeExpr Symbol
     | TypeNullable Type
     | TypeRegion -- Region handle
+    | TypeStr    -- String type !reussir.str<global>
     deriving (Eq, Show, Hashable, Generic)
 
 data Atomicity = Atomic | NonAtomic

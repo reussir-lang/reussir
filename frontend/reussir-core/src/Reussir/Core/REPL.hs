@@ -50,6 +50,7 @@ import Reussir.Bridge qualified as B
 import Reussir.Codegen qualified as IR
 import Reussir.Codegen.Context qualified as IR
 import Reussir.Codegen.Context.Symbol (Symbol, verifiedSymbol)
+import Reussir.Codegen.Global (Global (..))
 import Reussir.Core.Data.Class (Class (..))
 import Reussir.Core.Data.FP (FloatingPointType (..))
 import Reussir.Core.Data.Full.Context (FullContext (..))
@@ -68,6 +69,7 @@ import Reussir.Core.Full.Type (convertSemiType)
 import Reussir.Core.Lowering.Context (createLoweringContext, runLoweringToModule)
 import Reussir.Core.Lowering.Function (lowerFunction)
 import Reussir.Core.Lowering.Record (lowerRecord)
+import Reussir.Core.String (getAllStrings, mangleStringToken)
 import Reussir.Core.Semi.Context (
     emptyLocalSemiContext,
     emptySemiContext,
@@ -113,6 +115,7 @@ data ResultKind
     | ResultF64
     | ResultBool
     | ResultUnit
+    | ResultStr
     | -- | For non-primitive types, store type description
       ResultOther T.Text
     deriving (Show, Eq)
@@ -471,7 +474,13 @@ generateExpressionModule funcName semiExpr exprType logLevel state = do
                 allRecords <- liftIO $ H.toList (ctxRecords finalFullCtx)
                 forM_ allRecords $ \(_, record) -> lowerRecord record
 
-                -- TODO: Lower all strings
+                -- Lower all strings from the string table
+                strList <- getAllStrings stringUniq
+                forM_ strList $ \(strVal, token) -> do
+                    let symbol = verifiedSymbol $ mangleStringToken token
+                    State.modify $ \mod' ->
+                        let global = GlobalString symbol strVal
+                         in mod'{IR.globals = global : IR.globals mod'}
 
                 -- Lower all functions
                 forM_ allFuncs $ \(_, func) -> do
@@ -520,4 +529,5 @@ typeToResultKind (Semi.TypeFP (IEEEFloat 32)) = ResultF32
 typeToResultKind (Semi.TypeFP (IEEEFloat 64)) = ResultF64
 typeToResultKind Semi.TypeBool = ResultBool
 typeToResultKind Semi.TypeUnit = ResultUnit
+typeToResultKind Semi.TypeStr = ResultStr
 typeToResultKind ty = ResultOther (T.pack $ show ty)

@@ -1,3 +1,4 @@
+{-# LANGUAGE CApiFFI #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Test.REPL.Integration (tests) where
@@ -7,8 +8,10 @@ import Data.ByteString (ByteString)
 import Data.Int (Int64)
 import Data.String (IsString (fromString))
 import Data.Text qualified as T
-import Foreign (FunPtr, nullPtr)
-import Foreign.Ptr (castPtrToFunPtr)
+import Data.Word (Word64)
+import Foreign (FunPtr, Ptr, Storable (..), alloca, nullPtr)
+import Foreign.C.String (peekCStringLen)
+import Foreign.Ptr (castPtrToFunPtr, wordPtrToPtr)
 import Test.Tasty
 import Test.Tasty.HUnit
 import Text.Megaparsec (runParser)
@@ -22,6 +25,27 @@ foreign import ccall "dynamic"
 
 foreign import ccall "dynamic"
     callF64Func :: FunPtr (IO Double) -> IO Double
+
+-- | Representation of the str type from Reussir (ptr, len pair)
+data StrResult = StrResult
+    { strResultPtr :: {-# UNPACK #-} !Word64
+    , strResultLen :: {-# UNPACK #-} !Word64
+    }
+
+instance Storable StrResult where
+    sizeOf _ = 16
+    alignment _ = 8
+    peek p = do
+        ptr <- peekByteOff p 0
+        len <- peekByteOff p 8
+        return $ StrResult ptr len
+    poke p (StrResult ptr len) = do
+        pokeByteOff p 0 ptr
+        pokeByteOff p 8 len
+
+-- | C helper function to call a JIT function returning a str type
+foreign import capi "Reussir/Bridge.h reussir_bridge_call_str_func"
+    c_reussir_bridge_call_str_func :: Ptr () -> Ptr StrResult -> IO ()
 
 tests :: TestTree
 tests =
@@ -38,6 +62,13 @@ tests =
             [ testCase "Execute float literal" testExecFloatLiteral
             , testCase "Execute float addition" testExecFloatAddition
             , testCase "Execute float multiplication" testExecFloatMultiplication
+            ]
+        , testGroup "JIT Execution - Strings"
+            [ testCase "Execute simple string literal" testExecSimpleString
+            , testCase "Execute empty string literal" testExecEmptyString
+            , testCase "Execute string with spaces" testExecStringWithSpaces
+            , testCase "Execute string with escape chars" testExecStringWithEscapes
+            , testCase "Execute string from if-expression" testExecStringFromIf
             ]
         , testGroup "State Persistence"
             [ testCase "Multiple expressions share state" testMultipleExpressions
@@ -113,6 +144,43 @@ compileAndExecFloat' input = do
                                     else return $ Left $ "Symbol not found: " ++ funcName
                             else return $ Left "Failed to add module"
 
+-- Helper to compile and execute a string expression
+compileAndExecStr :: T.Text -> IO (Either String String)
+compileAndExecStr input = do
+    catch (compileAndExecStr' input) handleErr
+  where
+    handleErr :: SomeException -> IO (Either String String)
+    handleErr e = return $ Left $ "Exception: " ++ show e
+
+compileAndExecStr' :: T.Text -> IO (Either String String)
+compileAndExecStr' input = do
+    state <- initReplState LogWarning "<test>"
+    case runParser parseExpr "<test>" input of
+        Left err -> return $ Left $ "Parse error: " ++ show err
+        Right expr -> do
+            result <- compileExpression state input expr
+            case result of
+                Left err -> return $ Left $ "Compile error: " ++ show err
+                Right (moduleBytes, state', _) -> do
+                    let counter = replCounter state' - 1
+                    let funcName = "__repl_expr_" ++ show counter
+                    withJIT placeholderCallback OptTPDE LogInfo $ \jit -> do
+                        flag <- addModule jit moduleBytes
+                        if flag
+                            then do
+                                sym <- lookupSymbol jit (fromString funcName) False
+                                if sym /= nullPtr
+                                    then do
+                                        strVal <- alloca $ \resultPtr -> do
+                                            c_reussir_bridge_call_str_func sym resultPtr
+                                            StrResult ptrWord lenWord <- peek resultPtr
+                                            let strPtrVal = wordPtrToPtr (fromIntegral ptrWord)
+                                            let strLenVal = fromIntegral lenWord
+                                            peekCStringLen (strPtrVal, strLenVal)
+                                        return $ Right strVal
+                                    else return $ Left $ "Symbol not found: " ++ funcName
+                            else return $ Left "Failed to add module"
+
 testExecIntLiteral :: Assertion
 testExecIntLiteral = do
     result <- compileAndExecInt "42"
@@ -168,6 +236,50 @@ testExecFloatMultiplication = do
     case result of
         Left err -> assertFailure err
         Right val -> assertBool "Float product close to 6.28" (abs (val - 6.28) < 0.001)
+
+-- String execution tests
+
+testExecSimpleString :: Assertion
+testExecSimpleString = do
+    result <- compileAndExecStr "\"hello\""
+    case result of
+        Left err -> assertFailure err
+        Right val -> val @?= "hello"
+
+testExecEmptyString :: Assertion
+testExecEmptyString = do
+    result <- compileAndExecStr "\"\""
+    case result of
+        Left err -> assertFailure err
+        Right val -> val @?= ""
+
+testExecStringWithSpaces :: Assertion
+testExecStringWithSpaces = do
+    result <- compileAndExecStr "\"hello world\""
+    case result of
+        Left err -> assertFailure err
+        Right val -> val @?= "hello world"
+
+testExecStringWithEscapes :: Assertion
+testExecStringWithEscapes = do
+    -- Test string with escaped newline character to verify content
+    result <- compileAndExecStr "\"hello\\nworld\""
+    case result of
+        Left err -> assertFailure err
+        Right val -> val @?= "hello\nworld"
+
+testExecStringFromIf :: Assertion
+testExecStringFromIf = do
+    -- Test if-expression returning strings (using bool literal since comparisons don't work in REPL)
+    result1 <- compileAndExecStr "if true { \"yes\" } else { \"no\" }"
+    case result1 of
+        Left err -> assertFailure $ "true branch failed: " ++ err
+        Right val -> val @?= "yes"
+    
+    result2 <- compileAndExecStr "if false { \"yes\" } else { \"no\" }"
+    case result2 of
+        Left err -> assertFailure $ "false branch failed: " ++ err
+        Right val -> val @?= "no"
 
 testMultipleExpressions :: Assertion
 testMultipleExpressions = do

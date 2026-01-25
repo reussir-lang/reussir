@@ -15,7 +15,7 @@ import Effectful (inject, liftIO)
 import Effectful.Log qualified as L
 import Effectful.Reader.Static qualified as Reader
 import Effectful.State.Static.Local qualified as State
-import Reussir.Codegen.Context.Symbol (Symbol)
+import Reussir.Codegen.Context.Symbol (Symbol, verifiedSymbol)
 import Reussir.Codegen.IR qualified as IR
 import Reussir.Codegen.Intrinsics qualified as IR
 import Reussir.Codegen.Intrinsics.Arith qualified as Arith
@@ -35,6 +35,7 @@ import Reussir.Core.Data.UniqueID (VarID (..))
 import Reussir.Core.Lowering.Context (addIRInstr, materializeCurrentBlock, nextValue, tyValOrICE, withLocationMetaData, withLocationSpan, withVar)
 import Reussir.Core.Lowering.Debug (typeAsDbgType)
 import Reussir.Core.Lowering.Type (convertType, mkRefType)
+import Reussir.Core.String (mangleStringToken)
 import Reussir.Parser.Types.Lexer (Identifier (unIdentifier), Path (..))
 
 createConstant :: IR.Type -> Scientific -> LoweringEff IR.TypedValue
@@ -70,6 +71,13 @@ lowerExprAsBlock expr blkArgs finalizer = do
 
 lowerExprInBlock ::
     Full.ExprKind -> Full.Type -> LoweringEff ExprResult
+lowerExprInBlock (Full.GlobalStr token) ty = do
+    ty' <- inject $ convertType ty
+    let sym = verifiedSymbol $ mangleStringToken token
+    value' <- nextValue
+    let instr = IR.StrLiteral sym (value', ty')
+    addIRInstr instr
+    pure $ Just (value', ty')
 lowerExprInBlock (Full.Constant value) ty = do
     ty' <- inject $ convertType ty
     Just <$> createConstant ty' value

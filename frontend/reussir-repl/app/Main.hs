@@ -1,3 +1,4 @@
+{-# LANGUAGE CApiFFI #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Main (main) where
@@ -10,8 +11,9 @@ import Data.Int (Int16, Int32, Int64, Int8)
 import Data.Maybe (isNothing)
 import Data.String (IsString (fromString))
 import Data.Word (Word16, Word32, Word64, Word8)
-import Foreign (FunPtr, Ptr, nullPtr)
-import Foreign.Ptr (castPtrToFunPtr)
+import Foreign (FunPtr, Ptr, Storable (..), alloca, castPtr, nullPtr)
+import Foreign.C.String (peekCStringLen)
+import Foreign.Ptr (castPtrToFunPtr, wordPtrToPtr)
 
 -- Text
 import Data.Text qualified as T
@@ -88,6 +90,27 @@ foreign import ccall "dynamic"
 
 foreign import ccall "dynamic"
     callUnitFunc :: FunPtr (IO ()) -> IO ()
+
+-- | Representation of the str type from Reussir (ptr, len pair)
+data StrResult = StrResult
+    { strResultPtr :: {-# UNPACK #-} !Word64
+    , strResultLen :: {-# UNPACK #-} !Word64
+    }
+
+instance Storable StrResult where
+    sizeOf _ = 16
+    alignment _ = 8
+    peek p = do
+        ptr <- peekByteOff p 0
+        len <- peekByteOff p 8
+        return $ StrResult ptr len
+    poke p (StrResult ptr len) = do
+        pokeByteOff p 0 ptr
+        pokeByteOff p 8 len
+
+-- | C helper function to call a JIT function returning a str type
+foreign import capi "Reussir/Bridge.h reussir_bridge_call_str_func"
+    c_reussir_bridge_call_str_func :: Ptr () -> Ptr StrResult -> IO ()
 
 --------------------------------------------------------------------------------
 -- Placeholder callback for lazy module loading
@@ -454,6 +477,16 @@ executeWithResultKind sym resultKind = case resultKind of
     ResultUnit -> do
         callUnitFunc (castPtrToFunPtr sym)
         return "()"
+    ResultStr -> do
+        -- String is returned as a struct { ptr, len }
+        -- Use the C helper function to call the JIT'd function and capture the result
+        alloca $ \resultPtr -> do
+            c_reussir_bridge_call_str_func sym resultPtr
+            StrResult ptrWord lenWord <- peek resultPtr
+            let strPtrVal = wordPtrToPtr (fromIntegral ptrWord)
+            let strLenVal = fromIntegral lenWord
+            strContent <- peekCStringLen (strPtrVal, strLenVal)
+            return $ show strContent ++ " : str"
     ResultOther tyName -> do
         -- For non-primitive types, we can't easily print the value
         -- Just indicate the expression was evaluated

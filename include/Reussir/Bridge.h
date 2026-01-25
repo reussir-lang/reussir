@@ -134,6 +134,16 @@ typedef struct {
 void reussir_bridge_hash_bytes(const uint8_t *str, size_t len,
                                ReussirStringHash *out);
 
+// String result from JIT execution
+typedef struct {
+  const char *ptr;
+  uint64_t len;
+} ReussirStrResult;
+
+// Call a JIT function that returns a str type and capture the result
+// The function pointer should be obtained from reussir_bridge_jit_lookup_symbol
+void reussir_bridge_call_str_func(void *func_ptr, ReussirStrResult *result);
+
 #ifdef __cplusplus
 }
 #endif

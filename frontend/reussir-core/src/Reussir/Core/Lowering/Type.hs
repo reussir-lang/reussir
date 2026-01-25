@@ -28,7 +28,7 @@ convertType (Full.TypeRc ty cap) = do
                 , IR.rcBoxCapability = cap
                 , IR.rcBoxAtomicity = IR.NonAtomic -- TODO: implement atomicity
                 }
-convertType Full.TypeStr = error "NYI: TypeStr"
+convertType Full.TypeStr = pure IR.TypeStr
 convertType Full.TypeBottom = error "NYI: TypeBottom"
 
 convertIntegral :: Int -> IR.Type
