@@ -297,7 +297,12 @@ public:
       return execution_session->lookup({&main_dynlib},
                                        mangle_and_interner(Name.str()));
     }
-    return execution_session->lookup({&main_dynlib}, Name.str());
+    // For unmangled lookups, we need to prepend the global prefix (e.g., '_' on macOS)
+    char prefix = data_layout.getGlobalPrefix();
+    std::string prefixed_name = (prefix != '\0') 
+        ? std::string(1, prefix) + Name.str() 
+        : Name.str();
+    return execution_session->lookup({&main_dynlib}, prefixed_name);
   }
 };
 } // namespace
