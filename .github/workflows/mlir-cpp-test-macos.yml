@@ -32,6 +32,7 @@ jobs:
           path: |
             ~/.cabal/store
             ~/.cabal/packages
+            ~/.ghcup
             dist-newstyle
           key: ${{ matrix.os }}-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
           restore-keys: |

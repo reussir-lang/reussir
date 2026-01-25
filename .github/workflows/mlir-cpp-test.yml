@@ -31,6 +31,7 @@ jobs:
             ~/.cabal/store
             ~/.cabal/packages
             dist-newstyle
+            ~/.ghcup
           key: ${{ runner.os }}-${{ runner.arch }}-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-cabal-

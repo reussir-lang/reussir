@@ -25,6 +25,7 @@ jobs:
           path: |
             C:/Users/runneradmin/AppData/Roaming/cabal/store
             C:/Users/runneradmin/AppData/Roaming/cabal/packages
+            C:/ghcup
             dist-newstyle
           key: windows-clang64-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
           restore-keys: |
