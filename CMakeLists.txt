@@ -32,6 +32,19 @@ if(DEFINED ENV{NIX_STORE})
   get_target_property(GTEST_INCLUDE_DIRS GTest::gtest INTERFACE_INCLUDE_DIRECTORIES)
   set(CMAKE_CXX_FLAGS
       "${CMAKE_CXX_FLAGS} -I${MLIR_INCLUDE_DIRS} -I${LLVM_INCLUDE_DIRS} -I${GTEST_INCLUDE_DIRS}")
+elseif(APPLE AND NOT DEFINED ENV{NIX_STORE})
+  # On macOS with Homebrew LLVM, the module scanner cannot find system headers.
+  # We need to inject the SDK sysroot include path similar to the Nix workaround.
+  execute_process(
+    COMMAND xcrun --show-sdk-path
+    OUTPUT_VARIABLE MACOS_SDK_PATH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  if(MACOS_SDK_PATH)
+    message(STATUS "Detected macOS; injecting SDK and MLIR/LLVM include flags for scan-deps: ${MACOS_SDK_PATH}")
+    set(CMAKE_CXX_FLAGS
+        "${CMAKE_CXX_FLAGS} -I${MLIR_INCLUDE_DIRS} -I${LLVM_INCLUDE_DIRS} -isysroot ${MACOS_SDK_PATH}")
+  endif()
 endif()
 message(STATUS "include dirs for llvm and mlir: ${MLIR_INCLUDE_DIRS};${LLVM_INCLUDE_DIRS}")
 set(MLIR_TABLEGEN_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/include)
