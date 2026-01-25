@@ -28,8 +28,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cabal/store
-            ~/.cabal/packages
+            ~/.cache/cabal
             dist-newstyle
             ~/.ghcup
           key: ${{ runner.os }}-${{ runner.arch }}-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
