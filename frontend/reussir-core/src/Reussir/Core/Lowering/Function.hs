@@ -23,6 +23,7 @@ import Reussir.Core.Lowering.Debug (typeAsDbgType, unmangledPath)
 import Reussir.Core.Lowering.Expr (lowerExprAsBlock)
 import Reussir.Core.Lowering.Type (convertType)
 import Reussir.Parser.Types.Lexer (Identifier (..))
+import System.Info (os)
 
 lowerFunction :: Full.Function -> GlobalLoweringEff ()
 lowerFunction func = do
@@ -32,9 +33,13 @@ lowerFunction func = do
     let mBody = Full.funcBody func
     let span' = Full.funcSpan func
 
+    let preferredLinkage = if os == "mingw32" || os == "darwin" 
+            then IR.LnkExternal 
+            else IR.LnkWeakODR
+
     let (linkage, llvmVis, mlirVis) = case mBody of
             Nothing -> (IR.LnkExternal, IR.LLVMVisDefault, IR.MLIRVisPrivate)
-            Just _ -> (IR.LnkWeakODR, IR.LLVMVisDefault, IR.MLIRVisPublic)
+            Just _ -> (preferredLinkage, IR.LLVMVisDefault, IR.MLIRVisPublic)
 
     -- Handle Location and Debug Info for Function
     loc <- case span' of

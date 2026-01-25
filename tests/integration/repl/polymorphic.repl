@@ -1,9 +1,9 @@
-// RUN: %reussir-repl -i %s -lerror -Odefault | %FileCheck %s
+// RUN: %reussir-repl -i %s -lerror -Onone | %FileCheck %s
 
-fn cos_squared(x: f64) -> f64 { let y = core::intrinsic::math::cos(x, 127); y * y }
+fn cos_squared(x: f64) -> f64 { let y = core::intrinsic::math::cos(x, 0); y * y }
 // CHECK: Definition added.
 
-fn sin_squared(x: f64) -> f64 { let y = core::intrinsic::math::sin(x, 127); y * y }
+fn sin_squared(x: f64) -> f64 { let y = core::intrinsic::math::sin(x, 0); y * y }
 // CHECK: Definition added.
 
 :dump context
