@@ -39,11 +39,14 @@ elseif(APPLE AND NOT DEFINED ENV{NIX_STORE})
     COMMAND xcrun --show-sdk-path
     OUTPUT_VARIABLE MACOS_SDK_PATH
     OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE XCRUN_RESULT
   )
-  if(MACOS_SDK_PATH)
+  if(XCRUN_RESULT EQUAL 0 AND MACOS_SDK_PATH)
     message(STATUS "Detected macOS; injecting SDK and MLIR/LLVM include flags for scan-deps: ${MACOS_SDK_PATH}")
     set(CMAKE_CXX_FLAGS
         "${CMAKE_CXX_FLAGS} -I${MLIR_INCLUDE_DIRS} -I${LLVM_INCLUDE_DIRS} -isysroot ${MACOS_SDK_PATH}")
+  else()
+    message(WARNING "Could not determine macOS SDK path via xcrun. Module scanning may fail.")
   endif()
 endif()
 message(STATUS "include dirs for llvm and mlir: ${MLIR_INCLUDE_DIRS};${LLVM_INCLUDE_DIRS}")
