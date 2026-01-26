@@ -32,43 +32,63 @@ Reussir is a programming language compiler featuring Rust-like syntax with advan
 
 ## Quickstart
 
-### Using Nix (Recommended)
-
-The fastest way to get started is with [Nix](https://nixos.org/). Nix provides a fully reproducible development environment with all dependencies pre-configured.
+### Ubuntu 24.04
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-org/reussir.git
-cd reussir
+# LLVM 21
+wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh
+sudo ./llvm.sh 21
+sudo apt install libmlir-21-dev mlir-21-tools llvm-21-dev
 
-# Enter the development shell (all dependencies included!)
-nix develop
+# Build tools
+sudo apt install cmake ninja-build libgtest-dev libspdlog-dev
+pip install lit
 
-# Build everything
-mkdir -p build && cd build
-cmake -GNinja -DCMAKE_BUILD_TYPE=Release ..
-ninja
+# Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup default nightly
+
+# Haskell (via GHCup)
+curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
+ghcup install ghc 9.14.1
+ghcup install cabal latest
 ```
 
-The Nix development shell automatically provides:
+> [!NOTE]
+> For GHC 9.14.1, in case GHCup does not have the latest HLS support, you can manually install HLS 2.13.0.0:
+> ```bash
+> ghcup install hls 2.13.0.0 -u https://github.com/haskell/haskell-language-server/releases/download/2.13.0.0/haskell-language-server-2.13.0.0-aarch64-linux-ubuntu2204.tar.xz
+> ```
 
-| Component | Version |
-|-----------|---------|
-| LLVM + MLIR | 21 |
-| GHC | 9.14.1 |
-| Rust | nightly-2025-11-07 |
-| Python | 3.13 |
-| CMake + Ninja | latest |
+**Sample VS Code settings for Ubuntu (`.vscode/settings.json`):**
 
-### Using direnv (Optional)
-
-If you have [direnv](https://direnv.net/) installed, the environment loads automatically:
-
-```bash
-cd reussir
-echo "use flake" > .envrc
-direnv allow  # One-time setup
-# Environment loads automatically on cd
+```json
+{
+    "cmake.configureOnOpen": false,
+    "cmake.generator": "Ninja",
+    "cmake.configureSettings": {
+        "TPDE_INCLUDE_TESTS": false,
+        "MLIR_DIR": "/usr/lib/llvm-21/lib/cmake/mlir",
+        "LLVM_DIR": "/usr/lib/llvm-21/lib/cmake/llvm",
+        "CMAKE_CXX_COMPILER": "clang++-21",
+        "CMAKE_C_COMPILER": "clang-21",
+        "LLVM_USE_LINKER": "lld"
+    },
+    "editor.rulers": [
+        80
+    ],
+    "files.autoSave": "afterDelay",
+    "files.insertFinalNewline": true,
+    "editor.formatOnSave": true,
+    "editor.wordWrap": "off",
+    "haskell.manageHLS": "GHCup",
+    "clangd.path": "clangd-21",
+    "haskell.toolchain": {
+        "ghc": "9.14.1",
+        "hls": "2.13.0.0",
+        "cabal": "3.16.1.0"
+    }
+}
 ```
 
 ## Building
@@ -76,7 +96,7 @@ direnv allow  # One-time setup
 ### Full Build (C++ Backend + Rust Runtime)
 
 ```bash
-# From project root with Nix shell active
+# From project root
 mkdir -p build && cd build
 cmake -GNinja -DCMAKE_BUILD_TYPE=Release ..
 ninja
@@ -190,19 +210,10 @@ reussir/
 │   ├── integration/          # lit-based integration tests
 │   └── unittest/             # C++ unit tests
 ├── www/                      # Documentation source
-├── flake.nix                 # Nix flake configuration
 └── cabal.project             # Cabal project file
 ```
 
 ## Dependencies
-
-### Via Nix (Recommended)
-
-All dependencies are managed through `flake.nix`. Simply run `nix develop` to get a complete environment.
-
-### Manual Installation
-
-If you prefer not to use Nix:
 
 | Dependency | Version | Notes |
 |------------|---------|-------|
@@ -211,30 +222,8 @@ If you prefer not to use Nix:
 | Ninja | any | Build tool |
 | Rust | nightly | Runtime library |
 | GHC | 9.14.1 | Haskell frontend |
-| Cabal | 3.12+ | Haskell build tool |
+| Cabal | 3.16+ | Haskell build tool |
 | Python | 3.11+ | Test infrastructure (lit) |
-
-**Ubuntu 24.04:**
-
-```bash
-# LLVM 21
-wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh
-sudo ./llvm.sh 21
-sudo apt install libmlir-21-dev mlir-21-tools llvm-21-dev
-
-# Build tools
-sudo apt install cmake ninja-build libgtest-dev libspdlog-dev
-pip install lit
-
-# Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-rustup default nightly
-
-# Haskell (via GHCup)
-curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
-ghcup install ghc 9.14.1
-ghcup install cabal latest
-```
 
 ## CI/CD
 
@@ -244,7 +233,7 @@ The project runs automated tests on every push:
 |----------|----------|-------------|
 | MLIR Backend | Ubuntu 24.04 (x64/ARM) | LLVM 21 & 22 builds |
 | MinGW Clang64 | Windows 2025 | Full pipeline with MSYS2 |
-| Haskell Frontend | Ubuntu 24.04 ARM | Cabal build & test in Nix |
+| Haskell Frontend | Ubuntu 24.04 ARM | Cabal build & test |
 | Miri Tests | Ubuntu Latest | Runtime UB detection |
 | MacOS | MacOS 14 | Full pipeline with Homebrew vendored dependencies |
 
