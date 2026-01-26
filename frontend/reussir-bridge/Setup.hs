@@ -90,23 +90,29 @@ configureCMake v = do
                 , "-DREUSSIR_ENABLE_TESTS=OFF"
                 , root
                 ]
-        (code, _out, err) <- readCreateProcessWithExitCode (proc "cmake" args){cwd = Just bdir} ""
+        -- Note: We use createProcess with Inherit instead of readCreateProcessWithExitCode.
+        -- readCreateProcessWithExitCode uses pipes which can cause segfaults on macOS 15
+        -- due to interactions between fork and the Haskell runtime/threads.
+        -- Inheriting handles sidesteps this issue and streams output directly to the user.
+        let p = (proc "cmake" args){cwd = Just bdir, std_out = Inherit, std_err = Inherit}
+        (_, _, _, ph) <- createProcess p
+        code <- waitForProcess ph
         case code of
             ExitSuccess -> notice v "CMake configuration successful"
-            ExitFailure n -> die' v ("CMake failed (" ++ show n ++ "):\n" ++ err)
+            ExitFailure n -> die' v ("CMake failed (" ++ show n ++ ")")
 
 buildMLIRReussirBridge :: Verbosity -> IO FilePath
 buildMLIRReussirBridge v = do
     bdir <- getBuildDir
     notice v "Building MLIRReussirBridge..."
-    (code, out, err) <- readCreateProcessWithExitCode (proc "ninja" ["MLIRReussirBridge"]){cwd = Just bdir} ""
-    unless (null out) (notice v ("Ninja stdout:\n" ++ out))
-    unless (null err) (notice v ("Ninja stderr:\n" ++ err))
+    let p = (proc "ninja" ["MLIRReussirBridge"]){cwd = Just bdir, std_out = Inherit, std_err = Inherit}
+    (_, _, _, ph) <- createProcess p
+    code <- waitForProcess ph
     case code of
         ExitSuccess -> do
             notice v "MLIRReussirBridge build successful"
             pure (getLibDir bdir </> getSharedLibName "MLIRReussirBridge")
-        ExitFailure n -> die' v ("Ninja failed (" ++ show n ++ "):\n" ++ err)
+        ExitFailure n -> die' v ("Ninja failed (" ++ show n ++ ")")
 
 -------------------------------------------------------------------------------
 -- Hooks
