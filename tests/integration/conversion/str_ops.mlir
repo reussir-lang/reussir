@@ -1,9 +1,9 @@
 // RUN: %reussir-opt %s --reussir-lowering-basic-ops | %FileCheck %s
 module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>>} {
-  // CHECK: llvm.mlir.global linkonce_odr constant @hello("Hello, World!\00") {addr_space = 0 : i32}
+  // CHECK: llvm.mlir.global internal constant @hello("Hello, World!\00") {addr_space = 0 : i32}
   reussir.str.global @hello = "Hello, World!"
 
-  // CHECK: llvm.mlir.global linkonce_odr constant @empty("\00") {addr_space = 0 : i32}
+  // CHECK: llvm.mlir.global internal constant @empty("\00") {addr_space = 0 : i32}
   reussir.str.global @empty = ""
 
   // CHECK-LABEL: llvm.func @test_str_literal() -> !llvm.struct<(ptr, i64)>
