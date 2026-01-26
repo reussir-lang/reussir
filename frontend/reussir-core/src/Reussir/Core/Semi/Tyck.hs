@@ -25,7 +25,7 @@ import Control.Monad (unless, when, zipWithM)
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
 import Data.List (find)
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, fromMaybe)
 import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
@@ -235,14 +235,14 @@ checkFuncType func = withFreshLocalContext $ do
 -- Helper function for convert type args into semantic counterparts.
 -- For placeholder type args (represented as Nothing), we always introduce a
 -- new meta hole.
-tyArgOrMetaHole :: Maybe Syn.Type -> TypeBound -> SemiEff Type
-tyArgOrMetaHole (Just ty) bounds = do
+tyArgOrMetaHole :: WithSpan (Maybe Syn.Type) -> TypeBound -> SemiEff Type
+tyArgOrMetaHole (WithSpan (Just ty) _) bounds = do
     ty' <- evalType ty
     satisfied <- runUnification $ satisfyBounds ty' bounds
     unless satisfied $ do
         addErrReportMsg "Type argument does not satisfy the required bounds"
     pure ty'
-tyArgOrMetaHole Nothing bounds = introduceNewHoleInContext bounds
+tyArgOrMetaHole (WithSpan Nothing span) bounds = runUnification $ introduceNewHole Nothing (Just span) bounds
 
 inferType :: Syn.Expr -> SemiEff Expr
 --            U is fresh in Г
@@ -464,10 +464,10 @@ inferType
         ) = do
         L.logTrace_ "Tyck: infer Nullable::Null ctor call"
         ty' <- case ctorTyArgs of
-            [Just ty] -> do
+            [WithSpan (Just ty) _] -> do
                 ty' <- evalType ty
                 return ty'
-            [Nothing] -> introduceNewHoleInContext [] -- TODO: locate the exact span of the type arg
+            [WithSpan Nothing span] -> runUnification $ introduceNewHole Nothing (Just span) []
             [] -> introduceNewHoleInContext []
             _ -> do
                 addErrReportMsg "Nullable::Null expects exactly 1 type argument"
@@ -488,8 +488,8 @@ inferType
         ) = do
         L.logTrace_ "Tyck: infer Nullable::NonNull ctor call"
         expectedTy <- case ctorTyArgs of
-            [Just ty] -> evalType ty
-            [Nothing] -> introduceNewHoleInContext []
+            [WithSpan (Just ty) _] -> evalType ty
+            [WithSpan Nothing span] -> runUnification $ introduceNewHole Nothing (Just span) []
             [] -> introduceNewHoleInContext []
             _ -> do
                 addErrReportMsg "Nullable::NonNull expects exactly 1 type argument"
@@ -594,8 +594,8 @@ inferTypeForIntrinsicCall Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallTyAr
                         else do
                             -- Infer float type T
                             floatTy <- case tyArgs of
-                                [Just ty] -> evalType ty
-                                [Nothing] -> introduceNewHoleInContext [Class $ Path "FloatingPoint" []]
+                                [WithSpan (Just ty) _] -> evalType ty
+                                [WithSpan Nothing span] -> runUnification $ introduceNewHole Nothing (Just span) [Class $ Path "FloatingPoint" []]
                                 [] -> introduceNewHoleInContext [Class $ Path "FloatingPoint" []]
                                 _ -> do
                                     addErrReportMsg "Intrinsic function expects exactly 0 or 1 type argument"
@@ -666,9 +666,10 @@ inferTypeForNormalCall Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallTyArgs 
         Just proto -> do
             let numGenerics = length (funcGenerics proto)
             -- Allow empty type argument list as syntax sugar for all holes
+            currentSpan <- State.gets currentSpan
             let paddedTyArgs =
                     if null tyArgs && numGenerics > 0
-                        then replicate numGenerics Nothing
+                        then replicate numGenerics (WithSpan Nothing (fromMaybe (0, 0) currentSpan))
                         else tyArgs
             insideRegion' <- State.gets insideRegion
             when (not insideRegion' && funcIsRegional proto) $ do
@@ -711,7 +712,7 @@ inferTypeForNormalCall Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallTyArgs 
                         <> T.pack (show (length argExprs))
                 exprWithSpan TypeBottom Poison
             else argAction
-    checkTypeArgsNum :: Int -> [Maybe Syn.Type] -> SemiEff Expr -> SemiEff Expr
+    checkTypeArgsNum :: Int -> [WithSpan (Maybe Syn.Type)] -> SemiEff Expr -> SemiEff Expr
     checkTypeArgsNum expectedNum actualTyArgs paramAction = do
         if expectedNum /= length actualTyArgs
             then do
@@ -839,9 +840,10 @@ inferTypeForNormalCtorCall
             Just record -> do
                 let numGenerics = length (recordTyParams record)
                 -- Allow empty type argument list as syntax sugar for all holes
+                currentSpan <- State.gets currentSpan
                 let paddedTyArgs =
                         if null ctorTyArgs && numGenerics > 0
-                            then replicate numGenerics Nothing
+                            then replicate numGenerics (WithSpan Nothing (fromMaybe (0, 0) currentSpan))
                             else ctorTyArgs
                 bounds <- mapM (\(_, gid) -> runUnification $ getGenericBound gid) (recordTyParams record)
                 tyArgs' <- zipWithM tyArgOrMetaHole paddedTyArgs bounds
@@ -958,7 +960,7 @@ inferTypeForNormalCtorCall
                             <> T.pack (show (length ctorArgs))
                     exprWithSpan TypeBottom Poison
                 else argAction
-        checkTypeArgsNum :: Int -> [Maybe Syn.Type] -> SemiEff Expr -> SemiEff Expr
+        checkTypeArgsNum :: Int -> [WithSpan (Maybe Syn.Type)] -> SemiEff Expr -> SemiEff Expr
         checkTypeArgsNum expectedNum actualTyArgs paramAction = do
             if expectedNum /= length actualTyArgs
                 then do

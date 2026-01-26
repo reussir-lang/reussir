@@ -39,14 +39,14 @@ data UnaryOp = Negate | Not deriving (Show, Eq)
 
 data CtorCall = CtorCall
     { ctorName :: Path
-    , ctorTyArgs :: [Maybe Type] -- underscore represented as Nothing
+    , ctorTyArgs :: [WithSpan (Maybe Type)] -- underscore represented as Nothing
     , ctorArgs :: [(Maybe Identifier, Expr)]
     }
     deriving (Show, Eq)
 
 data FuncCall = FuncCall
     { funcCallName :: Path
-    , funcCallTyArgs :: [Maybe Type]
+    , funcCallTyArgs :: [WithSpan (Maybe Type)]
     , funcCallArgs :: [Expr]
     }
     deriving (Show, Eq)

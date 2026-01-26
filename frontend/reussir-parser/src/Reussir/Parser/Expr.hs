@@ -84,8 +84,8 @@ parseConstant =
         <|> (ConstString <$> parseString)
         <|> (ConstBool <$> parseBool)
 
-parseTypeArg :: Parser (Maybe Type)
-parseTypeArg = (char '_' *> space $> Nothing) <|> (Just <$> parseType)
+parseTypeArg :: Parser (WithSpan (Maybe Type))
+parseTypeArg = withSpan $ (char '_' *> space $> Nothing) <|> (Just <$> parseType)
 
 parseCtorArg :: Parser (Maybe Identifier, Expr)
 parseCtorArg =
