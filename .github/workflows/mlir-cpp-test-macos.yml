@@ -53,7 +53,7 @@ jobs:
       - name: Setup GHC
         uses: haskell/ghcup-setup@v1
         with:
-          ghc: 9.10.3
+          ghc: 9.14.1
           cabal: latest
 
       - name: Setup Cabal
