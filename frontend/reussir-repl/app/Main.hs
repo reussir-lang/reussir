@@ -11,9 +11,9 @@ import Data.Int (Int16, Int32, Int64, Int8)
 import Data.Maybe (isNothing)
 import Data.String (IsString (fromString))
 import Data.Word (Word16, Word32, Word64, Word8)
-import Foreign (FunPtr, Ptr, Storable (..), alloca, castPtr, nullPtr)
+import Foreign (FunPtr, Ptr, Storable (..), alloca, nullPtr)
 import Foreign.C.String (peekCStringLen)
-import Foreign.Ptr (castPtrToFunPtr, wordPtrToPtr)
+import Foreign.Ptr (castPtrToFunPtr)
 
 -- Text
 import Data.Text qualified as T
@@ -50,6 +50,7 @@ import Reussir.Core.REPL (
 import Reussir.Core.Semi.Pretty qualified as SemiP
 import Reussir.Parser.Prog (ReplInput (..), parseReplInput)
 import Reussir.Parser.Types.Expr qualified as P
+import Foreign.C (CChar, CSize)
 
 --------------------------------------------------------------------------------
 -- Foreign function imports for different result types
@@ -92,21 +93,18 @@ foreign import ccall "dynamic"
     callUnitFunc :: FunPtr (IO ()) -> IO ()
 
 -- | Representation of the str type from Reussir (ptr, len pair)
-data StrResult = StrResult
-    { strResultPtr :: {-# UNPACK #-} !Word64
-    , strResultLen :: {-# UNPACK #-} !Word64
-    }
+data StrResult = StrResult {-# UNPACK #-} !(Ptr CChar) {-# UNPACK #-} !CSize
 
 instance Storable StrResult where
-    sizeOf _ = 16
-    alignment _ = 8
+    sizeOf _ = sizeOf (undefined :: Ptr CChar) + sizeOf (undefined :: CSize)
+    alignment _ = alignment (undefined :: Ptr CChar)
     peek p = do
         ptr <- peekByteOff p 0
-        len <- peekByteOff p 8
+        len <- peekByteOff p $ sizeOf (undefined :: Ptr CChar)
         return $ StrResult ptr len
     poke p (StrResult ptr len) = do
         pokeByteOff p 0 ptr
-        pokeByteOff p 8 len
+        pokeByteOff p (sizeOf (undefined :: Ptr CChar)) len
 
 -- | C helper function to call a JIT function returning a str type
 foreign import capi "Reussir/Bridge.h reussir_bridge_call_str_func"
@@ -483,9 +481,7 @@ executeWithResultKind sym resultKind = case resultKind of
         alloca $ \resultPtr -> do
             c_reussir_bridge_call_str_func sym resultPtr
             StrResult ptrWord lenWord <- peek resultPtr
-            let strPtrVal = wordPtrToPtr (fromIntegral ptrWord)
-            let strLenVal = fromIntegral lenWord
-            strContent <- peekCStringLen (strPtrVal, strLenVal)
+            strContent <- peekCStringLen (ptrWord, fromIntegral lenWord)
             return $ show strContent ++ " : str"
     ResultOther tyName -> do
         -- For non-primitive types, we can't easily print the value

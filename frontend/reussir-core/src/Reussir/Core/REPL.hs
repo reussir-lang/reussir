@@ -512,6 +512,7 @@ isPrimitiveType (Semi.TypeIntegral _) = True
 isPrimitiveType (Semi.TypeFP _) = True
 isPrimitiveType Semi.TypeBool = True
 isPrimitiveType Semi.TypeUnit = True
+isPrimitiveType Semi.TypeStr = True
 isPrimitiveType _ = False
 
 -- | Convert a Semi type to a ResultKind for printing

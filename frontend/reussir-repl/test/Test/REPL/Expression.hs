@@ -8,16 +8,18 @@ import Data.ByteString (ByteString)
 import Data.Int (Int64)
 import Data.String (IsString (fromString))
 import Data.Text qualified as T
-import Data.Word (Word8, Word64)
+import Data.Word (Word8)
 import Foreign (FunPtr, Ptr, Storable (..), alloca, nullPtr)
 import Foreign.C.String (peekCStringLen)
-import Foreign.Ptr (castPtrToFunPtr, wordPtrToPtr)
+import Foreign.Ptr (castPtrToFunPtr)
 import Test.Tasty
 import Test.Tasty.HUnit
 import Text.Megaparsec (runParser)
 import Reussir.Bridge (LogLevel (..), OptOption (..), addModule, lookupSymbol, withJIT)
 import Reussir.Core.REPL
 import Reussir.Parser.Expr (parseExpr)
+import Foreign.C (CChar)
+import Foreign.C.Types (CSize)
 
 -- Foreign imports for calling JIT-compiled functions
 foreign import ccall "dynamic"
@@ -30,10 +32,7 @@ foreign import ccall "dynamic"
     callBoolFunc :: FunPtr (IO Word8) -> IO Word8
 
 -- | Representation of the str type from Reussir (ptr, len pair)
-data StrResult = StrResult
-    { strResultPtr :: {-# UNPACK #-} !Word64
-    , strResultLen :: {-# UNPACK #-} !Word64
-    }
+data StrResult = StrResult {-# UNPACK #-} !(Ptr CChar) {-# UNPACK #-} !CSize
 
 instance Storable StrResult where
     sizeOf _ = 16
@@ -228,9 +227,7 @@ compileAndExecStr' input = do
                                         strVal <- alloca $ \resultPtr -> do
                                             c_reussir_bridge_call_str_func sym resultPtr
                                             StrResult ptrWord lenWord <- peek resultPtr
-                                            let strPtrVal = wordPtrToPtr (fromIntegral ptrWord)
-                                            let strLenVal = fromIntegral lenWord
-                                            peekCStringLen (strPtrVal, strLenVal)
+                                            peekCStringLen (ptrWord, fromIntegral lenWord)
                                         return $ Right strVal
                                     else return $ Left $ "Symbol not found: " ++ funcName
                             else return $ Left "Failed to add module"
