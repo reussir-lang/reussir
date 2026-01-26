@@ -55,7 +55,7 @@ The Nix development shell automatically provides:
 | Component | Version |
 |-----------|---------|
 | LLVM + MLIR | 21 |
-| GHC | 9.10.3 |
+| GHC | 9.14.1 |
 | Rust | nightly-2025-11-07 |
 | Python | 3.13 |
 | CMake + Ninja | latest |
@@ -210,7 +210,7 @@ If you prefer not to use Nix:
 | CMake | 3.31+ | Build system |
 | Ninja | any | Build tool |
 | Rust | nightly | Runtime library |
-| GHC | 9.10.3 | Haskell frontend |
+| GHC | 9.14.1 | Haskell frontend |
 | Cabal | 3.12+ | Haskell build tool |
 | Python | 3.11+ | Test infrastructure (lit) |
 
@@ -232,7 +232,7 @@ rustup default nightly
 
 # Haskell (via GHCup)
 curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
-ghcup install ghc 9.10.3
+ghcup install ghc 9.14.1
 ghcup install cabal latest
 ```
 

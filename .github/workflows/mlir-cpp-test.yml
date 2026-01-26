@@ -45,13 +45,13 @@ jobs:
       - name: Setup GHC
         uses: haskell/ghcup-setup@v1
         with:
-          ghc: 9.10.3
+          ghc: 9.14.1
           cabal: latest
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build wget libgtest-dev libgmock-dev libspdlog-dev
+          sudo apt-get install -y cmake ninja-build wget libgtest-dev libgmock-dev libspdlog-dev libgmp-dev
           sudo pip install lit --break-system-packages
           cabal update
 
