@@ -1547,7 +1547,7 @@ struct ReussirStrGlobalOpConversionPattern
 
     // Create LLVM global op
     rewriter.replaceOpWithNewOp<mlir::LLVM::GlobalOp>(
-        op, arrayType, /*isConstant=*/true, mlir::LLVM::Linkage::LinkonceODR,
+        op, arrayType, /*isConstant=*/true, mlir::LLVM::Linkage::Internal,
         op.getSymName(), stringAttr);
 
     return mlir::success();
