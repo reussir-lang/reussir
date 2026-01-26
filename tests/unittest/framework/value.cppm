@@ -3,6 +3,7 @@ module;
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
 
+#include <format>
 #include <gtest/gtest.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.31)
+cmake_minimum_required(VERSION 3.28)
 project(Reussir LANGUAGES CXX C VERSION 0.1.0)
 
 # Options

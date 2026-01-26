@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14]  # ARM64 macOS runner
+        os: [macos-15]  # ARM64 macOS runner
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -53,7 +53,7 @@ jobs:
       - name: Setup GHC
         uses: haskell/ghcup-setup@v1
         with:
-          ghc: 9.10.3
+          ghc: 9.14.1
           cabal: latest
 
       - name: Setup Cabal
