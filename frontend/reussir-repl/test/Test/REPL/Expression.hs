@@ -35,15 +35,15 @@ foreign import ccall "dynamic"
 data StrResult = StrResult {-# UNPACK #-} !(Ptr CChar) {-# UNPACK #-} !CSize
 
 instance Storable StrResult where
-    sizeOf _ = 16
-    alignment _ = 8
+    sizeOf _ = sizeOf (undefined :: Ptr CChar) + sizeOf (undefined :: CSize)
+    alignment _ = alignment (undefined :: Ptr CChar)
     peek p = do
         ptr <- peekByteOff p 0
-        len <- peekByteOff p 8
+        len <- peekByteOff p $ sizeOf (undefined :: Ptr CChar)
         return $ StrResult ptr len
     poke p (StrResult ptr len) = do
         pokeByteOff p 0 ptr
-        pokeByteOff p 8 len
+        pokeByteOff p (sizeOf (undefined :: Ptr CChar)) len
 
 -- | C helper function to call a JIT function returning a str type
 foreign import capi "Reussir/Bridge.h reussir_bridge_call_str_func"
