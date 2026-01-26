@@ -297,11 +297,11 @@ public:
       return execution_session->lookup({&main_dynlib},
                                        mangle_and_interner(Name.str()));
     }
-    // For unmangled lookups, we need to prepend the global prefix (e.g., '_' on macOS)
+    // For unmangled lookups, we need to prepend the global prefix (e.g., '_' on
+    // macOS)
     char prefix = data_layout.getGlobalPrefix();
-    std::string prefixed_name = (prefix != '\0') 
-        ? std::string(1, prefix) + Name.str() 
-        : Name.str();
+    std::string prefixed_name =
+        (prefix != '\0') ? std::string(1, prefix) + Name.str() : Name.str();
     return execution_session->lookup({&main_dynlib}, prefixed_name);
   }
 };
@@ -385,4 +385,20 @@ export extern "C" {
     }
     return def->getAddress().toPtr<void *>();
   }
+// Call a JIT function that returns a str type (struct { ptr, len })
+// On ARM64 and x86-64, small structs are returned in registers
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wgcc-compat"
+#if defined(_WIN32) && defined(__x86_64__)
+#define API_FLAG [[gnu::sysv_abi]]
+#else
+#define API_FLAG
+#endif
+  void reussir_bridge_call_str_func(void *func_ptr, ReussirStrResult *result) {
+    // Define the function type that returns the str struct
+    using StrFuncType = ReussirStrResult (*)() API_FLAG;
+    auto func = reinterpret_cast<StrFuncType>(func_ptr);
+    *result = func();
+  }
+#pragma clang diagnostic pop
 }

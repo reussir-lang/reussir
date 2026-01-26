@@ -558,13 +558,4 @@ export extern "C" {
                                  ReussirStringHash *out) {
     *out = std::bit_cast<ReussirStringHash>(llvm::BLAKE3::hash<32>({str, len}));
   }
-
-  // Call a JIT function that returns a str type (struct { ptr, len })
-  // On ARM64 and x86-64, small structs are returned in registers
-  void reussir_bridge_call_str_func(void *func_ptr, ReussirStrResult *result) {
-    // Define the function type that returns the str struct
-    using StrFuncType = ReussirStrResult (*)();
-    auto func = reinterpret_cast<StrFuncType>(func_ptr);
-    *result = func();
-  }
 }
