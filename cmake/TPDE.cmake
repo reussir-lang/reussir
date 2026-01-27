@@ -4,7 +4,7 @@
 include(FetchContent)
 
 # Set TPDE version to the specified commit
-set(TPDE_VERSION "41570d7ee465e05cbf16bc66614659f4584c5a06")
+set(TPDE_VERSION "master")
 
 # Disable TPDE_ENABLE_ENCODEGEN as requested
 set(TPDE_ENABLE_LLVM ON CACHE BOOL "Disable TPDE LLVM" FORCE)
