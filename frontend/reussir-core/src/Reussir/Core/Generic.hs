@@ -2,13 +2,14 @@ module Reussir.Core.Generic where
 
 import Control.Monad (forM, forM_, when)
 import Data.Graph (flattenSCC, stronglyConnComp)
-import Data.HashTable.IO qualified as H
+import Data.HashTable.ST.Cuckoo qualified as Cuckoo
+import Reussir.Core.Uitls.HashTable qualified as HU
 import Data.Int (Int64)
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust)
 import Data.Sequence qualified as Seq
-import Effectful (Eff, IOE, liftIO, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (modifyIORef', newIORef', readIORef')
 import Reussir.Core.Data.Generic
@@ -30,7 +31,7 @@ Generic vars are allocated by appending to a Seq. Their 'GenericID' is the index
 at allocation time. This means IDs are stable for the lifetime of the GenericState.
 -}
 emptyGenericState :: (IOE :> es, Prim :> es) => Eff es GenericState
-emptyGenericState = GenericState <$> newIORef' Seq.empty <*> liftIO H.new
+emptyGenericState = GenericState <$> newIORef' Seq.empty <*> HU.new
 
 {- |
 Allocate a new generic variable and append it to the global sequence.
@@ -55,7 +56,7 @@ newGenericVar ::
     GenericState ->
     Eff es GenericID
 newGenericVar genericName genericSpan genericBounds state = do
-    links <- liftIO H.new
+    links <- HU.new
     let var = GenericVar{genericName, genericSpan, genericLinks = links, genericBounds}
         ref = getStateRef state
     varID <- fromIntegral . Seq.length <$> readIORef' ref
@@ -88,7 +89,7 @@ addLink (GenericID srcID) (GenericID tgtID) mType state = do
     let ref = getStateRef state
     vars <- readIORef' ref
     let var = Seq.index vars (fromIntegral srcID)
-    liftIO $ H.insert (genericLinks var) (GenericID tgtID) mType
+    HU.insert (genericLinks var) (GenericID tgtID) mType
 
 {- |
 Add a plain flow edge @src -> tgt@.
@@ -162,10 +163,10 @@ addConcreteFlow ::
 addConcreteFlow genericID ty state = do
     when (isConcrete ty) $ do
         let table = concreteFlow state
-        existing <- liftIO $ H.lookup table genericID
+        existing <- HU.lookup table genericID
         case existing of
-            Nothing -> liftIO $ H.insert table genericID [ty]
-            Just tys -> liftIO $ H.insert table genericID (ty : tys)
+            Nothing -> HU.insert table genericID [ty]
+            Just tys -> HU.insert table genericID (ty : tys)
 
 -- Internal DFS visitation state used by 'detectGrowingCycles'.
 data VisitState
@@ -231,7 +232,7 @@ detectGrowingCycles state = do
             let visited' = Map.insert u (Visiting depth) visited
             let var = Seq.index vars (fromIntegral (case u of GenericID i -> i))
 
-            edgesList <- liftIO $ H.toList (genericLinks var)
+            edgesList <- HU.toList (genericLinks var)
 
             let processEdges [] vMap = pure (Nothing, Map.insert u Done vMap)
                 processEdges ((v, ctor) : es) vMap = do
@@ -316,7 +317,7 @@ solveGeneric state = do
         -- stronglyConnComp expects triples (node, key, [key]).
         adjList <- forM allNodes $ \u -> do
             let var = Seq.index vars (fromIntegral (case u of GenericID i -> i))
-            edges <- liftIO $ H.toList (genericLinks var)
+            edges <- HU.toList (genericLinks var)
             let neighbors = map fst edges
             pure (u, u, neighbors)
 
@@ -324,26 +325,26 @@ solveGeneric state = do
         let topo = reverse sccs
 
         -- Build reverse graph: for each v, store incoming edges (u, ctorAnn)
-        incomingEdges <- liftIO (H.new :: IO (H.CuckooHashTable GenericID [(GenericID, Maybe Type)]))
+        incomingEdges <- HU.new @Cuckoo.HashTable
         forM_ allNodes $ \u -> do
             let var = Seq.index vars (fromIntegral (case u of GenericID i -> i))
-            edges <- liftIO $ H.toList (genericLinks var)
+            edges <- HU.toList (genericLinks var)
             forM_ edges $ \(v, ctor) -> do
-                prev <- liftIO $ H.lookup incomingEdges v
+                prev <- HU.lookup incomingEdges v
                 let new = (u, ctor) : fromMaybe [] prev
-                liftIO $ H.insert incomingEdges v new
+                HU.insert incomingEdges v new
 
         -- Initialize solution with concrete flow
-        currentSol <- liftIO (H.new :: IO (H.CuckooHashTable GenericID [Type]))
-        concrete <- liftIO $ H.toList (concreteFlow state)
-        forM_ concrete $ \(k, v) -> liftIO $ H.insert currentSol k v
+        currentSol <- HU.new @Cuckoo.HashTable
+        concrete <- HU.toList (concreteFlow state)
+        forM_ concrete $ \(k, v) -> HU.insert currentSol k v
 
         let processSCC comp = do
                 let nodes = flattenSCC comp
 
                 -- 1) Existing types already in currentSol for nodes in this SCC
                 baseTypes <- fmap concat $ forM nodes $ \n -> do
-                    res <- liftIO $ H.lookup currentSol n
+                    res <- HU.lookup currentSol n
                     pure $ fromMaybe [] res
 
                 -- 2) Data contributed by incoming edges from outside this SCC
@@ -353,7 +354,7 @@ solveGeneric state = do
                 let allTypes = nub (baseTypes ++ flowTypes)
 
                 -- Assign the shared set to all nodes in SCC
-                forM_ nodes $ \n -> liftIO $ H.insert currentSol n allTypes
+                forM_ nodes $ \n -> HU.insert currentSol n allTypes
 
         forM_ topo processSCC
         pure currentSol
@@ -368,7 +369,7 @@ solveGeneric state = do
     --        * ctor edge : instantiate template with solutions of generics appearing in it
     --
     getIncomingTypes sol incomingEdges sccNodes node = do
-        edges <- liftIO $ H.lookup incomingEdges node
+        edges <- HU.lookup incomingEdges node
         case edges of
             Nothing -> pure []
             Just es -> fmap concat $ forM es $ \(u, ctor) ->
@@ -382,7 +383,7 @@ solveGeneric state = do
             then pure []
             else case ctor of
                 Nothing -> do
-                    res <- liftIO $ H.lookup sol u
+                    res <- HU.lookup sol u
                     pure $ fromMaybe [] res
                 Just t -> instantiate t sol
 
@@ -413,6 +414,6 @@ solveGeneric state = do
     generateAssignments [] _ = pure [Map.empty]
     generateAssignments (v : vs) sol = do
         rest <- generateAssignments vs sol
-        options <- liftIO $ H.lookup sol v
+        options <- HU.lookup sol v
         let opts = fromMaybe [] options
         pure [Map.insert v opt r | opt <- opts, r <- rest]

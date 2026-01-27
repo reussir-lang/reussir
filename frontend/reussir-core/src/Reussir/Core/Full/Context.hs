@@ -10,7 +10,7 @@ module Reussir.Core.Full.Context (
 ) where
 
 import Control.Monad (forM_)
-import Data.HashTable.IO qualified as H
+import Reussir.Core.Uitls.HashTable qualified as HU
 import Data.Int (Int64)
 import Data.IntMap qualified as IntMap
 import Effectful (Eff, IOE, inject, liftIO, (:>))
@@ -63,10 +63,10 @@ addError err = State.modify $ \st -> st{ctxErrors = err : ctxErrors st}
 
 emptyFullContext :: (IOE :> es, Prim :> es) => FilePath -> Eff es FullContext
 emptyFullContext ctxFilePath = do
-    ctxFunctions <- liftIO H.new
-    ctxRecords <- liftIO H.new
-    ctxSemiRecords <- liftIO H.new
-    table <- liftIO H.new
+    ctxFunctions <- HU.new
+    ctxRecords <- HU.new
+    ctxSemiRecords <- HU.new
+    table <- HU.new
     let ctxStringUniqifier = StringUniqifier table
     let ctxErrors = []
     return FullContext{..}

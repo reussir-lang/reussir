@@ -65,6 +65,8 @@ library
         Reussir.Core.Lowering.Type
         Reussir.Core.Lowering.Record
         Reussir.Core.Lowering.Module
+    other-modules:
+        Reussir.Core.Uitls.HashTable
     build-depends:    base ^>=4.20.2.0,
                       reussir-bridge,
                       reussir-parser,

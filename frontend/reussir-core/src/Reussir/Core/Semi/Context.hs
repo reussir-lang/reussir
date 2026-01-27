@@ -23,12 +23,12 @@ module Reussir.Core.Semi.Context (
 import Control.Monad (forM_, unless)
 import Data.Function ((&))
 import Data.HashMap.Strict qualified as HashMap
-import Data.HashTable.IO qualified as H
+import Reussir.Core.Uitls.HashTable qualified as HU
 import Data.Int (Int64)
 import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
-import Effectful (Eff, IOE, inject, liftIO, (:>))
+import Effectful (Eff, IOE, inject, (:>))
 import Effectful.Log qualified as L
 import Effectful.Prim.IORef (Prim)
 import Effectful.Prim.IORef.Strict (newIORef', writeIORef')
@@ -169,12 +169,12 @@ populatePrimitives typeClassTable typeClassDAG = do
 emptySemiContext ::
     (IOE :> es, Prim :> es) => B.LogLevel -> FilePath -> Eff es SemiContext
 emptySemiContext translationLogLevel currentFile = do
-    table <- liftIO $ H.new
+    table <- HU.new
     let stringUniqifier = StringUniqifier table
     typeClassDAG <- newDAG
     typeClassTable <- emptyTypeClassTable
     populatePrimitives typeClassTable typeClassDAG
-    knownRecords <- liftIO $ H.new
+    knownRecords <- HU.new
     functions <- newFunctionTable
     generics <- emptyGenericState
     return $
@@ -257,7 +257,7 @@ evalType (Syn.TypeExpr path args) = do
             return $ TypeGeneric gid
         Nothing -> do
             knownRecords <- State.gets knownRecords
-            liftIO (H.lookup knownRecords path) >>= \case
+            HU.lookup knownRecords path >>= \case
                 Just record -> case recordDefaultCap record of
                     Syn.Value -> return $ TypeRecord path args' Irrelevant
                     Syn.Shared -> return $ TypeRecord path args' Irrelevant
@@ -311,7 +311,7 @@ evalTypeWithFlexivity t isFlexible = do
 addRecordDefinition :: Path -> Record -> SemiEff ()
 addRecordDefinition path record = do
     records <- State.gets knownRecords
-    liftIO $ H.insert records path record
+    HU.insert records path record
 
 -- | The initial scan to build up the index of functions and records
 scanStmt :: Syn.Stmt -> GlobalSemiEff ()
@@ -408,12 +408,12 @@ scanStmtImpl
             let funcPath = Path funcName []
             functionTable <- State.gets functions
             existed <-
-                isJust <$> liftIO (H.lookup (functionProtos functionTable) funcPath)
+                isJust <$> HU.lookup (functionProtos functionTable) funcPath
             if existed
                 then
                     addErrReportMsg $
                         "Function already defined: " <> unIdentifier funcName
-                else liftIO $ H.insert (functionProtos functionTable) funcPath proto
+                else HU.insert (functionProtos functionTable) funcPath proto
       where
         translateParam ::
             (Identifier, Syn.Type, Syn.FlexFlag) -> SemiEff (Identifier, Type)
@@ -434,7 +434,7 @@ populateRecordFieldsImpl (Syn.RecordStmt record) = do
     let name = Syn.recordName record
     let path = Path name [] -- TODO: handle module path
     knownRecords <- State.gets knownRecords
-    mRecord <- liftIO $ H.lookup knownRecords path
+    mRecord <- HU.lookup knownRecords path
 
     case mRecord of
         Nothing -> addErrReportMsg $ "Internal error: record not found during field population: " <> unIdentifier name
@@ -460,7 +460,7 @@ populateRecordFieldsImpl (Syn.RecordStmt record) = do
                     Just vs -> do
                         V.forM_ vs $ \(WithSpan (variantName, variantFields) s e) -> do
                             let variantPath = Path variantName [name]
-                            mVariantRecord <- liftIO $ H.lookup knownRecords variantPath
+                            mVariantRecord <- HU.lookup knownRecords variantPath
                             case mVariantRecord of
                                 Nothing -> addErrReportMsg $ "Internal error: variant record not found: " <> unIdentifier variantName
                                 Just vRec -> do
