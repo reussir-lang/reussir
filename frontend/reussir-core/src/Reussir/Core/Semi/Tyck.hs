@@ -21,7 +21,7 @@ import Data.Function ((&))
 import Effectful.State.Static.Local qualified as State
 import System.Console.ANSI.Types qualified as ANSI
 
-import Control.Monad (unless, when, zipWithM)
+import Control.Monad (forM, unless, when, zipWithM)
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
 import Data.List (find)
@@ -893,6 +893,14 @@ resolveSingleAccessForAssign currentTy access = do
             addErrReportMsg "Accessing field of non-record type"
             return (-1, TypeBottom, False)
 
+-- | Extract the identifier from a simple variable expression.
+-- Returns Just identifier if the expression is a simple variable (Var with no path segments),
+-- otherwise returns Nothing.
+extractSimpleVarName :: Syn.Expr -> Maybe Identifier
+extractSimpleVarName (Syn.Var (Path name [])) = Just name
+extractSimpleVarName (Syn.SpannedExpr (WithSpan e _ _)) = extractSimpleVarName e
+extractSimpleVarName _ = Nothing
+
 -- | Helper function to infer the type of a normal constructor call
 inferTypeForNormalCtorCall :: Syn.CtorCall -> SemiEff Expr
 inferTypeForNormalCtorCall
@@ -945,17 +953,32 @@ inferTypeForNormalCtorCall
 
                     let expectedNumParams = length fields
                     checkArgsNum expectedNumParams $ do
+                        -- Expand shorthand args: for positional args that are simple Var expressions
+                        -- matching a record field name and in-scope variable, treat as named args.
+                        -- E.g., `{ val }` becomes `{ val: val }` if `val` is in scope and matches a field.
+                        let fieldNames = [n | (Just n, _, _) <- fields]
+                        varTable <- State.gets varTable
+                        expandedCtorArgs <- forM ctorArgs $ \(mArgName, argExpr) -> case mArgName of
+                            Just _ -> return (mArgName, argExpr)  -- Already named, keep as-is
+                            Nothing -> case extractSimpleVarName argExpr of
+                                Just varName | varName `elem` fieldNames -> do
+                                    -- Check if the variable exists in scope
+                                    lookupVar varName varTable >>= \case
+                                        Just _ -> return (Just varName, argExpr)  -- Expand shorthand
+                                        Nothing -> return (Nothing, argExpr)  -- Not in scope, keep positional
+                                _ -> return (Nothing, argExpr)  -- Not a simple var or doesn't match field, keep positional
+
                         -- Reconstruct an ordered list of syntactic expressions in the same order as required in the record
                         orderedArgsExprs <-
                             if isJust variantInfo || case fieldsMaybe of Just (Unnamed _) -> True; _ -> False
-                                then return $ map (Just . snd) ctorArgs
+                                then return $ map (Just . snd) expandedCtorArgs
                                 else do
-                                    let hasNamedArgs = any (isJust . fst) ctorArgs
+                                    let hasNamedArgs = any (isJust . fst) expandedCtorArgs
                                     if hasNamedArgs
                                         then
                                             mapM
                                                 ( \(mName, _, _) -> case mName of
-                                                    Just name -> case find (\(aName, _) -> aName == Just name) ctorArgs of
+                                                    Just name -> case find (\(aName, _) -> aName == Just name) expandedCtorArgs of
                                                         Just (_, expr) -> return $ Just expr
                                                         Nothing -> do
                                                             addErrReportMsg $ "Missing argument for field: " <> unIdentifier name
@@ -963,7 +986,7 @@ inferTypeForNormalCtorCall
                                                     Nothing -> error "Named field has no name?"
                                                 )
                                                 fields
-                                        else return $ map (Just . snd) ctorArgs
+                                        else return $ map (Just . snd) expandedCtorArgs
                         argExprs' <-
                             zipWithM
                                 ( \expr (_, ty, flag) -> do
