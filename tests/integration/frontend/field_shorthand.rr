@@ -1,0 +1,46 @@
+// RUN: %reussir-elab --mode semi %s
+// RUN: %reussir-elab --mode full %s | %FileCheck %s
+
+// Test: auto-forward field shorthand syntax
+// When a constructor argument is a simple variable reference matching
+// a field name and in-scope, treat it as a named argument.
+// E.g., `Point { x, y }` becomes `Point { x: x, y: y }`
+
+struct Point {
+    x: i32,
+    y: i32
+}
+
+// Test: all shorthand
+fn make_point(x: i32, y: i32) -> Point {
+    Point { x, y }
+}
+
+// CHECK-DAG: fn _RC10make_point(x: i32, y: i32) -> Rc<{{.*}}Point{{.*}}> {
+// CHECK-DAG: compound
+
+// Test: mixed shorthand and explicit
+fn make_point_mixed(x: i32) -> Point {
+    Point { x, y: 10 }
+}
+
+// CHECK-DAG: fn _RC16make_point_mixed(x: i32) -> Rc<{{.*}}Point{{.*}}> {
+// CHECK-DAG: compound
+
+// Test: order independence with shorthand
+fn make_point_reversed(x: i32, y: i32) -> Point {
+    Point { y, x }
+}
+
+// CHECK-DAG: fn _RC19make_point_reversed(x: i32, y: i32) -> Rc<{{.*}}Point{{.*}}> {
+// CHECK-DAG: compound
+
+// Test: shorthand only applies when variable is in scope
+fn make_point_explicit() -> Point {
+    let x: i32 = 5;
+    let y: i32 = 10;
+    Point { x, y }
+}
+
+// CHECK-DAG: fn _RC19make_point_explicit() -> Rc<{{.*}}Point{{.*}}> {
+// CHECK-DAG: compound
