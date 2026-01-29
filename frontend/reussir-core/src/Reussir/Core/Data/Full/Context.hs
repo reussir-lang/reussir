@@ -18,6 +18,7 @@ data FullContext = FullContext
     , ctxErrors :: [Error]
     , ctxStringUniqifier :: StringUniqifier
     , ctxFilePath :: FilePath
+    , ctxFlexible :: Bool
     }
 
 data LocalFullContext = LocalFullContext

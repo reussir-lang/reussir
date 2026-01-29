@@ -20,6 +20,12 @@ import Reussir.Core.Full.Type (convertSemiType)
 import Reussir.Core.Semi.Mangle (mangleABIName)
 import Reussir.Core.Semi.Type qualified as Semi (substituteGenericMap)
 import Prelude hiding (span)
+import qualified Reussir.Core.Uitls.HashTable as H
+import qualified Reussir.Core.Data.Semi.Record as Semi
+import Effectful.Prim.IORef.Strict (readIORef')
+import Control.Monad
+import Reussir.Parser.Types.Lexer (WithSpan(..))
+import qualified Data.Vector.Strict as V
 
 exprWithSpan :: Type -> ExprKind -> FullEff Expr
 exprWithSpan exprType exprKind = do
@@ -97,8 +103,21 @@ convertSemiExpr semiExpr = do
                 exprWithSpan ty $ FuncCall symbol args' funcCallRegional
             SemiExpr.Poison -> exprWithSpan ty Poison
             SemiExpr.CompoundCall{..} -> do
-                args' <- mapM convertSemiExpr compoundCallArgs
-                hoistRcWrapping ty $ CompoundCall args'
+                semiRecords <- State.gets @FullContext ctxSemiRecords
+                maybeRecord <- H.lookup semiRecords compoundCallTarget
+                recordFields <- maybe (return Nothing)
+                    (readIORef' . Semi.recordFields) maybeRecord
+                case recordFields of
+                    Nothing -> error "record should be well-defined at this stage"
+                    Just fields -> do
+                        let fieldMutability = case fields of
+                                Semi.Named v -> map (\(WithSpan (_, _, flag) _ _) -> flag) $ V.toList  v
+                                Semi.Unnamed v -> map (\(WithSpan (_, flag) _ _) -> flag) $ V.toList v
+                                Semi.Variants _ -> repeat False
+                        let convertFieldExpr expr mutability = 
+                                flexibleScope mutability $ convertSemiExpr expr
+                        args' <- zipWithM convertFieldExpr compoundCallArgs fieldMutability
+                        hoistRcWrapping ty $ CompoundCall args'
             SemiExpr.VariantCall{..} -> do
                 arg' <- convertSemiExpr variantCallArg
                 hoistRcWrapping ty $ VariantCall variantCallVariant arg'
@@ -130,8 +149,19 @@ convertTy t = do
     genericMap <- State.gets genericMap
     records <- State.gets @FullContext ctxSemiRecords
     res <- convertSemiType (fromMaybe (0, 0) span) genericMap records t
+    flexible <- State.gets @FullContext ctxFlexible
     case res of
         Left errs -> do
             mapM_ (inject . addError) errs
             pure TypeBottom -- Or TypePoison if available, TypeBottom is likely safest fallback
+        Right (TypeRc innerTy Regional) | flexible -> pure (TypeRc innerTy Flex)
+        Right (TypeNullable (TypeRc innerTy Regional)) | flexible -> pure (TypeNullable (TypeRc innerTy Flex))
         Right ty -> pure ty
+
+flexibleScope :: Bool -> FullEff a -> FullEff a
+flexibleScope flexible cont = do
+    oldFlexible <- State.gets @FullContext ctxFlexible
+    State.modify $ \st -> st{ctxFlexible = flexible}
+    result <- cont
+    State.modify $ \st -> st{ctxFlexible = oldFlexible}
+    return result

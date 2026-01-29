@@ -69,6 +69,7 @@ emptyFullContext ctxFilePath = do
     table <- HU.new
     let ctxStringUniqifier = StringUniqifier table
     let ctxErrors = []
+    let ctxFlexible = False
     return FullContext{..}
 
 reportAllErrors :: (IOE :> es, Prim :> es) => FullContext -> Repository -> Handle -> Eff es ()

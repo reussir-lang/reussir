@@ -3,7 +3,7 @@
 module Reussir.Core.Lowering.Expr where
 
 import Control.Monad (when)
-import Data.HashTable.IO qualified as H
+import Reussir.Core.Uitls.HashTable qualified as H
 import Data.IntMap.Strict qualified as IntMap
 import Data.Maybe (maybeToList)
 import Data.Scientific (Scientific, toBoundedInteger)
@@ -11,7 +11,7 @@ import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
-import Effectful (inject, liftIO)
+import Effectful (inject)
 import Effectful.Log qualified as L
 import Effectful.Reader.Static qualified as Reader
 import Effectful.State.Static.Local qualified as State
@@ -301,10 +301,14 @@ lowerExprInBlock (Full.FuncCall callee args regional) ty = do
             else pure []
     typedArgs <- mapM (fmap tyValOrICE . lowerExpr) args
     retTy <- inject $ convertType ty
-    retVal <- nextValue
-    let instr = IR.FCall $ IR.FuncCall callee (handle <> typedArgs) $ Just (retVal, retTy)
+    ret <- case ty of
+        Full.TypeUnit -> pure Nothing
+        _ -> do
+            retVal <- nextValue
+            pure $ Just (retVal, retTy)
+    let instr = IR.FCall $ IR.FuncCall callee (handle <> typedArgs) ret
     addIRInstr instr
-    pure $ Just (retVal, retTy)
+    pure ret
 -- Compound CtorCall
 lowerExprInBlock (Full.CompoundCall args) ty = do
     typedArgs <- mapM (fmap tyValOrICE . lowerExpr) args
@@ -360,6 +364,25 @@ lowerExprInBlock (Full.NullableCall maybeExpr) ty = do
     let instr = IR.NullableCreate maybeExpr' (retVal, retTy)
     addIRInstr instr
     pure $ Just (retVal, retTy)
+lowerExprInBlock (Full.Assign dst idx src) _ = do
+    dst'@(_, dstTy) <- tyValOrICE <$> lowerExpr dst
+    src'@(_, srcTy) <- tyValOrICE <$> lowerExpr src
+    case dstTy of
+        IR.TypeRc (IR.Rc recTy@(IR.TypeExpr _) atm IR.Flex) -> do
+            let flexRecordRef = IR.TypeRef (IR.Ref recTy atm IR.Flex)
+            let fieldRef = IR.TypeRef (IR.Ref srcTy atm IR.Field)
+            recRefVal <- nextValue
+            let loweredRecRef = (recRefVal, flexRecordRef)
+            let borrowOp = IR.RcBorrow dst' loweredRecRef
+            addIRInstr borrowOp
+            fieldRefVal <- nextValue
+            let loweredFieldRef = (fieldRefVal, fieldRef)
+            let projOp = IR.RefProject loweredRecRef (fromIntegral idx) loweredFieldRef
+            addIRInstr projOp
+            let storeOp = IR.RefStore loweredFieldRef src' 
+            addIRInstr storeOp
+            pure Nothing
+        _ -> error $ "assign to non-flex rc types: " ++ show dstTy
 lowerExprInBlock kind ty =
     error $
         "Detailed lowerExprInBlock implementation missing for "
@@ -515,7 +538,7 @@ handleProjection base@(_, valTy) index = do
     projectedType :: IR.Capability -> IR.Atomicity -> Symbol -> Int -> LoweringEff IR.Type
     projectedType cap atm sym idx = do
         table <- Reader.asks recordInstances
-        record <- liftIO $ H.lookup table sym
+        record <- H.lookup table sym
         case record of
             Just record'
                 | Full.StructKind <- Full.recordKind record'
@@ -524,7 +547,7 @@ handleProjection base@(_, valTy) index = do
                     ty' <- inject $ convertType ty
                     case ty of
                         Full.TypeRecord fieldSym -> do
-                            fieldRecord <- liftIO $ H.lookup table fieldSym
+                            fieldRecord <- H.lookup table fieldSym
                             case fieldRecord of
                                 Just fr -> case Full.recordDefaultCap fr of
                                     IRType.Value -> pure ty'

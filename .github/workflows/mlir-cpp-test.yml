@@ -39,7 +39,7 @@ jobs:
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: nightly-2025-12-01
           components: rust-src, rustfmt, clippy, rustc-dev, llvm-tools-preview
 
       - name: Setup GHC
