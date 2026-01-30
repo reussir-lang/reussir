@@ -19,15 +19,18 @@ data Pattern' = Pattern' { patKind :: PatternKind, patGuard :: Maybe Expr }
 data PatternKind
     = WildcardPat 
     | BindPat Identifier
-    | CtorPat 
+    | CtorPatWithNamedArgs 
         { patCtorPath :: Path
-        , patCtorArgs :: V.Vector CtorArgPattern
+        , patCtorArgs :: V.Vector PatternCtorArg
         , patCtorHasEllipsis :: Bool 
         }
+    | StrLitPat T.Text
+    | IntLitPat Int
+    | BoolLitPat Bool
 
-data CtorArgPattern
-    = CtorArgPattern 
-    { patCtorArgName :: Maybe Identifier
+data PatternCtorArg
+    = PatternCtorArg 
+    { patCtorArgField :: Maybe Identifier
     , patCtorArgKind :: PatternKind 
     }
 
