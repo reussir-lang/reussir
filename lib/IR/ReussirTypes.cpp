@@ -480,10 +480,10 @@ reussir::Capability RecordType::getDefaultCapability() const {
   auto name = getName();
   if (!name)
     return nullptr;
-  auto prefix = llvm::Twine("core::intrinsic::drop_in_place<");
-  auto suffix = llvm::Twine(">");
+  auto prefix = llvm::Twine("_RINvNvC4core9intrinsic13drop_in_place");
+  auto suffix = llvm::Twine("E");
   auto recordName = name.getValue();
-  auto dtorName = (prefix + recordName + suffix).str();
+  auto dtorName = (prefix + recordName.ltrim("_R") + suffix).str();
   return ::mlir::FlatSymbolRefAttr::get(getContext(), dtorName);
 }
 
@@ -491,10 +491,10 @@ reussir::Capability RecordType::getDefaultCapability() const {
   auto name = getName();
   if (!name)
     return nullptr;
-  auto prefix = llvm::Twine("core::intrinsic::acquire_in_place<");
-  auto suffix = llvm::Twine(">");
+  auto prefix = llvm::Twine("_RINvNvC4core9intrinsic16acquire_in_place");
+  auto suffix = llvm::Twine("E");
   auto recordName = name.getValue();
-  auto acquireName = (prefix + recordName + suffix).str();
+  auto acquireName = (prefix + recordName.ltrim("_R") + suffix).str();
   return ::mlir::FlatSymbolRefAttr::get(getContext(), acquireName);
 }
 

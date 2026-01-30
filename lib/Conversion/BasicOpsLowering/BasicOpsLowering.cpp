@@ -842,7 +842,9 @@ struct ReussirRegionVTableOpConversionPattern
         mlir::LLVM::LLVMStructType::getLiteral(
             rewriter.getContext(),
             {llvmPtrType, llvmPtrType, indexType, indexType});
-    std::string arrayName = op.getSymName().str() + "::scan_instrs";
+    std::string arrayName =
+        (llvm::Twine("_RNv") + op.getSymName().ltrim("_R") + "11scan_instrs")
+            .str();
     reussir::RecordType recordType =
         llvm::dyn_cast<reussir::RecordType>(op.getType());
 

@@ -38,10 +38,11 @@ private:
                           mlir::func::FuncOp dropOp,
                           mlir::OpBuilder &builder) const {
     mlir::SymbolTable symbolTable(moduleOp);
-    llvm::Twine vtablePrefix = "core::region::vtable<";
-    llvm::Twine vtableSuffix = ">";
+    llvm::Twine vtablePrefix = "_RINvNvC4core8regional6vtable";
+    llvm::Twine vtableSuffix = "E";
     std::string vtableName =
-        (vtablePrefix + type.getName().strref() + vtableSuffix).str();
+        (vtablePrefix + type.getName().strref().ltrim("_R") + vtableSuffix)
+            .str();
     if (auto existingVTable = symbolTable.lookup<ReussirRegionVTableOp>(
             builder.getStringAttr(vtableName)))
       return existingVTable;
