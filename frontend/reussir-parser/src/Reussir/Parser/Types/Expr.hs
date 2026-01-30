@@ -7,11 +7,29 @@ import Data.Text qualified as T
 import Data.Vector.Strict (Vector)
 import Reussir.Parser.Types.Lexer (Identifier (..), Path, WithSpan)
 import Reussir.Parser.Types.Type (Type)
+import Data.Vector qualified as V
 
 data Pattern = Pattern Identifier Identifier [Identifier] deriving (Eq)
 
 instance Show Pattern where
     show (Pattern ns name es) = show ns ++ "::" ++ show name ++ "(" ++ intercalate ", " (map show es) ++ ")"
+
+data Pattern' = Pattern' { patKind :: PatternKind, patGuard :: Maybe Expr }
+
+data PatternKind
+    = WildcardPat 
+    | BindPat Identifier
+    | CtorPat 
+        { patCtorPath :: Path
+        , patCtorArgs :: V.Vector CtorArgPattern
+        , patCtorHasEllipsis :: Bool 
+        }
+
+data CtorArgPattern
+    = CtorArgPattern 
+    { patCtorArgName :: Maybe Identifier
+    , patCtorArgKind :: PatternKind 
+    }
 
 data Constant
     = ConstInt Int
