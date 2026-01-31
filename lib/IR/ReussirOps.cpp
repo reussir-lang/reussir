@@ -1853,6 +1853,19 @@ mlir::LogicalResult ReussirStrLiteralOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// StrCastOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirStrCastOp::verify() {
+  StrType localStrType = getLocalStr().getType();
+
+  if (localStrType.getLifeScope() != LifeScope::local)
+    return emitOpError("output must be a local string literal, got: ")
+           << stringifyLifeScope(localStrType.getLifeScope());
+
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
 // RegionRunOp RegionBranchOpInterface implementation
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRecordExtractOp::verify() {

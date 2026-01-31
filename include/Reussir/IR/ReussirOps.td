@@ -1294,4 +1294,56 @@ def ReussirStrLiteralOp : ReussirStrOp<"literal", [
   let hasVerifier = 1;
 }
 
+def ReussirStrLenOp : ReussirStrOp<"len", []> {
+  let summary = "Get the length of the string";
+  let description = [{
+    `reussir.str.len` returns the length of the string.
+  }];
+  let arguments = (ins Arg<ReussirStrType, "String to get length from">:$str);
+  let results = (outs Res<Index, "Length of the string">:$len);
+  let assemblyFormat = [{
+    `(` $str `:` type($str) `)` `:` type($len) attr-dict
+  }];
+}
+
+def ReussirStrByteAtOp : ReussirStrOp<"byte_at", []> {
+  let summary = "Get the character at a specific index";
+  let description = [{
+    `reussir.str.byte_at` returns the character at a byte offset. Return 0 if the index is out of bounds.
+  }];
+  let arguments = (ins Arg<ReussirStrType, "String to get character from">:$str, 
+    Arg<Index, "Index of character to get">:$index);
+  let results = (outs Res<I8, "Character at index">:$charVal);
+  let assemblyFormat = [{
+    `(` $str `:` type($str) `)` 
+    `[` $index `:` type($index) `]` 
+    `:` type($charVal) attr-dict
+  }];
+}
+
+def ReussirStrCastOp : ReussirStrOp<"cast", []> {
+   let summary = "Cast a global string literal to a local string literal";
+   let description = [{
+    `reussir.str.cast` casts a global string literal to a local string literal.
+   }];
+   let arguments = (ins Arg<ReussirStrType, "Global string literal">:$globalStr);
+   let results = (outs Res<ReussirStrType, "Local string literal">:$localStr);
+   let assemblyFormat = [{
+    `(` $globalStr `:` type($globalStr) `)` `:` type($localStr) attr-dict
+   }];
+   let hasVerifier = 1;
+}
+
+def ReussirStrSelectOp : ReussirStrOp<"select", []> {
+  let summary = "Select the first matched pattern of the string";
+  let description = [{
+    `reussir.str.select` selects the first matched pattern of the string.
+  }];
+  let arguments = (ins Arg<ReussirStrType, "String to select">:$str, 
+    Arg<ArrayAttr, "Patterns to match">:$patterns);
+  let results = (outs Res<Index, "Selected pattern">:$selected);
+  let assemblyFormat = [{
+    `(` $str `:` type($str) `)` $patterns `:` type($selected) attr-dict
+  }];
+}
 #endif // REUSSIR_IR_REUSSIROPS_TD
