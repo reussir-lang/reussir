@@ -1,0 +1,13 @@
+// RUN: %reussir-parser %s | %FileCheck %s
+
+fn test() {
+    match x {
+        y => y
+    }
+}
+
+// CHECK: fn test() {
+// CHECK:     match x {
+// CHECK:         y => y
+// CHECK:     }
+// CHECK: }

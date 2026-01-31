@@ -1,0 +1,15 @@
+// RUN: %reussir-parser %s | %FileCheck %s
+
+fn test() {
+    match x {
+        Foo => 1,
+        std::Bar => 2
+    }
+}
+
+// CHECK: fn test() {
+// CHECK:     match x {
+// CHECK:         Foo => 1
+// CHECK:         std::Bar => 2
+// CHECK:     }
+// CHECK: }

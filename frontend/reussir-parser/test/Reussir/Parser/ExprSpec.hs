@@ -60,19 +60,19 @@ spec = do
 
     describe "parseFuncCallExpr" $ do
         it "parses function call" $
-            (stripExprSpans <$> parse parsePathBasedExpr "" "foo(1, 2)")
+            (stripExprSpans <$> parse (parsePathBasedExpr True) "" "foo(1, 2)")
                 `shouldParse` FuncCallExpr (FuncCall (Path "foo" []) [] [ConstExpr (ConstInt 1), ConstExpr (ConstInt 2)])
         it "parses function call with type args" $
-            (stripExprSpans <$> parse parsePathBasedExpr "" "foo<i32, _>(1)")
+            (stripExprSpans <$> parse (parsePathBasedExpr True) "" "foo<i32, _>(1)")
                 `shouldParse` FuncCallExpr (FuncCall (Path "foo" []) [Just (TypeIntegral (Signed 32)), Nothing] [ConstExpr (ConstInt 1)])
 
     describe "parseCtorCallExpr" $ do
         it "parses struct constructor" $
-            (stripExprSpans <$> parse parsePathBasedExpr "" "Foo { x: 1 }")
+            (stripExprSpans <$> parse (parsePathBasedExpr True) "" "Foo { x: 1 }")
                 `shouldParse` CtorCallExpr (CtorCall (Path "Foo" []) [] [(Just "x", ConstExpr (ConstInt 1))])
 
         it "parses struct constructor with type args" $
-            (stripExprSpans <$> parse parsePathBasedExpr "" "Foo<i32> { 1 }")
+            (stripExprSpans <$> parse (parsePathBasedExpr True) "" "Foo<i32> { 1 }")
                 `shouldParse` CtorCallExpr (CtorCall (Path "Foo" []) [Just (TypeIntegral (Signed 32))] [(Nothing, ConstExpr (ConstInt 1))])
 
     {-

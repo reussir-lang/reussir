@@ -6,6 +6,7 @@ module Reussir.Parser.Pretty (
 ) where
 
 import Data.Vector.Strict qualified as V
+import Data.Vector qualified as BV
 import Prettyprinter
 import Prettyprinter.Render.Terminal
 import Reussir.Parser.Types.Capability
@@ -91,8 +92,31 @@ instance PrettyColored UnaryOp where
     prettyColored Not = operator "!"
 
 instance PrettyColored Pattern where
-    prettyColored (Pattern ns name args) =
-        prettyColored ns <> "::" <> prettyColored name <> parens (commaSep (map prettyColored args))
+    prettyColored (Pattern kind guard) =
+        prettyColored kind <> case guard of
+            Just g -> space <> keyword "if" <+> prettyColored g
+            Nothing -> emptyDoc
+
+instance PrettyColored PatternKind where
+    prettyColored WildcardPat = "_"
+    prettyColored (BindPat i) = prettyColored i
+    prettyColored (ConstPat c) = prettyColored c
+    prettyColored (CtorPat path args ell isNamed) =
+        prettyColored path <>
+            if BV.null args && not ell
+                then emptyDoc
+                else
+                    let open = if isNamed then lbrace else lparen
+                        close = if isNamed then rbrace else rparen
+                        argDocs = map prettyColored (BV.toList args)
+                        ellDoc = if ell then [operator ".."] else []
+                     in open <> commaSep (argDocs ++ ellDoc) <> close
+
+instance PrettyColored PatternCtorArg where
+    prettyColored (PatternCtorArg field kind) =
+        case field of
+            Just f -> prettyColored f <> colon <+> prettyColored kind
+            Nothing -> prettyColored kind
 
 instance PrettyColored Access where
     prettyColored (E.Named i) = "." <> prettyColored i
@@ -139,7 +163,7 @@ instance PrettyColored Expr where
     prettyColored (Var path) = prettyColored path
     prettyColored (SpannedExpr w) = prettyColored (spanValue w)
     prettyColored (RegionalExpr e) = keyword "regional" <+> braces (prettyColored e)
-    prettyColored (AccessChain e accesses) = prettyColored e <> V.foldMap' prettyColored accesses
+    prettyColored (AccessChain e accesses) = prettyColored e <> V.foldMap prettyColored accesses
     prettyColored (CtorCallExpr (CtorCall path tys args)) =
         prettyColored path
             <> (if null tys then mempty else angles (commaSep (map prettyTyArg tys)))

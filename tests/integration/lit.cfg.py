@@ -28,6 +28,7 @@ config.substitutions.append((r'%rpath_flag', config.rpath_flag))
 config.substitutions.append((r'%reussir-elab', config.reussir_elab_path))
 config.substitutions.append((r'%reussir-compiler', config.reussir_compiler_path))
 config.substitutions.append((r'%reussir-repl', config.reussir_repl_path))
+config.substitutions.append((r'%reussir-parser', config.reussir_parser_path))
 
 # TODO: should we support macos?
 if sys.platform == 'windows':

@@ -10,13 +10,17 @@ import Data.Functor
 import Data.Maybe
 
 import Data.Text qualified as T
-import Data.Vector.Strict (fromList)
+import Data.Vector qualified as V
+import Data.Vector (Vector)
+import Data.Vector.Strict qualified as SV
 import Reussir.Parser.Lexer
 import Reussir.Parser.Type (parseType)
 import Reussir.Parser.Types hiding (space)
 import Reussir.Parser.Types.Expr
-import Reussir.Parser.Types.Lexer (Identifier)
+import Reussir.Parser.Types.Lexer (Identifier (..), Path (..))
 import Reussir.Parser.Types.Type (Type)
+import Data.Char qualified as C
+
 
 parseBody :: Parser Expr
 parseBody = parseExprSeq
@@ -26,11 +30,84 @@ parseExprSeq = ExprSeq <$> (openBody *> parseExpr `sepEndBy` semicolon <* closeB
 
 parsePattern :: Parser Pattern
 parsePattern = do
-    ns <- parseIdentifier
-    name <- doubleColon *> parseIdentifier
-    args <- optional $ openParen *> parseIdentifier `sepBy` comma <* closeParen
+    kind <- parsePatternKind
+    guard <- optional (try (keyword "if") *> parseExpr)
+    return (Pattern kind guard)
+  where
+    keyword k = string k *> notFollowedBy (satisfy C.isAlphaNum) *> space
 
-    return (Pattern ns name (fromMaybe [] args))
+parsePatternKind :: Parser PatternKind
+parsePatternKind =
+    choice
+        [ WildcardPat <$ (char '_' *> space)
+        , ConstPat <$> parseConstant
+        , parsePathOrBind
+        ]
+
+parsePathOrBind :: Parser PatternKind
+parsePathOrBind = do
+    p <- parsePath
+    choice
+        [ do
+            (args, ell) <- parseCtorPatArgs (char '{') (char '}') True
+            return (CtorPat p args ell True)
+        , do
+            (args, ell) <- parseCtorPatArgs (char '(') (char ')') False
+            return (CtorPat p args ell False)
+        , return $ case p of
+            Path _ (_ : _) -> CtorPat p V.empty False False
+            Path (Identifier t) [] ->
+                if C.isUpper (T.head t)
+                    then CtorPat p V.empty False False
+                    else BindPat (Identifier t)
+        ]
+
+parseCtorPatArgs :: Parser Char -> Parser Char -> Bool -> Parser (Vector PatternCtorArg, Bool)
+parseCtorPatArgs open close isNamed = do
+    _ <- open *> space
+    choice
+        [ do
+            _ <- string ".." *> space
+            _ <- close *> space
+            return (V.empty, True)
+        , do
+            (args, ell) <- parseArgsAndEllipsis isNamed
+            _ <- close *> space
+            return (V.fromList args, ell)
+        , do
+            _ <- close *> space
+            return (V.empty, False)
+        ]
+
+parseArgsAndEllipsis :: Bool -> Parser ([PatternCtorArg], Bool)
+parseArgsAndEllipsis isNamed = do
+    arg <- parseArg isNamed
+    choice
+        [ do
+            _ <- comma
+            choice
+                [ do
+                    _ <- string ".." *> space
+                    return ([arg], True)
+                , do
+                    (rest, ell) <- parseArgsAndEllipsis isNamed
+                    return (arg : rest, ell)
+                , return ([arg], False)
+                ]
+        , return ([arg], False)
+        ]
+
+parseArg :: Bool -> Parser PatternCtorArg
+parseArg True = do -- Named: identifier (: pattern)?
+    id' <- parseIdentifier
+    mk <- optional (colon *> parsePatternKind)
+    case mk of
+        Just k -> return $ PatternCtorArg (Just id') k
+        Nothing -> return $ PatternCtorArg (Just id') (BindPat id') -- { x } -> x: x (BindPat)
+parseArg False = do -- Positional: pattern
+    k <- parsePatternKind
+    return $ PatternCtorArg Nothing k
+
 
 parseIf :: Parser Expr
 parseIf = do
@@ -73,9 +150,9 @@ parseMatchCase = do
 
 parseMatch :: Parser Expr
 parseMatch = do
-    expr <- string "match" *> space *> parseExpr
+    expr <- string "match" *> space *> parseExprWithOpts False
     body <- openBody *> parseMatchCase `sepBy` comma <* closeBody
-    return (Match expr (fromList body))
+    return (Match expr (SV.fromList body))
 
 parseConstant :: Parser Constant
 parseConstant =
@@ -117,13 +194,13 @@ parseRegionalExpr = do
     body <- parseBody
     return (RegionalExpr body)
 
-parsePathBasedExpr :: Parser Expr
-parsePathBasedExpr = do
+parsePathBasedExpr :: Bool -> Parser Expr
+parsePathBasedExpr allowStruct = do
     path <- parsePath
     tyArgs <- optional (try (openAngle *> parseTypeArg `sepBy` comma <* closeAngle))
     lookAheadChar <- optional (lookAhead anySingle)
     case lookAheadChar of
-        Just '{' -> do
+        Just '{' | allowStruct -> do
             args <- openBody *> parseCtorArg `sepBy` comma <* closeBody
             return $ CtorCallExpr $ CtorCall path (fromMaybe [] tyArgs) args
         Just '(' -> do
@@ -170,7 +247,7 @@ parseArrowAccess =
 accessOp :: Operator Parser Expr
 accessOp = Postfix $ do
     access <- some parseAccess
-    return $ flip AccessChain (fromList access)
+    return $ flip AccessChain (SV.fromList access)
 
 exprOpTable :: [[Operator Parser Expr]]
 exprOpTable =
@@ -208,8 +285,8 @@ exprOpTable =
         ]
     ]
 
-parseExprTerm :: Parser Expr
-parseExprTerm =
+parseExprTerm :: Bool -> Parser Expr
+parseExprTerm allowStruct =
     choice
         [ (char '(' *> space *> parseExpr <* space <* char ')' <* space) <?> "parenthesized expression"
         , parseIf <?> "if expression"
@@ -217,11 +294,14 @@ parseExprTerm =
         , parseMatch <?> "match expression"
         , parseRegionalExpr <?> "regional expression"
         , ConstExpr <$> parseConstant <?> "constant"
-        , SpannedExpr <$> withSpan parsePathBasedExpr <?> "variable or function call"
+        , SpannedExpr <$> withSpan (parsePathBasedExpr allowStruct) <?> "variable or function call"
         , parseExprSeq <?> "expression sequence"
         ]
 
 parseExpr :: Parser Expr
-parseExpr =
+parseExpr = parseExprWithOpts True
+
+parseExprWithOpts :: Bool -> Parser Expr
+parseExprWithOpts allowStruct =
     (SpannedExpr <$> withSpan parseLambda)
-        <|> makeExprParser (SpannedExpr <$> withSpan parseExprTerm) exprOpTable
+        <|> makeExprParser (SpannedExpr <$> withSpan (parseExprTerm allowStruct)) exprOpTable

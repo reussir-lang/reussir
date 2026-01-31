@@ -1,7 +1,6 @@
 module Reussir.Parser.Types.Expr where
 
 import Data.Int (Int64)
-import Data.List
 import Data.Scientific (Scientific)
 import Data.Text qualified as T
 import Data.Vector.Strict (Vector)
@@ -9,13 +8,17 @@ import Reussir.Parser.Types.Lexer (Identifier (..), Path, WithSpan)
 import Reussir.Parser.Types.Type (Type)
 import Data.Vector qualified as V
 
-data Pattern = Pattern Identifier Identifier [Identifier] deriving (Eq)
+-- pattern ::= pattern-kind (`if` expr)?
+data Pattern = Pattern { patKind :: PatternKind, patGuard :: Maybe Expr } deriving (Eq, Show)
 
-instance Show Pattern where
-    show (Pattern ns name es) = show ns ++ "::" ++ show name ++ "(" ++ intercalate ", " (map show es) ++ ")"
+-- pattern-kind ::=
+--   | `_`
+--   | `x`
+--   | path `{` (named-pattern),+  (`..`)? `}`
+--   | path `(` (pattern-kind),+  (`..`)? `)`
+--   | constant
 
-data Pattern' = Pattern' { patKind :: PatternKind, patGuard :: Maybe Expr }
-
+-- named-pattern ::= identifier (`:`  pattern-kind)? -- syntax sugar for direct binding with identical field name
 data PatternKind
     = WildcardPat 
     | BindPat Identifier
@@ -23,16 +26,17 @@ data PatternKind
         { patCtorPath :: Path
         , patCtorArgs :: V.Vector PatternCtorArg
         , patCtorHasEllipsis :: Bool 
+        , patCtorIsNamed :: Bool
         }
-    | StrLitPat T.Text
-    | IntLitPat Int
-    | BoolLitPat Bool
+    | ConstPat Constant
+     deriving (Eq, Show)
 
 data PatternCtorArg
     = PatternCtorArg 
     { patCtorArgField :: Maybe Identifier
     , patCtorArgKind :: PatternKind 
     }
+    deriving (Eq, Show)
 
 data Constant
     = ConstInt Int

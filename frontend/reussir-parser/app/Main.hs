@@ -7,6 +7,7 @@ import Reussir.Parser.Pretty (PrettyColored (..))
 import Data.Text.IO qualified as T
 import System.Environment
 import System.Exit
+import System.IO (hIsTerminalDevice, stdout)
 import Prettyprinter
 import Prettyprinter.Render.Terminal
 
@@ -17,7 +18,12 @@ main =
             contents <- T.readFile infile
             case parse parseProg infile contents of
                 Left err -> putStrLn (errorBundlePretty err)
-                Right p -> putDoc (vsep (map prettyColored p) <> line)
+                Right p -> do
+                    isTTy <- hIsTerminalDevice stdout
+                    let doc = vsep (map prettyColored p) <> line
+                    if isTTy
+                        then putDoc doc
+                        else putDoc (unAnnotate doc)
         _ -> do
             putStrLn "Usage: frontend <infile>"
             exitFailure
