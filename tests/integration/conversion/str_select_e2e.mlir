@@ -3,8 +3,8 @@
 // RUN:   --convert-scf-to-cf \
 // RUN:   --reussir-lowering-basic-ops | \
 // RUN:   %reussir-translate --reussir-to-llvmir | \
-// RUN:   %opt -S -O3 | \
-// RUN:   %llc -relocation-model=pic -filetype=obj -o %t.o
+// RUN:   %opt -S -O3 -o %t.ll
+// RUN: %llc %t.ll -relocation-model=pic -filetype=obj -o %t.o
 // RUN: %cc %S/str_select_e2e.c %t.o -o %t.exe -L%library_path \
 // RUN:    %rpath_flag %extra_sys_libs
 // RUN: %t.exe

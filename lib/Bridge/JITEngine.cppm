@@ -388,16 +388,19 @@ export extern "C" {
 // Call a JIT function that returns a str type (struct { ptr, len })
 // On ARM64 and x86-64, small structs are returned in registers
 #if defined(_WIN32) && defined(__x86_64__)
-  // On Windows x86_64, we use unsigned __int128 to capture the two-register
-  // return {ptr, len} pair returned by the JIT function (%rax = ptr, %rdx =
-  // len).
+  // On Windows x86_64, the JIT function returns:
+  // - %rax = ptr
+  // - %rdx = len
+  // We use inline assembly to call and capture both return registers.
   void reussir_bridge_call_str_func(void *func_ptr, ReussirStrResult *result) {
-    using StrFuncType = unsigned __int128 (*)();
-    auto func = reinterpret_cast<StrFuncType>(func_ptr);
-    unsigned __int128 raw_res = func();
-    result->ptr =
-        reinterpret_cast<const char *>(static_cast<uintptr_t>(raw_res));
-    result->len = static_cast<size_t>(raw_res >> 64);
+    const char *ptr;
+    size_t len;
+    __asm__ __volatile__("callq *%[func]"
+                         : "=a"(ptr), "=d"(len)
+                         : [func] "r"(func_ptr)
+                         : "rcx", "r8", "r9", "r10", "r11", "memory");
+    result->ptr = ptr;
+    result->len = len;
   }
 #else
   void reussir_bridge_call_str_func(void *func_ptr, ReussirStrResult *result) {
