@@ -87,23 +87,95 @@ jobs:
 
       - name: Build
         shell: msys2 {0}
-        run: cmake --build build --parallel
+        run: |
+          echo "=== Building with parallel jobs ==="
+          cmake --build build --parallel || {
+            echo "=== Build failed, showing CMake error log ==="
+            if [ -f "build/CMakeFiles/CMakeError.log" ]; then
+              echo "--- CMakeError.log ---"
+              cat build/CMakeFiles/CMakeError.log
+            fi
+            if [ -f "build/CMakeFiles/CMakeOutput.log" ]; then
+              echo "--- CMakeOutput.log (last 50 lines) ---"
+              tail -n 50 build/CMakeFiles/CMakeOutput.log
+            fi
+            exit 1
+          }
 
+      - name: Run Unit Tests
+        shell: msys2 {0}
+        run: |
+          echo "=== Building unit tests ==="
+          cmake --build build --target reussir-ut
+          echo "=== Running unit tests with detailed output ==="
+          ctest --test-dir build --output-on-failure --verbose || {
+            echo "=== Unit tests failed ==="
+            echo "=== CTest log output ==="
+            if [ -f "build/Testing/Temporary/LastTest.log" ]; then
+              cat build/Testing/Temporary/LastTest.log
+            fi
+            exit 1
+          }
 
+      - name: Check Library Dependencies
+        shell: msys2 {0}
+        run: |
+          echo "=== Checking library dependencies for main executables ==="
+          for exe in build/bin/*.exe; do
+            if [ -f "$exe" ]; then
+              echo "--- Dependencies for $(basename $exe) ---"
+              ldd "$exe" || echo "ldd failed for $exe"
+            fi
+          done
+          
+          echo ""
+          echo "=== Checking Reussir runtime library ==="
+          if [ -f "build/bin/reussir_rt.dll" ]; then
+            ldd build/bin/reussir_rt.dll || echo "ldd failed for reussir_rt.dll"
+          else
+            echo "Warning: reussir_rt.dll not found"
+          fi
+          
+          echo ""
+          echo "=== Environment variables ==="
+          echo "PATH=$PATH"
+          echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-not set}"
+          echo ""
+          echo "=== Installed MSYS packages (key ones) ==="
+          pacman -Q | grep -E "(mlir|llvm|clang|spdlog|gtest)" || echo "No matching packages found"
+      
       - name: Run Integration Tests
         shell: msys2 {0}
         run: |
           . /c/ghcup/env
           . .github/workflows/setup_path.sh
-          cmake --build build --target check
+          echo "=== Running integration tests with verbose output ==="
+          cmake --build build --target check || {
+            echo "=== Integration tests failed, showing detailed output ==="
+            echo "=== Checking for test output files ==="
+            find build/tests -name "*.log" -o -name "*.out" 2>/dev/null | while read f; do
+              echo "--- Content of $f ---"
+              cat "$f" || echo "Failed to read $f"
+            done
+            exit 1
+          }
 
       - name: Build Haskell frontend
         shell: msys2 {0}
         run: |
           . /c/ghcup/env
           . .github/workflows/setup_path.sh
+          echo "=== Building Haskell frontend ==="
           cabal update
-          cabal build all -j
+          cabal build all -j --enable-tests --enable-benchmarks || {
+            echo "=== Haskell build failed ==="
+            echo "=== Checking build logs ==="
+            find frontend -path "*/dist-newstyle/build/*/*/build" -name "*.log" 2>/dev/null | while read log; do
+              echo "--- Build log: $log ---"
+              tail -n 50 "$log" || echo "Failed to read $log"
+            done
+            exit 1
+          }
 
       - name: Test Haskell frontend
         shell: msys2 {0}
@@ -111,4 +183,22 @@ jobs:
           . /c/ghcup/env
           . .github/workflows/setup_path.sh
           chcp.com 65001
-          cabal test all -j
+          echo "=== Running Haskell tests with verbose output and error details ==="
+          cabal test all -j --test-show-details=streaming --test-option=--color=always || {
+            echo "=== Haskell tests failed ==="
+            echo "=== Attempting to run tests individually for more details ==="
+            for pkg in frontend/*/; do
+              if [ -f "$pkg/$(basename $pkg).cabal" ]; then
+                echo "--- Testing package: $(basename $pkg) ---"
+                (cd "$pkg" && cabal test --test-show-details=streaming --test-option=--color=always) || {
+                  echo "!!! Package $(basename $pkg) tests failed"
+                  echo "--- Checking for test artifacts ---"
+                  find "$pkg/dist-newstyle" -name "*.log" 2>/dev/null | while read log; do
+                    echo "=== Log file: $log ==="
+                    tail -n 100 "$log" || echo "Failed to read $log"
+                  done
+                }
+              fi
+            done
+            exit 1
+          }
