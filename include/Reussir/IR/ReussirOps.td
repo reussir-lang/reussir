@@ -1294,4 +1294,115 @@ def ReussirStrLiteralOp : ReussirStrOp<"literal", [
   let hasVerifier = 1;
 }
 
+def ReussirStrLenOp : ReussirStrOp<"len", []> {
+  let summary = "Get the length of the string";
+  let description = [{
+    `reussir.str.len` returns the length of the string.
+  }];
+  let arguments = (ins Arg<ReussirStrType, "String to get length from">:$str);
+  let results = (outs Res<Index, "Length of the string">:$len);
+  let assemblyFormat = [{
+    `(` $str `:` type($str) `)` `:` type($len) attr-dict
+  }];
+}
+
+def ReussirStrByteAtOp : ReussirStrOp<"byte_at", []> {
+  let summary = "Get the character at a specific index";
+  let description = [{
+    `reussir.str.byte_at` returns the character at a byte offset. Return 0 if the index is out of bounds.
+  }];
+  let arguments = (ins Arg<ReussirStrType, "String to get character from">:$str, 
+    Arg<Index, "Index of character to get">:$index);
+  let results = (outs Res<I8, "Character at index">:$charVal);
+  let assemblyFormat = [{
+    `(` $str `:` type($str) `)` 
+    `[` $index `:` type($index) `]` 
+    `:` type($charVal) attr-dict
+  }];
+}
+
+def ReussirStrUnsafeByteAtOp : ReussirStrOp<"unsafe_byte_at", []> {
+  let summary = "Get the character at a specific index without bounds check";
+  let description = [{
+    `reussir.str.unsafe_byte_at` returns the character at a byte offset. 
+    Undefined behavior if the index is out of bounds.
+  }];
+  let arguments = (ins Arg<ReussirStrType, "String to get character from">:$str, 
+    Arg<Index, "Index of character to get">:$index);
+  let results = (outs Res<I8, "Character at index">:$charVal);
+  let assemblyFormat = [{
+    `(` $str `:` type($str) `)` 
+    `[` $index `:` type($index) `]` 
+    `:` type($charVal) attr-dict
+  }];
+}
+
+def ReussirStrCastOp : ReussirStrOp<"cast", []> {
+   let summary = "Cast a global string literal to a local string literal";
+   let description = [{
+    `reussir.str.cast` casts a global string literal to a local string literal.
+   }];
+   let arguments = (ins Arg<ReussirStrType, "Global string literal">:$globalStr);
+   let results = (outs Res<ReussirStrType, "Local string literal">:$localStr);
+   let assemblyFormat = [{
+    `(` $globalStr `:` type($globalStr) `)` `:` type($localStr) attr-dict
+   }];
+   let hasVerifier = 1;
+}
+
+def ReussirStrSelectOp : ReussirStrOp<"select", []> {
+  let summary = "Select the first matched pattern of the string";
+  let description = [{
+    `reussir.str.select` selects the first matched pattern of the string.
+  }];
+  let arguments = (ins Arg<ReussirStrType, "String to select">:$str, 
+    Arg<ArrayAttr, "Patterns to match">:$patterns);
+  let results = (outs Res<Index, "Selected pattern">:$selected, 
+    Res<I1, "Matched found">:$found);
+  let assemblyFormat = [{
+    `(` $str `)` $patterns `:` functional-type(operands, results) attr-dict
+  }];
+}
+
+def ReussirStrStartWithOp : ReussirStrOp<"startswith", []> {
+   let summary = "Check if the string starts with a prefix";
+   let description = [{
+    `reussir.str.startswith` checks if the string starts with a prefix.
+   }];
+   let arguments = (ins Arg<ReussirStrType, "String to check">:$str, Arg<StrAttr, "Prefix to check">:$prefix);
+   let results = (outs Res<I1, "Whether the string starts with the prefix">:$startsWith);
+   let assemblyFormat = [{
+    `(` $str `:` type($str) `)` 
+    $prefix 
+    `:` type($startsWith) attr-dict
+   }];
+}
+
+def ReussirStrUnsafeStartWithOp : ReussirStrOp<"unsafe_startswith", []> {
+   let summary = "Check if the string starts with a prefix without bounds check";
+   let description = [{
+    `reussir.str.unsafe_startswith` checks if the string starts with a prefix.
+    Undefined behavior if the prefix is longer than the string.
+   }];
+   let arguments = (ins Arg<ReussirStrType, "String to check">:$str, Arg<StrAttr, "Prefix to check">:$prefix);
+   let results = (outs Res<I1, "Whether the string starts with the prefix">:$startsWith);
+   let assemblyFormat = [{
+    `(` $str `:` type($str) `)` 
+    $prefix 
+    `:` type($startsWith) attr-dict
+   }];
+}
+
+def ReussirStrSliceOp : ReussirStrOp<"slice", []> {
+  let summary = "Slice the string from a byte offset";
+  let description = [{
+    `reussir.str.slice` returns a substring starting from the given offset.
+    If offset is greater than length, returns an empty string.
+  }];
+  let arguments = (ins Arg<ReussirStrType, "String to slice">:$str, Arg<Index, "Byte offset">:$offset);
+  let results = (outs Res<ReussirStrType, "Sliced string">:$result);
+  let assemblyFormat = [{
+    `(` $str `:` type($str) `)` `[` $offset `]` `:` type($result) attr-dict
+  }];
+}
 #endif // REUSSIR_IR_REUSSIROPS_TD

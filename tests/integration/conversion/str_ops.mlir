@@ -1,28 +1,21 @@
-// RUN: %reussir-opt %s --reussir-lowering-basic-ops | %FileCheck %s
-module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>>} {
-  // CHECK: llvm.mlir.global internal constant @hello("Hello, World!\00") {addr_space = 0 : i32}
-  reussir.str.global @hello = "Hello, World!"
+// RUN: %reussir-opt %s --reussir-lowering-scf-ops --reussir-lowering-basic-ops | %FileCheck %s
 
-  // CHECK: llvm.mlir.global internal constant @empty("\00") {addr_space = 0 : i32}
-  reussir.str.global @empty = ""
-
-  // CHECK-LABEL: llvm.func @test_str_literal() -> !llvm.struct<(ptr, i64)>
-  // CHECK: %[[ADDR:.*]] = llvm.mlir.addressof @hello : !llvm.ptr
-  // CHECK: %[[LEN:.*]] = llvm.mlir.constant(13 : i64) : i64
-  // CHECK: %[[UNDEF:.*]] = llvm.mlir.undef : !llvm.struct<(ptr, i64)>
-  // CHECK: %[[WITH_PTR:.*]] = llvm.insertvalue %[[ADDR]], %[[UNDEF]][0]
-  // CHECK: %[[WITH_LEN:.*]] = llvm.insertvalue %[[LEN]], %[[WITH_PTR]][1]
-  // CHECK: llvm.return %[[WITH_LEN]]
-  func.func @test_str_literal() -> !reussir.str<global> {
-    %str = reussir.str.literal @hello : !reussir.str<global>
-    return %str : !reussir.str<global>
-  }
-
-  // CHECK-LABEL: llvm.func @test_empty_str_literal() -> !llvm.struct<(ptr, i64)>
-  // CHECK: %[[ADDR2:.*]] = llvm.mlir.addressof @empty : !llvm.ptr
-  // CHECK: %[[LEN2:.*]] = llvm.mlir.constant(0 : i64) : i64
-  func.func @test_empty_str_literal() -> !reussir.str<global> {
-    %str = reussir.str.literal @empty : !reussir.str<global>
-    return %str : !reussir.str<global>
+module {
+  // CHECK-LABEL: @test_str_ops
+  func.func @test_str_ops(%str: !reussir.str<local>) -> i8 {
+    %idx = arith.constant 0 : index
+    // CHECK: %[[LEN:.*]] = llvm.extractvalue %{{.*}}[1] : !llvm.struct<(ptr, i64)> 
+    // CHECK: %[[COND:.*]] = llvm.icmp "ugt" %[[LEN]], %{{.*}} : i64
+    // CHECK: %[[RES:.*]] = scf.if %[[COND]] -> (i8) {
+    // CHECK:   %[[PTR:.*]] = llvm.extractvalue %{{.*}}[0] : !llvm.struct<(ptr, i64)>
+    // CHECK:   %[[GEP:.*]] = llvm.getelementptr %[[PTR]][%{{.*}}] : (!llvm.ptr, i64) -> !llvm.ptr, i8
+    // CHECK:   %[[VAL:.*]] = llvm.load %[[GEP]] : !llvm.ptr -> i8
+    // CHECK:   scf.yield %[[VAL]] : i8
+    // CHECK: } else {
+    // CHECK:   %[[ZERO:.*]] = llvm.mlir.constant(0 : i8) : i8
+    // CHECK:   scf.yield %[[ZERO]] : i8
+    // CHECK: }
+    %byte = reussir.str.byte_at (%str : !reussir.str<local>) [%idx : index] : i8
+    return %byte : i8
   }
 }

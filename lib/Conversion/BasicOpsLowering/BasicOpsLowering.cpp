@@ -1609,6 +1609,170 @@ struct ReussirStrLiteralOpConversionPattern
   }
 };
 
+struct ReussirStrLenOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirStrLenOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirStrLenOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // Extract the length field (index 1) from the string struct
+    rewriter.replaceOpWithNewOp<mlir::LLVM::ExtractValueOp>(
+        op, adaptor.getStr(), llvm::ArrayRef<int64_t>{1});
+    return mlir::success();
+  }
+};
+
+struct ReussirStrUnsafeByteAtOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirStrUnsafeByteAtOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirStrUnsafeByteAtOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    auto i8Type = rewriter.getI8Type();
+
+    // Extract the pointer field (index 0) from the string struct
+    auto ptr = rewriter.create<mlir::LLVM::ExtractValueOp>(
+        loc, adaptor.getStr(), llvm::ArrayRef<int64_t>{0});
+
+    // Calculate the address of the character
+    auto ptrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto charPtr = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, ptrType, i8Type, ptr, mlir::ValueRange{adaptor.getIndex()});
+
+    // Load the character
+    rewriter.replaceOpWithNewOp<mlir::LLVM::LoadOp>(op, i8Type, charPtr);
+
+    return mlir::success();
+  }
+};
+
+struct ReussirStrUnsafeStartWithOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirStrUnsafeStartWithOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirStrUnsafeStartWithOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    mlir::ModuleOp module = op->getParentOfType<mlir::ModuleOp>();
+    llvm::StringRef prefix = op.getPrefix();
+    size_t len = prefix.size();
+
+    // Extract the pointer field (index 0) from the string struct
+    auto ptr = rewriter.create<mlir::LLVM::ExtractValueOp>(
+        loc, adaptor.getStr(), llvm::ArrayRef<int64_t>{0});
+
+    // Use memcmp for all prefix lengths as LLVM optimizes it well.
+    // 1. Create global string for prefix
+    // Use hash to avoid duplicate strings (similar to PanicOp)
+    llvm::ArrayRef<uint8_t> messageBytes(
+        reinterpret_cast<const uint8_t *>(prefix.data()), prefix.size());
+    llvm::XXH128_hash_t hash = llvm::xxh3_128bits(messageBytes);
+    std::string globalName = "__str_prefix_" + llvm::utohexstr(hash.high64) +
+                             "_" + llvm::utohexstr(hash.low64);
+
+    auto existingGlobal = module.lookupSymbol<mlir::LLVM::GlobalOp>(globalName);
+    if (!existingGlobal) {
+      auto i8Type = rewriter.getI8Type();
+      auto arrayType = mlir::LLVM::LLVMArrayType::get(i8Type, prefix.size());
+      auto stringAttr = rewriter.getStringAttr(prefix);
+      mlir::OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(module.getBody());
+      rewriter.create<mlir::LLVM::GlobalOp>(loc, arrayType, true,
+                                            mlir::LLVM::Linkage::Internal,
+                                            globalName, stringAttr);
+    }
+
+    // 2. Get address of global string
+    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto prefixPtr =
+        rewriter.create<mlir::LLVM::AddressOfOp>(loc, llvmPtrType, globalName);
+
+    // 3. Declare memcmp if needed
+    // declare i32 @memcmp(ptr, ptr, i64)
+    if (!module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("memcmp")) {
+      mlir::OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(module.getBody());
+      auto i32Type = rewriter.getI32Type();
+      auto i64Type = rewriter.getI64Type();
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(
+          i32Type, {llvmPtrType, llvmPtrType, i64Type});
+      rewriter.create<mlir::LLVM::LLVMFuncOp>(loc, "memcmp", fnType);
+    }
+
+    // 4. Call memcmp
+    auto lenVal = rewriter.create<mlir::arith::ConstantIntOp>(loc, len, 64);
+    auto call = rewriter.create<mlir::LLVM::CallOp>(
+        loc, rewriter.getI32Type(),
+        mlir::SymbolRefAttr::get(rewriter.getContext(), "memcmp"),
+        mlir::ValueRange{ptr, prefixPtr, lenVal});
+
+    // 5. Compare result == 0
+    auto zero = rewriter.create<mlir::arith::ConstantIntOp>(loc, 0, 32);
+    auto res = rewriter.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::eq, call.getResult(), zero);
+    rewriter.replaceOp(op, res);
+
+    return mlir::success();
+  }
+};
+
+struct ReussirStrSliceOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirStrSliceOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirStrSliceOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+
+    mlir::Location loc = op.getLoc();
+    auto startOffset = adaptor.getOffset();
+
+    // 1. Get length and pointer
+    auto ptr = rewriter.create<mlir::LLVM::ExtractValueOp>(
+        loc, adaptor.getStr(), llvm::ArrayRef<int64_t>{0});
+    auto len = rewriter.create<mlir::LLVM::ExtractValueOp>(
+        loc, adaptor.getStr(), llvm::ArrayRef<int64_t>{1});
+
+    // 2. Check bounds
+    // offset > len ?
+    auto outOfBounds = rewriter.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::ugt, startOffset, len);
+
+    // 3. Select new length and pointer adjustment
+    // If outOfBounds, newLen = 0, newPtr = ptr (or undefined)
+    // Actually, safest is:
+    // adjustment = min(offset, len)
+    // newLen = len - adjustment
+    // newPtr = ptr + adjustment
+
+    // adjustment = min(offset, len)
+    // umin is not directly available in LLVM dialect as a single op usually?
+    // Use select.
+    auto adjustment = rewriter.create<mlir::LLVM::SelectOp>(loc, outOfBounds,
+                                                            len, startOffset);
+    auto newLen = rewriter.create<mlir::LLVM::SubOp>(loc, len, adjustment);
+
+    auto ptrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto newPtr = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, ptrType, rewriter.getI8Type(), ptr, mlir::ValueRange{adjustment});
+
+    // 4. Create new struct
+    auto structType = getTypeConverter()->convertType(op.getType());
+    auto newStr = rewriter.create<mlir::LLVM::UndefOp>(loc, structType);
+    auto s1 = rewriter.create<mlir::LLVM::InsertValueOp>(
+        loc, newStr, newPtr, llvm::ArrayRef<int64_t>{0});
+    auto s2 = rewriter.create<mlir::LLVM::InsertValueOp>(
+        loc, s1, newLen, llvm::ArrayRef<int64_t>{1});
+
+    rewriter.replaceOp(op, s2.getResult());
+    return mlir::success();
+  }
+};
+
 struct ReussirRefDiffConversionPattern
     : public mlir::OpConversionPattern<ReussirRefDiffOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -2021,9 +2185,11 @@ struct BasicOpsLoweringPass
           ReussirRegionCreateOp, ReussirRcReinterpretOp, ReussirClosureApplyOp,
           ReussirClosureCloneOp, ReussirClosureEvalOp,
           ReussirClosureInspectPayloadOp, ReussirClosureCursorOp,
-          ReussirClosureTransferOp, ReussirClosureInstantiateOp,
-          ReussirClosureVtableOp, ReussirClosureCreateOp, ReussirRcFetchDecOp,
-          ReussirStrGlobalOp, ReussirStrLiteralOp, ReussirPanicOp>();
+          ReussirClosureInstantiateOp, ReussirClosureVtableOp,
+          ReussirClosureCreateOp, ReussirRcFetchDecOp, ReussirStrGlobalOp,
+          ReussirStrLiteralOp, ReussirPanicOp, ReussirStrLenOp,
+          ReussirStrUnsafeByteAtOp, ReussirStrUnsafeStartWithOp,
+          ReussirStrSliceOp>();
       target.addLegalDialect<mlir::LLVM::LLVMDialect>();
       if (failed(applyPartialConversion(getOperation(), target,
                                         std::move(patterns))))
@@ -2067,7 +2233,10 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirClosureCreateOpConversionPattern,
       ReussirRcReinterpretConversionPattern,
       ReussirRcFetchDectConversionPattern, ReussirStrGlobalOpConversionPattern,
-      ReussirStrLiteralOpConversionPattern, ReussirPanicConversionPattern>(
-      converter, patterns.getContext());
+      ReussirStrLiteralOpConversionPattern, ReussirPanicConversionPattern,
+      ReussirStrLenOpConversionPattern,
+      ReussirStrUnsafeByteAtOpConversionPattern,
+      ReussirStrUnsafeStartWithOpConversionPattern,
+      ReussirStrSliceOpConversionPattern>(converter, patterns.getContext());
 }
 } // namespace reussir
