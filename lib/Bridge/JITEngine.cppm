@@ -387,18 +387,24 @@ export extern "C" {
   }
 // Call a JIT function that returns a str type (struct { ptr, len })
 // On ARM64 and x86-64, small structs are returned in registers
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wgcc-compat"
 #if defined(_WIN32) && defined(__x86_64__)
-#define API_FLAG [[gnu::sysv_abi]]
+  // On Windows x86_64, we use unsigned __int128 to capture the two-register
+  // return {ptr, len} pair returned by the JIT function (%rax = ptr, %rdx =
+  // len).
+  void reussir_bridge_call_str_func(void *func_ptr, ReussirStrResult *result) {
+    using StrFuncType = unsigned __int128 (*)();
+    auto func = reinterpret_cast<StrFuncType>(func_ptr);
+    unsigned __int128 raw_res = func();
+    result->ptr =
+        reinterpret_cast<const char *>(static_cast<uintptr_t>(raw_res));
+    result->len = static_cast<size_t>(raw_res >> 64);
+  }
 #else
-#define API_FLAG
-#endif
   void reussir_bridge_call_str_func(void *func_ptr, ReussirStrResult *result) {
     // Define the function type that returns the str struct
-    using StrFuncType = ReussirStrResult (*)() API_FLAG;
+    using StrFuncType = ReussirStrResult (*)();
     auto func = reinterpret_cast<StrFuncType>(func_ptr);
     *result = func();
   }
-#pragma clang diagnostic pop
+#endif
 }

@@ -17,19 +17,57 @@ typedef struct {
   uint8_t found;
 } SelectResult;
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wgcc-compat"
+// Platform-specific calling convention handling
 #if defined(_WIN32) && defined(__x86_64__)
-#define API_FLAG [[gnu::sysv_abi]]
+// On Windows x86_64, the assembly uses:
+// - Input:  %rcx = ptr, %rdx = len (Windows x64 ABI)
+// - Output: %rax = index, %rdx = found (custom two-register return)
+// We declare raw symbol addresses and use inline asm to call them properly.
+extern void test_basic(void);
+extern void test_prefix(void);
+extern void test_long(void);
+extern void test_many(void);
+
+// Wrapper that calls the function and captures both %rax and %rdx return
+// registers
+static inline SelectResult call_select_func(void (*func)(void), const char *ptr,
+                                            size_t len) {
+  size_t index;
+  uint8_t found;
+  __asm__ __volatile__("callq *%[func]"
+                       : "=a"(index), "=d"(found)
+                       : [func] "r"(func), "c"(ptr), "d"(len)
+                       : "r8", "r9", "r10", "r11", "memory");
+  SelectResult res = {index, found};
+  return res;
+}
+
+// Wrapper functions to translate calling conventions
+static SelectResult test_basic_wrapper(ReussirStr str) {
+  return call_select_func(test_basic, str.ptr, str.len);
+}
+static SelectResult test_prefix_wrapper(ReussirStr str) {
+  return call_select_func(test_prefix, str.ptr, str.len);
+}
+static SelectResult test_long_wrapper(ReussirStr str) {
+  return call_select_func(test_long, str.ptr, str.len);
+}
+static SelectResult test_many_wrapper(ReussirStr str) {
+  return call_select_func(test_many, str.ptr, str.len);
+}
+
+// Macros to redirect calls to wrappers
+#define test_basic(str) test_basic_wrapper(str)
+#define test_prefix(str) test_prefix_wrapper(str)
+#define test_long(str) test_long_wrapper(str)
+#define test_many(str) test_many_wrapper(str)
 #else
-#define API_FLAG
+// Non-Windows platforms use direct struct return
+extern SelectResult test_basic(ReussirStr str);
+extern SelectResult test_prefix(ReussirStr str);
+extern SelectResult test_long(ReussirStr str);
+extern SelectResult test_many(ReussirStr str);
 #endif
-// Declare the MLIR-generated functions
-extern SelectResult test_basic(ReussirStr str) API_FLAG;
-extern SelectResult test_prefix(ReussirStr str) API_FLAG;
-extern SelectResult test_long(ReussirStr str) API_FLAG;
-extern SelectResult test_many(ReussirStr str) API_FLAG;
-#pragma clang diagnostic pop
 
 // Helper to create a ReussirStr from a C string
 static ReussirStr make_str(const char *s) {

@@ -5,7 +5,7 @@
 // RUN:   %reussir-translate --reussir-to-llvmir | \
 // RUN:   %opt -S -O3 | \
 // RUN:   %llc -relocation-model=pic -filetype=obj -o %t.o
-// RUN: %cc %S/str_select_e2e.c %t.o -o %t.exe -L%library_path -lreussir_rt \
+// RUN: %cc %S/str_select_e2e.c %t.o -o %t.exe -L%library_path \
 // RUN:    %rpath_flag %extra_sys_libs
 // RUN: %t.exe
 
