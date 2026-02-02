@@ -8,6 +8,8 @@ import Reussir.Core.Data.Semi.Type (Type)
 import Reussir.Core.Data.String (StringToken)
 import Reussir.Core.Data.UniqueID (ExprID, VarID)
 import Reussir.Parser.Types.Lexer (Identifier, Path)
+import qualified Data.IntMap.Strict as IntMap
+import qualified Data.Vector.Strict as V
 
 data ExprKind
     = GlobalStr StringToken
@@ -53,6 +55,31 @@ data ExprKind
         , intrinsicCallArgs :: [Expr]
         }
     deriving (Show, Eq)
+
+data DecisionTree a
+    = DTUncovered
+    | DTUnreachable
+    | DTLeaf {
+        dtLeafBody :: a,
+        dtLeafBindings :: [Maybe VarID] -- positional bindings
+    }
+    | DTGuard {
+        dtGuardBindings :: [Maybe VarID],
+        dtGuardExpr :: a,
+        dtGuardTrue :: DecisionTree a,
+        dtGuardFalse :: DecisionTree a
+    }
+    | DTSwitch {
+        dtSwitchPosition :: Int,
+        dtSwitchCases :: DTSwitchCases a,
+        dtSwitchDefault :: DecisionTree a
+    }
+
+data DTSwitchCases a
+    = DTSwitchInt (IntMap.IntMap (DecisionTree a))
+    | DTSwitchBool (DecisionTree a) (DecisionTree a)
+    | DTSwitchCtor (V.Vector (DecisionTree a))
+    | DTSwitchString (IntMap.IntMap (DecisionTree a))
 
 data Expr = Expr
     { exprKind :: ExprKind
