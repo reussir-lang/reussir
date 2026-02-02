@@ -1409,7 +1409,7 @@ def ReussirStrSliceOp : ReussirStrOp<"slice", []> {
 }
 
 //===----------------------------------------------------------------------===//
-// Reussir Function Operations (CABI-aware replacements for func dialect)
+// Reussir Function Operations (Platform-aware ABI handling)
 //===----------------------------------------------------------------------===//
 
 def ReussirFuncOp : ReussirOp<"func", [

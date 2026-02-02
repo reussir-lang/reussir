@@ -8,11 +8,17 @@
 
 #include "Reussir/Conversion/TypeConverter.h"
 #include "Reussir/IR/ReussirTypes.h"
+#include <llvm/TargetParser/Host.h>
+#include <llvm/TargetParser/Triple.h>
 #include <mlir/IR/BuiltinTypes.h>
+
+
 
 namespace reussir {
 namespace {
+
 mlir::LowerToLLVMOptions getLowerOptions(mlir::ModuleOp op) {
+
   llvm::StringRef dataLayoutString;
   auto dataLayoutAttr = op->template getAttrOfType<mlir::StringAttr>(
       mlir::LLVM::LLVMDialect::getDataLayoutAttrName());
@@ -43,11 +49,59 @@ public:
       callStack->pop_back();
   }
 };
-}; // namespace
+}; // end anonymous namespace
+
+/// Get the target triple attribute name used in MLIR modules.
+static llvm::StringRef getTargetTripleAttrName() {
+  return "llvm.target_triple";
+}
+
+/// Get the target triple from the module, or infer from data layout.
+static llvm::Triple getTargetTriple(mlir::ModuleOp op) {
+  // First, try to get explicit target triple attribute
+  if (auto tripleAttr = op->getAttrOfType<mlir::StringAttr>(
+          getTargetTripleAttrName())) {
+    return llvm::Triple(tripleAttr.getValue());
+  }
+
+  // Fallback: try to infer from data layout string
+  // This is a heuristic approach
+  if (auto dataLayoutAttr = op->getAttrOfType<mlir::StringAttr>(
+          mlir::LLVM::LLVMDialect::getDataLayoutAttrName())) {
+    llvm::StringRef dlStr = dataLayoutAttr.getValue();
+
+    // Windows data layouts typically contain specific patterns
+    // e.g., "-m:w-" for Windows COFF or "-m:x-" for MinGW
+    if (dlStr.contains("-m:w-") || dlStr.contains("-m:x-")) {
+      // Likely Windows target
+      if (dlStr.contains("e-m:") && dlStr.contains("i64:64")) {
+        // 64-bit Windows
+        return llvm::Triple("x86_64-pc-windows-msvc");
+      }
+    }
+
+    // macOS/iOS patterns
+    if (dlStr.contains("-m:o-")) {
+      // Mach-O, likely Darwin
+      if (dlStr.contains("i64:64") && !dlStr.contains("p:32:32")) {
+        return llvm::Triple("arm64-apple-macosx");
+      }
+    }
+
+    // Default to a reasonable x86_64 Linux triple
+    return llvm::Triple("x86_64-unknown-linux-gnu");
+  }
+
+  // Ultimate fallback: use host triple
+  return llvm::Triple(llvm::sys::getDefaultTargetTriple());
+}
 
 LLVMTypeConverter::LLVMTypeConverter(mlir::ModuleOp op)
     : mlir::LLVMTypeConverter(op.getContext(), getLowerOptions(op)),
-      dataLayout(op) {
+      dataLayout(op),
+      targetTriple(::reussir::getTargetTriple(op)) {
+
+
   // Record types
   addConversion(
       [this](RecordType type, llvm::SmallVectorImpl<mlir::Type> &results) {
@@ -169,5 +223,52 @@ std::optional<llvm::LogicalResult> LLVMTypeConverter::convertRecordType(
 
   results.push_back(structType);
   return mlir::success();
+}
+
+bool LLVMTypeConverter::shouldUseSret(mlir::Type llvmType) const {
+  // Only struct types can potentially need sret
+  auto structType = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(llvmType);
+  if (!structType)
+    return false;
+
+  // Get the size of the struct using MLIR DataLayout
+  llvm::TypeSize typeSize = dataLayout.getTypeSize(llvmType);
+
+  // Can't use sret for scalable types (shouldn't happen for structs)
+  if (typeSize.isScalable())
+    return false;
+
+  uint64_t size = typeSize.getFixedValue();
+
+
+  // Windows x64 ABI (Microsoft x64 calling convention)
+  // Structs of size 1, 2, 4, or 8 bytes can be returned in RAX
+  // All other sizes must use sret
+  if (isWindowsTarget() && isX86_64()) {
+    return size != 1 && size != 2 && size != 4 && size != 8;
+  }
+
+  // System V AMD64 ABI (used by Linux x86_64)
+  // Simplified rule: structs <= 16 bytes can be returned in registers
+  // (actual ABI is more complex with eightbyte classification, but this
+  // is a good enough approximation for most cases)
+  if (isX86_64()) {
+    return size > 16;
+  }
+
+  // AAPCS64 (used by Linux aarch64 and Darwin arm64)
+  // Simplified rule: structs <= 16 bytes can be returned in registers
+  // (actual ABI considers HFAs/HVAs, but this is a reasonable approximation)
+  if (isAArch64()) {
+    return size > 16;
+  }
+
+  // For 32-bit targets, typically structs > 8 bytes use sret
+  if (is32Bit()) {
+    return size > 8;
+  }
+
+  // Default: conservative approach, use sret for anything > 8 bytes
+  return size > 8;
 }
 } // namespace reussir

@@ -34,7 +34,9 @@
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/IR/Types.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
+#include <mlir/Interfaces/FunctionInterfaces.h>
 #include <mlir/Interfaces/FunctionImplementation.h>
+#include <mlir/Interfaces/CallInterfaces.h>
 
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirEnumAttrs.h"
@@ -1961,7 +1963,7 @@ gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
 }
 
 //===----------------------------------------------------------------------===//
-// ReussirFuncOp
+// ReussirFuncOp Implementation
 //===----------------------------------------------------------------------===//
 
 void ReussirFuncOp::build(mlir::OpBuilder &odsBuilder,
@@ -2030,11 +2032,14 @@ mlir::LogicalResult ReussirFuncOp::verifyType() {
 }
 
 mlir::LogicalResult ReussirFuncOp::verify() {
-  return verifyType();
+  // Verify the function type
+  if (mlir::failed(verifyType()))
+    return mlir::failure();
+  return mlir::success();
 }
 
 //===----------------------------------------------------------------------===//
-// ReussirReturnOp
+// ReussirReturnOp Implementation
 //===----------------------------------------------------------------------===//
 
 mlir::LogicalResult ReussirReturnOp::verify() {
@@ -2061,13 +2066,8 @@ mlir::LogicalResult ReussirReturnOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
-// ReussirCallOp
+// ReussirCallOp Implementation
 //===----------------------------------------------------------------------===//
-
-mlir::LogicalResult ReussirCallOp::verify() {
-  // Basic verification - symbol verification happens in verifySymbolUses
-  return mlir::success();
-}
 
 mlir::LogicalResult
 ReussirCallOp::verifySymbolUses(mlir::SymbolTableCollection &symbolTable) {
@@ -2092,30 +2092,18 @@ ReussirCallOp::verifySymbolUses(mlir::SymbolTableCollection &symbolTable) {
     return emitOpError("incorrect number of operands for callee: expected ")
            << funcType.getNumInputs() << ", got " << argTypes.size();
 
-  // Check operand types
-  for (size_t i = 0; i < funcType.getNumInputs(); ++i) {
-    if (funcType.getInput(i) != argTypes[i])
-      return emitOpError("operand type mismatch at index ")
-             << i << ": expected " << funcType.getInput(i) << ", got "
-             << argTypes[i];
-  }
-
   // Check result count
   auto resultTypes = getResultTypes();
   if (funcType.getNumResults() != resultTypes.size())
     return emitOpError("incorrect number of results for callee: expected ")
            << funcType.getNumResults() << ", got " << resultTypes.size();
 
-  // Check result types
-  for (size_t i = 0; i < funcType.getNumResults(); ++i) {
-    if (funcType.getResult(i) != resultTypes[i])
-      return emitOpError("result type mismatch at index ")
-             << i << ": expected " << funcType.getResult(i) << ", got "
-             << resultTypes[i];
-  }
+  return mlir::success();
+}
 
+mlir::LogicalResult ReussirCallOp::verify() {
+  // Basic verification - symbol uses are verified separately by verifySymbolUses
   return mlir::success();
 }
 
 } // namespace reussir
-

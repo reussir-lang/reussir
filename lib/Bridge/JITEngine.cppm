@@ -111,10 +111,10 @@ public:
   ReussirASTLayer(ASTCallbackFn ast_callback_fn, ASTFreeFn ast_free_fn,
                   IRLayer &inner_layer, llvm::orc::ThreadSafeContext ts_context,
                   mlir::MLIRContext &context, mlir::PassManager &pm,
-                  const DataLayout &data_layout)
+                  const DataLayout &data_layout, llvm::StringRef target_triple)
       : ast_callback_fn(ast_callback_fn), ast_free_fn(ast_free_fn),
         inner_layer(inner_layer), ts_context(ts_context), context(context),
-        pm(pm), data_layout(data_layout) {}
+        pm(pm), data_layout(data_layout), target_triple(target_triple.str()) {}
 
   Error add(ResourceTrackerSP resource_tracker, ASTStablePtr ast,
             ArrayRef<char *> symbol_names, ArrayRef<uint8_t> symbol_flags) {
@@ -134,7 +134,7 @@ public:
             const char *texture) {
     auto unique_module = ts_context.withContextDo([&](LLVMContext *llvmCtx) {
       return bridge::translateToModule(texture, *llvmCtx, context, pm,
-                                       data_layout);
+                                       data_layout, target_triple);
     });
     auto concurrentModule =
         ThreadSafeModule(std::move(unique_module), ts_context);
@@ -161,6 +161,7 @@ private:
   mlir::MLIRContext &context;
   mlir::PassManager &pm;
   const DataLayout &data_layout;
+  std::string target_triple;
 
   friend class ReussirASTMaterializationUnit;
 };
@@ -205,6 +206,7 @@ private:
   std::unique_ptr<EPCIndirectionUtils> epc_indirection_utils;
 
   DataLayout data_layout;
+  std::string target_triple;
   MangleAndInterner mangle_and_interner;
 
   RTDyldObjectLinkingLayer object_layer;
@@ -228,10 +230,12 @@ private:
 public:
   JITEngine(std::unique_ptr<ExecutionSession> es,
             std::unique_ptr<EPCIndirectionUtils> epciu,
-            JITTargetMachineBuilder jtmb, DataLayout dl, ReussirOptOption opt,
+            JITTargetMachineBuilder jtmb, DataLayout dl,
+            llvm::StringRef target_triple_str, ReussirOptOption opt,
             ASTCallbackFn ast_callback_fn, ASTFreeFn ast_free_fn)
       : execution_session(std::move(es)),
         epc_indirection_utils(std::move(epciu)), data_layout(dl),
+        target_triple(target_triple_str.str()),
         mangle_and_interner(*execution_session, dl),
         object_layer(*execution_session,
                      [](const MemoryBuffer &) {
@@ -248,7 +252,7 @@ public:
         pm(bridge::buildPassManager(*context)),
         ts_context(std::make_unique<llvm::LLVMContext>()),
         ast_layer(ast_callback_fn, ast_free_fn, optimize_layer, ts_context,
-                  *context, *pm, data_layout),
+                  *context, *pm, data_layout, target_triple),
         main_dynlib(execution_session->createBareJITDylib("<main>")) {
     main_dynlib.addGenerator(
         cantFail(DynamicLibrarySearchGenerator::GetForCurrentProcess(
@@ -260,6 +264,7 @@ public:
     else
       main_dynlib.addGenerator(std::move(*loaded));
   }
+
 
   ~JITEngine() {
     if (auto err = execution_session->endSession())
@@ -277,12 +282,13 @@ public:
 
     auto unique_module = ts_context.withContextDo([&](LLVMContext *llvmCtx) {
       return bridge::translateToModule(texture, *llvmCtx, *context, *pm,
-                                       data_layout);
+                                       data_layout, target_triple);
     });
     auto concurrentModule =
         ThreadSafeModule(std::move(unique_module), ts_context);
     return optimize_layer.add(resource_tracker, std::move(concurrentModule));
   }
+
   Error addModule(ASTStablePtr ast, char *symbol_names[],
                   uint8_t symbol_flags[], size_t symbol_count,
                   ResourceTrackerSP resource_tracker = nullptr) {
@@ -346,15 +352,21 @@ export extern "C" {
     JITTargetMachineBuilder jtmb(
         es->getExecutorProcessControl().getTargetTriple());
 
+    // Get target triple string for ABI handling
+    std::string target_triple_str =
+        es->getExecutorProcessControl().getTargetTriple().str();
+
     auto dl = jtmb.getDefaultDataLayoutForTarget();
     if (!dl) {
       spdlog::error("Failed to get default data layout for target");
       return nullptr;
     }
     return new reussir::JITEngine(std::move(es), std::move(*epciu),
-                                  std::move(jtmb), std::move(*dl), opt,
+                                  std::move(jtmb), std::move(*dl),
+                                  target_triple_str, opt,
                                   ast_callback_fn, ast_free_fn);
   }
+
   void reussir_bridge_jit_destroy(ReussirJIT jit) {
     delete static_cast<reussir::JITEngine *>(jit);
   }

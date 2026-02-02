@@ -143,142 +143,6 @@ struct ReussirPanicConversionPattern
   }
 };
 
-//===----------------------------------------------------------------------===//
-// ReussirFuncOp Conversion Pattern
-//===----------------------------------------------------------------------===//
-
-struct ReussirFuncOpConversionPattern
-    : public mlir::OpConversionPattern<ReussirFuncOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(ReussirFuncOp op, OpAdaptor adaptor,
-                  mlir::ConversionPatternRewriter &rewriter) const override {
-    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
-    mlir::FunctionType funcType = op.getFunctionType();
-
-    // Convert input types
-    llvm::SmallVector<mlir::Type, 4> inputTypes;
-    for (mlir::Type inputType : funcType.getInputs()) {
-      mlir::Type convertedType = converter->convertType(inputType);
-      if (!convertedType)
-        return rewriter.notifyMatchFailure(op, "failed to convert input type");
-      inputTypes.push_back(convertedType);
-    }
-
-    // Convert result types
-    mlir::Type resultType;
-    if (funcType.getNumResults() == 0) {
-      resultType = mlir::LLVM::LLVMVoidType::get(rewriter.getContext());
-    } else if (funcType.getNumResults() == 1) {
-      resultType = converter->convertType(funcType.getResult(0));
-      if (!resultType)
-        return rewriter.notifyMatchFailure(op, "failed to convert result type");
-    } else {
-      // Multiple results: wrap in a struct
-      llvm::SmallVector<mlir::Type, 4> resultTypes;
-      for (mlir::Type resType : funcType.getResults()) {
-        mlir::Type converted = converter->convertType(resType);
-        if (!converted)
-          return rewriter.notifyMatchFailure(op, "failed to convert result type");
-        resultTypes.push_back(converted);
-      }
-      resultType = mlir::LLVM::LLVMStructType::getLiteral(
-          rewriter.getContext(), resultTypes);
-    }
-
-    // Create the LLVM function type
-    auto llvmFuncType = mlir::LLVM::LLVMFunctionType::get(resultType, inputTypes);
-
-    // Create the LLVM function op
-    auto llvmFunc = rewriter.create<mlir::LLVM::LLVMFuncOp>(
-        op.getLoc(), op.getSymName(), llvmFuncType);
-
-    // Handle visibility - only set private linkage for non-external functions
-    // External functions must have external or extern_weak linkage
-    if (op.getSymVisibility() && *op.getSymVisibility() == "private" &&
-        !op.isExternal()) {
-      llvmFunc.setLinkage(mlir::LLVM::Linkage::Private);
-    }
-
-    // Handle llvm.linkage attribute if present (takes precedence)
-    if (auto linkageAttr = op->getAttrOfType<mlir::LLVM::LinkageAttr>("llvm.linkage")) {
-      llvmFunc.setLinkage(linkageAttr.getLinkage());
-    }
-
-    // Handle LLVM visibility attribute if present
-    if (auto visAttr = op->getAttrOfType<mlir::StringAttr>("llvm_visibility")) {
-      llvm::StringRef visStr = visAttr.getValue();
-      if (visStr == "default")
-        llvmFunc.setVisibility_(mlir::LLVM::Visibility::Default);
-      else if (visStr == "hidden")
-        llvmFunc.setVisibility_(mlir::LLVM::Visibility::Hidden);
-      else if (visStr == "protected")
-        llvmFunc.setVisibility_(mlir::LLVM::Visibility::Protected);
-    }
-
-    // Handle function body
-    if (!op.isExternal()) {
-      mlir::Region &funcBody = llvmFunc.getBody();
-      rewriter.inlineRegionBefore(op.getBody(), funcBody, funcBody.end());
-
-      // Convert block argument types
-      if (failed(rewriter.convertRegionTypes(&funcBody, *converter)))
-        return rewriter.notifyMatchFailure(op, "failed to convert region types");
-    }
-
-    rewriter.eraseOp(op);
-    return mlir::success();
-  }
-};
-
-//===----------------------------------------------------------------------===//
-// ReussirReturnOp Conversion Pattern
-//===----------------------------------------------------------------------===//
-
-struct ReussirReturnOpConversionPattern
-    : public mlir::OpConversionPattern<ReussirReturnOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(ReussirReturnOp op, OpAdaptor adaptor,
-                  mlir::ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<mlir::LLVM::ReturnOp>(op, adaptor.getOperands());
-    return mlir::success();
-  }
-};
-
-//===----------------------------------------------------------------------===//
-// ReussirCallOp Conversion Pattern
-//===----------------------------------------------------------------------===//
-
-struct ReussirCallOpConversionPattern
-    : public mlir::OpConversionPattern<ReussirCallOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(ReussirCallOp op, OpAdaptor adaptor,
-                  mlir::ConversionPatternRewriter &rewriter) const override {
-    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
-
-    // Convert result types
-    llvm::SmallVector<mlir::Type, 4> resultTypes;
-    for (mlir::Type resType : op.getResultTypes()) {
-      mlir::Type converted = converter->convertType(resType);
-      if (!converted)
-        return rewriter.notifyMatchFailure(op, "failed to convert result type");
-      resultTypes.push_back(converted);
-    }
-
-    // Create the LLVM call op
-    auto callOp = rewriter.create<mlir::LLVM::CallOp>(
-        op.getLoc(), resultTypes, op.getCallee(), adaptor.getOperands());
-
-    rewriter.replaceOp(op, callOp.getResults());
-    return mlir::success();
-  }
-};
-
 struct ReussirTokenAllocConversionPattern
     : public mlir::OpConversionPattern<ReussirTokenAllocOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -2281,6 +2145,333 @@ void lowerFusedDBGAttributeInLocations(mlir::ModuleOp moduleOp) {
     }
   });
 }
+
+//===----------------------------------------------------------------------===//
+// Reussir Function Operations Lowering
+//===----------------------------------------------------------------------===//
+
+struct ReussirFuncOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirFuncOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirFuncOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    mlir::Location loc = op.getLoc();
+
+    // Convert input types
+    llvm::SmallVector<mlir::Type> convertedInputTypes;
+    if (failed(converter->convertTypes(op.getFunctionType().getInputs(),
+                                       convertedInputTypes)))
+      return op.emitOpError("failed to convert input types");
+
+    // Convert result types
+    llvm::SmallVector<mlir::Type> convertedResultTypes;
+    if (failed(converter->convertTypes(op.getFunctionType().getResults(),
+                                       convertedResultTypes)))
+      return op.emitOpError("failed to convert result types");
+
+    // Determine if we need sret for the return value
+    bool useSret = false;
+    mlir::Type sretType;
+    mlir::Type llvmResultType;
+
+    if (convertedResultTypes.empty()) {
+      llvmResultType = mlir::LLVM::LLVMVoidType::get(rewriter.getContext());
+    } else if (convertedResultTypes.size() == 1) {
+      mlir::Type resultType = convertedResultTypes[0];
+      // Check if this struct type requires sret based on target ABI
+      if (converter->shouldUseSret(resultType)) {
+        useSret = true;
+        sretType = resultType;
+        llvmResultType = mlir::LLVM::LLVMVoidType::get(rewriter.getContext());
+      } else {
+        llvmResultType = resultType;
+      }
+    } else {
+      // Multiple results - pack into a struct
+      mlir::Type packedType = mlir::LLVM::LLVMStructType::getLiteral(
+          rewriter.getContext(), convertedResultTypes);
+      // Check if this packed struct requires sret
+      if (converter->shouldUseSret(packedType)) {
+        useSret = true;
+        sretType = packedType;
+        llvmResultType = mlir::LLVM::LLVMVoidType::get(rewriter.getContext());
+      } else {
+        llvmResultType = packedType;
+      }
+    }
+
+    // If using sret, prepend pointer type to input types
+    llvm::SmallVector<mlir::Type> finalInputTypes;
+    if (useSret) {
+      // sret pointer as first argument
+      finalInputTypes.push_back(
+          mlir::LLVM::LLVMPointerType::get(rewriter.getContext()));
+    }
+    finalInputTypes.append(convertedInputTypes.begin(),
+                           convertedInputTypes.end());
+
+    auto llvmFuncType = mlir::LLVM::LLVMFunctionType::get(
+        llvmResultType, finalInputTypes, /*isVarArg=*/false);
+
+    // Create the LLVM function
+    auto llvmFunc = rewriter.create<mlir::LLVM::LLVMFuncOp>(
+        loc, op.getSymName(), llvmFuncType);
+
+    // Set sret attribute on the first argument if needed
+    if (useSret) {
+      llvm::SmallVector<mlir::Attribute> argAttrs;
+      mlir::NamedAttrList sretAttrs;
+      // Add sret attribute with the struct type
+      sretAttrs.append("llvm.sret", mlir::TypeAttr::get(sretType));
+      // noalias is typical for sret
+      sretAttrs.append("llvm.noalias", mlir::UnitAttr::get(rewriter.getContext()));
+      argAttrs.push_back(
+          mlir::DictionaryAttr::get(rewriter.getContext(), sretAttrs));
+
+      // Add empty attributes for the rest of the arguments
+      for (size_t i = 0; i < convertedInputTypes.size(); ++i) {
+        argAttrs.push_back(mlir::DictionaryAttr::get(rewriter.getContext(), {}));
+      }
+
+      llvmFunc.setArgAttrsAttr(rewriter.getArrayAttr(argAttrs));
+    }
+
+    // Handle linkage: Private linkage is only valid for non-external functions.
+    // External functions (no body) must remain External.
+    if (!op.isExternal()) {
+      if (op.getSymVisibility() && *op.getSymVisibility() == "private") {
+        llvmFunc.setLinkage(mlir::LLVM::Linkage::Private);
+      }
+    }
+
+    // Copy over visibility attribute if present
+    if (op.getLlvmVisibility()) {
+      llvmFunc->setAttr("llvm.visibility", rewriter.getStringAttr(*op.getLlvmVisibility()));
+    }
+
+    // Handle the function body if present
+    if (!op.isExternal()) {
+      mlir::Region &srcRegion = op.getBody();
+      mlir::Region &dstRegion = llvmFunc.getBody();
+
+      // Create signature conversion
+      // Account for the extra sret argument if present
+      unsigned numOriginalInputs = op.getFunctionType().getNumInputs();
+      mlir::TypeConverter::SignatureConversion signatureConversion(
+          numOriginalInputs);
+
+      if (useSret) {
+        // Map original arguments to after the sret argument
+        for (unsigned i = 0; i < convertedInputTypes.size(); ++i) {
+          signatureConversion.addInputs(i, convertedInputTypes[i]);
+        }
+      } else {
+        for (unsigned i = 0; i < convertedInputTypes.size(); ++i) {
+          signatureConversion.addInputs(i, convertedInputTypes[i]);
+        }
+      }
+
+      // Convert the region
+      if (failed(rewriter.convertRegionTypes(&srcRegion, *converter,
+                                             &signatureConversion)))
+        return op.emitOpError("failed to convert region types");
+
+      // Inline the converted region into the LLVM function
+      rewriter.inlineRegionBefore(srcRegion, dstRegion, dstRegion.end());
+
+      // If using sret, we need to adjust the function entry to handle
+      // the sret argument. However, this is complex as it requires:
+      // 1. Adding the sret block argument
+      // 2. Updating all reussir.return ops to store to sret and return void
+      // For now, we mark the function with a custom attribute that the
+      // ReussirReturnOpConversionPattern can use
+      if (useSret) {
+        llvmFunc->setAttr("reussir.sret_func", mlir::UnitAttr::get(rewriter.getContext()));
+        llvmFunc->setAttr("reussir.sret_type", mlir::TypeAttr::get(sretType));
+
+        // Add the sret block argument to the entry block
+        mlir::Block &entryBlock = dstRegion.front();
+        entryBlock.insertArgument(
+            entryBlock.args_begin(),
+            mlir::LLVM::LLVMPointerType::get(rewriter.getContext()), loc);
+      }
+    }
+
+    // Copy other attributes (excluding function-specific ones)
+    for (auto attr : op->getAttrs()) {
+      llvm::StringRef attrName = attr.getName();
+      if (attrName == mlir::SymbolTable::getSymbolAttrName() ||
+          attrName == op.getFunctionTypeAttrName() ||
+          attrName == "sym_visibility" ||
+          attrName == op.getArgAttrsAttrName() ||
+          attrName == op.getResAttrsAttrName() ||
+          attrName == "linkage" ||
+          attrName == "llvm_visibility")
+        continue;
+      llvmFunc->setAttr(attrName, attr.getValue());
+    }
+
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
+
+struct ReussirReturnOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirReturnOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirReturnOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto operands = adaptor.getOperands();
+    mlir::Location loc = op.getLoc();
+
+    // Check if we're inside an sret function by looking for the parent LLVM func
+    // and checking for the reussir.sret_func attribute
+    mlir::LLVM::LLVMFuncOp parentFunc =
+        op->getParentOfType<mlir::LLVM::LLVMFuncOp>();
+
+    bool isSretFunc = parentFunc &&
+                      parentFunc->hasAttr("reussir.sret_func");
+
+    if (isSretFunc && !operands.empty()) {
+      // Get the sret pointer (first argument of the function)
+      mlir::Value sretPtr = parentFunc.getBody().front().getArgument(0);
+
+      // Get the sret type from the attribute
+      auto sretTypeAttr =
+          parentFunc->getAttrOfType<mlir::TypeAttr>("reussir.sret_type");
+      mlir::Type sretType = sretTypeAttr.getValue();
+
+      // Store the return value(s) to the sret pointer
+      if (operands.size() == 1) {
+        // Single return value - store directly
+        rewriter.create<mlir::LLVM::StoreOp>(loc, operands[0], sretPtr);
+      } else {
+        // Multiple return values - pack into struct and store
+        mlir::Value packed =
+            rewriter.create<mlir::LLVM::UndefOp>(loc, sretType);
+        for (auto [i, operand] : llvm::enumerate(operands)) {
+          packed = rewriter.create<mlir::LLVM::InsertValueOp>(loc, packed,
+                                                              operand, i);
+        }
+        rewriter.create<mlir::LLVM::StoreOp>(loc, packed, sretPtr);
+      }
+
+      // Return void
+      rewriter.replaceOpWithNewOp<mlir::LLVM::ReturnOp>(op, mlir::ValueRange{});
+    } else if (operands.empty()) {
+      // No return value
+      rewriter.replaceOpWithNewOp<mlir::LLVM::ReturnOp>(op, mlir::ValueRange{});
+    } else if (operands.size() == 1) {
+      // Single return value
+      rewriter.replaceOpWithNewOp<mlir::LLVM::ReturnOp>(op, operands[0]);
+    } else {
+      // Multiple return values - pack into a struct
+      auto structType = mlir::LLVM::LLVMStructType::getLiteral(
+          rewriter.getContext(),
+          llvm::to_vector(adaptor.getOperands().getTypes()));
+      mlir::Value packed =
+          rewriter.create<mlir::LLVM::UndefOp>(loc, structType);
+      for (auto [i, operand] : llvm::enumerate(operands)) {
+        packed = rewriter.create<mlir::LLVM::InsertValueOp>(loc, packed,
+                                                            operand, i);
+      }
+      rewriter.replaceOpWithNewOp<mlir::LLVM::ReturnOp>(op, packed);
+    }
+
+    return mlir::success();
+  }
+};
+
+
+struct ReussirCallOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirCallOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirCallOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    mlir::Location loc = op.getLoc();
+
+    // Convert result types
+    llvm::SmallVector<mlir::Type> convertedResultTypes;
+    if (failed(converter->convertTypes(op.getResultTypes(),
+                                       convertedResultTypes)))
+      return op.emitOpError("failed to convert result types");
+
+    // Check if the result type requires sret
+    bool useSret = false;
+    mlir::Type sretType;
+
+    if (!convertedResultTypes.empty()) {
+      mlir::Type resultType;
+      if (convertedResultTypes.size() == 1) {
+        resultType = convertedResultTypes[0];
+      } else {
+        // Multiple results packed into a struct
+        resultType = mlir::LLVM::LLVMStructType::getLiteral(
+            rewriter.getContext(), convertedResultTypes);
+      }
+
+      if (converter->shouldUseSret(resultType)) {
+        useSret = true;
+        sretType = resultType;
+      }
+    }
+
+    if (useSret) {
+      // Allocate stack space for the return value
+      auto one = rewriter.create<mlir::LLVM::ConstantOp>(
+          loc, rewriter.getI64Type(),
+          rewriter.getI64IntegerAttr(1));
+      mlir::Value sretPtr = rewriter.create<mlir::LLVM::AllocaOp>(
+          loc, mlir::LLVM::LLVMPointerType::get(rewriter.getContext()),
+          sretType, one);
+
+      // Prepend sret pointer to arguments
+      llvm::SmallVector<mlir::Value> callArgs;
+      callArgs.push_back(sretPtr);
+      callArgs.append(adaptor.getOperands().begin(),
+                      adaptor.getOperands().end());
+
+      // Call returns void when using sret
+      rewriter.create<mlir::LLVM::CallOp>(
+          loc, mlir::TypeRange{}, op.getCallee(), callArgs);
+
+      // Load the result from the sret pointer
+      mlir::Value result =
+          rewriter.create<mlir::LLVM::LoadOp>(loc, sretType, sretPtr);
+
+      // If original had multiple results, extract them
+      if (convertedResultTypes.size() > 1) {
+        llvm::SmallVector<mlir::Value> unpackedResults;
+        for (size_t i = 0; i < convertedResultTypes.size(); ++i) {
+          auto extracted = rewriter.create<mlir::LLVM::ExtractValueOp>(
+              loc, convertedResultTypes[i], result, i);
+          unpackedResults.push_back(extracted);
+        }
+        rewriter.replaceOp(op, unpackedResults);
+      } else {
+        rewriter.replaceOp(op, result);
+      }
+    } else {
+      // Normal call without sret
+      auto callOp = rewriter.create<mlir::LLVM::CallOp>(
+          loc, convertedResultTypes, op.getCallee(), adaptor.getOperands());
+      rewriter.replaceOp(op, callOp.getResults());
+    }
+
+    return mlir::success();
+  }
+};
+
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -2297,7 +2488,6 @@ struct BasicOpsLoweringPass
       mlir::RewritePatternSet patterns(&getContext());
       LLVMTypeConverter converter(getOperation());
       populateBasicOpsLoweringToLLVMConversionPatterns(converter, patterns);
-      // Use standard func dialect lowering for func.func/return/call
       mlir::populateFuncToLLVMFuncOpConversionPattern(converter, patterns);
       mlir::populateFuncToLLVMConversionPatterns(converter, patterns);
       mlir::arith::populateArithToLLVMConversionPatterns(converter, patterns);
@@ -2322,10 +2512,10 @@ struct BasicOpsLoweringPass
           ReussirRegionCreateOp, ReussirRcReinterpretOp, ReussirClosureApplyOp,
           ReussirClosureCloneOp, ReussirClosureEvalOp,
           ReussirClosureInspectPayloadOp, ReussirClosureCursorOp,
-          ReussirClosureTransferOp, ReussirClosureInstantiateOp,
-          ReussirClosureVtableOp, ReussirClosureCreateOp, ReussirRcFetchDecOp,
-          ReussirStrGlobalOp, ReussirStrLiteralOp, ReussirPanicOp,
-          ReussirStrLenOp, ReussirStrUnsafeByteAtOp, ReussirStrUnsafeStartWithOp,
+          ReussirClosureInstantiateOp, ReussirClosureVtableOp,
+          ReussirClosureCreateOp, ReussirRcFetchDecOp, ReussirStrGlobalOp,
+          ReussirStrLiteralOp, ReussirPanicOp, ReussirStrLenOp,
+          ReussirStrUnsafeByteAtOp, ReussirStrUnsafeStartWithOp,
           ReussirStrSliceOp, ReussirFuncOp, ReussirReturnOp, ReussirCallOp>();
       target.addLegalDialect<mlir::LLVM::LLVMDialect>();
       if (failed(applyPartialConversion(getOperation(), target,
