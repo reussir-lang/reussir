@@ -21,6 +21,8 @@ include "Reussir/IR/ReussirDialect.td"
 include "Reussir/IR/ReussirAttrs.td"
 include "Reussir/IR/ReussirTypes.td"
 include "Reussir/IR/ReussirInterfaces.td"
+include "mlir/Interfaces/CallInterfaces.td"
+include "mlir/Interfaces/FunctionInterfaces.td"
 
 class ReussirOp<string mnemonic, list<Trait> traits>
     : Op<ReussirDialect, mnemonic, traits>;
@@ -1405,4 +1407,168 @@ def ReussirStrSliceOp : ReussirStrOp<"slice", []> {
     `(` $str `:` type($str) `)` `[` $offset `]` `:` type($result) attr-dict
   }];
 }
+
+//===----------------------------------------------------------------------===//
+// Reussir Function Operations (CABI-aware replacements for func dialect)
+//===----------------------------------------------------------------------===//
+
+def ReussirFuncOp : ReussirOp<"func", [
+  AffineScope, AutomaticAllocationScope,
+  IsolatedFromAbove,
+  FunctionOpInterface
+]> {
+  let summary = "Reussir function with ABI-aware LLVM lowering";
+  let description = [{
+    `reussir.func` defines a function with automatic platform ABI handling.
+    Unlike `func.func`, this operation allows the Reussir-to-LLVM lowering
+    pass to retrieve target triple information and apply ABI transformations
+    (e.g., adding `sret` for large structures on Windows x64).
+
+    Example:
+    ```mlir
+    reussir.func @add(%a: i32, %b: i32) -> i32 {
+      %sum = arith.addi %a, %b : i32
+      reussir.return %sum : i32
+    }
+    ```
+  }];
+
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    TypeAttrOf<FunctionType>:$function_type,
+    OptionalAttr<StrAttr>:$sym_visibility,
+    OptionalAttr<StrAttr>:$linkage,
+    OptionalAttr<StrAttr>:$llvm_visibility,
+    OptionalAttr<DictArrayAttr>:$arg_attrs,
+    OptionalAttr<DictArrayAttr>:$res_attrs
+  );
+
+  let regions = (region AnyRegion:$body);
+
+  let builders = [
+    OpBuilder<(ins "::llvm::StringRef":$name, "::mlir::FunctionType":$type,
+      CArg<"::llvm::ArrayRef<::mlir::NamedAttribute>", "{}">:$attrs,
+      CArg<"::llvm::ArrayRef<::mlir::DictionaryAttr>", "{}">:$argAttrs)>
+  ];
+
+  let extraClassDeclaration = [{
+    /// Returns true if this function is external (has no body).
+    bool isExternal() { return getBody().empty(); }
+
+    /// Returns true if this function is a declaration (external).
+    bool isDeclaration() { return isExternal(); }
+    
+    /// Hook for FunctionOpInterface verifier.
+    ::mlir::LogicalResult verifyType();
+
+    //===------------------------------------------------------------------===//
+    // FunctionOpInterface Methods
+    //===------------------------------------------------------------------===//
+
+    /// Returns the callable region.
+    ::mlir::Region *getCallableRegion() { return isExternal() ? nullptr : &getBody(); }
+
+    /// Returns the argument types of this function.
+    ::llvm::ArrayRef<::mlir::Type> getArgumentTypes() { return getFunctionType().getInputs(); }
+
+    /// Returns the result types of this function.
+    ::llvm::ArrayRef<::mlir::Type> getResultTypes() { return getFunctionType().getResults(); }
+
+    //===------------------------------------------------------------------===//
+    // SymbolOpInterface Methods
+    //===------------------------------------------------------------------===//
+
+    bool isPrivate() {
+      return getSymVisibility() && *getSymVisibility() == "private";
+    }
+    bool isPublic() { return !isPrivate(); }
+  }];
+
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+def ReussirReturnOp : ReussirOp<"return", [
+  Pure, HasParent<"ReussirFuncOp">, ReturnLike, Terminator
+]> {
+  let summary = "Return from a reussir.func function";
+  let description = [{
+    `reussir.return` terminates a `reussir.func` function and optionally
+    returns values. The types of the operands must match the result types
+    of the enclosing function.
+
+    Example:
+    ```mlir
+    reussir.func @foo() -> i32 {
+      %c = arith.constant 42 : i32
+      reussir.return %c : i32
+    }
+    ```
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$operands);
+
+  let builders = [
+    OpBuilder<(ins), [{
+      build($_builder, $_state, std::nullopt);
+    }]>
+  ];
+
+  let assemblyFormat = "attr-dict ($operands^ `:` type($operands))?";
+
+  let hasVerifier = 1;
+}
+
+def ReussirCallOp : ReussirOp<"call", [
+  CallOpInterface,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Call a reussir.func function";
+  let description = [{
+    `reussir.call` invokes a function defined with `reussir.func`. This
+    operation enables platform-specific ABI handling during lowering to LLVM.
+
+    Example:
+    ```mlir
+    %result = reussir.call @add(%a, %b) : (i32, i32) -> i32
+    ```
+  }];
+
+  let arguments = (ins
+    FlatSymbolRefAttr:$callee,
+    Variadic<AnyType>:$operands,
+    OptionalAttr<DictArrayAttr>:$arg_attrs,
+    OptionalAttr<DictArrayAttr>:$res_attrs
+  );
+
+  let results = (outs Variadic<AnyType>:$results);
+
+  let extraClassDeclaration = [{
+    /// Get the argument operands to the called function.
+    ::mlir::Operation::operand_range getArgOperands() {
+      return getOperands();
+    }
+
+    ::mlir::MutableOperandRange getArgOperandsMutable() {
+      return getOperandsMutable();
+    }
+
+    /// Return the callee of this operation.
+    ::mlir::CallInterfaceCallable getCallableForCallee() {
+      return getCalleeAttr();
+    }
+
+    /// Set the callee for this operation.
+    void setCalleeFromCallable(::mlir::CallInterfaceCallable callee) {
+      setCalleeAttr(::mlir::cast<::mlir::FlatSymbolRefAttr>(::mlir::cast<::mlir::SymbolRefAttr>(callee)));
+    }
+  }];
+
+  let assemblyFormat = [{
+    $callee `(` $operands `)` attr-dict `:` functional-type($operands, $results)
+  }];
+
+  let hasVerifier = 1;
+}
+
 #endif // REUSSIR_IR_REUSSIROPS_TD

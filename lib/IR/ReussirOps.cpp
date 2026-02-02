@@ -34,6 +34,7 @@
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/IR/Types.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
+#include <mlir/Interfaces/FunctionImplementation.h>
 
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirEnumAttrs.h"
@@ -1958,4 +1959,163 @@ gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
     op.erase();
   return finalModule;
 }
+
+//===----------------------------------------------------------------------===//
+// ReussirFuncOp
+//===----------------------------------------------------------------------===//
+
+void ReussirFuncOp::build(mlir::OpBuilder &odsBuilder,
+                          mlir::OperationState &odsState, llvm::StringRef name,
+                          mlir::FunctionType type,
+                          llvm::ArrayRef<mlir::NamedAttribute> attrs,
+                          llvm::ArrayRef<mlir::DictionaryAttr> argAttrs) {
+  odsState.addAttribute(mlir::SymbolTable::getSymbolAttrName(),
+                        odsBuilder.getStringAttr(name));
+  odsState.addAttribute(getFunctionTypeAttrName(odsState.name),
+                        mlir::TypeAttr::get(type));
+  odsState.attributes.append(attrs.begin(), attrs.end());
+  odsState.addRegion();
+
+  if (argAttrs.empty())
+    return;
+  assert(argAttrs.size() == type.getNumInputs());
+  mlir::call_interface_impl::addArgAndResultAttrs(
+      odsBuilder, odsState, argAttrs,
+      /*resultAttrs=*/{}, getArgAttrsAttrName(odsState.name),
+      getResAttrsAttrName(odsState.name));
+}
+
+mlir::ParseResult ReussirFuncOp::parse(mlir::OpAsmParser &parser,
+                                       mlir::OperationState &result) {
+  auto buildFuncType = [](mlir::Builder &builder,
+                          llvm::ArrayRef<mlir::Type> argTypes,
+                          llvm::ArrayRef<mlir::Type> resultTypes,
+                          mlir::function_interface_impl::VariadicFlag,
+                          std::string &) {
+    return builder.getFunctionType(argTypes, resultTypes);
+  };
+
+  return mlir::function_interface_impl::parseFunctionOp(
+      parser, result, /*allowVariadic=*/false,
+      getFunctionTypeAttrName(result.name), buildFuncType,
+      getArgAttrsAttrName(result.name), getResAttrsAttrName(result.name));
+}
+
+void ReussirFuncOp::print(mlir::OpAsmPrinter &p) {
+  mlir::function_interface_impl::printFunctionOp(
+      p, *this, /*isVariadic=*/false, getFunctionTypeAttrName(),
+      getArgAttrsAttrName(), getResAttrsAttrName());
+}
+
+mlir::LogicalResult ReussirFuncOp::verifyType() {
+  auto type = getFunctionType();
+  if (!type)
+    return emitOpError("requires a function type attribute");
+
+  if (!isExternal()) {
+    auto &entryBlock = getBody().front();
+    auto argTypes = type.getInputs();
+    if (entryBlock.getNumArguments() != argTypes.size())
+      return emitOpError("entry block has ")
+             << entryBlock.getNumArguments()
+             << " arguments, but function expects " << argTypes.size();
+
+    for (auto [i, argType] : llvm::enumerate(argTypes)) {
+      if (entryBlock.getArgument(i).getType() != argType)
+        return emitOpError("type of entry block argument #")
+               << i << " does not match function signature";
+    }
+  }
+  return mlir::success();
+}
+
+mlir::LogicalResult ReussirFuncOp::verify() {
+  return verifyType();
+}
+
+//===----------------------------------------------------------------------===//
+// ReussirReturnOp
+//===----------------------------------------------------------------------===//
+
+mlir::LogicalResult ReussirReturnOp::verify() {
+  auto funcOp = (*this)->getParentOfType<ReussirFuncOp>();
+  if (!funcOp)
+    return emitOpError("expected parent to be reussir.func");
+
+  auto funcResultTypes = funcOp.getFunctionType().getResults();
+  auto operandTypes = getOperandTypes();
+
+  if (funcResultTypes.size() != operandTypes.size())
+    return emitOpError("has ")
+           << operandTypes.size() << " operand(s), but enclosing function "
+           << "returns " << funcResultTypes.size() << " value(s)";
+
+  for (size_t i = 0; i < funcResultTypes.size(); ++i) {
+    if (funcResultTypes[i] != operandTypes[i])
+      return emitOpError("type of return operand ")
+             << i << " (" << operandTypes[i]
+             << ") doesn't match function result type (" << funcResultTypes[i]
+             << ")";
+  }
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
+// ReussirCallOp
+//===----------------------------------------------------------------------===//
+
+mlir::LogicalResult ReussirCallOp::verify() {
+  // Basic verification - symbol verification happens in verifySymbolUses
+  return mlir::success();
+}
+
+mlir::LogicalResult
+ReussirCallOp::verifySymbolUses(mlir::SymbolTableCollection &symbolTable) {
+  // Look up the callee - first try ReussirFuncOp, then fall back to func::FuncOp
+  auto reussirFuncOp = symbolTable.lookupNearestSymbolFrom<ReussirFuncOp>(
+      getOperation(), getCalleeAttr());
+  auto stdFuncOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
+      getOperation(), getCalleeAttr());
+
+  if (!reussirFuncOp && !stdFuncOp)
+    return emitOpError("'") << getCallee() << "' does not reference a valid function";
+
+  mlir::FunctionType funcType;
+  if (reussirFuncOp)
+    funcType = reussirFuncOp.getFunctionType();
+  else
+    funcType = stdFuncOp.getFunctionType();
+
+  // Check operand count
+  auto argTypes = getOperandTypes();
+  if (funcType.getNumInputs() != argTypes.size())
+    return emitOpError("incorrect number of operands for callee: expected ")
+           << funcType.getNumInputs() << ", got " << argTypes.size();
+
+  // Check operand types
+  for (size_t i = 0; i < funcType.getNumInputs(); ++i) {
+    if (funcType.getInput(i) != argTypes[i])
+      return emitOpError("operand type mismatch at index ")
+             << i << ": expected " << funcType.getInput(i) << ", got "
+             << argTypes[i];
+  }
+
+  // Check result count
+  auto resultTypes = getResultTypes();
+  if (funcType.getNumResults() != resultTypes.size())
+    return emitOpError("incorrect number of results for callee: expected ")
+           << funcType.getNumResults() << ", got " << resultTypes.size();
+
+  // Check result types
+  for (size_t i = 0; i < funcType.getNumResults(); ++i) {
+    if (funcType.getResult(i) != resultTypes[i])
+      return emitOpError("result type mismatch at index ")
+             << i << ": expected " << funcType.getResult(i) << ", got "
+             << resultTypes[i];
+  }
+
+  return mlir::success();
+}
+
 } // namespace reussir
+
