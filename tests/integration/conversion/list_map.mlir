@@ -35,7 +35,7 @@
 !closure = !reussir.rc<!reussir.closure<(!rc_i64) -> !rc_i64>>
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> : vector<2xi64>>, #dlti.dl_entry<i128, dense<128> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<f128, dense<128> : vector<2xi64>>, #dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<f16, dense<16> : vector<2xi64>>, #dlti.dl_entry<i1, dense<8> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi64>>, #dlti.dl_entry<i8, dense<8> : vector<2xi64>>, #dlti.dl_entry<i16, dense<16> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi64>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"} 
 {
-    func.func private @get_closure(%delta: i64) -> !closure {
+    reussir.func private @get_closure(%delta: i64) -> !closure {
         %init = reussir.closure.create -> !reussir.rc<!reussir.closure<(i64, !rc_i64) -> !rc_i64>> {
             body {
                 ^bb0(%arg0 : i64, %arg2 : !rc_i64):
@@ -51,9 +51,9 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
         %res = reussir.closure.apply (%delta : i64) to 
             (%init : !reussir.rc<!reussir.closure<(i64, !rc_i64) -> !rc_i64>>) 
             : !closure
-        func.return %res : !closure
+        reussir.return %res : !closure
     }
-    func.func private @cons(%data: i64, %tail: !rc_list) -> !rc_list attributes {
+    reussir.func private @cons(%data: i64, %tail: !rc_list) -> !rc_list attributes {
         llvm.linkage = #llvm.linkage<internal>
     } {
         %cell = reussir.record.compound(%data : i64) : !cell
@@ -61,9 +61,9 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
         %cons = reussir.record.compound(%rc, %tail : !rc_i64, !rc_list) : !list_cons
         %list = reussir.record.variant[0] (%cons : !list_cons) : !list
         %res = reussir.rc.create value(%list : !list) : !rc_list
-        func.return %res : !rc_list
+        reussir.return %res : !rc_list
     }
-    func.func @list_0123() -> !rc_list {
+    reussir.func @list_0123() -> !rc_list {
         %nil = reussir.record.compound : !list_nil
         %nil_variant = reussir.record.variant[1] (%nil : !list_nil) : !list
         %nil_rc = reussir.rc.create value(%nil_variant : !list) : !rc_list
@@ -73,15 +73,15 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
         %2 = arith.constant 2 : i64
         %3 = arith.constant 3 : i64
 
-        %list3 = func.call @cons(%3, %nil_rc) : (i64, !rc_list) -> !rc_list
-        %list2 = func.call @cons(%2, %list3) : (i64, !rc_list) -> !rc_list
-        %list1 = func.call @cons(%1, %list2) : (i64, !rc_list) -> !rc_list
-        %list0 = func.call @cons(%0, %list1) : (i64, !rc_list) -> !rc_list
-        func.return %list0 : !rc_list
+        %list3 = reussir.call @cons(%3, %nil_rc) : (i64, !rc_list) -> !rc_list
+        %list2 = reussir.call @cons(%2, %list3) : (i64, !rc_list) -> !rc_list
+        %list1 = reussir.call @cons(%1, %list2) : (i64, !rc_list) -> !rc_list
+        %list0 = reussir.call @cons(%0, %list1) : (i64, !rc_list) -> !rc_list
+        reussir.return %list0 : !rc_list
     }
-    func.func private @print_i64(i64)
+    reussir.func private @print_i64(i64)
     // print list with consuming
-    func.func private @print_list(%list: !rc_list) {
+    reussir.func private @print_list(%list: !rc_list) {
         %borrow = reussir.rc.borrow (%list : !rc_list) : !reussir.ref<!list>
         reussir.record.dispatch (%borrow : !reussir.ref<!list>) {
             [0] -> {
@@ -95,8 +95,8 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
                 %tail_rc = reussir.ref.load (%tail_ref : !reussir.ref<!rc_list>) : !rc_list
                 reussir.rc.inc (%tail_rc : !rc_list)
                 %to_free = reussir.rc.dec (%list : !rc_list) : !nullable_token_rc_list
-                func.call @print_i64(%head) : (i64) -> ()
-                func.call @print_list(%tail_rc) : (!rc_list) -> ()
+                reussir.call @print_i64(%head) : (i64) -> ()
+                reussir.call @print_list(%tail_rc) : (!rc_list) -> ()
                 reussir.scf.yield
             }
             [1] -> {
@@ -105,9 +105,9 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
                 reussir.scf.yield
             }
         }
-        func.return
+        reussir.return
     }
-    func.func @apply(%closure: !closure, %list: !rc_list) -> !rc_list {
+    reussir.func @apply(%closure: !closure, %list: !rc_list) -> !rc_list {
         %list_ref = reussir.rc.borrow (%list : !rc_list) : !reussir.ref<!list>
         %res = reussir.record.dispatch (%list_ref : !reussir.ref<!list>) -> !rc_list {
             [0] -> {
@@ -123,7 +123,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
                 %closure_ = reussir.closure.uniqify (%closure : !closure) : !closure
                 %head_applied_ = reussir.closure.apply (%head_rc : !rc_i64) to (%closure_ : !closure) : !reussir.rc<!reussir.closure<() -> !rc_i64>>
                 %head_applied = reussir.closure.eval (%head_applied_ : !reussir.rc<!reussir.closure<() -> !rc_i64>>) : !rc_i64
-                %tail_applied = func.call @apply(%closure, %tail_rc) : (!closure, !rc_list) -> !rc_list
+                %tail_applied = reussir.call @apply(%closure, %tail_rc) : (!closure, !rc_list) -> !rc_list
                 %new_cons = reussir.record.compound(%head_applied, %tail_applied : !rc_i64, !rc_list) : !list_cons
                 %new_list = reussir.record.variant[0] (%new_cons : !list_cons) : !list
                 %res_list = reussir.rc.create value(%new_list : !list) : !rc_list
@@ -135,9 +135,9 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
                 reussir.scf.yield %list : !rc_list
             }
         }
-        func.return %res : !rc_list
+        reussir.return %res : !rc_list
     }
-    func.func @reverse_impl(%list: !rc_list, %acc: !rc_list) -> !rc_list 
+    reussir.func @reverse_impl(%list: !rc_list, %acc: !rc_list) -> !rc_list 
         attributes { llvm.linkage = #llvm.linkage<internal> }
     {
         %list_ref = reussir.rc.borrow (%list : !rc_list) : !reussir.ref<!list>
@@ -154,7 +154,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
                 %new_cons = reussir.record.compound(%head_rc, %acc : !rc_i64, !rc_list) : !list_cons
                 %new_list = reussir.record.variant[0] (%new_cons : !list_cons) : !list
                 %new_acc = reussir.rc.create value(%new_list : !list) : !rc_list
-                %res_list = func.call @reverse_impl(%tail_rc, %new_acc) : (!rc_list, !rc_list) -> !rc_list
+                %res_list = reussir.call @reverse_impl(%tail_rc, %new_acc) : (!rc_list, !rc_list) -> !rc_list
                 reussir.scf.yield %res_list : !rc_list
             }
             [1] -> {
@@ -163,27 +163,27 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
                 reussir.scf.yield %acc : !rc_list
             }
         }
-        func.return %res : !rc_list
+        reussir.return %res : !rc_list
     }
-    func.func @reverse(%list: !rc_list) -> !rc_list {
+    reussir.func @reverse(%list: !rc_list) -> !rc_list {
         %nil = reussir.record.compound : !list_nil
         %nil_variant = reussir.record.variant[1] (%nil : !list_nil) : !list
         %nil_rc = reussir.rc.create value(%nil_variant : !list) : !rc_list
-        %res = func.call @reverse_impl(%list, %nil_rc) : (!rc_list, !rc_list) -> !rc_list
-        func.return %res : !rc_list
+        %res = reussir.call @reverse_impl(%list, %nil_rc) : (!rc_list, !rc_list) -> !rc_list
+        reussir.return %res : !rc_list
     }
-    func.func @main() -> i32 {
-        %list = func.call @list_0123() : () -> !rc_list
+    reussir.func @main() -> i32 {
+        %list = reussir.call @list_0123() : () -> !rc_list
         reussir.rc.inc (%list : !rc_list)
-        func.call @print_list(%list) : (!rc_list) -> ()
+        reussir.call @print_list(%list) : (!rc_list) -> ()
         %one = arith.constant 1 : i64
-        %closure = func.call @get_closure(%one) : (i64) -> !closure
+        %closure = reussir.call @get_closure(%one) : (i64) -> !closure
         reussir.rc.inc (%closure : !closure)
-        %applied_once = func.call @apply(%closure, %list) : (!closure, !rc_list) -> !rc_list
-        %applied_twice = func.call @apply(%closure, %applied_once) : (!closure, !rc_list) -> !rc_list
-        %reversed = func.call @reverse(%applied_twice) : (!rc_list) -> !rc_list
-        func.call @print_list(%reversed) : (!rc_list) -> ()
+        %applied_once = reussir.call @apply(%closure, %list) : (!closure, !rc_list) -> !rc_list
+        %applied_twice = reussir.call @apply(%closure, %applied_once) : (!closure, !rc_list) -> !rc_list
+        %reversed = reussir.call @reverse(%applied_twice) : (!rc_list) -> !rc_list
+        reussir.call @print_list(%reversed) : (!rc_list) -> ()
         %zero = arith.constant 0 : i32
-        func.return %zero : i32
+        reussir.return %zero : i32
     }
 }

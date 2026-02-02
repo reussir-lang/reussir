@@ -22,6 +22,7 @@
 #include <mlir/Transforms/DialectConversion.h>
 
 #include "Reussir/IR/ReussirTypes.h"
+#include "Reussir/IR/ReussirOps.h"
 
 namespace reussir {
 
@@ -36,7 +37,7 @@ namespace reussir {
 // locally.
 //
 //===----------------------------------------------------------------------===//
-llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func);
+llvm::LogicalResult runIncDecCancellation(ReussirFuncOp func);
 
 } // namespace reussir
 

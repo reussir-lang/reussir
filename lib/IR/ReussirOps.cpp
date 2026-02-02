@@ -173,13 +173,22 @@ mlir::LogicalResult
 ReussirRcDecOp::verifySymbolUses(mlir::SymbolTableCollection &symbolTable) {
   RcType rcType = getRcPtr().getType();
   if (auto eleTy = mlir::dyn_cast<FFIObjectType>(rcType.getElementType())) {
-    auto funcOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
+    // Look for ReussirFuncOp first, then fall back to func::FuncOp
+    mlir::FunctionType funcType;
+    auto reussirFuncOp = symbolTable.lookupNearestSymbolFrom<ReussirFuncOp>(
         getOperation(), eleTy.getCleanupHook());
-    if (!funcOp)
-      return emitOpError("cleanup hook not found: ") << eleTy.getCleanupHook();
-    if (funcOp.getFunctionType().getNumInputs() != 1 ||
-        funcOp.getFunctionType().getNumResults() != 0 ||
-        funcOp.getFunctionType().getInput(0) != rcType)
+    if (reussirFuncOp) {
+      funcType = reussirFuncOp.getFunctionType();
+    } else {
+      auto stdFuncOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
+          getOperation(), eleTy.getCleanupHook());
+      if (!stdFuncOp)
+        return emitOpError("cleanup hook not found: ") << eleTy.getCleanupHook();
+      funcType = stdFuncOp.getFunctionType();
+    }
+    if (funcType.getNumInputs() != 1 ||
+        funcType.getNumResults() != 0 ||
+        funcType.getInput(0) != rcType)
       return emitOpError(
           "cleanup hook must be a function with one argument and no return "
           "type, and the argument type must match the RC element type");
@@ -766,15 +775,23 @@ void ReussirRecordDispatchOp::getSuccessorRegions(
 mlir::LogicalResult ReussirRegionVTableOp::verifySymbolUses(
     mlir::SymbolTableCollection &symbolTable) {
   if (getDropAttr()) {
-    auto funcOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
+    // Look for ReussirFuncOp first, then fall back to func::FuncOp
+    mlir::FunctionType funcType;
+    auto reussirFuncOp = symbolTable.lookupNearestSymbolFrom<ReussirFuncOp>(
         getOperation(), getDropAttr());
-    if (!funcOp)
-      return emitOpError("drop function not found: ") << getDropAttr();
+    if (reussirFuncOp) {
+      funcType = reussirFuncOp.getFunctionType();
+    } else {
+      auto stdFuncOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
+          getOperation(), getDropAttr());
+      if (!stdFuncOp)
+        return emitOpError("drop function not found: ") << getDropAttr();
+      funcType = stdFuncOp.getFunctionType();
+    }
 
     // Check that the drop function has the correct signature:
     // single input parameter of RefType with unspecified capability, zero
     // outputs
-    mlir::FunctionType funcType = funcOp.getFunctionType();
 
     // Must have exactly one input and zero outputs
     if (funcType.getNumInputs() != 1)
@@ -1340,20 +1357,33 @@ RcBoxType ReussirClosureCreateOp::getRcClosureBoxType() {
 mlir::LogicalResult ReussirClosureVtableOp::verifySymbolUses(
     mlir::SymbolTableCollection &symbolTable) {
   // NYI for body
-  auto funcOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
+  // Look for ReussirFuncOp first, then fall back to func::FuncOp
+  auto funcOp = symbolTable.lookupNearestSymbolFrom<ReussirFuncOp>(
       getOperation(), getFuncAttr());
-  if (!funcOp)
-    return emitOpError("function not found: ") << getFuncAttr();
+  if (!funcOp) {
+    auto stdFuncOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
+        getOperation(), getFuncAttr());
+    if (!stdFuncOp)
+      return emitOpError("function not found: ") << getFuncAttr();
+  }
 
-  auto dropOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
+  auto dropOp = symbolTable.lookupNearestSymbolFrom<ReussirFuncOp>(
       getOperation(), getDropAttr());
-  if (!dropOp)
-    return emitOpError("drop function not found: ") << getDropAttr();
+  if (!dropOp) {
+    auto stdDropOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
+        getOperation(), getDropAttr());
+    if (!stdDropOp)
+      return emitOpError("drop function not found: ") << getDropAttr();
+  }
 
-  auto cloneOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
+  auto cloneOp = symbolTable.lookupNearestSymbolFrom<ReussirFuncOp>(
       getOperation(), getCloneAttr());
-  if (!cloneOp)
-    return emitOpError("clone function not found: ") << getCloneAttr();
+  if (!cloneOp) {
+    auto stdCloneOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
+        getOperation(), getCloneAttr());
+    if (!stdCloneOp)
+      return emitOpError("clone function not found: ") << getCloneAttr();
+  }
 
   return mlir::success();
 }

@@ -8,17 +8,17 @@
 module {
     // CHECK-LABEL: reussir.ref.drop
     // CHECK-SAME: variant[1]
-    func.func @case_1(
+    reussir.func @case_1(
         %rc: !reussir.rc<!list>
     ) {
         %ref = reussir.rc.borrow(%rc : !reussir.rc<!list>) : !reussir.ref<!list>
         %ref_ = reussir.record.coerce [1] (%ref : !reussir.ref<!list>) : !reussir.ref<!list_cons>
         %token = reussir.rc.dec (%rc : !reussir.rc<!list>) : !reussir.nullable<!reussir.token<align: 8, size: 32>>
         reussir.token.free (%token : !reussir.nullable<!reussir.token<align: 8, size: 32>>)
-        return
+        reussir.return
     }
 
-    func.func @case_2(
+    reussir.func @case_2(
         %rc: !reussir.rc<!list>
     ) {
         %ref = reussir.rc.borrow(%rc : !reussir.rc<!list>) : !reussir.ref<!list>
@@ -40,6 +40,6 @@ module {
                     reussir.scf.yield
             }
         }
-        return
+        reussir.return
     }
 }

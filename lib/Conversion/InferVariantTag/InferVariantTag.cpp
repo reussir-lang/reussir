@@ -37,7 +37,7 @@ struct InferVariantTagPass
 };
 } // namespace
 
-void runTagInference(mlir::func::FuncOp func) {
+void runTagInference(ReussirFuncOp func) {
   // Initialize analyses
   mlir::AliasAnalysis aliasAnalysis(func);
   mlir::DominanceInfo dominanceInfo(func);
@@ -62,7 +62,7 @@ void runTagInference(mlir::func::FuncOp func) {
             coercionOp.getTag().getZExtValue();
 
     mlir::Region *region = block->getParent();
-    while (region && region->getParentOp() != func) {
+    while (region && region->getParentOp() != func.getOperation()) {
       ReussirRecordDispatchOp dispatchOp =
           llvm::dyn_cast<ReussirRecordDispatchOp>(region->getParentOp());
       if (dispatchOp) {

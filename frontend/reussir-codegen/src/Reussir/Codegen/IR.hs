@@ -400,7 +400,7 @@ funcCallCodegen (FuncCall target args result) = emitLine $ do
     tyList <- mapM (emit . snd) args
     for_ result $ emit . fst >=> emitBuilder . (<> " = ")
     let target' = symbolBuilder target
-    emitBuilder $ "func.call @\"" <> target' <> "\"(" <> intercalate ", " argList <> ")"
+    emitBuilder $ "reussir.call @\"" <> target' <> "\"(" <> intercalate ", " argList <> ")"
     emitBuilder $ " : (" <> intercalate ", " tyList <> ")"
     retTy <- maybe mempty (emit . snd) result
     emitBuilder $ " -> (" <> retTy <> ")"
@@ -457,7 +457,7 @@ panicCodegen message = emitBuilderLine $ "reussir.panic " <> fromString (show me
 
 returnCodegen :: Maybe TypedValue -> Codegen ()
 returnCodegen result = emitLine $ do
-    emitBuilder "func.return"
+    emitBuilder "reussir.return"
     for_ result $ fmtTypedValue >=> emitBuilder . (" " <>)
 
 nullableCheckCodegen :: TypedValue -> TypedValue -> Codegen ()
@@ -709,7 +709,7 @@ functionCodegen function = do
     let symbol = symbolBuilder (funcSymbol function)
     args <- mapM fmtTypedValue (funcArgs function)
     emitIndentation
-    emitBuilder $ "func.func" <> mlirVis <> "@\"" <> symbol <> "\""
+    emitBuilder $ "reussir.func" <> mlirVis <> "@\"" <> symbol <> "\""
     emitBuilder $ "(" <> intercalate ", " args <> ")"
     let result = funcResult function
     unless (isVoidType result) $ do

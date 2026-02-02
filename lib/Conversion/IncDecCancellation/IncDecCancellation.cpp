@@ -70,7 +70,7 @@ void eraseOrReplaceDecOp(ReussirRcDecOp decOp) {
 
 } // namespace
 
-llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func) {
+llvm::LogicalResult runIncDecCancellation(ReussirFuncOp func) {
   mlir::AliasAnalysis aliasAnalysis(func);
   registerAliasAnalysisImplementations(aliasAnalysis);
   mlir::PostDominanceInfo postDominanceInfo(func);

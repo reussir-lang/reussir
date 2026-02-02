@@ -120,18 +120,18 @@ llvm::CodeGenOptLevel toLlvmOptLevel(ReussirOptOption opt) {
 }
 void createLoweringPipeline(mlir::PassManager &pm) {
   // match the pipeline in list_map.mlir
-  pm.addNestedPass<mlir::func::FuncOp>(
+  pm.addNestedPass<reussir::ReussirFuncOp>(
       reussir::createReussirTokenInstantiationPass());
   pm.addPass(reussir::createReussirClosureOutliningPass());
   pm.addPass(reussir::createReussirRegionPatternsPass());
-  pm.addNestedPass<mlir::func::FuncOp>(
+  pm.addNestedPass<reussir::ReussirFuncOp>(
       reussir::createReussirIncDecCancellationPass());
   pm.addPass(reussir::createReussirRcDecrementExpansionPass());
-  pm.addNestedPass<mlir::func::FuncOp>(
+  pm.addNestedPass<reussir::ReussirFuncOp>(
       reussir::createReussirInferVariantTagPass());
   pm.addPass(reussir::createReussirDropExpansionPass());
   pm.addPass(reussir::createReussirSCFOpsLoweringPass());
-  pm.addNestedPass<mlir::func::FuncOp>(
+  pm.addNestedPass<reussir::ReussirFuncOp>(
       reussir::createReussirIncDecCancellationPass());
 
   reussir::ReussirDropExpansionPassOptions options;
@@ -139,7 +139,7 @@ void createLoweringPipeline(mlir::PassManager &pm) {
   options.outlineRecord = true;
   pm.addPass(reussir::createReussirDropExpansionPass(options));
 
-  pm.addNestedPass<mlir::func::FuncOp>(reussir::createReussirTokenReusePass());
+  pm.addNestedPass<reussir::ReussirFuncOp>(reussir::createReussirTokenReusePass());
   pm.addPass(reussir::createReussirSCFOpsLoweringPass());
   pm.addPass(reussir::createReussirCompilePolymorphicFFIPass());
 

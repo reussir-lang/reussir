@@ -104,7 +104,7 @@ class ReussirTokenInstantiationPass
           ReussirTokenInstantiationPass> {
 public:
   void runOnOperation() override {
-    mlir::func::FuncOp funcOp = getOperation();
+    ReussirFuncOp funcOp = getOperation();
 
     // Set up the pattern rewrite infrastructure
     mlir::RewritePatternSet patterns(&getContext());

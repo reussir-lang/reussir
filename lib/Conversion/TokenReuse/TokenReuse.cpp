@@ -246,7 +246,7 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
     for (auto &op : region.front()) {
       if (isa<mlir::LoopLikeOpInterface>(op) ||
           isa<mlir::CallOpInterface>(op)) {
-        mlir::func::CallOp funcCall = llvm::dyn_cast<mlir::func::CallOp>(op);
+        ReussirCallOp funcCall = llvm::dyn_cast<ReussirCallOp>(op);
         // skip intrinsic calls
         if (!funcCall ||
             !funcCall.getCallee().starts_with("core::intrinsic::")) {

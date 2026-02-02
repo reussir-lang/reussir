@@ -17,7 +17,7 @@
 // Test basic closure creation, application, and evaluation
 module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>>} {
   // Helper function that creates and returns a closure
-  func.func private @create_add_one_closure() -> !reussir.rc<!reussir.closure<(i32) -> i32>> attributes { llvm.linkage = #llvm.linkage<internal> } {
+  reussir.func private @create_add_one_closure() -> !reussir.rc<!reussir.closure<(i32) -> i32>> attributes { llvm.linkage = #llvm.linkage<internal> } {
     %token = reussir.token.alloc : !reussir.token<align: 8, size: 32>
     %closure = reussir.closure.create -> !reussir.rc<!reussir.closure<(i32) -> i32>> {
       token(%token : !reussir.token<align: 8, size: 32>)
@@ -28,18 +28,18 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
           reussir.closure.yield %add : i32
       }
     }
-    return %closure : !reussir.rc<!reussir.closure<(i32) -> i32>>
+    reussir.return %closure : !reussir.rc<!reussir.closure<(i32) -> i32>>
   }
 
   // Main function: create closure, apply 41, eval should give 42, return 42-42=0
-  func.func @main() -> i32 {
-    %closure = func.call @create_add_one_closure() : () -> !reussir.rc<!reussir.closure<(i32) -> i32>>
+  reussir.func @main() -> i32 {
+    %closure = reussir.call @create_add_one_closure() : () -> !reussir.rc<!reussir.closure<(i32) -> i32>>
     %c41 = arith.constant 41 : i32
     %c42 = arith.constant 42 : i32
     %applied = reussir.closure.apply (%c41 : i32) to (%closure : !reussir.rc<!reussir.closure<(i32) -> i32>>) : !reussir.rc<!reussir.closure<() -> i32>>
     %evaluated = reussir.closure.eval (%applied : !reussir.rc<!reussir.closure<() -> i32>>) : i32
     %res = arith.subi %evaluated, %c42 : i32
-    func.return %res : i32
+    reussir.return %res : i32
   }
 }
 
