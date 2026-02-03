@@ -26,13 +26,13 @@ data PatternKind
         { patCtorPath :: Path
         , patCtorArgs :: V.Vector PatternCtorArg
         , patCtorHasEllipsis :: Bool 
-        , patCtorIsNamed :: Bool
+        , patCtorIsNamed :: Bool -- FIXME: did AI add this?
         }
     | ConstPat Constant
      deriving (Eq, Show)
 
 data PatternCtorArg
-    = PatternCtorArg 
+    = PatternCtorArg -- TODO: seems that there is something off here. we shouldn't need to record ctor is named or not
     { patCtorArgField :: Maybe Identifier
     , patCtorArgKind :: PatternKind 
     }

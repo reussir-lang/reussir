@@ -10,6 +10,9 @@ import Reussir.Core.Data.UniqueID (ExprID, VarID)
 import Reussir.Parser.Types.Lexer (Identifier, Path)
 import qualified Data.IntMap.Strict as IntMap
 import qualified Data.Vector.Strict as V
+import qualified Data.HashMap.Strict as HashMap
+import qualified Data.Text as T
+import Data.Digest.XXHash.FFI
 
 data ExprKind
     = GlobalStr StringToken
@@ -61,7 +64,7 @@ data DecisionTree a
     | DTUnreachable
     | DTLeaf {
         dtLeafBody :: a,
-        dtLeafBindings :: [Maybe VarID] -- positional bindings
+        dtLeafBindings :: [Maybe VarID] -- positional bindings (DB Level order)
     }
     | DTGuard {
         dtGuardBindings :: [Maybe VarID],
@@ -70,16 +73,27 @@ data DecisionTree a
         dtGuardFalse :: DecisionTree a
     }
     | DTSwitch {
-        dtSwitchPosition :: Int,
-        dtSwitchCases :: DTSwitchCases a,
-        dtSwitchDefault :: DecisionTree a
+        dtSwitchDeBruijnLvl :: Int,  -- DB Level of the switch
+        dtSwitchCases :: DTSwitchCases a
     }
 
 data DTSwitchCases a
-    = DTSwitchInt (IntMap.IntMap (DecisionTree a))
-    | DTSwitchBool (DecisionTree a) (DecisionTree a)
-    | DTSwitchCtor (V.Vector (DecisionTree a))
-    | DTSwitchString (IntMap.IntMap (DecisionTree a))
+    = DTSwitchInt {
+        dtSwitchIntMap :: IntMap.IntMap (DecisionTree a),
+        dtSwitchIntDefault :: DecisionTree a
+    }
+    | DTSwitchBool {
+        dtSwitchBoolTrue :: DecisionTree a,
+        dtSwitchBoolFalse :: DecisionTree a
+    }
+    | DTSwitchCtor {
+        dtSwitchCtorCases :: V.Vector (DecisionTree a),
+        dtSwitchCtorDefault :: DecisionTree a
+    }
+    | DTSwitchString {
+        dtSwitchStringMap :: HashMap.HashMap (XXH3 T.Text) (DecisionTree a),
+        dtSwitchStringDefault :: DecisionTree a
+    }
 
 data Expr = Expr
     { exprKind :: ExprKind

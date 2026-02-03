@@ -50,6 +50,7 @@ library
         Reussir.Core.Semi.Tyck
         Reussir.Core.Semi.FlowAnalysis
         Reussir.Core.Semi.Pretty
+        Reussir.Core.Semi.PatternMatch
         Reussir.Core.Full.Record
         Reussir.Core.Full.Type
         Reussir.Core.Full.Context
