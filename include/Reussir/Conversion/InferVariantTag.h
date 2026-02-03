@@ -16,10 +16,11 @@
 #ifndef REUSSIR_CONVERSION_INFERVARIANTTAG_H
 #define REUSSIR_CONVERSION_INFERVARIANTTAG_H
 
-#include <mlir/Dialect/Func/IR/FuncOps.h>
+#include "Reussir/IR/ReussirOps.h"
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/DialectConversion.h>
+#include "llvm/Support/LogicalResult.h"
 
 #include "Reussir/IR/ReussirTypes.h"
 
@@ -62,7 +63,7 @@ namespace reussir {
 // attribute to the drop operation.
 //===----------------------------------------------------------------------===//
 
-void runTagInference(mlir::func::FuncOp func);
+llvm::LogicalResult runInferVariantTag(reussir::ReussirFuncOp func);
 
 } // namespace reussir
 

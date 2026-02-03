@@ -16,7 +16,7 @@
 #ifndef REUSSIR_CONVERSION_INCDECCANCELLATION_H
 #define REUSSIR_CONVERSION_INCDECCANCELLATION_H
 
-#include <mlir/Dialect/Func/IR/FuncOps.h>
+#include "Reussir/IR/ReussirOps.h"
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/DialectConversion.h>
@@ -36,7 +36,7 @@ namespace reussir {
 // locally.
 //
 //===----------------------------------------------------------------------===//
-llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func);
+llvm::LogicalResult runIncDecCancellation(reussir::ReussirFuncOp func);
 
 } // namespace reussir
 

@@ -16,6 +16,10 @@
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/RegionKindInterface.td"
+include "mlir/Interfaces/FunctionInterfaces.td"
+include "mlir/Interfaces/CallInterfaces.td"
+include "mlir/Interfaces/ControlFlowInterfaces.td"
+include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "Reussir/IR/ReussirDialect.td"
 include "Reussir/IR/ReussirAttrs.td"
@@ -1406,3 +1410,91 @@ def ReussirStrSliceOp : ReussirStrOp<"slice", []> {
   }];
 }
 #endif // REUSSIR_IR_REUSSIROPS_TD
+
+//===----------------------------------------------------------------------===//
+// Reussir Function Operations
+//===----------------------------------------------------------------------===//
+
+def ReussirFuncOp : ReussirOp<"func", [
+  CallableOpInterface,
+  FunctionOpInterface,
+  IsolatedFromAbove,
+  Symbol
+]> {
+  let summary = "Define a function";
+  let description = [{
+    `reussir.func` defines a function in the Reussir dialect.
+    It replaces `func.func` to allow for improved handling of ABI-specific details
+    during lowering (CABI alignment).
+  }];
+
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       TypeAttrOf<FunctionType>:$function_type,
+                       OptionalAttr<DictArrayAttr>:$arg_attrs,
+                       OptionalAttr<DictArrayAttr>:$res_attrs);
+  let regions = (region AnyRegion:$body);
+  let hasCustomAssemblyFormat = 1;
+  let extraClassDeclaration = [{
+    // Add necessary helper methods if needed, or rely on 
+    // FunctionOpInterface methods
+    ::llvm::ArrayRef<::mlir::Type> getArgumentTypes() { return getFunctionType().getInputs(); }
+    ::llvm::ArrayRef<::mlir::Type> getResultTypes() { return getFunctionType().getResults(); }
+
+    ::mlir::Region *getCallableRegion() { return isExternal() ? nullptr : &getBody(); }
+    ::llvm::ArrayRef<::mlir::Type> getCallableResults() { return getFunctionType().getResults(); }
+    ::mlir::ArrayAttr getCallableArgAttrs() { return getArgAttrs().value_or(nullptr); }
+    ::mlir::ArrayAttr getCallableResAttrs() { return getResAttrs().value_or(nullptr); }
+  }];
+}
+
+def ReussirReturnOp : ReussirOp<"return", [
+  Terminator,
+  ParentOneOf<["ReussirFuncOp"]>,
+  Pure,
+  ReturnLike
+]> {
+  let summary = "Return from a function";
+  let description = [{
+    `reussir.return` terminates a `reussir.func` and returns values.
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$operands);
+  let assemblyFormat = "($operands^ `:` type($operands))? attr-dict";
+}
+
+def ReussirCallOp : ReussirOp<"call", [
+  CallOpInterface,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Call a function";
+  let description = [{
+    `reussir.call` calls a function defined by `reussir.func`.
+  }];
+
+  let arguments = (ins FlatSymbolRefAttr:$callee, Variadic<AnyType>:$operands,
+                       OptionalAttr<DictArrayAttr>:$arg_attrs,
+                       OptionalAttr<DictArrayAttr>:$res_attrs);
+  let results = (outs Variadic<AnyType>);
+
+  let assemblyFormat = [{
+    $callee `(` $operands `)` attr-dict `:` functional-type($operands, results)
+  }];
+  
+  let extraClassDeclaration = [{
+    ::mlir::CallInterfaceCallable getCallableForCallee() {
+      return (*this)->getAttrOfType<::mlir::SymbolRefAttr>("callee");
+    }
+    
+    void setCalleeFromCallable(::mlir::CallInterfaceCallable callee) {
+      (*this)->setAttr("callee", ::llvm::cast<::mlir::SymbolRefAttr>(callee));
+    }
+
+    ::mlir::Operation::operand_range getArgOperands() {
+      return getOperands();
+    }
+    
+    ::mlir::MutableOperandRange getArgOperandsMutable() {
+      return getOperandsMutable();
+    }
+  }];
+}

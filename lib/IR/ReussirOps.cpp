@@ -1958,4 +1958,124 @@ gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
     op.erase();
   return finalModule;
 }
+
+//===----------------------------------------------------------------------===//
+// ReussirFuncOp - parse/print implementations
+//===----------------------------------------------------------------------===//
+mlir::ParseResult ReussirFuncOp::parse(mlir::OpAsmParser &parser,
+                                       mlir::OperationState &result) {
+  // Parse the function name
+  mlir::StringAttr nameAttr;
+  if (parser.parseSymbolName(nameAttr, mlir::SymbolTable::getSymbolAttrName(),
+                             result.attributes))
+    return mlir::failure();
+
+  // Parse the function signature using call_interface_impl
+  llvm::SmallVector<mlir::Type> argTypes;
+  llvm::SmallVector<mlir::DictionaryAttr> argAttrs;
+  llvm::SmallVector<mlir::Type> resultTypes;
+  llvm::SmallVector<mlir::DictionaryAttr> resultAttrs;
+  if (mlir::call_interface_impl::parseFunctionSignature(
+          parser, argTypes, argAttrs, resultTypes, resultAttrs))
+    return mlir::failure();
+
+  // Build the function type
+  auto fnType = parser.getBuilder().getFunctionType(argTypes, resultTypes);
+  result.addAttribute("function_type", mlir::TypeAttr::get(fnType));
+
+  // Parse optional attributes
+  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
+    return mlir::failure();
+
+  // Add arg_attrs and res_attrs
+  auto argAttrsName = parser.getBuilder().getStringAttr("arg_attrs");
+  auto resAttrsName = parser.getBuilder().getStringAttr("res_attrs");
+  mlir::call_interface_impl::addArgAndResultAttrs(
+      parser.getBuilder(), result, argAttrs, resultAttrs,
+      argAttrsName, resAttrsName);
+
+  // Parse the function body (optional for external functions)
+  auto *body = result.addRegion();
+  llvm::SmallVector<mlir::OpAsmParser::Argument> entryArgs;
+  for (size_t i = 0; i < argTypes.size(); ++i) {
+    mlir::OpAsmParser::Argument arg;
+    arg.type = argTypes[i];
+    arg.attrs = argAttrs.size() > i ? argAttrs[i] : mlir::DictionaryAttr();
+    entryArgs.push_back(arg);
+  }
+  mlir::OptionalParseResult parseResult = parser.parseOptionalRegion(
+      *body, entryArgs);
+  if (parseResult.has_value() && *parseResult)
+    return mlir::failure();
+
+  return mlir::success();
+}
+
+
+void ReussirFuncOp::print(mlir::OpAsmPrinter &p) {
+  // Print the function name
+  p << ' ';
+  p.printSymbolName(getSymName());
+
+  // Print the function signature
+  mlir::FunctionType fnType = getFunctionType();
+  mlir::Region *body = isExternal() ? nullptr : &getBody();
+  mlir::call_interface_impl::printFunctionSignature(
+      p, fnType.getInputs(), getArgAttrsAttr(),
+      /*isVariadic=*/false, fnType.getResults(), getResAttrsAttr(),
+      body);
+
+  // Print optional attribute dict (filter out known attrs)
+  llvm::SmallVector<llvm::StringRef> elided = {
+      mlir::SymbolTable::getSymbolAttrName(), "function_type",
+      "arg_attrs", "res_attrs"};
+  p.printOptionalAttrDictWithKeyword((*this)->getAttrs(), elided);
+
+  // Print the body if not external
+  if (!isExternal()) {
+    p << ' ';
+    p.printRegion(getBody(), /*printEntryBlockArgs=*/false,
+                  /*printBlockTerminators=*/true);
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// ReussirCallOp - SymbolUserOpInterface implementation
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirCallOp::verifySymbolUses(
+    mlir::SymbolTableCollection &symbolTable) {
+  // Verify the callee exists and is a function
+  auto callable = symbolTable.lookupNearestSymbolFrom<ReussirFuncOp>(
+      getOperation(), getCalleeAttr());
+  if (!callable)
+    return emitOpError("'") << getCallee() << "' does not reference a valid reussir.func";
+
+  // Verify the operand and result types match
+  mlir::FunctionType fnType = callable.getFunctionType();
+  if (fnType.getNumInputs() != getNumOperands())
+    return emitOpError("argument count mismatch: expected ")
+           << fnType.getNumInputs() << " but got " << getNumOperands();
+
+  for (unsigned i = 0; i < fnType.getNumInputs(); ++i) {
+    if (getOperand(i).getType() != fnType.getInput(i))
+      return emitOpError("operand type mismatch at index ")
+             << i << ": expected " << fnType.getInput(i) << " but got "
+             << getOperand(i).getType();
+  }
+
+  if (fnType.getNumResults() != getNumResults())
+    return emitOpError("result count mismatch: expected ")
+           << fnType.getNumResults() << " but got " << getNumResults();
+
+  for (unsigned i = 0; i < fnType.getNumResults(); ++i) {
+    if (getResult(i).getType() != fnType.getResult(i))
+      return emitOpError("result type mismatch at index ")
+             << i << ": expected " << fnType.getResult(i) << " but got "
+             << getResult(i).getType();
+  }
+
+  return mlir::success();
+}
+
 } // namespace reussir
+

@@ -25,7 +25,7 @@
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/xxhash.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
-#include <mlir/Dialect/Func/IR/FuncOps.h>
+
 #include <mlir/IR/Dominance.h>
 #include <mlir/IR/PatternMatch.h>
 #include <mlir/IR/Value.h>
@@ -246,10 +246,17 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
     for (auto &op : region.front()) {
       if (isa<mlir::LoopLikeOpInterface>(op) ||
           isa<mlir::CallOpInterface>(op)) {
+        ReussirCallOp reussirCall = llvm::dyn_cast<ReussirCallOp>(op);
         mlir::func::CallOp funcCall = llvm::dyn_cast<mlir::func::CallOp>(op);
         // skip intrinsic calls
-        if (!funcCall ||
-            !funcCall.getCallee().starts_with("core::intrinsic::")) {
+        bool isIntrinsic = false;
+        if (reussirCall) {
+           isIntrinsic = reussirCall.getCallee().starts_with("core::intrinsic::");
+        } else if (funcCall) {
+           isIntrinsic = funcCall.getCallee().starts_with("core::intrinsic::");
+        }
+
+        if (!isIntrinsic) {
           for (auto token : availableTokens)
             frees.push_back({token, &op});
           availableTokens = {};

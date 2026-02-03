@@ -18,7 +18,7 @@
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
 
-#include <mlir/Dialect/Func/IR/FuncOps.h>
+
 #include <mlir/IR/PatternMatch.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/GreedyPatternRewriteDriver.h>
@@ -104,7 +104,7 @@ class ReussirTokenInstantiationPass
           ReussirTokenInstantiationPass> {
 public:
   void runOnOperation() override {
-    mlir::func::FuncOp funcOp = getOperation();
+    ReussirFuncOp funcOp = getOperation();
 
     // Set up the pattern rewrite infrastructure
     mlir::RewritePatternSet patterns(&getContext());

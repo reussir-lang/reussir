@@ -14,7 +14,7 @@
 
 #include <llvm/Support/Casting.h>
 #include <mlir/Analysis/AliasAnalysis.h>
-#include <mlir/Dialect/Func/IR/FuncOps.h>
+#include "llvm/Support/LogicalResult.h"
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/Dominance.h>
 #include <mlir/IR/Value.h>
@@ -33,11 +33,14 @@ namespace {
 struct InferVariantTagPass
     : public impl::ReussirInferVariantTagPassBase<InferVariantTagPass> {
   using Base::Base;
-  void runOnOperation() override { runTagInference(getOperation()); }
+  void runOnOperation() override {
+    if (failed(runInferVariantTag(getOperation())))
+      signalPassFailure();
+  }
 };
 } // namespace
 
-void runTagInference(mlir::func::FuncOp func) {
+llvm::LogicalResult runInferVariantTag(reussir::ReussirFuncOp func) {
   // Initialize analyses
   mlir::AliasAnalysis aliasAnalysis(func);
   mlir::DominanceInfo dominanceInfo(func);
@@ -89,6 +92,7 @@ void runTagInference(mlir::func::FuncOp func) {
       }
     }
   });
+  return mlir::success();
 }
 
 } // namespace reussir
