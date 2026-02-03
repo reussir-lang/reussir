@@ -146,6 +146,7 @@ test-suite reussir-core-test
         Test.Reussir.Core.Class
         Test.Reussir.Core.String
         Test.Reussir.Core.Semi.Mangle
+        Test.Reussir.Core.Semi.PatternMatch
     build-depends:
         base ^>=4.20.2.0,
         reussir-core,
@@ -157,4 +158,9 @@ test-suite reussir-core-test
         effectful-core,
         reussir-parser,
         hashtables,
-        text-builder-linear
+        text-builder-linear,
+        unordered-containers,
+        vector,
+        log-effectful,
+        reussir-bridge,
+        log-base
