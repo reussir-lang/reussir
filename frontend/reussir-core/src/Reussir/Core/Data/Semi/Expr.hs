@@ -64,7 +64,7 @@ data DecisionTree a
     | DTUnreachable
     | DTLeaf {
         dtLeafBody :: a,
-        dtLeafBindings :: [Maybe VarID] -- positional bindings (DB Level order)
+        dtLeafBindings :: [Maybe VarID] -- positional bindings (DB index order)
     }
     | DTGuard {
         dtGuardBindings :: [Maybe VarID],
@@ -73,7 +73,7 @@ data DecisionTree a
         dtGuardFalse :: DecisionTree a
     }
     | DTSwitch {
-        dtSwitchDeBruijnLvl :: Int,  -- DB Level of the switch
+        dtSwitchDeBruijnIdx :: Int,  -- DB index of the switch
         dtSwitchCases :: DTSwitchCases a
     }
 
@@ -93,6 +93,10 @@ data DTSwitchCases a
     | DTSwitchString {
         dtSwitchStringMap :: HashMap.HashMap (XXH3 T.Text) (DecisionTree a),
         dtSwitchStringDefault :: DecisionTree a
+    }
+    | DTSwitchNullable { -- special case, since we specialize nullable types
+        dtSwitchNullableJust :: DecisionTree a,
+        dtSwitchNullableNothing :: DecisionTree a
     }
 
 data Expr = Expr

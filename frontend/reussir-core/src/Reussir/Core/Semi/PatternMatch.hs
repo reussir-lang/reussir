@@ -7,7 +7,6 @@ import qualified Data.Vector.Strict as V
 import Reussir.Core.Data.Semi.Context (SemiEff, SemiContext(..), knownRecords)
 import Reussir.Core.Data.Semi.Record (Record(..), RecordFields(..))
 import Reussir.Core.Semi.Context (addErrReportMsg)
-import Control.Monad (unless)
 import Control.Applicative ((<|>))
 import Data.Maybe (isJust)
 import qualified Data.HashMap.Strict as HashMap
@@ -125,7 +124,42 @@ normalizeCtorPattern recordPath args hasEllipsis = do
 
 -- elaborate a pattern into a decision within the semi-elaborated expression space.
 -- return Nothing if the elaboration fail
-patternToDecisionTree :: Syn.Pattern -> SemiEff (Maybe (DecisionTree Expr))
+-- At this stage, we do not perform exclusivity test yet. (TODO)
+-- Consider a set of pattern
+--  Foo::A(...)
+--  Foo::B(..) if ...
+--  Foo::A(...)
+--  _ if ...
+--  Foo::B(..)
+--  Foo::C(..)
+--  _
+-- We need to first find a bind/wildcard pattern.
+-- That pattern divides the patterns into two groups.
+-- In the first group, we can do a case switch to form a decision, and recurse into inner patterns.
+-- - The decision then fallback to an if-branch if the wildcard/bind pattern has a guard.
+--   - We first evaluate the condition with additional bindings.
+--   - On true branch, we just continue with the given body.
+--   - On false branch, we continue with the remaining patterns with another switch.
+-- - Otherwise, latter patterns are just filtered out.
+--
+-- Now we consider inner patterns.
+-- Notice that due to backend implementation, whenever we recurse into inner patterns,
+-- we will have all subfields reference. These bump the so-called de Bruijn levels;
+-- but may not be actually used (e.g. loaded).
+--   Foo::A(Bar::X, Baz::Y)
+--   Foo::A(bind0, Baz::Z)
+--   Foo::A(..)
+-- If we have multiple patterns, we need to do them in positional order, this may
+-- introduce more precondition to match during the process.
+data PMStateCase = PMStateCase {
+    pmscKind :: Syn.PatternKind,
+    pmscRemaining :: [Syn.PatternKind],
+    pmscGuard :: Maybe Expr,
+    pmscBody :: Expr
+}
+data PMState = PMState {
+    pmDeBruijnLevel :: Int,
+    pmCases :: [PMStateCase]
+}
+patternToDecisionTree :: [(Syn.Pattern, Expr)] -> SemiEff (Maybe (DecisionTree Expr))
 patternToDecisionTree = undefined
-
--- TODO: scaffold data structure used for exhaustive checking.
