@@ -16,6 +16,8 @@ import Effectful (liftIO)
 import Effectful.State.Static.Local qualified as State
 import Effectful.Prim.IORef.Strict (readIORef')
 import Reussir.Core.Data.Semi.Expr (DecisionTree, Expr)
+import qualified Data.IntMap as IntMap
+import qualified Data.Sequence as Seq
 
 -- normalize a ctor pattern into a positional applied form.
 -- fill in wildcards for ignored fields if ellipsis is present.
@@ -126,10 +128,11 @@ normalizeCtorPattern recordPath args hasEllipsis = do
 -- return Nothing if the elaboration fail
 -- At this stage, we do not perform exclusivity test yet. (TODO)
 -- Consider a set of pattern
---  Foo::A(...)
+--  Foo::A(..)
 --  Foo::B(..) if ...
---  Foo::A(...)
+--  Foo::A(..)
 --  _ if ...
+--  Foo::A(..)
 --  Foo::B(..)
 --  Foo::C(..)
 --  _
@@ -147,19 +150,40 @@ normalizeCtorPattern recordPath args hasEllipsis = do
 -- we will have all subfields reference. These bump the so-called de Bruijn levels;
 -- but may not be actually used (e.g. loaded).
 --   Foo::A(Bar::X, Baz::Y)
---   Foo::A(bind0, Baz::Z)
+--   Foo::A(_, Baz::Z)
 --   Foo::A(..)
--- If we have multiple patterns, we need to do them in positional order, this may
--- introduce more precondition to match during the process.
-data PMStateCase = PMStateCase {
-    pmscKind :: Syn.PatternKind,
-    pmscRemaining :: [Syn.PatternKind],
-    pmscGuard :: Maybe Expr,
-    pmscBody :: Expr
+-- So we will have the following matrix after specialization:
+--  X, Y
+--  _, Z
+--  empty
+-- so if a pattern have no requires at current level, it shall probagate 
+data PMRow = PMRow {
+    -- store distinguishable patterns (ctor or constant)
+    -- and the de Bruijn level of the pattern.
+    -- empty patterns means this raw is catching all patterns.
+    rowPatterns :: Seq.Seq (Int, Syn.PatternKind),
+    rowBindings :: HashMap.HashMap Identifier Int, -- creating bindings and tie them to de Bruijn levels. direct shadowing is not allowed here.
+    rowGuard :: Maybe Syn.Expr,
+    rowBody :: Syn.Expr
 }
-data PMState = PMState {
+data PMMatrix = PMMatrix {
     pmDeBruijnLevel :: Int,
-    pmCases :: [PMStateCase]
+    pmRows :: V.Vector PMRow
 }
-patternToDecisionTree :: [(Syn.Pattern, Expr)] -> SemiEff (Maybe (DecisionTree Expr))
-patternToDecisionTree = undefined
+data SplitResult = SplitResult
+    | NoPivot PMMatrix
+    | HasPivot PMMatrix PMRow (Maybe PMMatrix)
+
+initializePMMatrix :: V.Vector (Syn.Pattern, Syn.Expr) -> SemiEff PMMatrix
+initializePMMatrix patterns = PMMatrix 0 <$> inner
+  where
+    inner :: SemiEff (V.Vector PMRow)
+    inner = V.forM patterns $ \(Syn.Pattern kind guard, expr) -> case kind of
+        Syn.WildcardPat -> do
+            return $ PMRow mempty mempty guard expr
+        Syn.BindPat identifier -> do
+            return $ PMRow mempty (HashMap.singleton identifier 0) guard expr
+        _ -> return $ PMRow (Seq.singleton (0, kind)) mempty guard expr
+
+rowIsWildcard :: PMRow -> Bool
+rowIsWildcard row = Seq.null (rowPatterns row)
