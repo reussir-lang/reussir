@@ -92,7 +92,8 @@ library
                       bytestring,
                       text-builder-linear,
                       idn,
-                      vector
+                      vector,
+                      sort
     hs-source-dirs:   src
     default-language: GHC2024
 

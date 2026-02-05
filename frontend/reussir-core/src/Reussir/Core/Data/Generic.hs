@@ -1,12 +1,14 @@
 module Reussir.Core.Data.Generic where
 
-import Data.HashTable.IO qualified as H
 import Data.Int (Int64)
-import Data.Sequence qualified as Seq
 import Effectful.Prim.IORef.Strict (IORef')
+import Reussir.Parser.Types.Lexer (Identifier, Path)
+
+import Data.HashTable.IO qualified as H
+import Data.Sequence qualified as Seq
+
 import Reussir.Core.Data.Semi.Type (Type)
 import Reussir.Core.Data.UniqueID (GenericID)
-import Reussir.Parser.Types.Lexer (Identifier, Path)
 
 data GenericVar = GenericVar
     { genericName :: Identifier

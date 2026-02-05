@@ -7,6 +7,7 @@ module Reussir.Diagnostic.LineCache (
 
 import Data.Int (Int64)
 import Data.IntMap.Lazy (IntMap)
+
 import Data.IntMap.Lazy qualified as IntMap
 import Data.Text.Lazy qualified as LazyText
 

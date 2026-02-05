@@ -3,14 +3,18 @@
 module Reussir.Core.Semi.FlowAnalysis where
 
 import Control.Monad (forM_, zipWithM_)
+import Effectful (liftIO)
+import Effectful.Prim.IORef.Strict (readIORef')
+import Reussir.Diagnostic.Report (Report (..), defaultText)
+import Reussir.Parser.Types.Lexer (Identifier, WithSpan (..))
+
 import Data.HashTable.IO qualified as H
 import Data.IntSet qualified as IntSet
 import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
-import Effectful (liftIO)
 import Effectful.Log qualified as L
-import Effectful.Prim.IORef.Strict (readIORef')
 import Effectful.State.Static.Local qualified as State
+
 import Reussir.Core.Data.Generic (GenericSolution)
 import Reussir.Core.Data.Semi.Context (GlobalSemiEff, SemiContext (..))
 import Reussir.Core.Data.Semi.Expr (Expr (..), ExprKind (..))
@@ -18,11 +22,14 @@ import Reussir.Core.Data.Semi.Function (FunctionProto (..), FunctionTable (..))
 import Reussir.Core.Data.Semi.Record (Record (..), RecordFields (..))
 import Reussir.Core.Data.Semi.Type (Type (..))
 import Reussir.Core.Data.UniqueID (GenericID (..))
-import Reussir.Core.Generic (addConcreteFlow, addCtorLink, addDirectLink, solveGeneric)
+import Reussir.Core.Generic (
+    addConcreteFlow,
+    addCtorLink,
+    addDirectLink,
+    solveGeneric,
+ )
 import Reussir.Core.Semi.Context (addErrReport)
 import Reussir.Core.Semi.Type (collectGenerics, isConcrete)
-import Reussir.Diagnostic.Report (Report (..), defaultText)
-import Reussir.Parser.Types.Lexer (Identifier, WithSpan (..))
 
 -- Recursively analyze generic flow in an expression
 -- We focus on function call and ctor call: at each call site, we examine:

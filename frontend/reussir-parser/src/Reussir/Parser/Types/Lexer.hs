@@ -6,6 +6,7 @@ import Data.Hashable (Hashable (..))
 import Data.Int (Int64)
 import Data.List (intercalate)
 import Data.String (IsString (..))
+
 import Data.Text qualified as T
 
 {- | Represents an identifier in the source code.

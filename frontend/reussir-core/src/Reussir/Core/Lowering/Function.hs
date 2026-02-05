@@ -3,11 +3,13 @@
 module Reussir.Core.Lowering.Function where
 
 import Control.Monad (forM)
+import Data.Maybe (catMaybes, maybeToList)
+import Effectful (inject)
+import Reussir.Parser.Types.Lexer (Identifier (..))
+import System.Info (os)
 
 import Data.IntMap.Strict qualified as IntMap
-import Data.Maybe (catMaybes, maybeToList)
 import Data.Text qualified as T
-import Effectful (inject)
 import Effectful.Log qualified as L
 import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen qualified as IR
@@ -15,15 +17,24 @@ import Reussir.Codegen.IR qualified as IR
 import Reussir.Codegen.Location qualified as DBG
 import Reussir.Codegen.Location qualified as IR
 import Reussir.Codegen.Type qualified as IR
-import Reussir.Core.Data.Full.Expr qualified as Full
-import Reussir.Core.Data.Full.Function qualified as Full
-import Reussir.Core.Data.Lowering.Context (GlobalLoweringEff, LocalLoweringContext (..))
-import Reussir.Core.Lowering.Context (addIRInstr, lookupLocation, nextValue, withFreshLocalContext, withLocationSpan)
+
+import Reussir.Core.Data.Lowering.Context (
+    GlobalLoweringEff,
+    LocalLoweringContext (..),
+ )
+import Reussir.Core.Lowering.Context (
+    addIRInstr,
+    lookupLocation,
+    nextValue,
+    withFreshLocalContext,
+    withLocationSpan,
+ )
 import Reussir.Core.Lowering.Debug (typeAsDbgType, unmangledPath)
 import Reussir.Core.Lowering.Expr (lowerExprAsBlock)
 import Reussir.Core.Lowering.Type (convertType)
-import Reussir.Parser.Types.Lexer (Identifier (..))
-import System.Info (os)
+
+import Reussir.Core.Data.Full.Expr qualified as Full
+import Reussir.Core.Data.Full.Function qualified as Full
 
 lowerFunction :: Full.Function -> GlobalLoweringEff ()
 lowerFunction func = do
@@ -33,9 +44,10 @@ lowerFunction func = do
     let mBody = Full.funcBody func
     let span' = Full.funcSpan func
 
-    let preferredLinkage = if os == "mingw32" || os == "darwin" 
-            then IR.LnkExternal 
-            else IR.LnkWeakODR
+    let preferredLinkage =
+            if os == "mingw32" || os == "darwin"
+                then IR.LnkExternal
+                else IR.LnkWeakODR
 
     let (linkage, llvmVis, mlirVis) = case mBody of
             Nothing -> (IR.LnkExternal, IR.LLVMVisDefault, IR.MLIRVisPrivate)

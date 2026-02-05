@@ -2,30 +2,37 @@
 
 module Reussir.Core.Full.Expr where
 
+import Control.Monad
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe)
 import Effectful (inject)
-import Effectful.State.Static.Local qualified as State
+import Effectful.Prim.IORef.Strict (readIORef')
 import Reussir.Codegen.Context.Symbol (verifiedSymbol)
 import Reussir.Codegen.Type.Data (Capability (..))
-import Reussir.Core.Data.Full.Context (FullContext (..), FullEff, LocalFullContext (..))
+import Reussir.Parser.Types.Lexer (WithSpan (..))
+import Prelude hiding (span)
+
+import Data.Vector.Strict qualified as V
+import Effectful.State.Static.Local qualified as State
+
+import Reussir.Core.Data.Full.Context (
+    FullContext (..),
+    FullEff,
+    LocalFullContext (..),
+ )
 import Reussir.Core.Data.Full.Error (Error (..), ErrorKind (..))
 import Reussir.Core.Data.Full.Expr (Expr (..), ExprKind (..))
 import Reussir.Core.Data.Full.Type (Type (..))
-import Reussir.Core.Data.Semi.Expr qualified as SemiExpr
-import Reussir.Core.Data.Semi.Type qualified as SemiType
 import Reussir.Core.Data.UniqueID (ExprID (ExprID))
 import Reussir.Core.Full.Context (addError, withSpan)
 import Reussir.Core.Full.Type (convertSemiType)
 import Reussir.Core.Semi.Mangle (mangleABIName)
+
+import Reussir.Core.Data.Semi.Expr qualified as SemiExpr
+import Reussir.Core.Data.Semi.Record qualified as Semi
+import Reussir.Core.Data.Semi.Type qualified as SemiType
 import Reussir.Core.Semi.Type qualified as Semi (substituteGenericMap)
-import Prelude hiding (span)
-import qualified Reussir.Core.Uitls.HashTable as H
-import qualified Reussir.Core.Data.Semi.Record as Semi
-import Effectful.Prim.IORef.Strict (readIORef')
-import Control.Monad
-import Reussir.Parser.Types.Lexer (WithSpan(..))
-import qualified Data.Vector.Strict as V
+import Reussir.Core.Uitls.HashTable qualified as H
 
 exprWithSpan :: Type -> ExprKind -> FullEff Expr
 exprWithSpan exprType exprKind = do
@@ -89,7 +96,8 @@ convertSemiExpr semiExpr = do
                     TypeNullable (TypeRc _ _) -> do
                         inject $ addError (Error (fromMaybe (0, 0) span') InvalidAssignSourceCapability)
                     _ -> do
-                        inject $ addError (Error (fromMaybe (0, 0) span') InvalidAssignSourceNotRegional)
+                        inject $
+                            addError (Error (fromMaybe (0, 0) span') InvalidAssignSourceNotRegional)
                 exprWithSpan ty $ Assign e1' idx e2'
             SemiExpr.Let{..} -> do
                 varExpr' <- convertSemiExpr letVarExpr
@@ -97,7 +105,9 @@ convertSemiExpr semiExpr = do
             SemiExpr.FuncCall{..} -> do
                 gMap <- State.gets genericMap
                 let instantiatedTyArgs = map (flip Semi.substituteGenericMap gMap) funcCallTyArgs
-                let mangledName = mangleABIName (SemiType.TypeRecord funcCallTarget instantiatedTyArgs SemiType.Irrelevant)
+                let mangledName =
+                        mangleABIName
+                            (SemiType.TypeRecord funcCallTarget instantiatedTyArgs SemiType.Irrelevant)
                 let symbol = verifiedSymbol mangledName
                 args' <- mapM convertSemiExpr funcCallArgs
                 exprWithSpan ty $ FuncCall symbol args' funcCallRegional
@@ -105,16 +115,19 @@ convertSemiExpr semiExpr = do
             SemiExpr.CompoundCall{..} -> do
                 semiRecords <- State.gets @FullContext ctxSemiRecords
                 maybeRecord <- H.lookup semiRecords compoundCallTarget
-                recordFields <- maybe (return Nothing)
-                    (readIORef' . Semi.recordFields) maybeRecord
+                recordFields <-
+                    maybe
+                        (return Nothing)
+                        (readIORef' . Semi.recordFields)
+                        maybeRecord
                 case recordFields of
                     Nothing -> error "record should be well-defined at this stage"
                     Just fields -> do
                         let fieldMutability = case fields of
-                                Semi.Named v -> map (\(WithSpan (_, _, flag) _ _) -> flag) $ V.toList  v
+                                Semi.Named v -> map (\(WithSpan (_, _, flag) _ _) -> flag) $ V.toList v
                                 Semi.Unnamed v -> map (\(WithSpan (_, flag) _ _) -> flag) $ V.toList v
                                 Semi.Variants _ -> repeat False
-                        let convertFieldExpr expr mutability = 
+                        let convertFieldExpr expr mutability =
                                 flexibleScope mutability $ convertSemiExpr expr
                         args' <- zipWithM convertFieldExpr compoundCallArgs fieldMutability
                         hoistRcWrapping ty $ CompoundCall args'

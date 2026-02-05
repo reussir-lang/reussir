@@ -7,10 +7,13 @@ module Reussir.Codegen.Intrinsics.Math (
 where
 
 import Control.Monad (unless)
+
 import Data.Text.Builder.Linear qualified as TB
-import Reussir.Codegen.Context qualified as C
+
 import Reussir.Codegen.Intrinsics.Arith (FastMathFlag (..), fmfIsNone)
 import Reussir.Codegen.Value (TypedValue)
+
+import Reussir.Codegen.Context qualified as C
 
 data Math
     = Absf FastMathFlag
@@ -64,7 +67,8 @@ fmfCodegen fmf = unless (fmfIsNone fmf) $ do
     fmf' <- C.emit fmf
     C.emitBuilder $ " fastmath<" <> fmf' <> ">"
 
-unaryFloatMathCodegen :: TB.Builder -> FastMathFlag -> TypedValue -> TypedValue -> C.Codegen ()
+unaryFloatMathCodegen ::
+    TB.Builder -> FastMathFlag -> TypedValue -> TypedValue -> C.Codegen ()
 unaryFloatMathCodegen mnemonic fmf (inVal, _inTy) (resVal, resTy) = C.emitLine $ do
     resVal' <- C.emit resVal
     C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
@@ -83,7 +87,13 @@ unaryIntMathCodegen mnemonic (inVal, _inTy) (resVal, resTy) = C.emitLine $ do
     resTy' <- C.emit resTy
     C.emitBuilder $ " : " <> resTy'
 
-binaryFloatMathCodegen :: TB.Builder -> FastMathFlag -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
+binaryFloatMathCodegen ::
+    TB.Builder ->
+    FastMathFlag ->
+    TypedValue ->
+    TypedValue ->
+    TypedValue ->
+    C.Codegen ()
 binaryFloatMathCodegen mnemonic fmf (vA, _) (vB, _) (resVal, resTy) = C.emitLine $ do
     resVal' <- C.emit resVal
     C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
@@ -94,7 +104,14 @@ binaryFloatMathCodegen mnemonic fmf (vA, _) (vB, _) (resVal, resTy) = C.emitLine
     resTy' <- C.emit resTy
     C.emitBuilder $ " : " <> resTy'
 
-ternaryFloatMathCodegen :: TB.Builder -> FastMathFlag -> TypedValue -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
+ternaryFloatMathCodegen ::
+    TB.Builder ->
+    FastMathFlag ->
+    TypedValue ->
+    TypedValue ->
+    TypedValue ->
+    TypedValue ->
+    C.Codegen ()
 ternaryFloatMathCodegen mnemonic fmf (vA, _) (vB, _) (vC, _) (resVal, resTy) = C.emitLine $ do
     resVal' <- C.emit resVal
     C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
@@ -106,7 +123,8 @@ ternaryFloatMathCodegen mnemonic fmf (vA, _) (vB, _) (vC, _) (resVal, resTy) = C
     resTy' <- C.emit resTy
     C.emitBuilder $ " : " <> resTy'
 
-binaryIntMathCodegen :: TB.Builder -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
+binaryIntMathCodegen ::
+    TB.Builder -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
 binaryIntMathCodegen mnemonic (vA, _) (vB, _) (resVal, resTy) = C.emitLine $ do
     resVal' <- C.emit resVal
     C.emitBuilder $ resVal' <> " = " <> "math." <> mnemonic <> " "
@@ -117,7 +135,8 @@ binaryIntMathCodegen mnemonic (vA, _) (vB, _) (resVal, resTy) = C.emitLine $ do
     C.emitBuilder $ " : " <> resTy'
 
 -- Special codegen for fpowi which has type signature: : type($lhs), type($rhs)
-fpowiMathCodegen :: FastMathFlag -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
+fpowiMathCodegen ::
+    FastMathFlag -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
 fpowiMathCodegen fmf (vA, tyA) (vB, tyB) (resVal, _) = C.emitLine $ do
     resVal' <- C.emit resVal
     C.emitBuilder $ resVal' <> " = " <> "math.fpowi "

@@ -5,28 +5,38 @@ module Reussir.Core.Lowering.Context where
 import Control.Exception (SomeException, try)
 import Data.Foldable (toList)
 import Data.Int (Int64)
-import Data.IntMap.Strict qualified as IntMap
-import Data.Sequence qualified as Seq
-import Data.Text qualified as T
 import Effectful (Eff, IOE, inject, liftIO, (:>))
 import Effectful.Log (Log, logTrace_)
 import Effectful.Prim.IORef.Strict (Prim)
+import GHC.Stack (HasCallStack)
+import Reussir.Diagnostic.Repository (Repository, lookupRepositoryAsRange)
+import System.Directory (canonicalizePath)
+import System.FilePath (takeDirectory, takeFileName)
+
+import Data.IntMap.Strict qualified as IntMap
+import Data.Sequence qualified as Seq
+import Data.Text qualified as T
 import Effectful.Reader.Static qualified as Reader
 import Effectful.State.Static.Local qualified as State
-import GHC.Stack (HasCallStack)
 import Reussir.Codegen qualified as IR
 import Reussir.Codegen.Context qualified as IR
 import Reussir.Codegen.IR qualified as IR
 import Reussir.Codegen.Location qualified as IR
 import Reussir.Codegen.Value qualified as IR
-import Reussir.Core.Data.Full.Function qualified as Full
-import Reussir.Core.Data.Full.Record qualified as Full
-import Reussir.Core.Data.Lowering.Context (ExprResult, GlobalLoweringEff, LocalLoweringContext (..), LoweringContext (..), LoweringEff, LoweringSpan (..))
+
+import Reussir.Core.Data.Lowering.Context (
+    ExprResult,
+    GlobalLoweringEff,
+    LocalLoweringContext (..),
+    LoweringContext (..),
+    LoweringEff,
+    LoweringSpan (..),
+ )
 import Reussir.Core.Data.String (StringUniqifier)
 import Reussir.Core.Data.UniqueID (VarID (VarID))
-import Reussir.Diagnostic.Repository (Repository, lookupRepositoryAsRange)
-import System.Directory (canonicalizePath)
-import System.FilePath (takeDirectory, takeFileName)
+
+import Reussir.Core.Data.Full.Function qualified as Full
+import Reussir.Core.Data.Full.Record qualified as Full
 
 {-
 , srcRepository :: Repository

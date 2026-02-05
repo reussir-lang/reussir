@@ -2,21 +2,24 @@ module Reussir.Core.Generic where
 
 import Control.Monad (forM, forM_, when)
 import Data.Graph (flattenSCC, stronglyConnComp)
-import Data.HashTable.ST.Cuckoo qualified as Cuckoo
-import Reussir.Core.Uitls.HashTable qualified as HU
 import Data.Int (Int64)
 import Data.List (nub)
-import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust)
-import Data.Sequence qualified as Seq
 import Effectful (Eff, IOE, (:>))
 import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (modifyIORef', newIORef', readIORef')
+import Reussir.Parser.Types.Lexer (Identifier, Path)
+
+import Data.HashTable.ST.Cuckoo qualified as Cuckoo
+import Data.Map.Strict qualified as Map
+import Data.Sequence qualified as Seq
+
 import Reussir.Core.Data.Generic
 import Reussir.Core.Data.Semi.Type (Type (..))
 import Reussir.Core.Data.UniqueID (GenericID (..))
 import Reussir.Core.Semi.Type (isConcrete, substituteGeneric)
-import Reussir.Parser.Types.Lexer (Identifier, Path)
+
+import Reussir.Core.Uitls.HashTable qualified as HU
 
 {- |
 Create an empty 'GenericState'.

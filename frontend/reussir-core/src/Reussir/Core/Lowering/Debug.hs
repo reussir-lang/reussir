@@ -2,14 +2,17 @@
 
 module Reussir.Core.Lowering.Debug where
 
-import Data.HashTable.IO qualified as H
 import Data.Maybe (catMaybes, fromMaybe)
+import Effectful (Eff, IOE, liftIO, (:>))
+import Reussir.Parser.Types.Lexer (Identifier (..), Path (..))
+
+import Data.HashTable.IO qualified as H
 import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
-import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.Reader.Static qualified as Reader
 import Reussir.Codegen.Location qualified as DBG
 import Reussir.Codegen.Type.Data qualified as IRType
+
 import Reussir.Core.Data.FP (FloatingPointType (..))
 import Reussir.Core.Data.Full.Record (
     Record (..),
@@ -19,7 +22,6 @@ import Reussir.Core.Data.Full.Record (
 import Reussir.Core.Data.Full.Type (Type (..))
 import Reussir.Core.Data.Integral (IntegralType (..))
 import Reussir.Core.Data.Lowering.Context (LoweringContext (..))
-import Reussir.Parser.Types.Lexer (Identifier (..), Path (..))
 
 -- Helper for unmangled name
 unmangledPath :: Path -> T.Text
@@ -27,7 +29,8 @@ unmangledPath (Path name components) =
     T.intercalate "::" (map unIdentifier components ++ [unIdentifier name])
 
 typeAsDbgType ::
-    (IOE :> es, Reader.Reader LoweringContext :> es) => Type -> Eff es (Maybe DBG.DBGType)
+    (IOE :> es, Reader.Reader LoweringContext :> es) =>
+    Type -> Eff es (Maybe DBG.DBGType)
 typeAsDbgType ty = case ty of
     TypeIntegral (Signed w) -> pure $ do
         prim <- convertIntegralToPrim $ fromIntegral w

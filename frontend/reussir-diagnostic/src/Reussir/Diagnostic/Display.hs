@@ -6,16 +6,24 @@ import Data.Int (Int64)
 import Data.Maybe (isJust)
 import Data.String (fromString)
 import Data.Text.Builder.Linear (Builder, fromChar, fromText, runBuilder)
-import Data.Text.IO qualified as TextIO
-import Data.Text.Lazy qualified as LazyText
 import Effectful (Eff, IOE, liftIO, (:>))
 import GHC.IO.Handle (Handle)
-import Reussir.Diagnostic.LineCache (SelectedLine (..))
-import Reussir.Diagnostic.Report (CodeReference (..), Label (..), Report (..), TextWithFormat (textFormats), textContent)
-import Reussir.Diagnostic.Repository (Repository, lookupRepository)
 import System.Console.ANSI.Codes (SGR, setSGRCode)
-import System.Console.ANSI.Types qualified as ANSI
 import UnliftIO.IO (hIsTerminalDevice)
+
+import Data.Text.IO qualified as TextIO
+import Data.Text.Lazy qualified as LazyText
+import System.Console.ANSI.Types qualified as ANSI
+
+import Reussir.Diagnostic.LineCache (SelectedLine (..))
+import Reussir.Diagnostic.Report (
+    CodeReference (..),
+    Label (..),
+    Report (..),
+    TextWithFormat (textFormats),
+    textContent,
+ )
+import Reussir.Diagnostic.Repository (Repository, lookupRepository)
 
 data TableCodec
     = Standard
@@ -134,7 +142,10 @@ createFmtEnv tc indentWidth ignore repo =
 
 incIndentation :: FormatEnv -> FormatEnv
 incIndentation env =
-    env{indentation = indentation env + indentationWidth env, skipNextIndent = False}
+    env
+        { indentation = indentation env + indentationWidth env
+        , skipNextIndent = False
+        }
 
 sgrBuilder :: [SGR] -> FormatEnv -> Builder -> Builder
 sgrBuilder sgr env builder =
@@ -167,18 +178,31 @@ indentBuilder env =
 formatToBuilder :: FormatEnv -> Report -> Builder
 formatToBuilder _ ReportNil = mempty
 formatToBuilder env (ReportSeq r1 r2) =
-    formatToBuilder env r1 <> "\n" <> formatToBuilder (env{skipNextIndent = False}) r2
+    formatToBuilder env r1
+        <> "\n"
+        <> formatToBuilder (env{skipNextIndent = False}) r2
 formatToBuilder env (Nested rpt) =
     formatToBuilder (incIndentation env) rpt
 formatToBuilder env (Labeled label rpt) =
-    indentBuilder env <> labelToBuilder env label <> fromChar ' ' <> formatToBuilder (env{skipNextIndent = True}) rpt
+    indentBuilder env
+        <> labelToBuilder env label
+        <> fromChar ' '
+        <> formatToBuilder (env{skipNextIndent = True}) rpt
 formatToBuilder env (FormattedText segments) =
-    indentBuilder env <> mconcat [sgrBuilder sgr env (fromText $ textContent txt) | txt <- segments, let sgr = textFormats txt]
+    indentBuilder env
+        <> mconcat
+            [ sgrBuilder sgr env (fromText $ textContent txt)
+            | txt <- segments
+            , let sgr = textFormats txt
+            ]
 formatToBuilder env (CodeRef ref maybeText) =
     header <> "\n" <> body
   where
     selectedLines :: [SelectedLine]
-    selectedLines = lookupRepository (repository env) (codeFilePath ref, codeStartOffset ref, codeEndOffset ref)
+    selectedLines =
+        lookupRepository
+            (repository env)
+            (codeFilePath ref, codeStartOffset ref, codeEndOffset ref)
 
     minLineNumber :: Int64 -- first line number
     minLineNumber = case selectedLines of
@@ -217,12 +241,16 @@ formatToBuilder env (CodeRef ref maybeText) =
                 ( case maybeLineNum of
                     Just ln ->
                         let s = show ln
-                         in fromString (replicate (fromIntegral maxLineNumberWidth - length s) ' ') <> fromString s
+                         in fromString (replicate (fromIntegral maxLineNumberWidth - length s) ' ')
+                                <> fromString s
                     Nothing ->
                         fromString (replicate (fromIntegral maxLineNumberWidth) ' ')
                 )
             <> fromChar ' '
-            <> sgrBuilder [ANSI.SetColor ANSI.Foreground ANSI.Dull ANSI.White] env (fromChar (verticalLine (formatConfigTableCodec env)))
+            <> sgrBuilder
+                [ANSI.SetColor ANSI.Foreground ANSI.Dull ANSI.White]
+                env
+                (fromChar (verticalLine (formatConfigTableCodec env)))
             <> fromChar ' '
 
     codeContent :: SelectedLine -> Builder
@@ -257,13 +285,18 @@ formatToBuilder env (CodeRef ref maybeText) =
                      in sgrBuilder (textFormats twf) env suffixBuilder
 
     renderLine :: SelectedLine -> Builder
-    renderLine line = gutter (Just (lineNumber line)) <> codeContent line <> padding <> codeSuffix line
+    renderLine line =
+        gutter (Just (lineNumber line))
+            <> codeContent line
+            <> padding
+            <> codeSuffix line
       where
         padding =
             case maybeText of
                 Just _
                     | minLineNumber /= maxLineNumber ->
-                        fromString (replicate (fromIntegral (maxCodeWidth - LazyText.length (lineText line))) ' ')
+                        fromString
+                            (replicate (fromIntegral (maxCodeWidth - LazyText.length (lineText line))) ' ')
                 _ -> mempty
 
     renderCaret :: Builder
@@ -279,16 +312,19 @@ formatToBuilder env (CodeRef ref maybeText) =
                                 then fromChar (bottomTee (formatConfigTableCodec env))
                                 else
                                     fromChar (roundLLCorner (formatConfigTableCodec env))
-                                        <> fromString (replicate (fromIntegral len - 2) (horizontalLine (formatConfigTableCodec env)))
+                                        <> fromString
+                                            (replicate (fromIntegral len - 2) (horizontalLine (formatConfigTableCodec env)))
                                         <> fromChar (roundLRCorner (formatConfigTableCodec env))
                         msg = case maybeText of
                             Nothing -> mempty
-                            Just twf -> fromChar ' ' <> sgrBuilder (textFormats twf) env (fromText (textContent twf))
+                            Just twf ->
+                                fromChar ' ' <> sgrBuilder (textFormats twf) env (fromText (textContent twf))
                      in gutter Nothing <> spaces <> sgrBuilder (codeFormats ref) env connector <> msg
             _ ->
                 case maybeText of
                     Nothing -> mempty
-                    Just twf -> gutter Nothing <> sgrBuilder (textFormats twf) env (fromText (textContent twf))
+                    Just twf ->
+                        gutter Nothing <> sgrBuilder (textFormats twf) env (fromText (textContent twf))
 
     joinWithNewlines :: [Builder] -> Builder
     joinWithNewlines [] = mempty
@@ -296,9 +332,12 @@ formatToBuilder env (CodeRef ref maybeText) =
     joinWithNewlines (x : xs) = x <> fromChar '\n' <> joinWithNewlines xs
 
     body :: Builder
-    body = joinWithNewlines (map renderLine selectedLines ++ [renderCaret | not (null selectedLines)])
+    body =
+        joinWithNewlines
+            (map renderLine selectedLines ++ [renderCaret | not (null selectedLines)])
 
-displayReport :: (IOE :> es) => Report -> Repository -> Int64 -> Handle -> Eff es ()
+displayReport ::
+    (IOE :> es) => Report -> Repository -> Int64 -> Handle -> Eff es ()
 displayReport report repo indentWidth hdl = do
     isTTY <- hIsTerminalDevice hdl
     let codec = if isTTY then Extended else Standard

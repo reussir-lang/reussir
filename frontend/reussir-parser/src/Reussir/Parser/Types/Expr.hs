@@ -2,14 +2,17 @@ module Reussir.Parser.Types.Expr where
 
 import Data.Int (Int64)
 import Data.Scientific (Scientific)
-import Data.Text qualified as T
 import Data.Vector.Strict (Vector)
-import Reussir.Parser.Types.Lexer (Identifier (..), Path, WithSpan)
-import Reussir.Parser.Types.Type (Type)
+
+import Data.Text qualified as T
 import Data.Vector qualified as V
 
+import Reussir.Parser.Types.Lexer (Identifier (..), Path, WithSpan)
+import Reussir.Parser.Types.Type (Type)
+
 -- pattern ::= pattern-kind (`if` expr)?
-data Pattern = Pattern { patKind :: PatternKind, patGuard :: Maybe Expr } deriving (Eq, Show)
+data Pattern = Pattern {patKind :: PatternKind, patGuard :: Maybe Expr}
+    deriving (Eq, Show)
 
 -- pattern-kind ::=
 --   | `_`
@@ -20,21 +23,21 @@ data Pattern = Pattern { patKind :: PatternKind, patGuard :: Maybe Expr } derivi
 
 -- named-pattern ::= identifier (`:`  pattern-kind)? -- syntax sugar for direct binding with identical field name
 data PatternKind
-    = WildcardPat 
+    = WildcardPat
     | BindPat Identifier
-    | CtorPat 
+    | CtorPat
         { patCtorPath :: Path
         , patCtorArgs :: V.Vector PatternCtorArg
-        , patCtorHasEllipsis :: Bool 
+        , patCtorHasEllipsis :: Bool
         , patCtorIsNamed :: Bool
         }
     | ConstPat Constant
-     deriving (Eq, Show)
+    deriving (Eq, Show)
 
 data PatternCtorArg
     = PatternCtorArg
     { patCtorArgField :: Maybe Identifier
-    , patCtorArgKind :: PatternKind 
+    , patCtorArgKind :: PatternKind
     }
     deriving (Eq, Show)
 

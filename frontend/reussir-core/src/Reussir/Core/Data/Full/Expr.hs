@@ -2,13 +2,15 @@ module Reussir.Core.Data.Full.Expr where
 
 import Data.Int (Int64)
 import Data.Scientific (Scientific)
-import Data.Vector.Unboxed qualified as UV
 import Reussir.Codegen.Context.Symbol (Symbol)
+import Reussir.Parser.Types.Lexer (Identifier, Path)
+
+import Data.Vector.Unboxed qualified as UV
+
 import Reussir.Core.Data.Full.Type (Type)
 import Reussir.Core.Data.Operator (ArithOp, CmpOp)
 import Reussir.Core.Data.String (StringToken)
 import Reussir.Core.Data.UniqueID (ExprID, VarID)
-import Reussir.Parser.Types.Lexer (Identifier, Path)
 
 data ExprKind
     = GlobalStr StringToken

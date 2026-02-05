@@ -3,6 +3,7 @@ module Reussir.Parser.Types.Type where
 
 import Data.Int (Int16)
 import Data.List (intercalate)
+
 import Reussir.Parser.Types.Lexer (Path (..), WithSpan (..))
 
 {- | Represents integral types with a specific bit width.

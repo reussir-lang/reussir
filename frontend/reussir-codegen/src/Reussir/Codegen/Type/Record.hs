@@ -5,6 +5,7 @@ module Reussir.Codegen.Type.Record (
 ) where
 
 import Data.Vector.Strict qualified as V
+
 import Reussir.Codegen.Type.Data (Capability, Type)
 
 data RecordField = RecordField

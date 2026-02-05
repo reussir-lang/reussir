@@ -1,14 +1,16 @@
 module Test.Reussir.Core.Class (tests) where
 
-import Data.Set qualified as Set
 import Data.Text (pack)
 import Effectful (liftIO, runEff)
 import Effectful.Prim (runPrim)
-import Reussir.Core.Class
-import Reussir.Core.Data.Class
 import Reussir.Parser.Types.Lexer (Identifier (..), Path (..))
 import Test.Tasty
 import Test.Tasty.HUnit
+
+import Data.Set qualified as Set
+
+import Reussir.Core.Class
+import Reussir.Core.Data.Class
 
 mkClass :: String -> Class
 mkClass name = Class $ Path (Identifier $ pack name) []

@@ -6,29 +6,36 @@ module Test.Codegen (
 where
 
 import Data.Int (Int64)
-import Data.Text qualified as T
-import Data.Vector.Strict qualified as V
-import Effectful qualified as E
-import Effectful.Log qualified as L
 import Log (defaultLogLevel)
-import Log.Backend.StandardOutput qualified as L
-import Reussir.Bridge qualified as B
-import Reussir.Codegen (RecordInstance (..), emptyModule)
-import Reussir.Codegen qualified as C
-import Reussir.Codegen.Context (TargetSpec (..))
-import Reussir.Codegen.Context.Symbol (Symbol, verifiedSymbol)
-import Reussir.Codegen.IR qualified as IR
-import Reussir.Codegen.Intrinsics qualified as I
-import Reussir.Codegen.Type qualified as TT
-import Reussir.Codegen.Type.Record (Record (..), RecordField (..), RecordKind (..))
-import Reussir.Codegen.Value qualified as V
 import System.Exit (ExitCode (ExitSuccess))
 import System.IO ()
-import System.IO qualified as IO
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (readProcessWithExitCode)
 import Test.Tasty
 import Test.Tasty.HUnit
+
+import Data.Text qualified as T
+import Data.Vector.Strict qualified as V
+import Effectful qualified as E
+import Effectful.Log qualified as L
+import Log.Backend.StandardOutput qualified as L
+import Reussir.Bridge qualified as B
+import System.IO qualified as IO
+
+import Reussir.Codegen (RecordInstance (..), emptyModule)
+import Reussir.Codegen.Context (TargetSpec (..))
+import Reussir.Codegen.Context.Symbol (Symbol, verifiedSymbol)
+import Reussir.Codegen.Type.Record (
+    Record (..),
+    RecordField (..),
+    RecordKind (..),
+ )
+
+import Reussir.Codegen qualified as C
+import Reussir.Codegen.IR qualified as IR
+import Reussir.Codegen.Intrinsics qualified as I
+import Reussir.Codegen.Type qualified as TT
+import Reussir.Codegen.Value qualified as V
 
 -- Helper types
 primitiveF32 :: TT.Type
@@ -107,7 +114,14 @@ createSimpleModule :: C.Module
 createSimpleModule =
     (emptyModule spec){C.moduleFunctions = [createAddF32Function]}
   where
-    spec = TargetSpec "test_module" "output.o" B.OptDefault B.OutputObject B.LogWarning "test.rr"
+    spec =
+        TargetSpec
+            "test_module"
+            "output.o"
+            B.OptDefault
+            B.OutputObject
+            B.LogWarning
+            "test.rr"
 
 -- Create the Tensor2x2 record type symbol
 tensor2x2Symbol :: Symbol
@@ -139,7 +153,12 @@ defaultRef t = TT.TypeRef (TT.Ref t TT.NonAtomic TT.Unspecified)
 createTensor2x2Module :: C.Module
 createTensor2x2Module =
     (emptyModule spec)
-        { C.moduleFunctions = [createMatmulFunction, createPowImplFunction, createPowFunction, createFibonacciFastFunction]
+        { C.moduleFunctions =
+            [ createMatmulFunction
+            , createPowImplFunction
+            , createPowFunction
+            , createFibonacciFastFunction
+            ]
         , C.recordInstances =
             [ RecordInstance
                 ( tensor2x2Symbol
@@ -160,7 +179,14 @@ createTensor2x2Module =
             ]
         }
   where
-    spec = TargetSpec "tensor_module" "tensor.o" B.OptAggressive B.OutputObject B.LogWarning "test.rr"
+    spec =
+        TargetSpec
+            "tensor_module"
+            "tensor.o"
+            B.OptAggressive
+            B.OutputObject
+            B.LogWarning
+            "test.rr"
 
 -- Create matmul function: _ZN9Tensor2x2I3f64E6matmulE
 -- Takes two Tensor2x2, returns Tensor2x2
@@ -735,7 +761,14 @@ createFibonacciModule :: C.Module
 createFibonacciModule =
     (emptyModule spec){C.moduleFunctions = [createFibonacciFunction]}
   where
-    spec = TargetSpec "fibonacci_module" "fibonacci.o" B.OptAggressive B.OutputObject B.LogWarning "test.rr"
+    spec =
+        TargetSpec
+            "fibonacci_module"
+            "fibonacci.o"
+            B.OptAggressive
+            B.OutputObject
+            B.LogWarning
+            "test.rr"
 
 codegenTests :: TestTree
 codegenTests =
@@ -747,24 +780,32 @@ codegenTests =
                 let module' = createSimpleModule
                 result <-
                     L.withStdOutLogger $ \logger -> do
-                        E.runEff $ L.runLog "Test.Codegen" logger defaultLogLevel $ C.emitModuleToText module'
+                        E.runEff $
+                            L.runLog "Test.Codegen" logger defaultLogLevel $
+                                C.emitModuleToText module'
                 let resultStr = T.unpack result
                 assertBool "Should contain module declaration" $ "module" `isInfixOf` resultStr
                 assertBool "Should contain func.func" $ "func.func" `isInfixOf` resultStr
-                assertBool "Should contain function name add_f32" $ "add_f32" `isInfixOf` resultStr
+                assertBool "Should contain function name add_f32" $
+                    "add_f32" `isInfixOf` resultStr
                 assertBool "Should contain f32 type" $ "f32" `isInfixOf` resultStr
                 assertBool "Should contain arith.addf" $ "arith.addf" `isInfixOf` resultStr
                 assertBool "Should contain func.return" $ "func.return" `isInfixOf` resultStr
-                assertBool "Should contain function arguments" $ "%0" `isInfixOf` resultStr && "%1" `isInfixOf` resultStr
+                assertBool "Should contain function arguments" $
+                    "%0" `isInfixOf` resultStr && "%1" `isInfixOf` resultStr
                 assertBool "Should contain result" $ "%2" `isInfixOf` resultStr
             , testCase "emitModuleToText contains correct function signature" $ do
                 let module' = createSimpleModule
                 result <-
                     L.withStdOutLogger $ \logger -> do
-                        E.runEff $ L.runLog "Test.Codegen" logger defaultLogLevel $ C.emitModuleToText module'
+                        E.runEff $
+                            L.runLog "Test.Codegen" logger defaultLogLevel $
+                                C.emitModuleToText module'
                 let resultStr = T.unpack result
-                assertBool "Should contain external visibility" $ "external" `isInfixOf` resultStr
-                assertBool "Should contain multiple f32 references" $ T.count "f32" (T.pack resultStr) >= 3
+                assertBool "Should contain external visibility" $
+                    "external" `isInfixOf` resultStr
+                assertBool "Should contain multiple f32 references" $
+                    T.count "f32" (T.pack resultStr) >= 3
             ]
         , testGroup
             "emitModuleToBackend"
@@ -786,18 +827,22 @@ codegenTests =
                 let module' = createFibonacciModule
                 result <-
                     L.withStdOutLogger $ \logger -> do
-                        E.runEff $ L.runLog "Test.Codegen" logger defaultLogLevel $ C.emitModuleToText module'
+                        E.runEff $
+                            L.runLog "Test.Codegen" logger defaultLogLevel $
+                                C.emitModuleToText module'
                 let resultStr = T.unpack result
                 assertBool "Should contain module declaration" $ "module" `isInfixOf` resultStr
                 assertBool "Should contain func.func" $ "func.func" `isInfixOf` resultStr
-                assertBool "Should contain function name fibonacci" $ "fibonacci" `isInfixOf` resultStr
+                assertBool "Should contain function name fibonacci" $
+                    "fibonacci" `isInfixOf` resultStr
                 assertBool "Should contain i128 type" $ "i128" `isInfixOf` resultStr
                 assertBool "Should contain arith.cmpi" $ "arith.cmpi" `isInfixOf` resultStr
                 assertBool "Should contain scf.if" $ "scf.if" `isInfixOf` resultStr
                 assertBool "Should contain func.call" $ "func.call" `isInfixOf` resultStr
                 assertBool "Should contain arith.addi" $ "arith.addi" `isInfixOf` resultStr
                 assertBool "Should contain arith.subi" $ "arith.subi" `isInfixOf` resultStr
-            , testCase "emitModuleToBackend executes fibonacci module with aggressive optimization" $ do
+            , testCase
+                "emitModuleToBackend executes fibonacci module with aggressive optimization" $ do
                 withSystemTempDirectory "reussir-test" $ \tmpDir -> do
                     let fibonacciPath = tmpDir ++ "/fibonacci.o"
                     let origSpec = C.moduleSpec createFibonacciModule
@@ -815,14 +860,19 @@ codegenTests =
                 let module' = createTensor2x2Module
                 result <-
                     L.withStdOutLogger $ \logger -> do
-                        E.runEff $ L.runLog "Test.Codegen" logger defaultLogLevel $ C.emitModuleToText module'
+                        E.runEff $
+                            L.runLog "Test.Codegen" logger defaultLogLevel $
+                                C.emitModuleToText module'
                 let resultStr = T.unpack result
                 assertBool "Should contain module declaration" $ "module" `isInfixOf` resultStr
-                assertBool "Should contain record type" $ "!reussir.record" `isInfixOf` resultStr
-                assertBool "Should contain record name _Z9Tensor2x2I3f64E" $ "_Z9Tensor2x2I3f64E" `isInfixOf` resultStr
+                assertBool "Should contain record type" $
+                    "!reussir.record" `isInfixOf` resultStr
+                assertBool "Should contain record name _Z9Tensor2x2I3f64E" $
+                    "_Z9Tensor2x2I3f64E" `isInfixOf` resultStr
                 assertBool "Should contain f64 type" $ "f64" `isInfixOf` resultStr
                 assertBool "Should contain value capability" $ "value" `isInfixOf` resultStr
-                assertBool "Should contain four f64 fields" $ T.count "f64" (T.pack resultStr) >= 4
+                assertBool "Should contain four f64 fields" $
+                    T.count "f64" (T.pack resultStr) >= 4
             , testCase "emitModuleToBackend executes tensor2x2 module without error" $ do
                 withSystemTempDirectory "reussir-test" $ \tmpDir -> do
                     let tensorPath = tmpDir ++ "/tensor.o"
@@ -847,11 +897,15 @@ codegenTests =
                             E.runEff $ L.runLog "Test.Codegen" logger defaultLogLevel $ do
                                 C.emitModuleToBackend module'
                     -- Write the C file
-                    let cSource = "extern double _Z13fibnacci_fast(unsigned long long);\nint main() {\n        double value = _Z13fibnacci_fast(42);\n        __builtin_printf(\"%.0f\\n\", value);\n        return 0;\n}\n"
+                    let cSource =
+                            "extern double _Z13fibnacci_fast(unsigned long long);\nint main() {\n        double value = _Z13fibnacci_fast(42);\n        __builtin_printf(\"%.0f\\n\", value);\n        return 0;\n}\n"
                     IO.writeFile tensorCPath cSource
                     -- Compile the executable
                     (exitCode1, _, _) <-
-                        readProcessWithExitCode "cc" [tensorCPath, tensorObjPath, "-O3", "-o", tensorExecPath] ""
+                        readProcessWithExitCode
+                            "cc"
+                            [tensorCPath, tensorObjPath, "-O3", "-o", tensorExecPath]
+                            ""
                     -- Check that compilation succeeded
                     assertBool "Compilation should succeed" (exitCode1 == ExitSuccess)
                     -- Run the executable and capture output

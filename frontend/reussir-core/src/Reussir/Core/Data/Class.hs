@@ -1,11 +1,12 @@
 module Reussir.Core.Data.Class where
 
 import Data.Array (Array)
-import Data.HashTable.IO qualified as H
 import Data.Hashable (Hashable (..))
 import Data.Int (Int64)
 import Effectful.Prim.IORef.Strict (IORef')
 import Reussir.Parser.Types.Lexer (Path)
+
+import Data.HashTable.IO qualified as H
 
 newtype Class = Class Path
     deriving (Show, Eq, Ord)

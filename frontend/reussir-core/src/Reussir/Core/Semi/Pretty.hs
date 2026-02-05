@@ -7,13 +7,18 @@ module Reussir.Core.Semi.Pretty (
 ) where
 
 import Control.Monad (zipWithM)
-import Data.Vector.Strict qualified as V
-import Data.Vector.Unboxed qualified as UV
 import Effectful (Eff, IOE, (:>))
 import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (readIORef')
 import Prettyprinter
 import Prettyprinter.Render.Terminal
+import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
+import Reussir.Parser.Types.Stmt (Visibility (..))
+
+import Data.Vector.Strict qualified as V
+import Data.Vector.Unboxed qualified as UV
+import Reussir.Parser.Types.Capability qualified as Cap
+
 import Reussir.Core.Data.FP (FloatingPointType (..))
 import Reussir.Core.Data.Integral (IntegralType (..))
 import Reussir.Core.Data.Operator (ArithOp (..), CmpOp (..))
@@ -28,9 +33,6 @@ import Reussir.Core.Data.Semi.Record (
 import Reussir.Core.Data.Semi.Type (Flexivity (..), Type (..))
 import Reussir.Core.Data.String (StringToken (..))
 import Reussir.Core.Data.UniqueID (GenericID (..), HoleID (..), VarID (..))
-import Reussir.Parser.Types.Capability qualified as Cap
-import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
-import Reussir.Parser.Types.Stmt (Visibility (..))
 
 -- Helper functions for styles
 keyword :: Doc AnsiStyle -> Doc AnsiStyle
@@ -99,7 +101,8 @@ instance PrettyColored Type where
         flexDoc <- prettyColored flex
         argsDocs <- mapM prettyColored args
         -- Flexivity currently ignored in pretty printing
-        pure $ pathDoc <> flexDoc <> if null args then mempty else angles (commaSep argsDocs)
+        pure $
+            pathDoc <> flexDoc <> if null args then mempty else angles (commaSep argsDocs)
     prettyColored (TypeIntegral t) = prettyColored t
     prettyColored (TypeFP t) = prettyColored t
     prettyColored TypeBool = pure $ typeName "bool"
@@ -134,7 +137,18 @@ instance PrettyColored CmpOp where
 instance PrettyColored Expr where
     prettyColored expr = do
         kindDoc <- case exprKind expr of
-            GlobalStr (StringToken (u1, u2, u3, u4)) -> pure $ literal $ "str_token(" <> pretty u1 <> ", " <> pretty u2 <> ", " <> pretty u3 <> ", " <> pretty u4 <> ")"
+            GlobalStr (StringToken (u1, u2, u3, u4)) ->
+                pure $
+                    literal $
+                        "str_token("
+                            <> pretty u1
+                            <> ", "
+                            <> pretty u2
+                            <> ", "
+                            <> pretty u3
+                            <> ", "
+                            <> pretty u4
+                            <> ")"
             Constant n -> pure $ literal (pretty (show n))
             Negate e -> do
                 eDoc <- prettyColored e
@@ -233,7 +247,8 @@ instance PrettyColored Expr where
             Sequence [singleton] -> prettyColored singleton
             Sequence subexprs -> do
                 subexprsDocs <- mapM prettyColored subexprs
-                pure $ braces (nest 4 (hardline <> vsep (punctuate semi subexprsDocs)) <> hardline)
+                pure $
+                    braces (nest 4 (hardline <> vsep (punctuate semi subexprsDocs)) <> hardline)
 
         case exprKind expr of
             Var _ -> pure kindDoc
@@ -256,9 +271,14 @@ instance PrettyColored Record where
             Nothing -> pure $ comment "<un-elaborated>"
         pure $
             visDoc
-                <> keyword (case kind of StructKind -> "struct"; EnumKind -> "enum"; EnumVariant _ _ -> "enum_variant")
+                <> keyword
+                    ( case kind of
+                        StructKind -> "struct"
+                        EnumKind -> "enum"
+                        EnumVariant _ _ -> "enum_variant"
+                    )
                 <> (case cap of Cap.Unspecified -> mempty; _ -> space <> brackets capDoc)
-                    <+> nameDoc
+                <+> nameDoc
                 <> genericsDoc
                 <> fieldsDoc
       where
@@ -292,7 +312,8 @@ instance PrettyColored Record where
             tDoc <- prettyColored t
             pure $ fldDoc <> tDoc
 
-        prettyFieldFlag :: (IOE :> es, Prim :> es) => FieldFlag -> Eff es (Doc AnsiStyle)
+        prettyFieldFlag ::
+            (IOE :> es, Prim :> es) => FieldFlag -> Eff es (Doc AnsiStyle)
         prettyFieldFlag False = pure mempty
         prettyFieldFlag True = pure $ brackets (keyword "field") <> space
 
@@ -314,12 +335,12 @@ instance PrettyColored FunctionProto where
             visDoc
                 <> (if isRegional then keyword "regional" <> space else mempty)
                 <> keyword "fn"
-                    <+> nameDoc
+                <+> nameDoc
                 <> genericsDoc
                 <> parens (commaSep paramsDoc)
-                    <+> operator "->"
-                    <+> retDoc
-                    <+> bodyDoc
+                <+> operator "->"
+                <+> retDoc
+                <+> bodyDoc
       where
         prettyGenerics [] = pure mempty
         prettyGenerics gs = do

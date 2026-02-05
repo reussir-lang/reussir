@@ -5,22 +5,21 @@
 module Reussir.Parser.Expr where
 
 import Control.Monad.Combinators.Expr
-
 import Data.Functor
 import Data.Maybe
+import Data.Vector (Vector)
 
+import Data.Char qualified as C
 import Data.Text qualified as T
 import Data.Vector qualified as V
-import Data.Vector (Vector)
 import Data.Vector.Strict qualified as SV
+
 import Reussir.Parser.Lexer
 import Reussir.Parser.Type (parseType)
 import Reussir.Parser.Types hiding (space)
 import Reussir.Parser.Types.Expr
 import Reussir.Parser.Types.Lexer (Identifier (..), Path (..))
 import Reussir.Parser.Types.Type (Type)
-import Data.Char qualified as C
-
 
 parseBody :: Parser Expr
 parseBody = parseExprSeq
@@ -62,7 +61,8 @@ parsePathOrBind = do
                     else BindPat (Identifier t)
         ]
 
-parseCtorPatArgs :: Parser Char -> Parser Char -> Bool -> Parser (Vector PatternCtorArg, Bool)
+parseCtorPatArgs ::
+    Parser Char -> Parser Char -> Bool -> Parser (Vector PatternCtorArg, Bool)
 parseCtorPatArgs open close isNamed = do
     _ <- open *> space
     choice
@@ -98,16 +98,17 @@ parseArgsAndEllipsis isNamed = do
         ]
 
 parseArg :: Bool -> Parser PatternCtorArg
-parseArg True = do -- Named: identifier (: pattern)?
+parseArg True = do
+    -- Named: identifier (: pattern)?
     id' <- parseIdentifier
     mk <- optional (colon *> parsePatternKind)
     case mk of
         Just k -> return $ PatternCtorArg (Just id') k
         Nothing -> return $ PatternCtorArg (Just id') (BindPat id') -- { x } -> x: x (BindPat)
-parseArg False = do -- Positional: pattern
+parseArg False = do
+    -- Positional: pattern
     k <- parsePatternKind
     return $ PatternCtorArg Nothing k
-
 
 parseIf :: Parser Expr
 parseIf = do
@@ -125,7 +126,8 @@ parseLetIn = do
     return (Let name ty value)
   where
     parseTypeWithFlex = do
-        flexFlag <- optional (char '[' *> space *> string "flex" <* space <* char ']' <* space)
+        flexFlag <-
+            optional (char '[' *> space *> string "flex" <* space <* char ']' <* space)
         ty <- parseType
         return (ty, isJust flexFlag)
 
@@ -288,13 +290,15 @@ exprOpTable =
 parseExprTerm :: Bool -> Parser Expr
 parseExprTerm allowStruct =
     choice
-        [ (char '(' *> space *> parseExpr <* space <* char ')' <* space) <?> "parenthesized expression"
+        [ (char '(' *> space *> parseExpr <* space <* char ')' <* space)
+            <?> "parenthesized expression"
         , parseIf <?> "if expression"
         , parseLetIn <?> "let binding"
         , parseMatch <?> "match expression"
         , parseRegionalExpr <?> "regional expression"
         , ConstExpr <$> parseConstant <?> "constant"
-        , SpannedExpr <$> withSpan (parsePathBasedExpr allowStruct) <?> "variable or function call"
+        , SpannedExpr
+            <$> withSpan (parsePathBasedExpr allowStruct) <?> "variable or function call"
         , parseExprSeq <?> "expression sequence"
         ]
 
@@ -304,4 +308,6 @@ parseExpr = parseExprWithOpts True
 parseExprWithOpts :: Bool -> Parser Expr
 parseExprWithOpts allowStruct =
     (SpannedExpr <$> withSpan parseLambda)
-        <|> makeExprParser (SpannedExpr <$> withSpan (parseExprTerm allowStruct)) exprOpTable
+        <|> makeExprParser
+            (SpannedExpr <$> withSpan (parseExprTerm allowStruct))
+            exprOpTable

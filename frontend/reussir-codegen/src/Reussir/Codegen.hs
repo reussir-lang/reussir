@@ -10,18 +10,31 @@ module Reussir.Codegen (
 ) where
 
 import Control.Monad (forM_)
+import Effectful (Eff, IOE, inject, (:>))
+
 import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
-import Effectful (Eff, IOE, inject, (:>))
 import Effectful.Log qualified as L
 import Effectful.Reader.Static qualified as E
 import Effectful.State.Static.Local qualified as E
-import Reussir.Codegen.Context (Codegen, Context (builder), TargetSpec, addTypeInstance, emitModuleEnv, runCodegenToBackend)
+
+import Reussir.Codegen.Context (
+    Codegen,
+    Context (builder),
+    TargetSpec,
+    addTypeInstance,
+    emitModuleEnv,
+    runCodegenToBackend,
+ )
 import Reussir.Codegen.Context.Codegen (emptyContext)
 import Reussir.Codegen.Context.Symbol (Symbol)
 import Reussir.Codegen.Global (Global, globalCodegen)
 import Reussir.Codegen.IR (Function, functionCodegen)
-import Reussir.Codegen.PolymorphicFFI (PolymorphicFFI (..), PolymorphicFFIAttr (..), polyFFICodegen)
+import Reussir.Codegen.PolymorphicFFI (
+    PolymorphicFFI (..),
+    PolymorphicFFIAttr (..),
+    polyFFICodegen,
+ )
 import Reussir.Codegen.Type.Record (Record)
 
 newtype RecordInstance = RecordInstance {unRecordInstance :: (Symbol, Record)}
@@ -59,7 +72,8 @@ moduleCodegen m = do
 emitModuleToText :: (IOE :> es, L.Log :> es) => Module -> Eff es T.Text
 emitModuleToText m = do
     initCtx <- emptyContext
-    res <- inject $ E.runReader (moduleSpec m) $ E.execState initCtx $ moduleCodegen m
+    res <-
+        inject $ E.runReader (moduleSpec m) $ E.execState initCtx $ moduleCodegen m
     pure $ TB.runBuilder (builder res)
 
 -- | Helper function to emit module to backend

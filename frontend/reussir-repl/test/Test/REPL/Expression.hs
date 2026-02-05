@@ -7,19 +7,26 @@ import Control.Exception (SomeException, catch)
 import Data.ByteString (ByteString)
 import Data.Int (Int64)
 import Data.String (IsString (fromString))
-import Data.Text qualified as T
 import Data.Word (Word8)
 import Foreign (FunPtr, Ptr, Storable (..), alloca, nullPtr)
+import Foreign.C (CChar)
 import Foreign.C.String (peekCStringLen)
+import Foreign.C.Types (CSize)
 import Foreign.Ptr (castPtrToFunPtr)
+import Reussir.Bridge (
+    LogLevel (..),
+    OptOption (..),
+    addModule,
+    lookupSymbol,
+    withJIT,
+ )
+import Reussir.Core.REPL
+import Reussir.Parser.Expr (parseExpr)
 import Test.Tasty
 import Test.Tasty.HUnit
 import Text.Megaparsec (runParser)
-import Reussir.Bridge (LogLevel (..), OptOption (..), addModule, lookupSymbol, withJIT)
-import Reussir.Core.REPL
-import Reussir.Parser.Expr (parseExpr)
-import Foreign.C (CChar)
-import Foreign.C.Types (CSize)
+
+import Data.Text qualified as T
 
 -- Foreign imports for calling JIT-compiled functions
 foreign import ccall "dynamic"
@@ -57,41 +64,48 @@ tests :: TestTree
 tests =
     testGroup
         "Expression Compilation"
-        [ testGroup "Literal Expressions"
+        [ testGroup
+            "Literal Expressions"
             [ testCase "Integer literal" testIntLiteral
             , testCase "Float literal" testFloatLiteral
             , testCase "Boolean true" testBoolTrue
             , testCase "Boolean false" testBoolFalse
             ]
-        , testGroup "String Literal Expressions"
+        , testGroup
+            "String Literal Expressions"
             [ testCase "Simple string literal" testSimpleStringLiteral
             , testCase "Empty string literal" testEmptyStringLiteral
             , testCase "String with spaces" testStringWithSpaces
             , testCase "String with special chars" testStringWithSpecialChars
             ]
-        , testGroup "Arithmetic Expressions"
+        , testGroup
+            "Arithmetic Expressions"
             [ testCase "Addition" testAddition
             , testCase "Subtraction" testSubtraction
             , testCase "Multiplication" testMultiplication
             , testCase "Division" testDivision
             , testCase "Complex expression" testComplexExpr
             ]
-        , testGroup "Floating Point Expressions"
+        , testGroup
+            "Floating Point Expressions"
             [ testCase "Float addition" testFloatAddition
             , testCase "Float multiplication" testFloatMultiplication
             ]
-        , testGroup "Result Kind"
+        , testGroup
+            "Result Kind"
             [ testCase "Integer literal resolves to i64" testIntResultKind
             , testCase "Float literal resolves to f64" testFloatResultKind
             ]
-        , testGroup "Counter Increment"
+        , testGroup
+            "Counter Increment"
             [ testCase "Counter increments on compile" testCounterIncrement
             , testCase "Counter increments multiple times" testCounterMultiple
             ]
         ]
 
 -- Helper to parse and compile an expression
-parseAndCompile :: ReplState -> T.Text -> IO (Either ReplError (ReplState, ResultKind))
+parseAndCompile ::
+    ReplState -> T.Text -> IO (Either ReplError (ReplState, ResultKind))
 parseAndCompile state input =
     case runParser parseExpr "<test>" input of
         Left _err -> return $ Left $ ParseError "Parse failed"
@@ -336,21 +350,21 @@ testCounterMultiple :: Assertion
 testCounterMultiple = do
     state <- initReplState LogWarning "<test>"
     replCounter state @?= 0
-    
+
     -- First expression
     result1 <- parseAndCompile state "1"
     state1 <- case result1 of
         Left err -> assertFailure ("First expr failed: " ++ show err) >> return state
         Right (s, _) -> return s
     replCounter state1 @?= 1
-    
+
     -- Second expression
     result2 <- parseAndCompile state1 "2"
     state2 <- case result2 of
         Left err -> assertFailure ("Second expr failed: " ++ show err) >> return state1
         Right (s, _) -> return s
     replCounter state2 @?= 2
-    
+
     -- Third expression
     result3 <- parseAndCompile state2 "3"
     state3 <- case result3 of

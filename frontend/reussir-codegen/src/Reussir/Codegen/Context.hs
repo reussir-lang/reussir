@@ -21,10 +21,12 @@ module Reussir.Codegen.Context (
 where
 
 import Effectful ((:>))
+
 import Effectful qualified as E
 import Effectful.Log qualified as L
 import Effectful.Reader.Static qualified as E
 import Effectful.State.Static.Local qualified as E
+
 import Reussir.Codegen.Context.Codegen (
     Codegen,
     Context (..),
@@ -47,7 +49,8 @@ import Reussir.Codegen.Context.Module (
     runCodegenToBackend,
  )
 
-runCodegen :: (E.IOE :> es, L.Log :> es) => TargetSpec -> Codegen a -> E.Eff es a
+runCodegen ::
+    (E.IOE :> es, L.Log :> es) => TargetSpec -> Codegen a -> E.Eff es a
 runCodegen spec codegen = do
     initCtx <- emptyContext
     E.inject $ E.runReader spec $ E.evalState initCtx $ codegen

@@ -9,23 +9,26 @@ module Reussir.Core.Data.Lowering.Context (
 ) where
 
 import Data.Int (Int64)
-import Data.IntMap.Strict qualified as IntMap
-import Data.Sequence qualified as Seq
-import Data.Text qualified as T
 import Effectful (Eff, IOE)
 import Effectful.Log (Log)
 import Effectful.Prim.IORef.Strict (Prim)
+import Reussir.Codegen.Location (DBGMetaInfo)
+import Reussir.Codegen.Value (TypedValue)
+import Reussir.Diagnostic.Repository (Repository)
+
+import Data.IntMap.Strict qualified as IntMap
+import Data.Sequence qualified as Seq
+import Data.Text qualified as T
 import Effectful.Reader.Static qualified as Reader
 import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen qualified as IR
 import Reussir.Codegen.Context qualified as IR
 import Reussir.Codegen.IR qualified as IR
-import Reussir.Codegen.Location (DBGMetaInfo)
-import Reussir.Codegen.Value (TypedValue)
+
+import Reussir.Core.String
+
 import Reussir.Core.Data.Full.Function qualified as Full
 import Reussir.Core.Data.Full.Record qualified as Full
-import Reussir.Core.String
-import Reussir.Diagnostic.Repository (Repository)
 
 type BlockBuilder = Seq.Seq IR.Instr
 

@@ -3,13 +3,16 @@
 module Reussir.Core.Lowering.Record where
 
 import Control.Monad (forM)
+
 import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen qualified as IR
 import Reussir.Codegen.Type qualified as IR
 import Reussir.Codegen.Type.Record qualified as IRRecord
-import Reussir.Core.Data.Full.Record qualified as Full
+
 import Reussir.Core.Data.Lowering.Context (GlobalLoweringEff)
 import Reussir.Core.Lowering.Type (convertType)
+
+import Reussir.Core.Data.Full.Record qualified as Full
 
 lowerRecord :: Full.Record -> GlobalLoweringEff ()
 lowerRecord record = do
@@ -33,7 +36,12 @@ lowerRecord record = do
             forM fields $ \(_, ty, mutable) -> do
                 irTy <- convertType ty
                 pure $ IRRecord.RecordField irTy mutable
-        _ -> error $ "Mismatched record kind and fields: " ++ show semKind ++ " " ++ show (Full.recordFields record)
+        _ ->
+            error $
+                "Mismatched record kind and fields: "
+                    ++ show semKind
+                    ++ " "
+                    ++ show (Full.recordFields record)
 
     let irRecord =
             IRRecord.Record
@@ -43,5 +51,9 @@ lowerRecord record = do
                 }
 
     mod' <- State.get
-    let updatedMod = mod'{IR.recordInstances = IR.RecordInstance (symbol, irRecord) : IR.recordInstances mod'}
+    let updatedMod =
+            mod'
+                { IR.recordInstances =
+                    IR.RecordInstance (symbol, irRecord) : IR.recordInstances mod'
+                }
     State.put updatedMod

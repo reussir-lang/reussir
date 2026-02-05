@@ -1,10 +1,12 @@
 module Reussir.Core.Lowering.Type where
 
 import Reussir.Codegen.Type qualified as IR
+
+import Reussir.Core.Data.Lowering.Context (GlobalLoweringEff)
+
 import Reussir.Core.Data.FP qualified as FP
 import Reussir.Core.Data.Full.Type qualified as Full
 import Reussir.Core.Data.Integral qualified as Int
-import Reussir.Core.Data.Lowering.Context (GlobalLoweringEff)
 
 convertType :: Full.Type -> GlobalLoweringEff IR.Type
 convertType Full.TypeBool = pure $ IR.TypePrim IR.PrimBool

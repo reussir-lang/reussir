@@ -2,11 +2,11 @@
 
 module Reussir.Parser.ExprSpec (spec) where
 
+import Data.Vector.Strict (fromList)
 import Test.Hspec
 import Test.Hspec.Megaparsec
 import Text.Megaparsec
 
-import Data.Vector.Strict (fromList)
 import Reussir.Parser.Expr
 import Reussir.Parser.Types.Expr
 import Reussir.Parser.Types.Lexer (Path (..), WithSpan (..))
@@ -61,10 +61,16 @@ spec = do
     describe "parseFuncCallExpr" $ do
         it "parses function call" $
             (stripExprSpans <$> parse (parsePathBasedExpr True) "" "foo(1, 2)")
-                `shouldParse` FuncCallExpr (FuncCall (Path "foo" []) [] [ConstExpr (ConstInt 1), ConstExpr (ConstInt 2)])
+                `shouldParse` FuncCallExpr
+                    (FuncCall (Path "foo" []) [] [ConstExpr (ConstInt 1), ConstExpr (ConstInt 2)])
         it "parses function call with type args" $
             (stripExprSpans <$> parse (parsePathBasedExpr True) "" "foo<i32, _>(1)")
-                `shouldParse` FuncCallExpr (FuncCall (Path "foo" []) [Just (TypeIntegral (Signed 32)), Nothing] [ConstExpr (ConstInt 1)])
+                `shouldParse` FuncCallExpr
+                    ( FuncCall
+                        (Path "foo" [])
+                        [Just (TypeIntegral (Signed 32)), Nothing]
+                        [ConstExpr (ConstInt 1)]
+                    )
 
     describe "parseCtorCallExpr" $ do
         it "parses struct constructor" $
@@ -73,7 +79,12 @@ spec = do
 
         it "parses struct constructor with type args" $
             (stripExprSpans <$> parse (parsePathBasedExpr True) "" "Foo<i32> { 1 }")
-                `shouldParse` CtorCallExpr (CtorCall (Path "Foo" []) [Just (TypeIntegral (Signed 32))] [(Nothing, ConstExpr (ConstInt 1))])
+                `shouldParse` CtorCallExpr
+                    ( CtorCall
+                        (Path "Foo" [])
+                        [Just (TypeIntegral (Signed 32))]
+                        [(Nothing, ConstExpr (ConstInt 1))]
+                    )
 
     {-
     it "parses enum variant constructor" $
@@ -100,7 +111,9 @@ spec = do
 
         it "parses mixed access" $
             (stripExprSpans <$> parse parseExpr "" "foo.bar.0.baz")
-                `shouldParse` AccessChain (Var (Path "foo" [])) (fromList [Named "bar", Unnamed 0, Named "baz"])
+                `shouldParse` AccessChain
+                    (Var (Path "foo" []))
+                    (fromList [Named "bar", Unnamed 0, Named "baz"])
 
     describe "parseExprSeq" $ do
         it "parses simple sequence" $

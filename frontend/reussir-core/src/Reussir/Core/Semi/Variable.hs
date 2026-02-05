@@ -1,10 +1,13 @@
 module Reussir.Core.Semi.Variable where
 
-import Data.HashTable.IO qualified as H
 import Data.Int (Int64)
-import Data.Sequence qualified as Seq
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.Prim.IORef.Strict (Prim, newIORef', readIORef', writeIORef')
+import Reussir.Parser.Types.Lexer (Identifier)
+
+import Data.HashTable.IO qualified as H
+import Data.Sequence qualified as Seq
+
 import Reussir.Core.Data.Semi.Type (Type)
 import Reussir.Core.Data.Semi.Variable (
     ChangeLog (..),
@@ -12,7 +15,6 @@ import Reussir.Core.Data.Semi.Variable (
     VarTable (..),
  )
 import Reussir.Core.Data.UniqueID (VarID (..))
-import Reussir.Parser.Types.Lexer (Identifier)
 
 newVariableTable :: (IOE :> es, Prim :> es) => Eff es VarTable
 newVariableTable = do
@@ -49,7 +51,9 @@ getVarType (VarID idx) varTable = do
     return $ varType varDef
 
 -- | Lookup the locally effective variable with the given name
-lookupVar :: (IOE :> es, Prim :> es) => Identifier -> VarTable -> Eff es (Maybe (VarID, Type))
+lookupVar ::
+    (IOE :> es, Prim :> es) =>
+    Identifier -> VarTable -> Eff es (Maybe (VarID, Type))
 lookupVar varName varTable = do
     let nameMap = localBindings varTable
     liftIO (H.lookup nameMap varName) >>= \case

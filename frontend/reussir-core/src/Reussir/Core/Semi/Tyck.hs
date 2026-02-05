@@ -17,21 +17,41 @@ module Reussir.Core.Semi.Tyck (
     checkType,
 ) where
 
-import Data.Function ((&))
-import Effectful.State.Static.Local qualified as State
-import System.Console.ANSI.Types qualified as ANSI
-
 import Control.Monad (forM, unless, when, zipWithM)
-import Data.HashTable.IO qualified as H
-import Data.IntMap.Strict qualified as IntMap
+import Data.Function ((&))
 import Data.List (find)
 import Data.Maybe (isJust)
+import Effectful (MonadIO (liftIO), inject)
+import Effectful.Prim.IORef.Strict (readIORef', writeIORef')
+import Reussir.Diagnostic (Label (..))
+import Reussir.Diagnostic.Report (
+    Report (..),
+    addForegroundColorToCodeRef,
+    addForegroundColorToText,
+    annotatedCodeRef,
+    defaultCodeRef,
+    defaultText,
+ )
+import Reussir.Parser.Types.Lexer (
+    Identifier (..),
+    Path (..),
+    WithSpan (WithSpan),
+ )
+
+import Data.HashTable.IO qualified as H
+import Data.IntMap.Strict qualified as IntMap
 import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
-import Effectful (MonadIO (liftIO), inject)
 import Effectful.Log qualified as L
-import Effectful.Prim.IORef.Strict (readIORef', writeIORef')
+import Effectful.State.Static.Local qualified as State
+import Reussir.Parser.Types.Capability qualified as Cap
+import Reussir.Parser.Types.Expr qualified as Access (Access (..))
+import Reussir.Parser.Types.Expr qualified as Syn
+import Reussir.Parser.Types.Stmt qualified as Syn
+import Reussir.Parser.Types.Type qualified as Syn
+import System.Console.ANSI.Types qualified as ANSI
+
 import Reussir.Core.Data.Class (Class (Class), TypeBound)
 import Reussir.Core.Data.Integral (IntegralType (..))
 import Reussir.Core.Data.Operator (ArithOp (..), CmpOp (..))
@@ -43,7 +63,11 @@ import Reussir.Core.Data.Semi.Context (
  )
 import Reussir.Core.Data.Semi.Expr (Expr (..), ExprKind (..))
 import Reussir.Core.Data.Semi.Function (FunctionProto (..), FunctionTable (..))
-import Reussir.Core.Data.Semi.Record (Record (..), RecordFields (..), RecordKind (..))
+import Reussir.Core.Data.Semi.Record (
+    Record (..),
+    RecordFields (..),
+    RecordKind (..),
+ )
 import Reussir.Core.Data.Semi.Type (
     Flexivity (..),
     Type (..),
@@ -66,24 +90,17 @@ import Reussir.Core.Semi.Context (
  )
 import Reussir.Core.Semi.Function (getFunctionProto)
 import Reussir.Core.Semi.Type (substituteGenericMap)
-import Reussir.Core.Semi.Unification (errorToReport, force, getGenericBound, getHoleState, introduceNewHole, satisfyBounds, unify)
+import Reussir.Core.Semi.Unification (
+    errorToReport,
+    force,
+    getGenericBound,
+    getHoleState,
+    introduceNewHole,
+    satisfyBounds,
+    unify,
+ )
 import Reussir.Core.Semi.Variable (lookupVar, newVariable)
 import Reussir.Core.String (allocateStrToken)
-import Reussir.Diagnostic (Label (..))
-import Reussir.Diagnostic.Report (
-    Report (..),
-    addForegroundColorToCodeRef,
-    addForegroundColorToText,
-    annotatedCodeRef,
-    defaultCodeRef,
-    defaultText,
- )
-import Reussir.Parser.Types.Capability qualified as Cap
-import Reussir.Parser.Types.Expr qualified as Access (Access (..))
-import Reussir.Parser.Types.Expr qualified as Syn
-import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (WithSpan))
-import Reussir.Parser.Types.Stmt qualified as Syn
-import Reussir.Parser.Types.Type qualified as Syn
 
 introduceNewHoleInContext :: TypeBound -> SemiEff Type
 introduceNewHoleInContext bounds = do
@@ -510,7 +527,11 @@ checkType expr ty = do
 
 -- | Helper function to infer the type of an intrinsic function call
 inferTypeForIntrinsicCall :: Syn.FuncCall -> SemiEff (Maybe Expr)
-inferTypeForIntrinsicCall Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallTyArgs = tyArgs, Syn.funcCallArgs = argExprs} = do
+inferTypeForIntrinsicCall Syn.FuncCall
+                            { Syn.funcCallName = path
+                            , Syn.funcCallTyArgs = tyArgs
+                            , Syn.funcCallArgs = argExprs
+                            } = do
     case path of
         Path name ["core", "intrinsic", "math"] -> do
             let floatUnary =
@@ -643,7 +664,11 @@ inferTypeForCallExpr call = do
         Nothing -> inferTypeForNormalCall call
 
 inferTypeForNormalCall :: Syn.FuncCall -> SemiEff Expr
-inferTypeForNormalCall Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallTyArgs = tyArgs, Syn.funcCallArgs = argExprs} = do
+inferTypeForNormalCall Syn.FuncCall
+                        { Syn.funcCallName = path
+                        , Syn.funcCallTyArgs = tyArgs
+                        , Syn.funcCallArgs = argExprs
+                        } = do
     L.logTrace_ $ "Tyck: infer func call " <> T.pack (show path)
     -- Lookup function
     functionTable <- State.gets functions
@@ -659,7 +684,8 @@ inferTypeForNormalCall Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallTyArgs 
             when (not insideRegion' && funcIsRegional proto) $ do
                 addErrReportMsg "Cannot call regional function outside of region"
             checkTypeArgsNum numGenerics paddedTyArgs $ do
-                bounds <- mapM (\(_, gid) -> runUnification $ getGenericBound gid) (funcGenerics proto)
+                bounds <-
+                    mapM (\(_, gid) -> runUnification $ getGenericBound gid) (funcGenerics proto)
                 tyArgs' <- zipWithM tyArgOrMetaHole paddedTyArgs bounds
                 L.logTrace_ $
                     "Tyck: instantiated call generics for "
@@ -768,7 +794,8 @@ inferTypeBinOp op lhs rhs = case convertOp op of
                 rhs' <- checkType rhs lhsTy
                 exprWithSpan lhsTy $ Arith lhs' arithOp rhs'
             else do
-                addErrReportMsg $ "Binary arithmetic operation applied to non-numeric type: " <> T.show lhsTy
+                addErrReportMsg $
+                    "Binary arithmetic operation applied to non-numeric type: " <> T.show lhsTy
                 exprWithSpan TypeBottom Poison
     inferCmpOp cmpOp = do
         lhs' <- inferType lhs
@@ -815,7 +842,9 @@ resolveSingleAccess currentTy access = do
             knownRecords <- State.gets knownRecords
             liftIO (H.lookup knownRecords path) >>= \case
                 Just record -> do
-                    let subst = IntMap.fromList $ zip (map (\(_, GenericID gid) -> fromIntegral gid) $ recordTyParams record) args
+                    let subst =
+                            IntMap.fromList $
+                                zip (map (\(_, GenericID gid) -> fromIntegral gid) $ recordTyParams record) args
                     fieldsMaybe <- readIORef' (recordFields record)
                     case (fieldsMaybe, access) of
                         (Just (Named fields), Access.Named name) -> do
@@ -850,16 +879,20 @@ resolveSingleAccess currentTy access = do
             addErrReportMsg "Accessing field of non-record type"
             return (-1, TypeBottom)
 
--- | Resolve a single field access for assignment. Returns (index, rawFieldType, isMutable).
--- The rawFieldType is the field type before any nullable wrapping.
-resolveSingleAccessForAssign :: Type -> Access.Access -> SemiEff (Int, Type, Bool)
+{- | Resolve a single field access for assignment. Returns (index, rawFieldType, isMutable).
+The rawFieldType is the field type before any nullable wrapping.
+-}
+resolveSingleAccessForAssign ::
+    Type -> Access.Access -> SemiEff (Int, Type, Bool)
 resolveSingleAccessForAssign currentTy access = do
     case currentTy of
         TypeRecord path args _ -> do
             knownRecords <- State.gets knownRecords
             liftIO (H.lookup knownRecords path) >>= \case
                 Just record -> do
-                    let subst = IntMap.fromList $ zip (map (\(_, GenericID gid) -> fromIntegral gid) $ recordTyParams record) args
+                    let subst =
+                            IntMap.fromList $
+                                zip (map (\(_, GenericID gid) -> fromIntegral gid) $ recordTyParams record) args
                     fieldsMaybe <- readIORef' (recordFields record)
                     case (fieldsMaybe, access) of
                         (Just (Named fields), Access.Named name) -> do
@@ -893,9 +926,10 @@ resolveSingleAccessForAssign currentTy access = do
             addErrReportMsg "Accessing field of non-record type"
             return (-1, TypeBottom, False)
 
--- | Extract the identifier from a simple variable expression.
--- Returns Just identifier if the expression is a simple variable (Var with no path segments),
--- otherwise returns Nothing.
+{- | Extract the identifier from a simple variable expression.
+Returns Just identifier if the expression is a simple variable (Var with no path segments),
+otherwise returns Nothing.
+-}
 extractSimpleVarName :: Syn.Expr -> Maybe Identifier
 extractSimpleVarName (Syn.Var (Path name [])) = Just name
 extractSimpleVarName (Syn.SpannedExpr (WithSpan e _ _)) = extractSimpleVarName e
@@ -922,7 +956,8 @@ inferTypeForNormalCtorCall
                         if null ctorTyArgs && numGenerics > 0
                             then replicate numGenerics Nothing
                             else ctorTyArgs
-                bounds <- mapM (\(_, gid) -> runUnification $ getGenericBound gid) (recordTyParams record)
+                bounds <-
+                    mapM (\(_, gid) -> runUnification $ getGenericBound gid) (recordTyParams record)
                 tyArgs' <- zipWithM tyArgOrMetaHole paddedTyArgs bounds
                 L.logTrace_ $
                     "Tyck: instantiated ctor generics for "
@@ -934,9 +969,17 @@ inferTypeForNormalCtorCall
 
                     fieldsMaybe <- readIORef' (recordFields record)
                     (fields, variantInfo) <- case (recordKind record, fieldsMaybe) of
-                        (StructKind, Just (Named fs)) -> return (V.toList $ V.map (\(WithSpan (n, t, f) _ _) -> (Just n, t, f)) fs, Nothing)
-                        (StructKind, Just (Unnamed fs)) -> return (V.toList $ V.map (\(WithSpan (t, f) _ _) -> (Nothing, t, f)) fs, Nothing)
-                        (EnumVariant parentPath idx, Just (Unnamed fs)) -> return (V.toList $ V.map (\(WithSpan (t, f) _ _) -> (Nothing, t, f)) fs, Just (parentPath, idx))
+                        (StructKind, Just (Named fs)) ->
+                            return
+                                (V.toList $ V.map (\(WithSpan (n, t, f) _ _) -> (Just n, t, f)) fs, Nothing)
+                        (StructKind, Just (Unnamed fs)) ->
+                            return
+                                (V.toList $ V.map (\(WithSpan (t, f) _ _) -> (Nothing, t, f)) fs, Nothing)
+                        (EnumVariant parentPath idx, Just (Unnamed fs)) ->
+                            return
+                                ( V.toList $ V.map (\(WithSpan (t, f) _ _) -> (Nothing, t, f)) fs
+                                , Just (parentPath, idx)
+                                )
                         (EnumVariant _ _, Just (Named _)) -> do
                             -- This should be unreachable based on current translation logic
                             addErrReportMsg "Enum variant cannot have named fields yet"
@@ -959,14 +1002,14 @@ inferTypeForNormalCtorCall
                         let fieldNames = [n | (Just n, _, _) <- fields]
                         varTable <- State.gets varTable
                         expandedCtorArgs <- forM ctorArgs $ \(mArgName, argExpr) -> case mArgName of
-                            Just _ -> return (mArgName, argExpr)  -- Already named, keep as-is
+                            Just _ -> return (mArgName, argExpr) -- Already named, keep as-is
                             Nothing -> case extractSimpleVarName argExpr of
                                 Just varName | varName `elem` fieldNames -> do
                                     -- Check if the variable exists in scope
                                     lookupVar varName varTable >>= \case
-                                        Just _ -> return (Just varName, argExpr)  -- Expand shorthand
-                                        Nothing -> return (Nothing, argExpr)  -- Not in scope, keep positional
-                                _ -> return (Nothing, argExpr)  -- Not a simple var or doesn't match field, keep positional
+                                        Just _ -> return (Just varName, argExpr) -- Expand shorthand
+                                        Nothing -> return (Nothing, argExpr) -- Not in scope, keep positional
+                                _ -> return (Nothing, argExpr) -- Not a simple var or doesn't match field, keep positional
 
                         -- Reconstruct an ordered list of syntactic expressions in the same order as required in the record
                         orderedArgsExprs <-
@@ -1004,7 +1047,8 @@ inferTypeForNormalCtorCall
                         flexivity <-
                             if recordIsRegional
                                 then do
-                                    unless insideRegion' $ addErrReportMsg "Cannot instantiate regional record outside of a region"
+                                    unless insideRegion' $
+                                        addErrReportMsg "Cannot instantiate regional record outside of a region"
                                     return Flex
                                 else return Irrelevant
                         let recordTy = case variantInfo of

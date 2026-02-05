@@ -5,9 +5,9 @@ module Reussir.Parser.Types (
 ) where
 
 import Data.Void
-
-import Data.Text qualified as T
 import Text.Megaparsec
 import Text.Megaparsec.Char
+
+import Data.Text qualified as T
 
 type Parser = Parsec Void T.Text

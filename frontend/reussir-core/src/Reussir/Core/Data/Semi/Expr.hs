@@ -1,18 +1,21 @@
 module Reussir.Core.Data.Semi.Expr where
 
+import Data.Digest.XXHash.FFI
 import Data.Int (Int64)
 import Data.Scientific (Scientific)
+import Reussir.Parser.Types.Lexer (Identifier, Path)
+
+import Data.HashMap.Strict qualified as HashMap
+import Data.IntMap.Strict qualified as IntMap
+import Data.Sequence qualified as Seq
+import Data.Text qualified as T
+import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
+
 import Reussir.Core.Data.Operator (ArithOp, CmpOp)
 import Reussir.Core.Data.Semi.Type (Type)
 import Reussir.Core.Data.String (StringToken)
 import Reussir.Core.Data.UniqueID (ExprID, VarID)
-import Reussir.Parser.Types.Lexer (Identifier, Path)
-import qualified Data.IntMap.Strict as IntMap
-import qualified Data.Vector.Strict as V
-import qualified Data.HashMap.Strict as HashMap
-import qualified Data.Text as T
-import Data.Digest.XXHash.FFI
 
 data ExprKind
     = GlobalStr StringToken
@@ -59,45 +62,49 @@ data ExprKind
         }
     deriving (Show, Eq)
 
+newtype PatternVarRef = PatternVarRef {unPatternVarRef :: Seq.Seq Int}
+    deriving (Show, Eq, Ord)
+
 data DecisionTree a
     = DTUncovered
     | DTUnreachable
-    | DTLeaf {
-        dtLeafBody :: a,
-        dtLeafBindings :: [Maybe VarID] -- positional bindings (DB index order)
-    }
-    | DTGuard {
-        dtGuardBindings :: [Maybe VarID],
-        dtGuardExpr :: a,
-        dtGuardTrue :: DecisionTree a,
-        dtGuardFalse :: DecisionTree a
-    }
-    | DTSwitch {
-        dtSwitchDeBruijnIdx :: Int,  -- DB index of the switch
-        dtSwitchCases :: DTSwitchCases a
-    }
+    | DTLeaf
+        { dtLeafBody :: a
+        , dtLeafBindings :: IntMap.IntMap PatternVarRef
+        }
+    | DTGuard
+        { dtGuardBindings :: IntMap.IntMap PatternVarRef
+        , dtGuardExpr :: a
+        , dtGuardTrue :: DecisionTree a
+        , dtGuardFalse :: DecisionTree a
+        }
+    | DTSwitch
+        { dtSwitchDeBruijnIdx :: PatternVarRef -- DB index of the switch
+        , dtSwitchCases :: DTSwitchCases a
+        }
 
 data DTSwitchCases a
-    = DTSwitchInt {
-        dtSwitchIntMap :: IntMap.IntMap (DecisionTree a),
-        dtSwitchIntDefault :: DecisionTree a
-    }
-    | DTSwitchBool {
-        dtSwitchBoolTrue :: DecisionTree a,
-        dtSwitchBoolFalse :: DecisionTree a
-    }
-    | DTSwitchCtor {
-        dtSwitchCtorCases :: V.Vector (DecisionTree a),
-        dtSwitchCtorDefault :: DecisionTree a
-    }
-    | DTSwitchString {
-        dtSwitchStringMap :: HashMap.HashMap (XXH3 T.Text) (DecisionTree a),
-        dtSwitchStringDefault :: DecisionTree a
-    }
-    | DTSwitchNullable { -- special case, since we specialize nullable types
-        dtSwitchNullableJust :: DecisionTree a,
-        dtSwitchNullableNothing :: DecisionTree a
-    }
+    = DTSwitchInt
+        { dtSwitchIntMap :: IntMap.IntMap (DecisionTree a)
+        , dtSwitchIntDefault :: DecisionTree a
+        }
+    | DTSwitchBool
+        { dtSwitchBoolTrue :: DecisionTree a
+        , dtSwitchBoolFalse :: DecisionTree a
+        }
+    | DTSwitchCtor
+        { dtSwitchCtorCases :: V.Vector (DecisionTree a)
+        , dtSwitchCtorDefault :: DecisionTree a
+        }
+    | DTSwitchString
+        { dtSwitchStringMap :: HashMap.HashMap (XXH3 T.Text) (DecisionTree a)
+        , dtSwitchStringDefault :: DecisionTree a
+        }
+    | DTSwitchNullable
+        { -- special case, since we specialize nullable types
+          dtSwitchNullableJust :: DecisionTree a
+        , dtSwitchNullableNothing :: DecisionTree a
+        }
 
 data Expr = Expr
     { exprKind :: ExprKind

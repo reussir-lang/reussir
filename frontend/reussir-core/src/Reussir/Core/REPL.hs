@@ -34,42 +34,48 @@ module Reussir.Core.REPL (
 
 import Control.Monad (forM_, when)
 import Data.ByteString (ByteString)
-import Data.HashTable.IO qualified as H
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
-import Data.IntMap.Strict qualified as IntMap
-import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Effectful (Eff, IOE, inject, liftIO, runEff, (:>))
-import Effectful.Log qualified as L
 import Effectful.Prim (runPrim)
 import Effectful.Prim.IORef.Strict (Prim)
 import Effectful.State.Static.Local (runState)
-import Effectful.State.Static.Local qualified as State
 import Log (LogLevel (..))
+import Reussir.Codegen.Context.Symbol (Symbol, verifiedSymbol)
+import Reussir.Codegen.Global (Global (..))
+import Reussir.Diagnostic.Display (displayReport)
+import Reussir.Diagnostic.Repository (Repository, createRepository)
+import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
+import System.IO (stderr)
+import System.IO.Unsafe (unsafePerformIO)
+
+import Data.HashTable.IO qualified as H
+import Data.IntMap.Strict qualified as IntMap
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import Effectful.Log qualified as L
+import Effectful.State.Static.Local qualified as State
 import Reussir.Bridge qualified as B
 import Reussir.Codegen qualified as IR
 import Reussir.Codegen.Context qualified as IR
-import Reussir.Codegen.Context.Symbol (Symbol, verifiedSymbol)
-import Reussir.Codegen.Global (Global (..))
+import Reussir.Parser.Types.Expr qualified as SynExpr
+import Reussir.Parser.Types.Stmt qualified as Syn
+
 import Reussir.Core.Data.Class (Class (..))
 import Reussir.Core.Data.FP (FloatingPointType (..))
 import Reussir.Core.Data.Full.Context (FullContext (..))
-import Reussir.Core.Data.Full.Function qualified as Full
 import Reussir.Core.Data.Generic (GenericSolution)
 import Reussir.Core.Data.Integral (IntegralType (..))
 import Reussir.Core.Data.Semi.Context (SemiContext (..), SemiEff)
-import Reussir.Core.Data.Semi.Expr qualified as Semi
-import Reussir.Core.Data.Semi.Function qualified as SemiFunc
-import Reussir.Core.Data.Semi.Type qualified as Semi
-import Reussir.Core.Full.Context qualified as Full
 import Reussir.Core.Full.Expr (convertSemiExpr)
 import Reussir.Core.Full.Function (convertAllSemiFunctions)
 import Reussir.Core.Full.Record (convertSemiRecordTable)
 import Reussir.Core.Full.Type (convertSemiType)
-import Reussir.Core.Lowering.Context (createLoweringContext, runLoweringToModule)
+import Reussir.Core.Lowering.Context (
+    createLoweringContext,
+    runLoweringToModule,
+ )
 import Reussir.Core.Lowering.Function (lowerFunction)
 import Reussir.Core.Lowering.Record (lowerRecord)
-import Reussir.Core.String (getAllStrings, mangleStringToken)
 import Reussir.Core.Semi.Context (
     emptyLocalSemiContext,
     emptySemiContext,
@@ -77,16 +83,19 @@ import Reussir.Core.Semi.Context (
     runUnification,
     scanStmt,
  )
-import Reussir.Core.Semi.FlowAnalysis (analyzeGenericFlowInExpr, solveAllGenerics)
+import Reussir.Core.Semi.FlowAnalysis (
+    analyzeGenericFlowInExpr,
+    solveAllGenerics,
+ )
 import Reussir.Core.Semi.Tyck (checkFuncType, elimTypeHoles, inferType)
 import Reussir.Core.Semi.Unification (force, satisfyBounds, unify)
-import Reussir.Diagnostic.Display (displayReport)
-import Reussir.Diagnostic.Repository (Repository, createRepository)
-import Reussir.Parser.Types.Expr qualified as SynExpr
-import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
-import Reussir.Parser.Types.Stmt qualified as Syn
-import System.IO (stderr)
-import System.IO.Unsafe (unsafePerformIO)
+import Reussir.Core.String (getAllStrings, mangleStringToken)
+
+import Reussir.Core.Data.Full.Function qualified as Full
+import Reussir.Core.Data.Semi.Expr qualified as Semi
+import Reussir.Core.Data.Semi.Function qualified as SemiFunc
+import Reussir.Core.Data.Semi.Type qualified as Semi
+import Reussir.Core.Full.Context qualified as Full
 
 --------------------------------------------------------------------------------
 -- REPL Types
@@ -435,7 +444,8 @@ generateExpressionModule funcName semiExpr exprType logLevel state = do
                         }
 
             -- Add wrapper to the function table
-            liftIO $ H.insert (ctxFunctions finalFullCtx) (Full.funcName wrapperFunc) wrapperFunc
+            liftIO $
+                H.insert (ctxFunctions finalFullCtx) (Full.funcName wrapperFunc) wrapperFunc
 
             -- Create target spec for codegen
             let targetSpec =

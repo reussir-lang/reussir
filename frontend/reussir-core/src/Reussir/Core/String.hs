@@ -11,14 +11,19 @@ where
 
 import Data.Bits ((.|.))
 import Data.Digest.XXHash.FFI (XXH3 (XXH3))
+import Data.Word (Word64)
+import Effectful (Eff, IOE, liftIO, (:>))
+import Reussir.Bridge (StringHash (..), hashBytes)
+
 import Data.HashTable.IO qualified as H
 import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
 import Data.Text.Encoding qualified as T
-import Data.Word (Word64)
-import Effectful (Eff, IOE, liftIO, (:>))
-import Reussir.Bridge (StringHash (..), hashBytes)
-import Reussir.Core.Data.String (StringToken (StringToken), StringUniqifier (..))
+
+import Reussir.Core.Data.String (
+    StringToken (StringToken),
+    StringUniqifier (..),
+ )
 
 data Int256
     = Int256
@@ -84,7 +89,8 @@ encodeB62 n0 = go n0 mempty 0
 newInt256 :: (Word64, Word64, Word64, Word64) -> Int256
 newInt256 (a, b, c, d) = Int256 a b c d
 
-allocateStrToken :: (IOE :> es) => T.Text -> StringUniqifier -> Eff es StringToken
+allocateStrToken ::
+    (IOE :> es) => T.Text -> StringUniqifier -> Eff es StringToken
 allocateStrToken str (StringUniqifier table) = do
     let xxh3Str = XXH3 str
     bucket <- liftIO $ H.lookup table xxh3Str
@@ -97,7 +103,8 @@ allocateStrToken str (StringUniqifier table) = do
             liftIO $ H.insert table xxh3Str token
             return token
 
-getAllStrings :: (IOE :> es) => StringUniqifier -> Eff es [(T.Text, StringToken)]
+getAllStrings ::
+    (IOE :> es) => StringUniqifier -> Eff es [(T.Text, StringToken)]
 getAllStrings (StringUniqifier table) = do
     kvPairs <- liftIO $ H.toList table
     return $ map (\(XXH3 str, token) -> (str, token)) kvPairs
@@ -106,4 +113,5 @@ mangleStringToken :: StringToken -> T.Text
 mangleStringToken (StringToken (w1, w2, w3, w4)) =
     let (builder, count, isNum) = encodeB62 $ newInt256 (w1, w2, w3, w4)
         sep = if isNum then "_" else ""
-     in TB.runBuilder $ "_RNvC22REUSSIR_STRING_LITERAL" <> TB.fromDec count <> sep <> builder
+     in TB.runBuilder $
+            "_RNvC22REUSSIR_STRING_LITERAL" <> TB.fromDec count <> sep <> builder

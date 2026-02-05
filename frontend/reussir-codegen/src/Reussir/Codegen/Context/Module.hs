@@ -11,15 +11,19 @@ where
 
 import Control.Exception (SomeException, try)
 import Control.Monad (forM_)
-import Data.HashTable.IO qualified as H
 import Data.String (fromString)
+import Effectful as E
+import System.Directory (canonicalizePath)
+import System.FilePath (takeDirectory, takeFileName)
+
+import Data.HashTable.IO qualified as H
 import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
-import Effectful as E
 import Effectful.Log qualified as L
 import Effectful.Reader.Static qualified as E
 import Effectful.State.Static.Local qualified as E
 import Reussir.Bridge qualified as B
+
 import Reussir.Codegen.Context.Codegen (
     Codegen,
     Context (..),
@@ -34,14 +38,12 @@ import Reussir.Codegen.Context.Emission (
     Emission (emit),
     emitBuilder,
  )
-import System.Directory (canonicalizePath)
-import System.FilePath (takeDirectory, takeFileName)
-
 import Reussir.Codegen.Context.Symbol (symbolBuilder)
 import Reussir.Codegen.Type.Emission (emitRecord)
 
 -- | Run a Codegen action with an initial context and compile the result.
-runCodegenToBackend :: (E.IOE :> es, L.Log :> es) => TargetSpec -> Codegen () -> Eff es ()
+runCodegenToBackend ::
+    (E.IOE :> es, L.Log :> es) => TargetSpec -> Codegen () -> Eff es ()
 runCodegenToBackend spec codegen = do
     initCtx <- emptyContext
     finalCtx <- E.inject $ E.runReader spec $ E.execState initCtx $ codegen
@@ -93,7 +95,12 @@ emitModuleEnv body = do
         case result of
             Left _ -> pure (mempty, mempty)
             Right path -> pure (T.pack $ takeDirectory path, T.pack $ takeFileName path)
-    let attributes = " attributes { reussir.dbg.file_basename = " <> TB.fromText (T.show moduleBaseName) <> ", reussir.dbg.file_directory = " <> TB.fromText (T.show moduleDirectory) <> "}"
+    let attributes =
+            " attributes { reussir.dbg.file_basename = "
+                <> TB.fromText (T.show moduleBaseName)
+                <> ", reussir.dbg.file_directory = "
+                <> TB.fromText (T.show moduleDirectory)
+                <> "}"
     emitBuilder $ "module @" <> name <> attributes <> " {\n"
     incIndentation body
     emitBuilder "}\n"

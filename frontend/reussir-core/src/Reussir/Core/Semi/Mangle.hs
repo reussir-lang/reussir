@@ -142,14 +142,16 @@ Generic type applications use the @I...E@ wrapper:
 module Reussir.Core.Semi.Mangle where
 
 import Data.Char (isAscii)
+import Data.Text.Builder.Linear as TB
+import Reussir.Parser.Types.Lexer
+
 import Data.Char qualified as C
 import Data.Text qualified as T
-import Data.Text.Builder.Linear as TB
 import Data.Text.Punycode qualified as Punycode
+
 import Reussir.Core.Data.FP (FloatingPointType (..))
 import Reussir.Core.Data.Integral (IntegralType (..))
 import Reussir.Core.Data.Semi.Type (Type (..))
-import Reussir.Parser.Types.Lexer
 
 -- | Typeclass for types that can be mangled into a symbol representation.
 class Manglable a where
@@ -348,7 +350,11 @@ instance Manglable Type where
     mangle TypeBottom = "z"
     -- Closure: F + K + "ReussirClosure" identifier + arg types + E + return type
     mangle (TypeClosure args ret) =
-        "FK" <> mangle (Identifier "ReussirClosure") <> foldMap mangle args <> "E" <> mangle ret
+        "FK"
+            <> mangle (Identifier "ReussirClosure")
+            <> foldMap mangle args
+            <> "E"
+            <> mangle ret
     -- Generic types should be resolved before mangling
     mangle (TypeGeneric _) = error "Unsupported generic type in ABI mangle"
     -- Holes should be resolved before mangling

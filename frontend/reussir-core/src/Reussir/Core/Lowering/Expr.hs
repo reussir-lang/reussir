@@ -3,19 +3,20 @@
 module Reussir.Core.Lowering.Expr where
 
 import Control.Monad (when)
-import Reussir.Core.Uitls.HashTable qualified as H
-import Data.IntMap.Strict qualified as IntMap
 import Data.Maybe (maybeToList)
 import Data.Scientific (Scientific, toBoundedInteger)
+import Effectful (inject)
+import Reussir.Codegen.Context.Symbol (Symbol, verifiedSymbol)
+import Reussir.Parser.Types.Lexer (Identifier (unIdentifier), Path (..))
+
+import Data.IntMap.Strict qualified as IntMap
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
-import Effectful (inject)
 import Effectful.Log qualified as L
 import Effectful.Reader.Static qualified as Reader
 import Effectful.State.Static.Local qualified as State
-import Reussir.Codegen.Context.Symbol (Symbol, verifiedSymbol)
 import Reussir.Codegen.IR qualified as IR
 import Reussir.Codegen.Intrinsics qualified as IR
 import Reussir.Codegen.Intrinsics.Arith qualified as Arith
@@ -24,19 +25,34 @@ import Reussir.Codegen.Location qualified as IR
 import Reussir.Codegen.Type qualified as IR
 import Reussir.Codegen.Type.Data qualified as IRType
 import Reussir.Codegen.Value qualified as IR
+
+import Reussir.Core.Data.Lowering.Context (
+    ExprResult,
+    LocalLoweringContext (..),
+    LoweringContext (recordInstances),
+    LoweringEff,
+ )
+import Reussir.Core.Data.UniqueID (VarID (..))
+import Reussir.Core.Lowering.Context (
+    addIRInstr,
+    materializeCurrentBlock,
+    nextValue,
+    tyValOrICE,
+    withLocationMetaData,
+    withLocationSpan,
+    withVar,
+ )
+import Reussir.Core.Lowering.Debug (typeAsDbgType)
+import Reussir.Core.Lowering.Type (convertType, mkRefType)
+import Reussir.Core.String (mangleStringToken)
+
 import Reussir.Core.Data.FP qualified as FP
 import Reussir.Core.Data.Full.Expr qualified as Full
 import Reussir.Core.Data.Full.Record qualified as Full
 import Reussir.Core.Data.Full.Type qualified as Full
 import Reussir.Core.Data.Integral qualified as Int
-import Reussir.Core.Data.Lowering.Context (ExprResult, LocalLoweringContext (..), LoweringContext (recordInstances), LoweringEff)
 import Reussir.Core.Data.Operator qualified as Sem
-import Reussir.Core.Data.UniqueID (VarID (..))
-import Reussir.Core.Lowering.Context (addIRInstr, materializeCurrentBlock, nextValue, tyValOrICE, withLocationMetaData, withLocationSpan, withVar)
-import Reussir.Core.Lowering.Debug (typeAsDbgType)
-import Reussir.Core.Lowering.Type (convertType, mkRefType)
-import Reussir.Core.String (mangleStringToken)
-import Reussir.Parser.Types.Lexer (Identifier (unIdentifier), Path (..))
+import Reussir.Core.Uitls.HashTable qualified as H
 
 createConstant :: IR.Type -> Scientific -> LoweringEff IR.TypedValue
 createConstant ty val = do
@@ -52,7 +68,10 @@ lowerExpr (Full.Expr kind (Just span') ty _) =
 
 -- lower expression as a block with given block arguments and finalizer
 lowerExprAsBlock ::
-    Full.Expr -> [IR.TypedValue] -> (ExprResult -> LoweringEff ()) -> LoweringEff IR.Block
+    Full.Expr ->
+    [IR.TypedValue] ->
+    (ExprResult -> LoweringEff ()) ->
+    LoweringEff IR.Block
 lowerExprAsBlock expr blkArgs finalizer = do
     backupBlock <- State.gets currentBlock
     State.modify $ \s -> s{currentBlock = Seq.empty}
@@ -379,7 +398,7 @@ lowerExprInBlock (Full.Assign dst idx src) _ = do
             let loweredFieldRef = (fieldRefVal, fieldRef)
             let projOp = IR.RefProject loweredRecRef (fromIntegral idx) loweredFieldRef
             addIRInstr projOp
-            let storeOp = IR.RefStore loweredFieldRef src' 
+            let storeOp = IR.RefStore loweredFieldRef src'
             addIRInstr storeOp
             pure Nothing
         _ -> error $ "assign to non-flex rc types: " ++ show dstTy
@@ -390,7 +409,8 @@ lowerExprInBlock kind ty =
             ++ " : "
             ++ show ty
 
-lowerIntrinsicCallInBlock :: Path -> [Full.Expr] -> Full.Type -> LoweringEff IR.TypedValue
+lowerIntrinsicCallInBlock ::
+    Path -> [Full.Expr] -> Full.Type -> LoweringEff IR.TypedValue
 lowerIntrinsicCallInBlock (Path name ["core", "intrinsic", "math"]) args ty = do
     let floatUnary =
             [ "absf"
@@ -427,7 +447,11 @@ lowerIntrinsicCallInBlock (Path name ["core", "intrinsic", "math"]) args ty = do
     let floatBinary = ["atan2", "copysign", "powf"]
 
     let (valArgs, fmf) =
-            if name `elem` floatUnary || name `elem` checks || name == "fma" || name == "fpowi" || name `elem` floatBinary
+            if name `elem` floatUnary
+                || name `elem` checks
+                || name == "fma"
+                || name == "fpowi"
+                || name `elem` floatBinary
                 then
                     let (vals, flag) = (init args, last args)
                         val = case Full.exprKind flag of
@@ -535,7 +559,8 @@ handleProjection base@(_, valTy) index = do
             pure (resVal, projTy)
         _ -> error $ "projection not supported for base type " <> show valTy
   where
-    projectedType :: IR.Capability -> IR.Atomicity -> Symbol -> Int -> LoweringEff IR.Type
+    projectedType ::
+        IR.Capability -> IR.Atomicity -> Symbol -> Int -> LoweringEff IR.Type
     projectedType cap atm sym idx = do
         table <- Reader.asks recordInstances
         record <- H.lookup table sym

@@ -10,13 +10,17 @@ module Reussir.Core.Full.Context (
 ) where
 
 import Control.Monad (forM_)
-import Reussir.Core.Uitls.HashTable qualified as HU
 import Data.Int (Int64)
-import Data.IntMap qualified as IntMap
 import Effectful (Eff, IOE, inject, liftIO, (:>))
 import Effectful.Prim.IORef.Strict (Prim)
 import Effectful.State.Static.Local (runState)
+import Reussir.Diagnostic.Display (displayReport)
+import Reussir.Diagnostic.Repository (Repository)
+import System.IO (Handle, hPutStrLn)
+
+import Data.IntMap qualified as IntMap
 import Effectful.State.Static.Local qualified as State
+
 import Reussir.Core.Data.Full.Context (
     FullContext (..),
     FullEff,
@@ -27,9 +31,8 @@ import Reussir.Core.Data.Full.Error (Error)
 import Reussir.Core.Data.Full.Type (GenericMap)
 import Reussir.Core.Data.String (StringUniqifier (StringUniqifier))
 import Reussir.Core.Full.Error (errorToReport)
-import Reussir.Diagnostic.Display (displayReport)
-import Reussir.Diagnostic.Repository (Repository)
-import System.IO (Handle, hPutStrLn)
+
+import Reussir.Core.Uitls.HashTable qualified as HU
 
 withSpan :: (Int64, Int64) -> FullEff a -> FullEff a
 withSpan span' cont = do
@@ -72,7 +75,8 @@ emptyFullContext ctxFilePath = do
     let ctxFlexible = False
     return FullContext{..}
 
-reportAllErrors :: (IOE :> es, Prim :> es) => FullContext -> Repository -> Handle -> Eff es ()
+reportAllErrors ::
+    (IOE :> es, Prim :> es) => FullContext -> Repository -> Handle -> Eff es ()
 reportAllErrors ctx repo handle = do
     forM_ (ctxErrors ctx) $ \err -> do
         displayReport (errorToReport err (ctxFilePath ctx)) repo 0 handle

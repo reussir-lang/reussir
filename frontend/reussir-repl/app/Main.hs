@@ -11,34 +11,25 @@ import Data.Int (Int16, Int32, Int64, Int8)
 import Data.Maybe (isNothing)
 import Data.String (IsString (fromString))
 import Data.Word (Word16, Word32, Word64, Word8)
-import Foreign (FunPtr, Ptr, Storable (..), alloca, nullPtr)
-import Foreign.C.String (peekCStringLen)
-import Foreign.Ptr (castPtrToFunPtr)
-
 -- Text
-import Data.Text qualified as T
-import Options.Applicative
 
 -- Megaparsec
-import Text.Megaparsec (errorBundlePretty, runParser)
 
 -- Console
-import System.Console.Haskeline
-import System.Console.Haskeline.IO
 
 -- Reussir
 
-import Data.HashTable.IO qualified as H
-import Data.Text.IO qualified as TIO
 import Effectful (runEff)
 import Effectful.Prim (runPrim)
+import Foreign (FunPtr, Ptr, Storable (..), alloca, nullPtr)
+import Foreign.C (CChar, CSize)
+import Foreign.C.String (peekCStringLen)
+import Foreign.Ptr (castPtrToFunPtr)
+import Options.Applicative
 import Prettyprinter (defaultLayoutOptions, layoutPretty)
 import Prettyprinter.Render.Terminal (renderStrict)
 import Reussir.Bridge (ReussirJIT, addModule, lookupSymbol, withJIT)
-import Reussir.Bridge qualified as B
 import Reussir.Codegen.Context.Symbol (symbolText)
-import Reussir.Core.Data.Semi.Context qualified as Semi
-import Reussir.Core.Data.Semi.Function qualified as SemiFunc
 import Reussir.Core.REPL (
     ReplError (..),
     ReplState (..),
@@ -47,10 +38,19 @@ import Reussir.Core.REPL (
     compileExpression,
     initReplState,
  )
-import Reussir.Core.Semi.Pretty qualified as SemiP
 import Reussir.Parser.Prog (ReplInput (..), parseReplInput)
+import System.Console.Haskeline
+import System.Console.Haskeline.IO
+import Text.Megaparsec (errorBundlePretty, runParser)
+
+import Data.HashTable.IO qualified as H
+import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
+import Reussir.Bridge qualified as B
+import Reussir.Core.Data.Semi.Context qualified as Semi
+import Reussir.Core.Data.Semi.Function qualified as SemiFunc
+import Reussir.Core.Semi.Pretty qualified as SemiP
 import Reussir.Parser.Types.Expr qualified as P
-import Foreign.C (CChar, CSize)
 
 --------------------------------------------------------------------------------
 -- Foreign function imports for different result types
@@ -134,9 +134,24 @@ data Args = Args
 argsParser :: Parser Args
 argsParser =
     Args
-        <$> option parseOptLevel (long "opt-level" <> short 'O' <> value B.OptTPDE <> help "Optimization level (none, default, aggressive, size, tpde)")
-        <*> option parseLogLevel (long "log-level" <> short 'l' <> value B.LogWarning <> help "Log level (error, warning, info, debug, trace)")
-        <*> optional (strOption (long "input" <> short 'i' <> help "Input file for line-by-line execution"))
+        <$> option
+            parseOptLevel
+            ( long "opt-level"
+                <> short 'O'
+                <> value B.OptTPDE
+                <> help "Optimization level (none, default, aggressive, size, tpde)"
+            )
+        <*> option
+            parseLogLevel
+            ( long "log-level"
+                <> short 'l'
+                <> value B.LogWarning
+                <> help "Log level (error, warning, info, debug, trace)"
+            )
+        <*> optional
+            ( strOption
+                (long "input" <> short 'i' <> help "Input file for line-by-line execution")
+            )
 
 parseOptLevel :: ReadM B.OptOption
 parseOptLevel = eitherReader $ \s -> case s of

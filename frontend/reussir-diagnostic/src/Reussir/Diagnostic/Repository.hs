@@ -10,11 +10,18 @@ import Data.Function ((&))
 import Data.HashMap.Lazy as LazyHM
 import Data.Int (Int64)
 import Data.Text (StrictText)
-import Data.Text.Lazy qualified as LazyText
-import Data.Text.Lazy.IO qualified as LazyTextIO
 import Data.Traversable (forM)
 import Effectful (Eff, IOE, liftIO, (:>))
-import Reussir.Diagnostic.LineCache (LineCache, SelectedLine (lineColEnd, lineColStart, lineNumber), fromFile, selectLines)
+
+import Data.Text.Lazy qualified as LazyText
+import Data.Text.Lazy.IO qualified as LazyTextIO
+
+import Reussir.Diagnostic.LineCache (
+    LineCache,
+    SelectedLine (lineColEnd, lineColStart, lineNumber),
+    fromFile,
+    selectLines,
+ )
 
 data File = File
     { filePath :: FilePath

@@ -5,27 +5,41 @@ module Test.Codegen.Context.Module (
 )
 where
 
+import Log (defaultLogLevel)
+import Test.Tasty
+import Test.Tasty.HUnit
+
 import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
 import Data.Vector.Strict qualified as V
 import Effectful qualified as E
 import Effectful.Log qualified as L
 import Effectful.State.Static.Local qualified as E
-import Log (defaultLogLevel)
 import Log.Backend.StandardOutput qualified as L
 import Reussir.Bridge qualified as B
+
 import Reussir.Codegen.Context (runCodegen)
-import Reussir.Codegen.Context qualified as C
 import Reussir.Codegen.Context.Symbol (verifiedSymbol)
+import Reussir.Codegen.Type.Record (
+    Record (..),
+    RecordField (..),
+    RecordKind (..),
+ )
+
+import Reussir.Codegen.Context qualified as C
 import Reussir.Codegen.Type qualified as TT
-import Reussir.Codegen.Type.Record (Record (..), RecordField (..), RecordKind (..))
-import Test.Tasty
-import Test.Tasty.HUnit
 
 -- | Helper to run codegen and extract the builder as text
 runCodegenAsText :: C.Codegen () -> IO T.Text
 runCodegenAsText codegen = do
-    let spec = C.TargetSpec "test_module" "output.mlir" B.OptDefault B.OutputObject B.LogInfo "./module.mlir"
+    let spec =
+            C.TargetSpec
+                "test_module"
+                "output.mlir"
+                B.OptDefault
+                B.OutputObject
+                B.LogInfo
+                "./module.mlir"
     L.withStdOutLogger $ \logger -> do
         E.runEff $ L.runLog "Test.Codegen.Context.Module" logger defaultLogLevel $ runCodegen spec $ do
             codegen
@@ -112,18 +126,24 @@ testRecursiveListType = testCase "Recursive List type with Cons and Nil" $ do
     let resultStr = T.unpack result
 
     -- Check that all type aliases are emitted (using Itanium mangling format)
-    assertBool "Should contain List::Cons alias" $ "!_ZN4List4ConsE =" `isInfixOf` resultStr
-    assertBool "Should contain List::Nil alias" $ "!_ZN4List3NilE =" `isInfixOf` resultStr
+    assertBool "Should contain List::Cons alias" $
+        "!_ZN4List4ConsE =" `isInfixOf` resultStr
+    assertBool "Should contain List::Nil alias" $
+        "!_ZN4List3NilE =" `isInfixOf` resultStr
     assertBool "Should contain List alias" $ "!_ZN4ListE =" `isInfixOf` resultStr
 
     -- Check record structure
-    assertBool "Should contain compound record" $ "!reussir.record<compound" `isInfixOf` resultStr
-    assertBool "Should contain variant record" $ "!reussir.record<variant" `isInfixOf` resultStr
+    assertBool "Should contain compound record" $
+        "!reussir.record<compound" `isInfixOf` resultStr
+    assertBool "Should contain variant record" $
+        "!reussir.record<variant" `isInfixOf` resultStr
     assertBool "Should contain i32 field" $ "i32" `isInfixOf` resultStr
-    assertBool "Should contain [shared] capability" $ "[shared]" `isInfixOf` resultStr
+    assertBool "Should contain [shared] capability" $
+        "[shared]" `isInfixOf` resultStr
 
     -- Check module structure
-    assertBool "Should contain module declaration" $ "module @" `isInfixOf` resultStr
+    assertBool "Should contain module declaration" $
+        "module @" `isInfixOf` resultStr
     assertBool "Should contain closing brace" $ "}" `isInfixOf` resultStr
 
 -- | Test: Simple compound type
@@ -150,7 +170,8 @@ testSimpleCompoundType = testCase "Simple compound type" $ do
     let resultStr = T.unpack result
 
     assertBool "Should contain Point alias" $ "!_ZN5PointE =" `isInfixOf` resultStr
-    assertBool "Should contain compound record" $ "!reussir.record<compound" `isInfixOf` resultStr
+    assertBool "Should contain compound record" $
+        "!reussir.record<compound" `isInfixOf` resultStr
     assertBool "Should contain i32 fields" $ "i32" `isInfixOf` resultStr
 
 -- | Test: Variant type with capabilities
@@ -200,14 +221,16 @@ testVariantWithCapabilities = testCase "Variant type with different capabilities
     let resultStr = T.unpack result
 
     assertBool "Should contain [value] capability" $ "[value]" `isInfixOf` resultStr
-    assertBool "Should contain variant record" $ "!reussir.record<variant" `isInfixOf` resultStr
+    assertBool "Should contain variant record" $
+        "!reussir.record<variant" `isInfixOf` resultStr
 
 -- | Test: RC types with different capabilities and atomicity
 testRcTypes :: TestTree
 testRcTypes = testCase "RC types with capabilities" $ do
     result <- runCodegenAsText $ do
         C.emitBuilder "!i32_rc = "
-        C.emitBuilder =<< emitTy' (TT.TypeRc (TT.Rc primitiveI32 TT.NonAtomic TT.Shared))
+        C.emitBuilder
+            =<< emitTy' (TT.TypeRc (TT.Rc primitiveI32 TT.NonAtomic TT.Shared))
         C.emitBuilder "\n"
         C.emitBuilder "!i64_rc_atomic = "
         C.emitBuilder =<< emitTy' (TT.TypeRc (TT.Rc primitiveI64 TT.Atomic TT.Value))
@@ -224,7 +247,8 @@ testRefTypes :: TestTree
 testRefTypes = testCase "Ref types with capabilities" $ do
     result <- runCodegenAsText $ do
         C.emitBuilder "!i32_ref = "
-        C.emitBuilder =<< emitTy' (TT.TypeRef (TT.Ref primitiveI32 TT.NonAtomic TT.Flex))
+        C.emitBuilder
+            =<< emitTy' (TT.TypeRef (TT.Ref primitiveI32 TT.NonAtomic TT.Flex))
         C.emitBuilder "\n"
         C.emitBuilder "!f32_ref_rigid = "
         C.emitBuilder =<< emitTy' (TT.TypeRef (TT.Ref primitiveF32 TT.Atomic TT.Rigid))
@@ -244,18 +268,23 @@ testClosureTypes = testCase "Closure types" $ do
         C.emitBuilder =<< emitTy' (TT.TypeClosure (TT.Closure [] primitiveUnit))
         C.emitBuilder "\n"
         C.emitBuilder "!closure_i32_to_i64 = "
-        C.emitBuilder =<< emitTy' (TT.TypeClosure (TT.Closure [primitiveI32] primitiveI64))
+        C.emitBuilder
+            =<< emitTy' (TT.TypeClosure (TT.Closure [primitiveI32] primitiveI64))
         C.emitBuilder "\n"
         C.emitBuilder "!closure_multi_args = "
-        C.emitBuilder =<< emitTy' (TT.TypeClosure (TT.Closure [primitiveI32, primitiveF32] primitiveUnit))
+        C.emitBuilder
+            =<< emitTy' (TT.TypeClosure (TT.Closure [primitiveI32, primitiveF32] primitiveUnit))
         C.emitBuilder "\n"
 
     let resultStr = T.unpack result
 
-    assertBool "Should contain reussir.closure" $ "!reussir.closure<" `isInfixOf` resultStr
+    assertBool "Should contain reussir.closure" $
+        "!reussir.closure<" `isInfixOf` resultStr
     assertBool "Should contain () for unit return" $ ")>" `isInfixOf` resultStr
-    assertBool "Should contain -> for non-unit return" $ " -> " `isInfixOf` resultStr
-    assertBool "Should contain multiple arguments" $ "i32, f32" `isInfixOf` resultStr
+    assertBool "Should contain -> for non-unit return" $
+        " -> " `isInfixOf` resultStr
+    assertBool "Should contain multiple arguments" $
+        "i32, f32" `isInfixOf` resultStr
 
 -- Helper to emit types
 emitTy' :: TT.Type -> C.Codegen TB.Builder

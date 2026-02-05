@@ -5,17 +5,21 @@ module Reussir.Core.Full.Record where
 
 import Control.Monad
 import Data.Either (partitionEithers)
-import Data.HashTable.IO qualified as H
-import Data.IntMap.Strict qualified as IntMap
 import Data.Maybe (fromMaybe)
 import Data.Traversable (for)
-import Data.Vector.Strict qualified as V
-import Data.Vector.Strict.Mutable qualified as MV
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.Prim.IORef.Strict (Prim, readIORef')
-import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen.Context.Symbol (verifiedSymbol)
 import Reussir.Codegen.Type (Capability (Regional))
+import Reussir.Parser.Types.Lexer (Path (..), WithSpan (..))
+import Prelude hiding (span)
+
+import Data.HashTable.IO qualified as H
+import Data.IntMap.Strict qualified as IntMap
+import Data.Vector.Strict qualified as V
+import Data.Vector.Strict.Mutable qualified as MV
+import Effectful.State.Static.Local qualified as State
+
 import Reussir.Core.Data.Full.Context
 import Reussir.Core.Data.Full.Error (Error (..), ErrorKind (..))
 import Reussir.Core.Data.Full.Record (
@@ -27,18 +31,19 @@ import Reussir.Core.Data.Full.Record (
  )
 import Reussir.Core.Data.Full.Type (Type (..))
 import Reussir.Core.Data.Generic (GenericSolution)
-import Reussir.Core.Data.Semi.Record qualified as Semi
-import Reussir.Core.Data.Semi.Type qualified as Semi
 import Reussir.Core.Data.UniqueID (GenericID (..))
 import Reussir.Core.Full.Type (convertCapability, convertSemiType)
 import Reussir.Core.Semi.Mangle (mangleABIName)
-import Reussir.Parser.Types.Lexer (Path (..), WithSpan (..))
-import Prelude hiding (span)
+
+import Reussir.Core.Data.Semi.Record qualified as Semi
+import Reussir.Core.Data.Semi.Type qualified as Semi
 
 -- Assume that tyArgs is concrete
 
 -- Assume that tyArgs is concrete
-instantiateRecord :: (IOE :> es, Prim :> es) => [Semi.Type] -> SemiRecordTable -> Semi.Record -> Eff es (Either [Error] Record)
+instantiateRecord ::
+    (IOE :> es, Prim :> es) =>
+    [Semi.Type] -> SemiRecordTable -> Semi.Record -> Eff es (Either [Error] Record)
 instantiateRecord tyArgs semiRecords (Semi.Record path tyParams fieldsRef kind _ cap recSpan) = do
     fieldsMaybe <- readIORef' fieldsRef
     let fields = case fieldsMaybe of
@@ -87,7 +92,8 @@ instantiateRecord tyArgs semiRecords (Semi.Record path tyParams fieldsRef kind _
     isRegional (TypeRc _ Regional) = True
     isRegional _ = False
 
-    validateField :: (IOE :> es') => Type -> FieldFlag -> Int -> Eff es' (Either Error ())
+    validateField ::
+        (IOE :> es') => Type -> FieldFlag -> Int -> Eff es' (Either Error ())
     validateField fullTy isMutable idx = do
         if isMutable && not (isRegional fullTy)
             then
@@ -101,7 +107,11 @@ instantiateRecord tyArgs semiRecords (Semi.Record path tyParams fieldsRef kind _
                                 }
             else pure $ Right ()
 
-    instantiateField :: (IOE :> es') => IntMap.IntMap Semi.Type -> Semi.RecordFields -> Eff es' (Either [Error] RecordFields)
+    instantiateField ::
+        (IOE :> es') =>
+        IntMap.IntMap Semi.Type ->
+        Semi.RecordFields ->
+        Eff es' (Either [Error] RecordFields)
     instantiateField genericMap fieldsToInstantiate = do
         let
             convertAndValidate acc idx ty f span' mName mv = do

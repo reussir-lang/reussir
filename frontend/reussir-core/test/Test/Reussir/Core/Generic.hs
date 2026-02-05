@@ -6,17 +6,19 @@
 module Test.Reussir.Core.Generic where
 
 import Data.Either (fromLeft, isLeft, isRight)
-import Data.HashTable.IO qualified as H
 import Data.List (sortOn)
 import Data.Maybe (isJust)
-import Data.Text qualified as T
 import Effectful
 import Effectful.Prim
-import Reussir.Core.Data.Semi.Type
-import Reussir.Core.Generic
 import Reussir.Parser.Types.Lexer (Identifier (..), Path (..))
 import Test.Tasty
 import Test.Tasty.HUnit
+
+import Data.HashTable.IO qualified as H
+import Data.Text qualified as T
+
+import Reussir.Core.Data.Semi.Type
+import Reussir.Core.Generic
 
 tests :: TestTree
 tests =
@@ -159,7 +161,11 @@ testGraph7 = runGeneric $ do
     emptySol <- liftIO H.new
     let sol = fromLeft emptySol res
     solB <- liftIO $ H.lookup sol b
-    let expected = (sortOn show) [mkTypeRecord "Pair" [mkBasic "Int", mkBasic "Int"], mkTypeRecord "Pair" [mkBasic "Bool", mkBasic "Bool"]]
+    let expected =
+            (sortOn show)
+                [ mkTypeRecord "Pair" [mkBasic "Int", mkBasic "Int"]
+                , mkTypeRecord "Pair" [mkBasic "Bool", mkBasic "Bool"]
+                ]
     liftIO $ fmap (sortOn show) solB @?= Just expected
 
 testGraph8 :: Assertion
@@ -192,7 +198,11 @@ testGraph9 = runGeneric $ do
     emptySol <- liftIO H.new
     let sol = fromLeft emptySol res
     solC <- liftIO $ H.lookup sol c
-    let expected = (sortOn show) [mkTypeRecord "Pair" [mkBasic "Int", mkBasic "Bool"], mkTypeRecord "Pair" [mkBasic "Bool", mkBasic "Bool"]]
+    let expected =
+            (sortOn show)
+                [ mkTypeRecord "Pair" [mkBasic "Int", mkBasic "Bool"]
+                , mkTypeRecord "Pair" [mkBasic "Bool", mkBasic "Bool"]
+                ]
     liftIO $ fmap (sortOn show) solC @?= Just expected
 
 testGraph10 :: Assertion

@@ -7,6 +7,7 @@ module Reussir.Codegen.Global (
 
 import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
+
 import Reussir.Codegen.Context (Codegen, Emission (emit))
 import Reussir.Codegen.Context.Emission (emitBuilderLineM)
 import Reussir.Codegen.Context.Symbol (Symbol)

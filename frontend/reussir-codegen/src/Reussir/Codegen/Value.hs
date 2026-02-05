@@ -3,7 +3,9 @@
 module Reussir.Codegen.Value (Value (..), TypedValue) where
 
 import Data.Int (Int64)
+
 import Data.Text.Builder.Linear qualified as TB
+
 import Reussir.Codegen.Context (Emission (emit))
 import Reussir.Codegen.Type (Type)
 

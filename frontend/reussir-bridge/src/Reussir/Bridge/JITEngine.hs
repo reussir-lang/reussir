@@ -36,9 +36,7 @@ module Reussir.Bridge.JITEngine (
 where
 
 import Data.Bits (complement, shiftL, xor, (.&.))
-import Data.Bits qualified as Bits
 import Data.ByteString (ByteString)
-import Data.ByteString qualified as BS
 import Foreign (StablePtr, freeStablePtr)
 import Foreign.C.String
 import Foreign.C.Types
@@ -47,7 +45,16 @@ import Foreign.Marshal.Array (withArrayLen)
 import Foreign.Ptr
 import Foreign.StablePtr (castStablePtrToPtr, deRefStablePtr, newStablePtr)
 import Foreign.Storable (pokeByteOff)
-import Reussir.Bridge.Types (LogLevel (..), OptOption (..), logLevelToC, optOptionToC)
+
+import Data.Bits qualified as Bits
+import Data.ByteString qualified as BS
+
+import Reussir.Bridge.Types (
+    LogLevel (..),
+    OptOption (..),
+    logLevelToC,
+    optOptionToC,
+ )
 
 --------------------------------------------------------------------------------
 -- Opaque Types
@@ -219,7 +226,8 @@ copyBSInto dst bs =
         pokeByteOff dst len (0 :: CChar)
 
 -- | Create a new JIT engine.
-withJIT :: ASTCallback a -> OptOption -> LogLevel -> (ReussirJIT a -> IO b) -> IO b
+withJIT ::
+    ASTCallback a -> OptOption -> LogLevel -> (ReussirJIT a -> IO b) -> IO b
 withJIT astCallback optOption logOption continuation = do
     freeFn <- mkFreeFn $ \stablePtr -> do
         freeStablePtr stablePtr

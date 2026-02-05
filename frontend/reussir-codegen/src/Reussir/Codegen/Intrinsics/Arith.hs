@@ -17,14 +17,17 @@ import Control.Monad (unless)
 import Data.Bits ((.&.))
 import Data.Int (Int8)
 import Data.Scientific (Scientific)
+import Data.Text.Lazy.Builder.Scientific (formatScientificBuilder)
+
 import Data.Scientific qualified as S
 import Data.Text.Builder.Linear qualified as TB
 import Data.Text.Lazy qualified as TT
 import Data.Text.Lazy.Builder qualified as TTB
-import Data.Text.Lazy.Builder.Scientific (formatScientificBuilder)
-import Reussir.Codegen.Context qualified as C
+
 import Reussir.Codegen.Type.Data (isFloatType)
 import Reussir.Codegen.Value (TypedValue)
+
+import Reussir.Codegen.Context qualified as C
 
 newtype IntOFFlag = IntOFFlag Int8
     deriving (Eq, Show)
@@ -72,7 +75,8 @@ instance C.Emission FastMathFlag where
         doEmit :: Int8 -> [(Int8, TB.Builder)] -> TB.Builder
         doEmit _ [] = ""
         doEmit n ((bit, name) : xs)
-            | n .&. bit /= 0 = name <> (if null xsFiltered then "" else " ") <> doEmit n xsFiltered
+            | n .&. bit /= 0 =
+                name <> (if null xsFiltered then "" else " ") <> doEmit n xsFiltered
             | otherwise = doEmit n xs
           where
             xsFiltered = filter (\(b, _) -> n .&. b /= 0) xs
@@ -217,7 +221,13 @@ iofCodegen iof = unless (iofIsNone iof) $ do
     flag <- C.emit iof
     C.emitBuilder $ " overflow<" <> flag <> ">"
 
-binaryFloatArithCodegen :: TB.Builder -> FastMathFlag -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
+binaryFloatArithCodegen ::
+    TB.Builder ->
+    FastMathFlag ->
+    TypedValue ->
+    TypedValue ->
+    TypedValue ->
+    C.Codegen ()
 binaryFloatArithCodegen mnemonic fmf (vA, _) (vB, _) (resVal, resTy) = C.emitLine $ do
     resVal' <- C.emit resVal
     vA' <- C.emit vA
@@ -228,7 +238,13 @@ binaryFloatArithCodegen mnemonic fmf (vA, _) (vB, _) (resVal, resTy) = C.emitLin
     fmfCodegen fmf
     C.emitBuilder $ " : " <> resTy'
 
-binaryIntArithCodegen :: TB.Builder -> IntOFFlag -> TypedValue -> TypedValue -> TypedValue -> C.Codegen ()
+binaryIntArithCodegen ::
+    TB.Builder ->
+    IntOFFlag ->
+    TypedValue ->
+    TypedValue ->
+    TypedValue ->
+    C.Codegen ()
 binaryIntArithCodegen mnemonic iof (vA, _) (vB, _) (resVal, resTy) = C.emitLine $ do
     resVal' <- C.emit resVal
     vA' <- C.emit vA
@@ -459,7 +475,11 @@ arithCodegen (ScalingTruncf rm fmf) [(inVal, inTy), (sVal, sTy)] [(resVal, resTy
 -- Constant value
 arithCodegen (Constant value) [] [(res, ty)] = C.emitLine $ do
     resVal' <- C.emit res
-    let !value' = TB.fromText $ TT.toStrict $ TTB.toLazyText $ formatScientificBuilder fpfmt precision value
+    let !value' =
+            TB.fromText $
+                TT.toStrict $
+                    TTB.toLazyText $
+                        formatScientificBuilder fpfmt precision value
     C.emitBuilder $ resVal' <> " = arith.constant " <> value'
     ty' <- C.emit ty
     C.emitBuilder $ " : " <> ty'

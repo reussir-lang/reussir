@@ -6,16 +6,23 @@ import Control.Exception (SomeException, catch)
 import Data.ByteString (ByteString)
 import Data.Int (Int64)
 import Data.String (IsString (fromString))
-import Data.Text qualified as T
 import Foreign (FunPtr, nullPtr)
 import Foreign.Ptr (castPtrToFunPtr)
-import Reussir.Bridge (LogLevel (..), OptOption (..), addModule, lookupSymbol, withJIT)
+import Reussir.Bridge (
+    LogLevel (..),
+    OptOption (..),
+    addModule,
+    lookupSymbol,
+    withJIT,
+ )
 import Reussir.Core.REPL
 import Reussir.Parser.Expr (parseExpr)
 import Reussir.Parser.Stmt (parseStmt)
 import Test.Tasty
 import Test.Tasty.HUnit
 import Text.Megaparsec (runParser)
+
+import Data.Text qualified as T
 
 -- Foreign import for calling JIT-compiled functions
 foreign import ccall "dynamic"
@@ -83,7 +90,10 @@ testFunctionMultiParams = do
 testRecursiveFunction :: Assertion
 testRecursiveFunction = do
     state <- initReplState LogWarning "<test>"
-    result <- parseAndAdd state "fn factorial(n: i64) -> i64 { if n <= 1 { 1 } else { n * factorial(n - 1) } }"
+    result <-
+        parseAndAdd
+            state
+            "fn factorial(n: i64) -> i64 { if n <= 1 { 1 } else { n * factorial(n - 1) } }"
     case result of
         Left err -> assertFailure $ "Expected success, got: " ++ show err
         Right _ -> return ()

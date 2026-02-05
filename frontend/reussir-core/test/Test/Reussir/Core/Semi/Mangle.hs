@@ -2,12 +2,14 @@
 
 module Test.Reussir.Core.Semi.Mangle where
 
-import Data.Text qualified as T
-import Data.Text.Builder.Linear qualified as TB
-import Reussir.Core.Semi.Mangle
 import Reussir.Parser.Types.Lexer (Identifier (..), Path (..))
 import Test.Tasty
 import Test.Tasty.HUnit
+
+import Data.Text qualified as T
+import Data.Text.Builder.Linear qualified as TB
+
+import Reussir.Core.Semi.Mangle
 
 tests :: TestTree
 tests =
@@ -26,7 +28,8 @@ tests =
             "Identifier encoding"
             [ testCase "ASCII: foo -> 3foo" $ mangleIdent "foo" @?= "3foo"
             , testCase "ASCII: bach -> 4bach" $ mangleIdent "bach" @?= "4bach"
-            , testCase "ASCII with digit: 123abc -> 6_123abc" $ mangleIdent "123abc" @?= "6_123abc"
+            , testCase "ASCII with digit: 123abc -> 6_123abc" $
+                mangleIdent "123abc" @?= "6_123abc"
             , testCase "Unicode: gödel -> u8gdel_5qa" $ mangleIdent "gödel" @?= "u8gdel_5qa"
             ]
         , testGroup
