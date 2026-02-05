@@ -93,7 +93,8 @@ library
                       text-builder-linear,
                       idn,
                       vector,
-                      sort
+                      sort,
+                      rrb-vector
     hs-source-dirs:   src
     default-language: GHC2024
 

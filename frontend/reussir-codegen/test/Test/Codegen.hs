@@ -842,17 +842,18 @@ codegenTests =
                 assertBool "Should contain arith.addi" $ "arith.addi" `isInfixOf` resultStr
                 assertBool "Should contain arith.subi" $ "arith.subi" `isInfixOf` resultStr
             , testCase
-                "emitModuleToBackend executes fibonacci module with aggressive optimization" $ do
-                withSystemTempDirectory "reussir-test" $ \tmpDir -> do
-                    let fibonacciPath = tmpDir ++ "/fibonacci.o"
-                    let origSpec = C.moduleSpec createFibonacciModule
-                    let module' = createFibonacciModule{C.moduleSpec = origSpec{outputPath = fibonacciPath}}
-                    result <-
-                        L.withStdOutLogger $ \logger -> do
-                            E.runEff $ L.runLog "Test.Codegen" logger defaultLogLevel $ do
-                                C.emitModuleToBackend module'
-                                pure True
-                    assertBool "Should complete successfully" result
+                "emitModuleToBackend executes fibonacci module with aggressive optimization"
+                $ do
+                    withSystemTempDirectory "reussir-test" $ \tmpDir -> do
+                        let fibonacciPath = tmpDir ++ "/fibonacci.o"
+                        let origSpec = C.moduleSpec createFibonacciModule
+                        let module' = createFibonacciModule{C.moduleSpec = origSpec{outputPath = fibonacciPath}}
+                        result <-
+                            L.withStdOutLogger $ \logger -> do
+                                E.runEff $ L.runLog "Test.Codegen" logger defaultLogLevel $ do
+                                    C.emitModuleToBackend module'
+                                    pure True
+                        assertBool "Should complete successfully" result
             ]
         , testGroup
             "tensor2x2"

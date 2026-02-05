@@ -527,134 +527,135 @@ checkType expr ty = do
 
 -- | Helper function to infer the type of an intrinsic function call
 inferTypeForIntrinsicCall :: Syn.FuncCall -> SemiEff (Maybe Expr)
-inferTypeForIntrinsicCall Syn.FuncCall
-                            { Syn.funcCallName = path
-                            , Syn.funcCallTyArgs = tyArgs
-                            , Syn.funcCallArgs = argExprs
-                            } = do
-    case path of
-        Path name ["core", "intrinsic", "math"] -> do
-            let floatUnary =
-                    [ "absf"
-                    , "acos"
-                    , "acosh"
-                    , "asin"
-                    , "asinh"
-                    , "atan"
-                    , "atanh"
-                    , "cbrt"
-                    , "ceil"
-                    , "cos"
-                    , "cosh"
-                    , "erf"
-                    , "erfc"
-                    , "exp"
-                    , "exp2"
-                    , "expm1"
-                    , "floor"
-                    , "log10"
-                    , "log1p"
-                    , "log2"
-                    , "round"
-                    , "roundeven"
-                    , "rsqrt"
-                    , "sin"
-                    , "sinh"
-                    , "sqrt"
-                    , "tan"
-                    , "tanh"
-                    , "trunc"
-                    ]
-            let checks = ["isfinite", "isinf", "isnan", "isnormal"]
-            let floatBinary = ["atan2", "copysign", "powf"]
+inferTypeForIntrinsicCall
+    Syn.FuncCall
+        { Syn.funcCallName = path
+        , Syn.funcCallTyArgs = tyArgs
+        , Syn.funcCallArgs = argExprs
+        } = do
+        case path of
+            Path name ["core", "intrinsic", "math"] -> do
+                let floatUnary =
+                        [ "absf"
+                        , "acos"
+                        , "acosh"
+                        , "asin"
+                        , "asinh"
+                        , "atan"
+                        , "atanh"
+                        , "cbrt"
+                        , "ceil"
+                        , "cos"
+                        , "cosh"
+                        , "erf"
+                        , "erfc"
+                        , "exp"
+                        , "exp2"
+                        , "expm1"
+                        , "floor"
+                        , "log10"
+                        , "log1p"
+                        , "log2"
+                        , "round"
+                        , "roundeven"
+                        , "rsqrt"
+                        , "sin"
+                        , "sinh"
+                        , "sqrt"
+                        , "tan"
+                        , "tanh"
+                        , "trunc"
+                        ]
+                let checks = ["isfinite", "isinf", "isnan", "isnormal"]
+                let floatBinary = ["atan2", "copysign", "powf"]
 
-            let isUnary = name `elem` floatUnary
-            let isCheck = name `elem` checks
-            let isBinary = name `elem` floatBinary
-            let isFMA = name == "fma"
-            let isFPowi = name == "fpowi"
+                let isUnary = name `elem` floatUnary
+                let isCheck = name `elem` checks
+                let isBinary = name `elem` floatBinary
+                let isFMA = name == "fma"
+                let isFPowi = name == "fpowi"
 
-            if isUnary || isCheck || isBinary || isFMA || isFPowi
-                then do
-                    -- Check arguments count
-                    -- Unary/Check: 1 arg + flag
-                    -- Binary/FPowi: 2 args + flag
-                    -- FMA: 3 args + flag
-                    let expectedArgs =
-                            if isUnary || isCheck
-                                then 2
-                                else
-                                    if isBinary || isFPowi
-                                        then 3
-                                        else 4 -- FMA
-                    if length argExprs /= expectedArgs
-                        then do
-                            addErrReportMsg $
-                                "Intrinsic function "
-                                    <> T.pack (show path)
-                                    <> " expects "
-                                    <> T.pack (show expectedArgs)
-                                    <> " arguments, but got "
-                                    <> T.pack (show (length argExprs))
-                            Just <$> exprWithSpan TypeBottom Poison
-                        else do
-                            -- Infer float type T
-                            floatTy <- case tyArgs of
-                                [Just ty] -> evalType ty
-                                [Nothing] -> introduceNewHoleInContext [Class $ Path "FloatingPoint" []]
-                                [] -> introduceNewHoleInContext [Class $ Path "FloatingPoint" []]
-                                _ -> do
-                                    addErrReportMsg "Intrinsic function expects exactly 0 or 1 type argument"
-                                    return TypeBottom
+                if isUnary || isCheck || isBinary || isFMA || isFPowi
+                    then do
+                        -- Check arguments count
+                        -- Unary/Check: 1 arg + flag
+                        -- Binary/FPowi: 2 args + flag
+                        -- FMA: 3 args + flag
+                        let expectedArgs =
+                                if isUnary || isCheck
+                                    then 2
+                                    else
+                                        if isBinary || isFPowi
+                                            then 3
+                                            else 4 -- FMA
+                        if length argExprs /= expectedArgs
+                            then do
+                                addErrReportMsg $
+                                    "Intrinsic function "
+                                        <> T.pack (show path)
+                                        <> " expects "
+                                        <> T.pack (show expectedArgs)
+                                        <> " arguments, but got "
+                                        <> T.pack (show (length argExprs))
+                                Just <$> exprWithSpan TypeBottom Poison
+                            else do
+                                -- Infer float type T
+                                floatTy <- case tyArgs of
+                                    [Just ty] -> evalType ty
+                                    [Nothing] -> introduceNewHoleInContext [Class $ Path "FloatingPoint" []]
+                                    [] -> introduceNewHoleInContext [Class $ Path "FloatingPoint" []]
+                                    _ -> do
+                                        addErrReportMsg "Intrinsic function expects exactly 0 or 1 type argument"
+                                        return TypeBottom
 
-                            -- Ensure T is FloatingPoint
-                            satisfyFloatBound <-
-                                runUnification $
-                                    satisfyBounds
-                                        floatTy
-                                        [Class $ Path "FloatingPoint" []]
+                                -- Ensure T is FloatingPoint
+                                satisfyFloatBound <-
+                                    runUnification $
+                                        satisfyBounds
+                                            floatTy
+                                            [Class $ Path "FloatingPoint" []]
 
-                            unless satisfyFloatBound $ do
-                                addErrReportMsg "Intrinsic function type argument must be a floating point type"
+                                unless satisfyFloatBound $ do
+                                    addErrReportMsg "Intrinsic function type argument must be a floating point type"
 
-                            -- Check arguments
-                            let argsToCheck = init argExprs
-                            let flagArg = last argExprs
+                                -- Check arguments
+                                let argsToCheck = init argExprs
+                                let flagArg = last argExprs
 
-                            args' <-
-                                if isFPowi
-                                    then case argsToCheck of
-                                        [base, exponentExpr] -> do
-                                            base' <- checkType base floatTy
-                                            -- exp must be i32
-                                            let i32 = TypeIntegral (Signed 32)
-                                            exp' <- checkType exponentExpr i32
-                                            return [base', exp']
-                                        _ -> error "unreachable: args count checked"
-                                    else mapM (`checkType` floatTy) argsToCheck
+                                args' <-
+                                    if isFPowi
+                                        then case argsToCheck of
+                                            [base, exponentExpr] -> do
+                                                base' <- checkType base floatTy
+                                                -- exp must be i32
+                                                let i32 = TypeIntegral (Signed 32)
+                                                exp' <- checkType exponentExpr i32
+                                                return [base', exp']
+                                            _ -> error "unreachable: args count checked"
+                                        else mapM (`checkType` floatTy) argsToCheck
 
-                            -- Check flag
-                            let i32 = TypeIntegral (Signed 32)
-                            flagArg' <- checkType flagArg i32
-                            case exprKind flagArg' of
-                                Constant _ -> return ()
-                                _ -> addErrReportMsg "Intrinsic flag must be a constant literal"
+                                -- Check flag
+                                let i32 = TypeIntegral (Signed 32)
+                                flagArg' <- checkType flagArg i32
+                                case exprKind flagArg' of
+                                    Constant _ -> return ()
+                                    _ -> addErrReportMsg "Intrinsic flag must be a constant literal"
 
-                            let retTy = if isCheck then TypeBool else floatTy
+                                let retTy = if isCheck then TypeBool else floatTy
 
-                            -- Construct IntrinsicCall. Type arguments are not stored explicitly;
-                            -- type information is carried by the (already checked) arguments and return type.
-                            let finalArgs = args' ++ [flagArg']
+                                -- Construct IntrinsicCall. Type arguments are not stored explicitly;
+                                -- type information is carried by the (already checked) arguments and return type.
+                                let finalArgs = args' ++ [flagArg']
 
-                            Just
-                                <$> exprWithSpan
-                                    retTy
-                                    IntrinsicCall
-                                        { intrinsicCallTarget = path
-                                        , intrinsicCallArgs = finalArgs
-                                        }
-                else return Nothing
-        _ -> return Nothing
+                                Just
+                                    <$> exprWithSpan
+                                        retTy
+                                        IntrinsicCall
+                                            { intrinsicCallTarget = path
+                                            , intrinsicCallArgs = finalArgs
+                                            }
+                    else return Nothing
+            _ -> return Nothing
 
 -- | Helper function to infer the type of a function call expression
 inferTypeForCallExpr :: Syn.FuncCall -> SemiEff Expr
@@ -664,81 +665,82 @@ inferTypeForCallExpr call = do
         Nothing -> inferTypeForNormalCall call
 
 inferTypeForNormalCall :: Syn.FuncCall -> SemiEff Expr
-inferTypeForNormalCall Syn.FuncCall
-                        { Syn.funcCallName = path
-                        , Syn.funcCallTyArgs = tyArgs
-                        , Syn.funcCallArgs = argExprs
-                        } = do
-    L.logTrace_ $ "Tyck: infer func call " <> T.pack (show path)
-    -- Lookup function
-    functionTable <- State.gets functions
-    getFunctionProto path functionTable >>= \case
-        Just proto -> do
-            let numGenerics = length (funcGenerics proto)
-            -- Allow empty type argument list as syntax sugar for all holes
-            let paddedTyArgs =
-                    if null tyArgs && numGenerics > 0
-                        then replicate numGenerics Nothing
-                        else tyArgs
-            insideRegion' <- State.gets insideRegion
-            when (not insideRegion' && funcIsRegional proto) $ do
-                addErrReportMsg "Cannot call regional function outside of region"
-            checkTypeArgsNum numGenerics paddedTyArgs $ do
-                bounds <-
-                    mapM (\(_, gid) -> runUnification $ getGenericBound gid) (funcGenerics proto)
-                tyArgs' <- zipWithM tyArgOrMetaHole paddedTyArgs bounds
-                L.logTrace_ $
-                    "Tyck: instantiated call generics for "
-                        <> T.pack (show path)
-                        <> ": "
-                        <> T.pack (show tyArgs')
-                let genericMap = functionGenericMap proto tyArgs'
-                let instantiatedArgTypes = map (\(_, ty) -> substituteGenericMap ty genericMap) (funcParams proto)
-                let expectedNumParams = length instantiatedArgTypes
-                checkArgsNum expectedNumParams $ do
-                    argExprs' <- zipWithM checkType argExprs instantiatedArgTypes
-                    let instantiatedRetType = substituteGenericMap (funcReturnType proto) genericMap
-                    exprWithSpan instantiatedRetType $
-                        FuncCall
-                            { funcCallTarget = path
-                            , funcCallArgs = argExprs'
-                            , funcCallTyArgs = tyArgs'
-                            , funcCallRegional = funcIsRegional proto
-                            }
-        Nothing -> do
-            addErrReportMsg $ "Function not found: " <> T.pack (show path)
-            exprWithSpan TypeBottom Poison
-  where
-    checkArgsNum :: Int -> SemiEff Expr -> SemiEff Expr
-    checkArgsNum expectedNum argAction = do
-        if expectedNum /= length argExprs
-            then do
-                addErrReportMsg $
-                    "Function "
-                        <> T.pack (show path)
-                        <> " expects "
-                        <> T.pack (show expectedNum)
-                        <> " arguments, but got "
-                        <> T.pack (show (length argExprs))
+inferTypeForNormalCall
+    Syn.FuncCall
+        { Syn.funcCallName = path
+        , Syn.funcCallTyArgs = tyArgs
+        , Syn.funcCallArgs = argExprs
+        } = do
+        L.logTrace_ $ "Tyck: infer func call " <> T.pack (show path)
+        -- Lookup function
+        functionTable <- State.gets functions
+        getFunctionProto path functionTable >>= \case
+            Just proto -> do
+                let numGenerics = length (funcGenerics proto)
+                -- Allow empty type argument list as syntax sugar for all holes
+                let paddedTyArgs =
+                        if null tyArgs && numGenerics > 0
+                            then replicate numGenerics Nothing
+                            else tyArgs
+                insideRegion' <- State.gets insideRegion
+                when (not insideRegion' && funcIsRegional proto) $ do
+                    addErrReportMsg "Cannot call regional function outside of region"
+                checkTypeArgsNum numGenerics paddedTyArgs $ do
+                    bounds <-
+                        mapM (\(_, gid) -> runUnification $ getGenericBound gid) (funcGenerics proto)
+                    tyArgs' <- zipWithM tyArgOrMetaHole paddedTyArgs bounds
+                    L.logTrace_ $
+                        "Tyck: instantiated call generics for "
+                            <> T.pack (show path)
+                            <> ": "
+                            <> T.pack (show tyArgs')
+                    let genericMap = functionGenericMap proto tyArgs'
+                    let instantiatedArgTypes = map (\(_, ty) -> substituteGenericMap ty genericMap) (funcParams proto)
+                    let expectedNumParams = length instantiatedArgTypes
+                    checkArgsNum expectedNumParams $ do
+                        argExprs' <- zipWithM checkType argExprs instantiatedArgTypes
+                        let instantiatedRetType = substituteGenericMap (funcReturnType proto) genericMap
+                        exprWithSpan instantiatedRetType $
+                            FuncCall
+                                { funcCallTarget = path
+                                , funcCallArgs = argExprs'
+                                , funcCallTyArgs = tyArgs'
+                                , funcCallRegional = funcIsRegional proto
+                                }
+            Nothing -> do
+                addErrReportMsg $ "Function not found: " <> T.pack (show path)
                 exprWithSpan TypeBottom Poison
-            else argAction
-    checkTypeArgsNum :: Int -> [Maybe Syn.Type] -> SemiEff Expr -> SemiEff Expr
-    checkTypeArgsNum expectedNum actualTyArgs paramAction = do
-        if expectedNum /= length actualTyArgs
-            then do
-                addErrReportMsg $
-                    "Function "
-                        <> T.pack (show path)
-                        <> " expects "
-                        <> T.pack (show expectedNum)
-                        <> " type arguments, but got "
-                        <> T.pack (show (length actualTyArgs))
-                exprWithSpan TypeBottom Poison
-            else paramAction
-    functionGenericMap :: FunctionProto -> [Type] -> IntMap.IntMap Type
-    functionGenericMap proto assignedTypes =
-        let genericIDs = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
-         in IntMap.fromList $ zip genericIDs assignedTypes
+      where
+        checkArgsNum :: Int -> SemiEff Expr -> SemiEff Expr
+        checkArgsNum expectedNum argAction = do
+            if expectedNum /= length argExprs
+                then do
+                    addErrReportMsg $
+                        "Function "
+                            <> T.pack (show path)
+                            <> " expects "
+                            <> T.pack (show expectedNum)
+                            <> " arguments, but got "
+                            <> T.pack (show (length argExprs))
+                    exprWithSpan TypeBottom Poison
+                else argAction
+        checkTypeArgsNum :: Int -> [Maybe Syn.Type] -> SemiEff Expr -> SemiEff Expr
+        checkTypeArgsNum expectedNum actualTyArgs paramAction = do
+            if expectedNum /= length actualTyArgs
+                then do
+                    addErrReportMsg $
+                        "Function "
+                            <> T.pack (show path)
+                            <> " expects "
+                            <> T.pack (show expectedNum)
+                            <> " type arguments, but got "
+                            <> T.pack (show (length actualTyArgs))
+                    exprWithSpan TypeBottom Poison
+                else paramAction
+        functionGenericMap :: FunctionProto -> [Type] -> IntMap.IntMap Type
+        functionGenericMap proto assignedTypes =
+            let genericIDs = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
+             in IntMap.fromList $ zip genericIDs assignedTypes
 
 -- Binary operations
 --          Г, Num U |- U <- x, y -> U

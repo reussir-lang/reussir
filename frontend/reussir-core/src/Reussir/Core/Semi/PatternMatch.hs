@@ -3,13 +3,16 @@
 module Reussir.Core.Semi.PatternMatch where
 
 import Control.Applicative ((<|>))
+import Data.Foldable (toList)
+import Data.List (groupBy)
 import Data.Maybe (isJust)
 import Effectful (liftIO)
 import Effectful.Prim.IORef.Strict (readIORef')
-import Reussir.Parser.Types.Lexer (Identifier (..), Path, WithSpan (..))
+import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
 
 import Data.HashMap.Strict qualified as HashMap
 import Data.HashTable.IO qualified as H
+import Data.RRBVector qualified as RRB
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
@@ -20,6 +23,7 @@ import Reussir.Core.Data.Semi.Context (SemiContext (..), SemiEff, knownRecords)
 import Reussir.Core.Data.Semi.Expr (PatternVarRef (..))
 import Reussir.Core.Data.Semi.Record (Record (..), RecordFields (..))
 import Reussir.Core.Semi.Context (addErrReportMsg)
+import qualified Reussir.Core.Data.Semi.Type as Semi
 
 -- normalize a ctor pattern into a positional applied form.
 -- fill in wildcards for ignored fields if ellipsis is present.
@@ -159,33 +163,185 @@ data PMRow = PMRow
     -- store distinguishable patterns (ctor or constant)
     -- and the de Bruijn level of the pattern.
     -- empty patterns means this raw is catching all patterns.
-    { rowPatterns :: Seq.Seq (PatternVarRef, Syn.PatternKind)
+    { rowPatterns :: RRB.Vector (PatternVarRef, Syn.PatternKind)
     , rowBindings :: HashMap.HashMap Identifier PatternVarRef
     , rowGuard :: Maybe Syn.Expr
     , rowBody :: Syn.Expr
     }
+
 data PMMatrix = PMMatrix
     { matrixPrefix :: PatternVarRef
-    , matrixRows :: V.Vector PMRow
+    , matrixRows :: RRB.Vector PMRow
+    , matrixSemiType :: Semi.Type
     }
+
 data SplitResult
     = SplitResult
     | NoPivot PMMatrix
     | HasPivot PMMatrix PMRow (Maybe PMMatrix)
+    | FirstPivot PMRow (Maybe PMMatrix)
 
-initializePMMatrix :: V.Vector (Syn.Pattern, Syn.Expr) -> SemiEff PMMatrix
-initializePMMatrix patterns = PMMatrix zeroSingleton <$> inner
+data DispatchKind
+    = DispatchInt
+    | DispatchBool
+    | DispatchCtor Path
+    | DispatchString
+    | DispatchFP
+    | DispatchNullable
+
+initializePMMatrix :: V.Vector (Syn.Pattern, Syn.Expr) -> Semi.Type -> PMMatrix
+initializePMMatrix patterns semiType = PMMatrix zeroSingleton inner semiType
   where
     zeroSingleton :: PatternVarRef
     zeroSingleton = PatternVarRef $ Seq.singleton 0
 
-    inner :: SemiEff (V.Vector PMRow)
-    inner = V.forM patterns $ \(Syn.Pattern kind guard, expr) -> case kind of
-        Syn.WildcardPat -> do
-            return $ PMRow mempty mempty guard expr
-        Syn.BindPat identifier -> do
-            return $ PMRow mempty (HashMap.singleton identifier zeroSingleton) guard expr
-        _ -> return $ PMRow (Seq.singleton (zeroSingleton, kind)) mempty guard expr
+    inner :: RRB.Vector PMRow
+    inner = V.foldl' (\acc x -> acc RRB.|> patternToRow x) mempty patterns
 
-rowIsWildcard :: PMRow -> Bool
-rowIsWildcard row = Seq.null (rowPatterns row)
+    patternToRow :: (Syn.Pattern, Syn.Expr) -> PMRow
+    patternToRow (Syn.Pattern kind guard, expr) = case kind of
+        Syn.WildcardPat -> PMRow mempty mempty guard expr
+        Syn.BindPat identifier ->
+            PMRow mempty (HashMap.singleton identifier zeroSingleton) guard expr
+        _ -> PMRow (RRB.singleton (zeroSingleton, kind)) mempty guard expr
+
+-- A row is a wildcard with respect to a prefix if it has no pattern
+-- or its left-most pattern is larger than the prefix.
+rowIsWildcardAtPrefix :: PMRow -> PatternVarRef -> Bool
+rowIsWildcardAtPrefix row prefix = case RRB.viewl (rowPatterns row) of
+    Just ((hd, _), _) -> prefix < hd
+    Nothing -> null (rowPatterns row)
+
+findWildcardRow :: PMMatrix -> Maybe Int
+findWildcardRow (PMMatrix prefix rows _) =
+    RRB.findIndexL (flip rowIsWildcardAtPrefix prefix) rows
+
+-- assume current matrix have no wildcard, get the dispatch kind of the matrix
+-- query the first row should be enough, error otherwise
+-- Notice that for CtorPattern, if path is Nullable::NonNull/Null, it is a dispatch on Nullable
+-- Also notice that for other ctor patterns, the dispatch kind record the prefix path
+-- e.g. the path with variant dropped
+getDispatchKind :: PMMatrix -> DispatchKind
+getDispatchKind (PMMatrix _ rows _) =
+    case RRB.viewl rows of
+        Nothing -> error "getDispatchKind: empty matrix"
+        Just (firstRow, _) ->
+            case RRB.viewl (rowPatterns firstRow) of
+                Nothing -> error "getDispatchKind: empty row patterns"
+                Just ((_, kind), _) -> patKindToDispatch kind
+  where
+    patKindToDispatch :: Syn.PatternKind -> DispatchKind
+    patKindToDispatch (Syn.ConstPat (Syn.ConstInt _)) = DispatchInt
+    patKindToDispatch (Syn.ConstPat (Syn.ConstBool _)) = DispatchBool
+    patKindToDispatch (Syn.ConstPat (Syn.ConstString _)) = DispatchString
+    patKindToDispatch (Syn.ConstPat (Syn.ConstDouble _)) = DispatchFP
+    patKindToDispatch (Syn.CtorPat path _ _ _)
+        | isNullablePath path = DispatchNullable
+        | otherwise = DispatchCtor (droppedVariantPath path)
+    patKindToDispatch _ = error "getDispatchKind: unsupported or wildcard pattern"
+
+-- check if all rows are distinguishable via the same dispatch kind
+validateDistinguishable :: PMMatrix -> Bool
+validateDistinguishable (PMMatrix _ rows semiTy) =
+    all rowCompatible rows
+  where
+    rowCompatible row =
+        case RRB.viewl (rowPatterns row) of
+            Nothing -> True -- Should not happen if no wildcards assumed, but safe default
+            Just ((_, kind), _) -> isCompatible semiTy kind
+
+    isCompatible :: Semi.Type -> Syn.PatternKind -> Bool
+    isCompatible (Semi.TypeIntegral _) (Syn.ConstPat (Syn.ConstInt _)) = True
+    isCompatible Semi.TypeBool (Syn.ConstPat (Syn.ConstBool _)) = True
+    isCompatible Semi.TypeStr (Syn.ConstPat (Syn.ConstString _)) = True
+    isCompatible (Semi.TypeFP _) (Syn.ConstPat (Syn.ConstDouble _)) = True
+    isCompatible (Semi.TypeNullable _) (Syn.CtorPat path _ _ _) = isNullablePath path
+    isCompatible (Semi.TypeRecord tyPath _ _) (Syn.CtorPat ctorPath _ _ _) =
+        not (isNullablePath ctorPath) && tyPath == droppedVariantPath ctorPath
+    isCompatible _ _ = False
+
+isNullablePath :: Path -> Bool
+isNullablePath (Path base segs) =
+    (base == "NonNull" || base == "Null")
+        && (not (null segs) && last segs == "Nullable")
+
+droppedVariantPath :: Path -> Path
+droppedVariantPath (Path _ []) = error "Internal error: CtorPat path has no segments to drop"
+droppedVariantPath (Path _ segs) = Path (last segs) (init segs)
+
+stableSortDistinguishable :: PMMatrix -> PMMatrix
+stableSortDistinguishable mat@PMMatrix{matrixRows} = mat{matrixRows = RRB.sortBy compare' matrixRows}
+  where
+    compare' :: PMRow -> PMRow -> Ordering
+    compare' r1 r2 =
+        let l1 = RRB.viewl (rowPatterns r1)
+            l2 = RRB.viewl (rowPatterns r2)
+         in case (l1, l2) of
+                ( Just ((_, Syn.CtorPat{patCtorPath = p1}), _)
+                    , Just ((_, Syn.CtorPat{patCtorPath = p2}), _)
+                    ) -> p1 `compare` p2
+                ( Just ((_, Syn.ConstPat (Syn.ConstBool b1)), _)
+                    , Just ((_, Syn.ConstPat (Syn.ConstBool b2)), _)
+                    ) -> b1 `compare` b2
+                ( Just ((_, Syn.ConstPat (Syn.ConstInt i1)), _)
+                    , Just ((_, Syn.ConstPat (Syn.ConstInt i2)), _)
+                    ) -> i1 `compare` i2
+                ( Just ((_, Syn.ConstPat (Syn.ConstString s1)), _)
+                    , Just ((_, Syn.ConstPat (Syn.ConstString s2)), _)
+                    ) -> s1 `compare` s2
+                ( Just ((_, Syn.ConstPat (Syn.ConstDouble d1)), _)
+                    , Just ((_, Syn.ConstPat (Syn.ConstDouble d2)), _)
+                    ) -> d1 `compare` d2
+                _ -> error "stableSortDistinguishable applied to invalid pattern matrix"
+
+splitAtFirstWildcard :: PMMatrix -> SplitResult
+splitAtFirstWildcard mat@PMMatrix{matrixRows} = case findWildcardRow mat of
+    Nothing -> NoPivot mat
+    Just 0 -> case RRB.viewl matrixRows of
+        Just (pivot, rest) ->
+            FirstPivot pivot $
+                if null rest
+                    then Nothing
+                    else Just $ mat { matrixRows = rest }
+        Nothing -> error "Internal error: splitAtFirstWildcard pivot lookup failed"
+    Just i ->
+        let (before, after) = RRB.splitAt i matrixRows
+         in case RRB.viewl after of
+                Just (pivot, rest) ->
+                    let matBefore = mat { matrixRows = before }
+                        matAfter =
+                            if null rest
+                                then Nothing
+                                else Just $ mat { matrixRows = rest }
+                     in HasPivot matBefore pivot matAfter
+                Nothing -> error "Internal error: splitAtFirstWildcard pivot lookup failed"
+
+-- first apply stable sort, then divide the matrix into multiple groups and each
+-- group of rows have the same value. Again, this assumes no wildcard in the matrix
+divideDistinguishable :: PMMatrix -> [PMMatrix]
+divideDistinguishable mat =
+    let sortedMat = stableSortDistinguishable mat
+        rows = toList (matrixRows sortedMat)
+        groups = groupBy sameGroup rows
+     in map (\rows' -> mat { matrixRows = RRB.fromList rows' }) groups
+  where
+    sameGroup r1 r2 =
+        let l1 = RRB.viewl (rowPatterns r1)
+            l2 = RRB.viewl (rowPatterns r2)
+         in case (l1, l2) of
+                ( Just ((_, Syn.CtorPat{patCtorPath = p1}), _)
+                    , Just ((_, Syn.CtorPat{patCtorPath = p2}), _)
+                    ) -> p1 == p2
+                ( Just ((_, Syn.ConstPat (Syn.ConstBool b1)), _)
+                    , Just ((_, Syn.ConstPat (Syn.ConstBool b2)), _)
+                    ) -> b1 == b2
+                ( Just ((_, Syn.ConstPat (Syn.ConstInt i1)), _)
+                    , Just ((_, Syn.ConstPat (Syn.ConstInt i2)), _)
+                    ) -> i1 == i2
+                ( Just ((_, Syn.ConstPat (Syn.ConstString s1)), _)
+                    , Just ((_, Syn.ConstPat (Syn.ConstString s2)), _)
+                    ) -> s1 == s2
+                ( Just ((_, Syn.ConstPat (Syn.ConstDouble d1)), _)
+                    , Just ((_, Syn.ConstPat (Syn.ConstDouble d2)), _)
+                    ) -> d1 == d2
+                _ -> error "divideDistinguishable applied to invalid pattern matrix"
