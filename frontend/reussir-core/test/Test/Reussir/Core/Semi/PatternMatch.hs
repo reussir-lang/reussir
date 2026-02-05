@@ -14,7 +14,10 @@ import Reussir.Parser.Types.Stmt (Visibility (..))
 import Test.Tasty
 import Test.Tasty.HUnit
 
+import Data.HashMap.Strict qualified as HashMap
 import Data.HashTable.IO qualified as H
+import Data.RRBVector qualified as RRB
+import Data.Sequence qualified as Seq
 import Data.Text qualified
 import Data.Vector.Strict qualified as V
 import Effectful.State.Static.Local qualified as State
@@ -28,13 +31,21 @@ import Reussir.Core.Data.Semi.Context (
     SemiEff,
     knownRecords,
  )
+import Reussir.Core.Data.Semi.Expr (PatternVarRef (..))
 import Reussir.Core.Data.Semi.Record (
     Record (..),
     RecordFields (..),
     RecordKind (..),
  )
 import Reussir.Core.Semi.Context (emptyLocalSemiContext, emptySemiContext)
-import Reussir.Core.Semi.PatternMatch (normalizeCtorPattern)
+import Reussir.Core.Semi.PatternMatch (
+    PMMatrix (..),
+    PMRow (..),
+    SplitResult (..),
+    normalizeCtorPattern,
+    normalizeVarRefLevel,
+    splitAtFirstWildcard,
+ )
 
 import Reussir.Core.Data.Semi.Type qualified as SemiType
 
@@ -61,6 +72,12 @@ tests =
         , testCase
             "normalize positional record (named arg)"
             (testNormalizePositionalNamed "testNormalizePositionalNamed")
+        , testCase
+            "normalize var ref level"
+            (testNormalizeVarRefLevel "testNormalizeVarRefLevel")
+        , testCase
+            "split at first wildcard"
+            (testSplitAtFirstWildcard "testSplitAtFirstWildcard")
         ]
 
 runSemi :: String -> SemiEff a -> IO a
@@ -302,3 +319,130 @@ testNormalizePositionalNamed name = runSemi name $ do
     let args = V.fromList [Syn.PatternCtorArg (Just (mkId "x")) Syn.WildcardPat]
     res <- normalizeCtorPattern recName args False
     liftIO $ assertBool "Should fail (named arg)" (isNothing res)
+
+mkVarRef :: Int -> PatternVarRef
+mkVarRef i = PatternVarRef (Seq.singleton i)
+
+testNormalizeVarRefLevel :: String -> Assertion
+testNormalizeVarRefLevel name = runSemi name $ do
+    let ref0 = mkVarRef 0
+    let ref1 = mkVarRef 1
+    let ref2 = mkVarRef 2
+
+    -- Case 1: Empty matrix -> should remain unchanged
+    let matEmpty = PMMatrix ref0 RRB.empty HashMap.empty
+    let resEmpty = normalizeVarRefLevel matEmpty
+    liftIO $ matrixCursor resEmpty @?= ref0
+
+    -- Case 2: Matrix with rows having different leading refs [1], [0], [2]
+    -- Row 1: [1] ...
+    let row1 =
+            PMRow
+                (RRB.fromList [(ref1, Syn.WildcardPat)])
+                HashMap.empty
+                Nothing
+                (Syn.ConstExpr (Syn.ConstInt 0))
+    -- Row 2: [0] ...
+    let row2 =
+            PMRow
+                (RRB.fromList [(ref0, Syn.WildcardPat)])
+                HashMap.empty
+                Nothing
+                (Syn.ConstExpr (Syn.ConstInt 0))
+    -- Row 3: [2] ...
+    let row3 =
+            PMRow
+                (RRB.fromList [(ref2, Syn.WildcardPat)])
+                HashMap.empty
+                Nothing
+                (Syn.ConstExpr (Syn.ConstInt 0))
+
+    let matMixed = PMMatrix ref1 (RRB.fromList [row1, row2, row3]) HashMap.empty
+    let resMixed = normalizeVarRefLevel matMixed
+    -- Should pick min(1, 0, 2) = 0
+    liftIO $ matrixCursor resMixed @?= ref0
+
+    -- Case 3: Matrix with rows all having same leading ref [2]
+    let rowA =
+            PMRow
+                (RRB.fromList [(ref2, Syn.WildcardPat)])
+                HashMap.empty
+                Nothing
+                (Syn.ConstExpr (Syn.ConstInt 0))
+    let rowB =
+            PMRow
+                (RRB.fromList [(ref2, Syn.WildcardPat)])
+                HashMap.empty
+                Nothing
+                (Syn.ConstExpr (Syn.ConstInt 0))
+    let matSame = PMMatrix ref0 (RRB.fromList [rowA, rowB]) HashMap.empty
+    let resSame = normalizeVarRefLevel matSame
+    liftIO $ matrixCursor resSame @?= ref2
+
+    -- Case 4: Row with empty patterns (wildcard) -> ignored by normalizeVarRefLevel logic?
+    let rowEmpty = PMRow RRB.empty HashMap.empty Nothing (Syn.ConstExpr (Syn.ConstInt 0))
+    let matPartialWild = PMMatrix ref0 (RRB.fromList [row1, rowEmpty]) HashMap.empty
+    let resPartialWild = normalizeVarRefLevel matPartialWild
+    liftIO $ matrixCursor resPartialWild @?= ref1
+
+testSplitAtFirstWildcard :: String -> Assertion
+testSplitAtFirstWildcard name = runSemi name $ do
+    let ref0 = mkVarRef 0
+    let ref1 = mkVarRef 1
+
+    -- Specific row (matches at ref0)
+    let rowSpecific =
+            PMRow
+                (RRB.fromList [(ref0, Syn.WildcardPat)])
+                HashMap.empty
+                Nothing
+                (Syn.ConstExpr (Syn.ConstInt 0))
+
+    -- Wildcard row (empty patterns)
+    let rowWildEmpty =
+            PMRow
+                RRB.empty
+                HashMap.empty
+                Nothing
+                (Syn.ConstExpr (Syn.ConstInt 1))
+
+    -- Wildcard row (matches at ref1 > ref0)
+    let rowWildFuture =
+            PMRow
+                (RRB.fromList [(ref1, Syn.WildcardPat)])
+                HashMap.empty
+                Nothing
+                (Syn.ConstExpr (Syn.ConstInt 2))
+
+    -- Case 1: No wildcards
+    let rows1 = RRB.fromList [rowSpecific, rowSpecific]
+    let mat1 = PMMatrix ref0 rows1 HashMap.empty
+    let SplitResult l1 w1 t1 = splitAtFirstWildcard mat1
+    liftIO $ length l1 @?= 2
+    liftIO $ length w1 @?= 0
+    liftIO $ length t1 @?= 0
+
+    -- Case 2: Wildcard at start [Wild, Specific]
+    let rows2 = RRB.fromList [rowWildEmpty, rowSpecific]
+    let mat2 = PMMatrix ref0 rows2 HashMap.empty
+    let SplitResult l2 w2 t2 = splitAtFirstWildcard mat2
+    liftIO $ length l2 @?= 0
+    liftIO $ length w2 @?= 1
+    liftIO $ length t2 @?= 1
+
+    -- Case 3: Wildcard block in middle [Specific, Wild, Wild, Specific]
+    let rows3 = RRB.fromList [rowSpecific, rowWildEmpty, rowWildFuture, rowSpecific]
+    let mat3 = PMMatrix ref0 rows3 HashMap.empty
+    let SplitResult l3 w3 t3 = splitAtFirstWildcard mat3
+    liftIO $ length l3 @?= 1
+    liftIO $ length w3 @?= 2 -- Both empty and future match as wildcard for ref0
+    liftIO $ length t3 @?= 1
+
+    -- Case 4: Consecutive wildcards at end [Specific, Wild]
+    let rows4 = RRB.fromList [rowSpecific, rowWildEmpty]
+    let mat4 = PMMatrix ref0 rows4 HashMap.empty
+    let SplitResult l4 w4 t4 = splitAtFirstWildcard mat4
+    liftIO $ length l4 @?= 1
+    liftIO $ length w4 @?= 1
+    liftIO $ length t4 @?= 0
+

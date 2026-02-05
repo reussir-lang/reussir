@@ -89,6 +89,7 @@ import Reussir.Core.Semi.Context (
     withVariable,
  )
 import Reussir.Core.Semi.Function (getFunctionProto)
+import Reussir.Core.Semi.Projection (projectType, resolveProjection)
 import Reussir.Core.Semi.Type (substituteGenericMap)
 import Reussir.Core.Semi.Unification (
     errorToReport,
@@ -418,7 +419,7 @@ inferType (Syn.AccessChain baseExpr accesses) = do
     exprWithSpan projectedTy $ Proj baseExpr' (UV.fromList $ reverse indices)
   where
     resolveAccess (currentTy, acc) access = do
-        (idx, fieldTy) <- resolveSingleAccess currentTy access
+        (idx, fieldTy) <- resolveProjection currentTy access
         return (fieldTy, idx : acc)
 -- Function call:
 --            Г |- f : (T1, T2, ..., Tn) -> T, Г |- ei : Ti
@@ -814,72 +815,6 @@ inferTypeBinOp op lhs rhs = case convertOp op of
             else do
                 addErrReportMsg "Comparison operation applied to non-numeric type"
                 exprWithSpan TypeBottom Poison
-
-projectType :: Bool -> Type -> SemiEff Type
-projectType nullable ty@(TypeRecord path _ _) = do
-    record <- State.gets knownRecords
-    record' <- liftIO $ H.lookup record path
-    case record' of
-        Nothing -> do
-            addErrReportMsg $ "Unknown record: " <> T.pack (show path)
-            return TypeBottom
-        Just recordDef -> do
-            let defaultCap = recordDefaultCap recordDef
-            case (defaultCap, nullable) of
-                (Cap.Regional, True) -> return $ TypeNullable ty
-                (Cap.Regional, False) -> return ty
-                (Cap.Shared, True) -> return $ TypeNullable ty
-                (Cap.Shared, False) -> return ty
-                (_, True) -> do
-                    addErrReportMsg "Cannot make nullable value record"
-                    return TypeBottom
-                (_, False) -> return ty
-projectType _ ty = return ty
-
--- | Resolve a single field access on a record type to its index and projected type
-resolveSingleAccess :: Type -> Access.Access -> SemiEff (Int, Type)
-resolveSingleAccess currentTy access = do
-    case currentTy of
-        TypeRecord path args _ -> do
-            knownRecords <- State.gets knownRecords
-            liftIO (H.lookup knownRecords path) >>= \case
-                Just record -> do
-                    let subst =
-                            IntMap.fromList $
-                                zip (map (\(_, GenericID gid) -> fromIntegral gid) $ recordTyParams record) args
-                    fieldsMaybe <- readIORef' (recordFields record)
-                    case (fieldsMaybe, access) of
-                        (Just (Named fields), Access.Named name) -> do
-                            case V.findIndex (\(WithSpan (n, _, _) _ _) -> n == name) fields of
-                                Just idx -> do
-                                    let WithSpan (_, fieldTy, nullable) _ _ = fields `V.unsafeIndex` idx
-                                    fieldTy' <- projectType nullable $ substituteGenericMap fieldTy subst
-                                    L.logTrace_ $ "Field type: " <> T.pack (show fieldTy')
-                                    return (idx, fieldTy')
-                                Nothing -> do
-                                    addErrReportMsg $ "Field not found: " <> unIdentifier name
-                                    return (-1, TypeBottom)
-                        (Just (Unnamed fields), Access.Unnamed idx) -> do
-                            let idxInt = fromIntegral idx
-                            case fields V.!? idxInt of
-                                Just (WithSpan (fieldTy, nullable) _ _) -> do
-                                    fieldTy' <- projectType nullable $ substituteGenericMap fieldTy subst
-                                    return (idxInt, fieldTy')
-                                Nothing -> do
-                                    addErrReportMsg $ "Field index out of bounds: " <> T.pack (show idx)
-                                    return (-1, TypeBottom)
-                        (Nothing, _) -> do
-                            addErrReportMsg "Record fields not populated"
-                            return (-1, TypeBottom)
-                        _ -> do
-                            addErrReportMsg "Invalid access type for record kind"
-                            return (-1, TypeBottom)
-                Nothing -> do
-                    addErrReportMsg $ "Unknown record: " <> T.pack (show path)
-                    return (-1, TypeBottom)
-        _ -> do
-            addErrReportMsg "Accessing field of non-record type"
-            return (-1, TypeBottom)
 
 {- | Resolve a single field access for assignment. Returns (index, rawFieldType, isMutable).
 The rawFieldType is the field type before any nullable wrapping.

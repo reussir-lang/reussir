@@ -48,6 +48,7 @@ library
         Reussir.Core.Semi.Mangle
         Reussir.Core.Semi.Context
         Reussir.Core.Semi.Tyck
+        Reussir.Core.Semi.Projection
         Reussir.Core.Semi.FlowAnalysis
         Reussir.Core.Semi.Pretty
         Reussir.Core.Semi.PatternMatch
@@ -165,4 +166,5 @@ test-suite reussir-core-test
         vector,
         log-effectful,
         reussir-bridge,
+        rrb-vector,
         log-base

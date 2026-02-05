@@ -1,6 +1,7 @@
 module Reussir.Core.Data.Semi.Expr where
 
 import Data.Digest.XXHash.FFI
+import Data.Hashable
 import Data.Int (Int64)
 import Data.Scientific (Scientific)
 import Reussir.Parser.Types.Lexer (Identifier, Path)
@@ -63,7 +64,7 @@ data ExprKind
     deriving (Show, Eq)
 
 newtype PatternVarRef = PatternVarRef {unPatternVarRef :: Seq.Seq Int}
-    deriving (Show, Eq, Ord)
+    deriving (Show, Eq, Ord, Hashable)
 
 data DecisionTree a
     = DTUncovered
@@ -79,7 +80,7 @@ data DecisionTree a
         , dtGuardFalse :: DecisionTree a
         }
     | DTSwitch
-        { dtSwitchDeBruijnIdx :: PatternVarRef -- DB index of the switch
+        { dtSwitchVarRef :: PatternVarRef -- DB index of the switch
         , dtSwitchCases :: DTSwitchCases a
         }
 

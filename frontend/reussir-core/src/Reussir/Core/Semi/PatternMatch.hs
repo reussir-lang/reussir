@@ -4,6 +4,7 @@ module Reussir.Core.Semi.PatternMatch where
 
 import Control.Applicative ((<|>))
 import Data.Foldable (toList)
+import Data.Int (Int64)
 import Data.List (groupBy)
 import Data.Maybe (isJust)
 import Effectful (liftIO)
@@ -12,18 +13,28 @@ import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
 
 import Data.HashMap.Strict qualified as HashMap
 import Data.HashTable.IO qualified as H
+import Data.IntMap.Strict qualified as IntMap
+
 import Data.RRBVector qualified as RRB
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
 import Effectful.State.Static.Local qualified as State
 import Reussir.Parser.Types.Expr qualified as Syn
+import Reussir.Parser.Types.Type qualified as SynType
 
 import Reussir.Core.Data.Semi.Context (SemiContext (..), SemiEff, knownRecords)
-import Reussir.Core.Data.Semi.Expr (PatternVarRef (..))
+import Reussir.Core.Data.Semi.Expr (
+    DTSwitchCases (..),
+    DecisionTree (..),
+    PatternVarRef (..),
+ )
 import Reussir.Core.Data.Semi.Record (Record (..), RecordFields (..))
+import Reussir.Core.Data.UniqueID (VarID (..))
 import Reussir.Core.Semi.Context (addErrReportMsg)
-import qualified Reussir.Core.Data.Semi.Type as Semi
+
+import Reussir.Core.Data.Semi.Expr qualified as Semi
+import Reussir.Core.Data.Semi.Type qualified as Semi
 
 -- normalize a ctor pattern into a positional applied form.
 -- fill in wildcards for ignored fields if ellipsis is present.
@@ -170,17 +181,17 @@ data PMRow = PMRow
     }
 
 data PMMatrix = PMMatrix
-    { matrixPrefix :: PatternVarRef
+    { matrixCursor :: PatternVarRef
     , matrixRows :: RRB.Vector PMRow
-    , matrixSemiType :: Semi.Type
+    , matrixTypes :: HashMap.HashMap PatternVarRef Semi.Type
     }
 
 data SplitResult
     = SplitResult
-    | NoPivot PMMatrix
-    | HasPivot PMMatrix PMRow (Maybe PMMatrix)
-    | FirstPivot PMRow (Maybe PMMatrix)
-
+    { leadingNonWildcardRows :: [PMRow]
+    , wildcardRows :: [PMRow]
+    , trailingNonWildcardRows :: [PMRow]
+    }
 data DispatchKind
     = DispatchInt
     | DispatchBool
@@ -190,10 +201,14 @@ data DispatchKind
     | DispatchNullable
 
 initializePMMatrix :: V.Vector (Syn.Pattern, Syn.Expr) -> Semi.Type -> PMMatrix
-initializePMMatrix patterns semiType = PMMatrix zeroSingleton inner semiType
+initializePMMatrix patterns semiType =
+    PMMatrix zeroSingleton inner hashSingleton
   where
     zeroSingleton :: PatternVarRef
     zeroSingleton = PatternVarRef $ Seq.singleton 0
+
+    hashSingleton :: HashMap.HashMap PatternVarRef Semi.Type
+    hashSingleton = HashMap.singleton zeroSingleton semiType
 
     inner :: RRB.Vector PMRow
     inner = V.foldl' (\acc x -> acc RRB.|> patternToRow x) mempty patterns
@@ -242,9 +257,12 @@ getDispatchKind (PMMatrix _ rows _) =
 
 -- check if all rows are distinguishable via the same dispatch kind
 validateDistinguishable :: PMMatrix -> Bool
-validateDistinguishable (PMMatrix _ rows semiTy) =
+validateDistinguishable (PMMatrix cursor rows types) =
     all rowCompatible rows
   where
+    semiTy = case HashMap.lookup cursor types of
+        Nothing -> error "validateDistinguishable: pattern ref not found"
+        Just ty -> ty
     rowCompatible row =
         case RRB.viewl (rowPatterns row) of
             Nothing -> True -- Should not happen if no wildcards assumed, but safe default
@@ -295,26 +313,31 @@ stableSortDistinguishable mat@PMMatrix{matrixRows} = mat{matrixRows = RRB.sortBy
                 _ -> error "stableSortDistinguishable applied to invalid pattern matrix"
 
 splitAtFirstWildcard :: PMMatrix -> SplitResult
-splitAtFirstWildcard mat@PMMatrix{matrixRows} = case findWildcardRow mat of
-    Nothing -> NoPivot mat
-    Just 0 -> case RRB.viewl matrixRows of
-        Just (pivot, rest) ->
-            FirstPivot pivot $
-                if null rest
-                    then Nothing
-                    else Just $ mat { matrixRows = rest }
-        Nothing -> error "Internal error: splitAtFirstWildcard pivot lookup failed"
-    Just i ->
-        let (before, after) = RRB.splitAt i matrixRows
-         in case RRB.viewl after of
-                Just (pivot, rest) ->
-                    let matBefore = mat { matrixRows = before }
-                        matAfter =
-                            if null rest
-                                then Nothing
-                                else Just $ mat { matrixRows = rest }
-                     in HasPivot matBefore pivot matAfter
-                Nothing -> error "Internal error: splitAtFirstWildcard pivot lookup failed"
+splitAtFirstWildcard mat@PMMatrix{matrixRows, matrixCursor} =
+    -- Attempt to find the index of the first row that acts as a wildcard
+    -- with respect to the current matrix cursor (prefix).
+    case findWildcardRow mat of
+        -- If no wildcard row is found, all rows are leading non-wildcard rows.
+        Nothing -> SplitResult (toList matrixRows) [] []
+        -- If a wildcard row is found at index i:
+        Just i ->
+            -- Split the rows into 'leading' (before data i) and 'rest' (starting at i).
+            let (leading, rest) = RRB.splitAt i matrixRows
+                -- 'rest' starts with a wildcard row.
+                -- We convert to list to use standard list functions, as we return lists anyway.
+                restList = toList rest
+                (wildcards, trailing) = span (`rowIsWildcardAtPrefix` matrixCursor) restList
+             in SplitResult (toList leading) wildcards trailing
+
+
+normalizeVarRefLevel :: PMMatrix -> PMMatrix
+normalizeVarRefLevel mat@PMMatrix{matrixRows} =
+    case [ ref
+         | row <- toList matrixRows
+         , Just ((ref, _), _) <- [RRB.viewl (rowPatterns row)]
+         ] of
+        [] -> mat
+        refs -> mat{matrixCursor = minimum refs}
 
 -- first apply stable sort, then divide the matrix into multiple groups and each
 -- group of rows have the same value. Again, this assumes no wildcard in the matrix
@@ -323,7 +346,7 @@ divideDistinguishable mat =
     let sortedMat = stableSortDistinguishable mat
         rows = toList (matrixRows sortedMat)
         groups = groupBy sameGroup rows
-     in map (\rows' -> mat { matrixRows = RRB.fromList rows' }) groups
+     in map (\rows' -> mat{matrixRows = RRB.fromList rows'}) groups
   where
     sameGroup r1 r2 =
         let l1 = RRB.viewl (rowPatterns r1)
@@ -345,3 +368,158 @@ divideDistinguishable mat =
                     , Just ((_, Syn.ConstPat (Syn.ConstDouble d2)), _)
                     ) -> d1 == d2
                 _ -> error "divideDistinguishable applied to invalid pattern matrix"
+
+data TyckCPS = TyckCPS
+    { inferType :: Syn.Expr -> SemiEff Semi.Expr
+    , checkType :: Syn.Expr -> Semi.Type -> SemiEff Semi.Expr
+    , evalType :: SynType.Type -> Semi.Type
+    , bindVar ::
+        forall a.
+        Identifier ->
+        Maybe (Int64, Int64) ->
+        Semi.Type ->
+        (VarID -> SemiEff a) ->
+        SemiEff a
+    }
+
+translatePMToDT :: TyckCPS -> PMMatrix -> SemiEff (DecisionTree Semi.Expr)
+translatePMToDT _ _ = undefined
+
+-- first of all, each time we attempt to translate an expr, we first introduce
+-- all variables with bindVar and record the mapping from VarID' inner value to
+-- varref.
+-- let's discuss the situations where we have a set of rows and first several of
+-- them are wildcard patterns at this level.
+-- 1. if there is no further pattern in the first wildcard row
+--    1.a if there is no guard. then this basically discard all further rows. we
+--        hit a leaf case. We probably want to emit warnings if there are still
+--        rows left.
+--    1.b if there is a guard. then we emit a guard node. the true branch is 
+--        just a leaf case. on the false branch, we popout the leading wildcard
+--        pattern:
+--        1.b.i if there is no further wildcard row after poping out, we just recurse
+--              on the fallback matrix with normal translation
+--        1.b.ii if there are further wildcard rows, we end up with 2).
+-- 2. if there are further patterns in the first wildcard rows. We normalize
+--    the wildcard matrix and translate it as normal matrix. We also translate
+--    the fallback matrix as normal matrix. Then we combine them by subsituting
+--    Uncovered nodes in wildcard decision tree with the fallback decision tree.
+--    Notice that rows in leading wildcards are all wildcards at the current level
+--    so normalization will always advance it. We will not stuck in it.
+
+-- | Recursively substitute 'DTUncovered' nodes in a Decision Tree with a fallback Decision Tree.
+-- This is used to merge the results of a wildcard match (which may fail/be uncovered)
+-- with a fallback strategy (the rest of the matrix).
+substituteUncovered :: DecisionTree Semi.Expr -> DecisionTree Semi.Expr -> DecisionTree Semi.Expr
+substituteUncovered DTUncovered fallback = fallback
+substituteUncovered (DTGuard bindings expr trueBr falseBr) fallback =
+    DTGuard bindings expr (substituteUncovered trueBr fallback) (substituteUncovered falseBr fallback)
+substituteUncovered (DTSwitch ref cases) fallback =
+    DTSwitch ref (substituteCases cases)
+  where
+    substituteCases (DTSwitchInt m def) =
+        DTSwitchInt (fmap (`substituteUncovered` fallback) m) (substituteUncovered def fallback)
+    substituteCases (DTSwitchBool t f) =
+        DTSwitchBool (substituteUncovered t fallback) (substituteUncovered f fallback)
+    substituteCases (DTSwitchCtor cs def) =
+        DTSwitchCtor (V.map (`substituteUncovered` fallback) cs) (substituteUncovered def fallback)
+    substituteCases (DTSwitchString m def) =
+        DTSwitchString (fmap (`substituteUncovered` fallback) m) (substituteUncovered def fallback)
+    substituteCases (DTSwitchNullable j n) =
+        DTSwitchNullable (substituteUncovered j fallback) (substituteUncovered n fallback)
+substituteUncovered node _ = node -- Leaf, Unreachable
+
+translateWithLeadingWildcards ::
+    TyckCPS -> -- ^ Tyck utils and CPS context
+    PatternVarRef -> -- ^ Current pattern variable reference (cursor)
+    HashMap.HashMap PatternVarRef Semi.Type -> -- ^ Current type bindings
+    [PMRow] -> -- ^ Rows being a wildcard at the current position
+    [PMRow] -> -- ^ Rows without leading wildcards as fallback
+    SemiEff (DecisionTree Semi.Expr)
+translateWithLeadingWildcards cps cursor typeMap wildcards fallback = do
+    -- We assume 'wildcards' is non-empty given the context of calling this function.
+    case wildcards of
+        [] -> error "translateWithLeadingWildcards: empty wildcards list"
+        (firstRow : restWildcards) ->
+            -- Check if the first wildcard row is exhausted (no more patterns).
+            -- If `rowPatterns` is empty, this row matches everything remaining.
+            if null (rowPatterns firstRow)
+                then handleLeafRow firstRow restWildcards
+                else handleWildcardRecursion
+  where
+    -- Helper to recursively bind variables from a row's bindings
+    bindRowVars ::
+        HashMap.HashMap Identifier PatternVarRef ->
+        (IntMap.IntMap PatternVarRef -> SemiEff a) ->
+        SemiEff a
+    bindRowVars rowBinds k = go (HashMap.toList rowBinds) IntMap.empty
+      where
+        go [] acc = k acc
+        go ((ident, ref) : rest) acc =
+            case HashMap.lookup ref typeMap of
+                Nothing -> error "Type not found for pattern var ref in bindRowVars"
+                Just ty ->
+                    (bindVar cps) ident Nothing ty $ \(VarID vid) ->
+                        go rest (IntMap.insert vid ref acc)
+
+    -- Case 1: The row matches unconditionally at this level and has no more patterns.
+    -- It acts as a leaf (success) or a guarded leaf.
+    handleLeafRow row rest = do
+        case rowGuard row of
+            Nothing -> do
+                -- Case 1.a: No guard. This is a leaf node.
+                -- It catches all cases, so we discard any potential fallback rows (and subsequent wildcard rows).
+                -- We bind the variables collected in this row and translate the body.
+                bindRowVars (rowBindings row) $ \mapping -> do
+                    body <- inferType cps (rowBody row)
+                    return $ DTLeaf body mapping
+            Just guard -> do
+                -- Case 1.b: There is a guard.
+                -- Bind variables to check the guard.
+                bindRowVars (rowBindings row) $ \mapping -> do
+                    -- Check the guard expression type (must be Bool).
+                    guardExpr <- checkType cps guard Semi.TypeBool
+
+                    -- True branch: The guard succeeds, execute the body (Leaf).
+                    trueBranch <- do
+                        body <- inferType cps (rowBody row)
+                        return $ DTLeaf body mapping
+
+                    -- False branch: The guard fails.
+                    -- We effectively "pop" this row and try the next strategy.
+                    falseBranch <-
+                         if null rest
+                                then
+                                    -- Case 1.b.i: No more wildcard rows.
+                                    -- Recurse on the original fallback rows.
+                                    -- We construct a matrix from the fallback rows to use translatePMToDT.
+                                    let fallbackMat = PMMatrix cursor (RRB.fromList fallback) typeMap
+                                     in translatePMToDT cps fallbackMat
+                                else
+                                    -- Case 1.b.ii: There are more wildcard rows.
+                                    -- Recurse with the remaining wildcard rows and the same fallback.
+                                    translateWithLeadingWildcards cps cursor typeMap rest fallback
+
+                    return $ DTGuard mapping guardExpr trueBranch falseBranch
+
+    -- Case 2: The wildcard rows have further patterns (they are just wildcards *at this level*).
+    handleWildcardRecursion = do
+        -- 1. Translate the wildcard rows.
+        -- We construct a matrix from the wildcard rows.
+        let wildcardMat = PMMatrix cursor (RRB.fromList wildcards) typeMap
+        -- We MUST normalize this matrix. Since they are wildcards at 'cursor',
+        -- they must have patterns at some 'cursor' > 'cursor'.
+        -- 'normalizeVarRefLevel' will advance the cursor to the next relevant column.
+        let normalizedWildcardMat = normalizeVarRefLevel wildcardMat
+
+        dtWildcard <- translatePMToDT cps normalizedWildcardMat
+
+        -- 2. Translate the fallback rows.
+        -- These are the rows that were valid *at `cursor`* (or after).
+        -- We process them as a normal matrix starting from `cursor`.
+        let fallbackMat = PMMatrix cursor (RRB.fromList fallback) typeMap
+        dtFallback <- translatePMToDT cps fallbackMat
+
+        -- 3. Combine them.
+        -- If the wildcard path results in 'Uncovered', we fall back to 'dtFallback'.
+        return $ substituteUncovered dtWildcard dtFallback
