@@ -394,12 +394,13 @@ inferType (Syn.Cast targetType subExpr) = do
             innerTyHasFloatBound <-
                 runUnification $ satisfyBounds innerTy [Class $ Path "FloatingPoint" []]
             case innerTy of
-                TypeHole _ | (innerTyHasNumBound && targetTypeSatisfyIntBound)
-                                || (innerTyHasFloatBound && targetTypeSatisfyFloatBound) -> do
-                    unification <- runUnification $ unify innerTy targetType'
-                    case unification of
-                        Nothing -> return innerExpr
-                        Just e -> error $ "Unification should have succeeded, but failed with " ++ show e
+                TypeHole _
+                    | (innerTyHasNumBound && targetTypeSatisfyIntBound)
+                        || (innerTyHasFloatBound && targetTypeSatisfyFloatBound) -> do
+                        unification <- runUnification $ unify innerTy targetType'
+                        case unification of
+                            Nothing -> return innerExpr
+                            Just e -> error $ "Unification should have succeeded, but failed with " ++ show e
                 _ -> numCast innerTy innerExpr targetType'
         else do
             addErrReportMsg "Cannot cast to non-numeric type"
