@@ -30,6 +30,7 @@ data ExprKind
     | Var VarID
     | RegionRun Expr
     | Proj Expr (UV.Vector Int)
+    | Match Expr DecisionTree
     | Assign Expr Int Expr -- for now, we only allow single-field assignment
     | Let
         { letVarSpan :: Maybe (Int64, Int64)
@@ -66,46 +67,48 @@ data ExprKind
 newtype PatternVarRef = PatternVarRef {unPatternVarRef :: Seq.Seq Int}
     deriving (Show, Eq, Ord, Hashable)
 
-data DecisionTree a
+data DecisionTree
     = DTUncovered
     | DTUnreachable
     | DTLeaf
-        { dtLeafBody :: a
+        { dtLeafBody :: Expr
         , dtLeafBindings :: IntMap.IntMap PatternVarRef
         }
     | DTGuard
         { dtGuardBindings :: IntMap.IntMap PatternVarRef
-        , dtGuardExpr :: a
-        , dtGuardTrue :: DecisionTree a
-        , dtGuardFalse :: DecisionTree a
+        , dtGuardExpr :: Expr
+        , dtGuardTrue :: DecisionTree
+        , dtGuardFalse :: DecisionTree
         }
     | DTSwitch
         { dtSwitchVarRef :: PatternVarRef -- DB index of the switch
-        , dtSwitchCases :: DTSwitchCases a
+        , dtSwitchCases :: DTSwitchCases
         }
+    deriving (Show, Eq)
 
-data DTSwitchCases a
+data DTSwitchCases
     = DTSwitchInt
-        { dtSwitchIntMap :: IntMap.IntMap (DecisionTree a)
-        , dtSwitchIntDefault :: DecisionTree a
+        { dtSwitchIntMap :: IntMap.IntMap DecisionTree
+        , dtSwitchIntDefault :: DecisionTree
         }
     | DTSwitchBool
-        { dtSwitchBoolTrue :: DecisionTree a
-        , dtSwitchBoolFalse :: DecisionTree a
+        { dtSwitchBoolTrue :: DecisionTree
+        , dtSwitchBoolFalse :: DecisionTree
         }
     | DTSwitchCtor
-        { dtSwitchCtorCases :: V.Vector (DecisionTree a)
-        , dtSwitchCtorDefault :: DecisionTree a
+        { dtSwitchCtorCases :: V.Vector DecisionTree
+        , dtSwitchCtorDefault :: DecisionTree
         }
     | DTSwitchString
-        { dtSwitchStringMap :: HashMap.HashMap (XXH3 T.Text) (DecisionTree a)
-        , dtSwitchStringDefault :: DecisionTree a
+        { dtSwitchStringMap :: HashMap.HashMap (XXH3 T.Text) DecisionTree
+        , dtSwitchStringDefault :: DecisionTree
         }
     | DTSwitchNullable
         { -- special case, since we specialize nullable types
-          dtSwitchNullableJust :: DecisionTree a
-        , dtSwitchNullableNothing :: DecisionTree a
+          dtSwitchNullableJust :: DecisionTree
+        , dtSwitchNullableNothing :: DecisionTree
         }
+    deriving (Show, Eq)
 
 data Expr = Expr
     { exprKind :: ExprKind

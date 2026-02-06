@@ -3,6 +3,7 @@
 module Reussir.Core.Semi.PatternMatch where
 
 import Control.Applicative ((<|>))
+import Control.Monad (forM, unless, when)
 import Data.Digest.XXHash.FFI (XXH3 (..))
 import Data.Foldable (toList)
 import Data.Int (Int64)
@@ -15,7 +16,6 @@ import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
 import Data.HashMap.Strict qualified as HashMap
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
-
 import Data.RRBVector qualified as RRB
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
@@ -38,7 +38,6 @@ import Reussir.Core.Semi.Unification (force, satisfyBounds)
 
 import Reussir.Core.Data.Semi.Expr qualified as Semi
 import Reussir.Core.Data.Semi.Type qualified as Semi
-import Control.Monad (forM, unless, when)
 
 -- normalize a ctor pattern into a positional applied form.
 -- fill in wildcards for ignored fields if ellipsis is present.
@@ -265,18 +264,18 @@ validateDistinguishable (PMMatrix cursor rows types) = do
     let semiTyRaw = HashMap.lookupDefault Semi.TypeBottom cursor types
     semiTy <- runUnification $ force semiTyRaw
     results <- forM (toList rows) $ \row -> do
-         case RRB.viewl (rowPatterns row) of
-             Nothing -> return True
-             Just ((_, kind), _) -> isCompatible semiTy kind
+        case RRB.viewl (rowPatterns row) of
+            Nothing -> return True
+            Just ((_, kind), _) -> isCompatible semiTy kind
     return $ all id results
   where
     isCompatible :: Semi.Type -> Syn.PatternKind -> SemiEff Bool
     isCompatible ty (Syn.ConstPat (Syn.ConstInt _)) =
-         runUnification $ satisfyBounds ty [Class (Path "Integral" [])]
+        runUnification $ satisfyBounds ty [Class (Path "Integral" [])]
     isCompatible Semi.TypeBool (Syn.ConstPat (Syn.ConstBool _)) = return True
     isCompatible Semi.TypeStr (Syn.ConstPat (Syn.ConstString _)) = return True
     isCompatible ty (Syn.ConstPat (Syn.ConstDouble _)) =
-         runUnification $ satisfyBounds ty [Class (Path "FloatingPoint" [])]
+        runUnification $ satisfyBounds ty [Class (Path "FloatingPoint" [])]
     isCompatible (Semi.TypeNullable _) (Syn.CtorPat path _ _ _) = return $ isNullablePath path
     isCompatible (Semi.TypeRecord tyPath _ _) (Syn.CtorPat ctorPath _ _ _) =
         return $ not (isNullablePath ctorPath) && tyPath == droppedVariantPath ctorPath
@@ -330,11 +329,10 @@ splitAtFirstWildcard mat@PMMatrix{matrixRows, matrixCursor} =
                 -- 'rest' starts with a wildcard row.
                 -- Find the index of the first non-wildcard row in 'rest' to split wildcards and trailing.
                 splitIdx = case RRB.findIndexL (not . (`rowIsWildcardAtPrefix` matrixCursor)) rest of
-                     Nothing -> length rest
-                     Just idx -> idx
+                    Nothing -> length rest
+                    Just idx -> idx
                 (wildcards, trailing) = RRB.splitAt splitIdx rest
              in SplitResult leading wildcards trailing
-
 
 normalizeVarRefLevel :: PMMatrix -> PMMatrix
 normalizeVarRefLevel mat@PMMatrix{matrixRows} =
@@ -388,40 +386,62 @@ data TyckCPS = TyckCPS
         SemiEff a
     }
 
-translatePMToDT :: TyckCPS -> PMMatrix -> SemiEff (DecisionTree Semi.Expr)
-translatePMToDT cps mat@PMMatrix{matrixCursor, matrixRows, matrixTypes} = 
-    if null matrixRows then 
-        return DTUnreachable
-    else do
-        let SplitResult splitLeading splitWildcards splitTrailing = splitAtFirstWildcard mat
-        if null splitLeading then 
-            translateWithLeadingWildcards cps matrixCursor matrixTypes splitWildcards splitTrailing
+translatePMToDT :: TyckCPS -> PMMatrix -> SemiEff DecisionTree
+translatePMToDT cps mat@PMMatrix{matrixCursor, matrixRows, matrixTypes} =
+    if null matrixRows
+        then
+            return DTUnreachable
         else do
-            let leadingDistinguishable = mat{matrixRows = splitLeading}
-            translateWithLeadingDistinguishable 
-                cps leadingDistinguishable splitWildcards splitTrailing
-            
+            let SplitResult splitLeading splitWildcards splitTrailing = splitAtFirstWildcard mat
+            if null splitLeading
+                then
+                    translateWithLeadingWildcards
+                        cps
+                        matrixCursor
+                        matrixTypes
+                        splitWildcards
+                        splitTrailing
+                else do
+                    let leadingDistinguishable = mat{matrixRows = splitLeading}
+                    translateWithLeadingDistinguishable
+                        cps
+                        leadingDistinguishable
+                        splitWildcards
+                        splitTrailing
 
--- | Recursively substitute 'DTUncovered' nodes in a Decision Tree with a fallback Decision Tree.
--- This is used to merge the results of a wildcard match (which may fail/be uncovered)
--- with a fallback strategy (the rest of the matrix).
-substituteUncovered :: DecisionTree Semi.Expr -> DecisionTree Semi.Expr -> DecisionTree Semi.Expr
+{- | Recursively substitute 'DTUncovered' nodes in a Decision Tree with a fallback Decision Tree.
+This is used to merge the results of a wildcard match (which may fail/be uncovered)
+with a fallback strategy (the rest of the matrix).
+-}
+substituteUncovered :: DecisionTree -> DecisionTree -> DecisionTree
 substituteUncovered DTUncovered fallback = fallback
 substituteUncovered (DTGuard bindings expr trueBr falseBr) fallback =
-    DTGuard bindings expr (substituteUncovered trueBr fallback) (substituteUncovered falseBr fallback)
+    DTGuard
+        bindings
+        expr
+        (substituteUncovered trueBr fallback)
+        (substituteUncovered falseBr fallback)
 substituteUncovered (DTSwitch ref cases) fallback =
     DTSwitch ref (substituteCases cases)
   where
     substituteCases (DTSwitchInt m def) =
-        DTSwitchInt (fmap (`substituteUncovered` fallback) m) (substituteUncovered def fallback)
+        DTSwitchInt
+            (fmap (`substituteUncovered` fallback) m)
+            (substituteUncovered def fallback)
     substituteCases (DTSwitchBool t f) =
         DTSwitchBool (substituteUncovered t fallback) (substituteUncovered f fallback)
     substituteCases (DTSwitchCtor cs def) =
-        DTSwitchCtor (V.map (`substituteUncovered` fallback) cs) (substituteUncovered def fallback)
+        DTSwitchCtor
+            (V.map (`substituteUncovered` fallback) cs)
+            (substituteUncovered def fallback)
     substituteCases (DTSwitchString m def) =
-        DTSwitchString (fmap (`substituteUncovered` fallback) m) (substituteUncovered def fallback)
+        DTSwitchString
+            (fmap (`substituteUncovered` fallback) m)
+            (substituteUncovered def fallback)
     substituteCases (DTSwitchNullable j n) =
-        DTSwitchNullable (substituteUncovered j fallback) (substituteUncovered n fallback)
+        DTSwitchNullable
+            (substituteUncovered j fallback)
+            (substituteUncovered n fallback)
 substituteUncovered node _ = node -- Leaf, Unreachable
 
 -- Let's discuss the situations where we have a set of rows and first several of
@@ -430,7 +450,7 @@ substituteUncovered node _ = node -- Leaf, Unreachable
 --    1.a if there is no guard. then this basically discard all further rows. we
 --        hit a leaf case. We probably want to emit warnings if there are still
 --        rows left.
---    1.b if there is a guard. then we emit a guard node. the true branch is 
+--    1.b if there is a guard. then we emit a guard node. the true branch is
 --        just a leaf case. on the false branch, we popout the leading wildcard
 --        pattern:
 --        1.b.i if there is no further wildcard row after poping out, we just recurse
@@ -443,12 +463,17 @@ substituteUncovered node _ = node -- Leaf, Unreachable
 --    Notice that rows in leading wildcards are all wildcards at the current level
 --    so normalization will always advance it. We will not stuck in it.
 translateWithLeadingWildcards ::
-    TyckCPS -> -- ^ Tyck utils and CPS context
-    PatternVarRef -> -- ^ Current pattern variable reference (cursor)
-    HashMap.HashMap PatternVarRef Semi.Type -> -- ^ Current type bindings
-    RRB.Vector PMRow -> -- ^ Rows being a wildcard at the current position
-    RRB.Vector PMRow -> -- ^ Rows without leading wildcards as fallback
-    SemiEff (DecisionTree Semi.Expr)
+    -- | Tyck utils and CPS context
+    TyckCPS ->
+    -- | Current pattern variable reference (cursor)
+    PatternVarRef ->
+    -- | Current type bindings
+    HashMap.HashMap PatternVarRef Semi.Type ->
+    -- | Rows being a wildcard at the current position
+    RRB.Vector PMRow ->
+    -- | Rows without leading wildcards as fallback
+    RRB.Vector PMRow ->
+    SemiEff DecisionTree
 translateWithLeadingWildcards cps cursor typeMap wildcards fallback = do
     -- We assume 'wildcards' is non-empty given the context of calling this function.
     case RRB.viewl wildcards of
@@ -504,17 +529,17 @@ translateWithLeadingWildcards cps cursor typeMap wildcards fallback = do
                     -- False branch: The guard fails.
                     -- We effectively "pop" this row and try the next strategy.
                     falseBranch <-
-                         if null rest
-                                then
-                                    -- Case 1.b.i: No more wildcard rows.
-                                    -- Recurse on the original fallback rows.
-                                    -- We construct a matrix from the fallback rows to use translatePMToDT.
-                                    let fallbackMat = PMMatrix cursor fallback typeMap
-                                     in translatePMToDT cps fallbackMat
-                                else
-                                    -- Case 1.b.ii: There are more wildcard rows.
-                                    -- Recurse with the remaining wildcard rows and the same fallback.
-                                    translateWithLeadingWildcards cps cursor typeMap rest fallback
+                        if null rest
+                            then
+                                -- Case 1.b.i: No more wildcard rows.
+                                -- Recurse on the original fallback rows.
+                                -- We construct a matrix from the fallback rows to use translatePMToDT.
+                                let fallbackMat = PMMatrix cursor fallback typeMap
+                                 in translatePMToDT cps fallbackMat
+                            else
+                                -- Case 1.b.ii: There are more wildcard rows.
+                                -- Recurse with the remaining wildcard rows and the same fallback.
+                                translateWithLeadingWildcards cps cursor typeMap rest fallback
 
                     return $ DTGuard mapping guardExpr trueBranch falseBranch
 
@@ -544,168 +569,189 @@ translateWithLeadingWildcards cps cursor typeMap wildcards fallback = do
 -- We first check that the matrix is valid for the current cursor.
 -- Then we sort and divide the rows into groups.
 --
--- For constant switches, the translation is relatively easy, just emit a 
--- decision tree accordingly, where each group is assigned to its corresponding 
--- branch and the default branch is set to Uncovered. We then pop the front 
+-- For constant switches, the translation is relatively easy, just emit a
+-- decision tree accordingly, where each group is assigned to its corresponding
+-- branch and the default branch is set to Uncovered. We then pop the front
 -- element of each row, normalize it and recursively generate the inner subtrees.
--- Finally, we replace all uncovered node in the result with the fallback tree 
+-- Finally, we replace all uncovered node in the result with the fallback tree
 -- generated from wildcards and trailing fallback rows.
 --
 -- For ctor case, it is a bit more complicated. We still generate the switch
 -- branch accordingly. However, in order to continue matching on subtrees, we
 -- need to normalize the front ctor pattern of each row in each group.
 -- We prepend the normalized, non-wildcard new conditions to the row in order,
--- and also update the binding map and type map accordingly. Finally, we handle 
+-- and also update the binding map and type map accordingly. Finally, we handle
 -- fallback rows and wildcards as before.
 translateWithLeadingDistinguishable ::
-    TyckCPS -> -- ^ Tyck utils and CPS context
-    PMMatrix -> -- ^ Rows being distinguishable at the current position
-    RRB.Vector PMRow -> -- ^ Rows being a wildcard at the current position
-    RRB.Vector PMRow -> -- ^ Rows without leading wildcards as fallback
-    SemiEff (DecisionTree Semi.Expr)
+    -- | Tyck utils and CPS context
+    TyckCPS ->
+    -- | Rows being distinguishable at the current position
+    PMMatrix ->
+    -- | Rows being a wildcard at the current position
+    RRB.Vector PMRow ->
+    -- | Rows without leading wildcards as fallback
+    RRB.Vector PMRow ->
+    SemiEff DecisionTree
 translateWithLeadingDistinguishable cps distinguishable@(PMMatrix matCursor matRows matTypeMap) wildcards fallback = do
-    when (null matRows) $ error "translateWithLeadingDistinguishable: No distinguishable rows"
-    
+    when (null matRows) $
+        error "translateWithLeadingDistinguishable: No distinguishable rows"
+
     valid <- validateDistinguishable distinguishable
     unless valid $
-         addErrReportMsg "Indistinguishable patterns in the same column"
+        addErrReportMsg "Indistinguishable patterns in the same column"
 
-    fallbackDT <- translateWithLeadingWildcards cps matCursor matTypeMap wildcards fallback
-    
+    fallbackDT <-
+        translateWithLeadingWildcards cps matCursor matTypeMap wildcards fallback
+
     let sortedDist = stableSortDistinguishable distinguishable
     let dispatch = getDispatchKind sortedDist
     let groups = divideDistinguishable sortedDist
 
     let
-      processGroup :: PMMatrix -> SemiEff (Syn.PatternKind, DecisionTree Semi.Expr)
-      processGroup group = do
-          -- Safe because group comes from divideDistinguishable which ensures non-empty rows
-          let (firstRow, _) = case RRB.viewl (matrixRows group) of
-                  Just x -> x
-                  Nothing -> error "processGroup: empty group"
-                  
-          let leadingKind = case RRB.viewl (rowPatterns firstRow) of
-                  Just ((_, k), _) -> k
-                  Nothing -> error "processGroup: empty row patterns"
-          
-          subDT <- case dispatch of
-              DispatchCtor _ -> processCtorGroup group leadingKind
-              DispatchNullable -> processCtorGroup group leadingKind
-              _ -> processConstGroup group
-          return (leadingKind, subDT)
-      
-      processConstGroup group = do
-          let rows' = fmap popLeadingPattern (matrixRows group)
-              group' = group{matrixRows = rows'}
-              finalGroup = normalizeVarRefLevel group'
-          translatePMToDT cps finalGroup
+        processGroup :: PMMatrix -> SemiEff (Syn.PatternKind, DecisionTree)
+        processGroup group = do
+            -- Safe because group comes from divideDistinguishable which ensures non-empty rows
+            let (firstRow, _) = case RRB.viewl (matrixRows group) of
+                    Just x -> x
+                    Nothing -> error "processGroup: empty group"
 
-      processCtorGroup group leadingKind = do
-          let ctorPath = case leadingKind of
-                  Syn.CtorPat p _ _ _ -> p
-                  _ -> error "Expected CtorPat"
-          
-          let parentType = HashMap.lookupDefault Semi.TypeBottom matCursor matTypeMap
-          parentType' <- runUnification $ force parentType
-          fieldTypes <- resolveFieldTypes parentType' ctorPath
+            let leadingKind = case RRB.viewl (rowPatterns firstRow) of
+                    Just ((_, k), _) -> k
+                    Nothing -> error "processGroup: empty row patterns"
 
-          newRows <- RRB.fromList <$> forM (toList (matrixRows group)) (\row -> do
-               let rowPatsView = RRB.viewl (rowPatterns row)
-               case rowPatsView of
-                   Just ((_, pat), restPats) -> 
-                       case pat of
-                           Syn.CtorPat p args ell _ -> do
-                               -- Convert args to strict vector
-                               let argsStrict = V.fromList (toList args)
-                               mNorm <- normalizeCtorPattern p argsStrict ell
-                               case mNorm of
-                                   Nothing -> return row{rowPatterns = restPats} 
-                                   Just subPats -> do
-                                       let newCols = V.imap (\i subPat -> 
-                                                let ref = extendRef matCursor i
-                                                in (ref, subPat)
-                                              ) subPats
-                                       let newRefPats = RRB.fromList (V.toList newCols)
-                                       
-                                       let newBindings = V.foldl' (\acc (ref, subPat) ->
-                                               case subPat of
-                                                   Syn.BindPat ident -> HashMap.insert ident ref acc
-                                                   _ -> acc
-                                             ) (rowBindings row) newCols
-                                       
-                                       return row{rowPatterns = newRefPats <> restPats, rowBindings = newBindings}
-                           _ -> error "Expected CtorPat in group"
-                   Nothing -> error "Empty row patterns in group")
+            subDT <- case dispatch of
+                DispatchCtor _ -> processCtorGroup group leadingKind
+                DispatchNullable -> processCtorGroup group leadingKind
+                _ -> processConstGroup group
+            return (leadingKind, subDT)
 
-          let newTypeMap = V.imap (\i ty -> (extendRef matCursor i, ty)) fieldTypes
-          let combinedTypeMap = HashMap.union (HashMap.fromList (V.toList newTypeMap)) matTypeMap
-          
-          let newGroup = PMMatrix matCursor newRows combinedTypeMap
-          let finalGroup = normalizeVarRefLevel newGroup
-          
-          translatePMToDT cps finalGroup
+        processConstGroup group = do
+            let rows' = fmap popLeadingPattern (matrixRows group)
+                group' = group{matrixRows = rows'}
+                finalGroup = normalizeVarRefLevel group'
+            translatePMToDT cps finalGroup
+
+        processCtorGroup group leadingKind = do
+            let ctorPath = case leadingKind of
+                    Syn.CtorPat p _ _ _ -> p
+                    _ -> error "Expected CtorPat"
+
+            let parentType = HashMap.lookupDefault Semi.TypeBottom matCursor matTypeMap
+            parentType' <- runUnification $ force parentType
+            fieldTypes <- resolveFieldTypes parentType' ctorPath
+
+            newRows <-
+                RRB.fromList
+                    <$> forM
+                        (toList (matrixRows group))
+                        ( \row -> do
+                            let rowPatsView = RRB.viewl (rowPatterns row)
+                            case rowPatsView of
+                                Just ((_, pat), restPats) ->
+                                    case pat of
+                                        Syn.CtorPat p args ell _ -> do
+                                            -- Convert args to strict vector
+                                            let argsStrict = V.fromList (toList args)
+                                            mNorm <- normalizeCtorPattern p argsStrict ell
+                                            case mNorm of
+                                                Nothing -> return row{rowPatterns = restPats}
+                                                Just subPats -> do
+                                                    let newCols =
+                                                            V.imap
+                                                                ( \i subPat ->
+                                                                    let ref = extendRef matCursor i
+                                                                     in (ref, subPat)
+                                                                )
+                                                                subPats
+                                                    let newRefPats = RRB.fromList (V.toList newCols)
+
+                                                    let newBindings =
+                                                            V.foldl'
+                                                                ( \acc (ref, subPat) ->
+                                                                    case subPat of
+                                                                        Syn.BindPat ident -> HashMap.insert ident ref acc
+                                                                        _ -> acc
+                                                                )
+                                                                (rowBindings row)
+                                                                newCols
+
+                                                    return row{rowPatterns = newRefPats <> restPats, rowBindings = newBindings}
+                                        _ -> error "Expected CtorPat in group"
+                                Nothing -> error "Empty row patterns in group"
+                        )
+
+            let newTypeMap = V.imap (\i ty -> (extendRef matCursor i, ty)) fieldTypes
+            let combinedTypeMap = HashMap.union (HashMap.fromList (V.toList newTypeMap)) matTypeMap
+
+            let newGroup = PMMatrix matCursor newRows combinedTypeMap
+            let finalGroup = normalizeVarRefLevel newGroup
+
+            translatePMToDT cps finalGroup
 
     groupsResults <- mapM processGroup groups
-    
+
     case dispatch of
         DispatchInt -> do
-             let cases = IntMap.fromList [ (i, dt) | (Syn.ConstPat (Syn.ConstInt i), dt) <- groupsResults ]
-             return $ DTSwitch matCursor (DTSwitchInt cases fallbackDT)
-        
+            let cases =
+                    IntMap.fromList
+                        [(i, dt) | (Syn.ConstPat (Syn.ConstInt i), dt) <- groupsResults]
+            return $ DTSwitch matCursor (DTSwitchInt cases fallbackDT)
         DispatchBool -> do
-             let trueBranch = lookupBranch (Syn.ConstPat (Syn.ConstBool True)) groupsResults fallbackDT
-             let falseBranch = lookupBranch (Syn.ConstPat (Syn.ConstBool False)) groupsResults fallbackDT
-             return $ DTSwitch matCursor (DTSwitchBool trueBranch falseBranch)
-             
+            let trueBranch = lookupBranch (Syn.ConstPat (Syn.ConstBool True)) groupsResults fallbackDT
+            let falseBranch = lookupBranch (Syn.ConstPat (Syn.ConstBool False)) groupsResults fallbackDT
+            return $ DTSwitch matCursor (DTSwitchBool trueBranch falseBranch)
         DispatchString -> do
-             let cases = HashMap.fromList [ (hash s, dt) | (Syn.ConstPat (Syn.ConstString s), dt) <- groupsResults ]
-             return $ DTSwitch matCursor (DTSwitchString cases fallbackDT)
-             
+            let cases =
+                    HashMap.fromList
+                        [(hash s, dt) | (Syn.ConstPat (Syn.ConstString s), dt) <- groupsResults]
+            return $ DTSwitch matCursor (DTSwitchString cases fallbackDT)
         DispatchFP -> do
             addErrReportMsg "Floating point pattern matching is not supported"
             return DTUnreachable
-            
         DispatchCtor typePath -> do
-             variants <- getVariants typePath
-             let caseMap = HashMap.fromList [ (ctorPathName kind, dt) | (kind, dt) <- groupsResults ]
-             
-             let dtCases = V.map (\variantName -> 
-                    let fullPath = extendPath typePath variantName
-                    in HashMap.lookupDefault fallbackDT fullPath caseMap
-                  ) variants
-             
-             return $ DTSwitch matCursor (DTSwitchCtor dtCases fallbackDT)
-             
-        DispatchNullable -> do
-             let isNull (Syn.CtorPat p _ _ _) = 
-                    let Path base segs = p
-                    in (unIdentifier base == "Null" || unIdentifier base == "Nothing") || (not (null segs) && (unIdentifier (last segs) == "Null" || unIdentifier (last segs) == "Nothing"))
-                 -- Note: checking "Null" or "Nothing" is heuristic.
-                 isNull _ = False
-             
-             let (nulls, nonNulls) = partition (\(k, _) -> isNull k) groupsResults
-             let dtNull = case nulls of 
-                    [] -> fallbackDT
-                    ((_, dt):_) -> dt
-             let dtNonNull = case nonNulls of
-                    [] -> fallbackDT
-                    ((_, dt):_) -> dt
-             
-             return $ DTSwitch matCursor (DTSwitchNullable dtNonNull dtNull)
+            variants <- getVariants typePath
+            let caseMap = HashMap.fromList [(ctorPathName kind, dt) | (kind, dt) <- groupsResults]
 
+            let dtCases =
+                    V.map
+                        ( \variantName ->
+                            let fullPath = extendPath typePath variantName
+                             in HashMap.lookupDefault fallbackDT fullPath caseMap
+                        )
+                        variants
+
+            return $ DTSwitch matCursor (DTSwitchCtor dtCases fallbackDT)
+        DispatchNullable -> do
+            let isNull (Syn.CtorPat p _ _ _) =
+                    let Path base segs = p
+                     in (unIdentifier base == "Null" || unIdentifier base == "Nothing")
+                            || ( not (null segs)
+                                    && (unIdentifier (last segs) == "Null" || unIdentifier (last segs) == "Nothing")
+                               )
+                -- Note: checking "Null" or "Nothing" is heuristic.
+                isNull _ = False
+
+            let (nulls, nonNulls) = partition (\(k, _) -> isNull k) groupsResults
+            let dtNull = case nulls of
+                    [] -> fallbackDT
+                    ((_, dt) : _) -> dt
+            let dtNonNull = case nonNulls of
+                    [] -> fallbackDT
+                    ((_, dt) : _) -> dt
+
+            return $ DTSwitch matCursor (DTSwitchNullable dtNonNull dtNull)
   where
     popLeadingPattern row =
         case RRB.viewl (rowPatterns row) of
             Just (_, rest) -> row{rowPatterns = rest}
             Nothing -> row -- Should unlikely happen for const group rows
-
     extendRef (PatternVarRef s) i = PatternVarRef (s Seq.|> i)
-    
-    lookupBranch key results def = 
+
+    lookupBranch key results def =
         case lookup key results of
             Just dt -> dt
             Nothing -> def
-            
+
     ctorPathName (Syn.CtorPat p _ _ _) = p
     ctorPathName _ = error "Not a ctor pattern"
 
@@ -725,10 +771,10 @@ translateWithLeadingDistinguishable cps distinguishable@(PMMatrix matCursor matR
             Just record -> do
                 mFields <- readIORef' (recordFields record)
                 case mFields of
-                    Just (Named fields) -> 
-                         return $ V.map (\(WithSpan (_, ty, _) _ _) -> ty) fields -- TODO: instantiate
-                    Just (Unnamed fields) -> 
-                         return $ V.map (\(WithSpan (ty, _) _ _) -> ty) fields -- TODO: instantiate
+                    Just (Named fields) ->
+                        return $ V.map (\(WithSpan (_, ty, _) _ _) -> ty) fields -- TODO: instantiate
+                    Just (Unnamed fields) ->
+                        return $ V.map (\(WithSpan (ty, _) _ _) -> ty) fields -- TODO: instantiate
                     _ -> return V.empty
     resolveFieldTypes _ _ = return V.empty
 
@@ -737,12 +783,12 @@ translateWithLeadingDistinguishable cps distinguishable@(PMMatrix matCursor matR
         records <- State.gets knownRecords
         mRecord <- liftIO $ H.lookup records path
         case mRecord of
-             Just record -> do
-                 mFields <- readIORef' (recordFields record)
-                 case mFields of
-                     Just (Variants vs) -> return $ V.map (\(WithSpan ident _ _) -> ident) vs
-                     _ -> return V.empty
-             Nothing -> return V.empty
+            Just record -> do
+                mFields <- readIORef' (recordFields record)
+                case mFields of
+                    Just (Variants vs) -> return $ V.map (\(WithSpan ident _ _) -> ident) vs
+                    _ -> return V.empty
+            Nothing -> return V.empty
 
     hash :: T.Text -> XXH3 T.Text
     hash = XXH3

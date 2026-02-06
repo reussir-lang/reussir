@@ -61,7 +61,12 @@ import Reussir.Core.Data.Semi.Context (
     SemiContext (..),
     SemiEff,
  )
-import Reussir.Core.Data.Semi.Expr (Expr (..), ExprKind (..))
+import Reussir.Core.Data.Semi.Expr (
+    DTSwitchCases (..),
+    DecisionTree (..),
+    Expr (..),
+    ExprKind (..),
+ )
 import Reussir.Core.Data.Semi.Function (FunctionProto (..), FunctionTable (..))
 import Reussir.Core.Data.Semi.Record (
     Record (..),
@@ -192,7 +197,33 @@ elimTypeHoles expr = withMaybeSpan (exprSpan expr) $ do
         Assign e idx e' -> Assign <$> elimTypeHoles e <*> pure idx <*> elimTypeHoles e'
         IntrinsicCall path args -> IntrinsicCall path <$> mapM elimTypeHoles args
         Sequence subexprs -> Sequence <$> mapM elimTypeHoles subexprs
+        Match val dt -> Match <$> elimTypeHoles val <*> elimTypeHolesDT dt
     return $ expr{exprType = ty', exprKind = kind'}
+
+elimTypeHolesDT :: DecisionTree -> SemiEff DecisionTree
+elimTypeHolesDT DTUncovered = return DTUncovered
+elimTypeHolesDT DTUnreachable = return DTUnreachable
+elimTypeHolesDT (DTLeaf body bindings) = do
+    body' <- elimTypeHoles body
+    return $ DTLeaf body' bindings
+elimTypeHolesDT (DTGuard bindings guard trueBr falseBr) = do
+    guard' <- elimTypeHoles guard
+    trueBr' <- elimTypeHolesDT trueBr
+    falseBr' <- elimTypeHolesDT falseBr
+    return $ DTGuard bindings guard' trueBr' falseBr'
+elimTypeHolesDT (DTSwitch ref cases) = DTSwitch ref <$> elimTypeHolesCases cases
+
+elimTypeHolesCases :: DTSwitchCases -> SemiEff DTSwitchCases
+elimTypeHolesCases (DTSwitchInt m def) =
+    DTSwitchInt <$> mapM elimTypeHolesDT m <*> elimTypeHolesDT def
+elimTypeHolesCases (DTSwitchBool t f) =
+    DTSwitchBool <$> elimTypeHolesDT t <*> elimTypeHolesDT f
+elimTypeHolesCases (DTSwitchCtor cases def) =
+    DTSwitchCtor <$> mapM elimTypeHolesDT cases <*> elimTypeHolesDT def
+elimTypeHolesCases (DTSwitchString m def) =
+    DTSwitchString <$> mapM elimTypeHolesDT m <*> elimTypeHolesDT def
+elimTypeHolesCases (DTSwitchNullable j n) =
+    DTSwitchNullable <$> elimTypeHolesDT j <*> elimTypeHolesDT n
 
 -- | Infer the type of an expression that is inside a region
 inferWithRegion :: Syn.Expr -> SemiEff Expr

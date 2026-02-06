@@ -17,7 +17,12 @@ import Effectful.State.Static.Local qualified as State
 
 import Reussir.Core.Data.Generic (GenericSolution)
 import Reussir.Core.Data.Semi.Context (GlobalSemiEff, SemiContext (..))
-import Reussir.Core.Data.Semi.Expr (Expr (..), ExprKind (..))
+import Reussir.Core.Data.Semi.Expr (
+    DTSwitchCases (..),
+    DecisionTree (..),
+    Expr (..),
+    ExprKind (..),
+ )
 import Reussir.Core.Data.Semi.Function (FunctionProto (..), FunctionTable (..))
 import Reussir.Core.Data.Semi.Record (Record (..), RecordFields (..))
 import Reussir.Core.Data.Semi.Type (Type (..))
@@ -100,6 +105,34 @@ analyzeGenericFlowInExpr expr = do
         NullableCall Nothing -> pure ()
         Assign dst _ src -> analyzeGenericFlowInExpr dst >> analyzeGenericFlowInExpr src
         IntrinsicCall _ args -> mapM_ analyzeGenericFlowInExpr args
+        Match val dt -> analyzeGenericFlowInExpr val >> analyzeGenericFlowInDT dt
+
+analyzeGenericFlowInDT :: DecisionTree -> GlobalSemiEff ()
+analyzeGenericFlowInDT DTUncovered = pure ()
+analyzeGenericFlowInDT DTUnreachable = pure ()
+analyzeGenericFlowInDT (DTLeaf body _) = analyzeGenericFlowInExpr body
+analyzeGenericFlowInDT (DTGuard _ guard trueBr falseBr) = do
+    analyzeGenericFlowInExpr guard
+    analyzeGenericFlowInDT trueBr
+    analyzeGenericFlowInDT falseBr
+analyzeGenericFlowInDT (DTSwitch _ cases) = analyzeGenericFlowInSwitchCases cases
+
+analyzeGenericFlowInSwitchCases :: DTSwitchCases -> GlobalSemiEff ()
+analyzeGenericFlowInSwitchCases (DTSwitchInt m def) = do
+    mapM_ analyzeGenericFlowInDT m
+    analyzeGenericFlowInDT def
+analyzeGenericFlowInSwitchCases (DTSwitchBool t f) = do
+    analyzeGenericFlowInDT t
+    analyzeGenericFlowInDT f
+analyzeGenericFlowInSwitchCases (DTSwitchCtor cases def) = do
+    mapM_ analyzeGenericFlowInDT cases
+    analyzeGenericFlowInDT def
+analyzeGenericFlowInSwitchCases (DTSwitchString m def) = do
+    mapM_ analyzeGenericFlowInDT m
+    analyzeGenericFlowInDT def
+analyzeGenericFlowInSwitchCases (DTSwitchNullable j n) = do
+    analyzeGenericFlowInDT j
+    analyzeGenericFlowInDT n
 
 analyzeGenericInstantiationFlow ::
     [(Identifier, GenericID)] -> [Type] -> GlobalSemiEff ()

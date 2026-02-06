@@ -15,6 +15,8 @@ import Prettyprinter.Render.Terminal
 import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
 import Reussir.Parser.Types.Stmt (Visibility (..))
 
+import Data.HashMap.Strict qualified as Data.HashMap.Strict
+import Data.IntMap.Strict qualified as IntMap
 import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
 import Reussir.Parser.Types.Capability qualified as Cap
@@ -22,7 +24,12 @@ import Reussir.Parser.Types.Capability qualified as Cap
 import Reussir.Core.Data.FP (FloatingPointType (..))
 import Reussir.Core.Data.Integral (IntegralType (..))
 import Reussir.Core.Data.Operator (ArithOp (..), CmpOp (..))
-import Reussir.Core.Data.Semi.Expr (Expr (..), ExprKind (..))
+import Reussir.Core.Data.Semi.Expr (
+    DTSwitchCases (..),
+    DecisionTree (..),
+    Expr (..),
+    ExprKind (..),
+ )
 import Reussir.Core.Data.Semi.Function (FunctionProto (..))
 import Reussir.Core.Data.Semi.Record (
     FieldFlag,
@@ -244,6 +251,13 @@ instance PrettyColored Expr where
                 pure $
                     pathDoc
                         <> parens (commaSep argsDocs)
+            Match val dt -> do
+                valDoc <- prettyColored val
+                dtDoc <- prettyColored dt
+                pure $
+                    keyword "match"
+                        <+> valDoc
+                        <+> braces (nest 4 (hardline <> dtDoc) <> hardline)
             Sequence [singleton] -> prettyColored singleton
             Sequence subexprs -> do
                 subexprsDocs <- mapM prettyColored subexprs
@@ -255,9 +269,111 @@ instance PrettyColored Expr where
             Let _ _ _ _ -> pure kindDoc
             Sequence _ -> pure kindDoc
             ScfIfExpr _ _ _ -> pure kindDoc
+            Match _ _ -> pure kindDoc
             _ -> do
                 tyDoc <- prettyColored (exprType expr)
                 pure $ kindDoc <+> comment (":" <+> tyDoc)
+
+instance PrettyColored DecisionTree where
+    prettyColored DTUncovered = pure $ keyword "uncovered"
+    prettyColored DTUnreachable = pure $ keyword "unreachable"
+    prettyColored (DTLeaf body _) = do
+        bodyDoc <- prettyColored body
+        pure $ operator "=>" <+> bodyDoc
+    prettyColored (DTGuard _ guard trueBr falseBr) = do
+        guardDoc <- prettyColored guard
+        trueDoc <- prettyColored trueBr
+        falseDoc <- prettyColored falseBr
+        let caseDoc cond body =
+                keyword "if"
+                    <+> cond
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> body) <> hardline)
+        pure $
+            vsep
+                [ caseDoc guardDoc trueDoc
+                , caseDoc (keyword "otherwise") falseDoc
+                ]
+    prettyColored (DTSwitch _ cases) = prettyColored cases
+
+instance PrettyColored DTSwitchCases where
+    prettyColored (DTSwitchInt m def) = do
+        casesDocs <- mapM prettyCase (IntMap.toList m)
+        defDoc <- prettyColored def
+        pure $
+            vsep $
+                casesDocs
+                    ++ [ keyword "_"
+                            <+> operator "=>"
+                            <+> braces (nest 4 (hardline <> defDoc) <> hardline)
+                       ]
+      where
+        prettyCase (i, dt) = do
+            dtDoc <- prettyColored dt
+            pure $
+                literal (pretty i)
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> dtDoc) <> hardline)
+    prettyColored (DTSwitchBool t f) = do
+        tDoc <- prettyColored t
+        fDoc <- prettyColored f
+        pure $
+            vsep
+                [ literal "true"
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> tDoc) <> hardline)
+                , literal "false"
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> fDoc) <> hardline)
+                ]
+    prettyColored (DTSwitchCtor cases def) = do
+        -- This is a simplification as we don't have easy access to ctor names here purely from index
+        -- In a real implementation we might want to look up names if possible or print indices
+        defDoc <- prettyColored def
+        casesDocs <- zipWithM prettyCase [0 ..] (V.toList cases)
+        pure $
+            vsep $
+                casesDocs
+                    ++ [ keyword "_"
+                            <+> operator "=>"
+                            <+> braces (nest 4 (hardline <> defDoc) <> hardline)
+                       ]
+      where
+        prettyCase i dt = do
+            dtDoc <- prettyColored dt
+            pure $
+                variable ("ctor@" <> pretty (i :: Int))
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> dtDoc) <> hardline)
+    prettyColored (DTSwitchString m def) = do
+        defDoc <- prettyColored def
+        casesDocs <- mapM prettyCase (Data.HashMap.Strict.toList m)
+        pure $
+            vsep $
+                casesDocs
+                    ++ [ keyword "_"
+                            <+> operator "=>"
+                            <+> braces (nest 4 (hardline <> defDoc) <> hardline)
+                       ]
+      where
+        prettyCase (h, dt) = do
+            dtDoc <- prettyColored dt
+            pure $
+                literal ("hash(" <> pretty (show h) <> ")")
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> dtDoc) <> hardline)
+    prettyColored (DTSwitchNullable j n) = do
+        jDoc <- prettyColored j
+        nDoc <- prettyColored n
+        pure $
+            vsep
+                [ keyword "nonnull"
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> jDoc) <> hardline)
+                , keyword "null"
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> nDoc) <> hardline)
+                ]
 
 instance PrettyColored Record where
     prettyColored (Record name tyParams fieldsRef kind vis cap _) = do

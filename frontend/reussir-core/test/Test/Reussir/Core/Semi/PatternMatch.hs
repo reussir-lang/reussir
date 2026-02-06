@@ -445,4 +445,3 @@ testSplitAtFirstWildcard name = runSemi name $ do
     liftIO $ length l4 @?= 1
     liftIO $ length w4 @?= 1
     liftIO $ length t4 @?= 0
-
