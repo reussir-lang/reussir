@@ -441,7 +441,7 @@ translateWithLeadingWildcards cps cursor typeMap wildcards fallback = do
         Just (firstRow, restWildcards) ->
             -- Check if the first wildcard row is exhausted (no more patterns).
             -- If `rowPatterns` is empty, this row matches everything remaining.
-            if RRB.null (rowPatterns firstRow)
+            if null (rowPatterns firstRow)
                 then handleLeafRow firstRow restWildcards
                 else handleWildcardRecursion
   where
@@ -486,7 +486,7 @@ translateWithLeadingWildcards cps cursor typeMap wildcards fallback = do
                     -- False branch: The guard fails.
                     -- We effectively "pop" this row and try the next strategy.
                     falseBranch <-
-                         if RRB.null rest
+                         if null rest
                                 then
                                     -- Case 1.b.i: No more wildcard rows.
                                     -- Recurse on the original fallback rows.
