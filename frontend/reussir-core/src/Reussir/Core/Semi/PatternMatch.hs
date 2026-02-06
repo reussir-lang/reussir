@@ -24,6 +24,7 @@ import Effectful.State.Static.Local qualified as State
 import Reussir.Parser.Types.Expr qualified as Syn
 import Reussir.Parser.Types.Type qualified as SynType
 
+import Reussir.Core.Data.Class (Class (..))
 import Reussir.Core.Data.Semi.Context (SemiContext (..), SemiEff, knownRecords)
 import Reussir.Core.Data.Semi.Expr (
     DTSwitchCases (..),
@@ -32,7 +33,8 @@ import Reussir.Core.Data.Semi.Expr (
  )
 import Reussir.Core.Data.Semi.Record (Record (..), RecordFields (..))
 import Reussir.Core.Data.UniqueID (VarID (..))
-import Reussir.Core.Semi.Context (addErrReportMsg)
+import Reussir.Core.Semi.Context (addErrReportMsg, runUnification)
+import Reussir.Core.Semi.Unification (force, satisfyBounds)
 
 import Reussir.Core.Data.Semi.Expr qualified as Semi
 import Reussir.Core.Data.Semi.Type qualified as Semi
@@ -258,27 +260,27 @@ getDispatchKind (PMMatrix _ rows _) =
     patKindToDispatch _ = error "getDispatchKind: unsupported or wildcard pattern"
 
 -- check if all rows are distinguishable via the same dispatch kind
-validateDistinguishable :: PMMatrix -> Bool
-validateDistinguishable (PMMatrix cursor rows types) =
-    all rowCompatible rows
+validateDistinguishable :: PMMatrix -> SemiEff Bool
+validateDistinguishable (PMMatrix cursor rows types) = do
+    let semiTyRaw = HashMap.lookupDefault Semi.TypeBottom cursor types
+    semiTy <- runUnification $ force semiTyRaw
+    results <- forM (toList rows) $ \row -> do
+         case RRB.viewl (rowPatterns row) of
+             Nothing -> return True
+             Just ((_, kind), _) -> isCompatible semiTy kind
+    return $ all id results
   where
-    semiTy = case HashMap.lookup cursor types of
-        Nothing -> error "validateDistinguishable: pattern ref not found"
-        Just ty -> ty
-    rowCompatible row =
-        case RRB.viewl (rowPatterns row) of
-            Nothing -> True -- Should not happen if no wildcards assumed, but safe default
-            Just ((_, kind), _) -> isCompatible semiTy kind
-
-    isCompatible :: Semi.Type -> Syn.PatternKind -> Bool
-    isCompatible (Semi.TypeIntegral _) (Syn.ConstPat (Syn.ConstInt _)) = True
-    isCompatible Semi.TypeBool (Syn.ConstPat (Syn.ConstBool _)) = True
-    isCompatible Semi.TypeStr (Syn.ConstPat (Syn.ConstString _)) = True
-    isCompatible (Semi.TypeFP _) (Syn.ConstPat (Syn.ConstDouble _)) = True
-    isCompatible (Semi.TypeNullable _) (Syn.CtorPat path _ _ _) = isNullablePath path
+    isCompatible :: Semi.Type -> Syn.PatternKind -> SemiEff Bool
+    isCompatible ty (Syn.ConstPat (Syn.ConstInt _)) =
+         runUnification $ satisfyBounds ty [Class (Path "Integral" [])]
+    isCompatible Semi.TypeBool (Syn.ConstPat (Syn.ConstBool _)) = return True
+    isCompatible Semi.TypeStr (Syn.ConstPat (Syn.ConstString _)) = return True
+    isCompatible ty (Syn.ConstPat (Syn.ConstDouble _)) =
+         runUnification $ satisfyBounds ty [Class (Path "FloatingPoint" [])]
+    isCompatible (Semi.TypeNullable _) (Syn.CtorPat path _ _ _) = return $ isNullablePath path
     isCompatible (Semi.TypeRecord tyPath _ _) (Syn.CtorPat ctorPath _ _ _) =
-        not (isNullablePath ctorPath) && tyPath == droppedVariantPath ctorPath
-    isCompatible _ _ = False
+        return $ not (isNullablePath ctorPath) && tyPath == droppedVariantPath ctorPath
+    isCompatible _ _ = return False
 
 isNullablePath :: Path -> Bool
 isNullablePath (Path base segs) =
@@ -564,7 +566,8 @@ translateWithLeadingDistinguishable ::
 translateWithLeadingDistinguishable cps distinguishable@(PMMatrix matCursor matRows matTypeMap) wildcards fallback = do
     when (null matRows) $ error "translateWithLeadingDistinguishable: No distinguishable rows"
     
-    unless (validateDistinguishable distinguishable) $
+    valid <- validateDistinguishable distinguishable
+    unless valid $
          addErrReportMsg "Indistinguishable patterns in the same column"
 
     fallbackDT <- translateWithLeadingWildcards cps matCursor matTypeMap wildcards fallback
@@ -603,7 +606,8 @@ translateWithLeadingDistinguishable cps distinguishable@(PMMatrix matCursor matR
                   _ -> error "Expected CtorPat"
           
           let parentType = HashMap.lookupDefault Semi.TypeBottom matCursor matTypeMap
-          fieldTypes <- resolveFieldTypes parentType ctorPath
+          parentType' <- runUnification $ force parentType
+          fieldTypes <- resolveFieldTypes parentType' ctorPath
 
           newRows <- RRB.fromList <$> forM (toList (matrixRows group)) (\row -> do
                let rowPatsView = RRB.viewl (rowPatterns row)
