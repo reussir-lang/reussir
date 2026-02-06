@@ -35,6 +35,7 @@ import Reussir.Core.Semi.Context (addErrReportMsg)
 
 import Reussir.Core.Data.Semi.Expr qualified as Semi
 import Reussir.Core.Data.Semi.Type qualified as Semi
+import Control.Monad (when)
 
 -- normalize a ctor pattern into a positional applied form.
 -- fill in wildcards for ignored fields if ellipsis is present.
@@ -393,7 +394,7 @@ translatePMToDT cps mat@PMMatrix{matrixCursor, matrixRows, matrixTypes} =
         if null splitLeading then 
             translateWithLeadingWildcards cps matrixCursor matrixTypes splitWildcards splitTrailing
         else do
-            let leadingDistinguishable = stableSortDistinguishable mat{matrixRows = splitLeading}
+            let leadingDistinguishable = mat{matrixRows = splitLeading}
             -- translateWithLeadingDistinguishable
             undefined
             
@@ -535,3 +536,33 @@ translateWithLeadingWildcards cps cursor typeMap wildcards fallback = do
         -- 3. Combine them.
         -- If the wildcard path results in 'Uncovered', we fall back to 'dtFallback'.
         return $ substituteUncovered dtWildcard dtFallback
+
+-- Now we consider the cases where we start with distinguishable rows.
+-- We first check that the matrix is valid for the current cursor.
+-- Then we sort and divide the rows into groups.
+--
+-- For constant switches, the translation is relatively easy, just emit a 
+-- decision tree accordingly, where each group is assigned to its corresponding 
+-- branch and the default branch is set to Uncovered. We then pop the front 
+-- element of each row, normalize it and recursively generate the inner subtrees.
+-- Finally, we replace all uncovered node in the result with the fallback tree 
+-- generated from wildcards and trailing fallback rows.
+--
+-- For ctor case, it is a bit more complicated. We still generate the switch
+-- branch accordingly. However, in order to continue matching on subtrees, we
+-- need to normalize the front ctor pattern of each row in each group.
+-- We prepend the normalized, non-wildcard new conditions to the row in order,
+-- and also update the binding map accordingly. Finally, we handle fallback
+-- rows and wildcards as before.
+translateWithLeadingDistinguishable ::
+    TyckCPS -> -- ^ Tyck utils and CPS context
+    PMMatrix -> -- ^ Rows being distinguishable at the current position
+    RRB.Vector PMRow -> -- ^ Rows being a wildcard at the current position
+    RRB.Vector PMRow -> -- ^ Rows without leading wildcards as fallback
+    SemiEff (DecisionTree Semi.Expr)
+translateWithLeadingDistinguishable cps distinguishable@(PMMatrix matCursor matRows matTypeMap) wildcards fallback = do
+    when (null matRows) $ error "translateWithLeadingDistinguishable: No distinguishable rows"
+    -- TODO: add validation and report error if needed
+    let fallbackDT = translateWithLeadingWildcards cps matCursor matTypeMap wildcards fallback
+    let matRows' = stableSortDistinguishable distinguishable
+    undefined
