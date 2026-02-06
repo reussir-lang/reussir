@@ -17,7 +17,7 @@ module Reussir.Core.Semi.Tyck (
     checkType,
 ) where
 
-import Control.Monad (forM, unless, when, zipWithM, forM_)
+import Control.Monad (forM, forM_, unless, when, zipWithM)
 import Data.Function ((&))
 import Data.List (find)
 import Data.Maybe (isJust)
@@ -381,18 +381,25 @@ inferType (Syn.Cast targetType subExpr) = do
     targetType' <- evalType targetType
     innerExpr <- inferType subExpr
     innerTy <- runUnification $ force $ exprType innerExpr
+    targetTypeSatisfyIntBound <-
+        runUnification $ satisfyBounds targetType' [Class $ Path "Integral" []]
+    targetTypeSatisfyFloatBound <-
+        runUnification $ satisfyBounds targetType' [Class $ Path "FloatingPoint" []]
     targetTypeSatisfyNumBound <-
         runUnification $ satisfyBounds targetType' [Class $ Path "Num" []]
     if targetTypeSatisfyNumBound
         then do
-            innerTyHasExactNumBound <-
-                runUnification $ satisfyBounds innerTy [Class $ Path "Num" []]
+            innerTyHasNumBound <-
+                runUnification $ satisfyBounds innerTy [Class $ Path "Integral" []]
+            innerTyHasFloatBound <-
+                runUnification $ satisfyBounds innerTy [Class $ Path "FloatingPoint" []]
             case innerTy of
-                TypeHole _ | innerTyHasExactNumBound -> do
+                TypeHole _ | (innerTyHasNumBound && targetTypeSatisfyIntBound)
+                                || (innerTyHasFloatBound && targetTypeSatisfyFloatBound) -> do
                     unification <- runUnification $ unify innerTy targetType'
-                    if isJust unification
-                        then return innerExpr
-                        else error "Unification should have succeeded"
+                    case unification of
+                        Nothing -> return innerExpr
+                        Just e -> error $ "Unification should have succeeded, but failed with " ++ show e
                 _ -> numCast innerTy innerExpr targetType'
         else do
             addErrReportMsg "Cannot cast to non-numeric type"
@@ -555,7 +562,9 @@ inferType (Syn.Match scrutinee patterns) = do
                 case failure of
                     Just f -> do
                         filePath <- State.gets currentFile
-                        addErrReportMsgSeq "Type mismatch in match branches" (Just $ errorToReport f filePath)
+                        addErrReportMsgSeq
+                            "Type mismatch in match branches"
+                            (Just $ errorToReport f filePath)
                     Nothing -> return ()
             runUnification $ force t
 
@@ -581,7 +590,8 @@ collectLeafExprTypesCases (DTSwitchBool t f) =
 collectLeafExprTypesCases (DTSwitchCtor cases def) =
     concatMap collectLeafExprTypes (V.toList cases) ++ collectLeafExprTypes def
 collectLeafExprTypesCases (DTSwitchString m def) =
-    concatMap (collectLeafExprTypes . snd) (HashMap.toList m) ++ collectLeafExprTypes def
+    concatMap (collectLeafExprTypes . snd) (HashMap.toList m)
+        ++ collectLeafExprTypes def
 collectLeafExprTypesCases (DTSwitchNullable j n) =
     collectLeafExprTypes j ++ collectLeafExprTypes n
 

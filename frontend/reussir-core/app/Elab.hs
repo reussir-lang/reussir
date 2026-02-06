@@ -1,6 +1,7 @@
 module Main where
 
 import Control.Monad (forM_)
+import Data.List (nub)
 import Effectful (inject, liftIO, runEff)
 import Effectful.Prim (runPrim)
 import Effectful.State.Static.Local (runState)
@@ -156,7 +157,7 @@ runSemiElab args prog = do
                     doc <- Semi.prettyColored proto
                     liftIO $ putDoc' (doc <> hardline)
 
-    forM_ (translationReports finalState) $ \report -> do
+    forM_ (nub $ translationReports finalState) $ \report -> do
         runEff $ displayReport report repository 0 stderr
         hPutStrLn stderr ""
 
@@ -197,7 +198,7 @@ runFullElab args prog = do
                     return (Just fullCtx, finalSemiState)
 
     -- Report errors from Semi Elab
-    forM_ (translationReports finalSemiCtx) $ \report -> do
+    forM_ (nub $ translationReports finalSemiCtx) $ \report -> do
         runEff $ displayReport report repository 0 stderr
 
     let putDoc' doc = do

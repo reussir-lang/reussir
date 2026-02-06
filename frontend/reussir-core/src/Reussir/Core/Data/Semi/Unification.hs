@@ -36,12 +36,14 @@ data ErrorKind
         , candidateHoleName :: Maybe T.Text
         }
     | URMisMatchedType Type Type
+    deriving (Show)
 
 data Failure = Failure
     { errorKind :: ErrorKind
     , unificationContext :: T.Text
     , innerFailures :: [Failure]
     }
+    deriving (Show)
 
 type UnificationEff =
     Eff

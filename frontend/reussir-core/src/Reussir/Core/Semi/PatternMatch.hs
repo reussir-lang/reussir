@@ -33,11 +33,11 @@ import Reussir.Core.Data.Semi.Expr (
 import Reussir.Core.Data.Semi.Record (Record (..), RecordFields (..))
 import Reussir.Core.Data.UniqueID (GenericID (..), VarID (..))
 import Reussir.Core.Semi.Context (addErrReportMsg, runUnification)
+import Reussir.Core.Semi.Type (substituteGenericMap)
 import Reussir.Core.Semi.Unification (force, satisfyBounds)
 
 import Reussir.Core.Data.Semi.Expr qualified as Semi
 import Reussir.Core.Data.Semi.Type qualified as Semi
-import Reussir.Core.Semi.Type (substituteGenericMap)
 
 -- normalize a ctor pattern into a positional applied form.
 -- fill in wildcards for ignored fields if ellipsis is present.
@@ -662,7 +662,7 @@ translateWithLeadingDistinguishable cps distinguishable@(PMMatrix matCursor matR
                                                                      in (ref, subPat)
                                                                 )
                                                                 subPats
-                                                    
+
                                                     let validCols =
                                                             V.filter
                                                                 ( \(_, pat') -> case pat' of
@@ -781,7 +781,7 @@ translateWithLeadingDistinguishable cps distinguishable@(PMMatrix matCursor matR
                 let genIds = map (\(_, GenericID gid) -> fromIntegral gid) (recordTyParams record)
                 let substMap = IntMap.fromList (zip genIds tyParams)
                 let substitute = flip substituteGenericMap substMap
-                
+
                 mFields <- readIORef' (recordFields record)
                 case mFields of
                     Just (Named fields) ->

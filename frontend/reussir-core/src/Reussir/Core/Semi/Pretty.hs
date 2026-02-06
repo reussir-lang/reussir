@@ -7,6 +7,7 @@ module Reussir.Core.Semi.Pretty (
 ) where
 
 import Control.Monad (zipWithM)
+import Data.Foldable (toList)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (readIORef')
@@ -29,6 +30,7 @@ import Reussir.Core.Data.Semi.Expr (
     DecisionTree (..),
     Expr (..),
     ExprKind (..),
+    PatternVarRef (..),
  )
 import Reussir.Core.Data.Semi.Function (FunctionProto (..))
 import Reussir.Core.Data.Semi.Record (
@@ -277,9 +279,16 @@ instance PrettyColored Expr where
 instance PrettyColored DecisionTree where
     prettyColored DTUncovered = pure $ keyword "uncovered"
     prettyColored DTUnreachable = pure $ keyword "unreachable"
-    prettyColored (DTLeaf body _) = do
+    prettyColored (DTLeaf body bindings) = do
+        binds <- mapM prettyBind (IntMap.toList bindings)
         bodyDoc <- prettyColored body
-        pure $ operator "=>" <+> bodyDoc
+        pure $ vsep (binds ++ [bodyDoc])
+      where
+        prettyBind (v, PatternVarRef path) =
+            pure $
+                keyword "pattern var"
+                    <+> variable ("v" <> pretty v)
+                    <+> parens (commaSep (map pretty (toList path)))
     prettyColored (DTGuard _ guard trueBr falseBr) = do
         guardDoc <- prettyColored guard
         trueDoc <- prettyColored trueBr
@@ -287,7 +296,6 @@ instance PrettyColored DecisionTree where
         let caseDoc cond body =
                 keyword "if"
                     <+> cond
-                    <+> operator "=>"
                     <+> braces (nest 4 (hardline <> body) <> hardline)
         pure $
             vsep
