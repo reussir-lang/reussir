@@ -17,7 +17,7 @@ module Reussir.Core.Semi.Tyck (
     checkType,
 ) where
 
-import Control.Monad (forM, unless, when, zipWithM)
+import Control.Monad (forM, unless, when, zipWithM, forM_)
 import Data.Function ((&))
 import Data.List (find)
 import Data.Maybe (isJust)
@@ -38,6 +38,7 @@ import Reussir.Parser.Types.Lexer (
     WithSpan (WithSpan),
  )
 
+import Data.HashMap.Strict qualified as HashMap
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
 import Data.Text qualified as T
@@ -94,6 +95,11 @@ import Reussir.Core.Semi.Context (
     withVariable,
  )
 import Reussir.Core.Semi.Function (getFunctionProto)
+import Reussir.Core.Semi.PatternMatch (
+    TyckCPS (TyckCPS),
+    initializePMMatrix,
+    translatePMToDT,
+ )
 import Reussir.Core.Semi.Projection (projectType, resolveProjection)
 import Reussir.Core.Semi.Type (substituteGenericMap)
 import Reussir.Core.Semi.Unification (
@@ -534,10 +540,50 @@ inferType (Syn.Assign dst field src) = do
             exprWithSpan TypeBottom Poison
 inferType (Syn.ExprSeq exprs) = do
     inferTypeForSequence exprs []
+inferType (Syn.Match scrutinee patterns) = do
+    scrutinee' <- inferType scrutinee
+    let matrix = initializePMMatrix patterns (exprType scrutinee')
+    let cps = TyckCPS inferType checkType withVariable
+    decisionTree <- translatePMToDT cps matrix
+
+    let leafTypes = collectLeafExprTypes decisionTree
+    matchType <- case leafTypes of
+        [] -> return TypeUnit
+        (t : ts) -> do
+            forM_ ts $ \t' -> do
+                failure <- runUnification $ unify t t'
+                case failure of
+                    Just f -> do
+                        filePath <- State.gets currentFile
+                        addErrReportMsgSeq "Type mismatch in match branches" (Just $ errorToReport f filePath)
+                    Nothing -> return ()
+            runUnification $ force t
+
+    exprWithSpan matchType $ Match scrutinee' decisionTree
 -- Advance the span in the context and continue on inner expression
 inferType (Syn.SpannedExpr (WithSpan expr start end)) =
     withSpan (start, end) $ inferType expr
 inferType _ = error "Not implemented"
+
+collectLeafExprTypes :: DecisionTree -> [Type]
+collectLeafExprTypes DTUncovered = []
+collectLeafExprTypes DTUnreachable = []
+collectLeafExprTypes (DTLeaf body _) = [exprType body]
+collectLeafExprTypes (DTGuard _ _ trueBr falseBr) =
+    collectLeafExprTypes trueBr ++ collectLeafExprTypes falseBr
+collectLeafExprTypes (DTSwitch _ cases) = collectLeafExprTypesCases cases
+
+collectLeafExprTypesCases :: DTSwitchCases -> [Type]
+collectLeafExprTypesCases (DTSwitchInt m def) =
+    concatMap collectLeafExprTypes (IntMap.elems m) ++ collectLeafExprTypes def
+collectLeafExprTypesCases (DTSwitchBool t f) =
+    collectLeafExprTypes t ++ collectLeafExprTypes f
+collectLeafExprTypesCases (DTSwitchCtor cases def) =
+    concatMap collectLeafExprTypes (V.toList cases) ++ collectLeafExprTypes def
+collectLeafExprTypesCases (DTSwitchString m def) =
+    concatMap (collectLeafExprTypes . snd) (HashMap.toList m) ++ collectLeafExprTypes def
+collectLeafExprTypesCases (DTSwitchNullable j n) =
+    collectLeafExprTypes j ++ collectLeafExprTypes n
 
 checkType :: Syn.Expr -> Type -> SemiEff Expr
 checkType (Syn.SpannedExpr (WithSpan expr start end)) ty =

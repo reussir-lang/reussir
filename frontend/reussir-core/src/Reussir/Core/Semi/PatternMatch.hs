@@ -22,7 +22,6 @@ import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
 import Effectful.State.Static.Local qualified as State
 import Reussir.Parser.Types.Expr qualified as Syn
-import Reussir.Parser.Types.Type qualified as SynType
 
 import Reussir.Core.Data.Class (Class (..))
 import Reussir.Core.Data.Semi.Context (SemiContext (..), SemiEff, knownRecords)
@@ -376,7 +375,6 @@ divideDistinguishable mat =
 data TyckCPS = TyckCPS
     { inferType :: Syn.Expr -> SemiEff Semi.Expr
     , checkType :: Syn.Expr -> Semi.Type -> SemiEff Semi.Expr
-    , evalType :: SynType.Type -> Semi.Type
     , bindVar ::
         forall a.
         Identifier ->
@@ -663,7 +661,17 @@ translateWithLeadingDistinguishable cps distinguishable@(PMMatrix matCursor matR
                                                                      in (ref, subPat)
                                                                 )
                                                                 subPats
-                                                    let newRefPats = RRB.fromList (V.toList newCols)
+                                                    
+                                                    let validCols =
+                                                            V.filter
+                                                                ( \(_, pat') -> case pat' of
+                                                                    Syn.WildcardPat -> False
+                                                                    Syn.BindPat _ -> False
+                                                                    _ -> True
+                                                                )
+                                                                newCols
+
+                                                    let newRefPats = RRB.fromList (V.toList validCols)
 
                                                     let newBindings =
                                                             V.foldl'
