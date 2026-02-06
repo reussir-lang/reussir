@@ -385,7 +385,18 @@ data TyckCPS = TyckCPS
     }
 
 translatePMToDT :: TyckCPS -> PMMatrix -> SemiEff (DecisionTree Semi.Expr)
-translatePMToDT _ _ = undefined
+translatePMToDT cps mat@PMMatrix{matrixCursor, matrixRows, matrixTypes} = 
+    if null matrixRows then 
+        return DTUnreachable
+    else do
+        let SplitResult splitLeading splitWildcards splitTrailing = splitAtFirstWildcard mat
+        if null splitLeading then 
+            translateWithLeadingWildcards cps matrixCursor matrixTypes splitWildcards splitTrailing
+        else do
+            let leadingDistinguishable = stableSortDistinguishable mat{matrixRows = splitLeading}
+            -- translateWithLeadingDistinguishable
+            undefined
+            
 
 -- | Recursively substitute 'DTUncovered' nodes in a Decision Tree with a fallback Decision Tree.
 -- This is used to merge the results of a wildcard match (which may fail/be uncovered)
@@ -437,7 +448,10 @@ translateWithLeadingWildcards ::
 translateWithLeadingWildcards cps cursor typeMap wildcards fallback = do
     -- We assume 'wildcards' is non-empty given the context of calling this function.
     case RRB.viewl wildcards of
-        Nothing -> error "translateWithLeadingWildcards: empty wildcards list"
+        Nothing | null fallback -> return DTUnreachable
+        Nothing -> do
+            let normalizedFallback = normalizeVarRefLevel $ PMMatrix cursor fallback typeMap
+            translatePMToDT cps normalizedFallback
         Just (firstRow, restWildcards) ->
             -- Check if the first wildcard row is exhausted (no more patterns).
             -- If `rowPatterns` is empty, this row matches everything remaining.
