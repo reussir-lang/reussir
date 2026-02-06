@@ -31,12 +31,13 @@ import Reussir.Core.Data.Semi.Expr (
     PatternVarRef (..),
  )
 import Reussir.Core.Data.Semi.Record (Record (..), RecordFields (..))
-import Reussir.Core.Data.UniqueID (VarID (..))
+import Reussir.Core.Data.UniqueID (GenericID (..), VarID (..))
 import Reussir.Core.Semi.Context (addErrReportMsg, runUnification)
 import Reussir.Core.Semi.Unification (force, satisfyBounds)
 
 import Reussir.Core.Data.Semi.Expr qualified as Semi
 import Reussir.Core.Data.Semi.Type qualified as Semi
+import Reussir.Core.Semi.Type (substituteGenericMap)
 
 -- normalize a ctor pattern into a positional applied form.
 -- fill in wildcards for ignored fields if ellipsis is present.
@@ -769,7 +770,7 @@ translateWithLeadingDistinguishable cps distinguishable@(PMMatrix matCursor matR
 
     resolveFieldTypes :: Semi.Type -> Path -> SemiEff (V.Vector Semi.Type)
     resolveFieldTypes (Semi.TypeNullable t) _ = return $ V.singleton t -- NonNull has 1 field
-    resolveFieldTypes (Semi.TypeRecord _ _ _) ctorPath = do
+    resolveFieldTypes (Semi.TypeRecord _ tyParams _) ctorPath = do
         records <- State.gets knownRecords
         mRecord <- liftIO $ H.lookup records ctorPath
         case mRecord of
@@ -777,12 +778,16 @@ translateWithLeadingDistinguishable cps distinguishable@(PMMatrix matCursor matR
                 addErrReportMsg $ "Record not found: " <> T.pack (show ctorPath)
                 return V.empty
             Just record -> do
+                let genIds = map (\(_, GenericID gid) -> fromIntegral gid) (recordTyParams record)
+                let substMap = IntMap.fromList (zip genIds tyParams)
+                let substitute = flip substituteGenericMap substMap
+                
                 mFields <- readIORef' (recordFields record)
                 case mFields of
                     Just (Named fields) ->
-                        return $ V.map (\(WithSpan (_, ty, _) _ _) -> ty) fields -- TODO: instantiate
+                        return $ V.map (\(WithSpan (_, ty, _) _ _) -> substitute ty) fields
                     Just (Unnamed fields) ->
-                        return $ V.map (\(WithSpan (ty, _) _ _) -> ty) fields -- TODO: instantiate
+                        return $ V.map (\(WithSpan (ty, _) _ _) -> substitute ty) fields
                     _ -> return V.empty
     resolveFieldTypes _ _ = return V.empty
 
