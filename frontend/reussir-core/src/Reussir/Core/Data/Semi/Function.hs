@@ -1,13 +1,16 @@
 module Reussir.Core.Data.Semi.Function where
 
-import Data.HashTable.IO qualified as H
 import Effectful.Prim.IORef.Strict (IORef')
 import GHC.Int (Int64)
-import Reussir.Core.Data.Semi.Expr qualified as Semi
-import Reussir.Core.Data.Semi.Type qualified as Semi
-import Reussir.Core.Data.UniqueID (GenericID)
 import Reussir.Parser.Types.Lexer (Identifier, Path)
 import Reussir.Parser.Types.Stmt (Visibility)
+
+import Data.HashTable.IO qualified as H
+
+import Reussir.Core.Data.UniqueID (GenericID)
+
+import Reussir.Core.Data.Semi.Expr qualified as Semi
+import Reussir.Core.Data.Semi.Type qualified as Semi
 
 {- | Function prototype in the Semi Phase. At this point memory management except
 | for flexivity annotation is irrelevant.

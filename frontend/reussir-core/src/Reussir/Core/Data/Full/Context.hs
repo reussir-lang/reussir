@@ -5,6 +5,7 @@ import Effectful (Eff, IOE)
 import Effectful.Log (Log)
 import Effectful.Prim.IORef.Strict (Prim)
 import Effectful.State.Static.Local (State)
+
 import Reussir.Core.Data.Full.Error (Error)
 import Reussir.Core.Data.Full.Function (FunctionTable)
 import Reussir.Core.Data.Full.Record (FullRecordTable, SemiRecordTable)

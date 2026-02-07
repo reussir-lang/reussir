@@ -6,10 +6,23 @@ module Reussir.Parser.Type where
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Functor (($>))
 import Data.Maybe (fromMaybe)
-import Reussir.Parser.Lexer (closeAngle, comma, openAngle, parsePath, space, withSpan)
-import Reussir.Parser.Types hiding (space)
-import Reussir.Parser.Types.Type (FloatingPointType (..), IntegralType (..), Type (..))
+
 import Unicode.Char qualified as U
+
+import Reussir.Parser.Lexer (
+    closeAngle,
+    comma,
+    openAngle,
+    parsePath,
+    space,
+    withSpan,
+ )
+import Reussir.Parser.Types hiding (space)
+import Reussir.Parser.Types.Type (
+    FloatingPointType (..),
+    IntegralType (..),
+    Type (..),
+ )
 
 parseType :: Parser Type
 parseType = TypeSpanned <$> withSpan parseArrowType
@@ -19,17 +32,23 @@ parseTypeAtom =
     choice
         [ parseIntegralType <?> "integral type"
         , parseFPType <?> "floating point type"
-        , (string "bool" *> notFollowedBy (satisfy U.isXIDContinue) *> space $> TypeBool) <?> "bool"
-        , (string "str" *> notFollowedBy (satisfy U.isXIDContinue) *> space $> TypeStr) <?> "str"
-        , (string "unit" *> notFollowedBy (satisfy U.isXIDContinue) *> space $> TypeUnit) <?> "unit"
+        , (string "bool" *> notFollowedBy (satisfy U.isXIDContinue) *> space $> TypeBool)
+            <?> "bool"
+        , (string "str" *> notFollowedBy (satisfy U.isXIDContinue) *> space $> TypeStr)
+            <?> "str"
+        , (string "unit" *> notFollowedBy (satisfy U.isXIDContinue) *> space $> TypeUnit)
+            <?> "unit"
         , parseTypeExpr <?> "type expression"
-        , (between (string "(" *> space) (string ")" *> space) parseType) <?> "parenthesized type"
+        , (between (string "(" *> space) (string ")" *> space) parseType)
+            <?> "parenthesized type"
         ]
 
 parseIntegralType :: Parser Type
 parseIntegralType = try $ do
     c <- oneOf ['i', 'u']
-    width <- choice [string "8" $> 8, string "16" $> 16, string "32" $> 32, string "64" $> 64]
+    width <-
+        choice
+            [string "8" $> 8, string "16" $> 16, string "32" $> 32, string "64" $> 64]
     notFollowedBy (satisfy U.isXIDContinue)
     space
     let it = if c == 'i' then Signed width else Unsigned width

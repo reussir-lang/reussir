@@ -6,25 +6,35 @@ module Test.Codegen.Intrinsics.Math (
 where
 
 import Data.Int (Int64)
+import Log (defaultLogLevel)
+import Test.Tasty
+import Test.Tasty.HUnit
+
 import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
 import Effectful qualified as E
 import Effectful.Log qualified as L
 import Effectful.State.Static.Local qualified as E
-import Log (defaultLogLevel)
 import Log.Backend.StandardOutput qualified as L
 import Reussir.Bridge qualified as B
+
 import Reussir.Codegen.Context (runCodegen)
+
 import Reussir.Codegen.Context qualified as C
 import Reussir.Codegen.Intrinsics qualified as I
 import Reussir.Codegen.Type qualified as TT
 import Reussir.Codegen.Value qualified as V
-import Test.Tasty
-import Test.Tasty.HUnit
 
 runCodegenAsText :: C.Codegen () -> IO T.Text
 runCodegenAsText codegen = do
-    let spec = C.TargetSpec "test_module" "output.mlir" B.OptDefault B.OutputObject B.LogInfo "./module.mlir"
+    let spec =
+            C.TargetSpec
+                "test_module"
+                "output.mlir"
+                B.OptDefault
+                B.OutputObject
+                B.LogInfo
+                "./module.mlir"
     L.withStdOutLogger $ \logger -> do
         E.runEff $ L.runLog "Test.Codegen.Intrinsics.Math" logger defaultLogLevel $ runCodegen spec $ do
             codegen
@@ -143,7 +153,10 @@ fma64 :: Int64 -> Int64 -> Int64 -> Int64 -> I.FastMathFlag -> I.IntrinsicCall
 fma64 dst src1 src2 src3 flag =
     I.IntrinsicCall
         (I.Math (I.Fma flag))
-        [(V.Value src1, primitiveF64), (V.Value src2, primitiveF64), (V.Value src3, primitiveF64)]
+        [ (V.Value src1, primitiveF64)
+        , (V.Value src2, primitiveF64)
+        , (V.Value src3, primitiveF64)
+        ]
         [(V.Value dst, primitiveF64)]
 
 fpowi64 :: Int64 -> Int64 -> Int64 -> I.FastMathFlag -> I.IntrinsicCall
@@ -217,50 +230,70 @@ mathTests =
     testGroup
         "Math.Intrinsic.Codegen"
         [ testCase "ABSF Codegen without FastMath" $
-            runCodegenForICall (absf64 3 1 $ I.FastMathFlag 0) @@?= "%3 = math.absf %1 : f64\n"
+            runCodegenForICall (absf64 3 1 $ I.FastMathFlag 0)
+                @@?= "%3 = math.absf %1 : f64\n"
         , testCase "ABSF Codegen with FastMath" $
-            runCodegenForICall (absf64 3 1 $ I.FastMathFlag 127) @@?= "%3 = math.absf %1 fastmath<fast> : f64\n"
+            runCodegenForICall (absf64 3 1 $ I.FastMathFlag 127)
+                @@?= "%3 = math.absf %1 fastmath<fast> : f64\n"
         , testCase "ABSF Codegen with Reassoc and NInf" $
             runCodegenForICall (absf64 3 1 $ I.FastMathFlag 5)
                 @@?= "%3 = math.absf %1 fastmath<reassoc ninf> : f64\n"
         , testCase "ABSI Codegen" $
             runCodegenForICall (absi32 3 1) @@?= "%3 = math.absi %1 : i32\n"
         , testCase "SIN Codegen" $
-            runCodegenForICall (sin64 3 1 $ I.FastMathFlag 0) @@?= "%3 = math.sin %1 : f64\n"
+            runCodegenForICall (sin64 3 1 $ I.FastMathFlag 0)
+                @@?= "%3 = math.sin %1 : f64\n"
         , testCase "SIN Codegen with FastMath" $
-            runCodegenForICall (sin64 3 1 $ I.FastMathFlag 127) @@?= "%3 = math.sin %1 fastmath<fast> : f64\n"
+            runCodegenForICall (sin64 3 1 $ I.FastMathFlag 127)
+                @@?= "%3 = math.sin %1 fastmath<fast> : f64\n"
         , testCase "COS Codegen" $
-            runCodegenForICall (cos64 3 1 $ I.FastMathFlag 0) @@?= "%3 = math.cos %1 : f64\n"
+            runCodegenForICall (cos64 3 1 $ I.FastMathFlag 0)
+                @@?= "%3 = math.cos %1 : f64\n"
         , testCase "SQRT Codegen" $
-            runCodegenForICall (sqrt64 3 1 $ I.FastMathFlag 0) @@?= "%3 = math.sqrt %1 : f64\n"
+            runCodegenForICall (sqrt64 3 1 $ I.FastMathFlag 0)
+                @@?= "%3 = math.sqrt %1 : f64\n"
         , testCase "SQRT Codegen with FastMath" $
-            runCodegenForICall (sqrt64 3 1 $ I.FastMathFlag 127) @@?= "%3 = math.sqrt %1 fastmath<fast> : f64\n"
+            runCodegenForICall (sqrt64 3 1 $ I.FastMathFlag 127)
+                @@?= "%3 = math.sqrt %1 fastmath<fast> : f64\n"
         , testCase "EXP Codegen" $
-            runCodegenForICall (exp64 3 1 $ I.FastMathFlag 0) @@?= "%3 = math.exp %1 : f64\n"
+            runCodegenForICall (exp64 3 1 $ I.FastMathFlag 0)
+                @@?= "%3 = math.exp %1 : f64\n"
         , testCase "LOG2 Codegen" $
-            runCodegenForICall (log264 3 1 $ I.FastMathFlag 0) @@?= "%3 = math.log2 %1 : f64\n"
+            runCodegenForICall (log264 3 1 $ I.FastMathFlag 0)
+                @@?= "%3 = math.log2 %1 : f64\n"
         , testCase "FLOOR Codegen" $
-            runCodegenForICall (floor64 3 1 $ I.FastMathFlag 0) @@?= "%3 = math.floor %1 : f64\n"
+            runCodegenForICall (floor64 3 1 $ I.FastMathFlag 0)
+                @@?= "%3 = math.floor %1 : f64\n"
         , testCase "CEIL Codegen" $
-            runCodegenForICall (ceil64 3 1 $ I.FastMathFlag 0) @@?= "%3 = math.ceil %1 : f64\n"
+            runCodegenForICall (ceil64 3 1 $ I.FastMathFlag 0)
+                @@?= "%3 = math.ceil %1 : f64\n"
         , testCase "ATAN Codegen" $
-            runCodegenForICall (atan64 3 1 $ I.FastMathFlag 0) @@?= "%3 = math.atan %1 : f64\n"
+            runCodegenForICall (atan64 3 1 $ I.FastMathFlag 0)
+                @@?= "%3 = math.atan %1 : f64\n"
         , testCase "TANH Codegen" $
-            runCodegenForICall (tanh64 3 1 $ I.FastMathFlag 0) @@?= "%3 = math.tanh %1 : f64\n"
+            runCodegenForICall (tanh64 3 1 $ I.FastMathFlag 0)
+                @@?= "%3 = math.tanh %1 : f64\n"
         , testCase "POWF Codegen" $
-            runCodegenForICall (powf64 3 1 2 $ I.FastMathFlag 0) @@?= "%3 = math.powf %1, %2 : f64\n"
+            runCodegenForICall (powf64 3 1 2 $ I.FastMathFlag 0)
+                @@?= "%3 = math.powf %1, %2 : f64\n"
         , testCase "POWF Codegen with FastMath" $
-            runCodegenForICall (powf64 3 1 2 $ I.FastMathFlag 127) @@?= "%3 = math.powf %1, %2 fastmath<fast> : f64\n"
+            runCodegenForICall (powf64 3 1 2 $ I.FastMathFlag 127)
+                @@?= "%3 = math.powf %1, %2 fastmath<fast> : f64\n"
         , testCase "ATAN2 Codegen" $
-            runCodegenForICall (atan264 3 1 2 $ I.FastMathFlag 0) @@?= "%3 = math.atan2 %1, %2 : f64\n"
+            runCodegenForICall (atan264 3 1 2 $ I.FastMathFlag 0)
+                @@?= "%3 = math.atan2 %1, %2 : f64\n"
         , testCase "COPYSIGN Codegen" $
-            runCodegenForICall (copysign64 3 1 2 $ I.FastMathFlag 0) @@?= "%3 = math.copysign %1, %2 : f64\n"
+            runCodegenForICall (copysign64 3 1 2 $ I.FastMathFlag 0)
+                @@?= "%3 = math.copysign %1, %2 : f64\n"
         , testCase "FMA Codegen" $
-            runCodegenForICall (fma64 3 1 2 4 $ I.FastMathFlag 0) @@?= "%3 = math.fma %1, %2, %4 : f64\n"
+            runCodegenForICall (fma64 3 1 2 4 $ I.FastMathFlag 0)
+                @@?= "%3 = math.fma %1, %2, %4 : f64\n"
         , testCase "FMA Codegen with FastMath" $
-            runCodegenForICall (fma64 3 1 2 4 $ I.FastMathFlag 127) @@?= "%3 = math.fma %1, %2, %4 fastmath<fast> : f64\n"
+            runCodegenForICall (fma64 3 1 2 4 $ I.FastMathFlag 127)
+                @@?= "%3 = math.fma %1, %2, %4 fastmath<fast> : f64\n"
         , testCase "FPOWI Codegen" $
-            runCodegenForICall (fpowi64 3 1 2 $ I.FastMathFlag 0) @@?= "%3 = math.fpowi %1, %2 : f64, i32\n"
+            runCodegenForICall (fpowi64 3 1 2 $ I.FastMathFlag 0)
+                @@?= "%3 = math.fpowi %1, %2 : f64, i32\n"
         , testCase "IPOWI Codegen" $
             runCodegenForICall (ipowi32 3 1 2) @@?= "%3 = math.ipowi %1, %2 : i32\n"
         , testCase "CTLZ Codegen" $
@@ -270,15 +303,20 @@ mathTests =
         , testCase "CTTZ Codegen" $
             runCodegenForICall (cttz32 3 1) @@?= "%3 = math.cttz %1 : i32\n"
         , testCase "ISFINITE Codegen" $
-            runCodegenForICall (isfinite64 3 1 $ I.FastMathFlag 0) @@?= "%3 = math.isfinite %1 : i32\n"
+            runCodegenForICall (isfinite64 3 1 $ I.FastMathFlag 0)
+                @@?= "%3 = math.isfinite %1 : i32\n"
         , testCase "ISINF Codegen" $
-            runCodegenForICall (isinf64 3 1 $ I.FastMathFlag 0) @@?= "%3 = math.isinf %1 : i32\n"
+            runCodegenForICall (isinf64 3 1 $ I.FastMathFlag 0)
+                @@?= "%3 = math.isinf %1 : i32\n"
         , testCase "ISNAN Codegen" $
-            runCodegenForICall (isnan64 3 1 $ I.FastMathFlag 0) @@?= "%3 = math.isnan %1 : i32\n"
+            runCodegenForICall (isnan64 3 1 $ I.FastMathFlag 0)
+                @@?= "%3 = math.isnan %1 : i32\n"
         , testCase "SINCOS Codegen without FastMath" $
-            runCodegenForICall (sincos64 3 4 1 $ I.FastMathFlag 0) @@?= "%3, %4 = math.sincos %1 : f64\n"
+            runCodegenForICall (sincos64 3 4 1 $ I.FastMathFlag 0)
+                @@?= "%3, %4 = math.sincos %1 : f64\n"
         , testCase "SINCOS Codegen with FastMath" $
-            runCodegenForICall (sincos64 3 4 1 $ I.FastMathFlag 127) @@?= "%3, %4 = math.sincos %1 fastmath<fast> : f64\n"
+            runCodegenForICall (sincos64 3 4 1 $ I.FastMathFlag 127)
+                @@?= "%3, %4 = math.sincos %1 fastmath<fast> : f64\n"
         , testCase "SINCOS Codegen with Reassoc and NInf" $
             runCodegenForICall (sincos64 3 4 1 $ I.FastMathFlag 5)
                 @@?= "%3, %4 = math.sincos %1 fastmath<reassoc ninf> : f64\n"

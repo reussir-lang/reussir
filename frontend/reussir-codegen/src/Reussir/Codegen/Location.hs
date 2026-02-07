@@ -4,7 +4,9 @@ module Reussir.Codegen.Location where
 
 import Data.Int (Int64)
 import Data.String (IsString (..))
+
 import Data.Text qualified as T
+
 import Reussir.Codegen.Context.Symbol (Symbol)
 import Reussir.Codegen.Type.Data (PrimitiveFloat, PrimitiveInt)
 

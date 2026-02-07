@@ -16,10 +16,12 @@ spec = do
             parse parsePath "" "foo" `shouldParse` Path (Identifier "foo") []
 
         it "parses a path with one segment" $ do
-            parse parsePath "" "std::io" `shouldParse` Path (Identifier "io") [Identifier "std"]
+            parse parsePath "" "std::io"
+                `shouldParse` Path (Identifier "io") [Identifier "std"]
 
         it "parses a path with multiple segments" $ do
-            parse parsePath "" "std::io::File" `shouldParse` Path (Identifier "File") [Identifier "std", Identifier "io"]
+            parse parsePath "" "std::io::File"
+                `shouldParse` Path (Identifier "File") [Identifier "std", Identifier "io"]
 
         it "fails on empty input" $ do
             parse parsePath "" "" `shouldFailWith` err 0 ueof
@@ -29,4 +31,5 @@ spec = do
 
     describe "comments" $ do
         it "skips line comments" $ do
-            parse (parseIdentifier <* eof) "" "foo // this is a comment" `shouldParse` Identifier "foo"
+            parse (parseIdentifier <* eof) "" "foo // this is a comment"
+                `shouldParse` Identifier "foo"

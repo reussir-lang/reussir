@@ -1,11 +1,13 @@
 module Reussir.Core.Semi.Type where
 
+import Data.IntSet (IntSet)
+import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
+
 import Data.HashSet qualified as HashSet
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
-import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
-import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
+
 import Reussir.Core.Data.Class (Class)
 import Reussir.Core.Data.Integral (IntegralType (..))
 import Reussir.Core.Data.Semi.Type (Type (..), TypeClassTable (..))

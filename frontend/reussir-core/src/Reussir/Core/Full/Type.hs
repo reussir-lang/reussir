@@ -1,22 +1,25 @@
 module Reussir.Core.Full.Type where
 
 import Data.Either (partitionEithers)
-import Data.HashTable.IO qualified as H
 import Data.Int (Int64)
-import Data.IntMap.Strict qualified as IntMap
 import Effectful (Eff, IOE, liftIO, (:>))
 import Reussir.Codegen.Context.Symbol (verifiedSymbol)
 import Reussir.Codegen.Type (Capability (..))
+import Prelude hiding (span)
+
+import Data.HashTable.IO qualified as H
+import Data.IntMap.Strict qualified as IntMap
+import Reussir.Parser.Types.Capability qualified as Syn
+
 import Reussir.Core.Data.Full.Error (Error (..), ErrorKind (..))
 import Reussir.Core.Data.Full.Record (SemiRecordTable)
 import Reussir.Core.Data.Full.Type (GenericMap, Type (..))
-import Reussir.Core.Data.Semi.Record qualified as Semi
-import Reussir.Core.Data.Semi.Type qualified as Semi
 import Reussir.Core.Data.UniqueID (GenericID (..))
 import Reussir.Core.Semi.Mangle (mangleABIName)
+
+import Reussir.Core.Data.Semi.Record qualified as Semi
+import Reussir.Core.Data.Semi.Type qualified as Semi
 import Reussir.Core.Semi.Type qualified as Semi
-import Reussir.Parser.Types.Capability qualified as Syn
-import Prelude hiding (span)
 
 convertCapability :: Syn.Capability -> Capability
 convertCapability Syn.Value = Value
@@ -27,7 +30,13 @@ convertCapability Syn.Rigid = Rigid
 convertCapability Syn.Field = Field
 convertCapability Syn.Unspecified = Unspecified
 
-convertSemiType :: (IOE :> es) => (Int64, Int64) -> GenericMap -> SemiRecordTable -> Semi.Type -> Eff es (Either [Error] Type)
+convertSemiType ::
+    (IOE :> es) =>
+    (Int64, Int64) ->
+    GenericMap ->
+    SemiRecordTable ->
+    Semi.Type ->
+    Eff es (Either [Error] Type)
 convertSemiType span genericMap semiRecords semiType = do
     let wrapError kind = [Error span kind]
     case semiType of

@@ -8,10 +8,16 @@ module Reussir.Codegen.PolymorphicFFI (
 
 import Data.Int (Int64)
 import Data.String (fromString)
+
 import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
+
 import Reussir.Codegen.Context.Codegen (Codegen)
-import Reussir.Codegen.Context.Emission (Emission (emit), emitBuilderLineM, intercalate)
+import Reussir.Codegen.Context.Emission (
+    Emission (emit),
+    emitBuilderLineM,
+    intercalate,
+ )
 import Reussir.Codegen.Type.Data (Type)
 import Reussir.Codegen.Type.Emission ()
 

@@ -17,7 +17,7 @@ module Reussir.Codegen.Intrinsics (
 where
 
 import Log qualified as L
-import Reussir.Codegen.Context qualified as C
+
 import Reussir.Codegen.Intrinsics.Arith (
     Arith (..),
     CmpFPredicate (..),
@@ -29,6 +29,8 @@ import Reussir.Codegen.Intrinsics.Arith (
  )
 import Reussir.Codegen.Intrinsics.Math (Math (..), mathCodegen)
 import Reussir.Codegen.Value (TypedValue)
+
+import Reussir.Codegen.Context qualified as C
 
 data Intrinsic
     = Arith Arith

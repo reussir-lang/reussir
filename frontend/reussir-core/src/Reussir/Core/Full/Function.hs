@@ -5,27 +5,35 @@
 module Reussir.Core.Full.Function where
 
 import Control.Monad (forM_)
-import Data.HashTable.IO qualified as H
-import Data.IntMap qualified as IntMap
 import Data.Maybe (fromMaybe)
 import Data.Traversable (for)
 import Effectful (inject, liftIO)
 import Effectful.Prim.IORef.Strict (readIORef')
-import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen.Context.Symbol (verifiedSymbol)
+import Reussir.Parser.Types.Lexer (Path (..))
+import Prelude hiding (span)
+
+import Data.HashTable.IO qualified as H
+import Data.IntMap qualified as IntMap
+import Effectful.State.Static.Local qualified as State
+
 import Reussir.Core.Data.Full.Context (FullContext (..), GlobalFullEff)
 import Reussir.Core.Data.Full.Function (Function (..))
 import Reussir.Core.Data.Full.Type (GenericMap, Type (..))
 import Reussir.Core.Data.Generic (GenericSolution)
-import Reussir.Core.Data.Semi.Function qualified as Semi
-import Reussir.Core.Data.Semi.Type qualified as Semi
 import Reussir.Core.Data.UniqueID (GenericID (..))
-import Reussir.Core.Full.Context (addError, withFreshLocalContext, withGenericMap, withSpan)
+import Reussir.Core.Full.Context (
+    addError,
+    withFreshLocalContext,
+    withGenericMap,
+    withSpan,
+ )
 import Reussir.Core.Full.Expr (convertSemiExpr)
 import Reussir.Core.Full.Type (convertSemiType)
 import Reussir.Core.Semi.Mangle (mangleABIName)
-import Reussir.Parser.Types.Lexer (Path (..))
-import Prelude hiding (span)
+
+import Reussir.Core.Data.Semi.Function qualified as Semi
+import Reussir.Core.Data.Semi.Type qualified as Semi
 
 convertSemiFunction ::
     Semi.FunctionProto ->
@@ -60,7 +68,8 @@ convertSemiFunction proto genericMap typeArgs = do
                 Right t -> pure t
 
         -- Convert Return Type
-        retTypeResult <- convertSemiType span genericMap semiRecords (Semi.funcReturnType proto)
+        retTypeResult <-
+            convertSemiType span genericMap semiRecords (Semi.funcReturnType proto)
         retType <- case retTypeResult of
             Left errs -> do
                 mapM_ (inject . addError) errs

@@ -4,7 +4,9 @@
 module Reussir.Codegen.Type.Emission (emitRecord) where
 
 import Control.Monad (forM_, unless)
+
 import Data.Text.Builder.Linear qualified as TB
+
 import Reussir.Codegen.Context.Codegen
 import Reussir.Codegen.Context.Emission (Emission (emit), intercalate)
 import Reussir.Codegen.Context.Symbol (Symbol, symbolBuilder)
@@ -19,7 +21,11 @@ import Reussir.Codegen.Type.Data (
     Ref (..),
     Type (..),
  )
-import Reussir.Codegen.Type.Record (Record (..), RecordField (..), RecordKind (..))
+import Reussir.Codegen.Type.Record (
+    Record (..),
+    RecordField (..),
+    RecordKind (..),
+ )
 
 instance Emission PrimitiveInt where
     emit PrimInt8 = pure "i8"
@@ -160,4 +166,11 @@ emitRecord
             let defaultCapability' = translateCapability defaultCapability
             fields' <- mapM emitField fields
             let concatFields' = intercalate ", " fields'
-            pure $ "!reussir.record<" <> kind' <> name' <> defaultCapability' <> "{" <> concatFields' <> "}>"
+            pure $
+                "!reussir.record<"
+                    <> kind'
+                    <> name'
+                    <> defaultCapability'
+                    <> "{"
+                    <> concatFields'
+                    <> "}>"

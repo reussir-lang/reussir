@@ -1,12 +1,14 @@
 module Reussir.Core.Data.Full.Error where
 
 import Data.Int (Int64)
+import Reussir.Parser.Types.Lexer (Path (..))
+
 import Data.Vector.Strict qualified as V
+import Reussir.Parser.Types.Capability qualified as Syn
+
+import Reussir.Core.Data.UniqueID (GenericID)
 
 import Reussir.Core.Data.Semi.Type qualified as Semi
-import Reussir.Core.Data.UniqueID (GenericID)
-import Reussir.Parser.Types.Capability qualified as Syn
-import Reussir.Parser.Types.Lexer (Path (..))
 
 data Error = Error
     { errorSpan :: (Int64, Int64)
@@ -22,7 +24,7 @@ data ErrorKind
     | InvalidNullableType Semi.Type
     | UnknownGeneric GenericID
     | InvalidCapability Path Syn.Capability
-    | InvalidAssignSourceCapability
-        -- ^ Source of assignment is not Nullable<Rc<T, Flex>>
-    | InvalidAssignSourceNotRegional
-        -- ^ Source of assignment inner type is not a regional record
+    | -- | Source of assignment is not Nullable<Rc<T, Flex>>
+      InvalidAssignSourceCapability
+    | -- | Source of assignment inner type is not a regional record
+      InvalidAssignSourceNotRegional

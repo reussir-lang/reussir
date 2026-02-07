@@ -44,13 +44,15 @@ module Reussir.Bridge (
 )
 where
 
-import Data.ByteString qualified as BS
-import Data.ByteString.Unsafe qualified as BS
 import Data.Word (Word64, Word8)
 import Foreign.C (CSize (..))
 import Foreign.Marshal.Alloc (alloca)
 import Foreign.Ptr (Ptr, castPtr)
 import Foreign.Storable (Storable (..))
+
+import Data.ByteString qualified as BS
+import Data.ByteString.Unsafe qualified as BS
+
 import Reussir.Bridge.Compiler
 import Reussir.Bridge.JITEngine
 import Reussir.Bridge.Logging

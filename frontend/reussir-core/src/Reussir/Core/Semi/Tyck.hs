@@ -17,21 +17,42 @@ module Reussir.Core.Semi.Tyck (
     checkType,
 ) where
 
+import Control.Monad (forM, forM_, unless, when, zipWithM)
 import Data.Function ((&))
-import Effectful.State.Static.Local qualified as State
-import System.Console.ANSI.Types qualified as ANSI
-
-import Control.Monad (forM, unless, when, zipWithM)
-import Data.HashTable.IO qualified as H
-import Data.IntMap.Strict qualified as IntMap
 import Data.List (find)
 import Data.Maybe (isJust)
+import Effectful (MonadIO (liftIO), inject)
+import Effectful.Prim.IORef.Strict (readIORef', writeIORef')
+import Reussir.Diagnostic (Label (..))
+import Reussir.Diagnostic.Report (
+    Report (..),
+    addForegroundColorToCodeRef,
+    addForegroundColorToText,
+    annotatedCodeRef,
+    defaultCodeRef,
+    defaultText,
+ )
+import Reussir.Parser.Types.Lexer (
+    Identifier (..),
+    Path (..),
+    WithSpan (WithSpan),
+ )
+
+import Data.HashMap.Strict qualified as HashMap
+import Data.HashTable.IO qualified as H
+import Data.IntMap.Strict qualified as IntMap
 import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
-import Effectful (MonadIO (liftIO), inject)
 import Effectful.Log qualified as L
-import Effectful.Prim.IORef.Strict (readIORef', writeIORef')
+import Effectful.State.Static.Local qualified as State
+import Reussir.Parser.Types.Capability qualified as Cap
+import Reussir.Parser.Types.Expr qualified as Access (Access (..))
+import Reussir.Parser.Types.Expr qualified as Syn
+import Reussir.Parser.Types.Stmt qualified as Syn
+import Reussir.Parser.Types.Type qualified as Syn
+import System.Console.ANSI.Types qualified as ANSI
+
 import Reussir.Core.Data.Class (Class (Class), TypeBound)
 import Reussir.Core.Data.Integral (IntegralType (..))
 import Reussir.Core.Data.Operator (ArithOp (..), CmpOp (..))
@@ -41,9 +62,18 @@ import Reussir.Core.Data.Semi.Context (
     SemiContext (..),
     SemiEff,
  )
-import Reussir.Core.Data.Semi.Expr (Expr (..), ExprKind (..))
+import Reussir.Core.Data.Semi.Expr (
+    DTSwitchCases (..),
+    DecisionTree (..),
+    Expr (..),
+    ExprKind (..),
+ )
 import Reussir.Core.Data.Semi.Function (FunctionProto (..), FunctionTable (..))
-import Reussir.Core.Data.Semi.Record (Record (..), RecordFields (..), RecordKind (..))
+import Reussir.Core.Data.Semi.Record (
+    Record (..),
+    RecordFields (..),
+    RecordKind (..),
+ )
 import Reussir.Core.Data.Semi.Type (
     Flexivity (..),
     Type (..),
@@ -65,25 +95,24 @@ import Reussir.Core.Semi.Context (
     withVariable,
  )
 import Reussir.Core.Semi.Function (getFunctionProto)
+import Reussir.Core.Semi.PatternMatch (
+    TyckCPS (TyckCPS),
+    initializePMMatrix,
+    translatePMToDT,
+ )
+import Reussir.Core.Semi.Projection (projectType, resolveProjection)
 import Reussir.Core.Semi.Type (substituteGenericMap)
-import Reussir.Core.Semi.Unification (errorToReport, force, getGenericBound, getHoleState, introduceNewHole, satisfyBounds, unify)
+import Reussir.Core.Semi.Unification (
+    errorToReport,
+    force,
+    getGenericBound,
+    getHoleState,
+    introduceNewHole,
+    satisfyBounds,
+    unify,
+ )
 import Reussir.Core.Semi.Variable (lookupVar, newVariable)
 import Reussir.Core.String (allocateStrToken)
-import Reussir.Diagnostic (Label (..))
-import Reussir.Diagnostic.Report (
-    Report (..),
-    addForegroundColorToCodeRef,
-    addForegroundColorToText,
-    annotatedCodeRef,
-    defaultCodeRef,
-    defaultText,
- )
-import Reussir.Parser.Types.Capability qualified as Cap
-import Reussir.Parser.Types.Expr qualified as Access (Access (..))
-import Reussir.Parser.Types.Expr qualified as Syn
-import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (WithSpan))
-import Reussir.Parser.Types.Stmt qualified as Syn
-import Reussir.Parser.Types.Type qualified as Syn
 
 introduceNewHoleInContext :: TypeBound -> SemiEff Type
 introduceNewHoleInContext bounds = do
@@ -174,7 +203,33 @@ elimTypeHoles expr = withMaybeSpan (exprSpan expr) $ do
         Assign e idx e' -> Assign <$> elimTypeHoles e <*> pure idx <*> elimTypeHoles e'
         IntrinsicCall path args -> IntrinsicCall path <$> mapM elimTypeHoles args
         Sequence subexprs -> Sequence <$> mapM elimTypeHoles subexprs
+        Match val dt -> Match <$> elimTypeHoles val <*> elimTypeHolesDT dt
     return $ expr{exprType = ty', exprKind = kind'}
+
+elimTypeHolesDT :: DecisionTree -> SemiEff DecisionTree
+elimTypeHolesDT DTUncovered = return DTUncovered
+elimTypeHolesDT DTUnreachable = return DTUnreachable
+elimTypeHolesDT (DTLeaf body bindings) = do
+    body' <- elimTypeHoles body
+    return $ DTLeaf body' bindings
+elimTypeHolesDT (DTGuard bindings guard trueBr falseBr) = do
+    guard' <- elimTypeHoles guard
+    trueBr' <- elimTypeHolesDT trueBr
+    falseBr' <- elimTypeHolesDT falseBr
+    return $ DTGuard bindings guard' trueBr' falseBr'
+elimTypeHolesDT (DTSwitch ref cases) = DTSwitch ref <$> elimTypeHolesCases cases
+
+elimTypeHolesCases :: DTSwitchCases -> SemiEff DTSwitchCases
+elimTypeHolesCases (DTSwitchInt m def) =
+    DTSwitchInt <$> mapM elimTypeHolesDT m <*> elimTypeHolesDT def
+elimTypeHolesCases (DTSwitchBool t f) =
+    DTSwitchBool <$> elimTypeHolesDT t <*> elimTypeHolesDT f
+elimTypeHolesCases (DTSwitchCtor cases def) =
+    DTSwitchCtor <$> mapM elimTypeHolesDT cases <*> elimTypeHolesDT def
+elimTypeHolesCases (DTSwitchString m def) =
+    DTSwitchString <$> mapM elimTypeHolesDT m <*> elimTypeHolesDT def
+elimTypeHolesCases (DTSwitchNullable j n) =
+    DTSwitchNullable <$> elimTypeHolesDT j <*> elimTypeHolesDT n
 
 -- | Infer the type of an expression that is inside a region
 inferWithRegion :: Syn.Expr -> SemiEff Expr
@@ -326,18 +381,26 @@ inferType (Syn.Cast targetType subExpr) = do
     targetType' <- evalType targetType
     innerExpr <- inferType subExpr
     innerTy <- runUnification $ force $ exprType innerExpr
+    targetTypeSatisfyIntBound <-
+        runUnification $ satisfyBounds targetType' [Class $ Path "Integral" []]
+    targetTypeSatisfyFloatBound <-
+        runUnification $ satisfyBounds targetType' [Class $ Path "FloatingPoint" []]
     targetTypeSatisfyNumBound <-
         runUnification $ satisfyBounds targetType' [Class $ Path "Num" []]
     if targetTypeSatisfyNumBound
         then do
-            innerTyHasExactNumBound <-
-                runUnification $ satisfyBounds innerTy [Class $ Path "Num" []]
+            innerTyHasNumBound <-
+                runUnification $ satisfyBounds innerTy [Class $ Path "Integral" []]
+            innerTyHasFloatBound <-
+                runUnification $ satisfyBounds innerTy [Class $ Path "FloatingPoint" []]
             case innerTy of
-                TypeHole _ | innerTyHasExactNumBound -> do
-                    unification <- runUnification $ unify innerTy targetType'
-                    if isJust unification
-                        then return innerExpr
-                        else error "Unification should have succeeded"
+                TypeHole _
+                    | (innerTyHasNumBound && targetTypeSatisfyIntBound)
+                        || (innerTyHasFloatBound && targetTypeSatisfyFloatBound) -> do
+                        unification <- runUnification $ unify innerTy targetType'
+                        case unification of
+                            Nothing -> return innerExpr
+                            Just e -> error $ "Unification should have succeeded, but failed with " ++ show e
                 _ -> numCast innerTy innerExpr targetType'
         else do
             addErrReportMsg "Cannot cast to non-numeric type"
@@ -401,7 +464,7 @@ inferType (Syn.AccessChain baseExpr accesses) = do
     exprWithSpan projectedTy $ Proj baseExpr' (UV.fromList $ reverse indices)
   where
     resolveAccess (currentTy, acc) access = do
-        (idx, fieldTy) <- resolveSingleAccess currentTy access
+        (idx, fieldTy) <- resolveProjection currentTy access
         return (fieldTy, idx : acc)
 -- Function call:
 --            Г |- f : (T1, T2, ..., Tn) -> T, Г |- ei : Ti
@@ -485,10 +548,53 @@ inferType (Syn.Assign dst field src) = do
             exprWithSpan TypeBottom Poison
 inferType (Syn.ExprSeq exprs) = do
     inferTypeForSequence exprs []
+inferType (Syn.Match scrutinee patterns) = do
+    scrutinee' <- inferType scrutinee
+    let matrix = initializePMMatrix patterns (exprType scrutinee')
+    let cps = TyckCPS inferType checkType withVariable
+    decisionTree <- translatePMToDT cps matrix
+
+    let leafTypes = collectLeafExprTypes decisionTree
+    matchType <- case leafTypes of
+        [] -> return TypeUnit
+        (t : ts) -> do
+            forM_ ts $ \t' -> do
+                failure <- runUnification $ unify t t'
+                case failure of
+                    Just f -> do
+                        filePath <- State.gets currentFile
+                        addErrReportMsgSeq
+                            "Type mismatch in match branches"
+                            (Just $ errorToReport f filePath)
+                    Nothing -> return ()
+            runUnification $ force t
+
+    exprWithSpan matchType $ Match scrutinee' decisionTree
 -- Advance the span in the context and continue on inner expression
 inferType (Syn.SpannedExpr (WithSpan expr start end)) =
     withSpan (start, end) $ inferType expr
 inferType _ = error "Not implemented"
+
+collectLeafExprTypes :: DecisionTree -> [Type]
+collectLeafExprTypes DTUncovered = []
+collectLeafExprTypes DTUnreachable = []
+collectLeafExprTypes (DTLeaf body _) = [exprType body]
+collectLeafExprTypes (DTGuard _ _ trueBr falseBr) =
+    collectLeafExprTypes trueBr ++ collectLeafExprTypes falseBr
+collectLeafExprTypes (DTSwitch _ cases) = collectLeafExprTypesCases cases
+
+collectLeafExprTypesCases :: DTSwitchCases -> [Type]
+collectLeafExprTypesCases (DTSwitchInt m def) =
+    concatMap collectLeafExprTypes (IntMap.elems m) ++ collectLeafExprTypes def
+collectLeafExprTypesCases (DTSwitchBool t f) =
+    collectLeafExprTypes t ++ collectLeafExprTypes f
+collectLeafExprTypesCases (DTSwitchCtor cases def) =
+    concatMap collectLeafExprTypes (V.toList cases) ++ collectLeafExprTypes def
+collectLeafExprTypesCases (DTSwitchString m def) =
+    concatMap (collectLeafExprTypes . snd) (HashMap.toList m)
+        ++ collectLeafExprTypes def
+collectLeafExprTypesCases (DTSwitchNullable j n) =
+    collectLeafExprTypes j ++ collectLeafExprTypes n
 
 checkType :: Syn.Expr -> Type -> SemiEff Expr
 checkType (Syn.SpannedExpr (WithSpan expr start end)) ty =
@@ -510,130 +616,135 @@ checkType expr ty = do
 
 -- | Helper function to infer the type of an intrinsic function call
 inferTypeForIntrinsicCall :: Syn.FuncCall -> SemiEff (Maybe Expr)
-inferTypeForIntrinsicCall Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallTyArgs = tyArgs, Syn.funcCallArgs = argExprs} = do
-    case path of
-        Path name ["core", "intrinsic", "math"] -> do
-            let floatUnary =
-                    [ "absf"
-                    , "acos"
-                    , "acosh"
-                    , "asin"
-                    , "asinh"
-                    , "atan"
-                    , "atanh"
-                    , "cbrt"
-                    , "ceil"
-                    , "cos"
-                    , "cosh"
-                    , "erf"
-                    , "erfc"
-                    , "exp"
-                    , "exp2"
-                    , "expm1"
-                    , "floor"
-                    , "log10"
-                    , "log1p"
-                    , "log2"
-                    , "round"
-                    , "roundeven"
-                    , "rsqrt"
-                    , "sin"
-                    , "sinh"
-                    , "sqrt"
-                    , "tan"
-                    , "tanh"
-                    , "trunc"
-                    ]
-            let checks = ["isfinite", "isinf", "isnan", "isnormal"]
-            let floatBinary = ["atan2", "copysign", "powf"]
+inferTypeForIntrinsicCall
+    Syn.FuncCall
+        { Syn.funcCallName = path
+        , Syn.funcCallTyArgs = tyArgs
+        , Syn.funcCallArgs = argExprs
+        } = do
+        case path of
+            Path name ["core", "intrinsic", "math"] -> do
+                let floatUnary =
+                        [ "absf"
+                        , "acos"
+                        , "acosh"
+                        , "asin"
+                        , "asinh"
+                        , "atan"
+                        , "atanh"
+                        , "cbrt"
+                        , "ceil"
+                        , "cos"
+                        , "cosh"
+                        , "erf"
+                        , "erfc"
+                        , "exp"
+                        , "exp2"
+                        , "expm1"
+                        , "floor"
+                        , "log10"
+                        , "log1p"
+                        , "log2"
+                        , "round"
+                        , "roundeven"
+                        , "rsqrt"
+                        , "sin"
+                        , "sinh"
+                        , "sqrt"
+                        , "tan"
+                        , "tanh"
+                        , "trunc"
+                        ]
+                let checks = ["isfinite", "isinf", "isnan", "isnormal"]
+                let floatBinary = ["atan2", "copysign", "powf"]
 
-            let isUnary = name `elem` floatUnary
-            let isCheck = name `elem` checks
-            let isBinary = name `elem` floatBinary
-            let isFMA = name == "fma"
-            let isFPowi = name == "fpowi"
+                let isUnary = name `elem` floatUnary
+                let isCheck = name `elem` checks
+                let isBinary = name `elem` floatBinary
+                let isFMA = name == "fma"
+                let isFPowi = name == "fpowi"
 
-            if isUnary || isCheck || isBinary || isFMA || isFPowi
-                then do
-                    -- Check arguments count
-                    -- Unary/Check: 1 arg + flag
-                    -- Binary/FPowi: 2 args + flag
-                    -- FMA: 3 args + flag
-                    let expectedArgs =
-                            if isUnary || isCheck
-                                then 2
-                                else
-                                    if isBinary || isFPowi
-                                        then 3
-                                        else 4 -- FMA
-                    if length argExprs /= expectedArgs
-                        then do
-                            addErrReportMsg $
-                                "Intrinsic function "
-                                    <> T.pack (show path)
-                                    <> " expects "
-                                    <> T.pack (show expectedArgs)
-                                    <> " arguments, but got "
-                                    <> T.pack (show (length argExprs))
-                            Just <$> exprWithSpan TypeBottom Poison
-                        else do
-                            -- Infer float type T
-                            floatTy <- case tyArgs of
-                                [Just ty] -> evalType ty
-                                [Nothing] -> introduceNewHoleInContext [Class $ Path "FloatingPoint" []]
-                                [] -> introduceNewHoleInContext [Class $ Path "FloatingPoint" []]
-                                _ -> do
-                                    addErrReportMsg "Intrinsic function expects exactly 0 or 1 type argument"
-                                    return TypeBottom
+                if isUnary || isCheck || isBinary || isFMA || isFPowi
+                    then do
+                        -- Check arguments count
+                        -- Unary/Check: 1 arg + flag
+                        -- Binary/FPowi: 2 args + flag
+                        -- FMA: 3 args + flag
+                        let expectedArgs =
+                                if isUnary || isCheck
+                                    then 2
+                                    else
+                                        if isBinary || isFPowi
+                                            then 3
+                                            else 4 -- FMA
+                        if length argExprs /= expectedArgs
+                            then do
+                                addErrReportMsg $
+                                    "Intrinsic function "
+                                        <> T.pack (show path)
+                                        <> " expects "
+                                        <> T.pack (show expectedArgs)
+                                        <> " arguments, but got "
+                                        <> T.pack (show (length argExprs))
+                                Just <$> exprWithSpan TypeBottom Poison
+                            else do
+                                -- Infer float type T
+                                floatTy <- case tyArgs of
+                                    [Just ty] -> evalType ty
+                                    [Nothing] -> introduceNewHoleInContext [Class $ Path "FloatingPoint" []]
+                                    [] -> introduceNewHoleInContext [Class $ Path "FloatingPoint" []]
+                                    _ -> do
+                                        addErrReportMsg "Intrinsic function expects exactly 0 or 1 type argument"
+                                        return TypeBottom
 
-                            -- Ensure T is FloatingPoint
-                            satisfyFloatBound <-
-                                runUnification $
-                                    satisfyBounds
-                                        floatTy
-                                        [Class $ Path "FloatingPoint" []]
+                                -- Ensure T is FloatingPoint
+                                satisfyFloatBound <-
+                                    runUnification $
+                                        satisfyBounds
+                                            floatTy
+                                            [Class $ Path "FloatingPoint" []]
 
-                            unless satisfyFloatBound $ do
-                                addErrReportMsg "Intrinsic function type argument must be a floating point type"
+                                unless satisfyFloatBound $ do
+                                    addErrReportMsg "Intrinsic function type argument must be a floating point type"
 
-                            -- Check arguments
-                            let argsToCheck = init argExprs
-                            let flagArg = last argExprs
+                                -- Check arguments
+                                let argsToCheck = init argExprs
+                                let flagArg = last argExprs
 
-                            args' <-
-                                if isFPowi
-                                    then case argsToCheck of
-                                        [base, exponentExpr] -> do
-                                            base' <- checkType base floatTy
-                                            -- exp must be i32
-                                            let i32 = TypeIntegral (Signed 32)
-                                            exp' <- checkType exponentExpr i32
-                                            return [base', exp']
-                                        _ -> error "unreachable: args count checked"
-                                    else mapM (`checkType` floatTy) argsToCheck
+                                args' <-
+                                    if isFPowi
+                                        then case argsToCheck of
+                                            [base, exponentExpr] -> do
+                                                base' <- checkType base floatTy
+                                                -- exp must be i32
+                                                let i32 = TypeIntegral (Signed 32)
+                                                exp' <- checkType exponentExpr i32
+                                                return [base', exp']
+                                            _ -> error "unreachable: args count checked"
+                                        else mapM (`checkType` floatTy) argsToCheck
 
-                            -- Check flag
-                            let i32 = TypeIntegral (Signed 32)
-                            flagArg' <- checkType flagArg i32
-                            case exprKind flagArg' of
-                                Constant _ -> return ()
-                                _ -> addErrReportMsg "Intrinsic flag must be a constant literal"
+                                -- Check flag
+                                let i32 = TypeIntegral (Signed 32)
+                                flagArg' <- checkType flagArg i32
+                                case exprKind flagArg' of
+                                    Constant _ -> return ()
+                                    _ -> addErrReportMsg "Intrinsic flag must be a constant literal"
 
-                            let retTy = if isCheck then TypeBool else floatTy
+                                let retTy = if isCheck then TypeBool else floatTy
 
-                            -- Construct IntrinsicCall. Type arguments are not stored explicitly;
-                            -- type information is carried by the (already checked) arguments and return type.
-                            let finalArgs = args' ++ [flagArg']
+                                -- Construct IntrinsicCall. Type arguments are not stored explicitly;
+                                -- type information is carried by the (already checked) arguments and return type.
+                                let finalArgs = args' ++ [flagArg']
 
-                            Just
-                                <$> exprWithSpan
-                                    retTy
-                                    IntrinsicCall
-                                        { intrinsicCallTarget = path
-                                        , intrinsicCallArgs = finalArgs
-                                        }
-                else return Nothing
-        _ -> return Nothing
+                                Just
+                                    <$> exprWithSpan
+                                        retTy
+                                        IntrinsicCall
+                                            { intrinsicCallTarget = path
+                                            , intrinsicCallArgs = finalArgs
+                                            }
+                    else return Nothing
+            _ -> return Nothing
 
 -- | Helper function to infer the type of a function call expression
 inferTypeForCallExpr :: Syn.FuncCall -> SemiEff Expr
@@ -643,76 +754,82 @@ inferTypeForCallExpr call = do
         Nothing -> inferTypeForNormalCall call
 
 inferTypeForNormalCall :: Syn.FuncCall -> SemiEff Expr
-inferTypeForNormalCall Syn.FuncCall{Syn.funcCallName = path, Syn.funcCallTyArgs = tyArgs, Syn.funcCallArgs = argExprs} = do
-    L.logTrace_ $ "Tyck: infer func call " <> T.pack (show path)
-    -- Lookup function
-    functionTable <- State.gets functions
-    getFunctionProto path functionTable >>= \case
-        Just proto -> do
-            let numGenerics = length (funcGenerics proto)
-            -- Allow empty type argument list as syntax sugar for all holes
-            let paddedTyArgs =
-                    if null tyArgs && numGenerics > 0
-                        then replicate numGenerics Nothing
-                        else tyArgs
-            insideRegion' <- State.gets insideRegion
-            when (not insideRegion' && funcIsRegional proto) $ do
-                addErrReportMsg "Cannot call regional function outside of region"
-            checkTypeArgsNum numGenerics paddedTyArgs $ do
-                bounds <- mapM (\(_, gid) -> runUnification $ getGenericBound gid) (funcGenerics proto)
-                tyArgs' <- zipWithM tyArgOrMetaHole paddedTyArgs bounds
-                L.logTrace_ $
-                    "Tyck: instantiated call generics for "
-                        <> T.pack (show path)
-                        <> ": "
-                        <> T.pack (show tyArgs')
-                let genericMap = functionGenericMap proto tyArgs'
-                let instantiatedArgTypes = map (\(_, ty) -> substituteGenericMap ty genericMap) (funcParams proto)
-                let expectedNumParams = length instantiatedArgTypes
-                checkArgsNum expectedNumParams $ do
-                    argExprs' <- zipWithM checkType argExprs instantiatedArgTypes
-                    let instantiatedRetType = substituteGenericMap (funcReturnType proto) genericMap
-                    exprWithSpan instantiatedRetType $
-                        FuncCall
-                            { funcCallTarget = path
-                            , funcCallArgs = argExprs'
-                            , funcCallTyArgs = tyArgs'
-                            , funcCallRegional = funcIsRegional proto
-                            }
-        Nothing -> do
-            addErrReportMsg $ "Function not found: " <> T.pack (show path)
-            exprWithSpan TypeBottom Poison
-  where
-    checkArgsNum :: Int -> SemiEff Expr -> SemiEff Expr
-    checkArgsNum expectedNum argAction = do
-        if expectedNum /= length argExprs
-            then do
-                addErrReportMsg $
-                    "Function "
-                        <> T.pack (show path)
-                        <> " expects "
-                        <> T.pack (show expectedNum)
-                        <> " arguments, but got "
-                        <> T.pack (show (length argExprs))
+inferTypeForNormalCall
+    Syn.FuncCall
+        { Syn.funcCallName = path
+        , Syn.funcCallTyArgs = tyArgs
+        , Syn.funcCallArgs = argExprs
+        } = do
+        L.logTrace_ $ "Tyck: infer func call " <> T.pack (show path)
+        -- Lookup function
+        functionTable <- State.gets functions
+        getFunctionProto path functionTable >>= \case
+            Just proto -> do
+                let numGenerics = length (funcGenerics proto)
+                -- Allow empty type argument list as syntax sugar for all holes
+                let paddedTyArgs =
+                        if null tyArgs && numGenerics > 0
+                            then replicate numGenerics Nothing
+                            else tyArgs
+                insideRegion' <- State.gets insideRegion
+                when (not insideRegion' && funcIsRegional proto) $ do
+                    addErrReportMsg "Cannot call regional function outside of region"
+                checkTypeArgsNum numGenerics paddedTyArgs $ do
+                    bounds <-
+                        mapM (\(_, gid) -> runUnification $ getGenericBound gid) (funcGenerics proto)
+                    tyArgs' <- zipWithM tyArgOrMetaHole paddedTyArgs bounds
+                    L.logTrace_ $
+                        "Tyck: instantiated call generics for "
+                            <> T.pack (show path)
+                            <> ": "
+                            <> T.pack (show tyArgs')
+                    let genericMap = functionGenericMap proto tyArgs'
+                    let instantiatedArgTypes = map (\(_, ty) -> substituteGenericMap ty genericMap) (funcParams proto)
+                    let expectedNumParams = length instantiatedArgTypes
+                    checkArgsNum expectedNumParams $ do
+                        argExprs' <- zipWithM checkType argExprs instantiatedArgTypes
+                        let instantiatedRetType = substituteGenericMap (funcReturnType proto) genericMap
+                        exprWithSpan instantiatedRetType $
+                            FuncCall
+                                { funcCallTarget = path
+                                , funcCallArgs = argExprs'
+                                , funcCallTyArgs = tyArgs'
+                                , funcCallRegional = funcIsRegional proto
+                                }
+            Nothing -> do
+                addErrReportMsg $ "Function not found: " <> T.pack (show path)
                 exprWithSpan TypeBottom Poison
-            else argAction
-    checkTypeArgsNum :: Int -> [Maybe Syn.Type] -> SemiEff Expr -> SemiEff Expr
-    checkTypeArgsNum expectedNum actualTyArgs paramAction = do
-        if expectedNum /= length actualTyArgs
-            then do
-                addErrReportMsg $
-                    "Function "
-                        <> T.pack (show path)
-                        <> " expects "
-                        <> T.pack (show expectedNum)
-                        <> " type arguments, but got "
-                        <> T.pack (show (length actualTyArgs))
-                exprWithSpan TypeBottom Poison
-            else paramAction
-    functionGenericMap :: FunctionProto -> [Type] -> IntMap.IntMap Type
-    functionGenericMap proto assignedTypes =
-        let genericIDs = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
-         in IntMap.fromList $ zip genericIDs assignedTypes
+      where
+        checkArgsNum :: Int -> SemiEff Expr -> SemiEff Expr
+        checkArgsNum expectedNum argAction = do
+            if expectedNum /= length argExprs
+                then do
+                    addErrReportMsg $
+                        "Function "
+                            <> T.pack (show path)
+                            <> " expects "
+                            <> T.pack (show expectedNum)
+                            <> " arguments, but got "
+                            <> T.pack (show (length argExprs))
+                    exprWithSpan TypeBottom Poison
+                else argAction
+        checkTypeArgsNum :: Int -> [Maybe Syn.Type] -> SemiEff Expr -> SemiEff Expr
+        checkTypeArgsNum expectedNum actualTyArgs paramAction = do
+            if expectedNum /= length actualTyArgs
+                then do
+                    addErrReportMsg $
+                        "Function "
+                            <> T.pack (show path)
+                            <> " expects "
+                            <> T.pack (show expectedNum)
+                            <> " type arguments, but got "
+                            <> T.pack (show (length actualTyArgs))
+                    exprWithSpan TypeBottom Poison
+                else paramAction
+        functionGenericMap :: FunctionProto -> [Type] -> IntMap.IntMap Type
+        functionGenericMap proto assignedTypes =
+            let genericIDs = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
+             in IntMap.fromList $ zip genericIDs assignedTypes
 
 -- Binary operations
 --          Г, Num U |- U <- x, y -> U
@@ -768,7 +885,8 @@ inferTypeBinOp op lhs rhs = case convertOp op of
                 rhs' <- checkType rhs lhsTy
                 exprWithSpan lhsTy $ Arith lhs' arithOp rhs'
             else do
-                addErrReportMsg $ "Binary arithmetic operation applied to non-numeric type: " <> T.show lhsTy
+                addErrReportMsg $
+                    "Binary arithmetic operation applied to non-numeric type: " <> T.show lhsTy
                 exprWithSpan TypeBottom Poison
     inferCmpOp cmpOp = do
         lhs' <- inferType lhs
@@ -786,80 +904,20 @@ inferTypeBinOp op lhs rhs = case convertOp op of
                 addErrReportMsg "Comparison operation applied to non-numeric type"
                 exprWithSpan TypeBottom Poison
 
-projectType :: Bool -> Type -> SemiEff Type
-projectType nullable ty@(TypeRecord path _ _) = do
-    record <- State.gets knownRecords
-    record' <- liftIO $ H.lookup record path
-    case record' of
-        Nothing -> do
-            addErrReportMsg $ "Unknown record: " <> T.pack (show path)
-            return TypeBottom
-        Just recordDef -> do
-            let defaultCap = recordDefaultCap recordDef
-            case (defaultCap, nullable) of
-                (Cap.Regional, True) -> return $ TypeNullable ty
-                (Cap.Regional, False) -> return ty
-                (Cap.Shared, True) -> return $ TypeNullable ty
-                (Cap.Shared, False) -> return ty
-                (_, True) -> do
-                    addErrReportMsg "Cannot make nullable value record"
-                    return TypeBottom
-                (_, False) -> return ty
-projectType _ ty = return ty
-
--- | Resolve a single field access on a record type to its index and projected type
-resolveSingleAccess :: Type -> Access.Access -> SemiEff (Int, Type)
-resolveSingleAccess currentTy access = do
-    case currentTy of
-        TypeRecord path args _ -> do
-            knownRecords <- State.gets knownRecords
-            liftIO (H.lookup knownRecords path) >>= \case
-                Just record -> do
-                    let subst = IntMap.fromList $ zip (map (\(_, GenericID gid) -> fromIntegral gid) $ recordTyParams record) args
-                    fieldsMaybe <- readIORef' (recordFields record)
-                    case (fieldsMaybe, access) of
-                        (Just (Named fields), Access.Named name) -> do
-                            case V.findIndex (\(WithSpan (n, _, _) _ _) -> n == name) fields of
-                                Just idx -> do
-                                    let WithSpan (_, fieldTy, nullable) _ _ = fields `V.unsafeIndex` idx
-                                    fieldTy' <- projectType nullable $ substituteGenericMap fieldTy subst
-                                    L.logTrace_ $ "Field type: " <> T.pack (show fieldTy')
-                                    return (idx, fieldTy')
-                                Nothing -> do
-                                    addErrReportMsg $ "Field not found: " <> unIdentifier name
-                                    return (-1, TypeBottom)
-                        (Just (Unnamed fields), Access.Unnamed idx) -> do
-                            let idxInt = fromIntegral idx
-                            case fields V.!? idxInt of
-                                Just (WithSpan (fieldTy, nullable) _ _) -> do
-                                    fieldTy' <- projectType nullable $ substituteGenericMap fieldTy subst
-                                    return (idxInt, fieldTy')
-                                Nothing -> do
-                                    addErrReportMsg $ "Field index out of bounds: " <> T.pack (show idx)
-                                    return (-1, TypeBottom)
-                        (Nothing, _) -> do
-                            addErrReportMsg "Record fields not populated"
-                            return (-1, TypeBottom)
-                        _ -> do
-                            addErrReportMsg "Invalid access type for record kind"
-                            return (-1, TypeBottom)
-                Nothing -> do
-                    addErrReportMsg $ "Unknown record: " <> T.pack (show path)
-                    return (-1, TypeBottom)
-        _ -> do
-            addErrReportMsg "Accessing field of non-record type"
-            return (-1, TypeBottom)
-
--- | Resolve a single field access for assignment. Returns (index, rawFieldType, isMutable).
--- The rawFieldType is the field type before any nullable wrapping.
-resolveSingleAccessForAssign :: Type -> Access.Access -> SemiEff (Int, Type, Bool)
+{- | Resolve a single field access for assignment. Returns (index, rawFieldType, isMutable).
+The rawFieldType is the field type before any nullable wrapping.
+-}
+resolveSingleAccessForAssign ::
+    Type -> Access.Access -> SemiEff (Int, Type, Bool)
 resolveSingleAccessForAssign currentTy access = do
     case currentTy of
         TypeRecord path args _ -> do
             knownRecords <- State.gets knownRecords
             liftIO (H.lookup knownRecords path) >>= \case
                 Just record -> do
-                    let subst = IntMap.fromList $ zip (map (\(_, GenericID gid) -> fromIntegral gid) $ recordTyParams record) args
+                    let subst =
+                            IntMap.fromList $
+                                zip (map (\(_, GenericID gid) -> fromIntegral gid) $ recordTyParams record) args
                     fieldsMaybe <- readIORef' (recordFields record)
                     case (fieldsMaybe, access) of
                         (Just (Named fields), Access.Named name) -> do
@@ -893,9 +951,10 @@ resolveSingleAccessForAssign currentTy access = do
             addErrReportMsg "Accessing field of non-record type"
             return (-1, TypeBottom, False)
 
--- | Extract the identifier from a simple variable expression.
--- Returns Just identifier if the expression is a simple variable (Var with no path segments),
--- otherwise returns Nothing.
+{- | Extract the identifier from a simple variable expression.
+Returns Just identifier if the expression is a simple variable (Var with no path segments),
+otherwise returns Nothing.
+-}
 extractSimpleVarName :: Syn.Expr -> Maybe Identifier
 extractSimpleVarName (Syn.Var (Path name [])) = Just name
 extractSimpleVarName (Syn.SpannedExpr (WithSpan e _ _)) = extractSimpleVarName e
@@ -922,7 +981,8 @@ inferTypeForNormalCtorCall
                         if null ctorTyArgs && numGenerics > 0
                             then replicate numGenerics Nothing
                             else ctorTyArgs
-                bounds <- mapM (\(_, gid) -> runUnification $ getGenericBound gid) (recordTyParams record)
+                bounds <-
+                    mapM (\(_, gid) -> runUnification $ getGenericBound gid) (recordTyParams record)
                 tyArgs' <- zipWithM tyArgOrMetaHole paddedTyArgs bounds
                 L.logTrace_ $
                     "Tyck: instantiated ctor generics for "
@@ -934,9 +994,17 @@ inferTypeForNormalCtorCall
 
                     fieldsMaybe <- readIORef' (recordFields record)
                     (fields, variantInfo) <- case (recordKind record, fieldsMaybe) of
-                        (StructKind, Just (Named fs)) -> return (V.toList $ V.map (\(WithSpan (n, t, f) _ _) -> (Just n, t, f)) fs, Nothing)
-                        (StructKind, Just (Unnamed fs)) -> return (V.toList $ V.map (\(WithSpan (t, f) _ _) -> (Nothing, t, f)) fs, Nothing)
-                        (EnumVariant parentPath idx, Just (Unnamed fs)) -> return (V.toList $ V.map (\(WithSpan (t, f) _ _) -> (Nothing, t, f)) fs, Just (parentPath, idx))
+                        (StructKind, Just (Named fs)) ->
+                            return
+                                (V.toList $ V.map (\(WithSpan (n, t, f) _ _) -> (Just n, t, f)) fs, Nothing)
+                        (StructKind, Just (Unnamed fs)) ->
+                            return
+                                (V.toList $ V.map (\(WithSpan (t, f) _ _) -> (Nothing, t, f)) fs, Nothing)
+                        (EnumVariant parentPath idx, Just (Unnamed fs)) ->
+                            return
+                                ( V.toList $ V.map (\(WithSpan (t, f) _ _) -> (Nothing, t, f)) fs
+                                , Just (parentPath, idx)
+                                )
                         (EnumVariant _ _, Just (Named _)) -> do
                             -- This should be unreachable based on current translation logic
                             addErrReportMsg "Enum variant cannot have named fields yet"
@@ -959,14 +1027,14 @@ inferTypeForNormalCtorCall
                         let fieldNames = [n | (Just n, _, _) <- fields]
                         varTable <- State.gets varTable
                         expandedCtorArgs <- forM ctorArgs $ \(mArgName, argExpr) -> case mArgName of
-                            Just _ -> return (mArgName, argExpr)  -- Already named, keep as-is
+                            Just _ -> return (mArgName, argExpr) -- Already named, keep as-is
                             Nothing -> case extractSimpleVarName argExpr of
                                 Just varName | varName `elem` fieldNames -> do
                                     -- Check if the variable exists in scope
                                     lookupVar varName varTable >>= \case
-                                        Just _ -> return (Just varName, argExpr)  -- Expand shorthand
-                                        Nothing -> return (Nothing, argExpr)  -- Not in scope, keep positional
-                                _ -> return (Nothing, argExpr)  -- Not a simple var or doesn't match field, keep positional
+                                        Just _ -> return (Just varName, argExpr) -- Expand shorthand
+                                        Nothing -> return (Nothing, argExpr) -- Not in scope, keep positional
+                                _ -> return (Nothing, argExpr) -- Not a simple var or doesn't match field, keep positional
 
                         -- Reconstruct an ordered list of syntactic expressions in the same order as required in the record
                         orderedArgsExprs <-
@@ -1004,7 +1072,8 @@ inferTypeForNormalCtorCall
                         flexivity <-
                             if recordIsRegional
                                 then do
-                                    unless insideRegion' $ addErrReportMsg "Cannot instantiate regional record outside of a region"
+                                    unless insideRegion' $
+                                        addErrReportMsg "Cannot instantiate regional record outside of a region"
                                     return Flex
                                 else return Irrelevant
                         let recordTy = case variantInfo of

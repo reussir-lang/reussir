@@ -22,20 +22,36 @@ module Reussir.Core.Semi.Context (
 
 import Control.Monad (forM_, unless)
 import Data.Function ((&))
-import Data.HashMap.Strict qualified as HashMap
-import Reussir.Core.Uitls.HashTable qualified as HU
 import Data.Int (Int64)
 import Data.Maybe (isJust)
-import Data.Text qualified as T
-import Data.Vector.Strict qualified as V
 import Effectful (Eff, IOE, inject, (:>))
-import Effectful.Log qualified as L
 import Effectful.Prim.IORef (Prim)
 import Effectful.Prim.IORef.Strict (newIORef', writeIORef')
 import Effectful.Reader.Static (runReader)
 import Effectful.State.Static.Local (runState)
+import Reussir.Diagnostic (Label (..))
+import Reussir.Diagnostic.Report (
+    Report (..),
+    addForegroundColorToCodeRef,
+    addForegroundColorToText,
+    annotatedCodeRef,
+    defaultCodeRef,
+    defaultText,
+ )
+import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
+
+import Data.HashMap.Strict qualified as HashMap
+import Data.Text qualified as T
+import Data.Vector.Strict qualified as V
+import Effectful.Log qualified as L
 import Effectful.State.Static.Local qualified as State
 import Reussir.Bridge qualified as B
+import Reussir.Parser.Prog qualified as Syn
+import Reussir.Parser.Types.Capability qualified as Syn
+import Reussir.Parser.Types.Stmt qualified as Syn
+import Reussir.Parser.Types.Type qualified as Syn
+import System.Console.ANSI.Types qualified as ANSI
+
 import Reussir.Core.Class (addClass, newDAG, populateDAG)
 import Reussir.Core.Data.Class (Class (Class), ClassDAG)
 import Reussir.Core.Data.FP (FloatingPointType (..))
@@ -50,7 +66,6 @@ import Reussir.Core.Data.Semi.Expr
 import Reussir.Core.Data.Semi.Function (FunctionProto (..), FunctionTable (..))
 import Reussir.Core.Data.Semi.Record
 import Reussir.Core.Data.Semi.Type (Flexivity (..), Type (..), TypeClassTable)
-import Reussir.Core.Data.Semi.Type qualified as Semi
 import Reussir.Core.Data.Semi.Unification (UnificationEff)
 import Reussir.Core.Data.String (StringUniqifier (StringUniqifier))
 import Reussir.Core.Data.UniqueID (ExprID (..), GenericID (..), VarID)
@@ -59,21 +74,9 @@ import Reussir.Core.Semi.Function (newFunctionTable)
 import Reussir.Core.Semi.Type (addClassToType, emptyTypeClassTable)
 import Reussir.Core.Semi.Unification (newHoleTable)
 import Reussir.Core.Semi.Variable (newVariable, newVariableTable, rollbackVar)
-import Reussir.Diagnostic (Label (..))
-import Reussir.Diagnostic.Report (
-    Report (..),
-    addForegroundColorToCodeRef,
-    addForegroundColorToText,
-    annotatedCodeRef,
-    defaultCodeRef,
-    defaultText,
- )
-import Reussir.Parser.Prog qualified as Syn
-import Reussir.Parser.Types.Capability qualified as Syn
-import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
-import Reussir.Parser.Types.Stmt qualified as Syn
-import Reussir.Parser.Types.Type qualified as Syn
-import System.Console.ANSI.Types qualified as ANSI
+
+import Reussir.Core.Data.Semi.Type qualified as Semi
+import Reussir.Core.Uitls.HashTable qualified as HU
 
 withSpan :: (Int64, Int64) -> SemiEff a -> SemiEff a
 withSpan span' cont = do
@@ -102,7 +105,10 @@ runUnification eff = do
 addErrReport :: Report -> GlobalSemiEff ()
 addErrReport report = do
     State.modify $ \st ->
-        st{translationReports = report : translationReports st, translationHasFailed = True}
+        st
+            { translationReports = report : translationReports st
+            , translationHasFailed = True
+            }
 
 addErrReportMsgSeq :: T.Text -> Maybe Report -> SemiEff ()
 addErrReportMsgSeq msg additonal = do
@@ -129,7 +135,8 @@ addErrReportMsgSeq msg additonal = do
 addErrReportMsg :: T.Text -> SemiEff ()
 addErrReportMsg msg = addErrReportMsgSeq msg Nothing
 
-populatePrimitives :: (IOE :> es, Prim :> es) => TypeClassTable -> ClassDAG -> Eff es ()
+populatePrimitives ::
+    (IOE :> es, Prim :> es) => TypeClassTable -> ClassDAG -> Eff es ()
 populatePrimitives typeClassTable typeClassDAG = do
     let numClass = Class $ Path "Num" []
     let floatClass = Class $ Path "FloatingPoint" []
@@ -263,7 +270,11 @@ evalType (Syn.TypeExpr path args) = do
                     Syn.Shared -> return $ TypeRecord path args' Irrelevant
                     Syn.Regional -> return $ TypeRecord path args' Regional
                     cap -> do
-                        addErrReportMsg $ "Unsupported capability " <> T.pack (show cap) <> " for record " <> T.pack (show path)
+                        addErrReportMsg $
+                            "Unsupported capability "
+                                <> T.pack (show cap)
+                                <> " for record "
+                                <> T.pack (show path)
                         return TypeBottom
                 Nothing -> do
                     addErrReportMsg $ "Unknown type: " <> T.pack (show path)
@@ -429,7 +440,8 @@ populateRecordFields stmt = withFreshLocalContext $ populateRecordFieldsImpl stm
 
 populateRecordFieldsImpl :: Syn.Stmt -> SemiEff ()
 populateRecordFieldsImpl (Syn.SpannedStmt s) = do
-    withSpan (spanStartOffset s, spanEndOffset s) $ populateRecordFieldsImpl (spanValue s)
+    withSpan (spanStartOffset s, spanEndOffset s) $
+        populateRecordFieldsImpl (spanValue s)
 populateRecordFieldsImpl (Syn.RecordStmt record) = do
     let name = Syn.recordName record
     let path = Path name [] -- TODO: handle module path
@@ -437,20 +449,35 @@ populateRecordFieldsImpl (Syn.RecordStmt record) = do
     mRecord <- HU.lookup knownRecords path
 
     case mRecord of
-        Nothing -> addErrReportMsg $ "Internal error: record not found during field population: " <> unIdentifier name
+        Nothing ->
+            addErrReportMsg $
+                "Internal error: record not found during field population: "
+                    <> unIdentifier name
         Just rec -> do
             let existingGenerics = recordTyParams rec
 
             withGenericContext existingGenerics $ do
                 (fields, variants) <- case Syn.recordFields record of
                     Syn.Named fs -> do
-                        fs' <- V.mapM (\(WithSpan (n, t, f) s e) -> (\(n', t', f') -> WithSpan (n', t', f') s e) <$> ((n,,f) <$> evalType t)) fs
+                        fs' <-
+                            V.mapM
+                                ( \(WithSpan (n, t, f) s e) -> (\(n', t', f') -> WithSpan (n', t', f') s e) <$> ((n,,f) <$> evalType t)
+                                )
+                                fs
                         return (Named fs', Nothing)
                     Syn.Unnamed fs -> do
-                        fs' <- V.mapM (\(WithSpan (t, f) s e) -> (\(t', f') -> WithSpan (t', f') s e) <$> ((,f) <$> evalType t)) fs
+                        fs' <-
+                            V.mapM
+                                ( \(WithSpan (t, f) s e) -> (\(t', f') -> WithSpan (t', f') s e) <$> ((,f) <$> evalType t)
+                                )
+                                fs
                         return (Unnamed fs', Nothing)
                     Syn.Variants vs -> do
-                        vs' <- V.mapM (\(WithSpan (n, ts) s e) -> (\(n', ts') -> WithSpan (n', ts') s e) <$> ((n,) <$> mapM evalType ts)) vs
+                        vs' <-
+                            V.mapM
+                                ( \(WithSpan (n, ts) s e) -> (\(n', ts') -> WithSpan (n', ts') s e) <$> ((n,) <$> mapM evalType ts)
+                                )
+                                vs
                         let names = V.map (\(WithSpan (n, _) s e) -> WithSpan n s e) vs'
                         return (Variants names, Just vs')
 
@@ -462,7 +489,9 @@ populateRecordFieldsImpl (Syn.RecordStmt record) = do
                             let variantPath = Path variantName [name]
                             mVariantRecord <- HU.lookup knownRecords variantPath
                             case mVariantRecord of
-                                Nothing -> addErrReportMsg $ "Internal error: variant record not found: " <> unIdentifier variantName
+                                Nothing ->
+                                    addErrReportMsg $
+                                        "Internal error: variant record not found: " <> unIdentifier variantName
                                 Just vRec -> do
                                     let fieldsWithSpan = V.map (\t -> WithSpan (t, False) s e) variantFields
                                     writeIORef' (recordFields vRec) (Just (Unnamed fieldsWithSpan))

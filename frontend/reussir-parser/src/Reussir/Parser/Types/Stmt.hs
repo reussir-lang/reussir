@@ -1,6 +1,7 @@
 module Reussir.Parser.Types.Stmt where
 
 import Data.Vector.Strict qualified as V
+
 import Reussir.Parser.Types.Capability (Capability)
 import Reussir.Parser.Types.Expr (Expr)
 import Reussir.Parser.Types.Lexer (Identifier, Path, WithSpan)

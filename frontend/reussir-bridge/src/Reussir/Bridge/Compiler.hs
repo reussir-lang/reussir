@@ -12,9 +12,11 @@ module Reussir.Bridge.Compiler (
 where
 
 import Data.ByteString (ByteString, useAsCString)
-import Data.ByteString.Unsafe qualified as BSU
 import Foreign.C.String
 import Foreign.C.Types
+
+import Data.ByteString.Unsafe qualified as BSU
+
 import Reussir.Bridge.Types
 
 --------------------------------------------------------------------------------
@@ -144,4 +146,3 @@ compileProgram
                                     featuresPtr
                                     (codeModelToC targetCodeModel)
                                     (relocationModelToC targetRelocationModel)
-

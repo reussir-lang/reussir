@@ -3,18 +3,20 @@
 module Main (main) where
 
 import Data.Function ((&))
-import Data.IntMap.Lazy qualified as IntMap
-import Data.Text.Lazy qualified as Text
 import Effectful (runEff)
-import Reussir.Diagnostic.Display
-import Reussir.Diagnostic.LineCache
-import Reussir.Diagnostic.Report
-import Reussir.Diagnostic.Repository
-import System.Console.ANSI.Types qualified as ANSI
 import System.Directory (doesFileExist)
 import System.IO (stdout)
 import Test.Tasty
 import Test.Tasty.HUnit
+
+import Data.IntMap.Lazy qualified as IntMap
+import Data.Text.Lazy qualified as Text
+import System.Console.ANSI.Types qualified as ANSI
+
+import Reussir.Diagnostic.Display
+import Reussir.Diagnostic.LineCache
+import Reussir.Diagnostic.Report
+import Reussir.Diagnostic.Repository
 
 main :: IO ()
 main = defaultMain tests
@@ -59,13 +61,19 @@ testSelectLinesOverlap = do
             , SelectedLine 2 "de" 4 6 1 2
             , SelectedLine 3 "fghi" 7 11 1 1
             ]
-    assertEqual "selectLines should return overlapping lines with scope info" expected selected
+    assertEqual
+        "selectLines should return overlapping lines with scope info"
+        expected
+        selected
 
 testSelectLinesNone :: Assertion
 testSelectLinesNone = do
     let content = Text.unlines ["abc", "de", "fghi"]
         lc = fromFile content
-    assertEqual "selectLines should return empty when no overlap" [] (selectLines lc 12 20)
+    assertEqual
+        "selectLines should return empty when no overlap"
+        []
+        (selectLines lc 12 20)
 
 testDisplay :: Assertion
 testDisplay = do

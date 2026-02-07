@@ -44,7 +44,9 @@ getProjectRoot = do
             else do
                 let parent = takeDirectory dir
                 if parent == dir
-                    then fail "Could not find project root (cabal.project not found). Please set REUSSIR_PROJECT_ROOT."
+                    then
+                        fail
+                            "Could not find project root (cabal.project not found). Please set REUSSIR_PROJECT_ROOT."
                     else findProjectRoot parent
 
 getBuildDir :: IO FilePath
@@ -65,7 +67,7 @@ getLibDir bdir = if isWindows then bdir </> "bin" else bdir </> "lib"
 getSharedLibName :: String -> String
 getSharedLibName name
     | isWindows = "lib" ++ name ++ ".dll"
-    | isDarwin  = "lib" ++ name ++ ".dylib"
+    | isDarwin = "lib" ++ name ++ ".dylib"
     | otherwise = "lib" ++ name ++ ".so"
 
 -------------------------------------------------------------------------------
@@ -90,7 +92,8 @@ configureCMake v = do
                 , "-DREUSSIR_ENABLE_TESTS=OFF"
                 , root
                 ]
-        (code, _out, err) <- readCreateProcessWithExitCode (proc "cmake" args){cwd = Just bdir} ""
+        (code, _out, err) <-
+            readCreateProcessWithExitCode (proc "cmake" args){cwd = Just bdir} ""
         case code of
             ExitSuccess -> notice v "CMake configuration successful"
             ExitFailure n -> die' v ("CMake failed (" ++ show n ++ "):\n" ++ err)
@@ -99,7 +102,10 @@ buildMLIRReussirBridge :: Verbosity -> IO FilePath
 buildMLIRReussirBridge v = do
     bdir <- getBuildDir
     notice v "Building MLIRReussirBridge..."
-    (code, out, err) <- readCreateProcessWithExitCode (proc "ninja" ["MLIRReussirBridge"]){cwd = Just bdir} ""
+    (code, out, err) <-
+        readCreateProcessWithExitCode
+            (proc "ninja" ["MLIRReussirBridge"]){cwd = Just bdir}
+            ""
     unless (null out) (notice v ("Ninja stdout:\n" ++ out))
     unless (null err) (notice v ("Ninja stderr:\n" ++ err))
     case code of
@@ -128,7 +134,7 @@ myConfHook (pkg, pbi) flags = do
     let libDir = getLibDir bdir
         rpathOpts
             | isWindows = []
-            | isDarwin  = ["-Wl,-rpath,@loader_path/../lib", "-Wl,-rpath," ++ libDir]
+            | isDarwin = ["-Wl,-rpath,@loader_path/../lib", "-Wl,-rpath," ++ libDir]
             | otherwise = ["-Wl,-rpath," ++ libDir]
         hookedLib =
             emptyBuildInfo
@@ -146,7 +152,8 @@ myConfHook (pkg, pbi) flags = do
     let pkgDesc = localPkgDescr lbi
         fixLib bi =
             bi
-                { includeDirs = includeDirs bi ++ map makeSymbolicPath [root </> "include", bdir </> "include"]
+                { includeDirs =
+                    includeDirs bi ++ map makeSymbolicPath [root </> "include", bdir </> "include"]
                 , extraLibDirs = extraLibDirs bi ++ map makeSymbolicPath [libDir]
                 , extraLibs = extraLibs bi ++ ["MLIRReussirBridge"]
                 , ldOptions = ldOptions bi ++ rpathOpts
@@ -155,7 +162,8 @@ myConfHook (pkg, pbi) flags = do
     pure lbi{localPkgDescr = pkgDesc'}
 
 -------------------------------------------------------------------------------
-myBuildHook :: PackageDescription -> LocalBuildInfo -> UserHooks -> BuildFlags -> IO ()
+myBuildHook ::
+    PackageDescription -> LocalBuildInfo -> UserHooks -> BuildFlags -> IO ()
 myBuildHook pkg lbi hooks flags = do
     let v = fromFlag (buildVerbosity flags)
     bdir <- getBuildDir

@@ -2,21 +2,22 @@
 
 module Main where
 
-import Data.Text qualified as T
-import Data.Text.IO qualified as TIO
 import Effectful (liftIO, runEff)
-import Effectful.Log qualified as L
 import Effectful.Prim (runPrim)
 import Log (LogLevel (..))
 import Options.Applicative
+import Reussir.Codegen.Context (TargetSpec (..))
+import Reussir.Parser.Prog (parseProg)
 import System.Exit (exitFailure)
 import Text.Megaparsec (errorBundlePretty, runParser)
 
+import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
+import Effectful.Log qualified as L
 import Reussir.Bridge qualified as B
 import Reussir.Codegen qualified as C
-import Reussir.Codegen.Context (TargetSpec (..))
+
 import Reussir.Core (translateProgToModule)
-import Reussir.Parser.Prog (parseProg)
 
 data Args = Args
     { argInputFile :: FilePath
@@ -32,10 +33,29 @@ argsParser =
     Args
         <$> strArgument (metavar "INPUT" <> help "Input file")
         <*> strOption (long "output" <> short 'o' <> metavar "OUTPUT" <> help "Output file")
-        <*> option parseOptLevel (long "opt-level" <> short 'O' <> value B.OptDefault <> help "Optimization level (none, default, aggressive, size, tpde)")
-        <*> option parseOutputTarget (long "target" <> short 't' <> value (Backend B.OutputObject) <> help "Output target (llvm-ir, asm, object)")
-        <*> option parseLogLevel (long "log-level" <> short 'l' <> value B.LogWarning <> help "Log level (error, warning, info, debug, trace)")
-        <*> strOption (long "module-name" <> short 'm' <> value "main" <> help "Module name")
+        <*> option
+            parseOptLevel
+            ( long "opt-level"
+                <> short 'O'
+                <> value B.OptDefault
+                <> help "Optimization level (none, default, aggressive, size, tpde)"
+            )
+        <*> option
+            parseOutputTarget
+            ( long "target"
+                <> short 't'
+                <> value (Backend B.OutputObject)
+                <> help "Output target (llvm-ir, asm, object)"
+            )
+        <*> option
+            parseLogLevel
+            ( long "log-level"
+                <> short 'l'
+                <> value B.LogWarning
+                <> help "Log level (error, warning, info, debug, trace)"
+            )
+        <*> strOption
+            (long "module-name" <> short 'm' <> value "main" <> help "Module name")
 
 parseOptLevel :: ReadM B.OptOption
 parseOptLevel = eitherReader $ \s -> case s of

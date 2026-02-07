@@ -2,18 +2,21 @@ module Reussir.Core.Full.Conversion where
 
 import Control.Monad (when)
 import Data.Foldable (forM_)
-import Data.HashTable.IO qualified as H
 import Effectful (Eff, IOE, inject, liftIO, (:>))
 import Effectful.Log (Log)
 import Effectful.Prim.IORef.Strict (Prim)
+
+import Data.HashTable.IO qualified as H
 import Effectful.State.Static.Local qualified as State
+
 import Reussir.Core.Data.Full.Context (FullContext)
 import Reussir.Core.Data.Generic (GenericSolution)
-import Reussir.Core.Data.Semi.Context qualified as Semi
-import Reussir.Core.Data.Semi.Function qualified as Semi
 import Reussir.Core.Full.Context (addError, emptyFullContext)
 import Reussir.Core.Full.Function (convertAllSemiFunctions)
 import Reussir.Core.Full.Record (convertSemiRecordTable)
+
+import Reussir.Core.Data.Semi.Context qualified as Semi
+import Reussir.Core.Data.Semi.Function qualified as Semi
 
 convertCtx ::
     (IOE :> es, Prim :> es, Log :> es) =>

@@ -3,11 +3,8 @@
 module Reussir.Core.Semi.Unification where
 
 import Control.Monad (when, zipWithM)
-import Data.HashSet qualified as HashSet
 import Data.Int (Int64)
 import Data.Maybe (catMaybes)
-import Data.Sequence qualified as Seq
-import Data.Text qualified as T
 import Effectful (Eff, (:>))
 import Effectful.Prim.IORef.Strict (
     IORef',
@@ -17,6 +14,17 @@ import Effectful.Prim.IORef.Strict (
     writeIORef',
  )
 import Effectful.Reader.Static (ask)
+import Reussir.Diagnostic (Report (..))
+import Reussir.Diagnostic.Report (
+    addBoldToText,
+    defaultCodeRef,
+    defaultText,
+ )
+
+import Data.HashSet qualified as HashSet
+import Data.Sequence qualified as Seq
+import Data.Text qualified as T
+
 import Reussir.Core.Class (isSuperClass, meetBound, subsumeBound)
 import Reussir.Core.Data.Class (Class (..), TypeBound)
 import Reussir.Core.Data.Generic (GenericState (..), GenericVar (..))
@@ -31,12 +39,6 @@ import Reussir.Core.Data.Semi.Unification (
  )
 import Reussir.Core.Data.UniqueID (GenericID (..), HoleID (..))
 import Reussir.Core.Semi.Type (getClassesOfType)
-import Reussir.Diagnostic (Report (..))
-import Reussir.Diagnostic.Report (
-    addBoldToText,
-    defaultCodeRef,
-    defaultText,
- )
 
 newHoleTable :: (Prim :> es) => Eff es HoleTable
 newHoleTable = HoleTable <$> newIORef' mempty
@@ -293,7 +295,10 @@ unify ty1 ty2 = do
                 else failMismatchNested t1 t2 "failed to unify record components" failures
         | otherwise =
             failMismatch t1 t2 $
-                "failed to unify record path " <> T.pack (show path1) <> " with " <> T.pack (show path2)
+                "failed to unify record path "
+                    <> T.pack (show path1)
+                    <> " with "
+                    <> T.pack (show path2)
     unifyForced TypeBool TypeBool = return Nothing
     unifyForced TypeStr TypeStr = return Nothing
     unifyForced TypeUnit TypeUnit = return Nothing
@@ -314,7 +319,8 @@ unify ty1 ty2 = do
             if null failures
                 then return Nothing
                 else failMismatchNested t1 t2 "failed to unify closure types" failures
-        | otherwise = failMismatch t1 t2 "failed to unify closure types with different arity"
+        | otherwise =
+            failMismatch t1 t2 "failed to unify closure types with different arity"
     -- auto coercion from bottom
     unifyForced TypeBottom _ = return Nothing
     unifyForced _ TypeBottom = return Nothing
@@ -323,7 +329,10 @@ unify ty1 ty2 = do
             then return Nothing
             else
                 failMismatch t1 t2 $
-                    "failed to unify generic types " <> T.pack (show g1) <> " with " <> T.pack (show g2)
+                    "failed to unify generic types "
+                        <> T.pack (show g1)
+                        <> " with "
+                        <> T.pack (show g2)
     unifyForced (TypeNullable t1) (TypeNullable t2) = do
         failure <- unify t1 t2
         case failure of
@@ -361,7 +370,9 @@ errorToReport failure path = go True failure
                                 ]
                         loc = case hSpan of
                             Just (s, e) ->
-                                let hint = FormattedText [defaultText "The meta hole was introduced at the following place"]
+                                let hint =
+                                        FormattedText
+                                            [defaultText "The meta hole was introduced at the following place"]
                                     ref = CodeRef (defaultCodeRef p s e) (fmap defaultText name)
                                  in hint <> Nested ref
                             Nothing -> mempty

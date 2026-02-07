@@ -22,16 +22,18 @@ module Reussir.Codegen.Context.Codegen (
 )
 where
 
-import Data.HashTable.IO qualified as H
 import Data.Int (Int64)
-import Data.Text qualified as T
-import Data.Text.Builder.Linear qualified as TB
 import Effectful as E (Eff, IOE, MonadIO (liftIO), (:>))
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader)
 import Effectful.State.Static.Local (State)
+
+import Data.HashTable.IO qualified as H
+import Data.Text qualified as T
+import Data.Text.Builder.Linear qualified as TB
 import Effectful.State.Static.Local qualified as E
 import Reussir.Bridge qualified as B
+
 import Reussir.Codegen.Context.Symbol (Symbol)
 import Reussir.Codegen.Location (Location)
 import Reussir.Codegen.Type.Record (Record)

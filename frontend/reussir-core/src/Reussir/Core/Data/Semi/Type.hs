@@ -1,14 +1,16 @@
 module Reussir.Core.Data.Semi.Type where
 
 import Data.HashSet (HashSet)
-import Data.HashTable.IO qualified as H
 import Data.Hashable (Hashable (..))
 import Data.List (intercalate)
+import Reussir.Parser.Types.Lexer (Path (..))
+
+import Data.HashTable.IO qualified as H
+
 import Reussir.Core.Data.Class
 import Reussir.Core.Data.FP
 import Reussir.Core.Data.Integral
 import Reussir.Core.Data.UniqueID (GenericID, HoleID)
-import Reussir.Parser.Types.Lexer (Path (..))
 
 data Flexivity = Irrelevant | Regional | Flex | Rigid
     deriving (Eq, Ord)

@@ -4,10 +4,10 @@ module Reussir.Parser.Stmt where
 
 import Data.Maybe
 
+import Data.Vector.Strict qualified as V
+
 import Reussir.Parser.Expr
 import Reussir.Parser.Lexer
-
-import Data.Vector.Strict qualified as V
 import Reussir.Parser.Type (parseType)
 import Reussir.Parser.Types hiding (space)
 import Reussir.Parser.Types.Capability (Capability (Shared))
@@ -22,10 +22,16 @@ parseVis =
         Nothing -> return Private
 
 parseFieldFlag :: Parser Bool
-parseFieldFlag = option False (True <$ (char '[' *> space *> string "field" <* space <* char ']' <* space))
+parseFieldFlag =
+    option
+        False
+        (True <$ (char '[' *> space *> string "field" <* space <* char ']' <* space))
 
 parseFlexFlag :: Parser Bool
-parseFlexFlag = option False (True <$ (char '[' *> space *> string "flex" <* space <* char ']' <* space))
+parseFlexFlag =
+    option
+        False
+        (True <$ (char '[' *> space *> string "flex" <* space <* char ']' <* space))
 
 parseTypedParam :: Parser (Identifier, Type, Bool)
 parseTypedParam = do
@@ -45,7 +51,9 @@ parseStructDecRest vis = do
     name <- parseIdentifier
     tyvars <- optional $ openAngle *> parseGenericParam `sepBy` comma <* closeAngle
     fields <- try parseNamedFields <|> parseUnnamedFields
-    return $ RecordStmt $ Record name (fromMaybe [] tyvars) fields StructKind vis cap
+    return $
+        RecordStmt $
+            Record name (fromMaybe [] tyvars) fields StructKind vis cap
 
 parseUnnamedFields :: Parser RecordFields
 parseUnnamedFields = do
@@ -87,7 +95,10 @@ parseFuncDefRest vis = do
     ret <- closeParen *> optional (string "->" *> space *> parseRetType)
     body <- (Just <$> parseBody) <|> (Nothing <$ semicolon)
 
-    return (FunctionStmt $ Function vis name (fromMaybe [] tyargs) (fromMaybe [] args) ret isRegional body)
+    return
+        ( FunctionStmt $
+            Function vis name (fromMaybe [] tyargs) (fromMaybe [] args) ret isRegional body
+        )
   where
     parseRetType = do
         flx <- parseFlexFlag
@@ -97,7 +108,9 @@ parseFuncDefRest vis = do
 parseEnumConstructor :: Parser (Identifier, V.Vector Type)
 parseEnumConstructor = do
     name <- parseIdentifier
-    tys <- fmap V.fromList <$> optional (openParen *> parseType `sepBy` comma <* closeParen)
+    tys <-
+        fmap V.fromList
+            <$> optional (openParen *> parseType `sepBy` comma <* closeParen)
     return (name, fromMaybe V.empty tys)
 
 parseEnumDec :: Parser Stmt

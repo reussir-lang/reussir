@@ -1,11 +1,13 @@
 module Reussir.Core.Data.Semi.Unification where
 
 import Data.Int (Int64)
-import Data.Sequence qualified as Seq
-import Data.Text qualified as T
 import Effectful (Eff, IOE)
 import Effectful.Prim.IORef.Strict (IORef', Prim)
 import Effectful.Reader.Static (Reader)
+
+import Data.Sequence qualified as Seq
+import Data.Text qualified as T
+
 import Reussir.Core.Data.Class (ClassDAG, TypeBound)
 import Reussir.Core.Data.Generic (GenericState)
 import Reussir.Core.Data.Semi.Type (Type, TypeClassTable)
@@ -34,12 +36,14 @@ data ErrorKind
         , candidateHoleName :: Maybe T.Text
         }
     | URMisMatchedType Type Type
+    deriving (Show)
 
 data Failure = Failure
     { errorKind :: ErrorKind
     , unificationContext :: T.Text
     , innerFailures :: [Failure]
     }
+    deriving (Show)
 
 type UnificationEff =
     Eff

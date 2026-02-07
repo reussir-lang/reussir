@@ -3,10 +3,6 @@
 module Reussir.Core.Full.Error where
 
 import Data.Function ((&))
-import Data.Text qualified as T
-import Reussir.Core.Data.Full.Error (ErrorKind (..))
-import Reussir.Core.Data.Full.Error qualified as Full
-import Reussir.Core.Data.UniqueID (GenericID (..))
 import Reussir.Diagnostic (Label (..))
 import Reussir.Diagnostic.Report (
     Report (..),
@@ -16,7 +12,14 @@ import Reussir.Diagnostic.Report (
     defaultCodeRef,
     defaultText,
  )
+
+import Data.Text qualified as T
 import System.Console.ANSI.Types qualified as ANSI
+
+import Reussir.Core.Data.Full.Error (ErrorKind (..))
+import Reussir.Core.Data.UniqueID (GenericID (..))
+
+import Reussir.Core.Data.Full.Error qualified as Full
 
 errorToReport :: Full.Error -> FilePath -> Report
 errorToReport (Full.Error (start, end) kind) file =
@@ -42,7 +45,10 @@ errorKindToText (InvalidNullableType ty) =
 errorKindToText (UnknownGeneric (GenericID gid)) =
     "Unknown generic ID: " <> T.pack (show gid)
 errorKindToText (InvalidCapability path cap) =
-    "Invalid capability " <> T.pack (show cap) <> " for record " <> T.pack (show path)
+    "Invalid capability "
+        <> T.pack (show cap)
+        <> " for record "
+        <> T.pack (show path)
 errorKindToText InvalidAssignSourceCapability =
     "Assignment source must be Nullable<Rc<T, Flex>> (flex capability required)"
 errorKindToText InvalidAssignSourceNotRegional =

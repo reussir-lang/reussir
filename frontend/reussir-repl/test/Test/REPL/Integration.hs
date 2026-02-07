@@ -7,17 +7,24 @@ import Control.Exception (SomeException, catch)
 import Data.ByteString (ByteString)
 import Data.Int (Int64)
 import Data.String (IsString (fromString))
-import Data.Text qualified as T
 import Foreign (FunPtr, Ptr, Storable (..), alloca, nullPtr)
+import Foreign.C (CChar, CSize)
 import Foreign.C.String (peekCStringLen)
 import Foreign.Ptr (castPtrToFunPtr)
+import Reussir.Bridge (
+    LogLevel (..),
+    OptOption (..),
+    addModule,
+    lookupSymbol,
+    withJIT,
+ )
+import Reussir.Core.REPL
+import Reussir.Parser.Expr (parseExpr)
 import Test.Tasty
 import Test.Tasty.HUnit
 import Text.Megaparsec (runParser)
-import Reussir.Bridge (LogLevel (..), OptOption (..), addModule, lookupSymbol, withJIT)
-import Reussir.Core.REPL
-import Reussir.Parser.Expr (parseExpr)
-import Foreign.C (CChar, CSize)
+
+import Data.Text qualified as T
 
 -- Foreign import for calling JIT-compiled functions
 foreign import ccall "dynamic"
@@ -48,26 +55,30 @@ tests :: TestTree
 tests =
     testGroup
         "Integration Tests"
-        [ testGroup "JIT Execution - Integers"
+        [ testGroup
+            "JIT Execution - Integers"
             [ testCase "Execute integer literal" testExecIntLiteral
             , testCase "Execute integer addition" testExecIntAddition
             , testCase "Execute integer multiplication" testExecIntMultiplication
             , testCase "Execute complex integer expression" testExecComplexInt
             , testCase "Execute negative result" testExecNegative
             ]
-        , testGroup "JIT Execution - Floating Point"
+        , testGroup
+            "JIT Execution - Floating Point"
             [ testCase "Execute float literal" testExecFloatLiteral
             , testCase "Execute float addition" testExecFloatAddition
             , testCase "Execute float multiplication" testExecFloatMultiplication
             ]
-        , testGroup "JIT Execution - Strings"
+        , testGroup
+            "JIT Execution - Strings"
             [ testCase "Execute simple string literal" testExecSimpleString
             , testCase "Execute empty string literal" testExecEmptyString
             , testCase "Execute string with spaces" testExecStringWithSpaces
             , testCase "Execute string with escape chars" testExecStringWithEscapes
             , testCase "Execute string from if-expression" testExecStringFromIf
             ]
-        , testGroup "State Persistence"
+        , testGroup
+            "State Persistence"
             [ testCase "Multiple expressions share state" testMultipleExpressions
             , testCase "Counter persists across expressions" testCounterPersistence
             ]
@@ -270,7 +281,7 @@ testExecStringFromIf = do
     case result1 of
         Left err -> assertFailure $ "true branch failed: " ++ err
         Right val -> val @?= "yes"
-    
+
     result2 <- compileAndExecStr "if false { \"yes\" } else { \"no\" }"
     case result2 of
         Left err -> assertFailure $ "false branch failed: " ++ err
@@ -283,12 +294,12 @@ testMultipleExpressions = do
     case result1 of
         Left err -> assertFailure $ "First expression failed: " ++ err
         Right val -> val @?= 10
-    
+
     result2 <- compileAndExecInt "20 + 5"
     case result2 of
         Left err -> assertFailure $ "Second expression failed: " ++ err
         Right val -> val @?= 25
-    
+
     result3 <- compileAndExecInt "3 * 3 * 3"
     case result3 of
         Left err -> assertFailure $ "Third expression failed: " ++ err
@@ -298,7 +309,7 @@ testCounterPersistence :: Assertion
 testCounterPersistence = do
     state <- initReplState LogWarning "<test>"
     replCounter state @?= 0
-    
+
     -- First expression
     case runParser parseExpr "<test>" ("1" :: T.Text) of
         Left _ -> assertFailure "Parse failed"
@@ -308,7 +319,7 @@ testCounterPersistence = do
                 Left err -> assertFailure $ show err
                 Right (_, state1, _) -> do
                     replCounter state1 @?= 1
-                    
+
                     -- Second expression using updated state
                     case runParser parseExpr "<test>" ("2" :: T.Text) of
                         Left _ -> assertFailure "Parse failed"

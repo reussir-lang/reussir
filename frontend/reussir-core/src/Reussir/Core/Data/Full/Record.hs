@@ -1,15 +1,17 @@
 module Reussir.Core.Data.Full.Record where
 
-import Data.HashTable.IO qualified as H
-
 import Data.Int (Int64)
-import Data.Vector.Strict qualified as V
 import Reussir.Codegen.Context.Symbol (Symbol)
 import Reussir.Codegen.Type.Data (Capability)
+import Reussir.Parser.Types.Lexer (Identifier, Path)
+
+import Data.HashTable.IO qualified as H
+import Data.Vector.Strict qualified as V
+
 import Reussir.Core.Data.Full.Type (Type)
+
 import Reussir.Core.Data.Semi.Record qualified as Semi
 import Reussir.Core.Data.Semi.Type qualified as Semi
-import Reussir.Parser.Types.Lexer (Identifier, Path)
 
 type FieldFlag = Bool
 

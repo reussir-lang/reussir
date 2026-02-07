@@ -2,6 +2,7 @@ module Reussir.Diagnostic.Report where
 
 import Data.Int (Int64)
 import Data.Text (Text)
+
 import System.Console.ANSI.Types qualified as ANSI
 
 data TextWithFormat = TextWithFormat

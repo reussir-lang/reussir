@@ -1,38 +1,46 @@
 module Main where
 
 import Control.Monad (forM_)
-import Data.HashTable.IO qualified as H
-import Data.Text qualified as T
-import Data.Text.IO qualified as TIO
+import Data.List (nub)
 import Effectful (inject, liftIO, runEff)
-import Effectful.Log qualified as L
 import Effectful.Prim (runPrim)
 import Effectful.State.Static.Local (runState)
-import Effectful.State.Static.Local qualified as State
 import GHC.IO.Handle.FD (stderr)
 import Log (LogLevel (..))
-import Log.Backend.StandardOutput qualified as L
 import Options.Applicative
 import Prettyprinter (hardline, unAnnotate)
 import Prettyprinter.Render.Terminal (putDoc)
+import Reussir.Diagnostic (createRepository, displayReport)
+import Reussir.Parser.Prog (parseProg)
+import Reussir.Parser.Types.Lexer (WithSpan (..))
+import System.Exit (exitFailure, exitSuccess)
+import System.IO (hIsTerminalDevice, hPutStrLn, stdout)
+import Text.Megaparsec (errorBundlePretty, runParser)
+
+import Data.HashTable.IO qualified as H
+import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
+import Effectful.Log qualified as L
+import Effectful.State.Static.Local qualified as State
+import Log.Backend.StandardOutput qualified as L
 import Reussir.Bridge qualified as B
+import Reussir.Parser.Types.Stmt qualified as Syn
+
 import Reussir.Core.Data.Full.Context (FullContext (..))
 import Reussir.Core.Data.Semi.Context (SemiContext (..))
 import Reussir.Core.Data.Semi.Function (FunctionTable (..))
 import Reussir.Core.Full.Context (reportAllErrors)
 import Reussir.Core.Full.Conversion (convertCtx)
-import Reussir.Core.Full.Pretty qualified as Full
-import Reussir.Core.Semi.Context (emptySemiContext, populateRecordFields, scanStmt)
+import Reussir.Core.Semi.Context (
+    emptySemiContext,
+    populateRecordFields,
+    scanStmt,
+ )
 import Reussir.Core.Semi.FlowAnalysis (solveAllGenerics)
-import Reussir.Core.Semi.Pretty qualified as Semi
 import Reussir.Core.Semi.Tyck (checkFuncType)
-import Reussir.Diagnostic (createRepository, displayReport)
-import Reussir.Parser.Prog (parseProg)
-import Reussir.Parser.Types.Lexer (WithSpan (..))
-import Reussir.Parser.Types.Stmt qualified as Syn
-import System.Exit (exitFailure, exitSuccess)
-import System.IO (hIsTerminalDevice, hPutStrLn, stdout)
-import Text.Megaparsec (errorBundlePretty, runParser)
+
+import Reussir.Core.Full.Pretty qualified as Full
+import Reussir.Core.Semi.Pretty qualified as Semi
 
 data ElabMode = SemiMode | FullMode
     deriving (Eq, Show)
@@ -149,7 +157,7 @@ runSemiElab args prog = do
                     doc <- Semi.prettyColored proto
                     liftIO $ putDoc' (doc <> hardline)
 
-    forM_ (translationReports finalState) $ \report -> do
+    forM_ (nub $ translationReports finalState) $ \report -> do
         runEff $ displayReport report repository 0 stderr
         hPutStrLn stderr ""
 
@@ -190,7 +198,7 @@ runFullElab args prog = do
                     return (Just fullCtx, finalSemiState)
 
     -- Report errors from Semi Elab
-    forM_ (translationReports finalSemiCtx) $ \report -> do
+    forM_ (nub $ translationReports finalSemiCtx) $ \report -> do
         runEff $ displayReport report repository 0 stderr
 
     let putDoc' doc = do

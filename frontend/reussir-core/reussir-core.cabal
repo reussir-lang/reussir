@@ -48,8 +48,10 @@ library
         Reussir.Core.Semi.Mangle
         Reussir.Core.Semi.Context
         Reussir.Core.Semi.Tyck
+        Reussir.Core.Semi.Projection
         Reussir.Core.Semi.FlowAnalysis
         Reussir.Core.Semi.Pretty
+        Reussir.Core.Semi.PatternMatch
         Reussir.Core.Full.Record
         Reussir.Core.Full.Type
         Reussir.Core.Full.Context
@@ -91,7 +93,9 @@ library
                       bytestring,
                       text-builder-linear,
                       idn,
-                      vector
+                      vector,
+                      sort,
+                      rrb-vector
     hs-source-dirs:   src
     default-language: GHC2024
 
@@ -145,6 +149,7 @@ test-suite reussir-core-test
         Test.Reussir.Core.Class
         Test.Reussir.Core.String
         Test.Reussir.Core.Semi.Mangle
+        Test.Reussir.Core.Semi.PatternMatch
     build-depends:
         base ^>=4.20.2.0,
         reussir-core,
@@ -156,4 +161,10 @@ test-suite reussir-core-test
         effectful-core,
         reussir-parser,
         hashtables,
-        text-builder-linear
+        text-builder-linear,
+        unordered-containers,
+        vector,
+        log-effectful,
+        reussir-bridge,
+        rrb-vector,
+        log-base

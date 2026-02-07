@@ -10,10 +10,11 @@ module Reussir.Codegen.Context.Symbol (
 import Data.Hashable (Hashable)
 import Data.Interned (Uninternable (unintern), intern)
 import Data.Interned.Text (InternedText)
-import Data.Text qualified as T
-import Data.Text.Builder.Linear qualified as TB
 import Effectful.Dispatch.Dynamic (HasCallStack)
 import Unicode.Char.Identifiers (isXIDContinue, isXIDStart)
+
+import Data.Text qualified as T
+import Data.Text.Builder.Linear qualified as TB
 
 newtype Symbol = Symbol InternedText
     deriving (Eq, Show, Hashable)

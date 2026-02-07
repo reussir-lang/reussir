@@ -2,19 +2,26 @@ module Reussir.Core.Class where
 
 import Control.Monad (filterM, forM, forM_, when)
 import Data.Array (Array, listArray, (!))
-import Data.HashTable.IO qualified as H
 import Data.Int (Int64)
-import Data.IntSet qualified as IntSet
 import Data.List (maximumBy)
-import Data.Map.Strict qualified as Map
 import Data.Maybe (listToMaybe)
 import Data.Ord (comparing)
 import Data.Sequence (Seq (..), (<|))
-import Data.Sequence qualified as Seq
-import Data.Set qualified as Set
 import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
 import Effectful.Prim (Prim)
-import Effectful.Prim.IORef.Strict (modifyIORef', newIORef', readIORef', writeIORef')
+import Effectful.Prim.IORef.Strict (
+    modifyIORef',
+    newIORef',
+    readIORef',
+    writeIORef',
+ )
+
+import Data.HashTable.IO qualified as H
+import Data.IntSet qualified as IntSet
+import Data.Map.Strict qualified as Map
+import Data.Sequence qualified as Seq
+import Data.Set qualified as Set
+
 import Reussir.Core.Data.Class (Class, ClassDAG (..), ClassNode (..), TypeBound)
 
 newDAG :: (IOE :> es, Prim :> es) => Eff es ClassDAG
@@ -252,7 +259,8 @@ isSuperClassSlow dag parentID childID = do
                                         search worklist' (IntSet.insert u visited)
             search (Seq.singleton childID) IntSet.empty
 
-meetClass :: (IOE :> es, Prim :> es) => ClassDAG -> Class -> Class -> Eff es TypeBound
+meetClass ::
+    (IOE :> es, Prim :> es) => ClassDAG -> Class -> Class -> Eff es TypeBound
 meetClass dag c1 c2 = do
     sup12 <- isSuperClass dag c1 c2
     if sup12
@@ -263,7 +271,9 @@ meetClass dag c1 c2 = do
                 then pure [c1]
                 else pure [c1, c2]
 
-meetBound :: (IOE :> es, Prim :> es) => ClassDAG -> TypeBound -> TypeBound -> Eff es TypeBound
+meetBound ::
+    (IOE :> es, Prim :> es) =>
+    ClassDAG -> TypeBound -> TypeBound -> Eff es TypeBound
 meetBound dag b1 b2 = do
     let candidates = Set.toList $ Set.fromList (b1 ++ b2)
     filterM
@@ -271,7 +281,10 @@ meetBound dag b1 b2 = do
             -- Keep c if it is NOT a superclass of any other candidate c'
             -- i.e. for all c' != c, not (isSuperClass c c')
             -- Equivalently: not (exists c' != c s.t. isSuperClass c c')
-            isRedundant <- existsM (\c' -> if c == c' then pure False else isSuperClass dag c c') candidates
+            isRedundant <-
+                existsM
+                    (\c' -> if c == c' then pure False else isSuperClass dag c c')
+                    candidates
             pure (not isRedundant)
         )
         candidates

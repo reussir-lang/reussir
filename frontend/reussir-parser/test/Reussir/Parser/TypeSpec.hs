@@ -53,7 +53,8 @@ spec = do
 
     describe "parseTypeExpr" $ do
         it "parses simple type" $
-            parse parseTypeExpr "" "MyType" `shouldParse` TypeExpr (Path (Identifier "MyType") []) []
+            parse parseTypeExpr "" "MyType"
+                `shouldParse` TypeExpr (Path (Identifier "MyType") []) []
 
         it "parses qualified type" $
             parse parseTypeExpr "" "std::vec::Vec"

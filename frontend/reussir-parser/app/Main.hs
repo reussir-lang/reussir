@@ -1,15 +1,16 @@
 module Main where
 
-import Reussir.Parser.Prog
-import Reussir.Parser.Types
-import Reussir.Parser.Pretty (PrettyColored (..))
-
-import Data.Text.IO qualified as T
+import Prettyprinter
+import Prettyprinter.Render.Terminal
 import System.Environment
 import System.Exit
 import System.IO (hIsTerminalDevice, stdout)
-import Prettyprinter
-import Prettyprinter.Render.Terminal
+
+import Data.Text.IO qualified as T
+
+import Reussir.Parser.Pretty (PrettyColored (..))
+import Reussir.Parser.Prog
+import Reussir.Parser.Types
 
 main :: IO ()
 main =

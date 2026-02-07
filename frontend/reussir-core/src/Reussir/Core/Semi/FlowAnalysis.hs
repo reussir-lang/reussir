@@ -3,26 +3,38 @@
 module Reussir.Core.Semi.FlowAnalysis where
 
 import Control.Monad (forM_, zipWithM_)
+import Effectful (liftIO)
+import Effectful.Prim.IORef.Strict (readIORef')
+import Reussir.Diagnostic.Report (Report (..), defaultText)
+import Reussir.Parser.Types.Lexer (Identifier, WithSpan (..))
+
 import Data.HashTable.IO qualified as H
 import Data.IntSet qualified as IntSet
 import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
-import Effectful (liftIO)
 import Effectful.Log qualified as L
-import Effectful.Prim.IORef.Strict (readIORef')
 import Effectful.State.Static.Local qualified as State
+
 import Reussir.Core.Data.Generic (GenericSolution)
 import Reussir.Core.Data.Semi.Context (GlobalSemiEff, SemiContext (..))
-import Reussir.Core.Data.Semi.Expr (Expr (..), ExprKind (..))
+import Reussir.Core.Data.Semi.Expr (
+    DTSwitchCases (..),
+    DecisionTree (..),
+    Expr (..),
+    ExprKind (..),
+ )
 import Reussir.Core.Data.Semi.Function (FunctionProto (..), FunctionTable (..))
 import Reussir.Core.Data.Semi.Record (Record (..), RecordFields (..))
 import Reussir.Core.Data.Semi.Type (Type (..))
 import Reussir.Core.Data.UniqueID (GenericID (..))
-import Reussir.Core.Generic (addConcreteFlow, addCtorLink, addDirectLink, solveGeneric)
+import Reussir.Core.Generic (
+    addConcreteFlow,
+    addCtorLink,
+    addDirectLink,
+    solveGeneric,
+ )
 import Reussir.Core.Semi.Context (addErrReport)
 import Reussir.Core.Semi.Type (collectGenerics, isConcrete)
-import Reussir.Diagnostic.Report (Report (..), defaultText)
-import Reussir.Parser.Types.Lexer (Identifier, WithSpan (..))
 
 -- Recursively analyze generic flow in an expression
 -- We focus on function call and ctor call: at each call site, we examine:
@@ -93,6 +105,34 @@ analyzeGenericFlowInExpr expr = do
         NullableCall Nothing -> pure ()
         Assign dst _ src -> analyzeGenericFlowInExpr dst >> analyzeGenericFlowInExpr src
         IntrinsicCall _ args -> mapM_ analyzeGenericFlowInExpr args
+        Match val dt -> analyzeGenericFlowInExpr val >> analyzeGenericFlowInDT dt
+
+analyzeGenericFlowInDT :: DecisionTree -> GlobalSemiEff ()
+analyzeGenericFlowInDT DTUncovered = pure ()
+analyzeGenericFlowInDT DTUnreachable = pure ()
+analyzeGenericFlowInDT (DTLeaf body _) = analyzeGenericFlowInExpr body
+analyzeGenericFlowInDT (DTGuard _ guard trueBr falseBr) = do
+    analyzeGenericFlowInExpr guard
+    analyzeGenericFlowInDT trueBr
+    analyzeGenericFlowInDT falseBr
+analyzeGenericFlowInDT (DTSwitch _ cases) = analyzeGenericFlowInSwitchCases cases
+
+analyzeGenericFlowInSwitchCases :: DTSwitchCases -> GlobalSemiEff ()
+analyzeGenericFlowInSwitchCases (DTSwitchInt m def) = do
+    mapM_ analyzeGenericFlowInDT m
+    analyzeGenericFlowInDT def
+analyzeGenericFlowInSwitchCases (DTSwitchBool t f) = do
+    analyzeGenericFlowInDT t
+    analyzeGenericFlowInDT f
+analyzeGenericFlowInSwitchCases (DTSwitchCtor cases def) = do
+    mapM_ analyzeGenericFlowInDT cases
+    analyzeGenericFlowInDT def
+analyzeGenericFlowInSwitchCases (DTSwitchString m def) = do
+    mapM_ analyzeGenericFlowInDT m
+    analyzeGenericFlowInDT def
+analyzeGenericFlowInSwitchCases (DTSwitchNullable j n) = do
+    analyzeGenericFlowInDT j
+    analyzeGenericFlowInDT n
 
 analyzeGenericInstantiationFlow ::
     [(Identifier, GenericID)] -> [Type] -> GlobalSemiEff ()

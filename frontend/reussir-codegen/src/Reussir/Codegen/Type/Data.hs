@@ -24,6 +24,7 @@ where
 
 import Data.Hashable (Hashable)
 import GHC.Generics (Generic)
+
 import Reussir.Codegen.Context.Symbol (Symbol)
 
 {- | Integer primitive types for MLIR code generation.
@@ -123,10 +124,22 @@ the source language's type semantics. The 'PrimitiveInt' type itself does
 not encode signedness; this must be tracked separately in the type system
 or inferred from the operations used.
 -}
-data PrimitiveInt = PrimInt8 | PrimInt16 | PrimInt32 | PrimInt64 | PrimInt128 | PrimIndex
+data PrimitiveInt
+    = PrimInt8
+    | PrimInt16
+    | PrimInt32
+    | PrimInt64
+    | PrimInt128
+    | PrimIndex
     deriving (Eq, Show, Hashable, Generic)
 
-data PrimitiveFloat = PrimFloat8 | PrimFloat16 | PrimBFloat16 | PrimFloat32 | PrimFloat64 | PrimFloat128
+data PrimitiveFloat
+    = PrimFloat8
+    | PrimFloat16
+    | PrimBFloat16
+    | PrimFloat32
+    | PrimFloat64
+    | PrimFloat128
     deriving (Eq, Show, Hashable, Generic)
 
 data Primitive
@@ -136,7 +149,8 @@ data Primitive
     | PrimUnit
     deriving (Eq, Show, Hashable, Generic)
 
-data Rc = Rc {rcBoxInner :: Type, rcBoxAtomicity :: Atomicity, rcBoxCapability :: Capability}
+data Rc = Rc
+    {rcBoxInner :: Type, rcBoxAtomicity :: Atomicity, rcBoxCapability :: Capability}
     deriving (Eq, Show, Hashable, Generic)
 data Ref = Ref {refInner :: Type, refAtomicity :: Atomicity, refCapability :: Capability}
     deriving (Eq, Show, Hashable, Generic)
@@ -154,7 +168,7 @@ data Type
     | TypeExpr Symbol
     | TypeNullable Type
     | TypeRegion -- Region handle
-    | TypeStr    -- String type !reussir.str<global>
+    | TypeStr -- String type !reussir.str<global>
     deriving (Eq, Show, Hashable, Generic)
 
 data Atomicity = Atomic | NonAtomic

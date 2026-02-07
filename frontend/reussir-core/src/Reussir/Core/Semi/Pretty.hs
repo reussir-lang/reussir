@@ -7,17 +7,31 @@ module Reussir.Core.Semi.Pretty (
 ) where
 
 import Control.Monad (zipWithM)
-import Data.Vector.Strict qualified as V
-import Data.Vector.Unboxed qualified as UV
+import Data.Foldable (toList)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Prim (Prim)
 import Effectful.Prim.IORef.Strict (readIORef')
 import Prettyprinter
 import Prettyprinter.Render.Terminal
+import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
+import Reussir.Parser.Types.Stmt (Visibility (..))
+
+import Data.HashMap.Strict qualified as Data.HashMap.Strict
+import Data.IntMap.Strict qualified as IntMap
+import Data.Vector.Strict qualified as V
+import Data.Vector.Unboxed qualified as UV
+import Reussir.Parser.Types.Capability qualified as Cap
+
 import Reussir.Core.Data.FP (FloatingPointType (..))
 import Reussir.Core.Data.Integral (IntegralType (..))
 import Reussir.Core.Data.Operator (ArithOp (..), CmpOp (..))
-import Reussir.Core.Data.Semi.Expr (Expr (..), ExprKind (..))
+import Reussir.Core.Data.Semi.Expr (
+    DTSwitchCases (..),
+    DecisionTree (..),
+    Expr (..),
+    ExprKind (..),
+    PatternVarRef (..),
+ )
 import Reussir.Core.Data.Semi.Function (FunctionProto (..))
 import Reussir.Core.Data.Semi.Record (
     FieldFlag,
@@ -28,9 +42,6 @@ import Reussir.Core.Data.Semi.Record (
 import Reussir.Core.Data.Semi.Type (Flexivity (..), Type (..))
 import Reussir.Core.Data.String (StringToken (..))
 import Reussir.Core.Data.UniqueID (GenericID (..), HoleID (..), VarID (..))
-import Reussir.Parser.Types.Capability qualified as Cap
-import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
-import Reussir.Parser.Types.Stmt (Visibility (..))
 
 -- Helper functions for styles
 keyword :: Doc AnsiStyle -> Doc AnsiStyle
@@ -99,7 +110,8 @@ instance PrettyColored Type where
         flexDoc <- prettyColored flex
         argsDocs <- mapM prettyColored args
         -- Flexivity currently ignored in pretty printing
-        pure $ pathDoc <> flexDoc <> if null args then mempty else angles (commaSep argsDocs)
+        pure $
+            pathDoc <> flexDoc <> if null args then mempty else angles (commaSep argsDocs)
     prettyColored (TypeIntegral t) = prettyColored t
     prettyColored (TypeFP t) = prettyColored t
     prettyColored TypeBool = pure $ typeName "bool"
@@ -134,7 +146,18 @@ instance PrettyColored CmpOp where
 instance PrettyColored Expr where
     prettyColored expr = do
         kindDoc <- case exprKind expr of
-            GlobalStr (StringToken (u1, u2, u3, u4)) -> pure $ literal $ "str_token(" <> pretty u1 <> ", " <> pretty u2 <> ", " <> pretty u3 <> ", " <> pretty u4 <> ")"
+            GlobalStr (StringToken (u1, u2, u3, u4)) ->
+                pure $
+                    literal $
+                        "str_token("
+                            <> pretty u1
+                            <> ", "
+                            <> pretty u2
+                            <> ", "
+                            <> pretty u3
+                            <> ", "
+                            <> pretty u4
+                            <> ")"
             Constant n -> pure $ literal (pretty (show n))
             Negate e -> do
                 eDoc <- prettyColored e
@@ -230,19 +253,135 @@ instance PrettyColored Expr where
                 pure $
                     pathDoc
                         <> parens (commaSep argsDocs)
+            Match val dt -> do
+                valDoc <- prettyColored val
+                dtDoc <- prettyColored dt
+                pure $
+                    keyword "match"
+                        <+> valDoc
+                        <+> braces (nest 4 (hardline <> dtDoc) <> hardline)
             Sequence [singleton] -> prettyColored singleton
             Sequence subexprs -> do
                 subexprsDocs <- mapM prettyColored subexprs
-                pure $ braces (nest 4 (hardline <> vsep (punctuate semi subexprsDocs)) <> hardline)
+                pure $
+                    braces (nest 4 (hardline <> vsep (punctuate semi subexprsDocs)) <> hardline)
 
         case exprKind expr of
             Var _ -> pure kindDoc
             Let _ _ _ _ -> pure kindDoc
             Sequence _ -> pure kindDoc
             ScfIfExpr _ _ _ -> pure kindDoc
+            Match _ _ -> pure kindDoc
             _ -> do
                 tyDoc <- prettyColored (exprType expr)
                 pure $ kindDoc <+> comment (":" <+> tyDoc)
+
+instance PrettyColored DecisionTree where
+    prettyColored DTUncovered = pure $ keyword "uncovered"
+    prettyColored DTUnreachable = pure $ keyword "unreachable"
+    prettyColored (DTLeaf body bindings) = do
+        binds <- mapM prettyBind (IntMap.toList bindings)
+        bodyDoc <- prettyColored body
+        pure $ vsep (binds ++ [bodyDoc])
+      where
+        prettyBind (v, PatternVarRef path) =
+            pure $
+                keyword "pattern var"
+                    <+> variable ("v" <> pretty v)
+                    <+> parens (commaSep (map pretty (toList path)))
+    prettyColored (DTGuard _ guard trueBr falseBr) = do
+        guardDoc <- prettyColored guard
+        trueDoc <- prettyColored trueBr
+        falseDoc <- prettyColored falseBr
+        let caseDoc cond body =
+                keyword "if"
+                    <+> cond
+                    <+> braces (nest 4 (hardline <> body) <> hardline)
+        pure $
+            vsep
+                [ caseDoc guardDoc trueDoc
+                , caseDoc (keyword "otherwise") falseDoc
+                ]
+    prettyColored (DTSwitch _ cases) = prettyColored cases
+
+instance PrettyColored DTSwitchCases where
+    prettyColored (DTSwitchInt m def) = do
+        casesDocs <- mapM prettyCase (IntMap.toList m)
+        defDoc <- prettyColored def
+        pure $
+            vsep $
+                casesDocs
+                    ++ [ keyword "_"
+                            <+> operator "=>"
+                            <+> braces (nest 4 (hardline <> defDoc) <> hardline)
+                       ]
+      where
+        prettyCase (i, dt) = do
+            dtDoc <- prettyColored dt
+            pure $
+                literal (pretty i)
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> dtDoc) <> hardline)
+    prettyColored (DTSwitchBool t f) = do
+        tDoc <- prettyColored t
+        fDoc <- prettyColored f
+        pure $
+            vsep
+                [ literal "true"
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> tDoc) <> hardline)
+                , literal "false"
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> fDoc) <> hardline)
+                ]
+    prettyColored (DTSwitchCtor cases def) = do
+        -- This is a simplification as we don't have easy access to ctor names here purely from index
+        -- In a real implementation we might want to look up names if possible or print indices
+        defDoc <- prettyColored def
+        casesDocs <- zipWithM prettyCase [0 ..] (V.toList cases)
+        pure $
+            vsep $
+                casesDocs
+                    ++ [ keyword "_"
+                            <+> operator "=>"
+                            <+> braces (nest 4 (hardline <> defDoc) <> hardline)
+                       ]
+      where
+        prettyCase i dt = do
+            dtDoc <- prettyColored dt
+            pure $
+                variable ("ctor@" <> pretty (i :: Int))
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> dtDoc) <> hardline)
+    prettyColored (DTSwitchString m def) = do
+        defDoc <- prettyColored def
+        casesDocs <- mapM prettyCase (Data.HashMap.Strict.toList m)
+        pure $
+            vsep $
+                casesDocs
+                    ++ [ keyword "_"
+                            <+> operator "=>"
+                            <+> braces (nest 4 (hardline <> defDoc) <> hardline)
+                       ]
+      where
+        prettyCase (h, dt) = do
+            dtDoc <- prettyColored dt
+            pure $
+                literal ("hash(" <> pretty (show h) <> ")")
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> dtDoc) <> hardline)
+    prettyColored (DTSwitchNullable j n) = do
+        jDoc <- prettyColored j
+        nDoc <- prettyColored n
+        pure $
+            vsep
+                [ keyword "nonnull"
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> jDoc) <> hardline)
+                , keyword "null"
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> nDoc) <> hardline)
+                ]
 
 instance PrettyColored Record where
     prettyColored (Record name tyParams fieldsRef kind vis cap _) = do
@@ -256,9 +395,14 @@ instance PrettyColored Record where
             Nothing -> pure $ comment "<un-elaborated>"
         pure $
             visDoc
-                <> keyword (case kind of StructKind -> "struct"; EnumKind -> "enum"; EnumVariant _ _ -> "enum_variant")
+                <> keyword
+                    ( case kind of
+                        StructKind -> "struct"
+                        EnumKind -> "enum"
+                        EnumVariant _ _ -> "enum_variant"
+                    )
                 <> (case cap of Cap.Unspecified -> mempty; _ -> space <> brackets capDoc)
-                    <+> nameDoc
+                <+> nameDoc
                 <> genericsDoc
                 <> fieldsDoc
       where
@@ -292,7 +436,8 @@ instance PrettyColored Record where
             tDoc <- prettyColored t
             pure $ fldDoc <> tDoc
 
-        prettyFieldFlag :: (IOE :> es, Prim :> es) => FieldFlag -> Eff es (Doc AnsiStyle)
+        prettyFieldFlag ::
+            (IOE :> es, Prim :> es) => FieldFlag -> Eff es (Doc AnsiStyle)
         prettyFieldFlag False = pure mempty
         prettyFieldFlag True = pure $ brackets (keyword "field") <> space
 
@@ -314,12 +459,12 @@ instance PrettyColored FunctionProto where
             visDoc
                 <> (if isRegional then keyword "regional" <> space else mempty)
                 <> keyword "fn"
-                    <+> nameDoc
+                <+> nameDoc
                 <> genericsDoc
                 <> parens (commaSep paramsDoc)
-                    <+> operator "->"
-                    <+> retDoc
-                    <+> bodyDoc
+                <+> operator "->"
+                <+> retDoc
+                <+> bodyDoc
       where
         prettyGenerics [] = pure mempty
         prettyGenerics gs = do

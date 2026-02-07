@@ -18,18 +18,38 @@ import Control.Monad (unless, when, (>=>))
 import Data.Foldable (forM_, for_)
 import Data.Int (Int64)
 import Data.String (IsString (fromString))
+import Effectful.Log (logAttention_)
+
 import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
-import Effectful.Log (logAttention_)
-import Reussir.Codegen.Context (Emission (emit), emitIndentation, emitLine, incIndentation)
-import Reussir.Codegen.Context.Codegen (Codegen, getNewBlockId, incIndentationBy, withLocation, withoutLocation)
-import Reussir.Codegen.Context.Emission (emitBuilder, emitBuilderLine, emitBuilderLineM, emitLocIfPresent, intercalate)
+
+import Reussir.Codegen.Context (
+    Emission (emit),
+    emitIndentation,
+    emitLine,
+    incIndentation,
+ )
+import Reussir.Codegen.Context.Codegen (
+    Codegen,
+    getNewBlockId,
+    incIndentationBy,
+    withLocation,
+    withoutLocation,
+ )
+import Reussir.Codegen.Context.Emission (
+    emitBuilder,
+    emitBuilderLine,
+    emitBuilderLineM,
+    emitLocIfPresent,
+    intercalate,
+ )
 import Reussir.Codegen.Context.Symbol (Symbol, symbolBuilder)
 import Reussir.Codegen.Intrinsics (IntrinsicCall, intrinsicCallCodegen)
 import Reussir.Codegen.Location (DBGMetaInfo, Location)
 import Reussir.Codegen.Type.Data (isBoolType, isVoidType)
-import Reussir.Codegen.Type.Data qualified as TT
 import Reussir.Codegen.Value (TypedValue)
+
+import Reussir.Codegen.Type.Data qualified as TT
 
 {- | A function call instruction.
 Unlike intrinsic calls, function calls cannot have multiple results.
@@ -375,7 +395,8 @@ emitUnaryOp opName inputVal (resVal, resTy) = emitLine $ do
     inputVal' <- fmtTypedValue inputVal
     resVal' <- emit resVal
     resTy' <- emit resTy
-    emitBuilder $ resVal' <> " = " <> opName <> " (" <> inputVal' <> ") : " <> resTy'
+    emitBuilder $
+        resVal' <> " = " <> opName <> " (" <> inputVal' <> ") : " <> resTy'
 
 blockCodegen :: Bool -> Block -> Codegen ()
 blockCodegen printArgs blk = do
@@ -400,12 +421,14 @@ funcCallCodegen (FuncCall target args result) = emitLine $ do
     tyList <- mapM (emit . snd) args
     for_ result $ emit . fst >=> emitBuilder . (<> " = ")
     let target' = symbolBuilder target
-    emitBuilder $ "func.call @\"" <> target' <> "\"(" <> intercalate ", " argList <> ")"
+    emitBuilder $
+        "func.call @\"" <> target' <> "\"(" <> intercalate ", " argList <> ")"
     emitBuilder $ " : (" <> intercalate ", " tyList <> ")"
     retTy <- maybe mempty (emit . snd) result
     emitBuilder $ " -> (" <> retTy <> ")"
 
-nullableDispCodegen :: TypedValue -> Block -> Block -> Maybe TypedValue -> Codegen ()
+nullableDispCodegen ::
+    TypedValue -> Block -> Block -> Maybe TypedValue -> Codegen ()
 nullableDispCodegen nullDispVal nullDispNonnull nullDispNull nullDispRes = do
     emitIndentation
     for_ nullDispRes $ emit . fst >=> emitBuilder . (<> " = ")
@@ -413,8 +436,10 @@ nullableDispCodegen nullDispVal nullDispNonnull nullDispNull nullDispRes = do
     emitBuilder $ "reussir.nullable.dispatch (" <> nullDispVal' <> ")"
     for_ nullDispRes $ emit . snd >=> emitBuilder . (" -> " <>)
     emitBuilder " {\n"
-    unless (isSingleton (blkArgs nullDispNonnull)) $ logAttention_ "nonnull region must have exactly one argument"
-    unless (null (blkArgs nullDispNull)) $ logAttention_ "null region must have no arguments"
+    unless (isSingleton (blkArgs nullDispNonnull)) $
+        logAttention_ "nonnull region must have exactly one argument"
+    unless (null (blkArgs nullDispNull)) $
+        logAttention_ "null region must have no arguments"
     incIndentation $ withoutLocation $ do
         emitIndentation
         emitBuilder "nonnull -> "
@@ -438,7 +463,8 @@ rcCreateCodegen rcCreateVal rcCreateRegion (resVal, resTy) = emitLine $ do
     resVal' <- emit resVal
     resTy' <- emit resTy
     emitBuilder $ resVal' <> " = reussir.rc.create value(" <> rcCreateVal' <> ") "
-    for_ rcCreateRegion $ fmtTypedValue >=> \x -> emitBuilder $ "region(" <> x <> ") "
+    for_ rcCreateRegion $
+        fmtTypedValue >=> \x -> emitBuilder $ "region(" <> x <> ") "
     emitBuilder $ ": " <> resTy'
 
 rcFreezeCodegen :: TypedValue -> TypedValue -> Codegen ()
@@ -467,10 +493,16 @@ nullableCheckCodegen nullChkVal res@(_, resTy) = do
 
 nullableCreateCodegen :: Maybe TypedValue -> TypedValue -> Codegen ()
 nullableCreateCodegen nullCreateVal (resVal, resTy) = emitBuilderLineM $ do
-    nullCreateVal' <- maybe mempty (fmap (\x -> " (" <> x <> ")") <$> fmtTypedValue) nullCreateVal
+    nullCreateVal' <-
+        maybe mempty (fmap (\x -> " (" <> x <> ")") <$> fmtTypedValue) nullCreateVal
     nullCreateResVal <- emit resVal
     nullCreateresTy <- emit resTy
-    return $ nullCreateResVal <> " = reussir.nullable.create" <> nullCreateVal' <> " : " <> nullCreateresTy
+    return $
+        nullCreateResVal
+            <> " = reussir.nullable.create"
+            <> nullCreateVal'
+            <> " : "
+            <> nullCreateresTy
 
 rcIncCodegen :: TypedValue -> Codegen ()
 rcIncCodegen rcIncVal = emitBuilderLineM $ do
@@ -581,7 +613,14 @@ closureApplyCodegen target arg (resVal, resTy) = emitBuilderLineM $ do
     arg' <- fmtTypedValue arg
     resVal' <- emit resVal
     resTy' <- emit resTy
-    return $ resVal' <> " = reussir.closure.apply (" <> target' <> ") (" <> arg' <> ") : " <> resTy'
+    return $
+        resVal'
+            <> " = reussir.closure.apply ("
+            <> target'
+            <> ") ("
+            <> arg'
+            <> ") : "
+            <> resTy'
 
 closureEvalCodegen :: TypedValue -> Maybe TypedValue -> Codegen ()
 closureEvalCodegen target result = emitLine $ do
@@ -607,7 +646,8 @@ recordExtractCodegen val fieldIdx (resVal, resTy) = emitBuilderLineM $ do
             <> "] : "
             <> resTy'
 
-ifThenElseCodegen :: TypedValue -> Block -> Maybe Block -> Maybe TypedValue -> Codegen ()
+ifThenElseCodegen ::
+    TypedValue -> Block -> Maybe Block -> Maybe TypedValue -> Codegen ()
 ifThenElseCodegen (condVal, _) thenBlock elseBlock result = do
     emitIndentation
     for_ result $ emit . fst >=> emitBuilder . (<> " = ")
@@ -628,7 +668,8 @@ variantDispCaseCodegen tagSets body = do
     withoutLocation $ blockCodegen True body
     emitBuilder "\n"
 
-variantDispCodegen :: TypedValue -> VariantDispData -> Maybe TypedValue -> Codegen ()
+variantDispCodegen ::
+    TypedValue -> VariantDispData -> Maybe TypedValue -> Codegen ()
 variantDispCodegen val (VariantDispData cases) result = do
     emitIndentation
     for_ result $ emit . fst >=> emitBuilder . (<> " = ")
@@ -639,8 +680,9 @@ variantDispCodegen val (VariantDispData cases) result = do
     incIndentation $ forM_ cases $ uncurry variantDispCaseCodegen
     emitBuilder "}"
 
--- | Generate reussir.str.literal operation
--- Syntax: %res = reussir.str.literal @sym : !reussir.str<global>
+{- | Generate reussir.str.literal operation
+Syntax: %res = reussir.str.literal @sym : !reussir.str<global>
+-}
 strLiteralCodegen :: Symbol -> TypedValue -> Codegen ()
 strLiteralCodegen sym (resVal, resTy) = emitBuilderLineM $ do
     resVal' <- emit resVal
@@ -720,8 +762,16 @@ functionCodegen function = do
         [] -> pure ""
         dbgArgs -> do
             dbgArgsEmitted <- mapM emit dbgArgs
-            pure $ ", \"reussir.dbg_func_args\" = [" <> intercalate ", " dbgArgsEmitted <> "]"
-    emitBuilder $ " attributes { llvm.linkage = " <> linkage <> ", llvm.visibility = \"" <> visibility <> "\"" <> dbgArgsAttr <> " }"
+            pure $
+                ", \"reussir.dbg_func_args\" = [" <> intercalate ", " dbgArgsEmitted <> "]"
+    emitBuilder $
+        " attributes { llvm.linkage = "
+            <> linkage
+            <> ", llvm.visibility = \""
+            <> visibility
+            <> "\""
+            <> dbgArgsAttr
+            <> " }"
     for_ (funcBody function) $ \body -> emitBuilder " " >> blockCodegen False body
     for_ (funcLoc function) $ \loc -> withLocation loc emitLocIfPresent
     emitBuilder "\n"

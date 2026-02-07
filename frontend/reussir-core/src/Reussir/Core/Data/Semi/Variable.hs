@@ -1,12 +1,14 @@
 module Reussir.Core.Data.Semi.Variable where
 
-import Data.HashTable.IO qualified as H
 import Data.Int (Int64)
-import Data.Sequence qualified as Seq
 import Effectful.Prim.IORef.Strict (IORef')
+import Reussir.Parser.Types.Lexer
+
+import Data.HashTable.IO qualified as H
+import Data.Sequence qualified as Seq
+
 import Reussir.Core.Data.Semi.Type (Type)
 import Reussir.Core.Data.UniqueID (VarID)
-import Reussir.Parser.Types.Lexer
 
 data VarDef = VarDef
     { varName :: Identifier
