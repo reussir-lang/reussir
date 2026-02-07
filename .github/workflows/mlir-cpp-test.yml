@@ -63,20 +63,16 @@ jobs:
           # Get Ubuntu codename
           CODENAME=$(lsb_release -cs)
           
-          # Determine repository suffix and package version based on llvm-version matrix value
+          # Determine package version based on llvm-version matrix value
           if [ "${{ matrix.llvm-version }}" = "snapshot" ]; then
-            # Snapshot uses the versioned repository (not empty prefix to avoid build breakage)
-            REPO_SUFFIX="-22"
             # Snapshot packages are versioned as 22
             PKG_VERSION="22"
           else
-            # Stable releases use versioned repository
-            REPO_SUFFIX="-${{ matrix.llvm-version }}"
             PKG_VERSION="${{ matrix.llvm-version }}"
           fi
           
-          # Add LLVM apt repository
-          echo "deb http://apt.llvm.org/${CODENAME}/ llvm-toolchain-${CODENAME}${REPO_SUFFIX} main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          # Add LLVM apt repository with consistent suffix pattern
+          echo "deb http://apt.llvm.org/${CODENAME}/ llvm-toolchain-${CODENAME}-${{ matrix.llvm-version }} main" | sudo tee /etc/apt/sources.list.d/llvm.list
           
           # Update apt cache
           sudo apt-get update
