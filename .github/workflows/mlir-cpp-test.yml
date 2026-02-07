@@ -12,7 +12,15 @@ jobs:
       fail-fast: false
       matrix:
         llvm-version: [21, 22]
+        llvm-repo: [stable, snapshot]
         os: [ubuntu-24.04, ubuntu-24.04-arm]
+        exclude:
+          # LLVM 21 only uses stable repo
+          - llvm-version: 21
+            llvm-repo: snapshot
+          # LLVM 22 only uses snapshot repo
+          - llvm-version: 22
+            llvm-repo: stable
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -32,9 +40,9 @@ jobs:
             ~/.local/state/cabal
             dist-newstyle
             ~/.ghcup
-          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ matrix.llvm-version }}-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ matrix.llvm-version }}-${{ matrix.llvm-repo }}-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-llvm-${{ matrix.llvm-version }}-cabal-
+            ${{ runner.os }}-${{ runner.arch }}-llvm-${{ matrix.llvm-version }}-${{ matrix.llvm-repo }}-cabal-
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -57,14 +65,33 @@ jobs:
 
       - name: Install LLVM ${{ matrix.llvm-version }}
         run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh ${{ matrix.llvm-version }}
+          # Add LLVM apt repository GPG key
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          
+          # Determine repository suffix based on llvm-repo matrix value
+          if [ "${{ matrix.llvm-repo }}" = "snapshot" ]; then
+            REPO_SUFFIX=""
+          else
+            REPO_SUFFIX="-${{ matrix.llvm-version }}"
+          fi
+          
+          # Add LLVM apt repository
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble${REPO_SUFFIX} main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          
+          # Update apt cache
+          sudo apt-get update
+          
+          # Install LLVM/Clang toolchain
           sudo apt-get install -y \
+            clang-${{ matrix.llvm-version }} \
+            lldb-${{ matrix.llvm-version }} \
+            lld-${{ matrix.llvm-version }} \
+            clangd-${{ matrix.llvm-version }} \
             libmlir-${{ matrix.llvm-version }}-dev \
             mlir-${{ matrix.llvm-version }}-tools \
             llvm-${{ matrix.llvm-version }}-dev \
             llvm-${{ matrix.llvm-version }}-tools
+          
           echo "LD_LIBRARY_PATH=/usr/lib/llvm-${{ matrix.llvm-version }}/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
           
 
@@ -72,7 +99,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           variant: sccache
-          key: ${{ matrix.os }}-${{ matrix.llvm-version }}
+          key: ${{ matrix.os }}-${{ matrix.llvm-version }}-${{ matrix.llvm-repo }}
 
       - name: Configure CMake
         run: |
