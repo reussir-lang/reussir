@@ -65,8 +65,8 @@ jobs:
           
           # Determine repository suffix and package version based on llvm-version matrix value
           if [ "${{ matrix.llvm-version }}" = "snapshot" ]; then
-            # Snapshot uses the bleeding-edge repository with no suffix
-            REPO_SUFFIX=""
+            # Snapshot uses the versioned repository (not empty prefix to avoid build breakage)
+            REPO_SUFFIX="-22"
             # Snapshot packages are versioned as 22
             PKG_VERSION="22"
           else
