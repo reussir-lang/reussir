@@ -68,6 +68,9 @@ jobs:
           # Add LLVM apt repository GPG key
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
           
+          # Get Ubuntu codename
+          CODENAME=$(lsb_release -cs)
+          
           # Determine repository suffix based on llvm-repo matrix value
           if [ "${{ matrix.llvm-repo }}" = "snapshot" ]; then
             REPO_SUFFIX=""
@@ -76,7 +79,7 @@ jobs:
           fi
           
           # Add LLVM apt repository
-          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble${REPO_SUFFIX} main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          echo "deb http://apt.llvm.org/${CODENAME}/ llvm-toolchain-${CODENAME}${REPO_SUFFIX} main" | sudo tee /etc/apt/sources.list.d/llvm.list
           
           # Update apt cache
           sudo apt-get update
