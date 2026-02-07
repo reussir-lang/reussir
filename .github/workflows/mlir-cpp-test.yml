@@ -11,16 +11,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        llvm-version: [21, 22]
-        llvm-repo: [stable, snapshot]
+        llvm-version: [21, 22, snapshot]
         os: [ubuntu-24.04, ubuntu-24.04-arm]
-        exclude:
-          # LLVM 21 only uses stable repo
-          - llvm-version: 21
-            llvm-repo: snapshot
-          # LLVM 22 only uses snapshot repo
-          - llvm-version: 22
-            llvm-repo: stable
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -40,9 +32,9 @@ jobs:
             ~/.local/state/cabal
             dist-newstyle
             ~/.ghcup
-          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ matrix.llvm-version }}-${{ matrix.llvm-repo }}-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ matrix.llvm-version }}-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-llvm-${{ matrix.llvm-version }}-${{ matrix.llvm-repo }}-cabal-
+            ${{ runner.os }}-${{ runner.arch }}-llvm-${{ matrix.llvm-version }}-cabal-
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -71,11 +63,16 @@ jobs:
           # Get Ubuntu codename
           CODENAME=$(lsb_release -cs)
           
-          # Determine repository suffix based on llvm-repo matrix value
-          if [ "${{ matrix.llvm-repo }}" = "snapshot" ]; then
+          # Determine repository suffix and package version based on llvm-version matrix value
+          if [ "${{ matrix.llvm-version }}" = "snapshot" ]; then
+            # Snapshot uses the bleeding-edge repository with no suffix
             REPO_SUFFIX=""
+            # Snapshot packages are versioned as 22
+            PKG_VERSION="22"
           else
+            # Stable releases use versioned repository
             REPO_SUFFIX="-${{ matrix.llvm-version }}"
+            PKG_VERSION="${{ matrix.llvm-version }}"
           fi
           
           # Add LLVM apt repository
@@ -86,23 +83,24 @@ jobs:
           
           # Install LLVM/Clang toolchain
           sudo apt-get install -y \
-            clang-${{ matrix.llvm-version }} \
-            lldb-${{ matrix.llvm-version }} \
-            lld-${{ matrix.llvm-version }} \
-            clangd-${{ matrix.llvm-version }} \
-            libmlir-${{ matrix.llvm-version }}-dev \
-            mlir-${{ matrix.llvm-version }}-tools \
-            llvm-${{ matrix.llvm-version }}-dev \
-            llvm-${{ matrix.llvm-version }}-tools
+            clang-${PKG_VERSION} \
+            lldb-${PKG_VERSION} \
+            lld-${PKG_VERSION} \
+            clangd-${PKG_VERSION} \
+            libmlir-${PKG_VERSION}-dev \
+            mlir-${PKG_VERSION}-tools \
+            llvm-${PKG_VERSION}-dev \
+            llvm-${PKG_VERSION}-tools
           
-          echo "LD_LIBRARY_PATH=/usr/lib/llvm-${{ matrix.llvm-version }}/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/usr/lib/llvm-${PKG_VERSION}/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "LLVM_VERSION=${PKG_VERSION}" >> $GITHUB_ENV
           
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           variant: sccache
-          key: ${{ matrix.os }}-${{ matrix.llvm-version }}-${{ matrix.llvm-repo }}
+          key: ${{ matrix.os }}-${{ matrix.llvm-version }}
 
       - name: Configure CMake
         run: |
@@ -110,15 +108,15 @@ jobs:
           cmake -B build \
           -G Ninja \
           -DLLVM_USE_LINKER=lld \
-          -DCMAKE_CXX_COMPILER=clang++-${{ matrix.llvm-version }} \
-          -DCMAKE_C_COMPILER=clang-${{ matrix.llvm-version }} \
+          -DCMAKE_CXX_COMPILER=clang++-${LLVM_VERSION} \
+          -DCMAKE_C_COMPILER=clang-${LLVM_VERSION} \
           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
           -DREUSSIR_ENABLE_PEDANTIC=ON \
           -DREUSSIR_ENABLE_TESTS=ON \
           -DCMAKE_C_COMPILER_LAUNCHER=sccache \
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-          -DLLVM_DIR=/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/llvm \
-          -DMLIR_DIR=/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/mlir
+          -DLLVM_DIR=/usr/lib/llvm-${LLVM_VERSION}/lib/cmake/llvm \
+          -DMLIR_DIR=/usr/lib/llvm-${LLVM_VERSION}/lib/cmake/mlir
 
       - name: Build
         run: cmake --build build --parallel
