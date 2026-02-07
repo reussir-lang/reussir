@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        llvm-version: [21, 22]
+        llvm-version: [21, 22, snapshot]
         os: [ubuntu-24.04, ubuntu-24.04-arm]
 
     runs-on: ${{ matrix.os }}
@@ -57,15 +57,39 @@ jobs:
 
       - name: Install LLVM ${{ matrix.llvm-version }}
         run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh ${{ matrix.llvm-version }}
+          # Add LLVM apt repository GPG key
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          
+          # Get Ubuntu codename
+          CODENAME=$(lsb_release -cs)
+          
+          # Determine package version based on llvm-version matrix value
+          if [ "${{ matrix.llvm-version }}" = "snapshot" ]; then
+            # Snapshot packages are versioned as 22
+            PKG_VERSION="22"
+          else
+            PKG_VERSION="${{ matrix.llvm-version }}"
+          fi
+          
+          # Add LLVM apt repository with consistent suffix pattern
+          echo "deb http://apt.llvm.org/${CODENAME}/ llvm-toolchain-${CODENAME}-${{ matrix.llvm-version }} main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          
+          # Update apt cache
+          sudo apt-get update
+          
+          # Install LLVM/Clang toolchain
           sudo apt-get install -y \
-            libmlir-${{ matrix.llvm-version }}-dev \
-            mlir-${{ matrix.llvm-version }}-tools \
-            llvm-${{ matrix.llvm-version }}-dev \
-            llvm-${{ matrix.llvm-version }}-tools
-          echo "LD_LIBRARY_PATH=/usr/lib/llvm-${{ matrix.llvm-version }}/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+            clang-${PKG_VERSION} \
+            lldb-${PKG_VERSION} \
+            lld-${PKG_VERSION} \
+            clangd-${PKG_VERSION} \
+            libmlir-${PKG_VERSION}-dev \
+            mlir-${PKG_VERSION}-tools \
+            llvm-${PKG_VERSION}-dev \
+            llvm-${PKG_VERSION}-tools
+          
+          echo "LD_LIBRARY_PATH=/usr/lib/llvm-${PKG_VERSION}/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "LLVM_VERSION=${PKG_VERSION}" >> $GITHUB_ENV
           
 
       - name: ccache
@@ -80,15 +104,15 @@ jobs:
           cmake -B build \
           -G Ninja \
           -DLLVM_USE_LINKER=lld \
-          -DCMAKE_CXX_COMPILER=clang++-${{ matrix.llvm-version }} \
-          -DCMAKE_C_COMPILER=clang-${{ matrix.llvm-version }} \
+          -DCMAKE_CXX_COMPILER=clang++-${LLVM_VERSION} \
+          -DCMAKE_C_COMPILER=clang-${LLVM_VERSION} \
           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
           -DREUSSIR_ENABLE_PEDANTIC=ON \
           -DREUSSIR_ENABLE_TESTS=ON \
           -DCMAKE_C_COMPILER_LAUNCHER=sccache \
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-          -DLLVM_DIR=/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/llvm \
-          -DMLIR_DIR=/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/mlir
+          -DLLVM_DIR=/usr/lib/llvm-${LLVM_VERSION}/lib/cmake/llvm \
+          -DMLIR_DIR=/usr/lib/llvm-${LLVM_VERSION}/lib/cmake/mlir
 
       - name: Build
         run: cmake --build build --parallel
