@@ -143,6 +143,7 @@ convertSemiExpr semiExpr = do
             SemiExpr.Sequence es -> do
                 es' <- mapM convertSemiExpr es
                 exprWithSpan ty $ Sequence es'
+            SemiExpr.Match _ _ -> error "Match not implemented yet"
 
 hoistRcWrapping :: Type -> ExprKind -> FullEff Expr
 hoistRcWrapping ty e = do

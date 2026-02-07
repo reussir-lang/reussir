@@ -224,8 +224,8 @@ elimTypeHolesCases (DTSwitchInt m def) =
     DTSwitchInt <$> mapM elimTypeHolesDT m <*> elimTypeHolesDT def
 elimTypeHolesCases (DTSwitchBool t f) =
     DTSwitchBool <$> elimTypeHolesDT t <*> elimTypeHolesDT f
-elimTypeHolesCases (DTSwitchCtor cases def) =
-    DTSwitchCtor <$> mapM elimTypeHolesDT cases <*> elimTypeHolesDT def
+elimTypeHolesCases (DTSwitchCtor cases) =
+    DTSwitchCtor <$> mapM elimTypeHolesDT cases
 elimTypeHolesCases (DTSwitchString m def) =
     DTSwitchString <$> mapM elimTypeHolesDT m <*> elimTypeHolesDT def
 elimTypeHolesCases (DTSwitchNullable j n) =
@@ -588,8 +588,8 @@ collectLeafExprTypesCases (DTSwitchInt m def) =
     concatMap collectLeafExprTypes (IntMap.elems m) ++ collectLeafExprTypes def
 collectLeafExprTypesCases (DTSwitchBool t f) =
     collectLeafExprTypes t ++ collectLeafExprTypes f
-collectLeafExprTypesCases (DTSwitchCtor cases def) =
-    concatMap collectLeafExprTypes (V.toList cases) ++ collectLeafExprTypes def
+collectLeafExprTypesCases (DTSwitchCtor cases) =
+    concatMap collectLeafExprTypes (V.toList cases)
 collectLeafExprTypesCases (DTSwitchString m def) =
     concatMap (collectLeafExprTypes . snd) (HashMap.toList m)
         ++ collectLeafExprTypes def

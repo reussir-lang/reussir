@@ -1,0 +1,55 @@
+// RUN: %reussir-elab --mode semi %s | %FileCheck %s
+enum List<T> {
+    Nil,
+    Cons(T, List<T>)
+}
+
+pub fn empty1(list : List<i32>) -> bool {
+    match list {
+        List::Nil => true,
+        _ => false
+    }
+}
+
+pub fn empty2(list : List<i32>) -> bool {
+    match list {
+        List::Nil => true,
+        List::Cons(..) => false
+    }
+}
+
+// CHECK:      ;; Instantiated Generics
+// CHECK-NEXT: Generic @0 should be instantiated to:
+// CHECK-NEXT: i32
+// CHECK:      ;; Elaborated Records
+// CHECK-NEXT: enum [shared] List<T@0>{
+// CHECK-NEXT:     Nil,
+// CHECK-NEXT:     Cons
+// CHECK-NEXT: }
+// CHECK:      enum_variant [value] List::Nil<T@0>()
+// CHECK:      enum_variant [value] List::Cons<T@0>(T0, List<T0>)
+// CHECK:      ;; Elaborated Functions
+// CHECK-NEXT: pub fn empty2(v0 (list): List<i32>) -> bool {
+// CHECK-NEXT:     match v0 {
+// CHECK-NEXT:         switch (0) {
+// CHECK-NEXT:             ctor@0 => {
+// CHECK-NEXT:                 1.0 : bool
+// CHECK-NEXT:             }
+// CHECK-NEXT:             ctor@1 => {
+// CHECK-NEXT:                 0.0 : bool
+// CHECK-NEXT:             }
+// CHECK-NEXT:         }
+// CHECK-NEXT:     }
+// CHECK-NEXT: }
+// CHECK:      pub fn empty1(v0 (list): List<i32>) -> bool {
+// CHECK-NEXT:     match v0 {
+// CHECK-NEXT:         switch (0) {
+// CHECK-NEXT:             ctor@0 => {
+// CHECK-NEXT:                 1.0 : bool
+// CHECK-NEXT:             }
+// CHECK-NEXT:             ctor@1 => {
+// CHECK-NEXT:                 0.0 : bool
+// CHECK-NEXT:             }
+// CHECK-NEXT:         }
+// CHECK-NEXT:     }
+// CHECK-NEXT: }

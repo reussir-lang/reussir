@@ -1,0 +1,43 @@
+// RUN: %reussir-elab --mode semi %s | %FileCheck %s
+enum Nat {
+    Zero,
+    Succ(Nat)
+}
+
+fn even(n : Nat) -> bool {
+    match n {
+        Nat::Zero => true,
+        Nat::Succ(Nat::Zero) => false,
+        Nat::Succ(Nat::Succ(n)) => even(n)
+    }
+}
+
+// CHECK:      ;; Instantiated Generics
+// CHECK:      ;; Elaborated Records
+// CHECK-NEXT: enum [shared] Nat{
+// CHECK-NEXT:     Zero,
+// CHECK-NEXT:     Succ
+// CHECK-NEXT: }
+// CHECK:      enum_variant [value] Nat::Succ(Nat)
+// CHECK:      enum_variant [value] Nat::Zero()
+// CHECK:      ;; Elaborated Functions
+// CHECK-NEXT: fn even(v0 (n): Nat) -> bool {
+// CHECK-NEXT:     match v0 {
+// CHECK-NEXT:         switch (0) {
+// CHECK-NEXT:             ctor@0 => {
+// CHECK-NEXT:                 1.0 : bool
+// CHECK-NEXT:             }
+// CHECK-NEXT:             ctor@1 => {
+// CHECK-NEXT:                 switch (0, 0) {
+// CHECK-NEXT:                     ctor@0 => {
+// CHECK-NEXT:                         0.0 : bool
+// CHECK-NEXT:                     }
+// CHECK-NEXT:                     ctor@1 => {
+// CHECK-NEXT:                         pattern var v1 (0, 0, 0)
+// CHECK-NEXT:                         even(v1) : bool
+// CHECK-NEXT:                     }
+// CHECK-NEXT:                 }
+// CHECK-NEXT:             }
+// CHECK-NEXT:         }
+// CHECK-NEXT:     }
+// CHECK-NEXT: }

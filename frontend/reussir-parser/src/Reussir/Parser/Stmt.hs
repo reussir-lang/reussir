@@ -121,11 +121,11 @@ parseEnumDecRest vis = do
     _ <- string "enum" *> space
     cap <- parseCapability Shared
     name <- parseIdentifier
-    tyvars <- openAngle *> parseGenericParam `sepBy` comma <* closeAngle
+    tyvars <- optional $ openAngle *> parseGenericParam `sepBy` comma <* closeAngle
     body <- openBody *> (withSpan parseEnumConstructor) `sepBy` comma <* closeBody
 
     let fields = Variants $ V.fromList body
-    return $ RecordStmt $ Record name tyvars fields EnumKind vis cap
+    return $ RecordStmt $ Record name (fromMaybe [] tyvars) fields EnumKind vis cap
 
 parseStmt :: Parser Stmt
 parseStmt = SpannedStmt <$> withSpan parseStmtInner

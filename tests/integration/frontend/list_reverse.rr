@@ -1,0 +1,45 @@
+// RUN: %reussir-elab --mode semi %s | %FileCheck %s
+enum List<T> {
+    Nil,
+    Cons(T, List<T>)
+}
+
+fn reverse_impl(list : List<i32>, acc : List<i32>) -> List<i32> {
+    match list {
+        List::Nil => acc,
+        List::Cons(x, xs) => reverse_impl(xs, List::Cons{x, acc})
+    }
+}
+
+pub fn reverse(list : List<i32>) -> List<i32> {
+    reverse_impl(list, List::Nil {})
+}
+
+// CHECK:      ;; Instantiated Generics
+// CHECK-NEXT: Generic @0 should be instantiated to:
+// CHECK-NEXT: i32
+// CHECK:      ;; Elaborated Records
+// CHECK-NEXT: enum [shared] List<T@0>{
+// CHECK-NEXT:     Nil,
+// CHECK-NEXT:     Cons
+// CHECK-NEXT: }
+// CHECK:      enum_variant [value] List::Nil<T@0>()
+// CHECK:      enum_variant [value] List::Cons<T@0>(T0, List<T0>)
+// CHECK:      ;; Elaborated Functions
+// CHECK-NEXT: fn reverse_impl(v0 (list): List<i32>, v1 (acc): List<i32>) -> List<i32> {
+// CHECK-NEXT:     match v0 {
+// CHECK-NEXT:         switch (0) {
+// CHECK-NEXT:             ctor@0 => {
+// CHECK-NEXT:                 v1
+// CHECK-NEXT:             }
+// CHECK-NEXT:             ctor@1 => {
+// CHECK-NEXT:                 pattern var v2 (0, 1)
+// CHECK-NEXT:                 pattern var v3 (0, 0)
+// CHECK-NEXT:                 reverse_impl(v2, List<i32>[1](List::Cons<i32>(v3, v1) : List::Cons<i32>) : List<i32>) : List<i32>
+// CHECK-NEXT:             }
+// CHECK-NEXT:         }
+// CHECK-NEXT:     }
+// CHECK-NEXT: }
+// CHECK:      pub fn reverse(v0 (list): List<i32>) -> List<i32> {
+// CHECK-NEXT:     reverse_impl(v0, List<i32>[0](List::Nil<i32>() : List::Nil<i32>) : List<i32>) : List<i32>
+// CHECK-NEXT: }

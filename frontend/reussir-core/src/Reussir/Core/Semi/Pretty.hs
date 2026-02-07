@@ -302,7 +302,12 @@ instance PrettyColored DecisionTree where
                 [ caseDoc guardDoc trueDoc
                 , caseDoc (keyword "otherwise") falseDoc
                 ]
-    prettyColored (DTSwitch _ cases) = prettyColored cases
+    prettyColored (DTSwitch (PatternVarRef p) cases) = do
+        casesDoc <- prettyColored cases
+        pure $
+            keyword "switch"
+                <+> parens (commaSep (map pretty (toList p)))
+                <+> braces (nest 4 (hardline <> casesDoc) <> hardline)
 
 instance PrettyColored DTSwitchCases where
     prettyColored (DTSwitchInt m def) = do
@@ -334,18 +339,13 @@ instance PrettyColored DTSwitchCases where
                     <+> operator "=>"
                     <+> braces (nest 4 (hardline <> fDoc) <> hardline)
                 ]
-    prettyColored (DTSwitchCtor cases def) = do
+    prettyColored (DTSwitchCtor cases) = do
         -- This is a simplification as we don't have easy access to ctor names here purely from index
         -- In a real implementation we might want to look up names if possible or print indices
-        defDoc <- prettyColored def
         casesDocs <- zipWithM prettyCase [0 ..] (V.toList cases)
         pure $
             vsep $
                 casesDocs
-                    ++ [ keyword "_"
-                            <+> operator "=>"
-                            <+> braces (nest 4 (hardline <> defDoc) <> hardline)
-                       ]
       where
         prettyCase i dt = do
             dtDoc <- prettyColored dt

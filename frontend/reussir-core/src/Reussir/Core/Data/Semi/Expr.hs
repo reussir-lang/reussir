@@ -97,7 +97,6 @@ data DTSwitchCases
         }
     | DTSwitchCtor
         { dtSwitchCtorCases :: V.Vector DecisionTree
-        , dtSwitchCtorDefault :: DecisionTree
         }
     | DTSwitchString
         { dtSwitchStringMap :: HashMap.HashMap (XXH3 T.Text) DecisionTree

@@ -429,10 +429,9 @@ substituteUncovered (DTSwitch ref cases) fallback =
             (substituteUncovered def fallback)
     substituteCases (DTSwitchBool t f) =
         DTSwitchBool (substituteUncovered t fallback) (substituteUncovered f fallback)
-    substituteCases (DTSwitchCtor cs def) =
+    substituteCases (DTSwitchCtor cs) =
         DTSwitchCtor
             (V.map (`substituteUncovered` fallback) cs)
-            (substituteUncovered def fallback)
     substituteCases (DTSwitchString m def) =
         DTSwitchString
             (fmap (`substituteUncovered` fallback) m)
@@ -625,9 +624,44 @@ translateWithLeadingDistinguishable cps distinguishable@(PMMatrix matCursor matR
             return (leadingKind, subDT)
 
         processConstGroup group = do
-            let rows' = fmap popLeadingPattern (matrixRows group)
-                group' = group{matrixRows = rows'}
-                finalGroup = normalizeVarRefLevel group'
+            let popLeading row =
+                    case RRB.viewl (rowPatterns row) of
+                        Just (_, rest) -> Just row{rowPatterns = rest}
+                        Nothing -> Just row -- Should unlikely happen for const group rows
+
+            groupRows <-
+                RRB.fromList . catMaybes
+                    <$> forM (toList (matrixRows group)) (\row -> return $ popLeading row)
+
+            wildcardRowsExpanded <-
+                RRB.fromList . catMaybes
+                    <$> forM (toList wildcards) (\row -> return $ Just row)
+
+            fallbackRowsExpanded <-
+                RRB.fromList . catMaybes
+                    <$> forM (toList fallback) (\row -> do
+                         if rowIsWildcardAtPrefix row matCursor
+                            then return $ Just row
+                            else case RRB.viewl (rowPatterns row) of
+                                Just ((_, pat), _) ->
+                                    -- Check if pattern matches the group's constant.
+                                    -- We assume all rows in `group` share the same constant value,
+                                    -- so checking against the first row's pattern is sufficient.
+                                    case RRB.viewl (matrixRows group) of
+                                        Just (firstRow, _) ->
+                                            case RRB.viewl (rowPatterns firstRow) of
+                                                Just ((_, groupKind), _) ->
+                                                    if pat == groupKind
+                                                        then return $ popLeading row
+                                                        else return Nothing
+                                                Nothing -> return Nothing
+                                        Nothing -> return Nothing
+                                Nothing -> return Nothing
+                    )
+
+            let newRows = groupRows <> wildcardRowsExpanded <> fallbackRowsExpanded
+            let newGroup = PMMatrix matCursor newRows matTypeMap
+            let finalGroup = normalizeVarRefLevel newGroup
             translatePMToDT cps finalGroup
 
         processCtorGroup group leadingKind = do
@@ -639,63 +673,107 @@ translateWithLeadingDistinguishable cps distinguishable@(PMMatrix matCursor matR
             parentType' <- runUnification $ force parentType
             fieldTypes <- resolveFieldTypes parentType' ctorPath
 
-            newRows <-
-                RRB.fromList
-                    <$> forM
-                        (toList (matrixRows group))
-                        ( \row -> do
-                            let rowPatsView = RRB.viewl (rowPatterns row)
-                            case rowPatsView of
-                                Just ((_, pat), restPats) ->
-                                    case pat of
-                                        Syn.CtorPat p args ell _ -> do
-                                            -- Convert args to strict vector
-                                            let argsStrict = V.fromList (toList args)
-                                            mNorm <- normalizeCtorPattern p argsStrict ell
-                                            case mNorm of
-                                                Nothing -> return row{rowPatterns = restPats}
-                                                Just subPats -> do
-                                                    let newCols =
-                                                            V.imap
-                                                                ( \i subPat ->
-                                                                    let ref = extendRef matCursor i
-                                                                     in (ref, subPat)
-                                                                )
-                                                                subPats
 
-                                                    let validCols =
-                                                            V.filter
-                                                                ( \(_, pat') -> case pat' of
-                                                                    Syn.WildcardPat -> False
-                                                                    Syn.BindPat _ -> False
-                                                                    _ -> True
-                                                                )
-                                                                newCols
+            let mapRow row = do
+                    let rowPatsView = RRB.viewl (rowPatterns row)
+                    case rowPatsView of
+                        Just ((_, pat), restPats) ->
+                            case pat of
+                                Syn.CtorPat p args ell _ -> do
+                                    -- Convert args to strict vector
+                                    let argsStrict = V.fromList (toList args)
+                                    mNorm <- normalizeCtorPattern p argsStrict ell
+                                    case mNorm of
+                                        Nothing -> return $ Just row{rowPatterns = restPats}
+                                        Just subPats -> do
+                                            let newCols =
+                                                    V.imap
+                                                        ( \i subPat ->
+                                                            let ref = extendRef matCursor i
+                                                             in (ref, subPat)
+                                                        )
+                                                        subPats
 
-                                                    let newRefPats = RRB.fromList (V.toList validCols)
+                                            let validCols =
+                                                    V.filter
+                                                        ( \(_, pat') -> case pat' of
+                                                            Syn.WildcardPat -> False
+                                                            Syn.BindPat _ -> False
+                                                            _ -> True
+                                                        )
+                                                        newCols
 
-                                                    let newBindings =
-                                                            V.foldl'
-                                                                ( \acc (ref, subPat) ->
-                                                                    case subPat of
-                                                                        Syn.BindPat ident -> HashMap.insert ident ref acc
-                                                                        _ -> acc
-                                                                )
-                                                                (rowBindings row)
-                                                                newCols
+                                            let newRefPats = RRB.fromList (V.toList validCols)
 
-                                                    return row{rowPatterns = newRefPats <> restPats, rowBindings = newBindings}
-                                        _ -> error "Expected CtorPat in group"
-                                Nothing -> error "Empty row patterns in group"
-                        )
+                                            let newBindings =
+                                                    V.foldl'
+                                                        ( \acc (ref, subPat) ->
+                                                            case subPat of
+                                                                Syn.BindPat ident -> HashMap.insert ident ref acc
+                                                                _ -> acc
+                                                        )
+                                                        (rowBindings row)
+                                                        newCols
+
+                                            return $ Just row{rowPatterns = newRefPats <> restPats, rowBindings = newBindings}
+                                Syn.WildcardPat -> do
+                                    -- Wildcard matches everything, so we just pop it.
+                                    return $ Just row{rowPatterns = restPats}
+
+                                _ -> return Nothing -- Should not happen for group rows, but can for fallback
+                        Nothing -> return $ Just row -- Should not happen for group rows
+
+            groupRows <-
+                RRB.fromList . catMaybes
+                    <$> forM (toList (matrixRows group)) mapRow
+
+            -- | Expand wildcard rows for the current constructor.
+            -- Since these rows are wildcards at the current cursor, they match any constructor.
+            -- We just need to ensure they are preserved in the new matrix, potentially implicitly
+            -- handled if they don't have patterns for the new fields.
+            wildcardRowsExpanded <-
+                RRB.fromList . catMaybes
+                    <$> forM (toList wildcards) (\row -> return $ Just row)
+
+            -- | Expand fallback rows.
+            -- Fallback rows are patterns that appear *after* the current block of distinguishable patterns.
+            -- They are included in the new matrix if:
+            -- 1. They are wildcards at the current cursor (match this constructor).
+            -- 2. They explictly match the current constructor.
+            -- If they match a different constructor, they are excluded from this branch.
+            fallbackRowsExpanded <-
+                RRB.fromList . catMaybes
+                    <$> forM (toList fallback) (\row -> do
+                         if rowIsWildcardAtPrefix row matCursor
+                            then return $ Just row
+                            else mapRow row
+                    )
+
+            let newRows = groupRows <> wildcardRowsExpanded <> fallbackRowsExpanded
 
             let newTypeMap = V.imap (\i ty -> (extendRef matCursor i, ty)) fieldTypes
+            -- combine the new field types with existing types.
+            -- Note: `wildcards` and `fallback` might depend on `matCursor` type which is already present.
             let combinedTypeMap = HashMap.union (HashMap.fromList (V.toList newTypeMap)) matTypeMap
-
+            
             let newGroup = PMMatrix matCursor newRows combinedTypeMap
             let finalGroup = normalizeVarRefLevel newGroup
 
             translatePMToDT cps finalGroup
+
+
+
+
+        catMaybes :: [Maybe a] -> [a]
+        catMaybes = mapMaybe id
+          where
+            mapMaybe _ [] = []
+            mapMaybe f (Nothing : xs) = mapMaybe f xs
+            mapMaybe f (Just x : xs) = x : mapMaybe f xs
+
+
+
+
 
     groupsResults <- mapM processGroup groups
 
@@ -729,7 +807,7 @@ translateWithLeadingDistinguishable cps distinguishable@(PMMatrix matCursor matR
                         )
                         variants
 
-            return $ DTSwitch matCursor (DTSwitchCtor dtCases fallbackDT)
+            return $ DTSwitch matCursor (DTSwitchCtor dtCases)
         DispatchNullable -> do
             let isNull (Syn.CtorPat p _ _ _) =
                     let Path base segs = p
@@ -750,10 +828,6 @@ translateWithLeadingDistinguishable cps distinguishable@(PMMatrix matCursor matR
 
             return $ DTSwitch matCursor (DTSwitchNullable dtNonNull dtNull)
   where
-    popLeadingPattern row =
-        case RRB.viewl (rowPatterns row) of
-            Just (_, rest) -> row{rowPatterns = rest}
-            Nothing -> row -- Should unlikely happen for const group rows
     extendRef (PatternVarRef s) i = PatternVarRef (s Seq.|> i)
 
     lookupBranch key results def =

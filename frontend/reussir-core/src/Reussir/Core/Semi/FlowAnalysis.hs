@@ -124,9 +124,8 @@ analyzeGenericFlowInSwitchCases (DTSwitchInt m def) = do
 analyzeGenericFlowInSwitchCases (DTSwitchBool t f) = do
     analyzeGenericFlowInDT t
     analyzeGenericFlowInDT f
-analyzeGenericFlowInSwitchCases (DTSwitchCtor cases def) = do
+analyzeGenericFlowInSwitchCases (DTSwitchCtor cases) = do
     mapM_ analyzeGenericFlowInDT cases
-    analyzeGenericFlowInDT def
 analyzeGenericFlowInSwitchCases (DTSwitchString m def) = do
     mapM_ analyzeGenericFlowInDT m
     analyzeGenericFlowInDT def
