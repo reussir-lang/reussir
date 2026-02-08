@@ -1,4 +1,5 @@
 // RUN: %reussir-elab --mode semi %s | %FileCheck %s
+// RUN: %reussir-elab --mode full %s
 
 fn test(x : bool, y : i32) -> i32 {
     match x {

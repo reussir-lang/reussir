@@ -1,4 +1,5 @@
 // RUN: %reussir-elab --mode semi %s | %FileCheck %s
+// RUN: %reussir-elab --mode full %s
 
 enum Option<T> {
     Some(T),

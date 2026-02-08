@@ -21,13 +21,14 @@ import Reussir.Core.Data.Full.Context (
     LocalFullContext (..),
  )
 import Reussir.Core.Data.Full.Error (Error (..), ErrorKind (..))
-import Reussir.Core.Data.Full.Expr (Expr (..), ExprKind (..))
+import Reussir.Core.Data.Full.Expr (DTSwitchCases (..), DecisionTree (..), Expr (..), ExprKind (..), PatternVarRef (..))
 import Reussir.Core.Data.Full.Type (Type (..))
 import Reussir.Core.Data.UniqueID (ExprID (ExprID))
 import Reussir.Core.Full.Context (addError, withSpan)
 import Reussir.Core.Full.Type (convertSemiType)
 import Reussir.Core.Semi.Mangle (mangleABIName)
 
+import Data.IntMap.Strict qualified as IntMap
 import Reussir.Core.Data.Semi.Expr qualified as SemiExpr
 import Reussir.Core.Data.Semi.Record qualified as Semi
 import Reussir.Core.Data.Semi.Type qualified as SemiType
@@ -143,7 +144,10 @@ convertSemiExpr semiExpr = do
             SemiExpr.Sequence es -> do
                 es' <- mapM convertSemiExpr es
                 exprWithSpan ty $ Sequence es'
-            SemiExpr.Match _ _ -> error "Match not implemented yet"
+            SemiExpr.Match scrutinee dt -> do
+                scrutinee' <- convertSemiExpr scrutinee
+                dt' <- convertDecisionTree dt
+                exprWithSpan ty $ Match scrutinee' dt'
 
 hoistRcWrapping :: Type -> ExprKind -> FullEff Expr
 hoistRcWrapping ty e = do
@@ -179,3 +183,37 @@ flexibleScope flexible cont = do
     result <- cont
     State.modify $ \st -> st{ctxFlexible = oldFlexible}
     return result
+
+convertDecisionTree :: SemiExpr.DecisionTree -> FullEff DecisionTree
+convertDecisionTree SemiExpr.DTUncovered = pure DTUncovered
+convertDecisionTree SemiExpr.DTUnreachable = pure DTUnreachable
+convertDecisionTree (SemiExpr.DTLeaf body bindings) = do
+    body' <- convertSemiExpr body
+    pure $ DTLeaf body' (IntMap.map convertPatternVarRef bindings)
+convertDecisionTree (SemiExpr.DTGuard bindings guardExpr trueBr falseBr) = do
+    guard' <- convertSemiExpr guardExpr
+    trueBr' <- convertDecisionTree trueBr
+    falseBr' <- convertDecisionTree falseBr
+    pure $ DTGuard (IntMap.map convertPatternVarRef bindings) guard' trueBr' falseBr'
+convertDecisionTree (SemiExpr.DTSwitch varRef cases) = do
+    cases' <- convertDTSwitchCases cases
+    pure $ DTSwitch (convertPatternVarRef varRef) cases'
+
+convertDTSwitchCases :: SemiExpr.DTSwitchCases -> FullEff DTSwitchCases
+convertDTSwitchCases (SemiExpr.DTSwitchInt m def) = do
+    m' <- mapM convertDecisionTree m
+    def' <- convertDecisionTree def
+    pure $ DTSwitchInt m' def'
+convertDTSwitchCases (SemiExpr.DTSwitchBool t f) =
+    DTSwitchBool <$> convertDecisionTree t <*> convertDecisionTree f
+convertDTSwitchCases (SemiExpr.DTSwitchCtor cases) =
+    DTSwitchCtor <$> V.mapM convertDecisionTree cases
+convertDTSwitchCases (SemiExpr.DTSwitchString m def) = do
+    m' <- mapM convertDecisionTree m
+    def' <- convertDecisionTree def
+    pure $ DTSwitchString m' def'
+convertDTSwitchCases (SemiExpr.DTSwitchNullable j n) =
+    DTSwitchNullable <$> convertDecisionTree j <*> convertDecisionTree n
+
+convertPatternVarRef :: SemiExpr.PatternVarRef -> PatternVarRef
+convertPatternVarRef (SemiExpr.PatternVarRef s) = PatternVarRef s

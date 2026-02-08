@@ -1,4 +1,5 @@
 // RUN: %reussir-elab --mode semi %s | %FileCheck %s
+// RUN: %reussir-elab --mode full %s | %FileCheck %s --check-prefix=FULL
 
 fn negate(x : bool) -> bool {
     match x {
@@ -20,3 +21,19 @@ fn negate(x : bool) -> bool {
 // CHECK-NEXT:         }
 // CHECK-NEXT:     }
 // CHECK-NEXT: }
+
+// FULL:      ;; Elaborated Full Functions
+// FULL-NEXT: fn _RC6negate(x: bool) -> bool {
+// FULL-NEXT:     {
+// FULL-NEXT:         match v0 {
+// FULL-NEXT:             switch (0) {
+// FULL-NEXT:                 true => {
+// FULL-NEXT:                     0.0 : bool
+// FULL-NEXT:                 }
+// FULL-NEXT:                 false => {
+// FULL-NEXT:                     1.0 : bool
+// FULL-NEXT:                 }
+// FULL-NEXT:             }
+// FULL-NEXT:         }
+// FULL-NEXT:     }
+// FULL-NEXT: }

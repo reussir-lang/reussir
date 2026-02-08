@@ -8,6 +8,8 @@ module Reussir.Core.Full.Pretty (
 )
 where
 
+import Control.Monad (zipWithM)
+import Data.Foldable (toList)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Prim (Prim)
 import Prettyprinter
@@ -16,13 +18,15 @@ import Reussir.Codegen.Context.Symbol (Symbol, symbolText)
 import Reussir.Parser.Types.Lexer (Identifier (..), Path (..))
 import Reussir.Parser.Types.Stmt (Visibility (..))
 
+import Data.HashMap.Strict qualified as Data.HashMap.Strict
+import Data.IntMap.Strict qualified as IntMap
 import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
 import Reussir.Codegen.Type.Data qualified as C
 import Reussir.Parser.Types.Capability qualified as Cap
 
 import Reussir.Core.Data.FP (FloatingPointType (..))
-import Reussir.Core.Data.Full.Expr (Expr (..), ExprKind (..))
+import Reussir.Core.Data.Full.Expr (DTSwitchCases (..), DecisionTree (..), Expr (..), ExprKind (..), PatternVarRef (..))
 import Reussir.Core.Data.Full.Function (Function (..))
 import Reussir.Core.Data.Full.Record (
     FieldFlag,
@@ -270,6 +274,13 @@ instance PrettyColored Expr where
                     keyword "intrinsic"
                         <> angles pathDoc
                         <> parens (commaSep argsDocs)
+            Match val dt -> do
+                valDoc <- prettyColored val
+                dtDoc <- prettyColored dt
+                pure $
+                    keyword "match"
+                        <+> valDoc
+                        <+> braces (nest 4 (hardline <> dtDoc) <> hardline)
             RcWrap e -> do
                 eDoc <- prettyColored e
                 pure $ keyword "rc_wrap" <> parens eDoc
@@ -283,6 +294,7 @@ instance PrettyColored Expr where
             Let _ _ _ _ -> pure kindDoc
             Sequence _ -> pure kindDoc
             ScfIfExpr _ _ _ -> pure kindDoc
+            Match _ _ -> pure kindDoc
             _ -> do
                 tyDoc <- prettyColored (exprType expr)
                 pure $ kindDoc <+> comment (":" <+> tyDoc)
@@ -362,6 +374,107 @@ instance PrettyColored Function where
             nDoc <- prettyColored n
             tDoc <- prettyColored t
             pure $ nDoc <> operator ":" <+> tDoc
+
+instance PrettyColored DecisionTree where
+    prettyColored DTUncovered = pure $ keyword "uncovered"
+    prettyColored DTUnreachable = pure $ keyword "unreachable"
+    prettyColored (DTLeaf body bindings) = do
+        binds <- mapM prettyBind (IntMap.toList bindings)
+        bodyDoc <- prettyColored body
+        pure $ vsep (binds ++ [bodyDoc])
+      where
+        prettyBind (v, PatternVarRef path) =
+            pure $
+                keyword "pattern var"
+                    <+> variable ("v" <> pretty v)
+                    <+> parens (commaSep (map pretty (toList path)))
+    prettyColored (DTGuard _ guard trueBr falseBr) = do
+        guardDoc <- prettyColored guard
+        trueDoc <- prettyColored trueBr
+        falseDoc <- prettyColored falseBr
+        pure $
+            vsep
+                [ keyword "if" <+> guardDoc <+> braces (nest 4 (hardline <> trueDoc) <> hardline)
+                , keyword "otherwise" <+> braces (nest 4 (hardline <> falseDoc) <> hardline)
+                ]
+    prettyColored (DTSwitch (PatternVarRef p) cases) = do
+        casesDoc <- prettyColored cases
+        pure $
+            keyword "switch"
+                <+> parens (commaSep (map pretty (toList p)))
+                <+> braces (nest 4 (hardline <> casesDoc) <> hardline)
+
+instance PrettyColored DTSwitchCases where
+    prettyColored (DTSwitchInt m def) = do
+        casesDocs <- mapM prettyCase (IntMap.toList m)
+        defDoc <- prettyColored def
+        pure $
+            vsep $
+                casesDocs
+                    ++ [ keyword "_"
+                            <+> operator "=>"
+                            <+> braces (nest 4 (hardline <> defDoc) <> hardline)
+                       ]
+      where
+        prettyCase (i, dt) = do
+            dtDoc <- prettyColored dt
+            pure $
+                literal (pretty i)
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> dtDoc) <> hardline)
+    prettyColored (DTSwitchBool t f) = do
+        tDoc <- prettyColored t
+        fDoc <- prettyColored f
+        pure $
+            vsep
+                [ literal "true"
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> tDoc) <> hardline)
+                , literal "false"
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> fDoc) <> hardline)
+                ]
+    prettyColored (DTSwitchCtor cases) = do
+        casesDocs <- zipWithM prettyCase [0 ..] (V.toList cases)
+        pure $
+            vsep $
+                casesDocs
+      where
+        prettyCase i dt = do
+            dtDoc <- prettyColored dt
+            pure $
+                variable ("ctor@" <> pretty (i :: Int))
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> dtDoc) <> hardline)
+    prettyColored (DTSwitchString m def) = do
+        defDoc <- prettyColored def
+        casesDocs <- mapM prettyCase (Data.HashMap.Strict.toList m)
+        pure $
+            vsep $
+                casesDocs
+                    ++ [ keyword "_"
+                            <+> operator "=>"
+                            <+> braces (nest 4 (hardline <> defDoc) <> hardline)
+                       ]
+      where
+        prettyCase (h, dt) = do
+            dtDoc <- prettyColored dt
+            pure $
+                literal ("hash(" <> pretty (show h) <> ")")
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> dtDoc) <> hardline)
+    prettyColored (DTSwitchNullable j n) = do
+        jDoc <- prettyColored j
+        nDoc <- prettyColored n
+        pure $
+            vsep
+                [ keyword "nonnull"
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> jDoc) <> hardline)
+                , keyword "null"
+                    <+> operator "=>"
+                    <+> braces (nest 4 (hardline <> nDoc) <> hardline)
+                ]
 
 commaSep :: [Doc AnsiStyle] -> Doc AnsiStyle
 commaSep = concatWith (surround (comma <> space))
