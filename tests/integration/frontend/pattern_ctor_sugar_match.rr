@@ -1,0 +1,53 @@
+// RUN: %reussir-elab --mode semi %s | %FileCheck %s
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+fn is_some(x : Option<i32>) -> bool {
+    match x {
+        Option::Some(_) => true,
+        Option::None{} => false
+    }
+}
+
+fn none_val() -> Option<i32> {
+    Option::None
+}
+
+fn map_to_none(x : Option<i32>) -> Option<i32> {
+    match x {
+        Option::Some(_) => Option::None,
+        Option::None{} => Option::None
+    }
+}
+
+// CHECK:      ;; Elaborated Functions
+// CHECK:      fn none_val() -> Option<i32> {
+// CHECK-NEXT:     Option<i32>[1](Option::None<i32>() : Option::None<i32>) : Option<i32>
+// CHECK-NEXT: }
+// CHECK:      fn map_to_none(v0 (x): Option<i32>) -> Option<i32> {
+// CHECK-NEXT:     match v0 {
+// CHECK-NEXT:         switch (0) {
+// CHECK-NEXT:             ctor@0 => {
+// CHECK-NEXT:                 Option<i32>[1](Option::None<i32>() : Option::None<i32>) : Option<i32>
+// CHECK-NEXT:             }
+// CHECK-NEXT:             ctor@1 => {
+// CHECK-NEXT:                 Option<i32>[1](Option::None<i32>() : Option::None<i32>) : Option<i32>
+// CHECK-NEXT:             }
+// CHECK-NEXT:         }
+// CHECK-NEXT:     }
+// CHECK-NEXT: }
+// CHECK:      fn is_some(v0 (x): Option<i32>) -> bool {
+// CHECK-NEXT:     match v0 {
+// CHECK-NEXT:         switch (0) {
+// CHECK-NEXT:             ctor@0 => {
+// CHECK-NEXT:                 1.0 : bool
+// CHECK-NEXT:             }
+// CHECK-NEXT:             ctor@1 => {
+// CHECK-NEXT:                 0.0 : bool
+// CHECK-NEXT:             }
+// CHECK-NEXT:         }
+// CHECK-NEXT:     }
+// CHECK-NEXT: }
