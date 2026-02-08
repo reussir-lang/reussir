@@ -14,6 +14,7 @@ import Reussir.Codegen.Type.Data (
     Atomicity (..),
     Capability (..),
     Closure (..),
+    LifeScope (..),
     Primitive (..),
     PrimitiveFloat (..),
     PrimitiveInt (..),
@@ -91,7 +92,8 @@ emitTy toplevel (TypeNullable ty) = do
     ty' <- emitTy toplevel ty
     pure $ "!reussir.nullable<" <> ty' <> ">"
 emitTy _ TypeRegion = pure "!reussir.region"
-emitTy _ TypeStr = pure "!reussir.str<global>"
+emitTy _ (TypeStr Global) = pure "!reussir.str<global>"
+emitTy _ (TypeStr Local) = pure "!reussir.str<local>"
 -- TODO: backend does not support tensor emission yet
 emitTy _ (TypeTensor _tensor) = error "Emission for Tensor not yet implemented"
 

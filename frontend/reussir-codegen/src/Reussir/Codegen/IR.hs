@@ -336,6 +336,25 @@ data Instr
         , ifThenElseElse :: Maybe Block
         , ifThenElseRes :: Maybe TypedValue
         }
+    | -- | scf.index_switch: Switch on an index value with cases and default
+      IndexSwitch
+        { indexSwitchVal :: TypedValue -- index value to switch on
+        , indexSwitchCases :: [(Int64, Block)] -- (case_value, block) pairs
+        , indexSwitchDefault :: Block -- default block
+        , indexSwitchRes :: Maybe TypedValue -- optional result
+        }
+    | -- | reussir.str.select: Select first matched string pattern
+      StrSelect
+        { strSelectVal :: TypedValue -- input string (!reussir.str<local>)
+        , strSelectPatterns :: [T.Text] -- pattern strings to match
+        , strSelectIdxRes :: TypedValue -- result: selected index (index type)
+        , strSelectFoundRes :: TypedValue -- result: match found (i1 type)
+        }
+    | -- | reussir.str.cast: Cast a global string to a local string
+      StrCast
+        { strCastVal :: TypedValue -- input (!reussir.str<global>)
+        , strCastRes :: TypedValue -- result (!reussir.str<local>)
+        }
     | -- | Attach location information to an instruction
       WithLoc Location Instr
     | -- | reussir.str.literal: Create a reference to a global string literal
@@ -680,6 +699,69 @@ variantDispCodegen val (VariantDispData cases) result = do
     incIndentation $ forM_ cases $ uncurry variantDispCaseCodegen
     emitBuilder "}"
 
+{- | Generate scf.index_switch operation
+Syntax:
+  [%res =] scf.index_switch %val [-> type]
+  case 0 {
+    ...
+  }
+  default {
+    ...
+  }
+-}
+indexSwitchCodegen ::
+    TypedValue -> [(Int64, Block)] -> Block -> Maybe TypedValue -> Codegen ()
+indexSwitchCodegen (switchVal, _) cases defaultBlock result = do
+    emitIndentation
+    for_ result $ emit . fst >=> emitBuilder . (<> " = ")
+    switchVal' <- emit switchVal
+    emitBuilder $ "scf.index_switch " <> switchVal'
+    for_ result $ emit . snd >=> emitBuilder . (" -> " <>) . (<> " ")
+    emitBuilder "\n"
+    incIndentation $ withoutLocation $ do
+        forM_ cases $ \(caseVal, blk) -> do
+            emitIndentation
+            emitBuilder $ "case " <> TB.fromDec caseVal <> " "
+            blockCodegen False blk
+            emitBuilder "\n"
+        emitIndentation
+        emitBuilder "default "
+        blockCodegen False defaultBlock
+        emitBuilder "\n"
+    emitLocIfPresent
+
+{- | Generate reussir.str.select operation
+Syntax: %idx, %found = reussir.str.select (%str) ["foo", "bar"] : (!reussir.str<local>) -> (index, i1)
+-}
+strSelectCodegen ::
+    TypedValue -> [T.Text] -> TypedValue -> TypedValue -> Codegen ()
+strSelectCodegen inputVal patterns (idxResVal, idxResTy) (foundResVal, foundResTy) = emitLine $ do
+    inputVal' <- fmtTypedValue inputVal
+    inputTy' <- emit (snd inputVal)
+    idxResVal' <- emit idxResVal
+    idxResTy' <- emit idxResTy
+    foundResVal' <- emit foundResVal
+    foundResTy' <- emit foundResTy
+    let patternStrs = intercalate ", " (map (\p -> "\"" <> TB.fromText p <> "\"") patterns)
+    emitBuilder $
+        idxResVal'
+            <> ", "
+            <> foundResVal'
+            <> " = reussir.str.select ("
+            <> inputVal'
+            <> ") ["
+            <> patternStrs
+            <> "] : ("
+            <> inputTy'
+            <> ") -> ("
+            <> idxResTy'
+            <> ", "
+            <> foundResTy'
+            <> ")"
+
+strCastCodegen :: TypedValue -> TypedValue -> Codegen ()
+strCastCodegen = emitUnaryOp "reussir.str.cast"
+
 {- | Generate reussir.str.literal operation
 Syntax: %res = reussir.str.literal @sym : !reussir.str<global>
 -}
@@ -718,6 +800,9 @@ instrCodegen (ClosureApply target arg res) = closureApplyCodegen target arg res
 instrCodegen (ClosureEval target res) = closureEvalCodegen target res
 instrCodegen (ClosureUniqify target res) = closureUniqifyCodegen target res
 instrCodegen (IfThenElse cond thenBlock elseBlock res) = ifThenElseCodegen cond thenBlock elseBlock res
+instrCodegen (IndexSwitch val cases def res) = indexSwitchCodegen val cases def res
+instrCodegen (StrSelect val pats idxRes foundRes) = strSelectCodegen val pats idxRes foundRes
+instrCodegen (StrCast val res) = strCastCodegen val res
 instrCodegen (WithLoc loc instr) = withLocation loc (instrCodegen instr)
 instrCodegen (RecordExtract val field res) = recordExtractCodegen val field res
 instrCodegen (StrLiteral sym res) = strLiteralCodegen sym res

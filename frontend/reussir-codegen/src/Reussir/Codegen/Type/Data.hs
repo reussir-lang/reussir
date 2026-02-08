@@ -8,6 +8,7 @@ module Reussir.Codegen.Type.Data (
     Primitive (..),
     Atomicity (..),
     Capability (..),
+    LifeScope (..),
     Type (..),
     Rc (..),
     Ref (..),
@@ -16,6 +17,7 @@ module Reussir.Codegen.Type.Data (
     isRefType,
     isBoolType,
     isVoidType,
+    isStrType,
     isIntegralType,
     isFloatType,
     isPrimitiveType,
@@ -168,13 +170,16 @@ data Type
     | TypeExpr Symbol
     | TypeNullable Type
     | TypeRegion -- Region handle
-    | TypeStr -- String type !reussir.str<global>
+    | TypeStr LifeScope -- String type !reussir.str<global> or !reussir.str<local>
     deriving (Eq, Show, Hashable, Generic)
 
 data Atomicity = Atomic | NonAtomic
     deriving (Eq, Show, Hashable, Generic)
 
 data Capability = Unspecified | Shared | Value | Flex | Rigid | Field | Regional
+    deriving (Eq, Show, Hashable, Generic)
+
+data LifeScope = Local | Global
     deriving (Eq, Show, Hashable, Generic)
 
 isBoolType :: Type -> Bool
@@ -184,6 +189,10 @@ isBoolType _ = False
 isRefType :: Type -> Bool
 isRefType (TypeRef _) = True
 isRefType _ = False
+
+isStrType :: Type -> Bool
+isStrType (TypeStr _) = True
+isStrType _ = False
 
 isVoidType :: Type -> Bool
 isVoidType (TypePrim PrimUnit) = True

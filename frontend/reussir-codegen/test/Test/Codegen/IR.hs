@@ -58,6 +58,15 @@ primitiveBool = TT.TypePrim TT.PrimBool
 primitiveI64 :: TT.Type
 primitiveI64 = TT.TypePrim (TT.PrimInt TT.PrimInt64)
 
+primitiveIndex :: TT.Type
+primitiveIndex = TT.TypePrim (TT.PrimInt TT.PrimIndex)
+
+strLocalType :: TT.Type
+strLocalType = TT.TypeStr TT.Local
+
+strGlobalType :: TT.Type
+strGlobalType = TT.TypeStr TT.Global
+
 -- RC I32 type (non-nullable)
 rcI32 :: TT.Type
 rcI32 = TT.TypeRc (TT.Rc primitiveI32 TT.NonAtomic TT.Shared)
@@ -996,5 +1005,87 @@ irTests =
                 assertBool "Should contain else" $ "else" `isInfixOf` resultStr
                 assertBool "Result should come before condition" $
                     comesAfter "%4 = " "scf.if" resultStr
+            ]
+        , testGroup
+            "IndexSwitch"
+            [ testCase "IndexSwitch single case without result" $ do
+                result <-
+                    runCodegenForInstr
+                        ( IR.IndexSwitch
+                            (typedVal 1 primitiveIndex)
+                            [(0, blockWithArgs [] [IR.Yield IR.YieldScf Nothing])]
+                            (blockWithArgs [] [IR.Yield IR.YieldScf Nothing])
+                            Nothing
+                        )
+                let resultStr = T.unpack result
+                assertBool "Should contain scf.index_switch" $
+                    "scf.index_switch" `isInfixOf` resultStr
+                assertBool "Should contain case 0" $ "case 0" `isInfixOf` resultStr
+                assertBool "Should contain default" $ "default" `isInfixOf` resultStr
+                assertBool "Should contain input %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should not contain result assignment" $
+                    not ("%2 = " `isInfixOf` resultStr)
+            , testCase "IndexSwitch multiple cases with result" $ do
+                result <-
+                    runCodegenForInstr
+                        ( IR.IndexSwitch
+                            (typedVal 1 primitiveIndex)
+                            [ (0, blockWithArgs [] [IR.Yield IR.YieldScf (Just (typedVal 2 primitiveI32))])
+                            , (1, blockWithArgs [] [IR.Yield IR.YieldScf (Just (typedVal 3 primitiveI32))])
+                            ]
+                            (blockWithArgs [] [IR.Yield IR.YieldScf (Just (typedVal 4 primitiveI32))])
+                            (Just (typedVal 5 primitiveI32))
+                        )
+                let resultStr = T.unpack result
+                assertBool "Should contain scf.index_switch" $
+                    "scf.index_switch" `isInfixOf` resultStr
+                assertBool "Should contain case 0" $ "case 0" `isInfixOf` resultStr
+                assertBool "Should contain case 1" $ "case 1" `isInfixOf` resultStr
+                assertBool "Should contain default" $ "default" `isInfixOf` resultStr
+                assertBool "Should contain result %5" $ "%5 = " `isInfixOf` resultStr
+                assertBool "Should contain -> for result" $ " -> " `isInfixOf` resultStr
+            ]
+        , testGroup
+            "StrSelect"
+            [ testCase "StrSelect basic with 2 patterns" $ do
+                result <-
+                    runCodegenForInstr
+                        ( IR.StrSelect
+                            (typedVal 1 strLocalType)
+                            ["foo", "bar"]
+                            (typedVal 2 primitiveIndex)
+                            (typedVal 3 primitiveBool)
+                        )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.str.select" $
+                    "reussir.str.select" `isInfixOf` resultStr
+                assertBool "Should contain input %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain pattern foo" $ "\"foo\"" `isInfixOf` resultStr
+                assertBool "Should contain pattern bar" $ "\"bar\"" `isInfixOf` resultStr
+                assertBool "Should contain idx result %2" $ "%2" `isInfixOf` resultStr
+                assertBool "Should contain found result %3" $ "%3" `isInfixOf` resultStr
+                assertBool "Should contain local str type" $
+                    "!reussir.str<local>" `isInfixOf` resultStr
+            ]
+        , testGroup
+            "StrCast"
+            [ testCase "StrCast basic" $ do
+                result <-
+                    runCodegenForInstr
+                        ( IR.StrCast
+                            (typedVal 1 strGlobalType)
+                            (typedVal 2 strLocalType)
+                        )
+                let resultStr = T.unpack result
+                assertBool "Should contain reussir.str.cast" $
+                    "reussir.str.cast" `isInfixOf` resultStr
+                assertBool "Should contain input %1" $ "%1" `isInfixOf` resultStr
+                assertBool "Should contain result %2" $ "%2 = " `isInfixOf` resultStr
+                assertBool "Should contain global str type" $
+                    "!reussir.str<global>" `isInfixOf` resultStr
+                assertBool "Should contain local str type" $
+                    "!reussir.str<local>" `isInfixOf` resultStr
+                assertBool "Result should come before operation" $
+                    comesAfter "%2 = " "reussir.str.cast" resultStr
             ]
         ]
