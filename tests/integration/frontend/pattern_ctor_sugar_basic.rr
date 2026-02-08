@@ -1,0 +1,22 @@
+// RUN: %reussir-elab --mode semi %s | %FileCheck %s
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+fn foo() -> Option<i32> {
+    Option::None
+}
+
+fn bar() -> Option<i32> {
+    Option::None{}
+}
+
+// CHECK:      ;; Elaborated Functions
+// CHECK:      fn bar() -> Option<i32> {
+// CHECK-NEXT:     Option<i32>[1](Option::None<i32>() : Option::None<i32>) : Option<i32>
+// CHECK-NEXT: }
+// CHECK:      fn foo() -> Option<i32> {
+// CHECK-NEXT:     Option<i32>[1](Option::None<i32>() : Option::None<i32>) : Option<i32>
+// CHECK-NEXT: }

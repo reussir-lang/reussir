@@ -449,7 +449,25 @@ inferType (Syn.Var varName) = do
                 Nothing -> do
                     addErrReportMsg "Variable not found"
                     exprWithSpan TypeBottom Poison
-        _ -> error "unimplemented yet"
+        _ -> do
+            records <- State.gets knownRecords
+            liftIO (H.lookup records varName) >>= \case
+                Just record -> do
+                    fieldsMaybe <- readIORef' (recordFields record)
+                    case (recordKind record, fieldsMaybe) of
+                        (EnumVariant _ _, Just (Unnamed fs)) | V.null fs ->
+                            inferTypeForNormalCtorCall
+                                Syn.CtorCall
+                                    { Syn.ctorName = varName
+                                    , Syn.ctorTyArgs = []
+                                    , Syn.ctorArgs = []
+                                    }
+                        _ -> do
+                            addErrReportMsg $ "Qualified path is not a nullary variant: " <> T.pack (show varName)
+                            exprWithSpan TypeBottom Poison
+                Nothing -> do
+                    addErrReportMsg $ "Qualified variable not found: " <> T.pack (show varName)
+                    exprWithSpan TypeBottom Poison
 
 -- Project:
 --     C, record R, I : T, I in R |- R <- e
