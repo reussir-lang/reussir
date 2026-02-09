@@ -348,13 +348,13 @@ dumpSemiContext state = do
     records <- H.toList (Semi.knownRecords semiCtx)
     forM_ records $ \(_, rec') -> do
         doc <- runEff $ runPrim $ SemiP.prettyColored rec'
-        TIO.putStrLn $ renderStrict $ layoutPretty defaultLayoutOptions doc
+        TIO.putStrLn $ renderStrict $ layoutPretty defaultLayoutOptions (SemiP.renderAnsi doc)
 
     putStrLn "\n=== Functions ==="
     funcs <- H.toList (SemiFunc.functionProtos $ Semi.functions semiCtx)
     forM_ funcs $ \(_, func) -> do
         doc <- runEff $ runPrim $ SemiP.prettyColored func
-        TIO.putStrLn $ renderStrict $ layoutPretty defaultLayoutOptions doc
+        TIO.putStrLn $ renderStrict $ layoutPretty defaultLayoutOptions (SemiP.renderAnsi doc)
 
 dumpCompiledFunctions :: ReplState -> IO ()
 dumpCompiledFunctions state = do
