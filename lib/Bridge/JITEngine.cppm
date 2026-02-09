@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 module;
 #include <llvm/ADT/StringRef.h>
+#include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
 #include <llvm/ExecutionEngine/Orc/CompileOnDemandLayer.h>
 #include <llvm/ExecutionEngine/Orc/CompileUtils.h>
 #include <llvm/ExecutionEngine/Orc/Core.h>
@@ -28,6 +29,7 @@ module;
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/LegacyPassManager.h>
+#include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/TargetSelect.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/Pass/PassManager.h>
@@ -259,6 +261,21 @@ public:
       spdlog::warn("Failed to load Reussir runtime library");
     else
       main_dynlib.addGenerator(std::move(*loaded));
+
+#if defined(_WIN32) && defined(__x86_64__)
+    // On Windows x86-64 (MinGW/Clang64), ___chkstk_ms is a stack-probing
+    // intrinsic that LLVM-generated code may call for large stack frames.
+    // It comes from compiler-rt builtins (a static library), so it is linked
+    // into the host process but not exported by any DLL — meaning
+    // GetForCurrentProcess() cannot discover it. We register it manually.
+    if (auto addr = llvm::sys::DynamicLibrary::SearchForAddressOfSymbol(
+            "___chkstk_ms")) {
+      SymbolMap win_symbols;
+      win_symbols[mangle_and_interner("___chkstk_ms")] = {
+          ExecutorAddr::fromPtr(addr), JITSymbolFlags::Exported};
+      cantFail(main_dynlib.define(absoluteSymbols(std::move(win_symbols))));
+    }
+#endif
   }
 
   ~JITEngine() {
