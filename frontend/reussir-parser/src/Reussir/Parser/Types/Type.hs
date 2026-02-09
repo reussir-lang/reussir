@@ -2,8 +2,6 @@
 module Reussir.Parser.Types.Type where
 
 import Data.Int (Int16)
-import Data.List (intercalate)
-
 import Reussir.Parser.Types.Lexer (Path (..), WithSpan (..))
 
 {- | Represents integral types with a specific bit width.
@@ -17,8 +15,8 @@ data IntegralType
     deriving (Eq)
 
 instance Show IntegralType where
-    show (Signed bits) = "i" ++ show bits
-    show (Unsigned bits) = "u" ++ show bits
+    showsPrec _ (Signed bits) = showString "i" . shows bits
+    showsPrec _ (Unsigned bits) = showString "u" . shows bits
 
 {- | Represents floating-point types.
 Supports IEEE floating-point formats as well as specialized formats like BFloat16 and Float8.
@@ -33,9 +31,9 @@ data FloatingPointType
     deriving (Eq)
 
 instance Show FloatingPointType where
-    show (IEEEFloat bits) = "f" ++ show bits
-    show BFloat16 = "bfloat16"
-    show Float8 = "float8"
+    showsPrec _ (IEEEFloat bits) = showString "f" . shows bits
+    showsPrec _ BFloat16 = showString "bfloat16"
+    showsPrec _ Float8 = showString "float8"
 
 {- | Represents a type in the Reussir type system.
 Types can be primitives (integral, floating-point, bool, string, unit)
@@ -74,17 +72,23 @@ instance Eq Type where
     _ == _ = False
 
 instance Show Type where
-    show (TypeExpr path []) = show path
-    show (TypeExpr path args) =
-        show path
-            ++ "<"
-            ++ intercalate ", " (map show args)
-            ++ ">"
-    show (TypeIntegral it) = show it
-    show (TypeFP fpt) = show fpt
-    show TypeBool = "bool"
-    show TypeStr = "str"
-    show TypeUnit = "unit"
-    show (TypeArrow a b) = "(" ++ show a ++ " -> " ++ show b ++ ")"
-    show (TypeSpanned ws) = show (spanValue ws)
-    show TypeBottom = "⊥"
+    showsPrec _ (TypeExpr path []) = shows path
+    showsPrec p (TypeExpr path args) =
+        shows path
+            . showString "<"
+            . showArgs args
+            . showString ">"
+      where
+        showArgs [] = id
+        showArgs [x] = shows x
+        showArgs (x : xs) = shows x . showString ", " . showArgs xs
+    showsPrec _ (TypeIntegral it) = shows it
+    showsPrec _ (TypeFP fpt) = shows fpt
+    showsPrec _ TypeBool = showString "bool"
+    showsPrec _ TypeStr = showString "str"
+    showsPrec _ TypeUnit = showString "unit"
+    showsPrec _ (TypeArrow a b) =
+        showParen True $
+            shows a . showString " -> " . shows b
+    showsPrec p (TypeSpanned ws) = showsPrec p (spanValue ws)
+    showsPrec _ TypeBottom = showString "⊥"

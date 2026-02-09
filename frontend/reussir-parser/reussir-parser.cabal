@@ -157,3 +157,27 @@ test-suite reussir-parser-test
         text,
         reussir-parser,
         vector
+
+benchmark reussir-parser-bench
+    -- Import common warning flags.
+    import:           warnings
+
+    -- Base language which the package is written in.
+    default-language: GHC2024
+
+    -- The interface type and version of the benchmark.
+    type:             exitcode-stdio-1.0
+
+    -- Directories containing source files.
+    hs-source-dirs:   bench
+
+    -- The entrypoint to the benchmark.
+    main-is:          Main.hs
+
+    -- Benchmark dependencies.
+    build-depends:
+        base ^>=4.20.0.0,
+        reussir-parser,
+        criterion,
+        deepseq,
+        text
