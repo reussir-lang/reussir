@@ -14,6 +14,7 @@ import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
 import Effectful.Log qualified as L
 import Effectful.State.Static.Local qualified as State
+import Prettyprinter ((<+>))
 
 import Reussir.Core.Data.Generic (GenericSolution)
 import Reussir.Core.Data.Semi.Context (GlobalSemiEff, SemiContext (..))
@@ -34,6 +35,7 @@ import Reussir.Core.Generic (
     solveGeneric,
  )
 import Reussir.Core.Semi.Context (addErrReport)
+import Reussir.Core.Semi.Pretty (docToFormattedText, prettyColored)
 import Reussir.Core.Semi.Type (collectGenerics, isConcrete)
 
 -- Recursively analyze generic flow in an expression
@@ -204,17 +206,18 @@ solveAllGenerics = do
     genericState <- State.gets generics
     solveGeneric genericState >>= \case
         Right (x, y, ty) -> do
-            -- TODO: better format report
+            xDoc <- prettyColored (TypeGeneric x)
+            yDoc <- prettyColored (TypeGeneric y)
+            tyDoc <- prettyColored ty
             addErrReport $
                 FormattedText $
-                    [ defaultText $
+                    docToFormattedText $
                         "Growing edge detected between generic variables: "
-                            <> T.pack (show x)
-                            <> " -> "
-                            <> T.pack (show y)
-                            <> " via type "
-                            <> T.pack (show ty)
-                    ]
+                            <+> xDoc
+                            <+> "->"
+                            <+> yDoc
+                            <+> "via type"
+                            <+> tyDoc
             return Nothing
         Left table -> do
             L.logInfo_ "Generic solving succeeded"

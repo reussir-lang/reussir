@@ -140,7 +140,7 @@ runSemiElab args prog = do
                             liftIO $ putStrLn $ "Generic " ++ show gid ++ " should be instantiated to:"
                             forM_ types $ \ty -> do
                                 doc <- Semi.prettyColored ty
-                                liftIO $ putDoc' (doc <> hardline)
+                                liftIO $ putDoc' (Semi.renderAnsi doc <> hardline)
                     Nothing -> pure ()
 
                 liftIO $ putStrLn ";; Elaborated Records"
@@ -148,14 +148,14 @@ runSemiElab args prog = do
                 recs <- liftIO $ H.toList knownRecs
                 forM_ recs $ \(_, record) -> do
                     doc <- Semi.prettyColored record
-                    liftIO $ putDoc' (doc <> hardline)
+                    liftIO $ putDoc' (Semi.renderAnsi doc <> hardline)
 
                 liftIO $ putStrLn "\n;; Elaborated Functions"
                 funcsTbl <- State.gets functions
                 funcs <- liftIO $ H.toList (functionProtos funcsTbl)
                 forM_ funcs $ \(_, proto) -> do
                     doc <- Semi.prettyColored proto
-                    liftIO $ putDoc' (doc <> hardline)
+                    liftIO $ putDoc' (Semi.renderAnsi doc <> hardline)
 
     forM_ (nub $ translationReports finalState) $ \report -> do
         runEff $ displayReport report repository 0 stderr
