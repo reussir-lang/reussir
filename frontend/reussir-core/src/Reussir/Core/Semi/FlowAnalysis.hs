@@ -211,6 +211,7 @@ solveAllGenerics = do
             tyDoc <- case ty of
                 Just t -> prettyColored t
                 Nothing -> pure mempty
+            -- Force update
             addErrReport $
                 FormattedText $
                     docToFormattedText $

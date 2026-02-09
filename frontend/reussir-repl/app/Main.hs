@@ -348,6 +348,7 @@ dumpSemiContext state = do
     records <- H.toList (Semi.knownRecords semiCtx)
     forM_ records $ \(_, rec') -> do
         doc <- runEff $ runPrim $ SemiP.prettyColored rec'
+        -- Force update
         TIO.putStrLn $ renderStrict $ layoutPretty defaultLayoutOptions (SemiP.renderAnsi doc)
 
     putStrLn "\n=== Functions ==="
