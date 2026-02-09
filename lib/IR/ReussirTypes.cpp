@@ -539,7 +539,7 @@ RecordType::LayoutInfo RecordType::getElementRegionLayoutInfo(
       llvm_unreachable("RecordType must have a fixed size");
     largestSize = std::max(largestSize, memberSize);
     llvm::Align memberAlignment{dataLayout.getTypeABIAlignment(member)};
-    if (memberAlignment > largestAlignment) {
+    if (memberAlignment >= largestAlignment) {
       largestAlignment = memberAlignment;
       memberWithLargestAlignment = member;
     }
