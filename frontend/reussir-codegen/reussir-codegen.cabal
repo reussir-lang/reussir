@@ -63,6 +63,7 @@ library
         Reussir.Codegen.Context
         Reussir.Codegen.Context.Symbol
         Reussir.Codegen.IR
+        Reussir.Codegen.IR.Data
         Reussir.Codegen.Intrinsics
         Reussir.Codegen.Intrinsics.Arith
         Reussir.Codegen.Intrinsics.Math
@@ -80,6 +81,7 @@ library
         Reussir.Codegen.Context.Codegen
         Reussir.Codegen.Context.Emission
         Reussir.Codegen.Context.Module
+        Reussir.Codegen.IR.Emission
         Reussir.Codegen.Type.Emission
 
     -- LANGUAGE extensions used by modules in this package.
