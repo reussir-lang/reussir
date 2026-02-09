@@ -57,7 +57,6 @@
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/TypeSize.h"
-#include "llvm/Support/raw_ostream.h"
 
 namespace reussir {
 #define GEN_PASS_DEF_REUSSIRBASICOPSLOWERINGPASS
@@ -426,7 +425,8 @@ struct ReussirRecordVariantConversionPattern
 
     // Get the record type and convert it to LLVM struct type
     RecordType recordType = op.getVariant().getType();
-    mlir::Type llvmStructType = converter->convertType(recordType);
+    auto llvmStructType = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(
+        converter->convertType(recordType));
 
     if (!llvmStructType)
       return op.emitOpError("failed to convert record type to LLVM type");
@@ -454,10 +454,12 @@ struct ReussirRecordVariantConversionPattern
     rewriter.create<mlir::LLVM::StoreOp>(loc, tag, tagPtr);
 
     // Get a pointer to the value field (index 1) and store the value
-    auto valuePtr = rewriter.create<mlir::LLVM::GEPOp>(
-        loc, ptrType, llvmStructType, allocaOp,
-        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
-    rewriter.create<mlir::LLVM::StoreOp>(loc, value, valuePtr);
+    if (llvmStructType.getSubelementIndexMap()->size() > 1) {
+      auto valuePtr = rewriter.create<mlir::LLVM::GEPOp>(
+          loc, ptrType, llvmStructType, allocaOp,
+          llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
+      rewriter.create<mlir::LLVM::StoreOp>(loc, value, valuePtr);
+    }
     // Load the complete struct from the allocated space
     auto result =
         rewriter.create<mlir::LLVM::LoadOp>(loc, llvmStructType, allocaOp);
@@ -790,8 +792,8 @@ struct ReussirRecordCoerceConversionPattern
   mlir::LogicalResult
   matchAndRewrite(ReussirRecordCoerceOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    mlir::Location loc = op.getLoc();
     auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    auto dataLayout = mlir::DataLayout::closest(op.getOperation());
 
     // Get the variant reference pointer (already converted by the type
     // converter)
@@ -799,21 +801,22 @@ struct ReussirRecordCoerceConversionPattern
 
     // Get the element type that the reference points to (the variant record)
     RefType refType = op.getVariant().getType();
-    mlir::Type elementType = converter->convertType(refType.getElementType());
+    auto elementType = llvm::cast<mlir::LLVM::LLVMStructType>(
+        converter->convertType(refType.getElementType()));
+    bool variantHasNonZeroChild =
+        elementType.getSubelementIndexMap()->size() > 1;
 
     // Get the result type (should be a pointer type after conversion)
     mlir::Type resultType = converter->convertType(op.getCoerced().getType());
-    auto llvmPtrType = llvm::dyn_cast<mlir::LLVM::LLVMPointerType>(resultType);
-    if (!llvmPtrType)
-      return op.emitOpError("coerced result must be an LLVM pointer type");
 
     // Create GEP operation to get the value field pointer (index 0, 1)
     // For variant records, the value is at the second field (index 1)
-    auto gepOp = rewriter.create<mlir::LLVM::GEPOp>(
-        loc, llvmPtrType, elementType, variantPtr,
-        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
-
-    rewriter.replaceOp(op, gepOp);
+    if (variantHasNonZeroChild)
+      rewriter.replaceOpWithNewOp<mlir::LLVM::GEPOp>(
+          op, resultType, elementType, variantPtr,
+          llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
+    else
+      rewriter.replaceOpWithNewOp<mlir::ub::PoisonOp>(op, resultType);
     return mlir::success();
   }
 };

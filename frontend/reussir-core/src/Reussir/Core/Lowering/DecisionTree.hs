@@ -45,9 +45,9 @@ import Reussir.Core.Lowering.Type (convertType, mkRefType)
 import Reussir.Core.Uitls.HashTable qualified as H
 
 -- | Context for decision tree lowering.
--- Maps PatternVarRef paths to (IR typed value, Full.Type) pairs.
+-- Maps PatternVarRef paths to (Current Value, Current Type, Optional Original Value).
 newtype DTContext = DTContext
-    { dtRefMap :: Map.Map (Seq.Seq Int) (IR.TypedValue, Full.Type)
+    { dtRefMap :: Map.Map (Seq.Seq Int) (IR.TypedValue, Full.Type, Maybe (IR.TypedValue, Full.Type))
     }
 
 -- | Entry point: lower a match expression.
@@ -56,7 +56,7 @@ lowerMatch scrutinee dt resultTy = do
     scrutVal <- tyValOrICE <$> lowerExpr scrutinee
     let scrutFullTy = Full.exprType scrutinee
     let rootPath = Seq.singleton 0
-    let ctx = DTContext{dtRefMap = Map.singleton rootPath (scrutVal, scrutFullTy)}
+    let ctx = DTContext{dtRefMap = Map.singleton rootPath (scrutVal, scrutFullTy, Nothing)}
     lowerDecisionTree ctx dt resultTy
 
 -- | Recursively lower a decision tree node.
@@ -120,7 +120,7 @@ resolvePatternVarRef ctx (Full.PatternVarRef path) = do
     foldProjections baseVal baseTy remainingIndices
   where
     findLongestPrefix ::
-        Map.Map (Seq.Seq Int) (IR.TypedValue, Full.Type) ->
+        Map.Map (Seq.Seq Int) (IR.TypedValue, Full.Type, Maybe (IR.TypedValue, Full.Type)) ->
         Seq.Seq Int ->
         (IR.TypedValue, Full.Type, [Int])
     findLongestPrefix refMap fullPath =
@@ -128,12 +128,22 @@ resolvePatternVarRef ctx (Full.PatternVarRef path) = do
       where
         go 0 acc =
             case Map.lookup Seq.empty refMap of
-                Just (val, fty) -> (val, fty, acc)
+                Just (val, fty, orig) ->
+                    if null acc
+                        then case orig of
+                            Just (origVal, origTy) -> (origVal, origTy, [])
+                            Nothing -> (val, fty, [])
+                        else (val, fty, acc)
                 Nothing -> error "resolvePatternVarRef: root not in context"
         go n acc =
             let prefix = Seq.take n fullPath
              in case Map.lookup prefix refMap of
-                    Just (val, fty) -> (val, fty, acc)
+                    Just (val, fty, orig) ->
+                        if null acc
+                            then case orig of
+                                Just (origVal, origTy) -> (origVal, origTy, [])
+                                Nothing -> (val, fty, [])
+                            else (val, fty, acc)
                     Nothing ->
                         let idx = Seq.index fullPath (n - 1)
                          in go (n - 1) (idx : acc)
@@ -283,7 +293,7 @@ lowerCtorSwitch ctx varRef ctorCases ty = do
             _ -> error $ "lowerCtorSwitch: not an enum record " <> show recordSym
     returnTy <- inject $ convertType ty
     -- Build VariantDispData: one arm per variant
-    arms <- V.imapM (buildCtorArm path cap returnTy) (V.zip variantSyms ctorCases)
+    arms <- V.imapM (buildCtorArm path cap returnTy scrutRef scrutFullTy) (V.zip variantSyms ctorCases)
     resultVal <- nextValue
     let dispInstr =
             IR.VariantDispatch
@@ -297,10 +307,12 @@ lowerCtorSwitch ctx varRef ctorCases ty = do
         Seq.Seq Int ->
         IR.Capability ->
         IR.Type ->
+        IR.TypedValue ->
+        Full.Type ->
         Int ->
         (IR.Symbol, Full.DecisionTree) ->
         LoweringEff ([Int64], IR.Block)
-    buildCtorArm dispPath cap _returnTy idx (varSym, dt) = do
+    buildCtorArm dispPath cap _returnTy origVal origTy idx (varSym, dt) = do
         -- Block arg: ref to the variant's inner type
         let variantInnerTy = IR.TypeExpr varSym
         let variantRef = mkRefType variantInnerTy cap
@@ -313,7 +325,7 @@ lowerCtorSwitch ctx varRef ctorCases ty = do
                     { dtRefMap =
                         Map.insert
                             dispPath
-                            (blockArg, variantFullTy)
+                            (blockArg, variantFullTy, Just (origVal, origTy))
                             (dtRefMap ctx)
                     }
         -- Build block (VariantDispatch uses reussir.scf.yield)
@@ -352,7 +364,7 @@ lowerNullableSwitch ctx varRef justDT nothingDT ty = do
                 { dtRefMap =
                     Map.insert
                         path
-                        (blockArg, innerFullTy)
+                        (blockArg, innerFullTy, Just (scrutRef, scrutFullTy))
                         (dtRefMap ctx)
                 }
     backupBlock <- State.gets currentBlock
@@ -499,19 +511,19 @@ lookupTypeAtPath ctx path = do
     resolveFieldType baseTy remaining
   where
     findPrefix ::
-        Map.Map (Seq.Seq Int) (IR.TypedValue, Full.Type) ->
+        Map.Map (Seq.Seq Int) (IR.TypedValue, Full.Type, Maybe (IR.TypedValue, Full.Type)) ->
         Seq.Seq Int ->
         (IR.TypedValue, Full.Type, [Int])
     findPrefix refMap fullPath = go (Seq.length fullPath) []
       where
         go 0 acc =
             case Map.lookup Seq.empty refMap of
-                Just (val, fty) -> (val, fty, acc)
+                Just (val, fty, _) -> (val, fty, acc)
                 Nothing -> error "lookupTypeAtPath: root not in context"
         go n acc =
             let prefix = Seq.take n fullPath
              in case Map.lookup prefix refMap of
-                    Just (val, fty) -> (val, fty, acc)
+                    Just (val, fty, _) -> (val, fty, acc)
                     Nothing ->
                         let idx = Seq.index fullPath (n - 1)
                          in go (n - 1) (idx : acc)
