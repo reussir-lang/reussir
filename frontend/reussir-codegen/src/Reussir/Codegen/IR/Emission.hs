@@ -339,7 +339,7 @@ variantDispCodegen val (VariantDispData cases) result = do
     for_ result $ emit . snd >=> emitBuilder . (" -> " <>)
     emitBuilder " {\n"
     incIndentation $ forM_ cases $ uncurry variantDispCaseCodegen
-    emitBuilder "}"
+    emitBuilderLine "}"
 
 {- | Generate scf.index_switch operation
 Syntax:
