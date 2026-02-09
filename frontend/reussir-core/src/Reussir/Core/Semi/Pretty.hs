@@ -92,6 +92,10 @@ class PrettyColored a where
 
 -- Instances
 
+instance (PrettyColored a) => PrettyColored (Maybe a) where
+    prettyColored Nothing = pure mempty
+    prettyColored (Just x) = prettyColored x
+
 instance PrettyColored Identifier where
     prettyColored (Identifier t) = pure $ variable (pretty t)
 

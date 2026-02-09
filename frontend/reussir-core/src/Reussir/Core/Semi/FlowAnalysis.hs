@@ -208,7 +208,9 @@ solveAllGenerics = do
         Right (x, y, ty) -> do
             xDoc <- prettyColored (TypeGeneric x)
             yDoc <- prettyColored (TypeGeneric y)
-            tyDoc <- prettyColored ty
+            tyDoc <- case ty of
+                Just t -> prettyColored t
+                Nothing -> pure mempty
             addErrReport $
                 FormattedText $
                     docToFormattedText $
