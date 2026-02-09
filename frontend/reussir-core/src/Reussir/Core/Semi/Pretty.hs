@@ -35,12 +35,7 @@ import Data.Vector.Unboxed qualified as UV
 import Reussir.Diagnostic.Report (TextWithFormat (..))
 import Reussir.Parser.Types.Capability qualified as Cap
 import System.Console.ANSI.Codes (SGR (..))
-import System.Console.ANSI.Types (
-    Color (..),
-    ColorIntensity (..),
-    ConsoleIntensity (..),
-    ConsoleLayer (..),
- )
+import System.Console.ANSI.Types qualified as ANSI
 
 import Reussir.Core.Data.FP (FloatingPointType (..))
 import Reussir.Core.Data.Integral (IntegralType (..))
@@ -521,12 +516,12 @@ styleToAnsi StyleOperator = color Cyan
 styleToAnsi StyleComment = color Black <> bold
 
 styleToSGR :: Style -> [SGR]
-styleToSGR StyleKeyword = [SetColor Foreground Vivid Blue, SetConsoleIntensity BoldIntensity]
-styleToSGR StyleTypeName = [SetColor Foreground Vivid Green]
-styleToSGR StyleLiteral = [SetColor Foreground Vivid Yellow]
-styleToSGR StyleVariable = [SetColor Foreground Vivid White]
-styleToSGR StyleOperator = [SetColor Foreground Vivid Cyan]
-styleToSGR StyleComment = [SetColor Foreground Dull Black, SetConsoleIntensity BoldIntensity] -- Adjusted to look like gray
+styleToSGR StyleKeyword = [SetColor ANSI.Foreground ANSI.Vivid ANSI.Blue, ANSI.SetConsoleIntensity ANSI.BoldIntensity]
+styleToSGR StyleTypeName = [SetColor ANSI.Foreground ANSI.Vivid ANSI.Green]
+styleToSGR StyleLiteral = [SetColor ANSI.Foreground ANSI.Vivid ANSI.Yellow]
+styleToSGR StyleVariable = [SetColor ANSI.Foreground ANSI.Vivid ANSI.White]
+styleToSGR StyleOperator = [SetColor ANSI.Foreground ANSI.Vivid ANSI.Cyan]
+styleToSGR StyleComment = [SetColor ANSI.Foreground ANSI.Dull ANSI.Black, ANSI.SetConsoleIntensity ANSI.BoldIntensity] -- Adjusted to look like gray
 
 renderAnsi :: Doc Style -> Doc AnsiStyle
 renderAnsi = reAnnotate styleToAnsi
@@ -548,9 +543,9 @@ docToFormattedText doc = go (layoutPretty defaultLayoutOptions doc) []
         let txt = "\n" <> T.replicate i " "
             current = TextWithFormat txt (concatMap styleToSGR (reverse styles))
         in merge current (go rest styles)
-    go (SAnnotStart style rest) styles = go rest (style : styles)
-    go (SAnnotStop rest) (_:styles) = go rest styles
-    go (SAnnotStop rest) [] = go rest [] -- Should not happen
+    go (SAnnPush style rest) styles = go rest (style : styles)
+    go (SAnnPop rest) (_:styles) = go rest styles
+    go (SAnnPop rest) [] = go rest [] -- Should not happen
 
     merge :: TextWithFormat -> [TextWithFormat] -> [TextWithFormat]
     merge t [] = [t]
