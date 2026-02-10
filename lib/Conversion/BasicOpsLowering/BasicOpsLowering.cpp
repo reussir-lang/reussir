@@ -1851,15 +1851,16 @@ struct ReussirRefMemcpyConversionPattern
 //===----------------------------------------------------------------------===//
 
 namespace {
-void addRuntimeFunction(mlir::Block *body, llvm::StringRef name,
-                        llvm::ArrayRef<mlir::Type> inputs,
-                        llvm::ArrayRef<mlir::Type> outputs) {
+mlir::func::FuncOp addRuntimeFunction(mlir::Block *body, llvm::StringRef name,
+                                      llvm::ArrayRef<mlir::Type> inputs,
+                                      llvm::ArrayRef<mlir::Type> outputs) {
   mlir::MLIRContext *ctx = body->getParentOp()->getContext();
   mlir::FunctionType type = mlir::FunctionType::get(ctx, inputs, outputs);
   mlir::func::FuncOp func =
       mlir::func::FuncOp::create(mlir::UnknownLoc::get(ctx), name, type);
   func.setPrivate();
   body->push_front(func);
+  return func;
 }
 
 void addRuntimeFunctions(mlir::ModuleOp module,
@@ -1873,10 +1874,38 @@ void addRuntimeFunctions(mlir::ModuleOp module,
   addRuntimeFunction(body, "__reussir_cleanup_region", {llvmPtrType}, {});
   addRuntimeFunction(body, "__reussir_acquire_rigid_object", {llvmPtrType}, {});
   addRuntimeFunction(body, "__reussir_release_rigid_object", {llvmPtrType}, {});
-  addRuntimeFunction(body, "__reussir_allocate", {indexType, indexType},
-                     {llvmPtrType});
-  addRuntimeFunction(body, "__reussir_deallocate",
-                     {llvmPtrType, indexType, indexType}, {});
+  auto allocFunc = addRuntimeFunction(body, "__reussir_allocate",
+                                      {indexType, indexType}, {llvmPtrType});
+  auto deallocFunc = addRuntimeFunction(
+      body, "__reussir_deallocate", {llvmPtrType, indexType, indexType}, {});
+  // Add attributes to allocation functions
+  mlir::OpBuilder builder(ctx);
+  auto mustProgress = builder.getStringAttr("mustprogress");
+  auto nounwind = builder.getStringAttr("nounwind");
+  auto willreturn = builder.getStringAttr("willreturn");
+  auto nocallback = builder.getStringAttr("nocallback");
+  auto allocKind = builder.getStrArrayAttr({"allockind", "alloc"});
+  auto passthroughAlloc = builder.getArrayAttr(
+      {mustProgress, nounwind, willreturn, nocallback, allocKind});
+
+  allocFunc->setAttr("passthrough", passthroughAlloc);
+  allocFunc.setArgAttr(0, "llvm.allocalign", builder.getUnitAttr());
+  allocFunc.setResultAttr(0, "llvm.noalias", builder.getUnitAttr());
+  allocFunc.setResultAttr(0, "llvm.noundef", builder.getUnitAttr());
+  allocFunc.setArgAttr(0, "llvm.noundef", builder.getUnitAttr());
+  allocFunc.setArgAttr(1, "llvm.noundef", builder.getUnitAttr());
+
+  auto freeKind = builder.getStrArrayAttr({"allockind", "free"});
+  auto passthroughDealloc = builder.getArrayAttr(
+      {mustProgress, nounwind, willreturn, nocallback, freeKind});
+  deallocFunc->setAttr("passthrough", passthroughDealloc);
+  deallocFunc.setArgAttr(0, "llvm.nocapture", builder.getUnitAttr());
+  deallocFunc.setArgAttr(0, "llvm.allocptr", builder.getUnitAttr());
+  deallocFunc.setArgAttr(1, "llvm.allocalign", builder.getUnitAttr());
+  deallocFunc.setArgAttr(0, "llvm.noundef", builder.getUnitAttr());
+  deallocFunc.setArgAttr(1, "llvm.noundef", builder.getUnitAttr());
+  deallocFunc.setArgAttr(2, "llvm.noundef", builder.getUnitAttr());
+
   addRuntimeFunction(body, "__reussir_reallocate",
                      {llvmPtrType, indexType, indexType, indexType, indexType},
                      {llvmPtrType});
