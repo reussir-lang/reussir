@@ -1,4 +1,6 @@
 // RUN: %reussir-elab --mode semi %s | %FileCheck %s
+// RUN: %reussir-compiler %s -t mlir -o %t.mlir
+// RUN: %FileCheck %s --check-prefix=CHECK-MLIR < %t.mlir
 enum Nat {
     Zero,
     Succ(Nat)
@@ -41,3 +43,33 @@ fn even(n : Nat) -> bool {
 // CHECK-NEXT:         }
 // CHECK-NEXT:     }
 // CHECK-NEXT: }
+
+// --- MLIR ownership checks for even (nested DT, flattened) ---
+// even(%0=n): match on n via borrow+dispatch
+// CHECK-MLIR-LABEL: func.func @"_RC4even"(%0 :
+// CHECK-MLIR:       reussir.rc.borrow (%0 :
+// CHECK-MLIR:       reussir.record.dispatch
+// Zero branch: dec scrutinee, yield true
+// CHECK-MLIR:       [0] ->
+// CHECK-MLIR:       reussir.rc.dec (%0 :
+// CHECK-MLIR:       arith.constant 1 : i1
+// CHECK-MLIR:       reussir.scf.yield
+// Succ branch: intermediate lookup (no inc needed), nested dispatch
+// CHECK-MLIR:       [1] ->
+// CHECK-MLIR:       reussir.ref.project
+// CHECK-MLIR:       reussir.ref.load
+// CHECK-MLIR-NOT:   reussir.rc.inc
+// CHECK-MLIR:       reussir.rc.borrow
+// CHECK-MLIR:       reussir.record.dispatch
+// Succ(Zero): dec base scrutinee, yield false
+// CHECK-MLIR:       [0] ->
+// CHECK-MLIR:       reussir.rc.dec (%0 :
+// CHECK-MLIR:       arith.constant 0 : i1
+// CHECK-MLIR:       reussir.scf.yield
+// Succ(Succ(m)): load deepest binding, inc it, dec base scrutinee, call even
+// CHECK-MLIR:       [1] ->
+// CHECK-MLIR:       reussir.ref.project
+// CHECK-MLIR:       reussir.ref.load
+// CHECK-MLIR:       reussir.rc.inc
+// CHECK-MLIR:       reussir.rc.dec (%0 :
+// CHECK-MLIR:       func.call @"_RC4even"

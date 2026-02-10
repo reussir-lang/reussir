@@ -1,3 +1,5 @@
+// RUN: %reussir-compiler %s -t mlir -o %t.mlir
+// RUN: %FileCheck %s --check-prefix=CHECK-MLIR < %t.mlir
 // RUN: %reussir-compiler %s -o %t.o
 // RUN: %cc %t.o %S/fibonacci.c -DFIB_SYMBOL=_RC13fibonacci_u64 -o %t.exe \
 // RUN:    -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
@@ -47,3 +49,44 @@ fn fibonacci_u64(n : u64) -> u64 {
     let eye = Matrix<_> { m00 : 1, m01 : 0, m10 : 0, m11 : 1 };
     fibonacci_logarithmic_impl<_>(n, eye, x)
 }
+
+// --- MLIR ownership checks ---
+
+// matmul: both RC matrix params are dec'd before creating the result
+// CHECK-MLIR-LABEL: func.func @"_RIC6matmulyE"(%0 :
+// CHECK-MLIR:       reussir.rc.dec (%0 :
+// CHECK-MLIR-NEXT:  reussir.rc.dec (%1 :
+// CHECK-MLIR:       reussir.record.compound
+// CHECK-MLIR:       reussir.rc.create
+// CHECK-MLIR:       func.return
+
+// fibonacci_logarithmic_impl: n==0 branch decs both a and b; else branches inc b
+// CHECK-MLIR-LABEL: func.func @"_RIC26fibonacci_logarithmic_implyE"(%0 : i64, %1 :
+// n==0 true branch: borrow a, load field, dec both b and a
+// CHECK-MLIR:       scf.if
+// CHECK-MLIR:       reussir.rc.borrow (%1 :
+// CHECK-MLIR:       reussir.ref.project
+// CHECK-MLIR:       reussir.ref.load
+// CHECK-MLIR:       reussir.rc.dec (%2 :
+// CHECK-MLIR-NEXT:  reussir.rc.dec (%1 :
+// CHECK-MLIR:       scf.yield
+// n%2==1 branch: inc b before first matmul, inc b before second matmul
+// CHECK-MLIR:       } else {
+// CHECK-MLIR:       scf.if
+// CHECK-MLIR:       reussir.rc.inc (%2 :
+// CHECK-MLIR:       func.call @"_RIC6matmulyE"(%1, %2)
+// CHECK-MLIR:       reussir.rc.inc (%2 :
+// CHECK-MLIR:       func.call @"_RIC6matmulyE"(%2, %2)
+// CHECK-MLIR:       func.call @"_RIC26fibonacci_logarithmic_implyE"
+// CHECK-MLIR:       scf.yield
+// n%2==0 branch: inc b, matmul(b,b), pass a directly to recursive call
+// CHECK-MLIR:       } else {
+// CHECK-MLIR:       reussir.rc.inc (%2 :
+// CHECK-MLIR:       func.call @"_RIC6matmulyE"(%2, %2)
+// CHECK-MLIR:       func.call @"_RIC26fibonacci_logarithmic_implyE"({{%[0-9]+}}, %1, {{%[0-9]+}})
+
+// fibonacci_u64: no RC ops, just create matrices and call impl
+// CHECK-MLIR-LABEL: func.func @"_RC13fibonacci_u64"
+// CHECK-MLIR-NOT:   reussir.rc.inc
+// CHECK-MLIR-NOT:   reussir.rc.dec
+// CHECK-MLIR:       func.return

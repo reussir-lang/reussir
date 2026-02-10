@@ -1,4 +1,6 @@
 // RUN: %reussir-elab --mode semi %s | %FileCheck %s
+// RUN: %reussir-compiler %s -t mlir -o %t.mlir
+// RUN: %FileCheck %s --check-prefix=CHECK-MLIR < %t.mlir
 enum List<T> {
     Nil,
     Cons(T, List<T>)
@@ -53,3 +55,30 @@ pub fn empty2(list : List<i32>) -> bool {
 // CHECK-NEXT:         }
 // CHECK-NEXT:     }
 // CHECK-NEXT: }
+
+// --- MLIR ownership checks: both branches dec the list, no inc needed ---
+// empty1: match with wildcard
+// CHECK-MLIR-LABEL: func.func @"_RC6empty1"(%0 :
+// CHECK-MLIR:       reussir.rc.borrow (%0 :
+// CHECK-MLIR:       reussir.record.dispatch
+// Nil: dec scrutinee, yield true
+// CHECK-MLIR:       [0] ->
+// CHECK-MLIR:       reussir.rc.dec (%0 :
+// CHECK-MLIR:       arith.constant 1 : i1
+// Cons: dec scrutinee, yield false (no pattern bindings extracted)
+// CHECK-MLIR:       [1] ->
+// CHECK-MLIR-NOT:   reussir.rc.inc
+// CHECK-MLIR:       reussir.rc.dec (%0 :
+// CHECK-MLIR:       arith.constant 0 : i1
+
+// empty2: match with explicit Cons(..)
+// CHECK-MLIR-LABEL: func.func @"_RC6empty2"(%0 :
+// CHECK-MLIR:       reussir.record.dispatch
+// Nil: dec, yield true
+// CHECK-MLIR:       [0] ->
+// CHECK-MLIR:       reussir.rc.dec (%0 :
+// Cons: dec, yield false (no pattern bindings extracted)
+// CHECK-MLIR:       [1] ->
+// CHECK-MLIR-NOT:   reussir.rc.inc
+// CHECK-MLIR:       reussir.rc.dec (%0 :
+// CHECK-MLIR:       arith.constant 0 : i1

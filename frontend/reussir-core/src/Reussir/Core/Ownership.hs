@@ -256,7 +256,7 @@ analyzeExpr tbl expr st = do
         -- RcWrap: inner consumed, new RC created
         Full.RcWrap inner ->
             analyzeConsumingCall tbl [inner] st eid ty
-        -- Projection: base is used (not consumed), result may need OInc
+        -- Projection: base is borrowed (not consumed), result may need OInc
         Full.Proj baseExpr _ -> do
             (st1, baseFlux) <- analyzeExpr tbl baseExpr st
             -- Mark base vars as used (not consumed)
@@ -267,7 +267,9 @@ analyzeExpr tbl expr st = do
                     if rc
                         then annotate eid (OwnershipAction [] [OInc]) st2
                         else st2
-            pure (st3, emptyFlux{fluxFreeVars = fluxFreeVars baseFlux})
+            -- Don't propagate base's freeVars: borrowing doesn't transfer ownership.
+            -- The base variable's liveness is tracked by collectFreeVars for early-dec.
+            pure (st3, emptyFlux)
         -- Assignment: dst is used, src is consumed
         Full.Assign dstExpr _ srcExpr -> do
             (st1, _) <- analyzeExpr tbl dstExpr st
