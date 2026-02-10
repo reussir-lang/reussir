@@ -25,6 +25,7 @@ import Reussir.Codegen qualified as IR
 import Reussir.Codegen.Context qualified as IR
 import Reussir.Codegen.IR qualified as IR
 
+import Reussir.Core.Data.Ownership (OwnershipAnnotations (..))
 import Reussir.Core.String
 
 import Reussir.Core.Data.Full.Function qualified as Full
@@ -40,6 +41,7 @@ data LoweringContext = LoweringContext
     , recordInstances :: Full.FullRecordTable
     , stringUniqifier :: StringUniqifier
     , targetSpec :: IR.TargetSpec
+    , ownershipAnnotations :: OwnershipAnnotations
     }
 
 data LoweringSpan = LoweringSpan

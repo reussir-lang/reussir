@@ -32,6 +32,7 @@ import Reussir.Core.Data.Lowering.Context (
     LoweringEff,
     LoweringSpan (..),
  )
+import Reussir.Core.Data.Ownership (OwnershipAnnotations (..))
 import Reussir.Core.Data.String (StringUniqifier)
 import Reussir.Core.Data.UniqueID (VarID (VarID))
 
@@ -69,6 +70,7 @@ createLoweringContext repo functions records stringUniqifier targetSpec = do
             , recordInstances = records
             , stringUniqifier = stringUniqifier
             , targetSpec = targetSpec
+            , ownershipAnnotations = OwnershipAnnotations IntMap.empty
             }
 
 runLoweringToModule ::

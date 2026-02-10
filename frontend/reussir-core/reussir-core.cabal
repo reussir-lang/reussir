@@ -34,6 +34,7 @@ library
         Reussir.Core.Data.Full.Expr
         Reussir.Core.Data.Full.Record
         Reussir.Core.Data.Full.Error
+        Reussir.Core.Data.Ownership
         Reussir.Core.Data.Lowering.Context
         Reussir.Core.Data.Operator
         Reussir.Core.Data.Generic
@@ -60,6 +61,7 @@ library
         Reussir.Core.Full.Conversion
         Reussir.Core.Full.Error
         Reussir.Core.Full.Pretty
+        Reussir.Core.Ownership
         Reussir.Core.Lowering.Context
         Reussir.Core.Lowering.Debug
         Reussir.Core.Lowering.Function

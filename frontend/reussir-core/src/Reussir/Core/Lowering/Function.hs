@@ -4,13 +4,14 @@ module Reussir.Core.Lowering.Function where
 
 import Control.Monad (forM)
 import Data.Maybe (catMaybes, maybeToList)
-import Effectful (inject)
+import Effectful (inject, liftIO)
 import Reussir.Parser.Types.Lexer (Identifier (..))
 import System.Info (os)
 
 import Data.IntMap.Strict qualified as IntMap
 import Data.Text qualified as T
 import Effectful.Log qualified as L
+import Effectful.Reader.Static qualified as Reader
 import Effectful.State.Static.Local qualified as State
 import Reussir.Codegen qualified as IR
 import Reussir.Codegen.IR qualified as IR
@@ -20,6 +21,7 @@ import Reussir.Codegen.Type qualified as IR
 
 import Reussir.Core.Data.Lowering.Context (
     GlobalLoweringEff,
+    LoweringContext (..),
     LocalLoweringContext (..),
  )
 import Reussir.Core.Lowering.Context (
@@ -32,12 +34,20 @@ import Reussir.Core.Lowering.Context (
 import Reussir.Core.Lowering.Debug (typeAsDbgType, unmangledPath)
 import Reussir.Core.Lowering.Expr (lowerExprAsBlock)
 import Reussir.Core.Lowering.Type (convertType)
+import Reussir.Core.Ownership (analyzeFunction)
 
 import Reussir.Core.Data.Full.Expr qualified as Full
 import Reussir.Core.Data.Full.Function qualified as Full
 
 lowerFunction :: Full.Function -> GlobalLoweringEff ()
 lowerFunction func = do
+    -- Run ownership analysis before lowering
+    recordTable <- Reader.asks recordInstances
+    annotations <- liftIO $ analyzeFunction recordTable func
+    Reader.local (\ctx -> ctx{ownershipAnnotations = annotations}) $ lowerFunctionInner func
+
+lowerFunctionInner :: Full.Function -> GlobalLoweringEff ()
+lowerFunctionInner func = do
     let path = Full.funcRawPath func
     let tyArgs = Full.funcInstantiatedTyArgs func
     let symbol = Full.funcName func

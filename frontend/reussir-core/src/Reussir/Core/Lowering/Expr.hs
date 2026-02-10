@@ -2,7 +2,7 @@
 
 module Reussir.Core.Lowering.Expr where
 
-import Control.Monad (when)
+import Control.Monad (forM_, when)
 import Data.Maybe (maybeToList)
 import Data.Scientific (Scientific, toBoundedInteger)
 import Effectful (inject)
@@ -29,10 +29,11 @@ import Reussir.Codegen.Value qualified as IR
 import Reussir.Core.Data.Lowering.Context (
     ExprResult,
     LocalLoweringContext (..),
-    LoweringContext (recordInstances),
+    LoweringContext (recordInstances, ownershipAnnotations),
     LoweringEff,
  )
-import Reussir.Core.Data.UniqueID (VarID (..))
+import Reussir.Core.Data.Ownership qualified as Own
+import Reussir.Core.Data.UniqueID (ExprID, VarID (..))
 import Reussir.Core.Lowering.Context (
     addIRInstr,
     materializeCurrentBlock,
@@ -63,9 +64,58 @@ createConstant ty val = do
     pure (value', ty)
 
 lowerExpr :: Full.Expr -> LoweringEff ExprResult
-lowerExpr (Full.Expr kind Nothing ty _) = lowerExprInBlock kind ty
-lowerExpr (Full.Expr kind (Just span') ty _) =
-    withLocationSpan span' $ lowerExprInBlock kind ty
+lowerExpr expr = do
+    let eid = Full.exprID expr
+    let kind = Full.exprKind expr
+    let ty = Full.exprType expr
+    let span' = Full.exprSpan expr
+    -- Emit before-annotations
+    emitOwnershipBefore eid
+    -- Lower the expression
+    result <- case span' of
+        Nothing -> lowerExprInBlock kind ty
+        Just s -> withLocationSpan s $ lowerExprInBlock kind ty
+    -- Emit after-annotations
+    emitOwnershipAfter eid result
+    pure result
+
+-- | Emit ownership operations that should happen before an expression
+emitOwnershipBefore :: ExprID -> LoweringEff ()
+emitOwnershipBefore eid = do
+    annotations <- Reader.asks ownershipAnnotations
+    case Own.lookupAnnotation eid annotations of
+        Nothing -> pure ()
+        Just action -> mapM_ emitOwnershipOp (Own.oaBefore action)
+
+-- | Emit ownership operations that should happen after an expression
+emitOwnershipAfter :: ExprID -> ExprResult -> LoweringEff ()
+emitOwnershipAfter eid result = do
+    annotations <- Reader.asks ownershipAnnotations
+    case Own.lookupAnnotation eid annotations of
+        Nothing -> pure ()
+        Just action -> do
+            forM_ (Own.oaAfter action) $ \op -> case op of
+                Own.OInc -> case result of
+                    Just val -> addIRInstr (IR.RcInc val)
+                    Nothing -> pure ()
+                Own.ODec -> case result of
+                    Just val -> addIRInstr (IR.RcDec val)
+                    Nothing -> pure ()
+                Own.ODecVar (VarID vid) -> do
+                    varMap' <- State.gets @LocalLoweringContext varMap
+                    case IntMap.lookup (fromIntegral vid) varMap' of
+                        Just val -> addIRInstr (IR.RcDec val)
+                        Nothing -> pure ()
+
+-- | Emit a single ownership operation (for before-ops that don't reference result)
+emitOwnershipOp :: Own.OwnershipOp -> LoweringEff ()
+emitOwnershipOp Own.OInc = pure () -- Inc before doesn't make sense without value
+emitOwnershipOp Own.ODec = pure () -- Dec before doesn't make sense without value
+emitOwnershipOp (Own.ODecVar (VarID vid)) = do
+    varMap' <- State.gets @LocalLoweringContext varMap
+    case IntMap.lookup (fromIntegral vid) varMap' of
+        Just val -> addIRInstr (IR.RcDec val)
+        Nothing -> pure ()
 
 -- lower expression as a block with given block arguments and finalizer
 lowerExprAsBlock ::

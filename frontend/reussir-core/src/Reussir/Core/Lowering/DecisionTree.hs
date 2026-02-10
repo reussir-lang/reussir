@@ -224,6 +224,7 @@ ensureRef val@(_, irTy) _fty = do
             pure (resVal, spillRef)
 
 -- | Bind pattern variables, resolve their refs, load if needed, then run action.
+-- For RC-typed values loaded from refs, emit rc.inc to take ownership.
 withPatternBindings :: DTContext -> IntMap.IntMap Full.PatternVarRef -> LoweringEff a -> LoweringEff a
 withPatternBindings ctx bindings action = do
     let bindingsList = IntMap.toAscList bindings
@@ -233,6 +234,12 @@ withPatternBindings ctx bindings action = do
     go ((varId, pvRef) : rest) = do
         refVal <- resolvePatternVarRef ctx pvRef
         loaded <- loadIfRef refVal
+        -- If the loaded value is RC-typed, emit rc.inc to take ownership
+        -- (the value was borrowed from inside the scrutinee's RC)
+        let (_, loadedTy) = loaded
+        case loadedTy of
+            IR.TypeRc _ -> addIRInstr $ IR.RcInc loaded
+            _ -> pure ()
         withVar (VarID (fromIntegral varId)) loaded $ go rest
 
 -- | Lower a DTSwitch node.
