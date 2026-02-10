@@ -647,6 +647,8 @@ lowerSequenceExprInBlock (e : es) _ =
             , Full.letVarName = name
             , Full.letVarSpan = varSpan
             } -> do
+                -- Emit before-annotations for the Let wrapper expression
+                emitOwnershipBefore (Full.exprID e)
                 let makeDbgTy action = case varSpan of
                         Nothing -> action
                         Just (start, end) -> do
@@ -658,7 +660,9 @@ lowerSequenceExprInBlock (e : es) _ =
                                     withLocationSpan (start, end) $
                                         withLocationMetaData m action
                 varValue <- makeDbgTy $ tyValOrICE <$> lowerExpr varExpr
+                -- Emit after-annotations for the Let wrapper expression
+                emitOwnershipAfter (Full.exprID e) (Just varValue)
                 withVar varID varValue $ lowerSequenceExprInBlock es Nothing
-        kind -> do
-            res' <- lowerExprInBlock kind (Full.exprType e)
+        _ -> do
+            res' <- lowerExpr e
             lowerSequenceExprInBlock es res'

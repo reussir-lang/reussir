@@ -8,6 +8,7 @@ import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
 import Data.Foldable (toList)
+import Data.HashMap.Strict qualified as HashMap
 import Data.Vector.Strict qualified as V
 
 import Data.HashTable.IO qualified as HT
@@ -121,6 +122,80 @@ emitEndOfScopeDecs st eid =
             then st
             else annotate eid (OwnershipAction [] decs) st
 
+-- | Emit early decs for owned variables not referenced by remaining expressions.
+-- Returns updated state with decs annotated and ownership consumed.
+emitEarlyDecs :: AnalysisState -> ExprID -> IntSet.IntSet -> AnalysisState
+emitEarlyDecs st eid suffixFreeVars =
+    let toDec =
+            [ (vid, count)
+            | (vid, count) <- IntMap.toList (asLedger st)
+            , count > 0
+            , not (IntSet.member vid suffixFreeVars)
+            ]
+        decOps = concatMap (\(vid, count) -> replicate count (ODecVar (VarID vid))) toDec
+        st' =
+            if null decOps
+                then st
+                else annotate eid (OwnershipAction [] decOps) st
+     in -- Consume ownership for dec'd variables
+        foldl'
+            ( \s (vid, count) ->
+                foldl' (\s' _ -> consumeOwnership (VarID vid) s') s [1 .. count]
+            )
+            st'
+            toDec
+
+-- | Collect all free variable references (VarIDs) in an expression.
+-- This is a pure syntactic traversal.
+collectFreeVars :: Full.Expr -> IntSet.IntSet
+collectFreeVars expr = case Full.exprKind expr of
+    Full.Var (VarID vid) -> IntSet.singleton vid
+    Full.GlobalStr _ -> IntSet.empty
+    Full.Constant _ -> IntSet.empty
+    Full.Poison -> IntSet.empty
+    Full.Negate e -> collectFreeVars e
+    Full.Not e -> collectFreeVars e
+    Full.Arith l _ r -> collectFreeVars l <> collectFreeVars r
+    Full.Cmp l _ r -> collectFreeVars l <> collectFreeVars r
+    Full.Cast e _ -> collectFreeVars e
+    Full.ScfIfExpr c t e -> collectFreeVars c <> collectFreeVars t <> collectFreeVars e
+    Full.RegionRun e -> collectFreeVars e
+    Full.Proj e _ -> collectFreeVars e
+    Full.Assign d _ s -> collectFreeVars d <> collectFreeVars s
+    Full.Let{Full.letVarExpr = ve} -> collectFreeVars ve
+    Full.FuncCall{Full.funcCallArgs = args} -> IntSet.unions (map collectFreeVars args)
+    Full.IntrinsicCall{Full.intrinsicCallArgs = args} -> IntSet.unions (map collectFreeVars args)
+    Full.CompoundCall args -> IntSet.unions (map collectFreeVars args)
+    Full.VariantCall _ e -> collectFreeVars e
+    Full.NullableCall me -> maybe IntSet.empty collectFreeVars me
+    Full.RcWrap e -> collectFreeVars e
+    Full.Match scr dt -> collectFreeVars scr <> collectFreeVarsDT dt
+    Full.Sequence es -> IntSet.unions (map collectFreeVars es)
+
+-- | Collect free variable references in a decision tree.
+collectFreeVarsDT :: Full.DecisionTree -> IntSet.IntSet
+collectFreeVarsDT Full.DTUncovered = IntSet.empty
+collectFreeVarsDT Full.DTUnreachable = IntSet.empty
+collectFreeVarsDT (Full.DTLeaf body _) = collectFreeVars body
+collectFreeVarsDT (Full.DTGuard _ guardExpr dtT dtF) =
+    collectFreeVars guardExpr <> collectFreeVarsDT dtT <> collectFreeVarsDT dtF
+collectFreeVarsDT (Full.DTSwitch _ cases) = collectFreeVarsCases cases
+
+-- | Collect free variable references in decision tree switch cases.
+collectFreeVarsCases :: Full.DTSwitchCases -> IntSet.IntSet
+collectFreeVarsCases (Full.DTSwitchBool dtT dtF) =
+    collectFreeVarsDT dtT <> collectFreeVarsDT dtF
+collectFreeVarsCases (Full.DTSwitchCtor cases) =
+    V.foldl' (\acc dt -> acc <> collectFreeVarsDT dt) IntSet.empty cases
+collectFreeVarsCases (Full.DTSwitchNullable dtJ dtN) =
+    collectFreeVarsDT dtJ <> collectFreeVarsDT dtN
+collectFreeVarsCases (Full.DTSwitchInt intMap dtDef) =
+    IntMap.foldl' (\acc dt -> acc <> collectFreeVarsDT dt) IntSet.empty intMap
+        <> collectFreeVarsDT dtDef
+collectFreeVarsCases (Full.DTSwitchString strMap dtDef) =
+    HashMap.foldl' (\acc dt -> acc <> collectFreeVarsDT dt) IntSet.empty strMap
+        <> collectFreeVarsDT dtDef
+
 -- | Core recursive analysis of an expression
 analyzeExpr ::
     Full.FullRecordTable -> Full.Expr -> AnalysisState -> IO (AnalysisState, ExprFlux)
@@ -232,7 +307,9 @@ analyzeExpr tbl expr st = do
         -- Region run
         Full.RegionRun bodyExpr -> analyzeExpr tbl bodyExpr st
 
--- | Analyze a sequence of expressions (handling Let bindings)
+-- | Analyze a sequence of expressions (handling Let bindings).
+-- Uses precomputed suffix free-var sets to place decs at the earliest
+-- possible point after a variable's last use.
 analyzeSequence ::
     Full.FullRecordTable ->
     [Full.Expr] ->
@@ -240,31 +317,52 @@ analyzeSequence ::
     IO (AnalysisState, ExprFlux)
 analyzeSequence _ [] st = pure (st, emptyFlux)
 analyzeSequence tbl [e] st = analyzeExpr tbl e st
-analyzeSequence tbl (e : es) st = case Full.exprKind e of
-    Full.Let{Full.letVarID = varID, Full.letVarExpr = varExpr} -> do
-        -- Analyze the bound expression
-        (st1, exprFlux) <- analyzeExpr tbl varExpr st
-        -- Consume any free vars the expression uses
-        let st2 = consumeFreeVars exprFlux st1
-        -- Grant ownership if the bound value is RR
-        rr <- isRR tbl (Full.exprType varExpr)
-        let st3 = if rr then grantOwnership varID st2 else st2
-        -- Analyze the rest of the sequence
-        (st4, restFlux) <- analyzeSequence tbl es st3
-        -- At end of let scope: if varID still has ownership, emit dec
-        let count = ownershipCount varID st4
-        let st5 =
-                if count > 0
-                    then
-                        let lastExpr = last es
-                            decOps = replicate count (ODecVar varID)
-                         in annotate (Full.exprID lastExpr) (OwnershipAction [] decOps) st4
-                    else st4
-        let st6 = removeFromLedger varID st5
-        pure (st6, restFlux)
-    _ -> do
-        (st1, _) <- analyzeExpr tbl e st
-        analyzeSequence tbl es st1
+analyzeSequence tbl exprs st = do
+    -- Precompute free vars of the suffix (remaining expressions) for each position.
+    -- suffixes[i] = free vars needed by exprs[i+1..]
+    let freeVarSets = map collectFreeVars exprs
+    let suffixes = drop 1 $ scanr IntSet.union IntSet.empty freeVarSets
+    analyzeSequenceEarly tbl (zip exprs suffixes) st []
+
+-- | Process a sequence of expressions with early dec placement.
+-- After each non-last expression, emit decs for owned variables not
+-- referenced by any remaining expression.
+analyzeSequenceEarly ::
+    Full.FullRecordTable ->
+    [(Full.Expr, IntSet.IntSet)] ->
+    -- ^ Pairs of (expression, free vars of all subsequent expressions)
+    AnalysisState ->
+    [VarID] ->
+    -- ^ Let-bound variables in scope (to clean up from ledger)
+    IO (AnalysisState, ExprFlux)
+analyzeSequenceEarly _ [] st scopedVars = do
+    -- Clean up let-bound variables from ledger
+    let st' = foldl' (\s v -> removeFromLedger v s) st scopedVars
+    pure (st', emptyFlux)
+analyzeSequenceEarly tbl [(e, _)] st scopedVars = do
+    -- Last expression: return its flux to the caller
+    (st1, flux) <- analyzeExpr tbl e st
+    -- Clean up let-bound variables from ledger
+    let st2 = foldl' (\s v -> removeFromLedger v s) st1 scopedVars
+    pure (st2, flux)
+analyzeSequenceEarly tbl ((e, suffixVars) : rest) st scopedVars =
+    case Full.exprKind e of
+        Full.Let{Full.letVarID = varID, Full.letVarExpr = varExpr} -> do
+            -- Analyze the bound expression
+            (st1, exprFlux) <- analyzeExpr tbl varExpr st
+            -- Consume any free vars the expression uses
+            let st2 = consumeFreeVars exprFlux st1
+            -- Grant ownership if the bound value is RR
+            rr <- isRR tbl (Full.exprType varExpr)
+            let st3 = if rr then grantOwnership varID st2 else st2
+            -- Emit early decs for owned variables no longer needed
+            let st4 = emitEarlyDecs st3 (Full.exprID e) suffixVars
+            analyzeSequenceEarly tbl rest st4 (varID : scopedVars)
+        _ -> do
+            (st1, _) <- analyzeExpr tbl e st
+            -- Emit early decs for owned variables no longer needed
+            let st2 = emitEarlyDecs st1 (Full.exprID e) suffixVars
+            analyzeSequenceEarly tbl rest st2 scopedVars
 
 -- | Analyze a function/intrinsic/constructor call where arguments are consumed
 analyzeConsumingCall ::
