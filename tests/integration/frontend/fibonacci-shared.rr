@@ -1,0 +1,49 @@
+// RUN: %reussir-compiler %s -o %t.o
+// RUN: %cc %t.o %S/fibonacci.c -DFIB_SYMBOL=_RC13fibonacci_u64 -o %t.exe \
+// RUN:    -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+struct Matrix<T : Num> {
+    m00: T, 
+    m01: T,
+    m10: T, 
+    m11: T
+}
+
+fn matmul<T : Num>(a : Matrix<T>, b : Matrix<T>) -> Matrix<T> {
+    let m00 = a.m00 * b.m00 + a.m01 * b.m10;
+    let m01 = a.m00 * b.m01 + a.m01 * b.m11;
+    let m10 = a.m10 * b.m00 + a.m11 * b.m10;
+    let m11 = a.m10 * b.m01 + a.m11 * b.m11;
+    Matrix<T> { m00 : m00, m01 : m01, m10 : m10, m11 : m11 }
+}
+
+fn fibonacci_logarithmic_impl<T : Integral>(
+    n: T,
+    a: Matrix<T>,
+    b: Matrix<T>
+) -> T {
+    if n == 0 {
+        a.m01
+    } else {
+        if n % 2 == 1 {
+            fibonacci_logarithmic_impl<T>(
+                n / 2,
+                matmul(a, b),
+                matmul<T>(b, b)
+            )
+        } else {
+            fibonacci_logarithmic_impl<_>(
+                n / 2,
+                a,
+                matmul<T>(b, b)
+            )
+        }
+    }
+}
+
+fn fibonacci_u64(n : u64) -> u64 {
+    let x = Matrix<_> { m00 : 0, m01 : 1, m10 : 1, m11 : 1 };
+    let eye = Matrix<_> { m00 : 1, m01 : 0, m10 : 0, m11 : 1 };
+    fibonacci_logarithmic_impl<_>(n, eye, x)
+}

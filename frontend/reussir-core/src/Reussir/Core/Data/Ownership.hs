@@ -24,6 +24,8 @@ data OwnershipOp
       ODec
     | -- | rc.dec on a variable (by its VarID)
       ODecVar VarID
+    | -- | rc.inc on a variable (by its VarID), used when a var is consumed multiple times
+      OIncVar VarID
     deriving (Show, Eq)
 
 -- | Where to emit relative to the expression

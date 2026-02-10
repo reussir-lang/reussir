@@ -106,6 +106,11 @@ emitOwnershipAfter eid result = do
                     case IntMap.lookup (fromIntegral vid) varMap' of
                         Just val -> addIRInstr (IR.RcDec val)
                         Nothing -> pure ()
+                Own.OIncVar (VarID vid) -> do
+                    varMap' <- State.gets @LocalLoweringContext varMap
+                    case IntMap.lookup (fromIntegral vid) varMap' of
+                        Just val -> addIRInstr (IR.RcInc val)
+                        Nothing -> pure ()
 
 -- | Emit a single ownership operation (for before-ops that don't reference result)
 emitOwnershipOp :: Own.OwnershipOp -> LoweringEff ()
@@ -115,6 +120,11 @@ emitOwnershipOp (Own.ODecVar (VarID vid)) = do
     varMap' <- State.gets @LocalLoweringContext varMap
     case IntMap.lookup (fromIntegral vid) varMap' of
         Just val -> addIRInstr (IR.RcDec val)
+        Nothing -> pure ()
+emitOwnershipOp (Own.OIncVar (VarID vid)) = do
+    varMap' <- State.gets @LocalLoweringContext varMap
+    case IntMap.lookup (fromIntegral vid) varMap' of
+        Just val -> addIRInstr (IR.RcInc val)
         Nothing -> pure ()
 
 -- lower expression as a block with given block arguments and finalizer

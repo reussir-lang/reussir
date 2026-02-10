@@ -364,6 +364,7 @@ analyzeSequenceEarly tbl ((e, suffixVars) : rest) st scopedVars =
             let st2 = emitEarlyDecs st1 (Full.exprID e) suffixVars
             analyzeSequenceEarly tbl rest st2 scopedVars
 
+
 -- | Analyze a function/intrinsic/constructor call where arguments are consumed
 analyzeConsumingCall ::
     Full.FullRecordTable ->
@@ -373,7 +374,7 @@ analyzeConsumingCall ::
     Full.Type ->
     IO (AnalysisState, ExprFlux)
 analyzeConsumingCall tbl args st _eid _resultTy = do
-    -- Analyze each argument and consume their free vars
+    -- Analyze each argument and consume their free vars (handling sequential dependencies)
     st' <- analyzeConsumedArgs tbl args st
     pure (st', emptyFlux)
 
@@ -383,12 +384,39 @@ analyzeConsumedArgs ::
     [Full.Expr] ->
     AnalysisState ->
     IO AnalysisState
-analyzeConsumedArgs _ [] st = pure st
-analyzeConsumedArgs tbl (arg : rest) st = do
-    (st1, argFlux) <- analyzeExpr tbl arg st
+analyzeConsumedArgs tbl args st = do
+    let freeVarSets = map collectFreeVars args
+    -- suffixes[i] = free vars needed by args[i+1..]
+    let suffixes = drop 1 $ scanr IntSet.union IntSet.empty freeVarSets
+    analyzeConsumedArgsLoop tbl args freeVarSets suffixes st
+
+analyzeConsumedArgsLoop ::
+    Full.FullRecordTable ->
+    [Full.Expr] ->
+    [IntSet.IntSet] ->
+    [IntSet.IntSet] ->
+    AnalysisState ->
+    IO AnalysisState
+analyzeConsumedArgsLoop _ [] _ _ st = pure st
+analyzeConsumedArgsLoop tbl (arg : restArgs) (vars : restVars) (suffix : restSuffix) st = do
+    -- Identify vars that are in this arg AND in suffix (needed later)
+    -- We must inc them before this arg consumes them.
+    let neededLater = IntSet.intersection vars suffix
+    let incs = [VarID vid | vid <- IntSet.toList neededLater, ownershipCount (VarID vid) st > 0]
+    
+    let incOps = map OIncVar incs
+    let stBefore =
+            if null incOps
+                then st
+                else annotate (Full.exprID arg) (OwnershipAction incOps []) st
+    -- Grant ownership for each inc so consumption tracking is correct
+    let stInc = foldl' (\s vid -> grantOwnership vid s) stBefore incs
+    
+    (stAfter, argFlux) <- analyzeExpr tbl arg stInc
     -- Consume free vars from this argument
-    let st2 = consumeFreeVars argFlux st1
-    analyzeConsumedArgs tbl rest st2
+    let stConsumed = consumeFreeVars argFlux stAfter
+    analyzeConsumedArgsLoop tbl restArgs restVars restSuffix stConsumed
+analyzeConsumedArgsLoop _ _ _ _ st = pure st -- Should not happen with zip logic
 
 -- | Consume ownership of all free vars in a flux
 consumeFreeVars :: ExprFlux -> AnalysisState -> AnalysisState
