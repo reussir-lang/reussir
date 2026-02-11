@@ -4,6 +4,17 @@
 
 module Reussir.Core.Semi.Pretty (
     PrettyColored (..),
+    Style (..),
+    styleToAnsi,
+    styleToSGR,
+    renderAnsi,
+    docToFormattedText,
+    keyword,
+    typeName,
+    literal,
+    variable,
+    operator,
+    comment,
 ) where
 
 import Control.Monad (zipWithM)
@@ -18,9 +29,13 @@ import Reussir.Parser.Types.Stmt (Visibility (..))
 
 import Data.HashMap.Strict qualified as Data.HashMap.Strict
 import Data.IntMap.Strict qualified as IntMap
+import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
+import Reussir.Diagnostic.Report (TextWithFormat (..))
 import Reussir.Parser.Types.Capability qualified as Cap
+import System.Console.ANSI.Codes (SGR (..))
+import System.Console.ANSI.Types qualified as ANSI
 
 import Reussir.Core.Data.FP (FloatingPointType (..))
 import Reussir.Core.Data.Integral (IntegralType (..))
@@ -43,29 +58,43 @@ import Reussir.Core.Data.Semi.Type (Flexivity (..), Type (..))
 import Reussir.Core.Data.String (StringToken (..))
 import Reussir.Core.Data.UniqueID (GenericID (..), HoleID (..), VarID (..))
 
+-- Semantic Style Definition
+data Style
+    = StyleKeyword
+    | StyleTypeName
+    | StyleLiteral
+    | StyleVariable
+    | StyleOperator
+    | StyleComment
+    deriving (Show, Eq)
+
 -- Helper functions for styles
-keyword :: Doc AnsiStyle -> Doc AnsiStyle
-keyword = annotate (color Blue <> bold)
+keyword :: Doc Style -> Doc Style
+keyword = annotate StyleKeyword
 
-typeName :: Doc AnsiStyle -> Doc AnsiStyle
-typeName = annotate (color Green)
+typeName :: Doc Style -> Doc Style
+typeName = annotate StyleTypeName
 
-literal :: Doc AnsiStyle -> Doc AnsiStyle
-literal = annotate (color Yellow)
+literal :: Doc Style -> Doc Style
+literal = annotate StyleLiteral
 
-variable :: Doc AnsiStyle -> Doc AnsiStyle
-variable = annotate (color White)
+variable :: Doc Style -> Doc Style
+variable = annotate StyleVariable
 
-operator :: Doc AnsiStyle -> Doc AnsiStyle
-operator = annotate (color Cyan)
+operator :: Doc Style -> Doc Style
+operator = annotate StyleOperator
 
-comment :: Doc AnsiStyle -> Doc AnsiStyle
-comment = annotate (color Black <> bold) -- Using bright black (gray) for types/comments
+comment :: Doc Style -> Doc Style
+comment = annotate StyleComment
 
 class PrettyColored a where
-    prettyColored :: (IOE :> es, Prim :> es) => a -> Eff es (Doc AnsiStyle)
+    prettyColored :: (IOE :> es, Prim :> es) => a -> Eff es (Doc Style)
 
 -- Instances
+
+instance (PrettyColored a) => PrettyColored (Maybe a) where
+    prettyColored Nothing = pure mempty
+    prettyColored (Just x) = prettyColored x
 
 instance PrettyColored Identifier where
     prettyColored (Identifier t) = pure $ variable (pretty t)
@@ -433,7 +462,7 @@ instance PrettyColored Record where
             pure $ fldDoc <> tDoc
 
         prettyFieldFlag ::
-            (IOE :> es, Prim :> es) => FieldFlag -> Eff es (Doc AnsiStyle)
+            (IOE :> es, Prim :> es) => FieldFlag -> Eff es (Doc Style)
         prettyFieldFlag False = pure mempty
         prettyFieldFlag True = pure $ brackets (keyword "field") <> space
 
@@ -477,5 +506,53 @@ instance PrettyColored FunctionProto where
             let indexAnnotated = "v" <> pretty idx <> space <> parens nDoc
             pure $ indexAnnotated <> operator ":" <+> tDoc
 
-commaSep :: [Doc AnsiStyle] -> Doc AnsiStyle
+commaSep :: [Doc Style] -> Doc Style
 commaSep = concatWith (surround (comma <> space))
+
+-- Conversion Functions
+
+styleToAnsi :: Style -> AnsiStyle
+styleToAnsi StyleKeyword = color Blue <> bold
+styleToAnsi StyleTypeName = color Green
+styleToAnsi StyleLiteral = color Yellow
+styleToAnsi StyleVariable = color White
+styleToAnsi StyleOperator = color Cyan
+styleToAnsi StyleComment = color Black <> bold
+
+styleToSGR :: Style -> [SGR]
+styleToSGR StyleKeyword = [SetColor ANSI.Foreground ANSI.Vivid ANSI.Blue, ANSI.SetConsoleIntensity ANSI.BoldIntensity]
+styleToSGR StyleTypeName = [SetColor ANSI.Foreground ANSI.Vivid ANSI.Green]
+styleToSGR StyleLiteral = [SetColor ANSI.Foreground ANSI.Vivid ANSI.Yellow]
+styleToSGR StyleVariable = [SetColor ANSI.Foreground ANSI.Vivid ANSI.White]
+styleToSGR StyleOperator = [SetColor ANSI.Foreground ANSI.Vivid ANSI.Cyan]
+styleToSGR StyleComment = [SetColor ANSI.Foreground ANSI.Dull ANSI.Black, ANSI.SetConsoleIntensity ANSI.BoldIntensity] -- Adjusted to look like gray
+
+renderAnsi :: Doc Style -> Doc AnsiStyle
+renderAnsi = reAnnotate styleToAnsi
+
+docToFormattedText :: Doc Style -> [TextWithFormat]
+docToFormattedText doc = go (layoutPretty defaultLayoutOptions doc) []
+  where
+    go :: SimpleDocStream Style -> [Style] -> [TextWithFormat]
+    go SFail _ = []
+    go SEmpty _ = []
+    go (SChar c rest) styles =
+        let txt = T.singleton c
+            current = TextWithFormat txt (concatMap styleToSGR (reverse styles))
+        in merge current (go rest styles)
+    go (SText _ t rest) styles =
+        let current = TextWithFormat t (concatMap styleToSGR (reverse styles))
+        in merge current (go rest styles)
+    go (SLine i rest) styles =
+        let txt = "\n" <> T.replicate i " "
+            current = TextWithFormat txt (concatMap styleToSGR (reverse styles))
+        in merge current (go rest styles)
+    go (SAnnPush style rest) styles = go rest (style : styles)
+    go (SAnnPop rest) (_:styles) = go rest styles
+    go (SAnnPop rest) [] = go rest [] -- Should not happen
+
+    merge :: TextWithFormat -> [TextWithFormat] -> [TextWithFormat]
+    merge t [] = [t]
+    merge (TextWithFormat t1 s1) (TextWithFormat t2 s2 : rest)
+        | s1 == s2 = merge (TextWithFormat (t1 <> t2) s1) rest
+        | otherwise = TextWithFormat t1 s1 : TextWithFormat t2 s2 : rest
