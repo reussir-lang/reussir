@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15]  # ARM64 macOS runner
+        os: [macos-26]  # ARM64 macOS runner
 
     runs-on: ${{ matrix.os }}
     steps:
