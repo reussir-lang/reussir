@@ -15,9 +15,6 @@
     "categories": [
         "Programming Languages"
     ],
-    "activationEvents": [
-        "onLanguage:reussir"
-    ],
     "main": "./out/extension.js",
     "contributes": {
         "languages": [
@@ -31,6 +28,13 @@
                     ".reu"
                 ],
                 "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "reussir",
+                "scopeName": "source.reussir",
+                "path": "./syntaxes/reussir.tmLanguage.json"
             }
         ],
         "configuration": {
