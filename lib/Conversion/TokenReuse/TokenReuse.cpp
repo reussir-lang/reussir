@@ -244,12 +244,16 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
     }
 
     for (auto &op : region.front()) {
+      llvm::errs() << "[token-reuse] visiting: " << op.getName() << " at "
+                    << op.getLoc() << "\n";
       if (isa<mlir::LoopLikeOpInterface>(op) ||
           isa<mlir::CallOpInterface>(op)) {
         mlir::func::CallOp funcCall = llvm::dyn_cast<mlir::func::CallOp>(op);
         // skip intrinsic calls
         if (!funcCall ||
             !funcCall.getCallee().starts_with("core::intrinsic::")) {
+          llvm::errs() << "[token-reuse] call/loop barrier: freeing "
+                       << availableTokens.size() << " tokens\n";
           for (auto token : availableTokens)
             frees.push_back({token, &op});
           availableTokens = {};
@@ -258,6 +262,9 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
                               domInfo);
         }
       } else if (auto branchOp = dyn_cast<mlir::RegionBranchOpInterface>(op)) {
+        llvm::errs() << "[token-reuse] RegionBranch with "
+                     << op.getNumRegions() << " regions, "
+                     << availableTokens.size() << " available tokens\n";
         llvm::SmallVector<ValueSet> branchResults;
         for (auto &nestedRegion : op.getRegions())
           branchResults.push_back(
@@ -266,9 +273,6 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
         if (branchResults.empty()) {
           llvm::errs() << "[WARN] RegionBranch with no regions?\n";
         } else {
-          // effective intersect with available token at parent
-          // this rule out inner-scope created tokens from escaping parent
-          // scope.
           ValueSet intersection = availableTokens;
           for (size_t i = 0; i < branchResults.size(); ++i)
             intersection = intersect(intersection, branchResults[i]);
@@ -277,15 +281,29 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
             for (auto val : branchResults[i]) {
               if (!intersection.count(val)) {
                 mlir::Block &block = op.getRegion(i).front();
+                llvm::errs() << "[token-reuse] freeing token (not in "
+                                "intersection) at region "
+                             << i << " terminator\n";
                 frees.push_back({val, block.getTerminator()});
               }
             }
           }
           availableTokens = intersection;
+          llvm::errs() << "[token-reuse] after intersection: "
+                       << availableTokens.size() << " tokens remain\n";
         }
-        if (auto scfIf = dyn_cast<mlir::scf::IfOp>(op))
-          if (scfIf->hasAttr(kExpandedDecrementAttr) && scfIf->use_empty())
+        if (auto scfIf = dyn_cast<mlir::scf::IfOp>(op)) {
+          llvm::errs() << "[token-reuse] scf.if: hasExpandedDecAttr="
+                       << scfIf->hasAttr(kExpandedDecrementAttr)
+                       << " use_empty=" << scfIf->use_empty()
+                       << " numResults=" << scfIf->getNumResults() << "\n";
+          if (scfIf->hasAttr(kExpandedDecrementAttr) && scfIf->use_empty()) {
+            llvm::errs() << "[token-reuse] inserting expanded-dec result as "
+                            "available token, type="
+                         << scfIf.getResult(0).getType() << "\n";
             availableTokens = availableTokens.insert(scfIf.getResult(0));
+          }
+        }
       }
 
       if (auto producer = dyn_cast<TokenProducer>(op)) {
@@ -297,21 +315,40 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
             signalPassFailure();
             return {};
           }
+          llvm::errs() << "[token-reuse] producer: use_empty="
+                       << token.use_empty() << "\n";
           if (token.use_empty())
             availableTokens = availableTokens.insert(token);
         }
       }
 
       if (auto acceptor = dyn_cast<TokenAcceptor>(op)) {
-
+        llvm::errs() << "[token-reuse] acceptor: hasToken="
+                     << acceptor.hasToken() << ", op=";
+        op.print(llvm::errs(), mlir::OpPrintingFlags().skipRegions());
+        llvm::errs() << "\n";
+        assert(acceptor.hasToken() &&
+               "TokenAcceptor must have a token bound at this stage "
+               "(TokenInstantiation pass should have run)");
         auto allocOp = llvm::dyn_cast_if_present<ReussirTokenAllocOp>(
             acceptor.getToken().getDefiningOp());
+        llvm::errs() << "[token-reuse] acceptor token definingOp is "
+                     << (allocOp ? "TokenAllocOp" : "other") << "\n";
         if (allocOp && allocOp.getToken().hasOneUse()) {
+          llvm::errs() << "[token-reuse] scanning " << availableTokens.size()
+                       << " available tokens for reuse\n";
           int bestScore = -1;
           mlir::Value bestToken{};
           bool bestRealloc = false;
 
           for (auto tokenVal : availableTokens) {
+            llvm::errs() << "[token-reuse]   candidate token: ";
+            if (tokenVal.getDefiningOp())
+              llvm::errs() << tokenVal.getDefiningOp()->getName();
+            else
+              llvm::errs() << "<block-arg>";
+            llvm::errs() << "\n";
+
             if (auto producer =
                     dyn_cast_or_null<TokenProducer>(tokenVal.getDefiningOp())) {
               ReussirRcDecOp producerAsDec =
@@ -320,6 +357,8 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
                   producerAsDec ? producerAsDec.getRcPtr() : nullptr;
               int score = hueristic(producer.getTokenType(), producerRc,
                                     acceptor, aliasAnalyzer);
+              llvm::errs() << "[token-reuse]   producer score=" << score
+                           << "\n";
               if (score >= 0 && score > bestScore) {
                 bestScore = score;
                 bestToken = tokenVal;
@@ -328,12 +367,49 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
             }
             if (auto scfIf = dyn_cast_or_null<mlir::scf::IfOp>(
                     tokenVal.getDefiningOp())) {
+              llvm::errs() << "[token-reuse]   scf.if candidate: "
+                              "hasExpandedDecAttr="
+                           << scfIf->hasAttr(kExpandedDecrementAttr) << "\n";
               if (scfIf->hasAttr(kExpandedDecrementAttr)) {
-                TokenType producedType = cast<TokenType>(
-                    cast<NullableType>(scfIf.getResult(0).getType())
-                        .getPtrTy());
+                llvm::errs()
+                    << "[token-reuse]   scf.if result(0) type="
+                    << scfIf.getResult(0).getType() << "\n";
+                auto nullableType =
+                    dyn_cast<NullableType>(scfIf.getResult(0).getType());
+                if (!nullableType) {
+                  llvm::errs() << "[token-reuse]   SKIP: result is not "
+                                  "NullableType\n";
+                  continue;
+                }
+                auto producedType =
+                    dyn_cast<TokenType>(nullableType.getPtrTy());
+                if (!producedType) {
+                  llvm::errs() << "[token-reuse]   SKIP: inner is not "
+                                  "TokenType, got "
+                               << nullableType.getPtrTy() << "\n";
+                  continue;
+                }
                 mlir::Value condition = scfIf.getCondition();
-                auto cmp = cast<mlir::arith::CmpIOp>(condition.getDefiningOp());
+                llvm::errs() << "[token-reuse]   condition definingOp="
+                             << (condition.getDefiningOp()
+                                     ? condition.getDefiningOp()->getName()
+                                           .getStringRef()
+                                     : "<null>")
+                             << "\n";
+                auto cmp = dyn_cast_or_null<mlir::arith::CmpIOp>(
+                    condition.getDefiningOp());
+                if (!cmp) {
+                  llvm::errs()
+                      << "[token-reuse]   SKIP: condition is not CmpIOp\n";
+                  continue;
+                }
+                llvm::errs()
+                    << "[token-reuse]   cmp.lhs definingOp="
+                    << (cmp.getLhs().getDefiningOp()
+                            ? cmp.getLhs().getDefiningOp()->getName()
+                                  .getStringRef()
+                            : "<null>")
+                    << "\n";
                 auto rcFetchDec =
                     llvm::dyn_cast_if_present<ReussirRcFetchDecOp>(
                         cmp.getLhs().getDefiningOp());
@@ -341,6 +417,8 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
                     rcFetchDec ? rcFetchDec.getRcPtr() : nullptr;
                 int score = hueristic(producedType, producerRc, acceptor,
                                       aliasAnalyzer);
+                llvm::errs() << "[token-reuse]   expanded-dec score=" << score
+                             << "\n";
                 if (score >= 0 && score > bestScore) {
                   bestScore = score;
                   bestToken = tokenVal;
@@ -354,6 +432,8 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
             mlir::Value selectedToken = bestToken;
             availableTokens = availableTokens.erase(bestToken);
             reuses.push_back({selectedToken, bestRealloc, acceptor});
+            llvm::errs() << "[token-reuse] REUSE: score=" << bestScore
+                         << " realloc=" << bestRealloc << "\n";
           }
         }
         // ReussirClosureCreateOp is a kind of acceptor.
@@ -372,14 +452,22 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
     for (auto token : availableTokens) {
       if (!region.getParentOp() ||
           !domInfo.properlyDominates(token, region.getParentOp())) {
+        llvm::errs() << "[token-reuse] freeing token at terminator (does not "
+                        "dominate parent)\n";
         frees.push_back({token, terminator});
         availableTokens = availableTokens.erase(token);
       }
     }
+    llvm::errs() << "[token-reuse] exiting region with "
+                 << availableTokens.size() << " available tokens\n";
     return availableTokens;
   }
 
   void runOnOperation() override {
+    llvm::errs() << "[token-reuse] === running on ";
+    getOperation()->print(llvm::errs(),
+                          mlir::OpPrintingFlags().skipRegions());
+    llvm::errs() << " ===\n";
     llvm::SmallVector<Reuse> reuses;
     llvm::SmallVector<Free> frees;
     mlir::AliasAnalysis aliasAnalyzer(getOperation());
@@ -390,9 +478,15 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
       oneShotTokenReuse(region, {}, reuses, frees, aliasAnalyzer, domInfo);
     }
 
+    llvm::errs() << "[token-reuse] applying " << reuses.size()
+                 << " reuses and " << frees.size() << " frees\n";
     mlir::IRRewriter rewriter(getOperation());
 
     for (auto &reuse : reuses) {
+      llvm::errs() << "[token-reuse] applying reuse: realloc="
+                   << reuse.realloc << " anchor=";
+      reuse.anchor->print(llvm::errs(), mlir::OpPrintingFlags().skipRegions());
+      llvm::errs() << "\n";
       rewriter.setInsertionPoint(reuse.anchor);
       TokenType targetType = reuse.anchor.getTokenType();
 
@@ -410,9 +504,13 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
     }
 
     for (const auto &free : frees) {
+      llvm::errs() << "[token-reuse] applying free before: "
+                   << free.anchor->getName() << " at " << free.anchor->getLoc()
+                   << "\n";
       rewriter.setInsertionPoint(free.anchor);
       rewriter.create<ReussirTokenFreeOp>(free.anchor->getLoc(), free.token);
     }
+    llvm::errs() << "[token-reuse] === done ===\n";
   }
 };
 } // namespace
