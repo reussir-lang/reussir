@@ -64,6 +64,10 @@ typedef enum ReussirRelocationModel {
   REUSSIR_RELOC_MODEL_DEFAULT = 6
 } ReussirRelocationModel;
 
+// Install LLVM segfault handler and pretty stack trace support.
+// Safe to call multiple times; subsequent calls are no-ops.
+void reussir_bridge_setup(void);
+
 // Query if TPDE support is compiled in
 int reussir_bridge_has_tpde(void);
 

@@ -20,6 +20,8 @@ module;
 #include <llvm/Support/BLAKE3.h>
 #include <llvm/Support/CodeGen.h>
 #include <llvm/Support/FileSystem.h>
+#include <llvm/Support/PrettyStackTrace.h>
+#include <llvm/Support/Signals.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
@@ -63,6 +65,7 @@ module;
 #include <mlir/Target/LLVMIR/Export.h>
 #include <mlir/Target/LLVMIR/Import.h>
 #include <mlir/Transforms/Passes.h>
+#include <mutex>
 #include <string>
 #ifdef REUSSIR_HAS_TPDE
 #include <tpde-llvm/LLVMCompiler.hpp>
@@ -84,6 +87,13 @@ using namespace mlir;
 
 namespace reussir {
 export namespace bridge {
+void setup() {
+  static std::once_flag flag;
+  std::call_once(flag, [] {
+    llvm::EnablePrettyStackTrace();
+    llvm::sys::PrintStackTraceOnErrorSignal(/*argv0=*/"");
+  });
+}
 void setSpdlogLevel(ReussirLogLevel level) {
   switch (level) {
   case REUSSIR_LOG_ERROR:
@@ -395,6 +405,7 @@ void reussir_bridge_compile_for_target(
     const char *target_triple, const char *target_cpu,
     const char *target_features, ReussirCodeModel code_model,
     ReussirRelocationModel reloc_model) {
+  bridge::setup();
   setSpdlogLevel(log_level);
   // Initialize native target so we can query TargetMachine for layout/triple.
   // llvm::InitializeNativeTarget();
@@ -528,6 +539,8 @@ void reussir_bridge_compile_for_target(
 
 // C API wrapper
 export extern "C" {
+  void reussir_bridge_setup() { reussir::bridge::setup(); }
+
   int reussir_bridge_has_tpde() { return reussir::reussir_bridge_has_tpde(); }
 
   char *reussir_bridge_get_default_target_triple() {

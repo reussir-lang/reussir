@@ -333,6 +333,7 @@ export extern "C" {
   ReussirJIT reussir_bridge_jit_create(
       ASTCallbackFn ast_callback_fn, ASTFreeFn ast_free_fn,
       ReussirOptOption opt, ReussirLogLevel level) {
+    reussir::bridge::setup();
     reussir::bridge::setSpdlogLevel(level);
     using namespace llvm::orc;
     llvm::InitializeNativeTarget();

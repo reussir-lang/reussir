@@ -65,6 +65,7 @@ jobs:
           echo "LLVM_PREFIX=${LLVM_PREFIX}" >> $GITHUB_ENV
           echo "${LLVM_PREFIX}/bin" >> $GITHUB_PATH
           echo "DYLD_LIBRARY_PATH=${LLVM_PREFIX}/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "LLVM_SYMBOLIZER_PATH=${LLVM_PREFIX}/bin/llvm-symbolizer" >> $GITHUB_ENV
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2
