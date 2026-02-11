@@ -10,3 +10,5 @@ rustc-ice-*
 dist-*
 .clice
 _codeql_detected_source_root
+node_modules
+*.vsix
