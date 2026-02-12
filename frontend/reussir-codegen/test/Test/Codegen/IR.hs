@@ -158,12 +158,12 @@ irTests =
                     runCodegenForInstr
                         (funcCall (verifiedSymbol "test_func") [typedVal 1 primitiveI32] Nothing)
                 let resultStr = T.unpack result
-                assertBool "Should contain func.call" $ "func.call" `isInfixOf` resultStr
+                assertBool "Should contain reussir.call" $ "reussir.call" `isInfixOf` resultStr
                 assertBool "Should contain test_func" $ "test_func" `isInfixOf` resultStr
                 assertBool "Should contain arg %1" $ "%1" `isInfixOf` resultStr
                 assertBool "Should contain i32 type" $ "i32" `isInfixOf` resultStr
                 assertBool "Should not contain result assignment" $
-                    not (" = func.call" `isInfixOf` resultStr)
+                    not (" = reussir.call" `isInfixOf` resultStr)
             , testCase "FCall Codegen with result" $ do
                 result <-
                     runCodegenForInstr
@@ -173,13 +173,13 @@ irTests =
                             (Just (typedVal 2 primitiveI32))
                         )
                 let resultStr = T.unpack result
-                assertBool "Should contain func.call" $ "func.call" `isInfixOf` resultStr
+                assertBool "Should contain reussir.call" $ "reussir.call" `isInfixOf` resultStr
                 assertBool "Should contain result %2" $ "%2 = " `isInfixOf` resultStr
                 assertBool "Should contain test_func" $ "test_func" `isInfixOf` resultStr
                 assertBool "Should contain arg %1" $ "%1" `isInfixOf` resultStr
                 assertBool "Should contain return type ->" $ " -> " `isInfixOf` resultStr
-                assertBool "Result should come before func.call" $
-                    comesAfter "%2 = " "func.call" resultStr
+                assertBool "Result should come before reussir.call" $
+                    comesAfter "%2 = " "reussir.call" resultStr
             , testCase "FCall Codegen with multiple args" $ do
                 result <-
                     runCodegenForInstr
@@ -189,7 +189,7 @@ irTests =
                             (Just (typedVal 3 primitiveBool))
                         )
                 let resultStr = T.unpack result
-                assertBool "Should contain func.call" $ "func.call" `isInfixOf` resultStr
+                assertBool "Should contain reussir.call" $ "reussir.call" `isInfixOf` resultStr
                 assertBool "Should contain result %3" $ "%3 = " `isInfixOf` resultStr
                 assertBool "Should contain test_func" $ "test_func" `isInfixOf` resultStr
                 assertBool "Should contain both args" $
@@ -218,15 +218,15 @@ irTests =
             [ testCase "Return Codegen without value" $ do
                 result <- runCodegenForInstr (IR.Return Nothing)
                 let resultStr = T.unpack result
-                assertBool "Should contain func.return" $ "func.return" `isInfixOf` resultStr
+                assertBool "Should contain reussir.return" $ "reussir.return" `isInfixOf` resultStr
             , testCase "Return Codegen with value" $ do
                 result <- runCodegenForInstr (IR.Return (Just (typedVal 1 primitiveI32)))
                 let resultStr = T.unpack result
-                assertBool "Should contain func.return" $ "func.return" `isInfixOf` resultStr
+                assertBool "Should contain reussir.return" $ "reussir.return" `isInfixOf` resultStr
                 assertBool "Should contain %1" $ "%1" `isInfixOf` resultStr
                 assertBool "Should contain i32 type" $ "i32" `isInfixOf` resultStr
                 assertBool "Value should come after return" $
-                    comesAfter "func.return" "%1" resultStr
+                    comesAfter "reussir.return" "%1" resultStr
             ]
         , testGroup
             "NullableCheck"
@@ -330,8 +330,8 @@ irTests =
                 let resultStr = T.unpack result
                 assertBool "Should contain reussir.nullable.dispatch" $
                     "reussir.nullable.dispatch" `isInfixOf` resultStr
-                assertBool "Should contain func.return in nonnull block" $
-                    "func.return" `isInfixOf` resultStr
+                assertBool "Should contain reussir.return in nonnull block" $
+                    "reussir.return" `isInfixOf` resultStr
                 assertBool "Should contain %2 in return" $ "%2" `isInfixOf` resultStr
                 assertBool "Should contain nonnull region" $ "nonnull" `isInfixOf` resultStr
                 assertBool "Should contain null region" $ "null" `isInfixOf` resultStr
@@ -348,12 +348,12 @@ irTests =
                             (IR.Return (Just (typedVal 1 primitiveI32)))
                         )
                 let resultStr = T.unpack result
-                assertBool "Should contain func.return" $ "func.return" `isInfixOf` resultStr
+                assertBool "Should contain reussir.return" $ "reussir.return" `isInfixOf` resultStr
                 assertBool "Should contain %1" $ "%1" `isInfixOf` resultStr
                 assertBool "Should contain location reference" $ "loc(" `isInfixOf` resultStr
                 assertBool "Should contain #loc0" $ "#loc0" `isInfixOf` resultStr
                 assertBool "Location should come after instruction" $
-                    comesAfter "func.return" "loc" resultStr
+                    comesAfter "reussir.return" "loc" resultStr
                 assertBool "Should contain trailing locs marker" $
                     "========= trailing locs =========" `isInfixOf` resultStr
                 assertBool "Should contain outline location definition" $
@@ -637,7 +637,7 @@ irTests =
                 assertBool "Should contain input %1" $ "%1" `isInfixOf` resultStr
                 assertBool "Should contain case tags" $
                     "[0, 1]" `isInfixOf` resultStr || "[0,1]" `isInfixOf` resultStr
-                assertBool "Should contain func.return" $ "func.return" `isInfixOf` resultStr
+                assertBool "Should contain reussir.return" $ "reussir.return" `isInfixOf` resultStr
                 assertBool "Dispatch should come before cases" $
                     comesAfter "reussir.record.dispatch" "{" resultStr
             , testCase "VariantDispatch Codegen with result" $ do
@@ -775,7 +775,7 @@ irTests =
                 let resultStr = T.unpack result
                 assertBool "Should contain reussir.region.run" $
                     "reussir.region.run" `isInfixOf` resultStr
-                assertBool "Should contain func.return" $ "func.return" `isInfixOf` resultStr
+                assertBool "Should contain reussir.return" $ "reussir.return" `isInfixOf` resultStr
                 assertBool "Should contain block body" $ "{" `isInfixOf` resultStr
             , testCase "RegionRun Codegen with result" $ do
                 result <-

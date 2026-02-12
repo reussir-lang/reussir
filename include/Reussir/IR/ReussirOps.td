@@ -56,7 +56,7 @@ def ReussirFuncOp : ReussirOp<"func", [
   let description = [{
     `reussir.func` defines a function that lowers to LLVM with CABI-aware
     adjustments (e.g. `sret` for struct returns on Windows x64).
-    It replaces `func.func` in the Reussir pipeline.
+    It replaces `reussir.func` in the Reussir pipeline.
   }];
 
   let arguments = (ins SymbolNameAttr:$sym_name,
@@ -485,7 +485,7 @@ def ReussirRcCreateOp : ReussirRcOp<"create", [
 
     RC with flex capability:
     ```mlir
-    func.func @region_funcion(%region: !reussir.region) {
+    reussir.func @region_funcion(%region: !reussir.region) {
       %token = reussir.token.alloc : !reussir.token<align: 8, size: 32>
       %val = arith.constant 42 : i64
       %rc_ptr = reussir.rc.create 
@@ -493,7 +493,7 @@ def ReussirRcCreateOp : ReussirRcOp<"create", [
         token (%token : !reussir.token<align: 8, size: 32>) 
         region (%region : !reussir.region)
         : !reussir.rc<i64, flex>
-      func.return
+      reussir.return
     }
     ```
   }];
@@ -752,10 +752,10 @@ def ReussirRefProjectOp : ReussirReferenceOp<"project", []> {
 
     ```mlir
     !struct = !reussir.record<compound "foo" {i64, i64}>
-    func.func @project_func(%ref : !reussir.ref<!struct>) {
+    reussir.func @project_func(%ref : !reussir.ref<!struct>) {
       %field = reussir.ref.project (%ref : !reussir.ref<!struct>) [0] : !reussir.ref<i64>
       %field2 = reussir.ref.project (%ref : !reussir.ref<!struct>) [1] : !reussir.ref<i64>
-      func.return
+      reussir.return
     }
     ```
 

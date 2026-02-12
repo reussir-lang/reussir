@@ -233,7 +233,7 @@ Consider the following MLIR example that creates a simple node structure within 
   [field] !reussir.record<compound "Node">
 }>
 
-func.func @test() {
+reussir.func @test() {
   %res = reussir.region.run -> !reussir.rc<!node rigid> {
     ^bb0(%reg: !reussir.region):
     %token = reussir.token.alloc : !reussir.token<align: 8, size: 48>
@@ -337,7 +337,7 @@ region fn helper(list: [flex] List) {
 Lowered to IR:
 
 ```mlir
-func.func private @helper(%reg: !reussir.region, %list: !reussir.rc<!List flex>) {
+reussir.func private @helper(%reg: !reussir.region, %list: !reussir.rc<!List flex>) {
   // The hidden %reg parameter is threaded through
   ...
 }

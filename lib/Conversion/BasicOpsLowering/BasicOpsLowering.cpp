@@ -2040,7 +2040,7 @@ struct ReussirReturnOpConversionPattern
                   mlir::ConversionPatternRewriter &rewriter) const override {
     // Check if we're inside an sret function
     auto parentFunc = op->getParentOfType<mlir::LLVM::LLVMFuncOp>();
-    bool isSret = parentFunc &&
+    bool isSret = parentFunc && parentFunc.getNumArguments() > 0 &&
                   parentFunc.getArgAttrOfType<mlir::TypeAttr>(0, "llvm.sret");
 
     // If multiple operands, pack them into a struct

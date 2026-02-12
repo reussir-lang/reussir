@@ -20,7 +20,7 @@ import Reussir.Bridge
 -- Module with a simple add function
 moduleWithToAdd :: BS.ByteString
 moduleWithToAdd =
-    "module { func.func public @\"add\"(%0: i32, %1: i32) -> i32  attributes { llvm.linkage = #llvm.linkage<external>, llvm.visibility = \"default\" } { %2 = arith.addi %0, %1 : i32\n func.return %2 : i32 } }"
+    "module { reussir.func public @\"add\"(%0: i32, %1: i32) -> i32  attributes { llvm.linkage = #llvm.linkage<external>, llvm.visibility = \"default\" } { %2 = arith.addi %0, %1 : i32\n reussir.return %2 : i32 } }"
 
 foreign import ccall "dynamic"
     getAddFunc :: FunPtr (Int32 -> Int32 -> IO Int32) -> Int32 -> Int32 -> IO Int32

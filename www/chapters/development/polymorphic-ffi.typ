@@ -92,8 +92,8 @@ pub unsafe extern \"C\" fn __reussir_polyffi_Vec_[:typename:]_push(
 ) -> Vec<[:typename:]> { Vec::push(vec, ele) }")
     substitutions({"typename" = "f64"})
 
-func.func private @__reussir_polyffi_Vec_f64_new() -> !Vecf64
-func.func private @__reussir_polyffi_Vec_f64_push(!Vecf64, f64) -> !Vecf64
+reussir.func private @__reussir_polyffi_Vec_f64_new() -> !Vecf64
+reussir.func private @__reussir_polyffi_Vec_f64_push(!Vecf64, f64) -> !Vecf64
 ```
 
 After the `CompilePolymorphicFFI` pass runs, all `[:typename:]` occurrences are replaced with `f64`, the Rust code is compiled to LLVM bitcode, and the operation becomes:

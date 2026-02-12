@@ -176,7 +176,7 @@ have an argument list that matches the closure argument list.
 To see this flow in action, consider the following MLIR excerpts.
 
 ```mlir
-func.func private @capture_one() -> !reussir.rc<!reussir.closure<() -> i32>> {
+reussir.func private @capture_one() -> !reussir.rc<!reussir.closure<() -> i32>> {
   %closure = reussir.closure.create -> !reussir.rc<!reussir.closure<(i32) -> i32>> {
     body {
       ^bb0(%v0 : i32):

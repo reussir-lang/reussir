@@ -785,12 +785,12 @@ codegenTests =
                                 C.emitModuleToText module'
                 let resultStr = T.unpack result
                 assertBool "Should contain module declaration" $ "module" `isInfixOf` resultStr
-                assertBool "Should contain func.func" $ "func.func" `isInfixOf` resultStr
+                assertBool "Should contain reussir.func" $ "reussir.func" `isInfixOf` resultStr
                 assertBool "Should contain function name add_f32" $
                     "add_f32" `isInfixOf` resultStr
                 assertBool "Should contain f32 type" $ "f32" `isInfixOf` resultStr
                 assertBool "Should contain arith.addf" $ "arith.addf" `isInfixOf` resultStr
-                assertBool "Should contain func.return" $ "func.return" `isInfixOf` resultStr
+                assertBool "Should contain reussir.return" $ "reussir.return" `isInfixOf` resultStr
                 assertBool "Should contain function arguments" $
                     "%0" `isInfixOf` resultStr && "%1" `isInfixOf` resultStr
                 assertBool "Should contain result" $ "%2" `isInfixOf` resultStr
@@ -832,13 +832,13 @@ codegenTests =
                                 C.emitModuleToText module'
                 let resultStr = T.unpack result
                 assertBool "Should contain module declaration" $ "module" `isInfixOf` resultStr
-                assertBool "Should contain func.func" $ "func.func" `isInfixOf` resultStr
+                assertBool "Should contain reussir.func" $ "reussir.func" `isInfixOf` resultStr
                 assertBool "Should contain function name fibonacci" $
                     "fibonacci" `isInfixOf` resultStr
                 assertBool "Should contain i128 type" $ "i128" `isInfixOf` resultStr
                 assertBool "Should contain arith.cmpi" $ "arith.cmpi" `isInfixOf` resultStr
                 assertBool "Should contain scf.if" $ "scf.if" `isInfixOf` resultStr
-                assertBool "Should contain func.call" $ "func.call" `isInfixOf` resultStr
+                assertBool "Should contain reussir.call" $ "reussir.call" `isInfixOf` resultStr
                 assertBool "Should contain arith.addi" $ "arith.addi" `isInfixOf` resultStr
                 assertBool "Should contain arith.subi" $ "arith.subi" `isInfixOf` resultStr
             , testCase
