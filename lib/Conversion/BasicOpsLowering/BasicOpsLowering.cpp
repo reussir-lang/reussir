@@ -2087,12 +2087,20 @@ struct ReussirFuncOpConversionPattern
         needsTrampoline = true;
 
     if (needsTrampoline) {
+      // Strip fused debug metadata from the location used for trampoline ops.
+      // The trampoline is compiler-generated; reusing the full FusedLoc would
+      // cause lowerFusedDBGAttributeInLocations to create a second distinct
+      // DISubprogram, producing "!dbg attachment points at wrong subprogram".
+      mlir::Location trampolineLoc = funcOp.getLoc();
+      if (auto fused = llvm::dyn_cast<mlir::FusedLoc>(trampolineLoc))
+        trampolineLoc = fused.getLocations().front();
+
       // Now prepend the trampoline block
       mlir::Block *trampoline = rewriter.createBlock(
           &newFuncOp.getBody(), newFuncOp.getBody().begin(),
           newFuncOp.getFunctionType().getParams(),
           llvm::SmallVector<mlir::Location>(newFuncOp.getNumArguments(),
-                                            funcOp.getLoc()));
+                                            trampolineLoc));
 
       // In the trampoline, we have arguments matching the function signature
       // (ptrs). We need to load them and jump to the original entry block
@@ -2111,7 +2119,7 @@ struct ReussirFuncOpConversionPattern
           // It is a pointer. Load the value.
           mlir::Type structType = origFnTy.getParams()[origParamIdx];
           auto loaded = rewriter.create<mlir::LLVM::LoadOp>(
-              funcOp.getLoc(), structType, trampolineArg);
+              trampolineLoc, structType, trampolineArg);
           jumpArgs.push_back(loaded);
         } else {
           // Pass through
@@ -2122,7 +2130,7 @@ struct ReussirFuncOpConversionPattern
 
       // Branch to the original entry block (now the second block)
       auto originalEntryBlock = std::next(newFuncOp.getBody().begin());
-      rewriter.create<mlir::LLVM::BrOp>(funcOp.getLoc(), jumpArgs,
+      rewriter.create<mlir::LLVM::BrOp>(trampolineLoc, jumpArgs,
                                         &*originalEntryBlock);
     }
 
