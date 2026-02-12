@@ -1865,6 +1865,12 @@ static bool needsWindowsSret(const LLVMTypeConverter &converter,
   const auto &triple = converter.getTargetTriple();
   if (!triple.isOSWindows() || triple.getArch() != llvm::Triple::x86_64)
     return false;
+  // only POD <= 8 bytes can be returned in registers
+  if (resultTypes.size() > 1) {
+    auto packed = converter.packFunctionResults(resultTypes);
+    auto packedSize = converter.getDataLayout().getTypeSize(packed);
+    return packedSize > 8;
+  }
   if (resultTypes.size() == 1 &&
       converter.getDataLayout().getTypeSize(resultTypes.front()) <= 8)
     return false;
