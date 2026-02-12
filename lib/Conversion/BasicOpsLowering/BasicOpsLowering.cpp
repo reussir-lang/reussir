@@ -2185,8 +2185,8 @@ struct ReussirReturnOpConversionPattern
     } else {
       if (isSret) {
         mlir::Value sretPtr = parentFunc.getBody().front().getArgument(0);
-        rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), adaptor.getOperands(),
-                                             sretPtr);
+        rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(),
+                                             adaptor.getOperands()[0], sretPtr);
         rewriter.replaceOpWithNewOp<mlir::LLVM::ReturnOp>(op,
                                                           mlir::ValueRange{});
       } else {
