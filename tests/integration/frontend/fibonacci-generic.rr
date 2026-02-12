@@ -1,8 +1,8 @@
 // RUN: %reussir-elab --mode semi %s
 // RUN: %reussir-elab --mode full %s | %FileCheck %s
 // RUN: %reussir-compiler %s -o %t.o
-// RUN: %cc %t.o %S/fibonacci.c -DFIB_SYMBOL=_RC13fibonacci_u64 -o %t.exe \
-// RUN:    -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %cc %t.o %S/fibonacci.c -DFIB_SYMBOL=_RC13fibonacci_u64 -o %t.exe
+// RUN: objdump -p %t.exe 2>&1 | grep -i "DLL Name" || true
 // RUN: %t.exe
 
 // CHECK-DAG: struct _RIC6MatrixyE (aka Matrix<u64>){
