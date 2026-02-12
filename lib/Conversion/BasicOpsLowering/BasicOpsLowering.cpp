@@ -2183,8 +2183,16 @@ struct ReussirReturnOpConversionPattern
             op, mlir::ValueRange{packed});
       }
     } else {
-      rewriter.replaceOpWithNewOp<mlir::LLVM::ReturnOp>(op,
-                                                        adaptor.getOperands());
+      if (isSret) {
+        mlir::Value sretPtr = parentFunc.getBody().front().getArgument(0);
+        rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), adaptor.getOperands(),
+                                             sretPtr);
+        rewriter.replaceOpWithNewOp<mlir::LLVM::ReturnOp>(op,
+                                                          mlir::ValueRange{});
+      } else {
+        rewriter.replaceOpWithNewOp<mlir::LLVM::ReturnOp>(
+            op, adaptor.getOperands());
+      }
     }
     return mlir::success();
   }
