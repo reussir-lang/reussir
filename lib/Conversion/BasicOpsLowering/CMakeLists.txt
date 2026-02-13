@@ -1,5 +1,6 @@
 add_mlir_conversion_library(MLIRReussirBasicOpsLowering
   BasicOpsLowering.cpp
+  DbgInfoConversion.cpp
 
   DEPENDS
   MLIRReussirConversionPassIncGen

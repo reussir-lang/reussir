@@ -810,6 +810,18 @@ mlir::LogicalResult ReussirRegionVTableOp::verifySymbolUses(
 }
 
 //===----------------------------------------------------------------------===//
+// Reussir Trampoline Op
+//===----------------------------------------------------------------------===//
+// TrampolineOp SymbolUserOpInterface
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult
+ReussirTrampolineOp::verifySymbolUses(mlir::SymbolTableCollection &symbolTable) {
+  if (symbolTable.lookupNearestSymbolFrom(getOperation(), getTargetAttr()))
+    return mlir::success();
+  return emitOpError("target function not found: ") << getTargetAttr();
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Record Dispatch Op
 //===----------------------------------------------------------------------===//
 // RecordDispatchOp verification
