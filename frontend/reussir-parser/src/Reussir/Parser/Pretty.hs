@@ -273,6 +273,14 @@ instance PrettyColored Stmt where
         prettyFieldFlag False = emptyDoc
         prettyFieldFlag True = brackets (keyword "field") <> space
     prettyColored (SpannedStmt w) = prettyColored (spanValue w)
+    prettyColored (ExternTrampolineStmt (Identifier sym) abi func) =
+        keyword "extern"
+            <+> literal (dquotes (pretty abi))
+            <+> keyword "trampoline"
+            <+> literal (dquotes (pretty sym))
+            <+> operator "="
+            <+> prettyColored func
+            <> operator ";"
 
 commaSep :: (Foldable t) => t (Doc AnsiStyle) -> Doc AnsiStyle
 commaSep = concatWith (surround (comma <> space))

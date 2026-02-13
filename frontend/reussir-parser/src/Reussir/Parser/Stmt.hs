@@ -11,7 +11,7 @@ import Reussir.Parser.Lexer
 import Reussir.Parser.Type (parseType)
 import Reussir.Parser.Types hiding (space)
 import Reussir.Parser.Types.Capability (Capability (Shared))
-import Reussir.Parser.Types.Lexer (Identifier, Path, WithSpan)
+import Reussir.Parser.Types.Lexer (Identifier (..), Path, WithSpan)
 import Reussir.Parser.Types.Stmt
 import Reussir.Parser.Types.Type (Type)
 
@@ -127,6 +127,16 @@ parseEnumDecRest vis = do
     let fields = Variants $ V.fromList body
     return $ RecordStmt $ Record name (fromMaybe [] tyvars) fields EnumKind vis cap
 
+parseExternTrampoline :: Parser Stmt
+parseExternTrampoline = do
+    _ <- string "extern" *> space
+    abi <- parseString <* space
+    _ <- string "trampoline" *> space
+    sym <- parseString <* space
+    _ <- char '=' *> space
+    func <- parsePath <* semicolon
+    return $ ExternTrampolineStmt (Identifier sym) abi func
+
 parseStmt :: Parser Stmt
 parseStmt = SpannedStmt <$> withSpan parseStmtInner
 
@@ -137,4 +147,5 @@ parseStmtInner = do
         [ parseFuncDefRest vis <?> "function definition"
         , parseStructDecRest vis <?> "struct declaration"
         , parseEnumDecRest vis <?> "enum declaration"
+        , parseExternTrampoline <?> "extern trampoline"
         ]
