@@ -1945,7 +1945,7 @@ struct ReussirTrampolineOpConversionPattern
       return mlir::failure();
 
     auto module = op->getParentOfType<mlir::ModuleOp>();
-    auto tripleAttr = module->getAttrOfType<mlir::StringAttr>("llvm.target_triple");
+    auto tripleAttr = module->getAttrOfType<mlir::StringAttr>(mlir::LLVM::LLVMDialect::getTargetTripleAttrName());
     if (!tripleAttr)
         return mlir::failure();
     auto triple = llvm::Triple(tripleAttr.getValue());
