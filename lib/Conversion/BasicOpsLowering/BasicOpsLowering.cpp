@@ -1852,9 +1852,7 @@ static bool isScalarIntegerLike(mlir::Type type) {
          mlir::isa<mlir::LLVM::LLVMPointerType>(type);
 }
 
-static bool isFPScalar(mlir::Type type) {
-  return type.isF32() || type.isF64();
-}
+static bool isFPScalar(mlir::Type type) { return type.isF32() || type.isF64(); }
 
 static bool isAggregate(mlir::Type type) {
   return mlir::isa<mlir::LLVM::LLVMStructType>(type) ||
@@ -1890,15 +1888,18 @@ static bool isReturnIndirect(mlir::Type type, const mlir::DataLayout &dl) {
 struct CABISignature {
   mlir::Type returnType;
   llvm::SmallVector<mlir::Type> paramTypes;
+  llvm::SmallVector<bool> isByVal;
   bool hasSRet;
   int sretIndex;
 };
 
-static CABISignature convertFunctionSignatureForCABI(
-    mlir::Type retTy, llvm::ArrayRef<mlir::Type> paramTys,
-    const mlir::DataLayout &dl, bool isWin64) {
+static CABISignature
+convertFunctionSignatureForCABI(mlir::Type retTy,
+                                llvm::ArrayRef<mlir::Type> paramTys,
+                                const mlir::DataLayout &dl, bool isWin64) {
   if (!isWin64) {
-    return {retTy, llvm::to_vector(paramTys), false, -1};
+    return {retTy, llvm::to_vector(paramTys),
+            llvm::SmallVector<bool>(paramTys.size(), false), false, -1};
   }
 
   CABISignature sig;
@@ -1909,7 +1910,8 @@ static CABISignature convertFunctionSignatureForCABI(
   if (isReturnIndirect(retTy, dl)) {
     sig.hasSRet = true;
     sig.sretIndex = 0;
-    sig.paramTypes.push_back(mlir::LLVM::LLVMPointerType::get(retTy.getContext()));
+    sig.paramTypes.push_back(
+        mlir::LLVM::LLVMPointerType::get(retTy.getContext()));
     sig.returnType = mlir::LLVM::LLVMVoidType::get(retTy.getContext());
   } else {
     sig.returnType = retTy;
@@ -1920,8 +1922,10 @@ static CABISignature convertFunctionSignatureForCABI(
   for (auto paramTy : paramTys) {
     if (isPassIndirect(paramTy, dl)) {
       sig.paramTypes.push_back(ptrTy);
+      sig.isByVal.push_back(false);
     } else {
       sig.paramTypes.push_back(paramTy);
+      sig.isByVal.push_back(true);
     }
   }
 
@@ -1945,74 +1949,91 @@ struct ReussirTrampolineOpConversionPattern
       return mlir::failure();
 
     auto module = op->getParentOfType<mlir::ModuleOp>();
-    auto tripleAttr = module->getAttrOfType<mlir::StringAttr>(mlir::LLVM::LLVMDialect::getTargetTripleAttrName());
+    auto tripleAttr = module->getAttrOfType<mlir::StringAttr>(
+        mlir::LLVM::LLVMDialect::getTargetTripleAttrName());
     if (!tripleAttr)
-        return mlir::failure();
+      return mlir::failure();
     auto triple = llvm::Triple(tripleAttr.getValue());
     bool isWin64 = triple.isOSWindows() && triple.isArch64Bit();
     mlir::LLVM::LLVMFunctionType llvmFuncTy;
-    if (auto llvmFuncOp = mlir::dyn_cast<mlir::LLVM::LLVMFuncOp>(funcOp)) 
-        llvmFuncTy = llvmFuncOp.getFunctionType();
+    if (auto llvmFuncOp = mlir::dyn_cast<mlir::LLVM::LLVMFuncOp>(funcOp))
+      llvmFuncTy = llvmFuncOp.getFunctionType();
     else if (auto mlirFuncOp = mlir::dyn_cast<mlir::func::FuncOp>(funcOp)) {
-        auto funcTy = mlirFuncOp.getFunctionType();
-        // Check if we need signature conversion
-        mlir::TypeConverter::SignatureConversion signatureConversion(funcTy.getNumInputs());
-        llvmFuncTy = llvm::dyn_cast_if_present<mlir::LLVM::LLVMFunctionType>(converter->convertFunctionSignature(
-            funcTy, /*isVariadic=*/false, /*useBarePtrCallConv=*/false, signatureConversion));
+      auto funcTy = mlirFuncOp.getFunctionType();
+      // Check if we need signature conversion
+      mlir::TypeConverter::SignatureConversion signatureConversion(
+          funcTy.getNumInputs());
+      llvmFuncTy = llvm::dyn_cast_if_present<mlir::LLVM::LLVMFunctionType>(
+          converter->convertFunctionSignature(funcTy, /*isVariadic=*/false,
+                                              /*useBarePtrCallConv=*/false,
+                                              signatureConversion));
     }
     if (!llvmFuncTy)
-        return mlir::failure();
+      return mlir::failure();
 
     auto llvmRetTy = llvmFuncTy.getReturnType();
     auto llvmParamTys = llvmFuncTy.getParams();
 
     const mlir::DataLayout &dl = converter->getDataLayout();
-    auto cabiSig = convertFunctionSignatureForCABI(llvmRetTy, llvmParamTys, dl, isWin64);
+    auto cabiSig =
+        convertFunctionSignatureForCABI(llvmRetTy, llvmParamTys, dl, isWin64);
 
-    auto trampolineTy = mlir::LLVM::LLVMFunctionType::get(cabiSig.returnType, cabiSig.paramTypes);
+    auto trampolineTy = mlir::LLVM::LLVMFunctionType::get(cabiSig.returnType,
+                                                          cabiSig.paramTypes);
     auto trampoline = rewriter.create<mlir::LLVM::LLVMFuncOp>(
         op.getLoc(), op.getSymName(), trampolineTy);
 
     // Setup attributes (e.g. sret)
     if (cabiSig.hasSRet) {
-        trampoline.setArgAttr(cabiSig.sretIndex, 
-            mlir::LLVM::LLVMDialect::getStructRetAttrName(), mlir::TypeAttr::get(llvmRetTy));
+      trampoline.setArgAttr(cabiSig.sretIndex,
+                            mlir::LLVM::LLVMDialect::getStructRetAttrName(),
+                            mlir::TypeAttr::get(llvmRetTy));
     }
 
-    mlir::Block *entry =  trampoline.addEntryBlock(rewriter);
+    mlir::Block *entry = trampoline.addEntryBlock(rewriter);
     rewriter.setInsertionPointToStart(entry);
 
     llvm::SmallVector<mlir::Value> targetArgs;
     int trampolineArgIdx = cabiSig.hasSRet ? 1 : 0;
-    
+
     for (size_t i = 0; i < llvmParamTys.size(); ++i) {
-        trampoline.setArgAttr(trampolineArgIdx, mlir::LLVM::LLVMDialect::getByValAttrName(), mlir::TypeAttr::get(llvmParamTys[i]));
-        auto arg = trampoline.getArgument(trampolineArgIdx++);
-        if (isWin64 && isPassIndirect(llvmParamTys[i], dl)) {
-             targetArgs.push_back(rewriter.create<mlir::LLVM::LoadOp>(op.getLoc(), llvmParamTys[i], arg));
-        } else {
-             targetArgs.push_back(arg);
-        }
+      if (cabiSig.isByVal[i])
+        trampoline.setArgAttr(trampolineArgIdx,
+                              mlir::LLVM::LLVMDialect::getByValAttrName(),
+                              mlir::TypeAttr::get(llvmParamTys[i]));
+
+      auto arg = trampoline.getArgument(trampolineArgIdx++);
+      if (isWin64 && isPassIndirect(llvmParamTys[i], dl)) {
+        targetArgs.push_back(rewriter.create<mlir::LLVM::LoadOp>(
+            op.getLoc(), llvmParamTys[i], arg));
+      } else {
+        targetArgs.push_back(arg);
+      }
     }
 
-    mlir::Operation* callOp;
+    mlir::Operation *callOp;
 
     if (auto llvmFuncOp = mlir::dyn_cast<mlir::LLVM::LLVMFuncOp>(funcOp)) {
-        callOp = rewriter.create<mlir::LLVM::CallOp>(op.getLoc(), llvmFuncOp, targetArgs);
+      callOp = rewriter.create<mlir::LLVM::CallOp>(op.getLoc(), llvmFuncOp,
+                                                   targetArgs);
     } else if (auto mlirFuncOp = mlir::dyn_cast<mlir::func::FuncOp>(funcOp)) {
-        callOp = rewriter.create<mlir::func::CallOp>(op.getLoc(), mlirFuncOp, targetArgs);
+      callOp = rewriter.create<mlir::func::CallOp>(op.getLoc(), mlirFuncOp,
+                                                   targetArgs);
     } else {
-        return mlir::failure();
+      return mlir::failure();
     }
-    
+
     if (cabiSig.hasSRet) {
-        rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), callOp->getResult(0), trampoline.getArgument(cabiSig.sretIndex));
-        rewriter.create<mlir::LLVM::ReturnOp>(op.getLoc(), mlir::ValueRange{});
+      rewriter.create<mlir::LLVM::StoreOp>(
+          op.getLoc(), callOp->getResult(0),
+          trampoline.getArgument(cabiSig.sretIndex));
+      rewriter.create<mlir::LLVM::ReturnOp>(op.getLoc(), mlir::ValueRange{});
     } else {
-        if (llvm::isa<mlir::LLVM::LLVMVoidType>(cabiSig.returnType))
-             rewriter.create<mlir::LLVM::ReturnOp>(op.getLoc(), mlir::ValueRange{});
-        else 
-             rewriter.create<mlir::LLVM::ReturnOp>(op.getLoc(), callOp->getResults());
+      if (llvm::isa<mlir::LLVM::LLVMVoidType>(cabiSig.returnType))
+        rewriter.create<mlir::LLVM::ReturnOp>(op.getLoc(), mlir::ValueRange{});
+      else
+        rewriter.create<mlir::LLVM::ReturnOp>(op.getLoc(),
+                                              callOp->getResults());
     }
 
     rewriter.eraseOp(op);
