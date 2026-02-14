@@ -1913,6 +1913,7 @@ convertFunctionSignatureForCABI(mlir::Type retTy,
     sig.paramTypes.push_back(
         mlir::LLVM::LLVMPointerType::get(retTy.getContext()));
     sig.returnType = mlir::LLVM::LLVMVoidType::get(retTy.getContext());
+    sig.isByVal.push_back(false);
   } else {
     sig.returnType = retTy;
   }
