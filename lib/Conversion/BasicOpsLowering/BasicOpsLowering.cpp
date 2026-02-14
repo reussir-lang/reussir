@@ -1998,13 +1998,14 @@ struct ReussirTrampolineOpConversionPattern
     int trampolineArgIdx = cabiSig.hasSRet ? 1 : 0;
 
     for (size_t i = 0; i < llvmParamTys.size(); ++i) {
-      if (cabiSig.isByVal[i])
+      bool isIndirect = cabiSig.isByVal[trampolineArgIdx];
+      if (isIndirect)
         trampoline.setArgAttr(trampolineArgIdx,
                               mlir::LLVM::LLVMDialect::getByValAttrName(),
-                              mlir::TypeAttr::get(llvmParamTys[i]));
+                              mlir::TypeAttr::get(cabiSig.paramTypes[i]));
 
       auto arg = trampoline.getArgument(trampolineArgIdx++);
-      if (isWin64 && isPassIndirect(llvmParamTys[i], dl)) {
+      if (isWin64 && isIndirect) {
         targetArgs.push_back(rewriter.create<mlir::LLVM::LoadOp>(
             op.getLoc(), llvmParamTys[i], arg));
       } else {
