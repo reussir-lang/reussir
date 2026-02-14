@@ -96,6 +96,7 @@ import Reussir.Core.Data.Semi.Expr qualified as Semi
 import Reussir.Core.Data.Semi.Function qualified as SemiFunc
 import Reussir.Core.Data.Semi.Type qualified as Semi
 import Reussir.Core.Full.Context qualified as Full
+import qualified Reussir.Codegen.Trampoline as IR
 
 --------------------------------------------------------------------------------
 -- REPL Types
@@ -432,7 +433,7 @@ generateExpressionModule funcName semiExpr exprType logLevel state = do
             -- Create a wrapper function that returns the expression value
             let wrapperFunc =
                     Full.Function
-                        { Full.funcVisibility = Syn.Public
+                        { Full.funcVisibility = Syn.Private
                         , Full.funcName = verifiedSymbol funcName
                         , Full.funcRawPath = Path (Identifier funcName) []
                         , Full.funcInstantiatedTyArgs = []
@@ -504,6 +505,13 @@ generateExpressionModule funcName semiExpr exprType logLevel state = do
                         else do
                             -- New function, lower fully
                             lowerFunction func
+                let funcSymbol = verifiedSymbol funcName
+                let funcTrampoline = funcName <> "_trampoline"
+                let funcTrampolineSymbol = verifiedSymbol funcTrampoline
+                let trampoline' = IR.Trampoline funcTrampolineSymbol funcSymbol "C"
+                mod' <- State.get
+                let updatedMod = mod'{IR.trampolines = trampoline' : IR.trampolines mod'}
+                State.put updatedMod
 
             -- Update compiled functions set
             forM_ allFuncs $ \(_, func) -> do

@@ -482,7 +482,7 @@ executeModule ::
     ResultKind ->
     IO (Either String String)
 executeModule jit moduleBytes n resultKind = do
-    let funcName = "__repl_expr_" ++ show n
+    let funcName = "__repl_expr_" ++ show n ++ "_trampoline"
     let packedName = fromString funcName
     success <- addModule jit moduleBytes
     if success
