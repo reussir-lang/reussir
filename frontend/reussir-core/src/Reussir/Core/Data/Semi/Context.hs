@@ -26,6 +26,7 @@ import Reussir.Core.Data.Semi.Unification (HoleTable)
 import Reussir.Core.Data.Semi.Variable (VarTable)
 import Reussir.Core.Data.UniqueID (GenericID)
 import Reussir.Core.String (StringUniqifier)
+import qualified Data.Text as T
 
 {- | The local context for semi-elaboration. This is separated from the global
 context to indicate that it requires change per function
@@ -53,7 +54,7 @@ data SemiContext = SemiContext
     , knownRecords :: H.CuckooHashTable Path Record
     , functions :: FunctionTable
     , generics :: GenericState
-    , trampolines :: HashMap Identifier (Path, [Type])
+    , trampolines :: HashMap Identifier (Path, T.Text, [Type])
     }
 
 type GlobalSemiEff = Eff '[IOE, Prim, Log, State SemiContext]

@@ -41,6 +41,7 @@ import Reussir.Core.Semi.Tyck (checkFuncType)
 
 import Reussir.Core.Full.Pretty qualified as Full
 import Reussir.Core.Semi.Pretty qualified as Semi
+import Reussir.Core.Semi.Trampoline
 
 data ElabMode = SemiMode | FullMode
     deriving (Eq, Show)
@@ -122,6 +123,8 @@ runSemiElab args prog = do
                         Syn.FunctionStmt f -> do
                             _ <- inject $ checkFuncType f
                             return ()
+                        Syn.ExternTrampolineStmt name abi target args' -> do
+                            inject $ resolveTrampoline name abi target args'
                         _ -> return ()
 
                 let putDoc' doc = do
@@ -185,6 +188,8 @@ runFullElab args prog = do
                         Syn.FunctionStmt f -> do
                             _ <- inject $ checkFuncType f
                             return ()
+                        Syn.ExternTrampolineStmt name abi target args' -> do
+                            inject $ resolveTrampoline name abi target args'
                         _ -> return ()
 
                 -- Solve generics

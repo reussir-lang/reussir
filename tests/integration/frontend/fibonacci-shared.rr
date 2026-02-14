@@ -1,7 +1,7 @@
 // RUN: %reussir-compiler %s -t mlir -o %t.mlir
 // RUN: %FileCheck %s --check-prefix=CHECK-MLIR < %t.mlir
 // RUN: %reussir-compiler %s -o %t.o
-// RUN: %cc %t.o %S/fibonacci.c -DFIB_SYMBOL=_RC13fibonacci_u64 -o %t.exe \
+// RUN: %cc %t.o %S/fibonacci.c -o %t.exe \
 // RUN:    -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
 // RUN: %t.exe
 
@@ -44,11 +44,13 @@ fn fibonacci_logarithmic_impl<T : Integral>(
     }
 }
 
-fn fibonacci_u64(n : u64) -> u64 {
-    let x = Matrix<_> { m00 : 0, m01 : 1, m10 : 1, m11 : 1 };
-    let eye = Matrix<_> { m00 : 1, m01 : 0, m10 : 0, m11 : 1 };
-    fibonacci_logarithmic_impl<_>(n, eye, x)
+fn fibonacci<T : Integral>(n : T) -> T {
+    let x = Matrix { m00 : 0, m01 : 1, m10 : 1, m11 : 1 };
+    let eye = Matrix { m00 : 1, m01 : 0, m10 : 0, m11 : 1 };
+    fibonacci_logarithmic_impl(n, eye, x)
 }
+
+extern "C" trampoline "fibonacci_ffi" = fibonacci<u64>;
 
 // --- MLIR ownership checks ---
 
@@ -58,6 +60,12 @@ fn fibonacci_u64(n : u64) -> u64 {
 // CHECK-MLIR-NEXT:  reussir.rc.dec (%1 :
 // CHECK-MLIR:       reussir.record.compound
 // CHECK-MLIR:       reussir.rc.create
+// CHECK-MLIR:       func.return
+
+// fibonacci<u64>: no RC ops, just create matrices and call impl
+// CHECK-MLIR-LABEL: func.func @"_RIC9fibonacciyE"
+// CHECK-MLIR-NOT:   reussir.rc.inc
+// CHECK-MLIR-NOT:   reussir.rc.dec
 // CHECK-MLIR:       func.return
 
 // fibonacci_logarithmic_impl: n==0 branch decs both a and b; else branches inc b
@@ -84,9 +92,3 @@ fn fibonacci_u64(n : u64) -> u64 {
 // CHECK-MLIR:       reussir.rc.inc (%2 :
 // CHECK-MLIR:       func.call @"_RIC6matmulyE"(%2, %2)
 // CHECK-MLIR:       func.call @"_RIC26fibonacci_logarithmic_implyE"({{%[0-9]+}}, %1, {{%[0-9]+}})
-
-// fibonacci_u64: no RC ops, just create matrices and call impl
-// CHECK-MLIR-LABEL: func.func @"_RC13fibonacci_u64"
-// CHECK-MLIR-NOT:   reussir.rc.inc
-// CHECK-MLIR-NOT:   reussir.rc.dec
-// CHECK-MLIR:       func.return

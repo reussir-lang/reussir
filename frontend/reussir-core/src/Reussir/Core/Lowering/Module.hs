@@ -19,6 +19,8 @@ import Reussir.Core.Data.Lowering.Context (
 import Reussir.Core.Lowering.Function (lowerFunction)
 import Reussir.Core.Lowering.Record (lowerRecord)
 import Reussir.Core.String (getAllStrings, mangleStringToken)
+import qualified Data.HashMap.Strict as HashMap
+import qualified Reussir.Codegen.Trampoline as IR
 
 lowerModule :: GlobalLoweringEff ()
 lowerModule = do
@@ -39,4 +41,11 @@ lowerModule = do
         mod' <- State.get
         let global = IR.GlobalString symbol strVal
         let updatedMod = mod'{IR.globals = global : IR.globals mod'}
+        State.put updatedMod
+
+    -- Lower trampolines
+    forM_ (HashMap.toList (trampolines ctx)) $ \(name, (abi, target)) -> do
+        let trampoline' = IR.Trampoline name target abi
+        mod' <- State.get
+        let updatedMod = mod'{IR.trampolines = trampoline' : IR.trampolines mod'}
         State.put updatedMod

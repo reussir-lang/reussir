@@ -14,6 +14,7 @@ import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
 import Effectful.Log qualified as L
 import Effectful.State.Static.Local qualified as State
+import Data.HashMap.Strict qualified as HashMap
 
 import Reussir.Core.Data.Generic (GenericSolution)
 import Reussir.Core.Data.Semi.Context (GlobalSemiEff, SemiContext (..))
@@ -197,8 +198,17 @@ analyzeGenericFlow = do
     records <- liftIO $ H.toList knownRecords
     forM_ records $ \(_, record) -> analyzeGenericFlowInRecord record
 
--- TODO: should also analyze the trampolines as they demand the function to be
--- instantiated.
+    -- Analyze trampolines
+    trampolinesMap <- State.gets trampolines
+    let trampolineList = HashMap.toList trampolinesMap
+    forM_ trampolineList $ \(_, (target, _, tyArgs)) -> do
+        liftIO (H.lookup (functionProtos functionTable) target) >>= \case
+            Just proto -> do
+                let generics = funcGenerics proto
+                analyzeGenericInstantiationFlow generics tyArgs
+            Nothing -> pure () -- Should have been caught by resolution
+
+
 solveAllGenerics :: GlobalSemiEff (Maybe GenericSolution)
 solveAllGenerics = do
     L.logTrace_ "Solving all generics"

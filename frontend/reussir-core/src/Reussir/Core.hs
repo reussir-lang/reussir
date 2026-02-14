@@ -32,6 +32,7 @@ import Reussir.Core.Semi.Context (
     scanStmt,
  )
 import Reussir.Core.Semi.FlowAnalysis (solveAllGenerics)
+import Reussir.Core.Semi.Trampoline (resolveTrampoline)
 import Reussir.Core.Semi.Tyck (checkFuncType)
 
 unspanStmt :: Syn.Stmt -> Syn.Stmt
@@ -62,9 +63,8 @@ translateProgToModule spec prog = do
                     Syn.FunctionStmt f -> do
                         _ <- inject $ checkFuncType f
                         return ()
-                    Syn.ExternTrampolineStmt {} -> do
-                        -- TODO: emit trampoline
-                        return ()
+                    Syn.ExternTrampolineStmt name abi target args -> do
+                        inject $ resolveTrampoline name abi target args
                     _ -> return ()
 
             -- Solve generics
@@ -91,5 +91,6 @@ translateProgToModule spec prog = do
                     ctxFunctions
                     ctxRecords
                     ctxStringUniqifier
+                    ctxTrampolines
                     spec
         runLoweringToModule loweringCtx lowerModule

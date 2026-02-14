@@ -1,7 +1,7 @@
 // RUN: %reussir-elab --mode semi %s
 // RUN: %reussir-elab --mode full %s | %FileCheck %s
 // RUN: %reussir-compiler %s -o %t.o
-// RUN: %cc %t.o %S/fibonacci.c -DFIB_SYMBOL=_RC13fibonacci_u64 -o %t.exe
+// RUN: %cc %t.o %S/fibonacci.c -o %t.exe
 // RUN: %t.exe
 
 // CHECK-DAG: struct _RIC6MatrixyE (aka Matrix<u64>){
@@ -11,7 +11,7 @@
 // CHECK-NEXT-DAG: m11: u64
 // CHECK-NEXT-DAG: }
 
-// CHECK-DAG: fn _RC13fibonacci_u64(n: u64) -> u64 {
+// CHECK-DAG: fn _RIC9fibonacciyE<u64>(n: u64) -> u64 {
 // CHECK-NEXT-DAG: let v1 (x) : _RIC6MatrixyE = compound(0.0 : u64, 1.0 : u64, 1.0 : u64, 1.0 : u64) : _RIC6MatrixyE in
 // CHECK-NEXT-DAG: let v2 (eye) : _RIC6MatrixyE = compound(1.0 : u64, 0.0 : u64, 0.0 : u64, 1.0 : u64) : _RIC6MatrixyE in
 // CHECK-NEXT-DAG: _RIC26fibonacci_logarithmic_implyE(v0, v2, v1) : u64
@@ -73,8 +73,10 @@ fn fibonacci_logarithmic_impl<T : Integral>(
     }
 }
 
-fn fibonacci_u64(n : u64) -> u64 {
-    let x = Matrix<_> { m00 : 0, m01 : 1, m10 : 1, m11 : 1 };
-    let eye = Matrix<_> { m00 : 1, m01 : 0, m10 : 0, m11 : 1 };
-    fibonacci_logarithmic_impl<_>(n, eye, x)
+fn fibonacci<T : Integral>(n : T) -> T {
+    let x = Matrix { m00 : 0, m01 : 1, m10 : 1, m11 : 1 };
+    let eye = Matrix { m00 : 1, m01 : 0, m10 : 0, m11 : 1 };
+    fibonacci_logarithmic_impl(n, eye, x)
 }
+
+extern "C" trampoline "fibonacci_ffi" = fibonacci<u64>;

@@ -1,0 +1,7 @@
+// RUN: %reussir-elab --mode semi %s
+
+fn foo<T : Num>(x : T) -> i32 {
+    x as i32 + 1
+}
+
+extern "C" trampoline "bar" = foo<i32>;

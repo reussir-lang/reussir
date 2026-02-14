@@ -19,4 +19,4 @@ trampolineCodegen (Trampoline name target abi) = emitBuilderLineM $ do
     let abi' = TB.fromText $ T.show abi
     name' <- emit name
     target' <- emit target
-    return $ opName <> abi' <> " @" <> name' <> " = " <> target' 
+    return $ opName <> " " <> abi' <> " @" <> name' <> " = @" <> target' 
