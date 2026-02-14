@@ -135,7 +135,8 @@ parseExternTrampoline = do
     sym <- parseString <* space
     _ <- char '=' *> space
     func <- parsePath <* semicolon
-    return $ ExternTrampolineStmt (Identifier sym) abi func
+    funcTyArgs <- optional (openAngle *> parseType `sepBy` comma <* closeAngle)
+    return $ ExternTrampolineStmt (Identifier sym) abi func $ fromMaybe [] funcTyArgs
 
 parseStmt :: Parser Stmt
 parseStmt = SpannedStmt <$> withSpan parseStmtInner

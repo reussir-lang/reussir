@@ -36,6 +36,7 @@ import Reussir.Codegen.PolymorphicFFI (
     polyFFICodegen,
  )
 import Reussir.Codegen.Type.Record (Record)
+import Reussir.Codegen.Trampoline
 
 newtype RecordInstance = RecordInstance {unRecordInstance :: (Symbol, Record)}
 data Module = Module
@@ -44,6 +45,7 @@ data Module = Module
     , recordInstances :: [RecordInstance]
     , polymorphicFFIs :: [PolymorphicFFI]
     , globals :: [Global]
+    , trampolines :: [Trampoline]
     }
 
 {- | Create an empty module with the given target specification.
@@ -57,6 +59,7 @@ emptyModule spec =
         , recordInstances = []
         , polymorphicFFIs = []
         , globals = []
+        , trampolines = []
         }
 
 -- | Emit a complete MLIR module with the given body.
@@ -67,6 +70,7 @@ moduleCodegen m = do
         forM_ (globals m) globalCodegen
         forM_ (polymorphicFFIs m) polyFFICodegen
         forM_ (moduleFunctions m) functionCodegen
+        forM_ (trampolines m) trampolineCodegen
 
 -- | Helper function to emit module to a Text
 emitModuleToText :: (IOE :> es, L.Log :> es) => Module -> Eff es T.Text

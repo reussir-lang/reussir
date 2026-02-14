@@ -197,6 +197,8 @@ analyzeGenericFlow = do
     records <- liftIO $ H.toList knownRecords
     forM_ records $ \(_, record) -> analyzeGenericFlowInRecord record
 
+-- TODO: should also analyze the trampolines as they demand the function to be
+-- instantiated.
 solveAllGenerics :: GlobalSemiEff (Maybe GenericSolution)
 solveAllGenerics = do
     L.logTrace_ "Solving all generics"

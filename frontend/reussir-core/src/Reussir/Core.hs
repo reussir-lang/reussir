@@ -62,6 +62,9 @@ translateProgToModule spec prog = do
                     Syn.FunctionStmt f -> do
                         _ <- inject $ checkFuncType f
                         return ()
+                    Syn.ExternTrampolineStmt {} -> do
+                        -- TODO: emit trampoline
+                        return ()
                     _ -> return ()
 
             -- Solve generics

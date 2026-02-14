@@ -48,7 +48,8 @@ data Stmt
     | ExternTrampolineStmt {
         etsName :: Identifier,
         etsABI :: T.Text,
-        etsFunc :: Path
+        etsFunc :: Path,
+        etsFuncTyArgs :: [Type]
     }
     | SpannedStmt (WithSpan Stmt)
     deriving (Show, Eq)

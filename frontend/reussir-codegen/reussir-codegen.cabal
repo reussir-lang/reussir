@@ -74,6 +74,7 @@ library
         Reussir.Codegen.Location
         Reussir.Codegen.PolymorphicFFI
         Reussir.Codegen.Global
+        Reussir.Codegen.Trampoline
         Reussir.Codegen
 
     -- Modules included in this library but not exported.

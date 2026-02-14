@@ -21,7 +21,7 @@ import Reussir.Core.Data.Class (ClassDAG)
 import Reussir.Core.Data.Generic (GenericState)
 import Reussir.Core.Data.Semi.Function (FunctionTable)
 import Reussir.Core.Data.Semi.Record (Record)
-import Reussir.Core.Data.Semi.Type (TypeClassTable)
+import Reussir.Core.Data.Semi.Type (TypeClassTable, Type)
 import Reussir.Core.Data.Semi.Unification (HoleTable)
 import Reussir.Core.Data.Semi.Variable (VarTable)
 import Reussir.Core.Data.UniqueID (GenericID)
@@ -53,6 +53,7 @@ data SemiContext = SemiContext
     , knownRecords :: H.CuckooHashTable Path Record
     , functions :: FunctionTable
     , generics :: GenericState
+    , trampolines :: HashMap Identifier (Path, [Type])
     }
 
 type GlobalSemiEff = Eff '[IOE, Prim, Log, State SemiContext]

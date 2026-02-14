@@ -196,6 +196,7 @@ emptySemiContext translationLogLevel currentFile = do
             , functions
             , generics
             , translationHasFailed = False
+            , trampolines = mempty
             }
 
 -- | empty local context
@@ -334,6 +335,7 @@ scanStmtImpl (Syn.SpannedStmt s) = do
     State.modify $ \st -> st{currentSpan = Just (spanStartOffset s, spanEndOffset s)}
     scanStmtImpl (spanValue s)
     State.modify $ \st -> st{currentSpan = backup}
+scanStmtImpl (Syn.ExternTrampolineStmt {}) = pure ()
 scanStmtImpl (Syn.RecordStmt record) = do
     let name = Syn.recordName record
     let tyParams = Syn.recordTyParams record
