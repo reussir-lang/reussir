@@ -1923,10 +1923,10 @@ convertFunctionSignatureForCABI(mlir::Type retTy,
   for (auto paramTy : paramTys) {
     if (isPassIndirect(paramTy, dl)) {
       sig.paramTypes.push_back(ptrTy);
-      sig.isByVal.push_back(false);
+      sig.isByVal.push_back(true);
     } else {
       sig.paramTypes.push_back(paramTy);
-      sig.isByVal.push_back(true);
+      sig.isByVal.push_back(false);
     }
   }
 
