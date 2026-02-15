@@ -1,0 +1,29 @@
+// RUN: %reussir-compiler %s -o %t.o
+// RUN: %cc %t.o %S/huge_value_struct_call_and_return.c -o %t.exe
+// RUN: %t.exe
+
+struct [value] HugeValue {
+    f0: u64,
+    f1: u64,
+    f2: u64,
+    f3: u64,
+    f4: u64,
+    f5: u64,
+    f6: u64,
+    f7: u64
+}
+
+fn transform_huge_value(input: HugeValue) -> HugeValue {
+    HugeValue {
+        f0: input.f0 + input.f7,
+        f1: input.f1 + input.f6 * 2,
+        f2: input.f2 + input.f5 * 3,
+        f3: input.f3 + input.f4 * 4,
+        f4: input.f4 + input.f3 * 5,
+        f5: input.f5 + input.f2 * 6,
+        f6: input.f6 + input.f1 * 7,
+        f7: input.f7 + input.f0 * 8
+    }
+}
+
+extern "C" trampoline "transform_huge_value_ffi" = transform_huge_value;
