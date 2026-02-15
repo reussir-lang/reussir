@@ -113,10 +113,11 @@ public:
   ReussirASTLayer(ASTCallbackFn ast_callback_fn, ASTFreeFn ast_free_fn,
                   IRLayer &inner_layer, llvm::orc::ThreadSafeContext ts_context,
                   mlir::MLIRContext &context, mlir::PassManager &pm,
-                  const DataLayout &data_layout)
+                  const DataLayout &data_layout, std::string target_triple)
       : ast_callback_fn(ast_callback_fn), ast_free_fn(ast_free_fn),
         inner_layer(inner_layer), ts_context(ts_context), context(context),
-        pm(pm), data_layout(data_layout) {}
+        pm(pm), data_layout(data_layout),
+        target_triple(std::move(target_triple)) {}
 
   Error add(ResourceTrackerSP resource_tracker, ASTStablePtr ast,
             ArrayRef<char *> symbol_names, ArrayRef<uint8_t> symbol_flags) {
@@ -136,7 +137,7 @@ public:
             const char *texture) {
     auto unique_module = ts_context.withContextDo([&](LLVMContext *llvmCtx) {
       return bridge::translateToModule(texture, *llvmCtx, context, pm,
-                                       data_layout);
+                                       data_layout, target_triple);
     });
     auto concurrentModule =
         ThreadSafeModule(std::move(unique_module), ts_context);
@@ -163,6 +164,7 @@ private:
   mlir::MLIRContext &context;
   mlir::PassManager &pm;
   const DataLayout &data_layout;
+  std::string target_triple;
 
   friend class ReussirASTMaterializationUnit;
 };
@@ -250,7 +252,10 @@ public:
         pm(bridge::buildPassManager(*context)),
         ts_context(std::make_unique<llvm::LLVMContext>()),
         ast_layer(ast_callback_fn, ast_free_fn, optimize_layer, ts_context,
-                  *context, *pm, data_layout),
+                  *context, *pm, data_layout,
+                  execution_session->getExecutorProcessControl()
+                      .getTargetTriple()
+                      .str()),
         main_dynlib(execution_session->createBareJITDylib("<main>")) {
     main_dynlib.addGenerator(
         cantFail(DynamicLibrarySearchGenerator::GetForCurrentProcess(
@@ -293,8 +298,11 @@ public:
       resource_tracker = main_dynlib.getDefaultResourceTracker();
 
     auto unique_module = ts_context.withContextDo([&](LLVMContext *llvmCtx) {
-      return bridge::translateToModule(texture, *llvmCtx, *context, *pm,
-                                       data_layout);
+      return bridge::translateToModule(
+          texture, *llvmCtx, *context, *pm, data_layout,
+          execution_session->getExecutorProcessControl()
+              .getTargetTriple()
+              .str());
     });
     auto concurrentModule =
         ThreadSafeModule(std::move(unique_module), ts_context);
@@ -403,29 +411,12 @@ export extern "C" {
     }
     return def->getAddress().toPtr<void *>();
   }
-// Call a JIT function that returns a str type (struct { ptr, len })
-// On ARM64 and x86-64, small structs are returned in registers
-#if defined(_WIN32) && defined(__x86_64__)
-  // On Windows x86_64, the JIT function returns:
-  // - %rax = ptr
-  // - %rdx = len
-  // We use inline assembly to call and capture both return registers.
-  void reussir_bridge_call_str_func(void *func_ptr, ReussirStrResult *result) {
-    const char *ptr;
-    size_t len;
-    __asm__ __volatile__("callq *%[func]"
-                         : "=a"(ptr), "=d"(len)
-                         : [func] "r"(func_ptr)
-                         : "rcx", "r8", "r9", "r10", "r11", "memory");
-    result->ptr = ptr;
-    result->len = len;
-  }
-#else
+  // Call a JIT function that returns a str type (struct { ptr, len })
+  // On ARM64 and x86-64, small structs are returned in registers
   void reussir_bridge_call_str_func(void *func_ptr, ReussirStrResult *result) {
     // Define the function type that returns the str struct
     using StrFuncType = ReussirStrResult (*)();
     auto func = reinterpret_cast<StrFuncType>(func_ptr);
     *result = func();
   }
-#endif
 }

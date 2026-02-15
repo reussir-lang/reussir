@@ -1405,4 +1405,25 @@ def ReussirStrSliceOp : ReussirStrOp<"slice", []> {
     `(` $str `:` type($str) `)` `[` $offset `]` `:` type($result) attr-dict
   }];
 }
+
+def ReussirTrampolineOp : ReussirOp<"trampoline", [
+  Symbol, DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Trampoline for FFI calls";
+  let description = [{
+    Interally, Reussir uses MLIR calling convension, which typically aligns with
+    platform ABI. However, for C-FFI, platform ABI is not enough. For example,
+    windows x64 sometimes require hidden pointer to structural return values.
+    `reussir.trampoline` is a trampoline exported to FFI. Currently, only "C" 
+    ABI is supported.
+  }];
+  let arguments = (ins 
+    Arg<FlatSymbolRefAttr, "Wrapped target function">:$target,
+    Arg<StrAttr, "ABI Name">:$abi_name,
+    Arg<SymbolNameAttr, "Exported symbol name">:$sym_name
+  );
+  let assemblyFormat = [{
+    $abi_name $sym_name `=` $target attr-dict
+  }];
+}
 #endif // REUSSIR_IR_REUSSIROPS_TD

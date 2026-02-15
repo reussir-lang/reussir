@@ -6,6 +6,7 @@ import Reussir.Parser.Types.Capability (Capability)
 import Reussir.Parser.Types.Expr (Expr)
 import Reussir.Parser.Types.Lexer (Identifier, Path, WithSpan)
 import Reussir.Parser.Types.Type (Type)
+import qualified Data.Text as T
 
 data Visibility = Public | Private deriving (Show, Eq)
 
@@ -44,5 +45,11 @@ data Function = Function
 data Stmt
     = FunctionStmt Function
     | RecordStmt Record
+    | ExternTrampolineStmt {
+        etsName :: Identifier,
+        etsABI :: T.Text,
+        etsFunc :: Path,
+        etsFuncTyArgs :: [Type]
+    }
     | SpannedStmt (WithSpan Stmt)
     deriving (Show, Eq)

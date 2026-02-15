@@ -11,6 +11,9 @@ import Reussir.Core.Data.Full.Function (FunctionTable)
 import Reussir.Core.Data.Full.Record (FullRecordTable, SemiRecordTable)
 import Reussir.Core.Data.Full.Type (GenericMap)
 import Reussir.Core.Data.String (StringUniqifier)
+import Reussir.Codegen.Context.Symbol (Symbol)
+import qualified Data.HashMap.Strict as HashMap
+import qualified Data.Text as T
 
 data FullContext = FullContext
     { ctxFunctions :: FunctionTable
@@ -20,6 +23,7 @@ data FullContext = FullContext
     , ctxStringUniqifier :: StringUniqifier
     , ctxFilePath :: FilePath
     , ctxFlexible :: Bool
+    , ctxTrampolines :: HashMap.HashMap Symbol (T.Text, Symbol)
     }
 
 data LocalFullContext = LocalFullContext

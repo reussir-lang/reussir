@@ -17,6 +17,7 @@
 #include <mlir/Conversion/LLVMCommon/Pattern.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/DialectConversion.h>
+#include <mlir/IR/BuiltinOps.h>
 
 #include "Reussir/Conversion/TypeConverter.h"
 
@@ -27,6 +28,8 @@ namespace reussir {
 
 void populateBasicOpsLoweringToLLVMConversionPatterns(
     LLVMTypeConverter &converter, mlir::RewritePatternSet &patterns);
+
+void lowerFusedDBGAttributeInLocations(mlir::ModuleOp moduleOp);
 } // namespace reussir
 
 #endif // REUSSIR_CONVERSION_BASICOPSLOWERING_H

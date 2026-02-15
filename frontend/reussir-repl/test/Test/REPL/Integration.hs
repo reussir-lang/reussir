@@ -107,7 +107,7 @@ compileAndExecInt' input = do
                 Left err -> return $ Left $ "Compile error: " ++ show err
                 Right (moduleBytes, state', _) -> do
                     let counter = replCounter state' - 1
-                    let funcName = "__repl_expr_" ++ show counter
+                    let funcName = "__repl_expr_" ++ show counter ++ "_trampoline"
                     withJIT placeholderCallback OptTPDE LogInfo $ \jit -> do
                         flag <- addModule jit moduleBytes
                         if flag
@@ -139,7 +139,7 @@ compileAndExecFloat' input = do
                 Left err -> return $ Left $ "Compile error: " ++ show err
                 Right (moduleBytes, state', _) -> do
                     let counter = replCounter state' - 1
-                    let funcName = "__repl_expr_" ++ show counter
+                    let funcName = "__repl_expr_" ++ show counter ++ "_trampoline"
                     withJIT placeholderCallback OptTPDE LogInfo $ \jit -> do
                         flag <- addModule jit moduleBytes
                         if flag
@@ -171,7 +171,7 @@ compileAndExecStr' input = do
                 Left err -> return $ Left $ "Compile error: " ++ show err
                 Right (moduleBytes, state', _) -> do
                     let counter = replCounter state' - 1
-                    let funcName = "__repl_expr_" ++ show counter
+                    let funcName = "__repl_expr_" ++ show counter ++ "_trampoline"
                     withJIT placeholderCallback OptTPDE LogInfo $ \jit -> do
                         flag <- addModule jit moduleBytes
                         if flag

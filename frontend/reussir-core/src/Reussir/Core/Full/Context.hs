@@ -33,6 +33,7 @@ import Reussir.Core.Data.String (StringUniqifier (StringUniqifier))
 import Reussir.Core.Full.Error (errorToReport)
 
 import Reussir.Core.Uitls.HashTable qualified as HU
+import qualified Data.HashMap.Strict as HashMap
 
 withSpan :: (Int64, Int64) -> FullEff a -> FullEff a
 withSpan span' cont = do
@@ -73,6 +74,7 @@ emptyFullContext ctxFilePath = do
     let ctxStringUniqifier = StringUniqifier table
     let ctxErrors = []
     let ctxFlexible = False
+    let ctxTrampolines = HashMap.empty
     return FullContext{..}
 
 reportAllErrors ::

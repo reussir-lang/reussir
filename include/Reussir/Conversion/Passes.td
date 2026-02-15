@@ -207,6 +207,23 @@ def ReussirCompilePolymorphicFFIPass
 }
 
 //===----------------------------------------------------------------------===//
+// AttachNativeTarget
+//===----------------------------------------------------------------------===//
+def ReussirAttachNativeTargetPass
+    : Pass<"reussir-attach-native-target", "::mlir::ModuleOp"> {
+  let summary = "attach native target information to the module";
+  let description = [{
+    `reussir-attach-native-target` attaches native target information to the module.
+    It adds the following attributes to the module:
+    - `llvm.data_layout`: The data layout string of the native target.
+    - `llvm.target_triple`: The target triple string of the native target.
+    - `dlti.dl_spec`: The data layout spec of the native target.
+  }];
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect", 
+                           "::mlir::DLTIDialect"];
+}
+
+//===----------------------------------------------------------------------===//
 // TokenReuse
 //===----------------------------------------------------------------------===//
 def ReussirTokenReusePass

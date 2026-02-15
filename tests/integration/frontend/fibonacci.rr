@@ -1,7 +1,7 @@
 // RUN: %reussir-elab --mode semi %s
 // RUN: %reussir-elab --mode full %s | %FileCheck %s
 // RUN: %reussir-compiler %s -o %t.o
-// RUN: %cc %t.o %S/fibonacci.c -DFIB_SYMBOL=_RC14fibonacci_iter -o %t.exe
+// RUN: %cc %t.o %S/fibonacci.c -o %t.exe
 // RUN: %t.exe
 
 // CHECK-DAG: pub fn _RC14fibonacci_iter(n: u64) -> u64 {
@@ -101,3 +101,5 @@ fn fibonacci_logarithmic_impl(
         }
     }
 }
+
+extern "C" trampoline "fibonacci_ffi" = fibonacci;
