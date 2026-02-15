@@ -1,8 +1,8 @@
 name: Nightly Release
 
 on:
-  schedule:
-    - cron: '0 3 * * *'  # 3 AM UTC daily
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
