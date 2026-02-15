@@ -1,0 +1,435 @@
+name: Nightly Release
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # 3 AM UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        llvm-version: [21, 22]
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore file timestamps
+        uses: chetan/git-restore-mtime-action@v2
+
+      - name: Cache Cabal
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/cabal
+            ~/.local/state/cabal
+            dist-newstyle
+            ~/.ghcup
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ matrix.llvm-version }}-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-llvm-${{ matrix.llvm-version }}-cabal-
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly-2025-12-01
+          components: rust-src, rustfmt, clippy, rustc-dev, llvm-tools-preview
+
+      - name: Setup GHC
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: 9.14.1
+          cabal: latest
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build wget libgtest-dev libgmock-dev libspdlog-dev libgmp-dev
+          sudo pip install lit --break-system-packages
+          cabal update
+
+      - name: Install LLVM ${{ matrix.llvm-version }}
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          CODENAME=$(lsb_release -cs)
+          echo "deb http://apt.llvm.org/${CODENAME}/ llvm-toolchain-${CODENAME}-${{ matrix.llvm-version }} main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang-${{ matrix.llvm-version }} \
+            lldb-${{ matrix.llvm-version }} \
+            lld-${{ matrix.llvm-version }} \
+            clangd-${{ matrix.llvm-version }} \
+            libmlir-${{ matrix.llvm-version }}-dev \
+            mlir-${{ matrix.llvm-version }}-tools \
+            llvm-${{ matrix.llvm-version }}-dev \
+            llvm-${{ matrix.llvm-version }}-tools
+          echo "LD_LIBRARY_PATH=/usr/lib/llvm-${{ matrix.llvm-version }}/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "LLVM_SYMBOLIZER_PATH=/usr/bin/llvm-symbolizer-${{ matrix.llvm-version }}" >> $GITHUB_ENV
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          variant: sccache
+          key: ${{ matrix.os }}-${{ matrix.llvm-version }}
+
+      - name: Configure CMake
+        run: |
+          env RUSTC_WRAPPER=sccache \
+          cmake -B build \
+          -G Ninja \
+          -DLLVM_USE_LINKER=lld \
+          -DCMAKE_CXX_COMPILER=clang++-${{ matrix.llvm-version }} \
+          -DCMAKE_C_COMPILER=clang-${{ matrix.llvm-version }} \
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+          -DREUSSIR_ENABLE_PEDANTIC=ON \
+          -DREUSSIR_ENABLE_TESTS=ON \
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+          -DLLVM_DIR=/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/llvm \
+          -DMLIR_DIR=/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/mlir
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run Unit Tests
+        run: |
+          cmake --build build --target reussir-ut
+          ctest --test-dir build --output-on-failure
+
+      - name: Run Integration Tests
+        run: cmake --build build --target check
+
+      - name: Package
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          LLVM_VER=${{ matrix.llvm-version }}
+          ARCH=$(uname -m)
+          PREFIX="reussir-nightly-${DATE}-linux-${ARCH}-llvm${LLVM_VER}"
+          mkdir -p "${PREFIX}/bin" "${PREFIX}/lib"
+
+          # Copy binaries
+          for bin in reussir-opt reussir-translate reussir-compiler \
+                     reussir-elab reussir-repl reussir-parser \
+                     rustc cargo rustdoc; do
+            cp -a "build/bin/${bin}" "${PREFIX}/bin/"
+          done
+
+          # Copy shared libraries
+          cp -a build/lib/libreussir_rt.so "${PREFIX}/lib/" 2>/dev/null || true
+          cp -a build/lib/libMLIRReussirBridge* "${PREFIX}/lib/" 2>/dev/null || true
+          # Exclude static libs
+          rm -f "${PREFIX}"/lib/libMLIRReussir*.a
+          cp -a build/lib/libLLVM*rust*.so* "${PREFIX}/lib/" 2>/dev/null || true
+          cp -a build/lib/librustc_driver*.so "${PREFIX}/lib/" 2>/dev/null || true
+          cp -a build/lib/rustlib "${PREFIX}/lib/"
+
+          # Strip debug info from C++ binaries
+          strip --strip-debug "${PREFIX}"/bin/reussir-opt "${PREFIX}"/bin/reussir-translate 2>/dev/null || true
+
+          XZ_OPT=-6 tar -cJf "${PREFIX}.tar.xz" "${PREFIX}"
+          echo "ARCHIVE_NAME=${PREFIX}.tar.xz" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reussir-nightly-linux-${{ runner.arch }}-llvm${{ matrix.llvm-version }}
+          path: ${{ env.ARCHIVE_NAME }}
+
+  build-macos:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore file timestamps
+        uses: chetan/git-restore-mtime-action@v2
+
+      - name: Cache Cabal
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/cabal
+            ~/.local/state/cabal
+            ~/.ghcup
+            dist-newstyle
+          key: macos-15-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
+          restore-keys: |
+            macos-15-cabal-
+
+      - name: Install Homebrew dependencies
+        run: |
+          brew update
+          brew install cmake ninja llvm spdlog googletest python@3
+          pip3 install lit --break-system-packages
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly-2025-12-01
+          components: rust-src, rustfmt, clippy, rustc-dev, llvm-tools-preview
+
+      - name: Setup GHC
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: 9.14.1
+          cabal: latest
+
+      - name: Setup Cabal
+        run: cabal update
+
+      - name: Setup environment paths
+        run: |
+          LLVM_PREFIX=$(brew --prefix llvm)
+          echo "LLVM_PREFIX=${LLVM_PREFIX}" >> $GITHUB_ENV
+          echo "${LLVM_PREFIX}/bin" >> $GITHUB_PATH
+          echo "DYLD_LIBRARY_PATH=${LLVM_PREFIX}/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "LLVM_SYMBOLIZER_PATH=${LLVM_PREFIX}/bin/llvm-symbolizer" >> $GITHUB_ENV
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          variant: sccache
+          key: macos-15-llvm
+
+      - name: Configure CMake
+        run: |
+          env RUSTC_WRAPPER=sccache \
+          cmake -B build \
+          -G Ninja \
+          -DCMAKE_CXX_COMPILER="${LLVM_PREFIX}/bin/clang++" \
+          -DCMAKE_C_COMPILER="${LLVM_PREFIX}/bin/clang" \
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+          -DREUSSIR_ENABLE_PEDANTIC=ON \
+          -DREUSSIR_ENABLE_TESTS=ON \
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+          -DLLVM_DIR="${LLVM_PREFIX}/lib/cmake/llvm" \
+          -DMLIR_DIR="${LLVM_PREFIX}/lib/cmake/mlir"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run Unit Tests
+        run: |
+          cmake --build build --target reussir-ut
+          ctest --test-dir build --output-on-failure
+
+      - name: Run Integration Tests
+        run: |
+          export DYLD_LIBRARY_PATH="${GITHUB_WORKSPACE}/build/lib:${LLVM_PREFIX}/lib:$DYLD_LIBRARY_PATH"
+          cmake --build build --target check
+
+      - name: Package
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          LLVM_VER=$("${LLVM_PREFIX}/bin/llvm-config" --version | cut -d. -f1)
+          ARCH=$(uname -m)
+          PREFIX="reussir-nightly-${DATE}-macos-${ARCH}-llvm${LLVM_VER}"
+          mkdir -p "${PREFIX}/bin" "${PREFIX}/lib"
+
+          # Copy binaries
+          for bin in reussir-opt reussir-translate reussir-compiler \
+                     reussir-elab reussir-repl reussir-parser \
+                     rustc cargo rustdoc; do
+            cp -a "build/bin/${bin}" "${PREFIX}/bin/"
+          done
+
+          # Copy shared libraries
+          cp -a build/lib/libreussir_rt.dylib "${PREFIX}/lib/" 2>/dev/null || true
+          cp -a build/lib/libMLIRReussirBridge* "${PREFIX}/lib/" 2>/dev/null || true
+          # Exclude static libs
+          rm -f "${PREFIX}"/lib/libMLIRReussir*.a
+          cp -a build/lib/libLLVM*rust*.dylib* "${PREFIX}/lib/" 2>/dev/null || true
+          cp -a build/lib/librustc_driver*.dylib "${PREFIX}/lib/" 2>/dev/null || true
+          cp -a build/lib/rustlib "${PREFIX}/lib/"
+
+          # Strip debug info
+          strip -x "${PREFIX}"/bin/reussir-opt "${PREFIX}"/bin/reussir-translate 2>/dev/null || true
+
+          XZ_OPT=-6 tar -cJf "${PREFIX}.tar.xz" "${PREFIX}"
+          echo "ARCHIVE_NAME=${PREFIX}.tar.xz" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reussir-nightly-macos-arm64
+          path: ${{ env.ARCHIVE_NAME }}
+
+  build-windows:
+    runs-on: windows-2025
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore file timestamps
+        uses: chetan/git-restore-mtime-action@v2
+
+      - name: Cache Cabal (Windows)
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:/Users/runneradmin/AppData/Local/cabal
+            C:/ghcup
+            dist-newstyle
+          key: windows-clang64-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
+          restore-keys: |
+            windows-clang64-cabal-
+
+      - name: Install vcredist140
+        shell: pwsh
+        run: |
+          choco install vcredist140 -y
+
+      - name: Setup MSYS2
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: clang64
+          update: true
+          install: >-
+            git
+            mingw-w64-clang-x86_64-toolchain
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-mlir
+            mingw-w64-clang-x86_64-spdlog
+            mingw-w64-clang-x86_64-gtest
+            mingw-w64-clang-x86_64-python
+            mingw-w64-clang-x86_64-python-pip
+            mingw-w64-clang-x86_64-rustup
+            mingw-w64-clang-x86_64-7zip
+
+      - name: Setup GHCup MSYSTEM
+        shell: msys2 {0}
+        run: |
+          echo "GHCUP_MSYS2_ENV=CLANG64" >> $GITHUB_ENV
+
+      - name: Setup GHCup Without Silly Upstream
+        shell: msys2 {0}
+        run: |
+          export BOOTSTRAP_HASKELL_GHC_VERSION=9.14.1
+          export BOOTSTRAP_HASKELL_CABAL_VERSION=latest
+          curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
+          . /c/ghcup/env
+          cabal update
+
+      - name: Install Rust and Python dependencies
+        shell: msys2 {0}
+        run: |
+          pip install lit
+          rustup target add x86_64-pc-windows-gnullvm
+          rustup default nightly-2025-12-01-x86_64-pc-windows-gnullvm
+          rustup component add rust-src rustfmt clippy rustc-dev llvm-tools-preview
+
+      - name: Configure CMake
+        shell: msys2 {0}
+        run: |
+          cmake -B build \
+          -G Ninja \
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+          -DREUSSIR_ENABLE_PEDANTIC=ON \
+          -DREUSSIR_ENABLE_TESTS=ON
+
+      - name: Build
+        shell: msys2 {0}
+        run: cmake --build build --parallel
+
+      - name: Run Integration Tests
+        shell: msys2 {0}
+        run: |
+          . /c/ghcup/env
+          . .github/workflows/setup_path.sh
+          cmake --build build --target check
+
+      - name: Package
+        shell: msys2 {0}
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          LLVM_VER=$(llvm-config --version | cut -d. -f1)
+          PREFIX="reussir-nightly-${DATE}-windows-x64-llvm${LLVM_VER}"
+          mkdir -p "${PREFIX}/bin" "${PREFIX}/lib"
+
+          # Copy binaries (with .exe suffix)
+          for bin in reussir-opt reussir-translate reussir-compiler \
+                     reussir-elab reussir-repl reussir-parser \
+                     rustc cargo rustdoc; do
+            cp -a "build/bin/${bin}.exe" "${PREFIX}/bin/" 2>/dev/null || true
+          done
+
+          # Copy DLLs from build/bin (Windows puts DLLs next to executables)
+          cp -a build/bin/reussir_rt.dll "${PREFIX}/bin/" 2>/dev/null || true
+          cp -a build/bin/MLIRReussirBridge*.dll "${PREFIX}/bin/" 2>/dev/null || true
+          cp -a build/bin/LLVM*rust*.dll "${PREFIX}/bin/" 2>/dev/null || true
+          cp -a build/bin/rustc_driver*.dll "${PREFIX}/bin/" 2>/dev/null || true
+
+          # Copy rustlib tree
+          cp -a build/lib/rustlib "${PREFIX}/lib/" 2>/dev/null || true
+
+          # Strip binaries
+          strip "${PREFIX}"/bin/reussir-opt.exe "${PREFIX}"/bin/reussir-translate.exe 2>/dev/null || true
+
+          7z a -tzip "${PREFIX}.zip" "${PREFIX}"
+          echo "ARCHIVE_NAME=${PREFIX}.zip" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reussir-nightly-windows-x64
+          path: ${{ env.ARCHIVE_NAME }}
+
+  publish-release:
+    needs: [build-linux, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Force-tag nightly
+        run: |
+          git tag -f nightly
+          git push origin nightly --force
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh artifacts/
+
+      - name: Create or update nightly release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: "Nightly Build"
+          prerelease: true
+          make_latest: false
+          files: |
+            artifacts/*.tar.xz
+            artifacts/*.zip
+          body: |
+            Automated nightly build from `${{ github.sha }}`.
+
+            **Platforms:**
+            - Linux x86_64 (LLVM 21, LLVM 22)
+            - Linux aarch64 (LLVM 21, LLVM 22)
+            - macOS ARM64 (Homebrew LLVM)
+            - Windows x64 (MSYS2 Clang64)
+
+            **Usage:** Extract the archive, then add `<prefix>/bin` to `PATH` and `<prefix>/lib` to `LD_LIBRARY_PATH` (or `DYLD_LIBRARY_PATH` on macOS).
