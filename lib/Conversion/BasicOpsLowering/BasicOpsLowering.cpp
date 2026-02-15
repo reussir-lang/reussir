@@ -48,6 +48,7 @@
 #include <mlir/Pass/Pass.h>
 
 #include "Reussir/Conversion/BasicOpsLowering.h"
+#include "Reussir/Conversion/CABISignatureConversion.h"
 #include "Reussir/Conversion/TypeConverter.h"
 #include "Reussir/IR/ReussirAttrs.h"
 #include "Reussir/IR/ReussirDialect.h"
@@ -1847,92 +1848,6 @@ struct ReussirRefMemcpyConversionPattern
   }
 };
 
-static bool isScalarIntegerLike(mlir::Type type) {
-  return mlir::isa<mlir::IntegerType>(type) ||
-         mlir::isa<mlir::LLVM::LLVMPointerType>(type);
-}
-
-static bool isFPScalar(mlir::Type type) { return type.isF32() || type.isF64(); }
-
-static bool isAggregate(mlir::Type type) {
-  return mlir::isa<mlir::LLVM::LLVMStructType>(type) ||
-         mlir::isa<mlir::LLVM::LLVMArrayType>(type) ||
-         mlir::isa<mlir::VectorType>(type);
-}
-
-static bool isDirectAggregate(mlir::Type type, const mlir::DataLayout &dl) {
-  auto size = dl.getTypeSize(type);
-  return size == 1 || size == 2 || size == 4 || size == 8;
-}
-
-static bool isPassIndirect(mlir::Type type, const mlir::DataLayout &dl) {
-  if (isScalarIntegerLike(type))
-    return false;
-  if (isFPScalar(type))
-    return false;
-  if (isAggregate(type))
-    return !isDirectAggregate(type, dl);
-  return true;
-}
-
-static bool isReturnIndirect(mlir::Type type, const mlir::DataLayout &dl) {
-  if (isScalarIntegerLike(type))
-    return false;
-  if (isFPScalar(type))
-    return false;
-  if (isAggregate(type))
-    return !isDirectAggregate(type, dl);
-  return true;
-}
-
-struct CABISignature {
-  mlir::Type returnType;
-  llvm::SmallVector<mlir::Type> paramTypes;
-  llvm::SmallVector<bool> isByVal;
-  bool hasSRet;
-  int sretIndex;
-};
-
-static CABISignature
-convertFunctionSignatureForCABI(mlir::Type retTy,
-                                llvm::ArrayRef<mlir::Type> paramTys,
-                                const mlir::DataLayout &dl, bool isWin64) {
-  if (!isWin64) {
-    return {retTy, llvm::to_vector(paramTys),
-            llvm::SmallVector<bool>(paramTys.size(), false), false, -1};
-  }
-
-  CABISignature sig;
-  sig.hasSRet = false;
-  sig.sretIndex = -1;
-
-  // Handle return type
-  if (isReturnIndirect(retTy, dl)) {
-    sig.hasSRet = true;
-    sig.sretIndex = 0;
-    sig.paramTypes.push_back(
-        mlir::LLVM::LLVMPointerType::get(retTy.getContext()));
-    sig.returnType = mlir::LLVM::LLVMVoidType::get(retTy.getContext());
-    sig.isByVal.push_back(false);
-  } else {
-    sig.returnType = retTy;
-  }
-
-  // Handle parameters
-  auto ptrTy = mlir::LLVM::LLVMPointerType::get(retTy.getContext());
-  for (auto paramTy : paramTys) {
-    if (isPassIndirect(paramTy, dl)) {
-      sig.paramTypes.push_back(ptrTy);
-      sig.isByVal.push_back(true);
-    } else {
-      sig.paramTypes.push_back(paramTy);
-      sig.isByVal.push_back(false);
-    }
-  }
-
-  return sig;
-}
-
 struct ReussirTrampolineOpConversionPattern
     : public mlir::OpConversionPattern<ReussirTrampolineOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -1955,7 +1870,6 @@ struct ReussirTrampolineOpConversionPattern
     if (!tripleAttr)
       return mlir::failure();
     auto triple = llvm::Triple(tripleAttr.getValue());
-    bool isWin64 = triple.isOSWindows() && triple.isArch64Bit();
     mlir::LLVM::LLVMFunctionType llvmFuncTy;
     if (auto llvmFuncOp = mlir::dyn_cast<mlir::LLVM::LLVMFuncOp>(funcOp))
       llvmFuncTy = llvmFuncOp.getFunctionType();
@@ -1977,10 +1891,10 @@ struct ReussirTrampolineOpConversionPattern
 
     const mlir::DataLayout &dl = converter->getDataLayout();
     auto cabiSig =
-        convertFunctionSignatureForCABI(llvmRetTy, llvmParamTys, dl, isWin64);
+        evaluateCABISignatureForC(llvmRetTy, llvmParamTys, dl, triple);
 
-    auto trampolineTy = mlir::LLVM::LLVMFunctionType::get(cabiSig.returnType,
-                                                          cabiSig.paramTypes);
+    auto trampolineTy = mlir::LLVM::LLVMFunctionType::get(
+        cabiSig.abiReturnType, cabiSig.abiParamTypes);
     auto trampoline = rewriter.create<mlir::LLVM::LLVMFuncOp>(
         op.getLoc(), op.getSymName(), trampolineTy);
 
@@ -1988,7 +1902,7 @@ struct ReussirTrampolineOpConversionPattern
     if (cabiSig.hasSRet) {
       trampoline.setArgAttr(cabiSig.sretIndex,
                             mlir::LLVM::LLVMDialect::getStructRetAttrName(),
-                            mlir::TypeAttr::get(llvmRetTy));
+                            mlir::TypeAttr::get(cabiSig.sretType));
     }
 
     mlir::Block *entry = trampoline.addEntryBlock(rewriter);
@@ -1997,17 +1911,17 @@ struct ReussirTrampolineOpConversionPattern
     llvm::SmallVector<mlir::Value> targetArgs;
     int trampolineArgIdx = cabiSig.hasSRet ? 1 : 0;
 
-    for (size_t i = 0; i < llvmParamTys.size(); ++i) {
-      bool isIndirect = cabiSig.isByVal[trampolineArgIdx];
+    for (const auto &[paramType, passKind] : cabiSig.params) {
+      const bool isIndirect = passKind == CABIParamPassKind::IndirectByVal;
       if (isIndirect)
         trampoline.setArgAttr(trampolineArgIdx,
                               mlir::LLVM::LLVMDialect::getByValAttrName(),
-                              mlir::TypeAttr::get(cabiSig.paramTypes[i]));
+                              mlir::TypeAttr::get(paramType));
 
       auto arg = trampoline.getArgument(trampolineArgIdx++);
-      if (isWin64 && isIndirect) {
-        targetArgs.push_back(rewriter.create<mlir::LLVM::LoadOp>(
-            op.getLoc(), llvmParamTys[i], arg));
+      if (isIndirect) {
+        targetArgs.push_back(
+            rewriter.create<mlir::LLVM::LoadOp>(op.getLoc(), paramType, arg));
       } else {
         targetArgs.push_back(arg);
       }
@@ -2031,7 +1945,7 @@ struct ReussirTrampolineOpConversionPattern
           trampoline.getArgument(cabiSig.sretIndex));
       rewriter.create<mlir::LLVM::ReturnOp>(op.getLoc(), mlir::ValueRange{});
     } else {
-      if (llvm::isa<mlir::LLVM::LLVMVoidType>(cabiSig.returnType))
+      if (llvm::isa<mlir::LLVM::LLVMVoidType>(cabiSig.abiReturnType))
         rewriter.create<mlir::LLVM::ReturnOp>(op.getLoc(), mlir::ValueRange{});
       else
         rewriter.create<mlir::LLVM::ReturnOp>(op.getLoc(),
