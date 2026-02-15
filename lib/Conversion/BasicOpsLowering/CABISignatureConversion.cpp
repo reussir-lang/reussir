@@ -108,9 +108,14 @@ CABISignature evaluateCABISignatureForC(mlir::Type returnType,
 
   for (mlir::Type paramType : paramTypes) {
     const bool indirect = shouldPassIndirect(paramType, dl, abiKind);
-    sig.params.push_back(
-        CABIParamInfo{paramType, indirect ? CABIParamPassKind::IndirectByVal
-                                          : CABIParamPassKind::Direct});
+    CABIParamPassKind passKind = CABIParamPassKind::Direct;
+    if (indirect) {
+      if (abiKind == CABIKind::AArch64AAPCS)
+        passKind = CABIParamPassKind::IndirectPointer;
+      else
+        passKind = CABIParamPassKind::IndirectByVal;
+    }
+    sig.params.push_back(CABIParamInfo{paramType, passKind});
     sig.abiParamTypes.push_back(indirect ? ptrType : paramType);
   }
 

@@ -31,6 +31,7 @@ enum class CABIKind {
 enum class CABIParamPassKind {
   Direct,
   IndirectByVal,
+  IndirectPointer,
 };
 
 struct CABIParamInfo {
@@ -55,4 +56,3 @@ CABISignature evaluateCABISignatureForC(mlir::Type returnType,
                                         const llvm::Triple &triple);
 
 } // namespace reussir
-

@@ -1912,8 +1912,9 @@ struct ReussirTrampolineOpConversionPattern
     int trampolineArgIdx = cabiSig.hasSRet ? 1 : 0;
 
     for (const auto &[paramType, passKind] : cabiSig.params) {
-      const bool isIndirect = passKind == CABIParamPassKind::IndirectByVal;
-      if (isIndirect)
+      const bool isIndirect =
+          passKind != CABIParamPassKind::Direct;
+      if (passKind == CABIParamPassKind::IndirectByVal)
         trampoline.setArgAttr(trampolineArgIdx,
                               mlir::LLVM::LLVMDialect::getByValAttrName(),
                               mlir::TypeAttr::get(paramType));
