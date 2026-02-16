@@ -84,7 +84,7 @@ def ReussirAcquireDropExpansionPass
     This is a greedy pattern conversion pass.
 
     For drop operations:
-    1. it elminates no-op drop operations.
+    1. it eliminates no-op drop operations.
     2. for normal drop, it inserts destruction operations for inner elements.
 
     For acquire operations:
