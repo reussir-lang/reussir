@@ -95,7 +95,7 @@ newtype VariantDispData = VariantDispData [([Int64], Block)]
     - rc.dec, rc.fetch_dec, rc.reinterpret: Low-level RC management
     - nullable.coerce, record.coerce: Type coercion placeholders
     - record.tag: Tag extraction (handled implicitly in variant operations)
-    - ref.drop: Destructor calls (handled by backend)
+    - ref.drop: Also available as high-level RefDrop instruction for value struct destruction
     - region.create, region.cleanup: Region lifecycle management
     - closure.clone: Low-level cloning (handled via vtable)
 
@@ -198,6 +198,14 @@ data Instr
       RefStore
         { refStoreTarget :: TypedValue
         , refStoreVal :: TypedValue
+        }
+    | -- | reussir.ref.drop: Drop (destruct) the element behind a reference in place
+      RefDrop
+        { refDropVal :: TypedValue
+        }
+    | -- | reussir.ref.acquire: Acquire ownership of the element behind a reference in place
+      RefAcquire
+        { refAcquireVal :: TypedValue
         }
     | {- | reussir.region.run: Execute a region (inner region accepts !reussir.region argument)
 

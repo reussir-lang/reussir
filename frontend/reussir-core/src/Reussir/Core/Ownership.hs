@@ -4,6 +4,7 @@ module Reussir.Core.Ownership (
     isRR,
 ) where
 
+import Control.Monad (filterM)
 import Data.Foldable (toList)
 import Data.IntMap.Strict (IntMap)
 
@@ -155,6 +156,36 @@ emitEarlyDecs st eid suffixFreeVars =
             )
             st'
             toDec
+
+{- | Emit inc operations for variables that a consuming expression will consume
+but are still needed in later sequence expressions. This handles the case where
+a variable is passed to a call AND used again after the call returns.
+-}
+emitSequenceLevelIncs ::
+    Full.FullRecordTable ->
+    Full.Expr ->
+    IntSet.IntSet ->
+    AnalysisState ->
+    IO AnalysisState
+emitSequenceLevelIncs tbl e suffixVars st = do
+    let exprFreeVars = collectFreeVars e
+    let neededLater = IntSet.intersection exprFreeVars suffixVars
+    -- Only inc vars that are RR-typed and currently owned
+    incs <- filterM
+        (\vid -> do
+            let varID = VarID vid
+            if ownershipCount varID st > 0
+                then pure True
+                else pure False
+        )
+        (IntSet.toList neededLater)
+    let incVarIDs = map VarID incs
+    let incOps = map OIncVar incVarIDs
+    if null incOps
+        then pure st
+        else do
+            let stAnnotated = annotate (Full.exprID e) (OwnershipAction incOps []) st
+            pure $ foldl' (\s vid -> grantOwnership vid s) stAnnotated incVarIDs
 
 {- | Collect all free variable references (VarIDs) in an expression.
 This is a pure syntactic traversal.
@@ -380,7 +411,16 @@ analyzeSequenceEarly tbl ((e, suffixVars) : rest) st scopedVars =
             let st4 = emitEarlyDecs st3 (Full.exprID e) suffixVars
             analyzeSequenceEarly tbl rest st4 (varID : scopedVars)
         _ -> do
-            (st1, _) <- analyzeExpr tbl e st
+            -- Before analyzing a consuming expression, emit inc for vars that
+            -- will be consumed but are still needed in later expressions.
+            st0 <- case Full.exprKind e of
+                Full.FuncCall{} -> emitSequenceLevelIncs tbl e suffixVars st
+                Full.CompoundCall{} -> emitSequenceLevelIncs tbl e suffixVars st
+                Full.VariantCall{} -> emitSequenceLevelIncs tbl e suffixVars st
+                Full.NullableCall{} -> emitSequenceLevelIncs tbl e suffixVars st
+                Full.RcWrap{} -> emitSequenceLevelIncs tbl e suffixVars st
+                _ -> pure st
+            (st1, _) <- analyzeExpr tbl e st0
             -- Emit early decs for owned variables no longer needed
             let st2 = emitEarlyDecs st1 (Full.exprID e) suffixVars
             analyzeSequenceEarly tbl rest st2 scopedVars

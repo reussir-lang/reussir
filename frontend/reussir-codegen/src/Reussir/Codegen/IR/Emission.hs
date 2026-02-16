@@ -232,6 +232,16 @@ refStoreCodegen target value = emitBuilderLineM $ do
     value' <- fmtTypedValue value
     return $ "reussir.ref.store (" <> target' <> ") (" <> value' <> ")"
 
+refDropCodegen :: TypedValue -> Codegen ()
+refDropCodegen val = emitBuilderLineM $ do
+    val' <- fmtTypedValue val
+    return $ "reussir.ref.drop (" <> val' <> ")"
+
+refAcquireCodegen :: TypedValue -> Codegen ()
+refAcquireCodegen val = emitBuilderLineM $ do
+    val' <- fmtTypedValue val
+    return $ "reussir.ref.acquire (" <> val' <> ")"
+
 regionRunCodegen :: Block -> Maybe TypedValue -> Codegen ()
 regionRunCodegen regionRunBody regionRunRes = do
     emitIndentation
@@ -435,6 +445,8 @@ instrCodegen (RefProject val field res) = refProjectCodegen val field res
 instrCodegen (RefSpill val res) = refSpillCodegen val res
 instrCodegen (RefLoad val res) = refLoadCodegen val res
 instrCodegen (RefStore target value) = refStoreCodegen target value
+instrCodegen (RefDrop val) = refDropCodegen val
+instrCodegen (RefAcquire val) = refAcquireCodegen val
 instrCodegen (RegionRun body res) = regionRunCodegen body res
 instrCodegen (Yield kind result) = yieldCodegen kind result
 instrCodegen (ClosureCreate body res) = closureCreateCodegen body res

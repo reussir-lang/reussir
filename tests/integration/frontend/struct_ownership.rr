@@ -1,0 +1,31 @@
+// RUN: %reussir-compiler %s -t mlir -o %t.mlir
+// RUN: %FileCheck %s --check-prefix=CHECK-MLIR < %t.mlir
+
+struct [value] ValueBox<T> {
+    x : T,
+    y : T,
+    z : i32
+}
+
+struct RcBox {
+    data : i64
+}
+
+fn consume(x : ValueBox<RcBox>) {
+    let x_ = x
+}
+
+// CHECK-MLIR-LABEL: func.func @"_RC12multiplicity"
+// CHECK-MLIR: %{{[0-9]+}} = reussir.ref.spilled (%{{[0-9]+}} : !_RIC8ValueBoxC5RcBoxE) : !reussir.ref<!_RIC8ValueBoxC5RcBoxE normal>
+// CHECK-MLIR-NEXT: reussir.ref.acquire (%{{[0-9]+}} : !reussir.ref<!_RIC8ValueBoxC5RcBoxE normal>)
+// CHECK-MLIR-NEXT: func.call @"_RC7consume"
+// CHECK-MLIR-NEXT: func.return %{{[0-9]+}} : !_RIC8ValueBoxC5RcBoxE
+pub fn multiplicity(x : ValueBox<RcBox>) -> ValueBox<RcBox> {
+    consume(x);
+    x
+}
+
+// CHECK-MLIR-LABEL: func.func @"_RC7consume"
+// CHECK-MLIR: %{{[0-9]+}} = reussir.ref.spilled (%{{[0-9]+}} : !_RIC8ValueBoxC5RcBoxE) : !reussir.ref<!_RIC8ValueBoxC5RcBoxE normal>
+// CHECK-MLIR-NEXT: reussir.ref.drop (%{{[0-9]+}} : !reussir.ref<!_RIC8ValueBoxC5RcBoxE normal>)
+// CHECK-MLIR-NEXT: func.return
