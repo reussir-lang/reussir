@@ -1625,6 +1625,54 @@ mlir::LogicalResult ReussirRefDropOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// Reussir Reference Acquire Op
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRefAcquireOp::verify() {
+  RefType refType = getRef().getType();
+  mlir::Type elementType = refType.getElementType();
+
+  // Check if variant attribute is specified
+  if (auto variantAttr = getVariant()) {
+    // When variant is specified, the inner element must be a variant record type
+    RecordType recordType = llvm::dyn_cast<RecordType>(elementType);
+    if (!recordType)
+      return emitOpError("when variant is specified, reference element type "
+                         "must be a record type, got: ")
+             << elementType;
+
+    if (!recordType.isVariant())
+      return emitOpError("when variant is specified, reference element type "
+                         "must be a variant record type");
+
+    if (!recordType.getComplete())
+      return emitOpError("cannot acquire incomplete variant record");
+
+    size_t variantIndex = variantAttr->getZExtValue();
+    size_t numVariants = recordType.getMembers().size();
+    if (variantIndex >= numVariants)
+      return emitOpError("variant index out of bounds: ")
+             << variantIndex << " >= " << numVariants;
+  }
+
+  // Element type must be something emitOwnershipAcquisition can handle:
+  // Rc, Record (compound or variant), or trivially copyable
+  if (isTriviallyCopyable(elementType))
+    return mlir::success();
+
+  if (llvm::isa<RcType>(elementType))
+    return mlir::success();
+
+  if (auto recordType = llvm::dyn_cast<RecordType>(elementType)) {
+    if (!recordType.getComplete())
+      return emitOpError("cannot acquire incomplete record type");
+    return mlir::success();
+  }
+
+  return emitOpError("unsupported element type for acquisition: ")
+         << elementType;
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Poly FFI Op
 //===----------------------------------------------------------------------===//
 // ReussirPolyFFIOp verification

@@ -87,6 +87,16 @@ void runTagInference(mlir::func::FuncOp func) {
             break;
           }
       }
+      if (auto acquireOp = llvm::dyn_cast<ReussirRefAcquireOp>(&op)) {
+        mlir::TypedValue<RefType> refToAcquire = acquireOp.getRef();
+        for (const auto &[ref, tag] : referenceTags)
+          if (aliasAnalysis.alias(refToAcquire, ref) ==
+              mlir::AliasResult::MustAlias) {
+            acquireOp.setVariantAttr(mlir::IntegerAttr::get(
+                mlir::IndexType::get(acquireOp.getContext()), tag));
+            break;
+          }
+      }
     }
   });
 }

@@ -748,6 +748,47 @@ def ReussirRefDropOp : ReussirReferenceOp<"drop", []> {
   let hasVerifier = 1;
 }
 
+def ReussirRefAcquireOp : ReussirReferenceOp<"acquire", []> {
+  let summary = "Acquire ownership of a reference";
+  let description = [{
+    `reussir.ref.acquire` acquires ownership of the element behind the reference
+    in place. This increments reference counts for all RC pointers reachable
+    from the reference.
+
+    This is the dual of `reussir.ref.drop`. Where drop destructs, acquire
+    increments ownership.
+
+    For outlined version, the optimizer will not attempt to inline the acquire
+    operation for sub-elements.
+
+    When variant is specified, the inner element must be a variant record type and
+    the index must be inbound.
+  }];
+  let arguments = (
+    ins Arg<ReussirRefType, "reference to acquire">:$ref,
+    UnitAttr:$inlined,
+    OptionalAttr<IndexAttr>:$variant
+  );
+
+  let assemblyFormat = [{
+    `(` $ref `:` qualified(type($ref)) `)`
+    oilist (
+      `inlined` $inlined  |
+      `variant` `[` $variant `]`
+    )
+    attr-dict
+  }];
+
+  let builders = [
+    OpBuilder<(ins "mlir::Value":$ref),
+    [{
+      return build($_builder, $_state, ref, false, nullptr);
+    }]>
+  ];
+
+  let hasVerifier = 1;
+}
+
 def ReussirRefDiffOp : ReussirReferenceOp<"diff", []> {
   let summary = "Compute difference between two reference pointers";
   let description = [{

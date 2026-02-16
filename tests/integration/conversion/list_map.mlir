@@ -5,10 +5,10 @@
 // RUN: --reussir-inc-dec-cancellation \
 // RUN: --reussir-rc-decrement-expansion \
 // RUN: --reussir-infer-variant-tag \
-// RUN: --reussir-drop-expansion \
+// RUN: --reussir-acquire-drop-expansion \
 // RUN: --reussir-lowering-scf-ops \
 // RUN: --reussir-inc-dec-cancellation \
-// RUN: --reussir-drop-expansion='expand-decrement=1 outline-record=1' \
+// RUN: --reussir-acquire-drop-expansion='expand-decrement=1 outline-record=1' \
 // RUN: --reussir-token-reuse \
 // RUN: --reussir-lowering-scf-ops \
 // RUN: --reussir-compile-polymorphic-ffi \

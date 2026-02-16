@@ -74,17 +74,23 @@ def ReussirRegionPatternsPass
 }
 
 //===----------------------------------------------------------------------===//
-// DropExpansion
+// AcquireDropExpansion
 //===----------------------------------------------------------------------===//
-def ReussirDropExpansionPass
-    : Pass<"reussir-drop-expansion"> {
-  let summary = "expand Reussir drop operations";
+def ReussirAcquireDropExpansionPass
+    : Pass<"reussir-acquire-drop-expansion"> {
+  let summary = "expand Reussir acquire and drop operations";
   let description = [{
-    `reussir-drop-expansion` expands Reussir drop operations. This is a greedy
-    pattern conversion pass.
+    `reussir-acquire-drop-expansion` expands Reussir acquire and drop operations.
+    This is a greedy pattern conversion pass.
 
+    For drop operations:
     1. it elminates no-op drop operations.
     2. for normal drop, it inserts destruction operations for inner elements.
+
+    For acquire operations:
+    1. it eliminates no-op acquire operations (trivially copyable types).
+    2. for normal acquire, it emits ownership acquisition (e.g., rc.inc for Rc
+       fields, recursive acquisition for compound/variant records).
 
     Notice that this pass terminates normally for recursive types, as such types
     are backed by RC pointers. The decrement operation will not be inlined at
@@ -103,9 +109,9 @@ def ReussirDropExpansionPass
   }];
   let options = [
     Option<"outlineRecord", "outline-record", "bool", /*default=*/"false",
-        "whether to outline record destruction">,
+        "whether to outline record destruction and acquisition">,
     Option<"expandDecrement", "expand-decrement", "bool", /*default=*/"false",
-        "whether to expand rc decrement operations (using the `rc-decrement-expansion` pass)">,   
+        "whether to expand rc decrement operations (using the `rc-decrement-expansion` pass)">,
   ];
   let dependentDialects = ["::reussir::ReussirDialect"];
 }

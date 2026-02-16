@@ -1,5 +1,5 @@
-add_mlir_conversion_library(MLIRReussirDropExpansion
-  DropExpansion.cpp
+add_mlir_conversion_library(MLIRReussirAcquireDropExpansion
+  AcquireDropExpansion.cpp
 
   DEPENDS
   MLIRReussirConversionPassIncGen

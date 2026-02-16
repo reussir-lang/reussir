@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
     return reussir::createReussirRegionPatternsPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return reussir::createReussirDropExpansionPass();
+    return reussir::createReussirAcquireDropExpansionPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return reussir::createReussirRcDecrementExpansionPass();

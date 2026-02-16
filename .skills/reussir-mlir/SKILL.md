@@ -24,10 +24,10 @@ reussir-opt <input-file> \
  --reussir-inc-dec-cancellation \
  --reussir-rc-decrement-expansion \
  --reussir-infer-variant-tag \
- --reussir-drop-expansion \
+ --reussir-acquire-drop-expansion \
  --reussir-lowering-scf-ops \
  --reussir-inc-dec-cancellation \
- --reussir-drop-expansion='expand-decrement=1 outline-record=1' \
+ --reussir-acquire-drop-expansion='expand-decrement=1 outline-record=1' \
  --reussir-token-reuse \
  --reussir-lowering-scf-ops \
  --reussir-compile-polymorphic-ffi \

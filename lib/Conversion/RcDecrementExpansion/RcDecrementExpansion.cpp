@@ -30,7 +30,7 @@
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/GreedyPatternRewriteDriver.h>
 
-#include "Reussir/Conversion/DropExpansion.h"
+#include "Reussir/Conversion/AcquireDropExpansion.h"
 #include "Reussir/Conversion/RcDecrementExpansion.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirEnumAttrs.h"

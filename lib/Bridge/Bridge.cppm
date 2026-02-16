@@ -139,15 +139,15 @@ void createLoweringPipeline(mlir::PassManager &pm) {
   pm.addPass(reussir::createReussirRcDecrementExpansionPass());
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirInferVariantTagPass());
-  pm.addPass(reussir::createReussirDropExpansionPass());
+  pm.addPass(reussir::createReussirAcquireDropExpansionPass());
   pm.addPass(reussir::createReussirSCFOpsLoweringPass());
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirIncDecCancellationPass());
 
-  reussir::ReussirDropExpansionPassOptions options;
+  reussir::ReussirAcquireDropExpansionPassOptions options;
   options.expandDecrement = true;
   options.outlineRecord = true;
-  pm.addPass(reussir::createReussirDropExpansionPass(options));
+  pm.addPass(reussir::createReussirAcquireDropExpansionPass(options));
 
   pm.addNestedPass<mlir::func::FuncOp>(reussir::createReussirTokenReusePass());
   pm.addPass(reussir::createReussirSCFOpsLoweringPass());

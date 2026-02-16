@@ -1,6 +1,6 @@
 // RUN: %reussir-opt \
 // RUN:   -reussir-lowering-region-patterns \
-// RUN:   -reussir-drop-expansion \
+// RUN:   -reussir-acquire-drop-expansion \
 // RUN:   -reussir-lowering-basic-ops \
 // RUN:   -o %t.mlir %s
 // RUN: %FileCheck %s --check-prefix=CHECK-MLIR < %t.mlir

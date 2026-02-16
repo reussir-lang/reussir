@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 //
 // This header file provides patterns for inferring variant tags in Reussir
-// drop operations.
+// drop and acquire operations.
 //
 //===----------------------------------------------------------------------===//
 
@@ -55,11 +55,11 @@ namespace reussir {
 // tag into consideration. References and their tags are maintained in a
 // DenseMap.
 //
-// Inside the block, we walk through each operation of interest (currently, only
-// the drop operation) and check if it has a must-alias relation to any
+// Inside the block, we walk through each operation of interest (drop and
+// acquire operations) and check if it has a must-alias relation to any
 // reference within the context. (We assume consistency if there are multiple
 // matches. Hence, we only select the first match.) If so, we attach the variant
-// attribute to the drop operation.
+// attribute to the drop or acquire operation.
 //===----------------------------------------------------------------------===//
 
 void runTagInference(mlir::func::FuncOp func);

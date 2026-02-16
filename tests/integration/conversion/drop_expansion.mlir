@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-drop-expansion | %FileCheck %s
+// RUN: %reussir-opt %s --reussir-acquire-drop-expansion | %FileCheck %s
 !list_ = !reussir.record<variant "List" incomplete>
 !list_nil = !reussir.record<compound "List::Nil" [value] { }>
 !list_cons = !reussir.record<compound "List::Cons" [value] { i64, !list_ }>

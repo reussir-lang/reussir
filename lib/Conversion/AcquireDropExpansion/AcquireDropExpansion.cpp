@@ -1,4 +1,4 @@
-//===-- DropExpansion.cpp - Reussir drop expansion impl ---------*- C++ -*-===//
+//===-- AcquireDropExpansion.cpp - Reussir acquire/drop expansion -*- C++ -*-===//
 //
 // Part of the Reussir project, dual licensed under the Apache License v2.0 or
 // the MIT License.
@@ -27,7 +27,7 @@
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/GreedyPatternRewriteDriver.h>
 
-#include "Reussir/Conversion/DropExpansion.h"
+#include "Reussir/Conversion/AcquireDropExpansion.h"
 #include "Reussir/Conversion/RcDecrementExpansion.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirEnumAttrs.h"
@@ -36,11 +36,11 @@
 
 namespace reussir {
 
-#define GEN_PASS_DEF_REUSSIRDROPEXPANSIONPASS
+#define GEN_PASS_DEF_REUSSIRACQUIREDROPEXPANSIONPASS
 #include "Reussir/Conversion/Passes.h.inc"
 
 //===----------------------------------------------------------------------===//
-// Conversion patterns
+// Drop expansion pattern
 //===----------------------------------------------------------------------===//
 
 namespace {
@@ -227,21 +227,97 @@ public:
         .Default([&](mlir::Type) { return mlir::failure(); });
   }
 };
+
+//===----------------------------------------------------------------------===//
+// Acquire expansion pattern
+//===----------------------------------------------------------------------===//
+
+class AcquireExpansionPattern
+    : public mlir::OpRewritePattern<ReussirRefAcquireOp> {
+private:
+  bool outlineRecord;
+
+  bool shouldOutline(ReussirRefAcquireOp op, RecordType type) const {
+    if (!outlineRecord)
+      return false;
+
+    if (isTriviallyCopyable(type))
+      return false;
+
+    if (op.getInlined())
+      return false;
+
+    return type.getName() != nullptr;
+  }
+
+public:
+  AcquireExpansionPattern(mlir::MLIRContext *context, bool outlineRecord)
+      : mlir::OpRewritePattern<ReussirRefAcquireOp>(context),
+        outlineRecord(outlineRecord) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRefAcquireOp op,
+                  mlir::PatternRewriter &rewriter) const override {
+    RefType refType = op.getRef().getType();
+    mlir::Type elementType = refType.getElementType();
+
+    if (isTriviallyCopyable(elementType)) {
+      rewriter.eraseOp(op);
+      return mlir::success();
+    }
+
+    if (auto recordType = llvm::dyn_cast<RecordType>(elementType)) {
+      if (shouldOutline(op, recordType)) {
+        mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
+        mlir::func::FuncOp acquireFunc =
+            emitOwnershipAcquisitionFuncIfNotExists(moduleOp, recordType,
+                                                    rewriter);
+        rewriter.create<mlir::func::CallOp>(op.getLoc(), acquireFunc,
+                                            op.getRef());
+        rewriter.eraseOp(op);
+        return mlir::success();
+      }
+
+      // For variant with known tag, coerce first then acquire
+      if (recordType.isVariant() && op.getVariant()) {
+        size_t tag = op.getVariant()->getZExtValue();
+        auto targetType = recordType.getMembers()[tag];
+        auto targetRefType =
+            rewriter.getType<RefType>(targetType, refType.getCapability());
+        auto targetRef = rewriter.create<ReussirRecordCoerceOp>(
+            op.getLoc(), targetRefType, rewriter.getIndexAttr(tag),
+            op.getRef());
+        rewriter.create<ReussirRefAcquireOp>(op.getLoc(), targetRef);
+        rewriter.eraseOp(op);
+        return mlir::success();
+      }
+    }
+
+    // Route through emitOwnershipAcquisition for all other cases
+    if (emitOwnershipAcquisition(op.getRef(), rewriter, op.getLoc()).failed())
+      return mlir::failure();
+
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
-// DropExpansionPass
+// AcquireDropExpansionPass
 //===----------------------------------------------------------------------===//
 
 namespace {
-struct DropExpansionPass
-    : public impl::ReussirDropExpansionPassBase<DropExpansionPass> {
+struct AcquireDropExpansionPass
+    : public impl::ReussirAcquireDropExpansionPassBase<
+          AcquireDropExpansionPass> {
   using Base::Base;
   void runOnOperation() override {
     mlir::ConversionTarget target(getContext());
     mlir::RewritePatternSet patterns(&getContext());
 
-    populateDropExpansionConversionPatterns(patterns, outlineRecord);
+    populateAcquireDropExpansionConversionPatterns(patterns, outlineRecord);
     if (expandDecrement)
       populateRcDecrementExpansionConversionPatterns(patterns);
     if (failed(
@@ -251,9 +327,10 @@ struct DropExpansionPass
 };
 } // namespace
 
-void populateDropExpansionConversionPatterns(mlir::RewritePatternSet &patterns,
-                                             bool outlineRecord) {
+void populateAcquireDropExpansionConversionPatterns(
+    mlir::RewritePatternSet &patterns, bool outlineRecord) {
   patterns.add<DropExpansionPattern>(patterns.getContext(), outlineRecord);
+  patterns.add<AcquireExpansionPattern>(patterns.getContext(), outlineRecord);
 }
 
 } // namespace reussir

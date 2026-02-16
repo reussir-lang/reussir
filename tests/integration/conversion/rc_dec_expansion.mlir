@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-rc-decrement-expansion --reussir-drop-expansion --reussir-drop-expansion='expand-decrement=1 outline-record=1' | %FileCheck %s
+// RUN: %reussir-opt %s --reussir-rc-decrement-expansion --reussir-acquire-drop-expansion --reussir-acquire-drop-expansion='expand-decrement=1 outline-record=1' | %FileCheck %s
 
 // CHECK-DAG: func.func private @_RINvNvC4core9intrinsic13drop_in_placeListE
 // CHECK-DAG-SAME: attributes {llvm.linkage = #llvm.linkage<linkonce_odr>}

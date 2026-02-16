@@ -1,5 +1,5 @@
-// RUN: %reussir-opt %s --reussir-rc-decrement-expansion --reussir-drop-expansion --reussir-drop-expansion='expand-decrement=1 outline-record=1' | %FileCheck %s --check-prefix=CHECK-BEFORE
-// RUN: %reussir-opt %s --reussir-rc-decrement-expansion --reussir-drop-expansion --reussir-drop-expansion='expand-decrement=1 outline-record=1' --reussir-inc-dec-cancellation | %FileCheck %s --check-prefix=CHECK-AFTER
+// RUN: %reussir-opt %s --reussir-rc-decrement-expansion --reussir-acquire-drop-expansion --reussir-acquire-drop-expansion='expand-decrement=1 outline-record=1' | %FileCheck %s --check-prefix=CHECK-BEFORE
+// RUN: %reussir-opt %s --reussir-rc-decrement-expansion --reussir-acquire-drop-expansion --reussir-acquire-drop-expansion='expand-decrement=1 outline-record=1' --reussir-inc-dec-cancellation | %FileCheck %s --check-prefix=CHECK-AFTER
 
 
 
