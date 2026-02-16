@@ -53,7 +53,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build wget libgtest-dev libgmock-dev libspdlog-dev libgmp-dev
+          sudo apt-get install -y cmake ninja-build wget libgtest-dev libgmock-dev libspdlog-dev libgmp-dev patchelf
           sudo pip install lit --break-system-packages
           cabal update
 
@@ -132,8 +132,24 @@ jobs:
           cp -a build/lib/librustc_driver*.so "${PREFIX}/lib/" 2>/dev/null || true
           cp -a build/lib/rustlib "${PREFIX}/lib/"
 
+          # Copy system LLVM/MLIR shared libraries
+          LLVM_LIB="/usr/lib/llvm-${LLVM_VER}/lib"
+          cp -a "${LLVM_LIB}"/libMLIR.so* "${PREFIX}/lib/"
+          cp -a "${LLVM_LIB}"/libLLVM.so* "${PREFIX}/lib/"
+          # Also copy libMLIR-21 C-API style libs if present
+          cp -a "${LLVM_LIB}"/libMLIR-${LLVM_VER}*.so* "${PREFIX}/lib/" 2>/dev/null || true
+          cp -a "${LLVM_LIB}"/libLLVM-${LLVM_VER}*.so* "${PREFIX}/lib/" 2>/dev/null || true
+
           # Strip debug info from C++ binaries
           strip --strip-debug "${PREFIX}"/bin/reussir-opt "${PREFIX}"/bin/reussir-translate 2>/dev/null || true
+
+          # Patch RPATHs for relocatable package
+          for f in "${PREFIX}"/bin/*; do
+            [ -f "$f" ] && patchelf --set-rpath '$ORIGIN/../lib' "$f" 2>/dev/null || true
+          done
+          for f in "${PREFIX}"/lib/*.so*; do
+            [ -f "$f" ] && [ ! -L "$f" ] && patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
+          done
 
           XZ_OPT=-6 tar -cJf "${PREFIX}.tar.xz" "${PREFIX}"
           echo "ARCHIVE_NAME=${PREFIX}.tar.xz" >> $GITHUB_ENV
@@ -255,8 +271,32 @@ jobs:
           cp -a build/lib/librustc_driver*.dylib "${PREFIX}/lib/" 2>/dev/null || true
           cp -a build/lib/rustlib "${PREFIX}/lib/"
 
+          # Copy system LLVM/MLIR shared libraries
+          cp -a "${LLVM_PREFIX}/lib"/libMLIR*.dylib "${PREFIX}/lib/"
+          cp -a "${LLVM_PREFIX}/lib"/libLLVM*.dylib "${PREFIX}/lib/"
+
           # Strip debug info
           strip -x "${PREFIX}"/bin/reussir-opt "${PREFIX}"/bin/reussir-translate 2>/dev/null || true
+
+          # Patch rpaths for relocatable package
+          for f in "${PREFIX}"/bin/*; do
+            [ -f "$f" ] || continue
+            # Add relative rpath
+            install_name_tool -add_rpath @executable_path/../lib "$f" 2>/dev/null || true
+            # Rewrite references to system LLVM libs
+            for lib in $(otool -L "$f" | grep "${LLVM_PREFIX}/lib" | awk '{print $1}'); do
+              base=$(basename "$lib")
+              install_name_tool -change "$lib" "@rpath/${base}" "$f" 2>/dev/null || true
+            done
+          done
+          for f in "${PREFIX}"/lib/*.dylib; do
+            [ -f "$f" ] || continue
+            install_name_tool -add_rpath @loader_path "$f" 2>/dev/null || true
+            for lib in $(otool -L "$f" | grep "${LLVM_PREFIX}/lib" | awk '{print $1}'); do
+              base=$(basename "$lib")
+              install_name_tool -change "$lib" "@rpath/${base}" "$f" 2>/dev/null || true
+            done
+          done
 
           XZ_OPT=-6 tar -cJf "${PREFIX}.tar.xz" "${PREFIX}"
           echo "ARCHIVE_NAME=${PREFIX}.tar.xz" >> $GITHUB_ENV
@@ -377,6 +417,10 @@ jobs:
           cp -a build/bin/LLVM*rust*.dll "${PREFIX}/bin/" 2>/dev/null || true
           cp -a build/bin/rustc_driver*.dll "${PREFIX}/bin/" 2>/dev/null || true
 
+          # Copy system LLVM/MLIR DLLs
+          cp -a /clang64/bin/libMLIR.dll "${PREFIX}/bin/" 2>/dev/null || true
+          cp -a /clang64/bin/libLLVM*.dll "${PREFIX}/bin/" 2>/dev/null || true
+
           # Copy rustlib tree
           cp -a build/lib/rustlib "${PREFIX}/lib/" 2>/dev/null || true
 
@@ -398,6 +442,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Delete existing nightly release
+        run: gh release delete nightly --yes --cleanup-tag || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Force-tag nightly
         run: |
@@ -432,4 +481,4 @@ jobs:
             - macOS ARM64 (Homebrew LLVM)
             - Windows x64 (MSYS2 Clang64)
 
-            **Usage:** Extract the archive, then add `<prefix>/bin` to `PATH` and `<prefix>/lib` to `LD_LIBRARY_PATH` (or `DYLD_LIBRARY_PATH` on macOS).
+            **Usage:** Extract the archive and add `<prefix>/bin` to `PATH`. Libraries are bundled with correct rpaths — no need to set `LD_LIBRARY_PATH`.
