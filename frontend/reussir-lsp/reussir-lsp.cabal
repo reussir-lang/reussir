@@ -17,6 +17,8 @@ library
     exposed-modules:
         Reussir.LSP.Handlers
         Reussir.LSP.Diagnostics
+        Reussir.LSP.SemanticTokens
+        Reussir.LSP.Hover
     build-depends:
         base >=4.20.2.0,
         lsp,
@@ -34,7 +36,9 @@ library
         hashtables,
         prettyprinter,
         prettyprinter-ansi-terminal,
-        stm
+        stm,
+        strict-mutable-base,
+        vector
     hs-source-dirs:   src
     default-language: GHC2024
 

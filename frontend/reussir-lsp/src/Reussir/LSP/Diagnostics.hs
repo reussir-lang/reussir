@@ -11,18 +11,23 @@
 module Reussir.LSP.Diagnostics (
     -- * Diagnostic Conversion
     computeDiagnostics,
+
+    -- * Shared Elaboration Pipeline
+    elaborateFile,
+
+    -- * Offset Conversion Utilities
+    offsetToPosition,
+    offsetsToRange,
 ) where
 
 import Control.Monad (forM_)
 import Data.Int (Int64)
 import Data.Text qualified as T
-import Effectful (inject, runEff)
+import Effectful (Eff, IOE, (:>), inject)
 import Effectful.Log qualified as L
-import Effectful.Prim (runPrim)
+import Effectful.Prim (Prim)
 import Effectful.State.Static.Local (runState)
 import Language.LSP.Protocol.Types qualified as LSP
-import Log (LogLevel (..))
-import Log.Backend.StandardOutput qualified as L
 import Reussir.Bridge qualified as B
 import Reussir.Core.Data.Semi.Context (SemiContext (..))
 import Reussir.Core.Semi.Context (emptySemiContext, populateRecordFields, scanStmt)
@@ -34,18 +39,50 @@ import Reussir.Parser.Types.Lexer (WithSpan (..))
 import Reussir.Parser.Types.Stmt qualified as Syn
 import Text.Megaparsec (errorBundlePretty, runParser)
 
--- | Compute LSP diagnostics for a file by running the parser and semi-elaboration.
-computeDiagnostics ::
+-- | Run the parser and semi-elaboration pipeline, returning both the context
+-- and diagnostic reports. This is the shared entry point used by diagnostics,
+-- hover, and semantic tokens.
+elaborateFile ::
+    (IOE :> es, L.Log :> es, Prim :> es) =>
     -- | File path (URI-derived)
     FilePath ->
     -- | File content
     T.Text ->
-    IO [LSP.Diagnostic]
-computeDiagnostics filePath content =
+    Eff es (Either T.Text (SemiContext, [Syn.Stmt], [Report]))
+elaborateFile filePath content =
     case runParser parseProg filePath content of
-        Left err -> do
-            -- Parse error: convert the megaparsec error bundle to a single diagnostic
-            let errMsg = T.pack $ errorBundlePretty err
+        Left err -> return $ Left (T.pack $ errorBundlePretty err)
+        Right prog -> do
+            (_, finalState) <- do
+                initState <- emptySemiContext B.LogWarning filePath
+                runState initState $ do
+                    forM_ prog $ \stmt -> inject $ scanStmt stmt
+                    forM_ prog $ \stmt -> inject $ populateRecordFields stmt
+                    forM_ prog $ \stmt -> do
+                        case unspanStmt stmt of
+                            Syn.FunctionStmt f -> do
+                                _ <- inject $ checkFuncType f
+                                return ()
+                            _ -> return ()
+                    _ <- inject solveAllGenerics
+                    return ()
+            return $ Right (finalState, prog, translationReports finalState)
+  where
+    unspanStmt (Syn.SpannedStmt (WithSpan s _ _)) = unspanStmt s
+    unspanStmt s = s
+
+-- | Compute LSP diagnostics for a file by running the parser and semi-elaboration.
+computeDiagnostics ::
+    (IOE :> es, L.Log :> es, Prim :> es) =>
+    -- | File path (URI-derived)
+    FilePath ->
+    -- | File content
+    T.Text ->
+    Eff es [LSP.Diagnostic]
+computeDiagnostics filePath content = do
+    result <- elaborateFile filePath content
+    case result of
+        Left errMsg ->
             return
                 [ LSP.Diagnostic
                     { LSP._range = LSP.Range (LSP.Position 0 0) (LSP.Position 0 1)
@@ -59,39 +96,8 @@ computeDiagnostics filePath content =
                     , LSP._data_ = Nothing
                     }
                 ]
-        Right prog -> do
-            -- Run semi-elaboration and collect diagnostic reports
-            reports <- runSemiElab filePath prog
+        Right (_, _, reports) ->
             return $ concatMap (reportToDiagnostics content) reports
-
--- | Run semi-elaboration and return diagnostic reports.
-runSemiElab :: FilePath -> [Syn.Stmt] -> IO [Report]
-runSemiElab filePath prog = do
-    (_, finalState) <- L.withStdOutLogger $ \logger -> do
-        runEff $ L.runLog "reussir-lsp" logger LogAttention $ runPrim $ do
-            initState <- emptySemiContext B.LogWarning filePath
-            runState initState $ do
-                -- Scan all statements
-                forM_ prog $ \stmt -> inject $ scanStmt stmt
-
-                -- Populate record fields
-                forM_ prog $ \stmt -> inject $ populateRecordFields stmt
-
-                -- Elaborate all functions
-                forM_ prog $ \stmt -> do
-                    case unspanStmt stmt of
-                        Syn.FunctionStmt f -> do
-                            _ <- inject $ checkFuncType f
-                            return ()
-                        _ -> return ()
-
-                -- Solve generics
-                _ <- inject solveAllGenerics
-                return ()
-    return $ translationReports finalState
-  where
-    unspanStmt (Syn.SpannedStmt (WithSpan s _ _)) = unspanStmt s
-    unspanStmt s = s
 
 -- | Convert a Reussir diagnostic Report into a list of LSP Diagnostics.
 reportToDiagnostics :: T.Text -> Report -> [LSP.Diagnostic]

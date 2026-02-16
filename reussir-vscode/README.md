@@ -10,7 +10,7 @@ VSCode extension providing language support for [Reussir](https://github.com/Sch
 
 ## Prerequisites
 
-1. **Node.js** (≥ 18) and **npm**
+1. **Node.js** (≥ 18) and **npm** — we recommend using [nvm](https://github.com/nvm-sh/nvm) to manage Node.js versions
 2. **reussir-lsp** binary — the Haskell LSP server
 
 ### Building `reussir-lsp`
