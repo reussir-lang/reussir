@@ -43,6 +43,7 @@ module;
 #include <mlir/Dialect/ControlFlow/IR/ControlFlow.h>
 #include <mlir/Dialect/DLTI/DLTI.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/InitAllExtensions.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
@@ -136,12 +137,15 @@ void addCanonicalizerPassWithoutRegionSimplification(mlir::OpPassManager &pm) {
   pm.addPass(mlir::createCanonicalizerPass(config));
 }
 
-void createLoweringPipeline(mlir::PassManager &pm) {
-  llvm::StringMap<mlir::OpPassManager> pipelines;
-  // The default inliner pass adds the canonicalizer pass with the default
-  // configuration.
-  pm.addPass(mlir::createInlinerPass(
-      pipelines, addCanonicalizerPassWithoutRegionSimplification));
+void createLoweringPipeline(mlir::PassManager &pm,
+                            ReussirOptOption opt = REUSSIR_OPT_DEFAULT) {
+  if (opt != REUSSIR_OPT_NONE) {
+    llvm::StringMap<mlir::OpPassManager> pipelines;
+    // The default inliner pass adds the canonicalizer pass with the default
+    // configuration.
+    pm.addPass(mlir::createInlinerPass(
+        pipelines, addCanonicalizerPassWithoutRegionSimplification));
+  }
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirTokenInstantiationPass());
   pm.addPass(reussir::createReussirClosureOutliningPass());
@@ -295,6 +299,7 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
   registry.insert<reussir::ReussirDialect, DLTIDialect, LLVM::LLVMDialect,
                   arith::ArithDialect, memref::MemRefDialect, scf::SCFDialect,
                   ub::UBDialect, func::FuncDialect, cf::ControlFlowDialect>();
+  mlir::registerAllExtensions(registry);
   registerLLVMDialectTranslation(registry);
   registerBuiltinDialectTranslation(registry);
   auto context = std::make_unique<mlir::MLIRContext>(registry);
@@ -303,9 +308,10 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
 }
 
 std::unique_ptr<mlir::PassManager>
-buildPassManager(mlir::MLIRContext &context) {
+buildPassManager(mlir::MLIRContext &context,
+                 ReussirOptOption opt = REUSSIR_OPT_DEFAULT) {
   auto pm = std::make_unique<mlir::PassManager>(&context);
-  createLoweringPipeline(*pm);
+  createLoweringPipeline(*pm, opt);
   return pm;
 }
 
@@ -468,7 +474,7 @@ void reussir_bridge_compile_for_target(
   spdlog::debug("CPU: {}, features: {}", cpu.str(), target_features);
   spdlog::debug("Data layout: {}", dl.getStringRepresentation());
 
-  auto pm = buildPassManager(*context);
+  auto pm = buildPassManager(*context, opt);
 
   // 4) Convert the MLIR module to LLVM IR.
   llvm::LLVMContext llvmCtx;
