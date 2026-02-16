@@ -39,8 +39,9 @@ import Log qualified as Log
 handlers :: Handlers (LspM ())
 handlers =
     mconcat
-        [ notificationHandler SMethod_Initialized $ \_not -> do
-            liftIO $ putStrLn "[reussir-lsp] Initialized"
+        [ -- Keep these explicit no-op handlers to avoid noisy "no handler" protocol errors.
+          notificationHandler SMethod_Initialized $ \_msg -> pure ()
+        , notificationHandler SMethod_WorkspaceDidChangeConfiguration $ \_msg -> pure ()
         , notificationHandler SMethod_TextDocumentDidOpen $ \msg -> do
             let TNotificationMessage _ _ (LSP.DidOpenTextDocumentParams (LSP.TextDocumentItem uri _ _ content)) = msg
                 filePath = maybe "<unknown>" id (LSP.uriToFilePath uri)
