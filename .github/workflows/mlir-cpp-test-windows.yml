@@ -74,7 +74,7 @@ jobs:
           pip install lit
           rustup target add x86_64-pc-windows-gnullvm
           rustup default nightly-2025-12-01-x86_64-pc-windows-gnullvm
-          rustup component add rust-src rustfmt clippy rustc-dev llvm-tools-preview
+          rustup component add rust-src rustfmt clippy
 
       - name: Configure CMake
         shell: msys2 {0}

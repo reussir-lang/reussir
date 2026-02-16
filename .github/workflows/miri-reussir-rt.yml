@@ -29,7 +29,7 @@ jobs:
       uses: dtolnay/rust-toolchain@master
       with:
         toolchain: nightly-2025-12-01
-        components: rust-src, rustfmt, clippy, rustc-dev, llvm-tools-preview, miri
+        components: rust-src, rustfmt, clippy, miri
 
     - name: Run Miri tests on reussir-rt
       run: |

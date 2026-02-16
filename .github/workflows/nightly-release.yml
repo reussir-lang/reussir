@@ -42,7 +42,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: nightly-2025-12-01
-          components: rust-src, rustfmt, clippy, rustc-dev, llvm-tools-preview
+          components: rust-src, rustfmt, clippy
 
       - name: Setup GHC
         uses: haskell/ghcup-setup@v1
@@ -178,7 +178,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: nightly-2025-12-01
-          components: rust-src, rustfmt, clippy, rustc-dev, llvm-tools-preview
+          components: rust-src, rustfmt, clippy
 
       - name: Setup GHC
         uses: haskell/ghcup-setup@v1
@@ -334,7 +334,7 @@ jobs:
           pip install lit
           rustup target add x86_64-pc-windows-gnullvm
           rustup default nightly-2025-12-01-x86_64-pc-windows-gnullvm
-          rustup component add rust-src rustfmt clippy rustc-dev llvm-tools-preview
+          rustup component add rust-src rustfmt clippy
 
       - name: Configure CMake
         shell: msys2 {0}
