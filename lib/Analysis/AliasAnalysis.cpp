@@ -42,6 +42,7 @@ private:
                           TypedValue<NullableType> rhs);
   TypedValue<RefType> getProducerAsRef(TypedValue<RefType> value);
   TypedValue<NullableType> getProducerAsNullable(Value value);
+  bool sameProjectionPath(Value lhs, Value rhs);
 };
 
 AliasResult ReussirAliasAnalysisImpl::alias(Value lhs, Value rhs) {
@@ -89,6 +90,44 @@ AliasResult ReussirAliasAnalysisImpl::alias(Value lhs, Value rhs) {
 
 ModRefResult ReussirAliasAnalysisImpl::getModRef(Operation *, Value) {
   return ModRefResult::getModAndRef();
+}
+
+bool ReussirAliasAnalysisImpl::sameProjectionPath(Value lhs, Value rhs) {
+  while (true) {
+    auto lhsProj =
+        llvm::dyn_cast_if_present<ReussirRefProjectOp>(lhs.getDefiningOp());
+    auto rhsProj =
+        llvm::dyn_cast_if_present<ReussirRefProjectOp>(rhs.getDefiningOp());
+    if (lhsProj && rhsProj) {
+      if (lhsProj.getIndex() != rhsProj.getIndex())
+        return false;
+      if (lhsProj.getProjected().getType() != rhsProj.getProjected().getType())
+        return false;
+      lhs = lhsProj.getRef();
+      rhs = rhsProj.getRef();
+      continue;
+    }
+    if (lhsProj || rhsProj)
+      return false;
+    break;
+  }
+
+  auto lhsBorrow =
+      llvm::dyn_cast_if_present<ReussirRcBorrowOp>(lhs.getDefiningOp());
+  auto rhsBorrow =
+      llvm::dyn_cast_if_present<ReussirRcBorrowOp>(rhs.getDefiningOp());
+  if (lhsBorrow && rhsBorrow)
+    return alias(lhsBorrow.getRcPtr(), rhsBorrow.getRcPtr()) ==
+           AliasResult::MustAlias;
+
+  auto lhsSpill =
+      llvm::dyn_cast_if_present<ReussirRefSpilledOp>(lhs.getDefiningOp());
+  auto rhsSpill =
+      llvm::dyn_cast_if_present<ReussirRefSpilledOp>(rhs.getDefiningOp());
+  if (lhsSpill && rhsSpill)
+    return lhsSpill.getValue() == rhsSpill.getValue();
+
+  return false;
 }
 
 unsigned ReussirAliasAnalysisImpl::getIndex(Value value) {
@@ -180,8 +219,11 @@ AliasResult ReussirAliasAnalysisImpl::decideAlias(TypedValue<RcType> lhs,
   // loaded is aliased.
   auto lhsOp = llvm::dyn_cast_if_present<ReussirRefLoadOp>(lhs.getDefiningOp());
   auto rhsOp = llvm::dyn_cast_if_present<ReussirRefLoadOp>(rhs.getDefiningOp());
-  if (lhsOp && rhsOp)
+  if (lhsOp && rhsOp) {
+    if (sameProjectionPath(lhsOp.getRef(), rhsOp.getRef()))
+      return AliasResult::MustAlias;
     return alias(lhsOp.getRef(), rhsOp.getRef());
+  }
   // Case 2: check if they are produced by a nullable coercion.
   auto lhsNullable = getProducerAsNullable(lhs);
   auto rhsNullable = getProducerAsNullable(rhs);

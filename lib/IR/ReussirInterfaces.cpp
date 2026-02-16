@@ -20,6 +20,7 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <mlir/Target/LLVMIR/LLVMTranslationInterface.h>
 #include <mlir/Target/LLVMIR/ModuleTranslation.h>
+#include <mlir/Transforms/InliningUtils.h>
 /// Include the generated interface definitions.
 #include "Reussir/IR/ReussirInterfaces.cpp.inc"
 
@@ -62,8 +63,20 @@ namespace reussir {
 //   }
 // };
 // } // namespace
+
+namespace {
+struct ReussirInlinerInterface : public mlir::DialectInlinerInterface {
+  using DialectInlinerInterface::DialectInlinerInterface;
+  bool isLegalToInline(mlir::Operation *, mlir::Region *, bool,
+                       mlir::IRMapping &) const final {
+    return true;
+  }
+};
+} // namespace
+
 void ReussirDialect::registerInterfaces() {
   // addInterfaces<ReussirLLVMTranslation>();
+  addInterfaces<ReussirInlinerInterface>();
 }
 // void registerReussirDialectTranslation(DialectRegistry &registry) {
 //   registry.insert<ReussirDialect>();

@@ -128,8 +128,20 @@ llvm::CodeGenOptLevel toLlvmOptLevel(ReussirOptOption opt) {
   }
   llvm_unreachable("unknown optimization level");
 }
+
+void addCanonicalizerPassWithoutRegionSimplification(mlir::OpPassManager &pm) {
+  mlir::GreedyRewriteConfig config;
+  config.setRegionSimplificationLevel(
+      mlir::GreedySimplifyRegionLevel::Disabled);
+  pm.addPass(mlir::createCanonicalizerPass(config));
+}
+
 void createLoweringPipeline(mlir::PassManager &pm) {
-  // match the pipeline in list_map.mlir
+  llvm::StringMap<mlir::OpPassManager> pipelines;
+  // The default inliner pass adds the canonicalizer pass with the default
+  // configuration.
+  pm.addPass(mlir::createInlinerPass(
+      pipelines, addCanonicalizerPassWithoutRegionSimplification));
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirTokenInstantiationPass());
   pm.addPass(reussir::createReussirClosureOutliningPass());
@@ -301,8 +313,7 @@ std::unique_ptr<llvm::Module>
 translateToModule(llvm::StringRef texture, llvm::LLVMContext &llvmCtx,
                   mlir::MLIRContext &context, mlir::PassManager &pm,
                   const llvm::DataLayout &dl, llvm::StringRef targetTriple,
-                  llvm::StringRef source_name = "",
-                  bool optimizeFFI = false) {
+                  llvm::StringRef source_name = "", bool optimizeFFI = false) {
 #if LLVM_VERSION_MAJOR >= 21
   // Since LLVM 21.1.0, the MLIR parser does not depend on null terminator.
   OwningOpRef<ModuleOp> module =
