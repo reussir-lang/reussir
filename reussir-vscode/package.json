@@ -16,6 +16,10 @@
         "Programming Languages"
     ],
     "main": "./out/extension.js",
+    "activationEvents": [
+        "onLanguage:reussir",
+        "onStartupFinished"
+    ],
     "contributes": {
         "languages": [
             {

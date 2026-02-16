@@ -1,4 +1,3 @@
-import * as path from "path";
 import {
     workspace,
     ExtensionContext,
@@ -14,11 +13,14 @@ import {
 let client: LanguageClient | undefined;
 
 export function activate(context: ExtensionContext): void {
+    const outputChannel = window.createOutputChannel("Reussir Language Server");
+    context.subscriptions.push(outputChannel);
+    outputChannel.appendLine("[reussir-vscode] activate() called.");
+    console.log("[reussir-vscode] activate() called.");
+
     const config = workspace.getConfiguration("reussir.lsp");
     const serverPath: string = config.get<string>("serverPath", "reussir-lsp");
-
-    const outputChannel = window.createOutputChannel("Reussir Language Server");
-    outputChannel.appendLine(`Starting Reussir LSP with server path: ${serverPath}`);
+    outputChannel.appendLine(`[reussir-vscode] Starting Reussir LSP with server path: ${serverPath}`);
 
     const serverOptions: ServerOptions = {
         run: {
@@ -47,15 +49,25 @@ export function activate(context: ExtensionContext): void {
             clientOptions
         );
 
-        client.start().then(() => {
-            outputChannel.appendLine("Reussir LSP started successfully.");
-        }).catch((error) => {
-            outputChannel.appendLine(`Reussir LSP failed to start: ${error}`);
-            window.showErrorMessage(`Reussir LSP failed to start: ${error}`);
+        client.onDidChangeState((event) => {
+            outputChannel.appendLine(
+                `[reussir-vscode] client state ${event.oldState} -> ${event.newState}`
+            );
         });
-    } catch (error) {
-        outputChannel.appendLine(`Failed to create Reussir LSP client: ${error}`);
-        window.showErrorMessage(`Failed to create Reussir LSP client: ${error}`);
+
+        client.start().then(() => {
+            outputChannel.appendLine("[reussir-vscode] Reussir LSP started successfully.");
+        }).catch((error: unknown) => {
+            const message = `[reussir-vscode] Reussir LSP failed to start: ${String(error)}`;
+            outputChannel.appendLine(message);
+            outputChannel.show(true);
+            window.showErrorMessage(message);
+        });
+    } catch (error: unknown) {
+        const message = `[reussir-vscode] Failed to create Reussir LSP client: ${String(error)}`;
+        outputChannel.appendLine(message);
+        outputChannel.show(true);
+        window.showErrorMessage(message);
     }
 }
 
