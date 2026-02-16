@@ -249,7 +249,7 @@ public:
               return optimizeModule(std::move(tsm), resp, opt);
             }),
         context(bridge::buildMLIRContext()),
-        pm(bridge::buildPassManager(*context)),
+        pm(bridge::buildPassManager(*context, opt)),
         ts_context(std::make_unique<llvm::LLVMContext>()),
         ast_layer(ast_callback_fn, ast_free_fn, optimize_layer, ts_context,
                   *context, *pm, data_layout,
