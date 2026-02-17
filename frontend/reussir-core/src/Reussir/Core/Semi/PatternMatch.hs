@@ -1,5 +1,252 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+{- |
+Module      : Reussir.Core.Semi.PatternMatch
+Description : Pattern matching compilation via decision trees
+
+= Overview
+
+This module compiles high-level pattern matching syntax (as written by the
+programmer) into efficient /decision trees/ suitable for code generation.
+The approach is based on the classic "pattern matrix" algorithm, similar
+to the one described by Maranget (2008) and used in OCaml/Rust compilers.
+
+== What is a Decision Tree?
+
+A decision tree is a tree structure that tells the runtime how to dispatch
+on a matched value, step by step. Instead of testing every pattern arm
+top-to-bottom (which could be O(n*m) for n arms with m sub-patterns), a
+decision tree shares tests across arms and achieves much better performance.
+
+@
+   Source Code                              Decision Tree
+   ----------                              -------------
+   match x {                               DTSwitch x.tag
+     Result::Ok(0) => 1,                     |
+     Result::Ok(n) => n,        ====>        +-- ctor\@0 (Ok)
+     Result::Err(0) => 2,                   |    DTSwitch x.0
+     Result::Err(_) => 3                    |      +-- 0 => Leaf(1)
+   }                                        |      +-- _ => Leaf(n) [bind n = x.0]
+                                            |
+                                            +-- ctor\@1 (Err)
+                                                 DTSwitch x.0
+                                                   +-- 0 => Leaf(2)
+                                                   +-- _ => Leaf(3)
+@
+
+== Architecture Pipeline
+
+@
+  User Source (.rr)
+       |
+       v
+  Parser (Reussir.Parser.Types.Expr)
+       |  Produces: Vector (Pattern, Expr)
+       v
+  initializePMMatrix           <--- THIS MODULE (entry point)
+       |  Produces: PMMatrix
+       v
+  translatePMToDT              <--- THIS MODULE (main algorithm)
+       |  Produces: DecisionTree (Semi)
+       v
+  Full Elaboration
+       |  Produces: DecisionTree (Full)
+       v
+  lowerMatch (DecisionTree.hs) <--- Lowering to IR
+       |  Produces: MLIR instructions
+       v
+  MLIR/LLVM Backend
+@
+
+== Key Concepts for First-Time Readers
+
+=== PatternVarRef (The "Cursor")
+
+A 'PatternVarRef' is a /path/ into the scrutinee value, represented as a
+sequence of integers. Think of it like an address:
+
+@
+  PatternVarRef [0]       -- the scrutinee itself
+  PatternVarRef [0, 0]    -- first field of the scrutinee
+  PatternVarRef [0, 1]    -- second field of the scrutinee
+  PatternVarRef [0, 0, 2] -- third field of the first field
+@
+
+Example with a nested type:
+
+@
+  enum Result { Ok(i32), Err(i32) }
+
+  match result {            Scrutinee layout:
+    Result::Ok(0) => ...       result        = PatternVarRef [0]
+    ...                        result.val    = PatternVarRef [0, 0]
+  }
+@
+
+=== PMRow (A Single Pattern Arm)
+
+Each arm in a @match@ becomes one 'PMRow'. A row contains:
+
+  * 'rowPatterns'  -- The remaining sub-patterns to match (as (ref, kind) pairs)
+  * 'rowBindings'  -- Variable bindings collected so far (name -> ref)
+  * 'rowGuard'     -- Optional guard expression (@if condition@)
+  * 'rowBody'      -- The body expression to evaluate on match
+
+=== PMMatrix (The Pattern Matrix)
+
+A 'PMMatrix' groups all rows together with:
+
+  * 'matrixCursor'  -- Which PatternVarRef we are currently dispatching on
+  * 'matrixRows'    -- All pattern rows
+  * 'matrixTypes'   -- Type information for each PatternVarRef
+
+=== The Pattern Matrix Visualized
+
+Consider this Reussir code:
+
+@
+  enum Shape { Circle(f64), Rect(f64, f64) }
+
+  match shape {
+    Shape::Circle(0.0) => 1,    -- row 0
+    Shape::Circle(r)   => 2,    -- row 1
+    Shape::Rect(w, h)  => 3,    -- row 2
+  }
+@
+
+The initial PMMatrix (cursor = [0]) looks like:
+
+@
+  ┌─────────┬──────────────────────────────┬──────────┬──────┐
+  │  Row    │  rowPatterns                 │ bindings │ body │
+  ├─────────┼──────────────────────────────┼──────────┼──────┤
+  │  row 0  │  [([0], Circle(0.0))]       │  {}      │  1   │
+  │  row 1  │  [([0], Circle(r))]         │  {}      │  2   │
+  │  row 2  │  [([0], Rect(w, h))]        │  {}      │  3   │
+  └─────────┴──────────────────────────────┴──────────┴──────┘
+  cursor = [0]
+  types  = { [0] : Shape }
+@
+
+After splitting on Shape (ctor dispatch at [0]):
+
+  Group \"Circle\" (rows 0, 1) -- after expanding Circle(x) sub-patterns:
+
+@
+  ┌─────────┬──────────────────────────────┬──────────┬──────┐
+  │  Row    │  rowPatterns                 │ bindings │ body │
+  ├─────────┼──────────────────────────────┼──────────┼──────┤
+  │  row 0  │  [([0,0], ConstDouble 0.0)] │  {}      │  1   │
+  │  row 1  │  []                         │  {r=[0,0]}│  2   │
+  └─────────┴──────────────────────────────┴──────────┴──────┘
+  cursor = [0,0]
+  types  = { [0] : Shape, [0,0] : f64 }
+@
+
+  Group \"Rect\" (row 2) -- after expanding Rect(w, h):
+
+@
+  ┌─────────┬──────────────────────────────┬──────────────────┬──────┐
+  │  Row    │  rowPatterns                 │ bindings         │ body │
+  ├─────────┼──────────────────────────────┼──────────────────┼──────┤
+  │  row 2  │  []                         │ {w=[0,0],h=[0,1]}│  3   │
+  └─────────┴──────────────────────────────┴──────────────────┴──────┘
+  cursor advances past [0] (no more sub-patterns to match)
+@
+
+== The Main Algorithm: translatePMToDT
+
+The core loop works as follows:
+
+@
+  translatePMToDT(matrix):
+      1. If matrix is empty -> return DTUncovered
+      2. Split rows into 3 groups using splitAtFirstWildcard:
+         ┌──────────────────────────────────────────┐
+         │  Leading distinguishable rows             │ <-- have specific patterns at cursor
+         ├──────────────────────────────────────────┤
+         │  Wildcard rows                           │ <-- are wildcards at cursor
+         ├──────────────────────────────────────────┤
+         │  Trailing distinguishable rows           │ <-- have specific patterns after wildcards
+         └──────────────────────────────────────────┘
+      3a. If no leading distinguishable rows:
+          -> translateWithLeadingWildcards
+      3b. If there are leading distinguishable rows:
+          -> translateWithLeadingDistinguishable
+@
+
+=== What splitAtFirstWildcard Does
+
+@
+  Input rows (cursor = [0]):
+    row 0:  [([0], ConstInt 0)]     -- distinguishable (specific value)
+    row 1:  [([0], ConstInt 1)]     -- distinguishable
+    row 2:  []                      -- WILDCARD (no pattern at [0])
+    row 3:  [([1], ConstBool True)] -- WILDCARD at [0] (pattern is at [1] > [0])
+    row 4:  [([0], ConstInt 2)]     -- distinguishable (trailing)
+
+  Result:
+    leadingNonWildcard = [row 0, row 1]
+    wildcardRows       = [row 2, row 3]
+    trailingRows       = [row 4]
+@
+
+=== Wildcard Handling Cases (translateWithLeadingWildcards)
+
+@
+  Case 1a: Wildcard row with NO more patterns and NO guard
+    -> DTLeaf (this arm catches everything)
+
+  Case 1b: Wildcard row with NO more patterns but HAS a guard
+    -> DTGuard { true: DTLeaf, false: <recurse on rest> }
+
+  Case 2:  Wildcard rows HAVE further patterns (just not at cursor)
+    -> Normalize cursor, recurse, then substituteUncovered
+       with the fallback matrix
+@
+
+=== Distinguishable Handling (translateWithLeadingDistinguishable)
+
+@
+  1. Validate all rows are compatible with the scrutinee type
+  2. Sort and divide into groups (by constructor/constant value)
+  3. For constant dispatch (Int, Bool, String):
+     - Pop the front pattern from each row
+     - Recurse on each group
+     - Emit DTSwitch with appropriate case structure
+  4. For constructor dispatch:
+     - Normalize ctor sub-patterns into positional form
+     - Prepend new sub-pattern columns to each row
+     - Update type map with field types
+     - Recurse on each group
+  5. Replace DTUncovered nodes with fallback tree
+@
+
+== Constructor Pattern Normalization (normalizeCtorPattern)
+
+Reussir supports both named and positional constructor patterns:
+
+@
+  -- Named (order doesn't matter, can use `..` for rest):
+  Point { y: 0, x }       -- x binds to field "x", y matched against 0
+  Point { x, .. }         -- only match x, ignore rest
+
+  -- Positional (order matters):
+  Tuple(a, b)             -- a = field 0, b = field 1
+  Tuple(a, ..)            -- only match first field
+@
+
+normalizeCtorPattern converts both forms into a positional vector:
+
+@
+  Named { y: 0, x } with fields [x, y]:
+    -> [BindPat "x", ConstPat 0]    (reordered to match field declaration order)
+
+  Positional (a, ..) with 3 fields:
+    -> [BindPat "a", WildcardPat, WildcardPat]    (padded with wildcards)
+@
+
+-}
 module Reussir.Core.Semi.PatternMatch where
 
 import Control.Applicative ((<|>))
@@ -39,9 +286,58 @@ import Reussir.Core.Semi.Unification (force, satisfyBounds)
 import Reussir.Core.Data.Semi.Expr qualified as Semi
 import Reussir.Core.Data.Semi.Type qualified as Semi
 
--- normalize a ctor pattern into a positional applied form.
--- fill in wildcards for ignored fields if ellipsis is present.
--- return Nothing if the normalization fail
+{- | Normalize a constructor pattern into positional (applied) form.
+
+Given a constructor path like @Point@ and user-written arguments, this
+function reorders named arguments to match the declaration order and fills
+in wildcards for any fields omitted via @..@ (ellipsis).
+
+Returns 'Nothing' if normalization fails (e.g., unknown fields, arity mismatch).
+
+=== Examples
+
+@
+  -- Record declaration: struct Point { x: i32, y: i32 }
+
+  -- Input: Point { y: 0, x }   hasEllipsis=False
+  -- Output: Just [BindPat "x", ConstPat 0]
+  --         (reordered to declaration order: x first, y second)
+
+  -- Input: Point { x }         hasEllipsis=False
+  -- Output: Nothing            (missing field y, no ellipsis)
+
+  -- Input: Point { x, .. }     hasEllipsis=True
+  -- Output: Just [BindPat "x", WildcardPat]
+  --         (y filled with wildcard because of ..)
+@
+
+=== Flow
+
+@
+  normalizeCtorPattern(path, args, ellipsis)
+       │
+       ├─ Look up record in knownRecords
+       │     │
+       │     ├─ Not found ────────> error: "Record not found"
+       │     │
+       │     └─ Found
+       │          │
+       │          ├─ Named fields ──> normalizeNamed
+       │          │     │
+       │          │     ├─ Check for positional args (rejected)
+       │          │     ├─ Check for unknown fields (rejected)
+       │          │     ├─ Check for missing fields (rejected unless ellipsis)
+       │          │     └─ Reorder to declaration order, fill gaps with _
+       │          │
+       │          ├─ Unnamed fields -> normalizeUnnamed
+       │          │     │
+       │          │     ├─ Check for named args (rejected)
+       │          │     ├─ Check arity (exact or <= if ellipsis)
+       │          │     └─ Pad with wildcards if ellipsis
+       │          │
+       │          └─ Variants ──────> error (shouldn't happen here)
+@
+-}
 normalizeCtorPattern ::
     Path ->
     V.Vector Syn.PatternCtorArg ->
@@ -163,46 +459,161 @@ normalizeCtorPattern recordPath args hasEllipsis = do
 
     diff l1 l2 = filter (`notElem` l2) l1
 
--- Consider a set of pattern
---  Foo::A(..)
---  Foo::B(..) if ...
---  Foo::A(..)
---  _ if ...
---  Foo::A(..)
---  Foo::B(..)
---  Foo::C(..)
---  _
+{- | A single row in the pattern matrix.
 
+Consider a @match@ expression with multiple arms:
+
+@
+  match x {
+    Foo::A(..)        -- row 0: distinguishable (ctor A)
+    Foo::B(..) if ... -- row 1: distinguishable (ctor B) + guard
+    Foo::A(..)        -- row 2: distinguishable (ctor A, duplicate)
+    _ if ...          -- row 3: wildcard + guard
+    Foo::A(..)        -- row 4: distinguishable (trailing after wildcard)
+    Foo::B(..)        -- row 5: distinguishable (trailing)
+    Foo::C(..)        -- row 6: distinguishable (trailing)
+    _                 -- row 7: wildcard (catch-all)
+  }
+@
+
+Each row tracks:
+
+  * Which sub-patterns remain to be matched ('rowPatterns')
+  * Which variables have been bound so far ('rowBindings')
+  * Whether there is a guard condition ('rowGuard')
+  * What expression to evaluate on successful match ('rowBody')
+
+A row is considered a /wildcard/ at a given cursor position if:
+
+  * It has no patterns at all (matches everything), or
+  * Its leftmost pattern's 'PatternVarRef' is strictly greater
+    than the current cursor (it doesn't care about this position)
+-}
 data PMRow = PMRow
-    -- store distinguishable patterns (ctor or constant)
-    -- and the de Bruijn level of the pattern.
-    -- empty patterns means this raw is catching all patterns.
     { rowPatterns :: RRB.Vector (PatternVarRef, Syn.PatternKind)
+    -- ^ Remaining patterns to match, paired with their position reference.
+    -- Each entry is @(where_to_look, what_to_match)@.
+    -- An empty vector means this row is a catch-all (wildcard) at the current level.
     , rowBindings :: HashMap.HashMap Identifier PatternVarRef
     , rowGuard :: Maybe Syn.Expr
     , rowBody :: Syn.Expr
     }
 
+{- | The pattern matrix: all rows being matched against, plus context.
+
+=== Visualization
+
+@
+  PMMatrix:
+    cursor = [0]              <-- "which position are we deciding on now?"
+    types  = { [0]: i32 }     <-- type of each position
+    rows:
+      ┌─────┬──────────────────────┬──────────┬──────┬───────┐
+      │ Row │ rowPatterns           │ bindings │guard │ body  │
+      ├─────┼──────────────────────┼──────────┼──────┼───────┤
+      │  0  │ [([0], ConstInt 0)]  │ {}       │ None │ 100   │
+      │  1  │ [([0], ConstInt 1)]  │ {}       │ None │ 200   │
+      │  2  │ []                   │ {y=[0]}  │ None │ y     │
+      └─────┴──────────────────────┴──────────┴──────┴───────┘
+@
+
+The matrix is consumed column-by-column: we look at the current 'matrixCursor',
+split rows into groups, generate a switch node, then recurse on sub-matrices.
+-}
 data PMMatrix = PMMatrix
     { matrixCursor :: PatternVarRef
+    -- ^ The current column being dispatched on
     , matrixRows :: RRB.Vector PMRow
+    -- ^ All pattern rows (in source order, which determines priority)
     , matrixTypes :: HashMap.HashMap PatternVarRef Semi.Type
+    -- ^ Known types for each PatternVarRef (used for type-checking dispatch)
     }
 
+{- | Result of splitting rows at the first wildcard position.
+
+@
+  Before split (cursor = [0]):
+    ┌─────────────────────────────────┐
+    │  row 0: ConstInt 0              │──┐
+    │  row 1: ConstInt 1              │  │ leadingNonWildcardRows
+    ├─────────────────────────────────┤──┘
+    │  row 2: _ (wildcard)            │──┐
+    │  row 3: _ if flag (wildcard+gd) │  │ wildcardRows
+    ├─────────────────────────────────┤──┘
+    │  row 4: ConstInt 2              │──── trailingNonWildcardRows
+    └─────────────────────────────────┘
+@
+
+The split preserves source order within each group, which is essential
+for correct pattern matching semantics (first-match wins).
+-}
 data SplitResult
     = SplitResult
     { leadingNonWildcardRows :: RRB.Vector PMRow
+    -- ^ Rows before the first wildcard (these dispatch on the cursor)
     , wildcardRows :: RRB.Vector PMRow
+    -- ^ Contiguous block of rows that are wildcards at the cursor
     , trailingNonWildcardRows :: RRB.Vector PMRow
+    -- ^ Rows after the wildcard block (used as fallback)
     }
+{- | The kind of dispatch (switch) to emit for a column.
+
+Determined by looking at the first row's pattern in the current column.
+All rows in a distinguishable block must agree on the dispatch kind.
+
+@
+  ConstPat (ConstInt _)    -> DispatchInt      (integer switch)
+  ConstPat (ConstBool _)   -> DispatchBool     (boolean if/else)
+  ConstPat (ConstString _) -> DispatchString   (string hash switch)
+  ConstPat (ConstDouble _) -> DispatchFP       (currently unsupported!)
+  CtorPat Nullable::*      -> DispatchNullable (null/non-null check)
+  CtorPat SomeEnum::*      -> DispatchCtor     (variant tag switch)
+@
+-}
 data DispatchKind
     = DispatchInt
     | DispatchBool
     | DispatchCtor Path
+    -- ^ The Path is the /parent enum/ path (variant name is dropped)
     | DispatchString
     | DispatchFP
     | DispatchNullable
 
+{- | Create the initial pattern matrix from parsed match arms.
+
+This is the /entry point/ to the pattern matching compiler. It converts
+the user's @match@ arms into the initial matrix with cursor at [0].
+
+=== Example
+
+Given this source:
+
+@
+  match x {
+    0 => 100,
+    1 => 200,
+    y => y
+  }
+@
+
+Produces this initial matrix:
+
+@
+  cursor = PatternVarRef [0]
+  types  = { PatternVarRef [0] : <type of x> }
+
+  ┌─────┬──────────────────────────┬──────────────┬──────┐
+  │ Row │ rowPatterns              │ rowBindings  │ body │
+  ├─────┼──────────────────────────┼──────────────┼──────┤
+  │  0  │ [([0], ConstInt 0)]     │ {}           │ 100  │
+  │  1  │ [([0], ConstInt 1)]     │ {}           │ 200  │
+  │  2  │ []                      │ {y = [0]}    │ y    │
+  └─────┴──────────────────────────┴──────────────┴──────┘
+
+  Note: row 2 (BindPat "y") becomes an empty rowPatterns
+        (it's a wildcard) but records the binding y -> [0].
+@
+-}
 initializePMMatrix :: V.Vector (Syn.Pattern, Syn.Expr) -> Semi.Type -> PMMatrix
 initializePMMatrix patterns semiType =
     PMMatrix zeroSingleton inner hashSingleton
@@ -223,8 +634,24 @@ initializePMMatrix patterns semiType =
             PMRow mempty (HashMap.singleton identifier zeroSingleton) guard expr
         _ -> PMRow (RRB.singleton (zeroSingleton, kind)) mempty guard expr
 
--- A row is a wildcard with respect to a prefix if it has no pattern
--- or its left-most pattern is larger than the prefix.
+{- | Check if a row is a "wildcard" at the given cursor position.
+
+A row is a wildcard at cursor @c@ if:
+
+  * It has no patterns left at all (it matches everything), OR
+  * Its leftmost pattern's 'PatternVarRef' is strictly greater than @c@
+    (meaning it has patterns, but at a deeper/later position -- it doesn't
+    constrain position @c@).
+
+@
+  cursor = [0]
+
+  row A: patterns = [([0], ConstInt 5)]   -- NOT wildcard (matches at [0])
+  row B: patterns = []                    -- wildcard (matches everything)
+  row C: patterns = [([1], ConstBool T)]  -- wildcard at [0] (its pattern is at [1])
+  row D: patterns = [([0,1], ConstInt 3)] -- wildcard at [0] ([0,1] > [0])
+@
+-}
 rowIsWildcardAtPrefix :: PMRow -> PatternVarRef -> Bool
 rowIsWildcardAtPrefix row prefix = case RRB.viewl (rowPatterns row) of
     Just ((hd, _), _) -> prefix < hd
@@ -315,25 +742,66 @@ stableSortDistinguishable mat@PMMatrix{matrixRows} = mat{matrixRows = RRB.sortBy
                     ) -> d1 `compare` d2
                 _ -> error "stableSortDistinguishable applied to invalid pattern matrix"
 
+{- | Split the matrix rows into three groups at the first wildcard boundary.
+
+This is the key structural decomposition that drives the whole algorithm.
+It partitions rows while preserving source order (which determines priority).
+
+=== Algorithm
+
+@
+  1. Scan rows top-to-bottom for the first wildcard at cursor
+  2. Everything before it = leadingNonWildcard
+  3. The wildcard + any contiguous wildcards = wildcardRows
+  4. Everything after the wildcard block = trailing
+
+  Example (cursor = [0]):
+
+    rows:  [Int 0] [Int 1] [_] [_ if g] [Int 2]
+            ~~~~~~~~~~~     ~~~~~~~~     ~~~~~~
+            leading         wildcards    trailing
+            (idx 0,1)       (idx 2,3)    (idx 4)
+@
+
+=== Why This Matters
+
+The split determines the dispatch strategy:
+
+  * If there ARE leading distinguishable rows: emit a switch for them,
+    using the wildcard+trailing as the default/fallback.
+
+  * If the FIRST row is a wildcard: handle it directly (leaf or guard),
+    then fall through to the rest.
+
+This ensures first-match semantics: specific patterns before a wildcard
+take priority, but the wildcard acts as a catch-all for unmatched values.
+-}
 splitAtFirstWildcard :: PMMatrix -> SplitResult
 splitAtFirstWildcard mat@PMMatrix{matrixRows, matrixCursor} =
-    -- Attempt to find the index of the first row that acts as a wildcard
-    -- with respect to the current matrix cursor (prefix).
     case findWildcardRow mat of
-        -- If no wildcard row is found, all rows are leading non-wildcard rows.
         Nothing -> SplitResult matrixRows mempty mempty
-        -- If a wildcard row is found at index i:
         Just i ->
-            -- Split the rows into 'leading' (before data i) and 'rest' (starting at i).
             let (leading, rest) = RRB.splitAt i matrixRows
-                -- 'rest' starts with a wildcard row.
-                -- Find the index of the first non-wildcard row in 'rest' to split wildcards and trailing.
                 splitIdx = case RRB.findIndexL (not . (`rowIsWildcardAtPrefix` matrixCursor)) rest of
                     Nothing -> length rest
                     Just idx -> idx
                 (wildcards, trailing) = RRB.splitAt splitIdx rest
              in SplitResult leading wildcards trailing
 
+{- | Advance the matrix cursor to the minimum PatternVarRef among all rows.
+
+After popping the front pattern or handling wildcards, the cursor may
+no longer point to the column that rows care about. This function
+scans all rows and sets the cursor to the smallest remaining ref.
+
+@
+  Before: cursor = [0], but all row patterns reference [0, 0] or higher
+  After:  cursor = [0, 0]    (advanced to the actual next column)
+@
+
+This is essential to avoid infinite loops: after processing wildcards,
+the cursor MUST advance, and normalizeVarRefLevel guarantees that.
+-}
 normalizeVarRefLevel :: PMMatrix -> PMMatrix
 normalizeVarRefLevel mat@PMMatrix{matrixRows} =
     case [ ref
@@ -343,8 +811,24 @@ normalizeVarRefLevel mat@PMMatrix{matrixRows} =
         [] -> mat
         refs -> mat{matrixCursor = minimum refs}
 
--- first apply stable sort, then divide the matrix into multiple groups and each
--- group of rows have the same value. Again, this assumes no wildcard in the matrix
+{- | Sort rows by their leading pattern value, then group consecutive equal ones.
+
+This is used to partition distinguishable rows into per-value groups,
+so each group becomes one arm of the emitted switch.
+
+=== Example
+
+@
+  Input rows (sorted by stableSortDistinguishable):
+    [([0], CtorPat Circle), ([0], CtorPat Circle), ([0], CtorPat Rect)]
+
+  Output groups:
+    Group 0: [CtorPat Circle, CtorPat Circle]  -- 2 rows matching Circle
+    Group 1: [CtorPat Rect]                    -- 1 row  matching Rect
+@
+
+Assumes the matrix contains NO wildcard rows (only called after splitting).
+-}
 divideDistinguishable :: PMMatrix -> [PMMatrix]
 divideDistinguishable mat =
     let sortedMat = stableSortDistinguishable mat
@@ -373,6 +857,17 @@ divideDistinguishable mat =
                     ) -> d1 == d2
                 _ -> error "divideDistinguishable applied to invalid pattern matrix"
 
+{- | Continuation-passing interface for type-checking within pattern compilation.
+
+Pattern matching compilation needs to interact with the type checker to:
+
+  * Infer expression types ('inferType')
+  * Check guard expressions against Bool ('checkType')
+  * Bind pattern variables into scope ('bindVar')
+
+These are passed as callbacks because pattern matching compilation
+happens /during/ type checking (semi-elaboration phase), not after.
+-}
 data TyckCPS = TyckCPS
     { inferType :: Syn.Expr -> SemiEff Semi.Expr
     , checkType :: Syn.Expr -> Semi.Type -> SemiEff Semi.Expr
@@ -385,15 +880,55 @@ data TyckCPS = TyckCPS
         SemiEff a
     }
 
+{- | The main entry point: translate a pattern matrix into a decision tree.
+
+=== Complete Control Flow
+
+@
+  translatePMToDT(matrix)
+    │
+    ├── matrix empty?
+    │     └── YES: return DTUncovered
+    │               (no arms left = uncovered case)
+    │
+    └── NO: splitAtFirstWildcard(matrix)
+              │
+              ├── Has leading distinguishable rows?
+              │     │
+              │     ├── YES: translateWithLeadingDistinguishable
+              │     │          │
+              │     │          ├── Validate types match dispatch kind
+              │     │          ├── Compute fallback from wildcards+trailing
+              │     │          ├── Sort & divide into per-value groups
+              │     │          ├── For each group:
+              │     │          │     ├── Const: pop front, recurse
+              │     │          │     └── Ctor:  normalize sub-patterns,
+              │     │          │                prepend new columns, recurse
+              │     │          ├── Emit DTSwitch (Int/Bool/Ctor/String/Nullable)
+              │     │          └── substituteUncovered with fallback DT
+              │     │
+              │     └── NO: translateWithLeadingWildcards
+              │               │
+              │               ├── First wildcard exhausted (no more patterns)?
+              │               │     ├── No guard: DTLeaf (match!)
+              │               │     └── Has guard: DTGuard
+              │               │           ├── true:  DTLeaf
+              │               │           └── false: recurse on rest
+              │               │
+              │               └── Wildcards have further patterns?
+              │                     ├── Normalize cursor (advance)
+              │                     ├── Recurse on wildcard matrix
+              │                     ├── Recurse on fallback matrix
+              │                     └── substituteUncovered to merge
+@
+-}
 translatePMToDT :: TyckCPS -> PMMatrix -> SemiEff DecisionTree
 translatePMToDT cps mat@PMMatrix{matrixCursor, matrixRows, matrixTypes} =
     if null matrixRows
         then
-            -- If we have no rows left to match, it means for the current set of values,
-            -- no pattern matches. This is an uncovered case.
-            -- We return DTUncovered so that:
-            -- 1. If this is a partial match (e.g. wildcards exist), substituteUncovered can replace it with fallback.
-            -- 2. If this is final, checkExhaustiveness can report it as a warning.
+            -- No rows left -> uncovered case.
+            -- DTUncovered is a placeholder that gets replaced by substituteUncovered
+            -- if there's a fallback, or flagged as a warning if it survives to the end.
             return DTUncovered
         else do
             let SplitResult splitLeading splitWildcards splitTrailing = splitAtFirstWildcard mat
@@ -413,9 +948,28 @@ translatePMToDT cps mat@PMMatrix{matrixCursor, matrixRows, matrixTypes} =
                         splitWildcards
                         splitTrailing
 
-{- | Recursively substitute 'DTUncovered' nodes in a Decision Tree with a fallback Decision Tree.
-This is used to merge the results of a wildcard match (which may fail/be uncovered)
-with a fallback strategy (the rest of the matrix).
+{- | Replace all 'DTUncovered' leaves in a decision tree with a fallback tree.
+
+This is the "glue" that merges partial decision trees. When we compile
+the wildcard portion of a matrix, some paths may end up uncovered.
+We then splice in the fallback tree (from trailing rows) at those points.
+
+=== Example
+
+@
+  Wildcard tree:                   Fallback tree:
+    DTGuard g                        DTLeaf "fallback"
+      true:  DTLeaf "ok"
+      false: DTUncovered  <--- this gets replaced
+
+  Result after substituteUncovered:
+    DTGuard g
+      true:  DTLeaf "ok"
+      false: DTLeaf "fallback"
+@
+
+This operation is recursive: it descends into all DTGuard and DTSwitch
+nodes to find every DTUncovered leaf.
 -}
 substituteUncovered :: DecisionTree -> DecisionTree -> DecisionTree
 substituteUncovered DTUncovered fallback = fallback
