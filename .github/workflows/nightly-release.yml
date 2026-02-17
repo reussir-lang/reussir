@@ -136,9 +136,21 @@ jobs:
           LLVM_LIB="/usr/lib/llvm-${LLVM_VER}/lib"
           cp -a "${LLVM_LIB}"/libMLIR.so* "${PREFIX}/lib/"
           cp -a "${LLVM_LIB}"/libLLVM.so* "${PREFIX}/lib/"
-          # Also copy libMLIR-21 C-API style libs if present
+          # Also copy libMLIR C-API style libs if present
           cp -a "${LLVM_LIB}"/libMLIR-${LLVM_VER}*.so* "${PREFIX}/lib/" 2>/dev/null || true
           cp -a "${LLVM_LIB}"/libLLVM-${LLVM_VER}*.so* "${PREFIX}/lib/" 2>/dev/null || true
+
+          # On Ubuntu, libLLVM.so.XX.Y is a relative symlink into the
+          # multiarch directory (../../x86_64-linux-gnu/...) which dangles
+          # once extracted outside /usr/lib/llvm-XX/lib.  Replace any such
+          # dangling symlinks with the actual library file.
+          for f in "${PREFIX}"/lib/lib{LLVM,MLIR}*.so*; do
+            if [ -L "$f" ] && [ ! -e "$f" ]; then
+              orig="${LLVM_LIB}/$(basename "$f")"
+              rm "$f"
+              cp -L "$orig" "$f"
+            fi
+          done
 
           # Strip debug info from C++ binaries
           strip --strip-debug "${PREFIX}"/bin/reussir-opt "${PREFIX}"/bin/reussir-translate 2>/dev/null || true
