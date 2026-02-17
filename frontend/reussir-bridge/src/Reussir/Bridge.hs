@@ -27,10 +27,12 @@ module Reussir.Bridge (
 
     -- * Compilation
     compileForNativeMachine,
+    compileForTarget,
     compileProgram,
     hasTPDE,
     getNativeTargetTriple,
     getNativeTargetCPU,
+    getNativeTargetFeatures,
 
     -- * JIT Engine
     module Reussir.Bridge.JITEngine,

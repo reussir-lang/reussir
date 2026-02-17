@@ -35,6 +35,9 @@ runCodegenAsText codegen = do
                 B.OutputObject
                 B.LogInfo
                 "./module.mlir"
+                Nothing
+                Nothing
+                Nothing
     L.withStdOutLogger $ \logger -> do
         E.runEff $ L.runLog "Test.Codegen.Intrinsics.Arith" logger defaultLogLevel $ runCodegen spec $ do
             codegen

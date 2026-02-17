@@ -38,6 +38,9 @@ runCodegenAsText codegen = do
                 B.OutputObject
                 B.LogInfo
                 "./module.mlir"
+                Nothing
+                Nothing
+                Nothing
     L.withStdOutLogger $ \logger -> do
         E.runEff $ L.runLog "Test.Codegen.IR" logger defaultLogLevel $ runCodegen spec $ do
             codegen
