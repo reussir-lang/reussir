@@ -457,6 +457,9 @@ generateExpressionModule funcName semiExpr exprType logLevel state = do
                         , IR.outputTarget = B.OutputObject
                         , IR.logLevel = logLevel
                         , IR.moduleFilePath = filePath
+                        , IR.targetTriple = Nothing
+                        , IR.targetCPU = Nothing
+                        , IR.targetFeatures = Nothing
                         }
 
             -- Create lowering context with all functions

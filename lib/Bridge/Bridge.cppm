@@ -431,6 +431,7 @@ void reussir_bridge_compile_for_target(
   // Initialize native target so we can query TargetMachine for layout/triple.
   // llvm::InitializeNativeTarget();
   llvm::InitializeAllTargets();
+  llvm::InitializeAllTargetMCs();
   llvm::InitializeAllAsmPrinters();
   llvm::InitializeAllAsmParsers();
   spdlog::info("Initialized all targets.");

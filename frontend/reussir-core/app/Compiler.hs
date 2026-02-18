@@ -26,6 +26,9 @@ data Args = Args
     , argOutputTarget :: OutputTarget
     , argLogLevel :: B.LogLevel
     , argModuleName :: String
+    , argTargetTriple :: Maybe String
+    , argTargetCPU :: Maybe String
+    , argTargetFeatures :: Maybe String
     }
 
 argsParser :: Parser Args
@@ -56,6 +59,12 @@ argsParser =
             )
         <*> strOption
             (long "module-name" <> short 'm' <> value "main" <> help "Module name")
+        <*> optional
+            (strOption (long "target-triple" <> metavar "TRIPLE" <> help "Target triple (default: native)"))
+        <*> optional
+            (strOption (long "target-cpu" <> metavar "CPU" <> help "Target CPU (default: native)"))
+        <*> optional
+            (strOption (long "target-features" <> metavar "FEATURES" <> help "Target features (default: native)"))
 
 parseOptLevel :: ReadM B.OptOption
 parseOptLevel = eitherReader $ \s -> case s of
@@ -106,6 +115,9 @@ main = do
                         , outputTarget = outputTarget'
                         , logLevel = argLogLevel args
                         , moduleFilePath = argInputFile args
+                        , targetTriple = T.pack <$> argTargetTriple args
+                        , targetCPU = T.pack <$> argTargetCPU args
+                        , targetFeatures = T.pack <$> argTargetFeatures args
                         }
 
             B.withReussirLogger (argLogLevel args) "reussir-compiler" $ \logger -> do

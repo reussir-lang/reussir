@@ -4,14 +4,16 @@
 module Reussir.Bridge.Compiler (
     -- * Compilation
     compileForNativeMachine,
+    compileForTarget,
     compileProgram,
     hasTPDE,
     getNativeTargetTriple,
     getNativeTargetCPU,
+    getNativeTargetFeatures,
 )
 where
 
-import Data.ByteString (ByteString, useAsCString)
+import Data.ByteString (ByteString, empty, useAsCString)
 import Foreign.C.String
 import Foreign.C.Types
 
@@ -109,6 +111,49 @@ compileForNativeMachine mlirModule sourceName outputFile target opt logLevel = d
             , targetTriple = targetTriple
             , targetCPU = targetCPU
             , targetFeatures = targetFeatures
+            , targetCodeModel = CodeModelDefault
+            , targetRelocationModel = RelocationModelDefault
+            }
+
+compileForTarget ::
+    -- | MLIR module content
+    ByteString ->
+    -- | Source name (for diagnostics)
+    String ->
+    -- | Output file path
+    FilePath ->
+    -- | Output target format
+    OutputTarget ->
+    -- | Optimization level
+    OptOption ->
+    -- | Log level
+    LogLevel ->
+    -- | Optional target triple (Nothing = native)
+    Maybe ByteString ->
+    -- | Optional target CPU (Nothing = native)
+    Maybe ByteString ->
+    -- | Optional target features (Nothing = native)
+    Maybe ByteString ->
+    IO ()
+compileForTarget mlirModule sourceName outputFile target opt logLevel mTriple mCPU mFeatures = do
+    triple <- maybe getNativeTargetTriple pure mTriple
+    -- When a custom triple is specified, default CPU/features to empty strings
+    -- so LLVM picks appropriate defaults for the target architecture.
+    -- Using native CPU/features with a foreign triple causes crashes.
+    let isCustomTriple = case mTriple of Nothing -> False; Just _ -> True
+    cpu <- maybe (if isCustomTriple then pure empty else getNativeTargetCPU) pure mCPU
+    features <- maybe (if isCustomTriple then pure empty else getNativeTargetFeatures) pure mFeatures
+    compileProgram
+        Program
+            { mlirModule
+            , sourceName
+            , outputFile = outputFile
+            , outputTarget = target
+            , opt = opt
+            , logLevel = logLevel
+            , targetTriple = triple
+            , targetCPU = cpu
+            , targetFeatures = features
             , targetCodeModel = CodeModelDefault
             , targetRelocationModel = RelocationModelDefault
             }

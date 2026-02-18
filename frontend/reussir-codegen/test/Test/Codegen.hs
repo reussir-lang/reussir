@@ -122,6 +122,9 @@ createSimpleModule =
             B.OutputObject
             B.LogWarning
             "test.rr"
+            Nothing
+            Nothing
+            Nothing
 
 -- Create the Tensor2x2 record type symbol
 tensor2x2Symbol :: Symbol
@@ -187,6 +190,9 @@ createTensor2x2Module =
             B.OutputObject
             B.LogWarning
             "test.rr"
+            Nothing
+            Nothing
+            Nothing
 
 -- Create matmul function: _ZN9Tensor2x2I3f64E6matmulE
 -- Takes two Tensor2x2, returns Tensor2x2
@@ -769,6 +775,9 @@ createFibonacciModule =
             B.OutputObject
             B.LogWarning
             "test.rr"
+            Nothing
+            Nothing
+            Nothing
 
 codegenTests :: TestTree
 codegenTests =

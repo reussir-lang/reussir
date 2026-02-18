@@ -45,6 +45,9 @@ data TargetSpec = TargetSpec
     , outputTarget :: B.OutputTarget
     , logLevel :: B.LogLevel
     , moduleFilePath :: FilePath
+    , targetTriple :: Maybe T.Text
+    , targetCPU :: Maybe T.Text
+    , targetFeatures :: Maybe T.Text
     }
     deriving (Eq, Show)
 

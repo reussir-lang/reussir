@@ -32,6 +32,9 @@ runCodegenAsText codegen = do
                 B.OutputObject
                 B.LogInfo
                 "./module.mlir"
+                Nothing
+                Nothing
+                Nothing
     fmap TB.runBuilder $ L.withStdOutLogger $ \logger -> do
         E.runEff $
             L.runLog "Test.Codegen.Location" logger defaultLogLevel $

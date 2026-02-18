@@ -12,9 +12,10 @@ It has several CLI options:
 ```bash
 reussir-compiler - Reussir Compiler
 
-Usage: reussir-compiler INPUT (-o|--output OUTPUT) [-O|--opt-level ARG] 
-                        [-t|--target ARG] [-l|--log-level ARG] 
-                        [-m|--module-name ARG]
+Usage: reussir-compiler INPUT (-o|--output OUTPUT) [-O|--opt-level ARG]
+                        [-t|--target ARG] [-l|--log-level ARG]
+                        [-m|--module-name ARG] [--target-triple TRIPLE]
+                        [--target-cpu CPU] [--target-features FEATURES]
 
   Compile a Reussir file
 
@@ -26,6 +27,10 @@ Available options:
   -t,--target ARG          Output target (llvm-ir, asm, object)
   -l,--log-level ARG       Log level (error, warning, info, debug, trace)
   -m,--module-name ARG     Module name
+  --target-triple TRIPLE   Target triple (default: native)
+  --target-cpu CPU         Target CPU (default: native)
+  --target-features FEATURES
+                           Target features (default: native)
   -h,--help                Show this help text
 ```
 
@@ -50,6 +55,14 @@ define weak_odr i32 @_RC10rc_project(ptr %0) local_unnamed_addr !dbg !3 {
   ret i32 %3, !dbg !6
 }
 ```
+
+To cross-compile for a specific target, use the `--target-triple` flag:
+
+```bash
+cabal run reussir-compiler -- tests/integration/frontend/projection.rr -o output.ll -tllvm-ir --target-triple x86_64-unknown-linux-gnu
+```
+
+You can also specify `--target-cpu` and `--target-features` for finer control over code generation.
 
 Using the `-ltrace` option, you can get more detailed information about the compilation process.
 

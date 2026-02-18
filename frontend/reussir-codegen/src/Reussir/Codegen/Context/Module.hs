@@ -16,6 +16,8 @@ import Effectful as E
 import System.Directory (canonicalizePath)
 import System.FilePath (takeDirectory, takeFileName)
 
+import Data.Text.Encoding qualified as TE
+
 import Data.HashTable.IO qualified as H
 import Data.Text qualified as T
 import Data.Text.Builder.Linear qualified as TB
@@ -49,13 +51,16 @@ runCodegenToBackend spec codegen = do
     finalCtx <- E.inject $ E.runReader spec $ E.execState initCtx $ codegen
     let mlirModule = TB.runBuilderBS $ builder finalCtx
     E.liftIO $
-        B.compileForNativeMachine
+        B.compileForTarget
             mlirModule
             (T.unpack (programName spec))
             (outputPath spec)
             (outputTarget spec)
             (optimization spec)
             (logLevel spec)
+            (TE.encodeUtf8 <$> targetTriple spec)
+            (TE.encodeUtf8 <$> targetCPU spec)
+            (TE.encodeUtf8 <$> targetFeatures spec)
     pure ()
 
 -- | Emit type alias definitions (placeholder for future implementation).
