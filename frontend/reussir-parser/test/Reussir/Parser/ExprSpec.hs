@@ -9,7 +9,7 @@ import Text.Megaparsec
 
 import Reussir.Parser.Expr
 import Reussir.Parser.Types.Expr
-import Reussir.Parser.Types.Lexer (Path (..), WithSpan (..))
+import Reussir.Parser.Types.Lexer (Identifier (..), Path (..), WithSpan (..))
 import Reussir.Parser.Types.Type
 
 stripExprSpans :: Expr -> Expr
@@ -20,7 +20,7 @@ stripExprSpans (If e1 e2 e3) = If (stripExprSpans e1) (stripExprSpans e2) (strip
 stripExprSpans (Cast t e) = Cast t (stripExprSpans e)
 stripExprSpans (Let n t e) = Let n t (stripExprSpans e)
 stripExprSpans (FuncCallExpr (FuncCall p tys es)) = FuncCallExpr (FuncCall p tys (map stripExprSpans es))
-stripExprSpans (Lambda n t e) = Lambda n t (stripExprSpans e)
+stripExprSpans (Lambda (LambdaExpr args e)) = Lambda (LambdaExpr args (stripExprSpans e))
 stripExprSpans (Match e cases) = Match (stripExprSpans e) (fmap (\(p, ex) -> (p, stripExprSpans ex)) cases)
 stripExprSpans (RegionalExpr e) = RegionalExpr (stripExprSpans e)
 stripExprSpans (CtorCallExpr (CtorCall p tys args)) = CtorCallExpr (CtorCall p tys (map (\(i, e) -> (i, stripExprSpans e)) args))
@@ -144,6 +144,15 @@ spec = do
         it "parses simple assignment" $
             (stripExprSpans <$> parse parseExpr "" "x->y := z")
                 `shouldParse` Assign (Var (Path "x" [])) (Named "y") (Var (Path "z" []))
+
+    describe "parseLambda" $ do
+        it "parses simple lambda" $
+            (stripExprSpans <$> parse parseExpr "" "|x: i32| x")
+                `shouldParse` Lambda (LambdaExpr [(Identifier "x", Just (TypeIntegral (Signed 32)))] (Var (Path "x" [])))
+
+        it "parses mutiple args lambda" $
+            (stripExprSpans <$> parse parseExpr "" "|x, y: i32| { x }")
+                `shouldParse` Lambda (LambdaExpr [(Identifier "x", Nothing), (Identifier "y", Just (TypeIntegral (Signed 32)))] (ExprSeq [Var (Path "x" [])]))
 
     describe "parseExpr" $ do
         it "parses less than or equal with potential type arg ambiguity" $

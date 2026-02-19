@@ -86,6 +86,12 @@ data Access
 
 type FlexFlag = Bool
 
+data LambdaExpr = LambdaExpr
+    { args :: [(Identifier, Maybe Type)]
+    , body :: Expr
+    }
+    deriving (Show, Eq)
+
 data Expr
     = ConstExpr Constant
     | BinOpExpr BinaryOp Expr Expr
@@ -94,7 +100,7 @@ data Expr
     | Cast Type Expr
     | Let (WithSpan Identifier) (Maybe (Type, FlexFlag)) Expr
     | ExprSeq [Expr]
-    | Lambda Identifier Type Expr
+    | Lambda LambdaExpr
     | Match Expr (Vector (Pattern, Expr))
     | Var Path
     | FuncCallExpr FuncCall -- foo<i32, _> (arg1, arg2) -- notice the difference between variant ctor calls

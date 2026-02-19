@@ -138,11 +138,17 @@ assignOp = InfixN $ do
 
 parseLambda :: Parser Expr
 parseLambda = do
-    name <- char '|' *> space *> parseIdentifier
-    ty <- colon *> parseType <* char '|' <* space
+    _ <- char '|' *> space
+    args <- parseLambdaArg `sepBy` comma
+    _ <- char '|' *> space
     body <- parseExpr
 
-    return (Lambda name ty body)
+    return (Lambda (LambdaExpr args body))
+  where
+    parseLambdaArg = do
+        name <- parseIdentifier
+        ty <- optional (colon *> parseType)
+        return (name, ty)
 
 parseMatchCase :: Parser (Pattern, Expr)
 parseMatchCase = do

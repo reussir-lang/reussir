@@ -158,13 +158,14 @@ instance PrettyColored Expr where
       where
         prettyTyArg Nothing = "_"
         prettyTyArg (Just t) = prettyColored t
-    prettyColored (Lambda name t e) =
+    prettyColored (Lambda (LambdaExpr args e)) =
         operator "\\"
-            <> prettyColored name
-            <> operator ":"
-            <+> prettyColored t
+            <> commaSep (map prettyArg args)
             <+> operator "->"
             <+> prettyColored e
+      where
+        prettyArg (n, Nothing) = prettyColored n
+        prettyArg (n, Just t) = prettyColored n <> operator ":" <+> prettyColored t
     prettyColored (Match e cases) =
         keyword "match"
             <+> prettyColored e
