@@ -122,7 +122,8 @@ collectExpr content (Syn.Let _name mTy val) =
     maybe [] (\(ty, _) -> collectType content ty) mTy
         ++ collectExpr content val
 collectExpr content (Syn.ExprSeq es) = concatMap (collectExpr content) es
-collectExpr content (Syn.Lambda _ ty body) = collectType content ty ++ collectExpr content body
+collectExpr content (Syn.Lambda (Syn.LambdaExpr args body)) = 
+    concatMap (\(_, ty) -> maybe [] (collectType content) ty) args ++ collectExpr content body
 collectExpr content (Syn.Match scrutinee arms) =
     collectExpr content scrutinee
         ++ concatMap (\(pat, body) -> collectPattern content pat ++ collectExpr content body) arms
