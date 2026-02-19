@@ -446,12 +446,11 @@ but are still needed in later sequence expressions. This handles the case where
 a variable is passed to a call AND used again after the call returns.
 -}
 emitSequenceLevelIncs ::
-    Full.FullRecordTable ->
     Full.Expr ->
     IntSet.IntSet ->
     AnalysisState ->
     IO AnalysisState
-emitSequenceLevelIncs tbl e suffixVars st = do
+emitSequenceLevelIncs e suffixVars st = do
     let exprFreeVars = collectFreeVars e
     let neededLater = IntSet.intersection exprFreeVars suffixVars
     -- Only inc vars that are RR-typed and currently owned
@@ -773,11 +772,11 @@ analyzeSequenceEarly tbl ((e, suffixVars) : rest) st scopedVars =
             -- Before analyzing a consuming expression, emit inc for vars that
             -- will be consumed but are still needed in later expressions.
             st0 <- case Full.exprKind e of
-                Full.FuncCall{} -> emitSequenceLevelIncs tbl e suffixVars st
-                Full.CompoundCall{} -> emitSequenceLevelIncs tbl e suffixVars st
-                Full.VariantCall{} -> emitSequenceLevelIncs tbl e suffixVars st
-                Full.NullableCall{} -> emitSequenceLevelIncs tbl e suffixVars st
-                Full.RcWrap{} -> emitSequenceLevelIncs tbl e suffixVars st
+                Full.FuncCall{} -> emitSequenceLevelIncs e suffixVars st
+                Full.CompoundCall{} -> emitSequenceLevelIncs e suffixVars st
+                Full.VariantCall{} -> emitSequenceLevelIncs e suffixVars st
+                Full.NullableCall{} -> emitSequenceLevelIncs e suffixVars st
+                Full.RcWrap{} -> emitSequenceLevelIncs e suffixVars st
                 _ -> pure st
             (st1, _) <- analyzeExpr tbl e st0
             -- Emit early decs for owned variables no longer needed
