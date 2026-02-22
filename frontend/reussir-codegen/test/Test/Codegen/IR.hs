@@ -898,8 +898,10 @@ irTests =
                 assertBool "Should contain result %3" $ "%3 = " `isInfixOf` resultStr
                 assertBool "Should contain target %1" $ "%1" `isInfixOf` resultStr
                 assertBool "Should contain argument %2" $ "%2" `isInfixOf` resultStr
+                assertBool "Should contain 'to' keyword" $ " to " `isInfixOf` resultStr
                 assertBool "Should contain type annotation" $ " : " `isInfixOf` resultStr
-                assertBool "Target should come before argument" $ comesAfter "%1" "%2" resultStr
+                assertBool "Argument should come before target ((%arg) to (%closure) format)" $
+                    comesAfter "%2" "%1" resultStr
             ]
         , testGroup
             "ClosureEval"
