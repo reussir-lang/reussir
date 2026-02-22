@@ -294,6 +294,26 @@ instance PrettyColored Expr where
                 subexprsDocs <- mapM prettyColored subexprs
                 pure $
                     braces (nest 4 (hardline <> vsep (punctuate semi subexprsDocs)) <> hardline)
+            LambdaExpr closure args body -> do
+                argsDocs <- mapM prettyArg args
+                closureDocs <- mapM prettyCaptured closure
+                bodyDoc <- prettyColored body
+                pure $
+                    "|" <> commaSep argsDocs <> "|"
+                        <> (if null closure then mempty else space <> brackets (commaSep closureDocs))
+                        <+> braces (nest 4 (hardline <> bodyDoc) <> hardline)
+              where
+                prettyArg (VarID vid, ty) = do
+                    tyDoc <- prettyColored ty
+                    pure $ variable ("v" <> pretty vid) <> operator ":" <+> tyDoc
+                prettyCaptured (VarID vid, ty) = do
+                    tyDoc <- prettyColored ty
+                    pure $ keyword "capture" <+> variable ("v" <> pretty vid) <> operator ":" <+> tyDoc
+            ClosureCall (VarID target) args -> do
+                argsDocs <- mapM prettyColored args
+                pure $
+                    parens (variable ("v" <> pretty target))
+                        <> parens (commaSep argsDocs)
 
         case exprKind expr of
             Var _ -> pure kindDoc
@@ -301,6 +321,7 @@ instance PrettyColored Expr where
             Sequence _ -> pure kindDoc
             ScfIfExpr _ _ _ -> pure kindDoc
             Match _ _ -> pure kindDoc
+            LambdaExpr _ _ _ -> pure kindDoc
             _ -> do
                 tyDoc <- prettyColored (exprType expr)
                 pure $ kindDoc <+> comment (":" <+> tyDoc)

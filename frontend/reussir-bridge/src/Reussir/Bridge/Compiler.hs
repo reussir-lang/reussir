@@ -112,7 +112,7 @@ compileForNativeMachine mlirModule sourceName outputFile target opt logLevel = d
             , targetCPU = targetCPU
             , targetFeatures = targetFeatures
             , targetCodeModel = CodeModelDefault
-            , targetRelocationModel = RelocationModelDefault
+            , targetRelocationModel = RelocationModelPIC
             }
 
 compileForTarget ::
@@ -155,7 +155,7 @@ compileForTarget mlirModule sourceName outputFile target opt logLevel mTriple mC
             , targetCPU = cpu
             , targetFeatures = features
             , targetCodeModel = CodeModelDefault
-            , targetRelocationModel = RelocationModelDefault
+            , targetRelocationModel = RelocationModelPIC
             }
 
 compileProgram :: Program -> IO ()

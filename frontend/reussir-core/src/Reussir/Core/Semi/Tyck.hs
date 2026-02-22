@@ -41,6 +41,8 @@ import Reussir.Parser.Types.Lexer (
 import Data.HashMap.Strict qualified as HashMap
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
+import Data.IntSet qualified as IntSet
+import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
@@ -79,7 +81,7 @@ import Reussir.Core.Data.Semi.Type (
     Type (..),
  )
 import Reussir.Core.Data.Semi.Unification (HoleState (..))
-import Reussir.Core.Data.UniqueID (GenericID (..))
+import Reussir.Core.Data.UniqueID (GenericID (..), VarID (..))
 import Reussir.Core.Semi.Context (
     addErrReport,
     addErrReportMsg,
@@ -111,6 +113,7 @@ import Reussir.Core.Semi.Unification (
     satisfyBounds,
     unify,
  )
+import Reussir.Core.Data.Semi.Variable (VarDef (..), VarTable (..))
 import Reussir.Core.Semi.Variable (lookupVar, newVariable)
 import Reussir.Core.String (allocateStrToken)
 
@@ -204,6 +207,14 @@ elimTypeHoles expr = withMaybeSpan (exprSpan expr) $ do
         IntrinsicCall path args -> IntrinsicCall path <$> mapM elimTypeHoles args
         Sequence subexprs -> Sequence <$> mapM elimTypeHoles subexprs
         Match val dt -> Match <$> elimTypeHoles val <*> elimTypeHolesDT dt
+        LambdaExpr closure args body -> do
+            closure' <- forM closure $ \(vid, ty) -> (vid,) <$> forceAndCheckHoles ty
+            args' <- forM args $ \(vid, ty) -> (vid,) <$> forceAndCheckHoles ty
+            body' <- elimTypeHoles body
+            return $ LambdaExpr closure' args' body'
+        ClosureCall target callArgs -> do
+            callArgs' <- mapM elimTypeHoles callArgs
+            return $ ClosureCall target callArgs'
     return $ expr{exprType = ty', exprKind = kind'}
 
 elimTypeHolesDT :: DecisionTree -> SemiEff DecisionTree
@@ -596,6 +607,17 @@ inferType (Syn.Match scrutinee patterns) = do
 -- Advance the span in the context and continue on inner expression
 inferType (Syn.SpannedExpr (WithSpan expr start end)) =
     withSpan (start, end) $ inferType expr
+-- Lambda expression:
+--
+--   Г = { v0:T0, ..., vn:Tn }   outerCount = n+1
+--   Г, x1:A1, ..., xk:Ak |- body -> R
+--   freeVars(body) ∩ { v0..vn } = { c0, ..., cm }
+--   none of ci : Record _ _ Flex
+--  ──────────────────────────────────────────────────────────────────────────────
+--   Г |- TypeClosure [A1..Ak] R <- |x1:A1, ..., xk:Ak| body
+--        with lamClosure = [(c0,T_c0), ..., (cm,T_cm)]
+inferType (Syn.Lambda Syn.LambdaExpr{Syn.args = synArgs, Syn.body = synBody}) =
+    inferTypeForLambda synArgs synBody
 inferType _ = error "Not implemented"
 
 collectLeafExprTypes :: DecisionTree -> [Type]
@@ -622,9 +644,33 @@ collectLeafExprTypesCases (DTSwitchNullable j n) =
 checkType :: Syn.Expr -> Type -> SemiEff Expr
 checkType (Syn.SpannedExpr (WithSpan expr start end)) ty =
     withSpan (start, end) $ checkType expr ty
+-- Bidirectional check rule for lambda expressions:
+--
+--   Г, x1:A1, ..., xk:Ak |- body ⇐ R
+--  ─────────────────────────────────────────────────────────────────────────────
+--   Г |- |x1, ..., xk| body ⇐ TypeClosure [A1..Ak] R
+--
+-- When the expected type is a known closure type, we use the expected arg types
+-- directly (no holes) and check the body against the expected return type.
+checkType (Syn.Lambda Syn.LambdaExpr{Syn.args = synArgs, Syn.body = synBody}) ty = do
+    ty' <- runUnification $ force ty
+    case ty' of
+        TypeClosure expectedArgTys expectedRetTy ->
+            checkLambdaAgainstClosure synArgs expectedArgTys synBody expectedRetTy
+        _ -> do
+            -- Expected type is not (yet) a closure — fall back to inference + unify
+            expr' <- inferTypeForLambda synArgs synBody
+            exprTy <- runUnification $ force $ exprType expr'
+            unification <- runUnification $ unify exprTy ty
+            case unification of
+                Just err -> do
+                    filePath <- State.gets currentFile
+                    let report = errorToReport err filePath
+                    addErrReportMsgSeq "Failed to unify lambda type" (Just report)
+                    exprWithSpan TypeBottom Poison
+                Nothing -> return expr'
 checkType expr ty = do
     L.logTrace_ $ "Tyck: checkType expected=" <> T.pack (show ty)
-    -- this is apparently not complete. We need to handle lambda/unification
     expr' <- inferType expr
     L.logTrace_ $ "Tyck: inferred type=" <> T.pack (show $ exprType expr')
     exprTy <- runUnification $ force $ exprType expr'
@@ -820,8 +866,13 @@ inferTypeForNormalCall
                                 , funcCallRegional = funcIsRegional proto
                                 }
             Nothing -> do
-                addErrReportMsg $ "Function not found: " <> T.pack (show path)
-                exprWithSpan TypeBottom Poison
+                -- Check if this is a local closure variable being called
+                mClosureCall <- tryInferClosureCall path tyArgs argExprs
+                case mClosureCall of
+                    Just expr -> return expr
+                    Nothing -> do
+                        addErrReportMsg $ "Function not found: " <> T.pack (show path)
+                        exprWithSpan TypeBottom Poison
       where
         checkArgsNum :: Int -> SemiEff Expr -> SemiEff Expr
         checkArgsNum expectedNum argAction = do
@@ -853,6 +904,210 @@ inferTypeForNormalCall
         functionGenericMap proto assignedTypes =
             let genericIDs = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
              in IntMap.fromList $ zip genericIDs assignedTypes
+
+-- | Infer the type of a lambda expression, computing free variables (captures).
+inferTypeForLambda :: [(Identifier, Maybe Syn.Type)] -> Syn.Expr -> SemiEff Expr
+inferTypeForLambda synArgs synBody = do
+    -- Record the outer variable count before introducing lambda args
+    varTable' <- State.gets varTable
+    uniqueBindsBefore <- readIORef' (uniqueBindings varTable')
+    let outerCount = Seq.length uniqueBindsBefore
+    -- Introduce lambda args and infer the body inside their scope
+    introduceArgs synArgs $ \argVarTypes -> do
+        bodyExpr <- inferType synBody
+        let retTy = exprType bodyExpr
+        -- Collect free variable IDs from the body (VarIDs < outerCount)
+        let freeVarIDs = collectBodyFreeVarIDs outerCount bodyExpr
+        -- Look up types of captured vars (uniqueBindings still has all vars here)
+        uniqueBindsNow <- readIORef' (uniqueBindings varTable')
+        let captured =
+                map
+                    (\v -> (VarID v, varType (Seq.index uniqueBindsNow v)))
+                    (IntSet.toList freeVarIDs)
+        -- Flex escape check: captured vars must not be flex records
+        forM_ captured $ \(_, capTy) ->
+            case capTy of
+                TypeRecord _ _ Flex ->
+                    addErrReportMsg "Cannot capture a flex object in a closure (it would escape its region)"
+                _ -> return ()
+        let argTypes = map snd argVarTypes
+        let closureTy = TypeClosure argTypes retTy
+        exprWithSpan closureTy $
+            LambdaExpr
+                { lamClosure = captured
+                , lamArgs = argVarTypes
+                , lamBody = bodyExpr
+                }
+  where
+    introduceArgs ::
+        [(Identifier, Maybe Syn.Type)] ->
+        ([(VarID, Type)] -> SemiEff Expr) ->
+        SemiEff Expr
+    introduceArgs [] callback = callback []
+    introduceArgs ((argName, mArgTy) : rest) callback = do
+        argTy <- case mArgTy of
+            Just synTy -> evalType synTy
+            Nothing -> introduceNewHoleInContext []
+        withVariable argName Nothing argTy $ \varID ->
+            introduceArgs rest $ \restPairs ->
+                callback ((varID, argTy) : restPairs)
+
+-- | Check a lambda expression against a known closure type.
+-- Implements the bidirectional checking rule:
+--
+--   Г, x1:A1, ..., xk:Ak |- body ⇐ R
+--  ─────────────────────────────────────────────────────────────────────────────
+--   Г |- |x1, ..., xk| body ⇐ TypeClosure [A1..Ak] R
+--
+-- The expected arg types flow into the lambda body, avoiding holes for
+-- unannotated parameters.
+checkLambdaAgainstClosure ::
+    [(Identifier, Maybe Syn.Type)] ->
+    [Type] ->
+    Syn.Expr ->
+    Type ->
+    SemiEff Expr
+checkLambdaAgainstClosure synArgs expectedArgTys synBody expectedRetTy = do
+    when (length synArgs /= length expectedArgTys) $
+        addErrReportMsg $
+            "Lambda has "
+                <> T.pack (show (length synArgs))
+                <> " parameter(s) but the expected closure type has "
+                <> T.pack (show (length expectedArgTys))
+    varTable' <- State.gets varTable
+    uniqueBindsBefore <- readIORef' (uniqueBindings varTable')
+    let outerCount = Seq.length uniqueBindsBefore
+    introduceCheckedArgs (zip synArgs expectedArgTys) $ \argVarTypes -> do
+        -- Check body against expected return type (bidirectional: B flows in)
+        bodyExpr <- checkType synBody expectedRetTy
+        let retTy = exprType bodyExpr
+        let freeVarIDs = collectBodyFreeVarIDs outerCount bodyExpr
+        uniqueBindsNow <- readIORef' (uniqueBindings varTable')
+        let captured =
+                map
+                    (\v -> (VarID v, varType (Seq.index uniqueBindsNow v)))
+                    (IntSet.toList freeVarIDs)
+        forM_ captured $ \(_, capTy) ->
+            case capTy of
+                TypeRecord _ _ Flex ->
+                    addErrReportMsg "Cannot capture a flex object in a closure (it would escape its region)"
+                _ -> return ()
+        let argTypes = map snd argVarTypes
+        let closureTy = TypeClosure argTypes retTy
+        exprWithSpan closureTy $
+            LambdaExpr
+                { lamClosure = captured
+                , lamArgs = argVarTypes
+                , lamBody = bodyExpr
+                }
+  where
+    introduceCheckedArgs ::
+        [((Identifier, Maybe Syn.Type), Type)] ->
+        ([(VarID, Type)] -> SemiEff Expr) ->
+        SemiEff Expr
+    introduceCheckedArgs [] callback = callback []
+    introduceCheckedArgs (((argName, mSynTy), expectedArgTy) : rest) callback = do
+        argTy <- case mSynTy of
+            Just synTy -> do
+                -- Explicit annotation must unify with expected type
+                t <- evalType synTy
+                unification <- runUnification $ unify t expectedArgTy
+                case unification of
+                    Just err -> do
+                        filePath <- State.gets currentFile
+                        addErrReportMsgSeq
+                            "Lambda arg type annotation doesn't match expected type"
+                            (Just $ errorToReport err filePath)
+                    Nothing -> return ()
+                return t
+            -- Key bidirectional rule: use expected type directly (no hole)
+            Nothing -> return expectedArgTy
+        withVariable argName Nothing argTy $ \varID ->
+            introduceCheckedArgs rest $ \restPairs ->
+                callback ((varID, argTy) : restPairs)
+
+-- | Collect VarIDs of free variables in an expression that are < outerCount.
+-- Does not recurse into nested lambda bodies (they evaluate at call time);
+-- instead collects from their lamClosure lists.
+collectBodyFreeVarIDs :: Int -> Expr -> IntSet.IntSet
+collectBodyFreeVarIDs outerC = go
+  where
+    go expr = case exprKind expr of
+        Var (VarID v) -> if v < outerC then IntSet.singleton v else IntSet.empty
+        GlobalStr _ -> IntSet.empty
+        Constant _ -> IntSet.empty
+        Poison -> IntSet.empty
+        Negate e -> go e
+        Not e -> go e
+        Arith e1 _ e2 -> go e1 <> go e2
+        Cmp e1 _ e2 -> go e1 <> go e2
+        Cast e _ -> go e
+        ScfIfExpr e1 e2 e3 -> go e1 <> go e2 <> go e3
+        RegionRun e -> go e
+        Proj e _ -> go e
+        Assign e1 _ e2 -> go e1 <> go e2
+        Let{letVarExpr} -> go letVarExpr
+        Sequence es -> foldMap go es
+        FuncCall{funcCallArgs} -> foldMap go funcCallArgs
+        CompoundCall{compoundCallArgs} -> foldMap go compoundCallArgs
+        VariantCall{variantCallArg} -> go variantCallArg
+        NullableCall mExpr -> foldMap go mExpr
+        IntrinsicCall{intrinsicCallArgs} -> foldMap go intrinsicCallArgs
+        Match val dt -> go val <> goDecisionTree dt
+        LambdaExpr{lamClosure} ->
+            -- Don't recurse into body (runs at call time).
+            -- The nested lambda's captures that come from the outer scope
+            -- must also be captured by the outer lambda.
+            IntSet.fromList [v | (VarID v, _) <- lamClosure, v < outerC]
+        ClosureCall{closureCallTarget = VarID v, closureCallArgs} ->
+            (if v < outerC then IntSet.singleton v else IntSet.empty)
+                <> foldMap go closureCallArgs
+    goDecisionTree DTUncovered = IntSet.empty
+    goDecisionTree DTUnreachable = IntSet.empty
+    goDecisionTree (DTLeaf body _) = go body
+    goDecisionTree (DTGuard _ guard trueBr falseBr) =
+        go guard <> goDecisionTree trueBr <> goDecisionTree falseBr
+    goDecisionTree (DTSwitch _ cases) = goSwitchCases cases
+    goSwitchCases (DTSwitchInt m def) =
+        foldMap goDecisionTree (IntMap.elems m) <> goDecisionTree def
+    goSwitchCases (DTSwitchBool t f) = goDecisionTree t <> goDecisionTree f
+    goSwitchCases (DTSwitchCtor cs) = foldMap goDecisionTree (V.toList cs)
+    goSwitchCases (DTSwitchString m def) =
+        foldMap goDecisionTree (HashMap.elems m) <> goDecisionTree def
+    goSwitchCases (DTSwitchNullable j n) = goDecisionTree j <> goDecisionTree n
+
+-- | Try to interpret a function call as a call to a local closure variable.
+-- Returns Just an expression if successful, Nothing if the path is not a
+-- local closure variable.
+tryInferClosureCall ::
+    Path -> [Maybe Syn.Type] -> [Syn.Expr] -> SemiEff (Maybe Expr)
+tryInferClosureCall (Path name []) [] argExprs = do
+    varTable' <- State.gets varTable
+    lookupVar name varTable' >>= \case
+        Just (varID, ty) -> do
+            ty' <- runUnification $ force ty
+            case ty' of
+                TypeClosure argTys retTy -> do
+                    if length argExprs /= length argTys
+                        then do
+                            addErrReportMsg $
+                                "Closure expects "
+                                    <> T.pack (show (length argTys))
+                                    <> " arguments, but got "
+                                    <> T.pack (show (length argExprs))
+                            Just <$> exprWithSpan TypeBottom Poison
+                        else do
+                            argExprs' <- zipWithM checkType argExprs argTys
+                            Just
+                                <$> exprWithSpan
+                                    retTy
+                                    ClosureCall
+                                        { closureCallTarget = varID
+                                        , closureCallArgs = argExprs'
+                                        }
+                _ -> return Nothing
+        Nothing -> return Nothing
+tryInferClosureCall _ _ _ = return Nothing
 
 -- Binary operations
 --          Г, Num U |- U <- x, y -> U

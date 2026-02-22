@@ -287,9 +287,9 @@ closureApplyCodegen target arg (resVal, resTy) = emitBuilderLineM $ do
     return $
         resVal'
             <> " = reussir.closure.apply ("
-            <> target'
-            <> ") ("
             <> arg'
+            <> ") to ("
+            <> target'
             <> ") : "
             <> resTy'
 

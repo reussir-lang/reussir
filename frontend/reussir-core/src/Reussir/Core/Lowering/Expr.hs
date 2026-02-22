@@ -2,10 +2,10 @@
 
 module Reussir.Core.Lowering.Expr where
 
-import Control.Monad (forM_, when)
+import Control.Monad (foldM, forM_, when)
 import Data.Maybe (maybeToList)
 import Data.Scientific (Scientific, toBoundedInteger)
-import Effectful (inject)
+import Effectful (inject, liftIO)
 import Reussir.Codegen.Context.Symbol (Symbol, verifiedSymbol)
 import Reussir.Parser.Types.Lexer (Identifier (unIdentifier), Path (..))
 
@@ -54,6 +54,7 @@ import Reussir.Core.Data.Integral qualified as Int
 import Reussir.Core.Data.Operator qualified as Sem
 import Reussir.Core.Data.Ownership qualified as Own
 import Reussir.Core.Lowering.DecisionTree qualified as DT
+import Reussir.Core.Ownership (analyzeClosureBody)
 import Reussir.Core.Uitls.HashTable qualified as H
 
 createConstant :: IR.Type -> Scientific -> LoweringEff IR.TypedValue
@@ -487,6 +488,106 @@ lowerExprInBlock (Full.Assign dst idx src) _ = do
         _ -> error $ "assign to non-flex rc types: " ++ show dstTy
 lowerExprInBlock (Full.Match scrutinee dt) ty =
     DT.lowerMatch scrutinee dt ty
+lowerExprInBlock (Full.LambdaExpr{Full.lamClosure, Full.lamArgs, Full.lamBody}) _ = do
+    -- Convert IR types for captures, args, and return type
+    capIRTys <- mapM (inject . convertType . snd) lamClosure
+    argIRTys <- mapM (inject . convertType . snd) lamArgs
+    retIRTy <- inject $ convertType (Full.exprType lamBody)
+    -- Look up capture source values from the outer varMap
+    outerVarMap <- State.gets @LocalLoweringContext varMap
+    let capSrcVals =
+            map
+                ( \(VarID vid) ->
+                    case IntMap.lookup (fromIntegral vid) outerVarMap of
+                        Just val -> val
+                        Nothing -> error $ "Capture variable not found: " ++ show vid
+                )
+                (map fst lamClosure)
+    -- Run body ownership analysis with all closure params (captures + args)
+    recordTable <- Reader.asks recordInstances
+    bodyAnnotations <-
+        liftIO $ analyzeClosureBody recordTable (lamClosure ++ lamArgs) lamBody
+    -- Allocate fresh SSA values for the closure body block args (captures ++ args)
+    capBodyVals <- mapM (\irTy -> (, irTy) <$> nextValue) capIRTys
+    argBodyVals <- mapM (\irTy -> (, irTy) <$> nextValue) argIRTys
+    let allBodyParamVals = capBodyVals ++ argBodyVals
+    -- Build the wide closure IR type (captures + lambda args -> ret)
+    let wideClosureInner = IR.TypeClosure $ IR.Closure (capIRTys ++ argIRTys) retIRTy
+    let wideClosureTy =
+            IR.TypeRc $
+                IR.Rc
+                    { IR.rcBoxInner = wideClosureInner
+                    , IR.rcBoxCapability = IRType.Shared
+                    , IR.rcBoxAtomicity = IR.NonAtomic
+                    }
+    wideResVal <- nextValue
+    let wideTypedVal = (wideResVal, wideClosureTy)
+    -- Lower the body block: bind params via withVar, override ownership annotations
+    let paramBindings =
+            zip (map fst lamClosure) capBodyVals ++ zip (map fst lamArgs) argBodyVals
+    bodyBlock <-
+        Reader.local (\ctx -> ctx{ownershipAnnotations = bodyAnnotations}) $
+            foldr
+                (\(vid, val) acc -> withVar vid val acc)
+                ( lowerExprAsBlock lamBody allBodyParamVals $ \bodyRes ->
+                    addIRInstr (IR.Yield IR.YieldClosure bodyRes)
+                )
+                paramBindings
+    -- Emit ClosureCreate with the wide closure type
+    addIRInstr $ IR.ClosureCreate bodyBlock wideTypedVal
+    -- Narrow via ClosureApply for each captured variable (peeling from front)
+    let applyCapture prevTypedVal@(_, prevIRTy) capSrcVal =
+            case prevIRTy of
+                IR.TypeRc (IR.Rc (IR.TypeClosure (IR.Closure (_ : restArgs) ret)) atm cap) -> do
+                    let narrowTy =
+                            IR.TypeRc $
+                                IR.Rc
+                                    (IR.TypeClosure $ IR.Closure restArgs ret)
+                                    atm
+                                    cap
+                    narrowResVal <- nextValue
+                    let narrowTypedVal = (narrowResVal, narrowTy)
+                    addIRInstr $ IR.ClosureApply prevTypedVal capSrcVal narrowTypedVal
+                    pure narrowTypedVal
+                _ -> error $ "ClosureApply narrowing: unexpected type " ++ show prevIRTy
+    finalVal <- foldM applyCapture wideTypedVal capSrcVals
+    pure $ Just finalVal
+lowerExprInBlock (Full.ClosureCall{Full.closureCallTarget = closureVarID, Full.closureCallArgs}) ty = do
+    -- Look up the closure value from varMap
+    varMap' <- State.gets @LocalLoweringContext varMap
+    let closureTypedVal =
+            case IntMap.lookup (fromIntegral (unVarID closureVarID)) varMap' of
+                Just v -> v
+                Nothing -> error $ "Closure variable not found: " ++ show closureVarID
+    -- Lower each argument expression
+    argTypedVals <- mapM (fmap tyValOrICE . lowerExpr) closureCallArgs
+    -- Apply each argument to progressively narrow the closure
+    let applyArg prevTypedVal@(_, prevIRTy) argTypedVal =
+            case prevIRTy of
+                IR.TypeRc (IR.Rc (IR.TypeClosure (IR.Closure (_ : restArgs) ret)) atm cap) -> do
+                    let narrowTy =
+                            IR.TypeRc $
+                                IR.Rc
+                                    (IR.TypeClosure $ IR.Closure restArgs ret)
+                                    atm
+                                    cap
+                    narrowResVal <- nextValue
+                    let narrowTypedVal = (narrowResVal, narrowTy)
+                    addIRInstr $ IR.ClosureApply prevTypedVal argTypedVal narrowTypedVal
+                    pure narrowTypedVal
+                _ -> error $ "ClosureApply (call): unexpected type " ++ show prevIRTy
+    appliedVal <- foldM applyArg closureTypedVal argTypedVals
+    -- Eval the fully-applied closure
+    retTy <- inject $ convertType ty
+    case ty of
+        Full.TypeUnit -> do
+            addIRInstr $ IR.ClosureEval appliedVal Nothing
+            pure Nothing
+        _ -> do
+            retVal <- nextValue
+            let retTypedVal = (retVal, retTy)
+            addIRInstr $ IR.ClosureEval appliedVal (Just retTypedVal)
+            pure $ Just retTypedVal
 lowerExprInBlock kind ty =
     error $
         "Detailed lowerExprInBlock implementation missing for "

@@ -107,6 +107,8 @@ analyzeGenericFlowInExpr expr = do
         Assign dst _ src -> analyzeGenericFlowInExpr dst >> analyzeGenericFlowInExpr src
         IntrinsicCall _ args -> mapM_ analyzeGenericFlowInExpr args
         Match val dt -> analyzeGenericFlowInExpr val >> analyzeGenericFlowInDT dt
+        LambdaExpr _ _ body -> analyzeGenericFlowInExpr body
+        ClosureCall _ args -> mapM_ analyzeGenericFlowInExpr args
 
 analyzeGenericFlowInDT :: DecisionTree -> GlobalSemiEff ()
 analyzeGenericFlowInDT DTUncovered = pure ()

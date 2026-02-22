@@ -154,6 +154,14 @@ convertSemiExpr semiExpr = do
                 scrutinee' <- convertSemiExpr scrutinee
                 dt' <- convertDecisionTree dt
                 exprWithSpan ty $ Match scrutinee' dt'
+            SemiExpr.LambdaExpr closure args body -> do
+                closure' <- mapM (\(vid, t) -> (vid,) <$> convertTy t) closure
+                args' <- mapM (\(vid, t) -> (vid,) <$> convertTy t) args
+                body' <- convertSemiExpr body
+                exprWithSpan ty $ LambdaExpr closure' args' body'
+            SemiExpr.ClosureCall target callArgs -> do
+                callArgs' <- mapM convertSemiExpr callArgs
+                exprWithSpan ty $ ClosureCall target callArgs'
 
 hoistRcWrapping :: Type -> ExprKind -> FullEff Expr
 hoistRcWrapping ty e = do

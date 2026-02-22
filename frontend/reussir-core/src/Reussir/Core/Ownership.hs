@@ -181,6 +181,7 @@ which emits the actual @reussir.rc.inc@ and @reussir.rc.dec@ MLIR operations.
 -}
 module Reussir.Core.Ownership (
     analyzeFunction,
+    analyzeClosureBody,
     isRC,
     isRR,
 ) where
@@ -372,6 +373,33 @@ analyzeFunction tbl func = case Full.funcBody func of
         let finalState'' = emitEndOfScopeDecs finalState' (Full.exprID body)
         pure $ OwnershipAnnotations (asAnnotations finalState'')
 
+-- | Analyze ownership for a closure body given explicit (VarID, Type) pairs.
+-- Similar to analyzeFunction but takes params with their actual VarIDs instead
+-- of using sequential indices, and takes the body Expr directly.
+analyzeClosureBody ::
+    Full.FullRecordTable ->
+    [(VarID, Full.Type)] ->
+    Full.Expr ->
+    IO OwnershipAnnotations
+analyzeClosureBody tbl params body = do
+    initialState <- initClosureOwnership tbl params emptyState
+    (finalState, bodyFlux) <- analyzeExpr tbl body initialState
+    let finalState' = consumeFreeVars bodyFlux finalState
+    let finalState'' = emitEndOfScopeDecs finalState' (Full.exprID body)
+    pure $ OwnershipAnnotations (asAnnotations finalState'')
+
+-- | Initialize ownership for closure parameters using their actual VarIDs
+initClosureOwnership ::
+    Full.FullRecordTable ->
+    [(VarID, Full.Type)] ->
+    AnalysisState ->
+    IO AnalysisState
+initClosureOwnership _ [] st = pure st
+initClosureOwnership tbl ((vid, ty) : rest) st = do
+    rr <- isRR tbl ty
+    let st' = if rr then grantOwnership vid st else st
+    initClosureOwnership tbl rest st'
+
 -- | Initialize ownership for function parameters
 initParamOwnership ::
     Full.FullRecordTable ->
@@ -497,6 +525,13 @@ collectFreeVars expr = case Full.exprKind expr of
     Full.RcWrap e -> collectFreeVars e
     Full.Match scr dt -> collectFreeVars scr <> collectFreeVarsDT dt
     Full.Sequence es -> IntSet.unions (map collectFreeVars es)
+    Full.LambdaExpr{Full.lamClosure} ->
+        -- Don't recurse into body (runs at call time, not creation time).
+        -- The captured vars are the outer free vars consumed at creation.
+        IntSet.fromList [unVarID vid | (vid, _) <- lamClosure]
+    Full.ClosureCall{Full.closureCallTarget = closureVarID, Full.closureCallArgs = args} ->
+        IntSet.singleton (unVarID closureVarID)
+            <> IntSet.unions (map collectFreeVars args)
 
 -- | Collect free variable references in a decision tree.
 collectFreeVarsDT :: Full.DecisionTree -> IntSet.IntSet
@@ -671,6 +706,23 @@ analyzeExpr tbl expr st = do
             analyzeDecisionTree tbl dt st2 (Full.exprType scrutinee) scrutVarIDs
         -- Region run
         Full.RegionRun bodyExpr -> analyzeExpr tbl bodyExpr st
+        -- Lambda creation: captured vars are consumed at creation time.
+        -- The body runs at call time, so it is analyzed separately in the lowering phase.
+        Full.LambdaExpr{Full.lamClosure} -> do
+            rrCaptured <- filterM (\(_, capTy) -> isRR tbl capTy) lamClosure
+            let flux =
+                    emptyFlux
+                        { fluxFreeVars =
+                            IntSet.fromList [unVarID vid | (vid, _) <- rrCaptured]
+                        }
+            pure (st, flux)
+        -- Closure call: the closure itself and all args are consumed.
+        Full.ClosureCall{Full.closureCallTarget = closureVarID, Full.closureCallArgs = args} -> do
+            -- Consume the closure variable (it's always RC)
+            let st1 = consumeOwnership closureVarID st
+            -- Consume all args (ownership transfers to callee)
+            st2 <- analyzeConsumedArgs tbl args st1
+            pure (st2, emptyFlux)
 
 {- | Analyze a sequence of expressions with early dec placement.
 
@@ -777,6 +829,7 @@ analyzeSequenceEarly tbl ((e, suffixVars) : rest) st scopedVars =
                 Full.VariantCall{} -> emitSequenceLevelIncs e suffixVars st
                 Full.NullableCall{} -> emitSequenceLevelIncs e suffixVars st
                 Full.RcWrap{} -> emitSequenceLevelIncs e suffixVars st
+                Full.ClosureCall{} -> emitSequenceLevelIncs e suffixVars st
                 _ -> pure st
             (st1, _) <- analyzeExpr tbl e st0
             -- Emit early decs for owned variables no longer needed

@@ -1,0 +1,105 @@
+// RUN: %reussir-elab --mode semi %s | %FileCheck %s
+// RUN: %reussir-elab --mode full %s | %FileCheck %s --check-prefix=FULL
+// RUN: %reussir-compiler %s -t mlir -o %t.mlir
+// RUN: %FileCheck %s --check-prefix=CHECK-MLIR < %t.mlir
+// RUN: %reussir-compiler %s -o %t.o
+// RUN: %cc %t.o %S/closure.c -o %t.exe \
+// RUN:    -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// Shared struct used for RC ownership tests (shared/RC by default)
+struct RcBox {
+    val: i64
+}
+
+// Test: simple identity closure with explicit type annotation
+// CHECK-DAG: fn test_identity
+// CHECK-DAG: |v0: i32| {
+// CHECK-DAG: (v0)(42.0 : i32) : i32
+fn test_identity() -> i32 {
+    let id: i32 -> i32 = |x: i32| x;
+    id(42)
+}
+
+// Test: bidirectional check -- arg type flows in from let annotation (no explicit x:T)
+// CHECK-DAG: fn test_bidirectional
+fn test_bidirectional() -> i32 {
+    let id: i32 -> i32 = |x| x;
+    id(42)
+}
+
+// Test: closure that captures an outer variable
+// CHECK-DAG: fn test_capture
+// CHECK-DAG: [capture v0: i32]
+// CHECK-DAG: (v1 + v0) : i32
+fn test_capture() -> i32 {
+    let n: i32 = 5;
+    let add_n: i32 -> i32 = |x: i32| x + n;
+    add_n(10)
+}
+
+// Test: higher-order function accepting a closure parameter
+// CHECK-DAG: fn apply(v0 (f): (i32) -> i32, v1 (x): i32) -> i32
+// CHECK-DAG: (v0)(v1) : i32
+fn apply(f: i32 -> i32, x: i32) -> i32 {
+    f(x)
+}
+
+// Test: passing a lambda to a higher-order function (bidirectional from param type)
+// CHECK-DAG: fn test_higher_order
+// CHECK-DAG: apply(|v0: i32| {
+fn test_higher_order() -> i32 {
+    apply(|x| x + 1, 10)
+}
+
+// Full mode: closures should be wrapped in Rc<..., Shared>
+// FULL-DAG: Rc<(i32) -> i32, Shared>
+
+// Test: closure capturing an RC (shared) value.
+// The captured RC value must be dec'd inside the closure body after its last use.
+// A dummy i32 arg is used since zero-arg closure types ("() -> T") are not
+// yet part of the type grammar.
+// CHECK-DAG: fn test_rc_closure
+// CHECK-DAG: [capture
+// FULL-DAG: Rc<(i32) -> i64, Shared>
+fn test_rc_closure() -> i64 {
+    let n = RcBox { val: 42 };
+    let get_val: i32 -> i64 = |unused: i32| n.val;
+    get_val(0)
+}
+
+extern "C" trampoline "test_rc_closure_ffi" = test_rc_closure;
+
+// Test: closure receiving an RC value as argument.
+// The RC argument is consumed (moved into the closure body), so no extra
+// inc/dec is needed at the call site; the closure body dec's it after use.
+// CHECK-DAG: fn test_rc_arg_closure
+fn test_rc_arg_closure() -> i64 {
+    let f: RcBox -> i64 = |x: RcBox| x.val;
+    let b = RcBox { val: 100 };
+    f(b)
+}
+
+extern "C" trampoline "test_rc_arg_closure_ffi" = test_rc_arg_closure;
+
+// --- MLIR ownership checks ---
+// Closures with RC captures/arguments must emit rc.dec inside the closure body
+// to release the captured/consumed value after its last use.
+
+// test_rc_arg_closure: closure body receives RcBox as an argument, borrows it
+// to read val, then dec's it; the call site applies b then evals.
+// CHECK-MLIR-LABEL: func.func @"_RC19test_rc_arg_closure"
+// CHECK-MLIR: reussir.closure.create
+// CHECK-MLIR: reussir.rc.dec
+// CHECK-MLIR: reussir.closure.yield
+// CHECK-MLIR: reussir.closure.apply
+// CHECK-MLIR: reussir.closure.eval
+
+// test_rc_closure: closure body holds captured n (RcBox) and dec's it after
+// reading val; the outer function applies n at closure creation time.
+// CHECK-MLIR-LABEL: func.func @"_RC15test_rc_closure"
+// CHECK-MLIR: reussir.closure.create
+// CHECK-MLIR: reussir.rc.dec
+// CHECK-MLIR: reussir.closure.yield
+// CHECK-MLIR: reussir.closure.apply
+// CHECK-MLIR: reussir.closure.eval

@@ -62,6 +62,20 @@ data ExprKind
         { intrinsicCallTarget :: Path
         , intrinsicCallArgs :: [Expr]
         }
+    | LambdaExpr
+        { lamClosure :: [(VarID, Type)]
+        -- ^ Captured free variables (implementation detail, not in the user-visible type)
+        , lamArgs :: [(VarID, Type)]
+        -- ^ Declared parameters
+        , lamBody :: Expr
+        -- ^ Body expression (runs at call time, not creation time)
+        }
+    | ClosureCall
+        { closureCallTarget :: VarID
+        -- ^ Local variable holding the closure
+        , closureCallArgs :: [Expr]
+        -- ^ Arguments to pass
+        }
     deriving (Show, Eq)
 
 newtype PatternVarRef = PatternVarRef {unPatternVarRef :: Seq.Seq Int}
