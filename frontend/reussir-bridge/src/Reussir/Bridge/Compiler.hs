@@ -5,6 +5,7 @@ module Reussir.Bridge.Compiler (
     -- * Compilation
     compileForNativeMachine,
     compileForTarget,
+    compileForTargetWithModels,
     compileProgram,
     hasTPDE,
     getNativeTargetTriple,
@@ -136,6 +137,44 @@ compileForTarget ::
     Maybe ByteString ->
     IO ()
 compileForTarget mlirModule sourceName outputFile target opt logLevel mTriple mCPU mFeatures = do
+    compileForTargetWithModels
+        mlirModule
+        sourceName
+        outputFile
+        target
+        opt
+        logLevel
+        mTriple
+        mCPU
+        mFeatures
+        CodeModelDefault
+        RelocationModelDefault
+
+compileForTargetWithModels ::
+    -- | MLIR module content
+    ByteString ->
+    -- | Source name (for diagnostics)
+    String ->
+    -- | Output file path
+    FilePath ->
+    -- | Output target format
+    OutputTarget ->
+    -- | Optimization level
+    OptOption ->
+    -- | Log level
+    LogLevel ->
+    -- | Optional target triple (Nothing = native)
+    Maybe ByteString ->
+    -- | Optional target CPU (Nothing = native)
+    Maybe ByteString ->
+    -- | Optional target features (Nothing = native)
+    Maybe ByteString ->
+    -- | Target code model
+    CodeModel ->
+    -- | Target relocation model
+    RelocationModel ->
+    IO ()
+compileForTargetWithModels mlirModule sourceName outputFile target opt logLevel mTriple mCPU mFeatures codeModel relocationModel = do
     triple <- maybe getNativeTargetTriple pure mTriple
     -- When a custom triple is specified, default CPU/features to empty strings
     -- so LLVM picks appropriate defaults for the target architecture.
@@ -154,8 +193,8 @@ compileForTarget mlirModule sourceName outputFile target opt logLevel mTriple mC
             , targetTriple = triple
             , targetCPU = cpu
             , targetFeatures = features
-            , targetCodeModel = CodeModelDefault
-            , targetRelocationModel = RelocationModelDefault
+            , targetCodeModel = codeModel
+            , targetRelocationModel = relocationModel
             }
 
 compileProgram :: Program -> IO ()
