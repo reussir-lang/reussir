@@ -2,6 +2,7 @@
 
 module Main where
 
+import Data.Char (toLower)
 import Effectful (liftIO, runEff)
 import Effectful.Prim (runPrim)
 import Log (LogLevel (..))
@@ -13,6 +14,7 @@ import Text.Megaparsec (errorBundlePretty, runParser)
 
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
+import Data.Text.Encoding qualified as TE
 import Effectful.Log qualified as L
 import Reussir.Bridge qualified as B
 import Reussir.Codegen qualified as C
@@ -29,6 +31,7 @@ data Args = Args
     , argTargetTriple :: Maybe String
     , argTargetCPU :: Maybe String
     , argTargetFeatures :: Maybe String
+    , argRelocationMode :: B.RelocationModel
     }
 
 argsParser :: Parser Args
@@ -65,6 +68,12 @@ argsParser =
             (strOption (long "target-cpu" <> metavar "CPU" <> help "Target CPU (default: native)"))
         <*> optional
             (strOption (long "target-features" <> metavar "FEATURES" <> help "Target features (default: native)"))
+        <*> option
+            parseRelocationMode
+            ( long "relocation-mode"
+                <> value B.RelocationModelDefault
+                <> help "Relocation mode (default, static, pic, dynamic-no-pic, ropi, rwpi, ropi-rwpi)"
+            )
 
 parseOptLevel :: ReadM B.OptOption
 parseOptLevel = eitherReader $ \s -> case s of
@@ -93,6 +102,20 @@ parseLogLevel = eitherReader $ \s -> case s of
     "debug" -> Right B.LogDebug
     "trace" -> Right B.LogTrace
     _ -> Left $ "Unknown log level: " ++ s
+
+parseRelocationMode :: ReadM B.RelocationModel
+parseRelocationMode = eitherReader $ \s -> case map toLower s of
+    "default" -> Right B.RelocationModelDefault
+    "static" -> Right B.RelocationModelStatic
+    "pic" -> Right B.RelocationModelPIC
+    "dynamic" -> Right B.RelocationModelDynamic
+    "dynamic-no-pic" -> Right B.RelocationModelDynamic
+    "dynamic-nopic" -> Right B.RelocationModelDynamic
+    "ropi" -> Right B.RelocationModelROPI
+    "rwpi" -> Right B.RelocationModelRWPI
+    "ropi-rwpi" -> Right B.RelocationModelROPI_RWPI
+    "ropi_rwpi" -> Right B.RelocationModelROPI_RWPI
+    _ -> Left $ "Unknown relocation mode: " ++ s
 
 main :: IO ()
 main = do
@@ -129,8 +152,21 @@ main = do
                             MLIR -> do
                                 mlirText <- C.emitModuleToText module'
                                 liftIO $ TIO.writeFile (argOutputFile args) mlirText
-                            Backend _ ->
-                                C.emitModuleToBackend module'
+                            Backend target -> do
+                                mlirText <- C.emitModuleToText module'
+                                liftIO $
+                                    B.compileForTargetWithModels
+                                        (TE.encodeUtf8 mlirText)
+                                        (argModuleName args)
+                                        (argOutputFile args)
+                                        target
+                                        (argOptLevel args)
+                                        (argLogLevel args)
+                                        (TE.encodeUtf8 . T.pack <$> argTargetTriple args)
+                                        (TE.encodeUtf8 . T.pack <$> argTargetCPU args)
+                                        (TE.encodeUtf8 . T.pack <$> argTargetFeatures args)
+                                        B.CodeModelDefault
+                                        (argRelocationMode args)
   where
     toEffLogLevel :: B.LogLevel -> LogLevel
     toEffLogLevel = \case

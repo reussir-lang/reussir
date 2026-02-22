@@ -28,6 +28,7 @@ module Reussir.Bridge (
     -- * Compilation
     compileForNativeMachine,
     compileForTarget,
+    compileForTargetWithModels,
     compileProgram,
     hasTPDE,
     getNativeTargetTriple,
