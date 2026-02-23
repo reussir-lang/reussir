@@ -37,6 +37,7 @@ jobs:
           path: |
             C:/Users/runneradmin/AppData/Local/cabal
             C:/ghcup
+            D:/devdrive/dist-newstyle
           key: windows-clang64-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
           restore-keys: |
             windows-clang64-cabal-
