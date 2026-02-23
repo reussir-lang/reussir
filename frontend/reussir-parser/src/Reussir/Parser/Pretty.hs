@@ -66,7 +66,10 @@ instance PrettyColored Type where
     prettyColored TypeBool = typeName "bool"
     prettyColored TypeStr = typeName "str"
     prettyColored TypeUnit = typeName "unit"
-    prettyColored (TypeArrow t1 t2) = parens (prettyColored t1 <+> "->" <+> prettyColored t2)
+    prettyColored (TypeArrow args ret) =
+        let prettyArgs [a] = prettyColored a
+            prettyArgs as = parens (commaSep (map prettyColored as))
+         in parens (prettyArgs args <+> "->" <+> prettyColored ret)
     prettyColored (TypeSpanned w) = prettyColored (spanValue w)
     prettyColored TypeBottom = typeName "⊥"
 
@@ -158,10 +161,11 @@ instance PrettyColored Expr where
       where
         prettyTyArg Nothing = "_"
         prettyTyArg (Just t) = prettyColored t
-    prettyColored (Lambda (LambdaExpr args e)) =
-        operator "\\"
+    prettyColored (Lambda (LambdaExpr args e rt)) =
+        operator "|"
             <> commaSep (map prettyArg args)
-            <+> operator "->"
+            <> operator "|"
+            <+> maybe mempty (\x -> operator "->" <+> prettyColored x) rt
             <+> prettyColored e
       where
         prettyArg (n, Nothing) = prettyColored n
@@ -281,8 +285,11 @@ instance PrettyColored Stmt where
             <+> literal (dquotes (pretty sym))
             <+> operator "="
             <+> prettyColored func
-            <> if null tys then emptyDoc else angles (commaSep (map prettyColored tys))
-            <> operator ";"
+            <> if null tys
+                then emptyDoc
+                else
+                    angles (commaSep (map prettyColored tys))
+                        <> operator ";"
 
 commaSep :: (Foldable t) => t (Doc AnsiStyle) -> Doc AnsiStyle
 commaSep = concatWith (surround (comma <> space))

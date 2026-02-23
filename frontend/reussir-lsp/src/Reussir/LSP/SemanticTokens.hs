@@ -98,14 +98,15 @@ collectType content (Syn.TypeSpanned (WithSpan ty start end)) =
         Syn.TypeStr -> mkToken content start end LSP.SemanticTokenTypes_Type []
         Syn.TypeUnit -> mkToken content start end LSP.SemanticTokenTypes_Type []
         Syn.TypeBottom -> mkToken content start end LSP.SemanticTokenTypes_Type []
-        Syn.TypeArrow a b -> collectType content a ++ collectType content b
+        Syn.TypeArrow as b -> concatMap (collectType content) as ++ collectType content b
         Syn.TypeSpanned _ -> collectType content ty
 collectType content other = collectTypeInner content other
 
 -- | Walk into type structure without the outer span.
 collectTypeInner :: T.Text -> Syn.Type -> [SemanticTokenAbsolute]
 collectTypeInner content (Syn.TypeExpr _ args) = concatMap (collectType content) args
-collectTypeInner content (Syn.TypeArrow a b) = collectType content a ++ collectType content b
+collectTypeInner content (Syn.TypeArrow as b) =
+    concatMap (collectType content) as ++ collectType content b
 collectTypeInner content (Syn.TypeSpanned ws) = collectType content (Syn.TypeSpanned ws)
 collectTypeInner _ _ = []
 
@@ -122,8 +123,10 @@ collectExpr content (Syn.Let _name mTy val) =
     maybe [] (\(ty, _) -> collectType content ty) mTy
         ++ collectExpr content val
 collectExpr content (Syn.ExprSeq es) = concatMap (collectExpr content) es
-collectExpr content (Syn.Lambda (Syn.LambdaExpr args body)) = 
-    concatMap (\(_, ty) -> maybe [] (collectType content) ty) args ++ collectExpr content body
+collectExpr content (Syn.Lambda (Syn.LambdaExpr args body retTy)) =
+    concatMap (\(_, ty) -> maybe [] (collectType content) ty) args
+        ++ maybe [] (collectType content) retTy
+        ++ collectExpr content body
 collectExpr content (Syn.Match scrutinee arms) =
     collectExpr content scrutinee
         ++ concatMap (\(pat, body) -> collectPattern content pat ++ collectExpr content body) arms

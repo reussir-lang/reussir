@@ -55,7 +55,7 @@ data Type
     | -- | Unit type (similar to void)
       TypeUnit
     | -- | Arrow type
-      TypeArrow Type Type
+      TypeArrow [Type] Type
     | -- | Bottom type
       TypeBottom
     | -- | Spanned

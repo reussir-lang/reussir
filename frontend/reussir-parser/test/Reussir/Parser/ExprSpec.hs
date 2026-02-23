@@ -20,7 +20,7 @@ stripExprSpans (If e1 e2 e3) = If (stripExprSpans e1) (stripExprSpans e2) (strip
 stripExprSpans (Cast t e) = Cast t (stripExprSpans e)
 stripExprSpans (Let n t e) = Let n t (stripExprSpans e)
 stripExprSpans (FuncCallExpr (FuncCall p tys es)) = FuncCallExpr (FuncCall p tys (map stripExprSpans es))
-stripExprSpans (Lambda (LambdaExpr args e)) = Lambda (LambdaExpr args (stripExprSpans e))
+stripExprSpans (Lambda (LambdaExpr args e rt)) = Lambda (LambdaExpr args (stripExprSpans e) rt)
 stripExprSpans (Match e cases) = Match (stripExprSpans e) (fmap (\(p, ex) -> (p, stripExprSpans ex)) cases)
 stripExprSpans (RegionalExpr e) = RegionalExpr (stripExprSpans e)
 stripExprSpans (CtorCallExpr (CtorCall p tys args)) = CtorCallExpr (CtorCall p tys (map (\(i, e) -> (i, stripExprSpans e)) args))
@@ -148,11 +148,22 @@ spec = do
     describe "parseLambda" $ do
         it "parses simple lambda" $
             (stripExprSpans <$> parse parseExpr "" "|x: i32| x")
-                `shouldParse` Lambda (LambdaExpr [(Identifier "x", Just (TypeIntegral (Signed 32)))] (Var (Path "x" [])))
+                `shouldParse` Lambda
+                    (LambdaExpr [(Identifier "x", Just (TypeIntegral (Signed 32)))] (Var (Path "x" [])) Nothing)
 
         it "parses mutiple args lambda" $
             (stripExprSpans <$> parse parseExpr "" "|x, y: i32| { x }")
-                `shouldParse` Lambda (LambdaExpr [(Identifier "x", Nothing), (Identifier "y", Just (TypeIntegral (Signed 32)))] (ExprSeq [Var (Path "x" [])]))
+                `shouldParse` Lambda
+                    (LambdaExpr [(Identifier "x", Nothing), (Identifier "y", Just (TypeIntegral (Signed 32)))] (ExprSeq [Var (Path "x" [])]) Nothing)
+
+        it "parses lambda with explicit return type" $
+            (stripExprSpans <$> parse parseExpr "" "|x: i32| -> bool x > 0")
+                `shouldParse` Lambda
+                    ( LambdaExpr
+                        [(Identifier "x", Just (TypeIntegral (Signed 32)))]
+                        (BinOpExpr Gt (Var (Path "x" [])) (ConstExpr (ConstInt 0)))
+                        (Just TypeBool)
+                    )
 
     describe "parseExpr" $ do
         it "parses less than or equal with potential type arg ambiguity" $

@@ -100,19 +100,47 @@ spec = do
     describe "parseArrowType" $ do
         it "parses simple arrow" $
             parse parseArrowType "" "i32 -> bool"
-                `shouldParse` TypeArrow (TypeIntegral (Signed 32)) TypeBool
+                `shouldParse` TypeArrow [TypeIntegral (Signed 32)] TypeBool
 
         it "parses right associative arrow" $
             parse parseArrowType "" "i32 -> i32 -> bool"
                 `shouldParse` TypeArrow
-                    (TypeIntegral (Signed 32))
-                    (TypeArrow (TypeIntegral (Signed 32)) TypeBool)
+                    [TypeIntegral (Signed 32)]
+                    (TypeArrow [TypeIntegral (Signed 32)] TypeBool)
 
         it "parses arrow with parens" $
             parse parseArrowType "" "(i32 -> i32) -> bool"
                 `shouldParse` TypeArrow
-                    (TypeArrow (TypeIntegral (Signed 32)) (TypeIntegral (Signed 32)))
+                    [TypeArrow [TypeIntegral (Signed 32)] (TypeIntegral (Signed 32))]
                     TypeBool
+
+        it "parses mixed tuple and arrow args" $
+            parse parseArrowType "" "(i32 -> i32, i32) -> (i32 -> i32) -> i32"
+                `shouldParse` TypeArrow
+                    [ TypeArrow [TypeIntegral (Signed 32)] (TypeIntegral (Signed 32))
+                    , TypeIntegral (Signed 32)
+                    ]
+                    ( TypeArrow
+                        [TypeArrow [TypeIntegral (Signed 32)] (TypeIntegral (Signed 32))]
+                        (TypeIntegral (Signed 32))
+                    )
+
+        it "parses tuple args on both sides of a right-associative chain" $
+            parse parseArrowType "" "(i32, i32) -> (i32, i32) -> i32"
+                `shouldParse` TypeArrow
+                    [TypeIntegral (Signed 32), TypeIntegral (Signed 32)]
+                    ( TypeArrow
+                        [TypeIntegral (Signed 32), TypeIntegral (Signed 32)]
+                        (TypeIntegral (Signed 32))
+                    )
+
+        it "parses tuple of higher-order args" $
+            parse parseArrowType "" "((i32 -> i32), (i32 -> i32)) -> i32"
+                `shouldParse` TypeArrow
+                    [ TypeArrow [TypeIntegral (Signed 32)] (TypeIntegral (Signed 32))
+                    , TypeArrow [TypeIntegral (Signed 32)] (TypeIntegral (Signed 32))
+                    ]
+                    (TypeIntegral (Signed 32))
 
     describe "parenthesized types" $ do
         it "parses parenthesized type" $

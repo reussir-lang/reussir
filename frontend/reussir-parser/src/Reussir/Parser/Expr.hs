@@ -141,9 +141,10 @@ parseLambda = do
     _ <- char '|' *> space
     args <- parseLambdaArg `sepBy` comma
     _ <- char '|' *> space
+    ret <- optional (arrow *> parseType)
     body <- parseExpr
 
-    return (Lambda (LambdaExpr args body))
+    return (Lambda (LambdaExpr args body ret))
   where
     parseLambdaArg = do
         name <- parseIdentifier

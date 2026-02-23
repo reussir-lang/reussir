@@ -289,16 +289,16 @@ evalType Syn.TypeBool = return TypeBool
 evalType Syn.TypeStr = return TypeStr
 evalType Syn.TypeUnit = return TypeUnit
 evalType Syn.TypeBottom = return TypeBottom
-evalType (Syn.TypeArrow t1 t2) = do
-    t1' <- evalType t1
-    (args, ret) <- unfoldArrow t2
-    return $ TypeClosure (t1' : args) ret
+evalType (Syn.TypeArrow args retTy) = do
+    args' <- mapM evalType args
+    (restArgs, ret) <- unfoldArrow retTy
+    return $ TypeClosure (args' ++ restArgs) ret
   where
     unfoldArrow :: Syn.Type -> SemiEff ([Type], Type)
-    unfoldArrow (Syn.TypeArrow a b) = do
-        a' <- evalType a
+    unfoldArrow (Syn.TypeArrow as b) = do
+        as' <- mapM evalType as
         (args, ret) <- unfoldArrow b
-        return (a' : args, ret)
+        return (as' ++ args, ret)
     unfoldArrow (Syn.TypeSpanned s) = unfoldArrow (spanValue s)
     unfoldArrow t = do
         t' <- evalType t
