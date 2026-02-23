@@ -12,6 +12,9 @@ permissions:
 jobs:
   build:
     runs-on: windows-2025
+    env:
+      REUSSIR_BUILD_DIR: /d/devdrive/build
+      REUSSIR_DIST_DIR: /d/devdrive/dist-newstyle
 
     steps:
       - name: Checkout code
@@ -22,13 +25,18 @@ jobs:
       - name: Restore file timestamps
         uses: chetan/git-restore-mtime-action@v2
 
+      - name: Setup Dev Drive
+        uses: samypr100/setup-dev-drive@v3
+        with:
+          drive-size: 8GB
+          mount-path: 'D:\devdrive'
+
       - name: Cache Cabal (Windows)
         uses: actions/cache@v4
         with:
           path: |
             C:/Users/runneradmin/AppData/Local/cabal
             C:/ghcup
-            dist-newstyle
           key: windows-clang64-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
           restore-keys: |
             windows-clang64-cabal-
@@ -82,7 +90,7 @@ jobs:
       - name: Configure CMake
         shell: msys2 {0}
         run: |
-          cmake -B build \
+          cmake -B "${REUSSIR_BUILD_DIR}" \
           -G Ninja \
           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
           -DREUSSIR_ENABLE_PEDANTIC=ON \
@@ -90,7 +98,7 @@ jobs:
 
       - name: Build
         shell: msys2 {0}
-        run: cmake --build build --parallel
+        run: cmake --build "${REUSSIR_BUILD_DIR}" --parallel
 
 
       - name: Run Integration Tests
@@ -98,15 +106,14 @@ jobs:
         run: |
           . /c/ghcup/env
           . .github/workflows/setup_path.sh
-          cmake --build build --target check
+          cmake --build "${REUSSIR_BUILD_DIR}" --target check
 
       - name: Build Haskell frontend
         shell: msys2 {0}
         run: |
           . /c/ghcup/env
           . .github/workflows/setup_path.sh
-          cabal update
-          cabal build all -j
+          cabal build all -j --builddir="${REUSSIR_DIST_DIR}"
 
       - name: Test Haskell frontend
         shell: msys2 {0}
@@ -114,4 +121,4 @@ jobs:
           . /c/ghcup/env
           . .github/workflows/setup_path.sh
           chcp.com 65001
-          cabal test all -j
+          cabal test all -j --builddir="${REUSSIR_DIST_DIR}"

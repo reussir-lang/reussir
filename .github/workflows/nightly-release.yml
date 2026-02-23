@@ -321,6 +321,8 @@ jobs:
 
   build-windows:
     runs-on: windows-2025
+    env:
+      REUSSIR_BUILD_DIR: /d/devdrive/build
 
     steps:
       - name: Checkout code
@@ -331,13 +333,18 @@ jobs:
       - name: Restore file timestamps
         uses: chetan/git-restore-mtime-action@v2
 
+      - name: Setup Dev Drive
+        uses: samypr100/setup-dev-drive@v3
+        with:
+          drive-size: 8GB
+          mount-path: 'D:\devdrive'
+
       - name: Cache Cabal (Windows)
         uses: actions/cache@v4
         with:
           path: |
             C:/Users/runneradmin/AppData/Local/cabal
             C:/ghcup
-            dist-newstyle
           key: windows-clang64-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
           restore-keys: |
             windows-clang64-cabal-
@@ -391,7 +398,7 @@ jobs:
       - name: Configure CMake
         shell: msys2 {0}
         run: |
-          cmake -B build \
+          cmake -B "${REUSSIR_BUILD_DIR}" \
           -G Ninja \
           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
           -DREUSSIR_ENABLE_PEDANTIC=ON \
@@ -399,14 +406,14 @@ jobs:
 
       - name: Build
         shell: msys2 {0}
-        run: cmake --build build --parallel
+        run: cmake --build "${REUSSIR_BUILD_DIR}" --parallel
 
       - name: Run Integration Tests
         shell: msys2 {0}
         run: |
           . /c/ghcup/env
           . .github/workflows/setup_path.sh
-          cmake --build build --target check
+          cmake --build "${REUSSIR_BUILD_DIR}" --target check
 
       - name: Package
         shell: msys2 {0}
@@ -420,21 +427,21 @@ jobs:
           for bin in reussir-opt reussir-translate reussir-compiler \
                      reussir-elab reussir-repl reussir-parser \
                      rustc cargo rustdoc; do
-            cp -a "build/bin/${bin}.exe" "${PREFIX}/bin/" 2>/dev/null || true
+            cp -a "${REUSSIR_BUILD_DIR}/bin/${bin}.exe" "${PREFIX}/bin/" 2>/dev/null || true
           done
 
           # Copy DLLs from build/bin (Windows puts DLLs next to executables)
-          cp -a build/bin/reussir_rt.dll "${PREFIX}/bin/" 2>/dev/null || true
-          cp -a build/bin/MLIRReussirBridge*.dll "${PREFIX}/bin/" 2>/dev/null || true
-          cp -a build/bin/LLVM*rust*.dll "${PREFIX}/bin/" 2>/dev/null || true
-          cp -a build/bin/rustc_driver*.dll "${PREFIX}/bin/" 2>/dev/null || true
+          cp -a "${REUSSIR_BUILD_DIR}/bin/reussir_rt.dll" "${PREFIX}/bin/" 2>/dev/null || true
+          cp -a ${REUSSIR_BUILD_DIR}/bin/MLIRReussirBridge*.dll "${PREFIX}/bin/" 2>/dev/null || true
+          cp -a ${REUSSIR_BUILD_DIR}/bin/LLVM*rust*.dll "${PREFIX}/bin/" 2>/dev/null || true
+          cp -a ${REUSSIR_BUILD_DIR}/bin/rustc_driver*.dll "${PREFIX}/bin/" 2>/dev/null || true
 
           # Copy system LLVM/MLIR DLLs
           cp -a /clang64/bin/libMLIR.dll "${PREFIX}/bin/" 2>/dev/null || true
           cp -a /clang64/bin/libLLVM*.dll "${PREFIX}/bin/" 2>/dev/null || true
 
           # Copy rustlib tree
-          cp -a build/lib/rustlib "${PREFIX}/lib/" 2>/dev/null || true
+          cp -a "${REUSSIR_BUILD_DIR}/lib/rustlib" "${PREFIX}/lib/" 2>/dev/null || true
 
           # Strip binaries
           strip "${PREFIX}"/bin/reussir-opt.exe "${PREFIX}"/bin/reussir-translate.exe 2>/dev/null || true
