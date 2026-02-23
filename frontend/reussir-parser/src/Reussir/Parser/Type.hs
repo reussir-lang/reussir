@@ -5,6 +5,7 @@ module Reussir.Parser.Type where
 
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Functor (($>))
+import Data.List (singleton)
 import Data.Maybe (fromMaybe)
 
 import Unicode.Char qualified as U
@@ -39,8 +40,6 @@ parseTypeAtom =
         , (string "unit" *> notFollowedBy (satisfy U.isXIDContinue) *> space $> TypeUnit)
             <?> "unit"
         , parseTypeExpr <?> "type expression"
-        , (between (string "(" *> space) (string ")" *> space) parseType)
-            <?> "parenthesized type"
         ]
 
 parseIntegralType :: Parser Type
@@ -68,10 +67,49 @@ parseFPType = try $ do
     space
     return (TypeFP t)
 
-parseArrowType :: Parser Type
-parseArrowType = makeExprParser parseTypeAtom table
+parseTypeList :: Parser [Type]
+parseTypeList =
+    try $
+        between (char '(' *> space) (char ')' *> space) $
+            sepBy1 parseType comma
+
+data MaybeArrow
+    = ArrowList [Type]
+    | ArrowSingle Type
+    | ArrowCons MaybeArrow MaybeArrow
+
+parseArrowAtom :: Parser MaybeArrow
+parseArrowAtom = choice [arrowList <$> parseTypeList, ArrowSingle <$> parseTypeAtom]
   where
-    table = [[InfixR (string "->" *> space $> TypeArrow)]]
+    arrowList [x] = ArrowSingle x
+    arrowList xs = ArrowList xs
+
+parseArrowSegments :: Parser MaybeArrow
+parseArrowSegments = makeExprParser parseArrowAtom table
+  where
+    table = [[InfixR (string "->" *> space $> ArrowCons)]]
+
+parseArrowType :: Parser Type
+parseArrowType = do
+    parsed <- parseArrowSegments
+    case maybeArrowToMaybeType parsed of
+        Just ty -> pure ty
+        Nothing ->
+            fail
+                "invalid arrow type: expected a single (non-tuple) return type at the end of the arrow chain; tuple syntax like `(a, b)` is only allowed in argument position"
+  where
+    maybeArrowToMaybeType :: MaybeArrow -> Maybe Type
+    maybeArrowToMaybeType (ArrowSingle ty) = Just ty
+    maybeArrowToMaybeType (ArrowList _) = Nothing
+    maybeArrowToMaybeType (ArrowCons lhs rhs) = do
+        lhsArgs <- maybeArrowToArgs lhs
+        rhsTy <- maybeArrowToMaybeType rhs
+        pure $ TypeArrow lhsArgs rhsTy
+
+    maybeArrowToArgs :: MaybeArrow -> Maybe [Type]
+    maybeArrowToArgs (ArrowSingle ty) = Just (singleton ty)
+    maybeArrowToArgs (ArrowList tys) = Just tys
+    maybeArrowToArgs arrowNode = singleton <$> maybeArrowToMaybeType arrowNode
 
 parseTypeExpr :: Parser Type
 parseTypeExpr = do

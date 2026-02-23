@@ -89,6 +89,7 @@ type FlexFlag = Bool
 data LambdaExpr = LambdaExpr
     { args :: [(Identifier, Maybe Type)]
     , body :: Expr
+    , retTy :: Maybe Type
     }
     deriving (Show, Eq)
 
