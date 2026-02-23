@@ -81,7 +81,6 @@ data MaybeArrow
 parseArrowAtom :: Parser MaybeArrow
 parseArrowAtom = choice [arrowList <$> parseTypeList, ArrowSingle <$> parseTypeAtom]
   where
-    arrowList [] = ArrowSingle TypeUnit
     arrowList [x] = ArrowSingle x
     arrowList xs = ArrowList xs
 
@@ -97,7 +96,7 @@ parseArrowType = do
         Just ty -> pure ty
         Nothing ->
             fail
-                "invalid arrow type: expected a single return type at the end of the arrow chain"
+                "invalid arrow type: expected a single (non-tuple) return type at the end of the arrow chain; tuple syntax like `(a, b)` is only allowed in argument position"
   where
     maybeArrowToMaybeType :: MaybeArrow -> Maybe Type
     maybeArrowToMaybeType (ArrowSingle ty) = Just ty

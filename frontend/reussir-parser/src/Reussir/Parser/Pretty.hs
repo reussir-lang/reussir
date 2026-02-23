@@ -165,9 +165,12 @@ instance PrettyColored Expr where
         operator "|"
             <> commaSep (map prettyArg args)
             <> operator "|"
-            <+> maybe mempty (\x -> operator "->" <+> prettyColored x) rt
-            <+> prettyColored e
+            <+> bodyDoc
       where
+        bodyDoc =
+            case rt of
+                Nothing -> prettyColored e
+                Just x -> operator "->" <+> prettyColored x <+> prettyColored e
         prettyArg (n, Nothing) = prettyColored n
         prettyArg (n, Just t) = prettyColored n <> operator ":" <+> prettyColored t
     prettyColored (Match e cases) =
@@ -285,11 +288,8 @@ instance PrettyColored Stmt where
             <+> literal (dquotes (pretty sym))
             <+> operator "="
             <+> prettyColored func
-            <> if null tys
-                then emptyDoc
-                else
-                    angles (commaSep (map prettyColored tys))
-                        <> operator ";"
+            <> (if null tys then emptyDoc else angles (commaSep (map prettyColored tys)))
+            <> operator ";"
 
 commaSep :: (Foldable t) => t (Doc AnsiStyle) -> Doc AnsiStyle
 commaSep = concatWith (surround (comma <> space))
