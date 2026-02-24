@@ -291,18 +291,8 @@ evalType Syn.TypeUnit = return TypeUnit
 evalType Syn.TypeBottom = return TypeBottom
 evalType (Syn.TypeArrow args retTy) = do
     args' <- mapM evalType args
-    (restArgs, ret) <- unfoldArrow retTy
-    return $ TypeClosure (args' ++ restArgs) ret
-  where
-    unfoldArrow :: Syn.Type -> SemiEff ([Type], Type)
-    unfoldArrow (Syn.TypeArrow as b) = do
-        as' <- mapM evalType as
-        (args, ret) <- unfoldArrow b
-        return (as' ++ args, ret)
-    unfoldArrow (Syn.TypeSpanned s) = unfoldArrow (spanValue s)
-    unfoldArrow t = do
-        t' <- evalType t
-        return ([], t')
+    ret' <- evalType retTy
+    return $ TypeClosure args' ret'
 
 -- | Convert a type to a type with explicit flexivity
 evalTypeWithFlexivity :: Syn.Type -> Bool -> SemiEff Type

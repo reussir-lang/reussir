@@ -905,6 +905,8 @@ mlir::Type getProjectedType(mlir::Type type, bool fieldCap, Capability refCap) {
               return Capability::field;
             return type.getDefaultCapability();
           })
+          .Case<ClosureType>(
+              [](ClosureType) -> Capability { return Capability::shared; })
           .Default([](mlir::Type) { return Capability::unspecified; });
   if (targetCap == Capability::field) {
     // Target capability is rigid unless the reference capability is flex
