@@ -70,6 +70,7 @@ jobs:
         shell: msys2 {0}
         run: |
           echo "GHCUP_MSYS2_ENV=CLANG64" >> $GITHUB_ENV
+          echo "GHCUP_MSYS2=$(cygpath -w /)" >> $GITHUB_ENV
 
       - name: Setup GHCup Without Silly Upstream
         shell: msys2 {0}
