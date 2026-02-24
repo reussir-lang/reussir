@@ -63,6 +63,7 @@ import Reussir.Core.Data.Semi.Context (
     SemiEff,
  )
 import Reussir.Core.Data.Semi.Expr (
+    ClosureExpr (..),
     DTSwitchCases (..),
     DecisionTree (..),
     Expr (..),
@@ -204,6 +205,25 @@ elimTypeHoles expr = withMaybeSpan (exprSpan expr) $ do
         IntrinsicCall path args -> IntrinsicCall path <$> mapM elimTypeHoles args
         Sequence subexprs -> Sequence <$> mapM elimTypeHoles subexprs
         Match val dt -> Match <$> elimTypeHoles val <*> elimTypeHolesDT dt
+        Closure ClosureExpr{closureExprCaptures, closureExprArgs, closureExprBody} -> do
+            captures' <-
+                forM closureExprCaptures $ \(varID, captureTy) -> do
+                    captureTy' <- forceAndCheckHoles captureTy
+                    pure (varID, captureTy')
+            args' <-
+                forM closureExprArgs $ \(varID, argTy) -> do
+                    argTy' <- forceAndCheckHoles argTy
+                    pure (varID, argTy')
+            body' <- elimTypeHoles closureExprBody
+            pure $
+                Closure $
+                    ClosureExpr
+                        { closureExprCaptures = captures'
+                        , closureExprArgs = args'
+                        , closureExprBody = body'
+                        }
+        ClosureCall target args ->
+            ClosureCall <$> elimTypeHoles target <*> mapM elimTypeHoles args
     return $ expr{exprType = ty', exprKind = kind'}
 
 elimTypeHolesDT :: DecisionTree -> SemiEff DecisionTree

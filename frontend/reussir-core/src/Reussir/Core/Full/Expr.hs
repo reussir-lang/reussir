@@ -154,6 +154,8 @@ convertSemiExpr semiExpr = do
                 scrutinee' <- convertSemiExpr scrutinee
                 dt' <- convertDecisionTree dt
                 exprWithSpan ty $ Match scrutinee' dt'
+            SemiExpr.Closure _ -> error "NYI"
+            SemiExpr.ClosureCall{} -> error "NYI"
 
 hoistRcWrapping :: Type -> ExprKind -> FullEff Expr
 hoistRcWrapping ty e = do
