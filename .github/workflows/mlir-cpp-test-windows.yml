@@ -115,6 +115,7 @@ jobs:
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: |
           . /c/ghcup/env
+          export GITHUB_WORKSPACE=$(cygpath "$DEV_DRIVE_WORKSPACE")
           . .github/workflows/setup_path.sh
           cmake --build build --target check
 
@@ -123,6 +124,7 @@ jobs:
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: |
           . /c/ghcup/env
+          export GITHUB_WORKSPACE=$(cygpath "$DEV_DRIVE_WORKSPACE")
           . .github/workflows/setup_path.sh
           cabal update
           cabal build all -j
@@ -132,6 +134,7 @@ jobs:
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: |
           . /c/ghcup/env
+          export GITHUB_WORKSPACE=$(cygpath "$DEV_DRIVE_WORKSPACE")
           . .github/workflows/setup_path.sh
           chcp.com 65001
           cabal test all -j
