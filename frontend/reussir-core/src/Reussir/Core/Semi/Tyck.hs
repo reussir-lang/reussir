@@ -12,6 +12,7 @@
 module Reussir.Core.Semi.Tyck (
     forceAndCheckHoles,
     elimTypeHoles,
+    collectExprFreeVars,
     checkFuncType,
     inferType,
     checkType,
@@ -41,6 +42,7 @@ import Reussir.Parser.Types.Lexer (
 import Data.HashMap.Strict qualified as HashMap
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
+import Data.IntSet qualified as IntSet
 import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
@@ -80,7 +82,7 @@ import Reussir.Core.Data.Semi.Type (
     Type (..),
  )
 import Reussir.Core.Data.Semi.Unification (HoleState (..))
-import Reussir.Core.Data.UniqueID (GenericID (..), VarID)
+import Reussir.Core.Data.UniqueID (GenericID (..), VarID (..))
 import Reussir.Core.Semi.Context (
     addErrReport,
     addErrReportMsg,
@@ -250,6 +252,117 @@ elimTypeHolesCases (DTSwitchString m def) =
     DTSwitchString <$> mapM elimTypeHolesDT m <*> elimTypeHolesDT def
 elimTypeHolesCases (DTSwitchNullable j n) =
     DTSwitchNullable <$> elimTypeHolesDT j <*> elimTypeHolesDT n
+
+-- | Collect all free variable references in a semi expression.
+collectExprFreeVars :: Expr -> IntSet.IntSet
+collectExprFreeVars = collectExprFreeVarsInScope IntSet.empty
+
+collectExprFreeVarsInScope :: IntSet.IntSet -> Expr -> IntSet.IntSet
+collectExprFreeVarsInScope scope expr = case exprKind expr of
+    Var (VarID vid)
+        | vid `IntSet.member` scope -> IntSet.empty
+        | otherwise -> IntSet.singleton vid
+    GlobalStr _ -> IntSet.empty
+    Constant _ -> IntSet.empty
+    Poison -> IntSet.empty
+    Negate e -> collectExprFreeVarsInScope scope e
+    Not e -> collectExprFreeVarsInScope scope e
+    Arith e1 _ e2 ->
+        collectExprFreeVarsInScope scope e1
+            `IntSet.union` collectExprFreeVarsInScope scope e2
+    Cmp e1 _ e2 ->
+        collectExprFreeVarsInScope scope e1
+            `IntSet.union` collectExprFreeVarsInScope scope e2
+    Cast e _ -> collectExprFreeVarsInScope scope e
+    ScfIfExpr e1 e2 e3 ->
+        collectExprFreeVarsInScope scope e1
+            `IntSet.union` collectExprFreeVarsInScope scope e2
+            `IntSet.union` collectExprFreeVarsInScope scope e3
+    RegionRun e -> collectExprFreeVarsInScope scope e
+    Proj e _ -> collectExprFreeVarsInScope scope e
+    Assign e1 _ e2 ->
+        collectExprFreeVarsInScope scope e1
+            `IntSet.union` collectExprFreeVarsInScope scope e2
+    Let{letVarExpr = e} -> collectExprFreeVarsInScope scope e
+    FuncCall{funcCallArgs = args} ->
+        IntSet.unions $ map (collectExprFreeVarsInScope scope) args
+    IntrinsicCall{intrinsicCallArgs = args} ->
+        IntSet.unions $ map (collectExprFreeVarsInScope scope) args
+    CompoundCall{compoundCallArgs = args} ->
+        IntSet.unions $ map (collectExprFreeVarsInScope scope) args
+    VariantCall{variantCallArg = arg} -> collectExprFreeVarsInScope scope arg
+    NullableCall me -> maybe IntSet.empty (collectExprFreeVarsInScope scope) me
+    Match scrutinee dt ->
+        collectExprFreeVarsInScope scope scrutinee
+            `IntSet.union` collectExprFreeVarsInScopeDT scope dt
+    Sequence es -> collectExprFreeVarsInSequence scope es
+    Closure ClosureExpr{closureExprCaptures, closureExprArgs, closureExprBody} ->
+        let captureScope =
+                IntSet.fromList
+                    [ vid
+                    | (VarID vid, _) <- closureExprCaptures
+                    ]
+            argScope =
+                IntSet.fromList
+                    [ vid
+                    | (VarID vid, _) <- closureExprArgs
+                    ]
+            bodyScope = scope `IntSet.union` captureScope `IntSet.union` argScope
+            captureFreeVars = captureScope `IntSet.difference` scope
+            bodyFreeVars = collectExprFreeVarsInScope bodyScope closureExprBody
+         in captureFreeVars `IntSet.union` bodyFreeVars
+    ClosureCall target args ->
+        collectExprFreeVarsInScope scope target
+            `IntSet.union` IntSet.unions (map (collectExprFreeVarsInScope scope) args)
+
+collectExprFreeVarsInSequence :: IntSet.IntSet -> [Expr] -> IntSet.IntSet
+collectExprFreeVarsInSequence _ [] = IntSet.empty
+collectExprFreeVarsInSequence scope (e : es) =
+    collectExprFreeVarsInScope scope e
+        `IntSet.union` collectExprFreeVarsInSequence scope' es
+  where
+    scope' = case exprKind e of
+        Let{letVarID = VarID vid} ->
+            IntSet.insert vid scope
+        _ -> scope
+
+collectExprFreeVarsInScopeDT :: IntSet.IntSet -> DecisionTree -> IntSet.IntSet
+collectExprFreeVarsInScopeDT _ DTUncovered = IntSet.empty
+collectExprFreeVarsInScopeDT _ DTUnreachable = IntSet.empty
+collectExprFreeVarsInScopeDT scope (DTLeaf body bindings) =
+    collectExprFreeVarsInScope (scope `IntSet.union` IntMap.keysSet bindings) body
+collectExprFreeVarsInScopeDT scope (DTGuard bindings guard trueBr falseBr) =
+    let guardScope = scope `IntSet.union` IntMap.keysSet bindings
+     in collectExprFreeVarsInScope guardScope guard
+            `IntSet.union` collectExprFreeVarsInScopeDT guardScope trueBr
+            `IntSet.union` collectExprFreeVarsInScopeDT scope falseBr
+collectExprFreeVarsInScopeDT scope (DTSwitch _ cases) =
+    collectExprFreeVarsInScopeCases scope cases
+
+collectExprFreeVarsInScopeCases :: IntSet.IntSet -> DTSwitchCases -> IntSet.IntSet
+collectExprFreeVarsInScopeCases scope (DTSwitchInt cases def) =
+    IntMap.foldl'
+        (\acc dt -> acc `IntSet.union` collectExprFreeVarsInScopeDT scope dt)
+        IntSet.empty
+        cases
+        `IntSet.union` collectExprFreeVarsInScopeDT scope def
+collectExprFreeVarsInScopeCases scope (DTSwitchBool t f) =
+    collectExprFreeVarsInScopeDT scope t
+        `IntSet.union` collectExprFreeVarsInScopeDT scope f
+collectExprFreeVarsInScopeCases scope (DTSwitchCtor cases) =
+    V.foldl'
+        (\acc dt -> acc `IntSet.union` collectExprFreeVarsInScopeDT scope dt)
+        IntSet.empty
+        cases
+collectExprFreeVarsInScopeCases scope (DTSwitchString cases def) =
+    HashMap.foldl'
+        (\acc dt -> acc `IntSet.union` collectExprFreeVarsInScopeDT scope dt)
+        IntSet.empty
+        cases
+        `IntSet.union` collectExprFreeVarsInScopeDT scope def
+collectExprFreeVarsInScopeCases scope (DTSwitchNullable j n) =
+    collectExprFreeVarsInScopeDT scope j
+        `IntSet.union` collectExprFreeVarsInScopeDT scope n
 
 -- | Infer the type of an expression that is inside a region
 inferWithRegion :: Syn.Expr -> SemiEff Expr
