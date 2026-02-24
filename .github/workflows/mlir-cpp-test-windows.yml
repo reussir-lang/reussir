@@ -22,6 +22,7 @@ jobs:
       - name: Setup Dev Drive
         uses: samypr100/setup-dev-drive@v3
         with:
+          drive-size: 8GB
           workspace-copy: true
           trusted-dev-drive: true
           env-mapping: |
