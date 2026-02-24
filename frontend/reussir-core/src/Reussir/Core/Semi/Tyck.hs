@@ -80,7 +80,7 @@ import Reussir.Core.Data.Semi.Type (
     Type (..),
  )
 import Reussir.Core.Data.Semi.Unification (HoleState (..))
-import Reussir.Core.Data.UniqueID (GenericID (..))
+import Reussir.Core.Data.UniqueID (GenericID (..), VarID)
 import Reussir.Core.Semi.Context (
     addErrReport,
     addErrReportMsg,
@@ -794,7 +794,43 @@ inferTypeForCallExpr :: Syn.FuncCall -> SemiEff Expr
 inferTypeForCallExpr call = do
     inferTypeForIntrinsicCall call >>= \case
         Just expr -> return expr
-        Nothing -> inferTypeForNormalCall call
+        Nothing -> inferTypeForClosureCall call >>= \case
+            Just expr -> return expr
+            Nothing -> inferTypeForNormalCall call -- TODO: this nesting is ugly
+
+-- special handling for var-like closure calls.
+inferTypeForClosureCall :: Syn.FuncCall -> SemiEff (Maybe Expr)
+inferTypeForClosureCall (Syn.FuncCall (Path varLike []) [] args) = do
+    varTable <- State.gets varTable
+    varInfo <- lookupVar varLike varTable
+    maybe (pure Nothing) inferImpl varInfo
+  where
+    inferImpl :: (VarID, Type) -> SemiEff (Maybe Expr)
+    inferImpl (varID, varTy) = do
+        varTy' <- runUnification $ force varTy
+        case varTy' of
+                -- if the variable is a closure, we check that all arguments are
+                -- of expected type. If so, we use the return type as the type of the closure call
+                TypeClosure expectedArgs ret -> do
+                    (trailing, checkedArgs) <- oneByOneTypeCheck expectedArgs args
+                    varRef <- exprWithSpan varTy' (Var varID)
+                    if null trailing then
+                        Just <$> exprWithSpan ret (ClosureCall varRef checkedArgs)
+                    else 
+                        let newClosureTy = TypeClosure trailing ret in
+                        Just <$> exprWithSpan newClosureTy (ClosureCall varRef checkedArgs)
+                _ -> pure Nothing
+    
+    oneByOneTypeCheck :: [Type] -> [Syn.Expr] -> SemiEff ([Type], [Expr])
+    oneByOneTypeCheck trailing [] = pure (trailing, [])
+    oneByOneTypeCheck (expected:expectedRest) (arg:argRest) = do
+        arg' <- checkType arg expected
+        (trailing', rest') <- oneByOneTypeCheck expectedRest argRest
+        return (trailing', arg':rest')
+    oneByOneTypeCheck _ _ = do
+        addErrReportMsg "Closure argument count mismatch"
+        return ([], [])
+inferTypeForClosureCall _ = pure Nothing
 
 inferTypeForNormalCall :: Syn.FuncCall -> SemiEff Expr
 inferTypeForNormalCall
