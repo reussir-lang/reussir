@@ -25,7 +25,7 @@ jobs:
           workspace-copy: true
           trusted-dev-drive: true
           env-mapping: |
-            CABAL_DIR,{{ DEV_DRIVE }}/cabal
+            CABAL_DIR,{{ DEV_DRIVE }}\cabal
 
       - name: Restore file timestamps
         uses: chetan/git-restore-mtime-action@v2
