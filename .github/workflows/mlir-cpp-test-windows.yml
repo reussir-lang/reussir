@@ -19,16 +19,26 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Dev Drive
+        uses: samypr100/setup-dev-drive@v3
+        with:
+          workspace-copy: true
+          trusted-dev-drive: true
+          env-mapping: |
+            CABAL_DIR,{{ DEV_DRIVE }}/cabal
+
       - name: Restore file timestamps
         uses: chetan/git-restore-mtime-action@v2
+        with:
+          working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
 
       - name: Cache Cabal (Windows)
         uses: actions/cache@v4
         with:
           path: |
-            C:/Users/runneradmin/AppData/Local/cabal
+            ${{ env.CABAL_DIR }}
             C:/ghcup
-            dist-newstyle
+            ${{ env.DEV_DRIVE_WORKSPACE }}/dist-newstyle
           key: windows-clang64-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
           restore-keys: |
             windows-clang64-cabal-
@@ -63,16 +73,18 @@ jobs:
 
       - name: Setup GHCup Without Silly Upstream
         shell: msys2 {0}
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: |
           export BOOTSTRAP_HASKELL_GHC_VERSION=9.14.1
           export BOOTSTRAP_HASKELL_CABAL_VERSION=latest
           curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
           . /c/ghcup/env
           cabal update
-          
+
 
       - name: Install Rust and Python dependencies
         shell: msys2 {0}
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: |
           pip install lit
           rustup target add x86_64-pc-windows-gnullvm
@@ -81,6 +93,7 @@ jobs:
 
       - name: Configure CMake
         shell: msys2 {0}
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: |
           cmake -B build \
           -G Ninja \
@@ -90,11 +103,13 @@ jobs:
 
       - name: Build
         shell: msys2 {0}
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: cmake --build build --parallel
 
 
       - name: Run Integration Tests
         shell: msys2 {0}
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: |
           . /c/ghcup/env
           . .github/workflows/setup_path.sh
@@ -102,6 +117,7 @@ jobs:
 
       - name: Build Haskell frontend
         shell: msys2 {0}
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: |
           . /c/ghcup/env
           . .github/workflows/setup_path.sh
@@ -110,6 +126,7 @@ jobs:
 
       - name: Test Haskell frontend
         shell: msys2 {0}
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: |
           . /c/ghcup/env
           . .github/workflows/setup_path.sh
