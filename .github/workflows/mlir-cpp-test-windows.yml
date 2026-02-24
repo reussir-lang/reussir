@@ -13,7 +13,6 @@ jobs:
   build:
     runs-on: windows-2025
     env:
-      REUSSIR_BUILD_DIR: /d/devdrive/build
       REUSSIR_DIST_DIR: /d/devdrive/dist-newstyle
 
     steps:
@@ -91,7 +90,7 @@ jobs:
       - name: Configure CMake
         shell: msys2 {0}
         run: |
-          cmake -B "${REUSSIR_BUILD_DIR}" \
+          cmake -B build \
           -G Ninja \
           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
           -DREUSSIR_ENABLE_PEDANTIC=ON \
@@ -99,7 +98,7 @@ jobs:
 
       - name: Build
         shell: msys2 {0}
-        run: cmake --build "${REUSSIR_BUILD_DIR}" --parallel
+        run: cmake --build build --parallel
 
 
       - name: Run Integration Tests
@@ -107,7 +106,7 @@ jobs:
         run: |
           . /c/ghcup/env
           . .github/workflows/setup_path.sh
-          cmake --build "${REUSSIR_BUILD_DIR}" --target check
+          cmake --build build --target check
 
       - name: Build Haskell frontend
         shell: msys2 {0}
