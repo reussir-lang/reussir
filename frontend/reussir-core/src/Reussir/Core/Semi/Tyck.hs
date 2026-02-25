@@ -114,8 +114,9 @@ import Reussir.Core.Semi.Unification (
     satisfyBounds,
     unify,
  )
-import Reussir.Core.Semi.Variable (lookupVar, newVariable)
+import Reussir.Core.Semi.Variable (lookupVar, newVariable, getVarType)
 import Reussir.Core.String (allocateStrToken)
+import GHC.Stack (HasCallStack)
 
 introduceNewHoleInContext :: TypeBound -> SemiEff Type
 introduceNewHoleInContext bounds = do
@@ -339,7 +340,8 @@ collectExprFreeVarsInScopeDT scope (DTGuard bindings guard trueBr falseBr) =
 collectExprFreeVarsInScopeDT scope (DTSwitch _ cases) =
     collectExprFreeVarsInScopeCases scope cases
 
-collectExprFreeVarsInScopeCases :: IntSet.IntSet -> DTSwitchCases -> IntSet.IntSet
+collectExprFreeVarsInScopeCases ::
+    IntSet.IntSet -> DTSwitchCases -> IntSet.IntSet
 collectExprFreeVarsInScopeCases scope (DTSwitchInt cases def) =
     IntMap.foldl'
         (\acc dt -> acc `IntSet.union` collectExprFreeVarsInScopeDT scope dt)
@@ -725,11 +727,10 @@ inferType (Syn.Match scrutinee patterns) = do
             runUnification $ force t
 
     exprWithSpan matchType $ Match scrutinee' decisionTree
-
+inferType (Syn.Lambda expr) = inferTypeForLambdaAbstraction expr
 -- Advance the span in the context and continue on inner expression
 inferType (Syn.SpannedExpr (WithSpan expr start end)) =
     withSpan (start, end) $ inferType expr
-inferType _ = error "Not implemented"
 
 collectLeafExprTypes :: DecisionTree -> [Type]
 collectLeafExprTypes DTUncovered = []
@@ -769,6 +770,39 @@ checkType expr ty = do
             addErrReportMsgSeq "Failed to unify types" (Just report)
             exprWithSpan TypeBottom Poison
         Nothing -> return expr'
+
+-- | In the normal bidirectional system, lambda abstraction is checked
+-- rather than inferred. However, it is a bit tricker in our case as our lambda
+-- expression actually carries the type of args and return value. So, we still
+-- name this function as "inference", but it does checks the body by unifying
+-- with the return type.
+inferTypeForLambdaAbstraction :: HasCallStack => Syn.LambdaExpr -> SemiEff Expr
+inferTypeForLambdaAbstraction (Syn.LambdaExpr args body retTy)  = do
+    retTy' <- maybe (introduceNewHoleInContext []) evalType retTy
+    args' <- forM args $ \(name, ty) -> do
+        ty' <- maybe (introduceNewHoleInContext []) evalType ty
+        return (name, ty')
+    -- create a env with args' and infer body; unify with retTy'
+    (argIDs, body') <- withAllArgs args' (checkType body retTy') []
+    let argSet = IntSet.fromList (map (\(VarID x) -> x) argIDs)
+    let freeVars = collectExprFreeVars body' `IntSet.difference` argSet
+    let ty = TypeClosure (map snd args') retTy'
+    let zippedArgIDs = zipWith (\i (_, t) -> (i, t)) argIDs args'
+    freeVars' <- mapM queryVarInContext (IntSet.toList freeVars)
+    exprWithSpan ty $ Closure $ ClosureExpr freeVars' zippedArgIDs body'
+    where
+        withAllArgs :: [(Identifier, Type)] -> SemiEff a -> [VarID] -> SemiEff ([VarID], a)
+        withAllArgs [] action acc = action >>= \a -> return (reverse acc, a)
+        -- TODO: add span?
+        withAllArgs ((name, ty) : rest) action acc = do
+            withVariable name Nothing ty $ \varID -> withAllArgs rest action (varID : acc)
+
+        queryVarInContext :: Int -> SemiEff (VarID, Type)
+        queryVarInContext idx = do
+            let varID = VarID idx
+            varTable <- State.gets varTable
+            ty <- getVarType varID varTable
+            return (varID, ty)
 
 -- | Helper function to infer the type of an intrinsic function call
 inferTypeForIntrinsicCall :: Syn.FuncCall -> SemiEff (Maybe Expr)
@@ -907,9 +941,10 @@ inferTypeForCallExpr :: Syn.FuncCall -> SemiEff Expr
 inferTypeForCallExpr call = do
     inferTypeForIntrinsicCall call >>= \case
         Just expr -> return expr
-        Nothing -> inferTypeForClosureCall call >>= \case
-            Just expr -> return expr
-            Nothing -> inferTypeForNormalCall call -- TODO: this nesting is ugly
+        Nothing ->
+            inferTypeForClosureCall call >>= \case
+                Just expr -> return expr
+                Nothing -> inferTypeForNormalCall call -- TODO: this nesting is ugly
 
 -- special handling for var-like closure calls.
 inferTypeForClosureCall :: Syn.FuncCall -> SemiEff (Maybe Expr)
@@ -922,24 +957,25 @@ inferTypeForClosureCall (Syn.FuncCall (Path varLike []) [] args) = do
     inferImpl (varID, varTy) = do
         varTy' <- runUnification $ force varTy
         case varTy' of
-                -- if the variable is a closure, we check that all arguments are
-                -- of expected type. If so, we use the return type as the type of the closure call
-                TypeClosure expectedArgs ret -> do
-                    (trailing, checkedArgs) <- oneByOneTypeCheck expectedArgs args
-                    varRef <- exprWithSpan varTy' (Var varID)
-                    if null trailing then
+            -- if the variable is a closure, we check that all arguments are
+            -- of expected type. If so, we use the return type as the type of the closure call
+            TypeClosure expectedArgs ret -> do
+                (trailing, checkedArgs) <- oneByOneTypeCheck expectedArgs args
+                varRef <- exprWithSpan varTy' (Var varID)
+                if null trailing
+                    then
                         Just <$> exprWithSpan ret (ClosureCall varRef checkedArgs)
-                    else 
-                        let newClosureTy = TypeClosure trailing ret in
-                        Just <$> exprWithSpan newClosureTy (ClosureCall varRef checkedArgs)
-                _ -> pure Nothing
-    
+                    else
+                        let newClosureTy = TypeClosure trailing ret
+                         in Just <$> exprWithSpan newClosureTy (ClosureCall varRef checkedArgs)
+            _ -> pure Nothing
+
     oneByOneTypeCheck :: [Type] -> [Syn.Expr] -> SemiEff ([Type], [Expr])
     oneByOneTypeCheck trailing [] = pure (trailing, [])
-    oneByOneTypeCheck (expected:expectedRest) (arg:argRest) = do
+    oneByOneTypeCheck (expected : expectedRest) (arg : argRest) = do
         arg' <- checkType arg expected
         (trailing', rest') <- oneByOneTypeCheck expectedRest argRest
-        return (trailing', arg':rest')
+        return (trailing', arg' : rest')
     oneByOneTypeCheck _ _ = do
         addErrReportMsg "Closure argument count mismatch"
         return ([], [])
