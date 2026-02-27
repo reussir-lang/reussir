@@ -1,0 +1,35 @@
+// RUN: %reussir-elab --mode semi %s | %FileCheck %s
+
+// CHECK-DAG: fn test(v0 (x): (i32) -> i32) -> i32 {
+// CHECK-NEXT-DAG:     closure_call(v0, 1.0 : i32) : i32
+// CHECK-NEXT-DAG: }
+fn test(x : i32 -> i32) -> i32 {
+    x(1)
+}
+
+// CHECK-DAG: fn test2(v0 (x): (i32, i32) -> i32) -> i32 {
+// CHECK-NEXT-DAG:     closure_call(v0, 1.0 : i32, 2.0 : i32) : i32
+// CHECK-NEXT-DAG: }
+fn test2(x : (i32, i32) -> i32) -> i32 {
+    x(1, 2)
+}
+
+// CHECK-DAG: fn partial(v0 (x): (i32, bool) -> i32) -> (bool) -> i32 {
+// CHECK-NEXT-DAG:     closure_call(v0, 1.0 : i32) : (bool) -> i32
+// CHECK-NEXT-DAG: }
+fn partial(x : (i32, bool) -> i32) -> bool -> i32 {
+    x(1)
+}
+
+// CHECK-DAG: fn abstract() -> (bool) -> u64 {
+// CHECK-NEXT-DAG:     {
+// CHECK-NEXT-DAG:         let v0 (u) : u64 = 1.0 : u64;
+// CHECK-NEXT-DAG:         closure[v0 : u64](v1 : bool) {
+// CHECK-NEXT-DAG:             if v1 then 0.0 : u64 else v0
+// CHECK-NEXT-DAG:         } : (bool) -> u64
+// CHECK-NEXT-DAG:     }
+// CHECK-NEXT-DAG: }
+fn abstract() -> bool -> u64 {
+    let u = 1;
+    |x| if (x) { 0 } else { u }
+}
