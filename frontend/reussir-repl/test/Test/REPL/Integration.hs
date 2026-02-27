@@ -108,7 +108,7 @@ compileAndExecInt' input = do
                 Right (moduleBytes, state', _) -> do
                     let counter = replCounter state' - 1
                     let funcName = "__repl_expr_" ++ show counter ++ "_trampoline"
-                    withJIT placeholderCallback OptTPDE LogInfo $ \jit -> do
+                    withJIT placeholderCallback OptDefault LogInfo $ \jit -> do
                         flag <- addModule jit moduleBytes
                         if flag
                             then do
@@ -140,7 +140,7 @@ compileAndExecFloat' input = do
                 Right (moduleBytes, state', _) -> do
                     let counter = replCounter state' - 1
                     let funcName = "__repl_expr_" ++ show counter ++ "_trampoline"
-                    withJIT placeholderCallback OptTPDE LogInfo $ \jit -> do
+                    withJIT placeholderCallback OptDefault LogInfo $ \jit -> do
                         flag <- addModule jit moduleBytes
                         if flag
                             then do
@@ -172,7 +172,7 @@ compileAndExecStr' input = do
                 Right (moduleBytes, state', _) -> do
                     let counter = replCounter state' - 1
                     let funcName = "__repl_expr_" ++ show counter ++ "_trampoline"
-                    withJIT placeholderCallback OptTPDE LogInfo $ \jit -> do
+                    withJIT placeholderCallback OptDefault LogInfo $ \jit -> do
                         flag <- addModule jit moduleBytes
                         if flag
                             then do
