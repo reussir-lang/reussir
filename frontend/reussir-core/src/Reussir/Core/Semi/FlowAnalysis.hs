@@ -22,7 +22,7 @@ import Reussir.Core.Data.Semi.Expr (
     DTSwitchCases (..),
     DecisionTree (..),
     Expr (..),
-    ExprKind (..),
+    ExprKind (..), ClosureExpr (..),
  )
 import Reussir.Core.Data.Semi.Function (FunctionProto (..), FunctionTable (..))
 import Reussir.Core.Data.Semi.Record (Record (..), RecordFields (..))
@@ -107,6 +107,13 @@ analyzeGenericFlowInExpr expr = do
         Assign dst _ src -> analyzeGenericFlowInExpr dst >> analyzeGenericFlowInExpr src
         IntrinsicCall _ args -> mapM_ analyzeGenericFlowInExpr args
         Match val dt -> analyzeGenericFlowInExpr val >> analyzeGenericFlowInDT dt
+        ClosureCall target args -> do
+            analyzeGenericFlowInExpr target
+            mapM_ analyzeGenericFlowInExpr args
+        Closure ClosureExpr{closureExprCaptures, closureExprArgs, closureExprBody} -> do
+            mapM_ (analyzeGenericFlowInType . snd) closureExprCaptures
+            mapM_ (analyzeGenericFlowInType . snd) closureExprArgs
+            analyzeGenericFlowInExpr closureExprBody
 
 analyzeGenericFlowInDT :: DecisionTree -> GlobalSemiEff ()
 analyzeGenericFlowInDT DTUncovered = pure ()

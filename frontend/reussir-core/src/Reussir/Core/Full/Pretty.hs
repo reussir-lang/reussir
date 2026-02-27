@@ -31,7 +31,7 @@ import Reussir.Core.Data.Full.Expr (
     DecisionTree (..),
     Expr (..),
     ExprKind (..),
-    PatternVarRef (..),
+    PatternVarRef (..), ClosureExpr (..),
  )
 import Reussir.Core.Data.Full.Function (Function (..))
 import Reussir.Core.Data.Full.Record (
@@ -294,6 +294,21 @@ instance PrettyColored Expr where
                 subexprsDocs <- mapM prettyColored subexprs
                 pure $
                     braces (nest 4 (hardline <> vsep (punctuate semi subexprsDocs)) <> hardline)
+            Closure ClosureExpr{closureExprCaptures, closureExprArgs, closureExprBody} -> do
+                capturesDoc <- mapM prettyTypedVar closureExprCaptures
+                argsDoc <- mapM prettyTypedVar closureExprArgs
+                bodyDoc <- prettyColored closureExprBody
+                pure $
+                    keyword "closure"
+                        <> brackets (commaSep capturesDoc)
+                        <> parens (commaSep argsDoc)
+                        <+> braces (nest 4 (hardline <> bodyDoc) <> hardline)
+            ClosureCall target args -> do
+                targetDoc <- prettyColored target
+                argsDocs <- mapM prettyColored args
+                pure $
+                    keyword "closure_call"
+                        <> parens (commaSep (targetDoc : argsDocs))
 
         case exprKind expr of
             Var _ -> pure kindDoc
@@ -304,6 +319,13 @@ instance PrettyColored Expr where
             _ -> do
                 tyDoc <- prettyColored (exprType expr)
                 pure $ kindDoc <+> comment (":" <+> tyDoc)
+        where
+            prettyTypedVar (VarID varID, varTy) = do
+                tyDoc <- prettyColored varTy
+                pure $
+                    variable ("v" <> pretty varID)
+                        <+> operator ":"
+                        <+> tyDoc
 
 instance PrettyColored Record where
     prettyColored (Record name rawPath tyParams fields kind _defCap _span) = do

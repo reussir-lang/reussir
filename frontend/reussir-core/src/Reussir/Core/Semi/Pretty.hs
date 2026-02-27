@@ -26,6 +26,7 @@ import Reussir.Core.Data.FP (FloatingPointType (..))
 import Reussir.Core.Data.Integral (IntegralType (..))
 import Reussir.Core.Data.Operator (ArithOp (..), CmpOp (..))
 import Reussir.Core.Data.Semi.Expr (
+    ClosureExpr (..),
     DTSwitchCases (..),
     DecisionTree (..),
     Expr (..),
@@ -260,6 +261,21 @@ instance PrettyColored Expr where
                     keyword "match"
                         <+> valDoc
                         <+> braces (nest 4 (hardline <> dtDoc) <> hardline)
+            Closure ClosureExpr{closureExprCaptures, closureExprArgs, closureExprBody} -> do
+                capturesDoc <- mapM prettyTypedVar closureExprCaptures
+                argsDoc <- mapM prettyTypedVar closureExprArgs
+                bodyDoc <- prettyColored closureExprBody
+                pure $
+                    keyword "closure"
+                        <> brackets (commaSep capturesDoc)
+                        <> parens (commaSep argsDoc)
+                        <+> braces (nest 4 (hardline <> bodyDoc) <> hardline)
+            ClosureCall target args -> do
+                targetDoc <- prettyColored target
+                argsDocs <- mapM prettyColored args
+                pure $
+                    keyword "closure_call"
+                        <> parens (commaSep (targetDoc : argsDocs))
             Sequence [singleton] -> prettyColored singleton
             Sequence subexprs -> do
                 subexprsDocs <- mapM prettyColored subexprs
@@ -275,6 +291,13 @@ instance PrettyColored Expr where
             _ -> do
                 tyDoc <- prettyColored (exprType expr)
                 pure $ kindDoc <+> comment (":" <+> tyDoc)
+      where
+        prettyTypedVar (VarID varID, varTy) = do
+            tyDoc <- prettyColored varTy
+            pure $
+                variable ("v" <> pretty varID)
+                    <+> operator ":"
+                    <+> tyDoc
 
 instance PrettyColored DecisionTree where
     prettyColored DTUncovered = pure $ keyword "uncovered"

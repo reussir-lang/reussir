@@ -12,6 +12,7 @@
 module Reussir.Core.Semi.Tyck (
     forceAndCheckHoles,
     elimTypeHoles,
+    collectExprFreeVars,
     checkFuncType,
     inferType,
     checkType,
@@ -41,6 +42,7 @@ import Reussir.Parser.Types.Lexer (
 import Data.HashMap.Strict qualified as HashMap
 import Data.HashTable.IO qualified as H
 import Data.IntMap.Strict qualified as IntMap
+import Data.IntSet qualified as IntSet
 import Data.Text qualified as T
 import Data.Vector.Strict qualified as V
 import Data.Vector.Unboxed qualified as UV
@@ -63,6 +65,7 @@ import Reussir.Core.Data.Semi.Context (
     SemiEff,
  )
 import Reussir.Core.Data.Semi.Expr (
+    ClosureExpr (..),
     DTSwitchCases (..),
     DecisionTree (..),
     Expr (..),
@@ -79,7 +82,7 @@ import Reussir.Core.Data.Semi.Type (
     Type (..),
  )
 import Reussir.Core.Data.Semi.Unification (HoleState (..))
-import Reussir.Core.Data.UniqueID (GenericID (..))
+import Reussir.Core.Data.UniqueID (GenericID (..), VarID (..))
 import Reussir.Core.Semi.Context (
     addErrReport,
     addErrReportMsg,
@@ -111,8 +114,9 @@ import Reussir.Core.Semi.Unification (
     satisfyBounds,
     unify,
  )
-import Reussir.Core.Semi.Variable (lookupVar, newVariable)
+import Reussir.Core.Semi.Variable (lookupVar, newVariable, getVarType)
 import Reussir.Core.String (allocateStrToken)
+import GHC.Stack (HasCallStack)
 
 introduceNewHoleInContext :: TypeBound -> SemiEff Type
 introduceNewHoleInContext bounds = do
@@ -204,6 +208,25 @@ elimTypeHoles expr = withMaybeSpan (exprSpan expr) $ do
         IntrinsicCall path args -> IntrinsicCall path <$> mapM elimTypeHoles args
         Sequence subexprs -> Sequence <$> mapM elimTypeHoles subexprs
         Match val dt -> Match <$> elimTypeHoles val <*> elimTypeHolesDT dt
+        Closure ClosureExpr{closureExprCaptures, closureExprArgs, closureExprBody} -> do
+            captures' <-
+                forM closureExprCaptures $ \(varID, captureTy) -> do
+                    captureTy' <- forceAndCheckHoles captureTy
+                    pure (varID, captureTy')
+            args' <-
+                forM closureExprArgs $ \(varID, argTy) -> do
+                    argTy' <- forceAndCheckHoles argTy
+                    pure (varID, argTy')
+            body' <- elimTypeHoles closureExprBody
+            pure $
+                Closure $
+                    ClosureExpr
+                        { closureExprCaptures = captures'
+                        , closureExprArgs = args'
+                        , closureExprBody = body'
+                        }
+        ClosureCall target args ->
+            ClosureCall <$> elimTypeHoles target <*> mapM elimTypeHoles args
     return $ expr{exprType = ty', exprKind = kind'}
 
 elimTypeHolesDT :: DecisionTree -> SemiEff DecisionTree
@@ -230,6 +253,118 @@ elimTypeHolesCases (DTSwitchString m def) =
     DTSwitchString <$> mapM elimTypeHolesDT m <*> elimTypeHolesDT def
 elimTypeHolesCases (DTSwitchNullable j n) =
     DTSwitchNullable <$> elimTypeHolesDT j <*> elimTypeHolesDT n
+
+-- | Collect all free variable references in a semi expression.
+collectExprFreeVars :: Expr -> IntSet.IntSet
+collectExprFreeVars = collectExprFreeVarsInScope IntSet.empty
+
+collectExprFreeVarsInScope :: IntSet.IntSet -> Expr -> IntSet.IntSet
+collectExprFreeVarsInScope scope expr = case exprKind expr of
+    Var (VarID vid)
+        | vid `IntSet.member` scope -> IntSet.empty
+        | otherwise -> IntSet.singleton vid
+    GlobalStr _ -> IntSet.empty
+    Constant _ -> IntSet.empty
+    Poison -> IntSet.empty
+    Negate e -> collectExprFreeVarsInScope scope e
+    Not e -> collectExprFreeVarsInScope scope e
+    Arith e1 _ e2 ->
+        collectExprFreeVarsInScope scope e1
+            `IntSet.union` collectExprFreeVarsInScope scope e2
+    Cmp e1 _ e2 ->
+        collectExprFreeVarsInScope scope e1
+            `IntSet.union` collectExprFreeVarsInScope scope e2
+    Cast e _ -> collectExprFreeVarsInScope scope e
+    ScfIfExpr e1 e2 e3 ->
+        collectExprFreeVarsInScope scope e1
+            `IntSet.union` collectExprFreeVarsInScope scope e2
+            `IntSet.union` collectExprFreeVarsInScope scope e3
+    RegionRun e -> collectExprFreeVarsInScope scope e
+    Proj e _ -> collectExprFreeVarsInScope scope e
+    Assign e1 _ e2 ->
+        collectExprFreeVarsInScope scope e1
+            `IntSet.union` collectExprFreeVarsInScope scope e2
+    Let{letVarExpr = e} -> collectExprFreeVarsInScope scope e
+    FuncCall{funcCallArgs = args} ->
+        IntSet.unions $ map (collectExprFreeVarsInScope scope) args
+    IntrinsicCall{intrinsicCallArgs = args} ->
+        IntSet.unions $ map (collectExprFreeVarsInScope scope) args
+    CompoundCall{compoundCallArgs = args} ->
+        IntSet.unions $ map (collectExprFreeVarsInScope scope) args
+    VariantCall{variantCallArg = arg} -> collectExprFreeVarsInScope scope arg
+    NullableCall me -> maybe IntSet.empty (collectExprFreeVarsInScope scope) me
+    Match scrutinee dt ->
+        collectExprFreeVarsInScope scope scrutinee
+            `IntSet.union` collectExprFreeVarsInScopeDT scope dt
+    Sequence es -> collectExprFreeVarsInSequence scope es
+    Closure ClosureExpr{closureExprCaptures, closureExprArgs, closureExprBody} ->
+        let captureScope =
+                IntSet.fromList
+                    [ vid
+                    | (VarID vid, _) <- closureExprCaptures
+                    ]
+            argScope =
+                IntSet.fromList
+                    [ vid
+                    | (VarID vid, _) <- closureExprArgs
+                    ]
+            bodyScope = scope `IntSet.union` captureScope `IntSet.union` argScope
+            captureFreeVars = captureScope `IntSet.difference` scope
+            bodyFreeVars = collectExprFreeVarsInScope bodyScope closureExprBody
+         in captureFreeVars `IntSet.union` bodyFreeVars
+    ClosureCall target args ->
+        collectExprFreeVarsInScope scope target
+            `IntSet.union` IntSet.unions (map (collectExprFreeVarsInScope scope) args)
+
+collectExprFreeVarsInSequence :: IntSet.IntSet -> [Expr] -> IntSet.IntSet
+collectExprFreeVarsInSequence _ [] = IntSet.empty
+collectExprFreeVarsInSequence scope (e : es) =
+    collectExprFreeVarsInScope scope e
+        `IntSet.union` collectExprFreeVarsInSequence scope' es
+  where
+    scope' = case exprKind e of
+        Let{letVarID = VarID vid} ->
+            IntSet.insert vid scope
+        _ -> scope
+
+collectExprFreeVarsInScopeDT :: IntSet.IntSet -> DecisionTree -> IntSet.IntSet
+collectExprFreeVarsInScopeDT _ DTUncovered = IntSet.empty
+collectExprFreeVarsInScopeDT _ DTUnreachable = IntSet.empty
+collectExprFreeVarsInScopeDT scope (DTLeaf body bindings) =
+    collectExprFreeVarsInScope (scope `IntSet.union` IntMap.keysSet bindings) body
+collectExprFreeVarsInScopeDT scope (DTGuard bindings guard trueBr falseBr) =
+    let guardScope = scope `IntSet.union` IntMap.keysSet bindings
+     in collectExprFreeVarsInScope guardScope guard
+            `IntSet.union` collectExprFreeVarsInScopeDT guardScope trueBr
+            `IntSet.union` collectExprFreeVarsInScopeDT scope falseBr
+collectExprFreeVarsInScopeDT scope (DTSwitch _ cases) =
+    collectExprFreeVarsInScopeCases scope cases
+
+collectExprFreeVarsInScopeCases ::
+    IntSet.IntSet -> DTSwitchCases -> IntSet.IntSet
+collectExprFreeVarsInScopeCases scope (DTSwitchInt cases def) =
+    IntMap.foldl'
+        (\acc dt -> acc `IntSet.union` collectExprFreeVarsInScopeDT scope dt)
+        IntSet.empty
+        cases
+        `IntSet.union` collectExprFreeVarsInScopeDT scope def
+collectExprFreeVarsInScopeCases scope (DTSwitchBool t f) =
+    collectExprFreeVarsInScopeDT scope t
+        `IntSet.union` collectExprFreeVarsInScopeDT scope f
+collectExprFreeVarsInScopeCases scope (DTSwitchCtor cases) =
+    V.foldl'
+        (\acc dt -> acc `IntSet.union` collectExprFreeVarsInScopeDT scope dt)
+        IntSet.empty
+        cases
+collectExprFreeVarsInScopeCases scope (DTSwitchString cases def) =
+    HashMap.foldl'
+        (\acc dt -> acc `IntSet.union` collectExprFreeVarsInScopeDT scope dt)
+        IntSet.empty
+        cases
+        `IntSet.union` collectExprFreeVarsInScopeDT scope def
+collectExprFreeVarsInScopeCases scope (DTSwitchNullable j n) =
+    collectExprFreeVarsInScopeDT scope j
+        `IntSet.union` collectExprFreeVarsInScopeDT scope n
 
 -- | Infer the type of an expression that is inside a region
 inferWithRegion :: Syn.Expr -> SemiEff Expr
@@ -592,11 +727,10 @@ inferType (Syn.Match scrutinee patterns) = do
             runUnification $ force t
 
     exprWithSpan matchType $ Match scrutinee' decisionTree
-
+inferType (Syn.Lambda expr) = inferTypeForLambdaAbstraction expr
 -- Advance the span in the context and continue on inner expression
 inferType (Syn.SpannedExpr (WithSpan expr start end)) =
     withSpan (start, end) $ inferType expr
-inferType _ = error "Not implemented"
 
 collectLeafExprTypes :: DecisionTree -> [Type]
 collectLeafExprTypes DTUncovered = []
@@ -636,6 +770,39 @@ checkType expr ty = do
             addErrReportMsgSeq "Failed to unify types" (Just report)
             exprWithSpan TypeBottom Poison
         Nothing -> return expr'
+
+-- | In the normal bidirectional system, lambda abstraction is checked
+-- rather than inferred. However, it is a bit tricker in our case as our lambda
+-- expression actually carries the type of args and return value. So, we still
+-- name this function as "inference", but it does checks the body by unifying
+-- with the return type.
+inferTypeForLambdaAbstraction :: HasCallStack => Syn.LambdaExpr -> SemiEff Expr
+inferTypeForLambdaAbstraction (Syn.LambdaExpr args body retTy)  = do
+    retTy' <- maybe (introduceNewHoleInContext []) evalType retTy
+    args' <- forM args $ \(name, ty) -> do
+        ty' <- maybe (introduceNewHoleInContext []) evalType ty
+        return (name, ty')
+    -- create a env with args' and infer body; unify with retTy'
+    (argIDs, body') <- withAllArgs args' (checkType body retTy') []
+    let argSet = IntSet.fromList (map (\(VarID x) -> x) argIDs)
+    let freeVars = collectExprFreeVars body' `IntSet.difference` argSet
+    let ty = TypeClosure (map snd args') retTy'
+    let zippedArgIDs = zipWith (\i (_, t) -> (i, t)) argIDs args'
+    freeVars' <- mapM queryVarInContext (IntSet.toList freeVars)
+    exprWithSpan ty $ Closure $ ClosureExpr freeVars' zippedArgIDs body'
+    where
+        withAllArgs :: [(Identifier, Type)] -> SemiEff a -> [VarID] -> SemiEff ([VarID], a)
+        withAllArgs [] action acc = action >>= \a -> return (reverse acc, a)
+        -- TODO: add span?
+        withAllArgs ((name, ty) : rest) action acc = do
+            withVariable name Nothing ty $ \varID -> withAllArgs rest action (varID : acc)
+
+        queryVarInContext :: Int -> SemiEff (VarID, Type)
+        queryVarInContext idx = do
+            let varID = VarID idx
+            varTable <- State.gets varTable
+            ty <- getVarType varID varTable
+            return (varID, ty)
 
 -- | Helper function to infer the type of an intrinsic function call
 inferTypeForIntrinsicCall :: Syn.FuncCall -> SemiEff (Maybe Expr)
@@ -774,7 +941,45 @@ inferTypeForCallExpr :: Syn.FuncCall -> SemiEff Expr
 inferTypeForCallExpr call = do
     inferTypeForIntrinsicCall call >>= \case
         Just expr -> return expr
-        Nothing -> inferTypeForNormalCall call
+        Nothing ->
+            inferTypeForClosureCall call >>= \case
+                Just expr -> return expr
+                Nothing -> inferTypeForNormalCall call -- TODO: this nesting is ugly
+
+-- special handling for var-like closure calls.
+inferTypeForClosureCall :: Syn.FuncCall -> SemiEff (Maybe Expr)
+inferTypeForClosureCall (Syn.FuncCall (Path varLike []) [] args) = do
+    varTable <- State.gets varTable
+    varInfo <- lookupVar varLike varTable
+    maybe (pure Nothing) inferImpl varInfo
+  where
+    inferImpl :: (VarID, Type) -> SemiEff (Maybe Expr)
+    inferImpl (varID, varTy) = do
+        varTy' <- runUnification $ force varTy
+        case varTy' of
+            -- if the variable is a closure, we check that all arguments are
+            -- of expected type. If so, we use the return type as the type of the closure call
+            TypeClosure expectedArgs ret -> do
+                (trailing, checkedArgs) <- oneByOneTypeCheck expectedArgs args
+                varRef <- exprWithSpan varTy' (Var varID)
+                if null trailing
+                    then
+                        Just <$> exprWithSpan ret (ClosureCall varRef checkedArgs)
+                    else
+                        let newClosureTy = TypeClosure trailing ret
+                         in Just <$> exprWithSpan newClosureTy (ClosureCall varRef checkedArgs)
+            _ -> pure Nothing
+
+    oneByOneTypeCheck :: [Type] -> [Syn.Expr] -> SemiEff ([Type], [Expr])
+    oneByOneTypeCheck trailing [] = pure (trailing, [])
+    oneByOneTypeCheck (expected : expectedRest) (arg : argRest) = do
+        arg' <- checkType arg expected
+        (trailing', rest') <- oneByOneTypeCheck expectedRest argRest
+        return (trailing', arg' : rest')
+    oneByOneTypeCheck _ _ = do
+        addErrReportMsg "Closure argument count mismatch"
+        return ([], [])
+inferTypeForClosureCall _ = pure Nothing
 
 inferTypeForNormalCall :: Syn.FuncCall -> SemiEff Expr
 inferTypeForNormalCall

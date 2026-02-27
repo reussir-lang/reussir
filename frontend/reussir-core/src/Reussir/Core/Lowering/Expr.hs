@@ -2,7 +2,7 @@
 
 module Reussir.Core.Lowering.Expr where
 
-import Control.Monad (forM_, when)
+import Control.Monad (forM_, when, foldM)
 import Data.Maybe (maybeToList)
 import Data.Scientific (Scientific, toBoundedInteger)
 import Effectful (inject)
@@ -487,6 +487,113 @@ lowerExprInBlock (Full.Assign dst idx src) _ = do
         _ -> error $ "assign to non-flex rc types: " ++ show dstTy
 lowerExprInBlock (Full.Match scrutinee dt) ty =
     DT.lowerMatch scrutinee dt ty
+-- Closure: create closure with all inputs (captures + args), then apply captures
+lowerExprInBlock (Full.Closure clo) ty = do
+    let captures = Full.closureExprCaptures clo
+    let formalArgs = Full.closureExprArgs clo
+    let body = Full.closureExprBody clo
+
+    -- Extract return type from the overall closure type
+    -- ty = TypeRc (TypeClosure formalArgTypes retType) Shared
+    let retFullType = case ty of
+            Full.TypeRc (Full.TypeClosure _ ret) _ -> ret
+            _ -> error $ "Closure type should be TypeRc (TypeClosure ...) but got " ++ show ty
+
+    -- Convert types to IR
+    captureIRTypes <- mapM (inject . convertType . snd) captures
+    argIRTypes <- mapM (inject . convertType . snd) formalArgs
+    retIRType <- inject $ convertType retFullType
+
+    let allInputIRTypes = captureIRTypes ++ argIRTypes
+
+    -- Create block args for the closure body (captures first, then formal args)
+    blockArgVals <- mapM (\irTy -> do
+        v <- nextValue
+        pure (v, irTy)
+        ) allInputIRTypes
+
+    -- Lower the closure body with captures and args bound to block arg values
+    let allVarBindings = zip (map fst captures ++ map fst formalArgs) blockArgVals
+    bodyBlock <- do
+        backupBlock <- State.gets currentBlock
+        State.modify $ \s -> s{currentBlock = Seq.empty}
+        let bindAndLower [] = do
+                lastVal <- lowerExpr body
+                addIRInstr (IR.Yield IR.YieldClosure lastVal)
+            bindAndLower ((varID, typedVal) : rest) =
+                withVar varID typedVal $ bindAndLower rest
+        bindAndLower allVarBindings
+        res <- materializeCurrentBlock blockArgVals
+        State.modify $ \s -> s{currentBlock = backupBlock}
+        pure res
+
+    -- Emit closure.create with full type (all inputs including captures)
+    let fullClosureIRType = mkRcClosureType allInputIRTypes retIRType
+    closureVal <- nextValue
+    addIRInstr $ IR.ClosureCreate bodyBlock (closureVal, fullClosureIRType)
+
+    -- If no captures, we're done
+    if null captures
+        then pure $ Just (closureVal, fullClosureIRType)
+        else do
+            -- Look up captured variable values from outer scope
+            captureTypedVals <- mapM (\(varID, _) -> do
+                varMap' <- State.gets @LocalLoweringContext varMap
+                case IntMap.lookup (fromIntegral (unVarID varID)) varMap' of
+                    Just val -> pure val
+                    Nothing -> error $ "Captured variable not found: " ++ show varID
+                ) captures
+
+            -- Apply captured values one at a time
+            -- Closure is freshly created = unique, no uniqify needed
+            let remainingTypeSuffixes = drop 1 $ suffixes allInputIRTypes
+            foldM (\closureTV (capturedVal, remainingInputs) -> do
+                let appliedTy = mkRcClosureType remainingInputs retIRType
+                applyRes <- nextValue
+                addIRInstr $ IR.ClosureApply closureTV capturedVal (applyRes, appliedTy)
+                pure (applyRes, appliedTy)
+                ) (closureVal, fullClosureIRType) (zip captureTypedVals remainingTypeSuffixes)
+                >>= (pure . Just)
+-- ClosureCall: uniqify, apply all args, eval
+lowerExprInBlock (Full.ClosureCall target args) ty = do
+    -- Lower the target closure and all arguments
+    closureTV <- tyValOrICE <$> lowerExpr target
+    argTVs <- mapM (fmap tyValOrICE . lowerExpr) args
+
+    -- Extract closure input types and return type from the IR type
+    let (closureInputTypes, closureRetType) = case snd closureTV of
+            IR.TypeRc (IR.Rc (IR.TypeClosure (IR.Closure inputs ret)) _ _) -> (inputs, ret)
+            other -> error $ "ClosureCall target should be Rc<Closure> but got " ++ show other
+
+    -- Uniqify the closure (it might be shared)
+    uniqVal <- nextValue
+    let closureTy = snd closureTV
+    addIRInstr $ IR.ClosureUniqify closureTV (uniqVal, closureTy)
+
+    -- Apply args one by one (all unique after uniqify, no further uniqify needed)
+    let inputSuffixes = drop 1 $ suffixes closureInputTypes
+    applied <- foldM (\curTV (argTV, remainingInputs) -> do
+        let appliedTy = mkRcClosureType remainingInputs closureRetType
+        applyRes <- nextValue
+        addIRInstr $ IR.ClosureApply curTV argTV (applyRes, appliedTy)
+        pure (applyRes, appliedTy)
+        ) (uniqVal, closureTy) (zip argTVs inputSuffixes)
+
+    -- Only eval if all inputs have been consumed (full application)
+    -- For partial application, just return the partially-applied closure
+    if length args == length closureInputTypes
+        then do
+            retIRTy <- inject $ convertType ty
+            case ty of
+                Full.TypeUnit -> do
+                    addIRInstr $ IR.ClosureEval applied Nothing
+                    pure Nothing
+                _ -> do
+                    evalRes <- nextValue
+                    addIRInstr $ IR.ClosureEval applied (Just (evalRes, retIRTy))
+                    pure $ Just (evalRes, retIRTy)
+        else
+            pure $ Just applied
 lowerExprInBlock kind ty =
     error $
         "Detailed lowerExprInBlock implementation missing for "
@@ -698,3 +805,18 @@ lowerSequenceExprInBlock (e : es) _ =
         _ -> do
             res' <- lowerExpr e
             lowerSequenceExprInBlock es res'
+
+-- | Construct an Rc<Closure<(inputs) -> ret>> IR type
+mkRcClosureType :: [IR.Type] -> IR.Type -> IR.Type
+mkRcClosureType inputs ret =
+    IR.TypeRc
+        IR.Rc
+            { IR.rcBoxInner = IR.TypeClosure (IR.Closure inputs ret)
+            , IR.rcBoxAtomicity = IR.NonAtomic
+            , IR.rcBoxCapability = IRType.Shared
+            }
+
+-- | Compute all suffixes of a list: suffixes [a,b,c] = [[a,b,c],[b,c],[c],[]]
+suffixes :: [a] -> [[a]]
+suffixes [] = [[]]
+suffixes xs@(_ : rest) = xs : suffixes rest

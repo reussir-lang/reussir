@@ -53,6 +53,11 @@ data ExprKind
     | Match Expr DecisionTree
     | RcWrap Expr
     | Sequence [Expr]
+    | Closure ClosureExpr
+    | ClosureCall
+        { closureCallTarget :: Expr
+        , closureCallArgs :: [Expr]
+        }
     deriving (Show, Eq)
 
 newtype PatternVarRef = PatternVarRef {unPatternVarRef :: Seq.Seq Int}
@@ -97,6 +102,13 @@ data DTSwitchCases
         { dtSwitchNullableJust :: DecisionTree
         , dtSwitchNullableNothing :: DecisionTree
         }
+    deriving (Show, Eq)
+
+data ClosureExpr = ClosureExpr
+    { closureExprCaptures :: [(VarID, Type)]
+    , closureExprArgs :: [(VarID, Type)]
+    , closureExprBody :: Expr
+    }
     deriving (Show, Eq)
 
 data Expr = Expr

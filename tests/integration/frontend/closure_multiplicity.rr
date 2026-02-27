@@ -1,0 +1,99 @@
+// RUN: %reussir-compiler %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/closure_multiplicity.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+struct Box {
+    x : i32
+}
+
+fn apply1(f : i32 -> i32, x : i32) -> i32 {
+    f(x)
+}
+
+fn get_x(b : Box) -> i32 {
+    b.x
+}
+
+// --- Test 1: same closure called multiple times ---
+pub fn test_closure_reuse() -> i32 {
+    let add_one = |x : i32| x + 1;
+    let a = apply1(add_one, 10);
+    let b = apply1(add_one, 20);
+    let c = apply1(add_one, 30);
+    a + b + c
+}
+extern "C" trampoline "test_closure_reuse_ffi" = test_closure_reuse;
+
+// --- Test 2: captured RC value used both inside and outside closure ---
+pub fn test_capture_and_use() -> i32 {
+    let val = Box { x: 7 };
+    let use_val = |x : i32| x + val.x;
+    let inside = apply1(use_val, 10);
+    let outside = val.x * 5;
+    inside + outside
+}
+extern "C" trampoline "test_capture_and_use_ffi" = test_capture_and_use;
+
+// --- Test 3: multiple closures capture the same RC variable ---
+pub fn test_shared_capture() -> i32 {
+    let shared = Box { x: 100 };
+    let add_shared = |x : i32| x + shared.x;
+    let sub_shared = |x : i32| x - shared.x;
+    let a = apply1(add_shared, 10);
+    let b = apply1(sub_shared, 210);
+    a + b
+}
+extern "C" trampoline "test_shared_capture_ffi" = test_shared_capture;
+
+// --- Test 4: closure used as argument multiple times in a single call chain ---
+pub fn test_closure_multi_apply() -> i32 {
+    let double = |x : i32| x * 2;
+    apply1(double, apply1(double, apply1(double, 5)))
+}
+extern "C" trampoline "test_closure_multi_apply_ffi" = test_closure_multi_apply;
+
+// --- Test 5: RC captured value used in multiple closures and also directly ---
+pub fn test_multi_use_capture() -> i32 {
+    let base = Box { x: 10 };
+    let f1 = |x : i32| x + base.x;
+    let f2 = |x : i32| x * base.x;
+    let direct = base.x + 2;
+    let r1 = apply1(f1, 5);
+    let r2 = apply1(f2, 3);
+    r1 + r2 + direct
+}
+extern "C" trampoline "test_multi_use_capture_ffi" = test_multi_use_capture;
+
+// --- Test 6: partial application result used multiple times ---
+fn make_adder(n : i32) -> i32 -> i32 {
+    |x : i32| x + n
+}
+
+pub fn test_partial_reuse() -> i32 {
+    let add5 = make_adder(5);
+    let a = apply1(add5, 10);
+    let b = apply1(add5, 20);
+    a + b
+}
+extern "C" trampoline "test_partial_reuse_ffi" = test_partial_reuse;
+
+// --- Test 7: RC captured value used by closure called multiple times ---
+pub fn test_rc_closure_reuse() -> i32 {
+    let b = Box { x: 5 };
+    let add_b = |x : i32| x + b.x;
+    let a = apply1(add_b, 10);
+    let c = apply1(add_b, 20);
+    let d = apply1(add_b, 30);
+    a + c + d
+}
+extern "C" trampoline "test_rc_closure_reuse_ffi" = test_rc_closure_reuse;
+
+// --- Test 8: RC value captured and also passed to function directly ---
+pub fn test_rc_capture_and_consume() -> i32 {
+    let b = Box { x: 8 };
+    let f = |x : i32| x + b.x;
+    let r1 = apply1(f, 10);
+    let r2 = get_x(b);
+    r1 + r2
+}
+extern "C" trampoline "test_rc_capture_and_consume_ffi" = test_rc_capture_and_consume;

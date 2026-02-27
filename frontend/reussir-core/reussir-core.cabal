@@ -154,10 +154,13 @@ test-suite reussir-core-test
         Test.Reussir.Core.String
         Test.Reussir.Core.Semi.Mangle
         Test.Reussir.Core.Semi.PatternMatch
+        Test.Reussir.Core.Semi.TyckSpec
     build-depends:
         base ^>=4.20.2.0,
         reussir-core,
         tasty,
+        tasty-hspec,
+        hspec,
         tasty-hunit,
         containers,
         text,

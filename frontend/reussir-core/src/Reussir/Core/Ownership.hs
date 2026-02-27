@@ -497,6 +497,13 @@ collectFreeVars expr = case Full.exprKind expr of
     Full.RcWrap e -> collectFreeVars e
     Full.Match scr dt -> collectFreeVars scr <> collectFreeVarsDT dt
     Full.Sequence es -> IntSet.unions (map collectFreeVars es)
+    Full.Closure clo ->
+        -- Captures are the free vars from the outer scope's perspective.
+        -- The body's internal vars (args, locals) are not free in the outer scope.
+        let captureVarIDs = IntSet.fromList [unVarID vid | (vid, _) <- Full.closureExprCaptures clo]
+         in captureVarIDs
+    Full.ClosureCall target args ->
+        collectFreeVars target <> IntSet.unions (map collectFreeVars args)
 
 -- | Collect free variable references in a decision tree.
 collectFreeVarsDT :: Full.DecisionTree -> IntSet.IntSet
@@ -671,6 +678,11 @@ analyzeExpr tbl expr st = do
             analyzeDecisionTree tbl dt st2 (Full.exprType scrutinee) scrutVarIDs
         -- Region run
         Full.RegionRun bodyExpr -> analyzeExpr tbl bodyExpr st
+        -- Closure: analyze body in isolation, consume captured args from outer scope
+        Full.Closure clo -> analyzeClosure tbl clo st eid
+        -- Closure call: consume both the closure and all arguments
+        Full.ClosureCall target args ->
+            analyzeConsumingCall tbl (target : args) st eid ty
 
 {- | Analyze a sequence of expressions with early dec placement.
 
@@ -758,8 +770,19 @@ analyzeSequenceEarly tbl [(e, _)] st scopedVars = do
 analyzeSequenceEarly tbl ((e, suffixVars) : rest) st scopedVars =
     case Full.exprKind e of
         Full.Let{Full.letVarID = varID, Full.letVarExpr = varExpr} -> do
+            -- Before analyzing the bound expression, emit incs for vars
+            -- consumed by varExpr but still needed in later expressions
+            st0 <- case Full.exprKind varExpr of
+                Full.FuncCall{} -> emitSequenceLevelIncs e suffixVars st
+                Full.CompoundCall{} -> emitSequenceLevelIncs e suffixVars st
+                Full.VariantCall{} -> emitSequenceLevelIncs e suffixVars st
+                Full.NullableCall{} -> emitSequenceLevelIncs e suffixVars st
+                Full.RcWrap{} -> emitSequenceLevelIncs e suffixVars st
+                Full.ClosureCall{} -> emitSequenceLevelIncs e suffixVars st
+                Full.Closure{} -> emitSequenceLevelIncs e suffixVars st
+                _ -> pure st
             -- Analyze the bound expression
-            (st1, exprFlux) <- analyzeExpr tbl varExpr st
+            (st1, exprFlux) <- analyzeExpr tbl varExpr st0
             -- Consume any free vars the expression uses
             let st2 = consumeFreeVars exprFlux st1
             -- Grant ownership if the bound value is RR
@@ -777,11 +800,90 @@ analyzeSequenceEarly tbl ((e, suffixVars) : rest) st scopedVars =
                 Full.VariantCall{} -> emitSequenceLevelIncs e suffixVars st
                 Full.NullableCall{} -> emitSequenceLevelIncs e suffixVars st
                 Full.RcWrap{} -> emitSequenceLevelIncs e suffixVars st
+                Full.ClosureCall{} -> emitSequenceLevelIncs e suffixVars st
+                Full.Closure{} -> emitSequenceLevelIncs e suffixVars st
                 _ -> pure st
             (st1, _) <- analyzeExpr tbl e st0
             -- Emit early decs for owned variables no longer needed
             let st2 = emitEarlyDecs st1 (Full.exprID e) suffixVars
             analyzeSequenceEarly tbl rest st2 scopedVars
+
+{- | Analyze a closure expression.
+
+Closures capture variables from the enclosing scope and create an isolated
+execution environment. The ownership analysis must:
+
+1. /Consume/ captured variables from the outer scope (ownership transfers into the closure)
+2. Analyze the closure body in /isolation/ — with a fresh ledger initialized from
+   captures and formal parameters
+3. Emit end-of-scope decs inside the closure for any variables that are still owned
+   after the body executes
+4. Return the closure's annotations to the outer state
+
+=== Ownership Flow
+
+@
+  let x = make();           // outer ledger: { x: 1 }
+  let f = |x| { use(x) };  // captures x -> outer ledger: { x: 0 }
+                             // closure ledger: { x: 1 } -> analyze body -> { x: 0 }
+  f(arg);                    // f is consumed (it's Rc<Closure>)
+@
+
+Effects inside and outside the closure are isolated: the closure body
+gets its own ledger and does not see or modify the outer scope's ledger.
+-}
+analyzeClosure ::
+    Full.FullRecordTable ->
+    Full.ClosureExpr ->
+    AnalysisState ->
+    ExprID ->
+    IO (AnalysisState, ExprFlux)
+analyzeClosure tbl clo outerState _eid = do
+    -- 1. Build an isolated ledger for the closure body from captures + args
+    let captures = Full.closureExprCaptures clo
+    let args = Full.closureExprArgs clo
+    let body = Full.closureExprBody clo
+
+    -- Initialize closure-internal ledger: grant ownership for RR-typed captures and args
+    innerState <- foldlM'
+        (\s (varID, ty) -> do
+            rr <- isRR tbl ty
+            pure $ if rr then grantOwnership varID s else s
+        )
+        emptyState
+        (captures ++ args)
+
+    -- 2. Analyze the body in isolation
+    (innerStateFinal, bodyFlux) <- analyzeExpr tbl body innerState
+
+    -- 3. Consume the body's free vars (return value transfers ownership)
+    let innerStateFinal' = consumeFreeVars bodyFlux innerStateFinal
+
+    -- 4. Emit end-of-scope decs inside the closure for remaining owned vars
+    let innerStateFinal'' = emitEndOfScopeDecs innerStateFinal' (Full.exprID body)
+
+    -- 5. Merge the closure's internal annotations back into the outer state
+    let outerWithAnnotations = outerState
+            { asAnnotations =
+                IntMap.union (asAnnotations innerStateFinal'') (asAnnotations outerState)
+            }
+
+    -- 6. Consume captured RR-typed vars from the outer scope
+    captureFlux <- foldlM'
+        (\flux (varID, ty) -> do
+            rr <- isRR tbl ty
+            pure $ if rr
+                then flux { fluxFreeVars = IntSet.insert (unVarID varID) (fluxFreeVars flux) }
+                else flux
+        )
+        emptyFlux
+        captures
+    let outerConsumed = consumeFreeVars captureFlux outerWithAnnotations
+
+    -- The closure itself is an RR value (Rc<Closure>), but ownership is granted
+    -- by the caller (e.g., Let binding), not here. Return emptyFlux since the
+    -- captures have already been consumed above.
+    pure (outerConsumed, emptyFlux)
 
 {- | Analyze a function\/intrinsic\/constructor call where arguments are consumed.
 

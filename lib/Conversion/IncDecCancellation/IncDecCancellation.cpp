@@ -109,7 +109,9 @@ llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func) {
       // If encounter any of the following, there is a chance that nested
       // operation may demand rc management. Hence, we abort the cancellation.
       if (llvm::isa<mlir::CallableOpInterface>(next) ||
-          llvm::isa<mlir::RegionBranchOpInterface>(next))
+          llvm::isa<mlir::RegionBranchOpInterface>(next) ||
+          llvm::isa<ReussirClosureApplyOp>(next) ||
+          llvm::isa<ReussirClosureEvalOp>(next))
         break;
       next = next->getNextNode();
     }
