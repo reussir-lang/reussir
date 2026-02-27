@@ -1,0 +1,93 @@
+// RUN: %reussir-compiler %s -o %t.o
+// RUN: %cc %t.o %S/closure_e2e.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// --- Test 1: basic closure call (single arg) ---
+fn apply_i32(f : i32 -> i32, x : i32) -> i32 {
+    f(x)
+}
+
+pub fn test_basic_call() -> i32 {
+    let add_one = |x : i32| x + 1;
+    apply_i32(add_one, 41)
+}
+extern "C" trampoline "test_basic_call_ffi" = test_basic_call;
+
+// --- Test 2: closure with capture ---
+pub fn test_capture() -> i32 {
+    let offset = 10;
+    let add_offset = |x : i32| x + offset;
+    apply_i32(add_offset, 32)
+}
+extern "C" trampoline "test_capture_ffi" = test_capture;
+
+// --- Test 3: multi-arg closure call ---
+fn apply2(f : (i32, i32) -> i32, a : i32, b : i32) -> i32 {
+    f(a, b)
+}
+
+pub fn test_multi_arg() -> i32 {
+    let add = |a : i32, b : i32| a + b;
+    apply2(add, 17, 25)
+}
+extern "C" trampoline "test_multi_arg_ffi" = test_multi_arg;
+
+// --- Test 4: partial application ---
+fn apply_bool(f : bool -> i32, x : bool) -> i32 {
+    f(x)
+}
+
+pub fn test_partial() -> i32 {
+    let choose = |a : i32, b : bool| if (b) { a } else { 0 };
+    let choose_100 = choose(100);
+    apply_bool(choose_100, true)
+}
+extern "C" trampoline "test_partial_ffi" = test_partial;
+
+// --- Test 5: closure capturing multiple values ---
+pub fn test_multi_capture() -> i32 {
+    let a = 3;
+    let b = 7;
+    let c = 11;
+    let sum_with = |x : i32| x + a + b + c;
+    apply_i32(sum_with, 100)
+}
+extern "C" trampoline "test_multi_capture_ffi" = test_multi_capture;
+
+// --- Test 6: nested closure calls ---
+pub fn test_nested() -> i32 {
+    let double = |x : i32| x * 2;
+    let inc    = |x : i32| x + 1;
+    apply_i32(inc, apply_i32(double, 20))
+}
+extern "C" trampoline "test_nested_ffi" = test_nested;
+
+// --- Test 7: closure returning closure (higher-order) ---
+fn make_adder(n : i32) -> i32 -> i32 {
+    |x : i32| x + n
+}
+
+pub fn test_higher_order() -> i32 {
+    let add5 = make_adder(5);
+    apply_i32(add5, 37)
+}
+extern "C" trampoline "test_higher_order_ffi" = test_higher_order;
+
+// --- Test 8: abstract (closure as return value, no args) ---
+fn make_const(v : u64) -> bool -> u64 {
+    |b : bool| if (b) { v } else { 0 }
+}
+
+pub fn test_abstract() -> u64 {
+    let f = make_const(99);
+    f(true)
+}
+extern "C" trampoline "test_abstract_ffi" = test_abstract;
+
+// --- Test 9: partial application (false branch) ---
+pub fn test_partial_false() -> i32 {
+    let choose = |a : i32, b : bool| if (b) { a } else { 0 };
+    let choose_100 = choose(100);
+    apply_bool(choose_100, false)
+}
+extern "C" trampoline "test_partial_false_ffi" = test_partial_false;

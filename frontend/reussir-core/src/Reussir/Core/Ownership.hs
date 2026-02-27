@@ -770,8 +770,19 @@ analyzeSequenceEarly tbl [(e, _)] st scopedVars = do
 analyzeSequenceEarly tbl ((e, suffixVars) : rest) st scopedVars =
     case Full.exprKind e of
         Full.Let{Full.letVarID = varID, Full.letVarExpr = varExpr} -> do
+            -- Before analyzing the bound expression, emit incs for vars
+            -- consumed by varExpr but still needed in later expressions
+            st0 <- case Full.exprKind varExpr of
+                Full.FuncCall{} -> emitSequenceLevelIncs e suffixVars st
+                Full.CompoundCall{} -> emitSequenceLevelIncs e suffixVars st
+                Full.VariantCall{} -> emitSequenceLevelIncs e suffixVars st
+                Full.NullableCall{} -> emitSequenceLevelIncs e suffixVars st
+                Full.RcWrap{} -> emitSequenceLevelIncs e suffixVars st
+                Full.ClosureCall{} -> emitSequenceLevelIncs e suffixVars st
+                Full.Closure{} -> emitSequenceLevelIncs e suffixVars st
+                _ -> pure st
             -- Analyze the bound expression
-            (st1, exprFlux) <- analyzeExpr tbl varExpr st
+            (st1, exprFlux) <- analyzeExpr tbl varExpr st0
             -- Consume any free vars the expression uses
             let st2 = consumeFreeVars exprFlux st1
             -- Grant ownership if the bound value is RR
