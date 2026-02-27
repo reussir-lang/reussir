@@ -27,7 +27,7 @@ import Reussir.Core.Data.Full.Expr (
     DecisionTree (..),
     Expr (..),
     ExprKind (..),
-    PatternVarRef (..),
+    PatternVarRef (..), ClosureExpr (..),
  )
 import Reussir.Core.Data.Full.Type (Type (..))
 import Reussir.Core.Data.UniqueID (ExprID (ExprID))
@@ -154,8 +154,19 @@ convertSemiExpr semiExpr = do
                 scrutinee' <- convertSemiExpr scrutinee
                 dt' <- convertDecisionTree dt
                 exprWithSpan ty $ Match scrutinee' dt'
-            SemiExpr.Closure _ -> error "NYI"
-            SemiExpr.ClosureCall{} -> error "NYI"
+            SemiExpr.Closure SemiExpr.ClosureExpr{..} -> do
+                let convertSemiVarRef (varID, t) = do
+                        t' <- convertTy t
+                        pure (varID, t')
+                closureExprCaptures' <- mapM convertSemiVarRef closureExprCaptures
+                closureExprArgs' <- mapM convertSemiVarRef closureExprArgs
+                closureExprBody' <- convertSemiExpr closureExprBody
+                exprWithSpan ty $ Closure $ 
+                    ClosureExpr closureExprCaptures' closureExprArgs' closureExprBody'
+            SemiExpr.ClosureCall target args -> do
+                target' <- convertSemiExpr target
+                args' <- mapM convertSemiExpr args
+                exprWithSpan ty $ ClosureCall target' args'
 
 hoistRcWrapping :: Type -> ExprKind -> FullEff Expr
 hoistRcWrapping ty e = do
