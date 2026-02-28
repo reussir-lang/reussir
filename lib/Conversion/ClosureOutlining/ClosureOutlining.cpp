@@ -6,6 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <llvm-21/llvm/ADT/SmallVector.h>
+#include <llvm-21/llvm/ADT/StringRef.h>
 #include <mlir/Pass/Pass.h>
 
 #include "Reussir/Conversion/ClosureOutlining.h"
@@ -19,12 +21,12 @@
 
 #include <llvm/ADT/StringMap.h>
 #include <llvm/ADT/StringSet.h>
-#include <llvm/Support/xxhash.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/PatternMatch.h>
+#include <sstream>
 
 namespace reussir {
 
@@ -36,29 +38,37 @@ namespace reussir {
 //===----------------------------------------------------------------------===//
 
 namespace {
+
+std::string b62encode(size_t value) {
+  const char *alphabet =
+      "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  if (value == 0)
+    return std::string(1, alphabet[0]);
+
+  std::string result;
+  while (value != 0) {
+    uint64_t rem = value % 62;
+    value = value / 62;
+    result.push_back(alphabet[rem]);
+  }
+  std::reverse(result.begin(), result.end());
+  return result;
+}
+
 class ClosureNameUniquifier {
   llvm::StringMap<size_t> nameOccurrences;
 
 public:
   ClosureNameUniquifier() = default;
   std::string uniquify(ReussirClosureCreateOp op) {
-    llvm::SmallString<128> buffer;
     auto function = op->getParentOfType<mlir::func::FuncOp>();
-    auto moduleOp = function->getParentOfType<mlir::ModuleOp>();
-    buffer.append(moduleOp.getName() ? *moduleOp.getName() : "<anonymous>");
-    buffer.append(function.getName());
+    auto closureIdx = nameOccurrences[function.getSymName()]++;
     std::stringstream ss;
-    auto [high, lower] = llvm::xxh3_128bits(llvm::ArrayRef(
-        reinterpret_cast<const uint8_t *>(buffer.data()), buffer.size()));
-    ss << "core::intrinsic::<reussir_closure_" << std::hex << high << '_'
-       << std::hex << lower;
-    std::string name = ss.str();
-    if (nameOccurrences[name]++) {
-      name.push_back('_');
-      name.append(std::to_string(nameOccurrences[name]));
-    }
-    name.push_back('>');
-    return name;
+    llvm::StringRef funcNameWithoutPrefix = function.getSymName().ltrim("_R");
+    std::string_view funcNameWithoutPrefixView = funcNameWithoutPrefix;
+    ss << "Nv" << funcNameWithoutPrefixView << "s" << b62encode(closureIdx)
+       << "_8$closure";
+    return ss.str();
   }
 };
 struct ClosureOutliningPass
@@ -94,7 +104,7 @@ void ClosureOutliningPass::runOnOperation() {
     if (op.isInlined())
       closureCreateOps.push_back(op);
   });
-  ClosureNameUniquifier nameUniquifier;
+  ClosureNameUniquifier nameUniquifier{};
   mlir::IRRewriter rewriter(moduleOp.getContext());
   for (auto op : closureCreateOps) {
     auto name = nameUniquifier.uniquify(op);
@@ -111,7 +121,7 @@ void ClosureOutliningPass::runOnOperation() {
 
     // Third, create vtable operation
     rewriter.setInsertionPointToEnd(moduleOp.getBody());
-    std::string vtableName = name + "::vtable";
+    std::string vtableName = "_RNv" + name + "6vtable";
 
     // Create the vtable operation
     mlir::FlatSymbolRefAttr dropAttr = mlir::FlatSymbolRefAttr::get(
@@ -137,7 +147,7 @@ void ClosureOutliningPass::runOnOperation() {
 mlir::func::FuncOp ClosureOutliningPass::createFunctionAndInlineRegion(
     ReussirClosureCreateOp op, llvm::Twine name, mlir::IRRewriter &rewriter) {
   mlir::OpBuilder::InsertionGuard guard(rewriter);
-  std::string invokeName = (name + "::evaluate").str();
+  std::string invokeName = ("_RNv" + name + "8evaluate").str();
   mlir::ModuleOp moduleOp = getOperation();
   rewriter.setInsertionPointToEnd(moduleOp.getBody());
 
@@ -252,7 +262,7 @@ mlir::func::FuncOp ClosureOutliningPass::createFunctionAndInlineRegion(
 mlir::func::FuncOp ClosureOutliningPass::createClosureDropFunction(
     ReussirClosureCreateOp op, llvm::Twine name, mlir::IRRewriter &rewriter) {
   mlir::OpBuilder::InsertionGuard guard(rewriter);
-  std::string dropName = (name + "::drop").str();
+  std::string dropName = ("_RNv" + name + "4drop").str();
   mlir::ModuleOp moduleOp = getOperation();
   rewriter.setInsertionPointToEnd(moduleOp.getBody());
   ClosureBoxType closureBoxType = op.getClosureBoxType();
@@ -357,7 +367,7 @@ mlir::func::FuncOp ClosureOutliningPass::createClosureDropFunction(
 mlir::func::FuncOp ClosureOutliningPass::createClosureCloneFunction(
     ReussirClosureCreateOp op, llvm::Twine name, mlir::IRRewriter &rewriter) {
   mlir::OpBuilder::InsertionGuard guard(rewriter);
-  std::string cloneName = (name + "::clone").str();
+  std::string cloneName = ("_RNv" + name + "5clone").str();
   mlir::ModuleOp moduleOp = getOperation();
   rewriter.setInsertionPointToEnd(moduleOp.getBody());
   ClosureBoxType closureBoxType = op.getClosureBoxType();
