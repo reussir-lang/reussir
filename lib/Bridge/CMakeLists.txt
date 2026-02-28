@@ -36,6 +36,16 @@ add_mlir_library(MLIRReussirBridge
     spdlog::spdlog
     ${TPDE_LINK_LIB}
 )
+
+if (LLVM_VERSION VERSION_GREATER_EQUAL 22)
+  target_link_libraries(MLIRReussirBridge
+    PRIVATE
+      MLIRRegisterAllExtensions
+  )
+else()
+  message(STATUS "LLVM_VERSION is ${LLVM_VERSION}, skipping MLIRRegisterAllExtensions")
+endif()
+
 file(GLOB_RECURSE module_files "*.cppm")
 target_sources(MLIRReussirBridge
   PUBLIC FILE_SET CXX_MODULES FILES ${module_files} 
