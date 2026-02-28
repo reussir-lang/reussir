@@ -19,6 +19,7 @@ target_link_libraries(reussir-ut
     MLIRReussir
     GTest::gtest
     GTest::gtest_main
+    MLIRRegisterAllDialects
 )
 
 # Include necessary directories

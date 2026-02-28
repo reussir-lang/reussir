@@ -40,5 +40,8 @@ target_link_libraries(reussir-opt
     ${dialect_libs} 
     ${conversion_libs} 
     ${extension_libs} 
+    MLIRRegisterAllExtensions
+    MLIRRegisterAllPasses
+    MLIRRegisterAllDialects
     MLIROptLib
 )
