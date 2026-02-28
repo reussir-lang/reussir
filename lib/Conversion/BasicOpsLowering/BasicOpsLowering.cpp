@@ -1074,6 +1074,7 @@ struct ReussirRcDecOpConversionPattern
       // Load the drop function pointer
       auto dropFunc =
           rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, dropPtr);
+      dropFunc.setInvariant(true);
 
       // Create function type for drop: void (*)(void*)
       auto voidType = mlir::LLVM::LLVMVoidType::get(rewriter.getContext());
@@ -1313,6 +1314,7 @@ struct ReussirClosureCloneOpConversionPattern
     // Load the clone function pointer
     auto cloneFunc =
         rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, clonePtr);
+    cloneFunc.setInvariant(true);
 
     // Create function type for clone: void* (*)(void*)
     auto funcType =
@@ -1366,6 +1368,7 @@ struct ReussirClosureEvalOpConversionPattern
     // Load the evaluate function pointer
     auto evalFunc =
         rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, evalPtr);
+    evalFunc.setInvariant(true);
 
     // Determine if the closure has a return value
     mlir::Type resultType =
@@ -1912,8 +1915,7 @@ struct ReussirTrampolineOpConversionPattern
     int trampolineArgIdx = cabiSig.hasSRet ? 1 : 0;
 
     for (const auto &[paramType, passKind] : cabiSig.params) {
-      const bool isIndirect =
-          passKind != CABIParamPassKind::Direct;
+      const bool isIndirect = passKind != CABIParamPassKind::Direct;
       if (passKind == CABIParamPassKind::IndirectByVal)
         trampoline.setArgAttr(trampolineArgIdx,
                               mlir::LLVM::LLVMDialect::getByValAttrName(),
