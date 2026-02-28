@@ -39,6 +39,18 @@ target_link_libraries(reussir-opt
     MLIRReussirAttachNativeTarget
     ${dialect_libs} 
     ${conversion_libs} 
-    ${extension_libs} 
+    ${extension_libs}
     MLIROptLib
 )
+
+if (LLVM_VERSION VERSION_GREATER_EQUAL 22)
+  target_link_libraries(reussir-opt
+    PRIVATE
+      MLIRRegisterAllDialects
+      MLIRRegisterAllExtensions
+      MLIRRegisterAllPasses
+  )
+else()
+  message(STATUS "LLVM_VERSION is ${LLVM_VERSION}, skipping All(*) libs")
+endif()
+

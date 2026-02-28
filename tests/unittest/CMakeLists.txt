@@ -21,6 +21,15 @@ target_link_libraries(reussir-ut
     GTest::gtest_main
 )
 
+if (LLVM_VERSION VERSION_GREATER_EQUAL 22)
+  target_link_libraries(reussir-ut
+    PRIVATE
+      MLIRRegisterAllDialects
+  )
+else()
+  message(STATUS "LLVM_VERSION is ${LLVM_VERSION}, skipping MLIRRegisterAllDialects")
+endif()
+
 # Include necessary directories
 target_include_directories(reussir-ut
   PRIVATE
