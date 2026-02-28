@@ -1,4 +1,5 @@
-//===-- AcquireDropExpansion.cpp - Reussir acquire/drop expansion -*- C++ -*-===//
+//===-- AcquireDropExpansion.cpp - Reussir acquire/drop expansion -*- C++
+//-*-===//
 //
 // Part of the Reussir project, dual licensed under the Apache License v2.0 or
 // the MIT License.
@@ -51,7 +52,8 @@ private:
                                     mlir::PatternRewriter &rewriter) const {
     // Replace drop of ref rc with load then dec
     NullableType nullableType = nullptr;
-    if (rcType.getCapability() != Capability::rigid) {
+    if (rcType.getCapability() != Capability::rigid &&
+        !llvm::isa<ClosureType>(rcType.getElementType())) {
       auto layout = mlir::DataLayout::closest(op.getOperation());
       RcBoxType rcBoxType = rcType.getInnerBoxType();
       size_t size = layout.getTypeSize(rcBoxType).getFixedValue();

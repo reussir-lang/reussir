@@ -1,0 +1,102 @@
+// RUN: %reussir-compiler %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/closure_struct_materialize.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// Test: closures materialized as fields inside value and shared structs,
+// exercised with multiplicity to verify ownership (acquire/drop) handling.
+
+fn apply1(f : i32 -> i32, x : i32) -> i32 {
+    f(x)
+}
+
+struct [value] VBox {
+    f : i32 -> i32
+}
+
+struct [shared] SBox {
+    f : i32 -> i32
+}
+
+// --- Test 1: closure in value struct, single use ---
+pub fn test_vbox_single() -> i32 {
+    let inc = |x : i32| x + 1;
+    let vb = VBox { f: inc };
+    apply1(vb.f, 41)
+}
+extern "C" trampoline "test_vbox_single_ffi" = test_vbox_single;
+
+// --- Test 2: closure in value struct, multiplicity ---
+pub fn test_vbox_multi() -> i32 {
+    let double = |x : i32| x * 2;
+    let vb = VBox { f: double };
+    let a = apply1(vb.f, 5);
+    let b = apply1(vb.f, 10);
+    a + b
+}
+extern "C" trampoline "test_vbox_multi_ffi" = test_vbox_multi;
+
+// --- Test 3: closure in shared struct, single use ---
+pub fn test_sbox_single() -> i32 {
+    let add3 = |x : i32| x + 3;
+    let sb = SBox { f: add3 };
+    apply1(sb.f, 39)
+}
+extern "C" trampoline "test_sbox_single_ffi" = test_sbox_single;
+
+// --- Test 4: closure in shared struct, multiplicity ---
+pub fn test_sbox_multi() -> i32 {
+    let triple = |x : i32| x * 3;
+    let sb = SBox { f: triple };
+    let a = apply1(sb.f, 4);
+    let b = apply1(sb.f, 10);
+    a + b
+}
+extern "C" trampoline "test_sbox_multi_ffi" = test_sbox_multi;
+
+// --- Test 5: value struct with capturing closure, multiplicity ---
+pub fn test_vbox_capture_multi() -> i32 {
+    let offset = 100;
+    let add_offset = |x : i32| x + offset;
+    let vb = VBox { f: add_offset };
+    let a = apply1(vb.f, 1);
+    let b = apply1(vb.f, 2);
+    let c = apply1(vb.f, 3);
+    a + b + c
+}
+extern "C" trampoline "test_vbox_capture_multi_ffi" = test_vbox_capture_multi;
+
+// --- Test 6: shared struct with capturing closure, multiplicity ---
+pub fn test_sbox_capture_multi() -> i32 {
+    let factor = 10;
+    let scale = |x : i32| x * factor;
+    let sb = SBox { f: scale };
+    let a = apply1(sb.f, 3);
+    let b = apply1(sb.f, 7);
+    a + b
+}
+extern "C" trampoline "test_sbox_capture_multi_ffi" = test_sbox_capture_multi;
+
+// --- Test 7: same closure into both VBox and SBox ---
+pub fn test_both_structs() -> i32 {
+    let inc = |x : i32| x + 1;
+    let vb = VBox { f: inc };
+    let sb = SBox { f: inc };
+    let a = apply1(vb.f, 20);
+    let b = apply1(sb.f, 20);
+    a + b
+}
+extern "C" trampoline "test_both_structs_ffi" = test_both_structs;
+
+// --- Test 8: struct used as argument with multiplicity ---
+fn use_vbox(vb : VBox, x : i32) -> i32 {
+    apply1(vb.f, x)
+}
+
+pub fn test_vbox_pass_multi() -> i32 {
+    let double = |x : i32| x * 2;
+    let vb = VBox { f: double };
+    let a = use_vbox(vb, 5);
+    let b = use_vbox(vb, 15);
+    a + b
+}
+extern "C" trampoline "test_vbox_pass_multi_ffi" = test_vbox_pass_multi;

@@ -210,7 +210,7 @@ deriveCompoundSizeAndAlignment(mlir::MLIRContext *context,
   for (auto [rawMember, isField] : llvm::zip(members, memberIsField)) {
     if (!rawMember)
       continue;
-    mlir::Type member;
+    mlir::Type member = rawMember;
     auto recordTy = llvm::dyn_cast<RecordType>(rawMember);
     // A member is stored as a pointer if:
     // 1. it is a mutable field (isField == true)
@@ -223,8 +223,10 @@ deriveCompoundSizeAndAlignment(mlir::MLIRContext *context,
           (recordTy.getDefaultCapability() == Capability::shared ||
            recordTy.getDefaultCapability() == Capability::regional))))
       member = ptrTy;
-    else
-      member = rawMember;
+
+    // Additionally, closure type is also stored as a pointer
+    if (auto closureTy = llvm::dyn_cast<ClosureType>(member))
+      member = ptrTy;
 
     llvm::TypeSize memberSize = dataLayout.getTypeSize(member);
     if (!memberSize.isFixed())

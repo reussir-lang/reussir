@@ -814,8 +814,8 @@ mlir::LogicalResult ReussirRegionVTableOp::verifySymbolUses(
 //===----------------------------------------------------------------------===//
 // TrampolineOp SymbolUserOpInterface
 //===----------------------------------------------------------------------===//
-mlir::LogicalResult
-ReussirTrampolineOp::verifySymbolUses(mlir::SymbolTableCollection &symbolTable) {
+mlir::LogicalResult ReussirTrampolineOp::verifySymbolUses(
+    mlir::SymbolTableCollection &symbolTable) {
   if (symbolTable.lookupNearestSymbolFrom(getOperation(), getTargetAttr()))
     return mlir::success();
   return emitOpError("target function not found: ") << getTargetAttr();
@@ -1335,7 +1335,13 @@ bool ReussirClosureCreateOp::isInlined() {
 ClosureBoxType ReussirClosureCreateOp::getClosureBoxType() {
   ClosureType closureType =
       llvm::cast<ClosureType>(getClosure().getType().getElementType());
-  return ClosureBoxType::get(getContext(), closureType.getInputTypes());
+  llvm::SmallVector<mlir::Type> payloadTypes;
+  std::transform(
+      closureType.getInputTypes().begin(), closureType.getInputTypes().end(),
+      std::back_inserter(payloadTypes), [](mlir::Type type) {
+        return reussir::getProjectedType(type, false, Capability::shared);
+      });
+  return ClosureBoxType::get(getContext(), payloadTypes);
 }
 
 RcBoxType ReussirClosureCreateOp::getRcClosureBoxType() {
@@ -1633,7 +1639,8 @@ mlir::LogicalResult ReussirRefAcquireOp::verify() {
 
   // Check if variant attribute is specified
   if (auto variantAttr = getVariant()) {
-    // When variant is specified, the inner element must be a variant record type
+    // When variant is specified, the inner element must be a variant record
+    // type
     RecordType recordType = llvm::dyn_cast<RecordType>(elementType);
     if (!recordType)
       return emitOpError("when variant is specified, reference element type "

@@ -279,10 +279,12 @@ void lowerFusedDBGAttributeInLocations(mlir::ModuleOp moduleOp) {
           if (translated) {
             if (auto localVar = mlir::dyn_cast<mlir::LLVM::DILocalVariableAttr>(
                     translated)) {
-              auto value = op->getResult(0);
-              builder.setInsertionPointAfterValue(value);
-              builder.create<mlir::LLVM::DbgValueOp>(op->getLoc(), value,
-                                                     localVar);
+              if (op->getNumResults() == 1) {
+                auto value = op->getResult(0);
+                builder.setInsertionPointAfterValue(value);
+                builder.create<mlir::LLVM::DbgValueOp>(op->getLoc(), value,
+                                                       localVar);
+              }
             }
             auto updatedInnerLoc =
                 mlir::FusedLoc::get(context, fused.getLocations(), translated);

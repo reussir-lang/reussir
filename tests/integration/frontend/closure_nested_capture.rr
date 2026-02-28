@@ -1,0 +1,58 @@
+// RUN: %reussir-compiler %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/closure_nested_capture.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// Issue #210: closure capturing another closure triggers data layout crash
+// because !reussir.closure<...> appeared as a captured field without
+// size/alignment information.
+
+
+fn apply1(f : i32 -> i32, x : i32) -> i32 {
+    f(x)
+}
+
+// --- Test 1: compose -- closure captures two closures ---
+fn compose(f : i32 -> i32, g : i32 -> i32) -> i32 -> i32 {
+    |x : i32| f(g(x))
+}
+
+pub fn test_compose() -> i32 {
+    let double = |x : i32| x * 2;
+    let inc    = |x : i32| x + 1;
+    let double_then_inc = compose(double, inc);
+    apply1(double_then_inc, 5)
+}
+extern "C" trampoline "test_compose_ffi" = test_compose;
+
+// --- Test 2: compose applied multiple times ---
+pub fn test_compose_reuse() -> i32 {
+    let double = |x : i32| x * 2;
+    let inc    = |x : i32| x + 1;
+    let f = compose(double, inc);
+    let a = apply1(f, 3);
+    let b = apply1(f, 10);
+    a + b
+}
+extern "C" trampoline "test_compose_reuse_ffi" = test_compose_reuse;
+
+// --- Test 3: chain of compositions ---
+pub fn test_compose_chain() -> i32 {
+    let double = |x : i32| x * 2;
+    let inc    = |x : i32| x + 1;
+    let f = compose(inc, double);
+    let g = compose(f, inc);
+    apply1(g, 4)
+}
+extern "C" trampoline "test_compose_chain_ffi" = test_compose_chain;
+
+// --- Test 4: closure capturing a higher-order result ---
+fn make_adder(n : i32) -> i32 -> i32 {
+    |x : i32| x + n
+}
+
+pub fn test_capture_higher_order() -> i32 {
+    let add5 = make_adder(5);
+    let f = compose(add5, add5);
+    apply1(f, 10)
+}
+extern "C" trampoline "test_capture_higher_order_ffi" = test_capture_higher_order;

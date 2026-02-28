@@ -773,6 +773,7 @@ handleProjection base@(_, valTy) index = do
                                     IRType.Shared -> pure $ IR.TypeRc $ IR.Rc ty' atm IRType.Shared
                                     other -> error $ "projectedType: unsupported capability " <> show other
                                 Nothing -> error $ "projectedType: record not found " <> show fieldSym
+                        Full.TypeClosure _ _ -> pure $ IR.TypeRc $ IR.Rc ty' atm cap
                         _ -> pure ty'
             _ -> error $ "invalid record for projection: " <> show sym
 
