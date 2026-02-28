@@ -32,7 +32,6 @@ add_mlir_library(MLIRReussirBridge
     MLIRReussir
     MLIRReussirBasicOpsLowering
     MLIRReussirSCFOpsLowering
-    MLIRRegisterAllExtensions
     spdlog::spdlog
     ${TPDE_LINK_LIB}
 )
