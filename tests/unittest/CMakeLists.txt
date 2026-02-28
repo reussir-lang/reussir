@@ -19,7 +19,6 @@ target_link_libraries(reussir-ut
     MLIRReussir
     GTest::gtest
     GTest::gtest_main
-    MLIRRegisterAllDialects
 )
 
 if (LLVM_VERSION VERSION_GREATER_EQUAL 22)
