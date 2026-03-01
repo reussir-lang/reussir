@@ -112,7 +112,7 @@ parseArg False = do
 
 parseIf :: Parser Expr
 parseIf = do
-    cond <- string "if" *> space *> parseExpr
+    cond <- string "if" *> space *> parseExprWithOpts False
     iftrue <- parseBody
     iffalse <- string "else" *> space *> parseBody
 

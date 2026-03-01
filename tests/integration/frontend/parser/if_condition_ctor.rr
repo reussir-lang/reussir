@@ -1,0 +1,32 @@
+// RUN: %reussir-parser %s | %FileCheck %s
+
+struct Foo { x: bool }
+
+fn test(foo: bool) -> i32 {
+    if foo { 1 } else { 2 }
+}
+
+fn test_parenthesized() -> i32 {
+    if (Foo { x: true }.x) { 1 } else { 2 }
+}
+
+// CHECK: fn test(foo: bool) -> i32 {
+// CHECK:     if foo then
+// CHECK:         {
+// CHECK:             1
+// CHECK:         }
+// CHECK:     else
+// CHECK:         {
+// CHECK:             2
+// CHECK:         }
+// CHECK: }
+// CHECK: fn test_parenthesized() -> i32 {
+// CHECK:     if Foo{x: true}.x then
+// CHECK:         {
+// CHECK:             1
+// CHECK:         }
+// CHECK:     else
+// CHECK:         {
+// CHECK:             2
+// CHECK:         }
+// CHECK: }
