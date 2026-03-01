@@ -1038,8 +1038,12 @@ oneByOneTypeCheckClosureArgs (expected : expectedRest) (arg : argRest) = do
     arg' <- checkType arg expected
     (trailing', rest') <- oneByOneTypeCheckClosureArgs expectedRest argRest
     return (trailing', arg' : rest')
-oneByOneTypeCheckClosureArgs _ _ = do
-    addErrReportMsg "Closure argument count mismatch"
+oneByOneTypeCheckClosureArgs expectedArgs argExprs = do
+    addErrReportMsg $
+        "Closure argument count mismatch: expected "
+            <> T.pack (show (length expectedArgs))
+            <> " argument(s) but got "
+            <> T.pack (show (length argExprs))
     return ([], [])
 
 inferTypeForNormalCall :: Syn.FuncCall -> SemiEff Expr

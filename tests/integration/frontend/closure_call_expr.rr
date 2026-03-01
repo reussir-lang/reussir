@@ -27,8 +27,9 @@ struct HasClosure {
     transform: i32 -> i32
 }
 
-// CHECK-DAG: fn test_field_call
-// CHECK-DAG:     closure_call(
+// CHECK-DAG: fn test_field_call(v0 (s): HasClosure, v1 (x): i32) -> i32 {
+// CHECK-NEXT-DAG:     closure_call(v0.0 : (i32) -> i32, v1) : i32
+// CHECK-NEXT-DAG: }
 fn test_field_call(s : HasClosure, x : i32) -> i32 {
     s.transform(x)
 }
