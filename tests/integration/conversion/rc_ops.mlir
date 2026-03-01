@@ -39,8 +39,8 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
   // CHECK-LABEL: define ptr @rc_create(fp128 %0)
   // CHECK: %2 = call ptr @__reussir_allocate(i64 16, i64 32)
   // CHECK: %3 = getelementptr { i64, fp128 }, ptr %2, i32 0, i32 0
-  // CHECK: %4 = getelementptr { i64, fp128 }, ptr %2, i32 0, i32 1
   // CHECK: store i64 1, ptr %3, align 8
+  // CHECK: %4 = getelementptr { i64, fp128 }, ptr %2, i32 0, i32 1
   // CHECK: store fp128 %0, ptr %4, align 16
   func.func @rc_create(%value: f128) -> !reussir.rc<f128> {
     %token = reussir.token.alloc : !reussir.token<align: 16, size: 32>

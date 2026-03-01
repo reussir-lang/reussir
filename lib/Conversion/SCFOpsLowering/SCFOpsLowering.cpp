@@ -594,8 +594,10 @@ struct ReussirTokenEnsureOpRewritePattern
           rewriter.createBlock(&nullableDispatchOp.getNonNullRegion(), {},
                                op.getType(), {op.getLoc()});
       rewriter.setInsertionPointToStart(thenBlock);
+      auto launderedToken = rewriter.create<ReussirTokenLaunderOp>(
+          op.getLoc(), op.getType(), thenBlock->getArgument(0));
       rewriter.create<mlir::scf::YieldOp>(op.getLoc(),
-                                          thenBlock->getArgument(0));
+                                          launderedToken->getResults());
     }
     {
       mlir::Block *elseBlock =

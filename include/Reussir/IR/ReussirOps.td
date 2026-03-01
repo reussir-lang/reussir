@@ -126,6 +126,26 @@ def ReussirTokenEnsureOp : ReussirTokenOp<"ensure", []> {
   }];
 }
 
+def ReussirTokenLaunderOp : ReussirTokenOp<"launder", []> {
+  let summary = "Launder a token";
+  let description = [{
+    `reussir.token.launder` launders a token for reuse.
+    ```mlir
+    %result = reussir.token.launder
+      (%token : !reussir.token<align: 8, size: 8>) 
+      : !reussir.token<align: 8, size: 8>
+    ```
+  }];
+  let results = (outs Res<ReussirTokenType,
+                          "output token", [MemAlloc<DefaultResource>]>:$result);
+  let arguments =
+      (ins Arg<ReussirTokenType,
+               "input token", [MemFree<DefaultResource>]>:$token);
+  let assemblyFormat = [{
+    `(` $token `:` type($token) `)` `:` type($result) attr-dict
+  }];
+}
+
 def ReussirTokenReallocOp : ReussirTokenOp<"realloc", []> {
   let summary = "Reallocate a token";
   let description = [{
