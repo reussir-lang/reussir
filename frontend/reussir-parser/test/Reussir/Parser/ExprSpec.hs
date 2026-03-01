@@ -58,6 +58,24 @@ spec = do
             (stripExprSpans <$> parse parseRegionalExpr "" "regional { 1 }")
                 `shouldParse` RegionalExpr (ExprSeq [ConstExpr (ConstInt 1)])
 
+    describe "parseIf" $ do
+        it "parses branch blocks without treating them as condition ctor args" $
+            (stripExprSpans <$> parse parseIf "" "if foo { 1 } else { 2 }")
+                `shouldParse` If
+                    (Var (Path "foo" []))
+                    (ExprSeq [ConstExpr (ConstInt 1)])
+                    (ExprSeq [ConstExpr (ConstInt 2)])
+
+        it "allows ctor call in condition when explicitly parenthesized" $
+            (stripExprSpans <$> parse parseIf "" "if (Foo { x: true }.x) { 1 } else { 2 }")
+                `shouldParse` If
+                    ( AccessChain
+                        (CtorCallExpr (CtorCall (Path "Foo" []) [] [(Just "x", ConstExpr (ConstBool True))]))
+                        (fromList [Named "x"])
+                    )
+                    (ExprSeq [ConstExpr (ConstInt 1)])
+                    (ExprSeq [ConstExpr (ConstInt 2)])
+
     describe "parseFuncCallExpr" $ do
         it "parses function call" $
             (stripExprSpans <$> parse (parsePathBasedExpr True) "" "foo(1, 2)")
