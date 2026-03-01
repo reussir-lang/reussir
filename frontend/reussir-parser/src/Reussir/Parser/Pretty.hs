@@ -185,6 +185,8 @@ instance PrettyColored Expr where
     prettyColored (Var path) = prettyColored path
     prettyColored (SpannedExpr w) = prettyColored (spanValue w)
     prettyColored (RegionalExpr e) = keyword "regional" <+> braces (prettyColored e)
+    prettyColored (CallExpr target args) =
+        prettyColored target <> parens (commaSep (map prettyColored args))
     prettyColored (AccessChain e accesses) = prettyColored e <> V.foldMap prettyColored accesses
     prettyColored (CtorCallExpr (CtorCall path tys args)) =
         prettyColored path

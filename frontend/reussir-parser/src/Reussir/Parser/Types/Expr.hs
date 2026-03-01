@@ -107,6 +107,7 @@ data Expr
     | FuncCallExpr FuncCall -- foo<i32, _> (arg1, arg2) -- notice the difference between variant ctor calls
     | RegionalExpr Expr -- regional { ... }
     | CtorCallExpr CtorCall -- std::Foo {1, 2} / Foo<i32> {x: 1, y: 2} / List<i32>::Nil / List<i32>::Cons(1, xs)
+    | CallExpr Expr [Expr] -- expr(arg1, arg2, ...)
     | AccessChain Expr (Vector Access) -- foo.bar.baz.0.1
     | SpannedExpr (WithSpan Expr)
     | -- regional assignment { x->y := z }

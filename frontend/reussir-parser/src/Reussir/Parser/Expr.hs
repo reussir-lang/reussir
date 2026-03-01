@@ -253,10 +253,23 @@ parseArrowAccess =
                 <|> (Unnamed . read <$> (some digitChar <* space))
            )
 
-accessOp :: Operator Parser Expr
-accessOp = Postfix $ do
-    access <- some parseAccess
-    return $ flip AccessChain (SV.fromList access)
+data Suffix = AccessSuffix [Access] | CallSuffix [Expr]
+
+parseSuffix :: Parser Suffix
+parseSuffix =
+    (CallSuffix <$> (openParen *> parseExpr `sepBy` comma <* closeParen))
+        <|> (AccessSuffix <$> some parseAccess)
+
+applySuffixes :: Expr -> [Suffix] -> Expr
+applySuffixes = foldl applyOne
+  where
+    applyOne e (AccessSuffix accs) = AccessChain e (SV.fromList accs)
+    applyOne e (CallSuffix args) = CallExpr e args
+
+suffixOp :: Operator Parser Expr
+suffixOp = Postfix $ do
+    suffixes <- some parseSuffix
+    return $ \e -> applySuffixes e suffixes
 
 exprOpTable :: [[Operator Parser Expr]]
 exprOpTable =
@@ -264,7 +277,7 @@ exprOpTable =
         [ prefixOp "-" Negate
         , prefixOp "!" Not
         , castOp
-        , accessOp
+        , suffixOp
         ]
     ,
         [ infixLOp "*" Mul
