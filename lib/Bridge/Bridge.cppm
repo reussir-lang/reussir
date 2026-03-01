@@ -81,6 +81,7 @@ module;
 #include "Reussir/Conversion/SCFOpsLowering.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
+#include "Reussir/LLVMPass/AllocationSimplication.h"
 
 export module Reussir.Bridge;
 
@@ -180,6 +181,7 @@ void createLoweringPipeline(mlir::PassManager &pm,
   pm.addPass(createCSEPass());
   pm.addPass(createCanonicalizerPass());
 }
+
 void runNPMOptimization(llvm::Module &llvmModule, ReussirOptOption opt) {
   if (opt == REUSSIR_OPT_NONE || opt == REUSSIR_OPT_TPDE)
     return;
@@ -218,6 +220,7 @@ void runNPMOptimization(llvm::Module &llvmModule, ReussirOptOption opt) {
 
   // Create the default optimization pipeline for the specified level
   llvm::ModulePassManager mpm = pb.buildPerModuleDefaultPipeline(optLevel);
+  mpm.addPass(reussir::llvmpass::AllocationSimplicationPass());
 
   // Run the optimization
   mpm.run(llvmModule, mam);

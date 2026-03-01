@@ -1,0 +1,22 @@
+// RUN: %reussir-compiler %s -o %t.ll -t llvm-ir
+// RUN: %FileCheck %s --check-prefix=LLVM < %t.ll
+
+fn apply1(f : i32 -> i32, x : i32) -> i32 {
+    f(x)
+}
+
+struct [shared] SBox {
+    f : i32 -> i32
+}
+
+pub fn test_sbox_multi() -> i32 {
+    let triple = |x : i32| x * 3;
+    let sb = SBox { f: triple };
+    let a = apply1(sb.f, 4);
+    let b = apply1(sb.f, 10);
+    a + b
+}
+
+// LLVM-LABEL: define {{.*}}@_RC15test_sbox_multi
+// LLVM-NOT: call void @__reussir_deallocate(ptr null
+// LLVM: ret i32
