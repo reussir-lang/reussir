@@ -1,0 +1,51 @@
+// RUN: %reussir-compiler %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/fn_lift.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// --- Test 1: basic function-to-closure lifting ---
+fn double(x : i32) -> i32 { x * 2 }
+fn apply_i32(f : i32 -> i32, x : i32) -> i32 { f(x) }
+
+pub fn test_fn_lift_basic() -> i32 {
+    apply_i32(double, 21)
+}
+extern "C" trampoline "test_fn_lift_basic_ffi" = test_fn_lift_basic;
+
+// --- Test 2: partial application of named function ---
+fn add(a : i32, b : i32) -> i32 { a + b }
+
+pub fn test_fn_partial() -> i32 {
+    let add5 = add(5);
+    apply_i32(add5, 37)
+}
+extern "C" trampoline "test_fn_partial_ffi" = test_fn_partial;
+
+// --- Test 3: function as struct field ---
+struct [value] Strategy {
+    transform : i32 -> i32
+}
+
+pub fn test_fn_struct_field() -> i32 {
+    let s = Strategy { transform: double };
+    apply_i32(s.transform, 21)
+}
+extern "C" trampoline "test_fn_struct_field_ffi" = test_fn_struct_field;
+
+// --- Test 4: multi-arg function lifting ---
+fn apply2(f : (i32, i32) -> i32, a : i32, b : i32) -> i32 {
+    f(a, b)
+}
+
+pub fn test_fn_lift_multi_arg() -> i32 {
+    apply2(add, 17, 25)
+}
+extern "C" trampoline "test_fn_lift_multi_arg_ffi" = test_fn_lift_multi_arg;
+
+// --- Test 5: partial application with multiple provided args ---
+fn add3(a : i32, b : i32, c : i32) -> i32 { a + b + c }
+
+pub fn test_fn_partial_multi() -> i32 {
+    let add_10_20 = add3(10, 20);
+    apply_i32(add_10_20, 12)
+}
+extern "C" trampoline "test_fn_partial_multi_ffi" = test_fn_partial_multi;
