@@ -657,6 +657,22 @@ inferType (Syn.AccessChain baseExpr accesses) = do
 --  ─────────────────────────────────────────────────────────────────────────────────────
 --               Г |- T <- f(e1, e2, ..., en)
 inferType (Syn.FuncCallExpr call) = inferTypeForCallExpr call
+-- Expression-based closure call: expr(arg1, arg2, ...)
+-- Infers the target expression, checks it has TypeClosure, then type-checks arguments.
+inferType (Syn.CallExpr targetExpr argExprs) = do
+    target' <- inferType targetExpr
+    targetTy <- runUnification $ force (exprType target')
+    case targetTy of
+        TypeClosure expectedArgs ret -> do
+            (trailing, checkedArgs) <- oneByOneTypeCheckClosureArgs expectedArgs argExprs
+            if null trailing
+                then exprWithSpan ret (ClosureCall target' checkedArgs)
+                else
+                    let ty = TypeClosure trailing ret
+                     in exprWithSpan ty (ClosureCall target' checkedArgs)
+        _ -> do
+            addErrReportMsg "Expression is not callable"
+            exprWithSpan TypeBottom Poison
 -- Nullable::Null constructor call:
 -- Special handling for Nullable::Null to produce NullableCall Nothing
 --  ─────────────────────────────────────────────────────
@@ -1003,7 +1019,7 @@ inferTypeForClosureCall (Syn.FuncCall (Path varLike []) [] args) = do
             -- if the variable is a closure, we check that all arguments are
             -- of expected type. If so, we use the return type as the type of the closure call
             TypeClosure expectedArgs ret -> do
-                (trailing, checkedArgs) <- oneByOneTypeCheck expectedArgs args
+                (trailing, checkedArgs) <- oneByOneTypeCheckClosureArgs expectedArgs args
                 varRef <- exprWithSpan varTy' (Var varID)
                 if null trailing
                     then
@@ -1012,17 +1028,23 @@ inferTypeForClosureCall (Syn.FuncCall (Path varLike []) [] args) = do
                         let newClosureTy = TypeClosure trailing ret
                          in Just <$> exprWithSpan newClosureTy (ClosureCall varRef checkedArgs)
             _ -> pure Nothing
-
-    oneByOneTypeCheck :: [Type] -> [Syn.Expr] -> SemiEff ([Type], [Expr])
-    oneByOneTypeCheck trailing [] = pure (trailing, [])
-    oneByOneTypeCheck (expected : expectedRest) (arg : argRest) = do
-        arg' <- checkType arg expected
-        (trailing', rest') <- oneByOneTypeCheck expectedRest argRest
-        return (trailing', arg' : rest')
-    oneByOneTypeCheck _ _ = do
-        addErrReportMsg "Closure argument count mismatch"
-        return ([], [])
 inferTypeForClosureCall _ = pure Nothing
+
+-- | Type-check closure call arguments one by one against expected types.
+-- Returns trailing (unapplied) expected types and the checked arguments.
+oneByOneTypeCheckClosureArgs :: [Type] -> [Syn.Expr] -> SemiEff ([Type], [Expr])
+oneByOneTypeCheckClosureArgs trailing [] = pure (trailing, [])
+oneByOneTypeCheckClosureArgs (expected : expectedRest) (arg : argRest) = do
+    arg' <- checkType arg expected
+    (trailing', rest') <- oneByOneTypeCheckClosureArgs expectedRest argRest
+    return (trailing', arg' : rest')
+oneByOneTypeCheckClosureArgs expectedArgs argExprs = do
+    addErrReportMsg $
+        "Closure argument count mismatch: expected "
+            <> T.pack (show (length expectedArgs))
+            <> " argument(s) but got "
+            <> T.pack (show (length argExprs))
+    return ([], [])
 
 inferTypeForNormalCall :: Syn.FuncCall -> SemiEff Expr
 inferTypeForNormalCall

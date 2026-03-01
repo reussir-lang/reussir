@@ -24,6 +24,7 @@ stripExprSpans (Lambda (LambdaExpr args e rt)) = Lambda (LambdaExpr args (stripE
 stripExprSpans (Match e cases) = Match (stripExprSpans e) (fmap (\(p, ex) -> (p, stripExprSpans ex)) cases)
 stripExprSpans (RegionalExpr e) = RegionalExpr (stripExprSpans e)
 stripExprSpans (CtorCallExpr (CtorCall p tys args)) = CtorCallExpr (CtorCall p tys (map (\(i, e) -> (i, stripExprSpans e)) args))
+stripExprSpans (CallExpr target args) = CallExpr (stripExprSpans target) (map stripExprSpans args)
 stripExprSpans (AccessChain e accesses) = AccessChain (stripExprSpans e) accesses
 stripExprSpans (ExprSeq es) = ExprSeq (map stripExprSpans es)
 stripExprSpans (Assign e1 f e2) = Assign (stripExprSpans e1) f (stripExprSpans e2)
@@ -132,6 +133,31 @@ spec = do
                 `shouldParse` AccessChain
                     (Var (Path "foo" []))
                     (fromList [Named "bar", Unnamed 0, Named "baz"])
+
+    describe "parseCallExpr" $ do
+        it "parses immediate lambda call" $
+            (stripExprSpans <$> parse parseExpr "" "(|x: i32| x)(5)")
+                `shouldParse` CallExpr
+                    (Lambda (LambdaExpr [(Identifier "x", Just (TypeIntegral (Signed 32)))] (Var (Path "x" [])) Nothing))
+                    [ConstExpr (ConstInt 5)]
+
+        it "parses chained call (function result called)" $
+            (stripExprSpans <$> parse parseExpr "" "make_adder(5)(10)")
+                `shouldParse` CallExpr
+                    (FuncCallExpr (FuncCall (Path "make_adder" []) [] [ConstExpr (ConstInt 5)]))
+                    [ConstExpr (ConstInt 10)]
+
+        it "parses access then call" $
+            (stripExprSpans <$> parse parseExpr "" "foo.bar(1)")
+                `shouldParse` CallExpr
+                    (AccessChain (Var (Path "foo" [])) (fromList [Named "bar"]))
+                    [ConstExpr (ConstInt 1)]
+
+        it "parses call then access" $
+            (stripExprSpans <$> parse parseExpr "" "foo(1).bar")
+                `shouldParse` AccessChain
+                    (FuncCallExpr (FuncCall (Path "foo" []) [] [ConstExpr (ConstInt 1)]))
+                    (fromList [Named "bar"])
 
     describe "parseExprSeq" $ do
         it "parses simple sequence" $
