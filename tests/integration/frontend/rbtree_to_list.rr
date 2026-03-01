@@ -1,0 +1,71 @@
+// RUN: %reussir-compiler %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/rbtree_to_list.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// Helper: collect a binary search tree into an ordered Cons/Nil list
+// via in-order traversal. Tested standalone with a manually constructed
+// fixed tree before being used with the full make-tree port.
+
+enum [value] Color { Red, Black }
+
+enum Tree {
+    Branch(Color, Tree, i32, Tree),
+    Leaf
+}
+
+enum List {
+    Nil,
+    Cons(i32, List)
+}
+
+// In-order traversal with accumulator.
+// Processes right subtree first (into acc), prepends current key,
+// then processes left subtree -- producing an ascending list.
+fn tree_to_list_acc(t: Tree, acc: List) -> List {
+    match t {
+        Tree::Branch(_, l, k, r) =>
+            tree_to_list_acc(l, List::Cons{k, tree_to_list_acc(r, acc)}),
+        Tree::Leaf => acc
+    }
+}
+
+fn tree_to_list(t: Tree) -> List {
+    tree_to_list_acc(t, List::Nil {})
+}
+
+// Manually construct a fixed 9-node red-black tree:
+//
+//                4(Black)
+//               / \
+//          2(Red)   6(Red)
+//         / \       / \
+//       1(B) 3(B) 5(B)  8(B)
+//                       / \
+//                     7(R) 9(R)
+//
+// In-order traversal should produce: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+pub fn test_to_list() -> List {
+    let t = Tree::Branch{
+        Color::Black {},
+        Tree::Branch{
+            Color::Red {},
+            Tree::Branch{Color::Black {}, Tree::Leaf {}, 1, Tree::Leaf {}},
+            2,
+            Tree::Branch{Color::Black {}, Tree::Leaf {}, 3, Tree::Leaf {}}
+        },
+        4,
+        Tree::Branch{
+            Color::Red {},
+            Tree::Branch{Color::Black {}, Tree::Leaf {}, 5, Tree::Leaf {}},
+            6,
+            Tree::Branch{
+                Color::Black {},
+                Tree::Branch{Color::Red {}, Tree::Leaf {}, 7, Tree::Leaf {}},
+                8,
+                Tree::Branch{Color::Red {}, Tree::Leaf {}, 9, Tree::Leaf {}}
+            }
+        }
+    };
+    tree_to_list(t)
+}
+extern "C" trampoline "test_to_list_ffi" = test_to_list;
