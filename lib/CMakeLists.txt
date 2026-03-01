@@ -1,5 +1,6 @@
 add_subdirectory(IR)
 add_subdirectory(Conversion)
 add_subdirectory(RustCompiler)
+add_subdirectory(LLVMPass)
 add_subdirectory(Bridge)
 add_subdirectory(Analysis)
