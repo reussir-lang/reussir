@@ -47,8 +47,8 @@ module {
 // CHECK: %[[loaded:[0-9]+]] = load %List, ptr %[[alloca]], align 8
 // CHECK: %[[allocated:[0-9]+]] = call ptr @__reussir_allocate(i64 8, i64 32)
 // CHECK: %[[rc_tag_ptr:[0-9]+]] = getelementptr { i64, %List }, ptr %[[allocated]], i32 0, i32 0
-// CHECK: %[[rc_value_ptr:[0-9]+]] = getelementptr { i64, %List }, ptr %[[allocated]], i32 0, i32 1
 // CHECK: store i64 1, ptr %[[rc_tag_ptr]], align 4
+// CHECK: %[[rc_value_ptr:[0-9]+]] = getelementptr { i64, %List }, ptr %[[allocated]], i32 0, i32 1
 // CHECK: store %List %[[loaded]], ptr %[[rc_value_ptr]], align 8
 // CHECK: ret ptr %[[allocated]]
 

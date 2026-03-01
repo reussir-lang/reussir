@@ -482,8 +482,10 @@ struct ReussirRefLoadConversionPattern
                   mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Type pointeeTy = op.getResult().getType();
     mlir::Type llvmPointeeTy = getTypeConverter()->convertType(pointeeTy);
-    rewriter.replaceOpWithNewOp<mlir::LLVM::LoadOp>(op, llvmPointeeTy,
-                                                    adaptor.getRef());
+    auto loadOp = rewriter.replaceOpWithNewOp<mlir::LLVM::LoadOp>(
+        op, llvmPointeeTy, adaptor.getRef());
+    if (op->hasAttr("reussir.invariant_group"))
+      loadOp.setInvariantGroup(true);
     return mlir::success();
   }
 };
@@ -681,16 +683,18 @@ struct ReussirRcCreateOpConversionPattern
     auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
     auto one = rewriter.create<mlir::arith::ConstantOp>(
         op.getLoc(), mlir::IntegerAttr::get(indexType, 1));
+    auto token = adaptor.getToken();
     auto refcntPtr = rewriter.create<mlir::LLVM::GEPOp>(
-        op.getLoc(), llvmPtrType, convertedBoxType, adaptor.getToken(),
+        op.getLoc(), llvmPtrType, convertedBoxType, token,
         llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
-    auto elementPtr = rewriter.create<mlir::LLVM::GEPOp>(
-        op.getLoc(), llvmPtrType, convertedBoxType, adaptor.getToken(),
-        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
     rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), one, refcntPtr);
-    rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), adaptor.getValue(),
-                                         elementPtr);
-    rewriter.replaceOp(op, adaptor.getToken());
+    auto elementPtr = rewriter.create<mlir::LLVM::GEPOp>(
+        op.getLoc(), llvmPtrType, convertedBoxType, token,
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
+    auto objectPtr = rewriter.create<mlir::LLVM::StoreOp>(
+        op.getLoc(), adaptor.getValue(), elementPtr);
+    objectPtr.setInvariantGroup(true);
+    rewriter.replaceOp(op, token);
     return mlir::success();
   }
 
@@ -718,27 +722,28 @@ struct ReussirRcCreateOpConversionPattern
           op.getLoc(), llvmPtrType, *op.getVtable());
     } else
       vtable = null.getRes();
-
+    auto token = adaptor.getToken();
     auto statePtr = rewriter.create<mlir::LLVM::GEPOp>(
-        op.getLoc(), llvmPtrType, convertedBoxType, adaptor.getToken(),
+        op.getLoc(), llvmPtrType, convertedBoxType, token,
         llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
     auto nextPtr = rewriter.create<mlir::LLVM::GEPOp>(
-        op.getLoc(), llvmPtrType, convertedBoxType, adaptor.getToken(),
+        op.getLoc(), llvmPtrType, convertedBoxType, token,
         llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
     auto vtablePtr = rewriter.create<mlir::LLVM::GEPOp>(
-        op.getLoc(), llvmPtrType, convertedBoxType, adaptor.getToken(),
+        op.getLoc(), llvmPtrType, convertedBoxType, token,
         llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 2});
     auto elementPtr = rewriter.create<mlir::LLVM::GEPOp>(
-        op.getLoc(), llvmPtrType, convertedBoxType, adaptor.getToken(),
+        op.getLoc(), llvmPtrType, convertedBoxType, token,
         llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 3});
     rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), null, statePtr);
     rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), tailPtr, nextPtr);
-    rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), vtable, vtablePtr);
+    auto vtableStore =
+        rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), vtable, vtablePtr);
+    vtableStore.setInvariantGroup(true);
     rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), adaptor.getValue(),
                                          elementPtr);
-    rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), adaptor.getToken(),
-                                         regionPtr);
-    rewriter.replaceOp(op, adaptor.getToken());
+    rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), token, regionPtr);
+    rewriter.replaceOp(op, token);
     return mlir::success();
   }
 
@@ -997,7 +1002,9 @@ struct ReussirClosureCreateOpConversionPattern
         llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1, ClosureBoxType::VTABLE_INDEX});
     auto vtableAddr = rewriter.create<mlir::LLVM::AddressOfOp>(loc, llvmPtrType,
                                                                *op.getVtable());
-    rewriter.create<mlir::LLVM::StoreOp>(loc, vtableAddr, vtablePtrSlot);
+    auto vtableStore =
+        rewriter.create<mlir::LLVM::StoreOp>(loc, vtableAddr, vtablePtrSlot);
+    vtableStore.setInvariantGroup(true);
 
     // 3. Assign cursor (GEP[0, 1, 1]) to the value of GEP[0, 1, 2]
     //    (cursor points to the start of payload area)
@@ -1058,6 +1065,7 @@ struct ReussirRcDecOpConversionPattern
       // Load the vtable pointer
       auto vtable =
           rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, vtablePtr);
+      vtable.setInvariantGroup(true);
 
       // Create LLVM struct type for vtable: { void*, void*, void* }
       // representing { drop, clone, evaluate } function pointers
@@ -1074,7 +1082,7 @@ struct ReussirRcDecOpConversionPattern
       // Load the drop function pointer
       auto dropFunc =
           rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, dropPtr);
-      dropFunc.setInvariant(true);
+      dropFunc.setInvariantGroup(true);
 
       // Create function type for drop: void (*)(void*)
       auto voidType = mlir::LLVM::LLVMVoidType::get(rewriter.getContext());
@@ -1261,8 +1269,9 @@ public:
     auto alignedCursor = emitPointerAlign(cursor, inputType, rewriter);
 
     // Third, copy the input value to the aligned cursor.
-    rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), adaptor.getArg(),
-                                         alignedCursor);
+    auto payloadRef = rewriter.create<mlir::LLVM::StoreOp>(
+        op.getLoc(), adaptor.getArg(), alignedCursor);
+    payloadRef.setInvariantGroup(true);
 
     // Fourth, bump the cursor by the input type's size.
     auto newCursor = emitPointerBump(alignedCursor, inputType, rewriter);
@@ -1299,6 +1308,7 @@ struct ReussirClosureCloneOpConversionPattern
     // Load the vtable
     auto vtable =
         rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, vtablePtr);
+    vtable.setInvariantGroup(true);
 
     // Create LLVM struct type for vtable: { void*, void*, void* }
     // representing { drop, clone, evaluate } function pointers
@@ -1314,7 +1324,7 @@ struct ReussirClosureCloneOpConversionPattern
     // Load the clone function pointer
     auto cloneFunc =
         rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, clonePtr);
-    cloneFunc.setInvariant(true);
+    cloneFunc.setInvariantGroup(true);
 
     // Create function type for clone: void* (*)(void*)
     auto funcType =
@@ -1352,6 +1362,7 @@ struct ReussirClosureEvalOpConversionPattern
     // Load the vtable pointer
     auto vtable =
         rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, vtablePtr);
+    vtable.setInvariantGroup(true);
 
     // Create LLVM struct type for vtable: { void*, void*, void* }
     // representing { drop, clone, evaluate } function pointers
@@ -1368,7 +1379,7 @@ struct ReussirClosureEvalOpConversionPattern
     // Load the evaluate function pointer
     auto evalFunc =
         rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, evalPtr);
-    evalFunc.setInvariant(true);
+    evalFunc.setInvariantGroup(true);
 
     // Determine if the closure has a return value
     mlir::Type resultType =
@@ -1461,7 +1472,6 @@ struct ReussirClosureTransferOpConversionPattern
     ClosureBoxType closureBoxType =
         llvm::cast<ClosureBoxType>(srcRefType.getElementType());
     auto structType = converter->convertType(closureBoxType);
-
     // 1. Extract the cursor pointer from src
     // GEP[0, 1] to access the cursor field
     auto cursorPtrSlot = rewriter.create<mlir::LLVM::GEPOp>(
@@ -1475,30 +1485,68 @@ struct ReussirClosureTransferOpConversionPattern
     // Convert pointers to integers
     mlir::Value srcInt = rewriter.create<mlir::LLVM::PtrToIntOp>(
         loc, indexType, adaptor.getSrc());
+    mlir::Value dstInt = rewriter.create<mlir::LLVM::PtrToIntOp>(
+        loc, indexType, adaptor.getDst());
     mlir::Value cursorInt =
         rewriter.create<mlir::LLVM::PtrToIntOp>(loc, indexType, cursor);
 
     // Compute offset: cursor - src
-    mlir::Value offset = rewriter.create<mlir::arith::SubIOp>(
+    mlir::Value fullOffset = rewriter.create<mlir::arith::SubIOp>(
         loc, cursorInt, srcInt,
         mlir::arith::IntegerOverflowFlags::nsw |
             mlir::arith::IntegerOverflowFlags::nuw);
+    mlir::Value ptrSize = rewriter.create<mlir::arith::ConstantIntOp>(
+        loc, indexType,
+        converter->getDataLayout().getTypeSize(llvmPtrType).getFixedValue());
+    mlir::Value offset = rewriter.create<mlir::arith::SubIOp>(
+        loc, fullOffset, ptrSize,
+        mlir::arith::IntegerOverflowFlags::nsw |
+            mlir::arith::IntegerOverflowFlags::nuw);
+    mlir::Value srcPlusPtrSize = rewriter.create<mlir::arith::AddIOp>(
+        loc, srcInt, ptrSize,
+        mlir::arith::IntegerOverflowFlags::nsw |
+            mlir::arith::IntegerOverflowFlags::nuw);
+    mlir::Value src = rewriter.create<mlir::LLVM::IntToPtrOp>(loc, llvmPtrType,
+                                                              srcPlusPtrSize);
+    mlir::Value dstPlusPtrSize = rewriter.create<mlir::arith::AddIOp>(
+        loc, dstInt, ptrSize,
+        mlir::arith::IntegerOverflowFlags::nsw |
+            mlir::arith::IntegerOverflowFlags::nuw);
+    mlir::Value dst = rewriter.create<mlir::LLVM::IntToPtrOp>(loc, llvmPtrType,
+                                                              dstPlusPtrSize);
     // Call llvm.memcpy intrinsic
-    auto size =
+    auto closureSizeFixed =
         converter->getDataLayout().getTypeSize(closureBoxType).getFixedValue();
+    auto ptrSizeFixed =
+        converter->getDataLayout().getTypeSize(llvmPtrType).getFixedValue();
+    if (closureSizeFixed < ptrSizeFixed)
+      llvm::report_fatal_error("Closure size is smaller than pointer size");
+    auto size = closureSizeFixed - ptrSizeFixed;
     if (size > 32)
-      rewriter.create<mlir::LLVM::MemcpyOp>(loc, adaptor.getDst(),
-                                            adaptor.getSrc(), offset, false);
+      rewriter.create<mlir::LLVM::MemcpyOp>(loc, dst, src, offset, false);
     else {
       // directly copy the whole closure box
       mlir::IntegerAttr sizeAttr = mlir::IntegerAttr::get(indexType, size);
-      rewriter.create<mlir::LLVM::MemcpyInlineOp>(
-          loc, adaptor.getDst(), adaptor.getSrc(), sizeAttr, false);
+      rewriter.create<mlir::LLVM::MemcpyInlineOp>(loc, dst, src, sizeAttr,
+                                                  false);
     }
+    // (explicity transfer vtable)
+    auto vtablePtrSlot = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, llvmPtrType, structType, adaptor.getSrc(),
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, ClosureBoxType::VTABLE_INDEX});
+    auto vtable =
+        rewriter.create<mlir::LLVM::LoadOp>(loc, llvmPtrType, vtablePtrSlot);
+    vtable.setInvariantGroup(true);
+    auto targetVtablePtrSlot = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, llvmPtrType, structType, adaptor.getDst(),
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, ClosureBoxType::VTABLE_INDEX});
+    auto targetVtable =
+        rewriter.create<mlir::LLVM::StoreOp>(loc, vtable, targetVtablePtrSlot);
+    targetVtable.setInvariantGroup(true);
 
     // Update cursor to (dst + offset)
     auto newCursor = rewriter.create<mlir::LLVM::GEPOp>(
-        loc, llvmPtrType, rewriter.getI8Type(), adaptor.getDst(), offset,
+        loc, llvmPtrType, rewriter.getI8Type(), adaptor.getDst(), fullOffset,
         mlir::LLVM::GEPNoWrapFlags::inbounds);
 
     // Get the cursor slot in the destination closure box
@@ -1959,6 +2007,18 @@ struct ReussirTrampolineOpConversionPattern
     return mlir::success();
   }
 };
+struct ReussirTokenLaunderOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirTokenLaunderOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirTokenLaunderOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<mlir::LLVM::LaunderInvariantGroupOp>(
+        op, adaptor.getToken());
+    return mlir::success();
+  }
+};
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -1993,15 +2053,14 @@ void addRuntimeFunctions(mlir::ModuleOp module,
                                       {indexType, indexType}, {llvmPtrType});
   auto deallocFunc = addRuntimeFunction(
       body, "__reussir_deallocate", {llvmPtrType, indexType, indexType}, {});
-  // Add attributes to allocation functions
+  // Add common runtime attributes.
   mlir::OpBuilder builder(ctx);
   auto mustProgress = builder.getStringAttr("mustprogress");
   auto nounwind = builder.getStringAttr("nounwind");
   auto willreturn = builder.getStringAttr("willreturn");
   auto nocallback = builder.getStringAttr("nocallback");
-  auto allocKind = builder.getStrArrayAttr({"allockind", "alloc"});
-  auto passthroughAlloc = builder.getArrayAttr(
-      {mustProgress, nounwind, willreturn, nocallback, allocKind});
+  auto passthroughAlloc =
+      builder.getArrayAttr({mustProgress, nounwind, willreturn, nocallback});
 
   allocFunc->setAttr("passthrough", passthroughAlloc);
   allocFunc.setArgAttr(0, "llvm.allocalign", builder.getUnitAttr());
@@ -2010,9 +2069,8 @@ void addRuntimeFunctions(mlir::ModuleOp module,
   allocFunc.setArgAttr(0, "llvm.noundef", builder.getUnitAttr());
   allocFunc.setArgAttr(1, "llvm.noundef", builder.getUnitAttr());
 
-  auto freeKind = builder.getStrArrayAttr({"allockind", "free"});
-  auto passthroughDealloc = builder.getArrayAttr(
-      {mustProgress, nounwind, willreturn, nocallback, freeKind});
+  auto passthroughDealloc =
+      builder.getArrayAttr({mustProgress, nounwind, willreturn, nocallback});
   deallocFunc->setAttr("passthrough", passthroughDealloc);
   deallocFunc.setArgAttr(0, "llvm.nocapture", builder.getUnitAttr());
   deallocFunc.setArgAttr(0, "llvm.allocptr", builder.getUnitAttr());
@@ -2037,6 +2095,22 @@ void addRuntimeFunctions(mlir::ModuleOp module,
 //===----------------------------------------------------------------------===//
 
 namespace {
+void markInvariantGroup(ReussirRefLoadOp op) {
+  auto ref = op.getRef();
+  // walk up the reference projection chain, if it originates from a rc borrow,
+  // mark it as invariant group
+  while (auto proj =
+             dyn_cast_if_present<ReussirRefProjectOp>(ref.getDefiningOp()))
+    ref = proj.getRef();
+
+  if (auto borrow = dyn_cast_if_present<ReussirRcBorrowOp>(ref.getDefiningOp()))
+    op->setAttr("reussir.invariant_group",
+                mlir::UnitAttr::get(op.getContext()));
+  if (auto inspect = dyn_cast_if_present<ReussirClosureInspectPayloadOp>(
+          ref.getDefiningOp()))
+    op->setAttr("reussir.invariant_group",
+                mlir::UnitAttr::get(op.getContext()));
+}
 struct BasicOpsLoweringPass
     : public impl::ReussirBasicOpsLoweringPassBase<BasicOpsLoweringPass> {
   using Base::Base;
@@ -2055,6 +2129,7 @@ struct BasicOpsLoweringPass
       mlir::populateMathToLibmConversionPatterns(patterns);
       mlir::ub::populateUBToLLVMConversionPatterns(converter, patterns);
       addRuntimeFunctions(getOperation(), converter);
+      getOperation().walk(markInvariantGroup);
       target.addIllegalDialect<mlir::func::FuncDialect,
                                mlir::arith::ArithDialect>();
       target.addIllegalOp<
@@ -2074,7 +2149,7 @@ struct BasicOpsLoweringPass
           ReussirClosureCreateOp, ReussirRcFetchDecOp, ReussirStrGlobalOp,
           ReussirStrLiteralOp, ReussirPanicOp, ReussirStrLenOp,
           ReussirStrUnsafeByteAtOp, ReussirStrUnsafeStartWithOp,
-          ReussirStrSliceOp, ReussirTrampolineOp>();
+          ReussirStrSliceOp, ReussirTrampolineOp, ReussirTokenLaunderOp>();
       target.addLegalDialect<mlir::LLVM::LLVMDialect>();
       if (failed(applyPartialConversion(getOperation(), target,
                                         std::move(patterns))))
@@ -2122,7 +2197,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirStrLenOpConversionPattern,
       ReussirStrUnsafeByteAtOpConversionPattern,
       ReussirStrUnsafeStartWithOpConversionPattern,
-      ReussirStrSliceOpConversionPattern, ReussirTrampolineOpConversionPattern>(
-      converter, patterns.getContext());
+      ReussirStrSliceOpConversionPattern, ReussirTrampolineOpConversionPattern,
+      ReussirTokenLaunderOpConversionPattern>(converter, patterns.getContext());
 }
 } // namespace reussir
