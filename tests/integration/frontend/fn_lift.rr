@@ -49,3 +49,20 @@ pub fn test_fn_partial_multi() -> i32 {
     apply_i32(add_10_20, 12)
 }
 extern "C" trampoline "test_fn_partial_multi_ffi" = test_fn_partial_multi;
+
+// --- Test 6: generic function lifting ---
+fn identity<T>(x : T) -> T { x }
+
+pub fn test_generic_lift() -> i32 {
+    apply_i32(identity, 42)
+}
+extern "C" trampoline "test_generic_lift_ffi" = test_generic_lift;
+
+// --- Test 7: generic function partial application ---
+fn generic_add<T : Num>(a : T, b : T) -> T { a + b }
+
+pub fn test_generic_partial() -> i32 {
+    let add10 = generic_add(10);
+    apply_i32(add10, 32)
+}
+extern "C" trampoline "test_generic_partial_ffi" = test_generic_partial;

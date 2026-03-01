@@ -601,9 +601,13 @@ inferType (Syn.Var varName) = do
                     -- Try lifting a named function to a closure
                     functionTable <- State.gets functions
                     getFunctionProto varName functionTable >>= \case
-                        Just proto | not (funcIsRegional proto) ->
-                            liftFunctionToClosure proto varName
-                        _ -> do
+                        Just proto
+                            | not (funcIsRegional proto) ->
+                                liftFunctionToClosure proto varName
+                            | otherwise -> do
+                                addErrReportMsg "Cannot lift regional function to closure"
+                                exprWithSpan TypeBottom Poison
+                        Nothing -> do
                             addErrReportMsg "Variable not found"
                             exprWithSpan TypeBottom Poison
         _ -> do
