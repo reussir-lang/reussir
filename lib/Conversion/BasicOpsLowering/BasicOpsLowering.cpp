@@ -2053,15 +2053,14 @@ void addRuntimeFunctions(mlir::ModuleOp module,
                                       {indexType, indexType}, {llvmPtrType});
   auto deallocFunc = addRuntimeFunction(
       body, "__reussir_deallocate", {llvmPtrType, indexType, indexType}, {});
-  // Add attributes to allocation functions
+  // Add common runtime attributes.
   mlir::OpBuilder builder(ctx);
   auto mustProgress = builder.getStringAttr("mustprogress");
   auto nounwind = builder.getStringAttr("nounwind");
   auto willreturn = builder.getStringAttr("willreturn");
   auto nocallback = builder.getStringAttr("nocallback");
-  auto allocKind = builder.getStrArrayAttr({"allockind", "alloc"});
-  auto passthroughAlloc = builder.getArrayAttr(
-      {mustProgress, nounwind, willreturn, nocallback, allocKind});
+  auto passthroughAlloc =
+      builder.getArrayAttr({mustProgress, nounwind, willreturn, nocallback});
 
   allocFunc->setAttr("passthrough", passthroughAlloc);
   allocFunc.setArgAttr(0, "llvm.allocalign", builder.getUnitAttr());
@@ -2070,9 +2069,8 @@ void addRuntimeFunctions(mlir::ModuleOp module,
   allocFunc.setArgAttr(0, "llvm.noundef", builder.getUnitAttr());
   allocFunc.setArgAttr(1, "llvm.noundef", builder.getUnitAttr());
 
-  auto freeKind = builder.getStrArrayAttr({"allockind", "free"});
-  auto passthroughDealloc = builder.getArrayAttr(
-      {mustProgress, nounwind, willreturn, nocallback, freeKind});
+  auto passthroughDealloc =
+      builder.getArrayAttr({mustProgress, nounwind, willreturn, nocallback});
   deallocFunc->setAttr("passthrough", passthroughDealloc);
   deallocFunc.setArgAttr(0, "llvm.nocapture", builder.getUnitAttr());
   deallocFunc.setArgAttr(0, "llvm.allocptr", builder.getUnitAttr());

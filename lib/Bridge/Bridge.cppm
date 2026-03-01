@@ -82,6 +82,7 @@ module;
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/LLVMPass/AllocationSimplication.h"
+#include "Reussir/LLVMPass/RuntimeFunctionAttributor.h"
 
 export module Reussir.Bridge;
 
@@ -218,8 +219,10 @@ void runNPMOptimization(llvm::Module &llvmModule, ReussirOptOption opt) {
     return;
   }
 
-  // Create the default optimization pipeline for the specified level
-  llvm::ModulePassManager mpm = pb.buildPerModuleDefaultPipeline(optLevel);
+  // Create the default optimization pipeline for the specified level.
+  llvm::ModulePassManager mpm;
+  mpm.addPass(reussir::llvmpass::RuntimeFunctionAttributorPass());
+  mpm.addPass(pb.buildPerModuleDefaultPipeline(optLevel));
   mpm.addPass(reussir::llvmpass::AllocationSimplicationPass());
 
   // Run the optimization
