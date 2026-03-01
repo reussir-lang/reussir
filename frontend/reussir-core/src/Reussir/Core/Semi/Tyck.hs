@@ -123,6 +123,22 @@ introduceNewHoleInContext bounds = do
     currentSpan <- State.gets currentSpan
     runUnification $ introduceNewHole Nothing currentSpan bounds
 
+-- | Introduce a list of named, typed variables into scope (via 'withVariable'),
+-- execute an action while they are in scope, and return the allocated 'VarID's
+-- alongside the action's result.
+withAllArgs :: [(Identifier, Type)] -> SemiEff a -> [VarID] -> SemiEff ([VarID], a)
+withAllArgs [] action acc = action >>= \a -> return (reverse acc, a)
+withAllArgs ((name, ty) : rest) action acc =
+    withVariable name Nothing ty $ \varID -> withAllArgs rest action (varID : acc)
+
+-- | Look up a variable's type in the current context by its 'VarID'.
+queryVarInContext :: Int -> SemiEff (VarID, Type)
+queryVarInContext idx = do
+    let varID = VarID idx
+    vt <- State.gets varTable
+    ty <- getVarType varID vt
+    return (varID, ty)
+
 {- | Best effort attempt to force evaluate a pending type hole to a concrete type.
 Report an error if the any type hole cannot be resolved.
 -}
@@ -582,8 +598,18 @@ inferType (Syn.Var varName) = do
             lookupVar baseName varTable >>= \case
                 Just (varId, varType) -> exprWithSpan varType $ Var varId
                 Nothing -> do
-                    addErrReportMsg "Variable not found"
-                    exprWithSpan TypeBottom Poison
+                    -- Try lifting a named function to a closure
+                    functionTable <- State.gets functions
+                    getFunctionProto varName functionTable >>= \case
+                        Just proto
+                            | not (funcIsRegional proto) ->
+                                liftFunctionToClosure proto varName
+                            | otherwise -> do
+                                addErrReportMsg "Cannot lift regional function to closure"
+                                exprWithSpan TypeBottom Poison
+                        Nothing -> do
+                            addErrReportMsg "Variable not found"
+                            exprWithSpan TypeBottom Poison
         _ -> do
             records <- State.gets knownRecords
             liftIO (H.lookup records varName) >>= \case
@@ -790,19 +816,6 @@ inferTypeForLambdaAbstraction (Syn.LambdaExpr args body retTy)  = do
     let zippedArgIDs = zipWith (\i (_, t) -> (i, t)) argIDs args'
     freeVars' <- mapM queryVarInContext (IntSet.toList freeVars)
     exprWithSpan ty $ Closure $ ClosureExpr freeVars' zippedArgIDs body'
-    where
-        withAllArgs :: [(Identifier, Type)] -> SemiEff a -> [VarID] -> SemiEff ([VarID], a)
-        withAllArgs [] action acc = action >>= \a -> return (reverse acc, a)
-        -- TODO: add span?
-        withAllArgs ((name, ty) : rest) action acc = do
-            withVariable name Nothing ty $ \varID -> withAllArgs rest action (varID : acc)
-
-        queryVarInContext :: Int -> SemiEff (VarID, Type)
-        queryVarInContext idx = do
-            let varID = VarID idx
-            varTable <- State.gets varTable
-            ty <- getVarType varID varTable
-            return (varID, ty)
 
 -- | Helper function to infer the type of an intrinsic function call
 inferTypeForIntrinsicCall :: Syn.FuncCall -> SemiEff (Maybe Expr)
@@ -936,6 +949,36 @@ inferTypeForIntrinsicCall
                     else return Nothing
             _ -> return Nothing
 
+-- | Lift a named function into a closure expression.
+-- Synthesizes: \(a1, a2, ...) -> func(a1, a2, ...) with zero captures.
+liftFunctionToClosure :: FunctionProto -> Path -> SemiEff Expr
+liftFunctionToClosure proto path = do
+    -- Instantiate generic parameters with fresh type holes
+    bounds <- mapM (\(_, gid) -> runUnification $ getGenericBound gid) (funcGenerics proto)
+    tyArgs <- mapM introduceNewHoleInContext bounds
+    let genMap = functionGenericMap proto tyArgs
+    let instantiatedParams = map (\(name, ty) -> (name, substituteGenericMap ty genMap)) (funcParams proto)
+    let instantiatedRetType = substituteGenericMap (funcReturnType proto) genMap
+    -- Create parameter variables and build body inside their scope
+    (argIDs, body') <- withAllArgs instantiatedParams (do
+        vt <- State.gets varTable
+        argExprs <- forM instantiatedParams $ \(name, ty) ->
+            lookupVar name vt >>= \case
+                Just (varID, _) -> exprWithSpan ty (Var varID)
+                Nothing -> error "unreachable: liftFunctionToClosure arg not found"
+        exprWithSpan instantiatedRetType $ FuncCall
+            { funcCallTarget = path
+            , funcCallArgs = argExprs
+            , funcCallTyArgs = tyArgs
+            , funcCallRegional = funcIsRegional proto
+            }
+        ) []
+    let zippedArgIDs = zipWith (\i (_, t) -> (i, t)) argIDs instantiatedParams
+    let closureTy = TypeClosure (map snd instantiatedParams) instantiatedRetType
+    -- Captures are empty by construction: the body is a saturated call whose
+    -- only variable references are the closure's own arguments.
+    exprWithSpan closureTy $ Closure $ ClosureExpr [] zippedArgIDs body'
+
 -- | Helper function to infer the type of a function call expression
 inferTypeForCallExpr :: Syn.FuncCall -> SemiEff Expr
 inferTypeForCallExpr call = do
@@ -1014,33 +1057,61 @@ inferTypeForNormalCall
                     let genericMap = functionGenericMap proto tyArgs'
                     let instantiatedArgTypes = map (\(_, ty) -> substituteGenericMap ty genericMap) (funcParams proto)
                     let expectedNumParams = length instantiatedArgTypes
-                    checkArgsNum expectedNumParams $ do
-                        argExprs' <- zipWithM checkType argExprs instantiatedArgTypes
-                        let instantiatedRetType = substituteGenericMap (funcReturnType proto) genericMap
-                        exprWithSpan instantiatedRetType $
-                            FuncCall
-                                { funcCallTarget = path
-                                , funcCallArgs = argExprs'
-                                , funcCallTyArgs = tyArgs'
-                                , funcCallRegional = funcIsRegional proto
-                                }
+                    let actualNumArgs = length argExprs
+                    if actualNumArgs > expectedNumParams
+                        then do
+                            addErrReportMsg $
+                                "Function "
+                                    <> T.pack (show path)
+                                    <> " expects "
+                                    <> T.pack (show expectedNumParams)
+                                    <> " arguments, but got "
+                                    <> T.pack (show actualNumArgs)
+                            exprWithSpan TypeBottom Poison
+                        else if actualNumArgs == expectedNumParams
+                            then do
+                                argExprs' <- zipWithM checkType argExprs instantiatedArgTypes
+                                let instantiatedRetType = substituteGenericMap (funcReturnType proto) genericMap
+                                exprWithSpan instantiatedRetType $
+                                    FuncCall
+                                        { funcCallTarget = path
+                                        , funcCallArgs = argExprs'
+                                        , funcCallTyArgs = tyArgs'
+                                        , funcCallRegional = funcIsRegional proto
+                                        }
+                            else do
+                                -- Partial application: fewer args than expected
+                                let (appliedTypes, remainingTypes) = splitAt actualNumArgs instantiatedArgTypes
+                                let remainingParamNames =
+                                        zipWith (\(name, _) ty -> (name, ty))
+                                            (drop actualNumArgs (funcParams proto))
+                                            remainingTypes
+                                let instantiatedRetType = substituteGenericMap (funcReturnType proto) genericMap
+                                checkedArgs <- zipWithM checkType argExprs appliedTypes
+                                (argIDs, body') <- withAllArgs remainingParamNames (do
+                                    vt <- State.gets varTable
+                                    remainingArgExprs <- forM remainingParamNames $ \(name, ty) ->
+                                        lookupVar name vt >>= \case
+                                            Just (varID, _) -> exprWithSpan ty (Var varID)
+                                            Nothing -> error "unreachable: partial application arg"
+                                    let allArgExprs = checkedArgs ++ remainingArgExprs
+                                    exprWithSpan instantiatedRetType $ FuncCall
+                                        { funcCallTarget = path
+                                        , funcCallArgs = allArgExprs
+                                        , funcCallTyArgs = tyArgs'
+                                        , funcCallRegional = funcIsRegional proto
+                                        }
+                                    ) []
+                                let argSet = IntSet.fromList (map (\(VarID x) -> x) argIDs)
+                                let freeVars = collectExprFreeVars body' `IntSet.difference` argSet
+                                captures <- mapM queryVarInContext (IntSet.toList freeVars)
+                                let zippedArgIDs = zipWith (\i (_, t) -> (i, t)) argIDs remainingParamNames
+                                let closureTy = TypeClosure (map snd remainingParamNames) instantiatedRetType
+                                exprWithSpan closureTy $ Closure $ ClosureExpr captures zippedArgIDs body'
             Nothing -> do
                 addErrReportMsg $ "Function not found: " <> T.pack (show path)
                 exprWithSpan TypeBottom Poison
       where
-        checkArgsNum :: Int -> SemiEff Expr -> SemiEff Expr
-        checkArgsNum expectedNum argAction = do
-            if expectedNum /= length argExprs
-                then do
-                    addErrReportMsg $
-                        "Function "
-                            <> T.pack (show path)
-                            <> " expects "
-                            <> T.pack (show expectedNum)
-                            <> " arguments, but got "
-                            <> T.pack (show (length argExprs))
-                    exprWithSpan TypeBottom Poison
-                else argAction
         checkTypeArgsNum :: Int -> [Maybe Syn.Type] -> SemiEff Expr -> SemiEff Expr
         checkTypeArgsNum expectedNum actualTyArgs paramAction = do
             if expectedNum /= length actualTyArgs
@@ -1054,10 +1125,11 @@ inferTypeForNormalCall
                             <> T.pack (show (length actualTyArgs))
                     exprWithSpan TypeBottom Poison
                 else paramAction
-        functionGenericMap :: FunctionProto -> [Type] -> IntMap.IntMap Type
-        functionGenericMap proto assignedTypes =
-            let genericIDs = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
-             in IntMap.fromList $ zip genericIDs assignedTypes
+-- | Build a mapping from generic IDs to their assigned types for a function prototype.
+functionGenericMap :: FunctionProto -> [Type] -> IntMap.IntMap Type
+functionGenericMap proto assignedTypes =
+    let genericIDs = map (\(_, GenericID gid) -> fromIntegral gid) (funcGenerics proto)
+     in IntMap.fromList $ zip genericIDs assignedTypes
 
 -- Binary operations
 --          Г, Num U |- U <- x, y -> U
