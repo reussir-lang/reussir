@@ -706,11 +706,15 @@ def ReussirRefLoadOp : ReussirReferenceOp<"load", []> {
     `reussir.ref.load` loads a reference.
   }];
 
-  let arguments = (ins Arg<ReussirRefType, "reference to load">:$ref);
+  let arguments = (ins
+    Arg<ReussirRefType, "reference to load">:$ref,
+    UnitAttr:$invariant_group
+  );
   let results = (outs Res<AnyType, "loaded value">:$value);
 
   let assemblyFormat = [{
-    `(` $ref `:` qualified(type($ref)) `)` `:` type($value) attr-dict
+    `(` $ref `:` qualified(type($ref)) `)` (`invariant_group` $invariant_group^)?
+    `:` type($value) attr-dict
   }];
   let hasVerifier = 1;
 }

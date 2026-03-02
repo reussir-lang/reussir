@@ -77,6 +77,7 @@ module;
 
 #include "Reussir/Bridge.h"
 #include "Reussir/Conversion/BasicOpsLowering.h"
+#include "Reussir/Conversion/InvariantGroupAnalysis.h"
 #include "Reussir/Conversion/Passes.h"
 #include "Reussir/Conversion/SCFOpsLowering.h"
 #include "Reussir/IR/ReussirDialect.h"
@@ -171,6 +172,8 @@ void createLoweringPipeline(mlir::PassManager &pm,
   pm.addPass(reussir::createReussirSCFOpsLoweringPass());
   pm.addPass(reussir::createReussirCompilePolymorphicFFIPass());
 
+  pm.addNestedPass<mlir::func::FuncOp>(
+      reussir::createReussirInvariantGroupAnalysisPass());
 #if LLVM_VERSION_MAJOR >= 21
   pm.addPass(createSCFToControlFlowPass());
 #else

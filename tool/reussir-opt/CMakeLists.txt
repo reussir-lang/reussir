@@ -18,13 +18,14 @@ add_mlir_tool(reussir-opt
     MLIRReussirCompilePolymorphicFFI
     MLIRReussirTokenReuse
     MLIRReussirAttachNativeTarget
+    MLIRReussirInvariantGroupAnalysis
     ${dialect_libs}
     ${conversion_libs}
     ${extension_libs}
 )
 
-target_link_libraries(reussir-opt 
-  PRIVATE 
+target_link_libraries(reussir-opt
+  PRIVATE
     MLIRReussir
     MLIRReussirBasicOpsLowering
     MLIRReussirSCFOpsLowering
@@ -37,6 +38,7 @@ target_link_libraries(reussir-opt
     MLIRReussirCompilePolymorphicFFI
     MLIRReussirTokenReuse
     MLIRReussirAttachNativeTarget
+    MLIRReussirInvariantGroupAnalysis
     ${dialect_libs} 
     ${conversion_libs} 
     ${extension_libs}

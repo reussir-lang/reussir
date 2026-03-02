@@ -241,4 +241,20 @@ def ReussirTokenReusePass
 
   let dependentDialects = ["::reussir::ReussirDialect"];
 }
+
+//===----------------------------------------------------------------------===//
+// InvariantGroupAnalysis
+//===----------------------------------------------------------------------===//
+def ReussirInvariantGroupAnalysisPass
+    : Pass<"reussir-invariant-group-analysis", "::mlir::func::FuncOp"> {
+  let summary = "mark ref.load operations with invariant_group attribute";
+  let description = [{
+    `reussir-invariant-group-analysis` uses sparse forward dataflow analysis
+    to determine which `ref.load` operations can be marked with invariant_group.
+    A load is marked when its ref operand provably originates from `rc.borrow`
+    or `closure.inspect_payload` through a chain of `ref.project` operations,
+    and no projection in the chain goes through a flex reference's mutable field.
+  }];
+  let dependentDialects = ["::reussir::ReussirDialect"];
+}
 #endif // REUSSIR_CONVERSION_PASSES_TD

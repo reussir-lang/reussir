@@ -13,6 +13,7 @@
 #include <mlir/Pass/PassRegistry.h>
 #include <mlir/Tools/mlir-opt/MlirOptMain.h>
 
+#include "Reussir/Conversion/InvariantGroupAnalysis.h"
 #include "Reussir/Conversion/Passes.h"
 #include "Reussir/IR/ReussirDialect.h"
 
@@ -57,6 +58,9 @@ int main(int argc, char **argv) {
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return reussir::createReussirAttachNativeTargetPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return reussir::createReussirInvariantGroupAnalysisPass();
   });
   return failed(mlir::MlirOptMain(
       argc, argv, "Reussir analysis and optimization driver\n", registry));

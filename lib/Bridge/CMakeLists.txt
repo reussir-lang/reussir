@@ -18,6 +18,7 @@ add_mlir_library(MLIRReussirBridge
     MLIRReussir
     MLIRReussirBasicOpsLowering
     MLIRReussirSCFOpsLowering
+    MLIRReussirInvariantGroupAnalysis
   LINK_COMPONENTS
     Core
     Support
@@ -32,6 +33,7 @@ add_mlir_library(MLIRReussirBridge
     MLIRReussir
     MLIRReussirBasicOpsLowering
     MLIRReussirSCFOpsLowering
+    MLIRReussirInvariantGroupAnalysis
     ReussirLLVMAllocationSimplicationPass
     spdlog::spdlog
     ${TPDE_LINK_LIB}
