@@ -1193,7 +1193,7 @@ analyzeDTSwitchCases tbl cases st scrutTy scrutVarIDs = do
             -- MERGE ANNOTATIONS: Union the annotations from all branches into the reconciled state
             let mergedAnnotations =
                     foldl'
-                        (\acc s -> IntMap.union acc (asAnnotations s))
+                        (\acc s -> IntMap.unionWith mergeAction acc (asAnnotations s))
                         (asAnnotations stReconciledBase)
                         branchStates
 
@@ -1226,13 +1226,14 @@ analyzeDTSwitchCases tbl cases st scrutTy scrutVarIDs = do
             results <-
                 mapM
                     ( \(_, dt) -> do
-                        let s' = st{asLedger = ledgerBefore}
+                        let s' = st{asLedger = ledgerBefore, asAnnotations = IntMap.empty}
                         (s'', _) <- analyzeDecisionTree tbl dt s' scrutTy scrutVarIDs
                         pure (asLedger s'', dt, s'')
                     )
                     intCases
 
-            let stDefaultStart = st{asLedger = ledgerBefore}
+            let stDefaultStart =
+                    st{asLedger = ledgerBefore, asAnnotations = IntMap.empty}
             (stDefault, _) <-
                 analyzeDecisionTree tbl dtDefault stDefaultStart scrutTy scrutVarIDs
 
@@ -1244,7 +1245,7 @@ analyzeDTSwitchCases tbl cases st scrutTy scrutVarIDs = do
             -- MERGE ANNOTATIONS
             let mergedAnnotations =
                     foldl'
-                        (\acc s -> IntMap.union acc (asAnnotations s))
+                        (\acc s -> IntMap.unionWith mergeAction acc (asAnnotations s))
                         (asAnnotations stReconciledBase)
                         branchStates
 
@@ -1270,7 +1271,7 @@ analyzeCtorBranch ::
     Full.DecisionTree ->
     IO (IntMap Int, Full.DecisionTree, AnalysisState)
 analyzeCtorBranch tbl ledgerBefore scrutTy scrutVarIDs st idx dt = do
-    let st' = st{asLedger = ledgerBefore}
+    let st' = st{asLedger = ledgerBefore, asAnnotations = IntMap.empty}
     -- Determine variant type
     variantTy <- case scrutTy of
         Full.TypeRecord s -> getVariantType s

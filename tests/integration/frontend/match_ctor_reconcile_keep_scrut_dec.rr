@@ -1,0 +1,32 @@
+// RUN: %reussir-compiler %s -Onone -t mlir -o %t.mlir
+// RUN: %FileCheck %s --check-prefix=CHECK-MLIR < %t.mlir
+
+enum Tree {
+    Branch(i32, Tree, Tree),
+    Leaf
+}
+
+// This pattern requires branch reconciliation:
+// - Branch arm consumes `z` by returning it.
+// - Leaf arm does not consume `z`, so reconciliation inserts a dec for `z`.
+//
+// The scrutinee `t` must still be dec'd in both arms. If annotation maps are
+// merged with left-biased overwrite, one arm can lose the `dec(t)`.
+fn g(t: Tree, z: Tree) -> Tree {
+    match t {
+        Tree::Branch(_, _, _) => z,
+        Tree::Leaf => Tree::Leaf
+    }
+}
+
+extern "C" trampoline "g_ffi" = g;
+
+// CHECK-MLIR-LABEL: func.func @"_RC1g"(%0 :
+// CHECK-MLIR: reussir.record.dispatch
+// CHECK-MLIR: [0] ->
+// CHECK-MLIR: reussir.rc.dec (%0 :
+// CHECK-MLIR: reussir.scf.yield %1 :
+// CHECK-MLIR: [1] ->
+// CHECK-MLIR-DAG: reussir.rc.dec (%0 :
+// CHECK-MLIR-DAG: reussir.rc.dec (%1 :
+// CHECK-MLIR: reussir.scf.yield
