@@ -1,0 +1,137 @@
+// RUN: %reussir-compiler %s -o %t.o --relocation-mode pic -Oaggressive --reuse-across-call
+// RUN: %cc %t.o %S/rbtree2.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+enum [value] Color {
+    Red,
+    Black
+}
+
+enum Tree {
+    Branch(Color, Tree, i32, bool, Tree),
+    Leaf
+}
+
+
+enum Zipper {
+    NodeR(Color, Tree, i32, bool, Zipper),
+    NodeL(Color, Zipper, i32, bool, Tree),
+    Done
+}
+
+fn move_up(z : Zipper, t : Tree) -> Tree {
+    match z {
+        Zipper::NodeR(c, l, k, v, z1) => move_up(z1, Tree::Branch{c, l, k, v, t}),
+        Zipper::NodeL(c, z1, k, v, r) => move_up(z1, Tree::Branch{c, t, k, v, r}),
+        Zipper::Done => t
+    }
+}
+
+fn balance_red(z : Zipper, l : Tree, k : i32, v : bool, r : Tree) -> Tree {
+    match z {
+        Zipper::NodeR(Color::Black, l1, k1, v1, z1) =>
+            move_up(z1,
+                Tree::Branch {
+                    Color::Black, l1, k1, v1,
+                    Tree::Branch { Color::Red, l, k, v, r }
+                }),
+
+        Zipper::NodeL(Color::Black, z1, k1, v1, r1) =>
+            move_up(z1,
+                Tree::Branch {
+                    Color::Black,
+                    Tree::Branch { Color::Red, l, k, v, r },
+                    k1, v1, r1
+                }),
+
+        Zipper::NodeR(Color::Red, l1, k1, v1, z1) => match z1 {
+            Zipper::NodeR(_, l2, k2, v2, z2) =>
+                balance_red(z2,
+                    Tree::Branch { Color::Black, l2, k2, v2, l1 },
+                    k1,
+                    v1,
+                    Tree::Branch { Color::Black, l, k, v, r }),
+
+            Zipper::NodeL(_, z2, k2, v2, r2) =>
+                balance_red(z2,
+                    Tree::Branch { Color::Black, l1, k1, v1, l },
+                    k,
+                    v,
+                    Tree::Branch { Color::Black, r, k2, v2, r2 }),
+
+            Zipper::Done =>
+                Tree::Branch {
+                    Color::Black, l1, k1, v1,
+                    Tree::Branch { Color::Red, l, k, v, r }
+                }
+        },
+
+        Zipper::NodeL(Color::Red, z1, k1, v1, r1) => match z1 {
+            Zipper::NodeR(_, l2, k2, v2, z2) =>
+                balance_red(z2,
+                    Tree::Branch { Color::Black, l2, k2, v2, l },
+                    k,
+                    v,
+                    Tree::Branch { Color::Black, r, k1, v1, r1 }),
+
+            Zipper::NodeL(_, z2, k2, v2, r2) =>
+                balance_red(z2,
+                    Tree::Branch { Color::Black, l, k, v, r },
+                    k1,
+                    v1,
+                    Tree::Branch { Color::Black, r1, k2, v2, r2 }),
+
+            Zipper::Done =>
+                Tree::Branch {
+                    Color::Black,
+                    Tree::Branch { Color::Red, l, k, v, r },
+                    k1, v1, r1
+                }
+        },
+
+        Zipper::Done =>
+            Tree::Branch { Color::Black, l, k, v, r }
+    }
+}
+
+fn ins(t: Tree, k: i32, v: bool, z: Zipper) -> Tree {
+    match t {
+        Tree::Branch(c, l, kx, vx, r) =>
+            if k < kx {
+                ins(l, k, v, Zipper::NodeL{c, z, kx, vx, r})
+            } else {
+                if k > kx {
+                    ins(r, k, v, Zipper::NodeR{c, l, kx, vx, z})
+                } else {
+                    move_up(z, t)
+                }
+            },
+        Tree::Leaf => balance_red(z, Tree::Leaf, k, v, Tree::Leaf)
+    }
+}
+
+fn insert(t: Tree, k: i32, v: bool) -> Tree {
+    ins(t, k, v, Zipper::Done)
+}
+
+fn fold<A>(t: Tree, b: A, f: (i32, bool, A) -> A) -> A {
+    match t {
+        Tree::Branch(_, l, k, v, r) => fold(r, f(k, v, fold(l, b, f)), f),
+        Tree::Leaf => b
+    }
+}
+
+fn make_tree(n : i32, t : Tree) -> Tree {
+    if n <= 0 {
+        t
+    } else {
+        let m = n - 1;
+        make_tree(m, insert(t, m, m % 10 == 0))
+    }
+}
+
+fn fold_test(n: i32) -> i32 {
+    fold(make_tree(n, Tree::Leaf), 0, |k, v, acc : i32| if v { acc + 1 } else { acc })
+}
+
+extern "C" trampoline "fold_test_ffi" = fold_test;
