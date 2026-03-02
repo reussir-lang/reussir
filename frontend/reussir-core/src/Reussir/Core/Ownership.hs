@@ -647,7 +647,21 @@ analyzeExpr tbl expr st = do
             pure (st3, emptyFlux)
         -- If expression: branch reconciliation
         Full.ScfIfExpr condExpr thenExpr elseExpr -> do
-            (st1, _) <- analyzeExpr tbl condExpr st
+            -- Before analyzing the condition, if it's a consuming call,
+            -- emit incs for variables consumed by the condition but also
+            -- needed by the then/else branches.
+            let branchFreeVars = collectFreeVars thenExpr <> collectFreeVars elseExpr
+            st0 <- case Full.exprKind condExpr of
+                Full.FuncCall{} -> emitSequenceLevelIncs condExpr branchFreeVars st
+                Full.IntrinsicCall{} -> emitSequenceLevelIncs condExpr branchFreeVars st
+                Full.CompoundCall{} -> emitSequenceLevelIncs condExpr branchFreeVars st
+                Full.VariantCall{} -> emitSequenceLevelIncs condExpr branchFreeVars st
+                Full.NullableCall{} -> emitSequenceLevelIncs condExpr branchFreeVars st
+                Full.RcWrap{} -> emitSequenceLevelIncs condExpr branchFreeVars st
+                Full.ClosureCall{} -> emitSequenceLevelIncs condExpr branchFreeVars st
+                Full.Closure{} -> emitSequenceLevelIncs condExpr branchFreeVars st
+                _ -> pure st
+            (st1, _) <- analyzeExpr tbl condExpr st0
             -- Save ledger before branches
             let ledgerBefore = asLedger st1
             (st2, thenFlux) <- analyzeExpr tbl thenExpr st1
@@ -1348,33 +1362,79 @@ reconcileBranches branches st =
                     allVars
      in (minCounts, st')
 
--- | Reconcile ownership across decision tree branches
+-- | Reconcile ownership across decision tree branches.
+--
+-- Unlike 'reconcileBranches' which takes pre-extracted ExprIDs,
+-- this function works directly with decision trees. It computes
+-- min counts from ALL branch ledgers (including DTSwitch subtrees),
+-- then emits excess decs at every reachable exit point within each branch.
 reconcileBranchesWithDT ::
     [(IntMap Int, Full.DecisionTree)] ->
     AnalysisState ->
     (IntMap Int, AnalysisState)
 reconcileBranchesWithDT branches st =
     let
-        -- Convert DT branches to ExprID branches where possible
-        exprBranches =
-            [ (ledger, eid, used)
-            | (ledger, dt) <- branches
-            , Just (eid, used) <- [dtExitExprInfo dt]
-            ]
-     in
-        if null exprBranches
-            then
-                -- If no branches have exit ExprIDs, just pick first ledger
-                case branches of
-                    [] -> (asLedger st, st)
-                    ((ledger, _) : _) -> (ledger, st)
-            else reconcileBranches exprBranches st
+        allLedgers = map fst branches
+        allVars = IntSet.unions $ map IntMap.keysSet allLedgers
+        -- For each var, find the minimum count across ALL branches (most consumed)
+        minCounts = IntSet.foldl' findMin IntMap.empty allVars
+          where
+            findMin acc vid =
+                let counts = map (\ledger -> IntMap.findWithDefault 0 vid ledger) allLedgers
+                    minCount = minimum counts
+                 in IntMap.insert vid minCount acc
+        -- Emit decs at every exit point of each branch
+        st' = foldl' reconcileBranch st branches
+          where
+            reconcileBranch s (ledger, dt) =
+                let exitInfos = dtAllExitInfos dt
+                 in foldl' (emitExcessAtExit ledger) s exitInfos
 
--- | Get the exit ExprID and used vars for optimization
-dtExitExprInfo :: Full.DecisionTree -> Maybe (ExprID, IntSet.IntSet)
-dtExitExprInfo (Full.DTLeaf body _) = Just (Full.exprID body, collectFreeVars body)
-dtExitExprInfo (Full.DTGuard _ guardExpr _ _) = Just (Full.exprID guardExpr, collectFreeVars guardExpr)
-dtExitExprInfo _ = Nothing
+            emitExcessAtExit ledger s (eid, usedVars) =
+                IntSet.foldl'
+                    ( \s' vid ->
+                        let branchCount = IntMap.findWithDefault 0 vid ledger
+                            targetCount = IntMap.findWithDefault 0 vid minCounts
+                            excess = branchCount - targetCount
+                         in if excess > 0
+                                then
+                                    let action =
+                                            if vid `IntSet.member` usedVars
+                                                then OwnershipAction [] (replicate excess (ODecVar (VarID vid))) -- Late drop
+                                                else OwnershipAction (replicate excess (ODecVar (VarID vid))) [] -- Early drop
+                                     in annotate eid action s'
+                                else s'
+                    )
+                    s
+                    allVars
+     in
+        if null branches
+            then (asLedger st, st)
+            else (minCounts, st')
+
+-- | Collect all exit-point ExprIDs from a decision tree, recursively.
+--
+-- DTLeaf and DTGuard have a single exit point.  DTSwitch branches
+-- have already been internally reconciled, so all their leaf exit
+-- points share the same ledger — placing the same excess decs at
+-- each one is correct.
+dtAllExitInfos :: Full.DecisionTree -> [(ExprID, IntSet.IntSet)]
+dtAllExitInfos (Full.DTLeaf body _) = [(Full.exprID body, collectFreeVars body)]
+dtAllExitInfos (Full.DTGuard _ guardExpr _ _) = [(Full.exprID guardExpr, collectFreeVars guardExpr)]
+dtAllExitInfos (Full.DTSwitch _ cases) = dtSwitchCasesExitInfos cases
+dtAllExitInfos _ = []
+
+dtSwitchCasesExitInfos :: Full.DTSwitchCases -> [(ExprID, IntSet.IntSet)]
+dtSwitchCasesExitInfos (Full.DTSwitchBool t f) =
+    dtAllExitInfos t ++ dtAllExitInfos f
+dtSwitchCasesExitInfos (Full.DTSwitchCtor cases) =
+    concatMap dtAllExitInfos (V.toList cases)
+dtSwitchCasesExitInfos (Full.DTSwitchInt intMap def) =
+    concatMap dtAllExitInfos (IntMap.elems intMap) ++ dtAllExitInfos def
+dtSwitchCasesExitInfos (Full.DTSwitchString strMap def) =
+    concatMap dtAllExitInfos (HashMap.elems strMap) ++ dtAllExitInfos def
+dtSwitchCasesExitInfos (Full.DTSwitchNullable j n) =
+    dtAllExitInfos j ++ dtAllExitInfos n
 
 -- | Strict left fold for IO
 foldlM' :: (Monad m) => (b -> a -> m b) -> b -> [a] -> m b
