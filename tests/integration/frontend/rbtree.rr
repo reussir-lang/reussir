@@ -1,0 +1,173 @@
+// RUN: %reussir-compiler %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/rbtree.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// Port of Koka rbtree benchmark's make-tree path:
+// build a red-black tree by inserting keys [n-1 .. 0], then
+// expose an FFI that returns the in-order list [0 .. n-1].
+
+enum [value] Color {
+    Red,
+    Black
+}
+
+enum Tree {
+    Branch(Color, Tree, i32, bool, Tree),
+    Leaf
+}
+
+enum List {
+    Nil,
+    Cons(i32, List)
+}
+
+fn is_red(t: Tree) -> bool {
+    match t {
+        Tree::Branch(Color::Red, _, _, _, _) => true,
+        _ => false
+    }
+}
+
+fn balance_left(l: Tree, k: i32, v: bool, r: Tree) -> Tree {
+    match l {
+        Tree::Branch(_, Tree::Branch(Color::Red, lx, kx, vx, rx), ky, vy, ry) =>
+            Tree::Branch{
+                Color::Red,
+                Tree::Branch{Color::Black, lx, kx, vx, rx},
+                ky,
+                vy,
+                Tree::Branch{Color::Black, ry, k, v, r}
+            },
+
+        Tree::Branch(_, ly, ky, vy, Tree::Branch(Color::Red, lx, kx, vx, rx)) =>
+            Tree::Branch{
+                Color::Red,
+                Tree::Branch{Color::Black, ly, ky, vy, lx},
+                kx,
+                vx,
+                Tree::Branch{Color::Black, rx, k, v, r}
+            },
+
+        Tree::Branch(_, lx, kx, vx, rx) =>
+            Tree::Branch{
+                Color::Black,
+                Tree::Branch{Color::Red, lx, kx, vx, rx},
+                k,
+                v,
+                r
+            },
+
+        Tree::Leaf => Tree::Leaf
+    }
+}
+
+fn balance_right(l: Tree, k: i32, v: bool, r: Tree) -> Tree {
+    match r {
+        Tree::Branch(_, Tree::Branch(Color::Red, lx, kx, vx, rx), ky, vy, ry) =>
+            Tree::Branch{
+                Color::Red,
+                Tree::Branch{Color::Black, l, k, v, lx},
+                kx,
+                vx,
+                Tree::Branch{Color::Black, rx, ky, vy, ry}
+            },
+
+        Tree::Branch(_, lx, kx, vx, Tree::Branch(Color::Red, ly, ky, vy, ry)) =>
+            Tree::Branch{
+                Color::Red,
+                Tree::Branch{Color::Black, l, k, v, lx},
+                kx,
+                vx,
+                Tree::Branch{Color::Black, ly, ky, vy, ry}
+            },
+
+        Tree::Branch(_, lx, kx, vx, rx) =>
+            Tree::Branch{
+                Color::Black,
+                l,
+                k,
+                v,
+                Tree::Branch{Color::Red, lx, kx, vx, rx}
+            },
+
+        Tree::Leaf => Tree::Leaf
+    }
+}
+
+fn ins(t: Tree, k: i32, v: bool) -> Tree {
+    match t {
+        Tree::Branch(Color::Red, l, kx, vx, r) =>
+            if k < kx {
+                Tree::Branch{Color::Red, ins(l, k, v), kx, vx, r}
+            } else {
+                if k > kx {
+                    Tree::Branch{Color::Red, l, kx, vx, ins(r, k, v)}
+                } else {
+                    Tree::Branch{Color::Red, l, k, v, r}
+                }
+            },
+
+        Tree::Branch(Color::Black, l, kx, vx, r) =>
+            if k < kx {
+                if is_red(l) {
+                    balance_left(ins(l, k, v), kx, vx, r)
+                } else {
+                    Tree::Branch{Color::Black, ins(l, k, v), kx, vx, r}
+                }
+            } else {
+                if k > kx {
+                    if is_red(r) {
+                        balance_right(l, kx, vx, ins(r, k, v))
+                    } else {
+                        Tree::Branch{Color::Black, l, kx, vx, ins(r, k, v)}
+                    }
+                } else {
+                    Tree::Branch{Color::Black, l, k, v, r}
+                }
+            },
+
+        Tree::Leaf => Tree::Branch{Color::Red, Tree::Leaf, k, v, Tree::Leaf}
+    }
+}
+
+fn set_black(t: Tree) -> Tree {
+    match t {
+        Tree::Branch(_, l, k, v, r) => Tree::Branch{Color::Black, l, k, v, r},
+        Tree::Leaf => Tree::Leaf
+    }
+}
+
+fn insert(t: Tree, k: i32, v: bool) -> Tree {
+    set_black(ins(t, k, v))
+}
+
+fn make_tree_aux(n: i32, t: Tree) -> Tree {
+    if n <= 0 {
+        t
+    } else {
+        let n1 = n - 1;
+        make_tree_aux(n1, insert(t, n1, n1 % 10 == 0))
+    }
+}
+
+fn make_tree(n: i32) -> Tree {
+    make_tree_aux(n, Tree::Leaf)
+}
+
+fn tree_to_list_acc(t: Tree, acc: List) -> List {
+    match t {
+        Tree::Branch(_, l, k, _, r) =>
+            tree_to_list_acc(l, List::Cons{k, tree_to_list_acc(r, acc)}),
+        Tree::Leaf => acc
+    }
+}
+
+fn tree_to_list(t: Tree) -> List {
+    tree_to_list_acc(t, List::Nil)
+}
+
+pub fn make_tree_to_list(size: i32) -> List {
+    tree_to_list(make_tree(size))
+}
+
+extern "C" trampoline "make_tree_to_list_ffi" = make_tree_to_list;
