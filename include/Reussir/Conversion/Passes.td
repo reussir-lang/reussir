@@ -239,6 +239,11 @@ def ReussirTokenReusePass
     `reussir-token-reuse` reuses tokens for operations.
   }];
 
+  let options = [
+    Option<"reuseAcrossCall", "reuse-across-call", "bool", /*default=*/"false",
+        "allow token reuse across function calls (may increase peak heap usage)">,
+  ];
+
   let dependentDialects = ["::reussir::ReussirDialect"];
 }
 

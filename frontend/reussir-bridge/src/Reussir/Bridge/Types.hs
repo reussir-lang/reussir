@@ -162,5 +162,6 @@ data Program = Program
     , targetFeatures :: ByteString
     , targetCodeModel :: CodeModel
     , targetRelocationModel :: RelocationModel
+    , reuseTokenAcrossCall :: Bool
     }
     deriving (Eq, Show)

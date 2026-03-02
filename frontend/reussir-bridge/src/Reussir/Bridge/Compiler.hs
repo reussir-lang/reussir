@@ -66,6 +66,8 @@ foreign import capi "Reussir/Bridge.h reussir_bridge_compile_for_target"
         CInt ->
         -- | target relocation model
         CInt ->
+        -- | reuse_token_across_call
+        CInt ->
         IO ()
 
 getNativeTargetTriple :: IO ByteString
@@ -114,6 +116,7 @@ compileForNativeMachine mlirModule sourceName outputFile target opt logLevel = d
             , targetFeatures = targetFeatures
             , targetCodeModel = CodeModelDefault
             , targetRelocationModel = RelocationModelDefault
+            , reuseTokenAcrossCall = False
             }
 
 compileForTarget ::
@@ -149,6 +152,7 @@ compileForTarget mlirModule sourceName outputFile target opt logLevel mTriple mC
         mFeatures
         CodeModelDefault
         RelocationModelDefault
+        False
 
 compileForTargetWithModels ::
     -- | MLIR module content
@@ -173,8 +177,10 @@ compileForTargetWithModels ::
     CodeModel ->
     -- | Target relocation model
     RelocationModel ->
+    -- | Reuse tokens across function calls
+    Bool ->
     IO ()
-compileForTargetWithModels mlirModule sourceName outputFile target opt logLevel mTriple mCPU mFeatures codeModel relocationModel = do
+compileForTargetWithModels mlirModule sourceName outputFile target opt logLevel mTriple mCPU mFeatures codeModel relocationModel tokenReuse = do
     triple <- maybe getNativeTargetTriple pure mTriple
     -- When a custom triple is specified, default CPU/features to empty strings
     -- so LLVM picks appropriate defaults for the target architecture.
@@ -195,6 +201,7 @@ compileForTargetWithModels mlirModule sourceName outputFile target opt logLevel 
             , targetFeatures = features
             , targetCodeModel = codeModel
             , targetRelocationModel = relocationModel
+            , reuseTokenAcrossCall = tokenReuse
             }
 
 compileProgram :: Program -> IO ()
@@ -211,6 +218,7 @@ compileProgram
         , targetFeatures = featuresMap
         , targetCodeModel = targetCodeModel
         , targetRelocationModel = targetRelocationModel
+        , reuseTokenAcrossCall = tokenReuse
         } =
         useAsCString mlirModule $ \mlirPtr ->
             withCString sourceName $ \sourceNamePtr ->
@@ -230,3 +238,4 @@ compileProgram
                                     featuresPtr
                                     (codeModelToC targetCodeModel)
                                     (relocationModelToC targetRelocationModel)
+                                    (if tokenReuse then 1 else 0)
