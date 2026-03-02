@@ -1,6 +1,6 @@
 #![allow(clippy::missing_safety_doc)]
 
-#[cfg(feature = "mimalloc")]
+#[cfg(all(feature = "mimalloc", not(miri)))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
