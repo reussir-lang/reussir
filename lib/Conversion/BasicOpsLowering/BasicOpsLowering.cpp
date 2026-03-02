@@ -484,7 +484,7 @@ struct ReussirRefLoadConversionPattern
     mlir::Type llvmPointeeTy = getTypeConverter()->convertType(pointeeTy);
     auto loadOp = rewriter.replaceOpWithNewOp<mlir::LLVM::LoadOp>(
         op, llvmPointeeTy, adaptor.getRef());
-    if (op->hasAttr("reussir.invariant_group"))
+    if (op.getInvariantGroup())
       loadOp.setInvariantGroup(true);
     return mlir::success();
   }
@@ -2095,22 +2095,6 @@ void addRuntimeFunctions(mlir::ModuleOp module,
 //===----------------------------------------------------------------------===//
 
 namespace {
-void markInvariantGroup(ReussirRefLoadOp op) {
-  auto ref = op.getRef();
-  // walk up the reference projection chain, if it originates from a rc borrow,
-  // mark it as invariant group
-  while (auto proj =
-             dyn_cast_if_present<ReussirRefProjectOp>(ref.getDefiningOp()))
-    ref = proj.getRef();
-
-  if (auto borrow = dyn_cast_if_present<ReussirRcBorrowOp>(ref.getDefiningOp()))
-    op->setAttr("reussir.invariant_group",
-                mlir::UnitAttr::get(op.getContext()));
-  if (auto inspect = dyn_cast_if_present<ReussirClosureInspectPayloadOp>(
-          ref.getDefiningOp()))
-    op->setAttr("reussir.invariant_group",
-                mlir::UnitAttr::get(op.getContext()));
-}
 struct BasicOpsLoweringPass
     : public impl::ReussirBasicOpsLoweringPassBase<BasicOpsLoweringPass> {
   using Base::Base;
@@ -2129,7 +2113,6 @@ struct BasicOpsLoweringPass
       mlir::populateMathToLibmConversionPatterns(patterns);
       mlir::ub::populateUBToLLVMConversionPatterns(converter, patterns);
       addRuntimeFunctions(getOperation(), converter);
-      getOperation().walk(markInvariantGroup);
       target.addIllegalDialect<mlir::func::FuncDialect,
                                mlir::arith::ArithDialect>();
       target.addIllegalOp<
