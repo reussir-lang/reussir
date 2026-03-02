@@ -103,7 +103,7 @@ fn ins(t: Tree, k: i32, v: bool, z: Zipper) -> Tree {
                 if k > kx {
                     ins(r, k, v, Zipper::NodeR{c, l, kx, vx, z})
                 } else {
-                    move_up(z, t)
+                    move_up(z, Tree::Branch {c, l, kx, vx, r})
                 }
             },
         Tree::Leaf => balance_red(z, Tree::Leaf, k, v, Tree::Leaf)
