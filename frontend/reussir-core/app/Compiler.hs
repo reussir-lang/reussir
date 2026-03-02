@@ -32,6 +32,7 @@ data Args = Args
     , argTargetCPU :: Maybe String
     , argTargetFeatures :: Maybe String
     , argRelocationMode :: B.RelocationModel
+    , argReuseTokenAcrossCall :: Bool
     }
 
 argsParser :: Parser Args
@@ -73,6 +74,10 @@ argsParser =
             ( long "relocation-mode"
                 <> value B.RelocationModelDefault
                 <> help "Relocation mode (default, static, pic, dynamic-no-pic, ropi, rwpi, ropi-rwpi)"
+            )
+        <*> switch
+            ( long "reuse-across-call"
+                <> help "Allow token reuse across function calls (may increase peak heap usage)"
             )
 
 parseOptLevel :: ReadM B.OptOption
@@ -167,6 +172,7 @@ main = do
                                         (TE.encodeUtf8 . T.pack <$> argTargetFeatures args)
                                         B.CodeModelDefault
                                         (argRelocationMode args)
+                                        (argReuseTokenAcrossCall args)
   where
     toEffLogLevel :: B.LogLevel -> LogLevel
     toEffLogLevel = \case

@@ -141,7 +141,8 @@ void addCanonicalizerPassWithoutRegionSimplification(mlir::OpPassManager &pm) {
 }
 
 void createLoweringPipeline(mlir::PassManager &pm,
-                            ReussirOptOption opt = REUSSIR_OPT_DEFAULT) {
+                            ReussirOptOption opt = REUSSIR_OPT_DEFAULT,
+                            bool reuseTokenAcrossCall = false) {
   if (opt != REUSSIR_OPT_NONE) {
     llvm::StringMap<mlir::OpPassManager> pipelines;
     // The default inliner pass adds the canonicalizer pass with the default
@@ -168,7 +169,12 @@ void createLoweringPipeline(mlir::PassManager &pm,
   options.outlineRecord = true;
   pm.addPass(reussir::createReussirAcquireDropExpansionPass(options));
 
-  pm.addNestedPass<mlir::func::FuncOp>(reussir::createReussirTokenReusePass());
+  {
+    reussir::ReussirTokenReusePassOptions tokenReuseOpts;
+    tokenReuseOpts.reuseAcrossCall = reuseTokenAcrossCall;
+    pm.addNestedPass<mlir::func::FuncOp>(
+        reussir::createReussirTokenReusePass(tokenReuseOpts));
+  }
   pm.addPass(reussir::createReussirSCFOpsLoweringPass());
   pm.addPass(reussir::createReussirCompilePolymorphicFFIPass());
 
@@ -318,9 +324,10 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
 
 std::unique_ptr<mlir::PassManager>
 buildPassManager(mlir::MLIRContext &context,
-                 ReussirOptOption opt = REUSSIR_OPT_DEFAULT) {
+                 ReussirOptOption opt = REUSSIR_OPT_DEFAULT,
+                 bool reuseTokenAcrossCall = false) {
   auto pm = std::make_unique<mlir::PassManager>(&context);
-  createLoweringPipeline(*pm, opt);
+  createLoweringPipeline(*pm, opt, reuseTokenAcrossCall);
   return pm;
 }
 
@@ -434,7 +441,7 @@ void reussir_bridge_compile_for_target(
     ReussirOutputTarget target, ReussirOptOption opt, ReussirLogLevel log_level,
     const char *target_triple, const char *target_cpu,
     const char *target_features, ReussirCodeModel code_model,
-    ReussirRelocationModel reloc_model) {
+    ReussirRelocationModel reloc_model, int reuse_token_across_call) {
   bridge::setup();
   setSpdlogLevel(log_level);
   // Initialize native target so we can query TargetMachine for layout/triple.
@@ -484,7 +491,7 @@ void reussir_bridge_compile_for_target(
   spdlog::debug("CPU: {}, features: {}", cpu.str(), target_features);
   spdlog::debug("Data layout: {}", dl.getStringRepresentation());
 
-  auto pm = buildPassManager(*context, opt);
+  auto pm = buildPassManager(*context, opt, reuse_token_across_call);
 
   // 4) Convert the MLIR module to LLVM IR.
   llvm::LLVMContext llvmCtx;
@@ -591,10 +598,12 @@ export extern "C" {
       ReussirOutputTarget target, ReussirOptOption opt,
       ReussirLogLevel log_level, const char *target_triple,
       const char *target_cpu, const char *target_features,
-      ReussirCodeModel code_model, ReussirRelocationModel reloc_model) {
+      ReussirCodeModel code_model, ReussirRelocationModel reloc_model,
+      int reuse_token_across_call) {
     reussir::reussir_bridge_compile_for_target(
         mlir_module, source_name, output_file, target, opt, log_level,
-        target_triple, target_cpu, target_features, code_model, reloc_model);
+        target_triple, target_cpu, target_features, code_model, reloc_model,
+        reuse_token_across_call);
   }
 
   void reussir_bridge_hash_bytes(const uint8_t *str, size_t len,
