@@ -180,6 +180,8 @@ void createLoweringPipeline(mlir::PassManager &pm,
 
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirInvariantGroupAnalysisPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::createControlFlowSinkPass());
 #if LLVM_VERSION_MAJOR >= 21
   pm.addPass(createSCFToControlFlowPass());
 #else
