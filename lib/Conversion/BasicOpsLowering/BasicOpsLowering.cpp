@@ -2014,8 +2014,14 @@ struct ReussirTokenLaunderOpConversionPattern
   mlir::LogicalResult
   matchAndRewrite(ReussirTokenLaunderOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<mlir::LLVM::LaunderInvariantGroupOp>(
+    auto newSSA = rewriter.replaceOpWithNewOp<mlir::LLVM::LaunderInvariantGroupOp>(
         op, adaptor.getToken());
+    // Add assume to LLVM that the newSSA is equal to the old SSA
+    auto ptrEq = rewriter.create<mlir::LLVM::ICmpOp>(op.getLoc(), 
+                                                    mlir::LLVM::ICmpPredicate::eq, 
+                                                    newSSA, 
+                                                    adaptor.getToken());
+    rewriter.create<mlir::LLVM::AssumeOp>(op.getLoc(), ptrEq);
     return mlir::success();
   }
 };
