@@ -8,6 +8,7 @@
 
 #include "Reussir/Conversion/TypeConverter.h"
 #include "Reussir/IR/ReussirTypes.h"
+#include <llvm/ADT/SmallVector.h>
 #include <mlir/IR/BuiltinTypes.h>
 
 namespace reussir {
@@ -155,12 +156,53 @@ std::optional<llvm::LogicalResult> LLVMTypeConverter::convertRecordType(
             size.getFixedValue() - representativeSize.getFixedValue()));
     }
   } else {
+    size_t expectedTotalSize = dataLayout.getTypeSize(type);
+    size_t currentSize = 0;
     for (auto [member, capability] :
          llvm::zip(type.getMembers(), type.getMemberIsField())) {
       mlir::Type projectedType =
           getProjectedType(member, capability, Capability::unspecified);
+      auto align = dataLayout.getTypeABIAlignment(projectedType);
+      if (currentSize % align != 0) {
+        size_t lastMemberNeedToPad = align - (currentSize % align);
+        // get last member and wrap it in a literal struct with padding
+        mlir::Type lastMemberType = members.back();
+        // special case, if last member is smaller than ptr and we need to pad
+        // to pointer.
+        size_t lastMemberSize = dataLayout.getTypeSize(lastMemberType);
+        llvm::SmallVector<mlir::Type> liftCandidates = {
+            mlir::IntegerType::get(&getContext(), 64),
+            mlir::IntegerType::get(&getContext(), 32),
+            mlir::IntegerType::get(&getContext(), 16),
+            mlir::IntegerType::get(&getContext(), 8),
+        };
+        bool lift = false;
+        for (auto liftCandidate : liftCandidates) {
+          auto liftCandidateSize = dataLayout.getTypeSize(liftCandidate);
+          if (lastMemberSize < liftCandidateSize &&
+              lastMemberSize + lastMemberNeedToPad == liftCandidateSize) {
+            members.back() = liftCandidate;
+            lift = true;
+            break;
+          }
+        }
+        // just pad i8 at the end
+        if (!lift) {
+          members.back() = mlir::LLVM::LLVMStructType::getLiteral(
+              &getContext(),
+              {lastMemberType, mlir::LLVM::LLVMArrayType::get(
+                                   mlir::IntegerType::get(&getContext(), 8),
+                                   lastMemberNeedToPad)});
+        }
+        currentSize += lastMemberNeedToPad;
+      }
       members.push_back(convertType(projectedType));
+      currentSize += dataLayout.getTypeSize(projectedType);
     }
+    if (currentSize < expectedTotalSize)
+      members.push_back(mlir::LLVM::LLVMArrayType::get(
+          mlir::IntegerType::get(&getContext(), 8),
+          expectedTotalSize - currentSize));
   }
   if (!name)
     structType = mlir::LLVM::LLVMStructType::getLiteral(&getContext(), members);

@@ -382,17 +382,39 @@ struct ReussirRecordCompoundConversionPattern
     if (!llvmStructType)
       return op.emitOpError("failed to convert record type to LLVM type");
 
-    // Create an undef value of the struct type
-    auto undefOp = rewriter.create<mlir::LLVM::UndefOp>(loc, llvmStructType);
+    mlir::MLIRContext *ctx = rewriter.getContext();
+
+    // Create an opaque pointer type for the alloca and GEP operations
+    auto ptrType = mlir::LLVM::LLVMPointerType::get(ctx);
+
+    // Create a constant '1' for the alloca array size
+    mlir::Value one = rewriter.create<mlir::LLVM::ConstantOp>(
+        loc, rewriter.getI32Type(), rewriter.getI32IntegerAttr(1));
+
+    // Allocate the struct on the stack
+    mlir::Value alloca = rewriter.create<mlir::LLVM::AllocaOp>(
+        loc, ptrType, llvmStructType, one);
 
     // Get the field values (already converted by the type converter)
     auto fieldValues = adaptor.getFields();
 
-    // Insert each field using insertvalue
-    mlir::Value result = undefOp;
-    for (size_t i = 0; i < fieldValues.size(); ++i)
-      result = rewriter.create<mlir::LLVM::InsertValueOp>(loc, result,
-                                                          fieldValues[i], i);
+    // Insert each field using GEP + store
+    for (size_t i = 0; i < fieldValues.size(); ++i) {
+      // GEP indices:
+      // 0 -> Dereference the base pointer (step into the allocated element)
+      // i -> Access the i-th field of the struct
+      llvm::SmallVector<mlir::LLVM::GEPArg, 2> gepArgs{0,
+                                                       static_cast<int32_t>(i)};
+
+      mlir::Value fieldPtr = rewriter.create<mlir::LLVM::GEPOp>(
+          loc, ptrType, llvmStructType, alloca, gepArgs);
+
+      rewriter.create<mlir::LLVM::StoreOp>(loc, fieldValues[i], fieldPtr);
+    }
+
+    // Load the final populated struct value
+    mlir::Value result =
+        rewriter.create<mlir::LLVM::LoadOp>(loc, llvmStructType, alloca);
 
     rewriter.replaceOp(op, result);
     return mlir::success();
@@ -406,12 +428,50 @@ struct ReussirRecordExtractConversionPattern
   mlir::LogicalResult
   matchAndRewrite(ReussirRecordExtractOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    // adaptor.getRecord() is the struct value
-    // op.getIndex() is the index attribute
-    rewriter.replaceOpWithNewOp<mlir::LLVM::ExtractValueOp>(
-        op, adaptor.getRecord(),
-        llvm::ArrayRef<int64_t>{
-            static_cast<int64_t>(op.getIndex().getZExtValue())});
+    mlir::Location loc = op.getLoc();
+    mlir::MLIRContext *ctx = rewriter.getContext();
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+
+    // Get the LLVM types for the struct and the extracted field
+    mlir::Type llvmStructType = adaptor.getRecord().getType();
+    mlir::Type llvmResultType =
+        converter->convertType(op.getResult().getType());
+
+    if (!llvmResultType)
+      return op.emitOpError("failed to convert result type to LLVM type");
+
+    // Create an opaque pointer type for memory operations
+    auto ptrType = mlir::LLVM::LLVMPointerType::get(ctx);
+
+    // Constant '1' for the alloca array size
+    mlir::Value one = rewriter.create<mlir::LLVM::ConstantOp>(
+        loc, rewriter.getI32Type(), rewriter.getI32IntegerAttr(1));
+
+    // 1. Spill: Allocate memory for the struct on the stack
+    mlir::Value alloca = rewriter.create<mlir::LLVM::AllocaOp>(
+        loc, ptrType, llvmStructType, one);
+
+    addLifetimeOrInvariantOp<mlir::LLVM::LifetimeStartOp>(
+        rewriter, loc, llvmStructType, alloca, *converter);
+
+    // 2. Store the entire struct value into the allocated memory
+    rewriter.create<mlir::LLVM::StoreOp>(loc, adaptor.getRecord(), alloca);
+
+    // 3. GEP: Calculate the memory address of the specific field
+    int32_t fieldIndex = static_cast<int32_t>(op.getIndex().getZExtValue());
+    llvm::SmallVector<mlir::LLVM::GEPArg, 2> gepArgs{0, fieldIndex};
+
+    mlir::Value fieldPtr = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, ptrType, llvmStructType, alloca, gepArgs);
+
+    // 4. Load: Read the individual field value back into an SSA register
+    mlir::Value result =
+        rewriter.create<mlir::LLVM::LoadOp>(loc, llvmResultType, fieldPtr);
+
+    addLifetimeOrInvariantOp<mlir::LLVM::LifetimeEndOp>(
+        rewriter, loc, llvmStructType, alloca, *converter);
+
+    rewriter.replaceOp(op, result);
     return mlir::success();
   }
 };
@@ -2014,8 +2074,9 @@ struct ReussirTokenLaunderOpConversionPattern
   mlir::LogicalResult
   matchAndRewrite(ReussirTokenLaunderOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    auto newSSA = rewriter.replaceOpWithNewOp<mlir::LLVM::LaunderInvariantGroupOp>(
-        op, adaptor.getToken());
+    auto newSSA =
+        rewriter.replaceOpWithNewOp<mlir::LLVM::LaunderInvariantGroupOp>(
+            op, adaptor.getToken());
     /*
      * Why we emit llvm.assume after token launder (full repro):
      *
@@ -2099,14 +2160,13 @@ struct ReussirTokenLaunderOpConversionPattern
      * - `llvm.launder.invariant.group` intentionally creates a fresh SSA name.
      * - Without an explicit equality fact, O3 keeps stores on `%q/%q8`.
      * - With `llvm.assume(%q == %p)`, O3 can reconnect `%q` to `%p`, fold the
-     *   memory updates back to `%p/%p8`, and eliminate the redundant `%x` store.
+     *   memory updates back to `%p/%p8`, and eliminate the redundant `%x`
+     * store.
      * - Therefore this assume is required to recover alias/value propagation
      *   power after the launder boundary.
      */
-    auto ptrEq = rewriter.create<mlir::LLVM::ICmpOp>(op.getLoc(), 
-                                                    mlir::LLVM::ICmpPredicate::eq, 
-                                                    newSSA, 
-                                                    adaptor.getToken());
+    auto ptrEq = rewriter.create<mlir::LLVM::ICmpOp>(
+        op.getLoc(), mlir::LLVM::ICmpPredicate::eq, newSSA, adaptor.getToken());
     rewriter.create<mlir::LLVM::AssumeOp>(op.getLoc(), ptrEq);
     return mlir::success();
   }

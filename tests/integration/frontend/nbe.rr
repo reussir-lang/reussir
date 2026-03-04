@@ -1,0 +1,194 @@
+// RUN: %reussir-compiler %s -o %t.o --relocation-mode pic -Oaggressive --reuse-across-call
+// RUN: %cc %t.o %S/nbe.rr.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+enum Term {
+    Var(i64),
+    Lam(i64, Term),
+    App(Term, Term),
+    Let(i64, Term, Term)
+}
+
+enum Value {
+    VVar(i64),
+    VApp(Value, Value),
+    VLam(i64, Term, Env)
+}
+
+enum Env {
+    EnvCons(i64, Value, Env),
+    EnvNil
+}
+
+enum Names {
+    NameCons(i64, Names),
+    NameNil
+}
+
+fn max_of_names(n: Names, acc: i64) -> i64 {
+    match n {
+        Names::NameCons(id, n1) => {
+            let next = if acc > id { acc } else { id };
+            max_of_names(n1, next)
+        },
+        Names::NameNil => acc
+    }
+}
+
+fn names_of_env(env: Env, acc: Names) -> Names {
+    match env {
+        Env::EnvCons(id, _, env1) => names_of_env(env1, Names::NameCons{id, acc}),
+        Env::EnvNil => acc
+    }
+}
+
+fn fresh(n: Names) -> i64 {
+    max_of_names(n, 0) + 1
+}
+
+fn lookup(env: Env, id: i64) -> Value {
+    match env {
+        Env::EnvCons(id1, v, env1) =>
+            if id == id1 { v } else { lookup(env1, id) },
+        Env::EnvNil => Value::VVar{id}
+    }
+}
+
+fn eval(env: Env, x: Term) -> Value {
+    match x {
+        Term::Var(id) => lookup(env, id),
+        Term::App(t, u) => vapp(eval(env, t), eval(env, u)),
+        Term::Lam(x, t) => Value::VLam{x, t, env},
+        Term::Let(x, t, u) => eval(Env::EnvCons{x, eval(env, t), env}, u)
+    }
+}
+
+fn vapp(v1: Value, v2: Value) -> Value {
+    match v1 {
+        Value::VLam(x, body, env) => eval(Env::EnvCons{x, v2, env}, body),
+        _ => Value::VApp{v1, v2}
+    }
+}
+
+fn quote(n: Names, v: Value) -> Term {
+    match v {
+        Value::VVar(i) => Term::Var{i},
+        Value::VApp(v1, v2) => Term::App{quote(n, v1), quote(n, v2)},
+        Value::VLam(_, _, _) => {
+            let y = fresh(n);
+            Term::Lam{y, quote(Names::NameCons{y, n}, vapp(v, Value::VVar{y}))}
+        }
+    }
+}
+
+fn norm_form(env: Env, t: Term) -> Term {
+    quote(names_of_env(env, Names::NameNil), eval(env, t))
+}
+
+fn five() -> Term {
+    Term::Lam{
+        0,
+        Term::Lam{
+            1,
+            Term::App{
+                Term::Var{0},
+                Term::App{
+                    Term::Var{0},
+                    Term::App{
+                        Term::Var{0},
+                        Term::App{
+                            Term::Var{0},
+                            Term::App{Term::Var{0}, Term::Var{1}}
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn add() -> Term {
+    Term::Lam{
+        0,
+        Term::Lam{
+            1,
+            Term::Lam{
+                2,
+                Term::Lam{
+                    3,
+                    Term::App{
+                        Term::App{Term::Var{0}, Term::Var{2}},
+                        Term::App{Term::App{Term::Var{1}, Term::Var{2}}, Term::Var{3}}
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn mul() -> Term {
+    Term::Lam{
+        0,
+        Term::Lam{
+            1,
+            Term::Lam{
+                2,
+                Term::Lam{
+                    3,
+                    Term::App{
+                        Term::App{Term::Var{0}, Term::App{Term::Var{1}, Term::Var{2}}},
+                        Term::Var{3}
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn ten() -> Term {
+    let x = five();
+    let y = add();
+    Term::App{Term::App{y, x}, x}
+}
+
+fn hundred() -> Term {
+    let x = ten();
+    let y = mul();
+    Term::App{Term::App{y, x}, x}
+}
+
+fn two_hundred() -> Term {
+    let x = hundred();
+    let y = add();
+    Term::App{Term::App{y, x}, x}
+}
+
+fn thousand() -> Term {
+    let x = hundred();
+    let z = ten();
+    let y = mul();
+    Term::App{Term::App{y, x}, z}
+}
+
+fn term200000() -> Term {
+    let x = two_hundred();
+    let y = mul();
+    let z = thousand();
+    Term::App{Term::App{y, x}, z}
+}
+
+fn nf_to_int(t: Term, acc: i64) -> i64 {
+    match t {
+        Term::Lam(_, x) => nf_to_int(x, acc),
+        Term::App(_, x) => nf_to_int(x, acc + 1),
+        _ => acc
+    }
+}
+
+fn nbe_test() -> i64 {
+    let t = term200000();
+    let n = norm_form(Env::EnvNil, t);
+    nf_to_int(n, 0)
+}
+
+extern "C" trampoline "nbe_test_ffi" = nbe_test;

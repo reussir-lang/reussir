@@ -1,0 +1,24 @@
+// RUN: %reussir-compiler %s -o %t.o --relocation-mode pic -Oaggressive --reuse-across-call
+// RUN: %cc %t.o %S/vapp.rr.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+enum Value {
+    VVar(i32),
+    VApp(Value, Value),
+    VLam(i32, Value, Value)
+}
+
+fn mk_vapp() -> Value {
+    Value::VApp{Value::VVar{1}, Value::VVar{2}}
+}
+
+fn vapp_test() -> i32 {
+    let v = mk_vapp();
+    match v {
+        Value::VVar(_) => 0,
+        Value::VApp(_, _) => 1,
+        Value::VLam(_, _, _) => 2
+    }
+}
+
+extern "C" trampoline "vapp_test_ffi" = vapp_test;

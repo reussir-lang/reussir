@@ -1,5 +1,5 @@
 // RUN: %reussir-opt %s --reussir-lowering-basic-ops | \
-// RUN: %reussir-translate --mlir-to-llvmir | %FileCheck %s
+// RUN: %reussir-translate --mlir-to-llvmir | %opt -S -O3 | %FileCheck %s
 
 !pair = !reussir.record<compound "Pair" {i32, i64}>
 
@@ -11,5 +11,5 @@ module {
 }
 
 // CHECK-LABEL: define i64 @test_extract(%Pair %0)
-// CHECK: %[[val:[0-9]+]] = extractvalue %Pair %0, 1
+// CHECK: %[[val:[0-9a-z\.]+]] = extractvalue %Pair %0, 1
 // CHECK: ret i64 %[[val]]
