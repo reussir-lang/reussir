@@ -63,7 +63,7 @@ bridgeTests =
                     assertEqual "1 + 2 should equal 3" 3 three
             , testCase "Add a function to the JIT engine lazily" $ do
                 putStrLn ""
-                withJIT (const $ pure moduleWithToAdd) OptTPDE LogInfo $ \jit -> do
+                withJIT (const $ pure moduleWithToAdd) OptDefault LogInfo $ \jit -> do
                     res <- addLazyModule jit () [("add", symbolFlagExported)]
                     assertBool "Failed to add lazy module" res
                     ptr <- lookupSymbol jit "add" True -- lazily added symbols are mangled
