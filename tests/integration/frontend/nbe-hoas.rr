@@ -1,31 +1,30 @@
 // RUN: %reussir-compiler %s -o %t.o --relocation-mode pic -Oaggressive --reuse-across-call
 // RUN: %cc %t.o %S/nbe.rr.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
 // RUN: %t.exe
-
 enum Term {
-    Var(i64),
-    Lam(i64, Term),
+    Var(i32),
+    Lam(i32, Term),
     App(Term, Term),
-    Let(i64, Term, Term)
+    Let(i32, Term, Term)
 }
 
 enum Value {
-    VVar(i64),
+    VVar(i32),
     VApp(Value, Value),
-    VLam(i64, Term, Env)
+    VLam(i32, Value -> Value)
 }
 
 enum Env {
-    EnvCons(i64, Value, Env),
+    EnvCons(i32, Value, Env),
     EnvNil
 }
 
 enum Names {
-    NameCons(i64, Names),
+    NameCons(i32, Names),
     NameNil
 }
 
-fn max_of_names(n: Names, acc: i64) -> i64 {
+fn max_of_names(n: Names, acc: i32) -> i32 {
     match n {
         Names::NameCons(id, n1) => {
             let next = if acc > id { acc } else { id };
@@ -42,11 +41,11 @@ fn names_of_env(env: Env, acc: Names) -> Names {
     }
 }
 
-fn fresh(n: Names) -> i64 {
+fn fresh(n: Names) -> i32 {
     max_of_names(n, 0) + 1
 }
 
-fn lookup(env: Env, id: i64) -> Value {
+fn lookup(env: Env, id: i32) -> Value {
     match env {
         Env::EnvCons(id1, v, env1) =>
             if id == id1 { v } else { lookup(env1, id) },
@@ -58,14 +57,14 @@ fn eval(env: Env, x: Term) -> Value {
     match x {
         Term::Var(id) => lookup(env, id),
         Term::App(t, u) => vapp(eval(env, t), eval(env, u)),
-        Term::Lam(x, t) => Value::VLam{x, t, env},
+        Term::Lam(x, t) => Value::VLam{x, |u: Value| eval(Env::EnvCons{x, u, env}, t)},
         Term::Let(x, t, u) => eval(Env::EnvCons{x, eval(env, t), env}, u)
     }
 }
 
 fn vapp(v1: Value, v2: Value) -> Value {
     match v1 {
-        Value::VLam(x, body, env) => eval(Env::EnvCons{x, v2, env}, body),
+        Value::VLam(_, body) => body(v2),
         _ => Value::VApp{v1, v2}
     }
 }
@@ -74,9 +73,9 @@ fn quote(n: Names, v: Value) -> Term {
     match v {
         Value::VVar(i) => Term::Var{i},
         Value::VApp(v1, v2) => Term::App{quote(n, v1), quote(n, v2)},
-        Value::VLam(_, _, _) => {
+        Value::VLam(_, f) => {
             let y = fresh(n);
-            Term::Lam{y, quote(Names::NameCons{y, n}, vapp(v, Value::VVar{y}))}
+            Term::Lam{y, quote(Names::NameCons{y, n}, f(Value::VVar{y}))}
         }
     }
 }
@@ -170,7 +169,7 @@ fn thousand() -> Term {
     Term::App{Term::App{y, x}, z}
 }
 
-fn nf_to_int(t: Term, acc: i64) -> i64 {
+fn nf_to_int(t: Term, acc: i32) -> i32 {
     match t {
         Term::Lam(_, x) => nf_to_int(x, acc),
         Term::App(_, x) => nf_to_int(x, acc + 1),
@@ -178,7 +177,7 @@ fn nf_to_int(t: Term, acc: i64) -> i64 {
     }
 }
 
-fn nbe_test() -> i64 {
+fn nbe_test() -> i32 {
     let t = thousand();
     let n = norm_form(Env::EnvNil, t);
     nf_to_int(n, 0)
