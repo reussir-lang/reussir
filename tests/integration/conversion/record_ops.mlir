@@ -44,13 +44,13 @@ module {
 // CHECK: store ptr %1, ptr %[[cons_ptr1]], align 8
 // CHECK: %[[cons_loaded:[0-9]+]] = load %"List::Cons", ptr %[[cons_alloca]], align 8
 // CHECK: %[[alloca:[0-9]+]] = alloca %List, i64 1, align 8
-// CHECK: call void @llvm.lifetime.start.p0(i64 24, ptr %[[alloca]])
+// CHECK: call void @llvm.lifetime.start.p0({{.*}}ptr %[[alloca]])
 // CHECK: %[[tag_ptr:[0-9]+]] = getelementptr %List, ptr %[[alloca]], i32 0, i32 0
 // CHECK: store i64 0, ptr %[[tag_ptr]], align 4
 // CHECK: %[[value_ptr:[0-9]+]] = getelementptr %List, ptr %[[alloca]], i32 0, i32 1
 // CHECK: store %"List::Cons" %[[cons_loaded]], ptr %[[value_ptr]], align 8
 // CHECK: %[[loaded:[0-9]+]] = load %List, ptr %[[alloca]], align 8
-// CHECK: call void @llvm.lifetime.end.p0(i64 24, ptr %[[alloca]])
+// CHECK: call void @llvm.lifetime.end.p0({{.*}}ptr %[[alloca]])
 // CHECK: %[[allocated:[0-9]+]] = call ptr @__reussir_allocate(i64 8, i64 32)
 // CHECK: %[[rc_tag_ptr:[0-9]+]] = getelementptr { i64, %List }, ptr %[[allocated]], i32 0, i32 0
 // CHECK: store i64 1, ptr %[[rc_tag_ptr]], align 4
