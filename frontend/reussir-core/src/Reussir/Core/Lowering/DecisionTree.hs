@@ -199,6 +199,7 @@ resolvePatternVarRef ctx (Full.PatternVarRef path) = do
                                             IRType.Shared -> pure $ IR.TypeRc $ IR.Rc fieldIRTy atm IRType.Shared
                                             other -> error $ "projectOneField: unsupported capability " <> show other
                                         Nothing -> error $ "projectOneField: record not found " <> show fieldSym
+                                Full.TypeClosure {} -> pure $ IR.TypeRc $ IR.Rc fieldIRTy atm IRType.Shared
                                 _ -> pure fieldIRTy
                             let projRef = mkRefType actualFieldTy cap
                             resVal <- nextValue
