@@ -54,8 +54,7 @@ bool setAllocateAttributes(llvm::Function &fn) {
 bool setReallocateAttributes(llvm::Function &fn) {
   bool changed = false;
   llvm::LLVMContext &ctx = fn.getContext();
-  constexpr auto reallocKind = llvm::AllocFnKind::Alloc |
-                               llvm::AllocFnKind::Realloc |
+  constexpr auto reallocKind = llvm::AllocFnKind::Realloc |
                                llvm::AllocFnKind::Uninitialized |
                                llvm::AllocFnKind::Aligned;
 
