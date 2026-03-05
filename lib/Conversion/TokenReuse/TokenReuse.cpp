@@ -26,6 +26,7 @@
 #include <llvm/Support/xxhash.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/IR/Builders.h>
 #include <mlir/IR/Dominance.h>
 #include <mlir/IR/PatternMatch.h>
 #include <mlir/IR/Value.h>
@@ -217,6 +218,16 @@ ValueSet intersect(const ValueSet &lhs, const ValueSet &rhs) {
   return res;
 }
 
+unsigned
+getDfsOrder(const mlir::DenseMap<mlir::Operation *, unsigned> &dfsOrder,
+            mlir::Value token) {
+  if (auto *defOp = token.getDefiningOp())
+    return dfsOrder.lookup(defOp);
+  if (auto blockArg = mlir::dyn_cast<mlir::BlockArgument>(token))
+    return dfsOrder.lookup(blockArg.getOwner()->getParentOp());
+  return 0;
+}
+
 struct Reuse {
   mlir::Value token;
   bool realloc;
@@ -228,11 +239,11 @@ struct Free {
 };
 struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
   using Base::Base;
-  ValueSet oneShotTokenReuse(mlir::Region &region, ValueSet availableTokens,
-                             llvm::SmallVectorImpl<Reuse> &reuses,
-                             llvm::SmallVectorImpl<Free> &frees,
-                             mlir::AliasAnalysis &aliasAnalyzer,
-                             mlir::DominanceInfo &domInfo) {
+  ValueSet oneShotTokenReuse(
+      mlir::Region &region, ValueSet availableTokens,
+      llvm::SmallVectorImpl<Reuse> &reuses, llvm::SmallVectorImpl<Free> &frees,
+      mlir::AliasAnalysis &aliasAnalyzer, mlir::DominanceInfo &domInfo,
+      const mlir::DenseMap<mlir::Operation *, unsigned> &dfsOrder) {
     if (region.empty())
       return availableTokens;
 
@@ -255,14 +266,14 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
           availableTokens = {};
           for (auto &nestedRegion : op.getRegions())
             oneShotTokenReuse(nestedRegion, {}, reuses, frees, aliasAnalyzer,
-                              domInfo);
+                              domInfo, dfsOrder);
         }
       } else if (auto branchOp = dyn_cast<mlir::RegionBranchOpInterface>(op)) {
         llvm::SmallVector<ValueSet> branchResults;
         for (auto &nestedRegion : op.getRegions())
           branchResults.push_back(
               oneShotTokenReuse(nestedRegion, availableTokens, reuses, frees,
-                                aliasAnalyzer, domInfo));
+                                aliasAnalyzer, domInfo, dfsOrder));
         if (branchResults.empty()) {
           llvm::errs() << "[WARN] RegionBranch with no regions?\n";
         } else {
@@ -320,7 +331,10 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
                   producerAsDec ? producerAsDec.getRcPtr() : nullptr;
               int score = hueristic(producer.getTokenType(), producerRc,
                                     acceptor, aliasAnalyzer);
-              if (score >= 0 && score > bestScore) {
+              if (score >= 0 && (score > bestScore ||
+                                 (score == bestScore && bestToken &&
+                                  getDfsOrder(dfsOrder, tokenVal) >
+                                      getDfsOrder(dfsOrder, bestToken)))) {
                 bestScore = score;
                 bestToken = tokenVal;
                 bestRealloc = (score == 0);
@@ -349,7 +363,10 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
                     rcFetchDec ? rcFetchDec.getRcPtr() : nullptr;
                 int score = hueristic(producedType, producerRc, acceptor,
                                       aliasAnalyzer);
-                if (score >= 0 && score > bestScore) {
+                if (score >= 0 && (score > bestScore ||
+                                   (score == bestScore && bestToken &&
+                                    getDfsOrder(dfsOrder, tokenVal) >
+                                        getDfsOrder(dfsOrder, bestToken)))) {
                   bestScore = score;
                   bestToken = tokenVal;
                   bestRealloc = (score == 0);
@@ -399,8 +416,15 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
     reussir::registerAliasAnalysisImplementations(aliasAnalyzer);
     mlir::DominanceInfo domInfo(getOperation());
 
+    // Compute DFS pre-visit order for tiebreaking.
+    mlir::DenseMap<mlir::Operation *, unsigned> dfsOrder;
+    unsigned counter = 0;
+    getOperation()->walk<mlir::WalkOrder::PreOrder>(
+        [&](mlir::Operation *op) { dfsOrder[op] = counter++; });
+
     for (auto &region : getOperation()->getRegions()) {
-      oneShotTokenReuse(region, {}, reuses, frees, aliasAnalyzer, domInfo);
+      oneShotTokenReuse(region, {}, reuses, frees, aliasAnalyzer, domInfo,
+                        dfsOrder);
     }
 
     mlir::IRRewriter rewriter(getOperation());
