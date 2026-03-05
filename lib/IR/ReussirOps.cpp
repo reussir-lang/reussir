@@ -1845,6 +1845,7 @@ mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
   dtor.setPrivate();
   dtor->setAttr("llvm.linkage", builder.getAttr<mlir::LLVM::LinkageAttr>(
                                     mlir::LLVM::linkage::Linkage::LinkonceODR));
+  dtor->setAttr("llvm.cold", builder.getUnitAttr());
   mlir::Block *entryBlock = dtor.addEntryBlock();
   builder.setInsertionPointToStart(entryBlock);
   auto ref = entryBlock->getArgument(0);
