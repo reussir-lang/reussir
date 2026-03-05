@@ -183,6 +183,9 @@ private:
     if (op.getInlined())
       return false;
 
+    if (type.isVariant())
+      return !op.getVariant();
+
     return type.getName() != nullptr;
   }
 
