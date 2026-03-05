@@ -86,7 +86,8 @@ void reussir_bridge_compile_for_target(
     ReussirOutputTarget target, ReussirOptOption opt, ReussirLogLevel log_level,
     const char *target_triple, const char *target_cpu,
     const char *target_features, ReussirCodeModel code_model,
-    ReussirRelocationModel reloc_model, int reuse_token_across_call);
+    ReussirRelocationModel reloc_model, int reuse_token_across_call,
+    int enable_invariant_analysis);
 
 // An opaque stable pointer for AST.
 typedef void *ASTStablePtr;

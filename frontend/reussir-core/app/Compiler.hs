@@ -33,6 +33,7 @@ data Args = Args
     , argTargetFeatures :: Maybe String
     , argRelocationMode :: B.RelocationModel
     , argReuseTokenAcrossCall :: Bool
+    , argDisableInvariantAnalysis :: Bool
     }
 
 argsParser :: Parser Args
@@ -78,6 +79,10 @@ argsParser =
         <*> switch
             ( long "reuse-across-call"
                 <> help "Allow token reuse across function calls (may increase peak heap usage)"
+            )
+        <*> switch
+            ( long "disable-invariant-analysis"
+                <> help "Disable the invariant group analysis pass in backend lowering"
             )
 
 parseOptLevel :: ReadM B.OptOption
@@ -173,6 +178,7 @@ main = do
                                         B.CodeModelDefault
                                         (argRelocationMode args)
                                         (argReuseTokenAcrossCall args)
+                                        (not (argDisableInvariantAnalysis args))
   where
     toEffLogLevel :: B.LogLevel -> LogLevel
     toEffLogLevel = \case

@@ -163,5 +163,6 @@ data Program = Program
     , targetCodeModel :: CodeModel
     , targetRelocationModel :: RelocationModel
     , reuseTokenAcrossCall :: Bool
+    , enableInvariantAnalysis :: Bool
     }
     deriving (Eq, Show)

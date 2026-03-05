@@ -1846,8 +1846,8 @@ mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
   dtor->setAttr("llvm.linkage", builder.getAttr<mlir::LLVM::LinkageAttr>(
                                     mlir::LLVM::linkage::Linkage::LinkonceODR));
   dtor->setAttr("passthrough",
-                builder.getStrArrayAttr({"cold", "mustprogress", "nounwind",
-                                         "willreturn", "nocallback"}));
+                builder.getStrArrayAttr(
+                    {"mustprogress", "nounwind", "willreturn", "nocallback"}));
   dtor.setArgAttr(0, "llvm.noalias", builder.getUnitAttr());
   dtor.setArgAttr(0, "llvm.nonnull", builder.getUnitAttr());
   dtor.setArgAttr(0, "llvm.noundef", builder.getUnitAttr());

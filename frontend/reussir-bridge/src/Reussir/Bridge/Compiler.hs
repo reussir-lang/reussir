@@ -68,6 +68,8 @@ foreign import capi "Reussir/Bridge.h reussir_bridge_compile_for_target"
         CInt ->
         -- | reuse_token_across_call
         CInt ->
+        -- | enable_invariant_analysis
+        CInt ->
         IO ()
 
 getNativeTargetTriple :: IO ByteString
@@ -117,6 +119,7 @@ compileForNativeMachine mlirModule sourceName outputFile target opt logLevel = d
             , targetCodeModel = CodeModelDefault
             , targetRelocationModel = RelocationModelDefault
             , reuseTokenAcrossCall = False
+            , enableInvariantAnalysis = True
             }
 
 compileForTarget ::
@@ -153,6 +156,7 @@ compileForTarget mlirModule sourceName outputFile target opt logLevel mTriple mC
         CodeModelDefault
         RelocationModelDefault
         False
+        True
 
 compileForTargetWithModels ::
     -- | MLIR module content
@@ -179,8 +183,10 @@ compileForTargetWithModels ::
     RelocationModel ->
     -- | Reuse tokens across function calls
     Bool ->
+    -- | Enable invariant group analysis pass
+    Bool ->
     IO ()
-compileForTargetWithModels mlirModule sourceName outputFile target opt logLevel mTriple mCPU mFeatures codeModel relocationModel tokenReuse = do
+compileForTargetWithModels mlirModule sourceName outputFile target opt logLevel mTriple mCPU mFeatures codeModel relocationModel tokenReuse enableInvariant = do
     triple <- maybe getNativeTargetTriple pure mTriple
     -- When a custom triple is specified, default CPU/features to empty strings
     -- so LLVM picks appropriate defaults for the target architecture.
@@ -202,6 +208,7 @@ compileForTargetWithModels mlirModule sourceName outputFile target opt logLevel 
             , targetCodeModel = codeModel
             , targetRelocationModel = relocationModel
             , reuseTokenAcrossCall = tokenReuse
+            , enableInvariantAnalysis = enableInvariant
             }
 
 compileProgram :: Program -> IO ()
@@ -219,6 +226,7 @@ compileProgram
         , targetCodeModel = targetCodeModel
         , targetRelocationModel = targetRelocationModel
         , reuseTokenAcrossCall = tokenReuse
+        , enableInvariantAnalysis = enableInvariant
         } =
         useAsCString mlirModule $ \mlirPtr ->
             withCString sourceName $ \sourceNamePtr ->
@@ -239,3 +247,4 @@ compileProgram
                                     (codeModelToC targetCodeModel)
                                     (relocationModelToC targetRelocationModel)
                                     (if tokenReuse then 1 else 0)
+                                    (if enableInvariant then 1 else 0)
