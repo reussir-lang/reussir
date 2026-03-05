@@ -168,6 +168,8 @@ void createLoweringPipeline(mlir::PassManager &pm,
   options.expandDecrement = true;
   options.outlineRecord = true;
   pm.addPass(reussir::createReussirAcquireDropExpansionPass(options));
+  pm.addNestedPass<mlir::func::FuncOp>(
+      reussir::createReussirIncDecCancellationPass());
 
   {
     reussir::ReussirTokenReusePassOptions tokenReuseOpts;

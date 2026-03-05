@@ -13,11 +13,11 @@
 #include "Reussir/IR/ReussirOps.h"
 
 #include <mlir/Dialect/SCF/IR/SCF.h>
-#include <mlir/IR/Dominance.h>
 #include <mlir/IR/Value.h>
 #include <mlir/IR/Visitors.h>
 #include <mlir/Interfaces/CallInterfaces.h>
 #include <mlir/Interfaces/ControlFlowInterfaces.h>
+#include <mlir/Interfaces/LoopLikeInterface.h>
 #include <mlir/Pass/Pass.h>
 
 namespace reussir {
@@ -39,21 +39,76 @@ struct IncDecCancellationPass
   }
 };
 
-ReussirRcDecOp findPostDominantAliasedRcDec(
+enum class DecSearchState {
+  Found,
+  CleanNoDec,
+  Blocked,
+};
+
+struct DecSearchResult {
+  DecSearchState state;
+  llvm::SmallVector<ReussirRcDecOp> decOps;
+};
+
+DecSearchResult findGuaranteedAliasedRcDecsInRegion(
     mlir::TypedValue<RcType> rcPtr, mlir::AliasAnalysis &aliasAnalysis,
-    mlir::PostDominanceInfo &postDominanceInfo, mlir::Region &dropRegion) {
-  ReussirRcDecOp fusionTarget{};
-  dropRegion.walk([&](ReussirRcDecOp decOp) {
-    auto aliasResult = aliasAnalysis.alias(decOp.getRcPtr(), rcPtr);
-    if (postDominanceInfo.postDominates(decOp->getBlock(),
-                                        &dropRegion.front()) &&
-        aliasResult == mlir::AliasResult::MustAlias) {
-      fusionTarget = decOp;
-      return mlir::WalkResult::interrupt();
+    mlir::Region &region);
+
+bool isCancellationBarrier(mlir::Operation *op) {
+  return llvm::isa<mlir::CallableOpInterface>(op) ||
+         llvm::isa<ReussirClosureApplyOp>(op) ||
+         llvm::isa<ReussirClosureEvalOp>(op) ||
+         llvm::isa<mlir::LoopLikeOpInterface>(op);
+}
+
+DecSearchResult findGuaranteedAliasedRcDecsInBlock(
+    mlir::TypedValue<RcType> rcPtr, mlir::AliasAnalysis &aliasAnalysis,
+    mlir::Block &block) {
+  for (mlir::Operation &op : block) {
+    if (auto decOp = llvm::dyn_cast<ReussirRcDecOp>(&op)) {
+      if (aliasAnalysis.alias(decOp.getRcPtr(), rcPtr) ==
+          mlir::AliasResult::MustAlias)
+        return {DecSearchState::Found, {decOp}};
+      return {DecSearchState::Blocked, {}};
     }
-    return mlir::WalkResult::advance();
-  });
-  return fusionTarget;
+
+    if (auto ifOp = llvm::dyn_cast<mlir::scf::IfOp>(&op)) {
+      auto thenResult = findGuaranteedAliasedRcDecsInRegion(
+          rcPtr, aliasAnalysis, ifOp.getThenRegion());
+      auto elseResult = findGuaranteedAliasedRcDecsInRegion(
+          rcPtr, aliasAnalysis, ifOp.getElseRegion());
+      if (thenResult.state == DecSearchState::Found &&
+          elseResult.state == DecSearchState::Found) {
+        llvm::SmallVector<ReussirRcDecOp> decOps;
+        decOps.append(thenResult.decOps.begin(), thenResult.decOps.end());
+        decOps.append(elseResult.decOps.begin(), elseResult.decOps.end());
+        return {DecSearchState::Found, std::move(decOps)};
+      }
+      if (thenResult.state == DecSearchState::CleanNoDec &&
+          elseResult.state == DecSearchState::CleanNoDec)
+        continue;
+      return {DecSearchState::Blocked, {}};
+    }
+
+    if (isCancellationBarrier(&op) ||
+        llvm::isa<mlir::RegionBranchOpInterface>(&op) ||
+        op.getNumRegions() != 0) {
+      return {DecSearchState::Blocked, {}};
+    }
+  }
+
+  return {DecSearchState::CleanNoDec, {}};
+}
+
+DecSearchResult findGuaranteedAliasedRcDecsInRegion(
+    mlir::TypedValue<RcType> rcPtr, mlir::AliasAnalysis &aliasAnalysis,
+    mlir::Region &region) {
+  if (region.empty())
+    return {DecSearchState::CleanNoDec, {}};
+  if (!region.hasOneBlock())
+    return {DecSearchState::Blocked, {}};
+  return findGuaranteedAliasedRcDecsInBlock(rcPtr, aliasAnalysis,
+                                            region.front());
 }
 
 void eraseOrReplaceDecOp(ReussirRcDecOp decOp) {
@@ -73,7 +128,6 @@ void eraseOrReplaceDecOp(ReussirRcDecOp decOp) {
 llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func) {
   mlir::AliasAnalysis aliasAnalysis(func);
   registerAliasAnalysisImplementations(aliasAnalysis);
-  mlir::PostDominanceInfo postDominanceInfo(func);
   llvm::SmallVector<ReussirRcIncOp> incOps;
   func->walk([&](ReussirRcIncOp op) { incOps.push_back(op); });
   for (auto op : incOps) {
@@ -82,16 +136,19 @@ llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func) {
     while (next) {
       if (auto ifOp = llvm::dyn_cast<mlir::scf::IfOp>(next)) {
         // This is a similar situation as other aborting cases.
-        if (!ifOp->hasAttr(kExpandedDecrementAttr))
+        if (!ifOp->hasAttr(kExpandedDecrementAttr) || !ifOp.elseBlock())
           break;
-        ReussirRcDecOp decOp = findPostDominantAliasedRcDec(
-            op.getRcPtr(), aliasAnalysis, postDominanceInfo,
-            ifOp.getThenRegion());
-        if (decOp) {
+
+        DecSearchResult thenResult = findGuaranteedAliasedRcDecsInRegion(
+            op.getRcPtr(), aliasAnalysis, ifOp.getThenRegion());
+        if (thenResult.state == DecSearchState::Found) {
           op->moveBefore(ifOp.elseYield());
-          eraseOrReplaceDecOp(decOp);
+          for (ReussirRcDecOp decOp : thenResult.decOps)
+            eraseOrReplaceDecOp(decOp);
           break;
         }
+        if (thenResult.state == DecSearchState::Blocked)
+          break;
       }
 
       if (auto decOp = llvm::dyn_cast<ReussirRcDecOp>(next)) {
@@ -108,10 +165,9 @@ llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func) {
       }
       // If encounter any of the following, there is a chance that nested
       // operation may demand rc management. Hence, we abort the cancellation.
-      if (llvm::isa<mlir::CallableOpInterface>(next) ||
+      if (isCancellationBarrier(next) ||
           llvm::isa<mlir::RegionBranchOpInterface>(next) ||
-          llvm::isa<ReussirClosureApplyOp>(next) ||
-          llvm::isa<ReussirClosureEvalOp>(next))
+          next->getNumRegions() != 0)
         break;
       next = next->getNextNode();
     }
