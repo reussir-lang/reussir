@@ -394,6 +394,8 @@ struct ReussirRecordCompoundConversionPattern
     // Allocate the struct on the stack
     mlir::Value alloca = rewriter.create<mlir::LLVM::AllocaOp>(
         loc, ptrType, llvmStructType, one);
+    addLifetimeOrInvariantOp<mlir::LLVM::LifetimeStartOp>(
+        rewriter, loc, llvmStructType, alloca, *converter);
 
     // Get the field values (already converted by the type converter)
     auto fieldValues = adaptor.getFields();
@@ -415,6 +417,8 @@ struct ReussirRecordCompoundConversionPattern
     // Load the final populated struct value
     mlir::Value result =
         rewriter.create<mlir::LLVM::LoadOp>(loc, llvmStructType, alloca);
+    addLifetimeOrInvariantOp<mlir::LLVM::LifetimeEndOp>(
+        rewriter, loc, llvmStructType, alloca, *converter);
 
     rewriter.replaceOp(op, result);
     return mlir::success();
