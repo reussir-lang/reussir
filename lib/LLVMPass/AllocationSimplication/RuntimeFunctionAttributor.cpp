@@ -51,6 +51,41 @@ bool setAllocateAttributes(llvm::Function &fn) {
   return changed;
 }
 
+bool setReallocateAttributes(llvm::Function &fn) {
+  bool changed = false;
+  llvm::LLVMContext &ctx = fn.getContext();
+  constexpr auto reallocKind = llvm::AllocFnKind::Alloc |
+                               llvm::AllocFnKind::Realloc |
+                               llvm::AllocFnKind::Uninitialized |
+                               llvm::AllocFnKind::Aligned;
+
+  if (!fn.hasFnAttribute(llvm::Attribute::AllocKind) ||
+      fn.getFnAttribute(llvm::Attribute::AllocKind).getAllocKind() !=
+          reallocKind) {
+    fn.addFnAttr(llvm::Attribute::getWithAllocKind(ctx, reallocKind));
+    changed = true;
+  }
+
+  if (!fn.hasFnAttribute(llvm::Attribute::AllocSize)) {
+    fn.addFnAttr(llvm::Attribute::getWithAllocSizeArgs(ctx, 4, std::nullopt));
+    changed = true;
+  } else {
+    auto allocSizeArgs =
+        fn.getFnAttribute(llvm::Attribute::AllocSize).getAllocSizeArgs();
+    if (allocSizeArgs.first != 4 || allocSizeArgs.second.has_value()) {
+      fn.addFnAttr(llvm::Attribute::getWithAllocSizeArgs(ctx, 4, std::nullopt));
+      changed = true;
+    }
+  }
+
+  if (fn.getFnAttribute("alloc-family").getValueAsString() != "reussir") {
+    fn.addFnAttr("alloc-family", "reussir");
+    changed = true;
+  }
+
+  return changed;
+}
+
 bool setDeallocateAttributes(llvm::Function &fn) {
   bool changed = false;
   llvm::LLVMContext &ctx = fn.getContext();
@@ -88,6 +123,9 @@ RuntimeFunctionAttributorPass::run(llvm::Module &module,
 
   if (auto *deallocate = module.getFunction("__reussir_deallocate"))
     changed |= setDeallocateAttributes(*deallocate);
+
+  if (auto *reallocate = module.getFunction("__reussir_reallocate"))
+    changed |= setReallocateAttributes(*reallocate);
 
   return changed ? llvm::PreservedAnalyses::none()
                  : llvm::PreservedAnalyses::all();

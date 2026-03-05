@@ -170,7 +170,12 @@ mlir::func::FuncOp ClosureOutliningPass::createFunctionAndInlineRegion(
   funcOp->setAttr("llvm.linkage",
                   mlir::LLVM::LinkageAttr::get(rewriter.getContext(),
                                                mlir::LLVM::Linkage::Internal));
-
+  funcOp->setAttr("passthrough",
+                  rewriter.getStrArrayAttr({"mustprogress", "nounwind",
+                                            "willreturn", "nocallback"}));
+  funcOp.setArgAttr(0, "llvm.noalias", rewriter.getUnitAttr());
+  funcOp.setArgAttr(0, "llvm.nonnull", rewriter.getUnitAttr());
+  funcOp.setArgAttr(0, "llvm.noundef", rewriter.getUnitAttr());
   // Create entry block for the function
   mlir::Block *entryBlock = funcOp.addEntryBlock();
   rewriter.setInsertionPointToStart(entryBlock);
@@ -277,7 +282,13 @@ mlir::func::FuncOp ClosureOutliningPass::createClosureDropFunction(
   funcOp->setAttr("llvm.linkage",
                   mlir::LLVM::LinkageAttr::get(rewriter.getContext(),
                                                mlir::LLVM::Linkage::Internal));
+  funcOp->setAttr("passthrough",
+                  rewriter.getStrArrayAttr({"mustprogress", "nounwind",
+                                            "willreturn", "nocallback"}));
 
+  funcOp.setArgAttr(0, "llvm.noalias", rewriter.getUnitAttr());
+  funcOp.setArgAttr(0, "llvm.nonnull", rewriter.getUnitAttr());
+  funcOp.setArgAttr(0, "llvm.noundef", rewriter.getUnitAttr());
   // Create entry block for the function
   mlir::Block *entryBlock = funcOp.addEntryBlock();
   rewriter.setInsertionPointToStart(entryBlock);
@@ -383,7 +394,16 @@ mlir::func::FuncOp ClosureOutliningPass::createClosureCloneFunction(
   funcOp->setAttr("llvm.linkage",
                   mlir::LLVM::LinkageAttr::get(rewriter.getContext(),
                                                mlir::LLVM::Linkage::Internal));
+  funcOp->setAttr("passthrough",
+                  rewriter.getStrArrayAttr({"mustprogress", "nounwind",
+                                            "willreturn", "nocallback"}));
 
+  funcOp.setArgAttr(0, "llvm.noalias", rewriter.getUnitAttr());
+  funcOp.setArgAttr(0, "llvm.nonnull", rewriter.getUnitAttr());
+  funcOp.setArgAttr(0, "llvm.noundef", rewriter.getUnitAttr());
+  funcOp.setResultAttr(0, "llvm.noalias", rewriter.getUnitAttr());
+  funcOp.setResultAttr(0, "llvm.nonnull", rewriter.getUnitAttr());
+  funcOp.setResultAttr(0, "llvm.noundef", rewriter.getUnitAttr());
   // Create entry block for the function
   mlir::Block *entryBlock = funcOp.addEntryBlock();
   rewriter.setInsertionPointToStart(entryBlock);
