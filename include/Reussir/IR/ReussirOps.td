@@ -439,7 +439,8 @@ def ReussirRcCreateOp : ReussirRcOp<"create", [
       Arg<AnyType, "value">:$value, 
       Optional<ReussirTokenType>:$token,
       Optional<ReussirRegionType>:$region,
-      OptionalAttr<FlatSymbolRefAttr>:$vtable
+      OptionalAttr<FlatSymbolRefAttr>:$vtable,
+      UnitAttr:$skipRc
   );
   let results = (outs Res<ReussirRcType, "Created RC pointer">:$rcPtr);
 
@@ -449,6 +450,7 @@ def ReussirRcCreateOp : ReussirRcOp<"create", [
       `token` `(` $token `:` type($token) `)`
     | `region` `(` $region `:` type($region) `)` 
     | `vtable` `(` $vtable `)`
+    | `skip_rc` $skipRc
     )
     `:` qualified(type($rcPtr)) attr-dict
   }];

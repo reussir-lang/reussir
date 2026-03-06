@@ -769,13 +769,15 @@ struct ReussirRcCreateOpConversionPattern
     auto indexType = static_cast<const LLVMTypeConverter *>(getTypeConverter())
                          ->getIndexType();
     auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
-    auto one = rewriter.create<mlir::arith::ConstantOp>(
-        op.getLoc(), mlir::IntegerAttr::get(indexType, 1));
     auto token = adaptor.getToken();
-    auto refcntPtr = rewriter.create<mlir::LLVM::GEPOp>(
-        op.getLoc(), llvmPtrType, convertedBoxType, token,
-        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
-    rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), one, refcntPtr);
+    if (!op.getSkipRc()) {
+      auto one = rewriter.create<mlir::arith::ConstantOp>(
+          op.getLoc(), mlir::IntegerAttr::get(indexType, 1));
+      auto refcntPtr = rewriter.create<mlir::LLVM::GEPOp>(
+          op.getLoc(), llvmPtrType, convertedBoxType, token,
+          llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
+      rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), one, refcntPtr);
+    }
     auto elementPtr = rewriter.create<mlir::LLVM::GEPOp>(
         op.getLoc(), llvmPtrType, convertedBoxType, token,
         llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
