@@ -30,6 +30,9 @@ int main(int argc, char **argv) {
     return reussir::createReussirSCFOpsLoweringPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return reussir::createReussirRcCreateSinkPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return reussir::createReussirRegionPatternsPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {

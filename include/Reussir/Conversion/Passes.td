@@ -56,6 +56,19 @@ def ReussirSCFOpsLoweringPass
 }
 
 //===----------------------------------------------------------------------===//
+// RcCreateSink
+//===----------------------------------------------------------------------===//
+def ReussirRcCreateSinkPass
+    : Pass<"reussir-rc-create-sink", "::mlir::func::FuncOp"> {
+  let summary = "sink rc.create operations";
+  let description = [{
+    `reussir-rc-create-sink` sinks `reussir.rc.create` operations into ensure
+    scf for better copy avoidance.
+  }];
+  let dependentDialects = ["::reussir::ReussirDialect"];
+}
+
+//===----------------------------------------------------------------------===//
 // AttachRegionVtables
 //===----------------------------------------------------------------------===//
 def ReussirRegionPatternsPass

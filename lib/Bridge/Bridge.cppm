@@ -177,6 +177,7 @@ void createLoweringPipeline(mlir::PassManager &pm,
         reussir::createReussirTokenReusePass(tokenReuseOpts));
   }
   pm.addPass(reussir::createReussirSCFOpsLoweringPass());
+  pm.addNestedPass<mlir::func::FuncOp>(reussir::createReussirRcCreateSinkPass());
   pm.addPass(reussir::createReussirCompilePolymorphicFFIPass());
 
   if (enableInvariantAnalysis) {

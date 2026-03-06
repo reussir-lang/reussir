@@ -384,8 +384,12 @@ struct ReussirNullableDispatchOpRewritePattern
   matchAndRewrite(ReussirNullableDispatchOp op,
                   mlir::PatternRewriter &rewriter) const override {
     // First, create a check operation to get the null flag from the input.
-    auto flag = rewriter.create<reussir::ReussirNullableCheckOp>(
+    mlir::Value flag = rewriter.create<reussir::ReussirNullableCheckOp>(
         op.getLoc(), op.getNullable());
+    // mark expect not null
+    if (op->hasAttr(REUSSIR_EXPANDED_ENSURE_ATTR))
+      flag = rewriter.create<reussir::ReussirExpectOp>(op.getLoc(), flag, true);
+
     auto scfIfOp = rewriter.create<mlir::scf::IfOp>(
         op.getLoc(), op->getResultTypes(), flag, /*addThenRegion=*/true,
         /*addElseRegion=*/true);
@@ -403,6 +407,8 @@ struct ReussirNullableDispatchOpRewritePattern
     rewriter.inlineBlockBefore(
         &*op.getNonNullRegion().begin(), &*scfIfOp.getThenRegion().begin(),
         scfIfOp.getThenRegion().begin()->end(), mlir::ValueRange{coerced});
+    if (op->hasAttr(REUSSIR_EXPANDED_ENSURE_ATTR))
+      scfIfOp->setAttr(REUSSIR_EXPANDED_ENSURE_ATTR, rewriter.getUnitAttr());
     rewriter.replaceOp(op, scfIfOp);
     return mlir::success();
   }
@@ -551,7 +557,8 @@ struct ReussirClosureUniqifyOpRewritePattern
         op.getLoc(), op->getResultTypes(), isUnique, /*addThenRegion=*/true,
         /*addElseRegion=*/true);
 
-    // In the then region (closure is unique), just return the original closure
+    // In the then region (closure is unique), just return the original
+    // closure
     rewriter.setInsertionPointToStart(&scfIfOp.getThenRegion().front());
     rewriter.create<mlir::scf::YieldOp>(op.getLoc(), op.getClosure());
 
@@ -608,6 +615,8 @@ struct ReussirTokenEnsureOpRewritePattern
       rewriter.create<mlir::scf::YieldOp>(op.getLoc(),
                                           allocatedToken->getResults());
     }
+    nullableDispatchOp->setAttr(REUSSIR_EXPANDED_ENSURE_ATTR,
+                                rewriter.getUnitAttr());
     rewriter.replaceOp(op, nullableDispatchOp);
     return mlir::success();
   }

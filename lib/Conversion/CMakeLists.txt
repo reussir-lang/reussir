@@ -1,6 +1,7 @@
 add_subdirectory(TypeConverter)
 add_subdirectory(BasicOpsLowering)
 add_subdirectory(SCFOpsLowering)
+add_subdirectory(RcCreateSink)
 add_subdirectory(RegionPatterns)
 add_subdirectory(AcquireDropExpansion)
 add_subdirectory(RcDecrementExpansion)
