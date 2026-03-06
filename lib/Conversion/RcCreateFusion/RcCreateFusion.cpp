@@ -96,6 +96,30 @@ bool isLoadFromCompoundField(mlir::Value value, mlir::TypedValue<RcType> sourceR
   return borrow && borrow.getRcPtr() == sourceRc;
 }
 
+bool hasCompatibleFieldPrefix(RecordType sourcePayloadType,
+                              RecordType targetPayloadType,
+                              int64_t fieldIndex) {
+  if (!sourcePayloadType || !targetPayloadType)
+    return false;
+  if (!sourcePayloadType.isCompound() || !targetPayloadType.isCompound())
+    return false;
+  if (fieldIndex < 0)
+    return false;
+  if (static_cast<size_t>(fieldIndex) >= sourcePayloadType.getMembers().size() ||
+      static_cast<size_t>(fieldIndex) >= targetPayloadType.getMembers().size())
+    return false;
+
+  for (int64_t index = 0; index <= fieldIndex; ++index) {
+    if (sourcePayloadType.getMemberIsField()[index] !=
+        targetPayloadType.getMemberIsField()[index])
+      return false;
+    if (!structurallySameType(sourcePayloadType.getMembers()[index],
+                              targetPayloadType.getMembers()[index]))
+      return false;
+  }
+  return true;
+}
+
 bool isLoadFromVariantField(mlir::Value value, mlir::TypedValue<RcType> sourceRc,
                             mlir::Type targetPayloadType, int64_t fieldIndex) {
   auto load = llvm::dyn_cast_if_present<ReussirRefLoadOp>(value.getDefiningOp());
@@ -111,15 +135,12 @@ bool isLoadFromVariantField(mlir::Value value, mlir::TypedValue<RcType> sourceRc
       project.getRef().getDefiningOp());
   if (!coerce)
     return false;
-  auto sourceVariantType = llvm::dyn_cast<RecordType>(
-      sourceRc.getType().getElementType());
-  auto coercedVariantType = llvm::dyn_cast<RecordType>(
-      coerce.getVariant().getType().getElementType());
-  if (!sourceVariantType || !coercedVariantType ||
-      sourceVariantType != coercedVariantType)
-    return false;
-  if (!structurallySameType(coerce.getCoerced().getType().getElementType(),
-                            targetPayloadType))
+
+  auto sourcePayloadType =
+      llvm::dyn_cast<RecordType>(coerce.getCoerced().getType().getElementType());
+  auto targetPayloadRecord = llvm::dyn_cast<RecordType>(targetPayloadType);
+  if (!hasCompatibleFieldPrefix(sourcePayloadType, targetPayloadRecord,
+                                fieldIndex))
     return false;
 
   auto borrow = llvm::dyn_cast_if_present<ReussirRcBorrowOp>(

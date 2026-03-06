@@ -178,6 +178,8 @@ void createLoweringPipeline(mlir::PassManager &pm,
   }
   pm.addPass(reussir::createReussirSCFOpsLoweringPass());
   pm.addNestedPass<mlir::func::FuncOp>(reussir::createReussirRcCreateSinkPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      reussir::createReussirRcCreateFusionPass());
   pm.addPass(reussir::createReussirCompilePolymorphicFFIPass());
 
   if (enableInvariantAnalysis) {
@@ -191,8 +193,6 @@ void createLoweringPipeline(mlir::PassManager &pm,
 #else
   pm.addPass(createConvertSCFToCFPass());
 #endif
-  pm.addNestedPass<mlir::func::FuncOp>(
-      reussir::createReussirRcCreateFusionPass());
   pm.addPass(createReussirBasicOpsLoweringPass());
   pm.addPass(createConvertControlFlowToLLVMPass());
   pm.addPass(createReconcileUnrealizedCastsPass());
