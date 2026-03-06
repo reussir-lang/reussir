@@ -10,6 +10,15 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
         : !reussir.nullable<!reussir.token<align: 8, size: 16>>
       return %tk : !reussir.nullable<!reussir.token<align: 8, size: 16>>
   }
+  func.func private @fetch_set_rc(%rc: !reussir.rc<i64>) {
+      %cnt = reussir.rc.fetch (%rc : !reussir.rc<i64>) : index
+      reussir.rc.set (%rc : !reussir.rc<i64>, %cnt : index)
+      return
+  }
+  func.func private @likely(%cond: i1) -> i1 {
+      %likely = reussir.expect (%cond : i1, 1) : i1
+      return %likely : i1
+  }
   func.func private @create_rc() 
     -> !reussir.rc<i64> {
       %zero = arith.constant 0 : i64

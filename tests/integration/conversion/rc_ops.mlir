@@ -36,6 +36,30 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
     return 
   }
 
+  // CHECK-LABEL: define i64 @rc_fetch(ptr %0) {
+  // CHECK: %2 = load i64, ptr %0, align 8
+  // CHECK: ret i64 %2
+  func.func @rc_fetch(%rc: !reussir.rc<i64>) -> index {
+    %count = reussir.rc.fetch (%rc : !reussir.rc<i64>) : index
+    return %count : index
+  }
+
+  // CHECK-LABEL: define void @rc_set(ptr %0, i64 %1) {
+  // CHECK: store i64 %1, ptr %0, align 8
+  // CHECK: ret void
+  func.func @rc_set(%rc: !reussir.rc<i64>, %count: index) {
+    reussir.rc.set (%rc : !reussir.rc<i64>, %count : index)
+    return
+  }
+
+  // CHECK-LABEL: define i1 @likely(i1 %0) {
+  // CHECK: %2 = call i1 @llvm.expect.i1(i1 %0, i1 true)
+  // CHECK: ret i1 %2
+  func.func @likely(%cond: i1) -> i1 {
+    %likely = reussir.expect (%cond : i1, 1) : i1
+    return %likely : i1
+  }
+
   // CHECK-LABEL: define ptr @rc_create(fp128 %0)
   // CHECK: %2 = call ptr @__reussir_allocate(i64 16, i64 32)
   // CHECK: %3 = getelementptr { i64, fp128 }, ptr %2, i32 0, i32 0

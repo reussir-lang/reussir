@@ -250,24 +250,48 @@ struct ReussirRcReinterpretConversionPattern
   }
 };
 
-struct ReussirRcFetchDectConversionPattern
-    : public mlir::OpConversionPattern<ReussirRcFetchDecOp> {
+struct ReussirRcFetchConversionPattern
+    : public mlir::OpConversionPattern<ReussirRcFetchOp> {
   using OpConversionPattern::OpConversionPattern;
 
   mlir::LogicalResult
-  matchAndRewrite(ReussirRcFetchDecOp op, OpAdaptor adaptor,
+  matchAndRewrite(ReussirRcFetchOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
     auto indexTy = static_cast<const LLVMTypeConverter *>(getTypeConverter())
                        ->getIndexType();
     mlir::Value loaded = rewriter.create<mlir::LLVM::LoadOp>(
         op.getLoc(), indexTy, adaptor.getRcPtr());
-    mlir::Value one = rewriter.create<mlir::arith::ConstantOp>(
-        op.getLoc(), rewriter.getIntegerAttr(indexTy, 1));
-    mlir::Value updated =
-        rewriter.create<mlir::arith::SubIOp>(op.getLoc(), loaded, one);
-    rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), updated,
-                                         adaptor.getRcPtr());
     rewriter.replaceOp(op, loaded);
+    return mlir::success();
+  }
+};
+
+struct ReussirRcSetConversionPattern
+    : public mlir::OpConversionPattern<ReussirRcSetOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRcSetOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<mlir::LLVM::StoreOp>(op, adaptor.getRefCount(),
+                                                     adaptor.getRcPtr());
+    return mlir::success();
+  }
+};
+
+struct ReussirExpectConversionPattern
+    : public mlir::OpConversionPattern<ReussirExpectOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirExpectOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto expected = rewriter.create<mlir::arith::ConstantIntOp>(
+        op.getLoc(), static_cast<int64_t>(op.getExpected()), 1);
+    rewriter.replaceOpWithNewOp<mlir::LLVM::CallIntrinsicOp>(
+        op, adaptor.getCondition().getType(),
+        rewriter.getStringAttr("llvm.expect"),
+        mlir::ValueRange{adaptor.getCondition(), expected.getResult()});
     return mlir::success();
   }
 };
@@ -2279,10 +2303,11 @@ struct BasicOpsLoweringPass
       target.addIllegalDialect<mlir::func::FuncDialect,
                                mlir::arith::ArithDialect>();
       target.addIllegalOp<
-          ReussirTokenAllocOp, ReussirTokenFreeOp, ReussirTokenReinterpretOp,
-          ReussirTokenReallocOp, ReussirRefLoadOp, ReussirRefStoreOp,
-          ReussirRefSpilledOp, ReussirRefDiffOp, ReussirRefCmpOp,
-          ReussirRefMemcpyOp, ReussirNullableCheckOp, ReussirNullableCreateOp,
+          ReussirPanicOp, ReussirExpectOp, ReussirTokenAllocOp,
+          ReussirTokenFreeOp, ReussirTokenReinterpretOp, ReussirTokenReallocOp,
+          ReussirRefLoadOp, ReussirRefStoreOp, ReussirRefSpilledOp,
+          ReussirRefDiffOp, ReussirRefCmpOp, ReussirRefMemcpyOp,
+          ReussirNullableCheckOp, ReussirNullableCreateOp,
           ReussirNullableCoerceOp, ReussirRcIncOp, ReussirRcCreateOp,
           ReussirRcDecOp, ReussirRcBorrowOp, ReussirRcIsUniqueOp,
           ReussirRecordCompoundOp, ReussirRecordVariantOp, ReussirRefProjectOp,
@@ -2292,8 +2317,8 @@ struct BasicOpsLoweringPass
           ReussirClosureCloneOp, ReussirClosureEvalOp,
           ReussirClosureInspectPayloadOp, ReussirClosureCursorOp,
           ReussirClosureInstantiateOp, ReussirClosureVtableOp,
-          ReussirClosureCreateOp, ReussirRcFetchDecOp, ReussirStrGlobalOp,
-          ReussirStrLiteralOp, ReussirPanicOp, ReussirStrLenOp,
+          ReussirClosureCreateOp, ReussirRcFetchOp, ReussirRcSetOp,
+          ReussirStrGlobalOp, ReussirStrLiteralOp, ReussirStrLenOp,
           ReussirStrUnsafeByteAtOp, ReussirStrUnsafeStartWithOp,
           ReussirStrSliceOp, ReussirTrampolineOp, ReussirTokenLaunderOp>();
       target.addLegalDialect<mlir::LLVM::LLVMDialect>();
@@ -2309,7 +2334,8 @@ struct BasicOpsLoweringPass
 void populateBasicOpsLoweringToLLVMConversionPatterns(
     LLVMTypeConverter &converter, mlir::RewritePatternSet &patterns) {
   patterns.add<
-      ReussirTokenAllocConversionPattern, ReussirTokenFreeConversionPattern,
+      ReussirExpectConversionPattern, ReussirTokenAllocConversionPattern,
+      ReussirTokenFreeConversionPattern,
       ReussirTokenReinterpretConversionPattern,
       ReussirTokenReallocConversionPattern, ReussirRefLoadConversionPattern,
       ReussirRefStoreConversionPattern, ReussirRefSpilledConversionPattern,
@@ -2337,8 +2363,8 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirClosureInstantiateOpConversionPattern,
       ReussirClosureVtableOpConversionPattern,
       ReussirClosureCreateOpConversionPattern,
-      ReussirRcReinterpretConversionPattern,
-      ReussirRcFetchDectConversionPattern, ReussirStrGlobalOpConversionPattern,
+      ReussirRcReinterpretConversionPattern, ReussirRcFetchConversionPattern,
+      ReussirRcSetConversionPattern, ReussirStrGlobalOpConversionPattern,
       ReussirStrLiteralOpConversionPattern, ReussirPanicConversionPattern,
       ReussirStrLenOpConversionPattern,
       ReussirStrUnsafeByteAtOpConversionPattern,

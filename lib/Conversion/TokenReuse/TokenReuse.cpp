@@ -356,11 +356,11 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
                     condition.getDefiningOp());
                 if (!cmp)
                   continue;
-                auto rcFetchDec =
-                    llvm::dyn_cast_if_present<ReussirRcFetchDecOp>(
+                auto rcFetch =
+                    llvm::dyn_cast_if_present<ReussirRcFetchOp>(
                         cmp.getLhs().getDefiningOp());
                 mlir::TypedValue<RcType> producerRc =
-                    rcFetchDec ? rcFetchDec.getRcPtr() : nullptr;
+                    rcFetch ? rcFetch.getRcPtr() : nullptr;
                 int score = hueristic(producedType, producerRc, acceptor,
                                       aliasAnalyzer);
                 if (score >= 0 && (score > bestScore ||

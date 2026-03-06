@@ -92,7 +92,7 @@ newtype VariantDispData = VariantDispData [([Int64], Block)]
   Many low-level placeholder operations are intentionally excluded from this high-level
   abstraction, including:
     - token.*: Token allocation, deallocation, and reinterpretation
-    - rc.dec, rc.fetch_dec, rc.reinterpret: Low-level RC management
+    - rc.dec, rc.fetch, rc.set, rc.reinterpret, likely: Low-level RC management
     - nullable.coerce, record.coerce: Type coercion placeholders
     - record.tag: Tag extraction (handled implicitly in variant operations)
     - ref.drop: Also available as high-level RefDrop instruction for value struct destruction

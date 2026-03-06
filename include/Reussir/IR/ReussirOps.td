@@ -42,6 +42,21 @@ def ReussirPanicOp : ReussirOp<"panic", []> {
   }];
 }
 
+def ReussirExpectOp : ReussirOp<"expect", [Pure]> {
+  let summary = "Mark a condition as expected";
+  let description = [{
+    `reussir.expect` hints that a boolean condition is expected to evaluate to
+    true on the hot path.
+  }];
+
+  let arguments = (ins I1:$condition, I1Attr:$expected);
+  let results = (outs I1:$likely);
+
+  let assemblyFormat = [{
+    `(` $condition `:` type($condition) `,` $expected `)` `:` type($likely) attr-dict
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Reussir Token Operation
 //===----------------------------------------------------------------------===//
@@ -338,20 +353,43 @@ def ReussirRcDecOp : ReussirRcOp<"dec", [
   let hasVerifier = 1;
 }
 
-def ReussirRcFetchDecOp : ReussirRcOp<"fetch_dec", []> {
-  let summary = "Fetch and decrement a RC pointer";
+def ReussirRcFetchOp : ReussirRcOp<"fetch", []> {
+  let summary = "Fetch the reference count of a RC pointer";
   let description = [{
-    `reussir.rc.fetch_dec` fetches a decrement operation from a RC pointer.
+    `reussir.rc.fetch` fetches the current reference count from a RC pointer.
 
-    This serves as a low-level operation to implement the `reussir.rc.dec` operation.
-    It is not recommended to use this operation directly.
+    This serves as a low-level operation to implement `reussir.rc.dec` and
+    related RC management transforms. It is not recommended to use this
+    operation directly.
   }];
 
-  let arguments = (ins Arg<ReussirRcType, "Reference to fetch and decrement">:$rcPtr);
+  let arguments = (ins Arg<ReussirRcType, "Reference to inspect">:$rcPtr);
   let results = (outs Res<Index, "Reference count">:$refCount);
 
   let assemblyFormat = [{
     `(` $rcPtr `:` qualified(type($rcPtr)) `)` `:` type($refCount) attr-dict
+  }];
+}
+
+def ReussirRcSetOp : ReussirRcOp<"set", []> {
+  let summary = "Set the reference count of a RC pointer";
+  let description = [{
+    `reussir.rc.set` writes a reference count to a RC pointer.
+
+    This serves as a low-level operation to implement `reussir.rc.dec` and
+    related RC management transforms. It is not recommended to use this
+    operation directly.
+  }];
+
+  let arguments = (
+    ins
+      Arg<ReussirRcType, "Reference to update">:$rcPtr,
+      Arg<Index, "New reference count">:$refCount
+  );
+
+  let assemblyFormat = [{
+    `(` $rcPtr `:` qualified(type($rcPtr)) `,`
+    $refCount `:` type($refCount) `)` attr-dict
   }];
 }
 
