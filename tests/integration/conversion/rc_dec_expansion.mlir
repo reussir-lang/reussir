@@ -3,6 +3,9 @@
 // CHECK-DAG: func.func private @_RINvNvC4core9intrinsic13drop_in_placeListE
 // CHECK-DAG-SAME: attributes {llvm.linkage = #llvm.linkage<linkonce_odr>}
 
+// CHECK-DAG: reussir.rc.fetch
+// CHECK-DAG: reussir.rc.set
+// CHECK-DAG: reussir.expect
 // CHECK-DAG: scf.if
 
 // CHECK-DAG: reussir.record.dispatch

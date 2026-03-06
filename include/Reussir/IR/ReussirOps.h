@@ -101,6 +101,9 @@ mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
 std::unique_ptr<llvm::Module> gatherCompiledModules(mlir::ModuleOp moduleOp,
                                                     llvm::LLVMContext &context,
                                                     llvm::StringRef dataLayout);
+
+constexpr llvm::StringRef REUSSIR_EXPANDED_ENSURE_ATTR =
+    "reussir.expanded_ensure";
 } // namespace reussir
 
 #endif // REUSSIR_IR_REUSSIROPS_H

@@ -56,6 +56,34 @@ def ReussirSCFOpsLoweringPass
 }
 
 //===----------------------------------------------------------------------===//
+// RcCreateSink
+//===----------------------------------------------------------------------===//
+def ReussirRcCreateSinkPass
+    : Pass<"reussir-rc-create-sink", "::mlir::func::FuncOp"> {
+  let summary = "sink rc.create operations";
+  let description = [{
+    `reussir-rc-create-sink` sinks `reussir.rc.create` operations into ensure
+    scf for better copy avoidance.
+  }];
+  let dependentDialects = ["::reussir::ReussirDialect"];
+}
+
+//===----------------------------------------------------------------------===//
+// RcCreateFusion
+//===----------------------------------------------------------------------===//
+def ReussirRcCreateFusionPass
+    : Pass<"reussir-rc-create-fusion", "::mlir::func::FuncOp"> {
+  let summary = "fuse record materialization into rc.create operations";
+  let description = [{
+    `reussir-rc-create-fusion` fuses `reussir.record.variant` and
+    `reussir.record.compound` producers into dedicated RC creation operations.
+    For `variant(compound(...))`, it performs a total fusion into
+    `reussir.rc.create_variant`.
+  }];
+  let dependentDialects = ["::reussir::ReussirDialect"];
+}
+
+//===----------------------------------------------------------------------===//
 // AttachRegionVtables
 //===----------------------------------------------------------------------===//
 def ReussirRegionPatternsPass

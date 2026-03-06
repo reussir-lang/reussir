@@ -63,12 +63,15 @@ struct RcDecrementExpansionPattern
       return mlir::failure();
 
     auto prevRcCount =
-        rewriter.create<ReussirRcFetchDecOp>(op.getLoc(), op.getRcPtr());
+        rewriter.create<ReussirRcFetchOp>(op.getLoc(), op.getRcPtr());
     auto isOne = rewriter.create<mlir::arith::CmpIOp>(
         op.getLoc(), mlir::arith::CmpIPredicate::eq, prevRcCount.getRefCount(),
         rewriter.create<mlir::arith::ConstantIndexOp>(op.getLoc(), 1));
-    auto ifOp = rewriter.create<mlir::scf::IfOp>(
-        op.getLoc(), op->getResultTypes(), isOne, true, true);
+    auto likelyUnique =
+        rewriter.create<ReussirExpectOp>(op.getLoc(), isOne.getResult(), true);
+    auto ifOp =
+        rewriter.create<mlir::scf::IfOp>(op.getLoc(), op->getResultTypes(),
+                                         likelyUnique.getLikely(), true, true);
     RefType borrowedRefType = rewriter.getType<RefType>(
         type.getElementType(), Capability::unspecified, type.getAtomicKind());
     TokenType tokenType = llvm::cast<TokenType>(
@@ -86,6 +89,11 @@ struct RcDecrementExpansionPattern
     }
     {
       rewriter.setInsertionPointToStart(ifOp.elseBlock());
+      auto decremented = rewriter.create<mlir::arith::SubIOp>(
+          op.getLoc(), prevRcCount.getRefCount(),
+          rewriter.create<mlir::arith::ConstantIndexOp>(op.getLoc(), 1));
+      rewriter.create<ReussirRcSetOp>(op.getLoc(), op.getRcPtr(),
+                                      decremented.getResult());
       auto null = rewriter.create<ReussirNullableCreateOp>(
           op.getLoc(), op.getNullableToken().getType(), nullptr);
       rewriter.create<mlir::scf::YieldOp>(op.getLoc(), null->getResults());

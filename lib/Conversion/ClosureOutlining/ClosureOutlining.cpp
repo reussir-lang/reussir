@@ -217,26 +217,33 @@ mlir::func::FuncOp ClosureOutliningPass::createFunctionAndInlineRegion(
   rewriter.inlineBlockBefore(&closureBlock, entryBlock, entryBlock->end(),
                              blockArgs);
 
-  // === EPILOGUE: Replace yield with fetch_dec + conditional free + return ===
+  // === EPILOGUE: Replace yield with fetch + conditional dec/free + return ===
   funcOp.walk([&](ReussirClosureYieldOp yieldOp) {
     rewriter.setInsertionPoint(yieldOp);
     mlir::Location yieldLoc = yieldOp.getLoc();
 
-    // Fetch dec on the rc pointer
-    auto fetchDec = rewriter.create<ReussirRcFetchDecOp>(yieldLoc, rcPtr);
+    // Fetch the current reference count on the rc pointer.
+    auto fetch = rewriter.create<ReussirRcFetchOp>(yieldLoc, rcPtr);
 
-    // If fetch_dec result is 1, free the token
+    // Only write the decremented count when the closure remains shared.
     auto one = rewriter.create<mlir::arith::ConstantIndexOp>(yieldLoc, 1);
-    auto isOne = rewriter.create<mlir::arith::CmpIOp>(
-        yieldLoc, mlir::arith::CmpIPredicate::eq, fetchDec.getRefCount(), one);
+    auto isShared = rewriter.create<mlir::arith::CmpIOp>(
+        yieldLoc, mlir::arith::CmpIPredicate::ugt, fetch.getRefCount(), one);
 
     auto ifOp =
-        rewriter.create<mlir::scf::IfOp>(yieldLoc, mlir::TypeRange{}, isOne,
+        rewriter.create<mlir::scf::IfOp>(yieldLoc, mlir::TypeRange{}, isShared,
                                          /*addThenRegion=*/true,
-                                         /*addElseRegion=*/false);
+                                         /*addElseRegion=*/true);
 
-    // Inside the then block: free the token
+    // Inside the then block: decrement the refcount and skip the free.
     rewriter.setInsertionPointToStart(ifOp.thenBlock());
+    auto decremented = rewriter.create<mlir::arith::SubIOp>(
+        yieldLoc, fetch.getRefCount(), one);
+    rewriter.create<ReussirRcSetOp>(yieldLoc, rcPtr, decremented.getResult());
+    rewriter.create<mlir::scf::YieldOp>(yieldLoc);
+
+    // Inside the else block: free the token on the last reference.
+    rewriter.setInsertionPointToStart(ifOp.elseBlock());
 
     // Compute TokenType from RcBoxType using DataLayout
     RcBoxType rcBoxType = specializedRcType.getInnerBoxType();
@@ -295,20 +302,28 @@ mlir::func::FuncOp ClosureOutliningPass::createClosureDropFunction(
   mlir::Value rcPtr = entryBlock->getArgument(0);
   mlir::Location loc = op.getLoc();
 
-  // First, fetch dec on the rc pointer
-  auto fetchDec = rewriter.create<ReussirRcFetchDecOp>(loc, rcPtr);
+  // First, fetch the current reference count on the rc pointer.
+  auto fetch = rewriter.create<ReussirRcFetchOp>(loc, rcPtr);
 
-  // If fetch_dec result is 1, we then drop the closure box
+  // Only write the decremented count when the closure remains shared.
   auto one = rewriter.create<mlir::arith::ConstantIndexOp>(loc, 1);
-  auto isOne = rewriter.create<mlir::arith::CmpIOp>(
-      loc, mlir::arith::CmpIPredicate::eq, fetchDec.getRefCount(), one);
+  auto isShared = rewriter.create<mlir::arith::CmpIOp>(
+      loc, mlir::arith::CmpIPredicate::ugt, fetch.getRefCount(), one);
 
-  auto ifOp = rewriter.create<mlir::scf::IfOp>(loc, mlir::TypeRange{}, isOne,
+  auto ifOp = rewriter.create<mlir::scf::IfOp>(loc, mlir::TypeRange{}, isShared,
                                                /*addThenRegion=*/true,
-                                               /*addElseRegion=*/false);
+                                               /*addElseRegion=*/true);
 
-  // Inside the then block: drop the closure box contents
+  // Inside the then block: decrement the refcount and skip the drop.
   rewriter.setInsertionPointToStart(ifOp.thenBlock());
+  auto decremented =
+      rewriter.create<mlir::arith::SubIOp>(loc, fetch.getRefCount(), one);
+  rewriter.create<ReussirRcSetOp>(loc, rcPtr, decremented.getResult());
+  rewriter.create<mlir::scf::YieldOp>(loc);
+
+  // Inside the else block: drop the closure box contents on the last
+  // reference.
+  rewriter.setInsertionPointToStart(ifOp.elseBlock());
 
   // Use rc.borrow to get a reference to the closure box
   RefType closureBoxRefType =

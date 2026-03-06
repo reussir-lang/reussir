@@ -45,6 +45,92 @@
 #include "Reussir/IR/ReussirOps.cpp.inc"
 
 namespace reussir {
+namespace {
+
+mlir::LogicalResult verifyRcCreateLikeOp(mlir::Operation *op, RcType rcType,
+                                         mlir::Type valueType,
+                                         mlir::Value token,
+                                         mlir::Value region) {
+  if (valueType != rcType.getElementType())
+    return op->emitOpError("value type must match RC element type, ")
+           << "value type: " << valueType
+           << ", RC element type: " << rcType.getElementType();
+  Capability expectedCap = region == nullptr ? reussir::Capability::shared
+                                             : reussir::Capability::flex;
+  if (rcType.getCapability() != expectedCap)
+    return op->emitOpError("RC type capability must be ")
+           << stringifyCapability(expectedCap) << ", but got "
+           << stringifyCapability(rcType.getCapability());
+
+  if (!token)
+    return mlir::success();
+
+  TokenType tokenType = llvm::cast<TokenType>(token.getType());
+  auto rcBoxType = RcBoxType::get(op->getContext(), valueType, region != nullptr);
+  auto dataLayout = mlir::DataLayout::closest(op);
+  auto alignment = dataLayout.getTypeABIAlignment(rcBoxType);
+  auto size = dataLayout.getTypeSize(rcBoxType);
+  if (!size.isFixed())
+    return op->emitOpError("RC type must have a fixed size");
+  if (tokenType.getAlign() != alignment)
+    return op->emitOpError("token alignment must match RC type alignment, ")
+           << "token alignment: " << tokenType.getAlign()
+           << ", RC type alignment: " << alignment;
+  if (tokenType.getSize() != size)
+    return op->emitOpError("token size must match RC type size, ")
+           << "token size: " << tokenType.getSize()
+           << ", RC type size: " << size.getFixedValue();
+  return mlir::success();
+}
+
+mlir::LogicalResult
+verifyRcCreateLikeSymbolUses(mlir::Operation *op, mlir::Value region,
+                             mlir::Type valueType,
+                             mlir::FlatSymbolRefAttr vtableAttr,
+                             mlir::SymbolTableCollection &symbolTable) {
+  if (!vtableAttr)
+    return mlir::success();
+
+  if (!region)
+    return op->emitOpError(
+        "when vtable is provided, region argument must also exist");
+
+  auto vtableOp = symbolTable.lookupNearestSymbolFrom<ReussirRegionVTableOp>(
+      op, vtableAttr);
+  if (!vtableOp)
+    return op->emitOpError("vtable symbol not found: ") << vtableAttr;
+
+  mlir::Type vtableType = vtableOp.getTypeAttr().getValue();
+  if (vtableType != valueType)
+    return op->emitOpError("vtable type attribute must match value input type, ")
+           << "vtable type: " << vtableType << ", value type: " << valueType;
+  return mlir::success();
+}
+
+mlir::LogicalResult verifyCompoundFields(mlir::Operation *op, RecordType recordType,
+                                         mlir::ValueRange fields) {
+  if (!recordType)
+    return op->emitOpError("RC element type must be a record type");
+  if (!recordType.getComplete())
+    return op->emitOpError("cannot assemble incomplete compound record");
+  if (!recordType.isCompound())
+    return op->emitOpError("RC element type must be a compound record");
+  if (recordType.getMembers().size() != fields.size())
+    return op->emitOpError("number of fields must match number of members");
+  for (auto [field, member, memberCapability] :
+       llvm::zip(fields, recordType.getMembers(), recordType.getMemberIsField())) {
+    mlir::Type projectedType =
+        reussir::getProjectedType(member, memberCapability, Capability::flex);
+    if (projectedType != field.getType())
+      return op->emitOpError("field type must match projected member type, ")
+             << "field type: " << field.getType()
+             << ", projected member type: " << projectedType;
+  }
+  return mlir::success();
+}
+
+} // namespace
+
 ///===----------------------------------------------------------------------===//
 // ReussirTokenReinterpretOp
 //===----------------------------------------------------------------------===//
@@ -230,39 +316,8 @@ ReussirRcDecOp::replaceWithProduced(mlir::PatternRewriter &builder) {
 // RcCreateOp verification
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRcCreateOp::verify() {
-  RcType RcType = getRcPtr().getType();
-  mlir::Type valueType = getValue().getType();
-  if (valueType != RcType.getElementType())
-    return emitOpError("value type must match RC element type, ")
-           << "value type: " << valueType
-           << ", RC element type: " << RcType.getElementType();
-  Capability expectedCap = getRegion() == nullptr ? reussir::Capability::shared
-                                                  : reussir::Capability::flex;
-  if (RcType.getCapability() != expectedCap)
-    return emitOpError("RC type capability must be ")
-           << stringifyCapability(expectedCap) << ", but got "
-           << stringifyCapability(RcType.getCapability());
-
-  // Only verify token layout if token is present
-  if (getToken()) {
-    TokenType tokenType = getToken().getType();
-    auto rcBoxType =
-        RcBoxType::get(getContext(), valueType, getRegion() != nullptr);
-    auto dataLayout = mlir::DataLayout::closest(getOperation());
-    auto alignment = dataLayout.getTypeABIAlignment(rcBoxType);
-    auto size = dataLayout.getTypeSize(rcBoxType);
-    if (!size.isFixed())
-      return emitOpError("RC type must have a fixed size");
-    if (tokenType.getAlign() != alignment)
-      return emitOpError("token alignment must match RC type alignment, ")
-             << "token alignment: " << tokenType.getAlign()
-             << ", RC type alignment: " << alignment;
-    if (tokenType.getSize() != size)
-      return emitOpError("token size must match RC type size, ")
-             << "token size: " << tokenType.getSize()
-             << ", RC type size: " << size.getFixedValue();
-  }
-  return mlir::success();
+  return verifyRcCreateLikeOp(getOperation(), getRcPtr().getType(),
+                              getValue().getType(), getToken(), getRegion());
 }
 
 //===----------------------------------------------------------------------===//
@@ -282,26 +337,118 @@ TokenType ReussirRcCreateOp::getTokenType() {
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult
 ReussirRcCreateOp::verifySymbolUses(mlir::SymbolTableCollection &symbolTable) {
-  if (getVtableAttr()) {
-    // When vtable is provided, region argument must also exist
-    if (!getRegion())
-      return emitOpError(
-          "when vtable is provided, region argument must also exist");
+  return verifyRcCreateLikeSymbolUses(getOperation(), getRegion(),
+                                      getValue().getType(), getVtableAttr(),
+                                      symbolTable);
+}
 
-    // Look up the vtable symbol
-    auto vtableOp = symbolTable.lookupNearestSymbolFrom<ReussirRegionVTableOp>(
-        getOperation(), getVtableAttr());
-    if (!vtableOp)
-      return emitOpError("vtable symbol not found: ") << getVtableAttr();
+//===----------------------------------------------------------------------===//
+// RcCreateCompoundOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRcCreateCompoundOp::verify() {
+  RecordType recordType = getRecordType();
+  if (failed(verifyCompoundFields(getOperation(), recordType, getFields())))
+    return mlir::failure();
+  return verifyRcCreateLikeOp(getOperation(), getRcPtr().getType(), recordType,
+                              getToken(), getRegion());
+}
 
-    // Check that the vtable's type attribute matches the value input's type
-    mlir::Type vtableType = vtableOp.getTypeAttr().getValue();
-    mlir::Type valueType = getValue().getType();
-    if (vtableType != valueType)
-      return emitOpError("vtable type attribute must match value input type, ")
-             << "vtable type: " << vtableType << ", value type: " << valueType;
+//===----------------------------------------------------------------------===//
+// RcCreateCompoundOp TokenAcceptor Interface
+//===----------------------------------------------------------------------===//
+TokenType ReussirRcCreateCompoundOp::getTokenType() {
+  auto rcBoxType = RcBoxType::get(getContext(), getRcPtr().getType().getElementType(),
+                                  getRegion() != nullptr);
+  auto dataLayout = mlir::DataLayout::closest(getOperation());
+  auto alignment = dataLayout.getTypeABIAlignment(rcBoxType);
+  auto size = dataLayout.getTypeSize(rcBoxType);
+  return TokenType::get(getContext(), alignment, size.getFixedValue());
+}
+
+//===----------------------------------------------------------------------===//
+// RcCreateCompoundOp SymbolUserOpInterface
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRcCreateCompoundOp::verifySymbolUses(
+    mlir::SymbolTableCollection &symbolTable) {
+  return verifyRcCreateLikeSymbolUses(
+      getOperation(), getRegion(), getRcPtr().getType().getElementType(),
+      getVtableAttr(), symbolTable);
+}
+
+//===----------------------------------------------------------------------===//
+// RcCreateVariantOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRcCreateVariantOp::verify() {
+  RecordType variantType = getRecordType();
+  if (!variantType)
+    return emitOpError("RC element type must be a record type");
+  if (!variantType.getComplete())
+    return emitOpError("cannot assemble incomplete variant record");
+  if (!variantType.isVariant())
+    return emitOpError("RC element type must be a variant record");
+
+  size_t tag = getTag().getZExtValue();
+  if (tag >= variantType.getMembers().size())
+    return emitOpError("tag out of bounds");
+
+  mlir::Type targetVariantType = variantType.getMembers()[tag];
+  bool targetVariantIsField = variantType.getMemberIsField()[tag];
+  if (targetVariantIsField)
+    return emitOpError("TODO: check this is nested in a region operation");
+
+  bool hasValue = getValue() != nullptr;
+  bool hasFields = !getFields().empty();
+  if (hasValue == hasFields) {
+    if (!hasValue && !hasFields && mlir::isa<RecordType>(targetVariantType)) {
+      auto compoundType = llvm::cast<RecordType>(targetVariantType);
+      if (compoundType.isCompound() && compoundType.getMembers().empty())
+        hasFields = true;
+    }
   }
-  return mlir::success();
+  if (hasValue == hasFields)
+    return emitOpError(
+        "expected exactly one payload form: either a value or compound fields");
+
+  if (hasValue) {
+    mlir::Type projectedType = reussir::getProjectedType(
+        targetVariantType, targetVariantIsField, Capability::flex);
+    if (projectedType != getValue().getType())
+      return emitOpError("value type must match projected type, ")
+             << "value type: " << getValue().getType()
+             << ", projected type: " << projectedType;
+  } else {
+    auto compoundType = llvm::dyn_cast<RecordType>(targetVariantType);
+    if (!compoundType || !compoundType.isCompound())
+      return emitOpError(
+          "compound fields payload requires the selected variant member to be a compound record");
+    if (failed(verifyCompoundFields(getOperation(), compoundType, getFields())))
+      return mlir::failure();
+  }
+
+  return verifyRcCreateLikeOp(getOperation(), getRcPtr().getType(), variantType,
+                              getToken(), getRegion());
+}
+
+//===----------------------------------------------------------------------===//
+// RcCreateVariantOp TokenAcceptor Interface
+//===----------------------------------------------------------------------===//
+TokenType ReussirRcCreateVariantOp::getTokenType() {
+  auto rcBoxType = RcBoxType::get(getContext(), getRcPtr().getType().getElementType(),
+                                  getRegion() != nullptr);
+  auto dataLayout = mlir::DataLayout::closest(getOperation());
+  auto alignment = dataLayout.getTypeABIAlignment(rcBoxType);
+  auto size = dataLayout.getTypeSize(rcBoxType);
+  return TokenType::get(getContext(), alignment, size.getFixedValue());
+}
+
+//===----------------------------------------------------------------------===//
+// RcCreateVariantOp SymbolUserOpInterface
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRcCreateVariantOp::verifySymbolUses(
+    mlir::SymbolTableCollection &symbolTable) {
+  return verifyRcCreateLikeSymbolUses(
+      getOperation(), getRegion(), getRcPtr().getType().getElementType(),
+      getVtableAttr(), symbolTable);
 }
 
 //===----------------------------------------------------------------------===//

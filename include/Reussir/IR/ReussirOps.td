@@ -42,6 +42,21 @@ def ReussirPanicOp : ReussirOp<"panic", []> {
   }];
 }
 
+def ReussirExpectOp : ReussirOp<"expect", [Pure]> {
+  let summary = "Mark a condition as expected";
+  let description = [{
+    `reussir.expect` hints that a boolean condition is expected to evaluate to
+    true on the hot path.
+  }];
+
+  let arguments = (ins I1:$condition, I1Attr:$expected);
+  let results = (outs I1:$likely);
+
+  let assemblyFormat = [{
+    `(` $condition `:` type($condition) `,` $expected `)` `:` type($likely) attr-dict
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Reussir Token Operation
 //===----------------------------------------------------------------------===//
@@ -338,20 +353,43 @@ def ReussirRcDecOp : ReussirRcOp<"dec", [
   let hasVerifier = 1;
 }
 
-def ReussirRcFetchDecOp : ReussirRcOp<"fetch_dec", []> {
-  let summary = "Fetch and decrement a RC pointer";
+def ReussirRcFetchOp : ReussirRcOp<"fetch", []> {
+  let summary = "Fetch the reference count of a RC pointer";
   let description = [{
-    `reussir.rc.fetch_dec` fetches a decrement operation from a RC pointer.
+    `reussir.rc.fetch` fetches the current reference count from a RC pointer.
 
-    This serves as a low-level operation to implement the `reussir.rc.dec` operation.
-    It is not recommended to use this operation directly.
+    This serves as a low-level operation to implement `reussir.rc.dec` and
+    related RC management transforms. It is not recommended to use this
+    operation directly.
   }];
 
-  let arguments = (ins Arg<ReussirRcType, "Reference to fetch and decrement">:$rcPtr);
+  let arguments = (ins Arg<ReussirRcType, "Reference to inspect">:$rcPtr);
   let results = (outs Res<Index, "Reference count">:$refCount);
 
   let assemblyFormat = [{
     `(` $rcPtr `:` qualified(type($rcPtr)) `)` `:` type($refCount) attr-dict
+  }];
+}
+
+def ReussirRcSetOp : ReussirRcOp<"set", []> {
+  let summary = "Set the reference count of a RC pointer";
+  let description = [{
+    `reussir.rc.set` writes a reference count to a RC pointer.
+
+    This serves as a low-level operation to implement `reussir.rc.dec` and
+    related RC management transforms. It is not recommended to use this
+    operation directly.
+  }];
+
+  let arguments = (
+    ins
+      Arg<ReussirRcType, "Reference to update">:$rcPtr,
+      Arg<Index, "New reference count">:$refCount
+  );
+
+  let assemblyFormat = [{
+    `(` $rcPtr `:` qualified(type($rcPtr)) `,`
+    $refCount `:` type($refCount) `)` attr-dict
   }];
 }
 
@@ -401,7 +439,8 @@ def ReussirRcCreateOp : ReussirRcOp<"create", [
       Arg<AnyType, "value">:$value, 
       Optional<ReussirTokenType>:$token,
       Optional<ReussirRegionType>:$region,
-      OptionalAttr<FlatSymbolRefAttr>:$vtable
+      OptionalAttr<FlatSymbolRefAttr>:$vtable,
+      UnitAttr:$skipRc
   );
   let results = (outs Res<ReussirRcType, "Created RC pointer">:$rcPtr);
 
@@ -411,6 +450,7 @@ def ReussirRcCreateOp : ReussirRcOp<"create", [
       `token` `(` $token `:` type($token) `)`
     | `region` `(` $region `:` type($region) `)` 
     | `vtable` `(` $vtable `)`
+    | `skip_rc` $skipRc
     )
     `:` qualified(type($rcPtr)) attr-dict
   }];
@@ -419,6 +459,88 @@ def ReussirRcCreateOp : ReussirRcOp<"create", [
   let extraClassDeclaration = [{
     bool needsVTable() {
       auto recordType = llvm::dyn_cast<RecordType>(getValue().getType());
+      return getRegion() && recordType && !isTriviallyCopyable(recordType);
+    }
+  }];
+}
+
+def ReussirRcCreateCompoundOp : ReussirRcOp<"create_compound", [
+  AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+  DeclareOpInterfaceMethods<TokenAcceptorInterface>
+]> {
+  let summary = "Create a RC pointer from a compound record payload";
+  let description = [{
+    `reussir.rc.create_compound` fuses `reussir.record.compound` and
+    `reussir.rc.create` into a single operation. It stores the record fields
+    directly into the RC box payload.
+  }];
+
+  let arguments = (ins
+      Variadic<AnyType>:$fields,
+      Optional<ReussirTokenType>:$token,
+      Optional<ReussirRegionType>:$region,
+      OptionalAttr<FlatSymbolRefAttr>:$vtable,
+      UnitAttr:$skipRc
+  );
+  let results = (outs Res<ReussirRcType, "Created RC pointer">:$rcPtr);
+
+  let assemblyFormat = [{
+    (`(` $fields^ `:` type($fields) `)`)? 
+    oilist (
+      `token` `(` $token `:` type($token) `)`
+    | `region` `(` $region `:` type($region) `)`
+    | `vtable` `(` $vtable `)`
+    | `skip_rc` $skipRc
+    )
+    `:` qualified(type($rcPtr)) attr-dict
+  }];
+
+  let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    RecordType getRecordType() {
+      return llvm::dyn_cast<RecordType>(getRcPtr().getType().getElementType());
+    }
+
+    bool needsVTable() {
+      auto recordType = getRecordType();
+      return getRegion() && recordType && !isTriviallyCopyable(recordType);
+    }
+  }];
+}
+
+def ReussirRcCreateVariantOp : ReussirRcOp<"create_variant", [
+  AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+  DeclareOpInterfaceMethods<TokenAcceptorInterface>
+]> {
+  let summary = "Create a RC pointer from a variant record payload";
+  let description = [{
+    `reussir.rc.create_variant` fuses `reussir.record.variant` and
+    `reussir.rc.create` into a single operation. When the selected variant
+    payload is itself a compound record, the compound fields can be carried
+    directly to represent a fully fused `variant(compound(...))` materialization.
+  }];
+
+  let arguments = (ins
+      Arg<IndexAttr, "tag">:$tag,
+      Optional<AnyType>:$value,
+      Variadic<AnyType>:$fields,
+      Optional<ReussirTokenType>:$token,
+      Optional<ReussirRegionType>:$region,
+      OptionalAttr<FlatSymbolRefAttr>:$vtable,
+      UnitAttr:$skipRc
+  );
+  let results = (outs Res<ReussirRcType, "Created RC pointer">:$rcPtr);
+
+  let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    RecordType getRecordType() {
+      return llvm::dyn_cast<RecordType>(getRcPtr().getType().getElementType());
+    }
+
+    bool needsVTable() {
+      auto recordType = getRecordType();
       return getRegion() && recordType && !isTriviallyCopyable(recordType);
     }
   }];
