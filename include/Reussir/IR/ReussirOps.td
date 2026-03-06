@@ -481,7 +481,8 @@ def ReussirRcCreateCompoundOp : ReussirRcOp<"create_compound", [
       Optional<ReussirTokenType>:$token,
       Optional<ReussirRegionType>:$region,
       OptionalAttr<FlatSymbolRefAttr>:$vtable,
-      UnitAttr:$skipRc
+      UnitAttr:$skipRc,
+      OptionalAttr<DenseI64ArrayAttr>:$skipFields
   );
   let results = (outs Res<ReussirRcType, "Created RC pointer">:$rcPtr);
 
@@ -529,7 +530,8 @@ def ReussirRcCreateVariantOp : ReussirRcOp<"create_variant", [
       Optional<ReussirTokenType>:$token,
       Optional<ReussirRegionType>:$region,
       OptionalAttr<FlatSymbolRefAttr>:$vtable,
-      UnitAttr:$skipRc
+      UnitAttr:$skipRc,
+      OptionalAttr<DenseI64ArrayAttr>:$skipFields
   );
   let results = (outs Res<ReussirRcType, "Created RC pointer">:$rcPtr);
 

@@ -71,6 +71,17 @@ namespace reussir {
 
 namespace {
 
+bool shouldSkipFieldStore(mlir::Operation *op, int64_t index) {
+  auto skippedFields = op->getAttrOfType<mlir::DenseI64ArrayAttr>("skipFields");
+  if (!skippedFields)
+    return false;
+
+  for (int64_t skippedIndex : skippedFields.asArrayRef())
+    if (skippedIndex == index)
+      return true;
+  return false;
+}
+
 template <typename Op>
 void addLifetimeOrInvariantOp(mlir::OpBuilder &rewriter, mlir::Location loc,
                               mlir::Type type, mlir::Value value,
@@ -866,6 +877,8 @@ struct ReussirRcCreateCompoundOpConversionPattern
     auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
     auto llvmRecordType = converter->convertType(op.getRecordType());
     for (auto [index, field] : llvm::enumerate(adaptor.getFields())) {
+      if (shouldSkipFieldStore(op.getOperation(), static_cast<int64_t>(index)))
+        continue;
       auto fieldPtr = rewriter.create<mlir::LLVM::GEPOp>(
           op.getLoc(), llvmPtrType, llvmRecordType, storage->elementPtr,
           llvm::ArrayRef<mlir::LLVM::GEPArg>{0, static_cast<int32_t>(index)});
@@ -922,6 +935,9 @@ struct ReussirRcCreateVariantOpConversionPattern
             op.getRecordType().getMembers()[op.getTag().getZExtValue()]);
         auto llvmPayloadType = converter->convertType(payloadType);
         for (auto [index, field] : llvm::enumerate(adaptor.getFields())) {
+          if (shouldSkipFieldStore(op.getOperation(),
+                                   static_cast<int64_t>(index)))
+            continue;
           auto fieldPtr = rewriter.create<mlir::LLVM::GEPOp>(
               op.getLoc(), llvmPtrType, llvmPayloadType, payloadPtr,
               llvm::ArrayRef<mlir::LLVM::GEPArg>{0,
