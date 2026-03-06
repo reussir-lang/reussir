@@ -352,13 +352,16 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
                 if (!producedType)
                   continue;
                 mlir::Value condition = scfIf.getCondition();
-                auto cmp = dyn_cast_or_null<mlir::arith::CmpIOp>(
+                auto expectOp = dyn_cast_or_null<ReussirExpectOp>(
                     condition.getDefiningOp());
+                if (!expectOp)
+                  continue;
+                auto cmp = dyn_cast_or_null<mlir::arith::CmpIOp>(
+                    expectOp.getCondition().getDefiningOp());
                 if (!cmp)
                   continue;
-                auto rcFetch =
-                    llvm::dyn_cast_if_present<ReussirRcFetchOp>(
-                        cmp.getLhs().getDefiningOp());
+                auto rcFetch = llvm::dyn_cast_if_present<ReussirRcFetchOp>(
+                    cmp.getLhs().getDefiningOp());
                 mlir::TypedValue<RcType> producerRc =
                     rcFetch ? rcFetch.getRcPtr() : nullptr;
                 int score = hueristic(producedType, producerRc, acceptor,
