@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Reussir/Conversion/SCFOpsLowering.h"
+#include "Reussir/Conversion/RcDecrementExpansion.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirEnumAttrs.h"
 #include "Reussir/IR/ReussirOps.h"
@@ -34,6 +35,7 @@
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/IR/ValueRange.h>
 #include <mlir/Pass/Pass.h>
+#include <mlir/Support/LLVM.h>
 #include <utility>
 
 namespace reussir {
@@ -601,8 +603,25 @@ struct ReussirTokenEnsureOpRewritePattern
           rewriter.createBlock(&nullableDispatchOp.getNonNullRegion(), {},
                                op.getType(), {op.getLoc()});
       rewriter.setInsertionPointToStart(thenBlock);
+      mlir::Value tokenSrc = thenBlock->getArgument(0);
+      if (auto scfIf = mlir::dyn_cast_if_present<mlir::scf::IfOp>(
+              op.getNullableToken().getDefiningOp()))
+        if (scfIf->getAttr(kExpandedDecrementAttr)) {
+          auto thenYieldOp = mlir::dyn_cast_if_present<mlir::scf::YieldOp>(
+              scfIf.getThenRegion().back().getTerminator());
+          auto nullCreateOp =
+              mlir::dyn_cast_if_present<reussir::ReussirNullableCreateOp>(
+                  thenYieldOp->getOperands()[0].getDefiningOp());
+          auto reinterpretOp =
+              mlir::dyn_cast_if_present<reussir::ReussirRcReinterpretOp>(
+                  nullCreateOp.getPtr().getDefiningOp());
+          // it is safe since RC must dominate this path
+          if (reinterpretOp)
+            tokenSrc = rewriter.create<reussir::ReussirRcReinterpretOp>(
+                op.getLoc(), op.getType(), reinterpretOp.getRcPtr());
+        }
       auto launderedToken = rewriter.create<ReussirTokenLaunderOp>(
-          op.getLoc(), op.getType(), thenBlock->getArgument(0));
+          op.getLoc(), op.getType(), tokenSrc);
       rewriter.create<mlir::scf::YieldOp>(op.getLoc(),
                                           launderedToken->getResults());
     }

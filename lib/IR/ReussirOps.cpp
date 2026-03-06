@@ -41,6 +41,8 @@
 #include "Reussir/IR/ReussirTypes.h"
 #include "mlir/IR/PatternMatch.h"
 
+#include <llvm/ADT/DenseSet.h>
+
 #define GET_OP_CLASSES
 #include "Reussir/IR/ReussirOps.cpp.inc"
 
@@ -125,6 +127,21 @@ mlir::LogicalResult verifyCompoundFields(mlir::Operation *op, RecordType recordT
       return op->emitOpError("field type must match projected member type, ")
              << "field type: " << field.getType()
              << ", projected member type: " << projectedType;
+  }
+  return mlir::success();
+}
+
+mlir::LogicalResult verifySkippedFields(mlir::Operation *op, size_t fieldCount) {
+  auto skippedFields = op->getAttrOfType<mlir::DenseI64ArrayAttr>("skipFields");
+  if (!skippedFields)
+    return mlir::success();
+
+  llvm::DenseSet<int64_t> seen;
+  for (int64_t index : skippedFields.asArrayRef()) {
+    if (index < 0 || static_cast<size_t>(index) >= fieldCount)
+      return op->emitOpError("skipFields index out of bounds: ") << index;
+    if (!seen.insert(index).second)
+      return op->emitOpError("skipFields indices must be unique");
   }
   return mlir::success();
 }
@@ -349,6 +366,8 @@ mlir::LogicalResult ReussirRcCreateCompoundOp::verify() {
   RecordType recordType = getRecordType();
   if (failed(verifyCompoundFields(getOperation(), recordType, getFields())))
     return mlir::failure();
+  if (failed(verifySkippedFields(getOperation(), getFields().size())))
+    return mlir::failure();
   return verifyRcCreateLikeOp(getOperation(), getRcPtr().getType(), recordType,
                               getToken(), getRegion());
 }
@@ -424,6 +443,8 @@ mlir::LogicalResult ReussirRcCreateVariantOp::verify() {
     if (failed(verifyCompoundFields(getOperation(), compoundType, getFields())))
       return mlir::failure();
   }
+  if (failed(verifySkippedFields(getOperation(), getFields().size())))
+    return mlir::failure();
 
   return verifyRcCreateLikeOp(getOperation(), getRcPtr().getType(), variantType,
                               getToken(), getRegion());
