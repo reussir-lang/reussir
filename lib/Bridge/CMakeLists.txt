@@ -19,6 +19,7 @@ add_mlir_library(MLIRReussirBridge
     MLIRReussirBasicOpsLowering
     MLIRReussirSCFOpsLowering
     MLIRReussirRcCreateSink
+    MLIRReussirRcCreateFusion
     MLIRReussirInvariantGroupAnalysis
   LINK_COMPONENTS
     Core
@@ -35,6 +36,7 @@ add_mlir_library(MLIRReussirBridge
     MLIRReussirBasicOpsLowering
     MLIRReussirSCFOpsLowering
     MLIRReussirRcCreateSink
+    MLIRReussirRcCreateFusion
     MLIRReussirInvariantGroupAnalysis
     ReussirLLVMAllocationSimplicationPass
     spdlog::spdlog

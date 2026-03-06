@@ -10,6 +10,7 @@ add_mlir_tool(reussir-opt
     MLIRReussirBasicOpsLowering
     MLIRReussirSCFOpsLowering
   MLIRReussirRcCreateSink
+  MLIRReussirRcCreateFusion
   MLIRReussirRegionPatterns
     MLIRReussirAcquireDropExpansion
     MLIRReussirRcDecrementExpansion
@@ -31,6 +32,7 @@ target_link_libraries(reussir-opt
     MLIRReussirBasicOpsLowering
     MLIRReussirSCFOpsLowering
   MLIRReussirRcCreateSink
+  MLIRReussirRcCreateFusion
   MLIRReussirRegionPatterns
     MLIRReussirAcquireDropExpansion
     MLIRReussirRcDecrementExpansion

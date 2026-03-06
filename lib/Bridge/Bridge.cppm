@@ -191,6 +191,8 @@ void createLoweringPipeline(mlir::PassManager &pm,
 #else
   pm.addPass(createConvertSCFToCFPass());
 #endif
+  pm.addNestedPass<mlir::func::FuncOp>(
+      reussir::createReussirRcCreateFusionPass());
   pm.addPass(createReussirBasicOpsLoweringPass());
   pm.addPass(createConvertControlFlowToLLVMPass());
   pm.addPass(createReconcileUnrealizedCastsPass());

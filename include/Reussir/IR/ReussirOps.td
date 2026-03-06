@@ -464,6 +464,88 @@ def ReussirRcCreateOp : ReussirRcOp<"create", [
   }];
 }
 
+def ReussirRcCreateCompoundOp : ReussirRcOp<"create_compound", [
+  AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+  DeclareOpInterfaceMethods<TokenAcceptorInterface>
+]> {
+  let summary = "Create a RC pointer from a compound record payload";
+  let description = [{
+    `reussir.rc.create_compound` fuses `reussir.record.compound` and
+    `reussir.rc.create` into a single operation. It stores the record fields
+    directly into the RC box payload.
+  }];
+
+  let arguments = (ins
+      Variadic<AnyType>:$fields,
+      Optional<ReussirTokenType>:$token,
+      Optional<ReussirRegionType>:$region,
+      OptionalAttr<FlatSymbolRefAttr>:$vtable,
+      UnitAttr:$skipRc
+  );
+  let results = (outs Res<ReussirRcType, "Created RC pointer">:$rcPtr);
+
+  let assemblyFormat = [{
+    (`(` $fields^ `:` type($fields) `)`)? 
+    oilist (
+      `token` `(` $token `:` type($token) `)`
+    | `region` `(` $region `:` type($region) `)`
+    | `vtable` `(` $vtable `)`
+    | `skip_rc` $skipRc
+    )
+    `:` qualified(type($rcPtr)) attr-dict
+  }];
+
+  let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    RecordType getRecordType() {
+      return llvm::dyn_cast<RecordType>(getRcPtr().getType().getElementType());
+    }
+
+    bool needsVTable() {
+      auto recordType = getRecordType();
+      return getRegion() && recordType && !isTriviallyCopyable(recordType);
+    }
+  }];
+}
+
+def ReussirRcCreateVariantOp : ReussirRcOp<"create_variant", [
+  AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+  DeclareOpInterfaceMethods<TokenAcceptorInterface>
+]> {
+  let summary = "Create a RC pointer from a variant record payload";
+  let description = [{
+    `reussir.rc.create_variant` fuses `reussir.record.variant` and
+    `reussir.rc.create` into a single operation. When the selected variant
+    payload is itself a compound record, the compound fields can be carried
+    directly to represent a fully fused `variant(compound(...))` materialization.
+  }];
+
+  let arguments = (ins
+      Arg<IndexAttr, "tag">:$tag,
+      Optional<AnyType>:$value,
+      Variadic<AnyType>:$fields,
+      Optional<ReussirTokenType>:$token,
+      Optional<ReussirRegionType>:$region,
+      OptionalAttr<FlatSymbolRefAttr>:$vtable,
+      UnitAttr:$skipRc
+  );
+  let results = (outs Res<ReussirRcType, "Created RC pointer">:$rcPtr);
+
+  let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    RecordType getRecordType() {
+      return llvm::dyn_cast<RecordType>(getRcPtr().getType().getElementType());
+    }
+
+    bool needsVTable() {
+      auto recordType = getRecordType();
+      return getRegion() && recordType && !isTriviallyCopyable(recordType);
+    }
+  }];
+}
+
 def ReussirRcReinterpretOp : ReussirRcOp<"reinterpret", []> {
   let summary = "Reinterpret a Rc pointer into a token";
   let description = [{

@@ -753,23 +753,30 @@ struct ReussirRcIncConversionPattern
   }
 };
 
-struct ReussirRcCreateOpConversionPattern
-    : public mlir::OpConversionPattern<ReussirRcCreateOp> {
-  using OpConversionPattern::OpConversionPattern;
+namespace {
+struct RcCreateStorageInfo {
+  mlir::Value token;
+  mlir::Value elementPtr;
+  bool regional;
+};
 
-  mlir::LogicalResult
-  matchAndRewriteNormalRc(ReussirRcCreateOp op, OpAdaptor adaptor,
-                          RcType rcPtrTy, RcBoxType rcBoxType,
-                          mlir::ConversionPatternRewriter &rewriter) const {
-    // Implement the lowering for normal reference counted objects
-    if (rcPtrTy.getAtomicKind() == AtomicKind::atomic)
-      return op->emitError("TODO: atomic rc create");
+template <typename OpT, typename AdaptorT>
+mlir::FailureOr<RcCreateStorageInfo>
+initializeRcCreateStorage(OpT op, AdaptorT adaptor,
+                          const mlir::TypeConverter *typeConverter,
+                          mlir::ConversionPatternRewriter &rewriter) {
+  RcType rcPtrTy = op.getRcPtr().getType();
+  RcBoxType rcBoxType = rcPtrTy.getInnerBoxType();
+  if (rcPtrTy.getAtomicKind() == AtomicKind::atomic)
+    return op->emitError("TODO: atomic rc create"), mlir::failure();
 
-    auto convertedBoxType = getTypeConverter()->convertType(rcBoxType);
-    auto indexType = static_cast<const LLVMTypeConverter *>(getTypeConverter())
-                         ->getIndexType();
-    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
-    auto token = adaptor.getToken();
+  auto convertedBoxType = typeConverter->convertType(rcBoxType);
+  auto indexType =
+      static_cast<const LLVMTypeConverter *>(typeConverter)->getIndexType();
+  auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+  auto token = adaptor.getToken();
+
+  if (!rcBoxType.isRegional()) {
     if (!op.getSkipRc()) {
       auto one = rewriter.create<mlir::arith::ConstantOp>(
           op.getLoc(), mlir::IntegerAttr::get(indexType, 1));
@@ -781,72 +788,153 @@ struct ReussirRcCreateOpConversionPattern
     auto elementPtr = rewriter.create<mlir::LLVM::GEPOp>(
         op.getLoc(), llvmPtrType, convertedBoxType, token,
         llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
-    auto objectPtr = rewriter.create<mlir::LLVM::StoreOp>(
-        op.getLoc(), adaptor.getValue(), elementPtr);
-    objectPtr.setInvariantGroup(true);
-    rewriter.replaceOp(op, token);
-    return mlir::success();
+    return RcCreateStorageInfo{token, elementPtr, false};
   }
 
-  mlir::LogicalResult
-  matchAndRewriteRegionalRc(ReussirRcCreateOp op, OpAdaptor adaptor,
-                            RcType rcPtrTy, RcBoxType rcBoxType,
-                            mlir::ConversionPatternRewriter &rewriter) const {
-    // Implement the lowering for normal reference counted objects
-    if (rcPtrTy.getAtomicKind() == AtomicKind::atomic)
-      return op->emitError("TODO: atomic rc create");
-    if (!op.getToken())
-      return op->emitError("token is required but not provided");
-    auto convertedBoxType = getTypeConverter()->convertType(rcBoxType);
-    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
-    auto regionPtr = adaptor.getRegion();
-    auto tailPtr = rewriter.create<mlir::LLVM::LoadOp>(op.getLoc(), llvmPtrType,
-                                                       regionPtr);
-    auto null = rewriter.create<mlir::LLVM::ZeroOp>(op.getLoc(), llvmPtrType);
+  if (!op.getToken())
+    return op->emitError("token is required but not provided"), mlir::failure();
 
-    mlir::Value vtable;
-    if (op.needsVTable()) {
-      if (!op.getVtable())
-        return op->emitError("vtable is required but not provided");
-      vtable = rewriter.create<mlir::LLVM::AddressOfOp>(
-          op.getLoc(), llvmPtrType, *op.getVtable());
-    } else
-      vtable = null.getRes();
-    auto token = adaptor.getToken();
-    auto statePtr = rewriter.create<mlir::LLVM::GEPOp>(
-        op.getLoc(), llvmPtrType, convertedBoxType, token,
-        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
-    auto nextPtr = rewriter.create<mlir::LLVM::GEPOp>(
-        op.getLoc(), llvmPtrType, convertedBoxType, token,
-        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
-    auto vtablePtr = rewriter.create<mlir::LLVM::GEPOp>(
-        op.getLoc(), llvmPtrType, convertedBoxType, token,
-        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 2});
-    auto elementPtr = rewriter.create<mlir::LLVM::GEPOp>(
-        op.getLoc(), llvmPtrType, convertedBoxType, token,
-        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 3});
-    rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), null, statePtr);
-    rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), tailPtr, nextPtr);
-    auto vtableStore =
-        rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), vtable, vtablePtr);
-    vtableStore.setInvariantGroup(true);
-    rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), adaptor.getValue(),
-                                         elementPtr);
-    rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), token, regionPtr);
-    rewriter.replaceOp(op, token);
-    return mlir::success();
+  auto regionPtr = adaptor.getRegion();
+  auto tailPtr =
+      rewriter.create<mlir::LLVM::LoadOp>(op.getLoc(), llvmPtrType, regionPtr);
+  auto null = rewriter.create<mlir::LLVM::ZeroOp>(op.getLoc(), llvmPtrType);
+
+  mlir::Value vtable = null.getRes();
+  if (op.needsVTable()) {
+    if (!op.getVtable())
+      return op->emitError("vtable is required but not provided"),
+             mlir::failure();
+    vtable = rewriter.create<mlir::LLVM::AddressOfOp>(op.getLoc(), llvmPtrType,
+                                                      *op.getVtable());
   }
+
+  auto statePtr = rewriter.create<mlir::LLVM::GEPOp>(
+      op.getLoc(), llvmPtrType, convertedBoxType, token,
+      llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
+  auto nextPtr = rewriter.create<mlir::LLVM::GEPOp>(
+      op.getLoc(), llvmPtrType, convertedBoxType, token,
+      llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
+  auto vtablePtr = rewriter.create<mlir::LLVM::GEPOp>(
+      op.getLoc(), llvmPtrType, convertedBoxType, token,
+      llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 2});
+  auto elementPtr = rewriter.create<mlir::LLVM::GEPOp>(
+      op.getLoc(), llvmPtrType, convertedBoxType, token,
+      llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 3});
+  rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), null, statePtr);
+  rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), tailPtr, nextPtr);
+  auto vtableStore =
+      rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), vtable, vtablePtr);
+  vtableStore.setInvariantGroup(true);
+  rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), token, regionPtr);
+  return RcCreateStorageInfo{token, elementPtr, true};
+}
+} // namespace
+
+struct ReussirRcCreateOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirRcCreateOp> {
+  using OpConversionPattern::OpConversionPattern;
 
   mlir::LogicalResult
   matchAndRewrite(ReussirRcCreateOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    RcType rcPtrTy = op.getRcPtr().getType();
-    RcBoxType rcBoxType = rcPtrTy.getInnerBoxType();
-    if (rcBoxType.isRegional())
-      return matchAndRewriteRegionalRc(op, adaptor, rcPtrTy, rcBoxType,
-                                       rewriter);
+    auto storage =
+        initializeRcCreateStorage(op, adaptor, getTypeConverter(), rewriter);
+    if (mlir::failed(storage))
+      return mlir::failure();
+    auto objectStore = rewriter.create<mlir::LLVM::StoreOp>(
+        op.getLoc(), adaptor.getValue(), storage->elementPtr);
+    if (!storage->regional)
+      objectStore.setInvariantGroup(true);
+    rewriter.replaceOp(op, storage->token);
+    return mlir::success();
+  }
+};
 
-    return matchAndRewriteNormalRc(op, adaptor, rcPtrTy, rcBoxType, rewriter);
+struct ReussirRcCreateCompoundOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirRcCreateCompoundOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRcCreateCompoundOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto storage =
+        initializeRcCreateStorage(op, adaptor, getTypeConverter(), rewriter);
+    if (mlir::failed(storage))
+      return mlir::failure();
+
+    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    auto llvmRecordType = converter->convertType(op.getRecordType());
+    for (auto [index, field] : llvm::enumerate(adaptor.getFields())) {
+      auto fieldPtr = rewriter.create<mlir::LLVM::GEPOp>(
+          op.getLoc(), llvmPtrType, llvmRecordType, storage->elementPtr,
+          llvm::ArrayRef<mlir::LLVM::GEPArg>{0, static_cast<int32_t>(index)});
+      auto store =
+          rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), field, fieldPtr);
+      store.setInvariantGroup(true);
+    }
+
+    rewriter.replaceOp(op, storage->token);
+    return mlir::success();
+  }
+};
+
+struct ReussirRcCreateVariantOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirRcCreateVariantOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRcCreateVariantOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto storage =
+        initializeRcCreateStorage(op, adaptor, getTypeConverter(), rewriter);
+    if (mlir::failed(storage))
+      return mlir::failure();
+
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto llvmVariantType = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(
+        converter->convertType(op.getRecordType()));
+    if (!llvmVariantType)
+      return op.emitOpError("failed to convert record type to LLVM type");
+
+    auto indexType = converter->getIndexType();
+    auto tag = rewriter.create<mlir::arith::ConstantOp>(
+        op.getLoc(),
+        mlir::IntegerAttr::get(indexType, op.getTag().getZExtValue()));
+    auto tagPtr = rewriter.create<mlir::LLVM::GEPOp>(
+        op.getLoc(), llvmPtrType, llvmVariantType, storage->elementPtr,
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
+    auto tagStore =
+        rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), tag, tagPtr);
+    tagStore.setInvariantGroup(true);
+
+    if (llvmVariantType.getSubelementIndexMap()->size() > 1) {
+      auto payloadPtr = rewriter.create<mlir::LLVM::GEPOp>(
+          op.getLoc(), llvmPtrType, llvmVariantType, storage->elementPtr,
+          llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
+      if (op.getValue()) {
+        auto payloadStore = rewriter.create<mlir::LLVM::StoreOp>(
+            op.getLoc(), adaptor.getValue(), payloadPtr);
+        payloadStore.setInvariantGroup(true);
+      } else {
+        auto payloadType = llvm::cast<RecordType>(
+            op.getRecordType().getMembers()[op.getTag().getZExtValue()]);
+        auto llvmPayloadType = converter->convertType(payloadType);
+        for (auto [index, field] : llvm::enumerate(adaptor.getFields())) {
+          auto fieldPtr = rewriter.create<mlir::LLVM::GEPOp>(
+              op.getLoc(), llvmPtrType, llvmPayloadType, payloadPtr,
+              llvm::ArrayRef<mlir::LLVM::GEPArg>{0,
+                                                 static_cast<int32_t>(index)});
+          auto store = rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), field,
+                                                            fieldPtr);
+          store.setInvariantGroup(true);
+        }
+      }
+    }
+
+    rewriter.replaceOp(op, storage->token);
+    return mlir::success();
   }
 };
 
@@ -2311,18 +2399,19 @@ struct BasicOpsLoweringPass
           ReussirRefDiffOp, ReussirRefCmpOp, ReussirRefMemcpyOp,
           ReussirNullableCheckOp, ReussirNullableCreateOp,
           ReussirNullableCoerceOp, ReussirRcIncOp, ReussirRcCreateOp,
-          ReussirRcDecOp, ReussirRcBorrowOp, ReussirRcIsUniqueOp,
-          ReussirRecordCompoundOp, ReussirRecordVariantOp, ReussirRefProjectOp,
-          ReussirRecordTagOp, ReussirRecordExtractOp, ReussirRecordCoerceOp,
-          ReussirRegionVTableOp, ReussirRcFreezeOp, ReussirRegionCleanupOp,
-          ReussirRegionCreateOp, ReussirRcReinterpretOp, ReussirClosureApplyOp,
-          ReussirClosureCloneOp, ReussirClosureEvalOp,
-          ReussirClosureInspectPayloadOp, ReussirClosureCursorOp,
-          ReussirClosureInstantiateOp, ReussirClosureVtableOp,
-          ReussirClosureCreateOp, ReussirRcFetchOp, ReussirRcSetOp,
-          ReussirStrGlobalOp, ReussirStrLiteralOp, ReussirStrLenOp,
-          ReussirStrUnsafeByteAtOp, ReussirStrUnsafeStartWithOp,
-          ReussirStrSliceOp, ReussirTrampolineOp, ReussirTokenLaunderOp>();
+          ReussirRcCreateCompoundOp, ReussirRcCreateVariantOp, ReussirRcDecOp,
+          ReussirRcBorrowOp, ReussirRcIsUniqueOp, ReussirRecordCompoundOp,
+          ReussirRecordVariantOp, ReussirRefProjectOp, ReussirRecordTagOp,
+          ReussirRecordExtractOp, ReussirRecordCoerceOp, ReussirRegionVTableOp,
+          ReussirRcFreezeOp, ReussirRegionCleanupOp, ReussirRegionCreateOp,
+          ReussirRcReinterpretOp, ReussirClosureApplyOp, ReussirClosureCloneOp,
+          ReussirClosureEvalOp, ReussirClosureInspectPayloadOp,
+          ReussirClosureCursorOp, ReussirClosureInstantiateOp,
+          ReussirClosureVtableOp, ReussirClosureCreateOp, ReussirRcFetchOp,
+          ReussirRcSetOp, ReussirStrGlobalOp, ReussirStrLiteralOp,
+          ReussirStrLenOp, ReussirStrUnsafeByteAtOp,
+          ReussirStrUnsafeStartWithOp, ReussirStrSliceOp, ReussirTrampolineOp,
+          ReussirTokenLaunderOp>();
       target.addLegalDialect<mlir::LLVM::LLVMDialect>();
       if (failed(applyPartialConversion(getOperation(), target,
                                         std::move(patterns))))
@@ -2346,6 +2435,8 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirNullableCreateConversionPattern,
       ReussirNullableCoerceConversionPattern, ReussirRcIncConversionPattern,
       ReussirRcDecOpConversionPattern, ReussirRcCreateOpConversionPattern,
+      ReussirRcCreateCompoundOpConversionPattern,
+      ReussirRcCreateVariantOpConversionPattern,
       ReussirRcBorrowOpConversionPattern, ReussirRcIsUniqueOpConversionPattern,
       ReussirRecordCompoundConversionPattern,
       ReussirRecordExtractConversionPattern,
