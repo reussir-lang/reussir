@@ -15,4 +15,7 @@ stacker = { version = "0.1.21" }
 default = ["mimalloc"]
 
 [lib]
-crate-type = ["dylib", "lib"]
+crate-type = ["dylib", "lib", "staticlib"]
+
+[profile.release]
+lto = "thin"
