@@ -43,7 +43,6 @@ module;
 #include <mlir/Dialect/ControlFlow/IR/ControlFlow.h>
 #include <mlir/Dialect/DLTI/DLTI.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
-#include <mlir/InitAllExtensions.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
@@ -55,6 +54,7 @@ module;
 #include <mlir/IR/Diagnostics.h>
 #include <mlir/IR/DialectRegistry.h>
 #include <mlir/InitAllDialects.h>
+#include <mlir/InitAllExtensions.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
 #include <mlir/Parser/Parser.h>
 #include <mlir/Pass/PassManager.h>
@@ -146,6 +146,8 @@ void createLoweringPipeline(mlir::PassManager &pm,
                             bool enableInvariantAnalysis = false) {
   if (opt != REUSSIR_OPT_NONE) {
     llvm::StringMap<mlir::OpPassManager> pipelines;
+    if (opt == REUSSIR_OPT_AGGRESSIVE)
+      pm.addPass(reussir::createReussirUniqueCarryingRecursionAnalysisPass());
     // The default inliner pass adds the canonicalizer pass with the default
     // configuration.
     pm.addPass(mlir::createInlinerPass(
@@ -177,7 +179,8 @@ void createLoweringPipeline(mlir::PassManager &pm,
         reussir::createReussirTokenReusePass(tokenReuseOpts));
   }
   pm.addPass(reussir::createReussirSCFOpsLoweringPass());
-  pm.addNestedPass<mlir::func::FuncOp>(reussir::createReussirRcCreateSinkPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      reussir::createReussirRcCreateSinkPass());
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirRcCreateFusionPass());
   pm.addPass(reussir::createReussirCompilePolymorphicFFIPass());
@@ -330,11 +333,9 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
   return context;
 }
 
-std::unique_ptr<mlir::PassManager>
-buildPassManager(mlir::MLIRContext &context,
-                 ReussirOptOption opt = REUSSIR_OPT_DEFAULT,
-                 bool reuseTokenAcrossCall = false,
-                 bool enableInvariantAnalysis = false) {
+std::unique_ptr<mlir::PassManager> buildPassManager(
+    mlir::MLIRContext &context, ReussirOptOption opt = REUSSIR_OPT_DEFAULT,
+    bool reuseTokenAcrossCall = false, bool enableInvariantAnalysis = false) {
   auto pm = std::make_unique<mlir::PassManager>(&context);
   createLoweringPipeline(*pm, opt, reuseTokenAcrossCall,
                          enableInvariantAnalysis);
