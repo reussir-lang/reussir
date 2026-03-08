@@ -558,6 +558,20 @@ mlir::LogicalResult ReussirRcIsUniqueOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// RcAssumeUniqueOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRcAssumeUniqueOp::verify() {
+  RcType rcType = getRcPtr().getType();
+
+  if (rcType.isRegional())
+    return emitOpError("assumeUnique can only be applied to non-regional RC "
+                       "(shared capability), ")
+           << "got: " << stringifyCapability(rcType.getCapability());
+
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Record Operations
 //===----------------------------------------------------------------------===//
 // RecordCompoundOp verification

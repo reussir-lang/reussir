@@ -1313,33 +1313,51 @@ struct ReussirRcIsUniqueOpConversionPattern
     : public mlir::OpConversionPattern<ReussirRcIsUniqueOp> {
   using OpConversionPattern::OpConversionPattern;
 
+  static mlir::Value
+  buildUniquenessCondition(mlir::Location loc, RcType rcPtrTy,
+                           mlir::Value rcPtr,
+                           const mlir::TypeConverter *typeConverter,
+                           mlir::ConversionPatternRewriter &rewriter) {
+    RcBoxType rcBoxType = rcPtrTy.getInnerBoxType();
+    auto convertedBoxType = typeConverter->convertType(rcBoxType);
+    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto indexType =
+        static_cast<const LLVMTypeConverter *>(typeConverter)->getIndexType();
+
+    auto refcntPtr = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, llvmPtrType, convertedBoxType, rcPtr,
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
+    auto refcnt = rewriter.create<mlir::LLVM::LoadOp>(loc, indexType, refcntPtr);
+    auto one = rewriter.create<mlir::arith::ConstantOp>(
+        loc, mlir::IntegerAttr::get(indexType, 1));
+    return rewriter.create<mlir::arith::CmpIOp>(
+        loc, mlir::arith::CmpIPredicate::eq, refcnt, one);
+  }
+
   mlir::LogicalResult
   matchAndRewrite(ReussirRcIsUniqueOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
     RcType rcPtrTy = op.getRcPtr().getType();
-
-    RcBoxType rcBoxType = rcPtrTy.getInnerBoxType();
-    auto convertedBoxType = getTypeConverter()->convertType(rcBoxType);
-    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
-    auto indexType = static_cast<const LLVMTypeConverter *>(getTypeConverter())
-                         ->getIndexType();
-
-    // GEP [0, 0] to locate refcnt
-    auto refcntPtr = rewriter.create<mlir::LLVM::GEPOp>(
-        op.getLoc(), llvmPtrType, convertedBoxType, adaptor.getRcPtr(),
-        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
-
-    // Load refcnt
-    auto refcnt =
-        rewriter.create<mlir::LLVM::LoadOp>(op.getLoc(), indexType, refcntPtr);
-
-    // Compare with 1 (unique means refcnt == 1)
-    auto one = rewriter.create<mlir::arith::ConstantOp>(
-        op.getLoc(), mlir::IntegerAttr::get(indexType, 1));
-    auto isUnique = rewriter.create<mlir::arith::CmpIOp>(
-        op.getLoc(), mlir::arith::CmpIPredicate::eq, refcnt, one);
-
+    auto isUnique = buildUniquenessCondition(op.getLoc(), rcPtrTy,
+                                             adaptor.getRcPtr(),
+                                             getTypeConverter(), rewriter);
     rewriter.replaceOp(op, isUnique);
+    return mlir::success();
+  }
+};
+
+struct ReussirRcAssumeUniqueOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirRcAssumeUniqueOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRcAssumeUniqueOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto isUnique = ReussirRcIsUniqueOpConversionPattern::buildUniquenessCondition(
+        op.getLoc(), op.getRcPtr().getType(), adaptor.getRcPtr(),
+        getTypeConverter(), rewriter);
+    rewriter.create<mlir::LLVM::AssumeOp>(op.getLoc(), isUnique);
+    rewriter.eraseOp(op);
     return mlir::success();
   }
 };
@@ -2416,7 +2434,8 @@ struct BasicOpsLoweringPass
           ReussirNullableCheckOp, ReussirNullableCreateOp,
           ReussirNullableCoerceOp, ReussirRcIncOp, ReussirRcCreateOp,
           ReussirRcCreateCompoundOp, ReussirRcCreateVariantOp, ReussirRcDecOp,
-          ReussirRcBorrowOp, ReussirRcIsUniqueOp, ReussirRecordCompoundOp,
+          ReussirRcBorrowOp, ReussirRcIsUniqueOp, ReussirRcAssumeUniqueOp,
+          ReussirRecordCompoundOp,
           ReussirRecordVariantOp, ReussirRefProjectOp, ReussirRecordTagOp,
           ReussirRecordExtractOp, ReussirRecordCoerceOp, ReussirRegionVTableOp,
           ReussirRcFreezeOp, ReussirRegionCleanupOp, ReussirRegionCreateOp,
@@ -2454,6 +2473,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirRcCreateCompoundOpConversionPattern,
       ReussirRcCreateVariantOpConversionPattern,
       ReussirRcBorrowOpConversionPattern, ReussirRcIsUniqueOpConversionPattern,
+      ReussirRcAssumeUniqueOpConversionPattern,
       ReussirRecordCompoundConversionPattern,
       ReussirRecordExtractConversionPattern,
       ReussirRecordVariantConversionPattern,

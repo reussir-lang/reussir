@@ -395,6 +395,11 @@ struct ReussirNullableDispatchOpRewritePattern
     auto scfIfOp = rewriter.create<mlir::scf::IfOp>(
         op.getLoc(), op->getResultTypes(), flag, /*addThenRegion=*/true,
         /*addElseRegion=*/true);
+    if (op->hasAttr(REUSSIR_EXPANDED_ENSURE_ATTR))
+      if (auto producerIf = mlir::dyn_cast_if_present<mlir::scf::IfOp>(
+              op.getNullable().getDefiningOp()))
+        if (producerIf->hasAttr(kExpandedDecrementAttr))
+          scfIfOp.getConditionMutable().assign(producerIf.getCondition());
     // first, do the easy part, for else region, we can just inline the
     // operation
     rewriter.inlineBlockBefore(&*op.getNullRegion().begin(),
