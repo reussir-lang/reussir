@@ -286,13 +286,14 @@ emitDirectRecursiveTailCall(mlir::Operation *terminator,
 }
 
 static std::optional<unsigned>
-findFirstRecursiveFieldIndex(mlir::ValueRange fields, llvm::StringRef callee) {
-  for (auto [index, field] : llvm::enumerate(fields)) {
-    auto callOp =
-        llvm::dyn_cast_if_present<mlir::func::CallOp>(field.getDefiningOp());
+findLastRecursiveFieldIndex(mlir::ValueRange fields, llvm::StringRef callee) {
+  for (size_t i = fields.size(); i != 0; --i) {
+    unsigned index = static_cast<unsigned>(i - 1);
+    auto callOp = llvm::dyn_cast_if_present<mlir::func::CallOp>(
+        fields[index].getDefiningOp());
     if (!callOp || callOp.getCallee() != callee)
       continue;
-    return static_cast<unsigned>(index);
+    return index;
   }
   return std::nullopt;
 }
@@ -301,7 +302,7 @@ static bool isLinearizableCreateUser(mlir::Operation *user,
                                      mlir::func::CallOp callOp,
                                      llvm::StringRef callee) {
   auto isRecursiveFieldUser = [&](mlir::ValueRange fields) {
-    auto recursiveIndex = findFirstRecursiveFieldIndex(fields, callee);
+    auto recursiveIndex = findLastRecursiveFieldIndex(fields, callee);
     return recursiveIndex &&
            fields[*recursiveIndex].getDefiningOp() == callOp.getOperation();
   };
@@ -364,8 +365,8 @@ static bool isSameLinearizableCreateSite(mlir::Operation *lhs, mlir::Operation *
 
   auto sameRecursiveIndex = [&](mlir::ValueRange lhsFields,
                                 mlir::ValueRange rhsFields) {
-    return findFirstRecursiveFieldIndex(lhsFields, originalName) ==
-           findFirstRecursiveFieldIndex(rhsFields, originalName);
+    return findLastRecursiveFieldIndex(lhsFields, originalName) ==
+           findLastRecursiveFieldIndex(rhsFields, originalName);
   };
 
   if (auto lhsCreate = llvm::dyn_cast<ReussirRcCreateCompoundOp>(lhs)) {
@@ -432,7 +433,7 @@ emitRecursiveCreateIntoHole(mlir::Operation *terminator, mlir::Value value,
   if (auto create = llvm::dyn_cast_if_present<ReussirRcCreateCompoundOp>(
           value.getDefiningOp())) {
     auto recursiveIndex =
-        findFirstRecursiveFieldIndex(create.getFields(), ctx.originalName);
+        findLastRecursiveFieldIndex(create.getFields(), ctx.originalName);
     if (!recursiveIndex)
       return mlir::failure();
 
@@ -475,7 +476,7 @@ emitRecursiveCreateIntoHole(mlir::Operation *terminator, mlir::Value value,
     return mlir::failure();
 
   auto recursiveIndex =
-      findFirstRecursiveFieldIndex(create.getFields(), ctx.originalName);
+      findLastRecursiveFieldIndex(create.getFields(), ctx.originalName);
   if (!recursiveIndex)
     return mlir::failure();
 
@@ -518,7 +519,7 @@ static mlir::LogicalResult rewriteRecursiveCreateSite(
     llvm::StringRef helperName, mlir::IRRewriter &rewriter) {
   if (auto create = llvm::dyn_cast<ReussirRcCreateCompoundOp>(createOp)) {
     auto recursiveIndex =
-        findFirstRecursiveFieldIndex(create.getFields(), originalName);
+        findLastRecursiveFieldIndex(create.getFields(), originalName);
     if (!recursiveIndex)
       return mlir::failure();
 
@@ -554,7 +555,7 @@ static mlir::LogicalResult rewriteRecursiveCreateSite(
     return mlir::failure();
 
   auto recursiveIndex =
-      findFirstRecursiveFieldIndex(create.getFields(), originalName);
+      findLastRecursiveFieldIndex(create.getFields(), originalName);
   if (!recursiveIndex)
     return mlir::failure();
 

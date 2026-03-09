@@ -46,7 +46,7 @@ module {
   // CHECK-LABEL: func.func private @map_plus1.trmc(
   // CHECK-SAME: %[[LIST:.+]]: !reussir.rc<!reussir.record<variant "List"
   // CHECK-SAME: %[[OUTARG:.+]]: !reussir.hole<!reussir.rc<!reussir.record<variant "List"
-  // CHECK-SAME: attributes {llvm.linkage = #llvm.linkage<internal>}
+  // CHECK-SAME: {llvm.noalias, llvm.nonnull, llvm.noundef}) attributes {llvm.linkage = #llvm.linkage<internal>}
   // CHECK: reussir.record.dispatch
   // CHECK: %[[NEW:.+]], %[[TAILHOLE:.+]] = "reussir.rc.create_variant"(%{{.+}}, %{{.+}}) <{holeFields = array<i64: 1>, operandSegmentSizes = array<i32: 0, 2, 0, 0>, tag = 0 : index}>
   // CHECK-SAME: : (i64, !reussir.rc<!reussir.record<variant "List"
