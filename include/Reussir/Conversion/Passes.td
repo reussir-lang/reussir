@@ -317,9 +317,10 @@ def ReussirTRMCRecursionAnalysisPass
     `reussir.rc.create_compound` or `reussir.rc.create_variant` site.
     It outlines an internal `.trmc` helper with an explicit `reussir.hole`
     out-parameter and rewrites the recursive site to allocate the outer RC box
-    first, expose a pending-field hole, and tail-call the helper. When a fused
-    create site contains multiple direct self-calls, the pass linearizes the
-    first recursive field and leaves the remaining recursive calls in place.
+    first, expose pending-field holes, and redirect the recursive fields
+    through the helper. When a fused create site contains multiple direct
+    self-calls, the pass forwards all of them through the generated holes while
+    still falling back to the original function for non-linear recursive sites.
   }];
   let dependentDialects = ["::reussir::ReussirDialect",
                            "::mlir::func::FuncDialect",

@@ -28,6 +28,11 @@ namespace {
 
 static constexpr llvm::StringLiteral kTrmcSuffix = ".trmc";
 
+struct RecursiveFieldInfo {
+  unsigned index;
+  mlir::func::CallOp call;
+};
+
 struct TrmcRewriteContext {
   mlir::IRRewriter &rewriter;
   mlir::func::FuncOp helperFunc;
@@ -285,26 +290,53 @@ emitDirectRecursiveTailCall(mlir::Operation *terminator,
   return mlir::success();
 }
 
-static std::optional<unsigned>
-findLastRecursiveFieldIndex(mlir::ValueRange fields, llvm::StringRef callee) {
-  for (size_t i = fields.size(); i != 0; --i) {
-    unsigned index = static_cast<unsigned>(i - 1);
-    auto callOp = llvm::dyn_cast_if_present<mlir::func::CallOp>(
-        fields[index].getDefiningOp());
+static std::optional<llvm::SmallVector<RecursiveFieldInfo>>
+collectRecursiveFields(mlir::ValueRange fields, llvm::StringRef callee) {
+  llvm::SmallVector<RecursiveFieldInfo> recursiveFields;
+  llvm::DenseSet<mlir::Operation *> seenCalls;
+  for (auto [index, field] : llvm::enumerate(fields)) {
+    auto callOp =
+        llvm::dyn_cast_if_present<mlir::func::CallOp>(field.getDefiningOp());
     if (!callOp || callOp.getCallee() != callee)
       continue;
-    return index;
+    if (!seenCalls.insert(callOp.getOperation()).second)
+      return std::nullopt;
+    recursiveFields.push_back(
+        RecursiveFieldInfo{static_cast<unsigned>(index), callOp});
   }
-  return std::nullopt;
+  return recursiveFields;
+}
+
+static std::optional<llvm::SmallVector<RecursiveFieldInfo>>
+collectRecursiveFields(mlir::Operation *createOp, llvm::StringRef callee) {
+  if (auto create = llvm::dyn_cast<ReussirRcCreateCompoundOp>(createOp))
+    return collectRecursiveFields(create.getFields(), callee);
+
+  auto create = llvm::dyn_cast<ReussirRcCreateVariantOp>(createOp);
+  if (!create || create.getValue())
+    return std::nullopt;
+  return collectRecursiveFields(create.getFields(), callee);
+}
+
+static llvm::SmallVector<int64_t>
+getRecursiveFieldIndices(llvm::ArrayRef<RecursiveFieldInfo> recursiveFields) {
+  llvm::SmallVector<int64_t> indices;
+  indices.reserve(recursiveFields.size());
+  for (const RecursiveFieldInfo &field : recursiveFields)
+    indices.push_back(static_cast<int64_t>(field.index));
+  return indices;
 }
 
 static bool isLinearizableCreateUser(mlir::Operation *user,
                                      mlir::func::CallOp callOp,
                                      llvm::StringRef callee) {
   auto isRecursiveFieldUser = [&](mlir::ValueRange fields) {
-    auto recursiveIndex = findLastRecursiveFieldIndex(fields, callee);
-    return recursiveIndex &&
-           fields[*recursiveIndex].getDefiningOp() == callOp.getOperation();
+    auto recursiveFields = collectRecursiveFields(fields, callee);
+    if (!recursiveFields)
+      return false;
+    return llvm::any_of(*recursiveFields, [&](const RecursiveFieldInfo &field) {
+      return field.call == callOp;
+    });
   };
 
   if (auto create = llvm::dyn_cast<ReussirRcCreateCompoundOp>(user))
@@ -365,8 +397,11 @@ static bool isSameLinearizableCreateSite(mlir::Operation *lhs, mlir::Operation *
 
   auto sameRecursiveIndex = [&](mlir::ValueRange lhsFields,
                                 mlir::ValueRange rhsFields) {
-    return findLastRecursiveFieldIndex(lhsFields, originalName) ==
-           findLastRecursiveFieldIndex(rhsFields, originalName);
+    auto lhsRecursiveFields = collectRecursiveFields(lhsFields, originalName);
+    auto rhsRecursiveFields = collectRecursiveFields(rhsFields, originalName);
+    return lhsRecursiveFields && rhsRecursiveFields &&
+           getRecursiveFieldIndices(*lhsRecursiveFields) ==
+               getRecursiveFieldIndices(*rhsRecursiveFields);
   };
 
   if (auto lhsCreate = llvm::dyn_cast<ReussirRcCreateCompoundOp>(lhs)) {
@@ -396,10 +431,13 @@ static bool hasMeaningfulSiblingSelfCall(mlir::Region &region,
 }
 
 static bool isSiteEligibleForTrmc(mlir::Operation *createOp,
-                                  mlir::func::CallOp recursiveCall,
                                   llvm::StringRef originalName) {
-  if (!isCallOnlyUsedByLinearizableCreates(recursiveCall, originalName))
+  auto recursiveFields = collectRecursiveFields(createOp, originalName);
+  if (!recursiveFields || recursiveFields->empty())
     return false;
+  for (const RecursiveFieldInfo &field : *recursiveFields)
+    if (!isCallOnlyUsedByLinearizableCreates(field.call, originalName))
+      return false;
 
   mlir::Region *currentRegion = createOp->getParentRegion();
   mlir::Operation *parentOp =
@@ -432,23 +470,20 @@ emitRecursiveCreateIntoHole(mlir::Operation *terminator, mlir::Value value,
                             TrmcRewriteContext &ctx) {
   if (auto create = llvm::dyn_cast_if_present<ReussirRcCreateCompoundOp>(
           value.getDefiningOp())) {
-    auto recursiveIndex =
-        findLastRecursiveFieldIndex(create.getFields(), ctx.originalName);
-    if (!recursiveIndex)
+    auto recursiveFields =
+        collectRecursiveFields(create.getOperation(), ctx.originalName);
+    if (!recursiveFields || recursiveFields->empty())
       return mlir::failure();
-
-    auto recursiveCall = llvm::cast<mlir::func::CallOp>(
-        create.getFields()[*recursiveIndex].getDefiningOp());
-    if (!isSiteEligibleForTrmc(create.getOperation(), recursiveCall,
-                               ctx.originalName))
+    if (!isSiteEligibleForTrmc(create.getOperation(), ctx.originalName))
       return mlir::failure();
     llvm::SmallVector<mlir::Value> fields(create.getFields().begin(),
                                           create.getFields().end());
     ctx.rewriter.setInsertionPoint(terminator);
-    fields[*recursiveIndex] = ctx.rewriter.create<mlir::ub::PoisonOp>(
-        create.getLoc(), fields[*recursiveIndex].getType());
-    auto holeFields = ctx.rewriter.getDenseI64ArrayAttr(
-        {static_cast<int64_t>(*recursiveIndex)});
+    for (const RecursiveFieldInfo &field : *recursiveFields)
+      fields[field.index] = ctx.rewriter.create<mlir::ub::PoisonOp>(
+          create.getLoc(), fields[field.index].getType());
+    auto holeFields =
+        ctx.rewriter.getDenseI64ArrayAttr(getRecursiveFieldIndices(*recursiveFields));
     auto newCreate = createCompoundWithHoles(
         ctx.rewriter, create.getLoc(), create.getRcPtr().getType(), fields,
         create.getToken(), create.getRegion(), create.getVtableAttr(),
@@ -456,17 +491,21 @@ emitRecursiveCreateIntoHole(mlir::Operation *terminator, mlir::Value value,
     ctx.rewriter.setInsertionPointAfter(newCreate);
     auto store = ctx.rewriter.create<ReussirHoleStoreOp>(
         create.getLoc(), ctx.outHole, newCreate.getRcPtr());
-    llvm::SmallVector<mlir::Value> helperArgs(recursiveCall.getOperands());
-    helperArgs.push_back(newCreate.getHoles().front());
-    ctx.rewriter.setInsertionPointAfter(store);
-    ctx.rewriter.create<mlir::func::CallOp>(
-        recursiveCall.getLoc(), ctx.helperName, mlir::TypeRange{}, helperArgs);
+    mlir::Operation *insertionPoint = store;
+    for (auto [field, hole] : llvm::zip(*recursiveFields, newCreate.getHoles())) {
+      llvm::SmallVector<mlir::Value> helperArgs(field.call.getOperands());
+      helperArgs.push_back(hole);
+      ctx.rewriter.setInsertionPointAfter(insertionPoint);
+      insertionPoint = ctx.rewriter.create<mlir::func::CallOp>(
+          field.call.getLoc(), ctx.helperName, mlir::TypeRange{}, helperArgs);
+    }
     ctx.rewroteRecursiveSite = true;
     if (failed(replaceWithVoidTerminator(ctx.rewriter, terminator)))
       return mlir::failure();
     ctx.rewriter.eraseOp(create);
-    if (recursiveCall.use_empty())
-      ctx.rewriter.eraseOp(recursiveCall);
+    for (RecursiveFieldInfo &field : *recursiveFields)
+      if (field.call.use_empty())
+        ctx.rewriter.eraseOp(field.call);
     return mlir::success();
   }
 
@@ -475,23 +514,20 @@ emitRecursiveCreateIntoHole(mlir::Operation *terminator, mlir::Value value,
   if (!create || create.getValue())
     return mlir::failure();
 
-  auto recursiveIndex =
-      findLastRecursiveFieldIndex(create.getFields(), ctx.originalName);
-  if (!recursiveIndex)
+  auto recursiveFields =
+      collectRecursiveFields(create.getOperation(), ctx.originalName);
+  if (!recursiveFields || recursiveFields->empty())
     return mlir::failure();
-
-  auto recursiveCall = llvm::cast<mlir::func::CallOp>(
-      create.getFields()[*recursiveIndex].getDefiningOp());
-  if (!isSiteEligibleForTrmc(create.getOperation(), recursiveCall,
-                             ctx.originalName))
+  if (!isSiteEligibleForTrmc(create.getOperation(), ctx.originalName))
     return mlir::failure();
   llvm::SmallVector<mlir::Value> fields(create.getFields().begin(),
                                         create.getFields().end());
   ctx.rewriter.setInsertionPoint(terminator);
-  fields[*recursiveIndex] = ctx.rewriter.create<mlir::ub::PoisonOp>(
-      create.getLoc(), fields[*recursiveIndex].getType());
-  auto holeFields = ctx.rewriter.getDenseI64ArrayAttr(
-      {static_cast<int64_t>(*recursiveIndex)});
+  for (const RecursiveFieldInfo &field : *recursiveFields)
+    fields[field.index] = ctx.rewriter.create<mlir::ub::PoisonOp>(
+        create.getLoc(), fields[field.index].getType());
+  auto holeFields =
+      ctx.rewriter.getDenseI64ArrayAttr(getRecursiveFieldIndices(*recursiveFields));
   auto newCreate = createVariantWithHoles(
       ctx.rewriter, create.getLoc(), create.getRcPtr().getType(),
       create.getTagAttr(), create.getValue(), fields, create.getToken(),
@@ -500,17 +536,21 @@ emitRecursiveCreateIntoHole(mlir::Operation *terminator, mlir::Value value,
   ctx.rewriter.setInsertionPointAfter(newCreate);
   auto store = ctx.rewriter.create<ReussirHoleStoreOp>(
       create.getLoc(), ctx.outHole, newCreate.getRcPtr());
-  llvm::SmallVector<mlir::Value> helperArgs(recursiveCall.getOperands());
-  helperArgs.push_back(newCreate.getHoles().front());
-  ctx.rewriter.setInsertionPointAfter(store);
-  ctx.rewriter.create<mlir::func::CallOp>(
-      recursiveCall.getLoc(), ctx.helperName, mlir::TypeRange{}, helperArgs);
+  mlir::Operation *insertionPoint = store;
+  for (auto [field, hole] : llvm::zip(*recursiveFields, newCreate.getHoles())) {
+    llvm::SmallVector<mlir::Value> helperArgs(field.call.getOperands());
+    helperArgs.push_back(hole);
+    ctx.rewriter.setInsertionPointAfter(insertionPoint);
+    insertionPoint = ctx.rewriter.create<mlir::func::CallOp>(
+        field.call.getLoc(), ctx.helperName, mlir::TypeRange{}, helperArgs);
+  }
   ctx.rewroteRecursiveSite = true;
   if (failed(replaceWithVoidTerminator(ctx.rewriter, terminator)))
     return mlir::failure();
   ctx.rewriter.eraseOp(create);
-  if (recursiveCall.use_empty())
-    ctx.rewriter.eraseOp(recursiveCall);
+  for (RecursiveFieldInfo &field : *recursiveFields)
+    if (field.call.use_empty())
+      ctx.rewriter.eraseOp(field.call);
   return mlir::success();
 }
 
@@ -518,35 +558,37 @@ static mlir::LogicalResult rewriteRecursiveCreateSite(
     mlir::Operation *createOp, llvm::StringRef originalName,
     llvm::StringRef helperName, mlir::IRRewriter &rewriter) {
   if (auto create = llvm::dyn_cast<ReussirRcCreateCompoundOp>(createOp)) {
-    auto recursiveIndex =
-        findLastRecursiveFieldIndex(create.getFields(), originalName);
-    if (!recursiveIndex)
+    auto recursiveFields = collectRecursiveFields(create.getOperation(),
+                                                 originalName);
+    if (!recursiveFields || recursiveFields->empty())
       return mlir::failure();
-
-    auto recursiveCall = llvm::cast<mlir::func::CallOp>(
-        create.getFields()[*recursiveIndex].getDefiningOp());
-    if (!isSiteEligibleForTrmc(create.getOperation(), recursiveCall,
-                               originalName))
+    if (!isSiteEligibleForTrmc(create.getOperation(), originalName))
       return mlir::failure();
     llvm::SmallVector<mlir::Value> fields(create.getFields().begin(),
                                           create.getFields().end());
     rewriter.setInsertionPoint(create);
-    fields[*recursiveIndex] = rewriter.create<mlir::ub::PoisonOp>(
-        create.getLoc(), fields[*recursiveIndex].getType());
+    for (const RecursiveFieldInfo &field : *recursiveFields)
+      fields[field.index] = rewriter.create<mlir::ub::PoisonOp>(
+          create.getLoc(), fields[field.index].getType());
     auto holeFields =
-        rewriter.getDenseI64ArrayAttr({static_cast<int64_t>(*recursiveIndex)});
+        rewriter.getDenseI64ArrayAttr(getRecursiveFieldIndices(*recursiveFields));
     auto newCreate = createCompoundWithHoles(
         rewriter, create.getLoc(), create.getRcPtr().getType(), fields,
         create.getToken(), create.getRegion(), create.getVtableAttr(),
         create.getSkipRc(), create.getSkipFieldsAttr(), holeFields);
-    llvm::SmallVector<mlir::Value> helperArgs(recursiveCall.getOperands());
-    helperArgs.push_back(newCreate.getHoles().front());
-    rewriter.create<mlir::func::CallOp>(recursiveCall.getLoc(), helperName,
-                                        mlir::TypeRange{}, helperArgs);
+    mlir::Operation *insertionPoint = newCreate;
+    for (auto [field, hole] : llvm::zip(*recursiveFields, newCreate.getHoles())) {
+      llvm::SmallVector<mlir::Value> helperArgs(field.call.getOperands());
+      helperArgs.push_back(hole);
+      rewriter.setInsertionPointAfter(insertionPoint);
+      insertionPoint = rewriter.create<mlir::func::CallOp>(
+          field.call.getLoc(), helperName, mlir::TypeRange{}, helperArgs);
+    }
     create.getRcPtr().replaceAllUsesWith(newCreate.getRcPtr());
     rewriter.eraseOp(create);
-    if (recursiveCall.use_empty())
-      rewriter.eraseOp(recursiveCall);
+    for (RecursiveFieldInfo &field : *recursiveFields)
+      if (field.call.use_empty())
+        rewriter.eraseOp(field.call);
     return mlir::success();
   }
 
@@ -554,36 +596,38 @@ static mlir::LogicalResult rewriteRecursiveCreateSite(
   if (!create || create.getValue())
     return mlir::failure();
 
-  auto recursiveIndex =
-      findLastRecursiveFieldIndex(create.getFields(), originalName);
-  if (!recursiveIndex)
+  auto recursiveFields = collectRecursiveFields(create.getOperation(),
+                                               originalName);
+  if (!recursiveFields || recursiveFields->empty())
     return mlir::failure();
-
-  auto recursiveCall = llvm::cast<mlir::func::CallOp>(
-      create.getFields()[*recursiveIndex].getDefiningOp());
-  if (!isSiteEligibleForTrmc(create.getOperation(), recursiveCall,
-                             originalName))
+  if (!isSiteEligibleForTrmc(create.getOperation(), originalName))
     return mlir::failure();
   llvm::SmallVector<mlir::Value> fields(create.getFields().begin(),
                                         create.getFields().end());
   rewriter.setInsertionPoint(create);
-  fields[*recursiveIndex] = rewriter.create<mlir::ub::PoisonOp>(
-      create.getLoc(), fields[*recursiveIndex].getType());
+  for (const RecursiveFieldInfo &field : *recursiveFields)
+    fields[field.index] = rewriter.create<mlir::ub::PoisonOp>(
+        create.getLoc(), fields[field.index].getType());
   auto holeFields =
-      rewriter.getDenseI64ArrayAttr({static_cast<int64_t>(*recursiveIndex)});
+      rewriter.getDenseI64ArrayAttr(getRecursiveFieldIndices(*recursiveFields));
   auto newCreate = createVariantWithHoles(
       rewriter, create.getLoc(), create.getRcPtr().getType(),
       create.getTagAttr(), create.getValue(), fields, create.getToken(),
       create.getRegion(), create.getVtableAttr(), create.getSkipRc(),
       create.getSkipFieldsAttr(), holeFields);
-  llvm::SmallVector<mlir::Value> helperArgs(recursiveCall.getOperands());
-  helperArgs.push_back(newCreate.getHoles().front());
-  rewriter.create<mlir::func::CallOp>(recursiveCall.getLoc(), helperName,
-                                      mlir::TypeRange{}, helperArgs);
+  mlir::Operation *insertionPoint = newCreate;
+  for (auto [field, hole] : llvm::zip(*recursiveFields, newCreate.getHoles())) {
+    llvm::SmallVector<mlir::Value> helperArgs(field.call.getOperands());
+    helperArgs.push_back(hole);
+    rewriter.setInsertionPointAfter(insertionPoint);
+    insertionPoint = rewriter.create<mlir::func::CallOp>(
+        field.call.getLoc(), helperName, mlir::TypeRange{}, helperArgs);
+  }
   create.getRcPtr().replaceAllUsesWith(newCreate.getRcPtr());
   rewriter.eraseOp(create);
-  if (recursiveCall.use_empty())
-    rewriter.eraseOp(recursiveCall);
+  for (RecursiveFieldInfo &field : *recursiveFields)
+    if (field.call.use_empty())
+      rewriter.eraseOp(field.call);
   return mlir::success();
 }
 
