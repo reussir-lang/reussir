@@ -285,6 +285,28 @@ def ReussirRefType
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// Reussir Hole Type
+//===----------------------------------------------------------------------===//
+def ReussirHoleType
+    : ReussirType<
+          "Hole",
+          "hole", [DeclareTypeInterfaceMethods<DataLayoutTypeInterface>]> {
+  let summary = "Reussir mutable hole type";
+  let description = [{
+    `reussir.hole` represents a write-once destination used by TRMC-style
+    rewrites. Unlike `reussir.ref`, it is not a general-purpose aliasable
+    mutable reference.
+  }];
+
+  let parameters = (ins "mlir::Type":$eleTy);
+  let assemblyFormat = "`<` $eleTy `>`";
+
+  let extraClassDeclaration = [{
+    mlir::Type getElementType() const { return getEleTy(); }
+  }];
+}
+
 ///===----------------------------------------------------------------------===//
 // Reussir RcBox Type
 //===----------------------------------------------------------------------===//

@@ -55,8 +55,11 @@ LLVMTypeConverter::LLVMTypeConverter(mlir::ModuleOp op)
         return convertRecordType(type, results);
       });
 
-  // Pointer-like types: RefType, RegionType, RcType, TokenType
+  // Pointer-like types: RefType, HoleType, RegionType, RcType, TokenType
   addConversion([this](RefType type) {
+    return mlir::LLVM::LLVMPointerType::get(&getContext());
+  });
+  addConversion([this](HoleType type) {
     return mlir::LLVM::LLVMPointerType::get(&getContext());
   });
   addConversion([this](RegionType type) {

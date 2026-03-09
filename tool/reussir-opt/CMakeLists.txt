@@ -22,6 +22,7 @@ add_mlir_tool(reussir-opt
     MLIRReussirAttachNativeTarget
     MLIRReussirInvariantGroupAnalysis
     MLIRReussirUniqueCarryingRecursionAnalysis
+    MLIRReussirTRMCRecursionAnalysis
     ${dialect_libs}
     ${conversion_libs}
     ${extension_libs}
@@ -45,6 +46,7 @@ target_link_libraries(reussir-opt
     MLIRReussirAttachNativeTarget
     MLIRReussirInvariantGroupAnalysis
     MLIRReussirUniqueCarryingRecursionAnalysis
+    MLIRReussirTRMCRecursionAnalysis
     ${dialect_libs} 
     ${conversion_libs} 
     ${extension_libs}

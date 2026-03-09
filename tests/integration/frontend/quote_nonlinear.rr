@@ -1,0 +1,42 @@
+// RUN: %reussir-compiler %s -t llvm-ir -o %t.ll --opt-level aggressive
+// RUN: %reussir-compiler %s -t llvm-ir -o %t.reuse.ll --opt-level aggressive --reuse-across-call
+// RUN: %reussir-compiler %s -t mlir -o %t.mlir
+// RUN: %reussir-opt %t.mlir \
+// RUN:   --reussir-rc-create-fusion \
+// RUN:   --reussir-trmc-recursion-analysis | %FileCheck %s --check-prefix=CHECK-TRMC
+// RUN: %FileCheck %s --check-prefix=CHECK-LLVM < %t.reuse.ll
+
+enum Term {
+    Var(i64),
+    App(Term, Term)
+}
+
+enum Value {
+    VVar(i64),
+    VApp(Value, Value)
+}
+
+fn quote(v : Value) -> Term {
+    match v {
+        Value::VVar(i) => Term::Var{i},
+        Value::VApp(v1, v2) => Term::App{quote(v1), quote(v2)}
+    }
+}
+
+// CHECK-TRMC-LABEL: func.func @_RC5quote(
+// CHECK-TRMC: %[[SECOND:.+]] = func.call @_RC5quote(%{{.+}}) : (!reussir.rc<!reussir.record<variant
+// CHECK-TRMC: %[[NEW:.+]], %[[LEFTHOLE:.+]] = "reussir.rc.create_variant"(%{{.+}}, %[[SECOND]]) <{holeFields = array<i64: 0>, operandSegmentSizes = array<i32: 0, 2, 0, 0>, tag = 1 : index}>
+// CHECK-TRMC: func.call @_RC5quote.trmc(%{{.+}}, %[[LEFTHOLE]]) : (!reussir.rc<!reussir.record<variant
+// CHECK-TRMC: reussir.scf.yield %[[NEW]] : !reussir.rc<!reussir.record<variant
+
+// CHECK-TRMC-LABEL: func.func private @_RC5quote.trmc(
+// CHECK-TRMC-SAME: %[[VALUE:.+]]: !reussir.rc<!reussir.record<variant
+// CHECK-TRMC-SAME: %[[OUTARG:.+]]: !reussir.hole<!reussir.rc<!reussir.record<variant
+// CHECK-TRMC-SAME: attributes {llvm.linkage = #llvm.linkage<internal>}
+// CHECK-TRMC: %[[SECOND2:.+]] = func.call @_RC5quote(%{{.+}}) : (!reussir.rc<!reussir.record<variant
+// CHECK-TRMC: %[[NEW2:.+]], %[[LEFTHOLE2:.+]] = "reussir.rc.create_variant"(%{{.+}}, %[[SECOND2]]) <{holeFields = array<i64: 0>, operandSegmentSizes = array<i32: 0, 2, 0, 0>, tag = 1 : index}>
+// CHECK-TRMC: reussir.hole.store(%[[OUTARG]] : !reussir.hole<!reussir.rc<!reussir.record<variant
+// CHECK-TRMC: func.call @_RC5quote.trmc(%{{.+}}, %[[LEFTHOLE2]]) : (!reussir.rc<!reussir.record<variant
+
+// CHECK-LLVM-LABEL: define internal fastcc void @_RC5quote.trmc(
+// CHECK-LLVM-COUNT-1: tail call ptr @_RC5quote(
