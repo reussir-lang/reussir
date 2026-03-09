@@ -652,6 +652,8 @@ createTrmcHelper(mlir::func::FuncOp funcOp, mlir::SymbolTable &symbolTable) {
   helperFunc.setFunctionType(
       mlir::FunctionType::get(context, inputs, llvm::ArrayRef<mlir::Type>{}));
   helperFunc.getBody().front().addArgument(holeType, helperFunc.getLoc());
+  helperFunc.setArgAttr(helperFunc.getNumArguments() - 1, "llvm.noalias",
+                        mlir::UnitAttr::get(context));
   makeHelperInternal(helperFunc, context);
 
   mlir::IRRewriter rewriter(context);
