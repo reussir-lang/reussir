@@ -626,6 +626,19 @@ def ReussirRcIsUniqueOp : ReussirRcOp<"is_unique", []> {
   let hasVerifier = 1;
 }
 
+def ReussirRcAssumeUniqueOp : ReussirRcOp<"assume_unique", []> {
+  let summary = "Assume that a RC pointer is unique";
+  let description = [{
+    `reussir.rc.assume_unique` asserts that a RC pointer is unique and is
+    intended to lower to `llvm.assume`.
+  }];
+  let arguments = (ins Arg<ReussirRcType, "RC pointer to assume unique">:$rcPtr);
+  let assemblyFormat = [{
+    `(` $rcPtr `:` qualified(type($rcPtr)) `)` attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // Reussir Record Operations
 //===----------------------------------------------------------------------===//

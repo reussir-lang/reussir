@@ -290,4 +290,21 @@ def ReussirInvariantGroupAnalysisPass
   }];
   let dependentDialects = ["::reussir::ReussirDialect"];
 }
+
+def ReussirUniqueCarryingRecursionAnalysisPass
+    : Pass<"reussir-unique-carrying-recursion-analysis", "::mlir::ModuleOp"> {
+  let summary = "analyze uniqueness-carrying recursion and outline unique clones";
+  let description = [{
+    `reussir-unique-carrying-recursion-analysis` uses sparse forward dataflow
+    with interprocedural propagation to mark RC-returning function and SCF
+    operations carrying uniqueness. When a carrying function is directly
+    self-recursive, the pass creates an internal `.unique` clone that asserts
+    RC argument uniqueness at entry and rewrites recursive calls to use the
+    specialized clone.
+  }];
+  let dependentDialects = ["::reussir::ReussirDialect",
+                           "::mlir::func::FuncDialect",
+                           "::mlir::scf::SCFDialect",
+                           "::mlir::LLVM::LLVMDialect"];
+}
 #endif // REUSSIR_CONVERSION_PASSES_TD
