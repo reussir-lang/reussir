@@ -1,4 +1,4 @@
-//===-- TRMCRecursionAnalysis.cpp -----------------------------*- C++ -*-===//
+//===-- TRMCRecursionAnalysis.cpp -------------------------------*- C++ -*-===//
 //
 // Part of the Reussir project, dual licensed under the Apache License v2.0 or
 // the MIT License.
@@ -444,20 +444,16 @@ static bool isSiteEligibleForTrmc(mlir::Operation *createOp,
       currentRegion ? currentRegion->getParentOp() : nullptr;
   while (parentOp && !llvm::isa<mlir::func::FuncOp>(parentOp)) {
     if (parentOp->getNumRegions() > 1) {
-      bool sawSiblingSelfCall = false;
       for (mlir::Region &region : parentOp->getRegions()) {
         if (&region == currentRegion)
           continue;
         if (!regionHasDirectSelfCall(region, originalName))
           continue;
-        sawSiblingSelfCall = true;
         if (regionHasNonLinearSelfCall(region, originalName))
           return false;
         if (hasMeaningfulSiblingSelfCall(region, createOp, originalName))
           return true;
       }
-      if (sawSiblingSelfCall)
-        continue;
     }
     currentRegion = parentOp->getParentRegion();
     parentOp = currentRegion ? currentRegion->getParentOp() : nullptr;
@@ -685,9 +681,15 @@ createTrmcHelper(mlir::func::FuncOp funcOp, mlir::SymbolTable &symbolTable) {
     return existing;
 
   auto helperFunc = llvm::cast<mlir::func::FuncOp>(funcOp->clone());
+  auto destroyDetachedHelper = [&]() {
+    if (helperFunc && !helperFunc->getParentOp())
+      helperFunc->destroy();
+  };
   auto resultType = llvm::dyn_cast<RcType>(funcOp.getResultTypes().front());
-  if (!resultType)
+  if (!resultType) {
+    destroyDetachedHelper();
     return mlir::failure();
+  }
 
   auto holeType = HoleType::get(context, resultType);
   llvm::SmallVector<mlir::Type> inputs(helperFunc.getArgumentTypes().begin(),
@@ -719,14 +721,18 @@ createTrmcHelper(mlir::func::FuncOp funcOp, mlir::SymbolTable &symbolTable) {
       [&](mlir::func::ReturnOp returnOp) { returns.push_back(returnOp); });
   for (mlir::func::ReturnOp returnOp : returns) {
     if (returnOp.getNumOperands() != 1 ||
-        failed(lowerValueIntoHole(returnOp, returnOp.getOperand(0), ctx)))
+        failed(lowerValueIntoHole(returnOp, returnOp.getOperand(0), ctx))) {
+      destroyDetachedHelper();
       return mlir::failure();
+    }
   }
 
   eraseUnusedCallsTo(helperFunc, funcOp.getName());
 
-  if (!ctx.rewroteRecursiveSite)
+  if (!ctx.rewroteRecursiveSite) {
+    destroyDetachedHelper();
     return mlir::failure();
+  }
   symbolTable.insert(helperFunc);
   return helperFunc;
 }
