@@ -259,11 +259,13 @@ withPatternBindings ctx bindings action = do
     go ((varId, pvRef) : rest) = do
         refVal <- resolvePatternVarRef ctx pvRef
         loaded <- loadIfRef refVal
-        -- If the loaded value is RC-typed, emit rc.inc to take ownership
-        -- (the value was borrowed from inside the scrutinee's RC)
+        -- Whole-scrutinee bindings reuse the matched value's ownership.
+        -- Projected bindings loaded from refs still need an acquire.
+        let isWholeScrutineeBinding = Seq.length (Full.unPatternVarRef pvRef) == 1
+        let (_, refTy) = refVal
         let (_, loadedTy) = loaded
-        case loadedTy of
-            IR.TypeRc _ -> addIRInstr $ IR.RcInc loaded
+        case (isWholeScrutineeBinding, refTy, loadedTy) of
+            (False, IR.TypeRef _, IR.TypeRc _) -> addIRInstr $ IR.RcInc loaded
             _ -> pure ()
         withVar (VarID (fromIntegral varId)) loaded $ go rest
 

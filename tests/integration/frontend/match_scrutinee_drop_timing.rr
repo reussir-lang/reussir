@@ -1,0 +1,73 @@
+// RUN: %reussir-compiler %s -Onone -t mlir -o %t.mlir
+// RUN: %FileCheck %s --check-prefix=CHECK-MLIR < %t.mlir
+
+enum Term {
+    Var(i64),
+    Lam(i64, Term),
+    App(Term, Term)
+}
+
+enum Value {
+    VVar(i64),
+    VApp(Value, Value),
+    VLam(i64, Term, Env)
+}
+
+enum Env {
+    EnvCons(i64, Value, Env),
+    EnvNil
+}
+
+fn eval(env: Env, x: Term) -> Value {
+    match x {
+        Term::Var(id) => Value::VVar{id},
+        Term::Lam(a, body) => Value::VLam{a, body, env},
+        Term::App(t, u) => {
+            let v1 = eval(env, t);
+            match v1 {
+                Value::VLam(a, body, env2) => eval(Env::EnvCons{a, eval(env, u), env2}, body),
+                _ => Value::VApp{v1, eval(env, u)}
+            }
+        }
+    }
+}
+
+fn eval2(env: Env, x: Term) -> Value {
+    match x {
+        Term::Var(id) => Value::VVar{id},
+        Term::Lam(a, body) => Value::VLam{a, body, env},
+        Term::App(t, u) => {
+            match eval2(env, t) {
+                Value::VLam(a, body, env2) => eval2(Env::EnvCons{a, eval2(env, u), env2}, body),
+                v1 => Value::VApp{v1, eval2(env, u)}
+            }
+        }
+    }
+}
+
+extern "C" trampoline "eval_ffi" = eval;
+extern "C" trampoline "eval2_ffi" = eval2;
+
+// Matching on a consuming scrutinee must preserve outer variables reused in
+// the match arms by incrementing them before the scrutinee call.
+// CHECK-MLIR-LABEL: func.func @"_RC5eval2"(%0 :
+// CHECK-MLIR: ^bb{{[0-9]+}}(%{{[0-9]+}} : !reussir.ref<!_RNvC4Term3App shared normal>):
+// CHECK-MLIR: %[[T2:[0-9]+]] = reussir.ref.load
+// CHECK-MLIR: reussir.rc.inc (%[[T2]] : !reussir.rc<!_RC4Term shared normal>)
+// CHECK-MLIR: %[[U2:[0-9]+]] = reussir.ref.load
+// CHECK-MLIR: reussir.rc.inc (%[[U2]] : !reussir.rc<!_RC4Term shared normal>)
+// CHECK-MLIR: reussir.rc.dec (%1 : !reussir.rc<!_RC4Term shared normal>)
+// CHECK-MLIR: reussir.rc.inc (%0 : !reussir.rc<!_RC3Env shared normal>)
+// CHECK-MLIR: %[[MATCHED2:[0-9]+]] = func.call @"_RC5eval2"(%0, %[[T2]]) : (!reussir.rc<!_RC3Env shared normal>, !reussir.rc<!_RC4Term shared normal>) -> (!reussir.rc<!_RC5Value shared normal>)
+
+// Matching on a variable scrutinee must drop the matched root before the
+// branch-local sequence consumes projected fields from that root.
+// CHECK-MLIR-LABEL: func.func @"_RC4eval"(%0 :
+// CHECK-MLIR: ^bb{{[0-9]+}}(%{{[0-9]+}} : !reussir.ref<!_RNvC4Term3App shared normal>):
+// CHECK-MLIR: %[[T1:[0-9]+]] = reussir.ref.load
+// CHECK-MLIR: reussir.rc.inc (%[[T1]] : !reussir.rc<!_RC4Term shared normal>)
+// CHECK-MLIR: %[[U1:[0-9]+]] = reussir.ref.load
+// CHECK-MLIR: reussir.rc.inc (%[[U1]] : !reussir.rc<!_RC4Term shared normal>)
+// CHECK-MLIR: reussir.rc.dec (%1 : !reussir.rc<!_RC4Term shared normal>)
+// CHECK-MLIR: reussir.rc.inc (%0 : !reussir.rc<!_RC3Env shared normal>)
+// CHECK-MLIR: %[[MATCHED1:[0-9]+]] = func.call @"_RC4eval"(%0, %[[T1]]) : (!reussir.rc<!_RC3Env shared normal>, !reussir.rc<!_RC4Term shared normal>) -> (!reussir.rc<!_RC5Value shared normal>)
