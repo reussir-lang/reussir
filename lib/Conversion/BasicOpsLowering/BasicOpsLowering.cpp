@@ -71,15 +71,20 @@ namespace reussir {
 
 namespace {
 
-bool shouldSkipFieldStore(mlir::Operation *op, int64_t index) {
-  auto skippedFields = op->getAttrOfType<mlir::DenseI64ArrayAttr>("skipFields");
-  if (!skippedFields)
+bool hasIndexedFieldAttr(mlir::Operation *op, llvm::StringRef attrName,
+                         int64_t index) {
+  auto attr = op->getAttrOfType<mlir::DenseI64ArrayAttr>(attrName);
+  if (!attr)
     return false;
-
-  for (int64_t skippedIndex : skippedFields.asArrayRef())
-    if (skippedIndex == index)
+  for (int64_t value : attr.asArrayRef())
+    if (value == index)
       return true;
   return false;
+}
+
+bool shouldSkipFieldStore(mlir::Operation *op, int64_t index) {
+  return hasIndexedFieldAttr(op, "skipFields", index) ||
+         hasIndexedFieldAttr(op, "holeFields", index);
 }
 
 template <typename Op>
@@ -359,6 +364,55 @@ struct ReussirRefStoreConversionPattern
     // Create LLVM store operation
     rewriter.replaceOpWithNewOp<mlir::LLVM::StoreOp>(op, value, refPtr);
 
+    return mlir::success();
+  }
+};
+
+struct ReussirHoleCreateConversionPattern
+    : public mlir::OpConversionPattern<ReussirHoleCreateOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirHoleCreateOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    auto valueType = converter->convertType(op.getHole().getType().getElementType());
+    auto llvmPtrType = converter->convertType(op.getHole().getType());
+    auto alignment =
+        converter->getDataLayout().getTypePreferredAlignment(valueType);
+    auto arraySize = rewriter.create<mlir::arith::ConstantOp>(
+        loc, rewriter.getIntegerAttr(converter->getIndexType(), 1));
+    auto allocaOp = rewriter.create<mlir::LLVM::AllocaOp>(
+        loc, llvmPtrType, valueType, arraySize, alignment);
+    rewriter.replaceOp(op, allocaOp);
+    return mlir::success();
+  }
+};
+
+struct ReussirHoleLoadConversionPattern
+    : public mlir::OpConversionPattern<ReussirHoleLoadOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirHoleLoadOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto llvmValueType = getTypeConverter()->convertType(op.getValue().getType());
+    rewriter.replaceOpWithNewOp<mlir::LLVM::LoadOp>(op, llvmValueType,
+                                                    adaptor.getHole());
+    return mlir::success();
+  }
+};
+
+struct ReussirHoleStoreConversionPattern
+    : public mlir::OpConversionPattern<ReussirHoleStoreOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirHoleStoreOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<mlir::LLVM::StoreOp>(op, adaptor.getValue(),
+                                                     adaptor.getHole());
     return mlir::success();
   }
 };
@@ -876,18 +930,28 @@ struct ReussirRcCreateCompoundOpConversionPattern
     auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
     auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
     auto llvmRecordType = converter->convertType(op.getRecordType());
+    llvm::SmallVector<mlir::Value> results;
+    results.push_back(storage->token);
     for (auto [index, field] : llvm::enumerate(adaptor.getFields())) {
-      if (shouldSkipFieldStore(op.getOperation(), static_cast<int64_t>(index)))
+      bool isHoleField = hasIndexedFieldAttr(op.getOperation(), "holeFields",
+                                             static_cast<int64_t>(index));
+      bool skipStore = isHoleField || shouldSkipFieldStore(
+                                         op.getOperation(),
+                                         static_cast<int64_t>(index));
+      if (skipStore && !isHoleField)
         continue;
       auto fieldPtr = rewriter.create<mlir::LLVM::GEPOp>(
           op.getLoc(), llvmPtrType, llvmRecordType, storage->elementPtr,
           llvm::ArrayRef<mlir::LLVM::GEPArg>{0, static_cast<int32_t>(index)});
+      if (isHoleField)
+        results.push_back(fieldPtr);
+      if (skipStore)
+        continue;
       auto store =
           rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), field, fieldPtr);
       store.setInvariantGroup(true);
     }
-
-    rewriter.replaceOp(op, storage->token);
+    rewriter.replaceOp(op, results);
     return mlir::success();
   }
 };
@@ -922,6 +986,8 @@ struct ReussirRcCreateVariantOpConversionPattern
         rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), tag, tagPtr);
     tagStore.setInvariantGroup(true);
 
+    llvm::SmallVector<mlir::Value> results;
+    results.push_back(storage->token);
     if (llvmVariantType.getSubelementIndexMap()->size() > 1) {
       auto payloadPtr = rewriter.create<mlir::LLVM::GEPOp>(
           op.getLoc(), llvmPtrType, llvmVariantType, storage->elementPtr,
@@ -935,13 +1001,21 @@ struct ReussirRcCreateVariantOpConversionPattern
             op.getRecordType().getMembers()[op.getTag().getZExtValue()]);
         auto llvmPayloadType = converter->convertType(payloadType);
         for (auto [index, field] : llvm::enumerate(adaptor.getFields())) {
-          if (shouldSkipFieldStore(op.getOperation(),
-                                   static_cast<int64_t>(index)))
+          bool isHoleField = hasIndexedFieldAttr(op.getOperation(), "holeFields",
+                                                 static_cast<int64_t>(index));
+          bool skipStore = isHoleField || shouldSkipFieldStore(
+                                             op.getOperation(),
+                                             static_cast<int64_t>(index));
+          if (skipStore && !isHoleField)
             continue;
           auto fieldPtr = rewriter.create<mlir::LLVM::GEPOp>(
               op.getLoc(), llvmPtrType, llvmPayloadType, payloadPtr,
               llvm::ArrayRef<mlir::LLVM::GEPArg>{0,
                                                  static_cast<int32_t>(index)});
+          if (isHoleField)
+            results.push_back(fieldPtr);
+          if (skipStore)
+            continue;
           auto store = rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), field,
                                                             fieldPtr);
           store.setInvariantGroup(true);
@@ -949,7 +1023,7 @@ struct ReussirRcCreateVariantOpConversionPattern
       }
     }
 
-    rewriter.replaceOp(op, storage->token);
+    rewriter.replaceOp(op, results);
     return mlir::success();
   }
 };
@@ -2427,7 +2501,8 @@ struct BasicOpsLoweringPass
       target.addIllegalDialect<mlir::func::FuncDialect,
                                mlir::arith::ArithDialect>();
       target.addIllegalOp<
-          ReussirPanicOp, ReussirExpectOp, ReussirTokenAllocOp,
+          ReussirPanicOp, ReussirExpectOp, ReussirHoleCreateOp,
+          ReussirHoleLoadOp, ReussirHoleStoreOp, ReussirTokenAllocOp,
           ReussirTokenFreeOp, ReussirTokenReinterpretOp, ReussirTokenReallocOp,
           ReussirRefLoadOp, ReussirRefStoreOp, ReussirRefSpilledOp,
           ReussirRefDiffOp, ReussirRefCmpOp, ReussirRefMemcpyOp,
@@ -2460,7 +2535,9 @@ struct BasicOpsLoweringPass
 void populateBasicOpsLoweringToLLVMConversionPatterns(
     LLVMTypeConverter &converter, mlir::RewritePatternSet &patterns) {
   patterns.add<
-      ReussirExpectConversionPattern, ReussirTokenAllocConversionPattern,
+      ReussirExpectConversionPattern, ReussirHoleCreateConversionPattern,
+      ReussirHoleLoadConversionPattern, ReussirHoleStoreConversionPattern,
+      ReussirTokenAllocConversionPattern,
       ReussirTokenFreeConversionPattern,
       ReussirTokenReinterpretConversionPattern,
       ReussirTokenReallocConversionPattern, ReussirRefLoadConversionPattern,

@@ -71,6 +71,9 @@ int main(int argc, char **argv) {
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return reussir::createReussirUniqueCarryingRecursionAnalysisPass();
   });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return reussir::createReussirTRMCRecursionAnalysisPass();
+  });
   return failed(mlir::MlirOptMain(
       argc, argv, "Reussir analysis and optimization driver\n", registry));
 }

@@ -142,7 +142,8 @@ bool isNonNullPointerType(mlir::Type type) {
   if (!type)
     return false;
   return llvm::TypeSwitch<mlir::Type, bool>(type)
-      .Case<TokenType, RcType, RecordType, RawPtrType, RefType, ClosureType>(
+      .Case<TokenType, RcType, RecordType, RawPtrType, RefType, HoleType,
+            ClosureType>(
           [](auto) { return true; })
       .Default([](mlir::Type) { return false; });
 }
@@ -157,7 +158,7 @@ bool isTriviallyCopyable(mlir::Type type) {
       // Built-in types that are trivially copyable
       .Case<mlir::IntegerType, mlir::FloatType, mlir::IndexType>(
           [](auto) { return true; })
-      .Case<RawPtrType>([](auto) { return true; })
+      .Case<RawPtrType, HoleType>([](auto) { return true; })
       // Reference counted and reference types are NOT trivially copyable
       // as they require special handling for reference counting/lifetime
       .Case<RcType, RefType, ClosureType>([](auto) { return false; })
@@ -758,6 +759,11 @@ RefType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
   }
   return mlir::success();
 }
+
+//===----------------------------------------------------------------------===//
+// Reussir Hole Type
+//===----------------------------------------------------------------------===//
+REUSSIR_POINTER_LIKE_DATA_LAYOUT_INTERFACE(HoleType)
 
 //===----------------------------------------------------------------------===//
 // Reussir Rc Box Type

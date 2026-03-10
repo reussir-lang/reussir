@@ -470,6 +470,19 @@ emitSequenceLevelIncs e suffixVars st = do
             let stAnnotated = annotate (Full.exprID e) (OwnershipAction incOps []) st
             pure $ foldl' (\s vid -> grantOwnership vid s) stAnnotated incVarIDs
 
+-- | Whether evaluating an expression may consume RR-typed arguments.
+isConsumingExpr :: Full.Expr -> Bool
+isConsumingExpr expr = case Full.exprKind expr of
+    Full.FuncCall{} -> True
+    Full.IntrinsicCall{} -> True
+    Full.CompoundCall{} -> True
+    Full.VariantCall{} -> True
+    Full.NullableCall{} -> True
+    Full.RcWrap{} -> True
+    Full.ClosureCall{} -> True
+    Full.Closure{} -> True
+    _ -> False
+
 {- | Collect all free variable references (VarIDs) in an expression.
 This is a pure syntactic traversal.
 -}
@@ -684,11 +697,20 @@ analyzeExpr tbl expr st = do
             pure (st5{asLedger = reconciledLedger}, emptyFlux)
         -- Match expression
         Full.Match scrutinee dt -> do
-            (st1, scrutFlux) <- analyzeExpr tbl scrutinee st
+            let branchFreeVars = collectFreeVarsDT dt
+            st0 <-
+                if isConsumingExpr scrutinee
+                    then emitSequenceLevelIncs scrutinee branchFreeVars st
+                    else pure st
+            (st1, scrutFlux) <- analyzeExpr tbl scrutinee st0
             -- Scrutinee is used (not consumed) for borrowing
             let st2 = markUsed scrutFlux st1
-            -- Pass scrutinee var IDs so branches can dec them
-            let scrutVarIDs = fluxFreeVars scrutFlux
+            -- Only variable scrutinees have root ownership that branches may
+            -- need to reconcile locally. Temporary scrutinees should not cause
+            -- their input free vars to be dropped inside branches.
+            let scrutVarIDs = case Full.exprKind scrutinee of
+                    Full.Var (VarID vid) -> IntSet.singleton vid
+                    _ -> IntSet.empty
             analyzeDecisionTree tbl dt st2 (Full.exprType scrutinee) scrutVarIDs
         -- Region run
         Full.RegionRun bodyExpr -> analyzeExpr tbl bodyExpr st
@@ -786,15 +808,10 @@ analyzeSequenceEarly tbl ((e, suffixVars) : rest) st scopedVars =
         Full.Let{Full.letVarID = varID, Full.letVarExpr = varExpr} -> do
             -- Before analyzing the bound expression, emit incs for vars
             -- consumed by varExpr but still needed in later expressions
-            st0 <- case Full.exprKind varExpr of
-                Full.FuncCall{} -> emitSequenceLevelIncs e suffixVars st
-                Full.CompoundCall{} -> emitSequenceLevelIncs e suffixVars st
-                Full.VariantCall{} -> emitSequenceLevelIncs e suffixVars st
-                Full.NullableCall{} -> emitSequenceLevelIncs e suffixVars st
-                Full.RcWrap{} -> emitSequenceLevelIncs e suffixVars st
-                Full.ClosureCall{} -> emitSequenceLevelIncs e suffixVars st
-                Full.Closure{} -> emitSequenceLevelIncs e suffixVars st
-                _ -> pure st
+            st0 <-
+                if isConsumingExpr varExpr
+                    then emitSequenceLevelIncs e suffixVars st
+                    else pure st
             -- Analyze the bound expression
             (st1, exprFlux) <- analyzeExpr tbl varExpr st0
             -- Consume any free vars the expression uses
@@ -808,15 +825,10 @@ analyzeSequenceEarly tbl ((e, suffixVars) : rest) st scopedVars =
         _ -> do
             -- Before analyzing a consuming expression, emit inc for vars that
             -- will be consumed but are still needed in later expressions.
-            st0 <- case Full.exprKind e of
-                Full.FuncCall{} -> emitSequenceLevelIncs e suffixVars st
-                Full.CompoundCall{} -> emitSequenceLevelIncs e suffixVars st
-                Full.VariantCall{} -> emitSequenceLevelIncs e suffixVars st
-                Full.NullableCall{} -> emitSequenceLevelIncs e suffixVars st
-                Full.RcWrap{} -> emitSequenceLevelIncs e suffixVars st
-                Full.ClosureCall{} -> emitSequenceLevelIncs e suffixVars st
-                Full.Closure{} -> emitSequenceLevelIncs e suffixVars st
-                _ -> pure st
+            st0 <-
+                if isConsumingExpr e
+                    then emitSequenceLevelIncs e suffixVars st
+                    else pure st
             (st1, _) <- analyzeExpr tbl e st0
             -- Emit early decs for owned variables no longer needed
             let st2 = emitEarlyDecs st1 (Full.exprID e) suffixVars
@@ -1032,29 +1044,35 @@ analyzeDecisionTree _ Full.DTUnreachable st _ _ = pure (st, emptyFlux)
 analyzeDecisionTree tbl (Full.DTLeaf body bindings) st scrutTy scrutVarIDs = do
     -- Grant ownership for RC-typed pattern bindings
     st1 <- grantPatternBindingOwnership tbl bindings st scrutTy
-    -- Analyze the leaf body
-    (st2, bodyFlux) <- analyzeExpr tbl body st1
-    -- The body's result is consumed (yielded to match)
-    let st3 = consumeFreeVars bodyFlux st2
-    -- Dec the scrutinee vars inside this branch (before the body)
-    let scrutDecs =
+    let bodyFreeVars = collectFreeVars body
+    -- If the body does not reference the scrutinee root directly, drop it at
+    -- branch entry so nested sequences cannot postpone the drop until after a
+    -- projected field has already been consumed.
+    let scrutBeforeDecs =
             [ ODecVar (VarID vid)
             | vid <- IntSet.toList scrutVarIDs
-            , ownershipCount (VarID vid) st3 > 0
+            , ownershipCount (VarID vid) st1 > 0
+            , not (IntSet.member vid bodyFreeVars)
             ]
-    let st4 =
-            if null scrutDecs
-                then st3
-                else annotate (Full.exprID body) (OwnershipAction scrutDecs []) st3
-    -- Consume the scrutinee's ownership
-    let st5 =
+    let st2 =
+            if null scrutBeforeDecs
+                then st1
+                else annotate (Full.exprID body) (OwnershipAction scrutBeforeDecs []) st1
+    let st3 =
             IntSet.foldl'
                 ( \s vid ->
-                    let c = ownershipCount (VarID vid) s
-                     in if c > 0 then consumeOwnership (VarID vid) s else s
+                    let varID = VarID vid
+                        c = ownershipCount varID s
+                     in if c > 0 && not (IntSet.member vid bodyFreeVars)
+                            then consumeOwnership varID s
+                            else s
                 )
-                st4
+                st2
                 scrutVarIDs
+    -- Analyze the leaf body
+    (st4, bodyFlux) <- analyzeExpr tbl body st3
+    -- The body's result is consumed (yielded to match)
+    let st5 = consumeFreeVars bodyFlux st4
     -- Clean up pattern-local vars from ledger
     let patternVarIDs = IntMap.keys bindings
     let st6 =

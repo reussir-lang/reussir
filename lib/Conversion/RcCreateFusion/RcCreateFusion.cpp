@@ -197,11 +197,12 @@ struct FuseRcCreatePattern : public mlir::OpRewritePattern<ReussirRcCreateOp> {
       auto compound = llvm::dyn_cast_if_present<ReussirRecordCompoundOp>(
           variant.getValue().getDefiningOp());
       auto fused = rewriter.create<ReussirRcCreateVariantOp>(
-          create.getLoc(), create.getRcPtr().getType(), variant.getTagAttr(),
+          create.getLoc(), mlir::TypeRange{create.getRcPtr().getType()},
+          variant.getTagAttr(),
           compound ? mlir::Value{} : variant.getValue(),
           compound ? compound.getFields() : mlir::ValueRange{}, create.getToken(),
           create.getRegion(), create.getVtableAttr(), create.getSkipRcAttr(),
-          mlir::DenseI64ArrayAttr{});
+          mlir::DenseI64ArrayAttr{}, mlir::DenseI64ArrayAttr{});
       rewriter.replaceOp(create, fused.getRcPtr());
       eraseDeadRecordMaterialization(rewriter, variant.getOperation());
       return mlir::success();
@@ -213,9 +214,11 @@ struct FuseRcCreatePattern : public mlir::OpRewritePattern<ReussirRcCreateOp> {
       return mlir::failure();
 
     auto fused = rewriter.create<ReussirRcCreateCompoundOp>(
-        create.getLoc(), create.getRcPtr().getType(), compound.getFields(),
+        create.getLoc(), mlir::TypeRange{create.getRcPtr().getType()},
+        compound.getFields(),
         create.getToken(), create.getRegion(), create.getVtableAttr(),
-        create.getSkipRcAttr(), mlir::DenseI64ArrayAttr{});
+        create.getSkipRcAttr(), mlir::DenseI64ArrayAttr{},
+        mlir::DenseI64ArrayAttr{});
     rewriter.replaceOp(create, fused.getRcPtr());
     eraseDeadRecordMaterialization(rewriter, compound.getOperation());
     return mlir::success();

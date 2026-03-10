@@ -307,4 +307,25 @@ def ReussirUniqueCarryingRecursionAnalysisPass
                            "::mlir::scf::SCFDialect",
                            "::mlir::LLVM::LLVMDialect"];
 }
+
+def ReussirTRMCRecursionAnalysisPass
+    : Pass<"reussir-trmc-recursion-analysis", "::mlir::ModuleOp"> {
+  let summary = "rewrite fused tail-recursive modulo cons patterns to hole-based helpers";
+  let description = [{
+    `reussir-trmc-recursion-analysis` recognizes directly self-recursive
+    functions whose recursive result is embedded in a fused
+    `reussir.rc.create_compound` or `reussir.rc.create_variant` site.
+    It outlines an internal `.trmc` helper with an explicit `reussir.hole`
+    out-parameter and rewrites the recursive site to allocate the outer RC box
+    first, expose pending-field holes, and redirect the recursive fields
+    through the helper. When a fused create site contains multiple direct
+    self-calls, the pass forwards all of them through the generated holes while
+    still falling back to the original function for non-linear recursive sites.
+  }];
+  let dependentDialects = ["::reussir::ReussirDialect",
+                           "::mlir::func::FuncDialect",
+                           "::mlir::scf::SCFDialect",
+                           "::mlir::ub::UBDialect",
+                           "::mlir::LLVM::LLVMDialect"];
+}
 #endif // REUSSIR_CONVERSION_PASSES_TD

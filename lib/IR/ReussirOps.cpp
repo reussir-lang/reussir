@@ -146,6 +146,34 @@ mlir::LogicalResult verifySkippedFields(mlir::Operation *op, size_t fieldCount) 
   return mlir::success();
 }
 
+mlir::LogicalResult verifyHoleFields(mlir::Operation *op,
+                                     mlir::TypeRange fieldTypes,
+                                     mlir::TypeRange holeTypes) {
+  auto holeFields = op->getAttrOfType<mlir::DenseI64ArrayAttr>("holeFields");
+  if (!holeFields) {
+    if (!holeTypes.empty())
+      return op->emitOpError("hole results require holeFields attribute");
+    return mlir::success();
+  }
+
+  if (static_cast<size_t>(holeFields.size()) != holeTypes.size())
+    return op->emitOpError("hole result count must match holeFields count");
+
+  llvm::DenseSet<int64_t> seen;
+  for (auto [index, holeType] : llvm::zip(holeFields.asArrayRef(), holeTypes)) {
+    if (index < 0 || static_cast<size_t>(index) >= fieldTypes.size())
+      return op->emitOpError("holeFields index out of bounds: ") << index;
+    if (!seen.insert(index).second)
+      return op->emitOpError("holeFields indices must be unique");
+    auto expectedHoleType =
+        HoleType::get(op->getContext(), fieldTypes[static_cast<size_t>(index)]);
+    if (holeType != expectedHoleType)
+      return op->emitOpError("hole type must match selected field type, got: ")
+             << holeType << ", expected: " << expectedHoleType;
+  }
+  return mlir::success();
+}
+
 } // namespace
 
 ///===----------------------------------------------------------------------===//
@@ -368,6 +396,9 @@ mlir::LogicalResult ReussirRcCreateCompoundOp::verify() {
     return mlir::failure();
   if (failed(verifySkippedFields(getOperation(), getFields().size())))
     return mlir::failure();
+  if (failed(verifyHoleFields(getOperation(), getFields().getTypes(),
+                              getHoles().getTypes())))
+    return mlir::failure();
   return verifyRcCreateLikeOp(getOperation(), getRcPtr().getType(), recordType,
                               getToken(), getRegion());
 }
@@ -435,12 +466,19 @@ mlir::LogicalResult ReussirRcCreateVariantOp::verify() {
       return emitOpError("value type must match projected type, ")
              << "value type: " << getValue().getType()
              << ", projected type: " << projectedType;
+    if (getHoleFields())
+      return emitOpError("holeFields require compound fields payload form");
+    if (!getHoles().empty())
+      return emitOpError("hole results require compound fields payload form");
   } else {
     auto compoundType = llvm::dyn_cast<RecordType>(targetVariantType);
     if (!compoundType || !compoundType.isCompound())
       return emitOpError(
           "compound fields payload requires the selected variant member to be a compound record");
     if (failed(verifyCompoundFields(getOperation(), compoundType, getFields())))
+      return mlir::failure();
+    if (failed(verifyHoleFields(getOperation(), getFields().getTypes(),
+                                getHoles().getTypes())))
       return mlir::failure();
   }
   if (failed(verifySkippedFields(getOperation(), getFields().size())))
@@ -568,6 +606,27 @@ mlir::LogicalResult ReussirRcAssumeUniqueOp::verify() {
                        "(shared capability), ")
            << "got: " << stringifyCapability(rcType.getCapability());
 
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
+// Reussir Hole Operations
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirHoleLoadOp::verify() {
+  auto holeType = getHole().getType();
+  if (holeType.getElementType() != getValue().getType())
+    return emitOpError("value type must match hole element type, ")
+           << "value type: " << getValue().getType()
+           << ", hole element type: " << holeType.getElementType();
+  return mlir::success();
+}
+
+mlir::LogicalResult ReussirHoleStoreOp::verify() {
+  auto holeType = getHole().getType();
+  if (holeType.getElementType() != getValue().getType())
+    return emitOpError("value type must match hole element type, ")
+           << "value type: " << getValue().getType()
+           << ", hole element type: " << holeType.getElementType();
   return mlir::success();
 }
 

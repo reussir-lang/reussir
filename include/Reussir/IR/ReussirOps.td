@@ -58,6 +58,54 @@ def ReussirExpectOp : ReussirOp<"expect", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// Reussir Hole Operations
+//===----------------------------------------------------------------------===//
+class ReussirHoleOp<string mnemonic, list<Trait> traits>
+    : ReussirOp<"hole."#mnemonic, traits>;
+
+def ReussirHoleCreateOp : ReussirHoleOp<"create", []> {
+  let summary = "Create a stack hole";
+  let description = [{
+    `reussir.hole.create` allocates a local destination slot for a value that
+    will be filled later by a TRMC-style helper.
+  }];
+
+  let results = (outs Res<ReussirHoleType, "created hole">:$hole);
+  let assemblyFormat = [{
+    `:` qualified(type($hole)) attr-dict
+  }];
+}
+
+def ReussirHoleLoadOp : ReussirHoleOp<"load", []> {
+  let summary = "Load from a hole";
+  let description = [{
+    `reussir.hole.load` loads the value stored in a hole.
+  }];
+
+  let arguments = (ins Arg<ReussirHoleType, "hole to load">:$hole);
+  let results = (outs Res<AnyType, "loaded value">:$value);
+  let assemblyFormat = [{
+    `(` $hole `:` qualified(type($hole)) `)` `:` type($value) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def ReussirHoleStoreOp : ReussirHoleOp<"store", []> {
+  let summary = "Store to a hole";
+  let description = [{
+    `reussir.hole.store` stores a value into a hole.
+  }];
+
+  let arguments = (ins
+      Arg<ReussirHoleType, "hole to store into">:$hole,
+      Arg<AnyType, "value to store">:$value);
+  let assemblyFormat = [{
+    `(` $hole `:` qualified(type($hole)) `)` `(` $value `:` type($value) `)` attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Token Operation
 //===----------------------------------------------------------------------===//
 
@@ -482,9 +530,12 @@ def ReussirRcCreateCompoundOp : ReussirRcOp<"create_compound", [
       Optional<ReussirRegionType>:$region,
       OptionalAttr<FlatSymbolRefAttr>:$vtable,
       UnitAttr:$skipRc,
-      OptionalAttr<DenseI64ArrayAttr>:$skipFields
+      OptionalAttr<DenseI64ArrayAttr>:$skipFields,
+      OptionalAttr<DenseI64ArrayAttr>:$holeFields
   );
-  let results = (outs Res<ReussirRcType, "Created RC pointer">:$rcPtr);
+  let results = (outs
+      Res<ReussirRcType, "Created RC pointer">:$rcPtr,
+      Variadic<ReussirHoleType>:$holes);
 
   let assemblyFormat = [{
     (`(` $fields^ `:` type($fields) `)`)? 
@@ -494,7 +545,7 @@ def ReussirRcCreateCompoundOp : ReussirRcOp<"create_compound", [
     | `vtable` `(` $vtable `)`
     | `skip_rc` $skipRc
     )
-    `:` qualified(type($rcPtr)) attr-dict
+    `:` qualified(type($rcPtr)) (`,` qualified(type($holes))^)? attr-dict
   }];
 
   let hasVerifier = 1;
@@ -531,9 +582,12 @@ def ReussirRcCreateVariantOp : ReussirRcOp<"create_variant", [
       Optional<ReussirRegionType>:$region,
       OptionalAttr<FlatSymbolRefAttr>:$vtable,
       UnitAttr:$skipRc,
-      OptionalAttr<DenseI64ArrayAttr>:$skipFields
+      OptionalAttr<DenseI64ArrayAttr>:$skipFields,
+      OptionalAttr<DenseI64ArrayAttr>:$holeFields
   );
-  let results = (outs Res<ReussirRcType, "Created RC pointer">:$rcPtr);
+  let results = (outs
+      Res<ReussirRcType, "Created RC pointer">:$rcPtr,
+      Variadic<ReussirHoleType>:$holes);
 
   let hasVerifier = 1;
   let extraClassDeclaration = [{

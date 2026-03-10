@@ -22,6 +22,7 @@ add_mlir_library(MLIRReussirBridge
     MLIRReussirRcCreateFusion
     MLIRReussirInvariantGroupAnalysis
     MLIRReussirUniqueCarryingRecursionAnalysis
+    MLIRReussirTRMCRecursionAnalysis
   LINK_COMPONENTS
     Core
     Support
@@ -40,6 +41,7 @@ add_mlir_library(MLIRReussirBridge
     MLIRReussirRcCreateFusion
     MLIRReussirInvariantGroupAnalysis
     MLIRReussirUniqueCarryingRecursionAnalysis
+    MLIRReussirTRMCRecursionAnalysis
     ReussirLLVMAllocationSimplicationPass
     spdlog::spdlog
     ${TPDE_LINK_LIB}
