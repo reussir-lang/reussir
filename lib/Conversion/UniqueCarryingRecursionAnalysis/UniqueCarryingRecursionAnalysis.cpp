@@ -76,6 +76,18 @@ struct UniqueCarryingValue {
 
   bool isCarrying() const { return !unknown && (fresh || carriedArgs.any()); }
 
+  bool isProvenUniqueUnder(const llvm::BitVector &assumedArgs) const {
+    if (!isCarrying())
+      return false;
+    for (int bit = carriedArgs.find_first(); bit >= 0;
+         bit = carriedArgs.find_next(bit)) {
+      if (static_cast<unsigned>(bit) >= assumedArgs.size() ||
+          !assumedArgs.test(bit))
+        return false;
+    }
+    return true;
+  }
+
   void print(llvm::raw_ostream &os) const {
     if (unknown) {
       os << "Unknown";
@@ -96,12 +108,43 @@ struct UniqueCarryingValue {
 
 static bool isRcType(mlir::Type type) { return llvm::isa<RcType>(type); }
 
+static bool isAssumableRcType(mlir::Type type) {
+  auto rcType = llvm::dyn_cast<RcType>(type);
+  return rcType && !rcType.isRegional();
+}
+
 static bool hasRcResults(mlir::TypeRange types) {
   return llvm::any_of(types, isRcType);
 }
 
 using FunctionSummaryMap =
     llvm::StringMap<llvm::SmallVector<UniqueCarryingValue>>;
+using SpecializationEntry = std::pair<std::string, llvm::BitVector>;
+using SpecializationMap = llvm::SmallVector<SpecializationEntry>;
+using SpecializationNameEntry = std::pair<std::string, std::string>;
+using SpecializationNameMap = llvm::SmallVector<SpecializationNameEntry>;
+using SpecializationCloneEntry = std::pair<std::string, mlir::func::FuncOp>;
+using SpecializationCloneMap = llvm::SmallVector<SpecializationCloneEntry>;
+
+template <typename ValueT>
+static ValueT *findSpecializationValue(
+    llvm::SmallVectorImpl<std::pair<std::string, ValueT>> &entries,
+    llvm::StringRef key) {
+  for (auto &entry : entries)
+    if (entry.first == key)
+      return &entry.second;
+  return nullptr;
+}
+
+template <typename ValueT>
+static const ValueT *findSpecializationValue(
+    const llvm::SmallVectorImpl<std::pair<std::string, ValueT>> &entries,
+    llvm::StringRef key) {
+  for (const auto &entry : entries)
+    if (entry.first == key)
+      return &entry.second;
+  return nullptr;
+}
 
 class ProvenanceEvaluator {
 public:
@@ -268,12 +311,21 @@ static bool hasSelfRecursiveCall(mlir::func::FuncOp funcOp) {
   return found;
 }
 
-static void redirectDirectSelfCalls(mlir::func::FuncOp funcOp,
-                                    llvm::StringRef fromName,
-                                    llvm::StringRef toName) {
+static bool isUniqueCloneName(llvm::StringRef name) {
+  return name.contains(".unique");
+}
+
+static bool isUniqueCloneOf(llvm::StringRef baseName, llvm::StringRef callee) {
+  if (callee == baseName)
+    return true;
+  return callee.starts_with((baseName + ".unique").str());
+}
+
+static void resetDirectSelfCallsToBase(mlir::func::FuncOp funcOp,
+                                       llvm::StringRef baseName) {
   funcOp.walk([&](mlir::func::CallOp callOp) {
-    if (callOp.getCallee() == fromName)
-      callOp.setCallee(toName);
+    if (isUniqueCloneOf(baseName, callOp.getCallee()))
+      callOp.setCallee(baseName);
   });
 }
 
@@ -325,7 +377,7 @@ collectCarriedRcArguments(mlir::func::FuncOp funcOp,
     carriedArgs |= value.carriedArgs;
   }
   for (unsigned i = 0; i < funcOp.getNumArguments(); ++i)
-    if (!isRcType(funcOp.getArgument(i).getType()))
+    if (!isAssumableRcType(funcOp.getArgument(i).getType()))
       carriedArgs.reset(i);
   return carriedArgs;
 }
@@ -342,18 +394,92 @@ static void insertAssumeUniqueAtEntry(mlir::func::FuncOp funcOp,
     if (static_cast<unsigned>(index) >= funcOp.getNumArguments())
       continue;
     mlir::BlockArgument arg = funcOp.getArgument(index);
-    auto rcType = llvm::dyn_cast<RcType>(arg.getType());
-    if (!rcType || rcType.isRegional())
+    if (!isAssumableRcType(arg.getType()))
       continue;
     builder.create<ReussirRcAssumeUniqueOp>(funcOp.getLoc(), arg);
   }
 }
 
-static mlir::func::FuncOp
-getOrCreateUniqueClone(mlir::func::FuncOp funcOp,
-                       mlir::SymbolTable &symbolTable,
-                       const llvm::BitVector &carriedArgs) {
-  std::string uniqueName = (funcOp.getName() + ".unique").str();
+static std::string encodeSpecializationKey(const llvm::BitVector &carriedArgs) {
+  std::string key;
+  llvm::raw_string_ostream os(key);
+  bool first = true;
+  for (int bit = carriedArgs.find_first(); bit >= 0;
+       bit = carriedArgs.find_next(bit)) {
+    if (!first)
+      os << '_';
+    os << bit;
+    first = false;
+  }
+  return key;
+}
+
+static llvm::BitVector computeUniqueCallArguments(
+    mlir::func::CallOp callOp, ProvenanceEvaluator &evaluator,
+    const llvm::BitVector &assumedArgs, const llvm::BitVector &candidateArgs) {
+  llvm::BitVector provenArgs(candidateArgs.size());
+  for (int argIndex = candidateArgs.find_first(); argIndex >= 0;
+       argIndex = candidateArgs.find_next(argIndex)) {
+    if (static_cast<unsigned>(argIndex) >= callOp.getNumOperands())
+      continue;
+    if (evaluator.evaluate(callOp.getOperand(argIndex))
+            .isProvenUniqueUnder(assumedArgs))
+      provenArgs.set(argIndex);
+  }
+  return provenArgs;
+}
+
+static SpecializationMap
+collectUniqueSpecializations(mlir::func::FuncOp funcOp,
+                             const FunctionSummaryMap &summaries,
+                             const llvm::BitVector &candidateArgs) {
+  SpecializationMap specializations;
+  llvm::SmallVector<llvm::BitVector> worklist;
+
+  auto enqueue = [&](const llvm::BitVector &assumedArgs) {
+    if (!assumedArgs.any())
+      return;
+    std::string key = encodeSpecializationKey(assumedArgs);
+    if (findSpecializationValue(specializations, key))
+      return;
+    specializations.push_back({std::move(key), assumedArgs});
+    worklist.push_back(assumedArgs);
+  };
+
+  auto collectFromAssumedArgs = [&](const llvm::BitVector &assumedArgs) {
+    ProvenanceEvaluator evaluator(summaries);
+    funcOp.walk([&](mlir::func::CallOp callOp) {
+      if (callOp.getCallee() != funcOp.getName())
+        return;
+      enqueue(computeUniqueCallArguments(callOp, evaluator, assumedArgs,
+                                         candidateArgs));
+    });
+  };
+
+  llvm::BitVector emptyAssumptions(candidateArgs.size());
+  collectFromAssumedArgs(emptyAssumptions);
+  while (!worklist.empty())
+    collectFromAssumedArgs(worklist.pop_back_val());
+  return specializations;
+}
+
+static SpecializationNameMap
+buildSpecializationNames(llvm::StringRef baseName,
+                         const SpecializationMap &specializations) {
+  SpecializationNameMap names;
+  bool usePlainUniqueName = specializations.size() == 1;
+  for (const auto &entry : specializations) {
+    std::string cloneName = usePlainUniqueName
+                                ? (baseName + ".unique").str()
+                                : (baseName + ".unique_" + entry.first).str();
+    names.push_back({entry.first, std::move(cloneName)});
+  }
+  return names;
+}
+
+static mlir::func::FuncOp getOrCreateUniqueClone(
+    mlir::func::FuncOp funcOp, mlir::SymbolTable &symbolTable,
+    llvm::StringRef uniqueName, const llvm::BitVector &carriedArgs) {
   if (auto existing = symbolTable.lookup<mlir::func::FuncOp>(uniqueName))
     return existing;
 
@@ -368,8 +494,28 @@ getOrCreateUniqueClone(mlir::func::FuncOp funcOp,
   symbolTable.insert(uniqueFunc);
 
   insertAssumeUniqueAtEntry(uniqueFunc, carriedArgs);
-  redirectDirectSelfCalls(uniqueFunc, funcOp.getName(), uniqueName);
   return uniqueFunc;
+}
+
+static void rewriteSelfCallsForSpecialization(
+    mlir::func::FuncOp funcOp, llvm::StringRef baseName,
+    const FunctionSummaryMap &summaries, const llvm::BitVector &assumedArgs,
+    const llvm::BitVector &candidateArgs,
+    const SpecializationNameMap &specializationNames) {
+  ProvenanceEvaluator evaluator(summaries);
+  funcOp.walk([&](mlir::func::CallOp callOp) {
+    if (callOp.getCallee() != baseName)
+      return;
+    llvm::BitVector targetArgs = computeUniqueCallArguments(
+        callOp, evaluator, assumedArgs, candidateArgs);
+    if (!targetArgs.any())
+      return;
+    const std::string *targetName = findSpecializationValue(
+        specializationNames, encodeSpecializationKey(targetArgs));
+    if (!targetName)
+      return;
+    callOp.setCallee(*targetName);
+  });
 }
 
 struct UniqueCarryingRecursionAnalysisPass
@@ -416,8 +562,7 @@ struct UniqueCarryingRecursionAnalysisPass
     llvm::SmallVector<mlir::func::FuncOp> recursiveFunctions;
     moduleOp.walk([&](mlir::func::FuncOp funcOp) {
       if (!funcOp->hasAttr(kCarryingUniquenessAttr) || funcOp.isDeclaration() ||
-          funcOp.getName().ends_with(".unique") ||
-          !hasSelfRecursiveCall(funcOp))
+          isUniqueCloneName(funcOp.getName()) || !hasSelfRecursiveCall(funcOp))
         return;
       if (!collectCarriedRcArguments(funcOp, summaries).any())
         return;
@@ -427,9 +572,40 @@ struct UniqueCarryingRecursionAnalysisPass
     for (mlir::func::FuncOp funcOp : recursiveFunctions) {
       llvm::BitVector carriedArgs =
           collectCarriedRcArguments(funcOp, summaries);
-      auto uniqueFunc =
-          getOrCreateUniqueClone(funcOp, symbolTable, carriedArgs);
-      redirectDirectSelfCalls(funcOp, funcOp.getName(), uniqueFunc.getName());
+      SpecializationMap specializations =
+          collectUniqueSpecializations(funcOp, summaries, carriedArgs);
+      if (specializations.empty())
+        continue;
+
+      SpecializationNameMap specializationNames =
+          buildSpecializationNames(funcOp.getName(), specializations);
+      SpecializationCloneMap clones;
+
+      resetDirectSelfCallsToBase(funcOp, funcOp.getName());
+      for (const auto &entry : specializations) {
+        const std::string *cloneName =
+            findSpecializationValue(specializationNames, entry.first);
+        if (!cloneName)
+          continue;
+        clones.push_back(
+            {entry.first, getOrCreateUniqueClone(funcOp, symbolTable,
+                                                 *cloneName, entry.second)});
+      }
+
+      llvm::BitVector emptyAssumptions(funcOp.getNumArguments());
+      rewriteSelfCallsForSpecialization(funcOp, funcOp.getName(), summaries,
+                                        emptyAssumptions, carriedArgs,
+                                        specializationNames);
+      for (const auto &entry : specializations) {
+        mlir::func::FuncOp *cloneFunc =
+            findSpecializationValue(clones, entry.first);
+        if (!cloneFunc)
+          continue;
+        resetDirectSelfCallsToBase(*cloneFunc, funcOp.getName());
+        rewriteSelfCallsForSpecialization(*cloneFunc, funcOp.getName(),
+                                          summaries, entry.second, carriedArgs,
+                                          specializationNames);
+      }
     }
   }
 };
