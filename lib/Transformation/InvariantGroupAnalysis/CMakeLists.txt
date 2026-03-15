@@ -1,8 +1,8 @@
-add_mlir_conversion_library(MLIRReussirInvariantGroupAnalysis
+add_mlir_library(MLIRReussirInvariantGroupAnalysis
   InvariantGroupAnalysis.cpp
 
   DEPENDS
-  MLIRReussirConversionPassIncGen
+  MLIRReussirTransformationPassIncGen
 
   LINK_COMPONENTS
   Core

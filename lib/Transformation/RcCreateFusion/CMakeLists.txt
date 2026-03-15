@@ -1,8 +1,8 @@
-add_mlir_conversion_library(MLIRReussirRcCreateFusion
+add_mlir_library(MLIRReussirRcCreateFusion
   RcCreateFusion.cpp
 
   DEPENDS
-  MLIRReussirConversionPassIncGen
+  MLIRReussirTransformationPassIncGen
 
   LINK_COMPONENTS
   Core

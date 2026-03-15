@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Reussir/Conversion/InferVariantTag.h"
+#include "Reussir/Transformation/InferVariantTag.h"
 #include "Reussir/Analysis/AliasAnalysis.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
@@ -23,7 +23,7 @@
 namespace reussir {
 
 #define GEN_PASS_DEF_REUSSIRINFERVARIANTTAGPASS
-#include "Reussir/Conversion/Passes.h.inc"
+#include "Reussir/Transformation/Passes.h.inc"
 
 //===----------------------------------------------------------------------===//
 // InferVariantTagPass

@@ -16,13 +16,8 @@ add_mlir_library(MLIRReussirBridge
   SHARED
   DEPENDS
     MLIRReussir
-    MLIRReussirBasicOpsLowering
-    MLIRReussirSCFOpsLowering
-    MLIRReussirRcCreateSink
-    MLIRReussirRcCreateFusion
-    MLIRReussirInvariantGroupAnalysis
-    MLIRReussirUniqueCarryingRecursionAnalysis
-    MLIRReussirTRMCRecursionAnalysis
+    MLIRReussirConversion
+    MLIRReussirTransformation
   LINK_COMPONENTS
     Core
     Support
@@ -35,13 +30,8 @@ add_mlir_library(MLIRReussirBridge
     ${extension_libs}
     ${translation_libs}
     MLIRReussir
-    MLIRReussirBasicOpsLowering
-    MLIRReussirSCFOpsLowering
-    MLIRReussirRcCreateSink
-    MLIRReussirRcCreateFusion
-    MLIRReussirInvariantGroupAnalysis
-    MLIRReussirUniqueCarryingRecursionAnalysis
-    MLIRReussirTRMCRecursionAnalysis
+    MLIRReussirConversion
+    MLIRReussirTransformation
     ReussirLLVMAllocationSimplicationPass
     spdlog::spdlog
     ${TPDE_LINK_LIB}

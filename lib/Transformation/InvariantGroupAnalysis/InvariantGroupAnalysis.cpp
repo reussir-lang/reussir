@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Reussir/Conversion/InvariantGroupAnalysis.h"
+#include "Reussir/Transformation/InvariantGroupAnalysis.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
@@ -21,7 +21,7 @@
 namespace reussir {
 
 #define GEN_PASS_DEF_REUSSIRINVARIANTGROUPANALYSISPASS
-#include "Reussir/Conversion/Passes.h.inc"
+#include "Reussir/Transformation/Passes.h.inc"
 
 namespace {
 

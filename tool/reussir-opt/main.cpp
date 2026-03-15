@@ -13,9 +13,9 @@
 #include <mlir/Pass/PassRegistry.h>
 #include <mlir/Tools/mlir-opt/MlirOptMain.h>
 
-#include "Reussir/Conversion/InvariantGroupAnalysis.h"
 #include "Reussir/Conversion/Passes.h"
 #include "Reussir/IR/ReussirDialect.h"
+#include "Reussir/Transformation/Passes.h"
 
 int main(int argc, char **argv) {
   mlir::DialectRegistry registry;

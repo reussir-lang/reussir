@@ -7,22 +7,8 @@ add_mlir_tool(reussir-opt
   DEPENDS
     MLIROptLib
     MLIRReussir
-    MLIRReussirBasicOpsLowering
-    MLIRReussirSCFOpsLowering
-  MLIRReussirRcCreateSink
-  MLIRReussirRcCreateFusion
-  MLIRReussirRegionPatterns
-    MLIRReussirAcquireDropExpansion
-    MLIRReussirRcDecrementExpansion
-    MLIRReussirInferVariantTag
-    MLIRReussirIncDecCancellation
-    MLIRReussirTokenInstantiation
-    MLIRReussirCompilePolymorphicFFI
-    MLIRReussirTokenReuse
-    MLIRReussirAttachNativeTarget
-    MLIRReussirInvariantGroupAnalysis
-    MLIRReussirUniqueCarryingRecursionAnalysis
-    MLIRReussirTRMCRecursionAnalysis
+    MLIRReussirConversion
+    MLIRReussirTransformation
     ${dialect_libs}
     ${conversion_libs}
     ${extension_libs}
@@ -31,22 +17,8 @@ add_mlir_tool(reussir-opt
 target_link_libraries(reussir-opt
   PRIVATE
     MLIRReussir
-    MLIRReussirBasicOpsLowering
-    MLIRReussirSCFOpsLowering
-  MLIRReussirRcCreateSink
-  MLIRReussirRcCreateFusion
-  MLIRReussirRegionPatterns
-    MLIRReussirAcquireDropExpansion
-    MLIRReussirRcDecrementExpansion
-    MLIRReussirInferVariantTag
-    MLIRReussirIncDecCancellation
-    MLIRReussirTokenInstantiation
-    MLIRReussirCompilePolymorphicFFI
-    MLIRReussirTokenReuse
-    MLIRReussirAttachNativeTarget
-    MLIRReussirInvariantGroupAnalysis
-    MLIRReussirUniqueCarryingRecursionAnalysis
-    MLIRReussirTRMCRecursionAnalysis
+    MLIRReussirConversion
+    MLIRReussirTransformation
     ${dialect_libs} 
     ${conversion_libs} 
     ${extension_libs}

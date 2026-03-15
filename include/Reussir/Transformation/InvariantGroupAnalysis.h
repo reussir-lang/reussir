@@ -1,4 +1,4 @@
-//===-- InvariantGroupAnalysis.h - Invariant group analysis ------*- C++ -*-===//
+//===-- InvariantGroupAnalysis.h - Invariant group analysis -*- C++ -*-===//
 //
 // Part of the Reussir project, dual licensed under the Apache License v2.0 or
 // the MIT License.
@@ -13,8 +13,8 @@
 
 #pragma once
 
-#ifndef REUSSIR_CONVERSION_INVARIANTGROUPANALYSIS_H
-#define REUSSIR_CONVERSION_INVARIANTGROUPANALYSIS_H
+#ifndef REUSSIR_TRANSFORMATION_INVARIANTGROUPANALYSIS_H
+#define REUSSIR_TRANSFORMATION_INVARIANTGROUPANALYSIS_H
 
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Pass/Pass.h>
@@ -22,8 +22,8 @@
 namespace reussir {
 
 #define GEN_PASS_DECL_REUSSIRINVARIANTGROUPANALYSISPASS
-#include "Reussir/Conversion/Passes.h.inc"
+#include "Reussir/Transformation/Passes.h.inc"
 
 } // namespace reussir
 
-#endif // REUSSIR_CONVERSION_INVARIANTGROUPANALYSIS_H
+#endif // REUSSIR_TRANSFORMATION_INVARIANTGROUPANALYSIS_H

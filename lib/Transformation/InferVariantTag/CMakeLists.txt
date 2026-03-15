@@ -1,8 +1,8 @@
-add_mlir_conversion_library(MLIRReussirInferVariantTag
+add_mlir_library(MLIRReussirInferVariantTag
   InferVariantTag.cpp
 
   DEPENDS
-  MLIRReussirConversionPassIncGen
+  MLIRReussirTransformationPassIncGen
   MLIRReussirAnalysis
 
   LINK_COMPONENTS

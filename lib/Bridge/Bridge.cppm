@@ -77,13 +77,13 @@ module;
 
 #include "Reussir/Bridge.h"
 #include "Reussir/Conversion/BasicOpsLowering.h"
-#include "Reussir/Conversion/InvariantGroupAnalysis.h"
 #include "Reussir/Conversion/Passes.h"
 #include "Reussir/Conversion/SCFOpsLowering.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/LLVMPass/AllocationSimplication.h"
 #include "Reussir/LLVMPass/RuntimeFunctionAttributor.h"
+#include "Reussir/Transformation/Passes.h"
 
 export module Reussir.Bridge;
 

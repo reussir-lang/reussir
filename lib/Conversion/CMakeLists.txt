@@ -1,18 +1,30 @@
 add_subdirectory(TypeConverter)
 add_subdirectory(BasicOpsLowering)
 add_subdirectory(SCFOpsLowering)
-add_subdirectory(RcCreateSink)
-add_subdirectory(RcCreateFusion)
 add_subdirectory(RegionPatterns)
 add_subdirectory(AcquireDropExpansion)
 add_subdirectory(RcDecrementExpansion)
-add_subdirectory(InferVariantTag)
-add_subdirectory(IncDecCancellation)
 add_subdirectory(TokenInstantiation)
 add_subdirectory(ClosureOutlining)
 add_subdirectory(CompilePolymorphicFFI)
-add_subdirectory(TokenReuse)
-add_subdirectory(InvariantGroupAnalysis)
-add_subdirectory(UniqueCarryingRecursionAnalysis)
-add_subdirectory(TRMCRecursionAnalysis)
 add_subdirectory(AttachNativeTarget)
+
+set(REUSSIR_CONVERSION_AGGREGATE_LIBS
+  MLIRReussirTypeConverter
+  MLIRReussirBasicOpsLowering
+  MLIRReussirSCFOpsLowering
+  MLIRReussirRegionPatterns
+  MLIRReussirAcquireDropExpansion
+  MLIRReussirRcDecrementExpansion
+  MLIRReussirTokenInstantiation
+  MLIRReussirClosureOutlining
+  MLIRReussirCompilePolymorphicFFI
+  MLIRReussirAttachNativeTarget
+)
+
+add_library(MLIRReussirConversion INTERFACE)
+target_link_libraries(MLIRReussirConversion
+  INTERFACE
+    ${REUSSIR_CONVERSION_AGGREGATE_LIBS}
+)
+add_dependencies(MLIRReussirConversion ${REUSSIR_CONVERSION_AGGREGATE_LIBS})
