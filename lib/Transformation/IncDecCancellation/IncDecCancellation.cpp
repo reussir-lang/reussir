@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Reussir/Conversion/IncDecCancellation.h"
+#include "Reussir/Transformation/IncDecCancellation.h"
 #include "Reussir/Analysis/AliasAnalysis.h"
 #include "Reussir/Conversion/RcDecrementExpansion.h"
 #include "Reussir/IR/ReussirDialect.h"
@@ -23,7 +23,7 @@
 namespace reussir {
 
 #define GEN_PASS_DEF_REUSSIRINCDECCANCELLATIONPASS
-#include "Reussir/Conversion/Passes.h.inc"
+#include "Reussir/Transformation/Passes.h.inc"
 
 //===----------------------------------------------------------------------===//
 // IncDecCancellationPass

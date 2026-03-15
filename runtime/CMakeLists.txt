@@ -67,20 +67,31 @@ if(NOT RUST_HOST_TRIPLE)
     message(FATAL_ERROR "Could not detect host triple from 'rustc -vV' output. Output was: ${RUSTC_VERSION_INFO}")
 endif()
 
-# We need to install the toolchain.
-# We use a custom command/target to ensure it's there.
-# Note: We install the specific toolchain variant matching the host triple
-# to ensure the installed path matches what we'll look for during copy.
-add_custom_target(reussir-rust-toolchain-fetch
-    COMMAND ${CMAKE_COMMAND} -E env
-        RUSTUP_HOME=${LOCAL_RUSTUP_HOME}
-        CARGO_HOME=${LOCAL_CARGO_HOME}
-        rustup toolchain install ${RUST_CHANNEL}-${RUST_HOST_TRIPLE} --profile minimal --no-self-update
-    COMMENT "Ensuring Rust toolchain ${RUST_CHANNEL}-${RUST_HOST_TRIPLE} is installed in ${LOCAL_RUSTUP_HOME}"
-    USES_TERMINAL
-)
-
 set(INSTALLED_TOOLCHAIN_PATH "${LOCAL_RUSTUP_HOME}/toolchains/${RUST_CHANNEL}-${RUST_HOST_TRIPLE}")
+
+# Reuse the cached toolchain when it is already present in the build tree to
+# avoid forcing network access during incremental builds.
+if(EXISTS "${INSTALLED_TOOLCHAIN_PATH}/bin/rustc")
+    add_custom_target(reussir-rust-toolchain-fetch
+        COMMAND ${CMAKE_COMMAND} -E echo
+            "Using cached Rust toolchain ${RUST_CHANNEL}-${RUST_HOST_TRIPLE} from ${INSTALLED_TOOLCHAIN_PATH}"
+        COMMENT "Using cached Rust toolchain ${RUST_CHANNEL}-${RUST_HOST_TRIPLE}"
+        VERBATIM
+    )
+else()
+    # We need to install the toolchain.
+    # We use a custom command/target to ensure it's there.
+    # Note: We install the specific toolchain variant matching the host triple
+    # to ensure the installed path matches what we'll look for during copy.
+    add_custom_target(reussir-rust-toolchain-fetch
+        COMMAND ${CMAKE_COMMAND} -E env
+            RUSTUP_HOME=${LOCAL_RUSTUP_HOME}
+            CARGO_HOME=${LOCAL_CARGO_HOME}
+            rustup toolchain install ${RUST_CHANNEL}-${RUST_HOST_TRIPLE} --profile minimal --no-self-update
+        COMMENT "Ensuring Rust toolchain ${RUST_CHANNEL}-${RUST_HOST_TRIPLE} is installed in ${LOCAL_RUSTUP_HOME}"
+        USES_TERMINAL
+    )
+endif()
 
 add_custom_target(reussir-rust-install ALL
     # Copy bin

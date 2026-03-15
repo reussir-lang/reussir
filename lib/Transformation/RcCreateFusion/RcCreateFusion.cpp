@@ -20,7 +20,7 @@
 namespace reussir {
 
 #define GEN_PASS_DEF_REUSSIRRCCREATEFUSIONPASS
-#include "Reussir/Conversion/Passes.h.inc"
+#include "Reussir/Transformation/Passes.h.inc"
 
 namespace {
 

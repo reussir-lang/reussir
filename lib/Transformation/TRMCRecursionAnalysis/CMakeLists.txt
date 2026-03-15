@@ -1,8 +1,8 @@
-add_mlir_conversion_library(MLIRReussirTRMCRecursionAnalysis
+add_mlir_library(MLIRReussirTRMCRecursionAnalysis
   TRMCRecursionAnalysis.cpp
 
   DEPENDS
-    MLIRReussirConversionPassIncGen
+    MLIRReussirTransformationPassIncGen
 
   LINK_LIBS PUBLIC
     MLIRFuncDialect

@@ -1,0 +1,28 @@
+add_subdirectory(RcCreateSink)
+add_subdirectory(RcCreateFusion)
+add_subdirectory(InferVariantTag)
+add_subdirectory(IncDecCancellation)
+add_subdirectory(TokenReuse)
+add_subdirectory(InvariantGroupAnalysis)
+add_subdirectory(UniqueCarryingRecursionAnalysis)
+add_subdirectory(TRMCRecursionAnalysis)
+
+set(REUSSIR_TRANSFORMATION_AGGREGATE_LIBS
+  MLIRReussirRcCreateSink
+  MLIRReussirRcCreateFusion
+  MLIRReussirInferVariantTag
+  MLIRReussirIncDecCancellation
+  MLIRReussirTokenReuse
+  MLIRReussirInvariantGroupAnalysis
+  MLIRReussirUniqueCarryingRecursionAnalysis
+  MLIRReussirTRMCRecursionAnalysis
+)
+
+add_library(MLIRReussirTransformation INTERFACE)
+target_link_libraries(MLIRReussirTransformation
+  INTERFACE
+    ${REUSSIR_TRANSFORMATION_AGGREGATE_LIBS}
+)
+add_dependencies(MLIRReussirTransformation
+  ${REUSSIR_TRANSFORMATION_AGGREGATE_LIBS}
+)

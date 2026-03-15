@@ -1,8 +1,8 @@
-add_mlir_conversion_library(MLIRReussirRcCreateSink
+add_mlir_library(MLIRReussirRcCreateSink
   RcCreateSink.cpp
 
   DEPENDS
-  MLIRReussirConversionPassIncGen
+  MLIRReussirTransformationPassIncGen
 
   LINK_COMPONENTS
   Core

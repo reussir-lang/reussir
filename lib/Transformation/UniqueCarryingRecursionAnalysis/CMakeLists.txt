@@ -1,8 +1,8 @@
-add_mlir_conversion_library(MLIRReussirUniqueCarryingRecursionAnalysis
+add_mlir_library(MLIRReussirUniqueCarryingRecursionAnalysis
   UniqueCarryingRecursionAnalysis.cpp
 
   DEPENDS
-  MLIRReussirConversionPassIncGen
+  MLIRReussirTransformationPassIncGen
 
   LINK_COMPONENTS
   Core

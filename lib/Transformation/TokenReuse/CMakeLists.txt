@@ -1,8 +1,8 @@
-add_mlir_conversion_library(MLIRReussirTokenReuse
+add_mlir_library(MLIRReussirTokenReuse
   TokenReuse.cpp
 
   DEPENDS
-  MLIRReussirConversionPassIncGen
+  MLIRReussirTransformationPassIncGen
 
   LINK_COMPONENTS
   Core

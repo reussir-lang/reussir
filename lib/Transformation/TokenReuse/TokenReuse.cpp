@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Reussir/Conversion/TokenReuse.h"
+#include "Reussir/Transformation/TokenReuse.h"
 #include "Reussir/Analysis/AliasAnalysis.h"
 #include "Reussir/Conversion/RcDecrementExpansion.h"
 #include "Reussir/IR/ReussirDialect.h"
@@ -35,7 +35,7 @@
 
 namespace reussir {
 #define GEN_PASS_DEF_REUSSIRTOKENREUSEPASS
-#include "Reussir/Conversion/Passes.h.inc"
+#include "Reussir/Transformation/Passes.h.inc"
 
 // This Pass implements token reuse optimization for Reussir dialect.
 // This is currently a one-shot token assignment pass that does not rely on

@@ -1,8 +1,8 @@
-add_mlir_conversion_library(MLIRReussirIncDecCancellation
+add_mlir_library(MLIRReussirIncDecCancellation
   IncDecCancellation.cpp
 
   DEPENDS
-  MLIRReussirConversionPassIncGen
+  MLIRReussirTransformationPassIncGen
   MLIRReussirAnalysis
 
   LINK_COMPONENTS

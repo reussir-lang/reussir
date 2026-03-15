@@ -13,8 +13,8 @@
 
 #pragma once
 
-#ifndef REUSSIR_CONVERSION_INFERVARIANTTAG_H
-#define REUSSIR_CONVERSION_INFERVARIANTTAG_H
+#ifndef REUSSIR_TRANSFORMATION_INFERVARIANTTAG_H
+#define REUSSIR_TRANSFORMATION_INFERVARIANTTAG_H
 
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/BuiltinAttributes.h>
@@ -26,7 +26,7 @@
 namespace reussir {
 
 #define GEN_PASS_DECL_REUSSIRINFERVARIANTTAGPASS
-#include "Reussir/Conversion/Passes.h.inc"
+#include "Reussir/Transformation/Passes.h.inc"
 
 //===----------------------------------------------------------------------===//
 // Tag inference
@@ -66,4 +66,4 @@ void runTagInference(mlir::func::FuncOp func);
 
 } // namespace reussir
 
-#endif // REUSSIR_CONVERSION_INFERVARIANTTAG_H
+#endif // REUSSIR_TRANSFORMATION_INFERVARIANTTAG_H

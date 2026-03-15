@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Reussir/Conversion/Passes.h"
+#include "Reussir/Transformation/Passes.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
@@ -22,7 +22,7 @@
 namespace reussir {
 
 #define GEN_PASS_DEF_REUSSIRTRMCRECURSIONANALYSISPASS
-#include "Reussir/Conversion/Passes.h.inc"
+#include "Reussir/Transformation/Passes.h.inc"
 
 namespace {
 

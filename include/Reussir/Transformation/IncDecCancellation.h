@@ -13,8 +13,8 @@
 
 #pragma once
 
-#ifndef REUSSIR_CONVERSION_INCDECCANCELLATION_H
-#define REUSSIR_CONVERSION_INCDECCANCELLATION_H
+#ifndef REUSSIR_TRANSFORMATION_INCDECCANCELLATION_H
+#define REUSSIR_TRANSFORMATION_INCDECCANCELLATION_H
 
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/BuiltinAttributes.h>
@@ -26,7 +26,7 @@
 namespace reussir {
 
 #define GEN_PASS_DECL_REUSSIRINCDECCANCELLATIONPASS
-#include "Reussir/Conversion/Passes.h.inc"
+#include "Reussir/Transformation/Passes.h.inc"
 
 //===----------------------------------------------------------------------===//
 // IncDecCancellationPass
@@ -40,4 +40,4 @@ llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func);
 
 } // namespace reussir
 
-#endif // REUSSIR_CONVERSION_INCDECCANCELLATION_H
+#endif // REUSSIR_TRANSFORMATION_INCDECCANCELLATION_H
