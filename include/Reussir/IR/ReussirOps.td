@@ -694,6 +694,89 @@ def ReussirRcAssumeUniqueOp : ReussirRcOp<"assume_unique", []> {
 }
 
 //===----------------------------------------------------------------------===//
+// Reussir Array Operations
+//===----------------------------------------------------------------------===//
+class ReussirArrayOp<string mnemonic, list<Trait> traits>
+    : ReussirOp<"array."#mnemonic, traits>;
+
+def ReussirArrayCreateOp : ReussirArrayOp<"create", []> {
+  let summary = "Create an inline fixed-size array";
+  let description = [{
+    `reussir.array.create` assembles an inline fixed-size array from element
+    values.
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$elements);
+  let results = (outs Res<ReussirArrayType, "created array">:$array);
+
+  let assemblyFormat = [{
+    (`(` $elements^ `:` type($elements) `)`)? `:` qualified(type($array)) attr-dict
+  }];
+
+  let hasVerifier = 1;
+}
+
+def ReussirArrayExtractOp : ReussirArrayOp<"extract", []> {
+  let summary = "Extract an element from an inline fixed-size array";
+  let description = [{
+    `reussir.array.extract` extracts an element from an inline fixed-size
+    array value.
+  }];
+
+  let arguments = (ins Arg<ReussirArrayType, "array to extract from">:$array,
+      Arg<IndexAttr, "element index">:$index);
+  let results = (outs Res<AnyType, "extracted element">:$element);
+
+  let assemblyFormat = [{
+    `(` $array `:` qualified(type($array)) `)` `[` $index `]` `:` qualified(type($element)) attr-dict
+  }];
+
+  let hasVerifier = 1;
+}
+
+def ReussirArrayProjectOp : ReussirArrayOp<"project", []> {
+  let summary = "Project an element reference from an inline fixed-size array";
+  let description = [{
+    `reussir.array.project` projects a reference to one element inside an
+    inline fixed-size array.
+
+    This is the GEP-oriented array operation and is intended to be the basis
+    for in-place array recursion and future mutation support.
+  }];
+
+  let arguments = (ins
+      Arg<ReussirRefType, "reference to array">:$arrayRef,
+      Arg<Index, "element index">:$index);
+  let results = (outs Res<ReussirRefType, "projected element reference">:$elementRef);
+
+  let assemblyFormat = [{
+    `(` $arrayRef `:` qualified(type($arrayRef)) `,` $index `:` type($index) `)` `:` qualified(type($elementRef)) attr-dict
+  }];
+
+  let hasVerifier = 1;
+}
+
+def ReussirArrayInsertOp : ReussirArrayOp<"insert", []> {
+  let summary = "Insert an element into an inline fixed-size array";
+  let description = [{
+    `reussir.array.insert` returns a new inline fixed-size array value with one
+    element updated.
+  }];
+
+  let arguments = (ins Arg<ReussirArrayType, "array to update">:$array,
+      Arg<IndexAttr, "element index">:$index,
+      Arg<AnyType, "replacement element">:$value);
+  let results = (outs Res<ReussirArrayType, "updated array">:$updated);
+
+  let assemblyFormat = [{
+    `(` $array `:` qualified(type($array)) `)` `[` $index `]`
+    `(` $value `:` type($value) `)` `:` qualified(type($updated)) attr-dict
+  }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Record Operations
 //===----------------------------------------------------------------------===//
 class ReussirRecordOp<string mnemonic, list<Trait> traits>

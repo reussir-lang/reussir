@@ -54,6 +54,10 @@ LLVMTypeConverter::LLVMTypeConverter(mlir::ModuleOp op)
       [this](RecordType type, llvm::SmallVectorImpl<mlir::Type> &results) {
         return convertRecordType(type, results);
       });
+  addConversion([this](ArrayType type) {
+    return mlir::LLVM::LLVMArrayType::get(
+        convertType(type.getElementType()), type.getExtent());
+  });
 
   // Pointer-like types: RefType, HoleType, RegionType, RcType, TokenType
   addConversion([this](RefType type) {

@@ -134,6 +134,28 @@ void printTypeWithCapabilityAndAtomicKind(mlir::AsmPrinter &printer,
     printer << ' ' << type.getAtomicKind();
   printer << ">";
 }
+
+bool typeHasNoRegionalFields(mlir::Type type) {
+  return llvm::TypeSwitch<mlir::Type, bool>(type)
+      .Case<ArrayType>([](ArrayType arrayType) {
+        return typeHasNoRegionalFields(arrayType.getElementType());
+      })
+      .Case<RecordType>([](RecordType recordType) {
+        if (!recordType.getComplete())
+          return false;
+        if (recordType.getDefaultCapability() != Capability::value)
+          return true;
+        for (auto [member, isField] :
+             llvm::zip(recordType.getMembers(), recordType.getMemberIsField())) {
+          if (isField)
+            return false;
+          if (!typeHasNoRegionalFields(member))
+            return false;
+        }
+        return true;
+      })
+      .Default([](mlir::Type) { return true; });
+}
 } // namespace
 //===----------------------------------------------------------------------===//
 // isNonNullPointerType
@@ -159,6 +181,9 @@ bool isTriviallyCopyable(mlir::Type type) {
       .Case<mlir::IntegerType, mlir::FloatType, mlir::IndexType>(
           [](auto) { return true; })
       .Case<RawPtrType, HoleType>([](auto) { return true; })
+      .Case<ArrayType>([](ArrayType arrayType) {
+        return isTriviallyCopyable(arrayType.getElementType());
+      })
       // Reference counted and reference types are NOT trivially copyable
       // as they require special handling for reference counting/lifetime
       .Case<RcType, RefType, ClosureType>([](auto) { return false; })
@@ -502,9 +527,29 @@ reussir::Capability RecordType::getDefaultCapability() const {
 }
 
 bool RecordType::hasNoRegionalFields() const {
-  return llvm::none_of(getMemberIsField(),
-                       [](bool isField) { return isField; });
+  return typeHasNoRegionalFields(*this);
 }
+
+//===----------------------------------------------------------------------===//
+// ArrayType DataLayoutInterface
+//===----------------------------------------------------------------------===//
+llvm::TypeSize
+ArrayType::getTypeSizeInBits(const ::mlir::DataLayout &dataLayout,
+                             ::mlir::DataLayoutEntryListRef params) const {
+  return dataLayout.getTypeSizeInBits(getElementType()) * getExtent();
+}
+
+uint64_t
+ArrayType::getABIAlignment(const ::mlir::DataLayout &dataLayout,
+                           ::mlir::DataLayoutEntryListRef params) const {
+  return dataLayout.getTypeABIAlignment(getElementType());
+}
+
+MLIR_DATA_LAYOUT_EXPAND_PREFERRED_ALIGN(
+    uint64_t ArrayType::getPreferredAlignment(
+        const ::mlir::DataLayout &dataLayout,
+        ::mlir::DataLayoutEntryListRef params)
+        const { return getABIAlignment(dataLayout, params); })
 
 //===----------------------------------------------------------------------===//
 // RecordType Mutations

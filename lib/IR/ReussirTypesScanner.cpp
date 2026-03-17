@@ -13,7 +13,9 @@
 
 #include <cassert>
 #include <cstdint>
+#include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/Alignment.h>
 #include <llvm/Support/MathExtras.h>
 #include <llvm/Support/TypeSize.h>
@@ -25,6 +27,58 @@
 #include "Reussir/IR/ReussirTypes.h"
 
 namespace reussir {
+namespace {
+
+static bool needsInlineScanner(mlir::Type type) {
+  return llvm::TypeSwitch<mlir::Type, bool>(type)
+      .Case<ArrayType>([](ArrayType arrayType) {
+        return needsInlineScanner(arrayType.getElementType());
+      })
+      .Case<RecordType>([](RecordType recordType) {
+        return recordType.getDefaultCapability() == Capability::value &&
+               !recordType.hasNoRegionalFields();
+      })
+      .Default([](mlir::Type) { return false; });
+}
+
+static size_t emitScannerInstructionsForInlineType(
+    mlir::Type type, llvm::SmallVectorImpl<int32_t> &buffer,
+    const mlir::DataLayout &dataLayout,
+    const scanner::EmitState &emitState) {
+  using namespace scanner;
+  if (auto recordType = llvm::dyn_cast<RecordType>(type))
+    return recordType.emitScannerInstructions(buffer, dataLayout, emitState);
+
+  auto arrayType = llvm::cast<ArrayType>(type);
+  size_t scannedBytes = emitState.scannedBytes;
+  size_t cursorPosition = emitState.cursorPosition;
+  mlir::Type elementType = arrayType.getElementType();
+  llvm::TypeSize elementSize = dataLayout.getTypeSize(elementType);
+  if (!elementSize.isFixed())
+    llvm_unreachable("ArrayType must have a fixed element size");
+  uint64_t elementSizeInBytes = elementSize.getFixedValue();
+  uint64_t elementAlignment = dataLayout.getTypeABIAlignment(elementType);
+
+  scannedBytes = llvm::alignTo(scannedBytes, elementAlignment);
+  for ([[maybe_unused]] uint64_t index : llvm::seq<uint64_t>(0,
+                                                             arrayType.getExtent())) {
+    if (needsInlineScanner(elementType)) {
+      size_t newCursorPosition = emitScannerInstructionsForInlineType(
+          elementType, buffer, dataLayout,
+          {/*cursorPosition=*/cursorPosition,
+           /*scannedBytes=*/scannedBytes});
+      buffer.pop_back();
+      cursorPosition = newCursorPosition;
+    }
+    scannedBytes += elementSizeInBytes;
+  }
+
+  buffer.push_back(end());
+  return cursorPosition;
+}
+
+} // namespace
+
 size_t
 RecordType::emitScannerInstructions(llvm::SmallVectorImpl<int32_t> &buffer,
                                     const mlir::DataLayout &dataLayout,
@@ -60,12 +114,9 @@ RecordType::emitScannerInstructions(llvm::SmallVectorImpl<int32_t> &buffer,
         }
         buffer.push_back(field());
       } else {
-        RecordType nestedRecordType = llvm::dyn_cast<RecordType>(rawMember);
-        if (!isField && nestedRecordType &&
-            nestedRecordType.getDefaultCapability() == Capability::value &&
-            !nestedRecordType.hasNoRegionalFields()) {
-          size_t newCursorPosition = nestedRecordType.emitScannerInstructions(
-              buffer, dataLayout,
+        if (!isField && needsInlineScanner(rawMember)) {
+          size_t newCursorPosition = emitScannerInstructionsForInlineType(
+              rawMember, buffer, dataLayout,
               {/*cursorPosition=*/cursorPosition,
                /*scannedBytes=*/scannedBytes});
           buffer.pop_back();
@@ -111,16 +162,10 @@ RecordType::emitScannerInstructions(llvm::SmallVectorImpl<int32_t> &buffer,
       rewriteEndToSkip.push_back(buffer.size());
       buffer.push_back(end());
     } else {
-      auto recordType = llvm::dyn_cast_or_null<RecordType>(rawMember);
-      // that if the record is directly nested as a value and has mutable fields
-      // to scan (TODO: this should not be possible but let's be conservative
-      // here)
-      if (!isField && recordType &&
-          recordType.getDefaultCapability() == Capability::value &&
-          !recordType.hasNoRegionalFields()) {
-        // we need to scan nested record
-        size_t newCursorPosition = recordType.emitScannerInstructions(
-            buffer, dataLayout,
+      if (!isField && needsInlineScanner(rawMember)) {
+        // We need to scan nested inline aggregate elements.
+        size_t newCursorPosition = emitScannerInstructionsForInlineType(
+            rawMember, buffer, dataLayout,
             {/*cursorPosition=*/cursorPosition,
              /*scannedBytes=*/scannedBytes});
         buffer.pop_back(); // remove the nested end

@@ -152,6 +152,29 @@ def ReussirRecordType
 }
 
 //===----------------------------------------------------------------------===//
+// Reussir Array Type
+//===----------------------------------------------------------------------===//
+def ReussirArrayType
+    : ReussirType<
+          "Array", "array",
+          [DeclareTypeInterfaceMethods<DataLayoutTypeInterface>]> {
+  let summary = "Reussir inline fixed-size array type";
+  let description = [{
+    `reussir.array` represents an inline fixed-size aggregate array.
+
+    Arrays are always laid out inline and lower recursively to LLVM array
+    aggregates. Managed arrays are represented separately as `!reussir.rc`
+    around this inline payload type.
+  }];
+
+  let parameters = (ins "mlir::Type":$eleTy, "uint64_t":$extent);
+  let assemblyFormat = "`<` $extent `x` $eleTy `>`";
+  let extraClassDeclaration = [{
+    mlir::Type getElementType() const { return getEleTy(); }
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Token Type
 //===----------------------------------------------------------------------===//
 def ReussirTokenType

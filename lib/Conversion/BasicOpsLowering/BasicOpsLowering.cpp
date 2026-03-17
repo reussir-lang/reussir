@@ -454,6 +454,79 @@ struct ReussirRefSpilledConversionPattern
   }
 };
 
+struct ReussirArrayCreateConversionPattern
+    : public mlir::OpConversionPattern<ReussirArrayCreateOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayCreateOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Type llvmArrayType = getTypeConverter()->convertType(op.getType());
+    mlir::Value aggregate =
+        rewriter.create<mlir::LLVM::UndefOp>(op.getLoc(), llvmArrayType);
+    for (auto [index, element] : llvm::enumerate(adaptor.getElements()))
+      aggregate = rewriter.create<mlir::LLVM::InsertValueOp>(
+          op.getLoc(), aggregate, element,
+          llvm::ArrayRef<int64_t>{static_cast<int64_t>(index)});
+    rewriter.replaceOp(op, aggregate);
+    return mlir::success();
+  }
+};
+
+struct ReussirArrayExtractConversionPattern
+    : public mlir::OpConversionPattern<ReussirArrayExtractOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayExtractOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<mlir::LLVM::ExtractValueOp>(
+        op, adaptor.getArray(),
+        llvm::ArrayRef<int64_t>{static_cast<int64_t>(op.getIndex()
+                                                         .getZExtValue())});
+    return mlir::success();
+  }
+};
+
+struct ReussirArrayProjectConversionPattern
+    : public mlir::OpConversionPattern<ReussirArrayProjectOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayProjectOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    mlir::Type resultType = converter->convertType(op.getElementRef().getType());
+    auto llvmPtrType = llvm::dyn_cast<mlir::LLVM::LLVMPointerType>(resultType);
+    if (!llvmPtrType)
+      return op.emitOpError("projected result must be an LLVM pointer type");
+
+    RefType arrayRefType = op.getArrayRef().getType();
+    mlir::Type llvmArrayType =
+        converter->convertType(arrayRefType.getElementType());
+    auto gepOp = rewriter.create<mlir::LLVM::GEPOp>(
+        op.getLoc(), llvmPtrType, llvmArrayType, adaptor.getArrayRef(),
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, adaptor.getIndex()});
+    rewriter.replaceOp(op, gepOp);
+    return mlir::success();
+  }
+};
+
+struct ReussirArrayInsertConversionPattern
+    : public mlir::OpConversionPattern<ReussirArrayInsertOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayInsertOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<mlir::LLVM::InsertValueOp>(
+        op, adaptor.getArray(), adaptor.getValue(),
+        llvm::ArrayRef<int64_t>{static_cast<int64_t>(op.getIndex()
+                                                         .getZExtValue())});
+    return mlir::success();
+  }
+};
+
 struct ReussirRecordCompoundConversionPattern
     : public mlir::OpConversionPattern<ReussirRecordCompoundOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -2510,6 +2583,8 @@ struct BasicOpsLoweringPass
           ReussirNullableCoerceOp, ReussirRcIncOp, ReussirRcCreateOp,
           ReussirRcCreateCompoundOp, ReussirRcCreateVariantOp, ReussirRcDecOp,
           ReussirRcBorrowOp, ReussirRcIsUniqueOp, ReussirRcAssumeUniqueOp,
+          ReussirArrayCreateOp, ReussirArrayExtractOp, ReussirArrayProjectOp,
+          ReussirArrayInsertOp,
           ReussirRecordCompoundOp,
           ReussirRecordVariantOp, ReussirRefProjectOp, ReussirRecordTagOp,
           ReussirRecordExtractOp, ReussirRecordCoerceOp, ReussirRegionVTableOp,
@@ -2551,6 +2626,10 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirRcCreateVariantOpConversionPattern,
       ReussirRcBorrowOpConversionPattern, ReussirRcIsUniqueOpConversionPattern,
       ReussirRcAssumeUniqueOpConversionPattern,
+      ReussirArrayCreateConversionPattern,
+      ReussirArrayExtractConversionPattern,
+      ReussirArrayProjectConversionPattern,
+      ReussirArrayInsertConversionPattern,
       ReussirRecordCompoundConversionPattern,
       ReussirRecordExtractConversionPattern,
       ReussirRecordVariantConversionPattern,

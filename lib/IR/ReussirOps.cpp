@@ -174,6 +174,18 @@ mlir::LogicalResult verifyHoleFields(mlir::Operation *op,
   return mlir::success();
 }
 
+bool supportsOwnershipAcquisition(mlir::Type type) {
+  return llvm::TypeSwitch<mlir::Type, bool>(type)
+      .Case<RcType>([](RcType) { return true; })
+      .Case<RecordType>([](RecordType recordType) {
+        return recordType.getComplete();
+      })
+      .Case<ArrayType>([](ArrayType arrayType) {
+        return supportsOwnershipAcquisition(arrayType.getElementType());
+      })
+      .Default([](mlir::Type type) { return isTriviallyCopyable(type); });
+}
+
 } // namespace
 
 ///===----------------------------------------------------------------------===//
@@ -633,6 +645,76 @@ mlir::LogicalResult ReussirHoleStoreOp::verify() {
 //===----------------------------------------------------------------------===//
 // Reussir Record Operations
 //===----------------------------------------------------------------------===//
+// Array operation verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirArrayCreateOp::verify() {
+  ArrayType arrayType = getArray().getType();
+  if (arrayType.getExtent() != getElements().size())
+    return emitOpError("number of elements must match array extent, got ")
+           << getElements().size() << " elements for extent "
+           << arrayType.getExtent();
+
+  mlir::Type elementType = arrayType.getElementType();
+  for (mlir::Value element : getElements()) {
+    if (element.getType() != elementType)
+      return emitOpError("element type must match array element type, got ")
+             << element.getType() << " but expected " << elementType;
+  }
+  return mlir::success();
+}
+
+mlir::LogicalResult ReussirArrayExtractOp::verify() {
+  ArrayType arrayType = getArray().getType();
+  if (getIndex().getZExtValue() >= arrayType.getExtent())
+    return emitOpError("index out of bounds: ")
+           << getIndex().getZExtValue() << " >= " << arrayType.getExtent();
+  if (getElement().getType() != arrayType.getElementType())
+    return emitOpError("element type must match array element type, got ")
+           << getElement().getType() << " but expected "
+           << arrayType.getElementType();
+  return mlir::success();
+}
+
+mlir::LogicalResult ReussirArrayProjectOp::verify() {
+  RefType arrayRefType = getArrayRef().getType();
+  RefType elementRefType = getElementRef().getType();
+  ArrayType arrayType = llvm::dyn_cast<ArrayType>(arrayRefType.getElementType());
+  if (!arrayType)
+    return emitOpError("array reference element type must be an array type, got: ")
+           << arrayRefType.getElementType();
+  if (elementRefType.getElementType() != arrayType.getElementType())
+    return emitOpError("projected reference element type must match array element type, got ")
+           << elementRefType.getElementType() << " but expected "
+           << arrayType.getElementType();
+
+  bool sameCapability =
+      elementRefType.getCapability() == arrayRefType.getCapability();
+  bool fieldProjection =
+      elementRefType.getCapability() == Capability::field &&
+      arrayRefType.getCapability() == Capability::flex;
+  if (!sameCapability && !fieldProjection)
+    return emitOpError("projected reference capability must match array reference capability or be a field projection from flex, got ")
+           << stringifyCapability(elementRefType.getCapability())
+           << " from " << stringifyCapability(arrayRefType.getCapability());
+  return mlir::success();
+}
+
+mlir::LogicalResult ReussirArrayInsertOp::verify() {
+  ArrayType arrayType = getArray().getType();
+  ArrayType updatedType = getUpdated().getType();
+  if (arrayType != updatedType)
+    return emitOpError("updated array type must match input array type, got ")
+           << updatedType << " but expected " << arrayType;
+  if (getIndex().getZExtValue() >= arrayType.getExtent())
+    return emitOpError("index out of bounds: ")
+           << getIndex().getZExtValue() << " >= " << arrayType.getExtent();
+  if (getValue().getType() != arrayType.getElementType())
+    return emitOpError("value type must match array element type, got ")
+           << getValue().getType() << " but expected "
+           << arrayType.getElementType();
+  return mlir::success();
+}
+
 // RecordCompoundOp verification
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRecordCompoundOp::verify() {
@@ -1916,6 +1998,13 @@ mlir::LogicalResult ReussirRefAcquireOp::verify() {
     return mlir::success();
   }
 
+  if (auto arrayType = llvm::dyn_cast<ArrayType>(elementType)) {
+    if (!supportsOwnershipAcquisition(arrayType))
+      return emitOpError("unsupported element type for acquisition: ")
+             << elementType;
+    return mlir::success();
+  }
+
   return emitOpError("unsupported element type for acquisition: ")
          << elementType;
 }
@@ -1978,6 +2067,22 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
         builder.create<ReussirRcIncOp>(loc, value);
         return mlir::success();
       })
+      .Case<RecordType>([&](RecordType recordType) {
+        auto ref = builder.create<ReussirRefSpilledOp>(
+            loc, RefType::get(builder.getContext(), recordType), value);
+        builder.create<ReussirRefAcquireOp>(loc, ref);
+        return mlir::success();
+      })
+      .Case<ArrayType>([&](ArrayType arrayType) {
+        for (uint64_t index = 0; index < arrayType.getExtent(); ++index) {
+          auto element = builder.create<ReussirArrayExtractOp>(
+              loc, arrayType.getElementType(), value,
+              builder.getIndexAttr(index));
+          if (emitOwnershipAcquisition(element, builder, loc).failed())
+            return mlir::failure();
+        }
+        return mlir::success();
+      })
       // For Ref types, check what they point to and handle accordingly
       .Case<RefType>([&](RefType refType) {
         mlir::Type elementType = refType.getElementType();
@@ -1990,6 +2095,25 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
           auto loadedValue =
               builder.create<ReussirRefLoadOp>(loc, elementType, value);
           return emitOwnershipAcquisition(loadedValue, builder, loc);
+        }
+
+        if (auto arrayType = llvm::dyn_cast<ArrayType>(elementType)) {
+          Capability projectedCap =
+              refType.getCapability() == Capability::flex
+                  ? Capability::field
+                  : refType.getCapability();
+          for (uint64_t index = 0; index < arrayType.getExtent(); ++index) {
+            auto indexValue = builder.create<mlir::arith::ConstantIndexOp>(
+                loc, static_cast<int64_t>(index));
+            auto elementRef = builder.create<ReussirArrayProjectOp>(
+                loc,
+                RefType::get(builder.getContext(), arrayType.getElementType(),
+                             projectedCap),
+                value, indexValue);
+            if (emitOwnershipAcquisition(elementRef, builder, loc).failed())
+              return mlir::failure();
+          }
+          return mlir::success();
         }
 
         // If reference points to a record, handle fields directly
