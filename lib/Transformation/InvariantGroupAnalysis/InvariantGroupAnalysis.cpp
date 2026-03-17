@@ -171,6 +171,16 @@ mlir::LogicalResult InvariantGroupAnalysis::visitOperation(
     return mlir::success();
   }
 
+  // array.project: propagate input state directly
+  if (llvm::isa<ReussirArrayProjectOp>(op)) {
+    assert(operands.size() >= 1 &&
+           "array.project must have at least 1 operand");
+    const auto &inputState = operands[0]->getValue();
+    for (auto *result : results)
+      propagateIfChanged(result, result->join(inputState));
+    return mlir::success();
+  }
+
   // All other ops: check results. Those producing RefType get Unsafe,
   // others get default (unchanged).
   for (auto [idx, result] : llvm::enumerate(results)) {

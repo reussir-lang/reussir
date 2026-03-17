@@ -136,6 +136,26 @@ private:
   }
 
   mlir::LogicalResult
+  rewriteDropArray(ArrayType arrayType, Capability refCap, ReussirRefDropOp op,
+                   mlir::PatternRewriter &rewriter) const {
+    for (uint64_t index = 0; index < arrayType.getExtent(); ++index) {
+      mlir::Type elementType = arrayType.getElementType();
+      if (isTriviallyCopyable(elementType))
+        continue;
+      Capability projectedCap =
+          refCap == Capability::flex ? Capability::field : refCap;
+      auto indexValue = rewriter.create<mlir::arith::ConstantIndexOp>(
+          op.getLoc(), static_cast<int64_t>(index));
+      auto elementRef = rewriter.create<ReussirArrayProjectOp>(
+          op.getLoc(), rewriter.getType<RefType>(elementType, projectedCap),
+          op.getRef(), indexValue);
+      rewriter.create<ReussirRefDropOp>(op.getLoc(), elementRef);
+    }
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+
+  mlir::LogicalResult
   rewriteDropNullable(NullableType nullableType, ReussirRefDropOp op,
                       mlir::PatternRewriter &rewriter) const {
     if (auto rcType = llvm::dyn_cast<RcType>(nullableType.getPtrTy())) {
@@ -225,6 +245,9 @@ public:
                                       op.getVariant()->getZExtValue(), refCap,
                                       op, rewriter);
           return rewriteDropVariant(recordType, refCap, op, rewriter);
+        })
+        .Case<ArrayType>([&](ArrayType arrayType) {
+          return rewriteDropArray(arrayType, refCap, op, rewriter);
         })
         .Case<NullableType>([&](NullableType nullableType) {
           return rewriteDropNullable(nullableType, op, rewriter);

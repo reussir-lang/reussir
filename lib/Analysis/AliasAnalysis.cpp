@@ -109,6 +109,23 @@ bool ReussirAliasAnalysisImpl::sameProjectionPath(Value lhs, Value rhs) {
     }
     if (lhsProj || rhsProj)
       return false;
+
+    auto lhsArrayProj =
+        llvm::dyn_cast_if_present<ReussirArrayProjectOp>(lhs.getDefiningOp());
+    auto rhsArrayProj =
+        llvm::dyn_cast_if_present<ReussirArrayProjectOp>(rhs.getDefiningOp());
+    if (lhsArrayProj && rhsArrayProj) {
+      if (lhsArrayProj.getIndex() != rhsArrayProj.getIndex())
+        return false;
+      if (lhsArrayProj.getElementRef().getType() !=
+          rhsArrayProj.getElementRef().getType())
+        return false;
+      lhs = lhsArrayProj.getArrayRef();
+      rhs = rhsArrayProj.getArrayRef();
+      continue;
+    }
+    if (lhsArrayProj || rhsArrayProj)
+      return false;
     break;
   }
 
@@ -151,6 +168,14 @@ AliasResult ReussirAliasAnalysisImpl::decideAlias(TypedValue<RefType> lhs,
       llvm::dyn_cast_if_present<ReussirRefProjectOp>(rhs.getDefiningOp());
   if (lhsProjOp && rhsProjOp && lhsProjOp.getIndex() == rhsProjOp.getIndex())
     return alias(lhsProjOp.getRef(), rhsProjOp.getRef());
+
+  auto lhsArrayProjOp =
+      llvm::dyn_cast_if_present<ReussirArrayProjectOp>(lhs.getDefiningOp());
+  auto rhsArrayProjOp =
+      llvm::dyn_cast_if_present<ReussirArrayProjectOp>(rhs.getDefiningOp());
+  if (lhsArrayProjOp && rhsArrayProjOp &&
+      lhsArrayProjOp.getIndex() == rhsArrayProjOp.getIndex())
+    return alias(lhsArrayProjOp.getArrayRef(), rhsArrayProjOp.getArrayRef());
 
   // Case 2, check if they are borrowed from a aliased RC pointer.
   auto lhsRcOp =
