@@ -13,12 +13,15 @@
 
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/DenseSet.h>
+#include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/Location.h>
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/Pass/Pass.h>
+
+#include <optional>
 
 namespace reussir {
 
@@ -29,6 +32,16 @@ namespace {
 
 static constexpr llvm::StringLiteral kCarryingUniquenessAttr =
     "reussir.carrying_uniqueness";
+
+enum class AggregateProjectionKind : uint8_t {
+  Array,
+  Record,
+};
+
+struct AggregateProjection {
+  AggregateProjectionKind kind;
+  unsigned index;
+};
 
 struct UniqueCarryingValue {
   bool unknown = true;
@@ -177,11 +190,136 @@ public:
   }
 
 private:
+  static std::optional<unsigned> getConstantProjectIndex(mlir::Value index) {
+    auto constantOp =
+        llvm::dyn_cast_if_present<mlir::arith::ConstantOp>(index.getDefiningOp());
+    if (!constantOp)
+      return std::nullopt;
+
+    auto integerAttr = llvm::dyn_cast<mlir::IntegerAttr>(constantOp.getValue());
+    if (!integerAttr)
+      return std::nullopt;
+    return static_cast<unsigned>(integerAttr.getUInt());
+  }
+
+  UniqueCarryingValue
+  evaluateAggregateProjectionPath(mlir::Value aggregate,
+                                  llvm::ArrayRef<AggregateProjection> path) {
+    if (path.empty())
+      return evaluate(aggregate);
+
+    AggregateProjection projection = path.front();
+    if (auto create =
+            llvm::dyn_cast_if_present<ReussirArrayCreateOp>(
+                aggregate.getDefiningOp())) {
+      if (projection.kind != AggregateProjectionKind::Array ||
+          projection.index >= create.getElements().size())
+        return UniqueCarryingValue::getUnknown();
+      return evaluateAggregateProjectionPath(create.getElements()[projection.index],
+                                            path.drop_front());
+    }
+
+    if (auto insert =
+            llvm::dyn_cast_if_present<ReussirArrayInsertOp>(
+                aggregate.getDefiningOp())) {
+      if (projection.kind != AggregateProjectionKind::Array)
+        return UniqueCarryingValue::getUnknown();
+      if (insert.getIndex().getZExtValue() == projection.index)
+        return evaluateAggregateProjectionPath(insert.getValue(),
+                                              path.drop_front());
+      return evaluateAggregateProjectionPath(insert.getArray(), path);
+    }
+
+    if (auto create =
+            llvm::dyn_cast_if_present<ReussirRecordCompoundOp>(
+                aggregate.getDefiningOp())) {
+      if (projection.kind != AggregateProjectionKind::Record ||
+          projection.index >= create.getFields().size())
+        return UniqueCarryingValue::getUnknown();
+      return evaluateAggregateProjectionPath(create.getFields()[projection.index],
+                                            path.drop_front());
+    }
+
+    return UniqueCarryingValue::getUnknown();
+  }
+
+  UniqueCarryingValue evaluateLoadedReference(mlir::Value ref) {
+    llvm::SmallVector<AggregateProjection> reversedPath;
+    bool hasDynamicArrayProjection = false;
+
+    while (true) {
+      if (auto arrayProject =
+              llvm::dyn_cast_if_present<ReussirArrayProjectOp>(
+                  ref.getDefiningOp())) {
+        if (!hasDynamicArrayProjection) {
+          std::optional<unsigned> index =
+              getConstantProjectIndex(arrayProject.getIndex());
+          if (!index)
+            hasDynamicArrayProjection = true;
+          else
+            reversedPath.push_back({AggregateProjectionKind::Array, *index});
+        }
+        ref = arrayProject.getArrayRef();
+        continue;
+      }
+
+      if (auto recordProject =
+              llvm::dyn_cast_if_present<ReussirRefProjectOp>(
+                  ref.getDefiningOp())) {
+        if (!hasDynamicArrayProjection) {
+          reversedPath.push_back(
+              {AggregateProjectionKind::Record,
+               static_cast<unsigned>(recordProject.getIndex().getZExtValue())});
+        }
+        ref = recordProject.getRef();
+        continue;
+      }
+
+      break;
+    }
+
+    if (auto borrow =
+            llvm::dyn_cast_if_present<ReussirRcBorrowOp>(ref.getDefiningOp()))
+      return evaluate(borrow.getRcPtr());
+
+    if (hasDynamicArrayProjection)
+      return UniqueCarryingValue::getUnknown();
+
+    if (auto spilled =
+            llvm::dyn_cast_if_present<ReussirRefSpilledOp>(ref.getDefiningOp())) {
+      llvm::SmallVector<AggregateProjection> path(reversedPath.rbegin(),
+                                                  reversedPath.rend());
+      return evaluateAggregateProjectionPath(spilled.getValue(), path);
+    }
+
+    return UniqueCarryingValue::getUnknown();
+  }
+
+  UniqueCarryingValue evaluateAggregateElement(mlir::Value aggregate,
+                                               AggregateProjectionKind kind,
+                                               unsigned index) {
+    AggregateProjection projection{kind, index};
+    return evaluateAggregateProjectionPath(aggregate, {projection});
+  }
+
   UniqueCarryingValue evaluateResult(mlir::Operation *op,
                                      unsigned resultIndex) {
     if (llvm::isa<ReussirRcCreateOp, ReussirRcCreateCompoundOp,
                   ReussirRcCreateVariantOp>(op))
       return UniqueCarryingValue::getFresh();
+
+    if (auto loadOp = llvm::dyn_cast<ReussirRefLoadOp>(op))
+      return evaluateLoadedReference(loadOp.getRef());
+
+    if (auto extractOp = llvm::dyn_cast<ReussirArrayExtractOp>(op))
+      return evaluateAggregateElement(extractOp.getArray(),
+                                      AggregateProjectionKind::Array,
+                                      extractOp.getIndex().getZExtValue());
+
+    if (auto extractOp = llvm::dyn_cast<ReussirRecordExtractOp>(op))
+      return evaluateAggregateElement(extractOp.getRecord(),
+                                      AggregateProjectionKind::Record,
+                                      extractOp.getIndex().getZExtValue());
 
     if (auto callOp = llvm::dyn_cast<mlir::func::CallOp>(op)) {
       auto it = summaries.find(callOp.getCallee());
@@ -422,8 +560,8 @@ static llvm::BitVector computeUniqueCallArguments(
        argIndex = candidateArgs.find_next(argIndex)) {
     if (static_cast<unsigned>(argIndex) >= callOp.getNumOperands())
       continue;
-    if (evaluator.evaluate(callOp.getOperand(argIndex))
-            .isProvenUniqueUnder(assumedArgs))
+    UniqueCarryingValue value = evaluator.evaluate(callOp.getOperand(argIndex));
+    if (value.isCarrying() || value.isProvenUniqueUnder(assumedArgs))
       provenArgs.set(argIndex);
   }
   return provenArgs;

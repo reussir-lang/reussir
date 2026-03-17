@@ -30,8 +30,7 @@ module {
 
   // CHECK-LABEL: func.func @branch_loop(
   // CHECK: attributes {reussir.carrying_uniqueness}
-  // CHECK: func.call @branch_loop.unique_0(
-  // CHECK: func.call @branch_loop.unique_1(
+  // CHECK: func.call @branch_loop.unique(
   func.func @branch_loop(%left: !reussir.rc<i64>, %right: !reussir.rc<i64>, %n: i64) -> (!reussir.rc<i64>, !reussir.rc<i64>) {
     %c0 = arith.constant 0 : i64
     %c1 = arith.constant 1 : i64
@@ -81,23 +80,11 @@ module {
   // CHECK: %[[NEXT2:.+]] = reussir.rc.create value(%arg1 : i64) : !reussir.rc<i64>
   // CHECK: %[[RECURSE2:.+]] = func.call @loop.unique(%[[NEXT2]], %{{.+}}) : (!reussir.rc<i64>, i64) -> !reussir.rc<i64>
 
-  // CHECK-LABEL: func.func private @branch_loop.unique_0(
-  // CHECK: reussir.rc.assume_unique(%arg0 : !reussir.rc<i64>)
-  // CHECK-NOT: reussir.rc.assume_unique(%arg1 : !reussir.rc<i64>)
-  // CHECK: func.call @branch_loop.unique_0(
-  // CHECK: func.call @branch_loop.unique_0_1(
-
-  // CHECK-LABEL: func.func private @branch_loop.unique_1(
-  // CHECK: reussir.rc.assume_unique(%arg1 : !reussir.rc<i64>)
-  // CHECK-NOT: reussir.rc.assume_unique(%arg0 : !reussir.rc<i64>)
-  // CHECK: func.call @branch_loop.unique_0_1(
-  // CHECK: func.call @branch_loop.unique_1(
-
-  // CHECK-LABEL: func.func private @branch_loop.unique_0_1(
+  // CHECK-LABEL: func.func private @branch_loop.unique(
   // CHECK: reussir.rc.assume_unique(%arg0 : !reussir.rc<i64>)
   // CHECK: reussir.rc.assume_unique(%arg1 : !reussir.rc<i64>)
-  // CHECK: func.call @branch_loop.unique_0_1(
-  // CHECK: func.call @branch_loop.unique_0_1(
+  // CHECK: func.call @branch_loop.unique(
+  // CHECK: func.call @branch_loop.unique(
 
   // CHECK-LABEL: func.func private @pair_loop.unique(
   // CHECK: reussir.rc.assume_unique(%arg0 : !reussir.rc<i64>)
