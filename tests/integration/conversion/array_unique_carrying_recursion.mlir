@@ -15,11 +15,11 @@
 !rc_arr512 = !reussir.rc<!arr512>
 
 module {
-  // CHECK-LABEL: func.func @inc_1(
-  // CHECK: attributes {reussir.carrying_uniqueness}
+  // CHECK-LABEL: func.func private @inc_1(
+  // CHECK: attributes {llvm.linkage = #llvm.linkage<internal>, reussir.carrying_uniqueness}
   // CHECK: %[[UPDATED:.+]] = reussir.array.with_unique_view
   // CHECK: func.call @inc_1.unique(%[[UPDATED]], %{{.+}}) : (!reussir.rc<!reussir.array<512 x i8>>, index) -> !reussir.rc<!reussir.array<512 x i8>>
-  func.func @inc_1(%xs: !rc_arr512, %i: index) -> !rc_arr512 {
+  func.func private @inc_1(%xs: !rc_arr512, %i: index) -> !rc_arr512 attributes {llvm.linkage = #llvm.linkage<internal>} {
     %c512 = arith.constant 512 : index
     %cond = arith.cmpi ult, %i, %c512 : index
     %result = scf.if %cond -> (!rc_arr512) {
@@ -40,6 +40,16 @@ module {
       scf.yield %xs : !rc_arr512
     }
     return %result : !rc_arr512
+  }
+
+  // CHECK-LABEL: func.func @inc_1_export(
+  // CHECK: %[[C0:.+]] = arith.constant 0 : index
+  // CHECK: %[[RES:.+]] = call @inc_1(%arg0, %[[C0]]) : (!reussir.rc<!reussir.array<512 x i8>>, index) -> !reussir.rc<!reussir.array<512 x i8>>
+  // CHECK: return %[[RES]] : !reussir.rc<!reussir.array<512 x i8>>
+  func.func @inc_1_export(%xs: !rc_arr512) -> !rc_arr512 {
+    %c0 = arith.constant 0 : index
+    %res = func.call @inc_1(%xs, %c0) : (!rc_arr512, index) -> !rc_arr512
+    return %res : !rc_arr512
   }
 
   // CHECK-LABEL: func.func private @inc_1.unique(
