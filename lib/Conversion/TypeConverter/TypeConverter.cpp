@@ -68,6 +68,9 @@ LLVMTypeConverter::LLVMTypeConverter(mlir::ModuleOp op)
   addConversion([this](RcType type) {
     return mlir::LLVM::LLVMPointerType::get(&getContext());
   });
+  addConversion([this](ViewType type) {
+    return mlir::LLVM::LLVMPointerType::get(&getContext());
+  });
   addConversion([this](TokenType type) {
     return mlir::LLVM::LLVMPointerType::get(&getContext());
   });
@@ -122,6 +125,13 @@ LLVMTypeConverter::LLVMTypeConverter(mlir::ModuleOp op)
     auto ptrTy = mlir::LLVM::LLVMPointerType::get(&getContext());
     return mlir::LLVM::LLVMStructType::getLiteral(&getContext(),
                                                   {ptrTy, indexTy});
+  });
+
+  addConversion([this](ArrayType type) {
+    mlir::Type lowered = convertType(type.getElementType());
+    for (int64_t extent : llvm::reverse(type.getShape()))
+      lowered = mlir::LLVM::LLVMArrayType::get(lowered, extent);
+    return lowered;
   });
 }
 

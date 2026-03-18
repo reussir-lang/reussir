@@ -756,6 +756,92 @@ mlir::LogicalResult ReussirRecordCoerceOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// Reussir Array Operations
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirArrayViewOp::verify() {
+  RefType refType = getRef().getType();
+  ViewType viewType = getView().getType();
+  ArrayType arrayType = llvm::dyn_cast<ArrayType>(refType.getElementType());
+  if (!arrayType)
+    return emitOpError("array.view input must be a reference to a reussir.array");
+  if (viewType.getArrayType() != arrayType)
+    return emitOpError("array.view result type mismatch: expected ")
+           << ViewType::get(getContext(), viewType.isMutable(), arrayType)
+           << ", got " << viewType;
+  return mlir::success();
+}
+
+mlir::LogicalResult ReussirArrayProjectOp::verify() {
+  ViewType viewType = getView().getType();
+  ArrayType arrayType = viewType.getArrayType();
+  if (arrayType.getRank() == 0)
+    return emitOpError("array view must have at least one extent");
+
+  if (arrayType.getRank() == 1) {
+    RefType projectedType = llvm::dyn_cast<RefType>(getProjected().getType());
+    if (!projectedType)
+      return emitOpError("projecting the last array dimension must produce a "
+                         "reference result");
+    Capability expectedCapability =
+        viewType.isMutable() ? Capability::field : Capability::unspecified;
+    if (projectedType.getElementType() != arrayType.getElementType())
+      return emitOpError("projected reference element type mismatch: expected ")
+             << arrayType.getElementType() << ", got "
+             << projectedType.getElementType();
+    if (projectedType.getCapability() != expectedCapability)
+      return emitOpError("projected reference capability mismatch: expected ")
+             << stringifyCapability(expectedCapability) << ", got "
+             << stringifyCapability(projectedType.getCapability());
+    return mlir::success();
+  }
+
+  ViewType projectedType = llvm::dyn_cast<ViewType>(getProjected().getType());
+  if (!projectedType)
+    return emitOpError("projecting a non-final array dimension must produce "
+                       "another array view");
+  if (projectedType.isMutable() != viewType.isMutable())
+    return emitOpError("projected view mutability must match source view");
+  if (projectedType.getArrayType() != arrayType.dropFront())
+    return emitOpError("projected subview type mismatch: expected ")
+           << arrayType.dropFront() << ", got " << projectedType.getArrayType();
+  return mlir::success();
+}
+
+mlir::LogicalResult ReussirArrayWithUniqueViewOp::verify() {
+  RcType rcType = getArray().getType();
+  ArrayType arrayType = llvm::dyn_cast<ArrayType>(rcType.getElementType());
+  if (!arrayType)
+    return emitOpError("input must be an RC array");
+  if (!isTriviallyCopyable(arrayType))
+    return emitOpError("array.with_unique_view currently requires a trivially "
+                       "copyable array payload");
+
+  mlir::Region &body = getBody();
+  if (body.empty())
+    return emitOpError("body region must not be empty");
+  mlir::Block &block = body.front();
+  if (block.getNumArguments() != 1)
+    return emitOpError("body region must take exactly one view argument");
+
+  ViewType viewType = llvm::dyn_cast<ViewType>(block.getArgument(0).getType());
+  if (!viewType)
+    return emitOpError("body argument must be a reussir.view type");
+  if (!viewType.isMutable())
+    return emitOpError("body argument must be a mutable array view");
+  if (viewType.getArrayType() != arrayType)
+    return emitOpError("body argument view type mismatch: expected ")
+           << ViewType::get(getContext(), /*mutable=*/true, arrayType) << ", got "
+           << viewType;
+
+  if (getResult() && getBody().front().getTerminator()->getNumOperands() == 0 &&
+      getResult().getType() != getArray().getType())
+    return emitOpError("implicit array result is only valid when the result "
+                       "type matches the input RC array type");
+
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Reference Operations
 //===----------------------------------------------------------------------===//
 // ReferenceProjectOp verification
@@ -1268,6 +1354,54 @@ void ReussirRecordDispatchOp::print(mlir::OpAsmPrinter &p) {
 }
 
 //===----------------------------------------------------------------------===//
+// Reussir Array WithUniqueView Op
+//===----------------------------------------------------------------------===//
+mlir::ParseResult ReussirArrayWithUniqueViewOp::parse(
+    mlir::OpAsmParser &parser, mlir::OperationState &result) {
+  llvm::SMLoc operandLoc = parser.getCurrentLocation();
+  mlir::OpAsmParser::UnresolvedOperand arrayOperand;
+  RcType arrayType;
+  mlir::Type resultType;
+  auto bodyRegion = std::make_unique<mlir::Region>();
+
+  if (parser.parseLParen() || parser.parseOperand(arrayOperand) ||
+      parser.parseColon() || parser.parseCustomTypeWithFallback(arrayType) ||
+      parser.parseRParen())
+    return mlir::failure();
+
+  if (llvm::succeeded(parser.parseOptionalArrow()))
+    if (parser.parseType(resultType))
+      return mlir::failure();
+
+  if (parser.parseRegion(*bodyRegion) ||
+      parser.parseOptionalAttrDict(result.attributes))
+    return mlir::failure();
+
+  result.addRegion(std::move(bodyRegion));
+  if (resultType)
+    result.addTypes(resultType);
+  if (parser.resolveOperands({arrayOperand}, arrayType, operandLoc,
+                             result.operands))
+    return mlir::failure();
+  return mlir::success();
+}
+
+void ReussirArrayWithUniqueViewOp::print(mlir::OpAsmPrinter &p) {
+  p << "(";
+  p.printOperand(getArray());
+  p << " : ";
+  p.printType(getArray().getType());
+  p << ")";
+  if (getResult()) {
+    p << " -> ";
+    p.printType(getResult().getType());
+  }
+  p << " ";
+  p.printRegion(getBody());
+  p.printOptionalAttrDict(getOperation()->getAttrs());
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Nullable Coerce Op
 //===----------------------------------------------------------------------===//
 // NullableCoerceOp verification
@@ -1332,6 +1466,7 @@ mlir::LogicalResult ReussirNullableDispatchOp::verify() {
 mlir::LogicalResult ReussirScfYieldOp::verify() {
   mlir::Type yieldedType = getValue() ? getValue().getType() : mlir::Type{};
   mlir::Type expectedType = mlir::Type{};
+  bool allowImplicitArrayResult = false;
   if (auto nullableParent =
           getOperation()->getParentOfType<ReussirNullableDispatchOp>())
     expectedType = nullableParent.getValue()
@@ -1341,10 +1476,16 @@ mlir::LogicalResult ReussirScfYieldOp::verify() {
                getOperation()->getParentOfType<ReussirRecordDispatchOp>())
     expectedType = recordParent.getValue() ? recordParent.getValue().getType()
                                            : mlir::Type{};
+  else if (auto arrayParent =
+               getOperation()->getParentOfType<ReussirArrayWithUniqueViewOp>())
+    expectedType = arrayParent.getResult() ? arrayParent.getResult().getType()
+                                           : mlir::Type{},
+    allowImplicitArrayResult =
+        expectedType && expectedType == arrayParent.getArray().getType();
   else
     llvm_unreachable("unexpected parent operation");
 
-  if (expectedType && !yieldedType)
+  if (expectedType && !yieldedType && !allowImplicitArrayResult)
     return emitOpError(
         "parent operation expected a value, but nothing is yielded");
   if (yieldedType && !expectedType)

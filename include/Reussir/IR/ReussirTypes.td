@@ -413,6 +413,45 @@ def ReussirClosureBoxType
   }];
 }
 
+def ReussirArrayType
+    : ReussirType<
+          "Array", "array",
+          [DeclareTypeInterfaceMethods<DataLayoutTypeInterface>]> {
+  let summary = "Reussir fixed-size inline array type";
+  let description = [{
+    `reussir.array` represents a statically shaped inline array payload.
+    This is the payload type wrapped by `!reussir.rc<...>` for managed arrays.
+  }];
+  let parameters = (ins ArrayRefParameter<"int64_t">:$shape,
+      "mlir::Type":$eleTy);
+  let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
+  let extraClassDeclaration = [{
+    mlir::Type getElementType() const { return getEleTy(); }
+    size_t getRank() const { return getShape().size(); }
+    ArrayType dropFront() const;
+  }];
+}
+
+def ReussirViewType
+    : ReussirType<
+          "View", "view",
+          [DeclareTypeInterfaceMethods<DataLayoutTypeInterface>]> {
+  let summary = "Reussir array view type";
+  let description = [{
+    `reussir.view` represents a temporary region-scoped view of an array payload.
+    Mutable views are intended to support in-place update and future memref-style
+    integrations.
+  }];
+  let parameters = (ins "bool":$isMutable, "reussir::ArrayType":$arrayTy);
+  let hasCustomAssemblyFormat = 1;
+  let extraClassDeclaration = [{
+    bool isMutable() const { return getIsMutable(); }
+    ArrayType getArrayType() const { return getArrayTy(); }
+    mlir::Type getElementType() const { return getArrayTy(); }
+  }];
+}
+
 def ReussirFFIObjectType
     : ReussirType<"FFIObject", "ffi_object", []> {
   let summary = "Reussir FFIObject Object Type";
@@ -478,5 +517,22 @@ def ReussirClosureBoxRefType
     ::llvm::isa<::reussir::ClosureBoxType>(
       ::llvm::cast<::reussir::RefType>($_self).getElementType())
     }]>, "Reussir closure box reference type", "::reussir::RefType">;
+
+def ReussirArrayPayloadType
+    : Type<CPred<[{
+    ::llvm::isa<::reussir::ArrayType>($_self)
+    }]>, "Reussir array payload type", "::reussir::ArrayType">;
+
+def ReussirArrayViewType
+    : Type<CPred<[{
+    ::llvm::isa<::reussir::ViewType>($_self)
+    }]>, "Reussir array view type", "::reussir::ViewType">;
+
+def ReussirRcArrayType
+    : Type<CPred<[{
+    ::llvm::isa<::reussir::RcType>($_self) &&
+    ::llvm::isa<::reussir::ArrayType>(
+      ::llvm::cast<::reussir::RcType>($_self).getElementType())
+    }]>, "Reussir rc array type", "::reussir::RcType">;
 
 #endif // REUSSIR_IR_REUSSIRTYPES_TD

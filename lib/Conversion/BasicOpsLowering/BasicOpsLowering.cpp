@@ -677,6 +677,54 @@ struct ReussirReferenceProjectConversionPattern
   }
 };
 
+struct ReussirArrayProjectConversionPattern
+    : public mlir::OpConversionPattern<ReussirArrayProjectOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayProjectOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+
+    ViewType viewType = op.getView().getType();
+    ArrayType arrayType = viewType.getArrayType();
+    mlir::Type llvmArrayType = converter->convertType(arrayType);
+    mlir::Type resultType = converter->convertType(op.getProjected().getType());
+    auto llvmPtrType = llvm::dyn_cast<mlir::LLVM::LLVMPointerType>(resultType);
+    if (!llvmPtrType)
+      return op.emitOpError("projected result must lower to an LLVM pointer");
+
+    auto zero = rewriter.create<mlir::arith::ConstantOp>(
+        loc, mlir::IntegerAttr::get(converter->getIndexType(), 0));
+    auto extent = rewriter.create<mlir::arith::ConstantOp>(
+        loc, mlir::IntegerAttr::get(converter->getIndexType(),
+                                    arrayType.getShape().front()));
+    auto inBounds = rewriter.create<mlir::arith::CmpIOp>(
+        loc, mlir::arith::CmpIPredicate::ult, adaptor.getIndex(),
+        extent.getResult());
+    rewriter.create<mlir::LLVM::AssumeOp>(loc, inBounds);
+
+    auto gep = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, llvmPtrType, llvmArrayType, adaptor.getView(),
+        mlir::ValueRange{zero.getResult(), adaptor.getIndex()});
+    rewriter.replaceOp(op, gep.getResult());
+    return mlir::success();
+  }
+};
+
+struct ReussirArrayViewConversionPattern
+    : public mlir::OpConversionPattern<ReussirArrayViewOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayViewOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOp(op, adaptor.getRef());
+    return mlir::success();
+  }
+};
+
 struct ReussirRecordTagConversionPattern
     : public mlir::OpConversionPattern<ReussirRecordTagOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -2511,7 +2559,9 @@ struct BasicOpsLoweringPass
           ReussirRcCreateCompoundOp, ReussirRcCreateVariantOp, ReussirRcDecOp,
           ReussirRcBorrowOp, ReussirRcIsUniqueOp, ReussirRcAssumeUniqueOp,
           ReussirRecordCompoundOp,
-          ReussirRecordVariantOp, ReussirRefProjectOp, ReussirRecordTagOp,
+          ReussirRecordVariantOp, ReussirRefProjectOp, ReussirArrayProjectOp,
+          ReussirArrayViewOp,
+          ReussirRecordTagOp,
           ReussirRecordExtractOp, ReussirRecordCoerceOp, ReussirRegionVTableOp,
           ReussirRcFreezeOp, ReussirRegionCleanupOp, ReussirRegionCreateOp,
           ReussirRcReinterpretOp, ReussirClosureApplyOp, ReussirClosureCloneOp,
@@ -2555,6 +2605,8 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirRecordExtractConversionPattern,
       ReussirRecordVariantConversionPattern,
       ReussirReferenceProjectConversionPattern,
+      ReussirArrayProjectConversionPattern,
+      ReussirArrayViewConversionPattern,
       ReussirRecordTagConversionPattern, ReussirRecordCoerceConversionPattern,
       ReussirRegionVTableOpConversionPattern,
       ReussirRcFreezeOpConversionPattern,

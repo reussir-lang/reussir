@@ -583,6 +583,98 @@ struct ReussirClosureUniqifyOpRewritePattern
   }
 };
 
+static void cloneArrayWithUniqueViewBody(ReussirArrayWithUniqueViewOp op,
+                                         mlir::Block &targetBlock,
+                                         mlir::Value arrayValue,
+                                         mlir::Value viewValue,
+                                         mlir::PatternRewriter &rewriter) {
+  mlir::IRMapping mapping;
+  mapping.map(op.getBody().front().getArgument(0), viewValue);
+  for (mlir::Operation &nestedOp : op.getBody().front().without_terminator())
+    rewriter.clone(nestedOp, mapping);
+
+  auto yieldOp =
+      llvm::cast<ReussirScfYieldOp>(op.getBody().front().getTerminator());
+  llvm::SmallVector<mlir::Value> yieldedValues;
+  if (yieldOp.getNumOperands() == 0 && op.getResult() &&
+      op.getResult().getType() == op.getArray().getType()) {
+    yieldedValues.push_back(arrayValue);
+  } else {
+    yieldedValues.reserve(yieldOp.getNumOperands());
+    for (mlir::Value operand : yieldOp->getOperands())
+      yieldedValues.push_back(mapping.lookupOrDefault(operand));
+  }
+  rewriter.create<mlir::scf::YieldOp>(op.getLoc(), yieldedValues);
+}
+
+struct ReussirArrayWithUniqueViewOpRewritePattern
+    : public mlir::OpRewritePattern<ReussirArrayWithUniqueViewOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayWithUniqueViewOp op,
+                  mlir::PatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    RcType rcType = op.getArray().getType();
+    ArrayType arrayType = llvm::cast<ArrayType>(rcType.getElementType());
+    ViewType viewType =
+        llvm::cast<ViewType>(op.getBody().front().getArgument(0).getType());
+
+    auto makeBorrowedView = [&](mlir::Value array) -> mlir::Value {
+      auto borrowedType = RefType::get(rewriter.getContext(), arrayType);
+      auto borrowed =
+          rewriter.create<ReussirRcBorrowOp>(loc, borrowedType, array);
+      return rewriter
+          .create<ReussirArrayViewOp>(loc, viewType, borrowed.getResult())
+          .getResult();
+    };
+
+    auto makeClonedArray = [&]() -> mlir::Value {
+      auto borrowedType = RefType::get(rewriter.getContext(), arrayType);
+      auto borrowed =
+          rewriter.create<ReussirRcBorrowOp>(loc, borrowedType, op.getArray());
+      auto payload =
+          rewriter.create<ReussirRefLoadOp>(loc, arrayType, borrowed.getResult());
+
+      RcBoxType rcBoxType = RcBoxType::get(rewriter.getContext(), arrayType,
+                                           /*regional=*/false);
+      auto dataLayout = mlir::DataLayout::closest(op.getOperation());
+      TokenType tokenType =
+          TokenType::get(rewriter.getContext(),
+                         dataLayout.getTypeABIAlignment(rcBoxType),
+                         dataLayout.getTypeSize(rcBoxType).getFixedValue());
+      auto token = rewriter.create<ReussirTokenAllocOp>(loc, tokenType);
+      auto cloned = rewriter.create<ReussirRcCreateOp>(
+          loc, rcType, payload.getResult(), token.getResult(), mlir::Value{},
+          mlir::FlatSymbolRefAttr{}, mlir::UnitAttr{});
+      auto nullableTokenType =
+          NullableType::get(rewriter.getContext(), tokenType);
+      rewriter.create<ReussirRcDecOp>(loc, nullableTokenType, op.getArray());
+      return cloned.getResult();
+    };
+
+    auto isUnique =
+        rewriter.create<reussir::ReussirRcIsUniqueOp>(loc, op.getArray());
+    auto scfIfOp = rewriter.create<mlir::scf::IfOp>(
+        loc, op->getResultTypes(), isUnique, /*addThenRegion=*/true,
+        /*addElseRegion=*/true);
+
+    rewriter.setInsertionPointToStart(&scfIfOp.getThenRegion().front());
+    cloneArrayWithUniqueViewBody(op, scfIfOp.getThenRegion().front(),
+                                 op.getArray(),
+                                 makeBorrowedView(op.getArray()), rewriter);
+
+    rewriter.setInsertionPointToStart(&scfIfOp.getElseRegion().front());
+    mlir::Value clonedArray = makeClonedArray();
+    cloneArrayWithUniqueViewBody(op, scfIfOp.getElseRegion().front(),
+                                 clonedArray,
+                                 makeBorrowedView(clonedArray), rewriter);
+
+    rewriter.replaceOp(op, scfIfOp.getResults());
+    return mlir::success();
+  }
+};
+
 struct ReussirScfYieldOpRewritePattern
     : public mlir::OpRewritePattern<ReussirScfYieldOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -776,6 +868,7 @@ struct SCFOpsLoweringPass
     // Illegal operations
     target.addIllegalOp<ReussirNullableDispatchOp, ReussirRecordDispatchOp,
                         ReussirScfYieldOp, ReussirClosureUniqifyOp,
+                        ReussirArrayWithUniqueViewOp,
                         ReussirTokenEnsureOp, ReussirStrByteAtOp,
                         ReussirStrSelectOp, ReussirStrStartWithOp>();
 
@@ -793,6 +886,7 @@ void populateSCFOpsLoweringConversionPatterns(
       .add<ReussirNullableDispatchOpRewritePattern,
            ReussirRecordDispatchOpRewritePattern,
            ReussirClosureUniqifyOpRewritePattern,
+           ReussirArrayWithUniqueViewOpRewritePattern,
            ReussirScfYieldOpRewritePattern, ReussirTokenEnsureOpRewritePattern,
            ReussirStrByteAtOpRewritePattern, ReussirStrSelectOpRewritePattern,
            ReussirStrStartWithOpRewritePattern>(patterns.getContext());

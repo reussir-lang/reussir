@@ -134,6 +134,48 @@ void printTypeWithCapabilityAndAtomicKind(mlir::AsmPrinter &printer,
     printer << ' ' << type.getAtomicKind();
   printer << ">";
 }
+
+mlir::LogicalResult
+parseShapeAndElementType(mlir::AsmParser &parser,
+                         llvm::SmallVectorImpl<int64_t> &shape,
+                         mlir::Type &elementType) {
+  auto appendExtent = [&](llvm::APInt extent) -> mlir::LogicalResult {
+    if (extent.isNegative())
+      return parser.emitError(parser.getCurrentLocation(),
+                              "array extent must be non-negative");
+    shape.push_back(extent.getSExtValue());
+    return mlir::success();
+  };
+
+  llvm::APInt extent;
+  if (parser.parseInteger(extent))
+    return mlir::failure();
+  if (mlir::failed(appendExtent(extent)))
+    return mlir::failure();
+
+  if (parser.parseKeyword("x"))
+    return mlir::failure();
+
+  while (true) {
+    llvm::APInt nextExtent;
+    mlir::OptionalParseResult parseNextExtent =
+        parser.parseOptionalInteger(nextExtent);
+    if (!parseNextExtent.has_value())
+      break;
+    if (mlir::failed(*parseNextExtent) ||
+        mlir::failed(appendExtent(nextExtent)) || parser.parseKeyword("x"))
+      return mlir::failure();
+  }
+  return parser.parseType(elementType);
+}
+
+void printShapeAndElementType(mlir::AsmPrinter &printer,
+                              llvm::ArrayRef<int64_t> shape,
+                              mlir::Type elementType) {
+  for (int64_t extent : shape)
+    printer << extent << " x ";
+  printer.printType(elementType);
+}
 } // namespace
 //===----------------------------------------------------------------------===//
 // isNonNullPointerType
@@ -143,7 +185,7 @@ bool isNonNullPointerType(mlir::Type type) {
     return false;
   return llvm::TypeSwitch<mlir::Type, bool>(type)
       .Case<TokenType, RcType, RecordType, RawPtrType, RefType, HoleType,
-            ClosureType>(
+            ClosureType, ViewType>(
           [](auto) { return true; })
       .Default([](mlir::Type) { return false; });
 }
@@ -165,6 +207,9 @@ bool isTriviallyCopyable(mlir::Type type) {
       // Nullable types depend on their inner type
       .Case<NullableType>([](NullableType nullableType) {
         return isTriviallyCopyable(nullableType.getPtrTy());
+      })
+      .Case<ArrayType>([](ArrayType arrayType) {
+        return isTriviallyCopyable(arrayType.getElementType());
       })
       // Record types need to check all their members
       .Case<RecordType>([](RecordType recordType) {
@@ -892,6 +937,117 @@ void ClosureType::print(mlir::AsmPrinter &printer) const {
     printer << " -> " << getOutputType();
   printer << ">";
 }
+
+//===----------------------------------------------------------------------===//
+// ArrayType
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult
+ArrayType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
+                  llvm::ArrayRef<int64_t> shape, mlir::Type eleTy) {
+  if (shape.empty()) {
+    emitError() << "array shape must have at least one extent";
+    return mlir::failure();
+  }
+  for (int64_t extent : shape) {
+    if (extent < 0) {
+      emitError() << "array extents must be non-negative";
+      return mlir::failure();
+    }
+  }
+  if (!eleTy) {
+    emitError() << "array element type must not be null";
+    return mlir::failure();
+  }
+  return mlir::success();
+}
+
+ArrayType ArrayType::dropFront() const {
+  assert(getShape().size() > 1 && "cannot drop the last array extent");
+  return ArrayType::get(getContext(), getShape().drop_front(), getElementType());
+}
+
+mlir::Type ArrayType::parse(mlir::AsmParser &parser) {
+  llvm::SmallVector<int64_t> shape;
+  mlir::Type elementType;
+  if (parser.parseLess() ||
+      mlir::failed(parseShapeAndElementType(parser, shape, elementType)) ||
+      parser.parseGreater())
+    return {};
+  return ArrayType::getChecked(
+      parser.getEncodedSourceLoc(parser.getNameLoc()), parser.getContext(),
+      shape, elementType);
+}
+
+void ArrayType::print(mlir::AsmPrinter &printer) const {
+  printer << "<";
+  printShapeAndElementType(printer, getShape(), getElementType());
+  printer << ">";
+}
+
+llvm::TypeSize
+ArrayType::getTypeSizeInBits(const mlir::DataLayout &dataLayout,
+                             mlir::DataLayoutEntryListRef params) const {
+  llvm::TypeSize elementSize = dataLayout.getTypeSize(getElementType());
+  uint64_t totalElements = 1;
+  for (int64_t extent : getShape())
+    totalElements *= static_cast<uint64_t>(extent);
+  return llvm::TypeSize::getFixed(elementSize.getFixedValue() * totalElements *
+                                  8);
+}
+
+uint64_t ArrayType::getABIAlignment(const mlir::DataLayout &dataLayout,
+                                    mlir::DataLayoutEntryListRef params) const {
+  return dataLayout.getTypeABIAlignment(getElementType());
+}
+
+MLIR_DATA_LAYOUT_EXPAND_PREFERRED_ALIGN(
+    uint64_t ArrayType::getPreferredAlignment(
+        const mlir::DataLayout &dataLayout, mlir::DataLayoutEntryListRef params)
+        const { return getABIAlignment(dataLayout, params); })
+
+//===----------------------------------------------------------------------===//
+// ViewType
+//===----------------------------------------------------------------------===//
+mlir::Type ViewType::parse(mlir::AsmParser &parser) {
+  if (parser.parseLess())
+    return {};
+
+  llvm::StringRef keyword;
+  if (parser.parseKeyword(&keyword))
+    return {};
+  bool isMutable = false;
+  if (keyword == "mutable")
+    isMutable = true;
+  else if (keyword != "immutable")
+    return parser.emitError(parser.getCurrentLocation(),
+                            "expected mutable or immutable"),
+           mlir::Type{};
+
+  if (parser.parseComma())
+    return {};
+
+  llvm::SmallVector<int64_t> shape;
+  mlir::Type elementType;
+  if (mlir::failed(parseShapeAndElementType(parser, shape, elementType)) ||
+      parser.parseGreater())
+    return {};
+
+  auto arrayType = ArrayType::getChecked(
+      parser.getEncodedSourceLoc(parser.getNameLoc()), parser.getContext(),
+      shape, elementType);
+  if (!arrayType)
+    return {};
+  return ViewType::get(parser.getContext(), isMutable, arrayType);
+}
+
+void ViewType::print(mlir::AsmPrinter &printer) const {
+  printer << "<" << (isMutable() ? "mutable" : "immutable") << ", ";
+  printShapeAndElementType(printer, getArrayType().getShape(),
+                           getArrayType().getElementType());
+  printer << ">";
+}
+
+REUSSIR_POINTER_LIKE_DATA_LAYOUT_INTERFACE(ViewType)
 
 //===----------------------------------------------------------------------===//
 // getProjectedType
