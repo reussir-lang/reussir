@@ -874,10 +874,6 @@ def ReussirArrayWithUniqueViewOp : ReussirArrayOp<"with_unique_view", []> {
 
     The body region must take exactly one argument of `!reussir.view<mutable, ...>`
     matching the input array payload type and terminate with `reussir.scf.yield`.
-
-    The current backend lowering only supports arrays whose payload is trivially
-    copyable, which keeps the clone fallback well-defined until recursive
-    acquire/drop support is added for arrays carrying managed elements.
   }];
   let arguments = (ins Arg<ReussirRcArrayType, "array to uniqify">:$array);
   let regions = (region MaxSizedRegion<1>:$body);

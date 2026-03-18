@@ -629,13 +629,11 @@ struct ReussirArrayWithUniqueViewOpRewritePattern
           .getResult();
     };
 
-    auto makeClonedArray = [&]() -> mlir::Value {
+    auto makeClonedArray =
+        [&]() -> std::pair<mlir::Value, mlir::Value> {
       auto borrowedType = RefType::get(rewriter.getContext(), arrayType);
-      auto borrowed =
+      auto srcRef =
           rewriter.create<ReussirRcBorrowOp>(loc, borrowedType, op.getArray());
-      auto payload =
-          rewriter.create<ReussirRefLoadOp>(loc, arrayType, borrowed.getResult());
-
       RcBoxType rcBoxType = RcBoxType::get(rewriter.getContext(), arrayType,
                                            /*regional=*/false);
       auto dataLayout = mlir::DataLayout::closest(op.getOperation());
@@ -644,13 +642,23 @@ struct ReussirArrayWithUniqueViewOpRewritePattern
                          dataLayout.getTypeABIAlignment(rcBoxType),
                          dataLayout.getTypeSize(rcBoxType).getFixedValue());
       auto token = rewriter.create<ReussirTokenAllocOp>(loc, tokenType);
+      auto poison = rewriter.create<mlir::ub::PoisonOp>(loc, arrayType);
       auto cloned = rewriter.create<ReussirRcCreateOp>(
-          loc, rcType, payload.getResult(), token.getResult(), mlir::Value{},
+          loc, rcType, poison.getResult(), token.getResult(), mlir::Value{},
           mlir::FlatSymbolRefAttr{}, mlir::UnitAttr{});
-      auto nullableTokenType =
-          NullableType::get(rewriter.getContext(), tokenType);
-      rewriter.create<ReussirRcDecOp>(loc, nullableTokenType, op.getArray());
-      return cloned.getResult();
+      auto dstRef =
+          rewriter.create<ReussirRcBorrowOp>(loc, borrowedType, cloned.getResult());
+      rewriter.create<ReussirRefMemcpyOp>(loc, srcRef.getResult(),
+                                          dstRef.getResult());
+      rewriter.create<ReussirRefAcquireOp>(loc, dstRef.getResult(), false,
+                                           nullptr);
+
+      auto refCount = rewriter.create<ReussirRcFetchOp>(loc, op.getArray());
+      auto decremented = rewriter.create<mlir::arith::SubIOp>(
+          loc, refCount.getRefCount(),
+          rewriter.create<mlir::arith::ConstantIndexOp>(loc, 1));
+      rewriter.create<ReussirRcSetOp>(loc, op.getArray(), decremented.getResult());
+      return {cloned.getResult(), dstRef.getResult()};
     };
 
     auto isUnique =
@@ -665,10 +673,11 @@ struct ReussirArrayWithUniqueViewOpRewritePattern
                                  makeBorrowedView(op.getArray()), rewriter);
 
     rewriter.setInsertionPointToStart(&scfIfOp.getElseRegion().front());
-    mlir::Value clonedArray = makeClonedArray();
+    auto [clonedArray, clonedRef] = makeClonedArray();
+    auto clonedView =
+        rewriter.create<ReussirArrayViewOp>(loc, viewType, clonedRef).getView();
     cloneArrayWithUniqueViewBody(op, scfIfOp.getElseRegion().front(),
-                                 clonedArray,
-                                 makeBorrowedView(clonedArray), rewriter);
+                                 clonedArray, clonedView, rewriter);
 
     rewriter.replaceOp(op, scfIfOp.getResults());
     return mlir::success();

@@ -812,9 +812,6 @@ mlir::LogicalResult ReussirArrayWithUniqueViewOp::verify() {
   ArrayType arrayType = llvm::dyn_cast<ArrayType>(rcType.getElementType());
   if (!arrayType)
     return emitOpError("input must be an RC array");
-  if (!isTriviallyCopyable(arrayType))
-    return emitOpError("array.with_unique_view currently requires a trivially "
-                       "copyable array payload");
 
   mlir::Region &body = getBody();
   if (body.empty())
@@ -2057,6 +2054,9 @@ mlir::LogicalResult ReussirRefAcquireOp::verify() {
     return mlir::success();
   }
 
+  if (llvm::isa<ArrayType>(elementType))
+    return mlir::success();
+
   return emitOpError("unsupported element type for acquisition: ")
          << elementType;
 }
@@ -2107,6 +2107,9 @@ mlir::LogicalResult ReussirPolyFFIOp::verify() {
 //===----------------------------------------------------------------------===//
 // emitOwnershipAcquisition
 //===----------------------------------------------------------------------===//
+static mlir::LogicalResult emitArrayOwnershipAcquisition(
+    mlir::Value view, mlir::OpBuilder &builder, mlir::Location loc);
+
 mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
                                              mlir::OpBuilder &builder,
                                              mlir::Location loc) {
@@ -2131,6 +2134,14 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
           auto loadedValue =
               builder.create<ReussirRefLoadOp>(loc, elementType, value);
           return emitOwnershipAcquisition(loadedValue, builder, loc);
+        }
+
+        if (auto arrayType = llvm::dyn_cast<ArrayType>(elementType)) {
+          auto viewType =
+              ViewType::get(builder.getContext(), /*isMutable=*/false, arrayType);
+          auto view =
+              builder.create<ReussirArrayViewOp>(loc, viewType, value).getView();
+          return emitArrayOwnershipAcquisition(view, builder, loc);
         }
 
         // If reference points to a record, handle fields directly
@@ -2201,8 +2212,42 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
         // For other reference types, this is a no-op
         return mlir::success();
       })
+      .Case<ViewType>([&](ViewType) {
+        return emitArrayOwnershipAcquisition(value, builder, loc);
+      })
       // For other types, return failure
       .Default([&](mlir::Type) { return mlir::failure(); });
+}
+
+static mlir::LogicalResult emitArrayOwnershipAcquisition(
+    mlir::Value view, mlir::OpBuilder &builder, mlir::Location loc) {
+  ViewType viewType = llvm::cast<ViewType>(view.getType());
+  ArrayType arrayType = viewType.getArrayType();
+  auto *context = builder.getContext();
+  for (int64_t index : llvm::seq<int64_t>(0, arrayType.getShape().front())) {
+    auto idx = builder.create<mlir::arith::ConstantIndexOp>(loc, index);
+    if (arrayType.getRank() == 1) {
+      RefType projectedType =
+          RefType::get(context, arrayType.getElementType(),
+                       viewType.isMutable() ? Capability::field
+                                            : Capability::unspecified);
+      auto elementRef = builder.create<ReussirArrayProjectOp>(
+          loc, projectedType, view, idx.getResult());
+      if (emitOwnershipAcquisition(elementRef.getProjected(), builder, loc)
+              .failed())
+        return mlir::failure();
+      continue;
+    }
+
+    ViewType projectedType =
+        ViewType::get(context, viewType.isMutable(), arrayType.dropFront());
+    auto nestedView = builder.create<ReussirArrayProjectOp>(
+        loc, projectedType, view, idx.getResult());
+    if (emitArrayOwnershipAcquisition(nestedView.getProjected(), builder, loc)
+            .failed())
+      return mlir::failure();
+  }
+  return mlir::success();
 }
 
 //===----------------------------------------------------------------------===//

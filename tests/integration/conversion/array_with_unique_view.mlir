@@ -27,14 +27,19 @@ module {
 // CHECK: reussir.array.project
 // CHECK: scf.yield %arg0 : !reussir.rc<!reussir.array<4 x i8>>
 // CHECK: } else {
-// CHECK: %[[LOAD_BORROW:.+]] = reussir.rc.borrow
-// CHECK: %[[PAYLOAD:.+]] = reussir.ref.load
+// CHECK: %[[SRC_BORROW:.+]] = reussir.rc.borrow(%arg0 : !reussir.rc<!reussir.array<4 x i8>>) : !reussir.ref<!reussir.array<4 x i8>>
 // CHECK: %[[TOKEN:.+]] = reussir.token.alloc
+// CHECK: %[[POISON:.+]] = ub.poison : !reussir.array<4 x i8>
 // CHECK: %[[CLONED:.+]] = reussir.rc.create
-// CHECK: reussir.rc.dec
-// CHECK: %[[CLONED_BORROW:.+]] = reussir.rc.borrow
+// CHECK: %[[CLONED_BORROW:.+]] = reussir.rc.borrow(%[[CLONED]] : !reussir.rc<!reussir.array<4 x i8>>) : !reussir.ref<!reussir.array<4 x i8>>
+// CHECK: reussir.ref.memcpy %[[SRC_BORROW]] to %[[CLONED_BORROW]] : <!reussir.array<4 x i8>> to <!reussir.array<4 x i8>>
+// CHECK: reussir.ref.acquire(%[[CLONED_BORROW]] : !reussir.ref<!reussir.array<4 x i8>>)
+// CHECK: %[[COUNT:.+]] = reussir.rc.fetch(%arg0 : !reussir.rc<!reussir.array<4 x i8>>) : index
+// CHECK: %[[DEC:.+]] = arith.subi %[[COUNT]], %{{.+}} : index
+// CHECK: reussir.rc.set(%arg0 : !reussir.rc<!reussir.array<4 x i8>>, %[[DEC]] : index)
 // CHECK: %[[CLONED_VIEW:.+]] = reussir.array.view(%[[CLONED_BORROW]] : !reussir.ref<!reussir.array<4 x i8>>) : !reussir.view<mutable, 4 x i8>
 // CHECK: reussir.array.project
 // CHECK: scf.yield %[[CLONED]] : !reussir.rc<!reussir.array<4 x i8>>
 // CHECK: }
 // CHECK: return %[[RESULT]] : !reussir.rc<!reussir.array<4 x i8>>
+// CHECK-NOT: reussir.rc.dec
