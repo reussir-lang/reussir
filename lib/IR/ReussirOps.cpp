@@ -819,6 +819,8 @@ mlir::LogicalResult ReussirArrayWithUniqueViewOp::verify() {
   mlir::Block &block = body.front();
   if (block.getNumArguments() != 1)
     return emitOpError("body region must take exactly one view argument");
+  if (block.empty() || !llvm::isa<ReussirScfYieldOp>(block.getTerminator()))
+    return emitOpError("body region must terminate with reussir.scf.yield");
 
   ViewType viewType = llvm::dyn_cast<ViewType>(block.getArgument(0).getType());
   if (!viewType)
@@ -830,7 +832,8 @@ mlir::LogicalResult ReussirArrayWithUniqueViewOp::verify() {
            << ViewType::get(getContext(), /*mutable=*/true, arrayType) << ", got "
            << viewType;
 
-  if (getResult() && getBody().front().getTerminator()->getNumOperands() == 0 &&
+  auto yieldOp = llvm::cast<ReussirScfYieldOp>(block.getTerminator());
+  if (getResult() && yieldOp.getNumOperands() == 0 &&
       getResult().getType() != getArray().getType())
     return emitOpError("implicit array result is only valid when the result "
                        "type matches the input RC array type");
@@ -1474,12 +1477,12 @@ mlir::LogicalResult ReussirScfYieldOp::verify() {
     expectedType = recordParent.getValue() ? recordParent.getValue().getType()
                                            : mlir::Type{};
   else if (auto arrayParent =
-               getOperation()->getParentOfType<ReussirArrayWithUniqueViewOp>())
+               getOperation()->getParentOfType<ReussirArrayWithUniqueViewOp>()) {
     expectedType = arrayParent.getResult() ? arrayParent.getResult().getType()
-                                           : mlir::Type{},
+                                           : mlir::Type{};
     allowImplicitArrayResult =
         expectedType && expectedType == arrayParent.getArray().getType();
-  else
+  } else
     llvm_unreachable("unexpected parent operation");
 
   if (expectedType && !yieldedType && !allowImplicitArrayResult)

@@ -991,8 +991,7 @@ ArrayType::getTypeSizeInBits(const mlir::DataLayout &dataLayout,
   uint64_t totalElements = 1;
   for (int64_t extent : getShape())
     totalElements *= static_cast<uint64_t>(extent);
-  return llvm::TypeSize::getFixed(elementSize.getFixedValue() * totalElements *
-                                  8);
+  return elementSize * totalElements * 8;
 }
 
 uint64_t ArrayType::getABIAlignment(const mlir::DataLayout &dataLayout,

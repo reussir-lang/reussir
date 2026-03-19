@@ -448,7 +448,7 @@ def ReussirViewType
   let extraClassDeclaration = [{
     bool isMutable() const { return getIsMutable(); }
     ArrayType getArrayType() const { return getArrayTy(); }
-    mlir::Type getElementType() const { return getArrayTy(); }
+    mlir::Type getElementType() const { return getArrayTy().getElementType(); }
   }];
 }
 

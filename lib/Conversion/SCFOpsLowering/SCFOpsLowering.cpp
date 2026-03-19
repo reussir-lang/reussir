@@ -584,7 +584,6 @@ struct ReussirClosureUniqifyOpRewritePattern
 };
 
 static void cloneArrayWithUniqueViewBody(ReussirArrayWithUniqueViewOp op,
-                                         mlir::Block &targetBlock,
                                          mlir::Value arrayValue,
                                          mlir::Value viewValue,
                                          mlir::PatternRewriter &rewriter) {
@@ -668,16 +667,14 @@ struct ReussirArrayWithUniqueViewOpRewritePattern
         /*addElseRegion=*/true);
 
     rewriter.setInsertionPointToStart(&scfIfOp.getThenRegion().front());
-    cloneArrayWithUniqueViewBody(op, scfIfOp.getThenRegion().front(),
-                                 op.getArray(),
+    cloneArrayWithUniqueViewBody(op, op.getArray(),
                                  makeBorrowedView(op.getArray()), rewriter);
 
     rewriter.setInsertionPointToStart(&scfIfOp.getElseRegion().front());
     auto [clonedArray, clonedRef] = makeClonedArray();
     auto clonedView =
         rewriter.create<ReussirArrayViewOp>(loc, viewType, clonedRef).getView();
-    cloneArrayWithUniqueViewBody(op, scfIfOp.getElseRegion().front(),
-                                 clonedArray, clonedView, rewriter);
+    cloneArrayWithUniqueViewBody(op, clonedArray, clonedView, rewriter);
 
     rewriter.replaceOp(op, scfIfOp.getResults());
     return mlir::success();
