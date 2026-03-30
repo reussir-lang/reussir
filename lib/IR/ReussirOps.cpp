@@ -49,6 +49,10 @@
 namespace reussir {
 namespace {
 
+static mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType) {
+  return mlir::MemRefType::get(arrayType.getShape(), arrayType.getElementType());
+}
+
 mlir::LogicalResult verifyRcCreateLikeOp(mlir::Operation *op, RcType rcType,
                                          mlir::Type valueType,
                                          mlir::Value token,
@@ -756,6 +760,95 @@ mlir::LogicalResult ReussirRecordCoerceOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// Reussir Array Operations
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirArrayViewOp::verify() {
+  RefType refType = getRef().getType();
+  ArrayType arrayType = llvm::dyn_cast<ArrayType>(refType.getElementType());
+  if (!arrayType)
+    return emitOpError("array.view input must be a reference to a reussir.array");
+  auto memrefType = llvm::dyn_cast<mlir::MemRefType>(getView().getType());
+  if (!memrefType)
+    return emitOpError("array.view result must be a statically shaped memref");
+  if (memrefType != getArrayViewMemRefType(arrayType))
+    return emitOpError("array.view result type mismatch: expected ")
+           << getArrayViewMemRefType(arrayType) << ", got " << memrefType;
+  return mlir::success();
+}
+
+mlir::LogicalResult ReussirArrayProjectOp::verify() {
+  auto memrefType = llvm::dyn_cast<mlir::MemRefType>(getView().getType());
+  if (!memrefType)
+    return emitOpError("array.project input must be a statically shaped memref");
+  if (!memrefType.hasStaticShape() || !memrefType.getLayout().isIdentity())
+    return emitOpError("array.project input memref must have a static "
+                       "identity-layout type");
+  ArrayType arrayType =
+      ArrayType::get(getContext(), memrefType.getShape(), memrefType.getElementType());
+  if (arrayType.getRank() == 0)
+    return emitOpError("array view must have at least one extent");
+
+  if (arrayType.getRank() == 1) {
+    RefType projectedType = llvm::dyn_cast<RefType>(getProjected().getType());
+    if (!projectedType)
+      return emitOpError("projecting the last array dimension must produce a "
+                         "reference result");
+    if (projectedType.getElementType() != arrayType.getElementType())
+      return emitOpError("projected reference element type mismatch: expected ")
+             << arrayType.getElementType() << ", got "
+             << projectedType.getElementType();
+    if (projectedType.getCapability() != Capability::field &&
+        projectedType.getCapability() != Capability::unspecified)
+      return emitOpError("projected reference capability must be field or "
+                         "unspecified, got ")
+             << stringifyCapability(projectedType.getCapability());
+    return mlir::success();
+  }
+
+  auto projectedMemRefType =
+      llvm::dyn_cast<mlir::MemRefType>(getProjected().getType());
+  if (!projectedMemRefType)
+    return emitOpError("projecting a non-final array dimension must produce "
+                       "another statically shaped memref");
+  if (projectedMemRefType != getArrayViewMemRefType(arrayType.dropFront()))
+    return emitOpError("projected subview type mismatch: expected ")
+           << getArrayViewMemRefType(arrayType.dropFront()) << ", got "
+           << projectedMemRefType;
+  return mlir::success();
+}
+
+mlir::LogicalResult ReussirArrayWithUniqueViewOp::verify() {
+  RcType rcType = getArray().getType();
+  ArrayType arrayType = llvm::dyn_cast<ArrayType>(rcType.getElementType());
+  if (!arrayType)
+    return emitOpError("input must be an RC array");
+
+  mlir::Region &body = getBody();
+  if (body.empty())
+    return emitOpError("body region must not be empty");
+  mlir::Block &block = body.front();
+  if (block.getNumArguments() != 1)
+    return emitOpError("body region must take exactly one view argument");
+  if (block.empty() || !llvm::isa<ReussirScfYieldOp>(block.getTerminator()))
+    return emitOpError("body region must terminate with reussir.scf.yield");
+
+  auto memrefType = llvm::dyn_cast<mlir::MemRefType>(block.getArgument(0).getType());
+  if (!memrefType)
+    return emitOpError("body argument must be a statically shaped memref");
+  if (memrefType != getArrayViewMemRefType(arrayType))
+    return emitOpError("body argument view type mismatch: expected ")
+           << getArrayViewMemRefType(arrayType) << ", got " << memrefType;
+
+  auto yieldOp = llvm::cast<ReussirScfYieldOp>(block.getTerminator());
+  if (getResult() && yieldOp.getNumOperands() == 0 &&
+      getResult().getType() != getArray().getType())
+    return emitOpError("implicit array result is only valid when the result "
+                       "type matches the input RC array type");
+
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Reference Operations
 //===----------------------------------------------------------------------===//
 // ReferenceProjectOp verification
@@ -1268,6 +1361,54 @@ void ReussirRecordDispatchOp::print(mlir::OpAsmPrinter &p) {
 }
 
 //===----------------------------------------------------------------------===//
+// Reussir Array WithUniqueView Op
+//===----------------------------------------------------------------------===//
+mlir::ParseResult ReussirArrayWithUniqueViewOp::parse(
+    mlir::OpAsmParser &parser, mlir::OperationState &result) {
+  llvm::SMLoc operandLoc = parser.getCurrentLocation();
+  mlir::OpAsmParser::UnresolvedOperand arrayOperand;
+  RcType arrayType;
+  mlir::Type resultType;
+  auto bodyRegion = std::make_unique<mlir::Region>();
+
+  if (parser.parseLParen() || parser.parseOperand(arrayOperand) ||
+      parser.parseColon() || parser.parseCustomTypeWithFallback(arrayType) ||
+      parser.parseRParen())
+    return mlir::failure();
+
+  if (llvm::succeeded(parser.parseOptionalArrow()))
+    if (parser.parseType(resultType))
+      return mlir::failure();
+
+  if (parser.parseRegion(*bodyRegion) ||
+      parser.parseOptionalAttrDict(result.attributes))
+    return mlir::failure();
+
+  result.addRegion(std::move(bodyRegion));
+  if (resultType)
+    result.addTypes(resultType);
+  if (parser.resolveOperands({arrayOperand}, arrayType, operandLoc,
+                             result.operands))
+    return mlir::failure();
+  return mlir::success();
+}
+
+void ReussirArrayWithUniqueViewOp::print(mlir::OpAsmPrinter &p) {
+  p << "(";
+  p.printOperand(getArray());
+  p << " : ";
+  p.printType(getArray().getType());
+  p << ")";
+  if (getResult()) {
+    p << " -> ";
+    p.printType(getResult().getType());
+  }
+  p << " ";
+  p.printRegion(getBody());
+  p.printOptionalAttrDict(getOperation()->getAttrs());
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir Nullable Coerce Op
 //===----------------------------------------------------------------------===//
 // NullableCoerceOp verification
@@ -1332,6 +1473,7 @@ mlir::LogicalResult ReussirNullableDispatchOp::verify() {
 mlir::LogicalResult ReussirScfYieldOp::verify() {
   mlir::Type yieldedType = getValue() ? getValue().getType() : mlir::Type{};
   mlir::Type expectedType = mlir::Type{};
+  bool allowImplicitArrayResult = false;
   if (auto nullableParent =
           getOperation()->getParentOfType<ReussirNullableDispatchOp>())
     expectedType = nullableParent.getValue()
@@ -1341,10 +1483,16 @@ mlir::LogicalResult ReussirScfYieldOp::verify() {
                getOperation()->getParentOfType<ReussirRecordDispatchOp>())
     expectedType = recordParent.getValue() ? recordParent.getValue().getType()
                                            : mlir::Type{};
-  else
+  else if (auto arrayParent =
+               getOperation()->getParentOfType<ReussirArrayWithUniqueViewOp>()) {
+    expectedType = arrayParent.getResult() ? arrayParent.getResult().getType()
+                                           : mlir::Type{};
+    allowImplicitArrayResult =
+        expectedType && expectedType == arrayParent.getArray().getType();
+  } else
     llvm_unreachable("unexpected parent operation");
 
-  if (expectedType && !yieldedType)
+  if (expectedType && !yieldedType && !allowImplicitArrayResult)
     return emitOpError(
         "parent operation expected a value, but nothing is yielded");
   if (yieldedType && !expectedType)
@@ -1916,6 +2064,9 @@ mlir::LogicalResult ReussirRefAcquireOp::verify() {
     return mlir::success();
   }
 
+  if (llvm::isa<ArrayType>(elementType))
+    return mlir::success();
+
   return emitOpError("unsupported element type for acquisition: ")
          << elementType;
 }
@@ -1966,6 +2117,9 @@ mlir::LogicalResult ReussirPolyFFIOp::verify() {
 //===----------------------------------------------------------------------===//
 // emitOwnershipAcquisition
 //===----------------------------------------------------------------------===//
+static mlir::LogicalResult emitArrayOwnershipAcquisition(
+    mlir::Value view, mlir::OpBuilder &builder, mlir::Location loc);
+
 mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
                                              mlir::OpBuilder &builder,
                                              mlir::Location loc) {
@@ -1990,6 +2144,14 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
           auto loadedValue =
               builder.create<ReussirRefLoadOp>(loc, elementType, value);
           return emitOwnershipAcquisition(loadedValue, builder, loc);
+        }
+
+        if (auto arrayType = llvm::dyn_cast<ArrayType>(elementType)) {
+          auto view =
+              builder.create<ReussirArrayViewOp>(loc, getArrayViewMemRefType(arrayType),
+                                                 value)
+                  .getView();
+          return emitArrayOwnershipAcquisition(view, builder, loc);
         }
 
         // If reference points to a record, handle fields directly
@@ -2060,8 +2222,41 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
         // For other reference types, this is a no-op
         return mlir::success();
       })
+      .Case<mlir::MemRefType>([&](mlir::MemRefType) {
+        return emitArrayOwnershipAcquisition(value, builder, loc);
+      })
       // For other types, return failure
       .Default([&](mlir::Type) { return mlir::failure(); });
+}
+
+static mlir::LogicalResult emitArrayOwnershipAcquisition(
+    mlir::Value view, mlir::OpBuilder &builder, mlir::Location loc) {
+  auto viewType = llvm::cast<mlir::MemRefType>(view.getType());
+  ArrayType arrayType =
+      ArrayType::get(builder.getContext(), viewType.getShape(),
+                     viewType.getElementType());
+  auto *context = builder.getContext();
+  for (int64_t index : llvm::seq<int64_t>(0, arrayType.getShape().front())) {
+    auto idx = builder.create<mlir::arith::ConstantIndexOp>(loc, index);
+    if (arrayType.getRank() == 1) {
+      RefType projectedType = RefType::get(context, arrayType.getElementType(),
+                                           Capability::unspecified);
+      auto elementRef = builder.create<ReussirArrayProjectOp>(
+          loc, projectedType, view, idx.getResult());
+      if (emitOwnershipAcquisition(elementRef.getProjected(), builder, loc)
+              .failed())
+        return mlir::failure();
+      continue;
+    }
+
+    auto projectedType = getArrayViewMemRefType(arrayType.dropFront());
+    auto nestedView = builder.create<ReussirArrayProjectOp>(
+        loc, projectedType, view, idx.getResult());
+    if (emitArrayOwnershipAcquisition(nestedView.getProjected(), builder, loc)
+            .failed())
+      return mlir::failure();
+  }
+  return mlir::success();
 }
 
 //===----------------------------------------------------------------------===//

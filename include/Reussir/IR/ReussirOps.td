@@ -827,6 +827,64 @@ def ReussirRecordCoerceOp : ReussirRecordOp<"coerce", []> {
 }
 
 //===----------------------------------------------------------------------===//
+// Reussir array operations
+//===----------------------------------------------------------------------===//
+class ReussirArrayOp<string mnemonic, list<Trait> traits>
+    : ReussirOp<"array."#mnemonic, traits>;
+
+def ReussirArrayProjectOp : ReussirArrayOp<"project", []> {
+  let summary = "Project a fixed-size array view";
+  let description = [{
+    `reussir.array.project` projects the leading dimension of a statically
+    shaped memref produced by `reussir.array.view`.
+    When the remaining element is scalar, the result is a field reference.
+    Otherwise, the result is another statically shaped memref with one fewer
+    dimension.
+  }];
+  let arguments = (ins
+    Arg<AnyType, "array view to project">:$view,
+    Arg<Index, "dynamic index">:$index
+  );
+  let results = (outs Res<AnyType, "projected lane or subview">:$projected);
+  let assemblyFormat = [{
+    `(` $view `:` qualified(type($view)) `)` `[` $index `:` type($index) `]`
+    `:` qualified(type($projected)) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def ReussirArrayViewOp : ReussirArrayOp<"view", []> {
+  let summary = "Materialize an array view from an array reference";
+  let description = [{
+    `reussir.array.view` turns a reference to an inline array payload into a
+    statically shaped memref suitable for `memref.load` and `memref.store`.
+  }];
+  let arguments = (ins Arg<ReussirRefType, "array reference">:$ref);
+  let results = (outs Res<AnyType, "materialized view">:$view);
+  let assemblyFormat = [{
+    `(` $ref `:` qualified(type($ref)) `)` `:` qualified(type($view)) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def ReussirArrayWithUniqueViewOp : ReussirArrayOp<"with_unique_view", []> {
+  let summary = "Ensure a unique RC array, expose a mutable view, and run a region";
+  let description = [{
+    `reussir.array.with_unique_view` makes sure the input RC array is unique,
+    clones it when needed, then executes the body region with a mutable view of
+    the array payload as a statically shaped memref.
+
+    The body region must take exactly one matching view argument and terminate
+    with `reussir.scf.yield`.
+  }];
+  let arguments = (ins Arg<ReussirRcArrayType, "array to uniqify">:$array);
+  let regions = (region MaxSizedRegion<1>:$body);
+  let results = (outs Res<Optional<AnyType>, "body result">:$result);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Reussir reference operations
 //===----------------------------------------------------------------------===//
 class ReussirReferenceOp<string mnemonic, list<Trait> traits>
@@ -1182,7 +1240,8 @@ def ReussirScfYieldOp : ReussirScfOp<"yield", [
   ReturnLike, Terminator,
   ParentOneOf<[
     "::reussir::ReussirNullableDispatchOp", 
-    "::reussir::ReussirRecordDispatchOp"
+    "::reussir::ReussirRecordDispatchOp",
+    "::reussir::ReussirArrayWithUniqueViewOp"
   ]>]> {
   let summary = "Yield a value from a scf operation";
   let description = [{

@@ -203,6 +203,20 @@ private:
       return mapped;
     }
 
+    if (auto withUniqueView = llvm::dyn_cast<ReussirArrayWithUniqueViewOp>(op)) {
+      if (withUniqueView.getResult() &&
+          withUniqueView.getResult().getType() ==
+              withUniqueView.getArray().getType())
+        return UniqueCarryingValue::getFresh();
+      auto yieldOp =
+          llvm::dyn_cast<ReussirScfYieldOp>(withUniqueView.getBody().front().getTerminator());
+      if (!yieldOp)
+        return UniqueCarryingValue::getUnknown();
+      if (resultIndex >= yieldOp.getNumOperands())
+        return UniqueCarryingValue::getUnknown();
+      return evaluate(yieldOp.getOperand(resultIndex));
+    }
+
     auto *dialect = op->getDialect();
     if (dialect && dialect->getNamespace() == "scf") {
       UniqueCarryingValue joined = UniqueCarryingValue::getUnknown();
@@ -276,11 +290,13 @@ computeFunctionSummary(mlir::func::FuncOp funcOp,
   return summary;
 }
 
-static bool isCarryingUniquenessScfOp(mlir::Operation *op,
-                                      const FunctionSummaryMap &summaries) {
+static bool isCarryingUniquenessRegionOp(mlir::Operation *op,
+                                         const FunctionSummaryMap &summaries) {
   auto *dialect = op->getDialect();
-  if (!dialect || dialect->getNamespace() != "scf" ||
-      !hasRcResults(op->getResultTypes()))
+  bool supportedOp =
+      (dialect && dialect->getNamespace() == "scf") ||
+      llvm::isa<ReussirArrayWithUniqueViewOp>(op);
+  if (!supportedOp || !hasRcResults(op->getResultTypes()))
     return false;
   ProvenanceEvaluator evaluator(summaries);
   return areAllRcValuesCarrying(op->getResults(), evaluator);
@@ -555,7 +571,7 @@ struct UniqueCarryingRecursionAnalysisPass
     moduleOp.walk([&](mlir::Operation *op) {
       if (llvm::isa<mlir::func::FuncOp>(op))
         return;
-      setCarryingUniquenessAttr(op, isCarryingUniquenessScfOp(op, summaries));
+      setCarryingUniquenessAttr(op, isCarryingUniquenessRegionOp(op, summaries));
     });
 
     mlir::SymbolTable symbolTable(moduleOp);

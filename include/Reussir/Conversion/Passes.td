@@ -51,6 +51,7 @@ def ReussirSCFOpsLoweringPass
   let dependentDialects = ["::mlir::arith::ArithDialect",
                            "::reussir::ReussirDialect",
                            "::mlir::math::MathDialect",
+                           "::mlir::memref::MemRefDialect",
                            "::mlir::scf::SCFDialect",
                            "::mlir::func::FuncDialect",
                            "::mlir::ub::UBDialect"];

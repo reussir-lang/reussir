@@ -677,6 +677,88 @@ struct ReussirReferenceProjectConversionPattern
   }
 };
 
+struct ReussirArrayProjectConversionPattern
+    : public mlir::OpConversionPattern<ReussirArrayProjectOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayProjectOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    auto viewType = llvm::cast<mlir::MemRefType>(op.getView().getType());
+    auto extent = rewriter.create<mlir::arith::ConstantOp>(
+        loc, mlir::IntegerAttr::get(converter->getIndexType(),
+                                    viewType.getShape().front()));
+    auto inBounds = rewriter.create<mlir::arith::CmpIOp>(
+        loc, mlir::arith::CmpIPredicate::ult, adaptor.getIndex(),
+        extent.getResult());
+    rewriter.create<mlir::LLVM::AssumeOp>(loc, inBounds);
+
+    if (viewType.getRank() == 1) {
+      mlir::Type resultType = converter->convertType(op.getProjected().getType());
+      auto llvmPtrType = llvm::dyn_cast<mlir::LLVM::LLVMPointerType>(resultType);
+      if (!llvmPtrType)
+        return op.emitOpError("projected result must lower to an LLVM pointer");
+
+      auto elementPtr = mlir::LLVM::getStridedElementPtr(
+          rewriter, loc, *converter, viewType, adaptor.getView(),
+          mlir::ValueRange{adaptor.getIndex()});
+      if (elementPtr.getType() != llvmPtrType)
+        elementPtr =
+            rewriter.create<mlir::LLVM::BitcastOp>(loc, llvmPtrType, elementPtr);
+      rewriter.replaceOp(op, elementPtr);
+      return mlir::success();
+    }
+
+    auto resultMemRefType = llvm::cast<mlir::MemRefType>(op.getProjected().getType());
+    mlir::Type resultType = converter->convertType(resultMemRefType);
+    mlir::MemRefDescriptor srcDesc(adaptor.getView());
+    auto resultDesc = mlir::MemRefDescriptor::poison(rewriter, loc, resultType);
+    resultDesc.setAllocatedPtr(rewriter, loc, srcDesc.allocatedPtr(rewriter, loc));
+    resultDesc.setAlignedPtr(rewriter, loc, srcDesc.alignedPtr(rewriter, loc));
+
+    auto offset = srcDesc.offset(rewriter, loc);
+    auto stride0 = srcDesc.stride(rewriter, loc, 0);
+    auto delta = rewriter.create<mlir::arith::MulIOp>(loc, adaptor.getIndex(), stride0);
+    auto newOffset = rewriter.create<mlir::arith::AddIOp>(loc, offset, delta);
+    resultDesc.setOffset(rewriter, loc, newOffset);
+
+    for (int64_t i = 0, e = resultMemRefType.getRank(); i < e; ++i) {
+      resultDesc.setSize(rewriter, loc, i, srcDesc.size(rewriter, loc, i + 1));
+      resultDesc.setStride(rewriter, loc, i,
+                           srcDesc.stride(rewriter, loc, i + 1));
+    }
+
+    rewriter.replaceOp(op, mlir::Value(resultDesc));
+    return mlir::success();
+  }
+};
+
+struct ReussirArrayViewConversionPattern
+    : public mlir::OpConversionPattern<ReussirArrayViewOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayViewOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
+    auto viewType = llvm::cast<mlir::MemRefType>(op.getView().getType());
+    ArrayType arrayType =
+        llvm::cast<ArrayType>(llvm::cast<RefType>(op.getRef().getType()).getElementType());
+    mlir::Type llvmArrayType = converter->convertType(arrayType);
+    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    llvm::SmallVector<mlir::LLVM::GEPArg> zeroIndices(arrayType.getRank() + 1, 0);
+    auto elementPtr = rewriter.create<mlir::LLVM::GEPOp>(
+        loc, llvmPtrType, llvmArrayType, adaptor.getRef(), zeroIndices);
+    auto descriptor = mlir::MemRefDescriptor::fromStaticShape(
+        rewriter, loc, *converter, viewType, elementPtr, elementPtr);
+    rewriter.replaceOp(op, mlir::Value(descriptor));
+    return mlir::success();
+  }
+};
+
 struct ReussirRecordTagConversionPattern
     : public mlir::OpConversionPattern<ReussirRecordTagOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -2494,12 +2576,14 @@ struct BasicOpsLoweringPass
       mlir::arith::populateArithToLLVMConversionPatterns(converter, patterns);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(converter,
                                                             patterns);
+      mlir::populateFinalizeMemRefToLLVMConversionPatterns(converter, patterns);
       mlir::populateMathToLLVMConversionPatterns(converter, patterns);
       mlir::populateMathToLibmConversionPatterns(patterns);
       mlir::ub::populateUBToLLVMConversionPatterns(converter, patterns);
       addRuntimeFunctions(getOperation(), converter);
       target.addIllegalDialect<mlir::func::FuncDialect,
-                               mlir::arith::ArithDialect>();
+                               mlir::arith::ArithDialect,
+                               mlir::memref::MemRefDialect>();
       target.addIllegalOp<
           ReussirPanicOp, ReussirExpectOp, ReussirHoleCreateOp,
           ReussirHoleLoadOp, ReussirHoleStoreOp, ReussirTokenAllocOp,
@@ -2511,7 +2595,9 @@ struct BasicOpsLoweringPass
           ReussirRcCreateCompoundOp, ReussirRcCreateVariantOp, ReussirRcDecOp,
           ReussirRcBorrowOp, ReussirRcIsUniqueOp, ReussirRcAssumeUniqueOp,
           ReussirRecordCompoundOp,
-          ReussirRecordVariantOp, ReussirRefProjectOp, ReussirRecordTagOp,
+          ReussirRecordVariantOp, ReussirRefProjectOp, ReussirArrayProjectOp,
+          ReussirArrayViewOp,
+          ReussirRecordTagOp,
           ReussirRecordExtractOp, ReussirRecordCoerceOp, ReussirRegionVTableOp,
           ReussirRcFreezeOp, ReussirRegionCleanupOp, ReussirRegionCreateOp,
           ReussirRcReinterpretOp, ReussirClosureApplyOp, ReussirClosureCloneOp,
@@ -2555,6 +2641,8 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirRecordExtractConversionPattern,
       ReussirRecordVariantConversionPattern,
       ReussirReferenceProjectConversionPattern,
+      ReussirArrayProjectConversionPattern,
+      ReussirArrayViewConversionPattern,
       ReussirRecordTagConversionPattern, ReussirRecordCoerceConversionPattern,
       ReussirRegionVTableOpConversionPattern,
       ReussirRcFreezeOpConversionPattern,
