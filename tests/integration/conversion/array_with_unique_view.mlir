@@ -6,13 +6,12 @@
 module {
   func.func @update0(%xs: !rc_arr4) -> !rc_arr4 {
     %res = reussir.array.with_unique_view (%xs : !rc_arr4) -> !rc_arr4 {
-      ^bb0(%view: !reussir.view<mutable, 4 x i8>):
+      ^bb0(%view: memref<4xi8>):
         %c0 = arith.constant 0 : index
-        %elt = reussir.array.project (%view : !reussir.view<mutable, 4 x i8>) [%c0 : index] : !reussir.ref<i8 field>
-        %old = reussir.ref.load (%elt : !reussir.ref<i8 field>) : i8
+        %old = memref.load %view[%c0] : memref<4xi8>
         %one = arith.constant 1 : i8
         %new = arith.addi %old, %one : i8
-        reussir.ref.store (%elt : !reussir.ref<i8 field>) (%new : i8)
+        memref.store %new, %view[%c0] : memref<4xi8>
         reussir.scf.yield
     }
     return %res : !rc_arr4
@@ -23,8 +22,9 @@ module {
 // CHECK: %[[IS_UNIQUE:.+]] = reussir.rc.is_unique
 // CHECK: %[[RESULT:.+]] = scf.if %[[IS_UNIQUE]] -> (!reussir.rc<!reussir.array<4 x i8>>) {
 // CHECK: %[[BORROWED:.+]] = reussir.rc.borrow
-// CHECK: %[[VIEW:.+]] = reussir.array.view(%[[BORROWED]] : !reussir.ref<!reussir.array<4 x i8>>) : !reussir.view<mutable, 4 x i8>
-// CHECK: reussir.array.project
+// CHECK: %[[VIEW:.+]] = reussir.array.view(%[[BORROWED]] : !reussir.ref<!reussir.array<4 x i8>>) : memref<4xi8>
+// CHECK: memref.load %[[VIEW]]
+// CHECK: memref.store
 // CHECK: scf.yield %arg0 : !reussir.rc<!reussir.array<4 x i8>>
 // CHECK: } else {
 // CHECK: %[[SRC_BORROW:.+]] = reussir.rc.borrow(%arg0 : !reussir.rc<!reussir.array<4 x i8>>) : !reussir.ref<!reussir.array<4 x i8>>
@@ -37,8 +37,9 @@ module {
 // CHECK: %[[COUNT:.+]] = reussir.rc.fetch(%arg0 : !reussir.rc<!reussir.array<4 x i8>>) : index
 // CHECK: %[[DEC:.+]] = arith.subi %[[COUNT]], %{{.+}} : index
 // CHECK: reussir.rc.set(%arg0 : !reussir.rc<!reussir.array<4 x i8>>, %[[DEC]] : index)
-// CHECK: %[[CLONED_VIEW:.+]] = reussir.array.view(%[[CLONED_BORROW]] : !reussir.ref<!reussir.array<4 x i8>>) : !reussir.view<mutable, 4 x i8>
-// CHECK: reussir.array.project
+// CHECK: %[[CLONED_VIEW:.+]] = reussir.array.view(%[[CLONED_BORROW]] : !reussir.ref<!reussir.array<4 x i8>>) : memref<4xi8>
+// CHECK: memref.load %[[CLONED_VIEW]]
+// CHECK: memref.store
 // CHECK: scf.yield %[[CLONED]] : !reussir.rc<!reussir.array<4 x i8>>
 // CHECK: }
 // CHECK: return %[[RESULT]] : !reussir.rc<!reussir.array<4 x i8>>

@@ -27,6 +27,7 @@
 #include <mlir/Dialect/LLVMIR/LLVMAttrs.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/Math/IR/Math.h>
+#include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/IR/Block.h>
@@ -36,6 +37,7 @@
 #include <mlir/IR/ValueRange.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Support/LLVM.h>
+#include <mlir/Transforms/DialectConversion.h>
 #include <utility>
 
 namespace reussir {
@@ -380,11 +382,12 @@ std::string emitDecisionFunction(mlir::ModuleOp module,
 namespace {
 
 struct ReussirNullableDispatchOpRewritePattern
-    : public mlir::OpRewritePattern<ReussirNullableDispatchOp> {
-  using OpRewritePattern::OpRewritePattern;
+    : public mlir::OpConversionPattern<ReussirNullableDispatchOp> {
+  using OpConversionPattern::OpConversionPattern;
   mlir::LogicalResult
   matchAndRewrite(ReussirNullableDispatchOp op,
-                  mlir::PatternRewriter &rewriter) const override {
+                  OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
     // First, create a check operation to get the null flag from the input.
     mlir::Value flag = rewriter.create<reussir::ReussirNullableCheckOp>(
         op.getLoc(), op.getNullable());
@@ -422,8 +425,8 @@ struct ReussirNullableDispatchOpRewritePattern
 };
 
 struct ReussirRecordDispatchOpRewritePattern
-    : public mlir::OpRewritePattern<ReussirRecordDispatchOp> {
-  using OpRewritePattern::OpRewritePattern;
+    : public mlir::OpConversionPattern<ReussirRecordDispatchOp> {
+  using OpConversionPattern::OpConversionPattern;
 
 private:
   static mlir::DenseI64ArrayAttr
@@ -480,7 +483,8 @@ private:
 public:
   mlir::LogicalResult
   matchAndRewrite(ReussirRecordDispatchOp op,
-                  mlir::PatternRewriter &rewriter) const override {
+                  OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
     // First, create a RecordTagOps operation to get the tag from the input.
     auto tag = rewriter.create<reussir::ReussirRecordTagOp>(op.getLoc(),
                                                             op.getVariant());
@@ -550,11 +554,12 @@ public:
 };
 
 struct ReussirClosureUniqifyOpRewritePattern
-    : public mlir::OpRewritePattern<ReussirClosureUniqifyOp> {
-  using OpRewritePattern::OpRewritePattern;
+    : public mlir::OpConversionPattern<ReussirClosureUniqifyOp> {
+  using OpConversionPattern::OpConversionPattern;
   mlir::LogicalResult
   matchAndRewrite(ReussirClosureUniqifyOp op,
-                  mlir::PatternRewriter &rewriter) const override {
+                  OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
     // Create a check operation to see if the closure is unique
     auto isUnique = rewriter.create<reussir::ReussirRcIsUniqueOp>(
         op.getLoc(), op.getClosure());
@@ -607,17 +612,17 @@ static void cloneArrayWithUniqueViewBody(ReussirArrayWithUniqueViewOp op,
 }
 
 struct ReussirArrayWithUniqueViewOpRewritePattern
-    : public mlir::OpRewritePattern<ReussirArrayWithUniqueViewOp> {
-  using OpRewritePattern::OpRewritePattern;
+    : public mlir::OpConversionPattern<ReussirArrayWithUniqueViewOp> {
+  using OpConversionPattern::OpConversionPattern;
 
   mlir::LogicalResult
   matchAndRewrite(ReussirArrayWithUniqueViewOp op,
-                  mlir::PatternRewriter &rewriter) const override {
+                  OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Location loc = op.getLoc();
     RcType rcType = op.getArray().getType();
     ArrayType arrayType = llvm::cast<ArrayType>(rcType.getElementType());
-    ViewType viewType =
-        llvm::cast<ViewType>(op.getBody().front().getArgument(0).getType());
+    mlir::Type viewType = op.getBody().front().getArgument(0).getType();
 
     auto makeBorrowedView = [&](mlir::Value array) -> mlir::Value {
       auto borrowedType = RefType::get(rewriter.getContext(), arrayType);
@@ -682,22 +687,24 @@ struct ReussirArrayWithUniqueViewOpRewritePattern
 };
 
 struct ReussirScfYieldOpRewritePattern
-    : public mlir::OpRewritePattern<ReussirScfYieldOp> {
-  using OpRewritePattern::OpRewritePattern;
+    : public mlir::OpConversionPattern<ReussirScfYieldOp> {
+  using OpConversionPattern::OpConversionPattern;
   mlir::LogicalResult
   matchAndRewrite(ReussirScfYieldOp op,
-                  mlir::PatternRewriter &rewriter) const override {
+                  OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<mlir::scf::YieldOp>(op, op->getOperands());
     return mlir::success();
   }
 };
 
 struct ReussirTokenEnsureOpRewritePattern
-    : public mlir::OpRewritePattern<ReussirTokenEnsureOp> {
-  using OpRewritePattern::OpRewritePattern;
+    : public mlir::OpConversionPattern<ReussirTokenEnsureOp> {
+  using OpConversionPattern::OpConversionPattern;
   mlir::LogicalResult
   matchAndRewrite(ReussirTokenEnsureOp op,
-                  mlir::PatternRewriter &rewriter) const override {
+                  OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
     auto nullableDispatchOp = rewriter.create<ReussirNullableDispatchOp>(
         op.getLoc(), op.getType(), op.getNullableToken());
 
@@ -745,11 +752,12 @@ struct ReussirTokenEnsureOpRewritePattern
 };
 
 struct ReussirStrByteAtOpRewritePattern
-    : public mlir::OpRewritePattern<ReussirStrByteAtOp> {
-  using OpRewritePattern::OpRewritePattern;
+    : public mlir::OpConversionPattern<ReussirStrByteAtOp> {
+  using OpConversionPattern::OpConversionPattern;
   mlir::LogicalResult
   matchAndRewrite(ReussirStrByteAtOp op,
-                  mlir::PatternRewriter &rewriter) const override {
+                  OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Location loc = op.getLoc();
 
     // Get string length
@@ -787,11 +795,12 @@ struct ReussirStrByteAtOpRewritePattern
   }
 };
 struct ReussirStrSelectOpRewritePattern
-    : public mlir::OpRewritePattern<ReussirStrSelectOp> {
-  using OpRewritePattern::OpRewritePattern;
+    : public mlir::OpConversionPattern<ReussirStrSelectOp> {
+  using OpConversionPattern::OpConversionPattern;
   mlir::LogicalResult
   matchAndRewrite(ReussirStrSelectOp op,
-                  mlir::PatternRewriter &rewriter) const override {
+                  OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
     auto module = op->getParentOfType<mlir::ModuleOp>();
     auto funcName = emitDecisionFunction(module, rewriter, op.getPatterns());
     auto func = module.lookupSymbol<mlir::func::FuncOp>(funcName);
@@ -803,11 +812,12 @@ struct ReussirStrSelectOpRewritePattern
   }
 };
 struct ReussirStrStartWithOpRewritePattern
-    : public mlir::OpRewritePattern<ReussirStrStartWithOp> {
-  using OpRewritePattern::OpRewritePattern;
+    : public mlir::OpConversionPattern<ReussirStrStartWithOp> {
+  using OpConversionPattern::OpConversionPattern;
   mlir::LogicalResult
   matchAndRewrite(ReussirStrStartWithOp op,
-                  mlir::PatternRewriter &rewriter) const override {
+                  OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Location loc = op.getLoc();
     auto indexType = rewriter.getIndexType();
 
@@ -866,12 +876,11 @@ struct SCFOpsLoweringPass
 
     populateSCFOpsLoweringConversionPatterns(patterns);
 
-    // Configure target legality
-    target.addLegalDialect<mlir::arith::ArithDialect, mlir::scf::SCFDialect,
-                           mlir::math::MathDialect, mlir::func::FuncDialect,
-                           mlir::ub::UBDialect, reussir::ReussirDialect>();
+    target.addLegalDialect<mlir::arith::ArithDialect, mlir::memref::MemRefDialect,
+                           mlir::scf::SCFDialect, mlir::math::MathDialect,
+                           mlir::func::FuncDialect, mlir::ub::UBDialect,
+                           reussir::ReussirDialect>();
 
-    // Illegal operations
     target.addIllegalOp<ReussirNullableDispatchOp, ReussirRecordDispatchOp,
                         ReussirScfYieldOp, ReussirClosureUniqifyOp,
                         ReussirArrayWithUniqueViewOp,

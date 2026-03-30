@@ -16,6 +16,7 @@
 
 include "Reussir/IR/ReussirDialect.td"
 include "Reussir/IR/ReussirAttrs.td"
+include "mlir/IR/BuiltinTypeInterfaces.td"
 include "mlir/Interfaces/DataLayoutInterfaces.td"
 
 class ReussirType<string name, string typeMnemonic, list<Trait> traits = [],
@@ -193,7 +194,9 @@ def ReussirRegionType
 //===----------------------------------------------------------------------===//
 def ReussirRcType
     : ReussirType<
-          "Rc", "rc", [DeclareTypeInterfaceMethods<DataLayoutTypeInterface>]> {
+          "Rc", "rc",
+          [DeclareTypeInterfaceMethods<DataLayoutTypeInterface>,
+           MemRefElementTypeInterface]> {
   let summary = "Reussir Reference Counted Type";
   let description = [{
     `reussir.rc` represents a reference counted object. It is used to manage the
@@ -416,7 +419,8 @@ def ReussirClosureBoxType
 def ReussirArrayType
     : ReussirType<
           "Array", "array",
-          [DeclareTypeInterfaceMethods<DataLayoutTypeInterface>]> {
+          [DeclareTypeInterfaceMethods<DataLayoutTypeInterface>,
+           ShapedTypeInterface]> {
   let summary = "Reussir fixed-size inline array type";
   let description = [{
     `reussir.array` represents a statically shaped inline array payload.
@@ -428,6 +432,9 @@ def ReussirArrayType
   let genVerifyDecl = 1;
   let extraClassDeclaration = [{
     mlir::Type getElementType() const { return getEleTy(); }
+    bool hasRank() const { return true; }
+    ArrayType cloneWith(std::optional<llvm::ArrayRef<int64_t>> shape,
+                        mlir::Type elementType) const;
     size_t getRank() const { return getShape().size(); }
     ArrayType dropFront() const;
   }];

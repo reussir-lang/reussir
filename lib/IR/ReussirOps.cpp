@@ -49,6 +49,10 @@
 namespace reussir {
 namespace {
 
+static mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType) {
+  return mlir::MemRefType::get(arrayType.getShape(), arrayType.getElementType());
+}
+
 mlir::LogicalResult verifyRcCreateLikeOp(mlir::Operation *op, RcType rcType,
                                          mlir::Type valueType,
                                          mlir::Value token,
@@ -760,20 +764,27 @@ mlir::LogicalResult ReussirRecordCoerceOp::verify() {
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirArrayViewOp::verify() {
   RefType refType = getRef().getType();
-  ViewType viewType = getView().getType();
   ArrayType arrayType = llvm::dyn_cast<ArrayType>(refType.getElementType());
   if (!arrayType)
     return emitOpError("array.view input must be a reference to a reussir.array");
-  if (viewType.getArrayType() != arrayType)
+  auto memrefType = llvm::dyn_cast<mlir::MemRefType>(getView().getType());
+  if (!memrefType)
+    return emitOpError("array.view result must be a statically shaped memref");
+  if (memrefType != getArrayViewMemRefType(arrayType))
     return emitOpError("array.view result type mismatch: expected ")
-           << ViewType::get(getContext(), viewType.isMutable(), arrayType)
-           << ", got " << viewType;
+           << getArrayViewMemRefType(arrayType) << ", got " << memrefType;
   return mlir::success();
 }
 
 mlir::LogicalResult ReussirArrayProjectOp::verify() {
-  ViewType viewType = getView().getType();
-  ArrayType arrayType = viewType.getArrayType();
+  auto memrefType = llvm::dyn_cast<mlir::MemRefType>(getView().getType());
+  if (!memrefType)
+    return emitOpError("array.project input must be a statically shaped memref");
+  if (!memrefType.hasStaticShape() || !memrefType.getLayout().isIdentity())
+    return emitOpError("array.project input memref must have a static "
+                       "identity-layout type");
+  ArrayType arrayType =
+      ArrayType::get(getContext(), memrefType.getShape(), memrefType.getElementType());
   if (arrayType.getRank() == 0)
     return emitOpError("array view must have at least one extent");
 
@@ -782,28 +793,27 @@ mlir::LogicalResult ReussirArrayProjectOp::verify() {
     if (!projectedType)
       return emitOpError("projecting the last array dimension must produce a "
                          "reference result");
-    Capability expectedCapability =
-        viewType.isMutable() ? Capability::field : Capability::unspecified;
     if (projectedType.getElementType() != arrayType.getElementType())
       return emitOpError("projected reference element type mismatch: expected ")
              << arrayType.getElementType() << ", got "
              << projectedType.getElementType();
-    if (projectedType.getCapability() != expectedCapability)
-      return emitOpError("projected reference capability mismatch: expected ")
-             << stringifyCapability(expectedCapability) << ", got "
+    if (projectedType.getCapability() != Capability::field &&
+        projectedType.getCapability() != Capability::unspecified)
+      return emitOpError("projected reference capability must be field or "
+                         "unspecified, got ")
              << stringifyCapability(projectedType.getCapability());
     return mlir::success();
   }
 
-  ViewType projectedType = llvm::dyn_cast<ViewType>(getProjected().getType());
-  if (!projectedType)
+  auto projectedMemRefType =
+      llvm::dyn_cast<mlir::MemRefType>(getProjected().getType());
+  if (!projectedMemRefType)
     return emitOpError("projecting a non-final array dimension must produce "
-                       "another array view");
-  if (projectedType.isMutable() != viewType.isMutable())
-    return emitOpError("projected view mutability must match source view");
-  if (projectedType.getArrayType() != arrayType.dropFront())
+                       "another statically shaped memref");
+  if (projectedMemRefType != getArrayViewMemRefType(arrayType.dropFront()))
     return emitOpError("projected subview type mismatch: expected ")
-           << arrayType.dropFront() << ", got " << projectedType.getArrayType();
+           << getArrayViewMemRefType(arrayType.dropFront()) << ", got "
+           << projectedMemRefType;
   return mlir::success();
 }
 
@@ -822,15 +832,12 @@ mlir::LogicalResult ReussirArrayWithUniqueViewOp::verify() {
   if (block.empty() || !llvm::isa<ReussirScfYieldOp>(block.getTerminator()))
     return emitOpError("body region must terminate with reussir.scf.yield");
 
-  ViewType viewType = llvm::dyn_cast<ViewType>(block.getArgument(0).getType());
-  if (!viewType)
-    return emitOpError("body argument must be a reussir.view type");
-  if (!viewType.isMutable())
-    return emitOpError("body argument must be a mutable array view");
-  if (viewType.getArrayType() != arrayType)
+  auto memrefType = llvm::dyn_cast<mlir::MemRefType>(block.getArgument(0).getType());
+  if (!memrefType)
+    return emitOpError("body argument must be a statically shaped memref");
+  if (memrefType != getArrayViewMemRefType(arrayType))
     return emitOpError("body argument view type mismatch: expected ")
-           << ViewType::get(getContext(), /*mutable=*/true, arrayType) << ", got "
-           << viewType;
+           << getArrayViewMemRefType(arrayType) << ", got " << memrefType;
 
   auto yieldOp = llvm::cast<ReussirScfYieldOp>(block.getTerminator());
   if (getResult() && yieldOp.getNumOperands() == 0 &&
@@ -2140,10 +2147,10 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
         }
 
         if (auto arrayType = llvm::dyn_cast<ArrayType>(elementType)) {
-          auto viewType =
-              ViewType::get(builder.getContext(), /*isMutable=*/false, arrayType);
           auto view =
-              builder.create<ReussirArrayViewOp>(loc, viewType, value).getView();
+              builder.create<ReussirArrayViewOp>(loc, getArrayViewMemRefType(arrayType),
+                                                 value)
+                  .getView();
           return emitArrayOwnershipAcquisition(view, builder, loc);
         }
 
@@ -2215,7 +2222,7 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
         // For other reference types, this is a no-op
         return mlir::success();
       })
-      .Case<ViewType>([&](ViewType) {
+      .Case<mlir::MemRefType>([&](mlir::MemRefType) {
         return emitArrayOwnershipAcquisition(value, builder, loc);
       })
       // For other types, return failure
@@ -2224,16 +2231,16 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
 
 static mlir::LogicalResult emitArrayOwnershipAcquisition(
     mlir::Value view, mlir::OpBuilder &builder, mlir::Location loc) {
-  ViewType viewType = llvm::cast<ViewType>(view.getType());
-  ArrayType arrayType = viewType.getArrayType();
+  auto viewType = llvm::cast<mlir::MemRefType>(view.getType());
+  ArrayType arrayType =
+      ArrayType::get(builder.getContext(), viewType.getShape(),
+                     viewType.getElementType());
   auto *context = builder.getContext();
   for (int64_t index : llvm::seq<int64_t>(0, arrayType.getShape().front())) {
     auto idx = builder.create<mlir::arith::ConstantIndexOp>(loc, index);
     if (arrayType.getRank() == 1) {
-      RefType projectedType =
-          RefType::get(context, arrayType.getElementType(),
-                       viewType.isMutable() ? Capability::field
-                                            : Capability::unspecified);
+      RefType projectedType = RefType::get(context, arrayType.getElementType(),
+                                           Capability::unspecified);
       auto elementRef = builder.create<ReussirArrayProjectOp>(
           loc, projectedType, view, idx.getResult());
       if (emitOwnershipAcquisition(elementRef.getProjected(), builder, loc)
@@ -2242,8 +2249,7 @@ static mlir::LogicalResult emitArrayOwnershipAcquisition(
       continue;
     }
 
-    ViewType projectedType =
-        ViewType::get(context, viewType.isMutable(), arrayType.dropFront());
+    auto projectedType = getArrayViewMemRefType(arrayType.dropFront());
     auto nestedView = builder.create<ReussirArrayProjectOp>(
         loc, projectedType, view, idx.getResult());
     if (emitArrayOwnershipAcquisition(nestedView.getProjected(), builder, loc)

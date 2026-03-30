@@ -966,6 +966,11 @@ ArrayType ArrayType::dropFront() const {
   return ArrayType::get(getContext(), getShape().drop_front(), getElementType());
 }
 
+ArrayType ArrayType::cloneWith(std::optional<llvm::ArrayRef<int64_t>> shape,
+                               mlir::Type elementType) const {
+  return ArrayType::get(getContext(), shape.value_or(getShape()), elementType);
+}
+
 mlir::Type ArrayType::parse(mlir::AsmParser &parser) {
   llvm::SmallVector<int64_t> shape;
   mlir::Type elementType;

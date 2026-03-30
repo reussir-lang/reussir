@@ -46,15 +46,16 @@ namespace reussir {
 //===----------------------------------------------------------------------===//
 
 namespace {
-
 class DropExpansionPattern : public mlir::OpRewritePattern<ReussirRefDropOp> {
 private:
   mlir::LogicalResult rewriteDropArray(ArrayType arrayType, ReussirRefDropOp op,
                                        mlir::PatternRewriter &rewriter) const {
-    auto viewType =
-        ViewType::get(op.getContext(), /*isMutable=*/false, arrayType);
     mlir::Value view =
-        rewriter.create<ReussirArrayViewOp>(op.getLoc(), viewType, op.getRef())
+        rewriter
+            .create<ReussirArrayViewOp>(
+                op.getLoc(),
+                mlir::MemRefType::get(arrayType.getShape(), arrayType.getElementType()),
+                op.getRef())
             .getView();
     auto recurse =
         [&](auto &&self, mlir::Value currentView,
@@ -71,10 +72,12 @@ private:
                                               projected.getProjected());
           continue;
         }
-        ViewType projectedViewType = ViewType::get(
-            op.getContext(), /*isMutable=*/false, currentType.dropFront());
+        auto droppedType = currentType.dropFront();
         auto projected = rewriter.create<ReussirArrayProjectOp>(
-            op.getLoc(), projectedViewType, currentView, idx.getResult());
+            op.getLoc(),
+            mlir::MemRefType::get(droppedType.getShape(),
+                                  droppedType.getElementType()),
+            currentView, idx.getResult());
         if (mlir::failed(self(self, projected.getProjected(),
                               currentType.dropFront())))
           return mlir::failure();

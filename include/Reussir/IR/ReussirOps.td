@@ -835,12 +835,14 @@ class ReussirArrayOp<string mnemonic, list<Trait> traits>
 def ReussirArrayProjectOp : ReussirArrayOp<"project", []> {
   let summary = "Project a fixed-size array view";
   let description = [{
-    `reussir.array.project` projects the leading dimension of an array view.
+    `reussir.array.project` projects the leading dimension of a statically
+    shaped memref produced by `reussir.array.view`.
     When the remaining element is scalar, the result is a field reference.
-    Otherwise, the result is another array view with one fewer dimension.
+    Otherwise, the result is another statically shaped memref with one fewer
+    dimension.
   }];
   let arguments = (ins
-    Arg<ReussirArrayViewType, "array view to project">:$view,
+    Arg<AnyType, "array view to project">:$view,
     Arg<Index, "dynamic index">:$index
   );
   let results = (outs Res<AnyType, "projected lane or subview">:$projected);
@@ -855,10 +857,10 @@ def ReussirArrayViewOp : ReussirArrayOp<"view", []> {
   let summary = "Materialize an array view from an array reference";
   let description = [{
     `reussir.array.view` turns a reference to an inline array payload into a
-    temporary view value suitable for `reussir.array.project`.
+    statically shaped memref suitable for `memref.load` and `memref.store`.
   }];
   let arguments = (ins Arg<ReussirRefType, "array reference">:$ref);
-  let results = (outs Res<ReussirArrayViewType, "materialized view">:$view);
+  let results = (outs Res<AnyType, "materialized view">:$view);
   let assemblyFormat = [{
     `(` $ref `:` qualified(type($ref)) `)` `:` qualified(type($view)) attr-dict
   }];
@@ -870,10 +872,10 @@ def ReussirArrayWithUniqueViewOp : ReussirArrayOp<"with_unique_view", []> {
   let description = [{
     `reussir.array.with_unique_view` makes sure the input RC array is unique,
     clones it when needed, then executes the body region with a mutable view of
-    the array payload.
+    the array payload as a statically shaped memref.
 
-    The body region must take exactly one argument of `!reussir.view<mutable, ...>`
-    matching the input array payload type and terminate with `reussir.scf.yield`.
+    The body region must take exactly one matching view argument and terminate
+    with `reussir.scf.yield`.
   }];
   let arguments = (ins Arg<ReussirRcArrayType, "array to uniqify">:$array);
   let regions = (region MaxSizedRegion<1>:$body);

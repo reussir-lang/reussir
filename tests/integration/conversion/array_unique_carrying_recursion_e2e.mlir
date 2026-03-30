@@ -16,12 +16,11 @@ module {
     %cond = arith.cmpi ult, %i, %c512 : index
     %result = scf.if %cond -> (!rc_arr512) {
       %updated = reussir.array.with_unique_view (%xs : !rc_arr512) -> !rc_arr512 {
-        ^bb0(%view: !reussir.view<mutable, 512 x i8>):
-          %elt = reussir.array.project (%view : !reussir.view<mutable, 512 x i8>) [%i : index] : !reussir.ref<i8 field>
-          %old = reussir.ref.load (%elt : !reussir.ref<i8 field>) : i8
+        ^bb0(%view: memref<512xi8>):
+          %old = memref.load %view[%i] : memref<512xi8>
           %one = arith.constant 1 : i8
           %new = arith.addi %old, %one : i8
-          reussir.ref.store (%elt : !reussir.ref<i8 field>) (%new : i8)
+          memref.store %new, %view[%i] : memref<512xi8>
           reussir.scf.yield
       }
       %c1 = arith.constant 1 : index
@@ -38,14 +37,13 @@ module {
     %poison = ub.poison : !arr512
     %xs = reussir.rc.create value(%poison : !arr512) : !rc_arr512
     %zeroed = reussir.array.with_unique_view (%xs : !rc_arr512) -> !rc_arr512 {
-      ^bb0(%view: !reussir.view<mutable, 512 x i8>):
+      ^bb0(%view: memref<512xi8>):
         %c0 = arith.constant 0 : index
         %c512 = arith.constant 512 : index
         %c1 = arith.constant 1 : index
         %zero = arith.constant 0 : i8
         scf.for %i = %c0 to %c512 step %c1 {
-          %elt = reussir.array.project (%view : !reussir.view<mutable, 512 x i8>) [%i : index] : !reussir.ref<i8 field>
-          reussir.ref.store (%elt : !reussir.ref<i8 field>) (%zero : i8)
+          memref.store %zero, %view[%i] : memref<512xi8>
         }
         reussir.scf.yield
     }
@@ -68,10 +66,9 @@ module {
     %unique = func.call @make_zero_array() : () -> !rc_arr512
     %unique_result = func.call @inc_1_export(%unique) : (!rc_arr512) -> !rc_arr512
     %unique_borrow = reussir.rc.borrow (%unique_result : !rc_arr512) : !reussir.ref<!arr512>
-    %unique_view = reussir.array.view(%unique_borrow : !reussir.ref<!arr512>) : !reussir.view<immutable, 512 x i8>
+    %unique_view = reussir.array.view(%unique_borrow : !reussir.ref<!arr512>) : memref<512xi8>
     %unique_sum = scf.for %i = %c0 to %c512 step %c1 iter_args(%acc = %c0_i32) -> (i32) {
-      %elt = reussir.array.project (%unique_view : !reussir.view<immutable, 512 x i8>) [%i : index] : !reussir.ref<i8>
-      %value = reussir.ref.load (%elt : !reussir.ref<i8>) : i8
+      %value = memref.load %unique_view[%i] : memref<512xi8>
       %value_i32 = arith.extui %value : i8 to i32
       %next = arith.addi %acc, %value_i32 : i32
       scf.yield %next : i32
@@ -86,10 +83,9 @@ module {
     reussir.rc.inc (%shared : !rc_arr512)
     %shared_result = func.call @inc_1_export(%shared) : (!rc_arr512) -> !rc_arr512
     %shared_borrow = reussir.rc.borrow (%shared : !rc_arr512) : !reussir.ref<!arr512>
-    %shared_view = reussir.array.view(%shared_borrow : !reussir.ref<!arr512>) : !reussir.view<immutable, 512 x i8>
+    %shared_view = reussir.array.view(%shared_borrow : !reussir.ref<!arr512>) : memref<512xi8>
     %shared_sum = scf.for %i = %c0 to %c512 step %c1 iter_args(%acc = %c0_i32) -> (i32) {
-      %elt = reussir.array.project (%shared_view : !reussir.view<immutable, 512 x i8>) [%i : index] : !reussir.ref<i8>
-      %value = reussir.ref.load (%elt : !reussir.ref<i8>) : i8
+      %value = memref.load %shared_view[%i] : memref<512xi8>
       %value_i32 = arith.extui %value : i8 to i32
       %next = arith.addi %acc, %value_i32 : i32
       scf.yield %next : i32
@@ -99,10 +95,9 @@ module {
       reussir.panic "shared source array was mutated"
     }
     %shared_result_borrow = reussir.rc.borrow (%shared_result : !rc_arr512) : !reussir.ref<!arr512>
-    %shared_result_view = reussir.array.view(%shared_result_borrow : !reussir.ref<!arr512>) : !reussir.view<immutable, 512 x i8>
+    %shared_result_view = reussir.array.view(%shared_result_borrow : !reussir.ref<!arr512>) : memref<512xi8>
     %shared_result_sum = scf.for %i = %c0 to %c512 step %c1 iter_args(%acc = %c0_i32) -> (i32) {
-      %elt = reussir.array.project (%shared_result_view : !reussir.view<immutable, 512 x i8>) [%i : index] : !reussir.ref<i8>
-      %value = reussir.ref.load (%elt : !reussir.ref<i8>) : i8
+      %value = memref.load %shared_result_view[%i] : memref<512xi8>
       %value_i32 = arith.extui %value : i8 to i32
       %next = arith.addi %acc, %value_i32 : i32
       scf.yield %next : i32

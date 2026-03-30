@@ -27,6 +27,23 @@ TEST_F(ReussirTest, ViewTypeElementTypeTest) {
   EXPECT_EQ(viewType.getElementType(), i8Type);
 }
 
+TEST_F(ReussirTest, RcTypeIsValidMemRefElementType) {
+  auto i64Type = mlir::IntegerType::get(context.get(), 64);
+  auto rcType = reussir::RcType::get(context.get(), i64Type);
+
+  EXPECT_TRUE(llvm::isa<mlir::MemRefElementTypeInterface>(rcType));
+  EXPECT_TRUE(mlir::BaseMemRefType::isValidElementType(rcType));
+
+  withType<mlir::MemRefType>(
+      SIMPLE_LAYOUT, R"(memref<2x!reussir.rc<i64>>)",
+      [](mlir::ModuleOp module, mlir::MemRefType type) {
+        EXPECT_TRUE(type.hasStaticShape());
+        EXPECT_EQ(type.getShape().size(), 1u);
+        EXPECT_EQ(type.getShape()[0], 2);
+        EXPECT_TRUE(llvm::isa<reussir::RcType>(type.getElementType()));
+      });
+}
+
 TEST_F(ReussirValueTransformTest, RefToArrayOfRcAcquisition) {
   testValueAcquisition(
       "!reussir.ref<!reussir.array<2 x !reussir.rc<i32>>>",

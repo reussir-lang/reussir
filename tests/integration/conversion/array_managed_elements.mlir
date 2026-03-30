@@ -45,7 +45,7 @@ module {
   // CLONE: %[[CLONED:.+]] = reussir.rc.create value(%[[POISON]] : !reussir.array<2 x !reussir.rc<i64>>) token(%[[TOKEN]] : !reussir.token<align : 8, size : 24>) : !reussir.rc<!reussir.array<2 x !reussir.rc<i64>>>
   // CLONE: %[[DST_BORROW:.+]] = reussir.rc.borrow(%[[CLONED]] : !reussir.rc<!reussir.array<2 x !reussir.rc<i64>>>) : !reussir.ref<!reussir.array<2 x !reussir.rc<i64>>>
   // CLONE: reussir.ref.memcpy %[[SRC_BORROW]] to %[[DST_BORROW]] : <!reussir.array<2 x !reussir.rc<i64>>> to <!reussir.array<2 x !reussir.rc<i64>>>
-  // CLONE: reussir.array.view(%[[DST_BORROW]] : !reussir.ref<!reussir.array<2 x !reussir.rc<i64>>>) : !reussir.view<immutable, 2 x !reussir.rc<i64>>
+  // CLONE: reussir.array.view(%[[DST_BORROW]] : !reussir.ref<!reussir.array<2 x !reussir.rc<i64>>>) : memref<2x!reussir.rc<i64>>
   // CLONE: reussir.rc.inc
   // CLONE: reussir.rc.inc
   // CLONE: %[[COUNT:.+]] = reussir.rc.fetch(%arg0 : !reussir.rc<!reussir.array<2 x !reussir.rc<i64>>>) : index
@@ -53,7 +53,7 @@ module {
   // CLONE: scf.yield %[[CLONED]] : !reussir.rc<!reussir.array<2 x !reussir.rc<i64>>>
   func.func @clone_managed(%xs: !rc_arr2) -> !rc_arr2 {
     %res = reussir.array.with_unique_view (%xs : !rc_arr2) -> !rc_arr2 {
-      ^bb0(%view: !reussir.view<mutable, 2 x !reussir.rc<i64>>):
+      ^bb0(%view: memref<2x!reussir.rc<i64>>):
         reussir.scf.yield
     }
     return %res : !rc_arr2
