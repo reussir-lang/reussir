@@ -23,12 +23,15 @@
 #include <llvm/Support/Debug.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
+#include <mlir/Dialect/Bufferization/IR/Bufferization.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/Dialect/Linalg/IR/Linalg.h>
 #include <mlir/Dialect/LLVMIR/LLVMAttrs.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/Math/IR/Math.h>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
+#include <mlir/Dialect/Tensor/IR/Tensor.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/IR/Block.h>
 #include <mlir/IR/Builders.h>
@@ -611,6 +614,50 @@ static void cloneArrayWithUniqueViewBody(ReussirArrayWithUniqueViewOp op,
   rewriter.create<mlir::scf::YieldOp>(op.getLoc(), yieldedValues);
 }
 
+static mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType) {
+  return mlir::MemRefType::get(arrayType.getShape(), arrayType.getElementType());
+}
+
+static mlir::Value materializeArrayViewValue(mlir::Location loc,
+                                             mlir::PatternRewriter &rewriter,
+                                             ArrayType arrayType,
+                                             mlir::Value ref,
+                                             mlir::Type viewType,
+                                             bool writable) {
+  auto memrefType = getArrayViewMemRefType(arrayType);
+  auto memrefView =
+      rewriter.create<ReussirArrayViewOp>(loc, memrefType, ref).getView();
+  if (llvm::isa<mlir::MemRefType>(viewType))
+    return memrefView;
+
+  auto tensorType = llvm::cast<mlir::RankedTensorType>(viewType);
+  return rewriter
+      .create<mlir::bufferization::ToTensorOp>(loc, tensorType, memrefView,
+                                               /*restrict=*/true, writable)
+      .getResult();
+}
+
+struct ReussirArrayViewOpRewritePattern
+    : public mlir::OpConversionPattern<ReussirArrayViewOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayViewOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto tensorType = llvm::dyn_cast<mlir::RankedTensorType>(op.getView().getType());
+    if (!tensorType)
+      return rewriter.notifyMatchFailure(op, "expected tensor array view");
+
+    auto arrayType =
+        llvm::cast<ArrayType>(llvm::cast<RefType>(op.getRef().getType()).getElementType());
+    auto value = materializeArrayViewValue(op.getLoc(), rewriter, arrayType,
+                                           adaptor.getRef(), tensorType,
+                                           /*writable=*/false);
+    rewriter.replaceOp(op, value);
+    return mlir::success();
+  }
+};
+
 struct ReussirArrayWithUniqueViewOpRewritePattern
     : public mlir::OpConversionPattern<ReussirArrayWithUniqueViewOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -628,9 +675,9 @@ struct ReussirArrayWithUniqueViewOpRewritePattern
       auto borrowedType = RefType::get(rewriter.getContext(), arrayType);
       auto borrowed =
           rewriter.create<ReussirRcBorrowOp>(loc, borrowedType, array);
-      return rewriter
-          .create<ReussirArrayViewOp>(loc, viewType, borrowed.getResult())
-          .getResult();
+      return materializeArrayViewValue(loc, rewriter, arrayType,
+                                       borrowed.getResult(), viewType,
+                                       /*writable=*/true);
     };
 
     auto makeClonedArray =
@@ -677,8 +724,9 @@ struct ReussirArrayWithUniqueViewOpRewritePattern
 
     rewriter.setInsertionPointToStart(&scfIfOp.getElseRegion().front());
     auto [clonedArray, clonedRef] = makeClonedArray();
-    auto clonedView =
-        rewriter.create<ReussirArrayViewOp>(loc, viewType, clonedRef).getView();
+    auto clonedView = materializeArrayViewValue(loc, rewriter, arrayType,
+                                                clonedRef, viewType,
+                                                /*writable=*/true);
     cloneArrayWithUniqueViewBody(op, clonedArray, clonedView, rewriter);
 
     rewriter.replaceOp(op, scfIfOp.getResults());
@@ -876,10 +924,16 @@ struct SCFOpsLoweringPass
 
     populateSCFOpsLoweringConversionPatterns(patterns);
 
-    target.addLegalDialect<mlir::arith::ArithDialect, mlir::memref::MemRefDialect,
-                           mlir::scf::SCFDialect, mlir::math::MathDialect,
-                           mlir::func::FuncDialect, mlir::ub::UBDialect,
-                           reussir::ReussirDialect>();
+    target.addLegalDialect<mlir::arith::ArithDialect,
+                           mlir::bufferization::BufferizationDialect,
+                           mlir::func::FuncDialect, mlir::linalg::LinalgDialect,
+                           mlir::math::MathDialect, mlir::memref::MemRefDialect,
+                           mlir::scf::SCFDialect, mlir::tensor::TensorDialect,
+                           mlir::ub::UBDialect, reussir::ReussirDialect>();
+    target.addDynamicallyLegalOp<ReussirArrayViewOp>(
+        [](ReussirArrayViewOp op) {
+          return llvm::isa<mlir::MemRefType>(op.getView().getType());
+        });
 
     target.addIllegalOp<ReussirNullableDispatchOp, ReussirRecordDispatchOp,
                         ReussirScfYieldOp, ReussirClosureUniqifyOp,
@@ -899,6 +953,7 @@ void populateSCFOpsLoweringConversionPatterns(
   // Add conversion patterns for Reussir SCF operations
   patterns
       .add<ReussirNullableDispatchOpRewritePattern,
+           ReussirArrayViewOpRewritePattern,
            ReussirRecordDispatchOpRewritePattern,
            ReussirClosureUniqifyOpRewritePattern,
            ReussirArrayWithUniqueViewOpRewritePattern,

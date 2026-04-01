@@ -1,6 +1,7 @@
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
 #include <gtest/gtest.h>
+#include <mlir/IR/Verifier.h>
 
 import reussir.test;
 import reussir.test.value;
@@ -84,5 +85,41 @@ TEST_F(ReussirValueTransformTest, RefToNestedArrayOfRcAcquisition) {
         EXPECT_EQ(projectCount, 6u);
         EXPECT_EQ(incCount, 4u);
       });
+}
+
+TEST_F(ReussirTest, ArrayViewAllowsTensorResult) {
+  withModule(R"(
+!arr4 = !reussir.array<4 x i8>
+
+module {
+  func.func @borrow_tensor(%xs : !reussir.ref<!arr4>) -> tensor<4xi8> {
+    %view = reussir.array.view(%xs : !reussir.ref<!arr4>) : tensor<4xi8>
+    return %view : tensor<4xi8>
+  }
+}
+)",
+             [](mlir::ModuleOp module) {
+               EXPECT_TRUE(mlir::succeeded(mlir::verify(module)));
+             });
+}
+
+TEST_F(ReussirTest, ArrayWithUniqueViewAllowsTensorBodyArgument) {
+  withModule(R"(
+!arr4 = !reussir.array<4 x i8>
+!rc_arr4 = !reussir.rc<!arr4>
+
+module {
+  func.func @borrow_tensor(%xs : !rc_arr4) -> !rc_arr4 {
+    %updated = reussir.array.with_unique_view (%xs : !rc_arr4) -> !rc_arr4 {
+      ^bb0(%view: tensor<4xi8>):
+        reussir.scf.yield
+    }
+    return %updated : !rc_arr4
+  }
+}
+)",
+             [](mlir::ModuleOp module) {
+               EXPECT_TRUE(mlir::succeeded(mlir::verify(module)));
+             });
 }
 } // namespace reussir

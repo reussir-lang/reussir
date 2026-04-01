@@ -49,11 +49,14 @@ def ReussirSCFOpsLoweringPass
     operations.
   }];
   let dependentDialects = ["::mlir::arith::ArithDialect",
+                           "::mlir::bufferization::BufferizationDialect",
+                           "::mlir::func::FuncDialect",
+                           "::mlir::linalg::LinalgDialect",
                            "::reussir::ReussirDialect",
                            "::mlir::math::MathDialect",
                            "::mlir::memref::MemRefDialect",
                            "::mlir::scf::SCFDialect",
-                           "::mlir::func::FuncDialect",
+                           "::mlir::tensor::TensorDialect",
                            "::mlir::ub::UBDialect"];
 }
 

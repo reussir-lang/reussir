@@ -53,6 +53,35 @@ static mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType) {
   return mlir::MemRefType::get(arrayType.getShape(), arrayType.getElementType());
 }
 
+static mlir::RankedTensorType getArrayViewTensorType(ArrayType arrayType) {
+  return mlir::RankedTensorType::get(arrayType.getShape(),
+                                     arrayType.getElementType());
+}
+
+static mlir::LogicalResult verifyArrayViewType(mlir::Operation *op,
+                                               mlir::Type type,
+                                               ArrayType arrayType,
+                                               llvm::StringRef valueName) {
+  if (auto memrefType = llvm::dyn_cast<mlir::MemRefType>(type)) {
+    if (memrefType != getArrayViewMemRefType(arrayType))
+      return op->emitOpError(valueName) << " type mismatch: expected "
+                                        << getArrayViewMemRefType(arrayType)
+                                        << ", got " << memrefType;
+    return mlir::success();
+  }
+
+  if (auto tensorType = llvm::dyn_cast<mlir::RankedTensorType>(type)) {
+    if (tensorType != getArrayViewTensorType(arrayType))
+      return op->emitOpError(valueName) << " type mismatch: expected "
+                                        << getArrayViewTensorType(arrayType)
+                                        << ", got " << tensorType;
+    return mlir::success();
+  }
+
+  return op->emitOpError(valueName)
+         << " must be a statically shaped memref or tensor";
+}
+
 mlir::LogicalResult verifyRcCreateLikeOp(mlir::Operation *op, RcType rcType,
                                          mlir::Type valueType,
                                          mlir::Value token,
@@ -767,13 +796,8 @@ mlir::LogicalResult ReussirArrayViewOp::verify() {
   ArrayType arrayType = llvm::dyn_cast<ArrayType>(refType.getElementType());
   if (!arrayType)
     return emitOpError("array.view input must be a reference to a reussir.array");
-  auto memrefType = llvm::dyn_cast<mlir::MemRefType>(getView().getType());
-  if (!memrefType)
-    return emitOpError("array.view result must be a statically shaped memref");
-  if (memrefType != getArrayViewMemRefType(arrayType))
-    return emitOpError("array.view result type mismatch: expected ")
-           << getArrayViewMemRefType(arrayType) << ", got " << memrefType;
-  return mlir::success();
+  return verifyArrayViewType(getOperation(), getView().getType(), arrayType,
+                             "array.view result");
 }
 
 mlir::LogicalResult ReussirArrayProjectOp::verify() {
@@ -832,12 +856,9 @@ mlir::LogicalResult ReussirArrayWithUniqueViewOp::verify() {
   if (block.empty() || !llvm::isa<ReussirScfYieldOp>(block.getTerminator()))
     return emitOpError("body region must terminate with reussir.scf.yield");
 
-  auto memrefType = llvm::dyn_cast<mlir::MemRefType>(block.getArgument(0).getType());
-  if (!memrefType)
-    return emitOpError("body argument must be a statically shaped memref");
-  if (memrefType != getArrayViewMemRefType(arrayType))
-    return emitOpError("body argument view type mismatch: expected ")
-           << getArrayViewMemRefType(arrayType) << ", got " << memrefType;
+  if (failed(verifyArrayViewType(getOperation(), block.getArgument(0).getType(),
+                                 arrayType, "body argument view")))
+    return mlir::failure();
 
   auto yieldOp = llvm::cast<ReussirScfYieldOp>(block.getTerminator());
   if (getResult() && yieldOp.getNumOperands() == 0 &&

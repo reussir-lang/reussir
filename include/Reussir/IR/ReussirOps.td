@@ -857,7 +857,8 @@ def ReussirArrayViewOp : ReussirArrayOp<"view", []> {
   let summary = "Materialize an array view from an array reference";
   let description = [{
     `reussir.array.view` turns a reference to an inline array payload into a
-    statically shaped memref suitable for `memref.load` and `memref.store`.
+    statically shaped memref or tensor suitable for downstream bufferization
+    and lowering.
   }];
   let arguments = (ins Arg<ReussirRefType, "array reference">:$ref);
   let results = (outs Res<AnyType, "materialized view">:$view);
@@ -872,7 +873,7 @@ def ReussirArrayWithUniqueViewOp : ReussirArrayOp<"with_unique_view", []> {
   let description = [{
     `reussir.array.with_unique_view` makes sure the input RC array is unique,
     clones it when needed, then executes the body region with a mutable view of
-    the array payload as a statically shaped memref.
+    the array payload as a statically shaped memref or tensor.
 
     The body region must take exactly one matching view argument and terminate
     with `reussir.scf.yield`.
