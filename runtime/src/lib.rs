@@ -1,4 +1,5 @@
 #![allow(clippy::missing_safety_doc)]
+#![cfg_attr(target_family = "wasm", feature(stdarch_wasm_atomic_wait))]
 
 #[cfg(all(feature = "mimalloc", not(miri)))]
 #[global_allocator]

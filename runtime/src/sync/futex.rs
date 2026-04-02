@@ -1,6 +1,20 @@
 use std::ops::Deref;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+#[cfg(all(
+    not(miri),
+    target_family = "wasm",
+    target_feature = "atomics",
+    target_arch = "wasm32"
+))]
+use core::arch::wasm32 as wasm;
+#[cfg(all(
+    not(miri),
+    target_family = "wasm",
+    target_feature = "atomics",
+    target_arch = "wasm64"
+))]
+use core::arch::wasm64 as wasm;
 #[cfg(all(not(miri), target_os = "linux"))]
 use rustix::{io::Errno, thread::futex::Flags};
 #[cfg(all(not(miri), target_os = "macos"))]
@@ -43,9 +57,35 @@ impl Futex {
     }
 
     pub fn wait(&self, expected: u32) {
+        #[cfg(all(
+            not(miri),
+            target_family = "wasm",
+            target_feature = "atomics",
+            any(target_arch = "wasm32", target_arch = "wasm64")
+        ))]
+        loop {
+            if self.word.load(Ordering::Acquire) != expected {
+                return;
+            }
+
+            match unsafe {
+                wasm::memory_atomic_wait32(self.word.as_ptr().cast(), expected as i32, -1)
+            } {
+                0 | 1 | 2 => continue,
+                _ => return,
+            }
+        }
+
         #[cfg(any(
             miri,
-            not(any(target_os = "linux", target_os = "windows", target_os = "macos"))
+            all(
+                not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+                not(all(
+                    target_family = "wasm",
+                    target_feature = "atomics",
+                    any(target_arch = "wasm32", target_arch = "wasm64")
+                ))
+            )
         ))]
         {
             while self.word.load(Ordering::Acquire) == expected {
@@ -110,9 +150,29 @@ impl Futex {
     }
 
     pub fn wake_with(&self, message: u32) {
+        #[cfg(all(
+            not(miri),
+            target_family = "wasm",
+            target_feature = "atomics",
+            any(target_arch = "wasm32", target_arch = "wasm64")
+        ))]
+        {
+            self.word.store(message, Ordering::Release);
+            unsafe {
+                wasm::memory_atomic_notify(self.word.as_ptr().cast(), i32::MAX as u32);
+            }
+        }
+
         #[cfg(any(
             miri,
-            not(any(target_os = "linux", target_os = "windows", target_os = "macos"))
+            all(
+                not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+                not(all(
+                    target_family = "wasm",
+                    target_feature = "atomics",
+                    any(target_arch = "wasm32", target_arch = "wasm64")
+                ))
+            )
         ))]
         {
             self.word.store(message, Ordering::Release);
