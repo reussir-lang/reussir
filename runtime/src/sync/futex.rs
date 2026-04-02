@@ -62,6 +62,7 @@ mod futex_impl {
 #[cfg(all(not(miri), target_os = "linux"))]
 mod futex_impl {
     use std::{ops::Deref, sync::atomic::{AtomicU32, Ordering}};
+    use rustix::{io::Errno, thread::futex::Flags};
 
     #[derive(Default)]
     pub struct Futex(AtomicU32);
@@ -79,20 +80,23 @@ mod futex_impl {
         }
 
         pub fn wait(&self, val : u32) {
-            use rustix::thread::futex::Flags;
-            if self.0.load(Ordering::Acquire) != val {
-                return;
+            loop {
+                if self.0.load(Ordering::Acquire) != val {
+                    return;
+                }
+                match rustix::thread::futex::wait(&self.0, Flags::PRIVATE, val, None) {
+                    Ok(()) => return,
+                    Err(Errno::INTR) => continue,
+                    Err(_) => return,
+                }
             }
-            let _ = rustix::thread::futex::wait(&self.0, Flags::PRIVATE, val, None);
         }
 
         pub fn notify_one(&self) {
-            use rustix::thread::futex::Flags;
             let _ = rustix::thread::futex::wake(&self.0, Flags::PRIVATE, 1);
         }
 
         pub fn notify_all(&self) {
-            use rustix::thread::futex::Flags;
             let _ = rustix::thread::futex::wake(&self.0, Flags::PRIVATE, i32::MAX as u32);
         }
     }
