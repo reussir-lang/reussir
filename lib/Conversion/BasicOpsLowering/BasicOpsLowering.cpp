@@ -744,7 +744,10 @@ struct ReussirArrayViewConversionPattern
                   mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Location loc = op.getLoc();
     auto converter = static_cast<const LLVMTypeConverter *>(getTypeConverter());
-    auto viewType = llvm::cast<mlir::MemRefType>(op.getView().getType());
+    auto viewType = llvm::dyn_cast<mlir::MemRefType>(op.getView().getType());
+    if (!viewType)
+      return op.emitOpError(
+          "tensor array.view must be bufferized before lowering basic ops");
     ArrayType arrayType =
         llvm::cast<ArrayType>(llvm::cast<RefType>(op.getRef().getType()).getElementType());
     mlir::Type llvmArrayType = converter->convertType(arrayType);
