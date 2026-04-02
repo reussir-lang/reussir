@@ -1,237 +1,143 @@
-#[cfg(miri)]
-mod futex_impl {
-    use std::sync::{Mutex};
-    use std::ops::Deref;
-    use std::sync::atomic::{AtomicU32, Ordering};
-    pub struct Futex {
-        waiters: Mutex<Vec<std::thread::Thread>>,
-        word: AtomicU32
-    }
-
-    impl Futex {
-        pub fn new(init : u32) -> Self {
-            Self {
-                waiters: Mutex::new(Vec::new()),
-                word: AtomicU32::new(init),
-            }
-        }
-        // can exit spuriously
-        pub fn wait(&self, val : u32) {
-            if self.word.load(Ordering::Acquire) != val {
-                return;
-            }
-            {
-                let mut guard = self.waiters.lock().unwrap();
-                if self.word.load(Ordering::Acquire) != val {
-                    return;
-                }
-                guard.push(std::thread::current());
-            }
-            std::thread::park();
-        }
-
-        pub fn notify_one(&self) {
-            let mut guard = self.waiters.lock().unwrap();
-            if let Some(thread) = guard.pop() {
-                thread.unpark();
-            }
-        }
-
-        pub fn notify_all(&self) {
-            let mut guard = self.waiters.lock().unwrap();
-            for thread in guard.drain(..) {
-                thread.unpark();
-            }
-        }
-    }
-
-    impl Deref for Futex {
-        type Target = AtomicU32;
-        fn deref(&self) -> &Self::Target {
-            &self.word
-        }
-    }
-
-    impl Default for Futex {
-        fn default() -> Self {
-            Self::new(0)
-        }
-    }
-}
+use std::ops::Deref;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(all(not(miri), target_os = "linux"))]
-mod futex_impl {
-    use std::{ops::Deref, sync::atomic::{AtomicU32, Ordering}};
-    use rustix::{io::Errno, thread::futex::Flags};
+use rustix::{io::Errno, thread::futex::Flags};
+#[cfg(all(not(miri), target_os = "macos"))]
+use std::ffi::{c_int, c_void};
+#[cfg(all(not(miri), target_os = "windows"))]
+use winapi::{
+    shared::basetsd::SIZE_T,
+    um::{
+        synchapi::{WaitOnAddress, WakeByAddressAll},
+        winbase::INFINITE,
+    },
+};
 
-    #[derive(Default)]
-    pub struct Futex(AtomicU32);
+#[cfg(all(not(miri), target_os = "macos"))]
+const OS_SYNC_WAIT_ON_ADDRESS_NONE: u32 = 0;
+#[cfg(all(not(miri), target_os = "macos"))]
+const OS_SYNC_WAKE_BY_ADDRESS_NONE: u32 = 0;
+#[cfg(all(not(miri), target_os = "macos"))]
+const EINTR: i32 = 4;
+#[cfg(all(not(miri), target_os = "macos"))]
+const EFAULT: i32 = 14;
+#[cfg(all(not(miri), target_os = "macos"))]
+const ENOMEM: i32 = 12;
 
-    impl Deref for Futex {
-        type Target = AtomicU32;
-        fn deref(&self) -> &Self::Target {
-            &self.0
+#[cfg(all(not(miri), target_os = "macos"))]
+unsafe extern "C" {
+    fn os_sync_wait_on_address(addr: *mut c_void, value: u64, size: usize, flags: u32) -> c_int;
+    fn os_sync_wake_by_address_all(addr: *mut c_void, size: usize, flags: u32) -> c_int;
+}
+
+pub struct Futex {
+    word: AtomicU32,
+}
+
+impl Futex {
+    pub fn new(init: u32) -> Self {
+        Self {
+            word: AtomicU32::new(init),
         }
     }
 
-    impl Futex {
-        pub fn new(init : u32) -> Self {
-            Self(AtomicU32::new(init))
-        }
-
-        pub fn wait(&self, val : u32) {
-            loop {
-                if self.0.load(Ordering::Acquire) != val {
-                    return;
-                }
-                match rustix::thread::futex::wait(&self.0, Flags::PRIVATE, val, None) {
-                    Ok(()) => return,
-                    Err(Errno::INTR) => continue,
-                    Err(_) => return,
-                }
+    pub fn wait(&self, expected: u32) {
+        #[cfg(any(
+            miri,
+            not(any(target_os = "linux", target_os = "windows", target_os = "macos"))
+        ))]
+        {
+            while self.word.load(Ordering::Acquire) == expected {
+                std::hint::spin_loop();
             }
         }
 
-        pub fn notify_one(&self) {
-            let _ = rustix::thread::futex::wake(&self.0, Flags::PRIVATE, 1);
+        #[cfg(all(not(miri), target_os = "linux"))]
+        loop {
+            if self.word.load(Ordering::Acquire) != expected {
+                return;
+            }
+            match rustix::thread::futex::wait(&self.word, Flags::PRIVATE, expected, None) {
+                Ok(()) | Err(Errno::INTR) | Err(Errno::AGAIN) => continue,
+                Err(_) => return,
+            }
         }
 
-        pub fn notify_all(&self) {
-            let _ = rustix::thread::futex::wake(&self.0, Flags::PRIVATE, i32::MAX as u32);
-        }
-    }
-}
-
-#[cfg(all(not(miri), target_os = "windows"))]
-mod futex_impl {
-    use std::{ops::Deref, sync::atomic::{AtomicU32, Ordering}};
-    use winapi::{
-        shared::basetsd::SIZE_T,
-        um::{
-            synchapi::{WaitOnAddress, WakeByAddressAll, WakeByAddressSingle},
-            winbase::INFINITE,
-        },
-    };
-
-    #[derive(Default)]
-    pub struct Futex(AtomicU32);
-
-    impl Deref for Futex {
-        type Target = AtomicU32;
-        fn deref(&self) -> &Self::Target {
-            &self.0
-        }
-    }
-
-    impl Futex {
-        pub fn new(init : u32) -> Self {
-            Self(AtomicU32::new(init))
-        }
-
-        pub fn wait(&self, val : u32) {
-            if self.0.load(Ordering::Acquire) != val {
+        #[cfg(all(not(miri), target_os = "windows"))]
+        loop {
+            if self.word.load(Ordering::Acquire) != expected {
                 return;
             }
 
-            let expected = val;
-            unsafe {
-                let _ = WaitOnAddress(
-                    self.0.as_ptr().cast(),
+            let wait_succeeded = unsafe {
+                WaitOnAddress(
+                    self.word.as_ptr().cast(),
                     std::ptr::from_ref(&expected).cast_mut().cast(),
                     std::mem::size_of::<u32>() as SIZE_T,
                     INFINITE,
-                );
+                )
+            } != 0;
+
+            if !wait_succeeded {
+                return;
             }
         }
 
-        pub fn notify_one(&self) {
-            unsafe {
-                WakeByAddressSingle(self.0.as_ptr().cast());
+        #[cfg(all(not(miri), target_os = "macos"))]
+        loop {
+            if self.word.load(Ordering::Acquire) != expected {
+                return;
             }
-        }
 
-        pub fn notify_all(&self) {
-            unsafe {
-                WakeByAddressAll(self.0.as_ptr().cast());
-            }
-        }
-    }
-}
-
-#[cfg(all(not(miri), target_os = "macos"))]
-mod futex_impl {
-    use std::{
-        ffi::{c_int, c_void},
-        ops::Deref,
-        sync::atomic::{AtomicU32, Ordering},
-    };
-
-    const OS_SYNC_WAIT_ON_ADDRESS_NONE: u32 = 0;
-    const OS_SYNC_WAKE_BY_ADDRESS_NONE: u32 = 0;
-    const EINTR: i32 = 4;
-    const EFAULT: i32 = 14;
-    const ENOMEM: i32 = 12;
-
-    unsafe extern "C" {
-        fn os_sync_wait_on_address(addr: *mut c_void, value: u64, size: usize, flags: u32) -> c_int;
-        fn os_sync_wake_by_address_any(addr: *mut c_void, size: usize, flags: u32) -> c_int;
-        fn os_sync_wake_by_address_all(addr: *mut c_void, size: usize, flags: u32) -> c_int;
-    }
-
-    #[derive(Default)]
-    pub struct Futex(AtomicU32);
-
-    impl Deref for Futex {
-        type Target = AtomicU32;
-        fn deref(&self) -> &Self::Target {
-            &self.0
-        }
-    }
-
-    impl Futex {
-        pub fn new(init : u32) -> Self {
-            Self(AtomicU32::new(init))
-        }
-
-        pub fn wait(&self, val : u32) {
-            loop {
-                if self.0.load(Ordering::Acquire) != val {
-                    return;
-                }
-
-                let ret = unsafe {
-                    os_sync_wait_on_address(
-                        self.0.as_ptr().cast(),
-                        val as u64,
-                        std::mem::size_of::<u32>(),
-                        OS_SYNC_WAIT_ON_ADDRESS_NONE,
-                    )
-                };
-                if ret >= 0 {
-                    return;
-                }
-
-                match std::io::Error::last_os_error().raw_os_error() {
-                    Some(EINTR | EFAULT | ENOMEM) => continue,
-                    _ => return,
-                }
-            }
-        }
-
-        pub fn notify_one(&self) {
-            unsafe {
-                let _ = os_sync_wake_by_address_any(
-                    self.0.as_ptr().cast(),
+            let ret = unsafe {
+                os_sync_wait_on_address(
+                    self.word.as_ptr().cast(),
+                    expected as u64,
                     std::mem::size_of::<u32>(),
-                    OS_SYNC_WAKE_BY_ADDRESS_NONE,
-                );
+                    OS_SYNC_WAIT_ON_ADDRESS_NONE,
+                )
+            };
+            if ret >= 0 {
+                continue;
+            }
+
+            match std::io::Error::last_os_error().raw_os_error() {
+                Some(EINTR | EFAULT | ENOMEM) => continue,
+                _ => return,
+            }
+        }
+    }
+
+    pub fn wake_with(&self, message: u32) {
+        #[cfg(any(
+            miri,
+            not(any(target_os = "linux", target_os = "windows", target_os = "macos"))
+        ))]
+        {
+            self.word.store(message, Ordering::Release);
+        }
+
+        #[cfg(all(not(miri), target_os = "linux"))]
+        {
+            self.word.store(message, Ordering::Release);
+            let _ = rustix::thread::futex::wake(&self.word, Flags::PRIVATE, i32::MAX as u32);
+        }
+
+        #[cfg(all(not(miri), target_os = "windows"))]
+        {
+            self.word.store(message, Ordering::Release);
+            unsafe {
+                WakeByAddressAll(self.word.as_ptr().cast());
             }
         }
 
-        pub fn notify_all(&self) {
+        #[cfg(all(not(miri), target_os = "macos"))]
+        {
+            self.word.store(message, Ordering::Release);
             unsafe {
                 let _ = os_sync_wake_by_address_all(
-                    self.0.as_ptr().cast(),
+                    self.word.as_ptr().cast(),
                     std::mem::size_of::<u32>(),
                     OS_SYNC_WAKE_BY_ADDRESS_NONE,
                 );
@@ -240,7 +146,19 @@ mod futex_impl {
     }
 }
 
-pub use futex_impl::Futex;
+impl Deref for Futex {
+    type Target = AtomicU32;
+
+    fn deref(&self) -> &Self::Target {
+        &self.word
+    }
+}
+
+impl Default for Futex {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -277,10 +195,11 @@ mod tests {
     }
 
     #[test]
-    fn notify_one_eventually_releases_a_waiter() {
+    fn wake_with_same_value_does_not_release_a_waiter() {
         let futex = Futex::new(0);
         let ready = Barrier::new(2);
         let woke = AtomicBool::new(false);
+        let mut woke_early = false;
 
         thread::scope(|scope| {
             scope.spawn(|| {
@@ -291,29 +210,21 @@ mod tests {
 
             ready.wait();
             for _ in 0..1024 {
-                if woke.load(Ordering::Acquire) {
-                    break;
-                }
-                futex.notify_one();
+                futex.wake_with(0);
                 thread::yield_now();
             }
 
-            if !woke.load(Ordering::Acquire) {
-                for _ in 0..1024 {
-                    futex.notify_all();
-                    thread::yield_now();
-                    if woke.load(Ordering::Acquire) {
-                        break;
-                    }
-                }
-            }
+            woke_early = woke.load(Ordering::Acquire);
+            futex.wake_with(1);
         });
 
+        assert!(!woke_early);
         assert!(woke.load(Ordering::Acquire));
+        assert_eq!(futex.load(Ordering::Acquire), 1);
     }
 
     #[test]
-    fn notify_all_eventually_releases_all_waiters() {
+    fn wake_with_releases_all_waiters() {
         let futex = Futex::new(0);
         let waiter_count = 3;
         let ready = Barrier::new(waiter_count + 1);
@@ -329,25 +240,10 @@ mod tests {
             }
 
             ready.wait();
-            for _ in 0..1024 {
-                if woke.load(Ordering::Acquire) == waiter_count {
-                    break;
-                }
-                futex.notify_all();
-                thread::yield_now();
-            }
-
-            if woke.load(Ordering::Acquire) != waiter_count {
-                for _ in 0..1024 {
-                    futex.notify_all();
-                    thread::yield_now();
-                    if woke.load(Ordering::Acquire) == waiter_count {
-                        break;
-                    }
-                }
-            }
+            futex.wake_with(1);
         });
 
         assert_eq!(woke.load(Ordering::Acquire), waiter_count);
+        assert_eq!(futex.load(Ordering::Acquire), 1);
     }
 }
