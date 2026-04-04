@@ -49,7 +49,7 @@ private:
     mlir::OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToStart(moduleOp.getBody());
     mlir::FlatSymbolRefAttr dropOpRef = mlir::SymbolRefAttr::get(dropOp);
-    auto vtableOp = builder.create<ReussirRegionVTableOp>(
+    auto vtableOp = ReussirRegionVTableOp::create(builder, 
         moduleOp.getLoc(), vtableName, type, dropOpRef);
     return vtableOp;
   }
@@ -81,7 +81,7 @@ struct RegionInlinePattern : public mlir::OpRewritePattern<ReussirRegionRunOp> {
   mlir::LogicalResult
   matchAndRewrite(ReussirRegionRunOp op,
                   mlir::PatternRewriter &rewriter) const override {
-    auto region = rewriter.create<ReussirRegionCreateOp>(
+    auto region = ReussirRegionCreateOp::create(rewriter, 
         op.getLoc(), RegionType::get(op->getContext()));
     auto yieldOp =
         llvm::cast<ReussirRegionYieldOp>(op.getBody().front().getTerminator());
@@ -96,7 +96,7 @@ struct RegionInlinePattern : public mlir::OpRewritePattern<ReussirRegionRunOp> {
     // Create the final value based on the yield value
     mlir::Value finalValue;
     if (rcType && rcType.getCapability() == Capability::flex) {
-      auto freezeOp = rewriter.create<ReussirRcFreezeOp>(
+      auto freezeOp = ReussirRcFreezeOp::create(rewriter, 
           op.getLoc(), op->getResult(0).getType(), yieldValue);
       finalValue = freezeOp.getResult();
     } else {
@@ -105,7 +105,7 @@ struct RegionInlinePattern : public mlir::OpRewritePattern<ReussirRegionRunOp> {
 
     // Create cleanup operation
     rewriter.setInsertionPoint(op);
-    rewriter.create<ReussirRegionCleanupOp>(op.getLoc(), region);
+    ReussirRegionCleanupOp::create(rewriter, op.getLoc(), region);
 
     // Replace the whole RegionRunOp with the final value
     if (finalValue)

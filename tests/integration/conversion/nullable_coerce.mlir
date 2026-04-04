@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-lowering-basic-ops | \
+// RUN: %reussir-opt %s --convert-to-llvm | \
 // RUN: %reussir-translate --mlir-to-llvmir | %FileCheck %s
 
 module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>>} {

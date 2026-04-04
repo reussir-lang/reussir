@@ -196,7 +196,7 @@ struct FuseRcCreatePattern : public mlir::OpRewritePattern<ReussirRcCreateOp> {
     if (variant) {
       auto compound = llvm::dyn_cast_if_present<ReussirRecordCompoundOp>(
           variant.getValue().getDefiningOp());
-      auto fused = rewriter.create<ReussirRcCreateVariantOp>(
+      auto fused = ReussirRcCreateVariantOp::create(rewriter, 
           create.getLoc(), mlir::TypeRange{create.getRcPtr().getType()},
           variant.getTagAttr(),
           compound ? mlir::Value{} : variant.getValue(),
@@ -213,7 +213,7 @@ struct FuseRcCreatePattern : public mlir::OpRewritePattern<ReussirRcCreateOp> {
     if (!compound)
       return mlir::failure();
 
-    auto fused = rewriter.create<ReussirRcCreateCompoundOp>(
+    auto fused = ReussirRcCreateCompoundOp::create(rewriter, 
         create.getLoc(), mlir::TypeRange{create.getRcPtr().getType()},
         compound.getFields(),
         create.getToken(), create.getRegion(), create.getVtableAttr(),

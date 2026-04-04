@@ -23,10 +23,12 @@ class ReussirLoweringPass<string mnemonic, string target = "">
 //===----------------------------------------------------------------------===//
 def ReussirBasicOpsLoweringPass
     : ReussirLoweringPass<"basic-ops", "::mlir::ModuleOp"> {
-  let summary = "lower straight-forward operations to MLIR basic operations";
+  let summary = "prepare Reussir basic lowering for convert-to-llvm";
   let description = [{
-    `reussir-lowering-basic-ops` lowers straight-forward operations to MLIR basic
-    operations.
+    `reussir-lowering-basic-ops` prepares modules for LLVM lowering by
+    materializing the Reussir runtime declarations and normalizing fused debug
+    information. The actual lowering of Reussir basic operations is provided by
+    the registered LLVM lowering interface and is driven by `convert-to-llvm`.
   }];
   let dependentDialects = ["::mlir::arith::ArithDialect",
                            "::mlir::memref::MemRefDialect",

@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        llvm-version: [21, 22]
+        llvm-version: [22]
         os: [ubuntu-24.04, ubuntu-24.04-arm]
 
     runs-on: ${{ matrix.os }}
@@ -488,8 +488,8 @@ jobs:
             Automated nightly build from `${{ github.sha }}`.
 
             **Platforms:**
-            - Linux x86_64 (LLVM 21, LLVM 22)
-            - Linux aarch64 (LLVM 21, LLVM 22)
+            - Linux x86_64 (LLVM 22)
+            - Linux aarch64 (LLVM 22)
             - macOS ARM64 (Homebrew LLVM)
             - Windows x64 (MSYS2 Clang64)
 

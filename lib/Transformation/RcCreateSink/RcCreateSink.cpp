@@ -74,7 +74,7 @@ struct SinkRcCreateIntoExpandedEnsurePattern
     if (!isMatchCandidate(create, ifOp))
       return mlir::failure();
 
-    auto newIf = rewriter.create<mlir::scf::IfOp>(
+    auto newIf = mlir::scf::IfOp::create(rewriter, 
         ifOp.getLoc(), create.getRcPtr().getType(), ifOp.getCondition(),
         /*addThenRegion=*/true, /*addElseRegion=*/true);
     newIf->setAttrs(ifOp->getAttrs());

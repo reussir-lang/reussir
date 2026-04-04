@@ -2,7 +2,7 @@
 // RUN:   --reussir-lowering-scf-ops \
 // RUN:   --convert-scf-to-cf \
 // RUN:   --reussir-attach-native-target \
-// RUN:   --reussir-lowering-basic-ops | \
+// RUN:   --convert-to-llvm | \
 // RUN:   %reussir-translate --reussir-to-llvmir | \
 // RUN:   %opt -S -O3 -o %t.ll
 // RUN: %llc %t.ll -relocation-model=pic -filetype=obj -o %t.o

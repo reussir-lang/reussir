@@ -412,7 +412,7 @@ static void insertAssumeUniqueAtEntry(mlir::func::FuncOp funcOp,
     mlir::BlockArgument arg = funcOp.getArgument(index);
     if (!isAssumableRcType(arg.getType()))
       continue;
-    builder.create<ReussirRcAssumeUniqueOp>(funcOp.getLoc(), arg);
+    ReussirRcAssumeUniqueOp::create(builder, funcOp.getLoc(), arg);
   }
 }
 

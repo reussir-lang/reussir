@@ -63,14 +63,14 @@ struct RcDecrementExpansionPattern
       return mlir::failure();
 
     auto prevRcCount =
-        rewriter.create<ReussirRcFetchOp>(op.getLoc(), op.getRcPtr());
-    auto isOne = rewriter.create<mlir::arith::CmpIOp>(
+        ReussirRcFetchOp::create(rewriter, op.getLoc(), op.getRcPtr());
+    auto isOne = mlir::arith::CmpIOp::create(rewriter, 
         op.getLoc(), mlir::arith::CmpIPredicate::eq, prevRcCount.getRefCount(),
-        rewriter.create<mlir::arith::ConstantIndexOp>(op.getLoc(), 1));
+        mlir::arith::ConstantIndexOp::create(rewriter, op.getLoc(), 1));
     auto likelyUnique =
-        rewriter.create<ReussirExpectOp>(op.getLoc(), isOne.getResult(), true);
+        ReussirExpectOp::create(rewriter, op.getLoc(), isOne.getResult(), true);
     auto ifOp =
-        rewriter.create<mlir::scf::IfOp>(op.getLoc(), op->getResultTypes(),
+        mlir::scf::IfOp::create(rewriter, op.getLoc(), op->getResultTypes(),
                                          likelyUnique.getLikely(), true, true);
     RefType borrowedRefType = rewriter.getType<RefType>(
         type.getElementType(), Capability::unspecified, type.getAtomicKind());
@@ -78,25 +78,25 @@ struct RcDecrementExpansionPattern
         llvm::cast<NullableType>(op.getNullableToken().getType()).getPtrTy());
     {
       rewriter.setInsertionPointToStart(ifOp.thenBlock());
-      mlir::Value ref = rewriter.create<ReussirRcBorrowOp>(
+      mlir::Value ref = ReussirRcBorrowOp::create(rewriter, 
           op.getLoc(), borrowedRefType, op.getRcPtr());
-      rewriter.create<ReussirRefDropOp>(op.getLoc(), ref);
-      mlir::Value token = rewriter.create<ReussirRcReinterpretOp>(
+      ReussirRefDropOp::create(rewriter, op.getLoc(), ref);
+      mlir::Value token = ReussirRcReinterpretOp::create(rewriter, 
           op.getLoc(), tokenType, op.getRcPtr());
-      mlir::Value nonnull = rewriter.create<ReussirNullableCreateOp>(
+      mlir::Value nonnull = ReussirNullableCreateOp::create(rewriter, 
           op.getLoc(), op.getNullableToken().getType(), token);
-      rewriter.create<mlir::scf::YieldOp>(op.getLoc(), nonnull);
+      mlir::scf::YieldOp::create(rewriter, op.getLoc(), nonnull);
     }
     {
       rewriter.setInsertionPointToStart(ifOp.elseBlock());
-      auto decremented = rewriter.create<mlir::arith::SubIOp>(
+      auto decremented = mlir::arith::SubIOp::create(rewriter, 
           op.getLoc(), prevRcCount.getRefCount(),
-          rewriter.create<mlir::arith::ConstantIndexOp>(op.getLoc(), 1));
-      rewriter.create<ReussirRcSetOp>(op.getLoc(), op.getRcPtr(),
+          mlir::arith::ConstantIndexOp::create(rewriter, op.getLoc(), 1));
+      ReussirRcSetOp::create(rewriter, op.getLoc(), op.getRcPtr(),
                                       decremented.getResult());
-      auto null = rewriter.create<ReussirNullableCreateOp>(
+      auto null = ReussirNullableCreateOp::create(rewriter, 
           op.getLoc(), op.getNullableToken().getType(), nullptr);
-      rewriter.create<mlir::scf::YieldOp>(op.getLoc(), null->getResults());
+      mlir::scf::YieldOp::create(rewriter, op.getLoc(), null->getResults());
     }
     ifOp->setAttr(kExpandedDecrementAttr, rewriter.getUnitAttr());
     rewriter.replaceOp(op, ifOp);

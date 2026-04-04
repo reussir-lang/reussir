@@ -1,9 +1,9 @@
-// RUN: %reussir-opt %s --reussir-lowering-basic-ops
+// RUN: %reussir-opt %s --convert-to-llvm | %FileCheck %s
 module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>>} {
   // CHECK-LABEL: llvm.func @token_alloc() -> !llvm.ptr attributes {sym_visibility = "private"} {
-  // CHECK: %0 = llvm.mlir.constant(8 : index) : i64
-  // CHECK: %1 = llvm.mlir.constant(64 : index) : i64
-  // CHECK: %2 = llvm.call @__reussir_allocate(%0, %1) : (i64, i64) -> !llvm.ptr
+  // CHECK: %0 = llvm.mlir.constant(8 : [[INDEX_T:i[0-9]+]]) : [[INDEX_T]]
+  // CHECK: %1 = llvm.mlir.constant(64 : [[INDEX_T]]) : [[INDEX_T]]
+  // CHECK: %2 = llvm.call @__reussir_allocate(%0, %1) : ([[INDEX_T]], [[INDEX_T]]) -> !llvm.ptr
   // CHECK: llvm.return %2 : !llvm.ptr
   // CHECK: }
   func.func private @token_alloc() 
@@ -13,9 +13,9 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
   }
   
   // CHECK-LABEL: llvm.func @token_free(%arg0: !llvm.ptr) attributes {sym_visibility = "private"} {
-  // CHECK: %0 = llvm.mlir.constant(8 : index) : i64
-  // CHECK: %1 = llvm.mlir.constant(64 : index) : i64
-  // CHECK: llvm.call @__reussir_deallocate(%arg0, %0, %1) : (!llvm.ptr, i64, i64) -> ()
+  // CHECK: %0 = llvm.mlir.constant(8 : [[INDEX_T]]) : [[INDEX_T]]
+  // CHECK: %1 = llvm.mlir.constant(64 : [[INDEX_T]]) : [[INDEX_T]]
+  // CHECK: llvm.call @__reussir_deallocate(%arg0, %0, %1) : (!llvm.ptr, [[INDEX_T]], [[INDEX_T]]) -> ()
   // CHECK: llvm.return
   // CHECK: }
   func.func private @token_free(%token: !reussir.token<align: 8, size: 64>) {
@@ -35,11 +35,11 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
   }
   
   // CHECK-LABEL: llvm.func @token_realloc(%arg0: !llvm.ptr) -> !llvm.ptr attributes {sym_visibility = "private"} {
-  // CHECK: %0 = llvm.mlir.constant(8 : index) : i64
-  // CHECK: %1 = llvm.mlir.constant(8 : index) : i64
-  // CHECK: %2 = llvm.mlir.constant(8 : index) : i64
-  // CHECK: %3 = llvm.mlir.constant(16 : index) : i64
-  // CHECK: %4 = llvm.call @__reussir_reallocate(%arg0, %0, %1, %2, %3) : (!llvm.ptr, i64, i64, i64, i64) -> !llvm.ptr
+  // CHECK: %0 = llvm.mlir.constant(8 : [[INDEX_T]]) : [[INDEX_T]]
+  // CHECK: %1 = llvm.mlir.constant(8 : [[INDEX_T]]) : [[INDEX_T]]
+  // CHECK: %2 = llvm.mlir.constant(8 : [[INDEX_T]]) : [[INDEX_T]]
+  // CHECK: %3 = llvm.mlir.constant(16 : [[INDEX_T]]) : [[INDEX_T]]
+  // CHECK: %4 = llvm.call @__reussir_reallocate(%arg0, %0, %1, %2, %3) : (!llvm.ptr, [[INDEX_T]], [[INDEX_T]], [[INDEX_T]], [[INDEX_T]]) -> !llvm.ptr
   // CHECK: llvm.return %4 : !llvm.ptr
   // CHECK: }
   func.func private @token_realloc(%token: !reussir.token<align: 8, size: 8>) -> 

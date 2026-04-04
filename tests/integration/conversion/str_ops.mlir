@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-lowering-scf-ops --reussir-lowering-basic-ops | %FileCheck %s
+// RUN: %reussir-opt %s --reussir-lowering-scf-ops --convert-to-llvm | %FileCheck %s
 
 module {
   // CHECK-LABEL: @test_str_ops

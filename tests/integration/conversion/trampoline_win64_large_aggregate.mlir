@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-lowering-basic-ops | %FileCheck %s
+// RUN: %reussir-opt %s --convert-to-llvm | %FileCheck %s
 
 module attributes {llvm.target_triple = "x86_64-pc-windows-gnullvm"} {
   llvm.func @id_huge(

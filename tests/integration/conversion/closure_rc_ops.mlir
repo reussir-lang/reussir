@@ -3,6 +3,7 @@
 // RUN:   -reussir-lowering-scf-ops \
 // RUN:   -convert-scf-to-cf \
 // RUN:   -reussir-lowering-basic-ops \
+// RUN:   -convert-to-llvm \
 // RUN:   -reconcile-unrealized-casts \
 // RUN:   -o %t.mlir %s
 // RUN: %FileCheck %s --check-prefix=CHECK-MLIR < %t.mlir
@@ -181,4 +182,3 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
 
 // CHECK-LLVM-DAG: declare {{.*}} ptr @__reussir_allocate
 // CHECK-LLVM-DAG: call ptr @__reussir_allocate
-

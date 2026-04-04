@@ -14,6 +14,7 @@
 #ifndef REUSSIR_CONVERSION_PASSES_H
 #define REUSSIR_CONVERSION_PASSES_H
 
+#include <mlir/IR/DialectRegistry.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/Pass/Pass.h>
 
@@ -31,6 +32,8 @@ namespace reussir {
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult compilePolymorphicFFI(mlir::ModuleOp moduleOp,
                                           bool optimized = false);
+
+void registerReussirBasicOpsLoweringInterface(mlir::DialectRegistry &registry);
 
 } // namespace reussir
 

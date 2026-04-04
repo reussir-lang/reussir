@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-lowering-basic-ops | \
+// RUN: %reussir-opt %s --convert-to-llvm | \
 // RUN: %reussir-translate --mlir-to-llvmir | %FileCheck %s
 
 // Test closure apply operation lowering pattern
