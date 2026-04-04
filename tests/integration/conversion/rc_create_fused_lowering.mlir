@@ -1,5 +1,5 @@
 // RUN: %reussir-opt %s --reussir-rc-create-fusion | %FileCheck %s --check-prefix=FUSION
-// RUN: %reussir-opt %s --reussir-token-instantiation --reussir-rc-create-fusion --reussir-lowering-basic-ops --convert-to-llvm --reconcile-unrealized-casts | \
+// RUN: %reussir-opt %s --reussir-token-instantiation --reussir-rc-create-fusion --convert-to-llvm | \
 // RUN: %reussir-translate --mlir-to-llvmir | %FileCheck %s
 
 !cons = !reussir.record<compound "List::Cons" [value] { i32, i64 }>

@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-lowering-basic-ops --convert-to-llvm --reconcile-unrealized-casts | %FileCheck %s
+// RUN: %reussir-opt %s --convert-to-llvm | %FileCheck %s
 
 module attributes {llvm.target_triple = "x86_64-pc-windows-gnullvm"} {
   llvm.func @id_i64(%arg0: i64) -> i64 {

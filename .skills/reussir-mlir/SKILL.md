@@ -32,7 +32,7 @@ reussir-opt <input-file> \
  --reussir-lowering-scf-ops \
  --reussir-compile-polymorphic-ffi \
  --convert-scf-to-cf \
- --reussir-lowering-basic-ops | \
+ | \
 reussir-translate \
  --reussir-to-llvmir | \
 opt -O3 |\

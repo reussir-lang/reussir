@@ -6,7 +6,7 @@
 // RUN:   --reussir-acquire-drop-expansion \
 // RUN:   --reussir-acquire-drop-expansion='expand-decrement=1 outline-record=1' \
 // RUN:   --convert-scf-to-cf \
-// RUN:   --reussir-lowering-basic-ops --convert-to-llvm --reconcile-unrealized-casts | \
+// RUN:   --convert-to-llvm | \
 // RUN:   %reussir-translate --mlir-to-llvmir | \
 // RUN:   %opt -passes='default<O3>' -pass-remarks=loop-vectorize -disable-output 2>&1 | \
 // RUN:   %FileCheck %s --check-prefix=VEC

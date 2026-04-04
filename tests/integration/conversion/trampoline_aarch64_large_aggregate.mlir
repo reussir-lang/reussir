@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-lowering-basic-ops --convert-to-llvm --reconcile-unrealized-casts | %FileCheck %s
+// RUN: %reussir-opt %s --convert-to-llvm | %FileCheck %s
 
 module attributes {llvm.target_triple = "aarch64-unknown-linux-gnu"} {
   llvm.func @id_huge(

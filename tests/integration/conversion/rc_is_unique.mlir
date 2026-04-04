@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-lowering-basic-ops --convert-to-llvm --reconcile-unrealized-casts | \
+// RUN: %reussir-opt %s --convert-to-llvm | \
 // RUN: %reussir-translate --mlir-to-llvmir | %FileCheck %s
 
 !test_struct = !reussir.record<compound "TestStruct" {i64, i64}>
