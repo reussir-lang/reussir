@@ -36,7 +36,7 @@ module;
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Scalar/ADCE.h>
 #include <llvm/Transforms/Utils.h>
-#include <mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h>
+#include <mlir/Conversion/ConvertToLLVM/ToLLVMPass.h>
 #include <mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h>
 #include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
@@ -198,7 +198,7 @@ void createLoweringPipeline(mlir::PassManager &pm,
   pm.addPass(createConvertSCFToCFPass());
 #endif
   pm.addPass(createReussirBasicOpsLoweringPass());
-  pm.addPass(createConvertControlFlowToLLVMPass());
+  pm.addPass(createConvertToLLVMPass());
   pm.addPass(createReconcileUnrealizedCastsPass());
   pm.addPass(createCSEPass());
   pm.addPass(createCanonicalizerPass());
@@ -326,6 +326,8 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
   registry.insert<reussir::ReussirDialect, DLTIDialect, LLVM::LLVMDialect,
                   arith::ArithDialect, memref::MemRefDialect, scf::SCFDialect,
                   ub::UBDialect, func::FuncDialect, cf::ControlFlowDialect>();
+  reussir::registerReussirBasicOpsLoweringInterface(registry);
+  mlir::registerConvertToLLVMDependentDialectLoading(registry);
   mlir::registerAllExtensions(registry);
   registerLLVMDialectTranslation(registry);
   registerBuiltinDialectTranslation(registry);

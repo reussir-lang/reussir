@@ -261,7 +261,7 @@ void lowerFusedDBGAttributeInLocations(mlir::ModuleOp moduleOp) {
               auto argValue = funcOp.getArgument(idx);
               auto &entryBlock = funcOp.getBody().front();
               builder.setInsertionPointToStart(&entryBlock);
-              builder.create<mlir::LLVM::DbgValueOp>(updatedFuncLoc, argValue,
+              mlir::LLVM::DbgValueOp::create(builder, updatedFuncLoc, argValue,
                                                      translated);
             }
           }
@@ -282,7 +282,7 @@ void lowerFusedDBGAttributeInLocations(mlir::ModuleOp moduleOp) {
               if (op->getNumResults() == 1) {
                 auto value = op->getResult(0);
                 builder.setInsertionPointAfterValue(value);
-                builder.create<mlir::LLVM::DbgValueOp>(op->getLoc(), value,
+                mlir::LLVM::DbgValueOp::create(builder, op->getLoc(), value,
                                                        localVar);
               }
             }

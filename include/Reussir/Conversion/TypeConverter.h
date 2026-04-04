@@ -22,19 +22,9 @@
 
 namespace reussir {
 
-class LLVMTypeConverter : public mlir::LLVMTypeConverter {
-public:
-  LLVMTypeConverter(mlir::ModuleOp op);
+mlir::LowerToLLVMOptions getReussirToLLVMOptions(mlir::ModuleOp op);
 
-  std::optional<llvm::LogicalResult>
-  convertRecordType(RecordType type,
-                    llvm::SmallVectorImpl<mlir::Type> &results);
-
-  const mlir::DataLayout &getDataLayout() const { return dataLayout; }
-
-private:
-  mlir::DataLayout dataLayout;
-};
+void populateReussirToLLVMTypeConversions(mlir::LLVMTypeConverter &converter);
 } // namespace reussir
 
 #endif // REUSSIR_CONVERSION_TYPECONVERTER_H

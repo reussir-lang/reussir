@@ -51,8 +51,7 @@ private:
   mlir::LogicalResult rewriteDropArray(ArrayType arrayType, ReussirRefDropOp op,
                                        mlir::PatternRewriter &rewriter) const {
     mlir::Value view =
-        rewriter
-            .create<ReussirArrayViewOp>(
+        ReussirArrayViewOp::create(rewriter, 
                 op.getLoc(),
                 mlir::MemRefType::get(arrayType.getShape(), arrayType.getElementType()),
                 op.getRef())
@@ -61,19 +60,19 @@ private:
         [&](auto &&self, mlir::Value currentView,
             ArrayType currentType) -> mlir::LogicalResult {
       for (int64_t index : llvm::seq<int64_t>(0, currentType.getShape().front())) {
-        auto idx = rewriter.create<mlir::arith::ConstantIndexOp>(op.getLoc(), index);
+        auto idx = mlir::arith::ConstantIndexOp::create(rewriter, op.getLoc(), index);
         if (currentType.getRank() == 1) {
           RefType projectedRefType = rewriter.getType<RefType>(
               currentType.getElementType(), Capability::unspecified);
-          auto projected = rewriter.create<ReussirArrayProjectOp>(
+          auto projected = ReussirArrayProjectOp::create(rewriter, 
               op.getLoc(), projectedRefType, currentView, idx.getResult());
           if (!isTriviallyCopyable(currentType.getElementType()))
-            rewriter.create<ReussirRefDropOp>(op.getLoc(),
+            ReussirRefDropOp::create(rewriter, op.getLoc(),
                                               projected.getProjected());
           continue;
         }
         auto droppedType = currentType.dropFront();
-        auto projected = rewriter.create<ReussirArrayProjectOp>(
+        auto projected = ReussirArrayProjectOp::create(rewriter, 
             op.getLoc(),
             mlir::MemRefType::get(droppedType.getShape(),
                                   droppedType.getElementType()),
@@ -105,8 +104,8 @@ private:
       nullableType = NullableType::get(op.getContext(), tokenType);
     }
     mlir::Value loaded =
-        rewriter.create<ReussirRefLoadOp>(op.getLoc(), rcType, op.getRef());
-    rewriter.create<ReussirRcDecOp>(op.getLoc(), nullableType, loaded);
+        ReussirRefLoadOp::create(rewriter, op.getLoc(), rcType, op.getRef());
+    ReussirRcDecOp::create(rewriter, op.getLoc(), nullableType, loaded);
     rewriter.eraseOp(op);
     return mlir::success();
   }
@@ -126,9 +125,9 @@ private:
       RefType projectedRefTy =
           RefType::get(op.getContext(), projectedTy, refCap);
       mlir::IntegerAttr index = rewriter.getIndexAttr(idx);
-      mlir::Value projectedVal = rewriter.create<ReussirRefProjectOp>(
+      mlir::Value projectedVal = ReussirRefProjectOp::create(rewriter, 
           op.getLoc(), projectedRefTy, op.getRef(), index);
-      rewriter.create<ReussirRefDropOp>(op.getLoc(), projectedVal);
+      ReussirRefDropOp::create(rewriter, op.getLoc(), projectedVal);
     }
     rewriter.eraseOp(op);
     return mlir::success();
@@ -143,7 +142,7 @@ private:
     for (auto idx : llvm::seq<int64_t>(0, recordType.getMembers().size()))
       tagSets.push_back(rewriter.getDenseI64ArrayAttr({idx}));
     auto tagSetsAttr = rewriter.getArrayAttr(tagSets);
-    auto dispatcher = rewriter.create<ReussirRecordDispatchOp>(
+    auto dispatcher = ReussirRecordDispatchOp::create(rewriter, 
         op.getLoc(), mlir::Type{}, op.getRef(), tagSetsAttr, tagSets.size());
     for (auto [idx, memberTy, memberIsField] : llvm::enumerate(
              recordType.getMembers(), recordType.getMemberIsField())) {
@@ -155,10 +154,10 @@ private:
           {projectedRefTy}, {op.getLoc()});
       rewriter.setInsertionPointToStart(block);
       if (!memberIsField && !isTriviallyCopyable(projectedTy))
-        rewriter.create<ReussirRefDropOp>(op.getLoc(), block->getArgument(0),
+        ReussirRefDropOp::create(rewriter, op.getLoc(), block->getArgument(0),
                                           true, nullptr);
 
-      rewriter.create<ReussirScfYieldOp>(op.getLoc(), nullptr);
+      ReussirScfYieldOp::create(rewriter, op.getLoc(), nullptr);
     }
     rewriter.eraseOp(op);
     return mlir::success();
@@ -171,9 +170,9 @@ private:
     assert(recordType.isVariant());
     auto targetType = recordType.getMembers()[tag];
     auto targetRefType = rewriter.getType<RefType>(targetType, refCap);
-    auto targetRef = rewriter.create<ReussirRecordCoerceOp>(
+    auto targetRef = ReussirRecordCoerceOp::create(rewriter, 
         op.getLoc(), targetRefType, rewriter.getIndexAttr(tag), op.getRef());
-    rewriter.create<ReussirRefDropOp>(op.getLoc(), targetRef);
+    ReussirRefDropOp::create(rewriter, op.getLoc(), targetRef);
     rewriter.eraseOp(op);
     return mlir::success();
   }
@@ -182,15 +181,15 @@ private:
   rewriteDropNullable(NullableType nullableType, ReussirRefDropOp op,
                       mlir::PatternRewriter &rewriter) const {
     if (auto rcType = llvm::dyn_cast<RcType>(nullableType.getPtrTy())) {
-      mlir::Value loaded = rewriter.create<ReussirRefLoadOp>(
+      mlir::Value loaded = ReussirRefLoadOp::create(rewriter, 
           op.getLoc(), nullableType, op.getRef());
-      auto dispatcher = rewriter.create<ReussirNullableDispatchOp>(
+      auto dispatcher = ReussirNullableDispatchOp::create(rewriter, 
           op.getLoc(), mlir::Type{}, loaded);
       // do nothing if null
       mlir::Block *nullBlock = rewriter.createBlock(
           &dispatcher.getNullRegion(), dispatcher.getNullRegion().begin());
       rewriter.setInsertionPointToStart(nullBlock);
-      rewriter.create<ReussirScfYieldOp>(op.getLoc(), nullptr);
+      ReussirScfYieldOp::create(rewriter, op.getLoc(), nullptr);
 
       // drop inner if not null
       mlir::Block *nonNullBlock = rewriter.createBlock(
@@ -206,9 +205,9 @@ private:
         TokenType tokenType = TokenType::get(op.getContext(), align, size);
         retNullableTy = NullableType::get(op.getContext(), tokenType);
       }
-      rewriter.create<ReussirRcDecOp>(op.getLoc(), retNullableTy,
+      ReussirRcDecOp::create(rewriter, op.getLoc(), retNullableTy,
                                       nonNullBlock->getArgument(0));
-      rewriter.create<ReussirScfYieldOp>(op.getLoc(), nullptr);
+      ReussirScfYieldOp::create(rewriter, op.getLoc(), nullptr);
     }
     rewriter.eraseOp(op);
     return mlir::success();
@@ -260,7 +259,7 @@ public:
             mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
             mlir::func::FuncOp dtor =
                 createDtorIfNotExists(moduleOp, recordType, rewriter);
-            rewriter.create<mlir::func::CallOp>(op.getLoc(), dtor, op.getRef());
+            mlir::func::CallOp::create(rewriter, op.getLoc(), dtor, op.getRef());
             rewriter.eraseOp(op);
             return llvm::success();
           }
@@ -323,7 +322,7 @@ public:
         mlir::func::FuncOp acquireFunc =
             emitOwnershipAcquisitionFuncIfNotExists(moduleOp, recordType,
                                                     rewriter);
-        rewriter.create<mlir::func::CallOp>(op.getLoc(), acquireFunc,
+        mlir::func::CallOp::create(rewriter, op.getLoc(), acquireFunc,
                                             op.getRef());
         rewriter.eraseOp(op);
         return mlir::success();
@@ -335,10 +334,10 @@ public:
         auto targetType = recordType.getMembers()[tag];
         auto targetRefType =
             rewriter.getType<RefType>(targetType, refType.getCapability());
-        auto targetRef = rewriter.create<ReussirRecordCoerceOp>(
+        auto targetRef = ReussirRecordCoerceOp::create(rewriter, 
             op.getLoc(), targetRefType, rewriter.getIndexAttr(tag),
             op.getRef());
-        rewriter.create<ReussirRefAcquireOp>(op.getLoc(), targetRef);
+        ReussirRefAcquireOp::create(rewriter, op.getLoc(), targetRef);
         rewriter.eraseOp(op);
         return mlir::success();
       }

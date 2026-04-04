@@ -13,7 +13,7 @@
 // RUN: --reussir-lowering-scf-ops \
 // RUN: --reussir-compile-polymorphic-ffi \
 // RUN: --convert-scf-to-cf \
-// RUN: --reussir-lowering-basic-ops | \
+// RUN: --reussir-lowering-basic-ops --convert-to-llvm --reconcile-unrealized-casts | \
 // RUN: %reussir-translate \
 // RUN: --reussir-to-llvmir | \
 // RUN: %opt -O3 |\

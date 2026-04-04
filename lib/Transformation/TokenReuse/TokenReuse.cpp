@@ -439,10 +439,10 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
       mlir::Value newToken;
       mlir::Value oldToken = reuse.anchor.getToken();
       if (reuse.realloc)
-        newToken = rewriter.create<ReussirTokenReallocOp>(
+        newToken = ReussirTokenReallocOp::create(rewriter, 
             reuse.anchor->getLoc(), targetType, reuse.token);
       else
-        newToken = rewriter.create<ReussirTokenEnsureOp>(
+        newToken = ReussirTokenEnsureOp::create(rewriter, 
             reuse.anchor->getLoc(), targetType, reuse.token);
       reuse.anchor.assignToken(newToken);
       auto allocOp = llvm::cast<ReussirTokenAllocOp>(oldToken.getDefiningOp());
@@ -451,7 +451,7 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
 
     for (const auto &free : frees) {
       rewriter.setInsertionPoint(free.anchor);
-      rewriter.create<ReussirTokenFreeOp>(free.anchor->getLoc(), free.token);
+      ReussirTokenFreeOp::create(rewriter, free.anchor->getLoc(), free.token);
     }
   }
 };

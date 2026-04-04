@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-lowering-basic-ops | \
+// RUN: %reussir-opt %s --reussir-lowering-basic-ops --convert-to-llvm --reconcile-unrealized-casts | \
 // RUN: %reussir-translate --mlir-to-llvmir | %FileCheck %s
 
 !variant_record = !reussir.record<variant "test_variant" {i32, i64, f32}>

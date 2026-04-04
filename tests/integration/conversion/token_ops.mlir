@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-lowering-basic-ops
+// RUN: %reussir-opt %s --reussir-lowering-basic-ops --convert-to-llvm --reconcile-unrealized-casts | %FileCheck %s
 module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>>} {
   // CHECK-LABEL: llvm.func @token_alloc() -> !llvm.ptr attributes {sym_visibility = "private"} {
   // CHECK: %0 = llvm.mlir.constant(8 : index) : i64

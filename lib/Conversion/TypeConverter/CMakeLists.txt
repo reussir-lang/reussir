@@ -8,7 +8,9 @@ add_mlir_conversion_library(MLIRReussirTypeConverter
   Core
 
   LINK_LIBS PUBLIC
+  MLIRDLTIDialect
   MLIRReussir
+  MLIRTargetLLVMIRImport
   MLIRLLVMCommonConversion
   MLIRTransforms
   MLIRLLVMDialect

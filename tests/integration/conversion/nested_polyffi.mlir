@@ -1,5 +1,6 @@
 // RUN: %reussir-opt --reussir-compile-polymorphic-ffi=optimized %s \
-// RUN:   -reussir-lowering-basic-ops | %reussir-translate --reussir-to-llvmir \
+// RUN:   -reussir-lowering-basic-ops --convert-to-llvm \
+// RUN:   --reconcile-unrealized-casts | %reussir-translate --reussir-to-llvmir \
 // RUN:   | %opt -O3 | %llc -relocation-model=pic -filetype=obj -o %t.o
 // RUN: %cc %t.o -L%library_path -lreussir_rt \
 // RUN:   %rpath_flag %extra_sys_libs -o %t.exe

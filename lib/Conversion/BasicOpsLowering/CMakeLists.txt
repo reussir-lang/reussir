@@ -11,6 +11,7 @@ add_mlir_conversion_library(MLIRReussirBasicOpsLowering
 
   LINK_LIBS PUBLIC
   MLIRArithAttrToLLVMConversion
+  MLIRConvertToLLVMInterface
   MLIRReussir
   MLIRReussirTypeConverter
   MLIRLLVMCommonConversion

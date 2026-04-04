@@ -2,6 +2,8 @@
 // RUN:   -reussir-lowering-region-patterns \
 // RUN:   -reussir-acquire-drop-expansion \
 // RUN:   -reussir-lowering-basic-ops \
+// RUN:   -convert-to-llvm \
+// RUN:   -reconcile-unrealized-casts \
 // RUN:   -o %t.mlir %s
 // RUN: %FileCheck %s --check-prefix=CHECK-MLIR < %t.mlir
 // RUN: %reussir-translate --mlir-to-llvmir %t.mlir | \

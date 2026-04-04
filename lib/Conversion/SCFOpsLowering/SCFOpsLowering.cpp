@@ -101,8 +101,8 @@ buildDecisionTree(mlir::Location loc, mlir::OpBuilder &builder,
                   mlir::Value currentSlice,
                   llvm::ArrayRef<PatternInfo> patterns) {
   if (patterns.empty()) {
-    auto poison = builder.create<mlir::ub::PoisonOp>(loc, indexType);
-    auto falseVal = builder.create<mlir::arith::ConstantIntOp>(loc, 0, 1);
+    auto poison = mlir::ub::PoisonOp::create(builder, loc, indexType);
+    auto falseVal = mlir::arith::ConstantIntOp::create(builder, loc, 0, 1);
     return {poison.getResult(), falseVal.getResult()};
   }
 
@@ -110,27 +110,27 @@ buildDecisionTree(mlir::Location loc, mlir::OpBuilder &builder,
     const auto &p = patterns[0];
     mlir::Value condition;
     if (p.pattern.empty()) {
-      auto len = builder.create<ReussirStrLenOp>(loc, builder.getIndexType(),
+      auto len = ReussirStrLenOp::create(builder, loc, builder.getIndexType(),
                                                  currentSlice);
-      auto zero = builder.create<mlir::arith::ConstantIndexOp>(loc, 0);
-      condition = builder.create<mlir::arith::CmpIOp>(
+      auto zero = mlir::arith::ConstantIndexOp::create(builder, loc, 0);
+      condition = mlir::arith::CmpIOp::create(builder, 
           loc, mlir::arith::CmpIPredicate::eq, len.getResult(),
           zero.getResult());
     } else {
-      auto startswith = builder.create<ReussirStrUnsafeStartWithOp>(
+      auto startswith = ReussirStrUnsafeStartWithOp::create(builder, 
           loc, i1Type, currentSlice, builder.getStringAttr(p.pattern));
-      auto len = builder.create<ReussirStrLenOp>(loc, builder.getIndexType(),
+      auto len = ReussirStrLenOp::create(builder, loc, builder.getIndexType(),
                                                  currentSlice);
       auto expectedLen =
-          builder.create<mlir::arith::ConstantIndexOp>(loc, p.pattern.size());
-      auto lenOk = builder.create<mlir::arith::CmpIOp>(
+          mlir::arith::ConstantIndexOp::create(builder, loc, p.pattern.size());
+      auto lenOk = mlir::arith::CmpIOp::create(builder, 
           loc, mlir::arith::CmpIPredicate::eq, len.getResult(),
           expectedLen.getResult());
-      condition = builder.create<mlir::arith::AndIOp>(
+      condition = mlir::arith::AndIOp::create(builder, 
           loc, startswith.getResult(), lenOk.getResult());
     }
 
-    auto ifOp = builder.create<mlir::scf::IfOp>(
+    auto ifOp = mlir::scf::IfOp::create(builder, 
         loc, mlir::TypeRange{indexType, i1Type}, condition,
         /*addThenRegion=*/true, /*addElseRegion=*/true);
 
@@ -138,18 +138,18 @@ buildDecisionTree(mlir::Location loc, mlir::OpBuilder &builder,
       mlir::OpBuilder::InsertionGuard guard(builder);
       builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
       auto idx =
-          builder.create<mlir::arith::ConstantIndexOp>(loc, p.originalIdx);
-      auto trueVal = builder.create<mlir::arith::ConstantIntOp>(loc, 1, 1);
-      builder.create<mlir::scf::YieldOp>(
+          mlir::arith::ConstantIndexOp::create(builder, loc, p.originalIdx);
+      auto trueVal = mlir::arith::ConstantIntOp::create(builder, loc, 1, 1);
+      mlir::scf::YieldOp::create(builder, 
           loc, mlir::ValueRange{idx.getResult(), trueVal.getResult()});
     }
 
     {
       mlir::OpBuilder::InsertionGuard guard(builder);
       builder.setInsertionPointToStart(&ifOp.getElseRegion().front());
-      auto poison = builder.create<mlir::ub::PoisonOp>(loc, indexType);
-      auto falseVal = builder.create<mlir::arith::ConstantIntOp>(loc, 0, 1);
-      builder.create<mlir::scf::YieldOp>(
+      auto poison = mlir::ub::PoisonOp::create(builder, loc, indexType);
+      auto falseVal = mlir::arith::ConstantIntOp::create(builder, loc, 0, 1);
+      mlir::scf::YieldOp::create(builder, 
           loc, mlir::ValueRange{poison.getResult(), falseVal.getResult()});
     }
     return {ifOp.getResult(0), ifOp.getResult(1)};
@@ -169,14 +169,14 @@ buildDecisionTree(mlir::Location loc, mlir::OpBuilder &builder,
 
   if (lcpLen > 0) {
     auto lcp = first.substr(0, lcpLen);
-    auto len = builder.create<ReussirStrLenOp>(loc, builder.getIndexType(),
+    auto len = ReussirStrLenOp::create(builder, loc, builder.getIndexType(),
                                                currentSlice);
-    auto minLen = builder.create<mlir::arith::ConstantIndexOp>(loc, lcpLen);
-    auto lenOk = builder.create<mlir::arith::CmpIOp>(
+    auto minLen = mlir::arith::ConstantIndexOp::create(builder, loc, lcpLen);
+    auto lenOk = mlir::arith::CmpIOp::create(builder, 
         loc, mlir::arith::CmpIPredicate::uge, len.getResult(),
         minLen.getResult());
 
-    auto ifLen = builder.create<mlir::scf::IfOp>(
+    auto ifLen = mlir::scf::IfOp::create(builder, 
         loc, mlir::TypeRange{indexType, i1Type}, lenOk.getResult(),
         /*addThenRegion=*/true, /*addElseRegion=*/true);
 
@@ -184,18 +184,18 @@ buildDecisionTree(mlir::Location loc, mlir::OpBuilder &builder,
       mlir::OpBuilder::InsertionGuard guard(builder);
       builder.setInsertionPointToStart(&ifLen.getThenRegion().front());
 
-      auto startswith = builder.create<ReussirStrUnsafeStartWithOp>(
+      auto startswith = ReussirStrUnsafeStartWithOp::create(builder, 
           loc, i1Type, currentSlice, builder.getStringAttr(lcp));
 
-      auto ifMatch = builder.create<mlir::scf::IfOp>(
+      auto ifMatch = mlir::scf::IfOp::create(builder, 
           loc, mlir::TypeRange{indexType, i1Type}, startswith.getResult(),
           /*addThenRegion=*/true, /*addElseRegion=*/true);
 
       {
         mlir::OpBuilder::InsertionGuard thenGuard(builder);
         builder.setInsertionPointToStart(&ifMatch.getThenRegion().front());
-        auto offset = builder.create<mlir::arith::ConstantIndexOp>(loc, lcpLen);
-        auto nextSlice = builder.create<ReussirStrSliceOp>(
+        auto offset = mlir::arith::ConstantIndexOp::create(builder, loc, lcpLen);
+        auto nextSlice = ReussirStrSliceOp::create(builder, 
             loc, currentSlice.getType(), currentSlice, offset.getResult());
 
         llvm::SmallVector<PatternInfo> nextPatterns;
@@ -204,27 +204,27 @@ buildDecisionTree(mlir::Location loc, mlir::OpBuilder &builder,
         }
         auto res = buildDecisionTree(loc, builder, indexType, i1Type,
                                      nextSlice.getResult(), nextPatterns);
-        builder.create<mlir::scf::YieldOp>(
+        mlir::scf::YieldOp::create(builder, 
             loc, mlir::ValueRange{res.first, res.second});
       }
 
       {
         mlir::OpBuilder::InsertionGuard elseGuard(builder);
         builder.setInsertionPointToStart(&ifMatch.getElseRegion().front());
-        auto poison = builder.create<mlir::ub::PoisonOp>(loc, indexType);
-        auto falseVal = builder.create<mlir::arith::ConstantIntOp>(loc, 0, 1);
-        builder.create<mlir::scf::YieldOp>(
+        auto poison = mlir::ub::PoisonOp::create(builder, loc, indexType);
+        auto falseVal = mlir::arith::ConstantIntOp::create(builder, loc, 0, 1);
+        mlir::scf::YieldOp::create(builder, 
             loc, mlir::ValueRange{poison.getResult(), falseVal.getResult()});
       }
-      builder.create<mlir::scf::YieldOp>(loc, ifMatch.getResults());
+      mlir::scf::YieldOp::create(builder, loc, ifMatch.getResults());
     }
 
     {
       mlir::OpBuilder::InsertionGuard guard(builder);
       builder.setInsertionPointToStart(&ifLen.getElseRegion().front());
-      auto poison = builder.create<mlir::ub::PoisonOp>(loc, indexType);
-      auto falseVal = builder.create<mlir::arith::ConstantIntOp>(loc, 0, 1);
-      builder.create<mlir::scf::YieldOp>(
+      auto poison = mlir::ub::PoisonOp::create(builder, loc, indexType);
+      auto falseVal = mlir::arith::ConstantIntOp::create(builder, loc, 0, 1);
+      mlir::scf::YieldOp::create(builder, 
           loc, mlir::ValueRange{poison.getResult(), falseVal.getResult()});
     }
 
@@ -242,13 +242,13 @@ buildDecisionTree(mlir::Location loc, mlir::OpBuilder &builder,
     }
   }
 
-  auto len = builder.create<ReussirStrLenOp>(loc, builder.getIndexType(),
+  auto len = ReussirStrLenOp::create(builder, loc, builder.getIndexType(),
                                              currentSlice);
-  auto zero = builder.create<mlir::arith::ConstantIndexOp>(loc, 0);
-  auto isZero = builder.create<mlir::arith::CmpIOp>(
+  auto zero = mlir::arith::ConstantIndexOp::create(builder, loc, 0);
+  auto isZero = mlir::arith::CmpIOp::create(builder, 
       loc, mlir::arith::CmpIPredicate::eq, len.getResult(), zero.getResult());
 
-  auto ifZero = builder.create<mlir::scf::IfOp>(
+  auto ifZero = mlir::scf::IfOp::create(builder, 
       loc, mlir::TypeRange{indexType, i1Type}, isZero.getResult(),
       /*addThenRegion=*/true, /*addElseRegion=*/true);
 
@@ -257,15 +257,15 @@ buildDecisionTree(mlir::Location loc, mlir::OpBuilder &builder,
     mlir::OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToStart(&ifZero.getThenRegion().front());
     if (!emptyPatterns.empty()) {
-      auto idx = builder.create<mlir::arith::ConstantIndexOp>(
+      auto idx = mlir::arith::ConstantIndexOp::create(builder, 
           loc, emptyPatterns[0].originalIdx);
-      auto trueVal = builder.create<mlir::arith::ConstantIntOp>(loc, 1, 1);
-      builder.create<mlir::scf::YieldOp>(
+      auto trueVal = mlir::arith::ConstantIntOp::create(builder, loc, 1, 1);
+      mlir::scf::YieldOp::create(builder, 
           loc, mlir::ValueRange{idx.getResult(), trueVal.getResult()});
     } else {
-      auto poison = builder.create<mlir::ub::PoisonOp>(loc, indexType);
-      auto falseVal = builder.create<mlir::arith::ConstantIntOp>(loc, 0, 1);
-      builder.create<mlir::scf::YieldOp>(
+      auto poison = mlir::ub::PoisonOp::create(builder, loc, indexType);
+      auto falseVal = mlir::arith::ConstantIntOp::create(builder, loc, 0, 1);
+      mlir::scf::YieldOp::create(builder, 
           loc, mlir::ValueRange{poison.getResult(), falseVal.getResult()});
     }
   }
@@ -276,14 +276,14 @@ buildDecisionTree(mlir::Location loc, mlir::OpBuilder &builder,
     builder.setInsertionPointToStart(&ifZero.getElseRegion().front());
 
     if (nonEmptyPatterns.empty()) {
-      auto poison = builder.create<mlir::ub::PoisonOp>(loc, indexType);
-      auto falseVal = builder.create<mlir::arith::ConstantIntOp>(loc, 0, 1);
-      builder.create<mlir::scf::YieldOp>(
+      auto poison = mlir::ub::PoisonOp::create(builder, loc, indexType);
+      auto falseVal = mlir::arith::ConstantIntOp::create(builder, loc, 0, 1);
+      mlir::scf::YieldOp::create(builder, 
           loc, mlir::ValueRange{poison.getResult(), falseVal.getResult()});
     } else {
-      auto byteAtZero = builder.create<ReussirStrUnsafeByteAtOp>(
+      auto byteAtZero = ReussirStrUnsafeByteAtOp::create(builder, 
           loc, builder.getI8Type(), currentSlice, zero.getResult());
-      auto byteIndex = builder.create<mlir::arith::IndexCastOp>(
+      auto byteIndex = mlir::arith::IndexCastOp::create(builder, 
           loc, builder.getIndexType(), byteAtZero.getResult());
 
       llvm::SmallVector<int64_t> cases;
@@ -297,11 +297,11 @@ buildDecisionTree(mlir::Location loc, mlir::OpBuilder &builder,
         groups[b].push_back({p.originalIdx, p.pattern.substr(1)});
       }
 
-      auto one = builder.create<mlir::arith::ConstantIndexOp>(loc, 1);
-      auto nextSlice = builder.create<ReussirStrSliceOp>(
+      auto one = mlir::arith::ConstantIndexOp::create(builder, loc, 1);
+      auto nextSlice = ReussirStrSliceOp::create(builder, 
           loc, currentSlice.getType(), currentSlice, one.getResult());
 
-      auto switchOp = builder.create<mlir::scf::IndexSwitchOp>(
+      auto switchOp = mlir::scf::IndexSwitchOp::create(builder, 
           loc, mlir::TypeRange{indexType, i1Type}, byteIndex.getResult(), cases,
           cases.size());
 
@@ -312,7 +312,7 @@ buildDecisionTree(mlir::Location loc, mlir::OpBuilder &builder,
         builder.setInsertionPointToStart(&region.front());
         auto res = buildDecisionTree(loc, builder, indexType, i1Type,
                                      nextSlice.getResult(), groups[b]);
-        builder.create<mlir::scf::YieldOp>(
+        mlir::scf::YieldOp::create(builder, 
             loc, mlir::ValueRange{res.first, res.second});
       }
 
@@ -322,12 +322,12 @@ buildDecisionTree(mlir::Location loc, mlir::OpBuilder &builder,
         region.emplaceBlock();
         mlir::OpBuilder::InsertionGuard defaultGuard(builder);
         builder.setInsertionPointToStart(&region.front());
-        auto poison = builder.create<mlir::ub::PoisonOp>(loc, indexType);
-        auto falseVal = builder.create<mlir::arith::ConstantIntOp>(loc, 0, 1);
-        builder.create<mlir::scf::YieldOp>(
+        auto poison = mlir::ub::PoisonOp::create(builder, loc, indexType);
+        auto falseVal = mlir::arith::ConstantIntOp::create(builder, loc, 0, 1);
+        mlir::scf::YieldOp::create(builder, 
             loc, mlir::ValueRange{poison.getResult(), falseVal.getResult()});
       }
-      builder.create<mlir::scf::YieldOp>(loc, switchOp.getResults());
+      mlir::scf::YieldOp::create(builder, loc, switchOp.getResults());
     }
   }
 
@@ -353,7 +353,7 @@ std::string emitDecisionFunction(mlir::ModuleOp module,
   auto funcType = builder.getFunctionType({strType}, {indexType, i1Type});
 
   auto func =
-      builder.create<mlir::func::FuncOp>(module.getLoc(), funcName, funcType);
+      mlir::func::FuncOp::create(builder, module.getLoc(), funcName, funcType);
   func.setVisibility(mlir::SymbolTable::Visibility::Private);
   func->setAttr("llvm.linkage",
                 mlir::LLVM::LinkageAttr::get(builder.getContext(),
@@ -370,7 +370,7 @@ std::string emitDecisionFunction(mlir::ModuleOp module,
   auto res = buildDecisionTree(module.getLoc(), builder, indexType, i1Type,
                                entry->getArgument(0), patternInfos);
 
-  builder.create<mlir::func::ReturnOp>(module.getLoc(),
+  mlir::func::ReturnOp::create(builder, module.getLoc(),
                                        mlir::ValueRange{res.first, res.second});
 
   return funcName;
@@ -392,13 +392,13 @@ struct ReussirNullableDispatchOpRewritePattern
                   OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
     // First, create a check operation to get the null flag from the input.
-    mlir::Value flag = rewriter.create<reussir::ReussirNullableCheckOp>(
+    mlir::Value flag = reussir::ReussirNullableCheckOp::create(rewriter, 
         op.getLoc(), op.getNullable());
     // mark expect not null
     if (op->hasAttr(REUSSIR_EXPANDED_ENSURE_ATTR))
-      flag = rewriter.create<reussir::ReussirExpectOp>(op.getLoc(), flag, true);
+      flag = reussir::ReussirExpectOp::create(rewriter, op.getLoc(), flag, true);
 
-    auto scfIfOp = rewriter.create<mlir::scf::IfOp>(
+    auto scfIfOp = mlir::scf::IfOp::create(rewriter, 
         op.getLoc(), op->getResultTypes(), flag, /*addThenRegion=*/true,
         /*addElseRegion=*/true);
     if (op->hasAttr(REUSSIR_EXPANDED_ENSURE_ATTR))
@@ -414,7 +414,7 @@ struct ReussirNullableDispatchOpRewritePattern
 
     // Now, for the then region, we first create the coerced value
     rewriter.setInsertionPointToStart(&scfIfOp.getThenRegion().front());
-    auto coerced = rewriter.create<reussir::ReussirNullableCoerceOp>(
+    auto coerced = reussir::ReussirNullableCoerceOp::create(rewriter, 
         op.getLoc(), op.getNullable().getType().getPtrTy(), op.getNullable());
     // Then we inline the region, supplying coerced value as the argument
     rewriter.inlineBlockBefore(
@@ -458,7 +458,7 @@ private:
         tagToRegionIdx[tag] = idx;
       }
     };
-    auto indexSwitchOp = rewriter.create<mlir::scf::IndexSwitchOp>(
+    auto indexSwitchOp = mlir::scf::IndexSwitchOp::create(rewriter, 
         op.getLoc(), rewriter.getIndexType(), tag.getResult(), allTags,
         allTags.size());
 
@@ -466,9 +466,9 @@ private:
          llvm::zip(allTags, indexSwitchOp.getCaseRegions())) {
       mlir::Block *block = rewriter.createBlock(&region, region.begin());
       rewriter.setInsertionPointToStart(block);
-      auto constantIdx = rewriter.create<mlir::arith::ConstantIndexOp>(
+      auto constantIdx = mlir::arith::ConstantIndexOp::create(rewriter, 
           op.getLoc(), tagToRegionIdx[tag]);
-      rewriter.create<mlir::scf::YieldOp>(op.getLoc(),
+      mlir::scf::YieldOp::create(rewriter, op.getLoc(),
                                           constantIdx->getResults());
     }
     {
@@ -476,9 +476,9 @@ private:
           rewriter.createBlock(&indexSwitchOp.getDefaultRegion(),
                                indexSwitchOp.getDefaultRegion().begin());
       rewriter.setInsertionPointToStart(block);
-      auto poison = rewriter.create<mlir::ub::PoisonOp>(
+      auto poison = mlir::ub::PoisonOp::create(rewriter, 
           op.getLoc(), rewriter.getIndexType());
-      rewriter.create<mlir::scf::YieldOp>(op.getLoc(), poison->getResults());
+      mlir::scf::YieldOp::create(rewriter, op.getLoc(), poison->getResults());
     }
     return indexSwitchOp.getResult(0);
   }
@@ -489,7 +489,7 @@ public:
                   OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
     // First, create a RecordTagOps operation to get the tag from the input.
-    auto tag = rewriter.create<reussir::ReussirRecordTagOp>(op.getLoc(),
+    auto tag = reussir::ReussirRecordTagOp::create(rewriter, op.getLoc(),
                                                             op.getVariant());
 
     mlir::Value outerSwitchValue;
@@ -505,7 +505,7 @@ public:
           llvm::to_vector(llvm::seq<int64_t>(0, op.getTagSets().size())));
     }
 
-    auto indexSwitchOp = rewriter.create<mlir::scf::IndexSwitchOp>(
+    auto indexSwitchOp = mlir::scf::IndexSwitchOp::create(rewriter, 
         op.getLoc(), op->getResultTypes(), outerSwitchValue, outerSwitchCases,
         outerSwitchCases.size());
     // mark default region as unreachable
@@ -516,11 +516,11 @@ public:
       rewriter.setInsertionPointToStart(block);
       llvm::SmallVector<mlir::Value, 1> poisonValues;
       if (op.getValue()) {
-        auto poison = rewriter.create<mlir::ub::PoisonOp>(
+        auto poison = mlir::ub::PoisonOp::create(rewriter, 
             op.getLoc(), op.getValue().getType());
         poisonValues.push_back(poison);
       }
-      rewriter.create<mlir::scf::YieldOp>(op.getLoc(), poisonValues);
+      mlir::scf::YieldOp::create(rewriter, op.getLoc(), poisonValues);
     }
     for (auto [idx, tagSet, region] :
          llvm::enumerate(op.getTagSets(), indexSwitchOp.getCaseRegions())) {
@@ -542,7 +542,7 @@ public:
         RefType coercedType =
             RefType::get(rewriter.getContext(), targetVariantType,
                          variantRef.getCapability());
-        auto coerced = rewriter.create<reussir::ReussirRecordCoerceOp>(
+        auto coerced = reussir::ReussirRecordCoerceOp::create(rewriter, 
             op.getLoc(), coercedType, rewriter.getIndexAttr(tagArray[0]),
             op.getVariant());
         args.push_back(coerced);
@@ -564,27 +564,27 @@ struct ReussirClosureUniqifyOpRewritePattern
                   OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
     // Create a check operation to see if the closure is unique
-    auto isUnique = rewriter.create<reussir::ReussirRcIsUniqueOp>(
+    auto isUnique = reussir::ReussirRcIsUniqueOp::create(rewriter, 
         op.getLoc(), op.getClosure());
 
     // Create an SCF if-else operation
-    auto scfIfOp = rewriter.create<mlir::scf::IfOp>(
+    auto scfIfOp = mlir::scf::IfOp::create(rewriter, 
         op.getLoc(), op->getResultTypes(), isUnique, /*addThenRegion=*/true,
         /*addElseRegion=*/true);
 
     // In the then region (closure is unique), just return the original
     // closure
     rewriter.setInsertionPointToStart(&scfIfOp.getThenRegion().front());
-    rewriter.create<mlir::scf::YieldOp>(op.getLoc(), op.getClosure());
+    mlir::scf::YieldOp::create(rewriter, op.getLoc(), op.getClosure());
 
     // In the else region (closure is not unique), clone the closure, dec the
     // original rc pointer
     rewriter.setInsertionPointToStart(&scfIfOp.getElseRegion().front());
-    auto cloned = rewriter.create<reussir::ReussirClosureCloneOp>(
+    auto cloned = reussir::ReussirClosureCloneOp::create(rewriter, 
         op.getLoc(), op.getClosure().getType(), op.getClosure());
-    rewriter.create<reussir::ReussirRcDecOp>(op.getLoc(), mlir::Type{},
+    reussir::ReussirRcDecOp::create(rewriter, op.getLoc(), mlir::Type{},
                                              op.getClosure());
-    rewriter.create<mlir::scf::YieldOp>(op.getLoc(), cloned.getResult());
+    mlir::scf::YieldOp::create(rewriter, op.getLoc(), cloned.getResult());
 
     rewriter.replaceOp(op, scfIfOp);
     return mlir::success();
@@ -611,7 +611,7 @@ static void cloneArrayWithUniqueViewBody(ReussirArrayWithUniqueViewOp op,
     for (mlir::Value operand : yieldOp->getOperands())
       yieldedValues.push_back(mapping.lookupOrDefault(operand));
   }
-  rewriter.create<mlir::scf::YieldOp>(op.getLoc(), yieldedValues);
+  mlir::scf::YieldOp::create(rewriter, op.getLoc(), yieldedValues);
 }
 
 static mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType) {
@@ -626,13 +626,12 @@ static mlir::Value materializeArrayViewValue(mlir::Location loc,
                                              bool writable) {
   auto memrefType = getArrayViewMemRefType(arrayType);
   auto memrefView =
-      rewriter.create<ReussirArrayViewOp>(loc, memrefType, ref).getView();
+      ReussirArrayViewOp::create(rewriter, loc, memrefType, ref).getView();
   if (llvm::isa<mlir::MemRefType>(viewType))
     return memrefView;
 
   auto tensorType = llvm::cast<mlir::RankedTensorType>(viewType);
-  return rewriter
-      .create<mlir::bufferization::ToTensorOp>(loc, tensorType, memrefView,
+  return mlir::bufferization::ToTensorOp::create(rewriter, loc, tensorType, memrefView,
                                                /*restrict=*/true, writable)
       .getResult();
 }
@@ -674,7 +673,7 @@ struct ReussirArrayWithUniqueViewOpRewritePattern
     auto makeBorrowedView = [&](mlir::Value array) -> mlir::Value {
       auto borrowedType = RefType::get(rewriter.getContext(), arrayType);
       auto borrowed =
-          rewriter.create<ReussirRcBorrowOp>(loc, borrowedType, array);
+          ReussirRcBorrowOp::create(rewriter, loc, borrowedType, array);
       return materializeArrayViewValue(loc, rewriter, arrayType,
                                        borrowed.getResult(), viewType,
                                        /*writable=*/true);
@@ -684,7 +683,7 @@ struct ReussirArrayWithUniqueViewOpRewritePattern
         [&]() -> std::pair<mlir::Value, mlir::Value> {
       auto borrowedType = RefType::get(rewriter.getContext(), arrayType);
       auto srcRef =
-          rewriter.create<ReussirRcBorrowOp>(loc, borrowedType, op.getArray());
+          ReussirRcBorrowOp::create(rewriter, loc, borrowedType, op.getArray());
       RcBoxType rcBoxType = RcBoxType::get(rewriter.getContext(), arrayType,
                                            /*regional=*/false);
       auto dataLayout = mlir::DataLayout::closest(op.getOperation());
@@ -692,29 +691,29 @@ struct ReussirArrayWithUniqueViewOpRewritePattern
           TokenType::get(rewriter.getContext(),
                          dataLayout.getTypeABIAlignment(rcBoxType),
                          dataLayout.getTypeSize(rcBoxType).getFixedValue());
-      auto token = rewriter.create<ReussirTokenAllocOp>(loc, tokenType);
-      auto poison = rewriter.create<mlir::ub::PoisonOp>(loc, arrayType);
-      auto cloned = rewriter.create<ReussirRcCreateOp>(
+      auto token = ReussirTokenAllocOp::create(rewriter, loc, tokenType);
+      auto poison = mlir::ub::PoisonOp::create(rewriter, loc, arrayType);
+      auto cloned = ReussirRcCreateOp::create(rewriter, 
           loc, rcType, poison.getResult(), token.getResult(), mlir::Value{},
           mlir::FlatSymbolRefAttr{}, mlir::UnitAttr{});
       auto dstRef =
-          rewriter.create<ReussirRcBorrowOp>(loc, borrowedType, cloned.getResult());
-      rewriter.create<ReussirRefMemcpyOp>(loc, srcRef.getResult(),
+          ReussirRcBorrowOp::create(rewriter, loc, borrowedType, cloned.getResult());
+      ReussirRefMemcpyOp::create(rewriter, loc, srcRef.getResult(),
                                           dstRef.getResult());
-      rewriter.create<ReussirRefAcquireOp>(loc, dstRef.getResult(), false,
+      ReussirRefAcquireOp::create(rewriter, loc, dstRef.getResult(), false,
                                            nullptr);
 
-      auto refCount = rewriter.create<ReussirRcFetchOp>(loc, op.getArray());
-      auto decremented = rewriter.create<mlir::arith::SubIOp>(
+      auto refCount = ReussirRcFetchOp::create(rewriter, loc, op.getArray());
+      auto decremented = mlir::arith::SubIOp::create(rewriter, 
           loc, refCount.getRefCount(),
-          rewriter.create<mlir::arith::ConstantIndexOp>(loc, 1));
-      rewriter.create<ReussirRcSetOp>(loc, op.getArray(), decremented.getResult());
+          mlir::arith::ConstantIndexOp::create(rewriter, loc, 1));
+      ReussirRcSetOp::create(rewriter, loc, op.getArray(), decremented.getResult());
       return {cloned.getResult(), dstRef.getResult()};
     };
 
     auto isUnique =
-        rewriter.create<reussir::ReussirRcIsUniqueOp>(loc, op.getArray());
-    auto scfIfOp = rewriter.create<mlir::scf::IfOp>(
+        reussir::ReussirRcIsUniqueOp::create(rewriter, loc, op.getArray());
+    auto scfIfOp = mlir::scf::IfOp::create(rewriter, 
         loc, op->getResultTypes(), isUnique, /*addThenRegion=*/true,
         /*addElseRegion=*/true);
 
@@ -753,7 +752,7 @@ struct ReussirTokenEnsureOpRewritePattern
   matchAndRewrite(ReussirTokenEnsureOp op,
                   OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    auto nullableDispatchOp = rewriter.create<ReussirNullableDispatchOp>(
+    auto nullableDispatchOp = ReussirNullableDispatchOp::create(rewriter, 
         op.getLoc(), op.getType(), op.getNullableToken());
 
     {
@@ -775,12 +774,12 @@ struct ReussirTokenEnsureOpRewritePattern
                   nullCreateOp.getPtr().getDefiningOp());
           // it is safe since RC must dominate this path
           if (reinterpretOp)
-            tokenSrc = rewriter.create<reussir::ReussirRcReinterpretOp>(
+            tokenSrc = reussir::ReussirRcReinterpretOp::create(rewriter, 
                 op.getLoc(), op.getType(), reinterpretOp.getRcPtr());
         }
-      auto launderedToken = rewriter.create<ReussirTokenLaunderOp>(
+      auto launderedToken = ReussirTokenLaunderOp::create(rewriter, 
           op.getLoc(), op.getType(), tokenSrc);
-      rewriter.create<mlir::scf::YieldOp>(op.getLoc(),
+      mlir::scf::YieldOp::create(rewriter, op.getLoc(),
                                           launderedToken->getResults());
     }
     {
@@ -788,8 +787,8 @@ struct ReussirTokenEnsureOpRewritePattern
           rewriter.createBlock(&nullableDispatchOp.getNullRegion());
       rewriter.setInsertionPointToStart(elseBlock);
       auto allocatedToken =
-          rewriter.create<ReussirTokenAllocOp>(op.getLoc(), op.getType());
-      rewriter.create<mlir::scf::YieldOp>(op.getLoc(),
+          ReussirTokenAllocOp::create(rewriter, op.getLoc(), op.getType());
+      mlir::scf::YieldOp::create(rewriter, op.getLoc(),
                                           allocatedToken->getResults());
     }
     nullableDispatchOp->setAttr(REUSSIR_EXPANDED_ENSURE_ATTR,
@@ -809,15 +808,15 @@ struct ReussirStrByteAtOpRewritePattern
     mlir::Location loc = op.getLoc();
 
     // Get string length
-    auto lenOp = rewriter.create<reussir::ReussirStrLenOp>(
+    auto lenOp = reussir::ReussirStrLenOp::create(rewriter, 
         loc, rewriter.getIndexType(), op.getStr());
 
     // Check if index is within bounds (index < len)
-    auto inBounds = rewriter.create<mlir::arith::CmpIOp>(
+    auto inBounds = mlir::arith::CmpIOp::create(rewriter, 
         loc, mlir::arith::CmpIPredicate::ult, op.getIndex(), lenOp.getResult());
 
     // Create if-else block
-    auto ifOp = rewriter.create<mlir::scf::IfOp>(
+    auto ifOp = mlir::scf::IfOp::create(rewriter, 
         loc, op.getResult().getType(), inBounds, /*addThenRegion=*/true,
         /*addElseRegion=*/true);
 
@@ -825,17 +824,17 @@ struct ReussirStrByteAtOpRewritePattern
     {
       auto &thenBlock = ifOp.getThenRegion().front();
       rewriter.setInsertionPointToStart(&thenBlock);
-      auto unsafeByte = rewriter.create<reussir::ReussirStrUnsafeByteAtOp>(
+      auto unsafeByte = reussir::ReussirStrUnsafeByteAtOp::create(rewriter, 
           loc, rewriter.getI8Type(), op.getStr(), op.getIndex());
-      rewriter.create<mlir::scf::YieldOp>(loc, unsafeByte.getResult());
+      mlir::scf::YieldOp::create(rewriter, loc, unsafeByte.getResult());
     }
 
     // Else region: Return 0
     {
       auto &elseBlock = ifOp.getElseRegion().front();
       rewriter.setInsertionPointToStart(&elseBlock);
-      auto zero = rewriter.create<mlir::arith::ConstantIntOp>(loc, 0, 8);
-      rewriter.create<mlir::scf::YieldOp>(loc, zero->getResult(0));
+      auto zero = mlir::arith::ConstantIntOp::create(rewriter, loc, 0, 8);
+      mlir::scf::YieldOp::create(rewriter, loc, zero->getResult(0));
     }
 
     rewriter.replaceOp(op, ifOp.getResult(0));
@@ -852,7 +851,7 @@ struct ReussirStrSelectOpRewritePattern
     auto module = op->getParentOfType<mlir::ModuleOp>();
     auto funcName = emitDecisionFunction(module, rewriter, op.getPatterns());
     auto func = module.lookupSymbol<mlir::func::FuncOp>(funcName);
-    auto call = rewriter.create<mlir::func::CallOp>(
+    auto call = mlir::func::CallOp::create(rewriter, 
         op.getLoc(), func, mlir::ValueRange{op.getStr()});
 
     rewriter.replaceOp(op, call.getResults());
@@ -871,19 +870,19 @@ struct ReussirStrStartWithOpRewritePattern
 
     // Get string length
     auto lenOp =
-        rewriter.create<reussir::ReussirStrLenOp>(loc, indexType, op.getStr());
+        reussir::ReussirStrLenOp::create(rewriter, loc, indexType, op.getStr());
 
     // Get prefix length
     size_t prefixLen = op.getPrefix().size();
     auto prefixLenVal =
-        rewriter.create<mlir::arith::ConstantIndexOp>(loc, prefixLen);
+        mlir::arith::ConstantIndexOp::create(rewriter, loc, prefixLen);
 
     // Check if len >= prefixLen
-    auto isSufficientLen = rewriter.create<mlir::arith::CmpIOp>(
+    auto isSufficientLen = mlir::arith::CmpIOp::create(rewriter, 
         loc, mlir::arith::CmpIPredicate::uge, lenOp.getResult(), prefixLenVal);
 
     auto resultType = op.getResult().getType();
-    auto ifOp = rewriter.create<mlir::scf::IfOp>(
+    auto ifOp = mlir::scf::IfOp::create(rewriter, 
         loc, resultType, isSufficientLen, /*addThenRegion=*/true,
         /*addElseRegion=*/true);
 
@@ -891,17 +890,17 @@ struct ReussirStrStartWithOpRewritePattern
     {
       auto &thenBlock = ifOp.getThenRegion().front();
       rewriter.setInsertionPointToStart(&thenBlock);
-      auto unsafeCheck = rewriter.create<reussir::ReussirStrUnsafeStartWithOp>(
+      auto unsafeCheck = reussir::ReussirStrUnsafeStartWithOp::create(rewriter, 
           loc, resultType, op.getStr(), op.getPrefixAttr());
-      rewriter.create<mlir::scf::YieldOp>(loc, unsafeCheck.getResult());
+      mlir::scf::YieldOp::create(rewriter, loc, unsafeCheck.getResult());
     }
 
     // Else region: Return false
     {
       auto &elseBlock = ifOp.getElseRegion().front();
       rewriter.setInsertionPointToStart(&elseBlock);
-      auto falseVal = rewriter.create<mlir::arith::ConstantIntOp>(loc, 0, 1);
-      rewriter.create<mlir::scf::YieldOp>(loc, falseVal->getResult(0));
+      auto falseVal = mlir::arith::ConstantIntOp::create(rewriter, loc, 0, 1);
+      mlir::scf::YieldOp::create(rewriter, loc, falseVal->getResult(0));
     }
 
     rewriter.replaceOp(op, ifOp.getResult(0));

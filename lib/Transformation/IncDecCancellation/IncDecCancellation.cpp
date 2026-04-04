@@ -61,7 +61,7 @@ void eraseOrReplaceDecOp(ReussirRcDecOp decOp) {
     decOp.erase();
   else {
     mlir::OpBuilder builder(decOp);
-    auto replacement = builder.create<ReussirNullableCreateOp>(
+    auto replacement = ReussirNullableCreateOp::create(builder, 
         decOp.getLoc(), decOp.getResultTypes(), nullptr);
     decOp.replaceAllUsesWith(replacement->getResults());
     decOp.erase();
