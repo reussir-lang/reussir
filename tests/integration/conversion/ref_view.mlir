@@ -16,6 +16,21 @@ module @test {
   // CHECK: llvm.return %[[VALUE]] : i64
   // CHECK: }
 
+  func.func @from_offset_memref(%view : memref<4xi64>) -> i64 {
+    %subview = memref.subview %view[2] [1] [1]
+      : memref<4xi64> to memref<i64, strided<[], offset: 2>>
+    %ref = reussir.ref.from_memref (%subview : memref<i64, strided<[], offset: 2>>) : !reussir.ref<i64>
+    %value = reussir.ref.load (%ref : !reussir.ref<i64>) : i64
+    return %value : i64
+  }
+  // CHECK-LABEL: llvm.func @from_offset_memref(
+  // CHECK: %[[BASE:.*]] = llvm.extractvalue %{{.*}}[1] : !llvm.struct<(ptr, ptr, i64)>
+  // CHECK: %[[OFFSET:.*]] = llvm.mlir.constant(2 : index) : i64
+  // CHECK: %[[PTR:.*]] = llvm.getelementptr %[[BASE]][%[[OFFSET]]] : (!llvm.ptr, i64) -> !llvm.ptr, i64
+  // CHECK: %[[VALUE:.*]] = llvm.load %[[PTR]] : !llvm.ptr -> i64
+  // CHECK: llvm.return %[[VALUE]] : i64
+  // CHECK: }
+
   func.func @from_memref_to_ref(%view : memref<i64>) -> i64 {
     %ref = reussir.ref.from_memref (%view : memref<i64>) : !reussir.ref<i64>
     %value = reussir.ref.load (%ref : !reussir.ref<i64>) : i64

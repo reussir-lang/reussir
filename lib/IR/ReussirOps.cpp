@@ -58,8 +58,18 @@ static mlir::RankedTensorType getArrayViewTensorType(ArrayType arrayType) {
                                      arrayType.getElementType());
 }
 
-static mlir::MemRefType getRefMemRefType(mlir::Type elementType) {
-  return mlir::MemRefType::get({}, elementType);
+static mlir::LogicalResult verifyZeroRankMemRefType(mlir::Operation *op,
+                                                    mlir::Type type,
+                                                    mlir::Type elementType,
+                                                    llvm::StringRef valueName) {
+  auto memrefType = llvm::dyn_cast<mlir::MemRefType>(type);
+  if (!memrefType || memrefType.getRank() != 0)
+    return op->emitOpError(valueName) << " must be a zero-rank memref";
+  if (memrefType.getElementType() != elementType)
+    return op->emitOpError(valueName) << " element type mismatch: expected "
+                                      << elementType << ", got "
+                                      << memrefType.getElementType();
+  return mlir::success();
 }
 
 static mlir::LogicalResult verifyArrayViewType(mlir::Operation *op,
@@ -955,13 +965,8 @@ mlir::LogicalResult ReussirRefSpilledOp::verify() {
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRefToMemrefOp::verify() {
   RefType refType = getRef().getType();
-  auto viewType = llvm::dyn_cast<mlir::MemRefType>(getView().getType());
-  if (!viewType)
-    return emitOpError("view result must be a zero-rank memref");
-  if (viewType != getRefMemRefType(refType.getElementType()))
-    return emitOpError("view result type mismatch: expected ")
-           << getRefMemRefType(refType.getElementType()) << ", got " << viewType;
-  return mlir::success();
+  return verifyZeroRankMemRefType(getOperation(), getView().getType(),
+                                  refType.getElementType(), "view result");
 }
 
 //===----------------------------------------------------------------------===//
@@ -969,13 +974,8 @@ mlir::LogicalResult ReussirRefToMemrefOp::verify() {
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRefFromMemrefOp::verify() {
   RefType refType = getRef().getType();
-  auto viewType = llvm::dyn_cast<mlir::MemRefType>(getView().getType());
-  if (!viewType)
-    return emitOpError("view input must be a zero-rank memref");
-  if (viewType != getRefMemRefType(refType.getElementType()))
-    return emitOpError("view input type mismatch: expected ")
-           << getRefMemRefType(refType.getElementType()) << ", got " << viewType;
-  return mlir::success();
+  return verifyZeroRankMemRefType(getOperation(), getView().getType(),
+                                  refType.getElementType(), "view input");
 }
 
 //===----------------------------------------------------------------------===//
