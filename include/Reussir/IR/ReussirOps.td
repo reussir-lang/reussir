@@ -950,6 +950,39 @@ def ReussirRefSpilledOp : ReussirReferenceOp<"spilled", []> {
   let hasVerifier = 1;
 }
 
+def ReussirRefToMemrefOp : ReussirReferenceOp<"to_memref", []> {
+  let summary = "Materialize a zero-rank memref view from a reference";
+  let description = [{
+    `reussir.ref.to_memref` turns a reference into a zero-rank memref view over
+    the same payload. This is intended as a bridge to dialects that operate on
+    memrefs, such as synchronization primitives that expect `memref<T>`.
+  }];
+
+  let arguments = (ins Arg<ReussirRefType, "reference to bridge">:$ref);
+  let results = (outs Res<AnyType, "zero-rank memref view">:$view);
+  let assemblyFormat = [{
+    `(` $ref `:` qualified(type($ref)) `)` `:` qualified(type($view)) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def ReussirRefFromMemrefOp : ReussirReferenceOp<"from_memref", []> {
+  let summary = "Recover a reference from a zero-rank memref view";
+  let description = [{
+    `reussir.ref.from_memref` bridges a zero-rank memref view back to a
+    reference over the same payload. Together with `reussir.ref.to_memref`,
+    this provides a round-trip bridge between Reussir references and
+    `memref<T>` values.
+  }];
+
+  let arguments = (ins Arg<AnyType, "zero-rank memref view">:$view);
+  let results = (outs Res<ReussirRefType, "bridged reference">:$ref);
+  let assemblyFormat = [{
+    `(` $view `:` qualified(type($view)) `)` `:` qualified(type($ref)) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 def ReussirRefLoadOp : ReussirReferenceOp<"load", []> {
   let summary = "Load a reference";
   let description = [{

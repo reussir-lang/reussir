@@ -58,6 +58,10 @@ static mlir::RankedTensorType getArrayViewTensorType(ArrayType arrayType) {
                                      arrayType.getElementType());
 }
 
+static mlir::MemRefType getRefMemRefType(mlir::Type elementType) {
+  return mlir::MemRefType::get({}, elementType);
+}
+
 static mlir::LogicalResult verifyArrayViewType(mlir::Operation *op,
                                                mlir::Type type,
                                                ArrayType arrayType,
@@ -943,6 +947,34 @@ mlir::LogicalResult ReussirRefSpilledOp::verify() {
     return emitOpError("spilled type capability must be unspecified, ")
            << "spilled type capability: "
            << stringifyCapability(refType.getCapability());
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
+// RefToMemrefOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRefToMemrefOp::verify() {
+  RefType refType = getRef().getType();
+  auto viewType = llvm::dyn_cast<mlir::MemRefType>(getView().getType());
+  if (!viewType)
+    return emitOpError("view result must be a zero-rank memref");
+  if (viewType != getRefMemRefType(refType.getElementType()))
+    return emitOpError("view result type mismatch: expected ")
+           << getRefMemRefType(refType.getElementType()) << ", got " << viewType;
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
+// RefFromMemrefOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRefFromMemrefOp::verify() {
+  RefType refType = getRef().getType();
+  auto viewType = llvm::dyn_cast<mlir::MemRefType>(getView().getType());
+  if (!viewType)
+    return emitOpError("view input must be a zero-rank memref");
+  if (viewType != getRefMemRefType(refType.getElementType()))
+    return emitOpError("view input type mismatch: expected ")
+           << getRefMemRefType(refType.getElementType()) << ", got " << viewType;
   return mlir::success();
 }
 

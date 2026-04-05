@@ -670,6 +670,48 @@ struct ReussirRefLoadConversionPattern
   }
 };
 
+struct ReussirRefToMemrefConversionPattern
+    : public mlir::OpConversionPattern<ReussirRefToMemrefOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRefToMemrefOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    auto converter =
+        static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter());
+    auto viewType = llvm::dyn_cast<mlir::MemRefType>(op.getView().getType());
+    if (!viewType)
+      return op.emitOpError("view result must be a memref");
+    auto descriptor = mlir::MemRefDescriptor::fromStaticShape(
+        rewriter, loc, *converter, viewType, adaptor.getRef(), adaptor.getRef());
+    rewriter.replaceOp(op, mlir::Value(descriptor));
+    return mlir::success();
+  }
+};
+
+struct ReussirRefFromMemrefConversionPattern
+    : public mlir::OpConversionPattern<ReussirRefFromMemrefOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRefFromMemrefOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    mlir::Type resultType = getTypeConverter()->convertType(op.getRef().getType());
+    auto llvmPtrType = llvm::dyn_cast<mlir::LLVM::LLVMPointerType>(resultType);
+    if (!llvmPtrType)
+      return op.emitOpError("ref result must lower to an LLVM pointer");
+
+    mlir::MemRefDescriptor descriptor(adaptor.getView());
+    mlir::Value ptr = descriptor.alignedPtr(rewriter, loc);
+    if (ptr.getType() != llvmPtrType)
+      ptr = mlir::LLVM::BitcastOp::create(rewriter, loc, llvmPtrType, ptr);
+    rewriter.replaceOp(op, ptr);
+    return mlir::success();
+  }
+};
+
 struct ReussirReferenceProjectConversionPattern
     : public mlir::OpConversionPattern<ReussirRefProjectOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -2674,6 +2716,7 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirHoleLoadOp, ReussirHoleStoreOp, ReussirTokenAllocOp,
         ReussirTokenFreeOp, ReussirTokenReinterpretOp, ReussirTokenReallocOp,
         ReussirRefLoadOp, ReussirRefStoreOp, ReussirRefSpilledOp,
+        ReussirRefToMemrefOp, ReussirRefFromMemrefOp,
         ReussirRefDiffOp, ReussirRefCmpOp, ReussirRefMemcpyOp,
         ReussirNullableCheckOp, ReussirNullableCreateOp,
         ReussirNullableCoerceOp, ReussirRcIncOp, ReussirRcCreateOp,
@@ -2729,6 +2772,8 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirTokenFreeConversionPattern,
       ReussirTokenReinterpretConversionPattern,
       ReussirTokenReallocConversionPattern, ReussirRefLoadConversionPattern,
+      ReussirRefToMemrefConversionPattern,
+      ReussirRefFromMemrefConversionPattern,
       ReussirRefStoreConversionPattern, ReussirRefSpilledConversionPattern,
       ReussirRefDiffConversionPattern, ReussirRefCmpConversionPattern,
       ReussirRefMemcpyConversionPattern, ReussirNullableCheckConversionPattern,
