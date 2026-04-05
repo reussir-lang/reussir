@@ -2150,7 +2150,7 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
   return llvm::TypeSwitch<mlir::Type, mlir::LogicalResult>(type)
       // For Rc types, emit an Inc operation
       .Case<RcType>([&](RcType) {
-        builder.create<ReussirRcIncOp>(loc, value);
+        ReussirRcIncOp::create(builder, loc, value);
         return mlir::success();
       })
       // For Ref types, check what they point to and handle accordingly
@@ -2163,15 +2163,14 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
         // If reference points to an RC pointer, load it and recursively apply
         if (llvm::isa<RcType>(elementType)) {
           auto loadedValue =
-              builder.create<ReussirRefLoadOp>(loc, elementType, value);
+              ReussirRefLoadOp::create(builder, loc, elementType, value);
           return emitOwnershipAcquisition(loadedValue, builder, loc);
         }
 
         if (auto arrayType = llvm::dyn_cast<ArrayType>(elementType)) {
-          auto view =
-              builder.create<ReussirArrayViewOp>(loc, getArrayViewMemRefType(arrayType),
-                                                 value)
-                  .getView();
+          auto view = ReussirArrayViewOp::create(
+                          builder, loc, getArrayViewMemRefType(arrayType), value)
+                          .getView();
           return emitArrayOwnershipAcquisition(view, builder, loc);
         }
 
@@ -2187,7 +2186,8 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
                   actualMemberType, actualMemberCap, refType.getCapability());
               if (isTriviallyCopyable(projectedType))
                 continue;
-              auto fieldRef = builder.create<ReussirRefProjectOp>(
+              auto fieldRef = ReussirRefProjectOp::create(
+                  builder,
                   loc, RefType::get(builder.getContext(), projectedType), value,
                   builder.getIndexAttr(i));
 
@@ -2205,7 +2205,8 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
 
             // Create the dispatch operation with the correct number of
             // regions
-            auto dispatchOp = builder.create<ReussirRecordDispatchOp>(
+            auto dispatchOp = ReussirRecordDispatchOp::create(
+                builder,
                 loc, mlir::Type{}, value, tagSetsAttr,
                 recordType.getMembers().size());
 
@@ -2235,7 +2236,7 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
               }
 
               // Add a terminator
-              builder.create<ReussirScfYieldOp>(loc, nullptr);
+              ReussirScfYieldOp::create(builder, loc, nullptr);
             }
           }
         }
@@ -2258,11 +2259,12 @@ static mlir::LogicalResult emitArrayOwnershipAcquisition(
                      viewType.getElementType());
   auto *context = builder.getContext();
   for (int64_t index : llvm::seq<int64_t>(0, arrayType.getShape().front())) {
-    auto idx = builder.create<mlir::arith::ConstantIndexOp>(loc, index);
+    auto idx = mlir::arith::ConstantIndexOp::create(builder, loc, index);
     if (arrayType.getRank() == 1) {
       RefType projectedType = RefType::get(context, arrayType.getElementType(),
                                            Capability::unspecified);
-      auto elementRef = builder.create<ReussirArrayProjectOp>(
+      auto elementRef = ReussirArrayProjectOp::create(
+          builder,
           loc, projectedType, view, idx.getResult());
       if (emitOwnershipAcquisition(elementRef.getProjected(), builder, loc)
               .failed())
@@ -2271,7 +2273,8 @@ static mlir::LogicalResult emitArrayOwnershipAcquisition(
     }
 
     auto projectedType = getArrayViewMemRefType(arrayType.dropFront());
-    auto nestedView = builder.create<ReussirArrayProjectOp>(
+    auto nestedView = ReussirArrayProjectOp::create(
+        builder,
         loc, projectedType, view, idx.getResult());
     if (emitArrayOwnershipAcquisition(nestedView.getProjected(), builder, loc)
             .failed())
@@ -2296,7 +2299,8 @@ mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
   mlir::OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(moduleOp.getBody());
   RefType refType = builder.getType<RefType>(type);
-  auto dtor = builder.create<mlir::func::FuncOp>(
+  auto dtor = mlir::func::FuncOp::create(
+      builder,
       builder.getUnknownLoc(), funcName,
       builder.getFunctionType({refType}, {}));
   dtor.setPrivate();
@@ -2311,8 +2315,9 @@ mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
   mlir::Block *entryBlock = dtor.addEntryBlock();
   builder.setInsertionPointToStart(entryBlock);
   auto ref = entryBlock->getArgument(0);
-  builder.create<ReussirRefDropOp>(builder.getUnknownLoc(), ref, true, nullptr);
-  builder.create<mlir::func::ReturnOp>(builder.getUnknownLoc());
+  ReussirRefDropOp::create(builder, builder.getUnknownLoc(), ref, true,
+                           nullptr);
+  mlir::func::ReturnOp::create(builder, builder.getUnknownLoc());
   return dtor;
 }
 
@@ -2337,7 +2342,8 @@ mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
   // Construct RefType from RecordType
   RefType refType = builder.getType<RefType>(type);
 
-  auto funcOp = builder.create<mlir::func::FuncOp>(
+  auto funcOp = mlir::func::FuncOp::create(
+      builder,
       builder.getUnknownLoc(), funcName,
       builder.getFunctionType({refType}, {}));
   funcOp.setPrivate();
@@ -2354,7 +2360,7 @@ mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
     llvm::report_fatal_error("failed to emit ownership acquisition");
   }
 
-  builder.create<mlir::func::ReturnOp>(builder.getUnknownLoc());
+  mlir::func::ReturnOp::create(builder, builder.getUnknownLoc());
   return funcOp;
 }
 

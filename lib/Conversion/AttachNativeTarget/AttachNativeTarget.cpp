@@ -47,9 +47,10 @@ struct ReussirAttachNativeTargetPass
       features.AddFeature(str, enable);
     std::string featuresStr = features.getString();
 
+    llvm::Triple targetTriple(triple);
     std::string error;
     const llvm::Target *target =
-        llvm::TargetRegistry::lookupTarget(triple, error);
+        llvm::TargetRegistry::lookupTarget(targetTriple, error);
     if (!target) {
       module.emitError("Failed to lookup native target: " + error);
       return signalPassFailure();
@@ -57,7 +58,7 @@ struct ReussirAttachNativeTargetPass
 
     llvm::TargetOptions targetOptions;
     auto tm = std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
-        llvm::Triple(triple), cpu, featuresStr, targetOptions, std::nullopt));
+        targetTriple, cpu, featuresStr, targetOptions, std::nullopt));
     if (!tm) {
       module.emitError("Failed to create target machine");
       return signalPassFailure();
