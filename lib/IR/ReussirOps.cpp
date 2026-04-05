@@ -58,6 +58,20 @@ static mlir::RankedTensorType getArrayViewTensorType(ArrayType arrayType) {
                                      arrayType.getElementType());
 }
 
+static mlir::LogicalResult verifyZeroRankMemRefType(mlir::Operation *op,
+                                                    mlir::Type type,
+                                                    mlir::Type elementType,
+                                                    llvm::StringRef valueName) {
+  auto memrefType = llvm::dyn_cast<mlir::MemRefType>(type);
+  if (!memrefType || memrefType.getRank() != 0)
+    return op->emitOpError(valueName) << " must be a zero-rank memref";
+  if (memrefType.getElementType() != elementType)
+    return op->emitOpError(valueName) << " element type mismatch: expected "
+                                      << elementType << ", got "
+                                      << memrefType.getElementType();
+  return mlir::success();
+}
+
 static mlir::LogicalResult verifyArrayViewType(mlir::Operation *op,
                                                mlir::Type type,
                                                ArrayType arrayType,
@@ -944,6 +958,24 @@ mlir::LogicalResult ReussirRefSpilledOp::verify() {
            << "spilled type capability: "
            << stringifyCapability(refType.getCapability());
   return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
+// RefToMemrefOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRefToMemrefOp::verify() {
+  RefType refType = getRef().getType();
+  return verifyZeroRankMemRefType(getOperation(), getView().getType(),
+                                  refType.getElementType(), "view result");
+}
+
+//===----------------------------------------------------------------------===//
+// RefFromMemrefOp verification
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirRefFromMemrefOp::verify() {
+  RefType refType = getRef().getType();
+  return verifyZeroRankMemRefType(getOperation(), getView().getType(),
+                                  refType.getElementType(), "view input");
 }
 
 //===----------------------------------------------------------------------===//
