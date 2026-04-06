@@ -3,6 +3,7 @@
 .cargo
 .vscode
 /build
+/build-*
 .cache
 rustc-ice-*
 .envrc

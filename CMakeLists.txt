@@ -4,6 +4,8 @@ project(Reussir LANGUAGES CXX C VERSION 0.1.0)
 # Options
 option(REUSSIR_ENABLE_TESTS "Build tests for Reussir" ON)
 option(REUSSIR_ENABLE_PEDANTIC "Use pedantic compiler flags" OFF)
+set(REUSSIR_RUNTIME_SANITIZERS "" CACHE STRING "Semicolon-separated sanitizer runtimes to build (address, leak, memory, thread)")
+option(REUSSIR_MSAN_TRACK_ORIGINS "Enable origin tracking in the MSan runtime variant" ON)
 
 if (REUSSIR_ENABLE_PEDANTIC)
   message(STATUS "Pedantic mode enabled")
