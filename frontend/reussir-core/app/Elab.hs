@@ -31,7 +31,12 @@ import Reussir.Core.Data.Semi.Context (SemiContext (..))
 import Reussir.Core.Data.Semi.Function (FunctionTable (..))
 import Reussir.Core.Full.Context (reportAllErrors)
 import Reussir.Core.Full.Conversion (convertCtx)
-import Reussir.Core.Module (PackageInfo (..), discoverPackageFiles)
+import Reussir.Core.Module (
+    PackageInfo (..),
+    discoverPackageFiles,
+    renderDiscoveryError,
+    validatePackageInfo,
+ )
 import Reussir.Core.Semi.Context (
     emptySemiContext,
     populateRecordFields,
@@ -130,8 +135,14 @@ elabSingleFile args fp = do
 
 elabPackage :: Args -> FilePath -> String -> IO ()
 elabPackage args root pkgName = do
-    let pkgInfo = PackageInfo root (Identifier (T.pack pkgName))
-    discoveredFiles <- discoverPackageFiles pkgInfo
+    let rawPkgInfo = PackageInfo root (Identifier (T.pack pkgName))
+    pkgInfo <- case validatePackageInfo rawPkgInfo of
+        Left err -> putStrLn err >> exitFailure
+        Right valid -> return valid
+    discoveryResult <- discoverPackageFiles pkgInfo
+    discoveredFiles <- case discoveryResult of
+        Left err -> putStrLn (renderDiscoveryError err) >> exitFailure
+        Right files -> return files
     when (null discoveredFiles) $ do
         putStrLn $ "Error: no .rr files found in " ++ root
         exitFailure

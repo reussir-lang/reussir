@@ -1,0 +1,7 @@
+pub fn double_with_offset(x: u64) -> u64 {
+    x + x + super::offset()
+}
+
+pub fn scaled_offset(x: u64) -> u64 {
+    root::models::scale(double_with_offset(x))
+}

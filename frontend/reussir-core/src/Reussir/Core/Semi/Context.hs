@@ -19,6 +19,7 @@ module Reussir.Core.Semi.Context (
     addErrReportMsgSeq,
     withVariable,
     withModuleFile,
+    resolveSpecialRelativePath,
     resolveFunctionPath,
     resolveRecordPath,
 ) where
@@ -28,6 +29,7 @@ import Data.Function ((&))
 import Data.Int (Int64)
 import Data.Maybe (isJust)
 import Effectful (Eff, IOE, inject, (:>))
+import Effectful.Exception (finally)
 import Effectful.Prim.IORef (Prim)
 import Effectful.Prim.IORef.Strict (newIORef', writeIORef')
 import Effectful.Reader.Static (runReader)
@@ -530,9 +532,22 @@ withModuleFile file modPath action = do
     oldFile <- State.gets currentFile
     oldModPath <- State.gets currentModulePath
     State.modify $ \st -> st{currentFile = file, currentModulePath = modPath}
-    result <- action
-    State.modify $ \st -> st{currentFile = oldFile, currentModulePath = oldModPath}
-    return result
+    action `finally` State.modify (\st -> st{currentFile = oldFile, currentModulePath = oldModPath})
+
+resolveSpecialRelativePath :: [Identifier] -> [Identifier] -> Maybe [Identifier]
+resolveSpecialRelativePath modulePath segments =
+    case segments of
+        ("root" : rest) -> case modulePath of
+            (pkgRoot : _) -> Just (pkgRoot : rest)
+            [] -> Nothing
+        _ ->
+            let (supers, rest) = span (== "super") segments
+             in case length supers of
+                    0 -> Nothing
+                    upCount
+                        | upCount < length modulePath ->
+                            Just (take (length modulePath - upCount) modulePath ++ rest)
+                        | otherwise -> Nothing
 
 {- | Resolve a parsed path to a fully qualified function path.
 
@@ -558,23 +573,29 @@ resolveFunctionPath parsedPath = do
                     rootResult <- getFunctionProto parsedPath functionTable
                     return $ fmap (parsedPath,) rootResult
         segs -> do
-            -- Qualified path: try as-is first (absolute)
-            result <- getFunctionProto parsedPath functionTable
-            case result of
-                Just proto -> return $ Just (parsedPath, proto)
+            case resolveSpecialRelativePath modulePath segs of
+                Just specialSegs -> do
+                    let specialPath = Path (pathBasename parsedPath) specialSegs
+                    specialResult <- getFunctionProto specialPath functionTable
+                    return $ fmap (specialPath,) specialResult
                 Nothing -> do
-                    -- Try relative to current module
-                    let relativePath = Path (pathBasename parsedPath) (modulePath ++ segs)
-                    relResult <- getFunctionProto relativePath functionTable
-                    case relResult of
-                        Just proto -> return $ Just (relativePath, proto)
-                        Nothing -> case modulePath of
-                            (pkgRoot : _) -> do
-                                -- Try relative to package root
-                                let pkgRelPath = Path (pathBasename parsedPath) (pkgRoot : segs)
-                                pkgResult <- getFunctionProto pkgRelPath functionTable
-                                return $ fmap (pkgRelPath,) pkgResult
-                            [] -> return Nothing
+                    -- Qualified path: try as-is first (absolute)
+                    result <- getFunctionProto parsedPath functionTable
+                    case result of
+                        Just proto -> return $ Just (parsedPath, proto)
+                        Nothing -> do
+                            -- Try relative to current module
+                            let relativePath = Path (pathBasename parsedPath) (modulePath ++ segs)
+                            relResult <- getFunctionProto relativePath functionTable
+                            case relResult of
+                                Just proto -> return $ Just (relativePath, proto)
+                                Nothing -> case modulePath of
+                                    (pkgRoot : _) -> do
+                                        -- Try relative to package root
+                                        let pkgRelPath = Path (pathBasename parsedPath) (pkgRoot : segs)
+                                        pkgResult <- getFunctionProto pkgRelPath functionTable
+                                        return $ fmap (pkgRelPath,) pkgResult
+                                    [] -> return Nothing
 
 {- | Resolve a parsed path to a fully qualified record path.
 
@@ -600,20 +621,26 @@ resolveRecordPath parsedPath = do
                     rootResult <- HU.lookup records parsedPath
                     return $ fmap (parsedPath,) rootResult
         segs -> do
-            -- Qualified path: try as-is first (absolute)
-            result <- HU.lookup records parsedPath
-            case result of
-                Just record -> return $ Just (parsedPath, record)
+            case resolveSpecialRelativePath modulePath segs of
+                Just specialSegs -> do
+                    let specialPath = Path (pathBasename parsedPath) specialSegs
+                    specialResult <- HU.lookup records specialPath
+                    return $ fmap (specialPath,) specialResult
                 Nothing -> do
-                    -- Try relative to current module
-                    let relativePath = Path (pathBasename parsedPath) (modulePath ++ segs)
-                    relResult <- HU.lookup records relativePath
-                    case relResult of
-                        Just record -> return $ Just (relativePath, record)
-                        Nothing -> case modulePath of
-                            (pkgRoot : _) -> do
-                                -- Try relative to package root
-                                let pkgRelPath = Path (pathBasename parsedPath) (pkgRoot : segs)
-                                pkgResult <- HU.lookup records pkgRelPath
-                                return $ fmap (pkgRelPath,) pkgResult
-                            [] -> return Nothing
+                    -- Qualified path: try as-is first (absolute)
+                    result <- HU.lookup records parsedPath
+                    case result of
+                        Just record -> return $ Just (parsedPath, record)
+                        Nothing -> do
+                            -- Try relative to current module
+                            let relativePath = Path (pathBasename parsedPath) (modulePath ++ segs)
+                            relResult <- HU.lookup records relativePath
+                            case relResult of
+                                Just record -> return $ Just (relativePath, record)
+                                Nothing -> case modulePath of
+                                    (pkgRoot : _) -> do
+                                        -- Try relative to package root
+                                        let pkgRelPath = Path (pathBasename parsedPath) (pkgRoot : segs)
+                                        pkgResult <- HU.lookup records pkgRelPath
+                                        return $ fmap (pkgRelPath,) pkgResult
+                                    [] -> return Nothing

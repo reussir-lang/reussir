@@ -6,6 +6,8 @@ module Reussir.Core (
 ) where
 
 import Control.Monad (forM, forM_)
+import Data.List (find, minimumBy)
+import Data.Ord (comparing)
 import Effectful (Eff, IOE, inject, (:>))
 import Effectful.Prim (runPrim)
 import Effectful.Prim.IORef.Strict (Prim)
@@ -21,6 +23,7 @@ import Reussir.Codegen qualified as IR
 import Reussir.Codegen.Context qualified as IR
 import Reussir.Parser.Prog qualified as Syn
 import Reussir.Parser.Types.Stmt qualified as Syn
+import System.FilePath (takeFileName)
 
 import Reussir.Core.Data.Full.Context (FullContext (..))
 import Reussir.Core.Data.Semi.Context (SemiContext (translationReports))
@@ -65,12 +68,7 @@ translatePackageToModule ::
     Eff es (Maybe IR.Module)
 translatePackageToModule spec files = do
     let allFilePaths = map (\(fp, _, _) -> fp) files
-    let primaryFilePath = case files of
-            ((fp, _, _) : _) -> fp
-            [] -> IR.moduleFilePath spec
-    let primaryModPath = case files of
-            ((_, mp, _) : _) -> mp
-            [] -> []
+    let (primaryFilePath, primaryModPath) = selectPrimaryModule spec files
 
     L.logTrace_ $
         T.pack ("translatePackageToModule: scanning "
@@ -131,3 +129,21 @@ translatePackageToModule spec files = do
                     ctxTrampolines
                     spec
         runLoweringToModule loweringCtx lowerModule
+
+selectPrimaryModule ::
+    IR.TargetSpec ->
+    [(FilePath, [Identifier], Syn.Prog)] ->
+    (FilePath, [Identifier])
+selectPrimaryModule spec files =
+    case find isCrateRoot files of
+        Just (fp, modPath, _) -> (fp, modPath)
+        Nothing -> case files of
+            [] -> (IR.moduleFilePath spec, [])
+            _ ->
+                let (fp, modPath, _) =
+                        minimumBy
+                            (comparing (\(path, mp, _) -> (length mp, path)))
+                            files
+                 in (fp, modPath)
+  where
+    isCrateRoot (fp, _modPath, _) = takeFileName fp == "lib.rr"

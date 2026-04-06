@@ -1,0 +1,8 @@
+mod a;
+mod a;
+
+pub fn entry(n: u64) -> u64 {
+    a::entry(n)
+}
+
+extern "C" trampoline "entry_ffi" = entry;
