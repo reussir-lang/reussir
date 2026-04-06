@@ -71,6 +71,7 @@ library
         Reussir.Core.Lowering.Type
         Reussir.Core.Lowering.Record
         Reussir.Core.Lowering.Module
+        Reussir.Core.Module
     other-modules:
         Reussir.Core.Uitls.HashTable
     build-depends:    base ^>=4.20.2.0,
@@ -84,6 +85,7 @@ library
                       text,
                       unordered-containers,
                       containers,
+                      transformers,
                       hashable,
                       xxhash-ffi,
                       scientific,
@@ -99,7 +101,8 @@ library
                       idn,
                       vector,
                       sort,
-                      rrb-vector
+                      rrb-vector,
+                      megaparsec
     hs-source-dirs:   src
     default-language: GHC2024
 
@@ -153,6 +156,7 @@ test-suite reussir-core-test
         Test.Reussir.Core.Class
         Test.Reussir.Core.String
         Test.Reussir.Core.Semi.Mangle
+        Test.Reussir.Core.Semi.ModuleResolution
         Test.Reussir.Core.Semi.PatternMatch
         Test.Reussir.Core.Semi.TyckSpec
     build-depends:

@@ -60,6 +60,7 @@ collectStmt content (Syn.FunctionStmt f) = collectFunction content f
 collectStmt content (Syn.RecordStmt r) = collectRecord content r
 collectStmt content (Syn.ExternTrampolineStmt _ _ _ tyArgs) =
     concatMap (collectType content) tyArgs
+collectStmt _ (Syn.ModStmt _ _) = []
 
 -- | Collect tokens from a function definition.
 collectFunction :: T.Text -> Syn.Function -> [SemanticTokenAbsolute]

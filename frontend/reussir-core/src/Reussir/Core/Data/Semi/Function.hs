@@ -18,6 +18,7 @@ import Reussir.Core.Data.Semi.Type qualified as Semi
 data FunctionProto = FunctionProto
     { funcVisibility :: Visibility
     , funcName :: Identifier
+    , funcPath :: Path
     , funcGenerics :: [(Identifier, GenericID)]
     , funcParams :: [(Identifier, Semi.Type)]
     , funcReturnType :: Semi.Type

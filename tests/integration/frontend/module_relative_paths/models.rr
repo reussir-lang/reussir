@@ -1,0 +1,7 @@
+pub fn seed() -> u64 {
+    5
+}
+
+pub fn scale(x: u64) -> u64 {
+    x + seed()
+}

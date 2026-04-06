@@ -1,0 +1,5 @@
+// RUN: %not %reussir-elab --mode semi --package-root %S/module_reserved_package --package-name core 2>&1 | %FileCheck %s --check-prefix=ERR
+// RUN: %not %reussir-elab --mode full --package-root %S/module_reserved_package --package-name core 2>&1 | %FileCheck %s --check-prefix=ERR
+// RUN: %not %reussir-compiler --package-root %S/module_reserved_package --package-name core -o %t.o 2>&1 | %FileCheck %s --check-prefix=ERR
+
+// ERR: Error: package name 'core' is reserved for the built-in core package

@@ -39,6 +39,7 @@ stripStmtSpans (RecordStmt r) = RecordStmt (r{recordFields = stripFields (record
     stripFields (Named fs) = Named (V.map (\(WithSpan (n, t, f) _ _) -> WithSpan (n, t, f) 0 0) fs)
     stripFields (Unnamed fs) = Unnamed (V.map (\(WithSpan (t, f) _ _) -> WithSpan (t, f) 0 0) fs)
     stripFields (Variants vs) = Variants (V.map (\(WithSpan (n, ts) _ _) -> WithSpan (n, ts) 0 0) vs)
+stripStmtSpans (ModStmt vis name) = ModStmt vis name
 stripStmtSpans (ExternTrampolineStmt n a f tys) = ExternTrampolineStmt n a f tys
 
 dummyWithSpan :: a -> WithSpan a
@@ -256,3 +257,12 @@ spec = do
                     "C"
                     (Path (Identifier "foo") [])
                     []
+
+    describe "parseStmt module declarations" $ do
+        it "parses a private module declaration" $
+            (stripStmtSpans <$> parse parseStmt "" "mod math;")
+                `shouldParse` ModStmt Private (Identifier "math")
+
+        it "parses a public module declaration" $
+            (stripStmtSpans <$> parse parseStmt "" "pub mod math;")
+                `shouldParse` ModStmt Public (Identifier "math")

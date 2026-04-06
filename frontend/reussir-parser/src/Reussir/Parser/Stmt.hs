@@ -148,5 +148,12 @@ parseStmtInner = do
         [ parseFuncDefRest vis <?> "function definition"
         , parseStructDecRest vis <?> "struct declaration"
         , parseEnumDecRest vis <?> "enum declaration"
+        , parseModDeclRest vis <?> "module declaration"
         , parseExternTrampoline <?> "extern trampoline"
         ]
+
+parseModDeclRest :: Visibility -> Parser Stmt
+parseModDeclRest vis = do
+    _ <- string "mod" *> space
+    name <- parseIdentifier <* semicolon
+    return $ ModStmt vis name

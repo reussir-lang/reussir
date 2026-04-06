@@ -10,7 +10,6 @@ import Data.Traversable (for)
 import Effectful (inject, liftIO)
 import Effectful.Prim.IORef.Strict (readIORef')
 import Reussir.Codegen.Context.Symbol (verifiedSymbol)
-import Reussir.Parser.Types.Lexer (Path (..))
 import Prelude hiding (span)
 
 import Data.HashTable.IO qualified as H
@@ -42,7 +41,7 @@ convertSemiFunction ::
     GlobalFullEff (Maybe Function)
 convertSemiFunction proto genericMap typeArgs = do
     let span = fromMaybe (0, 0) (Semi.funcSpan proto)
-    let funcPath = Path (Semi.funcName proto) [] -- TODO: Module handling
+    let funcPath = Semi.funcPath proto
     let mangledName = mangleABIName (Semi.TypeRecord funcPath typeArgs Semi.Irrelevant) -- Abuse Record mangle for now as it contains Path and Args
     let symbol = verifiedSymbol mangledName
 

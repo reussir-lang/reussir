@@ -289,6 +289,8 @@ instance PrettyColored Stmt where
         prettyUnnamedField (t, fld) = prettyFieldFlag fld <> prettyColored t
         prettyFieldFlag False = emptyDoc
         prettyFieldFlag True = brackets (keyword "field") <> space
+    prettyColored (ModStmt vis name) =
+        prettyColored vis <> keyword "mod" <+> prettyColored name <> operator ";"
     prettyColored (SpannedStmt w) = prettyColored (spanValue w)
     prettyColored (ExternTrampolineStmt (Identifier sym) abi func tys) =
         keyword "extern"

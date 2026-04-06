@@ -6,6 +6,7 @@ import Test.Tasty.Hspec (testSpec)
 import Test.Reussir.Core.Class qualified as Class
 import Test.Reussir.Core.Generic qualified as Generic
 import Test.Reussir.Core.Semi.Mangle qualified as Mangle
+import Test.Reussir.Core.Semi.ModuleResolution qualified as ModuleResolution
 import Test.Reussir.Core.Semi.PatternMatch qualified as PatternMatch
 import Test.Reussir.Core.Semi.TyckSpec qualified as TyckSpec
 import Test.Reussir.Core.String qualified as String
@@ -23,6 +24,7 @@ tests tyckSpec =
         , Class.tests
         , String.tests
         , Mangle.tests
+        , ModuleResolution.tests
         , PatternMatch.tests
         , tyckSpec
         ]

@@ -6,9 +6,8 @@ import Data.Text qualified as T
 import Effectful.State.Static.Local qualified as State
 
 import Reussir.Core.Data.Semi.Context (SemiContext (..), GlobalSemiEff)
-import Reussir.Core.Data.Semi.Function (FunctionProto (..))
-import Reussir.Core.Semi.Context (addErrReportMsg, evalType, withFreshLocalContext)
-import Reussir.Core.Semi.Function (getFunctionProto)
+import Reussir.Core.Data.Semi.Function (FunctionProto(funcGenerics))
+import Reussir.Core.Semi.Context (addErrReportMsg, evalType, resolveFunctionPath, withFreshLocalContext)
 
 import Reussir.Parser.Types.Lexer (Identifier, Path)
 import Reussir.Parser.Types.Type qualified as Syn
@@ -24,12 +23,11 @@ resolveTrampoline name abi target tyArgs = withFreshLocalContext $ do
 
     tyArgs' <- mapM evalType tyArgs
 
-    -- 2. Lookup target function
-    funcTable <- State.gets functions
-    getFunctionProto target funcTable >>= \case
+    -- 2. Lookup target function via module-aware resolution
+    resolveFunctionPath target >>= \case
         Nothing ->
              addErrReportMsg $ "Trampoline target function not found: " <> T.pack (show target)
-        Just proto -> do
+        Just (resolvedTarget, proto) -> do
             let generics = funcGenerics proto
 
             -- 3. Check type argument count
@@ -41,6 +39,6 @@ resolveTrampoline name abi target tyArgs = withFreshLocalContext $ do
                             <> ", got "
                             <> T.pack (show (length tyArgs'))
                 else do
-                    -- 4. Register trampoline
+                    -- 4. Register trampoline with the resolved target path
                     State.modify $ \ctx ->
-                        ctx { trampolines = HashMap.insert name (target, abi, tyArgs') (trampolines ctx) }
+                        ctx { trampolines = HashMap.insert name (resolvedTarget, abi, tyArgs') (trampolines ctx) }

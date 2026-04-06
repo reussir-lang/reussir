@@ -1,0 +1,5 @@
+mod missing;
+
+pub fn entry(n: u64) -> u64 {
+    n
+}

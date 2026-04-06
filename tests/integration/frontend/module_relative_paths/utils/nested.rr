@@ -1,0 +1,3 @@
+pub fn compute(x: u64) -> u64 {
+    super::math::scaled_offset(x) + super::super::models::seed()
+}

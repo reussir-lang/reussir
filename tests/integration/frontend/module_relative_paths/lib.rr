@@ -1,0 +1,8 @@
+mod models;
+mod utils;
+
+pub fn entry(n: u64) -> u64 {
+    root::utils::nested::compute(n) + root::models::seed()
+}
+
+extern "C" trampoline "entry_ffi" = entry;

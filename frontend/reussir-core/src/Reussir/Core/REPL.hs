@@ -171,7 +171,7 @@ initReplState logLevel filePath = do
     loggerName <- uniqueLoggerName
     B.withReussirLogger logLevel loggerName $ \logger -> do
         runEff $ L.runLog "REPL" logger (toEffLogLevel logLevel) $ runPrim $ do
-            semiCtx <- emptySemiContext logLevel filePath
+            semiCtx <- emptySemiContext logLevel filePath []
             compiledFuncs <- liftIO H.new
             genericSol <- liftIO H.new
             return
