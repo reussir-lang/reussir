@@ -1,4 +1,5 @@
 import lit.formats
+import os
 import sys
 
 config.name = 'Reussir'
@@ -29,6 +30,19 @@ config.substitutions.append((r'%reussir-elab', config.reussir_elab_path))
 config.substitutions.append((r'%reussir-compiler', config.reussir_compiler_path))
 config.substitutions.append((r'%reussir-repl', config.reussir_repl_path))
 config.substitutions.append((r'%reussir-parser', config.reussir_parser_path))
+config.substitutions.append((r'%asan_flags', config.asan_flags))
+config.substitutions.append((r'%lsan_flags', config.lsan_flags))
+config.substitutions.append((r'%msan_flags', config.msan_flags))
+config.substitutions.append((r'%tsan_flags', config.tsan_flags))
+config.substitutions.append((r'%asan_env', config.asan_env))
+config.substitutions.append((r'%lsan_env', config.lsan_env))
+config.substitutions.append((r'%msan_env', config.msan_env))
+config.substitutions.append((r'%tsan_env', config.tsan_env))
+config.substitutions.append((r'%rpath_san_flag', config.rpath_san_flag))
+config.substitutions.append((r'%reussir_rt_asan', config.reussir_rt_asan_path))
+config.substitutions.append((r'%reussir_rt_lsan', config.reussir_rt_lsan_path))
+config.substitutions.append((r'%reussir_rt_msan', config.reussir_rt_msan_path))
+config.substitutions.append((r'%reussir_rt_tsan', config.reussir_rt_tsan_path))
 
 # TODO: should we support macos?
 if sys.platform == 'windows':
@@ -37,3 +51,15 @@ elif sys.platform == 'darwin':
     config.substitutions.append((r'%reussir_rt', 'libreussir_rt.dylib'))
 else:
     config.substitutions.append((r'%reussir_rt', 'libreussir_rt.so'))
+
+if config.reussir_rt_asan_path and os.path.exists(config.reussir_rt_asan_path):
+    config.available_features.add('asan')
+
+if config.reussir_rt_lsan_path and os.path.exists(config.reussir_rt_lsan_path):
+    config.available_features.add('lsan')
+
+if config.reussir_rt_msan_path and os.path.exists(config.reussir_rt_msan_path):
+    config.available_features.add('msan')
+
+if config.reussir_rt_tsan_path and os.path.exists(config.reussir_rt_tsan_path):
+    config.available_features.add('tsan')

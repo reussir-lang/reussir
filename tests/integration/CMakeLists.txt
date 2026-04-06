@@ -15,6 +15,12 @@ find_llvm_tool(opt_path opt)
 find_llvm_tool(llc_path llc)
 find_llvm_tool(lli_path lli)
 
+if(REUSSIR_RUNTIME_SANITIZERS AND NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+  message(FATAL_ERROR
+    "Sanitizer integration tests require Clang as C compiler because they "
+    "compile generated LLVM IR with `%cc -x ir`.")
+endif()
+
 if (WIN32)
   set(extra_sys_libs "-lucrt -lntdll -lws2_32 -ladvapi32 -lbcrypt -luserenv")
   set(REUSSIR_LIBRARY_PATH ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
@@ -36,6 +42,26 @@ set(reussir_elab_path ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/reussir-elab${CMAKE_EXEC
 set(reussir_compiler_path ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/reussir-compiler${CMAKE_EXECUTABLE_SUFFIX})
 set(reussir_repl_path ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/reussir-repl${CMAKE_EXECUTABLE_SUFFIX})
 set(reussir_parser_path ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/reussir-parser${CMAKE_EXECUTABLE_SUFFIX})
+set(reussir_rt_asan_path ${REUSSIR_RT_ASAN_LIBRARY})
+set(reussir_rt_lsan_path ${REUSSIR_RT_LSAN_LIBRARY})
+set(reussir_rt_msan_path ${REUSSIR_RT_MSAN_LIBRARY})
+set(reussir_rt_tsan_path ${REUSSIR_RT_TSAN_LIBRARY})
+
+set(rpath_san_flag "-Wl,-rpath,${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/sanitizers")
+
+set(asan_flags "-fsanitize=address -fno-omit-frame-pointer -g")
+set(lsan_flags "-fsanitize=leak -fno-omit-frame-pointer -g")
+set(msan_flags "-fsanitize=memory -fno-omit-frame-pointer -g -fno-optimize-sibling-calls")
+set(tsan_flags "-fsanitize=thread -fno-omit-frame-pointer -g")
+if(REUSSIR_MSAN_TRACK_ORIGINS)
+  string(APPEND msan_flags " -fsanitize-memory-track-origins=2")
+endif()
+
+set(asan_env "ASAN_OPTIONS=detect_leaks=1:abort_on_error=1:halt_on_error=1")
+set(lsan_env "LSAN_OPTIONS=abort_on_error=1:report_objects=1")
+set(msan_env "MSAN_OPTIONS=abort_on_error=1:halt_on_error=1:poison_in_dtor=1")
+set(tsan_env "TSAN_OPTIONS=abort_on_error=1:halt_on_error=1")
+
 configure_file(lit.site.cfg.py.in lit.site.cfg.py @ONLY)
 
 if(DEFINED ENV{MSYSTEM_PREFIX})
@@ -62,3 +88,8 @@ add_custom_target(check
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/lit "${CMAKE_CURRENT_BINARY_DIR}" -v
   DEPENDS reussir-opt reussir-rt reussir-translate reussir-elab reussir-repl reussir-compiler reussir-parser)
 
+if(REUSSIR_SANITIZED_RUNTIME_TARGETS)
+  add_custom_target(check-sanitizer
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/lit "${CMAKE_CURRENT_BINARY_DIR}" -v --filter "sanitizer/"
+    DEPENDS reussir-opt reussir-rt reussir-rt-sanitizers reussir-translate reussir-elab reussir-repl reussir-compiler reussir-parser)
+endif()
