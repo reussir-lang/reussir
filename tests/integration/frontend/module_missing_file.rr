@@ -5,4 +5,4 @@
 // ERR: Error: module 'missing'
 // ERR: has no source file
 // ERR: missing.rr
-// ERR: missing/mod.rr
+// ERR: missing{{[/\\]}}mod.rr
