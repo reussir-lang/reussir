@@ -71,6 +71,7 @@ library
         Reussir.Core.Lowering.Type
         Reussir.Core.Lowering.Record
         Reussir.Core.Lowering.Module
+        Reussir.Core.Module
     other-modules:
         Reussir.Core.Uitls.HashTable
     build-depends:    base ^>=4.20.2.0,
@@ -99,7 +100,8 @@ library
                       idn,
                       vector,
                       sort,
-                      rrb-vector
+                      rrb-vector,
+                      megaparsec
     hs-source-dirs:   src
     default-language: GHC2024
 

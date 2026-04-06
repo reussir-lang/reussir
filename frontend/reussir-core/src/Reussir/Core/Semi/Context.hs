@@ -18,6 +18,9 @@ module Reussir.Core.Semi.Context (
     withGenericContext,
     addErrReportMsgSeq,
     withVariable,
+    withModuleFile,
+    resolveFunctionPath,
+    resolveRecordPath,
 ) where
 
 import Control.Monad (forM_, unless)
@@ -70,7 +73,7 @@ import Reussir.Core.Data.Semi.Unification (UnificationEff)
 import Reussir.Core.Data.String (StringUniqifier (StringUniqifier))
 import Reussir.Core.Data.UniqueID (ExprID (..), GenericID (..), VarID)
 import Reussir.Core.Generic (emptyGenericState, newGenericVar)
-import Reussir.Core.Semi.Function (newFunctionTable)
+import Reussir.Core.Semi.Function (getFunctionProto, newFunctionTable)
 import Reussir.Core.Semi.Type (addClassToType, emptyTypeClassTable)
 import Reussir.Core.Semi.Unification (newHoleTable)
 import Reussir.Core.Semi.Variable (newVariable, newVariableTable, rollbackVar)
@@ -172,10 +175,10 @@ populatePrimitives typeClassTable typeClassDAG = do
     forM_ intTypes $ \it ->
         addClassToType typeClassTable (TypeIntegral it) intClass
 
--- | Initialize the semi context with the given log level and file path
+-- | Initialize the semi context with the given log level, file path, and module path
 emptySemiContext ::
-    (IOE :> es, Prim :> es) => B.LogLevel -> FilePath -> Eff es SemiContext
-emptySemiContext translationLogLevel currentFile = do
+    (IOE :> es, Prim :> es) => B.LogLevel -> FilePath -> [Identifier] -> Eff es SemiContext
+emptySemiContext translationLogLevel currentFile currentModulePath = do
     table <- HU.new
     let stringUniqifier = StringUniqifier table
     typeClassDAG <- newDAG
@@ -187,6 +190,7 @@ emptySemiContext translationLogLevel currentFile = do
     return $
         SemiContext
             { currentFile
+            , currentModulePath
             , translationLogLevel
             , stringUniqifier
             , translationReports = []
@@ -264,18 +268,17 @@ evalType (Syn.TypeExpr path args) = do
                         <> " cannot have type arguments"
             return $ TypeGeneric gid
         Nothing -> do
-            knownRecords <- State.gets knownRecords
-            HU.lookup knownRecords path >>= \case
-                Just record -> case recordDefaultCap record of
-                    Syn.Value -> return $ TypeRecord path args' Irrelevant
-                    Syn.Shared -> return $ TypeRecord path args' Irrelevant
-                    Syn.Regional -> return $ TypeRecord path args' Regional
+            resolveRecordPath path >>= \case
+                Just (resolvedPath, record) -> case recordDefaultCap record of
+                    Syn.Value -> return $ TypeRecord resolvedPath args' Irrelevant
+                    Syn.Shared -> return $ TypeRecord resolvedPath args' Irrelevant
+                    Syn.Regional -> return $ TypeRecord resolvedPath args' Regional
                     cap -> do
                         addErrReportMsg $
                             "Unsupported capability "
                                 <> T.pack (show cap)
                                 <> " for record "
-                                <> T.pack (show path)
+                                <> T.pack (show resolvedPath)
                         return TypeBottom
                 Nothing -> do
                     addErrReportMsg $ "Unknown type: " <> T.pack (show path)
@@ -326,9 +329,11 @@ scanStmtImpl (Syn.SpannedStmt s) = do
     scanStmtImpl (spanValue s)
     State.modify $ \st -> st{currentSpan = backup}
 scanStmtImpl (Syn.ExternTrampolineStmt {}) = pure ()
+scanStmtImpl (Syn.ModStmt _ _) = pure ()
 scanStmtImpl (Syn.RecordStmt record) = do
     let name = Syn.recordName record
     let tyParams = Syn.recordTyParams record
+    moduleSegs <- State.gets currentModulePath
     -- Translate generics
     genericsList <- mapM translateGeneric tyParams
 
@@ -341,9 +346,10 @@ scanStmtImpl (Syn.RecordStmt record) = do
             Syn.StructKind -> StructKind
             Syn.EnumKind -> EnumKind
 
+    let recordPath = Path name moduleSegs
     let semRecord =
             Record
-                { recordName = Path name [] -- TODO: handle module path
+                { recordName = recordPath
                 , recordTyParams = genericsList
                 , recordFields = fieldsRef
                 , recordKind = kind
@@ -356,14 +362,14 @@ scanStmtImpl (Syn.RecordStmt record) = do
     case Syn.recordFields record of
         Syn.Variants vs -> do
             V.iforM_ vs $ \variantIdx (WithSpan (variantName, _) s e) -> do
-                let variantPath = Path variantName [name] -- TODO: handle module path
+                let variantPath = Path variantName (moduleSegs ++ [name])
                 variantFieldsRef <- newIORef' Nothing
                 let variantRecord =
                         Record
                             { recordName = variantPath
                             , recordTyParams = genericsList -- share same generics as parent
                             , recordFields = variantFieldsRef
-                            , recordKind = EnumVariant{variantParent = Path name [], variantIdx}
+                            , recordKind = EnumVariant{variantParent = recordPath, variantIdx}
                             , recordVisibility = Syn.recordVisibility record
                             , recordDefaultCap = Syn.Value
                             , recordSpan = Just (s, e)
@@ -371,8 +377,7 @@ scanStmtImpl (Syn.RecordStmt record) = do
                 addRecordDefinition variantPath variantRecord
         _ -> return ()
 
-    let path = Path name [] -- TODO: handle module path
-    addRecordDefinition path semRecord
+    addRecordDefinition recordPath semRecord
 scanStmtImpl
     ( Syn.FunctionStmt
             Syn.Function
@@ -384,6 +389,7 @@ scanStmtImpl
                 , Syn.funcIsRegional = funcIsRegional
                 }
         ) = do
+        moduleSegs <- State.gets currentModulePath
         genericsList <- mapM translateGeneric funcGenerics
         withGenericContext genericsList $ do
             paramsList <- mapM translateParam funcParams
@@ -396,10 +402,12 @@ scanStmtImpl
                     Nothing -> TypeUnit
             pendingFuncBody <- newIORef' Nothing
             funcSpan <- State.gets currentSpan
+            let qualifiedPath = Path funcName moduleSegs
             let proto =
                     FunctionProto
                         { funcVisibility = funcVisibility
                         , funcName = funcName
+                        , funcPath = qualifiedPath
                         , funcGenerics = genericsList
                         , funcParams = paramsList
                         , funcReturnType = returnTy
@@ -407,16 +415,14 @@ scanStmtImpl
                         , funcBody = pendingFuncBody
                         , funcSpan = funcSpan
                         }
-            -- TODO: handle module path
-            let funcPath = Path funcName []
             functionTable <- State.gets functions
             existed <-
-                isJust <$> HU.lookup (functionProtos functionTable) funcPath
+                isJust <$> HU.lookup (functionProtos functionTable) qualifiedPath
             if existed
                 then
                     addErrReportMsg $
                         "Function already defined: " <> unIdentifier funcName
-                else HU.insert (functionProtos functionTable) funcPath proto
+                else HU.insert (functionProtos functionTable) qualifiedPath proto
       where
         translateParam ::
             (Identifier, Syn.Type, Syn.FlexFlag) -> SemiEff (Identifier, Type)
@@ -436,7 +442,8 @@ populateRecordFieldsImpl (Syn.SpannedStmt s) = do
         populateRecordFieldsImpl (spanValue s)
 populateRecordFieldsImpl (Syn.RecordStmt record) = do
     let name = Syn.recordName record
-    let path = Path name [] -- TODO: handle module path
+    moduleSegs <- State.gets currentModulePath
+    let path = Path name moduleSegs
     knownRecords <- State.gets knownRecords
     mRecord <- HU.lookup knownRecords path
 
@@ -478,7 +485,7 @@ populateRecordFieldsImpl (Syn.RecordStmt record) = do
                 case variants of
                     Just vs -> do
                         V.forM_ vs $ \(WithSpan (variantName, variantFields) s e) -> do
-                            let variantPath = Path variantName [name]
+                            let variantPath = Path variantName (moduleSegs ++ [name])
                             mVariantRecord <- HU.lookup knownRecords variantPath
                             case mVariantRecord of
                                 Nothing ->
@@ -515,3 +522,98 @@ withVariable varName varSpan varType cont = do
     result <- cont varID
     rollbackVar changeLog vt
     pure result
+
+-- | Temporarily set the current file and module path for multi-file processing.
+-- Restores the previous values after the computation completes.
+withModuleFile :: FilePath -> [Identifier] -> GlobalSemiEff a -> GlobalSemiEff a
+withModuleFile file modPath action = do
+    oldFile <- State.gets currentFile
+    oldModPath <- State.gets currentModulePath
+    State.modify $ \st -> st{currentFile = file, currentModulePath = modPath}
+    result <- action
+    State.modify $ \st -> st{currentFile = oldFile, currentModulePath = oldModPath}
+    return result
+
+{- | Resolve a parsed path to a fully qualified function path.
+
+For bare names (no segments), tries the current module first, then root.
+For qualified names, tries:
+  1. As-is (absolute)
+  2. Relative to the current module (prepend currentModulePath)
+  3. Relative to the package root (prepend just the package name)
+-}
+resolveFunctionPath :: Path -> SemiEff (Maybe (Path, FunctionProto))
+resolveFunctionPath parsedPath = do
+    functionTable <- State.gets functions
+    modulePath <- State.gets currentModulePath
+    case pathSegments parsedPath of
+        [] -> do
+            -- Bare name: try current module first
+            let localPath = Path (pathBasename parsedPath) modulePath
+            localResult <- getFunctionProto localPath functionTable
+            case localResult of
+                Just proto -> return $ Just (localPath, proto)
+                Nothing -> do
+                    -- Fall back to root (empty segments)
+                    rootResult <- getFunctionProto parsedPath functionTable
+                    return $ fmap (parsedPath,) rootResult
+        segs -> do
+            -- Qualified path: try as-is first (absolute)
+            result <- getFunctionProto parsedPath functionTable
+            case result of
+                Just proto -> return $ Just (parsedPath, proto)
+                Nothing -> do
+                    -- Try relative to current module
+                    let relativePath = Path (pathBasename parsedPath) (modulePath ++ segs)
+                    relResult <- getFunctionProto relativePath functionTable
+                    case relResult of
+                        Just proto -> return $ Just (relativePath, proto)
+                        Nothing -> case modulePath of
+                            (pkgRoot : _) -> do
+                                -- Try relative to package root
+                                let pkgRelPath = Path (pathBasename parsedPath) (pkgRoot : segs)
+                                pkgResult <- getFunctionProto pkgRelPath functionTable
+                                return $ fmap (pkgRelPath,) pkgResult
+                            [] -> return Nothing
+
+{- | Resolve a parsed path to a fully qualified record path.
+
+For bare names (no segments), tries the current module first, then root.
+For qualified names, tries:
+  1. As-is (absolute)
+  2. Relative to the current module (prepend currentModulePath)
+  3. Relative to the package root (prepend just the package name)
+-}
+resolveRecordPath :: Path -> SemiEff (Maybe (Path, Record))
+resolveRecordPath parsedPath = do
+    records <- State.gets knownRecords
+    modulePath <- State.gets currentModulePath
+    case pathSegments parsedPath of
+        [] -> do
+            -- Bare name: try current module first
+            let localPath = Path (pathBasename parsedPath) modulePath
+            localResult <- HU.lookup records localPath
+            case localResult of
+                Just record -> return $ Just (localPath, record)
+                Nothing -> do
+                    -- Fall back to root (empty segments)
+                    rootResult <- HU.lookup records parsedPath
+                    return $ fmap (parsedPath,) rootResult
+        segs -> do
+            -- Qualified path: try as-is first (absolute)
+            result <- HU.lookup records parsedPath
+            case result of
+                Just record -> return $ Just (parsedPath, record)
+                Nothing -> do
+                    -- Try relative to current module
+                    let relativePath = Path (pathBasename parsedPath) (modulePath ++ segs)
+                    relResult <- HU.lookup records relativePath
+                    case relResult of
+                        Just record -> return $ Just (relativePath, record)
+                        Nothing -> case modulePath of
+                            (pkgRoot : _) -> do
+                                -- Try relative to package root
+                                let pkgRelPath = Path (pathBasename parsedPath) (pkgRoot : segs)
+                                pkgResult <- HU.lookup records pkgRelPath
+                                return $ fmap (pkgRelPath,) pkgResult
+                            [] -> return Nothing

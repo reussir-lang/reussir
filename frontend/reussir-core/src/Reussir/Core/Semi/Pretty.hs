@@ -461,7 +461,7 @@ instance PrettyColored Record where
         prettyFieldFlag True = pure $ brackets (keyword "field") <> space
 
 instance PrettyColored FunctionProto where
-    prettyColored (FunctionProto vis name generics params retType isRegional bodyRef _span) = do
+    prettyColored (FunctionProto vis name _path generics params retType isRegional bodyRef _span) = do
         visDoc <- prettyColored vis
         nameDoc <- prettyColored name
         genericsDoc <- prettyGenerics generics

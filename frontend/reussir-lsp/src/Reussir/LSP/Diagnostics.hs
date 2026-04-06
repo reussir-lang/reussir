@@ -54,7 +54,7 @@ elaborateFile filePath content =
         Left err -> return $ Left (T.pack $ errorBundlePretty err)
         Right prog -> do
             (_, finalState) <- do
-                initState <- emptySemiContext B.LogWarning filePath
+                initState <- emptySemiContext B.LogWarning filePath []
                 runState initState $ do
                     forM_ prog $ \stmt -> inject $ scanStmt stmt
                     forM_ prog $ \stmt -> inject $ populateRecordFields stmt

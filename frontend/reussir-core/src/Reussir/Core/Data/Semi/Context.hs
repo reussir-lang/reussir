@@ -45,6 +45,7 @@ data LocalSemiContext = LocalSemiContext
 -}
 data SemiContext = SemiContext
     { currentFile :: FilePath
+    , currentModulePath :: [Identifier]
     , translationLogLevel :: B.LogLevel
     , stringUniqifier :: StringUniqifier
     , translationReports :: [Report]

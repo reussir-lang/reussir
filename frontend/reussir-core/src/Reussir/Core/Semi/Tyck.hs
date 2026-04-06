@@ -90,6 +90,8 @@ import Reussir.Core.Semi.Context (
     evalType,
     evalTypeWithFlexivity,
     exprWithSpan,
+    resolveFunctionPath,
+    resolveRecordPath,
     runUnification,
     withFreshLocalContext,
     withGenericContext,
@@ -97,7 +99,6 @@ import Reussir.Core.Semi.Context (
     withSpan,
     withVariable,
  )
-import Reussir.Core.Semi.Function (getFunctionProto)
 import Reussir.Core.Semi.PatternMatch (
     TyckCPS (TyckCPS),
     initializePMMatrix,
@@ -408,7 +409,8 @@ checkFuncType :: Syn.Function -> GlobalSemiEff Expr
 checkFuncType func = withFreshLocalContext $ do
     L.logTrace_ $ "Tyck: checking function " <> unIdentifier (Syn.funcName func)
     let name = Syn.funcName func
-    let path = Path name [] -- TODO: handle module prefix later on
+    moduleSegs <- State.gets currentModulePath
+    let path = Path name moduleSegs
     funcTable <- State.gets functions
     varTable <- State.gets varTable
     liftIO (H.lookup (functionProtos funcTable) path) >>= \case
@@ -599,11 +601,10 @@ inferType (Syn.Var varName) = do
                 Just (varId, varType) -> exprWithSpan varType $ Var varId
                 Nothing -> do
                     -- Try lifting a named function to a closure
-                    functionTable <- State.gets functions
-                    getFunctionProto varName functionTable >>= \case
-                        Just proto
+                    resolveFunctionPath varName >>= \case
+                        Just (resolvedPath, proto)
                             | not (funcIsRegional proto) ->
-                                liftFunctionToClosure proto varName
+                                liftFunctionToClosure proto resolvedPath
                             | otherwise -> do
                                 addErrReportMsg "Cannot lift regional function to closure"
                                 exprWithSpan TypeBottom Poison
@@ -611,16 +612,15 @@ inferType (Syn.Var varName) = do
                             addErrReportMsg "Variable not found"
                             exprWithSpan TypeBottom Poison
         _ -> do
-            records <- State.gets knownRecords
-            liftIO (H.lookup records varName) >>= \case
-                Just record -> do
+            resolveRecordPath varName >>= \case
+                Just (resolvedPath, record) -> do
                     fieldsMaybe <- readIORef' (recordFields record)
                     case (recordKind record, fieldsMaybe) of
                         (EnumVariant _ _, Just (Unnamed fs))
                             | V.null fs ->
                                 inferTypeForNormalCtorCall
                                     Syn.CtorCall
-                                        { Syn.ctorName = varName
+                                        { Syn.ctorName = resolvedPath
                                         , Syn.ctorTyArgs = []
                                         , Syn.ctorArgs = []
                                         }
@@ -629,8 +629,17 @@ inferType (Syn.Var varName) = do
                                 "Qualified path is not a nullary variant: " <> T.pack (show varName)
                             exprWithSpan TypeBottom Poison
                 Nothing -> do
-                    addErrReportMsg $ "Qualified variable not found: " <> T.pack (show varName)
-                    exprWithSpan TypeBottom Poison
+                    -- Also try as a function reference with qualified path
+                    resolveFunctionPath varName >>= \case
+                        Just (resolvedPath, proto)
+                            | not (funcIsRegional proto) ->
+                                liftFunctionToClosure proto resolvedPath
+                            | otherwise -> do
+                                addErrReportMsg "Cannot lift regional function to closure"
+                                exprWithSpan TypeBottom Poison
+                        Nothing -> do
+                            addErrReportMsg $ "Qualified variable not found: " <> T.pack (show varName)
+                            exprWithSpan TypeBottom Poison
 
 -- Project:
 --     C, record R, I : T, I in R |- R <- e
@@ -1054,10 +1063,9 @@ inferTypeForNormalCall
         , Syn.funcCallArgs = argExprs
         } = do
         L.logTrace_ $ "Tyck: infer func call " <> T.pack (show path)
-        -- Lookup function
-        functionTable <- State.gets functions
-        getFunctionProto path functionTable >>= \case
-            Just proto -> do
+        -- Lookup function via module-aware resolution
+        resolveFunctionPath path >>= \case
+            Just (resolvedPath, proto) -> do
                 let numGenerics = length (funcGenerics proto)
                 -- Allow empty type argument list as syntax sugar for all holes
                 let paddedTyArgs =
@@ -1073,7 +1081,7 @@ inferTypeForNormalCall
                     tyArgs' <- zipWithM tyArgOrMetaHole paddedTyArgs bounds
                     L.logTrace_ $
                         "Tyck: instantiated call generics for "
-                            <> T.pack (show path)
+                            <> T.pack (show resolvedPath)
                             <> ": "
                             <> T.pack (show tyArgs')
                     let genericMap = functionGenericMap proto tyArgs'
@@ -1084,7 +1092,7 @@ inferTypeForNormalCall
                         then do
                             addErrReportMsg $
                                 "Function "
-                                    <> T.pack (show path)
+                                    <> T.pack (show resolvedPath)
                                     <> " expects "
                                     <> T.pack (show expectedNumParams)
                                     <> " arguments, but got "
@@ -1096,7 +1104,7 @@ inferTypeForNormalCall
                                 let instantiatedRetType = substituteGenericMap (funcReturnType proto) genericMap
                                 exprWithSpan instantiatedRetType $
                                     FuncCall
-                                        { funcCallTarget = path
+                                        { funcCallTarget = resolvedPath
                                         , funcCallArgs = argExprs'
                                         , funcCallTyArgs = tyArgs'
                                         , funcCallRegional = funcIsRegional proto
@@ -1118,7 +1126,7 @@ inferTypeForNormalCall
                                             Nothing -> error "unreachable: partial application arg"
                                     let allArgExprs = checkedArgs ++ remainingArgExprs
                                     exprWithSpan instantiatedRetType $ FuncCall
-                                        { funcCallTarget = path
+                                        { funcCallTarget = resolvedPath
                                         , funcCallArgs = allArgExprs
                                         , funcCallTyArgs = tyArgs'
                                         , funcCallRegional = funcIsRegional proto
@@ -1291,12 +1299,11 @@ inferTypeForNormalCtorCall
         , Syn.ctorTyArgs = ctorTyArgs
         } = do
         L.logTrace_ $ "Tyck: infer ctor call " <> T.pack (show ctorCallTarget)
-        records <- State.gets knownRecords
-        liftIO (H.lookup records ctorCallTarget) >>= \case
+        resolveRecordPath ctorCallTarget >>= \case
             Nothing -> do
                 addErrReportMsg $ "Record not found: " <> T.pack (show ctorCallTarget)
                 exprWithSpan TypeBottom Poison
-            Just record -> do
+            Just (resolvedCtorTarget, record) -> do
                 let numGenerics = length (recordTyParams record)
                 -- Allow empty type argument list as syntax sugar for all holes
                 let paddedTyArgs =
@@ -1400,14 +1407,14 @@ inferTypeForNormalCtorCall
                                 else return Irrelevant
                         let recordTy = case variantInfo of
                                 Just (parent, _) -> TypeRecord parent tyArgs' flexivity
-                                Nothing -> TypeRecord ctorCallTarget tyArgs' flexivity
+                                Nothing -> TypeRecord resolvedCtorTarget tyArgs' flexivity
                         case variantInfo of
                             Just (parentPath, idx) -> do
-                                let innerTy = TypeRecord ctorCallTarget tyArgs' Irrelevant
+                                let innerTy = TypeRecord resolvedCtorTarget tyArgs' Irrelevant
                                 innerExpr <-
                                     exprWithSpan innerTy $
                                         CompoundCall
-                                            { compoundCallTarget = ctorCallTarget
+                                            { compoundCallTarget = resolvedCtorTarget
                                             , compoundCallTyArgs = tyArgs'
                                             , compoundCallArgs = argExprs'
                                             }
@@ -1421,7 +1428,7 @@ inferTypeForNormalCtorCall
                             Nothing ->
                                 exprWithSpan recordTy $
                                     CompoundCall
-                                        { compoundCallTarget = ctorCallTarget
+                                        { compoundCallTarget = resolvedCtorTarget
                                         , compoundCallTyArgs = tyArgs'
                                         , compoundCallArgs = argExprs'
                                         }

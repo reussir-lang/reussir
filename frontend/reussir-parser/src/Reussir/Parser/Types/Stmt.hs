@@ -51,5 +51,6 @@ data Stmt
         etsFunc :: Path,
         etsFuncTyArgs :: [Type]
     }
+    | ModStmt Visibility Identifier
     | SpannedStmt (WithSpan Stmt)
     deriving (Show, Eq)

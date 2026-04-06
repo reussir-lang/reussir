@@ -84,7 +84,7 @@ runSemi :: String -> SemiEff a -> IO a
 runSemi name action = do
     B.withReussirLogger B.LogError name $ \logger -> do
         runEff $ runPrim $ runLog (Data.Text.pack name) logger LogAttention $ do
-            semiCtx <- emptySemiContext B.LogError "test.reussir"
+            semiCtx <- emptySemiContext B.LogError "test.reussir" []
             locCtx <- emptyLocalSemiContext
             State.evalState semiCtx $ State.evalState locCtx $ inject action
 
