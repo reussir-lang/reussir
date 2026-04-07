@@ -1,0 +1,64 @@
+// RUN: %reussir-compiler %s -t mlir -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+
+// Test polymorphic FFI with List<T> involving non-trivial clone/cleanup
+// and nested type parameters (List<List<i32>>).
+
+enum List<T> {
+    Nil,
+    Cons(T, List<T>)
+}
+
+// Helper: build a single-element list
+fn singleton<T>(x: T) -> List<T> {
+    List::Cons{x, List::Nil{}}
+}
+
+// Helper: append two lists (exercises clone on shared references)
+fn append<T>(a: List<T>, b: List<T>) -> List<T> {
+    match a {
+        List::Nil => b,
+        List::Cons(x, xs) => List::Cons{x, append<T>(xs, b)}
+    }
+}
+
+// FFI with template: polymorphic over T, receiving and returning List<T>
+extern "C" import fn ffi_transform<T>(xs: List<T>) -> List<T> {
+    ```
+    // FFI stub for transforming List<[:T:]>
+    ```
+}
+
+// Instantiate with a simple type
+fn transform_int_list(xs: List<i32>) -> List<i32> {
+    ffi_transform<i32>(xs)
+}
+
+// Instantiate with a nested type: List<List<i32>>
+// This exercises the type system with nested generic parameters.
+fn transform_nested(xs: List<List<i32>>) -> List<List<i32>> {
+    ffi_transform<List<i32>>(xs)
+}
+
+// Build and transform: exercises clone/cleanup with FFI
+fn build_and_transform(x: i32, y: i32) -> List<i32> {
+    let a = singleton<i32>(x);
+    let b = singleton<i32>(y);
+    let combined = append<i32>(a, b);
+    ffi_transform<i32>(combined)
+}
+
+// CHECK-DAG: reussir.polyffi texture({{.*}}) substitutions({T = !reussir.rc<!_RIC4ListlE shared normal>})
+// CHECK-DAG: reussir.polyffi texture({{.*}}) substitutions({T = i32})
+
+// The nested instantiation should use rc type for List<i32> as T
+// CHECK-DAG: func.func private @"_RIC13ffi_transformIC4ListlEE"
+//                             (taking !reussir.rc of List<List<i32>>)
+
+// The simple instantiation
+// CHECK-DAG: func.func private @"_RIC13ffi_transformlE"
+
+// append and singleton should have proper rc ops for cleanup
+// CHECK-DAG: reussir.rc.dec
+// CHECK-DAG: reussir.rc.inc
+// CHECK-DAG: reussir.rc.create

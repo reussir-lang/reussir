@@ -2,9 +2,12 @@
 
 module Reussir.Parser.Stmt where
 
+import Control.Monad (join)
 import Data.Maybe
 
 import Data.Vector.Strict qualified as V
+
+import Data.Text qualified as T
 
 import Reussir.Parser.Expr
 import Reussir.Parser.Lexer
@@ -127,6 +130,8 @@ parseEnumDecRest vis = do
     let fields = Variants $ V.fromList body
     return $ RecordStmt $ Record name (fromMaybe [] tyvars) fields EnumKind vis cap
 
+-- | Parse the legacy trampoline syntax, desugaring to ExternFFIStmt.
+-- @extern \"C\" trampoline \"bar\" = foo\<i32\>;@  →  @extern \"C\" export fn bar = foo\<i32\>;@
 parseExternTrampoline :: Parser Stmt
 parseExternTrampoline = do
     _ <- string "extern" *> space
@@ -136,10 +141,111 @@ parseExternTrampoline = do
     _ <- char '=' *> space
     func <- parsePath <* space
     funcTyArgs <- optional (openAngle *> parseType `sepBy` comma <* closeAngle) <* semicolon
-    return $ ExternTrampolineStmt (Identifier sym) abi func $ fromMaybe [] funcTyArgs
+    return $ ExternFFIStmt
+        { efsABI = abi
+        , efsDirection = FFIExport
+        , efsName = Identifier sym
+        , efsGenerics = []
+        , efsParams = []
+        , efsReturnType = Nothing
+        , efsBody = FFIAlias func (fromMaybe [] funcTyArgs)
+        }
+
+-- | Parse a triple-backtick quoted region.
+-- Consumes everything between @\`\`\`@ delimiters as raw text.
+parseQuotedTemplate :: Parser T.Text
+parseQuotedTemplate = do
+    _ <- string "```"
+    -- Only skip the rest of the opening line (not comments inside the template)
+    _ <- takeWhileP Nothing (\c -> c == ' ' || c == '\t')
+    _ <- optional (char '\n')
+    content <- manyTill anySingle (string "```")
+    space
+    return $ T.strip $ T.pack content
+
+-- | Parse a typed parameter for FFI declarations (no flex flag).
+parseFFIParam :: Parser (Identifier, Type)
+parseFFIParam = do
+    name <- parseIdentifier <* char ':' <* space
+    ty <- parseType
+    return (name, ty)
+
+-- | Parse the body of an FFI declaration.
+-- Either an alias (@= path\<args\>@), a quoted template, or just a semicolon.
+parseFFIBody :: FFIDirection -> Parser FFIBody
+parseFFIBody FFIExport = do
+    -- Export must have alias: = path<args>;
+    _ <- char '=' *> space
+    func <- parsePath <* space
+    funcTyArgs <- optional (openAngle *> parseType `sepBy` comma <* closeAngle)
+    semicolon
+    return $ FFIAlias func (fromMaybe [] funcTyArgs)
+parseFFIBody FFIImport = do
+    -- Import: either semicolon (simple extern) or { ```...``` } (template)
+    choice
+        [ FFIExtern <$ semicolon
+        , do
+            openBody
+            template <- parseQuotedTemplate
+            closeBody
+            return $ FFITemplate template
+        ]
+
+-- | Parse a new-style FFI declaration.
+--
+-- @extern \"C\" import fn name\<T\>(params) -> rettype { \`\`\`template\`\`\` }@
+-- @extern \"C\" export fn name = target\<args\>;@
+parseExternFFI :: Parser Stmt
+parseExternFFI = do
+    _ <- string "extern" *> space
+    abi <- parseString <* space
+    direction <- parseDirection <* space
+    _ <- string "fn" *> space
+    name <- parseIdentifier
+    tyargs <- optional $ openAngle *> parseGenericParam `sepBy` comma <* closeAngle
+    params <- case direction of
+        FFIImport -> do
+            ps <- openParen *> optional (parseFFIParam `sepBy` comma)
+            closeParen
+            return $ fromMaybe [] ps
+        FFIExport -> do
+            -- Export may optionally have params for documentation, or omit them
+            ps <- optional (openParen *> optional (parseFFIParam `sepBy` comma) <* closeParen)
+            return $ fromMaybe [] (join ps)
+    ret <- optional (string "->" *> space *> parseType)
+    body <- parseFFIBody direction
+    return $ ExternFFIStmt
+        { efsABI = abi
+        , efsDirection = direction
+        , efsName = name
+        , efsGenerics = fromMaybe [] tyargs
+        , efsParams = params
+        , efsReturnType = ret
+        , efsBody = body
+        }
+  where
+    parseDirection :: Parser FFIDirection
+    parseDirection =
+        (FFIImport <$ string "import")
+            <|> (FFIExport <$ string "export")
 
 parseStmt :: Parser Stmt
 parseStmt = SpannedStmt <$> withSpan parseStmtInner
+
+parseExternStruct :: Parser Stmt
+parseExternStruct = do
+    _ <- string "extern" *> space
+    _ <- string "struct" *> space
+    name <- parseIdentifier
+    tyargs <- optional $ openAngle *> parseGenericParam `sepBy` comma <* closeAngle
+    _ <- char '=' *> space
+    foreignType <- parseString <* space
+    _ <- char ';' *> space
+    return $ ExternStructStmt
+        { essName = name
+        , essGenerics = fromMaybe [] tyargs
+        , essForeignType = foreignType
+        }
 
 parseStmtInner :: Parser Stmt
 parseStmtInner = do
@@ -149,7 +255,9 @@ parseStmtInner = do
         , parseStructDecRest vis <?> "struct declaration"
         , parseEnumDecRest vis <?> "enum declaration"
         , parseModDeclRest vis <?> "module declaration"
-        , parseExternTrampoline <?> "extern trampoline"
+        , try parseExternTrampoline <?> "extern trampoline"
+        , try parseExternStruct <?> "extern struct declaration"
+        , parseExternFFI <?> "extern FFI declaration"
         ]
 
 parseModDeclRest :: Visibility -> Parser Stmt

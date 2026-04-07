@@ -23,6 +23,7 @@ data RecordKind
     = StructKind
     | EnumKind
     | EnumVariant {variantParent :: Path, variantIdx :: Int}
+    | ExternStructKind
     deriving (Show, Eq)
 
 data Record = Record

@@ -419,6 +419,7 @@ instance PrettyColored Record where
                         StructKind -> "struct"
                         EnumKind -> "enum"
                         EnumVariant _ _ -> "enum_variant"
+                        ExternStructKind -> "extern struct"
                     )
                 <> (case cap of Cap.Unspecified -> mempty; _ -> space <> brackets capDoc)
                 <+> nameDoc

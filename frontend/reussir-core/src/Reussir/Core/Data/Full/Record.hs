@@ -24,6 +24,7 @@ data RecordKind
     = StructKind
     | EnumKind
     | EnumVariant {variantParent :: Symbol, variantIdx :: Int}
+    | ExternStructKind
     deriving (Show, Eq)
 
 data Record = Record

@@ -1,0 +1,13 @@
+// RUN: %reussir-elab --mode semi %s
+// RUN: %reussir-elab --mode full %s
+// RUN: %reussir-compiler %s -o %t.o
+// RUN: %cc %t.o %S/ffi_export_new_syntax.c -o %t.exe
+// RUN: %t.exe
+
+// New-style export syntax (equivalent to legacy trampoline)
+fn add<T : Num>(x: T, y: T) -> T {
+    x + y
+}
+
+extern "C" export fn add_i32 = add<i32>;
+extern "C" export fn add_f64 = add<f64>;

@@ -1,0 +1,35 @@
+// RUN: %reussir-compiler %s -t mlir -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+
+// Test polymorphic FFI with non-trivial generic types.
+// When instantiated with List<i32>, the template should receive the
+// concrete MLIR type for the List record (an RC pointer type).
+
+enum List<T> {
+    Nil,
+    Cons(T, List<T>)
+}
+
+// Polymorphic FFI import with a template: the generic T will be
+// substituted with the concrete MLIR type for List<i32>.
+extern "C" import fn process_list<T>(xs: T) -> T {
+    ```
+    // placeholder: process [:T:] values
+    ```
+}
+
+fn use_process_with_int(xs: i32) -> i32 {
+    process_list<i32>(xs)
+}
+
+fn use_process_with_list(xs: List<i32>) -> List<i32> {
+    process_list<List<i32>>(xs)
+}
+
+// Two polyffi instantiations: one for i32, one for List<i32>
+// CHECK-DAG: substitutions({T = i32})
+// CHECK-DAG: substitutions({T = !reussir.rc<!_RIC4ListlE shared normal>})
+
+// External function declarations for each monomorphized instance
+// CHECK-DAG: func.func private @"_RIC12process_listlE"
+// CHECK-DAG: func.func private @"_RIC12process_listIC4ListlEE"

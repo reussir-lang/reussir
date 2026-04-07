@@ -75,6 +75,8 @@ emptyFullContext ctxFilePath = do
     let ctxErrors = []
     let ctxFlexible = False
     let ctxTrampolines = HashMap.empty
+    let ctxFFIImports = HashMap.empty
+    let ctxExternStructs = HashMap.empty
     return FullContext{..}
 
 reportAllErrors ::

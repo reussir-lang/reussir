@@ -42,14 +42,52 @@ data Function = Function
     }
     deriving (Show, Eq)
 
+-- | Direction of an FFI declaration.
+data FFIDirection = FFIExport | FFIImport deriving (Show, Eq)
+
+-- | Body of an FFI declaration.
+data FFIBody
+    = -- | Export alias: @= path\<type_args\>@, wraps an existing Reussir function.
+      FFIAlias Path [Type]
+    | -- | Quoted template: @{ \`\`\`...template...\`\`\` }@, inline foreign source code.
+      FFITemplate T.Text
+    | -- | Simple extern declaration with no body (semicolon-terminated).
+      FFIExtern
+    deriving (Show, Eq)
+
 data Stmt
     = FunctionStmt Function
     | RecordStmt Record
-    | ExternTrampolineStmt {
-        etsName :: Identifier,
-        etsABI :: T.Text,
-        etsFunc :: Path,
-        etsFuncTyArgs :: [Type]
+    | -- | FFI declaration supporting both import and export directions.
+      --
+      -- Syntax examples:
+      --
+      -- Legacy: @extern \"C\" trampoline \"bar\" = foo\<i32\>;@
+      --
+      -- Import: @extern \"C\" import fn strlen(s: i64) -> i64;@
+      --
+      -- Export: @extern \"C\" export fn bar = foo\<i32\>;@
+      --
+      -- Import with template:
+      -- @extern \"C\" import fn push\<T\>(v: Vec\<T\>, e: T) -> Vec\<T\> { \`\`\`...template...\`\`\` }@
+      ExternFFIStmt {
+        efsABI :: T.Text,
+        efsDirection :: FFIDirection,
+        efsName :: Identifier,
+        efsGenerics :: [(Identifier, [Path])],
+        efsParams :: [(Identifier, Type)],
+        efsReturnType :: Maybe Type,
+        efsBody :: FFIBody
+    }
+    | -- | Extern struct declaration for opaque FFI types.
+      --
+      -- Syntax: @extern struct Vec\<T\> = \"::reussir_rt::collections::vec::Vec\<${T}\>\";@
+      --
+      -- Declares an opaque type always behind RC, mapped to a foreign type via template.
+      ExternStructStmt {
+        essName :: Identifier,
+        essGenerics :: [(Identifier, [Path])],
+        essForeignType :: T.Text
     }
     | ModStmt Visibility Identifier
     | SpannedStmt (WithSpan Stmt)

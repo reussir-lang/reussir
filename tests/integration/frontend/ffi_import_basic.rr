@@ -1,0 +1,12 @@
+// RUN: %reussir-elab --mode semi %s
+// RUN: %reussir-elab --mode full %s
+// RUN: %reussir-compiler %s -o %t.o
+// RUN: %cc %t.o %S/ffi_import_basic.c -o %t.exe
+// RUN: %t.exe
+
+// Basic import FFI: declares a foreign function callable from Reussir.
+extern "C" import fn add_one(x: i32) -> i32;
+
+fn use_add_one(x: i32) -> i32 {
+    add_one(x)
+}

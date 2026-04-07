@@ -16,6 +16,13 @@ import Reussir.Core.Data.Full.Record qualified as Full
 
 lowerRecord :: Full.Record -> GlobalLoweringEff ()
 lowerRecord record = do
+    -- Extern structs are opaque FFI types; they don't produce record instances.
+    case Full.recordKind record of
+        Full.ExternStructKind -> pure ()
+        _ -> lowerRecordImpl record
+
+lowerRecordImpl :: Full.Record -> GlobalLoweringEff ()
+lowerRecordImpl record = do
     let symbol = Full.recordName record
     let semKind = Full.recordKind record
 

@@ -58,8 +58,10 @@ collectStmt :: T.Text -> Syn.Stmt -> [SemanticTokenAbsolute]
 collectStmt content (Syn.SpannedStmt (WithSpan s _ _)) = collectStmt content s
 collectStmt content (Syn.FunctionStmt f) = collectFunction content f
 collectStmt content (Syn.RecordStmt r) = collectRecord content r
-collectStmt content (Syn.ExternTrampolineStmt _ _ _ tyArgs) =
-    concatMap (collectType content) tyArgs
+collectStmt content (Syn.ExternFFIStmt{Syn.efsParams = params, Syn.efsReturnType = retType}) =
+    concatMap (collectType content . snd) params
+        ++ maybe [] (collectType content) retType
+collectStmt _ (Syn.ExternStructStmt{}) = []
 collectStmt _ (Syn.ModStmt _ _) = []
 
 -- | Collect tokens from a function definition.

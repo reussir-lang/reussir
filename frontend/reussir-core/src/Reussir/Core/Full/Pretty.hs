@@ -339,6 +339,7 @@ instance PrettyColored Record where
                     StructKind -> "struct"
                     EnumKind -> "enum"
                     EnumVariant _ _ -> "enum_variant"
+                    ExternStructKind -> "extern struct"
                 )
                 <+> nameDoc
                 <+> parens ("aka " <> rawPathDoc <> genericsDoc)

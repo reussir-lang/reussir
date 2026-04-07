@@ -65,6 +65,7 @@ instantiateRecord tyArgs semiRecords (Semi.Record path tyParams fieldsRef kind _
             Semi.EnumVariant p i ->
                 let parentSymbol = verifiedSymbol $ mangleABIName (Semi.TypeRecord p tyArgs Semi.Irrelevant)
                  in EnumVariant parentSymbol i
+            Semi.ExternStructKind -> ExternStructKind
 
     case instantiatedFields of
         Left errs -> pure $ Left errs

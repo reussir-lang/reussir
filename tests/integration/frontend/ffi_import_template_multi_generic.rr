@@ -1,0 +1,25 @@
+// RUN: %reussir-compiler %s -t mlir -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+
+// Test polymorphic FFI with multiple generic parameters.
+// Each generic should get its own substitution entry with concrete types.
+
+extern "C" import fn pair_op<A : Num, B : Num>(x: A, y: B) -> A {
+    ```
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn pair_op_${A}_${B}(x: ${A}, y: ${B}) -> ${A} {
+        x
+    }
+    ```
+}
+
+fn use_pair(a: i32, b: f64) -> i32 {
+    pair_op<i32, f64>(a, b)
+}
+
+// CHECK: reussir.polyffi
+// CHECK-SAME: texture(
+// CHECK-SAME: [:A:]
+// CHECK-SAME: [:B:]
+// CHECK-SAME: substitutions({A = i32, B = f64})
+// CHECK: func.func private @"_RIC7pair_opldE"

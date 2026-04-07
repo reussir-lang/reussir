@@ -1,0 +1,64 @@
+// RUN: %reussir-compiler %s -t mlir -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+
+// Test extern struct declaration for opaque FFI types.
+// Vec<T> wraps reussir_rt's Vec and is always behind RC.
+
+extern struct Vec<T> = "::reussir_rt::collections::vec::Vec<${T}>";
+
+enum List<T> {
+    Nil,
+    Cons(T, List<T>)
+}
+
+// FFI operations on Vec
+extern "C" import fn vec_new<T>() -> Vec<T> {
+    ```
+    #![feature(linkage)]
+    extern crate reussir_rt;
+    use reussir_rt::collections::vec::Vec;
+    #[linkage = "weak_odr"]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn vec_new_[:T:]() -> Vec<[:T:]> { Vec::new() }
+    ```
+}
+
+extern "C" import fn vec_push<T>(v: Vec<T>, e: T) -> Vec<T> {
+    ```
+    #![feature(linkage)]
+    extern crate reussir_rt;
+    use reussir_rt::collections::vec::Vec;
+    #[linkage = "weak_odr"]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn vec_push_[:T:](v: Vec<[:T:]>, e: [:T:]) -> Vec<[:T:]> {
+        Vec::push(v, e)
+    }
+    ```
+}
+
+// Instantiate with primitive type
+fn make_int_vec() -> Vec<i32> {
+    let v = vec_new<i32>();
+    vec_push<i32>(v, 42)
+}
+
+// Instantiate with non-trivial RC type: List<i32>
+fn make_list_vec(elem: List<i32>) -> Vec<List<i32>> {
+    let v = vec_new<List<i32>>();
+    vec_push<List<i32>>(v, elem)
+}
+
+// -- Check ffi_object types --
+
+// Vec<i32> should produce ffi_object with the Rust type name
+// CHECK-DAG: !reussir.ffi_object<"::reussir_rt::collections::vec::Vec<i32>"
+
+// Vec<List<i32>> should produce ffi_object for the List-parameterized Vec
+// CHECK-DAG: !reussir.ffi_object<"::reussir_rt::collections::vec::Vec<
+
+// -- Check polyffi ops --
+// CHECK-DAG: reussir.polyffi texture(
+// CHECK-DAG: substitutions({T = i32})
+
+// -- Check destructor polyffi templates are emitted --
+// CHECK-DAG: polyffi_drop

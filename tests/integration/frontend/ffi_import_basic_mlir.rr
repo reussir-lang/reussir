@@ -1,0 +1,15 @@
+// RUN: %reussir-compiler %s -t mlir -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+
+// Test that a basic (non-template) FFI import produces an external function
+// declaration with no polyffi op.
+
+extern "C" import fn foreign_add(x: i32, y: i32) -> i32;
+
+fn call_foreign(a: i32, b: i32) -> i32 {
+    foreign_add(a, b)
+}
+
+// CHECK-NOT: reussir.polyffi
+// CHECK: func.func private @"_RC11foreign_add"({{.*}}) -> i32
+// CHECK-SAME: llvm.linkage = #llvm.linkage<external>

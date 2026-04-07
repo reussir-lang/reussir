@@ -1,0 +1,20 @@
+// RUN: %reussir-compiler %s -t mlir -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+
+// Test that import and export FFI declarations can coexist in the same module.
+
+// Import: external C function
+extern "C" import fn c_square(x: i32) -> i32;
+
+// Reussir function that uses the imported function
+fn double_square(x: i32) -> i32 {
+    let a = c_square(x);
+    c_square(a)
+}
+
+// Export: expose double_square to C
+extern "C" export fn exported_double_square = double_square;
+
+// CHECK-DAG: func.func private @"_RC8c_square"
+// CHECK-DAG: func.func @"_RC13double_square"
+// CHECK-DAG: reussir.trampoline "C" @exported_double_square = @_RC13double_square

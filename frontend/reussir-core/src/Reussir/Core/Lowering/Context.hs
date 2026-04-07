@@ -40,14 +40,8 @@ import Reussir.Core.Data.Full.Function qualified as Full
 import Reussir.Core.Data.Full.Record qualified as Full
 import qualified Data.HashMap.Strict as HashMap
 import Reussir.Codegen.Context.Symbol (Symbol)
-
-{-
-, srcRepository :: Repository
-    , functionInstances :: Full.FunctionTable
-    , recordInstances :: Full.FullRecordTable
-    , stringUniqifier :: StringUniqifier
-    , targetSpec :: IR.TargetSpec
--}
+import Reussir.Core.Data.Full.Context (FullFFIImport)
+import Reussir.Parser.Types.Lexer (Path)
 
 createLoweringContext ::
     (IOE :> es, Log :> es, Prim :> es) =>
@@ -56,9 +50,11 @@ createLoweringContext ::
     Full.FullRecordTable ->
     StringUniqifier ->
     HashMap.HashMap Symbol (T.Text, Symbol) ->
+    HashMap.HashMap Symbol FullFFIImport ->
+    HashMap.HashMap Path T.Text ->
     IR.TargetSpec ->
     Eff es LoweringContext
-createLoweringContext repo functions records stringUniqifier trampolines targetSpec = do
+createLoweringContext repo functions records stringUniqifier trampolines ffiImports externStructs targetSpec = do
     (dir, base) <- liftIO $ do
         result <- try @SomeException $ canonicalizePath (IR.moduleFilePath targetSpec)
         case result of
@@ -75,6 +71,8 @@ createLoweringContext repo functions records stringUniqifier trampolines targetS
             , targetSpec = targetSpec
             , ownershipAnnotations = OwnershipAnnotations IntMap.empty
             , trampolines
+            , ffiImports
+            , externStructs
             }
 
 runLoweringToModule ::

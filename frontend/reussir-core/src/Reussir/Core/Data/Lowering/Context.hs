@@ -32,6 +32,8 @@ import Reussir.Core.Data.Full.Function qualified as Full
 import Reussir.Core.Data.Full.Record qualified as Full
 import qualified Data.HashMap.Strict as HashMap
 import Reussir.Codegen.Context.Symbol (Symbol)
+import Reussir.Core.Data.Full.Context (FullFFIImport)
+import Reussir.Parser.Types.Lexer (Path)
 
 type BlockBuilder = Seq.Seq IR.Instr
 
@@ -45,6 +47,9 @@ data LoweringContext = LoweringContext
     , targetSpec :: IR.TargetSpec
     , ownershipAnnotations :: OwnershipAnnotations
     , trampolines :: HashMap.HashMap Symbol (T.Text, Symbol)
+    , ffiImports :: HashMap.HashMap Symbol FullFFIImport
+    -- | Extern struct: maps record path → foreign type template
+    , externStructs :: HashMap.HashMap Path T.Text
     }
 
 data LoweringSpan = LoweringSpan

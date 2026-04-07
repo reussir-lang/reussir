@@ -1,0 +1,29 @@
+// RUN: %reussir-elab --mode semi %s
+// RUN: %reussir-elab --mode full %s
+// RUN: %reussir-compiler %s -t mlir -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+
+// Import FFI with a quoted template for polymorphic code generation.
+// The template uses ${T} syntax for type parameter substitution,
+// which gets converted to [:T:] at the MLIR level.
+
+extern "C" import fn magic_add<T : Num>(x: T, y: T) -> T {
+    ```
+    #![feature(linkage)]
+    #[linkage = "weak_odr"]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn magic_add_${T}(x: ${T}, y: ${T}) -> ${T} {
+        x + y
+    }
+    ```
+}
+
+fn use_magic(a: i32, b: i32) -> i32 {
+    magic_add<i32>(a, b)
+}
+
+// CHECK: reussir.polyffi
+// CHECK-SAME: texture(
+// CHECK-SAME: [:T:]
+// CHECK-SAME: substitutions({T = i32})
+// CHECK: func.func private @"_RIC9magic_addlE"

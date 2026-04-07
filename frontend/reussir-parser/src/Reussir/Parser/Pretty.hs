@@ -292,15 +292,53 @@ instance PrettyColored Stmt where
     prettyColored (ModStmt vis name) =
         prettyColored vis <> keyword "mod" <+> prettyColored name <> operator ";"
     prettyColored (SpannedStmt w) = prettyColored (spanValue w)
-    prettyColored (ExternTrampolineStmt (Identifier sym) abi func tys) =
+    prettyColored (ExternFFIStmt abi direction name generics params retType body) =
         keyword "extern"
             <+> literal (dquotes (pretty abi))
-            <+> keyword "trampoline"
-            <+> literal (dquotes (pretty sym))
+            <+> prettyDir direction
+            <+> keyword "fn"
+            <+> prettyColored name
+            <> prettyGenerics generics
+            <> parens (commaSep (map prettyParam params))
+            <> prettyRet retType
+            <+> prettyBody body
+      where
+        prettyDir FFIExport = keyword "export"
+        prettyDir FFIImport = keyword "import"
+        prettyGenerics [] = emptyDoc
+        prettyGenerics gs = angles (commaSep (map prettyGeneric gs))
+        prettyGeneric (n, bounds) =
+            prettyColored n
+                <> if null bounds
+                    then emptyDoc
+                    else operator ":" <+> concatWith (surround (operator "+")) (map prettyColored bounds)
+        prettyParam (n, t) = prettyColored n <> operator ":" <+> prettyColored t
+        prettyRet Nothing = emptyDoc
+        prettyRet (Just t) = space <> operator "->" <+> prettyColored t
+        prettyBody FFIExtern = operator ";"
+        prettyBody (FFIAlias func tys) =
+            operator "="
+                <+> prettyColored func
+                <> (if null tys then emptyDoc else angles (commaSep (map prettyColored tys)))
+                <> operator ";"
+        prettyBody (FFITemplate tmpl) =
+            braces (nest 4 (hardline <> pretty ("```" :: String) <> hardline <> pretty tmpl <> pretty ("```" :: String)) <> hardline)
+    prettyColored (ExternStructStmt name generics foreignType) =
+        keyword "extern"
+            <+> keyword "struct"
+            <+> prettyColored name
+            <> prettyGenerics generics
             <+> operator "="
-            <+> prettyColored func
-            <> (if null tys then emptyDoc else angles (commaSep (map prettyColored tys)))
+            <+> literal (dquotes (pretty foreignType))
             <> operator ";"
+      where
+        prettyGenerics [] = emptyDoc
+        prettyGenerics gs = angles (commaSep (map prettyGeneric gs))
+        prettyGeneric (n, bounds) =
+            prettyColored n
+                <> if null bounds
+                    then emptyDoc
+                    else operator ":" <+> concatWith (surround (operator "+")) (map prettyColored bounds)
 
 commaSep :: (Foldable t) => t (Doc AnsiStyle) -> Doc AnsiStyle
 commaSep = concatWith (surround (comma <> space))

@@ -473,6 +473,8 @@ generateExpressionModule funcName semiExpr exprType logLevel state = do
                     (ctxRecords finalFullCtx)
                     stringUniq
                     (ctxTrampolines finalFullCtx)
+                    (ctxFFIImports finalFullCtx)
+                    (ctxExternStructs finalFullCtx)
                     targetSpec
 
             -- Lower functions

@@ -37,7 +37,7 @@ import Reussir.Core.Semi.Context (
     withModuleFile,
  )
 import Reussir.Core.Semi.FlowAnalysis (solveAllGenerics)
-import Reussir.Core.Semi.Trampoline (resolveTrampoline)
+import Reussir.Core.Semi.Trampoline (resolveFFI)
 import Reussir.Core.Semi.Tyck (checkFuncType)
 
 unspanStmt :: Syn.Stmt -> Syn.Stmt
@@ -98,8 +98,13 @@ translatePackageToModule spec files = do
                             Syn.FunctionStmt f -> do
                                 _ <- inject $ checkFuncType f
                                 return ()
-                            Syn.ExternTrampolineStmt name abi target args -> do
-                                inject $ resolveTrampoline name abi target args
+                            Syn.ExternFFIStmt{Syn.efsName = name, Syn.efsABI = abi,
+                                              Syn.efsDirection = direction,
+                                              Syn.efsGenerics = generics,
+                                              Syn.efsParams = params,
+                                              Syn.efsReturnType = retType,
+                                              Syn.efsBody = body} -> do
+                                inject $ resolveFFI name abi direction generics params retType body
                             _ -> return ()
 
             -- Solve generics
@@ -127,6 +132,8 @@ translatePackageToModule spec files = do
                     ctxRecords
                     ctxStringUniqifier
                     ctxTrampolines
+                    ctxFFIImports
+                    ctxExternStructs
                     spec
         runLoweringToModule loweringCtx lowerModule
 

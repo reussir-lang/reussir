@@ -203,6 +203,8 @@ emptySemiContext translationLogLevel currentFile currentModulePath = do
             , generics
             , translationHasFailed = False
             , trampolines = mempty
+            , ffiImports = mempty
+            , externStructs = mempty
             }
 
 -- | empty local context
@@ -330,7 +332,59 @@ scanStmtImpl (Syn.SpannedStmt s) = do
     State.modify $ \st -> st{currentSpan = Just (spanStartOffset s, spanEndOffset s)}
     scanStmtImpl (spanValue s)
     State.modify $ \st -> st{currentSpan = backup}
-scanStmtImpl (Syn.ExternTrampolineStmt {}) = pure ()
+scanStmtImpl (Syn.ExternFFIStmt{Syn.efsDirection = Syn.FFIImport,
+                                 Syn.efsName = funcName,
+                                 Syn.efsGenerics = funcGenerics,
+                                 Syn.efsParams = funcParams,
+                                 Syn.efsReturnType = funcReturnType}) = do
+    -- Register FFI imports during scan so they're available for type checking.
+    moduleSegs <- State.gets currentModulePath
+    genericsList <- mapM translateGeneric funcGenerics
+    withGenericContext genericsList $ do
+        paramsList <- mapM (\(pName, ty) -> (pName,) <$> evalType ty) funcParams
+        funcReturnType' <- case funcReturnType of
+            Just ty -> evalType ty
+            Nothing -> return TypeUnit
+        pendingFuncBody <- newIORef' Nothing
+        let qualifiedPath = Path funcName moduleSegs
+        let proto =
+                FunctionProto
+                    { funcVisibility = Syn.Public
+                    , funcName = funcName
+                    , funcPath = qualifiedPath
+                    , funcGenerics = genericsList
+                    , funcParams = paramsList
+                    , funcReturnType = funcReturnType'
+                    , funcIsRegional = False
+                    , funcBody = pendingFuncBody
+                    , funcSpan = Nothing
+                    }
+        functionTable <- State.gets functions
+        existed <- isJust <$> HU.lookup (functionProtos functionTable) qualifiedPath
+        if existed
+            then addErrReportMsg $ "Function already defined: " <> unIdentifier funcName
+            else HU.insert (functionProtos functionTable) qualifiedPath proto
+scanStmtImpl (Syn.ExternFFIStmt {}) = pure ()  -- export trampolines are handled later
+scanStmtImpl (Syn.ExternStructStmt{Syn.essName = name,
+                                    Syn.essGenerics = structGenerics,
+                                    Syn.essForeignType = foreignType}) = do
+    moduleSegs <- State.gets currentModulePath
+    genericsList <- mapM translateGeneric structGenerics
+    recSpan <- State.gets currentSpan
+    fieldsRef <- newIORef' (Just (Named V.empty))  -- opaque: no fields
+    let recordPath = Path name moduleSegs
+    let semRecord =
+            Record
+                { recordName = recordPath
+                , recordTyParams = genericsList
+                , recordFields = fieldsRef
+                , recordKind = ExternStructKind
+                , recordVisibility = Syn.Public
+                , recordDefaultCap = Syn.Shared
+                , recordSpan = recSpan
+                }
+    addRecordDefinition recordPath semRecord
+    State.modify $ \st -> st{externStructs = HashMap.insert recordPath foreignType (externStructs st)}
 scanStmtImpl (Syn.ModStmt _ _) = pure ()
 scanStmtImpl (Syn.RecordStmt record) = do
     let name = Syn.recordName record

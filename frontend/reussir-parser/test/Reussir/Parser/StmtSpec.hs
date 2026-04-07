@@ -40,7 +40,7 @@ stripStmtSpans (RecordStmt r) = RecordStmt (r{recordFields = stripFields (record
     stripFields (Unnamed fs) = Unnamed (V.map (\(WithSpan (t, f) _ _) -> WithSpan (t, f) 0 0) fs)
     stripFields (Variants vs) = Variants (V.map (\(WithSpan (n, ts) _ _) -> WithSpan (n, ts) 0 0) vs)
 stripStmtSpans (ModStmt vis name) = ModStmt vis name
-stripStmtSpans (ExternTrampolineStmt n a f tys) = ExternTrampolineStmt n a f tys
+stripStmtSpans s@(ExternFFIStmt {}) = s
 
 dummyWithSpan :: a -> WithSpan a
 dummyWithSpan x = WithSpan x 0 0
@@ -250,13 +250,16 @@ spec = do
                     )
 
     describe "parseExternTrampoline" $ do
-        it "parses extern trampoline" $
+        it "parses extern trampoline (legacy syntax)" $
             (stripStmtSpans <$> parse parseExternTrampoline "" "extern \"C\" trampoline \"foo_ffi\" = foo;")
-                `shouldParse` ExternTrampolineStmt
-                    (Identifier "foo_ffi")
+                `shouldParse` ExternFFIStmt
                     "C"
-                    (Path (Identifier "foo") [])
+                    FFIExport
+                    (Identifier "foo_ffi")
                     []
+                    []
+                    Nothing
+                    (FFIAlias (Path (Identifier "foo") []) [])
 
     describe "parseStmt module declarations" $ do
         it "parses a private module declaration" $

@@ -27,6 +27,7 @@ where
 import Data.Hashable (Hashable)
 import GHC.Generics (Generic)
 
+import Data.Text qualified as T
 import Reussir.Codegen.Context.Symbol (Symbol)
 
 {- | Integer primitive types for MLIR code generation.
@@ -168,6 +169,8 @@ data Type
     | TypeRc Rc
     | TypeRef Ref
     | TypeExpr Symbol
+    | -- | Opaque FFI object type: @!reussir.ffi_object\<\"foreign_name\", \@dtor\>@
+      TypeFFIObject T.Text Symbol
     | TypeNullable Type
     | TypeRegion -- Region handle
     | TypeStr LifeScope -- String type !reussir.str<global> or !reussir.str<local>

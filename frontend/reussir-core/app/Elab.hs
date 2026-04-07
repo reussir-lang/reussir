@@ -48,7 +48,7 @@ import Reussir.Core.Semi.Tyck (checkFuncType)
 
 import Reussir.Core.Full.Pretty qualified as Full
 import Reussir.Core.Semi.Pretty qualified as Semi
-import Reussir.Core.Semi.Trampoline
+import Reussir.Core.Semi.Trampoline (resolveFFI)
 
 data ElabMode = SemiMode | FullMode
     deriving (Eq, Show)
@@ -189,8 +189,13 @@ runSemiElab _args files = do
                                 Syn.FunctionStmt f -> do
                                     _ <- inject $ checkFuncType f
                                     return ()
-                                Syn.ExternTrampolineStmt name abi target args' -> do
-                                    inject $ resolveTrampoline name abi target args'
+                                Syn.ExternFFIStmt{Syn.efsName = name, Syn.efsABI = abi,
+                                                  Syn.efsDirection = direction,
+                                                  Syn.efsGenerics = generics,
+                                                  Syn.efsParams = params,
+                                                  Syn.efsReturnType = retType,
+                                                  Syn.efsBody = body} -> do
+                                    inject $ resolveFFI name abi direction generics params retType body
                                 _ -> return ()
 
                 let putDoc' doc = do
@@ -267,8 +272,13 @@ runFullElab _args files = do
                                 Syn.FunctionStmt f -> do
                                     _ <- inject $ checkFuncType f
                                     return ()
-                                Syn.ExternTrampolineStmt name abi target args' -> do
-                                    inject $ resolveTrampoline name abi target args'
+                                Syn.ExternFFIStmt{Syn.efsName = name, Syn.efsABI = abi,
+                                                  Syn.efsDirection = direction,
+                                                  Syn.efsGenerics = generics,
+                                                  Syn.efsParams = params,
+                                                  Syn.efsReturnType = retType,
+                                                  Syn.efsBody = body} -> do
+                                    inject $ resolveFFI name abi direction generics params retType body
                                 _ -> return ()
 
                 -- Solve generics

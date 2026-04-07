@@ -1341,6 +1341,9 @@ inferTypeForNormalCtorCall
                         (EnumKind, _) -> do
                             addErrReportMsg "Cannot instantiate Enum directly"
                             return ([], Nothing)
+                        (ExternStructKind, _) -> do
+                            addErrReportMsg "Cannot construct extern struct directly"
+                            return ([], Nothing)
                         (_, Nothing) -> do
                             addErrReportMsg "Record fields not populated"
                             return ([], Nothing)

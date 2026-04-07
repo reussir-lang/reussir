@@ -1,0 +1,80 @@
+// RUN: %reussir-compiler %s -t mlir -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+
+// Test polymorphic FFI with non-trivial types:
+// - List<T> is an enum with Cons/Nil requiring RC clone/cleanup
+// - Vec from reussir_rt stores elements that need clone/drop
+// - Nested poly params: Vec operations on List<i32> elements
+
+enum List<T> {
+    Nil,
+    Cons(T, List<T>)
+}
+
+// Push an element into a Vec<T>. Uses reussir_rt::collections::vec::Vec
+// which wraps Rc<StdVec<T>> and needs proper clone/drop for T.
+extern "C" import fn vec_push<T>(v: T, elem: T) -> T {
+    ```
+    extern crate reussir_rt;
+    use reussir_rt::collections::vec::Vec;
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn vec_push_[:T:](mut v: Vec<[:T:]>, elem: [:T:]) -> Vec<[:T:]> {
+        v.push(elem);
+        v
+    }
+    ```
+}
+
+// Get vector length via FFI
+extern "C" import fn vec_len<T>(v: T) -> i64 {
+    ```
+    extern crate reussir_rt;
+    use reussir_rt::collections::vec::Vec;
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn vec_len_[:T:](v: Vec<[:T:]>) -> i64 {
+        Vec::len(&v) as i64
+    }
+    ```
+}
+
+// Use vec_push with List<i32> -- non-trivial type with RC semantics.
+// The generated Rust code must handle Clone/Drop for the RC'd List type.
+fn push_list_to_vec(v: List<i32>, elem: List<i32>) -> List<i32> {
+    vec_push<List<i32>>(v, elem)
+}
+
+// Use vec_len with List<i32>
+fn get_list_vec_len(v: List<i32>) -> i64 {
+    vec_len<List<i32>>(v)
+}
+
+// Also test with a simple type for comparison
+fn push_int_to_vec(v: i32, elem: i32) -> i32 {
+    vec_push<i32>(v, elem)
+}
+
+// Nested: List<List<i32>> -- doubly-nested RC type
+fn push_nested_to_vec(v: List<List<i32>>, elem: List<List<i32>>) -> List<List<i32>> {
+    vec_push<List<List<i32>>>(v, elem)
+}
+
+// -- polyffi ops with type substitutions --
+
+// Simple i32 instantiation
+// CHECK-DAG: substitutions({T = i32})
+
+// List<i32> instantiation: T becomes an RC pointer to the List variant type
+// CHECK-DAG: substitutions({T = !reussir.rc<!_RIC4ListlE shared normal>})
+
+// List<List<i32>> instantiation: doubly-nested RC type
+// CHECK-DAG: substitutions({T = !reussir.rc<!_RIC4ListIC4ListlEE shared normal>})
+
+// External function declarations for vec_push instantiations
+// CHECK-DAG: func.func private @"_RIC8vec_pushlE"
+// CHECK-DAG: func.func private @"_RIC8vec_pushIC4ListlEE"
+// CHECK-DAG: func.func private @"_RIC8vec_pushIC4ListIC4ListlEEE"
+
+// External function declarations for vec_len instantiations
+// CHECK-DAG: func.func private @"_RIC7vec_lenIC4ListlEE"
