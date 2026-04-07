@@ -145,8 +145,10 @@ typedef struct {
   uint64_t len;
 } ReussirStrResult;
 
-// Call a JIT function that returns a str type and capture the result
+// Call JIT functions that use an explicit leading return pointer.
 // The function pointer should be obtained from reussir_bridge_jit_lookup_symbol
+void reussir_bridge_call_f32_func(void *func_ptr, float *result);
+void reussir_bridge_call_f64_func(void *func_ptr, double *result);
 void reussir_bridge_call_str_func(void *func_ptr, ReussirStrResult *result);
 
 #ifdef __cplusplus

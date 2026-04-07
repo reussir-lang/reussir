@@ -411,12 +411,19 @@ export extern "C" {
     }
     return def->getAddress().toPtr<void *>();
   }
-  // Call a JIT function that returns a str type (struct { ptr, len })
-  // On ARM64 and x86-64, small structs are returned in registers
+  void reussir_bridge_call_f32_func(void *func_ptr, float *result) {
+    using F32FuncType = void (*)(float *);
+    auto func = reinterpret_cast<F32FuncType>(func_ptr);
+    func(result);
+  }
+  void reussir_bridge_call_f64_func(void *func_ptr, double *result) {
+    using F64FuncType = void (*)(double *);
+    auto func = reinterpret_cast<F64FuncType>(func_ptr);
+    func(result);
+  }
   void reussir_bridge_call_str_func(void *func_ptr, ReussirStrResult *result) {
-    // Define the function type that returns the str struct
-    using StrFuncType = ReussirStrResult (*)();
+    using StrFuncType = void (*)(ReussirStrResult *);
     auto func = reinterpret_cast<StrFuncType>(func_ptr);
-    *result = func();
+    func(result);
   }
 }

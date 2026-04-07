@@ -5,7 +5,7 @@ module attributes {llvm.target_triple = "x86_64-pc-windows-gnullvm"} {
     llvm.return %arg0 : i64
   }
 
-  reussir.trampoline "C" @id_i64_ffi = @id_i64
+  reussir.trampoline export "C" @id_i64_ffi = @id_i64
 }
 
 // CHECK: llvm.func @id_i64_ffi({{.*}}i64{{.*}}) -> i64

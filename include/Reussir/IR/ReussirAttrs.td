@@ -71,6 +71,19 @@ def LifeScope
     : I32EnumAttr<"LifeScope", "life scope", [LS_Global, LS_Local]> {
   let cppNamespace = "::reussir";
 }
+
+//===----------------------------------------------------------------------===//
+// Trampoline Attributes
+//===----------------------------------------------------------------------===//
+def TD_Import : I32EnumAttrCase<"Import", 0, "import">;
+def TD_Export : I32EnumAttrCase<"Export", 1, "export">;
+
+def TrampolineDirection
+    : I32EnumAttr<"TrampolineDirection", "trampoline direction",
+                  [TD_Import, TD_Export]> {
+  let cppNamespace = "::reussir";
+}
+
 //===----------------------------------------------------------------------===//
 // Debug Attributes
 //===----------------------------------------------------------------------===//
@@ -168,4 +181,3 @@ def Reussir_DBGFuncArg : ReussirAttr<"DBGFuncArg", "dbg_func_arg"> {
   }];
 }
 #endif // REUSSIR_IR_REUSSIRATTRS_TD
-

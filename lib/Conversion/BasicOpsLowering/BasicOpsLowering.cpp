@@ -2379,6 +2379,7 @@ struct ReussirTrampolineOpConversionPattern
                   mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::SymbolTable symTable = mlir::SymbolTable::getNearestSymbolTable(op);
     auto converter = static_cast<const mlir::LLVMTypeConverter *> (getTypeConverter());
+    auto ptrType = mlir::LLVM::LLVMPointerType::get(op.getContext());
     mlir::Operation *funcOp = symTable.lookup(op.getTarget());
     if (!funcOp)
       return mlir::failure();
@@ -2386,12 +2387,6 @@ struct ReussirTrampolineOpConversionPattern
     if (op.getAbiName() != "C")
       return mlir::failure();
 
-    auto module = op->getParentOfType<mlir::ModuleOp>();
-    auto tripleAttr = module->getAttrOfType<mlir::StringAttr>(
-        mlir::LLVM::LLVMDialect::getTargetTripleAttrName());
-    if (!tripleAttr)
-      return mlir::failure();
-    auto triple = llvm::Triple(tripleAttr.getValue());
     mlir::LLVM::LLVMFunctionType llvmFuncTy;
     if (auto llvmFuncOp = mlir::dyn_cast<mlir::LLVM::LLVMFuncOp>(funcOp))
       llvmFuncTy = llvmFuncOp.getFunctionType();
@@ -2410,43 +2405,45 @@ struct ReussirTrampolineOpConversionPattern
 
     auto llvmRetTy = llvmFuncTy.getReturnType();
     auto llvmParamTys = llvmFuncTy.getParams();
+    const bool isImport =
+        op.getDirection() == reussir::TrampolineDirection::Import;
+    CABISignature cabiSig;
+    if (isImport) {
+      cabiSig.isTrivial = true;
+      cabiSig.abiReturnType = llvmRetTy;
+      cabiSig.abiParamTypes.append(llvmParamTys.begin(), llvmParamTys.end());
+    } else {
+      cabiSig = evaluateCABISignatureForC(llvmRetTy, llvmParamTys);
+    }
 
-    auto dl = getDataLayout(*converter, op.getOperation());
-    auto cabiSig =
-        evaluateCABISignatureForC(llvmRetTy, llvmParamTys, dl, triple);
-
-    auto trampolineTy = mlir::LLVM::LLVMFunctionType::get(
-        cabiSig.abiReturnType, cabiSig.abiParamTypes);
+    auto trampolineTy =
+        mlir::LLVM::LLVMFunctionType::get(cabiSig.abiReturnType, cabiSig.abiParamTypes);
     auto trampoline = mlir::LLVM::LLVMFuncOp::create(
         rewriter, op.getLoc(), op.getSymName(), trampolineTy);
-
-    // Setup attributes (e.g. sret)
-    if (cabiSig.hasSRet) {
-      trampoline.setArgAttr(cabiSig.sretIndex,
-                            mlir::LLVM::LLVMDialect::getStructRetAttrName(),
-                            mlir::TypeAttr::get(cabiSig.sretType));
-    }
 
     mlir::Block *entry = trampoline.addEntryBlock(rewriter);
     rewriter.setInsertionPointToStart(entry);
 
     llvm::SmallVector<mlir::Value> targetArgs;
-    int trampolineArgIdx = cabiSig.hasSRet ? 1 : 0;
-
-    for (const auto &[paramType, passKind] : cabiSig.params) {
-      const bool isIndirect = passKind != CABIParamPassKind::Direct;
-      if (passKind == CABIParamPassKind::IndirectByVal)
-        trampoline.setArgAttr(trampolineArgIdx,
-                              mlir::LLVM::LLVMDialect::getByValAttrName(),
-                              mlir::TypeAttr::get(paramType));
-
-      auto arg = trampoline.getArgument(trampolineArgIdx++);
-      if (isIndirect) {
+    if (isImport) {
+      targetArgs.append(trampoline.getArguments().begin(),
+                        trampoline.getArguments().end());
+    } else if (cabiSig.hasPackedArgs) {
+      auto packedArgsPtr = trampoline.getArgument(cabiSig.packedArgsIndex);
+      for (const auto &[idx, paramType] : llvm::enumerate(llvmParamTys)) {
+        llvm::SmallVector<mlir::LLVM::GEPArg, 2> gepArgs{
+            0, static_cast<int32_t>(idx)};
+        auto fieldPtr = mlir::LLVM::GEPOp::create(
+            rewriter, op.getLoc(), ptrType, cabiSig.packedArgsType, packedArgsPtr,
+            gepArgs);
         targetArgs.push_back(
-            mlir::LLVM::LoadOp::create(rewriter, op.getLoc(), paramType, arg));
-      } else {
-        targetArgs.push_back(arg);
+            mlir::LLVM::LoadOp::create(rewriter, op.getLoc(), paramType, fieldPtr));
       }
+    } else {
+      auto trampolineArgs = trampoline.getArguments();
+      auto firstTargetArg = cabiSig.hasReturnPtr ? 1u : 0u;
+      targetArgs.append(trampolineArgs.begin() + firstTargetArg,
+                        trampolineArgs.end());
     }
 
     mlir::Operation *callOp;
@@ -2461,10 +2458,10 @@ struct ReussirTrampolineOpConversionPattern
       return mlir::failure();
     }
 
-    if (cabiSig.hasSRet) {
+    if (cabiSig.hasReturnPtr && !isImport) {
       mlir::LLVM::StoreOp::create(rewriter, 
           op.getLoc(), callOp->getResult(0),
-          trampoline.getArgument(cabiSig.sretIndex));
+          trampoline.getArgument(cabiSig.returnPtrIndex));
       mlir::LLVM::ReturnOp::create(rewriter, op.getLoc(), mlir::ValueRange{});
     } else {
       if (llvm::isa<mlir::LLVM::LLVMVoidType>(cabiSig.abiReturnType))

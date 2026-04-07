@@ -15,44 +15,26 @@
 
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/SmallVector.h>
-#include <llvm/TargetParser/Triple.h>
+#include <mlir/Dialect/LLVMIR/LLVMTypes.h>
 #include <mlir/IR/BuiltinTypes.h>
-#include <mlir/Interfaces/DataLayoutInterfaces.h>
 
 namespace reussir {
 
-enum class CABIKind {
-  Win64,
-  SysVAMD64,
-  AArch64AAPCS,
-  Unknown,
-};
-
-enum class CABIParamPassKind {
-  Direct,
-  IndirectByVal,
-  IndirectPointer,
-};
-
-struct CABIParamInfo {
-  mlir::Type originalType;
-  CABIParamPassKind passKind;
-};
-
 struct CABISignature {
+  bool isTrivial = false;
   mlir::Type abiReturnType;
   llvm::SmallVector<mlir::Type> abiParamTypes;
-  llvm::SmallVector<CABIParamInfo> params;
-  bool hasSRet = false;
-  unsigned sretIndex = 0;
-  mlir::Type sretType;
+  bool hasReturnPtr = false;
+  unsigned returnPtrIndex = 0;
+  mlir::Type returnStorageType;
+  bool hasPackedArgs = false;
+  unsigned packedArgsIndex = 0;
+  mlir::LLVM::LLVMStructType packedArgsType;
 };
 
-CABIKind detectCABIKind(const llvm::Triple &triple);
+bool isTrivialFFIType(mlir::Type type);
 
 CABISignature evaluateCABISignatureForC(mlir::Type returnType,
-                                        llvm::ArrayRef<mlir::Type> paramTypes,
-                                        const mlir::DataLayout &dl,
-                                        const llvm::Triple &triple);
+                                        llvm::ArrayRef<mlir::Type> paramTypes);
 
 } // namespace reussir

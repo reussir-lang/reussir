@@ -12,6 +12,7 @@
   - #chapter("chapters/development/compilation-process.typ")[Compilation Process]
   - #chapter("chapters/development/closures.typ")[Closures]
   - #chapter("chapters/development/regions.typ")[Regions]
+  - #chapter("chapters/development/trampolines.typ")[Trampolines]
   - #chapter("chapters/development/polymorphic-ffi.typ")[Polymorphic FFI]
 ])
 
