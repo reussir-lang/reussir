@@ -33,9 +33,6 @@ foreign import ccall "dynamic"
     callI64Func :: FunPtr (IO Int64) -> IO Int64
 
 foreign import ccall "dynamic"
-    callF64Func :: FunPtr (IO Double) -> IO Double
-
-foreign import ccall "dynamic"
     callBoolFunc :: FunPtr (IO Word8) -> IO Word8
 
 -- | Representation of the str type from Reussir (ptr, len pair)
@@ -55,6 +52,9 @@ instance Storable StrResult where
 -- | C helper function to call a JIT function returning a str type
 foreign import capi "Reussir/Bridge.h reussir_bridge_call_str_func"
     c_reussir_bridge_call_str_func :: Ptr () -> Ptr StrResult -> IO ()
+
+foreign import capi "Reussir/Bridge.h reussir_bridge_call_f64_func"
+    c_reussir_bridge_call_f64_func :: Ptr () -> Ptr Double -> IO ()
 
 -- Placeholder callback for JIT
 placeholderCallback :: () -> IO ByteString
@@ -174,8 +174,10 @@ compileAndExecFloat' input = do
                                 sym <- lookupSymbol jit (fromString funcName) False
                                 if sym /= nullPtr
                                     then do
-                                        val <- callF64Func (castPtrToFunPtr sym)
-                                        return $ Right val
+                                        alloca $ \resultPtr -> do
+                                            c_reussir_bridge_call_f64_func sym resultPtr
+                                            val <- peek resultPtr
+                                            return $ Right val
                                     else return $ Left $ "Symbol not found: " ++ funcName
                             else return $ Left "Failed to add module"
 

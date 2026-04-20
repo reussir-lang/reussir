@@ -16,7 +16,8 @@ data Trampoline = Trampoline {
 trampolineCodegen :: Trampoline -> Codegen ()
 trampolineCodegen (Trampoline name target abi) = emitBuilderLineM $ do
     let opName = "reussir.trampoline"
+    let direction = "export"
     let abi' = TB.fromText $ T.show abi
     name' <- emit name
     target' <- emit target
-    return $ opName <> " " <> abi' <> " @" <> name' <> " = @" <> target' 
+    return $ opName <> " " <> direction <> " " <> abi' <> " @" <> name' <> " = @" <> target'

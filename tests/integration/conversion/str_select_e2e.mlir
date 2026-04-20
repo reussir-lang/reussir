@@ -17,7 +17,7 @@ module {
     return %idx, %found : index, i1
   }
 
-  reussir.trampoline "C" @test_basic = @test_basic_
+  reussir.trampoline export "C" @test_basic = @test_basic_
 
   // Function to test pattern with common prefix: "abc" (0), "abd" (1), "xyz" (2)
   func.func @test_prefix_(%str: !reussir.str<local>) -> (index, i1) {
@@ -25,7 +25,7 @@ module {
     return %idx, %found : index, i1
   }
 
-  reussir.trampoline "C" @test_prefix = @test_prefix_
+  reussir.trampoline export "C" @test_prefix = @test_prefix_
 
   // Function to test long pattern
   func.func @test_long_(%str: !reussir.str<local>) -> (index, i1) {
@@ -33,7 +33,7 @@ module {
     return %idx, %found : index, i1
   }
 
-  reussir.trampoline "C" @test_long = @test_long_
+  reussir.trampoline export "C" @test_long = @test_long_
 
   // Function to test many patterns with various first bytes
   func.func @test_many_(%str: !reussir.str<local>) -> (index, i1) {
@@ -41,5 +41,5 @@ module {
     return %idx, %found : index, i1
   }
 
-  reussir.trampoline "C" @test_many = @test_many_
+  reussir.trampoline export "C" @test_many = @test_many_
 }

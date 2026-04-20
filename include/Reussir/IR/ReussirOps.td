@@ -1760,19 +1760,34 @@ def ReussirTrampolineOp : ReussirOp<"trampoline", [
 ]> {
   let summary = "Trampoline for FFI calls";
   let description = [{
-    Interally, Reussir uses MLIR calling convension, which typically aligns with
-    platform ABI. However, for C-FFI, platform ABI is not enough. For example,
-    windows x64 sometimes require hidden pointer to structural return values.
-    `reussir.trampoline` is a trampoline exported to FFI. Currently, only "C" 
-    ABI is supported.
+    `reussir.trampoline` describes an FFI boundary shim. The `direction`
+    attribute distinguishes between:
+
+    - `export`: expose a Reussir-internal function through a C-facing boundary.
+    - `import`: provide a Reussir symbol that forwards to a C-facing target.
+
+    The backend classifies a trampoline as trivial when it accepts fewer than
+    four integral or pointer arguments and returns at most one integral or
+    pointer result. Trivial trampolines forward directly with best-effort
+    minimal overhead.
+
+    Nontrivial trampolines use a backend-defined explicit boundary:
+
+    - nontrivial returns use a leading return pointer parameter;
+    - nontrivial argument lists are packed into a literal LLVM struct passed by
+      pointer in source order.
+
+    Currently only the `"C"` ABI is supported.
   }];
   let arguments = (ins 
+    DefaultValuedAttr<TrampolineDirection,
+                      "::reussir::TrampolineDirection::Export">:$direction,
     Arg<FlatSymbolRefAttr, "Wrapped target function">:$target,
     Arg<StrAttr, "ABI Name">:$abi_name,
-    Arg<SymbolNameAttr, "Exported symbol name">:$sym_name
+    Arg<SymbolNameAttr, "Trampoline symbol name">:$sym_name
   );
   let assemblyFormat = [{
-    $abi_name $sym_name `=` $target attr-dict
+    $direction $abi_name $sym_name `=` $target attr-dict
   }];
 }
 #endif // REUSSIR_IR_REUSSIROPS_TD

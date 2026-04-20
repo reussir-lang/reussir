@@ -17,10 +17,14 @@ typedef struct {
   uint8_t found;
 } SelectResult;
 
-extern SelectResult test_basic(ReussirStr str);
-extern SelectResult test_prefix(ReussirStr str);
-extern SelectResult test_long(ReussirStr str);
-extern SelectResult test_many(ReussirStr str);
+typedef struct {
+  ReussirStr str;
+} SelectArgs;
+
+extern void test_basic(SelectResult *out, SelectArgs *args);
+extern void test_prefix(SelectResult *out, SelectArgs *args);
+extern void test_long(SelectResult *out, SelectArgs *args);
+extern void test_many(SelectResult *out, SelectArgs *args);
 
 // Helper to create a ReussirStr from a C string
 static ReussirStr make_str(const char *s) {
@@ -28,6 +32,15 @@ static ReussirStr make_str(const char *s) {
   str.ptr = s;
   str.len = strlen(s);
   return str;
+}
+
+static SelectResult call_select(void (*fn)(SelectResult *, SelectArgs *),
+                                const char *s) {
+  SelectResult out;
+  SelectArgs args;
+  args.str = make_str(s);
+  fn(&out, &args);
+  return out;
 }
 
 // Test assertion macro
@@ -45,65 +58,65 @@ int main() {
   SelectResult r;
 
   // Test basic pattern matching
-  r = test_basic(make_str("foo"));
+  r = call_select(test_basic, "foo");
   ASSERT_MATCH(r, 0);
 
-  r = test_basic(make_str("bar"));
+  r = call_select(test_basic, "bar");
   ASSERT_MATCH(r, 1);
 
-  r = test_basic(make_str("baz"));
+  r = call_select(test_basic, "baz");
   ASSERT_NO_MATCH(r);
 
-  r = test_basic(make_str("foobar"));
+  r = call_select(test_basic, "foobar");
   ASSERT_NO_MATCH(r); // "foobar" is not exactly "foo"
 
-  r = test_basic(make_str(""));
+  r = call_select(test_basic, "");
   ASSERT_NO_MATCH(r);
 
   // Test prefix patterns (distinguishing "abc" vs "abd")
-  r = test_prefix(make_str("abc"));
+  r = call_select(test_prefix, "abc");
   ASSERT_MATCH(r, 0);
 
-  r = test_prefix(make_str("abd"));
+  r = call_select(test_prefix, "abd");
   ASSERT_MATCH(r, 1);
 
-  r = test_prefix(make_str("xyz"));
+  r = call_select(test_prefix, "xyz");
   ASSERT_MATCH(r, 2);
 
-  r = test_prefix(make_str("abz"));
+  r = call_select(test_prefix, "abz");
   ASSERT_NO_MATCH(r);
 
-  r = test_prefix(make_str("ab"));
+  r = call_select(test_prefix, "ab");
   ASSERT_NO_MATCH(r); // prefix of pattern but not full match
 
   // Test long pattern
-  r = test_long(
-      make_str("extremely_long_unique_pattern_that_is_over_32_chars"));
+  r = call_select(test_long,
+                  "extremely_long_unique_pattern_that_is_over_32_chars");
   ASSERT_MATCH(r, 0);
 
-  r = test_long(make_str("extremely_long_unique_pattern"));
+  r = call_select(test_long, "extremely_long_unique_pattern");
   ASSERT_NO_MATCH(r); // partial match
 
-  r = test_long(make_str("short"));
+  r = call_select(test_long, "short");
   ASSERT_NO_MATCH(r);
 
   // Test many patterns
-  r = test_many(make_str("apple"));
+  r = call_select(test_many, "apple");
   ASSERT_MATCH(r, 0);
 
-  r = test_many(make_str("banana"));
+  r = call_select(test_many, "banana");
   ASSERT_MATCH(r, 1);
 
-  r = test_many(make_str("cherry"));
+  r = call_select(test_many, "cherry");
   ASSERT_MATCH(r, 2);
 
-  r = test_many(make_str("date"));
+  r = call_select(test_many, "date");
   ASSERT_MATCH(r, 3);
 
-  r = test_many(make_str("elderberry"));
+  r = call_select(test_many, "elderberry");
   ASSERT_MATCH(r, 4);
 
-  r = test_many(make_str("fig"));
+  r = call_select(test_many, "fig");
   ASSERT_NO_MATCH(r);
 
   return 0;

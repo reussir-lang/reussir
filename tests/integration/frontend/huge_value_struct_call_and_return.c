@@ -12,7 +12,11 @@ typedef struct {
   uint64_t f7;
 } HugeValue;
 
-extern HugeValue transform_huge_value_ffi(HugeValue input);
+typedef struct {
+  HugeValue input;
+} HugeValueArgs;
+
+extern void transform_huge_value_ffi(HugeValue *out, HugeValueArgs *args);
 
 static void assert_huge_value_eq(HugeValue actual, HugeValue expected) {
   if (actual.f0 != expected.f0 || actual.f1 != expected.f1 ||
@@ -23,14 +27,21 @@ static void assert_huge_value_eq(HugeValue actual, HugeValue expected) {
   }
 }
 
+static HugeValue call_transform_huge_value(HugeValue input) {
+  HugeValue out;
+  HugeValueArgs args = {input};
+  transform_huge_value_ffi(&out, &args);
+  return out;
+}
+
 int main() {
   HugeValue input = {3, 5, 8, 13, 21, 34, 55, 89};
   HugeValue expected = {92, 115, 110, 97, 86, 82, 90, 113};
-  HugeValue output = transform_huge_value_ffi(input);
+  HugeValue output = call_transform_huge_value(input);
   assert_huge_value_eq(output, expected);
 
   HugeValue expected_second = {205, 295, 356, 441, 571, 742, 895, 849};
-  HugeValue output_second = transform_huge_value_ffi(output);
+  HugeValue output_second = call_transform_huge_value(output);
   assert_huge_value_eq(output_second, expected_second);
 
   return 0;

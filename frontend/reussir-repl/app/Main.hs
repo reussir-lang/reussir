@@ -81,12 +81,6 @@ foreign import ccall "dynamic"
     callU8Func :: FunPtr (IO Word8) -> IO Word8
 
 foreign import ccall "dynamic"
-    callF64Func :: FunPtr (IO Double) -> IO Double
-
-foreign import ccall "dynamic"
-    callF32Func :: FunPtr (IO Float) -> IO Float
-
-foreign import ccall "dynamic"
     callBoolFunc :: FunPtr (IO Word8) -> IO Word8
 
 foreign import ccall "dynamic"
@@ -109,6 +103,12 @@ instance Storable StrResult where
 -- | C helper function to call a JIT function returning a str type
 foreign import capi "Reussir/Bridge.h reussir_bridge_call_str_func"
     c_reussir_bridge_call_str_func :: Ptr () -> Ptr StrResult -> IO ()
+
+foreign import capi "Reussir/Bridge.h reussir_bridge_call_f32_func"
+    c_reussir_bridge_call_f32_func :: Ptr () -> Ptr Float -> IO ()
+
+foreign import capi "Reussir/Bridge.h reussir_bridge_call_f64_func"
+    c_reussir_bridge_call_f64_func :: Ptr () -> Ptr Double -> IO ()
 
 --------------------------------------------------------------------------------
 -- Placeholder callback for lazy module loading
@@ -523,15 +523,21 @@ executeWithResultKind sym resultKind = case resultKind of
         result <- callU64Func (castPtrToFunPtr sym)
         return $ show result ++ " : u64"
     ResultF16 -> do
-        -- F16 is typically not directly supported in C ABI, use F32
-        result <- callF32Func (castPtrToFunPtr sym)
-        return $ show result ++ " : f16"
+        -- F16 is typically not directly supported in C ABI, use F32 storage.
+        alloca $ \resultPtr -> do
+            c_reussir_bridge_call_f32_func sym resultPtr
+            result <- peek resultPtr
+            return $ show result ++ " : f16"
     ResultF32 -> do
-        result <- callF32Func (castPtrToFunPtr sym)
-        return $ show result ++ " : f32"
+        alloca $ \resultPtr -> do
+            c_reussir_bridge_call_f32_func sym resultPtr
+            result <- peek resultPtr
+            return $ show result ++ " : f32"
     ResultF64 -> do
-        result <- callF64Func (castPtrToFunPtr sym)
-        return $ show result ++ " : f64"
+        alloca $ \resultPtr -> do
+            c_reussir_bridge_call_f64_func sym resultPtr
+            result <- peek resultPtr
+            return $ show result ++ " : f64"
     ResultBool -> do
         result <- callBoolFunc (castPtrToFunPtr sym)
         return $ (if result /= 0 then "true" else "false") ++ " : bool"
