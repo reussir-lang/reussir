@@ -86,6 +86,10 @@ aliased elements would break the drop traversal's exactly-once contract.
   the existing universal fallback donor; `token.alloc` gains an SSA size
   operand (the `__reussir_allocate` entry point already takes a runtime
   size — only the constant-gated `_small` fast path stays static-only).
+  Dynamic arrays can donate tokens to statically sized constructions, but
+  dynamic recipients retain their original allocation: `token.ensure` and
+  `token.realloc` do not yet carry the requested SSA byte count. Equality of
+  two dynamic token types does not establish equal allocation sizes.
   Boxes past `kAllocatorBinModelMax` are excluded from reuse pairing,
   implementing the #344 integration note.
 
