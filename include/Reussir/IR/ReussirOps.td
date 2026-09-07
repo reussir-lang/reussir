@@ -591,6 +591,7 @@ def ReussirRcCreateOp
 
   let arguments = (ins Arg<AnyType, "value">:$value,
       Optional<ReussirTokenType>:$token, Optional<ReussirRegionType>:$region,
+      Variadic<Index>:$extents,
       OptionalAttr<FlatSymbolRefAttr>:$vtable, UnitAttr:$skipRc);
   let results = (outs Res<ReussirRcType, "Created RC pointer">:$rcPtr);
 
@@ -599,6 +600,7 @@ def ReussirRcCreateOp
     oilist ( 
       `token` `(` $token `:` type($token) `)`
     | `region` `(` $region `:` type($region) `)` 
+    | `extents` `(` $extents `)`
     | `vtable` `(` $vtable `)`
     | `skip_rc` $skipRc
     )

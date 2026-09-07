@@ -1859,6 +1859,56 @@ struct ReussirRcCreateOpConversionPattern
         initializeRcCreateStorage(op, adaptor, getTypeConverter(), rewriter);
     if (mlir::failed(storage))
       return mlir::failure();
+    RcBoxType boxType = op.getRcPtr().getType().getInnerBoxType();
+    if (boxType.hasDynamicArrayPayload()) {
+      // Canonical strided-header construction: offset 0, the merged
+      // static/runtime sizes, and row-major suffix-product strides. The
+      // payload itself starts poison (the value operand is the zero-length
+      // tail placeholder — nothing to store).
+      mlir::Location loc = op.getLoc();
+      auto converter =
+          static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter());
+      auto llvmBoxType = converter->convertType(boxType);
+      auto llvmPtrType =
+          mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+      mlir::Type indexType = converter->getIndexType();
+      auto storeHeaderField = [&](int32_t fieldIndex, mlir::Value value) {
+        auto fieldPtr = mlir::LLVM::GEPOp::create(
+            rewriter, loc, llvmPtrType, llvmBoxType, storage->token,
+            llvm::ArrayRef<mlir::LLVM::GEPArg>{0, fieldIndex});
+        mlir::LLVM::StoreOp::create(rewriter, loc, value, fieldPtr);
+      };
+      auto indexConst = [&](int64_t v) -> mlir::Value {
+        return mlir::LLVM::ConstantOp::create(
+            rewriter, loc, indexType,
+            mlir::IntegerAttr::get(indexType, v));
+      };
+      auto arrayType = llvm::cast<ArrayType>(boxType.getElementType());
+      int64_t rank = arrayType.getRank();
+      storeHeaderField(1, indexConst(0)); // offset
+      llvm::SmallVector<mlir::Value> sizes;
+      size_t nextExtent = 0;
+      for (int64_t dim : arrayType.getShape())
+        sizes.push_back(mlir::ShapedType::isDynamic(dim)
+                            ? adaptor.getExtents()[nextExtent++]
+                            : indexConst(dim));
+      for (int64_t i = 0; i < rank; ++i)
+        storeHeaderField(static_cast<int32_t>(2 + i), sizes[i]);
+      mlir::Value stride = indexConst(1);
+      llvm::SmallVector<mlir::Value> strides(rank);
+      for (int64_t i = rank - 1; i >= 0; --i) {
+        strides[i] = stride;
+        if (i > 0)
+          stride =
+              mlir::LLVM::MulOp::create(rewriter, loc, stride, sizes[i]);
+      }
+      for (int64_t i = 0; i < rank; ++i)
+        storeHeaderField(static_cast<int32_t>(2 + rank + i), strides[i]);
+      if (storage->countPtr)
+        storeInitialRcCount(storage->countPtr, op.getLoc(), rewriter);
+      rewriter.replaceOp(op, storage->token);
+      return mlir::success();
+    }
     auto objectStore = mlir::LLVM::StoreOp::create(
         rewriter, op.getLoc(), adaptor.getValue(), storage->elementPtr);
     if (!storage->regional)

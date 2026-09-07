@@ -403,19 +403,30 @@ mlir::LogicalResult ReussirRcReinterpretOp::verify() {
   // Get the RC box type for the RC pointer
   RcBoxType rcBoxType = rcType.getInnerBoxType();
 
-  // Get the data layout to compute alignment and size
+  // Get the data layout to compute alignment
   auto dataLayout = mlir::DataLayout::closest(getOperation());
   auto alignment = dataLayout.getTypeABIAlignment(rcBoxType);
-  auto size = dataLayout.getTypeSize(rcBoxType);
-
-  if (!size.isFixed())
-    return emitOpError("RC box type must have a fixed size");
 
   // Check that token alignment matches RC box alignment
   if (tokenType.getAlign() != alignment)
     return emitOpError("token alignment must match RC box alignment, ")
            << "token alignment: " << tokenType.getAlign()
            << ", RC box alignment: " << alignment;
+
+  // A dynamic-extent array box has no static size (checked before any size
+  // query — the box's size is not computable); its decrement reinterprets it
+  // as a dynamic token, which the size-recovering allocator frees or
+  // resizes from the pointer alone.
+  if (rcBoxType.hasDynamicArrayPayload())
+    return tokenType.isDynamicSize()
+               ? mlir::success()
+               : emitOpError("a dynamic-extent array box reinterprets as a "
+                             "dynamically sized token");
+
+  auto size = dataLayout.getTypeSize(rcBoxType);
+
+  if (!size.isFixed())
+    return emitOpError("RC box type must have a fixed size");
 
   // Check that token size matches RC box size. Under per-constructor box
   // sizing a fused-header variant box may be any arm's cell: a
@@ -686,6 +697,11 @@ TokenType ReussirRcDecOp::getTokenType() {
     }
     return TokenType::getDynamic(getContext(), alignment);
   }
+  // A dynamic-extent array box has no static size (the strided header
+  // carries the shape); its token is dynamic and the size-recovering
+  // allocator frees/resizes it from the pointer alone.
+  if (rcBoxType.hasDynamicArrayPayload())
+    return TokenType::getDynamic(getContext(), alignment);
   auto size = dataLayout.getTypeSize(rcBoxType);
 
   return TokenType::get(getContext(), alignment, size.getFixedValue());
@@ -722,6 +738,20 @@ ReussirRcDecOp::replaceWithProduced(mlir::PatternRewriter &builder) {
 // RcCreateOp verification
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRcCreateOp::verify() {
+  // A dynamic-extent array construction supplies one runtime extent per
+  // dynamic dimension (in dimension order); construction is canonical
+  // (offset 0, row-major suffix strides), written into the strided header.
+  size_t expectedExtents = 0;
+  if (auto arrayType =
+          llvm::dyn_cast<ArrayType>(getRcPtr().getType().getElementType());
+      arrayType && !arrayType.hasStaticShape())
+    expectedExtents = llvm::count_if(arrayType.getShape(), [](int64_t d) {
+      return mlir::ShapedType::isDynamic(d);
+    });
+  if (getExtents().size() != expectedExtents)
+    return emitOpError("expects ")
+           << expectedExtents << " extent operand(s), got "
+           << getExtents().size();
   return verifyRcCreateLikeOp(getOperation(), getRcPtr().getType(),
                               getValue().getType(), getToken(), getRegion());
 }
@@ -751,6 +781,10 @@ TokenType ReussirRcCreateOp::getTokenType() {
       return TokenType::get(getContext(), alignment, armSize.getFixedValue());
     }
   }
+  // A dynamic-extent array box is dynamically sized; the instantiation pass
+  // computes `header + product(sizes) * elemsize` from the extents.
+  if (rcBoxType.hasDynamicArrayPayload())
+    return TokenType::getDynamic(getContext(), alignment);
   auto size = dataLayout.getTypeSize(rcBoxType);
   return TokenType::get(getContext(), alignment, size.getFixedValue());
 }
