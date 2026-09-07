@@ -1,4 +1,5 @@
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion | %FileCheck %s --check-prefixes=DROP,ACQUIRE
+// RUN: %reussir-opt %s --reussir-convert-to-std --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=CLONE
 
 // Ownership of a dynamic-extent array:
 // the element traversal never unrolls a dynamic shape, takes its loop bounds
@@ -7,6 +8,8 @@
 
 !elt = !reussir.rc<i64>
 !dv = !reussir.array<? x 2 x !elt>
+!rc_dv = !reussir.rc<!dv>
+!view = memref<?x2x!elt, strided<[?, ?], offset: ?>>
 
 module {
   // DROP-LABEL: func.func @drop_dynamic(
@@ -37,5 +40,35 @@ module {
   func.func @acquire_dynamic_inner(%xs: !reussir.ref<!reussir.array<2 x ? x !elt>>) {
     reussir.ref.acquire (%xs : !reussir.ref<!reussir.array<2 x ? x !elt>>)
     return
+  }
+
+  // Dynamic clones use the same initializer as static clones. The source's
+  // logical extents size the allocation and the loop acquires each element.
+  // CLONE-LABEL: func.func @clone_dynamic(
+  // CLONE: reussir.rc.is_unique
+  // CLONE: } else {
+  // CLONE: %[[SRC:.+]] = reussir.rc.borrow(%arg0
+  // CLONE: %[[SRC_VIEW:.+]] = reussir.array.view(%[[SRC]]
+  // CLONE: %[[N:.+]] = memref.dim %[[SRC_VIEW]],
+  // CLONE: arith.muli %[[N]],
+  // CLONE: arith.muli
+  // CLONE: %[[BYTES:.+]] = arith.addi
+  // CLONE: %[[TOKEN:.+]] = reussir.token.alloc(%[[BYTES]] : index) : <align : 8, size : ?>
+  // CLONE: %[[CLONED:.+]] = reussir.array.instantiate(%[[TOKEN]] : !reussir.token<align : 8, size : ?>) extents(%[[N]])
+  // CLONE: scf.for %[[I:.+]] = %{{.+}} to %[[N]]
+  // CLONE: scf.for %[[J:.+]] =
+  // CLONE: %[[COPY_VIEW:.+]] = reussir.array.view(%[[SRC]]
+  // CLONE: %[[ELEMENT:.+]] = memref.load %[[COPY_VIEW]][%[[I]], %[[J]]]
+  // CLONE: reussir.rc.inc
+  // CLONE: memref.store %[[ELEMENT]],
+  // CLONE: reussir.rc.fetch(%arg0
+  // CLONE: reussir.rc.set(%arg0
+  // CLONE: scf.yield %[[CLONED]]
+  func.func @clone_dynamic(%xs: !rc_dv) -> !rc_dv {
+    %res = reussir.array.with_unique_view (%xs : !rc_dv) -> !rc_dv {
+      ^bb0(%view: !view):
+        reussir.scf.yield
+    }
+    return %res : !rc_dv
   }
 }
