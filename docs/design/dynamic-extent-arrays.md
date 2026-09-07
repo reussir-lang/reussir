@@ -133,11 +133,15 @@ recovered from the payload ref by the static header offset); `token.alloc`
 takes an SSA byte size for `token<align, ?>`; `rc.create … extents(…)`
 writes the canonical header and its instantiated token computes `header +
 product(sizes) * elemsize`; `rc.dec`/`rc.reinterpret` produce dynamic
-tokens freed unsized. Executable e2e: `dynamic_array_e2e.mlir`. Open
-backend halves: dynamic `array.project`, the `with_unique_view` clone
-branch (runtime-length copy), restride ops, `expand-strided-metadata` in
-the shipping pipeline, and wiring the frontend codegen off its `err(…)`
-stubs.
+tokens freed unsized; `array.project` accepts the dynamic strided view and
+every projection of it keeps that layout (descriptor arithmetic on the live
+offset field); the ownership traversal (`emitArrayElementTraversal`, the
+drop/acquire nest) unrolls only static shapes and takes dynamic bounds from
+`memref.dim`. Executable e2e: `dynamic_array_e2e.mlir`,
+`dynamic_array_managed_e2e.mlir`. Open backend halves: the
+`with_unique_view` clone branch (runtime-length copy), restride ops,
+`expand-strided-metadata` in the shipping pipeline, and wiring the frontend
+codegen off its `err(…)` stubs.
 
 Frontend landed: `?` extents, the `DYNAMIC_EXTENT` sentinel through the
 type system, leading runtime extents on `splat`/`tabulate`, `array::dim`,

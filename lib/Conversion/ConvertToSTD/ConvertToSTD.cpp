@@ -774,11 +774,6 @@ static void cloneArrayWithUniqueViewBody(ReussirArrayWithUniqueViewOp op,
   mlir::scf::YieldOp::create(rewriter, op.getLoc(), yieldedValues);
 }
 
-static mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType) {
-  return mlir::MemRefType::get(arrayType.getShape(),
-                               arrayType.getElementType());
-}
-
 static mlir::Value
 materializeArrayViewValue(mlir::Location loc, mlir::PatternRewriter &rewriter,
                           ArrayType arrayType, mlir::Value ref,
