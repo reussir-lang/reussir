@@ -10,9 +10,9 @@
 // Executable proof of the ownership traversal over a dynamic-extent array of
 // managed elements: a rank-2 `array<? x 2 x rc<i32>>` whose drop walks a loop
 // nest bounded by `memref.dim` on the leading dim and projects through the
-// dynamic strided layout at every rank. The array is shared, so the first
-// decrement only lowers the count and the second releases every element
-// exactly once.
+// dynamic strided layout at every rank. The array is shared and updated
+// through a unique view, so the clone's acquire traversal retains every
+// element once and the two drops release each element exactly twice.
 !e = !reussir.rc<i32>
 !dv = !reussir.array<? x 2 x !e>
 !rc_dv = !reussir.rc<!dv>
@@ -65,22 +65,45 @@ module {
     return %s : i32
   }
 
+  func.func private @set00(%rc: !rc_dv, %value: !e) -> !rc_dv attributes {llvm.linkage = #llvm.linkage<internal>} {
+    %updated = reussir.array.with_unique_view (%rc : !rc_dv) -> !rc_dv {
+      ^bb0(%view: !view):
+        %c0 = arith.constant 0 : index
+        %row = reussir.array.project(%view : !view) [%c0 : index] : !row
+        %slot = reussir.array.project(%row : !row) [%c0 : index] : !reussir.ref<!e field>
+        // Release the old occupant, then move the new element in.
+        %old = reussir.ref.load (%slot : !reussir.ref<!e field>) : !e
+        reussir.rc.dec (%old : !e)
+        reussir.ref.store (%slot : !reussir.ref<!e field>) (%value : !e)
+        reussir.scf.yield
+    }
+    return %updated : !rc_dv
+  }
+
   func.func @main() -> i32 {
     %c5 = arith.constant 5 : index
-    // sum(0..9) = 45
+    %c100 = arith.constant 100 : i32
+    // sum(0..9) = 45; replacing slot [0][0] (value 0) with 100 gives 145.
     %c45 = arith.constant 45 : i32
+    %c145 = arith.constant 145 : i32
 
     %shared = func.call @make(%c5) : (index) -> !rc_dv
     reussir.rc.inc (%shared : !rc_dv)
-    %shared_sum = func.call @sum(%shared) : (!rc_dv) -> i32
-    %shared_bad = arith.cmpi ne, %shared_sum, %c45 : i32
-    scf.if %shared_bad {
-      reussir.panic "managed dynamic array sum mismatch"
+    %hundred = reussir.rc.create value(%c100 : i32) : !e
+    %updated = func.call @set00(%shared, %hundred) : (!rc_dv, !e) -> !rc_dv
+
+    %original_sum = func.call @sum(%shared) : (!rc_dv) -> i32
+    %original_bad = arith.cmpi ne, %original_sum, %c45 : i32
+    scf.if %original_bad {
+      reussir.panic "shared managed dynamic array was mutated through the clone"
     }
-    // The first decrement only drops the count; the second walks the
-    // traversal and releases every element exactly once.
+    %updated_sum = func.call @sum(%updated) : (!rc_dv) -> i32
+    %updated_bad = arith.cmpi ne, %updated_sum, %c145 : i32
+    scf.if %updated_bad {
+      reussir.panic "managed dynamic array clone did not carry the update"
+    }
     reussir.rc.dec (%shared : !rc_dv)
-    reussir.rc.dec (%shared : !rc_dv)
+    reussir.rc.dec (%updated : !rc_dv)
 
     %c0 = arith.constant 0 : i32
     return %c0 : i32

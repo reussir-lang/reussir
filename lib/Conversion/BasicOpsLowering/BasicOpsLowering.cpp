@@ -3509,19 +3509,23 @@ struct ReussirRefMemcpyConversionPattern
         static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter());
     auto dataLayout = getDataLayout(*converter, op.getOperation());
 
-    // Get the element type and its size
-    RefType srcType = op.getSrc().getType();
-    mlir::Type elementType = converter->convertType(srcType.getElementType());
-    size_t size = dataLayout.getTypeSize(elementType);
+    // The byte count: the `size` operand for a dynamically sized element (a
+    // dynamic-extent array payload), the element's static size otherwise.
+    mlir::Value sizeVal = adaptor.getSize();
+    if (!sizeVal) {
+      RefType srcType = op.getSrc().getType();
+      mlir::Type elementType = converter->convertType(srcType.getElementType());
+      size_t size = dataLayout.getTypeSize(elementType);
+      sizeVal = mlir::LLVM::ConstantOp::create(
+          rewriter, op.getLoc(), converter->getIndexType(),
+          rewriter.getIntegerAttr(converter->getIndexType(), size));
+    }
 
     // Create LLVM memcpy intrinsic (non-overlapping, so isVolatile = false).
     // The plain form, not memcpy.inline: with a constant length LLVM already
     // expands small copies to loads/stores and picks the best strategy
     // (expansion or libcall) for large ones — forcing inline expansion on a
     // big payload (e.g. a whole array clone) just unrolls it.
-    auto sizeVal = mlir::LLVM::ConstantOp::create(
-        rewriter, op.getLoc(), converter->getIndexType(),
-        rewriter.getIntegerAttr(converter->getIndexType(), size));
     rewriter.replaceOpWithNewOp<mlir::LLVM::MemcpyOp>(op, adaptor.getDst(),
                                                       adaptor.getSrc(), sizeVal,
                                                       /*isVolatile=*/false);

@@ -1590,12 +1590,23 @@ def ReussirRefMemcpyOp : ReussirReferenceOp<"memcpy", []> {
 
     This is a low-level operation that does not perform any reference counting
     or ownership transfer. It simply copies the bytes from source to destination.
+
+    The byte count is the element's static size. An element without one — a
+    dynamic-extent array payload, whose size is `product(sizes) * elemsize`
+    at runtime — takes the count as an SSA operand instead, and the operand
+    is required exactly then:
+    ```mlir
+    reussir.ref.memcpy %src to %dst size(%bytes : index)
+        : <!reussir.array<? x i32>> to <!reussir.array<? x i32>>
+    ```
   }];
   let arguments = (ins Arg<ReussirRefType, "source reference",
       [MemRead]>:$src,
-      Arg<ReussirRefType, "destination reference", [MemWrite]>:$dst);
+      Arg<ReussirRefType, "destination reference", [MemWrite]>:$dst,
+      Arg<Optional<Index>, "byte count of a dynamically sized element">:$size);
   let assemblyFormat = [{
-    $src `to` $dst `:` type($src) `to` type($dst) attr-dict
+    $src `to` $dst (`size` `(` $size^ `:` `index` `)`)?
+    `:` type($src) `to` type($dst) attr-dict
   }];
   let hasVerifier = 1;
 }

@@ -1966,6 +1966,18 @@ mlir::LogicalResult ReussirRefMemcpyOp::verify() {
            << "source element type: " << srcType.getElementType()
            << ", destination element type: " << dstType.getElementType();
 
+  // The byte count is static unless the element has no static size — a
+  // dynamic-extent array payload — in which case it is the `size` operand.
+  auto arrayType = llvm::dyn_cast<ArrayType>(srcType.getElementType());
+  bool dynamicallySized = arrayType && !arrayType.hasStaticShape();
+  if (dynamicallySized && !getSize())
+    return emitOpError("copying a dynamic-extent array payload requires the "
+                       "`size` operand");
+  if (!dynamicallySized && getSize())
+    return emitOpError("the `size` operand is only for a dynamic-extent "
+                       "array payload; ")
+           << srcType.getElementType() << " has a static size";
+
   return mlir::success();
 }
 
