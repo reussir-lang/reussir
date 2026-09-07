@@ -675,7 +675,44 @@ llvm::SmallVector<mlir::Type> RcBoxType::getHeaderTypes() const {
     auto ptrTy = mlir::LLVM::LLVMPointerType::get(getContext());
     return {ptrTy, ptrTy, ptrTy};
   }
+  // A dynamic-extent array box stores the full strided-memref encoding —
+  // exactly what `memref.extract_strided_metadata` returns, minus the base
+  // pointer: offset, then one size and one stride per dimension, all
+  // index-typed so the width follows the target's data layout.
+  if (auto arrayTy = llvm::dyn_cast<ArrayType>(getEleTy());
+      arrayTy && !arrayTy.hasStaticShape()) {
+    llvm::SmallVector<mlir::Type> header;
+    auto indexTy = mlir::IndexType::get(getContext());
+    header.push_back(mlir::IntegerType::get(getContext(), 32));
+    header.push_back(indexTy); // offset
+    for (size_t i = 0, rank = arrayTy.getRank(); i < 2 * rank; ++i)
+      header.push_back(indexTy); // sizes, then strides
+    return header;
+  }
   return {mlir::IntegerType::get(getContext(), 32)};
+}
+
+bool RcBoxType::hasDynamicArrayPayload() const {
+  auto arrayTy = llvm::dyn_cast<ArrayType>(getEleTy());
+  return arrayTy && !arrayTy.hasStaticShape();
+}
+
+uint64_t
+RcBoxType::getDynamicPayloadOffset(const mlir::DataLayout &dataLayout) const {
+  assert(hasDynamicArrayPayload() &&
+         "payload offset is the strided-header layout's; static boxes use "
+         "deriveLayoutForRcBox");
+  uint64_t offset = 0;
+  uint64_t align = 1;
+  for (mlir::Type header : getHeaderTypes()) {
+    uint64_t memberAlign = dataLayout.getTypeABIAlignment(header);
+    offset = llvm::alignTo(offset, memberAlign);
+    offset += dataLayout.getTypeSize(header);
+    align = std::max(align, memberAlign);
+  }
+  uint64_t elemAlign = dataLayout.getTypeABIAlignment(
+      llvm::cast<ArrayType>(getEleTy()).getElementType());
+  return llvm::alignTo(offset, std::max(align, elemAlign));
 }
 
 bool RecordType::hasFusedHeader() const {
@@ -1406,6 +1443,9 @@ RcBoxType::getTypeSizeInBits(const mlir::DataLayout &dataLayout,
   // overlays the element's leading count slot.
   if (isHeaderFused())
     return dataLayout.getTypeSizeInBits(getElementType());
+  assert(!hasDynamicArrayPayload() &&
+         "a dynamic-array box has no static size; the allocation computes "
+         "header + product(sizes) * elemsize at runtime");
   auto derived = deriveLayoutForRcBox(*this, dataLayout);
   if (!derived)
     llvm_unreachable("RcBoxType must have a fixed size");
@@ -1416,6 +1456,15 @@ uint64_t RcBoxType::getABIAlignment(const mlir::DataLayout &dataLayout,
                                     mlir::DataLayoutEntryListRef params) const {
   if (isHeaderFused())
     return dataLayout.getTypeABIAlignment(getElementType());
+  if (hasDynamicArrayPayload()) {
+    // max over the header members (index-heavy) and the element type; the
+    // shape never affects alignment.
+    uint64_t align = dataLayout.getTypeABIAlignment(
+        llvm::cast<ArrayType>(getEleTy()).getElementType());
+    for (mlir::Type header : getHeaderTypes())
+      align = std::max(align, dataLayout.getTypeABIAlignment(header));
+    return align;
+  }
   auto derived = deriveLayoutForRcBox(*this, dataLayout);
   if (!derived)
     llvm_unreachable("RcBoxType must have a fixed alignment");

@@ -120,9 +120,13 @@ aliased elements would break the drop traversal's exactly-once contract.
 
 Dialect landed: `!reussir.array<? x T>` parses/verifies (`?` extents,
 `ShapedType::kDynamic`), size queries assert on dynamic shapes, and the
-type verifiers restrict dynamic arrays to shared boxes. Open backend
-halves: the strided-header box, the descriptor lowering of `array.view`,
-runtime-sized allocation, dynamic `array.project`, the `with_unique_view`
+type verifiers restrict dynamic arrays to shared boxes; the strided-header
+box (`RcBoxType` `hasDynamicArrayPayload` — `{i32 count | index offset |
+sizes | strides | tail}`, index-typed so the width follows the target);
+`array.view` builds the strided descriptor from header loads (box
+recovered from the payload ref by the static header offset). Open backend
+halves: runtime-sized allocation (`token.alloc` with an SSA size,
+`rc.create … extents(…)`), dynamic `array.project`, the `with_unique_view`
 clone branch, restride ops, `expand-strided-metadata` in the shipping
 pipeline, and wiring the frontend codegen off its `err(…)` stubs.
 
