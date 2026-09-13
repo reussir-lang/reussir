@@ -35,8 +35,7 @@
 //   the with_unique_view expansion pattern rolls back on a tiled body.
 // - The bufferized forall reads and writes memref.subviews of the rc
 //   payloads with runtime offsets; expand-strided-metadata (plus a second
-//   lower-affine) is required before reussir-lowering-basic-ops, exactly as
-//   docs/design/dynamic-extent-arrays.md anticipates for strided views.
+//   lower-affine) is required before reussir-lowering-basic-ops.
 // - scf-forall-to-parallel materializes scf.parallel in both CoW arms, and
 //   convert-scf-to-openmp lowers those to omp.parallel/omp.wsloop — the
 //   OpenMP direction named in AGENTS.md is reachable from this path.

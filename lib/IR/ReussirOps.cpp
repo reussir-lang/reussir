@@ -87,10 +87,9 @@ namespace {
 static mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType) {
   // A static array views as an identity-layout memref. A dynamic-extent
   // array views as a strided memref with dynamic offset and strides — the
-  // box header carries the full strided encoding
-  // (docs/design/dynamic-extent-arrays.md), and static dims stay static in
-  // the shape while the layout is uniformly dynamic.
-  if (!arrayType.hasStaticShape()) {
+  // box header carries the full strided encoding, and static dims stay
+  // static in the shape while the layout is uniformly dynamic.
+  if (arrayType.hasDynamicShape()) {
     auto layout = mlir::StridedLayoutAttr::get(
         arrayType.getContext(), mlir::ShapedType::kDynamic,
         llvm::SmallVector<int64_t>(arrayType.getRank(),

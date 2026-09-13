@@ -2,7 +2,7 @@
 // RUN:   --pass-pipeline='builtin.module(reussir-attach-native-target,func.func(reussir-token-instantiation),control-flow-sink,convert-scf-to-cf,reussir-lowering-basic-ops,convert-to-llvm,reconcile-unrealized-casts,cse,canonicalize)' \
 // RUN:   | %FileCheck %s
 
-// A dynamic-extent array (docs/design/dynamic-extent-arrays.md) boxes as
+// A dynamic-extent array boxes as
 // `{ i32 count | index offset | index size[r] | index stride[r] | tail }`;
 // `array.view` is a straight header copy — recover the box from the payload
 // ref by the static header offset, load the descriptor fields, address as

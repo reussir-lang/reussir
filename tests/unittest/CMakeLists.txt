@@ -18,6 +18,7 @@ target_link_libraries(reussir-ut
     ReussirRustCompiler
     ReussirCAPI
     MLIRReussir
+    MLIRReussirTypeConverter
     GTest::gtest
     GTest::gtest_main
 )

@@ -277,7 +277,21 @@ void populateReussirToLLVMTypeConversions(mlir::LLVMTypeConverter &converter) {
     llvm::SmallVector<mlir::Type> members;
     for (mlir::Type headerType : type.getHeaderTypes())
       members.push_back(converter.convertType(headerType));
-    members.push_back(converter.convertType(type.getElementType()));
+    mlir::Type payloadType;
+    if (type.hasDynamicArrayPayload()) {
+      // Only the box layout uses a zero-length tail for dynamic storage;
+      // a dynamic array itself has no concrete LLVM value type.
+      auto arrayType = llvm::cast<ArrayType>(type.getElementType());
+      mlir::Type elementType = converter.convertType(arrayType.getElementType());
+      if (!elementType)
+        return {};
+      payloadType = mlir::LLVM::LLVMArrayType::get(elementType, 0);
+    } else {
+      payloadType = converter.convertType(type.getElementType());
+      if (!payloadType)
+        return {};
+    }
+    members.push_back(payloadType);
     return mlir::LLVM::LLVMStructType::getLiteral(type.getContext(), members);
   });
 
@@ -318,12 +332,12 @@ void populateReussirToLLVMTypeConversions(mlir::LLVMTypeConverter &converter) {
   });
 
   converter.addConversion([&converter](ArrayType type) -> mlir::Type {
+    // Dynamic arrays must not reach LLVM lowering as concrete values.
+    if (type.hasDynamicShape())
+      return {};
     mlir::Type lowered = converter.convertType(type.getElementType());
-    // A dynamic-extent array has no LLVM array type; as a box payload it is
-    // the zero-length tail after the strided header (GEPs index it by
-    // element, never by whole-payload value).
-    if (!type.hasStaticShape())
-      return mlir::LLVM::LLVMArrayType::get(lowered, 0);
+    if (!lowered)
+      return {};
     for (int64_t extent : llvm::reverse(type.getShape()))
       lowered = mlir::LLVM::LLVMArrayType::get(lowered, extent);
     return lowered;

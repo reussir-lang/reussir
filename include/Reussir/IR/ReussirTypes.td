@@ -568,9 +568,8 @@ def ReussirRcBoxType
     // LLVM type conversion.
     llvm::SmallVector<mlir::Type> getHeaderTypes() const;
     size_t getElementIndex() const { return getHeaderTypes().size(); }
-    // Whether the payload is a dynamic-extent array
-    // (docs/design/dynamic-extent-arrays.md): the box then carries the full
-    // strided-memref encoding in its header —
+    // Whether the payload is a dynamic-extent array: the box then carries
+    // the full strided-memref encoding in its header —
     // `{ i32 count | index offset | index size[r] | index stride[r] | payload }`
     // (padding per the data layout; the two descriptor pointers are derived
     // as box + header). The header prefix is static per rank; only the
@@ -651,6 +650,7 @@ def ReussirArrayType
   let extraClassDeclaration = [{
     mlir::Type getElementType() const { return getEleTy(); }
     bool hasRank() const { return true; }
+    bool hasDynamicShape() const { return !hasStaticShape(); }
     ArrayType cloneWith(std::optional<llvm::ArrayRef<int64_t>> shape,
                         mlir::Type elementType) const;
     size_t getRank() const { return getShape().size(); }

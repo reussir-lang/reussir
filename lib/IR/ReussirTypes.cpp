@@ -680,7 +680,7 @@ llvm::SmallVector<mlir::Type> RcBoxType::getHeaderTypes() const {
   // pointer: offset, then one size and one stride per dimension, all
   // index-typed so the width follows the target's data layout.
   if (auto arrayTy = llvm::dyn_cast<ArrayType>(getEleTy());
-      arrayTy && !arrayTy.hasStaticShape()) {
+      arrayTy && arrayTy.hasDynamicShape()) {
     llvm::SmallVector<mlir::Type> header;
     auto indexTy = mlir::IndexType::get(getContext());
     header.push_back(mlir::IntegerType::get(getContext(), 32));
@@ -694,7 +694,7 @@ llvm::SmallVector<mlir::Type> RcBoxType::getHeaderTypes() const {
 
 bool RcBoxType::hasDynamicArrayPayload() const {
   auto arrayTy = llvm::dyn_cast<ArrayType>(getEleTy());
-  return arrayTy && !arrayTy.hasStaticShape();
+  return arrayTy && arrayTy.hasDynamicShape();
 }
 
 uint64_t
@@ -1013,7 +1013,7 @@ RcType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
   // The strided array header currently extends only the shared RC header.
   // Regional boxes use their header words for state, next, and the vtable.
   if (auto arrayTy = llvm::dyn_cast<ArrayType>(eleTy);
-      arrayTy && !arrayTy.hasStaticShape() && capability != Capability::shared) {
+      arrayTy && arrayTy.hasDynamicShape() && capability != Capability::shared) {
     emitError() << "dynamic-extent arrays require shared RC capability";
     return mlir::failure();
   }
@@ -1349,7 +1349,7 @@ RefType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
   // A dynamic array view recovers the shared strided header from its payload
   // reference. Regional payloads have a different header and offset.
   if (auto arrayTy = llvm::dyn_cast<ArrayType>(eleTy);
-      arrayTy && !arrayTy.hasStaticShape() &&
+      arrayTy && arrayTy.hasDynamicShape() &&
       (capability == Capability::flex || capability == Capability::rigid ||
        capability == Capability::regional)) {
     emitError() << "dynamic-extent arrays do not support regional references";
@@ -1383,7 +1383,7 @@ mlir::LogicalResult
 RcBoxType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
                   mlir::Type eleTy, bool regional) {
   if (auto arrayTy = llvm::dyn_cast<ArrayType>(eleTy);
-      regional && arrayTy && !arrayTy.hasStaticShape()) {
+      regional && arrayTy && arrayTy.hasDynamicShape()) {
     emitError() << "dynamic-extent arrays do not support regional boxes";
     return mlir::failure();
   }

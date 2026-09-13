@@ -100,9 +100,10 @@ aliased elements would break the drop traversal's exactly-once contract.
 - `RcBoxType::getTypeSizeInBits`/`getABIAlignment`: the
   `llvm_unreachable("must have a fixed size")` paths route to the
   runtime size computation; alignment is already shape-independent.
-- Type converter: nested `LLVM::LLVMArrayType` has no dynamic form — the
-  dynamic box lowers as the header struct plus a trailing
-  zero-length-array-style tail.
+- Type converter: nested `LLVM::LLVMArrayType` has no dynamic form, so
+  converting a dynamic array as a concrete value fails. Only the dynamic
+  box layout uses a header struct plus a trailing zero-length-array-style
+  tail.
 - `emitArrayElementTraversal` (drop/acquire): loop bounds from header
   loads; the ≤4 unroll threshold gates to static shapes; iteration walks
   the logical index space through strides (exactly-once by the

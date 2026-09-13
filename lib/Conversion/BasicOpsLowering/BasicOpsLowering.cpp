@@ -1493,11 +1493,29 @@ struct ReussirArrayViewConversionPattern
     ArrayType arrayType = llvm::cast<ArrayType>(
         llvm::cast<RefType>(op.getRef().getType()).getElementType());
     auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
-    if (!arrayType.hasStaticShape()) {
+    if (arrayType.hasDynamicShape()) {
       // A dynamic-extent view is a straight header copy: the box stores the
       // full strided encoding (offset, sizes, strides) right before the
       // payload, so the descriptor's fields are loads at statically known
       // offsets and both descriptor pointers are the payload ref itself.
+      //
+      // Shared box layout, r = rank (target-dependent padding omitted):
+      //
+      //   boxPtr ──▶ ┌─────────────────────────┐
+      //              │ i32 refcount            │ field 0
+      //              ├─────────────────────────┤
+      //              │ index offset            │ field 1
+      //              ├─────────────────────────┤
+      //              │ index sizes[0 .. r-1]   │ fields 2 .. 1+r
+      //              ├─────────────────────────┤
+      //              │ index strides[0 .. r-1] │ fields 2+r .. 1+2*r
+      //              ├─────────────────────────┤
+      //      ref ──▶ │ element storage ...     │ runtime-sized payload
+      //              └─────────────────────────┘
+      //
+      //   ref = boxPtr + payloadOffset (including alignment padding).
+      //   Descriptor allocatedPtr = alignedPtr = ref; offset, sizes, and
+      //   strides are loaded from the header above.
       auto boxType =
           RcBoxType::get(rewriter.getContext(), arrayType, /*regional=*/false);
       mlir::Type llvmBoxType = converter->convertType(boxType);
@@ -1519,8 +1537,6 @@ struct ReussirArrayViewConversionPattern
                                          converter->convertType(viewType));
       descriptor.setAllocatedPtr(rewriter, loc, adaptor.getRef());
       descriptor.setAlignedPtr(rewriter, loc, adaptor.getRef());
-      // Header layout: {i32 count, index offset, index size[r], index
-      // stride[r], payload}; field 0 is the refcount.
       descriptor.setOffset(rewriter, loc, loadHeaderField(1));
       int64_t rank = arrayType.getRank();
       for (int64_t i = 0; i < rank; ++i)
