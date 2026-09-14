@@ -39,6 +39,11 @@ Static arrays keep today's headerless box and identity-layout
 `memref<NxT>` view — no regression, and the two forms stay distinct
 types.
 
+Dynamic arrays currently support shared boxes only. Regional (`flex`/`rigid`)
+RC pointers and references, and regional dynamic-array box types, are rejected
+by the type verifiers: the regional state/next/vtable header has no strided
+metadata extension yet.
+
 ## Views and projection
 
 `getArrayViewMemRefType` for a dynamic array returns
@@ -112,6 +117,14 @@ aliased elements would break the drop traversal's exactly-once contract.
   `array::dim` intrinsic; lengths stay `u64` until `usize` lands.
 
 ## Status
+
+Dialect landed: `!reussir.array<? x T>` parses/verifies (`?` extents,
+`ShapedType::kDynamic`), size queries assert on dynamic shapes, and the
+type verifiers restrict dynamic arrays to shared boxes. Open backend
+halves: the strided-header box, the descriptor lowering of `array.view`,
+runtime-sized allocation, dynamic `array.project`, the `with_unique_view`
+clone branch, restride ops, `expand-strided-metadata` in the shipping
+pipeline, and wiring the frontend codegen off its `err(…)` stubs.
 
 Frontend landed: `?` extents, the `DYNAMIC_EXTENT` sentinel through the
 type system, leading runtime extents on `splat`/`tabulate`, `array::dim`,
