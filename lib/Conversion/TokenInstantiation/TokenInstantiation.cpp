@@ -81,18 +81,24 @@ struct TokenInstantiationPattern : public mlir::RewritePattern {
       uint64_t elementSize =
           dataLayout.getTypeSize(arrayType.getElementType());
       mlir::Location loc = op->getLoc();
+      // Multiply all dimension sizes to compute the element count. Runtime
+      // extent operands supply only the dynamic dimensions, in shape order.
+      // Note: revisit size computation if array ever supports non-identity layout.
       mlir::Value count;
       size_t nextExtent = 0;
       for (int64_t dim : arrayType.getShape()) {
-        mlir::Value factor =
-            mlir::ShapedType::isDynamic(dim)
-                ? rcCreate.getExtents()[nextExtent++]
-                : mlir::arith::ConstantIndexOp::create(rewriter, loc, dim)
-                      .getResult();
-        count = count ? mlir::arith::MulIOp::create(rewriter, loc, count,
-                                                    factor)
-                            .getResult()
-                      : factor;
+        mlir::Value factor;
+        if (mlir::ShapedType::isDynamic(dim)) {
+          factor = rcCreate.getExtents()[nextExtent];
+          ++nextExtent;
+        } else {
+          factor = mlir::arith::ConstantIndexOp::create(rewriter, loc, dim);
+        }
+
+        if (count)
+          count = mlir::arith::MulIOp::create(rewriter, loc, count, factor);
+        else
+          count = factor;
       }
       mlir::Value elemBytes = mlir::arith::MulIOp::create(
           rewriter, loc, count,

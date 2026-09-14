@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/TypeSwitch.h>
 #include <llvm/DebugInfo/DWARF/DWARFAttribute.h>
@@ -1865,6 +1866,23 @@ struct ReussirRcCreateOpConversionPattern
       // static/runtime sizes, and row-major suffix-product strides. The
       // payload itself starts poison (the value operand is the zero-length
       // tail placeholder — nothing to store).
+      //
+      // Shared box layout, r = rank (target-dependent padding omitted):
+      //
+      //   token ------> +--------------------------+
+      //                 | i32 refcount             | field 0
+      //                 +--------------------------+
+      //                 | index offset = 0         | field 1
+      //                 +--------------------------+
+      //                 | index sizes[0 .. r-1]    | fields 2 .. 1+r
+      //                 +--------------------------+
+      //                 | index strides[0 .. r-1]  | fields 2+r .. 1+2*r
+      //                 +--------------------------+
+      //   elementPtr -> | uninitialized elements   | field 2+2*r
+      //                 +--------------------------+
+      //
+      //   elementPtr = token + payloadOffset (including alignment padding).
+      //   Refcount is set to 1 unless skipped; the returned RC is token.
       mlir::Location loc = op.getLoc();
       auto converter =
           static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter());
@@ -1886,14 +1904,18 @@ struct ReussirRcCreateOpConversionPattern
       auto arrayType = llvm::cast<ArrayType>(boxType.getElementType());
       int64_t rank = arrayType.getRank();
       storeHeaderField(1, indexConst(0)); // offset
-      llvm::SmallVector<mlir::Value> sizes;
       size_t nextExtent = 0;
-      for (int64_t dim : arrayType.getShape())
-        sizes.push_back(mlir::ShapedType::isDynamic(dim)
-                            ? adaptor.getExtents()[nextExtent++]
-                            : indexConst(dim));
-      for (int64_t i = 0; i < rank; ++i)
-        storeHeaderField(static_cast<int32_t>(2 + i), sizes[i]);
+      auto sizes = llvm::to_vector(llvm::map_range(
+          arrayType.getShape(), [&](int64_t dim) {
+            if (mlir::ShapedType::isDynamic(dim)) {
+              mlir::Value extent = adaptor.getExtents()[nextExtent];
+              ++nextExtent;
+              return extent;
+            }
+            return indexConst(dim);
+          }));
+      for (auto [i, size] : llvm::enumerate(sizes))
+        storeHeaderField(static_cast<int32_t>(2 + i), size);
       mlir::Value stride = indexConst(1);
       llvm::SmallVector<mlir::Value> strides(rank);
       for (int64_t i = rank - 1; i >= 0; --i) {
@@ -1902,8 +1924,8 @@ struct ReussirRcCreateOpConversionPattern
           stride =
               mlir::LLVM::MulOp::create(rewriter, loc, stride, sizes[i]);
       }
-      for (int64_t i = 0; i < rank; ++i)
-        storeHeaderField(static_cast<int32_t>(2 + rank + i), strides[i]);
+      for (auto [i, stride] : llvm::enumerate(strides))
+        storeHeaderField(static_cast<int32_t>(2 + rank + i), stride);
       if (storage->countPtr)
         storeInitialRcCount(storage->countPtr, op.getLoc(), rewriter);
       rewriter.replaceOp(op, storage->token);
