@@ -16,12 +16,15 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
 
 jobs:
   test:
+    name: wine-test
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
@@ -127,6 +130,7 @@ jobs:
   # wasm engines) report UNSUPPORTED, exactly as on any host missing those
   # features.
   lit:
+    name: wine-lit
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
