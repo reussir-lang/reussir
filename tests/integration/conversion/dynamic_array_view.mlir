@@ -28,4 +28,23 @@ module {
     %x = memref.load %v[%i] : memref<?xi32, strided<[?], offset: ?>>
     return %x : i32
   }
+
+  // Construction: the instantiated token computes `header + n * elemsize`,
+  // allocation takes the generic entry point with the runtime size, and the
+  // header stores are canonical (offset 0, size n, stride 1).
+  // CHECK-LABEL: llvm.func @make
+  // CHECK-DAG: %[[C4:.+]] = llvm.mlir.constant(4 : index) : i64
+  // CHECK-DAG: %[[C32:.+]] = llvm.mlir.constant(32 : index) : i64
+  // CHECK: %[[BYTES0:.+]] = llvm.mul %arg0, %[[C4]]
+  // CHECK: %[[BYTES:.+]] = llvm.add %[[BYTES0]], %[[C32]]
+  // CHECK: %[[TOK:.+]] = llvm.call @__reussir_allocate(%{{.+}}, %[[BYTES]])
+  // CHECK-DAG: llvm.getelementptr %[[TOK]][0, 1]
+  // CHECK-DAG: llvm.getelementptr %[[TOK]][0, 2]
+  // CHECK-DAG: llvm.getelementptr %[[TOK]][0, 3]
+  // CHECK-DAG: llvm.getelementptr %[[TOK]][0, 0]
+  func.func @make(%n: index) -> !rc_dv {
+    %poison = ub.poison : !dv
+    %rc = reussir.rc.create value(%poison : !dv) extents(%n) : !rc_dv
+    return %rc : !rc_dv
+  }
 }
