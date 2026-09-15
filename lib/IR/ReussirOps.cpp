@@ -325,6 +325,15 @@ mlir::LogicalResult verifyHoleFields(mlir::Operation *op,
 // ReussirTokenReinterpretOp
 //===----------------------------------------------------------------------===//
 // ReinterpretOp verification
+mlir::LogicalResult ReussirTokenAllocOp::verify() {
+  bool dynamicToken = getToken().getType().isDynamicSize();
+  if (dynamicToken != static_cast<bool>(getDynamicSize()))
+    return emitOpError(dynamicToken
+                           ? "a dynamically sized token requires a size operand"
+                           : "a statically sized token takes no size operand");
+  return mlir::success();
+}
+
 mlir::LogicalResult ReussirTokenReinterpretOp::verify() {
   TokenType tokenType = getToken().getType();
   RefType resultType = getReinterpreted().getType();

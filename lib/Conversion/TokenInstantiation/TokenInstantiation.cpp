@@ -60,8 +60,9 @@ struct TokenInstantiationPattern : public mlir::RewritePattern {
     // Create the token allocation operation before the current operation
     mlir::OpBuilder::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(op);
-    auto allocOp =
-        ReussirTokenAllocOp::create(rewriter, op->getLoc(), tokenType);
+    auto allocOp = ReussirTokenAllocOp::create(rewriter, op->getLoc(),
+                                               tokenType,
+                                               /*dynamicSize=*/mlir::Value());
 
     // Assign the token to the operation
     tokenAcceptor.assignToken(allocOp.getToken());

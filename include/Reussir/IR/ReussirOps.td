@@ -144,15 +144,25 @@ def ReussirTokenAllocOp : ReussirTokenOp<"alloc", []> {
     ```mlir
     reussir.token.alloc : !reussir.token<align: 8, size: 16>
     ```
+    A dynamically sized token (`token<align, ?>`) takes its byte size as an
+    SSA operand instead (a dynamic-extent array box, whose size is
+    `header + product(sizes) * elemsize`):
+    ```mlir
+    reussir.token.alloc(%bytes : index) : !reussir.token<align: 8, size: ?>
+    ```
   }];
+
+  let arguments = (ins Arg<Optional<Index>, "dynamic byte size">:$dynamicSize);
 
   let results =
       (outs Res<ReussirTokenType,
                 "Allocated Memory Token", [MemAlloc<DefaultResource>]>:$token);
 
   let assemblyFormat = [{
-    `:` type($token) attr-dict
+    ( `(` $dynamicSize^ `:` `index` `)` )? `:` type($token) attr-dict
   }];
+
+  let hasVerifier = 1;
 }
 
 def ReussirTokenFreeOp : ReussirTokenOp<"free", []> {

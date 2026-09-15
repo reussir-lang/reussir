@@ -125,9 +125,10 @@ type verifiers restrict dynamic arrays to shared boxes; the strided-header
 box (`RcBoxType` `hasDynamicArrayPayload` — `{i32 count | index offset |
 sizes | strides | tail}`, index-typed so the width follows the target);
 `array.view` builds the strided descriptor from header loads (box
-recovered from the payload ref by the static header offset). Open backend
-halves: runtime-sized allocation (`token.alloc` with an SSA size,
-`rc.create … extents(…)`), dynamic `array.project`, the `with_unique_view`
+recovered from the payload ref by the static header offset); `token.alloc`
+takes an SSA byte size for `token<align, ?>` and allocates through the
+generic entry point. Open backend halves: runtime-sized construction
+(`rc.create … extents(…)`), dynamic `array.project`, the `with_unique_view`
 clone branch, restride ops, `expand-strided-metadata` in the shipping
 pipeline, and wiring the frontend codegen off its `err(…)` stubs.
 

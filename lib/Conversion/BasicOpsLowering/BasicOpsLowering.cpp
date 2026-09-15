@@ -431,6 +431,21 @@ struct ReussirTokenAllocConversionPattern
     auto indexType = converter->getIndexType();
     auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
 
+    // A dynamically sized token (a dynamic-extent array box) carries its
+    // byte size as an operand; it always takes the generic entry point (the
+    // small fast path requires a compile-time-constant size).
+    if (tokenType.isDynamicSize()) {
+      auto alignConst = mlir::arith::ConstantOp::create(
+          rewriter, loc, mlir::IntegerAttr::get(indexType, alignment));
+      auto allocFunc =
+          moduleOp.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__reussir_allocate");
+      auto funcOp = mlir::LLVM::CallOp::create(
+          rewriter, loc, allocFunc,
+          mlir::ValueRange{alignConst, adaptor.getDynamicSize()});
+      rewriter.replaceOp(op, funcOp.getResult());
+      return mlir::success();
+    }
+
     // A statically small, naturally aligned layout takes the sized fast
     // path: `__reussir_allocate_small(size)` is `mi_malloc_small` behind an
     // OOM check — no alignment/divisibility recheck, no size
