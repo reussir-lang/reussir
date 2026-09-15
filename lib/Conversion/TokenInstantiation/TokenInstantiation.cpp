@@ -22,6 +22,7 @@
 #include "Reussir/IR/ReussirTypes.h"
 #include "Sync/IR/SyncDialect.h"
 
+#include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/PatternMatch.h>
 #include <mlir/Pass/Pass.h>
@@ -60,8 +61,55 @@ struct TokenInstantiationPattern : public mlir::RewritePattern {
     // Create the token allocation operation before the current operation
     mlir::OpBuilder::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(op);
-    auto allocOp =
-        ReussirTokenAllocOp::create(rewriter, op->getLoc(), tokenType);
+
+    // A dynamically sized token means a dynamic-extent array box: its byte
+    // size is `header + product(sizes) * elemsize`, assembled here from the
+    // construction's extent operands (canonical layout — offset 0, suffix
+    // strides — so the payload is exactly the element product).
+    mlir::Value dynamicSize;
+    if (tokenType.isDynamicSize()) {
+      auto rcCreate = dyn_cast<ReussirRcCreateOp>(op);
+      if (!rcCreate)
+        return op->emitOpError("cannot instantiate a dynamically sized token "
+                               "for this acceptor"),
+               mlir::failure();
+      auto arrayType = llvm::cast<ArrayType>(
+          rcCreate.getRcPtr().getType().getElementType());
+      auto boxType = rcCreate.getRcPtr().getType().getInnerBoxType();
+      mlir::DataLayout dataLayout = mlir::DataLayout::closest(op);
+      uint64_t payloadOffset = boxType.getDynamicPayloadOffset(dataLayout);
+      uint64_t elementSize =
+          dataLayout.getTypeSize(arrayType.getElementType());
+      mlir::Location loc = op->getLoc();
+      // Multiply all dimension sizes to compute the element count. Runtime
+      // extent operands supply only the dynamic dimensions, in shape order.
+      // Note: revisit size computation if array ever supports non-identity layout.
+      mlir::Value count;
+      size_t nextExtent = 0;
+      for (int64_t dim : arrayType.getShape()) {
+        mlir::Value factor;
+        if (mlir::ShapedType::isDynamic(dim)) {
+          factor = rcCreate.getExtents()[nextExtent];
+          ++nextExtent;
+        } else {
+          factor = mlir::arith::ConstantIndexOp::create(rewriter, loc, dim);
+        }
+
+        if (count)
+          count = mlir::arith::MulIOp::create(rewriter, loc, count, factor);
+        else
+          count = factor;
+      }
+      mlir::Value elemBytes = mlir::arith::MulIOp::create(
+          rewriter, loc, count,
+          mlir::arith::ConstantIndexOp::create(rewriter, loc, elementSize));
+      dynamicSize = mlir::arith::AddIOp::create(
+          rewriter, loc, elemBytes,
+          mlir::arith::ConstantIndexOp::create(rewriter, loc, payloadOffset));
+    }
+
+    auto allocOp = ReussirTokenAllocOp::create(rewriter, op->getLoc(),
+                                               tokenType, dynamicSize);
 
     // Assign the token to the operation
     tokenAcceptor.assignToken(allocOp.getToken());
