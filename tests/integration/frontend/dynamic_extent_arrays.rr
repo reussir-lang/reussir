@@ -1,6 +1,6 @@
-// Dynamic-extent arrays (docs/design/dynamic-extent-arrays.md): a `?`
-// extent marks a dimension dynamic; its runtime value is a leading operand
-// of the constructing intrinsic. Frontend-complete; lowering is pending the
+// Dynamic-extent arrays: a `?` extent marks a dimension dynamic; its runtime
+// value is a leading operand of the constructing intrinsic.
+// Frontend-complete; lowering is pending the
 // strided-header box, so `--emit mlir` stops with a diagnostic.
 
 // RUN: %rrc %s --emit hir -o - | %FileCheck %s

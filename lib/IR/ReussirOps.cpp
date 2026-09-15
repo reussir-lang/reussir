@@ -85,6 +85,18 @@ namespace reussir {
 namespace {
 
 static mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType) {
+  // A static array views as an identity-layout memref. A dynamic-extent
+  // array views as a strided memref with dynamic offset and strides — the
+  // box header carries the full strided encoding, and static dims stay
+  // static in the shape while the layout is uniformly dynamic.
+  if (arrayType.hasDynamicShape()) {
+    auto layout = mlir::StridedLayoutAttr::get(
+        arrayType.getContext(), mlir::ShapedType::kDynamic,
+        llvm::SmallVector<int64_t>(arrayType.getRank(),
+                                   mlir::ShapedType::kDynamic));
+    return mlir::MemRefType::get(arrayType.getShape(),
+                                 arrayType.getElementType(), layout);
+  }
   return mlir::MemRefType::get(arrayType.getShape(),
                                arrayType.getElementType());
 }
@@ -129,7 +141,7 @@ static mlir::LogicalResult verifyArrayViewType(mlir::Operation *op,
   }
 
   return op->emitOpError(valueName)
-         << " must be a statically shaped memref or tensor";
+         << " must be a memref or tensor of the array's shape";
 }
 
 static mlir::FailureOr<CellType> verifySharedCellOperand(mlir::Operation *op,

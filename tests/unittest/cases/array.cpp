@@ -1,3 +1,4 @@
+#include "Reussir/Conversion/TypeConverter.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
 #include <gtest/gtest.h>
@@ -102,6 +103,38 @@ TEST_F(ReussirTest, DynamicArraysRequireSharedStorage) {
   }
   EXPECT_FALSE(RcBoxType::getChecked(loc, context.get(), dynamicArray, true));
   EXPECT_TRUE(RcBoxType::getChecked(loc, context.get(), staticArray, true));
+}
+
+TEST_F(ReussirTest, ArrayValueLoweringRequiresStaticShape) {
+  mlir::LLVMTypeConverter converter(context.get());
+  populateReussirToLLVMTypeConversions(converter);
+  auto i32Type = mlir::IntegerType::get(context.get(), 32);
+
+  auto dynamicArray = ArrayType::get(
+      context.get(), {mlir::ShapedType::kDynamic}, i32Type);
+  auto mixedArray = ArrayType::get(
+      context.get(), {4, mlir::ShapedType::kDynamic}, i32Type);
+  EXPECT_FALSE(converter.convertType(dynamicArray));
+  EXPECT_FALSE(converter.convertType(mixedArray));
+
+  // A statically empty array is still a valid concrete value.
+  auto emptyArray = ArrayType::get(context.get(), {0}, i32Type);
+  EXPECT_EQ(converter.convertType(emptyArray),
+            mlir::LLVM::LLVMArrayType::get(i32Type, 0));
+  auto staticArray = ArrayType::get(context.get(), {4, 2}, i32Type);
+  EXPECT_EQ(converter.convertType(staticArray),
+            mlir::LLVM::LLVMArrayType::get(
+                mlir::LLVM::LLVMArrayType::get(i32Type, 2), 4));
+
+  // Rejecting concrete values must not prevent accessing boxed storage.
+  auto boxType = RcBoxType::get(context.get(), dynamicArray);
+  auto loweredBox = llvm::dyn_cast_if_present<mlir::LLVM::LLVMStructType>(
+      converter.convertType(boxType));
+  ASSERT_TRUE(loweredBox);
+  EXPECT_EQ(loweredBox.getBody().size(), 5u);
+  EXPECT_EQ(loweredBox.getBody().back(),
+            mlir::LLVM::LLVMArrayType::get(i32Type, 0));
+  EXPECT_FALSE(converter.convertType(dynamicArray));
 }
 
 TEST_F(ReussirTest, RcTypeIsValidMemRefElementType) {

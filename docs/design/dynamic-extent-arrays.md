@@ -100,9 +100,10 @@ aliased elements would break the drop traversal's exactly-once contract.
 - `RcBoxType::getTypeSizeInBits`/`getABIAlignment`: the
   `llvm_unreachable("must have a fixed size")` paths route to the
   runtime size computation; alignment is already shape-independent.
-- Type converter: nested `LLVM::LLVMArrayType` has no dynamic form — the
-  dynamic box lowers as the header struct plus a trailing
-  zero-length-array-style tail.
+- Type converter: nested `LLVM::LLVMArrayType` has no dynamic form, so
+  converting a dynamic array as a concrete value fails. Only the dynamic
+  box layout uses a header struct plus a trailing zero-length-array-style
+  tail.
 - `emitArrayElementTraversal` (drop/acquire): loop bounds from header
   loads; the ≤4 unroll threshold gates to static shapes; iteration walks
   the logical index space through strides (exactly-once by the
@@ -120,9 +121,13 @@ aliased elements would break the drop traversal's exactly-once contract.
 
 Dialect landed: `!reussir.array<? x T>` parses/verifies (`?` extents,
 `ShapedType::kDynamic`), size queries assert on dynamic shapes, and the
-type verifiers restrict dynamic arrays to shared boxes. Open backend
-halves: the strided-header box, the descriptor lowering of `array.view`,
-runtime-sized allocation, dynamic `array.project`, the `with_unique_view`
+type verifiers restrict dynamic arrays to shared boxes; the strided-header
+box (`RcBoxType` `hasDynamicArrayPayload` — `{i32 count | index offset |
+sizes | strides | tail}`, index-typed so the width follows the target);
+`array.view` builds the strided descriptor from header loads (box
+recovered from the payload ref by the static header offset). Open backend
+halves: runtime-sized allocation (`token.alloc` with an SSA size,
+`rc.create … extents(…)`), dynamic `array.project`, the `with_unique_view`
 clone branch, restride ops, `expand-strided-metadata` in the shipping
 pipeline, and wiring the frontend codegen off its `err(…)` stubs.
 

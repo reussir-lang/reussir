@@ -467,8 +467,7 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
             return err("array payload requested for a non-array type");
         };
         if reussir_core::semi::ty::has_dynamic_extent(dims) {
-            // Frontend-complete, backend-pending: the strided-header box
-            // (docs/design/dynamic-extent-arrays.md).
+            // Frontend-complete, backend-pending: the strided-header box.
             return err("dynamic-extent arrays do not lower yet");
         }
         let elem = self.mlir_ty(elem)?;

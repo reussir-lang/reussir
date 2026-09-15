@@ -1492,8 +1492,61 @@ struct ReussirArrayViewConversionPattern
           "tensor array.view must be bufferized before lowering basic ops");
     ArrayType arrayType = llvm::cast<ArrayType>(
         llvm::cast<RefType>(op.getRef().getType()).getElementType());
-    mlir::Type llvmArrayType = converter->convertType(arrayType);
     auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    if (arrayType.hasDynamicShape()) {
+      // A dynamic-extent view is a straight header copy: the box stores the
+      // full strided encoding (offset, sizes, strides) right before the
+      // payload, so the descriptor's fields are loads at statically known
+      // offsets and both descriptor pointers are the payload ref itself.
+      //
+      // Shared box layout, r = rank (target-dependent padding omitted):
+      //
+      //   boxPtr ──▶ ┌─────────────────────────┐
+      //              │ i32 refcount            │ field 0
+      //              ├─────────────────────────┤
+      //              │ index offset            │ field 1
+      //              ├─────────────────────────┤
+      //              │ index sizes[0 .. r-1]   │ fields 2 .. 1+r
+      //              ├─────────────────────────┤
+      //              │ index strides[0 .. r-1] │ fields 2+r .. 1+2*r
+      //              ├─────────────────────────┤
+      //      ref ──▶ │ element storage ...     │ runtime-sized payload
+      //              └─────────────────────────┘
+      //
+      //   ref = boxPtr + payloadOffset (including alignment padding).
+      //   Descriptor allocatedPtr = alignedPtr = ref; offset, sizes, and
+      //   strides are loaded from the header above.
+      auto boxType =
+          RcBoxType::get(rewriter.getContext(), arrayType, /*regional=*/false);
+      mlir::Type llvmBoxType = converter->convertType(boxType);
+      mlir::DataLayout dataLayout = mlir::DataLayout::closest(op);
+      uint64_t payloadOffset = boxType.getDynamicPayloadOffset(dataLayout);
+      auto i8Type = rewriter.getI8Type();
+      auto boxPtr = mlir::LLVM::GEPOp::create(
+          rewriter, loc, llvmPtrType, i8Type, adaptor.getRef(),
+          {mlir::LLVM::GEPArg(-static_cast<int32_t>(payloadOffset))});
+      mlir::Type indexType = converter->getIndexType();
+      auto loadHeaderField = [&](int32_t fieldIndex) -> mlir::Value {
+        auto fieldPtr = mlir::LLVM::GEPOp::create(
+            rewriter, loc, llvmPtrType, llvmBoxType, boxPtr,
+            {mlir::LLVM::GEPArg(0), mlir::LLVM::GEPArg(fieldIndex)});
+        return mlir::LLVM::LoadOp::create(rewriter, loc, indexType, fieldPtr);
+      };
+      auto descriptor =
+          mlir::MemRefDescriptor::poison(rewriter, loc,
+                                         converter->convertType(viewType));
+      descriptor.setAllocatedPtr(rewriter, loc, adaptor.getRef());
+      descriptor.setAlignedPtr(rewriter, loc, adaptor.getRef());
+      descriptor.setOffset(rewriter, loc, loadHeaderField(1));
+      int64_t rank = arrayType.getRank();
+      for (int64_t i = 0; i < rank; ++i)
+        descriptor.setSize(rewriter, loc, i, loadHeaderField(2 + i));
+      for (int64_t i = 0; i < rank; ++i)
+        descriptor.setStride(rewriter, loc, i, loadHeaderField(2 + rank + i));
+      rewriter.replaceOp(op, mlir::Value(descriptor));
+      return mlir::success();
+    }
+    mlir::Type llvmArrayType = converter->convertType(arrayType);
     llvm::SmallVector<mlir::LLVM::GEPArg> zeroIndices(arrayType.getRank() + 1,
                                                       0);
     auto elementPtr =

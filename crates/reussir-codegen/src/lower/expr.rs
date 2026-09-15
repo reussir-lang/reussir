@@ -3242,9 +3242,8 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         op: ArrayFn,
         args: &'tcx [Expr<'tcx>],
     ) -> Result<Option<Value<'c, 'b>>> {
-        // Frontend-complete, backend-pending: a dynamic-extent array
-        // (docs/design/dynamic-extent-arrays.md) lowers to the strided-header
-        // box; until that lands every op on one stops here.
+        // Frontend-complete, backend-pending: a dynamic-extent array lowers
+        // to the strided-header box; until that lands every op on one stops here.
         let shaped = match op {
             ArrayFn::Splat | ArrayFn::Tabulate => e.ty,
             _ => args[0].ty,
