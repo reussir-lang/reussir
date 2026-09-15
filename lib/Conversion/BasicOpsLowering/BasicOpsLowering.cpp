@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/TypeSwitch.h>
 #include <llvm/DebugInfo/DWARF/DWARFAttribute.h>
@@ -430,6 +431,21 @@ struct ReussirTokenAllocConversionPattern
     uint64_t size = tokenType.getSize();
     auto indexType = converter->getIndexType();
     auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
+
+    // A dynamically sized token (a dynamic-extent array box) carries its
+    // byte size as an operand; it always takes the generic entry point (the
+    // small fast path requires a compile-time-constant size).
+    if (tokenType.isDynamicSize()) {
+      auto alignConst = mlir::arith::ConstantOp::create(
+          rewriter, loc, mlir::IntegerAttr::get(indexType, alignment));
+      auto allocFunc =
+          moduleOp.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__reussir_allocate");
+      auto funcOp = mlir::LLVM::CallOp::create(
+          rewriter, loc, allocFunc,
+          mlir::ValueRange{alignConst, adaptor.getDynamicSize()});
+      rewriter.replaceOp(op, funcOp.getResult());
+      return mlir::success();
+    }
 
     // A statically small, naturally aligned layout takes the sized fast
     // path: `__reussir_allocate_small(size)` is `mi_malloc_small` behind an
@@ -1844,6 +1860,77 @@ struct ReussirRcCreateOpConversionPattern
         initializeRcCreateStorage(op, adaptor, getTypeConverter(), rewriter);
     if (mlir::failed(storage))
       return mlir::failure();
+    RcBoxType boxType = op.getRcPtr().getType().getInnerBoxType();
+    if (boxType.hasDynamicArrayPayload()) {
+      // Canonical strided-header construction: offset 0, the merged
+      // static/runtime sizes, and row-major suffix-product strides. The
+      // payload itself starts poison (the value operand is the zero-length
+      // tail placeholder — nothing to store).
+      //
+      // Shared box layout, r = rank (target-dependent padding omitted):
+      //
+      //   token ------> +--------------------------+
+      //                 | i32 refcount             | field 0
+      //                 +--------------------------+
+      //                 | index offset = 0         | field 1
+      //                 +--------------------------+
+      //                 | index sizes[0 .. r-1]    | fields 2 .. 1+r
+      //                 +--------------------------+
+      //                 | index strides[0 .. r-1]  | fields 2+r .. 1+2*r
+      //                 +--------------------------+
+      //   elementPtr -> | uninitialized elements   | field 2+2*r
+      //                 +--------------------------+
+      //
+      //   elementPtr = token + payloadOffset (including alignment padding).
+      //   Refcount is set to 1 unless skipped; the returned RC is token.
+      mlir::Location loc = op.getLoc();
+      auto converter =
+          static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter());
+      auto llvmBoxType = converter->convertType(boxType);
+      auto llvmPtrType =
+          mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+      mlir::Type indexType = converter->getIndexType();
+      auto storeHeaderField = [&](int32_t fieldIndex, mlir::Value value) {
+        auto fieldPtr = mlir::LLVM::GEPOp::create(
+            rewriter, loc, llvmPtrType, llvmBoxType, storage->token,
+            llvm::ArrayRef<mlir::LLVM::GEPArg>{0, fieldIndex});
+        mlir::LLVM::StoreOp::create(rewriter, loc, value, fieldPtr);
+      };
+      auto indexConst = [&](int64_t v) -> mlir::Value {
+        return mlir::LLVM::ConstantOp::create(
+            rewriter, loc, indexType,
+            mlir::IntegerAttr::get(indexType, v));
+      };
+      auto arrayType = llvm::cast<ArrayType>(boxType.getElementType());
+      int64_t rank = arrayType.getRank();
+      storeHeaderField(1, indexConst(0)); // offset
+      size_t nextExtent = 0;
+      auto sizes = llvm::to_vector(llvm::map_range(
+          arrayType.getShape(), [&](int64_t dim) {
+            if (mlir::ShapedType::isDynamic(dim)) {
+              mlir::Value extent = adaptor.getExtents()[nextExtent];
+              ++nextExtent;
+              return extent;
+            }
+            return indexConst(dim);
+          }));
+      for (auto [i, size] : llvm::enumerate(sizes))
+        storeHeaderField(static_cast<int32_t>(2 + i), size);
+      mlir::Value stride = indexConst(1);
+      llvm::SmallVector<mlir::Value> strides(rank);
+      for (int64_t i = rank - 1; i >= 0; --i) {
+        strides[i] = stride;
+        if (i > 0)
+          stride =
+              mlir::LLVM::MulOp::create(rewriter, loc, stride, sizes[i]);
+      }
+      for (auto [i, stride] : llvm::enumerate(strides))
+        storeHeaderField(static_cast<int32_t>(2 + rank + i), stride);
+      if (storage->countPtr)
+        storeInitialRcCount(storage->countPtr, op.getLoc(), rewriter);
+      rewriter.replaceOp(op, storage->token);
+      return mlir::success();
+    }
     auto objectStore = mlir::LLVM::StoreOp::create(
         rewriter, op.getLoc(), adaptor.getValue(), storage->elementPtr);
     if (!storage->regional)

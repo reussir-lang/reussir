@@ -86,6 +86,10 @@ aliased elements would break the drop traversal's exactly-once contract.
   the existing universal fallback donor; `token.alloc` gains an SSA size
   operand (the `__reussir_allocate` entry point already takes a runtime
   size — only the constant-gated `_small` fast path stays static-only).
+  Dynamic arrays can donate tokens to statically sized constructions, but
+  dynamic recipients retain their original allocation: `token.ensure` and
+  `token.realloc` do not yet carry the requested SSA byte count. Equality of
+  two dynamic token types does not establish equal allocation sizes.
   Boxes past `kAllocatorBinModelMax` are excluded from reuse pairing,
   implementing the #344 integration note.
 
@@ -125,11 +129,15 @@ type verifiers restrict dynamic arrays to shared boxes; the strided-header
 box (`RcBoxType` `hasDynamicArrayPayload` — `{i32 count | index offset |
 sizes | strides | tail}`, index-typed so the width follows the target);
 `array.view` builds the strided descriptor from header loads (box
-recovered from the payload ref by the static header offset). Open backend
-halves: runtime-sized allocation (`token.alloc` with an SSA size,
-`rc.create … extents(…)`), dynamic `array.project`, the `with_unique_view`
-clone branch, restride ops, `expand-strided-metadata` in the shipping
-pipeline, and wiring the frontend codegen off its `err(…)` stubs.
+recovered from the payload ref by the static header offset); `token.alloc`
+takes an SSA byte size for `token<align, ?>`; `rc.create … extents(…)`
+writes the canonical header and its instantiated token computes `header +
+product(sizes) * elemsize`; `rc.dec`/`rc.reinterpret` produce dynamic
+tokens freed unsized. Executable e2e: `dynamic_array_e2e.mlir`. Open
+backend halves: dynamic `array.project`, the `with_unique_view` clone
+branch (runtime-length copy), restride ops, `expand-strided-metadata` in
+the shipping pipeline, and wiring the frontend codegen off its `err(…)`
+stubs.
 
 Frontend landed: `?` extents, the `DYNAMIC_EXTENT` sentinel through the
 type system, leading runtime extents on `splat`/`tabulate`, `array::dim`,
