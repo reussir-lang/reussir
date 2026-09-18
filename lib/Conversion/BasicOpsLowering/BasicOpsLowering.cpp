@@ -561,6 +561,22 @@ struct ReussirRcReinterpretConversionPattern
   }
 };
 
+// All count probes must agree on ordering: an atomic uniqueness observation
+// acquires the uses published by other threads' release decrements. The count
+// is the first i32 field of every RC box, including tagged-immediate dummies.
+static mlir::Value loadRcCount(mlir::Location loc, RcType rcType,
+                               mlir::Value rcPtr,
+                               mlir::ConversionPatternRewriter &rewriter) {
+  if (rcType.getAtomicKind() == AtomicKind::atomic)
+    return mlir::LLVM::LoadOp::create(
+        rewriter, loc, rewriter.getI32Type(), rcPtr,
+        /*alignment=*/4, /*isVolatile=*/false, /*isNonTemporal=*/false,
+        /*isInvariant=*/false, /*isInvariantGroup=*/false,
+        mlir::LLVM::AtomicOrdering::acquire);
+  return mlir::LLVM::LoadOp::create(rewriter, loc, rewriter.getI32Type(),
+                                    rcPtr);
+}
+
 struct ReussirRcFetchConversionPattern
     : public mlir::OpConversionPattern<ReussirRcFetchOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -572,26 +588,8 @@ struct ReussirRcFetchConversionPattern
         static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter())
             ->getIndexType();
     mlir::Location loc = op.getLoc();
-    // No guard for tagged immediates: TBI masks the top byte, so the load
-    // hits the dummy box's refcount, which is pinned >= 2 — exactly what
-    // routes the expanded decrement to its shared branch and answers
-    // `is_unique` with false (see the special-pointer-tag notes above).
-    //
-    // An atomic box's count is loaded with acquire ordering: observing 1
-    // proves exclusivity only if every other thread's uses (published by
-    // their release decrements) happen-before this read — that is what
-    // keeps the copy-on-write and uniqify probes sound when the box is
-    // shared across threads. (Atomic boxes never carry tagged immediates.)
-    mlir::Value loaded;
-    if (op.getRcPtr().getType().getAtomicKind() == AtomicKind::atomic)
-      loaded = mlir::LLVM::LoadOp::create(
-          rewriter, loc, rewriter.getI32Type(), adaptor.getRcPtr(),
-          /*alignment=*/4, /*isVolatile=*/false, /*isNonTemporal=*/false,
-          /*isInvariant=*/false, /*isInvariantGroup=*/false,
-          mlir::LLVM::AtomicOrdering::acquire);
-    else
-      loaded = mlir::LLVM::LoadOp::create(rewriter, loc, rewriter.getI32Type(),
-                                          adaptor.getRcPtr());
+    mlir::Value loaded =
+        loadRcCount(loc, op.getRcPtr().getType(), adaptor.getRcPtr(), rewriter);
     mlir::Value widened =
         llvm::cast<mlir::IntegerType>(indexTy).getWidth() > 32
             ? mlir::LLVM::ZExtOp::create(rewriter, loc, indexTy, loaded)
@@ -2499,19 +2497,14 @@ struct ReussirRcIsUniqueOpConversionPattern
                            const mlir::TypeConverter *typeConverter,
                            mlir::ConversionPatternRewriter &rewriter,
                            mlir::Value *outCount = nullptr) {
-    RcBoxType rcBoxType = rcPtrTy.getInnerBoxType();
-    auto convertedBoxType = typeConverter->convertType(rcBoxType);
+    auto convertedBoxType =
+        typeConverter->convertType(rcPtrTy.getInnerBoxType());
     auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
-
     auto refcntPtr = mlir::LLVM::GEPOp::create(
         rewriter, loc, llvmPtrType, convertedBoxType, rcPtr,
         llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
-    // No guard for tagged immediates: the load reads the dummy box's
-    // refcount, pinned above the unique/shared decision point, so
-    // uniqueness is naturally false there.
     auto countType = rewriter.getI32Type();
-    auto refcnt =
-        mlir::LLVM::LoadOp::create(rewriter, loc, countType, refcntPtr);
+    auto refcnt = loadRcCount(loc, rcPtrTy, refcntPtr, rewriter);
     if (outCount)
       *outCount = refcnt;
     auto one = mlir::arith::ConstantOp::create(

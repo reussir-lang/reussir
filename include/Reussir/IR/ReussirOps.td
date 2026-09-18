@@ -321,8 +321,9 @@ def ReussirNullableCreateOp : ReussirNullableOp<"create", [Pure]> {
 // should be expanded before basic ops lowering pass
 def ReussirNullableDispatchOp
     : ReussirNullableOp<
-          "dispatch", [RecursiveMemoryEffects,
-                       DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs"]>]> {
+          "dispatch", [RecursiveMemoryEffects, RecursivelySpeculatable,
+                       DeclareOpInterfaceMethods<
+                           RegionBranchOpInterface, ["getSuccessorInputs"]>]> {
   let summary = "Dispatch a nullable token";
   let description = [{
     `reussir.nullable.dispatch` is a high-level structured control flow operation.
@@ -475,7 +476,9 @@ def ReussirRcDecOp
   let hasVerifier = 1;
 }
 
-def ReussirRcFetchOp : ReussirRcOp<"fetch", []> {
+def ReussirRcFetchOp
+    : ReussirRcOp<
+          "fetch", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "Fetch the reference count of a RC pointer";
   let description = [{
     `reussir.rc.fetch` fetches the current reference count from a RC pointer.
@@ -485,8 +488,7 @@ def ReussirRcFetchOp : ReussirRcOp<"fetch", []> {
     operation directly.
   }];
 
-  let arguments =
-      (ins Arg<ReussirRcType, "Reference to inspect", [MemRead]>:$rcPtr);
+  let arguments = (ins Arg<ReussirRcType, "Reference to inspect">:$rcPtr);
   let results = (outs Res<Index, "Reference count">:$refCount);
 
   let assemblyFormat = [{
@@ -855,13 +857,14 @@ def ReussirRcBorrowOp : ReussirRcOp<"borrow", [Pure]> {
 //===----------------------------------------------------------------------===//
 // Rc IsUnique Operation
 //===----------------------------------------------------------------------===//
-def ReussirRcIsUniqueOp : ReussirRcOp<"is_unique", []> {
+def ReussirRcIsUniqueOp
+    : ReussirRcOp<
+          "is_unique", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "Check if a RC pointer is unique";
   let description = [{
     `reussir.rc.is_unique` checks if a RC pointer is unique.
   }];
-  let arguments =
-      (ins Arg<ReussirRcType, "RC pointer to check", [MemRead]>:$rcPtr);
+  let arguments = (ins Arg<ReussirRcType, "RC pointer to check">:$rcPtr);
   let results = (outs Res<I1, "Is unique">:$isUnique);
   let assemblyFormat = [{
     `(` $rcPtr `:` qualified(type($rcPtr)) `)` `:` type($isUnique) attr-dict
@@ -963,8 +966,9 @@ def ReussirRecordTagOp : ReussirRecordOp<"tag", []> {
 // should be expanded before basic ops lowering pass
 def ReussirRecordDispatchOp
     : ReussirRecordOp<
-          "dispatch", [RecursiveMemoryEffects,
-                       DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs"]>]> {
+          "dispatch", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+                       DeclareOpInterfaceMethods<
+                           RegionBranchOpInterface, ["getSuccessorInputs"]>]> {
   let summary = "Dispatch a record";
   let description = [{
     `reussir.record.dispatch` is a high-level structured control flow operation.
@@ -1023,14 +1027,15 @@ def ReussirRecordCoerceOp : ReussirRecordOp<"coerce", [Pure]> {
 class ReussirArrayOp<string mnemonic, list<Trait> traits>
     : ReussirOp<"array."#mnemonic, traits>;
 
-def ReussirArrayProjectOp : ReussirArrayOp<"project", [Pure]> {
+def ReussirArrayProjectOp : ReussirArrayOp<"project", [NoMemoryEffect]> {
   let summary = "Project a fixed-size array view";
   let description = [{
     `reussir.array.project` projects the leading dimension of a statically
     shaped memref produced by `reussir.array.view`.
     When the remaining element is scalar, the result is a field reference.
     Otherwise, the result is another statically shaped memref with one fewer
-    dimension.
+    dimension. The index must be in bounds; lowering asserts this with
+    `llvm.assume`, so the operation must not be speculated unconditionally.
   }];
   let arguments = (ins Arg<AnyType, "array view to project">:$view,
       Arg<Index, "dynamic index">:$index);
@@ -1042,12 +1047,17 @@ def ReussirArrayProjectOp : ReussirArrayOp<"project", [Pure]> {
   let hasVerifier = 1;
 }
 
-def ReussirArrayViewOp : ReussirArrayOp<"view", [Pure]> {
+def ReussirArrayViewOp
+    : ReussirArrayOp<
+          "view", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+                   DeclareOpInterfaceMethods<ConditionallySpeculatable>]> {
   let summary = "Materialize an array view from an array reference";
   let description = [{
     `reussir.array.view` turns a reference to an inline array payload into a
     statically shaped memref or tensor suitable for downstream bufferization
-    and lowering.
+    and lowering. Static memref descriptor construction is speculatable and
+    has no memory effects. Tensor views read the payload, and dynamic memref
+    views read the descriptor header; neither is unconditionally speculatable.
   }];
   let arguments = (ins Arg<ReussirRefType, "array reference">:$ref);
   let results = (outs Res<AnyType, "materialized view">:$view);
@@ -1617,9 +1627,11 @@ def ReussirRegionRunOp
 }
 
 def ReussirRegionYieldOp
-    : ReussirRegionOp<"yield", [Pure, Terminator,
-                                ParentOneOf<["::reussir::ReussirRegionRunOp"]>,
-]> {
+    : ReussirRegionOp<
+          "yield", [Pure, Terminator,
+                    DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface,
+                                              ["getMutableSuccessorOperands"]>,
+                    ParentOneOf<["::reussir::ReussirRegionRunOp"]>]> {
   let summary = "Yield a value from a region";
   let description = [{
     `reussir.region.yield` yields a value from a region.

@@ -1,4 +1,5 @@
 // RUN: %reussir-opt \
+// RUN:   -sccp \
 // RUN:   -reussir-lowering-region-patterns \
 // RUN:   -reussir-acquire-drop-expansion \
 // RUN:   -reussir-lowering-basic-ops \
