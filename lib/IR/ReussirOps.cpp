@@ -28,6 +28,7 @@
 #include <llvm/Linker/Linker.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/LogicalResult.h>
+#include <llvm/Support/MathExtras.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
@@ -36,6 +37,7 @@
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributes.h>
+#include <mlir/IR/Matchers.h>
 #include <mlir/IR/OpImplementation.h>
 #include <mlir/IR/Operation.h>
 #include <mlir/IR/SymbolTable.h>
@@ -43,6 +45,7 @@
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
 #include <mlir/Interfaces/FunctionInterfaces.h>
 #include <mlir/Interfaces/SideEffectInterfaces.h>
+#include <mlir/Interfaces/ValueBoundsOpInterface.h>
 
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirEnumAttrs.h"
@@ -1241,6 +1244,35 @@ mlir::LogicalResult ReussirRecordCoerceOp::verify() {
 //===----------------------------------------------------------------------===//
 // Reussir Array Operations
 //===----------------------------------------------------------------------===//
+// Prove a bound on the SSA value, rather than relying on a guard at the op's
+// current execution point. ValueBounds uses upstream arithmetic models, so
+// computed indices can be speculated without a bespoke range analysis.
+static bool isIndexInRange(mlir::Value value, uint64_t upperExclusive) {
+  llvm::APInt constant;
+  if (mlir::matchPattern(value, mlir::m_ConstantInt(&constant)))
+    return !constant.isNegative() && constant.ult(upperExclusive);
+  using mlir::ValueBoundsConstraintSet;
+  using mlir::presburger::BoundType;
+  auto lower =
+      ValueBoundsConstraintSet::computeConstantBound(BoundType::LB, value);
+  if (mlir::failed(lower) || *lower < 0)
+    return false;
+  auto upper =
+      ValueBoundsConstraintSet::computeConstantBound(BoundType::UB, value);
+  return mlir::succeeded(upper) && *upper >= 0 &&
+         static_cast<uint64_t>(*upper) <= upperExclusive;
+}
+
+mlir::Speculation::Speculatability ReussirArrayProjectOp::getSpeculatability() {
+  auto viewType = llvm::dyn_cast<mlir::MemRefType>(getView().getType());
+  // Lowering emits an assumption, so moving an unchecked projection to a path
+  // where its index is out of bounds would introduce immediate UB.
+  if (viewType && viewType.getRank() > 0 && !viewType.isDynamicDim(0) &&
+      isIndexInRange(getIndex(), viewType.getDimSize(0)))
+    return mlir::Speculation::Speculatable;
+  return mlir::Speculation::NotSpeculatable;
+}
+
 // Static memref views only construct a descriptor. Tensor views read the
 // payload; dynamic memref views also read the box's descriptor header.
 static bool arrayViewReadsMemory(ReussirArrayViewOp op) {
@@ -3555,6 +3587,68 @@ mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
 
   mlir::func::ReturnOp::create(builder, builder.getUnknownLoc());
   return funcOp;
+}
+
+// String literals have known static storage; casts retain the length and
+// constant slices clamp it. Follow only these representation operations; all
+// arithmetic bounds are delegated to ValueBounds above.
+static std::optional<uint64_t> getKnownStringLength(mlir::Value str) {
+  uint64_t skipped = 0;
+  while (mlir::Operation *def = str.getDefiningOp()) {
+    if (auto literal = llvm::dyn_cast<ReussirStrLiteralOp>(def)) {
+      auto global =
+          mlir::SymbolTable::lookupNearestSymbolFrom<ReussirStrGlobalOp>(
+              literal, literal.getSymNameAttr());
+      if (!global)
+        return std::nullopt;
+      uint64_t length = global.getPayload().size();
+      return length > skipped ? length - skipped : 0;
+    }
+    if (auto cast = llvm::dyn_cast<ReussirStrCastOp>(def)) {
+      str = cast.getGlobalStr();
+      continue;
+    }
+    if (auto slice = llvm::dyn_cast<ReussirStrSliceOp>(def)) {
+      llvm::APInt offset;
+      if (!mlir::matchPattern(slice.getOffset(), mlir::m_ConstantInt(&offset)))
+        return std::nullopt;
+      skipped = llvm::SaturatingAdd(skipped, offset.getLimitedValue());
+      str = slice.getStr();
+      continue;
+    }
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+mlir::Speculation::Speculatability
+ReussirStrUnsafeByteAtOp::getSpeculatability() {
+  auto length = getKnownStringLength(getStr());
+  return length && isIndexInRange(getIndex(), *length)
+             ? mlir::Speculation::Speculatable
+             : mlir::Speculation::NotSpeculatable;
+}
+
+mlir::Speculation::Speculatability
+ReussirStrUnsafeStartWithOp::getSpeculatability() {
+  auto length = getKnownStringLength(getStr());
+  return getPrefix().empty() || (length && getPrefix().size() <= *length)
+             ? mlir::Speculation::Speculatable
+             : mlir::Speculation::NotSpeculatable;
+}
+
+mlir::Speculation::Speculatability
+ReussirStrUnsafeMemcmpOp::getSpeculatability() {
+  llvm::APInt count;
+  if (mlir::matchPattern(getLen(), mlir::m_ConstantInt(&count)) &&
+      count.isZero())
+    return mlir::Speculation::Speculatable;
+  auto lhsLength = getKnownStringLength(getLhs());
+  auto rhsLength = getKnownStringLength(getRhs());
+  return lhsLength && rhsLength &&
+                 isIndexInRange(getLen(), std::min(*lhsLength, *rhsLength) + 1)
+             ? mlir::Speculation::Speculatable
+             : mlir::Speculation::NotSpeculatable;
 }
 
 //===----------------------------------------------------------------------===//

@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include <mlir/Conversion/ConvertToLLVM/ToLLVMPass.h>
+#include <mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h>
 #include <mlir/IR/DialectRegistry.h>
 #include <mlir/InitAllDialects.h>
 #include <mlir/InitAllExtensions.h>
@@ -39,6 +40,7 @@ int main(int argc, char **argv) {
   mlir::sync::registerConvertSyncToLLVMInterface(registry);
   mlir::registerConvertToLLVMDependentDialectLoading(registry);
   mlir::registerAllExtensions(registry);
+  mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::registerAllPasses();
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return mlir::sync::createConvertSyncToSTDPass();

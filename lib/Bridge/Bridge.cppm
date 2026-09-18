@@ -45,6 +45,7 @@ module;
 #include <mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h>
 #include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
+#include <mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlow.h>
 #include <mlir/Dialect/DLTI/DLTI.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
@@ -349,6 +350,7 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
   reussir::registerReussirBasicOpsLoweringInterface(registry);
   mlir::registerConvertToLLVMDependentDialectLoading(registry);
   mlir::registerAllExtensions(registry);
+  mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
   registerLLVMDialectTranslation(registry);
   registerBuiltinDialectTranslation(registry);
   auto context = std::make_unique<mlir::MLIRContext>(registry);
