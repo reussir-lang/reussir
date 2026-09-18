@@ -1027,7 +1027,10 @@ def ReussirRecordCoerceOp : ReussirRecordOp<"coerce", [Pure]> {
 class ReussirArrayOp<string mnemonic, list<Trait> traits>
     : ReussirOp<"array."#mnemonic, traits>;
 
-def ReussirArrayProjectOp : ReussirArrayOp<"project", [NoMemoryEffect]> {
+def ReussirArrayProjectOp
+    : ReussirArrayOp<
+          "project", [NoMemoryEffect,
+                      DeclareOpInterfaceMethods<ConditionallySpeculatable>]> {
   let summary = "Project a fixed-size array view";
   let description = [{
     `reussir.array.project` projects the leading dimension of a statically
@@ -1035,7 +1038,7 @@ def ReussirArrayProjectOp : ReussirArrayOp<"project", [NoMemoryEffect]> {
     When the remaining element is scalar, the result is a field reference.
     Otherwise, the result is another statically shaped memref with one fewer
     dimension. The index must be in bounds; lowering asserts this with
-    `llvm.assume`, so the operation must not be speculated unconditionally.
+    `llvm.assume`. Speculation requires a statically proven in-bounds index.
   }];
   let arguments = (ins Arg<AnyType, "array view to project">:$view,
       Arg<Index, "dynamic index">:$index);
@@ -2137,13 +2140,15 @@ def ReussirStrLenOp : ReussirStrOp<"len", [Pure]> {
   }];
 }
 
-def ReussirStrByteAtOp : ReussirStrOp<"byte_at", []> {
+// Strings are immutable views of static storage, so inspecting their contents
+// has no memory effects. Unchecked operations additionally require bounds
+// proofs before they can be speculated.
+def ReussirStrByteAtOp : ReussirStrOp<"byte_at", [Pure]> {
   let summary = "Get the character at a specific index";
   let description = [{
     `reussir.str.byte_at` returns the character at a byte offset. Return 0 if the index is out of bounds.
   }];
-  let arguments = (ins Arg<ReussirStrType, "String to get character from",
-      [MemRead]>:$str,
+  let arguments = (ins Arg<ReussirStrType, "String to get character from">:$str,
       Arg<Index, "Index of character to get">:$index);
   let results = (outs Res<I8, "Character at index">:$charVal);
   let assemblyFormat = [{
@@ -2153,14 +2158,16 @@ def ReussirStrByteAtOp : ReussirStrOp<"byte_at", []> {
   }];
 }
 
-def ReussirStrUnsafeByteAtOp : ReussirStrOp<"unsafe_byte_at", []> {
+def ReussirStrUnsafeByteAtOp
+    : ReussirStrOp<"unsafe_byte_at", [NoMemoryEffect,
+                                      DeclareOpInterfaceMethods<
+                                          ConditionallySpeculatable>]> {
   let summary = "Get the character at a specific index without bounds check";
   let description = [{
     `reussir.str.unsafe_byte_at` returns the character at a byte offset.
     Undefined behavior if the index is out of bounds.
   }];
-  let arguments = (ins Arg<ReussirStrType, "String to get character from",
-      [MemRead]>:$str,
+  let arguments = (ins Arg<ReussirStrType, "String to get character from">:$str,
       Arg<Index, "Index of character to get">:$index);
   let results = (outs Res<I8, "Character at index">:$charVal);
   let assemblyFormat = [{
@@ -2183,13 +2190,12 @@ def ReussirStrCastOp : ReussirStrOp<"cast", [Pure]> {
   let hasVerifier = 1;
 }
 
-def ReussirStrSelectOp : ReussirStrOp<"select", []> {
+def ReussirStrSelectOp : ReussirStrOp<"select", [Pure]> {
   let summary = "Select the first matched pattern of the string";
   let description = [{
     `reussir.str.select` selects the first matched pattern of the string.
   }];
-  let arguments = (ins Arg<ReussirStrType, "String to select",
-      [MemRead]>:$str,
+  let arguments = (ins Arg<ReussirStrType, "String to select">:$str,
       Arg<ArrayAttr, "Patterns to match">:$patterns);
   let results = (outs Res<Index, "Selected pattern">:$selected,
       Res<I1, "Matched found">:$found);
@@ -2198,13 +2204,12 @@ def ReussirStrSelectOp : ReussirStrOp<"select", []> {
   }];
 }
 
-def ReussirStrStartWithOp : ReussirStrOp<"startswith", []> {
+def ReussirStrStartWithOp : ReussirStrOp<"startswith", [Pure]> {
   let summary = "Check if the string starts with a prefix";
   let description = [{
     `reussir.str.startswith` checks if the string starts with a prefix.
    }];
-  let arguments = (ins Arg<ReussirStrType, "String to check",
-      [MemRead]>:$str,
+  let arguments = (ins Arg<ReussirStrType, "String to check">:$str,
       Arg<StrAttr, "Prefix to check">:$prefix);
   let results =
       (outs Res<I1, "Whether the string starts with the prefix">:$startsWith);
@@ -2215,14 +2220,16 @@ def ReussirStrStartWithOp : ReussirStrOp<"startswith", []> {
    }];
 }
 
-def ReussirStrUnsafeStartWithOp : ReussirStrOp<"unsafe_startswith", []> {
+def ReussirStrUnsafeStartWithOp
+    : ReussirStrOp<"unsafe_startswith", [NoMemoryEffect,
+                                         DeclareOpInterfaceMethods<
+                                             ConditionallySpeculatable>]> {
   let summary = "Check if the string starts with a prefix without bounds check";
   let description = [{
     `reussir.str.unsafe_startswith` checks if the string starts with a prefix.
     Undefined behavior if the prefix is longer than the string.
    }];
-  let arguments = (ins Arg<ReussirStrType, "String to check",
-      [MemRead]>:$str,
+  let arguments = (ins Arg<ReussirStrType, "String to check">:$str,
       Arg<StrAttr, "Prefix to check">:$prefix);
   let results =
       (outs Res<I1, "Whether the string starts with the prefix">:$startsWith);
@@ -2264,7 +2271,10 @@ def ReussirStrRefEqOp : ReussirStrOp<"ref_eq", [Pure]> {
   }];
 }
 
-def ReussirStrUnsafeMemcmpOp : ReussirStrOp<"unsafe_memcmp", []> {
+def ReussirStrUnsafeMemcmpOp
+    : ReussirStrOp<"unsafe_memcmp", [NoMemoryEffect,
+                                     DeclareOpInterfaceMethods<
+                                         ConditionallySpeculatable>]> {
   let summary = "Byte comparison of two strings' leading bytes";
   let description = [{
     `reussir.str.unsafe_memcmp` compares the first `len` bytes of two
@@ -2273,8 +2283,8 @@ def ReussirStrUnsafeMemcmpOp : ReussirStrOp<"unsafe_memcmp", []> {
     scf-level expansion supplies the guards. Undefined behavior when `len`
     exceeds either string's length.
   }];
-  let arguments = (ins Arg<ReussirStrType, "Left string", [MemRead]>:$lhs,
-      Arg<ReussirStrType, "Right string", [MemRead]>:$rhs,
+  let arguments = (ins Arg<ReussirStrType, "Left string">:$lhs,
+      Arg<ReussirStrType, "Right string">:$rhs,
       Arg<Index, "Number of leading bytes to compare">:$len);
   let results = (outs Res<I32, "Negative, zero, or positive ordering">:$order);
   let assemblyFormat = [{
@@ -2290,8 +2300,8 @@ def ReussirStrEqualOp : ReussirStrOp<"equal", [Pure]> {
     match and every byte matches. Unlike `str.startswith`, both sides are
     runtime values rather than attribute patterns.
   }];
-  let arguments = (ins Arg<ReussirStrType, "Left string", [MemRead]>:$lhs,
-      Arg<ReussirStrType, "Right string", [MemRead]>:$rhs);
+  let arguments = (ins Arg<ReussirStrType, "Left string">:$lhs,
+      Arg<ReussirStrType, "Right string">:$rhs);
   let results = (outs Res<I1, "Whether the strings are equal">:$equal);
   let assemblyFormat = [{
     `(` $lhs `:` type($lhs) `,` $rhs `:` type($rhs) `)`
@@ -2308,8 +2318,8 @@ def ReussirStrCompareOp : ReussirStrOp<"compare", [Pure]> {
     greater — consumers compare it against zero rather than relying on
     exact -1/1 values.
   }];
-  let arguments = (ins Arg<ReussirStrType, "Left string", [MemRead]>:$lhs,
-      Arg<ReussirStrType, "Right string", [MemRead]>:$rhs);
+  let arguments = (ins Arg<ReussirStrType, "Left string">:$lhs,
+      Arg<ReussirStrType, "Right string">:$rhs);
   let results = (outs Res<I32, "Negative, zero, or positive ordering">:$order);
   let assemblyFormat = [{
     `(` $lhs `:` type($lhs) `,` $rhs `:` type($rhs) `)`

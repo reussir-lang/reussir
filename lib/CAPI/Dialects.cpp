@@ -29,6 +29,7 @@
 #include <mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h>
 #include <mlir/Conversion/UBToLLVM/UBToLLVM.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
+#include <mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlow.h>
 #include <mlir/Dialect/DLTI/DLTI.h>
 #include <mlir/Dialect/Func/Extensions/InlinerExtension.h>
@@ -76,6 +77,10 @@ void populateReussirRegistry(mlir::DialectRegistry &registry) {
   // separately registered extension; without it the inliner pass resolves no
   // `func.call` sites and silently inlines nothing.
   mlir::func::registerInlinerExtension(registry);
+
+  // Range proofs used by Reussir operation speculation (for example, bounded
+  // array indices) should be available in the frontend as well as reussir-opt.
+  mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
 
   // The transform dialect carries user-authored schedules (issue #349): the
   // lowering pipeline can run `transform-interpreter` at named anchors over
