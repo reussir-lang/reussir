@@ -368,6 +368,30 @@ mlir::LogicalResult ReussirRcIncOp::verify() {
   return mlir::success();
 }
 
+// Count reads on atomic boxes acquire other threads' releases. As with LLVM
+// LoadOp, model that synchronization as global read/write effects so it cannot
+// be CSE'd or deleted even when the loaded count is unused.
+static void getRcCountReadEffects(
+    mlir::OpOperand &rcPtr,
+    llvm::SmallVectorImpl<mlir::MemoryEffects::EffectInstance> &effects) {
+  effects.emplace_back(mlir::MemoryEffects::Read::get(), &rcPtr);
+  if (llvm::cast<RcType>(rcPtr.get().getType()).getAtomicKind() ==
+      AtomicKind::atomic) {
+    effects.emplace_back(mlir::MemoryEffects::Read::get());
+    effects.emplace_back(mlir::MemoryEffects::Write::get());
+  }
+}
+
+void ReussirRcFetchOp::getEffects(
+    llvm::SmallVectorImpl<mlir::MemoryEffects::EffectInstance> &effects) {
+  getRcCountReadEffects(getRcPtrMutable(), effects);
+}
+
+void ReussirRcIsUniqueOp::getEffects(
+    llvm::SmallVectorImpl<mlir::MemoryEffects::EffectInstance> &effects) {
+  getRcCountReadEffects(getRcPtrMutable(), effects);
+}
+
 //===----------------------------------------------------------------------===//
 // RcFetchSubOp verification
 //===----------------------------------------------------------------------===//
@@ -1217,6 +1241,25 @@ mlir::LogicalResult ReussirRecordCoerceOp::verify() {
 //===----------------------------------------------------------------------===//
 // Reussir Array Operations
 //===----------------------------------------------------------------------===//
+// Static memref views only construct a descriptor. Tensor views read the
+// payload; dynamic memref views also read the box's descriptor header.
+static bool arrayViewReadsMemory(ReussirArrayViewOp op) {
+  return llvm::isa<mlir::TensorType>(op.getView().getType()) ||
+         llvm::cast<ArrayType>(op.getRef().getType().getElementType())
+             .hasDynamicShape();
+}
+
+void ReussirArrayViewOp::getEffects(
+    llvm::SmallVectorImpl<mlir::MemoryEffects::EffectInstance> &effects) {
+  if (arrayViewReadsMemory(*this))
+    effects.emplace_back(mlir::MemoryEffects::Read::get(), &getRefMutable());
+}
+
+mlir::Speculation::Speculatability ReussirArrayViewOp::getSpeculatability() {
+  return arrayViewReadsMemory(*this) ? mlir::Speculation::NotSpeculatable
+                                     : mlir::Speculation::Speculatable;
+}
+
 mlir::LogicalResult ReussirArrayViewOp::verify() {
   RefType refType = getRef().getType();
   ArrayType arrayType = llvm::dyn_cast<ArrayType>(refType.getElementType());
@@ -1974,13 +2017,28 @@ void ReussirRegionRunOp::getSuccessorRegions(
   regions.emplace_back(getOperation());
 }
 
-// The parent edge produces the op's results; region entries receive their
-// values through the dispatch semantics, not as modeled successor inputs.
+// The region argument is produced by region.run, not forwarded from an operand.
 mlir::ValueRange
 ReussirRegionRunOp::getSuccessorInputs(mlir::RegionSuccessor successor) {
-  if (successor.isOperation())
+  if (!successor.isOperation() || !getResult() || getBody().empty() ||
+      getBody().front().empty())
+    return {};
+  auto yield =
+      llvm::dyn_cast<ReussirRegionYieldOp>(getBody().front().getTerminator());
+  // Freezing produces a new value, not a forwarded flex operand. Leave that
+  // result unmapped so dataflow analyses conservatively treat it as unknown.
+  if (yield && yield.getValue() &&
+      yield.getValue().getType() == getResult().getType())
     return getResults();
   return mlir::ValueRange();
+}
+
+mlir::MutableOperandRange ReussirRegionYieldOp::getMutableSuccessorOperands(
+    mlir::RegionSuccessor successor) {
+  auto parent = llvm::cast<ReussirRegionRunOp>((*this)->getParentOp());
+  if (parent.getSuccessorInputs(successor).empty())
+    return mlir::MutableOperandRange(getOperation(), 0, 0);
+  return getValueMutable();
 }
 
 //===----------------------------------------------------------------------===//
@@ -2010,6 +2068,31 @@ mlir::ValueRange ReussirNullableDispatchOp::getSuccessorInputs(
 //===----------------------------------------------------------------------===//
 // RecordDispatchOp RegionBranchOpInterface implementation
 //===----------------------------------------------------------------------===//
+void ReussirRecordDispatchOp::getEffects(
+    llvm::SmallVectorImpl<mlir::MemoryEffects::EffectInstance> &effects) {
+  effects.emplace_back(mlir::MemoryEffects::Read::get(), &getVariantMutable());
+  // Some clients (including CSE's read-only shortcut) query this interface
+  // directly instead of recursively collecting effects. Include the bodies so
+  // the tag read cannot make a dispatch with nested writes appear read-only.
+  for (mlir::Region &region : getRegions()) {
+    for (mlir::Block &block : region) {
+      for (mlir::Operation &op : block) {
+        auto nested = mlir::getEffectsRecursively(&op);
+        if (nested) {
+          llvm::append_range(effects, *nested);
+          continue;
+        }
+        // An unknown call/body may access, allocate, or free arbitrary memory.
+        effects.emplace_back(mlir::MemoryEffects::Read::get());
+        effects.emplace_back(mlir::MemoryEffects::Write::get());
+        effects.emplace_back(mlir::MemoryEffects::Allocate::get());
+        effects.emplace_back(mlir::MemoryEffects::Free::get());
+        return;
+      }
+    }
+  }
+}
+
 void ReussirRecordDispatchOp::getSuccessorRegions(
     mlir::RegionBranchPoint point,
     llvm::SmallVectorImpl<mlir::RegionSuccessor> &regions) {
