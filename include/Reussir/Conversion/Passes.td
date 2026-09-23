@@ -209,7 +209,8 @@ def ReussirTokenInstantiationPass
 
     * `acceptors`: every operation implementing the TokenAcceptor interface
       that has no token assigned gets a `reussir.token.alloc` of its token
-      type immediately before it, and the token is assigned to it.
+      type immediately before it, and the token is assigned to it. For a
+      dynamically sized token, `buildTokenSize` supplies the allocation size.
     * `producers`: every operation implementing the TokenProducer interface
       that should produce a token and does not yet is rebuilt with its token
       result, typed by the producer's `getTokenType()`.
@@ -232,6 +233,7 @@ def ReussirTokenInstantiationPass
                         "rebuild TokenProducers with their token result">];
 
   let dependentDialects = ["::reussir::ReussirDialect",
+                           "::mlir::arith::ArithDialect",
                            "::mlir::sync::SyncDialect"];
 }
 

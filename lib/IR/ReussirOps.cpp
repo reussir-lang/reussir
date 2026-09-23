@@ -430,19 +430,30 @@ mlir::LogicalResult ReussirRcReinterpretOp::verify() {
   // Get the RC box type for the RC pointer
   RcBoxType rcBoxType = rcType.getInnerBoxType();
 
-  // Get the data layout to compute alignment and size
+  // Get the data layout to compute alignment
   auto dataLayout = mlir::DataLayout::closest(getOperation());
   auto alignment = dataLayout.getTypeABIAlignment(rcBoxType);
-  auto size = dataLayout.getTypeSize(rcBoxType);
-
-  if (!size.isFixed())
-    return emitOpError("RC box type must have a fixed size");
 
   // Check that token alignment matches RC box alignment
   if (tokenType.getAlign() != alignment)
     return emitOpError("token alignment must match RC box alignment, ")
            << "token alignment: " << tokenType.getAlign()
            << ", RC box alignment: " << alignment;
+
+  // A dynamic-extent array box has no static size (checked before any size
+  // query — the box's size is not computable); its decrement reinterprets it
+  // as a dynamic token, which the size-recovering allocator frees or
+  // resizes from the pointer alone.
+  if (rcBoxType.hasDynamicArrayPayload())
+    return tokenType.isDynamicSize()
+               ? mlir::success()
+               : emitOpError("a dynamic-extent array box reinterprets as a "
+                             "dynamically sized token");
+
+  auto size = dataLayout.getTypeSize(rcBoxType);
+
+  if (!size.isFixed())
+    return emitOpError("RC box type must have a fixed size");
 
   // Check that token size matches RC box size. Under per-constructor box
   // sizing a fused-header variant box may be any arm's cell: a
@@ -713,6 +724,11 @@ TokenType ReussirRcDecOp::getTokenType() {
     }
     return TokenType::getDynamic(getContext(), alignment);
   }
+  // A dynamic-extent array box has no static size (the strided header
+  // carries the shape); its token is dynamic and the size-recovering
+  // allocator frees/resizes it from the pointer alone.
+  if (rcBoxType.hasDynamicArrayPayload())
+    return TokenType::getDynamic(getContext(), alignment);
   auto size = dataLayout.getTypeSize(rcBoxType);
 
   return TokenType::get(getContext(), alignment, size.getFixedValue());
@@ -749,6 +765,9 @@ ReussirRcDecOp::replaceWithProduced(mlir::PatternRewriter &builder) {
 // RcCreateOp verification
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRcCreateOp::verify() {
+  if (auto arrayType = llvm::dyn_cast<ArrayType>(getValue().getType());
+      arrayType && arrayType.hasDynamicShape())
+    return emitOpError("dynamic arrays must be created with array.create");
   return verifyRcCreateLikeOp(getOperation(), getRcPtr().getType(),
                               getValue().getType(), getToken(), getRegion());
 }
@@ -1290,6 +1309,80 @@ void ReussirArrayViewOp::getEffects(
 mlir::Speculation::Speculatability ReussirArrayViewOp::getSpeculatability() {
   return arrayViewReadsMemory(*this) ? mlir::Speculation::NotSpeculatable
                                      : mlir::Speculation::Speculatable;
+}
+
+static mlir::LogicalResult
+verifyDynamicArrayConstruction(mlir::Operation *op, RcType rcType,
+                               mlir::ValueRange extents, mlir::Value token) {
+  auto arrayType = llvm::cast<ArrayType>(rcType.getElementType());
+  if (!arrayType.hasDynamicShape())
+    return op->emitOpError("requires a dynamic-extent array result");
+  if (auto elementArray = llvm::dyn_cast<ArrayType>(arrayType.getElementType());
+      elementArray && elementArray.hasDynamicShape())
+    return op->emitOpError("array elements must have a fixed size");
+  auto dataLayout = mlir::DataLayout::closest(op);
+  if (!dataLayout.getTypeSize(arrayType.getElementType()).isFixed())
+    return op->emitOpError("array elements must have a fixed size");
+  auto expectedExtents = llvm::count_if(arrayType.getShape(), [](int64_t dim) {
+    return mlir::ShapedType::isDynamic(dim);
+  });
+  if (extents.size() != static_cast<size_t>(expectedExtents))
+    return op->emitOpError("expects ")
+           << expectedExtents << " extent operand(s), got " << extents.size();
+  if (token) {
+    auto expected = TokenType::getDynamic(
+        op->getContext(),
+        dataLayout.getTypeABIAlignment(rcType.getInnerBoxType()));
+    if (token.getType() != expected)
+      return op->emitOpError("expected token type ") << expected;
+  }
+  return mlir::success();
+}
+
+mlir::LogicalResult ReussirArrayCreateOp::verify() {
+  auto arrayType = llvm::cast<ArrayType>(getRcPtr().getType().getElementType());
+  if (getInit().getType() != arrayType.getElementType())
+    return emitOpError("initializer type must match array element type");
+  return verifyDynamicArrayConstruction(getOperation(), getRcPtr().getType(),
+                                        getExtents(), getToken());
+}
+
+TokenType ReussirArrayCreateOp::getTokenType() {
+  auto dataLayout = mlir::DataLayout::closest(getOperation());
+  return TokenType::getDynamic(
+      getContext(),
+      dataLayout.getTypeABIAlignment(getRcPtr().getType().getInnerBoxType()));
+}
+
+mlir::Value ReussirArrayCreateOp::buildTokenSize(mlir::OpBuilder &builder) {
+  auto arrayType = llvm::cast<ArrayType>(getRcPtr().getType().getElementType());
+  auto dataLayout = mlir::DataLayout::closest(getOperation());
+  auto elementSize = dataLayout.getTypeSize(arrayType.getElementType());
+  assert(elementSize.isFixed() && "array elements must have a fixed size");
+  auto loc = getLoc();
+  mlir::Value count =
+      builder.createOrFold<mlir::arith::ConstantIndexOp>(loc, 1);
+  size_t nextExtent = 0;
+  for (int64_t dim : arrayType.getShape()) {
+    mlir::Value factor = mlir::ShapedType::isDynamic(dim)
+                             ? getExtents()[nextExtent++]
+                             : builder.createOrFold<mlir::arith::ConstantIndexOp>(
+                                   loc, dim);
+    count = builder.createOrFold<mlir::arith::MulIOp>(loc, count, factor);
+  }
+  auto elementBytes = builder.createOrFold<mlir::arith::ConstantIndexOp>(
+      loc, elementSize.getFixedValue());
+  auto payloadBytes =
+      builder.createOrFold<mlir::arith::MulIOp>(loc, count, elementBytes);
+  auto headerBytes = builder.createOrFold<mlir::arith::ConstantIndexOp>(
+      loc, getRcPtr().getType().getInnerBoxType().getDynamicPayloadOffset(
+               dataLayout));
+  return builder.createOrFold<mlir::arith::AddIOp>(loc, payloadBytes, headerBytes);
+}
+
+mlir::LogicalResult ReussirArrayInstantiateOp::verify() {
+  return verifyDynamicArrayConstruction(getOperation(), getRcPtr().getType(),
+                                        getExtents(), getToken());
 }
 
 mlir::LogicalResult ReussirArrayViewOp::verify() {

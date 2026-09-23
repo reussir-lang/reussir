@@ -126,11 +126,17 @@ box (`RcBoxType` `hasDynamicArrayPayload` — `{i32 count | index offset |
 sizes | strides | tail}`, index-typed so the width follows the target);
 `array.view` builds the strided descriptor from header loads (box
 recovered from the payload ref by the static header offset); `token.alloc`
-takes an SSA byte size for `token<align, ?>` and allocates through the
-generic entry point. Open backend halves: runtime-sized construction
-(`rc.create … extents(…)`), dynamic `array.project`, the `with_unique_view`
-clone branch, restride ops, `expand-strided-metadata` in the shipping
-pipeline, and wiring the frontend codegen off its `err(…)` stubs.
+takes an SSA byte size for `token<align, ?>`; `array.create init(…) extents(…)`
+creates an RC box filled with clones of the initial element. Like closures,
+it lowers through `array.instantiate`, which initializes the canonical header.
+Its `TokenAcceptor::buildTokenSize` implementation computes
+`header + product(sizes) * elemsize`;
+`rc.dec`/`rc.reinterpret` produce dynamic
+tokens freed unsized. Executable e2e: `dynamic_array_e2e.mlir`. Open
+backend halves: dynamic `array.project`, the `with_unique_view` clone
+branch (runtime-length copy), restride ops, `expand-strided-metadata` in
+the shipping pipeline, and wiring the frontend codegen off its `err(…)`
+stubs.
 
 Frontend landed: `?` extents, the `DYNAMIC_EXTENT` sentinel through the
 type system, leading runtime extents on `splat`/`tabulate`, `array::dim`,

@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/TypeSwitch.h>
 #include <llvm/DebugInfo/DWARF/DWARFAttribute.h>
@@ -1845,6 +1846,63 @@ initializeRcCreateStorage(OpT op, AdaptorT adaptor,
   return RcCreateStorageInfo{token, elementPtr, true, /*countPtr=*/{}};
 }
 } // namespace
+
+struct ReussirArrayInstantiateOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirArrayInstantiateOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayInstantiateOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    RcBoxType boxType = op.getRcPtr().getType().getInnerBoxType();
+    mlir::Location loc = op.getLoc();
+    auto converter =
+        static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter());
+    auto llvmBoxType = converter->convertType(boxType);
+    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    mlir::Type indexType = converter->getIndexType();
+    auto storeHeaderField = [&](int32_t fieldIndex, mlir::Value value) {
+      auto fieldPtr = mlir::LLVM::GEPOp::create(
+          rewriter, loc, llvmPtrType, llvmBoxType, adaptor.getToken(),
+          llvm::ArrayRef<mlir::LLVM::GEPArg>{0, fieldIndex});
+      mlir::LLVM::StoreOp::create(rewriter, loc, value, fieldPtr);
+    };
+    auto indexConst = [&](int64_t v) -> mlir::Value {
+      return mlir::LLVM::ConstantOp::create(
+          rewriter, loc, indexType, mlir::IntegerAttr::get(indexType, v));
+    };
+    auto arrayType = llvm::cast<ArrayType>(boxType.getElementType());
+    int64_t rank = arrayType.getRank();
+    storeHeaderField(1, indexConst(0)); // offset
+    size_t nextExtent = 0;
+    auto sizes =
+        llvm::to_vector(llvm::map_range(arrayType.getShape(), [&](int64_t dim) {
+          if (mlir::ShapedType::isDynamic(dim)) {
+            mlir::Value extent = adaptor.getExtents()[nextExtent];
+            ++nextExtent;
+            return extent;
+          }
+          return indexConst(dim);
+        }));
+    for (auto [i, size] : llvm::enumerate(sizes))
+      storeHeaderField(static_cast<int32_t>(2 + i), size);
+    mlir::Value stride = indexConst(1);
+    llvm::SmallVector<mlir::Value> strides(rank);
+    for (int64_t i = rank - 1; i >= 0; --i) {
+      strides[i] = stride;
+      if (i > 0)
+        stride = mlir::LLVM::MulOp::create(rewriter, loc, stride, sizes[i]);
+    }
+    for (auto [i, stride] : llvm::enumerate(strides))
+      storeHeaderField(static_cast<int32_t>(2 + rank + i), stride);
+    auto countPtr = mlir::LLVM::GEPOp::create(
+        rewriter, loc, llvmPtrType, llvmBoxType, adaptor.getToken(),
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
+    storeInitialRcCount(countPtr, loc, rewriter);
+    rewriter.replaceOp(op, adaptor.getToken());
+    return mlir::success();
+  }
+};
 
 struct ReussirRcCreateOpConversionPattern
     : public mlir::OpConversionPattern<ReussirRcCreateOp> {
@@ -3937,20 +3995,20 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirRcTaggedOp, ReussirRcDecOp, ReussirRcBorrowOp,
         ReussirRcIsUniqueOp, ReussirRcAssumeUniqueOp, ReussirRecordCompoundOp,
         ReussirRecordVariantOp, ReussirRefProjectOp, ReussirArrayProjectOp,
-        ReussirArrayViewOp, ReussirRecordTagOp, ReussirRecordExtractOp,
-        ReussirRecordCoerceOp, ReussirRegionVTableOp, ReussirRcFreezeOp,
-        ReussirRegionCleanupOp, ReussirRegionCreateOp, ReussirRcReinterpretOp,
-        ReussirCellCreateOp, ReussirCellGetOp, ReussirCellSetOp,
-        ReussirCellRmwOp, ReussirCellRdlockOp, ReussirCellYieldOp,
-        ReussirClosureApplyOp, ReussirClosureCloneOp, ReussirClosureEvalOp,
-        ReussirClosureInspectPayloadOp, ReussirClosureCursorOp,
-        ReussirClosureInstantiateOp, ReussirClosureVtableOp,
-        ReussirClosureCreateOp, ReussirRcFetchOp, ReussirRcFetchSubOp,
-        ReussirRcSetOp, ReussirStrGlobalOp, ReussirStrLiteralOp,
-        ReussirStrCastOp, ReussirStrLenOp, ReussirStrUnsafeByteAtOp,
-        ReussirStrUnsafeStartWithOp, ReussirStrSliceOp, ReussirStrRefEqOp,
-        ReussirStrUnsafeMemcmpOp, ReussirTrampolineOp,
-        ReussirTokenLaunderOp>();
+        ReussirArrayViewOp, ReussirArrayInstantiateOp, ReussirRecordTagOp,
+        ReussirRecordExtractOp, ReussirRecordCoerceOp, ReussirRegionVTableOp,
+        ReussirRcFreezeOp, ReussirRegionCleanupOp, ReussirRegionCreateOp,
+        ReussirRcReinterpretOp, ReussirCellCreateOp, ReussirCellGetOp,
+        ReussirCellSetOp, ReussirCellRmwOp, ReussirCellRdlockOp,
+        ReussirCellYieldOp, ReussirClosureApplyOp, ReussirClosureCloneOp,
+        ReussirClosureEvalOp, ReussirClosureInspectPayloadOp,
+        ReussirClosureCursorOp, ReussirClosureInstantiateOp,
+        ReussirClosureVtableOp, ReussirClosureCreateOp, ReussirRcFetchOp,
+        ReussirRcFetchSubOp, ReussirRcSetOp, ReussirStrGlobalOp,
+        ReussirStrLiteralOp, ReussirStrCastOp, ReussirStrLenOp,
+        ReussirStrUnsafeByteAtOp, ReussirStrUnsafeStartWithOp,
+        ReussirStrSliceOp, ReussirStrRefEqOp, ReussirStrUnsafeMemcmpOp,
+        ReussirTrampolineOp, ReussirTokenLaunderOp>();
     // `reussir.closure.wpd_test` is created BY the dispatch conversion
     // patterns above, already in its final form (operand = the loaded vtable
     // pointer), and must survive conversion: the LLVM dialect cannot express
@@ -4103,6 +4161,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirClosureCursorOpConversionPattern,
       ReussirClosureTransferOpConversionPattern,
       ReussirClosureInstantiateOpConversionPattern,
+      ReussirArrayInstantiateOpConversionPattern,
       ReussirClosureVtableOpConversionPattern,
       ReussirClosureCreateOpConversionPattern,
       ReussirRcReinterpretConversionPattern, ReussirRcFetchConversionPattern,

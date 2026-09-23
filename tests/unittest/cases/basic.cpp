@@ -1,5 +1,7 @@
+#include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
 #include <gtest/gtest.h>
+#include <mlir/IR/Verifier.h>
 
 import reussir.test;
 
@@ -18,5 +20,27 @@ TEST_F(ReussirTest, ParseRecordTypeTest) {
       [](mlir::ModuleOp module, reussir::RecordType type) {
 
       });
+}
+
+TEST_F(ReussirTest, TokenAcceptorBuildsFixedSize) {
+  withModule(R"(
+module {
+  func.func @create(%init: i32) -> !reussir.rc<i32> {
+    %rc = reussir.rc.create value(%init : i32) : !reussir.rc<i32>
+    return %rc : !reussir.rc<i32>
+  }
+}
+)", [](mlir::ModuleOp module) {
+    module.walk([](ReussirRcCreateOp op) {
+      mlir::OpBuilder builder(op);
+      auto acceptor = llvm::cast<TokenAcceptor>(op.getOperation());
+      auto size = acceptor.buildTokenSize(builder);
+      ASSERT_TRUE(size.getType().isIndex());
+      auto constant = size.getDefiningOp<mlir::arith::ConstantIndexOp>();
+      ASSERT_TRUE(constant);
+      EXPECT_EQ(constant.value(), 8);
+    });
+    EXPECT_TRUE(mlir::succeeded(mlir::verify(module)));
+  });
 }
 } // namespace reussir

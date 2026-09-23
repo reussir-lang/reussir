@@ -22,6 +22,7 @@
 #include "Reussir/IR/ReussirTypes.h"
 #include "Sync/IR/SyncDialect.h"
 
+#include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/PatternMatch.h>
 #include <mlir/Pass/Pass.h>
@@ -60,12 +61,17 @@ struct TokenInstantiationPattern : public mlir::RewritePattern {
     // Create the token allocation operation before the current operation
     mlir::OpBuilder::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(op);
+
+    mlir::Value dynamicSize;
+    if (tokenType.isDynamicSize())
+      dynamicSize = tokenAcceptor.buildTokenSize(rewriter);
+
     auto allocOp = ReussirTokenAllocOp::create(rewriter, op->getLoc(),
-                                               tokenType,
-                                               /*dynamicSize=*/mlir::Value());
+                                               tokenType, dynamicSize);
 
     // Assign the token to the operation
-    tokenAcceptor.assignToken(allocOp.getToken());
+    rewriter.modifyOpInPlace(
+        op, [&] { tokenAcceptor.assignToken(allocOp.getToken()); });
 
     return mlir::success();
   }
