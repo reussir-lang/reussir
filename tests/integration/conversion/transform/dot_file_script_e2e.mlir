@@ -62,8 +62,11 @@ module {
   // iota(s)[i] = i + s.
   func.func private @iota(%s: i64) -> !rc
       attributes {llvm.linkage = #llvm.linkage<internal>} {
-    %poison = ub.poison : !arr
-    %xs = reussir.rc.create value(%poison : !arr) : !rc
+    %poison = ub.poison : i64
+    %xs = reussir.array.create extents() : !rc body {
+      ^bb0(%array_i0: index):
+        reussir.scf.yield %poison : i64
+    }
     %filled = reussir.array.with_unique_view (%xs : !rc) -> !rc {
       ^bb0(%v: memref<16xi64>):
         %c0 = arith.constant 0 : index

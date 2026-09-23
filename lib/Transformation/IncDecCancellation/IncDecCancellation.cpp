@@ -185,6 +185,8 @@ llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func) {
   llvm::SmallVector<ReussirRcIncOp> incOps;
   func->walk([&](ReussirRcIncOp op) { incOps.push_back(op); });
   for (auto op : incOps) {
+    if (!op.isSingleAcquire())
+      continue;
     // iterate all succeeding operations in the same block
     mlir::Operation *next = op->getNextNode();
     while (next) {
@@ -196,6 +198,11 @@ llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func) {
             op.getRcPtr(), aliasAnalysis, postDominanceInfo,
             ifOp.getThenRegion());
         if (decOp) {
+          if (ifOp.getElseRegion().empty()) {
+            mlir::OpBuilder builder(ifOp);
+            builder.createBlock(&ifOp.getElseRegion());
+            mlir::scf::YieldOp::create(builder, ifOp.getLoc());
+          }
           op->moveBefore(ifOp.elseYield());
           eraseOrReplaceDecOp(decOp);
           break;

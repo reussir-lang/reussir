@@ -46,24 +46,17 @@ pub fn cell(m : [i32; 4, 4], i : i64, j : i64) -> i32 {
     array::get(m, i, j)
 }
 
-// A tabulate constructor: a fresh rc.create over a poison payload (uniquely
-// owned by construction, so the plain borrowed view is mutable), filled by a
-// check-free loop calling the kernel closure per element through the
-// standard per-call chain — a per-iteration rc.inc pre-paying the consume,
-// then uniqify → apply… → eval. That is exactly the loop-carried redex the
-// closure beta reduction inlines at -Oaggressive (see the FUSED lines).
+// Tabulation generates each element in the array constructor body.
 // CHECK-LABEL: func.func @_RC4iota
 // CHECK: reussir.closure.create
-// CHECK: %[[POISON:.+]] = ub.poison : !reussir.array<8 x f64>
-// CHECK: %[[ARR:.+]] = reussir.rc.create value(%[[POISON]]
-// CHECK: %[[TVIEW:.+]] = reussir.array.view
-// CHECK: scf.for %[[IV:.+]] = %{{.+}} to %{{.+}} step %{{.+}} {
+// CHECK: %[[ARR:.+]] = reussir.array.create extents()
+// CHECK: ^bb0(%[[IV:.+]]: index):
 // CHECK: reussir.rc.inc
 // CHECK: %[[I64:.+]] = arith.index_cast %[[IV]] : index to i64
 // CHECK: reussir.closure.uniqify
 // CHECK: reussir.closure.apply(%[[I64]] : i64)
 // CHECK: %[[ELT:.+]] = reussir.closure.eval
-// CHECK: memref.store %[[ELT]], %[[TVIEW]][%[[IV]]]
+// CHECK: reussir.scf.yield %[[ELT]] : f64
 // CHECK: reussir.rc.dec
 // CHECK: return %[[ARR]]
 pub fn iota() -> [f64; 8] {
@@ -74,10 +67,8 @@ pub fn iota() -> [f64; 8] {
 // kernel, no closure ops anywhere.
 // CHECK-LABEL: func.func @_RC4ones
 // CHECK-NOT: reussir.closure
-// CHECK: ub.poison
-// CHECK: reussir.rc.create
-// CHECK: scf.for
-// CHECK: memref.store
+// CHECK: reussir.array.create extents()
+// CHECK-NOT: scf.for
 pub fn ones() -> [f64; 8] {
     array::splat<[f64; 8]>(1.0)
 }

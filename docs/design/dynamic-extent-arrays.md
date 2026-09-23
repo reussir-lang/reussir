@@ -126,9 +126,16 @@ box (`RcBoxType` `hasDynamicArrayPayload` — `{i32 count | index offset |
 sizes | strides | tail}`, index-typed so the width follows the target);
 `array.view` builds the strided descriptor from header loads (box
 recovered from the payload ref by the static header offset); `token.alloc`
-takes an SSA byte size for `token<align, ?>`; `array.create init(…) extents(…)`
-creates an RC box filled with clones of the initial element. Like closures,
+takes an SSA byte size for `token<align, ?>`; `array.create extents(…) body { … }`
+creates an RC box from a single-block initializer region. The region takes one
+index per dimension and yields ownership of an element. Like closures,
 it lowers through `array.instantiate`, which initializes the canonical header.
+Fixed arrays use the same constructor. Initializer regions survive token reuse;
+SCCP, canonicalization, and loop-invariant code motion then run before expansion. An invariant yield with only invariant
+ownership acquisitions becomes `array.fill_pattern`; acquisitions are batched
+by the element count and skipped for empty arrays. Other bodies become loops.
+The fill operation is retained until basic lowering emits
+`llvm.experimental.memset.pattern` with a typed scalar or pointer pattern.
 Its `TokenAcceptor::buildTokenSize` implementation computes
 `header + product(sizes) * elemsize`;
 `rc.dec`/`rc.reinterpret` produce dynamic

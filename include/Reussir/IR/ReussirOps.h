@@ -29,6 +29,7 @@
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/Interfaces/ControlFlowInterfaces.h>
 #include <mlir/Interfaces/InferTypeOpInterface.h>
+#include <mlir/Interfaces/LoopLikeInterface.h>
 #include <mlir/Interfaces/SideEffectInterfaces.h>
 
 #include "Reussir/IR/ReussirAttrs.h"
@@ -70,7 +71,8 @@ void inheritSanitizerPassthrough(mlir::ModuleOp moduleOp,
 //===----------------------------------------------------------------------===//
 //
 // This function emits the ownership acquisition for the given value. The input
-// value can either be a reference or a rc pointer. If other type is provided,
+// value can either be a reference or a rc pointer. Delta defaults to one.
+// If another type is provided,
 // the function returns failure.
 // - When RC value is passed in, the function emits a RcInc operation.
 // - When Reference value is passed in, the function checks the following:
@@ -86,7 +88,8 @@ void inheritSanitizerPassthrough(mlir::ModuleOp moduleOp,
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
                                              mlir::OpBuilder &builder,
-                                             mlir::Location loc);
+                                             mlir::Location loc,
+                                             mlir::Value delta = {});
 
 /// Traverses a statically shaped Reussir array view and invokes `emitElement`
 /// with a reference to each element.
@@ -119,8 +122,9 @@ createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
 //
 // Creates a function that performs ownership acquisition for the given
 // record type if it doesn't already exist. The function takes a reference to
-// the type and performs the acquisition operation. Returns the existing
-// function if one is already present. The RecordType must be a named type.
+// the type and an index delta and performs the acquisition operation. Returns
+// the existing function if one is already present. The RecordType must be a
+// named type.
 //
 //===----------------------------------------------------------------------===//
 mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(

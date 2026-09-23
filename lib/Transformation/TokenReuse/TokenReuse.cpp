@@ -120,6 +120,8 @@ namespace {
 static constexpr int kReallocEnsureCutoff = 2;
 int heuristic(TokenType producedType, mlir::TypedValue<RcType> producerRc,
               TokenAcceptor consumer, EquivalenceAnalysis &equivalence) {
+  if (consumer.getTokenType().isDynamicSize())
+    return -1;
   // Under perfect match, we measure the locality score.
   if (producedType == consumer.getTokenType()) {
     ReussirRcCreateOp create =

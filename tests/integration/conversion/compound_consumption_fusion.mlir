@@ -52,3 +52,17 @@ func.func @blocked(%q: !rc_queue) -> !rc_qlist {
   reussir.rc.dec (%q : !rc_queue)
   return %front : !rc_qlist
 }
+
+// CHECK-LABEL: func.func @multiple_acquisition(
+// CHECK: reussir.rc.inc{{.*}} by %arg1
+// CHECK: reussir.rc.dec
+// CHECK-NOT: boundMembers
+// CHECK: return
+func.func @multiple_acquisition(%q: !rc_queue, %delta: index) -> !rc_qlist {
+  %ref = reussir.rc.borrow(%q : !rc_queue) : !reussir.ref<!queue>
+  %slot = reussir.ref.project(%ref : !reussir.ref<!queue>)[1] : !reussir.ref<!rc_qlist>
+  %front = reussir.ref.load(%slot : !reussir.ref<!rc_qlist>) : !rc_qlist
+  reussir.rc.inc(%front : !rc_qlist) by %delta
+  reussir.rc.dec(%q : !rc_queue)
+  return %front : !rc_qlist
+}

@@ -45,6 +45,7 @@
 #include <mlir/IR/Block.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributes.h>
+#include <mlir/IR/Matchers.h>
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/IR/ValueRange.h>
 #include <mlir/Pass/Pass.h>
@@ -843,37 +844,82 @@ struct ReussirArrayCreateOpRewritePattern
     auto refType = RefType::get(rewriter.getContext(), arrayType);
     auto ref =
         ReussirRcBorrowOp::create(rewriter, loc, refType, created.getRcPtr());
-    auto view = ReussirArrayViewOp::create(
-        rewriter, loc, getArrayViewMemRefType(arrayType), ref);
-    auto zero = mlir::arith::ConstantIndexOp::create(rewriter, loc, 0);
-    auto one = mlir::arith::ConstantIndexOp::create(rewriter, loc, 1);
+    auto zero = rewriter.createOrFold<mlir::arith::ConstantIndexOp>(loc, 0);
+    auto one = rewriter.createOrFold<mlir::arith::ConstantIndexOp>(loc, 1);
     llvm::SmallVector<mlir::Value> lowerBounds(arrayType.getRank(), zero);
     llvm::SmallVector<mlir::Value> steps(arrayType.getRank(), one);
     llvm::SmallVector<mlir::Value> upperBounds;
+    mlir::Value count = one;
     size_t nextExtent = 0;
-    for (int64_t dim : arrayType.getShape())
-      upperBounds.push_back(
+    for (int64_t dim : arrayType.getShape()) {
+      auto extent =
           mlir::ShapedType::isDynamic(dim)
               ? op.getExtents()[nextExtent++]
-              : mlir::arith::ConstantIndexOp::create(rewriter, loc, dim)
-                    .getResult());
-    mlir::Value initRef;
-    if (!isTriviallyCopyable(op.getInit().getType())) {
-      auto initRefType =
-          RefType::get(rewriter.getContext(), op.getInit().getType());
-      initRef =
-          ReussirRefSpilledOp::create(rewriter, loc, initRefType, op.getInit());
+              : rewriter.createOrFold<mlir::arith::ConstantIndexOp>(loc, dim);
+      upperBounds.push_back(extent);
+      count = rewriter.createOrFold<mlir::arith::MulIOp>(loc, count, extent);
     }
-    mlir::scf::buildLoopNest(
-        rewriter, loc, lowerBounds, upperBounds, steps,
-        [&](mlir::OpBuilder &builder, mlir::Location bodyLoc,
-            mlir::ValueRange indices) {
-          if (initRef)
-            ReussirRefAcquireOp::create(builder, bodyLoc, initRef, false,
-                                        nullptr);
-          mlir::memref::StoreOp::create(builder, bodyLoc, op.getInit(), view,
-                                        indices);
+    auto &body = op.getBody().front();
+    auto yield = llvm::cast<ReussirScfYieldOp>(body.getTerminator());
+    auto loop = llvm::cast<mlir::LoopLikeOpInterface>(op.getOperation());
+    bool isSplat =
+        loop.isDefinedOutsideOfLoop(yield.getValue()) &&
+        llvm::all_of(body.without_terminator(), [&](mlir::Operation &inner) {
+          return llvm::isa<ReussirRcIncOp, ReussirRefAcquireOp>(inner) &&
+                 llvm::all_of(inner.getOperands(), [&](mlir::Value operand) {
+                   return loop.isDefinedOutsideOfLoop(operand);
+                 });
         });
+    if (isSplat) {
+      auto acquire = [&] {
+        for (auto &inner : body.without_terminator()) {
+          mlir::Value delta;
+          if (auto inc = llvm::dyn_cast<ReussirRcIncOp>(inner))
+            delta = inc.getDelta();
+          else
+            delta = llvm::cast<ReussirRefAcquireOp>(inner).getDelta();
+          delta = delta ? rewriter.createOrFold<mlir::arith::MulIOp>(loc, count,
+                                                                     delta)
+                        : count;
+          auto *cloned = rewriter.clone(inner);
+          if (auto inc = llvm::dyn_cast<ReussirRcIncOp>(cloned))
+            inc.getDeltaMutable().assign(delta);
+          else
+            llvm::cast<ReussirRefAcquireOp>(cloned).getDeltaMutable().assign(
+                delta);
+        }
+      };
+      if (!body.without_terminator().empty()) {
+        llvm::APInt constant;
+        if (mlir::matchPattern(count, mlir::m_ConstantInt(&constant))) {
+          if (!constant.isZero())
+            acquire();
+        } else {
+          auto nonempty = rewriter.createOrFold<mlir::arith::CmpIOp>(
+              loc, mlir::arith::CmpIPredicate::ne, count, zero);
+          auto guard = mlir::scf::IfOp::create(rewriter, loc, nonempty, false);
+          mlir::OpBuilder::InsertionGuard insertionGuard(rewriter);
+          rewriter.setInsertionPointToStart(&guard.getThenRegion().front());
+          acquire();
+        }
+      }
+      ReussirArrayFillPatternOp::create(rewriter, loc, ref, yield.getValue(),
+                                        count);
+    } else {
+      auto view = ReussirArrayViewOp::create(
+          rewriter, loc, getArrayViewMemRefType(arrayType), ref);
+      auto nest = mlir::scf::buildLoopNest(rewriter, loc, lowerBounds,
+                                           upperBounds, steps);
+      auto indices = llvm::map_to_vector(nest.loops, [](mlir::scf::ForOp loop) {
+        return loop.getInductionVar();
+      });
+      auto *insertionPoint = nest.loops.back().getBody()->getTerminator();
+      rewriter.inlineBlockBefore(&body, insertionPoint, indices);
+      rewriter.setInsertionPoint(yield);
+      mlir::memref::StoreOp::create(rewriter, loc, yield.getValue(), view,
+                                    indices);
+      rewriter.eraseOp(yield);
+    }
     rewriter.replaceOp(op, created.getRcPtr());
     return mlir::success();
   }
@@ -912,16 +958,32 @@ struct ReussirArrayWithUniqueViewOpRewritePattern
           dataLayout.getTypeSize(rcBoxType).getFixedValue());
       auto token = ReussirTokenAllocOp::create(rewriter, loc, tokenType,
                                   /*dynamicSize=*/mlir::Value());
-      auto poison = mlir::ub::PoisonOp::create(rewriter, loc, arrayType);
-      auto cloned = ReussirRcCreateOp::create(
-          rewriter, loc, rcType, poison.getResult(), token.getResult(),
-          mlir::Value{}, mlir::FlatSymbolRefAttr{}, mlir::UnitAttr{});
+      auto cloned = ReussirArrayCreateOp::create(
+          rewriter, loc, rcType, token.getResult(), mlir::ValueRange{});
+      auto *body = rewriter.createBlock(
+          &cloned.getBody(), {},
+          llvm::SmallVector<mlir::Type>(arrayType.getRank(),
+                                        rewriter.getIndexType()),
+          llvm::SmallVector<mlir::Location>(arrayType.getRank(), loc));
+      {
+        mlir::OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPointToStart(body);
+        auto srcView = ReussirArrayViewOp::create(
+            rewriter, loc, getArrayViewMemRefType(arrayType), srcRef);
+        auto element = mlir::memref::LoadOp::create(rewriter, loc, srcView,
+                                                    body->getArguments());
+        if (!isTriviallyCopyable(arrayType.getElementType())) {
+          auto elementRef = ReussirRefSpilledOp::create(
+              rewriter, loc,
+              RefType::get(rewriter.getContext(), arrayType.getElementType()),
+              element);
+          ReussirRefAcquireOp::create(rewriter, loc, elementRef);
+        }
+        ReussirScfYieldOp::create(rewriter, loc, element);
+      }
+      rewriter.setInsertionPointAfter(cloned);
       auto dstRef = ReussirRcBorrowOp::create(rewriter, loc, borrowedType,
                                               cloned.getResult());
-      ReussirRefMemcpyOp::create(rewriter, loc, srcRef.getResult(),
-                                 dstRef.getResult());
-      ReussirRefAcquireOp::create(rewriter, loc, dstRef.getResult(), false,
-                                  nullptr);
 
       auto refCount = ReussirRcFetchOp::create(rewriter, loc, op.getArray());
       auto decremented = mlir::arith::SubIOp::create(
@@ -2082,13 +2144,18 @@ struct ConvertToSTDPass
       return kind && hasNativeAtomicRMWLowering(*kind);
     });
 
+    target.addDynamicallyLegalOp<ReussirArrayCreateOp>(
+        [&](ReussirArrayCreateOp) { return !expandArrays; });
+    target.addDynamicallyLegalOp<ReussirScfYieldOp>([&](ReussirScfYieldOp op) {
+      return !expandArrays &&
+             llvm::isa<ReussirArrayCreateOp>(op->getParentOp());
+    });
     target.addIllegalOp<
-        ReussirNullableDispatchOp, ReussirRecordDispatchOp, ReussirScfYieldOp,
+        ReussirNullableDispatchOp, ReussirRecordDispatchOp,
         ReussirClosureUniqifyOp, ReussirArrayWithUniqueViewOp,
-        ReussirArrayCreateOp, ReussirTokenEnsureOp, ReussirStrByteAtOp,
-        ReussirStrSelectOp, ReussirStrStartWithOp, ReussirStrEqualOp,
-        ReussirStrCompareOp, ReussirCellCreateOp, ReussirCellRdlockOp,
-        ReussirCellInUseOp>();
+        ReussirTokenEnsureOp, ReussirStrByteAtOp, ReussirStrSelectOp,
+        ReussirStrStartWithOp, ReussirStrEqualOp, ReussirStrCompareOp,
+        ReussirCellCreateOp, ReussirCellRdlockOp, ReussirCellInUseOp>();
 
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns)))) {

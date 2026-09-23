@@ -11,7 +11,10 @@
 !rc_dv = !reussir.rc<!dv>
 module {
   func.func private @splat_sum(%n: index, %init: i32) -> i32 attributes {llvm.linkage = #llvm.linkage<internal>} {
-    %rc = reussir.array.create init(%init : i32) extents(%n) : !rc_dv
+    %rc = reussir.array.create extents(%n) : !rc_dv body {
+      ^bb0(%array_i0: index):
+        reussir.scf.yield %init : i32
+    }
     %ref = reussir.rc.borrow (%rc : !rc_dv) : !reussir.ref<!dv>
     %v = reussir.array.view(%ref : !reussir.ref<!dv>) : memref<?xi32, strided<[?], offset: ?>>
     %c0 = arith.constant 0 : index
@@ -27,7 +30,10 @@ module {
   }
 
   func.func private @mixed_sum(%n: index, %init: i32) -> i32 attributes {llvm.linkage = #llvm.linkage<internal>} {
-    %rc = reussir.array.create init(%init : i32) extents(%n) : !reussir.rc<!reussir.array<? x 4 x i32>>
+    %rc = reussir.array.create extents(%n) : !reussir.rc<!reussir.array<? x 4 x i32>> body {
+      ^bb0(%array_i0: index, %array_i1: index):
+        reussir.scf.yield %init : i32
+    }
     %ref = reussir.rc.borrow(%rc : !reussir.rc<!reussir.array<? x 4 x i32>>) : !reussir.ref<!reussir.array<? x 4 x i32>>
     %view = reussir.array.view(%ref : !reussir.ref<!reussir.array<? x 4 x i32>>) : memref<?x4xi32, strided<[?, ?], offset: ?>>
     %zero = arith.constant 0 : index

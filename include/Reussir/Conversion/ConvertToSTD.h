@@ -18,13 +18,10 @@
 #ifndef REUSSIR_CONVERSION_CONVERTTOSTD_H
 #define REUSSIR_CONVERSION_CONVERTTOSTD_H
 
-#include <mlir/Pass/Pass.h>
+#include "Reussir/Conversion/Passes.h"
 #include <mlir/Transforms/DialectConversion.h>
 
 namespace reussir {
-
-#define GEN_PASS_DECL_REUSSIRCONVERTTOSTDPASS
-#include "Reussir/Conversion/Passes.h.inc"
 
 void populateConvertToSTDConversionPatterns(mlir::RewritePatternSet &patterns);
 

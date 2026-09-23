@@ -21,12 +21,12 @@ const MIN_RC_VALUE: usize = 1 << STATUS_BITS | (PackedStatusTag::Rc as usize) | 
 struct PackedStatus(*mut Header);
 
 impl PackedStatus {
-    pub unsafe fn increase_unchecked(&mut self) {
+    pub unsafe fn increase_unchecked(&mut self, delta: usize) {
         debug_assert!({
             let status: Status = (*self).into();
             matches!(status, Status::Rc(_) | Status::Rank(_))
         });
-        self.0 = self.0.map_addr(|addr| addr + (1 << STATUS_BITS));
+        self.0 = self.0.map_addr(|addr| addr + (delta << STATUS_BITS));
     }
     pub unsafe fn saturating_decrease_unchecked(&mut self) -> bool {
         debug_assert!({
@@ -210,7 +210,7 @@ impl Header {
             std::mem::swap(&mut r1, &mut r2);
         } else if rank1 == rank2 {
             unsafe {
-                r1.as_mut().status.increase_unchecked();
+                r1.as_mut().status.increase_unchecked(1);
             };
         }
         unsafe { r2.as_mut().status = Status::Parent(r1).into() };
@@ -255,9 +255,9 @@ impl Header {
             unsafe { Header::deallocate(elem) };
         }
     }
-    pub unsafe fn acquire(this: NonNull<Self>) {
+    pub unsafe fn acquire(this: NonNull<Self>, delta: usize) {
         let mut root = unsafe { Header::find(this) };
-        unsafe { root.as_mut().status.increase_unchecked() };
+        unsafe { root.as_mut().status.increase_unchecked(delta) };
     }
     pub unsafe fn release(this: NonNull<Self>) {
         let mut root = unsafe { Header::find(this) };
@@ -292,7 +292,7 @@ impl Header {
                         }
                     }
                     Status::Rc(_) => unsafe {
-                        Header::find(this).as_mut().status.increase_unchecked()
+                        Header::find(this).as_mut().status.increase_unchecked(1)
                     },
                     Status::Rank(_) => {
                         while pending
@@ -327,7 +327,7 @@ impl Default for Header {
                      {llvmPtrType});
   addRuntimeFunction(body, "__reussir_cleanup_region", {llvmPtrType},
                      {llvmPtrType});
-  addRuntimeFunction(body, "__reussir_acquire_rigid_object", {llvmPtrType}, {});
+  addRuntimeFunction(body, "__reussir_acquire_rigid_object", {llvmPtrType, indexType}, {});
   addRuntimeFunction(body, "__reussir_release_rigid_object", {llvmPtrType}, {});
 */
 
@@ -357,11 +357,11 @@ pub unsafe extern "C" fn __reussir_cleanup_region(ptr: *mut u8) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __reussir_acquire_rigid_object(ptr: *mut u8) {
+pub unsafe extern "C" fn __reussir_acquire_rigid_object(ptr: *mut u8, delta: usize) {
     unsafe {
         match NonNull::new(ptr) {
             Some(ptr) => {
-                Header::acquire(ptr.cast());
+                Header::acquire(ptr.cast(), delta);
             }
             None => crate::panic!("Invalid pointer passed to __reussir_acquire_rigid_object"),
         }
@@ -383,6 +383,22 @@ pub unsafe extern "C" fn __reussir_release_rigid_object(ptr: *mut u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn acquire_delta_updates_the_scc_root() {
+        let mut root = Header::default();
+        root.status = Status::rc1().into();
+        let mut child = Header::default();
+        child.status = Status::Parent(NonNull::from(&mut root)).into();
+        unsafe {
+            __reussir_acquire_rigid_object(NonNull::from(&mut child).as_ptr().cast(), 7);
+            __reussir_acquire_rigid_object(NonNull::from(&mut child).as_ptr().cast(), 0);
+        }
+        match Status::from(root.status) {
+            Status::Rc(count) => assert_eq!(count.get(), 8),
+            status => panic!("expected a reference count, got {status:?}"),
+        }
+    }
 
     #[test]
     fn test_pack_unpack_unmarked() {

@@ -12,8 +12,11 @@
 
 module {
   func.func private @make_zero_array() -> !rc_arr4 attributes {llvm.linkage = #llvm.linkage<internal>} {
-    %poison = ub.poison : !arr4
-    %xs = reussir.rc.create value(%poison : !arr4) : !rc_arr4
+    %poison = ub.poison : i8
+    %xs = reussir.array.create extents() : !rc_arr4 body {
+      ^bb0(%array_i0: index):
+        reussir.scf.yield %poison : i8
+    }
     %zeroed = reussir.array.with_unique_view (%xs : !rc_arr4) -> !rc_arr4 {
       ^bb0(%view: memref<4xi8>):
         %c0 = arith.constant 0 : index

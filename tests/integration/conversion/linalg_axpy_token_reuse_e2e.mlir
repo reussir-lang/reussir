@@ -20,7 +20,7 @@
 // LOOPS-LABEL: func.func private @axpy(
 // LOOPS-NOT: linalg.
 // LOOPS-NOT: memref.alloc
-// LOOPS: reussir.rc.create {{.*}} skip_rc
+// LOOPS: reussir.array.instantiate{{.*}} skip_rc
 // LOOPS: scf.for
 // LOOPS: memref.load
 // LOOPS: memref.store
@@ -37,9 +37,12 @@ module {
     %vy = reussir.array.view(%by : !reussir.ref<!vec>) : tensor<64xi32>
     %t1 = reussir.rc.dec (%xs : !rc_vec) : !reussir.nullable<!vtoken>
     %t2 = reussir.rc.dec (%ys : !rc_vec) : !reussir.nullable<!vtoken>
-    %poison = ub.poison : !vec
+    %poison = ub.poison : i32
     %tk = reussir.token.alloc : !vtoken
-    %fresh = reussir.rc.create value(%poison : !vec) token(%tk : !vtoken) : !rc_vec
+    %fresh = reussir.array.create extents() token(%tk : !vtoken) : !rc_vec body {
+      ^bb0(%array_i0: index):
+        reussir.scf.yield %poison : i32
+    }
     %result = reussir.array.with_unique_view (%fresh : !rc_vec) -> !rc_vec {
       ^bb0(%view: memref<64xi32>):
         %dest = bufferization.to_tensor %view restrict writable : memref<64xi32> to tensor<64xi32>
@@ -59,8 +62,11 @@ module {
 
   // fill[i] = base + step*i
   func.func private @iota(%base: i32, %step: i32) -> !rc_vec attributes {llvm.linkage = #llvm.linkage<internal>} {
-    %poison = ub.poison : !vec
-    %fresh = reussir.rc.create value(%poison : !vec) : !rc_vec
+    %poison = ub.poison : i32
+    %fresh = reussir.array.create extents() : !rc_vec body {
+      ^bb0(%array_i0: index):
+        reussir.scf.yield %poison : i32
+    }
     %filled = reussir.array.with_unique_view (%fresh : !rc_vec) -> !rc_vec {
       ^bb0(%view: memref<64xi32>):
         %c0 = arith.constant 0 : index

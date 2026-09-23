@@ -38,10 +38,10 @@ module {
   // CHECK: scf.if
   // CHECK: reussir.rc.reinterpret
   // CHECK: reussir.token.launder
-  // CHECK: reussir.rc.create {{.*}} skip_rc
+  // CHECK: reussir.array.instantiate{{.*}} skip_rc
   // CHECK: } else {
   // CHECK: reussir.token.alloc
-  // CHECK: reussir.rc.create
+  // CHECK: reussir.array.instantiate
   func.func @axpy(%xs: !rc_vec, %ys: !rc_vec) -> !rc_vec {
     %bx = reussir.rc.borrow (%xs : !rc_vec) : !reussir.ref<!vec>
     %vx = reussir.array.view(%bx : !reussir.ref<!vec>) : tensor<64xi32>
@@ -49,9 +49,12 @@ module {
     %vy = reussir.array.view(%by : !reussir.ref<!vec>) : tensor<64xi32>
     %t1 = reussir.rc.dec (%xs : !rc_vec) : !reussir.nullable<!vtoken>
     %t2 = reussir.rc.dec (%ys : !rc_vec) : !reussir.nullable<!vtoken>
-    %poison = ub.poison : !vec
+    %poison = ub.poison : i32
     %tk = reussir.token.alloc : !vtoken
-    %fresh = reussir.rc.create value(%poison : !vec) token(%tk : !vtoken) : !rc_vec
+    %fresh = reussir.array.create extents() token(%tk : !vtoken) : !rc_vec body {
+      ^bb0(%array_i0: index):
+        reussir.scf.yield %poison : i32
+    }
     %result = reussir.array.with_unique_view (%fresh : !rc_vec) -> !rc_vec {
       ^bb0(%view: memref<64xi32>):
         %dest = bufferization.to_tensor %view restrict writable : memref<64xi32> to tensor<64xi32>

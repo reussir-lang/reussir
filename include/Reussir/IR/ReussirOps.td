@@ -396,19 +396,25 @@ class ReussirRcOp<string mnemonic, list<Trait> traits>
 def ReussirRcIncOp : ReussirRcOp<"inc", []> {
   let summary = "Increment reference count";
   let description = [{
-    `reussir.rc.inc` increments the reference count of a RC pointer.
+    `reussir.rc.inc` adds `delta` to the reference count of an RC pointer.
+    The optional index operand defaults to one. Delta must be non-negative
+    and the resulting count must fit the reference-count representation.
     ```mlir
     reussir.rc.inc (%rc_ptr : !reussir.rc<i64>)
     ```
   }];
 
   let arguments = (ins Arg<ReussirRcType, "Reference to increment",
-      [MemRead, MemWrite]>:$rcPtr);
+      [MemRead, MemWrite]>:$rcPtr, Optional<Index>:$delta);
 
   let assemblyFormat = [{
-    `(` $rcPtr `:` qualified(type($rcPtr)) `)` attr-dict
+    `(` $rcPtr `:` qualified(type($rcPtr)) `)` (`by` $delta^)? attr-dict
   }];
 
+  let builders = [OpBuilder<(ins "mlir::Value":$rcPtr), [{
+    build($_builder, $_state, rcPtr, mlir::Value{});
+  }]>];
+  let extraClassDeclaration = [{ bool isSingleAcquire(); }];
   let hasVerifier = 1;
 }
 
@@ -1030,39 +1036,69 @@ class ReussirArrayOp<string mnemonic, list<Trait> traits>
 def ReussirArrayCreateOp
     : ReussirArrayOp<
           "create", [AttrSizedOperandSegments,
+                     DeclareOpInterfaceMethods<LoopLikeOpInterface,
+                         ["getLoopInductionVars", "getLoopLowerBounds",
+                          "getLoopUpperBounds", "getLoopSteps"]>,
                      DeclareOpInterfaceMethods<TokenAcceptorInterface,
                                                ["buildTokenSize"]>]> {
-  let summary = "Create an RC array filled with clones of an element";
+  let summary = "Create an RC array from an element initializer region";
   let description = [{
-    Creates a shared dynamic-extent array with reference count one. Each slot
-    owns a clone of `init`; the initializer remains owned by the caller.
+    Creates a shared array with reference count one. The initializer body
+    takes one index per dimension and yields ownership
+    of the element for that slot. The body executes in row-major order.
     Extents supply the dynamic dimensions in shape order. An optional token
     provides storage, as for `closure.create`.
   }];
-  let arguments = (ins AnyType:$init, Optional<ReussirTokenType>:$token,
+  let arguments = (ins Optional<ReussirTokenType>:$token,
       Variadic<Index>:$extents);
   let results = (outs ReussirRcArrayType:$rcPtr);
+  let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
-    `init` `(` $init `:` type($init) `)`
     `extents` `(` $extents `)`
     (`token` `(` $token^ `:` qualified(type($token)) `)`)?
-    `:` qualified(type($rcPtr)) attr-dict
+    `:` qualified(type($rcPtr)) `body` $body attr-dict
   }];
   let hasVerifier = 1;
 }
 
-def ReussirArrayInstantiateOp : ReussirArrayOp<"instantiate", []> {
+def ReussirArrayInstantiateOp
+    : ReussirArrayOp<"instantiate", [AttrSizedOperandSegments,
+        DeclareOpInterfaceMethods<TokenAcceptorInterface, ["buildTokenSize"]>]> {
   let summary = "Initialize an RC array header in token storage";
   let description = [{
     Sets the reference count to one and initializes the canonical strided
     header. Like `closure.instantiate`, this is a low-level construction op;
     the caller must initialize the payload before using or releasing the array.
+    `skip_rc` preserves the existing count when storage has been reused.
   }];
-  let arguments = (ins ReussirTokenType:$token, Variadic<Index>:$extents);
+  let arguments = (ins Optional<ReussirTokenType>:$token, Variadic<Index>:$extents,
+                       UnitAttr:$skipRc);
   let results = (outs ReussirRcArrayType:$rcPtr);
   let assemblyFormat = [{
     `(` $token `:` qualified(type($token)) `)`
-    `extents` `(` $extents `)` `:` qualified(type($rcPtr)) attr-dict
+    `extents` `(` $extents `)` (`skip_rc` $skipRc^)? `:` qualified(type($rcPtr)) attr-dict
+  }];
+  let builders = [OpBuilder<(ins "RcType":$rcPtr, "mlir::Value":$token,
+                               "mlir::ValueRange":$extents), [{
+    build($_builder, $_state, rcPtr, token, extents, false);
+  }]>];
+  let hasVerifier = 1;
+}
+
+def ReussirArrayFillPatternOp : ReussirArrayOp<"fill_pattern", []> {
+  let summary = "Fill contiguous array storage with a repeated element";
+  let description = [{
+    Writes `init` into `count` consecutive elements starting at the array
+    payload reference. The destination must have room for those elements.
+    This performs no ownership acquisition or release; callers must account
+    for managed elements separately. A zero count writes nothing.
+    Lowers to llvm.experimental.memset.pattern in BasicOpsLowering.
+  }];
+  let arguments = (ins Arg<ReussirRefType, "array payload", [MemWrite]>:$ref,
+                       AnyType:$init, Index:$count);
+  let assemblyFormat = [{
+    `(` $ref `:` qualified(type($ref)) `)`
+    `init` `(` $init `:` type($init) `)` `count` `(` $count `)` attr-dict
   }];
   let hasVerifier = 1;
 }
@@ -1567,7 +1603,8 @@ def ReussirRefAcquireOp
   let description = [{
     `reussir.ref.acquire` acquires ownership of the element behind the reference
     in place. This increments reference counts for all RC pointers reachable
-    from the reference.
+    from the reference by `delta`, which defaults to one. Delta must be
+    non-negative and each resulting reference count must fit its representation.
 
     This is the dual of `reussir.ref.drop`. Where drop destructs, acquire
     increments ownership.
@@ -1579,21 +1616,26 @@ def ReussirRefAcquireOp
     the index must be inbound.
   }];
   let arguments = (ins Arg<ReussirRefType, "reference to acquire">:$ref,
-      UnitAttr:$inlined, OptionalAttr<IndexAttr>:$variant);
+      UnitAttr:$inlined, OptionalAttr<IndexAttr>:$variant, Optional<Index>:$delta);
 
   let assemblyFormat = [{
     `(` $ref `:` qualified(type($ref)) `)`
     oilist (
       `inlined` $inlined  |
-      `variant` `[` $variant `]`
+      `variant` `[` $variant `]` |
+      `by` $delta
     )
     attr-dict
   }];
 
   let builders = [OpBuilder<(ins "mlir::Value":$ref), [{
-      return build($_builder, $_state, ref, false, nullptr);
+      return build($_builder, $_state, ref, false, nullptr, mlir::Value{});
+    }]>, OpBuilder<(ins "mlir::Value":$ref, "bool":$inlined,
+                        "mlir::IntegerAttr":$variant), [{
+      build($_builder, $_state, ref, inlined, variant, mlir::Value{});
     }]>];
 
+  let extraClassDeclaration = [{ bool isSingleAcquire(); }];
   let hasVerifier = 1;
 }
 
@@ -1766,6 +1808,7 @@ def ReussirScfYieldOp
                     ParentOneOf<["::reussir::ReussirNullableDispatchOp",
                                  "::reussir::ReussirRecordDispatchOp",
                                  "::reussir::ReussirArrayWithUniqueViewOp",
+                                 "::reussir::ReussirArrayCreateOp",
                                  "::reussir::ReussirCellRdlockOp"]>]> {
   let summary = "Yield a value from a scf operation";
   let description = [{

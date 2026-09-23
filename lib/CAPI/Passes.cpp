@@ -96,8 +96,10 @@ MlirPass reussirCreateRcDecrementExpansionPass(void) {
 MlirPass reussirCreateInferVariantTagPass(void) {
   return wrapOwned(reussir::createReussirInferVariantTagPass());
 }
-MlirPass reussirCreateConvertToSTDPass(void) {
-  return wrapOwned(reussir::createReussirConvertToSTDPass());
+MlirPass reussirCreateConvertToSTDPass(bool expandArrays) {
+  reussir::ReussirConvertToSTDPassOptions options;
+  options.expandArrays = expandArrays;
+  return wrapOwned(reussir::createReussirConvertToSTDPass(options));
 }
 MlirPass reussirCreateSpecialPointerTagPass(bool archIndependent) {
   reussir::ReussirSpecialPointerTagPassOptions options;
@@ -182,6 +184,12 @@ MlirPass reussirCreateTransformPreloadLibraryPass(MlirStringRef const *paths,
 }
 MlirPass reussirCreateCanonicalizerPass(void) {
   return wrapOwned(mlir::createCanonicalizerPass());
+}
+MlirPass reussirCreateSCCPPass(void) {
+  return wrapOwned(mlir::createSCCPPass());
+}
+MlirPass reussirCreateLoopInvariantCodeMotionPass(void) {
+  return wrapOwned(mlir::createLoopInvariantCodeMotionPass());
 }
 MlirPass reussirCreateCSEPass(void) { return wrapOwned(mlir::createCSEPass()); }
 MlirPass reussirCreateControlFlowSinkPass(void) {

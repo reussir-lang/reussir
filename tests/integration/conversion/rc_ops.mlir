@@ -31,7 +31,7 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
   }
 
   func.func @rc_inc_rigid(%rc: !reussir.rc<i64 rigid>){
-    // CHECK-LABEL: call void @__reussir_acquire_rigid_object(ptr %0)
+    // CHECK-LABEL: call void @__reussir_acquire_rigid_object(ptr %0, i64 1)
     reussir.rc.inc (%rc : !reussir.rc<i64 rigid>)
     return 
   }

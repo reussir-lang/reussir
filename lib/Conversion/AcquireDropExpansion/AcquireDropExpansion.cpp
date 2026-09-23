@@ -412,8 +412,12 @@ public:
         mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
         mlir::func::FuncOp acquireFunc = emitOwnershipAcquisitionFuncIfNotExists(
             moduleOp, recordType, rewriter, refType.getAtomicKind());
+        mlir::Value delta = op.getDelta();
+        if (!delta)
+          delta = rewriter.createOrFold<mlir::arith::ConstantIndexOp>(
+              op.getLoc(), 1);
         mlir::func::CallOp::create(rewriter, op.getLoc(), acquireFunc,
-                                   op.getRef());
+                                   mlir::ValueRange{op.getRef(), delta});
         rewriter.eraseOp(op);
         return mlir::success();
       }
@@ -428,14 +432,17 @@ public:
         auto targetRef = ReussirRecordCoerceOp::create(
             rewriter, op.getLoc(), targetRefType, rewriter.getIndexAttr(tag),
             op.getRef());
-        ReussirRefAcquireOp::create(rewriter, op.getLoc(), targetRef);
+        ReussirRefAcquireOp::create(rewriter, op.getLoc(), targetRef, false,
+                                    nullptr, op.getDelta());
         rewriter.eraseOp(op);
         return mlir::success();
       }
     }
 
     // Route through emitOwnershipAcquisition for all other cases
-    if (emitOwnershipAcquisition(op.getRef(), rewriter, op.getLoc()).failed())
+    if (emitOwnershipAcquisition(op.getRef(), rewriter, op.getLoc(),
+                                 op.getDelta())
+            .failed())
       return mlir::failure();
 
     rewriter.eraseOp(op);
