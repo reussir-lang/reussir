@@ -27,7 +27,7 @@ def TokenAcceptorInterface : OpInterface<"TokenAcceptor"> {
   let description = [{
     Interface for operations that can accept and manage tokens.
     Operations implementing this interface support token assignment, retrieval,
-    and removal operations.
+    and removal operations, and materialization of their allocation size.
   }];
 
   let cppNamespace = "::reussir";
@@ -40,6 +40,22 @@ def TokenAcceptorInterface : OpInterface<"TokenAcceptor"> {
            /*args=*/(ins),
            /*methodBody=*/"",
            /*defaultImplementation=*/"">,
+       InterfaceMethod<
+           /*desc=*/[{Build the required allocation size in bytes as an index
+                     value at the builder's insertion point. The operation
+                     must be verified. Dynamically sized acceptors must
+                     override the fixed-size default.}],
+           /*retTy=*/"::mlir::Value",
+           /*methodName=*/"buildTokenSize",
+           /*args=*/(ins "::mlir::OpBuilder &":$builder),
+           /*methodBody=*/"",
+           /*defaultImplementation=*/[{
+        auto tokenType = $_op.getTokenType();
+        assert(!tokenType.isDynamicSize() &&
+               "dynamic token acceptors must implement buildTokenSize");
+        return builder.createOrFold<::mlir::arith::ConstantIndexOp>(
+            $_op.getLoc(), tokenType.getSize());
+      }]>,
        InterfaceMethod<
            /*desc=*/"Check whether the operation has been assigned a token.",
            /*retTy=*/"bool",

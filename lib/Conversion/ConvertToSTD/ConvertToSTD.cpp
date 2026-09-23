@@ -775,6 +775,14 @@ static void cloneArrayWithUniqueViewBody(ReussirArrayWithUniqueViewOp op,
 }
 
 static mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType) {
+  if (arrayType.hasDynamicShape()) {
+    auto layout = mlir::StridedLayoutAttr::get(
+        arrayType.getContext(), mlir::ShapedType::kDynamic,
+        llvm::SmallVector<int64_t>(arrayType.getRank(),
+                                   mlir::ShapedType::kDynamic));
+    return mlir::MemRefType::get(arrayType.getShape(),
+                                 arrayType.getElementType(), layout);
+  }
   return mlir::MemRefType::get(arrayType.getShape(),
                                arrayType.getElementType());
 }
@@ -814,6 +822,59 @@ struct ReussirArrayViewOpRewritePattern
                                            adaptor.getRef(), tensorType,
                                            /*writable=*/false);
     rewriter.replaceOp(op, value);
+    return mlir::success();
+  }
+};
+
+struct ReussirArrayCreateOpRewritePattern
+    : public mlir::OpRewritePattern<ReussirArrayCreateOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayCreateOp op,
+                  mlir::PatternRewriter &rewriter) const override {
+    if (!op.getToken())
+      return rewriter.notifyMatchFailure(op, "requires token instantiation");
+    auto loc = op.getLoc();
+    auto arrayType =
+        llvm::cast<ArrayType>(op.getRcPtr().getType().getElementType());
+    auto created = ReussirArrayInstantiateOp::create(
+        rewriter, loc, op.getRcPtr().getType(), op.getToken(), op.getExtents());
+    auto refType = RefType::get(rewriter.getContext(), arrayType);
+    auto ref =
+        ReussirRcBorrowOp::create(rewriter, loc, refType, created.getRcPtr());
+    auto view = ReussirArrayViewOp::create(
+        rewriter, loc, getArrayViewMemRefType(arrayType), ref);
+    auto zero = mlir::arith::ConstantIndexOp::create(rewriter, loc, 0);
+    auto one = mlir::arith::ConstantIndexOp::create(rewriter, loc, 1);
+    llvm::SmallVector<mlir::Value> lowerBounds(arrayType.getRank(), zero);
+    llvm::SmallVector<mlir::Value> steps(arrayType.getRank(), one);
+    llvm::SmallVector<mlir::Value> upperBounds;
+    size_t nextExtent = 0;
+    for (int64_t dim : arrayType.getShape())
+      upperBounds.push_back(
+          mlir::ShapedType::isDynamic(dim)
+              ? op.getExtents()[nextExtent++]
+              : mlir::arith::ConstantIndexOp::create(rewriter, loc, dim)
+                    .getResult());
+    mlir::Value initRef;
+    if (!isTriviallyCopyable(op.getInit().getType())) {
+      auto initRefType =
+          RefType::get(rewriter.getContext(), op.getInit().getType());
+      initRef =
+          ReussirRefSpilledOp::create(rewriter, loc, initRefType, op.getInit());
+    }
+    mlir::scf::buildLoopNest(
+        rewriter, loc, lowerBounds, upperBounds, steps,
+        [&](mlir::OpBuilder &builder, mlir::Location bodyLoc,
+            mlir::ValueRange indices) {
+          if (initRef)
+            ReussirRefAcquireOp::create(builder, bodyLoc, initRef, false,
+                                        nullptr);
+          mlir::memref::StoreOp::create(builder, bodyLoc, op.getInit(), view,
+                                        indices);
+        });
+    rewriter.replaceOp(op, created.getRcPtr());
     return mlir::success();
   }
 };
@@ -2024,9 +2085,9 @@ struct ConvertToSTDPass
     target.addIllegalOp<
         ReussirNullableDispatchOp, ReussirRecordDispatchOp, ReussirScfYieldOp,
         ReussirClosureUniqifyOp, ReussirArrayWithUniqueViewOp,
-        ReussirTokenEnsureOp, ReussirStrByteAtOp, ReussirStrSelectOp,
-        ReussirStrStartWithOp, ReussirStrEqualOp, ReussirStrCompareOp,
-        ReussirCellCreateOp, ReussirCellRdlockOp,
+        ReussirArrayCreateOp, ReussirTokenEnsureOp, ReussirStrByteAtOp,
+        ReussirStrSelectOp, ReussirStrStartWithOp, ReussirStrEqualOp,
+        ReussirStrCompareOp, ReussirCellCreateOp, ReussirCellRdlockOp,
         ReussirCellInUseOp>();
 
     if (failed(applyPartialConversion(getOperation(), target,
@@ -2070,15 +2131,16 @@ void populateConvertToSTDConversionPatterns(mlir::RewritePatternSet &patterns) {
       ReussirRecordDispatchOpRewritePattern,
       ReussirClosureUniqifyOpRewritePattern, ReussirClosureEvalOpRewritePattern,
       ReussirArrayWithUniqueViewOpRewritePattern,
-      ReussirScfYieldOpRewritePattern, ReussirTokenEnsureOpRewritePattern,
+      ReussirArrayCreateOpRewritePattern, ReussirScfYieldOpRewritePattern,
+      ReussirTokenEnsureOpRewritePattern,
       ReussirNullableTokenFreeOpRewritePattern,
       ReussirStrByteAtOpRewritePattern, ReussirStrSelectOpRewritePattern,
       ReussirStrStartWithOpRewritePattern, ReussirStrEqualOpRewritePattern,
       ReussirStrCompareOpRewritePattern, ReussirCellCreateOpRewritePattern,
       ReussirCellGetOpRewritePattern, ReussirCellSetOpRewritePattern,
       ReussirCellRmwOpRewritePattern, ReussirCellRdlockOpRewritePattern,
-      ReussirAtomicCellRmwOpRewritePattern,
-      ReussirCellInUseOpRewritePattern>(patterns.getContext());
+      ReussirAtomicCellRmwOpRewritePattern, ReussirCellInUseOpRewritePattern>(
+      patterns.getContext());
 }
 
 } // namespace reussir

@@ -1027,6 +1027,46 @@ def ReussirRecordCoerceOp : ReussirRecordOp<"coerce", [Pure]> {
 class ReussirArrayOp<string mnemonic, list<Trait> traits>
     : ReussirOp<"array."#mnemonic, traits>;
 
+def ReussirArrayCreateOp
+    : ReussirArrayOp<
+          "create", [AttrSizedOperandSegments,
+                     DeclareOpInterfaceMethods<TokenAcceptorInterface,
+                                               ["buildTokenSize"]>]> {
+  let summary = "Create an RC array filled with clones of an element";
+  let description = [{
+    Creates a shared dynamic-extent array with reference count one. Each slot
+    owns a clone of `init`; the initializer remains owned by the caller.
+    Extents supply the dynamic dimensions in shape order. An optional token
+    provides storage, as for `closure.create`.
+  }];
+  let arguments = (ins AnyType:$init, Optional<ReussirTokenType>:$token,
+      Variadic<Index>:$extents);
+  let results = (outs ReussirRcArrayType:$rcPtr);
+  let assemblyFormat = [{
+    `init` `(` $init `:` type($init) `)`
+    `extents` `(` $extents `)`
+    (`token` `(` $token^ `:` qualified(type($token)) `)`)?
+    `:` qualified(type($rcPtr)) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def ReussirArrayInstantiateOp : ReussirArrayOp<"instantiate", []> {
+  let summary = "Initialize an RC array header in token storage";
+  let description = [{
+    Sets the reference count to one and initializes the canonical strided
+    header. Like `closure.instantiate`, this is a low-level construction op;
+    the caller must initialize the payload before using or releasing the array.
+  }];
+  let arguments = (ins ReussirTokenType:$token, Variadic<Index>:$extents);
+  let results = (outs ReussirRcArrayType:$rcPtr);
+  let assemblyFormat = [{
+    `(` $token `:` qualified(type($token)) `)`
+    `extents` `(` $extents `)` `:` qualified(type($rcPtr)) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 def ReussirArrayProjectOp
     : ReussirArrayOp<
           "project", [NoMemoryEffect,

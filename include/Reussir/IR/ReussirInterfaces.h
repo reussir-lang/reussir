@@ -17,6 +17,7 @@
 #define REUSSIR_IR_REUSSIRINTERFACES_H
 
 #include "Reussir/IR/ReussirTypes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
