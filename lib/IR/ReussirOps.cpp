@@ -1379,6 +1379,11 @@ static mlir::LogicalResult verifyArrayConstruction(mlir::Operation *op,
 }
 
 mlir::LogicalResult ReussirArrayCreateOp::verify() {
+  if (mlir::failed(verifyArrayConstruction(getOperation(), getRcPtr().getType(),
+                                           getExtents(), getToken())))
+    return mlir::failure();
+  if (getBody().empty())
+    return mlir::success();
   auto arrayType = llvm::cast<ArrayType>(getRcPtr().getType().getElementType());
   auto &block = getBody().front();
   if (block.getNumArguments() != static_cast<size_t>(arrayType.getRank()) ||
@@ -1389,8 +1394,7 @@ mlir::LogicalResult ReussirArrayCreateOp::verify() {
   if (!yield || !yield.getValue() ||
       yield.getValue().getType() != arrayType.getElementType())
     return emitOpError("initializer body must yield an array element");
-  return verifyArrayConstruction(getOperation(), getRcPtr().getType(),
-                                 getExtents(), getToken());
+  return mlir::success();
 }
 
 template <typename Op> static TokenType getArrayTokenType(Op op) {
@@ -1436,16 +1440,22 @@ static mlir::Value buildArrayTokenSize(Op op, mlir::OpBuilder &builder) {
 }
 
 llvm::SmallVector<mlir::Region *> ReussirArrayCreateOp::getLoopRegions() {
+  if (getBody().empty())
+    return {};
   return {&getBody()};
 }
 
 std::optional<llvm::SmallVector<mlir::Value>>
 ReussirArrayCreateOp::getLoopInductionVars() {
+  if (getBody().empty())
+    return llvm::SmallVector<mlir::Value>{};
   return llvm::to_vector_of<mlir::Value>(getBody().front().getArguments());
 }
 
 std::optional<llvm::SmallVector<mlir::OpFoldResult>>
 ReussirArrayCreateOp::getLoopLowerBounds() {
+  if (getBody().empty())
+    return llvm::SmallVector<mlir::OpFoldResult>{};
   auto rank = getBody().front().getNumArguments();
   return llvm::SmallVector<mlir::OpFoldResult>(
       rank, mlir::Builder(getContext()).getIndexAttr(0));
@@ -1453,6 +1463,8 @@ ReussirArrayCreateOp::getLoopLowerBounds() {
 
 std::optional<llvm::SmallVector<mlir::OpFoldResult>>
 ReussirArrayCreateOp::getLoopSteps() {
+  if (getBody().empty())
+    return llvm::SmallVector<mlir::OpFoldResult>{};
   auto rank = getBody().front().getNumArguments();
   return llvm::SmallVector<mlir::OpFoldResult>(
       rank, mlir::Builder(getContext()).getIndexAttr(1));
@@ -1460,6 +1472,8 @@ ReussirArrayCreateOp::getLoopSteps() {
 
 std::optional<llvm::SmallVector<mlir::OpFoldResult>>
 ReussirArrayCreateOp::getLoopUpperBounds() {
+  if (getBody().empty())
+    return llvm::SmallVector<mlir::OpFoldResult>{};
   llvm::SmallVector<mlir::OpFoldResult> bounds;
   auto arrayType = llvm::cast<ArrayType>(getRcPtr().getType().getElementType());
   mlir::Builder builder(getContext());

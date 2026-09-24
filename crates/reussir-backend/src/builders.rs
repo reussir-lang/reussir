@@ -285,7 +285,8 @@ pub fn record_compound<'c>(
         .expect("valid reussir.record.compound")
 }
 
-/// Create an RC array from a per-element initializer body.
+/// Create an RC array with a per-element initializer body.
+/// Pass an empty region to leave the payload untouched for later initialization.
 pub fn array_create<'c>(
     context: &'c Context,
     extents: &[Value<'c, '_>],

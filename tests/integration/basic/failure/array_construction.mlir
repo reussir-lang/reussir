@@ -6,9 +6,26 @@ func.func @fixed_rc_create(%value: !reussir.array<4 x i32>) {
   return
 }
 // -----
-func.func @missing_init() {
-  // expected-error @+1 {{region with 1 blocks}}
-  %array = reussir.array.create extents() : !reussir.rc<!reussir.array<4 x i32>> body {}
+func.func @multiple_blocks(%value: i32) {
+  // expected-error @+1 {{region with at most 1 blocks}}
+  %array = reussir.array.create extents() : !reussir.rc<!reussir.array<4 x i32>> body {
+    ^bb0(%i: index):
+      cf.br ^bb1
+    ^bb1:
+      reussir.scf.yield %value : i32
+  }
+  return
+}
+// -----
+func.func @uninitialized_missing_extent() {
+  // expected-error @+1 {{expects 1 extent operand(s), got 0}}
+  %array = reussir.array.create extents() : !reussir.rc<!reussir.array<? x i32>>
+  return
+}
+// -----
+func.func @uninitialized_wrong_token(%token: !reussir.token<align: 4, size: 4>) {
+  // expected-error @+1 {{expected token type}}
+  %array = reussir.array.create extents() token(%token : !reussir.token<align: 4, size: 4>) : !reussir.rc<!reussir.array<4 x i32>>
   return
 }
 // -----

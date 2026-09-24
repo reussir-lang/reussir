@@ -496,7 +496,10 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
     }
 
     for (auto &op : region.front()) {
-      if (isa<mlir::LoopLikeOpInterface>(op) ||
+      auto loop = dyn_cast<mlir::LoopLikeOpInterface>(op);
+      // A constructor with an omitted initializer has no loop body and must
+      // remain eligible to consume a token from the surrounding block.
+      if ((loop && !loop.getLoopRegions().empty()) ||
           (isa<mlir::CallOpInterface>(op) &&
            (!reuseAcrossCall || isTailPositioned(&op)))) {
         mlir::func::CallOp funcCall = llvm::dyn_cast<mlir::func::CallOp>(op);

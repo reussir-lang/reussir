@@ -841,6 +841,10 @@ struct ReussirArrayCreateOpRewritePattern
         llvm::cast<ArrayType>(op.getRcPtr().getType().getElementType());
     auto created = ReussirArrayInstantiateOp::create(
         rewriter, loc, op.getRcPtr().getType(), op.getToken(), op.getExtents());
+    if (op.getBody().empty()) {
+      rewriter.replaceOp(op, created.getRcPtr());
+      return mlir::success();
+    }
     auto refType = RefType::get(rewriter.getContext(), arrayType);
     auto ref =
         ReussirRcBorrowOp::create(rewriter, loc, refType, created.getRcPtr());

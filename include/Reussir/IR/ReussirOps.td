@@ -1041,22 +1041,28 @@ def ReussirArrayCreateOp
                           "getLoopUpperBounds", "getLoopSteps"]>,
                      DeclareOpInterfaceMethods<TokenAcceptorInterface,
                                                ["buildTokenSize"]>]> {
-  let summary = "Create an RC array from an element initializer region";
+  let summary = "Create an RC array with an optional element initializer region";
   let description = [{
     Creates a shared array with reference count one. The initializer body
     takes one index per dimension and yields ownership
     of the element for that slot. The body executes in row-major order.
     Extents supply the dynamic dimensions in shape order. An optional token
     provides storage, as for `closure.create`.
+
+    When the body is omitted, only the array header is initialized; the
+    payload is left untouched, including when the token reuses existing
+    storage. The caller must initialize the payload before reading or
+    releasing the array. This form supports destination-passing kernels
+    that initialize the elements through a mutable view.
   }];
   let arguments = (ins Optional<ReussirTokenType>:$token,
       Variadic<Index>:$extents);
   let results = (outs ReussirRcArrayType:$rcPtr);
-  let regions = (region SizedRegion<1>:$body);
+  let regions = (region MaxSizedRegion<1>:$body);
   let assemblyFormat = [{
     `extents` `(` $extents `)`
     (`token` `(` $token^ `:` qualified(type($token)) `)`)?
-    `:` qualified(type($rcPtr)) `body` $body attr-dict
+    `:` qualified(type($rcPtr)) (`body` $body^)? attr-dict
   }];
   let hasVerifier = 1;
 }

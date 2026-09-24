@@ -1,3 +1,4 @@
+// RUN: %reussir-opt %s --reussir-attach-native-target --reussir-token-instantiation --reussir-token-reuse | %FileCheck %s --check-prefix=REUSE
 // RUN: %reussir-opt %s \
 // RUN:   --pass-pipeline='builtin.module(reussir-attach-native-target,func.func(reussir-token-instantiation),reussir-closure-outlining,reussir-lowering-region-patterns,func.func(reussir-inc-dec-cancellation),reussir-rc-decrement-expansion,func.func(reussir-infer-variant-tag),reussir-acquire-drop-expansion,reussir-convert-to-std,func.func(reussir-inc-dec-cancellation),reussir-acquire-drop-expansion{expand-decrement=1 outline-record=1},func.func(reussir-token-reuse{emit-remarks=1}),reussir-convert-to-std)' \
 // RUN:   --remarks-filter=TokenReuse --remark-format=emitRemark 2>&1 | %FileCheck %s --check-prefix=REMARK
@@ -22,6 +23,13 @@
 // elementwise with identical index maps. TokenReuse cannot see this: the
 // frontend must emit consuming decs before the kernel ONLY for
 // elementwise-aligned kernels, and after it otherwise.
+// The destination omits the array.create body so token reassignment leaves
+// the donor payload intact until the kernel reads and overwrites each element.
+
+// REUSE-LABEL: func.func @axpy
+// REUSE: %[[DONOR:.*]] = reussir.rc.dec(%arg1
+// REUSE: %[[TOKEN:.*]] = reussir.token.ensure(%[[DONOR]]
+// REUSE: reussir.array.create extents() token(%[[TOKEN]] : {{.*}}) : {{.*}}{{$}}
 
 // REMARK: remark: [Passed] TokenReused | Category:TokenReuse:OneShot | Function=axpy | AvailableTokens=2, CompatibleTokens=2, RemarkId={{[0-9]+}}, Score=2, Source=loc({{.*}}), Strategy=ensure
 // REMARK: remark: [Passed] TokenReused | Category:TokenReuse:OneShot | Function=axpy | AvailableTokens=1, CompatibleTokens=1, RemarkId={{[0-9]+}}, Score=2, Source=loc({{.*}}), Strategy=ensure
@@ -49,12 +57,8 @@ module {
     %vy = reussir.array.view(%by : !reussir.ref<!vec>) : tensor<64xi32>
     %t1 = reussir.rc.dec (%xs : !rc_vec) : !reussir.nullable<!vtoken>
     %t2 = reussir.rc.dec (%ys : !rc_vec) : !reussir.nullable<!vtoken>
-    %poison = ub.poison : i32
     %tk = reussir.token.alloc : !vtoken
-    %fresh = reussir.array.create extents() token(%tk : !vtoken) : !rc_vec body {
-      ^bb0(%array_i0: index):
-        reussir.scf.yield %poison : i32
-    }
+    %fresh = reussir.array.create extents() token(%tk : !vtoken) : !rc_vec
     %result = reussir.array.with_unique_view (%fresh : !rc_vec) -> !rc_vec {
       ^bb0(%view: memref<64xi32>):
         %dest = bufferization.to_tensor %view restrict writable : memref<64xi32> to tensor<64xi32>

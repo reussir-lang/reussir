@@ -97,6 +97,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : 
       ^bb0(%array_i0: index, %array_i1: index, %array_i2: index):
         reussir.scf.yield %init : i32
     }
+    %uninitialized = reussir.array.create extents(%three, %two) : !reussir.rc<!reussir.array<? x 4 x ? x i32>>
     return
   }
 }
@@ -113,7 +114,51 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : 
                  ASSERT_TRUE(constant);
                  sizes.push_back(constant.value());
                });
-               EXPECT_EQ(sizes, (llvm::SmallVector<int64_t>{160, 64}));
+               EXPECT_EQ(sizes, (llvm::SmallVector<int64_t>{160, 64, 160}));
+               EXPECT_TRUE(mlir::succeeded(mlir::verify(module)));
+             });
+}
+
+TEST_F(ReussirTest, ArrayWithoutInitializerHasNoLoop) {
+  withModule(R"(
+module {
+  func.func @create(%n: index, %value: i32) {
+    %fixed = reussir.array.create extents() : !reussir.rc<!reussir.array<4 x i32>>
+    %dynamic = reussir.array.create extents(%n) : !reussir.rc<!reussir.array<? x i32>>
+    %explicit_empty = reussir.array.create extents() : !reussir.rc<!reussir.array<4 x i32>> body {}
+    %initialized = reussir.array.create extents() : !reussir.rc<!reussir.array<4 x i32>> body {
+      ^bb0(%i: index):
+        reussir.scf.yield %value : i32
+    }
+    return
+  }
+}
+)",
+             [](mlir::ModuleOp module) {
+               size_t uninitialized = 0;
+               module.walk([&](ReussirArrayCreateOp op) {
+                 auto loop = llvm::cast<mlir::LoopLikeOpInterface>(
+                     op.getOperation());
+                 ASSERT_TRUE(loop.getLoopInductionVars());
+                 ASSERT_TRUE(loop.getLoopLowerBounds());
+                 ASSERT_TRUE(loop.getLoopUpperBounds());
+                 ASSERT_TRUE(loop.getLoopSteps());
+                 if (op.getBody().empty()) {
+                   ++uninitialized;
+                   EXPECT_TRUE(loop.getLoopRegions().empty());
+                   EXPECT_TRUE(loop.getLoopInductionVars()->empty());
+                   EXPECT_TRUE(loop.getLoopLowerBounds()->empty());
+                   EXPECT_TRUE(loop.getLoopUpperBounds()->empty());
+                   EXPECT_TRUE(loop.getLoopSteps()->empty());
+                 } else {
+                   EXPECT_EQ(loop.getLoopRegions().size(), 1u);
+                   EXPECT_EQ(loop.getLoopInductionVars()->size(), 1u);
+                   EXPECT_EQ(loop.getLoopLowerBounds()->size(), 1u);
+                   EXPECT_EQ(loop.getLoopUpperBounds()->size(), 1u);
+                   EXPECT_EQ(loop.getLoopSteps()->size(), 1u);
+                 }
+               });
+               EXPECT_EQ(uninitialized, 3u);
                EXPECT_TRUE(mlir::succeeded(mlir::verify(module)));
              });
 }

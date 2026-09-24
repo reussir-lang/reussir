@@ -4,7 +4,9 @@
 // RUN: %reussir-opt %s \
 // RUN:   --pass-pipeline='builtin.module(reussir-attach-native-target,func.func(reussir-token-instantiation),reussir-closure-outlining,reussir-lowering-region-patterns,func.func(reussir-inc-dec-cancellation),reussir-rc-decrement-expansion,func.func(reussir-infer-variant-tag),reussir-acquire-drop-expansion,reussir-convert-to-std,func.func(reussir-inc-dec-cancellation),reussir-acquire-drop-expansion{expand-decrement=1 outline-record=1},func.func(reussir-token-reuse),reussir-convert-to-std,func.func(reussir-rc-create-sink),func.func(reussir-rc-create-fusion),reussir-trmc-recursion-analysis,reussir-compile-polymorphic-ffi,canonicalize,cse,one-shot-bufferize{allow-unknown-ops},canonicalize,cse,convert-linalg-to-loops,convert-bufferization-to-memref,canonicalize,control-flow-sink,convert-scf-to-cf,reussir-lowering-basic-ops,convert-to-llvm,reconcile-unrealized-casts,cse,canonicalize)' \
 // RUN:   -o %t.mlir
-// RUN: %reussir-translate --mlir-to-llvmir %t.mlir | %opt -S -O3 -o %t.ll
+// RUN: %reussir-translate --mlir-to-llvmir %t.mlir -o %t.unopt.ll
+// RUN: %FileCheck %s --check-prefix=LLVM < %t.unopt.ll
+// RUN: %opt %t.unopt.ll -S -O3 -o %t.ll
 // RUN: %llc %t.ll -relocation-model=pic -filetype=obj -o %t.o
 // RUN: %cc %t.o -o %t.exe -L%library_path -lreussir_rt \
 // RUN:   %rpath_flag %extra_sys_libs
@@ -24,6 +26,12 @@
 // LOOPS: scf.for
 // LOOPS: memref.load
 // LOOPS: memref.store
+// The destination must not fill the reused payload before the kernel reads
+// its input aliases. Check before LLVM optimization so every target catches
+// a poison fill, even when its backend happens to discard that fill.
+// LLVM-LABEL: define internal ptr @axpy(
+// LLVM-NOT: @llvm.experimental.memset.pattern
+// LLVM: ret ptr
 #map = affine_map<(d0) -> (d0)>
 !vec = !reussir.array<64 x i32>
 !rc_vec = !reussir.rc<!vec>
@@ -37,12 +45,10 @@ module {
     %vy = reussir.array.view(%by : !reussir.ref<!vec>) : tensor<64xi32>
     %t1 = reussir.rc.dec (%xs : !rc_vec) : !reussir.nullable<!vtoken>
     %t2 = reussir.rc.dec (%ys : !rc_vec) : !reussir.nullable<!vtoken>
-    %poison = ub.poison : i32
     %tk = reussir.token.alloc : !vtoken
-    %fresh = reussir.array.create extents() token(%tk : !vtoken) : !rc_vec body {
-      ^bb0(%array_i0: index):
-        reussir.scf.yield %poison : i32
-    }
+    // Omit the initializer so token reassignment preserves the donor payload
+    // until each kernel iteration reads and overwrites its element.
+    %fresh = reussir.array.create extents() token(%tk : !vtoken) : !rc_vec
     %result = reussir.array.with_unique_view (%fresh : !rc_vec) -> !rc_vec {
       ^bb0(%view: memref<64xi32>):
         %dest = bufferization.to_tensor %view restrict writable : memref<64xi32> to tensor<64xi32>
@@ -62,11 +68,7 @@ module {
 
   // fill[i] = base + step*i
   func.func private @iota(%base: i32, %step: i32) -> !rc_vec attributes {llvm.linkage = #llvm.linkage<internal>} {
-    %poison = ub.poison : i32
-    %fresh = reussir.array.create extents() : !rc_vec body {
-      ^bb0(%array_i0: index):
-        reussir.scf.yield %poison : i32
-    }
+    %fresh = reussir.array.create extents() : !rc_vec
     %filled = reussir.array.with_unique_view (%fresh : !rc_vec) -> !rc_vec {
       ^bb0(%view: memref<64xi32>):
         %c0 = arith.constant 0 : index
