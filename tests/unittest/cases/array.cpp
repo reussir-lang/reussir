@@ -62,16 +62,6 @@ TEST_F(ReussirTest, ParseArrayTypeTest) {
       });
 }
 
-TEST_F(ReussirTest, ViewTypeElementTypeTest) {
-  auto i8Type = mlir::IntegerType::get(context.get(), 8);
-  auto arrayType = reussir::ArrayType::get(context.get(), {4, 8}, i8Type);
-  auto viewType =
-      reussir::ViewType::get(context.get(), /*isMutable=*/true, arrayType);
-
-  EXPECT_EQ(viewType.getArrayType(), arrayType);
-  EXPECT_EQ(viewType.getElementType(), i8Type);
-}
-
 TEST_F(ReussirTest, ArrayRejectsRankZero) {
   auto loc = mlir::UnknownLoc::get(context.get());
   mlir::ScopedDiagnosticHandler handler(
@@ -80,6 +70,25 @@ TEST_F(ReussirTest, ArrayRejectsRankZero) {
   EXPECT_FALSE(ArrayType::getChecked([&] { return mlir::emitError(loc); },
                                      context.get(), llvm::ArrayRef<int64_t>{},
                                      mlir::Type(i32Type)));
+}
+
+TEST_F(ReussirTest, ArrayProjectionPreservesStridesAndMemorySpace) {
+  withModule(R"mlir(
+    func.func private @static(memref<3x4x5xf32>) -> memref<4x5xf32, strided<[5, 1], offset: ?>>
+    func.func private @dynamic(memref<?x4x5xf32>) -> memref<4x5xf32, strided<[5, 1], offset: ?>>
+    func.func private @unit_dimensions(memref<2x1x1xf32, strided<[30, 7, 2], offset: 9>>) -> memref<1x1xf32, strided<[7, 2], offset: ?>>
+    func.func private @reversed(memref<3x4xf32, strided<[20, -2], offset: 8>, 3>) -> memref<4xf32, strided<[-2], offset: ?>, 3>
+    func.func private @scalar(memref<4xf32, strided<[2], offset: 3>>) -> memref<f32, strided<[], offset: ?>>
+  )mlir",
+             [](mlir::ModuleOp module) {
+               for (auto func : module.getOps<mlir::func::FuncOp>()) {
+                 auto input = llvm::cast<mlir::MemRefType>(
+                     func.getArgumentTypes().front());
+                 EXPECT_EQ(getProjectedArrayViewType(input),
+                           func.getResultTypes().front())
+                     << func.getName().str();
+               }
+             });
 }
 
 TEST_F(ReussirTest, TokenAcceptorBuildsDynamicArraySize) {

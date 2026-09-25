@@ -1,6 +1,6 @@
 // RUN: %reussir-opt %s --loop-invariant-code-motion | %FileCheck %s
 
-// Projection assumes an in-bounds index during LLVM lowering. Unknown and
+// Projection panics on an out-of-bounds index. Unknown and
 // out-of-bounds indices must stay under their original execution guard.
 module {
   func.func private @consume(!reussir.ref<i32 field>)
@@ -18,8 +18,8 @@ module {
     return
   }
 
-  // The loop may be empty: speculating either assumption would then turn a
-  // defined program into UB, even if the projected pointer is never loaded.
+  // The loop may be empty: speculating either projection would introduce a
+  // panic, even if the projected pointer is never loaded.
   // CHECK-LABEL: func.func @out_of_bounds
   // CHECK: scf.for
   // CHECK-COUNT-2: reussir.array.project

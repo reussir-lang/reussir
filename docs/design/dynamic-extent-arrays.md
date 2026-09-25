@@ -54,13 +54,17 @@ for both descriptor pointers, then `2r+1` loads — replacing
 `MemRefDescriptor::fromStaticShape`. Uniform for every static/dynamic
 mix; no constants-vs-loads case split.
 
-`array.project` becomes pure descriptor arithmetic: `offset += i *
-stride[0]`, drop the front of sizes/strides. The current lowering's trick
-of folding the row shift into the aligned pointer and pinning descriptor
-offset 0 is deleted for dynamic arrays — the offset field is live, and
-consumers reach elements through `getStridedElementPtr` as upstream
-intends. Bounds checks compare against header loads instead of constants,
-feeding the same cold-`reussir.panic` guard.
+`array.project` lowers in `reussir-convert-to-std` to a non-negative-index
+check, an unsigned check against the leading `memref.dim`, and a guarded rank-reducing
+`memref.subview`. Out-of-bounds indices panic. Subview inference retains
+known strides and the memory space; MLIR value-bounds analysis omits the guard
+when it proves `0 <= index < extent`, including induction variables in bounded
+loops. Otherwise the panic guard remains. The offset includes `i * stride[0]`.
+The final projection bridges a rank-zero subview with
+`reussir.ref.from_memref`. This applies equally to static arrays, dynamic
+arrays, and other strided memrefs. Before LLVM lowering, the pipeline runs
+`expand-strided-metadata` and `lower-affine` to expand the standard view
+operations.
 
 The strided layout also buys mutation-free layout ops: transpose,
 reverse, and leading-dim slice rewrite the header only, gated by the same
@@ -145,10 +149,11 @@ payload before exposing or releasing the result.
 Its `TokenAcceptor::buildTokenSize` implementation computes
 `header + product(sizes) * elemsize`;
 `rc.dec`/`rc.reinterpret` produce dynamic
-tokens freed unsized. Executable e2e: `dynamic_array_e2e.mlir`. Open
-backend halves: dynamic `array.project`, the `with_unique_view` clone
-branch (runtime-length copy), restride ops, `expand-strided-metadata` in
-the shipping pipeline, and wiring the frontend codegen off its `err(…)`
+tokens freed unsized. `array.project` now lowers through checked strided
+subviews. Executable e2e: `dynamic_array_e2e.mlir`, `array_project_e2e.mlir`.
+Open backend halves: dynamic ownership traversal, the `with_unique_view`
+clone branch (runtime-length copy), restride ops, and wiring the frontend
+codegen off its `err(…)`
 stubs.
 
 Frontend landed: `?` extents, the `DYNAMIC_EXTENT` sentinel through the

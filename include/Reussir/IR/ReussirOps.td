@@ -1131,16 +1131,26 @@ def ReussirArrayFillPatternOp : ReussirArrayOp<"fill_pattern", []> {
 
 def ReussirArrayProjectOp
     : ReussirArrayOp<
-          "project", [NoMemoryEffect,
+          "project", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
                       DeclareOpInterfaceMethods<ConditionallySpeculatable>]> {
-  let summary = "Project a fixed-size array view";
+  let summary = "Project the leading dimension of an array view";
   let description = [{
-    `reussir.array.project` projects the leading dimension of a statically
-    shaped memref produced by `reussir.array.view`.
+    `reussir.array.project` projects the leading dimension of a strided memref.
     When the remaining element is scalar, the result is a field reference.
-    Otherwise, the result is another statically shaped memref with one fewer
-    dimension. The index must be in bounds; lowering asserts this with
-    `llvm.assume`. Speculation requires a statically proven in-bounds index.
+    Otherwise, the result is another memref with one fewer dimension.
+
+    Projection follows rank-reducing `memref.subview` layout inference:
+    it adds `index * stride[0]` to the offset and drops the leading size and
+    stride, preserving known trailing strides and the memory space.
+
+    An index outside the leading extent panics. Convert-to-std uses MLIR value
+    bounds to omit the check when it proves `0 <= index < extent`. Otherwise it
+    emits a
+    non-negative-index check, an unsigned extent comparison, and an `scf.if`,
+    with the subview in the
+    successful branch and `reussir.panic` in the failure branch. The final
+    dimension bridges a rank-zero subview to a reference. Speculation and
+    effect-free elimination require a statically proven in-bounds index.
   }];
   let arguments = (ins Arg<AnyType, "array view to project">:$view,
       Arg<Index, "dynamic index">:$index);

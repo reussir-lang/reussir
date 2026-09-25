@@ -128,11 +128,6 @@ MlirType reussirArrayTypeGet(intptr_t nDims, int64_t const *shape,
                              llvm::ArrayRef<int64_t>(shape, nDims), ele));
 }
 
-MlirType reussirViewTypeGet(bool isMutable, MlirType arrayType) {
-  auto array = llvm::cast<ArrayType>(unwrap(arrayType));
-  return wrap(ViewType::get(array.getContext(), isMutable, array));
-}
-
 MlirType reussirFFIObjectTypeGet(MlirContext context, MlirAttribute ffiName,
                                  MlirAttribute cleanupHook) {
   return wrap(FFIObjectType::get(

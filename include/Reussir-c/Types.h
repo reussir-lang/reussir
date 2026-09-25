@@ -127,9 +127,6 @@ MlirType reussirClosureBoxTypeGet(MlirContext context, intptr_t nPayloads,
 MlirType reussirArrayTypeGet(intptr_t nDims, int64_t const *shape,
                              MlirType elementType);
 
-// `!reussir.view<isMutable, arrayTy>`. The context is taken from `arrayType`.
-MlirType reussirViewTypeGet(bool isMutable, MlirType arrayType);
-
 // `!reussir.ffi_object<ffiName, cleanupHook>`. `ffiName` must be a `StringAttr`
 // and `cleanupHook` a `FlatSymbolRefAttr`.
 MlirType reussirFFIObjectTypeGet(MlirContext context, MlirAttribute ffiName,

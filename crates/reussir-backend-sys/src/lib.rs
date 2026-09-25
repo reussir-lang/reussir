@@ -184,6 +184,8 @@ unsafe extern "C" {
     pub fn reussirCreateCSEPass() -> MlirPass;
     pub fn reussirCreateControlFlowSinkPass() -> MlirPass;
     pub fn reussirCreateSCFToControlFlowPass() -> MlirPass;
+    pub fn reussirCreateExpandStridedMetadataPass() -> MlirPass;
+    pub fn reussirCreateLowerAffinePass() -> MlirPass;
     pub fn reussirCreateConvertToLLVMPass() -> MlirPass;
     pub fn reussirCreateReconcileUnrealizedCastsPass() -> MlirPass;
 
@@ -349,7 +351,6 @@ unsafe extern "C" {
         shape: *const i64,
         element_type: MlirType,
     ) -> MlirType;
-    pub fn reussirViewTypeGet(is_mutable: bool, array_type: MlirType) -> MlirType;
     pub fn reussirFFIObjectTypeGet(
         context: MlirContext,
         ffi_name: MlirAttribute,

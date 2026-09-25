@@ -218,9 +218,6 @@ void populateReussirToLLVMTypeConversions(mlir::LLVMTypeConverter &converter) {
   converter.addConversion([](RcType type) {
     return mlir::LLVM::LLVMPointerType::get(type.getContext());
   });
-  converter.addConversion([](ViewType type) {
-    return mlir::LLVM::LLVMPointerType::get(type.getContext());
-  });
   converter.addConversion([](TokenType type) -> mlir::Type {
     // Every token is a bare pointer. A dynamic token (`size: ?`, from an
     // unpinned variant decrement under per-constructor sizing) carries no

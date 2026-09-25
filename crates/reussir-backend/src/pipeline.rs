@@ -457,6 +457,13 @@ pub fn run_lowering_pipeline(
         }
 
         // Lower to the LLVM dialect.
+        // Keep subviews visible to kernel scheduling, then use upstream
+        // expansion for their offset/stride arithmetic before LLVM lowering.
+        // Remove statically failing projection branches before expansion can
+        // fold an unreachable negative index into an invalid static offset.
+        module: sys::reussirCreateCanonicalizerPass();
+        module: sys::reussirCreateExpandStridedMetadataPass();
+        module: sys::reussirCreateLowerAffinePass();
         module: sys::reussirCreateCanonicalizerPass();
         module: sys::reussirCreateControlFlowSinkPass();
         module: sys::reussirCreateSCFToControlFlowPass();

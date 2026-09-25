@@ -38,12 +38,14 @@
 #include <mlir/CAPI/IR.h>
 #include <mlir/CAPI/Pass.h>
 #include <mlir/CAPI/Support.h>
+#include <mlir/Conversion/AffineToStandard/AffineToStandard.h>
 #include <mlir/Conversion/ConvertToLLVM/ToLLVMPass.h>
 #include <mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h>
 #include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
 #include <mlir/Dialect/DLTI/DLTI.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/Dialect/MemRef/Transforms/Passes.h>
 #include <mlir/Dialect/Transform/Transforms/Passes.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Pass/PassManager.h>
@@ -197,6 +199,12 @@ MlirPass reussirCreateControlFlowSinkPass(void) {
 }
 MlirPass reussirCreateSCFToControlFlowPass(void) {
   return wrapOwned(mlir::createSCFToControlFlowPass());
+}
+MlirPass reussirCreateExpandStridedMetadataPass(void) {
+  return wrapOwned(mlir::memref::createExpandStridedMetadataPass());
+}
+MlirPass reussirCreateLowerAffinePass(void) {
+  return wrapOwned(mlir::createLowerAffinePass());
 }
 MlirPass reussirCreateConvertToLLVMPass(void) {
   return wrapOwned(reussir::createReussirConvertToLLVMPass());

@@ -104,6 +104,30 @@ static mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType) {
                                arrayType.getElementType());
 }
 
+} // namespace
+
+mlir::MemRefType getProjectedArrayViewType(mlir::MemRefType viewType) {
+  llvm::SmallVector<int64_t> offsets(viewType.getRank(), 0);
+  llvm::SmallVector<int64_t> sizes(viewType.getShape());
+  llvm::SmallVector<int64_t> strides(viewType.getRank(), 1);
+  offsets.front() = mlir::ShapedType::kDynamic;
+  sizes.front() = 1;
+  auto subviewType =
+      llvm::cast<mlir::MemRefType>(mlir::memref::SubViewOp::inferResultType(
+          viewType, offsets, sizes, strides));
+  auto [subviewStrides, offset] = subviewType.getStridesAndOffset();
+  // Shape-based rank reduction is ambiguous when trailing dimensions are also
+  // one. Projection always drops the leading dimension, including its stride.
+  auto layout = mlir::StridedLayoutAttr::get(
+      viewType.getContext(), offset,
+      llvm::ArrayRef<int64_t>(subviewStrides).drop_front());
+  return mlir::MemRefType::get(viewType.getShape().drop_front(),
+                               viewType.getElementType(), layout,
+                               viewType.getMemorySpace());
+}
+
+namespace {
+
 static mlir::RankedTensorType getArrayViewTensorType(ArrayType arrayType) {
   return mlir::RankedTensorType::get(arrayType.getShape(),
                                      arrayType.getElementType());
@@ -1322,12 +1346,21 @@ static bool isIndexInRange(mlir::Value value, uint64_t upperExclusive) {
 
 mlir::Speculation::Speculatability ReussirArrayProjectOp::getSpeculatability() {
   auto viewType = llvm::dyn_cast<mlir::MemRefType>(getView().getType());
-  // Lowering emits an assumption, so moving an unchecked projection to a path
-  // where its index is out of bounds would introduce immediate UB.
+  // Moving a possibly failing projection can introduce a panic on a path
+  // where the original operation never executes (e.g. a zero-trip loop).
   if (viewType && viewType.getRank() > 0 && !viewType.isDynamicDim(0) &&
       isIndexInRange(getIndex(), viewType.getDimSize(0)))
     return mlir::Speculation::Speculatable;
   return mlir::Speculation::NotSpeculatable;
+}
+
+void ReussirArrayProjectOp::getEffects(
+    llvm::SmallVectorImpl<mlir::MemoryEffects::EffectInstance> &effects) {
+  // A failed bounds check is observable even when the reference is unused.
+  // Model the possible panic conservatively, as a write to the default
+  // resource; proven in-bounds descriptor arithmetic remains effect-free.
+  if (getSpeculatability() != mlir::Speculation::Speculatable)
+    effects.emplace_back(mlir::MemoryEffects::Write::get());
 }
 
 // Static memref views only construct a descriptor. Tensor views read the
@@ -1546,24 +1579,20 @@ mlir::LogicalResult ReussirArrayViewOp::verify() {
 mlir::LogicalResult ReussirArrayProjectOp::verify() {
   auto memrefType = llvm::dyn_cast<mlir::MemRefType>(getView().getType());
   if (!memrefType)
-    return emitOpError(
-        "array.project input must be a statically shaped memref");
-  if (!memrefType.hasStaticShape() || !memrefType.getLayout().isIdentity())
-    return emitOpError("array.project input memref must have a static "
-                       "identity-layout type");
-  ArrayType arrayType = ArrayType::get(getContext(), memrefType.getShape(),
-                                       memrefType.getElementType());
-  if (arrayType.getRank() == 0)
+    return emitOpError("array.project input must be an array view memref");
+  if (!memrefType.isStrided())
+    return emitOpError("array.project input memref must have a strided layout");
+  if (memrefType.getRank() == 0)
     return emitOpError("array view must have at least one extent");
 
-  if (arrayType.getRank() == 1) {
+  if (memrefType.getRank() == 1) {
     RefType projectedType = llvm::dyn_cast<RefType>(getProjected().getType());
     if (!projectedType)
       return emitOpError("projecting the last array dimension must produce a "
                          "reference result");
-    if (projectedType.getElementType() != arrayType.getElementType())
+    if (projectedType.getElementType() != memrefType.getElementType())
       return emitOpError("projected reference element type mismatch: expected ")
-             << arrayType.getElementType() << ", got "
+             << memrefType.getElementType() << ", got "
              << projectedType.getElementType();
     if (projectedType.getCapability() != Capability::field &&
         projectedType.getCapability() != Capability::unspecified)
@@ -1577,10 +1606,10 @@ mlir::LogicalResult ReussirArrayProjectOp::verify() {
       llvm::dyn_cast<mlir::MemRefType>(getProjected().getType());
   if (!projectedMemRefType)
     return emitOpError("projecting a non-final array dimension must produce "
-                       "another statically shaped memref");
-  if (projectedMemRefType != getArrayViewMemRefType(arrayType.dropFront()))
+                       "another memref");
+  if (projectedMemRefType != getProjectedArrayViewType(memrefType))
     return emitOpError("projected subview type mismatch: expected ")
-           << getArrayViewMemRefType(arrayType.dropFront()) << ", got "
+           << getProjectedArrayViewType(memrefType) << ", got "
            << projectedMemRefType;
   return mlir::success();
 }
@@ -3677,7 +3706,9 @@ mlir::LogicalResult emitArrayElementTraversal(
         } else {
           ArrayType nestedType = currentType.dropFront();
           auto nestedView = ReussirArrayProjectOp::create(
-              currentBuilder, loc, getArrayViewMemRefType(nestedType),
+              currentBuilder, loc,
+              getProjectedArrayViewType(
+                  llvm::cast<mlir::MemRefType>(currentView.getType())),
               currentView, indexValue);
           if (mlir::failed(self(self, nestedView.getProjected(), nestedType,
                                 currentBuilder)))
@@ -3719,7 +3750,9 @@ mlir::LogicalResult emitArrayElementTraversal(
             currentType = currentType.dropFront();
             currentView =
                 ReussirArrayProjectOp::create(
-                    bodyBuilder, bodyLoc, getArrayViewMemRefType(currentType),
+                    bodyBuilder, bodyLoc,
+                    getProjectedArrayViewType(
+                        llvm::cast<mlir::MemRefType>(currentView.getType())),
                     currentView, index)
                     .getProjected();
           }
