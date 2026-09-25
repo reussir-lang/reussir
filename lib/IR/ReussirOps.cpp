@@ -322,6 +322,17 @@ mlir::LogicalResult verifyHoleFields(mlir::Operation *op,
   return mlir::success();
 }
 
+static mlir::LogicalResult verifyTokenSize(mlir::Operation *op,
+                                           TokenType tokenType,
+                                           mlir::Value dynamicSize) {
+  bool dynamicToken = tokenType.isDynamicSize();
+  if (dynamicToken != static_cast<bool>(dynamicSize))
+    return op->emitOpError(
+        dynamicToken ? "a dynamically sized token requires a size operand"
+                     : "a statically sized token takes no size operand");
+  return mlir::success();
+}
+
 } // namespace
 
 ///===----------------------------------------------------------------------===//
@@ -329,12 +340,15 @@ mlir::LogicalResult verifyHoleFields(mlir::Operation *op,
 //===----------------------------------------------------------------------===//
 // ReinterpretOp verification
 mlir::LogicalResult ReussirTokenAllocOp::verify() {
-  bool dynamicToken = getToken().getType().isDynamicSize();
-  if (dynamicToken != static_cast<bool>(getDynamicSize()))
-    return emitOpError(dynamicToken
-                           ? "a dynamically sized token requires a size operand"
-                           : "a statically sized token takes no size operand");
-  return mlir::success();
+  return verifyTokenSize(*this, getToken().getType(), getDynamicSize());
+}
+
+mlir::LogicalResult ReussirTokenEnsureOp::verify() {
+  return verifyTokenSize(*this, getResult().getType(), getDynamicSize());
+}
+
+mlir::LogicalResult ReussirTokenReallocOp::verify() {
+  return verifyTokenSize(*this, getRealloced().getType(), getDynamicSize());
 }
 
 mlir::LogicalResult ReussirTokenReinterpretOp::verify() {

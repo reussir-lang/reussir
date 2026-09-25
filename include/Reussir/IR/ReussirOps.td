@@ -210,18 +210,29 @@ def ReussirTokenEnsureOp : ReussirTokenOp<"ensure", []> {
     checking the nullability and allocate memory on need.
     ```mlir
     %result = reussir.token.ensure
-      (%nullableToken : !reussir.nullable.token<align: 8, size: 8>) 
+      (%nullableToken : !reussir.nullable<!reussir.token<align: 8, size: 8>>)
       : !reussir.token<align: 8, size: 8>
+    ```
+    A dynamically sized result requires a byte-size operand for allocation
+    on the null path. A nonnull token must already have a compatible layout;
+    this operation does not resize it.
+    ```mlir
+    %result = reussir.token.ensure
+      (%nullableToken : !reussir.nullable<!reussir.token<align: 8, size: ?>>)
+      size(%bytes : index) : !reussir.token<align: 8, size: ?>
     ```
   }];
   let results = (outs Res<ReussirTokenType,
                           "output token", [MemAlloc<DefaultResource>]>:$result);
   let arguments =
       (ins Arg<ReussirNullableTokenType,
-               "input token", [MemFree<DefaultResource>]>:$nullableToken);
+               "input token", [MemFree<DefaultResource>]>:$nullableToken,
+          Arg<Optional<Index>, "dynamic byte size">:$dynamicSize);
   let assemblyFormat = [{
-    `(` $nullableToken `:` type($nullableToken) `)` `:` type($result) attr-dict
+    `(` $nullableToken `:` type($nullableToken) `)`
+    (`size` `(` $dynamicSize^ `:` `index` `)`)? `:` type($result) attr-dict
   }];
+  let hasVerifier = 1;
 }
 
 def ReussirTokenLaunderOp : ReussirTokenOp<"launder", []> {
@@ -261,19 +272,28 @@ def ReussirTokenReallocOp : ReussirTokenOp<"realloc", []> {
       (%token : !reussir.token<align: 8, size: 8>) 
       : !reussir.token<align: 8, size: 16>
     ```
+    A dynamically sized result takes its requested byte size as an SSA operand:
+    ```mlir
+    %realloced = reussir.token.realloc
+      (%token : !reussir.token<align: 8, size: ?>)
+      size(%bytes : index) : !reussir.token<align: 8, size: ?>
+    ```
   }];
 
   let arguments =
       (ins Arg<AnyTypeOf<[ReussirTokenType, ReussirNullableTokenType]>,
-               "Target Token to Realloc", [MemFree<DefaultResource>]>:$token);
+               "Target Token to Realloc", [MemFree<DefaultResource>]>:$token,
+          Arg<Optional<Index>, "dynamic byte size">:$dynamicSize);
 
   let results = (outs Res<
       ReussirTokenType,
       "Reallocated Memory Token", [MemAlloc<DefaultResource>]>:$realloced);
 
   let assemblyFormat = [{
-    `(` $token `:` type($token) `)` `:` type($realloced) attr-dict
+    `(` $token `:` type($token) `)`
+    (`size` `(` $dynamicSize^ `:` `index` `)`)? `:` type($realloced) attr-dict
   }];
+  let hasVerifier = 1;
 }
 //===----------------------------------------------------------------------===//
 // Reussir Nullable Operations

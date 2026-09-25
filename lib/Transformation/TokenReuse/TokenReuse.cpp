@@ -110,8 +110,8 @@ namespace reussir {
 
 namespace {
 // heuristic  < 0 : do not reuse at all
-// heuristic == 0 : reuse via realloc — dynamic token (`token<align, ?>`), a
-//                  universal fallback donor, resized at runtime
+// heuristic == 0 : reuse via realloc — dynamic donor or recipient, resized
+//                  at runtime
 // heuristic == 1 : reuse via realloc — a fixed-size token in the same
 //                  allocator bin (preferred over a dynamic donor)
 // heuristic >= 2 : reuse via ensure — an exact-size match, larger is better
@@ -120,8 +120,10 @@ namespace {
 static constexpr int kReallocEnsureCutoff = 2;
 int heuristic(TokenType producedType, mlir::TypedValue<RcType> producerRc,
               TokenAcceptor consumer, EquivalenceAnalysis &equivalence) {
+  // Equal dynamic token types do not prove equal byte sizes. Always resize
+  // to the recipient's requested size before constructing the new object.
   if (consumer.getTokenType().isDynamicSize())
-    return -1;
+    return 0;
   // Under perfect match, we measure the locality score.
   if (producedType == consumer.getTokenType()) {
     ReussirRcCreateOp create =
@@ -666,14 +668,16 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
 
       mlir::Value newToken;
       mlir::Value oldToken = reuse.anchor.getToken();
+      auto allocOp = llvm::cast<ReussirTokenAllocOp>(oldToken.getDefiningOp());
       if (reuse.realloc)
         newToken = ReussirTokenReallocOp::create(
-            rewriter, reuse.anchor->getLoc(), targetType, reuse.token);
+            rewriter, reuse.anchor->getLoc(), targetType, reuse.token,
+            allocOp.getDynamicSize());
       else
         newToken = ReussirTokenEnsureOp::create(
-            rewriter, reuse.anchor->getLoc(), targetType, reuse.token);
+            rewriter, reuse.anchor->getLoc(), targetType, reuse.token,
+            allocOp.getDynamicSize());
       reuse.anchor.assignToken(newToken);
-      auto allocOp = llvm::cast<ReussirTokenAllocOp>(oldToken.getDefiningOp());
       rewriter.eraseOp(allocOp);
     }
 

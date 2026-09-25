@@ -1082,9 +1082,10 @@ struct ReussirTokenEnsureOpRewritePattern
         rewriter, op.getLoc(), op.getType(), op.getNullableToken());
 
     {
+      mlir::Type inputType = op.getNullableToken().getType().getPtrTy();
       mlir::Block *thenBlock =
           rewriter.createBlock(&nullableDispatchOp.getNonNullRegion(), {},
-                               op.getType(), {op.getLoc()});
+                               inputType, {op.getLoc()});
       rewriter.setInsertionPointToStart(thenBlock);
       mlir::Value tokenSrc = thenBlock->getArgument(0);
       if (auto scfIf = mlir::dyn_cast_if_present<mlir::scf::IfOp>(
@@ -1112,7 +1113,7 @@ struct ReussirTokenEnsureOpRewritePattern
           // it is safe since RC must dominate this path
           if (reinterpretOp)
             tokenSrc = reussir::ReussirRcReinterpretOp::create(
-                rewriter, op.getLoc(), op.getType(), reinterpretOp.getRcPtr());
+                rewriter, op.getLoc(), inputType, reinterpretOp.getRcPtr());
         }
       auto launderedToken = ReussirTokenLaunderOp::create(
           rewriter, op.getLoc(), op.getType(), tokenSrc);
@@ -1123,9 +1124,8 @@ struct ReussirTokenEnsureOpRewritePattern
       mlir::Block *elseBlock =
           rewriter.createBlock(&nullableDispatchOp.getNullRegion());
       rewriter.setInsertionPointToStart(elseBlock);
-      auto allocatedToken =
-          ReussirTokenAllocOp::create(rewriter, op.getLoc(), op.getType(),
-                                      /*dynamicSize=*/mlir::Value());
+      auto allocatedToken = ReussirTokenAllocOp::create(
+          rewriter, op.getLoc(), op.getType(), adaptor.getDynamicSize());
       mlir::scf::YieldOp::create(rewriter, op.getLoc(),
                                  allocatedToken->getResults());
     }
