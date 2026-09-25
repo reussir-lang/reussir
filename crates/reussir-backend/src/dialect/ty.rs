@@ -165,12 +165,6 @@ pub fn array<'c>(shape: &[i64], element: Type<'c>) -> Type<'c> {
     }
 }
 
-/// Creates a `!reussir.view<isMutable, array>` type. `array` must be a
-/// `!reussir.array` type.
-pub fn view(is_mutable: bool, array: Type) -> Type {
-    unsafe { Type::from_raw(sys::reussirViewTypeGet(is_mutable, array.to_raw())) }
-}
-
 /// Creates a `!reussir.ffi_object<ffiName, cleanupHook>` type.
 pub fn ffi_object<'c>(
     context: &'c Context,

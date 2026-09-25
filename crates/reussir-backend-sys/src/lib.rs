@@ -351,7 +351,6 @@ unsafe extern "C" {
         shape: *const i64,
         element_type: MlirType,
     ) -> MlirType;
-    pub fn reussirViewTypeGet(is_mutable: bool, array_type: MlirType) -> MlirType;
     pub fn reussirFFIObjectTypeGet(
         context: MlirContext,
         ffi_name: MlirAttribute,

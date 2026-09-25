@@ -62,16 +62,6 @@ TEST_F(ReussirTest, ParseArrayTypeTest) {
       });
 }
 
-TEST_F(ReussirTest, ViewTypeElementTypeTest) {
-  auto i8Type = mlir::IntegerType::get(context.get(), 8);
-  auto arrayType = reussir::ArrayType::get(context.get(), {4, 8}, i8Type);
-  auto viewType =
-      reussir::ViewType::get(context.get(), /*isMutable=*/true, arrayType);
-
-  EXPECT_EQ(viewType.getArrayType(), arrayType);
-  EXPECT_EQ(viewType.getElementType(), i8Type);
-}
-
 TEST_F(ReussirTest, ArrayRejectsRankZero) {
   auto loc = mlir::UnknownLoc::get(context.get());
   mlir::ScopedDiagnosticHandler handler(

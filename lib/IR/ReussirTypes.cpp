@@ -203,7 +203,7 @@ bool isNonNullPointerType(mlir::Type type) {
     return false;
   return llvm::TypeSwitch<mlir::Type, bool>(type)
       .Case<TokenType, RcType, RecordType, RawPtrType, RefType, HoleType,
-            ClosureType, ViewType>([](auto) { return true; })
+            ClosureType>([](auto) { return true; })
       .Default([](mlir::Type) { return false; });
 }
 //===----------------------------------------------------------------------===//
@@ -1602,50 +1602,6 @@ MLIR_DATA_LAYOUT_EXPAND_PREFERRED_ALIGN(
     uint64_t ArrayType::getPreferredAlignment(
         const mlir::DataLayout &dataLayout, mlir::DataLayoutEntryListRef params)
         const { return getABIAlignment(dataLayout, params); })
-
-//===----------------------------------------------------------------------===//
-// ViewType
-//===----------------------------------------------------------------------===//
-mlir::Type ViewType::parse(mlir::AsmParser &parser) {
-  if (parser.parseLess())
-    return {};
-
-  llvm::StringRef keyword;
-  if (parser.parseKeyword(&keyword))
-    return {};
-  bool isMutable = false;
-  if (keyword == "mutable")
-    isMutable = true;
-  else if (keyword != "immutable")
-    return parser.emitError(parser.getCurrentLocation(),
-                            "expected mutable or immutable"),
-           mlir::Type{};
-
-  if (parser.parseComma())
-    return {};
-
-  llvm::SmallVector<int64_t> shape;
-  mlir::Type elementType;
-  if (mlir::failed(parseShapeAndElementType(parser, shape, elementType)) ||
-      parser.parseGreater())
-    return {};
-
-  auto arrayType =
-      ArrayType::getChecked(parser.getEncodedSourceLoc(parser.getNameLoc()),
-                            parser.getContext(), shape, elementType);
-  if (!arrayType)
-    return {};
-  return ViewType::get(parser.getContext(), isMutable, arrayType);
-}
-
-void ViewType::print(mlir::AsmPrinter &printer) const {
-  printer << "<" << (isMutable() ? "mutable" : "immutable") << ", ";
-  printShapeAndElementType(printer, getArrayType().getShape(),
-                           getArrayType().getElementType());
-  printer << ">";
-}
-
-REUSSIR_POINTER_LIKE_DATA_LAYOUT_INTERFACE(ViewType)
 
 //===----------------------------------------------------------------------===//
 // getProjectedType
