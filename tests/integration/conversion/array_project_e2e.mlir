@@ -3,9 +3,10 @@
 // RUN: %llc %t.ll -relocation-model=pic -filetype=obj -o %t.o
 // RUN: %cc %t.o -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
 // RUN: %t.exe
-// RUN: %not --crash %t.exe negative 2>&1 | %FileCheck %s --check-prefix=PANIC
-// RUN: %not --crash %t.exe past end 2>&1 | %FileCheck %s --check-prefix=PANIC
-// RUN: %not --crash %t.exe empty array index 2>&1 | %FileCheck %s --check-prefix=PANIC
+// Wine reports a Windows abort as a nonzero exit to the host's not tool.
+// RUN: %if wine-quirks %{ %not %} %else %{ %not --crash %} %t.exe negative 2>&1 | %FileCheck %s --check-prefix=PANIC
+// RUN: %if wine-quirks %{ %not %} %else %{ %not --crash %} %t.exe past end 2>&1 | %FileCheck %s --check-prefix=PANIC
+// RUN: %if wine-quirks %{ %not %} %else %{ %not --crash %} %t.exe empty array index 2>&1 | %FileCheck %s --check-prefix=PANIC
 // PANIC: Panic: array index out of bounds
 
 !matrix = memref<2x3xi32, strided<[6, 2], offset: 6>>
