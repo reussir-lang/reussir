@@ -82,7 +82,28 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  llvm::PassBuilder passBuilder;
+  std::optional<llvm::OptimizationLevel> level;
+  if (!linearRecurrencePipeline.empty()) {
+    if (!passPipeline.empty()) {
+      llvm::errs() << argv[0]
+                   << ": --passes and --linear-recurrence-pipeline are "
+                      "mutually exclusive\n";
+      return 1;
+    }
+    level = parseLevel(linearRecurrencePipeline);
+    if (!level) {
+      llvm::errs() << argv[0] << ": invalid optimization level '"
+                   << linearRecurrencePipeline << "'\n";
+      return 1;
+    }
+  }
+
+  llvm::PipelineTuningOptions tuningOptions;
+  if (level) {
+    tuningOptions.LoopVectorization = *level >= llvm::OptimizationLevel::O2;
+    tuningOptions.SLPVectorization = *level >= llvm::OptimizationLevel::O2;
+  }
+  llvm::PassBuilder passBuilder(nullptr, tuningOptions);
   llvm::LoopAnalysisManager lam;
   llvm::FunctionAnalysisManager fam;
   llvm::CGSCCAnalysisManager cgam;
@@ -121,20 +142,7 @@ int main(int argc, char **argv) {
       });
 
   llvm::ModulePassManager mpm;
-  if (!linearRecurrencePipeline.empty()) {
-    if (!passPipeline.empty()) {
-      llvm::errs() << argv[0]
-                   << ": --passes and --linear-recurrence-pipeline are "
-                      "mutually exclusive\n";
-      return 1;
-    }
-    std::optional<llvm::OptimizationLevel> level =
-        parseLevel(linearRecurrencePipeline);
-    if (!level) {
-      llvm::errs() << argv[0] << ": invalid optimization level '"
-                   << linearRecurrencePipeline << "'\n";
-      return 1;
-    }
+  if (level) {
     if (linearRecurrencePipeline == "Os" || linearRecurrencePipeline == "Oz")
       reussir::llvmpass::stampSizeAttributes(
           *module, /*minSize=*/linearRecurrencePipeline == "Oz");

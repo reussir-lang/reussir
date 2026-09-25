@@ -217,20 +217,6 @@ void runNPMOptimization(llvm::Module &llvmModule, ReussirOptOption opt) {
   if (opt == REUSSIR_OPT_NONE || opt == REUSSIR_OPT_TPDE)
     return;
 
-  // Initialize PassBuilder without TargetMachine
-  llvm::PassBuilder pb;
-  llvm::LoopAnalysisManager lam;
-  llvm::FunctionAnalysisManager fam;
-  llvm::CGSCCAnalysisManager cgam;
-  llvm::ModuleAnalysisManager mam;
-
-  // Register all analysis managers
-  pb.registerModuleAnalyses(mam);
-  pb.registerCGSCCAnalyses(cgam);
-  pb.registerFunctionAnalyses(fam);
-  pb.registerLoopAnalyses(lam);
-  pb.crossRegisterProxies(lam, fam, cgam, mam);
-
   // Configure optimization level
   llvm::OptimizationLevel optLevel;
   switch (opt) {
@@ -251,6 +237,23 @@ void runNPMOptimization(llvm::Module &llvmModule, ReussirOptOption opt) {
   case REUSSIR_OPT_TPDE:
     return;
   }
+
+  // Initialize PassBuilder without TargetMachine
+  llvm::PipelineTuningOptions tuningOptions;
+  tuningOptions.LoopVectorization = optLevel >= llvm::OptimizationLevel::O2;
+  tuningOptions.SLPVectorization = optLevel >= llvm::OptimizationLevel::O2;
+  llvm::PassBuilder pb(nullptr, tuningOptions);
+  llvm::LoopAnalysisManager lam;
+  llvm::FunctionAnalysisManager fam;
+  llvm::CGSCCAnalysisManager cgam;
+  llvm::ModuleAnalysisManager mam;
+
+  // Register all analysis managers
+  pb.registerModuleAnalyses(mam);
+  pb.registerCGSCCAnalyses(cgam);
+  pb.registerFunctionAnalyses(fam);
+  pb.registerLoopAnalyses(lam);
+  pb.crossRegisterProxies(lam, fam, cgam, mam);
 
   // Create the default optimization pipeline for the specified level.
   llvm::ModulePassManager mpm;

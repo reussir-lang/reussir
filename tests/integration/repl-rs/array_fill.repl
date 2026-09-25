@@ -1,0 +1,15 @@
+// REQUIRES: rrepl
+// RUN: %rrepl -i %s -lerror -Onone | %FileCheck %s
+// RUN: %rrepl -i %s -lerror | %FileCheck %s
+// RUN: %rrepl -i %s -lerror -Oaggressive | %FileCheck %s
+
+// The default REPL uses TPDE when available. Array initialization must reach
+// it as ordinary stores rather than an unsupported memset.pattern intrinsic.
+fn pick(value: i32) -> i32 { core::intrinsic::array::get(core::intrinsic::array::splat<[i32; 4]>(value), 3) }
+// CHECK: Definition added.
+
+pick(7)
+// CHECK: 7 : i32
+
+core::intrinsic::array::get(core::intrinsic::array::splat<[i32; 2, 3]>(9), 1, 2)
+// CHECK: 9 : i32

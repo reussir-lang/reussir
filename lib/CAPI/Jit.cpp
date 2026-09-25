@@ -95,17 +95,6 @@ void reussirRunBackendLLVMPipeline(LLVMModuleRef module, ReussirJitOptLevel opt,
     }
   }
 
-  llvm::PassBuilder pb(tm);
-  llvm::LoopAnalysisManager lam;
-  llvm::FunctionAnalysisManager fam;
-  llvm::CGSCCAnalysisManager cgam;
-  llvm::ModuleAnalysisManager mam;
-  pb.registerModuleAnalyses(mam);
-  pb.registerCGSCCAnalyses(cgam);
-  pb.registerFunctionAnalyses(fam);
-  pb.registerLoopAnalyses(lam);
-  pb.crossRegisterProxies(lam, fam, cgam, mam);
-
   llvm::OptimizationLevel level;
   switch (opt) {
   case ReussirJitOptAggressive:
@@ -122,6 +111,20 @@ void reussirRunBackendLLVMPipeline(LLVMModuleRef module, ReussirJitOptLevel opt,
     level = llvm::OptimizationLevel::O2;
     break;
   }
+
+  llvm::PipelineTuningOptions tuningOptions;
+  tuningOptions.LoopVectorization = level >= llvm::OptimizationLevel::O2;
+  tuningOptions.SLPVectorization = level >= llvm::OptimizationLevel::O2;
+  llvm::PassBuilder pb(tm, tuningOptions);
+  llvm::LoopAnalysisManager lam;
+  llvm::FunctionAnalysisManager fam;
+  llvm::CGSCCAnalysisManager cgam;
+  llvm::ModuleAnalysisManager mam;
+  pb.registerModuleAnalyses(mam);
+  pb.registerCGSCCAnalyses(cgam);
+  pb.registerFunctionAnalyses(fam);
+  pb.registerLoopAnalyses(lam);
+  pb.crossRegisterProxies(lam, fam, cgam, mam);
 
   llvm::ModulePassManager mpm;
   mpm.addPass(reussir::llvmpass::RuntimeFunctionAttributorPass());

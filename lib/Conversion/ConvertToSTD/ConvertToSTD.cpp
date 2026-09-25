@@ -842,6 +842,9 @@ struct ReussirArrayCreateOpRewritePattern
     auto created = ReussirArrayInstantiateOp::create(
         rewriter, loc, op.getRcPtr().getType(), op.getToken(), op.getExtents());
     if (op.getBody().empty()) {
+      // No body: initialize the header and leave the elements uninitialized.
+      //   %array = reussir.array.create extents()
+      //       : !reussir.rc<!reussir.array<4 x i32>>
       rewriter.replaceOp(op, created.getRcPtr());
       return mlir::success();
     }
@@ -866,6 +869,13 @@ struct ReussirArrayCreateOpRewritePattern
     auto &body = op.getBody().front();
     auto yield = llvm::cast<ReussirScfYieldOp>(body.getTerminator());
     auto loop = llvm::cast<mlir::LoopLikeOpInterface>(op.getOperation());
+    // A value defined outside the body can fill every slot directly:
+    //   body {
+    //     ^bb0(%i: index):
+    //       reussir.scf.yield %value : i32
+    //   }
+    // Folding and LICM run before this pattern; only ownership acquisitions
+    // with operands defined outside the body may remain alongside the yield.
     bool isSplat =
         loop.isDefinedOutsideOfLoop(yield.getValue()) &&
         llvm::all_of(body.without_terminator(), [&](mlir::Operation &inner) {
@@ -875,6 +885,8 @@ struct ReussirArrayCreateOpRewritePattern
                  });
         });
     if (isSplat) {
+      // Batch each acquisition into one operation by count * delta.
+      // ref.acquire is scaled the same way; an omitted delta means one.
       auto acquire = [&] {
         for (auto &inner : body.without_terminator()) {
           mlir::Value delta;
@@ -893,6 +905,16 @@ struct ReussirArrayCreateOpRewritePattern
                 delta);
         }
       };
+      // The yield-only body above has no acquisitions and needs just the fill.
+      // This branch handles bodies with acquisitions, for example:
+      //   body {
+      //     ^bb0(%i: index):
+      //       reussir.rc.inc(%value : !reussir.rc<i32>) by %delta
+      //       reussir.scf.yield %value : !reussir.rc<i32>
+      //   }
+      // isSplat guarantees these non-terminators are only rc.inc/ref.acquire,
+      // with all operands defined outside the body. Skip them when count is
+      // zero, since the original initializer would not execute at all.
       if (!body.without_terminator().empty()) {
         llvm::APInt constant;
         if (mlir::matchPattern(count, mlir::m_ConstantInt(&constant))) {
@@ -907,9 +929,28 @@ struct ReussirArrayCreateOpRewritePattern
           acquire();
         }
       }
-      ReussirArrayFillPatternOp::create(rewriter, loc, ref, yield.getValue(),
-                                        count);
+      auto view = ReussirArrayViewOp::create(
+          rewriter, loc, getArrayViewMemRefType(arrayType), ref);
+      mlir::scf::buildLoopNest(
+          rewriter, loc, lowerBounds, upperBounds, steps,
+          [&](mlir::OpBuilder &builder, mlir::Location bodyLoc,
+              mlir::ValueRange indices) {
+            mlir::memref::StoreOp::create(builder, bodyLoc, yield.getValue(),
+                                          view, indices);
+          });
     } else {
+      // Index-dependent values require executing the body for each element:
+      //   body {
+      //     ^bb0(%i: index, %j: index):
+      //       %sum = arith.addi %i, %j : index
+      //       reussir.scf.yield %sum : index
+      //   }
+      // So do other effects, even when the yielded %value is defined outside:
+      //   body {
+      //     ^bb0(%i: index):
+      //       func.call @observe(%i) : (index) -> ()
+      //       reussir.scf.yield %value : i32
+      //   }
       auto view = ReussirArrayViewOp::create(
           rewriter, loc, getArrayViewMemRefType(arrayType), ref);
       auto nest = mlir::scf::buildLoopNest(rewriter, loc, lowerBounds,
