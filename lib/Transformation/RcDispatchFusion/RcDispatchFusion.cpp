@@ -126,8 +126,11 @@ bool fuseArm(mlir::Region &region, int64_t tag,
       continue;
     }
     if (auto inc = llvm::dyn_cast<ReussirRcIncOp>(op)) {
-      if (extractedMemberIndex(inc.getRcPtr(), payloadRef))
+      if (extractedMemberIndex(inc.getRcPtr(), payloadRef)) {
+        if (!inc.isSingleAcquire())
+          return false;
         boundIncs.push_back(inc);
+      }
       continue;
     }
     if (llvm::is_contained(op.getOperands(), mlir::Value(scrutinee)) &&
@@ -222,7 +225,7 @@ matchCompoundExtraction(ReussirRefProjectOp project,
       continue;
     }
     if (auto candidate = llvm::dyn_cast<ReussirRefAcquireOp>(user)) {
-      if (directAcquire)
+      if (directAcquire || !candidate.isSingleAcquire())
         return std::nullopt;
       directAcquire = candidate;
       continue;
@@ -249,7 +252,7 @@ matchCompoundExtraction(ReussirRefProjectOp project,
     if (directAcquire)
       return std::nullopt;
     auto inc = llvm::dyn_cast_if_present<ReussirRcIncOp>(load->getNextNode());
-    if (!inc || inc.getRcPtr() != load.getValue() ||
+    if (!inc || !inc.isSingleAcquire() || inc.getRcPtr() != load.getValue() ||
         !inc->isBeforeInBlock(terminalDec))
       return std::nullopt;
     extraction.retain = inc;
@@ -273,7 +276,8 @@ matchCompoundExtraction(ReussirRefProjectOp project,
     return std::nullopt;
   auto acquire =
       llvm::dyn_cast_if_present<ReussirRefAcquireOp>(spilled->getNextNode());
-  if (!acquire || acquire.getRef() != spilled.getSpilled() ||
+  if (!acquire || !acquire.isSingleAcquire() ||
+      acquire.getRef() != spilled.getSpilled() ||
       !acquire->isBeforeInBlock(terminalDec))
     return std::nullopt;
   extraction.retain = acquire;
@@ -548,11 +552,15 @@ void fuseCompoundConsumption(ReussirRcDecOp dec) {
       // cancellation; do not shadow it.
       if (inc.getRcPtr() == dec.getRcPtr())
         return;
+      if (!inc.isSingleAcquire())
+        break;
       if (auto idx = loadedMemberIndex(inc.getRcPtr(), dec.getRcPtr()))
         rememberRetain(*idx, cursor);
       continue;
     }
     if (auto acquire = llvm::dyn_cast<ReussirRefAcquireOp>(cursor)) {
+      if (!acquire.isSingleAcquire())
+        break;
       if (auto idx = acquiredMemberIndex(acquire, dec.getRcPtr()))
         rememberRetain(*idx, cursor);
       continue;

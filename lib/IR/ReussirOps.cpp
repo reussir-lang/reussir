@@ -363,7 +363,32 @@ mlir::LogicalResult ReussirTokenReinterpretOp::verify() {
 //===----------------------------------------------------------------------===//
 // RcIncOp verification
 //===----------------------------------------------------------------------===//
+static bool isSingleAcquisition(mlir::Value delta) {
+  return !delta || mlir::matchPattern(delta, mlir::m_One());
+}
+
+bool ReussirRcIncOp::isSingleAcquire() {
+  return isSingleAcquisition(getDelta());
+}
+
+bool ReussirRefAcquireOp::isSingleAcquire() {
+  return isSingleAcquisition(getDelta());
+}
+
+static mlir::LogicalResult verifyNonnegativeCount(mlir::Operation *op,
+                                                  mlir::Value delta,
+                                                  llvm::StringRef name) {
+  llvm::APInt constant;
+  if (delta && mlir::matchPattern(delta, mlir::m_ConstantInt(&constant)) &&
+      constant.isNegative())
+    return op->emitOpError() << name << " must be non-negative";
+  return mlir::success();
+}
+
 mlir::LogicalResult ReussirRcIncOp::verify() {
+  if (mlir::failed(verifyNonnegativeCount(getOperation(), getDelta(),
+                                          "acquisition delta")))
+    return mlir::failure();
   RcType RcType = getRcPtr().getType();
   if (RcType.getCapability() == reussir::Capability::flex)
     return emitOpError("cannot increase reference count of a flex RC type");
@@ -765,9 +790,8 @@ ReussirRcDecOp::replaceWithProduced(mlir::PatternRewriter &builder) {
 // RcCreateOp verification
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRcCreateOp::verify() {
-  if (auto arrayType = llvm::dyn_cast<ArrayType>(getValue().getType());
-      arrayType && arrayType.hasDynamicShape())
-    return emitOpError("dynamic arrays must be created with array.create");
+  if (llvm::isa<ArrayType>(getValue().getType()))
+    return emitOpError("arrays must be created with array.create");
   return verifyRcCreateLikeOp(getOperation(), getRcPtr().getType(),
                               getValue().getType(), getToken(), getRegion());
 }
@@ -1311,18 +1335,29 @@ mlir::Speculation::Speculatability ReussirArrayViewOp::getSpeculatability() {
                                      : mlir::Speculation::Speculatable;
 }
 
-static mlir::LogicalResult
-verifyDynamicArrayConstruction(mlir::Operation *op, RcType rcType,
-                               mlir::ValueRange extents, mlir::Value token) {
+static mlir::LogicalResult verifyFixedArrayElementSize(mlir::Operation *op,
+                                                       ArrayType arrayType) {
+  auto elementType = arrayType.getElementType();
+  while (auto nested = llvm::dyn_cast<ArrayType>(elementType)) {
+    if (nested.hasDynamicShape())
+      return op->emitOpError("array elements must have a fixed size");
+    elementType = nested.getElementType();
+  }
+  if (!mlir::DataLayout::closest(op).getTypeSize(elementType).isFixed())
+    return op->emitOpError("array elements must have a fixed size");
+  return mlir::success();
+}
+
+static mlir::LogicalResult verifyArrayConstruction(mlir::Operation *op,
+                                                   RcType rcType,
+                                                   mlir::ValueRange extents,
+                                                   mlir::Value token) {
   auto arrayType = llvm::cast<ArrayType>(rcType.getElementType());
-  if (!arrayType.hasDynamicShape())
-    return op->emitOpError("requires a dynamic-extent array result");
-  if (auto elementArray = llvm::dyn_cast<ArrayType>(arrayType.getElementType());
-      elementArray && elementArray.hasDynamicShape())
-    return op->emitOpError("array elements must have a fixed size");
+  if (rcType.getCapability() != Capability::shared)
+    return op->emitOpError("requires a shared array result");
+  if (mlir::failed(verifyFixedArrayElementSize(op, arrayType)))
+    return mlir::failure();
   auto dataLayout = mlir::DataLayout::closest(op);
-  if (!dataLayout.getTypeSize(arrayType.getElementType()).isFixed())
-    return op->emitOpError("array elements must have a fixed size");
   auto expectedExtents = llvm::count_if(arrayType.getShape(), [](int64_t dim) {
     return mlir::ShapedType::isDynamic(dim);
   });
@@ -1330,9 +1365,13 @@ verifyDynamicArrayConstruction(mlir::Operation *op, RcType rcType,
     return op->emitOpError("expects ")
            << expectedExtents << " extent operand(s), got " << extents.size();
   if (token) {
-    auto expected = TokenType::getDynamic(
-        op->getContext(),
-        dataLayout.getTypeABIAlignment(rcType.getInnerBoxType()));
+    auto boxType = rcType.getInnerBoxType();
+    auto alignment = dataLayout.getTypeABIAlignment(boxType);
+    auto expected =
+        arrayType.hasDynamicShape()
+            ? TokenType::getDynamic(op->getContext(), alignment)
+            : TokenType::get(op->getContext(), alignment,
+                             dataLayout.getTypeSize(boxType).getFixedValue());
     if (token.getType() != expected)
       return op->emitOpError("expected token type ") << expected;
   }
@@ -1340,34 +1379,54 @@ verifyDynamicArrayConstruction(mlir::Operation *op, RcType rcType,
 }
 
 mlir::LogicalResult ReussirArrayCreateOp::verify() {
+  if (mlir::failed(verifyArrayConstruction(getOperation(), getRcPtr().getType(),
+                                           getExtents(), getToken())))
+    return mlir::failure();
+  if (getBody().empty())
+    return mlir::success();
   auto arrayType = llvm::cast<ArrayType>(getRcPtr().getType().getElementType());
-  if (getInit().getType() != arrayType.getElementType())
-    return emitOpError("initializer type must match array element type");
-  return verifyDynamicArrayConstruction(getOperation(), getRcPtr().getType(),
-                                        getExtents(), getToken());
+  auto &block = getBody().front();
+  if (block.getNumArguments() != static_cast<size_t>(arrayType.getRank()) ||
+      !llvm::all_of(block.getArgumentTypes(),
+                    [](mlir::Type type) { return type.isIndex(); }))
+    return emitOpError("initializer body requires one index per dimension");
+  auto yield = llvm::dyn_cast<ReussirScfYieldOp>(block.getTerminator());
+  if (!yield || !yield.getValue() ||
+      yield.getValue().getType() != arrayType.getElementType())
+    return emitOpError("initializer body must yield an array element");
+  return mlir::success();
 }
 
-TokenType ReussirArrayCreateOp::getTokenType() {
-  auto dataLayout = mlir::DataLayout::closest(getOperation());
-  return TokenType::getDynamic(
-      getContext(),
-      dataLayout.getTypeABIAlignment(getRcPtr().getType().getInnerBoxType()));
+template <typename Op> static TokenType getArrayTokenType(Op op) {
+  auto dataLayout = mlir::DataLayout::closest(op.getOperation());
+  auto boxType = op.getRcPtr().getType().getInnerBoxType();
+  auto alignment = dataLayout.getTypeABIAlignment(boxType);
+  if (boxType.hasDynamicArrayPayload())
+    return TokenType::getDynamic(op.getContext(), alignment);
+  return TokenType::get(op.getContext(), alignment,
+                        dataLayout.getTypeSize(boxType).getFixedValue());
 }
 
-mlir::Value ReussirArrayCreateOp::buildTokenSize(mlir::OpBuilder &builder) {
-  auto arrayType = llvm::cast<ArrayType>(getRcPtr().getType().getElementType());
-  auto dataLayout = mlir::DataLayout::closest(getOperation());
+template <typename Op>
+static mlir::Value buildArrayTokenSize(Op op, mlir::OpBuilder &builder) {
+  auto tokenType = getArrayTokenType(op);
+  if (!tokenType.isDynamicSize())
+    return builder.createOrFold<mlir::arith::ConstantIndexOp>(
+        op.getLoc(), tokenType.getSize());
+  auto arrayType =
+      llvm::cast<ArrayType>(op.getRcPtr().getType().getElementType());
+  auto dataLayout = mlir::DataLayout::closest(op.getOperation());
   auto elementSize = dataLayout.getTypeSize(arrayType.getElementType());
   assert(elementSize.isFixed() && "array elements must have a fixed size");
-  auto loc = getLoc();
+  auto loc = op.getLoc();
   mlir::Value count =
       builder.createOrFold<mlir::arith::ConstantIndexOp>(loc, 1);
   size_t nextExtent = 0;
   for (int64_t dim : arrayType.getShape()) {
-    mlir::Value factor = mlir::ShapedType::isDynamic(dim)
-                             ? getExtents()[nextExtent++]
-                             : builder.createOrFold<mlir::arith::ConstantIndexOp>(
-                                   loc, dim);
+    mlir::Value factor =
+        mlir::ShapedType::isDynamic(dim)
+            ? op.getExtents()[nextExtent++]
+            : builder.createOrFold<mlir::arith::ConstantIndexOp>(loc, dim);
     count = builder.createOrFold<mlir::arith::MulIOp>(loc, count, factor);
   }
   auto elementBytes = builder.createOrFold<mlir::arith::ConstantIndexOp>(
@@ -1375,14 +1434,89 @@ mlir::Value ReussirArrayCreateOp::buildTokenSize(mlir::OpBuilder &builder) {
   auto payloadBytes =
       builder.createOrFold<mlir::arith::MulIOp>(loc, count, elementBytes);
   auto headerBytes = builder.createOrFold<mlir::arith::ConstantIndexOp>(
-      loc, getRcPtr().getType().getInnerBoxType().getDynamicPayloadOffset(
+      loc, op.getRcPtr().getType().getInnerBoxType().getDynamicPayloadOffset(
                dataLayout));
   return builder.createOrFold<mlir::arith::AddIOp>(loc, payloadBytes, headerBytes);
 }
 
+llvm::SmallVector<mlir::Region *> ReussirArrayCreateOp::getLoopRegions() {
+  if (getBody().empty())
+    return {};
+  return {&getBody()};
+}
+
+std::optional<llvm::SmallVector<mlir::Value>>
+ReussirArrayCreateOp::getLoopInductionVars() {
+  if (getBody().empty())
+    return llvm::SmallVector<mlir::Value>{};
+  return llvm::to_vector_of<mlir::Value>(getBody().front().getArguments());
+}
+
+std::optional<llvm::SmallVector<mlir::OpFoldResult>>
+ReussirArrayCreateOp::getLoopLowerBounds() {
+  if (getBody().empty())
+    return llvm::SmallVector<mlir::OpFoldResult>{};
+  auto rank = getBody().front().getNumArguments();
+  return llvm::SmallVector<mlir::OpFoldResult>(
+      rank, mlir::Builder(getContext()).getIndexAttr(0));
+}
+
+std::optional<llvm::SmallVector<mlir::OpFoldResult>>
+ReussirArrayCreateOp::getLoopSteps() {
+  if (getBody().empty())
+    return llvm::SmallVector<mlir::OpFoldResult>{};
+  auto rank = getBody().front().getNumArguments();
+  return llvm::SmallVector<mlir::OpFoldResult>(
+      rank, mlir::Builder(getContext()).getIndexAttr(1));
+}
+
+std::optional<llvm::SmallVector<mlir::OpFoldResult>>
+ReussirArrayCreateOp::getLoopUpperBounds() {
+  if (getBody().empty())
+    return llvm::SmallVector<mlir::OpFoldResult>{};
+  llvm::SmallVector<mlir::OpFoldResult> bounds;
+  auto arrayType = llvm::cast<ArrayType>(getRcPtr().getType().getElementType());
+  mlir::Builder builder(getContext());
+  size_t nextExtent = 0;
+  for (int64_t dim : arrayType.getShape()) {
+    if (mlir::ShapedType::isDynamic(dim))
+      bounds.push_back(getExtents()[nextExtent++]);
+    else
+      bounds.push_back(builder.getIndexAttr(dim));
+  }
+  return bounds;
+}
+
+TokenType ReussirArrayCreateOp::getTokenType() {
+  return getArrayTokenType(*this);
+}
+
+mlir::Value ReussirArrayCreateOp::buildTokenSize(mlir::OpBuilder &builder) {
+  return buildArrayTokenSize(*this, builder);
+}
+
+TokenType ReussirArrayInstantiateOp::getTokenType() {
+  return getArrayTokenType(*this);
+}
+
+mlir::Value
+ReussirArrayInstantiateOp::buildTokenSize(mlir::OpBuilder &builder) {
+  return buildArrayTokenSize(*this, builder);
+}
+
 mlir::LogicalResult ReussirArrayInstantiateOp::verify() {
-  return verifyDynamicArrayConstruction(getOperation(), getRcPtr().getType(),
-                                        getExtents(), getToken());
+  return verifyArrayConstruction(getOperation(), getRcPtr().getType(),
+                                 getExtents(), getToken());
+}
+
+mlir::LogicalResult ReussirArrayFillPatternOp::verify() {
+  auto arrayType =
+      llvm::dyn_cast<ArrayType>(getRef().getType().getElementType());
+  if (!arrayType || getInit().getType() != arrayType.getElementType())
+    return emitOpError("requires an array reference and matching element type");
+  if (mlir::failed(verifyFixedArrayElementSize(getOperation(), arrayType)))
+    return mlir::failure();
+  return verifyNonnegativeCount(getOperation(), getCount(), "fill count");
 }
 
 mlir::LogicalResult ReussirArrayViewOp::verify() {
@@ -2640,8 +2774,13 @@ mlir::LogicalResult ReussirScfYieldOp::verify() {
   // (not the nearest ancestor of a type): either body may itself sit inside
   // a dispatch region — a `set` in a match arm is the everyday case — and
   // this yield belongs to the op whose single-block body it terminates.
-  if (auto rdlockParent = llvm::dyn_cast_if_present<ReussirCellRdlockOp>(
-          getOperation()->getParentOp()))
+  if (auto create =
+          llvm::dyn_cast<ReussirArrayCreateOp>(getOperation()->getParentOp()))
+    expectedType =
+        llvm::cast<ArrayType>(create.getRcPtr().getType().getElementType())
+            .getElementType();
+  else if (auto rdlockParent = llvm::dyn_cast_if_present<ReussirCellRdlockOp>(
+               getOperation()->getParentOp()))
     expectedType = rdlockParent.getOutput() ? rdlockParent.getOutput().getType()
                                             : mlir::Type{};
   else if (auto arrayParent =
@@ -3210,6 +3349,9 @@ mlir::LogicalResult ReussirRefDropOp::verify() {
 // Reussir Reference Acquire Op
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRefAcquireOp::verify() {
+  if (mlir::failed(verifyNonnegativeCount(getOperation(), getDelta(),
+                                          "acquisition delta")))
+    return mlir::failure();
   RefType refType = getRef().getType();
   mlir::Type elementType = refType.getElementType();
 
@@ -3312,18 +3454,19 @@ mlir::LogicalResult ReussirPolyFFIOp::verify() {
 //===----------------------------------------------------------------------===//
 static mlir::LogicalResult
 emitArrayOwnershipAcquisition(mlir::Value view, mlir::OpBuilder &builder,
-                              mlir::Location loc);
+                              mlir::Location loc, mlir::Value delta);
 
 mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
                                              mlir::OpBuilder &builder,
-                                             mlir::Location loc) {
+                                             mlir::Location loc,
+                                             mlir::Value delta) {
   mlir::OpBuilder::InsertionGuard guard(builder);
   mlir::Type type = value.getType();
 
   return llvm::TypeSwitch<mlir::Type, mlir::LogicalResult>(type)
       // For Rc types, emit an Inc operation
       .Case<RcType>([&](RcType) {
-        ReussirRcIncOp::create(builder, loc, value);
+        ReussirRcIncOp::create(builder, loc, value, delta);
         return mlir::success();
       })
       // For Ref types, check what they point to and handle accordingly
@@ -3337,7 +3480,7 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
         if (llvm::isa<RcType>(elementType)) {
           auto loadedValue =
               ReussirRefLoadOp::create(builder, loc, elementType, value);
-          return emitOwnershipAcquisition(loadedValue, builder, loc);
+          return emitOwnershipAcquisition(loadedValue, builder, loc, delta);
         }
 
         if (auto arrayType = llvm::dyn_cast<ArrayType>(elementType)) {
@@ -3345,7 +3488,7 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
               ReussirArrayViewOp::create(
                   builder, loc, getArrayViewMemRefType(arrayType), value)
                   .getView();
-          return emitArrayOwnershipAcquisition(view, builder, loc);
+          return emitArrayOwnershipAcquisition(view, builder, loc, delta);
         }
 
         // A nullable RC pointer is the drop-side dual of
@@ -3368,7 +3511,8 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
                                   dispatcher.getNonNullRegion().begin(),
                                   {nullableType.getPtrTy()}, {loc});
           builder.setInsertionPointToStart(nonNullBlock);
-          ReussirRcIncOp::create(builder, loc, nonNullBlock->getArgument(0));
+          ReussirRcIncOp::create(builder, loc, nonNullBlock->getArgument(0),
+                                 delta);
           ReussirScfYieldOp::create(builder, loc, nullptr);
           return mlir::success();
         }
@@ -3382,7 +3526,7 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
                            Capability::field, refType.getAtomicKind());
           mlir::Value slot = ReussirRefProjectOp::create(
               builder, loc, slotType, value, builder.getIndexAttr(0));
-          return emitOwnershipAcquisition(slot, builder, loc);
+          return emitOwnershipAcquisition(slot, builder, loc, delta);
         }
 
         // If reference points to a record, handle fields directly
@@ -3407,7 +3551,8 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
                                refType.getAtomicKind()),
                   value, builder.getIndexAttr(i));
 
-              if (emitOwnershipAcquisition(fieldRef, builder, loc).failed())
+              if (emitOwnershipAcquisition(fieldRef, builder, loc, delta)
+                      .failed())
                 return mlir::failure();
             }
           } else if (recordType.getKind() == RecordKind::variant) {
@@ -3449,7 +3594,7 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
               builder.setInsertionPointToStart(block);
               if (!isTriviallyCopyable(projectedType)) {
                 if (emitOwnershipAcquisition(block->getArgument(0), builder,
-                                             loc)
+                                             loc, delta)
                         .failed())
                   return mlir::failure();
               }
@@ -3464,7 +3609,7 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
         return mlir::success();
       })
       .Case<mlir::MemRefType>([&](mlir::MemRefType) {
-        return emitArrayOwnershipAcquisition(value, builder, loc);
+        return emitArrayOwnershipAcquisition(value, builder, loc, delta);
       })
       // For other types, return failure
       .Default([&](mlir::Type) { return mlir::failure(); });
@@ -3472,12 +3617,13 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
 
 static mlir::LogicalResult
 emitArrayOwnershipAcquisition(mlir::Value view, mlir::OpBuilder &builder,
-                              mlir::Location loc) {
+                              mlir::Location loc, mlir::Value delta) {
   return emitArrayElementTraversal(
       view, builder, loc,
       [&](mlir::OpBuilder &bodyBuilder, mlir::Location bodyLoc,
           mlir::Value elementRef) {
-        return emitOwnershipAcquisition(elementRef, bodyBuilder, bodyLoc);
+        return emitOwnershipAcquisition(elementRef, bodyBuilder, bodyLoc,
+                                        delta);
       });
 }
 
@@ -3660,9 +3806,9 @@ mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
   RefType refType =
       builder.getType<RefType>(type, Capability::unspecified, kind);
 
-  auto funcOp =
-      mlir::func::FuncOp::create(builder, builder.getUnknownLoc(), funcName,
-                                 builder.getFunctionType({refType}, {}));
+  auto funcOp = mlir::func::FuncOp::create(
+      builder, builder.getUnknownLoc(), funcName,
+      builder.getFunctionType({refType, builder.getIndexType()}, {}));
   funcOp.setPrivate();
   funcOp->setAttr("llvm.linkage",
                   builder.getAttr<mlir::LLVM::LinkageAttr>(
@@ -3673,7 +3819,8 @@ mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
   builder.setInsertionPointToStart(entryBlock);
   auto ref = entryBlock->getArgument(0);
 
-  if (emitOwnershipAcquisition(ref, builder, builder.getUnknownLoc())
+  if (emitOwnershipAcquisition(ref, builder, builder.getUnknownLoc(),
+                               entryBlock->getArgument(1))
           .failed()) {
     llvm::report_fatal_error("failed to emit ownership acquisition");
   }

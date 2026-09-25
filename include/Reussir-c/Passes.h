@@ -40,7 +40,7 @@ MlirPass reussirCreateRegionPatternsPass(void);
 MlirPass reussirCreateIncDecCancellationPass(void);
 MlirPass reussirCreateRcDecrementExpansionPass(void);
 MlirPass reussirCreateInferVariantTagPass(void);
-MlirPass reussirCreateConvertToSTDPass(void);
+MlirPass reussirCreateConvertToSTDPass(bool expandArrays);
 // Beta-reduces closure apply/eval chains (inlines fully visible closures,
 // collapses chained uniqueness checks). Aggressive-opt only: inlining closure
 // bodies hurts debuggability.
@@ -106,6 +106,8 @@ MlirPass reussirCreateTransformInterpreterPass(MlirStringRef entryPoint);
 MlirPass reussirCreateTransformPreloadLibraryPass(MlirStringRef const *paths,
                                                   intptr_t nPaths);
 MlirPass reussirCreateCanonicalizerPass(void);
+MlirPass reussirCreateSCCPPass(void);
+MlirPass reussirCreateLoopInvariantCodeMotionPass(void);
 MlirPass reussirCreateCSEPass(void);
 MlirPass reussirCreateControlFlowSinkPass(void);
 MlirPass reussirCreateSCFToControlFlowPass(void);

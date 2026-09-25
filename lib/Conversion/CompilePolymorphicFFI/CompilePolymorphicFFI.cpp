@@ -102,7 +102,7 @@ static void formatInto(mlir::ModuleOp moduleOp, llvm::raw_ostream &os,
             os << "#[link_name = \"" << ty.getAcquireName().getValue()
                << "\"]\n"
                << "unsafe fn " << "acquire_in_place" << "(ptr: *mut " << name
-               << ");\n";
+               << ", delta: usize);\n";
           }
           os << "}\n";
           os << "impl Drop for " << name << " {\n";
@@ -115,7 +115,7 @@ static void formatInto(mlir::ModuleOp moduleOp, llvm::raw_ostream &os,
             os << "    fn clone(&self) -> Self {\n";
             os << "        let mut raw_data = ::std::mem::MaybeUninit::uninit();\n";
             os << "        unsafe { ::std::ptr::copy_nonoverlapping(self, raw_data.as_mut_ptr(), 1) };\n";
-            os << "        unsafe { acquire_in_place(raw_data.as_mut_ptr()) };\n";
+            os << "        unsafe { acquire_in_place(raw_data.as_mut_ptr(), 1) };\n";
             os << "        unsafe { raw_data.assume_init() }\n";
             os << "    }\n";
             os << "}\n";

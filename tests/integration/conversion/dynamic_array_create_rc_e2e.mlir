@@ -14,7 +14,11 @@ module {
   func.func private @check_clones(%n: index) attributes {llvm.linkage = #llvm.linkage<internal>} {
     %value = arith.constant 42 : i32
     %init = reussir.rc.create value(%value : i32) : !elem
-    %array = reussir.array.create init(%init : !elem) extents(%n) : !rc_array
+    %array = reussir.array.create extents(%n) : !rc_array body {
+      ^bb0(%array_i0: index):
+        reussir.rc.inc(%init : !elem)
+        reussir.scf.yield %init : !elem
+    }
     %one = arith.constant 1 : index
     %expected = arith.addi %n, %one : index
     %count = reussir.rc.fetch(%init : !elem) : index

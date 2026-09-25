@@ -104,7 +104,7 @@ region scope. It:
 Only objects that were not frozen (via `freeze_flex_object`) are cleaned up, as
 frozen objects are now managed by reference counting.
 
-*`__reussir_acquire_rigid_object(ptr: *mut u8)`*
+*`__reussir_acquire_rigid_object(ptr: *mut u8, delta: usize)`*
 
 Increments the reference count of a rigid object. This operation:
 

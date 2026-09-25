@@ -22,7 +22,10 @@ module {
   // CHECK-DAG: llvm.getelementptr %[[TOK]][0, 0]
   func.func @make(%n: index) -> !rc_dv {
     %init = arith.constant 42 : i32
-    %rc = reussir.array.create init(%init : i32) extents(%n) : !rc_dv
+    %rc = reussir.array.create extents(%n) : !rc_dv body {
+      ^bb0(%array_i0: index):
+        reussir.scf.yield %init : i32
+    }
     return %rc : !rc_dv
   }
 }

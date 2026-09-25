@@ -120,6 +120,8 @@ namespace {
 static constexpr int kReallocEnsureCutoff = 2;
 int heuristic(TokenType producedType, mlir::TypedValue<RcType> producerRc,
               TokenAcceptor consumer, EquivalenceAnalysis &equivalence) {
+  if (consumer.getTokenType().isDynamicSize())
+    return -1;
   // Under perfect match, we measure the locality score.
   if (producedType == consumer.getTokenType()) {
     ReussirRcCreateOp create =
@@ -494,7 +496,10 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
     }
 
     for (auto &op : region.front()) {
-      if (isa<mlir::LoopLikeOpInterface>(op) ||
+      auto loop = dyn_cast<mlir::LoopLikeOpInterface>(op);
+      // A constructor with an omitted initializer has no loop body and must
+      // remain eligible to consume a token from the surrounding block.
+      if ((loop && !loop.getLoopRegions().empty()) ||
           (isa<mlir::CallOpInterface>(op) &&
            (!reuseAcrossCall || isTailPositioned(&op)))) {
         mlir::func::CallOp funcCall = llvm::dyn_cast<mlir::func::CallOp>(op);

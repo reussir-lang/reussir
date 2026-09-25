@@ -294,6 +294,11 @@ private:
     if (auto create = llvm::dyn_cast<ReussirRcCreateOp>(op))
       return create.getSkipRc() ? UniqueCarryingValue::getUnknown()
                                 : UniqueCarryingValue::getFresh();
+    if (auto create = llvm::dyn_cast<ReussirArrayInstantiateOp>(op))
+      return create.getSkipRc() ? UniqueCarryingValue::getUnknown()
+                                : UniqueCarryingValue::getFresh();
+    if (llvm::isa<ReussirArrayCreateOp>(op))
+      return UniqueCarryingValue::getFresh();
     if (auto create = llvm::dyn_cast<ReussirRcCreateCompoundOp>(op))
       return create.getSkipRc() ? UniqueCarryingValue::getUnknown()
                                 : UniqueCarryingValue::getFresh();

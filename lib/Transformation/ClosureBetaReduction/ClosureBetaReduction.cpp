@@ -285,7 +285,8 @@ mlir::LogicalResult structuralBetaReduction(ReussirClosureEvalOp eval,
     if (user == firstLink)
       continue;
     if (auto inc = llvm::dyn_cast<ReussirRcIncOp>(user)) {
-      if (inc->getBlock() != eval->getBlock() || !inc->isBeforeInBlock(eval))
+      if (!inc.isSingleAcquire() || inc->getBlock() != eval->getBlock() ||
+          !inc->isBeforeInBlock(eval))
         return mlir::failure();
       incs.push_back(inc);
       continue;

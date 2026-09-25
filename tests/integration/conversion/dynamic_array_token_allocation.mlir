@@ -12,7 +12,10 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : 
   // CHECK-SAME: token(%[[TOKEN]]
   func.func @mixed(%n: index) -> !reussir.rc<!reussir.array<? x 4 x i32>> {
     %value = arith.constant 7 : i32
-    %rc = reussir.array.create init(%value : i32) extents(%n) : !reussir.rc<!reussir.array<? x 4 x i32>>
+    %rc = reussir.array.create extents(%n) : !reussir.rc<!reussir.array<? x 4 x i32>> body {
+      ^bb0(%array_i0: index, %array_i1: index):
+        reussir.scf.yield %value : i32
+    }
     return %rc : !reussir.rc<!reussir.array<? x 4 x i32>>
   }
 
@@ -21,7 +24,10 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : 
   // CHECK: reussir.array.create
   // CHECK-SAME: token(%arg2
   func.func @provided_token(%n: index, %init: i32, %token: !reussir.token<align: 8, size: ?>) -> !reussir.rc<!reussir.array<? x i32>> {
-    %rc = reussir.array.create init(%init : i32) extents(%n) token(%token : !reussir.token<align: 8, size: ?>) : !reussir.rc<!reussir.array<? x i32>>
+    %rc = reussir.array.create extents(%n) token(%token : !reussir.token<align: 8, size: ?>) : !reussir.rc<!reussir.array<? x i32>> body {
+      ^bb0(%array_i0: index):
+        reussir.scf.yield %init : i32
+    }
     return %rc : !reussir.rc<!reussir.array<? x i32>>
   }
 

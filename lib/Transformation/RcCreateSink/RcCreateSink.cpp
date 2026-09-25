@@ -29,11 +29,12 @@ namespace reussir {
 
 namespace {
 
+template <typename CreateOp>
 struct SinkRcCreateIntoExpandedEnsurePattern
-    : public mlir::OpRewritePattern<ReussirRcCreateOp> {
-  using OpRewritePattern::OpRewritePattern;
+    : public mlir::OpRewritePattern<CreateOp> {
+  using mlir::OpRewritePattern<CreateOp>::OpRewritePattern;
 
-  static bool isMatchCandidate(ReussirRcCreateOp create, mlir::scf::IfOp ifOp) {
+  static bool isMatchCandidate(CreateOp create, mlir::scf::IfOp ifOp) {
     if (!create.getToken() || !ifOp ||
         !ifOp->hasAttr(REUSSIR_EXPANDED_ENSURE_ATTR))
       return false;
@@ -48,21 +49,22 @@ struct SinkRcCreateIntoExpandedEnsurePattern
     return true;
   }
 
-  static ReussirRcCreateOp
-  cloneCreateIntoBranch(mlir::PatternRewriter &rewriter,
-                        ReussirRcCreateOp create, mlir::Value branchToken,
-                        mlir::scf::YieldOp yieldOp, bool skipRc) {
+  static CreateOp cloneCreateIntoBranch(mlir::PatternRewriter &rewriter,
+                                        CreateOp create,
+                                        mlir::Value branchToken,
+                                        mlir::scf::YieldOp yieldOp,
+                                        bool skipRc) {
     rewriter.setInsertionPoint(yieldOp);
     auto *clonedOp = rewriter.clone(*create.getOperation());
-    auto clonedCreate = llvm::cast<ReussirRcCreateOp>(clonedOp);
-    clonedCreate->setOperand(1, branchToken);
+    auto clonedCreate = llvm::cast<CreateOp>(clonedOp);
+    clonedCreate.getTokenMutable().assign(branchToken);
     if (skipRc)
       clonedCreate.setSkipRcAttr(rewriter.getUnitAttr());
     return clonedCreate;
   }
 
   static void rewriteRegionYield(mlir::PatternRewriter &rewriter,
-                                 ReussirRcCreateOp create, mlir::Block &block,
+                                 CreateOp create, mlir::Block &block,
                                  bool skipRc) {
     auto yieldOp = llvm::cast<mlir::scf::YieldOp>(block.getTerminator());
     auto sunkCreate = cloneCreateIntoBranch(
@@ -72,7 +74,7 @@ struct SinkRcCreateIntoExpandedEnsurePattern
   }
 
   mlir::LogicalResult
-  matchAndRewrite(ReussirRcCreateOp create,
+  matchAndRewrite(CreateOp create,
                   mlir::PatternRewriter &rewriter) const override {
     auto ifOp = llvm::dyn_cast_or_null<mlir::scf::IfOp>(
         create.getToken().getDefiningOp());
@@ -110,7 +112,10 @@ struct RcCreateSinkPass
 
   void runOnOperation() override {
     mlir::RewritePatternSet patterns(&getContext());
-    patterns.add<SinkRcCreateIntoExpandedEnsurePattern>(&getContext());
+    patterns
+        .add<SinkRcCreateIntoExpandedEnsurePattern<ReussirRcCreateOp>,
+             SinkRcCreateIntoExpandedEnsurePattern<ReussirArrayInstantiateOp>>(
+            &getContext());
     if (mlir::failed(
             mlir::applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();

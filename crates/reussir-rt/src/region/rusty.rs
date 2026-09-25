@@ -54,7 +54,7 @@ impl<T> RegionalRc<T> {
         RigidRc(self)
     }
     pub unsafe fn read_field(&self) -> RigidRc<T> {
-        unsafe { Header::acquire(self.header()) };
+        unsafe { Header::acquire(self.header(), 1) };
         RigidRc(*self)
     }
 }
@@ -71,7 +71,7 @@ impl<T> RigidRc<T> {
 impl<T> Clone for RigidRc<T> {
     fn clone(&self) -> Self {
         unsafe {
-            Header::acquire(self.0.header());
+            Header::acquire(self.0.header(), 1);
         }
         RigidRc(self.0)
     }

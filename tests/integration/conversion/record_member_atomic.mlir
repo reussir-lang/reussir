@@ -37,7 +37,8 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
   // EXPAND: reussir.rc.inc(%{{[0-9a-z]+}} : !reussir.rc<!reussir.record<compound "Inner" {i64}>>)
 
   // LLVM-LABEL: @_RINvNvC4core9intrinsic16acquire_in_placePairE
-  // LLVM: atomicrmw add ptr %{{[0-9]+}}, i32 1 monotonic
+  // LLVM: %[[DELTA:[0-9]+]] = trunc i64 %1 to i32
+  // LLVM: atomicrmw add ptr %{{[0-9]+}}, i32 %[[DELTA]] monotonic
   func.func @acquire_pair(%ref : !reussir.ref<!pair>) {
     reussir.ref.acquire (%ref : !reussir.ref<!pair>)
     return

@@ -106,6 +106,9 @@ def ReussirConvertToSTDPass
     atomic accesses (get, set, native atomicrmw kinds, and the bridge itself)
     remain intact for the LLVM lowering, which performs no CFG changes.
   }];
+  let options = [Option<"expandArrays", "expand-arrays", "bool",
+                        /*default=*/"true",
+                        "Expand array initializer regions to loops or fills">];
   let dependentDialects = ["::mlir::arith::ArithDialect",
                            "::mlir::bufferization::BufferizationDialect",
                            "::mlir::func::FuncDialect",

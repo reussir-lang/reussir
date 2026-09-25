@@ -1,5 +1,5 @@
 // Inline schedules survive HIR/MIR reload and run at the kernel anchor. The
-// rank-2 array splat supplies a predictable perfect loop nest. Navigating from
+// rank-2 array tabulation supplies a predictable perfect loop nest. Navigating from
 // its store to the outer loop and unrolling-and-jamming it proves that the
 // schedule rewrites payload IR rather than merely being parsed.
 //
@@ -14,7 +14,7 @@ import core::intrinsic::array;
 
 #[transform_anchor]
 pub fn target() -> [i64; 4, 16] {
-    array::splat<[i64; 4, 16]>(7)
+    array::tabulate<[i64; 4, 16]>(|i, j| i * 16 + j)
 }
 
 transform [{
@@ -43,9 +43,9 @@ transform [{
 // LOWER-LABEL: llvm.func @_RC6target
 // LOWER-SAME: attributes {reussir.inline_ran, reussir.transform_anchor}
 // LOWER-DAG: %[[OUTER_STEP:.+]] = llvm.mlir.constant(2 : index) : i64
-// LOWER-COUNT-2: llvm.store %{{.+}}, %{{.+}} : i64, !llvm.ptr
-// LOWER-NOT: llvm.store %{{.+}}, %{{.+}} : i64, !llvm.ptr
+// LOWER-COUNT-2: llvm.store %{{[^ ]+}}, %{{[^ ]+}} : i64, !llvm.ptr
+// LOWER-NOT: llvm.store %{{[^ ]+}}, %{{[^ ]+}} : i64, !llvm.ptr
 // LOWER: llvm.add %{{.+}}, %[[OUTER_STEP]] : i64
-// LOWER-NOT: llvm.store %{{.+}}, %{{.+}} : i64, !llvm.ptr
+// LOWER-NOT: llvm.store %{{[^ ]+}}, %{{[^ ]+}} : i64, !llvm.ptr
 // LOWER: llvm.return
 // LOWER-NOT: transform.named_sequence

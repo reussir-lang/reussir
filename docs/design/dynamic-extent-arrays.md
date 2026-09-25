@@ -126,9 +126,22 @@ box (`RcBoxType` `hasDynamicArrayPayload` — `{i32 count | index offset |
 sizes | strides | tail}`, index-typed so the width follows the target);
 `array.view` builds the strided descriptor from header loads (box
 recovered from the payload ref by the static header offset); `token.alloc`
-takes an SSA byte size for `token<align, ?>`; `array.create init(…) extents(…)`
-creates an RC box filled with clones of the initial element. Like closures,
+takes an SSA byte size for `token<align, ?>`; `array.create extents(…) body { … }`
+creates an RC box with an optional single-block initializer region. The region
+takes one index per dimension and yields ownership of an element. Like closures,
 it lowers through `array.instantiate`, which initializes the canonical header.
+Fixed arrays use the same constructor. Initializer regions survive token reuse;
+SCCP, canonicalization, and loop-invariant code motion then run before expansion. An invariant yield with only invariant
+ownership acquisitions becomes `array.fill_pattern`; acquisitions are batched
+by the element count and skipped for empty arrays. Other bodies become loops.
+The fill operation is retained until basic lowering emits
+`llvm.experimental.memset.pattern` with a typed scalar or pointer pattern.
+An initializer yielding `ub.poison` still writes the payload: poison does not
+mean "leave storage untouched". Destination-passing kernels that reuse an
+input buffer can omit the `array.create` body to initialize only the header,
+then read each input element before overwriting its slot. Token instantiation
+and reuse still apply to this form. The caller must initialize the entire
+payload before exposing or releasing the result.
 Its `TokenAcceptor::buildTokenSize` implementation computes
 `header + product(sizes) * elemsize`;
 `rc.dec`/`rc.reinterpret` produce dynamic

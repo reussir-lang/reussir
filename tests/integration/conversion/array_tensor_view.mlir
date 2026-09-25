@@ -42,6 +42,7 @@ module {
 // CHECK: tensor.extract %[[FILLED]]
 // CHECK: } else {
 // CHECK: %[[CLONED_BORROW:.+]] = reussir.rc.borrow(%{{.+}} : !reussir.rc<!reussir.array<4 x i8>>) : !reussir.ref<!reussir.array<4 x i8>>
+// CHECK: reussir.rc.set
 // CHECK: %[[CLONED_VIEW_MEMREF:.+]] = reussir.array.view(%{{.+}} : !reussir.ref<!reussir.array<4 x i8>>) : memref<4xi8>
 // CHECK: %[[CLONED_VIEW_TENSOR:.+]] = bufferization.to_tensor %[[CLONED_VIEW_MEMREF]] restrict writable : memref<4xi8> to tensor<4xi8>
 // CHECK: linalg.fill ins(%{{.+}} : i8) outs(%[[CLONED_VIEW_TENSOR]] : tensor<4xi8>) -> tensor<4xi8>

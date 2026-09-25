@@ -285,6 +285,27 @@ pub fn record_compound<'c>(
         .expect("valid reussir.record.compound")
 }
 
+/// Create an RC array with a per-element initializer body.
+/// Pass an empty region to leave the payload untouched for later initialization.
+pub fn array_create<'c>(
+    context: &'c Context,
+    extents: &[Value<'c, '_>],
+    body: Region<'c>,
+    result_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.array.create", location)
+        .add_operands(extents)
+        .add_attributes(&[(
+            Identifier::new(context, "operandSegmentSizes"),
+            DenseI32ArrayAttribute::new(context, &[0, extents.len() as i32]).into(),
+        )])
+        .add_regions([body])
+        .add_results(&[result_type])
+        .build()
+        .expect("valid reussir.array.create")
+}
+
 /// `reussir.rc.create value(<value> : <type>) : <result_type>` — box a value into
 /// a fresh reference-counted pointer with an initial count of 1.
 ///

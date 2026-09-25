@@ -15,8 +15,11 @@
 
 module {
   func.func private @make_zero_matrix() -> !rc_mat2 attributes {llvm.linkage = #llvm.linkage<internal>} {
-    %poison = ub.poison : !mat2
-    %xs = reussir.rc.create value(%poison : !mat2) : !rc_mat2
+    %poison = ub.poison : i32
+    %xs = reussir.array.create extents() : !rc_mat2 body {
+      ^bb0(%array_i0: index, %array_i1: index):
+        reussir.scf.yield %poison : i32
+    }
     %zeroed = reussir.array.with_unique_view (%xs : !rc_mat2) -> !rc_mat2 {
       ^bb0(%view: memref<2x2xi32>):
         %c0 = arith.constant 0 : index

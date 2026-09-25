@@ -110,8 +110,11 @@ module {
 
   // fill[i][j] = base + jstep*j  (row-independent so bias rows are equal)
   func.func private @fill2d(%base: i32, %jstep: i32) -> !rc_mat attributes {llvm.linkage = #llvm.linkage<internal>} {
-    %poison = ub.poison : !mat
-    %fresh = reussir.rc.create value(%poison : !mat) : !rc_mat
+    %poison = ub.poison : i32
+    %fresh = reussir.array.create extents() : !rc_mat body {
+      ^bb0(%array_i0: index, %array_i1: index):
+        reussir.scf.yield %poison : i32
+    }
     %filled = reussir.array.with_unique_view (%fresh : !rc_mat) -> !rc_mat {
       ^bb0(%view: memref<16x16xi32>):
         %c0 = arith.constant 0 : index
@@ -139,8 +142,11 @@ module {
     %a = func.call @fill2d(%ci1, %ci0) : (i32, i32) -> !rc_mat
     %b = func.call @fill2d(%ci1, %ci0) : (i32, i32) -> !rc_mat
     %bias = func.call @fill2d(%cin20, %ci1) : (i32, i32) -> !rc_mat
-    %poison = ub.poison : !mat
-    %out = reussir.rc.create value(%poison : !mat) : !rc_mat
+    %poison = ub.poison : i32
+    %out = reussir.array.create extents() : !rc_mat body {
+      ^bb0(%array_i0: index, %array_i1: index):
+        reussir.scf.yield %poison : i32
+    }
     // out[i][j] = relu(16 + j - 20) = max(0, j - 4)
     %r = func.call @fused_kernel(%out, %a, %b, %bias) : (!rc_mat, !rc_mat, !rc_mat, !rc_mat) -> !rc_mat
     %br = reussir.rc.borrow (%r : !rc_mat) : !reussir.ref<!mat>
