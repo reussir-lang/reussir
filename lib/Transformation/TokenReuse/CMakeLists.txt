@@ -11,4 +11,7 @@ add_mlir_library(MLIRReussirTokenReuse
   MLIRReussir
   MLIRIR
   MLIRPass
+  MLIRArithValueBoundsOpInterfaceImpl
+  MLIRMemRefDialect
+  MLIRValueBoundsOpInterface
 )

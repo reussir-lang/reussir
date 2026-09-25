@@ -25,6 +25,7 @@
 #include <bit>
 #include <cstddef>
 #include <functional>
+#include <optional>
 #include <tuple>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
@@ -34,13 +35,16 @@
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/xxhash.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
+#include <mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/Dialect/MemRef/IR/ValueBoundsOpInterfaceImpl.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/Dominance.h>
 #include <mlir/IR/PatternMatch.h>
 #include <mlir/IR/Remarks.h>
 #include <mlir/IR/Value.h>
 #include <mlir/IR/ValueRange.h>
+#include <mlir/Interfaces/ValueBoundsOpInterface.h>
 #include <mlir/Pass/Pass.h>
 
 namespace reussir {
@@ -109,9 +113,134 @@ namespace reussir {
 // vector of operations where such changes are needed.
 
 namespace {
+mlir::Value getDynamicAllocationSize(TokenAcceptor acceptor) {
+  if (!acceptor || !acceptor.getToken())
+    return {};
+  mlir::Operation *op = acceptor.getToken().getDefiningOp();
+  if (auto alloc = mlir::dyn_cast_if_present<ReussirTokenAllocOp>(op))
+    return alloc.getDynamicSize();
+  if (auto ensure = mlir::dyn_cast_if_present<ReussirTokenEnsureOp>(op))
+    return ensure.getDynamicSize();
+  if (auto realloc = mlir::dyn_cast_if_present<ReussirTokenReallocOp>(op))
+    return realloc.getDynamicSize();
+  return {};
+}
+
+// Queries run on the unchanged IR while reuse decisions are collected. Cache
+// constant-size proofs so candidates sharing an allocation do not repeat them.
+class TokenSizeAnalysis {
+public:
+  bool haveEqualSizes(TokenType donorType, mlir::TypedValue<RcType> donorRc,
+                      TokenAcceptor recipient) {
+    TokenType recipientType = recipient.getTokenType();
+    if (donorType.getAlign() != recipientType.getAlign())
+      return false;
+    if (!donorType.isDynamicSize() && !recipientType.isDynamicSize())
+      return donorType == recipientType;
+    auto donor =
+        donorRc
+            ? mlir::dyn_cast_if_present<TokenAcceptor>(donorRc.getDefiningOp())
+            : TokenAcceptor{};
+    auto oldSize = getConstantSize(donorType, donor);
+    auto newSize = getConstantSize(recipientType, recipient);
+    if (oldSize && newSize)
+      return *oldSize == *newSize;
+    mlir::Value oldBytes = getDynamicAllocationSize(donor);
+    mlir::Value newBytes = getDynamicAllocationSize(recipient);
+    if (oldBytes && newBytes && areEqual(oldBytes, newBytes))
+      return true;
+    return haveEqualArrayExtents(donorRc, donor, recipient);
+  }
+
+private:
+  static bool areEqual(mlir::Value lhs, mlir::Value rhs) {
+    return lhs == rhs || mlir::ValueBoundsConstraintSet::compare(
+                             lhs, mlir::ValueBoundsConstraintSet::EQ, rhs);
+  }
+
+  static mlir::ValueRange getArrayExtents(mlir::Operation *op) {
+    if (auto create = mlir::dyn_cast_if_present<ReussirArrayCreateOp>(op))
+      return create.getExtents();
+    if (auto instantiate =
+            mlir::dyn_cast_if_present<ReussirArrayInstantiateOp>(op))
+      return instantiate.getExtents();
+    return {};
+  }
+
+  static bool haveEqualArrayExtents(mlir::TypedValue<RcType> donorRc,
+                                    TokenAcceptor donor,
+                                    TokenAcceptor recipient) {
+    mlir::ValueRange newExtents = getArrayExtents(recipient);
+    if (!donorRc || newExtents.empty())
+      return false;
+    auto arrayType =
+        mlir::dyn_cast<ArrayType>(donorRc.getType().getElementType());
+    auto resultType = mlir::cast<RcType>(recipient->getResult(0).getType());
+    // Equal extents imply equal bytes only for the same header and element
+    // layout. Compare dimensions individually: their product may be nonlinear.
+    if (!arrayType || arrayType != resultType.getElementType())
+      return false;
+    mlir::ValueRange oldExtents = getArrayExtents(donor);
+    if (!oldExtents.empty() &&
+        llvm::all_of(llvm::zip(oldExtents, newExtents), [](auto pair) {
+          return areEqual(std::get<0>(pair), std::get<1>(pair));
+        }))
+      return true;
+
+    // An existing descriptor also covers incoming arrays. The memref models
+    // relate its dimensions to memref.dim and arithmetic on those results;
+    // no header reads are inserted after the donor's lifetime has ended.
+    for (mlir::Operation *user : donorRc.getUsers()) {
+      auto borrow = mlir::dyn_cast<ReussirRcBorrowOp>(user);
+      if (!borrow)
+        continue;
+      for (mlir::Operation *refUser : borrow.getBorrowed().getUsers()) {
+        auto view = mlir::dyn_cast<ReussirArrayViewOp>(refUser);
+        if (!view || !mlir::isa<mlir::MemRefType>(view.getView().getType()))
+          continue;
+        unsigned dynamicDim = 0;
+        bool equal = true;
+        for (auto [dim, extent] : llvm::enumerate(arrayType.getShape())) {
+          if (!mlir::ShapedType::isDynamic(extent))
+            continue;
+          if (!mlir::ValueBoundsConstraintSet::compare(
+                  {view.getView(), static_cast<int64_t>(dim)},
+                  mlir::ValueBoundsConstraintSet::EQ,
+                  newExtents[dynamicDim++])) {
+            equal = false;
+            break;
+          }
+        }
+        if (equal)
+          return true;
+      }
+    }
+    return false;
+  }
+
+  std::optional<uint64_t> getConstantSize(TokenType type,
+                                          TokenAcceptor acceptor) {
+    if (!type.isDynamicSize())
+      return type.getSize();
+    mlir::Value size = getDynamicAllocationSize(acceptor);
+    if (!size)
+      return std::nullopt;
+    auto [it, inserted] = constantSizes.try_emplace(size, std::nullopt);
+    if (inserted) {
+      auto bound = mlir::ValueBoundsConstraintSet::computeConstantBound(
+          mlir::presburger::BoundType::EQ, size);
+      if (mlir::succeeded(bound) && *bound >= 0)
+        it->second = static_cast<uint64_t>(*bound);
+    }
+    return it->second;
+  }
+
+  llvm::DenseMap<mlir::Value, std::optional<uint64_t>> constantSizes;
+};
+
 // heuristic  < 0 : do not reuse at all
-// heuristic == 0 : reuse via realloc — dynamic token (`token<align, ?>`), a
-//                  universal fallback donor, resized at runtime
+// heuristic == 0 : reuse via realloc — dynamic donor or recipient, resized
+//                  at runtime
 // heuristic == 1 : reuse via realloc — a fixed-size token in the same
 //                  allocator bin (preferred over a dynamic donor)
 // heuristic >= 2 : reuse via ensure — an exact-size match, larger is better
@@ -119,11 +248,10 @@ namespace {
 // TODO: consider appreantly non-exclusive cases.
 static constexpr int kReallocEnsureCutoff = 2;
 int heuristic(TokenType producedType, mlir::TypedValue<RcType> producerRc,
-              TokenAcceptor consumer, EquivalenceAnalysis &equivalence) {
-  if (consumer.getTokenType().isDynamicSize())
-    return -1;
-  // Under perfect match, we measure the locality score.
-  if (producedType == consumer.getTokenType()) {
+              TokenAcceptor consumer, EquivalenceAnalysis &equivalence,
+              TokenSizeAnalysis &sizes) {
+  // Under a proven size and alignment match, measure the locality score.
+  if (sizes.haveEqualSizes(producedType, producerRc, consumer)) {
     ReussirRcCreateOp create =
         dyn_cast<ReussirRcCreateOp>(consumer.getOperation());
     int localityScore = kReallocEnsureCutoff;
@@ -173,7 +301,7 @@ int heuristic(TokenType producedType, mlir::TypedValue<RcType> producerRc,
   // resized to any acceptor at runtime via realloc — a universal *fallback*
   // donor. It scores below both the ensure tier and the fixed-size same-bin
   // realloc tier, so it is chosen only when no statically-sized donor fits.
-  if (producedType.isDynamicSize())
+  if (producedType.isDynamicSize() || consumer.getTokenType().isDynamicSize())
     return 0;
   TokenType consumerType = consumer.getTokenType();
   size_t oldSize = producedType.getSize();
@@ -331,14 +459,14 @@ mlir::TypedValue<RcType> expandedDecProducerRc(mlir::scf::IfOp scfIf,
 /// bookkeeping lets the default analysis loop stay exactly the same shape
 /// when reporting is disabled.
 int scoreToken(mlir::Value token, TokenAcceptor acceptor,
-               EquivalenceAnalysis &equivalence) {
+               EquivalenceAnalysis &equivalence, TokenSizeAnalysis &sizes) {
   if (auto producer = dyn_cast_or_null<TokenProducer>(token.getDefiningOp())) {
     ReussirRcDecOp producerAsDec =
         dyn_cast<ReussirRcDecOp>(producer.getOperation());
     mlir::TypedValue<RcType> producerRc =
         producerAsDec ? producerAsDec.getRcPtr() : nullptr;
-    return heuristic(producer.getTokenType(), producerRc, acceptor,
-                     equivalence);
+    return heuristic(producer.getTokenType(), producerRc, acceptor, equivalence,
+                     sizes);
   }
 
   auto scfIf = dyn_cast_or_null<mlir::scf::IfOp>(token.getDefiningOp());
@@ -352,7 +480,7 @@ int scoreToken(mlir::Value token, TokenAcceptor acceptor,
     return -1;
   mlir::TypedValue<RcType> producerRc = expandedDecProducerRc(
       scfIf, llvm::cast<mlir::OpResult>(token).getResultNumber());
-  return heuristic(producedType, producerRc, acceptor, equivalence);
+  return heuristic(producedType, producerRc, acceptor, equivalence, sizes);
 }
 
 bool escapeTrappedTokensSweep(mlir::func::FuncOp func) {
@@ -483,7 +611,8 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
   ValueSet oneShotTokenReuse(
       mlir::Region &region, ValueSet availableTokens,
       llvm::SmallVectorImpl<Reuse> &reuses, llvm::SmallVectorImpl<Free> &frees,
-      EquivalenceAnalysis &equivalence, mlir::DominanceInfo &domInfo,
+      EquivalenceAnalysis &equivalence, TokenSizeAnalysis &sizes,
+      mlir::DominanceInfo &domInfo,
       const mlir::DenseMap<mlir::Operation *, unsigned> &dfsOrder) {
     if (region.empty())
       return availableTokens;
@@ -512,13 +641,14 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
           availableTokens = {};
           for (auto &nestedRegion : op.getRegions())
             oneShotTokenReuse<EmitRemarks>(nestedRegion, {}, reuses, frees,
-                                           equivalence, domInfo, dfsOrder);
+                                           equivalence, sizes, domInfo,
+                                           dfsOrder);
         }
       } else if (auto branchOp = dyn_cast<mlir::RegionBranchOpInterface>(op)) {
         llvm::SmallVector<ValueSet> branchResults;
         for (auto &nestedRegion : op.getRegions())
           branchResults.push_back(oneShotTokenReuse<EmitRemarks>(
-              nestedRegion, availableTokens, reuses, frees, equivalence,
+              nestedRegion, availableTokens, reuses, frees, equivalence, sizes,
               domInfo, dfsOrder));
         // A RegionBranch op with no regions has nothing to intersect;
         // availableTokens flows through unchanged.
@@ -575,7 +705,7 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
             compatibleTokenCount = 0;
 
           for (auto tokenVal : availableTokens) {
-            int score = scoreToken(tokenVal, acceptor, equivalence);
+            int score = scoreToken(tokenVal, acceptor, equivalence, sizes);
             if constexpr (EmitRemarks)
               compatibleTokenCount += score >= 0;
             if (score >= 0 && (score > bestScore ||
@@ -632,12 +762,19 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
     return availableTokens;
   }
 
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    Base::getDependentDialects(registry);
+    mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
+    mlir::memref::registerValueBoundsOpInterfaceExternalModels(registry);
+  }
+
   void runOnOperation() override {
     escapeTrappedTokens(getOperation());
 
     llvm::SmallVector<Reuse> reuses;
     llvm::SmallVector<Free> frees;
     EquivalenceAnalysis equivalence;
+    TokenSizeAnalysis sizes;
     mlir::DominanceInfo domInfo(getOperation());
 
     // Compute DFS pre-visit order for tiebreaking.
@@ -651,11 +788,11 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
     // the candidate-selection loop.
     if (emitRemarks)
       for (auto &region : getOperation()->getRegions())
-        oneShotTokenReuse<true>(region, {}, reuses, frees, equivalence, domInfo,
-                                dfsOrder);
+        oneShotTokenReuse<true>(region, {}, reuses, frees, equivalence, sizes,
+                                domInfo, dfsOrder);
     else
       for (auto &region : getOperation()->getRegions())
-        oneShotTokenReuse<false>(region, {}, reuses, frees, equivalence,
+        oneShotTokenReuse<false>(region, {}, reuses, frees, equivalence, sizes,
                                  domInfo, dfsOrder);
 
     mlir::IRRewriter rewriter(getOperation());
@@ -666,14 +803,16 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
 
       mlir::Value newToken;
       mlir::Value oldToken = reuse.anchor.getToken();
+      auto allocOp = llvm::cast<ReussirTokenAllocOp>(oldToken.getDefiningOp());
       if (reuse.realloc)
         newToken = ReussirTokenReallocOp::create(
-            rewriter, reuse.anchor->getLoc(), targetType, reuse.token);
+            rewriter, reuse.anchor->getLoc(), targetType, reuse.token,
+            allocOp.getDynamicSize());
       else
         newToken = ReussirTokenEnsureOp::create(
-            rewriter, reuse.anchor->getLoc(), targetType, reuse.token);
+            rewriter, reuse.anchor->getLoc(), targetType, reuse.token,
+            allocOp.getDynamicSize());
       reuse.anchor.assignToken(newToken);
-      auto allocOp = llvm::cast<ReussirTokenAllocOp>(oldToken.getDefiningOp());
       rewriter.eraseOp(allocOp);
     }
 

@@ -377,6 +377,13 @@ pub fn run_lowering_pipeline(
             }
         }
 
+        // Simplify extents before instantiating tokens. Cleanup after decrement
+        // expansion would erase the still-unused donor results before reuse
+        // can assign or free them.
+        module: sys::reussirCreateSCCPPass();
+        module: sys::reussirCreateCanonicalizerPass();
+        module: sys::reussirCreateCSEPass();
+
         // Reussir-level transformation and analysis. Only the acceptor side
         // of token instantiation runs here; producer tokens are typed from
         // the decrement's destructuring attributes, so they are instantiated

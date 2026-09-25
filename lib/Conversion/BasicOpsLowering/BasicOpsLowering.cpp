@@ -715,15 +715,15 @@ struct ReussirTokenReallocConversionPattern
     TokenType outputTokenType = op.getRealloced().getType();
     auto indexType = converter->getIndexType();
     auto loc = op.getLoc();
-    // The token is a bare pointer either way. `token.realloc` always yields a
-    // statically sized token, so the new (align, size) are constants.
     mlir::Value oldPtr = adaptor.getToken();
     mlir::Value newAlignVal = mlir::arith::ConstantOp::create(
         rewriter, loc,
         mlir::IntegerAttr::get(indexType, outputTokenType.getAlign()));
-    mlir::Value newSizeVal = mlir::arith::ConstantOp::create(
-        rewriter, loc,
-        mlir::IntegerAttr::get(indexType, outputTokenType.getSize()));
+    mlir::Value newSizeVal = adaptor.getDynamicSize();
+    if (!newSizeVal)
+      newSizeVal = mlir::arith::ConstantOp::create(
+          rewriter, loc,
+          mlir::IntegerAttr::get(indexType, outputTokenType.getSize()));
     auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
     mlir::Value reallocated;
     if (inputTokenType.isDynamicSize()) {
