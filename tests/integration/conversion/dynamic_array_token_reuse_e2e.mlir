@@ -36,6 +36,17 @@ module {
     return %xs : !rc
   }
 
+  func.func private @replace_same(%old: !rc) -> !rc attributes {llvm.linkage = #llvm.linkage<internal>} {
+    %c0 = arith.constant 0 : index
+    %ref = reussir.rc.borrow(%old : !rc) : !reussir.ref<!array>
+    %view = reussir.array.view(%ref : !reussir.ref<!array>) : !view
+    %n = memref.dim %view, %c0 : !view
+    reussir.rc.dec (%old : !rc)
+    %xs = reussir.array.create extents(%n) : !rc
+    func.call @fill(%xs) : (!rc) -> ()
+    return %xs : !rc
+  }
+
   func.func private @check(%xs: !rc, %expected: i32) attributes {llvm.linkage = #llvm.linkage<internal>} {
     %ref = reussir.rc.borrow (%xs : !rc) : !reussir.ref<!array>
     %view = reussir.array.view(%ref : !reussir.ref<!array>) : !view
@@ -77,7 +88,19 @@ module {
 
     %empty = func.call @replace(%fresh, %c0) : (!rc, index) -> !rc
     func.call @check(%empty, %c0i) : (!rc, i32) -> ()
-    reussir.rc.dec (%empty : !rc)
+    %empty_same = func.call @replace_same(%empty) : (!rc) -> !rc
+    func.call @check(%empty_same, %c0i) : (!rc, i32) -> ()
+    reussir.rc.dec (%empty_same : !rc)
+
+    %same = func.call @make(%c3) : (index) -> !rc
+    %unique_same = func.call @replace_same(%same) : (!rc) -> !rc
+    func.call @check(%unique_same, %c3i) : (!rc, i32) -> ()
+    reussir.rc.inc (%unique_same : !rc)
+    %shared_same = func.call @replace_same(%unique_same) : (!rc) -> !rc
+    func.call @check(%unique_same, %c3i) : (!rc, i32) -> ()
+    func.call @check(%shared_same, %c3i) : (!rc, i32) -> ()
+    reussir.rc.dec (%unique_same : !rc)
+    reussir.rc.dec (%shared_same : !rc)
     return %c0i : i32
   }
 }

@@ -37,6 +37,7 @@
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/Dialect/MemRef/IR/ValueBoundsOpInterfaceImpl.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/Dominance.h>
 #include <mlir/IR/PatternMatch.h>
@@ -142,10 +143,81 @@ public:
             : TokenAcceptor{};
     auto oldSize = getConstantSize(donorType, donor);
     auto newSize = getConstantSize(recipientType, recipient);
-    return oldSize && newSize && *oldSize == *newSize;
+    if (oldSize && newSize)
+      return *oldSize == *newSize;
+    mlir::Value oldBytes = getDynamicAllocationSize(donor);
+    mlir::Value newBytes = getDynamicAllocationSize(recipient);
+    if (oldBytes && newBytes && areEqual(oldBytes, newBytes))
+      return true;
+    return haveEqualArrayExtents(donorRc, donor, recipient);
   }
 
 private:
+  static bool areEqual(mlir::Value lhs, mlir::Value rhs) {
+    return lhs == rhs || mlir::ValueBoundsConstraintSet::compare(
+                             lhs, mlir::ValueBoundsConstraintSet::EQ, rhs);
+  }
+
+  static mlir::ValueRange getArrayExtents(mlir::Operation *op) {
+    if (auto create = mlir::dyn_cast_if_present<ReussirArrayCreateOp>(op))
+      return create.getExtents();
+    if (auto instantiate =
+            mlir::dyn_cast_if_present<ReussirArrayInstantiateOp>(op))
+      return instantiate.getExtents();
+    return {};
+  }
+
+  static bool haveEqualArrayExtents(mlir::TypedValue<RcType> donorRc,
+                                    TokenAcceptor donor,
+                                    TokenAcceptor recipient) {
+    mlir::ValueRange newExtents = getArrayExtents(recipient);
+    if (!donorRc || newExtents.empty())
+      return false;
+    auto arrayType =
+        mlir::dyn_cast<ArrayType>(donorRc.getType().getElementType());
+    auto resultType = mlir::cast<RcType>(recipient->getResult(0).getType());
+    // Equal extents imply equal bytes only for the same header and element
+    // layout. Compare dimensions individually: their product may be nonlinear.
+    if (!arrayType || arrayType != resultType.getElementType())
+      return false;
+    mlir::ValueRange oldExtents = getArrayExtents(donor);
+    if (!oldExtents.empty() &&
+        llvm::all_of(llvm::zip(oldExtents, newExtents), [](auto pair) {
+          return areEqual(std::get<0>(pair), std::get<1>(pair));
+        }))
+      return true;
+
+    // An existing descriptor also covers incoming arrays. The memref models
+    // relate its dimensions to memref.dim and arithmetic on those results;
+    // no header reads are inserted after the donor's lifetime has ended.
+    for (mlir::Operation *user : donorRc.getUsers()) {
+      auto borrow = mlir::dyn_cast<ReussirRcBorrowOp>(user);
+      if (!borrow)
+        continue;
+      for (mlir::Operation *refUser : borrow.getBorrowed().getUsers()) {
+        auto view = mlir::dyn_cast<ReussirArrayViewOp>(refUser);
+        if (!view || !mlir::isa<mlir::MemRefType>(view.getView().getType()))
+          continue;
+        unsigned dynamicDim = 0;
+        bool equal = true;
+        for (auto [dim, extent] : llvm::enumerate(arrayType.getShape())) {
+          if (!mlir::ShapedType::isDynamic(extent))
+            continue;
+          if (!mlir::ValueBoundsConstraintSet::compare(
+                  {view.getView(), static_cast<int64_t>(dim)},
+                  mlir::ValueBoundsConstraintSet::EQ,
+                  newExtents[dynamicDim++])) {
+            equal = false;
+            break;
+          }
+        }
+        if (equal)
+          return true;
+      }
+    }
+    return false;
+  }
+
   std::optional<uint64_t> getConstantSize(TokenType type,
                                           TokenAcceptor acceptor) {
     if (!type.isDynamicSize())
@@ -693,6 +765,7 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
   void getDependentDialects(mlir::DialectRegistry &registry) const override {
     Base::getDependentDialects(registry);
     mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
+    mlir::memref::registerValueBoundsOpInterfaceExternalModels(registry);
   }
 
   void runOnOperation() override {
