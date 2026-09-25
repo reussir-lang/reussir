@@ -31,6 +31,7 @@
 #include <llvm/Support/Debug.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
+#include <mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h>
 #include <mlir/Dialect/Bufferization/IR/Bufferization.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMAttrs.h>
@@ -38,8 +39,10 @@
 #include <mlir/Dialect/Linalg/IR/Linalg.h>
 #include <mlir/Dialect/Math/IR/Math.h>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
+#include <mlir/Dialect/MemRef/IR/ValueBoundsOpInterfaceImpl.h>
 #include <mlir/Dialect/Ptr/IR/PtrOps.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
+#include <mlir/Dialect/SCF/IR/ValueBoundsOpInterfaceImpl.h>
 #include <mlir/Dialect/Tensor/IR/Tensor.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/IR/Block.h>
@@ -48,6 +51,7 @@
 #include <mlir/IR/Matchers.h>
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/IR/ValueRange.h>
+#include <mlir/Interfaces/ValueBoundsOpInterface.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Support/LLVM.h>
 #include <mlir/Transforms/DialectConversion.h>
@@ -823,6 +827,81 @@ struct ReussirArrayViewOpRewritePattern
                                            adaptor.getRef(), tensorType,
                                            /*writable=*/false);
     rewriter.replaceOp(op, value);
+    return mlir::success();
+  }
+};
+
+struct ReussirArrayProjectOpRewritePattern
+    : public mlir::OpConversionPattern<ReussirArrayProjectOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayProjectOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto viewType = llvm::cast<mlir::MemRefType>(adaptor.getView().getType());
+    auto buildProjection = [&]() -> mlir::Value {
+      llvm::SmallVector<mlir::OpFoldResult> offsets(viewType.getRank(),
+                                                    rewriter.getIndexAttr(0));
+      llvm::SmallVector<mlir::OpFoldResult> sizes;
+      llvm::SmallVector<mlir::OpFoldResult> strides(viewType.getRank(),
+                                                    rewriter.getIndexAttr(1));
+      offsets.front() = adaptor.getIndex();
+      sizes.push_back(rewriter.getIndexAttr(1));
+      for (int64_t dim = 1; dim < viewType.getRank(); ++dim) {
+        if (viewType.isDynamicDim(dim))
+          sizes.push_back(rewriter.createOrFold<mlir::memref::DimOp>(
+              loc, adaptor.getView(), dim));
+        else
+          sizes.push_back(rewriter.getIndexAttr(viewType.getDimSize(dim)));
+      }
+      mlir::Value projected = mlir::memref::SubViewOp::create(
+          rewriter, loc, getProjectedArrayViewType(viewType), adaptor.getView(),
+          offsets, sizes, strides);
+      if (viewType.getRank() == 1)
+        projected = ReussirRefFromMemrefOp::create(
+            rewriter, loc, op.getProjected().getType(), projected);
+      return projected;
+    };
+
+    using Bounds = mlir::ValueBoundsConstraintSet;
+    if (Bounds::compare(adaptor.getIndex(), Bounds::GE,
+                        Bounds::Variable(rewriter.getIndexAttr(0))) &&
+        Bounds::compare(adaptor.getIndex(), Bounds::LT,
+                        Bounds::Variable(adaptor.getView(), 0))) {
+      rewriter.replaceOp(op, buildProjection());
+      return mlir::success();
+    }
+
+    auto extent =
+        rewriter.createOrFold<mlir::memref::DimOp>(loc, adaptor.getView(), 0);
+    auto withinExtent = rewriter.createOrFold<mlir::arith::CmpIOp>(
+        loc, mlir::arith::CmpIPredicate::ult, adaptor.getIndex(), extent);
+    // Keep the lower bound explicit so later constant folding can discard a
+    // negative-index branch even when the extent is dynamic. Otherwise metadata
+    // expansion could materialize an invalid negative static subview offset.
+    auto zero = rewriter.createOrFold<mlir::arith::ConstantIndexOp>(loc, 0);
+    auto nonnegative = rewriter.createOrFold<mlir::arith::CmpIOp>(
+        loc, mlir::arith::CmpIPredicate::sge, adaptor.getIndex(), zero);
+    auto inBounds = rewriter.createOrFold<mlir::arith::AndIOp>(
+        loc, nonnegative, withinExtent);
+    auto guard =
+        mlir::scf::IfOp::create(rewriter, loc, op->getResultTypes(), inBounds,
+                                /*addThenRegion=*/true, /*addElseRegion=*/true);
+    {
+      mlir::OpBuilder::InsertionGuard insertionGuard(rewriter);
+      rewriter.setInsertionPointToStart(guard.thenBlock());
+      auto projected = buildProjection();
+      mlir::scf::YieldOp::create(rewriter, loc, projected);
+
+      rewriter.setInsertionPointToStart(guard.elseBlock());
+      ReussirPanicOp::create(
+          rewriter, loc, rewriter.getStringAttr("array index out of bounds"));
+      auto poison = mlir::ub::PoisonOp::create(rewriter, loc,
+                                               op.getProjected().getType());
+      mlir::scf::YieldOp::create(rewriter, loc, poison.getResult());
+    }
+    rewriter.replaceOp(op, guard.getResults());
     return mlir::success();
   }
 };
@@ -2146,6 +2225,14 @@ namespace {
 struct ConvertToSTDPass
     : public impl::ReussirConvertToSTDPassBase<ConvertToSTDPass> {
   using Base::Base;
+
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    Base::getDependentDialects(registry);
+    mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
+    mlir::memref::registerValueBoundsOpInterfaceExternalModels(registry);
+    mlir::scf::registerValueBoundsOpInterfaceExternalModels(registry);
+  }
+
   void runOnOperation() override {
     mlir::ConversionTarget target(getContext());
     mlir::RewritePatternSet patterns(&getContext());
@@ -2195,12 +2282,13 @@ struct ConvertToSTDPass
       return !expandArrays &&
              llvm::isa<ReussirArrayCreateOp>(op->getParentOp());
     });
-    target.addIllegalOp<
-        ReussirNullableDispatchOp, ReussirRecordDispatchOp,
-        ReussirClosureUniqifyOp, ReussirArrayWithUniqueViewOp,
-        ReussirTokenEnsureOp, ReussirStrByteAtOp, ReussirStrSelectOp,
-        ReussirStrStartWithOp, ReussirStrEqualOp, ReussirStrCompareOp,
-        ReussirCellCreateOp, ReussirCellRdlockOp, ReussirCellInUseOp>();
+    target.addIllegalOp<ReussirNullableDispatchOp, ReussirRecordDispatchOp,
+                        ReussirClosureUniqifyOp, ReussirArrayWithUniqueViewOp,
+                        ReussirArrayProjectOp, ReussirTokenEnsureOp,
+                        ReussirStrByteAtOp, ReussirStrSelectOp,
+                        ReussirStrStartWithOp, ReussirStrEqualOp,
+                        ReussirStrCompareOp, ReussirCellCreateOp,
+                        ReussirCellRdlockOp, ReussirCellInUseOp>();
 
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns)))) {
@@ -2240,6 +2328,7 @@ void populateConvertToSTDConversionPatterns(mlir::RewritePatternSet &patterns) {
   // Add patterns for high-level Reussir operations.
   patterns.add<
       ReussirNullableDispatchOpRewritePattern, ReussirArrayViewOpRewritePattern,
+      ReussirArrayProjectOpRewritePattern,
       ReussirRecordDispatchOpRewritePattern,
       ReussirClosureUniqifyOpRewritePattern, ReussirClosureEvalOpRewritePattern,
       ReussirArrayWithUniqueViewOpRewritePattern,

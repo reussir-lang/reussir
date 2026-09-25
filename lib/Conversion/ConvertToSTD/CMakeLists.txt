@@ -9,12 +9,15 @@ add_mlir_conversion_library(MLIRReussirConvertToSTD
 
   LINK_LIBS PUBLIC
   MLIRArithDialect
+  MLIRArithValueBoundsOpInterfaceImpl
   MLIRReussir
   MLIRMathDialect
+  MLIRMemRefDialect
   MLIRPtrDialect
   MLIRSCFDialect
   MLIRFuncDialect
   MLIRTransforms
+  MLIRValueBoundsOpInterface
   MLIRSync
   MLIRSyncConvertSyncToSTD
 )

@@ -82,6 +82,25 @@ TEST_F(ReussirTest, ArrayRejectsRankZero) {
                                      mlir::Type(i32Type)));
 }
 
+TEST_F(ReussirTest, ArrayProjectionPreservesStridesAndMemorySpace) {
+  withModule(R"mlir(
+    func.func private @static(memref<3x4x5xf32>) -> memref<4x5xf32, strided<[5, 1], offset: ?>>
+    func.func private @dynamic(memref<?x4x5xf32>) -> memref<4x5xf32, strided<[5, 1], offset: ?>>
+    func.func private @unit_dimensions(memref<2x1x1xf32, strided<[30, 7, 2], offset: 9>>) -> memref<1x1xf32, strided<[7, 2], offset: ?>>
+    func.func private @reversed(memref<3x4xf32, strided<[20, -2], offset: 8>, 3>) -> memref<4xf32, strided<[-2], offset: ?>, 3>
+    func.func private @scalar(memref<4xf32, strided<[2], offset: 3>>) -> memref<f32, strided<[], offset: ?>>
+  )mlir",
+             [](mlir::ModuleOp module) {
+               for (auto func : module.getOps<mlir::func::FuncOp>()) {
+                 auto input = llvm::cast<mlir::MemRefType>(
+                     func.getArgumentTypes().front());
+                 EXPECT_EQ(getProjectedArrayViewType(input),
+                           func.getResultTypes().front())
+                     << func.getName().str();
+               }
+             });
+}
+
 TEST_F(ReussirTest, TokenAcceptorBuildsDynamicArraySize) {
   withModule(R"(
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>>} {

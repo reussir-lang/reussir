@@ -22,8 +22,8 @@ TEST_F(ReussirTest, SpeculationAndMemoryEffects) {
       %tensor = reussir.array.view(%array : !reussir.ref<!reussir.array<4 x i32>>) : tensor<4xi32> {test.speculate = false, test.effect_free = false}
       %dyn = reussir.array.view(%dynamic : !reussir.ref<!reussir.array<? x i32>>) : memref<?xi32, strided<[?], offset: ?>> {test.speculate = false, test.effect_free = false}
       %good = reussir.array.project(%mem : memref<4xi32>)[%c0 : index] : !reussir.ref<i32 field> {test.speculate = true, test.effect_free = true}
-      %bad = reussir.array.project(%mem : memref<4xi32>)[%c4 : index] : !reussir.ref<i32 field> {test.speculate = false, test.effect_free = true}
-      %unknown = reussir.array.project(%mem : memref<4xi32>)[%index : index] : !reussir.ref<i32 field> {test.speculate = false, test.effect_free = true}
+      %bad = reussir.array.project(%mem : memref<4xi32>)[%c4 : index] : !reussir.ref<i32 field> {test.speculate = false, test.effect_free = false}
+      %unknown = reussir.array.project(%mem : memref<4xi32>)[%index : index] : !reussir.ref<i32 field> {test.speculate = false, test.effect_free = false}
       %byte = reussir.str.byte_at(%str : !reussir.str<local>)[%index : index] : i8 {test.speculate = true, test.effect_free = true}
       %unchecked = reussir.str.unsafe_byte_at(%str : !reussir.str<local>)[%index : index] : i8 {test.speculate = false, test.effect_free = true}
       %prefix = reussir.str.startswith(%str : !reussir.str<local>) "hi" : i1 {test.speculate = true, test.effect_free = true}

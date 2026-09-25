@@ -111,6 +111,8 @@ MlirPass reussirCreateLoopInvariantCodeMotionPass(void);
 MlirPass reussirCreateCSEPass(void);
 MlirPass reussirCreateControlFlowSinkPass(void);
 MlirPass reussirCreateSCFToControlFlowPass(void);
+MlirPass reussirCreateExpandStridedMetadataPass(void);
+MlirPass reussirCreateLowerAffinePass(void);
 MlirPass reussirCreateConvertToLLVMPass(void);
 MlirPass reussirCreateReconcileUnrealizedCastsPass(void);
 
