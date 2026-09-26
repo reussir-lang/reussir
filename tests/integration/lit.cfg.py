@@ -2,6 +2,9 @@ import lit.formats
 import os
 import sys
 
+if config.enable_openxla:
+    config.available_features.add('stablehlo')
+
 config.name = 'Reussir'
 # lit 23 (LLVM 23) hard-errors on execute_external=True unless the migration
 # escape hatch force_execute_external is set; lit <= 22 does not know that

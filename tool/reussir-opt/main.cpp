@@ -31,8 +31,15 @@
 #include "Sync/Conversion/Passes.h"
 #include "Sync/IR/SyncDialect.h"
 
+#ifdef REUSSIR_ENABLE_OPENXLA
+void registerStablehloDialectsAndPasses(mlir::DialectRegistry &registry);
+#endif
+
 int main(int argc, char **argv) {
   mlir::DialectRegistry registry;
+#ifdef REUSSIR_ENABLE_OPENXLA
+  registerStablehloDialectsAndPasses(registry);
+#endif
   mlir::registerAllDialects(registry);
   registry.insert<reussir::ReussirDialect>();
   registry.insert<mlir::sync::SyncDialect>();

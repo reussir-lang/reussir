@@ -187,6 +187,18 @@ cmake --build build --target reussir-vscode-package
 Built binaries are placed under `build/bin/`, and runtime libraries are
 copied under `build/lib/`.
 
+### Optional OpenXLA tooling
+
+To add StableHLO, CHLO, VHLO, and frontend transformation passes to `reussir-opt`:
+
+```bash
+cmake -S . -B build -DREUSSIR_ENABLE_OPENXLA=ON
+cmake --build build --target reussir-opt
+```
+
+StableHLO builds against Reussir's LLVM/MLIR without fetching XLA or using Bazel.
+See [StableHLO build notes](docs/design/stablehlo-build.md).
+
 ### 4. Typical local workflows
 
 Inspect elaboration output:
