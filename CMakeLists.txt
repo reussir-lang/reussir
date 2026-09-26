@@ -4,6 +4,7 @@ project(Reussir LANGUAGES CXX C VERSION 0.1.0)
 # Options
 option(REUSSIR_ENABLE_TESTS "Build tests for Reussir" ON)
 option(REUSSIR_ENABLE_PEDANTIC "Use pedantic compiler flags" OFF)
+option(REUSSIR_ENABLE_OPENXLA "Build StableHLO and IFRT tooling (requires Bazel)" OFF)
 set(REUSSIR_RUNTIME_SANITIZERS "" CACHE STRING "Semicolon-separated sanitizer runtimes to build (address, leak, memory, thread)")
 option(REUSSIR_MSAN_TRACK_ORIGINS "Enable origin tracking in the MSan runtime variant" ON)
 
@@ -62,6 +63,11 @@ include(cmake/Immer.cmake)
 # Include the mlir-sync `sync` dialect (synchronization primitives). Reussir's
 # lock-guarded cells lower onto this dialect.
 include(cmake/MlirSync.cmake)
+
+if(REUSSIR_ENABLE_OPENXLA)
+  add_subdirectory(cmake/stablehlo)
+  add_subdirectory(cmake/ifrt)
+endif()
 
 # Detect object format
 include(cmake/ObjectFormat.cmake)

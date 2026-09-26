@@ -187,6 +187,22 @@ cmake --build build --target reussir-vscode-package
 Built binaries are placed under `build/bin/`, and runtime libraries are
 copied under `build/lib/`.
 
+### Optional OpenXLA tooling
+
+Enable StableHLO and IFRT together with one option:
+
+```bash
+cmake -S . -B build -DREUSSIR_ENABLE_OPENXLA=ON
+cmake --build build --target reussir-opt reussir-ifrt-translate
+```
+
+This adds StableHLO/CHLO/VHLO frontend passes and IFRT/VIFRT outlining and
+program serialization. The separate build targets use Reussir's LLVM/MLIR;
+IFRT requires Bazel and native Linux with Clang. Serialized artifacts contain
+portable IR; CPU/GPU compilation and execution are not wired yet.
+See the [StableHLO](docs/design/stablehlo-build.md) and
+[IFRT](docs/design/ifrt-build.md) build notes.
+
 ### 4. Typical local workflows
 
 Inspect elaboration output:

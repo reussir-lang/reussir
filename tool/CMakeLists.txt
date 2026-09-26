@@ -1,3 +1,6 @@
 add_subdirectory(reussir-opt)
 add_subdirectory(reussir-translate)
 add_subdirectory(reussir-llvm-opt)
+if(REUSSIR_ENABLE_OPENXLA)
+  add_subdirectory(reussir-ifrt-translate)
+endif()

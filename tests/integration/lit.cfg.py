@@ -2,6 +2,9 @@ import lit.formats
 import os
 import sys
 
+if config.enable_openxla:
+    config.available_features.update(['stablehlo', 'ifrt'])
+
 config.name = 'Reussir'
 # lit 23 (LLVM 23) hard-errors on execute_external=True unless the migration
 # escape hatch force_execute_external is set; lit <= 22 does not know that
@@ -134,6 +137,8 @@ config.substitutions.append((r'%reussir-opt',
                              bin_tool('reussir-opt')))
 config.substitutions.append((r'%reussir-translate',
                              bin_tool('reussir-translate')))
+config.substitutions.append((r'%reussir-ifrt-translate',
+                             bin_tool('reussir-ifrt-translate')))
 config.substitutions.append((r'%reussir-llvm-opt',
                              bin_tool('reussir-llvm-opt')))
 
