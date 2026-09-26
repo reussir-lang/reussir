@@ -7,8 +7,19 @@ Building requires libclang and one of:
 - `REUSSIR_PJRT_PATH`: a directory containing `pjrt_c_api.h`, or an XLA checkout
   containing `xla/pjrt/c/pjrt_c_api.h`.
 
-The crate does not vendor the header, build or link XLA, or provide a runtime
-wrapper; plugin loading, ABI compatibility and ownership belong to the caller.
+When `rene` is built with either variable, it bundles the selected header and
+the upstream `LICENSE` found alongside it or in its source checkout. OpenXLA
+CMake builds set `REUSSIR_PJRT_PATH` to the project's XLA dependency. The extracted
+crate falls back to `bundled/pjrt_c_api.h`, so runtime baking needs no XLA checkout.
+The two environment variables still take precedence over the bundled header.
+
+The upstream header is **Apache-2.0**, as stated in its original notice. Its full
+license is included as `bundled/LICENSE` in the extracted bundle; Reussir's
+alternative MIT license does not apply to that header.
+
+The repository does not vendor the header. This crate does not build or link XLA,
+or provide a runtime wrapper; plugin loading, ABI compatibility and ownership
+belong to the caller.
 `libloading` and `paste` are test-only dependencies.
 
 The CPU smoke test embeds a handwritten StableHLO checkerboard kernel and calls

@@ -19,6 +19,8 @@ pub mod instrument;
 pub mod nullable;
 pub mod option;
 pub mod panic;
+#[cfg(feature = "pjrt")]
+pub mod pjrt;
 pub mod rc;
 pub mod region;
 pub mod symbols;

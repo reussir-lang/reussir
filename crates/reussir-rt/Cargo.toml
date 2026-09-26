@@ -14,6 +14,10 @@ hashbrown = { version = "0.16.0" }
 # them (so ASan/LSan/MSan actually see the runtime's allocations — mimalloc's
 # and dlmalloc's private heaps are invisible to them), and miri shims them.
 libc = "0.2"
+libloading = { version = "0.8.9", optional = true }
+paste = { version = "1", optional = true }
+reussir-pjrt-sys = { path = "../reussir-pjrt-sys", optional = true }
+tracing = { version = "0.1", features = ["log"], optional = true }
 # `extended` only adds extern declarations (mi_usable_size for the no-copy
 # language realloc); the linked C library is the same either way.
 libmimalloc-sys = { version = "0.1.44", optional = true, features = ["extended"] }
@@ -34,6 +38,7 @@ stacker.workspace = true
 
 [features]
 default = ["mimalloc-v2"]
+pjrt = ["dep:libloading", "dep:paste", "dep:reussir-pjrt-sys", "dep:tracing"]
 # The language heap requires a size-recovering allocator (`token<?>` frees
 # without a size); mimalloc is that allocator today (dlmalloc later). `mimalloc`
 # is the version-neutral gate the code checks; select the bundled major through

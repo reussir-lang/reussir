@@ -498,6 +498,14 @@ mod tests {
         // Versions are pinned through the bundled lock file (no vendoring;
         // the host cargo fetches, the lock decides versions).
         assert!(tmp.path().join(RT_DIR).join("Cargo.lock").is_file());
+
+        // Even a feature-off Cargo build must resolve optional path dependencies.
+        let pjrt = tmp.path().join("reussir-pjrt-sys");
+        let manifest = std::fs::read_to_string(pjrt.join("Cargo.toml")).unwrap();
+        assert!(!manifest.contains("workspace = true"), "{manifest}");
+        assert!(pjrt.join("build.rs").is_file());
+        assert!(pjrt.join("header.rs").is_file());
+        assert!(pjrt.join("src/lib.rs").is_file());
     }
 
     #[test]

@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item};
 
+#[path = "../reussir-pjrt-sys/header.rs"]
+mod pjrt_header;
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let crates_dir = manifest_dir.parent().unwrap();
@@ -35,14 +38,49 @@ fn main() {
     // versions of the reachable packages and pruning the rest.
     let lock = fs::read_to_string(&workspace_lock).expect("failed to read Cargo.lock");
 
-    // Archive layout: everything under a `reussir-rt/` root, so unpacking
-    // into a target's build prefix yields
-    // `<build-dir>/<target>/reussir-rt/{Cargo.toml,src/**}`.
+    // Unpack the runtime and its optional PjRt bindings side by side, preserving
+    // the relative path dependency in the runtime's manifest.
     let mut tar = tar::Builder::new(Vec::new());
     append_text(&mut tar, "reussir-rt/Cargo.toml", &manifest);
     append_text(&mut tar, "reussir-rt/Cargo.lock", &lock);
     tar.append_dir_all("reussir-rt/src", rt_dir.join("src"))
         .expect("failed to archive reussir-rt/src");
+    // Cargo resolves optional path dependencies even with their feature off.
+    // Ship the bindings source beside the runtime.
+    let pjrt_dir = crates_dir.join("reussir-pjrt-sys");
+    println!("cargo::rerun-if-changed={}", pjrt_dir.display());
+    append_text(
+        &mut tar,
+        "reussir-pjrt-sys/Cargo.toml",
+        &standalone_manifest(&pjrt_dir.join("Cargo.toml"), &workspace_toml),
+    );
+    for file in ["build.rs", "header.rs", "README.md"] {
+        append_text(
+            &mut tar,
+            &format!("reussir-pjrt-sys/{file}"),
+            &fs::read_to_string(pjrt_dir.join(file)).expect("failed to read PjRt bindings source"),
+        );
+    }
+    tar.append_dir_all("reussir-pjrt-sys/src", pjrt_dir.join("src"))
+        .expect("failed to archive PjRt bindings source");
+    if let Some(header) = pjrt_header::find() {
+        // Use the header from the configured project dependency at build time.
+        // The extracted crate can then build without the original XLA checkout.
+        let license = header
+            .ancestors()
+            .skip(1)
+            .map(|dir| dir.join("LICENSE"))
+            .find(|path| path.is_file())
+            .expect("bundling pjrt_c_api.h requires the upstream LICENSE alongside it or in its source checkout");
+        for (source, name) in [(&header, "pjrt_c_api.h"), (&license, "LICENSE")] {
+            println!("cargo::rerun-if-changed={}", source.display());
+            append_text(
+                &mut tar,
+                &format!("reussir-pjrt-sys/bundled/{name}"),
+                &fs::read_to_string(source).expect("failed to read PjRt header/license"),
+            );
+        }
+    }
     let archive = tar.into_inner().expect("failed to finish the tar archive");
 
     let compressed =
@@ -138,10 +176,10 @@ fn standalone_manifest(crate_toml: &Path, workspace_toml: &Path) -> String {
         }
     }
 
-    if let Some(deps) = doc
-        .get_mut("dependencies")
-        .and_then(Item::as_table_like_mut)
-    {
+    for section in ["dependencies", "build-dependencies", "dev-dependencies"] {
+        let Some(deps) = doc.get_mut(section).and_then(Item::as_table_like_mut) else {
+            continue;
+        };
         let names: Vec<String> = deps.iter().map(|(k, _)| k.to_owned()).collect();
         for name in names {
             let spec = deps.get(&name).unwrap();

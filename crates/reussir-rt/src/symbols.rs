@@ -16,6 +16,8 @@ use crate::alloc::{
 };
 use crate::instrument::__reussir_report_nonlinear_usage;
 use crate::panic::__reussir_panic;
+#[cfg(feature = "pjrt")]
+use crate::pjrt::ffi::*;
 use crate::region::{
     __reussir_acquire_rigid_object, __reussir_cleanup_region, __reussir_freeze_flex_object,
     __reussir_release_rigid_object,
@@ -45,8 +47,8 @@ unsafe impl Sync for RuntimeSymbol {}
 /// symbols exactly.
 pub fn exported_symbols() -> &'static [RuntimeSymbol] {
     macro_rules! symbols {
-        ($($f:ident),* $(,)?) => {
-            &[$(RuntimeSymbol { name: stringify!($f), address: $f as *const c_void }),*]
+        ($($(#[$attr:meta])* $f:ident),* $(,)?) => {
+            &[$($(#[$attr])* RuntimeSymbol { name: stringify!($f), address: $f as *const c_void }),*]
         };
     }
     symbols![
@@ -62,5 +64,19 @@ pub fn exported_symbols() -> &'static [RuntimeSymbol] {
         __reussir_cleanup_region,
         __reussir_acquire_rigid_object,
         __reussir_release_rigid_object,
+        #[cfg(feature = "pjrt")]
+        __reussir_pjrt_array_allocate,
+        #[cfg(feature = "pjrt")]
+        __reussir_pjrt_array_deallocate,
+        #[cfg(feature = "pjrt")]
+        __reussir_pjrt_array_from_host,
+        #[cfg(feature = "pjrt")]
+        __reussir_pjrt_array_to_host,
+        #[cfg(feature = "pjrt")]
+        __reussir_pjrt_array_copy_to_device,
+        #[cfg(feature = "pjrt")]
+        __reussir_pjrt_array_wait_ready,
+        #[cfg(feature = "pjrt")]
+        __reussir_pjrt_array_host_size,
     ]
 }

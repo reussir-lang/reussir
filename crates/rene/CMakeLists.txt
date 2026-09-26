@@ -36,6 +36,10 @@ endif()
 set(RENE_CARGO_ENV
     CARGO_TARGET_DIR=${CMAKE_BINARY_DIR}/target
     "RUSTFLAGS=${RENE_RUSTFLAGS}")
+if(REUSSIR_ENABLE_OPENXLA)
+    FetchContent_GetProperties(xla)
+    list(APPEND RENE_CARGO_ENV "REUSSIR_PJRT_PATH=${xla_SOURCE_DIR}")
+endif()
 
 set(RENE_BIN rene${CMAKE_EXECUTABLE_SUFFIX})
 

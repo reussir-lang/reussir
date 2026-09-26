@@ -330,3 +330,10 @@ The project is dual-licensed:
 
 You may use the project under either license. The full license text is in
 [LICENSE](LICENSE).
+
+When built with `REUSSIR_ENABLE_OPENXLA`, `rene` includes OpenXLA's
+`pjrt_c_api.h` from the project's XLA dependency in its runtime source bundle.
+That upstream header is licensed under **Apache-2.0**, with its original notice
+and upstream `LICENSE` preserved in `reussir-pjrt-sys/bundled/`. It is not covered
+by Reussir's alternative MIT license. See the [PjRt bindings README](crates/reussir-pjrt-sys/README.md)
+for header selection when building directly with Cargo.
