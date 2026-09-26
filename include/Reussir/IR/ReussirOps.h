@@ -91,14 +91,21 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
                                              mlir::Location loc,
                                              mlir::Value delta = {});
 
+/// The memref type `reussir.array.view` produces for an array: identity
+/// layout for a static shape, a fully dynamic strided layout for a
+/// dynamic-extent one (the box header carries the strided encoding).
+mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType);
+
 /// The memref type `reussir.array.project` produces for a non-final
 /// dimension of `viewType`: rank-reducing subview inference preserves known
 /// strides and accounts for a dynamic leading index in the offset. Also
 /// supports rank-one inputs, returning the rank-zero view used by the bridge.
 mlir::MemRefType getProjectedArrayViewType(mlir::MemRefType viewType);
 
-/// Traverses a statically shaped Reussir array view and invokes `emitElement`
-/// with a reference to each element.
+/// Traverses a Reussir array view and invokes `emitElement` with a reference
+/// to each element. Small static shapes are unrolled; other shapes use an
+/// `scf.for` nest with constants for static bounds and `memref.dim` for dynamic
+/// bounds.
 mlir::LogicalResult emitArrayElementTraversal(
     mlir::Value view, mlir::OpBuilder &builder, mlir::Location loc,
     llvm::function_ref<mlir::LogicalResult(mlir::OpBuilder &, mlir::Location,

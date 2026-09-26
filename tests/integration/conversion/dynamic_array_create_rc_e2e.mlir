@@ -37,14 +37,12 @@ module {
       scf.if %bad_value {
         reussir.panic "array slot contains the wrong element"
       }
-      reussir.rc.dec(%element : !elem)
     }
-    %token = reussir.rc.reinterpret(%array : !rc_array) : !reussir.token<align: 8, size: ?>
-    reussir.token.free(%token : !reussir.token<align: 8, size: ?>)
+    reussir.rc.dec(%array : !rc_array)
     %remaining = reussir.rc.fetch(%init : !elem) : index
     %bad_remaining = arith.cmpi ne, %remaining, %one : index
     scf.if %bad_remaining {
-      reussir.panic "array construction consumed the initializer"
+      reussir.panic "array release did not preserve the initializer"
     }
     reussir.rc.dec(%init : !elem)
     return

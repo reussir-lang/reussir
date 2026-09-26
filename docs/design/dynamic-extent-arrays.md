@@ -150,9 +150,13 @@ Its `TokenAcceptor::buildTokenSize` implementation computes
 `header + product(sizes) * elemsize`;
 `rc.dec`/`rc.reinterpret` produce dynamic
 tokens freed unsized. `array.project` now lowers through checked strided
-subviews. Executable e2e: `dynamic_array_e2e.mlir`, `array_project_e2e.mlir`.
-Open backend halves: dynamic ownership traversal, the `with_unique_view`
-clone branch (runtime-length copy), restride ops, and wiring the frontend
+subviews. Ownership acquisition and release use `memref.dim` for dynamic
+loop bounds; only small static shapes are unrolled. Empty dimensions skip
+all element ownership operations. Executable e2e: `dynamic_array_e2e.mlir`,
+`array_project_e2e.mlir`, `dynamic_array_managed_e2e.mlir`, and
+`dynamic_array_create_rc_e2e.mlir`.
+Open backend halves: the `with_unique_view` clone branch (runtime-length copy),
+restride ops, and wiring the frontend
 codegen off its `err(…)`
 stubs.
 

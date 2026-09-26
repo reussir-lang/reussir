@@ -85,9 +85,8 @@ static void printCompiledModule(mlir::OpAsmPrinter &printer,
 #include "Reussir/IR/ReussirOps.cpp.inc"
 
 namespace reussir {
-namespace {
 
-static mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType) {
+mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType) {
   // A static array views as an identity-layout memref. A dynamic-extent
   // array views as a strided memref with dynamic offset and strides — the
   // box header carries the full strided encoding, and static dims stay
@@ -103,8 +102,6 @@ static mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType) {
   return mlir::MemRefType::get(arrayType.getShape(),
                                arrayType.getElementType());
 }
-
-} // namespace
 
 mlir::MemRefType getProjectedArrayViewType(mlir::MemRefType viewType) {
   llvm::SmallVector<int64_t> offsets(viewType.getRank(), 0);
@@ -3686,7 +3683,9 @@ mlir::LogicalResult emitArrayElementTraversal(
   ArrayType arrayType = ArrayType::get(
       builder.getContext(), viewType.getShape(), viewType.getElementType());
 
-  if (viewType.getNumElements() <= kArrayOwnershipUnrollThreshold) {
+  // Dynamic shapes always loop using extents from the array descriptor.
+  if (viewType.hasStaticShape() &&
+      viewType.getNumElements() <= kArrayOwnershipUnrollThreshold) {
     auto emitDimension =
         [&](auto &&self, mlir::Value currentView, ArrayType currentType,
             mlir::OpBuilder &currentBuilder) -> mlir::LogicalResult {
@@ -3726,9 +3725,14 @@ mlir::LogicalResult emitArrayElementTraversal(
   llvm::SmallVector<mlir::Value> upperBounds;
   llvm::SmallVector<mlir::Value> steps(arrayType.getRank(), step);
   upperBounds.reserve(arrayType.getRank());
-  for (int64_t extent : arrayType.getShape())
+  for (auto [dim, extent] : llvm::enumerate(arrayType.getShape()))
     upperBounds.push_back(
-        mlir::arith::ConstantIndexOp::create(builder, loc, extent));
+        mlir::ShapedType::isDynamic(extent)
+            ? mlir::memref::DimOp::create(builder, loc, view,
+                                          static_cast<int64_t>(dim))
+                  .getResult()
+            : mlir::arith::ConstantIndexOp::create(builder, loc, extent)
+                  .getResult());
 
   mlir::LogicalResult bodyResult = mlir::success();
   mlir::scf::buildLoopNest(

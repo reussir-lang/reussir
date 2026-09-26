@@ -779,19 +779,6 @@ static void cloneArrayWithUniqueViewBody(ReussirArrayWithUniqueViewOp op,
   mlir::scf::YieldOp::create(rewriter, op.getLoc(), yieldedValues);
 }
 
-static mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType) {
-  if (arrayType.hasDynamicShape()) {
-    auto layout = mlir::StridedLayoutAttr::get(
-        arrayType.getContext(), mlir::ShapedType::kDynamic,
-        llvm::SmallVector<int64_t>(arrayType.getRank(),
-                                   mlir::ShapedType::kDynamic));
-    return mlir::MemRefType::get(arrayType.getShape(),
-                                 arrayType.getElementType(), layout);
-  }
-  return mlir::MemRefType::get(arrayType.getShape(),
-                               arrayType.getElementType());
-}
-
 static mlir::Value
 materializeArrayViewValue(mlir::Location loc, mlir::PatternRewriter &rewriter,
                           ArrayType arrayType, mlir::Value ref,
