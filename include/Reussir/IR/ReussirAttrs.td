@@ -26,6 +26,31 @@ class ReussirAttr<string name, string attrMnemonic, list<Trait> traits = [],
 }
 
 //===----------------------------------------------------------------------===//
+// Array target metadata
+//===----------------------------------------------------------------------===//
+def Reussir_Target : ReussirAttr<"Target", "target"> {
+  let summary = "Array placement metadata for IFRT interoperability";
+  let description = [{
+    Carries the metadata of an IFRT array beyond its shape and element type.
+    Devices are ordered logical IDs within a program's device assignment, not
+    physical device IDs. Sharding is kept as an attribute so upstream sharding
+    representations can be preserved without an IFRT dependency in Reussir IR.
+    An absent sharding leaves it unspecified.
+
+    An absent memory kind selects device-default memory. Layout preserves IFRT's
+    distinction between absent (inherited), "default", "auto", and an explicit
+    XLA layout string. This attribute only carries metadata; applying it to an
+    array and checking shape/device compatibility belong to its eventual users.
+  }];
+  let parameters = (ins
+    "::mlir::DenseI32ArrayAttr":$devices,
+    OptionalParameter<"::mlir::Attribute">:$sharding,
+    OptionalParameter<"::mlir::StringAttr">:$memory_kind,
+    OptionalParameter<"::mlir::StringAttr">:$layout);
+  let assemblyFormat = [{ `<` struct(params) `>` }];
+}
+
+//===----------------------------------------------------------------------===//
 // Atomicity Attributes
 //===----------------------------------------------------------------------===//
 def AK_Normal : I32EnumAttrCase<"normal", 0>;
