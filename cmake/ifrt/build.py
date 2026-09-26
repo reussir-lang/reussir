@@ -37,6 +37,21 @@ def link(source, destination):
     destination.symlink_to(source, target_is_directory=True)
 
 
+def compiler_launcher(work, compiler, launcher):
+    if not launcher:
+        return compiler
+    # Bazel's local C++ toolchain accepts a compiler path, not CMake's launcher
+    # list. Resolve the launcher now: compile actions have a restricted PATH.
+    executable = shutil.which(launcher[0])
+    if executable is None:
+        raise RuntimeError("compiler launcher not found: " + launcher[0])
+    wrapper = work / (compiler.name + "-launcher")
+    write(wrapper, '#!/bin/sh\nexec ' + shlex.join(
+        [executable, *launcher[1:], str(compiler)]) + ' "$@"\n')
+    wrapper.chmod(0o755)
+    return wrapper
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("work", "xla", "stablehlo", "stablehlo-build", "tblgen",
@@ -48,6 +63,7 @@ def main():
     parser.add_argument("--host-library", required=True, nargs="+", type=Path)
     parser.add_argument("--host-library-dir", nargs="*", type=Path, default=[])
     parser.add_argument("--cxx-flags", default="")
+    parser.add_argument("--compiler-launcher", nargs="*", default=[])
     args = parser.parse_args()
     adapter = Path(__file__).resolve().parent
     workspace = args.work / "workspace"
@@ -140,10 +156,21 @@ def _impl(ctx):
 llvm_extension = module_extension(implementation = _impl)
 ''' % json.dumps(str(llvm)))
 
-    env = dict(os.environ, CC=str(args.cc), CXX=str(args.cxx))
+    env = dict(os.environ,
+               CC=str(compiler_launcher(args.work, args.cc, args.compiler_launcher)),
+               CXX=str(compiler_launcher(args.work, args.cxx, args.compiler_launcher)))
+    # CI starts the S3-backed sccache server before the build. Forward its
+    # connection/configuration to target and host actions by name, not value.
+    # Credentials remain with the already-running server.
+    cache_env = [name for name in (
+        "SCCACHE_CONF", "SCCACHE_SERVER_PORT", "SCCACHE_SERVER_UDS",
+        "SCCACHE_IDLE_TIMEOUT", "SCCACHE_LOG", "SCCACHE_ERROR_LOG",
+    ) if name in env]
     subprocess.run([
         str(args.bazel), "--output_user_root=" + str(args.work / "cache"),
         "--max_idle_secs=60", "build", "--config=clang_local",
+        *["--action_env=" + name for name in cache_env],
+        *["--host_action_env=" + name for name in cache_env],
         "--override_repository=+third_party_ext+stablehlo=" + str(stablehlo),
         *["--cxxopt=" + flag for flag in shlex.split(args.cxx_flags)
           if not flag.startswith("-Werror")],

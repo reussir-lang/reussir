@@ -20,6 +20,7 @@ rustc-ice-*
 /build
 /build-*
 .cache
+__pycache__/
 dist-*
 # rene's per-package build directory and rrc's rust-module temp files, as the
 # integration tests scatter both inside tests/integration/ packages

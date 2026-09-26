@@ -45,6 +45,7 @@ add_custom_target(reussir-ifrt-build
     --tblgen-rule ${ifrt_tblgen_SOURCE_DIR}/tblgen.bzl
     --bazel ${REUSSIR_BAZEL_EXECUTABLE}
     --cc ${CMAKE_C_COMPILER} --cxx ${CMAKE_CXX_COMPILER}
+    --compiler-launcher ${CMAKE_CXX_COMPILER_LAUNCHER}
     --cxx-flags=${CMAKE_CXX_FLAGS}
     --jobs ${REUSSIR_IFRT_JOBS}
     --output ${ifrt_archive}
