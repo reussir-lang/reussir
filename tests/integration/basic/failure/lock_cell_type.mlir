@@ -12,9 +12,9 @@ module {
 
 // -----
 
-// The same restriction applies to every lock kind, records included.
+// The same restriction applies to every lock kind.
 // expected-error @+1 {{a cell of kind 'rwlock' requires an element that is a valid memref element type}}
-!bad_rwlock_record = !reussir.cell<!reussir.record<compound "pair" {i64, i64}> rwlock>
+!bad_rwlock_nullable = !reussir.cell<!reussir.nullable<!reussir.rc<i64>> rwlock>
 
 module {
 }

@@ -1,5 +1,5 @@
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion | %FileCheck %s --check-prefixes=DROP,ACQUIRE
-// RUN: %reussir-opt %s --reussir-convert-to-std --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=CLONE
+// RUN: %reussir-opt %s --reussir-convert-to-std --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=CLONE --implicit-check-not=reussir.ref.spilled
 
 // Ownership of a dynamic-extent array:
 // the element traversal never unrolls a dynamic shape, takes its loop bounds
@@ -58,8 +58,11 @@ module {
   // CLONE: scf.for %[[I:.+]] = %{{.+}} to %[[N]]
   // CLONE: scf.for %[[J:.+]] =
   // CLONE: %[[COPY_VIEW:.+]] = reussir.array.view(%[[SRC]]
-  // CLONE: %[[ELEMENT:.+]] = memref.load %[[COPY_VIEW]][%[[I]], %[[J]]]
+  // CLONE: %[[SLOT_VIEW:.+]] = memref.subview %[[COPY_VIEW]][%[[I]], %[[J]]]
+  // CLONE: %[[SLOT:.+]] = reussir.ref.from_memref(%[[SLOT_VIEW]]
+  // CLONE: reussir.ref.load(%[[SLOT]]
   // CLONE: reussir.rc.inc
+  // CLONE: %[[ELEMENT:.+]] = memref.load %[[COPY_VIEW]][%[[I]], %[[J]]]
   // CLONE: memref.store %[[ELEMENT]],
   // CLONE: reussir.rc.fetch(%arg0
   // CLONE: reussir.rc.set(%arg0

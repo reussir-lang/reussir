@@ -1250,7 +1250,7 @@ CellType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
   // A lock-guarded cell's payload is physically wrapped in a `sync` primitive
   // and every access views it through a zero-ranked memref (the critical
   // section's payload view), so the element must be a valid memref element
-  // type. Types outside that set (records, nullables, ...) would pass here
+  // type. Types outside that set (nullables, ...) would pass here
   // only to make the lowering construct an invalid `memref<T>`.
   if (kind == CellKind::mutex || kind == CellKind::flatlock ||
       kind == CellKind::rwlock) {

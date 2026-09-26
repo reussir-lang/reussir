@@ -67,7 +67,7 @@ def ReussirRawPtrType : ReussirType<"RawPtr", "raw_ptr"> {
 def ReussirRecordType
     : ReussirType<"Record", "record",
                   [DeclareTypeInterfaceMethods<DataLayoutTypeInterface>,
-                   MutableType,
+                   MutableType, MemRefElementTypeInterface,
 ]> {
   let summary = "A record type that is either a composite type or an enum";
 
@@ -86,6 +86,10 @@ def ReussirRecordType
     is unspecified, it is set to the type's default capability.
 
     For variant records, the default capability is `value` if not specified.
+
+    A value record can be stored in place as a memref element. Memref loads and
+    stores copy the record value; acquisition and release of managed members
+    remain explicit ownership operations.
   }];
 
   let parameters = (ins OptionalArrayRefParameter<"mlir::Type">:$members,

@@ -20,6 +20,10 @@
 !row = memref<2x!e, strided<[?], offset: ?>>
 !inner_dynamic = !reussir.array<2 x ? x !e>
 !rc_inner_dynamic = !reussir.rc<!inner_dynamic>
+!member = !reussir.record<compound "CloneMember" {i32}>
+!member_rc = !reussir.rc<!member>
+!pair = !reussir.record<compound "ClonePair" [value] {!member, !member}>
+!rc_record_array = !reussir.rc<!reussir.array<? x !pair>>
 module {
   // Slot [i][j] holds rc(2i + j).
   func.func private @make(%n: index) -> !rc_dv attributes {llvm.linkage = #llvm.linkage<internal>} {
@@ -113,6 +117,41 @@ module {
       reussir.panic "dynamic clone did not release every repeated pointer"
     }
     reussir.rc.dec(%element : !e)
+
+    // A value record lives in place in the memref, but each of its shared
+    // fields still owns a reference. Two fields per record give the same
+    // ownership totals as the 2 x n array above, including when n is zero.
+    %member_value = reussir.record.compound(%value : i32) : !member
+    %record_element = reussir.rc.create value(%member_value : !member) : !member_rc
+    %records = reussir.array.create extents(%n) : !rc_record_array body {
+      ^bb0(%i: index):
+        reussir.rc.inc(%record_element : !member_rc) by %two
+        %pair = reussir.record.compound(%record_element, %record_element : !member_rc, !member_rc) : !pair
+        reussir.scf.yield %pair : !pair
+    }
+    reussir.rc.inc(%records : !rc_record_array)
+    %record_clone = reussir.array.with_unique_view (%records : !rc_record_array) -> !rc_record_array {
+      ^bb0(%view: memref<?x!pair, strided<[?], offset: ?>>):
+        reussir.scf.yield
+    }
+    %record_both_count = reussir.rc.fetch(%record_element : !member_rc) : index
+    %record_both_bad = arith.cmpi ne, %record_both_count, %both_expected : index
+    scf.if %record_both_bad {
+      reussir.panic "dynamic value record clone did not retain every shared field"
+    }
+    reussir.rc.dec(%records : !rc_record_array)
+    %record_clone_count = reussir.rc.fetch(%record_element : !member_rc) : index
+    %record_clone_bad = arith.cmpi ne, %record_clone_count, %clone_expected : index
+    scf.if %record_clone_bad {
+      reussir.panic "releasing the original changed value record clone ownership"
+    }
+    reussir.rc.dec(%record_clone : !rc_record_array)
+    %record_remaining = reussir.rc.fetch(%record_element : !member_rc) : index
+    %record_remaining_bad = arith.cmpi ne, %record_remaining, %one : index
+    scf.if %record_remaining_bad {
+      reussir.panic "dynamic value record clone did not release every shared field"
+    }
+    reussir.rc.dec(%record_element : !member_rc)
     return
   }
 

@@ -1094,17 +1094,30 @@ struct ReussirArrayWithUniqueViewOpRewritePattern
       {
         mlir::OpBuilder::InsertionGuard guard(rewriter);
         rewriter.setInsertionPointToStart(body);
-        auto srcView = ReussirArrayViewOp::create(
-            rewriter, loc, getArrayViewMemRefType(arrayType), srcRef);
-        auto element = mlir::memref::LoadOp::create(rewriter, loc, srcView,
-                                                    body->getArguments());
+        auto srcViewType = getArrayViewMemRefType(arrayType);
+        auto srcView =
+            ReussirArrayViewOp::create(rewriter, loc, srcViewType, srcRef);
         if (!isTriviallyCopyable(arrayType.getElementType())) {
-          auto elementRef = ReussirRefSpilledOp::create(
+          // The initializer indices select an in-bounds source slot. Acquire
+          // through that slot before loading the value for the clone.
+          llvm::SmallVector<mlir::OpFoldResult> offsets;
+          for (mlir::Value index : body->getArguments())
+            offsets.push_back(index);
+          llvm::SmallVector<mlir::OpFoldResult> ones(arrayType.getRank(),
+                                                     rewriter.getIndexAttr(1));
+          auto elementViewType =
+              mlir::memref::SubViewOp::inferRankReducedResultType(
+                  {}, srcViewType, offsets, ones, ones);
+          auto elementView = mlir::memref::SubViewOp::create(
+              rewriter, loc, elementViewType, srcView, offsets, ones, ones);
+          auto elementRef = ReussirRefFromMemrefOp::create(
               rewriter, loc,
               RefType::get(rewriter.getContext(), arrayType.getElementType()),
-              element);
+              elementView);
           ReussirRefAcquireOp::create(rewriter, loc, elementRef);
         }
+        auto element = mlir::memref::LoadOp::create(rewriter, loc, srcView,
+                                                    body->getArguments());
         ReussirScfYieldOp::create(rewriter, loc, element);
       }
       rewriter.setInsertionPointAfter(cloned);
