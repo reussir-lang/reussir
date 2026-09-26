@@ -1,0 +1,13 @@
+[package]
+name = "reussir-pjrt-sys"
+description = "Raw bindings to the OpenXLA PjRt plugin C API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dev-dependencies]
+libloading.workspace = true
+paste.workspace = true
+
+[build-dependencies]
+bindgen.workspace = true

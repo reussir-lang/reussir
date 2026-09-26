@@ -1,0 +1,5 @@
+# xla.CompileOptionsProto; generated with upstream protoc, see README.md.
+executable_build_options {
+  num_replicas: 1
+  num_partitions: 1
+}
