@@ -1,16 +1,17 @@
-use std::{ffi::OsStr, mem, ptr::NonNull, sync::OnceLock};
+use std::{ffi::OsStr, mem, sync::OnceLock};
 
 use super::{
     Error, Result,
-    api::{Api, call, non_null},
+    api::{Api, call},
+    client::{Client, Device},
     sys::*,
 };
 
 /// Process-lifetime PjRt client owned by the runtime, never passed to language code.
 pub(super) struct Context {
     pub(super) api: Api,
-    pub(super) client: NonNull<PJRT_Client>,
-    devices: Vec<NonNull<PJRT_Device>>,
+    pub(super) client: Client,
+    devices: Vec<Device>,
 }
 
 // SAFETY: PjRtClient is thread-safe; the API table and device handles are
@@ -53,27 +54,13 @@ impl Context {
         let api = unsafe { Api::new(raw) }?;
 
         call!(api, PJRT_Plugin_Initialize {})?;
-        let client = non_null(call!(api, PJRT_Client_Create {})?.client, "client")?;
+        let client = Client::create(api)?;
         let mut context = Self {
             api,
             client,
             devices: Vec::new(),
         };
-        let devices = call!(
-            api,
-            PJRT_Client_AddressableDevices {
-                client: client.as_ptr()
-            }
-        )?;
-        if devices.num_addressable_devices != 0 {
-            let pointer = non_null(devices.addressable_devices.cast_mut(), "device list")?;
-            context.devices = unsafe {
-                std::slice::from_raw_parts(pointer.as_ptr(), devices.num_addressable_devices)
-            }
-            .iter()
-            .map(|&device| non_null(device, "device"))
-            .collect::<Result<_>>()?;
-        }
+        context.devices = client.addressable_devices(api)?;
         tracing::debug!(
             ?client,
             devices = context.devices.len(),
@@ -82,7 +69,7 @@ impl Context {
         Ok(context)
     }
 
-    pub(super) fn device(&self, index: usize) -> Result<NonNull<PJRT_Device>> {
+    pub(super) fn device(&self, index: usize) -> Result<Device> {
         self.devices
             .get(index)
             .copied()
@@ -92,17 +79,8 @@ impl Context {
 
 impl Drop for Context {
     fn drop(&mut self) {
-        let result = call!(
-            self.api,
-            PJRT_Client_Destroy {
-                client: self.client.as_ptr(),
-            }
-        );
-        match result {
-            Ok(_) => tracing::debug!(client = ?self.client, "destroyed PjRt context"),
-            Err(error) => {
-                tracing::warn!(client = ?self.client, %error, "PjRt context cleanup failed")
-            }
+        if let Err(error) = unsafe { self.client.destroy(self.api) } {
+            tracing::warn!(client = ?self.client, %error, "PjRt context cleanup failed");
         }
     }
 }

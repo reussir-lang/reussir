@@ -2,8 +2,13 @@ use std::{mem, ptr::NonNull};
 
 use super::{Error, Result, sys::*};
 
+#[repr(transparent)]
 #[derive(Clone, Copy)]
 pub(super) struct Api(pub(super) NonNull<PJRT_Api>);
+
+/// A completion event consumed by waiting and destroying it.
+#[repr(transparent)]
+pub(super) struct Event(NonNull<PJRT_Event>);
 
 pub(super) fn non_null<T>(pointer: *mut T, name: &str) -> Result<NonNull<T>> {
     NonNull::new(pointer).ok_or_else(|| Error::local(format!("PjRt returned null {name}")))
@@ -68,7 +73,7 @@ impl Api {
     }
 
     pub(super) fn call<A>(
-        &self,
+        self,
         function: unsafe extern "C" fn(*mut A) -> *mut PJRT_Error,
         mut args: A,
     ) -> Result<A> {
@@ -117,12 +122,18 @@ impl Api {
             })
         }
     }
+}
 
-    pub(super) fn wait(&self, event: *mut PJRT_Event) -> Result<()> {
-        let event = non_null(event, "completion event")?.as_ptr();
-        let ready = call!(*self, PJRT_Event_Await { event });
+impl Event {
+    pub(super) fn new(raw: *mut PJRT_Event) -> Result<Self> {
+        non_null(raw, "completion event").map(Self)
+    }
+
+    pub(super) fn wait(self, api: Api) -> Result<()> {
+        let event = self.0.as_ptr();
+        let ready = call!(api, PJRT_Event_Await { event });
         // Destroy the event even when the asynchronous operation failed.
-        let destroyed = call!(*self, PJRT_Event_Destroy { event });
+        let destroyed = call!(api, PJRT_Event_Destroy { event });
         ready.and(destroyed).map(|_| ())
     }
 }

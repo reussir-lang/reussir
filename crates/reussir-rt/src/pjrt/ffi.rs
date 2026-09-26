@@ -1,6 +1,7 @@
 //! Compiler-facing ABI. Errors use the runtime's aborting panic path.
 //!
-//! Array handles are native `PJRT_Buffer*` pointers, represented by `NonNull`.
+//! Array handles are native `PJRT_Buffer*` pointers, represented by transparent
+//! `Buffer` handles.
 //! There is no Reussir allocation or context pointer attached to a handle.
 //! Allocation, upload and copy transfer ownership; deallocate consumes it.
 //! All other operations borrow the handle. Release each owned handle once.
@@ -17,9 +18,9 @@
 //! device contents and aligned, exclusively writable host storage of at least
 //! array_host_size bytes. Host storage can be reused once a transfer returns.
 
-use std::{ffi::c_void, ptr::NonNull, slice};
+use std::{ffi::c_void, slice};
 
-use super::{Result, buffer, sys::PJRT_Buffer};
+use super::{Buffer, Result};
 
 fn checked<T>(result: Result<T>) -> T {
     result.unwrap_or_else(|error| unsafe {
@@ -42,15 +43,15 @@ pub unsafe extern "C" fn __reussir_pjrt_array_allocate(
     element_type: u32,
     dims: *const i64,
     rank: usize,
-) -> NonNull<PJRT_Buffer> {
-    checked(buffer::allocate(device, element_type, unsafe {
+) -> Buffer {
+    checked(Buffer::allocate(device, element_type, unsafe {
         dimensions(dims, rank)
     }))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __reussir_pjrt_array_deallocate(buffer: NonNull<PJRT_Buffer>) {
-    checked(unsafe { buffer::deallocate(buffer) });
+pub unsafe extern "C" fn __reussir_pjrt_array_deallocate(buffer: Buffer) {
+    checked(unsafe { buffer.deallocate() });
 }
 
 #[unsafe(no_mangle)]
@@ -60,33 +61,33 @@ pub unsafe extern "C" fn __reussir_pjrt_array_from_host(
     dims: *const i64,
     rank: usize,
     data: *const c_void,
-) -> NonNull<PJRT_Buffer> {
-    checked(unsafe { buffer::from_host(device, element_type, dimensions(dims, rank), data) })
+) -> Buffer {
+    checked(unsafe { Buffer::from_host(device, element_type, dimensions(dims, rank), data) })
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __reussir_pjrt_array_to_host(
-    buffer: NonNull<PJRT_Buffer>,
+    buffer: Buffer,
     data: *mut c_void,
     bytes: usize,
 ) {
-    checked(unsafe { buffer::to_host(buffer, data, bytes) });
+    checked(unsafe { buffer.to_host(data, bytes) });
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __reussir_pjrt_array_copy_to_device(
-    buffer: NonNull<PJRT_Buffer>,
+    buffer: Buffer,
     device: usize,
-) -> NonNull<PJRT_Buffer> {
-    checked(unsafe { buffer::copy_to_device(buffer, device) })
+) -> Buffer {
+    checked(unsafe { buffer.copy_to_device(device) })
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __reussir_pjrt_array_wait_ready(buffer: NonNull<PJRT_Buffer>) {
-    checked(unsafe { buffer::wait_ready(buffer) });
+pub unsafe extern "C" fn __reussir_pjrt_array_wait_ready(buffer: Buffer) {
+    checked(unsafe { buffer.wait_ready() });
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __reussir_pjrt_array_host_size(buffer: NonNull<PJRT_Buffer>) -> usize {
-    checked(unsafe { buffer::host_size(buffer) })
+pub unsafe extern "C" fn __reussir_pjrt_array_host_size(buffer: Buffer) -> usize {
+    checked(unsafe { buffer.host_size() })
 }

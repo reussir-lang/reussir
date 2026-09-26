@@ -8,9 +8,11 @@
 
 mod api;
 mod buffer;
+mod client;
 mod context;
 mod error;
 pub mod ffi;
 
+pub use buffer::Buffer;
 use error::{Error, Result};
 use reussir_pjrt_sys as sys;
