@@ -323,7 +323,7 @@ a cell in `Arc`.
 | plain | no | any type | `get` (clone) / `set` (replace) |
 | exclusive | no | any type | plain ops + `rmw` (move-out region, in-use flag, panics on reentry) |
 | atomic | yes | signless int/float primitive, power-of-two width ≥ 8 bits (verified in `ReussirTypes.cpp`) | atomic `get` (acquire) / `set` (release) / `rmw` (direct `atomicrmw` or CAS-retry region, acq-rel) |
-| mutex | yes | **`Sync(τ)`**, and τ a valid memref element (rc pointer or primitive; records/nullables don't qualify) | ops inside `sync.mutex.critical_section`; `rmw` region runs exactly once, reentry deadlocks |
+| mutex | yes | **`Sync(τ)`**, and τ a valid memref element (rc pointer, primitive, or value record; nullables don't qualify) | ops inside `sync.mutex.critical_section`; `rmw` region runs exactly once, reentry deadlocks |
 | flatlock | yes | **`Sync(τ)`**, memref-element | ops inside `sync.combining_lock.critical_section`; the body may execute on the *combining thread*, results return via a captured stack slot |
 | rwlock | yes | **`Sync(τ)`**, memref-element | `get`/`rdlock` under the read lock (concurrent), `set`/`rmw` under the write lock |
 

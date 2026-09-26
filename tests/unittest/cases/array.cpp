@@ -72,6 +72,26 @@ TEST_F(ReussirTest, ArrayRejectsRankZero) {
                                      mlir::Type(i32Type)));
 }
 
+TEST_F(ReussirTest, ValueRecordsAreMemRefElements) {
+  for (std::string_view spelling :
+       {R"(!reussir.record<compound "MemRefPair" [value] {i32, i64}>)",
+        R"(!reussir.record<variant "MemRefChoice" [value] {i32, i64}>)"}) {
+    withType<RecordType>(
+        SIMPLE_LAYOUT, spelling, [](mlir::ModuleOp module, RecordType type) {
+          auto loc = module.getLoc();
+          EXPECT_TRUE(mlir::BaseMemRefType::isValidElementType(type));
+          auto ranked = mlir::MemRefType::getChecked(
+              loc, llvm::ArrayRef<int64_t>{2, 3}, type);
+          ASSERT_TRUE(ranked);
+          EXPECT_EQ(ranked.getElementType(), type);
+          auto unranked = mlir::UnrankedMemRefType::getChecked(
+              loc, type, mlir::Attribute{});
+          ASSERT_TRUE(unranked);
+          EXPECT_EQ(unranked.getElementType(), type);
+        });
+  }
+}
+
 TEST_F(ReussirTest, ArrayProjectionPreservesStridesAndMemorySpace) {
   withModule(R"mlir(
     func.func private @static(memref<3x4x5xf32>) -> memref<4x5xf32, strided<[5, 1], offset: ?>>

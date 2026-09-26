@@ -81,10 +81,11 @@ aliased elements would break the drop traversal's exactly-once contract.
   `header + ∏sizes × elemsize`, computed on the canonical form. The
   touched-extent formula (`offset + Σ(size_i − 1)·stride_i + 1` elements)
   is for verifier/debug assertions only, never allocation.
-- **Clone compacts.** The `with_unique_view` clone branch checks the
-  loaded header: canonical → flat `ref.memcpy` with an SSA length;
-  non-canonical → a strided-to-canonical copy nest, and the clone's
-  header is written canonical. Sharing never entrenches a degenerate
+- **Clone compacts.** The `with_unique_view` clone branch reads dynamic
+  extents from the source view and constructs a canonical `array.create`
+  with those extents. Its initializer loads each logical source element
+  through the strided view and acquires its ownership before yielding it.
+  The same path handles static arrays. Sharing never entrenches a degenerate
   layout.
 - **Tokens.** `rc.dec` of a dynamic array produces `token<align, ?>`,
   the existing universal fallback donor; `token.alloc` gains an SSA size
@@ -152,11 +153,14 @@ Its `TokenAcceptor::buildTokenSize` implementation computes
 tokens freed unsized. `array.project` now lowers through checked strided
 subviews. Ownership acquisition and release use `memref.dim` for dynamic
 loop bounds; only small static shapes are unrolled. Empty dimensions skip
-all element ownership operations. Executable e2e: `dynamic_array_e2e.mlir`,
-`array_project_e2e.mlir`, `dynamic_array_managed_e2e.mlir`, and
+all element ownership operations. The `with_unique_view` clone branch reads
+dynamic extents with `memref.dim` and uses the `array.create` sizing interface
+to allocate the clone. Its initializer copies logical elements through the
+source view, retaining managed elements and constructing a canonical layout.
+Executable e2e: `dynamic_array_e2e.mlir`, `array_project_e2e.mlir`,
+`dynamic_array_clone_e2e.mlir`, `dynamic_array_managed_e2e.mlir`, and
 `dynamic_array_create_rc_e2e.mlir`.
-Open backend halves: the `with_unique_view` clone branch (runtime-length copy),
-restride ops, and wiring the frontend
+Open backend halves: restride ops, and wiring the frontend
 codegen off its `err(…)`
 stubs.
 

@@ -1,5 +1,5 @@
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=ACQ2D --check-prefix=ACQ2DLOOP --check-prefix=UNROLL3 --check-prefix=DROP32
-// RUN: %reussir-opt %s --reussir-convert-to-std --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=CLONE
+// RUN: %reussir-opt %s --reussir-convert-to-std --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=CLONE --implicit-check-not=reussir.ref.spilled
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion --convert-scf-to-cf | %FileCheck %s --check-prefix=CF
 
 !elt = !reussir.rc<i64>
@@ -98,8 +98,11 @@ module {
   // CLONE: %[[CLONED_VIEW:.+]] = reussir.array.view(%[[DST_BORROW]]
   // CLONE: scf.for %[[IV:.+]] =
   // CLONE: %[[SOURCE_VIEW:.+]] = reussir.array.view(%[[SRC_BORROW]]
-  // CLONE: %[[ELEMENT:.+]] = memref.load %[[SOURCE_VIEW]][%[[IV]]]
+  // CLONE: %[[SLOT_VIEW:.+]] = memref.subview %[[SOURCE_VIEW]][%[[IV]]]
+  // CLONE: %[[SLOT:.+]] = reussir.ref.from_memref(%[[SLOT_VIEW]]
+  // CLONE: reussir.ref.load(%[[SLOT]]
   // CLONE: reussir.rc.inc
+  // CLONE: %[[ELEMENT:.+]] = memref.load %[[SOURCE_VIEW]][%[[IV]]]
   // CLONE: memref.store %[[ELEMENT]], %[[CLONED_VIEW]][%[[IV]]]
   // CLONE: }
   // CLONE: %[[COUNT:.+]] = reussir.rc.fetch(%arg0 : !reussir.rc<!reussir.array<2 x !reussir.rc<i64>>>) : index

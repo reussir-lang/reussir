@@ -1061,16 +1061,31 @@ struct ReussirArrayWithUniqueViewOpRewritePattern
       auto borrowedType = RefType::get(rewriter.getContext(), arrayType);
       auto srcRef =
           ReussirRcBorrowOp::create(rewriter, loc, borrowedType, op.getArray());
-      RcBoxType rcBoxType = RcBoxType::get(rewriter.getContext(), arrayType,
-                                           /*regional=*/false);
-      auto dataLayout = mlir::DataLayout::closest(op.getOperation());
-      TokenType tokenType = TokenType::get(
-          rewriter.getContext(), dataLayout.getTypeABIAlignment(rcBoxType),
-          dataLayout.getTypeSize(rcBoxType).getFixedValue());
-      auto token = ReussirTokenAllocOp::create(rewriter, loc, tokenType,
-                                  /*dynamicSize=*/mlir::Value());
+      llvm::SmallVector<mlir::Value> extents;
+      if (arrayType.hasDynamicShape()) {
+        auto srcView = ReussirArrayViewOp::create(
+            rewriter, loc, getArrayViewMemRefType(arrayType), srcRef);
+        for (auto [dim, extent] : llvm::enumerate(arrayType.getShape()))
+          if (mlir::ShapedType::isDynamic(extent))
+            extents.push_back(rewriter.createOrFold<mlir::memref::DimOp>(
+                loc, srcView, static_cast<int64_t>(dim)));
+      }
       auto cloned = ReussirArrayCreateOp::create(
-          rewriter, loc, rcType, token.getResult(), mlir::ValueRange{});
+          rewriter, loc, rcType, mlir::Value{}, extents);
+      // Clone expansion runs after token instantiation. Use the constructor's
+      // sizing interface so static and dynamic clones share its box layout.
+      {
+        mlir::OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPoint(cloned);
+        auto tokenType = cloned.getTokenType();
+        mlir::Value dynamicSize;
+        if (tokenType.isDynamicSize())
+          dynamicSize = cloned.buildTokenSize(rewriter);
+        auto token = ReussirTokenAllocOp::create(rewriter, loc, tokenType,
+                                                 dynamicSize);
+        rewriter.modifyOpInPlace(
+            cloned, [&] { cloned.getTokenMutable().assign(token.getToken()); });
+      }
       auto *body = rewriter.createBlock(
           &cloned.getBody(), {},
           llvm::SmallVector<mlir::Type>(arrayType.getRank(),
@@ -1079,17 +1094,30 @@ struct ReussirArrayWithUniqueViewOpRewritePattern
       {
         mlir::OpBuilder::InsertionGuard guard(rewriter);
         rewriter.setInsertionPointToStart(body);
-        auto srcView = ReussirArrayViewOp::create(
-            rewriter, loc, getArrayViewMemRefType(arrayType), srcRef);
-        auto element = mlir::memref::LoadOp::create(rewriter, loc, srcView,
-                                                    body->getArguments());
+        auto srcViewType = getArrayViewMemRefType(arrayType);
+        auto srcView =
+            ReussirArrayViewOp::create(rewriter, loc, srcViewType, srcRef);
         if (!isTriviallyCopyable(arrayType.getElementType())) {
-          auto elementRef = ReussirRefSpilledOp::create(
+          // The initializer indices select an in-bounds source slot. Acquire
+          // through that slot before loading the value for the clone.
+          llvm::SmallVector<mlir::OpFoldResult> offsets;
+          for (mlir::Value index : body->getArguments())
+            offsets.push_back(index);
+          llvm::SmallVector<mlir::OpFoldResult> ones(arrayType.getRank(),
+                                                     rewriter.getIndexAttr(1));
+          auto elementViewType =
+              mlir::memref::SubViewOp::inferRankReducedResultType(
+                  {}, srcViewType, offsets, ones, ones);
+          auto elementView = mlir::memref::SubViewOp::create(
+              rewriter, loc, elementViewType, srcView, offsets, ones, ones);
+          auto elementRef = ReussirRefFromMemrefOp::create(
               rewriter, loc,
               RefType::get(rewriter.getContext(), arrayType.getElementType()),
-              element);
+              elementView);
           ReussirRefAcquireOp::create(rewriter, loc, elementRef);
         }
+        auto element = mlir::memref::LoadOp::create(rewriter, loc, srcView,
+                                                    body->getArguments());
         ReussirScfYieldOp::create(rewriter, loc, element);
       }
       rewriter.setInsertionPointAfter(cloned);
