@@ -37,7 +37,7 @@ target_link_libraries(reussir-opt
 
 if(REUSSIR_ENABLE_OPENXLA)
   target_compile_definitions(reussir-opt PRIVATE REUSSIR_ENABLE_OPENXLA)
-  target_link_libraries(reussir-opt PRIVATE ReussirStablehlo)
+  target_link_libraries(reussir-opt PRIVATE ReussirStablehlo ReussirIfrt)
 endif()
 
 if (LLVM_VERSION VERSION_GREATER_EQUAL 22)

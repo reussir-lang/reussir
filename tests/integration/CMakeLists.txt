@@ -283,6 +283,10 @@ add_custom_target(check
           reussir-syntax reussir-lsp rrc rrepl rene
   USES_TERMINAL)
 
+if(REUSSIR_ENABLE_OPENXLA)
+  add_dependencies(check reussir-ifrt-translate)
+endif()
+
 # Rust compiler caches need an explicit content key for native archives. The
 # probe rebuilds a tiny archive at the same path and checks that the cached Rust
 # crate observes the new contents. Keep it in the normal check graph wherever

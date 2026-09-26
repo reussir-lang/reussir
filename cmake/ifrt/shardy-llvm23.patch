@@ -1,0 +1,14 @@
+--- a/shardy/dialect/sdy/ir/ops.td
++++ b/shardy/dialect/sdy/ir/ops.td
+@@ -35 +35 @@
+-    SymbolName, Symbol, HasParent<"ModuleOp">
++    Symbol, HasParent<"ModuleOp">
+@@ -56 +56 @@
+-          ::mlir::SymbolOpInterface::getDefaultVisibilityAttrName());
++          ::mlir::SymbolTable::getVisibilityAttrName());
+@@ -66 +66 @@
+-            ::mlir::SymbolOpInterface::getDefaultVisibilityAttrName());
++            ::mlir::SymbolTable::getVisibilityAttrName());
+@@ -73 +73 @@
+-          ::mlir::SymbolOpInterface::getDefaultVisibilityAttrName(),
++          ::mlir::SymbolTable::getVisibilityAttrName(),

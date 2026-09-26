@@ -301,6 +301,7 @@
             # Build orchestration
             pkgs.cmake
             pkgs.ninja
+            pkgs.bazel_8 # Optional IFRT tooling build
             pkgs.pkg-config
 
             # Compiler cache for C++ and rustc; CI points it at the shared S3

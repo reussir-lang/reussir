@@ -33,12 +33,14 @@
 
 #ifdef REUSSIR_ENABLE_OPENXLA
 void registerStablehloDialectsAndPasses(mlir::DialectRegistry &registry);
+void registerIfrtDialectsAndPasses(mlir::DialectRegistry &registry);
 #endif
 
 int main(int argc, char **argv) {
   mlir::DialectRegistry registry;
 #ifdef REUSSIR_ENABLE_OPENXLA
   registerStablehloDialectsAndPasses(registry);
+  registerIfrtDialectsAndPasses(registry);
 #endif
   mlir::registerAllDialects(registry);
   registry.insert<reussir::ReussirDialect>();

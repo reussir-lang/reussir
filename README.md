@@ -189,15 +189,19 @@ copied under `build/lib/`.
 
 ### Optional OpenXLA tooling
 
-To add StableHLO, CHLO, VHLO, and frontend transformation passes to `reussir-opt`:
+Enable StableHLO and IFRT together with one option:
 
 ```bash
 cmake -S . -B build -DREUSSIR_ENABLE_OPENXLA=ON
-cmake --build build --target reussir-opt
+cmake --build build --target reussir-opt reussir-ifrt-translate
 ```
 
-StableHLO builds against Reussir's LLVM/MLIR without fetching XLA or using Bazel.
-See [StableHLO build notes](docs/design/stablehlo-build.md).
+This adds StableHLO/CHLO/VHLO frontend passes and IFRT/VIFRT outlining and
+program serialization. The separate build targets use Reussir's LLVM/MLIR;
+IFRT requires Bazel and native Linux with Clang. Serialized artifacts contain
+portable IR; CPU/GPU compilation and execution are not wired yet.
+See the [StableHLO](docs/design/stablehlo-build.md) and
+[IFRT](docs/design/ifrt-build.md) build notes.
 
 ### 4. Typical local workflows
 

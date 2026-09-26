@@ -2,7 +2,9 @@
 
 `REUSSIR_ENABLE_OPENXLA=ON` adds StableHLO, CHLO, and VHLO dialects to
 `reussir-opt`, together with upstream frontend transformation, shape refinement,
-optimization, and version conversion passes. The option is disabled by default.
+optimization, and version conversion passes. The same option also enables
+[IFRT tooling](ifrt-build.md), including its Bazel and native Linux/Clang
+requirements. It is disabled by default.
 
 ```sh
 cmake -S . -B build -DREUSSIR_ENABLE_OPENXLA=ON
@@ -11,8 +13,9 @@ python3 tests/integration/lit build/tests/integration -v --filter 'stablehlo/'
 ```
 
 The `ReussirStablehlo` target uses StableHLO's embedded CMake build with the
-LLVM/MLIR selected by Reussir. It does not fetch XLA or require Bazel. The source
-archive is pinned to `b9029ac2228a12e176ea20e56f7d3dcb6bf8a019` and SHA-256 checked.
+LLVM/MLIR selected by Reussir. IFRT has a separate Bazel build target under
+the same OpenXLA option. The StableHLO source archive is pinned to
+`b9029ac2228a12e176ea20e56f7d3dcb6bf8a019` and SHA-256 checked.
 This revision builds against LLVM/MLIR 23.1.0; its upstream LLVM pin is a tested
 baseline, not an additional version check.
 
