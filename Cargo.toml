@@ -9,6 +9,7 @@ members = [
     "crates/reussir-backend-sys",
     "crates/reussir-backend",
     "crates/reussir-jit",
+    "crates/reussir-pjrt-sys",
     "crates/reussir-codegen",
     "crates/reussir-compiler",
     "crates/reussir-repl",
@@ -19,6 +20,7 @@ members = [
 # MLIR and the staged Reussir C API, so they are excluded from the default
 # `cargo build`; build them explicitly (e.g. `cargo build -p reussir-backend`
 # or `cargo build -p reussir-codegen`) with the CMake build wiring up the env.
+# reussir-pjrt-sys is also explicit: bindgen requires libclang to build it.
 default-members = [
     "crates/reussir-rt",
     "crates/reussir-syntax",
@@ -35,6 +37,9 @@ edition = "2024"
 license = "(Apache-2.0 OR MIT)"
 
 [workspace.dependencies]
+bindgen = "0.72.1"
+libloading = "0.8.9"
+paste = "1"
 # The builtin_traits! registration DSL (reussir-trait-dsl) parses with syn and
 # emits with quote; heck snake_cases trait names into Builtins field names.
 proc-macro2 = "1"

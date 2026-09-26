@@ -3465,6 +3465,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "reussir-pjrt-sys"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "libloading",
+ "paste",
+]
+
+[[package]]
 name = "reussir-repl"
 version = "0.1.0"
 dependencies = [
