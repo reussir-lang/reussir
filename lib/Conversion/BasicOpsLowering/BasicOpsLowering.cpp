@@ -3972,10 +3972,13 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirStrUnsafeMemcmpOp, ReussirTrampolineOp, ReussirTokenLaunderOp>();
     target.addDynamicallyLegalOp<ReussirArrayCreateOp>(
         [](ReussirArrayCreateOp op) {
-          return !isTargetArrayType(op.getRcPtr().getType().getElementType());
+          return !llvm::cast<ArrayType>(op.getRcPtr().getType().getElementType())
+                      .hasTargetAttr();
         });
     target.addDynamicallyLegalOp<ReussirRefDropOp>([](ReussirRefDropOp op) {
-      return !isTargetArrayType(op.getRef().getType().getElementType());
+      auto arrayType =
+          llvm::dyn_cast<ArrayType>(op.getRef().getType().getElementType());
+      return !(arrayType && arrayType.hasTargetAttr());
     });
     // `reussir.closure.wpd_test` is created BY the dispatch conversion
     // patterns above, already in its final form (operand = the loaded vtable

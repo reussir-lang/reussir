@@ -677,6 +677,7 @@ def ReussirArrayType
     mlir::Type getElementType() const { return getEleTy(); }
     bool hasRank() const { return true; }
     bool hasDynamicShape() const { return !hasStaticShape(); }
+    bool hasTargetAttr() const { return static_cast<bool>(getTarget()); }
     ArrayType cloneWith(std::optional<llvm::ArrayRef<int64_t>> shape,
                         mlir::Type elementType) const;
     size_t getRank() const { return getShape().size(); }

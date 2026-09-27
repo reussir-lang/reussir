@@ -333,12 +333,11 @@ struct DropTargetArray : mlir::ConvertOpToLLVMPattern<ReussirRefDropOp> {
   mlir::LogicalResult
   matchAndRewrite(ReussirRefDropOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    if (!isTargetArrayType(op.getRef().getType().getElementType()))
+    auto arrayType =
+        llvm::dyn_cast<ArrayType>(op.getRef().getType().getElementType());
+    if (!arrayType || !arrayType.hasTargetAttr())
       return mlir::failure();
-    if (mlir::failed(dropAllocation(
-            op, adaptor.getRef(),
-            llvm::cast<ArrayType>(op.getRef().getType().getElementType()),
-            rewriter)))
+    if (mlir::failed(dropAllocation(op, adaptor.getRef(), arrayType, rewriter)))
       return mlir::failure();
     rewriter.eraseOp(op);
     return mlir::success();
@@ -351,7 +350,8 @@ struct ReleaseTargetArray : mlir::ConvertOpToLLVMPattern<ReussirRcDecOp> {
   matchAndRewrite(ReussirRcDecOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
     auto rcType = op.getRcPtr().getType();
-    if (!isTargetArrayType(rcType.getElementType()))
+    auto arrayType = llvm::dyn_cast<ArrayType>(rcType.getElementType());
+    if (!arrayType || !arrayType.hasTargetAttr())
       return mlir::failure();
     auto loc = op.getLoc();
     auto ptrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
@@ -388,9 +388,7 @@ struct ReleaseTargetArray : mlir::ConvertOpToLLVMPattern<ReussirRcDecOp> {
         rewriter, loc, ptrType,
         getTypeConverter()->convertType(rcType.getInnerBoxType()),
         adaptor.getRcPtr(), llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
-    if (mlir::failed(dropAllocation(
-            op, descriptor, llvm::cast<ArrayType>(rcType.getElementType()),
-            rewriter)))
+    if (mlir::failed(dropAllocation(op, descriptor, arrayType, rewriter)))
       return mlir::failure();
     mlir::LLVM::CallOp::create(rewriter, loc, *free,
                                mlir::ValueRange{adaptor.getRcPtr()});

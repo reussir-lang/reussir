@@ -148,7 +148,7 @@ static mlir::LogicalResult verifyArrayViewType(mlir::Operation *op,
                                                mlir::Type type,
                                                ArrayType arrayType,
                                                llvm::StringRef valueName) {
-  if (arrayType.getTarget())
+  if (arrayType.hasTargetAttr())
     return op->emitOpError(
         "target arrays cannot expose a host memref or tensor view");
   if (auto memrefType = llvm::dyn_cast<mlir::MemRefType>(type)) {
@@ -488,7 +488,8 @@ mlir::LogicalResult ReussirRcSetOp::verify() {
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRcReinterpretOp::verify() {
   RcType rcType = getRcPtr().getType();
-  if (isTargetArrayType(rcType.getElementType()))
+  if (auto arrayType = llvm::dyn_cast<ArrayType>(rcType.getElementType());
+      arrayType && arrayType.hasTargetAttr())
     return emitOpError("target arrays cannot produce allocation tokens");
   TokenType tokenType = getReinterpreted().getType();
 
@@ -684,10 +685,11 @@ mlir::LogicalResult ReussirRcDecOp::verify() {
 //===----------------------------------------------------------------------===//
 bool ReussirRcDecOp::shouldProduceToken() {
   RcType rcType = getRcPtr().getType();
+  auto arrayType = llvm::dyn_cast<ArrayType>(rcType.getElementType());
   // Only shared capability RC pointers produce tokens
   return rcType.getCapability() == reussir::Capability::shared &&
          !mlir::isa<FFIObjectType, ClosureType>(rcType.getElementType()) &&
-         !isTargetArrayType(rcType.getElementType());
+         !(arrayType && arrayType.hasTargetAttr());
 }
 
 //===----------------------------------------------------------------------===//
@@ -1405,7 +1407,7 @@ static mlir::LogicalResult verifyArrayConstruction(mlir::Operation *op,
   auto arrayType = llvm::cast<ArrayType>(rcType.getElementType());
   if (rcType.getCapability() != Capability::shared)
     return op->emitOpError("requires a shared array result");
-  if (arrayType.getTarget() && token)
+  if (arrayType.hasTargetAttr() && token)
     return op->emitOpError("target arrays do not accept allocation tokens");
   if (mlir::failed(verifyFixedArrayElementSize(op, arrayType)))
     return mlir::failure();
@@ -1437,7 +1439,7 @@ mlir::LogicalResult ReussirArrayCreateOp::verify() {
   if (getBody().empty())
     return mlir::success();
   auto arrayType = llvm::cast<ArrayType>(getRcPtr().getType().getElementType());
-  if (arrayType.getTarget())
+  if (arrayType.hasTargetAttr())
     return emitOpError("target arrays do not support host initializer bodies");
   auto &block = getBody().front();
   if (block.getNumArguments() != static_cast<size_t>(arrayType.getRank()) ||
@@ -1546,7 +1548,8 @@ TokenType ReussirArrayCreateOp::getTokenType() {
 }
 
 bool ReussirArrayCreateOp::shouldAcceptToken() {
-  return !isTargetArrayType(getRcPtr().getType().getElementType());
+  return !llvm::cast<ArrayType>(getRcPtr().getType().getElementType())
+              .hasTargetAttr();
 }
 
 mlir::Value ReussirArrayCreateOp::buildTokenSize(mlir::OpBuilder &builder) {
@@ -1563,17 +1566,17 @@ ReussirArrayInstantiateOp::buildTokenSize(mlir::OpBuilder &builder) {
 }
 
 mlir::LogicalResult ReussirArrayInstantiateOp::verify() {
-  if (isTargetArrayType(getRcPtr().getType().getElementType()))
+  if (llvm::cast<ArrayType>(getRcPtr().getType().getElementType()).hasTargetAttr())
     return emitOpError("target arrays must be constructed with array.create");
   return verifyArrayConstruction(getOperation(), getRcPtr().getType(),
                                  getExtents(), getToken());
 }
 
 mlir::LogicalResult ReussirArrayFillPatternOp::verify() {
-  if (isTargetArrayType(getRef().getType().getElementType()))
-    return emitOpError("target arrays cannot be filled through host memory");
   auto arrayType =
       llvm::dyn_cast<ArrayType>(getRef().getType().getElementType());
+  if (arrayType && arrayType.hasTargetAttr())
+    return emitOpError("target arrays cannot be filled through host memory");
   if (!arrayType || getInit().getType() != arrayType.getElementType())
     return emitOpError("requires an array reference and matching element type");
   if (mlir::failed(verifyFixedArrayElementSize(getOperation(), arrayType)))
@@ -2152,7 +2155,8 @@ mlir::LogicalResult ReussirRefProjectOp::verify() {
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRefSpilledOp::verify() {
   mlir::Type valueType = getValue().getType();
-  if (isTargetArrayType(valueType))
+  if (auto arrayType = llvm::dyn_cast<ArrayType>(valueType);
+      arrayType && arrayType.hasTargetAttr())
     return emitOpError("target arrays must remain RC wrapped");
   RefType refType = getSpilled().getType();
   if (valueType != refType.getElementType())
@@ -2197,7 +2201,8 @@ mlir::LogicalResult ReussirRefFromMemrefOp::verify() {
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRefLoadOp::verify() {
   RefType refType = getRef().getType();
-  if (isTargetArrayType(refType.getElementType()))
+  if (auto arrayType = llvm::dyn_cast<ArrayType>(refType.getElementType());
+      arrayType && arrayType.hasTargetAttr())
     return emitOpError("target arrays must remain RC wrapped");
   mlir::Type valueType = getValue().getType();
   if (valueType != refType.getElementType())
@@ -2212,7 +2217,8 @@ mlir::LogicalResult ReussirRefLoadOp::verify() {
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRefStoreOp::verify() {
   RefType refType = getRef().getType();
-  if (isTargetArrayType(refType.getElementType()))
+  if (auto arrayType = llvm::dyn_cast<ArrayType>(refType.getElementType());
+      arrayType && arrayType.hasTargetAttr())
     return emitOpError("target arrays must remain RC wrapped");
   mlir::Type valueType = getValue().getType();
 
@@ -2260,7 +2266,8 @@ mlir::LogicalResult ReussirRefCmpXchgOp::verify() {
 mlir::LogicalResult ReussirRefMemcpyOp::verify() {
   RefType srcType = getSrc().getType();
   RefType dstType = getDst().getType();
-  if (isTargetArrayType(srcType.getElementType()))
+  if (auto arrayType = llvm::dyn_cast<ArrayType>(srcType.getElementType());
+      arrayType && arrayType.hasTargetAttr())
     return emitOpError("target array descriptors cannot be copied");
 
   // Check that element types are identical
@@ -3415,7 +3422,9 @@ mlir::LogicalResult ReussirRefDropOp::verify() {
 // Reussir Reference Acquire Op
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRefAcquireOp::verify() {
-  if (isTargetArrayType(getRef().getType().getElementType()))
+  if (auto arrayType =
+          llvm::dyn_cast<ArrayType>(getRef().getType().getElementType());
+      arrayType && arrayType.hasTargetAttr())
     return emitOpError(
         "target array ownership must be acquired through its RC wrapper");
   if (mlir::failed(verifyNonnegativeCount(getOperation(), getDelta(),

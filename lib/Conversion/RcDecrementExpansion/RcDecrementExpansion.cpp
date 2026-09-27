@@ -63,11 +63,12 @@ struct RcDecrementExpansionPattern
   matchAndRewrite(ReussirRcDecOp op,
                   mlir::PatternRewriter &rewriter) const override {
     RcType type = op.getRcPtr().getType();
+    auto arrayType = llvm::dyn_cast<ArrayType>(type.getElementType());
     // No need to proceed if dec operation is applied to a rigid type.
     // Also delay the FFI object type clean up until basic ops lowering pass.
     if (type.getCapability() == Capability::rigid ||
         mlir::isa<FFIObjectType, ClosureType>(type.getElementType()) ||
-        isTargetArrayType(type.getElementType()))
+        (arrayType && arrayType.hasTargetAttr()))
       return mlir::failure();
 
     // An atomic box decrements with one acquire-release `rc.fetch_sub`

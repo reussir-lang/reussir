@@ -329,7 +329,7 @@ void populateReussirToLLVMTypeConversions(mlir::LLVMTypeConverter &converter) {
   });
 
   converter.addConversion([&converter](ArrayType type) -> mlir::Type {
-    if (type.getTarget()) {
+    if (type.hasTargetAttr()) {
       llvm::SmallVector<mlir::Type> members;
       if (mlir::failed(
               converter.convertTypes(type.getDescriptorTypes(), members)))
