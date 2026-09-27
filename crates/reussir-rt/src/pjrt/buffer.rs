@@ -8,6 +8,7 @@ use super::{
     Result,
     api::{Event, call, non_null},
     context,
+    layout::Allocation,
     sys::*,
 };
 
@@ -22,19 +23,36 @@ impl Buffer {
         self.0.as_ptr()
     }
 
-    /// Allocate uninitialized storage in the device's default memory. Backends
+    /// Allocate uninitialized storage with the requested memory and layout. Backends
     /// without this operation return their `UNIMPLEMENTED` status.
     pub(super) fn allocate(
         device: usize,
         element_type: PJRT_Buffer_Type,
         dims: &[i64],
+        allocation: Allocation<'_>,
     ) -> Result<Self> {
         let context = context::get()?;
+        let device_handle = context.device(device)?;
+        let memory = allocation
+            .memory_kind
+            .map(|kind| device_handle.memory(context.api, kind))
+            .transpose()?;
+        let mut layout = allocation.layout.as_ref().map(|layout| layout.as_pjrt());
         let args = call!(
             context.api,
             PJRT_Client_CreateUninitializedBuffer {
                 client: context.client.as_ptr(),
-                device: context.device(device)?.as_ptr(),
+                // The upstream wrapper prefers device-default memory whenever
+                // device is non-null, even if memory is also supplied.
+                device: if memory.is_some() {
+                    std::ptr::null_mut()
+                } else {
+                    device_handle.as_ptr()
+                },
+                memory: memory.map_or(std::ptr::null_mut(), |memory| memory.as_ptr()),
+                shape_layout: layout
+                    .as_mut()
+                    .map_or(std::ptr::null_mut(), std::ptr::from_mut),
                 shape_element_type: element_type,
                 shape_dims: dims.as_ptr(),
                 shape_num_dims: dims.len(),
@@ -46,6 +64,7 @@ impl Buffer {
             device,
             element_type,
             ?dims,
+            ?memory,
             "allocated PjRt buffer"
         );
         Ok(buffer)
@@ -166,18 +185,50 @@ mod tests {
     #[test]
     #[ignore = "requires REUSSIR_PJRT_PLUGIN pointing to a trusted CPU plugin"]
     fn allocation_and_transfer_errors() {
-        match Buffer::allocate(0, PJRT_Buffer_Type_PJRT_Buffer_Type_F32, &[2, 4]) {
-            Ok(buffer) => unsafe {
-                buffer.wait_ready().unwrap();
-                assert_eq!(buffer.host_size().unwrap(), 32);
-                buffer.deallocate().unwrap();
+        for allocation in [
+            Allocation::default(),
+            Allocation {
+                memory_kind: Some(b"device"),
+                layout: Some(super::super::layout::Layout::new(&[0, 1], &[], &[]).unwrap()),
             },
-            Err(error) => assert_eq!(
-                error.code,
-                Some(PJRT_Error_Code_PJRT_Error_Code_UNIMPLEMENTED)
-            ),
+        ] {
+            match Buffer::allocate(
+                0,
+                PJRT_Buffer_Type_PJRT_Buffer_Type_F32,
+                &[2, 4],
+                allocation,
+            ) {
+                Ok(buffer) => unsafe {
+                    buffer.wait_ready().unwrap();
+                    assert_eq!(buffer.host_size().unwrap(), 32);
+                    buffer.deallocate().unwrap();
+                },
+                Err(error) => assert_eq!(
+                    error.code,
+                    Some(PJRT_Error_Code_PJRT_Error_Code_UNIMPLEMENTED)
+                ),
+            }
         }
-        assert!(Buffer::allocate(usize::MAX, PJRT_Buffer_Type_PJRT_Buffer_Type_F32, &[1]).is_err());
+        let missing_memory = Buffer::allocate(
+            0,
+            PJRT_Buffer_Type_PJRT_Buffer_Type_F32,
+            &[2, 4],
+            Allocation {
+                memory_kind: Some(b"missing-memory-kind"),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(missing_memory.message.contains("no memory kind"));
+        assert!(
+            Buffer::allocate(
+                usize::MAX,
+                PJRT_Buffer_Type_PJRT_Buffer_Type_F32,
+                &[1],
+                Allocation::default()
+            )
+            .is_err()
+        );
         let value = 3.0f32;
         // An upstream error leaves the same buffer usable for a valid transfer.
         unsafe {

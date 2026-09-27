@@ -8,8 +8,10 @@
 //! Calls and destruction of the same array must not race. The runtime owns
 //! the context; generated code never carries or manages a context handle.
 //! Device indices select addressable devices;
-//! element types are PJRT_Buffer_Type values. Shapes and host data are dense
-//! major-to-minor arrays in default device memory, with nonnegative dimensions.
+//! element types are PJRT_Buffer_Type values. Shapes use logical dimension order
+//! with nonnegative extents; host data uses dense major-to-minor order. Allocation
+//! accepts optional memory-kind and tiled-layout metadata; upload uses
+//! device-default memory.
 //! Dimensions may be null only for rank-zero shapes.
 //!
 //! The runtime loads `REUSSIR_PJRT_PLUGIN` once on first use. Allocation leaves
@@ -20,7 +22,59 @@
 
 use std::{ffi::c_void, slice};
 
-use super::{Buffer, Result};
+use super::{
+    Buffer, Result,
+    layout::{Allocation, Layout},
+};
+
+/// Optional allocation metadata borrowed for the duration of the call.
+/// A null memory_kind selects device-default memory. A null minor_to_major
+/// selects the backend's default layout; otherwise it points to rank indices.
+/// tile_dim_sizes has num_tiles entries; tile_dims concatenates those tiles.
+#[repr(C)]
+#[derive(Default)]
+pub struct AllocationOptions {
+    pub memory_kind: *const u8,
+    pub memory_kind_size: usize,
+    pub minor_to_major: *const i64,
+    pub tile_dims: *const i64,
+    pub tile_dim_sizes: *const usize,
+    pub num_tiles: usize,
+}
+
+impl AllocationOptions {
+    // The compiler supplies valid, live arrays with the documented lengths.
+    unsafe fn allocation(&self, rank: usize) -> Result<Allocation<'_>> {
+        let memory_kind = if self.memory_kind.is_null() {
+            None
+        } else {
+            Some(unsafe { slice::from_raw_parts(self.memory_kind, self.memory_kind_size) })
+        };
+        let layout = if self.minor_to_major.is_null() {
+            None
+        } else {
+            let sizes = if self.num_tiles == 0 {
+                &[]
+            } else {
+                unsafe { slice::from_raw_parts(self.tile_dim_sizes, self.num_tiles) }
+            };
+            let count = sizes
+                .iter()
+                .try_fold(0usize, |n, &size| n.checked_add(size))
+                .ok_or_else(|| super::Error::local("PjRt tile dimension count overflow"))?;
+            let tiles = unsafe { dimensions(self.tile_dims, count) };
+            Some(Layout::new(
+                unsafe { dimensions(self.minor_to_major, rank) },
+                tiles,
+                sizes,
+            )?)
+        };
+        Ok(Allocation {
+            memory_kind,
+            layout,
+        })
+    }
+}
 
 fn checked<T>(result: Result<T>) -> T {
     result.unwrap_or_else(|error| unsafe {
@@ -43,10 +97,18 @@ pub unsafe extern "C" fn __reussir_pjrt_array_allocate(
     element_type: u32,
     dims: *const i64,
     rank: usize,
+    options: *const AllocationOptions,
 ) -> Buffer {
-    checked(Buffer::allocate(device, element_type, unsafe {
-        dimensions(dims, rank)
-    }))
+    let allocation = match unsafe { options.as_ref() } {
+        Some(options) => checked(unsafe { options.allocation(rank) }),
+        None => Allocation::default(),
+    };
+    checked(Buffer::allocate(
+        device,
+        element_type,
+        unsafe { dimensions(dims, rank) },
+        allocation,
+    ))
 }
 
 #[unsafe(no_mangle)]

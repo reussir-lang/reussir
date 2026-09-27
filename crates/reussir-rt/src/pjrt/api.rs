@@ -60,6 +60,8 @@ impl Api {
             PJRT_Client_Create,
             PJRT_Client_Destroy,
             PJRT_Client_AddressableDevices,
+            PJRT_Device_AddressableMemories,
+            PJRT_Memory_Kind,
             PJRT_Client_CreateUninitializedBuffer,
             PJRT_Client_BufferFromHostBuffer,
             PJRT_Buffer_Destroy,
