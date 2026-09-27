@@ -14,7 +14,19 @@ cc_library(
 
 cc_static_library(
     name = "reussir_ifrt",
-    deps = [":reussir_registration", ":reussir_translate"],
+    deps = [":reussir_registration", ":reussir_translate", ":reussir_array_target"],
+)
+
+cc_library(
+    name = "reussir_array_target",
+    srcs = ["reussir_array_target.cc"],
+    hdrs = ["reussir_target.h"],
+    deps = [
+        ":ir",
+        "//xla:shape_util",
+        "//xla/pjrt:layout_mode",
+        "@llvm-project//mlir:IR",
+    ],
 )
 
 # Only the registration archive is needed; a Bazel shared-library link would

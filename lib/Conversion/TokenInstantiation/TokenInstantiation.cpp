@@ -48,7 +48,7 @@ struct TokenInstantiationPattern : public mlir::RewritePattern {
                   mlir::PatternRewriter &rewriter) const override {
     // Check if this operation implements TokenAcceptor interface
     auto tokenAcceptor = dyn_cast<TokenAcceptor>(op);
-    if (!tokenAcceptor)
+    if (!tokenAcceptor || !tokenAcceptor.shouldAcceptToken())
       return mlir::failure();
 
     // Skip if already has a token

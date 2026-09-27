@@ -34,6 +34,8 @@ namespace reussir {
 
 void populateBasicOpsLoweringToLLVMConversionPatterns(
     mlir::LLVMTypeConverter &converter, mlir::RewritePatternSet &patterns);
+void populateTargetArrayLoweringPatterns(mlir::LLVMTypeConverter &converter,
+                                         mlir::RewritePatternSet &patterns);
 
 void registerReussirBasicOpsLoweringInterface(mlir::DialectRegistry &registry);
 

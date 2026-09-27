@@ -72,6 +72,46 @@ TEST_F(ReussirTest, ArrayRejectsRankZero) {
                                      mlir::Type(i32Type)));
 }
 
+TEST_F(ReussirTest, TargetArrayDescriptorLayout) {
+  for (std::string_view spelling :
+       {"!reussir.array<1024 x 4096 x f32, #reussir.target<devices = [0]>>",
+        "!reussir.array<? x 4 x ? x f32, #reussir.target<devices = [0]>>",
+        "!reussir.array<? x 4 x f32, #reussir.target<devices = [3, 1, 2, "
+        "0]>>"}) {
+    withType<ArrayType>(
+        SIMPLE_LAYOUT, spelling, [](mlir::ModuleOp module, ArrayType type) {
+          mlir::DataLayout layout(module);
+          mlir::LLVMTypeConverter converter(module.getContext());
+          populateReussirToLLVMTypeConversions(converter);
+          auto box = RcBoxType::get(module.getContext(), type);
+          auto descriptor = llvm::cast<mlir::LLVM::LLVMStructType>(
+              converter.convertType(type));
+          EXPECT_EQ(descriptor.getBody().size(), 2u + type.getNumDynamicDims());
+          size_t devices = type.getTarget().getDevices().size();
+          if (devices == 1)
+            EXPECT_TRUE(llvm::isa<mlir::LLVM::LLVMPointerType>(
+                descriptor.getBody()[0]));
+          else
+            EXPECT_EQ(
+                llvm::cast<mlir::LLVM::LLVMArrayType>(descriptor.getBody()[0])
+                    .getNumElements(),
+                devices);
+          EXPECT_EQ(layout.getTypeSize(type),
+                    8 * (devices + 1 + type.getNumDynamicDims()));
+          EXPECT_EQ(layout.getTypeSize(box),
+                    8 * (devices + 2 + type.getNumDynamicDims()));
+          EXPECT_EQ(layout.getTypeSize(box),
+                    layout.getTypeSize(converter.convertType(box)));
+          EXPECT_FALSE(box.hasDynamicArrayPayload());
+          EXPECT_FALSE(isTriviallyCopyable(type));
+          EXPECT_EQ(type.dropFront().getTarget(), type.getTarget());
+          EXPECT_EQ(
+              type.cloneWith(std::nullopt, type.getElementType()).getTarget(),
+              type.getTarget());
+        });
+  }
+}
+
 TEST_F(ReussirTest, ValueRecordsAreMemRefElements) {
   for (std::string_view spelling :
        {R"(!reussir.record<compound "MemRefPair" [value] {i32, i64}>)",

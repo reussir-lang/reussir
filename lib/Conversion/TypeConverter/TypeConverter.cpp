@@ -329,6 +329,13 @@ void populateReussirToLLVMTypeConversions(mlir::LLVMTypeConverter &converter) {
   });
 
   converter.addConversion([&converter](ArrayType type) -> mlir::Type {
+    if (type.getTarget()) {
+      llvm::SmallVector<mlir::Type> members;
+      if (mlir::failed(
+              converter.convertTypes(type.getDescriptorTypes(), members)))
+        return {};
+      return mlir::LLVM::LLVMStructType::getLiteral(type.getContext(), members);
+    }
     // Dynamic arrays must not reach LLVM lowering as concrete values.
     if (type.hasDynamicShape())
       return {};

@@ -89,6 +89,9 @@ def main():
           (args.xla / package / "BUILD").read_text() + "\n" +
           (adapter / "ir.BUILD").read_text())
     copy(adapter / "Register.cpp", workspace / "xla/python/ifrt/ir/reussir_registration.cc")
+    copy(adapter / "ArrayTarget.cpp", workspace / package / "reussir_array_target.cc")
+    copy(adapter.parent.parent / "include/Reussir/Conversion/OpenXLATarget.h",
+         workspace / package / "reussir_target.h")
     driver = (args.xla / package / "tests/ifrt-translate.cc").read_text()
     entry = "int main(int argc, char** argv)"
     if driver.count(entry) != 1:

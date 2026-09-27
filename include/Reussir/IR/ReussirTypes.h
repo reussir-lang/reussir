@@ -40,6 +40,7 @@ deriveCompoundSizeAndAlignment(mlir::MLIRContext *context,
                                bool memBoxInternal = false);
 bool isNonNullPointerType(mlir::Type type);
 bool isTriviallyCopyable(mlir::Type type);
+bool isTargetArrayType(mlir::Type type);
 // Checks that `eleTy` is eligible for atomic accesses: a byte-addressable,
 // power-of-two-width signless integer or floating-point primitive. `what`
 // names the checked entity in diagnostics (e.g. "atomic cell element").

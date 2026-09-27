@@ -34,6 +34,13 @@ def TokenAcceptorInterface : OpInterface<"TokenAcceptor"> {
 
   let methods =
       [InterfaceMethod<
+           /*desc=*/"Whether this operation's storage supports allocation tokens.",
+           /*retTy=*/"bool",
+           /*methodName=*/"shouldAcceptToken",
+           /*args=*/(ins),
+           /*methodBody=*/"",
+           /*defaultImplementation=*/[{ return true; }]>,
+       InterfaceMethod<
            /*desc=*/"Get the expected token type for this operation.",
            /*retTy=*/"::reussir::TokenType",
            /*methodName=*/"getTokenType",

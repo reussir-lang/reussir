@@ -3970,6 +3970,13 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirStrCastOp, ReussirStrLenOp, ReussirStrUnsafeByteAtOp,
         ReussirStrUnsafeStartWithOp, ReussirStrSliceOp, ReussirStrRefEqOp,
         ReussirStrUnsafeMemcmpOp, ReussirTrampolineOp, ReussirTokenLaunderOp>();
+    target.addDynamicallyLegalOp<ReussirArrayCreateOp>(
+        [](ReussirArrayCreateOp op) {
+          return !isTargetArrayType(op.getRcPtr().getType().getElementType());
+        });
+    target.addDynamicallyLegalOp<ReussirRefDropOp>([](ReussirRefDropOp op) {
+      return !isTargetArrayType(op.getRef().getType().getElementType());
+    });
     // `reussir.closure.wpd_test` is created BY the dispatch conversion
     // patterns above, already in its final form (operand = the loaded vtable
     // pointer), and must survive conversion: the LLVM dialect cannot express
@@ -4082,6 +4089,7 @@ void registerReussirBasicOpsLoweringInterface(mlir::DialectRegistry &registry) {
 
 void populateBasicOpsLoweringToLLVMConversionPatterns(
     mlir::LLVMTypeConverter &converter, mlir::RewritePatternSet &patterns) {
+  populateTargetArrayLoweringPatterns(converter, patterns);
   patterns.add<
       ReussirExpectConversionPattern, ReussirCctxEmptyConversionPattern,
       ReussirCctxExtendConversionPattern, ReussirCctxApplyConversionPattern,

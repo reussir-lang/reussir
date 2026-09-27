@@ -66,7 +66,8 @@ struct RcDecrementExpansionPattern
     // No need to proceed if dec operation is applied to a rigid type.
     // Also delay the FFI object type clean up until basic ops lowering pass.
     if (type.getCapability() == Capability::rigid ||
-        mlir::isa<FFIObjectType, ClosureType>(type.getElementType()))
+        mlir::isa<FFIObjectType, ClosureType>(type.getElementType()) ||
+        isTargetArrayType(type.getElementType()))
       return mlir::failure();
 
     // An atomic box decrements with one acquire-release `rc.fetch_sub`

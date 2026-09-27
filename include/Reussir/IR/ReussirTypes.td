@@ -572,7 +572,7 @@ def ReussirRcBoxType
     // LLVM type conversion.
     llvm::SmallVector<mlir::Type> getHeaderTypes() const;
     size_t getElementIndex() const { return getHeaderTypes().size(); }
-    // Whether the payload is a dynamic-extent array: the box then carries
+    // Whether the payload is a host dynamic-extent array: the box then carries
     // the full strided-memref encoding in its header —
     // `{ i32 count | index offset | index size[r] | index stride[r] | payload }`
     // (padding per the data layout; the two descriptor pointers are derived
@@ -642,13 +642,35 @@ def ReussirArrayType
     : ReussirType<"Array", "array",
                   [DeclareTypeInterfaceMethods<DataLayoutTypeInterface>,
                    ShapedTypeInterface]> {
-  let summary = "Reussir fixed-size inline array type";
+  let summary = "Reussir array payload type";
   let description = [{
-    `reussir.array` represents a statically shaped inline array payload.
-    This is the payload type wrapped by `!reussir.rc<...>` for managed arrays.
+    `reussir.array` is the payload type wrapped by `!reussir.rc<...>` for
+    managed arrays. A `#reussir.target` annotation selects device storage:
+    the RC box holds one allocation handle per device, an element offset, and
+    dynamic extents. Static extents and layout metadata remain in the type.
+    Device allocations are released when the last RC owner drops.
+
+    For example, `!reussir.rc<!reussir.array<? x 4 x f32,
+    #reussir.target<devices = [0]>>>` owns an external allocation and stores
+    only its dynamic first extent alongside the handle and offset. Device IDs
+    select the runtime's addressable device indices (identity assignment).
+    Allocation resolves memory kinds through each device and passes concrete
+    XLA layouts, including tiles, through to PjRt. IFRT sharding parameters
+    determine per-device shapes; dynamic extents must divide evenly by their
+    shard counts. Sharded arrays store their handles inline in device-list order.
+    Explicit layouts and IFRT sharding require `REUSSIR_ENABLE_OPENXLA`.
+    Unspecified multi-device sharding and `auto` layouts must be resolved before
+    allocation. Target arrays cannot use allocation tokens or host element
+    views. Executables using them must link
+    `reussir-rt` with its `pjrt` Cargo feature enabled.
   }];
   let parameters = (ins ArrayRefParameter<"int64_t">:$shape,
-      "mlir::Type":$eleTy);
+      "mlir::Type":$eleTy,
+      OptionalParameter<"::reussir::TargetAttr">:$target);
+  let builders = [TypeBuilder<(ins "llvm::ArrayRef<int64_t>":$shape,
+                                  "mlir::Type":$eleTy), [{
+    return $_get($_ctxt, shape, eleTy, ::reussir::TargetAttr{});
+  }]>];
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;
   let extraClassDeclaration = [{
@@ -659,6 +681,10 @@ def ReussirArrayType
                         mlir::Type elementType) const;
     size_t getRank() const { return getShape().size(); }
     ArrayType dropFront() const;
+    static constexpr unsigned ALLOCATION_INDEX = 0;
+    static constexpr unsigned OFFSET_INDEX = 1;
+    static constexpr unsigned DYNAMIC_EXTENTS_INDEX = 2;
+    llvm::SmallVector<mlir::Type> getDescriptorTypes() const;
   }];
 }
 

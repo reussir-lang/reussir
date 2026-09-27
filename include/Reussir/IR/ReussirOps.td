@@ -1060,7 +1060,7 @@ def ReussirArrayCreateOp
                          ["getLoopInductionVars", "getLoopLowerBounds",
                           "getLoopUpperBounds", "getLoopSteps"]>,
                      DeclareOpInterfaceMethods<TokenAcceptorInterface,
-                                               ["buildTokenSize"]>]> {
+                                               ["buildTokenSize", "shouldAcceptToken"]>]> {
   let summary = "Create an RC array with an optional element initializer region";
   let description = [{
     Creates a shared array with reference count one. The initializer body
@@ -1074,6 +1074,10 @@ def ReussirArrayCreateOp
     storage. The caller must initialize the payload before reading or
     releasing the array. This form supports destination-passing kernels
     that initialize the elements through a mutable view.
+
+    Target-annotated arrays allocate device storage through the runtime and
+    initialize an RC-wrapped handle descriptor. They do not accept tokens or
+    initializer bodies; their elements are initialized by device operations.
   }];
   let arguments = (ins Optional<ReussirTokenType>:$token,
       Variadic<Index>:$extents);

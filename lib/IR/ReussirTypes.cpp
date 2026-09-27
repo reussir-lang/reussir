@@ -226,7 +226,8 @@ bool isTriviallyCopyable(mlir::Type type) {
         return isTriviallyCopyable(nullableType.getPtrTy());
       })
       .Case<ArrayType>([](ArrayType arrayType) {
-        return isTriviallyCopyable(arrayType.getElementType());
+        return !arrayType.getTarget() &&
+               isTriviallyCopyable(arrayType.getElementType());
       })
       .Case<CellType>([](CellType cellType) {
         return isTriviallyCopyable(cellType.getElementType());
@@ -259,6 +260,10 @@ bool isTriviallyCopyable(mlir::Type type) {
       // Default: check if it's a built-in MLIR type that might be trivially
       // copyable
       .Default([](mlir::Type type) { return false; });
+}
+bool isTargetArrayType(mlir::Type type) {
+  auto arrayType = llvm::dyn_cast<ArrayType>(type);
+  return arrayType && arrayType.getTarget();
 }
 //===----------------------------------------------------------------------===//
 // memberStorageType
@@ -680,7 +685,7 @@ llvm::SmallVector<mlir::Type> RcBoxType::getHeaderTypes() const {
   // pointer: offset, then one size and one stride per dimension, all
   // index-typed so the width follows the target's data layout.
   if (auto arrayTy = llvm::dyn_cast<ArrayType>(getEleTy());
-      arrayTy && arrayTy.hasDynamicShape()) {
+      arrayTy && arrayTy.hasDynamicShape() && !arrayTy.getTarget()) {
     llvm::SmallVector<mlir::Type> header;
     auto indexTy = mlir::IndexType::get(getContext());
     header.push_back(mlir::IntegerType::get(getContext(), 32));
@@ -694,7 +699,7 @@ llvm::SmallVector<mlir::Type> RcBoxType::getHeaderTypes() const {
 
 bool RcBoxType::hasDynamicArrayPayload() const {
   auto arrayTy = llvm::dyn_cast<ArrayType>(getEleTy());
-  return arrayTy && arrayTy.hasDynamicShape();
+  return arrayTy && arrayTy.hasDynamicShape() && !arrayTy.getTarget();
 }
 
 uint64_t
@@ -1012,6 +1017,10 @@ RcType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
 
   // The strided array header currently extends only the shared RC header.
   // Regional boxes use their header words for state, next, and the vtable.
+  if (isTargetArrayType(eleTy) && capability != Capability::shared) {
+    emitError() << "target arrays require shared RC capability";
+    return mlir::failure();
+  }
   if (auto arrayTy = llvm::dyn_cast<ArrayType>(eleTy);
       arrayTy && arrayTy.hasDynamicShape() && capability != Capability::shared) {
     emitError() << "dynamic-extent arrays require shared RC capability";
@@ -1348,6 +1357,12 @@ RefType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
   }
   // A dynamic array view recovers the shared strided header from its payload
   // reference. Regional payloads have a different header and offset.
+  if (isTargetArrayType(eleTy) &&
+      (capability == Capability::flex || capability == Capability::rigid ||
+       capability == Capability::regional)) {
+    emitError() << "target arrays do not support regional references";
+    return mlir::failure();
+  }
   if (auto arrayTy = llvm::dyn_cast<ArrayType>(eleTy);
       arrayTy && arrayTy.hasDynamicShape() &&
       (capability == Capability::flex || capability == Capability::rigid ||
@@ -1382,6 +1397,10 @@ CctxType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
 mlir::LogicalResult
 RcBoxType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
                   mlir::Type eleTy, bool regional) {
+  if (regional && isTargetArrayType(eleTy)) {
+    emitError() << "target arrays do not support regional boxes";
+    return mlir::failure();
+  }
   if (auto arrayTy = llvm::dyn_cast<ArrayType>(eleTy);
       regional && arrayTy && arrayTy.hasDynamicShape()) {
     emitError() << "dynamic-extent arrays do not support regional boxes";
@@ -1534,7 +1553,8 @@ void ClosureType::print(mlir::AsmPrinter &printer) const {
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult
 ArrayType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
-                  llvm::ArrayRef<int64_t> shape, mlir::Type eleTy) {
+                  llvm::ArrayRef<int64_t> shape, mlir::Type eleTy,
+                  TargetAttr target) {
   if (shape.empty()) {
     emitError() << "array shape must have at least one extent";
     return mlir::failure();
@@ -1549,40 +1569,87 @@ ArrayType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     emitError() << "array element type must not be null";
     return mlir::failure();
   }
+  if (target) {
+    if (target.getDevices().empty() ||
+        llvm::any_of(target.getDevices().asArrayRef(),
+                     [](int32_t device) { return device < 0; })) {
+      emitError() << "target array requires non-negative device IDs";
+      return mlir::failure();
+    }
+    if (!llvm::isa<mlir::IntegerType, mlir::FloatType, mlir::ComplexType>(
+            eleTy)) {
+      emitError() << "target array requires a scalar numeric element type";
+      return mlir::failure();
+    }
+  }
+  if (isTargetArrayType(eleTy)) {
+    emitError() << "target array elements must be RC wrapped";
+    return mlir::failure();
+  }
   return mlir::success();
 }
 
 ArrayType ArrayType::dropFront() const {
   assert(getShape().size() > 1 && "cannot drop the last array extent");
-  return ArrayType::get(getContext(), getShape().drop_front(),
-                        getElementType());
+  return ArrayType::get(getContext(), getShape().drop_front(), getElementType(),
+                        getTarget());
 }
 
 ArrayType ArrayType::cloneWith(std::optional<llvm::ArrayRef<int64_t>> shape,
                                mlir::Type elementType) const {
-  return ArrayType::get(getContext(), shape.value_or(getShape()), elementType);
+  return ArrayType::get(getContext(), shape.value_or(getShape()), elementType,
+                        getTarget());
 }
 
 mlir::Type ArrayType::parse(mlir::AsmParser &parser) {
   llvm::SmallVector<int64_t> shape;
   mlir::Type elementType;
+  TargetAttr target;
   if (parser.parseLess() ||
-      mlir::failed(parseShapeAndElementType(parser, shape, elementType)) ||
-      parser.parseGreater())
+      mlir::failed(parseShapeAndElementType(parser, shape, elementType)))
+    return {};
+  if (mlir::succeeded(parser.parseOptionalComma()) &&
+      parser.parseAttribute(target))
+    return {};
+  if (parser.parseGreater())
     return {};
   return ArrayType::getChecked(parser.getEncodedSourceLoc(parser.getNameLoc()),
-                               parser.getContext(), shape, elementType);
+                               parser.getContext(), shape, elementType, target);
 }
 
 void ArrayType::print(mlir::AsmPrinter &printer) const {
   printer << "<";
   printShapeAndElementType(printer, getShape(), getElementType());
+  if (getTarget())
+    printer << ", " << getTarget();
   printer << ">";
+}
+
+llvm::SmallVector<mlir::Type> ArrayType::getDescriptorTypes() const {
+  assert(getTarget() && "only target arrays have an external descriptor");
+  auto indexType = mlir::IndexType::get(getContext());
+  mlir::Type handles = mlir::LLVM::LLVMPointerType::get(getContext());
+  if (getTarget().getDevices().size() > 1)
+    handles = mlir::LLVM::LLVMArrayType::get(handles,
+                                             getTarget().getDevices().size());
+  llvm::SmallVector<mlir::Type> members{handles, indexType};
+  members.append(getNumDynamicDims(), indexType);
+  return members;
+}
+
+static CompoundLayout
+deriveTargetArrayLayout(ArrayType type, const mlir::DataLayout &dataLayout) {
+  auto members = type.getDescriptorTypes();
+  return *deriveCompoundLayout(type.getContext(), members,
+                               llvm::SmallVector<bool>(members.size(), false),
+                               dataLayout, /*memBoxInternal=*/true);
 }
 
 llvm::TypeSize
 ArrayType::getTypeSizeInBits(const mlir::DataLayout &dataLayout,
                              mlir::DataLayoutEntryListRef params) const {
+  if (getTarget())
+    return deriveTargetArrayLayout(*this, dataLayout).size * 8;
   assert(hasStaticShape() &&
          "a dynamic-extent array has no static size; its box carries the "
          "strided-header layout instead");
@@ -1595,6 +1662,8 @@ ArrayType::getTypeSizeInBits(const mlir::DataLayout &dataLayout,
 
 uint64_t ArrayType::getABIAlignment(const mlir::DataLayout &dataLayout,
                                     mlir::DataLayoutEntryListRef params) const {
+  if (getTarget())
+    return deriveTargetArrayLayout(*this, dataLayout).alignment.value();
   return dataLayout.getTypeABIAlignment(getElementType());
 }
 

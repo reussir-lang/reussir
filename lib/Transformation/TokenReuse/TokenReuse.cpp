@@ -692,7 +692,8 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
         }
       }
 
-      if (auto acceptor = dyn_cast<TokenAcceptor>(op)) {
+      if (auto acceptor = dyn_cast<TokenAcceptor>(op);
+          acceptor && acceptor.shouldAcceptToken()) {
 
         auto allocOp = llvm::dyn_cast_if_present<ReussirTokenAllocOp>(
             acceptor.getToken().getDefiningOp());
