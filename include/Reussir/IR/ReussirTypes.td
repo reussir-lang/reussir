@@ -642,27 +642,46 @@ def ReussirArrayType
     : ReussirType<"Array", "array",
                   [DeclareTypeInterfaceMethods<DataLayoutTypeInterface>,
                    ShapedTypeInterface]> {
-  let summary = "Reussir array payload type";
+  let summary = "Reussir array type";
   let description = [{
-    `reussir.array` is the payload type wrapped by `!reussir.rc<...>` for
-    managed arrays. A `#reussir.target` annotation selects device storage:
-    the RC box holds one allocation handle per device, an element offset, and
-    dynamic extents. Static extents and layout metadata remain in the type.
-    Device allocations are released when the last RC owner drops.
+    `reussir.array` is a complex type always managed by `!reussir.rc<...>`.
+    Dimensions may be static or dynamic (`?`), with dynamic extents supplied
+    at runtime. Arrays use host storage by default; a `#reussir.target`
+    annotation selects PjRt device storage and specifies logical devices,
+    sharding, memory kind, and layout.
 
-    For example, `!reussir.rc<!reussir.array<? x 4 x f32,
-    #reussir.target<devices = [0]>>>` owns an external allocation and stores
-    only its dynamic first extent alongside the handle and offset. Device IDs
-    select the runtime's addressable device indices (identity assignment).
-    Allocation resolves memory kinds through each device and passes concrete
-    XLA layouts, including tiles, through to PjRt. IFRT sharding parameters
-    determine per-device shapes; dynamic extents must divide evenly by their
-    shard counts. Sharded arrays store their handles inline in device-list order.
-    Explicit layouts and IFRT sharding require `REUSSIR_ENABLE_OPENXLA`.
-    Unspecified multi-device sharding and `auto` layouts must be resolved before
-    allocation. Target arrays cannot use allocation tokens or host element
-    views. Executables using them must link
-    `reussir-rt` with its `pjrt` Cargo feature enabled.
+    Layouts within a non-regional RC box (alignment padding omitted):
+
+    ```text
+    Static host array
+    ┌─────────────────────────────────────┐
+    │ refcount: i32                       │ RC header
+    ├─────────────────────────────────────┤
+    │ elements: T[product(shape)]         │ inline payload
+    └─────────────────────────────────────┘
+
+    Dynamic host array (rank r)
+    ┌─────────────────────────────────────┐
+    │ refcount: i32                       │ RC header
+    │ offset: index                       │
+    │ sizes: index[r]                     │ all dimensions
+    │ strides: index[r]                   │
+    ├─────────────────────────────────────┤
+    │ elements: T[product(sizes)]         │ inline payload
+    └─────────────────────────────────────┘
+
+    Target array (d devices, k dynamic dimensions)
+    ┌─────────────────────────────────────┐
+    │ refcount: i32                       │ RC header
+    ├─────────────────────────────────────┤
+    │ allocation handles: ptr[d]          │──→ PjRt device storage
+    │ offset: index                       │ descriptor payload
+    │ dynamic extents: index[k]           │ omitted for static shape
+    └─────────────────────────────────────┘
+    ```
+
+    A single-device target stores one pointer instead of a pointer array.
+    Static target extents and placement remain in the type.
   }];
   let parameters = (ins ArrayRefParameter<"int64_t">:$shape,
       "mlir::Type":$eleTy,

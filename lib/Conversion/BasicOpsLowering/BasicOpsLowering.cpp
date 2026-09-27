@@ -3948,7 +3948,7 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirPanicOp, ReussirExpectOp, ReussirCctxEmptyOp,
         ReussirCctxExtendOp, ReussirCctxApplyOp, ReussirTokenAllocOp,
         ReussirTokenFreeOp, ReussirTokenReinterpretOp, ReussirTokenReallocOp,
-        ReussirRefLoadOp, ReussirRefStoreOp, ReussirRefSpilledOp,
+        ReussirRefLoadOp, ReussirRefStoreOp, ReussirRefSpilledOp, ReussirRefDropOp,
         ReussirRefToMemrefOp, ReussirRefFromMemrefOp, ReussirRefDiffOp,
         ReussirRefCmpOp, ReussirRefMemcpyOp, ReussirNullableCheckOp,
         ReussirNullableCreateOp, ReussirNullableCoerceOp, ReussirRcIncOp,
@@ -3956,7 +3956,7 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirRcTaggedOp, ReussirRcDecOp, ReussirRcBorrowOp,
         ReussirRcIsUniqueOp, ReussirRcAssumeUniqueOp, ReussirRecordCompoundOp,
         ReussirRecordVariantOp, ReussirRefProjectOp, ReussirArrayProjectOp,
-        ReussirArrayViewOp, ReussirArrayInstantiateOp,
+        ReussirArrayViewOp, ReussirArrayCreateOp, ReussirArrayInstantiateOp,
         ReussirArrayFillPatternOp, ReussirRecordTagOp, ReussirRecordExtractOp,
         ReussirRecordCoerceOp, ReussirRegionVTableOp, ReussirRcFreezeOp,
         ReussirRegionCleanupOp, ReussirRegionCreateOp, ReussirRcReinterpretOp,
@@ -3970,16 +3970,6 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirStrCastOp, ReussirStrLenOp, ReussirStrUnsafeByteAtOp,
         ReussirStrUnsafeStartWithOp, ReussirStrSliceOp, ReussirStrRefEqOp,
         ReussirStrUnsafeMemcmpOp, ReussirTrampolineOp, ReussirTokenLaunderOp>();
-    target.addDynamicallyLegalOp<ReussirArrayCreateOp>(
-        [](ReussirArrayCreateOp op) {
-          return !llvm::cast<ArrayType>(op.getRcPtr().getType().getElementType())
-                      .hasTargetAttr();
-        });
-    target.addDynamicallyLegalOp<ReussirRefDropOp>([](ReussirRefDropOp op) {
-      auto arrayType =
-          llvm::dyn_cast<ArrayType>(op.getRef().getType().getElementType());
-      return !(arrayType && arrayType.hasTargetAttr());
-    });
     // `reussir.closure.wpd_test` is created BY the dispatch conversion
     // patterns above, already in its final form (operand = the loaded vtable
     // pointer), and must survive conversion: the LLVM dialect cannot express
