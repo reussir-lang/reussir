@@ -37,17 +37,17 @@ impl Api {
         let handle = non_null(raw.cast_mut(), "API table")?;
         let required = mem::offset_of!(PJRT_Api, PJRT_Client_CreateUninitializedBuffer)
             + mem::size_of::<PJRT_Client_CreateUninitializedBuffer>();
-        if unsafe { (*raw).struct_size } < required {
+        if unsafe { (*handle.as_ptr()).struct_size } < required {
             return Err(Error::local(
                 "PjRt API lacks the buffer-allocation API prefix",
             ));
         }
-        if unsafe { (*raw).pjrt_api_version.major_version } != PJRT_API_MAJOR as i32 {
+        if unsafe { (*handle.as_ptr()).pjrt_api_version.major_version } != PJRT_API_MAJOR as i32 {
             return Err(Error::local("incompatible PjRt API major version"));
         }
         macro_rules! require {
             ($($function:ident),* $(,)?) => { $(
-                if unsafe { (*raw).$function.is_none() } {
+                if unsafe { (*handle.as_ptr()).$function.is_none() } {
                     return Err(Error::local(concat!("missing ", stringify!($function))));
                 }
             )* };
