@@ -53,5 +53,26 @@ set(REUSSIR_BACKEND_ARCHIVES
   MLIRReussirTRMCRecursionAnalysis)
 add_dependencies(ReussirCAPI ${REUSSIR_BACKEND_ARCHIVES})
 
+# Cargo does not inherit CMake's transitive link dependencies. Export the
+# optional lowering dependencies explicitly, including an empty list when
+# OpenXLA is disabled so stale archives cannot enable it in a reused build.
+set(REUSSIR_BACKEND_OPTIONAL_ARCHIVES "")
+if(REUSSIR_ENABLE_OPENXLA)
+  # XLA's layout parser also reaches its HLO importer and StableHLO support.
+  # Keep the ReussirIfrt/StablehloPortableApi/ReussirStablehlo closure in static
+  # link order; the remaining LLVM/MLIR dependencies come from mlir-sys.
+  list(APPEND REUSSIR_BACKEND_OPTIONAL_ARCHIVES
+    ReussirIfrt StablehloPortableApi StablehloRegister StablehloSerialization
+    StablehloPasses StablehloOptimizationPasses StablehloLinalgTransforms
+    StablehloTypeConversion StablehloReplicaGroupUtils StablehloPassUtils
+    ChloOps StablehloBroadcastUtils StablehloBroadcastLowering StablehloOps
+    StablehloTypeInference VhloOps VhloTypes StablehloAssemblyFormat
+    StablehloBase Version)
+  add_dependencies(ReussirCAPI ${REUSSIR_BACKEND_OPTIONAL_ARCHIVES})
+endif()
+file(GENERATE
+  OUTPUT ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/reussir-backend-optional-archives.txt
+  CONTENT "$<JOIN:${REUSSIR_BACKEND_OPTIONAL_ARCHIVES},\n>")
+
 # Aggregate target the Rust crates depend on.
 add_custom_target(reussir-capi DEPENDS ReussirCAPI ${REUSSIR_BACKEND_ARCHIVES})

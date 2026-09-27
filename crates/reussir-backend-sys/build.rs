@@ -76,7 +76,13 @@ fn linked_archives() -> Vec<&'static str> {
 
 fn main() {
     let lib_dir = capi_lib_dir();
-    native_archive::track(&lib_dir, &linked_archives())
+    let optional_manifest = lib_dir.join("reussir-backend-optional-archives.txt");
+    println!("cargo:rerun-if-changed={}", optional_manifest.display());
+    let optional_archives = std::fs::read_to_string(&optional_manifest)
+        .expect("failed to read optional Reussir archives; rerun CMake configuration");
+    let mut archives = linked_archives();
+    archives.extend(optional_archives.lines());
+    native_archive::track(&lib_dir, &archives)
         .expect("failed to fingerprint native Reussir archives");
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
 
@@ -92,6 +98,16 @@ fn main() {
         if native_archive::archive_exists(&lib_dir, archive) {
             println!("cargo:rustc-link-lib=static:+whole-archive={archive}");
         }
+    }
+    // OpenXLA's support archive contains the target-array layout and sharding
+    // helpers. Use ordinary archive extraction: whole-archiving it would also
+    // pull in unrelated IFRT tools and serializer registrations. Its MLIR/LLVM
+    // references resolve against the same mlir-sys libraries as the core code.
+    // Keep these archives outside the rlib so rustc places them after the
+    // whole-archived Reussir components. Bundling them moves them ahead of
+    // their callers, which leaves unresolved symbols with GNU BFD.
+    for archive in optional_archives.lines() {
+        println!("cargo:rustc-link-lib=static:-bundle={archive}");
     }
 
     // Cargo does not track the contents of native static libraries, so without

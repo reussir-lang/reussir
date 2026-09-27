@@ -29,7 +29,7 @@ FetchContent_Declare(ifrt_tblgen
 )
 FetchContent_MakeAvailable(ifrt_tblgen)
 
-set(ifrt_archive ${CMAKE_CURRENT_BINARY_DIR}/libReussirIfrt.a)
+set(ifrt_archive ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/libReussirIfrt.a)
 set(ifrt_serdes_archive ${CMAKE_CURRENT_BINARY_DIR}/libReussirIfrtSerdes.a)
 # Bazel checks source dependencies on every invocation. In particular, edits in
 # a FetchContent source override must not leave a stale support archive.
