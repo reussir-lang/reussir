@@ -117,6 +117,16 @@ config.environment[_loader_var] = os.pathsep.join(_loader_dirs)
 def sh_path(path):
     return path.replace('\\', '/') if isinstance(path, str) else path
 
+# Optional runtime ABI tests use an explicitly supplied pjrt-enabled runtime
+# and trusted CPU plugin. The normal CMake runtime does not enable pjrt.
+_pjrt_runtime = os.environ.get('REUSSIR_PJRT_TEST_RUNTIME')
+_pjrt_plugin = os.environ.get('REUSSIR_PJRT_PLUGIN')
+if _pjrt_runtime and _pjrt_plugin:
+    config.available_features.add('pjrt-runtime')
+    config.substitutions.append((r'%pjrt_runtime_dir', sh_path(os.path.dirname(_pjrt_runtime))))
+    config.substitutions.append((r'%pjrt_runtime', sh_path(_pjrt_runtime)))
+    config.environment['REUSSIR_PJRT_PLUGIN'] = _pjrt_plugin
+
 def append_flags(command, flags):
     return ' '.join(
         part for part in (sh_path(command), sh_path(flags)) if part

@@ -8,7 +8,7 @@ use super::{
     Result,
     api::{Event, call, non_null},
     context,
-    layout::Allocation,
+    layout::{Allocation, Layout},
     sys::*,
 };
 
@@ -70,22 +70,44 @@ impl Buffer {
         Ok(buffer)
     }
 
-    /// Upload dense host data. The allocation described by `element_type`/`dims`
-    /// must be aligned, initialized and immutable until this returns.
+    /// Upload host data with optional signed byte strides and device placement.
+    /// All elements addressed by `data`/`dims`/`byte_strides` must be aligned,
+    /// initialized and immutable until this returns.
     pub(super) unsafe fn from_host(
         device: usize,
         element_type: PJRT_Buffer_Type,
         dims: &[i64],
         data: *const c_void,
+        byte_strides: Option<&[i64]>,
+        allocation: Allocation<'_>,
     ) -> Result<Self> {
+        if byte_strides.is_some_and(|strides| strides.len() != dims.len()) {
+            return Err(super::Error::local("PjRt host strides must match the rank"));
+        }
         let context = context::get()?;
+        let device_handle = context.device(device)?;
+        let memory = allocation
+            .memory_kind
+            .map(|kind| device_handle.memory(context.api, kind))
+            .transpose()?;
+        let mut layout = allocation.layout.as_ref().map(Layout::as_pjrt);
         let host_buffer_semantics =
             PJRT_HostBufferSemantics_PJRT_HostBufferSemantics_kImmutableUntilTransferCompletes;
         let args = call!(
             context.api,
             PJRT_Client_BufferFromHostBuffer {
                 client: context.client.as_ptr(),
-                device: context.device(device)?.as_ptr(),
+                device: if memory.is_some() {
+                    std::ptr::null_mut()
+                } else {
+                    device_handle.as_ptr()
+                },
+                memory: memory.map_or(std::ptr::null_mut(), |memory| memory.as_ptr()),
+                device_layout: layout
+                    .as_mut()
+                    .map_or(std::ptr::null_mut(), std::ptr::from_mut),
+                byte_strides: byte_strides.map_or(std::ptr::null(), |strides| strides.as_ptr()),
+                num_byte_strides: byte_strides.map_or(0, |strides| strides.len()),
                 type_: element_type,
                 dims: dims.as_ptr(),
                 num_dims: dims.len(),
@@ -135,9 +157,18 @@ impl Buffer {
     }
 
     /// Borrow a live handle and query the required host storage size.
-    pub(super) unsafe fn host_size(self) -> Result<usize> {
+    pub(super) unsafe fn host_size(self, layout: Option<&Layout<'_>>) -> Result<usize> {
         let context = context::get()?;
-        let args = call!(context.api, PJRT_Buffer_ToHostBuffer { src: self.as_ptr() })?;
+        let mut layout = layout.map(Layout::as_pjrt);
+        let args = call!(
+            context.api,
+            PJRT_Buffer_ToHostBuffer {
+                src: self.as_ptr(),
+                host_layout: layout
+                    .as_mut()
+                    .map_or(std::ptr::null_mut(), std::ptr::from_mut),
+            }
+        )?;
         if !args.event.is_null() {
             Event::new(args.event)?.wait(context.api)?;
         }
@@ -160,16 +191,25 @@ impl Buffer {
     }
 
     /// Borrow a live initialized buffer and download it. `dst` must be non-null,
-    /// aligned and exclusively writable for `bytes` bytes until this returns.
-    /// The plugin checks that `bytes` is sufficient for the buffer's layout.
-    pub(super) unsafe fn to_host(self, dst: *mut c_void, bytes: usize) -> Result<()> {
+    /// aligned and exclusively writable at every address in the host layout
+    /// until this returns. The plugin checks `bytes` against that same layout.
+    pub(super) unsafe fn to_host(
+        self,
+        dst: *mut c_void,
+        bytes: usize,
+        layout: Option<&Layout<'_>>,
+    ) -> Result<()> {
         let context = context::get()?;
+        let mut layout = layout.map(Layout::as_pjrt);
         let args = call!(
             context.api,
             PJRT_Buffer_ToHostBuffer {
                 src: self.as_ptr(),
                 dst,
                 dst_size: bytes,
+                host_layout: layout
+                    .as_mut()
+                    .map_or(std::ptr::null_mut(), std::ptr::from_mut),
             }
         )?;
         Event::new(args.event)?.wait(context.api)?;
@@ -200,7 +240,7 @@ mod tests {
             ) {
                 Ok(buffer) => unsafe {
                     buffer.wait_ready().unwrap();
-                    assert_eq!(buffer.host_size().unwrap(), 32);
+                    assert_eq!(buffer.host_size(None).unwrap(), 32);
                     buffer.deallocate().unwrap();
                 },
                 Err(error) => assert_eq!(
@@ -237,20 +277,47 @@ mod tests {
                 PJRT_Buffer_Type_PJRT_Buffer_Type_F32,
                 &[],
                 (&value as *const f32).cast(),
+                None,
+                Allocation::default(),
             )
             .unwrap();
             let mut output = 0.0f32;
+            let layout = Layout::new(&[], &[], &[]).unwrap();
+            assert_eq!(
+                buffer.host_size(Some(&layout)).unwrap(),
+                size_of_val(&output)
+            );
             let error = buffer
-                .to_host((&mut output as *mut f32).cast(), 1)
+                .to_host((&mut output as *mut f32).cast(), 1, Some(&layout))
                 .unwrap_err();
             assert_eq!(
                 error.code,
                 Some(PJRT_Error_Code_PJRT_Error_Code_INVALID_ARGUMENT)
             );
             buffer
-                .to_host((&mut output as *mut f32).cast(), size_of_val(&output))
+                .to_host(
+                    (&mut output as *mut f32).cast(),
+                    size_of_val(&output),
+                    Some(&layout),
+                )
                 .unwrap();
             assert_eq!(output, value);
+            // The CPU wrapper rejects strided host layouts. Both entry points
+            // must forward the layout and report the backend error.
+            let unsupported = Layout::Strides(&[]);
+            let size_error = buffer.host_size(Some(&unsupported)).unwrap_err();
+            let copy_error = buffer
+                .to_host(
+                    (&mut output as *mut f32).cast(),
+                    size_of_val(&output),
+                    Some(&unsupported),
+                )
+                .unwrap_err();
+            assert_eq!(
+                size_error.code,
+                Some(PJRT_Error_Code_PJRT_Error_Code_INVALID_ARGUMENT)
+            );
+            assert_eq!(copy_error.code, size_error.code);
             buffer.deallocate().unwrap();
         }
     }
