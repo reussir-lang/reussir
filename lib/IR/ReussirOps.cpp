@@ -488,9 +488,6 @@ mlir::LogicalResult ReussirRcSetOp::verify() {
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRcReinterpretOp::verify() {
   RcType rcType = getRcPtr().getType();
-  if (auto arrayType = llvm::dyn_cast<ArrayType>(rcType.getElementType());
-      arrayType && arrayType.hasTargetAttr())
-    return emitOpError("target arrays cannot produce allocation tokens");
   TokenType tokenType = getReinterpreted().getType();
 
   // Get the RC box type for the RC pointer
@@ -685,11 +682,9 @@ mlir::LogicalResult ReussirRcDecOp::verify() {
 //===----------------------------------------------------------------------===//
 bool ReussirRcDecOp::shouldProduceToken() {
   RcType rcType = getRcPtr().getType();
-  auto arrayType = llvm::dyn_cast<ArrayType>(rcType.getElementType());
   // Only shared capability RC pointers produce tokens
   return rcType.getCapability() == reussir::Capability::shared &&
-         !mlir::isa<FFIObjectType, ClosureType>(rcType.getElementType()) &&
-         !(arrayType && arrayType.hasTargetAttr());
+         !mlir::isa<FFIObjectType, ClosureType>(rcType.getElementType());
 }
 
 //===----------------------------------------------------------------------===//
@@ -1407,8 +1402,6 @@ static mlir::LogicalResult verifyArrayConstruction(mlir::Operation *op,
   auto arrayType = llvm::cast<ArrayType>(rcType.getElementType());
   if (rcType.getCapability() != Capability::shared)
     return op->emitOpError("requires a shared array result");
-  if (arrayType.hasTargetAttr() && token)
-    return op->emitOpError("target arrays do not accept allocation tokens");
   if (mlir::failed(verifyFixedArrayElementSize(op, arrayType)))
     return mlir::failure();
   auto dataLayout = mlir::DataLayout::closest(op);
@@ -1422,7 +1415,7 @@ static mlir::LogicalResult verifyArrayConstruction(mlir::Operation *op,
     auto boxType = rcType.getInnerBoxType();
     auto alignment = dataLayout.getTypeABIAlignment(boxType);
     auto expected =
-        arrayType.hasDynamicShape()
+        boxType.hasDynamicArrayPayload()
             ? TokenType::getDynamic(op->getContext(), alignment)
             : TokenType::get(op->getContext(), alignment,
                              dataLayout.getTypeSize(boxType).getFixedValue());
@@ -1545,11 +1538,6 @@ ReussirArrayCreateOp::getLoopUpperBounds() {
 
 TokenType ReussirArrayCreateOp::getTokenType() {
   return getArrayTokenType(*this);
-}
-
-bool ReussirArrayCreateOp::shouldAcceptToken() {
-  return !llvm::cast<ArrayType>(getRcPtr().getType().getElementType())
-              .hasTargetAttr();
 }
 
 mlir::Value ReussirArrayCreateOp::buildTokenSize(mlir::OpBuilder &builder) {

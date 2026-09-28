@@ -112,6 +112,47 @@ TEST_F(ReussirTest, TargetArrayDescriptorLayout) {
   }
 }
 
+TEST_F(ReussirTest, TargetArrayMetadataTokens) {
+  withModule(R"mlir(
+module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>>} {
+  func.func @tokens(%n: index) {
+    %a = reussir.array.create extents() : !reussir.rc<!reussir.array<1024 x 4096 x f32, #reussir.target<devices = [0]>>>
+    %b = reussir.array.create extents(%n, %n) : !reussir.rc<!reussir.array<? x 4 x ? x f32, #reussir.target<devices = [0]>>>
+    %c = reussir.array.create extents(%n) : !reussir.rc<!reussir.array<? x 4 x f32, #reussir.target<devices = [3, 1, 2, 0]>> atomic>
+    reussir.rc.dec(%a : !reussir.rc<!reussir.array<1024 x 4096 x f32, #reussir.target<devices = [0]>>>)
+    reussir.rc.dec(%b : !reussir.rc<!reussir.array<? x 4 x ? x f32, #reussir.target<devices = [0]>>>)
+    reussir.rc.dec(%c : !reussir.rc<!reussir.array<? x 4 x f32, #reussir.target<devices = [3, 1, 2, 0]>> atomic>)
+    return
+  }
+}
+)mlir",
+             [](mlir::ModuleOp module) {
+               llvm::SmallVector<uint64_t> sizes;
+               module.walk([&](ReussirArrayCreateOp op) {
+                 auto acceptor = llvm::cast<TokenAcceptor>(op.getOperation());
+                 EXPECT_TRUE(acceptor.shouldAcceptToken());
+                 auto token = acceptor.getTokenType();
+                 EXPECT_FALSE(token.isDynamicSize());
+                 EXPECT_EQ(token.getAlign(), 8u);
+                 mlir::OpBuilder builder(op);
+                 auto size = acceptor.buildTokenSize(builder)
+                                 .getDefiningOp<mlir::arith::ConstantIndexOp>();
+                 ASSERT_TRUE(size);
+                 EXPECT_EQ(size.value(), token.getSize());
+                 sizes.push_back(token.getSize());
+               });
+               EXPECT_EQ(sizes, (llvm::SmallVector<uint64_t>{24, 40, 56}));
+               module.walk([&](ReussirRcDecOp op) {
+                 EXPECT_TRUE(op.shouldProduceToken());
+                 auto create =
+                     op.getRcPtr().getDefiningOp<ReussirArrayCreateOp>();
+                 ASSERT_TRUE(create);
+                 EXPECT_EQ(op.getTokenType(), create.getTokenType());
+               });
+               EXPECT_TRUE(mlir::succeeded(mlir::verify(module)));
+             });
+}
+
 TEST_F(ReussirTest, ValueRecordsAreMemRefElements) {
   for (std::string_view spelling :
        {R"(!reussir.record<compound "MemRefPair" [value] {i32, i64}>)",

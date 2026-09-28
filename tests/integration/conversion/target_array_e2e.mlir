@@ -44,3 +44,15 @@ func.func @nested(%a: !rc) {
   reussir.rc.dec(%outer : !outer)
   return
 }
+
+// Both shapes use the same metadata size, regardless of device payload size.
+func.func @replace(%old: !rc, %n: index) -> !rc {
+  reussir.rc.dec(%old : !rc)
+  %a = reussir.array.create extents(%n) : !rc
+  return %a : !rc
+}
+func.func @replace_atomic(%old: !fixed) -> !fixed {
+  reussir.rc.dec(%old : !fixed)
+  %a = reussir.array.create extents() : !fixed
+  return %a : !fixed
+}

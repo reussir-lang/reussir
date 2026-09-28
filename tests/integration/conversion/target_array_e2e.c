@@ -37,6 +37,8 @@ extern struct Array *create(size_t rows);
 extern void retain(struct Array *), release(struct Array *),
     nested(struct Array *);
 extern struct Array *create_atomic(void);
+extern struct Array *replace(struct Array *, size_t);
+extern struct Array *replace_atomic(struct Array *);
 extern void retain_atomic(struct Array *), release_atomic(struct Array *);
 
 int main(void) {
@@ -64,5 +66,33 @@ int main(void) {
   assert(a->rows == 0 && a->allocation->rows == 0);
   release(a);
   assert(allocations == 3 && releases == 3);
+  // A unique final decrement releases the old handle before reusing metadata.
+  a = create(3);
+  struct Array *b = replace(a, 1024);
+  assert(a == b && b->count == 1 && b->offset == 0 && b->rows == 1024);
+  assert(b->allocation->rows == 1024 && releases == 4);
+  release(b);
+  assert(releases == 5);
+
+  // Shared metadata remains live: the null token must allocate a new header.
+  a = create(7);
+  retain(a);
+  b = replace(a, 13);
+  assert(a != b && a->count == 1 && a->rows == 7 && b->rows == 13);
+  assert(a->allocation->rows == 7 && b->allocation->rows == 13);
+  assert(releases == 5);
+  release(a);
+  release(b);
+  assert(releases == 7);
+
+  a = create_atomic();
+  b = replace_atomic(a);
+  assert(a == b && b->count == 1 && releases == 8);
+  retain_atomic(b);
+  a = replace_atomic(b);
+  assert(a != b && a->count == 1 && b->count == 1 && releases == 8);
+  release_atomic(a);
+  release_atomic(b);
+  assert(allocations == 10 && releases == 10);
   return 0;
 }

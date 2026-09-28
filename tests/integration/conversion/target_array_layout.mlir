@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-convert-to-llvm | %FileCheck %s
+// RUN: %reussir-opt %s --reussir-token-instantiation --reussir-convert-to-llvm | %FileCheck %s
 
 // The descriptor follows host pointer/index width. PjRt dimensions remain i64.
 module attributes {
@@ -12,10 +12,10 @@ module attributes {
 } {
   // CHECK-LABEL: llvm.func @create
   // CHECK: llvm.alloca {{.*}} x i64
-  // CHECK: llvm.sext %arg0 : i32 to i64
-  // CHECK: llvm.call @__reussir_pjrt_array_allocate({{.*}}) : (i32, i32, !llvm.ptr, i32, !llvm.ptr) -> !llvm.ptr
   // CHECK: llvm.mlir.constant(16 : i32)
   // CHECK: llvm.call @__reussir_allocate
+  // CHECK: llvm.sext %arg0 : i32 to i64
+  // CHECK: llvm.call @__reussir_pjrt_array_allocate({{.*}}) : (i32, i32, !llvm.ptr, i32, !llvm.ptr) -> !llvm.ptr
   // CHECK: !llvm.struct<(i32, struct<(ptr, i32, i32)>)>
   func.func @create(%n: index) -> !reussir.rc<!reussir.array<? x f32, #reussir.target<devices = [0]>>> {
     %a = reussir.array.create extents(%n) : !reussir.rc<!reussir.array<? x f32, #reussir.target<devices = [0]>>>

@@ -1,5 +1,5 @@
 // REQUIRES: ifrt
-// RUN: %not %reussir-opt %s --split-input-file --reussir-convert-to-llvm 2>&1 | %FileCheck %s
+// RUN: %not %reussir-opt %s --split-input-file --reussir-token-instantiation --reussir-convert-to-llvm 2>&1 | %FileCheck %s
 
 // CHECK: multi-device allocation requires concrete sharding
 func.func @unspecified() {

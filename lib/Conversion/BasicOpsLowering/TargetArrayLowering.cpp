@@ -185,6 +185,8 @@ struct CreateTargetArray : mlir::ConvertOpToLLVMPattern<ReussirArrayCreateOp> {
     auto target = arrayType.getTarget();
     if (!target)
       return mlir::failure();
+    if (!op.getToken())
+      return op.emitOpError("token is required but not provided");
     auto function = op->getParentOfType<mlir::FunctionOpInterface>();
     if (!function)
       return rewriter.notifyMatchFailure(op, "expected an enclosing function");
@@ -230,13 +232,11 @@ struct CreateTargetArray : mlir::ConvertOpToLLVMPattern<ReussirArrayCreateOp> {
     auto ptrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
     auto indexType = getTypeConverter()->getIndexType();
     auto i64Type = rewriter.getI64Type();
-    auto allocate = runtimeFunction(op, rewriter, "__reussir_allocate",
-                                    {indexType, indexType}, ptrType);
     auto allocateDevice = runtimeFunction(
         op, rewriter, "__reussir_pjrt_array_allocate",
         {indexType, rewriter.getI32Type(), ptrType, indexType, ptrType},
         ptrType);
-    if (mlir::failed(allocate) || mlir::failed(allocateDevice))
+    if (mlir::failed(allocateDevice))
       return mlir::failure();
 
     // PjRt shape dimensions are i64 on every host, while usize arguments and
@@ -291,14 +291,7 @@ struct CreateTargetArray : mlir::ConvertOpToLLVMPattern<ReussirArrayCreateOp> {
     }
 
     auto boxType = rcType.getInnerBoxType();
-    auto layout = mlir::DataLayout::closest(op);
-    auto alignment =
-        constant(rewriter, loc, indexType, layout.getTypeABIAlignment(boxType));
-    auto bytes = constant(rewriter, loc, indexType,
-                          layout.getTypeSize(boxType).getFixedValue());
-    auto box = mlir::LLVM::CallOp::create(rewriter, loc, *allocate,
-                                          mlir::ValueRange{alignment, bytes})
-                   .getResult();
+    auto box = adaptor.getToken();
     auto one = constant(rewriter, loc, rewriter.getI32Type(), 1);
     mlir::LLVM::StoreOp::create(rewriter, loc, one, box);
     auto loweredBox = getTypeConverter()->convertType(boxType);
@@ -344,71 +337,10 @@ struct DropTargetArray : mlir::ConvertOpToLLVMPattern<ReussirRefDropOp> {
   }
 };
 
-struct ReleaseTargetArray : mlir::ConvertOpToLLVMPattern<ReussirRcDecOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-  mlir::LogicalResult
-  matchAndRewrite(ReussirRcDecOp op, OpAdaptor adaptor,
-                  mlir::ConversionPatternRewriter &rewriter) const override {
-    auto rcType = op.getRcPtr().getType();
-    auto arrayType = llvm::dyn_cast<ArrayType>(rcType.getElementType());
-    if (!arrayType || !arrayType.hasTargetAttr())
-      return mlir::failure();
-    auto loc = op.getLoc();
-    auto ptrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
-    auto free =
-        runtimeFunction(op, rewriter, "__reussir_dealloc_unsized", {ptrType});
-    auto release = runtimeFunction(
-        op, rewriter, "__reussir_pjrt_array_deallocate", {ptrType});
-    if (mlir::failed(free) || mlir::failed(release))
-      return mlir::failure();
-    auto one = constant(rewriter, loc, rewriter.getI32Type(), 1);
-    bool atomic = rcType.getAtomicKind() == AtomicKind::atomic;
-    mlir::Value count =
-        atomic
-            ? mlir::LLVM::AtomicRMWOp::create(
-                  rewriter, loc, mlir::LLVM::AtomicBinOp::sub,
-                  adaptor.getRcPtr(), one, mlir::LLVM::AtomicOrdering::acq_rel)
-                  .getResult()
-            : mlir::LLVM::LoadOp::create(rewriter, loc, rewriter.getI32Type(),
-                                         adaptor.getRcPtr())
-                  .getResult();
-    auto last = mlir::LLVM::ICmpOp::create(
-        rewriter, loc, mlir::LLVM::ICmpPredicate::eq, count, one);
-    auto *head = rewriter.getInsertionBlock();
-    auto *continuation =
-        rewriter.splitBlock(head, rewriter.getInsertionPoint());
-    auto *destroy = rewriter.createBlock(continuation->getParent(),
-                                         mlir::Region::iterator(continuation));
-    auto *shared = rewriter.createBlock(continuation->getParent(),
-                                        mlir::Region::iterator(continuation));
-    rewriter.setInsertionPointToEnd(head);
-    mlir::LLVM::CondBrOp::create(rewriter, loc, last, destroy, shared);
-    rewriter.setInsertionPointToEnd(destroy);
-    auto descriptor = mlir::LLVM::GEPOp::create(
-        rewriter, loc, ptrType,
-        getTypeConverter()->convertType(rcType.getInnerBoxType()),
-        adaptor.getRcPtr(), llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
-    if (mlir::failed(dropAllocation(op, descriptor, arrayType, rewriter)))
-      return mlir::failure();
-    mlir::LLVM::CallOp::create(rewriter, loc, *free,
-                               mlir::ValueRange{adaptor.getRcPtr()});
-    mlir::LLVM::BrOp::create(rewriter, loc, continuation);
-    rewriter.setInsertionPointToEnd(shared);
-    if (!atomic) {
-      auto decremented = mlir::LLVM::SubOp::create(rewriter, loc, count, one);
-      mlir::LLVM::StoreOp::create(rewriter, loc, decremented,
-                                  adaptor.getRcPtr());
-    }
-    mlir::LLVM::BrOp::create(rewriter, loc, continuation);
-    rewriter.eraseOp(op);
-    return mlir::success();
-  }
-};
 } // namespace
 
 void populateTargetArrayLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                          mlir::RewritePatternSet &patterns) {
-  patterns.add<CreateTargetArray, DropTargetArray, ReleaseTargetArray>(
-      converter);
+  patterns.add<CreateTargetArray, DropTargetArray>(converter);
 }
 } // namespace reussir

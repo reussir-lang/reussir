@@ -139,10 +139,8 @@ private:
   // FFI objects release through their foreign cleanup hook and closures
   // through their vtable, so neither can hand its box out as a token.
   static bool decMayProduceToken(RcType rcType) {
-    auto arrayType = llvm::dyn_cast<ArrayType>(rcType.getElementType());
     return rcType.getCapability() == Capability::shared &&
-           !llvm::isa<FFIObjectType, ClosureType>(rcType.getElementType()) &&
-           !(arrayType && arrayType.hasTargetAttr());
+           !llvm::isa<FFIObjectType, ClosureType>(rcType.getElementType());
   }
 
   mlir::LogicalResult rewriteDropRc(RcType rcType, ReussirRefDropOp op,

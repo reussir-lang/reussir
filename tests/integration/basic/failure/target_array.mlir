@@ -1,16 +1,16 @@
 // RUN: %reussir-opt %s --split-input-file --verify-diagnostics
 
 !array = !reussir.array<4 x f32, #reussir.target<devices = [0]>>
-func.func @token(%token: !reussir.token<align: 8, size: 24>) {
-  // expected-error @+1 {{target arrays do not accept allocation tokens}}
-  %a = reussir.array.create extents() token(%token : !reussir.token<align: 8, size: 24>) : !reussir.rc<!array>
+func.func @token(%token: !reussir.token<align: 8, size: 4096>) {
+  // expected-error @+1 {{expected token type '!reussir.token<align : 8, size : 24>'}}
+  %a = reussir.array.create extents() token(%token : !reussir.token<align: 8, size: 4096>) : !reussir.rc<!array>
   return
 }
 // -----
 !array = !reussir.array<4 x f32, #reussir.target<devices = [0]>>
 func.func @token_result(%a: !reussir.rc<!array>) {
-  // expected-error @+1 {{this RC decrement cannot produce a token}}
-  %t = reussir.rc.dec(%a : !reussir.rc<!array>) : !reussir.nullable<!reussir.token<align: 8, size: 24>>
+  // expected-error @+1 {{token size must match managed type size}}
+  %t = reussir.rc.dec(%a : !reussir.rc<!array>) : !reussir.nullable<!reussir.token<align: 8, size: 4096>>
   return
 }
 // -----

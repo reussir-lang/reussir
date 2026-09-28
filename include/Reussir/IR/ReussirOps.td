@@ -1060,7 +1060,7 @@ def ReussirArrayCreateOp
                          ["getLoopInductionVars", "getLoopLowerBounds",
                           "getLoopUpperBounds", "getLoopSteps"]>,
                      DeclareOpInterfaceMethods<TokenAcceptorInterface,
-                                               ["buildTokenSize", "shouldAcceptToken"]>]> {
+                                               ["buildTokenSize"]>]> {
   let summary = "Create an RC array with an optional element initializer region";
   let description = [{
     Creates a shared array with reference count one. The initializer body
@@ -1076,8 +1076,9 @@ def ReussirArrayCreateOp
     that initialize the elements through a mutable view.
 
     Target-annotated arrays allocate device storage through the runtime and
-    initialize an RC-wrapped handle descriptor. They do not accept tokens or
-    initializer bodies; their elements are initialized by device operations.
+    consume a token for the host RC header and handle descriptor only. The
+    final decrement releases device storage and returns that metadata token.
+    Initializer bodies are unsupported; device operations initialize elements.
   }];
   let arguments = (ins Optional<ReussirTokenType>:$token,
       Variadic<Index>:$extents);

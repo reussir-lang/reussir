@@ -1,4 +1,4 @@
-// RUN: %not %reussir-opt %s --split-input-file --reussir-convert-to-llvm 2>&1 | %FileCheck %s
+// RUN: %not %reussir-opt %s --split-input-file --reussir-token-instantiation --reussir-convert-to-llvm 2>&1 | %FileCheck %s
 
 // Unresolved metadata must not be silently replaced by the default layout.
 // CHECK: auto layout must be resolved before allocation

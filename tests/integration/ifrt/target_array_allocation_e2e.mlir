@@ -1,5 +1,5 @@
 // REQUIRES: ifrt
-// RUN: %reussir-opt %s --reussir-attach-native-target --reussir-token-instantiation --reussir-token-reuse --reussir-rc-decrement-expansion --reussir-acquire-drop-expansion --reussir-convert-to-std --reussir-lowering-basic-ops --reussir-convert-to-llvm --reconcile-unrealized-casts --canonicalize -o %t.mlir
+// RUN: %reussir-opt %s --reussir-attach-native-target --reussir-token-instantiation --reussir-token-reuse --reussir-rc-decrement-expansion --reussir-acquire-drop-expansion --reussir-convert-to-std --convert-scf-to-cf --reussir-lowering-basic-ops --reussir-convert-to-llvm --reconcile-unrealized-casts --canonicalize -o %t.mlir
 // RUN: %reussir-translate --mlir-to-llvmir %t.mlir | %opt -S -O2 -o %t.ll
 // RUN: %llc %t.ll -relocation-model=pic -filetype=obj -o %t.o
 // RUN: %cc %t.o %S/target_array_allocation_e2e.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
