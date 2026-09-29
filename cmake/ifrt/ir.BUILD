@@ -3,6 +3,8 @@ load("@rules_cc//cc:cc_static_library.bzl", "cc_static_library")
 cc_library(
     name = "reussir_registration",
     srcs = ["reussir_registration.cc"],
+    # Make workspace headers available to angle-bracket includes as well.
+    copts = ["-I.", "-I$(BINDIR)"],
     deps = [
         ":ir",
         ":vifrt",
@@ -21,6 +23,7 @@ cc_library(
     name = "reussir_array_target",
     srcs = ["reussir_array_target.cc"],
     hdrs = ["reussir_target.h"],
+    copts = ["-I.", "-I$(BINDIR)"],
     deps = [
         ":ir",
         "//xla:shape_util",

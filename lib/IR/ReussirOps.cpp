@@ -55,6 +55,10 @@
 #include "Sync/IR/SyncTypes.h"
 #include "mlir/IR/PatternMatch.h"
 
+#ifdef REUSSIR_ENABLE_OPENXLA
+#include "Reussir/Conversion/OpenXLATarget.h"
+#endif
+
 #include <llvm/ADT/DenseSet.h>
 
 // The `compiled(...)` clause of `reussir.polyffi` stores an ElementsAttr — an
@@ -1429,6 +1433,55 @@ mlir::LogicalResult ReussirArrayToDeviceOp::verify() {
   if (getToken() && getToken().getType() != getTokenType())
     return emitOpError("expected descriptor token type ") << getTokenType();
   return mlir::success();
+}
+
+static mlir::LogicalResult verifyArrayIfrtBridge(mlir::Operation *op,
+                                                RcType rcType,
+                                                mlir::Type ifrtType) {
+  auto array = llvm::cast<ArrayType>(rcType.getElementType());
+  if (!array.hasTargetAttr())
+    return op->emitOpError("requires a target-annotated device array");
+#ifdef REUSSIR_ENABLE_OPENXLA
+  auto target = array.getTarget();
+  return verifyIfrtArrayMetadata(
+      op, ifrtType,
+      mlir::RankedTensorType::get(array.getShape(), array.getElementType()),
+      target.getDevices(), target.getSharding(), target.getMemoryKind(),
+      target.getLayout());
+#else
+  return op->emitOpError("requires an OpenXLA-enabled build");
+#endif
+}
+
+mlir::LogicalResult ReussirArrayToIfrtOp::verify() {
+  if (mlir::failed(verifyArrayIfrtBridge(getOperation(), getArray().getType(),
+                                      getView().getType())))
+    return mlir::failure();
+#ifdef REUSSIR_ENABLE_OPENXLA
+  return verifyIfrtArrayBorrow(getOperation(), getView());
+#else
+  return mlir::failure();
+#endif
+}
+
+mlir::LogicalResult ReussirArrayFromIfrtOp::verify() {
+  if (mlir::failed(verifyArrayIfrtBridge(getOperation(), getArray().getType(),
+                                      getSource().getType())))
+    return mlir::failure();
+  if (getToken() && getToken().getType() != getTokenType())
+    return emitOpError("expected descriptor token type ") << getTokenType();
+#ifdef REUSSIR_ENABLE_OPENXLA
+  return verifyIfrtArrayAdoption(getOperation(), getSource());
+#else
+  return mlir::failure();
+#endif
+}
+
+TokenType ReussirArrayFromIfrtOp::getTokenType() {
+  auto layout = mlir::DataLayout::closest(getOperation());
+  auto box = getArray().getType().getInnerBoxType();
+  return TokenType::get(getContext(), layout.getTypeABIAlignment(box),
+                       layout.getTypeSize(box).getFixedValue());
 }
 
 TokenType ReussirArrayToDeviceOp::getTokenType() {

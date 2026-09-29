@@ -1053,6 +1053,53 @@ def ReussirRecordCoerceOp : ReussirRecordOp<"coerce", [Pure]> {
 class ReussirArrayOp<string mnemonic, list<Trait> traits>
     : ReussirOp<"array."#mnemonic, traits>;
 
+def ReussirArrayToIfrtOp
+    : ReussirArrayOp<"to_ifrt", [MemoryEffects<[MemRead]>]> {
+  let summary = "Borrow a target array for IFRT calls without copying data";
+  let description = [{
+    Exposes the device buffers as an IFRT array. The RC owner must stay alive
+    and immutable until all uses complete. Calls must neither donate nor alias
+    this input. Currently only direct `ifrt.Call`, `ifrt.CallLoadedExecutable`,
+    and `ifrt.After` uses in the same block are supported.
+
+    Shape (including dynamic dimensions), element type, ordered devices,
+    sharding, memory kind, and layout must match exactly. Absent target sharding
+    matches IFRT's unspecified sharding. No transfer or resharding occurs.
+    Requires an OpenXLA-enabled build; execution lowering is not yet provided.
+  }];
+  let arguments = (ins ReussirRcArrayType:$array);
+  let results = (outs AnyType:$view);
+  let assemblyFormat = [{
+    $array attr-dict `:` qualified(type($array)) `->` type($view)
+  }];
+  let hasVerifier = 1;
+}
+
+def ReussirArrayFromIfrtOp
+    : ReussirArrayOp<"from_ifrt", [MemoryEffects<[MemRead, MemWrite, MemAlloc]>,
+                                  DeclareOpInterfaceMethods<TokenAcceptorInterface>]> {
+  let summary = "Adopt an IFRT call result into an RC target array";
+  let description = [{
+    Consumes a result of `ifrt.Call` or `ifrt.CallLoadedExecutable` in the same
+    block. This must be its only use; borrowed arrays cannot be adopted.
+    Ownership of the returned buffer handles moves to the new RC array.
+    Input/output aliases follow IFRT donation rules: borrowed RC inputs cannot
+    be aliased, while donated IFRT-owned inputs may become results.
+
+    Metadata must match as for `array.to_ifrt`. Dynamic extents come from the
+    IFRT result. The optional token supplies only the host RC metadata box.
+    No device allocation, data copy, or wait occurs. Requires OpenXLA;
+    execution lowering is not yet provided.
+  }];
+  let arguments = (ins AnyType:$source, Optional<ReussirTokenType>:$token);
+  let results = (outs ReussirRcArrayType:$array);
+  let assemblyFormat = [{
+    $source (`token` `(` $token^ `:` qualified(type($token)) `)`)? attr-dict
+    `:` type($source) `->` qualified(type($array))
+  }];
+  let hasVerifier = 1;
+}
+
 def ReussirArrayToDeviceOp
     : ReussirArrayOp<"to_device", [MemoryEffects<[MemRead, MemWrite, MemAlloc]>,
                                   DeclareOpInterfaceMethods<TokenAcceptorInterface>]> {

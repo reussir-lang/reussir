@@ -7,9 +7,9 @@
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "shardy/dialect/sdy/ir/dialect.h"
-#include "xla/python/ifrt/ir/ifrt_dialect.h"
-#include "xla/python/ifrt/ir/transforms/passes.h"
-#include "xla/python/ifrt/ir/vifrt_dialect.h"
+#include <xla/python/ifrt/ir/ifrt_dialect.h>
+#include <xla/python/ifrt/ir/transforms/passes.h>
+#include <xla/python/ifrt/ir/vifrt_dialect.h>
 
 void registerIfrtDialectsAndPasses(mlir::DialectRegistry &registry) {
   registry.insert<xla::ifrt::IfrtDialect, xla::ifrt::VifrtDialect,

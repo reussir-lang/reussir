@@ -18,3 +18,8 @@ add_mlir_dialect_library(MLIRReussir
     # layouts); listed explicitly rather than via the dialect-libs glob.
     MLIRSync
 )
+
+if(REUSSIR_ENABLE_OPENXLA)
+  target_compile_definitions(obj.MLIRReussir PRIVATE REUSSIR_ENABLE_OPENXLA)
+  target_link_libraries(MLIRReussir PUBLIC ReussirIfrt)
+endif()

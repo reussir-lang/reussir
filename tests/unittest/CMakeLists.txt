@@ -42,6 +42,10 @@ target_include_directories(reussir-ut
 
 add_dependencies(reussir-ut reussir-rt)
 
+if(REUSSIR_ENABLE_OPENXLA)
+  target_compile_definitions(reussir-ut PRIVATE REUSSIR_ENABLE_OPENXLA)
+endif()
+
 # The RustCompiler tests invoke rustc and resolve `extern crate reussir_rt`
 # against the runtime's deps directory. With no toolchain or runtime staged
 # into the build tree anymore, hand the tests the configure-time paths as
