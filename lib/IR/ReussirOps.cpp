@@ -1395,6 +1395,54 @@ static mlir::LogicalResult verifyFixedArrayElementSize(mlir::Operation *op,
   return mlir::success();
 }
 
+static mlir::LogicalResult
+verifyArrayTransfer(mlir::Operation *op, RcType rcType, mlir::MemRefType host) {
+  auto array = llvm::cast<ArrayType>(rcType.getElementType());
+  if (!array.hasTargetAttr())
+    return op->emitOpError("requires a target-annotated device array");
+  if (array.getTarget().getDevices().size() != 1)
+    return op->emitOpError("requires a single-device target");
+  if (host.getElementType() != array.getElementType())
+    return op->emitOpError("host and device element types must match");
+  if (host.getRank() != static_cast<int64_t>(array.getRank()))
+    return op->emitOpError("host and device ranks must match");
+  for (auto [hostDim, deviceDim] : llvm::zip(host.getShape(), array.getShape()))
+    if (!mlir::ShapedType::isDynamic(hostDim) &&
+        !mlir::ShapedType::isDynamic(deviceDim) && hostDim != deviceDim)
+      return op->emitOpError("host and device shapes must match");
+  if (auto space = host.getMemorySpace()) {
+    auto integer = llvm::dyn_cast<mlir::IntegerAttr>(space);
+    if (!integer || !integer.getValue().isZero())
+      return op->emitOpError("requires a host memref in memory space zero");
+  }
+  llvm::SmallVector<int64_t> strides;
+  int64_t offset;
+  if (mlir::failed(host.getStridesAndOffset(strides, offset)))
+    return op->emitOpError("requires a strided host memref");
+  return mlir::success();
+}
+
+mlir::LogicalResult ReussirArrayToDeviceOp::verify() {
+  if (mlir::failed(verifyArrayTransfer(getOperation(), getArray().getType(),
+                                       getSource().getType())))
+    return mlir::failure();
+  if (getToken() && getToken().getType() != getTokenType())
+    return emitOpError("expected descriptor token type ") << getTokenType();
+  return mlir::success();
+}
+
+TokenType ReussirArrayToDeviceOp::getTokenType() {
+  auto layout = mlir::DataLayout::closest(getOperation());
+  auto box = getArray().getType().getInnerBoxType();
+  return TokenType::get(getContext(), layout.getTypeABIAlignment(box),
+                        layout.getTypeSize(box).getFixedValue());
+}
+
+mlir::LogicalResult ReussirArrayToHostOp::verify() {
+  return verifyArrayTransfer(getOperation(), getArray().getType(),
+                             getDestination().getType());
+}
+
 static mlir::LogicalResult verifyArrayConstruction(mlir::Operation *op,
                                                    RcType rcType,
                                                    mlir::ValueRange extents,

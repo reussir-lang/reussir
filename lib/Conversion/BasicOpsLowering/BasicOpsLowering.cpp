@@ -3957,6 +3957,7 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirRcIsUniqueOp, ReussirRcAssumeUniqueOp, ReussirRecordCompoundOp,
         ReussirRecordVariantOp, ReussirRefProjectOp, ReussirArrayProjectOp,
         ReussirArrayViewOp, ReussirArrayCreateOp, ReussirArrayInstantiateOp,
+        ReussirArrayToDeviceOp, ReussirArrayToHostOp,
         ReussirArrayFillPatternOp, ReussirRecordTagOp, ReussirRecordExtractOp,
         ReussirRecordCoerceOp, ReussirRegionVTableOp, ReussirRcFreezeOp,
         ReussirRegionCleanupOp, ReussirRegionCreateOp, ReussirRcReinterpretOp,

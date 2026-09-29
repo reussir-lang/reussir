@@ -1053,6 +1053,43 @@ def ReussirRecordCoerceOp : ReussirRecordOp<"coerce", [Pure]> {
 class ReussirArrayOp<string mnemonic, list<Trait> traits>
     : ReussirOp<"array."#mnemonic, traits>;
 
+def ReussirArrayToDeviceOp
+    : ReussirArrayOp<"to_device", [MemoryEffects<[MemRead, MemWrite, MemAlloc]>,
+                                  DeclareOpInterfaceMethods<TokenAcceptorInterface>]> {
+  let summary = "Upload a host view into an owned target array";
+  let description = [{
+    Copies a strided host memref to a single-device target array. Shape and
+    element type must match; dynamic extents are checked at runtime.
+    Borrows initialized, immutable host storage until return. The result owns
+    its device buffer; no host pointer escapes. Backend errors abort.
+    The optional token supplies the host RC descriptor box, not device storage.
+  }];
+  let arguments = (ins AnyMemRef:$source, Optional<ReussirTokenType>:$token);
+  let results = (outs ReussirRcArrayType:$array);
+  let assemblyFormat = [{
+    $source (`token` `(` $token^ `:` qualified(type($token)) `)`)? attr-dict
+    `:` type($source) `->` qualified(type($array))
+  }];
+  let hasVerifier = 1;
+}
+
+def ReussirArrayToHostOp
+    : ReussirArrayOp<"to_host", [MemoryEffects<[MemRead, MemWrite]>]> {
+  let summary = "Download a target array into existing host storage and wait";
+  let description = [{
+    Copies a single-device target array into an exclusive, dense row-major
+    host memref. Shape and element type must match; dynamic extents and strides
+    are checked at runtime. Borrows the array and destination until completion.
+    The destination may be uninitialized; successful return initializes all
+    elements. Backend errors abort. This operation does not allocate a host array.
+  }];
+  let arguments = (ins ReussirRcArrayType:$array, AnyMemRef:$destination);
+  let assemblyFormat = [{
+    $array `into` $destination attr-dict `:` qualified(type($array)) `,` type($destination)
+  }];
+  let hasVerifier = 1;
+}
+
 def ReussirArrayCreateOp
     : ReussirArrayOp<
           "create", [AttrSizedOperandSegments,

@@ -437,4 +437,40 @@ module {
                EXPECT_TRUE(mlir::succeeded(mlir::verify(module)));
              });
 }
+TEST_F(ReussirTest, ArrayTransferOwnershipAndEffects) {
+  withModule(
+      R"mlir(
+    #device = #reussir.target<devices = [0]>
+    !D = !reussir.rc<!reussir.array<? x 3 x f32, #device>>
+    func.func @transfer(%src: memref<?x3xf32>, %dst: memref<?x3xf32>) -> !D {
+      %d = reussir.array.to_device %src : memref<?x3xf32> -> !D
+      reussir.array.to_host %d into %dst : !D, memref<?x3xf32>
+      return %d : !D
+    }
+  )mlir",
+      [](mlir::ModuleOp module) {
+        EXPECT_TRUE(mlir::succeeded(mlir::verify(module)));
+        unsigned checked = 0;
+        module.walk([&](mlir::Operation *op) {
+          if (!llvm::isa<ReussirArrayToDeviceOp, ReussirArrayToHostOp>(op))
+            return;
+          EXPECT_FALSE(mlir::isSpeculatable(op));
+          EXPECT_FALSE(mlir::isMemoryEffectFree(op));
+          if (auto upload = llvm::dyn_cast<ReussirArrayToDeviceOp>(op)) {
+            auto acceptor = llvm::cast<TokenAcceptor>(op);
+            EXPECT_TRUE(acceptor.shouldAcceptToken());
+            EXPECT_FALSE(acceptor.getTokenType().isDynamicSize());
+            auto box = upload.getArray().getType().getInnerBoxType();
+            mlir::DataLayout layout(module);
+            EXPECT_EQ(acceptor.getTokenType().getSize(),
+                      layout.getTypeSize(box));
+            EXPECT_EQ(acceptor.getTokenType().getAlign(),
+                      layout.getTypeABIAlignment(box));
+          }
+          ++checked;
+        });
+        EXPECT_EQ(checked, 2u);
+      });
+}
+
 } // namespace reussir

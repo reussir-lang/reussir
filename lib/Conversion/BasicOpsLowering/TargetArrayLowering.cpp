@@ -6,6 +6,7 @@
 #include "Reussir/Conversion/OpenXLATarget.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
+#include <mlir/Conversion/LLVMCommon/MemRefBuilder.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h>
 #include <mlir/Dialect/LLVMIR/FunctionCallUtils.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
@@ -87,11 +88,11 @@ mlir::Value constantAddress(mlir::Operation *op, mlir::Type type,
   return mlir::LLVM::AddressOfOp::create(builder, op->getLoc(), global);
 }
 
-mlir::Value allocationOptions(ReussirArrayCreateOp op, TargetAttr target,
+mlir::Value allocationOptions(mlir::Operation *op, TargetAttr target,
                               const std::optional<PjrtLayout> &layout,
                               mlir::Type indexType,
                               mlir::ConversionPatternRewriter &rewriter) {
-  auto loc = op.getLoc();
+  auto loc = op->getLoc();
   auto ptrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
   mlir::Value null = mlir::LLVM::ZeroOp::create(rewriter, loc, ptrType);
   if (!target.getMemoryKind() && !layout)
@@ -174,6 +175,67 @@ mlir::LogicalResult dropAllocation(mlir::Operation *op, mlir::Value descriptor,
   return mlir::success();
 }
 
+void initializeTargetBox(mlir::Operation *op, RcType rcType,
+                         llvm::ArrayRef<mlir::Value> handles,
+                         mlir::ValueRange extents,
+                         const mlir::LLVMTypeConverter &converter,
+                         mlir::ConversionPatternRewriter &rewriter,
+                         mlir::Value box) {
+  auto loc = op->getLoc();
+  auto indexType = converter.getIndexType();
+  auto ptrType = mlir::LLVM::LLVMPointerType::get(op->getContext());
+  auto boxType = rcType.getInnerBoxType();
+  auto one = constant(rewriter, loc, rewriter.getI32Type(), 1);
+  mlir::LLVM::StoreOp::create(rewriter, loc, one, box);
+  auto loweredBox = converter.convertType(boxType);
+  auto storeField = [&](unsigned field, mlir::Value value) {
+    auto address = mlir::LLVM::GEPOp::create(
+        rewriter, loc, ptrType, loweredBox, box,
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1, static_cast<int32_t>(field)});
+    mlir::LLVM::StoreOp::create(rewriter, loc, value, address);
+  };
+  mlir::Value allocations = handles.front();
+  if (handles.size() > 1) {
+    allocations = mlir::LLVM::PoisonOp::create(
+        rewriter, loc, mlir::LLVM::LLVMArrayType::get(ptrType, handles.size()));
+    for (auto [i, handle] : llvm::enumerate(handles))
+      allocations = mlir::LLVM::InsertValueOp::create(
+          rewriter, loc, allocations, handle,
+          llvm::ArrayRef<int64_t>{static_cast<int64_t>(i)});
+  }
+  storeField(ArrayType::ALLOCATION_INDEX, allocations);
+  storeField(ArrayType::OFFSET_INDEX, constant(rewriter, loc, indexType, 0));
+  for (auto [i, extent] : llvm::enumerate(extents))
+    storeField(ArrayType::DYNAMIC_EXTENTS_INDEX + i, extent);
+}
+
+mlir::FailureOr<std::optional<PjrtLayout>> resolveLayout(mlir::Operation *op,
+                                                         ArrayType arrayType) {
+  auto target = arrayType.getTarget();
+  std::optional<PjrtLayout> pjrtLayout;
+  if (target.getLayout() && target.getLayout().getValue() == "auto") {
+    op->emitOpError("auto layout must be resolved before allocation");
+    return mlir::failure();
+  }
+  if (target.getMemoryKind() && target.getMemoryKind().getValue().empty()) {
+    op->emitOpError("memory kind must not be empty");
+    return mlir::failure();
+  }
+  if (target.getLayout() && target.getLayout().getValue() != "default") {
+#ifdef REUSSIR_ENABLE_OPENXLA
+    auto parsed =
+        parsePjrtLayout(target.getLayout(), arrayType.getRank(), op->getLoc());
+    if (mlir::failed(parsed))
+      return mlir::failure();
+    pjrtLayout = std::move(*parsed);
+#else
+    op->emitOpError("explicit XLA layouts require REUSSIR_ENABLE_OPENXLA");
+    return mlir::failure();
+#endif
+  }
+  return pjrtLayout;
+}
+
 struct CreateTargetArray : mlir::ConvertOpToLLVMPattern<ReussirArrayCreateOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
@@ -190,24 +252,11 @@ struct CreateTargetArray : mlir::ConvertOpToLLVMPattern<ReussirArrayCreateOp> {
     auto function = op->getParentOfType<mlir::FunctionOpInterface>();
     if (!function)
       return rewriter.notifyMatchFailure(op, "expected an enclosing function");
-    std::optional<PjrtLayout> pjrtLayout;
+    auto parsedLayout = resolveLayout(op, arrayType);
+    if (mlir::failed(parsedLayout))
+      return mlir::failure();
+    auto &pjrtLayout = *parsedLayout;
     llvm::SmallVector<int64_t> dimShards(arrayType.getRank(), 1);
-    if (target.getLayout() && target.getLayout().getValue() == "auto")
-      return op.emitOpError("auto layout must be resolved before allocation");
-    if (target.getMemoryKind() && target.getMemoryKind().getValue().empty())
-      return op.emitOpError("memory kind must not be empty");
-    if (target.getLayout() && target.getLayout().getValue() != "default") {
-#ifdef REUSSIR_ENABLE_OPENXLA
-      auto parsed =
-          parsePjrtLayout(target.getLayout(), arrayType.getRank(), op.getLoc());
-      if (mlir::failed(parsed))
-        return mlir::failure();
-      pjrtLayout = std::move(*parsed);
-#else
-      return op.emitOpError(
-          "explicit XLA layouts require REUSSIR_ENABLE_OPENXLA");
-#endif
-    }
     if (target.getSharding() || target.getDevices().size() != 1) {
 #ifdef REUSSIR_ENABLE_OPENXLA
       auto shards = getPjrtDimShards(
@@ -290,33 +339,283 @@ struct CreateTargetArray : mlir::ConvertOpToLLVMPattern<ReussirArrayCreateOp> {
               .getResult());
     }
 
-    auto boxType = rcType.getInnerBoxType();
-    auto box = adaptor.getToken();
-    auto one = constant(rewriter, loc, rewriter.getI32Type(), 1);
-    mlir::LLVM::StoreOp::create(rewriter, loc, one, box);
-    auto loweredBox = getTypeConverter()->convertType(boxType);
-    auto storeField = [&](unsigned field, mlir::Value value) {
-      auto address =
-          mlir::LLVM::GEPOp::create(rewriter, loc, ptrType, loweredBox, box,
-                                    llvm::ArrayRef<mlir::LLVM::GEPArg>{
-                                        0, 1, static_cast<int32_t>(field)});
-      mlir::LLVM::StoreOp::create(rewriter, loc, value, address);
-    };
-    mlir::Value allocations = handles.front();
-    if (handles.size() > 1) {
-      allocations = mlir::LLVM::PoisonOp::create(
-          rewriter, loc,
-          mlir::LLVM::LLVMArrayType::get(ptrType, handles.size()));
-      for (auto [i, handle] : llvm::enumerate(handles))
-        allocations = mlir::LLVM::InsertValueOp::create(
-            rewriter, loc, allocations, handle,
-            llvm::ArrayRef<int64_t>{static_cast<int64_t>(i)});
+    initializeTargetBox(op, rcType, handles, adaptor.getExtents(),
+                        *getTypeConverter(), rewriter, adaptor.getToken());
+    rewriter.replaceOp(op, adaptor.getToken());
+    return mlir::success();
+  }
+};
+
+// Transfers currently cover one complete, addressable device buffer.
+mlir::LogicalResult verifyTransferSharding(mlir::Operation *op,
+                                           ArrayType array) {
+  auto target = array.getTarget();
+  if (!target.getSharding())
+    return mlir::success();
+#ifdef REUSSIR_ENABLE_OPENXLA
+  auto shards = getPjrtDimShards(
+      target.getSharding(),
+      mlir::RankedTensorType::get(array.getShape(), array.getElementType()),
+      target.getDevices().asArrayRef(), op->getLoc());
+  if (mlir::failed(shards))
+    return mlir::failure();
+  if (llvm::any_of(*shards, [](int64_t n) { return n != 1; }))
+    return op->emitOpError("transfer requires an unsharded device buffer");
+  return mlir::success();
+#else
+  return op->emitOpError("sharding metadata requires REUSSIR_ENABLE_OPENXLA");
+#endif
+}
+
+void assertEqual(mlir::OpBuilder &builder, mlir::Location loc, mlir::Value lhs,
+                 mlir::Value rhs, llvm::StringRef message) {
+  auto equal = mlir::LLVM::ICmpOp::create(
+      builder, loc, mlir::LLVM::ICmpPredicate::eq, lhs, rhs);
+  mlir::cf::AssertOp::create(builder, loc, equal, message);
+}
+
+// Use LLVM's checked arithmetic for byte counts and signed byte strides.
+template <typename MulOp>
+mlir::Value checkedMultiply(mlir::OpBuilder &builder, mlir::Location loc,
+                            mlir::Value lhs, mlir::Value rhs) {
+  auto resultType = mlir::LLVM::LLVMStructType::getLiteral(
+      builder.getContext(), {lhs.getType(), builder.getI1Type()});
+  auto product = MulOp::create(builder, loc, resultType, lhs, rhs);
+  auto overflow = mlir::LLVM::ExtractValueOp::create(
+      builder, loc, product, llvm::ArrayRef<int64_t>{1});
+  assertEqual(builder, loc, overflow,
+              constant(builder, loc, builder.getI1Type(), 0),
+              "array transfer size or stride overflow");
+  return mlir::LLVM::ExtractValueOp::create(builder, loc, product,
+                                            llvm::ArrayRef<int64_t>{0});
+}
+
+mlir::Value hostDataPointer(mlir::OpBuilder &builder, mlir::Location loc,
+                            mlir::MemRefDescriptor descriptor,
+                            mlir::Type elementType) {
+  auto base = descriptor.alignedPtr(builder, loc);
+  return mlir::LLVM::GEPOp::create(
+      builder, loc, base.getType(), elementType, base,
+      mlir::ValueRange{descriptor.offset(builder, loc)});
+}
+
+struct ToDevice : mlir::ConvertOpToLLVMPattern<ReussirArrayToDeviceOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayToDeviceOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    if (!op.getToken())
+      return op.emitOpError("token is required but not provided");
+    if (!op->getParentOfType<mlir::FunctionOpInterface>())
+      return op.emitOpError("requires an enclosing function");
+    auto rcType = op.getArray().getType();
+    auto array = llvm::cast<ArrayType>(rcType.getElementType());
+    if (mlir::failed(verifyTransferSharding(op, array)))
+      return mlir::failure();
+    auto dtype = pjrtElementType(array.getElementType());
+    if (!dtype)
+      return op.emitOpError("unsupported PjRt element type: ")
+             << array.getElementType();
+    auto layout = resolveLayout(op, array);
+    if (mlir::failed(layout))
+      return mlir::failure();
+    auto loc = op.getLoc();
+    auto indexType = getTypeConverter()->getIndexType();
+    auto ptrType = mlir::LLVM::LLVMPointerType::get(getContext());
+    auto i64 = rewriter.getI64Type();
+    auto upload =
+        runtimeFunction(op, rewriter, "__reussir_pjrt_array_from_host",
+                        {indexType, rewriter.getI32Type(), ptrType, indexType,
+                         ptrType, ptrType, ptrType},
+                        ptrType);
+    if (mlir::failed(upload))
+      return mlir::failure();
+    auto dims = entryAlloca(op, i64, indexType, array.getRank(), rewriter);
+    auto strides = entryAlloca(op, i64, indexType, array.getRank(), rewriter);
+    auto elementBytes = mlir::DataLayout::closest(op)
+                            .getTypeSize(array.getElementType())
+                            .getFixedValue();
+    mlir::MemRefDescriptor source(adaptor.getSource());
+    llvm::SmallVector<mlir::Value> extents;
+    for (unsigned i = 0; i < array.getRank(); ++i) {
+      auto size = source.size(rewriter, loc, i);
+      auto valid = mlir::LLVM::ICmpOp::create(
+          rewriter, loc, mlir::LLVM::ICmpPredicate::sge, size,
+          constant(rewriter, loc, indexType, 0));
+      mlir::cf::AssertOp::create(rewriter, loc, valid,
+                                 "array transfer extent must be nonnegative");
+      if (array.isDynamicDim(i))
+        extents.push_back(size);
+      else
+        assertEqual(rewriter, loc, size,
+                    constant(rewriter, loc, indexType, array.getDimSize(i)),
+                    "array transfer shape mismatch");
+      mlir::Value stride = source.stride(rewriter, loc, i);
+      if (indexType != i64) {
+        size = mlir::LLVM::SExtOp::create(rewriter, loc, i64, size);
+        stride = mlir::LLVM::SExtOp::create(rewriter, loc, i64, stride);
+      }
+      auto byteStride = checkedMultiply<mlir::LLVM::SMulWithOverflowOp>(
+          rewriter, loc, stride, constant(rewriter, loc, i64, elementBytes));
+      auto slot = [&](mlir::Value base) {
+        return mlir::LLVM::GEPOp::create(
+            rewriter, loc, ptrType, i64, base,
+            llvm::ArrayRef<mlir::LLVM::GEPArg>{static_cast<int32_t>(i)});
+      };
+      mlir::LLVM::StoreOp::create(rewriter, loc, size, slot(dims));
+      mlir::LLVM::StoreOp::create(rewriter, loc, byteStride, slot(strides));
     }
-    storeField(ArrayType::ALLOCATION_INDEX, allocations);
-    storeField(ArrayType::OFFSET_INDEX, constant(rewriter, loc, indexType, 0));
-    for (auto [i, extent] : llvm::enumerate(adaptor.getExtents()))
-      storeField(ArrayType::DYNAMIC_EXTENTS_INDEX + i, extent);
-    rewriter.replaceOp(op, box);
+    auto target = array.getTarget();
+    auto handle =
+        mlir::LLVM::CallOp::create(
+            rewriter, loc, *upload,
+            mlir::ValueRange{
+                constant(rewriter, loc, indexType,
+                         target.getDevices().asArrayRef().front()),
+                constant(rewriter, loc, rewriter.getI32Type(), *dtype), dims,
+                constant(rewriter, loc, indexType, array.getRank()),
+                hostDataPointer(
+                    rewriter, loc, source,
+                    getTypeConverter()->convertType(array.getElementType())),
+                strides,
+                allocationOptions(op, target, *layout, indexType, rewriter)})
+            .getResult();
+    initializeTargetBox(op, rcType, {handle}, extents, *getTypeConverter(),
+                        rewriter, adaptor.getToken());
+    rewriter.replaceOp(op, adaptor.getToken());
+    return mlir::success();
+  }
+};
+
+struct ToHost : mlir::ConvertOpToLLVMPattern<ReussirArrayToHostOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayToHostOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    if (!op->getParentOfType<mlir::FunctionOpInterface>())
+      return op.emitOpError("requires an enclosing function");
+    auto rcType = op.getArray().getType();
+    auto array = llvm::cast<ArrayType>(rcType.getElementType());
+    if (mlir::failed(verifyTransferSharding(op, array)))
+      return mlir::failure();
+    if (!pjrtElementType(array.getElementType()))
+      return op.emitOpError("unsupported PjRt element type: ")
+             << array.getElementType();
+    auto loc = op.getLoc();
+    auto indexType = getTypeConverter()->getIndexType();
+    auto ptrType = mlir::LLVM::LLVMPointerType::get(getContext());
+    auto hostSize =
+        runtimeFunction(op, rewriter, "__reussir_pjrt_array_host_size",
+                        {ptrType, ptrType}, indexType);
+    auto download =
+        runtimeFunction(op, rewriter, "__reussir_pjrt_array_to_host",
+                        {ptrType, ptrType, indexType, ptrType});
+    if (mlir::failed(hostSize) || mlir::failed(download))
+      return mlir::failure();
+    auto loadField = [&](unsigned field, mlir::Type type) -> mlir::Value {
+      auto address = mlir::LLVM::GEPOp::create(
+          rewriter, loc, ptrType,
+          getTypeConverter()->convertType(rcType.getInnerBoxType()),
+          adaptor.getArray(),
+          llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1,
+                                             static_cast<int32_t>(field)});
+      return mlir::LLVM::LoadOp::create(rewriter, loc, type, address);
+    };
+    auto zero = constant(rewriter, loc, indexType, 0);
+    auto one = constant(rewriter, loc, indexType, 1);
+    assertEqual(rewriter, loc, loadField(ArrayType::OFFSET_INDEX, indexType),
+                zero, "array transfer requires a complete device buffer");
+    mlir::MemRefDescriptor destination(adaptor.getDestination());
+    llvm::SmallVector<mlir::Value> sizes;
+    mlir::Value empty = constant(rewriter, loc, rewriter.getI1Type(), 0);
+    unsigned dynamicDim = 0;
+    for (unsigned i = 0; i < array.getRank(); ++i) {
+      auto size = destination.size(rewriter, loc, i);
+      auto expected =
+          array.isDynamicDim(i)
+              ? loadField(ArrayType::DYNAMIC_EXTENTS_INDEX + dynamicDim++,
+                          indexType)
+              : constant(rewriter, loc, indexType, array.getDimSize(i));
+      assertEqual(rewriter, loc, size, expected,
+                  "array transfer shape mismatch");
+      auto valid = mlir::LLVM::ICmpOp::create(
+          rewriter, loc, mlir::LLVM::ICmpPredicate::sge, size, zero);
+      mlir::cf::AssertOp::create(rewriter, loc, valid,
+                                 "array transfer extent must be nonnegative");
+      auto isZero = mlir::LLVM::ICmpOp::create(
+          rewriter, loc, mlir::LLVM::ICmpPredicate::eq, size, zero);
+      empty = mlir::LLVM::OrOp::create(rewriter, loc, empty, isZero);
+      sizes.push_back(size);
+    }
+    // Empty arrays touch no storage; singleton dimensions have no stride
+    // constraint.
+    mlir::Value count =
+        mlir::LLVM::SelectOp::create(rewriter, loc, empty, zero, one);
+    for (unsigned i = array.getRank(); i-- > 0;) {
+      auto matches = mlir::LLVM::ICmpOp::create(
+          rewriter, loc, mlir::LLVM::ICmpPredicate::eq,
+          destination.stride(rewriter, loc, i), count);
+      auto singleton = mlir::LLVM::ICmpOp::create(
+          rewriter, loc, mlir::LLVM::ICmpPredicate::eq, sizes[i], one);
+      auto valid = mlir::LLVM::OrOp::create(rewriter, loc, matches, singleton);
+      valid = mlir::LLVM::OrOp::create(rewriter, loc, valid, empty);
+      mlir::cf::AssertOp::create(
+          rewriter, loc, valid,
+          "array.to_host requires dense row-major storage");
+      count = checkedMultiply<mlir::LLVM::UMulWithOverflowOp>(rewriter, loc,
+                                                              count, sizes[i]);
+    }
+    auto elementBytes = mlir::DataLayout::closest(op)
+                            .getTypeSize(array.getElementType())
+                            .getFixedValue();
+    auto bytes = checkedMultiply<mlir::LLVM::UMulWithOverflowOp>(
+        rewriter, loc, count, constant(rewriter, loc, indexType, elementBytes));
+    llvm::SmallVector<int64_t> order;
+    for (int64_t i = array.getRank(); i-- > 0;)
+      order.push_back(i);
+    auto orderData = mlir::DenseIntElementsAttr::get(
+        mlir::RankedTensorType::get({static_cast<int64_t>(order.size())},
+                                    rewriter.getI64Type()),
+        order);
+    auto orderPtr = constantAddress(
+        op, mlir::LLVM::LLVMArrayType::get(rewriter.getI64Type(), order.size()),
+        orderData, rewriter);
+    // Matches pjrt::ffi::HostLayout; the synchronous calls borrow this slot.
+    auto layoutType = mlir::LLVM::LLVMStructType::getLiteral(
+        getContext(),
+        {indexType, ptrType, ptrType, ptrType, ptrType, indexType});
+    auto null = mlir::LLVM::ZeroOp::create(rewriter, loc, ptrType);
+    llvm::SmallVector<mlir::Value> fields{
+        constant(rewriter, loc, indexType, array.getRank()),
+        null,
+        orderPtr,
+        null,
+        null,
+        zero};
+    mlir::Value layout =
+        mlir::LLVM::PoisonOp::create(rewriter, loc, layoutType);
+    for (auto [i, field] : llvm::enumerate(fields))
+      layout = mlir::LLVM::InsertValueOp::create(
+          rewriter, loc, layout, field,
+          llvm::ArrayRef<int64_t>{static_cast<int64_t>(i)});
+    auto layoutPtr = entryAlloca(op, layoutType, indexType, 1, rewriter);
+    mlir::LLVM::StoreOp::create(rewriter, loc, layout, layoutPtr);
+    auto handle = loadField(ArrayType::ALLOCATION_INDEX, ptrType);
+    auto required =
+        mlir::LLVM::CallOp::create(rewriter, loc, *hostSize,
+                                   mlir::ValueRange{handle, layoutPtr})
+            .getResult();
+    assertEqual(rewriter, loc, required, bytes,
+                "array transfer host byte size mismatch");
+    auto data = hostDataPointer(
+        rewriter, loc, destination,
+        getTypeConverter()->convertType(array.getElementType()));
+    mlir::LLVM::CallOp::create(
+        rewriter, loc, *download,
+        mlir::ValueRange{handle, data, bytes, layoutPtr});
+    rewriter.eraseOp(op);
     return mlir::success();
   }
 };
@@ -341,6 +640,6 @@ struct DropTargetArray : mlir::ConvertOpToLLVMPattern<ReussirRefDropOp> {
 
 void populateTargetArrayLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                          mlir::RewritePatternSet &patterns) {
-  patterns.add<CreateTargetArray, DropTargetArray>(converter);
+  patterns.add<CreateTargetArray, ToDevice, ToHost, DropTargetArray>(converter);
 }
 } // namespace reussir
