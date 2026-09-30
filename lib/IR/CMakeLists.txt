@@ -17,6 +17,8 @@ add_mlir_dialect_library(MLIRReussir
     # Loaded as a dependent dialect (lock-guarded cell layouts are sync-type
     # layouts); listed explicitly rather than via the dialect-libs glob.
     MLIRSync
+    MLIRParser
+    MLIRBytecodeReader
 )
 
 if(REUSSIR_ENABLE_OPENXLA)

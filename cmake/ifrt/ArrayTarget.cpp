@@ -13,6 +13,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include <llvm/ADT/DenseSet.h>
 #include <xla/layout_util.h>
 #include <xla/pjrt/layout_mode.h>
 #include <xla/python/ifrt/ir/ifrt_dialect.h>
@@ -64,42 +65,107 @@ verifyBorrowedCallInput(mlir::Operation *bridge, CallOp call, unsigned index) {
   return mlir::success();
 }
 
-mlir::LogicalResult verifyIfrtArrayBorrow(mlir::Operation *op,
-                                          mlir::Value view) {
-  for (mlir::OpOperand &use : view.getUses()) {
-    auto *user = use.getOwner();
-    if (user->getBlock() != op->getBlock())
-      return op->emitOpError(
-          "borrowed IFRT array must stay in its defining block");
-    if (auto call = llvm::dyn_cast<xla::ifrt::CallOp>(user)) {
-      if (mlir::failed(
-              verifyBorrowedCallInput(op, call, use.getOperandNumber())))
-        return mlir::failure();
-    } else if (auto call =
-                   llvm::dyn_cast<xla::ifrt::CallLoadedExecutableOp>(user)) {
-      if (mlir::failed(
-              verifyBorrowedCallInput(op, call, use.getOperandNumber())))
-        return mlir::failure();
-    } else if (!llvm::isa<xla::ifrt::AfterOp>(user)) {
-      return op->emitOpError(
-          "borrowed IFRT array only supports direct IFRT call and After uses");
-    }
-  }
-  return mlir::success();
+mlir::LogicalResult verifyIfrtArrayBorrowUse(mlir::Operation *op,
+                                             mlir::OpOperand &use) {
+  auto *user = use.getOwner();
+  if (auto call = llvm::dyn_cast<xla::ifrt::CallOp>(user))
+    return verifyBorrowedCallInput(op, call, use.getOperandNumber());
+  if (auto call = llvm::dyn_cast<xla::ifrt::CallLoadedExecutableOp>(user))
+    return verifyBorrowedCallInput(op, call, use.getOperandNumber());
+  if (llvm::isa<xla::ifrt::AfterOp>(user))
+    return mlir::success();
+  return op->emitOpError(
+      "borrowed IFRT array only supports direct IFRT call and After uses");
 }
 
-mlir::LogicalResult verifyIfrtArrayAdoption(mlir::Operation *op,
-                                            mlir::Value source) {
-  auto *producer = source.getDefiningOp();
-  if (!producer ||
-      !llvm::isa<xla::ifrt::CallOp, xla::ifrt::CallLoadedExecutableOp>(
-          producer))
-    return op->emitOpError("requires an owned IFRT call result");
-  if (producer->getBlock() != op->getBlock())
-    return op->emitOpError("IFRT result must be adopted in its defining block");
-  if (!source.hasOneUse())
-    return op->emitOpError("adopted IFRT result must have exactly one use");
-  return mlir::success();
+bool isIfrtCall(mlir::Operation *op) {
+  return op &&
+         llvm::isa<xla::ifrt::CallOp, xla::ifrt::CallLoadedExecutableOp>(op);
+}
+
+std::optional<IfrtCallInfo> getIfrtCallInfo(mlir::Operation *op) {
+  auto call = llvm::dyn_cast<xla::ifrt::CallOp>(op);
+  if (!call)
+    return std::nullopt;
+  return IfrtCallInfo{call.getCalleeAttr(),
+                      static_cast<unsigned>(call.getInputs().size()),
+                      static_cast<unsigned>(call.getOutputs().size()),
+                      mlir::DenseI32ArrayAttr::get(
+                          op->getContext(), call.getDevicesAttr().getIds()),
+                      call.getIoAliases(),
+                      call.getDonatedInputIndicesAttr(),
+                      call.getArgAttrsAttr(),
+                      call.getResAttrsAttr()};
+}
+
+mlir::FailureOr<mlir::FunctionType> verifyIfrtCallSignature(
+    mlir::Operation *op, mlir::TypeRange inputs, mlir::TypeRange outputs,
+    mlir::TypeRange controls, mlir::Type controlOutput,
+    llvm::ArrayRef<int32_t> devices, mlir::ArrayAttr aliases,
+    llvm::ArrayRef<int32_t> donated) {
+  using xla::ifrt::IfrtArrayType;
+  if (mlir::failed(xla::ifrt::IfrtDevicesAttr::verify(
+          [&] { return op->emitOpError(); }, devices)))
+    return mlir::failure();
+  for (auto type :
+       llvm::concat<mlir::Type>(controls, mlir::TypeRange{controlOutput}))
+    if (!llvm::isa<xla::ifrt::IfrtControlType>(type)) {
+      op->emitOpError("requires IFRT control dependencies");
+      return mlir::failure();
+    }
+  llvm::SmallVector<mlir::Type> inputShapes, outputShapes;
+  for (auto [types, shapes] :
+       {std::pair{inputs, &inputShapes}, std::pair{outputs, &outputShapes}}) {
+    for (auto type : types) {
+      auto array = llvm::dyn_cast<IfrtArrayType>(type);
+      if (!array) {
+        op->emitOpError("requires IFRT array inputs and outputs");
+        return mlir::failure();
+      }
+      for (int device : array.getDevices())
+        if (!llvm::is_contained(devices, device)) {
+          op->emitOpError("array devices must be a subset of call devices");
+          return mlir::failure();
+        }
+      shapes->push_back(array.getShape());
+    }
+  }
+  llvm::SmallDenseSet<int32_t> consumed, aliasedOutputs;
+  for (int32_t index : donated)
+    if (index < 0 || index >= inputs.size() || !consumed.insert(index).second) {
+      op->emitOpError("invalid or repeated donated input index");
+      return mlir::failure();
+    }
+  for (auto attr : aliases) {
+    auto alias = llvm::dyn_cast<mlir::DenseI32ArrayAttr>(attr);
+    if (!alias || alias.size() != 2 || alias[0] < 0 ||
+        alias[0] >= inputs.size() || alias[1] < 0 ||
+        alias[1] >= outputs.size()) {
+      op->emitOpError("invalid input/output alias indices");
+      return mlir::failure();
+    }
+    if (!consumed.insert(alias[0]).second ||
+        !aliasedOutputs.insert(alias[1]).second) {
+      op->emitOpError("input/output alias repeats an aliased or donated index");
+      return mlir::failure();
+    }
+    auto input = llvm::cast<IfrtArrayType>(inputs[alias[0]]);
+    auto output = llvm::cast<IfrtArrayType>(outputs[alias[1]]);
+    if (input == output)
+      continue;
+    auto inputShape = input.getShardingAttr().LocalShapeFromGlobalShape(
+        input.getShape().getShape());
+    auto outputShape = output.getShardingAttr().LocalShapeFromGlobalShape(
+        output.getShape().getShape());
+    if (input.getShape().getElementType() !=
+            output.getShape().getElementType() ||
+        !inputShape.ok() || !outputShape.ok() || *inputShape != *outputShape) {
+      op->emitOpError(
+          "aliased arrays must have equal dtypes and per-shard shapes");
+      return mlir::failure();
+    }
+  }
+  return mlir::FunctionType::get(op->getContext(), inputShapes, outputShapes);
 }
 
 mlir::FailureOr<PjrtLayout> parsePjrtLayout(mlir::StringAttr spelling,

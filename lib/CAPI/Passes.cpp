@@ -147,6 +147,9 @@ MlirPass reussirCreateBasicOpsLoweringPass(bool closureWpd) {
 MlirPass reussirCreateDebugInfoConversionPass(void) {
   return wrapOwned(reussir::createReussirDebugInfoConversionPass());
 }
+MlirPass reussirCreateIFRTJustInTimeTransformPass(void) {
+  return wrapOwned(reussir::createReussirIFRTJustInTimeTransformPass());
+}
 MlirPass reussirCreateAcquireDropExpansionPass(bool expandDecrement,
                                                bool outlineRecord) {
   reussir::ReussirAcquireDropExpansionPassOptions options;

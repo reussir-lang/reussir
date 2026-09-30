@@ -365,4 +365,22 @@ def ReussirAttachNativeTargetPass
   let dependentDialects = ["::mlir::LLVM::LLVMDialect", "::mlir::DLTIDialect"];
 }
 
+def ReussirIFRTJustInTimeTransformPass
+    : Pass<"reussir-ifrt-just-in-time-transform", "::mlir::ModuleOp"> {
+  let summary = "Prepare IFRT kernels and call sites for just-in-time execution";
+  let description = [{
+    Provides a general lowering pipeline for preparing outlined IFRT kernels
+    and their call sites for just-in-time execution.
+
+    The current implementation serializes outlined StableHLO modules into
+    `reussir.ifrt.bytecode` symbols with BLAKE3 checksums and replaces
+    `ifrt.Call` with `reussir.pjrt.jit_call`. It runs after IFRT outlining and
+    before basic lowering, followed by symbol DCE to remove unused kernel
+    modules. It requires OpenXLA but does not invoke a device compiler or load
+    a PJRT plugin.
+  }];
+  let dependentDialects = ["::reussir::ReussirDialect",
+                           "::mlir::func::FuncDialect"];
+}
+
 #endif // REUSSIR_CONVERSION_PASSES_TD

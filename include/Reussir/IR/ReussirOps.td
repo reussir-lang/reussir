@@ -30,6 +30,55 @@ class ReussirOp<string mnemonic, list<Trait> traits>
     : Op<ReussirDialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
+// IFRT kernel packaging and PJRT execution
+//===----------------------------------------------------------------------===//
+
+def ReussirIFRTBytecodeOp : ReussirOp<"ifrt.bytecode", [Symbol]> {
+  let summary = "A standalone kernel's MLIR bytecode and BLAKE3 checksum";
+  let description = [{
+    Stores an outlined StableHLO module with a public tensor entry point named
+    `main`. The checksum is the 32-byte BLAKE3 digest of `bytecode`, encoded
+    as a 64-character hexadecimal string (emitted in lowercase).
+    Runtime compilation must verify it before consulting the executable cache.
+    Compile options and device assignment belong to each referencing call.
+  }];
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       OptionalAttr<StrAttr>:$sym_visibility,
+                       StrAttr:$bytecode, StrAttr:$checksum);
+  let assemblyFormat = [{
+    ($sym_visibility^)? $sym_name `bytecode` $bytecode `checksum` $checksum attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def ReussirPJRTJitCallOp
+    : ReussirOp<"pjrt.jit_call", [AttrSizedOperandSegments,
+        DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+        MemoryEffects<[MemRead, MemWrite, MemAlloc, MemFree]>]> {
+  let summary = "Execute a bytecode kernel through cached PJRT compilation";
+  let description = [{
+    References an `ifrt.bytecode` symbol. Inputs and outputs are IFRT arrays;
+    control operands and the final result are IFRT completion dependencies.
+    Devices, input/output aliases, and donation indices retain IFRT semantics.
+    Borrowed RC inputs cannot be donated or aliased. Returned handles are owned
+    and may be adopted with `array.from_ifrt`. Runtime lowering is separate.
+  }];
+  let arguments = (ins Variadic<AnyType>:$inputs,
+                       Variadic<AnyType>:$control_inputs,
+                       SymbolRefAttr:$callee, DenseI32ArrayAttr:$devices,
+                       DefaultValuedAttr<ArrayAttr, "{}">:$io_aliases,
+                       DefaultValuedAttr<DenseI32ArrayAttr, "{}">:$donated_input_indices,
+                       OptionalAttr<DictArrayAttr>:$arg_attrs,
+                       OptionalAttr<DictArrayAttr>:$res_attrs);
+  let results = (outs Variadic<AnyType>:$outputs, AnyType:$control_output);
+  let assemblyFormat = [{
+    $callee `(` $inputs `)` (`after` `(` $control_inputs^ `)`)?
+    `on` `devices` $devices attr-dict `:` functional-type(operands, results)
+  }];
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Generic Operations
 //===----------------------------------------------------------------------===//
 
@@ -1060,7 +1109,7 @@ def ReussirArrayToIfrtOp
     Exposes the device buffers as an IFRT array. The RC owner must stay alive
     and immutable until all uses complete. Calls must neither donate nor alias
     this input. Currently only direct `ifrt.Call`, `ifrt.CallLoadedExecutable`,
-    and `ifrt.After` uses in the same block are supported.
+    `reussir.pjrt.jit_call`, and `ifrt.After` uses in the same block are supported.
 
     Shape (including dynamic dimensions), element type, ordered devices,
     sharding, memory kind, and layout must match exactly. Absent target sharding
@@ -1080,8 +1129,9 @@ def ReussirArrayFromIfrtOp
                                   DeclareOpInterfaceMethods<TokenAcceptorInterface>]> {
   let summary = "Adopt an IFRT call result into an RC target array";
   let description = [{
-    Consumes a result of `ifrt.Call` or `ifrt.CallLoadedExecutable` in the same
-    block. This must be its only use; borrowed arrays cannot be adopted.
+    Consumes a result of `ifrt.Call`, `ifrt.CallLoadedExecutable`, or
+    `reussir.pjrt.jit_call` in the same block. This must be its only use;
+    borrowed arrays cannot be adopted.
     Ownership of the returned buffer handles moves to the new RC array.
     Input/output aliases follow IFRT donation rules: borrowed RC inputs cannot
     be aliased, while donated IFRT-owned inputs may become results.

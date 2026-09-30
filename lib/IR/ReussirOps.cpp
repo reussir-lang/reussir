@@ -1458,7 +1458,25 @@ mlir::LogicalResult ReussirArrayToIfrtOp::verify() {
                                       getView().getType())))
     return mlir::failure();
 #ifdef REUSSIR_ENABLE_OPENXLA
-  return verifyIfrtArrayBorrow(getOperation(), getView());
+  for (mlir::OpOperand &use : getView().getUses()) {
+    if (use.getOwner()->getBlock() != getOperation()->getBlock())
+      return emitOpError("borrowed IFRT array must stay in its defining block");
+    if (auto call = llvm::dyn_cast<ReussirPJRTJitCallOp>(use.getOwner())) {
+      unsigned index = use.getOperandNumber();
+      if (llvm::is_contained(call.getDonatedInputIndices(), index))
+        return emitOpError("borrowed IFRT input cannot be donated");
+      for (auto attr : call.getIoAliases()) {
+        auto alias = llvm::dyn_cast<mlir::DenseI32ArrayAttr>(attr);
+        if (!alias || alias.size() != 2)
+          return emitOpError("malformed IFRT input/output alias");
+        if (alias[0] == static_cast<int32_t>(index))
+          return emitOpError("borrowed IFRT input cannot alias a call result");
+      }
+    } else if (mlir::failed(verifyIfrtArrayBorrowUse(getOperation(), use))) {
+      return mlir::failure();
+    }
+  }
+  return mlir::success();
 #else
   return mlir::failure();
 #endif
@@ -1471,7 +1489,15 @@ mlir::LogicalResult ReussirArrayFromIfrtOp::verify() {
   if (getToken() && getToken().getType() != getTokenType())
     return emitOpError("expected descriptor token type ") << getTokenType();
 #ifdef REUSSIR_ENABLE_OPENXLA
-  return verifyIfrtArrayAdoption(getOperation(), getSource());
+  auto *producer = getSource().getDefiningOp();
+  if (!isIfrtCall(producer) &&
+      !llvm::isa_and_nonnull<ReussirPJRTJitCallOp>(producer))
+    return emitOpError("requires an owned IFRT call result");
+  if (producer->getBlock() != getOperation()->getBlock())
+    return emitOpError("IFRT result must be adopted in its defining block");
+  if (!getSource().hasOneUse())
+    return emitOpError("adopted IFRT result must have exactly one use");
+  return mlir::success();
 #else
   return mlir::failure();
 #endif

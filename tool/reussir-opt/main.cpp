@@ -61,6 +61,9 @@ int main(int argc, char **argv) {
     return reussir::createReussirBasicOpsLoweringPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return reussir::createReussirIFRTJustInTimeTransformPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return reussir::createReussirConvertToSTDPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {

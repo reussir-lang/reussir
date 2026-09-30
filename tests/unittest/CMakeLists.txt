@@ -19,6 +19,8 @@ target_link_libraries(reussir-ut
     ReussirCAPI
     MLIRReussir
     MLIRReussirTypeConverter
+    MLIRReussirIFRTJustInTimeTransform
+    MLIRTransforms
     GTest::gtest
     GTest::gtest_main
 )

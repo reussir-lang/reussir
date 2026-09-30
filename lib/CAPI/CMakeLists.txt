@@ -41,6 +41,7 @@ set(REUSSIR_BACKEND_ARCHIVES
   MLIRReussirClosureOutlining
   MLIRReussirCompilePolymorphicFFI
   MLIRReussirAttachNativeTarget
+  MLIRReussirIFRTJustInTimeTransform
   # transformations
   MLIRReussirRcCreateSink
   MLIRReussirRcCreateFusion

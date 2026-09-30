@@ -9,6 +9,7 @@ add_subdirectory(ClosureOutlining)
 add_subdirectory(CompilePolymorphicFFI)
 add_subdirectory(InstrumentNonlinearFFI)
 add_subdirectory(AttachNativeTarget)
+add_subdirectory(IFRTJustInTimeTransform)
 
 set(REUSSIR_CONVERSION_AGGREGATE_LIBS
   MLIRReussirTypeConverter
@@ -22,6 +23,7 @@ set(REUSSIR_CONVERSION_AGGREGATE_LIBS
   MLIRReussirCompilePolymorphicFFI
   MLIRReussirInstrumentNonlinearFFI
   MLIRReussirAttachNativeTarget
+  MLIRReussirIFRTJustInTimeTransform
 )
 
 add_library(MLIRReussirConversion INTERFACE)

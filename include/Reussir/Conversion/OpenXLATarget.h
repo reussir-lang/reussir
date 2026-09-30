@@ -19,10 +19,12 @@
 
 #include <llvm/ADT/SmallVector.h>
 #include <mlir/IR/BuiltinAttributes.h>
+#include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/IR/Location.h>
 #include <mlir/IR/Value.h>
 #include <mlir/Support/LogicalResult.h>
+#include <optional>
 
 namespace reussir {
 // These helpers are built alongside upstream IFRT, so its C++ dependencies do
@@ -44,10 +46,30 @@ mlir::LogicalResult verifyIfrtArrayMetadata(
     mlir::Operation *op, mlir::Type type, mlir::RankedTensorType shape,
     llvm::ArrayRef<int32_t> devices, mlir::Attribute sharding,
     mlir::StringAttr memoryKind, mlir::StringAttr layout);
-mlir::LogicalResult verifyIfrtArrayBorrow(mlir::Operation *op,
-                                          mlir::Value view);
-mlir::LogicalResult verifyIfrtArrayAdoption(mlir::Operation *op,
-                                            mlir::Value source);
+mlir::LogicalResult verifyIfrtArrayBorrowUse(mlir::Operation *op,
+                                             mlir::OpOperand &use);
+bool isIfrtCall(mlir::Operation *op);
+
+// Verify the self-contained module stored in a bytecode object.
+mlir::LogicalResult verifyIfrtKernelModule(mlir::ModuleOp module);
+
+// Typed IFRT accessors for the Reussir pass without exposing XLA headers.
+struct IfrtCallInfo {
+  mlir::SymbolRefAttr callee;
+  unsigned numInputs;
+  unsigned numOutputs;
+  mlir::DenseI32ArrayAttr devices;
+  mlir::ArrayAttr ioAliases;
+  mlir::DenseI32ArrayAttr donatedInputIndices;
+  mlir::ArrayAttr argAttrs;
+  mlir::ArrayAttr resAttrs;
+};
+std::optional<IfrtCallInfo> getIfrtCallInfo(mlir::Operation *op);
+mlir::FailureOr<mlir::FunctionType> verifyIfrtCallSignature(
+    mlir::Operation *op, mlir::TypeRange inputs, mlir::TypeRange outputs,
+    mlir::TypeRange controls, mlir::Type controlOutput,
+    llvm::ArrayRef<int32_t> devices, mlir::ArrayAttr aliases,
+    llvm::ArrayRef<int32_t> donated);
 } // namespace reussir
 
 #endif // REUSSIR_CONVERSION_OPENXLATARGET_H

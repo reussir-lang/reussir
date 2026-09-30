@@ -16,6 +16,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#pragma once
 #ifndef REUSSIR_C_PASSES_H
 #define REUSSIR_C_PASSES_H
 
@@ -72,6 +73,9 @@ MlirPass reussirCreateCompilePolymorphicFFIPass(bool optimized);
 MlirPass reussirCreateInstrumentNonlinearFFIPass(void);
 MlirPass reussirCreateInvariantGroupAnalysisPass(void);
 MlirPass reussirCreateBasicOpsLoweringPass(bool closureWpd);
+// Packages outlined IFRT kernels as bytecode and rewrites their calls for PJRT
+// JIT compilation. Requires OpenXLA; run before basic lowering and symbol DCE.
+MlirPass reussirCreateIFRTJustInTimeTransformPass(void);
 MlirPass reussirCreateDebugInfoConversionPass(void);
 
 // Acquire/drop expansion has two phases controlled by these options; the
