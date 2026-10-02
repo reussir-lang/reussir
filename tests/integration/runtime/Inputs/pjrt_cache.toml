@@ -1,0 +1,5 @@
+[memory]
+loaded_entries = 1
+
+[disk]
+enabled = false

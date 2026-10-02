@@ -6,6 +6,13 @@ license.workspace = true
 
 [dependencies]
 backtrace = { version = "0.3.75" }
+blake3 = { version = "1", optional = true }
+dirs = { version = "6", optional = true }
+foyer = { version = "0.22.6", optional = true }
+futures = { version = "0.3", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"], optional = true }
 hashbrown = { version = "0.16.0" }
 # Fallback allocator when the mimalloc backend is unavailable: the sanitizer
 # runtime variants (built `--no-default-features`), miri, and lean embeddings
@@ -36,9 +43,12 @@ num_enum = "0.7.4"
 smallvec = "1.15.1"
 stacker.workspace = true
 
+[dev-dependencies]
+tempfile = "3"
+
 [features]
 default = ["mimalloc-v2"]
-pjrt = ["dep:libloading", "dep:paste", "dep:reussir-pjrt-sys", "dep:tracing"]
+pjrt = ["dep:blake3", "dep:dirs", "dep:foyer", "dep:futures", "dep:serde", "dep:tokio", "dep:toml", "dep:libloading", "dep:paste", "dep:reussir-pjrt-sys", "dep:tracing"]
 # The language heap requires a size-recovering allocator (`token<?>` frees
 # without a size); mimalloc is that allocator today (dlmalloc later). `mimalloc`
 # is the version-neutral gate the code checks; select the bundled major through

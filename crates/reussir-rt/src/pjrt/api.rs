@@ -14,8 +14,9 @@ pub(super) fn non_null<T>(pointer: *mut T, name: &str) -> Result<NonNull<T>> {
     NonNull::new(pointer).ok_or_else(|| Error::local(format!("PjRt returned null {name}")))
 }
 
-// All these fields are checked before constructing Api. Never form a reference
-// to the entire PJRT_Api: compatible older plugins may have a shorter tail.
+// Required fields are checked when constructing Api; optional persistence APIs
+// are checked before enabling the artifact cache. Never form a reference to the
+// entire PJRT_Api: compatible older plugins may have a shorter tail.
 macro_rules! call {
     ($api:expr, $function:ident { $($field:ident $(: $value:expr)?),* $(,)? }) => {{
         let api = $api;
@@ -59,6 +60,8 @@ impl Api {
             PJRT_Plugin_Initialize,
             PJRT_Client_Create,
             PJRT_Client_Destroy,
+            PJRT_Client_Compile,
+            PJRT_LoadedExecutable_Destroy,
             PJRT_Client_AddressableDevices,
             PJRT_Device_AddressableMemories,
             PJRT_Memory_Kind,

@@ -1,6 +1,6 @@
 //! Compiler-facing PJRT ABI. Backend errors abort through the runtime panic path.
 //!
-//! Handles are native `PJRT_Buffer*`: allocation/upload/copy return ownership;
+//! Array handles are native `PJRT_Buffer*`: allocation/upload/copy return ownership;
 //! deallocate consumes it; other calls borrow it. Release each owned handle once.
 //! Devices index the process-lifetime client's addressable devices. The runtime
 //! loads `REUSSIR_PJRT_PLUGIN` on first use. Host transfers block until return.
@@ -10,10 +10,10 @@
 //! Host data must remain live and aligned, immutable during upload and exclusively
 //! writable during download. Every address selected by strides must be in bounds.
 
-use std::{ffi::c_void, slice};
+use std::{ffi::c_void, slice, sync::Arc};
 
 use super::{
-    Buffer, Result,
+    Buffer, Executable, Result,
     layout::{Allocation, Layout},
 };
 
@@ -153,6 +153,51 @@ fn checked<T>(result: Result<T>) -> T {
     result.unwrap_or_else(|error| unsafe {
         crate::panic::panic!("PjRt: {}", error);
     })
+}
+
+/// Verify an MLIR payload's BLAKE3 checksum and return its cached compilation.
+/// `checksum` contains exactly 64 ASCII hex bytes (either case, no terminator).
+/// `options` contains a serialized PJRT CompileOptionsProto, including device
+/// assignment. The runtime borrows all input bytes only until this call returns.
+/// Acquires ownership before returning an opaque runtime executable. Release it with
+/// __reussir_pjrt_executable_release. Failures use the runtime panic path.
+///
+/// # Safety
+/// All nonempty inputs must be readable and immutable for their stated lengths.
+/// Empty bytecode/options slices permit null pointers; checksum must be readable
+/// for 64 bytes. This function does not execute the compiled program.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_pjrt_compile(
+    bytecode: *const u8,
+    bytecode_size: usize,
+    checksum: *const u8,
+    options: *const u8,
+    options_size: usize,
+) -> *const Executable {
+    let bytecode = if bytecode_size == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(bytecode, bytecode_size) }
+    };
+    let options = if options_size == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(options, options_size) }
+    };
+    Arc::into_raw(checked(Executable::compile(
+        bytecode,
+        unsafe { slice::from_raw_parts(checksum, 64) },
+        options,
+    )))
+}
+
+/// Release one owned reference. The final release may destroy the PJRT object.
+/// # Safety
+/// `executable` must carry an unreleased reference. It must remain retained
+/// throughout any asynchronous execution using its native handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_pjrt_executable_release(executable: *const Executable) {
+    unsafe { Arc::decrement_strong_count(executable) };
 }
 
 // A rank-zero shape is allowed to have a null dimensions pointer.
