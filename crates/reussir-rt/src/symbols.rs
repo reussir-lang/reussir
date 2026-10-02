@@ -69,6 +69,8 @@ pub fn exported_symbols() -> &'static [RuntimeSymbol] {
         #[cfg(feature = "pjrt")]
         __reussir_pjrt_executable_release,
         #[cfg(feature = "pjrt")]
+        __reussir_pjrt_executable_execute,
+        #[cfg(feature = "pjrt")]
         __reussir_pjrt_array_allocate,
         #[cfg(feature = "pjrt")]
         __reussir_pjrt_array_deallocate,

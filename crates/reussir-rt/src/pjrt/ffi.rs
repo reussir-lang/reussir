@@ -15,6 +15,7 @@ use std::{ffi::c_void, slice, sync::Arc};
 use super::{
     Buffer, Executable, Result,
     layout::{Allocation, Layout},
+    sys,
 };
 
 /// Destination placement for allocation/upload. Null options use PJRT defaults.
@@ -198,6 +199,37 @@ pub unsafe extern "C" fn __reussir_pjrt_compile(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __reussir_pjrt_executable_release(executable: *const Executable) {
     unsafe { Arc::decrement_strong_count(executable) };
+}
+
+/// Execute on the executable's single addressable device and wait for completion.
+/// Inputs are borrowed without donation; outputs are owned handles released with
+/// __reussir_pjrt_array_deallocate. `num_outputs` must match executable metadata.
+/// Failures use the runtime panic path, after cleaning up returned PJRT objects.
+///
+/// # Safety
+/// `executable` must carry an unreleased reference throughout this call. `inputs`
+/// must contain `num_inputs` live buffer handles from the runtime's client, which
+/// must not be destroyed or donated concurrently. `outputs` must provide exclusive
+/// writable storage for `num_outputs` handles, disjoint from the input list.
+/// Output storage may be uninitialized. Either list may be null when its count
+/// is zero. On return, the executable and inputs can be reused or released.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_pjrt_executable_execute(
+    executable: *const Executable,
+    inputs: *const *mut sys::PJRT_Buffer,
+    num_inputs: usize,
+    outputs: *mut *mut sys::PJRT_Buffer,
+    num_outputs: usize,
+) {
+    let inputs = if num_inputs == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(inputs, num_inputs) }
+    };
+    let results = checked(unsafe { (&*executable).execute(inputs, num_outputs) });
+    if num_outputs != 0 {
+        unsafe { std::ptr::copy_nonoverlapping(results.as_ptr(), outputs, num_outputs) };
+    }
 }
 
 // A rank-zero shape is allowed to have a null dimensions pointer.

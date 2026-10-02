@@ -49,6 +49,13 @@
 //! Normal process exit closes the artifact cache (and flushes hot entries when
 //! configured). Compilation returns an owned handle; release it after execution.
 //! Abort/forced termination can lose pending writes; cache misses recompile.
+//!
+//! `__reussir_pjrt_executable_execute` invokes an executable assigned to one
+//! addressable device and blocks until its completion event resolves, including
+//! for zero-result kernels. It borrows the executable and input buffers without
+//! donation. The caller supplies output slots matching the executable's result
+//! count and owns the returned buffers, released with the existing array API.
+//! The executable and inputs can be released or reused when invocation returns.
 
 mod api;
 mod artifact;
