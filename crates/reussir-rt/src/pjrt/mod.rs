@@ -50,11 +50,15 @@
 //! configured). Compilation returns an owned handle; release it after execution.
 //! Abort/forced termination can lose pending writes; cache misses recompile.
 //!
-//! `__reussir_pjrt_executable_execute` invokes an executable assigned to one
-//! addressable device and blocks until its completion event resolves, including
-//! for zero-result kernels. It borrows the executable and input buffers without
-//! donation. The caller supplies output slots matching the executable's result
-//! count and owns the returned buffers, released with the existing array API.
+//! `__reussir_pjrt_executable_execute` invokes an executable on all its addressable
+//! devices and waits for every device's completion, including for zero-result
+//! kernels and when a device fails. It borrows the executable and input buffers
+//! without donation. Each FFI input/output pointer addresses one logical array's
+//! allocation-handle field in its target-array descriptor. The runtime derives
+//! the shard count from the executable and packs/unpacks PJRT's per-device lists.
+//! Shards follow `PJRT_LoadedExecutable_AddressableDevices` order; counts passed
+//! to the FFI count logical arrays. Returned shards are owned by their output
+//! arrays and released by the existing target-array drop lowering.
 //! The executable and inputs can be released or reused when invocation returns.
 
 mod api;

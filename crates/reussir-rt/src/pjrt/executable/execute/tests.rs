@@ -16,7 +16,7 @@ struct State {
     outputs: usize,
     failure: Failure,
     log: RefCell<Vec<&'static str>>,
-    inputs: RefCell<Vec<*mut PJRT_Buffer>>,
+    inputs: RefCell<Vec<Vec<*mut PJRT_Buffer>>>,
 }
 
 unsafe fn state<T>(pointer: *mut T) -> &'static State {
@@ -67,7 +67,7 @@ unsafe extern "C" fn execute(args: *mut PJRT_LoadedExecutable_Execute_Args) -> *
         args.struct_size,
         PJRT_LoadedExecutable_Execute_Args_STRUCT_SIZE as usize
     );
-    assert_eq!(args.num_devices, 1);
+    assert_eq!(args.num_devices, state.devices);
     assert!(args.execute_device.is_null()); // Use the compiled assignment.
     let options = unsafe { &*args.options };
     assert_eq!(
@@ -81,25 +81,32 @@ unsafe extern "C" fn execute(args: *mut PJRT_LoadedExecutable_Execute_Args) -> *
         )
     };
     assert_eq!(indices, (0..args.num_args as i64).collect::<Vec<_>>());
-    *state.inputs.borrow_mut() =
-        unsafe { std::slice::from_raw_parts(*args.argument_lists, args.num_args) }.to_vec();
+    *state.inputs.borrow_mut() = (0..args.num_devices)
+        .map(|device| unsafe {
+            std::slice::from_raw_parts(*args.argument_lists.add(device), args.num_args).to_vec()
+        })
+        .collect();
     if state.failure == Failure::Launch {
         return ptr::dangling_mut();
     }
-    unsafe { *args.device_complete_events = args.executable.cast() };
-    for index in 0..state.outputs {
-        if state.failure != Failure::NullOutput || index != 0 {
-            let buffer = Box::into_raw(Box::new(ptr::from_ref(state))).cast();
-            unsafe { (*args.output_lists).add(index).write(buffer) };
+    for device in 0..args.num_devices {
+        let event = Box::into_raw(Box::new((ptr::from_ref(state), device))).cast();
+        unsafe { args.device_complete_events.add(device).write(event) };
+        for index in 0..state.outputs {
+            if state.failure != Failure::NullOutput || device != 0 || index != 0 {
+                let buffer = Box::into_raw(Box::new((ptr::from_ref(state), device, index))).cast();
+                unsafe { (*args.output_lists.add(device)).add(index).write(buffer) };
+            }
         }
     }
     ptr::null_mut()
 }
 
 unsafe extern "C" fn await_event(args: *mut PJRT_Event_Await_Args) -> *mut PJRT_Error {
-    let state = unsafe { state((*args).event) };
+    let (state, device) = unsafe { &*(*args).event.cast::<(*const State, usize)>() };
+    let state = unsafe { &**state };
     state.log.borrow_mut().push("await");
-    if state.failure == Failure::Completion {
+    if state.failure == Failure::Completion && *device == 0 {
         ptr::dangling_mut()
     } else {
         ptr::null_mut()
@@ -107,7 +114,8 @@ unsafe extern "C" fn await_event(args: *mut PJRT_Event_Await_Args) -> *mut PJRT_
 }
 
 unsafe extern "C" fn destroy_event(args: *mut PJRT_Event_Destroy_Args) -> *mut PJRT_Error {
-    unsafe { state((*args).event) }
+    let event = unsafe { Box::from_raw((*args).event.cast::<(*const State, usize)>()) };
+    unsafe { &*event.0 }
         .log
         .borrow_mut()
         .push("event destroyed");
@@ -115,8 +123,8 @@ unsafe extern "C" fn destroy_event(args: *mut PJRT_Event_Destroy_Args) -> *mut P
 }
 
 unsafe extern "C" fn destroy_buffer(args: *mut PJRT_Buffer_Destroy_Args) -> *mut PJRT_Error {
-    let state = unsafe { Box::from_raw((*args).buffer.cast::<*const State>()) };
-    unsafe { &**state }
+    let buffer = unsafe { Box::from_raw((*args).buffer.cast::<(*const State, usize, usize)>()) };
+    unsafe { &*buffer.0 }
         .log
         .borrow_mut()
         .push("buffer destroyed");
@@ -195,70 +203,122 @@ impl Fixture {
 }
 
 #[test]
-fn abi_borrows_repeated_inputs_and_transfers_outputs_after_completion() {
-    let fixture = Fixture::new(1, 2, Failure::None);
-    let input = ptr::dangling_mut::<PJRT_Buffer>();
-    let inputs = [input, input];
-    let mut outputs = [std::mem::MaybeUninit::<*mut PJRT_Buffer>::uninit(); 2];
+fn abi_accepts_logical_array_descriptors_and_packs_devices_internally() {
+    #[repr(C)]
+    struct Descriptor {
+        shards: [std::mem::MaybeUninit<*mut PJRT_Buffer>; 2],
+        offset: usize,
+        extent: usize,
+    }
+    let fixture = Fixture::new(2, 2, Failure::None);
+    let first = [
+        ptr::without_provenance_mut(1),
+        ptr::without_provenance_mut(2),
+    ];
+    let second = [
+        ptr::without_provenance_mut(3),
+        ptr::without_provenance_mut(4),
+    ];
+    let arrays = [first, second, first].map(|shards| Descriptor {
+        shards: shards.map(std::mem::MaybeUninit::new),
+        offset: 0,
+        extent: 8,
+    });
+    // Three logical arguments, two devices; the third reuses the first array.
+    let inputs = arrays.each_ref().map(|array| ptr::from_ref(array).cast());
     for _ in 0..2 {
+        fixture.state.log.borrow_mut().clear();
+        let mut outputs = [0; 2].map(|_| Descriptor {
+            shards: [std::mem::MaybeUninit::<*mut PJRT_Buffer>::uninit(); 2],
+            offset: 0,
+            extent: 8,
+        });
+        let destinations = outputs.each_mut().map(|array| ptr::from_mut(array).cast());
         unsafe {
             ffi::__reussir_pjrt_executable_execute(
                 Arc::as_ptr(&fixture.executable),
                 inputs.as_ptr(),
                 inputs.len(),
-                outputs.as_mut_ptr().cast(),
-                outputs.len(),
+                destinations.as_ptr(),
+                destinations.len(),
             )
         };
-        assert_eq!(*fixture.state.inputs.borrow(), inputs);
         assert_eq!(
-            &fixture.state.log.borrow()[..4],
-            ["metadata destroyed", "execute", "await", "event destroyed"]
+            *fixture.state.inputs.borrow(),
+            [
+                vec![first[0], second[0], first[0]],
+                vec![first[1], second[1], first[1]],
+            ]
+        );
+        assert_eq!(
+            *fixture.state.log.borrow(),
+            [
+                "metadata destroyed",
+                "execute",
+                "await",
+                "event destroyed",
+                "await",
+                "event destroyed",
+            ]
         );
         assert_eq!(Arc::strong_count(&fixture.executable), 1);
-        for output in outputs {
-            call!(
-                fixture.executable.owner.api,
-                PJRT_Buffer_Destroy {
-                    buffer: unsafe { output.assume_init() }
-                }
-            )
-            .unwrap();
+        for (result, array) in outputs.into_iter().enumerate() {
+            assert_eq!(array.offset, 0);
+            assert_eq!(array.extent, 8);
+            for (device, shard) in array.shards.into_iter().enumerate() {
+                let buffer =
+                    unsafe { &*shard.assume_init().cast::<(*const State, usize, usize)>() };
+                assert_eq!((buffer.1, buffer.2), (device, result));
+                call!(
+                    fixture.executable.owner.api,
+                    PJRT_Buffer_Destroy {
+                        buffer: unsafe { shard.assume_init() }
+                    }
+                )
+                .unwrap();
+            }
         }
+        assert_eq!(
+            fixture
+                .state
+                .log
+                .borrow()
+                .iter()
+                .filter(|&&s| s == "buffer destroyed")
+                .count(),
+            4
+        );
     }
-    assert_eq!(
-        fixture
-            .state
-            .log
-            .borrow()
-            .iter()
-            .filter(|&&s| s == "buffer destroyed")
-            .count(),
-        4
-    );
 }
 
 #[test]
-fn zero_outputs_still_wait_and_null_empty_lists_are_accepted() {
-    let fixture = Fixture::new(1, 0, Failure::None);
+fn zero_outputs_still_wait_on_every_device_and_allow_null_lists() {
+    let fixture = Fixture::new(2, 0, Failure::None);
     unsafe {
         ffi::__reussir_pjrt_executable_execute(
             Arc::as_ptr(&fixture.executable),
             ptr::null(),
             0,
-            ptr::null_mut(),
+            ptr::null(),
             0,
         )
     };
     assert_eq!(
         *fixture.state.log.borrow(),
-        ["metadata destroyed", "execute", "await", "event destroyed"]
+        [
+            "metadata destroyed",
+            "execute",
+            "await",
+            "event destroyed",
+            "await",
+            "event destroyed"
+        ]
     );
 }
 
 #[test]
-fn rejects_output_count_and_device_count_before_launch() {
-    for (devices, slots) in [(1, 0), (1, 3), (0, 2), (2, 2)] {
+fn rejects_output_count_and_non_addressable_execution_before_launch() {
+    for (devices, slots) in [(1, 0), (2, 3), (0, 2)] {
         let fixture = Fixture::new(devices, 2, Failure::None);
         assert!(unsafe { fixture.executable.execute(&[], slots) }.is_err());
         assert!(!fixture.state.log.borrow().contains(&"execute"));
@@ -283,8 +343,8 @@ fn launch_failure_does_not_await_unpopulated_event() {
 }
 
 #[test]
-fn completion_failure_releases_event_and_all_outputs() {
-    let fixture = Fixture::new(1, 2, Failure::Completion);
+fn first_device_failure_still_waits_on_other_devices_before_cleanup() {
+    let fixture = Fixture::new(2, 2, Failure::Completion);
     let error = unsafe { fixture.executable.execute(&[], 2) }.unwrap_err();
     assert_eq!(error.message, "execution failed");
     assert_eq!(
@@ -294,6 +354,10 @@ fn completion_failure_releases_event_and_all_outputs() {
             "execute",
             "await",
             "event destroyed",
+            "await",
+            "event destroyed",
+            "buffer destroyed",
+            "buffer destroyed",
             "buffer destroyed",
             "buffer destroyed"
         ]
@@ -302,7 +366,7 @@ fn completion_failure_releases_event_and_all_outputs() {
 
 #[test]
 fn invalid_output_waits_before_releasing_other_outputs() {
-    let fixture = Fixture::new(1, 2, Failure::NullOutput);
+    let fixture = Fixture::new(2, 2, Failure::NullOutput);
     assert!(unsafe { fixture.executable.execute(&[], 2) }.is_err());
     assert_eq!(
         *fixture.state.log.borrow(),
@@ -311,6 +375,10 @@ fn invalid_output_waits_before_releasing_other_outputs() {
             "execute",
             "await",
             "event destroyed",
+            "await",
+            "event destroyed",
+            "buffer destroyed",
+            "buffer destroyed",
             "buffer destroyed"
         ]
     );
