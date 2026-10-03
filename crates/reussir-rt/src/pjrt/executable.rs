@@ -12,6 +12,8 @@ use super::{
 use foyer::{Cache, CacheBuilder, S3FifoConfig};
 use std::{future::Future, path::Path, ptr::NonNull, sync::Arc};
 
+mod execute;
+
 /// An owned executable. The compiler ABI holds strong references to this object;
 /// cache eviction cannot destroy it until every caller releases its reference.
 pub struct Executable {

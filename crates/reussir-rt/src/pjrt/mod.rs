@@ -47,8 +47,21 @@
 //! mismatches always fail, including on warm-cache hits.
 //!
 //! Normal process exit closes the artifact cache (and flushes hot entries when
-//! configured). Compilation returns an owned handle; release it after execution.
+//! configured). Compilation returns an owned handle consumed by execution.
 //! Abort/forced termination can lose pending writes; cache misses recompile.
+//!
+//! `__reussir_pjrt_executable_execute` invokes an executable on all its addressable
+//! devices and waits for every device's completion, including for zero-result
+//! kernels and when a device fails. It consumes the executable reference and
+//! borrows input buffers without donation. Each FFI input/output pointer addresses
+//! one logical array's allocation-handle field in its descriptor. The runtime derives
+//! the shard count from the executable and packs/unpacks PJRT's per-device lists.
+//! Shards follow `PJRT_LoadedExecutable_AddressableDevices` order; counts passed
+//! to the FFI count logical arrays. Returned shards are owned by their output
+//! arrays and released by the existing target-array drop lowering.
+//! Inputs can be released or reused when invocation returns. Each invocation
+//! consumes one handle from compile; compile again to acquire another reference
+//! to the cached executable. The consumed reference is dropped on failure too.
 
 mod api;
 mod artifact;

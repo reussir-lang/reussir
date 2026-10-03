@@ -15,6 +15,7 @@ use std::{ffi::c_void, slice, sync::Arc};
 use super::{
     Buffer, Executable, Result,
     layout::{Allocation, Layout},
+    sys,
 };
 
 /// Destination placement for allocation/upload. Null options use PJRT defaults.
@@ -159,8 +160,9 @@ fn checked<T>(result: Result<T>) -> T {
 /// `checksum` contains exactly 64 ASCII hex bytes (either case, no terminator).
 /// `options` contains a serialized PJRT CompileOptionsProto, including device
 /// assignment. The runtime borrows all input bytes only until this call returns.
-/// Acquires ownership before returning an opaque runtime executable. Release it with
-/// __reussir_pjrt_executable_release. Failures use the runtime panic path.
+/// Acquires ownership before returning an opaque runtime executable. Pass it once
+/// to __reussir_pjrt_executable_execute, which consumes that reference. Failures
+/// use the runtime panic path.
 ///
 /// # Safety
 /// All nonempty inputs must be readable and immutable for their stated lengths.
@@ -191,13 +193,57 @@ pub unsafe extern "C" fn __reussir_pjrt_compile(
     )))
 }
 
-/// Release one owned reference. The final release may destroy the PJRT object.
+/// Invoke with one descriptor pointer per logical input/output array.
+/// Each pointer addresses the allocation-handle field of an MLIR target-array
+/// descriptor (after the RC header): `PJRT_Buffer *[d]`, where `d` comes from the
+/// loaded executable's addressable devices. Shards follow that device order.
+/// The runtime packs these arrays into PJRT's device lists and waits for all
+/// device completions, then drops the consumed executable reference. Inputs are
+/// borrowed without donation. Each output shard is owned and is released by
+/// the existing target-array drop lowering.
+///
 /// # Safety
-/// `executable` must carry an unreleased reference. It must remain retained
-/// throughout any asynchronous execution using its native handle.
+/// `executable` must carry one owned reference returned by compile. This call
+/// consumes it on success or failure; it must not be reused afterward. `inputs`
+/// and `outputs` have `num_inputs` and `num_outputs` descriptor pointers, counting
+/// logical arrays, not shards. The input arrays must contain `d` live buffer
+/// handles from the runtime's client, matching the executable's input sharding.
+/// Their owners must remain alive and must not donate/destroy the buffers during
+/// this call. Each output descriptor must provide exclusive writable storage for
+/// `d` handles, disjoint from other outputs and inputs; slots may be uninitialized.
+/// The compiler initializes the remaining descriptor metadata (offset/extents).
+/// Only complete-buffer views with zero offset are supported. Either outer list
+/// may be null when its logical-array count is zero. Inputs may be reused or
+/// released after return. Compile again to acquire a reference for another
+/// invocation. Failures use the runtime panic path after releasing the reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __reussir_pjrt_executable_release(executable: *const Executable) {
-    unsafe { Arc::decrement_strong_count(executable) };
+pub unsafe extern "C" fn __reussir_pjrt_executable_execute(
+    executable: *const Executable,
+    inputs: *const *const c_void,
+    num_inputs: usize,
+    outputs: *const *mut c_void,
+    num_outputs: usize,
+) {
+    // The ABI carries opaque array-descriptor pointers. Their first field is
+    // the existing allocation-handle array, not a standalone PJRT_Buffer.
+    let inputs = if num_inputs == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(inputs.cast::<*const *mut sys::PJRT_Buffer>(), num_inputs) }
+    };
+    let executable = unsafe { Arc::from_raw(executable) };
+    // execute owns the reference and drops it before returning its Result,
+    // including on failure, before checked enters the aborting panic path.
+    let results = checked(unsafe { executable.execute(inputs, num_outputs) });
+    for (array, shards) in results.iter().enumerate() {
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                shards.as_ptr(),
+                (*outputs.add(array)).cast::<*mut sys::PJRT_Buffer>(),
+                shards.len(),
+            )
+        };
+    }
 }
 
 // A rank-zero shape is allowed to have a null dimensions pointer.
