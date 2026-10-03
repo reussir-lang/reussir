@@ -519,8 +519,13 @@ impl<'a> Printer<'a> {
                     .collect();
                 comma_sep(parts)
             }
-            // An opaque `#[ffi]` record: the Rust path it aliases.
-            Some(RecordFields::Opaque) => text(format!("ffi {:?}", r.ffi.as_deref().unwrap_or(""))),
+            // An opaque `#[ffi]` record: the Rust path it aliases (`tagged`
+            // when a handle may be an odd immediate word).
+            Some(RecordFields::Opaque) => text(format!(
+                "ffi {}{:?}",
+                if r.ffi_tagged { "tagged " } else { "" },
+                r.ffi.as_deref().unwrap_or("")
+            )),
             // A record that failed field population elaborates with no fields.
             None => Doc::Null,
         }

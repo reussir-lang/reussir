@@ -255,13 +255,15 @@ impl Render<'_> {
             mir::RecordLayout::Opaque {
                 rust_name,
                 drop_hook,
+                tagged,
             } => {
                 text("ffi ")
                     + self.ty(rec.ty)
                     + text(format!(
-                        " {{ {:?}, @{} }}",
+                        " {{ {:?}, @{}{} }}",
                         self.sym(rust_name),
-                        self.sym(drop_hook)
+                        self.sym(drop_hook),
+                        if tagged { ", tagged" } else { "" }
                     ))
             }
         };

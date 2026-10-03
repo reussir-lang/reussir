@@ -212,7 +212,12 @@ static bool isRcType(mlir::Type type) { return llvm::isa<RcType>(type); }
 
 static bool isAssumableRcType(mlir::Type type) {
   auto rcType = llvm::dyn_cast<RcType>(type);
-  return rcType && !rcType.isRegional();
+  if (!rcType || rcType.isRegional())
+    return false;
+  // `rc.assume_unique` reads the count: a tagged FFI object may be an
+  // immediate, which has none.
+  auto ffiTy = llvm::dyn_cast<FFIObjectType>(rcType.getElementType());
+  return !(ffiTy && ffiTy.getTagged());
 }
 
 static bool hasRcResults(mlir::TypeRange types) {

@@ -408,6 +408,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 placement: None,
                 launch: None,
                 ffi: None,
+                ffi_tagged: false,
                 fields: Some(RecordFields::Named(vec![(
                     field,
                     self.tcx.mk_generic(generic),

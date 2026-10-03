@@ -83,7 +83,9 @@ enum FfiSpec {
     Import,
     /// `#[ffi(rust = "path")]` — an opaque record aliasing the Rust type
     /// at `path` (a `#[repr(transparent)]` wrapper over `reussir_rt`'s `Rc`).
-    Opaque(String),
+    /// With `#[ffi(rust = "path", tagged)]` (the flag) a handle may also be
+    /// an odd immediate word, which reference counting skips.
+    Opaque(String, bool),
 }
 
 /// One `import` binding: within `file`, reference paths headed by `name`
@@ -199,6 +201,10 @@ pub struct Record<'tcx> {
     /// `#[ffi(rust = "path")]`: the Rust type path this opaque record
     /// aliases. Set exactly when `fields` is [`RecordFields::Opaque`].
     pub ffi: Option<String>,
+    /// `#[ffi(rust = "path", tagged)]`: a handle may be an odd immediate
+    /// word (not a pointer), which reference counting skips. Only ever set
+    /// with `ffi`.
+    pub ffi_tagged: bool,
     pub fields: Option<RecordFields<'tcx>>,
     /// Generics that must be instantiated regional because they appear as the
     /// element of a `[field]` link (e.g. `inner: [field] T`). Checked at the
@@ -2532,9 +2538,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         seen && valid
     }
 
-    /// Recognize a `#[ffi(...)]` attribute among `attrs`: `#[ffi(import)]`
-    /// or `#[ffi(rust = "path")]`. Malformed or duplicated uses report and
-    /// yield `None` (the item elaborates as if unannotated).
+    /// Recognize a `#[ffi(...)]` attribute among `attrs`: `#[ffi(import)]`,
+    /// `#[ffi(rust = "path")]` or `#[ffi(rust = "path", tagged)]`. Malformed
+    /// or duplicated uses report and yield `None` (the item elaborates as if
+    /// unannotated).
     fn ffi_attr(&mut self, attrs: &[surface::Attribute]) -> Option<FfiSpec> {
         let mut spec = None;
         for attr in attrs {
@@ -2549,12 +2556,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             match (attr.args.as_slice(), attr.values.as_slice()) {
                 ([arg], []) if self.sym(*arg) == "import" => spec = Some(FfiSpec::Import),
                 ([], [(k, path)]) if self.sym(*k) == "rust" => {
-                    spec = Some(FfiSpec::Opaque(path.clone()));
+                    spec = Some(FfiSpec::Opaque(path.clone(), false));
+                }
+                ([flag], [(k, path)]) if self.sym(*k) == "rust" && self.sym(*flag) == "tagged" => {
+                    spec = Some(FfiSpec::Opaque(path.clone(), true));
                 }
                 _ => self.error(
                     span,
-                    "malformed `#[ffi(...)]`: expected `#[ffi(import)]` or \
-                     `#[ffi(rust = \"path\")]`",
+                    "malformed `#[ffi(...)]`: expected `#[ffi(import)]`, \
+                     `#[ffi(rust = \"path\")]` or `#[ffi(rust = \"path\", tagged)]`",
                 ),
             }
         }
@@ -2662,13 +2672,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     }
 
     /// Check the `#[ffi(rust = "path")]` rules on a record and return the
-    /// Rust path when the record is a valid opaque FFI record.
+    /// Rust path (and the `tagged` flag) when the record is a valid opaque
+    /// FFI record.
     fn validate_ffi_record(
         &mut self,
         rec: &surface::Record,
         ffi: Option<FfiSpec>,
         span: Option<Span>,
-    ) -> Option<String> {
+    ) -> Option<(String, bool)> {
         let opaque = matches!(rec.fields, surface::RecordFields::Opaque);
         let Some(spec) = ffi else {
             if opaque {
@@ -2680,7 +2691,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
             return None;
         };
-        let FfiSpec::Opaque(path) = spec else {
+        let FfiSpec::Opaque(path, tagged) = spec else {
             self.error(span, "`#[ffi(import)]` may only be attached to a function");
             return None;
         };
@@ -2697,7 +2708,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self.error(span, "an `#[ffi(rust = ...)]` record is always `[shared]`");
             return None;
         }
-        Some(path)
+        Some((path, tagged))
     }
 
     /// Check the `#[ffi(import)]` rules on a function; returns whether the
@@ -2896,7 +2907,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     fn scan_record(
         &mut self,
         rec: &surface::Record,
-        ffi: Option<String>,
+        ffi: Option<(String, bool)>,
         span: Option<Span>,
     ) -> Option<DefId> {
         let ty_params = self.collect_generics(&rec.ty_params, span);
@@ -2945,7 +2956,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             repr_fixed,
             placement: rec.placement.clone(),
             launch: rec.launch,
-            ffi,
+            ffi_tagged: ffi.as_ref().is_some_and(|(_, tagged)| *tagged),
+            ffi: ffi.map(|(path, _)| path),
             fields: None,
             regional_generics: Vec::new(),
             span,

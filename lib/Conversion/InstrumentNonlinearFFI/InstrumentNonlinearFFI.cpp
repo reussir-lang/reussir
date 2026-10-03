@@ -179,6 +179,10 @@ struct InstrumentNonlinearFFIPass
           continue;
         if (!llvm::isa<FFIObjectType, ArrayType>(rcType.getElementType()))
           continue;
+        // A tagged object may be an immediate, which has no count to read.
+        if (auto ffiTy = llvm::dyn_cast<FFIObjectType>(rcType.getElementType());
+            ffiTy && ffiTy.getTagged())
+          continue;
         instrumentOperand(module, call, operand);
       }
     }

@@ -252,10 +252,10 @@ MlirType reussirArrayTypeGet(intptr_t nDims, int64_t const *shape,
 }
 
 MlirType reussirFFIObjectTypeGet(MlirContext context, MlirAttribute ffiName,
-                                 MlirAttribute cleanupHook) {
+                                 MlirAttribute cleanupHook, bool tagged) {
   return wrap(FFIObjectType::get(
       unwrap(context), llvm::cast<mlir::StringAttr>(unwrap(ffiName)),
-      llvm::cast<mlir::FlatSymbolRefAttr>(unwrap(cleanupHook))));
+      llvm::cast<mlir::FlatSymbolRefAttr>(unwrap(cleanupHook)), tagged));
 }
 
 MlirType reussirStrTypeGet(MlirContext context, ReussirLifeScope lifeScope) {

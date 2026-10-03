@@ -210,8 +210,9 @@ pub enum RecordBody {
     Compound(Vec<Member>),
     /// An enum's variants, in declaration order.
     Variant(Vec<Variant>),
-    /// An opaque `#[ffi]` record: the Rust type path it aliases.
-    Opaque(String),
+    /// An opaque `#[ffi]` record: the Rust type path it aliases, and whether
+    /// it is `tagged` (a handle may be an odd immediate word).
+    Opaque(String, bool),
 }
 
 /// One compound field: a `pub` visibility marker, an optional source name

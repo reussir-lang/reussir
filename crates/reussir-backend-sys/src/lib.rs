@@ -404,6 +404,7 @@ unsafe extern "C" {
         context: MlirContext,
         ffi_name: MlirAttribute,
         cleanup_hook: MlirAttribute,
+        tagged: bool,
     ) -> MlirType;
     pub fn reussirStrTypeGet(context: MlirContext, life_scope: ReussirLifeScope) -> MlirType;
     pub fn reussirConstSeqTypeGet(element_type: MlirType) -> MlirType;

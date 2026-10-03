@@ -83,9 +83,10 @@ RecordDecl: raw::Record = {
         span: loc.and_then(|l| l.1),
         body: raw::RecordBody::Compound(ms),
     },
-    // An opaque `#[ffi]` record: `[shared] struct #Vec<$0> { ffi "path" };`.
+    // An opaque `#[ffi]` record: `[shared] struct #Vec<$0> { ffi "path" };`
+    // (`{ ffi tagged "path" }` when a handle may be an odd immediate word).
     <lang:LangAttr?> <placement:("placement" <"quoted">)?> <launch:LaunchConfig?> <p:"pub"?> <default_cap:DefaultCap> "struct" "#" <path:QPath> <generics:Generics?> <loc:ItemLoc?>
-    "{" "ffi" <rust:"quoted"> "}" ";"
+    "{" "ffi" <tagged:"tagged"?> <rust:"quoted"> "}" ";"
     => raw::Record {
         lang,
         placement: placement.map(|p| unescape_debug_str(p).into_owned()), launch,
@@ -97,7 +98,7 @@ RecordDecl: raw::Record = {
         generics: generics.unwrap_or_default(),
         file: loc.map(|l| l.0),
         span: loc.and_then(|l| l.1),
-        body: raw::RecordBody::Opaque(unescape_debug_str(rust).into_owned()),
+        body: raw::RecordBody::Opaque(unescape_debug_str(rust).into_owned(), tagged.is_some()),
     },
     // Only an enum may carry the `fixed` marker (`#[repr(fixed)]`).
     <lang:LangAttr?> <placement:("placement" <"quoted">)?> <launch:LaunchConfig?> <p:"pub"?> <default_cap:DefaultCap> "enum" <fixed:"fixed"?> "#" <path:QPath> <generics:Generics?> <loc:ItemLoc?>
@@ -383,6 +384,7 @@ Name: &'input str = {
     "transform_anchor" => "transform_anchor",
     "import" => "import",
     "ffi" => "ffi",
+    "tagged" => "tagged",
     "texture" => "texture",
     "glue" => "glue",
     "interface" => "interface",
@@ -699,6 +701,7 @@ extern {
         "shared" => Token::Shared,
         "field" => Token::Field,
         "fixed" => Token::Fixed,
+        "tagged" => Token::Tagged,
         "extern" => Token::Extern,
         "trampoline" => Token::Trampoline,
         "import" => Token::Import,

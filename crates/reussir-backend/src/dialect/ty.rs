@@ -235,17 +235,21 @@ pub fn array<'c>(shape: &[i64], element: Type<'c>) -> Type<'c> {
     }
 }
 
-/// Creates a `!reussir.ffi_object<ffiName, cleanupHook>` type.
+/// Creates a `!reussir.ffi_object<ffiName, cleanupHook[, tagged = true]>`
+/// type. A `tagged` object may be an odd immediate word (not a pointer):
+/// `rc.inc`/`rc.dec` skip it.
 pub fn ffi_object<'c>(
     context: &'c Context,
     ffi_name: StringAttribute<'c>,
     cleanup_hook: FlatSymbolRefAttribute<'c>,
+    tagged: bool,
 ) -> Type<'c> {
     unsafe {
         Type::from_raw(sys::reussirFFIObjectTypeGet(
             context.to_raw(),
             ffi_name.to_raw(),
             cleanup_hook.to_raw(),
+            tagged,
         ))
     }
 }

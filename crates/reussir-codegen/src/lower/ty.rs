@@ -400,11 +400,17 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
     }
 
     /// The `!reussir.ffi_object<…>` payload type of an opaque instance.
-    fn ffi_object_type(&self, rust_name: mir::Symbol, drop_hook: mir::Symbol) -> Type<'c> {
+    fn ffi_object_type(
+        &self,
+        rust_name: mir::Symbol,
+        drop_hook: mir::Symbol,
+        tagged: bool,
+    ) -> Type<'c> {
         ffi_object(
             self.context,
             StringAttribute::new(self.context, self.program.symbol(rust_name)),
             FlatSymbolRefAttribute::new(self.context, self.program.symbol(drop_hook)),
+            tagged,
         )
     }
 
@@ -491,7 +497,8 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
             mir::RecordLayout::Opaque {
                 rust_name,
                 drop_hook,
-            } => return Ok(self.ffi_object_type(rust_name, drop_hook)),
+                tagged,
+            } => return Ok(self.ffi_object_type(rust_name, drop_hook, tagged)),
         };
         let name = StringAttribute::new(self.context, self.program.symbol(rec.symbol));
         let record = record_incomplete(self.context, name, kind);

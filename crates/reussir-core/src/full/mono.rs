@@ -820,6 +820,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
                     let layout = mir::RecordLayout::Opaque {
                         rust_name: mir::Symbol(driver.symbols.get_or_intern(&rust_name)),
                         drop_hook: mir::Symbol(driver.symbols.get_or_intern(&hook_name)),
+                        tagged: record.ffi_tagged,
                     };
                     ffi_textures.push(mir::FfiTexture {
                         release_bindings: decls

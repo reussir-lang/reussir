@@ -650,11 +650,11 @@ impl<'tcx> Builder<'_, 'tcx> {
                     })
                     .collect(),
             ),
-            raw::RecordBody::Opaque(_) => RecordFields::Opaque,
+            raw::RecordBody::Opaque(..) => RecordFields::Opaque,
         };
-        let ffi = match &r.body {
-            raw::RecordBody::Opaque(path) => Some(path.clone()),
-            _ => None,
+        let (ffi, ffi_tagged) = match &r.body {
+            raw::RecordBody::Opaque(path, tagged) => (Some(path.clone()), *tagged),
+            _ => (None, false),
         };
         let record = Record {
             def,
@@ -671,6 +671,7 @@ impl<'tcx> Builder<'_, 'tcx> {
             placement: r.placement.clone(),
             launch: r.launch,
             ffi,
+            ffi_tagged,
             fields: Some(fields),
             regional_generics,
             span: span_of(r.span),
@@ -1779,6 +1780,26 @@ mod tests {
             pub fn push<T>(v: Vec<T>, x: T) -> Vec<T> [{ RVec::push(v, "\"".len() as i64; x) }];
 
             pub fn use_it() -> Vec<f64> { push(new<f64>(), 1.0) }
+            "#,
+        );
+    }
+
+    #[test]
+    fn roundtrips_tagged_ffi_records() {
+        // A `tagged` opaque record (a handle may be an odd immediate word)
+        // keeps its flag through the textual form.
+        roundtrip(
+            r#"
+            #[ffi(rust = "::demo::Word", tagged)]
+            pub struct Word;
+
+            #[ffi(rust = "::demo::Box")]
+            pub struct Plain;
+
+            #[ffi(import)]
+            pub fn word(x: u64) -> Word [{ ::demo::Word::new(x) }];
+
+            pub fn use_it() -> Word { word(1) }
             "#,
         );
     }

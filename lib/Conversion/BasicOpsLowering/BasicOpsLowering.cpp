@@ -267,6 +267,45 @@ void emitGuardedStore(mlir::ConversionPatternRewriter &rewriter,
   rewriter.setInsertionPointToStart(contBlock);
 }
 
+// A `tagged` ffi_object handle whose low bit is set is an immediate (an
+// odd word the foreign side encodes in the handle itself), not a box:
+// reference counting must neither touch nor free it. Splits the current
+// block so that what the caller emits next runs only for a real box (low
+// bit clear) and returns the block to resume at; the caller closes the
+// guard with `endRealBoxGuard`. Nothing is dereferenced before the test.
+mlir::Block *beginRealBoxGuard(mlir::ConversionPatternRewriter &rewriter,
+                               mlir::Location loc, mlir::Value ptr) {
+  auto i64 = rewriter.getI64Type();
+  mlir::Value raw = mlir::LLVM::PtrToIntOp::create(rewriter, loc, i64, ptr);
+  mlir::Value one = mlir::LLVM::ConstantOp::create(
+      rewriter, loc, i64, rewriter.getI64IntegerAttr(1));
+  mlir::Value zero = mlir::LLVM::ConstantOp::create(
+      rewriter, loc, i64, rewriter.getI64IntegerAttr(0));
+  mlir::Value low = mlir::LLVM::AndOp::create(rewriter, loc, raw, one);
+  mlir::Value isBox = mlir::LLVM::ICmpOp::create(
+      rewriter, loc, mlir::LLVM::ICmpPredicate::eq, low, zero);
+  mlir::Block *condBlock = rewriter.getInsertionBlock();
+  mlir::Block *contBlock =
+      rewriter.splitBlock(condBlock, rewriter.getInsertionPoint());
+  mlir::Block *boxBlock = rewriter.createBlock(
+      contBlock->getParent(), mlir::Region::iterator(contBlock));
+  rewriter.setInsertionPointToEnd(condBlock);
+  mlir::LLVM::CondBrOp::create(rewriter, loc, isBox, boxBlock, contBlock);
+  rewriter.setInsertionPointToEnd(boxBlock);
+  return contBlock;
+}
+
+void endRealBoxGuard(mlir::ConversionPatternRewriter &rewriter,
+                     mlir::Location loc, mlir::Block *contBlock) {
+  mlir::LLVM::BrOp::create(rewriter, loc, contBlock);
+  rewriter.setInsertionPointToStart(contBlock);
+}
+
+bool isTaggedFFIObject(RcType rcType) {
+  auto ffiTy = mlir::dyn_cast<FFIObjectType>(rcType.getElementType());
+  return ffiTy && ffiTy.getTagged();
+}
+
 void ensureRuntimeFunctions(mlir::ModuleOp module,
                             const mlir::LLVMTypeConverter &converter);
 
@@ -1648,6 +1687,11 @@ struct ReussirRcIncConversionPattern
       return mlir::success();
     }
     mlir::Value refcntPtr;
+    // A tagged FFI object may be an immediate: the increment below runs only
+    // for a real box.
+    mlir::Block *taggedCont = nullptr;
+    if (isTaggedFFIObject(rcPtrTy))
+      taggedCont = beginRealBoxGuard(rewriter, op.getLoc(), adaptor.getRcPtr());
     // If inner element type is a FFI object, we do not reuse gep to expose
     // the struct.
     if (auto eleTy = mlir::dyn_cast<FFIObjectType>(rcPtrTy.getElementType())) {
@@ -1722,6 +1766,8 @@ struct ReussirRcIncConversionPattern
           isTaggedImmediate(top, op.getLoc(), rewriter));
     }
     mlir::LLVM::AssumeOp::create(rewriter, op.getLoc(), geOne);
+    if (taggedCont)
+      endRealBoxGuard(rewriter, op.getLoc(), taggedCont);
 
     rewriter.eraseOp(op);
     return mlir::success();
@@ -2510,6 +2556,17 @@ struct ReussirRcDecOpConversionPattern
     }
     if (auto ffi = mlir::dyn_cast<FFIObjectType>(rcPtrTy.getElementType())) {
       mlir::FlatSymbolRefAttr cleanupHook = ffi.getCleanupHook();
+      if (eleTy.getTagged()) {
+        // An immediate is not a box: only a real one reaches the hook.
+        mlir::Block *cont =
+            beginRealBoxGuard(rewriter, op.getLoc(), adaptor.getRcPtr());
+        mlir::func::CallOp::create(rewriter, op.getLoc(), cleanupHook,
+                                   mlir::TypeRange{},
+                                   mlir::ValueRange{adaptor.getRcPtr()});
+        endRealBoxGuard(rewriter, op.getLoc(), cont);
+        rewriter.eraseOp(op);
+        return mlir::success();
+      }
       rewriter.replaceOpWithNewOp<mlir::func::CallOp>(
           op, cleanupHook, mlir::TypeRange{},
           mlir::ValueRange{adaptor.getRcPtr()});

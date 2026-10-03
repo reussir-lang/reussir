@@ -101,11 +101,13 @@ RecordBody: (raw::Ty, raw::RecordBody, bool) = {
     "struct" <t:Ty> "{" <ms:Comma<Member>> "}" => (t, raw::RecordBody::Compound(ms), false),
     "enum" <fixed:"fixed"?> <t:Ty> "{" <vs:Comma<Variant>> "}"
         => (t, raw::RecordBody::Variant(vs), fixed.is_some()),
-    // An opaque `#[ffi]` instance: its Rust identity string and drop hook.
-    "ffi" <t:Ty> "{" <rust:"quoted"> "," "@" <hook:Sym> "}"
+    // An opaque `#[ffi]` instance: its Rust identity string and drop hook;
+    // `, tagged` when a handle may be an odd immediate word.
+    "ffi" <t:Ty> "{" <rust:"quoted"> "," "@" <hook:Sym> <tagged:("," "tagged")?> "}"
         => (t, raw::RecordBody::Opaque {
             rust_name: unescape_debug_str(rust).into_owned(),
             drop_hook: hook,
+            tagged: tagged.is_some(),
         }, false),
 };
 
@@ -155,6 +157,7 @@ BareName: &'input str = {
     "transform_anchor" => "transform_anchor",
     "import" => "import",
     "ffi" => "ffi",
+    "tagged" => "tagged",
     "texture" => "texture",
     "glue" => "glue",
     "trait" => "trait",
@@ -520,6 +523,7 @@ extern {
         "shared" => Token::Shared,
         "field" => Token::Field,
         "fixed" => Token::Fixed,
+        "tagged" => Token::Tagged,
         "extern" => Token::Extern,
         "trampoline" => Token::Trampoline,
         "import" => Token::Import,

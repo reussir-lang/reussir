@@ -1,0 +1,40 @@
+// UNSUPPORTED: darwin
+// `#[ffi(rust = "...", tagged)]`: an opaque record whose handle may be an
+// odd immediate word lowers to a `tagged` ffi_object (reference counting
+// skips immediates); a plain opaque record does not carry the flag.
+
+// RUN: %rrc %s --emit mlir -o - | %FileCheck %s
+// RUN: %rrc %s --emit hir -o - | %FileCheck %s --check-prefix=HIR
+// RUN: %rrc %s --emit mir -o - | %FileCheck %s --check-prefix=MIR
+
+#[ffi(rust = "::reussir_rt::rc::Rc<u64>", tagged)]
+pub struct Word;
+
+#[ffi(rust = "::reussir_rt::rc::Rc<u32>")]
+pub struct Plain;
+
+#[ffi(import)]
+pub fn word(x : u64) -> Word [{ ::reussir_rt::rc::Rc::new(x) }];
+
+#[ffi(import)]
+pub fn plain(x : u32) -> Plain [{ ::reussir_rt::rc::Rc::new(x) }];
+
+#[ffi(import)]
+pub fn both(w : Word, p : Plain) -> u64 [{ *w + (*p as u64) }];
+
+pub fn main() -> u64 {
+    let w = word(3);
+    let p = plain(4);
+    both(w, p) + both(w, p)
+}
+
+extern "C" trampoline "reussir_main" = main;
+
+// CHECK-DAG: !reussir.rc<!reussir.ffi_object<"::reussir_rt::rc::Rc<u64>", @{{.*}}_ffi_drop, tagged = true>>
+// CHECK-DAG: !reussir.rc<!reussir.ffi_object<"::reussir_rt::rc::Rc<u32>", @{{.*}}_ffi_drop>>
+
+// HIR-DAG: { ffi tagged "::reussir_rt::rc::Rc<u64>" }
+// HIR-DAG: { ffi "::reussir_rt::rc::Rc<u32>" }
+
+// MIR-DAG: ffi {{.*}} { "::reussir_rt::rc::Rc<u64>", @{{.*}}_ffi_drop, tagged }
+// MIR-DAG: ffi {{.*}} { "::reussir_rt::rc::Rc<u32>", @{{[A-Za-z0-9_]*}}_ffi_drop }

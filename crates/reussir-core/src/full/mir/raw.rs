@@ -115,10 +115,12 @@ pub enum RecordBody {
     Compound(Vec<Member>),
     /// An enum: one compound sub-record per variant, in declaration order.
     Variant(Vec<Variant>),
-    /// An opaque `#[ffi]` instance: its Rust identity string and drop hook.
+    /// An opaque `#[ffi]` instance: its Rust identity string, drop hook, and
+    /// whether it is `tagged` (a handle may be an odd immediate word).
     Opaque {
         rust_name: String,
         drop_hook: String,
+        tagged: bool,
     },
 }
 

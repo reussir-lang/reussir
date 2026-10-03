@@ -146,10 +146,11 @@ MLIR_CAPI_EXPORTED MlirType reussirArrayTypeGetWithTarget(intptr_t nDims,
 MlirType reussirArrayTypeGet(intptr_t nDims, int64_t const *shape,
                              MlirType elementType);
 
-// `!reussir.ffi_object<ffiName, cleanupHook>`. `ffiName` must be a `StringAttr`
-// and `cleanupHook` a `FlatSymbolRefAttr`.
+// `!reussir.ffi_object<ffiName, cleanupHook[, tagged = true]>`. `ffiName` must
+// be a `StringAttr` and `cleanupHook` a `FlatSymbolRefAttr`. A `tagged` object
+// may be an odd immediate word, which reference counting skips.
 MlirType reussirFFIObjectTypeGet(MlirContext context, MlirAttribute ffiName,
-                                 MlirAttribute cleanupHook);
+                                 MlirAttribute cleanupHook, bool tagged);
 
 // `!reussir.str<lifeScope>`.
 MlirType reussirStrTypeGet(MlirContext context, ReussirLifeScope lifeScope);

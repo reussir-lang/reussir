@@ -273,6 +273,7 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                 placement: rec.placement.clone(),
                 launch: rec.launch,
                 ffi: rec.ffi.clone(),
+                ffi_tagged: rec.ffi_tagged,
                 fields: rec.fields.as_ref().map(|f| remap.fields(f)),
                 regional_generics: remap.generic_ids(&rec.regional_generics),
                 span: rec.span,

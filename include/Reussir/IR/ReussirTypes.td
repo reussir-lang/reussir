@@ -731,10 +731,27 @@ def ReussirFFIObjectType : ReussirType<"FFIObject", "ffi_object",
     refcount the foreign `Rc` wrapper pins at offset 0. The payload behind
     the header stays opaque — debug info describing a boxed variable is the
     client, and it renders the box as that visible header.
+
+    A `tagged` object (`#[ffi(rust = "...", tagged)]`) may also be an odd
+    word that is not a pointer at all: an immediate the foreign side
+    encodes in the handle itself (e.g. a small integer `(v << 1) | 1`, as
+    Lean's runtime boxes scalars). Its `rc.inc` touches the refcount only
+    when the low bit is clear, and its `rc.dec` calls the cleanup hook only
+    then; an immediate is never dereferenced. Real boxes are at least
+    4-aligned (the `u32` refcount), so the low bit is free.
   }];
   let parameters = (ins "::mlir::StringAttr":$ffiName,
-      "::mlir::FlatSymbolRefAttr":$cleanupHook);
-  let assemblyFormat = "`<` $ffiName `,` $cleanupHook `>`";
+      "::mlir::FlatSymbolRefAttr":$cleanupHook,
+      DefaultValuedParameter<"bool", "false">:$tagged);
+  // Without the flag (the type's form before `tagged`): an untagged object.
+  let builders = [
+    TypeBuilder<(ins "::mlir::StringAttr":$ffiName,
+                     "::mlir::FlatSymbolRefAttr":$cleanupHook), [{
+      return $_get($_ctxt, ffiName, cleanupHook, /*tagged=*/false);
+    }]>
+  ];
+  let assemblyFormat =
+      "`<` $ffiName `,` $cleanupHook (`,` `tagged` `=` $tagged^)? `>`";
 }
 
 def ReussirStrType : ReussirType<"Str", "str",

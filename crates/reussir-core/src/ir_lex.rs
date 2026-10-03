@@ -40,6 +40,8 @@ pub enum Token<'a> {
     Field,
     #[token("fixed")]
     Fixed,
+    #[token("tagged")]
+    Tagged,
     #[token("extern")]
     Extern,
     #[token("trampoline")]

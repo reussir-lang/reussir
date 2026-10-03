@@ -205,10 +205,13 @@ pub enum RecordLayout<'tcx> {
     Compound(&'tcx [Member<'tcx>]),
     Variant(&'tcx [VariantDef<'tcx>]),
     /// An opaque `#[ffi]` record instance: the rendered Rust type name (the
-    /// `ffi_object` identity string) and its drop-hook symbol.
+    /// `ffi_object` identity string), its drop-hook symbol, and whether a
+    /// handle may be an odd immediate word (`#[ffi(rust = "...", tagged)]`),
+    /// which reference counting skips.
     Opaque {
         rust_name: Symbol,
         drop_hook: Symbol,
+        tagged: bool,
     },
 }
 
