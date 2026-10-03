@@ -1,6 +1,6 @@
-//! Synchronous invocation borrowing the executable and all input buffers.
+//! Synchronous invocation consuming an executable reference and borrowing inputs.
 
-use std::ptr;
+use std::{ptr, sync::Arc};
 
 use super::{Error, Executable, Result, call, non_null};
 use crate::pjrt::{api::Event, sys::*};
@@ -8,10 +8,11 @@ use crate::pjrt::{api::Event, sys::*};
 impl Executable {
     /// Each input points to one target-array descriptor's allocation-handle
     /// field, containing one buffer per addressable device in executable order.
-    /// The descriptors and their buffers remain borrowed until all devices finish.
+    /// Consumes the executable reference after all devices finish. The descriptors
+    /// and their buffers remain borrowed until then.
     /// Results are grouped by logical array and transfer buffer ownership.
     pub(in crate::pjrt) unsafe fn execute(
-        &self,
+        self: Arc<Self>,
         inputs: &[*const *mut PJRT_Buffer],
         num_outputs: usize,
     ) -> Result<Vec<Vec<*mut PJRT_Buffer>>> {

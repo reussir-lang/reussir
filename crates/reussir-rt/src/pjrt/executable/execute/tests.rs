@@ -131,11 +131,21 @@ unsafe extern "C" fn destroy_buffer(args: *mut PJRT_Buffer_Destroy_Args) -> *mut
     ptr::null_mut()
 }
 
-unsafe extern "C" fn destroy_loaded(_: *mut PJRT_LoadedExecutable_Destroy_Args) -> *mut PJRT_Error {
+unsafe extern "C" fn destroy_loaded(
+    args: *mut PJRT_LoadedExecutable_Destroy_Args,
+) -> *mut PJRT_Error {
+    unsafe { state((*args).executable) }
+        .log
+        .borrow_mut()
+        .push("loaded destroyed");
     ptr::null_mut()
 }
 
-unsafe extern "C" fn destroy_client(_: *mut PJRT_Client_Destroy_Args) -> *mut PJRT_Error {
+unsafe extern "C" fn destroy_client(args: *mut PJRT_Client_Destroy_Args) -> *mut PJRT_Error {
+    unsafe { state((*args).client) }
+        .log
+        .borrow_mut()
+        .push("client destroyed");
     ptr::null_mut()
 }
 
@@ -236,7 +246,7 @@ fn abi_accepts_logical_array_descriptors_and_packs_devices_internally() {
         let destinations = outputs.each_mut().map(|array| ptr::from_mut(array).cast());
         unsafe {
             ffi::__reussir_pjrt_executable_execute(
-                Arc::as_ptr(&fixture.executable),
+                Arc::into_raw(fixture.executable.clone()),
                 inputs.as_ptr(),
                 inputs.len(),
                 destinations.as_ptr(),
@@ -296,7 +306,7 @@ fn zero_outputs_still_wait_on_every_device_and_allow_null_lists() {
     let fixture = Fixture::new(2, 0, Failure::None);
     unsafe {
         ffi::__reussir_pjrt_executable_execute(
-            Arc::as_ptr(&fixture.executable),
+            Arc::into_raw(fixture.executable.clone()),
             ptr::null(),
             0,
             ptr::null(),
@@ -320,7 +330,7 @@ fn zero_outputs_still_wait_on_every_device_and_allow_null_lists() {
 fn rejects_output_count_and_non_addressable_execution_before_launch() {
     for (devices, slots) in [(1, 0), (2, 3), (0, 2)] {
         let fixture = Fixture::new(devices, 2, Failure::None);
-        assert!(unsafe { fixture.executable.execute(&[], slots) }.is_err());
+        assert!(unsafe { fixture.executable.clone().execute(&[], slots) }.is_err());
         assert!(!fixture.state.log.borrow().contains(&"execute"));
     }
 }
@@ -328,14 +338,14 @@ fn rejects_output_count_and_non_addressable_execution_before_launch() {
 #[test]
 fn metadata_failure_releases_temporary_executable() {
     let fixture = Fixture::new(1, 1, Failure::Metadata);
-    assert!(unsafe { fixture.executable.execute(&[], 1) }.is_err());
+    assert!(unsafe { fixture.executable.clone().execute(&[], 1) }.is_err());
     assert_eq!(*fixture.state.log.borrow(), ["metadata destroyed"]);
 }
 
 #[test]
 fn launch_failure_does_not_await_unpopulated_event() {
     let fixture = Fixture::new(1, 1, Failure::Launch);
-    assert!(unsafe { fixture.executable.execute(&[], 1) }.is_err());
+    assert!(unsafe { fixture.executable.clone().execute(&[], 1) }.is_err());
     assert_eq!(
         *fixture.state.log.borrow(),
         ["metadata destroyed", "execute"]
@@ -345,7 +355,7 @@ fn launch_failure_does_not_await_unpopulated_event() {
 #[test]
 fn first_device_failure_still_waits_on_other_devices_before_cleanup() {
     let fixture = Fixture::new(2, 2, Failure::Completion);
-    let error = unsafe { fixture.executable.execute(&[], 2) }.unwrap_err();
+    let error = unsafe { fixture.executable.clone().execute(&[], 2) }.unwrap_err();
     assert_eq!(error.message, "execution failed");
     assert_eq!(
         *fixture.state.log.borrow(),
@@ -367,7 +377,7 @@ fn first_device_failure_still_waits_on_other_devices_before_cleanup() {
 #[test]
 fn invalid_output_waits_before_releasing_other_outputs() {
     let fixture = Fixture::new(2, 2, Failure::NullOutput);
-    assert!(unsafe { fixture.executable.execute(&[], 2) }.is_err());
+    assert!(unsafe { fixture.executable.clone().execute(&[], 2) }.is_err());
     assert_eq!(
         *fixture.state.log.borrow(),
         [
@@ -380,6 +390,66 @@ fn invalid_output_waits_before_releasing_other_outputs() {
             "buffer destroyed",
             "buffer destroyed",
             "buffer destroyed"
+        ]
+    );
+}
+
+#[test]
+fn consuming_ffi_drops_last_executable_reference_after_every_device_finishes() {
+    let Fixture {
+        executable,
+        _api,
+        state,
+    } = Fixture::new(2, 0, Failure::None);
+    let weak = Arc::downgrade(&executable);
+    unsafe {
+        ffi::__reussir_pjrt_executable_execute(
+            Arc::into_raw(executable),
+            ptr::null(),
+            0,
+            ptr::null(),
+            0,
+        )
+    };
+    assert!(weak.upgrade().is_none());
+    assert_eq!(
+        *state.log.borrow(),
+        [
+            "metadata destroyed",
+            "execute",
+            "await",
+            "event destroyed",
+            "await",
+            "event destroyed",
+            "loaded destroyed",
+            "client destroyed"
+        ]
+    );
+}
+
+#[test]
+fn failure_drops_consumed_reference_after_output_cleanup() {
+    let Fixture {
+        executable,
+        _api,
+        state,
+    } = Fixture::new(2, 1, Failure::Completion);
+    let weak = Arc::downgrade(&executable);
+    assert!(unsafe { executable.execute(&[], 1) }.is_err());
+    assert!(weak.upgrade().is_none());
+    assert_eq!(
+        *state.log.borrow(),
+        [
+            "metadata destroyed",
+            "execute",
+            "await",
+            "event destroyed",
+            "await",
+            "event destroyed",
+            "buffer destroyed",
+            "buffer destroyed",
+            "loaded destroyed",
+            "client destroyed"
         ]
     );
 }

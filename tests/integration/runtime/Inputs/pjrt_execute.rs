@@ -15,7 +15,6 @@ unsafe extern "C" {
         outputs: *const *mut c_void,
         num_outputs: usize,
     );
-    fn __reussir_pjrt_executable_release(executable: *const c_void);
     fn __reussir_pjrt_array_from_host(
         device: usize,
         element_type: u32,
@@ -87,7 +86,6 @@ fn main() {
         return;
     }
     unsafe {
-        let executable = compile(&args[1], OPTIONS);
         let lhs = upload(0, &[1.0, 2.0, 3.0, 4.0]);
         let rhs = upload(0, &[4.0, 3.0, 2.0, 1.0]);
         let mut outputs = [MaybeUninit::<*mut c_void>::uninit(); 2];
@@ -96,7 +94,7 @@ fn main() {
         match mode {
             "wrong-output-count" | "wrong-input-count" => {
                 __reussir_pjrt_executable_execute(
-                    executable,
+                    compile(&args[1], OPTIONS),
                     inputs.as_ptr(),
                     if mode == "wrong-input-count" { 1 } else { 2 },
                     destinations.as_ptr(),
@@ -110,7 +108,7 @@ fn main() {
         // Reusing the same buffers across calls must not consume their contents.
         for _ in 0..2 {
             __reussir_pjrt_executable_execute(
-                executable,
+                compile(&args[1], OPTIONS),
                 inputs.as_ptr(),
                 2,
                 destinations.as_ptr(),
@@ -124,14 +122,13 @@ fn main() {
         }
         let repeated = [ptr::from_ref(&lhs).cast(), ptr::from_ref(&lhs).cast()];
         __reussir_pjrt_executable_execute(
-            executable,
+            compile(&args[1], OPTIONS),
             repeated.as_ptr(),
             2,
             destinations.as_ptr(),
             2,
         );
-        // Outputs remain owned after the caller releases its executable handle.
-        __reussir_pjrt_executable_release(executable);
+        // Outputs remain owned after execution consumes the executable handle.
         let [sum, difference] = outputs.map(|output| output.assume_init());
         assert_eq!(download(sum), [2.0, 4.0, 6.0, 8.0]);
         assert_eq!(download(difference), [0.0; 4]);
@@ -142,7 +139,6 @@ fn main() {
         }
         let empty = compile(&args[2], OPTIONS);
         __reussir_pjrt_executable_execute(empty, ptr::null(), 0, ptr::null(), 0);
-        __reussir_pjrt_executable_release(empty);
     }
 }
 
@@ -156,7 +152,6 @@ struct ShardedArray {
 
 unsafe fn sharded(path: &str) {
     unsafe {
-        let executable = compile(path, include_bytes!("pjrt_execute_sharded.pb"));
         // The compile fixture deliberately assigns partitions to devices [1, 0].
         let lhs = ShardedArray {
             shards: [
@@ -179,6 +174,7 @@ unsafe fn sharded(path: &str) {
                 offset: 0,
             });
             let outputs = results.each_mut().map(|array| ptr::from_mut(array).cast());
+            let executable = compile(path, include_bytes!("pjrt_execute_sharded.pb"));
             __reussir_pjrt_executable_execute(executable, inputs.as_ptr(), 2, outputs.as_ptr(), 2);
             let [sum, reversed_difference] = &results;
             assert_eq!(download(sum.shards[0]), [9.0; 4]);
@@ -198,7 +194,6 @@ unsafe fn sharded(path: &str) {
                 }
             }
         }
-        __reussir_pjrt_executable_release(executable);
         assert_eq!(download(lhs.shards[0]), [1.0, 2.0, 3.0, 4.0]);
         assert_eq!(download(lhs.shards[1]), [5.0, 6.0, 7.0, 8.0]);
         for shard in lhs.shards.into_iter().chain(rhs.shards) {
