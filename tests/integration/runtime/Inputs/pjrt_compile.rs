@@ -8,11 +8,29 @@ unsafe extern "C" {
         options: *const u8,
         options_size: usize,
     ) -> *mut c_void;
-    fn __reussir_pjrt_executable_release(executable: *mut c_void);
+    fn __reussir_pjrt_executable_execute(
+        executable: *mut c_void,
+        inputs: *const *const c_void,
+        num_inputs: usize,
+        outputs: *const *mut c_void,
+        num_outputs: usize,
+    );
+    fn __reussir_pjrt_array_deallocate(buffer: *mut c_void);
 }
 
 const OPTIONS: &[u8] =
     include_bytes!("../../../../crates/reussir-pjrt-sys/tests/fixtures/compile_options.pb");
+
+// This fixture returns one scalar array. Execution consumes each reference
+// acquired by compile, including cache hits from concurrent callers.
+unsafe fn consume(executable: *mut c_void) {
+    let mut output: *mut c_void = std::ptr::null_mut();
+    let descriptor = std::ptr::from_mut(&mut output).cast();
+    unsafe {
+        __reussir_pjrt_executable_execute(executable, std::ptr::null(), 0, &descriptor, 1);
+        __reussir_pjrt_array_deallocate(output);
+    }
+}
 
 fn main() {
     let args: Vec<_> = std::env::args().collect();
@@ -77,7 +95,7 @@ fn main() {
                             OPTIONS.len(),
                         );
                         let address = executable as usize;
-                        __reussir_pjrt_executable_release(executable);
+                        consume(executable);
                         address
                     })
                 })
@@ -86,6 +104,6 @@ fn main() {
                 assert_eq!(worker.join().unwrap(), first as usize);
             }
         });
-        __reussir_pjrt_executable_release(first);
+        consume(first);
     }
 }

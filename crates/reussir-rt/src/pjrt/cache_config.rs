@@ -1,4 +1,21 @@
 //! Runtime cache configuration. No config file is required for normal use.
+//!
+//! `REUSSIR_PJRT_CACHE_CONFIG` names a TOML file; omitted fields use these defaults:
+//! ```toml
+//! [memory]
+//! loaded_entries = 128
+//! [disk]
+//! enabled = true
+//! # directory = "/custom/cache" # relative paths resolve beside the config file
+//! capacity_bytes = 1073741824
+//! buffer_bytes = 67108864
+//! block_bytes = 16777216
+//! write_policy = "on_eviction" # or "on_insertion"
+//! flush_on_shutdown = true
+//! ```
+//! The default directory is `reussir/pjrt` under `dirs::cache_dir()`:
+//! `$XDG_CACHE_HOME` or `~/.cache` on Linux, `%LOCALAPPDATA%` on Windows,
+//! and `~/Library/Caches` on macOS.
 
 use super::{Error, Result};
 use serde::Deserialize;

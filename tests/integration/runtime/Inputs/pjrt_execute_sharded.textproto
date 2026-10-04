@@ -1,0 +1,14 @@
+# xla.CompileOptionsProto, encoded as pjrt_execute_sharded.pb with:
+# protoc -I "$XLA" --encode=xla.CompileOptionsProto \
+#   xla/pjrt/proto/compile_options.proto < pjrt_execute_sharded.textproto
+executable_build_options {
+  num_replicas: 1
+  num_partitions: 2
+  use_spmd_partitioning: true
+  device_assignment {
+    replica_count: 1
+    computation_count: 2
+    computation_devices { replica_device_ids: 1 }
+    computation_devices { replica_device_ids: 0 }
+  }
+}
