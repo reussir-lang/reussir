@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #ifdef REUSSIR_ENABLE_OPENXLA
+#include "Reussir/Conversion/BasicOpsLowering.h"
 #include "Reussir/Conversion/OpenXLATarget.h"
 #include "Reussir/Conversion/Passes.h"
 #include "Reussir/Conversion/TypeConverter.h"
@@ -154,6 +155,45 @@ mlir::LogicalResult packageKernels(mlir::ModuleOp module) {
   return pm.run(module);
 }
 } // namespace
+
+TEST_F(ReussirTest, IfrtBytecodeGlobalPreservesPayload) {
+  mlir::DialectRegistry registry;
+  registerIfrtDialectsAndPasses(registry);
+  registerReussirBasicOpsLoweringInterface(registry);
+  context->appendDialectRegistry(registry);
+  context->loadAllAvailableDialects();
+  auto module = parse(jitSource);
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(mlir::succeeded(packageKernels(*module)));
+  auto code = *module->getOps<ReussirIFRTBytecodeOp>().begin();
+  auto name = code.getSymName().str();
+  auto bytes = code.getBytecodeAttr();
+  auto checksum = code.getChecksumAttr();
+  mlir::PassManager pm(context.get());
+  pm.addPass(createReussirConvertToLLVMPass());
+  ASSERT_TRUE(mlir::succeeded(pm.run(*module)));
+  auto global = module->lookupSymbol<mlir::LLVM::GlobalOp>(name);
+  ASSERT_TRUE(global);
+  EXPECT_TRUE(global.getConstant());
+  auto type = llvm::cast<mlir::LLVM::LLVMStructType>(global.getGlobalType());
+  EXPECT_EQ(llvm::cast<mlir::LLVM::LLVMArrayType>(type.getBody()[1])
+                .getNumElements(), bytes.size());
+  EXPECT_EQ(llvm::cast<mlir::LLVM::LLVMArrayType>(type.getBody()[0])
+                .getNumElements(), 64u);
+  auto constants = llvm::to_vector(global.getInitializerRegion().front()
+                                      .getOps<mlir::LLVM::ConstantOp>());
+  ASSERT_EQ(constants.size(), 2u);
+  for (auto [op, expected] : llvm::zip_equal(
+           constants, llvm::ArrayRef<mlir::StringAttr>{bytes, checksum})) {
+    std::string actual;
+    for (auto byte : llvm::cast<mlir::DenseIntElementsAttr>(op.getValue())
+                         .getValues<llvm::APInt>())
+      actual.push_back(byte.getZExtValue());
+    EXPECT_EQ(actual, expected.getValue());
+  }
+  EXPECT_TRUE(module->getOps<ReussirIFRTBytecodeOp>().empty());
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+}
 
 TEST_F(ReussirTest, IfrtJitBytecodeRoundTripAndDeduplication) {
   mlir::DialectRegistry registry;

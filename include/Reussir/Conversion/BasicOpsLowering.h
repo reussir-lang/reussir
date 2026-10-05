@@ -37,6 +37,8 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
     mlir::SymbolTableCollection *symbolTables = nullptr);
 void populateTargetArrayLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                          mlir::RewritePatternSet &patterns);
+void populatePjrtLoweringPatterns(mlir::LLVMTypeConverter &converter,
+                                 mlir::RewritePatternSet &patterns);
 
 void populateRetconDropLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                        mlir::RewritePatternSet &patterns);

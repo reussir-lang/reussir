@@ -21,6 +21,7 @@
 #include <llvm/Support/MemoryBufferRef.h>
 #include <mlir/Bytecode/BytecodeReader.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/IR/Verifier.h>
 #include <mlir/Parser/Parser.h>
 
@@ -92,8 +93,20 @@ mlir::LogicalResult ReussirPJRTJitCallOp::verify() {
 
 mlir::LogicalResult
 ReussirPJRTJitCallOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
-  auto code = symbols.lookupNearestSymbolFrom<ReussirIFRTBytecodeOp>(
-      getOperation(), getCalleeAttr());
+  auto *symbol = symbols.lookupNearestSymbolFrom(getOperation(), getCalleeAttr());
+  if (auto global = llvm::dyn_cast_or_null<mlir::LLVM::GlobalOp>(symbol)) {
+    auto type = llvm::dyn_cast<mlir::LLVM::LLVMStructType>(global.getGlobalType());
+    if (global.getConstant() && type && !type.isOpaque() &&
+        type.getBody().size() == 2) {
+      auto bytes = llvm::dyn_cast<mlir::LLVM::LLVMArrayType>(type.getBody()[1]);
+      auto checksum = llvm::dyn_cast<mlir::LLVM::LLVMArrayType>(type.getBody()[0]);
+      if (bytes && bytes.getElementType().isInteger(8) && checksum &&
+          checksum.getElementType().isInteger(8) && checksum.getNumElements() == 64)
+        return mlir::success();
+    }
+    return emitOpError("lowered callee must be a constant {checksum, bytecode} global");
+  }
+  auto code = llvm::dyn_cast_or_null<ReussirIFRTBytecodeOp>(symbol);
   if (!code)
     return emitOpError("callee must reference a reussir.ifrt.bytecode symbol");
 #ifdef REUSSIR_ENABLE_OPENXLA

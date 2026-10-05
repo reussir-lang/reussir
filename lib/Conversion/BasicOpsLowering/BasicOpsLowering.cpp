@@ -3980,6 +3980,7 @@ struct ReussirConvertToLLVMPatternInterface
     populateBasicOpsLoweringToLLVMConversionPatterns(typeConverter, patterns,
                                                     symbolTables);
     target.addIllegalOp<
+        ReussirIFRTBytecodeOp,
         ReussirPanicOp, ReussirExpectOp, ReussirCctxEmptyOp,
         ReussirCctxExtendOp, ReussirCctxApplyOp, ReussirTokenAllocOp,
         ReussirTokenFreeOp, ReussirTokenReinterpretOp, ReussirTokenReallocOp,
@@ -4178,6 +4179,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       converter, patterns.getContext(), symbolTables);
   populateTargetArrayLoweringPatterns(converter, patterns);
   populateRetconDropLoweringPatterns(converter, patterns);
+  populatePjrtLoweringPatterns(converter, patterns);
   patterns.add<
       ReussirExpectConversionPattern, ReussirCctxEmptyConversionPattern,
       ReussirCctxExtendConversionPattern, ReussirCctxApplyConversionPattern,
