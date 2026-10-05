@@ -150,6 +150,15 @@ struct ReussirIFRTJustInTimeTransformPass
       call.op->replaceAllUsesWith(jit.getResults());
       call.op->erase();
     }
+    getOperation().walk([](mlir::Operation *op) {
+      if (!isIfrtAfter(op))
+        return;
+      mlir::OpBuilder builder(op);
+      auto after = ReussirPJRTAfterOp::create(
+          builder, op->getLoc(), op->getResult(0).getType(), op->getOperands());
+      op->replaceAllUsesWith(after->getResults());
+      op->erase();
+    });
     getOperation().walk([](mlir::func::FuncOp func) {
       if (!func->removeAttr("ifrt.function"))
         return;

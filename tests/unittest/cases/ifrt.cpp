@@ -46,7 +46,7 @@ TEST_F(ReussirTest, IfrtArrayDescriptorTypeConversion) {
       func.func private @arrays(
         !ifrt.array<tensor<8xf32>, #s, [0]>,
         !ifrt.array<tensor<8xf32>, #m, [3, 1]>,
-        !ifrt.array<tensor<?xf32>, #s, [0]>, i32)
+        !ifrt.array<tensor<?xf32>, #s, [0]>, !ifrt.control, i32)
     }
   )mlir");
   ASSERT_TRUE(module);
@@ -57,6 +57,7 @@ TEST_F(ReussirTest, IfrtArrayDescriptorTypeConversion) {
   auto pointer = mlir::LLVM::LLVMPointerType::get(context.get());
   for (auto type : args.take_front(3))
     EXPECT_EQ(converter.convertType(type), pointer);
+  EXPECT_TRUE(converter.convertType(args[3]).isInteger(1));
   EXPECT_EQ(converter.convertType(args.back()), args.back());
 }
 
@@ -169,6 +170,8 @@ TEST_F(ReussirTest, IfrtBytecodeGlobalPreservesPayload) {
   auto name = code.getSymName().str();
   auto bytes = code.getBytecodeAttr();
   auto checksum = code.getChecksumAttr();
+  module->lookupSymbol<mlir::func::FuncOp>("host").erase();
+  module->lookupSymbol<mlir::func::FuncOp>("empty").erase();
   mlir::PassManager pm(context.get());
   pm.addPass(createReussirConvertToLLVMPass());
   ASSERT_TRUE(mlir::succeeded(pm.run(*module)));

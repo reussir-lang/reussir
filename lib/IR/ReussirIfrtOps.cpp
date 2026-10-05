@@ -91,6 +91,17 @@ mlir::LogicalResult ReussirPJRTJitCallOp::verify() {
 #endif
 }
 
+mlir::LogicalResult ReussirPJRTAfterOp::verify() {
+#ifdef REUSSIR_ENABLE_OPENXLA
+  if (!isIfrtControlType(getControl().getType()) ||
+      !llvm::all_of(getInputs().getTypes(), isIfrtArrayType))
+    return emitOpError("requires IFRT arrays and a control result");
+  return mlir::success();
+#else
+  return emitOpError("requires an OpenXLA-enabled build");
+#endif
+}
+
 mlir::LogicalResult
 ReussirPJRTJitCallOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
   auto *symbol = symbols.lookupNearestSymbolFrom(getOperation(), getCalleeAttr());

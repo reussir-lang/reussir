@@ -30,6 +30,14 @@ bool isIfrtArrayType(mlir::Type type) {
   return llvm::isa<xla::ifrt::IfrtArrayType>(type);
 }
 
+bool isIfrtControlType(mlir::Type type) {
+  return llvm::isa<xla::ifrt::IfrtControlType>(type);
+}
+
+llvm::ArrayRef<int32_t> getIfrtArrayDevices(mlir::Type type) {
+  return llvm::cast<xla::ifrt::IfrtArrayType>(type).getDevices();
+}
+
 mlir::FailureOr<mlir::StringAttr>
 serializeIfrtCompileOptions(mlir::Operation *op) {
   auto call = llvm::cast<xla::ifrt::CallOp>(op);
@@ -129,6 +137,10 @@ mlir::LogicalResult verifyIfrtArrayBorrowUse(mlir::Operation *op,
 bool isIfrtCall(mlir::Operation *op) {
   return op &&
          llvm::isa<xla::ifrt::CallOp, xla::ifrt::CallLoadedExecutableOp>(op);
+}
+
+bool isIfrtAfter(mlir::Operation *op) {
+  return llvm::isa<xla::ifrt::AfterOp>(op);
 }
 
 std::optional<IfrtCallInfo> getIfrtCallInfo(mlir::Operation *op) {

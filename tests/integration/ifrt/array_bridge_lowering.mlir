@@ -16,10 +16,8 @@ module {
   // CHECK: llvm.load
   // CHECK: llvm.icmp "eq"
   // CHECK: %[[VIEW:.*]] = llvm.getelementptr %[[INPUT]][0, 1]
-  // CHECK: builtin.unrealized_conversion_cast %[[VIEW]]
-  // CHECK: %[[OUT:.*]], %{{.*}} = reussir.pjrt.jit_call
-  // CHECK: %[[RESULT:.*]] = builtin.unrealized_conversion_cast %[[OUT]]
-  // CHECK: %[[SLOT:.*]] = llvm.getelementptr %[[RESULT]][0]
+  // CHECK: llvm.call @__reussir_pjrt_executable_execute
+  // CHECK: %[[SLOT:.*]] = llvm.getelementptr %[[RESULT:.*]][0]
   // CHECK: %[[HANDLE:.*]] = llvm.load %[[SLOT]]
   // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
   // CHECK: llvm.store %[[ONE]], %[[BOX]]
@@ -40,9 +38,8 @@ module {
   // CHECK-LABEL: llvm.func @sharded(
   // CHECK-SAME: %[[INPUT:.*]]: !llvm.ptr, %[[BOX:.*]]: !llvm.ptr
   // CHECK: llvm.getelementptr %[[INPUT]][0, 1]
-  // CHECK: %[[OUT:.*]], %{{.*}} = reussir.pjrt.jit_call
-  // CHECK: %[[RESULT:.*]] = builtin.unrealized_conversion_cast %[[OUT]]
-  // CHECK: %[[SLOT0:.*]] = llvm.getelementptr %[[RESULT]][0]
+  // CHECK: llvm.call @__reussir_pjrt_executable_execute
+  // CHECK: %[[SLOT0:.*]] = llvm.getelementptr %[[RESULT:.*]][0]
   // CHECK: %[[HANDLE0:.*]] = llvm.load %[[SLOT0]]
   // CHECK: %[[SLOT1:.*]] = llvm.getelementptr %[[RESULT]][1]
   // CHECK: %[[HANDLE1:.*]] = llvm.load %[[SLOT1]]

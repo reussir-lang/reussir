@@ -3979,8 +3979,9 @@ struct ReussirConvertToLLVMPatternInterface
         patterns.getContext(), target, typeConverter, patterns);
     populateBasicOpsLoweringToLLVMConversionPatterns(typeConverter, patterns,
                                                     symbolTables);
+    target.addIllegalDialect("ifrt");
     target.addIllegalOp<
-        ReussirIFRTBytecodeOp,
+        ReussirPJRTJitCallOp, ReussirPJRTAfterOp, ReussirIFRTBytecodeOp,
         ReussirPanicOp, ReussirExpectOp, ReussirCctxEmptyOp,
         ReussirCctxExtendOp, ReussirCctxApplyOp, ReussirTokenAllocOp,
         ReussirTokenFreeOp, ReussirTokenReinterpretOp, ReussirTokenReallocOp,

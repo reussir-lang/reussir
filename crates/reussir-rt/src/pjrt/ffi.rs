@@ -193,6 +193,41 @@ pub unsafe extern "C" fn __reussir_pjrt_compile(
     )))
 }
 
+/// Validate descriptor placement before execution; failure releases the executable reference.
+/// `executable` owns one compile reference, retained on success, and `devices`
+/// provides `count` readable nonnegative client device indices.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_pjrt_executable_validate_devices(
+    executable: *const Executable,
+    devices: *const i32,
+    count: usize,
+) {
+    let executable = unsafe { Arc::from_raw(executable) };
+    let result = (|| {
+        let context = super::context::get()?;
+        let indices = if count == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(devices, count) }
+        };
+        let expected = indices
+            .iter()
+            .map(|&index| {
+                let index = usize::try_from(index)
+                    .map_err(|_| super::Error::local("negative device index"))?;
+                context.device(index).map(|device| device.as_ptr())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        executable.validate_devices(&expected)
+    })();
+    if result.is_err() {
+        drop(executable);
+        checked(result);
+    } else {
+        let _ = Arc::into_raw(executable);
+    }
+}
+
 /// Invoke synchronously, borrowing inputs without donation and returning owned
 /// output shards for target-array drop lowering to release.
 /// Waits for all devices before releasing the consumed executable reference;

@@ -333,6 +333,8 @@ void populateReussirToLLVMTypeConversions(mlir::LLVMTypeConverter &converter) {
   auto dataLayout = buildMLIRDataLayout(converter);
 #ifdef REUSSIR_ENABLE_OPENXLA
   converter.addConversion([](mlir::Type type) -> std::optional<mlir::Type> {
+    if (isIfrtControlType(type))
+      return mlir::IntegerType::get(type.getContext(), 1);
     if (!isIfrtArrayType(type))
       return std::nullopt;
     // IFRT values address the target-array descriptor, without the RC header.

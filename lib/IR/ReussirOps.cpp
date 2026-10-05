@@ -1480,6 +1480,8 @@ mlir::LogicalResult ReussirArrayToIfrtOp::verify() {
   for (mlir::OpOperand &use : getView().getUses()) {
     if (use.getOwner()->getBlock() != getOperation()->getBlock())
       return emitOpError("borrowed IFRT array must stay in its defining block");
+    if (llvm::isa<ReussirPJRTAfterOp>(use.getOwner()))
+      continue;
     if (auto call = llvm::dyn_cast<ReussirPJRTJitCallOp>(use.getOwner())) {
       unsigned index = use.getOperandNumber();
       if (llvm::is_contained(call.getDonatedInputIndices(), index))

@@ -2,9 +2,19 @@
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --symbol-dce --reussir-convert-to-llvm | %FileCheck %s --implicit-check-not=reussir.ifrt.bytecode
 
 module {
-  // The call retains its symbol reference when the payload becomes a global.
+  // Runtime compilation references the lowered bytecode object.
   // CHECK-LABEL: llvm.func @host
-  // CHECK: reussir.pjrt.jit_call @[[CODE:[a-zA-Z0-9_]+]]()
+  // CHECK: llvm.mlir.addressof @[[CODE:[a-zA-Z0-9_]+]]
+  // CHECK: %[[BYTES:.*]] = llvm.getelementptr {{.*}}[0, 1, 0]
+  // CHECK: %[[SIZE:.*]] = llvm.mlir.constant({{[0-9]+}} : i64)
+  // CHECK: %[[CHECKSUM:.*]] = llvm.getelementptr {{.*}}[0, 0, 0]
+  // CHECK: %[[EXE:.*]] = llvm.call @__reussir_pjrt_compile(%[[BYTES]], %[[SIZE]], %[[CHECKSUM]],
+  // CHECK: llvm.call @__reussir_pjrt_executable_validate_devices(%[[EXE]],
+  // CHECK: %[[INPUTS:.*]] = llvm.mlir.zero : !llvm.ptr
+  // CHECK: %[[OUTPUTS:.*]] = llvm.mlir.zero : !llvm.ptr
+  // CHECK: %[[NI:.*]] = llvm.mlir.constant(0 : i64)
+  // CHECK: %[[NO:.*]] = llvm.mlir.constant(0 : i64)
+  // CHECK: llvm.call @__reussir_pjrt_executable_execute(%[[EXE]], %[[INPUTS]], %[[NI]], %[[OUTPUTS]], %[[NO]])
   func.func @host() attributes {ifrt.function} {
     %done = ifrt.Call @kernel::@main() on devices [0] : () -> ()
     return

@@ -13,6 +13,7 @@ enum Failure {
 
 struct State {
     devices: usize,
+    device_handles: Vec<*mut PJRT_Device>,
     outputs: usize,
     failure: Failure,
     log: RefCell<Vec<&'static str>>,
@@ -28,6 +29,7 @@ unsafe extern "C" fn devices(
 ) -> *mut PJRT_Error {
     let args = unsafe { &mut *args };
     args.num_addressable_devices = unsafe { state(args.executable) }.devices;
+    args.addressable_devices = unsafe { state(args.executable) }.device_handles.as_ptr();
     ptr::null_mut()
 }
 
@@ -174,6 +176,7 @@ impl Fixture {
     fn new(devices: usize, outputs: usize, failure: Failure) -> Self {
         let mut state = Box::new(State {
             devices,
+            device_handles: (1..=devices).map(ptr::without_provenance_mut).collect(),
             outputs,
             failure,
             log: RefCell::default(),
@@ -452,4 +455,32 @@ fn failure_drops_consumed_reference_after_output_cleanup() {
             "client destroyed"
         ]
     );
+}
+
+#[test]
+fn descriptor_placement_must_match_executable_before_accessing_shards() {
+    let fixture = Fixture::new(2, 1, Failure::None);
+    let expected = &fixture.state.device_handles;
+    fixture.executable.validate_devices(expected).unwrap();
+    for invalid in [&expected[..1], &[]] {
+        assert!(
+            fixture
+                .executable
+                .validate_devices(invalid)
+                .unwrap_err()
+                .message
+                .contains("device count")
+        );
+    }
+    let reversed = [expected[1], expected[0]];
+    assert!(
+        fixture
+            .executable
+            .validate_devices(&reversed)
+            .unwrap_err()
+            .message
+            .contains("device order")
+    );
+    assert!(fixture.state.log.borrow().is_empty());
+    assert!(fixture.state.inputs.borrow().is_empty());
 }

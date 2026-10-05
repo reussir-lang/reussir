@@ -66,7 +66,9 @@ def ReussirPJRTJitCallOp
     placement, keeping array placement and execution consistent. Attached device
     assignments are hints expressed as IFRT logical IDs, not fixed placement.
     Borrowed RC inputs cannot be donated or aliased. Returned handles are owned
-    and may be adopted with `array.from_ifrt`. Runtime lowering is separate.
+    and must be adopted once with `array.from_ifrt` during LLVM lowering.
+    Runtime execution is synchronous and requires every array to use all call
+    devices in call order; donation and aliases are not yet supported.
   }];
   let arguments = (ins Variadic<AnyType>:$inputs,
                        Variadic<AnyType>:$control_inputs,
@@ -81,6 +83,14 @@ def ReussirPJRTJitCallOp
     $callee `(` $inputs `)` (`after` `(` $control_inputs^ `)`)?
     `on` `devices` $devices attr-dict `:` functional-type(operands, results)
   }];
+  let hasVerifier = 1;
+}
+
+def ReussirPJRTAfterOp : ReussirOp<"pjrt.after", [MemoryEffects<[MemRead]>]> {
+  let summary = "Wait for borrowed PJRT arrays to materialize";
+  let arguments = (ins Variadic<AnyType>:$inputs);
+  let results = (outs AnyType:$control);
+  let assemblyFormat = "$inputs attr-dict `:` functional-type(operands, results)";
   let hasVerifier = 1;
 }
 

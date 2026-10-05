@@ -6,6 +6,30 @@ use super::{Error, Executable, Result, call, non_null};
 use crate::pjrt::{api::Event, sys::*};
 
 impl Executable {
+    pub(in crate::pjrt) fn validate_devices(&self, expected: &[*mut PJRT_Device]) -> Result<()> {
+        let actual = call!(
+            self.owner.api,
+            PJRT_LoadedExecutable_AddressableDevices {
+                executable: self.as_ptr()
+            }
+        )?;
+        if expected.is_empty() || actual.num_addressable_devices != expected.len() {
+            return Err(Error::local(
+                "executable device count does not match array descriptors",
+            ));
+        }
+        non_null(actual.addressable_devices.cast_mut(), "executable devices")?;
+        let actual = unsafe {
+            std::slice::from_raw_parts(actual.addressable_devices, actual.num_addressable_devices)
+        };
+        if actual != expected {
+            return Err(Error::local(
+                "executable device order does not match array descriptors",
+            ));
+        }
+        Ok(())
+    }
+
     /// Each input points to one target-array descriptor's allocation-handle
     /// field, containing one buffer per addressable device in executable order.
     /// Consumes the executable reference after all devices finish. The descriptors

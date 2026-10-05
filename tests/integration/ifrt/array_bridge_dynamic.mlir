@@ -16,7 +16,7 @@ module {
   // CHECK: llvm.alloca {{.*}} x i64
   // CHECK: llvm.getelementptr %[[INPUT]][0, 1]
   // CHECK-NOT: llvm.call @__reussir_pjrt_array_dimensions
-  // CHECK: reussir.pjrt.jit_call
+  // CHECK: llvm.call @__reussir_pjrt_executable_execute
   // CHECK: llvm.call @__reussir_pjrt_array_dimensions
   // CHECK: %[[LOCAL0:.*]] = llvm.load
   // CHECK: llvm.load
@@ -41,7 +41,7 @@ module {
 
   // Four devices hold two shards with replication; extents scale by two.
   // CHECK-LABEL: llvm.func @sharded(
-  // CHECK: reussir.pjrt.jit_call
+  // CHECK: llvm.call @__reussir_pjrt_executable_execute
   // CHECK: llvm.call @__reussir_pjrt_array_dimensions
   // CHECK: %[[LOCAL0:.*]] = llvm.load
   // CHECK: %[[LOCAL1:.*]] = llvm.load

@@ -43,6 +43,8 @@ getPjrtDimShards(mlir::Attribute sharding, mlir::RankedTensorType shape,
 
 // Exact, lossless metadata matching at the RC/IFRT boundary.
 bool isIfrtArrayType(mlir::Type type);
+bool isIfrtControlType(mlir::Type type);
+llvm::ArrayRef<int32_t> getIfrtArrayDevices(mlir::Type type);
 mlir::LogicalResult verifyIfrtArrayMetadata(
     mlir::Operation *op, mlir::Type type, mlir::RankedTensorType shape,
     llvm::ArrayRef<int32_t> devices, mlir::Attribute sharding,
@@ -50,6 +52,7 @@ mlir::LogicalResult verifyIfrtArrayMetadata(
 mlir::LogicalResult verifyIfrtArrayBorrowUse(mlir::Operation *op,
                                              mlir::OpOperand &use);
 bool isIfrtCall(mlir::Operation *op);
+bool isIfrtAfter(mlir::Operation *op);
 
 // Verify the self-contained module stored in a bytecode object.
 mlir::LogicalResult verifyIfrtKernelModule(mlir::ModuleOp module);
