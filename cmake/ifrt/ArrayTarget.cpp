@@ -26,6 +26,10 @@
 #include <xla/shape_util.h>
 
 namespace reussir {
+bool isIfrtArrayType(mlir::Type type) {
+  return llvm::isa<xla::ifrt::IfrtArrayType>(type);
+}
+
 mlir::FailureOr<mlir::StringAttr>
 serializeIfrtCompileOptions(mlir::Operation *op) {
   auto call = llvm::cast<xla::ifrt::CallOp>(op);

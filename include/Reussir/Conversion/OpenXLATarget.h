@@ -42,6 +42,7 @@ getPjrtDimShards(mlir::Attribute sharding, mlir::RankedTensorType shape,
                  llvm::ArrayRef<int32_t> devices, mlir::Location loc);
 
 // Exact, lossless metadata matching at the RC/IFRT boundary.
+bool isIfrtArrayType(mlir::Type type);
 mlir::LogicalResult verifyIfrtArrayMetadata(
     mlir::Operation *op, mlir::Type type, mlir::RankedTensorType shape,
     llvm::ArrayRef<int32_t> devices, mlir::Attribute sharding,

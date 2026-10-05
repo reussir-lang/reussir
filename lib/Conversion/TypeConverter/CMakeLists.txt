@@ -18,3 +18,7 @@ add_mlir_conversion_library(MLIRReussirTypeConverter
   MLIRSync
   MLIRSyncTypeConverter
 )
+
+if(REUSSIR_ENABLE_OPENXLA)
+  target_compile_definitions(obj.MLIRReussirTypeConverter PRIVATE REUSSIR_ENABLE_OPENXLA)
+endif()

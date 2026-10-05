@@ -14,6 +14,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "Reussir/Conversion/TypeConverter.h"
+#ifdef REUSSIR_ENABLE_OPENXLA
+#include "Reussir/Conversion/OpenXLATarget.h"
+#endif
 #include "Reussir/IR/ReussirTypes.h"
 #include "Sync/Conversion/TypeConverter.h"
 #include "Sync/IR/SyncTypes.h"
@@ -328,6 +331,14 @@ mlir::LowerToLLVMOptions getReussirToLLVMOptions(mlir::ModuleOp op) {
 
 void populateReussirToLLVMTypeConversions(mlir::LLVMTypeConverter &converter) {
   auto dataLayout = buildMLIRDataLayout(converter);
+#ifdef REUSSIR_ENABLE_OPENXLA
+  converter.addConversion([](mlir::Type type) -> std::optional<mlir::Type> {
+    if (!isIfrtArrayType(type))
+      return std::nullopt;
+    // IFRT values address the target-array descriptor, without the RC header.
+    return mlir::LLVM::LLVMPointerType::get(type.getContext());
+  });
+#endif
   // Lock-guarded cells lower onto the `sync` dialect: register its type
   // conversions so that `convertType` can resolve `!sync.*` wrappers (and, via
   // the CellType conversion below, the reussir cell types built on them).

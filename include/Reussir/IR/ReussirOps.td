@@ -1152,7 +1152,8 @@ def ReussirArrayToIfrtOp
     Shape (including dynamic dimensions), element type, ordered devices,
     sharding, memory kind, and layout must match exactly. Absent target sharding
     matches IFRT's unspecified sharding. No transfer or resharding occurs.
-    Requires an OpenXLA-enabled build; execution lowering is not yet provided.
+    Requires OpenXLA; LLVM lowering currently requires static shapes and a
+    complete-buffer view with zero offset.
   }];
   let arguments = (ins ReussirRcArrayType:$array);
   let results = (outs AnyType:$view);
@@ -1177,7 +1178,7 @@ def ReussirArrayFromIfrtOp
     Metadata must match as for `array.to_ifrt`. Dynamic extents come from the
     IFRT result. The optional token supplies only the host RC metadata box.
     No device allocation, data copy, or wait occurs. Requires OpenXLA;
-    execution lowering is not yet provided.
+    LLVM lowering currently requires static shapes.
   }];
   let arguments = (ins AnyType:$source, Optional<ReussirTokenType>:$token);
   let results = (outs ReussirRcArrayType:$array);

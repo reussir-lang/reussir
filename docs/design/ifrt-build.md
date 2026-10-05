@@ -54,9 +54,23 @@ supported version ranges. Bare MLIR bytecode is not this program envelope.
 
 IFRT array types carry shape, element type, sharding, logical devices,
 optional memory kind, and optional layout. These describe the program;
-registering the dialect does not create a runtime array. Runtime device
-binding, `CompileAndLoad`, Reussir array interoperability, and CPU/GPU execution
-remain subsequent work. No Linalg lowering is used in this artifact path.
+registering the dialect does not create a runtime array, and program
+serialization does not execute kernels. No Linalg lowering is used in this
+artifact path.
+
+The RC/IFRT bridge operations have LLVM lowering for statically shaped arrays.
+`reussir.array.to_ifrt` borrows the device-handle descriptor from an RC array
+without changing its reference count, copying data, or waiting for the device.
+The array must describe a complete buffer: a nonzero offset fails at runtime.
+`reussir.array.from_ifrt` adopts an owned call result into a new RC descriptor,
+using an allocation token for the host metadata and preserving shard order.
+It does not allocate device storage. The existing bridge verifiers enforce
+matching metadata, forbid donation of borrowed inputs, and require each adopted
+result to have exactly one use.
+
+This lowering covers the bridge operations themselves. Dynamic shapes and
+native lowering of IFRT/PJRT calls are not supported yet; programs containing
+those calls cannot yet complete the LLVM conversion.
 
 The individually registered passes cover donation/sharding verification,
 control dependencies, duplicate callees, copy/reshard preparation, outlining,

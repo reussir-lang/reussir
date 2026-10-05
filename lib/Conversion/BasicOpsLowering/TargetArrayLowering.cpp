@@ -374,6 +374,67 @@ void assertEqual(mlir::OpBuilder &builder, mlir::Location loc, mlir::Value lhs,
   mlir::cf::AssertOp::create(builder, loc, equal, message);
 }
 
+struct ToIfrt : mlir::ConvertOpToLLVMPattern<ReussirArrayToIfrtOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayToIfrtOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto rcType = op.getArray().getType();
+    auto array = llvm::cast<ArrayType>(rcType.getElementType());
+    if (array.hasDynamicShape())
+      return op.emitOpError(
+          "dynamic-shape IFRT bridge lowering is not yet supported");
+    auto loc = op.getLoc();
+    auto ptrType = mlir::LLVM::LLVMPointerType::get(getContext());
+    auto boxType = getTypeConverter()->convertType(rcType.getInnerBoxType());
+    auto offsetAddress = mlir::LLVM::GEPOp::create(
+        rewriter, loc, ptrType, boxType, adaptor.getArray(),
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1, ArrayType::OFFSET_INDEX});
+    auto indexType = getTypeConverter()->getIndexType();
+    auto offset = mlir::LLVM::LoadOp::create(rewriter, loc, indexType,
+                                           offsetAddress);
+    assertEqual(rewriter, loc, offset,
+                constant(rewriter, loc, indexType, 0),
+                "array.to_ifrt requires a complete device buffer");
+    auto descriptor = mlir::LLVM::GEPOp::create(
+        rewriter, loc, ptrType, boxType, adaptor.getArray(),
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
+    rewriter.replaceOp(op, descriptor);
+    return mlir::success();
+  }
+};
+
+struct FromIfrt : mlir::ConvertOpToLLVMPattern<ReussirArrayFromIfrtOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirArrayFromIfrtOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto rcType = op.getArray().getType();
+    auto array = llvm::cast<ArrayType>(rcType.getElementType());
+    if (array.hasDynamicShape())
+      return op.emitOpError(
+          "dynamic-shape IFRT bridge lowering is not yet supported");
+    if (!adaptor.getToken())
+      return op.emitOpError(
+          "requires an allocation token; run token instantiation first");
+    auto loc = op.getLoc();
+    auto ptrType = mlir::LLVM::LLVMPointerType::get(getContext());
+    llvm::SmallVector<mlir::Value> handles;
+    for (int32_t i = 0; i < array.getTarget().getDevices().size(); ++i) {
+      auto slot = mlir::LLVM::GEPOp::create(
+          rewriter, loc, ptrType, ptrType, adaptor.getSource(),
+          llvm::ArrayRef<mlir::LLVM::GEPArg>{i});
+      handles.push_back(mlir::LLVM::LoadOp::create(rewriter, loc, ptrType, slot));
+    }
+    initializeTargetBox(op, rcType, handles, {}, *getTypeConverter(), rewriter,
+                        adaptor.getToken());
+    rewriter.replaceOp(op, adaptor.getToken());
+    return mlir::success();
+  }
+};
+
 // Use LLVM's checked arithmetic for byte counts and signed byte strides.
 template <typename MulOp>
 mlir::Value checkedMultiply(mlir::OpBuilder &builder, mlir::Location loc,
@@ -640,6 +701,7 @@ struct DropTargetArray : mlir::ConvertOpToLLVMPattern<ReussirRefDropOp> {
 
 void populateTargetArrayLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                          mlir::RewritePatternSet &patterns) {
-  patterns.add<CreateTargetArray, ToDevice, ToHost, DropTargetArray>(converter);
+  patterns.add<CreateTargetArray, ToDevice, ToHost, ToIfrt, FromIfrt,
+               DropTargetArray>(converter);
 }
 } // namespace reussir

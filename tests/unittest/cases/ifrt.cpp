@@ -16,10 +16,12 @@
 #ifdef REUSSIR_ENABLE_OPENXLA
 #include "Reussir/Conversion/OpenXLATarget.h"
 #include "Reussir/Conversion/Passes.h"
+#include "Reussir/Conversion/TypeConverter.h"
 #include "Reussir/IR/ReussirOps.h"
 #include <gtest/gtest.h>
 #include <llvm/ADT/StringExtras.h>
 #include <llvm/Support/BLAKE3.h>
+#include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/IR/Diagnostics.h>
 #include <mlir/IR/Verifier.h>
 #include <mlir/Parser/Parser.h>
@@ -31,6 +33,32 @@ import reussir.test;
 void registerIfrtDialectsAndPasses(mlir::DialectRegistry &registry);
 
 namespace reussir {
+TEST_F(ReussirTest, IfrtArrayDescriptorTypeConversion) {
+  mlir::DialectRegistry registry;
+  registerIfrtDialectsAndPasses(registry);
+  context->appendDialectRegistry(registry);
+  context->loadAllAvailableDialects();
+  auto module = parse(R"mlir(
+    #s = #ifrt.sharding_param<1 to [0] on 1>
+    #m = #ifrt.sharding_param<2 to [0] on 2>
+    module {
+      func.func private @arrays(
+        !ifrt.array<tensor<8xf32>, #s, [0]>,
+        !ifrt.array<tensor<8xf32>, #m, [3, 1]>,
+        !ifrt.array<tensor<?xf32>, #s, [0]>, i32)
+    }
+  )mlir");
+  ASSERT_TRUE(module);
+  mlir::LLVMTypeConverter converter(context.get(),
+                                    getReussirToLLVMOptions(*module));
+  populateReussirToLLVMTypeConversions(converter);
+  auto args = module->lookupSymbol<mlir::func::FuncOp>("arrays").getArgumentTypes();
+  auto pointer = mlir::LLVM::LLVMPointerType::get(context.get());
+  for (auto type : args.take_front(3))
+    EXPECT_EQ(converter.convertType(type), pointer);
+  EXPECT_EQ(converter.convertType(args.back()), args.back());
+}
+
 TEST_F(ReussirTest, IfrtBridgeMetadataTokensAndEffects) {
   mlir::DialectRegistry registry;
   registerIfrtDialectsAndPasses(registry);
