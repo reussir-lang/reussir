@@ -282,6 +282,18 @@ pub unsafe extern "C" fn __reussir_pjrt_array_deallocate(buffer: Buffer) {
     checked(unsafe { buffer.deallocate() });
 }
 
+/// Copy a borrowed buffer's unpadded extents; the backend may wait for their computation.
+/// `dims` provides `rank` exclusive writable i64 slots (null allowed for rank zero).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_pjrt_array_dimensions(
+    buffer: Buffer,
+    dims: *mut i64,
+    rank: usize,
+) {
+    let api = checked(super::context::get()).api;
+    checked(unsafe { buffer.dimensions(api, dims, rank) });
+}
+
 /// Return an owned buffer after PJRT finishes borrowing initialized host data.
 /// `element_type` is PJRT_Buffer_Type; `dims` has `rank` nonnegative extents
 /// (null allowed for rank zero). `byte_strides` has `rank` signed **byte** strides;

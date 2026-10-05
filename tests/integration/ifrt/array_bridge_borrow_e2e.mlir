@@ -6,9 +6,9 @@
 // RUN: %t.exe
 // RUN: %not --crash %t.exe bad
 
-#s = #ifrt.sharding_param<2 to [0] on 2>
-!I = !ifrt.array<tensor<8xf32>, #s, [3, 1]>
-!R = !reussir.rc<!reussir.array<8 x f32, #reussir.target<devices = [3, 1], sharding = #s>> atomic>
+#s = #ifrt.sharding_param<2x1x1 to [0] on 2>
+!I = !ifrt.array<tensor<?x4x?xf32>, #s, [3, 1]>
+!R = !reussir.rc<!reussir.array<? x 4 x ? x f32, #reussir.target<devices = [3, 1], sharding = #s>> atomic>
 func.func @borrow(%input: !R) {
   %view = reussir.array.to_ifrt %input : !R -> !I
   return

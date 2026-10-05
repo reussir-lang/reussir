@@ -381,10 +381,6 @@ struct ToIfrt : mlir::ConvertOpToLLVMPattern<ReussirArrayToIfrtOp> {
   matchAndRewrite(ReussirArrayToIfrtOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
     auto rcType = op.getArray().getType();
-    auto array = llvm::cast<ArrayType>(rcType.getElementType());
-    if (array.hasDynamicShape())
-      return op.emitOpError(
-          "dynamic-shape IFRT bridge lowering is not yet supported");
     auto loc = op.getLoc();
     auto ptrType = mlir::LLVM::LLVMPointerType::get(getContext());
     auto boxType = getTypeConverter()->convertType(rcType.getInnerBoxType());
@@ -405,6 +401,11 @@ struct ToIfrt : mlir::ConvertOpToLLVMPattern<ReussirArrayToIfrtOp> {
   }
 };
 
+mlir::FailureOr<llvm::SmallVector<mlir::Value>> readResultExtents(
+    mlir::Operation *op, ArrayType array, llvm::ArrayRef<mlir::Value> handles,
+    const mlir::LLVMTypeConverter &converter,
+    mlir::ConversionPatternRewriter &rewriter);
+
 struct FromIfrt : mlir::ConvertOpToLLVMPattern<ReussirArrayFromIfrtOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
@@ -413,9 +414,6 @@ struct FromIfrt : mlir::ConvertOpToLLVMPattern<ReussirArrayFromIfrtOp> {
                   mlir::ConversionPatternRewriter &rewriter) const override {
     auto rcType = op.getArray().getType();
     auto array = llvm::cast<ArrayType>(rcType.getElementType());
-    if (array.hasDynamicShape())
-      return op.emitOpError(
-          "dynamic-shape IFRT bridge lowering is not yet supported");
     if (!adaptor.getToken())
       return op.emitOpError(
           "requires an allocation token; run token instantiation first");
@@ -428,8 +426,16 @@ struct FromIfrt : mlir::ConvertOpToLLVMPattern<ReussirArrayFromIfrtOp> {
           llvm::ArrayRef<mlir::LLVM::GEPArg>{i});
       handles.push_back(mlir::LLVM::LoadOp::create(rewriter, loc, ptrType, slot));
     }
-    initializeTargetBox(op, rcType, handles, {}, *getTypeConverter(), rewriter,
-                        adaptor.getToken());
+    llvm::SmallVector<mlir::Value> extents;
+    if (array.hasDynamicShape()) {
+      auto sizes = readResultExtents(op, array, handles, *getTypeConverter(),
+                                    rewriter);
+      if (mlir::failed(sizes))
+        return mlir::failure();
+      extents = std::move(*sizes);
+    }
+    initializeTargetBox(op, rcType, handles, extents, *getTypeConverter(),
+                        rewriter, adaptor.getToken());
     rewriter.replaceOp(op, adaptor.getToken());
     return mlir::success();
   }
@@ -438,7 +444,9 @@ struct FromIfrt : mlir::ConvertOpToLLVMPattern<ReussirArrayFromIfrtOp> {
 // Use LLVM's checked arithmetic for byte counts and signed byte strides.
 template <typename MulOp>
 mlir::Value checkedMultiply(mlir::OpBuilder &builder, mlir::Location loc,
-                            mlir::Value lhs, mlir::Value rhs) {
+                            mlir::Value lhs, mlir::Value rhs,
+                            llvm::StringRef message =
+                                "array transfer size or stride overflow") {
   auto resultType = mlir::LLVM::LLVMStructType::getLiteral(
       builder.getContext(), {lhs.getType(), builder.getI1Type()});
   auto product = MulOp::create(builder, loc, resultType, lhs, rhs);
@@ -446,9 +454,78 @@ mlir::Value checkedMultiply(mlir::OpBuilder &builder, mlir::Location loc,
       builder, loc, product, llvm::ArrayRef<int64_t>{1});
   assertEqual(builder, loc, overflow,
               constant(builder, loc, builder.getI1Type(), 0),
-              "array transfer size or stride overflow");
+              message);
   return mlir::LLVM::ExtractValueOp::create(builder, loc, product,
                                             llvm::ArrayRef<int64_t>{0});
+}
+
+mlir::FailureOr<llvm::SmallVector<mlir::Value>> readResultExtents(
+    mlir::Operation *op, ArrayType array, llvm::ArrayRef<mlir::Value> handles,
+    const mlir::LLVMTypeConverter &converter,
+    mlir::ConversionPatternRewriter &rewriter) {
+#ifndef REUSSIR_ENABLE_OPENXLA
+  return op->emitOpError("IFRT result shapes require REUSSIR_ENABLE_OPENXLA");
+#else
+  auto target = array.getTarget();
+  auto shards = getPjrtDimShards(
+      target.getSharding(),
+      mlir::RankedTensorType::get(array.getShape(), array.getElementType()),
+      target.getDevices().asArrayRef(), op->getLoc());
+  if (mlir::failed(shards))
+    return mlir::failure();
+  if (!op->getParentOfType<mlir::FunctionOpInterface>())
+    return op->emitOpError("requires an enclosing function");
+  auto loc = op->getLoc();
+  auto ptrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+  auto indexType = converter.getIndexType();
+  auto i64 = rewriter.getI64Type();
+  auto query = runtimeFunction(op, rewriter, "__reussir_pjrt_array_dimensions",
+                               {ptrType, ptrType, indexType});
+  if (mlir::failed(query))
+    return mlir::failure();
+  auto storage = entryAlloca(op, i64, indexType, array.getRank(), rewriter);
+  auto rank = constant(rewriter, loc, indexType, array.getRank());
+  llvm::SmallVector<mlir::Value> localShape;
+  for (auto [device, handle] : llvm::enumerate(handles)) {
+    mlir::LLVM::CallOp::create(rewriter, loc, *query,
+                             mlir::ValueRange{handle, storage, rank});
+    for (size_t dim = 0; dim < array.getRank(); ++dim) {
+      auto slot = mlir::LLVM::GEPOp::create(
+          rewriter, loc, ptrType, i64, storage,
+          llvm::ArrayRef<mlir::LLVM::GEPArg>{static_cast<int32_t>(dim)});
+      auto size = mlir::LLVM::LoadOp::create(rewriter, loc, i64, slot);
+      if (device == 0)
+        localShape.push_back(size);
+      else
+        assertEqual(rewriter, loc, size, localShape[dim],
+                    "IFRT result requires equal unpadded shard shapes");
+    }
+  }
+  llvm::SmallVector<mlir::Value> extents;
+  for (size_t dim = 0; dim < array.getRank(); ++dim) {
+    auto size = checkedMultiply<mlir::LLVM::SMulWithOverflowOp>(
+        rewriter, loc, localShape[dim],
+        constant(rewriter, loc, i64, (*shards)[dim]),
+        "IFRT result extent overflow");
+    if (!array.isDynamicDim(dim)) {
+      assertEqual(rewriter, loc, size,
+                  constant(rewriter, loc, i64, array.getDimSize(dim)),
+                  "IFRT result static extent mismatch");
+      continue;
+    }
+    if (indexType.getIntOrFloatBitWidth() < 64) {
+      auto narrowed = mlir::LLVM::TruncOp::create(rewriter, loc, indexType, size);
+      auto restored = mlir::LLVM::SExtOp::create(rewriter, loc, i64, narrowed);
+      assertEqual(rewriter, loc, restored, size,
+                  "IFRT result extent does not fit index type");
+      size = narrowed;
+    } else if (indexType.getIntOrFloatBitWidth() > 64) {
+      size = mlir::LLVM::SExtOp::create(rewriter, loc, indexType, size);
+    }
+    extents.push_back(size);
+  }
+  return extents;
+#endif
 }
 
 mlir::Value hostDataPointer(mlir::OpBuilder &builder, mlir::Location loc,

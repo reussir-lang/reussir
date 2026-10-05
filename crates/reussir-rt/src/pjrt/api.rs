@@ -76,6 +76,7 @@ impl Api {
             PJRT_Buffer_CopyToDevice,
             PJRT_Buffer_ToHostBuffer,
             PJRT_Buffer_ReadyEvent,
+            PJRT_Buffer_UnpaddedDimensions,
             PJRT_Event_Await,
             PJRT_Event_Destroy,
         );

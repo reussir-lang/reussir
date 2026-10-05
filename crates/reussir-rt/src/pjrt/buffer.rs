@@ -6,7 +6,7 @@ use std::{ffi::c_void, ptr::NonNull};
 
 use super::{
     Result,
-    api::{Event, call, non_null},
+    api::{Api, Event, call, non_null},
     context,
     layout::{Allocation, Layout},
     sys::*,
@@ -21,6 +21,33 @@ pub struct Buffer(NonNull<PJRT_Buffer>);
 impl Buffer {
     pub fn as_ptr(self) -> *mut PJRT_Buffer {
         self.0.as_ptr()
+    }
+
+    /// Copy actual extents into `rank` writable slots while borrowing the buffer.
+    pub(super) unsafe fn dimensions(self, api: Api, dims: *mut i64, rank: usize) -> Result<()> {
+        let args = call!(
+            api,
+            PJRT_Buffer_UnpaddedDimensions {
+                buffer: self.as_ptr()
+            }
+        )?;
+        if args.num_dims != rank {
+            return Err(super::Error::local(
+                "PjRt buffer rank does not match array rank",
+            ));
+        }
+        if rank == 0 {
+            return Ok(());
+        }
+        non_null(args.unpadded_dims.cast_mut(), "buffer dimensions")?;
+        let actual = unsafe { std::slice::from_raw_parts(args.unpadded_dims, rank) };
+        if actual.iter().any(|&dim| dim < 0) {
+            return Err(super::Error::local(
+                "PjRt buffer extent must be nonnegative",
+            ));
+        }
+        unsafe { std::ptr::copy_nonoverlapping(actual.as_ptr(), dims, rank) };
+        Ok(())
     }
 
     /// Allocate uninitialized storage with the requested memory and layout. Backends
@@ -221,6 +248,89 @@ impl Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Dimensions {
+        values: &'static [i64],
+        null: bool,
+    }
+
+    unsafe extern "C" fn unpadded_dimensions(
+        args: *mut PJRT_Buffer_UnpaddedDimensions_Args,
+    ) -> *mut PJRT_Error {
+        let args = unsafe { &mut *args };
+        let dimensions = unsafe { &*args.buffer.cast::<Dimensions>() };
+        args.num_dims = dimensions.values.len();
+        args.unpadded_dims = if dimensions.null {
+            std::ptr::null()
+        } else {
+            dimensions.values.as_ptr()
+        };
+        std::ptr::null_mut()
+    }
+
+    fn query_dimensions(dimensions: &mut Dimensions, output: &mut [i64]) -> Result<()> {
+        // No padded-shape, wait, or destroy callback: the query only borrows.
+        let mut table = PJRT_Api {
+            PJRT_Buffer_UnpaddedDimensions: Some(unpadded_dimensions),
+            ..Default::default()
+        };
+        let api = Api(NonNull::from(&mut table));
+        let buffer = Buffer(NonNull::from(dimensions).cast());
+        unsafe { buffer.dimensions(api, output.as_mut_ptr(), output.len()) }
+    }
+
+    #[test]
+    fn actual_dimensions_include_zero_extents() {
+        let mut dimensions = Dimensions {
+            values: &[3, 0, 7],
+            null: false,
+        };
+        let mut output = [-1; 3];
+        query_dimensions(&mut dimensions, &mut output).unwrap();
+        assert_eq!(output, [3, 0, 7]);
+        assert_eq!(dimensions.values, &[3, 0, 7]);
+    }
+
+    #[test]
+    fn scalar_dimensions_allow_null() {
+        let mut dimensions = Dimensions {
+            values: &[],
+            null: true,
+        };
+        query_dimensions(&mut dimensions, &mut []).unwrap();
+    }
+
+    #[test]
+    fn invalid_dimensions_leave_output_untouched() {
+        for (mut dimensions, message) in [
+            (
+                Dimensions {
+                    values: &[3],
+                    null: false,
+                },
+                "rank does not match",
+            ),
+            (
+                Dimensions {
+                    values: &[3, 4],
+                    null: true,
+                },
+                "null buffer dimensions",
+            ),
+            (
+                Dimensions {
+                    values: &[3, -1],
+                    null: false,
+                },
+                "extent must be nonnegative",
+            ),
+        ] {
+            let mut output = [99; 2];
+            let error = query_dimensions(&mut dimensions, &mut output).unwrap_err();
+            assert!(error.message.contains(message), "{}", error.message);
+            assert_eq!(output, [99; 2]);
+        }
+    }
 
     #[test]
     #[ignore = "requires REUSSIR_PJRT_PLUGIN pointing to a trusted CPU plugin"]

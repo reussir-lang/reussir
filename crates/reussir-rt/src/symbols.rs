@@ -86,6 +86,8 @@ pub fn exported_symbols() -> &'static [RuntimeSymbol] {
         #[cfg(feature = "pjrt")]
         __reussir_pjrt_array_deallocate,
         #[cfg(feature = "pjrt")]
+        __reussir_pjrt_array_dimensions,
+        #[cfg(feature = "pjrt")]
         __reussir_pjrt_array_from_host,
         #[cfg(feature = "pjrt")]
         __reussir_pjrt_array_to_host,
