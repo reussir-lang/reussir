@@ -28,6 +28,9 @@ cc_library(
         ":ir",
         "//xla:shape_util",
         "//xla/pjrt:layout_mode",
+        "//xla/pjrt:pjrt_executable",
+        "//xla/pjrt/proto:compile_options_proto_cc",
+        "//xla/python/ifrt/ir/transforms:utils",
         "@llvm-project//mlir:IR",
     ],
 )

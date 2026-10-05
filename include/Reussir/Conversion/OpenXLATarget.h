@@ -65,6 +65,11 @@ struct IfrtCallInfo {
   mlir::ArrayAttr resAttrs;
 };
 std::optional<IfrtCallInfo> getIfrtCallInfo(mlir::Operation *op);
+// Prepare per-call options before the original IFRT call and kernel disappear.
+mlir::FailureOr<mlir::StringAttr>
+serializeIfrtCompileOptions(mlir::Operation *op);
+mlir::LogicalResult verifyPjrtCompileOptions(mlir::Operation *op,
+                                             llvm::StringRef bytes);
 mlir::FailureOr<mlir::FunctionType> verifyIfrtCallSignature(
     mlir::Operation *op, mlir::TypeRange inputs, mlir::TypeRange outputs,
     mlir::TypeRange controls, mlir::Type controlOutput,

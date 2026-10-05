@@ -16,12 +16,56 @@
 #include <llvm/ADT/DenseSet.h>
 #include <xla/layout_util.h>
 #include <xla/pjrt/layout_mode.h>
+#include <xla/pjrt/pjrt_executable.h>
+#include <xla/pjrt/proto/compile_options.pb.h>
+#include <xla/python/ifrt/ir/constants.h>
 #include <xla/python/ifrt/ir/ifrt_dialect.h>
 #include <xla/python/ifrt/ir/ifrt_ops.h>
 #include <xla/python/ifrt/ir/reussir_target.h>
+#include <xla/python/ifrt/ir/transforms/utils.h>
 #include <xla/shape_util.h>
 
 namespace reussir {
+mlir::FailureOr<mlir::StringAttr>
+serializeIfrtCompileOptions(mlir::Operation *op) {
+  auto call = llvm::cast<xla::ifrt::CallOp>(op);
+  if (call->hasAttr(xla::ifrt::kIfrtCompileOptionsKey)) {
+    call.emitOpError(
+        "JIT preparation does not support external compile option overrides");
+    return mlir::failure();
+  }
+  // Match IFRT's atom compiler: separate parameters, with sharding fixed by
+  // the outlined kernel. Logical IDs are resolved when a client is available.
+  auto options = xla::ifrt::GetDefaultCompileOptions(
+      call, /*enable_sharding_propagation=*/false,
+      /*enable_parameter_tupling=*/false);
+  auto proto = options.ToProto();
+  if (!proto.ok()) {
+    call.emitOpError("cannot serialize PJRT compile options: ")
+        << proto.status().message();
+    return mlir::failure();
+  }
+  return mlir::StringAttr::get(op->getContext(), proto->SerializeAsString());
+}
+
+mlir::LogicalResult verifyPjrtCompileOptions(mlir::Operation *op,
+                                             llvm::StringRef bytes) {
+  xla::CompileOptionsProto proto;
+  if (!proto.ParseFromString(bytes.str()))
+    return op->emitOpError("requires serialized XLA CompileOptionsProto bytes");
+  auto options = xla::CompileOptions::FromProto(proto);
+  if (!options.ok())
+    return op->emitOpError("invalid PJRT compile options: ")
+           << options.status().message();
+  // Placement is a runtime-overridable default; the call's parameter convention
+  // remains part of its ABI.
+  if (proto.parameter_is_tupled_arguments() ||
+      proto.compile_portable_executable())
+    return op->emitOpError(
+        "JIT calls require separate parameters and an assigned executable");
+  return mlir::success();
+}
+
 mlir::LogicalResult verifyIfrtArrayMetadata(
     mlir::Operation *op, mlir::Type type, mlir::RankedTensorType shape,
     llvm::ArrayRef<int32_t> devices, mlir::Attribute sharding,

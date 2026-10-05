@@ -60,12 +60,17 @@ def ReussirPJRTJitCallOp
     References an `ifrt.bytecode` symbol. Inputs and outputs are IFRT arrays;
     control operands and the final result are IFRT completion dependencies.
     Devices, input/output aliases, and donation indices retain IFRT semantics.
+    Optional `compile_options` carries serialized XLA CompileOptionsProto
+    defaults. The runtime supplies omitted options and may override device
+    placement, keeping array placement and execution consistent. Attached device
+    assignments are hints expressed as IFRT logical IDs, not fixed placement.
     Borrowed RC inputs cannot be donated or aliased. Returned handles are owned
     and may be adopted with `array.from_ifrt`. Runtime lowering is separate.
   }];
   let arguments = (ins Variadic<AnyType>:$inputs,
                        Variadic<AnyType>:$control_inputs,
                        SymbolRefAttr:$callee, DenseI32ArrayAttr:$devices,
+                       OptionalAttr<StrAttr>:$compile_options,
                        DefaultValuedAttr<ArrayAttr, "{}">:$io_aliases,
                        DefaultValuedAttr<DenseI32ArrayAttr, "{}">:$donated_input_indices,
                        OptionalAttr<DictArrayAttr>:$arg_attrs,

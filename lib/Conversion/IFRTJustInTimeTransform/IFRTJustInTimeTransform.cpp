@@ -50,6 +50,7 @@ struct ReussirIFRTJustInTimeTransformPass
       mlir::Operation *op;
       IfrtCallInfo info;
       mlir::ModuleOp kernel;
+      mlir::StringAttr compileOptions;
     };
     struct Artifact {
       std::string bytes;
@@ -98,7 +99,10 @@ struct ReussirIFRTJustInTimeTransformPass
                 mangledBlake3Symbol("REUSSIR_IFRT_BYTECODE", artifact.bytes);
             artifacts.insert({kernel, std::move(artifact)});
           }
-          calls.push_back({op, *info, kernel});
+          auto options = serializeIfrtCompileOptions(op);
+          if (mlir::failed(options))
+            return mlir::WalkResult::interrupt();
+          calls.push_back({op, *info, kernel, *options});
           return mlir::WalkResult::advance();
         });
     if (result.wasInterrupted()) {
@@ -139,8 +143,9 @@ struct ReussirIFRTJustInTimeTransformPass
           call.op->getResult(call.info.numOutputs).getType(),
           call.op->getOperands().take_front(call.info.numInputs),
           call.op->getOperands().drop_front(call.info.numInputs), callee,
-          call.info.devices, call.info.ioAliases, call.info.donatedInputIndices,
-          call.info.argAttrs, call.info.resAttrs);
+          call.info.devices, call.compileOptions, call.info.ioAliases,
+          call.info.donatedInputIndices, call.info.argAttrs,
+          call.info.resAttrs);
       jit->setDiscardableAttrs(call.op->getDiscardableAttrDictionary());
       call.op->replaceAllUsesWith(jit.getResults());
       call.op->erase();

@@ -64,3 +64,19 @@ module {
     }
   }
 }
+
+// -----
+#s = #ifrt.sharding_param<1 to [0] on 1>
+!I = !ifrt.array<tensor<8xf32>, #s, [0]>
+module {
+  func.func @host(%input: !I) -> !I attributes {ifrt.function} {
+    // expected-error @+1 {{JIT preparation does not support external compile option overrides}}
+    %out, %done = ifrt.Call @kernel::@main(%input) on devices [0] {ifrt.compile_options_key = "external"} : (!I) -> !I
+    return %out : !I
+  }
+  module @kernel {
+    func.func @main(%arg: tensor<8xf32>) -> tensor<8xf32> {
+      return %arg : tensor<8xf32>
+    }
+  }
+}

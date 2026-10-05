@@ -15,6 +15,7 @@ module {
   // CHECK-LABEL: func.func @main
   // CHECK: %[[VIEW:.*]] = reussir.array.to_ifrt
   // CHECK: %[[OUT:.*]], %[[DONE:.*]] = reussir.pjrt.jit_call @[[CODE:[A-Za-z0-9_]+]](%[[VIEW]]) on devices [0]
+  // CHECK-SAME: compile_options = "{{.+}}"
   // CHECK: reussir.rc.dec
   // CHECK: reussir.array.from_ifrt %[[OUT]]
   // CHECK: reussir.array.to_host

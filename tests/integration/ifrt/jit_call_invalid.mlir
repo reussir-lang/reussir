@@ -1,4 +1,5 @@
 // REQUIRES: ifrt
+// Protobuf fixtures below are encoded with upstream protoc.
 // RUN: %reussir-opt %s --split-input-file --verify-diagnostics
 
 #s = #ifrt.sharding_param<1 to [0] on 1>
@@ -101,5 +102,41 @@ func.func @borrowed_alias(%input: !R) {
   // expected-error @+1 {{borrowed IFRT input cannot alias a call result}}
   %view = reussir.array.to_ifrt %input : !R -> !I
   %out, %done = reussir.pjrt.jit_call @kernel(%view) on devices [0] {io_aliases = [array<i32: 0, 0>]} : (!I) -> (!I, !ifrt.control)
+  return
+}
+
+// -----
+#s = #ifrt.sharding_param<1 to [0] on 1>
+!I = !ifrt.array<tensor<8xf32>, #s, [0]>
+func.func @invalid_options(%input: !I) {
+  // expected-error @+1 {{requires serialized XLA CompileOptionsProto bytes}}
+  %out, %done = reussir.pjrt.jit_call @kernel(%input) on devices [0] {compile_options = "\80"} : (!I) -> (!I, !ifrt.control)
+  return
+}
+
+// -----
+#s = #ifrt.sharding_param<1 to [0] on 1>
+!I = !ifrt.array<tensor<8xf32>, #s, [0]>
+func.func @wrong_dimensions(%input: !I) {
+  // expected-error @+1 {{invalid PJRT compile options:}}
+  %out, %done = reussir.pjrt.jit_call @kernel(%input) on devices [0] {compile_options = "\1A\11\20\01\28\01\30\01\4A\09\08\01\10\02\1A\03\0A\01\00"} : (!I) -> (!I, !ifrt.control)
+  return
+}
+
+// -----
+#s = #ifrt.sharding_param<1 to [0] on 1>
+!I = !ifrt.array<tensor<8xf32>, #s, [0]>
+func.func @tupled_parameters(%input: !I) {
+  // expected-error @+1 {{JIT calls require separate parameters and an assigned executable}}
+  %out, %done = reussir.pjrt.jit_call @kernel(%input) on devices [0] {compile_options = "\10\01\1A\11\20\01\28\01\30\01\4A\09\08\01\10\01\1A\03\0A\01\00"} : (!I) -> (!I, !ifrt.control)
+  return
+}
+
+// -----
+#s = #ifrt.sharding_param<1 to [0] on 1>
+!I = !ifrt.array<tensor<8xf32>, #s, [0]>
+func.func @portable_options(%input: !I) {
+  // expected-error @+1 {{JIT calls require separate parameters and an assigned executable}}
+  %out, %done = reussir.pjrt.jit_call @kernel(%input) on devices [0] {compile_options = "\1A\11\20\01\28\01\30\01\4A\09\08\01\10\01\1A\03\0A\01\00\20\01"} : (!I) -> (!I, !ifrt.control)
   return
 }

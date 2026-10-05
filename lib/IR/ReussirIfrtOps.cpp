@@ -82,6 +82,8 @@ mlir::LogicalResult ReussirPJRTJitCallOp::verify() {
     return emitOpError("arg_attrs must match the input count");
   if (getResAttrs() && getResAttrs()->size() != getOutputs().size())
     return emitOpError("res_attrs must match the output count");
+  if (auto options = getCompileOptions())
+    return verifyPjrtCompileOptions(getOperation(), *options);
   return mlir::success();
 #else
   return emitOpError("requires an OpenXLA-enabled build");

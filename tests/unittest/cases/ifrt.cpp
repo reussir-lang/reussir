@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #ifdef REUSSIR_ENABLE_OPENXLA
+#include "Reussir/Conversion/OpenXLATarget.h"
 #include "Reussir/Conversion/Passes.h"
 #include "Reussir/IR/ReussirOps.h"
 #include <gtest/gtest.h>
@@ -171,6 +172,9 @@ TEST_F(ReussirTest, IfrtJitBytecodeRoundTripAndDeduplication) {
   auto calls = llvm::to_vector(host.getOps<ReussirPJRTJitCallOp>());
   ASSERT_EQ(calls.size(), 2u);
   EXPECT_EQ(calls[0].getCalleeAttr(), calls[1].getCalleeAttr());
+  ASSERT_TRUE(calls[0].getCompileOptions());
+  EXPECT_FALSE(calls[0].getCompileOptions()->empty());
+  EXPECT_EQ(calls[0].getCompileOptionsAttr(), calls[1].getCompileOptionsAttr());
   ASSERT_EQ(calls[1].getControlInputs().size(), 1u);
   EXPECT_EQ(calls[1].getControlInputs()[0], calls[0].getControlOutput());
   EXPECT_FALSE(mlir::isMemoryEffectFree(calls[0]));
@@ -195,24 +199,116 @@ TEST_F(ReussirTest, IfrtJitBytecodeRoundTripAndDeduplication) {
   EXPECT_NE((*uniqueCodes.begin()).getSymName(), code.getSymName());
 }
 
+TEST_F(ReussirTest, IfrtJitCompileOptionsAreOptionalDefaults) {
+  mlir::DialectRegistry registry;
+  registerIfrtDialectsAndPasses(registry);
+  context->appendDialectRegistry(registry);
+  context->loadAllAvailableDialects();
+  auto module = parse(R"mlir(
+    #s = #ifrt.sharding_param<1 to [0] on 1>
+    #r = #ifrt.sharding_param<1 to [0] on 2>
+    !S = !ifrt.array<tensor<8xf32>, #s, [0]>
+    !A = !ifrt.array<tensor<8xf32>, #r, [3, 1]>
+    !B = !ifrt.array<tensor<8xf32>, #r, [1, 3]>
+    module {
+      func.func @single(%x: !S) -> !S attributes {ifrt.function} {
+        %out, %done = ifrt.Call @kernel::@main(%x) on devices [0] : (!S) -> !S
+        return %out : !S
+      }
+      func.func @partitioned(%x: !A) -> !A attributes {ifrt.function} {
+        %out, %done = ifrt.Call @kernel::@main(%x) on devices [3, 1] : (!A) -> !A
+        return %out : !A
+      }
+      func.func @reordered(%x: !B) -> !B attributes {ifrt.function} {
+        %out, %done = ifrt.Call @kernel::@main(%x) on devices [1, 3] : (!B) -> !B
+        return %out : !B
+      }
+      func.func @local(%x: !A) -> !A attributes {ifrt.function} {
+        %out, %done = ifrt.Call @kernel::@main(%x) on devices [3, 1] {ifrt.local_view} : (!A) -> !A
+        return %out : !A
+      }
+      module @kernel attributes {sym_visibility = "private"} {
+        func.func @main(%arg: tensor<8xf32>) -> tensor<8xf32> {
+          return %arg : tensor<8xf32>
+        }
+      }
+    }
+  )mlir");
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(mlir::succeeded(packageKernels(*module)));
+  ASSERT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 1u);
+  llvm::SmallVector<ReussirPJRTJitCallOp> calls;
+  module->walk([&](ReussirPJRTJitCallOp call) { calls.push_back(call); });
+  ASSERT_EQ(calls.size(), 4u);
+  for (auto call : calls) {
+    EXPECT_EQ(call.getCalleeAttr(), calls[0].getCalleeAttr());
+    ASSERT_TRUE(call.getCompileOptions());
+    EXPECT_TRUE(mlir::succeeded(
+        verifyPjrtCompileOptions(call, *call.getCompileOptions())));
+  }
+  for (unsigned i = 0; i < calls.size(); ++i)
+    for (unsigned j = i + 1; j < calls.size(); ++j)
+      EXPECT_NE(calls[i].getCompileOptions(), calls[j].getCompileOptions());
+
+  auto options = calls[1].getCompileOptionsAttr();
+  std::string diagnostic;
+  mlir::ScopedDiagnosticHandler handler(context.get(),
+                                        [&](mlir::Diagnostic &diag) {
+                                          diagnostic = diag.str();
+                                          return mlir::success();
+                                        });
+  calls[1].setCompileOptionsAttr(calls[2].getCompileOptionsAttr());
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+  calls[1].setCompileOptionsAttr(calls[3].getCompileOptionsAttr());
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+  calls[1].setCompileOptionsAttr(mlir::StringAttr::get(context.get(), "\x80"));
+  EXPECT_TRUE(mlir::failed(mlir::verify(*module)));
+  EXPECT_NE(diagnostic.find("serialized XLA CompileOptionsProto"),
+            std::string::npos);
+  calls[1].setCompileOptionsAttr(mlir::StringAttr::get(context.get(), ""));
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+  calls[0].removeCompileOptionsAttr();
+  calls[1].setCompileOptionsAttr(options);
+  ASSERT_TRUE(mlir::succeeded(packageKernels(*module)));
+  EXPECT_FALSE(calls[0].getCompileOptions());
+  EXPECT_EQ(calls[1].getCompileOptionsAttr(), options);
+  std::string printed;
+  llvm::raw_string_ostream stream(printed);
+  module->print(stream);
+  auto roundTrip = parse(printed);
+  ASSERT_TRUE(roundTrip);
+  auto partitioned = roundTrip->lookupSymbol<mlir::func::FuncOp>("partitioned");
+  auto roundTripCall = *partitioned.getOps<ReussirPJRTJitCallOp>().begin();
+  EXPECT_EQ(roundTripCall.getCompileOptionsAttr(), options);
+  auto single = roundTrip->lookupSymbol<mlir::func::FuncOp>("single");
+  EXPECT_FALSE(
+      (*single.getOps<ReussirPJRTJitCallOp>().begin()).getCompileOptions());
+}
+
 TEST_F(ReussirTest, IfrtJitFailureDoesNotPartiallyRewriteCalls) {
   mlir::DialectRegistry registry;
   registerIfrtDialectsAndPasses(registry);
   context->appendDialectRegistry(registry);
   context->loadAllAvailableDialects();
-  std::string source = jitSource.str();
-  source.insert(source.rfind("return %arg"),
-                "%bad = arith.addf %arg, %arg : tensor<8xf32>\n");
-  auto module = parse(source);
-  ASSERT_TRUE(module);
-  std::string before, after;
-  llvm::raw_string_ostream beforeStream(before), afterStream(after);
-  module->print(beforeStream);
+  std::string badKernel = jitSource.str();
+  badKernel.insert(badKernel.rfind("return %arg"),
+                   "%bad = arith.addf %arg, %arg : tensor<8xf32>\n");
+  std::string badOptions = jitSource.str();
+  badOptions.insert(
+      badOptions.find(" : (!I)", badOptions.find("@second::@main")),
+      " {ifrt.compile_options_key = \"external\"}");
   mlir::ScopedDiagnosticHandler handler(
       context.get(), [](mlir::Diagnostic &) { return mlir::success(); });
-  EXPECT_TRUE(mlir::failed(packageKernels(*module)));
-  module->print(afterStream);
-  EXPECT_EQ(before, after);
+  for (const auto &source : {badKernel, badOptions}) {
+    auto module = parse(source);
+    ASSERT_TRUE(module);
+    std::string before, after;
+    llvm::raw_string_ostream beforeStream(before), afterStream(after);
+    module->print(beforeStream);
+    EXPECT_TRUE(mlir::failed(packageKernels(*module)));
+    module->print(afterStream);
+    EXPECT_EQ(before, after);
+  }
 }
 
 TEST_F(ReussirTest, IfrtJitRejectsCorruptBytecodeAndMismatchedSignature) {

@@ -8,10 +8,12 @@ module {
   // CHECK: %[[A:.*]], %[[READY:.*]] = reussir.pjrt.jit_call @[[CODE:[A-Za-z0-9_]+]]
   // CHECK-SAME: on devices [3, 1]
   // CHECK-SAME: arg_attrs = [{test.arg}]
+  // CHECK-SAME: compile_options = "[[OPTIONS:[^"]+]]"
   // CHECK-SAME: io_aliases = [array<i32: 0, 0>]
   // CHECK-SAME: res_attrs = [{test.result}]
   // CHECK-SAME: test.option = "kept"
   // CHECK: reussir.pjrt.jit_call @[[CODE]](%[[A]]) after(%[[READY]]) on devices [3, 1]
+  // CHECK-SAME: compile_options = "[[OPTIONS]]"
   // CHECK-SAME: donated_input_indices = array<i32: 0>
   func.func @main(%input: !I {ifrt.donated}) -> !I attributes {ifrt.function} {
     %a, %ready = ifrt.Call @kernel::@main(%input) on devices [3, 1] {io_aliases = [array<i32: 0, 0>], arg_attrs = [{test.arg}], res_attrs = [{test.result}], test.option = "kept"} : (!I) -> !I
