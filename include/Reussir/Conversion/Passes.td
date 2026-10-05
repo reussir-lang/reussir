@@ -374,10 +374,11 @@ def ReussirIFRTJustInTimeTransformPass
 
     The current implementation serializes outlined StableHLO modules into
     `reussir.ifrt.bytecode` symbols with BLAKE3 checksums and replaces
-    `ifrt.Call` with `reussir.pjrt.jit_call`. It runs after IFRT outlining and
-    before basic lowering, followed by symbol DCE to remove unused kernel
-    modules. It requires OpenXLA but does not invoke a device compiler or load
-    a PJRT plugin.
+    `ifrt.Call` with `reussir.pjrt.jit_call`. It removes the host
+    `ifrt.function` and argument `ifrt.donated` annotations. It runs after IFRT
+    outlining and before basic lowering, followed by symbol DCE to remove
+    unused kernel modules. It requires OpenXLA but does not invoke a device
+    compiler or load a PJRT plugin.
   }];
   let dependentDialects = ["::reussir::ReussirDialect",
                            "::mlir::func::FuncDialect"];

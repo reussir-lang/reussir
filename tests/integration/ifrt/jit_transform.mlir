@@ -1,9 +1,9 @@
 // REQUIRES: ifrt
 // RUN: %reussir-opt %s --ifrt-to-outlined-atom-programs-pipeline --reussir-ifrt-just-in-time-transform --symbol-dce -o %t.mlir
-// RUN: %FileCheck %s < %t.mlir
+// RUN: %FileCheck %s --implicit-check-not=ifrt.function < %t.mlir
 // RUN: %reussir-opt %S/program-shardy.mlir --ifrt-to-outlined-atom-programs-pipeline --reussir-ifrt-just-in-time-transform --symbol-dce | %FileCheck %s --check-prefix=SHARDY
 // RUN: %reussir-opt %t.mlir --reussir-ifrt-just-in-time-transform --emit-bytecode -o %t.bc
-// RUN: %reussir-opt %t.bc | %FileCheck %s
+// RUN: %reussir-opt %t.bc | %FileCheck %s --implicit-check-not=ifrt.function
 // RUN: %reussir-opt %t.mlir --reussir-attach-native-target --reussir-token-instantiation --reussir-token-reuse | %FileCheck %s --check-prefix=TOKEN
 
 #s = #ifrt.sharding_param<1 to [0] on 1>

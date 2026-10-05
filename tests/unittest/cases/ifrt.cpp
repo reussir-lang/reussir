@@ -97,10 +97,13 @@ constexpr llvm::StringLiteral jitSource = R"mlir(
   #s = #ifrt.sharding_param<1 to [0] on 1>
   !I = !ifrt.array<tensor<8xf32>, #s, [0]>
   module {
-    func.func @host(%input: !I) -> !I attributes {ifrt.function} {
+    func.func @host(%input: !I {ifrt.donated, test.arg}) -> !I attributes {ifrt.function, test.function} {
       %a, %ready = ifrt.Call @first::@main(%input) on devices [0] : (!I) -> !I
       %b, %done = ifrt.Call @second::@main(%a) after %ready on devices [0] : (!I) -> !I
       return %b : !I
+    }
+    func.func @empty() attributes {ifrt.function} {
+      return
     }
     module @first attributes {sym_visibility = "private"} {
       func.func @main(%arg: tensor<8xf32> loc("kernel.rr":2:10)) -> tensor<8xf32> {
@@ -159,6 +162,12 @@ TEST_F(ReussirTest, IfrtJitBytecodeRoundTripAndDeduplication) {
   EXPECT_EQ(main.getBody().front().getTerminator()->getLoc(),
             mlir::FileLineColLoc::get(context.get(), "kernel.rr", 3, 5));
   auto host = module->lookupSymbol<mlir::func::FuncOp>("host");
+  EXPECT_FALSE(host->hasAttr("ifrt.function"));
+  EXPECT_FALSE(host.getArgAttr(0, "ifrt.donated"));
+  EXPECT_TRUE(host->hasAttr("test.function"));
+  EXPECT_TRUE(host.getArgAttr(0, "test.arg"));
+  EXPECT_FALSE(module->lookupSymbol<mlir::func::FuncOp>("empty")
+                   ->hasAttr("ifrt.function"));
   auto calls = llvm::to_vector(host.getOps<ReussirPJRTJitCallOp>());
   ASSERT_EQ(calls.size(), 2u);
   EXPECT_EQ(calls[0].getCalleeAttr(), calls[1].getCalleeAttr());

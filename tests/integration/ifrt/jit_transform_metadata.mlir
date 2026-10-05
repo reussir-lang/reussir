@@ -1,5 +1,5 @@
 // REQUIRES: ifrt
-// RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --symbol-dce | %FileCheck %s
+// RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --symbol-dce | %FileCheck %s --implicit-check-not=ifrt.function --implicit-check-not=ifrt.donated
 
 #s = #ifrt.sharding_param<2 to [0] on 2>
 !I = !ifrt.array<tensor<8xf32>, #s, [3, 1], memory_kind = "device", layout = "{0}">

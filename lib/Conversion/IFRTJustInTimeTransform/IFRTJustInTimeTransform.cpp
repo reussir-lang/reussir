@@ -145,6 +145,13 @@ struct ReussirIFRTJustInTimeTransformPass
       call.op->replaceAllUsesWith(jit.getResults());
       call.op->erase();
     }
+    getOperation().walk([](mlir::func::FuncOp func) {
+      if (!func->removeAttr("ifrt.function"))
+        return;
+      // Argument donation annotations require the IFRT function marker.
+      for (unsigned i = 0; i < func.getNumArguments(); ++i)
+        func.removeArgAttr(i, "ifrt.donated");
+    });
 #endif
   }
 };
