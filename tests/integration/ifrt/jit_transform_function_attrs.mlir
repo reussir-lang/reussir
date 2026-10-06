@@ -1,5 +1,6 @@
 // REQUIRES: ifrt
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --reussir-convert-to-llvm | %FileCheck %s --implicit-check-not=ifrt.function --implicit-check-not=ifrt.donated
+// RUN: %rrc %s --emit mlir-llvm -O none -o - | %FileCheck %s --implicit-check-not=ifrt.function --implicit-check-not=ifrt.donated
 
 // Even a host with no kernel calls must be ready for function conversion.
 // CHECK-LABEL: llvm.func @main

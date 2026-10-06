@@ -371,6 +371,18 @@ def ReussirAttachNativeTargetPass
   let dependentDialects = ["::mlir::LLVM::LLVMDialect", "::mlir::DLTIDialect"];
 }
 
+def ReussirPreparePjrtPass
+    : Pass<"reussir-prepare-pjrt", "::mlir::ModuleOp"> {
+  let summary = "Package outlined IFRT kernels before host optimization";
+  let description = [{
+    Packages outlined IFRT atom programs as bytecode and removes unused
+    source kernels before the host pipeline can inline or lower them.
+    Modules without IFRT operations or function annotations are unchanged,
+    including non-OpenXLA builds.
+  }];
+  let dependentDialects = ["::reussir::ReussirDialect", "::mlir::func::FuncDialect"];
+}
+
 def ReussirIFRTJustInTimeTransformPass
     : Pass<"reussir-ifrt-just-in-time-transform", "::mlir::ModuleOp"> {
   let summary = "Prepare IFRT kernels and call sites for just-in-time execution";

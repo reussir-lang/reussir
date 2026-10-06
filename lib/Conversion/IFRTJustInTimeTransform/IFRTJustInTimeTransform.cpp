@@ -20,6 +20,8 @@
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/Pass/Pass.h>
+#include <mlir/Pass/PassManager.h>
+#include <mlir/Transforms/Passes.h>
 
 #ifdef REUSSIR_ENABLE_OPENXLA
 #include "Reussir/Conversion/Blake3Symbol.h"
@@ -34,9 +36,33 @@
 
 namespace reussir {
 #define GEN_PASS_DEF_REUSSIRIFRTJUSTINTIMETRANSFORMPASS
+#define GEN_PASS_DEF_REUSSIRPREPAREPJRTPASS
 #include "Reussir/Conversion/Passes.h.inc"
 
 namespace {
+struct ReussirPreparePjrtPass
+    : impl::ReussirPreparePjrtPassBase<ReussirPreparePjrtPass> {
+  void runOnOperation() override {
+    bool hasIfrt = false;
+    getOperation().walk([&](mlir::Operation *op) {
+      hasIfrt |= op->getName().getDialectNamespace() == "ifrt" ||
+                 op->hasAttr("ifrt.function");
+    });
+    if (!hasIfrt)
+      return;
+#ifdef REUSSIR_ENABLE_OPENXLA
+    mlir::OpPassManager pipeline(mlir::ModuleOp::getOperationName());
+    pipeline.addPass(createReussirIFRTJustInTimeTransformPass());
+    pipeline.addPass(mlir::createSymbolDCEPass());
+    if (mlir::failed(runPipeline(pipeline, getOperation())))
+      signalPassFailure();
+#else
+    getOperation().emitError("PJRT preparation requires an OpenXLA-enabled build");
+    signalPassFailure();
+#endif
+  }
+};
+
 struct ReussirIFRTJustInTimeTransformPass
     : impl::ReussirIFRTJustInTimeTransformPassBase<
           ReussirIFRTJustInTimeTransformPass> {

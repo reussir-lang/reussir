@@ -56,11 +56,20 @@
 MLIR_DEFINE_CAPI_DIALECT_REGISTRATION(Reussir, reussir,
                                       ::reussir::ReussirDialect)
 
+#ifdef REUSSIR_ENABLE_OPENXLA
+#include <stablehlo/dialect/Register.h>
+void registerIfrtDialects(mlir::DialectRegistry &registry);
+#endif
+
 namespace {
 // Populates a registry with the Reussir dialect plus the minimal set of
 // upstream dialects, ConvertToLLVM interfaces and translations the lowering
 // pipeline relies on.
 void populateReussirRegistry(mlir::DialectRegistry &registry) {
+#ifdef REUSSIR_ENABLE_OPENXLA
+  registerIfrtDialects(registry);
+  mlir::stablehlo::registerAllDialects(registry);
+#endif
   // Only the dialects the Reussir lowering pipeline actually operates on. Using
   // the minimal set (rather than registerAllDialects/registerAllExtensions)
   // keeps unrelated dialects such as complex/tensor/bufferization out of the

@@ -270,6 +270,25 @@ TEST_F(ReussirTest, IfrtJitBytecodeRoundTripAndDeduplication) {
   EXPECT_NE((*uniqueCodes.begin()).getSymName(), code.getSymName());
 }
 
+TEST_F(ReussirTest, PreparePjrtRemovesSourceKernelsAndIsIdempotent) {
+  mlir::DialectRegistry registry;
+  registerIfrtDialectsAndPasses(registry);
+  context->appendDialectRegistry(registry);
+  context->loadAllAvailableDialects();
+  auto module = parse(jitSource);
+  ASSERT_TRUE(module);
+  mlir::PassManager pm(context.get());
+  pm.addPass(createReussirPreparePjrtPass());
+  ASSERT_TRUE(mlir::succeeded(pm.run(*module)));
+  EXPECT_TRUE(module->getOps<mlir::ModuleOp>().empty());
+  EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 1u);
+  auto host = module->lookupSymbol<mlir::func::FuncOp>("host");
+  EXPECT_EQ(llvm::range_size(host.getOps<ReussirPJRTJitCallOp>()), 2u);
+  EXPECT_FALSE(host->hasAttr("ifrt.function"));
+  ASSERT_TRUE(mlir::succeeded(pm.run(*module)));
+  EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 1u);
+}
+
 TEST_F(ReussirTest, IfrtJitCompileOptionsAreOptionalDefaults) {
   mlir::DialectRegistry registry;
   registerIfrtDialectsAndPasses(registry);

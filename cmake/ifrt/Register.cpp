@@ -11,9 +11,13 @@
 #include <xla/python/ifrt/ir/transforms/passes.h>
 #include <xla/python/ifrt/ir/vifrt_dialect.h>
 
-void registerIfrtDialectsAndPasses(mlir::DialectRegistry &registry) {
+void registerIfrtDialects(mlir::DialectRegistry &registry) {
   registry.insert<xla::ifrt::IfrtDialect, xla::ifrt::VifrtDialect,
                   mlir::sdy::SdyDialect>();
+}
+
+void registerIfrtDialectsAndPasses(mlir::DialectRegistry &registry) {
+  registerIfrtDialects(registry);
   mlir::registerPass(
       [] { return xla::ifrt::createIfrtAddCtrlDependenciesPass(); });
   mlir::registerPass(

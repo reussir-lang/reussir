@@ -63,6 +63,11 @@ if(REUSSIR_HAS_TPDE)
   target_compile_definitions(MLIRReussirBridge PRIVATE REUSSIR_HAS_TPDE)
 endif()
 
+if(REUSSIR_ENABLE_OPENXLA)
+  target_compile_definitions(MLIRReussirBridge PRIVATE REUSSIR_ENABLE_OPENXLA)
+  target_link_libraries(MLIRReussirBridge PRIVATE ReussirIfrt StablehloRegister)
+endif()
+
 # Nix scan-deps workaround, spdlog/fmt edition (see the NIX_STORE branch in
 # the top-level CMakeLists): on darwin, spdlog's and fmt's interface include
 # dirs coincide with the nix cc wrapper's implicit dirs, so CMake elides

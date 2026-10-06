@@ -147,6 +147,7 @@ unsafe extern "C" {
     pub fn reussirCreateInvariantGroupAnalysisPass() -> MlirPass;
     pub fn reussirCreateBasicOpsLoweringPass(closure_wpd: bool) -> MlirPass;
     pub fn reussirCreateIFRTJustInTimeTransformPass() -> MlirPass;
+    pub fn reussirCreatePreparePjrtPass() -> MlirPass;
     pub fn reussirCreateDebugInfoConversionPass() -> MlirPass;
     pub fn reussirCreateAcquireDropExpansionPass(
         expand_decrement: bool,

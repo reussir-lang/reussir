@@ -150,6 +150,9 @@ MlirPass reussirCreateDebugInfoConversionPass(void) {
 MlirPass reussirCreateIFRTJustInTimeTransformPass(void) {
   return wrapOwned(reussir::createReussirIFRTJustInTimeTransformPass());
 }
+MlirPass reussirCreatePreparePjrtPass(void) {
+  return wrapOwned(reussir::createReussirPreparePjrtPass());
+}
 MlirPass reussirCreateAcquireDropExpansionPass(bool expandDecrement,
                                                bool outlineRecord,
                                                bool tailRecursiveDrops,

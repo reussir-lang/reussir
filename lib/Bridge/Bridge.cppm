@@ -95,6 +95,11 @@ module;
 #include "Reussir/LLVMPass/SizeAttributes.h"
 #include "Reussir/Transformation/Passes.h"
 
+#ifdef REUSSIR_ENABLE_OPENXLA
+#include <stablehlo/dialect/Register.h>
+void registerIfrtDialects(mlir::DialectRegistry &registry);
+#endif
+
 export module Reussir.Bridge;
 
 using namespace mlir;
@@ -154,6 +159,7 @@ void createLoweringPipeline(mlir::PassManager &pm,
                             ReussirOptOption opt = REUSSIR_OPT_DEFAULT,
                             bool reuseTokenAcrossCall = false,
                             bool enableInvariantAnalysis = false) {
+  pm.addPass(reussir::createReussirPreparePjrtPass());
   if (opt != REUSSIR_OPT_NONE) {
     llvm::StringMap<mlir::OpPassManager> pipelines;
     if (opt == REUSSIR_OPT_AGGRESSIVE)
@@ -352,6 +358,10 @@ std::optional<llvm::Reloc::Model> toRelocModel(ReussirRelocationModel model) {
 
 std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
   DialectRegistry registry;
+#ifdef REUSSIR_ENABLE_OPENXLA
+  registerIfrtDialects(registry);
+  mlir::stablehlo::registerAllDialects(registry);
+#endif
   registry.insert<reussir::ReussirDialect, DLTIDialect, LLVM::LLVMDialect,
                   arith::ArithDialect, memref::MemRefDialect, scf::SCFDialect,
                   ub::UBDialect, func::FuncDialect, cf::ControlFlowDialect>();

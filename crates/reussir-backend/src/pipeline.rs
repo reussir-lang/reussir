@@ -359,6 +359,9 @@ pub fn run_lowering_pipeline(
             );
         }
 
+        // Package device kernels before host inlining or scalar optimization.
+        module: sys::reussirCreatePreparePjrtPass();
+
         // Optimization-only prologue.
         if options.opt.runs_optimization() => {
             if options.opt == OptLevel::Aggressive => {

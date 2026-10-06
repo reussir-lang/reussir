@@ -69,6 +69,8 @@ add_dependencies(ReussirCAPI ${REUSSIR_BACKEND_ARCHIVES})
 # OpenXLA is disabled so stale archives cannot enable it in a reused build.
 set(REUSSIR_BACKEND_OPTIONAL_ARCHIVES "")
 if(REUSSIR_ENABLE_OPENXLA)
+  target_compile_definitions(ReussirCAPI PRIVATE REUSSIR_ENABLE_OPENXLA)
+  target_link_libraries(ReussirCAPI PRIVATE ReussirIfrt StablehloRegister)
   # XLA's layout parser also reaches its HLO importer and StableHLO support.
   # Keep the ReussirIfrt/StablehloPortableApi/ReussirStablehlo closure in static
   # link order; the remaining LLVM/MLIR dependencies come from mlir-sys.
