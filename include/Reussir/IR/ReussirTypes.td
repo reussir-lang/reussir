@@ -738,7 +738,10 @@ def ReussirFFIObjectType : ReussirType<"FFIObject", "ffi_object",
     Lean's runtime boxes scalars). Its `rc.inc` touches the refcount only
     when the low bit is clear, and its `rc.dec` calls the cleanup hook only
     then; an immediate is never dereferenced. Real boxes are at least
-    4-aligned (the `u32` refcount), so the low bit is free.
+    4-aligned (the `u32` refcount), so the low bit is free. On 64-bit
+    targets the top 16 bits of a real box's handle may carry foreign data
+    too (e.g. the type of the payload): `rc.inc` clears them before it
+    touches the refcount, and the cleanup hook gets the handle unchanged.
   }];
   let parameters = (ins "::mlir::StringAttr":$ffiName,
       "::mlir::FlatSymbolRefAttr":$cleanupHook,

@@ -306,6 +306,26 @@ bool isTaggedFFIObject(RcType rcType) {
   return ffiTy && ffiTy.getTagged();
 }
 
+// The box address of a `tagged` ffi_object handle that is not an immediate:
+// the handle with its top 16 bits cleared. The foreign side may keep data
+// there (lean2rr's one-word `Box` keeps the number of the payload's type);
+// user-space addresses fit in the low 48 bits on the 64-bit targets. A
+// pointer mask (provenance kept), applied only where the count is accessed:
+// the handle itself, with its top bits, still goes to the cleanup hook. On
+// targets narrower than 64 bits the handle is the address.
+mlir::Value taggedBoxAddress(mlir::ConversionPatternRewriter &rewriter,
+                             mlir::Location loc, mlir::Value ptr,
+                             mlir::Type indexTy) {
+  auto intTy = llvm::cast<mlir::IntegerType>(indexTy);
+  if (intTy.getWidth() != 64)
+    return ptr;
+  mlir::Value mask = mlir::LLVM::ConstantOp::create(
+      rewriter, loc, intTy,
+      rewriter.getIntegerAttr(intTy, (uint64_t(1) << 48) - 1));
+  return mlir::LLVM::PtrMaskOp::create(rewriter, loc, ptr.getType(), ptr,
+                                       mask);
+}
+
 void ensureRuntimeFunctions(mlir::ModuleOp module,
                             const mlir::LLVMTypeConverter &converter);
 
@@ -1696,6 +1716,12 @@ struct ReussirRcIncConversionPattern
     // the struct.
     if (auto eleTy = mlir::dyn_cast<FFIObjectType>(rcPtrTy.getElementType())) {
       refcntPtr = adaptor.getRcPtr();
+      // A tagged object's box address is the handle without its top bits.
+      if (eleTy.getTagged())
+        refcntPtr = taggedBoxAddress(
+            rewriter, op.getLoc(), refcntPtr,
+            static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter())
+                ->getIndexType());
     } else {
       RcBoxType rcBoxType = rcPtrTy.getInnerBoxType();
       // GEP [0].1

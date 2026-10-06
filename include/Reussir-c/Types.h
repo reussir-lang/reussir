@@ -148,7 +148,8 @@ MlirType reussirArrayTypeGet(intptr_t nDims, int64_t const *shape,
 
 // `!reussir.ffi_object<ffiName, cleanupHook[, tagged = true]>`. `ffiName` must
 // be a `StringAttr` and `cleanupHook` a `FlatSymbolRefAttr`. A `tagged` object
-// may be an odd immediate word, which reference counting skips.
+// may be an odd immediate word, which reference counting skips; the top 16
+// bits of its other handles are not part of the address (on 64-bit targets).
 MlirType reussirFFIObjectTypeGet(MlirContext context, MlirAttribute ffiName,
                                  MlirAttribute cleanupHook, bool tagged);
 
