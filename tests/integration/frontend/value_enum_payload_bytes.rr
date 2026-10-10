@@ -1,0 +1,95 @@
+// The type converter lowers a [value] enum to `{ tag, payload }`. rrc moves
+// such values as whole LLVM values: record.variant builds them in an alloca
+// and loads them, functions take and return them, ref.spilled stores them,
+// and records hold them in fields. So the LLVM type of the payload must keep
+// the bytes of every arm. The payload type is the type of one arm (the
+// representative: the last arm with the largest alignment). A move of this
+// type does not keep the bytes on its padding. It keeps only bit 0 of the
+// byte of an i1. It keeps the bytes of a floating-point member only for a
+// floating-point value of the same type at the same offset. When another arm
+// has a byte that a move does not keep, the payload gets an array of
+// alignment-sized integers instead. Otherwise the representative stays.
+//
+// Flag: B's { i1 } kept one bit of A's u8 (A{42} read back as 0).
+// Mode, Held: N is { i8, { i64 } }, with 7 bytes of padding after its tag.
+//   E's u64 (Mode) kept its low byte. E's pointer (Held) crashed.
+// Pair: J is { i64, i1, [7 x i8] }. The low byte of E's second u64 lies on
+//   the i1.
+// Bx: a Flag in a field of a shared record.
+// Num, Odd: every byte of the representative ({ ptr }, { Q, i16 }) is in an
+//   integer or a pointer member, so these types do not change.
+// Ins: Replaced is { ptr, i1, [7 x i8] }. Added's pointer is on its ptr, so
+//   the type does not change.
+// Shape: Rect is { double, double }. Circle's f64 is on its first double, so
+//   the type does not change.
+
+// RUN: %rrc %s --emit llvm-ir -O none -o %t.ll
+// RUN: %FileCheck %s < %t.ll
+// RUN: %rrc %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/value_enum_payload_bytes.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s -o %t.opt.o --relocation-mode pic -Oaggressive
+// RUN: %cc %t.opt.o %S/value_enum_payload_bytes.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+// RUN: %rrc %s -o %t.np.o --relocation-mode pic -Oaggressive --no-pack-record-members
+// RUN: %cc %t.np.o %S/value_enum_payload_bytes.c -o %t.np.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.np.exe
+
+enum [value] Flag { A(u8), B(bool) }
+enum [value] N { S(u64) }
+enum [value] Mode { E(u64), J(N) }
+pub struct Big(u64)
+enum [value] Held { E(Big), J(N) }
+enum [value] Pair { E(u64, u64), J(u64, bool) }
+enum [value] Num { Small(u64), Large(Big) }
+struct Bx(Flag)
+struct [value] S3(u8, u8, u8)
+struct [value] Q(S3, u16)
+enum [value] Odd { B(u8, bool), A(Q, u16) }
+enum [value] Ins { Added(Big), Replaced(bool, Big) }
+enum [value] Shape { Circle(f64), Rect(f64, f64) }
+
+fn flag(m : Flag) -> u64 { match m { Flag::A(x) => { x as u64 }, Flag::B(v) => { 7 } } }
+fn mode(m : Mode) -> u64 { match m { Mode::E(x) => { x }, Mode::J(n) => { 0 } } }
+fn held(m : Held) -> u64 { match m { Held::E(b) => { b.0 }, Held::J(n) => { 0 } } }
+fn pair(m : Pair) -> u64 { match m { Pair::E(x, y) => { y }, Pair::J(a, b) => { 0 } } }
+fn num(m : Num) -> u64 { match m { Num::Small(x) => { x }, Num::Large(b) => { b.0 } } }
+fn boxed(b : Bx) -> u64 { flag(b.0) }
+fn odd(m : Odd) -> u64 {
+    match m {
+        Odd::A(q, x) => { (q.0.2 as u64) * 100000 + (q.1 as u64) * 1000 + (x as u64) },
+        Odd::B(a, b) => { (a as u64) + (if b { 1 } else { 0 }) }
+    }
+}
+fn id_odd(m : Odd) -> Odd { m }
+fn ins(m : Ins) -> u64 { match m { Ins::Added(b) => { b.0 }, Ins::Replaced(f, b) => { if f { b.0 + 1 } else { b.0 } } } }
+fn shape(m : Shape) -> f64 { match m { Shape::Circle(r) => { r }, Shape::Rect(w, h) => { w * h } } }
+
+pub fn main() -> i64 {
+    let flag_ok = if flag(Flag::A{42}) == 42 { 1 } else { 0 };
+    let mode_ok = if mode(Mode::E{123456789}) == 123456789 { 1 } else { 0 };
+    let held_ok = if held(Held::E{Big{3}}) == 3 { 1 } else { 0 };
+    let pair_ok = if pair(Pair::E{1, 123456789}) == 123456789 { 1 } else { 0 };
+    let num_ok = if num(Num::Small{5}) + num(Num::Large{Big{6}}) == 11 { 1 } else { 0 };
+    let boxed_ok = if boxed(Bx{Flag::A{42}}) == 42 { 1 } else { 0 };
+    let odd_ok = if odd(id_odd(Odd::A{Q{S3{7, 8, 9}, 4}, 5})) + odd(id_odd(Odd::B{42, true})) == 904048 { 1 } else { 0 };
+    let ins_ok = if ins(Ins::Added{Big{5}}) + ins(Ins::Replaced{true, Big{6}}) == 12 { 1 } else { 0 };
+    let shape_ok = if shape(Shape::Circle{1.5}) + shape(Shape::Rect{2.0, 3.0}) == 7.5 { 1 } else { 0 };
+    flag_ok + mode_ok * 10 + held_ok * 100 + pair_ok * 1000 + num_ok * 10000
+        + boxed_ok * 100000 + odd_ok * 1000000 + ins_ok * 10000000
+        + shape_ok * 100000000
+}
+
+extern "C" trampoline "reussir_main" = main;
+
+// Lossy representatives become integer arrays with the size and the
+// alignment of the payload. The representatives of Num, Odd, Ins and Shape
+// keep the bytes of the other arms, so they stay.
+// CHECK-DAG: %_RC4Flag = type { i8, [1 x i8] }
+// CHECK-DAG: %_RC4Mode = type { i8, [2 x i64] }
+// CHECK-DAG: %_RC4Held = type { i8, [2 x i64] }
+// CHECK-DAG: %_RC4Pair = type { i8, [2 x i64] }
+// CHECK-DAG: %_RC3Odd = type { i8, %_RNvC3Odd1A }
+// CHECK-DAG: %_RC3Num = type { i8, %_RNvC3Num5Large }
+// CHECK-DAG: %_RC3Ins = type { i8, %_RNvC3Ins8Replaced }
+// CHECK-DAG: %_RC5Shape = type { i8, %_RNvC5Shape4Rect }

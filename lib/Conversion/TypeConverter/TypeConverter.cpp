@@ -83,6 +83,124 @@ buildMLIRDataLayout(const mlir::LLVMTypeConverter &converter) {
   return std::make_shared<mlir::DataLayout>(layoutModule);
 }
 
+// What a first-class load and store of an LLVM value keeps of one byte of its
+// storage, or what an arm needs kept: all of it (an integer of whole bytes, a
+// pointer), only bit 0 (an i1), the byte as part of the floating-point value
+// of type `floatType` that starts at `floatStart`, or nothing (padding).
+struct PayloadByte {
+  enum Kind { None, Bit0, Float, Full } kind = None;
+  mlir::Type floatType = {};
+  uint64_t floatStart = 0;
+
+  bool operator==(const PayloadByte &other) const {
+    return kind == other.kind && floatType == other.floatType &&
+           floatStart == other.floatStart;
+  }
+  // A whole byte serves every need, and any value keeps bit 0 of its byte. A
+  // floating-point byte serves only the same value at the same offset.
+  bool keeps(const PayloadByte &needed) const {
+    return kind == Full || needed.kind == None ||
+           (needed.kind == Bit0 && kind != None) ||
+           (needed.kind == Float && *this == needed);
+  }
+};
+
+// Records in `bytes` what each byte of the LLVM type `type`, placed at
+// `offset`, holds. Struct members are at their DataLayout offsets, array
+// elements at their stride. A leaf of another type (a vector, an integer of
+// an odd width) gets `other`. Returns false if the layout is not known.
+bool markBytes(mlir::Type type, uint64_t offset, PayloadByte::Kind other,
+               const mlir::DataLayout &dataLayout,
+               llvm::MutableArrayRef<PayloadByte> bytes) {
+  if (!type)
+    return false;
+  if (auto structTy = llvm::dyn_cast<mlir::LLVM::LLVMStructType>(type)) {
+    if (structTy.isOpaque() ||
+        (structTy.isIdentified() && !structTy.isInitialized()))
+      return false;
+    uint64_t memberOffset = 0;
+    for (mlir::Type member : structTy.getBody()) {
+      if (!structTy.isPacked())
+        memberOffset = llvm::alignTo(memberOffset,
+                                     dataLayout.getTypeABIAlignment(member));
+      if (!markBytes(member, offset + memberOffset, other, dataLayout, bytes))
+        return false;
+      memberOffset += dataLayout.getTypeSize(member);
+    }
+    return true;
+  }
+  if (auto arrayTy = llvm::dyn_cast<mlir::LLVM::LLVMArrayType>(type)) {
+    mlir::Type element = arrayTy.getElementType();
+    uint64_t stride = llvm::alignTo(dataLayout.getTypeSize(element),
+                                    dataLayout.getTypeABIAlignment(element));
+    for (uint64_t i = 0; i < arrayTy.getNumElements(); ++i)
+      if (!markBytes(element, offset + i * stride, other, dataLayout, bytes))
+        return false;
+    return true;
+  }
+  PayloadByte byte{other};
+  auto intTy = llvm::dyn_cast<mlir::IntegerType>(type);
+  if (intTy && intTy.getWidth() == 1)
+    byte = {PayloadByte::Bit0};
+  else if ((intTy && intTy.getWidth() % 8 == 0) ||
+           llvm::isa<mlir::LLVM::LLVMPointerType>(type))
+    byte = {PayloadByte::Full};
+  else if (llvm::isa<mlir::FloatType>(type))
+    byte = {PayloadByte::Float, type, offset};
+  uint64_t end = offset + dataLayout.getTypeSize(type);
+  for (uint64_t i = offset; i < end && i < bytes.size(); ++i)
+    bytes[i] = byte;
+  return true;
+}
+
+// A [value] variant's payload is converted to its representative arm (the
+// last arm with the largest alignment) and an [n x i8] tail, and [value]
+// variants move as first-class aggregates of that type (record.variant,
+// arguments, spills, fields). Such a move keeps all bytes of an integer of
+// whole bytes or of a pointer, only bit 0 of an i1, the bytes of a
+// floating-point value only as that value, and no padding. Another arm needs
+// all bytes of its integers (also of [n x i8] members: the tail of a nested
+// variant holds bytes) and pointers, bit 0 of its i1s, and its
+// floating-point values. If the move loses a byte that an arm needs, use an
+// array of alignment-sized integers of the payload's size instead: it has
+// the same size and alignment, and every byte survives. Field accesses
+// address the payload member and then use the arm's own type, so they are
+// unaffected. Returns null to keep the representative (also when no integer
+// type has the payload's alignment).
+mlir::Type opaquePayloadType(mlir::LLVMTypeConverter &converter,
+                             RecordType type, mlir::Type representative,
+                             llvm::ArrayRef<mlir::Type> payload,
+                             llvm::TypeSize size, llvm::Align alignment,
+                             const mlir::DataLayout &dataLayout) {
+  auto word = mlir::IntegerType::get(type.getContext(), alignment.value() * 8);
+  if (dataLayout.getTypeABIAlignment(word) != alignment.value() ||
+      size.getFixedValue() % alignment.value() != 0)
+    return nullptr;
+  auto opaque = mlir::LLVM::LLVMArrayType::get(word, size.getFixedValue() /
+                                                         alignment.value());
+  llvm::SmallVector<PayloadByte> kept(size.getFixedValue());
+  if (!markBytes(
+          mlir::LLVM::LLVMStructType::getLiteral(type.getContext(), payload),
+          0, PayloadByte::None, dataLayout, kept))
+    return opaque;
+  for (auto [member, isField] :
+       llvm::zip(type.getMembers(), type.getMemberIsField())) {
+    if (!member)
+      continue;
+    mlir::Type arm = getProjectedType(member, isField, Capability::value);
+    if (arm == representative)
+      continue;
+    llvm::SmallVector<PayloadByte> needed(size.getFixedValue());
+    if (!markBytes(converter.convertType(arm), 0, PayloadByte::Full,
+                   dataLayout, needed))
+      return opaque;
+    for (auto [keptByte, neededByte] : llvm::zip(kept, needed))
+      if (!keptByte.keeps(neededByte))
+        return opaque;
+  }
+  return nullptr;
+}
+
 std::optional<llvm::LogicalResult>
 convertRecordType(mlir::LLVMTypeConverter &converter,
                   const mlir::DataLayout &dataLayout, RecordType type,
@@ -112,15 +230,29 @@ convertRecordType(mlir::LLVMTypeConverter &converter,
     if (type.hasFusedHeader())
       members.push_back(mlir::IntegerType::get(type.getContext(), 32));
     members.push_back(type.getTagType());
-    auto [size, _unused, representative] =
+    auto [size, alignment, representative] =
         type.getElementRegionLayoutInfo(dataLayout);
     if (representative) {
-      members.push_back(converter.convertType(representative));
+      llvm::SmallVector<mlir::Type, 2> payload{
+          converter.convertType(representative)};
       auto representativeSize = dataLayout.getTypeSize(representative);
       if (representativeSize < size)
-        members.push_back(mlir::LLVM::LLVMArrayType::get(
+        payload.push_back(mlir::LLVM::LLVMArrayType::get(
             mlir::IntegerType::get(type.getContext(), 8),
             size.getFixedValue() - representativeSize.getFixedValue()));
+      // Fused-header (shared) variants are accessed through their boxes: a
+      // value of one only exists between its construction and the rc.create
+      // that boxes it, which RcCreateFusion turns into stores into the box
+      // (rc.create_variant). [value] variants are moved as values.
+      mlir::Type opaque =
+          type.hasFusedHeader()
+              ? mlir::Type{}
+              : opaquePayloadType(converter, type, representative, payload,
+                                  size, alignment, dataLayout);
+      if (opaque)
+        members.push_back(opaque);
+      else
+        members.append(payload);
     }
   } else {
     size_t expectedTotalSize = dataLayout.getTypeSize(type);
