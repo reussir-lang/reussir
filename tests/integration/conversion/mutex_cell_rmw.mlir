@@ -17,10 +17,10 @@ module {
   // STD-NOT: reussir.expect
   // STD-NOT: reussir.panic
   // STD: %[[PAYLOAD:.+]] = sync.mutex.get_payload %[[VIEW]]
-  // STD: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<i64>) : !reussir.ref<i64 field atomic>
+  // STD: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<i64>) : !reussir.ref<i64 atomic>
   // STD: %[[OLD:.+]] = reussir.ref.load(%[[SLOT]]
   // STD: %[[NEW:.+]] = arith.addi %[[OLD]]
-  // STD: reussir.ref.store(%[[SLOT]]{{.*}}) (%[[NEW]] : i64)
+  // STD: memref.store %[[NEW]]
   // STD: sync.raw_mutex.unlock_fast %[[RAW]]
   // STD-NOT: reussir.cell.rmw
   // STD: return %[[OLD]]
@@ -52,7 +52,7 @@ module {
   // STD: %[[OLD:.+]] = reussir.ref.load
   // STD-NOT: reussir.rc.inc
   // STD-NOT: reussir.ref.drop
-  // STD: reussir.ref.store
+  // STD: memref.store
   // STD: sync.raw_mutex.unlock_fast
   // STD: return %[[OLD]]
   // LLVM-LABEL: define ptr @rmw_swap
@@ -74,7 +74,7 @@ module {
   // The output is optional; a resultless read-modify-write erases cleanly.
   // STD-LABEL: func.func @rmw_no_output
   // STD: sync.raw_mutex.try_lock
-  // STD: reussir.ref.store
+  // STD: memref.store
   // STD: sync.raw_mutex.unlock_fast
   // STD-NOT: reussir.cell.rmw
   // STD: return

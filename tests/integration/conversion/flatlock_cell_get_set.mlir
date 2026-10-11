@@ -25,7 +25,7 @@ module {
   // STD: sync.combining_lock.try_acquire %[[VIEW]]
   // STD: "sync.combining_lock.capture"
   // STD: func.call @__sync_trampoline_mlir_sync_combining_lock_attach_slow_path{{.*}} {CConv = #llvm.cconv<preserve_mostcc>}
-  // STD: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<i64>) : !reussir.ref<i64 field atomic>
+  // STD: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<i64>) : !reussir.ref<i64 atomic>
   // STD: reussir.ref.acquire(%[[SLOT]]
   // STD: %[[VALUE:.+]] = reussir.ref.load(%[[SLOT]]
   // STD: memref.store %[[VALUE]], %[[OUT]][] : memref<i64>
@@ -50,7 +50,7 @@ module {
   // STD: sync.combining_lock.try_acquire
   // STD: %[[SLOT:.+]] = reussir.ref.from_memref
   // STD: reussir.ref.drop(%[[SLOT]]
-  // STD: reussir.ref.store(%[[SLOT]]
+  // STD: memref.store
   // STD: sync.combining_lock.release
   // STD: return
   // LLVM-LABEL: define void @set_i64
@@ -84,7 +84,7 @@ module {
   // STD-NOT: reussir.rc.inc
   // STD: %[[SLOT:.+]] = reussir.ref.from_memref
   // STD: reussir.ref.drop(%[[SLOT]]
-  // STD: reussir.ref.store(%[[SLOT]]
+  // STD: memref.store
   // STD-NOT: reussir.rc.inc
   // LLVM-LABEL: define void @set_rc
   // LLVM: ret void

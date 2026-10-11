@@ -382,6 +382,8 @@ mlir::LogicalResult ReussirTokenReallocOp::verify() {
 mlir::LogicalResult ReussirTokenReinterpretOp::verify() {
   TokenType tokenType = getToken().getType();
   RefType resultType = getReinterpreted().getType();
+  if (resultType.getCapability() == Capability::field)
+    return emitOpError("token storage cannot produce a regional field reference");
   mlir::Type elementType = resultType.getElementType();
   auto dataLayout = mlir::DataLayout::closest(getOperation());
   auto alignment = dataLayout.getTypeABIAlignment(elementType);
@@ -1742,10 +1744,8 @@ mlir::LogicalResult ReussirArrayProjectOp::verify() {
       return emitOpError("projected reference element type mismatch: expected ")
              << memrefType.getElementType() << ", got "
              << projectedType.getElementType();
-    if (projectedType.getCapability() != Capability::field &&
-        projectedType.getCapability() != Capability::unspecified)
-      return emitOpError("projected reference capability must be field or "
-                         "unspecified, got ")
+    if (projectedType.getCapability() != Capability::unspecified)
+      return emitOpError("projected reference capability must be unspecified, got ")
              << stringifyCapability(projectedType.getCapability());
     return mlir::success();
   }
@@ -2213,8 +2213,8 @@ mlir::LogicalResult ReussirRefProjectOp::verify() {
     if (projectedType.getElementType() != expectedSlotType)
       return emitOpError("projected cell slot type mismatch: expected ")
              << expectedSlotType << ", got " << projectedType.getElementType();
-    if (projectedType.getCapability() != Capability::field)
-      return emitOpError("a cell slot projection must have field capability");
+    if (projectedType.getCapability() != Capability::unspecified)
+      return emitOpError("a cell slot projection must have unspecified capability");
     if (projectedType.getAtomicKind() != refType.getAtomicKind())
       return emitOpError("projected cell reference atomic kind must match the "
                          "source reference");
@@ -2322,6 +2322,8 @@ mlir::LogicalResult ReussirRefToMemrefOp::verify() {
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRefFromMemrefOp::verify() {
   RefType refType = getRef().getType();
+  if (refType.getCapability() == Capability::field)
+    return emitOpError("a memref cannot produce a regional field reference");
   return verifyZeroRankMemRefType(getOperation(), getView().getType(),
                                   refType.getElementType(), "view input");
 }
@@ -2367,14 +2369,15 @@ mlir::LogicalResult ReussirRefStoreOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
-// RefCmpXchgOp verification
+// CellCmpXchgOp verification
 //===----------------------------------------------------------------------===//
-mlir::LogicalResult ReussirRefCmpXchgOp::verify() {
-  RefType refType = getRef().getType();
-  if (refType.getCapability() != reussir::Capability::field)
-    return emitOpError("target reference must have field capability, got: ")
-           << stringifyCapability(refType.getCapability());
-  mlir::Type elementType = refType.getElementType();
+mlir::LogicalResult ReussirCellCmpXchgOp::verify() {
+  auto cellType = verifySharedCellOperand(getOperation(), getCell().getType());
+  if (mlir::failed(cellType))
+    return mlir::failure();
+  if (!cellType->getAtomic())
+    return emitOpError("compare-and-exchange requires an atomic cell");
+  mlir::Type elementType = cellType->getElementType();
   if (mlir::failed(verifyAtomicElementType([&]() { return emitOpError(); },
                                            elementType, "cmpxchg element")))
     return mlir::failure();
@@ -2382,7 +2385,7 @@ mlir::LogicalResult ReussirRefCmpXchgOp::verify() {
       getDesired().getType() != elementType ||
       getObserved().getType() != elementType)
     return emitOpError("expected, desired, and observed types must match the "
-                       "reference element type ")
+                       "cell element type ")
            << elementType;
   if (getOrdering())
     return verifyAtomicAccessOrdering(getOperation(), *getOrdering(),
@@ -3727,7 +3730,7 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
         if (auto cellType = llvm::dyn_cast<CellType>(elementType)) {
           RefType slotType =
               RefType::get(builder.getContext(), cellType.getElementType(),
-                           Capability::field, refType.getAtomicKind());
+                           Capability::unspecified, refType.getAtomicKind());
           mlir::Value slot = ReussirRefProjectOp::create(
               builder, loc, slotType, value, builder.getIndexAttr(0));
           return emitOwnershipAcquisition(slot, builder, loc, delta);

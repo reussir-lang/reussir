@@ -144,7 +144,7 @@ fn token_alloc_free_round_trip() {
 /// Example 2: a manual heap round-trip with no reference counting. Allocate a
 /// token, reinterpret it as a typed reference, store 42 through it, load the value
 /// back, then free the token. Exercises `reussir.token.alloc`,
-/// `reussir.token.reinterpret`, `reussir.ref.store`, `reussir.ref.load` and
+/// `reussir.token.reinterpret`, `memref.store`, `reussir.ref.load` and
 /// `reussir.token.free`.
 #[test]
 fn token_reinterpret_store_load() {
@@ -156,10 +156,10 @@ fn token_reinterpret_store_load() {
         let location = Location::unknown(&context);
         // Token alignment must match the reinterpreted element's alignment.
         let token_type = ty::token(&context, 4, 8);
-        // `ref.store` requires a `field`-capability reference.
+        // Raw allocation is unrelated to regional field capability.
         let ref_type = ty::r#ref(
             i64_type,
-            ty::ReussirCapability::Field,
+            ty::ReussirCapability::Unspecified,
             ty::ReussirAtomicKind::Normal,
         );
 
@@ -176,7 +176,21 @@ fn token_reinterpret_store_load() {
                 location,
             ),
         );
-        block.append_operation(dialect::ref_store(&context, reference, value, location).into());
+        let view_type = Type::parse(&context, "memref<i64>").unwrap();
+        let view = result_of(
+            block,
+            OperationBuilder::new("reussir.ref.to_memref", location)
+                .add_operands(&[reference])
+                .add_results(&[view_type])
+                .build()
+                .unwrap(),
+        );
+        block.append_operation(
+            OperationBuilder::new("memref.store", location)
+                .add_operands(&[value, view])
+                .build()
+                .unwrap(),
+        );
         let loaded = result_of(
             block,
             dialect::ref_load(&context, i64_type, reference, location),

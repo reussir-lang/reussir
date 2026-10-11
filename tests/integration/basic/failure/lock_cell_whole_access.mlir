@@ -67,8 +67,8 @@ func.func @ordered_get_mutex(%cell: !mutex_cell) -> i64 {
 // critical-section region (the drop glue included).
 !mutex_ref = !reussir.ref<!reussir.cell<i64 mutex> atomic>
 
-func.func @project_mutex(%ref: !mutex_ref) -> !reussir.ref<i64 field atomic> {
+func.func @project_mutex(%ref: !mutex_ref) -> !reussir.ref<i64 atomic> {
   // expected-error @+1 {{cannot project into a cell of kind 'mutex'; its payload is reached through a critical-section region}}
-  %slot = reussir.ref.project(%ref : !mutex_ref) [0] : !reussir.ref<i64 field atomic>
-  return %slot : !reussir.ref<i64 field atomic>
+  %slot = reussir.ref.project(%ref : !mutex_ref) [0] : !reussir.ref<i64 atomic>
+  return %slot : !reussir.ref<i64 atomic>
 }

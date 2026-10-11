@@ -16,12 +16,12 @@ module {
   // STD: func.call @__sync_trampoline_mlir_sync_rwlock_read_lock_slow_path
   // STD-NOT: write_lock
   // STD: %[[PAYLOAD:.+]] = sync.rwlock.get_payload %[[VIEW]]
-  // STD: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<i64>) : !reussir.ref<i64 field atomic>
+  // STD: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<i64>) : !reussir.ref<i64 atomic>
   // STD: reussir.ref.acquire(%[[SLOT]]
   // STD-NEXT: %[[VALUE:.+]] = reussir.ref.load(%[[SLOT]]
   // STD: %[[RESULT:.+]] = arith.muli %[[VALUE]]
   // STD: sync.raw_rwlock.read_unlock_fast %[[RAW]]
-  // STD-NOT: reussir.ref.store
+  // STD-NOT: memref.store
   // STD-NOT: reussir.cell.rdlock
   // STD: return %[[RESULT]]
   // LLVM-LABEL: define i64 @read_i64
@@ -48,7 +48,7 @@ module {
   // STD-LABEL: func.func @read_rc_no_output
   // STD: func.call @__sync_trampoline_mlir_sync_rwlock_read_lock_slow_path
   // STD: %[[PAYLOAD:.+]] = sync.rwlock.get_payload
-  // STD: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<!reussir.rc<i64 atomic>>) : !reussir.ref<!reussir.rc<i64 atomic> field atomic>
+  // STD: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<!reussir.rc<i64 atomic>>) : !reussir.ref<!reussir.rc<i64 atomic> atomic>
   // STD: %[[VALUE:.+]] = reussir.ref.load(%[[SLOT]]
   // STD-NEXT: reussir.rc.inc(%[[VALUE]]
   // STD: call @consume(%[[VALUE]])

@@ -60,7 +60,7 @@ private:
     RefType refType = op.getRef().getType();
     RefType slotType =
         RefType::get(rewriter.getContext(), cellType.getElementType(),
-                     Capability::field, refType.getAtomicKind());
+                     Capability::unspecified, refType.getAtomicKind());
     // A lock-guarded cell's payload lives behind the lock header, so its drop
     // glue reaches it the same way every other access does: a critical
     // section whose body releases the managed payload (for an RC element, a

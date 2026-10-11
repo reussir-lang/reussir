@@ -1,7 +1,7 @@
 // RUN: %reussir-opt %s --loop-invariant-code-motion | %FileCheck %s
 
 module {
-  func.func private @consume(!reussir.ref<i32 field>)
+  func.func private @consume(!reussir.ref<i32>)
 
   // CHECK-LABEL: func.func @in_bounds
   // CHECK: reussir.array.project
@@ -11,8 +11,8 @@ module {
     %c1 = arith.constant 1 : index
     %c3 = arith.constant 3 : index
     scf.for %i = %c0 to %n step %c1 {
-      %ref = reussir.array.project(%view : memref<4xi32>)[%c3 : index] : !reussir.ref<i32 field>
-      func.call @consume(%ref) : (!reussir.ref<i32 field>) -> ()
+      %ref = reussir.array.project(%view : memref<4xi32>)[%c3 : index] : !reussir.ref<i32>
+      func.call @consume(%ref) : (!reussir.ref<i32>) -> ()
     }
     return
   }
@@ -28,8 +28,8 @@ module {
     %c3 = arith.constant 3 : index
     %bounded = arith.select %choose, %c0, %c3 : index
     scf.for %i = %c0 to %n step %c1 {
-      %ref = reussir.array.project(%view : memref<4xi32>)[%bounded : index] : !reussir.ref<i32 field>
-      func.call @consume(%ref) : (!reussir.ref<i32 field>) -> ()
+      %ref = reussir.array.project(%view : memref<4xi32>)[%bounded : index] : !reussir.ref<i32>
+      func.call @consume(%ref) : (!reussir.ref<i32>) -> ()
     }
     return
   }
@@ -47,10 +47,10 @@ module {
     %maybe_past = arith.select %choose, %c0, %c4 : index
     %maybe_before = arith.select %choose, %negative, %c3 : index
     scf.for %i = %c0 to %n step %c1 {
-      %end = reussir.array.project(%view : memref<4xi32>)[%maybe_past : index] : !reussir.ref<i32 field>
-      %before = reussir.array.project(%view : memref<4xi32>)[%maybe_before : index] : !reussir.ref<i32 field>
-      func.call @consume(%end) : (!reussir.ref<i32 field>) -> ()
-      func.call @consume(%before) : (!reussir.ref<i32 field>) -> ()
+      %end = reussir.array.project(%view : memref<4xi32>)[%maybe_past : index] : !reussir.ref<i32>
+      %before = reussir.array.project(%view : memref<4xi32>)[%maybe_before : index] : !reussir.ref<i32>
+      func.call @consume(%end) : (!reussir.ref<i32>) -> ()
+      func.call @consume(%before) : (!reussir.ref<i32>) -> ()
     }
     return
   }

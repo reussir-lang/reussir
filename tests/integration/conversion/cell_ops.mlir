@@ -1,10 +1,10 @@
-// RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-attach-native-target,func.func(reussir-token-instantiation))' | %FileCheck %s --check-prefix=TOKEN
-// RUN: %reussir-opt %s --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=ACQUIRE
-// RUN: %reussir-opt %s --reussir-convert-to-std | %FileCheck %s --check-prefix=SCF
-// RUN: %reussir-opt %s --reussir-convert-to-std --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=EXPAND
-// RUN: %reussir-opt %s --reussir-convert-to-std --reussir-invariant-group-analysis | %FileCheck %s --check-prefix=INVARIANT
-// RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-attach-native-target,func.func(reussir-token-instantiation),reussir-rc-decrement-expansion,reussir-acquire-drop-expansion)' | %FileCheck %s --check-prefix=DROP
-// RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-attach-native-target,func.func(reussir-token-instantiation),reussir-rc-decrement-expansion,reussir-acquire-drop-expansion,reussir-convert-to-std,reussir-acquire-drop-expansion{expand-decrement=1 outline-record=1},func.func(reussir-token-reuse),reussir-convert-to-std,convert-scf-to-cf,reussir-lowering-basic-ops,convert-to-llvm,reconcile-unrealized-casts,canonicalize,cse)' | %reussir-translate --mlir-to-llvmir | %FileCheck %s --check-prefix=LLVM
+// RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-attach-native-target,func.func(reussir-token-instantiation))' | %FileCheck %s --check-prefix=TOKEN --implicit-check-not=' field'
+// RUN: %reussir-opt %s --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=ACQUIRE --implicit-check-not=' field'
+// RUN: %reussir-opt %s --reussir-convert-to-std | %FileCheck %s --check-prefix=SCF --implicit-check-not=' field'
+// RUN: %reussir-opt %s --reussir-convert-to-std --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=EXPAND --implicit-check-not=' field'
+// RUN: %reussir-opt %s --reussir-convert-to-std --reussir-invariant-group-analysis | %FileCheck %s --check-prefix=INVARIANT --implicit-check-not=' field'
+// RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-attach-native-target,func.func(reussir-token-instantiation),reussir-rc-decrement-expansion,reussir-acquire-drop-expansion)' | %FileCheck %s --check-prefix=DROP --implicit-check-not=' field'
+// RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-attach-native-target,func.func(reussir-token-instantiation),reussir-rc-decrement-expansion,reussir-acquire-drop-expansion,reussir-convert-to-std,reussir-acquire-drop-expansion{expand-decrement=1 outline-record=1},func.func(reussir-token-reuse),reussir-convert-to-std,convert-scf-to-cf,reussir-lowering-basic-ops,convert-to-llvm,reconcile-unrealized-casts,canonicalize,cse)' | %reussir-translate --mlir-to-llvmir | %FileCheck %s --check-prefix=LLVM --implicit-check-not=' field'
 
 !inner = !reussir.rc<i64>
 !nullable_inner = !reussir.nullable<!inner>
@@ -36,9 +36,9 @@ module {
   // TOKEN: reussir.cell.create value(%{{.+}} : !reussir.rc<i64>) token(%[[TOKEN]] : !reussir.token<align : 8, size : 24>)
   // EXPAND-LABEL: func.func @create_exclusive_cell
   // EXPAND: %[[FALSE:.+]] = arith.constant false
-  // EXPAND: reussir.ref.store
-  // EXPAND: %[[FLAG:.+]] = reussir.ref.project{{.*}}[1] : !reussir.ref<i1 field>
-  // EXPAND: reussir.ref.store(%[[FLAG]] : !reussir.ref<i1 field>) (%[[FALSE]] : i1)
+  // EXPAND: memref.store
+  // EXPAND: %[[FLAG:.+]] = reussir.ref.project{{.*}}[1] : !reussir.ref<i1>
+  // EXPAND: memref.store %[[FALSE]]
   func.func @create_exclusive_cell(%value: !inner) -> !rc_excl_cell {
     %cell = reussir.cell.create value(%value : !inner) : !rc_excl_cell
     return %cell : !rc_excl_cell
@@ -103,12 +103,12 @@ module {
   // EXPAND: %[[OLD:.+]] = reussir.ref.load
   // EXPAND-NEXT: %{{.+}} = reussir.rc.dec(%[[OLD]]
   // EXPAND-NOT: reussir.rc.inc
-  // EXPAND: reussir.ref.store
+  // EXPAND: memref.store
   // EXPAND-NOT: reussir.rc.inc
   // EXPAND: return
   // SCF-LABEL: func.func @set_cell
   // SCF: reussir.ref.drop
-  // SCF: reussir.ref.store
+  // SCF: memref.store
   // SCF-NOT: reussir.cell.set
   func.func @set_cell(%value: !inner, %cell: !rc_cell) {
     reussir.cell.set(%value : !inner, %cell : !rc_cell)
@@ -120,7 +120,7 @@ module {
   // performs the access.
   // EXPAND-LABEL: func.func @get_exclusive_cell
   // EXPAND: %[[POISON:.+]] = ub.poison : !reussir.rc<i64>
-  // EXPAND: %[[FLAG:.+]] = reussir.ref.project{{.*}}[1] : !reussir.ref<i1 field>
+  // EXPAND: %[[FLAG:.+]] = reussir.ref.project{{.*}}[1] : !reussir.ref<i1>
   // EXPAND: %[[INUSE:.+]] = reussir.ref.load(%[[FLAG]]
   // EXPAND: %[[EXPECT:.+]] = reussir.expect(%[[INUSE]] : i1, false)
   // EXPAND: %[[RESULT:.+]] = scf.if %[[EXPECT]] -> (!reussir.rc<i64>)
@@ -143,7 +143,7 @@ module {
   // EXPAND: } else {
   // EXPAND: %[[OLD:.+]] = reussir.ref.load
   // EXPAND: reussir.rc.dec(%[[OLD]]
-  // EXPAND: reussir.ref.store
+  // EXPAND: memref.store
   func.func @set_exclusive_cell(%value: !inner, %cell: !rc_excl_cell) {
     reussir.cell.set(%value : !inner, %cell : !rc_excl_cell)
     return
@@ -163,12 +163,12 @@ module {
   // EXPAND: reussir.panic "cell.rmw on an exclusive cell that is in use"
   // EXPAND: scf.yield %[[POISON]]
   // EXPAND: } else {
-  // EXPAND: reussir.ref.store(%{{.+}} : !reussir.ref<i1 field>) (%[[TRUE]] : i1)
+  // EXPAND: memref.store %[[TRUE]]
   // EXPAND: %[[OLD:.+]] = reussir.ref.load
   // EXPAND-NOT: reussir.rc.inc
   // EXPAND-NOT: reussir.rc.dec
-  // EXPAND: reussir.ref.store
-  // EXPAND: reussir.ref.store(%{{.+}} : !reussir.ref<i1 field>) (%[[FALSE]] : i1)
+  // EXPAND: memref.store
+  // EXPAND: memref.store %[[FALSE]]
   // EXPAND: scf.yield %[[OLD]]
   // EXPAND-NOT: reussir.rc.inc
   // EXPAND-NOT: reussir.rc.dec
@@ -187,14 +187,14 @@ module {
   // EXPAND-LABEL: func.func @rmw_i64
   // EXPAND-NOT: reussir.rc.inc
   // EXPAND-NOT: reussir.rc.dec
-  // EXPAND: reussir.ref.store{{.*}}(%{{.+}} : i1)
+  // EXPAND: memref.store
   // EXPAND: %[[OLD:.+]] = reussir.ref.load
   // EXPAND-NOT: reussir.rc.inc
   // EXPAND-NOT: reussir.rc.dec
   // EXPAND: %[[NEXT:.+]] = arith.addi %[[OLD]]
   // EXPAND-NOT: reussir.rc.inc
   // EXPAND-NOT: reussir.rc.dec
-  // EXPAND: reussir.ref.store{{.*}}(%[[NEXT]] : i64)
+  // EXPAND: memref.store %[[NEXT]]
   // EXPAND-NOT: reussir.rc.inc
   // EXPAND-NOT: reussir.rc.dec
   // EXPAND: scf.yield %[[OLD]]
@@ -210,8 +210,8 @@ module {
   }
 
   // EXPAND-LABEL: func.func @in_use
-  // EXPAND: %[[FLAG:.+]] = reussir.ref.project{{.*}}[1] : !reussir.ref<i1 field>
-  // EXPAND: %[[LOADED:.+]] = reussir.ref.load(%[[FLAG]] : !reussir.ref<i1 field>) : i1
+  // EXPAND: %[[FLAG:.+]] = reussir.ref.project{{.*}}[1] : !reussir.ref<i1>
+  // EXPAND: %[[LOADED:.+]] = reussir.ref.load(%[[FLAG]] : !reussir.ref<i1>) : i1
   // EXPAND: return %[[LOADED]]
   func.func @in_use(%cell: !rc_excl_cell) -> i1 {
     %flag = reussir.cell.in_use(%cell : !rc_excl_cell) : i1

@@ -909,7 +909,7 @@ convertAtomicRMWKind(mlir::arith::AtomicRMWKind kind) {
   case ArithKind::mulf:
   case ArithKind::muli:
     // LLVM has no atomicrmw multiply; ConvertToSTD expands those kinds
-    // (and the region form) into an scf.while + ref.cmpxchg retry loop.
+    // (and the region form) into an scf.while + cell.cmpxchg retry loop.
     return std::nullopt;
   }
   llvm_unreachable("unknown AtomicRMWKind");
@@ -949,12 +949,12 @@ struct ReussirAtomicCellRmwConversionPattern
   }
 };
 
-struct ReussirRefCmpXchgConversionPattern
-    : public mlir::OpConversionPattern<ReussirRefCmpXchgOp> {
+struct ReussirCellCmpXchgConversionPattern
+    : public mlir::OpConversionPattern<ReussirCellCmpXchgOp> {
   using OpConversionPattern::OpConversionPattern;
 
   mlir::LogicalResult
-  matchAndRewrite(ReussirRefCmpXchgOp op, OpAdaptor adaptor,
+  matchAndRewrite(ReussirCellCmpXchgOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
     auto *converter =
         static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter());
@@ -976,8 +976,10 @@ struct ReussirRefCmpXchgConversionPattern
       desired =
           mlir::LLVM::BitcastOp::create(rewriter, loc, compareType, desired);
     }
+    mlir::Value slot = atomicCellSlotPtr(op.getCell().getType(),
+                                         adaptor.getCell(), loc, converter, rewriter);
     auto cmpxchg = mlir::LLVM::AtomicCmpXchgOp::create(
-        rewriter, loc, adaptor.getRef(), expected, desired,
+        rewriter, loc, slot, expected, desired,
         op.getOrdering().value_or(mlir::LLVM::AtomicOrdering::acq_rel),
         mlir::LLVM::AtomicOrdering::monotonic, llvm::StringRef(), alignment,
         op.getWeak());
@@ -3948,7 +3950,7 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirRecordCoerceOp, ReussirRegionVTableOp, ReussirRcFreezeOp,
         ReussirRegionCleanupOp, ReussirRegionCreateOp, ReussirRcReinterpretOp,
         ReussirCellCreateOp, ReussirCellGetOp, ReussirCellSetOp,
-        ReussirCellRmwOp, ReussirCellRdlockOp, ReussirCellYieldOp,
+        ReussirCellRmwOp, ReussirCellCmpXchgOp, ReussirCellRdlockOp, ReussirCellYieldOp,
         ReussirClosureApplyOp, ReussirClosureCloneOp, ReussirClosureEvalOp,
         ReussirClosureInspectPayloadOp, ReussirClosureCursorOp,
         ReussirClosureInstantiateOp, ReussirClosureVtableOp,
@@ -4080,7 +4082,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirRefFromMemrefConversionPattern, ReussirRefStoreConversionPattern,
       ReussirAtomicCellGetConversionPattern,
       ReussirAtomicCellSetConversionPattern,
-      ReussirAtomicCellRmwConversionPattern, ReussirRefCmpXchgConversionPattern,
+      ReussirAtomicCellRmwConversionPattern, ReussirCellCmpXchgConversionPattern,
       ReussirRefSpilledConversionPattern, ReussirRefDiffConversionPattern,
       ReussirRefCmpConversionPattern, ReussirRefMemcpyConversionPattern,
       ReussirNullableCheckConversionPattern,

@@ -1529,7 +1529,7 @@ static CellAccess borrowCell(mlir::Value cell, mlir::Location loc,
 
 static RefType getCellSlotRefType(const CellAccess &access) {
   return RefType::get(access.cellType.getContext(),
-                      access.cellType.getElementType(), Capability::field,
+                      access.cellType.getElementType(), Capability::unspecified,
                       access.atomicKind);
 }
 
@@ -1612,11 +1612,23 @@ static mlir::Value acquireThenLoadCellSlot(mlir::Value slotRef,
                                   slotRef);
 }
 
+// Cell mutability is independent of regional field capability. After the
+// Cell operation has established access (including a critical section for
+// lock-guarded kinds), write through its rank-zero memory view.
+static void storeCellSlot(mlir::Value slotRef, mlir::Value value,
+                          mlir::Location loc,
+                          mlir::PatternRewriter &rewriter) {
+  auto elementType = llvm::cast<RefType>(slotRef.getType()).getElementType();
+  auto view = ReussirRefToMemrefOp::create(
+      rewriter, loc, mlir::MemRefType::get({}, elementType), slotRef);
+  mlir::memref::StoreOp::create(rewriter, loc, value, view, mlir::ValueRange{});
+}
+
 static void dropThenStoreCellSlot(mlir::Value slotRef, mlir::Value replacement,
                                   mlir::Location loc,
                                   mlir::PatternRewriter &rewriter) {
   ReussirRefDropOp::create(rewriter, loc, slotRef);
-  ReussirRefStoreOp::create(rewriter, loc, slotRef, replacement);
+  storeCellSlot(slotRef, replacement, loc, rewriter);
 }
 
 // The trailing i1 in-use flag of an exclusive cell, addressed as slot [1].
@@ -1626,7 +1638,7 @@ static mlir::Value projectCellFlag(const CellAccess &access, mlir::Location loc,
          "only exclusive cells carry an in-use flag");
   RefType flagRefType =
       RefType::get(rewriter.getContext(), rewriter.getI1Type(),
-                   Capability::field, access.atomicKind);
+                   Capability::unspecified, access.atomicKind);
   return ReussirRefProjectOp::create(rewriter, loc, flagRefType, access.cellRef,
                                      rewriter.getIndexAttr(1));
 }
@@ -1636,7 +1648,7 @@ static void storeCellFlag(const CellAccess &access, bool inUse,
   mlir::Value flagRef = projectCellFlag(access, loc, rewriter);
   mlir::Value flag = mlir::arith::ConstantOp::create(
       rewriter, loc, rewriter.getIntegerAttr(rewriter.getI1Type(), inUse));
-  ReussirRefStoreOp::create(rewriter, loc, flagRef, flag);
+  storeCellSlot(flagRef, flag, loc, rewriter);
 }
 
 // An exclusive-cell payload access lowers to a two-armed `scf.if` over the
@@ -1708,7 +1720,7 @@ public:
       return mlir::success();
     }
     mlir::Value slotRef = projectCellSlot(access, op.getLoc(), rewriter);
-    ReussirRefStoreOp::create(rewriter, op.getLoc(), slotRef, op.getValue());
+    storeCellSlot(slotRef, op.getValue(), op.getLoc(), rewriter);
     // A fresh exclusive cell starts out not in use.
     if (cellType.getExclusive())
       storeCellFlag(access, /*inUse=*/false, op.getLoc(), rewriter);
@@ -1927,8 +1939,7 @@ public:
         rewriter.inlineBlockBefore(&body, criticalBody, criticalBody->end(),
                                    mlir::ValueRange{oldValue});
         rewriter.setInsertionPoint(yield);
-        ReussirRefStoreOp::create(rewriter, yield.getLoc(), slotRef,
-                                  yield.getNewValue());
+        storeCellSlot(slotRef, yield.getNewValue(), yield.getLoc(), rewriter);
         mlir::sync::SyncYieldOp::create(rewriter, yield.getLoc(),
                                         yield.getOutput()
                                             ? mlir::ValueRange{yield.getOutput()}
@@ -1967,8 +1978,7 @@ public:
         rewriter.inlineBlockBefore(&body, criticalBody, criticalBody->end(),
                                    mlir::ValueRange{oldValue});
         rewriter.setInsertionPoint(yield);
-        ReussirRefStoreOp::create(rewriter, yield.getLoc(), slotRef,
-                                  yield.getNewValue());
+        storeCellSlot(slotRef, yield.getNewValue(), yield.getLoc(), rewriter);
         if (yield.getOutput())
           mlir::memref::StoreOp::create(rewriter, yield.getLoc(),
                                         yield.getOutput(), out,
@@ -2007,8 +2017,7 @@ public:
         rewriter.inlineBlockBefore(&body, criticalBody, criticalBody->end(),
                                    mlir::ValueRange{oldValue});
         rewriter.setInsertionPoint(yield);
-        ReussirRefStoreOp::create(rewriter, yield.getLoc(), slotRef,
-                                  yield.getNewValue());
+        storeCellSlot(slotRef, yield.getNewValue(), yield.getLoc(), rewriter);
         mlir::sync::SyncYieldOp::create(rewriter, yield.getLoc(),
                                         yield.getOutput()
                                             ? mlir::ValueRange{yield.getOutput()}
@@ -2040,8 +2049,7 @@ public:
                                guarded.elseBlock()->end(),
                                mlir::ValueRange{oldValue});
     rewriter.setInsertionPoint(yield);
-    ReussirRefStoreOp::create(rewriter, yield.getLoc(), slotRef,
-                              yield.getNewValue());
+    storeCellSlot(slotRef, yield.getNewValue(), yield.getLoc(), rewriter);
     storeCellFlag(access, /*inUse=*/false, yield.getLoc(), rewriter);
     mlir::scf::YieldOp::create(rewriter, yield.getLoc(),
                                yield.getOutput()
@@ -2114,7 +2122,7 @@ static bool hasNativeAtomicRMWLowering(mlir::arith::AtomicRMWKind kind) {
 // (the region form and the multiply kinds) is loop-shaped, so its control
 // flow is crafted here as structured IR: an initial monotonic observation
 // feeds an `scf.while` whose before-region computes the replacement and
-// commits it with the straight-line `reussir.ref.cmpxchg` bridge; a failed
+// commits it with the straight-line `reussir.cell.cmpxchg` bridge; a failed
 // exchange retries with the element the comparison observed. Only the
 // successful attempt's values leave the loop.
 class ReussirAtomicCellRmwOpRewritePattern
@@ -2131,9 +2139,8 @@ public:
       return mlir::failure();
 
     mlir::Location loc = op.getLoc();
-    CellAccess access = borrowCell(op.getCell(), loc, rewriter);
-    mlir::Value slotRef = projectCellSlot(access, loc, rewriter);
-    mlir::Type elementType = access.cellType.getElementType();
+    auto cellType = llvm::cast<CellType>(op.getCell().getType().getElementType());
+    mlir::Type elementType = cellType.getElementType();
     auto orderingAttr = mlir::LLVM::AtomicOrderingAttr::get(
         rewriter.getContext(),
         op.getOrdering().value_or(mlir::LLVM::AtomicOrdering::acq_rel));
@@ -2180,9 +2187,9 @@ public:
       }
       // Weak exchange: the surrounding loop retries on failure anyway, and
       // weakness lets LLVM pick LL/SC sequences where beneficial.
-      auto cmpxchg = ReussirRefCmpXchgOp::create(
+      auto cmpxchg = ReussirCellCmpXchgOp::create(
           rewriter, commitLoc, elementType, rewriter.getI1Type(), orderingAttr,
-          rewriter.getUnitAttr(), expected, desired, slotRef);
+          rewriter.getUnitAttr(), expected, desired, op.getCell());
       mlir::Value trueValue = mlir::arith::ConstantOp::create(
           rewriter, commitLoc,
           rewriter.getIntegerAttr(rewriter.getI1Type(), true));

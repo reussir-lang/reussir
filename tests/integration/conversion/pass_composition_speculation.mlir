@@ -3,7 +3,7 @@
 // Projection panics on an out-of-bounds index. Unknown and
 // out-of-bounds indices must stay under their original execution guard.
 module {
-  func.func private @consume(!reussir.ref<i32 field>)
+  func.func private @consume(!reussir.ref<i32>)
 
   // CHECK-LABEL: func.func @unknown_index
   // CHECK: scf.for
@@ -12,8 +12,8 @@ module {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     scf.for %i = %c0 to %n step %c1 {
-      %ref = reussir.array.project(%view : memref<4xi32>)[%index : index] : !reussir.ref<i32 field>
-      func.call @consume(%ref) : (!reussir.ref<i32 field>) -> ()
+      %ref = reussir.array.project(%view : memref<4xi32>)[%index : index] : !reussir.ref<i32>
+      func.call @consume(%ref) : (!reussir.ref<i32>) -> ()
     }
     return
   }
@@ -29,10 +29,10 @@ module {
     %c4 = arith.constant 4 : index
     %negative = arith.constant -1 : index
     scf.for %i = %c0 to %n step %c1 {
-      %end = reussir.array.project(%view : memref<4xi32>)[%c4 : index] : !reussir.ref<i32 field>
-      %before = reussir.array.project(%view : memref<4xi32>)[%negative : index] : !reussir.ref<i32 field>
-      func.call @consume(%end) : (!reussir.ref<i32 field>) -> ()
-      func.call @consume(%before) : (!reussir.ref<i32 field>) -> ()
+      %end = reussir.array.project(%view : memref<4xi32>)[%c4 : index] : !reussir.ref<i32>
+      %before = reussir.array.project(%view : memref<4xi32>)[%negative : index] : !reussir.ref<i32>
+      func.call @consume(%end) : (!reussir.ref<i32>) -> ()
+      func.call @consume(%before) : (!reussir.ref<i32>) -> ()
     }
     return
   }

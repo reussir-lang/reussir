@@ -141,21 +141,21 @@ module {
   func.func @plain_cell_has_no_flag_slot(%ref: !reussir.ref<!cell_i64>) {
     // expected-error @+1 {{cell projection index must be zero, got 1}}
     %flag = reussir.ref.project(%ref : !reussir.ref<!cell_i64>) [1]
-      : !reussir.ref<i1 field>
+      : !reussir.ref<i1>
     return
   }
 
   func.func @flag_slot_type_mismatch(%ref: !reussir.ref<!excl_cell_i64>) {
     // expected-error @+1 {{projected cell slot type mismatch: expected 'i1', got 'i64'}}
     %flag = reussir.ref.project(%ref : !reussir.ref<!excl_cell_i64>) [1]
-      : !reussir.ref<i64 field>
+      : !reussir.ref<i64>
     return
   }
 
   func.func @exclusive_flag_out_of_range(%ref: !reussir.ref<!excl_cell_i64>) {
     // expected-error @+1 {{cell projection index must be zero (element) or one (in-use flag), got 2}}
     %flag = reussir.ref.project(%ref : !reussir.ref<!excl_cell_i64>) [2]
-      : !reussir.ref<i1 field>
+      : !reussir.ref<i1>
     return
   }
 }

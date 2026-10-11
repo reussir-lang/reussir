@@ -45,9 +45,9 @@ module {
   // STD: reussir.ref.from_memref(%[[SUB]]
   // STD: } else {
   // STD: reussir.panic
-  func.func @element(%a: memref<?xi32, strided<[2], offset: 3>>, %i: index) -> !reussir.ref<i32 field> {
-    %r = reussir.array.project(%a : memref<?xi32, strided<[2], offset: 3>>)[%i : index] : !reussir.ref<i32 field>
-    return %r : !reussir.ref<i32 field>
+  func.func @element(%a: memref<?xi32, strided<[2], offset: 3>>, %i: index) -> !reussir.ref<i32> {
+    %r = reussir.array.project(%a : memref<?xi32, strided<[2], offset: 3>>)[%i : index] : !reussir.ref<i32>
+    return %r : !reussir.ref<i32>
   }
 
   // An unused result must not remove a failing bounds check before lowering.
@@ -58,7 +58,7 @@ module {
   // FOLD: reussir.panic "array index out of bounds"
   func.func @unused_negative(%a: memref<4xi32>) {
     %i = arith.constant -1 : index
-    %r = reussir.array.project(%a : memref<4xi32>)[%i : index] : !reussir.ref<i32 field>
+    %r = reussir.array.project(%a : memref<4xi32>)[%i : index] : !reussir.ref<i32>
     return
   }
 
@@ -67,11 +67,11 @@ module {
   // FOLD-LABEL: func.func @negative_dynamic
   // FOLD-NOT: memref.subview
   // FOLD: reussir.panic "array index out of bounds"
-  func.func @negative_dynamic(%a: memref<?xi32>) -> !reussir.ref<i32 field> {
+  func.func @negative_dynamic(%a: memref<?xi32>) -> !reussir.ref<i32> {
     %i = arith.constant -2 : index
     %negative = arith.addi %i, %i : index
-    %r = reussir.array.project(%a : memref<?xi32>)[%negative : index] : !reussir.ref<i32 field>
-    return %r : !reussir.ref<i32 field>
+    %r = reussir.array.project(%a : memref<?xi32>)[%negative : index] : !reussir.ref<i32>
+    return %r : !reussir.ref<i32>
   }
 
   // LIVE-LABEL: func.func @unused_end
@@ -81,7 +81,7 @@ module {
   // FOLD: reussir.panic "array index out of bounds"
   func.func @unused_end(%a: memref<4xi32>) {
     %i = arith.constant 4 : index
-    %r = reussir.array.project(%a : memref<4xi32>)[%i : index] : !reussir.ref<i32 field>
+    %r = reussir.array.project(%a : memref<4xi32>)[%i : index] : !reussir.ref<i32>
     return
   }
 
@@ -89,9 +89,9 @@ module {
   // FOLD-NOT: scf.if
   // FOLD-NOT: reussir.panic
   // FOLD: return
-  func.func @known_valid(%a: memref<4xi32>) -> !reussir.ref<i32 field> {
+  func.func @known_valid(%a: memref<4xi32>) -> !reussir.ref<i32> {
     %i = arith.constant 2 : index
-    %r = reussir.array.project(%a : memref<4xi32>)[%i : index] : !reussir.ref<i32 field>
-    return %r : !reussir.ref<i32 field>
+    %r = reussir.array.project(%a : memref<4xi32>)[%i : index] : !reussir.ref<i32>
+    return %r : !reussir.ref<i32>
   }
 }

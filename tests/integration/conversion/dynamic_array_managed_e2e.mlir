@@ -67,11 +67,12 @@ module {
       ^bb0(%view: !view):
         %c0 = arith.constant 0 : index
         %row = reussir.array.project(%view : !view) [%c0 : index] : !row
-        %slot = reussir.array.project(%row : !row) [%c0 : index] : !reussir.ref<!e field>
+        %slot = reussir.array.project(%row : !row) [%c0 : index] : !reussir.ref<!e>
         // Release the old occupant, then move the new element in.
-        %old = reussir.ref.load (%slot : !reussir.ref<!e field>) : !e
+        %old = reussir.ref.load (%slot : !reussir.ref<!e>) : !e
         reussir.rc.dec (%old : !e)
-        reussir.ref.store (%slot : !reussir.ref<!e field>) (%value : !e)
+        %slot_view = reussir.ref.to_memref(%slot : !reussir.ref<!e>) : memref<!e>
+        memref.store %value, %slot_view[] : memref<!e>
         reussir.scf.yield
     }
     return %updated : !rc_dv

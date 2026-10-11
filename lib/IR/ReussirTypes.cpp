@@ -398,6 +398,14 @@ RecordType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
       return mlir::failure();
     }
 
+    if (isField && llvm::isa<CellType, ArrayType>(member)) {
+      emitError() << "cell and array members cannot be regional field links";
+      return mlir::failure();
+    }
+    if (isField && complete && defaultCapability == Capability::value) {
+      emitError() << "field members require a regional record";
+      return mlir::failure();
+    }
     if (isField && defaultCapability == Capability::shared) {
       emitError() << "Field capability is not allowed in shared record";
       return mlir::failure();
@@ -1372,6 +1380,10 @@ mlir::LogicalResult
 RefType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
                 mlir::Type eleTy, reussir::Capability capability,
                 reussir::AtomicKind atomicKind) {
+  if (capability == Capability::field && llvm::isa<CellType, ArrayType>(eleTy)) {
+    emitError() << "cell and array references cannot have regional field capability";
+    return mlir::failure();
+  }
   if (capability == reussir::Capability::value) {
     emitError() << "Capability must not be Value for RefType";
     return mlir::failure();

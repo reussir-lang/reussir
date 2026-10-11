@@ -1528,6 +1528,47 @@ def ReussirCellRmwOp : ReussirCellOp<"rmw", []> {
   let hasVerifier = 1;
 }
 
+def ReussirCellCmpXchgOp : ReussirCellOp<"cmpxchg", []> {
+  let summary = "Atomic compare-and-exchange on a Cell payload";
+  let description = [{
+    `reussir.cell.cmpxchg` atomically compares the payload of an atomic Cell
+    with `expected` and, on equality, stores `desired`. It returns the observed
+    element and a success flag.
+
+    This is the bridge primitive for retry loops crafted at the SCF level: the
+    loop-shaped control flow of an atomic read-modify-write is expressed with
+    `scf.while` during structured lowering, while this operation stays a
+    straight-line LLVM `cmpxchg` for the basic-ops lowering.
+
+    The element must satisfy the same restrictions as an atomic cell element:
+    a byte-addressable, power-of-two-width signless integer or floating-point
+    primitive. Floating-point elements are compared by their integer bit
+    patterns during lowering.
+
+    The optional ordering applies to the successful exchange and defaults to
+    `acq_rel`; the failed comparison always observes with `monotonic`
+    ordering. Read-modify-write orderings unsupported by LLVM are rejected.
+
+    A `weak` exchange may fail spuriously (the success flag is false even
+    though the observed element equals the expected one), letting LLVM emit
+    LL/SC sequences without a nested loop where beneficial. Callers inside a
+    retry loop — such as the rmw expansion — should therefore request `weak`.
+  }];
+  let arguments = (ins OptionalAttr<AtomicOrdering>:$ordering, UnitAttr:$weak,
+      Arg<AnyType, "expected element">:$expected,
+      Arg<AnyType, "replacement element">:$desired,
+      Arg<ReussirRcType, "atomic cell to exchange", [MemRead, MemWrite]>:$cell);
+  let results = (outs Res<AnyType, "observed element">:$observed,
+      Res<I1, "success flag">:$success);
+  let assemblyFormat = [{
+    `(` $expected `:` type($expected) `,` $desired `:` type($desired) `,`
+    $cell `:` qualified(type($cell)) `)` (`weak` $weak^)?
+    (`ordering` `(` $ordering^ `)`)? `:` type($observed) `,` type($success)
+    attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 def ReussirCellRdlockOp : ReussirCellOp<"rdlock", []> {
   let summary = "Run a read transaction over an rwlock cell";
   let description = [{
@@ -1717,54 +1758,13 @@ def ReussirRefStoreOp : ReussirReferenceOp<"store", []> {
   let summary = "Store a value to a reference";
   let description = [{
     `reussir.ref.store` stores a value to a reference. Target reference must have
-    field capability.
+    regional field capability. Cell and array writes use memory views instead.
   }];
   let arguments = (ins Arg<ReussirRefType, "reference to store",
       [MemWrite]>:$ref,
       Arg<AnyType, "value to store">:$value);
   let assemblyFormat = [{
     `(` $ref `:` qualified(type($ref)) `)` `(` $value `:` type($value) `)` attr-dict
-  }];
-  let hasVerifier = 1;
-}
-
-def ReussirRefCmpXchgOp : ReussirReferenceOp<"cmpxchg", []> {
-  let summary = "Atomic compare-and-exchange on a referenced slot";
-  let description = [{
-    `reussir.ref.cmpxchg` atomically compares the element behind the reference
-    with `expected` and, on equality, stores `desired`. It returns the observed
-    element and a success flag.
-
-    This is the bridge primitive for retry loops crafted at the SCF level: the
-    loop-shaped control flow of an atomic read-modify-write is expressed with
-    `scf.while` during structured lowering, while this operation stays a
-    straight-line LLVM `cmpxchg` for the basic-ops lowering.
-
-    The element must satisfy the same restrictions as an atomic cell element:
-    a byte-addressable, power-of-two-width signless integer or floating-point
-    primitive. Floating-point elements are compared by their integer bit
-    patterns during lowering.
-
-    The optional ordering applies to the successful exchange and defaults to
-    `acq_rel`; the failed comparison always observes with `monotonic`
-    ordering. Read-modify-write orderings unsupported by LLVM are rejected.
-
-    A `weak` exchange may fail spuriously (the success flag is false even
-    though the observed element equals the expected one), letting LLVM emit
-    LL/SC sequences without a nested loop where beneficial. Callers inside a
-    retry loop — such as the rmw expansion — should therefore request `weak`.
-  }];
-  let arguments = (ins OptionalAttr<AtomicOrdering>:$ordering, UnitAttr:$weak,
-      Arg<AnyType, "expected element">:$expected,
-      Arg<AnyType, "replacement element">:$desired,
-      Arg<ReussirRefType, "slot to exchange", [MemRead, MemWrite]>:$ref);
-  let results = (outs Res<AnyType, "observed element">:$observed,
-      Res<I1, "success flag">:$success);
-  let assemblyFormat = [{
-    `(` $expected `:` type($expected) `,` $desired `:` type($desired) `,`
-    $ref `:` qualified(type($ref)) `)` (`weak` $weak^)?
-    (`ordering` `(` $ordering^ `)`)? `:` type($observed) `,` type($success)
-    attr-dict
   }];
   let hasVerifier = 1;
 }

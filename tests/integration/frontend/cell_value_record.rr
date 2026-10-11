@@ -1,0 +1,67 @@
+// Cell payload references are ordinary references, not regional field links.
+// Exercise acquisition on get, release on set, and cleanup while a loaded
+// value remains live. Nested value records retain ordinary ownership glue.
+
+// RUN: %rrc %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/cell_value_record.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s -o %t.opt.o --relocation-mode pic -Oaggressive
+// RUN: %cc %t.opt.o %S/cell_value_record.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+
+import core::intrinsic::cell;
+
+struct [shared] Bg(u64)
+enum [value] Num { Small(u64), Big(Bg) }
+struct [value] Pair { big: Bg, small: u64 }
+struct [value] Quad { x: Pair, y: Pair }
+struct NumRef(Cell<Num>)
+
+fn mk(v : Num) -> NumRef { NumRef{cell::alloc(v)} }
+
+fn value(x : Num) -> u64 {
+    match x { Num::Small(y) => y, Num::Big(b) => b.0 }
+}
+
+// get of a variant record (acquire), then set over a counted arm (release).
+pub fn test_variant(n : u64) -> u64 {
+    let r = mk(Num::Small{n});
+    let a = value(cell::get(r.0));
+    cell::set(r.0, Num::Big{Bg{n + 1}});
+    let b = value(cell::get(r.0));
+    cell::set(r.0, Num::Small{n + 2});
+    let c = value(cell::get(r.0));
+    a + b + c
+}
+extern "C" trampoline "test_variant_ffi" = test_variant;
+
+// The cell is freed holding a counted arm; the value read from it outlives
+// the cell.
+pub fn test_drop_with_big(n : u64) -> u64 {
+    let kept = {
+        let r = mk(Num::Big{Bg{n}});
+        cell::get(r.0)
+    };
+    value(kept)
+}
+extern "C" trampoline "test_drop_with_big_ffi" = test_drop_with_big;
+
+// A compound [value] record with a counted member.
+pub fn test_compound(n : u64) -> u64 {
+    let c = cell::alloc(Pair { big: Bg{n}, small: 1 });
+    let first = cell::get(c);
+    cell::set(c, Pair { big: Bg{n * 10}, small: 2 });
+    let second = cell::get(c);
+    first.big.0 + first.small + second.big.0 + second.small
+}
+extern "C" trampoline "test_compound_ffi" = test_compound;
+
+// Nested [value] records keep both payloads alive across replacement.
+pub fn test_nested(n : u64) -> u64 {
+    let c = cell::alloc(Quad { x: Pair { big: Bg{n}, small: 1 }, y: Pair { big: Bg{n + 1}, small: 2 } });
+    let a = cell::get(c);
+    cell::set(c, Quad { x: Pair { big: Bg{n * 10}, small: 3 }, y: Pair { big: Bg{n * 20}, small: 4 } });
+    let b = cell::get(c);
+    a.x.big.0 + a.y.small + b.x.big.0 + b.y.big.0 + b.y.small
+}
+extern "C" trampoline "test_nested_ffi" = test_nested;

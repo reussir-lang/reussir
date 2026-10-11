@@ -4,41 +4,42 @@
 // RUN: %t.exe
 
 !variant = !reussir.record<variant "Choice" {i32, i64}>
-!ref = !reussir.ref<!variant field>
+!ref = !reussir.ref<!variant>
 module {
   // The tag is read by dispatch itself, even when both regions are pure.
   // CHECK-LABEL: func.func @main
   // CHECK: reussir.record.dispatch
-  // CHECK: reussir.ref.store
+  // CHECK: memref.store
   // CHECK: reussir.record.dispatch
   func.func @main() -> i32 {
     %size = arith.constant 32 : i64
     %slot = llvm.alloca %size x i8 {alignment = 8 : i64} : (i64) -> !llvm.ptr
     %ref = builtin.unrealized_conversion_cast %slot : !llvm.ptr to !ref
+    %view = reussir.ref.to_memref(%ref : !ref) : memref<!variant>
     %zero = arith.constant 0 : i32
     %one = arith.constant 1 : i32
     %wide = arith.constant 0 : i64
     %a = reussir.record.variant [0] (%zero : i32) : !variant
     %b = reussir.record.variant [1] (%wide : i64) : !variant
-    reussir.ref.store(%ref : !ref)(%a : !variant)
+    memref.store %a, %view[] : memref<!variant>
     %first = reussir.record.dispatch(%ref : !ref) -> i32 {
       [0] -> {
-      ^bb0(%v: !reussir.ref<i32 field>):
+      ^bb0(%v: !reussir.ref<i32>):
         reussir.scf.yield %zero : i32
       }
       [1] -> {
-      ^bb0(%v: !reussir.ref<i64 field>):
+      ^bb0(%v: !reussir.ref<i64>):
         reussir.scf.yield %one : i32
       }
     }
-    reussir.ref.store(%ref : !ref)(%b : !variant)
+    memref.store %b, %view[] : memref<!variant>
     %second = reussir.record.dispatch(%ref : !ref) -> i32 {
       [0] -> {
-      ^bb0(%v: !reussir.ref<i32 field>):
+      ^bb0(%v: !reussir.ref<i32>):
         reussir.scf.yield %zero : i32
       }
       [1] -> {
-      ^bb0(%v: !reussir.ref<i64 field>):
+      ^bb0(%v: !reussir.ref<i64>):
         reussir.scf.yield %one : i32
       }
     }
@@ -125,21 +126,21 @@ module {
     %one = arith.constant 1 : i32
     %first = reussir.record.dispatch(%ref : !ref) -> i32 {
       [0] -> {
-      ^bb0(%v: !reussir.ref<i32 field>):
+      ^bb0(%v: !reussir.ref<i32>):
         reussir.scf.yield %zero : i32
       }
       [1] -> {
-      ^bb0(%v: !reussir.ref<i64 field>):
+      ^bb0(%v: !reussir.ref<i64>):
         reussir.scf.yield %one : i32
       }
     }
     %second = reussir.record.dispatch(%ref : !ref) -> i32 {
       [0] -> {
-      ^bb0(%v: !reussir.ref<i32 field>):
+      ^bb0(%v: !reussir.ref<i32>):
         reussir.scf.yield %zero : i32
       }
       [1] -> {
-      ^bb0(%v: !reussir.ref<i64 field>):
+      ^bb0(%v: !reussir.ref<i64>):
         reussir.scf.yield %one : i32
       }
     }

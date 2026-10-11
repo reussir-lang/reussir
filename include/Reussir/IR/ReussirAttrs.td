@@ -92,6 +92,7 @@ def CAP_Value : I32EnumAttrCase<"value", 1>;
 def CAP_Shared : I32EnumAttrCase<"shared", 2>;
 def CAP_Flex : I32EnumAttrCase<"flex", 3>;
 def CAP_Rigid : I32EnumAttrCase<"rigid", 4>;
+// A mutable regional member reference; never a generic mutable memory slot.
 def CAP_Field : I32EnumAttrCase<"field", 5>;
 def CAP_Regional : I32EnumAttrCase<"regional", 6>;
 

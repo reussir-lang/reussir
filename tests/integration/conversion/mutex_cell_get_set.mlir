@@ -14,7 +14,7 @@ module {
   // STD-NOT: reussir.expect
   // STD-NOT: reussir.panic
   // STD: %[[PAYLOAD:.+]] = sync.mutex.get_payload %[[VIEW]]
-  // STD: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<i64>) : !reussir.ref<i64 field atomic>
+  // STD: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<i64>) : !reussir.ref<i64 atomic>
   // STD: reussir.ref.acquire(%[[SLOT]]
   // STD-NEXT: %[[VALUE:.+]] = reussir.ref.load(%[[SLOT]]
   // STD: sync.raw_mutex.unlock_fast %[[RAW]]
@@ -38,9 +38,9 @@ module {
   // STD-NOT: reussir.expect
   // STD-NOT: reussir.panic
   // STD: %[[PAYLOAD:.+]] = sync.mutex.get_payload %[[VIEW]]
-  // STD: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<i64>) : !reussir.ref<i64 field atomic>
+  // STD: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<i64>) : !reussir.ref<i64 atomic>
   // STD: reussir.ref.drop(%[[SLOT]]
-  // STD: reussir.ref.store(%[[SLOT]]
+  // STD: memref.store
   // STD: sync.raw_mutex.unlock_fast %[[RAW]]
   // STD-NOT: reussir.expect
   // STD-NOT: reussir.panic
@@ -62,7 +62,7 @@ module {
   // STD-NOT: reussir.expect
   // STD-NOT: reussir.panic
   // STD: %[[PAYLOAD:.+]] = sync.mutex.get_payload %[[VIEW]]
-  // STD: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<!reussir.rc<i64 atomic>>) : !reussir.ref<!reussir.rc<i64 atomic> field atomic>
+  // STD: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<!reussir.rc<i64 atomic>>) : !reussir.ref<!reussir.rc<i64 atomic> atomic>
   // STD: %[[VALUE:.+]] = reussir.ref.load(%[[SLOT]]
   // STD-NEXT: reussir.rc.inc(%[[VALUE]]
   // STD: sync.raw_mutex.unlock_fast %[[RAW]]
@@ -88,11 +88,11 @@ module {
   // MANAGE-NOT: reussir.expect
   // MANAGE-NOT: reussir.panic
   // MANAGE: %[[PAYLOAD:.+]] = sync.mutex.get_payload %[[VIEW]]
-  // MANAGE: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<!reussir.rc<i64 atomic>>) : !reussir.ref<!reussir.rc<i64 atomic> field atomic>
+  // MANAGE: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]] : memref<!reussir.rc<i64 atomic>>) : !reussir.ref<!reussir.rc<i64 atomic> atomic>
   // MANAGE: %[[OLD:.+]] = reussir.ref.load(%[[SLOT]]
   // MANAGE-NEXT: %{{.+}} = reussir.rc.dec(%[[OLD]] : !reussir.rc<i64 atomic>)
   // MANAGE-NOT: reussir.rc.inc
-  // MANAGE: reussir.ref.store(%[[SLOT]]{{.*}}) (%[[NEW]] : !reussir.rc<i64 atomic>)
+  // MANAGE: memref.store %[[NEW]]
   // MANAGE: sync.raw_mutex.unlock_fast %[[RAW]]
   // MANAGE-NOT: reussir.expect
   // MANAGE-NOT: reussir.panic
