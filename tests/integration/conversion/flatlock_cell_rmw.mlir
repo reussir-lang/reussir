@@ -19,7 +19,8 @@ module {
   // STD: %[[SLOT:.+]] = reussir.ref.from_memref
   // STD: %[[OLD:.+]] = reussir.ref.load(%[[SLOT]]
   // STD: %[[NEW:.+]] = arith.addi %[[OLD]]
-  // STD: reussir.ref.store(%[[SLOT]]{{.*}}) (%[[NEW]] : i64)
+  // STD: %[[STORE:.+]] = reussir.ref.to_memref(%[[SLOT]]
+  // STD: memref.store %[[NEW]], %[[STORE]][] : memref<i64>
   // STD: memref.store %[[OLD]], %[[OUT]][] : memref<i64>
   // STD: sync.combining_lock.release %[[VIEW]]
   // STD-NOT: reussir.cell.rmw
@@ -49,7 +50,7 @@ module {
   // STD: %[[OLD:.+]] = reussir.ref.load
   // STD-NOT: reussir.rc.inc
   // STD-NOT: reussir.ref.drop
-  // STD: reussir.ref.store
+  // STD: memref.store
   // STD: memref.store %[[OLD]]
   // STD: sync.combining_lock.release
   // LLVM-LABEL: define ptr @rmw_swap
@@ -69,7 +70,7 @@ module {
   // STD-LABEL: func.func @rmw_no_output
   // STD-NOT: memref.alloca
   // STD: sync.combining_lock.try_acquire
-  // STD: reussir.ref.store
+  // STD: memref.store
   // STD: sync.combining_lock.release
   // STD-NOT: reussir.cell.rmw
   // STD: return

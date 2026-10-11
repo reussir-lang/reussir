@@ -26,7 +26,7 @@ TEST_F(ReussirTest, NestedRecordScanner) {
         i64, 
         !reussir.record<compound "Nested" [value] {
           i8, 
-          !reussir.rc<i16>
+          !reussir.rc<i16 atomic>
         }>,
         f128,
         [field] i32
@@ -49,13 +49,13 @@ TEST_F(ReussirTest, VariantRecordScanner) {
         i64, 
         !reussir.record<compound "Nested" [value]  {
           i8, 
-          !reussir.rc<i16>
+          !reussir.rc<i16 atomic>
         }>,
         f128,
         !reussir.record<compound "Nested2" [value] {
-          !reussir.rc<i16>,
+          !reussir.rc<i16 atomic>,
           f128, 
-          !reussir.rc<i16>
+          !reussir.rc<i16 atomic>
         }>
       }>)",
       [](mlir::ModuleOp module, reussir::RecordType type) {

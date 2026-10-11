@@ -8,9 +8,9 @@
 module {
   // CHECK-LABEL: func.func @plain
   // CHECK: reussir.ref.project
-  // CHECK: func.call {{.*}}acquire_in_place
+  // CHECK: call {{.*}}acquire_in_place
   // CHECK: reussir.ref.load
-  // CHECK: func.call {{.*}}drop_in_place
+  // CHECK: call {{.*}}drop_in_place
   // CHECK: memref.store
   func.func @plain(%cell: !cell, %replacement: !value) -> !value {
     %old = reussir.cell.get(%cell : !cell) : !value
@@ -20,8 +20,8 @@ module {
   // CHECK-LABEL: func.func @locked
   // CHECK: sync.mutex
   // CHECK: reussir.ref.from_memref{{.*}} atomic>
-  // CHECK: func.call {{.*}}acquire_in_place_atomic
-  // CHECK: func.call {{.*}}drop_in_place_atomic
+  // CHECK: call {{.*}}acquire_in_place_atomic
+  // CHECK: call {{.*}}drop_in_place_atomic
   // CHECK: memref.store
   func.func @locked(%cell: !mutex, %replacement: !value) -> !value {
     %old = reussir.cell.get(%cell : !mutex) : !value
