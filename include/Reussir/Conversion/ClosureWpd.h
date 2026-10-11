@@ -22,10 +22,14 @@
 /// minimal scheme under which every vtable observable at a tested site carries
 /// the tested id, which is all `WholeProgramDevirt` requires.
 ///
-/// The id embeds the base-62 BLAKE3 digest of the return type's canonical
-/// textual form (the `Blake3Symbol.h` convention), so identical return types
-/// produce identical ids in any module. Ids are metadata strings, never
-/// symbols, so no mangling scheme applies.
+/// The id embeds the base-62 BLAKE3 digest of the return type's textual form
+/// with each named record's body written once
+/// (`printTypeWithRecordBodiesOnce`; the `Blake3Symbol.h` convention), so
+/// identical return types produce identical ids in any module, and a named
+/// record reached along many paths costs its body once (the canonical form
+/// repeats it once per path, exponentially many for nested records; unnamed
+/// composite types such as closure types are still repeated). Ids are
+/// metadata strings, never symbols, so no mangling scheme applies.
 ///
 /// See docs/design/closure-wpd.md for the full design.
 ///
@@ -65,7 +69,7 @@ inline std::string closureWpdTypeId(ClosureType closureType) {
   if (mlir::Type output = closureType.getOutputType()) {
     std::string text;
     llvm::raw_string_ostream os(text);
-    output.print(os);
+    printTypeWithRecordBodiesOnce(output, os);
     llvm::BLAKE3 hasher;
     hasher.update(text);
     id += base62Digits(blake3Words(hasher));

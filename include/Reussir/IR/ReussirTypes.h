@@ -55,6 +55,20 @@ mlir::Type getProjectedType(mlir::Type type, bool fieldCap, Capability refCap,
                             AtomicKind parentAtomic = AtomicKind::normal);
 mlir::Type memberStorageType(mlir::MLIRContext *context, mlir::Type rawMember,
                              bool isField, bool memBoxInternal = false);
+// Prints `type` as `type.print(os)` does, except that the body of each named
+// record is written only at its first occurrence: later occurrences print as
+// `<kind "name">`, the form `RecordType::print` already uses for a
+// self-reference. The text still determines the type (a named record's body
+// is fixed by its (name, kind), and it is written once). The full form repeats a
+// named record's body once per path that reaches it (exponential for a record
+// nested k levels deep through two members per level); here each named
+// record costs its body once. Only named records are shortened: an unnamed
+// composite type (a closure type, an anonymous record) is still written at
+// each occurrence, so a type that repeats such a type along many paths (for
+// instance `T(i+1) = (T(i)) -> T(i)`) is still exponential, as in the full
+// form. For type identities computed from text (closure WPD type ids); the
+// output is not meant to be parsed back.
+void printTypeWithRecordBodiesOnce(mlir::Type type, llvm::raw_ostream &os);
 class CellType;
 // The `sync` primitive type physically backing a lock-guarded cell:
 // `!sync.mutex<T>` for a mutex cell, `!sync.combining_lock<T>` for a flatlock

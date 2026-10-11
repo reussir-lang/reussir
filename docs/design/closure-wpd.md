@@ -16,11 +16,24 @@ type is therefore the one component of the static type that every value
 backed by a given vtable agrees on, and the strongest fact a call site can
 assert about the vtable it is about to dispatch through. That yields the
 whole id scheme: **one type id per closure return type**
-(`reussir.closure.wpd.<b62(blake3(print(c)))>`, built in `ClosureWpd.h`;
-identical return types produce identical ids in any module). Captures fold in
-for free — the frontend materializes a capture as a pre-applied leading
-parameter, so a capturing closure shares the id of every closure with the
-same visible return type.
+(`reussir.closure.wpd.<b62(blake3(text(c)))>`, built in `ClosureWpd.h`, where
+`text(c)` is `c` printed by `printTypeWithRecordBodiesOnce`: the usual form,
+except that each named record's body is written only at its first occurrence
+and later as `<kind "name">`, so a record nested along many paths costs its
+body once; identical return types produce identical ids in any module).
+Captures fold in for free — the frontend materializes a capture as a
+pre-applied leading parameter, so a capturing closure shares the id of every
+closure with the same visible return type.
+
+The traversal follows member order, and the reference includes both record
+kind and name, which together unique a named record within its context. Its
+body is still included once, so same-named records with different bodies in
+different contexts remain distinguishable. Ordinary MLIR printing is unchanged.
+Types without repeated named records retain their previous ids; repeated-record
+types get new ids, consistently at both vtables and call sites. These ids are
+compiler metadata, not a stable cross-version serialization format. Unnamed
+composite types are still printed at each occurrence; this does not address
+exponential sharing composed entirely of unnamed types.
 
 This maps directly onto LLVM's stock WPD contract:
 

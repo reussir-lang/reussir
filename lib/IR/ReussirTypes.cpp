@@ -17,6 +17,7 @@
 #include <bit>
 #include <cstdint>
 #include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/StringSwitch.h>
 #include <llvm/ADT/Twine.h>
@@ -25,6 +26,7 @@
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/LogicalResult.h>
 #include <llvm/Support/MathExtras.h>
+#include <llvm/Support/SaveAndRestore.h>
 #include <llvm/Support/TypeSize.h>
 #include <mlir/AsmParser/AsmParser.h>
 #include <mlir/Dialect/LLVMIR/LLVMTypes.h>
@@ -572,6 +574,18 @@ mlir::Type RecordType::parse(mlir::AsmParser &parser) {
   return result;
 }
 
+namespace {
+// While `printTypeWithRecordBodiesOnce` runs on this thread: the named records
+// whose body it has started to print.
+thread_local llvm::DenseSet<mlir::Type> *recordBodiesPrinted = nullptr;
+} // namespace
+
+void printTypeWithRecordBodiesOnce(mlir::Type type, llvm::raw_ostream &os) {
+  llvm::DenseSet<mlir::Type> printed;
+  llvm::SaveAndRestore guard(recordBodiesPrinted, &printed);
+  type.print(os);
+}
+
 void RecordType::print(::mlir::AsmPrinter &printer) const {
   llvm::FailureOr<mlir::AsmPrinter::CyclicPrintReset> cyclicPrintGuard;
   // Start printing the record type.
@@ -582,9 +596,13 @@ void RecordType::print(::mlir::AsmPrinter &printer) const {
   if (getName())
     printer << getName();
 
-  // Current type has already been printed: print as self reference.
+  // Current type has already been printed: print as self reference. Under
+  // `printTypeWithRecordBodiesOnce`, so is a named record whose body was
+  // printed earlier in the same text.
   cyclicPrintGuard = printer.tryStartCyclicPrint(*this);
-  if (failed(cyclicPrintGuard)) {
+  if (failed(cyclicPrintGuard) ||
+      (getName() && recordBodiesPrinted &&
+       !recordBodiesPrinted->insert(*this).second)) {
     printer << '>';
     return;
   }
