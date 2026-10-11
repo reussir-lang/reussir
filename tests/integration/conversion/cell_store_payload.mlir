@@ -1,6 +1,8 @@
-// RUN: %reussir-opt %s --reussir-lowering-basic-ops --reussir-convert-to-llvm --reconcile-unrealized-casts | %reussir-translate --mlir-to-llvmir | %FileCheck %s --implicit-check-not=llvm.invariant.start --implicit-check-not=alloca
+// RUN: %reussir-opt %s --reussir-convert-to-llvm | %reussir-translate --mlir-to-llvmir | %FileCheck %s --implicit-check-not=llvm.invariant.start --implicit-check-not=alloca
 // RUN: %reussir-opt %s --convert-to-llvm | %reussir-translate --mlir-to-llvmir | %FileCheck %s --implicit-check-not=llvm.invariant.start --implicit-check-not=alloca
 
+// Exercise both the target-layout-aware Reussir converter and the upstream
+// interface-driven converter. These stores require no runtime preparation.
 // The storage bridge supports all LLVM-storable payloads, not just nullable
 // pointers and strings. Representative pointer and aggregate payloads below
 // do not implement MemRefElementTypeInterface. The cell handle is already
