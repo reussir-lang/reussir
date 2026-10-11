@@ -978,6 +978,89 @@ mod tests {
         );
     }
 
+    /// Different small nodes stay distinct even when their hashes agree.
+    /// cstree's builder cache took a new node of up to three children to be
+    /// an earlier one when kind, text length and a 32-bit hash of the
+    /// children agreed, and each token text's interner key enters that hash.
+    /// Here the variable `vvvvvv` gets key 149353 and the literal `424242`
+    /// key 187378 (the comments only use up keys), and the `CtorArg` nodes
+    /// of `T::One{vvvvvv}` and `T::One{424242}` hash alike: the literal was
+    /// parsed as the variable, which is in scope in `second`, so `second`
+    /// returned its argument with no diagnostic. Assert the cache-key collision
+    /// too, so a hashing or interning change cannot silently weaken coverage.
+    #[test]
+    fn small_nodes_with_equal_hashes_stay_distinct() {
+        let mut lines = vec![
+            "enum T {".to_owned(),
+            "    One(u64)".to_owned(),
+            "}".to_owned(),
+            String::new(),
+            "fn get(t: T) -> u64 {".to_owned(),
+            "    match t {".to_owned(),
+            "        T::One(a) => a".to_owned(),
+            "    }".to_owned(),
+            "}".to_owned(),
+            String::new(),
+        ];
+        lines.extend((0..149_330).map(|i| format!("// a{i}")));
+        lines.push("fn first(vvvvvv: u64) -> u64 { get(T::One{vvvvvv}) }".to_owned());
+        lines.push(String::new());
+        lines.extend((0..38_022).map(|i| format!("// b{i}")));
+        lines.push("// second(n) returns 424242; with the bug it returns n.".to_owned());
+        lines.push("fn second(vvvvvv: u64) -> u64 { get(T::One{424242}) }".to_owned());
+        let source = lines.join("\n");
+        let parse = parse(&source);
+        assert!(parse.ok(), "errors: {:#?}", parse.errors);
+        // The source has one integer literal, in `second`.
+        let literal = parse
+            .root
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::IntLit)
+            .expect("the literal of `second` is in the tree");
+        assert_eq!(literal.text(), "424242");
+        assert_eq!(literal.parent().kind(), SyntaxKind::LiteralExpr);
+
+        // GreenNode::hash feeds the cache header (kind, length, child hash)
+        // to the hasher. Compare those inputs directly, without introducing
+        // another hash collision or duplicating cstree's hash algorithm.
+        #[derive(Default)]
+        struct HashInput(Vec<u8>);
+        impl std::hash::Hasher for HashInput {
+            fn finish(&self) -> u64 {
+                unreachable!("only the hash input is needed")
+            }
+            fn write(&mut self, bytes: &[u8]) {
+                self.0.extend_from_slice(bytes);
+            }
+        }
+        let args: Vec<_> = parse
+            .root
+            .descendants()
+            .filter(|n| n.kind() == SyntaxKind::CtorArg)
+            .collect();
+        assert_eq!(args.len(), 2);
+        assert!(args[0].text() == "vvvvvv" && args[1].text() == "424242");
+        let headers: Vec<_> = args
+            .iter()
+            .map(|arg| {
+                assert!(arg.green().children().len() <= 3, "must be cache eligible");
+                let mut input = HashInput::default();
+                std::hash::Hash::hash(arg.green(), &mut input);
+                input.0
+            })
+            .collect();
+        assert_eq!(
+            headers[0], headers[1],
+            "update the fixture: cache keys no longer collide"
+        );
+        // Kept short: a failing `assert_eq!` would print 2 MB of source.
+        assert!(
+            parse.root.text() == source.as_str(),
+            "the tree differs from the source"
+        );
+    }
+
     #[test]
     fn deep_recursion_is_survivable() {
         // Deeply nested parens would overflow the fixed test-thread stack
