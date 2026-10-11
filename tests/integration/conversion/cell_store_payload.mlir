@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-lowering-basic-ops | %reussir-translate --mlir-to-llvmir | %FileCheck %s --implicit-check-not=llvm.invariant.start --implicit-check-not=alloca
+// RUN: %reussir-opt %s --reussir-lowering-basic-ops --reussir-convert-to-llvm --reconcile-unrealized-casts | %reussir-translate --mlir-to-llvmir | %FileCheck %s --implicit-check-not=llvm.invariant.start --implicit-check-not=alloca
 // RUN: %reussir-opt %s --convert-to-llvm | %reussir-translate --mlir-to-llvmir | %FileCheck %s --implicit-check-not=llvm.invariant.start --implicit-check-not=alloca
 
 // The storage bridge supports all LLVM-storable payloads, not just nullable
