@@ -73,6 +73,9 @@ int main(int argc, char **argv) {
     return reussir::createReussirClosureBetaReductionPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return reussir::createReussirDefaultInlinerPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return reussir::createReussirRcCreateSinkPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
@@ -80,6 +83,9 @@ int main(int argc, char **argv) {
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return reussir::createReussirRcDispatchFusionPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return reussir::createReussirEarlyPartialMovePass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return reussir::createReussirPartialMovePass();
