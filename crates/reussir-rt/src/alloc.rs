@@ -76,7 +76,12 @@ mod backend {
     }
 
     #[inline]
-    pub unsafe fn realloc(ptr: *mut u8, new_align: usize, new_size: usize) -> *mut u8 {
+    pub unsafe fn realloc(
+        ptr: *mut u8,
+        _old_size: usize,
+        new_align: usize,
+        new_size: usize,
+    ) -> *mut u8 {
         // The result only has to satisfy the (new) alignment; mi_realloc accepts
         // blocks from either path and recovers the old size itself.
         unsafe {
@@ -125,28 +130,32 @@ mod backend {
 /// `_aligned_free`). Either way the unsized free needs only the pointer.
 #[cfg(any(not(feature = "mimalloc"), miri))]
 mod backend {
-    // Unix: `malloc` for <=16-aligned requests, `posix_memalign` for the
-    // (never-hit-at-runtime — Reussir boxes are <=8-aligned) over-aligned case.
+    // Unix: use malloc only when its size-dependent alignment suffices;
+    // otherwise request alignment explicitly without padding the size.
     // Both are released by the same `free`, so the pointer-only unsized free
     // stays unambiguous.
     #[cfg(not(windows))]
     mod imp {
         use core::ffi::c_void;
 
-        /// libc `malloc` guarantees `max_align_t` (16-byte) alignment; anything
-        /// larger goes through `posix_memalign`.
-        const MALLOC_ALIGN: usize = 16;
+        const MALLOC_ALIGN: usize = std::mem::align_of::<libc::max_align_t>();
+
+        #[inline]
+        const fn malloc_aligned(align: usize, size: usize) -> bool {
+            // Small malloc requests need only be aligned for types that fit
+            // in the requested size. Miri models this weaker guarantee.
+            align <= MALLOC_ALIGN && align <= size
+        }
 
         #[inline]
         pub unsafe fn alloc(align: usize, size: usize) -> *mut u8 {
-            // `malloc` already returns `max_align_t` (16-byte) aligned, so it
-            // covers every request up to 16. Larger alignments go through
-            // `posix_memalign`; those are always powers of two >= 32, hence
-            // valid multiples of `sizeof(void*)`.
-            if align <= MALLOC_ALIGN {
+            if malloc_aligned(align, size) {
                 unsafe { libc::malloc(size) as *mut u8 }
             } else {
                 let mut ptr: *mut c_void = core::ptr::null_mut();
+                // POSIX requires a power-of-two multiple of sizeof(void*),
+                // including when the requested alignment itself is smaller.
+                let align = align.max(std::mem::size_of::<*mut c_void>());
                 if unsafe { libc::posix_memalign(&mut ptr, align, size) } != 0 {
                     return core::ptr::null_mut();
                 }
@@ -160,20 +169,26 @@ mod backend {
         }
 
         #[inline]
-        pub unsafe fn realloc(ptr: *mut u8, new_align: usize, new_size: usize) -> *mut u8 {
-            // `realloc` preserves malloc's `max_align_t` alignment, which
-            // covers every Reussir box (all <=8-aligned; reussir never grows
-            // to a larger alignment) and every runtime-internal type. An
-            // over-16-aligned realloc CANNOT be honored here (plain `realloc`
-            // would mis-align it, and without the old size the block cannot be
-            // moved by hand) — assert the precondition instead of silently
-            // returning under-aligned memory.
-            debug_assert!(
-                new_align <= MALLOC_ALIGN,
-                "the libc fallback cannot realloc to alignment {new_align} > {MALLOC_ALIGN}"
-            );
-            let _ = new_align;
-            unsafe { libc::realloc(ptr as *mut c_void, new_size) as *mut u8 }
+        pub unsafe fn realloc(
+            ptr: *mut u8,
+            old_size: usize,
+            align: usize,
+            new_size: usize,
+        ) -> *mut u8 {
+            // Only pass malloc-origin blocks to realloc, and only when its
+            // result guarantees the requested alignment. A small shrink can
+            // lose alignment even when the original allocation had enough.
+            if malloc_aligned(align, old_size) && malloc_aligned(align, new_size) {
+                return unsafe { libc::realloc(ptr.cast(), new_size).cast() };
+            }
+            let new_ptr = unsafe { alloc(align, new_size) };
+            if !new_ptr.is_null() {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(ptr, new_ptr, old_size.min(new_size));
+                    free(ptr);
+                }
+            }
+            new_ptr
         }
     }
 
@@ -204,14 +219,9 @@ mod backend {
         }
 
         /// `_aligned_realloc` forbids changing a block's alignment, so alloc
-        /// and realloc must normalize `align` the SAME way. Clamping every
-        /// request up to 16 makes all of today's traffic uniform — the
-        /// language heap asks <= 8 (verifier-enforced power of two, possibly
-        /// < 8) and the global allocator exactly 16 — so a realloc can never
-        /// observe a different alignment than the allocation. A > 16 request
-        /// keeps its own alignment; that too is realloc-stable because a
-        /// box's alignment is a property of its type and does not change
-        /// across `token.realloc`.
+        /// and realloc must normalize `align` the same way. Rust's copying
+        /// realloc keeps its Layout's alignment, including requests above 16.
+        /// Language-heap resizing uses the separate free + alloc path.
         const MIN_ALIGN: usize = 16;
 
         #[inline]
@@ -230,7 +240,12 @@ mod backend {
         }
 
         #[inline]
-        pub unsafe fn realloc(ptr: *mut u8, new_align: usize, new_size: usize) -> *mut u8 {
+        pub unsafe fn realloc(
+            ptr: *mut u8,
+            _old_size: usize,
+            new_align: usize,
+            new_size: usize,
+        ) -> *mut u8 {
             unsafe {
                 _aligned_realloc(ptr as *mut c_void, new_size, norm_align(new_align)) as *mut u8
             }
@@ -254,8 +269,7 @@ mod backend {
     /// is always free + alloc. That is not just simple but *diagnostic*: the
     /// result is always a fresh block, so generated code that wrongly reads
     /// the donor's contents after a `token.realloc` fails loudly under the
-    /// sanitizers/miri instead of being masked by an in-place resize. It also
-    /// honors any alignment, unlike the copying realloc above.
+    /// sanitizers/miri instead of being masked by an in-place resize.
     #[inline]
     pub unsafe fn realloc_dead(ptr: *mut u8, new_align: usize, new_size: usize) -> *mut u8 {
         unsafe {
@@ -297,8 +311,9 @@ const GLOBAL_MAX_ALIGN: usize = 16;
 /// Only mimalloc v2 gets this optimization. v3's page layout does not give
 /// the same guarantee for non-power-of-two bins. The libc/Miri fallback gets
 /// the exact requested size so the extra bytes cannot hide an overrun.
-/// Free recovers the block from its pointer, and copying realloc recovers its
-/// usable size; callers continue to pass their original, unrounded Layout.
+/// Mimalloc free recovers the block from its pointer, and its copying realloc
+/// recovers the usable size. Callers keep their original, unrounded Layout;
+/// the libc copying path uses that Layout's size instead.
 /// Valid alloc/realloc sizes are at most `isize::MAX`, so rounding to 16 cannot
 /// overflow `usize`. An excessive rounded size is rejected by mimalloc.
 #[inline]
@@ -333,6 +348,7 @@ unsafe impl std::alloc::GlobalAlloc for ReussirGlobalAlloc {
         unsafe {
             backend::realloc(
                 ptr,
+                layout.size(),
                 layout.align().max(GLOBAL_MAX_ALIGN),
                 global_size(new_size),
             )
@@ -425,17 +441,15 @@ mod tests {
     /// platform fallback (Unix `malloc`/`posix_memalign`, Windows
     /// `_aligned_*`), and under miri the shimmed fallback — the same paths the
     /// language heap and `ReussirGlobalAlloc` use in each configuration.
-    /// Realloc alignments stop at 16: every caller's ceiling today (language
-    /// heap <= 8, `ReussirGlobalAlloc` exactly 16) and the libc fallback's
-    /// documented realloc limit.
+    /// Include over-aligned requests supported by the copying realloc path.
     #[test]
     fn backend_alloc_realloc_free() {
-        for align in [1usize, 8, 16] {
+        for align in [1usize, 8, 16, 64] {
             unsafe {
                 let p = super::backend::alloc(align, 24);
                 assert!(!p.is_null());
                 assert_eq!(p as usize % align.max(1), 0, "align {align}");
-                let q = super::backend::realloc(p, align, 40);
+                let q = super::backend::realloc(p, 24, align, 40);
                 assert!(!q.is_null());
                 assert_eq!(q as usize % align.max(1), 0, "align {align}");
                 // Touch the full grown extent (miri/ASan validate the block).
@@ -447,8 +461,7 @@ mod tests {
         }
     }
 
-    /// Over-aligned allocation (no realloc — see the fallback's realloc
-    /// limit): the aligned path on every backend.
+    /// Over-aligned allocation: the aligned path on every backend.
     #[test]
     fn backend_over_aligned_alloc() {
         unsafe {
@@ -495,28 +508,18 @@ mod tests {
     /// Preserve the requested contents and alignment through grow and shrink,
     /// freeing with the caller's unrounded layout. Also exercise alloc_zeroed.
     #[test]
-    fn global_alloc_is_16_aligned() {
+    fn global_alloc_preserves_alignment_and_contents() {
         use std::alloc::{GlobalAlloc, Layout};
         let a = super::ReussirGlobalAlloc;
+        // Keep the same boundary shapes under Miri, with fewer large buffers.
+        let limit = if cfg!(miri) { 17 } else { 144 };
         let large: &[usize] = if cfg!(miri) {
-            &[]
+            &[24, 65, 129]
         } else {
-            &[1 << 20, (16 << 20) + 8]
+            &[255, 1000, 4097, 9000, 70_000, 1 << 20, (16 << 20) + 8]
         };
-        let sizes = (1..=144)
-            .chain([255, 1000, 4097, 9000, 70_000])
-            .chain(large.iter().copied());
-        for size in sizes {
-            // The existing Unix libc fallback cannot realloc over-aligned blocks.
-            let extra: &[usize] = if cfg!(all(feature = "mimalloc", not(miri))) {
-                &[32, 64]
-            } else {
-                &[]
-            };
-            for align in [1usize, 2, 4, 8, 16]
-                .into_iter()
-                .chain(extra.iter().copied())
-            {
+        for size in (1..=limit).chain(large.iter().copied()) {
+            for align in [1usize, 2, 4, 8, 16, 32, 64] {
                 let layout = Layout::from_size_align(size, align).unwrap();
                 let grown = size + size / 2 + 1;
                 unsafe {
@@ -602,25 +605,15 @@ mod tests {
         }
     }
 
-    /// Under mimalloc v2, a global allocation is a whole block of the size
-    /// class of its size rounded up to 16: mimalloc did not allocate more and
-    /// move the pointer, which would mark the page and send every later free
-    /// in it to mimalloc's slow path. The blocks stay live, so that the
-    /// allocations come from fresh and partly used pages alike. (v3 starts
-    /// most pages of classes that are not powers of two 8 bytes off 16, so
-    /// it still moves blocks there.)
+    /// Check the selected backing bin, using the linked allocator's actual
+    /// geometry (24-byte bins are not enabled in every build). Usable size
+    /// alone does not prove that a pointer is a block start; check that below.
     #[cfg(all(feature = "mimalloc", not(feature = "mimalloc-v3"), not(miri)))]
     #[test]
-    fn global_alloc_takes_whole_blocks() {
+    fn global_alloc_uses_rounded_bins() {
         use libmimalloc_sys as ffi;
         use std::alloc::{GlobalAlloc, Layout};
         let a = super::ReussirGlobalAlloc;
-        // Keep the motivating bin geometry explicit if the dependency or its
-        // CFLAGS change: the language heap still has 8- and 24-byte bins.
-        unsafe {
-            assert_eq!(ffi::mi_good_size(8), 8);
-            assert_eq!(ffi::mi_good_size(24), 24);
-        }
         let mut live = Vec::new();
         for round in 0..4 {
             for size in (1..=1024usize).chain([4097, 9000, 40_000]) {
@@ -637,6 +630,67 @@ mod tests {
         for (p, layout) in live {
             unsafe { a.dealloc(p, layout) };
         }
+    }
+
+    /// Compare actual returned pointers with the block starts reported by
+    /// mimalloc, not usable sizes (an interior pointer can have the same size).
+    #[cfg(all(feature = "mimalloc", not(feature = "mimalloc-v3"), not(miri)))]
+    #[test]
+    fn global_alloc_returns_block_starts() {
+        use libmimalloc_sys as ffi;
+        use std::alloc::{GlobalAlloc, Layout};
+        use std::ffi::c_void;
+
+        struct Seen {
+            pointers: Vec<usize>,
+            found: Vec<bool>,
+        }
+        unsafe extern "C" fn visit(
+            _heap: *const ffi::mi_heap_t,
+            _area: *const ffi::mi_heap_area_t,
+            block: *mut c_void,
+            _size: usize,
+            arg: *mut c_void,
+        ) -> bool {
+            if !block.is_null() {
+                let seen = unsafe { &mut *arg.cast::<Seen>() };
+                if let Ok(index) = seen.pointers.binary_search(&(block as usize)) {
+                    seen.found[index] = true;
+                }
+            }
+            true
+        }
+
+        let a = super::ReussirGlobalAlloc;
+        let mut live = Vec::new();
+        for _ in 0..16 {
+            for size in 1..=64 {
+                let layout = Layout::from_size_align(size, 8).unwrap();
+                let p = unsafe { a.alloc(layout) };
+                assert!(!p.is_null());
+                live.push((p, layout));
+            }
+        }
+        let mut seen = Seen {
+            pointers: live.iter().map(|(p, _)| *p as usize).collect(),
+            found: vec![false; live.len()],
+        };
+        seen.pointers.sort_unstable();
+        // The test's live allocations belong to this thread's default heap.
+        let visited = unsafe {
+            ffi::mi_heap_visit_blocks(
+                ffi::mi_heap_get_default(),
+                true,
+                Some(visit),
+                (&mut seen as *mut Seen).cast(),
+            )
+        };
+        let missing = seen.found.iter().filter(|&&found| !found).count();
+        for (p, layout) in live {
+            unsafe { a.dealloc(p, layout) };
+        }
+        assert!(visited);
+        assert_eq!(missing, 0, "allocations not found at block starts");
     }
 
     /// The unsized entry points: free and realloc recover the block from the
