@@ -80,9 +80,9 @@ TEST(ClosureWpdTest, StableAcrossContextsAndDistinctReturnTypes) {
           !reussir.record<compound "Leaf" {i32}>,
           !reussir.record<variant "Leaf" {i32}>}>)",
       R"(!reussir.record<compound "Node" {
-          !reussir.rc<!reussir.record<compound "Node">>}>)",
+          !reussir.record<compound "Node">}>)",
       R"(!reussir.record<compound "Node" {
-          !reussir.rc<!reussir.record<compound "Node">>, i32}>)",
+          !reussir.record<compound "Node">, i32}>)",
   };
   std::set<std::string> ids;
   for (auto spelling : spellings) {
@@ -120,7 +120,7 @@ TEST(ClosureWpdTest, UnsharedAndRecursiveTypesKeepTheirText) {
            R"(!reussir.record<compound "Outer" {
                !reussir.record<compound "Inner" {i32}>}>)",
            R"(!reussir.record<compound "Cycle" {
-               !reussir.rc<!reussir.record<compound "Cycle">>}>)"}) {
+               !reussir.record<compound "Cycle">}>)"}) {
     auto type = mlir::parseType(spelling, &context);
     ASSERT_TRUE(type);
     EXPECT_EQ(printType(type, false), printType(type, true));
