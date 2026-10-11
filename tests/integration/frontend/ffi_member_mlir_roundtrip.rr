@@ -1,0 +1,41 @@
+// UNSUPPORTED: darwin
+// A record with an opaque `#[ffi]` member stores it as an explicit shared
+// rc link to the `ffi_object`. The type verifier used to accept only
+// atomic rc members, so the module rrc prints with `--emit mlir` did not
+// parse back ("rc members must be atomic shared links"): a build resumed
+// from the dump failed. The dump now round-trips.
+
+// RUN: %rrc %s --emit mlir -o %t.a.mlir
+// RUN: %rrc %t.a.mlir -x mlir --emit mlir -o %t.b.mlir
+// RUN: diff %t.a.mlir %t.b.mlir
+// RUN: %FileCheck %s --input-file=%t.a.mlir
+// RUN: %rrc %t.a.mlir -x mlir -o %t.o --relocation-mode pic
+
+extern "rust" [{
+    use reussir_rt::collections::vec::Vec as RVec;
+}];
+
+#[ffi(rust = "::reussir_rt::collections::vec::Vec")]
+pub struct Vec<T>;
+
+#[ffi(import)]
+pub fn new<T>() -> Vec<T> [{ RVec::new() }];
+
+#[ffi(import)]
+pub fn len<T>(v: Vec<T>) -> u64 [{ v.len() as u64 }];
+
+pub struct Holder(Vec<u64>, u64)
+
+pub enum Opt { Some(Vec<u64>), None }
+
+pub fn main() -> u64 {
+    let h = Holder { new<u64>(), 7 };
+    let o = Opt::Some { new<u64>() };
+    let n = match o { Opt::Some(v) => len(v), Opt::None => 0 };
+    len(h.0) + h.1 + n
+}
+
+extern "C" trampoline "reussir_main" = main;
+
+// CHECK: !reussir.record<compound "_RC6Holder" {!reussir.rc<!reussir.ffi_object<"::reussir_rt::collections::vec::Vec<u64>", @{{[A-Za-z0-9_]+}}>>, i64}>
+// CHECK: [value] {!reussir.rc<!reussir.ffi_object<"::reussir_rt::collections::vec::Vec<u64>", @{{[A-Za-z0-9_]+}}>>}>

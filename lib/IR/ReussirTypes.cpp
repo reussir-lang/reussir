@@ -376,15 +376,24 @@ RecordType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
       // derived — the member type carries a different refcount discipline
       // than its nominal capability implies (an `Arc` member, or the
       // same-group link of an arc'd recursive record, thread-safety design
-      // §3.3) — so it is spelled explicitly as the member type.
-      if (rcMember.getCapability() != Capability::shared ||
-          rcMember.getAtomicKind() != AtomicKind::atomic) {
-        emitError() << "rc members must be atomic shared links; a normal "
-                       "link is derived from the member's capability instead";
+      // §3.3) — so it is spelled explicitly as the member type. Neither can
+      // a link to an opaque foreign object: an `ffi_object` has no
+      // capability and no inline layout, so the frontend spells its member
+      // as an explicit shared rc link (stored as a pointer, like any rc
+      // member).
+      bool ffiObjectLink =
+          rcMember.getCapability() == Capability::shared &&
+          llvm::isa<FFIObjectType>(rcMember.getElementType());
+      if (!ffiObjectLink &&
+          (rcMember.getCapability() != Capability::shared ||
+           rcMember.getAtomicKind() != AtomicKind::atomic)) {
+        emitError() << "rc members must be atomic shared links or shared "
+                       "links to an ffi_object; a normal link is derived "
+                       "from the member's capability instead";
         return mlir::failure();
       }
       if (isField) {
-        emitError() << "an atomic rc member cannot be a [field] link";
+        emitError() << "an rc member cannot be a [field] link";
         return mlir::failure();
       }
     } else if (llvm::isa<RefType>(member)) {
