@@ -371,16 +371,12 @@ RecordType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     }
 
     if (auto rcMember = llvm::dyn_cast<RcType>(member)) {
-      // A member's *normal* shared link is derived from its capability, so a
-      // plain rc member stays banned. An **atomic** shared link cannot be
-      // derived — the member type carries a different refcount discipline
-      // than its nominal capability implies (an `Arc` member, or the
-      // same-group link of an arc'd recursive record, thread-safety design
-      // §3.3) — so it is spelled explicitly as the member type. Neither can
-      // a link to an opaque foreign object: an `ffi_object` has no
-      // capability and no inline layout, so the frontend spells its member
-      // as an explicit shared rc link (stored as a pointer, like any rc
-      // member).
+      // A normal shared link is derived from the member's capability, so a
+      // plain rc member stays banned. An atomic shared link must be explicit:
+      // the member can use an atomic refcount even when its containing record
+      // uses a normal refcount. An opaque foreign object also needs an explicit
+      // link: an `ffi_object` has no capability or inline layout, so its shared
+      // rc link is spelled in the member type and stored as a pointer.
       bool ffiObjectLink =
           rcMember.getCapability() == Capability::shared &&
           llvm::isa<FFIObjectType>(rcMember.getElementType());
