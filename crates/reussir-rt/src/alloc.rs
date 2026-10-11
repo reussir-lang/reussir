@@ -273,25 +273,56 @@ mod backend {
 /// memory is released through `std::alloc::dealloc` — so both sides must be one
 /// allocator.
 ///
-/// It uses the same allocator but *not* the language heap's 8-byte-natural
-/// convention: the process global allocator must honor `max_align_t`
-/// (16-byte) alignment even for small requests, because platform code that
-/// shares this heap assumes it (notably macOS system frameworks and parts of
-/// Rust's std). So every allocation is forced to at least 16-byte alignment
-/// via the backend's aligned path. `__reussir_*` keep the 8-byte convention
-/// (reussir boxes request their own alignment and never escape to that code),
-/// preserving the 8-granular per-constructor win; they also call the backend
-/// *directly*, so the unsized `token<?>` ABI needs no `Layout`.
+/// Reussir keeps Rust-side allocations at least 16-byte aligned, even when
+/// their `Layout` asks for less. This is a project policy, not a requirement
+/// of Rust's `GlobalAlloc` contract. Size classes and alignment are distinct:
+/// an 8-byte block can be 16-aligned, but not every block in an 8-byte bin is.
+/// The language heap (`__reussir_*`) still uses the backend directly, keeping
+/// its 8-byte-granular small bins and pointer-only free/realloc ABI.
 pub struct ReussirGlobalAlloc;
 
-/// `max_align_t` — the alignment a C/Rust global allocator is expected to
-/// provide for any allocation.
+/// Reussir's minimum alignment for Rust-side allocations, independent of
+/// the language heap's minimum size class.
 const GLOBAL_MAX_ALIGN: usize = 16;
+
+/// Choose a backing size without changing the caller's `Layout` or alignment.
+/// With mimalloc v2 and `MI_MAX_ALIGN_SIZE=8`, a 24-byte request aligned to 16
+/// may need an interior pointer into a larger block. That marks the whole
+/// page for the slower aligned-free path, including its language-heap cells.
+/// Rounding to 32 instead selects a bin whose blocks are already 16-aligned
+/// (`mi_malloc_is_naturally_aligned`, `_mi_segment_page_start_from_slice`).
+/// This targets the 16-byte policy; higher requested alignments still use
+/// the backend's aligned allocation path and can still need interior pointers.
+///
+/// Only mimalloc v2 gets this optimization. v3's page layout does not give
+/// the same guarantee for non-power-of-two bins. The libc/Miri fallback gets
+/// the exact requested size so the extra bytes cannot hide an overrun.
+/// Free recovers the block from its pointer, and copying realloc recovers its
+/// usable size; callers continue to pass their original, unrounded Layout.
+/// Valid alloc/realloc sizes are at most `isize::MAX`, so rounding to 16 cannot
+/// overflow `usize`. An excessive rounded size is rejected by mimalloc.
+#[inline]
+const fn global_size(size: usize) -> usize {
+    if cfg!(all(
+        feature = "mimalloc",
+        not(feature = "mimalloc-v3"),
+        not(miri)
+    )) {
+        size.next_multiple_of(GLOBAL_MAX_ALIGN)
+    } else {
+        size
+    }
+}
 
 unsafe impl std::alloc::GlobalAlloc for ReussirGlobalAlloc {
     #[inline]
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-        unsafe { backend::alloc(layout.align().max(GLOBAL_MAX_ALIGN), layout.size()) }
+        unsafe {
+            backend::alloc(
+                layout.align().max(GLOBAL_MAX_ALIGN),
+                global_size(layout.size()),
+            )
+        }
     }
     #[inline]
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: std::alloc::Layout) {
@@ -299,7 +330,13 @@ unsafe impl std::alloc::GlobalAlloc for ReussirGlobalAlloc {
     }
     #[inline]
     unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
-        unsafe { backend::realloc(ptr, layout.align().max(GLOBAL_MAX_ALIGN), new_size) }
+        unsafe {
+            backend::realloc(
+                ptr,
+                layout.align().max(GLOBAL_MAX_ALIGN),
+                global_size(new_size),
+            )
+        }
     }
 }
 
@@ -452,6 +489,153 @@ mod tests {
             assert_eq!(s as usize % 8, 0);
             s.cast::<u64>().write(42);
             super::backend::free(s);
+        }
+    }
+
+    /// Preserve the requested contents and alignment through grow and shrink,
+    /// freeing with the caller's unrounded layout. Also exercise alloc_zeroed.
+    #[test]
+    fn global_alloc_is_16_aligned() {
+        use std::alloc::{GlobalAlloc, Layout};
+        let a = super::ReussirGlobalAlloc;
+        let large: &[usize] = if cfg!(miri) {
+            &[]
+        } else {
+            &[1 << 20, (16 << 20) + 8]
+        };
+        let sizes = (1..=144)
+            .chain([255, 1000, 4097, 9000, 70_000])
+            .chain(large.iter().copied());
+        for size in sizes {
+            // The existing Unix libc fallback cannot realloc over-aligned blocks.
+            let extra: &[usize] = if cfg!(all(feature = "mimalloc", not(miri))) {
+                &[32, 64]
+            } else {
+                &[]
+            };
+            for align in [1usize, 2, 4, 8, 16]
+                .into_iter()
+                .chain(extra.iter().copied())
+            {
+                let layout = Layout::from_size_align(size, align).unwrap();
+                let grown = size + size / 2 + 1;
+                unsafe {
+                    let p = a.alloc(layout);
+                    assert!(!p.is_null());
+                    assert_eq!(p as usize % align.max(16), 0, "alloc {size} align {align}");
+                    p.write_bytes(0xA5, size);
+                    let z = a.alloc_zeroed(layout);
+                    assert!(!z.is_null());
+                    assert_eq!(
+                        z as usize % align.max(16),
+                        0,
+                        "alloc_zeroed {size} align {align}"
+                    );
+                    assert!(std::slice::from_raw_parts(z, size).iter().all(|&b| b == 0));
+                    let q = a.realloc(p, layout, grown);
+                    assert!(!q.is_null());
+                    assert_eq!(
+                        q as usize % align.max(16),
+                        0,
+                        "realloc {size} -> {grown} align {align}"
+                    );
+                    assert!(
+                        std::slice::from_raw_parts(q, size)
+                            .iter()
+                            .all(|&b| b == 0xA5)
+                    );
+                    let r = a.realloc(q, Layout::from_size_align(grown, align).unwrap(), size);
+                    assert!(!r.is_null());
+                    assert_eq!(
+                        r as usize % align.max(16),
+                        0,
+                        "realloc {grown} -> {size} align {align}"
+                    );
+                    assert!(
+                        std::slice::from_raw_parts(r, size)
+                            .iter()
+                            .all(|&b| b == 0xA5)
+                    );
+                    a.dealloc(r, layout);
+                    a.dealloc(z, layout);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn global_size_backend_policy() {
+        // Include the largest legal alignment-1 request: rounding may exceed
+        // isize::MAX, but must not wrap usize before mimalloc rejects it.
+        let sizes = [1, 8, 16, 24, 40, 56, 64, 65, isize::MAX as usize];
+        let expected = if cfg!(all(
+            feature = "mimalloc",
+            not(feature = "mimalloc-v3"),
+            not(miri)
+        )) {
+            [16, 16, 16, 32, 48, 64, 64, 80, (isize::MAX as usize) + 1]
+        } else {
+            sizes
+        };
+        assert_eq!(sizes.map(super::global_size), expected);
+    }
+
+    /// A rejected growth must leave the old pointer and contents owned by us.
+    #[cfg(all(feature = "mimalloc", not(miri)))]
+    #[test]
+    fn global_realloc_failure_preserves_allocation() {
+        use std::alloc::{GlobalAlloc, Layout};
+        let a = super::ReussirGlobalAlloc;
+        let layout = Layout::from_size_align(24, 1).unwrap();
+        unsafe {
+            let p = a.alloc(layout);
+            assert!(!p.is_null());
+            p.write_bytes(0xA5, layout.size());
+            // Valid for alignment 1, but exceeds mimalloc's allocation limit.
+            assert!(a.realloc(p, layout, isize::MAX as usize).is_null());
+            assert!(
+                std::slice::from_raw_parts(p, layout.size())
+                    .iter()
+                    .all(|&b| b == 0xA5)
+            );
+            a.dealloc(p, layout);
+        }
+    }
+
+    /// Under mimalloc v2, a global allocation is a whole block of the size
+    /// class of its size rounded up to 16: mimalloc did not allocate more and
+    /// move the pointer, which would mark the page and send every later free
+    /// in it to mimalloc's slow path. The blocks stay live, so that the
+    /// allocations come from fresh and partly used pages alike. (v3 starts
+    /// most pages of classes that are not powers of two 8 bytes off 16, so
+    /// it still moves blocks there.)
+    #[cfg(all(feature = "mimalloc", not(feature = "mimalloc-v3"), not(miri)))]
+    #[test]
+    fn global_alloc_takes_whole_blocks() {
+        use libmimalloc_sys as ffi;
+        use std::alloc::{GlobalAlloc, Layout};
+        let a = super::ReussirGlobalAlloc;
+        // Keep the motivating bin geometry explicit if the dependency or its
+        // CFLAGS change: the language heap still has 8- and 24-byte bins.
+        unsafe {
+            assert_eq!(ffi::mi_good_size(8), 8);
+            assert_eq!(ffi::mi_good_size(24), 24);
+        }
+        let mut live = Vec::new();
+        for round in 0..4 {
+            for size in (1..=1024usize).chain([4097, 9000, 40_000]) {
+                let layout = Layout::from_size_align(size, 1 << (round % 4)).unwrap();
+                unsafe {
+                    let p = a.alloc(layout);
+                    assert!(!p.is_null());
+                    let want = ffi::mi_good_size(size.next_multiple_of(16));
+                    assert_eq!(ffi::mi_usable_size(p.cast()), want, "size {size}");
+                    live.push((p, layout));
+                }
+            }
+        }
+        for (p, layout) in live {
+            unsafe { a.dealloc(p, layout) };
         }
     }
 
