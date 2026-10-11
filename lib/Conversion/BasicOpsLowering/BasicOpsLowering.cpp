@@ -787,7 +787,7 @@ struct ReussirRefStoreConversionPattern
 };
 
 //===----------------------------------------------------------------------===//
-// Atomic cell lowering
+// Cell payload and atomic operation lowering
 //===----------------------------------------------------------------------===//
 // Cell atomicity describes the payload slot itself, while
 // RcType::getAtomicKind() controls the RC box's refcount operations. An
@@ -795,9 +795,9 @@ struct ReussirRefStoreConversionPattern
 // so the two are atomic together; the patterns below nevertheless key only
 // on the cell kind.
 static mlir::Value
-atomicCellSlotPtr(RcType rcType, mlir::Value convertedCell, mlir::Location loc,
-                  const mlir::TypeConverter *typeConverter,
-                  mlir::ConversionPatternRewriter &rewriter) {
+cellSlotPtr(RcType rcType, mlir::Value convertedCell, mlir::Location loc,
+            const mlir::TypeConverter *typeConverter,
+            mlir::ConversionPatternRewriter &rewriter) {
   auto ptrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
   RcBoxType boxType = rcType.getInnerBoxType();
   mlir::Value payload = mlir::LLVM::GEPOp::create(
@@ -810,6 +810,20 @@ atomicCellSlotPtr(RcType rcType, mlir::Value convertedCell, mlir::Location loc,
       rewriter, loc, ptrType, typeConverter->convertType(cellType), payload,
       llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
 }
+
+struct ReussirCellStorePayloadConversionPattern
+    : public mlir::OpConversionPattern<ReussirCellStorePayloadOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirCellStorePayloadOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto slot = cellSlotPtr(op.getCell().getType(), adaptor.getCell(),
+                            op.getLoc(), getTypeConverter(), rewriter);
+    rewriter.replaceOpWithNewOp<mlir::LLVM::StoreOp>(op, adaptor.getValue(), slot);
+    return mlir::success();
+  }
+};
 
 static unsigned
 atomicElementAlignment(mlir::Type elementType, mlir::Operation *anchor,
@@ -832,8 +846,8 @@ struct ReussirAtomicCellGetConversionPattern
 
     auto *converter =
         static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter());
-    mlir::Value slot = atomicCellSlotPtr(rcType, adaptor.getCell(), op.getLoc(),
-                                         converter, rewriter);
+    mlir::Value slot =
+        cellSlotPtr(rcType, adaptor.getCell(), op.getLoc(), converter, rewriter);
     mlir::Type elementType = converter->convertType(cellType.getElementType());
     mlir::Value loaded = mlir::LLVM::LoadOp::create(
         rewriter, op.getLoc(), elementType, slot,
@@ -860,8 +874,8 @@ struct ReussirAtomicCellSetConversionPattern
 
     auto *converter =
         static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter());
-    mlir::Value slot = atomicCellSlotPtr(rcType, adaptor.getCell(), op.getLoc(),
-                                         converter, rewriter);
+    mlir::Value slot =
+        cellSlotPtr(rcType, adaptor.getCell(), op.getLoc(), converter, rewriter);
     mlir::LLVM::StoreOp::create(
         rewriter, op.getLoc(), adaptor.getValue(), slot,
         atomicElementAlignment(cellType.getElementType(), op, *converter),
@@ -937,8 +951,8 @@ struct ReussirAtomicCellRmwConversionPattern
 
     auto *converter =
         static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter());
-    mlir::Value slot = atomicCellSlotPtr(rcType, adaptor.getCell(), op.getLoc(),
-                                         converter, rewriter);
+    mlir::Value slot =
+        cellSlotPtr(rcType, adaptor.getCell(), op.getLoc(), converter, rewriter);
     mlir::Value old = mlir::LLVM::AtomicRMWOp::create(
         rewriter, op.getLoc(), *llvmKind, slot, adaptor.getValue(),
         op.getOrdering().value_or(mlir::LLVM::AtomicOrdering::acq_rel),
@@ -976,8 +990,8 @@ struct ReussirCellCmpXchgConversionPattern
       desired =
           mlir::LLVM::BitcastOp::create(rewriter, loc, compareType, desired);
     }
-    mlir::Value slot = atomicCellSlotPtr(op.getCell().getType(),
-                                         adaptor.getCell(), loc, converter, rewriter);
+    mlir::Value slot = cellSlotPtr(op.getCell().getType(), adaptor.getCell(), loc,
+                                   converter, rewriter);
     auto cmpxchg = mlir::LLVM::AtomicCmpXchgOp::create(
         rewriter, loc, slot, expected, desired,
         op.getOrdering().value_or(mlir::LLVM::AtomicOrdering::acq_rel),
@@ -3950,7 +3964,8 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirRecordCoerceOp, ReussirRegionVTableOp, ReussirRcFreezeOp,
         ReussirRegionCleanupOp, ReussirRegionCreateOp, ReussirRcReinterpretOp,
         ReussirCellCreateOp, ReussirCellGetOp, ReussirCellSetOp,
-        ReussirCellRmwOp, ReussirCellCmpXchgOp, ReussirCellRdlockOp, ReussirCellYieldOp,
+        ReussirCellRmwOp, ReussirCellCmpXchgOp, ReussirCellStorePayloadOp,
+        ReussirCellRdlockOp, ReussirCellYieldOp,
         ReussirClosureApplyOp, ReussirClosureCloneOp, ReussirClosureEvalOp,
         ReussirClosureInspectPayloadOp, ReussirClosureCursorOp,
         ReussirClosureInstantiateOp, ReussirClosureVtableOp,
@@ -4080,6 +4095,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirTokenReallocConversionPattern, ReussirRefLoadConversionPattern,
       ReussirRefToMemrefConversionPattern,
       ReussirRefFromMemrefConversionPattern, ReussirRefStoreConversionPattern,
+      ReussirCellStorePayloadConversionPattern,
       ReussirAtomicCellGetConversionPattern,
       ReussirAtomicCellSetConversionPattern,
       ReussirAtomicCellRmwConversionPattern, ReussirCellCmpXchgConversionPattern,

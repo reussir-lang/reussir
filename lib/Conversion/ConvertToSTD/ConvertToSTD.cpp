@@ -1503,6 +1503,7 @@ struct ReussirStrStartWithOpRewritePattern
 struct CellAccess {
   CellType cellType;
   mlir::Value cellRef;
+  mlir::Value cell;
   reussir::AtomicKind atomicKind;
 };
 
@@ -1524,7 +1525,7 @@ static CellAccess borrowCell(mlir::Value cell, mlir::Location loc,
                    rcType.getAtomicKind());
   mlir::Value cellRef =
       ReussirRcBorrowOp::create(rewriter, loc, cellRefType, cell);
-  return {cellType, cellRef, rcType.getAtomicKind()};
+  return {cellType, cellRef, cell, rcType.getAtomicKind()};
 }
 
 static RefType getCellSlotRefType(const CellAccess &access) {
@@ -1613,22 +1614,27 @@ static mlir::Value acquireThenLoadCellSlot(mlir::Value slotRef,
 }
 
 // Cell mutability is independent of regional field capability. After the
-// Cell operation has established access (including a critical section for
-// lock-guarded kinds), write through its rank-zero memory view.
-static void storeCellSlot(mlir::Value slotRef, mlir::Value value,
-                          mlir::Location loc,
+// Cell operation has established access, use its memory view where supported.
+// Other plain/exclusive payloads retain their existing LLVM store semantics.
+static void storeCellSlot(const CellAccess &access, mlir::Value slotRef,
+                          mlir::Value value, mlir::Location loc,
                           mlir::PatternRewriter &rewriter) {
   auto elementType = llvm::cast<RefType>(slotRef.getType()).getElementType();
+  if (!mlir::BaseMemRefType::isValidElementType(elementType)) {
+    ReussirCellStorePayloadOp::create(rewriter, loc, value, access.cell);
+    return;
+  }
   auto view = ReussirRefToMemrefOp::create(
       rewriter, loc, mlir::MemRefType::get({}, elementType), slotRef);
   mlir::memref::StoreOp::create(rewriter, loc, value, view, mlir::ValueRange{});
 }
 
-static void dropThenStoreCellSlot(mlir::Value slotRef, mlir::Value replacement,
+static void dropThenStoreCellSlot(const CellAccess &access, mlir::Value slotRef,
+                                  mlir::Value replacement,
                                   mlir::Location loc,
                                   mlir::PatternRewriter &rewriter) {
   ReussirRefDropOp::create(rewriter, loc, slotRef);
-  storeCellSlot(slotRef, replacement, loc, rewriter);
+  storeCellSlot(access, slotRef, replacement, loc, rewriter);
 }
 
 // The trailing i1 in-use flag of an exclusive cell, addressed as slot [1].
@@ -1648,7 +1654,7 @@ static void storeCellFlag(const CellAccess &access, bool inUse,
   mlir::Value flagRef = projectCellFlag(access, loc, rewriter);
   mlir::Value flag = mlir::arith::ConstantOp::create(
       rewriter, loc, rewriter.getIntegerAttr(rewriter.getI1Type(), inUse));
-  storeCellSlot(flagRef, flag, loc, rewriter);
+  storeCellSlot(access, flagRef, flag, loc, rewriter);
 }
 
 // An exclusive-cell payload access lowers to a two-armed `scf.if` over the
@@ -1720,7 +1726,7 @@ public:
       return mlir::success();
     }
     mlir::Value slotRef = projectCellSlot(access, op.getLoc(), rewriter);
-    storeCellSlot(slotRef, op.getValue(), op.getLoc(), rewriter);
+    storeCellSlot(access, slotRef, op.getValue(), op.getLoc(), rewriter);
     // A fresh exclusive cell starts out not in use.
     if (cellType.getExclusive())
       storeCellFlag(access, /*inUse=*/false, op.getLoc(), rewriter);
@@ -1847,7 +1853,7 @@ public:
         rewriter.setInsertionPointToStart(body);
         mlir::Value slotRef =
             getLockPayloadRef(body, access, op.getLoc(), rewriter);
-        dropThenStoreCellSlot(slotRef, op.getValue(), op.getLoc(), rewriter);
+        dropThenStoreCellSlot(access, slotRef, op.getValue(), op.getLoc(), rewriter);
         mlir::sync::SyncYieldOp::create(rewriter, op.getLoc());
       }
       rewriter.eraseOp(op);
@@ -1863,7 +1869,7 @@ public:
         rewriter.setInsertionPointToStart(body);
         mlir::Value slotRef =
             getLockPayloadRef(body, access, op.getLoc(), rewriter);
-        dropThenStoreCellSlot(slotRef, op.getValue(), op.getLoc(), rewriter);
+        dropThenStoreCellSlot(access, slotRef, op.getValue(), op.getLoc(), rewriter);
         mlir::sync::SyncYieldOp::create(rewriter, op.getLoc());
       }
       rewriter.eraseOp(op);
@@ -1881,7 +1887,7 @@ public:
         rewriter.setInsertionPointToStart(body);
         mlir::Value slotRef =
             getLockPayloadRef(body, access, op.getLoc(), rewriter);
-        dropThenStoreCellSlot(slotRef, op.getValue(), op.getLoc(), rewriter);
+        dropThenStoreCellSlot(access, slotRef, op.getValue(), op.getLoc(), rewriter);
         mlir::sync::SyncYieldOp::create(rewriter, op.getLoc());
       }
       rewriter.eraseOp(op);
@@ -1889,7 +1895,7 @@ public:
     }
     auto emitDropAndStore = [&]() {
       mlir::Value slotRef = projectCellSlot(access, op.getLoc(), rewriter);
-      dropThenStoreCellSlot(slotRef, op.getValue(), op.getLoc(), rewriter);
+      dropThenStoreCellSlot(access, slotRef, op.getValue(), op.getLoc(), rewriter);
     };
     if (access.cellType.getExclusive()) {
       auto guarded = createGuardedAccess(
@@ -1939,7 +1945,7 @@ public:
         rewriter.inlineBlockBefore(&body, criticalBody, criticalBody->end(),
                                    mlir::ValueRange{oldValue});
         rewriter.setInsertionPoint(yield);
-        storeCellSlot(slotRef, yield.getNewValue(), yield.getLoc(), rewriter);
+        storeCellSlot(access, slotRef, yield.getNewValue(), yield.getLoc(), rewriter);
         mlir::sync::SyncYieldOp::create(rewriter, yield.getLoc(),
                                         yield.getOutput()
                                             ? mlir::ValueRange{yield.getOutput()}
@@ -1978,7 +1984,7 @@ public:
         rewriter.inlineBlockBefore(&body, criticalBody, criticalBody->end(),
                                    mlir::ValueRange{oldValue});
         rewriter.setInsertionPoint(yield);
-        storeCellSlot(slotRef, yield.getNewValue(), yield.getLoc(), rewriter);
+        storeCellSlot(access, slotRef, yield.getNewValue(), yield.getLoc(), rewriter);
         if (yield.getOutput())
           mlir::memref::StoreOp::create(rewriter, yield.getLoc(),
                                         yield.getOutput(), out,
@@ -2017,7 +2023,7 @@ public:
         rewriter.inlineBlockBefore(&body, criticalBody, criticalBody->end(),
                                    mlir::ValueRange{oldValue});
         rewriter.setInsertionPoint(yield);
-        storeCellSlot(slotRef, yield.getNewValue(), yield.getLoc(), rewriter);
+        storeCellSlot(access, slotRef, yield.getNewValue(), yield.getLoc(), rewriter);
         mlir::sync::SyncYieldOp::create(rewriter, yield.getLoc(),
                                         yield.getOutput()
                                             ? mlir::ValueRange{yield.getOutput()}
@@ -2049,7 +2055,7 @@ public:
                                guarded.elseBlock()->end(),
                                mlir::ValueRange{oldValue});
     rewriter.setInsertionPoint(yield);
-    storeCellSlot(slotRef, yield.getNewValue(), yield.getLoc(), rewriter);
+    storeCellSlot(access, slotRef, yield.getNewValue(), yield.getLoc(), rewriter);
     storeCellFlag(access, /*inUse=*/false, yield.getLoc(), rewriter);
     mlir::scf::YieldOp::create(rewriter, yield.getLoc(),
                                yield.getOutput()

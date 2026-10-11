@@ -1622,6 +1622,29 @@ def ReussirCellInUseOp : ReussirCellOp<"in_use", []> {
   let hasVerifier = 1;
 }
 
+def ReussirCellStorePayloadOp : ReussirCellOp<"store_payload", []> {
+  let summary = "Store a plain or exclusive Cell payload after establishing access";
+  let description = [{
+    This low-level lowering operation stores a value into a plain or exclusive
+    Cell through its shared RC handle. It supports payloads that
+    are not memref elements, without granting mutable access to arbitrary
+    ordinary references or introducing regional field capability.
+
+    The caller must establish access first, including the in-use check for an
+    exclusive Cell, and handle the old payload's ownership. This operation
+    neither checks the flag nor acquires or drops a value. It lowers directly
+    to a store and introduces no immutable temporary. Atomic and lock-guarded
+    Cells are rejected; their dedicated accesses remain required.
+  }];
+  let arguments = (ins Arg<AnyType, "payload to store">:$value,
+      Arg<ReussirRcType, "shared RC handle to a plain or exclusive Cell",
+          [MemWrite]>:$cell);
+  let assemblyFormat = [{
+    `(` $value `:` type($value) `,` $cell `:` qualified(type($cell)) `)` attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 def ReussirCellYieldOp
     : ReussirCellOp<"yield", [Pure, ReturnLike, Terminator,
                               ParentOneOf<["::reussir::ReussirCellRmwOp"]>]> {

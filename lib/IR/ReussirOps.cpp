@@ -1793,6 +1793,17 @@ mlir::LogicalResult ReussirArrayWithUniqueViewOp::verify() {
 //===----------------------------------------------------------------------===//
 // Reussir Cell Operations
 //===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirCellStorePayloadOp::verify() {
+  auto cellType = verifySharedCellOperand(getOperation(), getCell().getType());
+  if (mlir::failed(cellType))
+    return mlir::failure();
+  if ((*cellType).getKind() != CellKind::plain && !(*cellType).getExclusive())
+    return emitOpError("requires a plain or exclusive Cell");
+  if (getValue().getType() != (*cellType).getElementType())
+    return emitOpError("value type must match Cell payload type");
+  return mlir::success();
+}
+
 mlir::LogicalResult ReussirCellCreateOp::verify() {
   RcType rcType = getCell().getType();
   auto cellType = verifySharedCellOperand(getOperation(), rcType);

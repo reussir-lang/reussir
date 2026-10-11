@@ -26,7 +26,7 @@ TEST_F(ReussirTest, NestedRecordScanner) {
         i64, 
         !reussir.record<compound "Nested" [value] {
           i8, 
-          [field] i16
+          !reussir.rc<i16>
         }>,
         f128,
         [field] i32
@@ -36,8 +36,7 @@ TEST_F(ReussirTest, NestedRecordScanner) {
         mlir::DataLayout dataLayout = mlir::DataLayout(module);
         type.emitScannerInstructions(buffer, dataLayout, {});
         llvm::SmallVector<int32_t> expected = {
-            scanner::advance(24), scanner::field(), scanner::advance(16),
-            scanner::field(), scanner::end()};
+            scanner::advance(40), scanner::field(), scanner::end()};
         EXPECT_EQ(buffer, expected);
       });
 }
@@ -50,13 +49,13 @@ TEST_F(ReussirTest, VariantRecordScanner) {
         i64, 
         !reussir.record<compound "Nested" [value]  {
           i8, 
-          [field] i16
+          !reussir.rc<i16>
         }>,
         f128,
         !reussir.record<compound "Nested2" [value] {
-          [field] i16,
+          !reussir.rc<i16>,
           f128, 
-          [field] i16
+          !reussir.rc<i16>
         }>
       }>)",
       [](mlir::ModuleOp module, reussir::RecordType type) {
@@ -67,23 +66,16 @@ TEST_F(ReussirTest, VariantRecordScanner) {
             // Fused header: advance past the i32 count slot to the i32 tag,
             // then read the 4-byte tag.
             scanner::advance(4), scanner::variant(4),
-            // skip table
+            // Nested value records contain shared links, not regional fields.
+            // Only the directly field-qualified first arm is scanned.
             scanner::skip(5), scanner::skip(8), scanner::skip(9),
-            scanner::skip(12), scanner::skip(13),
-            // first variant
-            scanner::advance(12), scanner::field(), scanner::advance(32),
-            scanner::skip(14),
-            // second variant
-            scanner::advance(44), scanner::skip(12),
-            // third variant
+            scanner::skip(10), scanner::skip(11),
             scanner::advance(12), scanner::field(), scanner::advance(32),
             scanner::skip(8),
-            // fourth variant
             scanner::advance(44), scanner::skip(6),
-            // fifth variant
-            scanner::advance(28), scanner::field(), scanner::advance(8),
-            scanner::field(), scanner::advance(8),
-            // final end
+            scanner::advance(44), scanner::skip(4),
+            scanner::advance(44), scanner::skip(2),
+            scanner::advance(44),
             scanner::end()};
         EXPECT_EQ(buffer, expected);
       });
