@@ -172,6 +172,10 @@ ratatui-textarea = "0.9"
 lto = "thin"
 
 [patch.crates-io]
+# Temporary cstree fork: compare children before reusing a node-cache hash hit.
+# Keeps node sharing without silently substituting colliding syntax nodes.
+# Remove once an upstream release contains https://github.com/reussir-lang/cstree/pull/1.
+cstree = { git = "https://github.com/reussir-lang/cstree", rev = "24df5bd03e61cc4d420645138c4c3767578c4f5b" }
 # Reussir fork: the MSVC fixes for conda-forge LLVM/MLIR (enum alias
 # normalization, .lib parsing, static:-bundle) plus the LLVM 23 retarget.
 # The crate keeps its 220 version, so melior's `mlir-sys = "220"` resolves to

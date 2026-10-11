@@ -879,8 +879,7 @@ dependencies = [
 [[package]]
 name = "cstree"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06cb7daab41fe0fd49e9482eb456fb6e49c2fb64843cd824721befeda0059264"
+source = "git+https://github.com/reussir-lang/cstree?rev=24df5bd03e61cc4d420645138c4c3767578c4f5b#24df5bd03e61cc4d420645138c4c3767578c4f5b"
 dependencies = [
  "cstree_derive",
  "hashbrown 0.17.1",
@@ -895,8 +894,7 @@ dependencies = [
 [[package]]
 name = "cstree_derive"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ef4cfdc000ad5eaafb304c599ab87894258acb2a508d2a805213322b18e3be3"
+source = "git+https://github.com/reussir-lang/cstree?rev=24df5bd03e61cc4d420645138c4c3767578c4f5b#24df5bd03e61cc4d420645138c4c3767578c4f5b"
 dependencies = [
  "proc-macro2",
  "quote",
