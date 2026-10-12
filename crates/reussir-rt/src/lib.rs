@@ -14,7 +14,7 @@ static GLOBAL: alloc::ReussirGlobalAlloc = alloc::ReussirGlobalAlloc;
 pub mod alloc;
 pub mod bridge;
 pub mod collections;
-pub mod dtor_worklist;
+pub mod dtor_executor;
 pub mod hash;
 pub mod instrument;
 pub mod nullable;

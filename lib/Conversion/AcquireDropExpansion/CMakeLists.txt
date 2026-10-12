@@ -1,7 +1,6 @@
 add_mlir_conversion_library(MLIRReussirAcquireDropExpansion
   AcquireDropExpansion.cpp
   TailDrop.cpp
-  WorklistDrop.cpp
 
   DEPENDS
   MLIRReussirConversionPassIncGen
@@ -13,9 +12,6 @@ add_mlir_conversion_library(MLIRReussirAcquireDropExpansion
   MLIRReussir
   MLIRFuncDialect
   MLIRSCFDialect
-  MLIRLLVMDialect
-  MLIRMemRefDialect
-  MLIRControlFlowDialect
   MLIRTransforms
   MLIRSync
 )

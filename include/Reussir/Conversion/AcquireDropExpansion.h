@@ -36,7 +36,7 @@ namespace reussir {
 // up in (see `createDtorIfNotExists`); it must outlive the patterns.
 void populateAcquireDropExpansionConversionPatterns(
     mlir::RewritePatternSet &patterns, bool outlineRecord,
-    mlir::SymbolTableCollection *symbols = nullptr, bool specializeRecursiveDrops = true);
+    mlir::SymbolTableCollection *symbols = nullptr, bool tailRecursiveDrops = true);
 
 } // namespace reussir
 

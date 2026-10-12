@@ -14,7 +14,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "TailDrop.h"
-#include "WorklistDrop.h"
 
 #include <algorithm>
 #include <llvm/ADT/ArrayRef.h>
@@ -28,10 +27,7 @@
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/LogicalResult.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
-#include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
-#include <mlir/Dialect/LLVMIR/LLVMDialect.h>
-#include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Block.h>
 #include <mlir/IR/Builders.h>
@@ -83,9 +79,10 @@ private:
             rewriter, op.getLoc(), mlir::TypeRange{}, storageView);
         criticalBody = &critical.getBody();
       } else if (cellType.getFlatlock()) {
-        auto critical = mlir::sync::SyncCombiningLockCriticalSectionOp::create(
-            rewriter, op.getLoc(), storageView,
-            /*combine_limit=*/mlir::IntegerAttr{});
+        auto critical =
+            mlir::sync::SyncCombiningLockCriticalSectionOp::create(
+                rewriter, op.getLoc(), storageView,
+                /*combine_limit=*/mlir::IntegerAttr{});
         criticalBody = &critical.getBody();
       } else if (cellType.getRwlock()) {
         // Releasing the payload mutates managed state behind the slot, so the
@@ -150,13 +147,10 @@ private:
 
   mlir::LogicalResult rewriteDropRc(RcType rcType, ReussirRefDropOp op,
                                     mlir::PatternRewriter &rewriter) const {
-    if (outlineRecord && specializeRecursiveDrops) {
-      mlir::Value loaded =
-          ReussirRefLoadOp::create(rewriter, op.getLoc(), rcType, op.getRef());
-      if (emitWorklistDropRelease(loaded, op.getLoc(),
-                                  op->getParentOfType<mlir::ModuleOp>(),
-                                  rewriter, symbols) ||
-          emitTailDropRelease(loaded, op.getLoc(),
+    if (outlineRecord && tailRecursiveDrops) {
+      mlir::Value loaded = ReussirRefLoadOp::create(rewriter, op.getLoc(), rcType,
+                                                  op.getRef());
+      if (emitTailDropRelease(loaded, op.getLoc(),
                               op->getParentOfType<mlir::ModuleOp>(), rewriter,
                               symbols)) {
         rewriter.eraseOp(op);
@@ -289,13 +283,10 @@ private:
           &dispatcher.getNonNullRegion(), dispatcher.getNonNullRegion().begin(),
           {nullableType.getPtrTy()}, {op.getLoc()});
       rewriter.setInsertionPointToStart(nonNullBlock);
-      if (outlineRecord && specializeRecursiveDrops &&
-          (emitWorklistDropRelease(nonNullBlock->getArgument(0), op.getLoc(),
-                                   op->getParentOfType<mlir::ModuleOp>(),
-                                   rewriter, symbols) ||
-           emitTailDropRelease(nonNullBlock->getArgument(0), op.getLoc(),
-                               op->getParentOfType<mlir::ModuleOp>(), rewriter,
-                               symbols))) {
+      if (outlineRecord && tailRecursiveDrops &&
+          emitTailDropRelease(nonNullBlock->getArgument(0), op.getLoc(),
+                              op->getParentOfType<mlir::ModuleOp>(), rewriter,
+                              symbols)) {
         ReussirScfYieldOp::create(rewriter, op.getLoc(), nullptr);
         rewriter.eraseOp(op);
         return mlir::success();
@@ -329,7 +320,7 @@ private:
   }
 
   bool outlineRecord;
-  bool specializeRecursiveDrops;
+  bool tailRecursiveDrops;
   mlir::SymbolTableCollection *symbols;
 
   bool shouldOutline(ReussirRefDropOp op, RecordType type) const {
@@ -351,10 +342,10 @@ private:
 public:
   DropExpansionPattern(mlir::MLIRContext *context, bool outlineRecord,
                        mlir::SymbolTableCollection *symbols,
-                       bool specializeRecursiveDrops)
+                       bool tailRecursiveDrops)
       : mlir::OpRewritePattern<ReussirRefDropOp>(context),
-        outlineRecord(outlineRecord),
-        specializeRecursiveDrops(specializeRecursiveDrops), symbols(symbols) {}
+        outlineRecord(outlineRecord), tailRecursiveDrops(tailRecursiveDrops),
+        symbols(symbols) {}
 
   mlir::LogicalResult
   matchAndRewrite(ReussirRefDropOp op,
@@ -378,18 +369,10 @@ public:
           return rewriteDropCell(cellType, op, rewriter);
         })
         .Case<RecordType>([&](RecordType recordType) {
-          if (outlineRecord && specializeRecursiveDrops &&
-              emitWorklistDrop(op.getRef(), op.getLoc(),
-                               op->getParentOfType<mlir::ModuleOp>(), rewriter,
-                               symbols)) {
-            rewriter.eraseOp(op);
-            return mlir::success();
-          }
           if (shouldOutline(op, recordType)) {
             mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
-            mlir::func::FuncOp dtor =
-                createDtorIfNotExists(moduleOp, recordType, rewriter,
-                                      refType.getAtomicKind(), symbols);
+            mlir::func::FuncOp dtor = createDtorIfNotExists(
+                moduleOp, recordType, rewriter, refType.getAtomicKind(), symbols);
             mlir::func::CallOp::create(rewriter, op.getLoc(), dtor,
                                        op.getRef());
             rewriter.eraseOp(op);
@@ -456,10 +439,8 @@ public:
     if (auto recordType = llvm::dyn_cast<RecordType>(elementType)) {
       if (shouldOutline(op, recordType)) {
         mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
-        mlir::func::FuncOp acquireFunc =
-            emitOwnershipAcquisitionFuncIfNotExists(
-                moduleOp, recordType, rewriter, refType.getAtomicKind(),
-                symbols);
+        mlir::func::FuncOp acquireFunc = emitOwnershipAcquisitionFuncIfNotExists(
+            moduleOp, recordType, rewriter, refType.getAtomicKind(), symbols);
         mlir::Value delta = op.getDelta();
         if (!delta)
           delta = rewriter.createOrFold<mlir::arith::ConstantIndexOp>(
@@ -515,8 +496,8 @@ struct AcquireDropExpansionPass
     // symbol, and this pass does not erase or rename functions.
     mlir::SymbolTableCollection symbols;
     mlir::RewritePatternSet patterns(&getContext());
-    populateAcquireDropExpansionConversionPatterns(
-        patterns, outlineRecord, &symbols, specializeRecursiveDrops);
+    populateAcquireDropExpansionConversionPatterns(patterns, outlineRecord,
+                                                   &symbols, tailRecursiveDrops);
     if (expandDecrement)
       populateRcDecrementExpansionConversionPatterns(patterns);
     if (failed(
@@ -528,11 +509,11 @@ struct AcquireDropExpansionPass
 
 void populateAcquireDropExpansionConversionPatterns(
     mlir::RewritePatternSet &patterns, bool outlineRecord,
-    mlir::SymbolTableCollection *symbols, bool specializeRecursiveDrops) {
+    mlir::SymbolTableCollection *symbols, bool tailRecursiveDrops) {
   patterns.add<DropExpansionPattern>(patterns.getContext(), outlineRecord,
-                                     symbols, specializeRecursiveDrops);
+                                     symbols, tailRecursiveDrops);
   patterns.add<AcquireExpansionPattern>(patterns.getContext(), outlineRecord,
-                                        symbols);
+                                     symbols);
 }
 
 } // namespace reussir
