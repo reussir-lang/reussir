@@ -51,6 +51,29 @@ struct ReussirLLVMTranslation : public mlir::LLVMTranslationDialectInterface {
   mlir::LogicalResult
   convertOperation(mlir::Operation *op, llvm::IRBuilderBase &builder,
                    mlir::LLVM::ModuleTranslation &state) const override {
+    if (auto begin = llvm::dyn_cast<ReussirDtorBeginOp>(op)) {
+      auto *id =
+          builder.CreateIntrinsic(llvm::Intrinsic::coro_id_retcon, {},
+                                  {builder.getInt32(begin.getSize()),
+                                   builder.getInt32(begin.getAlignment()),
+                                   state.lookupValue(begin.getBuffer()),
+                                   state.lookupValue(begin.getPrototype()),
+                                   state.lookupValue(begin.getAllocate()),
+                                   state.lookupValue(begin.getDeallocate())});
+      auto *handle = builder.CreateIntrinsic(
+          llvm::Intrinsic::coro_begin, {},
+          {id, llvm::ConstantPointerNull::get(builder.getPtrTy())});
+      state.mapValue(begin.getHandle(), handle);
+      return mlir::success();
+    }
+    if (auto end = llvm::dyn_cast<ReussirDtorEndOp>(op)) {
+      builder.CreateIntrinsic(
+          llvm::Intrinsic::coro_end, {},
+          {state.lookupValue(end.getHandle()), builder.getFalse(),
+           llvm::ConstantTokenNone::get(builder.getContext())});
+      builder.CreateUnreachable();
+      return mlir::success();
+    }
     auto test = llvm::dyn_cast<ReussirClosureWpdTestOp>(op);
     if (!test)
       return op->emitError("cannot translate operation to LLVM IR");

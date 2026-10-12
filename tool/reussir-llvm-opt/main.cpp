@@ -122,10 +122,6 @@ int main(int argc, char **argv) {
           mpm.addPass(reussir::llvmpass::RetconDropABIPass());
           return true;
         }
-        if (name == "reussir-retcon-drop") {
-          mpm.addPass(reussir::llvmpass::RetconDropPass());
-          return true;
-        }
         if (name == "reussir-recursion-linearization") {
           mpm.addPass(reussir::llvmpass::RecursionLinearizationPass());
           return true;

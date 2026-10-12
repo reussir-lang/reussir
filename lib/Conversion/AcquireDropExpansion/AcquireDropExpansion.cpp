@@ -421,8 +421,16 @@ public:
                 symbols,
                 retconDrops && recordType.classifyRecordDrop() ==
                                    RecordDropKind::Worklist);
-            mlir::func::CallOp::create(rewriter, op.getLoc(), dtor,
-                                       op.getRef());
+            auto parent = op->getParentOfType<mlir::func::FuncOp>();
+            if (dtor->hasAttr("reussir.retcon_drop") && parent &&
+                parent->hasAttr("reussir.retcon_drop"))
+              ReussirDtorSuspendOp::create(
+                  rewriter, op.getLoc(),
+                  mlir::FlatSymbolRefAttr::get(dtor.getSymNameAttr()),
+                  op.getRef());
+            else
+              mlir::func::CallOp::create(rewriter, op.getLoc(), dtor,
+                                         op.getRef());
             rewriter.eraseOp(op);
             return llvm::success();
           }

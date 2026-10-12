@@ -4114,6 +4114,21 @@ void inheritSanitizerPassthrough(mlir::ModuleOp moduleOp,
 //===----------------------------------------------------------------------===//
 // createDtorIfNotExists
 //===----------------------------------------------------------------------===//
+mlir::LogicalResult
+ReussirDtorSuspendOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
+  auto parent = (*this)->getParentOfType<mlir::FunctionOpInterface>();
+  if (!parent || !parent->hasAttr("reussir.retcon_drop"))
+    return emitOpError("requires a retcon destructor parent");
+  auto callee = symbols.lookupNearestSymbolFrom<mlir::FunctionOpInterface>(
+      *this, getCalleeAttr());
+  if (!callee || !callee->hasAttr("reussir.retcon_drop"))
+    return emitOpError("requires a retcon destructor callee");
+  if (!llvm::equal(callee.getArgumentTypes(),
+                   mlir::TypeRange{getObject().getType()}))
+    return emitOpError("object type must match the destructor argument");
+  return mlir::success();
+}
+
 mlir::func::FuncOp
 createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
                       mlir::OpBuilder &builder, AtomicKind kind,
@@ -4148,7 +4163,7 @@ createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
   if (retcon) {
     dtor->setAttr("reussir.retcon_drop", builder.getUnitAttr());
     dtor->setAttr("llvm.passthrough",
-                  builder.getStrArrayAttr({"nounwind", "reussir.retcon_drop"}));
+                  builder.getStrArrayAttr({"nounwind"}));
   }
   // Drop glue is where a stale box's memory is actually touched; it must be
   // instrumented like the code it was outlined from.

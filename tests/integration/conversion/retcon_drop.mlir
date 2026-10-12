@@ -12,8 +12,8 @@ module attributes {llvm.target_triple = "x86_64-unknown-linux-gnu"} {
   // CHECK-SAME: reussir.retcon_drop
   // CHECK: sync.mutex.critical_section
   // CHECK: func.call @__reussir_locked_drop
-  // CHECK: func.call @{{.*}}TreeE.retcon
-  // CHECK: func.call @{{.*}}TreeE.retcon
+  // CHECK: reussir.dtor.suspend @{{.*}}TreeE.retcon
+  // CHECK: reussir.dtor.suspend @{{.*}}TreeE.retcon
   // CHECK-LABEL: func.func @drop(
   // CHECK: call @{{.*}}TreeE.retcon
   // DIRECT-LABEL: func.func @drop(

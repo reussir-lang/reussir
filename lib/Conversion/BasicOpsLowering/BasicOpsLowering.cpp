@@ -3979,6 +3979,11 @@ struct ReussirConvertToLLVMPatternInterface
     // pointer), and must survive conversion: the LLVM dialect cannot express
     // `llvm.type.test`'s metadata-string operand, so the dialect's LLVM
     // translation interface lowers it at `translateModuleToLLVMIR` instead.
+    target.addLegalOp<ReussirDtorBeginOp, ReussirDtorEndOp>();
+    target.addDynamicallyLegalOp<ReussirDtorSuspendOp>(
+        [](ReussirDtorSuspendOp op) {
+          return mlir::isa<mlir::LLVM::LLVMPointerType>(op.getObject().getType());
+        });
     target.addDynamicallyLegalOp<ReussirClosureWpdTestOp>(
         [](ReussirClosureWpdTestOp op) {
           return mlir::isa<mlir::LLVM::LLVMPointerType>(
@@ -4064,6 +4069,10 @@ struct ConvertToLLVMPass
       signalPassFailure();
       return;
     }
+    if (failed(lowerRetconDropFunctions(moduleOp, converter))) {
+      signalPassFailure();
+      return;
+    }
     llvm::SmallVector<mlir::LLVM::CallOp> tailCalls;
     moduleOp.walk([&](mlir::LLVM::CallOp call) {
       if (call->hasAttr(kMustTailCallAttr))
@@ -4118,6 +4127,7 @@ void registerReussirBasicOpsLoweringInterface(mlir::DialectRegistry &registry) {
 void populateBasicOpsLoweringToLLVMConversionPatterns(
     mlir::LLVMTypeConverter &converter, mlir::RewritePatternSet &patterns) {
   populateTargetArrayLoweringPatterns(converter, patterns);
+  populateRetconDropLoweringPatterns(converter, patterns);
   patterns.add<
       ReussirExpectConversionPattern, ReussirCctxEmptyConversionPattern,
       ReussirCctxExtendConversionPattern, ReussirCctxApplyConversionPattern,

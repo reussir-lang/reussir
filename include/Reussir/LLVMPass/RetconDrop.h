@@ -18,9 +18,4 @@ class RetconDropABIPass : public llvm::PassInfoMixin<RetconDropABIPass> {
 public:
   llvm::PreservedAnalyses run(llvm::Module &, llvm::ModuleAnalysisManager &);
 };
-
-class RetconDropPass : public llvm::PassInfoMixin<RetconDropPass> {
-public:
-  llvm::PreservedAnalyses run(llvm::Module &, llvm::ModuleAnalysisManager &);
-};
 } // namespace reussir::llvmpass

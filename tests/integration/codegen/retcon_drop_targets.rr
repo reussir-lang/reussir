@@ -1,3 +1,6 @@
+// RUN: %rrc %s --target-triple aarch64-pc-windows-msvc -Onone --emit llvm-ir -o %t.aarch64-pc-windows-msvc.ll
+// RUN: %FileCheck %s < %t.aarch64-pc-windows-msvc.ll
+// RUN: %llc %t.aarch64-pc-windows-msvc.ll -filetype=obj -o %t.aarch64-pc-windows-msvc.o
 // RUN: %rrc %s --target-triple x86_64-pc-windows-msvc -Onone --emit llvm-ir -o %t.x86_64-pc-windows-msvc.ll
 // RUN: %FileCheck %s < %t.x86_64-pc-windows-msvc.ll
 // RUN: %llc %t.x86_64-pc-windows-msvc.ll -filetype=obj -o %t.x86_64-pc-windows-msvc.o
