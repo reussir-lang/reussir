@@ -152,11 +152,11 @@ MlirPass reussirCreateIFRTJustInTimeTransformPass(void) {
 }
 MlirPass reussirCreateAcquireDropExpansionPass(bool expandDecrement,
                                                bool outlineRecord,
-                                               bool tailRecursiveDrops) {
+                                               bool specializeRecursiveDrops) {
   reussir::ReussirAcquireDropExpansionPassOptions options;
   options.expandDecrement = expandDecrement;
   options.outlineRecord = outlineRecord;
-  options.tailRecursiveDrops = tailRecursiveDrops;
+  options.specializeRecursiveDrops = specializeRecursiveDrops;
   return wrapOwned(reussir::createReussirAcquireDropExpansionPass(options));
 }
 MlirPass reussirCreateTokenReusePass(bool reuseAcrossCall, bool emitRemarks) {

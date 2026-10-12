@@ -1,0 +1,81 @@
+// UNSUPPORTED: windows
+// RUN: %rrc %s -o %t.o --relocation-mode pic -O none
+// RUN: %cc %t.o %S/worklist_drop.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s -o %t.opt.o --relocation-mode pic -Oaggressive
+// RUN: %cc %t.opt.o %S/worklist_drop.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+// RUN: %rrc %s -o %t.boxed.o --relocation-mode pic -O none --nullary-variant-encoding boxed
+// RUN: %cc %t.boxed.o %S/worklist_drop.c -o %t.boxed.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.boxed.exe
+
+import core::intrinsic::array;
+import core::intrinsic::cell;
+
+pub enum Tree { Empty, Branch(u64, Tree, Tree) }
+pub struct Box { value: u64 }
+pub struct Snoc { next: Nullable<Snoc>, payload: Box }
+pub enum Rose { Empty, Branch(u64, [Rose; 2, 2]) }
+pub struct LockedLink { next: Nullable<Arc<Locked>> }
+pub struct Locked { next: Mutex<Arc<LockedLink>>, value: u64 }
+pub struct FlatLink { next: Nullable<Arc<Flat>> }
+pub struct Flat { next: FlatLock<Arc<FlatLink>>, value: u64 }
+pub struct RwLink { next: Nullable<Arc<Rw>> }
+pub struct Rw { next: RwLock<Arc<RwLink>>, value: u64 }
+
+pub fn tree_empty() -> Tree { Tree::Empty }
+pub fn tree_branch(n: u64, next: Tree, left: bool) -> Tree {
+    if left { Tree::Branch{n, next, Tree::Branch{0, Tree::Empty, Tree::Empty}} }
+    else { Tree::Branch{n, Tree::Branch{0, Tree::Empty, Tree::Empty}, next} }
+}
+fn tree_head(x: Tree) -> u64 {
+    match x { Tree::Empty => 0, Tree::Branch(n, _, _) => n }
+}
+pub fn tree_shared(x: Tree) -> u64 { tree_head(x) + tree_head(x) }
+pub fn snoc(n: u64, next: Nullable<Snoc>) -> Nullable<Snoc> {
+    Nullable::NonNull{Snoc{next: next, payload: Box{value: n}}}
+}
+pub fn snoc_head(x: Nullable<Snoc>) -> u64 {
+    match x { Nullable::Null => 0, Nullable::NonNull(n) => n.payload.value }
+}
+pub fn rose_empty() -> Rose { Rose::Empty }
+pub fn rose(n: u64, next: Rose) -> Rose {
+    let children = array::splat<[Rose; 2, 2]>(Rose::Empty);
+    let children = array::set(children, 0, 0, next);
+    Rose::Branch{n, children}
+}
+pub fn rose_head(x: Rose) -> u64 {
+    match x { Rose::Empty => 0, Rose::Branch(n, _) => n }
+}
+pub fn locked(n: u64, next: Nullable<Arc<Locked>>) -> Nullable<Arc<Locked>> {
+    Nullable::NonNull{Arc<Locked>{next: cell::alloc<Mutex<Arc<LockedLink>>>(Arc<LockedLink>{next: next}), value: n}}
+}
+pub fn locked_head(x: Nullable<Arc<Locked>>) -> u64 {
+    match x { Nullable::Null => 0, Nullable::NonNull(n) => n.value }
+}
+pub fn flat(n: u64, next: Nullable<Arc<Flat>>) -> Nullable<Arc<Flat>> {
+    Nullable::NonNull{Arc<Flat>{next: cell::alloc<FlatLock<Arc<FlatLink>>>(Arc<FlatLink>{next: next}), value: n}}
+}
+pub fn flat_head(x: Nullable<Arc<Flat>>) -> u64 {
+    match x { Nullable::Null => 0, Nullable::NonNull(n) => n.value }
+}
+pub fn rw(n: u64, next: Nullable<Arc<Rw>>) -> Nullable<Arc<Rw>> {
+    Nullable::NonNull{Arc<Rw>{next: cell::alloc<RwLock<Arc<RwLink>>>(Arc<RwLink>{next: next}), value: n}}
+}
+pub fn rw_head(x: Nullable<Arc<Rw>>) -> u64 {
+    match x { Nullable::Null => 0, Nullable::NonNull(n) => n.value }
+}
+extern "C" trampoline "work_tree_empty" = tree_empty;
+extern "C" trampoline "work_tree_branch" = tree_branch;
+extern "C" trampoline "work_tree_shared" = tree_shared;
+extern "C" trampoline "work_snoc" = snoc;
+extern "C" trampoline "work_snoc_head" = snoc_head;
+extern "C" trampoline "work_rose_empty" = rose_empty;
+extern "C" trampoline "work_rose" = rose;
+extern "C" trampoline "work_rose_head" = rose_head;
+extern "C" trampoline "work_locked" = locked;
+extern "C" trampoline "work_locked_head" = locked_head;
+extern "C" trampoline "work_flat" = flat;
+extern "C" trampoline "work_flat_head" = flat_head;
+extern "C" trampoline "work_rw" = rw;
+extern "C" trampoline "work_rw_head" = rw_head;

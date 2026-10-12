@@ -82,7 +82,7 @@ MlirPass reussirCreateDebugInfoConversionPass(void);
 // pipeline runs it once with both disabled and once with both enabled.
 MlirPass reussirCreateAcquireDropExpansionPass(bool expandDecrement,
                                                bool outlineRecord,
-                                               bool tailRecursiveDrops);
+                                               bool specializeRecursiveDrops);
 // Token reuse can optionally reuse tokens across function calls and emit one
 // structured optimization remark for every allocation/reuse decision.
 MlirPass reussirCreateTokenReusePass(bool reuseAcrossCall, bool emitRemarks);

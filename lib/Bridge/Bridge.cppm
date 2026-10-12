@@ -179,7 +179,7 @@ void createLoweringPipeline(mlir::PassManager &pm,
   reussir::ReussirAcquireDropExpansionPassOptions options;
   options.expandDecrement = true;
   options.outlineRecord = true;
-  options.tailRecursiveDrops = opt != REUSSIR_OPT_TPDE;
+  options.specializeRecursiveDrops = opt != REUSSIR_OPT_TPDE;
   pm.addPass(reussir::createReussirAcquireDropExpansionPass(options));
 
   {
