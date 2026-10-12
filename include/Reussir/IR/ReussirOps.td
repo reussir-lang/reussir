@@ -1093,8 +1093,12 @@ def ReussirRecordDispatchOp
     If the dispatch operation has separated regions for each tag, this operation
     will be directly lowered to a scf.index_switch operation. Otherwise, it will
     be expanded into 2 consecutive scf.index_switch operations, where the first
-    one dispatches tags to region indices and the second one dispatches the 
+    one dispatches tags to region indices and the second one dispatches the
     region indices to the actual regions.
+
+    Canonicalization merges regions that do not use their argument and hold
+    the same operations into one region over the union of their tags, unless
+    they box a value of the dispatched record's type.
   }];
 
   let arguments = (ins Arg<ReussirRefType, "variant record">:$variant,
@@ -1104,6 +1108,7 @@ def ReussirRecordDispatchOp
 
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
+  let hasCanonicalizer = 1;
 }
 
 def ReussirRecordCoerceOp : ReussirRecordOp<"coerce", [Pure]> {
