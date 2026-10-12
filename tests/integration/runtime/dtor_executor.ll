@@ -1,13 +1,13 @@
 ; UNSUPPORTED: windows
 ; RUN: %opt -passes='coro-early,cgscc(coro-split),coro-cleanup' -verify-each -S %s -o %t.ll
 ; RUN: %llc %t.ll -O0 -relocation-model=pic -filetype=obj -o %t.o
-; RUN: %cc -std=c11 -Wall -Wextra -Werror -I%S/../../../include %S/Inputs/dtor_executor.c %t.o -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs -o %t.exe
+; RUN: %cc -std=c11 -Wall -Wextra -Werror %S/Inputs/dtor_executor.c %t.o -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs -o %t.exe
 ; RUN: %t.exe
-; RUN: %cc -x c++ -std=c++17 -Wall -Wextra -Werror -I%S/../../../include %S/Inputs/dtor_executor.c -x none %t.o -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs -o %t.cpp.exe
+; RUN: %cc -x c++ -std=c++17 -Wall -Wextra -Werror %S/Inputs/dtor_executor.c -x none %t.o -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs -o %t.cpp.exe
 ; RUN: %t.cpp.exe
 ; RUN: %opt -passes='default<O2>' -verify-each -S %s -o %t.opt.ll
 ; RUN: %llc %t.opt.ll -relocation-model=pic -filetype=obj -o %t.opt.o
-; RUN: %cc -I%S/../../../include %S/Inputs/dtor_executor.c %t.opt.o -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs -o %t.opt.exe
+; RUN: %cc %S/Inputs/dtor_executor.c %t.opt.o -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs -o %t.opt.exe
 ; RUN: %t.opt.exe
 
 declare token @llvm.coro.id.retcon(i32, i32, ptr, ptr, ptr, ptr)
