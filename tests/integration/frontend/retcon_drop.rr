@@ -16,14 +16,16 @@ pub enum Tree {
     Branch(Tree, Tree),
     Locked(Mutex<Arc<Tree>>, Tree),
     Combined(FlatLock<Arc<Tree>>, Tree),
-    ReadWrite(RwLock<Arc<Tree>>, Tree)
+    ReadWrite(RwLock<Arc<Tree>>, Tree),
+    Value(Arc<Box>)
 }
 pub enum Forest { End, Branch([Forest; 2]) }
 pub struct Box { value: u64 }
 pub struct Chain { next: Nullable<Chain>, value: Box }
 
 pub fn leaf() -> Tree { Tree::Leaf }
-pub fn branch(next: Tree) -> Tree { Tree::Branch{next, Tree::Leaf} }
+pub fn value() -> Tree { Tree::Value{Arc<Box>{value: 42}} }
+pub fn branch(next: Tree) -> Tree { Tree::Branch{next, value()} }
 pub fn shared(next: Tree) -> Tree { Tree::Branch{next, next} }
 pub fn consume(tree: Tree) -> u64 { match tree { Tree::Leaf => 0, _ => 1 } }
 pub fn atomic_leaf() -> Arc<Tree> { Arc<Tree>::Leaf }
@@ -40,6 +42,7 @@ pub fn chain(next: Nullable<Chain>) -> Nullable<Chain> { Nullable::NonNull{Chain
 pub fn chain_consume(next: Nullable<Chain>) -> u64 { match next { Nullable::Null => 0, Nullable::NonNull(n) => n.value.value } }
 
 extern "C" trampoline "retcon_leaf" = leaf;
+extern "C" trampoline "retcon_value" = value;
 extern "C" trampoline "retcon_branch" = branch;
 extern "C" trampoline "retcon_shared" = shared;
 extern "C" trampoline "retcon_consume" = consume;

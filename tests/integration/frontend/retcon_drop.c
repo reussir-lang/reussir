@@ -4,6 +4,7 @@
 #include <sys/resource.h>
 #endif
 extern void *retcon_leaf(void);
+extern void *retcon_value(void);
 extern void *retcon_branch(void *);
 extern void *retcon_shared(void *);
 extern uint64_t retcon_consume(void *);
@@ -24,6 +25,8 @@ int main(void) {
   limit.rlim_cur = 256 * 1024;
   assert(!setrlimit(RLIMIT_STACK, &limit));
 #endif
+  assert(retcon_consume(retcon_leaf()) == 0);
+  assert(retcon_consume(retcon_value()) == 1);
   void *(*locks[])(void *, void *) = {retcon_mutex, retcon_flat, retcon_rw};
   for (unsigned kind = 0; kind < 3; ++kind) {
     void *normal = retcon_leaf(), *atomic = retcon_atomic_leaf();

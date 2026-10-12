@@ -260,10 +260,30 @@ private:
     return mlir::success();
   }
 
+  static bool isDirectVariantMember(mlir::Type member, bool isField) {
+    if (isField || isTriviallyCopyable(member))
+      return true;
+    auto record = llvm::dyn_cast<RecordType>(member);
+    return record && record.classifyRecordDrop() == RecordDropKind::Direct;
+  }
+
+  void emitOutlinedDrop(mlir::func::FuncOp dtor, ReussirRefDropOp op,
+                        mlir::PatternRewriter &rewriter) const {
+    auto parent = op->getParentOfType<mlir::func::FuncOp>();
+    if (dtor->hasAttr("reussir.retcon_drop") && parent &&
+        parent->hasAttr("reussir.retcon_drop"))
+      ReussirDtorSuspendOp::create(
+          rewriter, op.getLoc(),
+          mlir::FlatSymbolRefAttr::get(dtor.getSymNameAttr()), op.getRef());
+    else
+      mlir::func::CallOp::create(rewriter, op.getLoc(), dtor, op.getRef());
+  }
+
   mlir::LogicalResult
   rewriteDropVariant(RecordType recordType, Capability refCap,
                      AtomicKind refAtomic, ReussirRefDropOp op,
-                     mlir::PatternRewriter &rewriter) const {
+                     mlir::PatternRewriter &rewriter,
+                     mlir::func::FuncOp recursiveDtor = {}) const {
     assert(recordType.isVariant());
     llvm::SmallVector<mlir::Attribute> tagSets;
     for (auto idx : llvm::seq<int64_t>(0, recordType.getMembers().size()))
@@ -282,7 +302,9 @@ private:
           &dispatcher.getRegions()[idx], dispatcher.getRegions()[idx].begin(),
           {projectedRefTy}, {op.getLoc()});
       rewriter.setInsertionPointToStart(block);
-      if (!memberIsField && !isTriviallyCopyable(projectedTy))
+      if (recursiveDtor && !isDirectVariantMember(memberTy, memberIsField))
+        emitOutlinedDrop(recursiveDtor, op, rewriter);
+      else if (!memberIsField && !isTriviallyCopyable(projectedTy))
         ReussirRefDropOp::create(rewriter, op.getLoc(), block->getArgument(0),
                                  true, nullptr);
 
@@ -421,16 +443,17 @@ public:
                 symbols,
                 retconDrops && recordType.classifyRecordDrop() ==
                                    RecordDropKind::Worklist);
-            auto parent = op->getParentOfType<mlir::func::FuncOp>();
-            if (dtor->hasAttr("reussir.retcon_drop") && parent &&
-                parent->hasAttr("reussir.retcon_drop"))
-              ReussirDtorSuspendOp::create(
-                  rewriter, op.getLoc(),
-                  mlir::FlatSymbolRefAttr::get(dtor.getSymNameAttr()),
-                  op.getRef());
-            else
-              mlir::func::CallOp::create(rewriter, op.getLoc(), dtor,
-                                         op.getRef());
+            if (dtor->hasAttr("reussir.retcon_drop") && recordType.isVariant() &&
+                llvm::any_of(llvm::zip(recordType.getMembers(),
+                                       recordType.getMemberIsField()),
+                             [](auto member) {
+                               return isDirectVariantMember(std::get<0>(member),
+                                                            std::get<1>(member));
+                             }))
+              return rewriteDropVariant(recordType, refCap,
+                                        refType.getAtomicKind(), op, rewriter,
+                                        dtor);
+            emitOutlinedDrop(dtor, op, rewriter);
             rewriter.eraseOp(op);
             return llvm::success();
           }
