@@ -1,11 +1,10 @@
-; UNSUPPORTED: windows
-; RUN: %opt -passes='coro-early,cgscc(coro-split),coro-cleanup' -verify-each -S %s -o %t.ll
+; RUN: %reussir-llvm-opt -passes='coro-early,cgscc(coro-split),coro-cleanup,reussir-retcon-drop-abi' %s -o %t.ll
 ; RUN: %llc %t.ll -O0 -relocation-model=pic -filetype=obj -o %t.o
 ; RUN: %cc -std=c11 -Wall -Wextra -Werror %S/Inputs/dtor_executor.c %t.o -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs -o %t.exe
 ; RUN: %t.exe
 ; RUN: %cc -x c++ -std=c++17 -Wall -Wextra -Werror %S/Inputs/dtor_executor.c -x none %t.o -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs -o %t.cpp.exe
 ; RUN: %t.cpp.exe
-; RUN: %opt -passes='default<O2>' -verify-each -S %s -o %t.opt.ll
+; RUN: %reussir-llvm-opt -passes='coro-early,cgscc(coro-split),coro-cleanup,reussir-retcon-drop-abi,default<O2>' %s -o %t.opt.ll
 ; RUN: %llc %t.opt.ll -relocation-model=pic -filetype=obj -o %t.opt.o
 ; RUN: %cc %S/Inputs/dtor_executor.c %t.opt.o -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs -o %t.opt.exe
 ; RUN: %t.opt.exe
@@ -15,7 +14,7 @@ declare ptr @llvm.coro.begin(token, ptr)
 declare ptr @llvm.coro.prepare.retcon(ptr)
 declare i1 @llvm.coro.suspend.retcon.i1(...)
 declare void @llvm.coro.end(ptr, i1, token)
-declare {ptr, ptr} @resume_prototype(ptr, i1 zeroext)
+declare {ptr, ptr} @resume_prototype(ptr, i1 zeroext) "reussir.retcon_abi"
 declare ptr @unexpected_alloc(i64)
 declare void @unexpected_free(ptr)
 declare void @observe(i64)
@@ -23,7 +22,7 @@ declare void @observe(i64)
 @routine_a = constant {ptr, i64, i64} {ptr @start_a, i64 8, i64 8}
 @routine_b = constant {ptr, i64, i64} {ptr @start_b, i64 2048, i64 256}
 
-define {ptr, ptr} @start_a(ptr noalias %buffer, ptr %object) presplitcoroutine sanitize_address {
+define {ptr, ptr} @start_a(ptr noalias %buffer, ptr %object) presplitcoroutine sanitize_address "reussir.retcon_abi" {
 entry:
   %task = alloca {ptr, ptr}, align 8
   %id = call token @llvm.coro.id.retcon(i32 8, i32 8, ptr %buffer,
@@ -48,7 +47,7 @@ done:
   unreachable
 }
 
-define {ptr, ptr} @start_b(ptr noalias %buffer, ptr %object) presplitcoroutine sanitize_address {
+define {ptr, ptr} @start_b(ptr noalias %buffer, ptr %object) presplitcoroutine sanitize_address "reussir.retcon_abi" {
 entry:
   %task = alloca {ptr, ptr}, align 8
   %payload = alloca [1024 x i8], align 256

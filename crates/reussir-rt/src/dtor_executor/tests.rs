@@ -19,22 +19,26 @@ const LARGE: DtorRoutine = DtorRoutine {
     align: 256,
 };
 
-unsafe extern "C" fn resume(buffer: *mut c_void, cancel: bool) -> DtorStep {
+unsafe extern "C" fn resume(buffer: *mut c_void, cancel: bool, output_step: *mut DtorStep) {
     assert!(!cancel);
     let state = unsafe { &*buffer.cast::<State>() };
     unsafe { (*state.args.1).push(state.value) };
-    DtorStep {
-        resume: None,
-        child: ptr::null(),
+    unsafe {
+        output_step.write(DtorStep {
+            resume: None,
+            child: ptr::null(),
+        })
     }
 }
-unsafe extern "C" fn start(buffer: *mut c_void, object: *mut c_void) -> DtorStep {
+unsafe extern "C" fn start(buffer: *mut c_void, object: *mut c_void, output_step: *mut DtorStep) {
     let (n, output) = unsafe { *object.cast::<(usize, *mut Vec<usize>)>() };
     if n == 0 {
         unsafe { (*output).push(0) };
-        return DtorStep {
-            resume: None,
-            child: ptr::null(),
+        return unsafe {
+            output_step.write(DtorStep {
+                resume: None,
+                child: ptr::null(),
+            })
         };
     }
     let state = buffer.cast::<State>();
@@ -48,12 +52,18 @@ unsafe extern "C" fn start(buffer: *mut c_void, object: *mut c_void) -> DtorStep
             },
         });
     }
-    DtorStep {
-        resume: Some(resume),
-        child: unsafe { ptr::addr_of!((*state).task) },
+    unsafe {
+        output_step.write(DtorStep {
+            resume: Some(resume),
+            child: ptr::addr_of!((*state).task),
+        })
     }
 }
-unsafe extern "C" fn large_start(buffer: *mut c_void, object: *mut c_void) -> DtorStep {
+unsafe extern "C" fn large_start(
+    buffer: *mut c_void,
+    object: *mut c_void,
+    output_step: *mut DtorStep,
+) {
     assert_eq!(buffer as usize % LARGE.align, 0);
     unsafe {
         buffer
@@ -61,18 +71,18 @@ unsafe extern "C" fn large_start(buffer: *mut c_void, object: *mut c_void) -> Dt
             .cast::<[u8; 513]>()
             .write([0xa5; 513])
     };
-    let mut step = unsafe { start(buffer, object) };
+    unsafe { start(buffer, object, output_step) };
+    let step = unsafe { &mut *output_step };
     if step.resume.is_some() {
         step.resume = Some(large_resume);
     }
-    step
 }
-unsafe extern "C" fn large_resume(buffer: *mut c_void, cancel: bool) -> DtorStep {
+unsafe extern "C" fn large_resume(buffer: *mut c_void, cancel: bool, output_step: *mut DtorStep) {
     assert_eq!(
         unsafe { *buffer.byte_add(size_of::<State>()).cast::<[u8; 513]>() },
         [0xa5; 513]
     );
-    unsafe { resume(buffer, cancel) }
+    unsafe { resume(buffer, cancel, output_step) }
 }
 
 #[test]
@@ -150,12 +160,14 @@ fn invalid_layouts_and_empty_free_are_rejected() {
     );
 }
 
-unsafe extern "C" fn nested(_: *mut c_void, object: *mut c_void) -> DtorStep {
+unsafe extern "C" fn nested(_: *mut c_void, object: *mut c_void, output_step: *mut DtorStep) {
     let mut inner = DtorExecutor::new();
     unsafe { __reussir_run_dtor(&mut inner, object, &SMALL) };
-    DtorStep {
-        resume: None,
-        child: ptr::null(),
+    unsafe {
+        output_step.write(DtorStep {
+            resume: None,
+            child: ptr::null(),
+        })
     }
 }
 #[test]
@@ -219,15 +231,21 @@ const BRANCH: DtorRoutine = DtorRoutine {
     size: size_of::<Branch>(),
     align: align_of::<Branch>(),
 };
-unsafe extern "C" fn branch_start(buffer: *mut c_void, object: *mut c_void) -> DtorStep {
+unsafe extern "C" fn branch_start(
+    buffer: *mut c_void,
+    object: *mut c_void,
+    output_step: *mut DtorStep,
+) {
     let (depth, output) = unsafe { *object.cast::<(usize, *mut Vec<usize>)>() };
     if depth == 0 {
         unsafe {
             (*output).push(0);
         }
-        return DtorStep {
-            resume: None,
-            child: ptr::null(),
+        return unsafe {
+            output_step.write(DtorStep {
+                resume: None,
+                child: ptr::null(),
+            })
         };
     }
     let state = buffer.cast::<Branch>();
@@ -241,27 +259,33 @@ unsafe extern "C" fn branch_start(buffer: *mut c_void, object: *mut c_void) -> D
             },
         });
     }
-    DtorStep {
-        resume: Some(branch_resume),
-        child: unsafe { ptr::addr_of!((*state).task) },
+    unsafe {
+        output_step.write(DtorStep {
+            resume: Some(branch_resume),
+            child: ptr::addr_of!((*state).task),
+        })
     }
 }
-unsafe extern "C" fn branch_resume(buffer: *mut c_void, cancel: bool) -> DtorStep {
+unsafe extern "C" fn branch_resume(buffer: *mut c_void, cancel: bool, output_step: *mut DtorStep) {
     assert!(!cancel);
     let state = unsafe { &mut *buffer.cast::<Branch>() };
     if !state.second {
         state.second = true;
-        DtorStep {
-            resume: Some(branch_resume),
-            child: &state.task,
+        unsafe {
+            output_step.write(DtorStep {
+                resume: Some(branch_resume),
+                child: &state.task,
+            })
         }
     } else {
         unsafe {
             (*state.args.1).push(state.args.0 + 1);
         }
-        DtorStep {
-            resume: None,
-            child: ptr::null(),
+        unsafe {
+            output_step.write(DtorStep {
+                resume: None,
+                child: ptr::null(),
+            })
         }
     }
 }

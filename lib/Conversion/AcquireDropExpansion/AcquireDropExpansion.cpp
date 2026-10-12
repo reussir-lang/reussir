@@ -57,6 +57,44 @@ namespace reussir {
 namespace {
 class DropExpansionPattern : public mlir::OpRewritePattern<ReussirRefDropOp> {
 private:
+  mutable llvm::DenseMap<RefType, mlir::func::FuncOp> lockedDrops;
+
+  mlir::func::FuncOp lockedDrop(RefType type, ReussirRefDropOp op,
+                                mlir::PatternRewriter &rewriter) const {
+    auto [it, inserted] = lockedDrops.try_emplace(type);
+    if (!inserted)
+      return it->second;
+    auto module = op->getParentOfType<mlir::ModuleOp>();
+    for (auto function : module.getOps<mlir::func::FuncOp>()) {
+      if (function->hasAttr("reussir.locked_drop") &&
+          function.getNumArguments() == 1 &&
+          function.getArgumentTypes()[0] == type) {
+        it->second = function;
+        return function;
+      }
+    }
+    mlir::OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(module.getBody());
+    auto function = mlir::func::FuncOp::create(
+        rewriter, op.getLoc(), "__reussir_locked_drop",
+        rewriter.getFunctionType({type}, {}));
+    function.setPrivate();
+    function->setAttr("reussir.locked_drop", rewriter.getUnitAttr());
+    function->setAttr("llvm.linkage",
+                      rewriter.getAttr<mlir::LLVM::LinkageAttr>(
+                          mlir::LLVM::linkage::Linkage::Private));
+    if (symbols)
+      symbols->getSymbolTable(module).insert(function);
+    else
+      mlir::SymbolTable(module).insert(function);
+    inheritSanitizerPassthrough(module, function);
+    it->second = function;
+    rewriter.setInsertionPointToStart(function.addEntryBlock());
+    ReussirRefDropOp::create(rewriter, op.getLoc(), function.getArgument(0));
+    mlir::func::ReturnOp::create(rewriter, op.getLoc());
+    return function;
+  }
+
   mlir::LogicalResult rewriteDropCell(CellType cellType, ReussirRefDropOp op,
                                       mlir::PatternRewriter &rewriter) const {
     RefType refType = op.getRef().getType();
@@ -101,7 +139,13 @@ private:
       rewriter.setInsertionPointToStart(body);
       mlir::Value slot = ReussirRefFromMemrefOp::create(
           rewriter, op.getLoc(), slotType, body->getArgument(0));
-      ReussirRefDropOp::create(rewriter, op.getLoc(), slot);
+      if (retconDrops) {
+        auto function = lockedDrop(slotType, op, rewriter);
+        mlir::func::CallOp::create(rewriter, op.getLoc(), function,
+                                   mlir::ValueRange{slot});
+      } else {
+        ReussirRefDropOp::create(rewriter, op.getLoc(), slot);
+      }
       mlir::sync::SyncYieldOp::create(rewriter, op.getLoc());
       rewriter.eraseOp(op);
       return mlir::success();
@@ -321,6 +365,7 @@ private:
 
   bool outlineRecord;
   bool tailRecursiveDrops;
+  bool retconDrops;
   mlir::SymbolTableCollection *symbols;
 
   bool shouldOutline(ReussirRefDropOp op, RecordType type) const {
@@ -342,10 +387,10 @@ private:
 public:
   DropExpansionPattern(mlir::MLIRContext *context, bool outlineRecord,
                        mlir::SymbolTableCollection *symbols,
-                       bool tailRecursiveDrops)
+                       bool tailRecursiveDrops, bool retconDrops)
       : mlir::OpRewritePattern<ReussirRefDropOp>(context),
         outlineRecord(outlineRecord), tailRecursiveDrops(tailRecursiveDrops),
-        symbols(symbols) {}
+        retconDrops(retconDrops), symbols(symbols) {}
 
   mlir::LogicalResult
   matchAndRewrite(ReussirRefDropOp op,
@@ -372,7 +417,10 @@ public:
           if (shouldOutline(op, recordType)) {
             mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
             mlir::func::FuncOp dtor = createDtorIfNotExists(
-                moduleOp, recordType, rewriter, refType.getAtomicKind(), symbols);
+                moduleOp, recordType, rewriter, refType.getAtomicKind(),
+                symbols,
+                retconDrops && recordType.classifyRecordDrop() ==
+                                   RecordDropKind::Worklist);
             mlir::func::CallOp::create(rewriter, op.getLoc(), dtor,
                                        op.getRef());
             rewriter.eraseOp(op);
@@ -496,8 +544,8 @@ struct AcquireDropExpansionPass
     // symbol, and this pass does not erase or rename functions.
     mlir::SymbolTableCollection symbols;
     mlir::RewritePatternSet patterns(&getContext());
-    populateAcquireDropExpansionConversionPatterns(patterns, outlineRecord,
-                                                   &symbols, tailRecursiveDrops);
+    populateAcquireDropExpansionConversionPatterns(
+        patterns, outlineRecord, &symbols, tailRecursiveDrops, retconDrops);
     if (expandDecrement)
       populateRcDecrementExpansionConversionPatterns(patterns);
     if (failed(
@@ -509,9 +557,10 @@ struct AcquireDropExpansionPass
 
 void populateAcquireDropExpansionConversionPatterns(
     mlir::RewritePatternSet &patterns, bool outlineRecord,
-    mlir::SymbolTableCollection *symbols, bool tailRecursiveDrops) {
+    mlir::SymbolTableCollection *symbols, bool tailRecursiveDrops,
+    bool retconDrops) {
   patterns.add<DropExpansionPattern>(patterns.getContext(), outlineRecord,
-                                     symbols, tailRecursiveDrops);
+                                     symbols, tailRecursiveDrops, retconDrops);
   patterns.add<AcquireExpansionPattern>(patterns.getContext(), outlineRecord,
                                      symbols);
 }

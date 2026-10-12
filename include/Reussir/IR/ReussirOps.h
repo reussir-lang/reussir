@@ -128,11 +128,10 @@ mlir::LogicalResult emitArrayElementTraversal(
 // A caller doing many glue lookups can supply a collection to reuse the
 // module's symbol table. Newly created glue is registered in that table.
 // The caller must keep it consistent with any other symbol mutations.
-mlir::func::FuncOp
-createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
-                      mlir::OpBuilder &builder,
-                      AtomicKind kind = AtomicKind::normal,
-    mlir::SymbolTableCollection *symbols = nullptr);
+mlir::func::FuncOp createDtorIfNotExists(
+    mlir::ModuleOp moduleOp, RecordType type, mlir::OpBuilder &builder,
+    AtomicKind kind = AtomicKind::normal,
+    mlir::SymbolTableCollection *symbols = nullptr, bool retcon = false);
 
 //===----------------------------------------------------------------------===//
 // emitOwnershipAcquisitionFuncIfNotExists

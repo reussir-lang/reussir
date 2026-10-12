@@ -84,12 +84,13 @@ module;
 
 #include "Reussir/Bridge.h"
 #include "Reussir/Conversion/BasicOpsLowering.h"
-#include "Reussir/Conversion/Passes.h"
 #include "Reussir/Conversion/ConvertToSTD.h"
+#include "Reussir/Conversion/Passes.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/LLVMPass/AllocationSimplication.h"
 #include "Reussir/LLVMPass/LinearRecurrence.h"
+#include "Reussir/LLVMPass/RetconDrop.h"
 #include "Reussir/LLVMPass/RuntimeFunctionAttributor.h"
 #include "Reussir/LLVMPass/SizeAttributes.h"
 #include "Reussir/Transformation/Passes.h"
@@ -171,7 +172,9 @@ void createLoweringPipeline(mlir::PassManager &pm,
   pm.addPass(reussir::createReussirRcDecrementExpansionPass());
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirInferVariantTagPass());
-  pm.addPass(reussir::createReussirAcquireDropExpansionPass());
+  reussir::ReussirAcquireDropExpansionPassOptions earlyDrops;
+  earlyDrops.retconDrops = opt != REUSSIR_OPT_TPDE;
+  pm.addPass(reussir::createReussirAcquireDropExpansionPass(earlyDrops));
   pm.addPass(reussir::createReussirConvertToSTDPass());
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirIncDecCancellationPass());
@@ -180,6 +183,7 @@ void createLoweringPipeline(mlir::PassManager &pm,
   options.expandDecrement = true;
   options.outlineRecord = true;
   options.tailRecursiveDrops = opt != REUSSIR_OPT_TPDE;
+  options.retconDrops = opt != REUSSIR_OPT_TPDE;
   pm.addPass(reussir::createReussirAcquireDropExpansionPass(options));
 
   {
@@ -430,6 +434,8 @@ translateToModule(llvm::StringRef texture, llvm::LLVMContext &llvmCtx,
     spdlog::error("Failed to translate MLIR module to LLVM IR.");
     return nullptr;
   }
+
+  reussir::llvmpass::lowerRetconDrops(*mainModule);
 
   // link the compiled modules to the main module
   if (llvm::Linker::linkModules(*mainModule, std::move(compiledModules))) {

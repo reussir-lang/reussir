@@ -1,5 +1,6 @@
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true' --verify-each | %FileCheck %s --implicit-check-not=' cf.'
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true tail-recursive-drops=false' --verify-each | %FileCheck %s --check-prefix=UNSPECIALIZED --implicit-check-not=tail_release --implicit-check-not=reussir.musttail
+// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true retcon-drops=true' --verify-each | %FileCheck %s --implicit-check-not=' cf.'
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=EARLY
 
 !node_ = !reussir.record<compound "Node" incomplete>

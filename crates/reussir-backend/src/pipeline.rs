@@ -408,7 +408,12 @@ pub fn run_lowering_pipeline(
         func:   sys::reussirCreateIncDecCancellationPass();
         module: sys::reussirCreateRcDecrementExpansionPass();
         func:   sys::reussirCreateInferVariantTagPass();
-        module: sys::reussirCreateAcquireDropExpansionPass(false, false, false);
+        module: sys::reussirCreateAcquireDropExpansionPass(
+            false,
+            false,
+            false,
+            options.opt != OptLevel::Tpde,
+        );
         // Materialize Cell accesses and their ownership effects before the
         // second inc/dec cancellation phase.
         module: sys::reussirCreateConvertToSTDPass(false);
@@ -419,6 +424,7 @@ pub fn run_lowering_pipeline(
         module: sys::reussirCreateAcquireDropExpansionPass(
             true,
             true,
+            options.opt != OptLevel::Tpde,
             options.opt != OptLevel::Tpde,
         );
         func:   sys::reussirCreateTokenReusePass(

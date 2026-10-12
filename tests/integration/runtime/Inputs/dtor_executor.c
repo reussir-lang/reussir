@@ -4,15 +4,19 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <sys/resource.h>
+#endif
 #ifdef __cplusplus
 extern "C" {
 #endif
 typedef struct ReussirDtorExecutor ReussirDtorExecutor;
 typedef struct ReussirDtorTask ReussirDtorTask;
 typedef struct ReussirDtorStep ReussirDtorStep;
-typedef ReussirDtorStep (*ReussirDtorStart)(void *buffer, void *object);
-typedef ReussirDtorStep (*ReussirDtorResume)(void *buffer, bool cancel);
+typedef void (*ReussirDtorStart)(void *buffer, void *object,
+                                 ReussirDtorStep *result);
+typedef void (*ReussirDtorResume)(void *buffer, bool cancel,
+                                  ReussirDtorStep *result);
 typedef struct ReussirDtorRoutine {
   ReussirDtorStart start;
   size_t size;
@@ -60,11 +64,13 @@ void check_payload(void *ptr) {
 }
 #endif
 int main(void) {
+#ifndef _WIN32
   struct rlimit limit;
   assert(!getrlimit(RLIMIT_STACK, &limit));
   if (limit.rlim_cur > 256 * 1024)
     limit.rlim_cur = 256 * 1024;
   assert(!setrlimit(RLIMIT_STACK, &limit));
+#endif
   size_t size = __reussir_dtor_executor_size();
   size_t align = __reussir_dtor_executor_align();
   void *allocation = malloc(size + align - 1);

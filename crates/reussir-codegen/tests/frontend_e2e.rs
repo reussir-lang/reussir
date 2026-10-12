@@ -632,3 +632,39 @@ fn runs_a_string_match() {
         assert_eq!(classify(7), 99); // "mystery" misses every pattern
     });
 }
+
+#[test]
+fn deep_branching_drop_uses_runtime_executor() {
+    jit_run(
+        r#"
+        enum Tree { Leaf, Branch(Tree, Tree) }
+        fn leaf() -> Tree { Tree::Leaf }
+        fn branch(tree: Tree) -> Tree { Tree::Branch{tree, Tree::Leaf} }
+        fn consume(tree: Tree) -> u64 { match tree { Tree::Leaf => 0, _ => 1 } }
+        extern "C" trampoline "leaf" = leaf;
+        extern "C" trampoline "branch" = branch;
+        extern "C" trampoline "consume" = consume;
+        "#,
+        |jit| {
+            type Ptr = *mut std::ffi::c_void;
+            let leaf: extern "C" fn() -> Ptr =
+                unsafe { std::mem::transmute(jit.lookup("leaf").unwrap() as usize) };
+            let branch: extern "C" fn(Ptr) -> Ptr =
+                unsafe { std::mem::transmute(jit.lookup("branch").unwrap() as usize) };
+            let consume: extern "C" fn(Ptr) -> u64 =
+                unsafe { std::mem::transmute(jit.lookup("consume").unwrap() as usize) };
+            std::thread::Builder::new()
+                .stack_size(256 * 1024)
+                .spawn(move || {
+                    let mut tree = leaf();
+                    for _ in 0..100_000 {
+                        tree = branch(tree);
+                    }
+                    assert_eq!(consume(tree), 1);
+                })
+                .unwrap()
+                .join()
+                .unwrap();
+        },
+    );
+}

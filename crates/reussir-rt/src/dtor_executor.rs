@@ -2,8 +2,8 @@ use crate::alloc::{__reussir_allocate, __reussir_dealloc_unsized};
 use core::{alloc::Layout, ffi::c_void, mem::MaybeUninit};
 use smallvec::SmallVec;
 
-pub type DtorStart = unsafe extern "C" fn(*mut c_void, *mut c_void) -> DtorStep;
-pub type DtorResume = unsafe extern "C" fn(*mut c_void, bool) -> DtorStep;
+pub type DtorStart = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut DtorStep);
+pub type DtorResume = unsafe extern "C" fn(*mut c_void, bool, *mut DtorStep);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -134,7 +134,9 @@ pub unsafe extern "C" fn __reussir_run_dtor(
     loop {
         let routine = unsafe { *task.routine };
         let buffer = unsafe { (*context).allocate(routine.size, routine.align) };
-        let mut step = unsafe { (routine.start)(buffer, task.object) };
+        let mut result = MaybeUninit::<DtorStep>::uninit();
+        unsafe { (routine.start)(buffer, task.object, result.as_mut_ptr()) };
+        let mut step = unsafe { result.assume_init() };
         let mut buffer = buffer;
         loop {
             if let Some(resume) = step.resume {
@@ -157,7 +159,8 @@ pub unsafe extern "C" fn __reussir_run_dtor(
                 return;
             };
             buffer = continuation.buffer;
-            step = unsafe { (continuation.resume)(buffer, false) };
+            unsafe { (continuation.resume)(buffer, false, result.as_mut_ptr()) };
+            step = unsafe { result.assume_init() };
         }
     }
 }

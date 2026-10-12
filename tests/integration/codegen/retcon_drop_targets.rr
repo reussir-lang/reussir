@@ -1,0 +1,28 @@
+// RUN: %rrc %s --target-triple x86_64-pc-windows-msvc -Onone --emit llvm-ir -o %t.x86_64-pc-windows-msvc.ll
+// RUN: %FileCheck %s < %t.x86_64-pc-windows-msvc.ll
+// RUN: %llc %t.x86_64-pc-windows-msvc.ll -filetype=obj -o %t.x86_64-pc-windows-msvc.o
+// RUN: %rrc %s --target-triple aarch64-apple-darwin -Onone --emit llvm-ir -o %t.aarch64-apple-darwin.ll
+// RUN: %FileCheck %s < %t.aarch64-apple-darwin.ll
+// RUN: %llc %t.aarch64-apple-darwin.ll -filetype=obj -o %t.aarch64-apple-darwin.o
+// RUN: %rrc %s --target-triple i686-unknown-linux-gnu -Onone --emit llvm-ir -o %t.i686-unknown-linux-gnu.ll
+// RUN: %FileCheck %s < %t.i686-unknown-linux-gnu.ll
+// RUN: %llc %t.i686-unknown-linux-gnu.ll -filetype=obj -o %t.i686-unknown-linux-gnu.o
+// RUN: %rrc %s --target-triple wasm32-wasip1 -Onone --emit llvm-ir -o %t.wasm32-wasip1.ll
+// RUN: %FileCheck %s < %t.wasm32-wasip1.ll
+// RUN: %llc %t.wasm32-wasip1.ll -filetype=obj -o %t.wasm32-wasip1.o
+// RUN: %rrc %s --target-triple riscv64-unknown-linux-gnu -Onone --emit llvm-ir -o %t.riscv64-unknown-linux-gnu.ll
+// RUN: %FileCheck %s < %t.riscv64-unknown-linux-gnu.ll
+// RUN: %llc %t.riscv64-unknown-linux-gnu.ll -filetype=obj -o %t.riscv64-unknown-linux-gnu.o
+
+enum Tree { Leaf, Branch(Tree, Tree) }
+fn consume(tree: Tree) -> u64 { match tree { Tree::Leaf => 0, _ => 1 } }
+extern "C" trampoline "consume" = consume;
+
+// CHECK: call void @__reussir_run_dtor
+// CHECK: define private void @{{.*}}.retcon.start.callback(ptr {{.*}}, ptr {{.*}}, ptr {{.*}})
+// CHECK: call { ptr, ptr } @{{.*}}.retcon.start
+// CHECK: store { ptr, ptr }
+// CHECK: ret void
+// CHECK: define private void @{{.*}}.resume.0.callback(ptr {{.*}}, i1 zeroext {{.*}}, ptr {{.*}})
+// CHECK: store { ptr, ptr }
+// CHECK: ret void

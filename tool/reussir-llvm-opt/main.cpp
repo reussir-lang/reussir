@@ -31,6 +31,7 @@
 
 #include "Reussir/LLVMPass/AllocationSimplication.h"
 #include "Reussir/LLVMPass/LinearRecurrence.h"
+#include "Reussir/LLVMPass/RetconDrop.h"
 #include "Reussir/LLVMPass/RuntimeFunctionAttributor.h"
 #include "Reussir/LLVMPass/SizeAttributes.h"
 
@@ -117,6 +118,14 @@ int main(int argc, char **argv) {
   passBuilder.registerPipelineParsingCallback(
       [](llvm::StringRef name, llvm::ModulePassManager &mpm,
          llvm::ArrayRef<llvm::PassBuilder::PipelineElement>) {
+        if (name == "reussir-retcon-drop-abi") {
+          mpm.addPass(reussir::llvmpass::RetconDropABIPass());
+          return true;
+        }
+        if (name == "reussir-retcon-drop") {
+          mpm.addPass(reussir::llvmpass::RetconDropPass());
+          return true;
+        }
         if (name == "reussir-recursion-linearization") {
           mpm.addPass(reussir::llvmpass::RecursionLinearizationPass());
           return true;

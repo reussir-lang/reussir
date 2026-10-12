@@ -34,6 +34,7 @@
 
 #include "Reussir/LLVMPass/AllocationSimplication.h"
 #include "Reussir/LLVMPass/LinearRecurrence.h"
+#include "Reussir/LLVMPass/RetconDrop.h"
 #include "Reussir/LLVMPass/RuntimeFunctionAttributor.h"
 #include "Reussir/LLVMPass/SizeAttributes.h"
 
@@ -47,10 +48,13 @@
 void reussirRunBackendLLVMPipeline(LLVMModuleRef module, ReussirJitOptLevel opt,
                                    LLVMTargetMachineRef machine,
                                    ReussirLtoMode lto) {
-  if (opt == ReussirJitOptNone || opt == ReussirJitOptTpde)
+  if (opt == ReussirJitOptTpde)
     return;
 
   llvm::Module &m = *llvm::unwrap(module);
+  reussir::llvmpass::lowerRetconDrops(m);
+  if (opt == ReussirJitOptNone)
+    return;
 
   // The cost-driven passes (loop/SLP vectorization) consult the
   // TargetTransformInfo the PassBuilder derives from its TargetMachine; a

@@ -4114,9 +4114,10 @@ void inheritSanitizerPassthrough(mlir::ModuleOp moduleOp,
 //===----------------------------------------------------------------------===//
 // createDtorIfNotExists
 //===----------------------------------------------------------------------===//
-mlir::func::FuncOp createDtorIfNotExists(
-    mlir::ModuleOp moduleOp, RecordType type, mlir::OpBuilder &builder,
-    AtomicKind kind, mlir::SymbolTableCollection *symbols) {
+mlir::func::FuncOp
+createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
+                      mlir::OpBuilder &builder, AtomicKind kind,
+                      mlir::SymbolTableCollection *symbols, bool retcon) {
   std::optional<mlir::SymbolTable> ownTable;
   mlir::SymbolTable &symTable = symbols ? symbols->getSymbolTable(moduleOp)
                                       : ownTable.emplace(moduleOp);
@@ -4124,6 +4125,8 @@ mlir::func::FuncOp createDtorIfNotExists(
   if (!dtorName)
     llvm::report_fatal_error("only named record types have destructors");
   std::string funcName = dtorName.getValue().str();
+  if (retcon)
+    funcName += ".retcon";
   if (auto funcOp = symTable.lookup<mlir::func::FuncOp>(funcName))
     return funcOp;
   mlir::OpBuilder::InsertionGuard guard(builder);
@@ -4142,6 +4145,11 @@ mlir::func::FuncOp createDtorIfNotExists(
   dtor->setAttr("llvm.passthrough",
                 builder.getStrArrayAttr(
                     {"mustprogress", "nounwind", "willreturn", "nocallback"}));
+  if (retcon) {
+    dtor->setAttr("reussir.retcon_drop", builder.getUnitAttr());
+    dtor->setAttr("llvm.passthrough",
+                  builder.getStrArrayAttr({"nounwind", "reussir.retcon_drop"}));
+  }
   // Drop glue is where a stale box's memory is actually touched; it must be
   // instrumented like the code it was outlined from.
   inheritSanitizerPassthrough(moduleOp, dtor);

@@ -60,6 +60,7 @@ const REUSSIR_ARCHIVES: &[&str] = &[
     // The custom LLVM passes run by the JIT codegen helper (Jit.cpp).
     "ReussirLLVMAllocationSimplicationPass",
     "ReussirLLVMLinearRecurrencePass",
+    "ReussirLLVMRetconDropPass",
 ];
 
 // TPDE static archives (and TPDE's own vendored dependencies: spdlog plus the
