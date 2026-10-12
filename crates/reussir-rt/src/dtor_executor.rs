@@ -38,6 +38,11 @@ pub struct DtorExecutor {
     running: bool,
 }
 
+fn allocate_buffer(size: usize, align: usize) -> *mut c_void {
+    let layout = Layout::from_size_align(size, align).expect("invalid continuation layout");
+    unsafe { __reussir_allocate(layout.align(), layout.size().max(1)).cast() }
+}
+
 impl DtorExecutor {
     pub fn new() -> Self {
         Self {
@@ -48,10 +53,9 @@ impl DtorExecutor {
     }
 
     fn allocate(&mut self, size: usize, align: usize) -> *mut c_void {
-        let layout = Layout::from_size_align(size, align).expect("invalid continuation layout");
-        let buffer = unsafe { __reussir_allocate(layout.align(), layout.size().max(1)) };
-        self.allocations.push(buffer);
-        buffer.cast()
+        let buffer = allocate_buffer(size, align);
+        self.allocations.push(buffer.cast());
+        buffer
     }
 
     fn deallocate(&mut self) {
@@ -130,10 +134,11 @@ pub unsafe extern "C" fn __reussir_run_dtor(
         );
         executor.running = true;
     }
+    let mut continuations = unsafe { core::mem::take(&mut (*context).continuations) };
     let mut task = DtorTask { routine, object };
     loop {
         let routine = unsafe { *task.routine };
-        let buffer = unsafe { (*context).allocate(routine.size, routine.align) };
+        let buffer = allocate_buffer(routine.size, routine.align);
         let mut result = MaybeUninit::<DtorStep>::uninit();
         unsafe { (routine.start)(buffer, task.object, result.as_mut_ptr()) };
         let mut step = unsafe { result.assume_init() };
@@ -146,16 +151,16 @@ pub unsafe extern "C" fn __reussir_run_dtor(
                 );
                 unsafe {
                     task = *step.child;
-                    (*context)
-                        .continuations
-                        .push(Continuation { buffer, resume });
+                    continuations.push(Continuation { buffer, resume });
                 }
                 break;
             }
-            unsafe { (*context).deallocate() };
-            let continuation = unsafe { (*context).continuations.pop() };
-            let Some(continuation) = continuation else {
-                unsafe { (*context).running = false };
+            unsafe { __reussir_dealloc_unsized(buffer.cast()) };
+            let Some(continuation) = continuations.pop() else {
+                unsafe {
+                    (*context).continuations = continuations;
+                    (*context).running = false;
+                }
                 return;
             };
             buffer = continuation.buffer;

@@ -313,3 +313,75 @@ fn repeated_suspensions_preserve_postorder() {
         output.clear();
     }
 }
+
+#[repr(C)]
+struct AllocatingParent {
+    context: *mut DtorExecutor,
+    allocation: *mut u8,
+    args: (usize, *mut Vec<usize>),
+    task: DtorTask,
+}
+
+unsafe extern "C" fn allocating_start(
+    buffer: *mut c_void,
+    object: *mut c_void,
+    output: *mut DtorStep,
+) {
+    let (context, values) = unsafe { *object.cast::<(*mut DtorExecutor, *mut Vec<usize>)>() };
+    let frame = buffer.cast::<AllocatingParent>();
+    unsafe {
+        assert!((*context).allocations.is_empty());
+        let allocation = __reussir_dtor_conti_alloc(context, 513, 256).cast::<u8>();
+        allocation.write_bytes(0xa5, 513);
+        frame.write(AllocatingParent {
+            context,
+            allocation,
+            args: (100_000, values),
+            task: DtorTask {
+                routine: &SMALL,
+                object: ptr::addr_of_mut!((*frame).args).cast(),
+            },
+        });
+        output.write(DtorStep {
+            resume: Some(allocating_resume),
+            child: ptr::addr_of!((*frame).task),
+        });
+    }
+}
+
+unsafe extern "C" fn allocating_resume(buffer: *mut c_void, cancel: bool, output: *mut DtorStep) {
+    assert!(!cancel);
+    unsafe {
+        let frame = &*buffer.cast::<AllocatingParent>();
+        assert_eq!((*frame.context).allocations.as_slice(), &[frame.allocation]);
+        assert_eq!(
+            std::slice::from_raw_parts(frame.allocation, 513),
+            &[0xa5; 513]
+        );
+        __reussir_dtor_conti_free(frame.context);
+        output.write(DtorStep {
+            resume: None,
+            child: ptr::null(),
+        });
+    }
+}
+
+#[test]
+fn explicit_allocation_survives_child_drain() {
+    let mut context = DtorExecutor::new();
+    let mut values = Vec::<usize>::new();
+    let mut args = (ptr::addr_of_mut!(context), ptr::addr_of_mut!(values));
+    let routine = DtorRoutine {
+        start: allocating_start,
+        size: size_of::<AllocatingParent>(),
+        align: align_of::<AllocatingParent>(),
+    };
+    for _ in 0..2 {
+        unsafe { __reussir_run_dtor(&mut context, ptr::addr_of_mut!(args).cast(), &routine) };
+        assert_eq!(values, (0..=100_000).collect::<Vec<_>>());
+        assert!(context.allocations.is_empty());
+        assert!(context.continuations.is_empty());
+        assert!(!context.running);
+        values.clear();
+    }
+}
