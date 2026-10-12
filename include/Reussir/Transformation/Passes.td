@@ -269,15 +269,10 @@ def ReussirDefaultInlinerPass
     pass-registry resolution): a single inlining iteration, and a callable
     optimizer that canonicalizes with region simplification disabled.
 
-    One iteration is the load-bearing part: within a recursive SCC the
-    inliner re-inlines the call sites each round just created, so the
-    upstream default of four iterations grows a mutually recursive call
-    graph geometrically in its fanout — an interpreter-shaped program
-    inflates a few thousand ops into millions. A single iteration keeps
-    ordinary bottom-up inlining across SCCs (every non-recursive call still
-    inlines) and unrolls recursion one level, the posture LLVM's own inliner
-    takes. Region simplification stays off in the callable optimizer to
-    match the rest of the pipeline's canonicalization policy.
+    One iteration avoids repeatedly expanding recursive SCCs across rounds.
+    It retains bottom-up processing across SCCs, subject to MLIR's legality
+    checks and the profitability rules below. Region simplification stays
+    off in the callable optimizer to match the rest of the pipeline.
 
     The other load-bearing part is the callee size cap. The inliner works
     bottom-up, so by the time a caller is processed its callees already
@@ -288,6 +283,20 @@ def ReussirDefaultInlinerPass
     duplicated. The cap lets small helpers inline everywhere (where the
     rc-pairing passes profit from seeing through the call) while the big
     already-inlined bodies stay shared.
+
+    Within that one iteration, MLIR also visits calls introduced by earlier
+    inlining. Its inline history stops a chain when a callee repeats, but
+    chains through distinct members of a recursive SCC can still duplicate
+    substantial code. Record each call's original enclosing function and
+    decline calls that have moved into another function when their callee
+    belongs to an initially recursive SCC. Original calls and calls into
+    non-recursive callees still use the existing legality and size checks.
+    Temporary origin attributes are removed after inlining.
+
+    This is a growth heuristic, not a global code-size bound or an exact
+    recursion-unrolling depth. Callables can already contain inlined code;
+    unresolved recursion and calls newly created without origin attributes
+    are not covered by this guard.
   }];
   let options =
       [Option<"maxCalleeOps", "max-callee-ops", "unsigned", "256",
