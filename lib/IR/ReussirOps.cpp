@@ -3970,11 +3970,12 @@ void inheritSanitizerPassthrough(mlir::ModuleOp moduleOp,
 //===----------------------------------------------------------------------===//
 // createDtorIfNotExists
 //===----------------------------------------------------------------------===//
-mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
-                                         RecordType type,
-                                         mlir::OpBuilder &builder,
-                                         AtomicKind kind) {
-  mlir::SymbolTable symTable(moduleOp);
+mlir::func::FuncOp createDtorIfNotExists(
+    mlir::ModuleOp moduleOp, RecordType type, mlir::OpBuilder &builder,
+    AtomicKind kind, mlir::SymbolTableCollection *symbols) {
+  std::optional<mlir::SymbolTable> ownTable;
+  mlir::SymbolTable &symTable = symbols ? symbols->getSymbolTable(moduleOp)
+                                      : ownTable.emplace(moduleOp);
   auto dtorName = type.getDtorName(kind);
   if (!dtorName)
     llvm::report_fatal_error("only named record types have destructors");
@@ -3991,6 +3992,7 @@ mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
       mlir::func::FuncOp::create(builder, builder.getUnknownLoc(), funcName,
                                  builder.getFunctionType({refType}, {}));
   dtor.setPrivate();
+  symTable.insert(dtor);
   dtor->setAttr("llvm.linkage", builder.getAttr<mlir::LLVM::LinkageAttr>(
                                     mlir::LLVM::linkage::Linkage::LinkonceODR));
   dtor->setAttr("llvm.passthrough",
@@ -4016,8 +4018,10 @@ mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
 //===----------------------------------------------------------------------===//
 mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
     mlir::ModuleOp moduleOp, RecordType type, mlir::OpBuilder &builder,
-    AtomicKind kind) {
-  mlir::SymbolTable symTable(moduleOp);
+    AtomicKind kind, mlir::SymbolTableCollection *symbols) {
+  std::optional<mlir::SymbolTable> ownTable;
+  mlir::SymbolTable &symTable = symbols ? symbols->getSymbolTable(moduleOp)
+                                      : ownTable.emplace(moduleOp);
   auto acquireName = type.getAcquireName(kind);
   if (!acquireName)
     llvm::report_fatal_error(
@@ -4039,6 +4043,7 @@ mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
       builder, builder.getUnknownLoc(), funcName,
       builder.getFunctionType({refType, builder.getIndexType()}, {}));
   funcOp.setPrivate();
+  symTable.insert(funcOp);
   funcOp->setAttr("llvm.linkage",
                   builder.getAttr<mlir::LLVM::LinkageAttr>(
                       mlir::LLVM::linkage::Linkage::LinkonceODR));

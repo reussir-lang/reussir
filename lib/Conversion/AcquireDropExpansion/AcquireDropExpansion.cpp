@@ -299,6 +299,7 @@ private:
   }
 
   bool outlineRecord;
+  mlir::SymbolTableCollection *symbols;
 
   bool shouldOutline(ReussirRefDropOp op, RecordType type) const {
     if (!outlineRecord)
@@ -317,9 +318,10 @@ private:
   }
 
 public:
-  DropExpansionPattern(mlir::MLIRContext *context, bool outlineRecord)
+  DropExpansionPattern(mlir::MLIRContext *context, bool outlineRecord,
+                       mlir::SymbolTableCollection *symbols)
       : mlir::OpRewritePattern<ReussirRefDropOp>(context),
-        outlineRecord(outlineRecord) {}
+        outlineRecord(outlineRecord), symbols(symbols) {}
 
   mlir::LogicalResult
   matchAndRewrite(ReussirRefDropOp op,
@@ -346,7 +348,7 @@ public:
           if (shouldOutline(op, recordType)) {
             mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
             mlir::func::FuncOp dtor = createDtorIfNotExists(
-                moduleOp, recordType, rewriter, refType.getAtomicKind());
+                moduleOp, recordType, rewriter, refType.getAtomicKind(), symbols);
             mlir::func::CallOp::create(rewriter, op.getLoc(), dtor,
                                        op.getRef());
             rewriter.eraseOp(op);
@@ -378,6 +380,7 @@ class AcquireExpansionPattern
     : public mlir::OpRewritePattern<ReussirRefAcquireOp> {
 private:
   bool outlineRecord;
+  mlir::SymbolTableCollection *symbols;
 
   bool shouldOutline(ReussirRefAcquireOp op, RecordType type) const {
     if (!outlineRecord)
@@ -393,9 +396,10 @@ private:
   }
 
 public:
-  AcquireExpansionPattern(mlir::MLIRContext *context, bool outlineRecord)
+  AcquireExpansionPattern(mlir::MLIRContext *context, bool outlineRecord,
+                          mlir::SymbolTableCollection *symbols)
       : mlir::OpRewritePattern<ReussirRefAcquireOp>(context),
-        outlineRecord(outlineRecord) {}
+        outlineRecord(outlineRecord), symbols(symbols) {}
 
   mlir::LogicalResult
   matchAndRewrite(ReussirRefAcquireOp op,
@@ -412,7 +416,7 @@ public:
       if (shouldOutline(op, recordType)) {
         mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
         mlir::func::FuncOp acquireFunc = emitOwnershipAcquisitionFuncIfNotExists(
-            moduleOp, recordType, rewriter, refType.getAtomicKind());
+            moduleOp, recordType, rewriter, refType.getAtomicKind(), symbols);
         mlir::Value delta = op.getDelta();
         if (!delta)
           delta = rewriter.createOrFold<mlir::arith::ConstantIndexOp>(
@@ -464,9 +468,12 @@ struct AcquireDropExpansionPass
   using Base::Base;
   void runOnOperation() override {
     mlir::ConversionTarget target(getContext());
+    // Share tables for this run only; the glue helpers register each new
+    // symbol, and this pass does not erase or rename functions.
+    mlir::SymbolTableCollection symbols;
     mlir::RewritePatternSet patterns(&getContext());
-
-    populateAcquireDropExpansionConversionPatterns(patterns, outlineRecord);
+    populateAcquireDropExpansionConversionPatterns(patterns, outlineRecord,
+                                                   &symbols);
     if (expandDecrement)
       populateRcDecrementExpansionConversionPatterns(patterns);
     if (failed(
@@ -477,9 +484,12 @@ struct AcquireDropExpansionPass
 } // namespace
 
 void populateAcquireDropExpansionConversionPatterns(
-    mlir::RewritePatternSet &patterns, bool outlineRecord) {
-  patterns.add<DropExpansionPattern>(patterns.getContext(), outlineRecord);
-  patterns.add<AcquireExpansionPattern>(patterns.getContext(), outlineRecord);
+    mlir::RewritePatternSet &patterns, bool outlineRecord,
+    mlir::SymbolTableCollection *symbols) {
+  patterns.add<DropExpansionPattern>(patterns.getContext(), outlineRecord,
+                                     symbols);
+  patterns.add<AcquireExpansionPattern>(patterns.getContext(), outlineRecord,
+                                     symbols);
 }
 
 } // namespace reussir

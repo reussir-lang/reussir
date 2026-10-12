@@ -124,10 +124,14 @@ mlir::LogicalResult emitArrayElementTraversal(
 // `kind` is the atomic context the glue is dropped from: the glue's argument
 // reference carries it, and the expanded body derives member links from it
 // (whole-subtree rule), so each kind gets its own outlined symbol.
+// A caller doing many glue lookups can supply a collection to reuse the
+// module's symbol table. Newly created glue is registered in that table.
+// The caller must keep it consistent with any other symbol mutations.
 mlir::func::FuncOp
 createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
                       mlir::OpBuilder &builder,
-                      AtomicKind kind = AtomicKind::normal);
+                      AtomicKind kind = AtomicKind::normal,
+    mlir::SymbolTableCollection *symbols = nullptr);
 
 //===----------------------------------------------------------------------===//
 // emitOwnershipAcquisitionFuncIfNotExists
@@ -137,12 +141,13 @@ createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
 // record type if it doesn't already exist. The function takes a reference to
 // the type and an index delta and performs the acquisition operation. Returns
 // the existing function if one is already present. The RecordType must be a
-// named type.
+// named type. `symbols` follows the contract of createDtorIfNotExists.
 //
 //===----------------------------------------------------------------------===//
 mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
     mlir::ModuleOp moduleOp, RecordType type, mlir::OpBuilder &builder,
-    AtomicKind kind = AtomicKind::normal);
+    AtomicKind kind = AtomicKind::normal,
+    mlir::SymbolTableCollection *symbols = nullptr);
 
 //===----------------------------------------------------------------------===//
 

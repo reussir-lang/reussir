@@ -21,6 +21,7 @@
 
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/Builders.h>
+#include <mlir/IR/SymbolTable.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/DialectConversion.h>
 
@@ -31,8 +32,11 @@ namespace reussir {
 #define GEN_PASS_DECL_REUSSIRACQUIREDROPEXPANSIONPASS
 #include "Reussir/Conversion/Passes.h.inc"
 
+// `symbols`, if given, holds the symbol tables the outlined glue is looked
+// up in (see `createDtorIfNotExists`); it must outlive the patterns.
 void populateAcquireDropExpansionConversionPatterns(
-    mlir::RewritePatternSet &patterns, bool outlineRecord);
+    mlir::RewritePatternSet &patterns, bool outlineRecord,
+    mlir::SymbolTableCollection *symbols = nullptr);
 
 } // namespace reussir
 
