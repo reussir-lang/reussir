@@ -859,6 +859,12 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
     // the allocator entirely and the nullable result dies as a dead phi.
     // Sibling-exit records of the same token collapse into the single sunk
     // free — the producer dominates every path the records covered.
+    // A token the unique branch takes from an `scf.if` nested in it (the
+    // guard that skips a tagged immediate, a nested decrement whose token
+    // was escaped) is sunk the same way, as a free of that nullable at the
+    // end of the branch: under `reuse-across-call` tokens stay available
+    // across non-tail calls, and such a token, not reused, was freed at
+    // every exit after it (quadratic code in the nesting of matches).
     llvm::DenseSet<mlir::Value> sunkTokens;
     for (const auto &free : frees) {
       auto scfIf = llvm::dyn_cast_if_present<mlir::scf::IfOp>(
@@ -871,12 +877,24 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
             llvm::cast<mlir::OpResult>(free.token).getResultNumber();
         mlir::Operation *thenYield =
             scfIf.getThenRegion().back().getTerminator();
+        mlir::Value yielded = thenYield->getOperand(index);
         auto nonNull = llvm::dyn_cast_if_present<ReussirNullableCreateOp>(
-            thenYield->getOperand(index).getDefiningOp());
+            yielded.getDefiningOp());
         if (nonNull && nonNull.getPtr()) {
           rewriter.setInsertionPoint(thenYield);
           ReussirTokenFreeOp::create(rewriter, thenYield->getLoc(),
                                      nonNull.getPtr());
+          continue;
+        }
+        auto elseNull = llvm::dyn_cast_if_present<ReussirNullableCreateOp>(
+            scfIf.getElseRegion().back().getTerminator()->getOperand(index)
+                .getDefiningOp());
+        auto nested =
+            llvm::dyn_cast_if_present<mlir::scf::IfOp>(yielded.getDefiningOp());
+        if (nested && nested->getBlock() == thenYield->getBlock() &&
+            yielded.hasOneUse() && elseNull && !elseNull.getPtr()) {
+          rewriter.setInsertionPoint(thenYield);
+          ReussirTokenFreeOp::create(rewriter, thenYield->getLoc(), yielded);
           continue;
         }
         // Unexpected branch shape: fall back to the guarded top-level free.
