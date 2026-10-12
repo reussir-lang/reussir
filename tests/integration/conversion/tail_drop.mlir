@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true' --verify-each | %FileCheck %s
+// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true' --verify-each | %FileCheck %s --implicit-check-not=' cf.'
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=EARLY
 
 !node_ = !reussir.record<compound "Node" incomplete>
@@ -10,17 +10,15 @@
 !snoc = !reussir.record<compound "Snoc" { !snoc_, !leaf }>
 
 // CHECK-LABEL: func.func private @{{.*}}NodeE.tail_release
-// CHECK-NOT: call
 // CHECK: reussir.rc.fetch
-// CHECK: cf.cond_br
+// CHECK: scf.if
 // CHECK: %[[NEXT:.*]] = reussir.ref.load
 // CHECK: reussir.rc.reinterpret
 // CHECK-NEXT: reussir.token.free
-// CHECK: cf.cond_br
-// CHECK: reussir.rc.set
+// CHECK: scf.if
 // CHECK: reussir.nullable.coerce
-// CHECK-NEXT: cf.br
-// CHECK-NOT: call
+// CHECK-NEXT: func.call @{{.*}}NodeE.tail_release{{.*}}reussir.musttail
+// CHECK: reussir.rc.set
 module {
   // CHECK-LABEL: func.func @release
   // CHECK: call @{{.*}}NodeE.tail_release

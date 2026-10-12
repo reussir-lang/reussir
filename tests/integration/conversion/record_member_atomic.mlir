@@ -1,6 +1,6 @@
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=EXPAND
 // RUN: %reussir-opt %s --pass-pipeline='builtin.module(func.func(reussir-token-instantiation),reussir-rc-decrement-expansion,reussir-acquire-drop-expansion{expand-decrement=1 outline-record=1})' | %FileCheck %s --check-prefix=OUTLINE
-// RUN: %reussir-opt %s --pass-pipeline='builtin.module(func.func(reussir-token-instantiation),reussir-rc-decrement-expansion,reussir-acquire-drop-expansion{expand-decrement=1 outline-record=1},reussir-convert-to-std,convert-scf-to-cf,convert-to-llvm)' | %reussir-translate --mlir-to-llvmir | %FileCheck %s --check-prefix=LLVM
+// RUN: %reussir-opt %s --pass-pipeline='builtin.module(func.func(reussir-token-instantiation),reussir-rc-decrement-expansion,reussir-acquire-drop-expansion{expand-decrement=1 outline-record=1},reussir-convert-to-std,convert-scf-to-cf,reussir-convert-to-llvm)' | %reussir-translate --mlir-to-llvmir | %FileCheck %s --check-prefix=LLVM
 
 // The whole-subtree atomicity rule (thread-safety design §3.3). Two shapes:
 //

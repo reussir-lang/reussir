@@ -185,9 +185,6 @@ private:
       TokenType correct = dec.getTokenType();
       if (correct != llvm::cast<TokenType>(nullableType.getPtrTy()))
         dec->getResult(0).setType(NullableType::get(op.getContext(), correct));
-      if (auto function = op->getParentOfType<mlir::func::FuncOp>();
-          function && function->hasAttr(kTailDropReleaseAttr))
-        ReussirTokenFreeOp::create(rewriter, op.getLoc(), dec.getNullableToken());
     }
     rewriter.eraseOp(op);
     return mlir::success();
@@ -315,9 +312,6 @@ private:
         if (correct != llvm::cast<TokenType>(retNullableTy.getPtrTy()))
           dec->getResult(0).setType(
               NullableType::get(op.getContext(), correct));
-        if (auto function = op->getParentOfType<mlir::func::FuncOp>();
-            function && function->hasAttr(kTailDropReleaseAttr))
-          ReussirTokenFreeOp::create(rewriter, op.getLoc(), dec.getNullableToken());
       }
       ReussirScfYieldOp::create(rewriter, op.getLoc(), nullptr);
     }

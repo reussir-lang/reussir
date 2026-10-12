@@ -801,8 +801,6 @@ struct TokenReusePass : public impl::ReussirTokenReusePassBase<TokenReusePass> {
   }
 
   void runOnOperation() override {
-    if (getOperation()->hasAttr(kTailDropReleaseAttr))
-      return;
     escapeTrappedTokens(getOperation());
 
     llvm::SmallVector<Reuse> reuses;

@@ -11,13 +11,13 @@
 #include "Reussir/IR/RecordDrop.h"
 #include "Reussir/Transformation/SpecialPointerTag.h"
 #include <mlir/Dialect/Arith/IR/Arith.h>
-#include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMAttrs.h>
+#include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
 
 namespace reussir {
 namespace {
-bool canIterate(RcType type) {
+bool canTailRelease(RcType type) {
   if (type.getCapability() != Capability::shared)
     return false;
   if (auto record = llvm::dyn_cast<RecordType>(type.getElementType()))
@@ -35,20 +35,33 @@ class TailDropEmitter {
   mlir::func::FuncOp function;
   mlir::PatternRewriter &builder;
   mlir::Location loc;
-  mlir::Block *exit;
-  llvm::DenseMap<mlir::Type, mlir::Block *> states;
+  llvm::DenseMap<mlir::Type, mlir::func::FuncOp> helpers;
   llvm::SmallVector<RcType> pending;
 
-  mlir::Block *block() { return builder.createBlock(&function.getBody()); }
-  mlir::Block *state(RcType type) {
-    auto [it, inserted] = states.try_emplace(type);
+  mlir::func::FuncOp helper(RcType type) {
+    auto [it, inserted] = helpers.try_emplace(type);
     if (inserted) {
       mlir::OpBuilder::InsertionGuard guard(builder);
-      it->second = block();
-      it->second->addArgument(type, loc);
+      builder.setInsertionPoint(function);
+      auto name =
+          (function.getSymName() + "." + llvm::Twine(helpers.size())).str();
+      auto callee = mlir::func::FuncOp::create(
+          builder, loc, name, builder.getFunctionType({type}, {}));
+      callee.setPrivate();
+      callee->setAttr("llvm.linkage",
+                      builder.getAttr<mlir::LLVM::LinkageAttr>(
+                          mlir::LLVM::linkage::Linkage::Private));
+      inheritSanitizerPassthrough(module, callee);
+      it->second = callee;
       pending.push_back(type);
     }
     return it->second;
+  }
+  void tailRelease(mlir::Value next) {
+    auto callee = helper(llvm::cast<RcType>(next.getType()));
+    auto call = mlir::func::CallOp::create(builder, loc, callee,
+                                           mlir::ValueRange{next});
+    call->setAttr(kMustTailCallAttr, builder.getUnitAttr());
   }
   void freeOwner(mlir::Value owner) {
     auto rc = llvm::cast<RcType>(owner.getType());
@@ -66,10 +79,6 @@ class TailDropEmitter {
     auto token = ReussirRcReinterpretOp::create(builder, loc, tokenType, owner);
     ReussirTokenFreeOp::create(builder, loc, token.getReinterpreted());
   }
-  void finish(mlir::Value owner) {
-    freeOwner(owner);
-    mlir::cf::BranchOp::create(builder, loc, exit);
-  }
   void emitPayload(mlir::Value ref, mlir::Value owner) {
     auto refType = llvm::cast<RefType>(ref.getType());
     mlir::Type type = refType.getElementType();
@@ -77,65 +86,49 @@ class TailDropEmitter {
       return RefType::get(builder.getContext(), type, Capability::unspecified,
                           refType.getAtomicKind());
     };
-    if (auto rc = llvm::dyn_cast<RcType>(type); rc && canIterate(rc)) {
+    if (auto rc = llvm::dyn_cast<RcType>(type); rc && canTailRelease(rc)) {
       mlir::Value next = ReussirRefLoadOp::create(builder, loc, rc, ref);
       freeOwner(owner);
-      mlir::cf::BranchOp::create(builder, loc, state(rc),
-                                 mlir::ValueRange{next});
+      tailRelease(next);
       return;
     }
     if (auto nullable = llvm::dyn_cast<NullableType>(type)) {
       auto rc = llvm::dyn_cast<RcType>(nullable.getPtrTy());
-      if (rc && canIterate(rc)) {
+      if (rc && canTailRelease(rc)) {
         mlir::Value next =
             ReussirRefLoadOp::create(builder, loc, nullable, ref);
         mlir::Value present =
             ReussirNullableCheckOp::create(builder, loc, next);
         freeOwner(owner);
-        auto *current = builder.getInsertionBlock();
-        auto *nonnull = block();
-        builder.setInsertionPointToEnd(current);
-        mlir::cf::CondBranchOp::create(builder, loc, present, nonnull, exit);
-        builder.setInsertionPointToEnd(nonnull);
+        auto branch = mlir::scf::IfOp::create(builder, loc, present, false);
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(branch.thenBlock());
         mlir::Value value =
             ReussirNullableCoerceOp::create(builder, loc, rc, next);
-        mlir::cf::BranchOp::create(builder, loc, state(rc),
-                                   mlir::ValueRange{value});
+        tailRelease(value);
         return;
       }
     }
     if (auto record = llvm::dyn_cast<RecordType>(type)) {
       if (record.isVariant() && !record.getMembers().empty()) {
-        auto *current = builder.getInsertionBlock();
-        llvm::SmallVector<mlir::Block *> arms;
+        llvm::SmallVector<mlir::Attribute> tags;
         for (size_t i = 0; i < record.getMembers().size(); ++i)
-          arms.push_back(block());
-        builder.setInsertionPointToEnd(current);
-        mlir::Value tag = ReussirRecordTagOp::create(builder, loc, ref);
-        tag = mlir::arith::IndexCastOp::create(builder, loc,
-                                               builder.getI32Type(), tag);
-        llvm::SmallVector<int32_t> tags;
-        llvm::SmallVector<mlir::ValueRange> operands;
-        for (size_t i = 0; i + 1 < arms.size(); ++i) {
-          tags.push_back(i);
-          operands.emplace_back();
-        }
-        mlir::cf::SwitchOp::create(builder, loc, tag, arms.back(),
-                                   mlir::ValueRange{}, tags,
-                                   llvm::ArrayRef(arms).drop_back(), operands);
-        for (auto [i, arm] : llvm::enumerate(arms)) {
-          builder.setInsertionPointToEnd(arm);
-          if (record.getMemberIsField()[i]) {
-            finish(owner);
-            continue;
-          }
-          auto member = getProjectedType(record.getMembers()[i], false,
-                                         Capability::unspecified,
-                                         refType.getAtomicKind());
-          mlir::Value payload = ReussirRecordCoerceOp::create(
-              builder, loc, projectedRefType(member), builder.getIndexAttr(i),
-              ref);
-          emitPayload(payload, owner);
+          tags.push_back(builder.getDenseI64ArrayAttr({int64_t(i)}));
+        auto dispatch = ReussirRecordDispatchOp::create(
+            builder, loc, mlir::Type{}, ref, builder.getArrayAttr(tags),
+            tags.size());
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        for (size_t i = 0; i < tags.size(); ++i) {
+          auto member = getProjectedType(
+              record.getMembers()[i], record.getMemberIsField()[i],
+              Capability::unspecified, refType.getAtomicKind());
+          auto *arm = builder.createBlock(&dispatch.getRegions()[i], {},
+                                          {projectedRefType(member)}, {loc});
+          if (record.getMemberIsField()[i])
+            freeOwner(owner);
+          else
+            emitPayload(arm->getArgument(0), owner);
+          ReussirScfYieldOp::create(builder, loc, nullptr);
         }
         return;
       }
@@ -160,7 +153,7 @@ class TailDropEmitter {
           }
           ReussirRefDropOp::create(builder, loc, slot);
         }
-        finish(owner);
+        freeOwner(owner);
         return;
       }
     }
@@ -192,21 +185,10 @@ class TailDropEmitter {
     }
     if (!isTriviallyCopyable(type))
       ReussirRefDropOp::create(builder, loc, ref);
-    finish(owner);
+    freeOwner(owner);
   }
-  void emitState(RcType type) {
-    builder.setInsertionPointToEnd(states.lookup(type));
-    mlir::Value rc = builder.getInsertionBlock()->getArgument(0);
-    if (module->hasAttr(kSpecialPtrTagAttr) &&
-        type.mayCarrySpecialPointerTag()) {
-      mlir::Value immediate =
-          ReussirRcIsImmediateOp::create(builder, loc, builder.getI1Type(), rc);
-      auto *current = builder.getInsertionBlock();
-      auto *heap = block();
-      builder.setInsertionPointToEnd(current);
-      mlir::cf::CondBranchOp::create(builder, loc, immediate, exit, heap);
-      builder.setInsertionPointToEnd(heap);
-    }
+  void emitHeapRelease(mlir::Value rc) {
+    auto type = llvm::cast<RcType>(rc.getType());
     bool atomic = type.getAtomicKind() == AtomicKind::atomic;
     mlir::Value count =
         atomic ? ReussirRcFetchSubOp::create(builder, loc, rc).getRefCount()
@@ -214,23 +196,36 @@ class TailDropEmitter {
     mlir::Value one = mlir::arith::ConstantIndexOp::create(builder, loc, 1);
     mlir::Value unique = mlir::arith::CmpIOp::create(
         builder, loc, mlir::arith::CmpIPredicate::eq, count, one);
-    auto *current = builder.getInsertionBlock();
-    auto *destroy = block();
-    auto *shared = block();
-    builder.setInsertionPointToEnd(current);
-    mlir::cf::CondBranchOp::create(builder, loc, unique, destroy, shared);
-    builder.setInsertionPointToEnd(shared);
+    auto branch = mlir::scf::IfOp::create(builder, loc, unique, !atomic);
+    mlir::OpBuilder::InsertionGuard guard(builder);
     if (!atomic) {
+      builder.setInsertionPointToStart(branch.elseBlock());
       mlir::Value decremented =
           mlir::arith::SubIOp::create(builder, loc, count, one);
       ReussirRcSetOp::create(builder, loc, rc, decremented);
     }
-    mlir::cf::BranchOp::create(builder, loc, exit);
-    builder.setInsertionPointToEnd(destroy);
+    builder.setInsertionPointToStart(branch.thenBlock());
     auto refType = RefType::get(builder.getContext(), type.getElementType(),
                                 Capability::unspecified, type.getAtomicKind());
     mlir::Value ref = ReussirRcBorrowOp::create(builder, loc, refType, rc);
     emitPayload(ref, rc);
+  }
+  void emitHelper(RcType type) {
+    auto callee = helpers.lookup(type);
+    builder.setInsertionPointToStart(callee.addEntryBlock());
+    mlir::Value rc = callee.getArgument(0);
+    if (module->hasAttr(kSpecialPtrTagAttr) &&
+        type.mayCarrySpecialPointerTag()) {
+      mlir::Value immediate =
+          ReussirRcIsImmediateOp::create(builder, loc, builder.getI1Type(), rc);
+      auto branch = mlir::scf::IfOp::create(builder, loc, immediate, true);
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(branch.elseBlock());
+      emitHeapRelease(rc);
+    } else {
+      emitHeapRelease(rc);
+    }
+    mlir::func::ReturnOp::create(builder, loc);
   }
 
 public:
@@ -238,15 +233,11 @@ public:
                   mlir::PatternRewriter &builder)
       : module(module), function(function), builder(builder),
         loc(function.getLoc()) {
-    auto *entry = function.addEntryBlock();
-    exit = block();
-    mlir::func::ReturnOp::create(builder, loc);
-    builder.setInsertionPointToEnd(entry);
-    auto type = llvm::cast<RcType>(entry->getArgument(0).getType());
-    mlir::cf::BranchOp::create(builder, loc, state(type),
-                               entry->getArguments());
+    auto type = llvm::cast<RcType>(function.getArgumentTypes()[0]);
+    helpers.try_emplace(type, function);
+    pending.push_back(type);
     for (size_t i = 0; i < pending.size(); ++i)
-      emitState(pending[i]);
+      emitHelper(pending[i]);
   }
 };
 } // namespace
@@ -256,7 +247,7 @@ bool emitTailDropRelease(mlir::Value rc, mlir::Location loc,
                          mlir::SymbolTableCollection *symbols) {
   auto type = llvm::cast<RcType>(rc.getType());
   auto record = llvm::dyn_cast<RecordType>(type.getElementType());
-  if (!record || !record.getName() || !canIterate(type))
+  if (!record || !record.getName() || !canTailRelease(type))
     return false;
   std::optional<mlir::SymbolTable> ownTable;
   auto &table =
@@ -267,12 +258,11 @@ bool emitTailDropRelease(mlir::Value rc, mlir::Location loc,
   auto function = table.lookup<mlir::func::FuncOp>(name);
   if (!function) {
     mlir::OpBuilder::InsertionGuard guard(rewriter);
-    rewriter.getContext()->getOrLoadDialect<mlir::cf::ControlFlowDialect>();
+    rewriter.getContext()->getOrLoadDialect<mlir::scf::SCFDialect>();
     rewriter.setInsertionPointToStart(module.getBody());
     function = mlir::func::FuncOp::create(rewriter, loc, name,
                                           rewriter.getFunctionType({type}, {}));
     function.setPrivate();
-    function->setAttr(kTailDropReleaseAttr, rewriter.getUnitAttr());
     table.insert(function);
     function->setAttr("llvm.linkage",
                       rewriter.getAttr<mlir::LLVM::LinkageAttr>(

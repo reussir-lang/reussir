@@ -207,7 +207,7 @@ void createLoweringPipeline(mlir::PassManager &pm,
   pm.addPass(createConvertSCFToCFPass());
 #endif
   pm.addPass(createReussirBasicOpsLoweringPass());
-  pm.addPass(createConvertToLLVMPass());
+  pm.addPass(createReussirConvertToLLVMPass());
   pm.addPass(createReconcileUnrealizedCastsPass());
   pm.addPass(createCSEPass());
   pm.addPass(createCanonicalizerPass());

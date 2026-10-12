@@ -4060,8 +4060,39 @@ struct ConvertToLLVMPass
                                                        patterns);
     }
     if (failed(mlir::applyPartialConversion(moduleOp, target,
-                                            std::move(patterns))))
+                                            std::move(patterns)))) {
       signalPassFailure();
+      return;
+    }
+    llvm::SmallVector<mlir::LLVM::CallOp> tailCalls;
+    moduleOp.walk([&](mlir::LLVM::CallOp call) {
+      if (call->hasAttr(kMustTailCallAttr))
+        tailCalls.push_back(call);
+    });
+    for (auto call : tailCalls) {
+      auto *next = call->getNextNode();
+      llvm::SmallPtrSet<mlir::Block *, 8> visited;
+      while (auto branch = llvm::dyn_cast_or_null<mlir::LLVM::BrOp>(next)) {
+        auto *dest = branch.getDest();
+        if (!visited.insert(dest).second)
+          break;
+        next = &dest->front();
+      }
+      if (!llvm::isa_and_nonnull<mlir::LLVM::ReturnOp>(next) ||
+          next->getNumOperands() != 0 || call.getNumResults() != 0) {
+        call.emitError("musttail release must be followed only by a void return");
+        signalPassFailure();
+        return;
+      }
+      auto *terminator = call->getNextNode();
+      if (!llvm::isa<mlir::LLVM::ReturnOp>(terminator)) {
+        mlir::OpBuilder builder(terminator);
+        mlir::LLVM::ReturnOp::create(builder, call.getLoc(), mlir::ValueRange{});
+        terminator->erase();
+      }
+      call->removeAttr(kMustTailCallAttr);
+      call.setTailCallKind(mlir::LLVM::TailCallKind::MustTail);
+    }
   }
 };
 } // namespace
