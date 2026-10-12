@@ -115,6 +115,9 @@ int main(int argc, char **argv) {
     return reussir::createReussirTokenReusePass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return reussir::createReussirSCCPPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return reussir::createReussirSpecialPointerTagPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {

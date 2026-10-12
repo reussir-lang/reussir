@@ -40,6 +40,7 @@ const REUSSIR_ARCHIVES: &[&str] = &[
     "MLIRReussirIFRTJustInTimeTransform",
     "MLIRReussirClosureBetaReduction",
     "MLIRReussirDefaultInliner",
+    "MLIRReussirSCCP",
     "MLIRReussirRcCreateSink",
     "MLIRReussirRcCreateFusion",
     "MLIRReussirRcDispatchFusion",

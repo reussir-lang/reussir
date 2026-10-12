@@ -43,6 +43,7 @@ set(REUSSIR_BACKEND_ARCHIVES
   MLIRReussirAttachNativeTarget
   MLIRReussirIFRTJustInTimeTransform
   # transformations
+  MLIRReussirSCCP
   MLIRReussirRcCreateSink
   MLIRReussirRcCreateFusion
   MLIRReussirRcDispatchFusion

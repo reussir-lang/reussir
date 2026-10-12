@@ -191,7 +191,8 @@ MlirPass reussirCreateCanonicalizerPass(void) {
   return wrapOwned(mlir::createCanonicalizerPass());
 }
 MlirPass reussirCreateSCCPPass(void) {
-  return wrapOwned(mlir::createSCCPPass());
+  // Across calls only within a budget of call sites (see the pass).
+  return wrapOwned(reussir::createReussirSCCPPass());
 }
 MlirPass reussirCreateLoopInvariantCodeMotionPass(void) {
   return wrapOwned(mlir::createLoopInvariantCodeMotionPass());

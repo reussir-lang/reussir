@@ -295,4 +295,30 @@ def ReussirDefaultInlinerPass
               "(counted recursively through nested regions).">];
 }
 
+def ReussirSCCPPass : Pass<"reussir-sccp", "::mlir::ModuleOp"> {
+  let summary = "MLIR's SCCP, interprocedural while the call sites allow";
+  let description = [{
+    `reussir-sccp` runs MLIR's `sccp` on the whole module, across calls,
+    when the module's call sites are within a budget, and on each function
+    alone otherwise.
+
+    Interprocedural dataflow can repeatedly scan a callable's known call
+    sites when its argument or return information changes. The budget is
+    a heuristic for that fan-in cost: the sum, over callees with bodies,
+    of the square of their call-site counts. External declarations do not
+    count. The default threshold is 2^22; it is not a runtime bound.
+
+    Above the budget, stock SCCP runs on each `func.func` in the pipeline's
+    flat module. This preserves local constant propagation but gives up
+    propagation of arguments and results across calls at this stage.
+    Neither mode promises linear running time, and later LLVM optimization
+    need not recover every lost interprocedural opportunity.
+  }];
+  let options =
+      [Option<"maxCallSitePairs", "max-call-site-pairs", "uint64_t",
+              "uint64_t(1) << 22",
+              "Run SCCP across calls only while the sum over callees of the "
+              "square of their number of call sites is at most this.">];
+}
+
 #endif // REUSSIR_TRANSFORMATION_PASSES_TD
