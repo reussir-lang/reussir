@@ -515,6 +515,79 @@ mod tests {
     use melior::ir::operation::OperationLike;
 
     #[test]
+    fn scf_to_cf_disables_rollback() {
+        let context = crate::context();
+        let manager = PassManager::new(&context);
+        lowering_pipeline!(manager, module: sys::reussirCreateSCFToControlFlowPass(););
+        // Small functional examples pass in either mode. Guard the setting
+        // avoiding quadratic rollback storage without a timing/RSS threshold.
+        assert!(
+            manager
+                .as_operation_pass_manager()
+                .to_string()
+                .contains("allow-pattern-rollback=false")
+        );
+    }
+
+    #[test]
+    fn scf_to_cf_matches_rollback_on_chained_and_nested_control_flow() {
+        use std::fmt::Write;
+
+        let context = crate::context();
+        let mut source = String::from(
+            r#"module {
+              func.func @test(%condition: i1, %selector: index, %x0: i64) -> i64 {
+                %zero = arith.constant 0 : index
+                %one = arith.constant 1 : index
+            "#,
+        );
+        // Every result feeds the next split. Keep this a modest correctness
+        // fixture; historical large-input memory measurements are not CI limits.
+        for i in 0..32 {
+            let next = i + 1;
+            writeln!(
+                source,
+                r#"%x{next} = scf.if %condition -> (i64) {{
+                  %value = scf.index_switch %selector -> i64
+                    case 0 {{ scf.yield %x{i} : i64 }}
+                    default {{
+                      %loop = scf.for %iv = %zero to %selector step %one
+                          iter_args(%acc = %x{i}) -> (i64) {{
+                        %sum = arith.addi %acc, %acc : i64
+                        scf.yield %sum : i64
+                      }}
+                      scf.yield %loop : i64
+                    }}
+                  scf.yield %value : i64
+                }} else {{ scf.yield %x{i} : i64 }}"#,
+            )
+            .unwrap();
+        }
+        source.push_str("return %x32 : i64\n}}");
+        let mut actual = Module::parse(&context, &source).expect("module should parse");
+        let mut reference = Module::parse(&context, &source).expect("module should parse");
+
+        let manager = PassManager::new(&context);
+        lowering_pipeline!(manager, module: sys::reussirCreateSCFToControlFlowPass(););
+        manager.run(&mut actual).expect("no-rollback lowering");
+        assert!(actual.as_operation().verify());
+
+        melior::utility::register_all_passes();
+        let manager = PassManager::new(&context);
+        melior::utility::parse_pass_pipeline(
+            manager.as_operation_pass_manager(),
+            "builtin.module(convert-scf-to-cf{allow-pattern-rollback=true})",
+        )
+        .expect("rollback-enabled pipeline should parse");
+        manager.run(&mut reference).expect("rollback lowering");
+        assert!(reference.as_operation().verify());
+
+        let actual = actual.as_operation().to_string();
+        assert!(!actual.contains("scf."));
+        assert_eq!(actual, reference.as_operation().to_string());
+    }
+
+    #[test]
     fn lowers_simple_module_to_llvm_dialect() {
         let context = crate::context();
 
