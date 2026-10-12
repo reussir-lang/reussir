@@ -386,3 +386,29 @@ fn explicit_allocation_survives_child_drain() {
         values.clear();
     }
 }
+
+#[test]
+fn completed_sibling_frames_reuse_storage_without_touching_ancestors() {
+    let arena = Arena::new();
+    let mut buffers = FrameBuffers::default();
+    let parent = buffers.get(&arena, 0, 64, 8);
+    unsafe { parent.cast::<u8>().write_bytes(0xa5, 64) };
+    buffers.get(&arena, 1, 4096, 8);
+    let sibling = buffers.get(&arena, 1, 32, 256);
+    assert_eq!(sibling as usize % 256, 0);
+    let allocated = arena.allocated_bytes();
+    for _ in 0..10_000 {
+        assert_eq!(buffers.get(&arena, 1, 4096, 8), sibling);
+        assert_eq!(buffers.get(&arena, 1, 32, 256), sibling);
+    }
+    assert_eq!(arena.allocated_bytes(), allocated);
+    // Force the metadata vector out of its inline storage while the parent lives.
+    for depth in 2..32 {
+        buffers.get(&arena, depth, 64, 8);
+    }
+    assert_eq!(buffers.get(&arena, 0, 64, 8), parent);
+    assert_eq!(
+        unsafe { core::slice::from_raw_parts(parent.cast::<u8>(), 64) },
+        &[0xa5; 64]
+    );
+}

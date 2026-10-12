@@ -32,6 +32,40 @@ struct Continuation {
     resume: DtorResume,
 }
 
+struct FrameBuffer {
+    pointer: *mut c_void,
+    size: usize,
+    align: usize,
+}
+
+#[derive(Default)]
+struct FrameBuffers(SmallVec<[FrameBuffer; 8]>);
+
+impl FrameBuffers {
+    fn get(&mut self, arena: &Arena, depth: usize, size: usize, align: usize) -> *mut c_void {
+        // Completed siblings share a slot. Suspended ancestors keep their stable
+        // arena addresses even when the slot vector moves or grows.
+        if depth == self.0.len() {
+            self.0.push(FrameBuffer {
+                pointer: core::ptr::null_mut(),
+                size: 0,
+                align: 1,
+            });
+        }
+        let slot = &mut self.0[depth];
+        if slot.pointer.is_null() || slot.size < size || slot.align < align {
+            // Keep both dimensions monotone: alternating large and over-aligned
+            // siblings must not repeatedly replace the same slot.
+            slot.size = slot.size.max(size);
+            slot.align = slot.align.max(align);
+            let layout = Layout::from_size_align(slot.size.max(1), slot.align)
+                .expect("invalid continuation layout");
+            slot.pointer = arena.alloc_layout(layout).as_ptr().cast();
+        }
+        slot.pointer
+    }
+}
+
 pub struct DtorExecutor {
     arena: Arena,
     allocations: usize,
@@ -134,10 +168,16 @@ pub unsafe extern "C" fn __reussir_run_dtor(
     }
     // Keep inline storage in this drain; moving an empty SmallVec still copies it.
     let mut continuations: SmallVec<[Continuation; 8]> = SmallVec::new();
+    let mut buffers = FrameBuffers::default();
     let mut task = DtorTask { routine, object };
     loop {
         let routine = unsafe { *task.routine };
-        let buffer = unsafe { (*context).allocate_buffer(routine.size, routine.align) };
+        let buffer = buffers.get(
+            unsafe { &(*context).arena },
+            continuations.len(),
+            routine.size,
+            routine.align,
+        );
         let mut result = MaybeUninit::<DtorStep>::uninit();
         unsafe { (routine.start)(buffer, task.object, result.as_mut_ptr()) };
         let mut step = unsafe { result.assume_init() };
