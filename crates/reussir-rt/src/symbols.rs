@@ -14,6 +14,10 @@ use crate::alloc::{
     __reussir_allocate, __reussir_allocate_small, __reussir_dealloc_unsized, __reussir_deallocate,
     __reussir_realloc_unsized, __reussir_reallocate,
 };
+use crate::dtor_worklist::{
+    __reussir_create_dtor_worklist, __reussir_destroy_dtor_worklist, __reussir_drain_dtor_worklist,
+    __reussir_dtor_worklist_align, __reussir_dtor_worklist_size, __reussir_enqueue_dtor,
+};
 use crate::instrument::__reussir_report_nonlinear_usage;
 use crate::panic::__reussir_panic;
 #[cfg(feature = "pjrt")]
@@ -58,6 +62,12 @@ pub fn exported_symbols() -> &'static [RuntimeSymbol] {
         __reussir_dealloc_unsized,
         __reussir_reallocate,
         __reussir_realloc_unsized,
+        __reussir_dtor_worklist_size,
+        __reussir_dtor_worklist_align,
+        __reussir_create_dtor_worklist,
+        __reussir_enqueue_dtor,
+        __reussir_drain_dtor_worklist,
+        __reussir_destroy_dtor_worklist,
         __reussir_panic,
         __reussir_report_nonlinear_usage,
         __reussir_freeze_flex_object,

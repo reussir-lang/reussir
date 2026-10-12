@@ -1,0 +1,5 @@
+// Runtime-only ABI test; the .rr suffix makes lit collect the C/C++ driver.
+// RUN: %cc -std=c11 -Wall -Wextra -Werror -I%S/../../../include %S/Inputs/dtor_worklist.c -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs -o %t.exe
+// RUN: %t.exe
+// RUN: %cc -x c++ -std=c++17 -Wall -Wextra -Werror -I%S/../../../include %S/Inputs/dtor_worklist.c -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs -o %t.cpp.exe
+// RUN: %t.cpp.exe
