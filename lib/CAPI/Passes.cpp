@@ -201,7 +201,13 @@ MlirPass reussirCreateControlFlowSinkPass(void) {
   return wrapOwned(mlir::createControlFlowSinkPass());
 }
 MlirPass reussirCreateSCFToControlFlowPass(void) {
-  return wrapOwned(mlir::createSCFToControlFlowPass());
+  // Lowering SCF splits blocks and moves their remaining operations. Recording
+  // those moves for rollback costs quadratic space for long straight-line
+  // sequences of SCF operations. Use the stock pass's no-rollback mode to
+  // avoid that bookkeeping while keeping its lowering patterns.
+  mlir::SCFToControlFlowPassOptions options;
+  options.allowPatternRollback = false;
+  return wrapOwned(mlir::createSCFToControlFlowPass(options));
 }
 MlirPass reussirCreateExpandStridedMetadataPass(void) {
   return wrapOwned(mlir::memref::createExpandStridedMetadataPass());
