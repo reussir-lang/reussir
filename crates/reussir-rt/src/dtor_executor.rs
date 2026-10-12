@@ -1,6 +1,6 @@
-use crate::alloc::{__reussir_allocate, __reussir_dealloc_unsized};
 use core::{alloc::Layout, ffi::c_void, mem::MaybeUninit};
 use smallvec::SmallVec;
+use stumpalo::Arena;
 
 pub type DtorStart = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut DtorStep);
 pub type DtorResume = unsafe extern "C" fn(*mut c_void, bool, *mut DtorStep);
@@ -33,37 +33,39 @@ struct Continuation {
 }
 
 pub struct DtorExecutor {
-    allocations: SmallVec<[*mut u8; 8]>,
+    arena: Arena,
+    allocations: usize,
     continuations: SmallVec<[Continuation; 8]>,
     running: bool,
-}
-
-fn allocate_buffer(size: usize, align: usize) -> *mut c_void {
-    let layout = Layout::from_size_align(size, align).expect("invalid continuation layout");
-    unsafe { __reussir_allocate(layout.align(), layout.size().max(1)).cast() }
 }
 
 impl DtorExecutor {
     pub fn new() -> Self {
         Self {
-            allocations: SmallVec::new(),
+            arena: Arena::new(),
+            allocations: 0,
             continuations: SmallVec::new(),
             running: false,
         }
     }
 
+    fn allocate_buffer(&self, size: usize, align: usize) -> *mut c_void {
+        let layout =
+            Layout::from_size_align(size.max(1), align).expect("invalid continuation layout");
+        self.arena.alloc_layout(layout).as_ptr().cast()
+    }
+
     fn allocate(&mut self, size: usize, align: usize) -> *mut c_void {
-        let buffer = allocate_buffer(size, align);
-        self.allocations.push(buffer.cast());
+        let buffer = self.allocate_buffer(size, align);
+        self.allocations += 1;
         buffer
     }
 
     fn deallocate(&mut self) {
-        let buffer = self
+        self.allocations = self
             .allocations
-            .pop()
+            .checked_sub(1)
             .expect("empty destructor allocation stack");
-        unsafe { __reussir_dealloc_unsized(buffer) };
     }
 }
 
@@ -76,7 +78,7 @@ impl Default for DtorExecutor {
 impl Drop for DtorExecutor {
     fn drop(&mut self) {
         assert!(
-            !self.running && self.allocations.is_empty() && self.continuations.is_empty(),
+            !self.running && self.allocations == 0 && self.continuations.is_empty(),
             "destructor executor is active"
         );
     }
@@ -127,9 +129,7 @@ pub unsafe extern "C" fn __reussir_run_dtor(
     {
         let executor = unsafe { (*context.cast::<MaybeUninit<DtorExecutor>>()).assume_init_mut() };
         assert!(
-            !executor.running
-                && executor.allocations.is_empty()
-                && executor.continuations.is_empty(),
+            !executor.running && executor.allocations == 0 && executor.continuations.is_empty(),
             "destructor executor is active"
         );
         executor.running = true;
@@ -138,7 +138,7 @@ pub unsafe extern "C" fn __reussir_run_dtor(
     let mut task = DtorTask { routine, object };
     loop {
         let routine = unsafe { *task.routine };
-        let buffer = allocate_buffer(routine.size, routine.align);
+        let buffer = unsafe { (*context).allocate_buffer(routine.size, routine.align) };
         let mut result = MaybeUninit::<DtorStep>::uninit();
         unsafe { (routine.start)(buffer, task.object, result.as_mut_ptr()) };
         let mut step = unsafe { result.assume_init() };
@@ -155,11 +155,13 @@ pub unsafe extern "C" fn __reussir_run_dtor(
                 }
                 break;
             }
-            unsafe { __reussir_dealloc_unsized(buffer.cast()) };
             let Some(continuation) = continuations.pop() else {
                 unsafe {
-                    (*context).continuations = continuations;
-                    (*context).running = false;
+                    let executor = &mut *context;
+                    assert_eq!(executor.allocations, 0, "destructor allocations are active");
+                    executor.continuations = continuations;
+                    executor.arena = Arena::new();
+                    executor.running = false;
                 }
                 return;
             };

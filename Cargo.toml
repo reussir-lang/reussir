@@ -80,7 +80,7 @@ ena = "0.14"
 # Bump arena backing the type interner: with_scope yields a generative
 # ArenaRef whose `alloc(&self) -> &'scope mut T` hands out arena-lifetimed
 # references, so interned `Ty<'tcx>` handles compare by pointer.
-stumpalo = { version = "0.4", features = ["std"] }
+stumpalo = { version = "1.0", features = ["std"] }
 lasso = "0.7"
 # Rust-grammar literal parsing: validates and decodes string/char literal
 # escapes (the surface language follows Rust's escape rules).

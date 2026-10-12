@@ -3765,6 +3765,7 @@ dependencies = [
  "serde",
  "smallvec",
  "stacker",
+ "stumpalo",
  "tempfile",
  "tokio",
  "toml 0.9.12+spec-1.1.0",
@@ -4317,9 +4318,9 @@ dependencies = [
 
 [[package]]
 name = "stumpalo"
-version = "0.4.0"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71a9e0a78a61853dbfaf5c7662d91a1b4ef87aa0ac7aa576485bf67c47fc9774"
+checksum = "bf4a1e52ba589579bfea17e809d8845f5f216b76aac28c370a566b2a23f4ac09"
 dependencies = [
  "readme-rustdocifier",
  "rustc_version",

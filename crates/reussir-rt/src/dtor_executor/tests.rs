@@ -99,8 +99,9 @@ fn deep_mixed_entries_preserve_order_across_drains() {
             output.clear();
             __reussir_run_dtor(context, ptr::addr_of_mut!(args).cast(), &SMALL);
             assert_eq!(output, (0..=100_000).collect::<Vec<_>>());
-            assert!((*context).allocations.is_empty());
+            assert_eq!((*context).allocations, 0);
             assert!((*context).continuations.is_empty());
+            assert_eq!((*context).arena.allocated_bytes(), 0);
             __reussir_destroy_dtor_executor(context);
             __reussir_create_dtor_executor(storage.as_mut_ptr().cast());
             __reussir_destroy_dtor_executor(context);
@@ -138,7 +139,7 @@ fn continuation_storage_is_aligned_stable_and_lifo() {
                 __reussir_dtor_conti_free(&mut context);
             }
         }
-        assert!(context.allocations.is_empty());
+        assert_eq!(context.allocations, 0);
     }
 }
 
@@ -152,7 +153,7 @@ fn invalid_layouts_and_empty_free_are_rejected() {
             ))
             .is_err()
         );
-        assert!(context.allocations.is_empty());
+        assert_eq!(context.allocations, 0);
     }
     let mut context = DtorExecutor::new();
     assert!(
@@ -308,8 +309,9 @@ fn repeated_suspensions_preserve_postorder() {
             __reussir_run_dtor(&mut context, ptr::addr_of_mut!(args).cast(), &BRANCH);
         }
         assert_eq!(output, reference);
-        assert!(context.allocations.is_empty());
+        assert_eq!(context.allocations, 0);
         assert!(context.continuations.is_empty());
+        assert_eq!(context.arena.allocated_bytes(), 0);
         output.clear();
     }
 }
@@ -330,7 +332,7 @@ unsafe extern "C" fn allocating_start(
     let (context, values) = unsafe { *object.cast::<(*mut DtorExecutor, *mut Vec<usize>)>() };
     let frame = buffer.cast::<AllocatingParent>();
     unsafe {
-        assert!((*context).allocations.is_empty());
+        assert_eq!((*context).allocations, 0);
         let allocation = __reussir_dtor_conti_alloc(context, 513, 256).cast::<u8>();
         allocation.write_bytes(0xa5, 513);
         frame.write(AllocatingParent {
@@ -353,7 +355,7 @@ unsafe extern "C" fn allocating_resume(buffer: *mut c_void, cancel: bool, output
     assert!(!cancel);
     unsafe {
         let frame = &*buffer.cast::<AllocatingParent>();
-        assert_eq!((*frame.context).allocations.as_slice(), &[frame.allocation]);
+        assert_eq!((*frame.context).allocations, 1);
         assert_eq!(
             std::slice::from_raw_parts(frame.allocation, 513),
             &[0xa5; 513]
@@ -379,8 +381,9 @@ fn explicit_allocation_survives_child_drain() {
     for _ in 0..2 {
         unsafe { __reussir_run_dtor(&mut context, ptr::addr_of_mut!(args).cast(), &routine) };
         assert_eq!(values, (0..=100_000).collect::<Vec<_>>());
-        assert!(context.allocations.is_empty());
+        assert_eq!(context.allocations, 0);
         assert!(context.continuations.is_empty());
+        assert_eq!(context.arena.allocated_bytes(), 0);
         assert!(!context.running);
         values.clear();
     }
