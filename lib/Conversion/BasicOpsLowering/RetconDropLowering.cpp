@@ -139,7 +139,7 @@ public:
         stepType(LLVMStructType::getLiteral(module.getContext(), {ptr, ptr})),
         routineType(LLVMStructType::getLiteral(module.getContext(),
                                                {ptr, sizeType, sizeType})),
-        bufferSize(converter.getDataLayout().getPointerSize()),
+        bufferSize(48),
         bufferAlign(
             converter.getDataLayout().getPointerABIAlignment(0).value()) {}
 

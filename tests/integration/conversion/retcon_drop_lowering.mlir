@@ -10,6 +10,7 @@ module attributes {llvm.data_layout = "e-p:64:64-i64:64-n8:16:32:64-S128"} {
     llvm.return
   }
 
+  // CHECK: @drop.routine = private constant { ptr, i64, i64 } { ptr @drop.start, i64 48, i64 8 }
   // CHECK-LABEL: define linkonce_odr void @drop(
   // CHECK: call i64 @__reussir_dtor_executor_size()
   // CHECK: call i64 @__reussir_dtor_executor_align()
@@ -38,7 +39,7 @@ module attributes {llvm.data_layout = "e-p:64:64-i64:64-n8:16:32:64-S128"} {
 }
 
 // CHECK-LABEL: define private {{.*}} @drop.start(
-// CHECK: call token @llvm.coro.id.retcon
+// CHECK: call token @llvm.coro.id.retcon(i32 48, i32 8,
 // CHECK: call ptr @llvm.coro.begin
 // CHECK: call void @locked
 // CHECK-NOT: call void @drop(
