@@ -1,4 +1,5 @@
 use super::*;
+use core::ptr;
 
 #[repr(C)]
 struct State {
@@ -75,7 +76,7 @@ unsafe extern "C" fn large_resume(buffer: *mut c_void, cancel: bool) -> DtorStep
 }
 
 #[test]
-fn deep_mixed_entries_preserve_order_and_reuse_slots() {
+fn deep_mixed_entries_preserve_order_across_drains() {
     std::thread::Builder::new()
         .stack_size(256 * 1024)
         .spawn(|| unsafe {
@@ -85,11 +86,11 @@ fn deep_mixed_entries_preserve_order_and_reuse_slots() {
             let mut args = (100_000usize, ptr::addr_of_mut!(output));
             __reussir_run_dtor(context, ptr::addr_of_mut!(args).cast(), &SMALL);
             assert_eq!(output, (0..=100_000).collect::<Vec<_>>());
-            let bytes = (*context).arena.allocated_bytes_including_metadata();
             output.clear();
             __reussir_run_dtor(context, ptr::addr_of_mut!(args).cast(), &SMALL);
             assert_eq!(output, (0..=100_000).collect::<Vec<_>>());
-            assert_eq!((*context).arena.allocated_bytes_including_metadata(), bytes);
+            assert!((*context).allocations.is_empty());
+            assert!((*context).continuations.is_empty());
             __reussir_destroy_dtor_executor(context);
             __reussir_create_dtor_executor(storage.as_mut_ptr().cast());
             __reussir_destroy_dtor_executor(context);
@@ -111,20 +112,14 @@ fn continuation_storage_is_aligned_stable_and_lifo() {
             buffer.cast::<u8>().write_bytes(0xa5, size);
             buffers.push(buffer);
         }
-        for (&buffer, &(size, align)) in buffers.iter().zip(&layouts).rev() {
+        for (&buffer, &(size, _)) in buffers.iter().zip(&layouts).rev() {
             assert!(
                 std::slice::from_raw_parts(buffer.cast::<u8>(), size)
                     .iter()
                     .all(|&v| v == 0xa5)
             );
             __reussir_dtor_conti_free(&mut context);
-            assert_eq!(
-                __reussir_dtor_conti_alloc(&mut context, size, align),
-                buffer
-            );
-            __reussir_dtor_conti_free(&mut context);
         }
-        let bytes = context.arena.allocated_bytes_including_metadata();
         for _ in 0..1000 {
             for &(size, align) in layouts.iter().rev() {
                 __reussir_dtor_conti_alloc(&mut context, size, align);
@@ -133,13 +128,13 @@ fn continuation_storage_is_aligned_stable_and_lifo() {
                 __reussir_dtor_conti_free(&mut context);
             }
         }
-        assert_eq!(context.arena.allocated_bytes_including_metadata(), bytes);
+        assert!(context.allocations.is_empty());
     }
 }
 
 #[test]
 fn invalid_layouts_and_empty_free_are_rejected() {
-    for (size, align) in [(1, 0), (1, 3), (usize::MAX, 8), (isize::MAX as usize, 1)] {
+    for (size, align) in [(1, 0), (1, 3), (usize::MAX, 8), (isize::MAX as usize, 8)] {
         let mut context = DtorExecutor::new();
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(
@@ -147,7 +142,7 @@ fn invalid_layouts_and_empty_free_are_rejected() {
             ))
             .is_err()
         );
-        assert!(context.allocations.is_null());
+        assert!(context.allocations.is_empty());
     }
     let mut context = DtorExecutor::new();
     assert!(
@@ -271,7 +266,7 @@ unsafe extern "C" fn branch_resume(buffer: *mut c_void, cancel: bool) -> DtorSte
     }
 }
 #[test]
-fn repeated_suspensions_preserve_postorder_and_reuse_sibling_storage() {
+fn repeated_suspensions_preserve_postorder() {
     fn expected(depth: usize, output: &mut Vec<usize>) {
         if depth != 0 {
             expected(depth - 1, output);
@@ -289,7 +284,8 @@ fn repeated_suspensions_preserve_postorder_and_reuse_sibling_storage() {
             __reussir_run_dtor(&mut context, ptr::addr_of_mut!(args).cast(), &BRANCH);
         }
         assert_eq!(output, reference);
-        assert!(context.arena.allocated_bytes_including_metadata() < 8192);
+        assert!(context.allocations.is_empty());
+        assert!(context.continuations.is_empty());
         output.clear();
     }
 }

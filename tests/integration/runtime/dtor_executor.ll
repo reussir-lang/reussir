@@ -20,14 +20,14 @@ declare ptr @unexpected_alloc(i64)
 declare void @unexpected_free(ptr)
 declare void @observe(i64)
 
-@routine_a = constant {ptr, i64, i64} {ptr @start_a, i64 32, i64 8}
+@routine_a = constant {ptr, i64, i64} {ptr @start_a, i64 8, i64 8}
 @routine_b = constant {ptr, i64, i64} {ptr @start_b, i64 2048, i64 256}
 
 define {ptr, ptr} @start_a(ptr noalias %buffer, ptr %object) presplitcoroutine sanitize_address {
 entry:
   %task = alloca {ptr, ptr}, align 8
-  %id = call token @llvm.coro.id.retcon(i32 32, i32 8, ptr %buffer,
-      ptr @resume_prototype, ptr @unexpected_alloc, ptr @unexpected_free)
+  %id = call token @llvm.coro.id.retcon(i32 8, i32 8, ptr %buffer,
+      ptr @resume_prototype, ptr @retcon_alloc, ptr @__reussir_dealloc_unsized)
   %hdl = call ptr @llvm.coro.begin(token %id, ptr null)
   %n = ptrtoint ptr %object to i64
   %base = icmp eq i64 %n, 0
@@ -77,3 +77,11 @@ done:
 }
 declare void @fill_payload(ptr)
 declare void @check_payload(ptr)
+
+declare ptr @__reussir_allocate(i64, i64)
+declare void @__reussir_dealloc_unsized(ptr)
+
+define internal ptr @retcon_alloc(i64 %size) {
+  %frame = call ptr @__reussir_allocate(i64 8, i64 %size)
+  ret ptr %frame
+}

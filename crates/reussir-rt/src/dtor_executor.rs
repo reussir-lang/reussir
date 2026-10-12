@@ -1,7 +1,6 @@
-use core::{alloc::Layout, ffi::c_void, mem::MaybeUninit, ptr};
-use hashbrown::HashMap;
+use crate::alloc::{__reussir_allocate, __reussir_dealloc_unsized};
+use core::{alloc::Layout, ffi::c_void, mem::MaybeUninit};
 use smallvec::SmallVec;
-use stumpalo::Arena;
 
 pub type DtorStart = unsafe extern "C" fn(*mut c_void, *mut c_void) -> DtorStep;
 pub type DtorResume = unsafe extern "C" fn(*mut c_void, bool) -> DtorStep;
@@ -28,20 +27,13 @@ pub struct DtorStep {
     pub child: *const DtorTask,
 }
 
-struct Allocation {
-    link: *mut Allocation,
-    layout: Layout,
-}
-
 struct Continuation {
     buffer: *mut c_void,
     resume: DtorResume,
 }
 
 pub struct DtorExecutor {
-    arena: Arena,
-    allocations: *mut Allocation,
-    free: HashMap<Layout, *mut Allocation>,
+    allocations: SmallVec<[*mut u8; 8]>,
     continuations: SmallVec<[Continuation; 8]>,
     running: bool,
 }
@@ -49,9 +41,7 @@ pub struct DtorExecutor {
 impl DtorExecutor {
     pub fn new() -> Self {
         Self {
-            arena: Arena::with_chunk(1024),
-            allocations: ptr::null_mut(),
-            free: HashMap::new(),
+            allocations: SmallVec::new(),
             continuations: SmallVec::new(),
             running: false,
         }
@@ -59,39 +49,17 @@ impl DtorExecutor {
 
     fn allocate(&mut self, size: usize, align: usize) -> *mut c_void {
         let layout = Layout::from_size_align(size, align).expect("invalid continuation layout");
-        let (storage_layout, offset) = Layout::new::<Allocation>()
-            .extend(layout)
-            .expect("continuation layout overflow");
-        let free = self.free.entry(layout).or_insert(ptr::null_mut());
-        let allocation = if free.is_null() {
-            self.arena
-                .alloc_layout(storage_layout)
-                .as_ptr()
-                .cast::<Allocation>()
-        } else {
-            let allocation = *free;
-            *free = unsafe { (*allocation).link };
-            allocation
-        };
-        unsafe {
-            allocation.write(Allocation {
-                link: self.allocations,
-                layout,
-            });
-            self.allocations = allocation;
-            allocation.byte_add(offset).cast()
-        }
+        let buffer = unsafe { __reussir_allocate(layout.align(), layout.size().max(1)) };
+        self.allocations.push(buffer);
+        buffer.cast()
     }
 
     fn deallocate(&mut self) {
-        let allocation = self.allocations;
-        assert!(!allocation.is_null(), "empty destructor allocation stack");
-        unsafe {
-            self.allocations = (*allocation).link;
-            let free = self.free.get_mut(&(*allocation).layout).unwrap();
-            (*allocation).link = *free;
-            *free = allocation;
-        }
+        let buffer = self
+            .allocations
+            .pop()
+            .expect("empty destructor allocation stack");
+        unsafe { __reussir_dealloc_unsized(buffer) };
     }
 }
 
@@ -104,7 +72,7 @@ impl Default for DtorExecutor {
 impl Drop for DtorExecutor {
     fn drop(&mut self) {
         assert!(
-            !self.running && self.allocations.is_null() && self.continuations.is_empty(),
+            !self.running && self.allocations.is_empty() && self.continuations.is_empty(),
             "destructor executor is active"
         );
     }
@@ -156,7 +124,7 @@ pub unsafe extern "C" fn __reussir_run_dtor(
         let executor = unsafe { (*context.cast::<MaybeUninit<DtorExecutor>>()).assume_init_mut() };
         assert!(
             !executor.running
-                && executor.allocations.is_null()
+                && executor.allocations.is_empty()
                 && executor.continuations.is_empty(),
             "destructor executor is active"
         );
