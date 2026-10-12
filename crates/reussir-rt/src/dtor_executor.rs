@@ -35,7 +35,6 @@ struct Continuation {
 pub struct DtorExecutor {
     arena: Arena,
     allocations: usize,
-    continuations: SmallVec<[Continuation; 8]>,
     running: bool,
 }
 
@@ -44,7 +43,6 @@ impl DtorExecutor {
         Self {
             arena: Arena::new(),
             allocations: 0,
-            continuations: SmallVec::new(),
             running: false,
         }
     }
@@ -78,7 +76,7 @@ impl Default for DtorExecutor {
 impl Drop for DtorExecutor {
     fn drop(&mut self) {
         assert!(
-            !self.running && self.allocations == 0 && self.continuations.is_empty(),
+            !self.running && self.allocations == 0,
             "destructor executor is active"
         );
     }
@@ -129,12 +127,13 @@ pub unsafe extern "C" fn __reussir_run_dtor(
     {
         let executor = unsafe { (*context.cast::<MaybeUninit<DtorExecutor>>()).assume_init_mut() };
         assert!(
-            !executor.running && executor.allocations == 0 && executor.continuations.is_empty(),
+            !executor.running && executor.allocations == 0,
             "destructor executor is active"
         );
         executor.running = true;
     }
-    let mut continuations = unsafe { core::mem::take(&mut (*context).continuations) };
+    // Keep inline storage in this drain; moving an empty SmallVec still copies it.
+    let mut continuations: SmallVec<[Continuation; 8]> = SmallVec::new();
     let mut task = DtorTask { routine, object };
     loop {
         let routine = unsafe { *task.routine };
@@ -159,7 +158,6 @@ pub unsafe extern "C" fn __reussir_run_dtor(
                 unsafe {
                     let executor = &mut *context;
                     assert_eq!(executor.allocations, 0, "destructor allocations are active");
-                    executor.continuations = continuations;
                     executor.arena = Arena::new();
                     executor.running = false;
                 }

@@ -100,7 +100,7 @@ fn deep_mixed_entries_preserve_order_across_drains() {
             __reussir_run_dtor(context, ptr::addr_of_mut!(args).cast(), &SMALL);
             assert_eq!(output, (0..=100_000).collect::<Vec<_>>());
             assert_eq!((*context).allocations, 0);
-            assert!((*context).continuations.is_empty());
+            assert!(!(*context).running);
             assert_eq!((*context).arena.allocated_bytes(), 0);
             __reussir_destroy_dtor_executor(context);
             __reussir_create_dtor_executor(storage.as_mut_ptr().cast());
@@ -310,7 +310,6 @@ fn repeated_suspensions_preserve_postorder() {
         }
         assert_eq!(output, reference);
         assert_eq!(context.allocations, 0);
-        assert!(context.continuations.is_empty());
         assert_eq!(context.arena.allocated_bytes(), 0);
         output.clear();
     }
@@ -382,7 +381,6 @@ fn explicit_allocation_survives_child_drain() {
         unsafe { __reussir_run_dtor(&mut context, ptr::addr_of_mut!(args).cast(), &routine) };
         assert_eq!(values, (0..=100_000).collect::<Vec<_>>());
         assert_eq!(context.allocations, 0);
-        assert!(context.continuations.is_empty());
         assert_eq!(context.arena.allocated_bytes(), 0);
         assert!(!context.running);
         values.clear();
