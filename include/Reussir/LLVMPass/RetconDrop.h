@@ -12,6 +12,7 @@
 #include <llvm/IR/PassManager.h>
 
 namespace reussir::llvmpass {
+void populateRetconDropPasses(llvm::ModulePassManager &passes);
 void lowerRetconDrops(llvm::Module &module);
 
 class RetconDropABIPass : public llvm::PassInfoMixin<RetconDropABIPass> {

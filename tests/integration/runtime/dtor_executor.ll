@@ -1,16 +1,16 @@
-; RUN: %reussir-llvm-opt -passes='coro-early,cgscc(coro-split),coro-cleanup,reussir-retcon-drop-abi' %s -o %t.ll
+; RUN: %reussir-llvm-opt -passes='reussir-retcon-drop' %s -o %t.ll
 ; RUN: %llc %t.ll -O0 -relocation-model=pic -filetype=obj -o %t.o
 ; RUN: %cc -std=c11 -Wall -Wextra -Werror %S/Inputs/dtor_executor.c %t.o -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs -o %t.exe
 ; RUN: %t.exe
 ; RUN: %cc -x c++ -std=c++17 -Wall -Wextra -Werror %S/Inputs/dtor_executor.c -x none %t.o -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs -o %t.cpp.exe
 ; RUN: %t.cpp.exe
-; RUN: %reussir-llvm-opt -passes='coro-early,cgscc(coro-split),coro-cleanup,reussir-retcon-drop-abi,default<O2>' %s -o %t.opt.ll
+; RUN: %reussir-llvm-opt -passes='reussir-retcon-drop,default<O2>' %s -o %t.opt.ll
 ; RUN: %llc %t.opt.ll -relocation-model=pic -filetype=obj -o %t.opt.o
 ; RUN: %cc %S/Inputs/dtor_executor.c %t.opt.o -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs -o %t.opt.exe
 ; RUN: %t.opt.exe
 
 declare token @llvm.coro.id.retcon(i32, i32, ptr, ptr, ptr, ptr)
-declare ptr @llvm.coro.begin(token, ptr)
+declare ptr @llvm.coro.begin.custom.abi(token, ptr, i32)
 declare ptr @llvm.coro.prepare.retcon(ptr)
 declare i1 @llvm.coro.suspend.retcon.i1(...)
 declare void @llvm.coro.end(ptr, i1, token)
@@ -20,14 +20,14 @@ declare void @unexpected_free(ptr)
 declare void @observe(i64)
 
 @routine_a = constant {ptr, i64, i64} {ptr @start_a, i64 8, i64 8}
-@routine_b = constant {ptr, i64, i64} {ptr @start_b, i64 2048, i64 256}
+@routine_b = constant {ptr, i64, i64} {ptr @start_b, i64 48, i64 8}
 
-define {ptr, ptr} @start_a(ptr noalias %buffer, ptr %object) presplitcoroutine sanitize_address "reussir.retcon_abi" {
+define {ptr, ptr} @start_a(ptr noalias %buffer, ptr %object) presplitcoroutine sanitize_address "reussir.retcon_abi" "reussir.retcon_routine"="routine_a" {
 entry:
   %task = alloca {ptr, ptr}, align 8
   %id = call token @llvm.coro.id.retcon(i32 8, i32 8, ptr %buffer,
-      ptr @resume_prototype, ptr @retcon_alloc, ptr @__reussir_dealloc_unsized)
-  %hdl = call ptr @llvm.coro.begin(token %id, ptr null)
+      ptr @resume_prototype, ptr @unexpected_alloc, ptr @unexpected_free)
+  %hdl = call ptr @llvm.coro.begin.custom.abi(token %id, ptr null, i32 0)
   %n = ptrtoint ptr %object to i64
   %base = icmp eq i64 %n, 0
   br i1 %base, label %observe, label %child
@@ -47,13 +47,13 @@ done:
   unreachable
 }
 
-define {ptr, ptr} @start_b(ptr noalias %buffer, ptr %object) presplitcoroutine sanitize_address "reussir.retcon_abi" {
+define {ptr, ptr} @start_b(ptr noalias %buffer, ptr %object) presplitcoroutine sanitize_address "reussir.retcon_abi" "reussir.retcon_routine"="routine_b" {
 entry:
   %task = alloca {ptr, ptr}, align 8
   %payload = alloca [1024 x i8], align 256
-  %id = call token @llvm.coro.id.retcon(i32 2048, i32 256, ptr %buffer,
+  %id = call token @llvm.coro.id.retcon(i32 48, i32 8, ptr %buffer,
       ptr @resume_prototype, ptr @unexpected_alloc, ptr @unexpected_free)
-  %hdl = call ptr @llvm.coro.begin(token %id, ptr null)
+  %hdl = call ptr @llvm.coro.begin.custom.abi(token %id, ptr null, i32 0)
   call void @fill_payload(ptr %payload)
   %n = ptrtoint ptr %object to i64
   %base = icmp eq i64 %n, 0
@@ -76,11 +76,3 @@ done:
 }
 declare void @fill_payload(ptr)
 declare void @check_payload(ptr)
-
-declare ptr @__reussir_allocate(i64, i64)
-declare void @__reussir_dealloc_unsized(ptr)
-
-define internal ptr @retcon_alloc(i64 %size) {
-  %frame = call ptr @__reussir_allocate(i64 8, i64 %size)
-  ret ptr %frame
-}

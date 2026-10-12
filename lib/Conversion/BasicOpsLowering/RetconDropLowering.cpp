@@ -93,14 +93,12 @@ class RetconDropLowering {
     ReturnOp::create(builder, loc, value);
     return global;
   }
-  LLVMFuncOp allocator(StringRef name, uint64_t align) {
-    auto alloc = function(name, ptr, {sizeType});
-    builder.setInsertionPointToStart(alloc.addEntryBlock(builder));
-    auto result = CallOp::create(
-        builder, loc, TypeRange{ptr}, "__reussir_allocate",
-        ValueRange{constant(sizeType, align), alloc.getArgument(0)});
-    ReturnOp::create(builder, loc, result.getResults());
-    return alloc;
+  LLVMFuncOp unavailableAllocator(StringRef name, Type result,
+                                  ArrayRef<Type> args) {
+    auto target = function(name, result, args);
+    builder.setInsertionPointToStart(target.addEntryBlock(builder));
+    UnreachableOp::create(builder, loc);
+    return target;
   }
   void executorWrapper(LLVMFuncOp wrapper, GlobalOp routine) {
     builder.setInsertionPointToStart(wrapper.addEntryBlock(builder));
@@ -145,8 +143,6 @@ public:
 
   LogicalResult run(ArrayRef<LLVMFuncOp> functions) {
     auto voidType = LLVMVoidType::get(module.getContext());
-    runtime("__reussir_allocate", ptr, {sizeType, sizeType});
-    runtime("__reussir_dealloc_unsized", voidType, {ptr});
     runtime("__reussir_dtor_executor_size", sizeType, {});
     runtime("__reussir_dtor_executor_align", sizeType, {});
     runtime("__reussir_create_dtor_executor", ptr, {ptr});
@@ -176,16 +172,14 @@ public:
       UnreachableOp::create(builder, loc);
       auto routine = descriptor(entry, name + ".routine");
 
-      uint64_t frameAlign = bufferAlign;
-      DataLayout layout(module);
-      entry.walk([&](Operation *op) {
-        if (auto alloca = dyn_cast<AllocaOp>(op))
-          frameAlign = std::max(frameAlign, alloca.getAlignment().value_or(0));
-        for (auto type : op->getResultTypes())
-          if (!isa<mlir::TokenType>(type))
-            frameAlign = std::max(frameAlign, layout.getTypeABIAlignment(type));
-      });
-      auto alloc = allocator(name + ".allocate", frameAlign);
+      auto attrs = llvm::to_vector(entry.getPassthroughAttr());
+      attrs.push_back(
+          builder.getArrayAttr({builder.getStringAttr("reussir.retcon_routine"),
+                                builder.getStringAttr(routine.getSymName())}));
+      entry.setPassthroughAttr(builder.getArrayAttr(attrs));
+      auto alloc = unavailableAllocator(name + ".allocate", ptr, {sizeType});
+      auto dealloc =
+          unavailableAllocator(name + ".deallocate", voidType, {ptr});
       builder.setInsertionPointToStart(&entry.getBody().front());
       Value task =
           AllocaOp::create(builder, loc, ptr, stepType, constant(sizeType, 1));
@@ -193,7 +187,7 @@ public:
           builder, loc, ptr, builder.getI32IntegerAttr(bufferSize),
           builder.getI32IntegerAttr(bufferAlign), entry.getArgument(0),
           address(prototype.getSymName()), address(alloc.getSymName()),
-          address("__reussir_dealloc_unsized"));
+          address(dealloc.getSymName()));
       entry.walk([&](ReussirDtorSuspendOp suspend) {
         builder.setInsertionPoint(suspend);
         Value child = UndefOp::create(builder, loc, stepType);

@@ -1,6 +1,6 @@
 // RUN: %reussir-opt %s --reussir-convert-to-llvm --verify-each | %reussir-translate --reussir-to-llvmir -o %t.ll
 // RUN: %FileCheck %s < %t.ll
-// RUN: %reussir-llvm-opt %t.ll -passes='coro-early,cgscc(coro-split),coro-cleanup,reussir-retcon-drop-abi,verify' -o - | %FileCheck %s --check-prefix=SPLIT
+// RUN: %reussir-llvm-opt %t.ll -passes='reussir-retcon-drop,verify' -o - | %FileCheck %s --check-prefix=SPLIT
 
 module attributes {llvm.data_layout = "e-p:64:64-i64:64-n8:16:32:64-S128"} {
   llvm.func @observe(!llvm.ptr)
@@ -48,15 +48,16 @@ module attributes {llvm.data_layout = "e-p:64:64-i64:64-n8:16:32:64-S128"} {
 // CHECK: call void @observe
 // CHECK: call void @llvm.coro.end
 // CHECK-LABEL: define private ptr @drop.allocate(
-// CHECK: call ptr @__reussir_allocate(i64 128,
+// CHECK-NEXT: unreachable
+// SPLIT: @drop.routine = private constant { ptr, i64, i64 } { ptr @drop.start.callback, i64 {{[0-9]+}}, i64 128 }
 // SPLIT-LABEL: define private {{.*}} @drop.start(
-// SPLIT: call ptr @drop.allocate
+// SPLIT-NOT: call ptr @drop.allocate
 // SPLIT: call void @locked
 // SPLIT-LABEL: define internal {{.*}} @drop.start.resume.0(
 // SPLIT-NOT: call void @locked
 // SPLIT-LABEL: define internal {{.*}} @drop.start.resume.1(
 // SPLIT: call void @observe
-// SPLIT: call void @__reussir_dealloc_unsized
+// SPLIT-NOT: call void @drop.deallocate
 // SPLIT-LABEL: define private void @drop.start.callback(ptr %0, ptr %1, ptr %2)
 // SPLIT: %[[STEP:.*]] = call { ptr, ptr } @drop.start
 // SPLIT: %[[RESUME:.*]] = extractvalue { ptr, ptr } %[[STEP]], 0

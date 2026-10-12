@@ -16,8 +16,55 @@
 #include <llvm/Transforms/Coroutines/CoroCleanup.h>
 #include <llvm/Transforms/Coroutines/CoroEarly.h>
 #include <llvm/Transforms/Coroutines/CoroSplit.h>
+#include <llvm/Transforms/Coroutines/MaterializationUtils.h>
 
 namespace reussir::llvmpass {
+namespace {
+class DtorRetconABI : public llvm::coro::AnyRetconABI {
+public:
+  DtorRetconABI(llvm::Function &function, llvm::coro::Shape &shape)
+      : AnyRetconABI(function, shape, llvm::coro::isTriviallyMaterializable) {}
+
+  void buildCoroutineFrame(bool optimizeFrame) override {
+    AnyRetconABI::buildCoroutineFrame(optimizeFrame);
+    auto name = F.getFnAttribute("reussir.retcon_routine").getValueAsString();
+    auto *routine = F.getParent()->getNamedGlobal(name);
+    if (!routine || !routine->hasInitializer())
+      llvm::report_fatal_error("missing destructor routine descriptor");
+    auto *init = llvm::cast<llvm::ConstantStruct>(routine->getInitializer());
+    auto *id = Shape.getRetconCoroId();
+    uint64_t size = std::max(Shape.FrameSize, id->getStorageSize());
+    uint64_t align =
+        std::max(Shape.FrameAlign.value(), id->getStorageAlignment().value());
+    if (!llvm::isUInt<32>(size) || !llvm::isUInt<32>(align))
+      llvm::report_fatal_error(
+          "destructor coroutine frame exceeds retcon limits");
+    routine->setInitializer(llvm::ConstantStruct::get(
+        init->getType(), init->getOperand(0),
+        llvm::ConstantInt::get(init->getOperand(1)->getType(), size),
+        llvm::ConstantInt::get(init->getOperand(2)->getType(), align)));
+    id->setArgOperand(
+        0, llvm::ConstantInt::get(id->getArgOperand(0)->getType(), size));
+    id->setArgOperand(
+        1, llvm::ConstantInt::get(id->getArgOperand(1)->getType(), align));
+    Shape.RetconLowering.IsFrameInlineInStorage = true;
+    F.removeFnAttr("reussir.retcon_routine");
+  }
+};
+} // namespace
+
+void populateRetconDropPasses(llvm::ModulePassManager &passes) {
+  llvm::SmallVector<llvm::CoroSplitPass::BaseABITy> abis{
+      [](llvm::Function &function, llvm::coro::Shape &shape) {
+        return std::make_unique<DtorRetconABI>(function, shape);
+      }};
+  passes.addPass(llvm::CoroEarlyPass());
+  passes.addPass(llvm::createModuleToPostOrderCGSCCPassAdaptor(
+      llvm::CoroSplitPass(std::move(abis))));
+  passes.addPass(llvm::CoroCleanupPass());
+  passes.addPass(RetconDropABIPass());
+}
+
 void lowerRetconDrops(llvm::Module &module) {
   if (llvm::none_of(module, [](const llvm::Function &function) {
         return function.hasFnAttribute("reussir.retcon_abi");
@@ -34,11 +81,7 @@ void lowerRetconDrops(llvm::Module &module) {
   builder.registerModuleAnalyses(modules);
   builder.crossRegisterProxies(loops, functions, graph, modules);
   llvm::ModulePassManager passes;
-  passes.addPass(llvm::CoroEarlyPass());
-  passes.addPass(
-      llvm::createModuleToPostOrderCGSCCPassAdaptor(llvm::CoroSplitPass()));
-  passes.addPass(llvm::CoroCleanupPass());
-  passes.addPass(RetconDropABIPass());
+  populateRetconDropPasses(passes);
   passes.run(module, modules);
 }
 

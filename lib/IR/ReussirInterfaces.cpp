@@ -61,8 +61,9 @@ struct ReussirLLVMTranslation : public mlir::LLVMTranslationDialectInterface {
                                    state.lookupValue(begin.getAllocate()),
                                    state.lookupValue(begin.getDeallocate())});
       auto *handle = builder.CreateIntrinsic(
-          llvm::Intrinsic::coro_begin, {},
-          {id, llvm::ConstantPointerNull::get(builder.getPtrTy())});
+          llvm::Intrinsic::coro_begin_custom_abi, {},
+          {id, llvm::ConstantPointerNull::get(builder.getPtrTy()),
+           builder.getInt32(0)});
       state.mapValue(begin.getHandle(), handle);
       return mlir::success();
     }
