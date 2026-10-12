@@ -37,8 +37,8 @@ module {
   // LLVM: %[[INNER:.+]] = load ptr, ptr %[[SLOT]]
   // LLVM: atomicrmw sub ptr %[[INNER]], i32 1
   // LLVM: atomicrmw xchg ptr %[[STATE]], i32 0
-  // LLVM: call void @__reussir_deallocate(ptr %{{.+}}, i64 8, i64 24)
-  // LLVM: call void @__reussir_deallocate(ptr %{{.+}}, i64 8, i64 16)
+  // LLVM-DAG: call void @__reussir_deallocate(ptr %{{.+}}, i64 8, i64 24)
+  // LLVM-DAG: call void @__reussir_deallocate(ptr %{{.+}}, i64 8, i64 16)
   func.func @mutex_cell_drop(%cell: !mutex_rc) {
     %t = reussir.rc.dec (%cell : !mutex_rc) : !reussir.nullable<!reussir.token<align: 8, size: 24>>
     reussir.token.free (%t : !reussir.nullable<!reussir.token<align: 8, size: 24>>)

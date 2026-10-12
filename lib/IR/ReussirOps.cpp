@@ -17,6 +17,7 @@
 #include <optional>
 
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallSet.h>
 #include <llvm/ADT/SmallVector.h>
@@ -40,6 +41,7 @@
 #include <mlir/IR/Matchers.h>
 #include <mlir/IR/OpImplementation.h>
 #include <mlir/IR/Operation.h>
+#include <mlir/IR/OperationSupport.h>
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/IR/Types.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
@@ -2870,6 +2872,148 @@ void ReussirRecordDispatchOp::print(mlir::OpAsmPrinter &p) {
   p.printNewline();
   p << "}";
   p.printOptionalAttrDict(getOperation()->getAttrs(), {"tagSets"});
+}
+
+//===----------------------------------------------------------------------===//
+// RecordDispatchOp canonicalization
+//===----------------------------------------------------------------------===//
+namespace {
+// Regions that ignore their payload and hold the same operations are one
+// region over several tags. The frontend's pattern compiler gives each
+// variant its own subtree, so a wildcard arm arrives as one copy per variant
+// it covers (`_ => unreachable()` inside a derived equality over N
+// constructors: N - 1 copies in each of N arms). Every later pass pays for
+// each copy, and the decrement expansion expands the releases of every copy
+// in line, so merge the copies before those passes run.
+struct MergeEquivalentDispatchRegions
+    : public mlir::OpRewritePattern<ReussirRecordDispatchOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  static bool ignoresPayload(mlir::Region &region) {
+    return llvm::all_of(
+        region.front().getArguments(),
+        [](mlir::BlockArgument arg) { return arg.use_empty(); });
+  }
+
+  // A region that boxes a value of the scrutinee's type keeps one copy per
+  // tag: there the release of the scrutinee becomes a decrement of that
+  // tag's cell, which the construction reuses in place when the sizes
+  // match, where a region over several tags would release a cell of
+  // unknown size and reuse it through a reallocation.
+  static bool boxesType(mlir::Region &region, mlir::Type type) {
+    return region
+        .walk([&](TokenAcceptor acceptor) {
+          for (mlir::Type result : acceptor->getResultTypes())
+            if (auto rc = llvm::dyn_cast<RcType>(result);
+                rc && rc.getElementType() == type)
+              return mlir::WalkResult::interrupt();
+          return mlir::WalkResult::advance();
+        })
+        .wasInterrupted();
+  }
+
+  // Equal for regions `sameOps` accepts (locations aside), so only regions
+  // with equal hashes are compared.
+  static llvm::hash_code regionHash(mlir::Region &region) {
+    llvm::hash_code hash = 0;
+    region.walk([&](mlir::Operation *op) {
+      hash = llvm::hash_combine(
+          hash, mlir::OperationEquivalence::computeHash(
+                    op, mlir::OperationEquivalence::ignoreHashValue,
+                    mlir::OperationEquivalence::ignoreHashValue,
+                    mlir::OperationEquivalence::IgnoreLocations));
+    });
+    return hash;
+  }
+
+  // The same operations (attributes and locations included) on the same
+  // values from outside; values defined inside correspond by position. The
+  // block arguments are unused, so their types do not matter.
+  static bool sameOps(mlir::Region &lhs, mlir::Region &rhs) {
+    mlir::Block &lhsBlock = lhs.front();
+    mlir::Block &rhsBlock = rhs.front();
+    if (lhsBlock.getOperations().size() != rhsBlock.getOperations().size())
+      return false;
+    llvm::DenseMap<mlir::Value, mlir::Value> corresponding;
+    auto check = [&](mlir::Value l, mlir::Value r) {
+      return mlir::success(l == r || corresponding.lookup(l) == r);
+    };
+    auto mark = [&](mlir::Value l, mlir::Value r) { corresponding[l] = r; };
+    for (auto [l, r] : llvm::zip_equal(lhsBlock, rhsBlock))
+      if (!mlir::OperationEquivalence::isEquivalentTo(
+              &l, &r, check, mark, mlir::OperationEquivalence::None))
+        return false;
+    return true;
+  }
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRecordDispatchOp op,
+                  mlir::PatternRewriter &rewriter) const override {
+    unsigned numRegions = op.getRegions().size();
+    if (numRegions < 2)
+      return mlir::failure();
+    // `kept[i]`: the region that region `i` merges into (itself if none).
+    llvm::SmallVector<unsigned> kept(numRegions);
+    llvm::DenseMap<size_t, llvm::SmallVector<unsigned>> candidates;
+    bool changed = false;
+    mlir::Type scrutineeType = op.getVariant().getType().getElementType();
+    for (unsigned i = 0; i < numRegions; ++i) {
+      kept[i] = i;
+      mlir::Region &region = op.getRegions()[i];
+      if (!ignoresPayload(region) || boxesType(region, scrutineeType))
+        continue;
+      // Hashes only select candidates; structural equality decides the merge.
+      auto &bucket = candidates[static_cast<size_t>(regionHash(region))];
+      for (unsigned other : bucket)
+        if (sameOps(op.getRegions()[other], region)) {
+          kept[i] = other;
+          changed = true;
+          break;
+        }
+      if (kept[i] == i)
+        bucket.push_back(i);
+    }
+    if (!changed)
+      return mlir::failure();
+
+    llvm::SmallVector<llvm::SmallVector<int64_t>> tags(numRegions);
+    for (unsigned i = 0; i < numRegions; ++i)
+      llvm::append_range(
+          tags[kept[i]],
+          llvm::cast<mlir::DenseI64ArrayAttr>(op.getTagSets()[i]).asArrayRef());
+    llvm::SmallVector<unsigned> survivors;
+    llvm::SmallVector<mlir::Attribute> tagSets;
+    for (unsigned i = 0; i < numRegions; ++i) {
+      if (kept[i] != i)
+        continue;
+      llvm::sort(tags[i]);
+      survivors.push_back(i);
+      tagSets.push_back(rewriter.getDenseI64ArrayAttr(tags[i]));
+    }
+
+    auto merged = ReussirRecordDispatchOp::create(
+        rewriter, op.getLoc(), op->getResultTypes(), op.getVariant(),
+        rewriter.getArrayAttr(tagSets), survivors.size());
+    merged->setDiscardableAttrs(op->getDiscardableAttrDictionary());
+    for (auto [index, i] : llvm::enumerate(survivors)) {
+      mlir::Region &region = op.getRegions()[i];
+      // A region over several tags takes no argument.
+      if (tags[i].size() > 1)
+        rewriter.modifyOpInPlace(op, [&] {
+          region.front().eraseArguments(0, region.front().getNumArguments());
+        });
+      mlir::Region &target = merged.getRegions()[index];
+      rewriter.inlineRegionBefore(region, target, target.end());
+    }
+    rewriter.replaceOp(op, merged->getResults());
+    return mlir::success();
+  }
+};
+} // namespace
+
+void ReussirRecordDispatchOp::getCanonicalizationPatterns(
+    mlir::RewritePatternSet &results, mlir::MLIRContext *context) {
+  results.add<MergeEquivalentDispatchRegions>(context);
 }
 
 //===----------------------------------------------------------------------===//
