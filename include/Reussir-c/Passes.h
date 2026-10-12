@@ -81,7 +81,8 @@ MlirPass reussirCreateDebugInfoConversionPass(void);
 // Acquire/drop expansion has two phases controlled by these options; the
 // pipeline runs it once with both disabled and once with both enabled.
 MlirPass reussirCreateAcquireDropExpansionPass(bool expandDecrement,
-                                               bool outlineRecord);
+                                               bool outlineRecord,
+                                               bool tailRecursiveDrops);
 // Token reuse can optionally reuse tokens across function calls and emit one
 // structured optimization remark for every allocation/reuse decision.
 MlirPass reussirCreateTokenReusePass(bool reuseAcrossCall, bool emitRemarks);

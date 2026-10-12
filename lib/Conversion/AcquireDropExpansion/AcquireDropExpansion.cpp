@@ -147,7 +147,7 @@ private:
 
   mlir::LogicalResult rewriteDropRc(RcType rcType, ReussirRefDropOp op,
                                     mlir::PatternRewriter &rewriter) const {
-    if (outlineRecord) {
+    if (outlineRecord && tailRecursiveDrops) {
       mlir::Value loaded = ReussirRefLoadOp::create(rewriter, op.getLoc(), rcType,
                                                   op.getRef());
       if (emitTailDropRelease(loaded, op.getLoc(),
@@ -283,10 +283,10 @@ private:
           &dispatcher.getNonNullRegion(), dispatcher.getNonNullRegion().begin(),
           {nullableType.getPtrTy()}, {op.getLoc()});
       rewriter.setInsertionPointToStart(nonNullBlock);
-      if (outlineRecord && emitTailDropRelease(
-                               nonNullBlock->getArgument(0), op.getLoc(),
-                               op->getParentOfType<mlir::ModuleOp>(), rewriter,
-                               symbols)) {
+      if (outlineRecord && tailRecursiveDrops &&
+          emitTailDropRelease(nonNullBlock->getArgument(0), op.getLoc(),
+                              op->getParentOfType<mlir::ModuleOp>(), rewriter,
+                              symbols)) {
         ReussirScfYieldOp::create(rewriter, op.getLoc(), nullptr);
         rewriter.eraseOp(op);
         return mlir::success();
@@ -320,6 +320,7 @@ private:
   }
 
   bool outlineRecord;
+  bool tailRecursiveDrops;
   mlir::SymbolTableCollection *symbols;
 
   bool shouldOutline(ReussirRefDropOp op, RecordType type) const {
@@ -340,9 +341,11 @@ private:
 
 public:
   DropExpansionPattern(mlir::MLIRContext *context, bool outlineRecord,
-                       mlir::SymbolTableCollection *symbols)
+                       mlir::SymbolTableCollection *symbols,
+                       bool tailRecursiveDrops)
       : mlir::OpRewritePattern<ReussirRefDropOp>(context),
-        outlineRecord(outlineRecord), symbols(symbols) {}
+        outlineRecord(outlineRecord), tailRecursiveDrops(tailRecursiveDrops),
+        symbols(symbols) {}
 
   mlir::LogicalResult
   matchAndRewrite(ReussirRefDropOp op,
@@ -494,7 +497,7 @@ struct AcquireDropExpansionPass
     mlir::SymbolTableCollection symbols;
     mlir::RewritePatternSet patterns(&getContext());
     populateAcquireDropExpansionConversionPatterns(patterns, outlineRecord,
-                                                   &symbols);
+                                                   &symbols, tailRecursiveDrops);
     if (expandDecrement)
       populateRcDecrementExpansionConversionPatterns(patterns);
     if (failed(
@@ -506,9 +509,9 @@ struct AcquireDropExpansionPass
 
 void populateAcquireDropExpansionConversionPatterns(
     mlir::RewritePatternSet &patterns, bool outlineRecord,
-    mlir::SymbolTableCollection *symbols) {
+    mlir::SymbolTableCollection *symbols, bool tailRecursiveDrops) {
   patterns.add<DropExpansionPattern>(patterns.getContext(), outlineRecord,
-                                     symbols);
+                                     symbols, tailRecursiveDrops);
   patterns.add<AcquireExpansionPattern>(patterns.getContext(), outlineRecord,
                                      symbols);
 }

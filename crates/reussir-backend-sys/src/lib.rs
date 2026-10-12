@@ -151,6 +151,7 @@ unsafe extern "C" {
     pub fn reussirCreateAcquireDropExpansionPass(
         expand_decrement: bool,
         outline_record: bool,
+        tail_recursive_drops: bool,
     ) -> MlirPass;
     pub fn reussirCreateTokenReusePass(reuse_across_call: bool, emit_remarks: bool) -> MlirPass;
 

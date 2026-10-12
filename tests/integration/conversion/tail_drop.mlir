@@ -1,4 +1,5 @@
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true' --verify-each | %FileCheck %s --implicit-check-not=' cf.'
+// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true tail-recursive-drops=false' --verify-each | %FileCheck %s --check-prefix=UNSPECIALIZED --implicit-check-not=tail_release --implicit-check-not=reussir.musttail
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=EARLY
 
 !node_ = !reussir.record<compound "Node" incomplete>
@@ -20,6 +21,8 @@
 // CHECK-NEXT: func.call @{{.*}}NodeE.tail_release{{.*}}reussir.musttail
 // CHECK: reussir.rc.set
 module {
+  // UNSPECIALIZED-LABEL: func.func @release
+  // UNSPECIALIZED: reussir.rc.dec
   // CHECK-LABEL: func.func @release
   // CHECK: call @{{.*}}NodeE.tail_release
   // EARLY-NOT: tail_release
@@ -38,6 +41,14 @@ module {
     reussir.ref.drop (%a : !reussir.ref<!reussir.rc<!leaf shared>>)
     reussir.ref.drop (%b : !reussir.ref<!reussir.rc<!tree shared>>)
     reussir.ref.drop (%c : !reussir.ref<!reussir.rc<!snoc shared>>)
+    return
+  }
+  // CHECK-LABEL: func.func @nullable_release
+  // CHECK: call @{{.*}}NodeE.tail_release
+  // UNSPECIALIZED-LABEL: func.func @nullable_release
+  // UNSPECIALIZED: reussir.rc.dec
+  func.func @nullable_release(%ref: !reussir.ref<!reussir.nullable<!reussir.rc<!node shared>>>) {
+    reussir.ref.drop (%ref : !reussir.ref<!reussir.nullable<!reussir.rc<!node shared>>>)
     return
   }
 }
