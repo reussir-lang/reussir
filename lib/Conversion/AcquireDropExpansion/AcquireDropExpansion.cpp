@@ -13,6 +13,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "TailDrop.h"
+
 #include <algorithm>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/MapVector.h>
@@ -145,6 +147,17 @@ private:
 
   mlir::LogicalResult rewriteDropRc(RcType rcType, ReussirRefDropOp op,
                                     mlir::PatternRewriter &rewriter) const {
+    if (outlineRecord) {
+      mlir::Value loaded = ReussirRefLoadOp::create(rewriter, op.getLoc(), rcType,
+                                                  op.getRef());
+      if (emitTailDropRelease(loaded, op.getLoc(),
+                              op->getParentOfType<mlir::ModuleOp>(), rewriter,
+                              symbols)) {
+        rewriter.eraseOp(op);
+        return mlir::success();
+      }
+      rewriter.eraseOp(loaded.getDefiningOp());
+    }
     // Replace drop of ref rc with load then dec
     NullableType nullableType = nullptr;
     if (decMayProduceToken(rcType)) {
@@ -172,6 +185,9 @@ private:
       TokenType correct = dec.getTokenType();
       if (correct != llvm::cast<TokenType>(nullableType.getPtrTy()))
         dec->getResult(0).setType(NullableType::get(op.getContext(), correct));
+      if (auto function = op->getParentOfType<mlir::func::FuncOp>();
+          function && function->hasAttr(kTailDropReleaseAttr))
+        ReussirTokenFreeOp::create(rewriter, op.getLoc(), dec.getNullableToken());
     }
     rewriter.eraseOp(op);
     return mlir::success();
@@ -270,6 +286,14 @@ private:
           &dispatcher.getNonNullRegion(), dispatcher.getNonNullRegion().begin(),
           {nullableType.getPtrTy()}, {op.getLoc()});
       rewriter.setInsertionPointToStart(nonNullBlock);
+      if (outlineRecord && emitTailDropRelease(
+                               nonNullBlock->getArgument(0), op.getLoc(),
+                               op->getParentOfType<mlir::ModuleOp>(), rewriter,
+                               symbols)) {
+        ReussirScfYieldOp::create(rewriter, op.getLoc(), nullptr);
+        rewriter.eraseOp(op);
+        return mlir::success();
+      }
       NullableType retNullableTy = nullptr;
       if (decMayProduceToken(rcType)) {
         auto layout = mlir::DataLayout::closest(op.getOperation());
@@ -291,6 +315,9 @@ private:
         if (correct != llvm::cast<TokenType>(retNullableTy.getPtrTy()))
           dec->getResult(0).setType(
               NullableType::get(op.getContext(), correct));
+        if (auto function = op->getParentOfType<mlir::func::FuncOp>();
+            function && function->hasAttr(kTailDropReleaseAttr))
+          ReussirTokenFreeOp::create(rewriter, op.getLoc(), dec.getNullableToken());
       }
       ReussirScfYieldOp::create(rewriter, op.getLoc(), nullptr);
     }

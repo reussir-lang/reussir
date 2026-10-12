@@ -127,6 +127,8 @@ mlir::LogicalResult emitArrayElementTraversal(
 // A caller doing many glue lookups can supply a collection to reuse the
 // module's symbol table. Newly created glue is registered in that table.
 // The caller must keep it consistent with any other symbol mutations.
+constexpr llvm::StringLiteral kTailDropReleaseAttr = "reussir.tail_drop_release";
+
 mlir::func::FuncOp
 createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
                       mlir::OpBuilder &builder,

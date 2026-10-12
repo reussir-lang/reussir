@@ -1,0 +1,43 @@
+// UNSUPPORTED: windows
+// RUN: %rrc %s -o %t.o --relocation-mode pic -O none
+// RUN: %cc %t.o %S/tail_drop.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s -o %t.opt.o --relocation-mode pic -Oaggressive
+// RUN: %cc %t.opt.o %S/tail_drop.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+// RUN: %rrc %s -o %t.boxed.o --relocation-mode pic -O none --nullary-variant-encoding boxed
+// RUN: %cc %t.boxed.o %S/tail_drop.c -o %t.boxed.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.boxed.exe
+
+pub struct Box { value: u64 }
+pub enum List { Nil, Cons(Box, List), Wide(u64, u64, List) }
+pub struct Node { value: u64, next: Nullable<Node> }
+pub enum A { End, Next(u64, B) }
+pub enum B { End, Next(u64, A) }
+
+pub fn nil() -> List { List::Nil{} }
+pub fn cons(n: u64, next: List) -> List {
+    if n % 2 == 0 { List::Cons{Box{value: n}, next} } else { List::Wide{n, n, next} }
+}
+fn head(x: List) -> u64 {
+    match x { List::Nil => 0, List::Cons(n, _) => n.value, List::Wide(n, _, _) => n }
+}
+pub fn shared(x: List) -> u64 { head(x) + head(x) }
+pub fn node(n: u64, next: Nullable<Node>) -> Nullable<Node> {
+    Nullable::NonNull{Node{value: n, next: next}}
+}
+pub fn node_head(x: Nullable<Node>) -> u64 {
+    match x { Nullable::Null => 0, Nullable::NonNull(n) => n.value }
+}
+pub fn a_nil() -> A { A::End{} }
+pub fn a_cons(n: u64, next: A) -> A { A::Next{n, B::Next{n, next}} }
+pub fn a_head(x: A) -> u64 { match x { A::End => 0, A::Next(n, _) => n } }
+
+extern "C" trampoline "tail_nil" = nil;
+extern "C" trampoline "tail_cons" = cons;
+extern "C" trampoline "tail_shared" = shared;
+extern "C" trampoline "tail_node" = node;
+extern "C" trampoline "tail_node_head" = node_head;
+extern "C" trampoline "tail_a_nil" = a_nil;
+extern "C" trampoline "tail_a_cons" = a_cons;
+extern "C" trampoline "tail_a_head" = a_head;

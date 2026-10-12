@@ -1,0 +1,45 @@
+// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true' --verify-each | %FileCheck %s
+// RUN: %reussir-opt %s --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=EARLY
+
+!node_ = !reussir.record<compound "Node" incomplete>
+!node = !reussir.record<compound "Node" { i64, !reussir.nullable<!reussir.rc<!node_ shared>> }>
+!leaf = !reussir.record<compound "Leaf" { i64 }>
+!tree_ = !reussir.record<compound "Tree" incomplete>
+!tree = !reussir.record<compound "Tree" { !tree_, !tree_ }>
+!snoc_ = !reussir.record<compound "Snoc" incomplete>
+!snoc = !reussir.record<compound "Snoc" { !snoc_, !leaf }>
+
+// CHECK-LABEL: func.func private @{{.*}}NodeE.tail_release
+// CHECK-NOT: call
+// CHECK: reussir.rc.fetch
+// CHECK: cf.cond_br
+// CHECK: %[[NEXT:.*]] = reussir.ref.load
+// CHECK: reussir.rc.reinterpret
+// CHECK-NEXT: reussir.token.free
+// CHECK: cf.cond_br
+// CHECK: reussir.rc.set
+// CHECK: reussir.nullable.coerce
+// CHECK-NEXT: cf.br
+// CHECK-NOT: call
+module {
+  // CHECK-LABEL: func.func @release
+  // CHECK: call @{{.*}}NodeE.tail_release
+  // EARLY-NOT: tail_release
+  func.func @release(%ref: !reussir.ref<!reussir.rc<!node shared>>) {
+    reussir.ref.drop (%ref : !reussir.ref<!reussir.rc<!node shared>>)
+    return
+  }
+  // CHECK-LABEL: func.func @other_drops
+  // CHECK-NOT: tail_release
+  // CHECK: reussir.rc.dec
+  // CHECK: reussir.rc.dec
+  // CHECK: reussir.rc.dec
+  func.func @other_drops(%a: !reussir.ref<!reussir.rc<!leaf shared>>,
+                         %b: !reussir.ref<!reussir.rc<!tree shared>>,
+                         %c: !reussir.ref<!reussir.rc<!snoc shared>>) {
+    reussir.ref.drop (%a : !reussir.ref<!reussir.rc<!leaf shared>>)
+    reussir.ref.drop (%b : !reussir.ref<!reussir.rc<!tree shared>>)
+    reussir.ref.drop (%c : !reussir.ref<!reussir.rc<!snoc shared>>)
+    return
+  }
+}

@@ -54,17 +54,14 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
     return
   }
 
-  // The recursive spine outlines to a per-kind dtor: the atomic glue takes
-  // an *atomic* reference, dispatches, and releases the bare-declared Cons
-  // tail by calling itself — the whole spine shares one coloring.
-  // OUTLINE-LABEL: func.func private @_RINvNvC4core9intrinsic20drop_in_place_atomicAListE
+  // OUTLINE-LABEL: func.func private @_RINvNvC4core9intrinsic20drop_in_place_atomicAListE(
   // OUTLINE-SAME: !reussir.ref<!reussir.record<variant "AList" {{.*}}> atomic>
   // OUTLINE: reussir.record.dispatch
-  // OUTLINE: func.call @_RINvNvC4core9intrinsic20drop_in_place_atomicAListE({{.*}} atomic>) -> ()
+  // OUTLINE: func.call @_RINvNvC4core9intrinsic20drop_in_place_atomicAListE.tail_release({{.*}} atomic>) -> ()
   // OUTLINE-LABEL: @drop_alist
   // OUTLINE: func.call @_RINvNvC4core9intrinsic20drop_in_place_atomicAListE
 
-  // LLVM-LABEL: @_RINvNvC4core9intrinsic20drop_in_place_atomicAListE
+  // LLVM-LABEL: @_RINvNvC4core9intrinsic20drop_in_place_atomicAListE.tail_release(
   // LLVM: atomicrmw sub ptr %{{[0-9]+}}, i32 1 acq_rel
   func.func @drop_alist(%rc : !reussir.rc<!alist atomic>) {
     %t = reussir.rc.dec (%rc : !reussir.rc<!alist atomic>) : !reussir.nullable<!reussir.token<align: 8, size: ?>>
