@@ -16,7 +16,9 @@ use std::sync::Once;
 
 use llvm_sys::core::{
     LLVMContextCreate, LLVMContextDispose, LLVMCreateMemoryBufferWithMemoryRangeCopy,
-    LLVMDisposeMessage, LLVMDisposeModule,
+    LLVMDisposeMessage, LLVMDisposeModule, LLVMGetFirstBasicBlock, LLVMGetFirstFunction,
+    LLVMGetFirstInstruction, LLVMGetNextBasicBlock, LLVMGetNextFunction, LLVMGetNextInstruction,
+    LLVMGetTailCallKind, LLVMIsACallInst,
 };
 use llvm_sys::error::{LLVMDisposeErrorMessage, LLVMErrorRef, LLVMGetErrorMessage};
 #[allow(deprecated)]
@@ -57,6 +59,30 @@ unsafe extern "C" {
         strip_invariant_group_barriers: c_int,
     ) -> LLVMMemoryBufferRef;
     fn reussirHasTPDE() -> c_int;
+}
+
+unsafe fn contains_musttail(module: LLVMModuleRef) -> bool {
+    unsafe {
+        let mut function = LLVMGetFirstFunction(module);
+        while !function.is_null() {
+            let mut block = LLVMGetFirstBasicBlock(function);
+            while !block.is_null() {
+                let mut instruction = LLVMGetFirstInstruction(block);
+                while !instruction.is_null() {
+                    if !LLVMIsACallInst(instruction).is_null()
+                        && LLVMGetTailCallKind(instruction)
+                            == llvm_sys::LLVMTailCallKind::LLVMTailCallKindMustTail
+                    {
+                        return true;
+                    }
+                    instruction = LLVMGetNextInstruction(instruction);
+                }
+                block = LLVMGetNextBasicBlock(block);
+            }
+            function = LLVMGetNextFunction(function);
+        }
+        false
+    }
 }
 
 /// Reports whether TPDE support was compiled into the backend. [`OptLevel::Tpde`]
@@ -372,7 +398,7 @@ impl OrcJit {
             };
             tracing::trace!("translated MLIR module to LLVM IR");
 
-            if opt == OptLevel::Tpde {
+            if opt == OptLevel::Tpde && (!has_tpde() || !contains_musttail(llvm_module)) {
                 // TPDE compiles the IR to an object directly; the IR module and
                 // its context are not handed to the JIT, so we free them here.
                 let result = self.add_tpde_object(llvm_module, tracker);
@@ -624,6 +650,48 @@ mod tests {
             return;
         }
         assert_eq!(jit_add(OptLevel::Tpde), 42);
+    }
+
+    #[test]
+    fn tpde_uses_llvm_for_musttail() {
+        if !has_tpde() {
+            return;
+        }
+        let context = reussir_backend::context();
+        let module = Module::parse(
+            &context,
+            r#"
+            module {
+              llvm.func @countdown(%n: i64) -> i64 {
+                %zero = llvm.mlir.constant(0 : i64) : i64
+                %done = llvm.icmp "eq" %n, %zero : i64
+                llvm.cond_br %done, ^exit, ^recurse
+              ^exit:
+                llvm.return %zero : i64
+              ^recurse:
+                %one = llvm.mlir.constant(1 : i64) : i64
+                %next = llvm.sub %n, %one : i64
+                %result = llvm.call musttail @countdown(%next) : (i64) -> i64
+                llvm.return %result : i64
+              }
+            }
+        "#,
+        )
+        .expect("parse musttail module");
+        let jit = OrcJit::new().expect("create LLJIT");
+        let handle = jit
+            .add_module_tracked(&module, OptLevel::Tpde)
+            .expect("add musttail module at TPDE level");
+        let address = jit.lookup("countdown").expect("lookup countdown");
+        let countdown: extern "C" fn(u64) -> u64 = unsafe { std::mem::transmute(address as usize) };
+        let result = std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(move || countdown(200_000))
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(result, 0);
+        jit.remove_module(&handle).expect("remove fallback module");
     }
 
     #[test]
