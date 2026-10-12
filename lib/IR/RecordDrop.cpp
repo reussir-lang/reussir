@@ -7,7 +7,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 //===----------------------------------------------------------------------===//
-#include "Reussir/IR/RecordDrop.h"
+#include "Reussir/IR/ReussirTypes.h"
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/SCCIterator.h>
@@ -40,10 +40,10 @@ template <> struct GraphTraits<reussir::detail::DropNode *> {
 } // namespace llvm
 
 namespace reussir {
-std::optional<RecordDropKind> classifyRecordDrop(RecordType record) {
+static RecordDropKind computeRecordDrop(RecordType record, bool &cacheable) {
   using detail::DropNode;
   if (!record)
-    return std::nullopt;
+    return RecordDropKind::Invalid;
   llvm::DenseMap<mlir::Type, DropNode *> nodes;
   llvm::SmallVector<std::unique_ptr<DropNode>> storage;
   auto intern = [&](mlir::Type type) {
@@ -59,20 +59,23 @@ std::optional<RecordDropKind> classifyRecordDrop(RecordType record) {
   for (size_t i = 0; i < storage.size(); ++i) {
     DropNode *node = storage[i].get();
     if (!node->type)
-      return std::nullopt;
+      return RecordDropKind::Invalid;
     auto addChild = [&](mlir::Type type, bool owned = false) {
       node->children.push_back(intern(type));
       node->owned.push_back(owned);
     };
     if (auto record = llvm::dyn_cast<RecordType>(node->type)) {
-      if (!record.getComplete() ||
-          record.getMembers().size() != record.getMemberIsField().size())
-        return std::nullopt;
+      if (!record.getComplete()) {
+        cacheable = false;
+        return RecordDropKind::Invalid;
+      }
+      if (record.getMembers().size() != record.getMemberIsField().size())
+        return RecordDropKind::Invalid;
       node->alternatives = record.isVariant();
       for (auto [member, field] :
            llvm::zip(record.getMembers(), record.getMemberIsField())) {
         if (!member)
-          return std::nullopt;
+          return RecordDropKind::Invalid;
         if (!field)
           addChild(getProjectedType(member, false, Capability::shared));
       }
@@ -129,7 +132,7 @@ std::optional<RecordDropKind> classifyRecordDrop(RecordType record) {
     for (DropNode *node : component)
       node->hasDrop = hasDrop;
     if (it.hasCycle() && !ownedCycle)
-      return std::nullopt;
+      return RecordDropKind::Invalid;
     if (!members.contains(root))
       continue;
     if (!it.hasCycle())
@@ -139,5 +142,19 @@ std::optional<RecordDropKind> classifyRecordDrop(RecordType record) {
     return RecordDropKind::TailLoop;
   }
   llvm_unreachable("root must belong to an SCC");
+}
+
+RecordDropKind RecordType::classifyRecordDrop() const {
+  if (!*this)
+    return RecordDropKind::Invalid;
+  auto *storage = getImpl();
+  std::lock_guard lock(storage->dropKindMutex);
+  if (storage->dropKind)
+    return *storage->dropKind;
+  bool cacheable = true;
+  RecordDropKind kind = computeRecordDrop(*this, cacheable);
+  if (cacheable)
+    storage->dropKind = kind;
+  return kind;
 }
 } // namespace reussir

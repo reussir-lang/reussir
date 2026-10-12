@@ -10,13 +10,8 @@
 #ifndef REUSSIR_IR_RECORDDROP_H
 #define REUSSIR_IR_RECORDDROP_H
 
-#include "Reussir/IR/ReussirTypes.h"
-#include <optional>
-
 namespace reussir {
-enum class RecordDropKind { Direct, TailLoop, Worklist };
-
-std::optional<RecordDropKind> classifyRecordDrop(RecordType record);
+enum class RecordDropKind { Invalid, Direct, TailLoop, Worklist };
 } // namespace reussir
 
 #endif

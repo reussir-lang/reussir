@@ -14,6 +14,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include <mutex>
+#include <optional>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/Hashing.h>
 #include <llvm/Support/TypeSize.h>
@@ -21,6 +23,7 @@
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
 #include <mlir/Support/LogicalResult.h>
 
+#include "Reussir/IR/RecordDrop.h"
 #include "Reussir/IR/ReussirAttrs.h"
 #include "Reussir/IR/ReussirEnumAttrs.h"
 
@@ -52,6 +55,8 @@ struct RecordTypeStorage : public mlir::TypeStorage {
   // completion), so a named record's self-references resolve to the same
   // value — mirrors `defaultCapability`.
   bool fixed;
+  mutable std::optional<RecordDropKind> dropKind;
+  mutable std::mutex dropKindMutex;
 
   using KeyTy = RecordTypeStorage;
 
@@ -63,7 +68,9 @@ struct RecordTypeStorage : public mlir::TypeStorage {
         complete(complete), kind(kind), defaultCapability(defaultCapability),
         fixed(fixed) {}
 
-  RecordTypeStorage(const KeyTy &key) = default;
+  RecordTypeStorage(const KeyTy &key)
+      : RecordTypeStorage(key.members, key.memberIsField, key.name, key.complete,
+                          key.kind, key.defaultCapability, key.fixed) {}
 
   KeyTy getAsKey() const { return *this; }
 

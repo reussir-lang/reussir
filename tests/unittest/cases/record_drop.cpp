@@ -7,7 +7,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 //===----------------------------------------------------------------------===//
-#include "Reussir/IR/RecordDrop.h"
+#include "Reussir/IR/ReussirTypes.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include <gtest/gtest.h>
 
@@ -35,25 +35,25 @@ TEST_F(RecordDropTest, AcyclicBranchingIsDirect) {
   complete(leaf, {scalar()});
   auto pair = declare("Pair");
   complete(pair, {leaf, leaf});
-  EXPECT_EQ(classifyRecordDrop(leaf), RecordDropKind::Direct);
-  EXPECT_EQ(classifyRecordDrop(pair), RecordDropKind::Direct);
+  EXPECT_EQ(leaf.classifyRecordDrop(), RecordDropKind::Direct);
+  EXPECT_EQ(pair.classifyRecordDrop(), RecordDropKind::Direct);
 }
 
 TEST_F(RecordDropTest, ChainAndNullableChainUseTailLoop) {
   auto chain = declare("Chain");
   complete(chain, {scalar(), chain});
-  EXPECT_EQ(classifyRecordDrop(chain), RecordDropKind::TailLoop);
+  EXPECT_EQ(chain.classifyRecordDrop(), RecordDropKind::TailLoop);
   auto nullable = declare("NullableChain");
   auto link =
       RcType::get(&context, nullable, Capability::shared, AtomicKind::normal);
   complete(nullable, {NullableType::get(&context, link), scalar()});
-  EXPECT_EQ(classifyRecordDrop(nullable), RecordDropKind::TailLoop);
+  EXPECT_EQ(nullable.classifyRecordDrop(), RecordDropKind::TailLoop);
 }
 
 TEST_F(RecordDropTest, TreeUsesWorklist) {
   auto tree = declare("Tree");
   complete(tree, {tree, tree});
-  EXPECT_EQ(classifyRecordDrop(tree), RecordDropKind::Worklist);
+  EXPECT_EQ(tree.classifyRecordDrop(), RecordDropKind::Worklist);
 }
 
 TEST_F(RecordDropTest, MutualRecursionUsesTailLoop) {
@@ -61,8 +61,8 @@ TEST_F(RecordDropTest, MutualRecursionUsesTailLoop) {
   auto b = declare("B");
   complete(a, {b});
   complete(b, {a});
-  EXPECT_EQ(classifyRecordDrop(a), RecordDropKind::TailLoop);
-  EXPECT_EQ(classifyRecordDrop(b), RecordDropKind::TailLoop);
+  EXPECT_EQ(a.classifyRecordDrop(), RecordDropKind::TailLoop);
+  EXPECT_EQ(b.classifyRecordDrop(), RecordDropKind::TailLoop);
 }
 
 TEST_F(RecordDropTest, MutualBranchingUsesWorklist) {
@@ -70,8 +70,8 @@ TEST_F(RecordDropTest, MutualBranchingUsesWorklist) {
   auto b = declare("B");
   complete(a, {b});
   complete(b, {a, a});
-  EXPECT_EQ(classifyRecordDrop(a), RecordDropKind::Worklist);
-  EXPECT_EQ(classifyRecordDrop(b), RecordDropKind::Worklist);
+  EXPECT_EQ(a.classifyRecordDrop(), RecordDropKind::Worklist);
+  EXPECT_EQ(b.classifyRecordDrop(), RecordDropKind::Worklist);
 }
 
 TEST_F(RecordDropTest, AlternativesAreNotSimultaneousChildren) {
@@ -81,7 +81,7 @@ TEST_F(RecordDropTest, AlternativesAreNotSimultaneousChildren) {
   complete(left, {scalar(), variant}, Capability::value);
   complete(right, {variant, scalar()}, Capability::value);
   complete(variant, {scalar(), left, right});
-  EXPECT_EQ(classifyRecordDrop(variant), RecordDropKind::TailLoop);
+  EXPECT_EQ(variant.classifyRecordDrop(), RecordDropKind::TailLoop);
 }
 
 TEST_F(RecordDropTest, ValueVariantWithBoxedConstructorUsesTailLoop) {
@@ -89,8 +89,8 @@ TEST_F(RecordDropTest, ValueVariantWithBoxedConstructorUsesTailLoop) {
   auto cons = declare("Cons");
   complete(list, {scalar(), cons}, Capability::value);
   complete(cons, {scalar(), list});
-  EXPECT_EQ(classifyRecordDrop(list), RecordDropKind::TailLoop);
-  EXPECT_EQ(classifyRecordDrop(cons), RecordDropKind::TailLoop);
+  EXPECT_EQ(list.classifyRecordDrop(), RecordDropKind::TailLoop);
+  EXPECT_EQ(cons.classifyRecordDrop(), RecordDropKind::TailLoop);
 }
 
 TEST_F(RecordDropTest, NestedNontrivialSuffixUsesWorklist) {
@@ -100,7 +100,7 @@ TEST_F(RecordDropTest, NestedNontrivialSuffixUsesWorklist) {
   complete(suffix, {leaf}, Capability::value);
   auto chain = declare("Chain");
   complete(chain, {chain, suffix});
-  EXPECT_EQ(classifyRecordDrop(chain), RecordDropKind::Worklist);
+  EXPECT_EQ(chain.classifyRecordDrop(), RecordDropKind::Worklist);
 }
 
 TEST_F(RecordDropTest, InlinePayloadCanHideBranching) {
@@ -108,7 +108,7 @@ TEST_F(RecordDropTest, InlinePayloadCanHideBranching) {
   auto payload = declare("Pair");
   complete(payload, {variant, variant}, Capability::value);
   complete(variant, {scalar(), payload});
-  EXPECT_EQ(classifyRecordDrop(variant), RecordDropKind::Worklist);
+  EXPECT_EQ(variant.classifyRecordDrop(), RecordDropKind::Worklist);
 }
 
 TEST_F(RecordDropTest, AcyclicOwnerOfTreeIsDirect) {
@@ -116,7 +116,7 @@ TEST_F(RecordDropTest, AcyclicOwnerOfTreeIsDirect) {
   complete(tree, {tree, tree});
   auto owner = declare("Owner");
   complete(owner, {tree});
-  EXPECT_EQ(classifyRecordDrop(owner), RecordDropKind::Direct);
+  EXPECT_EQ(owner.classifyRecordDrop(), RecordDropKind::Direct);
 }
 
 TEST_F(RecordDropTest, NonTailDropUsesWorklist) {
@@ -124,10 +124,10 @@ TEST_F(RecordDropTest, NonTailDropUsesWorklist) {
   complete(leaf, {scalar()});
   auto chain = declare("Chain");
   complete(chain, {chain, leaf});
-  EXPECT_EQ(classifyRecordDrop(chain), RecordDropKind::Worklist);
+  EXPECT_EQ(chain.classifyRecordDrop(), RecordDropKind::Worklist);
   auto tail = declare("Tail");
   complete(tail, {leaf, tail});
-  EXPECT_EQ(classifyRecordDrop(tail), RecordDropKind::TailLoop);
+  EXPECT_EQ(tail.classifyRecordDrop(), RecordDropKind::TailLoop);
 }
 
 TEST_F(RecordDropTest, TrivialInlineSuffixDoesNotPreventTailLoop) {
@@ -135,35 +135,35 @@ TEST_F(RecordDropTest, TrivialInlineSuffixDoesNotPreventTailLoop) {
   complete(value, {scalar()}, Capability::value);
   auto chain = declare("Chain");
   complete(chain, {chain, value});
-  EXPECT_EQ(classifyRecordDrop(chain), RecordDropKind::TailLoop);
+  EXPECT_EQ(chain.classifyRecordDrop(), RecordDropKind::TailLoop);
 }
 
 TEST_F(RecordDropTest, BorrowedFieldsDoNotAddDropEdges) {
   auto record = declare("Borrowed");
   record.complete({record, record}, {true, true}, Capability::shared, false);
-  EXPECT_EQ(classifyRecordDrop(record), RecordDropKind::Direct);
+  EXPECT_EQ(record.classifyRecordDrop(), RecordDropKind::Direct);
 }
 
 TEST_F(RecordDropTest, IncompleteTypesAreNotCached) {
   auto record = declare("Incomplete");
-  EXPECT_EQ(classifyRecordDrop(record), std::nullopt);
+  EXPECT_EQ(record.classifyRecordDrop(), RecordDropKind::Invalid);
   complete(record, {record});
-  EXPECT_EQ(classifyRecordDrop(record), RecordDropKind::TailLoop);
+  EXPECT_EQ(record.classifyRecordDrop(), RecordDropKind::TailLoop);
 }
 
 TEST_F(RecordDropTest, OpaqueAtomicAndRegionalMembersAreClassified) {
   auto record = declare("ClosureOwner");
   complete(record, {ClosureType::get(&context, {}, scalar())});
-  EXPECT_EQ(classifyRecordDrop(record), RecordDropKind::Direct);
+  EXPECT_EQ(record.classifyRecordDrop(), RecordDropKind::Direct);
   auto atomic = declare("Atomic");
   complete(atomic,
            {NullableType::get(&context,
                               RcType::get(&context, atomic, Capability::shared,
                                           AtomicKind::atomic))});
-  EXPECT_EQ(classifyRecordDrop(atomic), RecordDropKind::TailLoop);
+  EXPECT_EQ(atomic.classifyRecordDrop(), RecordDropKind::TailLoop);
   auto regional = declare("Regional");
   complete(regional, {regional}, Capability::regional);
-  EXPECT_EQ(classifyRecordDrop(regional), RecordDropKind::Direct);
+  EXPECT_EQ(regional.classifyRecordDrop(), RecordDropKind::Direct);
 }
 
 TEST_F(RecordDropTest, RecursiveArraysUseTheirElementMultiplicity) {
@@ -175,7 +175,7 @@ TEST_F(RecordDropTest, RecursiveArraysUseTheirElementMultiplicity) {
     auto expected = extent == 0   ? RecordDropKind::Direct
                     : extent == 1 ? RecordDropKind::TailLoop
                                   : RecordDropKind::Worklist;
-    EXPECT_EQ(classifyRecordDrop(record), expected);
+    EXPECT_EQ(record.classifyRecordDrop(), expected);
   }
 }
 
@@ -186,9 +186,9 @@ TEST_F(RecordDropTest, RecursiveCellsAccountForLockCleanup) {
     auto link =
         RcType::get(&context, record, Capability::shared, AtomicKind::atomic);
     complete(record, {CellType::get(&context, link, kind)});
-    EXPECT_EQ(classifyRecordDrop(record), kind == CellKind::plain
-                                              ? RecordDropKind::TailLoop
-                                              : RecordDropKind::Worklist);
+    EXPECT_EQ(record.classifyRecordDrop(), kind == CellKind::plain
+                                               ? RecordDropKind::TailLoop
+                                               : RecordDropKind::Worklist);
   }
 }
 
@@ -200,10 +200,10 @@ TEST_F(RecordDropTest, ForeignCleanupAfterRecursionUsesWorklist) {
   auto link = NullableType::get(
       &context, RcType::get(&context, foreign, Capability::shared));
   complete(record, {record, link});
-  EXPECT_EQ(classifyRecordDrop(record), RecordDropKind::Worklist);
+  EXPECT_EQ(record.classifyRecordDrop(), RecordDropKind::Worklist);
   auto owner = declare("ForeignOwner");
   complete(owner, {link});
-  EXPECT_EQ(classifyRecordDrop(owner), RecordDropKind::Direct);
+  EXPECT_EQ(owner.classifyRecordDrop(), RecordDropKind::Direct);
 }
 
 TEST_F(RecordDropTest, ScalarBoxesArraysAndCellsAreDirect) {
@@ -213,18 +213,30 @@ TEST_F(RecordDropTest, ScalarBoxesArraysAndCellsAreDirect) {
                 &context, RcType::get(&context, scalar(), Capability::shared)),
             ArrayType::get(&context, {2}, scalar()),
             CellType::get(&context, scalar(), CellKind::plain)});
-  EXPECT_EQ(classifyRecordDrop(record), RecordDropKind::Direct);
+  EXPECT_EQ(record.classifyRecordDrop(), RecordDropKind::Direct);
 }
 
 TEST_F(RecordDropTest, IllFormedRecordsHaveNoClassification) {
-  EXPECT_EQ(classifyRecordDrop(RecordType{}), std::nullopt);
+  EXPECT_EQ(RecordType{}.classifyRecordDrop(), RecordDropKind::Invalid);
   auto cycle = declare("InlineCycle");
   complete(cycle, {cycle}, Capability::value);
-  EXPECT_EQ(classifyRecordDrop(cycle), std::nullopt);
+  EXPECT_EQ(cycle.classifyRecordDrop(), RecordDropKind::Invalid);
   auto incomplete = declare("IncompleteChild");
   auto owner = declare("Owner");
   complete(owner, {incomplete});
-  EXPECT_EQ(classifyRecordDrop(owner), std::nullopt);
+  EXPECT_EQ(owner.classifyRecordDrop(), RecordDropKind::Invalid);
+  complete(incomplete, {incomplete});
+  EXPECT_EQ(owner.classifyRecordDrop(), RecordDropKind::Direct);
+  EXPECT_EQ(incomplete.classifyRecordDrop(), RecordDropKind::TailLoop);
+}
+
+TEST_F(RecordDropTest, CachedClassificationIsSharedByTypeHandles) {
+  auto record = declare("Cached");
+  complete(record, {record});
+  EXPECT_EQ(record.classifyRecordDrop(), RecordDropKind::TailLoop);
+  auto same = declare("Cached");
+  EXPECT_EQ(same, record);
+  EXPECT_EQ(same.classifyRecordDrop(), RecordDropKind::TailLoop);
 }
 
 TEST_F(RecordDropTest, SharedAcyclicGraphDoesNotExpandPaths) {
@@ -235,7 +247,7 @@ TEST_F(RecordDropTest, SharedAcyclicGraphDoesNotExpandPaths) {
     complete(parent, {record, record});
     record = parent;
   }
-  EXPECT_EQ(classifyRecordDrop(record), RecordDropKind::Direct);
+  EXPECT_EQ(record.classifyRecordDrop(), RecordDropKind::Direct);
 }
 } // namespace
 } // namespace reussir
