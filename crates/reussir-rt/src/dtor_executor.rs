@@ -1,15 +1,23 @@
-use core::{ffi::c_void, mem::MaybeUninit, ptr};
+use core::{alloc::Layout, ffi::c_void, mem::MaybeUninit, ptr};
+use hashbrown::HashMap;
+use smallvec::SmallVec;
 use stumpalo::Arena;
 
-pub const DTOR_CONTI_SIZE: usize = 32;
-pub const DTOR_CONTI_ALIGN: usize = 8;
 pub type DtorStart = unsafe extern "C" fn(*mut c_void, *mut c_void) -> DtorStep;
 pub type DtorResume = unsafe extern "C" fn(*mut c_void, bool) -> DtorStep;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct DtorTask {
+pub struct DtorRoutine {
     pub start: DtorStart,
+    pub size: usize,
+    pub align: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DtorTask {
+    pub routine: *const DtorRoutine,
     pub object: *mut c_void,
 }
 
@@ -20,17 +28,21 @@ pub struct DtorStep {
     pub child: *const DtorTask,
 }
 
-#[repr(C, align(8))]
-struct Frame {
-    buffer: [MaybeUninit<u8>; DTOR_CONTI_SIZE],
-    resume: Option<DtorResume>,
-    link: *mut Frame,
+struct Allocation {
+    link: *mut Allocation,
+    layout: Layout,
+}
+
+struct Continuation {
+    buffer: *mut c_void,
+    resume: DtorResume,
 }
 
 pub struct DtorExecutor {
     arena: Arena,
-    top: *mut Frame,
-    free: *mut Frame,
+    allocations: *mut Allocation,
+    free: HashMap<Layout, *mut Allocation>,
+    continuations: SmallVec<[Continuation; 8]>,
     running: bool,
 }
 
@@ -38,37 +50,48 @@ impl DtorExecutor {
     pub fn new() -> Self {
         Self {
             arena: Arena::with_chunk(1024),
-            top: ptr::null_mut(),
-            free: ptr::null_mut(),
+            allocations: ptr::null_mut(),
+            free: HashMap::new(),
+            continuations: SmallVec::new(),
             running: false,
         }
     }
 
-    unsafe fn push(&mut self) -> *mut c_void {
-        let frame = if self.free.is_null() {
-            self.arena.alloc(Frame {
-                buffer: [MaybeUninit::uninit(); DTOR_CONTI_SIZE],
-                resume: None,
-                link: ptr::null_mut(),
-            }) as *mut Frame
+    fn allocate(&mut self, size: usize, align: usize) -> *mut c_void {
+        let layout = Layout::from_size_align(size, align).expect("invalid continuation layout");
+        let (storage_layout, offset) = Layout::new::<Allocation>()
+            .extend(layout)
+            .expect("continuation layout overflow");
+        let free = self.free.entry(layout).or_insert(ptr::null_mut());
+        let allocation = if free.is_null() {
+            self.arena
+                .alloc_layout(storage_layout)
+                .as_ptr()
+                .cast::<Allocation>()
         } else {
-            let frame = self.free;
-            self.free = unsafe { (*frame).link };
-            frame
+            let allocation = *free;
+            *free = unsafe { (*allocation).link };
+            allocation
         };
-        unsafe { (*frame).link = self.top };
-        self.top = frame;
-        unsafe { ptr::addr_of_mut!((*frame).buffer).cast() }
+        unsafe {
+            allocation.write(Allocation {
+                link: self.allocations,
+                layout,
+            });
+            self.allocations = allocation;
+            allocation.byte_add(offset).cast()
+        }
     }
 
-    unsafe fn pop(&mut self) {
-        let frame = self.top;
-        assert!(!frame.is_null(), "empty destructor continuation stack");
+    fn deallocate(&mut self) {
+        let allocation = self.allocations;
+        assert!(!allocation.is_null(), "empty destructor allocation stack");
         unsafe {
-            self.top = (*frame).link;
-            (*frame).link = self.free;
+            self.allocations = (*allocation).link;
+            let free = self.free.get_mut(&(*allocation).layout).unwrap();
+            (*allocation).link = *free;
+            *free = allocation;
         }
-        self.free = frame;
     }
 }
 
@@ -81,7 +104,7 @@ impl Default for DtorExecutor {
 impl Drop for DtorExecutor {
     fn drop(&mut self) {
         assert!(
-            !self.running && self.top.is_null(),
+            !self.running && self.allocations.is_null() && self.continuations.is_empty(),
             "destructor executor is active"
         );
     }
@@ -104,11 +127,15 @@ pub unsafe extern "C" fn __reussir_destroy_dtor_executor(context: *mut DtorExecu
     unsafe { (*context.cast::<MaybeUninit<DtorExecutor>>()).assume_init_drop() };
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __reussir_dtor_conti_alloc(context: *mut DtorExecutor) -> *mut c_void {
+pub unsafe extern "C" fn __reussir_dtor_conti_alloc(
+    context: *mut DtorExecutor,
+    size: usize,
+    align: usize,
+) -> *mut c_void {
     unsafe {
         (*context.cast::<MaybeUninit<DtorExecutor>>())
             .assume_init_mut()
-            .push()
+            .allocate(size, align)
     }
 }
 #[unsafe(no_mangle)]
@@ -116,27 +143,31 @@ pub unsafe extern "C" fn __reussir_dtor_conti_free(context: *mut DtorExecutor) {
     unsafe {
         (*context.cast::<MaybeUninit<DtorExecutor>>())
             .assume_init_mut()
-            .pop()
+            .deallocate()
     };
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __reussir_run_dtor(
     context: *mut DtorExecutor,
     object: *mut c_void,
-    start: DtorStart,
+    routine: *const DtorRoutine,
 ) {
     {
         let executor = unsafe { (*context.cast::<MaybeUninit<DtorExecutor>>()).assume_init_mut() };
         assert!(
-            !executor.running && executor.top.is_null(),
+            !executor.running
+                && executor.allocations.is_null()
+                && executor.continuations.is_empty(),
             "destructor executor is active"
         );
         executor.running = true;
     }
-    let mut task = DtorTask { start, object };
+    let mut task = DtorTask { routine, object };
     loop {
-        let buffer = unsafe { __reussir_dtor_conti_alloc(context) };
-        let mut step = unsafe { (task.start)(buffer, task.object) };
+        let routine = unsafe { *task.routine };
+        let buffer = unsafe { (*context).allocate(routine.size, routine.align) };
+        let mut step = unsafe { (routine.start)(buffer, task.object) };
+        let mut buffer = buffer;
         loop {
             if let Some(resume) = step.resume {
                 assert!(
@@ -144,19 +175,21 @@ pub unsafe extern "C" fn __reussir_run_dtor(
                     "suspended destructor has no child task"
                 );
                 unsafe {
-                    (*(*context).top).resume = Some(resume);
                     task = *step.child;
+                    (*context)
+                        .continuations
+                        .push(Continuation { buffer, resume });
                 }
                 break;
             }
-            unsafe { __reussir_dtor_conti_free(context) };
-            let top = unsafe { (*context).top };
-            if top.is_null() {
+            unsafe { (*context).deallocate() };
+            let continuation = unsafe { (*context).continuations.pop() };
+            let Some(continuation) = continuation else {
                 unsafe { (*context).running = false };
                 return;
-            }
-            let resume = unsafe { (*top).resume.unwrap() };
-            step = unsafe { resume(ptr::addr_of_mut!((*top).buffer).cast(), false) };
+            };
+            buffer = continuation.buffer;
+            step = unsafe { (continuation.resume)(buffer, false) };
         }
     }
 }

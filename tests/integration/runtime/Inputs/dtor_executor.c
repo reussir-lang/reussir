@@ -7,9 +7,26 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-extern ReussirDtorStep start_a(void *, void *);
+extern const ReussirDtorRoutine routine_a;
 static uintptr_t expected;
 void observe(uint64_t n) { assert(n == expected++); }
+void *unexpected_alloc(size_t size) {
+  (void)size;
+  abort();
+}
+void unexpected_free(void *ptr) {
+  (void)ptr;
+  abort();
+}
+void fill_payload(void *ptr) {
+  assert((uintptr_t)ptr % 256 == 0);
+  memset(ptr, 0xa5, 1024);
+}
+void check_payload(void *ptr) {
+  assert((uintptr_t)ptr % 256 == 0);
+  for (size_t i = 0; i < 1024; ++i)
+    assert(((unsigned char *)ptr)[i] == 0xa5);
+}
 #ifdef __cplusplus
 }
 #endif
@@ -25,24 +42,25 @@ int main(void) {
   assert(allocation);
   void *storage = (void *)(((uintptr_t)allocation + align - 1) & ~(align - 1));
   ReussirDtorExecutor *executor = __reussir_create_dtor_executor(storage);
-  unsigned char *first = (unsigned char *)__reussir_dtor_conti_alloc(executor);
-  assert((uintptr_t)first % REUSSIR_DTOR_CONTI_ALIGN == 0);
-  memset(first, 0x5a, REUSSIR_DTOR_CONTI_SIZE);
+  unsigned char *first =
+      (unsigned char *)__reussir_dtor_conti_alloc(executor, 8193, 4096);
+  assert((uintptr_t)first % 4096 == 0);
+  memset(first, 0x5a, 8193);
   for (int i = 0; i < 1000; ++i)
-    __reussir_dtor_conti_alloc(executor);
-  for (int i = 0; i < REUSSIR_DTOR_CONTI_SIZE; ++i)
+    __reussir_dtor_conti_alloc(executor, 17 + i, 64);
+  for (int i = 0; i < 8193; ++i)
     assert(first[i] == 0x5a);
   for (int i = 0; i < 1001; ++i)
     __reussir_dtor_conti_free(executor);
   for (int i = 0; i < 2; ++i) {
     expected = 0;
-    __reussir_run_dtor(executor, (void *)(uintptr_t)100000, start_a);
+    __reussir_run_dtor(executor, (void *)(uintptr_t)100000, &routine_a);
     assert(expected == 100001);
   }
   __reussir_destroy_dtor_executor(executor);
   executor = __reussir_create_dtor_executor(storage);
   expected = 0;
-  __reussir_run_dtor(executor, NULL, start_a);
+  __reussir_run_dtor(executor, NULL, &routine_a);
   assert(expected == 1);
   __reussir_destroy_dtor_executor(executor);
   free(allocation);
