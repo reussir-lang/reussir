@@ -1,0 +1,11 @@
+// Deeply nested expressions must not overflow rrc's stack. The parser grows
+// its stack itself, but elaboration, lowering and the syntax tree's drop
+// recurse once per nesting level; on the 8 MiB main thread a chain of 8000
+// `+` overflowed in the elaborator, and 100000 nested parentheses as well.
+// rrc runs its driver on a thread with a 1 GiB stack. The program is
+// generated (Inputs/deep_expression.py); this file only drives it.
+
+// RUN: %python %S/Inputs/deep_expression.py %t.rr
+// RUN: %rrc %t.rr -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/deep_expression.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe

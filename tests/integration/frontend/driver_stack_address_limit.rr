@@ -1,0 +1,16 @@
+// REQUIRES: linux
+// rrc runs its driver on a thread with a 1 GiB stack (deep_expression.rr).
+// The stack is reserved address space, which an address-space limit counts:
+// under `ulimit -v 1000000` (about 1 GB) the thread cannot be created, and
+// rrc must then run the driver on the main thread as before, not panic
+// ("failed to spawn the driver thread", exit 101). The backend runs
+// single-threaded here so that its thread pool's stacks, also reserved
+// address space, do not depend on the machine's core count.
+
+// RUN: bash -c 'ulimit -v 1000000 && exec %rrc %s -o %t.o --relocation-mode pic --disable-backend-multithreading'
+// RUN: %cc %t.o %S/driver_stack_address_limit.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+pub fn answer(x : u64) -> u64 { x * 6 + 0 }
+
+extern "C" trampoline "driver_stack_address_limit" = answer;
