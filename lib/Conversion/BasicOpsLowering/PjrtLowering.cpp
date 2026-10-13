@@ -40,9 +40,9 @@ struct Bytecode : mlir::ConvertOpToLLVMPattern<ReussirIFRTBytecodeOp> {
       auto empty = mlir::LLVM::PoisonOp::create(rewriter, op.getLoc(), type);
       auto withChecksum = mlir::LLVM::InsertValueOp::create(
           rewriter, op.getLoc(), empty, checksum, llvm::ArrayRef<int64_t>{0});
-      auto complete = mlir::LLVM::InsertValueOp::create(
-          rewriter, op.getLoc(), withChecksum, bytes,
-          llvm::ArrayRef<int64_t>{1});
+      auto complete =
+          mlir::LLVM::InsertValueOp::create(rewriter, op.getLoc(), withChecksum,
+                                            bytes, llvm::ArrayRef<int64_t>{1});
       mlir::LLVM::ReturnOp::create(rewriter, op.getLoc(), complete);
     }
     rewriter.eraseOp(op);
