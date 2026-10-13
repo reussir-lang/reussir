@@ -98,11 +98,20 @@ materialize. Completion handles lower to already-ready values because the
 runtime calls finish synchronously; the side-effecting calls preserve execution
 order. This does not provide asynchronous IFRT execution or automatic donation.
 
-For this path, explicitly run `--reussir-ifrt-just-in-time-transform` before
-`--reussir-convert-to-llvm`, along with the host program's normal array, RC, and
-control-flow lowerings. The native compiler pipeline does not yet schedule IFRT
-preparation automatically. The `pjrt_call_e2e.mlir` and
-`pjrt_sharded_e2e.mlir` integration tests show complete lowering/linking commands.
+The native compiler registers IFRT/StableHLO and automatically prepares device
+kernels before host inlining and optimization, including at `-O none`. Compile
+an outlined MLIR host program with `rrc input.mlir --emit llvm-ir -o output.ll`
+or emit a native object for linking. Compilation embeds the kernel bytecode;
+it does not require a PJRT runtime or load a backend plugin. The tensor kernels
+remain MLIR input: this does not add tensor computation syntax to `.rr` sources.
+
+`--reussir-prepare-pjrt` packages kernels, removes obsolete source modules, and
+strips IFRT function annotations even from hosts without calls. It leaves
+ordinary modules unchanged; builds without OpenXLA reject IFRT programs when
+preparation is required. For a hand-written `reussir-opt` pipeline, schedule
+this pass before host optimization and the normal array, RC, control-flow, and
+LLVM lowerings. The `pjrt_call_e2e.mlir` and `pjrt_sharded_e2e.mlir` integration
+tests show native-compiler and explicit lowering/linking commands.
 Execution requires a PJRT-enabled runtime and `REUSSIR_PJRT_PLUGIN` pointing to
 a compatible backend plugin; registering the compiler dialects alone does not
 provide a device backend.
