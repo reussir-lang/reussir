@@ -166,10 +166,41 @@ pub unsafe extern "C" fn __reussir_run_dtor(
         );
         executor.running = true;
     }
+    unsafe { drain(context, DtorTask { routine, object }, None) };
+}
+
+/// Finish a root whose first step already suspended, without restarting it.
+///
+/// # Safety
+/// `buffer` must remain live and suitably aligned for `resume` until this call
+/// returns. `child` must describe the yielded task and remain valid until copied.
+/// The root must obey the same child/continuation lifetime rules as `run_dtor`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_finish_dtor(
+    buffer: *mut c_void,
+    resume: DtorResume,
+    child: *const DtorTask,
+) {
+    assert!(!child.is_null(), "suspended destructor has no child task");
+    let mut executor = DtorExecutor::new();
+    executor.running = true;
+    unsafe { drain(&mut executor, *child, Some(Continuation { buffer, resume })) };
+}
+
+unsafe fn drain(context: *mut DtorExecutor, mut task: DtorTask, root: Option<Continuation>) {
     // Keep inline storage in this drain; moving an empty SmallVec still copies it.
     let mut continuations: SmallVec<[Continuation; 8]> = SmallVec::new();
     let mut buffers = FrameBuffers::default();
-    let mut task = DtorTask { routine, object };
+    if let Some(root) = root {
+        // Slot zero belongs to the caller. It is only resumed, never allocated
+        // or recycled; children start at depth one.
+        buffers.0.push(FrameBuffer {
+            pointer: root.buffer,
+            size: 0,
+            align: 1,
+        });
+        continuations.push(root);
+    }
     loop {
         let routine = unsafe { *task.routine };
         let buffer = buffers.get(

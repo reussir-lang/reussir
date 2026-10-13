@@ -51,6 +51,55 @@ public:
     F.removeFnAttr("reussir.retcon_routine");
   }
 };
+
+void lowerLazyWrapper(llvm::Function &wrapper) {
+  using namespace llvm;
+  auto &module = *wrapper.getParent();
+  auto name = wrapper.getFnAttribute("reussir.retcon_wrapper").getValueAsString();
+  auto *routine = module.getNamedGlobal(name);
+  if (!routine || !routine->hasInitializer())
+    report_fatal_error("missing destructor wrapper descriptor");
+  auto *descriptor = cast<ConstantStruct>(routine->getInitializer());
+  auto size = cast<ConstantInt>(descriptor->getOperand(1))->getZExtValue();
+  auto align = cast<ConstantInt>(descriptor->getOperand(2))->getZExtValue();
+  wrapper.removeFnAttr("reussir.retcon_wrapper");
+  // Bound native stack use. Large or over-aligned frames retain the original
+  // arena-backed entry; recursive children always use the explicit executor.
+  if (size > 256 || align > 16)
+    return;
+
+  // Keep the address-taken frame out of recursive callers. Inlining this
+  // wrapper before tail-recursion elimination can prevent their stack reuse.
+  wrapper.addFnAttr(Attribute::NoInline);
+  auto *start = cast<Function>(descriptor->getOperand(0));
+  auto &ctx = module.getContext();
+  auto *ptr = PointerType::getUnqual(ctx);
+  auto *stepType = StructType::get(ctx, {ptr, ptr});
+  auto finish = module.getOrInsertFunction(
+      "__reussir_finish_dtor",
+      FunctionType::get(Type::getVoidTy(ctx), {ptr, ptr, ptr}, false));
+  auto linkage = wrapper.getLinkage();
+  wrapper.deleteBody();
+  wrapper.setLinkage(linkage);
+  auto *entry = BasicBlock::Create(ctx, "entry", &wrapper);
+  auto *suspended = BasicBlock::Create(ctx, "suspended", &wrapper);
+  auto *done = BasicBlock::Create(ctx, "done", &wrapper);
+  IRBuilder<> builder(entry);
+  auto *buffer = builder.CreateAlloca(ArrayType::get(builder.getInt8Ty(), size),
+                                     nullptr, "frame");
+  buffer->setAlignment(Align(align));
+  auto *result = builder.CreateAlloca(stepType, nullptr, "step");
+  // A direct call exposes a non-suspending root to ordinary LLVM inlining.
+  builder.CreateCall(start, {buffer, wrapper.getArg(0), result});
+  auto *step = builder.CreateLoad(stepType, result);
+  auto *resume = builder.CreateExtractValue(step, 0);
+  builder.CreateCondBr(builder.CreateIsNotNull(resume), suspended, done);
+  builder.SetInsertPoint(suspended);
+  builder.CreateCall(finish, {buffer, resume, builder.CreateExtractValue(step, 1)});
+  builder.CreateBr(done);
+  builder.SetInsertPoint(done);
+  builder.CreateRetVoid();
+}
 } // namespace
 
 void populateRetconDropPasses(llvm::ModulePassManager &passes) {
@@ -127,6 +176,9 @@ llvm::PreservedAnalyses RetconDropABIPass::run(llvm::Module &module,
     builder.CreateStore(result, wrapper->getArg(2));
     builder.CreateRetVoid();
   }
+  for (auto &function : module)
+    if (function.hasFnAttribute("reussir.retcon_wrapper"))
+      lowerLazyWrapper(function);
   return PreservedAnalyses::none();
 }
 } // namespace reussir::llvmpass

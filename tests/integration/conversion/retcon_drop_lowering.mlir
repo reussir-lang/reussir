@@ -50,6 +50,11 @@ module attributes {llvm.data_layout = "e-p:64:64-i64:64-n8:16:32:64-S128"} {
 // CHECK-LABEL: define private ptr @drop.allocate(
 // CHECK-NEXT: unreachable
 // SPLIT: @drop.routine = private constant { ptr, i64, i64 } { ptr @drop.start.callback, i64 {{[0-9]+}}, i64 128 }
+// SPLIT-LABEL: define linkonce_odr void @drop(
+// SPLIT: call ptr @__reussir_create_dtor_executor
+// SPLIT: call void @__reussir_run_dtor
+// SPLIT-NOT: call void @__reussir_finish_dtor
+// SPLIT: ret void
 // SPLIT-LABEL: define private {{.*}} @drop.start(
 // SPLIT-NOT: call ptr @drop.allocate
 // SPLIT: call void @locked

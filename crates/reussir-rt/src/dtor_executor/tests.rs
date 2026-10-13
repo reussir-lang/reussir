@@ -212,6 +212,7 @@ fn ffi_layout_and_symbol_exports() {
         "__reussir_dtor_conti_alloc",
         "__reussir_dtor_conti_free",
         "__reussir_run_dtor",
+        "__reussir_finish_dtor",
     ] {
         assert!(
             crate::symbols::exported_symbols()
@@ -411,4 +412,58 @@ fn completed_sibling_frames_reuse_storage_without_touching_ancestors() {
         unsafe { core::slice::from_raw_parts(parent.cast::<u8>(), 64) },
         &[0xa5; 64]
     );
+}
+
+#[test]
+fn lazy_entry_finishes_deep_mixed_frames_without_restarting_root() {
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| unsafe {
+            let mut output = Vec::<usize>::new();
+            let mut args = (100_000usize, ptr::addr_of_mut!(output));
+            let mut root = MaybeUninit::<State>::uninit();
+            let mut step = MaybeUninit::<DtorStep>::uninit();
+            start(
+                root.as_mut_ptr().cast(),
+                ptr::addr_of_mut!(args).cast(),
+                step.as_mut_ptr(),
+            );
+            let step = step.assume_init();
+            // A restart would lose this already-established root state.
+            (*root.as_mut_ptr()).value = 100_001;
+            __reussir_finish_dtor(root.as_mut_ptr().cast(), step.resume.unwrap(), step.child);
+            assert_eq!(&output[..100_000], &(0..100_000).collect::<Vec<_>>());
+            assert_eq!(output[100_000], 100_001);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn lazy_entry_preserves_repeated_suspensions_and_postorder() {
+    let mut expected = Vec::new();
+    let mut args = (16usize, ptr::addr_of_mut!(expected));
+    unsafe {
+        __reussir_run_dtor(
+            &mut DtorExecutor::new(),
+            ptr::addr_of_mut!(args).cast(),
+            &BRANCH,
+        )
+    };
+    let mut output = Vec::<usize>::new();
+    args.1 = ptr::addr_of_mut!(output);
+    let mut root = MaybeUninit::<Branch>::uninit();
+    let mut step = MaybeUninit::<DtorStep>::uninit();
+    unsafe {
+        branch_start(
+            root.as_mut_ptr().cast(),
+            ptr::addr_of_mut!(args).cast(),
+            step.as_mut_ptr(),
+        );
+        let step = step.assume_init();
+        __reussir_finish_dtor(root.as_mut_ptr().cast(), step.resume.unwrap(), step.child);
+    }
+    assert_eq!(output, expected);
+    assert_eq!(output.len(), (1 << 17) - 1);
 }

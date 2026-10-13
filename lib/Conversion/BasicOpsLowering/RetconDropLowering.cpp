@@ -101,6 +101,15 @@ class RetconDropLowering {
     return target;
   }
   void executorWrapper(LLVMFuncOp wrapper, GlobalOp routine) {
+    // CoroSplit determines the complete frame layout. Leave an arena-backed
+    // fallback here; the LLVM ABI pass replaces small roots with lazy entry.
+    SmallVector<Attribute> attrs;
+    if (auto passthrough = wrapper.getPassthroughAttr())
+      llvm::append_range(attrs, passthrough);
+    attrs.push_back(builder.getArrayAttr(
+        {builder.getStringAttr("reussir.retcon_wrapper"),
+         builder.getStringAttr(routine.getSymName())}));
+    wrapper.setPassthroughAttr(builder.getArrayAttr(attrs));
     builder.setInsertionPointToStart(wrapper.addEntryBlock(builder));
     auto size = CallOp::create(builder, loc, TypeRange{sizeType},
                                "__reussir_dtor_executor_size", ValueRange{})

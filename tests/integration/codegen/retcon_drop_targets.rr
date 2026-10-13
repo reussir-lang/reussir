@@ -21,7 +21,7 @@ enum Tree { Leaf, Branch(Tree, Tree) }
 fn consume(tree: Tree) -> u64 { match tree { Tree::Leaf => 0, _ => 1 } }
 extern "C" trampoline "consume" = consume;
 
-// CHECK: call void @__reussir_run_dtor
+// CHECK: call void @__reussir_finish_dtor
 // CHECK: define private void @{{.*}}.retcon.start.callback(ptr {{.*}}, ptr {{.*}}, ptr {{.*}})
 // CHECK: call { ptr, ptr } @{{.*}}.retcon.start
 // CHECK: store { ptr, ptr }
