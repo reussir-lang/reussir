@@ -1,6 +1,12 @@
 use super::*;
 use core::ptr;
 
+// Keep native stack-stress coverage while making provenance checks practical
+// under interpretation. Miri still crosses the inline continuation capacity.
+const DEEP_DEPTH: usize = if cfg!(miri) { 64 } else { 100_000 };
+const BRANCH_DEPTH: usize = if cfg!(miri) { 5 } else { 12 };
+const LAZY_BRANCH_DEPTH: usize = if cfg!(miri) { 5 } else { 16 };
+
 #[repr(C)]
 struct State {
     args: (usize, *mut Vec<usize>),
@@ -93,12 +99,12 @@ fn deep_mixed_entries_preserve_order_across_drains() {
             let mut storage = MaybeUninit::<DtorExecutor>::uninit();
             let context = __reussir_create_dtor_executor(storage.as_mut_ptr().cast());
             let mut output: Vec<usize> = Vec::new();
-            let mut args = (100_000usize, ptr::addr_of_mut!(output));
+            let mut args = (DEEP_DEPTH, ptr::addr_of_mut!(output));
             __reussir_run_dtor(context, ptr::addr_of_mut!(args).cast(), &SMALL);
-            assert_eq!(output, (0..=100_000).collect::<Vec<_>>());
+            assert_eq!(output, (0..=DEEP_DEPTH).collect::<Vec<_>>());
             output.clear();
             __reussir_run_dtor(context, ptr::addr_of_mut!(args).cast(), &SMALL);
-            assert_eq!(output, (0..=100_000).collect::<Vec<_>>());
+            assert_eq!(output, (0..=DEEP_DEPTH).collect::<Vec<_>>());
             assert_eq!((*context).allocations, 0);
             assert!(!(*context).running);
             assert_eq!((*context).arena.allocated_bytes(), 0);
@@ -131,7 +137,7 @@ fn continuation_storage_is_aligned_stable_and_lifo() {
             );
             __reussir_dtor_conti_free(&mut context);
         }
-        for _ in 0..1000 {
+        for _ in 0..if cfg!(miri) { 8 } else { 1000 } {
             for &(size, align) in layouts.iter().rev() {
                 __reussir_dtor_conti_alloc(&mut context, size, align);
             }
@@ -302,9 +308,9 @@ fn repeated_suspensions_preserve_postorder() {
     }
     let mut context = DtorExecutor::new();
     let mut output = Vec::<usize>::new();
-    let mut args = (12usize, ptr::addr_of_mut!(output));
+    let mut args = (BRANCH_DEPTH, ptr::addr_of_mut!(output));
     let mut reference = Vec::new();
-    expected(12, &mut reference);
+    expected(BRANCH_DEPTH, &mut reference);
     for _ in 0..2 {
         unsafe {
             __reussir_run_dtor(&mut context, ptr::addr_of_mut!(args).cast(), &BRANCH);
@@ -338,7 +344,7 @@ unsafe extern "C" fn allocating_start(
         frame.write(AllocatingParent {
             context,
             allocation,
-            args: (100_000, values),
+            args: (DEEP_DEPTH, values),
             task: DtorTask {
                 routine: &SMALL,
                 object: ptr::addr_of_mut!((*frame).args).cast(),
@@ -372,15 +378,18 @@ unsafe extern "C" fn allocating_resume(buffer: *mut c_void, cancel: bool, output
 fn explicit_allocation_survives_child_drain() {
     let mut context = DtorExecutor::new();
     let mut values = Vec::<usize>::new();
-    let mut args = (ptr::addr_of_mut!(context), ptr::addr_of_mut!(values));
     let routine = DtorRoutine {
         start: allocating_start,
         size: size_of::<AllocatingParent>(),
         align: align_of::<AllocatingParent>(),
     };
     for _ in 0..2 {
-        unsafe { __reussir_run_dtor(&mut context, ptr::addr_of_mut!(args).cast(), &routine) };
-        assert_eq!(values, (0..=100_000).collect::<Vec<_>>());
+        // Pass the same raw pointer that the callback receives. A fresh &mut
+        // context here invalidates the callback's saved pointer under Miri.
+        let context_ptr = ptr::addr_of_mut!(context);
+        let mut args = (context_ptr, ptr::addr_of_mut!(values));
+        unsafe { __reussir_run_dtor(context_ptr, ptr::addr_of_mut!(args).cast(), &routine) };
+        assert_eq!(values, (0..=DEEP_DEPTH).collect::<Vec<_>>());
         assert_eq!(context.allocations, 0);
         assert_eq!(context.arena.allocated_bytes(), 0);
         assert!(!context.running);
@@ -398,7 +407,7 @@ fn completed_sibling_frames_reuse_storage_without_touching_ancestors() {
     let sibling = buffers.get(&arena, 1, 32, 256);
     assert_eq!(sibling as usize % 256, 0);
     let allocated = arena.allocated_bytes();
-    for _ in 0..10_000 {
+    for _ in 0..if cfg!(miri) { 32 } else { 10_000 } {
         assert_eq!(buffers.get(&arena, 1, 4096, 8), sibling);
         assert_eq!(buffers.get(&arena, 1, 32, 256), sibling);
     }
@@ -420,20 +429,21 @@ fn lazy_entry_finishes_deep_mixed_frames_without_restarting_root() {
         .stack_size(256 * 1024)
         .spawn(|| unsafe {
             let mut output = Vec::<usize>::new();
-            let mut args = (100_000usize, ptr::addr_of_mut!(output));
+            let mut args = (DEEP_DEPTH, ptr::addr_of_mut!(output));
             let mut root = MaybeUninit::<State>::uninit();
+            let buffer = root.as_mut_ptr();
             let mut step = MaybeUninit::<DtorStep>::uninit();
             start(
-                root.as_mut_ptr().cast(),
+                buffer.cast(),
                 ptr::addr_of_mut!(args).cast(),
                 step.as_mut_ptr(),
             );
             let step = step.assume_init();
             // A restart would lose this already-established root state.
-            (*root.as_mut_ptr()).value = 100_001;
-            __reussir_finish_dtor(root.as_mut_ptr().cast(), step.resume.unwrap(), step.child);
-            assert_eq!(&output[..100_000], &(0..100_000).collect::<Vec<_>>());
-            assert_eq!(output[100_000], 100_001);
+            (*buffer).value = DEEP_DEPTH + 1;
+            __reussir_finish_dtor(buffer.cast(), step.resume.unwrap(), step.child);
+            assert_eq!(&output[..DEEP_DEPTH], &(0..DEEP_DEPTH).collect::<Vec<_>>());
+            assert_eq!(output[DEEP_DEPTH], DEEP_DEPTH + 1);
         })
         .unwrap()
         .join()
@@ -443,7 +453,7 @@ fn lazy_entry_finishes_deep_mixed_frames_without_restarting_root() {
 #[test]
 fn lazy_entry_preserves_repeated_suspensions_and_postorder() {
     let mut expected = Vec::new();
-    let mut args = (16usize, ptr::addr_of_mut!(expected));
+    let mut args = (LAZY_BRANCH_DEPTH, ptr::addr_of_mut!(expected));
     unsafe {
         __reussir_run_dtor(
             &mut DtorExecutor::new(),
@@ -454,16 +464,17 @@ fn lazy_entry_preserves_repeated_suspensions_and_postorder() {
     let mut output = Vec::<usize>::new();
     args.1 = ptr::addr_of_mut!(output);
     let mut root = MaybeUninit::<Branch>::uninit();
+    let buffer = root.as_mut_ptr();
     let mut step = MaybeUninit::<DtorStep>::uninit();
     unsafe {
         branch_start(
-            root.as_mut_ptr().cast(),
+            buffer.cast(),
             ptr::addr_of_mut!(args).cast(),
             step.as_mut_ptr(),
         );
         let step = step.assume_init();
-        __reussir_finish_dtor(root.as_mut_ptr().cast(), step.resume.unwrap(), step.child);
+        __reussir_finish_dtor(buffer.cast(), step.resume.unwrap(), step.child);
     }
     assert_eq!(output, expected);
-    assert_eq!(output.len(), (1 << 17) - 1);
+    assert_eq!(output.len(), (1 << (LAZY_BRANCH_DEPTH + 1)) - 1);
 }
