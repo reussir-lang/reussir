@@ -78,9 +78,16 @@ wait for the backend to compute the shape, but do not copy data or allocate
 device storage. Multi-device results require concrete sharding, and uneven
 shards are not supported.
 
-This lowering covers the bridge operations themselves. Native lowering of
-IFRT/PJRT calls is not supported yet; programs containing those calls cannot
-yet complete the LLVM conversion.
+`reussir.ifrt.bytecode` lowers to an internal, immutable LLVM global containing
+`{[64 x i8], [N x i8]}`: the hexadecimal BLAKE3 checksum followed by the exact
+MLIR bytecode payload. Neither field includes a trailing NUL. The symbol name
+is preserved so prepared `reussir.pjrt.jit_call` operations can still reference
+the payload during partial lowering. Lowering an existing bytecode literal does
+not require an OpenXLA-enabled build; preparing IFRT kernels does.
+
+These lowerings cover the array bridges and embedded kernel data. Native
+lowering of IFRT/PJRT calls is not supported yet; programs containing those
+calls cannot yet complete translation to LLVM IR or execute device kernels.
 
 The individually registered passes cover donation/sharding verification,
 control dependencies, duplicate callees, copy/reshard preparation, outlining,
