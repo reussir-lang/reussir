@@ -23,13 +23,22 @@ pub struct DtorTask {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct DtorStep {
-    pub resume: Option<DtorResume>,
+    pub resume: *const DtorResumeAction,
     pub child: *const DtorTask,
+}
+
+/// A continuation either invokes a callback or frees a pointer loaded from its
+/// frame. The offset is used only when `callback` is `None`; the load and free
+/// occur after the child finishes, preserving destructor order and mutations.
+#[repr(C)]
+pub struct DtorResumeAction {
+    pub callback: Option<DtorResume>,
+    pub offset: usize,
 }
 
 struct Continuation {
     buffer: *mut c_void,
-    resume: DtorResume,
+    resume: *const DtorResumeAction,
 }
 
 struct FrameBuffer {
@@ -172,13 +181,14 @@ pub unsafe extern "C" fn __reussir_run_dtor(
 /// Finish a root whose first step already suspended, without restarting it.
 ///
 /// # Safety
-/// `buffer` must remain live and suitably aligned for `resume` until this call
+/// `resume` must point to a valid action for the duration of this call.
+/// `buffer` must remain live and suitably aligned for that action until this call
 /// returns. `child` must describe the yielded task and remain valid until copied.
 /// The root must obey the same child/continuation lifetime rules as `run_dtor`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __reussir_finish_dtor(
     buffer: *mut c_void,
-    resume: DtorResume,
+    resume: *const DtorResumeAction,
     child: *const DtorTask,
 ) {
     assert!(!child.is_null(), "suspended destructor has no child task");
@@ -214,7 +224,8 @@ unsafe fn drain(context: *mut DtorExecutor, mut task: DtorTask, root: Option<Con
         let mut step = unsafe { result.assume_init() };
         let mut buffer = buffer;
         loop {
-            if let Some(resume) = step.resume {
+            if !step.resume.is_null() {
+                let resume = step.resume;
                 assert!(
                     !step.child.is_null(),
                     "suspended destructor has no child task"
@@ -235,8 +246,25 @@ unsafe fn drain(context: *mut DtorExecutor, mut task: DtorTask, root: Option<Con
                 return;
             };
             buffer = continuation.buffer;
-            unsafe { (continuation.resume)(buffer, false, result.as_mut_ptr()) };
-            step = unsafe { result.assume_init() };
+            let action = unsafe { &*continuation.resume };
+            if let Some(resume) = action.callback {
+                unsafe { resume(buffer, false, result.as_mut_ptr()) };
+                step = unsafe { result.assume_init() };
+            } else {
+                // Read the payload only after the child completes, as the
+                // replaced callback would; do not move observable frees.
+                let object = unsafe {
+                    buffer
+                        .byte_add(action.offset)
+                        .cast::<*mut c_void>()
+                        .read_unaligned()
+                };
+                unsafe { crate::alloc::__reussir_dealloc_unsized(object.cast()) };
+                step = DtorStep {
+                    resume: core::ptr::null(),
+                    child: core::ptr::null(),
+                };
+            }
         }
     }
 }

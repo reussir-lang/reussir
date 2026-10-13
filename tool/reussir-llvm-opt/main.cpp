@@ -121,6 +121,10 @@ int main(int argc, char **argv) {
           reussir::llvmpass::populateRetconDropPasses(mpm);
           return true;
         }
+        if (name == "reussir-retcon-deferred-free") {
+          mpm.addPass(reussir::llvmpass::RetconDropDeferredFreePass());
+          return true;
+        }
         if (name == "reussir-retcon-drop-abi") {
           mpm.addPass(reussir::llvmpass::RetconDropABIPass());
           return true;

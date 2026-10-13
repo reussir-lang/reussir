@@ -19,4 +19,11 @@ class RetconDropABIPass : public llvm::PassInfoMixin<RetconDropABIPass> {
 public:
   llvm::PreservedAnalyses run(llvm::Module &, llvm::ModuleAnalysisManager &);
 };
+/// Replace free-only continuation callbacks after ordinary LLVM optimization
+/// has exposed their frame loads and completion stores.
+class RetconDropDeferredFreePass
+    : public llvm::PassInfoMixin<RetconDropDeferredFreePass> {
+public:
+  llvm::PreservedAnalyses run(llvm::Module &, llvm::ModuleAnalysisManager &);
+};
 } // namespace reussir::llvmpass

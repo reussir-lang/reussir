@@ -26,8 +26,12 @@ struct ReussirDtorTask {
   const ReussirDtorRoutine *routine;
   void *object;
 };
+typedef struct ReussirDtorResumeAction {
+  ReussirDtorResume callback;
+  size_t offset;
+} ReussirDtorResumeAction;
 struct ReussirDtorStep {
-  ReussirDtorResume resume;
+  const ReussirDtorResumeAction *resume;
   const ReussirDtorTask *child;
 };
 size_t __reussir_dtor_executor_size(void);

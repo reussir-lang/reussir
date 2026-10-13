@@ -199,6 +199,7 @@ void reussirRunBackendLLVMPipeline(LLVMModuleRef module, ReussirJitOptLevel opt,
     break;
   }
   mpm.addPass(reussir::llvmpass::AllocationSimplicationPass());
+  mpm.addPass(reussir::llvmpass::RetconDropDeferredFreePass());
   mpm.run(m, mam);
 }
 

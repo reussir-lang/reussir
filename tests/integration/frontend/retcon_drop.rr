@@ -1,3 +1,6 @@
+// RUN: %rrc %s -Oaggressive -t llvm-ir -o %t.ll
+// RUN: %FileCheck %s --check-prefix=FREE < %t.ll
+// FREE: .action = private constant { ptr, i{{32|64}} } { ptr null, i{{32|64}} {{[0-9]+}} }
 // RUN: %rrc %s -o %t.o --relocation-mode pic -Onone
 // RUN: %cc %t.o %S/retcon_drop.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
 // RUN: %t.exe
