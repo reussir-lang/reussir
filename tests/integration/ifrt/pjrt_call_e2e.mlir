@@ -60,6 +60,19 @@ module {
       %id = arith.addi %i, %c8 : index
       func.call @check(%id, %v) : (index, f32) -> ()
     }
+    // Revisit one call site so its function-entry descriptor slots are reused.
+    // Each result must be adopted and released independently on every iteration.
+    scf.for %i = %c0 to %c4 step %c1 {
+      %loop_a = reussir.array.to_ifrt %ra : !R -> !I
+      %loop_x = reussir.array.to_ifrt %rx : !R -> !I
+      %loop_y = reussir.array.to_ifrt %ry : !R -> !I
+      %loop_out, %loop_done = ifrt.Call @saxpy::@main(%loop_a, %loop_x, %loop_y) on devices [0] : (!I, !I, !I) -> !I
+      %loop_result = reussir.array.from_ifrt %loop_out : !I -> !R
+      reussir.array.to_host %loop_result into %dst : !R, memref<4xf32>
+      %v = memref.load %dst[%i] : memref<4xf32>
+      func.call @check(%i, %v) : (index, f32) -> ()
+      reussir.rc.dec(%loop_result : !R)
+    }
     reussir.rc.dec(%ra : !R)
     reussir.rc.dec(%rx : !R)
     reussir.rc.dec(%ry : !R)
