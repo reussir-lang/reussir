@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/reussir-rt",
+    "crates/reussir-ffi-cache",
     "crates/reussir-syntax",
     "crates/reussir-lsp",
     "crates/reussir-vscode-wasm",
@@ -23,6 +24,7 @@ members = [
 # reussir-pjrt-sys is also explicit: bindgen requires libclang and a PjRt header.
 default-members = [
     "crates/reussir-rt",
+    "crates/reussir-ffi-cache",
     "crates/reussir-syntax",
     "crates/reussir-lsp",
     "crates/reussir-vscode-wasm",

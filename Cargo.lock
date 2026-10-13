@@ -3686,6 +3686,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "reussir-ffi-cache"
+version = "0.1.0"
+dependencies = [
+ "foyer",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "reussir-jit"
 version = "0.1.0"
 dependencies = [
