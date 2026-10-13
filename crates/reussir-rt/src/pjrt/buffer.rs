@@ -343,6 +343,14 @@ mod tests {
             null: true,
         };
         query_dimensions(&mut dimensions, &mut []).unwrap();
+
+        let mut table = PJRT_Api {
+            PJRT_Buffer_UnpaddedDimensions: Some(unpadded_dimensions),
+            ..Default::default()
+        };
+        let api = Api(NonNull::from(&mut table));
+        let buffer = Buffer(NonNull::from(&mut dimensions).cast());
+        unsafe { buffer.dimensions(api, std::ptr::null_mut(), 0) }.unwrap();
     }
 
     #[test]
