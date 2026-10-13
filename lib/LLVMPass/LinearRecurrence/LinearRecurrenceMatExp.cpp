@@ -262,12 +262,20 @@ std::optional<LoopCandidate> analyzeLoop(Loop *loop, ScalarEvolution &se) {
   AffineDecomposer decomposer(header, type);
 
   SetVector<PHINode *> statePhis;
+  // Adds the PHIs `expr` uses in the header's order. The order of the state
+  // is the order of the companion matrix and of the emitted code, and
+  // `coeffs` is keyed by pointer, so iterating it would make the output
+  // depend on heap addresses.
+  auto addUsedPhis = [&](const AffineExpr &expr) {
+    for (PHINode &phi : header->phis())
+      if (expr.coeffs.contains(&phi))
+        statePhis.insert(&phi);
+  };
   for (Instruction *liveOut : liveOuts) {
     auto expr = decomposer.decompose(liveOut);
     if (!expr)
       return std::nullopt;
-    for (const auto &[phi, coeff] : expr->coeffs)
-      statePhis.insert(phi);
+    addUsedPhis(*expr);
   }
   // Close the state set under the update expressions.
   SmallVector<AffineExpr, 4> updates;
@@ -276,8 +284,7 @@ std::optional<LoopCandidate> analyzeLoop(Loop *loop, ScalarEvolution &se) {
     auto update = decomposer.decompose(phi->getIncomingValueForBlock(header));
     if (!update)
       return std::nullopt;
-    for (const auto &[usedPhi, coeff] : update->coeffs)
-      statePhis.insert(usedPhi);
+    addUsedPhis(*update);
     updates.push_back(std::move(*update));
   }
   if (statePhis.size() > kMaxStateSize)
