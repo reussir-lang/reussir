@@ -3537,7 +3537,12 @@ struct ReussirRefMemcpyConversionPattern
 
 struct ReussirTrampolineOpConversionPattern
     : public mlir::OpConversionPattern<ReussirTrampolineOp> {
-  using OpConversionPattern::OpConversionPattern;
+  ReussirTrampolineOpConversionPattern(
+      mlir::LLVMTypeConverter &converter, mlir::MLIRContext *context,
+      mlir::SymbolTableCollection *symbolTables)
+      : OpConversionPattern(converter, context), symbolTables(symbolTables) {}
+
+  mlir::SymbolTableCollection *symbolTables;
 
   // Recover the target's converted (native) LLVM signature. The target may
   // still be a `func.func` or may already have been converted to an
@@ -3562,8 +3567,10 @@ struct ReussirTrampolineOpConversionPattern
   mlir::LogicalResult
   matchAndRewrite(ReussirTrampolineOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    mlir::SymbolTable symTable = mlir::SymbolTable::getNearestSymbolTable(op);
-    mlir::Operation *funcOp = symTable.lookup(op.getTarget());
+    mlir::Operation *funcOp =
+        symbolTables
+            ? symbolTables->lookupNearestSymbolFrom(op, op.getTargetAttr())
+            : mlir::SymbolTable::lookupNearestSymbolFrom(op, op.getTargetAttr());
     if (!funcOp)
       return mlir::failure();
     // if start is not "C" ABI, return failure
@@ -3646,6 +3653,11 @@ struct ReussirTrampolineOpConversionPattern
                                      callOp->getResults());
     }
 
+    if (symbolTables) {
+      auto &table = symbolTables->getSymbolTable(op->getParentOp());
+      table.remove(op);
+      table.insert(trampoline);
+    }
     rewriter.eraseOp(op);
     return mlir::success();
   }
@@ -3690,12 +3702,22 @@ struct ReussirTrampolineOpConversionPattern
     }
 
     // Replace the declaration with the marshaling definition under the same
-    // (native) symbol name.
+    // (native) symbol name. Keep call lowering's cache in sync, just as the
+    // FuncToLLVM function conversion does for its own replacements.
+    mlir::SymbolTable *table =
+        symbolTables ? &symbolTables->getSymbolTable(module) : nullptr;
+    if (table) {
+      table->remove(op);
+      table->insert(boundary);
+      table->remove(funcOp);
+    }
     auto nativeName = mlir::SymbolTable::getSymbolName(funcOp);
     rewriter.eraseOp(funcOp);
     auto nativeTy = mlir::LLVM::LLVMFunctionType::get(llvmRetTy, llvmParamTys);
     auto native = mlir::LLVM::LLVMFuncOp::create(rewriter, op.getLoc(),
                                                  nativeName, nativeTy);
+    if (table)
+      table->insert(native);
     inheritSanitizerPassthrough(module, native);
 
     mlir::Block *entry = native.addEntryBlock(rewriter);
@@ -3932,20 +3954,31 @@ struct ReussirConvertToLLVMPatternInterface
   void populateConvertToLLVMConversionPatterns(
       mlir::ConversionTarget &target, mlir::LLVMTypeConverter &typeConverter,
       mlir::RewritePatternSet &patterns) const override {
+    populatePatterns(target, typeConverter, patterns);
+  }
+
+  static void populatePatterns(
+      mlir::ConversionTarget &target, mlir::LLVMTypeConverter &typeConverter,
+      mlir::RewritePatternSet &patterns,
+      mlir::SymbolTableCollection *symbolTables = nullptr) {
     populateReussirToLLVMTypeConversions(typeConverter);
     populateLLVMInterfaceForDialect<mlir::arith::ArithDialect>(
         patterns.getContext(), target, typeConverter, patterns);
     populateLLVMInterfaceForDialect<mlir::cf::ControlFlowDialect>(
         patterns.getContext(), target, typeConverter, patterns);
-    populateLLVMInterfaceForDialect<mlir::func::FuncDialect>(
-        patterns.getContext(), target, typeConverter, patterns);
+    // The custom pass supplies cached func patterns once, after collecting
+    // interfaces. Generic convert-to-llvm still needs this dependency here.
+    if (!symbolTables)
+      populateLLVMInterfaceForDialect<mlir::func::FuncDialect>(
+          patterns.getContext(), target, typeConverter, patterns);
     populateLLVMInterfaceForDialect<mlir::math::MathDialect>(
         patterns.getContext(), target, typeConverter, patterns);
     populateLLVMInterfaceForDialect<mlir::memref::MemRefDialect>(
         patterns.getContext(), target, typeConverter, patterns);
     populateLLVMInterfaceForDialect<mlir::ub::UBDialect>(
         patterns.getContext(), target, typeConverter, patterns);
-    populateBasicOpsLoweringToLLVMConversionPatterns(typeConverter, patterns);
+    populateBasicOpsLoweringToLLVMConversionPatterns(typeConverter, patterns,
+                                                    symbolTables);
     target.addIllegalOp<
         ReussirPanicOp, ReussirExpectOp, ReussirCctxEmptyOp,
         ReussirCctxExtendOp, ReussirCctxApplyOp, ReussirTokenAllocOp,
@@ -4033,8 +4066,8 @@ struct BasicOpsLoweringPass
   }
 };
 
-// The upstream `convert-to-llvm` with one change: the `LLVMTypeConverter` is
-// built from the module's stamped data layout (`getReussirToLLVMOptions`),
+// The upstream `convert-to-llvm` with target-aware type conversion: build the
+// `LLVMTypeConverter` from the stamped layout (`getReussirToLLVMOptions`),
 // index width included, instead of default options. Every converter Reussir
 // constructs itself derives the index width that way — most visibly
 // `ensureRuntimeFunctions` above, which declares `__reussir_allocate` and
@@ -4049,6 +4082,7 @@ struct ConvertToLLVMPass
     mlir::MLIRContext *context = moduleOp.getContext();
     mlir::LLVMTypeConverter converter(context,
                                       getReussirToLLVMOptions(moduleOp));
+    mlir::SymbolTableCollection symbolTables;
     mlir::RewritePatternSet patterns(context);
     mlir::ConversionTarget target(*context);
     target.addLegalDialect<mlir::LLVM::LLVMDialect>();
@@ -4059,11 +4093,23 @@ struct ConvertToLLVMPass
     // externalized declarations carry `!reussir.rc` signatures but no
     // reussir ops would lose the Reussir type conversions.
     for (mlir::Dialect *dialect : context->getLoadedDialects()) {
+      // Avoid uncached func patterns, including those recursively added by
+      // Reussir's interface. Callee lookup otherwise scans the module per call.
+      if (llvm::isa<mlir::func::FuncDialect>(dialect))
+        continue;
+      if (llvm::isa<ReussirDialect>(dialect)) {
+        ReussirConvertToLLVMPatternInterface::populatePatterns(
+            target, converter, patterns, &symbolTables);
+        continue;
+      }
       if (auto *iface =
               llvm::dyn_cast<mlir::ConvertToLLVMPatternInterface>(dialect))
         iface->populateConvertToLLVMConversionPatterns(target, converter,
                                                        patterns);
     }
+    // FuncToLLVM updates this collection when replacing func.func symbols.
+    mlir::populateFuncToLLVMConversionPatterns(converter, patterns,
+                                               &symbolTables);
     if (failed(mlir::applyPartialConversion(moduleOp, target,
                                             std::move(patterns)))) {
       signalPassFailure();
@@ -4125,7 +4171,10 @@ void registerReussirBasicOpsLoweringInterface(mlir::DialectRegistry &registry) {
 }
 
 void populateBasicOpsLoweringToLLVMConversionPatterns(
-    mlir::LLVMTypeConverter &converter, mlir::RewritePatternSet &patterns) {
+    mlir::LLVMTypeConverter &converter, mlir::RewritePatternSet &patterns,
+    mlir::SymbolTableCollection *symbolTables) {
+  patterns.add<ReussirTrampolineOpConversionPattern>(
+      converter, patterns.getContext(), symbolTables);
   populateTargetArrayLoweringPatterns(converter, patterns);
   populateRetconDropLoweringPatterns(converter, patterns);
   patterns.add<
@@ -4182,7 +4231,6 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirStrUnsafeStartWithOpConversionPattern,
       ReussirStrSliceOpConversionPattern, ReussirStrRefEqOpConversionPattern,
       ReussirStrUnsafeMemcmpOpConversionPattern,
-      ReussirTrampolineOpConversionPattern,
       ReussirTokenLaunderOpConversionPattern,
       ReussirRcFetchSubConversionPattern>(converter, patterns.getContext());
 }

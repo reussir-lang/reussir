@@ -1,3 +1,4 @@
+// RUN: %reussir-opt %s --reussir-convert-to-llvm | %FileCheck %s
 // RUN: %reussir-opt %s --convert-to-llvm | %FileCheck %s
 
 // The frontend shape: the native side is a body-less `func.func` declaration

@@ -1,3 +1,4 @@
+// RUN: %reussir-opt %s --reussir-convert-to-llvm | %FileCheck %s
 // RUN: %reussir-opt %s --convert-to-llvm | %FileCheck %s
 
 module attributes {llvm.target_triple = "x86_64-pc-linux-gnu"} {

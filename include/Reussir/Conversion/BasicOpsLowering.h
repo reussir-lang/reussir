@@ -33,7 +33,8 @@
 namespace reussir {
 
 void populateBasicOpsLoweringToLLVMConversionPatterns(
-    mlir::LLVMTypeConverter &converter, mlir::RewritePatternSet &patterns);
+    mlir::LLVMTypeConverter &converter, mlir::RewritePatternSet &patterns,
+    mlir::SymbolTableCollection *symbolTables = nullptr);
 void populateTargetArrayLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                          mlir::RewritePatternSet &patterns);
 
