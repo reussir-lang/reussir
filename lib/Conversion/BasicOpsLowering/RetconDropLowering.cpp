@@ -78,7 +78,9 @@ class RetconDropLowering {
   GlobalOp descriptor(LLVMFuncOp entry, StringRef name) {
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToEnd(module.getBody());
-    auto global = GlobalOp::create(builder, loc, routineType, true,
+    // The size/alignment are placeholders until LLVM constructs the frame.
+    // Do not let an earlier MLIR optimization fold loads of those fields.
+    auto global = GlobalOp::create(builder, loc, routineType, false,
                                    Linkage::Private, name, Attribute{});
     builder.createBlock(&global.getInitializerRegion());
     Value value = UndefOp::create(builder, loc, routineType);
@@ -100,17 +102,60 @@ class RetconDropLowering {
     UnreachableOp::create(builder, loc);
     return target;
   }
-  void executorWrapper(LLVMFuncOp wrapper, GlobalOp routine) {
-    // CoroSplit determines the complete frame layout. Leave an arena-backed
-    // fallback here; the LLVM ABI pass replaces small roots with lazy entry.
+  void executorWrapper(LLVMFuncOp wrapper, LLVMFuncOp entry, GlobalOp routine) {
+    // CoroSplit updates this descriptor with the final frame layout. Loading it
+    // here lets ordinary constant folding select a path after that update; the
+    // wrapper's control flow and bounded-stack policy belong in MLIR.
     SmallVector<Attribute> attrs;
     if (auto passthrough = wrapper.getPassthroughAttr())
       llvm::append_range(attrs, passthrough);
-    attrs.push_back(builder.getArrayAttr(
-        {builder.getStringAttr("reussir.retcon_wrapper"),
-         builder.getStringAttr(routine.getSymName())}));
+    // Keep the address-taken root frame out of recursive callers so their tail
+    // recursion can still be eliminated.
+    attrs.push_back(builder.getStringAttr("noinline"));
     wrapper.setPassthroughAttr(builder.getArrayAttr(attrs));
-    builder.setInsertionPointToStart(wrapper.addEntryBlock(builder));
+    auto *initial = wrapper.addEntryBlock(builder);
+    auto *lazy = builder.createBlock(&wrapper.getBody());
+    auto *suspended = builder.createBlock(&wrapper.getBody());
+    auto *fallback = builder.createBlock(&wrapper.getBody());
+    auto *done = builder.createBlock(&wrapper.getBody());
+    builder.setInsertionPointToStart(initial);
+    Value descriptor = LoadOp::create(builder, loc, routineType,
+                                      address(routine.getSymName()));
+    Value frameSize =
+        ExtractValueOp::create(builder, loc, descriptor, ArrayRef<int64_t>{1});
+    Value frameAlign =
+        ExtractValueOp::create(builder, loc, descriptor, ArrayRef<int64_t>{2});
+    Value fitsSize = ICmpOp::create(builder, loc, ICmpPredicate::ule, frameSize,
+                                    constant(sizeType, 256));
+    Value fitsAlign = ICmpOp::create(builder, loc, ICmpPredicate::ule,
+                                     frameAlign, constant(sizeType, 16));
+    Value fits = AndOp::create(builder, loc, fitsSize, fitsAlign);
+    CondBrOp::create(builder, loc, fits, lazy, fallback);
+
+    builder.setInsertionPointToStart(lazy);
+    Value frame =
+        AllocaOp::create(builder, loc, ptr, builder.getI8Type(), frameSize, 16);
+    // This is an internal LLVM-to-LLVM call with the retcon result type. Only
+    // address-taken entries crossing into the runtime need C ABI adapters.
+    Value step = CallOp::create(builder, loc, entry,
+                                ValueRange{frame, wrapper.getArgument(0)})
+                     .getResult();
+    Value resume =
+        ExtractValueOp::create(builder, loc, step, ArrayRef<int64_t>{0});
+    Value null = ZeroOp::create(builder, loc, ptr);
+    Value hasChild =
+        ICmpOp::create(builder, loc, ICmpPredicate::ne, resume, null);
+    CondBrOp::create(builder, loc, hasChild, suspended, done);
+    builder.setInsertionPointToStart(suspended);
+    Value child =
+        ExtractValueOp::create(builder, loc, step, ArrayRef<int64_t>{1});
+    CallOp::create(builder, loc, TypeRange{}, "__reussir_finish_dtor",
+                   ValueRange{frame, resume, child});
+    BrOp::create(builder, loc, ValueRange{}, done);
+
+    builder.setInsertionPointToStart(done);
+    ReturnOp::create(builder, loc, ValueRange{});
+    builder.setInsertionPointToStart(fallback);
     auto size = CallOp::create(builder, loc, TypeRange{sizeType},
                                "__reussir_dtor_executor_size", ValueRange{})
                     .getResult();
@@ -157,6 +202,7 @@ public:
     runtime("__reussir_create_dtor_executor", ptr, {ptr});
     runtime("__reussir_destroy_dtor_executor", voidType, {ptr});
     runtime("__reussir_run_dtor", voidType, {ptr, ptr, ptr});
+    runtime("__reussir_finish_dtor", voidType, {ptr, ptr, ptr});
     auto suspendFn =
         runtime("llvm.coro.suspend.retcon.i1", builder.getI1Type(), {}, true);
     for (auto wrapper : functions) {
@@ -215,7 +261,7 @@ public:
         ReussirDtorEndOp::create(builder, loc, handle);
         ret.erase();
       });
-      executorWrapper(wrapper, routine);
+      executorWrapper(wrapper, entry, routine);
     }
     return success();
   }

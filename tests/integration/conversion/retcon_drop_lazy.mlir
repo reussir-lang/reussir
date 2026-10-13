@@ -1,24 +1,42 @@
-// RUN: %reussir-opt %s --reussir-convert-to-llvm --verify-each | %reussir-translate --reussir-to-llvmir -o %t.ll
-// RUN: %reussir-llvm-opt %t.ll -passes='reussir-retcon-drop,verify' -o - | %FileCheck %s
+// RUN: %reussir-opt %s --reussir-convert-to-llvm --canonicalize --verify-each -o %t.mlir
+// RUN: %FileCheck %s --check-prefix=MLIR < %t.mlir
+// RUN: %reussir-translate --reussir-to-llvmir %t.mlir -o %t.ll
+// RUN: %reussir-llvm-opt %t.ll -passes='reussir-retcon-drop,function(instcombine,simplifycfg),verify' -o - | %FileCheck %s
 // RUN: %reussir-llvm-opt %t.ll -passes='reussir-retcon-drop,default<O2>,verify' -o - | %FileCheck %s --check-prefix=TAIL
 
 module attributes {llvm.data_layout = "e-p:64:64-i64:64-n8:16:32:64-S128"} {
   llvm.func @observe(!llvm.ptr)
   llvm.func @use_payload(!llvm.ptr)
 
+  // MLIR owns both root paths and keeps the eventual frame bounds symbolic.
+  // MLIR-LABEL: llvm.func linkonce_odr @small(
+  // MLIR-SAME: passthrough = ["noinline"]
+  // MLIR: %[[MAXALIGN:.*]] = llvm.mlir.constant(16 : i64)
+  // MLIR: %[[MAXSIZE:.*]] = llvm.mlir.constant(256 : i64)
+  // MLIR: %[[DESC:.*]] = llvm.load
+  // MLIR: %[[SIZE:.*]] = llvm.extractvalue %[[DESC]][1]
+  // MLIR: %[[ALIGN:.*]] = llvm.extractvalue %[[DESC]][2]
+  // MLIR: llvm.icmp "ule" %[[SIZE]], %[[MAXSIZE]]
+  // MLIR: llvm.icmp "ule" %[[ALIGN]], %[[MAXALIGN]]
+  // MLIR: llvm.cond_br
+  // MLIR: llvm.alloca %[[SIZE]] x i8 {alignment = 16 : i64}
+  // MLIR: llvm.call @small.start
+  // MLIR: llvm.call @__reussir_finish_dtor
+  // MLIR: llvm.call @__reussir_create_dtor_executor
+  // MLIR: llvm.call @__reussir_run_dtor
+
+  // The finalized descriptor folds through ordinary LLVM passes, without a
+  // dedicated LLVM wrapper rewrite. Direct root calls retain the internal ABI.
   // CHECK-LABEL: define linkonce_odr void @small(
-  // CHECK: %frame = alloca [{{[0-9]+}} x i8], align 8
-  // CHECK: call void @small.start.callback(ptr %frame, ptr %{{.*}}, ptr %step)
-  // CHECK: %[[STEP:.*]] = load { ptr, ptr }, ptr %step
+  // CHECK: %[[FRAME:.*]] = alloca [48 x i8], align 16
+  // CHECK: %[[STEP:.*]] = call { ptr, ptr } @small.start(ptr nonnull %[[FRAME]], ptr %{{.*}})
   // CHECK: %[[RESUME:.*]] = extractvalue { ptr, ptr } %[[STEP]], 0
-  // CHECK: %[[HAS:.*]] = icmp ne ptr %[[RESUME]], null
-  // CHECK: br i1 %[[HAS]], label %suspended, label %done
-  // CHECK: suspended:
+  // CHECK: icmp eq ptr %[[RESUME]], null
+  // CHECK: br i1
   // CHECK: %[[CHILD:.*]] = extractvalue { ptr, ptr } %[[STEP]], 1
-  // CHECK: call void @__reussir_finish_dtor(ptr %frame, ptr %[[RESUME]], ptr %[[CHILD]])
-  // CHECK: br label %done
-  // CHECK: done:
-  // CHECK-NEXT: ret void
+  // CHECK: call void @__reussir_finish_dtor(ptr nonnull %[[FRAME]], ptr nonnull %[[RESUME]], ptr %[[CHILD]])
+  // CHECK-NOT: call ptr @__reussir_create_dtor_executor
+  // CHECK: ret void
   llvm.func linkonce_odr @small(%p: !llvm.ptr) attributes {reussir.retcon_drop} {
     reussir.dtor.suspend @small(%p : !llvm.ptr)
     llvm.call @observe(%p) : (!llvm.ptr) -> ()

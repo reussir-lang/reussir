@@ -10,7 +10,7 @@ module attributes {llvm.data_layout = "e-p:64:64-i64:64-n8:16:32:64-S128"} {
     llvm.return
   }
 
-  // CHECK: @drop.routine = private constant { ptr, i64, i64 } { ptr @drop.start, i64 48, i64 8 }
+  // CHECK: @drop.routine = private global { ptr, i64, i64 } { ptr @drop.start, i64 48, i64 8 }
   // CHECK-LABEL: define linkonce_odr void @drop(
   // CHECK: call i64 @__reussir_dtor_executor_size()
   // CHECK: call i64 @__reussir_dtor_executor_align()
