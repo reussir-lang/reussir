@@ -4,7 +4,7 @@ use std::{fs, ptr, slice, sync::Arc};
 fn config(path: &std::path::Path) -> Config {
     Config {
         directory: path.into(),
-        memory_bytes: 256 * 1024,
+        io_buffer_bytes: 256 * 1024,
         disk_bytes: 1024 * 1024,
         block_bytes: 256 * 1024,
     }
@@ -51,7 +51,7 @@ fn invalid_config_and_io_failures_are_errors() {
         let mut cfg = config(dir.path());
         match field {
             0 => cfg.directory.clear(),
-            1 => cfg.memory_bytes = 0,
+            1 => cfg.io_buffer_bytes = 0,
             2 => cfg.block_bytes = 0,
             3 => cfg.disk_bytes = cfg.block_bytes * 3,
             _ => unreachable!(),
@@ -64,7 +64,7 @@ fn invalid_config_and_io_failures_are_errors() {
 }
 
 #[test]
-fn entries_obey_memory_and_block_budgets_and_resize_resets_storage() {
+fn entries_obey_io_buffer_and_block_budgets_and_resize_resets_storage() {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = config(dir.path());
     let cache = Cache::open(cfg.clone()).unwrap();
@@ -119,6 +119,8 @@ fn corrupted_disk_does_not_return_corrupted_values() {
     let value = b"uniquely recognizable bitcode payload\0\xff";
     cache.insert(b"corrupt", value).unwrap();
     cache.close().unwrap();
+    let cache = Cache::open(cfg).unwrap();
+    assert_eq!(cache.get(b"corrupt").unwrap(), Some(value.to_vec()));
     let mut changed = false;
     for entry in fs::read_dir(dir.path().join("data")).unwrap() {
         let path = entry.unwrap().path();
@@ -130,9 +132,9 @@ fn corrupted_disk_does_not_return_corrupted_values() {
         }
     }
     assert!(changed, "test must corrupt a persisted payload");
-    if let Ok(cache) = Cache::open(cfg) {
-        assert!(!matches!(cache.get(b"corrupt"), Ok(Some(_))));
-    }
+    // The earlier successful lookup must not hide disk corruption behind a
+    // retained memory value. Every completed lookup reads the backing store.
+    assert!(!matches!(cache.get(b"corrupt"), Ok(Some(_))));
 }
 
 #[test]

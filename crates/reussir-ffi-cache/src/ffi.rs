@@ -48,7 +48,7 @@ fn path(bytes: &[u8]) -> Option<PathBuf> {
 pub unsafe extern "C" fn reussir_ffi_cache_open(
     directory: *const u8,
     directory_len: usize,
-    memory_bytes: usize,
+    io_buffer_bytes: usize,
     disk_bytes: usize,
     block_bytes: usize,
 ) -> *mut ReussirFfiCache {
@@ -57,8 +57,8 @@ pub unsafe extern "C" fn reussir_ffi_cache_open(
             return ptr::null_mut();
         };
         let mut config = Config::new(directory);
-        if memory_bytes != 0 {
-            config.memory_bytes = memory_bytes;
+        if io_buffer_bytes != 0 {
+            config.io_buffer_bytes = io_buffer_bytes;
         }
         if disk_bytes != 0 {
             config.disk_bytes = disk_bytes;

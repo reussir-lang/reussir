@@ -18,11 +18,12 @@ typedef struct ReussirFfiCacheBuffer ReussirFfiCacheBuffer;
 
 // Explicitly opens a trusted, dedicated directory, exclusively locked until
 // close. Path bytes are native bytes on Unix, UTF-8 on Windows; no terminator is
-// needed. Zero capacities select defaults: 64 MiB memory, 1 GiB disk, 16 MiB
+// needed. Zero capacities select defaults: 16 MiB I/O buffers, 1 GiB disk, 16 MiB
 // blocks. Returns NULL on errors, invalid config, or lock contention.
-// Memory counts key/value payload bytes; metadata and I/O buffers are additional.
+// No retained memory value cache. I/O buffers, pending writes, metadata and
+// caller-owned results still consume memory.
 ReussirFfiCache *reussir_ffi_cache_open(const uint8_t *directory,
-                                     size_t directory_len, size_t memory_bytes,
+                                     size_t directory_len, size_t io_buffer_bytes,
                                      size_t disk_bytes, size_t block_bytes);
 
 // Keys/invalidation belong to the caller. Returns 1 on hit, 0 on miss, -1 on

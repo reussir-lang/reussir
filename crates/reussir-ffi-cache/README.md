@@ -2,7 +2,7 @@
 
 `reussir-ffi-cache` is an independent Rust library for compiler-generated bitcode.
 It uses Foyer 0.22.6, following the PJRT artifact cache's filesystem block device,
-Psync I/O, byte-weighted memory budget, exclusive directory lock, and close-time
+Psync I/O, bounded disk and I/O budgets, exclusive directory lock, and close-time
 flush. It has no dependency on PJRT, LLVM, or the language runtime.
 
 ```rust,no_run
@@ -15,13 +15,24 @@ cache.close()?;
 ```
 
 Opening is explicit; this crate does not read environment variables or select a
-cache directory. Defaults are 64 MiB key/value memory capacity, 1 GiB disk capacity,
-and 16 MiB blocks. Configurations require page-aligned memory >= 8 KiB,
+cache directory. There is no retained memory value cache: reads use the disk
+store without promotion and writes go directly to its pending I/O queue. The
+normal compiler pass processes each uncompiled texture once and keeps the result
+in MLIR; cache reuse is principally across compiler runs.
+
+Defaults are 1 GiB disk capacity, 16 MiB blocks, and 16 MiB I/O buffers. The
+`io_buffer_bytes` setting controls Foyer's flush buffer and pending-write queue
+threshold, not a memory cache. Foyer uses rotating I/O buffers; this setting is
+not a total RSS limit. Metadata, pending requests, and caller-owned results also
+consume memory. Configurations require page-aligned buffers >= 8 KiB,
 page-aligned blocks >= 16 KiB, and at least four whole disk blocks. An entry must
-fit both the memory budget and a block with a page reserved for record overhead.
-Memory accounting excludes runtime metadata, I/O buffers, request copies, and
-caller-owned result copies. Requests use a bounded queue. Foyer owns eviction,
-recovery and record checksums. Checksums detect damage, not malicious changes.
+fit the I/O buffer and a block with a page reserved for record overhead.
+
+Foyer owns recovery, checksums, and its default storage eviction: invalid-data
+ratio followed by FIFO block selection. There is no S3FIFO payload-memory tier.
+Its builder requires a memory stage internally; this is zero-capacity,
+rejects every entry, and is bypassed for storage reads and writes. Checksums
+detect damage, not malicious changes.
 
 A dedicated owner thread drives a Tokio runtime. The safe Rust API is synchronous
 and thread-safe, including calls from within an existing Tokio runtime. `close`

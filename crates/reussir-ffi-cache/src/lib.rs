@@ -7,8 +7,8 @@
 pub mod ffi;
 
 use foyer::{
-    BlockEngineConfig, DeviceBuilder, FsDeviceBuilder, HybridCacheBuilder, HybridCachePolicy,
-    PsyncIoEngineConfig, S3FifoConfig,
+    BlockEngineConfig, DeviceBuilder, FifoConfig, FsDeviceBuilder, HybridCacheBuilder,
+    HybridCachePolicy, Load, PsyncIoEngineConfig,
 };
 use std::{
     fmt,
@@ -36,13 +36,14 @@ fn error(value: impl fmt::Display) -> Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// All capacities count bytes. Memory capacity weighs key and value payloads;
-/// runtime metadata, I/O buffers, and caller-owned results are additional.
+/// Disk capacity and transient I/O buffer sizes, in bytes. There is no
+/// retained memory value cache. Metadata and caller-owned results are additional.
 #[derive(Clone, Debug)]
 pub struct Config {
     /// Dedicated, trusted cache directory; exclusively locked until close.
     pub directory: PathBuf,
-    pub memory_bytes: usize,
+    /// Foyer flush-buffer size and pending-write queue threshold.
+    pub io_buffer_bytes: usize,
     pub disk_bytes: usize,
     pub block_bytes: usize,
 }
@@ -51,7 +52,7 @@ impl Config {
     pub fn new(directory: impl Into<PathBuf>) -> Self {
         Self {
             directory: directory.into(),
-            memory_bytes: 64 * 1024 * 1024,
+            io_buffer_bytes: 16 * 1024 * 1024,
             disk_bytes: 1024 * 1024 * 1024,
             block_bytes: 16 * 1024 * 1024,
         }
@@ -59,15 +60,15 @@ impl Config {
 
     fn validate(&self) -> Result<()> {
         if self.directory.as_os_str().is_empty()
-            || self.memory_bytes < 8192
-            || !self.memory_bytes.is_multiple_of(4096)
+            || self.io_buffer_bytes < 8192
+            || !self.io_buffer_bytes.is_multiple_of(4096)
             || self.block_bytes < 16384
             || !self.block_bytes.is_multiple_of(4096)
             || self.disk_bytes / self.block_bytes < 4
             || !self.disk_bytes.is_multiple_of(self.block_bytes)
         {
             return Err(error(
-                "cache requires a directory, memory >= 8 KiB aligned to 4 KiB, \
+                "cache requires a directory, I/O buffers >= 8 KiB aligned to 4 KiB, \
                  blocks >= 16 KiB aligned to 4 KiB, and at least four whole disk blocks",
             ));
         }
@@ -76,7 +77,7 @@ impl Config {
 
     fn max_entry_bytes(&self) -> usize {
         // Reserve a page for Foyer's record/serialization overhead.
-        self.memory_bytes.min(self.block_bytes - 4096)
+        self.io_buffer_bytes.min(self.block_bytes) - 4096
     }
 }
 
@@ -136,12 +137,12 @@ impl Cache {
         response.recv().map_err(error)?
     }
 
-    /// Copies an entry into the cache. Entries too large for its memory/block
+    /// Copies an entry into the cache. Entries too large for its I/O buffer/block
     /// budget are rejected. Success is admission, not a durability guarantee;
     /// eviction is allowed, and close flushes admitted pending disk writes.
     pub fn insert(&self, key: &[u8], value: &[u8]) -> Result<()> {
         if key.len().saturating_add(value.len()) > self.max_entry_bytes {
-            return Err(error("entry exceeds cache memory or block budget"));
+            return Err(error("entry exceeds cache I/O buffer or block budget"));
         }
         let (reply, response) = mpsc::channel();
         self.requests
@@ -222,18 +223,21 @@ fn run(config: Config, requests: Receiver<Request>, ready: &Sender<Result<()>>) 
         HybridCacheBuilder::new()
             .with_name("reussir-ffi-cache")
             .with_policy(HybridCachePolicy::WriteOnInsertion)
-            .with_flush_on_close(true)
-            .memory(config.memory_bytes)
+            .with_flush_on_close(false)
+            // Foyer's builder requires a memory stage even for storage-only use.
+            // Reject all resident entries, including empty values, and bypass
+            // that stage on reads/writes below. FIFO has no auxiliary history.
+            .memory(0)
             .with_shards(1)
-            .with_eviction_config(S3FifoConfig::default())
-            .with_weighter(|key: &Vec<u8>, value: &Vec<u8>| key.len().saturating_add(value.len()))
+            .with_eviction_config(FifoConfig::default())
+            .with_filter(|_: &Vec<u8>, _: &Vec<u8>| false)
             .storage()
             .with_io_engine_config(PsyncIoEngineConfig::new())
             .with_engine_config(
                 BlockEngineConfig::new(device)
                     .with_block_size(config.block_bytes)
-                    .with_buffer_pool_size(config.memory_bytes)
-                    .with_submit_queue_size_threshold(config.memory_bytes),
+                    .with_buffer_pool_size(config.io_buffer_bytes)
+                    .with_submit_queue_size_threshold(config.io_buffer_bytes),
             )
             .build()
             .await
@@ -245,17 +249,25 @@ fn run(config: Config, requests: Receiver<Request>, ready: &Sender<Result<()>>) 
         match request {
             Request::Get(key, reply) => {
                 let result = runtime.block_on(async {
-                    cache
-                        .get(&key)
-                        .await
-                        .map(|entry| entry.map(|entry| entry.value().clone()))
-                        .map_err(error)
+                    // Load disk bytes without promotion into a memory cache.
+                    match cache.storage().load(&key).await.map_err(error)? {
+                        Load::Entry { value, .. } => Ok(Some(value)),
+                        // A just-enqueued write may still be in Foyer's I/O queue.
+                        Load::Piece { piece, .. } => Ok(Some(piece.value().clone())),
+                        Load::Miss | Load::Throttled => Ok(None),
+                    }
                 });
                 let _ = reply.send(result);
             }
             Request::Insert(key, value, reply) => {
-                runtime.block_on(async { cache.insert(key, value) });
-                let _ = reply.send(Ok(()));
+                let result = runtime.block_on(async {
+                    cache
+                        .storage_writer(key)
+                        .insert(value)
+                        .map(|_| ())
+                        .ok_or_else(|| error("disk cache admission declined"))
+                });
+                let _ = reply.send(result);
             }
             Request::Close(reply) => {
                 closed = Some(reply);
