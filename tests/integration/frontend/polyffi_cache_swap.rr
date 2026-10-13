@@ -1,0 +1,94 @@
+// UNSUPPORTED: windows
+// The texture bitcode cache (polyffi_cache.rr) when a library changes. A
+// library replaced while rrc compiles textures (another build writing a
+// package directory) must not leave entries filed under the old library's
+// key: %t/rustc replaces libfcrdep.rlib by v2 before the first texture
+// compile (by a rename, or with INPLACE set in place, with the same size and
+// its old modification time put back), and once v1 is back, a build must
+// see v1 again. A package directory given with an `-L` kind (`crate=DIR`) is
+// hashed like any other, and one that rrc runs in (where it writes its
+// temporary files) does not keep the entries out.
+
+// RUN: rm -rf %t && mkdir -p %t/L
+// RUN: printf '#[inline] pub fn k() -> u64 { 1111 }\n' > %t/v1.rs
+// RUN: printf '#[inline] pub fn k() -> u64 { 2222 }\n' > %t/v2.rs
+// RUN: %rustc_path --crate-type rlib --crate-name fcrdep %t/v1.rs -o %t/v1.rlib
+// RUN: %rustc_path --crate-type rlib --crate-name fcrdep %t/v2.rs -o %t/v2.rlib
+// RUN: printf '#!/bin/sh\ncase " $* " in *reussir_rust_module_*)\n' > %t/rustc
+// RUN: printf '  if [ -e "$D/armed" ]; then rm "$D/armed"\n' >> %t/rustc
+// RUN: printf '    if [ -n "$INPLACE" ]; then\n' >> %t/rustc
+// RUN: printf '      cp "$D/v2.rlib" "$D/L/libfcrdep.rlib"\n' >> %t/rustc
+// RUN: printf '      touch -r "$D/mtime" "$D/L/libfcrdep.rlib"\n' >> %t/rustc
+// RUN: printf '    else cp "$D/v2.rlib" "$D/L/new"\n' >> %t/rustc
+// RUN: printf '      mv "$D/L/new" "$D/L/libfcrdep.rlib"; fi\n' >> %t/rustc
+// RUN: printf '  fi ;;\nesac\nexec "$REAL_RUSTC" "$@"\n' >> %t/rustc
+// RUN: chmod +x %t/rustc
+
+// RUN: cp %t/v1.rlib %t/L/libfcrdep.rlib && touch %t/armed
+// RUN: env D=%t REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/cache \
+// RUN:   %rrc %s --polyffi-rust-path %t/rustc --polyffi-libdir %library_path \
+// RUN:   --polyffi-libdir %t/L --emit llvm-ir -O aggressive -o %t/swapped.ll
+// RUN: %FileCheck %s --check-prefix=V2 < %t/swapped.ll
+// RUN: cp %t/v1.rlib %t/L/new && mv %t/L/new %t/L/libfcrdep.rlib
+// RUN: env D=%t REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/cache \
+// RUN:   %rrc %s --polyffi-rust-path %t/rustc --polyffi-libdir %library_path \
+// RUN:   --polyffi-libdir %t/L --emit llvm-ir -O aggressive -o %t/v1.ll
+// RUN: %FileCheck %s --check-prefix=V1 < %t/v1.ll
+
+// RUN: env D=%t REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/kind \
+// RUN:   REUSSIR_RUSTC_DEPS=%library_path:crate=%t/L %rrc %s \
+// RUN:   --polyffi-rust-path %t/rustc --emit llvm-ir -O aggressive \
+// RUN:   -o %t/kind-v1.ll
+// RUN: %FileCheck %s --check-prefix=V1 < %t/kind-v1.ll
+// RUN: cp %t/v2.rlib %t/L/new && mv %t/L/new %t/L/libfcrdep.rlib
+// RUN: env D=%t REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/kind \
+// RUN:   REUSSIR_RUSTC_DEPS=%library_path:crate=%t/L %rrc %s \
+// RUN:   --polyffi-rust-path %t/rustc --emit llvm-ir -O aggressive \
+// RUN:   -o %t/kind-v2.ll
+// RUN: %FileCheck %s --check-prefix=V2 < %t/kind-v2.ll
+
+// In place: the same inode, size and modification time; only the
+// status-change time tells.
+// RUN: test "$(wc -c < %t/v1.rlib)" = "$(wc -c < %t/v2.rlib)"
+// RUN: cp %t/v1.rlib %t/L/libfcrdep.rlib
+// RUN: touch -r %t/L/libfcrdep.rlib %t/mtime
+// RUN: touch %t/armed
+// RUN: env D=%t INPLACE=1 REAL_RUSTC=%rustc_path \
+// RUN:   REUSSIR_FFI_CACHE_DIR=%t/inplace %rrc %s \
+// RUN:   --polyffi-rust-path %t/rustc --polyffi-libdir %library_path \
+// RUN:   --polyffi-libdir %t/L --emit llvm-ir -O aggressive \
+// RUN:   -o %t/inplace-swapped.ll
+// RUN: %FileCheck %s --check-prefix=V2 < %t/inplace-swapped.ll
+// RUN: cp %t/v1.rlib %t/L/libfcrdep.rlib
+// RUN: touch -r %t/mtime %t/L/libfcrdep.rlib
+// RUN: env D=%t REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/inplace \
+// RUN:   %rrc %s --polyffi-rust-path %t/rustc --polyffi-libdir %library_path \
+// RUN:   --polyffi-libdir %t/L --emit llvm-ir -O aggressive -o %t/inplace-v1.ll
+// RUN: %FileCheck %s --check-prefix=V1 < %t/inplace-v1.ll
+
+// rrc running in a package directory still stores both entries.
+// RUN: mkdir -p %t/Lc && cp %t/v1.rlib %t/Lc/libfcrdep.rlib
+// RUN: cd %t/Lc && env D=%t REAL_RUSTC=%rustc_path \
+// RUN:   REUSSIR_FFI_CACHE_DIR=%t/cwd %rrc %s --polyffi-rust-path %t/rustc \
+// RUN:   --polyffi-libdir %library_path --polyffi-libdir . --emit llvm-ir \
+// RUN:   -O aggressive -o %t/cwd.ll
+// RUN: ls %t/cwd | %FileCheck %s --check-prefix=TWO
+
+// TWO-COUNT-2: {{^[0-9a-f]{64}\.bc$}}
+// TWO-NOT: .bc
+// V1-DAG: add i64 %x, 1111
+// V1-DAG: add i64 %x, 1113
+// V2-DAG: add i64 %x, 2222
+// V2-DAG: add i64 %x, 2224
+
+extern "rust" [{
+    extern crate fcrdep;
+}];
+
+#[ffi(import)]
+pub fn kplus(x: u64) -> u64 [{ fcrdep::k() + x }];
+#[ffi(import)]
+pub fn kplus2(x: u64) -> u64 [{ fcrdep::k() + x + 2 }];
+pub fn main() -> u64 {
+    kplus2(kplus(1))
+}
