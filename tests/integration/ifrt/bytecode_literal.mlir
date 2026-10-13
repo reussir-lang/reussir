@@ -1,4 +1,3 @@
-// REQUIRES: ifrt
 // RUN: %reussir-opt %s --reussir-convert-to-llvm | %reussir-translate --mlir-to-llvmir | %FileCheck %s
 // CHECK: internal constant { [64 x i8], [{{[0-9]+}} x i8] }
 // CHECK-SAME: [64 x i8] c"
