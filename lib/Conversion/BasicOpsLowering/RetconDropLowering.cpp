@@ -10,8 +10,12 @@
 
 #include "Reussir/Conversion/BasicOpsLowering.h"
 #include "Reussir/IR/ReussirOps.h"
+#include <llvm/ADT/StringMap.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/IR/IRMapping.h>
+#include <mlir/IR/SymbolTable.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
+#include <mlir/Transforms/InliningUtils.h>
 
 namespace reussir {
 namespace {
@@ -28,6 +32,102 @@ struct ConvertSuspend : ConvertOpToLLVMPattern<ReussirDtorSuspendOp> {
     return success();
   }
 };
+
+// Expand one level of child destruction in a separate worker. The original
+// entry stays small for roots that finish without an executor. Worker bodies
+// come from frozen templates: even mutually recursive destructors cannot grow
+// transitively, and every remaining recursive edge still suspends.
+class DtorStepInliner : public InlinerInterface {
+public:
+  using InlinerInterface::InlinerInterface;
+  bool isLegalToInline(Region *, Region *, bool, IRMapping &) const override {
+    return true;
+  }
+  bool isLegalToInline(Operation *op, Region *, bool,
+                       IRMapping &) const override {
+    return op->getDialect()->getNamespace() == "llvm" ||
+           isa<ReussirDtorSuspendOp>(op);
+  }
+  bool allowSingleBlockOptimization(
+      iterator_range<Region::iterator>) const override {
+    return false;
+  }
+  void handleTerminator(Operation *op, Block *destination) const override {
+    if (auto ret = dyn_cast<ReturnOp>(op)) {
+      OpBuilder builder(ret);
+      BrOp::create(builder, ret.getLoc(), ValueRange{}, destination);
+      ret.erase();
+    }
+  }
+};
+
+static void coarsenDestructorSteps(ModuleOp module,
+                                   SmallVectorImpl<LLVMFuncOp> &functions) {
+  // Bound code growth independently of the recursion bound. Large destructors
+  // and operations unsupported by the inliner retain their suspension sites.
+  constexpr size_t maxWorkerOperations = 2048;
+  llvm::StringMap<OwningOpRef<LLVMFuncOp>> templates;
+  llvm::StringMap<size_t> costs;
+  for (auto function : functions) {
+    templates.try_emplace(function.getSymName(),
+                          cast<LLVMFuncOp>(function->clone()));
+    size_t size = 0;
+    function.walk([&](Operation *) { ++size; });
+    costs.try_emplace(function.getSymName(), size);
+  }
+
+  DtorStepInliner interface(module.getContext());
+  SymbolTable symbols(module);
+  llvm::StringMap<StringAttr> workers;
+  SmallVector<LLVMFuncOp> generated;
+  for (auto function : functions) {
+    size_t size = costs.lookup(function.getSymName());
+    if (function.isExternal() || size >= maxWorkerOperations)
+      continue;
+    auto worker = cast<LLVMFuncOp>(function->clone());
+    worker.setSymName((function.getSymName() + ".chunk").str());
+    worker.setLinkage(Linkage::Private);
+    symbols.insert(worker);
+    SmallVector<ReussirDtorSuspendOp> sites;
+    worker.walk([&](ReussirDtorSuspendOp op) { sites.push_back(op); });
+    bool expanded = false;
+    for (auto site : sites) {
+      auto it = templates.find(site.getCallee());
+      if (it == templates.end())
+        continue;
+      auto source = *it->second;
+      size_t cost = costs.lookup(site.getCallee());
+      if (source.isExternal() || cost > maxWorkerOperations - size)
+        continue;
+      auto clone = [](OpBuilder &builder, Region *source, Block *inlineBlock,
+                      Block *postInsertBlock, IRMapping &mapping,
+                      bool shouldClone) {
+        assert(shouldClone);
+        builder.cloneRegionBefore(*source, *inlineBlock->getParent(),
+                                  postInsertBlock->getIterator(), mapping);
+      };
+      if (failed(inlineRegion(interface, clone, &source.getBody(), site,
+                              ValueRange{site.getObject()}, ValueRange{})))
+        continue;
+      site.erase();
+      size += cost;
+      expanded = true;
+    }
+    if (!expanded) {
+      symbols.erase(worker);
+      continue;
+    }
+    workers.try_emplace(function.getSymName(), worker.getSymNameAttr());
+    generated.push_back(worker);
+  }
+  llvm::append_range(functions, generated);
+  for (auto function : functions)
+    function.walk([&](ReussirDtorSuspendOp suspend) {
+      auto worker = workers.find(suspend.getCallee());
+      if (worker != workers.end())
+        suspend.setCalleeAttr(FlatSymbolRefAttr::get(worker->second));
+    });
+}
 
 class RetconDropLowering {
   ModuleOp module;
@@ -283,6 +383,7 @@ lowerRetconDropFunctions(mlir::ModuleOp module,
   });
   if (functions.empty())
     return mlir::success();
+  coarsenDestructorSteps(module, functions);
   return RetconDropLowering(module, converter).run(functions);
 }
 } // namespace reussir
