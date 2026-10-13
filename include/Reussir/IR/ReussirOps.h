@@ -141,7 +141,9 @@ mlir::func::FuncOp createDtorIfNotExists(
 // record type if it doesn't already exist. The function takes a reference to
 // the type and an index delta and performs the acquisition operation. Returns
 // the existing function if one is already present. The RecordType must be a
-// named type. `symbols` follows the contract of createDtorIfNotExists.
+// named type. Named record members of compounds call their own acquire glue
+// so shared aggregate DAGs do not duplicate member bodies. `symbols` follows
+// the contract of createDtorIfNotExists, including nested glue insertions.
 //
 //===----------------------------------------------------------------------===//
 mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(

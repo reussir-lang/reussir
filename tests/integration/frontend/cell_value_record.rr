@@ -8,6 +8,7 @@
 // RUN: %rrc %s -o %t.opt.o --relocation-mode pic -Oaggressive
 // RUN: %cc %t.opt.o %S/cell_value_record.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
 // RUN: %t.opt.exe
+// RUN: %rrc %s --emit mlir-llvm -o - | %FileCheck %s --check-prefix=GLUE
 
 import core::intrinsic::cell;
 
@@ -65,3 +66,9 @@ pub fn test_nested(n : u64) -> u64 {
     a.x.big.0 + a.y.small + b.x.big.0 + b.y.big.0 + b.y.small
 }
 extern "C" trampoline "test_nested_ffi" = test_nested;
+
+// The late outlined acquisition of Quad shares Pair's body. The ordinary
+// reference capability remains sufficient for all cell payloads.
+// GLUE-LABEL: llvm.func {{.*}}@_RINvNvC4core9intrinsic16acquire_in_placeC4QuadE(
+// GLUE: llvm.call @_RINvNvC4core9intrinsic16acquire_in_placeC4PairE(
+// GLUE: llvm.call @_RINvNvC4core9intrinsic16acquire_in_placeC4PairE(

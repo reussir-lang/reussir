@@ -3816,12 +3816,13 @@ mlir::LogicalResult ReussirPolyFFIOp::verify() {
 //===----------------------------------------------------------------------===//
 static mlir::LogicalResult
 emitArrayOwnershipAcquisition(mlir::Value view, mlir::OpBuilder &builder,
-                              mlir::Location loc, mlir::Value delta);
+                              mlir::Location loc, mlir::Value delta,
+                              mlir::SymbolTableCollection *memberGlueSymbols);
 
-mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
-                                             mlir::OpBuilder &builder,
-                                             mlir::Location loc,
-                                             mlir::Value delta) {
+static mlir::LogicalResult
+emitOwnershipAcquisitionImpl(mlir::Value value, mlir::OpBuilder &builder,
+                             mlir::Location loc, mlir::Value delta,
+                             mlir::SymbolTableCollection *memberGlueSymbols) {
   mlir::OpBuilder::InsertionGuard guard(builder);
   mlir::Type type = value.getType();
 
@@ -3842,7 +3843,8 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
         if (llvm::isa<RcType>(elementType)) {
           auto loadedValue =
               ReussirRefLoadOp::create(builder, loc, elementType, value);
-          return emitOwnershipAcquisition(loadedValue, builder, loc, delta);
+          return emitOwnershipAcquisitionImpl(loadedValue, builder, loc, delta,
+                                              memberGlueSymbols);
         }
 
         if (auto arrayType = llvm::dyn_cast<ArrayType>(elementType)) {
@@ -3850,7 +3852,8 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
               ReussirArrayViewOp::create(
                   builder, loc, getArrayViewMemRefType(arrayType), value)
                   .getView();
-          return emitArrayOwnershipAcquisition(view, builder, loc, delta);
+          return emitArrayOwnershipAcquisition(view, builder, loc, delta,
+                                               memberGlueSymbols);
         }
 
         // A nullable RC pointer is the drop-side dual of
@@ -3888,7 +3891,8 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
                            Capability::unspecified, refType.getAtomicKind());
           mlir::Value slot = ReussirRefProjectOp::create(
               builder, loc, slotType, value, builder.getIndexAttr(0));
-          return emitOwnershipAcquisition(slot, builder, loc, delta);
+          return emitOwnershipAcquisitionImpl(slot, builder, loc, delta,
+                                              memberGlueSymbols);
         }
 
         // If reference points to a record, handle fields directly
@@ -3913,7 +3917,27 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
                                refType.getAtomicKind()),
                   value, builder.getIndexAttr(i));
 
-              if (emitOwnershipAcquisition(fieldRef, builder, loc, delta)
+              // Outlined glue shares named member bodies instead of expanding
+              // every path through an aggregate DAG. Keep the inline expansion
+              // used by ownership analysis unchanged.
+              auto memberRecord = llvm::dyn_cast<RecordType>(projectedType);
+              if (memberGlueSymbols && memberRecord && memberRecord.getName()) {
+                auto module = builder.getInsertionBlock()
+                                  ->getParentOp()
+                                  ->getParentOfType<mlir::ModuleOp>();
+                auto glue = emitOwnershipAcquisitionFuncIfNotExists(
+                    module, memberRecord, builder, refType.getAtomicKind(),
+                    memberGlueSymbols);
+                auto count =
+                    delta ? delta
+                          : builder.createOrFold<mlir::arith::ConstantIndexOp>(
+                                loc, 1);
+                mlir::func::CallOp::create(builder, loc, glue,
+                                           mlir::ValueRange{fieldRef, count});
+                continue;
+              }
+              if (emitOwnershipAcquisitionImpl(fieldRef, builder, loc, delta,
+                                               memberGlueSymbols)
                       .failed())
                 return mlir::failure();
             }
@@ -3955,8 +3979,8 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
               // Set insertion point to the block
               builder.setInsertionPointToStart(block);
               if (!isTriviallyCopyable(projectedType)) {
-                if (emitOwnershipAcquisition(block->getArgument(0), builder,
-                                             loc, delta)
+                if (emitOwnershipAcquisitionImpl(block->getArgument(0), builder,
+                                                 loc, delta, memberGlueSymbols)
                         .failed())
                   return mlir::failure();
               }
@@ -3971,21 +3995,30 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
         return mlir::success();
       })
       .Case<mlir::MemRefType>([&](mlir::MemRefType) {
-        return emitArrayOwnershipAcquisition(value, builder, loc, delta);
+        return emitArrayOwnershipAcquisition(value, builder, loc, delta,
+                                             memberGlueSymbols);
       })
       // For other types, return failure
       .Default([&](mlir::Type) { return mlir::failure(); });
 }
 
+mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
+                                             mlir::OpBuilder &builder,
+                                             mlir::Location loc,
+                                             mlir::Value delta) {
+  return emitOwnershipAcquisitionImpl(value, builder, loc, delta, nullptr);
+}
+
 static mlir::LogicalResult
 emitArrayOwnershipAcquisition(mlir::Value view, mlir::OpBuilder &builder,
-                              mlir::Location loc, mlir::Value delta) {
+                              mlir::Location loc, mlir::Value delta,
+                              mlir::SymbolTableCollection *memberGlueSymbols) {
   return emitArrayElementTraversal(
       view, builder, loc,
       [&](mlir::OpBuilder &bodyBuilder, mlir::Location bodyLoc,
           mlir::Value elementRef) {
-        return emitOwnershipAcquisition(elementRef, bodyBuilder, bodyLoc,
-                                        delta);
+        return emitOwnershipAcquisitionImpl(elementRef, bodyBuilder, bodyLoc,
+                                            delta, memberGlueSymbols);
       });
 }
 
@@ -4186,9 +4219,10 @@ createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
 mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
     mlir::ModuleOp moduleOp, RecordType type, mlir::OpBuilder &builder,
     AtomicKind kind, mlir::SymbolTableCollection *symbols) {
-  std::optional<mlir::SymbolTable> ownTable;
-  mlir::SymbolTable &symTable = symbols ? symbols->getSymbolTable(moduleOp)
-                                      : ownTable.emplace(moduleOp);
+  mlir::SymbolTableCollection ownSymbols;
+  if (!symbols)
+    symbols = &ownSymbols;
+  mlir::SymbolTable &symTable = symbols->getSymbolTable(moduleOp);
   auto acquireName = type.getAcquireName(kind);
   if (!acquireName)
     llvm::report_fatal_error(
@@ -4220,8 +4254,8 @@ mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
   builder.setInsertionPointToStart(entryBlock);
   auto ref = entryBlock->getArgument(0);
 
-  if (emitOwnershipAcquisition(ref, builder, builder.getUnknownLoc(),
-                               entryBlock->getArgument(1))
+  if (emitOwnershipAcquisitionImpl(ref, builder, builder.getUnknownLoc(),
+                                   entryBlock->getArgument(1), symbols)
           .failed()) {
     llvm::report_fatal_error("failed to emit ownership acquisition");
   }
