@@ -12,11 +12,11 @@ extern "C" {
 #endif
 typedef struct ReussirDtorExecutor ReussirDtorExecutor;
 typedef struct ReussirDtorTask ReussirDtorTask;
-typedef struct ReussirDtorStep ReussirDtorStep;
-typedef void (*ReussirDtorStart)(void *buffer, void *object,
-                                 ReussirDtorStep *result);
-typedef void (*ReussirDtorResume)(void *buffer, bool cancel,
-                                  ReussirDtorStep *result);
+typedef struct ReussirDtorResumeAction ReussirDtorResumeAction;
+typedef const ReussirDtorResumeAction *(*ReussirDtorStart)(
+    void *buffer, void *object, const ReussirDtorTask **child);
+typedef const ReussirDtorResumeAction *(*ReussirDtorResume)(
+    void *buffer, bool cancel, const ReussirDtorTask **child);
 typedef struct ReussirDtorRoutine {
   ReussirDtorStart start;
   size_t size;
@@ -26,13 +26,9 @@ struct ReussirDtorTask {
   const ReussirDtorRoutine *routine;
   void *object;
 };
-typedef struct ReussirDtorResumeAction {
+struct ReussirDtorResumeAction {
   ReussirDtorResume callback;
   size_t offset;
-} ReussirDtorResumeAction;
-struct ReussirDtorStep {
-  const ReussirDtorResumeAction *resume;
-  const ReussirDtorTask *child;
 };
 size_t __reussir_dtor_executor_size(void);
 size_t __reussir_dtor_executor_align(void);

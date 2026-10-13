@@ -105,7 +105,7 @@ llvm::PreservedAnalyses RetconDropABIPass::run(llvm::Module &module,
   for (auto *function : functions) {
     function->removeFnAttr("reussir.retcon_abi");
     auto *type = FunctionType::get(
-        Type::getVoidTy(ctx),
+        ptrTy,
         {function->getArg(0)->getType(), function->getArg(1)->getType(), ptrTy},
         false);
     auto *wrapper = Function::Create(type, GlobalValue::PrivateLinkage,
@@ -148,12 +148,15 @@ llvm::PreservedAnalyses RetconDropABIPass::run(llvm::Module &module,
     step->setCallingConv(function->getCallingConv());
     step->setAttributes(function->getAttributes());
     auto *resume = builder.CreateExtractValue(step, 0);
-    auto *child = builder.CreateSelect(builder.CreateIsNotNull(resume),
-                                       builder.CreateExtractValue(step, 1),
-                                       ConstantPointerNull::get(ptrTy));
-    auto *result = builder.CreateInsertValue(step, child, 1);
-    builder.CreateStore(result, wrapper->getArg(2));
-    builder.CreateRetVoid();
+    auto *yield = BasicBlock::Create(ctx, "yield", wrapper);
+    auto *done = BasicBlock::Create(ctx, "done", wrapper);
+    builder.CreateCondBr(builder.CreateIsNotNull(resume), yield, done);
+    builder.SetInsertPoint(yield);
+    builder.CreateStore(builder.CreateExtractValue(step, 1),
+                        wrapper->getArg(2));
+    builder.CreateBr(done);
+    builder.SetInsertPoint(done);
+    builder.CreateRet(resume);
   }
   return PreservedAnalyses::none();
 }
@@ -170,13 +173,12 @@ namespace {
 std::optional<uint64_t> getDeferredFreeOffset(llvm::Function &function) {
   using namespace llvm;
   if (function.size() != 1 || function.arg_size() != 3 ||
-      !function.getReturnType()->isVoidTy() ||
+      !function.getReturnType()->isPointerTy() ||
       !function.getArg(0)->getType()->isPointerTy() ||
       !function.getArg(1)->getType()->isIntegerTy(1) ||
       !function.getArg(2)->getType()->isPointerTy())
     return std::nullopt;
   const auto &layout = function.getParent()->getDataLayout();
-  auto pointerSize = layout.getPointerSize();
   CallInst *deallocation = nullptr;
   bool completes = false;
   for (auto &instruction : function.getEntryBlock()) {
@@ -191,16 +193,6 @@ std::optional<uint64_t> getDeferredFreeOffset(llvm::Function &function) {
         deallocation = call;
         continue;
       }
-      if (auto *zero = dyn_cast<MemSetInst>(call)) {
-        auto *length = dyn_cast<ConstantInt>(zero->getLength());
-        auto *value = dyn_cast<ConstantInt>(zero->getValue());
-        if (zero->isVolatile() || zero->getDest() != function.getArg(2) ||
-            !length || length->getZExtValue() != 2 * pointerSize || !value ||
-            !value->isZero())
-          return std::nullopt;
-        completes = true;
-        continue;
-      }
       if (callee->isIntrinsic() &&
           (callee->getIntrinsicID() == Intrinsic::assume ||
            callee->getIntrinsicID() ==
@@ -213,26 +205,14 @@ std::optional<uint64_t> getDeferredFreeOffset(llvm::Function &function) {
         return std::nullopt;
       continue;
     }
-    if (isa<GetElementPtrInst, ReturnInst>(instruction))
-      continue;
-    if (auto *store = dyn_cast<StoreInst>(&instruction)) {
-      auto *value = dyn_cast<Constant>(store->getValueOperand());
-      int64_t offset = 0;
-      auto *base = GetPointerBaseWithConstantOffset(store->getPointerOperand(),
-                                                    offset, layout);
-      if (store->isVolatile() || store->isAtomic() || !value ||
-          !value->isNullValue() || base != function.getArg(2) ||
-          (offset != 0 && offset != pointerSize) ||
-          layout.getTypeStoreSize(value->getType()) >
-              2 * pointerSize - static_cast<uint64_t>(offset))
+    if (auto *ret = dyn_cast<ReturnInst>(&instruction)) {
+      if (!isa_and_nonnull<ConstantPointerNull>(ret->getReturnValue()))
         return std::nullopt;
-      // Require a complete null pointer in the resume field, not a partial
-      // byte store or a zero in the child field alone.
-      if (offset == 0 &&
-          layout.getTypeStoreSize(value->getType()) >= pointerSize)
-        completes = true;
+      completes = true;
       continue;
     }
+    if (isa<GetElementPtrInst>(instruction))
+      continue;
     return std::nullopt;
   }
   if (!deallocation || !completes)

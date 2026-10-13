@@ -63,11 +63,13 @@ module attributes {llvm.data_layout = "e-p:64:64-i64:64-n8:16:32:64-S128"} {
 // SPLIT-LABEL: define internal {{.*}} @drop.start.resume.1(
 // SPLIT: call void @observe
 // SPLIT-NOT: call void @drop.deallocate
-// SPLIT-LABEL: define private void @drop.start.callback(ptr %0, ptr %1, ptr %2)
+// SPLIT-LABEL: define private ptr @drop.start.callback(ptr %0, ptr %1, ptr %2)
 // SPLIT: %[[STEP:.*]] = call { ptr, ptr } @drop.start
 // SPLIT: %[[RESUME:.*]] = extractvalue { ptr, ptr } %[[STEP]], 0
 // SPLIT: %[[VALID:.*]] = icmp ne ptr %[[RESUME]], null
+// SPLIT-NEXT: br i1 %[[VALID]], label %yield, label %done
+// SPLIT: yield:
 // SPLIT: %[[CHILD:.*]] = extractvalue { ptr, ptr } %[[STEP]], 1
-// SPLIT: select i1 %[[VALID]], ptr %[[CHILD]], ptr null
-// SPLIT: store { ptr, ptr }
-// SPLIT: ret void
+// SPLIT: store ptr %[[CHILD]], ptr %2
+// SPLIT: done:
+// SPLIT-NEXT: ret ptr %[[RESUME]]

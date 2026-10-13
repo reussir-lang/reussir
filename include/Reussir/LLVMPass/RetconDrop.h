@@ -20,7 +20,7 @@ public:
   llvm::PreservedAnalyses run(llvm::Module &, llvm::ModuleAnalysisManager &);
 };
 /// Replace free-only continuation callbacks after ordinary LLVM optimization
-/// has exposed their frame loads and completion stores.
+/// has exposed their frame loads and completion returns.
 class RetconDropDeferredFreePass
     : public llvm::PassInfoMixin<RetconDropDeferredFreePass> {
 public:

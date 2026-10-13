@@ -22,10 +22,10 @@ fn consume(tree: Tree) -> u64 { match tree { Tree::Leaf => 0, _ => 1 } }
 extern "C" trampoline "consume" = consume;
 
 // CHECK: call void @__reussir_finish_dtor
-// CHECK: define private void @{{.*}}.retcon.start.callback(ptr {{.*}}, ptr {{.*}}, ptr {{.*}})
+// CHECK: define private ptr @{{.*}}.retcon.start.callback(ptr {{.*}}, ptr {{.*}}, ptr {{.*}})
 // CHECK: call { ptr, ptr } @{{.*}}.retcon.start
-// CHECK: store { ptr, ptr }
-// CHECK: ret void
-// CHECK: define private void @{{.*}}.resume.0.callback(ptr {{.*}}, i1 zeroext {{.*}}, ptr {{.*}})
-// CHECK: store { ptr, ptr }
-// CHECK: ret void
+// CHECK: store ptr
+// CHECK: ret ptr
+// CHECK: define private ptr @{{.*}}.resume.0.callback(ptr {{.*}}, i1 zeroext {{.*}}, ptr {{.*}})
+// CHECK: store ptr
+// CHECK: ret ptr

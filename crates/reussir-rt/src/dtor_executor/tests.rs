@@ -25,27 +25,25 @@ const LARGE: DtorRoutine = DtorRoutine {
     align: 256,
 };
 
-unsafe extern "C" fn resume(buffer: *mut c_void, cancel: bool, output_step: *mut DtorStep) {
+unsafe extern "C" fn resume(
+    buffer: *mut c_void,
+    cancel: bool,
+    output_step: *mut *const DtorTask,
+) -> *const DtorResumeAction {
     assert!(!cancel);
     let state = unsafe { &*buffer.cast::<State>() };
     unsafe { (*state.args.1).push(state.value) };
-    unsafe {
-        output_step.write(DtorStep {
-            resume: ptr::null(),
-            child: ptr::null(),
-        })
-    }
+    unsafe { complete_or_yield(output_step, ptr::null(), ptr::null()) }
 }
-unsafe extern "C" fn start(buffer: *mut c_void, object: *mut c_void, output_step: *mut DtorStep) {
+unsafe extern "C" fn start(
+    buffer: *mut c_void,
+    object: *mut c_void,
+    output_step: *mut *const DtorTask,
+) -> *const DtorResumeAction {
     let (n, output) = unsafe { *object.cast::<(usize, *mut Vec<usize>)>() };
     if n == 0 {
         unsafe { (*output).push(0) };
-        return unsafe {
-            output_step.write(DtorStep {
-                resume: ptr::null(),
-                child: ptr::null(),
-            })
-        };
+        return unsafe { complete_or_yield(output_step, ptr::null(), ptr::null()) };
     }
     let state = buffer.cast::<State>();
     unsafe {
@@ -58,18 +56,13 @@ unsafe extern "C" fn start(buffer: *mut c_void, object: *mut c_void, output_step
             },
         });
     }
-    unsafe {
-        output_step.write(DtorStep {
-            resume: &RESUME_ACTION,
-            child: ptr::addr_of!((*state).task),
-        })
-    }
+    unsafe { complete_or_yield(output_step, &RESUME_ACTION, ptr::addr_of!((*state).task)) }
 }
 unsafe extern "C" fn large_start(
     buffer: *mut c_void,
     object: *mut c_void,
-    output_step: *mut DtorStep,
-) {
+    output_step: *mut *const DtorTask,
+) -> *const DtorResumeAction {
     assert_eq!(buffer as usize % LARGE.align, 0);
     unsafe {
         buffer
@@ -77,13 +70,18 @@ unsafe extern "C" fn large_start(
             .cast::<[u8; 513]>()
             .write([0xa5; 513])
     };
-    unsafe { start(buffer, object, output_step) };
-    let step = unsafe { &mut *output_step };
-    if !step.resume.is_null() {
-        step.resume = &LARGE_RESUME_ACTION;
+    let resume = unsafe { start(buffer, object, output_step) };
+    if !resume.is_null() {
+        &LARGE_RESUME_ACTION
+    } else {
+        resume
     }
 }
-unsafe extern "C" fn large_resume(buffer: *mut c_void, cancel: bool, output_step: *mut DtorStep) {
+unsafe extern "C" fn large_resume(
+    buffer: *mut c_void,
+    cancel: bool,
+    output_step: *mut *const DtorTask,
+) -> *const DtorResumeAction {
     assert_eq!(
         unsafe { *buffer.byte_add(size_of::<State>()).cast::<[u8; 513]>() },
         [0xa5; 513]
@@ -163,15 +161,14 @@ fn invalid_layouts_and_empty_free_are_rejected() {
     );
 }
 
-unsafe extern "C" fn nested(_: *mut c_void, object: *mut c_void, output_step: *mut DtorStep) {
+unsafe extern "C" fn nested(
+    _: *mut c_void,
+    object: *mut c_void,
+    output_step: *mut *const DtorTask,
+) -> *const DtorResumeAction {
     let mut inner = DtorExecutor::new();
     unsafe { __reussir_run_dtor(&mut inner, object, &SMALL) };
-    unsafe {
-        output_step.write(DtorStep {
-            resume: ptr::null(),
-            child: ptr::null(),
-        })
-    }
+    unsafe { complete_or_yield(output_step, ptr::null(), ptr::null()) }
 }
 #[test]
 fn independent_nested_and_parallel_executors() {
@@ -205,7 +202,6 @@ fn independent_nested_and_parallel_executors() {
 fn ffi_layout_and_symbol_exports() {
     assert_eq!(__reussir_dtor_executor_size(), size_of::<DtorExecutor>());
     assert_eq!(__reussir_dtor_executor_align(), align_of::<DtorExecutor>());
-    assert_eq!(size_of::<DtorStep>(), 2 * size_of::<usize>());
     assert_eq!(size_of::<DtorResumeAction>(), 2 * size_of::<usize>());
     assert_eq!(
         core::mem::offset_of!(DtorResumeAction, offset),
@@ -241,19 +237,14 @@ const BRANCH: DtorRoutine = DtorRoutine {
 unsafe extern "C" fn branch_start(
     buffer: *mut c_void,
     object: *mut c_void,
-    output_step: *mut DtorStep,
-) {
+    output_step: *mut *const DtorTask,
+) -> *const DtorResumeAction {
     let (depth, output) = unsafe { *object.cast::<(usize, *mut Vec<usize>)>() };
     if depth == 0 {
         unsafe {
             (*output).push(0);
         }
-        return unsafe {
-            output_step.write(DtorStep {
-                resume: ptr::null(),
-                child: ptr::null(),
-            })
-        };
+        return unsafe { complete_or_yield(output_step, ptr::null(), ptr::null()) };
     }
     let state = buffer.cast::<Branch>();
     unsafe {
@@ -267,33 +258,28 @@ unsafe extern "C" fn branch_start(
         });
     }
     unsafe {
-        output_step.write(DtorStep {
-            resume: &BRANCH_RESUME_ACTION,
-            child: ptr::addr_of!((*state).task),
-        })
+        complete_or_yield(
+            output_step,
+            &BRANCH_RESUME_ACTION,
+            ptr::addr_of!((*state).task),
+        )
     }
 }
-unsafe extern "C" fn branch_resume(buffer: *mut c_void, cancel: bool, output_step: *mut DtorStep) {
+unsafe extern "C" fn branch_resume(
+    buffer: *mut c_void,
+    cancel: bool,
+    output_step: *mut *const DtorTask,
+) -> *const DtorResumeAction {
     assert!(!cancel);
     let state = unsafe { &mut *buffer.cast::<Branch>() };
     if !state.second {
         state.second = true;
-        unsafe {
-            output_step.write(DtorStep {
-                resume: &BRANCH_RESUME_ACTION,
-                child: &state.task,
-            })
-        }
+        unsafe { complete_or_yield(output_step, &BRANCH_RESUME_ACTION, &state.task) }
     } else {
         unsafe {
             (*state.args.1).push(state.args.0 + 1);
         }
-        unsafe {
-            output_step.write(DtorStep {
-                resume: ptr::null(),
-                child: ptr::null(),
-            })
-        }
+        unsafe { complete_or_yield(output_step, ptr::null(), ptr::null()) }
     }
 }
 #[test]
@@ -332,8 +318,8 @@ struct AllocatingParent {
 unsafe extern "C" fn allocating_start(
     buffer: *mut c_void,
     object: *mut c_void,
-    output: *mut DtorStep,
-) {
+    output: *mut *const DtorTask,
+) -> *const DtorResumeAction {
     let (context, values) = unsafe { *object.cast::<(*mut DtorExecutor, *mut Vec<usize>)>() };
     let frame = buffer.cast::<AllocatingParent>();
     unsafe {
@@ -349,14 +335,19 @@ unsafe extern "C" fn allocating_start(
                 object: ptr::addr_of_mut!((*frame).args).cast(),
             },
         });
-        output.write(DtorStep {
-            resume: &ALLOCATING_RESUME_ACTION,
-            child: ptr::addr_of!((*frame).task),
-        });
+        complete_or_yield(
+            output,
+            &ALLOCATING_RESUME_ACTION,
+            ptr::addr_of!((*frame).task),
+        )
     }
 }
 
-unsafe extern "C" fn allocating_resume(buffer: *mut c_void, cancel: bool, output: *mut DtorStep) {
+unsafe extern "C" fn allocating_resume(
+    buffer: *mut c_void,
+    cancel: bool,
+    output: *mut *const DtorTask,
+) -> *const DtorResumeAction {
     assert!(!cancel);
     unsafe {
         let frame = &*buffer.cast::<AllocatingParent>();
@@ -366,10 +357,7 @@ unsafe extern "C" fn allocating_resume(buffer: *mut c_void, cancel: bool, output
             &[0xa5; 513]
         );
         __reussir_dtor_conti_free(frame.context);
-        output.write(DtorStep {
-            resume: ptr::null(),
-            child: ptr::null(),
-        });
+        complete_or_yield(output, ptr::null(), ptr::null())
     }
 }
 
@@ -431,16 +419,16 @@ fn lazy_entry_finishes_deep_mixed_frames_without_restarting_root() {
             let mut args = (DEEP_DEPTH, ptr::addr_of_mut!(output));
             let mut root = MaybeUninit::<State>::uninit();
             let buffer = root.as_mut_ptr();
-            let mut step = MaybeUninit::<DtorStep>::uninit();
-            start(
+            let mut child = MaybeUninit::<*const DtorTask>::uninit();
+            let resume = start(
                 buffer.cast(),
                 ptr::addr_of_mut!(args).cast(),
-                step.as_mut_ptr(),
+                child.as_mut_ptr(),
             );
-            let step = step.assume_init();
+            let child = child.assume_init();
             // A restart would lose this already-established root state.
             (*buffer).value = DEEP_DEPTH + 1;
-            __reussir_finish_dtor(buffer.cast(), step.resume, step.child);
+            __reussir_finish_dtor(buffer.cast(), resume, child);
             assert_eq!(&output[..DEEP_DEPTH], &(0..DEEP_DEPTH).collect::<Vec<_>>());
             assert_eq!(output[DEEP_DEPTH], DEEP_DEPTH + 1);
         })
@@ -464,15 +452,15 @@ fn lazy_entry_preserves_repeated_suspensions_and_postorder() {
     args.1 = ptr::addr_of_mut!(output);
     let mut root = MaybeUninit::<Branch>::uninit();
     let buffer = root.as_mut_ptr();
-    let mut step = MaybeUninit::<DtorStep>::uninit();
+    let mut child = MaybeUninit::<*const DtorTask>::uninit();
     unsafe {
-        branch_start(
+        let resume = branch_start(
             buffer.cast(),
             ptr::addr_of_mut!(args).cast(),
-            step.as_mut_ptr(),
+            child.as_mut_ptr(),
         );
-        let step = step.assume_init();
-        __reussir_finish_dtor(buffer.cast(), step.resume, step.child);
+        let child = child.assume_init();
+        __reussir_finish_dtor(buffer.cast(), resume, child);
     }
     assert_eq!(output, expected);
     assert_eq!(output.len(), (1 << (LAZY_BRANCH_DEPTH + 1)) - 1);
@@ -501,16 +489,17 @@ const ALLOCATING_RESUME_ACTION: DtorResumeAction = DtorResumeAction {
 // The child can replace the pointer in a suspended parent's frame. Loading it
 // when the action is pushed would free the old allocation twice and leak the new
 // one. Miri checks both allocation lifetime and provenance here.
-unsafe extern "C" fn replace_free_payload(_: *mut c_void, object: *mut c_void, out: *mut DtorStep) {
+unsafe extern "C" fn replace_free_payload(
+    _: *mut c_void,
+    object: *mut c_void,
+    out: *mut *const DtorTask,
+) -> *const DtorResumeAction {
     unsafe {
         let old = object.cast::<*mut u8>().read_unaligned();
         let new = crate::alloc::__reussir_allocate_small(32);
         crate::alloc::__reussir_dealloc_unsized(old);
         object.cast::<*mut u8>().write_unaligned(new);
-        out.write(DtorStep {
-            resume: ptr::null(),
-            child: ptr::null(),
-        });
+        complete_or_yield(out, ptr::null(), ptr::null())
     }
 }
 #[test]
@@ -538,4 +527,34 @@ fn deferred_free_loads_payload_after_child_finishes() {
         };
         __reussir_finish_dtor(buffer, &action, &task);
     }
+}
+
+unsafe fn complete_or_yield(
+    out: *mut *const DtorTask,
+    resume: *const DtorResumeAction,
+    child: *const DtorTask,
+) -> *const DtorResumeAction {
+    if !resume.is_null() {
+        unsafe { out.write(child) };
+    }
+    resume
+}
+
+#[test]
+fn completion_does_not_require_a_child_output() {
+    unsafe extern "C" fn complete(
+        _: *mut c_void,
+        _: *mut c_void,
+        _: *mut *const DtorTask,
+    ) -> *const DtorResumeAction {
+        core::ptr::null()
+    }
+    // The callback deliberately leaves the output uninitialized. Miri catches
+    // an executor that reads it on the completion path.
+    let routine = DtorRoutine {
+        start: complete,
+        size: 0,
+        align: 1,
+    };
+    unsafe { __reussir_run_dtor(&mut DtorExecutor::new(), ptr::null_mut(), &routine) };
 }

@@ -2,8 +2,12 @@ use core::{alloc::Layout, ffi::c_void, mem::MaybeUninit};
 use smallvec::SmallVec;
 use stumpalo::Arena;
 
-pub type DtorStart = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut DtorStep);
-pub type DtorResume = unsafe extern "C" fn(*mut c_void, bool, *mut DtorStep);
+// A null return completes the destructor without initializing the child output.
+// A nonnull action yields a child, which must be copied before the parent resumes.
+pub type DtorStart =
+    unsafe extern "C" fn(*mut c_void, *mut c_void, *mut *const DtorTask) -> *const DtorResumeAction;
+pub type DtorResume =
+    unsafe extern "C" fn(*mut c_void, bool, *mut *const DtorTask) -> *const DtorResumeAction;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -18,13 +22,6 @@ pub struct DtorRoutine {
 pub struct DtorTask {
     pub routine: *const DtorRoutine,
     pub object: *mut c_void,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct DtorStep {
-    pub resume: *const DtorResumeAction,
-    pub child: *const DtorTask,
 }
 
 /// A continuation either invokes a callback or frees a pointer loaded from its
@@ -219,19 +216,15 @@ unsafe fn drain(context: *mut DtorExecutor, mut task: DtorTask, root: Option<Con
             routine.size,
             routine.align,
         );
-        let mut result = MaybeUninit::<DtorStep>::uninit();
-        unsafe { (routine.start)(buffer, task.object, result.as_mut_ptr()) };
-        let mut step = unsafe { result.assume_init() };
+        let mut child = MaybeUninit::<*const DtorTask>::uninit();
+        let mut resume = unsafe { (routine.start)(buffer, task.object, child.as_mut_ptr()) };
         let mut buffer = buffer;
         loop {
-            if !step.resume.is_null() {
-                let resume = step.resume;
-                assert!(
-                    !step.child.is_null(),
-                    "suspended destructor has no child task"
-                );
+            if !resume.is_null() {
+                let child = unsafe { child.assume_init() };
+                assert!(!child.is_null(), "suspended destructor has no child task");
                 unsafe {
-                    task = *step.child;
+                    task = *child;
                     continuations.push(Continuation { buffer, resume });
                 }
                 break;
@@ -247,9 +240,8 @@ unsafe fn drain(context: *mut DtorExecutor, mut task: DtorTask, root: Option<Con
             };
             buffer = continuation.buffer;
             let action = unsafe { &*continuation.resume };
-            if let Some(resume) = action.callback {
-                unsafe { resume(buffer, false, result.as_mut_ptr()) };
-                step = unsafe { result.assume_init() };
+            if let Some(callback) = action.callback {
+                resume = unsafe { callback(buffer, false, child.as_mut_ptr()) };
             } else {
                 // Read the payload only after the child completes, as the
                 // replaced callback would; do not move observable frees.
@@ -260,10 +252,7 @@ unsafe fn drain(context: *mut DtorExecutor, mut task: DtorTask, root: Option<Con
                         .read_unaligned()
                 };
                 unsafe { crate::alloc::__reussir_dealloc_unsized(object.cast()) };
-                step = DtorStep {
-                    resume: core::ptr::null(),
-                    child: core::ptr::null(),
-                };
+                resume = core::ptr::null();
             }
         }
     }
