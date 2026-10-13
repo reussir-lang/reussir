@@ -119,6 +119,9 @@ static RecordDropKind computeRecordDrop(RecordType record, bool &cacheable) {
         hasDrop |= owned || child->hasDrop;
         ownedCycle |= recursive && owned;
         if (!node->alternatives) {
+          // Source-order cleanup must finish the recursive child before any
+          // managed suffix. Unlike a deferred LIFO work stack, a tail release
+          // cannot postpone that child past a foreign or inline-record drop.
           if (afterRecursion && (recursive || owned || child->hasDrop))
             tail = false;
           afterRecursion |= recursive;

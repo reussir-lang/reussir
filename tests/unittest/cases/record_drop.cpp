@@ -206,6 +206,31 @@ TEST_F(RecordDropTest, ForeignCleanupAfterRecursionUsesWorklist) {
   EXPECT_EQ(owner.classifyRecordDrop(), RecordDropKind::Direct);
 }
 
+TEST_F(RecordDropTest, ForeignMemberPositionPreservesTailEligibility) {
+  auto foreign = FFIObjectType::get(
+      &context, mlir::StringAttr::get(&context, "OrderedForeign"),
+      mlir::FlatSymbolRefAttr::get(&context, "cleanup"));
+  auto handle = RcType::get(&context, foreign, Capability::shared);
+  auto nullable = NullableType::get(&context, handle);
+  auto boxed = declare("BoxedForeign");
+  complete(boxed, {handle});
+  auto inlined = declare("InlineForeign");
+  complete(inlined, {boxed}, Capability::value);
+  for (auto [idx, suffix] : llvm::enumerate(
+           llvm::ArrayRef<mlir::Type>{handle, nullable, inlined})) {
+    auto before = declare(("BeforeForeign" + llvm::Twine(idx)).str());
+    auto after = declare(("AfterForeign" + llvm::Twine(idx)).str());
+    auto beforeLink = NullableType::get(
+        &context, RcType::get(&context, before, Capability::shared));
+    auto afterLink = NullableType::get(
+        &context, RcType::get(&context, after, Capability::shared));
+    complete(before, {suffix, beforeLink});
+    complete(after, {afterLink, suffix});
+    EXPECT_EQ(before.classifyRecordDrop(), RecordDropKind::TailLoop);
+    EXPECT_EQ(after.classifyRecordDrop(), RecordDropKind::Worklist);
+  }
+}
+
 TEST_F(RecordDropTest, ScalarBoxesArraysAndCellsAreDirect) {
   auto record = declare("Containers");
   complete(record,
