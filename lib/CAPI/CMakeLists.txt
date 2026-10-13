@@ -26,7 +26,11 @@ endif()
 # factories plus the standalone helpers (compilePolymorphicFFI via the
 # CompilePolymorphicFFI pass + ReussirRustCompiler, gatherCompiledModules via
 # MLIRReussir). reussir-backend-sys links these into the final Rust binary; here
-# we only ensure they are built first.
+# we only ensure they are built first. Every archive in REUSSIR_ARCHIVES of
+# crates/reussir-backend-sys/build.rs must be listed here unless it is a link
+# dependency of ReussirCAPI (the LLVM passes above; the sync archives, through
+# MLIRReussir): otherwise building only a cargo target in a fresh build
+# directory (`--target rrc`) does not build it, and cargo cannot link.
 set(REUSSIR_BACKEND_ARCHIVES
   MLIRReussir
   MLIRReussirAnalysis
@@ -41,9 +45,12 @@ set(REUSSIR_BACKEND_ARCHIVES
   MLIRReussirTokenInstantiation
   MLIRReussirClosureOutlining
   MLIRReussirCompilePolymorphicFFI
+  MLIRReussirInstrumentNonlinearFFI
   MLIRReussirAttachNativeTarget
   MLIRReussirIFRTJustInTimeTransform
   # transformations
+  MLIRReussirClosureBetaReduction
+  MLIRReussirDefaultInliner
   MLIRReussirSCCP
   MLIRReussirRcCreateSink
   MLIRReussirRcCreateFusion
@@ -51,6 +58,7 @@ set(REUSSIR_BACKEND_ARCHIVES
   MLIRReussirInferVariantTag
   MLIRReussirIncDecCancellation
   MLIRReussirTokenReuse
+  MLIRReussirSpecialPointerTag
   MLIRReussirInvariantGroupAnalysis
   MLIRReussirUniqueCarryingRecursionAnalysis
   MLIRReussirTRMCRecursionAnalysis)
