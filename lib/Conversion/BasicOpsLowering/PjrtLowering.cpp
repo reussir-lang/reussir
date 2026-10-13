@@ -200,6 +200,9 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
         rewriter, loc, *execute,
         mlir::ValueRange{executable, inputs, length(op.getInputs().size()),
                          outputs, length(op.getOutputs().size())});
+    // Execution returns only after every device completes. The resulting
+    // control handle is therefore already ready; the side-effecting runtime
+    // calls preserve ordering even though no token reaches the runtime ABI.
     results.push_back(integer(rewriter, loc, rewriter.getI1Type(), 1));
     rewriter.replaceOp(op, results);
     return mlir::success();

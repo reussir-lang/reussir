@@ -196,6 +196,12 @@ pub unsafe extern "C" fn __reussir_pjrt_compile(
 /// Validate descriptor placement before execution; failure releases the executable reference.
 /// `executable` owns one compile reference, retained on success, and `devices`
 /// provides `count` readable nonnegative client device indices.
+///
+/// # Safety
+/// `executable` must carry one owned reference returned by
+/// `__reussir_pjrt_compile`. The caller retains that same reference on success
+/// and must pass it once to `__reussir_pjrt_executable_execute`. `devices` must
+/// be aligned and readable for `count` i32 entries; it may be null when zero.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __reussir_pjrt_executable_validate_devices(
     executable: *const Executable,
