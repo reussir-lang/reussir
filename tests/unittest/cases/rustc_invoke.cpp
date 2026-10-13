@@ -1,7 +1,11 @@
 #include "Reussir/RustCompiler.h"
 #include <cstdlib>
 #include <gtest/gtest.h>
+#include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/Support/FileSystem.h>
+#include <llvm/Support/Path.h>
+#include <optional>
 
 namespace reussir {
 namespace {
@@ -93,4 +97,63 @@ TEST(RustCompilerTest, BareCompilerNameResolvesThroughPath) {
   ASSERT_NE(m, nullptr);
   EXPECT_NE(m->getFunction("__reussir_extern_Vec_f64_new"), nullptr);
 }
+TEST(RustCompilerTest, LocalCacheReusesAndRepairsBitcode) {
+  primeRustDiscoveryEnv();
+  llvm::SmallString<128> directory;
+  ASSERT_FALSE(
+      llvm::sys::fs::createUniqueDirectory("reussir-polyffi", directory));
+  struct CacheEnvironment {
+    llvm::StringRef directory;
+    std::optional<std::string> previous;
+    static void set(const char *value) {
+#ifdef _WIN32
+      _putenv_s("REUSSIR_FFI_CACHE_DIR", value ? value : "");
+#else
+      if (value)
+        setenv("REUSSIR_FFI_CACHE_DIR", value, 1);
+      else
+        unsetenv("REUSSIR_FFI_CACHE_DIR");
+#endif
+    }
+    ~CacheEnvironment() {
+      set(previous ? previous->c_str() : nullptr);
+      (void)llvm::sys::fs::remove_directories(directory);
+    }
+  } environment{directory, std::nullopt};
+  if (const char *old = std::getenv("REUSSIR_FFI_CACHE_DIR"))
+    environment.previous = old;
+  CacheEnvironment::set(directory.c_str());
+  llvm::LLVMContext context;
+  auto cold = compileRustSourceToBitcode(context, EXAMPLE_SOURCE);
+  ASSERT_NE(cold, nullptr);
+  auto warm = compileRustSourceToBitcode(context, EXAMPLE_SOURCE);
+  ASSERT_NE(warm, nullptr);
+  EXPECT_EQ(cold->getBuffer(), warm->getBuffer());
+
+  // Damage the published entry. The next invocation must replace it with
+  // freshly compiled bitcode, including on Windows where mapped files cannot
+  // always be overwritten while readers retain their file handles.
+  std::error_code error;
+  unsigned entries = 0;
+  for (llvm::sys::fs::directory_iterator file(directory, error), end;
+       file != end && !error; file.increment(error)) {
+    if (!llvm::sys::path::filename(file->path()).starts_with("llvmcache-"))
+      continue;
+    ++entries;
+    llvm::raw_fd_ostream out(file->path(), error);
+    ASSERT_FALSE(error);
+    out << "damaged cache entry";
+  }
+  ASSERT_FALSE(error);
+  ASSERT_EQ(entries, 1u);
+  auto repaired = compileRustSourceToBitcode(context, EXAMPLE_SOURCE);
+  ASSERT_NE(repaired, nullptr);
+  auto module = llvm::parseBitcodeFile(repaired->getMemBufferRef(), context);
+  ASSERT_TRUE(bool(module)) << llvm::toString(module.takeError());
+  EXPECT_NE((*module)->getFunction("__reussir_extern_Vec_f64_new"), nullptr);
+  auto reused = compileRustSourceToBitcode(context, EXAMPLE_SOURCE);
+  ASSERT_NE(reused, nullptr);
+  EXPECT_EQ(repaired->getBuffer(), reused->getBuffer());
+}
+
 } // namespace reussir

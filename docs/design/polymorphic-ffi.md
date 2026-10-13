@@ -295,7 +295,37 @@ toolchain explicitly; they take precedence over the `REUSSIR_RUSTC` /
 by the platform's environment path separator), which in turn beat the
 built-in probe list. The flags are the first step toward
 building against a host `cargo`/`rustc` toolchain instead of shipping a
-full Rust sysroot alongside the compiler. `translateToModule` links the
+full Rust sysroot alongside the compiler. With the `REUSSIR_FFI_CACHE_DIR`
+environment variable set, each texture's bitcode is kept in that
+directory and reused instead of running `rustc` again; the key is a digest
+of the texture, the `rustc` options, the compiler (path, content and `-vV`
+report), the host CPU and the libraries in the package directories
+(`lib/RustCompiler/RustCompiler.cpp`). An unset or empty variable disables
+caching. `llvm::localCache` manages file lookup, access-time updates and atomic
+publication, so independent compiler processes can share the directory. Each
+entry carries a BLAKE3 checksum; damaged entries and cache I/O failures fall
+back to compilation. There is no retained memory cache, extra runtime, or
+background executor.
+
+`llvm::pruneCache` is checked once per directory per compiler process. LLVM's
+default policy expires entries unused for one week and scans at most every
+20 minutes; this cache additionally sets a 1 GiB size target. Size limits are
+applied during pruning, not on every write, so the directory can temporarily
+exceed the target. Pruning ignores unrelated filenames. Use a dedicated cache
+directory; LLVM names its entries `llvmcache-*` and maintains a timestamp file.
+
+This is an opt-in cache for textures with controlled compile-time inputs.
+It does not track files or environment variables read by `include!`, `env!`,
+`option_env!`, or procedural macros; files named by options (such as custom
+target JSON); or dependencies injected by a compiler wrapper outside the
+package directories. Keep those inputs fixed, invalidate the cache when they
+change, or leave caching disabled. The selected toolchain must stay fixed for
+the duration of a compiler process. Package libraries are checked for changes
+before lookup and after compilation. On Windows, an in-place replacement that
+preserves size and modification time cannot be detected within that process;
+on filesystems with coarse timestamps, same-tick replacements may also escape
+detection. Entries are checked for damage, not authenticated, so the directory
+must be trusted. `translateToModule` links the
 gathered bitcode into the final LLVM module. The JIT/REPL path does not
 gather polyffi modules yet and rejects programs containing them.
 

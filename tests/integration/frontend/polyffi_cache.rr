@@ -1,0 +1,66 @@
+// UNSUPPORTED: windows
+// The texture bitcode cache (REUSSIR_FFI_CACHE_DIR; lib/RustCompiler): a
+// build stores the bitcode of each texture there, a second build takes every
+// texture from the cache, and different rustc options cause a miss.
+// %t/rustc runs the real rustc,
+// but fails every compilation while NO_COMPILE is set; it still answers
+// `-vV`, and the environment is not part of the key.
+
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf '#!/bin/sh\n' > %t/rustc
+// RUN: printf 'if [ -n "$NO_COMPILE" ] && [ "$1" != -vV ]; then exit 1; fi\n' \
+// RUN:   >> %t/rustc
+// RUN: printf 'exec "$REAL_RUSTC" "$@"\n' >> %t/rustc
+// RUN: chmod +x %t/rustc
+// RUN: env REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/cache %rrc %s \
+// RUN:   --polyffi-rust-path %t/rustc --emit llvm-ir -o %t/cold.ll
+// RUN: env REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/cache NO_COMPILE=1 \
+// RUN:   %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir -o %t/warm.ll
+// RUN: diff %t/cold.ll %t/warm.ll
+// RUN: %not env REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/cache \
+// RUN:   NO_COMPILE=1 %rrc %s -O none --polyffi-rust-path %t/rustc \
+// RUN:   --emit llvm-ir -o %t/none.ll 2>&1 | %FileCheck %s --check-prefix=MISS
+// Corruption is a miss and is replaced by a complete entry on recompilation.
+// RUN: for f in %t/cache/llvmcache-*; do \
+// RUN:   head -c 100 "$f" > "$f.cut" && mv "$f.cut" "$f"; done
+// RUN: %not env REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/cache \
+// RUN:   NO_COMPILE=1 %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir \
+// RUN:   -o %t/cut.ll 2>&1 | %FileCheck %s --check-prefix=MISS
+// RUN: env REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/cache %rrc %s \
+// RUN:   --polyffi-rust-path %t/rustc --emit llvm-ir -o %t/rebuilt.ll
+// RUN: env REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/cache NO_COMPILE=1 \
+// RUN:   %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir -o %t/warm2.ll
+// RUN: diff %t/rebuilt.ll %t/warm2.ll
+// Expired LLVM cache entries are pruned; unrelated files are left alone.
+// RUN: %python -c "import pathlib,os,sys; d=pathlib.Path(sys.argv[1]); old=d/'llvmcache-expired'; old.write_bytes(b'old'); os.utime(old,(0,0)); (d/'keep-me').write_bytes(b'unrelated'); (d/'llvmcache.timestamp').unlink(missing_ok=True)" %t/cache
+// RUN: env REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/cache NO_COMPILE=1 \
+// RUN:   %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir -o %t/pruned.ll
+// RUN: test ! -e %t/cache/llvmcache-expired && test -f %t/cache/keep-me
+// An empty cache variable disables lookups even with a warm cache elsewhere.
+// RUN: %not env REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR= NO_COMPILE=1 \
+// RUN:   %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir -o %t/off.ll \
+// RUN:   2>&1 | %FileCheck %s --check-prefix=MISS
+// A cache path that is a regular file cannot store entries; compilation works.
+// RUN: touch %t/not-a-directory
+// RUN: env REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/not-a-directory \
+// RUN:   %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir -o %t/no-store.ll
+// Changing the wrapper content invalidates a warm entry.
+// RUN: printf '# changed wrapper\n' >> %t/rustc
+// RUN: %not env REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/cache \
+// RUN:   NO_COMPILE=1 %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir \
+// RUN:   -o %t/changed.ll 2>&1 | %FileCheck %s --check-prefix=MISS
+// Independent cold writers atomically publish entries. A later reader hits.
+// RUN: env REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/concurrent \
+// RUN:   %python -c "import subprocess,sys; jobs=[subprocess.Popen(sys.argv[2:]+['-o',sys.argv[1]+str(i)+'.ll']) for i in range(4)]; codes=[p.wait() for p in jobs]; assert not any(codes),codes" \
+// RUN:   %t/parallel %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir
+// RUN: env REAL_RUSTC=%rustc_path REUSSIR_FFI_CACHE_DIR=%t/concurrent \
+// RUN:   NO_COMPILE=1 %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir \
+// RUN:   -o %t/parallel-warm.ll
+// MISS: Rust compilation failed
+
+#[ffi(import)]
+pub fn add_one(x: u64) -> u64 [{ x + 1 }];
+
+pub fn main() -> u64 {
+    add_one(41)
+}
