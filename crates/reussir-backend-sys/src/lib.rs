@@ -9,6 +9,10 @@
 
 pub use mlir_sys;
 
+// Native ReussirRustCompiler calls this crate's C ABI. Link it through Cargo
+// so Rust executables share one Rust standard library with the cache.
+extern crate reussir_ffi_cache as _;
+
 use core::ffi::{c_char, c_int};
 
 use mlir_sys::{
