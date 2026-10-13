@@ -1,5 +1,4 @@
 use core::{alloc::Layout, ffi::c_void, mem::MaybeUninit};
-use smallvec::SmallVec;
 use stumpalo::Arena;
 
 // A null return completes the destructor without initializing the child output.
@@ -38,14 +37,19 @@ struct Continuation {
     resume: *const DtorResumeAction,
 }
 
+// A depth slot owns both reusable frame storage and its pending continuation.
+// Completed siblings reuse the slot; only the active depth changes on push/pop.
 struct FrameBuffer {
     pointer: *mut c_void,
     size: usize,
     align: usize,
+    resume: *const DtorResumeAction,
 }
 
 #[derive(Default)]
-struct FrameBuffers(SmallVec<[FrameBuffer; 8]>);
+// Root drops that never suspend bypass this table. Once an executor is needed,
+// use one contiguous table without an inline/heap representation branch per step.
+struct FrameBuffers(Vec<FrameBuffer>);
 
 impl FrameBuffers {
     fn get(&mut self, arena: &Arena, depth: usize, size: usize, align: usize) -> *mut c_void {
@@ -56,6 +60,7 @@ impl FrameBuffers {
                 pointer: core::ptr::null_mut(),
                 size: 0,
                 align: 1,
+                resume: core::ptr::null(),
             });
         }
         let slot = &mut self.0[depth];
@@ -195,9 +200,8 @@ pub unsafe extern "C" fn __reussir_finish_dtor(
 }
 
 unsafe fn drain(context: *mut DtorExecutor, mut task: DtorTask, root: Option<Continuation>) {
-    // Keep inline storage in this drain; moving an empty SmallVec still copies it.
-    let mut continuations: SmallVec<[Continuation; 8]> = SmallVec::new();
     let mut buffers = FrameBuffers::default();
+    let mut depth = 0;
     if let Some(root) = root {
         // Slot zero belongs to the caller. It is only resumed, never allocated
         // or recycled; children start at depth one.
@@ -205,31 +209,32 @@ unsafe fn drain(context: *mut DtorExecutor, mut task: DtorTask, root: Option<Con
             pointer: root.buffer,
             size: 0,
             align: 1,
+            resume: root.resume,
         });
-        continuations.push(root);
+        depth = 1;
     }
     loop {
         let routine = unsafe { *task.routine };
         let buffer = buffers.get(
             unsafe { &(*context).arena },
-            continuations.len(),
+            depth,
             routine.size,
             routine.align,
         );
         let mut child = MaybeUninit::<*const DtorTask>::uninit();
         let mut resume = unsafe { (routine.start)(buffer, task.object, child.as_mut_ptr()) };
-        let mut buffer = buffer;
         loop {
             if !resume.is_null() {
                 let child = unsafe { child.assume_init() };
                 assert!(!child.is_null(), "suspended destructor has no child task");
                 unsafe {
                     task = *child;
-                    continuations.push(Continuation { buffer, resume });
+                    buffers.0[depth].resume = resume;
+                    depth += 1;
                 }
                 break;
             }
-            let Some(continuation) = continuations.pop() else {
+            if depth == 0 {
                 unsafe {
                     let executor = &mut *context;
                     assert_eq!(executor.allocations, 0, "destructor allocations are active");
@@ -237,9 +242,10 @@ unsafe fn drain(context: *mut DtorExecutor, mut task: DtorTask, root: Option<Con
                     executor.running = false;
                 }
                 return;
-            };
-            buffer = continuation.buffer;
-            let action = unsafe { &*continuation.resume };
+            }
+            depth -= 1;
+            let buffer = buffers.0[depth].pointer;
+            let action = unsafe { &*buffers.0[depth].resume };
             if let Some(callback) = action.callback {
                 resume = unsafe { callback(buffer, false, child.as_mut_ptr()) };
             } else {

@@ -2,7 +2,7 @@ use super::*;
 use core::ptr;
 
 // Keep native stack-stress coverage while making provenance checks practical
-// under interpretation. Miri still crosses the inline continuation capacity.
+// under interpretation. Miri still exercises continuation table growth.
 const DEEP_DEPTH: usize = if cfg!(miri) { 64 } else { 100_000 };
 const BRANCH_DEPTH: usize = if cfg!(miri) { 5 } else { 12 };
 const LAZY_BRANCH_DEPTH: usize = if cfg!(miri) { 5 } else { 16 };
@@ -399,7 +399,7 @@ fn completed_sibling_frames_reuse_storage_without_touching_ancestors() {
         assert_eq!(buffers.get(&arena, 1, 32, 256), sibling);
     }
     assert_eq!(arena.allocated_bytes(), allocated);
-    // Force the metadata vector out of its inline storage while the parent lives.
+    // Grow the metadata vector repeatedly while the parent frame stays live.
     for depth in 2..32 {
         buffers.get(&arena, depth, 64, 8);
     }
