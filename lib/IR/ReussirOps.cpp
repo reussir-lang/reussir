@@ -4395,8 +4395,14 @@ gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
       module->setTargetTriple(triple);
     return module;
   }
-  // Parse bitcode and link all modules together
+  // Parse bitcode and link all modules together, through one `llvm::Linker`
+  // for the whole gather, as `llvm-link` does. The static
+  // `Linker::linkModules` builds a new linker per call, and the linker's
+  // `IRMover` constructor walks every type and metadata node of the
+  // destination: one call per module made the gather quadratic in the number
+  // of instances (thousands of instances took more than half an hour).
   std::unique_ptr<llvm::Module> finalModule;
+  std::optional<llvm::Linker> linker;
   for (auto op : opsWithCompiledModule) {
     // Extract bitcode from DenseElementsAttr
     auto compiledModuleOpt = op.getCompiledModule();
@@ -4431,9 +4437,10 @@ gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
     if (!finalModule) {
       // First module becomes the base
       finalModule = std::move(parsedModule);
+      linker.emplace(*finalModule);
     } else {
       // Link subsequent modules into the final module
-      if (llvm::Linker::linkModules(*finalModule, std::move(parsedModule))) {
+      if (linker->linkInModule(std::move(parsedModule))) {
         llvm::errs() << "Failed to link LLVM modules\n";
         return nullptr;
       }
