@@ -13,7 +13,7 @@ extern void examples(void);
 int main(void) {
   examples();
   examples();
-  assert(checks == 32);
+  assert(checks == 40);
   puts("SAXPY, repeated inputs, multiple outputs, and empty calls passed");
   return 0;
 }
