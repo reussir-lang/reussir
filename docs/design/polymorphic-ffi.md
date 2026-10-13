@@ -301,9 +301,11 @@ directory and reused instead of running `rustc` again; the key is a digest
 of the texture, the `rustc` options, the compiler (path, content and `-vV`
 report), the host CPU and the libraries in the package directories
 (`lib/RustCompiler/RustCompiler.cpp`). An unset or empty variable disables
-caching. The `reussir-ffi-cache` Rust library owns a bounded Foyer hybrid
-cache behind its C API. One process holds the cache directory lock; competing
-processes and cache I/O failures fall back to compilation. Normal process
+caching. The `reussir-ffi-cache` Rust library owns a bounded Foyer
+disk cache behind its C API. Bitcode is not retained in a memory cache;
+Foyer uses its default storage eviction. The default disk capacity is 1 GiB,
+with 16 MiB blocks and 16 MiB transient I/O buffers. One process holds the cache
+directory lock; competing processes and cache I/O failures fall back to compilation. Normal process
 shutdown flushes pending writes before releasing the lock. Interrupted builds
 may lose recent entries without affecting compilation correctness.
 
