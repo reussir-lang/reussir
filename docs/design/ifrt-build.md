@@ -85,9 +85,27 @@ is preserved so prepared `reussir.pjrt.jit_call` operations can still reference
 the payload during partial lowering. Lowering an existing bytecode literal does
 not require an OpenXLA-enabled build; preparing IFRT kernels does.
 
-These lowerings cover the array bridges and embedded kernel data. Native
-lowering of IFRT/PJRT calls is not supported yet; programs containing those
-calls cannot yet complete translation to LLVM IR or execute device kernels.
+Prepared `reussir.pjrt.jit_call` operations lower to cached compilation,
+executable-device validation, and synchronous execution through the PJRT runtime.
+Execution borrows the input buffers without donation and waits for every device
+before returning owned output handles. Each output must be adopted exactly once
+with `reussir.array.from_ifrt`. Arrays must use all call devices in the same
+order; donation and input/output aliases are rejected. The runtime validates
+executable placement before accessing array descriptors.
+
+`ifrt.After` becomes `reussir.pjrt.after`, which waits for each input shard to
+materialize. Completion handles lower to already-ready values because the
+runtime calls finish synchronously; the side-effecting calls preserve execution
+order. This does not provide asynchronous IFRT execution or automatic donation.
+
+For this path, explicitly run `--reussir-ifrt-just-in-time-transform` before
+`--reussir-convert-to-llvm`, along with the host program's normal array, RC, and
+control-flow lowerings. The native compiler pipeline does not yet schedule IFRT
+preparation automatically. The `pjrt_call_e2e.mlir` and
+`pjrt_sharded_e2e.mlir` integration tests show complete lowering/linking commands.
+Execution requires a PJRT-enabled runtime and `REUSSIR_PJRT_PLUGIN` pointing to
+a compatible backend plugin; registering the compiler dialects alone does not
+provide a device backend.
 
 The individually registered passes cover donation/sharding verification,
 control dependencies, duplicate callees, copy/reshard preparation, outlining,
