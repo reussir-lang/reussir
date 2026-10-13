@@ -285,10 +285,55 @@ mod tests {
             values: &[3, 0, 7],
             null: false,
         };
-        let mut output = [-1; 3];
-        query_dimensions(&mut dimensions, &mut output).unwrap();
-        assert_eq!(output, [3, 0, 7]);
+        let mut output = [-1; 5];
+        query_dimensions(&mut dimensions, &mut output[1..4]).unwrap();
+        assert_eq!(output, [-1, 3, 0, 7, -1]);
         assert_eq!(dimensions.values, &[3, 0, 7]);
+    }
+
+    #[test]
+    fn backend_dimension_error_preserves_output_and_releases_error() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        unsafe extern "C" fn fail(
+            args: *mut PJRT_Buffer_UnpaddedDimensions_Args,
+        ) -> *mut PJRT_Error {
+            // Return the mock buffer itself as an error handle. The output
+            // fields remain null: they must not be inspected after failure.
+            unsafe { (*args).buffer.cast() }
+        }
+        unsafe extern "C" fn message(args: *mut PJRT_Error_Message_Args) {
+            unsafe {
+                (*args).message = c"shape unavailable".as_ptr();
+                (*args).message_size = c"shape unavailable".count_bytes();
+            }
+        }
+        unsafe extern "C" fn code(args: *mut PJRT_Error_GetCode_Args) -> *mut PJRT_Error {
+            unsafe { (*args).code = PJRT_Error_Code_PJRT_Error_Code_INTERNAL };
+            std::ptr::null_mut()
+        }
+        unsafe extern "C" fn destroy(args: *mut PJRT_Error_Destroy_Args) {
+            let destroyed = unsafe { &*(*args).error.cast::<AtomicBool>() };
+            assert!(!destroyed.swap(true, Ordering::Relaxed));
+        }
+
+        let mut destroyed = AtomicBool::new(false);
+        let mut table = PJRT_Api {
+            PJRT_Buffer_UnpaddedDimensions: Some(fail),
+            PJRT_Error_Message: Some(message),
+            PJRT_Error_GetCode: Some(code),
+            PJRT_Error_Destroy: Some(destroy),
+            ..Default::default()
+        };
+        let api = Api(NonNull::from(&mut table));
+        let buffer = Buffer(NonNull::from(&mut destroyed).cast());
+        let mut output = [99; 2];
+        let error =
+            unsafe { buffer.dimensions(api, output.as_mut_ptr(), output.len()) }.unwrap_err();
+        assert_eq!(error.message, "shape unavailable");
+        assert_eq!(error.code, Some(PJRT_Error_Code_PJRT_Error_Code_INTERNAL));
+        assert_eq!(output, [99; 2]);
+        assert!(destroyed.load(Ordering::Relaxed));
     }
 
     #[test]
