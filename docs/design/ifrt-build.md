@@ -58,7 +58,7 @@ registering the dialect does not create a runtime array, and program
 serialization does not execute kernels. No Linalg lowering is used in this
 artifact path.
 
-The RC/IFRT bridge operations have LLVM lowering for statically shaped arrays.
+The RC/IFRT bridge operations have LLVM lowering for static and dynamic shapes.
 `reussir.array.to_ifrt` borrows the device-handle descriptor from an RC array
 without changing its reference count, copying data, or waiting for the device.
 The array must describe a complete buffer: a nonzero offset fails at runtime.
@@ -68,9 +68,19 @@ It does not allocate device storage. The existing bridge verifiers enforce
 matching metadata, forbid donation of borrowed inputs, and require each adopted
 result to have exactly one use.
 
-This lowering covers the bridge operations themselves. Dynamic shapes and
-native lowering of IFRT/PJRT calls are not supported yet; programs containing
-those calls cannot yet complete the LLVM conversion.
+Borrowing preserves the descriptor's dynamic extents without querying the
+backend. Adopting a dynamically shaped result queries each device buffer's
+unpadded dimensions, checks equal local shard shapes, and reconstructs global
+extents using concrete, even sharding. Static dimensions must match the array
+type; checked multiplication and index-width conversion reject extent overflow.
+Only dynamic extents are stored in the RC descriptor. Dimension queries may
+wait for the backend to compute the shape, but do not copy data or allocate
+device storage. Multi-device results require concrete sharding, and uneven
+shards are not supported.
+
+This lowering covers the bridge operations themselves. Native lowering of
+IFRT/PJRT calls is not supported yet; programs containing those calls cannot
+yet complete the LLVM conversion.
 
 The individually registered passes cover donation/sharding verification,
 control dependencies, duplicate callees, copy/reshard preparation, outlining,
