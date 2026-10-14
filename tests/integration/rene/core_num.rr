@@ -11,7 +11,7 @@
 
 // RUN: %FileCheck %s --check-prefix=RRI < %t.bdir/dev/deps/core.rri
 
-// RRI: interface 1 package "core"
+// RRI: interface 2 package "core"
 // RRI-DAG: #[lang("num")] #[sealed] pub trait #core::num::Num<{{.*}}(Self)> : #core::cmp::PartialOrd::<{{.*}}> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {
 // RRI-DAG: #[lang("integral")] #[sealed] pub trait #core::num::Integral<{{.*}}(Self)> : #core::num::Num::<{{.*}}> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {
 // RRI-DAG: #[lang("floating_point")] #[sealed] pub trait #core::num::FloatingPoint<{{.*}}(Self)> : #core::num::Num::<{{.*}}> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {

@@ -871,7 +871,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 /// become tensor elements. `f8` has no specified encoding in the source language.
 pub fn tensor_element_rejection(elem: Ty<'_>) -> Option<&'static str> {
     match elem.kind() {
-        TyKind::Int(_)
+        TyKind::Int(IntTy::Signed(8 | 16 | 32 | 64) | IntTy::Unsigned(8 | 16 | 32 | 64))
         | TyKind::Bool
         | TyKind::Fp(FpTy::Ieee(16 | 32 | 64) | FpTy::BFloat16)
         | TyKind::Generic(_)

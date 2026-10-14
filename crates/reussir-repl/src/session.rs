@@ -664,11 +664,12 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
                 )
             }
             TyKind::Tensor { elem, dims } => {
-                format!(
-                    "Tensor<[{}; {}]>",
-                    Self::render_ty_with(elab, elem),
-                    Self::render_dims(dims)
-                )
+                let elem = Self::render_ty_with(elab, elem);
+                if dims.is_empty() {
+                    format!("Tensor<{elem}>")
+                } else {
+                    format!("Tensor<[{elem}; {}]>", Self::render_dims(dims))
+                }
             }
             TyKind::Record { def, args, .. } => {
                 let mut out = elab.defs.path(def).display(elab.resolver);
@@ -694,5 +695,30 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
             }
             TyKind::Generic(_) | TyKind::Hole(_) => "_".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reussir_core::semi::ty::{DYNAMIC_EXTENT, FpTy};
+
+    #[test]
+    fn tensor_type_display_uses_canonical_rank_zero_and_ranked_spellings() {
+        in_arena(|tcx| {
+            let interner = Arc::new(new_threaded_interner());
+            let parsed = reussir_syntax::parse_with_interner("", interner.clone());
+            let program = surface::program(&parsed.root);
+            let elab = reussir_core::semi::elaborate(tcx, &program, &interner);
+            let elem = tcx.mk_fp(FpTy::Ieee(32));
+            for (dims, expected) in [
+                (&[][..], "Tensor<f32>"),
+                (&[2, 3][..], "Tensor<[f32; 2, 3]>"),
+                (&[DYNAMIC_EXTENT, 0][..], "Tensor<[f32; ?, 0]>"),
+            ] {
+                let ty = tcx.mk_tensor(elem, dims);
+                assert_eq!(ReplSession::render_ty_with(&elab, ty), expected);
+            }
+        });
     }
 }

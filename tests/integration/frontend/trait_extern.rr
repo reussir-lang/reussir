@@ -10,7 +10,7 @@
 // RUN: %rrc --package-root %S/trait_extern_dep --package-name dep --emit rri -o %t.rri
 // RUN: %FileCheck %s --check-prefix=RRI < %t.rri
 
-// RRI: interface 1 package "dep"
+// RRI: interface 2 package "dep"
 // RRI-DAG: pub trait #dep::Show<$1 (Self)> in 0 {{\[[0-9.]+\]}} {
 // RRI-DAG: fn show ($1) -> i64
 // RRI-DAG: impl #dep::Show::<#dep::P> in 0 {{\[[0-9.]+\]}} { #dep::dep::Show::P::show }
