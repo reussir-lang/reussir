@@ -200,7 +200,8 @@ struct PjrtDonationAnalysis::Impl {
         for (Value operand : op->getOperands()) {
           Attribute constant;
           matchPattern(operand, m_Constant(&constant));
-          solver
+          // These are initial seeds; initializeAndRun will visit their users.
+          (void)solver
               ->getOrCreateState<dataflow::Lattice<dataflow::ConstantValue>>(
                   operand)
               ->join(dataflow::ConstantValue(constant, nullptr));
