@@ -305,21 +305,22 @@ struct CreateTargetArray : mlir::ConvertOpToLLVMPattern<ReussirArrayCreateOp> {
       }
       if (dimShards[i] != 1) {
         auto divisor = constant(rewriter, loc, i64Type, dimShards[i]);
-        if (mlir::ShapedType::isDynamic(extent)) {
-          auto zero = constant(rewriter, loc, i64Type, 0);
-          auto remainder =
-              mlir::LLVM::SRemOp::create(rewriter, loc, size, divisor);
-          auto divisible = mlir::LLVM::ICmpOp::create(
-              rewriter, loc, mlir::LLVM::ICmpPredicate::eq, remainder, zero);
-          auto nonnegative = mlir::LLVM::ICmpOp::create(
-              rewriter, loc, mlir::LLVM::ICmpPredicate::sge, size, zero);
-          auto valid =
-              mlir::LLVM::AndOp::create(rewriter, loc, divisible, nonnegative);
-          mlir::cf::AssertOp::create(rewriter, loc, valid,
-                                     "target array extent must be nonnegative "
-                                     "and divisible by its shard count");
-        }
-        size = mlir::LLVM::SDivOp::create(rewriter, loc, size, divisor);
+        auto zero = constant(rewriter, loc, i64Type, 0);
+        auto nonnegative = mlir::LLVM::ICmpOp::create(
+            rewriter, loc, mlir::LLVM::ICmpPredicate::sge, size, zero);
+        mlir::cf::AssertOp::create(rewriter, loc, nonnegative,
+                                   "target array extent must be nonnegative");
+        // XLA's physical tile shape is ceil(global / shards). Quotient plus
+        // a nonzero-remainder bit avoids overflowing global + shards - 1.
+        auto remainder =
+            mlir::LLVM::SRemOp::create(rewriter, loc, size, divisor);
+        auto partial = mlir::LLVM::ICmpOp::create(
+            rewriter, loc, mlir::LLVM::ICmpPredicate::ne, remainder, zero);
+        auto extra =
+            mlir::LLVM::ZExtOp::create(rewriter, loc, i64Type, partial);
+        size = mlir::LLVM::AddOp::create(
+            rewriter, loc,
+            mlir::LLVM::SDivOp::create(rewriter, loc, size, divisor), extra);
       }
       auto address = mlir::LLVM::GEPOp::create(
           rewriter, loc, ptrType, i64Type, dims,
@@ -411,7 +412,7 @@ struct ToIfrt : mlir::ConvertOpToLLVMPattern<ReussirArrayToIfrtOp> {
 
 mlir::FailureOr<llvm::SmallVector<mlir::Value>> readResultExtents(
     mlir::Operation *op, ArrayType array, llvm::ArrayRef<mlir::Value> handles,
-    const mlir::LLVMTypeConverter &converter,
+    mlir::ValueRange explicitExtents, const mlir::LLVMTypeConverter &converter,
     mlir::ConversionPatternRewriter &rewriter);
 
 struct FromIfrt : mlir::ConvertOpToLLVMPattern<ReussirArrayFromIfrtOp> {
@@ -436,8 +437,8 @@ struct FromIfrt : mlir::ConvertOpToLLVMPattern<ReussirArrayFromIfrtOp> {
     }
     llvm::SmallVector<mlir::Value> extents;
     if (array.hasDynamicShape()) {
-      auto sizes = readResultExtents(op, array, handles, *getTypeConverter(),
-                                    rewriter);
+      auto sizes = readResultExtents(op, array, handles, adaptor.getExtents(),
+                                     *getTypeConverter(), rewriter);
       if (mlir::failed(sizes))
         return mlir::failure();
       extents = std::move(*sizes);
@@ -469,7 +470,7 @@ mlir::Value checkedMultiply(mlir::OpBuilder &builder, mlir::Location loc,
 
 mlir::FailureOr<llvm::SmallVector<mlir::Value>> readResultExtents(
     mlir::Operation *op, ArrayType array, llvm::ArrayRef<mlir::Value> handles,
-    const mlir::LLVMTypeConverter &converter,
+    mlir::ValueRange explicitExtents, const mlir::LLVMTypeConverter &converter,
     mlir::ConversionPatternRewriter &rewriter) {
 #ifndef REUSSIR_ENABLE_OPENXLA
   return op->emitOpError("IFRT result shapes require REUSSIR_ENABLE_OPENXLA");
@@ -506,21 +507,56 @@ mlir::FailureOr<llvm::SmallVector<mlir::Value>> readResultExtents(
         localShape.push_back(size);
       else
         assertEqual(rewriter, loc, size, localShape[dim],
-                    "IFRT result requires equal unpadded shard shapes");
+                    "IFRT result requires equal physical shard shapes");
     }
   }
   llvm::SmallVector<mlir::Value> extents;
+  unsigned dynamicDim = 0;
   for (size_t dim = 0; dim < array.getRank(); ++dim) {
-    auto size = checkedMultiply<mlir::LLVM::SMulWithOverflowOp>(
-        rewriter, loc, localShape[dim],
-        constant(rewriter, loc, i64, (*shards)[dim]),
-        "IFRT result extent overflow");
-    if (!array.isDynamicDim(dim)) {
-      assertEqual(rewriter, loc, size,
-                  constant(rewriter, loc, i64, array.getDimSize(dim)),
-                  "IFRT result static extent mismatch");
-      continue;
+    mlir::Value logical;
+    if (!array.isDynamicDim(dim))
+      logical = constant(rewriter, loc, i64, array.getDimSize(dim));
+    else if (!explicitExtents.empty()) {
+      logical = explicitExtents[dynamicDim++];
+      if (indexType.getIntOrFloatBitWidth() < 64)
+        logical = mlir::LLVM::SExtOp::create(rewriter, loc, i64, logical);
+      else if (indexType.getIntOrFloatBitWidth() > 64) {
+        auto narrowed =
+            mlir::LLVM::TruncOp::create(rewriter, loc, i64, logical);
+        auto restored =
+            mlir::LLVM::SExtOp::create(rewriter, loc, indexType, narrowed);
+        assertEqual(rewriter, loc, restored, logical,
+                    "IFRT global extent does not fit i64");
+        logical = narrowed;
+      }
+    } else {
+      if ((*shards)[dim] != 1)
+        return op->emitOpError(
+            "partitioned dynamic results require explicit global extents");
+      logical = localShape[dim];
     }
+    auto zero = constant(rewriter, loc, i64, 0);
+    auto valid = mlir::LLVM::ICmpOp::create(
+        rewriter, loc, mlir::LLVM::ICmpPredicate::sge, logical, zero);
+    mlir::cf::AssertOp::create(rewriter, loc, valid,
+                               "IFRT result extent must be nonnegative");
+    mlir::Value physical = logical;
+    if ((*shards)[dim] != 1) {
+      auto divisor = constant(rewriter, loc, i64, (*shards)[dim]);
+      auto remainder =
+          mlir::LLVM::SRemOp::create(rewriter, loc, logical, divisor);
+      auto partial = mlir::LLVM::ICmpOp::create(
+          rewriter, loc, mlir::LLVM::ICmpPredicate::ne, remainder, zero);
+      auto extra = mlir::LLVM::ZExtOp::create(rewriter, loc, i64, partial);
+      physical = mlir::LLVM::AddOp::create(
+          rewriter, loc,
+          mlir::LLVM::SDivOp::create(rewriter, loc, logical, divisor), extra);
+    }
+    assertEqual(rewriter, loc, localShape[dim], physical,
+                "IFRT result physical shard shape mismatch");
+    if (!array.isDynamicDim(dim))
+      continue;
+    mlir::Value size = logical;
     if (indexType.getIntOrFloatBitWidth() < 64) {
       auto narrowed = mlir::LLVM::TruncOp::create(rewriter, loc, indexType, size);
       auto restored = mlir::LLVM::SExtOp::create(rewriter, loc, i64, narrowed);
@@ -576,6 +612,7 @@ struct ToDevice : mlir::ConvertOpToLLVMPattern<ReussirArrayToDeviceOp> {
         indexType, rewriter.getI32Type(), ptrType, indexType, ptrType, ptrType,
         ptrType};
     if (sharded) {
+      uploadArgs.push_back(indexType);
       uploadArgs.push_back(ptrType);
       uploadArgs.push_back(ptrType);
     }
@@ -637,6 +674,7 @@ struct ToDevice : mlir::ConvertOpToLLVMPattern<ReussirArrayToDeviceOp> {
           strides,
           options};
       if (sharded) {
+        args.push_back(constant(rewriter, loc, indexType, elementBytes));
         args.push_back(transferConstants(op, sharding->dimShards, rewriter));
         args.push_back(
             transferConstants(op, sharding->coordinates[i], rewriter));

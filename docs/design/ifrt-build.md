@@ -68,15 +68,18 @@ It does not allocate device storage. The existing bridge verifiers enforce
 matching metadata, forbid donation of borrowed inputs, and require each adopted
 result to have exactly one use.
 
-Borrowing preserves the descriptor's dynamic extents without querying the
-backend. Adopting a dynamically shaped result queries each device buffer's
-unpadded dimensions, checks equal local shard shapes, and reconstructs global
-extents using concrete, even sharding. Static dimensions must match the array
-type; checked multiplication and index-width conversion reject extent overflow.
-Only dynamic extents are stored in the RC descriptor. Dimension queries may
-wait for the backend to compute the shape, but do not copy data or allocate
-device storage. Multi-device results require concrete sharding, and uneven
-shards are not supported.
+Borrowing preserves the descriptor's dynamic global extents without querying the
+backend. When adopting a dynamically shaped result, `array.from_ifrt` accepts
+`extents(%d0, %d1, ...)` for all dynamic global dimensions, in dimension order.
+Explicit extents are required when a dynamic dimension is partitioned: physical
+buffers of extent three on two devices cannot distinguish global extent five
+from six. The caller supplies that logical shape; the compiler checks that all
+buffer shapes are compatible with it and with the static dimensions, using
+ceiling division by the shard counts. Unpartitioned dynamic dimensions can
+still be inferred from buffer queries when explicit extents are omitted.
+Negative extents, incompatible physical shapes, and index-width overflow fail
+at runtime. Dimension queries may wait for the backend, but do not copy data or
+allocate device storage. Only dynamic global extents are stored in the RC box.
 
 `reussir.ifrt.bytecode` lowers to an internal, immutable LLVM global containing
 `{[64 x i8], [N x i8]}`: the hexadecimal BLAKE3 checksum followed by the exact
@@ -154,22 +157,36 @@ Reussir continues to use C++23. Keep pins and overlays together when updating.
 
 `reussir.array.to_device` distributes a global strided host memref across the
 array's ordered devices. `reussir.array.to_host` gathers shards into a dense
-row-major host memref. Both operations support concrete, even IFRT
-`sharding_param` metadata, including multidimensional tiles, mesh permutations,
-replication, dynamic extents, and empty arrays. Uploads preserve signed host
-strides and view offsets; downloads preserve the destination view offset.
+row-major host memref. Both operations support concrete IFRT `sharding_param`
+metadata, including uneven multidimensional tiles, mesh/device permutations,
+replication, dynamic extents, empty arrays, and dimensions smaller than their
+shard count. Uploads preserve signed host strides and view offsets; downloads
+preserve the destination view offset.
 
-Shard coordinates follow upstream IFRT's
+Shard placement follows upstream IFRT's
 [`ShardingParam`](https://github.com/openxla/xla/blob/fc840b37e26bd36c99f32e295324a1700dc12ecd/xla/python/ifrt/ir/sharding_param.h)
-device permutation. Every replica receives uploaded data; downloads select one
-representative for each tile, assuming replicas hold identical values. The
-runtime downloads each selected shard into temporary row-major storage before
-copying its rows into the global destination, so plugins need not implement
-strided host downloads. Transfers finish borrowing host storage before returning.
+device permutation. Physical shapes and edge domains follow XLA's
+[`HloSharding::TileShape`, `TileOffsetForDevice`, and `TileLimitForDevice`](https://github.com/openxla/xla/blob/fc840b37e26bd36c99f32e295324a1700dc12ecd/xla/hlo/ir/hlo_sharding.cc):
+each physical dimension is `ceil(global_extent / shard_count)`, while the valid
+logical domain is clipped to the global array. This matches SPMD execution;
+IFRT's higher-level `ShardingParamShardingSpec::GetShardShape` still rejects
+uneven shapes at this upstream revision and is not used for physical sizing.
+Device allocation and transfers use the same ceiling-sized physical tiles.
 
-Global extents must divide evenly by their shard counts. Unspecified
-multi-device sharding, uneven shards, and unreduced mesh axes are rejected.
-Downloads require complete device buffers whose local shapes match the global
-shape and sharding; they do not perform a reduction across replicas. Sharding
-metadata requires an OpenXLA-enabled compiler; single-device transfers without
-sharding metadata remain available without OpenXLA.
+Uploads zero-fill edge padding and initialize every replica. Downloads select
+one representative per tile, assuming replicas contain identical values, and
+copy only valid logical rows from temporary row-major shard storage. Entirely
+padded devices never access or advance pointers into host storage. Plugins need
+not implement strided host downloads. Transfers finish borrowing host storage
+before returning, and downloads can initialize newly allocated host arrays.
+
+Unspecified multi-device sharding does not identify which host values belong to
+which devices, so transfers require concrete topology. Unreduced axes describe
+partial values rather than replicas; `sharding_param` records the axes but not
+the reduction operator. Upstream Shardy supports distinct
+[SUM, MAX, and MIN unreduced semantics](https://github.com/openxla/xla/blob/fc840b37e26bd36c99f32e295324a1700dc12ecd/xla/service/spmd/shardy/test/sdy_round_trip_export_pipeline.mlir).
+Materialize those reductions explicitly before downloading, or upload into a
+reduced array before converting to a partial representation. Transfers diagnose
+missing reduction semantics rather than discard partial values or assume SUM.
+Sharding metadata requires an OpenXLA-enabled compiler; single-device transfers
+without sharding metadata remain available without OpenXLA.

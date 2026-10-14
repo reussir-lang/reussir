@@ -394,10 +394,11 @@ pub unsafe extern "C" fn __reussir_pjrt_array_to_host(
     checked(unsafe { buffer.to_host(data, bytes, layout.as_ref()) });
 }
 
-/// Upload one even rectangular shard of a global host array. The three dimension
+/// Upload one padded rectangular shard of a global host array. The three dimension
 /// arrays and `byte_strides` each contain `rank` i64 values (null for rank zero).
 /// Coordinates index tiles, not physical devices; replicas use equal coordinates.
-/// `data` and `options` have the same contract as `array_from_host`.
+/// `element_bytes` must equal the byte width of `element_type`; `data` and
+/// `options` have the same contract as `array_from_host`. Edge padding is zero-filled.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __reussir_pjrt_array_from_host_shard(
     device: usize,
@@ -407,6 +408,7 @@ pub unsafe extern "C" fn __reussir_pjrt_array_from_host_shard(
     data: *const c_void,
     byte_strides: *const i64,
     options: *const AllocationOptions,
+    element_bytes: usize,
     dim_shards: *const i64,
     coordinates: *const i64,
 ) -> Buffer {
@@ -415,6 +417,21 @@ pub unsafe extern "C" fn __reussir_pjrt_array_from_host_shard(
         unsafe { dimensions(dim_shards, rank) },
         unsafe { dimensions(coordinates, rank) },
     ));
+    if shard.needs_padding() {
+        let packed =
+            checked(unsafe { shard.pack(data, dimensions(byte_strides, rank), element_bytes) });
+        return unsafe {
+            __reussir_pjrt_array_from_host(
+                device,
+                element_type,
+                shard.dims.as_ptr(),
+                rank,
+                packed.as_ptr().cast(),
+                std::ptr::null(),
+                options,
+            )
+        };
+    }
     let offset = checked(shard.byte_offset(unsafe { dimensions(byte_strides, rank) }));
     unsafe {
         __reussir_pjrt_array_from_host(

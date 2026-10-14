@@ -57,7 +57,7 @@ extern void retain(struct Array *), release(struct Array *);
 int main(int argc, char **argv) {
   if (argc > 1) {
     bad_input = 1;
-    create(3);
+    create((size_t)-1);
     return 0;
   }
   struct Array *array = create(12);
@@ -75,5 +75,15 @@ int main(int argc, char **argv) {
     assert(array->buffers[i]->rows == 0);
   release(array);
   assert(allocations == 8 && releases == 8);
+  array = create(3);
+  assert(array->rows == 3);
+  for (size_t i = 0; i < 4; ++i)
+    assert(array->buffers[i]->rows == 2);
+  release(array);
+  array = create(1);
+  for (size_t i = 0; i < 4; ++i)
+    assert(array->buffers[i]->rows == 1);
+  release(array);
+  assert(allocations == 16 && releases == 16);
   return 0;
 }

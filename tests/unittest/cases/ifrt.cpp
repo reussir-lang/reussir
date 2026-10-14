@@ -41,7 +41,7 @@ TEST_F(ReussirTest, HostTransferShardingUsesMeshPermutationAndReplicas) {
   context->appendDialectRegistry(registry);
   context->loadAllAvailableDialects();
   auto shape = mlir::RankedTensorType::get(
-      {4, 6}, mlir::Float32Type::get(context.get()));
+      {3, 5}, mlir::Float32Type::get(context.get()));
   auto loc = mlir::UnknownLoc::get(context.get());
   auto tiled = mlir::parseAttribute("#ifrt.sharding_param<2x2 to [1,0] on 2x2>",
                                     context.get());

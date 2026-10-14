@@ -7,12 +7,6 @@ func.func @unspecified() {
   return
 }
 // -----
-// CHECK: array extent 3 is not divisible by 2 shards
-func.func @uneven() {
-  %a = reussir.array.create extents() : !reussir.rc<!reussir.array<3 x 4 x f32, #reussir.target<devices = [0, 1], sharding = #ifrt.sharding_param<2x1 to [0] on 2>>>>
-  return
-}
-// -----
 // CHECK: Requires the same amount of `devices` and from `sharding`
 func.func @wrong_device_count() {
   %a = reussir.array.create extents() : !reussir.rc<!reussir.array<4 x f32, #reussir.target<devices = [0], sharding = #ifrt.sharding_param<2 to [0] on 2>>>>

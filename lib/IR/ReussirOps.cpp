@@ -1512,6 +1512,13 @@ mlir::LogicalResult ReussirArrayFromIfrtOp::verify() {
     return mlir::failure();
   if (getToken() && getToken().getType() != getTokenType())
     return emitOpError("expected descriptor token type ") << getTokenType();
+  auto array = llvm::cast<ArrayType>(getArray().getType().getElementType());
+  if (!getExtents().empty() &&
+      getExtents().size() !=
+          static_cast<size_t>(llvm::count_if(array.getShape(), [](int64_t dim) {
+            return mlir::ShapedType::isDynamic(dim);
+          })))
+    return emitOpError("extents must supply every dynamic global dimension");
 #ifdef REUSSIR_ENABLE_OPENXLA
   auto *producer = getSource().getDefiningOp();
   if (!isIfrtCall(producer) &&
@@ -1521,6 +1528,19 @@ mlir::LogicalResult ReussirArrayFromIfrtOp::verify() {
     return emitOpError("IFRT result must be adopted in its defining region");
   if (!getSource().hasOneUse())
     return emitOpError("adopted IFRT result must have exactly one use");
+  if (array.hasDynamicShape() && getExtents().empty() &&
+      array.getTarget().getSharding()) {
+    auto shards = getPjrtDimShards(
+        array.getTarget().getSharding(),
+        mlir::RankedTensorType::get(array.getShape(), array.getElementType()),
+        array.getTarget().getDevices().asArrayRef(), getLoc());
+    if (mlir::failed(shards))
+      return mlir::failure();
+    for (size_t dim = 0; dim < array.getRank(); ++dim)
+      if (array.isDynamicDim(dim) && (*shards)[dim] > 1)
+        return emitOpError(
+            "partitioned dynamic results require explicit global extents");
+  }
   return mlir::success();
 #else
   return mlir::failure();

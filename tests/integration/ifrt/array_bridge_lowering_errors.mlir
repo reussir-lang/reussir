@@ -31,19 +31,3 @@ func.func @unresolved_sharding(%token: !reussir.token<align : 8, size : 40>) -> 
   %result = reussir.array.from_ifrt %out token(%token : !reussir.token<align : 8, size : 40>) : !I -> !R
   return %result : !R
 }
-// -----
-#s = #ifrt.sharding_param<1x2 to [0] on 2>
-!I = !ifrt.array<tensor<?x3xf32>, #s, [0, 1]>
-!R = !reussir.rc<!reussir.array<? x 3 x f32, #reussir.target<devices = [0, 1], sharding = #s>>>
-module @kernel attributes {sym_visibility = "private"} {
-  func.func @main() -> tensor<?x3xf32> {
-    %out = stablehlo.custom_call @test() : () -> tensor<?x3xf32>
-    return %out : tensor<?x3xf32>
-  }
-}
-func.func @uneven_static_axis(%token: !reussir.token<align : 8, size : 40>) -> !R attributes {ifrt.function} {
-  %out, %done = ifrt.Call @kernel::@main() on devices [0, 1] : () -> !I
-  // CHECK: array extent 3 is not divisible by 2 shards
-  %result = reussir.array.from_ifrt %out token(%token : !reussir.token<align : 8, size : 40>) : !I -> !R
-  return %result : !R
-}

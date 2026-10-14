@@ -227,3 +227,25 @@ func.func @result_metadata() attributes {ifrt.function} {
   %result = reussir.array.from_ifrt %out : !I -> !R
   return
 }
+// -----
+#s = #ifrt.sharding_param<2x1 to [0] on 2>
+!I = !ifrt.array<tensor<?x?xf32>, #s, [0, 1]>
+!R = !reussir.rc<!reussir.array<? x ? x f32, #reussir.target<devices = [0, 1], sharding = #s>>>
+ifrt.LoadedExecutable @loaded on devices [0, 1] : () -> !I
+func.func @missing_logical_extents() -> !R attributes {ifrt.function} {
+  %out, %done = ifrt.CallLoadedExecutable @loaded() : () -> !I
+  // expected-error @+1 {{partitioned dynamic results require explicit global extents}}
+  %result = reussir.array.from_ifrt %out : !I -> !R
+  return %result : !R
+}
+// -----
+#s = #ifrt.sharding_param<2x1 to [0] on 2>
+!I = !ifrt.array<tensor<?x?xf32>, #s, [0, 1]>
+!R = !reussir.rc<!reussir.array<? x ? x f32, #reussir.target<devices = [0, 1], sharding = #s>>>
+ifrt.LoadedExecutable @loaded on devices [0, 1] : () -> !I
+func.func @incomplete_logical_extents(%rows: index) -> !R attributes {ifrt.function} {
+  %out, %done = ifrt.CallLoadedExecutable @loaded() : () -> !I
+  // expected-error @+1 {{extents must supply every dynamic global dimension}}
+  %result = reussir.array.from_ifrt %out extents(%rows) : !I -> !R
+  return %result : !R
+}

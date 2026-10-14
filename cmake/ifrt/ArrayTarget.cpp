@@ -285,14 +285,6 @@ getPjrtDimShards(mlir::Attribute attr, mlir::RankedTensorType shape,
   if (mlir::failed(param.CanApplyTo([&] { return mlir::emitError(loc); }, shape,
                                     devices)))
     return mlir::failure();
-  for (auto [size, shards] :
-       llvm::zip_equal(shape.getShape(), param.dim_shards())) {
-    if (!mlir::ShapedType::isDynamic(size) && size % shards != 0) {
-      mlir::emitError(loc) << "array extent " << size << " is not divisible by "
-                           << shards << " shards";
-      return mlir::failure();
-    }
-  }
   return llvm::to_vector(param.dim_shards());
 }
 mlir::FailureOr<PjrtTransferSharding>
@@ -312,7 +304,8 @@ getPjrtTransferSharding(mlir::Attribute attr, mlir::RankedTensorType shape,
   const auto &param = sharding.getSharding();
   if (!param.unreduced_axes().empty()) {
     mlir::emitError(loc)
-        << "host transfers do not support unreduced sharding axes";
+        << "host transfers require reduced values; sharding_param does not "
+           "specify the reduction operator for unreduced axes";
     return mlir::failure();
   }
   // IFRT's device permutation lists tiles in row-major order, with replicas
