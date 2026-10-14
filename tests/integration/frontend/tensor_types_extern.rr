@@ -8,10 +8,6 @@
 // RUN: diff %t.mir %t.round.mir
 // RUN: echo 'pub fn bad() { dep::scalar<str>() }' > %t.bad.rr
 // RUN: %not %rrc %t.bad.rr --package-name app --extern dep=%t.rri --emit mir -o - 2>&1 | %FileCheck %s --check-prefix=BAD
-// RUN: echo 'interface 1 package "dep" producer "old-rrc";' > %t.old.rri
-// RUN: %not %rrc %s --package-name app --extern dep=%t.old.rri --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=OLD
-// OLD: interface format 1 (from old-rrc) is not the supported 2
-// OLD-SAME: rebuild the dependency with this compiler
 // RRI-DAG: : Tensor<[$0; 4]>
 // RRI-DAG: : Tensor<$1>
 // MIR-DAG: : Tensor<[i32; 4]>

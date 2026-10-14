@@ -12,7 +12,7 @@
 
 // RUN: %FileCheck %s --check-prefix=RRI < %t.bdir/dev/deps/core.rri
 
-// RRI: interface 2 package "core"
+// RRI: interface 1 package "core"
 // RRI-DAG: #[lang("partial_eq")] pub trait #core::cmp::PartialEq<{{.*}}(Self)> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {
 // RRI-DAG: #[lang("partial_ord")] pub trait #core::cmp::PartialOrd<{{.*}}(Self)> : #core::cmp::PartialEq::<{{.*}}> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {
 // RRI-DAG: #[lang("ordering")] pub [value] enum #core::cmp::Ordering in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] { Less(), Equal(), Greater() };

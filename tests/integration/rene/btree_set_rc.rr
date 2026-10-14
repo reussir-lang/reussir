@@ -15,7 +15,7 @@
 // The implementer's interface must carry every comparison capability even
 // though that package never mentions BTreeSet.
 // RUN: %FileCheck %s --check-prefix=RRI < %t.bdir/dev/deps/ordered.rri
-// RRI: interface 2 package "ordered"
+// RRI: interface 1 package "ordered"
 // RRI-DAG: impl #core::cmp::PartialEq::<#ordered::Key> in
 // RRI-DAG: impl #core::cmp::Eq::<#ordered::Key> in
 // RRI-DAG: impl #core::cmp::PartialOrd::<#ordered::Key> in

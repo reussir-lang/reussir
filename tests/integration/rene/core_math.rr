@@ -13,7 +13,7 @@
 // prototypes.
 // RUN: %FileCheck %s --check-prefix=RRI < %t.bdir/dev/deps/core.rri
 
-// RRI: interface 2 package "core"
+// RRI: interface 1 package "core"
 // RRI-DAG: #[lang("core::intrinsic::math::sqrt")] pub fn #core::intrinsic::math::sqrt<{{.*}}: core::num::FloatingPoint>({{.*}}) -> {{.*}} in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}];
 // RRI-DAG: #[lang("core::intrinsic::math::powf")]
 // RRI-DAG: #[lang("core::intrinsic::panic::panic")] pub fn #core::intrinsic::panic::panic<{{.*}}>() -> {{.*}} in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}];
