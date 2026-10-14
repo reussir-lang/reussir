@@ -39,6 +39,7 @@ impl Executable {
         self: Arc<Self>,
         inputs: &[*const *mut PJRT_Buffer],
         num_outputs: usize,
+        non_donatable: &[i64],
     ) -> Result<Vec<Vec<*mut PJRT_Buffer>>> {
         let api = self.owner.api;
         let devices = call!(
@@ -79,11 +80,15 @@ impl Executable {
                 row.push(buffer);
             }
         }
-        let non_donatable_count =
-            i64::try_from(num_inputs).map_err(|_| Error::local("too many execution inputs"))?;
-        // Borrowed inputs may be reused or appear more than once. Never allow
-        // the backend to donate their storage to this invocation's results.
-        let non_donatable: Vec<i64> = (0..non_donatable_count).collect();
+        if non_donatable
+            .iter()
+            .any(|&i| i < 0 || i as usize >= num_inputs)
+            || non_donatable.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(Error::local(
+                "non-donatable indices must be sorted, unique, and in range",
+            ));
+        }
         let mut options = PJRT_ExecuteOptions {
             struct_size: PJRT_ExecuteOptions_STRUCT_SIZE as usize,
             non_donatable_input_indices: non_donatable.as_ptr(),

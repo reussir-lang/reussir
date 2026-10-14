@@ -18,6 +18,7 @@ struct State {
     failure: Failure,
     log: RefCell<Vec<&'static str>>,
     inputs: RefCell<Vec<Vec<*mut PJRT_Buffer>>>,
+    non_donatable: RefCell<Vec<i64>>,
 }
 
 unsafe fn state<T>(pointer: *mut T) -> &'static State {
@@ -82,7 +83,7 @@ unsafe extern "C" fn execute(args: *mut PJRT_LoadedExecutable_Execute_Args) -> *
             options.num_non_donatable_input_indices,
         )
     };
-    assert_eq!(indices, (0..args.num_args as i64).collect::<Vec<_>>());
+    *state.non_donatable.borrow_mut() = indices.to_vec();
     *state.inputs.borrow_mut() = (0..args.num_devices)
         .map(|device| unsafe {
             std::slice::from_raw_parts(*args.argument_lists.add(device), args.num_args).to_vec()
@@ -181,6 +182,7 @@ impl Fixture {
             failure,
             log: RefCell::default(),
             inputs: RefCell::default(),
+            non_donatable: RefCell::default(),
         });
         let api = Box::new(PJRT_Api {
             PJRT_LoadedExecutable_AddressableDevices: Some(self::devices),
@@ -254,6 +256,8 @@ fn abi_accepts_logical_array_descriptors_and_packs_devices_internally() {
                 inputs.len(),
                 destinations.as_ptr(),
                 destinations.len(),
+                (0..(inputs.len()) as i64).collect::<Vec<_>>().as_ptr(),
+                inputs.len(),
             )
         };
         assert_eq!(
@@ -314,6 +318,8 @@ fn zero_outputs_still_wait_on_every_device_and_allow_null_lists() {
             0,
             ptr::null(),
             0,
+            (0..(0) as i64).collect::<Vec<_>>().as_ptr(),
+            0,
         )
     };
     assert_eq!(
@@ -333,7 +339,7 @@ fn zero_outputs_still_wait_on_every_device_and_allow_null_lists() {
 fn rejects_output_count_and_non_addressable_execution_before_launch() {
     for (devices, slots) in [(1, 0), (2, 3), (0, 2)] {
         let fixture = Fixture::new(devices, 2, Failure::None);
-        assert!(unsafe { fixture.executable.clone().execute(&[], slots) }.is_err());
+        assert!(unsafe { fixture.executable.clone().execute(&[], slots, &[]) }.is_err());
         assert!(!fixture.state.log.borrow().contains(&"execute"));
     }
 }
@@ -341,14 +347,14 @@ fn rejects_output_count_and_non_addressable_execution_before_launch() {
 #[test]
 fn metadata_failure_releases_temporary_executable() {
     let fixture = Fixture::new(1, 1, Failure::Metadata);
-    assert!(unsafe { fixture.executable.clone().execute(&[], 1) }.is_err());
+    assert!(unsafe { fixture.executable.clone().execute(&[], 1, &[]) }.is_err());
     assert_eq!(*fixture.state.log.borrow(), ["metadata destroyed"]);
 }
 
 #[test]
 fn launch_failure_does_not_await_unpopulated_event() {
     let fixture = Fixture::new(1, 1, Failure::Launch);
-    assert!(unsafe { fixture.executable.clone().execute(&[], 1) }.is_err());
+    assert!(unsafe { fixture.executable.clone().execute(&[], 1, &[]) }.is_err());
     assert_eq!(
         *fixture.state.log.borrow(),
         ["metadata destroyed", "execute"]
@@ -358,7 +364,7 @@ fn launch_failure_does_not_await_unpopulated_event() {
 #[test]
 fn first_device_failure_still_waits_on_other_devices_before_cleanup() {
     let fixture = Fixture::new(2, 2, Failure::Completion);
-    let error = unsafe { fixture.executable.clone().execute(&[], 2) }.unwrap_err();
+    let error = unsafe { fixture.executable.clone().execute(&[], 2, &[]) }.unwrap_err();
     assert_eq!(error.message, "execution failed");
     assert_eq!(
         *fixture.state.log.borrow(),
@@ -380,7 +386,7 @@ fn first_device_failure_still_waits_on_other_devices_before_cleanup() {
 #[test]
 fn invalid_output_waits_before_releasing_other_outputs() {
     let fixture = Fixture::new(2, 2, Failure::NullOutput);
-    assert!(unsafe { fixture.executable.clone().execute(&[], 2) }.is_err());
+    assert!(unsafe { fixture.executable.clone().execute(&[], 2, &[]) }.is_err());
     assert_eq!(
         *fixture.state.log.borrow(),
         [
@@ -412,6 +418,8 @@ fn consuming_ffi_drops_last_executable_reference_after_every_device_finishes() {
             0,
             ptr::null(),
             0,
+            (0..(0) as i64).collect::<Vec<_>>().as_ptr(),
+            0,
         )
     };
     assert!(weak.upgrade().is_none());
@@ -438,7 +446,7 @@ fn failure_drops_consumed_reference_after_output_cleanup() {
         state,
     } = Fixture::new(2, 1, Failure::Completion);
     let weak = Arc::downgrade(&executable);
-    assert!(unsafe { executable.execute(&[], 1) }.is_err());
+    assert!(unsafe { executable.execute(&[], 1, &[]) }.is_err());
     assert!(weak.upgrade().is_none());
     assert_eq!(
         *state.log.borrow(),
@@ -483,4 +491,56 @@ fn descriptor_placement_must_match_executable_before_accessing_shards() {
     );
     assert!(fixture.state.log.borrow().is_empty());
     assert!(fixture.state.inputs.borrow().is_empty());
+}
+
+#[test]
+fn partial_donation_contract_reaches_every_device_unchanged() {
+    let fixture = Fixture::new(2, 0, Failure::None);
+    let shards = [
+        ptr::without_provenance_mut(1),
+        ptr::without_provenance_mut(2),
+    ];
+    let inputs = [shards.as_ptr(); 3];
+    for denied in [&[0i64, 2][..], &[], &[0, 1, 2]] {
+        unsafe { fixture.executable.clone().execute(&inputs, 0, denied) }.unwrap();
+        assert_eq!(*fixture.state.non_donatable.borrow(), denied);
+        assert_eq!(fixture.state.inputs.borrow().len(), 2);
+    }
+}
+
+#[test]
+fn malformed_donation_contract_is_rejected_before_execution() {
+    let fixture = Fixture::new(1, 0, Failure::None);
+    let shards = [ptr::without_provenance_mut(1)];
+    let inputs = [shards.as_ptr(); 3];
+    for denied in [&[-1i64][..], &[3], &[1, 1], &[2, 0]] {
+        let error = unsafe { fixture.executable.clone().execute(&inputs, 0, denied) }.unwrap_err();
+        assert!(error.message.contains("non-donatable indices"));
+        assert!(!fixture.state.log.borrow().contains(&"execute"));
+    }
+}
+
+#[test]
+fn donated_execution_failure_is_never_retried() {
+    for failure in [Failure::Launch, Failure::Completion, Failure::NullOutput] {
+        let fixture = Fixture::new(2, 1, failure);
+        let shards = [
+            ptr::without_provenance_mut(1),
+            ptr::without_provenance_mut(2),
+        ];
+        let inputs = [shards.as_ptr()];
+        assert!(unsafe { fixture.executable.clone().execute(&inputs, 1, &[]) }.is_err());
+        let log = fixture.state.log.borrow();
+        assert_eq!(log.iter().filter(|entry| **entry == "execute").count(), 1);
+        if failure != Failure::Launch {
+            assert_eq!(log.iter().filter(|entry| **entry == "await").count(), 2);
+            let destroyed = if failure == Failure::NullOutput { 1 } else { 2 };
+            assert_eq!(
+                log.iter()
+                    .filter(|entry| **entry == "buffer destroyed")
+                    .count(),
+                destroyed
+            );
+        }
+    }
 }

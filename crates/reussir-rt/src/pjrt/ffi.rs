@@ -262,6 +262,8 @@ pub unsafe extern "C" fn __reussir_pjrt_executable_execute(
     num_inputs: usize,
     outputs: *const *mut c_void,
     num_outputs: usize,
+    non_donatable: *const i64,
+    num_non_donatable: usize,
 ) {
     // The ABI carries opaque array-descriptor pointers. Their first field is
     // the existing allocation-handle array, not a standalone PJRT_Buffer.
@@ -273,7 +275,12 @@ pub unsafe extern "C" fn __reussir_pjrt_executable_execute(
     let executable = unsafe { Arc::from_raw(executable) };
     // execute owns the reference and drops it before returning its Result,
     // including on failure, before checked enters the aborting panic path.
-    let results = checked(unsafe { executable.execute(inputs, num_outputs) });
+    let non_donatable = if num_non_donatable == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(non_donatable, num_non_donatable) }
+    };
+    let results = checked(unsafe { executable.execute(inputs, num_outputs, non_donatable) });
     for (array, shards) in results.iter().enumerate() {
         unsafe {
             std::ptr::copy_nonoverlapping(

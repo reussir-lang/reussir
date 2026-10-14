@@ -14,6 +14,8 @@ unsafe extern "C" {
         num_inputs: usize,
         outputs: *const *mut c_void,
         num_outputs: usize,
+        non_donatable: *const i64,
+        num_non_donatable: usize,
     );
     fn __reussir_pjrt_array_from_host(
         device: usize,
@@ -99,6 +101,10 @@ fn main() {
                     if mode == "wrong-input-count" { 1 } else { 2 },
                     destinations.as_ptr(),
                     if mode == "wrong-output-count" { 1 } else { 2 },
+                    (0..(if mode == "wrong-input-count" { 1 } else { 2 }) as i64)
+                        .collect::<Vec<_>>()
+                        .as_ptr(),
+                    if mode == "wrong-input-count" { 1 } else { 2 },
                 );
                 panic!("invalid invocation accepted");
             }
@@ -112,6 +118,8 @@ fn main() {
                 inputs.as_ptr(),
                 2,
                 destinations.as_ptr(),
+                2,
+                (0..(2) as i64).collect::<Vec<_>>().as_ptr(),
                 2,
             );
             let [sum, difference] = outputs.map(|output| output.assume_init());
@@ -127,6 +135,8 @@ fn main() {
             2,
             destinations.as_ptr(),
             2,
+            (0..(2) as i64).collect::<Vec<_>>().as_ptr(),
+            2,
         );
         // Outputs remain owned after execution consumes the executable handle.
         let [sum, difference] = outputs.map(|output| output.assume_init());
@@ -138,7 +148,15 @@ fn main() {
             __reussir_pjrt_array_deallocate(buffer);
         }
         let empty = compile(&args[2], OPTIONS);
-        __reussir_pjrt_executable_execute(empty, ptr::null(), 0, ptr::null(), 0);
+        __reussir_pjrt_executable_execute(
+            empty,
+            ptr::null(),
+            0,
+            ptr::null(),
+            0,
+            (0..(0) as i64).collect::<Vec<_>>().as_ptr(),
+            0,
+        );
     }
 }
 
@@ -175,7 +193,15 @@ unsafe fn sharded(path: &str) {
             });
             let outputs = results.each_mut().map(|array| ptr::from_mut(array).cast());
             let executable = compile(path, include_bytes!("pjrt_execute_sharded.pb"));
-            __reussir_pjrt_executable_execute(executable, inputs.as_ptr(), 2, outputs.as_ptr(), 2);
+            __reussir_pjrt_executable_execute(
+                executable,
+                inputs.as_ptr(),
+                2,
+                outputs.as_ptr(),
+                2,
+                (0..(2) as i64).collect::<Vec<_>>().as_ptr(),
+                2,
+            );
             let [sum, reversed_difference] = &results;
             assert_eq!(download(sum.shards[0]), [9.0; 4]);
             assert_eq!(download(sum.shards[1]), [9.0; 4]);

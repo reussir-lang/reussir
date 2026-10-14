@@ -12,9 +12,11 @@ module {
   // CHECK: llvm.call @__reussir_pjrt_executable_validate_devices(%[[EXE]],
   // CHECK: %[[INPUTS:.*]] = llvm.mlir.zero : !llvm.ptr
   // CHECK: %[[OUTPUTS:.*]] = llvm.mlir.zero : !llvm.ptr
+  // CHECK: %[[ND:.*]] = llvm.mlir.constant(0 : i64)
+  // CHECK: %[[DENIED:.*]] = llvm.mlir.zero : !llvm.ptr
   // CHECK: %[[NI:.*]] = llvm.mlir.constant(0 : i64)
   // CHECK: %[[NO:.*]] = llvm.mlir.constant(0 : i64)
-  // CHECK: llvm.call @__reussir_pjrt_executable_execute(%[[EXE]], %[[INPUTS]], %[[NI]], %[[OUTPUTS]], %[[NO]])
+  // CHECK: llvm.call @__reussir_pjrt_executable_execute(%[[EXE]], %[[INPUTS]], %[[NI]], %[[OUTPUTS]], %[[NO]], %[[DENIED]], %[[ND]])
   func.func @host() attributes {ifrt.function} {
     %done = ifrt.Call @kernel::@main() on devices [0] : () -> ()
     return

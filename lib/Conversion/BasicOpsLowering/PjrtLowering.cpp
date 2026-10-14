@@ -8,6 +8,7 @@
 #include <mlir/Dialect/LLVMIR/FunctionCallUtils.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Interfaces/FunctionInterfaces.h>
+#include <numeric>
 
 namespace reussir {
 namespace {
@@ -158,11 +159,47 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
         {ptr, ptr, index}, voidTy);
     auto execute = mlir::LLVM::lookupOrCreateFn(
         rewriter, module, "__reussir_pjrt_executable_execute",
-        {ptr, ptr, index, ptr, index}, voidTy);
+        {ptr, ptr, index, ptr, index, ptr, index}, voidTy);
     if (mlir::failed(compile) || mlir::failed(validate) ||
         mlir::failed(execute))
       return mlir::failure();
     auto length = [&](size_t n) { return integer(rewriter, loc, index, n); };
+    auto nonDonatable = [&](llvm::ArrayRef<int32_t> arguments,
+                            llvm::ArrayRef<int32_t> donors) {
+      llvm::SmallVector<int64_t> indices;
+      for (auto [i, original] : llvm::enumerate(arguments))
+        if (!llvm::is_contained(donors, original))
+          indices.push_back(i);
+      auto size = length(indices.size());
+      if (indices.empty())
+        return std::make_pair(
+            mlir::Value(mlir::LLVM::ZeroOp::create(rewriter, loc, ptr)), size);
+      std::string key;
+      for (int64_t i : indices)
+        key += std::to_string(i) + ",";
+      auto name = mangledBlake3Symbol("REUSSIR_PJRT_NON_DONATABLE", key);
+      auto global = module.lookupSymbol<mlir::LLVM::GlobalOp>(name);
+      if (!global) {
+        mlir::OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPointToStart(module.getBody());
+        auto type = mlir::LLVM::LLVMArrayType::get(rewriter.getI64Type(),
+                                                   indices.size());
+        global = mlir::LLVM::GlobalOp::create(rewriter, loc, type, true,
+                                              mlir::LLVM::Linkage::LinkonceODR,
+                                              name, mlir::Attribute{}, 8);
+        rewriter.createBlock(&global.getInitializerRegion());
+        auto value = mlir::LLVM::ConstantOp::create(
+            rewriter, loc, type,
+            mlir::DenseIntElementsAttr::get(
+                mlir::RankedTensorType::get({int64_t(indices.size())},
+                                            rewriter.getI64Type()),
+                llvm::ArrayRef<int64_t>(indices)));
+        mlir::LLVM::ReturnOp::create(rewriter, loc, value.getResult());
+      }
+      return std::make_pair(
+          mlir::Value(mlir::LLVM::AddressOfOp::create(rewriter, loc, global)),
+          size);
+    };
     auto object = mlir::LLVM::AddressOfOp::create(
         rewriter, loc, ptr, op.getCalleeAttr().getRootReference().getValue());
     auto field = [&](int32_t i) {
@@ -196,10 +233,14 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
       storeSlot(op, outputs, i, descriptor, rewriter);
       results.push_back(descriptor);
     }
+    llvm::SmallVector<int32_t> identity(op.getInputs().size());
+    std::iota(identity.begin(), identity.end(), 0);
+    auto [denied, deniedCount] = nonDonatable(identity, {});
     mlir::LLVM::CallOp::create(
         rewriter, loc, *execute,
         mlir::ValueRange{executable, inputs, length(op.getInputs().size()),
-                         outputs, length(op.getOutputs().size())});
+                         outputs, length(op.getOutputs().size()),
+                         denied, deniedCount});
     // Execution returns only after every device completes. The resulting
     // control handle is therefore already ready; the side-effecting runtime
     // calls preserve ordering even though no token reaches the runtime ABI.

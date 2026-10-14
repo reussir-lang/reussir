@@ -14,6 +14,8 @@ unsafe extern "C" {
         num_inputs: usize,
         outputs: *const *mut c_void,
         num_outputs: usize,
+        non_donatable: *const i64,
+        num_non_donatable: usize,
     );
     fn __reussir_pjrt_array_deallocate(buffer: *mut c_void);
 }
@@ -27,7 +29,15 @@ unsafe fn consume(executable: *mut c_void) {
     let mut output: *mut c_void = std::ptr::null_mut();
     let descriptor = std::ptr::from_mut(&mut output).cast();
     unsafe {
-        __reussir_pjrt_executable_execute(executable, std::ptr::null(), 0, &descriptor, 1);
+        __reussir_pjrt_executable_execute(
+            executable,
+            std::ptr::null(),
+            0,
+            &descriptor,
+            1,
+            (0..(0) as i64).collect::<Vec<_>>().as_ptr(),
+            0,
+        );
         __reussir_pjrt_array_deallocate(output);
     }
 }
