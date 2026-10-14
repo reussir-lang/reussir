@@ -18,9 +18,9 @@ fn sig_escape(t : Tensor<[i32; 4]>) -> u64 {
 // CHECK-DAG: array element type `Tensor<[i32; 4]>` is not supported yet (a tensor)
 fn bad_elem(x : [Tensor<[i32; 4]>; 2]) -> i64 { 0 }
 
-// CHECK-DAG: `Tensor` takes an array type argument
+// CHECK-DAG: tensor element type `str` must be a supported
 fn bad_arg(x : [i32; 4]) -> i64 {
-    let t : Tensor<i32> = tensor::of(x);
+    let t : Tensor<str> = tensor::of(x);
     0
 }
 

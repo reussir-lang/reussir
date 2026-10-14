@@ -3240,6 +3240,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     );
                     return self.poison(span);
                 };
+                self.report_tensor_element(elem, span);
                 let tensor = self.tcx.mk_tensor(elem, dims);
                 self.mk_expr(
                     ExprKind::TensorOp {

@@ -26,6 +26,13 @@ fn null_attribute() -> sys::mlir_sys::MlirAttribute {
     sys::mlir_sys::MlirAttribute { ptr: null() }
 }
 
+/// The MLIR dynamic dimension sentinel, in the unsigned representation used
+/// by Melior's ranked tensor constructor. Query the C API instead of assuming
+/// it matches a frontend's shape encoding.
+pub fn dynamic_dimension_size() -> u64 {
+    unsafe { sys::mlir_sys::mlirShapedTypeGetDynamicSize() as u64 }
+}
+
 /// Creates a `!reussir.raw_ptr<element>` type.
 pub fn raw_ptr(element: Type) -> Type {
     unsafe { Type::from_raw(sys::reussirRawPtrTypeGet(element.to_raw())) }

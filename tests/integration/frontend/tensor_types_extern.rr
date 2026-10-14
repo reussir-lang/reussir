@@ -1,0 +1,17 @@
+// The actual package-interface writer and loader preserve generic Tensor
+// elements in shipped bodies, and the consumer substitutes them at mono time.
+// RUN: %rrc %S/Inputs/tensor_types_dep.rr --package-name dep --emit rri -o %t.rri
+// RUN: %FileCheck %s --check-prefix=RRI < %t.rri
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --emit mir --no-source-locations -o %t.mir
+// RUN: %FileCheck %s --check-prefix=MIR < %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: echo 'pub fn bad() { dep::scalar<str>() }' > %t.bad.rr
+// RUN: %not %rrc %t.bad.rr --package-name app --extern dep=%t.rri --emit mir -o - 2>&1 | %FileCheck %s --check-prefix=BAD
+// RRI-DAG: : Tensor<[$0; 4]>
+// RRI-DAG: : Tensor<$1>
+// MIR-DAG: : Tensor<[i32; 4]>
+// MIR-DAG: : Tensor<f32>
+// BAD: this instantiation grounds a tensor whose element must be a supported
+pub fn inspect(a: [i32; 4]) -> u64 { dep::inspect(a) }
+pub fn scalar() { dep::scalar<f32>() }

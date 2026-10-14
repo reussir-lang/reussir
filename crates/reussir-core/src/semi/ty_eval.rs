@@ -230,33 +230,43 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             };
         }
 
-        // The built-in tensor type former, `core::intrinsic::tensor::Tensor`.
-        // `Tensor<[f64; ?, 4]>` is the transient value-semantics view of an
-        // array of that shape (docs/design/tensor-kernels.md): same element
-        // and extent rules as the array type argument it wraps, but
-        // scope-confined — not storable, capturable, or FFI-crossing.
+        // Tensor's shape syntax resembles an array but does not construct a
+        // host array: zero extents and shapes larger than the host allocation
+        // limit are valid. A scalar argument denotes a rank-zero tensor.
         if (bare_unshadowed || self.is_core_intrinsic_prefix(&path.segments, "tensor"))
             && self.sym(key) == "Tensor"
         {
             return match args {
                 [inner] => {
-                    let inner = self.eval_type(inner);
-                    match *inner.kind() {
-                        TyKind::Array { elem, dims } => self.tcx.mk_tensor(elem, dims),
-                        // Error recovery from the argument itself.
-                        TyKind::Bottom => inner,
-                        _ => {
-                            self.error(
-                                Some(span),
-                                format!(
-                                    "`Tensor` takes an array type argument \
-                                     (`Tensor<[f64; 4, 4]>`), got `{}`",
-                                    self.ty_display(inner)
-                                ),
-                            );
-                            self.tcx.mk(TyKind::Bottom)
+                    let (elem, dims) = match inner.kind() {
+                        TypeKind::TypeArray(elem, extents) => {
+                            let elem = self.eval_type(&elem);
+                            let dims = extents
+                                .iter()
+                                .map(|extent| match extent {
+                                    surface::ArrayExtent::Dynamic(_) => {
+                                        crate::semi::ty::DYNAMIC_EXTENT
+                                    }
+                                    surface::ArrayExtent::Expr(expr) => {
+                                        let dim = self.eval_shape_extent(expr, "tensor");
+                                        if dim > i64::MAX as u64 {
+                                            self.error(
+                                                Some(expr.span()),
+                                                "tensor extent exceeds the signed 64-bit MLIR dimension limit",
+                                            );
+                                            1
+                                        } else {
+                                            dim
+                                        }
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+                            (elem, dims)
                         }
-                    }
+                        _ => (self.eval_type(inner), Vec::new()),
+                    };
+                    self.report_tensor_element(elem, Some(span));
+                    self.tcx.mk_tensor(elem, &dims)
                 }
                 _ => {
                     self.error(Some(span), "`Tensor` takes exactly one type argument");
@@ -288,6 +298,18 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// [`array_element_rejection`] against this elaborator's record table.
     pub(crate) fn array_element_rejection(&self, t: Ty<'tcx>) -> Option<&'static str> {
         array_element_rejection(|def| self.records.get(&def).map(|r| r.default_cap), t)
+    }
+
+    pub(crate) fn report_tensor_element(&mut self, elem: Ty<'tcx>, span: Option<surface::Span>) {
+        if tensor_element_rejection(elem).is_some() {
+            self.error(
+                span,
+                format!(
+                    "tensor element type `{}` must be a supported integer, floating-point, or bool scalar",
+                    self.ty_display(elem)
+                ),
+            );
+        }
     }
 
     /// Evaluate an array type (`[f64; 512]`, `[f64; 5, 16, 8]`,
@@ -349,12 +371,16 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// else reports and recovers with extent 1 (a *dynamic* dimension is
     /// spelled `?`, not an expression).
     fn eval_extent(&mut self, e: &surface::Expr) -> u64 {
+        self.eval_shape_extent(e, "array")
+    }
+
+    fn eval_shape_extent(&mut self, e: &surface::Expr, kind: &str) -> u64 {
         match e.kind() {
             surface::ExprKind::ConstExpr(crate::surface::Const::ConstInt(n)) => {
                 match u64::try_from(&n) {
                     Ok(v) => v,
                     Err(_) => {
-                        self.error(Some(e.span()), "array extent is out of range");
+                        self.error(Some(e.span()), format!("{kind} extent is out of range"));
                         1
                     }
                 }
@@ -362,7 +388,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             _ => {
                 self.error(
                     Some(e.span()),
-                    "this kind of array extent cannot be evaluated yet (only integer literals are supported)",
+                    format!("this kind of {kind} extent cannot be evaluated yet (only integer literals are supported)"),
                 );
                 1
             }
@@ -837,5 +863,20 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
             _ => {}
         }
+    }
+}
+
+/// Tensor elements have a native numeric MLIR representation. Unknown generic
+/// elements are checked again after substitution; pointers and aggregates never
+/// become tensor elements. `f8` has no specified encoding in the source language.
+pub fn tensor_element_rejection(elem: Ty<'_>) -> Option<&'static str> {
+    match elem.kind() {
+        TyKind::Int(_)
+        | TyKind::Bool
+        | TyKind::Fp(FpTy::Ieee(16 | 32 | 64) | FpTy::BFloat16)
+        | TyKind::Generic(_)
+        | TyKind::Hole(_)
+        | TyKind::Bottom => None,
+        _ => Some("a supported integer, floating-point, or bool scalar is required"),
     }
 }

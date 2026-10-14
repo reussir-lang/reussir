@@ -34,7 +34,7 @@ use reussir_backend::dialect::ty::{
 use reussir_backend::melior::Context;
 use reussir_backend::melior::ir::Type;
 use reussir_backend::melior::ir::attribute::{FlatSymbolRefAttribute, StringAttribute};
-use reussir_backend::melior::ir::r#type::IntegerType;
+use reussir_backend::melior::ir::r#type::{IntegerType, RankedTensorType};
 
 use reussir_core::full::mir;
 use reussir_core::semi::ctxt::DefaultCap;
@@ -151,8 +151,30 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
             // A statically shaped array is one shared `rc` box holding the whole
             // payload (`!reussir.rc<!reussir.array<dims x elem>>`); see #344.
             TyKind::Array { .. } => Ok(self.rc_type(self.array_inner_of(ty)?)),
-            // Frontend-complete, backend-pending (docs/design/tensor-kernels.md).
-            TyKind::Tensor { .. } => err("tensor types do not lower yet"),
+            TyKind::Tensor { elem, dims } => {
+                if reussir_core::semi::ty_eval::tensor_element_rejection(elem).is_some() {
+                    return err(
+                        "tensor element must be a supported integer, floating-point, or bool scalar",
+                    );
+                }
+                if dims
+                    .iter()
+                    .any(|&d| d != reussir_core::semi::ty::DYNAMIC_EXTENT && d > i64::MAX as u64)
+                {
+                    return err("tensor extent exceeds the signed 64-bit MLIR dimension limit");
+                }
+                let shape: Vec<_> = dims
+                    .iter()
+                    .map(|&d| {
+                        if d == reussir_core::semi::ty::DYNAMIC_EXTENT {
+                            reussir_backend::dialect::ty::dynamic_dimension_size()
+                        } else {
+                            d
+                        }
+                    })
+                    .collect();
+                Ok(RankedTensorType::new(&shape, scalar_ty(self.context, elem)?, None).into())
+            }
             // A cell is one shared rc box around its payload container. Unlike
             // arrays, its element may itself be a managed type. A sync-kind
             // cell is born in an *atomically counted* box — the dialect
@@ -661,7 +683,9 @@ fn scalar_ty<'c>(context: &'c Context, ty: Ty<'_>) -> Result<Type<'c>> {
         TyKind::Str => Ok(str_type(context, ReussirLifeScope::Global)),
         TyKind::Record { .. } => err("record type reached scalar lowering without a layout"),
         TyKind::Array { .. } => err("array type reached scalar lowering without its rc wrapper"),
-        TyKind::Tensor { .. } => err("tensor types do not lower yet"),
+        TyKind::Tensor { .. } => {
+            err("tensor type reached scalar lowering without its ranked shape")
+        }
         TyKind::Cell { .. } => err("cell type reached scalar lowering without its rc wrapper"),
         TyKind::Arc(_) => err("arc type reached scalar lowering without its rc wrapper"),
         TyKind::Nullable(_) => err("nullable type lowering not yet implemented"),

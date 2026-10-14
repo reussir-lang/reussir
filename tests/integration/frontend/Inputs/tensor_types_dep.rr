@@ -1,0 +1,8 @@
+import core::intrinsic::tensor;
+pub fn inspect<T>(a: [T; 4]) -> u64 {
+    let t: Tensor<[T; 4]> = tensor::of(a);
+    tensor::dim(t, 0)
+}
+pub fn scalar<T>() {
+    let t: Tensor<T> = core::intrinsic::panic::panic();
+}

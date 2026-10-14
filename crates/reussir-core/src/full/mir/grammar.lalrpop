@@ -171,8 +171,10 @@ Ty: raw::Ty = {
         => raw::Ty::Record { cap, path: path.0, args: path.1 },
     "[" <elem:Ty> ";" <dims:CommaPlus<Extent>> "]"
         => raw::Ty::Array { elem: Box::new(elem), dims },
-    "Tensor" "<" "[" <elem:Ty> ";" <dims:CommaPlus<Extent>> "]" ">"
-        => raw::Ty::Tensor { elem: Box::new(elem), dims },
+    "Tensor" "<" <inner:Ty> ">" => match inner {
+        raw::Ty::Array { elem, dims } => raw::Ty::Tensor { elem, dims },
+        elem => raw::Ty::Tensor { elem: Box::new(elem), dims: vec![] },
+    },
     "(" ")" "->" <ret:Ty> => raw::Ty::Closure { params: vec![], ret: Box::new(ret) },
     "(" <ps:CommaPlus<Ty>> ")" "->" <ret:Ty> => raw::Ty::Closure { params: ps, ret: Box::new(ret) },
 };
@@ -180,7 +182,9 @@ Ty: raw::Ty = {
 /// One shape dimension: a static extent, or `?` for a dynamic one
 /// (the DYNAMIC_EXTENT sentinel, matching MLIR's spelling).
 Extent: u64 = {
-    <i:"int"> => raw::small_u64(&i),
+    <l:@L> <i:"int"> <r:@R> =>? u64::try_from(&i)
+        .ok().filter(|&d| d <= i64::MAX as u64)
+        .ok_or_else(|| lalrpop_util::ParseError::User { error: LexError { span: l..r } }),
     "?" => crate::semi::ty::DYNAMIC_EXTENT,
 };
 

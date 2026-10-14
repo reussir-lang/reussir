@@ -38,10 +38,10 @@ pub struct HoleId(pub u32);
 
 /// The sentinel marking a dynamic dimension in an array or tensor shape
 /// (`[f64; ?, 4]`) — the extent is a runtime value carried by the
-/// constructing intrinsic, not by the type. Same `~0` convention as the
-/// dialect's dynamic `token<align, ?>` size and MLIR's
-/// `ShapedType::kDynamic`. A static extent can never collide with it: the
-/// element-count cap (2^32) rejects any product that large.
+/// constructing intrinsic, not by the type. This frontend `~0` encoding must
+/// be translated to MLIR's dynamic sentinel during type lowering. A static
+/// extent cannot collide with it: the host-array element-count cap and tensor
+/// signed-dimension limit reject it.
 pub const DYNAMIC_EXTENT: u64 = u64::MAX;
 
 /// Whether a shape has any dynamic dimension.
@@ -235,9 +235,10 @@ pub enum TyKind<'tcx> {
         dims: &'tcx [u64],
     },
     /// A transient value-semantics view of an array's data
-    /// (`Tensor<[f64; ?, 4]>`): the kernel-side tier that lowers to
-    /// linalg-on-tensors (docs/design/tensor-kernels.md). Same element and
-    /// extent rules as [`TyKind::Array`], including [`DYNAMIC_EXTENT`].
+    /// (`Tensor<f64>` or `Tensor<[f64; ?, 4]>`): the kernel-side tier that
+    /// lowers to an MLIR ranked tensor type. Elements are numeric scalars or
+    /// bool; extents are nonnegative signed-64-bit values or [`DYNAMIC_EXTENT`].
+    /// Unlike host arrays, tensors admit zero extents and have no allocation cap.
     /// Tensors are scope-confined: not storable in records, not capturable
     /// by closures, not FFI-crossing, and absent from plain `fn`
     /// signatures — materialization back to an array is the only way out.

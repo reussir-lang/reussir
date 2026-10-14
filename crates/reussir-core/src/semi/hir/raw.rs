@@ -311,7 +311,7 @@ pub enum Ty {
         elem: Box<Ty>,
         dims: Vec<u64>,
     },
-    /// `Tensor<[elem; extents…]>` — a transient value-semantics view.
+    /// `Tensor<elem>` (rank zero) or `Tensor<[elem; extents…]>`.
     Tensor {
         elem: Box<Ty>,
         dims: Vec<u64>,

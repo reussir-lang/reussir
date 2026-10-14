@@ -1209,6 +1209,62 @@ mod tests {
     }
 
     #[test]
+    fn roundtrips_tensor_type_shapes() {
+        for ty in [
+            "Tensor<f32>",
+            "Tensor<bool>",
+            "Tensor<[i32; 2, 3]>",
+            "Tensor<[bf16; ?, 0]>",
+            "Tensor<[u64; 9223372036854775807]>",
+        ] {
+            with_tcx(|tcx| {
+                let input = format!("fn #identity(v0 (x): {ty}) -> {ty} {{ v0 : {ty} }}");
+                let p = parse_program(tcx, &input).expect("parse tensor type");
+                let printed = Printer::new(&p.defs, &p.names).program(
+                    &p.funcs,
+                    &p.strings,
+                    &p.records,
+                    &p.trampolines,
+                );
+                assert!(printed.contains(ty), "{printed}");
+                let p = parse_program(tcx, &printed).expect("reparse tensor type");
+                let reprinted = Printer::new(&p.defs, &p.names).program(
+                    &p.funcs,
+                    &p.strings,
+                    &p.records,
+                    &p.trampolines,
+                );
+                assert_eq!(printed, reprinted);
+            });
+        }
+    }
+
+    #[test]
+    fn rejects_out_of_range_tensor_dimensions_without_panicking() {
+        for dimension in [
+            "-1",
+            "9223372036854775808",
+            "18446744073709551615",
+            "18446744073709551616",
+        ] {
+            with_tcx(|tcx| {
+                let text = format!("fn #bad(v0 (x): Tensor<[f32; {dimension}]>) -> () {{ () : () }}");
+                assert!(
+                    parse_program(tcx, &text).is_err(),
+                    "accepted dimension {dimension}"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn roundtrips_tensor_annotations_and_generic_elements() {
+        roundtrip(
+            "import core::intrinsic::tensor; pub fn inspect<T>(x: [T; 4]) -> u64 { let t: Tensor<[T; 4]> = tensor::of(x); tensor::dim(t, 0) }",
+        );
+    }
+
+    #[test]
     fn source_file_table_escapes_debug_quoted_names() {
         use reussir_syntax::source::SourceCache;
         let source = "fn id(x: i32) -> i32 { x }";

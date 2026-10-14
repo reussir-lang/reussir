@@ -631,7 +631,14 @@ impl<'a> Printer<'a> {
             }
             TyKind::Arc(inner) => text("Arc<") + self.ty(inner) + text(">"),
             TyKind::Array { elem, dims } => self.shape(elem, dims),
-            TyKind::Tensor { elem, dims } => text("Tensor<") + self.shape(elem, dims) + text(">"),
+            TyKind::Tensor { elem, dims } => {
+                let inner = if dims.is_empty() {
+                    self.ty(elem)
+                } else {
+                    self.shape(elem, dims)
+                };
+                text("Tensor<") + inner + text(">")
+            }
             TyKind::Record { def, args, flex } => {
                 let mut d = match flex {
                     Flexivity::Flex | Flexivity::Rigid | Flexivity::Regional => {

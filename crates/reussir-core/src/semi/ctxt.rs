@@ -766,7 +766,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
             TyKind::Tensor { elem, dims } => {
                 out.push_str("Tensor<");
-                self.push_shape_display(out, elem, dims);
+                if dims.is_empty() {
+                    self.push_ty_display(out, elem);
+                } else {
+                    self.push_shape_display(out, elem, dims);
+                }
                 out.push('>');
             }
             TyKind::Record { def, args, flex } => {

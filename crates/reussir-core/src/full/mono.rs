@@ -1949,9 +1949,15 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 }
                 self.check_arc_inners(inner, span);
             }
-            TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => {
-                self.check_arc_inners(elem, span)
+            TyKind::Tensor { elem, .. } => {
+                if crate::semi::ty_eval::tensor_element_rejection(elem).is_some()
+                    && self.reported_arcs.insert(ty)
+                {
+                    self.error(span, "this instantiation grounds a tensor whose element must be a supported integer, floating-point, or bool scalar");
+                }
+                self.check_arc_inners(elem, span);
             }
+            TyKind::Array { elem, .. } => self.check_arc_inners(elem, span),
             _ => {}
         }
     }

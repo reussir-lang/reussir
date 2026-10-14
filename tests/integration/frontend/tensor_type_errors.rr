@@ -1,0 +1,22 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+// CHECK-DAG: tensor element type `str` must be a supported
+// CHECK-DAG: tensor element type `char` must be a supported
+// CHECK-DAG: tensor element type `float8` must be a supported
+// CHECK-DAG: tensor element type `Record` must be a supported
+// CHECK-DAG: tensor element type `Tensor<f32>` must be a supported
+// CHECK-DAG: tensor extent exceeds the signed 64-bit MLIR dimension limit
+// CHECK-DAG: tensor extent is out of range
+// CHECK-DAG: only integer literals are supported
+// CHECK-DAG: `Tensor` takes exactly one type argument
+pub struct Record { x: i32 }
+pub fn bad() {
+    let s: Tensor<str> = core::intrinsic::panic::panic();
+    let c: Tensor<char> = core::intrinsic::panic::panic();
+    let f: Tensor<float8> = core::intrinsic::panic::panic();
+    let r: Tensor<[Record; 4]> = core::intrinsic::panic::panic();
+    let n: Tensor<Tensor<f32>> = core::intrinsic::panic::panic();
+    let d: Tensor<[f32; 9223372036854775808]> = core::intrinsic::panic::panic();
+    let overflow: Tensor<[f32; 18446744073709551616]> = core::intrinsic::panic::panic();
+    let negative: Tensor<[f32; -1]> = core::intrinsic::panic::panic();
+    let missing: Tensor = core::intrinsic::panic::panic();
+}

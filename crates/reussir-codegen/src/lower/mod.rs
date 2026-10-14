@@ -715,6 +715,83 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tensor_types_from_serialized_mir() {
+        let context = crate::testing::context();
+        for (source_ty, mlir_ty) in [
+            ("Tensor<f32>", "tensor<f32>"),
+            ("Tensor<bool>", "tensor<i1>"),
+            ("Tensor<[i32; 2, 3]>", "tensor<2x3xi32>"),
+            ("Tensor<[u64; ?, 4]>", "tensor<?x4xi64>"),
+            ("Tensor<[bf16; 0, ?]>", "tensor<0x?xbf16>"),
+            (
+                "Tensor<[f16; 65536, 65536, 2]>",
+                "tensor<65536x65536x2xf16>",
+            ),
+            (
+                "Tensor<[f64; 9223372036854775807]>",
+                "tensor<9223372036854775807xf64>",
+            ),
+        ] {
+            in_arena(|tcx| {
+                let text = format!(
+                    "fn @identity(v0 (x): {source_ty}) -> {source_ty} {{ v0 : {source_ty} }}"
+                );
+                let parsed = parse_program(tcx, &text).expect("parse Tensor MIR");
+                let module = lower_program(
+                    &context,
+                    tcx,
+                    &parsed.program,
+                    None,
+                    None,
+                    LinkagePolicy::Jit,
+                    &[],
+                )
+                .expect("lower Tensor MIR");
+                assert!(module.as_operation().verify(), "{}", module.as_operation());
+                let printed = module.as_operation().to_string();
+                assert!(printed.contains(mlir_ty), "expected {mlir_ty}: {printed}");
+                assert!(
+                    !printed.contains("reussir.rc"),
+                    "tensor values must not be boxed: {printed}"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn rejects_non_numeric_tensor_elements_from_serialized_mir() {
+        let context = crate::testing::context();
+        for elem in [
+            "str",
+            "char",
+            "()",
+            "f8",
+            "Cell<i32>",
+            "Tensor<f32>",
+            "[i32; 2]",
+        ] {
+            in_arena(|tcx| {
+                let ty = format!("Tensor<[{elem}; 2]>");
+                let text = format!("fn @identity(v0 (x): {ty}) -> {ty} {{ v0 : {ty} }}");
+                let parsed =
+                    parse_program(tcx, &text).expect("parse malformed type for checked lowering");
+                let error = lower_program(
+                    &context,
+                    tcx,
+                    &parsed.program,
+                    None,
+                    None,
+                    LinkagePolicy::Jit,
+                    &[],
+                )
+                .err()
+                .expect("invalid element must be diagnosed");
+                assert!(error.to_string().contains("tensor element"), "{error}");
+            });
+        }
+    }
+
+    #[test]
     fn embeds_inline_transform_dispatcher() {
         let printed = lower_source(
             r#"#[transform_anchor]

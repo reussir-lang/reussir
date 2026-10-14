@@ -1,0 +1,10 @@
+// Bare Tensor follows ordinary record shadowing; the qualified intrinsic name
+// always denotes the builtin, including through an imported alias.
+// RUN: %rrc %s --emit mlir --no-source-locations -o - | %FileCheck %s
+pub struct Tensor<T> { value: T }
+pub fn record(x: Tensor<i32>) -> Tensor<i32> { x }
+pub fn builtin() {
+    let t: core::intrinsic::tensor::Tensor<f32> = core::intrinsic::panic::panic();
+}
+// CHECK-DAG: ub.poison : tensor<f32>
+// CHECK-DAG: !reussir.rc<!reussir.record<compound
