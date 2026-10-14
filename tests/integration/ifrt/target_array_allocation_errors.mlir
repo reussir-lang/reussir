@@ -1,7 +1,7 @@
 // REQUIRES: ifrt
 // RUN: %not %reussir-opt %s --split-input-file --reussir-token-instantiation --reussir-convert-to-llvm 2>&1 | %FileCheck %s
 
-// CHECK: multi-device allocation requires concrete sharding
+// CHECK: multi-device array placement requires concrete sharding
 func.func @unspecified() {
   %a = reussir.array.create extents() : !reussir.rc<!reussir.array<4 x f32, #reussir.target<devices = [0, 1]>>>
   return

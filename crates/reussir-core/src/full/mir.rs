@@ -135,6 +135,7 @@ pub struct RecordInstance<'tcx> {
     /// for enums; always `false` for compounds. Threaded through to the dialect
     /// variant record type's `fixed` flag.
     pub repr_fixed: bool,
+    pub placement: Option<&'tcx str>,
     /// The ground field layout.
     pub layout: RecordLayout<'tcx>,
 }

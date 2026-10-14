@@ -84,6 +84,8 @@ pub enum FormerItem {
     Tensor,
     Arc,
     Nullable,
+    DevArray,
+    DefaultPlacement,
     /// One per [`crate::semi::ty::CellKind`].
     Cell,
     RefCell,
@@ -94,10 +96,12 @@ pub enum FormerItem {
 }
 
 impl FormerItem {
-    pub const ALL: [FormerItem; 9] = [
+    pub const ALL: [FormerItem; 11] = [
         FormerItem::Tensor,
         FormerItem::Arc,
         FormerItem::Nullable,
+        FormerItem::DevArray,
+        FormerItem::DefaultPlacement,
         FormerItem::Cell,
         FormerItem::RefCell,
         FormerItem::Atomic,
@@ -106,11 +110,21 @@ impl FormerItem {
         FormerItem::RwLock,
     ];
 
+    pub fn arity(self) -> usize {
+        match self {
+            FormerItem::DevArray => 2,
+            FormerItem::DefaultPlacement => 0,
+            _ => 1,
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             FormerItem::Tensor => "tensor",
             FormerItem::Arc => "arc",
             FormerItem::Nullable => "nullable",
+            FormerItem::DevArray => "dev_array",
+            FormerItem::DefaultPlacement => "default_placement",
             FormerItem::Cell => "cell",
             FormerItem::RefCell => "ref_cell",
             FormerItem::Atomic => "atomic",

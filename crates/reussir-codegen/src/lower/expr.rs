@@ -2415,10 +2415,9 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         } else if matches!(field_ty.kind(), TyKind::Arc(_)) {
             // An explicit `Arc` member: the link's atomicity is *written* (the
             // container cannot derive it — an atomic island in normal space).
-            let inner = self.tys.record_inner_of(field_ty)?;
             Ok(ProjectedMember {
                 field_ty,
-                elem_ty: self.tys.rc_type_in(inner, true),
+                elem_ty: self.tys.mlir_ty(field_ty)?,
                 proj_cap: ref_cap,
                 is_link: true,
                 atomic: ref_atomic,
@@ -2462,7 +2461,10 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 is_link: true,
                 atomic: ref_atomic,
             })
-        } else if matches!(field_ty.kind(), TyKind::Cell { .. }) {
+        } else if matches!(
+            field_ty.kind(),
+            TyKind::Cell { .. } | TyKind::DevArray { .. }
+        ) {
             // A cell member is stored as a bare payload type in the record
             // declaration, but dialect projection materializes a shared rc link
             // whose atomicity the cell kind itself decides.

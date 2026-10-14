@@ -170,6 +170,20 @@ impl<'a> Mangler<'a> {
                 let name = shaped_name("Array", dims);
                 self.path_with_args_segs(out, &[&name], &[elem]);
             }
+            TyKind::DefaultPlacement => self.path_with_args_segs(
+                out,
+                &["core", "intrinsic", "pjrt", "DefaultPlacement"],
+                &[],
+            ),
+            TyKind::DevArray {
+                elem,
+                dims,
+                placement,
+            } => {
+                let name = shaped_name("DevArray", dims);
+                let args = [elem, placement];
+                self.path_with_args_segs(out, &["core", "intrinsic", "pjrt", &name], &args);
+            }
             TyKind::Tensor { elem, dims } => {
                 // Keep builtin tensors distinct from shadowing user records,
                 // including rank-zero `Tensor<T>` and shaped `Tensor4<T>`.
@@ -417,6 +431,28 @@ mod tests {
             // others; a real inner is always a `[shared]` record).
             let arc = tcx.mk_arc(tcx.mk_int(IntTy::Signed(32)));
             assert_eq!(m.mangle_ty(arc), "_RIC3ArclE");
+        });
+    }
+
+    #[test]
+    fn device_builtins_do_not_collide_with_shadowing_records() {
+        crate::with_tcx(|tcx: &TyCtxt<'_>| {
+            let mut defs = DefTable::new();
+            let array = defs.declare_record(key(1)).expect("fresh");
+            let placement = defs.declare_record(key(2)).expect("fresh");
+            let resolver = VecResolver(vec!["DevArray", "DefaultPlacement"]);
+            let m = Mangler::new(&defs, &resolver);
+            let default = tcx.mk(TyKind::DefaultPlacement);
+            let user_default = tcx.mk_record(placement, &[], Flexivity::Irrelevant);
+            assert_ne!(m.mangle_ty(default), m.mangle_ty(user_default));
+            let elem = tcx.mk_fp(FpTy::Ieee(32));
+            let builtin = tcx.mk_devarray(elem, &[], None);
+            let user_array = tcx.mk_record(array, &[elem, default], Flexivity::Irrelevant);
+            assert_ne!(m.mangle_ty(builtin), m.mangle_ty(user_array));
+            assert_eq!(
+                m.mangle_ty(builtin),
+                m.mangle_ty(tcx.mk_devarray(elem, &[], Some(default)))
+            );
         });
     }
 

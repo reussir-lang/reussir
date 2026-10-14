@@ -1,0 +1,6 @@
+// RUN: %not %rrc %s --emit mir -o - 2>&1 | %FileCheck %s
+// Polymorphic Rust FFI has no device descriptor representation.
+#[ffi(import)]
+fn external(x: DevArray<f32>) -> DevArray<f32> [{ x }];
+pub fn use_it(x: DevArray<f32>) -> DevArray<f32> { external(x) }
+// CHECK: a device array cannot cross the native FFI boundary

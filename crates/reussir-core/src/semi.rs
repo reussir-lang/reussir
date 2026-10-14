@@ -2183,6 +2183,10 @@ mod tests {
                     &["intrinsic", "panic"],
                     include_str!("../../../library/core/src/intrinsic/panic.rr"),
                 ),
+                (
+                    &["intrinsic", "pjrt"],
+                    include_str!("../../../library/core/src/intrinsic/pjrt.rr"),
+                ),
             ],
             |elab, _| {
                 assert!(!elab.has_errors(), "{:#?}", elab.reports);
@@ -2391,6 +2395,10 @@ mod tests {
                 #[lang("nullable")]
                 pub struct Bad { pub x: i64 }
                 pub fn go() -> Arc2<i64> { Arc2 { } }
+                #[lang("dev_array")]
+                pub struct BadDevice<T> {}
+                #[lang("default_placement")]
+                pub struct BadPlacement<T> {}
             "#;
             let parse = reussir_syntax::parse_with_interner(src, interner.clone());
             assert!(parse.ok(), "parse errors: {:#?}", parse.errors);
@@ -2423,6 +2431,14 @@ mod tests {
             assert!(
                 msgs.iter()
                     .any(|m| m.contains("a builtin-type anchor must be an empty struct")),
+                "{msgs:#?}"
+            );
+            assert!(
+                msgs.iter().any(|m| m.contains("with two type parameters")),
+                "{msgs:#?}"
+            );
+            assert!(
+                msgs.iter().any(|m| m.contains("with no type parameters")),
                 "{msgs:#?}"
             );
         });

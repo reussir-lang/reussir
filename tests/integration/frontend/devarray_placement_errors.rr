@@ -1,0 +1,25 @@
+// REQUIRES: ifrt
+// RUN: echo '#[placement(devices = "0,1", sharding = "#ifrt.sharding_param<2x1 to [0] on 2>")] pub struct [value] P {} pub fn f(x: DevArray<[f32; 4], P>) -> DevArray<[f32; 4], P> { x }' > %t.rank.rr
+// RUN: %not %rrc %t.rank.rr --emit mlir -o - 2>&1 | %FileCheck %s --check-prefix=RANK
+// RUN: echo '#[placement(devices = "0", sharding = "#ifrt.sharding_param<2 to [0] on 2>")] pub struct [value] P {} pub fn f(x: DevArray<[f32; 4], P>) -> DevArray<[f32; 4], P> { x }' > %t.devices.rr
+// RUN: %not %rrc %t.devices.rr --emit mlir -o - 2>&1 | %FileCheck %s --check-prefix=DEVICES
+// RUN: echo '#[placement(devices = "0", sharding = "42 : i64")] pub struct [value] P {} pub fn f(x: DevArray<f32, P>) -> DevArray<f32, P> { x }' > %t.attr.rr
+// RUN: %not %rrc %t.attr.rr --emit mlir -o - 2>&1 | %FileCheck %s --check-prefix=ATTR
+// RUN: echo '#[placement(devices = "0", layout = "{1,0}")] pub struct [value] P {} pub fn f(x: DevArray<f32, P>) -> DevArray<f32, P> { x }' > %t.layout.rr
+// RUN: %not %rrc %t.layout.rr --emit mlir -o - 2>&1 | %FileCheck %s --check-prefix=LAYOUT
+// RUN: echo '#[placement(devices = "0,1")] pub struct [value] P {} pub fn f(x: DevArray<f32, P>) -> DevArray<f32, P> { x }' > %t.unknown.rr
+// RUN: %not %rrc %t.unknown.rr --emit mlir -o - 2>&1 | %FileCheck %s --check-prefix=UNKNOWN
+// RANK: {{rank|Rank|dimension|Dimension}}
+// DEVICES: {{device|Device}}
+// ATTR: device array placement requires an IFRT sharding_param
+// LAYOUT: invalid allocation layout
+// UNKNOWN: multi-device array placement requires concrete sharding
+
+// A malformed placement descriptor imported through MIR is rejected safely.
+// RUN: echo 'record @P: value placement "#reussir.target<devices = [0, 0]>" struct P { }; pub fn @f(v0 (x): DevArray<f32, P>) -> DevArray<f32, P> { v0 : DevArray<f32, P> }' > %t.bad.mir
+// RUN: %not %rrc %t.bad.mir --emit mlir -o - 2>&1 | %FileCheck %s --check-prefix=DUPLICATE
+// DUPLICATE: distinct logical device IDs
+
+// RUN: echo 'pub fn @bad(v0 (x): DevArray<i0>) -> DevArray<i0> { v0 : DevArray<i0> }' > %t.dtype.mir
+// RUN: %not %rrc %t.dtype.mir --emit mlir -o - 2>&1 | %FileCheck %s --check-prefix=DTYPE
+// DTYPE: unsupported device array element type

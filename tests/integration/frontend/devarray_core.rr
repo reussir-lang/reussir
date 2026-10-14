@@ -1,0 +1,13 @@
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %FileCheck %s --check-prefix=CORE < %t.core.rri
+// RUN: %rrc %s --package-name app --extern core=%t.core.rri --emit hir -o - | %FileCheck %s --check-prefix=HIR
+// RUN: %rrc %s --package-name app --extern core=%t.core.rri --emit llvm-ir -o %t.ll
+// CORE-DAG: #[lang("dev_array")] pub [shared] struct #core::intrinsic::pjrt::DevArray<{{.*}}(T), {{.*}}(P)> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {  };
+// CORE-DAG: #[lang("default_placement")] pub [value] struct #core::intrinsic::pjrt::DefaultPlacement in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {  };
+
+import core::intrinsic::pjrt::DevArray as Device;
+import core::intrinsic::pjrt::DefaultPlacement as Placement;
+pub fn imported(x: Device<f32, Placement>) -> DevArray<f32> { x }
+pub fn inferred(x: Device<f32>) -> Device<f32, Placement> { x }
+// HIR-DAG: fn #app::imported(v0 (x): DevArray<f32>) -> DevArray<f32>
+// HIR-DAG: fn #app::inferred(v0 (x): DevArray<f32>) -> DevArray<f32>

@@ -352,6 +352,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 kind: surface::RecordKind::StructKind,
                 default_cap: DefaultCap::Shared,
                 repr_fixed: false,
+                placement: None,
                 ffi: None,
                 fields: Some(RecordFields::Named(vec![(
                     field,

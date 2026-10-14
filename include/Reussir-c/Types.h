@@ -123,6 +123,13 @@ MlirType reussirClosureTypeGet(MlirContext context, intptr_t nInputs,
 MlirType reussirClosureBoxTypeGet(MlirContext context, intptr_t nPayloads,
                                   MlirType const *payloadTypes);
 
+/// Checked construction of a device array. The shape uses MLIR's dynamic
+/// sentinel.
+MLIR_CAPI_EXPORTED MlirType reussirArrayTypeGetWithTarget(intptr_t nDims,
+                                                          int64_t const *shape,
+                                                          MlirType elementType,
+                                                          MlirAttribute target);
+
 // `!reussir.array<shape x eleTy>`. The context is taken from `elementType`.
 MlirType reussirArrayTypeGet(intptr_t nDims, int64_t const *shape,
                              MlirType elementType);

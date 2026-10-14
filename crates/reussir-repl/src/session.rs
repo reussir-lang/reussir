@@ -663,6 +663,28 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
                     Self::render_dims(dims)
                 )
             }
+            TyKind::DefaultPlacement => "DefaultPlacement".into(),
+            TyKind::DevArray {
+                elem,
+                dims,
+                placement,
+            } => {
+                let inner = if dims.is_empty() {
+                    Self::render_ty_with(elab, elem)
+                } else {
+                    format!(
+                        "[{}; {}]",
+                        Self::render_ty_with(elab, elem),
+                        Self::render_dims(dims)
+                    )
+                };
+                let placement = if matches!(placement.kind(), TyKind::DefaultPlacement) {
+                    String::new()
+                } else {
+                    format!(", {}", Self::render_ty_with(elab, placement))
+                };
+                format!("DevArray<{inner}{placement}>")
+            }
             TyKind::Tensor { elem, dims } => {
                 let elem = Self::render_ty_with(elab, elem);
                 if dims.is_empty() {

@@ -1,0 +1,6 @@
+#[placement(devices = "2", memory_kind = "pinned_host", layout = "default")]
+pub struct [value] Placement {}
+pub struct [value] Holder<T, P> { pub value: DevArray<T, P> }
+pub fn identity<T, P>(x: DevArray<T, P>) -> DevArray<T, P> { x }
+pub fn named<T>(x: DevArray<T, Placement>) -> DevArray<T, Placement> { identity(x) }
+pub fn wrap<T, P>(x: DevArray<T, P>) -> Holder<T, P> { Holder { value: x } }

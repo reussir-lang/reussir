@@ -103,6 +103,7 @@ pub struct RecordDecl {
     /// `#[repr(fixed)]`: uniform max-arm box sizing for a variant. Only ever
     /// set for enums (`struct` is always `false`).
     pub repr_fixed: bool,
+    pub placement: Option<String>,
 }
 
 /// A record's ground shape.
@@ -281,6 +282,12 @@ pub enum Ty {
     Array {
         elem: Box<Ty>,
         dims: Vec<u64>,
+    },
+    DefaultPlacement,
+    DevArray {
+        elem: Box<Ty>,
+        dims: Vec<u64>,
+        placement: Option<Box<Ty>>,
     },
     /// `Tensor<elem>` (rank zero) or `Tensor<[elem; extents…]>`.
     Tensor {

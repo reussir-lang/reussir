@@ -1,0 +1,76 @@
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
+// RUN: diff %t.hir %t.round.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o - | %FileCheck %s
+// RUN: %rrc %t.mir --emit mlir-llvm -O none -o - | %FileCheck %s --check-prefix=LLVM
+
+// Scalars, dynamic and empty dimensions, and very large static shapes are
+// descriptor types: none of these signatures allocates the device payload.
+pub fn scalar(x: DevArray<f32>) -> DevArray<f32> { x }
+pub fn dynamic(x: DevArray<[u32; ?, 0, 4]>) -> DevArray<[u32; ?, 0, 4]> { x }
+pub fn large(x: DevArray<[f64; 65536, 65536]>) -> DevArray<[f64; 65536, 65536]> { x }
+
+// CHECK-DAG: !reussir.array<f32, #reussir.target<devices = [0]>>
+// CHECK-DAG: !reussir.array<? x 0 x 4 x i32, #reussir.target<devices = [0]>>
+// CHECK-DAG: !reussir.array<65536 x 65536 x f64, #reussir.target<devices = [0]>>
+// LLVM-DAG: llvm.func @_RC6scalar
+// LLVM-DAG: llvm.func @_RC7dynamic
+// LLVM-DAG: llvm.func @_RC5large
+
+#[placement(devices = "3", memory_kind = "device", layout = "default")]
+pub struct [value] Device3 {}
+pub struct [value] Pair<P> { first: DevArray<[f32; ?, 4], P>, second: DevArray<[f32; ?, 4], P> }
+
+fn ident<T, P>(x: DevArray<T, P>) -> DevArray<T, P> { x }
+pub fn marker(x: DevArray<f32, Device3>) -> DevArray<f32, Device3> { ident(x) }
+pub fn unpack(p: Pair<Device3>) -> DevArray<[f32; ?, 4], Device3> { p.first }
+pub fn duplicate(x: DevArray<[f32; ?, 4], Device3>) -> Pair<Device3> {
+    Pair { first: x, second: x }
+}
+pub fn choose(c: bool, a: DevArray<f32>, b: DevArray<f32>) -> DevArray<f32> {
+    if c { a } else { b }
+}
+pub fn recur(n: u64, x: DevArray<f32>) -> DevArray<f32> {
+    if n == 0 { x } else { recur(n - 1, x) }
+}
+pub fn discard(x: DevArray<f32>) {}
+pub fn atomic(x: Arc<DevArray<f32>>, y: Arc<DevArray<f32>>, c: bool) -> Arc<DevArray<f32>> {
+    if c { x } else { y }
+}
+// CHECK-DAG: #reussir.target<devices = [3], memory_kind = "device", layout = "default">
+// CHECK-DAG: reussir.rc.inc
+// CHECK-DAG: reussir.rc.dec
+// CHECK-DAG: !reussir.rc<!reussir.array<f32, #reussir.target<devices = [0]>> atomic>
+// LLVM-DAG: __reussir_pjrt_array_deallocate
+// LLVM-DAG: llvm.func @device_identity({{.*}}!llvm.ptr) -> !llvm.ptr
+
+pub fn optional(x: DevArray<f32>, c: bool) -> Nullable<DevArray<f32>> {
+    if c { Nullable::NonNull { x } } else { Nullable::Null }
+}
+pub fn optional_drop(x: Nullable<DevArray<f32>>) {}
+
+// Omitted placement is the canonical builtin DefaultPlacement type, so generic
+// placement inference works for both named and default arrays.
+pub fn infer_default(x: DevArray<f32>) -> DevArray<f32> { ident(x) }
+pub fn explicit_default(x: DevArray<f32, DefaultPlacement>) -> DevArray<f32> { x }
+pub fn default_marker(x: DefaultPlacement) -> DefaultPlacement { x }
+
+pub struct [shared] SharedHandles { pub plain: DevArray<f32>, pub atomic: Arc<DevArray<f32>> }
+pub fn shared_plain(h: SharedHandles) -> DevArray<f32> { h.plain }
+pub fn shared_atomic(h: SharedHandles) -> Arc<DevArray<f32>> { h.atomic }
+pub fn nullable_atomic(x: Nullable<Arc<DevArray<f32>>>) -> Nullable<Arc<DevArray<f32>>> { x }
+pub fn nullable_atomic_drop(x: Nullable<Arc<DevArray<f32>>>) {}
+
+pub fn capture(x: DevArray<f32>, c: bool) -> DevArray<f32> {
+    let f = |flag: bool| if flag { x } else { x };
+    f(c)
+}
+
+// Native trampolines retain the existing managed-pointer ABI.
+extern "C" trampoline "device_identity" = scalar;
+
+pub struct [shared] ThreadSafe { pub x: Arc<DevArray<f32>> }
+pub fn safe_arc(x: Arc<ThreadSafe>) -> Arc<DevArray<f32>> { x.x }

@@ -246,6 +246,19 @@ pub enum TyKind<'tcx> {
         elem: Ty<'tcx>,
         dims: &'tcx [u64],
     },
+    /// Builtin zero-field marker selecting logical device zero.
+    DefaultPlacement,
+    /// An immutable device-array handle, owned through one shared RC descriptor.
+    /// `DevArray<f32>` has rank zero; `DevArray<[f32; ?, 0, 4], P>` preserves
+    /// logical shape and the nominal compile-time placement marker `P`.
+    /// Elements are PJRT numeric scalars. Placement type parameters remain
+    /// symbolic until substitution, and are never erased into runtime values.
+    DevArray {
+        elem: Ty<'tcx>,
+        dims: &'tcx [u64],
+        /// A concrete marker or a type parameter; never runtime-erased.
+        placement: Ty<'tcx>,
+    },
     /// A shared mutable cell. The cell box is always reference-counted; `T`
     /// may itself contain reference-counted ownership. The [`CellKind`]
     /// mirrors the dialect's lattice and decides both the synchronization
@@ -393,6 +406,19 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn mk_tensor(&self, elem: Ty<'tcx>, dims: &[u64]) -> Ty<'tcx> {
         let dims = self.alloc_slice(dims);
         self.mk(TyKind::Tensor { elem, dims })
+    }
+
+    pub fn mk_devarray(
+        &self,
+        elem: Ty<'tcx>,
+        dims: &[u64],
+        placement: Option<Ty<'tcx>>,
+    ) -> Ty<'tcx> {
+        self.mk(TyKind::DevArray {
+            elem,
+            dims: self.alloc_slice(dims),
+            placement: placement.unwrap_or_else(|| self.mk(TyKind::DefaultPlacement)),
+        })
     }
 
     pub fn mk_cell(&self, elem: Ty<'tcx>, kind: CellKind) -> Ty<'tcx> {

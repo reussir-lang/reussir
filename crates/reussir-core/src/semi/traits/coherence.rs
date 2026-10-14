@@ -41,6 +41,8 @@ pub enum HeadKey {
     Closure,
     Array,
     Tensor,
+    DevArray,
+    DefaultPlacement,
     Cell(CellKind),
     Nullable,
     Arc,
@@ -60,6 +62,8 @@ pub fn head_key(ty: Ty<'_>) -> Option<HeadKey> {
         TyKind::Closure { .. } => HeadKey::Closure,
         TyKind::Array { .. } => HeadKey::Array,
         TyKind::Tensor { .. } => HeadKey::Tensor,
+        TyKind::DevArray { .. } => HeadKey::DevArray,
+        TyKind::DefaultPlacement => HeadKey::DefaultPlacement,
         TyKind::Cell { kind, .. } => HeadKey::Cell(kind),
         TyKind::Nullable(_) => HeadKey::Nullable,
         TyKind::Arc(_) => HeadKey::Arc,
@@ -100,6 +104,9 @@ fn occurs(g: GenericId, ty: Ty<'_>, subst: &FxHashMap<GenericId, Ty<'_>>) -> boo
     let ty = resolve_binding(ty, subst);
     match *ty.kind() {
         TyKind::Generic(h) => g == h,
+        TyKind::DevArray {
+            elem, placement, ..
+        } => occurs(g, elem, subst) || occurs(g, placement, subst),
         TyKind::Nullable(inner) | TyKind::Arc(inner) => occurs(g, inner, subst),
         TyKind::Cell { elem, .. } | TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => {
             occurs(g, elem, subst)
@@ -162,6 +169,18 @@ fn unify_ty<'tcx>(
                 ret: ry,
             },
         ) => unify_args(xs, ys, vars, subst) && unify_ty(*rx, *ry, vars, subst),
+        (
+            TyKind::DevArray {
+                elem: x,
+                dims: dx,
+                placement: px,
+            },
+            TyKind::DevArray {
+                elem: y,
+                dims: dy,
+                placement: py,
+            },
+        ) => dx == dy && unify_ty(*x, *y, vars, subst) && unify_ty(*px, *py, vars, subst),
         (TyKind::Tensor { elem: x, dims: dx }, TyKind::Tensor { elem: y, dims: dy }) => {
             dx == dy && unify_ty(*x, *y, vars, subst)
         }

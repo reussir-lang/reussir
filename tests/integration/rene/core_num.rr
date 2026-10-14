@@ -26,6 +26,9 @@
 // IMPLS-DAG: #[lang("cell")] pub [shared] struct #core::intrinsic::cell::Cell<{{.*}}(T)> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {  };
 // IMPLS-DAG: #[lang("tensor")] pub [shared] struct #core::intrinsic::tensor::Tensor<{{.*}}(T)> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {  };
 
+// IMPLS-DAG: #[lang("dev_array")] pub [shared] struct #core::intrinsic::pjrt::DevArray<{{.*}}(T), {{.*}}(P)> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {  };
+// IMPLS-DAG: #[lang("default_placement")] pub [value] struct #core::intrinsic::pjrt::DefaultPlacement in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {  };
+
 // Intrinsic prototypes now bound against core's own tower.
 // RUN: %FileCheck %s --check-prefix=PROTO < %t.bdir/dev/deps/core.rri
 // PROTO: #[lang("core::intrinsic::math::sqrt")] pub fn #core::intrinsic::math::sqrt<{{.*}}: core::num::FloatingPoint>({{.*}}

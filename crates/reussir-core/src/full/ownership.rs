@@ -312,11 +312,11 @@ impl<'a, 'tcx> Rr<'a, 'tcx> {
         let b = match *ty.kind() {
             // An array is one rc-managed box regardless of its (Plain)
             // element type.
-            TyKind::Array { .. } => true,
+            TyKind::Array { .. } | TyKind::DevArray { .. } => true,
             // A tensor is a transient value-semantics view; it carries no rc
             // box of its own (the backing array's reference is rooted by the
             // intrinsic that produced the tensor, not by the tensor value).
-            TyKind::Tensor { .. } => false,
+            TyKind::DefaultPlacement | TyKind::Tensor { .. } => false,
             // A cell is always one shared rc-managed box, independent of its
             // element type (which the cell's drop recursively releases).
             TyKind::Cell { .. } => true,

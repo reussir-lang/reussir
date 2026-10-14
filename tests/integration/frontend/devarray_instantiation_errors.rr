@@ -1,0 +1,6 @@
+// RUN: %not %rrc %s --emit mir -o - 2>&1 | %FileCheck %s
+pub struct [value] Holder<T, P> { value: DevArray<T, P> }
+pub fn bad_element(x: Holder<str, DefaultPlacement>) {}
+pub fn bad_placement(x: Holder<f32, i64>) {}
+// CHECK-DAG: this instantiation gives `DevArray` an unsupported scalar element type
+// CHECK-DAG: this instantiation gives `DevArray` a non-placement type argument

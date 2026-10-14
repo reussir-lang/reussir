@@ -223,6 +223,15 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 let elem = self.resolve(*elem);
                 self.tcx.mk_array(elem, dims)
             }
+            TyKind::DevArray {
+                elem,
+                dims,
+                placement,
+            } => {
+                let elem = self.resolve(*elem);
+                let placement = Some(self.resolve(*placement));
+                self.tcx.mk_devarray(elem, dims, placement)
+            }
             TyKind::Tensor { elem, dims } => {
                 let elem = self.resolve(*elem);
                 self.tcx.mk_tensor(elem, dims)
@@ -328,6 +337,21 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             {
                 self.unify(*e1, *e2)
             }
+            (
+                TyKind::DevArray {
+                    elem: e1,
+                    dims: d1,
+                    placement: p1,
+                },
+                TyKind::DevArray {
+                    elem: e2,
+                    dims: d2,
+                    placement: p2,
+                },
+            ) if d1 == d2 => {
+                self.unify(*e1, *e2)?;
+                self.unify(*p1, *p2)
+            }
             (TyKind::Tensor { elem: e1, dims: d1 }, TyKind::Tensor { elem: e2, dims: d2 })
                 if d1 == d2 =>
             {
@@ -336,6 +360,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
 
             (TyKind::Int(x), TyKind::Int(y)) if x == y => Ok(()),
             (TyKind::Fp(x), TyKind::Fp(y)) if x == y => Ok(()),
+            (TyKind::DefaultPlacement, TyKind::DefaultPlacement) => Ok(()),
             (TyKind::Bool, TyKind::Bool)
             | (TyKind::Str, TyKind::Str)
             | (TyKind::Char, TyKind::Char)
@@ -383,6 +408,9 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             TyKind::Nullable(inner) => self.occurs(h, *inner),
             TyKind::Arc(inner) => self.occurs(h, *inner),
             TyKind::Cell { elem: inner, .. } => self.occurs(h, *inner),
+            TyKind::DevArray {
+                elem, placement, ..
+            } => self.occurs(h, *elem) || self.occurs(h, *placement),
             TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => self.occurs(h, *elem),
             _ => false,
         }
@@ -545,6 +573,21 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             {
                 self.unify_instantiated(*e1, inst, *e2)
             }
+            (
+                TyKind::DevArray {
+                    elem: e1,
+                    dims: d1,
+                    placement: p1,
+                },
+                TyKind::DevArray {
+                    elem: e2,
+                    dims: d2,
+                    placement: p2,
+                },
+            ) if d1 == d2 => {
+                self.unify_instantiated(*e1, inst, *e2)?;
+                self.unify_instantiated(*p1, inst, *p2)
+            }
             (TyKind::Tensor { elem: e1, dims: d1 }, TyKind::Tensor { elem: e2, dims: d2 })
                 if d1 == d2 =>
             {
@@ -553,6 +596,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
 
             (TyKind::Int(x), TyKind::Int(y)) if x == y => Ok(()),
             (TyKind::Fp(x), TyKind::Fp(y)) if x == y => Ok(()),
+            (TyKind::DefaultPlacement, TyKind::DefaultPlacement) => Ok(()),
             (TyKind::Bool, TyKind::Bool)
             | (TyKind::Str, TyKind::Str)
             | (TyKind::Char, TyKind::Char)
@@ -611,6 +655,15 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 let elem = self.materialize(*elem, inst);
                 self.tcx.mk_array(elem, dims)
             }
+            TyKind::DevArray {
+                elem,
+                dims,
+                placement,
+            } => {
+                let elem = self.materialize(*elem, inst);
+                let placement = Some(self.materialize(*placement, inst));
+                self.tcx.mk_devarray(elem, dims, placement)
+            }
             TyKind::Tensor { elem, dims } => {
                 let elem = self.materialize(*elem, inst);
                 self.tcx.mk_tensor(elem, dims)
@@ -633,6 +686,47 @@ mod tests {
     /// A distinct record `DefId` for tests (no resolution pass).
     fn def(n: u32) -> DefId {
         DefId(n)
+    }
+
+    #[test]
+    fn device_array_infers_element_and_placement_and_checks_occurs() {
+        with_tcx(|tcx| {
+            let mut infer = InferCtxt::new(tcx);
+            let elem = infer.new_hole_ty();
+            let placement = infer.new_hole_ty();
+            let marker = tcx.mk_record(def(9), &[], crate::semi::ty::Flexivity::Irrelevant);
+            let expected = tcx.mk_devarray(
+                tcx.mk_bool(),
+                &[crate::semi::ty::DYNAMIC_EXTENT, 0],
+                Some(marker),
+            );
+            let actual =
+                tcx.mk_devarray(elem, &[crate::semi::ty::DYNAMIC_EXTENT, 0], Some(placement));
+            infer.unify(actual, expected).unwrap();
+            assert_eq!(infer.resolve(actual), expected);
+            assert!(
+                infer
+                    .unify(
+                        expected,
+                        tcx.mk_devarray(tcx.mk_bool(), &[4, 0], Some(marker))
+                    )
+                    .is_err()
+            );
+            assert!(
+                infer
+                    .unify(
+                        expected,
+                        tcx.mk_devarray(tcx.mk_bool(), &[crate::semi::ty::DYNAMIC_EXTENT, 0], None)
+                    )
+                    .is_err()
+            );
+            let hole = infer.new_hole_ty();
+            assert!(
+                infer
+                    .unify(hole, tcx.mk_devarray(tcx.mk_bool(), &[], Some(hole)))
+                    .is_err()
+            );
+        });
     }
 
     #[test]

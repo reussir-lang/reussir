@@ -23,7 +23,7 @@ pub Program: raw::Program = <h:Header?> <items:Item*> => {
 
 /// The `.rri` interface header, required first in an interface dump and
 /// absent from a plain HIR program:
-/// `interface 1 package "demo" producer "rrc 0.1.0";`.
+/// `interface 2 package "demo" producer "rrc 0.1.0";`.
 Header: raw::InterfaceHeader =
     "interface" <format:"int"> "package" <package:"quoted"> "producer" <producer:"quoted"> ";"
     => raw::InterfaceHeader {
@@ -60,10 +60,11 @@ Span: raw::Span = "[" <s:"int"> ".." <e:"int"> "]" => (raw::small_u32(&s), raw::
 ItemLoc: (u32, Option<raw::Span>) = "in" <f:"int"> <sp:Span?> => (raw::small_u32(&f), sp);
 
 RecordDecl: raw::Record = {
-    <lang:LangAttr?> <p:"pub"?> <default_cap:DefaultCap> "struct" "#" <path:QPath> <generics:Generics?> <loc:ItemLoc?>
+    <lang:LangAttr?> <placement:("placement" <"quoted">)?> <p:"pub"?> <default_cap:DefaultCap> "struct" "#" <path:QPath> <generics:Generics?> <loc:ItemLoc?>
     "{" <ms:Comma<Member>> "}" ";"
     => raw::Record {
         lang,
+        placement: placement.map(|p| unescape_debug_str(p).into_owned()),
         is_pub: p.is_some(),
         default_cap,
         repr_fixed: false,
@@ -75,10 +76,11 @@ RecordDecl: raw::Record = {
         body: raw::RecordBody::Compound(ms),
     },
     // An opaque `#[ffi]` record: `[shared] struct #Vec<$0> { ffi "path" };`.
-    <lang:LangAttr?> <p:"pub"?> <default_cap:DefaultCap> "struct" "#" <path:QPath> <generics:Generics?> <loc:ItemLoc?>
+    <lang:LangAttr?> <placement:("placement" <"quoted">)?> <p:"pub"?> <default_cap:DefaultCap> "struct" "#" <path:QPath> <generics:Generics?> <loc:ItemLoc?>
     "{" "ffi" <rust:"quoted"> "}" ";"
     => raw::Record {
         lang,
+        placement: placement.map(|p| unescape_debug_str(p).into_owned()),
         is_pub: p.is_some(),
         default_cap,
         repr_fixed: false,
@@ -90,10 +92,11 @@ RecordDecl: raw::Record = {
         body: raw::RecordBody::Opaque(unescape_debug_str(rust).into_owned()),
     },
     // Only an enum may carry the `fixed` marker (`#[repr(fixed)]`).
-    <lang:LangAttr?> <p:"pub"?> <default_cap:DefaultCap> "enum" <fixed:"fixed"?> "#" <path:QPath> <generics:Generics?> <loc:ItemLoc?>
+    <lang:LangAttr?> <placement:("placement" <"quoted">)?> <p:"pub"?> <default_cap:DefaultCap> "enum" <fixed:"fixed"?> "#" <path:QPath> <generics:Generics?> <loc:ItemLoc?>
     "{" <vs:Comma<Variant>> "}" ";"
     => raw::Record {
         lang,
+        placement: placement.map(|p| unescape_debug_str(p).into_owned()),
         is_pub: p.is_some(),
         default_cap,
         repr_fixed: fixed.is_some(),
@@ -306,6 +309,8 @@ Name: &'input str = {
     "RwLock" => "RwLock",
     "Arc" => "Arc",
     "Tensor" => "Tensor",
+    "DevArray" => "DevArray",
+    "DefaultPlacement" => "DefaultPlacement",
     "intrinsic" => "intrinsic",
     "array" => "array",
     "tensor" => "tensor",
@@ -377,6 +382,14 @@ Ty: raw::Ty = {
         => raw::Ty::Record { cap, path: path.0, args: path.1 },
     "[" <elem:Ty> ";" <dims:CommaPlus<Extent>> "]"
         => raw::Ty::Array { elem: Box::new(elem), dims },
+    "DefaultPlacement" => raw::Ty::DefaultPlacement,
+    "DevArray" "<" <inner:Ty> <p:("," <Ty>)?> ">" => {
+        let (elem, dims) = match inner {
+            raw::Ty::Array { elem, dims } => (elem, dims),
+            elem => (Box::new(elem), Vec::new()),
+        };
+        raw::Ty::DevArray { elem, dims, placement: p.map(Box::new) }
+    },
     "Tensor" "<" <inner:Ty> ">" => match inner {
         raw::Ty::Array { elem, dims } => raw::Ty::Tensor { elem, dims },
         elem => raw::Ty::Tensor { elem: Box::new(elem), dims: vec![] },
@@ -627,6 +640,9 @@ extern {
         "RwLock" => Token::RwLockCell,
         "Arc" => Token::Arc,
         "Tensor" => Token::Tensor,
+        "DevArray" => Token::DevArray,
+        "DefaultPlacement" => Token::DefaultPlacement,
+        "placement" => Token::Placement,
         "NonNull" => Token::NonNull,
         "Null" => Token::Null,
         "poison" => Token::Poison,

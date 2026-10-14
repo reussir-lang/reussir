@@ -351,6 +351,12 @@ unsafe extern "C" {
         n_payloads: isize,
         payload_types: *const MlirType,
     ) -> MlirType;
+    pub fn reussirArrayTypeGetWithTarget(
+        n_dims: isize,
+        shape: *const i64,
+        element_type: MlirType,
+        target: MlirAttribute,
+    ) -> MlirType;
     pub fn reussirArrayTypeGet(
         n_dims: isize,
         shape: *const i64,

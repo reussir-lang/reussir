@@ -22,7 +22,9 @@
 #include <mlir/CAPI/IR.h>
 #include <mlir/IR/BuiltinAttributes.h>
 
+#include "Reussir/Conversion/OpenXLATarget.h"
 #include "Reussir/IR/ReussirTypes.h"
+#include <llvm/ADT/DenseSet.h>
 
 #include "llvm/ADT/SmallVector.h"
 
@@ -119,6 +121,53 @@ MlirType reussirClosureBoxTypeGet(MlirContext context, intptr_t nPayloads,
                                   MlirType const *payloadTypes) {
   llvm::SmallVector<mlir::Type> payloads = unwrapTypes(nPayloads, payloadTypes);
   return wrap(ClosureBoxType::get(unwrap(context), payloads));
+}
+
+MlirType reussirArrayTypeGetWithTarget(intptr_t nDims, int64_t const *shape,
+                                     MlirType elementType,
+                                     MlirAttribute target) {
+  auto ele = unwrap(elementType);
+  auto placement = mlir::dyn_cast_or_null<TargetAttr>(unwrap(target));
+  if (!placement)
+    return MlirType{nullptr};
+  auto loc = mlir::UnknownLoc::get(ele.getContext());
+  auto array = ArrayType::getChecked(loc, ele.getContext(),
+                                    llvm::ArrayRef<int64_t>(shape, nDims), ele,
+                                    placement);
+  if (!array)
+    return MlirType{nullptr};
+  if (placement.getMemoryKind() && placement.getMemoryKind().getValue().empty()) {
+    mlir::emitError(loc) << "device array memory kind must not be empty";
+    return MlirType{nullptr};
+  }
+  llvm::SmallDenseSet<int32_t> seen;
+  for (auto device : placement.getDevices().asArrayRef()) {
+    if (!seen.insert(device).second) {
+      mlir::emitError(loc)
+          << "device array placement requires distinct logical device IDs";
+      return MlirType{nullptr};
+    }
+  }
+#ifdef REUSSIR_ENABLE_OPENXLA
+  if (mlir::failed(verifyPjrtArrayPlacement(
+          mlir::RankedTensorType::get(array.getShape(), ele),
+          placement.getDevices().asArrayRef(), placement.getSharding(),
+          placement.getLayout(), loc)))
+    return MlirType{nullptr};
+#else
+  if (placement.getSharding() ||
+      (placement.getLayout() && placement.getLayout().getValue() != "default" &&
+       placement.getLayout().getValue() != "auto")) {
+    mlir::emitError(loc) << "concrete device array sharding/layout requires "
+                            "REUSSIR_ENABLE_OPENXLA";
+    return MlirType{nullptr};
+  }
+  if (placement.getDevices().size() != 1) {
+    mlir::emitError(loc) << "multi-device placement requires concrete sharding";
+    return MlirType{nullptr};
+  }
+#endif
+  return wrap(array);
 }
 
 MlirType reussirArrayTypeGet(intptr_t nDims, int64_t const *shape,

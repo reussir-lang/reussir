@@ -269,13 +269,20 @@ fn note_records<'tcx>(ty: Ty<'tcx>, records: &mut FxHashSet<DefId>, queue: &mut 
             }
             note_records(ret, records, queue);
         }
+        TyKind::DevArray {
+            elem, placement, ..
+        } => {
+            note_records(elem, records, queue);
+            note_records(placement, records, queue);
+        }
         TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } | TyKind::Cell { elem, .. } => {
             note_records(elem, records, queue);
         }
         TyKind::Nullable(inner) | TyKind::Arc(inner) => {
             note_records(inner, records, queue);
         }
-        TyKind::Int(_)
+        TyKind::DefaultPlacement
+        | TyKind::Int(_)
         | TyKind::Fp(_)
         | TyKind::Bool
         | TyKind::Str

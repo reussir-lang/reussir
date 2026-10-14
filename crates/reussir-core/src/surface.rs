@@ -965,6 +965,7 @@ pub struct Record {
     /// `#[repr(fixed)]`: uniform max-arm box sizing for an enum instead of the
     /// default per-constructor sizing. Only meaningful for enums.
     pub repr_fixed: bool,
+    pub placement: Option<String>,
 }
 
 /// An `extern "C" trampoline` declaration. The ABI and symbol strings are
@@ -1396,6 +1397,7 @@ fn record_of(node: &ResolvedNode, kind: RecordKind) -> Record {
         visibility: visibility_of(node),
         default_cap,
         repr_fixed,
+        placement: None,
     }
 }
 

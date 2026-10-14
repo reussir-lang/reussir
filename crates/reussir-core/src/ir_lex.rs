@@ -124,6 +124,12 @@ pub enum Token<'a> {
     RwLockCell,
     #[token("Arc")]
     Arc,
+    #[token("placement")]
+    Placement,
+    #[token("DefaultPlacement")]
+    DefaultPlacement,
+    #[token("DevArray")]
+    DevArray,
     #[token("Tensor")]
     Tensor,
     #[token("NonNull")]

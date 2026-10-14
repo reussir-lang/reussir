@@ -161,6 +161,27 @@ pub fn closure_box<'c>(context: &'c Context, payloads: &[Type<'c>]) -> Type<'c> 
     }
 }
 
+/// Checked device-array payload construction. `target` must be a Reussir target attribute.
+pub fn array_with_target<'c>(
+    shape: &[i64],
+    element: Type<'c>,
+    target: melior::ir::Attribute<'c>,
+) -> Option<Type<'c>> {
+    unsafe {
+        let raw = sys::reussirArrayTypeGetWithTarget(
+            shape.len() as isize,
+            shape.as_ptr(),
+            element.to_raw(),
+            target.to_raw(),
+        );
+        if raw.ptr.is_null() {
+            None
+        } else {
+            Some(Type::from_raw(raw))
+        }
+    }
+}
+
 /// Creates a `!reussir.array<shape x element>` type.
 pub fn array<'c>(shape: &[i64], element: Type<'c>) -> Type<'c> {
     unsafe {

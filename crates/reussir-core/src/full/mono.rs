@@ -693,6 +693,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
                 ty,
                 default_cap: DefaultCap::Shared,
                 repr_fixed: false,
+                placement: None,
                 layout,
             });
             continue;
@@ -721,6 +722,11 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
             ty,
             default_cap,
             repr_fixed,
+            placement: input
+                .records
+                .get(&def)
+                .and_then(|r| r.placement.as_ref())
+                .map(|p| tcx.alloc(p.clone()).as_str()),
             layout,
         });
     }
@@ -868,6 +874,9 @@ fn ty_depth(ty: Ty<'_>) -> usize {
         TyKind::Nullable(inner) => 1 + ty_depth(inner),
         TyKind::Cell { elem: inner, .. } => 1 + ty_depth(inner),
         TyKind::Arc(inner) => 1 + ty_depth(inner),
+        TyKind::DevArray {
+            elem, placement, ..
+        } => 1 + ty_depth(elem).max(ty_depth(placement)),
         TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => 1 + ty_depth(elem),
         TyKind::Record { args, .. } => 1 + args.iter().map(|&a| ty_depth(a)).max().unwrap_or(0),
         TyKind::Closure { params, ret } => {
@@ -879,7 +888,8 @@ fn ty_depth(ty: Ty<'_>) -> usize {
                 .max()
                 .unwrap_or(0)
         }
-        TyKind::Int(_)
+        TyKind::DefaultPlacement
+        | TyKind::Int(_)
         | TyKind::Fp(_)
         | TyKind::Bool
         | TyKind::Str
@@ -1820,6 +1830,12 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
             TyKind::Nullable(inner) => self.note_records(inner),
             TyKind::Cell { elem: inner, .. } => self.note_records(inner),
             TyKind::Arc(inner) => self.note_records(inner),
+            TyKind::DevArray {
+                elem, placement, ..
+            } => {
+                self.note_records(elem);
+                self.note_records(placement);
+            }
             TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => self.note_records(elem),
             _ => {}
         }
@@ -1833,6 +1849,40 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     /// [`reported_arcs`](Self::reported_arcs)).
     fn check_arc_inners(&mut self, ty: Ty<'tcx>, span: Option<Span>) {
         match *ty.kind() {
+            TyKind::DevArray {
+                elem, placement, ..
+            } => {
+                if !crate::semi::ty_eval::device_element_supported(elem)
+                    && self.reported_arcs.insert(ty)
+                {
+                    self.error(
+                        span,
+                        "this instantiation gives `DevArray` an unsupported scalar element type",
+                    );
+                }
+                {
+                    let p = placement;
+                    let valid = match *p.kind() {
+                        TyKind::DefaultPlacement => true,
+                        TyKind::Record { def, args, .. } => {
+                            args.is_empty()
+                                && self
+                                    .record_defs
+                                    .get(&def)
+                                    .is_some_and(|r| r.placement.is_some())
+                        }
+                        _ => false,
+                    };
+                    if !valid && self.reported_arcs.insert(ty) {
+                        self.error(
+                            span,
+                            "this instantiation gives `DevArray` a non-placement type argument",
+                        );
+                    }
+                    self.check_arc_inners(p, span);
+                }
+                self.check_arc_inners(elem, span);
+            }
             TyKind::Arc(inner) => {
                 let rejection = arc_inner_rejection(
                     |def| self.record_defs.get(&def).map(|r| r.default_cap),
@@ -1993,6 +2043,12 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
             TyKind::Nullable(inner) => self.discover_records(inner, worklist),
             TyKind::Cell { elem: inner, .. } => self.discover_records(inner, worklist),
             TyKind::Arc(inner) => self.discover_records(inner, worklist),
+            TyKind::DevArray {
+                elem, placement, ..
+            } => {
+                self.discover_records(elem, worklist);
+                self.discover_records(placement, worklist);
+            }
             TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => {
                 self.discover_records(elem, worklist)
             }
@@ -3534,6 +3590,9 @@ mod tests {
             TyKind::Nullable(inner) => is_ground(inner),
             TyKind::Cell { elem: inner, .. } => is_ground(inner),
             TyKind::Arc(inner) => is_ground(inner),
+            TyKind::DevArray {
+                elem, placement, ..
+            } => is_ground(elem) && is_ground(placement),
             TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => is_ground(elem),
             _ => true,
         }

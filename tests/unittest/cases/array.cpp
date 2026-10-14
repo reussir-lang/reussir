@@ -74,7 +74,9 @@ TEST_F(ReussirTest, ArrayRejectsRankZero) {
 
 TEST_F(ReussirTest, TargetArrayDescriptorLayout) {
   for (std::string_view spelling :
-       {"!reussir.array<1024 x 4096 x f32, #reussir.target<devices = [0]>>",
+       {"!reussir.array<f32, #reussir.target<devices = [0]>>",
+        "!reussir.array<0 x 4 x f32, #reussir.target<devices = [0]>>",
+        "!reussir.array<1024 x 4096 x f32, #reussir.target<devices = [0]>>",
         "!reussir.array<? x 4 x ? x f32, #reussir.target<devices = [0]>>",
         "!reussir.array<? x 4 x f32, #reussir.target<devices = [3, 1, 2, "
         "0]>>"}) {
@@ -104,7 +106,8 @@ TEST_F(ReussirTest, TargetArrayDescriptorLayout) {
                     layout.getTypeSize(converter.convertType(box)));
           EXPECT_FALSE(box.hasDynamicArrayPayload());
           EXPECT_FALSE(isTriviallyCopyable(type));
-          EXPECT_EQ(type.dropFront().getTarget(), type.getTarget());
+          if (type.getRank() != 0)
+            EXPECT_EQ(type.dropFront().getTarget(), type.getTarget());
           EXPECT_EQ(
               type.cloneWith(std::nullopt, type.getElementType()).getTarget(),
               type.getTarget());

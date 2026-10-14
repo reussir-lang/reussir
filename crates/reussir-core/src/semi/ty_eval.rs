@@ -275,6 +275,79 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             };
         }
 
+        if (bare_unshadowed || self.is_core_intrinsic_prefix(&path.segments, "pjrt"))
+            && self.sym(key) == "DefaultPlacement"
+        {
+            if !args.is_empty() {
+                self.error(Some(span), "`DefaultPlacement` takes no type arguments");
+            }
+            return self.tcx.mk(TyKind::DefaultPlacement);
+        }
+        if (bare_unshadowed || self.is_core_intrinsic_prefix(&path.segments, "pjrt"))
+            && self.sym(key) == "DevArray"
+        {
+            if args.is_empty() || args.len() > 2 {
+                self.error(
+                    Some(span),
+                    "`DevArray` takes an element/shape type and an optional placement type",
+                );
+                return self.tcx.mk(TyKind::Bottom);
+            }
+            let (elem, dims) = match args[0].kind() {
+                TypeKind::TypeArray(elem, extents) => {
+                    let elem = self.eval_type(&elem);
+                    let mut dims = Vec::new();
+                    for extent in extents {
+                        dims.push(match extent {
+                            surface::ArrayExtent::Dynamic(_) => crate::semi::ty::DYNAMIC_EXTENT,
+                            surface::ArrayExtent::Expr(e) => {
+                                let n = self.eval_extent(&e);
+                                if n > i64::MAX as u64 {
+                                    self.error(
+                                        Some(e.span()),
+                                        "device array extent exceeds i64::MAX",
+                                    );
+                                }
+                                n.min(i64::MAX as u64)
+                            }
+                        });
+                    }
+                    (elem, dims)
+                }
+                _ => (self.eval_type(&args[0]), Vec::new()),
+            };
+            if !device_element_supported(elem) {
+                self.error(
+                    Some(span),
+                    "`DevArray` elements must be integer, bool, f16, bf16, f32, or f64 scalars",
+                );
+            }
+            let placement = args.get(1).map(|p| self.eval_type(p));
+            if let Some(p) = placement {
+                let valid = match *p.kind() {
+                    TyKind::DefaultPlacement
+                    | TyKind::Generic(_)
+                    | TyKind::Hole(_)
+                    | TyKind::Bottom => true,
+                    TyKind::Record { def, args, .. } => {
+                        args.is_empty()
+                            && self
+                                .records
+                                .get(&def)
+                                .is_some_and(|r| r.placement.is_some())
+                    }
+                    _ => false,
+                };
+                if !valid {
+                    self.error(
+                        Some(span),
+                        "`DevArray` placement must be a `#[placement]` marker type",
+                    );
+                }
+            }
+            return self.tcx.mk_devarray(elem, &dims, placement);
+        }
+
         // Nothing else under the reserved `core` package names a type.
         if path.segments.first().map(|&k| self.sym(k)) == Some("core") {
             let shown = self.path_display(path);
@@ -539,6 +612,7 @@ pub fn array_element_rejection<'tcx>(
         TyKind::Cell { .. } => Some("a cell"),
         TyKind::Closure { .. } => Some("a closure"),
         TyKind::Array { .. } => Some("a nested rc array"),
+        TyKind::DevArray { .. } => Some("a device array"),
         TyKind::Tensor { .. } => Some("a tensor"),
         TyKind::Str => Some("a string"),
         _ => Some("not a scalar or `[shared]` record"),
@@ -609,7 +683,7 @@ pub fn arc_inner_rejection<'tcx>(
         },
         // An array or a closure is one shared rc box exactly like a
         // `[shared]` record, so it takes the atomic coloring the same way.
-        TyKind::Array { .. } | TyKind::Closure { .. } => None,
+        TyKind::Array { .. } | TyKind::DevArray { .. } | TyKind::Closure { .. } => None,
         TyKind::Tensor { .. } => Some("a tensor is scope-confined and cannot be arc'd"),
         TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => None,
         // A cell is a shared box too, but synchronization is the cell's own
@@ -626,7 +700,8 @@ pub fn arc_inner_rejection<'tcx>(
 fn is_concretely_non_pointer(t: Ty<'_>) -> bool {
     matches!(
         t.kind(),
-        TyKind::Int(_)
+        TyKind::DefaultPlacement
+            | TyKind::Int(_)
             | TyKind::Fp(_)
             | TyKind::Bool
             | TyKind::Str
@@ -838,6 +913,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// backstop for what still blocks here, e.g. generic inners).
     pub(crate) fn sweep_arc_wf(&mut self, ty: Ty<'tcx>, span: Option<surface::Span>) {
         match *ty.kind() {
+            TyKind::DevArray {
+                elem, placement, ..
+            } => {
+                self.sweep_arc_wf(elem, span);
+                self.sweep_arc_wf(placement, span);
+            }
             TyKind::Arc(inner) => {
                 self.report_arc_wf(inner, span);
                 self.sweep_arc_wf(inner, span);
@@ -864,6 +945,21 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             _ => {}
         }
     }
+}
+
+/// PJRT scalar dtypes supported by the frontend. Generic elements are checked after substitution.
+pub fn device_element_supported(ty: Ty<'_>) -> bool {
+    matches!(
+        ty.kind(),
+        TyKind::Int(IntTy::Signed(8 | 16 | 32 | 64) | IntTy::Unsigned(8 | 16 | 32 | 64))
+            | TyKind::Bool
+            | TyKind::Fp(
+                crate::semi::ty::FpTy::Ieee(16 | 32 | 64) | crate::semi::ty::FpTy::BFloat16
+            )
+            | TyKind::Generic(_)
+            | TyKind::Hole(_)
+            | TyKind::Bottom
+    )
 }
 
 /// Tensor elements have a native numeric MLIR representation. Unknown generic

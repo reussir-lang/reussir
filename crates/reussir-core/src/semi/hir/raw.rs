@@ -161,6 +161,7 @@ pub struct Record {
     /// `#[repr(fixed)]`: uniform max-arm box sizing for an enum. Only ever set
     /// for enums (`struct` is always `false`).
     pub repr_fixed: bool,
+    pub placement: Option<String>,
     pub kind: RecordKind,
     pub path: String,
     pub generics: Vec<Generic>,
@@ -310,6 +311,12 @@ pub enum Ty {
     Array {
         elem: Box<Ty>,
         dims: Vec<u64>,
+    },
+    DefaultPlacement,
+    DevArray {
+        elem: Box<Ty>,
+        dims: Vec<u64>,
+        placement: Option<Box<Ty>>,
     },
     /// `Tensor<elem>` (rank zero) or `Tensor<[elem; extents…]>`.
     Tensor {

@@ -27,7 +27,7 @@ module @kernel attributes {sym_visibility = "private"} {
 }
 func.func @unresolved_sharding(%token: !reussir.token<align : 8, size : 40>) -> !R attributes {ifrt.function} {
   %out, %done = ifrt.Call @kernel::@main() on devices [0, 1] : () -> !I
-  // CHECK: multi-device allocation requires concrete sharding
+  // CHECK: multi-device array placement requires concrete sharding
   %result = reussir.array.from_ifrt %out token(%token : !reussir.token<align : 8, size : 40>) : !I -> !R
   return %result : !R
 }

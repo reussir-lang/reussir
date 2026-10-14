@@ -247,6 +247,7 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                 kind: rec.kind,
                 default_cap: rec.default_cap,
                 repr_fixed: rec.repr_fixed,
+                placement: rec.placement.clone(),
                 ffi: rec.ffi.clone(),
                 fields: rec.fields.as_ref().map(|f| remap.fields(f)),
                 regional_generics: remap.generic_ids(&rec.regional_generics),
@@ -583,6 +584,15 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
             TyKind::Array { elem, dims } => {
                 let elem = self.ty(elem);
                 self.tcx.mk_array(elem, dims)
+            }
+            TyKind::DevArray {
+                elem,
+                dims,
+                placement,
+            } => {
+                let elem = self.ty(elem);
+                let placement = Some(self.ty(placement));
+                self.tcx.mk_devarray(elem, dims, placement)
             }
             TyKind::Tensor { elem, dims } => {
                 let elem = self.ty(elem);
@@ -986,6 +996,53 @@ mod tests {
             assert!(
                 !text.contains(": #core::intrinsic::tensor::Tensor"),
                 "{text}"
+            );
+        });
+    }
+
+    #[test]
+    fn device_former_anchors_reload_with_source_sites() {
+        use crate::semi::lang::{FormerItem, LangItem};
+        with_tcx(|tcx| {
+            let parsed = package_interface(
+                tcx,
+                "core",
+                &["intrinsic", "pjrt"],
+                include_str!("../../../../library/core/src/intrinsic/pjrt.rr"),
+            );
+            let interner = Arc::new(reussir_syntax::new_threaded_interner());
+            let mut keys = interner.clone();
+            let mut elab = Elaborator::new(tcx, &interner);
+            let mapped_file = FileId::from_index(17);
+            elab.declare_extern_package(
+                &mut keys,
+                &ExternPackage {
+                    name: "core",
+                    parsed: &parsed,
+                    files: &[mapped_file],
+                },
+            );
+            for former in [FormerItem::DevArray, FormerItem::DefaultPlacement] {
+                let item = LangItem::Former(former);
+                let def = elab.lang.get(item).expect("reloaded anchor");
+                assert!(elab.lang.is_former_anchor(def));
+                assert_eq!(elab.records[&def].ty_params.len(), former.arity());
+                let (file, span) = elab.lang_item_site(item).expect("declaration site");
+                assert_eq!(file, mapped_file);
+                assert!(span.is_some());
+            }
+            let source = "import core::intrinsic::pjrt::DevArray as Device; import core::intrinsic::pjrt::DefaultPlacement as Placement; pub fn f(x: Device<f32, Placement>) -> DevArray<f32> { x }";
+            let parse = reussir_syntax::parse_with_interner(source, interner.clone());
+            assert!(parse.ok(), "{:#?}", parse.errors);
+            let program = surface::program(&parse.root);
+            elab.run_package(&[PackageFile {
+                file: FileId::ROOT,
+                module: vec![keys.get_or_intern("app")],
+                program: &program,
+            }]);
+            assert!(!elab.has_errors(), "{:#?}", elab.reports);
+            assert!(
+                matches!(elab.elaborated[0].return_ty.kind(), TyKind::DevArray { placement, .. } if matches!(placement.kind(), TyKind::DefaultPlacement))
             );
         });
     }

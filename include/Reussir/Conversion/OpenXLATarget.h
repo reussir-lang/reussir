@@ -43,6 +43,13 @@ mlir::FailureOr<llvm::SmallVector<int64_t>>
 getPjrtDimShards(mlir::Attribute sharding, mlir::RankedTensorType shape,
                  llvm::ArrayRef<int32_t> devices, mlir::Location loc);
 
+// Validate type-level placement without requiring divisible global extents.
+mlir::LogicalResult verifyPjrtArrayPlacement(mlir::RankedTensorType shape,
+                                           llvm::ArrayRef<int32_t> devices,
+                                           mlir::Attribute sharding,
+                                           mlir::StringAttr layout,
+                                           mlir::Location loc);
+
 // Tile coordinates are indexed by the target's ordered device list. Replicas
 // share coordinates. Unreduced axes cannot be transferred as a single host
 // value.

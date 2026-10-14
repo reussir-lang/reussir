@@ -77,6 +77,12 @@ pub fn collect_record_defs<'tcx>(ty: Ty<'tcx>, out: &mut Vec<DefId>) {
             }
         }
         TyKind::Arc(inner) | TyKind::Nullable(inner) => collect_record_defs(inner, out),
+        TyKind::DevArray {
+            elem, placement, ..
+        } => {
+            collect_record_defs(elem, out);
+            collect_record_defs(placement, out);
+        }
         TyKind::Cell { elem, .. } | TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => {
             collect_record_defs(elem, out)
         }
@@ -288,6 +294,7 @@ impl<'tcx> Cx<'_, 'tcx> {
             | TyKind::Str
             // Error recovery: don't cascade.
             | TyKind::Bottom => SyncVerdict::Sync,
+            TyKind::DefaultPlacement => SyncVerdict::Sync,
             TyKind::Generic(_) | TyKind::Hole(_) => SyncVerdict::Blocked,
             TyKind::Nullable(inner) => self.check(inner),
             // The cell verdict follows the kind lattice (thread-safety
@@ -317,7 +324,7 @@ impl<'tcx> Cx<'_, 'tcx> {
             // shareability is carried by the box coloring (`Arc`), not the
             // nominal type. A tensor refutes for the same reason its backing
             // array does: it is a scope-confined view of that box's data.
-            TyKind::Array { .. } | TyKind::Tensor { .. } | TyKind::Closure { .. } => {
+            TyKind::Array { .. } | TyKind::DevArray { .. } | TyKind::Tensor { .. } | TyKind::Closure { .. } => {
                 self.refute(ty, NotSyncReason::NonAtomicBox)
             }
             TyKind::Record { def, args, .. } => match self.env.default_cap(def) {
@@ -399,6 +406,7 @@ impl<'tcx> Cx<'_, 'tcx> {
             // Array elements and closure arguments are not record-member
             // positions, so the SCC promotion does not apply inside them —
             // their fold runs outside any group.
+            TyKind::DevArray { .. } => SyncVerdict::Sync,
             TyKind::Array { elem, .. } => {
                 let saved = std::mem::take(&mut self.group);
                 self.path.push("the array element".to_owned());
@@ -476,6 +484,27 @@ mod tests {
             for ty in [tcx.mk_int(IntTy::Unsigned(64)), tcx.mk_bool(), tcx.mk_str()] {
                 assert!(matches!(sync_verdict(&env, ty), SyncVerdict::Sync));
             }
+        });
+    }
+
+    #[test]
+    fn device_handles_require_atomic_coloring_for_sync() {
+        with_tcx(|tcx: &TyCtxt| {
+            let env = TestEnv::default();
+            let device = tcx.mk_devarray(tcx.mk_int(IntTy::Unsigned(32)), &[0, 4], None);
+            assert!(matches!(
+                sync_verdict(&env, device),
+                SyncVerdict::NotSync(_)
+            ));
+            assert!(matches!(wf_arc(&env, device), SyncVerdict::Sync));
+            assert!(matches!(
+                sync_verdict(&env, tcx.mk_arc(device)),
+                SyncVerdict::Sync
+            ));
+            assert!(matches!(
+                sync_verdict(&env, tcx.mk(TyKind::DefaultPlacement)),
+                SyncVerdict::Sync
+            ));
         });
     }
 

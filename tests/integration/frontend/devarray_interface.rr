@@ -1,0 +1,14 @@
+// RUN: %rrc --package-root %S/Inputs/devarray_interface_dep --package-name dep --emit rri -o %t.rri
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o - | %FileCheck %s
+// RUN: %rrc %t.mir --emit llvm-ir -O none -o %t.ll
+
+pub fn forward(x: DevArray<f32, dep::Placement>) -> DevArray<f32, dep::Placement> {
+    dep::wrap(dep::named(x)).value
+}
+// CHECK: #reussir.target<devices = [2], memory_kind = "pinned_host", layout = "default">
+
+pub fn infer_imported_default(x: DevArray<f32>) -> DevArray<f32> {
+    dep::identity(x)
+}

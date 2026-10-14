@@ -173,8 +173,7 @@ parseShapeAndElementType(mlir::AsmParser &parser,
 
   mlir::OptionalParseResult first = parseOptionalExtent();
   if (!first.has_value())
-    return parser.emitError(parser.getCurrentLocation(),
-                            "expected an array extent (an integer or `?`)");
+    return parser.parseType(elementType);
   if (mlir::failed(*first) || parser.parseKeyword("x"))
     return mlir::failure();
 
@@ -1608,8 +1607,8 @@ mlir::LogicalResult
 ArrayType::verify(llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
                   llvm::ArrayRef<int64_t> shape, mlir::Type eleTy,
                   TargetAttr target) {
-  if (shape.empty()) {
-    emitError() << "array shape must have at least one extent";
+  if (shape.empty() && !target) {
+    emitError() << "host array shape must have at least one extent";
     return mlir::failure();
   }
   for (int64_t extent : shape) {

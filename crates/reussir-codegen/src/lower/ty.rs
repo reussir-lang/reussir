@@ -28,8 +28,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use reussir_backend::dialect::ty::{
     ReussirAtomicKind, ReussirCapability, ReussirCellKind, ReussirLifeScope, ReussirRecordKind,
-    array, cell_with_kind, closure, ffi_object, nullable, rc, record_complete_in_place,
-    record_incomplete, record_is_complete, r#ref, region, str as str_type,
+    array, array_with_target, cell_with_kind, closure, dynamic_dimension_size, ffi_object,
+    nullable, rc, record_complete_in_place, record_incomplete, record_is_complete, r#ref, region,
+    str as str_type,
 };
 use reussir_backend::melior::Context;
 use reussir_backend::melior::ir::Type;
@@ -119,7 +120,13 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
         self.is_shared_record(ty)
             || self.is_regional_record(ty)
             || is_closure(ty)
-            || matches!(ty.kind(), TyKind::Array { .. } | TyKind::Cell { .. })
+            || matches!(
+                ty.kind(),
+                TyKind::Array { .. }
+                    | TyKind::DevArray { .. }
+                    | TyKind::Cell { .. }
+                    | TyKind::Arc(_)
+            )
     }
 
     /// Lower a ground type to MLIR: records resolve through the layout table, a
@@ -138,10 +145,11 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
             TyKind::Nullable(inner) => {
                 if !(self.is_shared_record(inner)
                     || self.is_regional_record(inner)
-                    || matches!(inner.kind(), TyKind::Cell { .. }))
+                    || matches!(inner.kind(), TyKind::Cell { .. } | TyKind::DevArray { .. })
+                    || matches!(inner.kind(), TyKind::Arc(payload) if matches!(payload.kind(), TyKind::DevArray { .. })))
                 {
                     return err("`Nullable` element does not lower to a pointer: only a \
-                         managed `[shared]`/`[regional]` record or Cell can sit behind a nullable");
+                         managed `[shared]`/`[regional]` record, Cell, or DevArray can sit behind a nullable");
                 }
                 Ok(nullable(self.mlir_ty(inner)?))
             }
@@ -151,6 +159,7 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
             // A statically shaped array is one shared `rc` box holding the whole
             // payload (`!reussir.rc<!reussir.array<dims x elem>>`); see #344.
             TyKind::Array { .. } => Ok(self.rc_type(self.array_inner_of(ty)?)),
+            TyKind::DevArray { .. } => Ok(self.rc_type(self.devarray_inner_of(ty)?)),
             TyKind::Tensor { elem, dims } => {
                 if reussir_core::semi::ty_eval::tensor_element_rejection(elem).is_some() {
                     return err(
@@ -185,9 +194,9 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
             }
             // The arc coloring: the same shared payload behind a box whose
             // refcount is adjusted with atomic operations. Of the shared rc
-            // boxes an `Arc` may color (a `[shared]` record, an array, or a
-            // closure), only the record lowering has landed; an array or
-            // closure inner is a valid arc type reported as unimplemented.
+            // boxes an `Arc` may color, shared records and device arrays lower
+            // here; a host array or closure inner is a valid arc type
+            // reported as unimplemented.
             // Any other inner is kept out by elaboration and mono's
             // instantiation check — rejecting it here is the backstop for
             // directly lowered textual MIR.
@@ -198,6 +207,8 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
                         ReussirCapability::Shared,
                         ReussirAtomicKind::Atomic,
                     ))
+                } else if matches!(inner.kind(), TyKind::DevArray { .. }) {
+                    Ok(self.rc_type_in(self.devarray_inner_of(inner)?, true))
                 } else if matches!(inner.kind(), TyKind::Array { .. } | TyKind::Closure { .. }) {
                     err(
                         "arc'd arrays and closures do not lower yet: only a `[shared]` \
@@ -237,6 +248,7 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
             TyKind::Record { .. } => self.record_inner_of(ty),
             TyKind::Closure { params, ret } => self.closure_inner(params, ret),
             TyKind::Array { .. } => self.array_inner_of(ty),
+            TyKind::DevArray { .. } => self.devarray_inner_of(ty),
             TyKind::Cell { .. } => self.cell_inner_of(ty),
             _ => self.mlir_ty(ty),
         }
@@ -480,6 +492,47 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
         Ok(closure(self.context, &input_tys, output))
     }
 
+    /// The target-annotated descriptor payload of a device handle. The existing
+    /// array descriptor carries its buffers and dynamic extents; no extra box
+    /// or runtime placement object is introduced.
+    fn devarray_inner_of(&self, ty: Ty<'tcx>) -> Result<Type<'c>> {
+        let TyKind::DevArray {
+            elem,
+            dims,
+            placement,
+        } = *ty.kind()
+        else {
+            return err("device array payload requested for a non-device type");
+        };
+        if !reussir_core::semi::ty_eval::device_element_supported(elem) {
+            return err("unsupported device array element type");
+        }
+        let target = match placement.kind() {
+            TyKind::DefaultPlacement => "#reussir.target<devices = [0]>",
+            _ => self
+                .record_of(placement)
+                .and_then(|r| r.placement)
+                .ok_or_else(|| {
+                    LoweringError("device array placement is not a placement marker".into())
+                })?,
+        };
+        let target = reussir_backend::melior::ir::Attribute::parse(self.context, target)
+            .ok_or_else(|| LoweringError("invalid device array placement descriptor".into()))?;
+        let shape = dims
+            .iter()
+            .map(|&d| {
+                if d == reussir_core::semi::ty::DYNAMIC_EXTENT {
+                    Ok(dynamic_dimension_size() as i64)
+                } else {
+                    i64::try_from(d)
+                        .map_err(|_| LoweringError("device array extent exceeds i64::MAX".into()))
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        array_with_target(&shape, scalar_ty(self.context, elem)?, target)
+            .ok_or_else(|| LoweringError("invalid device array target or shape".into()))
+    }
+
     /// The `!reussir.array<dims x elem>` payload type of an array-typed `ty`
     /// (the type inside its `rc` box, and the element type of its views).
     /// Full type lowering: an rc element's slot is its `!reussir.rc<…>`
@@ -679,10 +732,21 @@ fn scalar_ty<'c>(context: &'c Context, ty: Ty<'_>) -> Result<Type<'c>> {
         TyKind::Fp(FpTy::Float8) => err("float8 has no standard MLIR builtin type"),
         TyKind::Bool => Ok(IntegerType::new(context, 1).into()),
         TyKind::Char => Ok(IntegerType::new(context, 32).into()),
+        TyKind::DefaultPlacement => Ok(reussir_backend::dialect::ty::record_complete(
+            context,
+            &[],
+            &[],
+            Some(StringAttribute::new(context, "__reussir_default_placement")),
+            ReussirRecordKind::Compound,
+            ReussirCapability::Value,
+            false,
+        )),
         TyKind::Unit => err("unit has no MLIR value type"),
         TyKind::Str => Ok(str_type(context, ReussirLifeScope::Global)),
         TyKind::Record { .. } => err("record type reached scalar lowering without a layout"),
-        TyKind::Array { .. } => err("array type reached scalar lowering without its rc wrapper"),
+        TyKind::Array { .. } | TyKind::DevArray { .. } => {
+            err("array type reached scalar lowering without its rc wrapper")
+        }
         TyKind::Tensor { .. } => {
             err("tensor type reached scalar lowering without its ranked shape")
         }

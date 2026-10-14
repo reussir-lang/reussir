@@ -1,0 +1,21 @@
+// REQUIRES: ifrt
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mlir -o - | %FileCheck %s
+// RUN: %rrc %t.mir --emit mlir-llvm -O none -o %t.llvm
+
+#[placement(devices = "3,1", sharding = "#ifrt.sharding_param<2x1 to [0] on 2>", layout = "{1,0}")]
+pub struct [value] Tiled {}
+#[placement(devices = "1,3", sharding = "#ifrt.sharding_param<1x1 to [0] on 2>", layout = "auto")]
+pub struct [value] Replicated {}
+
+pub fn uneven(x: DevArray<[f32; 3, 5], Tiled>) -> DevArray<[f32; 3, 5], Tiled> { x }
+pub fn empty(x: DevArray<[f32; 0, 1], Tiled>) -> DevArray<[f32; 0, 1], Tiled> { x }
+pub fn dynamic(x: DevArray<[f32; ?, 5], Tiled>) -> DevArray<[f32; ?, 5], Tiled> { x }
+pub fn replica(x: DevArray<[f32; 3, 5], Replicated>) -> DevArray<[f32; 3, 5], Replicated> { x }
+// CHECK-DAG: #[[TILED:[a-z0-9]+]] = #ifrt.sharding_param<2x1 to [0] on 2>
+// CHECK-DAG: #[[REPLICA:[a-z0-9]+]] = #ifrt.sharding_param<1x1 to [0] on 2>
+// CHECK-DAG: !reussir.array<3 x 5 x f32, #reussir.target<devices = [3, 1], sharding = #[[TILED]], layout = "{1,0}">
+// CHECK-DAG: !reussir.array<0 x 1 x f32
+// CHECK-DAG: !reussir.array<? x 5 x f32
+// CHECK-DAG: #reussir.target<devices = [1, 3], sharding = #[[REPLICA]], layout = "auto">

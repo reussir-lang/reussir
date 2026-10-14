@@ -339,6 +339,15 @@ pub fn parse_program<'tcx>(tcx: &TyCtxt<'tcx>, text: &str) -> Result<Parsed<'tcx
     let raw = hir_ir::ProgramParser::new()
         .parse(lex(text))
         .map_err(|e| format!("{e:?}"))?;
+    for r in &raw.records {
+        if r.placement.is_some()
+            && (!matches!(r.default_cap, raw::DefaultCap::Value)
+                || !r.generics.is_empty()
+                || !matches!(&r.body, raw::RecordBody::Compound(fields) if fields.is_empty()))
+        {
+            return Err("a placement marker must be a non-generic, zero-field value struct".into());
+        }
+    }
     // The file table must be dense and in-order: spans index it positionally.
     let mut files = Vec::with_capacity(raw.files.len());
     for (i, f) in raw.files.iter().enumerate() {
@@ -606,6 +615,7 @@ impl<'tcx> Builder<'_, 'tcx> {
             kind,
             default_cap,
             repr_fixed: r.repr_fixed,
+            placement: r.placement.clone(),
             ffi,
             fields: Some(fields),
             regional_generics,
@@ -759,6 +769,16 @@ impl<'tcx> Builder<'_, 'tcx> {
             raw::Ty::Array { elem, dims } => {
                 let elem = self.ty(elem);
                 self.tcx.mk_array(elem, dims)
+            }
+            raw::Ty::DefaultPlacement => self.tcx.mk(TyKind::DefaultPlacement),
+            raw::Ty::DevArray {
+                elem,
+                dims,
+                placement,
+            } => {
+                let elem = self.ty(elem);
+                let placement = placement.as_ref().map(|p| self.ty(p));
+                self.tcx.mk_devarray(elem, dims, placement)
             }
             raw::Ty::Tensor { elem, dims } => {
                 let elem = self.ty(elem);
@@ -1248,7 +1268,8 @@ mod tests {
             "18446744073709551616",
         ] {
             with_tcx(|tcx| {
-                let text = format!("fn #bad(v0 (x): Tensor<[f32; {dimension}]>) -> () {{ () : () }}");
+                let text =
+                    format!("fn #bad(v0 (x): Tensor<[f32; {dimension}]>) -> () {{ () : () }}");
                 assert!(
                     parse_program(tcx, &text).is_err(),
                     "accepted dimension {dimension}"
@@ -1309,6 +1330,23 @@ mod tests {
         roundtrip_with_locations(
             "pub enum Opt { None, Some(i64) }\n\
              pub fn g(o: Opt) -> i64 { match o { Opt::None => 0, Opt::Some(x) => { let y = x; y } } }",
+        );
+    }
+
+    #[test]
+    fn roundtrips_device_arrays_and_placement_markers() {
+        roundtrip(
+            r#"
+            #[placement(devices = "3", memory_kind = "device", layout = "auto")]
+            pub struct [value] P {}
+            pub struct [value] Holder<T, P> { value: DevArray<T, P> }
+            pub fn id<T, P>(x: DevArray<T, P>) -> DevArray<T, P> { x }
+            pub fn default(x: DevArray<f32>) -> DevArray<f32> { id_default(x) }
+            fn id_default<T, P>(x: DevArray<T, P>) -> DevArray<T, P> { x }
+            pub fn marker(x: DefaultPlacement) -> DefaultPlacement { x }
+            pub fn scalar(x: DevArray<f32, P>) -> DevArray<f32, P> { id(x) }
+            pub fn shaped(x: DevArray<[u32; ?, 0, 65536]>) -> DevArray<[u32; ?, 0, 65536]> { x }
+        "#,
         );
     }
 

@@ -1,0 +1,20 @@
+// RUN: %rrc %s --emit hir -o %t.hir
+// RUN: %rrc %t.hir --emit mlir -o - | %FileCheck %s
+// RUN: %rrc %s --emit mlir-llvm -o %t.llvm
+// RUN: %reussir-translate --mlir-to-llvmir %t.llvm -o %t.ll
+pub struct [value] DevArray<T, P> { n: T, p: P }
+pub fn local(x: DevArray<f32, core::intrinsic::pjrt::DefaultPlacement>) -> DevArray<f32, core::intrinsic::pjrt::DefaultPlacement> { marker_identity(x) }
+pub fn builtin(x: core::intrinsic::pjrt::DevArray<f32>) -> core::intrinsic::pjrt::DevArray<f32> { x }
+// CHECK-DAG: !reussir.record<compound "_RIC8DevArray
+// CHECK-DAG: !reussir.array<f32, #reussir.target<devices = [0]>>
+
+pub struct [value] DefaultPlacement { n: i32 }
+pub fn marker_shadow(x: DefaultPlacement) -> DefaultPlacement { x }
+pub fn qualified_default(x: core::intrinsic::pjrt::DevArray<f32, core::intrinsic::pjrt::DefaultPlacement>) -> core::intrinsic::pjrt::DevArray<f32> { x }
+// CHECK-DAG: !reussir.record<compound "_RC16DefaultPlacement" [value] {i32}>
+
+fn marker_identity<T>(x: T) -> T { x }
+pub fn builtin_marker_generic(x: core::intrinsic::pjrt::DefaultPlacement) -> core::intrinsic::pjrt::DefaultPlacement { marker_identity(x) }
+pub fn user_marker_generic(x: DefaultPlacement) -> DefaultPlacement { marker_identity(x) }
+
+pub fn builtin_array_generic(x: core::intrinsic::pjrt::DevArray<f32>) -> core::intrinsic::pjrt::DevArray<f32> { marker_identity(x) }

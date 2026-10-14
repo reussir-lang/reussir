@@ -1,0 +1,11 @@
+//! Declaration anchors for the compiler's device-array and default-placement
+//! types. These records supply source locations, not nominal runtime layouts.
+
+/// A managed device array. `T` is a scalar or ranked array shape; omitted `P`
+/// selects `DefaultPlacement`. Named placement markers carry target metadata.
+#[lang("dev_array")]
+pub struct DevArray<T, P> {}
+
+/// The compile-time placement selecting logical device zero.
+#[lang("default_placement")]
+pub struct [value] DefaultPlacement {}

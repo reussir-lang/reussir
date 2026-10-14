@@ -18,8 +18,8 @@ pub Program: raw::Program = <items:Item*> => raw::Program::from_items(items);
 Item: raw::Item = {
     <f:FileDecl> => raw::Item::File(f),
     <s:StringDecl> => raw::Item::String(s),
-    "record" "@" <s:Sym> ":" <cap:DefCap> <kind:RecordBody> ";"
-        => raw::Item::Record(raw::RecordDecl { symbol: s, default_cap: cap, ty: kind.0, body: kind.1, repr_fixed: kind.2 }),
+    "record" "@" <s:Sym> ":" <cap:DefCap> <placement:("placement" <"quoted">)?> <kind:RecordBody> ";"
+        => raw::Item::Record(raw::RecordDecl { symbol: s, default_cap: cap, ty: kind.0, body: kind.1, repr_fixed: kind.2, placement: placement.map(|p| unescape_debug_str(p).into_owned()) }),
     <f:Func> => raw::Item::Func(f),
     "extern" <abi:"quoted"> "trampoline" <imp:"import"?> <export:"quoted"> "=" "@" <target:Sym> ";"
         => raw::Item::Tramp(raw::Tramp { abi: abi.into(), export: export.into(), target, import: imp.is_some() }),
@@ -171,6 +171,14 @@ Ty: raw::Ty = {
         => raw::Ty::Record { cap, path: path.0, args: path.1 },
     "[" <elem:Ty> ";" <dims:CommaPlus<Extent>> "]"
         => raw::Ty::Array { elem: Box::new(elem), dims },
+    "DefaultPlacement" => raw::Ty::DefaultPlacement,
+    "DevArray" "<" <inner:Ty> <p:("," <Ty>)?> ">" => {
+        let (elem, dims) = match inner {
+            raw::Ty::Array { elem, dims } => (elem, dims),
+            elem => (Box::new(elem), Vec::new()),
+        };
+        raw::Ty::DevArray { elem, dims, placement: p.map(Box::new) }
+    },
     "Tensor" "<" <inner:Ty> ">" => match inner {
         raw::Ty::Array { elem, dims } => raw::Ty::Tensor { elem, dims },
         elem => raw::Ty::Tensor { elem: Box::new(elem), dims: vec![] },
@@ -439,6 +447,9 @@ extern {
         "RwLock" => Token::RwLockCell,
         "Arc" => Token::Arc,
         "Tensor" => Token::Tensor,
+        "DevArray" => Token::DevArray,
+        "DefaultPlacement" => Token::DefaultPlacement,
+        "placement" => Token::Placement,
         "NonNull" => Token::NonNull,
         "Null" => Token::Null,
         "poison" => Token::Poison,

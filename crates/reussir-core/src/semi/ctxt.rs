@@ -191,6 +191,8 @@ pub struct Record<'tcx> {
     /// `#[repr(fixed)]`: uniform max-arm box sizing for this enum instead of the
     /// default per-constructor sizing. Only ever set for enums.
     pub repr_fixed: bool,
+    /// Compile-time target descriptor for a named zero-field placement marker.
+    pub placement: Option<String>,
     /// `#[ffi(rust = "path")]`: the Rust type path this opaque record
     /// aliases. Set exactly when `fields` is [`RecordFields::Opaque`].
     pub ffi: Option<String>,
@@ -248,6 +250,9 @@ pub struct FuncProto<'tcx> {
 /// closure captures).
 pub(crate) fn contains_tensor(ty: Ty<'_>) -> bool {
     match *ty.kind() {
+        TyKind::DevArray {
+            elem, placement, ..
+        } => contains_tensor(elem) || contains_tensor(placement),
         TyKind::Tensor { .. } => true,
         TyKind::Record { args, .. } => args.iter().any(|&a| contains_tensor(a)),
         TyKind::Closure { params, ret } => {
@@ -255,7 +260,8 @@ pub(crate) fn contains_tensor(ty: Ty<'_>) -> bool {
         }
         TyKind::Array { elem, .. } | TyKind::Cell { elem, .. } => contains_tensor(elem),
         TyKind::Nullable(inner) | TyKind::Arc(inner) => contains_tensor(inner),
-        TyKind::Int(_)
+        TyKind::DefaultPlacement
+        | TyKind::Int(_)
         | TyKind::Fp(_)
         | TyKind::Bool
         | TyKind::Str
@@ -291,13 +297,20 @@ fn collect_private_records<'tcx>(
             }
             collect_private_records(records, ret, out);
         }
+        TyKind::DevArray {
+            elem, placement, ..
+        } => {
+            collect_private_records(records, elem, out);
+            collect_private_records(records, placement, out);
+        }
         TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } | TyKind::Cell { elem, .. } => {
             collect_private_records(records, elem, out);
         }
         TyKind::Nullable(inner) | TyKind::Arc(inner) => {
             collect_private_records(records, inner, out);
         }
-        TyKind::Int(_)
+        TyKind::DefaultPlacement
+        | TyKind::Int(_)
         | TyKind::Fp(_)
         | TyKind::Bool
         | TyKind::Str
@@ -763,6 +776,24 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
             TyKind::Array { elem, dims } => {
                 self.push_shape_display(out, elem, dims);
+            }
+            TyKind::DefaultPlacement => out.push_str("DefaultPlacement"),
+            TyKind::DevArray {
+                elem,
+                dims,
+                placement,
+            } => {
+                out.push_str("DevArray<");
+                if dims.is_empty() {
+                    self.push_ty_display(out, elem);
+                } else {
+                    self.push_shape_display(out, elem, dims);
+                }
+                if !matches!(placement.kind(), TyKind::DefaultPlacement) {
+                    out.push_str(", ");
+                    self.push_ty_display(out, placement);
+                }
+                out.push('>');
             }
             TyKind::Tensor { elem, dims } => {
                 out.push_str("Tensor<");
@@ -1510,8 +1541,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     }
 
     /// A built-in type former's anchor (`#[lang("arc")] pub struct
-    /// Arc<T> { }`): a declaration *site* for the wired former — one type
-    /// parameter, no fields. The former itself keeps resolving by
+    /// Arc<T> { }`): a declaration *site* for the wired former — type
+    /// parameters as specified by the former, no fields. It keeps resolving by
     /// spelling; the anchor is never a nominal type.
     fn validate_former_anchor(
         &mut self,
@@ -1523,11 +1554,20 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             &rec.fields,
             surface::RecordFields::Named(fields) if fields.is_empty()
         );
-        if rec.kind != surface::RecordKind::StructKind || !empty || rec.ty_params.len() != 1 {
+        if rec.kind != surface::RecordKind::StructKind
+            || !empty
+            || rec.ty_params.len() != former.arity()
+        {
+            let params = match former.arity() {
+                0 => "no type parameters",
+                1 => "one type parameter",
+                2 => "two type parameters",
+                _ => unreachable!("all former arities are enumerated"),
+            };
             self.error(
                 span,
                 format!(
-                    "a builtin-type anchor must be an empty struct with one type parameter: `#[lang(\"{}\")]` binds the former's declaration site",
+                    "a builtin-type anchor must be an empty struct with {params}: `#[lang(\"{}\")]` binds the former's declaration site",
                     former.name()
                 ),
             );
@@ -1848,8 +1888,17 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 let attrs = stmt.attributes();
                 self.set_current_file(*file);
                 let ffi = self.ffi_attr(&attrs);
+                if !matches!(stmt.kind(), surface::StmtKind::Record(_))
+                    && attrs.iter().any(|a| self.sym(a.name) == "placement")
+                {
+                    self.error(
+                        span,
+                        "`#[placement]` requires a zero-field `[value]` struct",
+                    );
+                }
                 match stmt.kind() {
-                    surface::StmtKind::Record(rec) => {
+                    surface::StmtKind::Record(mut rec) => {
+                        rec.placement = self.placement_attr(&attrs, &rec);
                         self.validate_transform_anchor(&attrs, None);
                         let ffi = self.validate_ffi_record(&rec, ffi, span);
                         let lang = self.lang_attr(&attrs, span);
@@ -2443,6 +2492,106 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         true
     }
 
+    fn placement_attr(
+        &mut self,
+        attrs: &[surface::Attribute],
+        rec: &surface::Record,
+    ) -> Option<String> {
+        let mut result = None;
+        for attr in attrs
+            .iter()
+            .filter(|a| self.sym(a.name) == "placement")
+            .cloned()
+            .collect::<Vec<_>>()
+        {
+            if result.is_some() {
+                self.error(Some(attr.span), "duplicate `#[placement]` attribute");
+            }
+            let empty = match &rec.fields {
+                surface::RecordFields::Named(xs) => xs.is_empty(),
+                surface::RecordFields::Unnamed(xs) => xs.is_empty(),
+                _ => false,
+            };
+            if rec.kind != surface::RecordKind::StructKind
+                || rec.default_cap != surface::Capability::Value
+                || !rec.ty_params.is_empty()
+                || !empty
+            {
+                self.error(
+                    Some(attr.span),
+                    "`#[placement]` requires a non-generic, zero-field `[value]` struct",
+                );
+            }
+            if !attr.args.is_empty() || !attr.literals.is_empty() {
+                self.error(
+                    Some(attr.span),
+                    "placement arguments must be named string values",
+                );
+            }
+            let mut values = std::collections::BTreeMap::new();
+            for (key, value) in &attr.values {
+                let key = self.sym(*key).to_owned();
+                if !matches!(
+                    key.as_str(),
+                    "devices" | "sharding" | "memory_kind" | "layout"
+                ) {
+                    self.error(
+                        Some(attr.span),
+                        format!("unknown placement argument `{key}`"),
+                    );
+                }
+                if values.insert(key.clone(), value.clone()).is_some() {
+                    self.error(
+                        Some(attr.span),
+                        format!("duplicate placement argument `{key}`"),
+                    );
+                }
+            }
+            let devices = values.get("devices").and_then(|text| {
+                text.split(',')
+                    .map(|s| s.trim().parse::<i32>().ok().filter(|&n| n >= 0))
+                    .collect::<Option<Vec<_>>>()
+            });
+            let devices = match devices {
+                Some(devices)
+                    if !devices.is_empty()
+                        && devices
+                            .iter()
+                            .copied()
+                            .collect::<std::collections::BTreeSet<_>>()
+                            .len()
+                            == devices.len() =>
+                {
+                    devices
+                }
+                _ => {
+                    self.error(Some(attr.span), "placement `devices` must be a nonempty comma-separated list of distinct nonnegative i32 logical IDs");
+                    vec![0]
+                }
+            };
+            let mut target = format!(
+                "#reussir.target<devices = [{}]",
+                devices
+                    .iter()
+                    .map(i32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            if let Some(sharding) = values.get("sharding") {
+                target.push_str(", sharding = ");
+                target.push_str(sharding);
+            }
+            for key in ["memory_kind", "layout"] {
+                if let Some(value) = values.get(key) {
+                    target.push_str(&format!(", {key} = {value:?}"));
+                }
+            }
+            target.push('>');
+            result = Some(target);
+        }
+        result
+    }
+
     fn scan_record(
         &mut self,
         rec: &surface::Record,
@@ -2493,6 +2642,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             kind: rec.kind,
             default_cap,
             repr_fixed,
+            placement: rec.placement.clone(),
             ffi,
             fields: None,
             regional_generics: Vec::new(),
@@ -4000,7 +4150,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             // Arrays, cells, and arcs are pointer-like (one shared rc box), so
             // the `Nullable` check lets them through — but a `[field]` link
             // stores a regional record, never a shared box.
-            TyKind::Array { .. } | TyKind::Tensor { .. } | TyKind::Cell { .. } | TyKind::Arc(_) => {
+            TyKind::Array { .. }
+            | TyKind::DevArray { .. }
+            | TyKind::Tensor { .. }
+            | TyKind::Cell { .. }
+            | TyKind::Arc(_) => {
                 self.error(span, "a `[field]` link element must be a regional record")
             }
             // Regional records are fine; non-record elements are already rejected

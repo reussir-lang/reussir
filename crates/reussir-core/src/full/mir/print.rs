@@ -247,7 +247,11 @@ impl Render<'_> {
                     ))
             }
         };
-        head + body + text(";")
+        head + rec
+            .placement
+            .map_or(Doc::Null, |p| text(format!("placement {p:?} ")))
+            + body
+            + text(";")
     }
 
     fn function(&self, func: &mir::Function<'_>) -> Doc<'static> {
@@ -335,6 +339,26 @@ impl Render<'_> {
             }
             TyKind::Arc(inner) => text("Arc<") + self.ty(inner) + text(">"),
             TyKind::Array { elem, dims } => self.shape(elem, dims),
+            TyKind::DefaultPlacement => text("DefaultPlacement"),
+            TyKind::DevArray {
+                elem,
+                dims,
+                placement,
+            } => {
+                let inner = if dims.is_empty() {
+                    self.ty(elem)
+                } else {
+                    self.shape(elem, dims)
+                };
+                text("DevArray<")
+                    + inner
+                    + if matches!(placement.kind(), TyKind::DefaultPlacement) {
+                        Doc::Null
+                    } else {
+                        text(", ") + self.ty(placement)
+                    }
+                    + text(">")
+            }
             TyKind::Tensor { elem, dims } => {
                 let inner = if dims.is_empty() {
                     self.ty(elem)

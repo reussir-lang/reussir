@@ -307,6 +307,12 @@ impl<'a, 'tcx> FfiCtx<'a, 'tcx> {
             TyKind::Str => Ok("::reussir_rt::collections::string::Str<'static>".into()),
             TyKind::Cell { .. } => Err("a cell cannot cross the FFI boundary".into()),
             TyKind::Array { .. } => Err("an array cannot cross the FFI boundary yet".into()),
+            TyKind::DefaultPlacement => {
+                Err("a placement marker cannot cross the native FFI boundary".into())
+            }
+            TyKind::DevArray { .. } => {
+                Err("a device array cannot cross the native FFI boundary".into())
+            }
             TyKind::Tensor { .. } => Err("a tensor cannot cross the FFI boundary".into()),
             TyKind::Closure { .. } => Err("a closure cannot cross the FFI boundary yet".into()),
             TyKind::Bottom | TyKind::Generic(_) | TyKind::Hole(_) => {

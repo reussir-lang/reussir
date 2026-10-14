@@ -1,0 +1,41 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+// CHECK-DAG: device array extent exceeds i64::MAX
+fn huge(x: DevArray<[f32; 9223372036854775808]>) {}
+// CHECK-DAG: only integer literals are supported
+fn negative(x: DevArray<[f32; -1]>) {}
+// CHECK-DAG: `DevArray` elements must be integer, bool, f16, bf16, f32, or f64 scalars
+fn string(x: DevArray<str>) {}
+// CHECK-DAG: `DevArray` elements must be integer, bool, f16, bf16, f32, or f64 scalars
+fn character(x: DevArray<char>) {}
+// CHECK-DAG: `DevArray` elements must be integer, bool, f16, bf16, f32, or f64 scalars
+fn nested(x: DevArray<DevArray<f32>>) {}
+// CHECK-DAG: `DevArray` placement must be a `#[placement]` marker type
+fn wrong(x: DevArray<f32, i64>) {}
+// CHECK-DAG: placement `devices` must be a nonempty comma-separated list of distinct nonnegative i32 logical IDs
+#[placement(devices = "0,0")]
+struct [value] Duplicate {}
+// CHECK-DAG: placement `devices` must be a nonempty comma-separated list of distinct nonnegative i32 logical IDs
+#[placement(devices = "-1")]
+struct [value] Negative {}
+// CHECK-DAG: `#[placement]` requires a non-generic, zero-field `[value]` struct
+#[placement(devices = "0")]
+struct [shared] WrongKind { x: i64 }
+// CHECK-DAG: unknown placement argument `device`
+#[placement(device = "0")]
+struct [value] UnknownKey {}
+// CHECK-DAG: `#[placement]` requires a zero-field `[value]` struct
+#[placement(devices = "0")]
+fn bad_attribute() {}
+
+#[placement(devices = "0")]
+struct [value] A {}
+#[placement(devices = "0")]
+struct [value] B {}
+// Marker identity is nominal, even when descriptor values match.
+// CHECK-DAG: type mismatch
+fn nominal(x: DevArray<f32, A>) -> DevArray<f32, B> { x }
+
+struct [shared] ThreadUnsafe { x: DevArray<f32> }
+// CHECK-DAG: `Arc<ThreadUnsafe>` is ill-formed: member `x`
+fn unsafe_arc(x: Arc<ThreadUnsafe>) {}

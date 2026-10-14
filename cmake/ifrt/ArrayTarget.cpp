@@ -273,12 +273,12 @@ getPjrtDimShards(mlir::Attribute attr, mlir::RankedTensorType shape,
     if (devices.size() == 1)
       return llvm::SmallVector<int64_t>(shape.getRank(), 1);
     mlir::emitError(loc)
-        << "multi-device allocation requires concrete sharding";
+        << "multi-device array placement requires concrete sharding";
     return mlir::failure();
   }
   auto sharding = llvm::dyn_cast<xla::ifrt::IfrtShardingParamAttr>(attr);
   if (!sharding) {
-    mlir::emitError(loc) << "allocation requires an IFRT sharding_param";
+    mlir::emitError(loc) << "device array placement requires an IFRT sharding_param";
     return mlir::failure();
   }
   const auto &param = sharding.getSharding();
@@ -287,6 +287,19 @@ getPjrtDimShards(mlir::Attribute attr, mlir::RankedTensorType shape,
     return mlir::failure();
   return llvm::to_vector(param.dim_shards());
 }
+mlir::LogicalResult verifyPjrtArrayPlacement(mlir::RankedTensorType shape,
+                                           llvm::ArrayRef<int32_t> devices,
+                                           mlir::Attribute sharding,
+                                           mlir::StringAttr layout,
+                                           mlir::Location loc) {
+  if (mlir::failed(getPjrtDimShards(sharding, shape, devices, loc)))
+    return mlir::failure();
+  if (!layout || layout.getValue() == "default" || layout.getValue() == "auto")
+    return mlir::success();
+  return mlir::failure(
+      mlir::failed(parsePjrtLayout(layout, shape.getRank(), loc)));
+}
+
 mlir::FailureOr<PjrtTransferSharding>
 getPjrtTransferSharding(mlir::Attribute attr, mlir::RankedTensorType shape,
                         llvm::ArrayRef<int32_t> devices, mlir::Location loc) {
