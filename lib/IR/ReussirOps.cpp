@@ -1474,9 +1474,13 @@ static mlir::LogicalResult verifyArrayIfrtBridge(mlir::Operation *op,
 
 mlir::LogicalResult ReussirArrayToIfrtOp::verify() {
   if (mlir::failed(verifyArrayIfrtBridge(getOperation(), getArray().getType(),
-                                      getView().getType())))
+                                         getView().getType())))
     return mlir::failure();
 #ifdef REUSSIR_ENABLE_OPENXLA
+  if (getMayDonate() &&
+      (!getView().hasOneUse() ||
+       !llvm::isa<ReussirPJRTJitCallOp>(*getView().getUsers().begin())))
+    return emitOpError("donation-capable view requires one PJRT invocation");
   for (mlir::OpOperand &use : getView().getUses()) {
     if (use.getOwner()->getBlock() != getOperation()->getBlock())
       return emitOpError("borrowed IFRT array must stay in its defining block");
@@ -1484,13 +1488,14 @@ mlir::LogicalResult ReussirArrayToIfrtOp::verify() {
       continue;
     if (auto call = llvm::dyn_cast<ReussirPJRTJitCallOp>(use.getOwner())) {
       unsigned index = use.getOperandNumber();
-      if (llvm::is_contained(call.getDonatedInputIndices(), index))
+      if (!getMayDonate() &&
+          llvm::is_contained(call.getDonatedInputIndices(), index))
         return emitOpError("borrowed IFRT input cannot be donated");
       for (auto attr : call.getIoAliases()) {
         auto alias = llvm::dyn_cast<mlir::DenseI32ArrayAttr>(attr);
         if (!alias || alias.size() != 2)
           return emitOpError("malformed IFRT input/output alias");
-        if (alias[0] == static_cast<int32_t>(index))
+        if (!getMayDonate() && alias[0] == static_cast<int32_t>(index))
           return emitOpError("borrowed IFRT input cannot alias a call result");
       }
     } else if (mlir::failed(verifyIfrtArrayBorrowUse(getOperation(), use))) {
@@ -1514,8 +1519,8 @@ mlir::LogicalResult ReussirArrayFromIfrtOp::verify() {
   if (!isIfrtCall(producer) &&
       !llvm::isa_and_nonnull<ReussirPJRTJitCallOp>(producer))
     return emitOpError("requires an owned IFRT call result");
-  if (producer->getBlock() != getOperation()->getBlock())
-    return emitOpError("IFRT result must be adopted in its defining block");
+  if (producer->getParentRegion() != getOperation()->getParentRegion())
+    return emitOpError("IFRT result must be adopted in its defining region");
   if (!getSource().hasOneUse())
     return emitOpError("adopted IFRT result must have exactly one use");
   return mlir::success();

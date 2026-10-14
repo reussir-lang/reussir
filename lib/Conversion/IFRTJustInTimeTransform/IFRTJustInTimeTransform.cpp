@@ -57,7 +57,8 @@ struct ReussirPreparePjrtPass
     if (mlir::failed(runPipeline(pipeline, getOperation())))
       signalPassFailure();
 #else
-    getOperation().emitError("PJRT preparation requires an OpenXLA-enabled build");
+    getOperation().emitError(
+        "PJRT preparation requires an OpenXLA-enabled build");
     signalPassFailure();
 #endif
   }
@@ -160,6 +161,10 @@ struct ReussirIFRTJustInTimeTransformPass
             builder.getStringAttr(artifact.bytes), artifact.checksum);
         table.insert(code);
       }
+      code->setAttr("kernel_type",
+                    mlir::TypeAttr::get(
+                        call.kernel.lookupSymbol<mlir::func::FuncOp>("main")
+                            .getFunctionType()));
       emitted[key] = code;
       mlir::OpBuilder builder(call.op);
       auto callee = mlir::SymbolRefAttr::get(code.getSymNameAttr());
@@ -168,10 +173,10 @@ struct ReussirIFRTJustInTimeTransformPass
           call.op->getResults().take_front(call.info.numOutputs).getTypes(),
           call.op->getResult(call.info.numOutputs).getType(),
           call.op->getOperands().take_front(call.info.numInputs),
-          call.op->getOperands().drop_front(call.info.numInputs), callee,
-          call.info.devices, call.compileOptions, call.info.ioAliases,
-          call.info.donatedInputIndices, call.info.argAttrs,
-          call.info.resAttrs);
+          call.op->getOperands().drop_front(call.info.numInputs),
+          mlir::ValueRange{}, callee, call.info.devices, call.compileOptions,
+          call.info.ioAliases, call.info.donatedInputIndices,
+          call.info.argAttrs, call.info.resAttrs, builder.getArrayAttr({}));
       jit->setDiscardableAttrs(call.op->getDiscardableAttrDictionary());
       call.op->replaceAllUsesWith(jit.getResults());
       call.op->erase();

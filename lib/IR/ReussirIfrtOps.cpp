@@ -16,6 +16,7 @@
 #include "Reussir/Conversion/OpenXLATarget.h"
 #include "Reussir/IR/ReussirOps.h"
 
+#include <llvm/ADT/SmallBitVector.h>
 #include <llvm/ADT/StringExtras.h>
 #include <llvm/Support/BLAKE3.h>
 #include <llvm/Support/MemoryBufferRef.h>
@@ -69,6 +70,14 @@ mlir::LogicalResult ReussirIFRTBytecodeOp::verify() {
   auto digest = hasher.final();
   if (!checksum.equals_insensitive(llvm::toHex(digest, /*LowerCase=*/true)))
     return emitOpError("BLAKE3 checksum does not match bytecode");
+  if (auto cached = (*this)->getAttrOfType<mlir::TypeAttr>("kernel_type")) {
+    auto module = mlir::parseSourceString<mlir::ModuleOp>(bytes, getContext());
+    if (!module || mlir::failed(verifyIfrtKernelModule(*module)))
+      return emitOpError("requires a standalone StableHLO kernel");
+    auto main = module->lookupSymbol<mlir::func::FuncOp>("main");
+    if (cached.getValue() != main.getFunctionType())
+      return emitOpError("kernel_type does not match bytecode");
+  }
   return mlir::success();
 }
 
@@ -83,6 +92,45 @@ mlir::LogicalResult ReussirPJRTJitCallOp::verify() {
     return emitOpError("arg_attrs must match the input count");
   if (getResAttrs() && getResAttrs()->size() != getOutputs().size())
     return emitOpError("res_attrs must match the output count");
+  if (getDonationGuards().empty() != getDonationVariants().empty())
+    return emitOpError(
+        "donation guards and variants must be provided together");
+  if (!getDonationGuards().empty() &&
+      getDonationGuards().size() != getInputs().size())
+    return emitOpError("donation guards must match input count");
+  if (!getDonationVariants().empty() &&
+      (!getIoAliases().empty() || !getDonatedInputIndices().empty()))
+    return emitOpError(
+        "guarded variants cannot override an explicit donation contract");
+  for (auto attr : getDonationVariants()) {
+    auto variant = llvm::dyn_cast<mlir::DictionaryAttr>(attr);
+    auto arguments =
+        variant ? variant.getAs<mlir::DenseI32ArrayAttr>("arguments") : nullptr;
+    auto donors =
+        variant ? variant.getAs<mlir::DenseI32ArrayAttr>("donors") : nullptr;
+    auto callee =
+        variant ? variant.getAs<mlir::FlatSymbolRefAttr>("callee") : nullptr;
+    if (!arguments || !donors || !callee || donors.empty())
+      return emitOpError(
+          "variant requires callee, arguments, and nonempty donors");
+    llvm::SmallBitVector present(getInputs().size());
+    for (int32_t i : arguments.asArrayRef()) {
+      if (i < 0 || unsigned(i) >= getInputs().size() || present.test(i))
+        return emitOpError(
+            "variant arguments must be distinct in-range indices");
+      present.set(i);
+    }
+    llvm::SmallBitVector seen(getInputs().size());
+    for (int32_t i : donors.asArrayRef()) {
+      if (i < 0 || unsigned(i) >= getInputs().size() || !present.test(i) ||
+          seen.test(i))
+        return emitOpError("variant donors must be distinct argument indices");
+      seen.set(i);
+      auto view = getInputs()[i].getDefiningOp<ReussirArrayToIfrtOp>();
+      if (view && !view.getMayDonate())
+        return emitOpError("variant donor requires a donation-capable view");
+    }
+  }
   if (auto options = getCompileOptions())
     return verifyPjrtCompileOptions(getOperation(), *options);
   return mlir::success();
@@ -104,18 +152,23 @@ mlir::LogicalResult ReussirPJRTAfterOp::verify() {
 
 mlir::LogicalResult
 ReussirPJRTJitCallOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
-  auto *symbol = symbols.lookupNearestSymbolFrom(getOperation(), getCalleeAttr());
+  auto *symbol =
+      symbols.lookupNearestSymbolFrom(getOperation(), getCalleeAttr());
   if (auto global = llvm::dyn_cast_or_null<mlir::LLVM::GlobalOp>(symbol)) {
-    auto type = llvm::dyn_cast<mlir::LLVM::LLVMStructType>(global.getGlobalType());
+    auto type =
+        llvm::dyn_cast<mlir::LLVM::LLVMStructType>(global.getGlobalType());
     if (global.getConstant() && type && !type.isOpaque() &&
         type.getBody().size() == 2) {
       auto bytes = llvm::dyn_cast<mlir::LLVM::LLVMArrayType>(type.getBody()[1]);
-      auto checksum = llvm::dyn_cast<mlir::LLVM::LLVMArrayType>(type.getBody()[0]);
+      auto checksum =
+          llvm::dyn_cast<mlir::LLVM::LLVMArrayType>(type.getBody()[0]);
       if (bytes && bytes.getElementType().isInteger(8) && checksum &&
-          checksum.getElementType().isInteger(8) && checksum.getNumElements() == 64)
+          checksum.getElementType().isInteger(8) &&
+          checksum.getNumElements() == 64)
         return mlir::success();
     }
-    return emitOpError("lowered callee must be a constant {checksum, bytecode} global");
+    return emitOpError(
+        "lowered callee must be a constant {checksum, bytecode} global");
   }
   auto code = llvm::dyn_cast_or_null<ReussirIFRTBytecodeOp>(symbol);
   if (!code)
@@ -127,14 +180,38 @@ ReussirPJRTJitCallOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
       getIoAliases(), getDonatedInputIndices());
   if (mlir::failed(signature))
     return mlir::failure();
-  auto module =
-      mlir::parseSourceString<mlir::ModuleOp>(code.getBytecode(), getContext());
-  if (!module || mlir::failed(verifyIfrtKernelModule(*module)))
-    return emitOpError("callee must contain a standalone StableHLO kernel");
-  auto main = module->lookupSymbol<mlir::func::FuncOp>("main");
-  if (main.getFunctionType() != *signature)
+  auto kernelType = [&](ReussirIFRTBytecodeOp code) -> mlir::FunctionType {
+    if (auto cached = code->getAttrOfType<mlir::TypeAttr>("kernel_type"))
+      return llvm::dyn_cast<mlir::FunctionType>(cached.getValue());
+    auto module = mlir::parseSourceString<mlir::ModuleOp>(code.getBytecode(),
+                                                          getContext());
+    if (!module || mlir::failed(verifyIfrtKernelModule(*module)))
+      return {};
+    return module->lookupSymbol<mlir::func::FuncOp>("main").getFunctionType();
+  };
+  if (kernelType(code) != *signature)
     return emitOpError(
         "IFRT array shapes and dtypes must match the kernel signature");
+  for (auto attribute : getDonationVariants()) {
+    auto variant = llvm::cast<mlir::DictionaryAttr>(attribute);
+    auto reference = variant.getAs<mlir::FlatSymbolRefAttr>("callee");
+    auto target = symbols.lookupNearestSymbolFrom<ReussirIFRTBytecodeOp>(
+        getOperation(), reference);
+    if (!target) {
+      if (symbols.lookupNearestSymbolFrom<mlir::LLVM::GlobalOp>(getOperation(),
+                                                                reference))
+        continue;
+      return emitOpError("donation variant must reference kernel bytecode");
+    }
+    llvm::SmallVector<mlir::Type> inputs;
+    for (int32_t i :
+         variant.getAs<mlir::DenseI32ArrayAttr>("arguments").asArrayRef())
+      inputs.push_back(signature->getInput(i));
+    if (kernelType(target) !=
+        mlir::FunctionType::get(getContext(), inputs, signature->getResults()))
+      return emitOpError(
+          "donation variant signature does not match argument mapping");
+  }
 #endif
   return mlir::success();
 }

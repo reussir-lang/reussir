@@ -436,6 +436,10 @@ TEST_F(ReussirTest, IfrtJitRejectsCorruptBytecodeAndMismatchedSignature) {
   code.setBytecodeAttr(otherCode.getBytecodeAttr());
   code.setChecksumAttr(otherCode.getChecksumAttr());
   EXPECT_TRUE(mlir::failed(mlir::verify(*module)));
+  EXPECT_NE(diagnostic.find("kernel_type does not match bytecode"),
+            std::string::npos);
+  code->setAttr("kernel_type", otherCode->getAttr("kernel_type"));
+  EXPECT_TRUE(mlir::failed(mlir::verify(*module)));
   EXPECT_NE(diagnostic.find("must match the kernel signature"),
             std::string::npos);
 }

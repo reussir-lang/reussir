@@ -165,7 +165,7 @@ ifrt.LoadedExecutable @kernel on devices [0] : (!I) -> !I
 func.func @adopt_in_region(%input: !I, %cond: i1) attributes {ifrt.function} {
   %out, %done = ifrt.CallLoadedExecutable @kernel(%input) : (!I) -> !I
   scf.if %cond {
-    // expected-error @+1 {{IFRT result must be adopted in its defining block}}
+    // expected-error @+1 {{IFRT result must be adopted in its defining region}}
     %result = reussir.array.from_ifrt %out : !I -> !R
   }
   return

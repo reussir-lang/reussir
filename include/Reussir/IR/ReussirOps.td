@@ -72,16 +72,19 @@ def ReussirPJRTJitCallOp
   }];
   let arguments = (ins Variadic<AnyType>:$inputs,
                        Variadic<AnyType>:$control_inputs,
+                       Variadic<I1>:$donation_guards,
                        SymbolRefAttr:$callee, DenseI32ArrayAttr:$devices,
                        OptionalAttr<StrAttr>:$compile_options,
                        DefaultValuedAttr<ArrayAttr, "{}">:$io_aliases,
                        DefaultValuedAttr<DenseI32ArrayAttr, "{}">:$donated_input_indices,
                        OptionalAttr<DictArrayAttr>:$arg_attrs,
-                       OptionalAttr<DictArrayAttr>:$res_attrs);
+                       OptionalAttr<DictArrayAttr>:$res_attrs,
+                       DefaultValuedAttr<ArrayAttr, "{}">:$donation_variants);
   let results = (outs Variadic<AnyType>:$outputs, AnyType:$control_output);
   let assemblyFormat = [{
     $callee `(` $inputs `)` (`after` `(` $control_inputs^ `)`)?
-    `on` `devices` $devices attr-dict `:` functional-type(operands, results)
+    `on` `devices` $devices (`donation` `(` $donation_guards^ `)`)?
+    attr-dict `:` functional-type(operands, results)
   }];
   let hasVerifier = 1;
 }
@@ -1165,7 +1168,7 @@ def ReussirArrayToIfrtOp
     Requires OpenXLA; LLVM lowering requires a complete-buffer view with zero
     offset and preserves dynamic extents in the borrowed descriptor.
   }];
-  let arguments = (ins ReussirRcArrayType:$array);
+  let arguments = (ins ReussirRcArrayType:$array, UnitAttr:$may_donate);
   let results = (outs AnyType:$view);
   let assemblyFormat = [{
     $array attr-dict `:` qualified(type($array)) `->` type($view)
