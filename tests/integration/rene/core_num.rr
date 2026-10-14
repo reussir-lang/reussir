@@ -24,6 +24,7 @@
 // IMPLS-DAG: impl #core::num::FloatingPoint::<f64> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {  }
 // IMPLS-DAG: #[lang("arc")] pub [shared] struct #core::intrinsic::arc::Arc<{{.*}}(T)> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {  };
 // IMPLS-DAG: #[lang("cell")] pub [shared] struct #core::intrinsic::cell::Cell<{{.*}}(T)> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {  };
+// IMPLS-DAG: #[lang("tensor")] pub [shared] struct #core::intrinsic::tensor::Tensor<{{.*}}(T)> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {  };
 
 // Intrinsic prototypes now bound against core's own tower.
 // RUN: %FileCheck %s --check-prefix=PROTO < %t.bdir/dev/deps/core.rri
