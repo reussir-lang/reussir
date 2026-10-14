@@ -26,6 +26,7 @@ mod executable;
 pub mod ffi;
 mod layout;
 mod memory;
+mod transfer;
 
 pub use buffer::Buffer;
 use error::{Error, Result};

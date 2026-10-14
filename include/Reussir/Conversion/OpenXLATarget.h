@@ -41,6 +41,17 @@ mlir::FailureOr<llvm::SmallVector<int64_t>>
 getPjrtDimShards(mlir::Attribute sharding, mlir::RankedTensorType shape,
                  llvm::ArrayRef<int32_t> devices, mlir::Location loc);
 
+// Tile coordinates are indexed by the target's ordered device list. Replicas
+// share coordinates. Unreduced axes cannot be transferred as a single host
+// value.
+struct PjrtTransferSharding {
+  llvm::SmallVector<int64_t> dimShards;
+  llvm::SmallVector<llvm::SmallVector<int64_t>> coordinates;
+};
+mlir::FailureOr<PjrtTransferSharding>
+getPjrtTransferSharding(mlir::Attribute sharding, mlir::RankedTensorType shape,
+                        llvm::ArrayRef<int32_t> devices, mlir::Location loc);
+
 // Exact, lossless metadata matching at the RC/IFRT boundary.
 bool isIfrtArrayType(mlir::Type type);
 bool isIfrtControlType(mlir::Type type);

@@ -346,25 +346,33 @@ struct CreateTargetArray : mlir::ConvertOpToLLVMPattern<ReussirArrayCreateOp> {
   }
 };
 
-// Transfers currently cover one complete, addressable device buffer.
-mlir::LogicalResult verifyTransferSharding(mlir::Operation *op,
-                                           ArrayType array) {
+mlir::FailureOr<PjrtTransferSharding> transferSharding(mlir::Operation *op,
+                                                       ArrayType array) {
   auto target = array.getTarget();
-  if (!target.getSharding())
-    return mlir::success();
+  if (!target.getSharding() && target.getDevices().size() == 1)
+    return PjrtTransferSharding{
+        llvm::SmallVector<int64_t>(array.getRank(), 1),
+        {llvm::SmallVector<int64_t>(array.getRank(), 0)}};
 #ifdef REUSSIR_ENABLE_OPENXLA
-  auto shards = getPjrtDimShards(
+  return getPjrtTransferSharding(
       target.getSharding(),
       mlir::RankedTensorType::get(array.getShape(), array.getElementType()),
       target.getDevices().asArrayRef(), op->getLoc());
-  if (mlir::failed(shards))
-    return mlir::failure();
-  if (llvm::any_of(*shards, [](int64_t n) { return n != 1; }))
-    return op->emitOpError("transfer requires an unsharded device buffer");
-  return mlir::success();
 #else
-  return op->emitOpError("sharding metadata requires REUSSIR_ENABLE_OPENXLA");
+  return op->emitOpError("sharded transfers require REUSSIR_ENABLE_OPENXLA");
 #endif
+}
+
+mlir::Value transferConstants(mlir::Operation *op,
+                              llvm::ArrayRef<int64_t> values,
+                              mlir::OpBuilder &builder) {
+  auto data = mlir::DenseIntElementsAttr::get(
+      mlir::RankedTensorType::get({static_cast<int64_t>(values.size())},
+                                  builder.getI64Type()),
+      values);
+  return constantAddress(
+      op, mlir::LLVM::LLVMArrayType::get(builder.getI64Type(), values.size()),
+      data, builder);
 }
 
 void assertEqual(mlir::OpBuilder &builder, mlir::Location loc, mlir::Value lhs,
@@ -549,7 +557,8 @@ struct ToDevice : mlir::ConvertOpToLLVMPattern<ReussirArrayToDeviceOp> {
       return op.emitOpError("requires an enclosing function");
     auto rcType = op.getArray().getType();
     auto array = llvm::cast<ArrayType>(rcType.getElementType());
-    if (mlir::failed(verifyTransferSharding(op, array)))
+    auto sharding = transferSharding(op, array);
+    if (mlir::failed(sharding))
       return mlir::failure();
     auto dtype = pjrtElementType(array.getElementType());
     if (!dtype)
@@ -562,11 +571,19 @@ struct ToDevice : mlir::ConvertOpToLLVMPattern<ReussirArrayToDeviceOp> {
     auto indexType = getTypeConverter()->getIndexType();
     auto ptrType = mlir::LLVM::LLVMPointerType::get(getContext());
     auto i64 = rewriter.getI64Type();
+    bool sharded = array.getTarget().getDevices().size() > 1;
+    llvm::SmallVector<mlir::Type> uploadArgs{
+        indexType, rewriter.getI32Type(), ptrType, indexType, ptrType, ptrType,
+        ptrType};
+    if (sharded) {
+      uploadArgs.push_back(ptrType);
+      uploadArgs.push_back(ptrType);
+    }
     auto upload =
-        runtimeFunction(op, rewriter, "__reussir_pjrt_array_from_host",
-                        {indexType, rewriter.getI32Type(), ptrType, indexType,
-                         ptrType, ptrType, ptrType},
-                        ptrType);
+        runtimeFunction(op, rewriter,
+                        sharded ? "__reussir_pjrt_array_from_host_shard"
+                                : "__reussir_pjrt_array_from_host",
+                        uploadArgs, ptrType);
     if (mlir::failed(upload))
       return mlir::failure();
     auto dims = entryAlloca(op, i64, indexType, array.getRank(), rewriter);
@@ -605,21 +622,29 @@ struct ToDevice : mlir::ConvertOpToLLVMPattern<ReussirArrayToDeviceOp> {
       mlir::LLVM::StoreOp::create(rewriter, loc, byteStride, slot(strides));
     }
     auto target = array.getTarget();
-    auto handle =
-        mlir::LLVM::CallOp::create(
-            rewriter, loc, *upload,
-            mlir::ValueRange{
-                constant(rewriter, loc, indexType,
-                         target.getDevices().asArrayRef().front()),
-                constant(rewriter, loc, rewriter.getI32Type(), *dtype), dims,
-                constant(rewriter, loc, indexType, array.getRank()),
-                hostDataPointer(
-                    rewriter, loc, source,
-                    getTypeConverter()->convertType(array.getElementType())),
-                strides,
-                allocationOptions(op, target, *layout, indexType, rewriter)})
-            .getResult();
-    initializeTargetBox(op, rcType, {handle}, extents, *getTypeConverter(),
+    auto data = hostDataPointer(
+        rewriter, loc, source,
+        getTypeConverter()->convertType(array.getElementType()));
+    auto options = allocationOptions(op, target, *layout, indexType, rewriter);
+    llvm::SmallVector<mlir::Value> handles;
+    for (auto [i, device] : llvm::enumerate(target.getDevices().asArrayRef())) {
+      llvm::SmallVector<mlir::Value> args{
+          constant(rewriter, loc, indexType, device),
+          constant(rewriter, loc, rewriter.getI32Type(), *dtype),
+          dims,
+          constant(rewriter, loc, indexType, array.getRank()),
+          data,
+          strides,
+          options};
+      if (sharded) {
+        args.push_back(transferConstants(op, sharding->dimShards, rewriter));
+        args.push_back(
+            transferConstants(op, sharding->coordinates[i], rewriter));
+      }
+      handles.push_back(
+          mlir::LLVM::CallOp::create(rewriter, loc, *upload, args).getResult());
+    }
+    initializeTargetBox(op, rcType, handles, extents, *getTypeConverter(),
                         rewriter, adaptor.getToken());
     rewriter.replaceOp(op, adaptor.getToken());
     return mlir::success();
@@ -636,7 +661,8 @@ struct ToHost : mlir::ConvertOpToLLVMPattern<ReussirArrayToHostOp> {
       return op.emitOpError("requires an enclosing function");
     auto rcType = op.getArray().getType();
     auto array = llvm::cast<ArrayType>(rcType.getElementType());
-    if (mlir::failed(verifyTransferSharding(op, array)))
+    auto sharding = transferSharding(op, array);
+    if (mlir::failed(sharding))
       return mlir::failure();
     if (!pjrtElementType(array.getElementType()))
       return op.emitOpError("unsupported PjRt element type: ")
@@ -710,6 +736,50 @@ struct ToHost : mlir::ConvertOpToLLVMPattern<ReussirArrayToHostOp> {
                             .getFixedValue();
     auto bytes = checkedMultiply<mlir::LLVM::UMulWithOverflowOp>(
         rewriter, loc, count, constant(rewriter, loc, indexType, elementBytes));
+    if (array.getTarget().getDevices().size() > 1) {
+      auto gather = runtimeFunction(
+          op, rewriter, "__reussir_pjrt_array_to_host_shard",
+          {ptrType, ptrType, indexType, indexType, ptrType, ptrType, ptrType});
+      if (mlir::failed(gather))
+        return mlir::failure();
+      auto dims = entryAlloca(op, rewriter.getI64Type(), indexType,
+                              array.getRank(), rewriter);
+      for (auto [i, size] : llvm::enumerate(sizes)) {
+        if (indexType != rewriter.getI64Type())
+          size = mlir::LLVM::SExtOp::create(rewriter, loc,
+                                            rewriter.getI64Type(), size);
+        auto slot = mlir::LLVM::GEPOp::create(
+            rewriter, loc, ptrType, rewriter.getI64Type(), dims,
+            llvm::ArrayRef<mlir::LLVM::GEPArg>{static_cast<int32_t>(i)});
+        mlir::LLVM::StoreOp::create(rewriter, loc, size, slot);
+      }
+      auto data = hostDataPointer(
+          rewriter, loc, destination,
+          getTypeConverter()->convertType(array.getElementType()));
+      auto handlesType = mlir::LLVM::LLVMArrayType::get(
+          ptrType, array.getTarget().getDevices().size());
+      auto handles = loadField(ArrayType::ALLOCATION_INDEX, handlesType);
+      for (size_t i = 0; i < sharding->coordinates.size(); ++i) {
+        // Replicated shards contain the same logical values; download one copy.
+        bool duplicate = false;
+        for (size_t j = 0; j < i; ++j)
+          duplicate |= sharding->coordinates[i] == sharding->coordinates[j];
+        if (duplicate)
+          continue;
+        auto handle = mlir::LLVM::ExtractValueOp::create(
+            rewriter, loc, handles,
+            llvm::ArrayRef<int64_t>{static_cast<int64_t>(i)});
+        mlir::LLVM::CallOp::create(
+            rewriter, loc, *gather,
+            mlir::ValueRange{
+                handle, data, constant(rewriter, loc, indexType, elementBytes),
+                constant(rewriter, loc, indexType, array.getRank()), dims,
+                transferConstants(op, sharding->dimShards, rewriter),
+                transferConstants(op, sharding->coordinates[i], rewriter)});
+      }
+      rewriter.eraseOp(op);
+      return mlir::success();
+    }
     llvm::SmallVector<int64_t> order;
     for (int64_t i = array.getRank(); i-- > 0;)
       order.push_back(i);

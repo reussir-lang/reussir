@@ -22,6 +22,7 @@
 #include <gtest/gtest.h>
 #include <llvm/ADT/StringExtras.h>
 #include <llvm/Support/BLAKE3.h>
+#include <mlir/AsmParser/AsmParser.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/IR/Diagnostics.h>
 #include <mlir/IR/Verifier.h>
@@ -34,6 +35,33 @@ import reussir.test;
 void registerIfrtDialectsAndPasses(mlir::DialectRegistry &registry);
 
 namespace reussir {
+TEST_F(ReussirTest, HostTransferShardingUsesMeshPermutationAndReplicas) {
+  mlir::DialectRegistry registry;
+  registerIfrtDialectsAndPasses(registry);
+  context->appendDialectRegistry(registry);
+  context->loadAllAvailableDialects();
+  auto shape = mlir::RankedTensorType::get(
+      {4, 6}, mlir::Float32Type::get(context.get()));
+  auto loc = mlir::UnknownLoc::get(context.get());
+  auto tiled = mlir::parseAttribute("#ifrt.sharding_param<2x2 to [1,0] on 2x2>",
+                                    context.get());
+  auto shards = getPjrtTransferSharding(tiled, shape, {3, 1, 2, 0}, loc);
+  ASSERT_TRUE(mlir::succeeded(shards));
+  EXPECT_EQ(shards->dimShards, (llvm::SmallVector<int64_t>{2, 2}));
+  ASSERT_EQ(shards->coordinates.size(), 4u);
+  EXPECT_EQ(shards->coordinates[0], (llvm::SmallVector<int64_t>{0, 0}));
+  EXPECT_EQ(shards->coordinates[1], (llvm::SmallVector<int64_t>{1, 0}));
+  EXPECT_EQ(shards->coordinates[2], (llvm::SmallVector<int64_t>{0, 1}));
+  EXPECT_EQ(shards->coordinates[3], (llvm::SmallVector<int64_t>{1, 1}));
+  auto replicated = mlir::parseAttribute(
+      "#ifrt.sharding_param<2x1 to [1,0] on 2x2>", context.get());
+  shards = getPjrtTransferSharding(replicated, shape, {3, 1, 2, 0}, loc);
+  ASSERT_TRUE(mlir::succeeded(shards));
+  EXPECT_EQ(shards->coordinates[0], shards->coordinates[2]);
+  EXPECT_EQ(shards->coordinates[1], shards->coordinates[3]);
+  EXPECT_NE(shards->coordinates[0], shards->coordinates[1]);
+}
+
 TEST_F(ReussirTest, IfrtArrayDescriptorTypeConversion) {
   mlir::DialectRegistry registry;
   registerIfrtDialectsAndPasses(registry);

@@ -149,3 +149,27 @@ The MLIR Bazel TableGen rule is pinned to LLVM revision
 uses C++20 with the same compiler and standard-library ABI as Reussir because
 this XLA revision has an invalid `std::to_underlying` alias in its C++23 path.
 Reussir continues to use C++23. Keep pins and overlays together when updating.
+
+## Host transfers for sharded arrays
+
+`reussir.array.to_device` distributes a global strided host memref across the
+array's ordered devices. `reussir.array.to_host` gathers shards into a dense
+row-major host memref. Both operations support concrete, even IFRT
+`sharding_param` metadata, including multidimensional tiles, mesh permutations,
+replication, dynamic extents, and empty arrays. Uploads preserve signed host
+strides and view offsets; downloads preserve the destination view offset.
+
+Shard coordinates follow upstream IFRT's
+[`ShardingParam`](https://github.com/openxla/xla/blob/fc840b37e26bd36c99f32e295324a1700dc12ecd/xla/python/ifrt/ir/sharding_param.h)
+device permutation. Every replica receives uploaded data; downloads select one
+representative for each tile, assuming replicas hold identical values. The
+runtime downloads each selected shard into temporary row-major storage before
+copying its rows into the global destination, so plugins need not implement
+strided host downloads. Transfers finish borrowing host storage before returning.
+
+Global extents must divide evenly by their shard counts. Unspecified
+multi-device sharding, uneven shards, and unreduced mesh axes are rejected.
+Downloads require complete device buffers whose local shapes match the global
+shape and sharding; they do not perform a reduction across replicas. Sharding
+metadata requires an OpenXLA-enabled compiler; single-device transfers without
+sharding metadata remain available without OpenXLA.

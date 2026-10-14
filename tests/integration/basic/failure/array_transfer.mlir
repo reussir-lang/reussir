@@ -6,12 +6,6 @@ func.func @host_result(%src: memref<4xf32>) {
   return
 }
 // -----
-func.func @multiple_devices(%src: memref<4xf32>) {
-  // expected-error @+1 {{requires a single-device target}}
-  %d = reussir.array.to_device %src : memref<4xf32> -> !reussir.rc<!reussir.array<4 x f32, #reussir.target<devices = [0, 1]>>>
-  return
-}
-// -----
 func.func @type_mismatch(%src: memref<4xi32>) {
   // expected-error @+1 {{host and device element types must match}}
   %d = reussir.array.to_device %src : memref<4xi32> -> !reussir.rc<!reussir.array<4 x f32, #reussir.target<devices = [0]>>>

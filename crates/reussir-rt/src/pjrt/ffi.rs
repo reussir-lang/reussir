@@ -394,6 +394,63 @@ pub unsafe extern "C" fn __reussir_pjrt_array_to_host(
     checked(unsafe { buffer.to_host(data, bytes, layout.as_ref()) });
 }
 
+/// Upload one even rectangular shard of a global host array. The three dimension
+/// arrays and `byte_strides` each contain `rank` i64 values (null for rank zero).
+/// Coordinates index tiles, not physical devices; replicas use equal coordinates.
+/// `data` and `options` have the same contract as `array_from_host`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_pjrt_array_from_host_shard(
+    device: usize,
+    element_type: u32,
+    global_dims: *const i64,
+    rank: usize,
+    data: *const c_void,
+    byte_strides: *const i64,
+    options: *const AllocationOptions,
+    dim_shards: *const i64,
+    coordinates: *const i64,
+) -> Buffer {
+    let shard = checked(super::transfer::Shard::new(
+        unsafe { dimensions(global_dims, rank) },
+        unsafe { dimensions(dim_shards, rank) },
+        unsafe { dimensions(coordinates, rank) },
+    ));
+    let offset = checked(shard.byte_offset(unsafe { dimensions(byte_strides, rank) }));
+    unsafe {
+        __reussir_pjrt_array_from_host(
+            device,
+            element_type,
+            shard.dims.as_ptr(),
+            rank,
+            data.byte_offset(offset),
+            byte_strides,
+            options,
+        )
+    }
+}
+
+/// Download one shard into exclusive dense row-major global host storage.
+/// All dimension arrays contain `rank` i64 values (null for rank zero). `data`
+/// must be non-null and address the full global shape, with `element_bytes` per
+/// element. Borrows the device buffer and waits before scattering its contents.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_pjrt_array_to_host_shard(
+    buffer: Buffer,
+    data: *mut c_void,
+    element_bytes: usize,
+    rank: usize,
+    global_dims: *const i64,
+    dim_shards: *const i64,
+    coordinates: *const i64,
+) {
+    let shard = checked(super::transfer::Shard::new(
+        unsafe { dimensions(global_dims, rank) },
+        unsafe { dimensions(dim_shards, rank) },
+        unsafe { dimensions(coordinates, rank) },
+    ));
+    checked(unsafe { shard.download(buffer, data, element_bytes) });
+}
+
 /// Enqueue a device copy and return an owned handle; borrows initialized `buffer`.
 /// Does not wait for completion. The backend tracks pending storage use.
 #[unsafe(no_mangle)]

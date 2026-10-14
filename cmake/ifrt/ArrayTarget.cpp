@@ -295,4 +295,43 @@ getPjrtDimShards(mlir::Attribute attr, mlir::RankedTensorType shape,
   }
   return llvm::to_vector(param.dim_shards());
 }
+mlir::FailureOr<PjrtTransferSharding>
+getPjrtTransferSharding(mlir::Attribute attr, mlir::RankedTensorType shape,
+                        llvm::ArrayRef<int32_t> devices, mlir::Location loc) {
+  auto dims = getPjrtDimShards(attr, shape, devices, loc);
+  if (mlir::failed(dims))
+    return mlir::failure();
+  PjrtTransferSharding result{std::move(*dims), {}};
+  result.coordinates.resize(devices.size());
+  auto sharding =
+      llvm::dyn_cast_or_null<xla::ifrt::IfrtShardingParamAttr>(attr);
+  if (!sharding) {
+    result.coordinates.front().resize(shape.getRank(), 0);
+    return result;
+  }
+  const auto &param = sharding.getSharding();
+  if (!param.unreduced_axes().empty()) {
+    mlir::emitError(loc)
+        << "host transfers do not support unreduced sharding axes";
+    return mlir::failure();
+  }
+  // IFRT's device permutation lists tiles in row-major order, with replicas
+  // in the minor positions (see ShardingParam::MinorToMajor::ToDeviceList).
+  absl::InlinedVector<int, 4> deviceOrder;
+  param.minor_to_major().ToDeviceList(deviceOrder);
+  int64_t tiles = 1;
+  for (auto count : result.dimShards)
+    tiles *= count; // CanApplyTo already bounds the product by device count.
+  int64_t replicas = devices.size() / tiles;
+  for (auto [position, device] : llvm::enumerate(deviceOrder)) {
+    auto &coordinates = result.coordinates[device];
+    coordinates.resize(shape.getRank());
+    int64_t tile = position / replicas;
+    for (size_t dim = shape.getRank(); dim-- > 0;) {
+      coordinates[dim] = tile % result.dimShards[dim];
+      tile /= result.dimShards[dim];
+    }
+  }
+  return result;
+}
 } // namespace reussir

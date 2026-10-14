@@ -94,6 +94,10 @@ pub fn exported_symbols() -> &'static [RuntimeSymbol] {
         #[cfg(feature = "pjrt")]
         __reussir_pjrt_array_to_host,
         #[cfg(feature = "pjrt")]
+        __reussir_pjrt_array_from_host_shard,
+        #[cfg(feature = "pjrt")]
+        __reussir_pjrt_array_to_host_shard,
+        #[cfg(feature = "pjrt")]
         __reussir_pjrt_array_copy_to_device,
         #[cfg(feature = "pjrt")]
         __reussir_pjrt_array_wait_ready,

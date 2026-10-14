@@ -9,6 +9,14 @@
 !I = !ifrt.array<tensor<8xf32>, #s, [1, 0]>
 !R = !reussir.rc<!reussir.array<8 x f32, #reussir.target<devices = [1, 0], sharding = #s>>>
 module {
+  func.func @upload(%source: memref<8xf32>) -> !R attributes {llvm.emit_c_interface} {
+    %array = reussir.array.to_device %source : memref<8xf32> -> !R
+    return %array : !R
+  }
+  func.func @download(%array: !R, %destination: memref<8xf32>) attributes {llvm.emit_c_interface} {
+    reussir.array.to_host %array into %destination : !R, memref<8xf32>
+    return
+  }
   func.func @sharded(%input: !R) -> !R attributes {ifrt.function} {
     %view = reussir.array.to_ifrt %input : !R -> !I
     %out, %done = ifrt.Call @kernel::@main(%view) on devices [1, 0] : (!I) -> !I

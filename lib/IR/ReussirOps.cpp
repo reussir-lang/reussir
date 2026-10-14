@@ -1423,8 +1423,6 @@ verifyArrayTransfer(mlir::Operation *op, RcType rcType, mlir::MemRefType host) {
   auto array = llvm::cast<ArrayType>(rcType.getElementType());
   if (!array.hasTargetAttr())
     return op->emitOpError("requires a target-annotated device array");
-  if (array.getTarget().getDevices().size() != 1)
-    return op->emitOpError("requires a single-device target");
   if (host.getElementType() != array.getElementType())
     return op->emitOpError("host and device element types must match");
   if (host.getRank() != static_cast<int64_t>(array.getRank()))
