@@ -171,8 +171,10 @@ impl<'a> Mangler<'a> {
                 self.path_with_args_segs(out, &[&name], &[elem]);
             }
             TyKind::Tensor { elem, dims } => {
+                // Keep builtin tensors distinct from shadowing user records,
+                // including rank-zero `Tensor<T>` and shaped `Tensor4<T>`.
                 let name = shaped_name("Tensor", dims);
-                self.path_with_args_segs(out, &[&name], &[elem]);
+                self.path_with_args_segs(out, &["core", "intrinsic", "tensor", &name], &[elem]);
             }
             TyKind::Record { def, args, .. } => {
                 // The per-use capability (`flex`) is irrelevant to the ABI.
@@ -434,6 +436,46 @@ mod tests {
             let foo0 = tcx.mk_record(foo, &[], Flexivity::Irrelevant);
             assert_eq!(m.mangle_ty(foo0), "_RC3Foo");
             assert_eq!(m.mangle_instance(foo, &[]), "_RC3Foo");
+        });
+    }
+
+    #[test]
+    fn tensor_instances_do_not_collide_with_shadowing_records() {
+        crate::with_tcx(|tcx| {
+            let mut defs = DefTable::new();
+            let scalar_record = defs.declare_record(key(1)).expect("fresh");
+            let shaped_record = defs.declare_record(key(2)).expect("fresh");
+            let dynamic_record = defs.declare_record(key(3)).expect("fresh");
+            let instantiate = defs.declare_function(key(4)).expect("fresh");
+            let resolver = VecResolver(vec!["Tensor", "Tensor4", "TensorDx0", "instantiate"]);
+            let mangler = Mangler::new(&defs, &resolver);
+            let elem = tcx.mk_fp(FpTy::Ieee(32));
+            for (def, dims, expected) in [
+                (
+                    scalar_record,
+                    &[][..],
+                    "_RINvNvNvC4core9intrinsic6tensor6TensorfE",
+                ),
+                (
+                    shaped_record,
+                    &[4][..],
+                    "_RINvNvNvC4core9intrinsic6tensor7Tensor4fE",
+                ),
+                (
+                    dynamic_record,
+                    &[crate::semi::ty::DYNAMIC_EXTENT, 0][..],
+                    "_RINvNvNvC4core9intrinsic6tensor9TensorDx0fE",
+                ),
+            ] {
+                let tensor = tcx.mk_tensor(elem, dims);
+                let record = tcx.mk_record(def, &[elem], Flexivity::Irrelevant);
+                assert_eq!(mangler.mangle_ty(tensor), expected);
+                assert_ne!(mangler.mangle_ty(tensor), mangler.mangle_ty(record));
+                assert_ne!(
+                    mangler.mangle_instance(instantiate, &[tensor]),
+                    mangler.mangle_instance(instantiate, &[record]),
+                );
+            }
         });
     }
 

@@ -8,3 +8,14 @@ pub fn builtin() {
 }
 // CHECK-DAG: ub.poison : tensor<f32>
 // CHECK-DAG: !reussir.rc<!reussir.record<compound
+
+// Monomorphized functions must distinguish the builtin tensor from a user
+// record with the same surface name and element argument. A local contextual
+// value keeps tensors confined to the function body.
+fn instantiate<T>() { let value: T = core::intrinsic::panic::panic(); }
+pub fn instantiate_both() {
+    instantiate<core::intrinsic::tensor::Tensor<f32>>();
+    instantiate<Tensor<f32>>();
+}
+// CHECK-DAG: func.func private @_RIC11instantiateINvNvNvC4core9intrinsic6tensor6TensorfEE()
+// CHECK-DAG: func.func private @_RIC11instantiateIC6TensorfEE()
