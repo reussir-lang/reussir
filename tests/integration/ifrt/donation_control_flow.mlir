@@ -1,4 +1,5 @@
 // REQUIRES: ifrt
+// RUN: %rrc %S/donation_e2e.mlir --emit llvm-ir -O aggressive -o %t.ll
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --symbol-dce --reussir-pjrt-donation | %FileCheck %s
 #s = #ifrt.sharding_param<1 to [0] on 1>
 !I = !ifrt.array<tensor<4xf32>, #s, [0]>

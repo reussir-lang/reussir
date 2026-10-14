@@ -409,6 +409,7 @@ pub fn run_lowering_pipeline(
         // dynamic `token<align, ?>` an earlier instantiation would freeze).
         func:   sys::reussirCreateTokenInstantiationPass(false, true);
         func:   sys::reussirCreateIncDecCancellationPass();
+        module: sys::reussirCreatePjrtDonationPass();
         module: sys::reussirCreateRcDecrementExpansionPass();
         func:   sys::reussirCreateInferVariantTagPass();
         module: sys::reussirCreateAcquireDropExpansionPass(

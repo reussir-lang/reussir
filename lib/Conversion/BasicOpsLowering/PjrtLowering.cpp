@@ -5,6 +5,7 @@
 #include "Reussir/Conversion/Blake3Symbol.h"
 #include "Reussir/Conversion/OpenXLATarget.h"
 #include "Reussir/IR/ReussirOps.h"
+#include <llvm/ADT/BitVector.h>
 #include <mlir/Dialect/LLVMIR/FunctionCallUtils.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Interfaces/FunctionInterfaces.h>
@@ -112,9 +113,10 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
 #else
     if (!op->getParentOfType<mlir::FunctionOpInterface>())
       return op.emitOpError("requires an enclosing function");
-    if (!op.getIoAliases().empty() || !op.getDonatedInputIndices().empty())
-      return op.emitOpError(
-          "runtime execution does not support donation or aliases");
+    if ((!op.getIoAliases().empty() || !op.getDonatedInputIndices().empty()) &&
+        !op->hasAttr("pjrt.donation_materialized"))
+      return op.emitOpError("runtime execution does not support donation or "
+                            "aliases before reussir-pjrt-donation");
     for (auto type : llvm::concat<mlir::Type>(op.getInputs().getTypes(),
                                               op.getOutputs().getTypes()))
       if (getIfrtArrayDevices(type) != op.getDevices())
@@ -126,26 +128,6 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
         return op.emitOpError(
             "runtime results must be adopted once with array.from_ifrt");
 
-    if (!op.getCalleeAttr().getNestedReferences().empty())
-      return op.emitOpError("runtime callee must be in the same symbol table");
-    auto *code =
-        mlir::SymbolTable::lookupNearestSymbolFrom(op, op.getCalleeAttr());
-    mlir::LLVM::LLVMStructType codeType;
-    if (auto original = llvm::dyn_cast_or_null<ReussirIFRTBytecodeOp>(code))
-      codeType = mlir::LLVM::LLVMStructType::getLiteral(
-          getContext(),
-          {mlir::LLVM::LLVMArrayType::get(rewriter.getI8Type(), 64),
-           mlir::LLVM::LLVMArrayType::get(rewriter.getI8Type(),
-                                          original.getBytecode().size())});
-    else if (auto global = llvm::dyn_cast_or_null<mlir::LLVM::GlobalOp>(code))
-      codeType =
-          llvm::dyn_cast<mlir::LLVM::LLVMStructType>(global.getGlobalType());
-    if (!codeType)
-      return op.emitOpError("cannot resolve kernel bytecode");
-    auto byteCount =
-        llvm::cast<mlir::LLVM::LLVMArrayType>(codeType.getBody()[1])
-            .getNumElements();
-    auto options = op.getCompileOptions().value_or(llvm::StringRef{});
     auto loc = op.getLoc();
     auto ptr = mlir::LLVM::LLVMPointerType::get(getContext());
     auto index = getTypeConverter()->getIndexType();
@@ -164,6 +146,37 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
         mlir::failed(execute))
       return mlir::failure();
     auto length = [&](size_t n) { return integer(rewriter, loc, index, n); };
+    auto codeFields = [&](mlir::SymbolRefAttr symbol)
+        -> mlir::FailureOr<llvm::SmallVector<mlir::Value>> {
+      if (!symbol.getNestedReferences().empty())
+        return mlir::failure();
+      auto *code = mlir::SymbolTable::lookupNearestSymbolFrom(op, symbol);
+      mlir::LLVM::LLVMStructType type;
+      if (auto original = llvm::dyn_cast_or_null<ReussirIFRTBytecodeOp>(code))
+        type = mlir::LLVM::LLVMStructType::getLiteral(
+            getContext(),
+            {mlir::LLVM::LLVMArrayType::get(rewriter.getI8Type(), 64),
+             mlir::LLVM::LLVMArrayType::get(rewriter.getI8Type(),
+                                            original.getBytecode().size())});
+      else if (auto global = llvm::dyn_cast_or_null<mlir::LLVM::GlobalOp>(code))
+        type =
+            llvm::dyn_cast<mlir::LLVM::LLVMStructType>(global.getGlobalType());
+      if (!type)
+        return mlir::failure();
+      auto object = mlir::LLVM::AddressOfOp::create(
+          rewriter, loc, ptr, symbol.getRootReference().getValue());
+      auto field = [&](int32_t i) {
+        return mlir::LLVM::GEPOp::create(
+                   rewriter, loc, ptr, type, object,
+                   llvm::ArrayRef<mlir::LLVM::GEPArg>{0, i, 0})
+            .getResult();
+      };
+      return llvm::SmallVector<mlir::Value>{
+          field(1),
+          length(llvm::cast<mlir::LLVM::LLVMArrayType>(type.getBody()[1])
+                     .getNumElements()),
+          field(0)};
+    };
     auto nonDonatable = [&](llvm::ArrayRef<int32_t> arguments,
                             llvm::ArrayRef<int32_t> donors) {
       llvm::SmallVector<int64_t> indices;
@@ -200,17 +213,84 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
           mlir::Value(mlir::LLVM::AddressOfOp::create(rewriter, loc, global)),
           size);
     };
-    auto object = mlir::LLVM::AddressOfOp::create(
-        rewriter, loc, ptr, op.getCalleeAttr().getRootReference().getValue());
-    auto field = [&](int32_t i) {
-      return mlir::LLVM::GEPOp::create(
-          rewriter, loc, ptr, codeType, object,
-          llvm::ArrayRef<mlir::LLVM::GEPArg>{0, i, 0});
-    };
+    auto fields = codeFields(op.getCalleeAttr());
+    if (mlir::failed(fields))
+      return op.emitOpError("cannot resolve kernel bytecode");
+    llvm::SmallVector<int32_t> identity(op.getInputs().size());
+    std::iota(identity.begin(), identity.end(), 0);
+    auto inputs = slots(op, ptr, index, adaptor.getInputs().size(), rewriter);
+    for (auto [i, input] : llvm::enumerate(adaptor.getInputs()))
+      storeSlot(op, inputs, i, input, rewriter);
+    mlir::Value inputCount = length(identity.size());
+    llvm::SmallVector<int32_t> explicitDonors(op.getDonatedInputIndices());
+    for (auto alias : op.getIoAliases())
+      explicitDonors.push_back(llvm::cast<mlir::DenseI32ArrayAttr>(alias)[0]);
+    auto [denied, deniedCount] = nonDonatable(identity, explicitDonors);
+    llvm::SmallVector<llvm::SmallVector<mlir::Value>> handles;
+    if (!op.getDonationVariants().empty()) {
+      for (auto input : adaptor.getInputs()) {
+        auto &row = handles.emplace_back();
+        for (unsigned device = 0; device < op.getDevices().size(); ++device) {
+          auto address = mlir::LLVM::GEPOp::create(
+              rewriter, loc, ptr, ptr, input,
+              llvm::ArrayRef<mlir::LLVM::GEPArg>{int32_t(device)});
+          row.push_back(
+              mlir::LLVM::LoadOp::create(rewriter, loc, ptr, address));
+        }
+      }
+    }
+    auto baselineInputs = inputs;
+    for (auto attribute : llvm::reverse(op.getDonationVariants())) {
+      auto variant = llvm::cast<mlir::DictionaryAttr>(attribute);
+      auto arguments =
+          llvm::cast<mlir::DenseI32ArrayAttr>(variant.get("arguments"))
+              .asArrayRef();
+      auto donors = llvm::cast<mlir::DenseI32ArrayAttr>(variant.get("donors"))
+                        .asArrayRef();
+      mlir::Value eligible = integer(rewriter, loc, rewriter.getI1Type(), 1);
+      for (int32_t donor : donors) {
+        eligible = mlir::LLVM::AndOp::create(
+            rewriter, loc, eligible, adaptor.getDonationGuards()[donor]);
+        for (int32_t other : arguments) {
+          if (other == donor)
+            continue;
+          for (unsigned device = 0; device < op.getDevices().size(); ++device) {
+            auto distinct = mlir::LLVM::ICmpOp::create(
+                rewriter, loc, mlir::LLVM::ICmpPredicate::ne,
+                handles[donor][device], handles[other][device]);
+            eligible =
+                mlir::LLVM::AndOp::create(rewriter, loc, eligible, distinct);
+          }
+        }
+      }
+      auto candidate =
+          codeFields(llvm::cast<mlir::SymbolRefAttr>(variant.get("callee")));
+      if (mlir::failed(candidate))
+        return op.emitOpError("cannot resolve donation variant");
+      auto select = [&](mlir::Value yes, mlir::Value no) {
+        return mlir::LLVM::SelectOp::create(rewriter, loc, eligible, yes, no)
+            .getResult();
+      };
+      for (unsigned i = 0; i < fields->size(); ++i)
+        (*fields)[i] = select((*candidate)[i], (*fields)[i]);
+      auto [candidateDenied, candidateCount] = nonDonatable(arguments, donors);
+      denied = select(candidateDenied, denied);
+      deniedCount = select(candidateCount, deniedCount);
+      mlir::Value variantInputs = baselineInputs;
+      if (arguments != llvm::ArrayRef<int32_t>(identity)) {
+        auto storage = slots(op, ptr, index, arguments.size(), rewriter);
+        for (auto [i, original] : llvm::enumerate(arguments))
+          storeSlot(op, storage, i, adaptor.getInputs()[original], rewriter);
+        variantInputs = storage;
+      }
+      inputs = select(variantInputs, inputs);
+      inputCount = select(length(arguments.size()), inputCount);
+    }
+    auto options = op.getCompileOptions().value_or(llvm::StringRef{});
     auto executable =
         mlir::LLVM::CallOp::create(
             rewriter, loc, *compile,
-            mlir::ValueRange{field(1), length(byteCount), field(0),
+            mlir::ValueRange{(*fields)[0], (*fields)[1], (*fields)[2],
                              bytesAddress(op, options, rewriter),
                              length(options.size())})
             .getResult();
@@ -223,9 +303,6 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
     mlir::LLVM::CallOp::create(
         rewriter, loc, *validate,
         mlir::ValueRange{executable, devices, length(op.getDevices().size())});
-    auto inputs = slots(op, ptr, index, adaptor.getInputs().size(), rewriter);
-    for (auto [i, input] : llvm::enumerate(adaptor.getInputs()))
-      storeSlot(op, inputs, i, input, rewriter);
     auto outputs = slots(op, ptr, index, op.getOutputs().size(), rewriter);
     llvm::SmallVector<mlir::Value> results;
     for (size_t i = 0; i < op.getOutputs().size(); ++i) {
@@ -233,14 +310,10 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
       storeSlot(op, outputs, i, descriptor, rewriter);
       results.push_back(descriptor);
     }
-    llvm::SmallVector<int32_t> identity(op.getInputs().size());
-    std::iota(identity.begin(), identity.end(), 0);
-    auto [denied, deniedCount] = nonDonatable(identity, {});
     mlir::LLVM::CallOp::create(
         rewriter, loc, *execute,
-        mlir::ValueRange{executable, inputs, length(op.getInputs().size()),
-                         outputs, length(op.getOutputs().size()),
-                         denied, deniedCount});
+        mlir::ValueRange{executable, inputs, inputCount, outputs,
+                         length(op.getOutputs().size()), denied, deniedCount});
     // Execution returns only after every device completes. The resulting
     // control handle is therefore already ready; the side-effecting runtime
     // calls preserve ordering even though no token reaches the runtime ABI.

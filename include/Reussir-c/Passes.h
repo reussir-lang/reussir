@@ -39,6 +39,7 @@ MlirPass reussirCreateTokenInstantiationPass(bool acceptors, bool producers);
 MlirPass reussirCreateClosureOutliningPass(void);
 MlirPass reussirCreateRegionPatternsPass(void);
 MlirPass reussirCreateIncDecCancellationPass(void);
+MlirPass reussirCreatePjrtDonationPass(void);
 MlirPass reussirCreateRcDecrementExpansionPass(void);
 MlirPass reussirCreateInferVariantTagPass(void);
 MlirPass reussirCreateConvertToSTDPass(bool expandArrays);

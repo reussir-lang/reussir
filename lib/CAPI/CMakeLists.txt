@@ -61,7 +61,8 @@ set(REUSSIR_BACKEND_ARCHIVES
   MLIRReussirSpecialPointerTag
   MLIRReussirInvariantGroupAnalysis
   MLIRReussirUniqueCarryingRecursionAnalysis
-  MLIRReussirTRMCRecursionAnalysis)
+  MLIRReussirTRMCRecursionAnalysis
+  MLIRReussirPjrtDonation)
 add_dependencies(ReussirCAPI ${REUSSIR_BACKEND_ARCHIVES})
 
 # Cargo does not inherit CMake's transitive link dependencies. Export the

@@ -175,6 +175,7 @@ void createLoweringPipeline(mlir::PassManager &pm,
   pm.addPass(reussir::createReussirRegionPatternsPass());
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirIncDecCancellationPass());
+  pm.addPass(reussir::createReussirPjrtDonationPass());
   pm.addPass(reussir::createReussirRcDecrementExpansionPass());
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirInferVariantTagPass());

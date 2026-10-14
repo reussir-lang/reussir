@@ -120,6 +120,7 @@ unsafe extern "C" {
 
     //==-- Reussir passes --==//
 
+    pub fn reussirCreatePjrtDonationPass() -> MlirPass;
     pub fn reussirCreateUniqueCarryingRecursionAnalysisPass() -> MlirPass;
     pub fn reussirCreateTokenInstantiationPass(acceptors: bool, producers: bool) -> MlirPass;
     pub fn reussirCreateClosureOutliningPass() -> MlirPass;

@@ -74,6 +74,10 @@ MlirPass wrapOwned(std::unique_ptr<mlir::Pass> pass) {
 // Reussir passes
 //===----------------------------------------------------------------------===//
 
+MlirPass reussirCreatePjrtDonationPass(void) {
+  return wrapOwned(reussir::createReussirPjrtDonationPass());
+}
+
 MlirPass reussirCreateUniqueCarryingRecursionAnalysisPass(void) {
   return wrapOwned(reussir::createReussirUniqueCarryingRecursionAnalysisPass());
 }

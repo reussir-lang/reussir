@@ -50,6 +50,7 @@ const REUSSIR_ARCHIVES: &[&str] = &[
     "MLIRReussirSpecialPointerTag",
     "MLIRReussirInvariantGroupAnalysis",
     "MLIRReussirUniqueCarryingRecursionAnalysis",
+    "MLIRReussirPjrtDonation",
     "MLIRReussirTRMCRecursionAnalysis",
     // mlir-sync components referenced by Reussir's type converter,
     // ConvertToSTD pass, and ConvertToLLVM interface.
