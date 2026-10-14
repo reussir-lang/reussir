@@ -13,7 +13,8 @@ import reussir.test;
 void registerIfrtDialectsAndPasses(mlir::DialectRegistry &registry);
 namespace reussir {
 namespace {
-std::string program(unsigned calls) {
+std::string program(unsigned calls, llvm::StringRef tensorType = "4xf32",
+                    llvm::StringRef arrayType = "4 x f32") {
   std::string source = R"mlir(
 #s = #ifrt.sharding_param<1 to [0] on 1>
 !I = !ifrt.array<tensor<4xf32>, #s, [0]>
@@ -34,12 +35,20 @@ module {
   source += R"mlir(
 module @kernel attributes {sym_visibility = "private"} {
   func.func @main(%x: tensor<4xf32>) -> tensor<4xf32> {
-    %one = stablehlo.constant dense<1.0> : tensor<4xf32>
-    %r = stablehlo.add %x, %one : tensor<4xf32>
+    %r = stablehlo.add %x, %x : tensor<4xf32>
     return %r : tensor<4xf32>
   }
 }
 })mlir";
+  for (auto [before, after] :
+       {std::pair{llvm::StringRef("4xf32"), tensorType},
+        std::pair{llvm::StringRef("4 x f32"), arrayType}}) {
+    size_t position = 0;
+    while ((position = source.find(before.str(), position)) != std::string::npos) {
+      source.replace(position, before.size(), after.str());
+      position += after.size();
+    }
+  }
   return source;
 }
 void load(mlir::MLIRContext &context) {
@@ -100,6 +109,54 @@ TEST_F(ReussirTest, PjrtDonationSerializedContractAndChecksum) {
   }
   EXPECT_EQ(donors, 1u);
   EXPECT_EQ(baseline, 1u);
+}
+
+TEST_F(ReussirTest, PjrtDonationUnknownSizeIsAnOptionalHint) {
+  load(*context);
+  auto module = parse(program(1, "?xf32", "? x f32"));
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(mlir::succeeded(prepare(*module)));
+  ASSERT_TRUE(mlir::succeeded(donate(*module)));
+  unsigned hinted = 0;
+  module->walk([&](ReussirPJRTJitCallOp call) {
+    EXPECT_EQ(call.getDonationGuards().size(), 1u);
+    EXPECT_EQ(call.getDonationVariants().size(), 1u);
+    EXPECT_TRUE(call.getIoAliases().empty());
+  });
+  for (auto code : module->getOps<ReussirIFRTBytecodeOp>()) {
+    auto kernel = mlir::parseSourceString<mlir::ModuleOp>(code.getBytecode(),
+                                                        context.get());
+    ASSERT_TRUE(kernel);
+    auto entry = kernel->lookupSymbol<mlir::func::FuncOp>("main");
+    hinted += bool(entry.getArgAttr(0, "jax.buffer_donor"));
+    EXPECT_FALSE(entry.getArgAttr(0, "tf.aliasing_output"));
+  }
+  EXPECT_EQ(hinted, 1u);
+  ASSERT_TRUE(mlir::succeeded(donate(*module)));
+  EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 2u);
+}
+
+TEST_F(ReussirTest, PjrtDonationComplexElementSizes) {
+  load(*context);
+  auto module = parse(program(1, "4xcomplex<f32>", "4 x complex<f32>"));
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(mlir::succeeded(prepare(*module)));
+  ASSERT_TRUE(mlir::succeeded(donate(*module)));
+  module->walk([&](ReussirPJRTJitCallOp call) {
+    EXPECT_EQ(call.getDonationVariants().size(), 1u);
+  });
+}
+
+TEST_F(ReussirTest, PjrtDonationEmptyTensorsHaveNoBenefit) {
+  load(*context);
+  auto module = parse(program(1, "0xf32", "0 x f32"));
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(mlir::succeeded(prepare(*module)));
+  ASSERT_TRUE(mlir::succeeded(donate(*module)));
+  module->walk([&](ReussirPJRTJitCallOp call) {
+    EXPECT_TRUE(call.getDonationGuards().empty());
+    EXPECT_TRUE(call.getDonationVariants().empty());
+  });
 }
 
 TEST_F(ReussirTest, PjrtDonationBudgetsFallBackWithoutGuards) {

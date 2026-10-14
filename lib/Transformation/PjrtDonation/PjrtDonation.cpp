@@ -19,6 +19,7 @@
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/Parser/Parser.h>
 #include <numeric>
+#include <optional>
 
 namespace reussir {
 #define GEN_PASS_DEF_REUSSIRPJRTDONATIONPASS
@@ -35,7 +36,7 @@ struct CallPlan {
 };
 struct Candidate {
   Indices arguments, mapping, donors;
-  uint64_t benefit = 0;
+  std::optional<uint64_t> benefit;
   mlir::FlatSymbolRefAttr symbol;
 };
 struct Family {
@@ -45,16 +46,26 @@ struct Family {
   SmallVector<Candidate> candidates;
 };
 
-uint64_t tensorBytes(mlir::Type type) {
+std::optional<uint64_t> tensorBytes(mlir::Type type) {
   auto tensor = llvm::dyn_cast<mlir::RankedTensorType>(type);
-  if (!tensor || !tensor.hasStaticShape() ||
-      !tensor.getElementType().isIntOrFloat())
+  if (!tensor)
+    return std::nullopt;
+  if (llvm::is_contained(tensor.getShape(), 0))
     return 0;
-  uint64_t bits = tensor.getElementTypeBitWidth();
-  uint64_t bytes = (bits + 7) / 8;
+  if (!tensor.hasStaticShape())
+    return std::nullopt;
+  auto element = tensor.getElementType();
+  uint64_t components = 1;
+  if (auto complex = llvm::dyn_cast<mlir::ComplexType>(element)) {
+    element = complex.getElementType();
+    components = 2;
+  }
+  if (!element.isIntOrFloat())
+    return std::nullopt;
+  uint64_t bytes = components * ((element.getIntOrFloatBitWidth() + 7) / 8);
   for (int64_t dim : tensor.getShape()) {
-    if (dim < 0 || (dim && bytes > UINT64_MAX / uint64_t(dim)))
-      return 0;
+    if (bytes > UINT64_MAX / uint64_t(dim))
+      return std::nullopt;
     bytes *= dim;
   }
   return bytes;
@@ -331,26 +342,33 @@ struct ReussirPjrtDonationPass
         signalPassFailure();
         return;
       }
-      SmallVector<uint64_t> inputBytes;
+      SmallVector<std::optional<uint64_t>> inputBytes;
       for (auto type : main.getArgumentTypes())
         inputBytes.push_back(tensorBytes(type));
       llvm::SmallDenseSet<uint64_t, 8> resultSizes;
+      llvm::SmallDenseSet<mlir::Type, 8> unknownResultTypes;
       uint64_t outputBytes = 0;
       for (auto type : main.getResultTypes()) {
-        uint64_t bytes = tensorBytes(type);
-        resultSizes.insert(bytes);
-        outputBytes = std::min(UINT64_MAX - bytes, outputBytes) + bytes;
+        auto bytes = tensorBytes(type);
+        if (!bytes) {
+          unknownResultTypes.insert(type);
+          continue;
+        }
+        resultSizes.insert(*bytes);
+        outputBytes = std::min(UINT64_MAX - *bytes, outputBytes) + *bytes;
       }
       std::map<std::pair<Indices, Indices>, unsigned> interned;
       auto addCandidate = [&](Indices arguments, Indices mapping,
-                              Indices donors, uint64_t benefit) {
-        if (donors.empty() || !benefit)
+                              Indices donors,
+                              std::optional<uint64_t> benefit) {
+        if (donors.empty() || benefit == 0)
           return;
         auto key = std::make_pair(mapping, donors);
         auto found = interned.find(key);
         if (found != interned.end()) {
           auto &score = family.candidates[found->second].benefit;
-          score = std::min(UINT64_MAX - benefit, score) + benefit;
+          if (score && benefit)
+            score = std::min(UINT64_MAX - *benefit, *score) + *benefit;
           return;
         }
         if (family.candidates.size() >= maxCandidates)
@@ -370,9 +388,9 @@ struct ReussirPjrtDonationPass
           if (plan.decisions[i] == Decision::Forbidden)
             continue;
           auto bytes = inputBytes[i];
-          if (!bytes || !resultSizes.contains(bytes))
+          if (!bytes || !*bytes || !resultSizes.contains(*bytes))
             continue;
-          viable.emplace_back(bytes, i);
+          viable.emplace_back(*bytes, i);
         }
         llvm::stable_sort(viable,
                           [](auto a, auto b) { return a.first > b.first; });
@@ -392,6 +410,18 @@ struct ReussirPjrtDonationPass
             std::min(benefit, outputBytes) > viable.front().first)
           addCandidate(plan.arguments, plan.mapping, donors,
                        std::min(benefit, outputBytes));
+      }
+      for (auto &plan : family.calls) {
+        if (unknownResultTypes.empty() ||
+            family.candidates.size() >= maxCandidates)
+          break;
+        if (uint64_t(plan.arguments.size()) * plan.call.getDevices().size() >
+            maxGuardComparisons)
+          continue;
+        for (int32_t i : plan.arguments)
+          if (plan.decisions[i] != Decision::Forbidden && !inputBytes[i] &&
+              unknownResultTypes.contains(main.getArgumentTypes()[i]))
+            addCandidate(plan.arguments, plan.mapping, {i}, std::nullopt);
       }
       llvm::stable_sort(family.candidates, [](const Candidate &a,
                                               const Candidate &b) {
