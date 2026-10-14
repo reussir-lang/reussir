@@ -73,7 +73,7 @@ impl IntrinsicItem {
     }
 }
 
-/// A built-in type *former* — `Arc`, `Nullable`, and the cell family —
+/// A built-in type *former* — `Arc`, `Nullable`, `Tensor`, and the cell family —
 /// as a lang item: the marker on the anchor record `core` declares for
 /// it. The former itself stays wired (its canonical
 /// `core::intrinsic::…` spelling and bare prelude name resolve in
@@ -81,6 +81,7 @@ impl IntrinsicItem {
 /// the declaration site for diagnostics, debug info, and the LSP.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum FormerItem {
+    Tensor,
     Arc,
     Nullable,
     /// One per [`crate::semi::ty::CellKind`].
@@ -93,7 +94,8 @@ pub enum FormerItem {
 }
 
 impl FormerItem {
-    pub const ALL: [FormerItem; 8] = [
+    pub const ALL: [FormerItem; 9] = [
+        FormerItem::Tensor,
         FormerItem::Arc,
         FormerItem::Nullable,
         FormerItem::Cell,
@@ -106,6 +108,7 @@ impl FormerItem {
 
     pub fn name(self) -> &'static str {
         match self {
+            FormerItem::Tensor => "tensor",
             FormerItem::Arc => "arc",
             FormerItem::Nullable => "nullable",
             FormerItem::Cell => "cell",

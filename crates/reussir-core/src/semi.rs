@@ -2176,6 +2176,10 @@ mod tests {
                     include_str!("../../../library/core/src/intrinsic/nullable.rr"),
                 ),
                 (
+                    &["intrinsic", "tensor"],
+                    include_str!("../../../library/core/src/intrinsic/tensor.rr"),
+                ),
+                (
                     &["intrinsic", "panic"],
                     include_str!("../../../library/core/src/intrinsic/panic.rr"),
                 ),

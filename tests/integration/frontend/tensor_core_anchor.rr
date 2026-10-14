@@ -1,0 +1,18 @@
+// The actual core package exports Tensor's lang anchor and source location.
+// Importing that declaration must still produce builtin Tensor types.
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.rri
+// RUN: %FileCheck %s --check-prefix=RRI < %t.rri
+// RUN: %rrc %s --package-name app --extern core=%t.rri --emit hir --no-source-locations -o - | %FileCheck %s --check-prefix=HIR
+// RUN: %rrc %s --package-name app --extern core=%t.rri --emit mlir --no-source-locations -o - | %FileCheck %s --check-prefix=MLIR
+// RUN: echo 'pub fn bad() { let x = core::intrinsic::tensor::Tensor { }; }' > %t.bad.rr
+// RUN: %not %rrc %t.bad.rr --package-name app --extern core=%t.rri --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=BAD
+// BAD: `Tensor` is a built-in type; construct it with its own syntax
+// RRI: "intrinsic/tensor.rr"
+// RRI: #[lang("tensor")] pub [shared] struct #core::intrinsic::tensor::Tensor<{{.*}}(T)> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {  };
+import core::intrinsic::tensor::Tensor as Tile;
+pub fn scalar() { let x: Tile<f32> = core::intrinsic::panic::panic(); }
+pub fn shaped() { let x: Tile<[f32; 0, ?]> = core::intrinsic::panic::panic(); }
+// HIR-DAG: : Tensor<f32>
+// HIR-DAG: : Tensor<[f32; 0, ?]>
+// MLIR-DAG: ub.poison : tensor<f32>
+// MLIR-DAG: ub.poison : tensor<0x?xf32>

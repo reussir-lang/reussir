@@ -823,15 +823,25 @@ mod tests {
     /// re-parse — the same round trip `--extern` performs. (The reduction and
     /// header gating are the driver's business; declaration sees a `Parsed`.)
     fn dep_interface<'tcx>(tcx: &TyCtxt<'tcx>, src: &str) -> Parsed<'tcx> {
+        package_interface(tcx, "dep", &[], src)
+    }
+
+    fn package_interface<'tcx>(
+        tcx: &TyCtxt<'tcx>,
+        package: &str,
+        module: &[&str],
+        src: &str,
+    ) -> Parsed<'tcx> {
         let interner = Arc::new(reussir_syntax::new_threaded_interner());
         let mut keys = interner.clone();
-        let dep = keys.get_or_intern("dep");
+        let mut path = vec![keys.get_or_intern(package)];
+        path.extend(module.iter().map(|s| keys.get_or_intern(s)));
         let parse = reussir_syntax::parse_with_interner(src, interner.clone());
         assert!(parse.ok(), "dep parse errors: {:#?}", parse.errors);
         let prog = surface::program(&parse.root);
         let files = [PackageFile {
             file: FileId::ROOT,
-            module: vec![dep],
+            module: path,
             program: &prog,
         }];
         let elab = elaborate_package(tcx, &files, &interner);
@@ -841,7 +851,8 @@ mod tests {
         let (traits, impls) =
             crate::semi::hir::trait_texts(&elab.traits, &elab.defs, elab.resolver);
         let lang = elab.lang.declared_by_def();
-        let text = Printer::new(&elab.defs, elab.resolver)
+        let sources = reussir_syntax::source::SourceCache::single("<interface source>", src);
+        let text = Printer::with_sources(&elab.defs, elab.resolver, &sources)
             .with_bounds(&bounds)
             .with_traits(&traits, &impls)
             .with_lang(&lang)
@@ -914,6 +925,69 @@ mod tests {
                 assert!(elab.lang_item_site(LangItem::PartialEq).is_some());
             },
         );
+    }
+
+    #[test]
+    fn tensor_anchor_reloads_its_site_and_resolves_imported_builtin() {
+        use crate::semi::lang::{FormerItem, LangItem};
+        with_tcx(|tcx| {
+            let parsed = package_interface(
+                tcx,
+                "core",
+                &["intrinsic", "tensor"],
+                include_str!("../../../../library/core/src/intrinsic/tensor.rr"),
+            );
+            let interner = Arc::new(reussir_syntax::new_threaded_interner());
+            let mut keys = interner.clone();
+            let app = keys.get_or_intern("app");
+            let parse = reussir_syntax::parse_with_interner(
+                "import core::intrinsic::tensor::Tensor as Tile; \
+                 pub fn scalar() { let x: Tile<f32> = core::intrinsic::panic::panic(); } \
+                 pub fn shaped() { let x: Tile<[f32; 0, ?]> = core::intrinsic::panic::panic(); }",
+                interner.clone(),
+            );
+            assert!(parse.ok(), "{:#?}", parse.errors);
+            let program = surface::program(&parse.root);
+            let mut elab = Elaborator::new(tcx, &interner);
+            let source_file = FileId::from_index(7);
+            elab.declare_extern_package(
+                &mut keys,
+                &ExternPackage {
+                    name: "core",
+                    parsed: &parsed,
+                    files: &[source_file],
+                },
+            );
+            elab.run_package(&[PackageFile {
+                file: FileId::ROOT,
+                module: vec![app],
+                program: &program,
+            }]);
+            assert!(!elab.has_errors(), "{:#?}", elab.reports);
+            let item = LangItem::Former(FormerItem::Tensor);
+            let def = elab.lang.get(item).expect("Tensor anchor reloaded");
+            assert!(elab.lang.is_former_anchor(def));
+            let path: Vec<_> = elab.defs.path(def).0.iter().map(|&k| elab.sym(k)).collect();
+            assert_eq!(path, ["core", "intrinsic", "tensor", "Tensor"]);
+            let (file, span) = elab.lang_item_site(item).expect("Tensor declaration site");
+            assert_eq!(file, source_file);
+            assert!(
+                span.is_some(),
+                "Tensor's source span survives interface reload"
+            );
+            let text = Printer::new(&elab.defs, elab.resolver).program(
+                &elab.elaborated,
+                &elab.strings.entries(),
+                &elab.records,
+                &elab.trampolines,
+            );
+            assert!(text.contains(": Tensor<f32>"), "{text}");
+            assert!(text.contains(": Tensor<[f32; 0, ?]>"), "{text}");
+            assert!(
+                !text.contains(": #core::intrinsic::tensor::Tensor"),
+                "{text}"
+            );
+        });
     }
 
     const TRAIT_DEP: &str = "pub trait Show { fn show(self: Self) -> i64; }\n\

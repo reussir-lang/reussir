@@ -1,0 +1,7 @@
+//! Declaration anchor for the builtin tensor type. Its element and shape are
+//! checked by the compiler; the anchor supplies a source location for tools.
+
+/// A scope-confined numeric tensor: `Tensor<f32>` has rank zero, while
+/// `Tensor<[f32; ?, 4]>` carries an explicit shape. Zero extents are valid.
+#[lang("tensor")]
+pub struct Tensor<T> { }
