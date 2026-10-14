@@ -139,6 +139,39 @@ TEST_F(ReussirTest, PjrtDonationAnalysisWorkIsBounded) {
   EXPECT_LE(analysis.getWork(), 64u);
 }
 
+TEST_F(ReussirTest, PjrtDonationSolverBudgetDiscardsPartialFacts) {
+  load(*context);
+  auto source = program(1);
+  auto view = source.find("%v = reussir.array.to_ifrt %a");
+  ASSERT_NE(view, std::string::npos);
+  source.replace(view, std::string("%v = reussir.array.to_ifrt %a").size(),
+                 R"mlir(%condition = reussir.rc.is_unique(%a : !R) : i1
+  %forwarded = scf.if %condition -> !R {
+    scf.yield %a : !R
+  } else {
+    scf.yield %a : !R
+  }
+  %v = reussir.array.to_ifrt %forwarded)mlir");
+  source.replace(source.find("reussir.rc.dec(%a"),
+                 std::string("reussir.rc.dec(%a").size(),
+                 "reussir.rc.dec(%forwarded");
+  auto module = parse(source);
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(mlir::succeeded(prepare(*module)));
+  PjrtDonationAnalysis complete(*module);
+  ASSERT_FALSE(complete.exhausted());
+  PjrtDonationAnalysis partial(*module, complete.getWork() + 1);
+  ASSERT_FALSE(partial.exhausted());
+  module->walk([&](ReussirPJRTJitCallOp call) {
+    auto view = call.getInputs()[0].getDefiningOp<ReussirArrayToIfrtOp>();
+    EXPECT_EQ(complete.analyze(view.getArray(), call),
+              PjrtDonationAnalysis::Decision::Guarded);
+    EXPECT_EQ(partial.analyze(view.getArray(), call),
+              PjrtDonationAnalysis::Decision::Forbidden);
+  });
+  EXPECT_TRUE(partial.exhausted());
+}
+
 TEST_F(ReussirTest, PjrtDonationRejectsInvalidContract) {
   load(*context);
   auto module = parse(program(1));

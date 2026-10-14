@@ -3,12 +3,13 @@
 #include "Reussir/IR/ReussirOps.h"
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/DenseSet.h>
-#include <llvm/ADT/SetVector.h>
 #include <llvm/ADT/SmallPtrSet.h>
+#include <mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h>
+#include <mlir/Analysis/DataFlow/DeadCodeAnalysis.h>
+#include <mlir/Analysis/DataFlow/SparseAnalysis.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/Dominance.h>
 #include <mlir/IR/Matchers.h>
-#include <mlir/IR/SymbolTable.h>
 #include <mlir/Interfaces/ControlFlowInterfaces.h>
 #include <mlir/Interfaces/LoopLikeInterface.h>
 
@@ -30,19 +31,115 @@ bool bookkeeping(Operation *op) {
 bool transparentBorrow(Operation *op) {
   return isa<ReussirRcBorrowOp, ReussirArrayToIfrtOp, ReussirRefProjectOp>(op);
 }
+struct WorkBudget {
+  uint64_t work = 0, limit;
+  bool exhausted = false;
+
+  bool tick(uint64_t n = 1) {
+    if (exhausted || n > limit - std::min(limit, work)) {
+      exhausted = true;
+      return false;
+    }
+    work += n;
+    return true;
+  }
+};
+
+struct Ownership {
+  enum Kind { Uninitialized, Unique, Owned, Unknown } kind = Uninitialized;
+  bool operator==(const Ownership &) const = default;
+  static Ownership join(Ownership lhs, Ownership rhs) {
+    return {std::max(lhs.kind, rhs.kind)};
+  }
+  void print(llvm::raw_ostream &os) const { os << kind; }
+  bool isOwned() const { return kind == Unique || kind == Owned; }
+};
+
+class OwnershipLattice : public dataflow::Lattice<Ownership> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(OwnershipLattice)
+  explicit OwnershipLattice(Value value)
+      : Lattice(value),
+        shared(targetArray(value.getType()) &&
+               llvm::any_of(value.getUsers(), [](Operation *op) {
+                 return isa<ReussirRcIncOp, CallOpInterface>(op) ||
+                        (!isa<BranchOpInterface, RegionBranchOpInterface,
+                              RegionBranchTerminatorOpInterface, func::ReturnOp,
+                              ReussirArrayToIfrtOp, ReussirArrayToHostOp,
+                              ReussirRcBorrowOp>(op) &&
+                         !bookkeeping(op));
+               })) {}
+
+  using Lattice::join;
+  ChangeResult join(const AbstractSparseLattice &rhs) override {
+    const auto &source = static_cast<const OwnershipLattice &>(rhs);
+    auto facts = source.getValue();
+    // A forwarded reference may have aliases left behind. Local balanced
+    // retains are handled separately when querying the original SSA value.
+    if (facts.kind == Ownership::Unique && source.shared)
+      facts.kind = Ownership::Owned;
+    return join(facts);
+  }
+
+private:
+  const bool shared;
+};
+
+class OwnershipAnalysis
+    : public dataflow::SparseForwardDataFlowAnalysis<OwnershipLattice> {
+public:
+  OwnershipAnalysis(DataFlowSolver &solver, WorkBudget &budget)
+      : SparseForwardDataFlowAnalysis(solver), budget(budget) {}
+
+  LogicalResult visit(ProgramPoint *point) override {
+    if (!budget.tick())
+      return failure();
+    return SparseForwardDataFlowAnalysis::visit(point);
+  }
+
+  LogicalResult visitOperation(Operation *op,
+                               ArrayRef<const OwnershipLattice *>,
+                               ArrayRef<OwnershipLattice *> results) override {
+    if (!budget.tick())
+      return failure();
+    for (auto *result : results) {
+      Ownership facts{targetArray(result->getAnchor().getType()) &&
+                              freshProducer(op)
+                          ? Ownership::Unique
+                          : Ownership::Unknown};
+      propagateIfChanged(result, result->join(facts));
+    }
+    return success();
+  }
+
+private:
+  void setToEntryState(OwnershipLattice *lattice) override {
+    Value value = lattice->getAnchor();
+    auto arg = dyn_cast<BlockArgument>(value);
+    bool owned = targetArray(value.getType()) &&
+                 ((arg && isa<func::FuncOp>(arg.getOwner()->getParentOp())) ||
+                  isa_and_nonnull<CallOpInterface>(value.getDefiningOp()));
+    propagateIfChanged(lattice,
+                       lattice->join(Ownership{owned ? Ownership::Owned
+                                                     : Ownership::Unknown}));
+  }
+
+  void visitCallableOperation(
+      CallableOpInterface,
+      ArrayRef<dataflow::AbstractSparseLattice *> arguments) override {
+    // A callee cannot assume that its caller has transferred a unique
+    // reference. Return values still use the driver's interprocedural join.
+    for (auto *argument : arguments)
+      setToEntryState(static_cast<OwnershipLattice *>(argument));
+  }
+
+  WorkBudget &budget;
+};
 } // namespace
 
 struct PjrtDonationAnalysis::Impl {
-  struct Node {
-    Value value;
-    SmallVector<unsigned, 2> sources, users;
-    bool initialized = false;
-    bool unique = false;
-    bool owned = false;
-    bool shared = false;
-  };
   struct Uses {
-    SmallVector<Operation *, 4> contents, borrowedContents;
+    SmallVector<Operation *, 4> contents;
     SmallVector<ReussirRcDecOp, 2> releases;
     SmallVector<ReussirRcIncOp, 2> retains;
     bool escapedBorrow = false;
@@ -50,150 +147,134 @@ struct PjrtDonationAnalysis::Impl {
   ModuleOp module;
   DominanceInfo dominance;
   PostDominanceInfo postDominance;
-  SymbolTableCollection symbols;
-  DenseMap<Value, unsigned> indices;
-  SmallVector<Node> nodes;
+  DataFlowSolver localSolver;
+  std::unique_ptr<DataFlowSolver> moduleSolver;
+  DenseSet<Operation *> solvedFunctions;
+  WorkBudget budget;
   DenseMap<Value, Uses> uses;
   DenseMap<Block *, bool> cyclicBlocks;
-  uint64_t work = 0, limit;
-  bool overBudget = false;
 
-  bool tick(uint64_t n = 1) {
-    if (overBudget || n > limit - std::min(limit, work)) {
-      overBudget = true;
-      return false;
-    }
-    work += n;
-    return true;
-  }
-  unsigned index(Value value) {
-    auto [it, inserted] = indices.try_emplace(value, nodes.size());
-    if (inserted) {
-      nodes.emplace_back();
-      nodes.back().value = value;
-    }
-    return it->second;
-  }
-  void edge(Value source, Value destination) {
-    if (!targetArray(source.getType()) || !targetArray(destination.getType()))
-      return;
-    unsigned src = index(source), dst = index(destination);
-    nodes[src].users.push_back(dst);
-    nodes[dst].sources.push_back(src);
-  }
-  void edges(ValueRange sources, ValueRange destinations) {
-    if (sources.size() != destinations.size())
-      return;
-    for (auto [source, destination] : llvm::zip_equal(sources, destinations))
-      edge(source, destination);
-  }
+  bool tick(uint64_t n = 1) { return budget.tick(n); }
+
   explicit Impl(ModuleOp module, uint64_t limit)
-      : module(module), dominance(module), postDominance(module), limit(limit) {
-    module.walk([&](Operation *op) {
+      : module(module), dominance(module), postDominance(module),
+        budget{0, limit} {
+    module.walk([&](Operation *) {
+      return tick() ? WalkResult::advance() : WalkResult::interrupt();
+    });
+  }
+
+  DataFlowSolver *getSolver(Value value) {
+    if (moduleSolver)
+      return moduleSolver.get();
+    auto function = value.getParentRegion()->getParentOfType<func::FuncOp>();
+    if (function && solvedFunctions.contains(function))
+      return &localSolver;
+    // Function scopes have disjoint SSA values and no array-return summaries.
+    // Reuse the driver and its completed states across these scopes.
+    bool interprocedural =
+        !function ||
+        function
+            .walk([&](CallOpInterface call) {
+              return llvm::any_of(call->getResultTypes(), targetArray)
+                         ? WalkResult::interrupt()
+                         : WalkResult::advance();
+            })
+            .wasInterrupted();
+    if (interprocedural)
+      moduleSolver = std::make_unique<DataFlowSolver>();
+    auto *solver = interprocedural ? moduleSolver.get() : &localSolver;
+    if (interprocedural || solvedFunctions.empty()) {
+      solver->load<dataflow::DeadCodeAnalysis>();
+      solver->load<OwnershipAnalysis>(budget);
+    }
+    Operation *scope =
+        interprocedural ? module.getOperation() : function.getOperation();
+    // Donation needs conservative reachability, not another SCCP run. Seed
+    // control-flow inputs with literal constants or overdefined values.
+    auto initialized = scope->walk([&](Operation *op) {
       if (!tick())
-        return;
-      for (Value result : op->getResults())
-        if (targetArray(result.getType()))
-          index(result);
-      for (Region &region : op->getRegions())
-        for (Block &block : region)
-          for (Value arg : block.getArguments())
-            if (targetArray(arg.getType()))
-              index(arg);
-      if (auto branch = dyn_cast<BranchOpInterface>(op)) {
-        for (unsigned i = 0; i < op->getNumSuccessors(); ++i) {
-          auto operands = branch.getSuccessorOperands(i);
-          edges(operands.getForwardedOperands(),
-                op->getSuccessor(i)->getArguments().drop_front(
-                    operands.getProducedOperandCount()));
+        return WalkResult::interrupt();
+      if (isa<BranchOpInterface, RegionBranchOpInterface,
+              RegionBranchTerminatorOpInterface>(op)) {
+        for (Value operand : op->getOperands()) {
+          Attribute constant;
+          matchPattern(operand, m_Constant(&constant));
+          solver
+              ->getOrCreateState<dataflow::Lattice<dataflow::ConstantValue>>(
+                  operand)
+              ->join(dataflow::ConstantValue(constant, nullptr));
         }
       }
-      if (auto branch = dyn_cast<RegionBranchOpInterface>(op)) {
-        SmallVector<RegionSuccessor> successors;
-        branch.getSuccessorRegions(RegionBranchPoint::parent(), successors);
-        for (auto successor : successors)
-          edges(branch.getEntrySuccessorOperands(successor),
-                branch.getSuccessorInputs(successor));
-        for (Region &region : op->getRegions())
-          for (Block &block : region)
-            if (auto term = dyn_cast<RegionBranchTerminatorOpInterface>(
-                    block.getTerminator())) {
-              successors.clear();
-              branch.getSuccessorRegions(region, successors);
-              for (auto successor : successors)
-                edges(term.getSuccessorOperands(successor),
-                      branch.getSuccessorInputs(successor));
-            }
-      }
+      return WalkResult::advance();
     });
-    // Callee results are shared summary nodes. Entry arguments remain unknown;
-    // only results independent of those arguments can become statically unique.
-    DenseMap<Operation *, SmallVector<func::ReturnOp>> returns;
-    module.walk([&](func::CallOp call) {
+    if (initialized.wasInterrupted())
+      return nullptr;
+    if (failed(solver->initializeAndRun(scope))) {
+      budget.exhausted = true;
+      return nullptr;
+    }
+    if (!interprocedural)
+      solvedFunctions.insert(function);
+    return solver;
+  }
+
+  Ownership getOwnership(Value value) {
+    if (freshProducer(value.getDefiningOp()))
+      return {Ownership::Unique};
+    if (auto arg = dyn_cast<BlockArgument>(value);
+        arg && arg.getOwner()->isEntryBlock() &&
+        isa<func::FuncOp>(arg.getOwner()->getParentOp()))
+      return {Ownership::Owned};
+    auto *solver = getSolver(value);
+    const auto *lattice =
+        solver ? solver->lookupState<OwnershipLattice>(value) : nullptr;
+    return lattice ? lattice->getValue() : Ownership{Ownership::Unknown};
+  }
+
+  void appendSources(Value value, SmallVectorImpl<Value> &sources) {
+    auto argument = dyn_cast<BlockArgument>(value);
+    Block *block = argument ? argument.getOwner() : nullptr;
+    if (block && !block->isEntryBlock()) {
+      for (auto it = block->pred_begin(); it != block->pred_end(); ++it) {
+        if (!tick())
+          return;
+        auto branch = dyn_cast<BranchOpInterface>((*it)->getTerminator());
+        if (!branch)
+          continue;
+        auto operands = branch.getSuccessorOperands(it.getSuccessorIndex());
+        if (Value source = operands[argument.getArgNumber()])
+          sources.push_back(source);
+      }
+      return;
+    }
+    Operation *op = block ? block->getParentOp() : value.getDefiningOp();
+    auto branch = dyn_cast_or_null<RegionBranchOpInterface>(op);
+    if (!branch)
+      return;
+    auto *solver = getSolver(value);
+    if (!solver)
+      return;
+    auto *point = block ? solver->getProgramPointBefore(block)
+                        : solver->getProgramPointAfter(op);
+    const auto *predecessors =
+        solver->lookupState<dataflow::PredecessorState>(point);
+    if (!predecessors)
+      return;
+    RegionSuccessor successor =
+        block ? RegionSuccessor(block->getParent()) : RegionSuccessor(op);
+    for (Operation *predecessor : predecessors->getKnownPredecessors()) {
       if (!tick())
         return;
-      auto callee = symbols.lookupNearestSymbolFrom<func::FuncOp>(
-          call, call.getCalleeAttr());
-      if (!callee || callee.isDeclaration())
-        return;
-      auto [it, inserted] = returns.try_emplace(callee);
-      if (inserted)
-        callee.walk([&](func::ReturnOp ret) {
-          if (tick() && ret->getParentOfType<func::FuncOp>() == callee)
-            it->second.push_back(ret);
-        });
-      for (auto ret : it->second)
-        if (tick())
-          edges(ret.getOperands(), call.getResults());
-    });
-    llvm::SetVector<unsigned> pending;
-    for (unsigned i = 0; i < nodes.size(); ++i) {
-      Node &node = nodes[i];
-      node.shared = llvm::any_of(node.value.getUsers(), [](Operation *op) {
-        return isa<ReussirRcIncOp, func::CallOp>(op) ||
-               (!isa<BranchOpInterface, RegionBranchOpInterface,
-                     RegionBranchTerminatorOpInterface, func::ReturnOp,
-                     ReussirArrayToIfrtOp, ReussirArrayToHostOp,
-                     ReussirRcBorrowOp>(op) &&
-                !bookkeeping(op));
-      });
-      if (freshProducer(node.value.getDefiningOp())) {
-        node.initialized = node.owned = node.unique = true;
-      } else if (node.sources.empty()) {
-        node.initialized = true;
-        auto arg = dyn_cast<BlockArgument>(node.value);
-        node.owned =
-            (arg && isa<func::FuncOp>(arg.getOwner()->getParentOp())) ||
-            isa_and_nonnull<func::CallOp>(node.value.getDefiningOp());
-      }
-      pending.insert(i);
-    }
-    while (!pending.empty() && tick()) {
-      unsigned i = pending.pop_back_val();
-      Node &node = nodes[i];
-      if (node.sources.empty() || freshProducer(node.value.getDefiningOp()))
+      ValueRange inputs = predecessors->getSuccessorInputs(predecessor);
+      auto found = llvm::find(inputs, value);
+      if (found == inputs.end())
         continue;
-      bool initialized = false, unique = true, owned = true;
-      for (unsigned source : node.sources) {
-        if (!tick())
-          break;
-        Node &from = nodes[source];
-        if (!from.initialized)
-          continue;
-        initialized = true;
-        owned &= from.owned;
-        unique &= from.unique && !from.shared;
-      }
-      if (!initialized)
-        continue;
-      unique &= owned;
-      if (node.initialized && node.unique == unique && node.owned == owned)
-        continue;
-      node.initialized = true;
-      node.unique = unique;
-      node.owned = owned;
-      for (unsigned user : node.users)
-        pending.insert(user);
+      auto operands = predecessor == op
+                          ? branch.getEntrySuccessorOperands(successor)
+                          : cast<RegionBranchTerminatorOpInterface>(predecessor)
+                                .getSuccessorOperands(successor);
+      sources.push_back(operands[found - inputs.begin()]);
     }
   }
 
@@ -229,8 +310,6 @@ struct PjrtDonationAnalysis::Impl {
           continue;
         }
         result.contents.push_back(user);
-        if (borrowed)
-          result.borrowedContents.push_back(user);
         if (borrowed && !isa<ReussirPJRTJitCallOp, ReussirPJRTAfterOp>(user) &&
             !isa<ReussirRefLoadOp>(user))
           result.escapedBorrow = true;
@@ -283,7 +362,7 @@ struct PjrtDonationAnalysis::Impl {
       if (seen.insert(next).second)
         llvm::append_range(pending, next->getSuccessors());
     }
-    return it->second = overBudget;
+    return it->second = budget.exhausted;
   }
 
   PjrtDonationAnalysis::Decision analyze(Value value,
@@ -291,8 +370,8 @@ struct PjrtDonationAnalysis::Impl {
     using Decision = PjrtDonationAnalysis::Decision;
     if (!targetArray(value.getType()) || !tick())
       return Decision::Forbidden;
-    auto found = indices.find(value);
-    if (found == indices.end())
+    Ownership facts = getOwnership(value);
+    if (budget.exhausted)
       return Decision::Forbidden;
     for (Region *region = getEnclosingRepetitiveRegion(call); region;
          region = getEnclosingRepetitiveRegion(region->getParentOp()))
@@ -300,14 +379,13 @@ struct PjrtDonationAnalysis::Impl {
         return Decision::Forbidden;
     if (cyclic(call->getBlock()) && value.getParentBlock() != call->getBlock())
       return Decision::Forbidden;
-    SmallVector<unsigned> ancestors(
-        llvm::ArrayRef<unsigned>(nodes[found->second].sources));
-    llvm::SmallDenseSet<unsigned, 16> seen;
+    SmallVector<Value> ancestors;
+    appendSources(value, ancestors);
+    llvm::SmallPtrSet<Value, 16> seen;
     while (!ancestors.empty() && tick()) {
-      unsigned i = ancestors.pop_back_val();
-      if (!seen.insert(i).second || nodes[i].value == value)
+      Value source = ancestors.pop_back_val();
+      if (!seen.insert(source).second || source == value)
         continue;
-      auto source = nodes[i].value;
       if (source.getParentBlock()
                   ->getParentOp()
                   ->getParentOfType<func::FuncOp>() !=
@@ -336,10 +414,10 @@ struct PjrtDonationAnalysis::Impl {
         if (canFollow(use, call, source))
           return Decision::Forbidden;
       }
-      llvm::append_range(ancestors, nodes[i].sources);
+      appendSources(source, ancestors);
     }
     Uses &u = getUses(value);
-    if (u.escapedBorrow || overBudget)
+    if (u.escapedBorrow || budget.exhausted)
       return Decision::Forbidden;
     for (Operation *use : u.contents)
       if (!tick() || canFollow(use, call, value))
@@ -354,13 +432,12 @@ struct PjrtDonationAnalysis::Impl {
     // An unused borrow with count one is not an owned reference.
     if (!released)
       return Decision::Forbidden;
-    Node &node = nodes[found->second];
-    bool owned = node.initialized && node.owned;
+    bool owned = facts.isOwned();
     for (auto retain : u.retains)
       owned |= dominance.properlyDominates(retain, call);
     if (!owned)
       return Decision::Forbidden;
-    if (!node.unique)
+    if (facts.kind != Ownership::Unique)
       return Decision::Guarded;
     for (Operation *use : u.contents)
       if (use != call &&
@@ -400,6 +477,6 @@ PjrtDonationAnalysis::Decision
 PjrtDonationAnalysis::analyze(Value array, ReussirPJRTJitCallOp call) {
   return impl->analyze(array, call);
 }
-uint64_t PjrtDonationAnalysis::getWork() const { return impl->work; }
-bool PjrtDonationAnalysis::exhausted() const { return impl->overBudget; }
+uint64_t PjrtDonationAnalysis::getWork() const { return impl->budget.work; }
+bool PjrtDonationAnalysis::exhausted() const { return impl->budget.exhausted; }
 } // namespace reussir
