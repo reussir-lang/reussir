@@ -54,7 +54,75 @@ mlir::LogicalResult prepare(mlir::ModuleOp module) {
   pm.addPass(mlir::createSymbolDCEPass());
   return pm.run(module);
 }
+mlir::LogicalResult donate(mlir::ModuleOp module,
+                           ReussirPjrtDonationPassOptions options = {}) {
+  mlir::PassManager pm(module.getContext());
+  pm.addPass(createReussirPjrtDonationPass(options));
+  return pm.run(module);
+}
 } // namespace
+
+TEST_F(ReussirTest, PjrtDonationSharedKernelAndIdempotence) {
+  load(*context);
+  auto module = parse(program(100));
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(mlir::succeeded(prepare(*module)));
+  ASSERT_TRUE(mlir::succeeded(donate(*module)));
+  EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 2u);
+  unsigned calls = 0;
+  module->walk([&](ReussirPJRTJitCallOp call) {
+    ++calls;
+    EXPECT_EQ(call.getDonationGuards().size(), 1u);
+    EXPECT_EQ(call.getDonationVariants().size(), 1u);
+  });
+  EXPECT_EQ(calls, 100u);
+  ASSERT_TRUE(mlir::succeeded(donate(*module)));
+  EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 2u);
+}
+
+TEST_F(ReussirTest, PjrtDonationSerializedContractAndChecksum) {
+  load(*context);
+  auto module = parse(program(1));
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(mlir::succeeded(prepare(*module)));
+  ASSERT_TRUE(mlir::succeeded(donate(*module)));
+  unsigned donors = 0, baseline = 0;
+  for (auto code : module->getOps<ReussirIFRTBytecodeOp>()) {
+    EXPECT_TRUE(mlir::succeeded(code.verify()));
+    auto kernel = mlir::parseSourceString<mlir::ModuleOp>(code.getBytecode(),
+                                                          context.get());
+    ASSERT_TRUE(kernel);
+    auto entry = kernel->lookupSymbol<mlir::func::FuncOp>("main");
+    if (entry.getArgAttr(0, "jax.buffer_donor"))
+      ++donors;
+    else
+      ++baseline;
+  }
+  EXPECT_EQ(donors, 1u);
+  EXPECT_EQ(baseline, 1u);
+}
+
+TEST_F(ReussirTest, PjrtDonationBudgetsFallBackWithoutGuards) {
+  load(*context);
+  for (unsigned kind = 0; kind < 3; ++kind) {
+    auto module = parse(program(2));
+    ASSERT_TRUE(module);
+    ASSERT_TRUE(mlir::succeeded(prepare(*module)));
+    ReussirPjrtDonationPassOptions options;
+    if (kind == 0)
+      options.maxExtraBytes = 0;
+    if (kind == 1)
+      options.maxVariants = 1;
+    if (kind == 2)
+      options.maxAnalysisWork = 1;
+    ASSERT_TRUE(mlir::succeeded(donate(*module, options)));
+    EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 1u);
+    module->walk([](ReussirPJRTJitCallOp call) {
+      EXPECT_TRUE(call.getDonationVariants().empty());
+      EXPECT_TRUE(call.getDonationGuards().empty());
+    });
+  }
+}
 
 TEST_F(ReussirTest, PjrtDonationAnalysisWorkIsBounded) {
   load(*context);
@@ -71,6 +139,59 @@ TEST_F(ReussirTest, PjrtDonationAnalysisWorkIsBounded) {
   EXPECT_LE(analysis.getWork(), 64u);
 }
 
+TEST_F(ReussirTest, PjrtDonationRejectsInvalidContract) {
+  load(*context);
+  auto module = parse(program(1));
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(mlir::succeeded(prepare(*module)));
+  ASSERT_TRUE(mlir::succeeded(donate(*module)));
+  module->walk([&](ReussirPJRTJitCallOp call) {
+    mlir::OpBuilder builder(context.get());
+    auto original =
+        llvm::cast<mlir::DictionaryAttr>(call.getDonationVariants()[0]);
+    auto invalid = builder.getDictionaryAttr(
+        {builder.getNamedAttr("callee", original.get("callee")),
+         builder.getNamedAttr("arguments", builder.getDenseI32ArrayAttr({0})),
+         builder.getNamedAttr("donors", builder.getDenseI32ArrayAttr({1}))});
+    call.setDonationVariantsAttr(builder.getArrayAttr({invalid}));
+    mlir::ScopedDiagnosticHandler suppress(
+        context.get(), [](mlir::Diagnostic &) { return mlir::success(); });
+    EXPECT_TRUE(mlir::failed(call.verify()));
+  });
+}
+TEST_F(ReussirTest, PjrtDonationExplicitContractReachesBytecode) {
+  load(*context);
+  for (bool alias : {false, true}) {
+    auto module = parse(program(1));
+    ASSERT_TRUE(module);
+    ASSERT_TRUE(mlir::succeeded(prepare(*module)));
+    module->walk([&](ReussirPJRTJitCallOp call) {
+      mlir::OpBuilder builder(context.get());
+      call.getInputs()[0].getDefiningOp<ReussirArrayToIfrtOp>().setMayDonate(
+          true);
+      if (alias)
+        call.setIoAliasesAttr(
+            builder.getArrayAttr({builder.getDenseI32ArrayAttr({0, 0})}));
+      else
+        call.setDonatedInputIndicesAttr(builder.getDenseI32ArrayAttr({0}));
+    });
+    ASSERT_TRUE(mlir::succeeded(donate(*module)));
+    module->walk([&](ReussirPJRTJitCallOp call) {
+      auto code =
+          module->lookupSymbol<ReussirIFRTBytecodeOp>(call.getCalleeAttr());
+      ASSERT_TRUE(code);
+      auto kernel = mlir::parseSourceString<mlir::ModuleOp>(code.getBytecode(),
+                                                            context.get());
+      ASSERT_TRUE(kernel);
+      auto entry = kernel->lookupSymbol<mlir::func::FuncOp>("main");
+      EXPECT_TRUE(entry.getArgAttr(0, alias ? "tf.aliasing_output"
+                                            : "jax.buffer_donor"));
+      EXPECT_TRUE(call.getDonationVariants().empty());
+    });
+    ASSERT_TRUE(mlir::succeeded(donate(*module)));
+    EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 2u);
+  }
+}
 
 } // namespace reussir
 #endif

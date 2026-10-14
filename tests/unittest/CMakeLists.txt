@@ -21,7 +21,7 @@ target_link_libraries(reussir-ut
     MLIRReussirTypeConverter
     MLIRReussirBasicOpsLowering
     MLIRReussirIFRTJustInTimeTransform
-    MLIRReussirAnalysis
+    MLIRReussirPjrtDonation
     MLIRTransforms
     GTest::gtest
     GTest::gtest_main

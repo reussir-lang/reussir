@@ -103,6 +103,9 @@ int main(int argc, char **argv) {
     return reussir::createReussirIncDecCancellationPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return reussir::createReussirPjrtDonationPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return reussir::createReussirTokenInstantiationPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
