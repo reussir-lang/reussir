@@ -838,6 +838,17 @@ impl<'tcx> Builder<'_, 'tcx> {
             }
             raw::Kind::If(c, t, f) => ExprKind::If(self.boxed(c), self.boxed(t), self.boxed(f)),
             raw::Kind::RegionRun(x) => ExprKind::RegionRun(self.boxed(x)),
+            raw::Kind::Async { captures, body } => {
+                let captures = captures
+                    .iter()
+                    .map(|(v, t)| (VarId(*v), self.ty(t)))
+                    .collect();
+                ExprKind::Async(ClosureExpr {
+                    captures,
+                    params: Vec::new(),
+                    body: self.boxed(body),
+                })
+            }
             raw::Kind::Proj(base, path) => ExprKind::Proj(self.boxed(base), path.clone()),
             raw::Kind::Assign(dst, field, src) => {
                 ExprKind::Assign(self.boxed(dst), *field, self.boxed(src))
@@ -1000,6 +1011,16 @@ impl<'tcx> Builder<'_, 'tcx> {
                 ExprKind::Match(scrut, self.tree(tree))
             }
         };
+        if let ExprKind::Async(c) = &kind {
+            if let Err(error) = crate::async_check::hir(&c.captures, &c.body, ty) {
+                self.error.get_or_insert(error);
+            }
+        }
+        if let ExprKind::TensorOp { op, args } = &kind {
+            if let Err(error) = crate::async_check::hir_tensor_op(*op, ty, args) {
+                self.error.get_or_insert(error);
+            }
+        }
         Expr {
             kind,
             ty,
@@ -1160,6 +1181,21 @@ mod tests {
     use crate::semi::elaborate;
     use crate::semi::hir::print::Printer;
     use crate::{surface, with_tcx};
+
+    #[test]
+    fn async_captures_roundtrip() {
+        roundtrip(
+            r#"
+            import core::intrinsic::tensor;
+            #[kernel] fn helper<T>(x: Tensor<[T; 8]>, i:i64) -> Future<Tensor<[T;2]>> {
+                async { let slice=tensor::dynamic_slice<Tensor<[T;2]>>(x,(i,)); slice }
+            }
+            #[kernel] pub fn forward(x:Tensor<[f32;8]>,i:i64)->Tensor<[f32;2]> {
+                tensor::async_done(helper(x,i))
+            }
+"#,
+        );
+    }
 
     /// Print the elaborated HIR, parse it back, re-print, and assert text
     /// equality.

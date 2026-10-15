@@ -1005,6 +1005,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             // Frontend-complete, backend-pending (docs/design/tensor-kernels.md):
             // the tensor boundary ops lower to array views / linalg once the
             // bufferization stages land in the pipeline.
+            Async(_) => err("async blocks are only available inside kernels"),
             TensorOp { .. } => err("tensor operations do not lower yet"),
             GlobalStr(token) => self.global_str(block, e, *token).map(Some),
             Poison => err("poison expression reached lowering"),

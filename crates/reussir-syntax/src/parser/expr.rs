@@ -360,6 +360,12 @@ impl Parser<'_> {
             WhileKw => Some(self.while_expr()),
             LetKw => Some(self.let_expr()),
             MatchKw => Some(self.match_expr()),
+            AsyncKw if self.nth(1) == LBrace => {
+                let m = self.start();
+                self.bump();
+                self.block_expr();
+                Some(m.complete(self, AsyncExpr))
+            }
             RegionalKw if self.nth(1) == LBrace => {
                 let m = self.start();
                 self.bump();

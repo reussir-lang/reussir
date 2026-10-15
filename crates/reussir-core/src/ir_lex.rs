@@ -84,6 +84,8 @@ pub enum Token<'a> {
     Switch,
     #[token("region")]
     Region,
+    #[token("async")]
+    Async,
     #[token("as")]
     As,
     #[token("closure")]

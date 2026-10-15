@@ -1,0 +1,18 @@
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %s --emit mir --no-source-locations -o %t.mir
+// RUN: sed 's/i64/Tensor<i64>/g' %t.hir > %t.type.hir
+// RUN: %not %rrc %t.type.hir --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=TYPE
+// RUN: sed 's/i64/Tensor<i64>/g' %t.mir > %t.type.mir
+// RUN: %not %rrc %t.type.mir --emit mir -o - 2>&1 | %FileCheck %s --check-prefix=TYPE
+// RUN: sed 's/0 : i64/1 : i64/g' %t.hir > %t.duplicate.hir
+// RUN: %not %rrc %t.duplicate.hir --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=DUPLICATE
+// RUN: sed 's/0 : i64/1 : i64/g' %t.mir > %t.duplicate.mir
+// RUN: %not %rrc %t.duplicate.mir --emit mir -o - 2>&1 | %FileCheck %s --check-prefix=DUPLICATE
+// TYPE: collective_permute replica ids must have signed 64-bit integer scalar type annotations
+// DUPLICATE: collective_permute requires unique source ids and unique target ids
+#[kernel]
+pub fn exchange(x: Tensor<[f32; 2]>) -> Tensor<[f32; 2]> {
+    core::intrinsic::tensor::async_done(async {
+        core::intrinsic::tensor::collective_permute(x, ((0, 1), (1, 0)))
+    })
+}

@@ -224,6 +224,8 @@ pub enum ExprKind<'tcx> {
         args: Vec<Expr<'tcx>>,
     },
     Closure(ClosureExpr<'tcx>),
+    /// Isolated kernel computation. Captures are explicit; params is empty.
+    Async(ClosureExpr<'tcx>),
     ClosureCall {
         target: Box<Expr<'tcx>>,
         args: Vec<Expr<'tcx>>,

@@ -67,6 +67,49 @@ TEST_F(ReussirTest, KernelAsyncTypesStayInternal) {
   EXPECT_TRUE(mlir::failed(verifyIfrtKernelModule(*module)));
 }
 
+TEST_F(ReussirTest, AsyncSliceRequiresAnIsolatedSingleOperation) {
+  mlir::DialectRegistry registry;
+  registerIfrtDialectsAndPasses(registry);
+  context->appendDialectRegistry(registry);
+  context->loadAllAvailableDialects();
+  const std::string source = R"mlir(
+    module {
+      func.func @main(%x: tensor<4xf32>, %i: tensor<i32>) -> tensor<2xf32> {
+        %f = "stablehlo.async_start"(%x, %i) ({
+          ^bb0(%arg: tensor<4xf32>, %index: tensor<i32>):
+          %slice = "stablehlo.dynamic_slice"(%arg, %index) {slice_sizes = array<i64: 2>} : (tensor<4xf32>, tensor<i32>) -> tensor<2xf32>
+          "stablehlo.return"(%slice) : (tensor<2xf32>) -> ()
+        }) : (tensor<4xf32>, tensor<i32>) -> !stablehlo.future<tensor<2xf32>>
+        %out = "stablehlo.async_done"(%f) : (!stablehlo.future<tensor<2xf32>>) -> tensor<2xf32>
+        return %out : tensor<2xf32>
+      }
+    }
+  )mlir";
+  auto module = parse(source);
+  ASSERT_TRUE(module);
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+  EXPECT_TRUE(mlir::succeeded(verifyIfrtKernelModule(*module)));
+  mlir::ScopedDiagnosticHandler silence(
+      context.get(), [](mlir::Diagnostic &) { return mlir::success(); });
+  auto escaped = source;
+  escaped.replace(escaped.find("(%arg, %index)"), 14, "(%x, %index)");
+  EXPECT_FALSE(mlir::parseSourceString<mlir::ModuleOp>(escaped, context.get()));
+  auto extra = source;
+  extra.insert(extra.find("\"stablehlo.return\""),
+               "%extra = \"stablehlo.negate\"(%slice) : (tensor<2xf32>) -> "
+               "tensor<2xf32>\n");
+  EXPECT_FALSE(mlir::parseSourceString<mlir::ModuleOp>(extra, context.get()));
+  EXPECT_FALSE(mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
+    module {
+      func.func private @done(%f: !stablehlo.future<tensor<f32>, tensor<i32>>) -> tensor<f32> {
+        %x = "stablehlo.async_done"(%f) : (!stablehlo.future<tensor<f32>, tensor<i32>>) -> tensor<f32>
+        return %x : tensor<f32>
+      }
+    }
+  )mlir",
+                                                       context.get()));
+}
+
 TEST_F(ReussirTest, HostTransferShardingUsesMeshPermutationAndReplicas) {
   mlir::DialectRegistry registry;
   registerIfrtDialectsAndPasses(registry);

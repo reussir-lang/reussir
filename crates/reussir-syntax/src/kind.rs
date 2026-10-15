@@ -228,6 +228,9 @@ pub enum SyntaxKind {
     WhileKw,
     WhileExpr,
     WhileBinding,
+    // Append new stored kinds to preserve existing green-tree cache/hash IDs.
+    AsyncKw,
+    AsyncExpr,
 
     /// End-of-file sentinel used by the parser; never stored in the tree.
     Eof,
@@ -268,6 +271,7 @@ impl SyntaxKind {
                 | ElseKw
                 | MatchKw
                 | RegionalKw
+                | AsyncKw
                 | ExternKw
                 | AsKw
                 | TrueKw
@@ -298,6 +302,7 @@ impl SyntaxKind {
             ElseKw => "`else`",
             MatchKw => "`match`",
             RegionalKw => "`regional`",
+            AsyncKw => "`async`",
             ExternKw => "`extern`",
             AsKw => "`as`",
             TrueKw => "`true`",

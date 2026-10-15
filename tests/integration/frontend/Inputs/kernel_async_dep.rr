@@ -1,0 +1,11 @@
+import core::intrinsic::tensor::dynamic_slice as cut;
+#[kernel]
+pub fn begin<T>(x: Tensor<[T; 8]>, index: i64) -> Future<Tensor<[T; 3]>> {
+    async { cut<Tensor<[T; 3]>>(x, (index,)) }
+}
+
+import core::intrinsic::tensor::collective_permute as route;
+#[kernel]
+pub fn routed<T>(x: Tensor<[T; 8]>) -> Future<Tensor<[T; 8]>> {
+    async { route(x, ((0, 0),)) }
+}

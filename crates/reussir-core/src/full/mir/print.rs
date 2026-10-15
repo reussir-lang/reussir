@@ -586,6 +586,14 @@ impl Render<'_> {
                 }
                 d + text(")")
             }
+            Async(c) => {
+                let caps = c
+                    .captures
+                    .iter()
+                    .map(|(v, t)| var(*v) + text(": ") + self.ty(*t))
+                    .collect();
+                text("async[") + comma_sep(caps) + text("] { ") + self.value(c.body) + text(" }")
+            }
             Closure(c) => {
                 let caps: Vec<Doc<'static>> = c
                     .captures

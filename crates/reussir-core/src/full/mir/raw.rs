@@ -405,6 +405,10 @@ pub enum Kind {
         body: Expr,
     },
     RegionRun(Expr),
+    Async {
+        captures: Vec<(u32, Ty)>,
+        body: Expr,
+    },
     Proj(Expr, Vec<u32>),
     Assign(Expr, u32, Expr),
     Let {

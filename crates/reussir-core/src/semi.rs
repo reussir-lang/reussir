@@ -106,6 +106,59 @@ mod tests {
     use crate::with_tcx;
 
     #[test]
+    fn async_blocks_capture_kernel_values_and_check_single_payload_intrinsics() {
+        check(
+            r#"
+            import core::intrinsic::tensor;
+            #[kernel] pub fn slice(x: Tensor<[f32; ?, 8]>, i: i64, j: i64) -> Tensor<[f32; 2, 3]> {
+                let f = async { let y = tensor::dynamic_slice<Tensor<[f32; 2, 3]>>(x, (i, j)); y };
+                tensor::async_done(f)
+            }
+            #[kernel] pub fn scalar(x: Tensor<f32>) -> Future<Tensor<f32>> {
+                async { tensor::dynamic_slice<Tensor<f32>>(x, ()) }
+            }
+            #[kernel] pub fn empty<T>(x: Tensor<[T; 8]>, i: Tensor<i32>) -> Future<Tensor<[T; 0]>> {
+                async { tensor::dynamic_slice<Tensor<[T; 0]>>(x, (i,)) }
+            }
+        "#,
+            |_, _| {},
+        );
+    }
+
+    #[test]
+    fn async_blocks_reject_host_scope_extra_operations_and_bad_slice_shapes() {
+        for (source, error) in [
+            ("fn host() { async {} }", "only allowed inside"),
+            (
+                "#[kernel] fn k(x: Tensor<f32>) -> Future<Tensor<f32>> { async { x } }",
+                "exactly one",
+            ),
+            (
+                "#[kernel] fn k(x: Tensor<[f32; 2]>, i:i64) { async { core::intrinsic::tensor::dynamic_slice<Tensor<[f32;3]>>(x,(i,)) } }",
+                "exceeds the input",
+            ),
+            (
+                "#[kernel] fn k(x: Tensor<[f32; 2]>, i:i64) { core::intrinsic::tensor::dynamic_slice<Tensor<[f32;?]>>(x,(i,)) }",
+                "static shape",
+            ),
+            (
+                "#[kernel] fn k(x: Tensor<[f32; 2]>, i:bool) { core::intrinsic::tensor::dynamic_slice<Tensor<[f32;1]>>(x,(i,)) }",
+                "indices must be integers",
+            ),
+            (
+                "#[kernel] fn k(f: Future<Tensor<f32>,Tensor<i32>>) { core::intrinsic::tensor::async_done(f) }",
+                "exactly one Tensor payload",
+            ),
+        ] {
+            assert!(
+                has_error(source, error),
+                "{source}: {:?}",
+                reports_of(source)
+            );
+        }
+    }
+
+    #[test]
     fn tuples_check_contextually_and_destructure_inferred_shapes() {
         check(
             r#"

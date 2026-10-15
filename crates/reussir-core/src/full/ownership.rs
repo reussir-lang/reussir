@@ -539,7 +539,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             ExprKind::RegionRun(x) => s.union_with(&self.free(x)),
             // A closure consumes its captured outer vars; its body is a separate
             // scope and does not contribute to the enclosing function's free set.
-            ExprKind::Closure(c) => {
+            ExprKind::Closure(c) | ExprKind::Async(c) => {
                 for &(v, ty) in c.captures {
                     if self.rr.is_rr(ty) {
                         s.insert(v);
@@ -701,7 +701,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             // Transparent: a region scope does not change rc ownership (region
             // lifetime is a separate axis); its body's result is moved out.
             ExprKind::RegionRun(x) => self.place(x, live_after),
-            ExprKind::Closure(c) => self.place_closure(e.id, &c, live_after),
+            ExprKind::Closure(c) | ExprKind::Async(c) => self.place_closure(e.id, &c, live_after),
             ExprKind::ClosureCall { target, args } => {
                 self.place_closure_call(target, args, live_after)
             }

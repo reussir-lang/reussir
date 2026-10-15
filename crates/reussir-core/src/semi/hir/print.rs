@@ -906,6 +906,14 @@ impl<'a> Printer<'a> {
                 }
                 d + text(")")
             }
+            ExprKind::Async(c) => {
+                let caps = c
+                    .captures
+                    .iter()
+                    .map(|(v, t)| var(*v) + text(": ") + self.ty(*t))
+                    .collect();
+                text("async[") + comma_sep(caps) + text("] { ") + self.value(&c.body) + text(" }")
+            }
             ExprKind::Closure(c) => {
                 let caps: Vec<Doc<'static>> = c
                     .captures

@@ -11,14 +11,17 @@ use indexmap::IndexMap;
 use reussir_backend::dialect::ty::{dynamic_dimension_size, stablehlo_future, stablehlo_token};
 use reussir_backend::melior::Context;
 use reussir_backend::melior::dialect::func;
-use reussir_backend::melior::ir::attribute::{Attribute, StringAttribute, TypeAttribute};
+use reussir_backend::melior::ir::attribute::{
+    Attribute, DenseElementsAttribute, DenseI64ArrayAttribute, StringAttribute, TypeAttribute,
+};
 use reussir_backend::melior::ir::operation::OperationBuilder;
 use reussir_backend::melior::ir::r#type::{FunctionType, IntegerType, RankedTensorType};
 use reussir_backend::melior::ir::{
     Block, BlockLike, Identifier, Location, Operation, Region, RegionLike, Type, TypeLike, Value,
     ValueLike,
 };
-use reussir_core::full::mir::{self, Binding, DecisionTree, Expr, ExprKind, SwitchCases};
+use reussir_core::full::mir::{self, Binding, ClosureExpr, DecisionTree, Expr, ExprKind, SwitchCases};
+use reussir_core::intrinsic::TensorFn;
 use reussir_core::literal::{self, Integer};
 use reussir_core::semi::hir::{ArithOp, CmpOp, VarId};
 use reussir_core::semi::ty::{DYNAMIC_EXTENT, IntTy, Ty, TyCtxt, TyKind};
@@ -511,6 +514,10 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
             ExprKind::Match(scrutinee, tree) => {
                 self.match_expr(block, env, scrutinee, tree, e.ty, e.span)?
             }
+            ExprKind::Async(capture) => self.async_region(block, env, &capture, e.ty, e.span)?,
+            ExprKind::TensorOp { op, args } => {
+                self.async_tensor_op(block, env, op, args, e.ty, e.span)?
+            }
             ExprKind::If(condition, then, otherwise) => {
                 self.if_expr(block, env, condition, then, otherwise, e.ty, e.span)?
             }
@@ -896,6 +903,183 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
             DecisionTree::Switch { .. } => {
                 Err(self.error("kernel match only supports integer decision trees", span))
             }
+        }
+    }
+}
+
+impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
+    pub(super) fn async_region<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut KernelEnv<'c, 'b>,
+        capture: &ClosureExpr<'tcx>,
+        result: Ty<'tcx>,
+        span: Option<Span>,
+    ) -> Result<Vec<Value<'c, 'b>>> {
+        if !capture.params.is_empty() {
+            return Err(self.error("async regions cannot declare closure parameters", span));
+        }
+        reussir_core::async_check::mir(capture.captures, capture.body, result)
+            .map_err(|e| self.error(e, span))?;
+        let mut operands = Vec::new();
+        let mut inputs = Vec::new();
+        let mut lengths = Vec::new();
+        for &(var, ty) in capture.captures {
+            let values = env
+                .vars
+                .get(&var)
+                .ok_or_else(|| self.error("unbound async capture", span))?;
+            let types = self.types(ty)?;
+            self.check_values(values, &types, span)?;
+            if types
+                .iter()
+                .any(|&ty| RankedTensorType::try_from(ty).is_err())
+            {
+                return Err(self.error("StableHLO async captures must be tensor SSA values", span));
+            }
+            lengths.push((var, types.len()));
+            operands.extend(values.iter().copied());
+            inputs.extend(types.into_iter().map(|t| (t, self.loc(span))));
+        }
+        let body = Block::new(&inputs);
+        let mut inner = KernelEnv::new();
+        let mut offset = 0;
+        for (var, len) in lengths {
+            let values = (offset..offset + len)
+                .map(|i| {
+                    body.argument(i)
+                        .map(Into::into)
+                        .map_err(|e| self.error(format!("missing async block argument: {e}"), span))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            inner.vars.insert(var, values);
+            offset += len;
+        }
+        let values = self.expr(&body, &mut inner, capture.body)?;
+        self.check_values(&values, &self.types(capture.body.ty)?, span)?;
+        self.ret(&body, &values, span)?;
+        let region = Region::new();
+        region.append_block(body);
+        self.operation(
+            block,
+            "stablehlo.async_start",
+            &operands,
+            &self.types(result)?,
+            &[],
+            vec![region],
+            span,
+        )
+    }
+
+    pub(super) fn async_tensor_op<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut KernelEnv<'c, 'b>,
+        op: TensorFn,
+        args: &[Expr<'tcx>],
+        result: Ty<'tcx>,
+        span: Option<Span>,
+    ) -> Result<Vec<Value<'c, 'b>>> {
+        reussir_core::async_check::mir_tensor_op(op, result, args)
+            .map_err(|e| self.error(e, span))?;
+        let mut values = Vec::new();
+        for a in args.iter().take(
+            if matches!(op, TensorFn::Slice | TensorFn::CollectivePermute) {
+                1
+            } else {
+                args.len()
+            },
+        ) {
+            values.extend(self.expr(block, env, a)?);
+        }
+        let results = self.types(result)?;
+        match op {
+            TensorFn::CollectivePermute => {
+                let pairs = reussir_core::async_check::mir_permutation_pairs(args)
+                    .map_err(|e| self.error(e, span))?;
+                let rows = i64::try_from(pairs.len() / 2)
+                    .map_err(|_| self.error("too many collective_permute pairs", span))?;
+                let ty = RankedTensorType::new(
+                    &[rows as u64, 2],
+                    IntegerType::new(self.context, 64).into(),
+                    None,
+                );
+                let attr = DenseElementsAttribute::i64_values(ty.into(), &pairs);
+                self.operation(
+                    block,
+                    "stablehlo.collective_permute",
+                    &values,
+                    &results,
+                    &[(
+                        Identifier::new(self.context, "source_target_pairs"),
+                        attr.into(),
+                    )],
+                    vec![],
+                    span,
+                )
+            }
+            TensorFn::Slice | TensorFn::DynamicSlice => {
+                let TyKind::Tensor { dims, .. } = result.kind() else {
+                    return Err(self.error("dynamic_slice result must be a Tensor", span));
+                };
+                let sizes: Vec<_> = dims.iter().map(|&d| d as i64).collect();
+                if op == TensorFn::Slice || dims.is_empty() {
+                    // With no indices dynamic_slice is exactly a rank-zero slice.
+                    // Canonicalize it to avoid the pinned upstream custom-printer bug.
+                    let starts = if op == TensorFn::Slice {
+                        reussir_core::async_check::mir_slice_offsets(result, args)
+                            .map_err(|e| self.error(e, span))?
+                    } else {
+                        Vec::new()
+                    };
+                    let limits: Vec<_> = starts
+                        .iter()
+                        .zip(sizes.iter())
+                        .map(|(a, b)| a + b)
+                        .collect();
+                    let strides = vec![1; starts.len()];
+                    let attrs = [
+                        ("start_indices", starts),
+                        ("limit_indices", limits),
+                        ("strides", strides),
+                    ]
+                    .map(|(name, values)| {
+                        (
+                            Identifier::new(self.context, name),
+                            DenseI64ArrayAttribute::new(self.context, &values).into(),
+                        )
+                    });
+                    return self.operation(
+                        block,
+                        "stablehlo.slice",
+                        &values,
+                        &results,
+                        &attrs,
+                        vec![],
+                        span,
+                    );
+                }
+                let attr = DenseI64ArrayAttribute::new(self.context, &sizes);
+                self.operation(
+                    block,
+                    "stablehlo.dynamic_slice",
+                    &values,
+                    &results,
+                    &[(Identifier::new(self.context, "slice_sizes"), attr.into())],
+                    vec![],
+                    span,
+                )
+            }
+            TensorFn::AsyncDone => self.operation(
+                block,
+                "stablehlo.async_done",
+                &values,
+                &results,
+                &[],
+                vec![],
+                span,
+            ),
+            _ => Err(self.error("host tensor intrinsic cannot lower in a kernel", span)),
         }
     }
 }

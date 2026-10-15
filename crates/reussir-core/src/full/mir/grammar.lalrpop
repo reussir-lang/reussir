@@ -103,6 +103,7 @@ Sym: String = <s:"ident"> => s.into();
 
 Name: &'input str = {
     "while" => "while",
+    "async" => "async",
     <name:"ident"> => name,
     "transform" => "transform",
     "transform_anchor" => "transform_anchor",
@@ -294,6 +295,7 @@ Atom: raw::Kind = {
     "(" <l:Expr> <op:CmpOp> <r:Expr> ")" => raw::Kind::Cmp(l, op, r),
     "(" <e:Expr> "as" <t:Ty> ")" => raw::Kind::Cast(e, t),
     "region" "{" <e:Expr> "}" => raw::Kind::RegionRun(e),
+    "async" "[" <captures:Comma<ClosureParam>> "]" "{" <body:Expr> "}" => raw::Kind::Async { captures, body },
     "proj" "(" <base:Expr> <idxs:("," <"int">)*> ")"
         => raw::Kind::Proj(base, idxs.iter().map(raw::small_u32).collect()),
     "assign" "(" <dst:Expr> "," <field:"int"> "," <src:Expr> ")"
@@ -450,6 +452,7 @@ extern {
         "uncovered" => Token::Uncovered,
         "unreachable" => Token::Unreachable,
         "region" => Token::Region,
+        "async" => Token::Async,
         "as" => Token::As,
         "closure" => Token::Closure,
         "apply" => Token::Apply,

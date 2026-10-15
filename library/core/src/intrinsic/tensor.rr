@@ -19,3 +19,24 @@ pub struct Token {}
 // async_start/async_done operations currently accept a single result.
 #[lang("tensor_future")]
 pub struct Future<T> {}
+
+/// Kernel-only slice. Result supplies static slice sizes. Start indices form
+/// a rank-sized tuple of same-typed integers (or rank-zero integer tensors).
+#[lang("core::intrinsic::tensor::dynamic_slice")]
+pub fn dynamic_slice<Result, Input, Starts>(input: Input, starts: Starts) -> Result;
+
+/// Resolve one tensor result from a StableHLO future, inside a kernel.
+/// The intrinsic checker requires Input = Future<Result> with one Tensor payload;
+/// these generic parameters are declaration metadata, not call-site arguments.
+#[lang("core::intrinsic::tensor::async_done")]
+pub fn async_done<Input, Result>(future: Input) -> Result;
+
+/// Kernel-only unit-stride slice. Result supplies static sizes; starts is a
+/// rank-sized tuple of nonnegative compile-time integer literals.
+#[lang("core::intrinsic::tensor::slice")]
+pub fn slice<Result, Input, Starts>(input: Input, starts: Starts) -> Result;
+
+/// Kernel-only cross-replica permutation. Pairs are literal (source, target)
+/// replica ids; each source and each target may occur at most once.
+#[lang("core::intrinsic::tensor::collective_permute")]
+pub fn collective_permute<T, Pairs>(input: T, pairs: Pairs) -> T;

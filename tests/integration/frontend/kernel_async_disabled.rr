@@ -1,0 +1,3 @@
+// UNSUPPORTED: stablehlo
+// RUN: %not %rrc %S/kernel_async.rr --emit mlir -o /dev/null 2>&1 | %FileCheck %s
+// CHECK: REUSSIR_ENABLE_OPENXLA

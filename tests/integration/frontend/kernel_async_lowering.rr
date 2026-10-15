@@ -1,0 +1,13 @@
+// REQUIRES: stablehlo
+// RUN: %rrc %S/kernel_async.rr --emit mlir --no-source-locations -o %t.mlir
+// RUN: %reussir-opt %t.mlir -o /dev/null
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %rrc %S/kernel_async.rr --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.from-mir.mlir
+// RUN: diff %t.mlir %t.from-mir.mlir
+// CHECK-DAG: stablehlo.async_start
+// CHECK-DAG: stablehlo.dynamic_slice
+// CHECK-DAG: stablehlo.async_done
+// CHECK-DAG: !stablehlo.future<tensor<2x3xf32>>
+// CHECK-DAG: tensor<ui64>
+// CHECK-DAG: tensor<0xi16>

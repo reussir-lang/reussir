@@ -1,0 +1,22 @@
+// RUN: %rrc %S/kernel_async.rr --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %S/kernel_async.rr --emit mir --no-source-locations -o %t.mir
+// RUN: sed 's/async\[/async[v999: Tensor<f32>, /g' %t.hir > %t.unused.hir
+// RUN: %not %rrc %t.unused.hir --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=UNUSED
+// RUN: sed 's/async\[/async[v999: Tensor<f32>, /g' %t.mir > %t.unused.mir
+// RUN: %not %rrc %t.unused.mir --emit mir -o - 2>&1 | %FileCheck %s --check-prefix=UNUSED
+// RUN: sed 's/async\[v0:/async[v998:/g' %t.hir > %t.missing.hir
+// RUN: %not %rrc %t.missing.hir --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=MISSING
+// RUN: sed 's/async\[v0:/async[v998:/g' %t.mir > %t.missing.mir
+// RUN: %not %rrc %t.missing.mir --emit mir -o - 2>&1 | %FileCheck %s --check-prefix=MISSING
+// RUN: sed 's/tensor#dynamic_slice/tensor#async_done/g' %t.hir > %t.op.hir
+// RUN: %not %rrc %t.op.hir --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=OP
+// RUN: sed 's/tensor#dynamic_slice/tensor#async_done/g' %t.mir > %t.op.mir
+// RUN: %not %rrc %t.op.mir --emit mir -o - 2>&1 | %FileCheck %s --check-prefix=OP
+// RUN: sed 's/(2 : i64,) : (i64,)/(2 : Tensor<i64>,) : (Tensor<i64>,)/g' %t.hir > %t.offset.hir
+// RUN: %not %rrc %t.offset.hir --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=OFFSET
+// RUN: sed 's/(2 : i64,) : (i64,)/(2 : Tensor<i64>,) : (Tensor<i64>,)/g' %t.mir > %t.offset.mir
+// RUN: %not %rrc %t.offset.mir --emit mir -o - 2>&1 | %FileCheck %s --check-prefix=OFFSET
+// UNUSED: async capture list contains an unused variable
+// MISSING: async body references an undeclared capture or binding
+// OP: async_done requires exactly one Future<Tensor> operand
+// OFFSET: slice offsets must have signed 64-bit integer scalar type annotations

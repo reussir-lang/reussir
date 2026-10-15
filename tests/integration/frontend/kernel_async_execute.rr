@@ -1,0 +1,17 @@
+// REQUIRES: linux, stablehlo, pjrt-runtime
+// RUN: %rrc %s --emit mlir --no-source-locations -o %t.mlir
+// RUN: sed 's/@_RC3run(/@main(/' %t.mlir | %reussir-opt --emit-bytecode -o %t.bc
+// RUN: pjrt_test_blake3=$(ls -t "%pjrt_runtime_dir"/deps/libblake3-*.rlib | head -n 1) && %rustc_path --edition=2024 -C prefer-dynamic %S/Inputs/kernel_async_execute.rs --extern blake3="$pjrt_test_blake3" --extern blake3="${pjrt_test_blake3%.rlib}.rmeta" -L "%pjrt_runtime_dir/deps" -L native="%pjrt_runtime_dir" -l dylib=reussir_rt -o %t.exe
+// RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc
+// RUN: rm -rf %t.cache
+import core::intrinsic::tensor;
+#[kernel]
+pub fn run(x: Tensor<[f32; 8]>) -> (Tensor<[f32; 8]>, Tensor<[f32; 8]>) {
+    let iterations: i64 = 2;
+    let (i, delivered) = while [i = 0, value = x] (i < iterations) {
+        let pending = async { tensor::collective_permute(value, ((0, 0),)) };
+        (i + 1, tensor::async_done(pending))
+    };
+    let unmatched = async { tensor::collective_permute(x, ()) };
+    (delivered, tensor::async_done(unmatched))
+}

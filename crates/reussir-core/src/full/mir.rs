@@ -341,6 +341,8 @@ pub enum ExprKind<'tcx> {
         args: &'tcx [Expr<'tcx>],
     },
     Closure(ClosureExpr<'tcx>),
+    /// Isolated kernel computation. Captures are explicit; params is empty.
+    Async(ClosureExpr<'tcx>),
     ClosureCall {
         target: &'tcx Expr<'tcx>,
         args: &'tcx [Expr<'tcx>],

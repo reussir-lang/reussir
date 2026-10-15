@@ -447,6 +447,7 @@ fn kind_name(kind: &ExprKind<'_>) -> &'static str {
         ExprKind::Variant { .. } => "Variant",
         ExprKind::NullableCall(_) => "NullableCall",
         ExprKind::Closure(_) => "Closure",
+        ExprKind::Async(_) => "Async",
         ExprKind::ClosureCall { .. } => "ClosureCall",
         ExprKind::ArrayOp { .. } => "ArrayOp",
         ExprKind::TensorOp { .. } => "TensorOp",
@@ -630,7 +631,7 @@ impl Renderer<'_> {
             ExprKind::RegionRun(x) => {
                 self.block(e.id, text("region-run"), vec![self.expr(x)], nest)
             }
-            ExprKind::Closure(c) => {
+            ExprKind::Closure(c) | ExprKind::Async(c) => {
                 let caps = c
                     .captures
                     .iter()
@@ -876,7 +877,7 @@ fn interp<'tcx>(
         ExprKind::RegionRun(x) => interp(x, ot, rr, rc),
         // Creating a closure consumes its RR captures; the body is a separate
         // scope, validated on its own, not here.
-        ExprKind::Closure(c) => {
+        ExprKind::Closure(c) | ExprKind::Async(c) => {
             for &(v, ty) in c.captures {
                 if rr.is_rr(ty) {
                     let cc = rc
@@ -1047,7 +1048,7 @@ fn children<'tcx>(e: &Expr<'tcx>) -> Vec<&'tcx Expr<'tcx>> {
         }
         NullableCall(opt) => opt.into_iter().collect(),
         ClosureCall { target, args } => std::iter::once(target).chain(args.iter()).collect(),
-        Closure(c) => vec![c.body],
+        Closure(c) | Async(c) => vec![c.body],
         Match(scrut, _) => vec![scrut],
     }
 }

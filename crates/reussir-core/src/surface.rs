@@ -208,6 +208,7 @@ fn is_expr_kind(kind: SyntaxKind) -> bool {
             | LetExpr
             | MatchExpr
             | RegionalExpr
+            | AsyncExpr
             | LambdaExpr
             | BinExpr
             | PrefixExpr
@@ -712,6 +713,7 @@ pub enum ExprKind {
     Let(Spanned<TokenKey>, Option<(Type, bool)>, Expr),
     Match(Expr, Vec<(Pattern, Expr)>),
     RegionalExpr(Expr),
+    AsyncExpr(Expr),
     Lambda(Box<Lambda>),
     BinOpExpr(BinOp, Expr, Expr),
     UnaryOpExpr(UnaryOp, Expr),
@@ -860,6 +862,9 @@ impl Expr {
                     })
                     .collect();
                 ExprKind::Match(scrutinee, arms)
+            }
+            AsyncExpr => {
+                ExprKind::AsyncExpr(Expr::new(expr_children(node).next().expect("async body")))
             }
             RegionalExpr => ExprKind::RegionalExpr(Expr::new(
                 expr_children(node).next().expect("regional body"),

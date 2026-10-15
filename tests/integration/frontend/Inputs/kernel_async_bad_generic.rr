@@ -1,0 +1,4 @@
+#[kernel]
+pub fn begin<Input>(x: Input, i: i32) -> Future<Tensor<[f32; 2]>> {
+    async { core::intrinsic::tensor::dynamic_slice<Tensor<[f32; 2]>>(x, (i,)) }
+}

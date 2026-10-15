@@ -1,0 +1,50 @@
+// RUN: echo 'fn host() { async {} }' > %t.host.rr
+// RUN: %not %rrc %t.host.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=HOST
+// RUN: echo '#[kernel] fn k(x:Tensor<f32>)->Future<Tensor<f32>> { async { x } }' > %t.empty.rr
+// RUN: %not %rrc %t.empty.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=ONE
+// RUN: echo '#[kernel] fn k(x:Tensor<f32>)->Future<Tensor<f32>> { async { core::intrinsic::tensor::dynamic_slice<Tensor<f32>>(x,()); x } }' > %t.wrong.rr
+// RUN: %not %rrc %t.wrong.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=ONE
+// RUN: echo '#[kernel] fn k(x:Tensor<[f32;8]>)->Future<Tensor<[f32;2]>> { async { core::intrinsic::tensor::dynamic_slice<Tensor<[f32;2]>>(x,(0,)) } }' > %t.constant.rr
+// RUN: %not %rrc %t.constant.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=BODY
+// RUN: echo '#[kernel] fn k(x:Tensor<[f32;8]>, i:i32)->Future<Tensor<[f32;2]>> { async { let y=core::intrinsic::tensor::dynamic_slice<Tensor<[f32;3]>>(x,(i,)); core::intrinsic::tensor::dynamic_slice<Tensor<[f32;2]>>(y,(i,)) } }' > %t.two.rr
+// RUN: %not %rrc %t.two.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=ONE
+// RUN: echo '#[kernel] fn k(x:Tensor<[f32;8]>, i:i32) { core::intrinsic::tensor::dynamic_slice<Tensor<[f32;?]>>(x,(i,)) }' > %t.dynamic.rr
+// RUN: %not %rrc %t.dynamic.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=STATIC
+// RUN: echo '#[kernel] fn k(x:Tensor<[f32;2]>, i:i32) { core::intrinsic::tensor::dynamic_slice<Tensor<[f32;3]>>(x,(i,)) }' > %t.large.rr
+// RUN: %not %rrc %t.large.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=LARGE
+// RUN: echo '#[kernel] fn k(x:Tensor<[f32;2,2]>, i:i32,j:i64) { core::intrinsic::tensor::dynamic_slice<Tensor<[f32;1,1]>>(x,(i,j)) }' > %t.indices.rr
+// RUN: %not %rrc %t.indices.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=INDICES
+// RUN: echo '#[kernel] fn k(x:Future<Tensor<f32>,Tensor<i32>>) { core::intrinsic::tensor::async_done(x) }' > %t.multi.rr
+// RUN: %not %rrc %t.multi.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=MULTI
+// RUN: echo '#[kernel] fn k(x:(Tensor<f32>,Token))->Future<Tensor<f32>> { async { core::intrinsic::tensor::dynamic_slice<Tensor<f32>>(x.0,()) } }' > %t.capture.rr
+// RUN: %not %rrc %t.capture.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=CAPTURE
+// RUN: echo '#[kernel] fn k(x:Tensor<[f32;8]>, i:i64) { core::intrinsic::tensor::slice<Tensor<[f32;2]>>(x,(i,)) }' > %t.static-var.rr
+// RUN: %not %rrc %t.static-var.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=LITERAL
+// RUN: echo '#[kernel] fn k(x:Tensor<[f32;8]>) { core::intrinsic::tensor::slice<Tensor<[f32;2]>>(x,(7,)) }' > %t.static-range.rr
+// RUN: %not %rrc %t.static-range.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=LIMIT
+// RUN: echo '#[kernel] fn k(x:Tensor<[f32;8]>) { core::intrinsic::tensor::slice<Tensor<[f32;2]>>(x,(-1,)) }' > %t.static-negative.rr
+// RUN: %not %rrc %t.static-negative.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=NEGATIVE
+// LITERAL: slice start offsets must be a tuple of nonnegative integer literals
+// LIMIT: slice limit exceeds the input extent
+// NEGATIVE: nonnegative
+// RUN: echo '#[kernel] fn k(x:Tensor<f32>) { core::intrinsic::tensor::collective_permute(x,((0,1),(0,2))) }' > %t.duplicate-source.rr
+// RUN: %not %rrc %t.duplicate-source.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=UNIQUE
+// RUN: echo '#[kernel] fn k(x:Tensor<f32>) { core::intrinsic::tensor::collective_permute(x,((0,1),(2,1))) }' > %t.duplicate-target.rr
+// RUN: %not %rrc %t.duplicate-target.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=UNIQUE
+// RUN: echo '#[kernel] fn k(x:Tensor<f32>,i:i64) { core::intrinsic::tensor::collective_permute(x,((0,i),)) }' > %t.dynamic-id.rr
+// RUN: %not %rrc %t.dynamic-id.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=REPLICA
+// RUN: echo '#[kernel] fn k(x:Tensor<f32>) { core::intrinsic::tensor::collective_permute(x,((0,-1),)) }' > %t.negative-id.rr
+// RUN: %not %rrc %t.negative-id.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=REPLICA
+// RUN: echo '#[kernel] fn k(x:Tensor<f32>) { core::intrinsic::tensor::collective_permute(x,((0,1,2),)) }' > %t.bad-pair.rr
+// RUN: %not %rrc %t.bad-pair.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=PAIR
+// UNIQUE: unique source ids and unique target ids
+// REPLICA: collective_permute replica id
+// PAIR: exactly two integers per pair
+// HOST: async blocks are only allowed inside a #[kernel] function
+// ONE: async body must return the result of exactly one
+// BODY: bind computations and constants outside the async block
+// STATIC: dynamic_slice result must have a static shape
+// LARGE: dynamic_slice size exceeds the input extent
+// INDICES: dynamic_slice indices must share one integer type
+// MULTI: exactly one Tensor payload
+// CAPTURE: async captures must lower to tensor operands

@@ -272,7 +272,7 @@ pub(crate) fn for_each_expr<'e, 'tcx>(expr: &'e Expr<'tcx>, f: &mut impl FnMut(&
                 for_each_expr(e, f);
             }
         }
-        Closure(c) => for_each_expr(&c.body, f),
+        Closure(c) | Async(c) => for_each_expr(&c.body, f),
         ClosureCall { target, args } => {
             for_each_expr(target, f);
             args.iter().for_each(|e| for_each_expr(e, f));
@@ -2357,6 +2357,14 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     | ExprKind::While { .. }
                     | ExprKind::If(..)
                     | ExprKind::Match(..)
+                    | ExprKind::Async(_)
+                    | ExprKind::TensorOp {
+                        op: crate::intrinsic::TensorFn::DynamicSlice
+                            | crate::intrinsic::TensorFn::Slice
+                            | crate::intrinsic::TensorFn::CollectivePermute
+                            | crate::intrinsic::TensorFn::AsyncDone,
+                        ..
+                    }
                     | ExprKind::FuncCall { .. }
                     | ExprKind::TraitCall { .. }
                     | ExprKind::ConstInt(_)
@@ -2651,6 +2659,24 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 args: self.lower_slice(args, subst),
             },
             ExprKind::Closure(c) => M::Closure(self.lower_closure(c, subst)),
+            ExprKind::Async(c) => {
+                if !self.inside_kernel {
+                    self.error(
+                        span,
+                        "async blocks are only allowed inside a #[kernel] function",
+                    );
+                }
+                let captures = self.lower_var_tys(&c.captures, subst);
+                let body = self.lower_ref(&c.body, subst);
+                if let Err(reason) = crate::async_check::mir(captures, body, result_ty) {
+                    self.error(span, reason);
+                }
+                M::Async(mir::ClosureExpr {
+                    captures,
+                    params: &[],
+                    body,
+                })
+            }
             ExprKind::ArrayOp { op, args } => {
                 // The ground half of the array element checks: semi lets a
                 // generic element through, so an instantiation is the first
@@ -2709,10 +2735,26 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
             // here; `of`'s array operand goes through the array element
             // checks on its own type, and the lowering stubs stop anything
             // from reaching codegen.
-            ExprKind::TensorOp { op, args } => M::TensorOp {
-                op: *op,
-                args: self.lower_slice(args, subst),
-            },
+            ExprKind::TensorOp { op, args } => {
+                if matches!(
+                    op,
+                    crate::intrinsic::TensorFn::DynamicSlice
+                        | crate::intrinsic::TensorFn::Slice
+                        | crate::intrinsic::TensorFn::CollectivePermute
+                        | crate::intrinsic::TensorFn::AsyncDone
+                ) && !self.inside_kernel
+                {
+                    self.error(
+                        span,
+                        "this tensor intrinsic is only allowed inside a #[kernel] function",
+                    );
+                }
+                let args = self.lower_slice(args, subst);
+                if let Err(reason) = crate::async_check::mir_tensor_op(*op, result_ty, args) {
+                    self.error(span, reason);
+                }
+                M::TensorOp { op: *op, args }
+            }
             ExprKind::Match(scrut, tree) => {
                 let scrut_ty = subst_ty(self.tcx, scrut.ty, subst);
                 if self.inside_kernel && !matches!(scrut_ty.kind(), TyKind::Int(_)) {
@@ -4088,7 +4130,7 @@ mod tests {
             | Intrinsic { args, .. } => args.iter().collect(),
             NullableCall(opt) => opt.into_iter().collect(),
             ClosureCall { target, args } => std::iter::once(target).chain(args.iter()).collect(),
-            Closure(c) => vec![c.body],
+            Closure(c) | Async(c) => vec![c.body],
             Match(scrut, _) => vec![scrut],
         }
     }

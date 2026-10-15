@@ -316,6 +316,14 @@ pub enum TensorFn {
     Materialize,
     /// `dim(t, k)`: the `k`-th extent as `u64`. Value operands: `[t, k]`.
     Dim,
+    /// Kernel-only dynamic slice; result type supplies static slice sizes.
+    DynamicSlice,
+    /// Kernel-only static, unit-stride slice with literal starting offsets.
+    Slice,
+    /// Cross-replica permutation with literal source/target pairs.
+    CollectivePermute,
+    /// Resolve a single-result StableHLO future inside a kernel.
+    AsyncDone,
 }
 
 impl TensorFn {
@@ -325,6 +333,10 @@ impl TensorFn {
             "of" => Some(TensorFn::Of),
             "materialize" => Some(TensorFn::Materialize),
             "dim" => Some(TensorFn::Dim),
+            "dynamic_slice" => Some(TensorFn::DynamicSlice),
+            "slice" => Some(TensorFn::Slice),
+            "collective_permute" => Some(TensorFn::CollectivePermute),
+            "async_done" => Some(TensorFn::AsyncDone),
             _ => None,
         }
     }
@@ -335,6 +347,10 @@ impl TensorFn {
             TensorFn::Of => "of",
             TensorFn::Materialize => "materialize",
             TensorFn::Dim => "dim",
+            TensorFn::DynamicSlice => "dynamic_slice",
+            TensorFn::Slice => "slice",
+            TensorFn::CollectivePermute => "collective_permute",
+            TensorFn::AsyncDone => "async_done",
         }
     }
 }

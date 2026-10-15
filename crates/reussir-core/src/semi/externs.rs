@@ -771,6 +771,19 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
                     .collect(),
                 body: self.boxed(&closure.body),
             }),
+            ExprKind::Async(closure) => ExprKind::Async(ClosureExpr {
+                captures: closure
+                    .captures
+                    .iter()
+                    .map(|&(v, t)| (v, self.ty(t)))
+                    .collect(),
+                params: closure
+                    .params
+                    .iter()
+                    .map(|&(v, t)| (v, self.ty(t)))
+                    .collect(),
+                body: self.boxed(&closure.body),
+            }),
             ExprKind::ClosureCall { target, args } => ExprKind::ClosureCall {
                 target: self.boxed(target),
                 args: self.exprs(args),
@@ -978,6 +991,9 @@ mod tests {
                  import core::intrinsic::tensor::Future as Pending; \
                  import core::intrinsic::tensor::Token as Ordered; \
                  pub fn async_types() { let f: Pending<Tile<f32>, Tile<[i32; ?, 0]>> = core::intrinsic::panic::panic(); let t: Ordered = core::intrinsic::panic::panic(); } \
+                 import core::intrinsic::tensor::dynamic_slice as slice_tensor; \
+                 import core::intrinsic::tensor::async_done as finish_tensor; \
+                 #[kernel] pub fn sliced(x: Tile<[f32; 8]>, i: i32) -> Tile<[f32; 2]> { finish_tensor(async { slice_tensor<Tile<[f32; 2]>>(x, (i,)) }) } \
                  pub fn scalar() { let x: Tile<f32> = core::intrinsic::panic::panic(); } \
                  pub fn shaped() { let x: Tile<[f32; 0, ?]> = core::intrinsic::panic::panic(); }",
                 interner.clone(),

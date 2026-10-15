@@ -8,6 +8,7 @@
 //! representation that downstream lowering targets; it reuses the Semi type
 //! interner and adds the ground-only invariant and v0 symbol mangling.
 
+pub mod async_check;
 pub mod full;
 /// The built-in `core::intrinsic` operation families.
 pub mod intrinsic;

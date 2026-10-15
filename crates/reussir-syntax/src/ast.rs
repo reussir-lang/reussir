@@ -79,6 +79,7 @@ fn is_expr_kind(kind: SyntaxKind) -> bool {
             | LetExpr
             | MatchExpr
             | RegionalExpr
+            | AsyncExpr
             | LambdaExpr
             | BinExpr
             | PrefixExpr
@@ -712,6 +713,10 @@ impl Emitter<'_> {
                     })
                     .collect();
                 tagged("Match", json!([self.expr(scrutinee), arms]))
+            }
+            AsyncExpr => {
+                let body = expr_children(node).next().expect("async body");
+                tagged("AsyncExpr", self.expr(body))
             }
             RegionalExpr => {
                 let body = expr_children(node).next().expect("regional body");
