@@ -20,6 +20,12 @@ BUILD_DIR="${REUSSIR_XWIN_BUILD_DIR:-build-xwin}"
 CONDA="${XDG_CACHE_HOME:-$HOME/.cache}/reussir-msvc-conda/Library"
 TARGET=x86_64-pc-windows-msvc
 
+# Release CI restores historical source mtimes and a shared Cargo target cache.
+# Cargo's default mtime checks can then reuse workspace metadata from an older
+# revision. The pinned nightly supports content-based freshness; apply it to
+# both cargo-xwin phases so their dependency graphs always match this checkout.
+export CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+
 if [ ! -e "$CONDA/lib/cmake/mlir/MLIRConfig.cmake" ]; then
   echo "error: conda MSVC LLVM/MLIR not baked; run reussir-bake-msvc-llvm" >&2
   exit 1
