@@ -76,7 +76,7 @@ MlirType reussirStablehloTokenTypeGet(MlirContext context) {
 }
 
 MlirType reussirStablehloFutureTypeGet(MlirContext context, intptr_t n,
-                                     const MlirType *payloads) {
+                                       const MlirType *payloads) {
 #ifdef REUSSIR_ENABLE_OPENXLA
   auto *ctx = unwrap(context);
   // The spec requires a nonempty ordered list of ranked tensors. Validate

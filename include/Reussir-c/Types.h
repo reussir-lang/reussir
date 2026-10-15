@@ -85,7 +85,7 @@ MlirType reussirRawPtrTypeGet(MlirType elementType);
 // Return a null type if OpenXLA is disabled or a future payload is invalid.
 MlirType reussirStablehloTokenTypeGet(MlirContext context);
 MlirType reussirStablehloFutureTypeGet(MlirContext context, intptr_t n,
-                                     const MlirType *payloads);
+                                       const MlirType *payloads);
 
 MlirType reussirTokenTypeGet(MlirContext context, size_t align, size_t size);
 

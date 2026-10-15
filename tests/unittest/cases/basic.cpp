@@ -1,8 +1,8 @@
-#include "Reussir/IR/ReussirOps.h"
 #include "Reussir-c/Types.h"
-#include <mlir/CAPI/IR.h>
+#include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
 #include <gtest/gtest.h>
+#include <mlir/CAPI/IR.h>
 #include <mlir/IR/Verifier.h>
 
 import reussir.test;
@@ -19,7 +19,8 @@ TEST_F(ReussirTest, StablehloAsyncTypesAreCheckedAndDistinct) {
   auto scalar = wrap(mlir::IntegerType::get(context.get(), 32));
   EXPECT_EQ(reussirStablehloFutureTypeGet(ctx, 1, &scalar).ptr, nullptr);
   mlir::MLIRContext other;
-  auto foreign = wrap(mlir::RankedTensorType::get({}, mlir::Float32Type::get(&other)));
+  auto foreign =
+      wrap(mlir::RankedTensorType::get({}, mlir::Float32Type::get(&other)));
   EXPECT_EQ(reussirStablehloFutureTypeGet(ctx, 1, &foreign).ptr, nullptr);
 #ifdef REUSSIR_ENABLE_OPENXLA
   ASSERT_NE(token.ptr, nullptr);

@@ -53,15 +53,17 @@ TEST_F(ReussirTest, KernelAsyncTypesStayInternal) {
   )mlir");
   ASSERT_TRUE(module);
   EXPECT_TRUE(mlir::succeeded(verifyIfrtKernelModule(*module)));
-  mlir::ScopedDiagnosticHandler silence(context.get(), [](mlir::Diagnostic &) {
-    return mlir::success();
-  });
+  mlir::ScopedDiagnosticHandler silence(
+      context.get(), [](mlir::Diagnostic &) { return mlir::success(); });
   auto helper = module->lookupSymbol<mlir::func::FuncOp>("token");
   helper.setPublic();
   EXPECT_TRUE(mlir::failed(verifyIfrtKernelModule(*module)));
   helper.setPrivate();
-  helper.setType(mlir::FunctionType::get(context.get(),
-      {mlir::OpaqueType::get(mlir::StringAttr::get(context.get(), "stablehlo"), "token")}, {}));
+  helper.setType(mlir::FunctionType::get(
+      context.get(),
+      {mlir::OpaqueType::get(mlir::StringAttr::get(context.get(), "stablehlo"),
+                             "token")},
+      {}));
   EXPECT_TRUE(mlir::failed(verifyIfrtKernelModule(*module)));
 }
 

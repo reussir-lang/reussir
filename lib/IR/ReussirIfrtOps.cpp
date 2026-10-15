@@ -64,9 +64,11 @@ mlir::LogicalResult verifyIfrtKernelModule(mlir::ModuleOp module) {
         }
 #endif
         if (!valid) {
-          func.emitOpError(func.isPrivate()
-                               ? "kernel helper signatures require ranked tensors or StableHLO Future/Token values"
-                               : "public kernel functions require ranked tensor signatures");
+          func.emitOpError(
+              func.isPrivate()
+                  ? "kernel helper signatures require ranked tensors or "
+                    "StableHLO Future/Token values"
+                  : "public kernel functions require ranked tensor signatures");
           return mlir::WalkResult::interrupt();
         }
       }
