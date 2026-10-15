@@ -12,7 +12,7 @@ import core::intrinsic::array;
 import core::intrinsic::pjrt;
 
 #[placement(devices = "0", layout = "default")]
-#[launch(backend_optimization_level = "3", donation = "auto")]
+#[pjrt::launch(backend_optimization_level = "3", donation = "auto")]
 struct [value] HeatConfig {}
 
 #[kernel]
@@ -44,7 +44,7 @@ pub fn heat_large(steps: i64) -> (f32, f32) {
     let device_matrix = pjrt::upload(matrix);
     let device_initial = pjrt::upload(initial);
     let device_steps = pjrt::upload(steps);
-    let result = launch<HeatConfig>(diffuse_large, device_matrix, device_initial, device_steps);
+    let result = pjrt::launch<HeatConfig>(diffuse_large, device_matrix, device_initial, device_steps);
     let actual = result.download();
     let expected = reference(initial, steps);
     let errors = array::tabulate<[f32; 1024]>(|i| {

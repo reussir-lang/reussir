@@ -33,7 +33,7 @@ fn paperwork(n: i64, parcel: Tensor<i64>) -> Tensor<i64> {
 pub fn bureaucracy(n: i64, stamp: i64) -> i64 {
     let parcel = pjrt::upload(stamp);
     let rounds = pjrt::upload(n);
-    let result = launch(paperwork, rounds, parcel);
+    let result = pjrt::launch(paperwork, rounds, parcel);
     // Retain and read the original input after the launch: donation must not
     // invalidate a shared parcel. Remove its stamp from the returned checksum.
     result.download() - parcel.download()

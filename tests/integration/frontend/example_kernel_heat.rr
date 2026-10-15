@@ -18,7 +18,7 @@ import core::intrinsic::pjrt;
 import core::intrinsic::tensor;
 
 #[placement(devices = "0", layout = "default")]
-#[launch(backend_optimization_level = "2", donation = "none")]
+#[pjrt::launch(backend_optimization_level = "2", donation = "none")]
 struct [value] HeatConfig {}
 
 // No launch operands: construct the initial hot cell entirely on the device.
@@ -46,9 +46,9 @@ fn evolve(steps: i64) -> [f32; 8] {
         else { if (row + 1) % 8 == col || (row + 7) % 8 == col { 0.25 } else { 0.0 } }
     });
     let device_matrix = pjrt::upload(matrix);
-    let device_initial = launch(seed);
+    let device_initial = pjrt::launch(seed);
     let device_steps = pjrt::upload(steps);
-    let result = launch<HeatConfig>(diffuse, device_matrix, device_initial, device_steps);
+    let result = pjrt::launch<HeatConfig>(diffuse, device_matrix, device_initial, device_steps);
     result.download()
 }
 

@@ -14,7 +14,7 @@ import core::intrinsic::pjrt;
 import core::intrinsic::tensor;
 
 #[placement(devices = "0", layout = "default")]
-#[launch(backend_optimization_level = "2", donation = "none")]
+#[pjrt::launch(backend_optimization_level = "2", donation = "none")]
 struct [value] MandelbrotConfig {}
 
 #[kernel]
@@ -56,7 +56,7 @@ fn emit_pixel(index: u64, value: i32) [{
 pub fn render_mandelbrot() -> u64 {
     let iterations: i64 = 128;
     let limit = pjrt::upload(iterations);
-    let pixels = launch<MandelbrotConfig>(escape_times, limit).download();
+    let pixels = pjrt::launch<MandelbrotConfig>(escape_times, limit).download();
     let start: u64 = 0;
     array::fold(pixels, start, |index: u64, value: i32| {
         emit_pixel(index, value);
