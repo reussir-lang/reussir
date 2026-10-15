@@ -17,6 +17,7 @@
 
 // The Semi-phase type machinery.
 pub mod infer;
+pub mod shape_summary;
 pub mod lang;
 pub mod traits;
 pub mod ty;
