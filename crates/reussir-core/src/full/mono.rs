@@ -255,7 +255,7 @@ pub(crate) fn for_each_expr<'e, 'tcx>(expr: &'e Expr<'tcx>, f: &mut impl FnMut(&
         }
         Let { value, .. } => for_each_expr(value, f),
         Seq(es) | Tuple(es) => es.iter().for_each(|e| for_each_expr(e, f)),
-        FuncCall { args, .. } | TraitCall { args, .. } => {
+        Launch { args, .. } | FuncCall { args, .. } | TraitCall { args, .. } => {
             args.iter().for_each(|e| for_each_expr(e, f));
         }
         // Compound/variant targets name records, not functions; only their
@@ -743,6 +743,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
                 default_cap: DefaultCap::Shared,
                 repr_fixed: false,
                 placement: None,
+                launch: None,
                 layout,
             });
             continue;
@@ -771,6 +772,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
             ty,
             default_cap,
             repr_fixed,
+            launch: input.records.get(&def).and_then(|r| r.launch),
             placement: input
                 .records
                 .get(&def)
@@ -2599,6 +2601,19 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 condition: self.lower_ref(condition, subst),
                 body: self.lower_ref(body, subst),
             },
+            ExprKind::Launch {
+                target,
+                ty_args,
+                args,
+            } => {
+                let ty_args = self.ground_args(ty_args, subst);
+                self.enqueue(*target, ty_args, span);
+                let callee = self.symbol_of(*target, ty_args);
+                M::Launch {
+                    callee,
+                    args: self.lower_slice(args, subst),
+                }
+            }
             ExprKind::FuncCall {
                 target,
                 ty_args,
@@ -4111,7 +4126,8 @@ mod tests {
             } => vec![initial, condition, body],
             Let { value, .. } => vec![value],
             Seq(es) | Tuple(es) => es.iter().collect(),
-            Call { args, .. }
+            Launch { args, .. }
+            | Call { args, .. }
             | Ctor { args, .. }
             | Variant { args, .. }
             | Intrinsic { args, .. } => args.iter().collect(),

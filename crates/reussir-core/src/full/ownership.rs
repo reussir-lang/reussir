@@ -507,6 +507,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 s.union_with(&self.free(initial));
             }
             ExprKind::Tuple(args)
+            | ExprKind::Launch { args, .. }
             | ExprKind::Call { args, .. }
             | ExprKind::Ctor { args, .. }
             | ExprKind::Variant { args, .. }
@@ -637,6 +638,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 }
             }
             ExprKind::Seq(es) => self.place_seq(es, live_after),
+            ExprKind::Launch { args, .. } => self.place_launch(e, args, live_after),
             ExprKind::Tuple(args)
             | ExprKind::Call { args, .. }
             | ExprKind::Ctor { args, .. }
@@ -1173,6 +1175,40 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         // anchor right after the statement.
         if !is_last && !matches!(s.kind, ExprKind::Let { .. }) && self.rr.is_rr(s.ty) {
             self.add_after(s.id, RcOp::DropValue(s.id));
+        }
+    }
+
+    /// Launch borrows each buffer/product for synchronous execution. Keep named
+    /// operands alive together; release temporary owners after the call.
+    fn place_launch(&mut self, e: &Expr<'tcx>, args: &'tcx [Expr<'tcx>], live_after: &VarSet) {
+        let mut borrowed = VarSet::default();
+        for arg in args {
+            if let ExprKind::Var(v) = arg.kind
+                && self.rr.is_rr(arg.ty)
+            {
+                borrowed.insert(v);
+            }
+        }
+        let mut live = live_after.clone();
+        live.union_with(&borrowed);
+        let mut afters = vec![live.clone(); args.len()];
+        for i in (0..args.len()).rev() {
+            afters[i] = live.clone();
+            live.union_with(&self.free(&args[i]));
+        }
+        for (i, arg) in args.iter().enumerate() {
+            if matches!(arg.kind, ExprKind::Var(v) if borrowed.contains(v)) {
+                continue;
+            }
+            self.place(arg, &afters[i]);
+            if self.rr.is_rr(arg.ty) {
+                self.add_after(e.id, RcOp::DropValue(arg.id));
+            }
+        }
+        for v in borrowed.iter() {
+            if !live_after.contains(v) {
+                self.add_after(e.id, RcOp::Drop(v));
+            }
         }
     }
 

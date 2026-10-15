@@ -178,6 +178,13 @@ pub enum ExprKind<'tcx> {
         value: Box<Expr<'tcx>>,
     },
     Seq(Vec<Expr<'tcx>>),
+    /// A host launch. Arguments retain their DevArray/product host types;
+    /// the result's placement determines the output descriptor and device order.
+    Launch {
+        target: DefId,
+        ty_args: Vec<Ty<'tcx>>,
+        args: Vec<Expr<'tcx>>,
+    },
     /// A direct function call with (possibly hole) type arguments.
     FuncCall {
         target: DefId,

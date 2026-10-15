@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include <mlir/CAPI/IR.h>
 #include <mlir/IR/Verifier.h>
+#include <mlir/AsmParser/AsmParser.h>
 
 import reussir.test;
 
@@ -34,6 +35,31 @@ TEST_F(ReussirTest, StablehloAsyncTypesAreCheckedAndDistinct) {
   EXPECT_EQ(reussirStablehloFutureTypeGet(ctx, 1, &future).ptr, nullptr);
 #else
   EXPECT_EQ(token.ptr, nullptr);
+#endif
+}
+
+TEST_F(ReussirTest, DeviceArrayIfrtViewsPreserveMetadata) {
+  MlirType nullType{nullptr};
+  EXPECT_EQ(reussirArrayTypeGetIfrtType(nullType).ptr, nullptr);
+  EXPECT_EQ(reussirIfrtArrayGetDevices(nullType).ptr, nullptr);
+  EXPECT_EQ(reussirIfrtArrayGetHloSharding(nullType).ptr, nullptr);
+  auto scalar = wrap(mlir::IntegerType::get(context.get(), 32));
+  EXPECT_EQ(reussirArrayTypeGetIfrtType(scalar).ptr, nullptr);
+  auto target = mlir::parseAttribute("#reussir.target<devices = [3]>", context.get());
+  ASSERT_TRUE(target);
+  int64_t shape[] = {0, mlir::ShapedType::kDynamic};
+  auto descriptor = reussirArrayTypeGetWithTarget(2, shape, scalar, wrap(target));
+  ASSERT_NE(descriptor.ptr, nullptr);
+  auto view = reussirArrayTypeGetIfrtType(descriptor);
+#ifdef REUSSIR_ENABLE_OPENXLA
+  ASSERT_NE(view.ptr, nullptr);
+  auto expected = mlir::parseType("!ifrt.array<tensor<0x?xi32>, #ifrt.sharding_unspecified, [3]>", context.get());
+  ASSERT_TRUE(expected);
+  EXPECT_EQ(unwrap(view), expected);
+  EXPECT_NE(reussirIfrtArrayGetDevices(view).ptr, nullptr);
+  EXPECT_EQ(reussirIfrtArrayGetHloSharding(view).ptr, nullptr);
+#else
+  EXPECT_EQ(view.ptr, nullptr);
 #endif
 }
 

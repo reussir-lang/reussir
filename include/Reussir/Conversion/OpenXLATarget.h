@@ -62,6 +62,13 @@ getPjrtTransferSharding(mlir::Attribute sharding, mlir::RankedTensorType shape,
                         llvm::ArrayRef<int32_t> devices, mlir::Location loc);
 
 // Exact, lossless metadata matching at the RC/IFRT boundary.
+mlir::Type makeIfrtArrayType(mlir::RankedTensorType shape,
+                           llvm::ArrayRef<int32_t> devices,
+                           mlir::Attribute sharding, mlir::StringAttr memoryKind,
+                           mlir::StringAttr layout);
+mlir::Attribute getIfrtDevicesAttr(mlir::Type type);
+mlir::StringAttr getIfrtHloSharding(mlir::Type type);
+bool ifrtArrayRequiresGlobalExtents(mlir::Type type);
 bool isIfrtArrayType(mlir::Type type);
 bool isIfrtControlType(mlir::Type type);
 llvm::ArrayRef<int32_t> getIfrtArrayDevices(mlir::Type type);

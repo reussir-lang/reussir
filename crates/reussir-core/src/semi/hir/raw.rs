@@ -163,6 +163,7 @@ pub struct Record {
     /// for enums (`struct` is always `false`).
     pub repr_fixed: bool,
     pub placement: Option<String>,
+    pub launch: Option<crate::launch::LaunchConfig>,
     pub kind: RecordKind,
     pub path: String,
     pub generics: Vec<Generic>,
@@ -399,6 +400,11 @@ pub enum Kind {
         value: Expr,
     },
     Seq(Vec<Expr>),
+    Launch {
+        path: String,
+        ty_args: Vec<Ty>,
+        args: Vec<Expr>,
+    },
     FuncCall {
         regional: bool,
         path: String,

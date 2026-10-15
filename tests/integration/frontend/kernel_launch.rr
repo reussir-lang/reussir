@@ -1,0 +1,43 @@
+// REQUIRES: ifrt
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.hir.round
+// RUN: diff %t.hir %t.hir.round
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.mir.round
+// RUN: diff %t.mir %t.mir.round
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %reussir-opt %t.mlir --reussir-prepare-pjrt -o %t.prepared
+// RUN: %FileCheck %s --check-prefix=PREP < %t.prepared
+// RUN: %rrc %t.mir --emit mlir-llvm -O aggressive -o %t.llvm
+
+#[placement(devices = "0")]
+#[launch(backend_optimization_level = "2", donation = "none")]
+pub struct [value] Config {}
+#[kernel] fn identity<T>(x: Tensor<T>) -> Tensor<T> { x }
+#[kernel] fn choose<T>(x: (Tensor<T>, ((), bool))) -> Tensor<T> {
+    if x.1.1 { identity(x.0) } else { x.0 }
+}
+pub fn run<T>(x: DevArray<T>, condition: DevArray<bool>) -> DevArray<T, Config> {
+    launch<Config>(choose<T>, (x, ((), condition)))
+}
+pub fn unsigned(x: DevArray<u64>, condition: DevArray<bool>) -> DevArray<u64, Config> {
+    run(x, condition)
+}
+pub fn default(x: DevArray<f32>) -> DevArray<f32> { launch(identity, x) }
+pub fn reuse(x: DevArray<f32>) -> (DevArray<f32>, DevArray<f32>) {
+    (launch(identity, x), launch(identity, x))
+}
+pub fn closure(x: DevArray<f32>) -> DevArray<f32> {
+    let f = |a: DevArray<f32>| launch(identity, a);
+    f(x)
+}
+// CHECK: module @_reussir_launch_
+// CHECK: tensor<ui64>
+// CHECK: ifrt.Call
+// CHECK-SAME: reussir.backend_optimization_level = 2 : i32
+// CHECK-SAME: reussir.disable_donation
+// CHECK: reussir.array.from_ifrt
+// PREP: reussir.pjrt.jit_call
+// PREP: reussir.ifrt.bytecode
+// PREP-NOT: module @_reussir_launch_

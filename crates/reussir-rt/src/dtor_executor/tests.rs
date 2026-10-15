@@ -128,9 +128,11 @@ fn continuation_storage_is_aligned_stable_and_lifo() {
             buffers.push(buffer);
         }
         for (&buffer, &(size, _)) in buffers.iter().zip(&layouts).rev() {
-            assert!(std::slice::from_raw_parts(buffer.cast::<u8>(), size)
-                .iter()
-                .all(|&v| v == 0xa5));
+            assert!(
+                std::slice::from_raw_parts(buffer.cast::<u8>(), size)
+                    .iter()
+                    .all(|&v| v == 0xa5)
+            );
             __reussir_dtor_conti_free(&mut context);
         }
         for _ in 0..if cfg!(miri) { 8 } else { 1000 } {
@@ -149,10 +151,12 @@ fn continuation_storage_is_aligned_stable_and_lifo() {
 fn invalid_layouts_and_empty_free_are_rejected() {
     for (size, align) in [(1, 0), (1, 3), (usize::MAX, 8), (isize::MAX as usize, 8)] {
         let mut context = DtorExecutor::new();
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || context.allocate(size, align)
-        ))
-        .is_err());
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                || context.allocate(size, align)
+            ))
+            .is_err()
+        );
         assert_eq!(context.allocations, 0);
     }
     let mut context = DtorExecutor::new();
@@ -217,9 +221,11 @@ fn ffi_layout_and_symbol_exports() {
         "__reussir_run_dtor",
         "__reussir_finish_dtor",
     ] {
-        assert!(crate::symbols::exported_symbols()
-            .iter()
-            .any(|s| s.name == name && !s.address.is_null()));
+        assert!(
+            crate::symbols::exported_symbols()
+                .iter()
+                .any(|s| s.name == name && !s.address.is_null())
+        );
     }
 }
 

@@ -443,6 +443,7 @@ fn kind_name(kind: &ExprKind<'_>) -> &'static str {
         ExprKind::Seq(_) => "Seq",
         ExprKind::Tuple(_) => "Tuple",
         ExprKind::Call { .. } => "Call",
+        ExprKind::Launch { .. } => "Launch",
         ExprKind::Ctor { .. } => "Ctor",
         ExprKind::Variant { .. } => "Variant",
         ExprKind::NullableCall(_) => "NullableCall",
@@ -762,6 +763,11 @@ fn interp<'tcx>(
                 interp(s, ot, rr, rc);
             }
         }
+        ExprKind::Launch { args, .. } => {
+            for a in args {
+                interp_borrow(a, ot, rr, rc);
+            }
+        }
         ExprKind::Call { args, .. }
         | ExprKind::Ctor { args, .. }
         | ExprKind::Variant { args, .. } => {
@@ -1051,9 +1057,11 @@ fn children<'tcx>(e: &Expr<'tcx>) -> Vec<&'tcx Expr<'tcx>> {
         } => vec![initial, condition, body],
         Let { value, .. } => vec![value],
         Seq(es) | Tuple(es) => es.iter().collect(),
-        Call { args, .. } | Ctor { args, .. } | Variant { args, .. } | Intrinsic { args, .. } => {
-            args.iter().collect()
-        }
+        Launch { args, .. }
+        | Call { args, .. }
+        | Ctor { args, .. }
+        | Variant { args, .. }
+        | Intrinsic { args, .. } => args.iter().collect(),
         NullableCall(opt) => opt.into_iter().collect(),
         ClosureCall { target, args } => std::iter::once(target).chain(args.iter()).collect(),
         Closure(c) | Async(c) => vec![c.body],

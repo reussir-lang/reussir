@@ -1146,6 +1146,27 @@ mod tests {
             .unwrap();
     }
     #[test]
+    fn launch_has_a_named_kernel_reference_and_optional_configuration() {
+        for source in [
+            "fn f() { launch(kernel) }",
+            "fn f(x: T) { launch<P>(module::kernel<T>, x, (x, ()),) }",
+            "#[launch(donation = \"none\")] struct [value] P {}",
+        ] {
+            let parsed = super::parse(source);
+            assert!(parsed.ok(), "{source}: {:?}", parsed.errors);
+            let _ = json_of(source);
+        }
+        for source in [
+            "fn f() { launch<P> kernel<T>(x) }",
+            "fn f() { launch() }",
+            "fn f() { launch<P>(|x| x, a) }",
+            "fn f() { launch<P>(kernel<T> x) }",
+        ] {
+            assert!(!super::parse(source).ok(), "unexpectedly accepted {source}");
+        }
+    }
+
+    #[test]
     fn while_expression_grammar() {
         for source in [
             "fn f() { while [] (false) { () } }",

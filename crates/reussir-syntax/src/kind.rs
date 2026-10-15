@@ -231,6 +231,9 @@ pub enum SyntaxKind {
     // Append new stored kinds to preserve existing green-tree cache/hash IDs.
     AsyncKw,
     AsyncExpr,
+    LaunchKw,
+    LaunchExpr,
+    LaunchTarget,
 
     /// End-of-file sentinel used by the parser; never stored in the tree.
     Eof,
@@ -272,6 +275,7 @@ impl SyntaxKind {
                 | MatchKw
                 | RegionalKw
                 | AsyncKw
+                | LaunchKw
                 | ExternKw
                 | AsKw
                 | TrueKw

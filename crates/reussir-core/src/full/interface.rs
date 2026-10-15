@@ -95,7 +95,7 @@ pub fn export_closure(input: &MonoInput<'_, '_>) -> ExportClosure {
         if f.visibility != Visibility::Public {
             continue;
         }
-        if f.generics.is_empty() {
+        if f.generics.is_empty() && !f.is_kernel {
             closure.protos.insert(f.def);
         } else if closure.bodies.insert(f.def) {
             queue.push_back(f.def);
@@ -157,11 +157,11 @@ pub fn export_closure(input: &MonoInput<'_, '_>) -> ExportClosure {
                     ExprKind::GlobalStr(s) => {
                         closure.strings.insert(*s);
                     }
-                    ExprKind::FuncCall { target, .. } => {
+                    ExprKind::FuncCall { target, .. } | ExprKind::Launch { target, .. } => {
                         let Some(callee) = by_def.get(target) else {
                             return;
                         };
-                        if callee.generics.is_empty() {
+                        if callee.generics.is_empty() && !callee.is_kernel {
                             closure.protos.insert(*target);
                         } else if closure.bodies.insert(*target) {
                             queue.push_back(*target);
@@ -206,7 +206,7 @@ pub fn export_closure(input: &MonoInput<'_, '_>) -> ExportClosure {
                 // A consumer instantiates generic impl methods itself (the
                 // `_RI` symbols dedup `weak_odr`); ground ones compile here
                 // and only the symbol crosses.
-                if func.generics.is_empty() {
+                if func.generics.is_empty() && !func.is_kernel {
                     closure.protos.insert(m);
                 } else if closure.bodies.insert(m) {
                     queue.push_back(m);

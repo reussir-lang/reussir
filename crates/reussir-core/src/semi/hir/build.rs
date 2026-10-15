@@ -341,6 +341,9 @@ pub fn parse_program<'tcx>(tcx: &TyCtxt<'tcx>, text: &str) -> Result<Parsed<'tcx
         .parse(lex(text))
         .map_err(|e| format!("{e:?}"))?;
     for r in &raw.records {
+        if r.launch.is_some() && r.placement.is_none() {
+            return Err("launch configuration requires a placement marker".into());
+        }
         if r.placement.is_some()
             && (!matches!(r.default_cap, raw::DefaultCap::Value)
                 || !r.generics.is_empty()
@@ -622,6 +625,7 @@ impl<'tcx> Builder<'_, 'tcx> {
             default_cap,
             repr_fixed: r.repr_fixed,
             placement: r.placement.clone(),
+            launch: r.launch,
             ffi,
             fields: Some(fields),
             regional_generics,
@@ -901,6 +905,18 @@ impl<'tcx> Builder<'_, 'tcx> {
                     );
                 }
                 ExprKind::Tuple(fields)
+            }
+            raw::Kind::Launch {
+                path,
+                ty_args,
+                args,
+            } => {
+                let target = self.function_def(path);
+                ExprKind::Launch {
+                    target,
+                    ty_args: self.tys(ty_args),
+                    args: self.exprs(args),
+                }
             }
             raw::Kind::FuncCall {
                 regional,
@@ -1491,6 +1507,26 @@ mod tests {
         roundtrip_with_locations(
             "pub enum Opt { None, Some(i64) }\n\
              pub fn g(o: Opt) -> i64 { match o { Opt::None => 0, Opt::Some(x) => { let y = x; y } } }",
+        );
+    }
+
+    #[test]
+    fn roundtrips_launch_configuration_and_buffer_products() {
+        roundtrip(
+            r#"
+            #[placement(devices = "0")]
+            #[launch(backend_optimization_level = "2", donation = "none")]
+            pub struct [value] Config {}
+            #[kernel] fn helper<T>(x: Tensor<T>) -> Tensor<T> { x }
+            #[kernel] fn nested<T>(x: (Tensor<T>, ((), bool))) -> Tensor<T> {
+                if x.1.1 { helper(x.0) } else { x.0 }
+            }
+            pub fn run<T>(x: DevArray<T>, c: DevArray<bool>) -> DevArray<T, Config> {
+                launch<Config>(nested<T>, (x, ((), c)))
+            }
+            pub fn scalar(x: DevArray<u32>, c: DevArray<bool>) -> DevArray<u32, Config> { run(x, c) }
+            pub fn default(x: DevArray<f32>) -> DevArray<f32> { launch(helper, x) }
+"#,
         );
     }
 

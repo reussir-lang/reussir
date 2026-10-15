@@ -1,0 +1,26 @@
+// REQUIRES: ifrt, linux, pjrt-runtime
+// RUN: %rrc %s -o %t.source.o -O aggressive --relocation-mode pic
+// RUN: %rrc %S/Inputs/kernel_launch_driver.mlir -o %t.driver.o -O aggressive --relocation-mode pic
+// RUN: %cc %t.source.o %t.driver.o %S/Inputs/kernel_launch_execute.c -o %t.exe %pjrt_runtime %extra_sys_libs
+// RUN: env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" REUSSIR_PJRT_CACHE_CONFIG="%S/../runtime/Inputs/pjrt_cache.toml" %t.exe
+
+#[placement(devices = "0")]
+#[launch(backend_optimization_level = "1", donation = "none")]
+pub struct [value] Keep {}
+#[placement(devices = "0")]
+#[launch(backend_optimization_level = "3", donation = "auto")]
+pub struct [value] Reuse {}
+#[kernel] fn identity<T>(x: T) -> T { x }
+#[kernel] fn asynchronous(x: Tensor<[f32; 4]>) -> Tensor<[f32; 4]> {
+    let pending = async { core::intrinsic::tensor::collective_permute(x, ((0, 0),)) };
+    core::intrinsic::tensor::async_done(pending)
+}
+pub fn launch_keep(x: DevArray<[f32; 4]>) -> DevArray<[f32; 4], Keep> {
+    launch<Keep>(identity<Tensor<[f32; 4]>>, x)
+}
+pub fn launch_reuse(x: DevArray<[f32; 4]>) -> DevArray<[f32; 4], Reuse> {
+    launch<Reuse>(identity<Tensor<[f32; 4]>>, x)
+}
+pub fn launch_async(x: DevArray<[f32; 4]>) -> DevArray<[f32; 4]> {
+    launch(asynchronous, x)
+}

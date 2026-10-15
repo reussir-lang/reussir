@@ -160,6 +160,43 @@ MlirType reussirClosureBoxTypeGet(MlirContext context, intptr_t nPayloads,
   return wrap(ClosureBoxType::get(unwrap(context), payloads));
 }
 
+MlirType reussirArrayTypeGetIfrtType(MlirType type) {
+#ifdef REUSSIR_ENABLE_OPENXLA
+  auto array = mlir::dyn_cast_or_null<ArrayType>(unwrap(type));
+  if (!array || !array.getTarget())
+    return {nullptr};
+  auto target = array.getTarget();
+  return wrap(makeIfrtArrayType(
+      mlir::RankedTensorType::get(array.getShape(), array.getElementType()),
+      target.getDevices().asArrayRef(), target.getSharding(),
+      target.getMemoryKind(), target.getLayout()));
+#else
+  return {nullptr};
+#endif
+}
+MlirAttribute reussirIfrtArrayGetDevices(MlirType type) {
+#ifdef REUSSIR_ENABLE_OPENXLA
+  return wrap(getIfrtDevicesAttr(unwrap(type)));
+#else
+  return {nullptr};
+#endif
+}
+bool reussirIfrtArrayRequiresGlobalExtents(MlirType type) {
+#ifdef REUSSIR_ENABLE_OPENXLA
+  return ifrtArrayRequiresGlobalExtents(unwrap(type));
+#else
+  return false;
+#endif
+}
+
+MlirAttribute reussirIfrtArrayGetHloSharding(MlirType type) {
+#ifdef REUSSIR_ENABLE_OPENXLA
+  return wrap(mlir::Attribute(getIfrtHloSharding(unwrap(type))));
+#else
+  return {nullptr};
+#endif
+}
+
 MlirType reussirArrayTypeGetWithTarget(intptr_t nDims, int64_t const *shape,
                                      MlirType elementType,
                                      MlirAttribute target) {

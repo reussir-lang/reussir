@@ -29,7 +29,9 @@ pub unsafe extern "C" fn __reussir_report_nonlinear_usage(
     let file = if file.is_null() {
         String::new()
     } else {
-        unsafe { CStr::from_ptr(file) }.to_string_lossy().into_owned()
+        unsafe { CStr::from_ptr(file) }
+            .to_string_lossy()
+            .into_owned()
     };
     let location = if file.is_empty() {
         "<unknown location>".to_owned()

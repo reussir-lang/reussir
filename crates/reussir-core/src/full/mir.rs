@@ -137,6 +137,7 @@ pub struct RecordInstance<'tcx> {
     /// variant record type's `fixed` flag.
     pub repr_fixed: bool,
     pub placement: Option<&'tcx str>,
+    pub launch: Option<crate::launch::LaunchConfig>,
     /// The ground field layout.
     pub layout: RecordLayout<'tcx>,
 }
@@ -317,6 +318,10 @@ pub enum ExprKind<'tcx> {
     },
     Seq(&'tcx [Expr<'tcx>]),
     /// A direct call to a ground function instance, by interned symbol.
+    Launch {
+        callee: Symbol,
+        args: &'tcx [Expr<'tcx>],
+    },
     Call {
         callee: Symbol,
         args: &'tcx [Expr<'tcx>],
@@ -414,4 +419,114 @@ pub enum SwitchCases<'tcx> {
         non_null: &'tcx DecisionTree<'tcx>,
         null: &'tcx DecisionTree<'tcx>,
     },
+}
+
+/// Visit all expressions, including closure bodies and decision-tree guards.
+pub fn for_each_expr<'e, 'tcx>(expr: &'e Expr<'tcx>, f: &mut impl FnMut(&'e Expr<'tcx>)) {
+    use ExprKind::*;
+    f(expr);
+    match expr.kind {
+        Tuple(es)
+        | Seq(es)
+        | Launch { args: es, .. }
+        | Call { args: es, .. }
+        | Ctor { args: es, .. }
+        | Variant { args: es, .. }
+        | Intrinsic { args: es, .. }
+        | ArrayOp { args: es, .. }
+        | TensorOp { args: es, .. } => {
+            for e in es {
+                for_each_expr(e, f);
+            }
+        }
+        Negate(e) | Not(e) | Cast(e, _) | RegionRun(e) | Proj(e, _) | Let { value: e, .. } => {
+            for_each_expr(e, f)
+        }
+        Arith(a, _, b) | Cmp(a, _, b) | Assign(a, _, b) => {
+            for_each_expr(a, f);
+            for_each_expr(b, f);
+        }
+        If(a, b, c) => {
+            for_each_expr(a, f);
+            for_each_expr(b, f);
+            for_each_expr(c, f);
+        }
+        While {
+            initial,
+            condition,
+            body,
+            ..
+        } => {
+            for_each_expr(initial, f);
+            for_each_expr(condition, f);
+            for_each_expr(body, f);
+        }
+        NullableCall(Some(e)) => for_each_expr(e, f),
+        Closure(c) | Async(c) => for_each_expr(c.body, f),
+        ClosureCall { target, args } => {
+            for_each_expr(target, f);
+            for e in args {
+                for_each_expr(e, f);
+            }
+        }
+        Match(e, tree) => {
+            for_each_expr(e, f);
+            for_each_tree_expr(&tree, f);
+        }
+        GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_) | Var(_)
+        | NullableCall(None) | Poison => {}
+    }
+}
+
+fn for_each_tree_expr<'e, 'tcx>(tree: &DecisionTree<'tcx>, f: &mut impl FnMut(&'e Expr<'tcx>))
+where
+    'tcx: 'e,
+{
+    match *tree {
+        DecisionTree::Leaf { body, .. } => for_each_expr(body, f),
+        DecisionTree::Guard {
+            guard,
+            success,
+            failure,
+            ..
+        } => {
+            for_each_expr(guard, f);
+            for_each_tree_expr(success, f);
+            for_each_tree_expr(failure, f);
+        }
+        DecisionTree::Switch { cases, .. } => match cases {
+            SwitchCases::Int { cases, default } => {
+                for (_, t) in cases {
+                    for_each_tree_expr(t, f);
+                }
+                for_each_tree_expr(default, f);
+            }
+            SwitchCases::Char { cases, default } => {
+                for (_, t) in cases {
+                    for_each_tree_expr(t, f);
+                }
+                for_each_tree_expr(default, f);
+            }
+            SwitchCases::String { cases, default } => {
+                for (_, t) in cases {
+                    for_each_tree_expr(t, f);
+                }
+                for_each_tree_expr(default, f);
+            }
+            SwitchCases::Bool { if_true, if_false } => {
+                for_each_tree_expr(if_true, f);
+                for_each_tree_expr(if_false, f);
+            }
+            SwitchCases::Nullable { non_null, null } => {
+                for_each_tree_expr(non_null, f);
+                for_each_tree_expr(null, f);
+            }
+            SwitchCases::Ctor(cases) => {
+                for t in cases {
+                    for_each_tree_expr(t, f);
+                }
+            }
+        },
+        DecisionTree::Uncovered | DecisionTree::Unreachable => {}
+    }
 }

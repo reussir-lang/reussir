@@ -104,6 +104,7 @@ pub struct RecordDecl {
     /// set for enums (`struct` is always `false`).
     pub repr_fixed: bool,
     pub placement: Option<String>,
+    pub launch: Option<crate::launch::LaunchConfig>,
 }
 
 /// A record's ground shape.
@@ -417,6 +418,10 @@ pub enum Kind {
         value: Expr,
     },
     Seq(Vec<Expr>),
+    Launch {
+        symbol: String,
+        args: Vec<Expr>,
+    },
     Call {
         regional: bool,
         symbol: String,

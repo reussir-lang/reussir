@@ -395,6 +395,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             surface::ExprKind::UnaryOpExpr(op, e) => self.infer_unop(*op, e, span),
             surface::ExprKind::Cast(ty, e) => self.infer_cast(ty, e, span),
             surface::ExprKind::FuncCallExpr(fc) => self.infer_func_call(fc, span),
+            surface::ExprKind::LaunchExpr(placement, call) => {
+                self.infer_launch(placement, call, span)
+            }
             surface::ExprKind::CtorCallExpr(cc) => self.infer_ctor_call(cc, span),
             surface::ExprKind::CallExpr(callee, args) => {
                 // `e.f(x)` is a postfix call: the method wins when one
@@ -1292,6 +1295,155 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             result,
             span,
         )
+    }
+
+    fn infer_launch(
+        &mut self,
+        placement: &[Option<surface::Type>],
+        fc: &surface::FuncCall,
+        span: Option<Span>,
+    ) -> Expr<'tcx> {
+        if fc.name.segments.is_empty() && self.vars.lookup(fc.name.basename).is_some() {
+            self.error(span, "launch requires a named kernel function, not a local value");
+            return self.poison(span);
+        }
+        if placement.len() > 1 {
+            self.error(span, "launch takes at most one placement type argument");
+        }
+        let placement = match placement.first() {
+            Some(Some(p)) => self.eval_type(p),
+            Some(None) => {
+                self.error(span, "launch placement must be explicit or omitted");
+                self.tcx.mk(TyKind::DefaultPlacement)
+            }
+            None => self.tcx.mk(TyKind::DefaultPlacement),
+        };
+        let placement_ok = match placement.kind() {
+            TyKind::DefaultPlacement | TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => {
+                true
+            }
+            TyKind::Record { def, .. } => {
+                self.records.get(def).is_some_and(|r| r.placement.is_some())
+            }
+            _ => false,
+        };
+        if !placement_ok {
+            self.error(span, "launch configuration must be a placement marker type");
+        }
+        let path = self
+            .expand_path(&fc.name)
+            .unwrap_or_else(|| fc.name.clone());
+        let Some(def) = self.resolve_function_ref(&path) else {
+            self.error(
+                span,
+                "launch target must name an accessible kernel function",
+            );
+            return self.poison(span);
+        };
+        let proto = self.functions[&def].clone();
+        if !proto.is_kernel {
+            self.error(span, "launch target must be a #[kernel] function");
+            return self.poison(span);
+        }
+        if fc.args.len() != proto.params.len() {
+            self.error(
+                span,
+                format!(
+                    "launch expects {} argument(s), got {}",
+                    proto.params.len(),
+                    fc.args.len()
+                ),
+            );
+            return self.poison(span);
+        }
+        self.record_use(fc.name.basename);
+        let inst = self.instantiate(&proto.generics, &fc.ty_args, span);
+        let mut args = Vec::new();
+        for (arg, (_, param)) in fc.args.iter().zip(&proto.params) {
+            let arg = self.infer_expr(arg);
+            let expected = self.infer.instantiate_ty(*param, &inst);
+            if let Some(actual) = self.launch_argument_type(arg.ty, expected, span) {
+                self.expect(actual, expected, arg.span);
+            }
+            args.push(arg);
+        }
+        let result = self.infer.instantiate_ty(proto.return_ty, &inst);
+        let result = self.infer.resolve(result);
+        let TyKind::Tensor { elem, dims } = *result.kind() else {
+            self.error(span, "launch requires exactly one Tensor result");
+            return self.poison(span);
+        };
+        let ty = self.tcx.mk(TyKind::DevArray {
+            elem,
+            dims,
+            placement,
+        });
+        let ty_args = self.inst_args(&proto.generics, &inst);
+        self.mk_expr(
+            ExprKind::Launch {
+                target: def,
+                ty_args,
+                args,
+            },
+            ty,
+            span,
+        )
+    }
+
+    /// Project the host buffer tree onto the kernel's SSA parameter tree.
+    /// Scalars are rank-zero device buffers; this operation never uploads data.
+    fn launch_argument_type(
+        &mut self,
+        actual: Ty<'tcx>,
+        expected: Ty<'tcx>,
+        span: Option<Span>,
+    ) -> Option<Ty<'tcx>> {
+        let actual = self.infer.resolve(actual);
+        let expected = self.infer.resolve(expected);
+        match *actual.kind() {
+            TyKind::DevArray { elem, dims, .. } => {
+                if matches!(
+                    expected.kind(),
+                    TyKind::Int(_) | TyKind::Fp(_) | TyKind::Bool
+                ) {
+                    if !dims.is_empty() {
+                        self.error(
+                            span,
+                            "a scalar kernel parameter requires a rank-zero DevArray",
+                        );
+                        return None;
+                    }
+                    Some(elem)
+                } else {
+                    Some(self.tcx.mk(TyKind::Tensor { elem, dims }))
+                }
+            }
+            TyKind::Tuple(fields) => {
+                let expected_fields = match expected.kind() {
+                    TyKind::Tuple(expected_fields) if expected_fields.len() == fields.len() => {
+                        Some(*expected_fields)
+                    }
+                    _ => None,
+                };
+                let mut mapped = Vec::new();
+                for (i, &field) in fields.iter().enumerate() {
+                    let expected = expected_fields
+                        .and_then(|f| f.get(i))
+                        .copied()
+                        .unwrap_or(field);
+                    mapped.push(self.launch_argument_type(field, expected, span)?);
+                }
+                Some(self.tcx.mk(TyKind::Tuple(self.tcx.intern_tys(&mapped))))
+            }
+            TyKind::Unit => Some(actual),
+            _ => {
+                self.error(
+                    span,
+                    "launch arguments must be DevArray buffers, tuples of buffers, or unit",
+                );
+                None
+            }
+        }
     }
 
     /// (POSTFIX-APP) `Γ ⊢ base.acc₁.….accₙ(args)`: the chain prefix projects
@@ -4907,6 +5059,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             },
             Seq(es) => Seq(es.into_iter().map(|e| self.zonk_expr(e)).collect()),
             Tuple(es) => Tuple(es.into_iter().map(|e| self.zonk_expr(e)).collect()),
+            Launch {
+                target,
+                ty_args,
+                args,
+            } => Launch {
+                target,
+                ty_args: ty_args.into_iter().map(|t| self.zonk_ty(t, span)).collect(),
+                args: args.into_iter().map(|e| self.zonk_expr(e)).collect(),
+            },
             FuncCall {
                 target,
                 ty_args,
@@ -5097,7 +5258,8 @@ fn var_occurrences<'tcx>(e: &Expr<'tcx>, used: &mut Vec<VarId>, bound: &mut Vec<
             bound.push(*var);
         }
         Seq(es) | Tuple(es) => es.iter().for_each(|e| var_occurrences(e, used, bound)),
-        FuncCall { args, .. }
+        Launch { args, .. }
+        | FuncCall { args, .. }
         | TraitCall { args, .. }
         | CompoundCall { args, .. }
         | VariantCall { args, .. } => args.iter().for_each(|e| var_occurrences(e, used, bound)),
