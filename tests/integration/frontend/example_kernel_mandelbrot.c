@@ -47,10 +47,13 @@ int main(int argc, char **argv) {
   assert(interior > PIXELS / 10 && interior < PIXELS / 4);
   assert(quick_escape > PIXELS / 3 && quick_escape < 9 * PIXELS / 10);
   // Dyadic grid coordinates make these stable samples exactly representable.
+  // The final three samples add five/eight-step escapes and an off-axis
+  // interior point, each constant across its 3x3 pixel neighborhood.
   const unsigned samples[][2] = {
       {0, 0},   {0, 512},    {0, 1023},  {256, 0},    {256, 1023},
       {512, 0}, {512, 256},  {512, 512}, {512, 640},  {512, 896},
-      {768, 0}, {768, 1023}, {1023, 0},  {1023, 512}, {1023, 1023}};
+      {768, 0}, {768, 1023}, {1023, 0},  {1023, 512}, {1023, 1023},
+      {128, 640}, {240, 576}, {384, 640}};
   for (unsigned i = 0; i < sizeof(samples) / sizeof(samples[0]); ++i) {
     const unsigned row = samples[i][0], col = samples[i][1];
     assert(image[row * WIDTH + col] == reference(row, col));
