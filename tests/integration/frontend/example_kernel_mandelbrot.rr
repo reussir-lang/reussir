@@ -14,7 +14,7 @@ import core::intrinsic::pjrt;
 import core::intrinsic::tensor;
 
 #[placement(devices = "0", layout = "default")]
-#[pjrt::launch(backend_optimization_level = "2", donation = "none")]
+#[launch(backend_optimization_level = "2", donation = "none")]
 struct [value] MandelbrotConfig {}
 
 #[kernel]
