@@ -1,0 +1,13 @@
+// REQUIRES: stablehlo
+// RUN: %rrc %S/Inputs/kernel_dep.rr --package-name dep --emit rri -o %t.rri
+// RUN: %rrc %s --package-name consumer --extern dep=%t.rri --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mlir -o %t.mlir
+// RUN: %reussir-opt %t.mlir | %FileCheck %s
+// CHECK-DAG: func.func
+// CHECK-DAG: call
+// CHECK-DAG: stablehlo.if
+// CHECK-NOT: scf.if
+#[kernel]
+pub fn choose(c: bool, x: (Tensor<[f32; 2]>, i64), y: (Tensor<[f32; 2]>, i64)) -> (Tensor<[f32; 2]>, i64) {
+    dep::choose(c, x, y)
+}
