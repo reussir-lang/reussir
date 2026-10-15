@@ -363,6 +363,10 @@ unsafe extern "C" {
         element_type: MlirType,
         target: MlirAttribute,
     ) -> MlirType;
+    pub fn reussirArrayTypeGetIfrtType(array: MlirType) -> MlirType;
+    pub fn reussirIfrtArrayGetDevices(array: MlirType) -> MlirAttribute;
+    pub fn reussirIfrtArrayGetHloSharding(array: MlirType) -> MlirAttribute;
+    pub fn reussirIfrtArrayRequiresGlobalExtents(array: MlirType) -> bool;
     pub fn reussirArrayTypeGet(
         n_dims: isize,
         shape: *const i64,

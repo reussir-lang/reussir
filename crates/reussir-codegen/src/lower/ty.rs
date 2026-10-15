@@ -576,7 +576,7 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
     /// The target-annotated descriptor payload of a device handle. The existing
     /// array descriptor carries its buffers and dynamic extents; no extra box
     /// or runtime placement object is introduced.
-    fn devarray_inner_of(&self, ty: Ty<'tcx>) -> Result<Type<'c>> {
+    pub(super) fn devarray_inner_of(&self, ty: Ty<'tcx>) -> Result<Type<'c>> {
         let TyKind::DevArray {
             elem,
             dims,

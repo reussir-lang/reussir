@@ -70,7 +70,7 @@ struct ReussirPreparePjrtPass
     bool unlaunchedKernel = false;
     getOperation().walk([&](mlir::func::FuncOp function) {
       if (function->hasAttr("reussir.kernel_function")) {
-        function.emitError("kernel launching is not available; an unlaunched "
+        function.emitError("an unlaunched "
                            "kernel cannot enter native host lowering");
         unlaunchedKernel = true;
       }
@@ -126,6 +126,14 @@ struct ReussirIFRTJustInTimeTransformPass
             mlir::OwningOpRef<mlir::ModuleOp> copy(kernel.clone());
             (*copy)->removeAttr(mlir::SymbolTable::getSymbolAttrName());
             (*copy)->removeAttr(mlir::SymbolTable::getVisibilityAttrName());
+            // PJRT's HLO importer cannot carry Future values across func.call.
+            // Use MLIR's registered function/dialect inliners on the isolated
+            // compilation unit, then discard helpers that are no longer used.
+            mlir::PassManager preparation(&getContext());
+            preparation.addPass(mlir::createInlinerPass());
+            preparation.addPass(mlir::createSymbolDCEPass());
+            if (mlir::failed(preparation.run(*copy)))
+              return mlir::WalkResult::interrupt();
             if (mlir::failed(verifyIfrtKernelModule(*copy)) ||
                 mlir::failed(mlir::verify(*copy)))
               return mlir::WalkResult::interrupt();

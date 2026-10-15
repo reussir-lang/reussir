@@ -431,6 +431,8 @@ impl<'a> Printer<'a> {
             + r.placement
                 .as_ref()
                 .map_or(Doc::Null, |p| text(format!("placement {p:?} ")))
+            + r.launch
+                .map_or(Doc::Null, |c| text(format!("launch {:?} ", c.encode())))
             + text(format!("{vis}{cap}{kind}{}", self.path(r.def)))
             + self.generics_binder(&r.ty_params, &r.regional_generics)
             + self.item_loc(r.file, r.span);
@@ -849,6 +851,17 @@ impl<'a> Printer<'a> {
                     + text(format!(", {field}, "))
                     + self.value(src)
                     + text(")")
+            }
+            ExprKind::Launch {
+                target,
+                ty_args,
+                args,
+            } => {
+                let mut d = text(format!("launch(#{}", self.path(*target))) + self.ty_args(ty_args);
+                for arg in args {
+                    d = d + text(", ") + self.value(arg);
+                }
+                d + text(")")
             }
             ExprKind::FuncCall {
                 target,

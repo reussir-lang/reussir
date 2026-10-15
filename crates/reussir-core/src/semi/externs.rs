@@ -249,6 +249,7 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                 default_cap: rec.default_cap,
                 repr_fixed: rec.repr_fixed,
                 placement: rec.placement.clone(),
+                launch: rec.launch,
                 ffi: rec.ffi.clone(),
                 fields: rec.fields.as_ref().map(|f| remap.fields(f)),
                 regional_generics: remap.generic_ids(&rec.regional_generics),
@@ -720,6 +721,15 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
             } => ExprKind::TraitCall {
                 trait_def: self.def(*trait_def),
                 method: *method,
+                ty_args: self.tys(ty_args),
+                args: self.exprs(args),
+            },
+            ExprKind::Launch {
+                target,
+                ty_args,
+                args,
+            } => ExprKind::Launch {
+                target: self.def(*target),
                 ty_args: self.tys(ty_args),
                 args: self.exprs(args),
             },

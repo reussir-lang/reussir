@@ -120,7 +120,6 @@ impl<'a> Str<'a> {
     pub fn as_bytes(&self) -> &'a [u8] {
         unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
     }
-
 }
 
 impl<'a> std::ops::Deref for Str<'a> {

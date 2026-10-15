@@ -486,6 +486,7 @@ TEST_F(ReussirTest, IfrtJitFailureDoesNotPartiallyRewriteCalls) {
   std::string badKernel = jitSource.str();
   badKernel.insert(badKernel.rfind("return %arg"),
                    "%bad = arith.addf %arg, %arg : tensor<8xf32>\n");
+  badKernel.replace(badKernel.rfind("return %arg"), 11, "return %bad");
   std::string badOptions = jitSource.str();
   badOptions.insert(
       badOptions.find(" : (!I)", badOptions.find("@second::@main")),

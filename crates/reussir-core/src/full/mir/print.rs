@@ -250,6 +250,9 @@ impl Render<'_> {
         head + rec
             .placement
             .map_or(Doc::Null, |p| text(format!("placement {p:?} ")))
+            + rec
+                .launch
+                .map_or(Doc::Null, |c| text(format!("launch {:?} ", c.encode())))
             + body
             + text(";")
     }
@@ -545,6 +548,13 @@ impl Render<'_> {
                     + text(format!(", {field}, "))
                     + self.value(src)
                     + text(")")
+            }
+            Launch { callee, args } => {
+                let mut d = text(format!("launch(@{}", self.sym(callee)));
+                for arg in args {
+                    d = d + text(", ") + self.value(arg);
+                }
+                d + text(")")
             }
             Call {
                 callee,

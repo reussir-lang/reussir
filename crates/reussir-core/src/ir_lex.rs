@@ -86,6 +86,8 @@ pub enum Token<'a> {
     Region,
     #[token("async")]
     Async,
+    #[token("launch")]
+    Launch,
     #[token("as")]
     As,
     #[token("closure")]

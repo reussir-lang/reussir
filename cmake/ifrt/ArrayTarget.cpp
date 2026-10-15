@@ -23,9 +23,61 @@
 #include <xla/python/ifrt/ir/ifrt_ops.h>
 #include <xla/python/ifrt/ir/reussir_target.h>
 #include <xla/python/ifrt/ir/transforms/utils.h>
+#include <xla/python/ifrt/ir/support/sharding_conversions.h>
 #include <xla/shape_util.h>
 
 namespace reussir {
+mlir::Type makeIfrtArrayType(mlir::RankedTensorType shape,
+                           llvm::ArrayRef<int32_t> devices,
+                           mlir::Attribute sharding, mlir::StringAttr memoryKind,
+                           mlir::StringAttr layout) {
+  auto *ctx = shape.getContext();
+  ctx->getOrLoadDialect<xla::ifrt::IfrtDialect>();
+  if (!sharding)
+    sharding = xla::ifrt::IfrtUnspecifiedShardingAttr::get(ctx);
+  auto typed = mlir::dyn_cast<xla::ifrt::IfrtShardingAttrInterface>(sharding);
+  if (!typed)
+    return {};
+  if (auto param = mlir::dyn_cast<xla::ifrt::IfrtShardingParamAttr>(typed);
+      param && !xla::ifrt::support::ToHloSharding(param.getSharding()).ok())
+    return {};
+  return xla::ifrt::IfrtArrayType::get(
+      ctx, shape, typed, xla::ifrt::IfrtDevicesAttr::get(ctx, devices),
+      memoryKind, layout);
+}
+mlir::Attribute getIfrtDevicesAttr(mlir::Type type) {
+  auto array = mlir::dyn_cast_or_null<xla::ifrt::IfrtArrayType>(type);
+  return array ? xla::ifrt::IfrtDevicesAttr::get(type.getContext(), array.getDevices())
+               : mlir::Attribute{};
+}
+mlir::StringAttr getIfrtHloSharding(mlir::Type type) {
+  auto array = mlir::dyn_cast_or_null<xla::ifrt::IfrtArrayType>(type);
+  if (!array)
+    return {};
+  auto sharding = mlir::dyn_cast<xla::ifrt::IfrtShardingParamAttr>(array.getShardingAttr());
+  if (!sharding)
+    return {};
+  auto hlo = xla::ifrt::support::ToHloSharding(sharding.getSharding());
+  if (!hlo.ok())
+    return {};
+  return mlir::StringAttr::get(type.getContext(), hlo->ToString());
+}
+
+bool ifrtArrayRequiresGlobalExtents(mlir::Type type) {
+  auto array = mlir::dyn_cast_or_null<xla::ifrt::IfrtArrayType>(type);
+  if (!array)
+    return false;
+  auto sharding = mlir::dyn_cast<xla::ifrt::IfrtShardingParamAttr>(array.getShardingAttr());
+  if (!sharding)
+    return false;
+  auto dims = array.getShape().getShape();
+  auto shards = sharding.getSharding().dim_shards();
+  for (auto [dim, count] : llvm::zip(dims, shards))
+    if (mlir::ShapedType::isDynamic(dim) && count != 1)
+      return true;
+  return false;
+}
+
 bool isIfrtArrayType(mlir::Type type) {
   return llvm::isa<xla::ifrt::IfrtArrayType>(type);
 }
@@ -46,11 +98,28 @@ serializeIfrtCompileOptions(mlir::Operation *op) {
         "JIT preparation does not support external compile option overrides");
     return mlir::failure();
   }
+  if (call->hasAttr("reussir.disable_donation") &&
+      (!call->hasAttrOfType<mlir::UnitAttr>("reussir.disable_donation") ||
+       !call.getIoAliases().empty() || !call.getDonatedInputIndices().empty())) {
+    call.emitOpError("donation opt-out must be a unit attribute and cannot coexist with donation or alias contracts");
+    return mlir::failure();
+  }
   // Match IFRT's atom compiler: separate parameters, with sharding fixed by
   // the outlined kernel. Logical IDs are resolved when a client is available.
   auto options = xla::ifrt::GetDefaultCompileOptions(
       call, /*enable_sharding_propagation=*/false,
       /*enable_parameter_tupling=*/false);
+  if (auto level = call->getAttrOfType<mlir::IntegerAttr>("reussir.backend_optimization_level")) {
+    auto value = level.getInt();
+    if (value < 0 || value > 3) {
+      call.emitOpError("backend optimization level must be in [0, 3]");
+      return mlir::failure();
+    }
+    options.executable_build_options.mutable_debug_options()->set_xla_backend_optimization_level(value);
+  } else if (call->hasAttr("reussir.backend_optimization_level")) {
+    call.emitOpError("backend optimization level must be an integer attribute");
+    return mlir::failure();
+  }
   auto proto = options.ToProto();
   if (!proto.ok()) {
     call.emitOpError("cannot serialize PJRT compile options: ")

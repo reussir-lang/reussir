@@ -402,6 +402,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 default_cap: DefaultCap::Shared,
                 repr_fixed: false,
                 placement: None,
+                launch: None,
                 ffi: None,
                 fields: Some(RecordFields::Named(vec![(
                     field,

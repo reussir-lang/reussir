@@ -15,6 +15,7 @@ pub mod full;
 pub mod intrinsic;
 /// The shared logos lexer for the textual IR (both the MIR and HIR grammars).
 pub mod ir_lex;
+pub mod launch;
 /// Arbitrary-precision numeric literals, carried exact through HIR/MIR and
 /// rounded to the target format exactly once.
 pub mod literal;

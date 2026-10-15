@@ -1,0 +1,24 @@
+// REQUIRES: ifrt
+// RUN: %rrc --package-root %S/Inputs/kernel_launch_dep --package-name dep --emit rri -o %t.rri
+// RUN: %FileCheck %s --check-prefix=RRI < %t.rri
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.hir.round
+// RUN: diff %t.hir %t.hir.round
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.mir.round
+// RUN: diff %t.mir %t.mir.round
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %rrc %t.mir --emit mlir-llvm -O aggressive -o %t.llvm
+import dep::identity as kernel;
+pub fn imported(x: DevArray<f32>) -> DevArray<f32, dep::Config> {
+    launch<dep::Config>(kernel<f32>, x)
+}
+pub fn concrete(x: DevArray<[f32; 4]>) -> DevArray<[f32; 4]> { launch(dep::concrete, x) }
+pub fn host_generic(x: DevArray<u64>) -> DevArray<u64, dep::Config> { dep::generic_launch(x) }
+// RRI: launch "optimization=1,donation=none"
+// RRI: fn #dep::concrete
+// RRI: #dep::private_helper
+// CHECK: module @_reussir_launch_
+// CHECK: ifrt.Call
+// CHECK: reussir.backend_optimization_level = 1 : i32

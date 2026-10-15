@@ -1,0 +1,14 @@
+// RUN: not %rrc %s --emit hir -o /dev/null 2>&1 | %FileCheck %s
+#[placement(devices = "0")]
+#[launch(backend_optimization_level = "9", donation = "force", view = "local", compile_options = "raw")]
+struct [value] Bad {}
+#[launch(donation = "none")]
+struct [value] MissingPlacement {}
+#[launch(donation = "none")]
+fn misplaced() {}
+// CHECK-DAG: backend optimization level must be 0, 1, 2, or 3
+// CHECK-DAG: donation must be auto or none
+// CHECK-DAG: launch supports global view only
+// CHECK-DAG: unknown launch option `compile_options`
+// CHECK-DAG: `#[launch]` requires a #[placement] marker
+// CHECK-DAG: `#[launch]` requires a placement marker struct

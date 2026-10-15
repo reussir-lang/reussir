@@ -202,6 +202,28 @@ pub fn array_with_target<'c>(
     }
 }
 
+/// Create an exact IFRT view type for a target-annotated device descriptor.
+pub fn ifrt_array<'c>(array: Type<'c>) -> Option<Type<'c>> {
+    unsafe {
+        let raw = sys::reussirArrayTypeGetIfrtType(array.to_raw());
+        (!raw.ptr.is_null()).then(|| Type::from_raw(raw))
+    }
+}
+
+pub fn ifrt_devices<'c>(array: Type<'c>) -> Option<melior::ir::Attribute<'c>> {
+    unsafe {
+        let raw = sys::reussirIfrtArrayGetDevices(array.to_raw());
+        (!raw.ptr.is_null()).then(|| melior::ir::Attribute::from_raw(raw))
+    }
+}
+
+pub fn ifrt_hlo_sharding<'c>(array: Type<'c>) -> Option<melior::ir::Attribute<'c>> {
+    unsafe {
+        let raw = sys::reussirIfrtArrayGetHloSharding(array.to_raw());
+        (!raw.ptr.is_null()).then(|| melior::ir::Attribute::from_raw(raw))
+    }
+}
+
 /// Creates a `!reussir.array<shape x element>` type.
 pub fn array<'c>(shape: &[i64], element: Type<'c>) -> Type<'c> {
     unsafe {
@@ -319,4 +341,9 @@ pub fn record_complete_in_place(
             fixed,
         );
     }
+}
+
+/// Whether a partitioned dynamic result requires an explicit logical shape.
+pub fn ifrt_requires_global_extents(array: Type<'_>) -> bool {
+    unsafe { sys::reussirIfrtArrayRequiresGlobalExtents(array.to_raw()) }
 }

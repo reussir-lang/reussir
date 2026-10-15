@@ -131,6 +131,12 @@ MlirType reussirClosureBoxTypeGet(MlirContext context, intptr_t nPayloads,
 
 /// Checked construction of a device array. The shape uses MLIR's dynamic
 /// sentinel.
+/// Exact IFRT view of a target-annotated Reussir array; null without OpenXLA.
+MLIR_CAPI_EXPORTED MlirType reussirArrayTypeGetIfrtType(MlirType array);
+MLIR_CAPI_EXPORTED MlirAttribute reussirIfrtArrayGetDevices(MlirType array);
+MLIR_CAPI_EXPORTED MlirAttribute reussirIfrtArrayGetHloSharding(MlirType array);
+MLIR_CAPI_EXPORTED bool reussirIfrtArrayRequiresGlobalExtents(MlirType array);
+
 MLIR_CAPI_EXPORTED MlirType reussirArrayTypeGetWithTarget(intptr_t nDims,
                                                           int64_t const *shape,
                                                           MlirType elementType,

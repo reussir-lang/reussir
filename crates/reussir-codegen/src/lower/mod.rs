@@ -53,6 +53,7 @@
 mod debug;
 mod expr;
 mod kernel;
+mod launch;
 mod math;
 mod ty;
 
@@ -420,12 +421,40 @@ pub fn lower_unit<'c, 'tcx>(
         ));
     }
     let kernel_lowerer = kernel::KernelLowerer::new(context, tcx, program, source);
+    let mut launches = Vec::new();
+    let mut launch_ids = rustc_hash::FxHashSet::default();
+    for function in &program.functions {
+        if let Some(body) = function.body {
+            mir::for_each_expr(body, &mut |expr| {
+                if matches!(expr.kind, mir::ExprKind::Launch { .. }) && launch_ids.insert(expr.id) {
+                    launches.push((function, expr));
+                }
+            });
+        }
+    }
+    for (function, expr) in &launches {
+        if function.is_kernel {
+            return err("launch is a host-only operation");
+        }
+        if unit.is_home(program.symbol(function.symbol)) {
+            body.append_operation(launch::outline(
+                context,
+                &kernel_lowerer,
+                &lowerer.tys,
+                expr,
+            )?);
+        }
+    }
     for func in &program.functions {
-        body.append_operation(if func.is_kernel {
-            kernel_lowerer.function(func, unit)?
+        if func.is_kernel {
+            // A host launch owns a self-contained device compilation unit.
+            // Standalone kernel MLIR remains inspectable when no launch exists.
+            if launches.is_empty() {
+                body.append_operation(kernel_lowerer.function(func, unit)?);
+            }
         } else {
-            lowerer.function(func)?
-        });
+            body.append_operation(lowerer.function(func)?);
+        }
     }
     for t in &program.trampolines {
         // A trampoline is a body-carrying wrapper: it belongs to its target's

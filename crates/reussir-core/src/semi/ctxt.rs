@@ -193,6 +193,7 @@ pub struct Record<'tcx> {
     pub repr_fixed: bool,
     /// Compile-time target descriptor for a named zero-field placement marker.
     pub placement: Option<String>,
+    pub launch: Option<crate::launch::LaunchConfig>,
     /// `#[ffi(rust = "path")]`: the Rust type path this opaque record
     /// aliases. Set exactly when `fields` is [`RecordFields::Opaque`].
     pub ffi: Option<String>,
@@ -1945,9 +1946,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                         "`#[placement]` requires a zero-field `[value]` struct",
                     );
                 }
+                if !matches!(stmt.kind(), surface::StmtKind::Record(_))
+                    && attrs.iter().any(|a| self.sym(a.name) == "launch")
+                {
+                    self.error(span, "`#[launch]` requires a placement marker struct");
+                }
                 match stmt.kind() {
                     surface::StmtKind::Record(mut rec) => {
                         rec.placement = self.placement_attr(&attrs, &rec);
+                        rec.launch = self.launch_attr(&attrs, &rec);
                         self.validate_transform_anchor(&attrs, None);
                         let ffi = self.validate_ffi_record(&rec, ffi, span);
                         let lang = self.lang_attr(&attrs, span);
@@ -2568,6 +2575,56 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         true
     }
 
+    fn launch_attr(
+        &mut self,
+        attrs: &[surface::Attribute],
+        rec: &surface::Record,
+    ) -> Option<crate::launch::LaunchConfig> {
+        let mut result = None;
+        for attr in attrs
+            .iter()
+            .filter(|a| self.sym(a.name) == "launch")
+            .cloned()
+            .collect::<Vec<_>>()
+        {
+            if result.is_some() {
+                self.error(Some(attr.span), "duplicate `#[launch]` attribute");
+            }
+            if rec.placement.is_none() {
+                self.error(
+                    Some(attr.span),
+                    "`#[launch]` requires a #[placement] marker",
+                );
+            }
+            if !attr.args.is_empty() || !attr.literals.is_empty() {
+                self.error(
+                    Some(attr.span),
+                    "launch options must be named string values",
+                );
+            }
+            let mut config = crate::launch::LaunchConfig::default();
+            let mut seen = std::collections::BTreeSet::new();
+            for (key, value) in &attr.values {
+                let key = self.sym(*key).to_owned();
+                if !seen.insert(key.clone()) {
+                    self.error(Some(attr.span), format!("duplicate launch option `{key}`"));
+                }
+                match (key.as_str(), value.as_str()) {
+                    ("backend_optimization_level", "0" | "1" | "2" | "3") => config.backend_optimization_level = value.parse().ok(),
+                    ("backend_optimization_level", _) => self.error(Some(attr.span), "backend optimization level must be 0, 1, 2, or 3"),
+                    ("donation", "auto") => config.disable_donation = false,
+                    ("donation", "none") => config.disable_donation = true,
+                    ("donation", _) => self.error(Some(attr.span), "donation must be auto or none"),
+                    ("view", "global") => {},
+                    ("view", _) => self.error(Some(attr.span), "launch supports global view only; local-view execution requires different global/local shape mapping"),
+                    _ => self.error(Some(attr.span), format!("unknown launch option `{key}`")),
+                }
+            }
+            result = Some(config);
+        }
+        result
+    }
+
     fn placement_attr(
         &mut self,
         attrs: &[surface::Attribute],
@@ -2719,6 +2776,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             default_cap,
             repr_fixed,
             placement: rec.placement.clone(),
+            launch: rec.launch,
             ffi,
             fields: None,
             regional_generics: Vec::new(),

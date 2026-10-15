@@ -59,12 +59,15 @@ Span: raw::Span = "[" <s:"int"> ".." <e:"int"> "]" => (raw::small_u32(&s), raw::
 /// An item's source location: its file-table id and its span.
 ItemLoc: (u32, Option<raw::Span>) = "in" <f:"int"> <sp:Span?> => (raw::small_u32(&f), sp);
 
+LaunchConfig: crate::launch::LaunchConfig = "launch" <l:@L> <s:"quoted"> <r:@R>
+    =>? crate::launch::LaunchConfig::parse(&unescape_debug_str(s)).map_err(|_| lalrpop_util::ParseError::User { error: LexError { span: l..r } });
+
 RecordDecl: raw::Record = {
-    <lang:LangAttr?> <placement:("placement" <"quoted">)?> <p:"pub"?> <default_cap:DefaultCap> "struct" "#" <path:QPath> <generics:Generics?> <loc:ItemLoc?>
+    <lang:LangAttr?> <placement:("placement" <"quoted">)?> <launch:LaunchConfig?> <p:"pub"?> <default_cap:DefaultCap> "struct" "#" <path:QPath> <generics:Generics?> <loc:ItemLoc?>
     "{" <ms:Comma<Member>> "}" ";"
     => raw::Record {
         lang,
-        placement: placement.map(|p| unescape_debug_str(p).into_owned()),
+        placement: placement.map(|p| unescape_debug_str(p).into_owned()), launch,
         is_pub: p.is_some(),
         default_cap,
         repr_fixed: false,
@@ -76,11 +79,11 @@ RecordDecl: raw::Record = {
         body: raw::RecordBody::Compound(ms),
     },
     // An opaque `#[ffi]` record: `[shared] struct #Vec<$0> { ffi "path" };`.
-    <lang:LangAttr?> <placement:("placement" <"quoted">)?> <p:"pub"?> <default_cap:DefaultCap> "struct" "#" <path:QPath> <generics:Generics?> <loc:ItemLoc?>
+    <lang:LangAttr?> <placement:("placement" <"quoted">)?> <launch:LaunchConfig?> <p:"pub"?> <default_cap:DefaultCap> "struct" "#" <path:QPath> <generics:Generics?> <loc:ItemLoc?>
     "{" "ffi" <rust:"quoted"> "}" ";"
     => raw::Record {
         lang,
-        placement: placement.map(|p| unescape_debug_str(p).into_owned()),
+        placement: placement.map(|p| unescape_debug_str(p).into_owned()), launch,
         is_pub: p.is_some(),
         default_cap,
         repr_fixed: false,
@@ -92,11 +95,11 @@ RecordDecl: raw::Record = {
         body: raw::RecordBody::Opaque(unescape_debug_str(rust).into_owned()),
     },
     // Only an enum may carry the `fixed` marker (`#[repr(fixed)]`).
-    <lang:LangAttr?> <placement:("placement" <"quoted">)?> <p:"pub"?> <default_cap:DefaultCap> "enum" <fixed:"fixed"?> "#" <path:QPath> <generics:Generics?> <loc:ItemLoc?>
+    <lang:LangAttr?> <placement:("placement" <"quoted">)?> <launch:LaunchConfig?> <p:"pub"?> <default_cap:DefaultCap> "enum" <fixed:"fixed"?> "#" <path:QPath> <generics:Generics?> <loc:ItemLoc?>
     "{" <vs:Comma<Variant>> "}" ";"
     => raw::Record {
         lang,
-        placement: placement.map(|p| unescape_debug_str(p).into_owned()),
+        placement: placement.map(|p| unescape_debug_str(p).into_owned()), launch,
         is_pub: p.is_some(),
         default_cap,
         repr_fixed: fixed.is_some(),
@@ -301,6 +304,7 @@ BoundItem: Bound = <first:Name> <rest:("::" <Name>)*> => {
 Name: &'input str = {
     "while" => "while",
     "async" => "async",
+    "launch" => "launch",
     <name:"ident"> => name,
     "lang" => "lang",
     "sealed" => "sealed",
@@ -494,6 +498,8 @@ Atom: raw::Kind = {
         => raw::Kind::Proj(base, idxs.iter().map(raw::small_u32).collect()),
     "assign" "(" <dst:Expr> "," <field:"int"> "," <src:Expr> ")"
         => raw::Kind::Assign(dst, raw::small_u32(&field), src),
+    "launch" "(" "#" <path:PathArgs> <args:("," <Expr>)*> ")"
+        => raw::Kind::Launch { path: path.0, ty_args: path.1, args },
     <r:"regional"?> "#" <path:PathArgs> "(" <args:Comma<Expr>> ")"
         => raw::Kind::FuncCall { regional: r.is_some(), path: path.0, ty_args: path.1, args },
     "trait" "#" <path:PathArgs> "#" <m:"int"> "(" <args:Comma<Expr>> ")"
@@ -649,6 +655,7 @@ extern {
         "unreachable" => Token::Unreachable,
         "region" => Token::Region,
         "async" => Token::Async,
+        "launch" => Token::Launch,
         "as" => Token::As,
         "closure" => Token::Closure,
         "apply" => Token::Apply,

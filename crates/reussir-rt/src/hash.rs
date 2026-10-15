@@ -32,8 +32,7 @@ fn le_u64(bytes: &[u8]) -> u64 {
 /// the byte length last — so a zero-padded tail cannot collide with the
 /// longer input it pads to.
 pub fn fx_write_bytes(state: u64, bytes: &[u8]) -> u64 {
-    let mix =
-        |state: u64, value: u64| (state.rotate_left(5) ^ value).wrapping_mul(FX_MULTIPLE);
+    let mix = |state: u64, value: u64| (state.rotate_left(5) ^ value).wrapping_mul(FX_MULTIPLE);
     let mut state = state;
     let mut rest = bytes;
     while rest.len() >= 8 {
@@ -59,7 +58,9 @@ fn read_small(bytes: &[u8]) -> (u64, u64) {
             u64::from(bytes[bytes.len() - 1]),
         ),
         len => (
-            u64::from(u32::from_le_bytes(bytes[..4].try_into().expect("four bytes"))),
+            u64::from(u32::from_le_bytes(
+                bytes[..4].try_into().expect("four bytes"),
+            )),
             u64::from(u32::from_le_bytes(
                 bytes[len - 4..].try_into().expect("four bytes"),
             )),
@@ -110,8 +111,7 @@ mod tests {
     // Reference spelling of the Fx protocol, word by word, to pin the
     // chunk walk in `fx_write_bytes`.
     fn fx_reference(state: u64, bytes: &[u8]) -> u64 {
-        let mix =
-            |s: u64, v: u64| (s.rotate_left(5) ^ v).wrapping_mul(FX_MULTIPLE);
+        let mix = |s: u64, v: u64| (s.rotate_left(5) ^ v).wrapping_mul(FX_MULTIPLE);
         let mut state = state;
         let words = bytes.len() / 8;
         for w in 0..words {

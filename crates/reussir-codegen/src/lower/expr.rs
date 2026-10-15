@@ -480,6 +480,12 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 StringAttribute::new(self.context, "private").into(),
             ));
         }
+        if func.body.is_some_and(super::launch::contains_launch) {
+            attributes.push((
+                Identifier::new(self.context, "ifrt.function"),
+                Attribute::unit(self.context),
+            ));
+        }
         // Sanitizer attributes ride the `llvm.passthrough` attribute
         // FuncToLLVM folds into the `llvm.func`'s inherent `passthrough`;
         // LLVM's sanitizer passes only instrument plain memory accesses in
@@ -939,6 +945,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 }
                 Ok(None)
             }
+            Launch { callee: _, args } => self.launch(block, env, e, args).map(Some),
             Call {
                 callee,
                 args,
@@ -2423,6 +2430,132 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             cursor = self.project_one(block, cursor, idx)?;
         }
         self.load_cursor(block, cursor)
+    }
+
+    fn launch<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        expr: &Expr<'tcx>,
+        args: &[Expr<'tcx>],
+    ) -> Result<Value<'c, 'b>> {
+        use reussir_backend::dialect::ty::{ifrt_array, ifrt_devices};
+        use reussir_backend::melior::ir::attribute::DenseI32ArrayAttribute;
+        use reussir_backend::melior::ir::operation::OperationBuilder;
+        let result = self.tys.mlir_ty(expr.ty)?;
+        let output = ifrt_array(self.tys.devarray_inner_of(expr.ty)?)
+            .ok_or_else(|| LoweringError("kernel launch requires REUSSIR_ENABLE_OPENXLA".into()))?;
+        let control = Type::parse(self.context, "!ifrt.control")
+            .ok_or_else(|| LoweringError("IFRT control type is unavailable".into()))?;
+        let devices =
+            ifrt_devices(output).ok_or_else(|| LoweringError("invalid launch placement".into()))?;
+        let mut operands = Vec::new();
+        for arg in args {
+            let value = self.expr(block, env, arg)?;
+            if let Some(value) = value {
+                self.remember_temp(env, arg, value);
+            }
+            self.launch_operand(block, value, arg.ty, &mut operands)?;
+        }
+        let callee = Attribute::parse(
+            self.context,
+            &format!("@{}::@main", super::launch::name(expr)),
+        )
+        .ok_or_else(|| LoweringError("invalid outlined kernel symbol".into()))?;
+        let mut attrs = vec![
+            (Identifier::new(self.context, "callee"), callee),
+            (Identifier::new(self.context, "devices"), devices),
+            (
+                Identifier::new(self.context, "operandSegmentSizes"),
+                DenseI32ArrayAttribute::new(self.context, &[operands.len() as i32, 0]).into(),
+            ),
+            (
+                Identifier::new(self.context, "donated_input_indices"),
+                DenseI32ArrayAttribute::new(self.context, &[]).into(),
+            ),
+            (
+                Identifier::new(self.context, "io_aliases"),
+                ArrayAttribute::new(self.context, &[]).into(),
+            ),
+        ];
+        if let TyKind::DevArray { placement, .. } = expr.ty.kind()
+            && let Some(config) = self.tys.record_of(*placement).and_then(|r| r.launch)
+        {
+            if let Some(level) = config.backend_optimization_level {
+                attrs.push((
+                    Identifier::new(self.context, "reussir.backend_optimization_level"),
+                    IntegerAttribute::new(IntegerType::new(self.context, 32).into(), level as i64)
+                        .into(),
+                ));
+            }
+            if config.disable_donation {
+                attrs.push((
+                    Identifier::new(self.context, "reussir.disable_donation"),
+                    Attribute::unit(self.context),
+                ));
+            }
+        }
+        let call = OperationBuilder::new("ifrt.Call", self.loc())
+            .add_operands(&operands)
+            .add_results(&[output, control])
+            .add_attributes(&attrs)
+            .build()
+            .map_err(|e| LoweringError(e.to_string().into()))?;
+        let output = self.append(block, call);
+        let own = OperationBuilder::new("reussir.array.from_ifrt", self.loc())
+            .add_operands(&[output])
+            .add_results(&[result])
+            .add_attributes(&[(
+                Identifier::new(self.context, "operandSegmentSizes"),
+                DenseI32ArrayAttribute::new(self.context, &[1, 0, 0]).into(),
+            )])
+            .build()
+            .map_err(|e| LoweringError(e.to_string().into()))?;
+        Ok(self.append(block, own))
+    }
+
+    fn launch_operand<'b>(
+        &self,
+        block: &'b Block<'c>,
+        value: Option<Value<'c, 'b>>,
+        ty: Ty<'tcx>,
+        out: &mut Vec<Value<'c, 'b>>,
+    ) -> Result<()> {
+        use reussir_backend::melior::ir::operation::OperationBuilder;
+        match ty.kind() {
+            TyKind::Unit => Ok(()),
+            TyKind::Tuple(fields) => {
+                let value = value
+                    .ok_or_else(|| LoweringError("tuple launch operand has no value".into()))?;
+                for (index, &field) in fields.iter().enumerate() {
+                    if is_unit(field) {
+                        continue;
+                    }
+                    let cursor =
+                        self.project_one(block, Cursor::Value { val: value, ty }, index as u32)?;
+                    let field_value = self.load_cursor(block, cursor)?;
+                    self.launch_operand(block, Some(field_value), field, out)?;
+                }
+                Ok(())
+            }
+            TyKind::DevArray { .. } => {
+                let value = value
+                    .ok_or_else(|| LoweringError("device launch operand has no value".into()))?;
+                let view =
+                    reussir_backend::dialect::ty::ifrt_array(self.tys.devarray_inner_of(ty)?)
+                        .ok_or_else(|| {
+                            LoweringError("kernel launch requires REUSSIR_ENABLE_OPENXLA".into())
+                        })?;
+                let op = OperationBuilder::new("reussir.array.to_ifrt", self.loc())
+                    .add_operands(&[value])
+                    .add_results(&[view])
+                    .build()
+                    .map_err(|e| LoweringError(e.to_string().into()))?;
+                out.push(self.append(block, op));
+                Ok(())
+            }
+            _ => err("launch operands must be DevArray buffers, tuples of buffers, or unit"),
+        }
     }
 
     /// Advance the projection [`Cursor`] by one field index.
