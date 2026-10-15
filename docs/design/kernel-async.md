@@ -100,10 +100,14 @@ collective producers in `async_start`; it rejects slices even though the pinned
 StableHLO verifier permits them. It also requires an `async_done` operand to be
 defined directly by `async_start`, so Future values passed through helper calls
 remain valid compiler/StableHLO IR but are not accepted by this importer.
-The existing MLIR inliner (`reussir-opt --inline --symbol-dce`) resolves ordinary
-kernel helper calls, including `Future.done`, before PJRT import. Source MLIR
-retains those calls until that preparation step; the compiler does not invent a
-second completion intrinsic or special-case the method body.
+Codegen always inlines straight-line wrappers containing one intrinsic,
+including the ordinary `Future.done` member, before emitting MLIR. This does not
+require an optimization level or an extra pass. Arguments are evaluated once in
+source order; the callee keeps its own variable and ownership frame. Calls,
+control flow, closures, regional functions, and explicit transform anchors are
+outside this simple-wrapper rule. More complex kernel helpers still use the
+existing MLIR inliner (`reussir-opt --inline --symbol-dce`) before PJRT import.
+No second completion intrinsic or method-name special case is introduced.
 
 The StableHLO specification and pinned verifier do not prohibit repeated
 `async_done` uses. The current [XLA async contract](https://openxla.org/xla/async_ops)

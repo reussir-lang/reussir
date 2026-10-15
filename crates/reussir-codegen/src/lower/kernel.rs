@@ -418,9 +418,18 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
                         e.span,
                     ));
                 }
+                if args.len() != function.params.len() {
+                    return Err(self.error(
+                        "kernel call argument count does not match its signature",
+                        e.span,
+                    ));
+                }
                 let mut values = Vec::new();
+                let mut arguments = Vec::with_capacity(args.len());
                 for arg in args {
-                    values.extend(self.expr(block, env, arg)?);
+                    let argument = self.expr(block, env, arg)?;
+                    values.extend(argument.iter().copied());
+                    arguments.push(argument);
                 }
                 let inputs = function
                     .params
@@ -432,6 +441,23 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
                     .collect::<Vec<_>>();
                 self.check_values(&values, &inputs, e.span)?;
                 let results = self.types(function.return_ty)?;
+                if let Some(body) = super::intrinsic_wrapper_body(function) {
+                    // Evaluate actual arguments once in source order, then bind
+                    // the resulting SSA values in an isolated callee frame.
+                    // This also preserves tuple/unit flattening across calls.
+                    let mut frame = KernelEnv::new();
+                    for (parameter, argument) in function.params.iter().zip(arguments) {
+                        self.check_values(&argument, &self.types(parameter.ty)?, e.span)?;
+                        frame.vars.insert(parameter.var, argument);
+                    }
+                    let saved_file = self.file.replace(function.file);
+                    let result = self.expr(block, &mut frame, body);
+                    self.file.set(saved_file);
+                    let values = result?;
+                    self.check_values(&values, &results, e.span)?;
+                    self.check_values(&values, &self.types(e.ty)?, e.span)?;
+                    return Ok(values);
+                }
                 let op = block.append_operation(func::call(
                     self.context,
                     reussir_backend::melior::ir::attribute::FlatSymbolRefAttribute::new(

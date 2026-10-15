@@ -2,7 +2,7 @@
 // RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
 // RUN: %rrc %s --package-name app --extern core=%t.core.rri --emit mlir --no-source-locations -o %t.mlir
 // RUN: %FileCheck %s --check-prefix=METHOD < %t.mlir
-// RUN: sed 's/@_RNvC3app3run(/@main(/' %t.mlir | %reussir-opt --inline --symbol-dce --emit-bytecode -o %t.bc
+// RUN: sed 's/@_RNvC3app3run(/@main(/' %t.mlir | %reussir-opt --emit-bytecode -o %t.bc
 // RUN: pjrt_test_blake3=$(ls -t "%pjrt_runtime_dir"/deps/libblake3-*.rlib | head -n 1) && %rustc_path --edition=2024 -C prefer-dynamic %S/Inputs/kernel_async_execute.rs --extern blake3="$pjrt_test_blake3" --extern blake3="${pjrt_test_blake3%.rlib}.rmeta" -L "%pjrt_runtime_dir/deps" -L native="%pjrt_runtime_dir" -l dylib=reussir_rt -o %t.exe
 // RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc
 // RUN: rm -rf %t.cache
@@ -20,4 +20,4 @@ pub fn run(x: Tensor<[f32; 8]>) -> (Tensor<[f32; 8]>, Tensor<[f32; 8]>) {
 
 // The normal public generic core method is a private instantiated helper.
 // METHOD-DAG: func.func private @_RI{{.*}}6Future4done
-// METHOD-DAG: call @_RI{{.*}}6Future4done
+// METHOD-NOT: call @_RI{{.*}}6Future4done
