@@ -14,7 +14,7 @@ pub fn dynamic(x: DevArray<[u32; ?, 0, 4]>) -> DevArray<[u32; ?, 0, 4]> { x }
 pub fn large(x: DevArray<[f64; 65536, 65536]>) -> DevArray<[f64; 65536, 65536]> { x }
 
 // CHECK-DAG: !reussir.array<f32, #reussir.target<devices = [0]>>
-// CHECK-DAG: !reussir.array<? x 0 x 4 x i32, #reussir.target<devices = [0]>>
+// CHECK-DAG: !reussir.array<? x 0 x 4 x ui32, #reussir.target<devices = [0]>>
 // CHECK-DAG: !reussir.array<65536 x 65536 x f64, #reussir.target<devices = [0]>>
 // LLVM-DAG: llvm.func @_RC6scalar
 // LLVM-DAG: llvm.func @_RC7dynamic

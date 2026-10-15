@@ -610,7 +610,15 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
                 }
             })
             .collect::<Result<Vec<_>>>()?;
-        array_with_target(&shape, scalar_ty(self.context, elem)?, target)
+        // PJRT distinguishes signed and unsigned buffers. Host integer SSA is
+        // signless, but a device descriptor must retain the kernel element type.
+        let element = if let TyKind::Int(IntTy::Unsigned(width)) = elem.kind() {
+            Type::parse(self.context, &format!("ui{width}"))
+                .ok_or_else(|| LoweringError("invalid unsigned device element type".into()))?
+        } else {
+            scalar_ty(self.context, elem)?
+        };
+        array_with_target(&shape, element, target)
             .ok_or_else(|| LoweringError("invalid device array target or shape".into()))
     }
 
