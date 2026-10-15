@@ -1,0 +1,7 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+// CHECK-DAG: unknown lang item `future`
+// CHECK-DAG: unknown lang item `token`
+#[lang("future")]
+pub struct HostFuture<T> {}
+#[lang("token")]
+pub struct HostToken {}

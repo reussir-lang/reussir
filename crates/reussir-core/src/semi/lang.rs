@@ -82,8 +82,8 @@ impl IntrinsicItem {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum FormerItem {
     Tensor,
-    Future,
-    Token,
+    TensorFuture,
+    TensorToken,
     Arc,
     Nullable,
     DevArray,
@@ -100,8 +100,8 @@ pub enum FormerItem {
 impl FormerItem {
     pub const ALL: [FormerItem; 13] = [
         FormerItem::Tensor,
-        FormerItem::Future,
-        FormerItem::Token,
+        FormerItem::TensorFuture,
+        FormerItem::TensorToken,
         FormerItem::Arc,
         FormerItem::Nullable,
         FormerItem::DevArray,
@@ -119,7 +119,7 @@ impl FormerItem {
     pub fn arity(self) -> usize {
         match self {
             FormerItem::DevArray => 2,
-            FormerItem::DefaultPlacement | FormerItem::Token => 0,
+            FormerItem::DefaultPlacement | FormerItem::TensorToken => 0,
             _ => 1,
         }
     }
@@ -127,8 +127,8 @@ impl FormerItem {
     pub fn name(self) -> &'static str {
         match self {
             FormerItem::Tensor => "tensor",
-            FormerItem::Future => "future",
-            FormerItem::Token => "token",
+            FormerItem::TensorFuture => "tensor_future",
+            FormerItem::TensorToken => "tensor_token",
             FormerItem::Arc => "arc",
             FormerItem::Nullable => "nullable",
             FormerItem::DevArray => "dev_array",
@@ -414,5 +414,28 @@ impl LangItems {
 
     pub(crate) fn truncate(&mut self, len: usize) {
         self.declared.truncate(len);
+    }
+}
+
+#[cfg(test)]
+mod async_former_tests {
+    use super::{FormerItem, LangItem};
+
+    #[test]
+    fn tensor_async_formers_have_family_scoped_names() {
+        assert_eq!(FormerItem::TensorFuture.name(), "tensor_future");
+        assert_eq!(FormerItem::TensorToken.name(), "tensor_token");
+        assert_eq!(FormerItem::TensorFuture.arity(), 1);
+        assert_eq!(FormerItem::TensorToken.arity(), 0);
+        assert_eq!(
+            LangItem::from_name("tensor_future"),
+            Some(LangItem::Former(FormerItem::TensorFuture))
+        );
+        assert_eq!(
+            LangItem::from_name("tensor_token"),
+            Some(LangItem::Former(FormerItem::TensorToken))
+        );
+        assert_eq!(LangItem::from_name("future"), None);
+        assert_eq!(LangItem::from_name("token"), None);
     }
 }

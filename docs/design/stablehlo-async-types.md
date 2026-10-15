@@ -7,7 +7,9 @@ rank, static dimensions, and dynamic dimensions. Generic payload arguments
 are checked again after substitution. Scalars, tokens, nested futures, and
 host containers are not future payloads.
 
-The core declarations are intrinsic anchors, not runtime records. `Future<T>`
+The core declarations use the family-scoped language-item identifiers
+`tensor_future` and `tensor_token`; unqualified `future` and `token` are not
+recognized language items. These anchors are not runtime records. `Future<T>`
 anchors the minimum one payload; its compiler-provided former accepts further
 payload arguments. This does not add variadic generic records. Ordinary names
 may shadow the prelude names; the qualified intrinsic names and imported

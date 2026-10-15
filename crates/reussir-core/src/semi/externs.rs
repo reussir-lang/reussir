@@ -981,7 +981,7 @@ mod tests {
                 program: &program,
             }]);
             assert!(!elab.has_errors(), "{:#?}", elab.reports);
-            for former in [FormerItem::Future, FormerItem::Token] {
+            for former in [FormerItem::TensorFuture, FormerItem::TensorToken] {
                 let item = LangItem::Former(former);
                 let def = elab.lang.get(item).expect("async anchor reloaded");
                 assert!(elab.lang.is_former_anchor(def));

@@ -2399,9 +2399,9 @@ mod tests {
                 pub struct BadDevice<T> {}
                 #[lang("default_placement")]
                 pub struct BadPlacement<T> {}
-                #[lang("future")]
+                #[lang("tensor_future")]
                 pub struct BadFuture {}
-                #[lang("token")]
+                #[lang("tensor_token")]
                 pub struct BadToken<T> {}
             "#;
             let parse = reussir_syntax::parse_with_interner(src, interner.clone());
