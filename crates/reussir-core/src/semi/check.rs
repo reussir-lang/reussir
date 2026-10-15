@@ -3391,13 +3391,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         };
         match *family {
             "panic" => Some(self.infer_panic_intrinsic(fc, span)),
-            "math" => Some(self.infer_math_intrinsic(fc, span)),
-            "array" => Some(self.infer_array_intrinsic(fc, span)),
-            "pjrt" => Some(self.infer_pjrt_intrinsic(fc, span)),
-            "tensor" => Some(self.infer_tensor_intrinsic(fc, span)),
             "pjrt" if self.sym(fc.name.basename) == "launch" => {
                 Some(self.infer_launch_intrinsic(fc, span))
             }
+            "pjrt" => Some(self.infer_pjrt_intrinsic(fc, span)),
+            "math" => Some(self.infer_math_intrinsic(fc, span)),
+            "array" => Some(self.infer_array_intrinsic(fc, span)),
+            "tensor" => Some(self.infer_tensor_intrinsic(fc, span)),
             "cell" => Some(self.infer_cell_intrinsic(fc, span)),
             "str" => Some(self.infer_str_intrinsic(fc, span)),
             other => {
