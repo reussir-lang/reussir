@@ -291,12 +291,12 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     pub fn unify(&mut self, a: Ty<'tcx>, b: Ty<'tcx>) -> Result<(), Mismatch<'tcx>> {
         let a = self.shallow_resolve(a);
         let b = self.shallow_resolve(b);
-        let a = if matches!(a.kind(), TyKind::DevArray { dims, .. } if dims.is_empty()) {
+        let a = if matches!(a.kind(), TyKind::Tensor { dims, .. } | TyKind::DevArray { dims, .. } if dims.is_empty()) {
             self.resolve(a)
         } else {
             a
         };
-        let b = if matches!(b.kind(), TyKind::DevArray { dims, .. } if dims.is_empty()) {
+        let b = if matches!(b.kind(), TyKind::Tensor { dims, .. } | TyKind::DevArray { dims, .. } if dims.is_empty()) {
             self.resolve(b)
         } else {
             b
@@ -407,6 +407,30 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     self.unify(x, y)?;
                 }
                 Ok(())
+            }
+            (
+                TyKind::Tensor { elem, dims },
+                TyKind::Tensor {
+                    elem: other,
+                    dims: shape,
+                },
+            ) if dims.is_empty()
+                && !shape.is_empty()
+                && matches!(self.shallow_resolve(*elem).kind(), TyKind::Hole(_)) =>
+            {
+                self.unify(*elem, self.tcx.mk_array(*other, shape))
+            }
+            (
+                TyKind::Tensor {
+                    elem: other,
+                    dims: shape,
+                },
+                TyKind::Tensor { elem, dims },
+            ) if dims.is_empty()
+                && !shape.is_empty()
+                && matches!(self.shallow_resolve(*elem).kind(), TyKind::Hole(_)) =>
+            {
+                self.unify(*elem, self.tcx.mk_array(*other, shape))
             }
             (TyKind::Tensor { elem: e1, dims: d1 }, TyKind::Tensor { elem: e2, dims: d2 })
                 if d1 == d2 =>
@@ -642,6 +666,18 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 }
                 Ok(())
             }
+            (
+                TyKind::Tensor { elem, dims },
+                TyKind::Tensor {
+                    elem: other,
+                    dims: shape,
+                },
+            ) if dims.is_empty()
+                && !shape.is_empty()
+                && matches!(elem.kind(), TyKind::Generic(_) | TyKind::Hole(_)) =>
+            {
+                self.unify_instantiated(*elem, inst, self.tcx.mk_array(*other, shape))
+            }
             (TyKind::Tensor { elem: e1, dims: d1 }, TyKind::Tensor { elem: e2, dims: d2 })
                 if d1 == d2 =>
             {
@@ -748,6 +784,38 @@ mod tests {
     /// A distinct record `DefId` for tests (no resolution pass).
     fn def(n: u32) -> DefId {
         DefId(n)
+    }
+
+    #[test]
+    fn tensor_former_infers_and_canonicalizes_shape_arguments() {
+        with_tcx(|tcx| {
+            let mut infer = InferCtxt::new(tcx);
+            let argument = infer.new_hole_ty();
+            let former = tcx.mk_tensor(argument, &[]);
+            let ranked = tcx.mk_tensor(
+                tcx.mk_int(IntTy::Signed(32)),
+                &[crate::semi::ty::DYNAMIC_EXTENT, 0, 4],
+            );
+            infer.unify(former, ranked).unwrap();
+            assert_eq!(infer.resolve(former), ranked);
+            infer.unify(former, ranked).unwrap();
+            assert!(
+                infer
+                    .unify(tcx.mk_tensor(tcx.mk_int(IntTy::Signed(32)), &[]), ranked)
+                    .is_err()
+            );
+            let element = infer.new_hole_ty();
+            let fixed = tcx.mk_tensor(element, &[2, 3]);
+            infer
+                .unify(fixed, tcx.mk_tensor(tcx.mk_bool(), &[2, 3]))
+                .unwrap();
+            assert_eq!(infer.resolve(element), tcx.mk_bool());
+            assert!(
+                infer
+                    .unify(fixed, tcx.mk_tensor(tcx.mk_bool(), &[2, 4]))
+                    .is_err()
+            );
+        });
     }
 
     #[test]

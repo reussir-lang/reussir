@@ -413,6 +413,13 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     pub fn mk_tensor(&self, elem: Ty<'tcx>, dims: &[u64]) -> Ty<'tcx> {
+        // Tensor's single source argument can be a scalar or a shaped array.
+        // Reapply that former after a generic argument has been substituted.
+        if dims.is_empty()
+            && let TyKind::Array { elem, dims } = elem.kind()
+        {
+            return self.mk_tensor(*elem, dims);
+        }
         let dims = self.alloc_slice(dims);
         self.mk(TyKind::Tensor { elem, dims })
     }
