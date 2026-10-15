@@ -1,0 +1,51 @@
+// REQUIRES: stablehlo
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
+// RUN: diff %t.hir %t.round.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.mlir
+// RUN: %reussir-opt %t.mlir -o /dev/null
+// RUN: %FileCheck %s < %t.mlir
+import core::intrinsic::tensor;
+
+#[kernel]
+pub fn scalar_binding() -> Tensor<[f32; 2, 3]> {
+    let scalar = 1.0;
+    tensor::fill(scalar)
+}
+#[kernel]
+pub fn scalar_computation() -> Tensor<[f32; 2, 3]> {
+    tensor::fill(1.0 + 2.0)
+}
+#[kernel]
+pub fn later_iota_annotation() -> Tensor<[i32; 4]> {
+    let ramp = tensor::iota(0);
+    let typed: Tensor<[i32; 4]> = ramp;
+    typed
+}
+#[kernel]
+pub fn comparison_and_select(y: Tensor<[f32; 2, 3]>) -> Tensor<[f32; 2, 3]> {
+    let x = tensor::fill(1.0);
+    let greater = x > y;
+    tensor::select(greater, x, y)
+}
+#[kernel]
+fn filled<T, S>(value: S) -> Tensor<T> { tensor::fill(value) }
+#[kernel]
+fn ramp<T>() -> Tensor<T> { tensor::iota(0) }
+#[kernel]
+pub fn generic_helpers() -> (Tensor<[f32; 2, 3]>, Tensor<[i32; 4]>) {
+    (filled(1.0), ramp())
+}
+// CHECK-DAG: stablehlo.broadcast_in_dim
+// CHECK-DAG: stablehlo.iota
+// CHECK-DAG: stablehlo.compare
+// CHECK-DAG: stablehlo.select
+
+// Operations without new shape rules must retain the existing annotated path.
+#[kernel]
+pub fn legacy_dynamic_constructor(n: i64) -> Tensor<[f32; ?, 3]> {
+    tensor::dynamic_fill(1.0, (n, 3))
+}

@@ -151,6 +151,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     }
 
     fn mk_expr(&mut self, kind: ExprKind<'tcx>, ty: Ty<'tcx>, span: Option<Span>) -> Expr<'tcx> {
+        self.register_expression_relations(&kind, ty, span);
         let id = self.fresh_expr_id();
         Expr { kind, ty, span, id }
     }
@@ -333,7 +334,35 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 .collect();
             return self.checked_tuple(fields, Some(e.span()));
         }
-        let h = self.infer_expr(e);
+        // Checking information enters a block at its tail and both branches
+        // symmetrically. Inference variables shared with preceding bindings
+        // remain live until the enclosing function's constraints are solved.
+        let h = match e.kind() {
+            surface::ExprKind::FuncCallExpr(fc) => {
+                self.infer_func_call(&fc, Some(e.span()), Some(expected))
+            }
+            surface::ExprKind::ExprSeq(exprs) => {
+                self.infer_seq_expected(&exprs, Some(e.span()), Some(expected))
+            }
+            surface::ExprKind::If(c, t, Some(f)) => {
+                let c = self.check_condition(&c);
+                let t = self.check_expr(&t, expected);
+                let f = self.check_expr(&f, expected);
+                self.mk_expr(
+                    ExprKind::If(Box::new(c), Box::new(t), Box::new(f)),
+                    expected,
+                    Some(e.span()),
+                )
+            }
+            surface::ExprKind::While(bindings, condition, body) => self.infer_while_expected(
+                &bindings,
+                &condition,
+                &body,
+                Some(e.span()),
+                Some(expected),
+            ),
+            _ => self.infer_expr(e),
+        };
         self.expect(h.ty, expected, h.span);
         if self.inside_kernel {
             if let Some(reason) =
@@ -398,7 +427,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             surface::ExprKind::BinOpExpr(op, l, r) => self.infer_binop(*op, l, r, span),
             surface::ExprKind::UnaryOpExpr(op, e) => self.infer_unop(*op, e, span),
             surface::ExprKind::Cast(ty, e) => self.infer_cast(ty, e, span),
-            surface::ExprKind::FuncCallExpr(fc) => self.infer_func_call(fc, span),
+            surface::ExprKind::FuncCallExpr(fc) => self.infer_func_call(fc, span, None),
             surface::ExprKind::CtorCallExpr(cc) => self.infer_ctor_call(cc, span),
             surface::ExprKind::CallExpr(callee, args) => {
                 // `e.f(x)` is a postfix call: the method wins when one
@@ -455,6 +484,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// Register the obligation `ty : Trait<trait_id>` — a single-parameter bound,
     /// written `Trait ⊳ ty` in the rules — for the fulfillment pass to discharge.
     pub(super) fn register_bound(&mut self, trait_id: TraitId, ty: Ty<'tcx>, span: Option<Span>) {
+        if [self.lang.num, self.lang.integral, self.lang.floating_point].contains(&trait_id) {
+            self.fulfill.shapes.register_scalar(ty);
+        }
         self.fulfill.register(
             Obligation::Trait(TraitRef {
                 trait_id,
@@ -505,11 +537,23 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// (SEQ) `Γ ⊢ {e₁;…;eₙ} ⇒ (Seq[hᵢ] : Tₙ)`: synthesize each element in a scope
     /// marked on entry and restored on exit; an empty sequence has type `Unit`.
     fn infer_seq(&mut self, exprs: &[surface::Expr], span: Option<Span>) -> Expr<'tcx> {
+        self.infer_seq_expected(exprs, span, None)
+    }
+
+    fn infer_seq_expected(
+        &mut self,
+        exprs: &[surface::Expr],
+        span: Option<Span>,
+        expected: Option<Ty<'tcx>>,
+    ) -> Expr<'tcx> {
         let mark = self.vars.mark();
         let mut out = Vec::with_capacity(exprs.len());
         let mut ty = self.tcx.mk_unit();
-        for e in exprs {
-            let h = self.infer_expr(e);
+        for (index, e) in exprs.iter().enumerate() {
+            let h = match expected.filter(|_| index + 1 == exprs.len()) {
+                Some(t) => self.check_expr(e, t),
+                None => self.infer_expr(e),
+            };
             ty = h.ty;
             out.push(h);
         }
@@ -529,12 +573,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let bool_ty = self.tcx.mk_bool();
         if self.inside_kernel {
             let condition = self.infer_expr(c);
-            let ty = self.infer.shallow_resolve(condition.ty);
-            if !matches!(ty.kind(), TyKind::Tensor { elem, dims }
-                if dims.is_empty() && matches!(elem.kind(), TyKind::Bool))
-            {
-                self.expect(condition.ty, bool_ty, condition.span);
-            }
+            self.register_condition_relation(condition.ty, condition.span);
             condition
         } else {
             self.check_expr(c, bool_ty)
@@ -624,8 +663,40 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         body: &surface::Expr,
         span: Option<Span>,
     ) -> Expr<'tcx> {
-        // Evaluate all initializers before introducing any state names.
-        let initials: Vec<_> = bindings.iter().map(|(_, e)| self.infer_expr(e)).collect();
+        self.infer_while_expected(bindings, condition, body, span, None)
+    }
+
+    fn infer_while_expected(
+        &mut self,
+        bindings: &[(
+            surface::Spanned<reussir_syntax::kind::TokenKey>,
+            surface::Expr,
+        )],
+        condition: &surface::Expr,
+        body: &surface::Expr,
+        span: Option<Span>,
+        expected: Option<Ty<'tcx>>,
+    ) -> Expr<'tcx> {
+        // Evaluate all initializers before introducing any state names. The
+        // expected result constrains the same invariant used by both regions.
+        let fields = expected.and_then(|t| {
+            let t = self.infer.shallow_resolve(t);
+            if bindings.len() == 1 {
+                Some(vec![t])
+            } else if let TyKind::Tuple(ts) = t.kind() {
+                (ts.len() == bindings.len()).then(|| ts.to_vec())
+            } else {
+                None
+            }
+        });
+        let initials: Vec<_> = bindings
+            .iter()
+            .enumerate()
+            .map(|(i, (_, e))| match fields.as_ref() {
+                Some(ts) => self.check_expr(e, ts[i]),
+                None => self.infer_expr(e),
+            })
+            .collect();
         let field_types: Vec<_> = initials.iter().map(|e| e.ty).collect();
         let initial = if initials.len() == 1 {
             initials.into_iter().next().unwrap()
@@ -877,7 +948,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                 let l = self.infer_expr(l);
                 let ty = l.ty;
-                if matches!(self.infer.resolve(ty).kind(), TyKind::Tensor { .. }) {
+                if self.infer.tensor_view(ty).is_some() {
                     let r = self.check_expr(r, ty);
                     let top = match op {
                         BinOp::Add => crate::intrinsic::TensorFn::Add,
@@ -886,17 +957,29 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                         BinOp::Div => crate::intrinsic::TensorFn::Div,
                         _ => crate::intrinsic::TensorFn::Rem,
                     };
-                    return self.mk_expr(
-                        ExprKind::TensorOp {
-                            op: top,
-                            args: vec![l, r],
-                        },
+                    let args = vec![l, r];
+
+                    return self.mk_expr(ExprKind::TensorOp { op: top, args }, ty, span);
+                }
+                let r = self.check_expr(r, ty);
+                if self.inside_kernel {
+                    let tensor_op = match op {
+                        BinOp::Add => crate::intrinsic::TensorFn::Add,
+                        BinOp::Sub => crate::intrinsic::TensorFn::Sub,
+                        BinOp::Mul => crate::intrinsic::TensorFn::Mul,
+                        BinOp::Div => crate::intrinsic::TensorFn::Div,
+                        _ => crate::intrinsic::TensorFn::Rem,
+                    };
+                    self.register_operator_relation(
+                        tensor_op,
+                        Some(self.lang.num),
                         ty,
+                        &[l.clone(), r.clone()],
                         span,
                     );
+                } else {
+                    self.register_bound(self.lang.num, ty, span);
                 }
-                self.register_bound(self.lang.num, ty, span);
-                let r = self.check_expr(r, ty);
                 let aop = arith_op(op);
                 self.mk_expr(ExprKind::Arith(Box::new(l), aop, Box::new(r)), ty, span)
             }
@@ -938,7 +1021,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             _ => {
                 let l = self.infer_expr(l);
                 let ty = self.infer.shallow_resolve(l.ty);
-                if let TyKind::Tensor { dims, .. } = ty.kind() {
+                if let Some(view) = self.infer.tensor_view(ty) {
                     let r = self.check_expr(r, l.ty);
                     use crate::intrinsic::TensorFn;
                     let top = match op {
@@ -950,15 +1033,18 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                         BinOp::Gte => TensorFn::Ge,
                         _ => unreachable!(),
                     };
-                    let result = self.tcx.mk_tensor(self.tcx.mk_bool(), dims);
-                    return self.mk_expr(
-                        ExprKind::TensorOp {
-                            op: top,
-                            args: vec![l, r],
-                        },
-                        result,
-                        span,
-                    );
+                    let result = if matches!(ty.kind(), TyKind::Tensor { elem, dims }
+                        if dims.is_empty() && matches!(elem.kind(), TyKind::Generic(_)))
+                    {
+                        // A rigid whole-shape parameter is not a scalar dtype.
+                        // Its result relation is instantiated at ordinary calls.
+                        self.infer.new_hole_ty()
+                    } else {
+                        self.infer.new_tensor_ty(self.tcx.mk_bool(), view.shape)
+                    };
+                    let args = vec![l, r];
+
+                    return self.mk_expr(ExprKind::TensorOp { op: top, args }, result, span);
                 }
                 if matches!(ty.kind(), TyKind::Hole(_)) {
                     // Inference: the operand is still an open hole — commit
@@ -969,10 +1055,32 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     // comparison is intrinsic is the *impl*'s property, not
                     // a type test here.
                     let r = self.check_expr(r, l.ty);
-                    self.register_cmp_bound(op, ty, span);
-                    let bool_ty = self.tcx.mk_bool();
+                    let result = if self.inside_kernel {
+                        let result = self.infer.new_hole_ty();
+                        use crate::intrinsic::TensorFn;
+                        let top = match op {
+                            BinOp::Equ => TensorFn::Eq,
+                            BinOp::Neq => TensorFn::Ne,
+                            BinOp::Lt => TensorFn::Lt,
+                            BinOp::Lte => TensorFn::Le,
+                            BinOp::Gt => TensorFn::Gt,
+                            BinOp::Gte => TensorFn::Ge,
+                            _ => unreachable!(),
+                        };
+                        self.register_operator_relation(
+                            top,
+                            self.comparison_bound(op),
+                            result,
+                            &[l.clone(), r.clone()],
+                            span,
+                        );
+                        result
+                    } else {
+                        self.register_cmp_bound(op, ty, span);
+                        self.tcx.mk_bool()
+                    };
                     let cop = cmp_op(op);
-                    self.mk_expr(ExprKind::Cmp(Box::new(l), cop, Box::new(r)), bool_ty, span)
+                    self.mk_expr(ExprKind::Cmp(Box::new(l), cop, Box::new(r)), result, span)
                 } else {
                     self.dispatch_cmp_operator(op, l, r, span)
                 }
@@ -992,7 +1100,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// `PartialOrd ⊳ T` for orderings. Without a comparison tower (its
     /// root names were squatted before it could register), orderings
     /// degrade to the numeric constraint.
-    fn register_cmp_bound(&mut self, op: BinOp, ty: Ty<'tcx>, span: Option<Span>) {
+    fn comparison_bound(&self, op: BinOp) -> Option<TraitId> {
         use crate::semi::lang::LangItem;
         let ordering = matches!(op, BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte);
         let item = if ordering {
@@ -1000,10 +1108,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         } else {
             LangItem::PartialEq
         };
-        match self.cmp_lang_trait(item) {
-            Some(tid) => self.register_bound(tid, ty, span),
-            None if ordering => self.register_bound(self.lang.num, ty, span),
-            None => {}
+        self.cmp_lang_trait(item)
+            .or_else(|| ordering.then_some(self.lang.num))
+    }
+
+    fn register_cmp_bound(&mut self, op: BinOp, ty: Ty<'tcx>, span: Option<Span>) {
+        if let Some(bound) = self.comparison_bound(op) {
+            self.register_bound(bound, ty, span);
         }
     }
 
@@ -1089,17 +1200,29 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             UnaryOp::Negate => {
                 let e = self.infer_expr(e);
                 let ty = e.ty;
-                if matches!(self.infer.resolve(ty).kind(), TyKind::Tensor { .. }) {
+                if self.infer.tensor_view(ty).is_some() {
+                    let args = vec![e];
+
                     return self.mk_expr(
                         ExprKind::TensorOp {
                             op: crate::intrinsic::TensorFn::Neg,
-                            args: vec![e],
+                            args,
                         },
                         ty,
                         span,
                     );
                 }
-                self.register_bound(self.lang.num, ty, span);
+                if self.inside_kernel {
+                    self.register_operator_relation(
+                        crate::intrinsic::TensorFn::Neg,
+                        Some(self.lang.num),
+                        ty,
+                        std::slice::from_ref(&e),
+                        span,
+                    );
+                } else {
+                    self.register_bound(self.lang.num, ty, span);
+                }
                 self.mk_expr(ExprKind::Negate(Box::new(e)), ty, span)
             }
             UnaryOp::Not => {
@@ -1176,7 +1299,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// an unknown name, or an arity mismatch is a diagnostic (unknown name ⇒ poison).
     /// A bare `name` that binds a local closure value is redirected to a closure
     /// application (`closure_apply`) — the parser cannot tell the two apart.
-    fn infer_func_call(&mut self, fc: &surface::FuncCall, span: Option<Span>) -> Expr<'tcx> {
+    fn infer_func_call(
+        &mut self,
+        fc: &surface::FuncCall,
+        span: Option<Span>,
+        expected: Option<Ty<'tcx>>,
+    ) -> Expr<'tcx> {
         let fname = self.sym(fc.name.basename);
         // The parser emits a `FuncCall` for every bare-name application `f(x)` —
         // it cannot tell a `fn` from a closure-valued local. A name that binds a
@@ -1214,7 +1342,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // The built-in `core` package: `core::intrinsic::<family>::<fn>` calls
         // are intrinsics, and nothing else lives under `core` (the package name
         // is reserved, so this can never shadow user code).
-        if let Some(done) = self.infer_intrinsic(fc, span) {
+        if let Some(done) = self.infer_intrinsic(fc, span, expected) {
             return done;
         }
         let Some(def) = self.resolve_function_ref(&fc.name) else {
@@ -1277,6 +1405,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 ),
             );
         }
+        let result = self.infer.instantiate_ty(proto.return_ty, &inst);
+        if let Some(expected) = expected {
+            self.expect(result, expected, span);
+        }
         let mut args = Vec::new();
         for (arg, (_, pty)) in fc.args.iter().zip(&proto.params) {
             let expected = self.infer.instantiate_ty(*pty, &inst);
@@ -1287,6 +1419,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         if !self.check_kernel_call(proto.is_kernel, result, span) {
             return self.poison(span);
         }
+
         self.mk_expr(
             ExprKind::FuncCall {
                 target: def,
@@ -1507,10 +1640,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
 
         if self.inside_kernel
-            && !matches!(
-                self.infer.shallow_resolve(raw).kind(),
-                TyKind::Future(_) | TyKind::Tensor { .. }
-            )
+            && self.infer.tensor_view(raw).is_none()
+            && !matches!(self.infer.shallow_resolve(raw).kind(), TyKind::Future(_))
         {
             self.error(span, "host operations are not allowed in a kernel");
             return self.poison(span);
@@ -1525,11 +1656,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return self.closure_apply(callee, args, span);
         }
 
-        let former = match self.infer.shallow_resolve(raw).kind() {
-            TyKind::Future(_) => Some(crate::semi::lang::FormerItem::TensorFuture),
-            TyKind::Tensor { .. } => Some(crate::semi::lang::FormerItem::Tensor),
-            TyKind::DevArray { .. } => Some(crate::semi::lang::FormerItem::DevArray),
-            _ => None,
+        let former = if self.infer.tensor_view(raw).is_some() {
+            Some(crate::semi::lang::FormerItem::Tensor)
+        } else {
+            match self.infer.shallow_resolve(raw).kind() {
+                TyKind::Future(_) => Some(crate::semi::lang::FormerItem::TensorFuture),
+                TyKind::Tensor { .. } => Some(crate::semi::lang::FormerItem::Tensor),
+                TyKind::DevArray { .. } => Some(crate::semi::lang::FormerItem::DevArray),
+                _ => None,
+            }
         };
         if let Some(former) = former {
             let surface::Access::Named(name) = last else {
@@ -1814,6 +1949,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         if !self.check_kernel_call(proto.is_kernel, result, span) {
             return self.poison(span);
         }
+
         self.mk_expr(
             ExprKind::FuncCall {
                 target: def,
@@ -2745,7 +2881,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         )
     }
 
-    fn infer_basic_tensor_intrinsic(
+    fn infer_annotated_tensor_intrinsic(
         &mut self,
         op: crate::intrinsic::TensorFn,
         fc: &surface::FuncCall,
@@ -2868,6 +3004,51 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
         }
         expression
+    }
+
+    fn infer_basic_tensor_intrinsic(
+        &mut self,
+        op: crate::intrinsic::TensorFn,
+        fc: &surface::FuncCall,
+        span: Option<Span>,
+        expected: Option<Ty<'tcx>>,
+    ) -> Expr<'tcx> {
+        // Unmigrated operation families retain their existing annotated checker.
+        if !super::shape_rules::supports(op) {
+            return self.infer_annotated_tensor_intrinsic(op, fc, span);
+        }
+
+        if !self.inside_kernel {
+            self.error(
+                span,
+                "this tensor intrinsic is only allowed inside a #[kernel] function",
+            );
+            return self.poison(span);
+        }
+        if fc.args.len() != op.arity() {
+            self.error(
+                span,
+                format!("{} expects exactly {} arguments", op.as_str(), op.arity()),
+            );
+            return self.poison(span);
+        }
+        let explicit = match fc.ty_args.as_slice() {
+            [] | [None] => None,
+            [Some(t)] => Some(self.eval_type(t)),
+            _ => {
+                self.error(
+                    span,
+                    "tensor operation accepts at most one result type argument",
+                );
+                return self.poison(span);
+            }
+        };
+        let args: Vec<_> = fc.args.iter().map(|a| self.infer_expr(a)).collect();
+        let result = explicit
+            .or(expected)
+            .unwrap_or_else(|| self.infer.new_hole_ty());
+
+        self.mk_expr(ExprKind::TensorOp { op, args }, result, span)
     }
 
     fn infer_kernel_tensor_intrinsic(
@@ -3360,6 +3541,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         &mut self,
         fc: &surface::FuncCall,
         span: Option<Span>,
+        expected: Option<Ty<'tcx>>,
     ) -> Option<Expr<'tcx>> {
         if fc.name.segments.first().map(|&k| self.sym(k)) != Some("core") {
             return None;
@@ -3403,7 +3585,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             "pjrt" => Some(self.infer_pjrt_intrinsic(fc, span)),
             "math" => Some(self.infer_math_intrinsic(fc, span)),
             "array" => Some(self.infer_array_intrinsic(fc, span)),
-            "tensor" => Some(self.infer_tensor_intrinsic(fc, span)),
+            "tensor" => Some(self.infer_tensor_intrinsic(fc, span, expected)),
             "cell" => Some(self.infer_cell_intrinsic(fc, span)),
             "str" => Some(self.infer_str_intrinsic(fc, span)),
             other => {
@@ -4256,7 +4438,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// later in-place update of the array from mutating the viewed buffer);
     /// `materialize(t)` builds a fresh array from the tensor's value;
     /// `dim(t, k)` reads the `k`-th extent as `u64`.
-    fn infer_tensor_intrinsic(&mut self, fc: &surface::FuncCall, span: Option<Span>) -> Expr<'tcx> {
+    fn infer_tensor_intrinsic(
+        &mut self,
+        fc: &surface::FuncCall,
+        span: Option<Span>,
+        expected: Option<Ty<'tcx>>,
+    ) -> Expr<'tcx> {
         use crate::intrinsic::TensorFn;
         let name = self.sym(fc.name.basename).to_string();
         let Some(op) = TensorFn::parse(&name) else {
@@ -4267,7 +4454,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return self.poison(span);
         };
         if op.is_basic() {
-            return self.infer_basic_tensor_intrinsic(op, fc, span);
+            return self.infer_basic_tensor_intrinsic(op, fc, span, expected);
         }
         if op.is_kernel() {
             return self.infer_kernel_tensor_intrinsic(op, fc, span);
@@ -5058,10 +5245,60 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         use ExprKind::*;
         let zb = |s: &mut Self, e: Box<Expr<'tcx>>| Box::new(s.zonk_expr(*e));
         match kind {
-            Negate(e) => Negate(zb(self, e)),
+            Negate(e) => {
+                let e = self.zonk_expr(*e);
+                if matches!(e.ty.kind(), TyKind::Tensor { .. }) {
+                    TensorOp {
+                        op: crate::intrinsic::TensorFn::Neg,
+                        args: vec![e],
+                    }
+                } else {
+                    Negate(Box::new(e))
+                }
+            }
             Not(e) => Not(zb(self, e)),
-            Arith(l, op, r) => Arith(zb(self, l), op, zb(self, r)),
-            Cmp(l, op, r) => Cmp(zb(self, l), op, zb(self, r)),
+            Arith(l, op, r) => {
+                let l = self.zonk_expr(*l);
+                let r = self.zonk_expr(*r);
+                let tensor_op = match op {
+                    ArithOp::Add => Some(crate::intrinsic::TensorFn::Add),
+                    ArithOp::Sub => Some(crate::intrinsic::TensorFn::Sub),
+                    ArithOp::Mul => Some(crate::intrinsic::TensorFn::Mul),
+                    ArithOp::Div => Some(crate::intrinsic::TensorFn::Div),
+                    ArithOp::Mod => Some(crate::intrinsic::TensorFn::Rem),
+                    _ => None,
+                };
+                if matches!(l.ty.kind(), TyKind::Tensor { .. })
+                    && let Some(op) = tensor_op
+                {
+                    TensorOp {
+                        op,
+                        args: vec![l, r],
+                    }
+                } else {
+                    Arith(Box::new(l), op, Box::new(r))
+                }
+            }
+            Cmp(l, op, r) => {
+                let l = self.zonk_expr(*l);
+                let r = self.zonk_expr(*r);
+                if matches!(l.ty.kind(), TyKind::Tensor { .. }) {
+                    let op = match op {
+                        CmpOp::Eq => crate::intrinsic::TensorFn::Eq,
+                        CmpOp::Ne => crate::intrinsic::TensorFn::Ne,
+                        CmpOp::Lt => crate::intrinsic::TensorFn::Lt,
+                        CmpOp::Le => crate::intrinsic::TensorFn::Le,
+                        CmpOp::Gt => crate::intrinsic::TensorFn::Gt,
+                        CmpOp::Ge => crate::intrinsic::TensorFn::Ge,
+                    };
+                    TensorOp {
+                        op,
+                        args: vec![l, r],
+                    }
+                } else {
+                    Cmp(Box::new(l), op, Box::new(r))
+                }
+            }
             Cast(e, t) => {
                 let t = self.zonk_ty(t, span);
                 Cast(zb(self, e), t)

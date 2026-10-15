@@ -17,6 +17,7 @@
 
 // The Semi-phase type machinery.
 pub mod infer;
+mod shape_constraints;
 pub(crate) mod shape_rules;
 pub mod shape_summary;
 pub mod lang;
