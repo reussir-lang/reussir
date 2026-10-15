@@ -357,6 +357,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     | surface::ExprKind::LetPattern(..)
                     | surface::ExprKind::Tuple(_)
                     | surface::ExprKind::AccessChain(..)
+                    | surface::ExprKind::While(..)
                     | surface::ExprKind::If(..)
                     | surface::ExprKind::FuncCallExpr(_)
                     | surface::ExprKind::ConstExpr(_)
@@ -372,6 +373,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             surface::ExprKind::Var(path) => self.infer_var(path, span),
             surface::ExprKind::ExprSeq(exprs) => self.infer_seq(exprs, span),
             surface::ExprKind::Tuple(fields) => self.infer_tuple(fields, span),
+            surface::ExprKind::While(bindings, condition, body) => {
+                self.infer_while(bindings, condition, body, span)
+            }
             surface::ExprKind::LetPattern(pat, ty, value) => {
                 self.infer_let_pattern(pat, ty.as_ref(), value, span)
             }
@@ -589,6 +593,81 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 value: Box::new(value),
             },
             unit,
+            span,
+        )
+    }
+
+    fn infer_while(
+        &mut self,
+        bindings: &[(
+            surface::Spanned<reussir_syntax::kind::TokenKey>,
+            surface::Expr,
+        )],
+        condition: &surface::Expr,
+        body: &surface::Expr,
+        span: Option<Span>,
+    ) -> Expr<'tcx> {
+        // Evaluate all initializers before introducing any state names.
+        let initials: Vec<_> = bindings.iter().map(|(_, e)| self.infer_expr(e)).collect();
+        let field_types: Vec<_> = initials.iter().map(|e| e.ty).collect();
+        let initial = if initials.len() == 1 {
+            initials.into_iter().next().unwrap()
+        } else {
+            self.checked_tuple(initials, span)
+        };
+        let state_ty = initial.ty;
+        let state = self.vars.fresh_anonymous(self.tuple_temp_name, state_ty);
+        let mut names = rustc_hash::FxHashSet::default();
+        for (name, _) in bindings {
+            if !names.insert(name.value) {
+                self.error(
+                    span,
+                    format!("duplicate loop state binding `{}`", self.sym(name.value)),
+                );
+            }
+        }
+        let mut regions = Vec::new();
+        for (source, expected) in [(condition, self.tcx.mk_bool()), (body, state_ty)] {
+            let mark = self.vars.mark();
+            let mut expressions = Vec::new();
+            for (i, ((name, _), &ty)) in bindings.iter().zip(&field_types).enumerate() {
+                let base = self.mk_expr(ExprKind::Var(state), state_ty, span);
+                let value = if bindings.len() == 1 {
+                    base
+                } else {
+                    self.mk_expr(ExprKind::Proj(Box::new(base), vec![i as u32]), ty, span)
+                };
+                let var = self.vars.fresh(name.value, ty, Some(name.span()));
+                expressions.push(self.mk_expr(
+                    ExprKind::Let {
+                        var,
+                        name: name.value,
+                        span: Some(name.span()),
+                        value: Box::new(value),
+                    },
+                    self.tcx.mk_unit(),
+                    span,
+                ));
+            }
+            expressions.push(self.check_expr(source, expected));
+            self.vars.restore(mark);
+            let region = if expressions.len() == 1 {
+                expressions.pop().unwrap()
+            } else {
+                self.mk_expr(ExprKind::Seq(expressions), expected, span)
+            };
+            regions.push(Box::new(region));
+        }
+        let body = regions.pop().unwrap();
+        let condition = regions.pop().unwrap();
+        self.mk_expr(
+            ExprKind::While {
+                state,
+                initial: Box::new(initial),
+                condition,
+                body,
+            },
+            state_ty,
             span,
         )
     }
@@ -4287,6 +4366,17 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 Cast(zb(self, e), t)
             }
             If(c, t, f) => If(zb(self, c), zb(self, t), zb(self, f)),
+            While {
+                state,
+                initial,
+                condition,
+                body,
+            } => While {
+                state,
+                initial: zb(self, initial),
+                condition: zb(self, condition),
+                body: zb(self, body),
+            },
             RegionRun(e) => RegionRun(zb(self, e)),
             Proj(e, idx) => Proj(zb(self, e), idx),
             Assign(d, i, s) => Assign(zb(self, d), i, zb(self, s)),
@@ -4458,6 +4548,17 @@ fn var_occurrences<'tcx>(e: &Expr<'tcx>, used: &mut Vec<VarId>, bound: &mut Vec<
         Arith(l, _, r) | Cmp(l, _, r) | Assign(l, _, r) => {
             var_occurrences(l, used, bound);
             var_occurrences(r, used, bound);
+        }
+        While {
+            state,
+            initial,
+            condition,
+            body,
+        } => {
+            bound.push(*state);
+            var_occurrences(initial, used, bound);
+            var_occurrences(condition, used, bound);
+            var_occurrences(body, used, bound);
         }
         If(c, t, f) => {
             var_occurrences(c, used, bound);

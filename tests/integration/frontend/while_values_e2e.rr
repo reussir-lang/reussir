@@ -1,0 +1,90 @@
+// RUN: %rrc %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/while_values_e2e.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s -o %t.opt.o --relocation-mode pic -Oaggressive
+// RUN: %cc %t.opt.o %S/while_values_e2e.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit llvm-ir -o %t.ll
+
+import core::intrinsic::cell;
+struct Boxed { n: u64 }
+
+pub fn counter(n: u64) -> u64 { while [i = 0] (i < n) { i + 1 } }
+extern "C" trampoline "counter" = counter;
+
+pub fn swap(n: u64) -> u64 {
+    let (i, a, b) = while [i = 0, a = 1, b = 2,] (i < n) { (i + 1, b, a) };
+    i * 100 + a * 10 + b
+}
+extern "C" trampoline "swap" = swap;
+
+fn tick(c: Cell<u64>) -> u64 { let old = cell::get(c); cell::set(c, old + 1); old }
+pub fn effects(n: u64) -> u64 {
+    let c = cell::alloc(0);
+    let (a, b) = while [a = tick(c), b = tick(c)] ({ tick(c); a < n }) { (a + 1, b + 1) };
+    a * 10000 + b * 100 + cell::get(c)
+}
+extern "C" trampoline "effects" = effects;
+
+pub fn zero_state(n: u64) -> u64 {
+    let c = cell::alloc(0);
+    while [] (cell::get(c) < n) { cell::set(c, cell::get(c) + 1) };
+    cell::get(c)
+}
+extern "C" trampoline "zero_state" = zero_state;
+
+pub fn managed(n: u64) -> u64 {
+    let retained = Boxed { n: 7 };
+    let result = while [p = Boxed { n: 0 }] (p.n < n) { Boxed { n: p.n + 1 + retained.n - 7 } };
+    result.n + retained.n
+}
+extern "C" trampoline "managed" = managed;
+
+pub fn managed_many(n: u64) -> u64 {
+    let original = Boxed { n: 10 };
+    let (i, p, ()) = while [i = 0, p = (original, ((), original)), unit = ()] (i < n) {
+        (i + 1, (p.1.1, ((), Boxed { n: p.0.n + 1 })), ())
+    };
+    i + p.0.n + p.1.1.n + original.n
+}
+extern "C" trampoline "managed_many" = managed_many;
+
+pub fn nested(n: u64) -> u64 {
+    while [i = 0] (i < n) { while [j = i] (j == i) { j + 1 } }
+}
+extern "C" trampoline "nested" = nested;
+
+pub fn outer_scope(n: u64) -> u64 {
+    let a = 7;
+    let (a, b) = while [a = n, b = a] (false) { (a, b) };
+    a + b
+}
+extern "C" trampoline "outer_scope" = outer_scope;
+
+pub fn captured_loop(n: u64) -> u64 {
+    let x = Boxed { n: 5 };
+    let f = |limit: u64| while [i = x.n] (i < limit) { i + 1 };
+    f(n) + x.n
+}
+extern "C" trampoline "captured_loop" = captured_loop;
+
+struct [regional] Regional { value: u64 }
+pub fn regional_loop(n: u64) -> u64 {
+    let result = region { while [p = Regional { value: 0 }] (p.value < n) { Regional { value: p.value + 1 } } };
+    result.value
+}
+extern "C" trampoline "regional_loop" = regional_loop;
+
+pub fn replace_unused(n: u64) -> u64 {
+    let result = while [p = Boxed { n: 0 }] (p.n < n) { Boxed { n: n } };
+    result.n
+}
+extern "C" trampoline "replace_unused" = replace_unused;
+
+pub fn condition_capture(n: u64) -> u64 {
+    let limit = Boxed { n: n };
+    while [i = 0] (i < limit.n) { i + 1 }
+}
+extern "C" trampoline "condition_capture" = condition_capture;

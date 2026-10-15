@@ -857,6 +857,27 @@ impl<'tcx> Builder<'_, 'tcx> {
                 }
             }
             raw::Kind::Seq(items) => ExprKind::Seq(self.exprs(items)),
+            raw::Kind::While {
+                state,
+                initial,
+                condition,
+                body,
+            } => {
+                let initial = self.boxed(initial);
+                let condition = self.boxed(condition);
+                let body = self.boxed(body);
+                if initial.ty != ty || body.ty != ty || !matches!(condition.ty.kind(), TyKind::Bool)
+                {
+                    self.error =
+                        Some("while state/body types must agree and condition must be bool".into());
+                }
+                ExprKind::While {
+                    state: VarId(*state),
+                    initial,
+                    condition,
+                    body,
+                }
+            }
             raw::Kind::Tuple(items) => {
                 let fields = self.exprs(items);
                 if !matches!(ty.kind(), TyKind::Tuple(types) if types.len() == fields.len() && types.iter().zip(fields.iter()).all(|(&t, f)| t == f.ty))
@@ -1898,5 +1919,12 @@ mod tests {
              pub struct T(pub i64, i64)\n\
              pub struct [regional] R { pub c: [field] R, d: i64 }",
         );
+    }
+    #[test]
+    fn while_state_roundtrips() {
+        roundtrip(
+            "pub fn f(n: u64) -> (u64, (u64, ())) { while [i = 0, pair = (1, ())] (i < n) { (i + 1, (pair.0 + i, ())) } }",
+        );
+        roundtrip("pub fn f() { while [] (false) { () } }");
     }
 }

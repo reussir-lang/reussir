@@ -138,6 +138,13 @@ pub struct ClosureExpr<'tcx> {
 #[derive(Clone, Debug)]
 pub enum ExprKind<'tcx> {
     Tuple(Vec<Expr<'tcx>>),
+    /// The state is owned by the loop, borrowed by condition, and consumed by body.
+    While {
+        state: VarId,
+        initial: Box<Expr<'tcx>>,
+        condition: Box<Expr<'tcx>>,
+        body: Box<Expr<'tcx>>,
+    },
     /// An interned string literal.
     GlobalStr(StringToken),
     /// A Unicode scalar value, stored as its 32-bit code point.

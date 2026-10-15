@@ -435,6 +435,7 @@ fn kind_name(kind: &ExprKind<'_>) -> &'static str {
         ExprKind::Cmp(..) => "Cmp",
         ExprKind::Cast(..) => "Cast",
         ExprKind::If(..) => "If",
+        ExprKind::While { .. } => "While",
         ExprKind::RegionRun(_) => "RegionRun",
         ExprKind::Proj(..) => "Proj",
         ExprKind::Assign(..) => "Assign",
@@ -792,6 +793,44 @@ fn interp<'tcx>(
             interp(l, ot, rr, rc);
             interp(r, ot, rr, rc);
         }
+        ExprKind::While {
+            state,
+            initial,
+            condition,
+            body,
+        } => {
+            interp(initial, ot, rr, rc);
+            let mut exits = Vec::new();
+            for count in [0, 1, 3] {
+                let mut path = rc.clone();
+                if rr.is_rr(initial.ty) {
+                    path.insert(state, 1);
+                }
+                for iteration in 0..=count {
+                    interp(condition, ot, rr, &mut path);
+                    if rr.is_rr(initial.ty) {
+                        assert_eq!(path[&state], 1, "condition must preserve state");
+                    }
+                    if iteration == count {
+                        break;
+                    }
+                    interp(body, ot, rr, &mut path);
+                    if rr.is_rr(initial.ty) {
+                        assert_eq!(path[&state], 0, "body must settle old state");
+                        path.insert(state, 1);
+                    }
+                }
+                // Transfer the final owned state to the loop result.
+                if rr.is_rr(initial.ty) {
+                    path.insert(state, 0);
+                }
+                path.retain(|_, count| *count != 0);
+                exits.push(path);
+            }
+            assert_eq!(exits[0], exits[1]);
+            assert_eq!(exits[0], exits[2]);
+            *rc = exits.pop().unwrap();
+        }
         // Each arm is interpreted from the same entry state; reconciliation must
         // leave both with identical ownership (the join is well-defined).
         ExprKind::If(c, t, e) => {
@@ -995,6 +1034,12 @@ fn children<'tcx>(e: &Expr<'tcx>) -> Vec<&'tcx Expr<'tcx>> {
         Negate(x) | Not(x) | Cast(x, _) | RegionRun(x) | Proj(x, _) => vec![x],
         Arith(l, _, r) | Cmp(l, _, r) | Assign(l, _, r) => vec![l, r],
         If(c, t, e) => vec![c, t, e],
+        While {
+            initial,
+            condition,
+            body,
+            ..
+        } => vec![initial, condition, body],
         Let { value, .. } => vec![value],
         Seq(es) | Tuple(es) => es.iter().collect(),
         Call { args, .. } | Ctor { args, .. } | Variant { args, .. } | Intrinsic { args, .. } => {
@@ -2313,5 +2358,39 @@ fn tail_recursive_list_reverse() {
             &[RcOp::Dup(h), RcOp::Dup(t), RcOp::Drop(xs)],
             "Cons arm: head & tail borrow-extracted, then the Cons cell dropped"
         );
+    });
+}
+
+#[test]
+fn while_state_and_captures_balance_across_iterations() {
+    with_tcx(|tcx| {
+        for replace_state in [false, true] {
+            let mut b = MirBuilder::new(tcx);
+            let ty = b.shared();
+            let incoming = b.fresh_var();
+            let capture = b.fresh_var();
+            let state = b.fresh_var();
+            let initial = tcx.alloc(b.var(incoming, ty));
+            let state_use = b.var(state, ty);
+            let capture_use = b.var(capture, ty);
+            let condition = tcx.alloc(b.call("test", vec![state_use, capture_use], tcx.mk_bool()));
+            let body = tcx.alloc(if replace_state {
+                b.var(capture, ty)
+            } else {
+                b.var(state, ty)
+            });
+            let loop_expr = b.mk(
+                ExprKind::While {
+                    state,
+                    initial,
+                    condition,
+                    body,
+                },
+                ty,
+            );
+            let params = vec![b.param(incoming, ty), b.param(capture, ty)];
+            let f = b.function("loop", params, ty, loop_expr);
+            run(tcx, &f, &b);
+        }
     });
 }

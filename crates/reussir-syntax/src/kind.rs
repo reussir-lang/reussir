@@ -225,6 +225,10 @@ pub enum SyntaxKind {
     TuplePat,
     ParenPat,
 
+    WhileKw,
+    WhileExpr,
+    WhileBinding,
+
     /// End-of-file sentinel used by the parser; never stored in the tree.
     Eof,
 }
@@ -259,6 +263,7 @@ impl SyntaxKind {
                 | PubKw
                 | ModKw
                 | LetKw
+                | WhileKw
                 | IfKw
                 | ElseKw
                 | MatchKw
@@ -289,6 +294,7 @@ impl SyntaxKind {
             ModKw => "`mod`",
             LetKw => "`let`",
             IfKw => "`if`",
+            WhileKw => "`while`",
             ElseKw => "`else`",
             MatchKw => "`match`",
             RegionalKw => "`regional`",

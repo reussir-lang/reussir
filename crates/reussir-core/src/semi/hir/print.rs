@@ -802,6 +802,22 @@ impl<'a> Printer<'a> {
                     + self.arg_list(args)
                     + text(")")
             }
+            ExprKind::While {
+                state,
+                initial,
+                condition,
+                body,
+            } => {
+                text("while [")
+                    + var(*state)
+                    + text(" = ")
+                    + self.value(initial)
+                    + text("] (")
+                    + self.value(condition)
+                    + text(") { ")
+                    + self.expr(body)
+                    + text(" }")
+            }
             ExprKind::Tuple(fields) => {
                 text("(") + self.arg_list(fields) + text(if fields.len() == 1 { ",)" } else { ")" })
             }

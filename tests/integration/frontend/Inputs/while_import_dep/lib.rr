@@ -1,0 +1,4 @@
+pub fn iterate<T>(initial: T, count: u64, step: (T) -> T) -> T {
+    let (i, value) = while [i = 0, value = initial] (i < count) { (i + 1, step(value)) };
+    value
+}

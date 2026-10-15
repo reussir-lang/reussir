@@ -74,6 +74,7 @@ fn is_expr_kind(kind: SyntaxKind) -> bool {
         BlockExpr
             | ParenExpr
             | TupleExpr
+            | WhileExpr
             | IfExpr
             | LetExpr
             | MatchExpr
@@ -663,6 +664,22 @@ impl Emitter<'_> {
                         ]),
                     )
                 }
+            }
+            WhileExpr => {
+                let bindings: Vec<_> = nodes(node)
+                    .filter(|n| n.kind() == WhileBinding)
+                    .map(|binding| {
+                        let name = tokens(binding)
+                            .find(|t| t.kind().is_ident_like())
+                            .expect("state name");
+                        let initial = expr_children(binding).next().expect("state initializer");
+                        json!([name.text(), self.expr(initial)])
+                    })
+                    .collect();
+                let mut children = expr_children(node);
+                let condition = self.expr(children.next().expect("while condition"));
+                let body = self.expr(children.next().expect("while body"));
+                tagged("While", json!([bindings, condition, body]))
             }
             MatchExpr => {
                 let scrutinee = expr_children(node).next().expect("scrutinee");

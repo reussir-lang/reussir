@@ -689,6 +689,17 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
                 value: self.boxed(value),
             },
             ExprKind::Seq(items) => ExprKind::Seq(self.exprs(items)),
+            ExprKind::While {
+                state,
+                initial,
+                condition,
+                body,
+            } => ExprKind::While {
+                state: *state,
+                initial: self.boxed(initial),
+                condition: self.boxed(condition),
+                body: self.boxed(body),
+            },
             ExprKind::Tuple(items) => ExprKind::Tuple(self.exprs(items)),
             ExprKind::FuncCall {
                 target,

@@ -357,6 +357,7 @@ impl Parser<'_> {
                 ))
             }
             IfKw => Some(self.if_expr()),
+            WhileKw => Some(self.while_expr()),
             LetKw => Some(self.let_expr()),
             MatchKw => Some(self.match_expr()),
             RegionalKw if self.nth(1) == LBrace => {
@@ -390,6 +391,32 @@ impl Parser<'_> {
             self.block_expr();
         }
         m.complete(self, IfExpr)
+    }
+
+    /// `while [name = initial, ...] (condition) { next_state }`.
+    fn while_expr(&mut self) -> CompletedMarker {
+        let m = self.start();
+        self.bump();
+        self.expect(LBracket);
+        while !self.at(RBracket) && !self.at_eof() {
+            let binding = self.start();
+            if !self.expect_ident("a loop state name") {
+                break;
+            }
+            self.expect(Eq);
+            self.expr();
+            binding.complete(self, WhileBinding);
+            if !self.at(Comma) {
+                break;
+            }
+            self.bump();
+        }
+        self.expect(RBracket);
+        self.expect(LParen);
+        self.expr();
+        self.expect(RParen);
+        self.block_expr();
+        m.complete(self, WhileExpr)
     }
 
     /// `let name (: [flex]? type)? = value`.

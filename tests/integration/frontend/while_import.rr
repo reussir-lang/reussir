@@ -1,0 +1,7 @@
+// RUN: %rrc --package-root %S/Inputs/while_import_dep --package-name dep --emit rri -o %t.rri
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit llvm-ir -o %t.ll
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --emit mlir -o - | %FileCheck %s
+// CHECK: scf.while
+pub fn imported(n: u64) -> u64 { dep::iterate((0, ()), n, |pair| (pair.0 + 2, ())).0 }

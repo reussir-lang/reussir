@@ -500,6 +500,22 @@ impl Render<'_> {
     fn atom(&self, e: &mir::Expr<'_>) -> Doc<'static> {
         use mir::ExprKind::*;
         match e.kind {
+            While {
+                state,
+                initial,
+                condition,
+                body,
+            } => {
+                text("while [")
+                    + var(state)
+                    + text(" = ")
+                    + self.value(initial)
+                    + text("] (")
+                    + self.value(condition)
+                    + text(") { ")
+                    + self.expr(body)
+                    + text(" }")
+            }
             Tuple(fields) => {
                 text("(") + self.arg_list(fields) + text(if fields.len() == 1 { ",)" } else { ")" })
             }

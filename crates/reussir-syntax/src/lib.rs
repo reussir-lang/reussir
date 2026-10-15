@@ -1131,4 +1131,23 @@ mod tests {
             .join()
             .unwrap();
     }
+    #[test]
+    fn while_expression_grammar() {
+        for source in [
+            "fn f() { while [] (false) { () } }",
+            "fn f() { while [i = 0, pair = (1, 2),] (i < 3) { (i + 1, pair) } }",
+        ] {
+            let parsed = super::parse(source);
+            assert!(parsed.ok(), "{:#?}", parsed.errors);
+        }
+        for source in [
+            "fn f() { while (false) {} }",
+            "fn f() { while [i = 0] false { i } }",
+            "fn f() { while [i = ] (false) { i } }",
+            "fn f() { while [= 0] (false) { 0 } }",
+            "fn f() { while [i = 0,,] (false) { i } }",
+        ] {
+            assert!(!super::parse(source).ok(), "unexpectedly accepted {source}");
+        }
+    }
 }

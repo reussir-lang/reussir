@@ -280,6 +280,12 @@ pub struct ClosureExpr<'tcx> {
 #[derive(Clone, Copy, Debug)]
 pub enum ExprKind<'tcx> {
     Tuple(&'tcx [Expr<'tcx>]),
+    While {
+        state: VarId,
+        initial: &'tcx Expr<'tcx>,
+        condition: &'tcx Expr<'tcx>,
+        body: &'tcx Expr<'tcx>,
+    },
     GlobalStr(StringToken),
     /// A Unicode scalar value, stored as its 32-bit code point.
     ConstChar(u32),

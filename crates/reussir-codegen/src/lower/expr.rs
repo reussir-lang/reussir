@@ -760,6 +760,12 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let loc = self.loc();
         match &e.kind {
             Tuple(fields) => self.tuple(block, env, e.ty, fields).map(Some),
+            While {
+                state,
+                initial,
+                condition,
+                body,
+            } => self.lower_while(block, env, *state, initial, condition, body),
             // Emitted at full width via the textual APInt path — the value
             // was range-checked against `e.ty` at monomorphization.
             ConstInt(n) => Ok(Some(self.wide_int_constant(block, n, e.ty)?)),
@@ -3111,6 +3117,74 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             }
         };
         Ok(Some(self.append(block, op)))
+    }
+
+    fn lower_while<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        state: VarId,
+        initial: &Expr<'tcx>,
+        condition: &Expr<'tcx>,
+        body: &Expr<'tcx>,
+    ) -> Result<Option<Value<'c, 'b>>> {
+        use reussir_backend::melior::ir::operation::OperationBuilder;
+        let loc = self.loc();
+        let initial_value = self.expr(block, env, initial)?;
+        let types = if is_unit(initial.ty) {
+            vec![]
+        } else {
+            vec![self.tys.mlir_ty(initial.ty)?]
+        };
+        let operands: Vec<_> = initial_value.into_iter().collect();
+        self.bind_var_ty(state, initial.ty);
+        let before = Block::new(&types.iter().map(|&t| (t, loc)).collect::<Vec<_>>());
+        env.subscope(|scope| {
+            let args: Vec<Value<'c, '_>> = (0..types.len())
+                .map(|i| before.argument(i).unwrap().into())
+                .collect();
+            if let Some(&value) = args.first() {
+                scope.vars.insert(state, value);
+            }
+            let condition = self
+                .expr(&before, scope, condition)?
+                .ok_or_else(|| LoweringError("while condition produced no value".into()))?;
+            let mut operands = vec![condition];
+            operands.extend(args);
+            before.append_operation(
+                OperationBuilder::new("scf.condition", loc)
+                    .add_operands(&operands)
+                    .build()
+                    .map_err(|e| LoweringError(e.to_string().into()))?,
+            );
+            Ok::<_, LoweringError>(())
+        })?;
+        let after = Block::new(&types.iter().map(|&t| (t, loc)).collect::<Vec<_>>());
+        env.subscope(|scope| {
+            if !types.is_empty() {
+                scope.vars.insert(state, after.argument(0).unwrap().into());
+            }
+            let next = self.expr(&after, scope, body)?;
+            after.append_operation(scf::r#yield(&next.into_iter().collect::<Vec<_>>(), loc));
+            Ok::<_, LoweringError>(())
+        })?;
+        let before_region = Region::new();
+        before_region.append_block(before);
+        let after_region = Region::new();
+        after_region.append_block(after);
+        let op = block.append_operation(
+            OperationBuilder::new("scf.while", loc)
+                .add_operands(&operands)
+                .add_results(&types)
+                .add_regions([before_region, after_region])
+                .build()
+                .map_err(|e| LoweringError(e.to_string().into()))?,
+        );
+        Ok(if types.is_empty() {
+            None
+        } else {
+            Some(op.result(0).unwrap().into())
+        })
     }
 
     fn lower_if<'b>(

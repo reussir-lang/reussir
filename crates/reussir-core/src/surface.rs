@@ -203,6 +203,7 @@ fn is_expr_kind(kind: SyntaxKind) -> bool {
         kind,
         BlockExpr
             | ParenExpr
+            | WhileExpr
             | IfExpr
             | LetExpr
             | MatchExpr
@@ -696,6 +697,7 @@ pub enum ExprKind {
     /// `if cond { then } else { other }`; `None` for the else branch means it
     /// was omitted, which is sugar for an empty (unit) `else {}`.
     If(Expr, Expr, Option<Expr>),
+    While(Vec<(Spanned<TokenKey>, Expr)>, Expr, Expr),
     Let(Spanned<TokenKey>, Option<(Type, bool)>, Expr),
     Match(Expr, Vec<(Pattern, Expr)>),
     RegionalExpr(Expr),
@@ -811,6 +813,30 @@ impl Expr {
                     ty,
                     Expr::new(value),
                 )
+            }
+            WhileExpr => {
+                let bindings = nodes(node)
+                    .filter(|n| n.kind() == WhileBinding)
+                    .map(|binding| {
+                        let name = tokens(binding)
+                            .find(|t| t.kind().is_ident_like())
+                            .expect("state name");
+                        let span = token_span(name);
+                        let init = expr_children(binding).next().expect("state initializer");
+                        (
+                            Spanned {
+                                value: key(name),
+                                start: span.start,
+                                end: span.end,
+                            },
+                            Expr::new(init),
+                        )
+                    })
+                    .collect();
+                let mut children = expr_children(node);
+                let condition = Expr::new(children.next().expect("while condition"));
+                let body = Expr::new(children.next().expect("while body"));
+                ExprKind::While(bindings, condition, body)
             }
             MatchExpr => {
                 let scrutinee = Expr::new(expr_children(node).next().expect("scrutinee"));

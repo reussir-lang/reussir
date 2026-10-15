@@ -469,6 +469,7 @@ Expr: raw::Expr = {
 };
 
 Atom: raw::Kind = {
+    "while" "[" <state:"var"> "=" <initial:Expr> "]" "(" <condition:Expr> ")" "{" <body:Block> "}" => raw::Kind::While { state, initial, condition, body },
     "(" <first:Expr> "," <rest:Comma<Expr>> ")" => {
         let mut fields = vec![first]; fields.extend(rest); raw::Kind::Tuple(fields)
     },
@@ -635,6 +636,7 @@ extern {
         "quoted" => Token::Quoted(<Cow<'input, str>>),
         "let" => Token::Let,
         "if" => Token::If,
+        "while" => Token::While,
         "then" => Token::Then,
         "else" => Token::Else,
         "match" => Token::Match,

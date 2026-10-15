@@ -378,6 +378,12 @@ pub enum Kind {
     Cmp(Expr, CmpOp, Expr),
     Cast(Expr, Ty),
     If(Expr, Expr, Expr),
+    While {
+        state: u32,
+        initial: Expr,
+        condition: Expr,
+        body: Expr,
+    },
     RegionRun(Expr),
     Proj(Expr, Vec<u32>),
     Assign(Expr, u32, Expr),

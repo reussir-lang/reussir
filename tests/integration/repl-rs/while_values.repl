@@ -1,0 +1,13 @@
+// REQUIRES: rrepl
+// RUN: %rrepl -i %s -lerror -Onone 2>&1 | %FileCheck %s
+// RUN: %rrepl -i %s -lerror -Oaggressive 2>&1 | %FileCheck %s
+while [i = 0] (i < 5) { i + 1 }
+// CHECK: 5 : i64
+let (i, sum) = while [i = 0, sum = 0] (i < 4) { (i + 1, sum + i) }
+// CHECK: (i, sum) = (4, 6) : (i64, i64)
+sum + i
+// CHECK: 10 : i64
+while [] (false) { () }
+// CHECK: {{^}}(){{$}}
+while [p = ((), (1,))] (false) { p }
+// CHECK: ((), (1,)) : ((), (i64,))

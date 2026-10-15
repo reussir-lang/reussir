@@ -234,6 +234,16 @@ pub(crate) fn for_each_expr<'e, 'tcx>(expr: &'e Expr<'tcx>, f: &mut impl FnMut(&
             for_each_expr(a, f);
             for_each_expr(b, f);
         }
+        While {
+            initial,
+            condition,
+            body,
+            ..
+        } => {
+            for_each_expr(initial, f);
+            for_each_expr(condition, f);
+            for_each_expr(body, f);
+        }
         If(c, t, e) => {
             for_each_expr(c, f);
             for_each_expr(t, f);
@@ -2344,6 +2354,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     | ExprKind::Tuple(_)
                     | ExprKind::Proj(..)
                     | ExprKind::Let { .. }
+                    | ExprKind::While { .. }
                     | ExprKind::If(..)
                     | ExprKind::FuncCall { .. }
                     | ExprKind::TraitCall { .. }
@@ -2572,6 +2583,17 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
             },
             ExprKind::Seq(es) => M::Seq(self.lower_slice(es, subst)),
             ExprKind::Tuple(es) => M::Tuple(self.lower_slice(es, subst)),
+            ExprKind::While {
+                state,
+                initial,
+                condition,
+                body,
+            } => M::While {
+                state: *state,
+                initial: self.lower_ref(initial, subst),
+                condition: self.lower_ref(condition, subst),
+                body: self.lower_ref(body, subst),
+            },
             ExprKind::FuncCall {
                 target,
                 ty_args,
@@ -3787,6 +3809,12 @@ mod tests {
             Negate(x) | Not(x) | Cast(x, _) | RegionRun(x) | Proj(x, _) => vec![x],
             Arith(l, _, r) | Cmp(l, _, r) | Assign(l, _, r) => vec![l, r],
             If(c, t, f) => vec![c, t, f],
+            While {
+                initial,
+                condition,
+                body,
+                ..
+            } => vec![initial, condition, body],
             Let { value, .. } => vec![value],
             Seq(es) | Tuple(es) => es.iter().collect(),
             Call { args, .. }

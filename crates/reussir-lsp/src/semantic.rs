@@ -187,6 +187,7 @@ fn classify_reussir(token: &ResolvedToken) -> Option<(SemanticKind, u32)> {
                 Some(S::Namespace)
             }
             K::TraitStmt if contextual_name_after(parent, token, "trait") => Some(S::Interface),
+            K::WhileBinding if first_ident(parent, token) => Some(S::Variable),
             K::LetExpr if name_after(parent, token, |candidate| candidate.kind() == K::LetKw) => {
                 Some(S::Variable)
             }
@@ -344,6 +345,7 @@ fn is_hard_keyword(kind: SyntaxKind) -> bool {
             | K::PubKw
             | K::ModKw
             | K::LetKw
+            | K::WhileKw
             | K::IfKw
             | K::ElseKw
             | K::MatchKw
@@ -750,6 +752,15 @@ extern "rust" [{ use crate::Thing; }];
             tokens
                 .iter()
                 .any(|(text, kind, _, _)| text == "1" && *kind == SemanticKind::Number)
+        );
+    }
+    #[test]
+    fn while_state_names_are_declarations_and_keyword_is_highlighted() {
+        let tokens = decoded("fn f() { while [state = 0] (state < 2) { state + 1 } }");
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.0 == "while" && t.1 == SemanticKind::Keyword)
         );
     }
 }

@@ -483,9 +483,28 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             }
             ExprKind::Let { value, .. } => s.union_with(&self.free(value)),
             ExprKind::Seq(es) => {
+                let mut bound = VarSet::default();
                 for st in es {
-                    s.union_with(&self.free(st));
+                    let mut free = self.free(st);
+                    free.subtract(&bound);
+                    s.union_with(&free);
+                    if let ExprKind::Let { var, .. } = st.kind {
+                        bound.insert(var);
+                    }
                 }
+            }
+            ExprKind::While {
+                state,
+                initial,
+                condition,
+                body,
+            } => {
+                s.union_with(&self.free(condition));
+                s.union_with(&self.free(body));
+                let mut bound = VarSet::default();
+                bound.insert(state);
+                s.subtract(&bound);
+                s.union_with(&self.free(initial));
             }
             ExprKind::Tuple(args)
             | ExprKind::Call { args, .. }
@@ -638,6 +657,36 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 }
             }
             ExprKind::If(c, t, e) => self.place_if(c, t, e, live_after),
+            ExprKind::While {
+                state,
+                initial,
+                condition,
+                body,
+            } => {
+                // Captures must survive every iteration, including a zero-trip loop.
+                let mut captures = self.free(condition);
+                captures.union_with(&self.free(body));
+                let mut bound = VarSet::default();
+                bound.insert(state);
+                captures.subtract(&bound);
+                let mut held = captures.clone();
+                held.union_with(live_after);
+                self.place(initial, &held);
+                let mut condition_after = held.clone();
+                if self.rr.is_rr(initial.ty) {
+                    condition_after.insert(state);
+                }
+                self.place(condition, &condition_after);
+                self.place(body, &held);
+                if self.rr.is_rr(initial.ty) && !self.free(body).contains(state) {
+                    self.add_before(body.id, RcOp::Drop(state));
+                }
+                for var in captures.iter() {
+                    if !live_after.contains(var) {
+                        self.add_after(e.id, RcOp::Drop(var));
+                    }
+                }
+            }
             ExprKind::Match(scrut, tree) => self.place_match(scrut, &tree, live_after),
             // Borrow-extract: the result is an owned field copy (inc'd, since the
             // parent keeps the original); the base is navigated and its root

@@ -70,6 +70,8 @@ pub enum Token<'a> {
     Let,
     #[token("in")]
     In,
+    #[token("while")]
+    While,
     #[token("if")]
     If,
     #[token("then")]

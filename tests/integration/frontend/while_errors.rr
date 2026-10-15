@@ -1,0 +1,13 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+// CHECK-DAG: duplicate loop state binding `x`
+pub fn duplicate() { while [x = 0, x = 1] (false) { (x, x) }; }
+// CHECK-DAG: type mismatch
+pub fn condition() { while [x = 0] (x) { x }; }
+// CHECK-DAG: type mismatch
+pub fn body_arity() { while [x = 0, y = true] (false) { x }; }
+// CHECK-DAG: type mismatch
+pub fn body_type() { while [x = 0] (false) { true }; }
+// CHECK-DAG: unknown variable `x`
+pub fn sibling_scope() { while [x = 0, y = x] (false) { (x, y) }; }
+// CHECK-DAG: unknown variable `i`
+pub fn outside_scope() { while [i = 0] (false) { i }; i; }
