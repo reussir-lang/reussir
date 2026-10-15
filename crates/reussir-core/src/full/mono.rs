@@ -2356,6 +2356,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     | ExprKind::Let { .. }
                     | ExprKind::While { .. }
                     | ExprKind::If(..)
+                    | ExprKind::Match(..)
                     | ExprKind::FuncCall { .. }
                     | ExprKind::TraitCall { .. }
                     | ExprKind::ConstInt(_)
@@ -2713,6 +2714,11 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 args: self.lower_slice(args, subst),
             },
             ExprKind::Match(scrut, tree) => {
+                let scrut_ty = subst_ty(self.tcx, scrut.ty, subst);
+                if self.inside_kernel && !matches!(scrut_ty.kind(), TyKind::Int(_)) {
+                    self.error(scrut.span, "kernel match scrutinee must be an integer");
+                    return M::Poison;
+                }
                 M::Match(self.lower_ref(scrut, subst), self.lower_tree(tree, subst))
             }
         }
@@ -2908,6 +2914,32 @@ mod tests {
             );
             f(&full)
         })
+    }
+
+    #[test]
+    fn kernel_generic_match_checks_the_specialized_scrutinee() {
+        let source = r#"
+            #[kernel] fn choose<T>(x: T, value: i32) -> i32 { match x { _ => value } }
+            #[kernel] pub fn bad(x: bool, value: i32) -> i32 { choose(x, value) }
+        "#;
+        assert!(
+            mono_reports(source)
+                .iter()
+                .any(|m| m.contains("kernel match scrutinee must be an integer"))
+        );
+    }
+
+    #[test]
+    fn kernel_generic_integer_match_specializes_to_integer_cases() {
+        let source = r#"
+            #[kernel] fn choose<T: Integral>(x: T, a: T, b: T) -> T {
+                match x { 0 => a, _ => b }
+            }
+            #[kernel] pub fn run(x: u64, a: u64, b: u64) -> u64 { choose(x, a, b) }
+        "#;
+        let text = mir_text(source);
+        assert!(text.contains("switch"), "{text}");
+        assert!(text.contains("u64"), "{text}");
     }
 
     fn symbols(full: &mir::Program<'_>) -> Vec<String> {

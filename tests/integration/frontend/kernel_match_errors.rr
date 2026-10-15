@@ -1,0 +1,9 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+// CHECK: kernel match scrutinee must be an integer
+// CHECK: kernel match scrutinee must be an integer
+// CHECK: kernel match scrutinee must be an integer
+// CHECK: non-exhaustive
+#[kernel] fn boolean(key: bool, value: i32) -> i32 { match key { _ => value } }
+#[kernel] fn tensor(key: Tensor<i32>, value: i32) -> i32 { match key { _ => value } }
+#[kernel] fn tuple(key: (i32, i32), value: i32) -> i32 { match key { _ => value } }
+#[kernel] fn incomplete(key: i32, value: i32) -> i32 { match key { 0 => value } }

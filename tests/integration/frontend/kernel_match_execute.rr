@@ -1,0 +1,31 @@
+// REQUIRES: linux, stablehlo, pjrt-runtime
+// RUN: %rrc %s --emit mlir --no-source-locations -o %t.mlir
+// The runtime test selects this source kernel as the PJRT entry point.
+// RUN: sed 's/@_RC3run(/@main(/' %t.mlir | %reussir-opt --emit-bytecode -o %t.bc
+// RUN: pjrt_test_blake3=$(ls -t "%pjrt_runtime_dir"/deps/libblake3-*.rlib | head -n 1) && %rustc_path --edition=2024 -C prefer-dynamic %S/Inputs/kernel_match_execute.rs --extern blake3="$pjrt_test_blake3" --extern blake3="${pjrt_test_blake3%.rlib}.rmeta" -L "%pjrt_runtime_dir/deps" -L native="%pjrt_runtime_dir" -l dylib=reussir_rt -o %t.exe
+// RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc
+// RUN: rm -rf %t.cache
+#[kernel]
+fn classify(key: u64, accept: bool) -> i64 {
+    match key {
+        0 => 10,
+        4294967296 if accept => 20,
+        4294967296 => 21,
+        18446744073709551615 => 30,
+        _ => 40
+    }
+}
+#[kernel]
+fn signed(key: i64) -> i64 {
+    match key { -9223372036854775808 => 50, -1 => 60, whole => whole }
+}
+#[kernel]
+fn guarded(key: i64) -> i64 {
+    match key { whole if whole < 0 => 70, whole => whole }
+}
+#[kernel]
+pub fn run() -> (i64, i64, i64, i64, i64, i64, i64, i64, i64, ()) {
+    (classify(0, true), classify(4294967296, true), classify(4294967296, false),
+     classify(18446744073709551615, false), classify(7, true),
+     signed(-9223372036854775808), signed(-1), guarded(-2), guarded(123), ())
+}

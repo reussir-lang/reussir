@@ -154,7 +154,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// (POISON) error recovery: `Γ ⊢ e ⇒ (poison : ⊥)`. `⊥` (Bottom) unifies with
     /// anything and is never stored into a hole, so a poisoned subterm does not
     /// cascade into spurious follow-on diagnostics.
-    fn poison(&mut self, span: Option<Span>) -> Expr<'tcx> {
+    pub(super) fn poison(&mut self, span: Option<Span>) -> Expr<'tcx> {
         let ty = self.tcx.mk(TyKind::Bottom);
         self.mk_expr(ExprKind::Poison, ty, span)
     }
@@ -359,6 +359,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     | surface::ExprKind::AccessChain(..)
                     | surface::ExprKind::While(..)
                     | surface::ExprKind::If(..)
+                    | surface::ExprKind::Match(..)
                     | surface::ExprKind::FuncCallExpr(_)
                     | surface::ExprKind::ConstExpr(_)
                     | surface::ExprKind::BinOpExpr(..)

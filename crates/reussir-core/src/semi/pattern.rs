@@ -186,6 +186,18 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     ) -> Expr<'tcx> {
         let scrut = self.infer_expr(scrut);
         let scrut_ty = self.infer.shallow_resolve(scrut.ty);
+        // Generic matches are checked again after specialization. A wildcard
+        // alone imposes no Integral bound, so accepting it here must not let a
+        // later Bool/Tuple/Tensor instantiation bypass the kernel restriction.
+        if self.inside_kernel
+            && !matches!(
+                scrut_ty.kind(),
+                TyKind::Int(_) | TyKind::Generic(_) | TyKind::Hole(_)
+            )
+        {
+            self.error(scrut.span, "kernel match scrutinee must be an integer");
+            return self.poison(span);
+        }
         let result = self.infer.new_hole_ty();
 
         // Type-check every arm, turning each surface pattern into a `Pat` (with
@@ -1045,6 +1057,37 @@ mod tests {
     }
 
     const COLOR: &str = "enum Color { Red, Green }\nenum Opt { None, Some(Color) }\n";
+
+    #[test]
+    fn kernel_integer_matches_preserve_guards_and_whole_value_bindings() {
+        let source = r#"
+            #[kernel] fn choose(x: u64, a: u64, b: u64, accept: bool) -> u64 {
+                match x { 18446744073709551615 if accept => a, whole => whole }
+            }
+        "#;
+        assert!(reports_of(source).is_empty(), "{:#?}", reports_of(source));
+    }
+
+    #[test]
+    fn kernel_matches_reject_non_integer_scrutinees_even_with_a_wildcard() {
+        for ty in ["bool", "f32", "()", "(i32,)", "Tensor<i32>"] {
+            let source = format!(
+                "#[kernel] fn bad(x: {ty}, value: i32) -> i32 {{ match x {{ _ => value }} }}"
+            );
+            assert!(
+                has_message(&source, "kernel match scrutinee must be an integer"),
+                "{ty}: {:#?}",
+                reports_of(&source)
+            );
+        }
+    }
+
+    #[test]
+    fn host_tuple_and_boolean_matches_remain_supported() {
+        let source =
+            "fn host(x: (bool, i32)) -> i32 { match x { (true, n) => n, (false, n) => n } }";
+        assert!(reports_of(source).is_empty(), "{:#?}", reports_of(source));
+    }
 
     #[test]
     fn nested_refutable_patterns_compile() {

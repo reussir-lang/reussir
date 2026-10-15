@@ -1,0 +1,12 @@
+// REQUIRES: stablehlo
+// RUN: %rrc %S/Inputs/kernel_match_dep.rr --package-name dep --emit rri -o %t.rri
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: %rrc %t.mir --emit mlir -o - | %FileCheck %s
+// RUN: echo '#[kernel] pub fn bad(key: bool, value: i32) -> i32 { dep::deferred(key, value) }' > %t.bad.rr
+// RUN: %not %rrc %t.bad.rr --package-name app --extern dep=%t.rri --emit mir -o - 2>&1 | %FileCheck %s --check-prefix=BAD
+// CHECK: stablehlo.case
+// BAD: kernel match scrutinee must be an integer
+#[kernel]
+pub fn imported(key: u64, a: u64, b: u64) -> (u64, ()) { dep::choose(key, a, b) }

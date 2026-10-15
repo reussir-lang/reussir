@@ -1,0 +1,6 @@
+#[kernel]
+pub fn choose<T: Integral>(key: T, a: T, b: T) -> (T, ()) {
+    (match key { 0 => a, whole => whole }, ())
+}
+#[kernel]
+pub fn deferred<T>(key: T, value: i32) -> i32 { match key { _ => value } }
