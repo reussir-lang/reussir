@@ -3,6 +3,7 @@
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --symbol-dce --reussir-pjrt-donation --reussir-pjrt-donation | %FileCheck %s
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --symbol-dce --reussir-pjrt-donation='max-extra-bytes=0' | %FileCheck %s --check-prefix=NONE
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --symbol-dce --reussir-pjrt-donation='max-analysis-work=1' | %FileCheck %s --check-prefix=NONE
+// RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --symbol-dce --reussir-pjrt-donation='infer-donation=false' | %FileCheck %s --check-prefix=NONE --implicit-check-not=may_donate --implicit-check-not=donation_guards
 // NONE-NOT: donation_variants
 
 #s = #ifrt.sharding_param<1 to [0] on 1>

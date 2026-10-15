@@ -120,7 +120,7 @@ unsafe extern "C" {
 
     //==-- Reussir passes --==//
 
-    pub fn reussirCreatePjrtDonationPass() -> MlirPass;
+    pub fn reussirCreatePjrtDonationPass(infer_donation: bool) -> MlirPass;
     pub fn reussirCreateUniqueCarryingRecursionAnalysisPass() -> MlirPass;
     pub fn reussirCreateTokenInstantiationPass(acceptors: bool, producers: bool) -> MlirPass;
     pub fn reussirCreateClosureOutliningPass() -> MlirPass;
@@ -148,7 +148,7 @@ unsafe extern "C" {
     pub fn reussirCreateInvariantGroupAnalysisPass() -> MlirPass;
     pub fn reussirCreateBasicOpsLoweringPass(closure_wpd: bool) -> MlirPass;
     pub fn reussirCreateIFRTJustInTimeTransformPass() -> MlirPass;
-    pub fn reussirCreatePreparePjrtPass() -> MlirPass;
+    pub fn reussirCreatePreparePjrtPass(optimize_kernels: bool) -> MlirPass;
     pub fn reussirCreateDebugInfoConversionPass() -> MlirPass;
     pub fn reussirCreateAcquireDropExpansionPass(
         expand_decrement: bool,

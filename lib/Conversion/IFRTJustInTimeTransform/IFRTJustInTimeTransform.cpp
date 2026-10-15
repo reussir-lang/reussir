@@ -32,6 +32,7 @@
 #include <mlir/Bytecode/BytecodeWriter.h>
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/IR/Verifier.h>
+#include <stablehlo/transforms/optimization/Passes.h>
 #endif
 
 namespace reussir {
@@ -42,6 +43,7 @@ namespace reussir {
 namespace {
 struct ReussirPreparePjrtPass
     : impl::ReussirPreparePjrtPassBase<ReussirPreparePjrtPass> {
+  using Base::Base;
   void runOnOperation() override {
     bool hasIfrt = false;
     getOperation().walk([&](mlir::Operation *op) {
@@ -51,7 +53,9 @@ struct ReussirPreparePjrtPass
     if (hasIfrt) {
 #ifdef REUSSIR_ENABLE_OPENXLA
       mlir::OpPassManager pipeline(mlir::ModuleOp::getOperationName());
-      pipeline.addPass(createReussirIFRTJustInTimeTransformPass());
+      ReussirIFRTJustInTimeTransformPassOptions options;
+      options.optimizeKernels = optimizeKernels;
+      pipeline.addPass(createReussirIFRTJustInTimeTransformPass(options));
       pipeline.addPass(mlir::createSymbolDCEPass());
       if (mlir::failed(runPipeline(pipeline, getOperation()))) {
         signalPassFailure();
@@ -83,6 +87,7 @@ struct ReussirPreparePjrtPass
 struct ReussirIFRTJustInTimeTransformPass
     : impl::ReussirIFRTJustInTimeTransformPassBase<
           ReussirIFRTJustInTimeTransformPass> {
+  using Base::Base;
   void runOnOperation() override {
 #ifndef REUSSIR_ENABLE_OPENXLA
     getOperation().emitError(
@@ -134,6 +139,13 @@ struct ReussirIFRTJustInTimeTransformPass
             preparation.addPass(mlir::createSymbolDCEPass());
             if (mlir::failed(preparation.run(*copy)))
               return mlir::WalkResult::interrupt();
+            if (optimizeKernels) {
+              mlir::PassManager optimization(&getContext());
+              optimization.addNestedPass<mlir::func::FuncOp>(
+                  mlir::stablehlo::createStablehloTargetIndependentOptimizationPass());
+              if (mlir::failed(optimization.run(*copy)))
+                return mlir::WalkResult::interrupt();
+            }
             if (mlir::failed(verifyIfrtKernelModule(*copy)) ||
                 mlir::failed(mlir::verify(*copy)))
               return mlir::WalkResult::interrupt();

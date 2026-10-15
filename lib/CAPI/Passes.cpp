@@ -74,8 +74,10 @@ MlirPass wrapOwned(std::unique_ptr<mlir::Pass> pass) {
 // Reussir passes
 //===----------------------------------------------------------------------===//
 
-MlirPass reussirCreatePjrtDonationPass(void) {
-  return wrapOwned(reussir::createReussirPjrtDonationPass());
+MlirPass reussirCreatePjrtDonationPass(bool inferDonation) {
+  reussir::ReussirPjrtDonationPassOptions options;
+  options.inferDonation = inferDonation;
+  return wrapOwned(reussir::createReussirPjrtDonationPass(options));
 }
 
 MlirPass reussirCreateUniqueCarryingRecursionAnalysisPass(void) {
@@ -154,8 +156,10 @@ MlirPass reussirCreateDebugInfoConversionPass(void) {
 MlirPass reussirCreateIFRTJustInTimeTransformPass(void) {
   return wrapOwned(reussir::createReussirIFRTJustInTimeTransformPass());
 }
-MlirPass reussirCreatePreparePjrtPass(void) {
-  return wrapOwned(reussir::createReussirPreparePjrtPass());
+MlirPass reussirCreatePreparePjrtPass(bool optimizeKernels) {
+  reussir::ReussirPreparePjrtPassOptions options;
+  options.optimizeKernels = optimizeKernels;
+  return wrapOwned(reussir::createReussirPreparePjrtPass(options));
 }
 MlirPass reussirCreateAcquireDropExpansionPass(bool expandDecrement,
                                                bool outlineRecord,

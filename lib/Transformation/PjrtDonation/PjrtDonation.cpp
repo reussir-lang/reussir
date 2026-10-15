@@ -272,7 +272,7 @@ struct ReussirPjrtDonationPass
       signalPassFailure();
       return;
     }
-    if (maxVariants <= 1 || maxExtraBytes == 0 || maxCandidates == 0)
+    if (!inferDonation || maxVariants <= 1 || maxExtraBytes == 0 || maxCandidates == 0)
       return;
     PjrtDonationAnalysis analysis(module, maxAnalysisWork);
     llvm::MapVector<mlir::Operation *, Family> families;
