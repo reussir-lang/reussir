@@ -2,8 +2,21 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
-extern float heat_sample(int64_t steps, int64_t index);
-extern float heat_energy(int64_t steps);
+/* Float-return trampolines use an output pointer and packed argument storage. */
+struct SampleArgs { int64_t steps, index; };
+extern void heat_sample(float *result, const struct SampleArgs *args);
+extern void heat_energy(float *result, const int64_t *steps);
+static float sample(int64_t steps, int64_t index) {
+  const struct SampleArgs args = {steps, index};
+  float result;
+  heat_sample(&result, &args);
+  return result;
+}
+static float energy(int64_t steps) {
+  float result;
+  heat_energy(&result, &steps);
+  return result;
+}
 static void reference(int steps, float values[8]) {
   for (int i = 0; i < 8; ++i) values[i] = i == 4 ? 1.0f : 0.0f;
   for (int step = 0; step < steps; ++step) {
@@ -20,12 +33,12 @@ int main(void) {
     reference(steps[k], expected);
     printf("heat %2d:", steps[k]);
     for (int i = 0; i < 8; ++i) {
-      float actual = heat_sample(steps[k], i);
+      float actual = sample(steps[k], i);
       assert(isfinite(actual) && actual >= 0.0f);
       assert(fabsf(actual - expected[i]) < 0.00001f);
       printf(" %.4f", actual);
     }
-    assert(fabsf(heat_energy(steps[k]) - 1.0f) < 0.00002f);
+    assert(fabsf(energy(steps[k]) - 1.0f) < 0.00002f);
     putchar('\n');
   }
   return 0;
