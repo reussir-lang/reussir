@@ -1,0 +1,30 @@
+// REQUIRES: ifrt
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.rri
+// RUN: %FileCheck %s --check-prefix=RRI < %t.rri
+// RUN: %rrc %s --package-name app --extern core=%t.rri --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
+// RUN: diff %t.hir %t.round.hir
+// RUN: %rrc %s --package-name app --extern core=%t.rri --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: %rrc %t.mir --emit mlir -o - | %FileCheck %s --check-prefix=MLIR
+// RUN: echo 'import core::intrinsic::pjrt::launch as execute; pub fn f() { let x = execute; }' > %t.value.rr
+// RUN: %not %rrc %t.value.rr --package-name app --extern core=%t.rri --emit hir -o /dev/null 2>&1 | %FileCheck %s --check-prefix=VALUE
+// RRI: #[lang("core::intrinsic::pjrt::launch")] pub fn #core::intrinsic::pjrt::launch<
+// MLIR-DAG: ifrt.Call
+// MLIR-DAG: func.func @_RNvC3app6launch
+// VALUE: is an intrinsic and cannot be used as a value
+import core::intrinsic::pjrt as device;
+import core::intrinsic::pjrt::launch as execute;
+#[kernel] fn identity<T>(x: Tensor<T>) -> Tensor<T> { x }
+pub fn via_module(x: DevArray<f32>) -> DevArray<f32> {
+    device::launch(identity<f32>, x)
+}
+pub fn via_alias(x: DevArray<f32>) -> DevArray<f32> {
+    execute(identity<f32>, x)
+}
+pub fn launch(x: i32) -> i32 { x }
+pub fn ordinary_name() -> i32 {
+    let execute = |x: i32| x + 1;
+    launch(execute(2))
+}

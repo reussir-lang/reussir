@@ -1146,24 +1146,19 @@ mod tests {
             .unwrap();
     }
     #[test]
-    fn launch_has_a_named_kernel_reference_and_optional_configuration() {
+    fn launch_is_an_ordinary_identifier_and_call() {
         for source in [
-            "fn f() { launch(kernel) }",
-            "fn f(x: T) { launch<P>(module::kernel<T>, x, (x, ()),) }",
+            "fn launch(x: i32) -> i32 { x }",
+            "fn f() { let launch = |x| x; launch(1) }",
+            "fn f() { core::intrinsic::pjrt::launch(kernel) }",
+            "fn f(x: T) { pjrt::launch<P>(module::kernel<T>, x, (x, ()),) }",
             "#[launch(donation = \"none\")] struct [value] P {}",
         ] {
             let parsed = super::parse(source);
             assert!(parsed.ok(), "{source}: {:?}", parsed.errors);
             let _ = json_of(source);
         }
-        for source in [
-            "fn f() { launch<P> kernel<T>(x) }",
-            "fn f() { launch() }",
-            "fn f() { launch<P>(|x| x, a) }",
-            "fn f() { launch<P>(kernel<T> x) }",
-        ] {
-            assert!(!super::parse(source).ok(), "unexpectedly accepted {source}");
-        }
+        assert!(!super::parse("fn f() { launch<P> kernel<T>(x) }").ok());
     }
 
     #[test]

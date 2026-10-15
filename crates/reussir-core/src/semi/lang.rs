@@ -30,6 +30,7 @@ use crate::semi::ty::DefId;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum IntrinsicItem {
     Panic,
+    PjrtLaunch,
     Math(crate::intrinsic::MathFn),
     Array(crate::intrinsic::ArrayFn),
     Tensor(crate::intrinsic::TensorFn),
@@ -42,6 +43,7 @@ impl IntrinsicItem {
     pub fn family(self) -> &'static str {
         match self {
             IntrinsicItem::Panic => "panic",
+            IntrinsicItem::PjrtLaunch => "pjrt",
             IntrinsicItem::Math(_) => "math",
             IntrinsicItem::Array(_) => "array",
             IntrinsicItem::Tensor(_) => "tensor",
@@ -54,6 +56,7 @@ impl IntrinsicItem {
     pub fn op_name(self) -> &'static str {
         match self {
             IntrinsicItem::Panic => "panic",
+            IntrinsicItem::PjrtLaunch => "launch",
             IntrinsicItem::Math(f) => f.as_str(),
             IntrinsicItem::Array(f) => f.as_str(),
             IntrinsicItem::Tensor(f) => f.as_str(),
@@ -66,6 +69,7 @@ impl IntrinsicItem {
     fn from_parts(family: &str, name: &str) -> Option<IntrinsicItem> {
         match family {
             "panic" if name == "panic" => Some(IntrinsicItem::Panic),
+            "pjrt" if name == "launch" => Some(IntrinsicItem::PjrtLaunch),
             "math" => crate::intrinsic::MathFn::parse(name).map(IntrinsicItem::Math),
             "array" => crate::intrinsic::ArrayFn::parse(name).map(IntrinsicItem::Array),
             "tensor" => crate::intrinsic::TensorFn::parse(name).map(IntrinsicItem::Tensor),

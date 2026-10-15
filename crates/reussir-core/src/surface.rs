@@ -209,7 +209,6 @@ fn is_expr_kind(kind: SyntaxKind) -> bool {
             | MatchExpr
             | RegionalExpr
             | AsyncExpr
-            | LaunchExpr
             | LambdaExpr
             | BinExpr
             | PrefixExpr
@@ -715,7 +714,6 @@ pub enum ExprKind {
     Match(Expr, Vec<(Pattern, Expr)>),
     RegionalExpr(Expr),
     AsyncExpr(Expr),
-    LaunchExpr(Vec<Option<Type>>, Box<FuncCall>),
     Lambda(Box<Lambda>),
     BinOpExpr(BinOp, Expr, Expr),
     UnaryOpExpr(UnaryOp, Expr),
@@ -772,6 +770,18 @@ impl Expr {
         Expr {
             node: n,
             parenthesized,
+        }
+    }
+
+    /// A syntactic named function reference, used by special intrinsic forms.
+    /// A generic path shares constructor syntax, but braces are not a reference.
+    pub fn function_reference(&self) -> Option<(Path, SmallVec<[Option<Type>; 2]>)> {
+        match self.node.kind() {
+            VarExpr => Some((call_path_of(&self.node), SmallVec::new())),
+            CtorCallExpr if child_node(&self.node, CtorArgList).is_none() => {
+                Some((call_path_of(&self.node), type_args_of(&self.node)))
+            }
+            _ => None,
         }
     }
 
@@ -864,17 +874,6 @@ impl Expr {
                     })
                     .collect();
                 ExprKind::Match(scrutinee, arms)
-            }
-            LaunchExpr => {
-                let target = child_node(node, LaunchTarget).expect("launch target");
-                ExprKind::LaunchExpr(
-                    type_args_of(node).into_vec(),
-                    Box::new(FuncCall {
-                        name: call_path_of(target),
-                        ty_args: type_args_of(target),
-                        args: expr_children(node).map(Expr::new).collect(),
-                    }),
-                )
             }
             AsyncExpr => {
                 ExprKind::AsyncExpr(Expr::new(expr_children(node).next().expect("async body")))

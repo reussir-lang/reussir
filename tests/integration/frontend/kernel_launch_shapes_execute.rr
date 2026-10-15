@@ -16,14 +16,14 @@ pub struct [value] Tiled {}
 }
 
 pub fn sharded_shape(x: DevArray<[i32; 5], Tiled>) -> DevArray<[i32; 5], Tiled> {
-    let first = launch<Tiled>(identity<Tensor<[i32; 5]>>, x);
+    let first = core::intrinsic::pjrt::launch<Tiled>(identity<Tensor<[i32; 5]>>, x);
     // Both calls borrow x. The unused first result must be released.
-    launch<Tiled>(identity<Tensor<[i32; 5]>>, x)
+    core::intrinsic::pjrt::launch<Tiled>(identity<Tensor<[i32; 5]>>, x)
 }
 
 pub fn scalar_shape(x: DevArray<u64>, y: DevArray<u64>, condition: DevArray<bool>)
     -> DevArray<u64> {
-    let first = launch(select_nested, (x, ((), (y, condition))));
+    let first = core::intrinsic::pjrt::launch(select_nested, (x, ((), (y, condition))));
     // Reuse x and condition after their appearance in a temporary nested tuple.
-    launch(select_nested, (x, ((), (first, condition))))
+    core::intrinsic::pjrt::launch(select_nested, (x, ((), (first, condition))))
 }

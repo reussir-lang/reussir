@@ -46,3 +46,13 @@ impl<T, P> DevArray<T, P> {
         core::intrinsic::pjrt::upload<P>(value)
     }
 }
+
+/// Launch a named kernel: `launch<P>(kernel<T>, buffers...)`.
+///
+/// This prototype is a declaration anchor for a special intrinsic form, not an
+/// ordinary function value. The optional configuration P defaults to
+/// DefaultPlacement. The first syntactic argument names a kernel; its signature
+/// determines the remaining buffer arguments and the single DevArray result.
+/// Launch has no source keyword and supports ordinary module/function imports.
+#[lang("core::intrinsic::pjrt::launch")]
+pub fn launch<P>();

@@ -1,6 +1,6 @@
 # Host kernel launches
 
-`launch<P>(kernel<T>, arguments...)` runs a named `#[kernel]` function on device
+`core::intrinsic::pjrt::launch<P>(kernel<T>, arguments...)` runs a named `#[kernel]` function on device
 buffers. `P` is an optional compile-time configuration type; omitting it selects
 `core::intrinsic::pjrt::DefaultPlacement`. Kernel type arguments are independent
 of the launch configuration and may be inferred.
@@ -17,7 +17,7 @@ fn choose(x: Tensor<[f32; 4]>, enabled: bool) -> Tensor<[f32; 4]> {
 
 pub fn run(x: DevArray<[f32; 4]>, enabled: DevArray<bool>)
     -> DevArray<[f32; 4], Config> {
-    launch<Config>(choose, x, enabled)
+    core::intrinsic::pjrt::launch<Config>(choose, x, enabled)
 }
 ```
 
@@ -98,3 +98,5 @@ lowering. An OpenXLA-disabled build reports an explicit launch diagnostic.
 The compiler optimization level controls optional target-independent StableHLO optimization and inferred buffer donation. `none` and `tpde` omit these optimizations; `default`, `aggressive`, and `size` enable them. Required kernel preparation and explicit ownership contracts are preserved at every level. The configuration marker’s `backend_optimization_level` independently selects XLA backend optimization.
 
 Partitioned dynamic result dimensions require a logical result-shape contract, which this syntax does not provide. They receive an early diagnostic: padded physical shard shapes cannot recover an uneven logical result extent. Static uneven results and unpartitioned dynamic results retain their existing runtime paths.
+
+`launch` is an ordinary identifier. The special form is selected by the scoped `core::intrinsic::pjrt::launch` declaration (or its module/function import alias), before its kernel-reference argument is elaborated as a value. A local value or ordinary function named `launch` follows normal call resolution. The core prototype is a declaration anchor; it does not expose launch as a first-class function.

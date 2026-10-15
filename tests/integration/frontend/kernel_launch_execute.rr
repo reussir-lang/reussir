@@ -19,11 +19,11 @@ pub struct [value] Reuse {}
     core::intrinsic::tensor::async_done(pending)
 }
 pub fn launch_keep(x: DevArray<[f32; 4]>) -> DevArray<[f32; 4], Keep> {
-    launch<Keep>(identity<Tensor<[f32; 4]>>, x)
+    core::intrinsic::pjrt::launch<Keep>(identity<Tensor<[f32; 4]>>, x)
 }
 pub fn launch_reuse(x: DevArray<[f32; 4]>) -> DevArray<[f32; 4], Reuse> {
-    launch<Reuse>(identity<Tensor<[f32; 4]>>, x)
+    core::intrinsic::pjrt::launch<Reuse>(identity<Tensor<[f32; 4]>>, x)
 }
 pub fn launch_async(x: DevArray<[f32; 4]>) -> DevArray<[f32; 4]> {
-    launch(asynchronous, x)
+    core::intrinsic::pjrt::launch(asynchronous, x)
 }
