@@ -866,10 +866,13 @@ impl<'tcx> Builder<'_, 'tcx> {
                 let initial = self.boxed(initial);
                 let condition = self.boxed(condition);
                 let body = self.boxed(body);
-                if initial.ty != ty || body.ty != ty || !matches!(condition.ty.kind(), TyKind::Bool)
+                if initial.ty != ty
+                    || body.ty != ty
+                    || !(matches!(condition.ty.kind(), TyKind::Bool)
+                        || matches!(condition.ty.kind(), TyKind::Tensor { elem, dims } if dims.is_empty() && matches!(elem.kind(), TyKind::Bool)))
                 {
                     self.error =
-                        Some("while state/body types must agree and condition must be bool".into());
+                        Some("while state/body types must agree and condition must be bool or rank-zero Tensor<bool>".into());
                 }
                 ExprKind::While {
                     state: VarId(*state),
@@ -1935,8 +1938,12 @@ mod tests {
                 "pub fn #f() -> i64 { while [v0 = 0 : i64] (0 : i64) { 0 : i64 } : i64 }",
                 "pub fn #f() -> i64 { while [v0 = 0 : i64] (true : bool) { true : bool } : i64 }",
                 "pub fn #f() -> bool { while [v0 = 0 : i64] (true : bool) { 0 : i64 } : bool }",
-            ] { assert!(parse_program(tcx, text).is_err(), "accepted malformed while: {text}"); }
+            ] {
+                assert!(
+                    parse_program(tcx, text).is_err(),
+                    "accepted malformed while: {text}"
+                );
+            }
         });
     }
-
 }

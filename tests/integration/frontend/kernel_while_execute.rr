@@ -1,0 +1,32 @@
+// REQUIRES: linux, stablehlo, pjrt-runtime
+// RUN: %rrc %s --emit mlir --no-source-locations -o %t.mlir
+// RUN: sed 's/@_RC3run(/@main(/' %t.mlir | %reussir-opt --emit-bytecode -o %t.bc
+// RUN: pjrt_test_blake3=$(ls -t "%pjrt_runtime_dir"/deps/libblake3-*.rlib | head -n 1) && %rustc_path --edition=2024 -C prefer-dynamic %S/../runtime/Inputs/kernel_execute.rs --extern blake3="$pjrt_test_blake3" --extern blake3="${pjrt_test_blake3%.rlib}.rmeta" -L "%pjrt_runtime_dir/deps" -L native="%pjrt_runtime_dir" -l dylib=reussir_rt -o %t.exe
+// RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc -- i64:0 i64:1 i64:20 i64:0 i64:190 i64:2 i64:1 i64:22 i64:0
+// RUN: rm -rf %t.cache
+#[kernel]
+fn count(n: i64) -> i64 { while [i = 0] (i < n) { i + 1 } }
+#[kernel]
+fn sum(n: i64) -> i64 {
+    let (i, pair) = while [i = 0, pair = (0, ())] (i < n) {
+        (i + 1, (pair.0 + i, ()))
+    };
+    pair.0
+}
+#[kernel]
+fn swap(n: i64) -> i64 {
+    let (i, a, b) = while [i = 0, a = 1, b = 2] (i < n) { (i + 1, b, a) };
+    a
+}
+#[kernel]
+fn nested(n: i64) -> i64 {
+    while [i = 0] (i < n) {
+        if i < 10 { while [j = i] (j == i) { j + 1 } } else { i + 2 }
+    }
+}
+#[kernel]
+pub fn run() -> (i64, i64, i64, i64, i64, i64, i64, i64, i64, ()) {
+    while [] (false) { () };
+    (count(0), count(1), count(20), sum(0), sum(20), swap(1), swap(2), nested(21),
+     while [i = 0] (false) { i + 1 }, ())
+}

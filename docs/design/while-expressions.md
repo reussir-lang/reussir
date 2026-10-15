@@ -14,7 +14,7 @@ inside the condition and body; duplicate names are rejected. A trailing comma
 in the binding list is allowed.
 
 The condition runs before every iteration, including the first, and must have
-type `bool`. When it is false the current state is returned. The body's final
+type `bool` (kernel code also accepts `Tensor<bool>`). When it is false the current state is returned. The body's final
 expression supplies the entire next state simultaneously. There is no `yield`
 keyword, nor a break/continue statement model.
 

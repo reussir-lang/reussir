@@ -139,3 +139,47 @@ fn scalar_formats_and_mixed_host_kernel_contexts() {
         assert!(text.contains(needle), "missing {needle}: {text}");
     }
 }
+
+#[test]
+fn while_flattens_state_and_supports_nested_control() {
+    let result = lower(
+        r#"
+        #[kernel] pub fn count(n: i64) -> (i64, (i64, ())) {
+            while [i = 0, pair = (1, ())] (i < n) {
+                (i + 1, (if i < 2 { pair.0 + 2 } else { pair.0 * 2 }, ()))
+            }
+        }
+        #[kernel] pub fn tensor_predicate(c: Tensor<bool>, x: Tensor<[f32; 2]>) -> Tensor<[f32; 2]> {
+            while [a = x] (c) { a }
+        }
+        #[kernel] pub fn empty() { while [] (false) { () } }
+        #[kernel] fn token(t: Token) -> Token { while [s = t] (false) { s } }
+    "#,
+    );
+    if !enabled() {
+        assert!(result.unwrap_err().contains("REUSSIR_ENABLE_OPENXLA"));
+        return;
+    }
+    let text = result.unwrap();
+    assert_eq!(text.matches("stablehlo.while").count(), 4, "{text}");
+    assert!(text.contains("stablehlo.if"));
+    assert!(text.contains("!stablehlo.token"));
+    for host in ["scf.", "arith.", "reussir.record", "reussir.rc", "tuple<"] {
+        assert!(
+            !text.contains(host),
+            "host/aggregate instruction {host}: {text}"
+        );
+    }
+}
+
+#[test]
+fn rejects_future_while_state() {
+    if !enabled() {
+        return;
+    }
+    let error = lower(r#"#[kernel] fn wait(x: Future<Tensor<f32>>) -> Future<Tensor<f32>> { while [s = x] (false) { s } }"#).unwrap_err();
+    assert!(
+        error.contains("control-flow results cannot contain Future"),
+        "{error}"
+    );
+}

@@ -512,6 +512,22 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         self.mk_expr(ExprKind::Seq(out), ty, span)
     }
 
+    fn check_condition(&mut self, c: &surface::Expr) -> Expr<'tcx> {
+        let bool_ty = self.tcx.mk_bool();
+        if self.inside_kernel {
+            let condition = self.infer_expr(c);
+            let ty = self.infer.shallow_resolve(condition.ty);
+            if !matches!(ty.kind(), TyKind::Tensor { elem, dims }
+                if dims.is_empty() && matches!(elem.kind(), TyKind::Bool))
+            {
+                self.expect(condition.ty, bool_ty, condition.span);
+            }
+            condition
+        } else {
+            self.check_expr(c, bool_ty)
+        }
+    }
+
     /// (IF) `Γ ⊢ if c t f ⇒ (If(hc,ht,hf) : T)`: `c ⇐ Bool`, `t ⇒ T`, then `f ⇐ T`
     /// (the then-branch's synthesized type drives the else-branch).
     ///
@@ -527,19 +543,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         f: Option<&surface::Expr>,
         span: Option<Span>,
     ) -> Expr<'tcx> {
-        let bool_ty = self.tcx.mk_bool();
-        let c = if self.inside_kernel {
-            let condition = self.infer_expr(c);
-            let ty = self.infer.shallow_resolve(condition.ty);
-            if !matches!(ty.kind(), TyKind::Tensor { elem, dims }
-                if dims.is_empty() && matches!(elem.kind(), TyKind::Bool))
-            {
-                self.expect(condition.ty, bool_ty, condition.span);
-            }
-            condition
-        } else {
-            self.check_expr(c, bool_ty)
-        };
+        let c = self.check_condition(c);
         let (t, f) = match f {
             Some(f) => {
                 let t = self.infer_expr(t);
@@ -627,7 +631,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
         }
         let mut regions = Vec::new();
-        for (source, expected) in [(condition, self.tcx.mk_bool()), (body, state_ty)] {
+        for (source, predicate) in [(condition, true), (body, false)] {
             let mark = self.vars.mark();
             let mut expressions = Vec::new();
             for (i, ((name, _), &ty)) in bindings.iter().zip(&field_types).enumerate() {
@@ -649,7 +653,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     span,
                 ));
             }
-            expressions.push(self.check_expr(source, expected));
+            let tail = if predicate {
+                self.check_condition(source)
+            } else {
+                self.check_expr(source, state_ty)
+            };
+            let expected = tail.ty;
+            expressions.push(tail);
             self.vars.restore(mark);
             let region = if expressions.len() == 1 {
                 expressions.pop().unwrap()

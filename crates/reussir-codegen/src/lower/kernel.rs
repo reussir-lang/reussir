@@ -502,6 +502,12 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
                     e.span,
                 )?
             }
+            ExprKind::While {
+                state,
+                initial,
+                condition,
+                body,
+            } => self.while_expr(block, env, state, initial, condition, body, e.span)?,
             ExprKind::If(condition, then, otherwise) => {
                 self.if_expr(block, env, condition, then, otherwise, e.ty, e.span)?
             }
@@ -511,6 +517,64 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
         };
         self.check_values(&result, &self.types(e.ty)?, e.span)?;
         Ok(result)
+    }
+    pub(super) fn while_expr<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut KernelEnv<'c, 'b>,
+        state: VarId,
+        initial: &Expr<'tcx>,
+        condition: &Expr<'tcx>,
+        body: &Expr<'tcx>,
+        span: Option<Span>,
+    ) -> Result<Vec<Value<'c, 'b>>> {
+        if !matches!(condition.ty.kind(), TyKind::Bool)
+            && !matches!(condition.ty.kind(), TyKind::Tensor { elem, dims }
+                if dims.is_empty() && matches!(elem.kind(), TyKind::Bool))
+        {
+            return err("kernel while predicate must be bool or rank-zero Tensor<bool>");
+        }
+        let types = self.control_result_types(initial.ty)?;
+        let initial = self.expr(block, env, initial)?;
+        self.check_values(&initial, &types, span)?;
+        let arguments: Vec<_> = types.iter().map(|ty| (*ty, self.loc(span))).collect();
+        let mut regions = Vec::new();
+        for (expression, predicate) in [(condition, true), (body, false)] {
+            let region_block = Block::new(&arguments);
+            env.subscope(|nested| {
+                nested.vars.insert(
+                    state,
+                    (0..types.len())
+                        .map(|i| {
+                            region_block
+                                .argument(i)
+                                .expect("constructed state argument")
+                                .into()
+                        })
+                        .collect(),
+                );
+                let values = self.expr(&region_block, nested, expression)?;
+                let expected = if predicate {
+                    self.types(self.tcx.mk_bool())?
+                } else {
+                    types.clone()
+                };
+                self.check_values(&values, &expected, expression.span)?;
+                self.ret(&region_block, &values, expression.span)
+            })?;
+            let region = Region::new();
+            region.append_block(region_block);
+            regions.push(region);
+        }
+        self.operation(
+            block,
+            "stablehlo.while",
+            &initial,
+            &types,
+            &[],
+            regions,
+            span,
+        )
     }
     fn constant<'b>(
         &self,
