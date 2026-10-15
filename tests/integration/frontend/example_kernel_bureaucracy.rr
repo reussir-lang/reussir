@@ -3,7 +3,7 @@
 // REQUIRES: linux, ifrt, pjrt-runtime
 // RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
 // RUN: %rrc %s --package-name bureaucracy --extern core=%t.core.rri --emit hir --no-source-locations -o %t.hir
-// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.hir --extern core=%t.core.rri --emit mir --no-source-locations -o %t.mir
 // RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
 // RUN: diff %t.mir %t.round.mir
 // RUN: %rrc %s --package-name bureaucracy --extern core=%t.core.rri -Onone --relocation-mode pic -o %t.o
