@@ -1,0 +1,59 @@
+// A 1024-cell periodic heat equation: dense device dot versus a host stencil.
+// REQUIRES: linux, ifrt, pjrt-runtime
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name heat_large --extern core=%t.core.rri --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: %rrc %t.mir -Oaggressive --relocation-mode pic -o %t.o
+// RUN: %cc %t.o %S/example_kernel_heat_large.c -o %t.exe %pjrt_runtime %extra_sys_libs
+// RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe
+// RUN: rm -rf %t.cache
+import core::intrinsic::array;
+import core::intrinsic::pjrt;
+
+#[placement(devices = "0", layout = "default")]
+#[launch(backend_optimization_level = "3", donation = "auto")]
+struct [value] HeatConfig {}
+
+#[kernel]
+fn diffuse_large(matrix: Tensor<[f32; 1024, 1024]>, initial: Tensor<[f32; 1024]>, steps: i64) -> Tensor<[f32; 1024]> {
+    let (i, temperature) = while [i = 0, temperature = initial] (i < steps) {
+        let next: Tensor<[f32; 1024]> = matrix.dot(temperature);
+        (i + 1, next)
+    };
+    temperature
+}
+
+// Independent O(N) stencil reference; the device uses a dense matrix-vector dot.
+fn reference(current: [f32; 1024], steps: i64) -> [f32; 1024] {
+    if steps <= 0 { current } else {
+        let next = array::tabulate<[f32; 1024]>(|i| {
+            0.5 * array::get(current, i) + 0.25 *
+                (array::get(current, (i + 1023) % 1024) + array::get(current, (i + 1) % 1024))
+        });
+        reference(next, steps - 1)
+    }
+}
+
+pub fn heat_large(steps: i64) -> (f32, f32) {
+    let matrix = array::tabulate<[f32; 1024, 1024]>(|row, col| {
+        if row == col { 0.5 }
+        else { if (row + 1) % 1024 == col || (row + 1023) % 1024 == col { 0.25 } else { 0.0 } }
+    });
+    let initial = array::tabulate<[f32; 1024]>(|i| if i == 512 { 1.0 } else { 0.0 });
+    let device_matrix = pjrt::upload(matrix);
+    let device_initial = pjrt::upload(initial);
+    let device_steps = pjrt::upload(steps);
+    let result = launch<HeatConfig>(diffuse_large, device_matrix, device_initial, device_steps);
+    let actual = result.download();
+    let expected = reference(initial, steps);
+    let errors = array::tabulate<[f32; 1024]>(|i| {
+        let difference = array::get(actual, i) - array::get(expected, i);
+        if difference < 0.0 { -difference } else { difference }
+    });
+    let zero: f32 = 0.0;
+    let maximum = array::fold(errors, zero, |largest, x| if x > largest { x } else { largest });
+    let energy = array::fold(actual, zero, |sum, x| sum + x);
+    (maximum, energy)
+}
+extern "C" trampoline "heat_large" = heat_large;
