@@ -54,9 +54,11 @@ fn emit_pixel(index: u64, value: i32) [{
 }];
 
 pub fn render_mandelbrot() -> u64 {
-    let limit = pjrt::upload(128i64);
+    let iterations: i64 = 128;
+    let limit = pjrt::upload(iterations);
     let pixels = launch<MandelbrotConfig>(escape_times, limit).download();
-    array::fold(pixels, 0u64, |index: u64, value: i32| {
+    let start: u64 = 0;
+    array::fold(pixels, start, |index: u64, value: i32| {
         emit_pixel(index, value);
         index + 1
     })
