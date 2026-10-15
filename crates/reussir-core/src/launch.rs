@@ -55,11 +55,20 @@ mod tests {
     fn metadata_is_checked_and_roundtrips() {
         for level in [None, Some(0), Some(1), Some(2), Some(3)] {
             for disable_donation in [false, true] {
-                let config = LaunchConfig { backend_optimization_level: level, disable_donation };
+                let config = LaunchConfig {
+                    backend_optimization_level: level,
+                    disable_donation,
+                };
                 assert_eq!(LaunchConfig::parse(&config.encode()), Ok(config));
             }
         }
-        for text in ["", "optimization=4,donation=auto", "optimization=-1,donation=none", "optimization=default,donation=force", "optimization=2,donation=none,extra=true"] {
+        for text in [
+            "",
+            "optimization=4,donation=auto",
+            "optimization=-1,donation=none",
+            "optimization=default,donation=force",
+            "optimization=2,donation=none,extra=true",
+        ] {
             assert!(LaunchConfig::parse(text).is_err(), "{text}");
         }
     }

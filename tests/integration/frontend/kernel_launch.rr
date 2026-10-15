@@ -28,14 +28,13 @@ pub fn default(x: DevArray<f32>) -> DevArray<f32> { launch(identity, x) }
 pub fn reuse(x: DevArray<f32>) -> (DevArray<f32>, DevArray<f32>) {
     (launch(identity, x), launch(identity, x))
 }
-pub fn closure(x: DevArray<f32>) -> DevArray<f32> {
+pub fn launch_closure(x: DevArray<f32>) -> DevArray<f32> {
     let f = |a: DevArray<f32>| launch(identity, a);
     f(x)
 }
 // CHECK: module @_reussir_launch_
 // CHECK: tensor<ui64>
-// CHECK: ifrt.Call
-// CHECK-SAME: reussir.backend_optimization_level = 2 : i32
+// CHECK: ifrt.Call {{.*}}reussir.backend_optimization_level = 2 : i32
 // CHECK-SAME: reussir.disable_donation
 // CHECK: reussir.array.from_ifrt
 // PREP: reussir.pjrt.jit_call

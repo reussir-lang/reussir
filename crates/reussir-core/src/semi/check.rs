@@ -1304,7 +1304,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         span: Option<Span>,
     ) -> Expr<'tcx> {
         if fc.name.segments.is_empty() && self.vars.lookup(fc.name.basename).is_some() {
-            self.error(span, "launch requires a named kernel function, not a local value");
+            self.error(
+                span,
+                "launch requires a named kernel function, not a local value",
+            );
             return self.poison(span);
         }
         if placement.len() > 1 {

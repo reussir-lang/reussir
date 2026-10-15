@@ -3,6 +3,9 @@
 // RUN: %rrc %S/Inputs/kernel_launch_driver.mlir -o %t.driver.o -O aggressive --relocation-mode pic
 // RUN: %cc %t.source.o %t.driver.o %S/Inputs/kernel_launch_execute.c -o %t.exe %pjrt_runtime %extra_sys_libs
 // RUN: env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" REUSSIR_PJRT_CACHE_CONFIG="%S/../runtime/Inputs/pjrt_cache.toml" %t.exe
+// RUN: %rrc %s -o %t.none.o -O none --relocation-mode pic
+// RUN: %cc %t.none.o %t.driver.o %S/Inputs/kernel_launch_execute.c -o %t.none.exe %pjrt_runtime %extra_sys_libs
+// RUN: env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" REUSSIR_PJRT_CACHE_CONFIG="%S/../runtime/Inputs/pjrt_cache.toml" %t.none.exe
 
 #[placement(devices = "0")]
 #[launch(backend_optimization_level = "1", donation = "none")]

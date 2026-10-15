@@ -22,15 +22,16 @@
 #include <xla/python/ifrt/ir/ifrt_dialect.h>
 #include <xla/python/ifrt/ir/ifrt_ops.h>
 #include <xla/python/ifrt/ir/reussir_target.h>
-#include <xla/python/ifrt/ir/transforms/utils.h>
 #include <xla/python/ifrt/ir/support/sharding_conversions.h>
+#include <xla/python/ifrt/ir/transforms/utils.h>
 #include <xla/shape_util.h>
 
 namespace reussir {
 mlir::Type makeIfrtArrayType(mlir::RankedTensorType shape,
-                           llvm::ArrayRef<int32_t> devices,
-                           mlir::Attribute sharding, mlir::StringAttr memoryKind,
-                           mlir::StringAttr layout) {
+                             llvm::ArrayRef<int32_t> devices,
+                             mlir::Attribute sharding,
+                             mlir::StringAttr memoryKind,
+                             mlir::StringAttr layout) {
   auto *ctx = shape.getContext();
   ctx->getOrLoadDialect<xla::ifrt::IfrtDialect>();
   if (!sharding)
@@ -47,14 +48,16 @@ mlir::Type makeIfrtArrayType(mlir::RankedTensorType shape,
 }
 mlir::Attribute getIfrtDevicesAttr(mlir::Type type) {
   auto array = mlir::dyn_cast_or_null<xla::ifrt::IfrtArrayType>(type);
-  return array ? xla::ifrt::IfrtDevicesAttr::get(type.getContext(), array.getDevices())
+  return array ? xla::ifrt::IfrtDevicesAttr::get(type.getContext(),
+                                                 array.getDevices())
                : mlir::Attribute{};
 }
 mlir::StringAttr getIfrtHloSharding(mlir::Type type) {
   auto array = mlir::dyn_cast_or_null<xla::ifrt::IfrtArrayType>(type);
   if (!array)
     return {};
-  auto sharding = mlir::dyn_cast<xla::ifrt::IfrtShardingParamAttr>(array.getShardingAttr());
+  auto sharding =
+      mlir::dyn_cast<xla::ifrt::IfrtShardingParamAttr>(array.getShardingAttr());
   if (!sharding)
     return {};
   auto hlo = xla::ifrt::support::ToHloSharding(sharding.getSharding());
@@ -67,11 +70,13 @@ bool ifrtArrayRequiresGlobalExtents(mlir::Type type) {
   auto array = mlir::dyn_cast_or_null<xla::ifrt::IfrtArrayType>(type);
   if (!array)
     return false;
-  auto sharding = mlir::dyn_cast<xla::ifrt::IfrtShardingParamAttr>(array.getShardingAttr());
+  auto sharding =
+      mlir::dyn_cast<xla::ifrt::IfrtShardingParamAttr>(array.getShardingAttr());
   if (!sharding)
     return false;
   auto dims = array.getShape().getShape();
-  auto shards = sharding.getSharding().dim_shards();
+  auto param = sharding.getSharding();
+  auto shards = param.dim_shards();
   for (auto [dim, count] : llvm::zip(dims, shards))
     if (mlir::ShapedType::isDynamic(dim) && count != 1)
       return true;
@@ -100,8 +105,10 @@ serializeIfrtCompileOptions(mlir::Operation *op) {
   }
   if (call->hasAttr("reussir.disable_donation") &&
       (!call->hasAttrOfType<mlir::UnitAttr>("reussir.disable_donation") ||
-       !call.getIoAliases().empty() || !call.getDonatedInputIndices().empty())) {
-    call.emitOpError("donation opt-out must be a unit attribute and cannot coexist with donation or alias contracts");
+       !call.getIoAliases().empty() ||
+       !call.getDonatedInputIndices().empty())) {
+    call.emitOpError("donation opt-out must be a unit attribute and cannot "
+                     "coexist with donation or alias contracts");
     return mlir::failure();
   }
   // Match IFRT's atom compiler: separate parameters, with sharding fixed by
@@ -109,13 +116,15 @@ serializeIfrtCompileOptions(mlir::Operation *op) {
   auto options = xla::ifrt::GetDefaultCompileOptions(
       call, /*enable_sharding_propagation=*/false,
       /*enable_parameter_tupling=*/false);
-  if (auto level = call->getAttrOfType<mlir::IntegerAttr>("reussir.backend_optimization_level")) {
+  if (auto level = call->getAttrOfType<mlir::IntegerAttr>(
+          "reussir.backend_optimization_level")) {
     auto value = level.getInt();
     if (value < 0 || value > 3) {
       call.emitOpError("backend optimization level must be in [0, 3]");
       return mlir::failure();
     }
-    options.executable_build_options.mutable_debug_options()->set_xla_backend_optimization_level(value);
+    options.executable_build_options.mutable_debug_options()
+        ->set_xla_backend_optimization_level(value);
   } else if (call->hasAttr("reussir.backend_optimization_level")) {
     call.emitOpError("backend optimization level must be an integer attribute");
     return mlir::failure();

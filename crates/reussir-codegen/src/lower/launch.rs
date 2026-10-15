@@ -93,7 +93,9 @@ pub(super) fn outline<'c, 'p, 'tcx>(
     let output = ifrt_array(tys.devarray_inner_of(expr.ty)?)
         .ok_or_else(|| LoweringError("kernel launch requires REUSSIR_ENABLE_OPENXLA".into()))?;
     if reussir_backend::dialect::ty::ifrt_requires_global_extents(output) {
-        return err("partitioned dynamic launch results require an explicit logical result-shape contract; use a static result shape or an unpartitioned placement");
+        return err(
+            "partitioned dynamic launch results require an explicit logical result-shape contract; use a static result shape or an unpartitioned placement",
+        );
     }
     let devices = ifrt_devices(output)
         .ok_or_else(|| LoweringError("invalid launch output placement".into()))?;
