@@ -39,7 +39,8 @@ MlirPass reussirCreateTokenInstantiationPass(bool acceptors, bool producers);
 MlirPass reussirCreateClosureOutliningPass(void);
 MlirPass reussirCreateRegionPatternsPass(void);
 MlirPass reussirCreateIncDecCancellationPass(void);
-MlirPass reussirCreatePjrtDonationPass(void);
+// Explicit contracts are materialized even when optional inference is disabled.
+MlirPass reussirCreatePjrtDonationPass(bool inferDonation);
 MlirPass reussirCreateRcDecrementExpansionPass(void);
 MlirPass reussirCreateInferVariantTagPass(void);
 MlirPass reussirCreateConvertToSTDPass(bool expandArrays);
@@ -78,7 +79,8 @@ MlirPass reussirCreateBasicOpsLoweringPass(bool closureWpd);
 // JIT compilation. Requires OpenXLA; run before basic lowering and symbol DCE.
 MlirPass reussirCreateIFRTJustInTimeTransformPass(void);
 // Prepares IFRT kernels before host optimization, or leaves ordinary modules alone.
-MlirPass reussirCreatePreparePjrtPass(void);
+// optimizeKernels enables optional target-independent StableHLO simplification.
+MlirPass reussirCreatePreparePjrtPass(bool optimizeKernels);
 MlirPass reussirCreateDebugInfoConversionPass(void);
 
 // Acquire/drop expansion has two phases controlled by these options; the

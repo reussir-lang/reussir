@@ -374,6 +374,8 @@ def ReussirAttachNativeTargetPass
 def ReussirPreparePjrtPass
     : Pass<"reussir-prepare-pjrt", "::mlir::ModuleOp"> {
   let summary = "Package outlined IFRT kernels before host optimization";
+  let options = [Option<"optimizeKernels", "optimize-kernels", "bool", "false",
+    "Run target-independent StableHLO optimization before serialization">];
   let description = [{
     Packages outlined IFRT atom programs as bytecode and removes unused
     source kernels before the host pipeline can inline or lower them.
@@ -386,6 +388,8 @@ def ReussirPreparePjrtPass
 def ReussirIFRTJustInTimeTransformPass
     : Pass<"reussir-ifrt-just-in-time-transform", "::mlir::ModuleOp"> {
   let summary = "Prepare IFRT kernels and call sites for just-in-time execution";
+  let options = [Option<"optimizeKernels", "optimize-kernels", "bool", "false",
+    "Run target-independent StableHLO optimization before serialization">];
   let description = [{
     Provides a general lowering pipeline for preparing outlined IFRT kernels
     and their call sites for just-in-time execution.

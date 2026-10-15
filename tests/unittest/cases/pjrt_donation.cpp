@@ -102,6 +102,36 @@ TEST_F(ReussirTest, PjrtDonationSerializedContractAndChecksum) {
   EXPECT_EQ(baseline, 1u);
 }
 
+TEST_F(ReussirTest, PjrtDonationInferenceCanBeDisabled) {
+  load(*context);
+  auto module = parse(program(2));
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(mlir::succeeded(prepare(*module)));
+  ReussirPjrtDonationPassOptions options;
+  options.inferDonation = false;
+  for (unsigned run = 0; run < 2; ++run) {
+    ASSERT_TRUE(mlir::succeeded(donate(*module, options)));
+    EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 1u);
+    unsigned calls = 0;
+    module->walk([&](ReussirPJRTJitCallOp call) {
+      ++calls;
+      EXPECT_TRUE(call.getDonationVariants().empty());
+      EXPECT_TRUE(call.getDonationGuards().empty());
+      EXPECT_FALSE(call.getInputs()[0]
+                       .getDefiningOp<ReussirArrayToIfrtOp>()
+                       .getMayDonate());
+    });
+    EXPECT_EQ(calls, 2u);
+    auto code = *module->getOps<ReussirIFRTBytecodeOp>().begin();
+    auto kernel = mlir::parseSourceString<mlir::ModuleOp>(code.getBytecode(),
+                                                          context.get());
+    ASSERT_TRUE(kernel);
+    auto entry = kernel->lookupSymbol<mlir::func::FuncOp>("main");
+    EXPECT_FALSE(entry.getArgAttr(0, "jax.buffer_donor"));
+    EXPECT_FALSE(entry.getArgAttr(0, "tf.aliasing_output"));
+  }
+}
+
 TEST_F(ReussirTest, PjrtDonationBudgetsFallBackWithoutGuards) {
   load(*context);
   for (unsigned kind = 0; kind < 3; ++kind) {
@@ -194,35 +224,40 @@ TEST_F(ReussirTest, PjrtDonationRejectsInvalidContract) {
 }
 TEST_F(ReussirTest, PjrtDonationExplicitContractReachesBytecode) {
   load(*context);
-  for (bool alias : {false, true}) {
-    auto module = parse(program(1));
-    ASSERT_TRUE(module);
-    ASSERT_TRUE(mlir::succeeded(prepare(*module)));
-    module->walk([&](ReussirPJRTJitCallOp call) {
-      mlir::OpBuilder builder(context.get());
-      call.getInputs()[0].getDefiningOp<ReussirArrayToIfrtOp>().setMayDonate(
-          true);
-      if (alias)
-        call.setIoAliasesAttr(
-            builder.getArrayAttr({builder.getDenseI32ArrayAttr({0, 0})}));
-      else
-        call.setDonatedInputIndicesAttr(builder.getDenseI32ArrayAttr({0}));
-    });
-    ASSERT_TRUE(mlir::succeeded(donate(*module)));
-    module->walk([&](ReussirPJRTJitCallOp call) {
-      auto code =
-          module->lookupSymbol<ReussirIFRTBytecodeOp>(call.getCalleeAttr());
-      ASSERT_TRUE(code);
-      auto kernel = mlir::parseSourceString<mlir::ModuleOp>(code.getBytecode(),
-                                                            context.get());
-      ASSERT_TRUE(kernel);
-      auto entry = kernel->lookupSymbol<mlir::func::FuncOp>("main");
-      EXPECT_TRUE(entry.getArgAttr(0, alias ? "tf.aliasing_output"
-                                            : "jax.buffer_donor"));
-      EXPECT_TRUE(call.getDonationVariants().empty());
-    });
-    ASSERT_TRUE(mlir::succeeded(donate(*module)));
-    EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 2u);
+  for (bool infer : {false, true}) {
+    SCOPED_TRACE(infer ? "inference enabled" : "inference disabled");
+    ReussirPjrtDonationPassOptions options;
+    options.inferDonation = infer;
+    for (bool alias : {false, true}) {
+      auto module = parse(program(1));
+      ASSERT_TRUE(module);
+      ASSERT_TRUE(mlir::succeeded(prepare(*module)));
+      module->walk([&](ReussirPJRTJitCallOp call) {
+        mlir::OpBuilder builder(context.get());
+        call.getInputs()[0].getDefiningOp<ReussirArrayToIfrtOp>().setMayDonate(
+            true);
+        if (alias)
+          call.setIoAliasesAttr(
+              builder.getArrayAttr({builder.getDenseI32ArrayAttr({0, 0})}));
+        else
+          call.setDonatedInputIndicesAttr(builder.getDenseI32ArrayAttr({0}));
+      });
+      ASSERT_TRUE(mlir::succeeded(donate(*module, options)));
+      module->walk([&](ReussirPJRTJitCallOp call) {
+        auto code =
+            module->lookupSymbol<ReussirIFRTBytecodeOp>(call.getCalleeAttr());
+        ASSERT_TRUE(code);
+        auto kernel = mlir::parseSourceString<mlir::ModuleOp>(
+            code.getBytecode(), context.get());
+        ASSERT_TRUE(kernel);
+        auto entry = kernel->lookupSymbol<mlir::func::FuncOp>("main");
+        EXPECT_TRUE(entry.getArgAttr(0, alias ? "tf.aliasing_output"
+                                              : "jax.buffer_donor"));
+        EXPECT_TRUE(call.getDonationVariants().empty());
+      });
+      ASSERT_TRUE(mlir::succeeded(donate(*module, options)));
+      EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 2u);
+    }
   }
 }
 

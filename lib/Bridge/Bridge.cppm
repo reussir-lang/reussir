@@ -159,7 +159,13 @@ void createLoweringPipeline(mlir::PassManager &pm,
                             ReussirOptOption opt = REUSSIR_OPT_DEFAULT,
                             bool reuseTokenAcrossCall = false,
                             bool enableInvariantAnalysis = false) {
-  pm.addPass(reussir::createReussirPreparePjrtPass());
+  // Keep optional device optimization out of unoptimized/fast compilation.
+  // Packaging and explicit donation contracts remain mandatory at every level.
+  const bool optimizeDeviceKernels =
+      opt != REUSSIR_OPT_NONE && opt != REUSSIR_OPT_TPDE;
+  reussir::ReussirPreparePjrtPassOptions preparation;
+  preparation.optimizeKernels = optimizeDeviceKernels;
+  pm.addPass(reussir::createReussirPreparePjrtPass(preparation));
   if (opt != REUSSIR_OPT_NONE) {
     llvm::StringMap<mlir::OpPassManager> pipelines;
     if (opt == REUSSIR_OPT_AGGRESSIVE)
@@ -175,7 +181,9 @@ void createLoweringPipeline(mlir::PassManager &pm,
   pm.addPass(reussir::createReussirRegionPatternsPass());
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirIncDecCancellationPass());
-  pm.addPass(reussir::createReussirPjrtDonationPass());
+  reussir::ReussirPjrtDonationPassOptions donation;
+  donation.inferDonation = optimizeDeviceKernels;
+  pm.addPass(reussir::createReussirPjrtDonationPass(donation));
   pm.addPass(reussir::createReussirRcDecrementExpansionPass());
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirInferVariantTagPass());

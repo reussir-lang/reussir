@@ -42,6 +42,13 @@ impl OptLevel {
         !matches!(self, OptLevel::None)
     }
 
+    /// Optional kernel simplification and donation inference are skipped for
+    /// unoptimized and fast-compilation modes. Required packaging and explicit
+    /// donation contracts still run at every level.
+    fn optimizes_device_kernels(self) -> bool {
+        matches!(self, Self::Default | Self::Aggressive | Self::Size)
+    }
+
     /// This level as its matching `ReussirOptOption` C enum value — the contract
     /// the LLVM-IR-level backend pipeline (`reussirRunBackendLLVMPipeline`)
     /// expects. Owned here so callers (the JIT, the AOT compiler) need not
@@ -360,7 +367,7 @@ pub fn run_lowering_pipeline(
         }
 
         // Package device kernels before host inlining or scalar optimization.
-        module: sys::reussirCreatePreparePjrtPass();
+        module: sys::reussirCreatePreparePjrtPass(options.opt.optimizes_device_kernels());
 
         // Optimization-only prologue.
         if options.opt.runs_optimization() => {
@@ -409,7 +416,7 @@ pub fn run_lowering_pipeline(
         // dynamic `token<align, ?>` an earlier instantiation would freeze).
         func:   sys::reussirCreateTokenInstantiationPass(false, true);
         func:   sys::reussirCreateIncDecCancellationPass();
-        module: sys::reussirCreatePjrtDonationPass();
+        module: sys::reussirCreatePjrtDonationPass(options.opt.optimizes_device_kernels());
         module: sys::reussirCreateRcDecrementExpansionPass();
         func:   sys::reussirCreateInferVariantTagPass();
         module: sys::reussirCreateAcquireDropExpansionPass(

@@ -333,6 +333,8 @@ def ReussirSCCPPass : Pass<"reussir-sccp", "::mlir::ModuleOp"> {
 def ReussirPjrtDonationPass : Pass<"reussir-pjrt-donation", "::mlir::ModuleOp"> {
   let summary = "Infer array donation and emit bounded PJRT kernel variants";
   let options = [
+    Option<"inferDonation", "infer-donation", "bool", "true",
+      "Infer optional donation variants; explicit contracts are always materialized">,
     Option<"maxVariants", "max-variants", "unsigned", "4", "Artifacts per kernel including baseline">,
     Option<"maxExtraBytes", "max-extra-bytes", "uint64_t", "16777216", "Module-wide additional bytecode budget">,
     Option<"maxCandidates", "max-candidates", "unsigned", "128", "Candidate contracts per kernel">,
