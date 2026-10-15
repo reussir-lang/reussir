@@ -122,8 +122,8 @@ fn ordinary_future_done_method_is_a_private_kernel_specialization() {
     let text = result.unwrap();
     assert!(text.contains("func.func private @_RI"), "{text}");
     assert!(
-        text.contains("call @_RI"),
-        "ordinary member must remain a call: {text}"
+        !text.contains("call @_RI"),
+        "simple intrinsic member must inline during codegen: {text}"
     );
     assert!(text.contains("stablehlo.async_done"), "{text}");
 }

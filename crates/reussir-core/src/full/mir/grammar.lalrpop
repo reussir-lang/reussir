@@ -103,6 +103,7 @@ Sym: String = <s:"ident"> => s.into();
 
 Name: &'input str = {
     <name:BareName> => name,
+    "str" => "str",
     "Future" => "Future",
     "Nullable" => "Nullable",
     "Cell" => "Cell",

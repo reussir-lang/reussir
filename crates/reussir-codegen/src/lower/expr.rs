@@ -30,7 +30,7 @@ use reussir_backend::melior::ir::attribute::{
 };
 use reussir_backend::melior::ir::r#type::{FunctionType, IntegerType, MemRefType};
 use reussir_backend::melior::ir::{
-    Block, BlockLike, Identifier, Location, Operation, Region, RegionLike, Type, Value,
+    Block, BlockLike, Identifier, Location, Operation, Region, RegionLike, Type, Value, ValueLike,
 };
 
 use reussir_core::full::mir::{self, DecisionTree, Expr, ExprKind, SwitchCases};
@@ -948,6 +948,62 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                         self.cur_file.get(),
                         e.span,
                     ));
+                }
+                if !regional
+                    && let Some(function) = self
+                        .program
+                        .functions
+                        .iter()
+                        .find(|function| function.symbol == *callee)
+                    && let Some(body) = super::intrinsic_wrapper_body(function)
+                {
+                    if args.len() != function.params.len() {
+                        return err(
+                            "intrinsic wrapper argument count does not match its signature",
+                        );
+                    }
+                    // Argument evaluation belongs to the caller. Ownership of
+                    // the bound values belongs to a fresh callee frame, with
+                    // the same analysis as a separately emitted function.
+                    let mut arguments = Vec::with_capacity(args.len());
+                    for arg in args.iter() {
+                        arguments.push(self.expr(block, env, arg)?);
+                    }
+                    // Reuse immutable type/record tables. Only per-function
+                    // state is swapped, avoiding an entire program scan for
+                    // each small wrapper call. Restore it on errors as well.
+                    let saved_ownership =
+                        self.ownership
+                            .replace(analyze_function(self.tcx, function, &self.records));
+                    let saved_vars = self.var_tys.replace(FxHashMap::default());
+                    let saved_temps = self.temp_tys.replace(FxHashMap::default());
+                    let saved_file = self.cur_file.replace(function.file);
+                    let result = (|| {
+                        let mut frame = Env::new(None, false);
+                        for (parameter, argument) in function.params.iter().zip(arguments) {
+                            self.bind_var_ty(parameter.var, parameter.ty);
+                            match argument {
+                                Some(value)
+                                    if !is_unit(parameter.ty)
+                                        && value.r#type() == self.tys.mlir_ty(parameter.ty)? =>
+                                {
+                                    frame.vars.insert(parameter.var, value);
+                                }
+                                None if is_unit(parameter.ty) => {}
+                                _ => {
+                                    return err(
+                                        "intrinsic wrapper argument type does not match its signature",
+                                    );
+                                }
+                            }
+                        }
+                        self.expr(block, &mut frame, body)
+                    })();
+                    self.cur_file.set(saved_file);
+                    self.temp_tys.replace(saved_temps);
+                    self.var_tys.replace(saved_vars);
+                    self.ownership.replace(saved_ownership);
+                    return result;
                 }
                 // A `regional` callee takes the enclosing region as an implicit
                 // leading argument; thread it ahead of the source arguments.

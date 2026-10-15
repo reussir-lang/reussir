@@ -78,6 +78,42 @@ use reussir_syntax::kind::{Resolver, TokenKey};
 use crate::source::{FileId, SourceCache};
 use expr::Lowerer;
 
+/// A straight-line wrapper around one intrinsic has no useful call boundary.
+/// Recognize its body structurally so ordinary member functions and imported
+/// generic instances work identically, including when re-entering textual MIR.
+/// Calls, control flow and closures are excluded: this is not a recursive or
+/// heuristic whole-program inliner. Explicit transform anchors retain their
+/// function boundary.
+fn intrinsic_wrapper_body<'tcx>(function: &mir::Function<'tcx>) -> Option<&'tcx mir::Expr<'tcx>> {
+    use mir::ExprKind::*;
+    fn simple(expr: &mir::Expr<'_>, intrinsics: &mut usize) -> bool {
+        match expr.kind {
+            Intrinsic { args, .. } | ArrayOp { args, .. } | TensorOp { args, .. } => {
+                *intrinsics += 1;
+                *intrinsics == 1 && args.iter().all(|arg| simple(arg, intrinsics))
+            }
+            Var(_) | GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_) => {
+                true
+            }
+            Tuple(fields) | Seq(fields) => fields.iter().all(|field| simple(field, intrinsics)),
+            Proj(value, _) | Cast(value, _) | Negate(value) | Not(value) => {
+                simple(value, intrinsics)
+            }
+            Let { value, .. } => simple(value, intrinsics),
+            Arith(left, _, right) | Cmp(left, _, right) => {
+                simple(left, intrinsics) && simple(right, intrinsics)
+            }
+            _ => false,
+        }
+    }
+    if function.transform_anchor || function.is_regional {
+        return None;
+    }
+    let body = function.body?;
+    let mut intrinsics = 0;
+    (simple(body, &mut intrinsics) && intrinsics == 1).then_some(body)
+}
+
 /// How lowered functions map to LLVM linkage.
 ///
 /// The JIT and the AOT compiler need opposite defaults. The REPL adds modules
