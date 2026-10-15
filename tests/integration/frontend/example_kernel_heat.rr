@@ -1,0 +1,48 @@
+// Eight cells on a periodic ring: one hot cell spreads its heat to neighbors.
+// This is a full host -> upload -> launch -> download example, not a raw-MLIR runner.
+// REQUIRES: linux, ifrt, pjrt-runtime
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name heat_demo --extern core=%t.core.rri --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: %rrc %s --package-name heat_demo --extern core=%t.core.rri -Onone --relocation-mode pic -o %t.o
+// RUN: %cc %t.o %S/example_kernel_heat.c -o %t.exe %pjrt_runtime %extra_sys_libs
+// RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe
+// RUN: %rrc %t.mir -Oaggressive --relocation-mode pic -o %t.opt.o
+// RUN: %cc %t.opt.o %S/example_kernel_heat.c -o %t.opt.exe %pjrt_runtime %extra_sys_libs
+// RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.opt.exe
+// RUN: rm -rf %t.cache
+import core::intrinsic::array;
+import core::intrinsic::pjrt;
+
+#[placement(devices = "0", layout = "default")]
+#[launch(backend_optimization_level = "2", donation = "none")]
+struct [value] HeatConfig {}
+
+#[kernel]
+fn diffuse(matrix: Tensor<[f32; 8, 8]>, initial: Tensor<[f32; 8]>, steps: i64) -> Tensor<[f32; 8]> {
+    let (i, temperature) = while [i = 0, temperature = initial] (i < steps) {
+        let next: Tensor<[f32; 8]> = matrix.dot(temperature);
+        (i + 1, next)
+    };
+    temperature
+}
+
+fn evolve(steps: i64) -> [f32; 8] {
+    let matrix = array::tabulate<[f32; 8, 8]>(|row, col| {
+        if row == col { 0.5 }
+        else { if (row + 1) % 8 == col || (row + 7) % 8 == col { 0.25 } else { 0.0 } }
+    });
+    let initial = array::tabulate<[f32; 8]>(|i| if i == 4 { 1.0 } else { 0.0 });
+    let device_matrix = pjrt::upload(matrix);
+    let device_initial = pjrt::upload(initial);
+    let device_steps = pjrt::upload(steps);
+    let result = launch<HeatConfig>(diffuse, device_matrix, device_initial, device_steps);
+    result.download()
+}
+
+pub fn heat_sample(steps: i64, index: i64) -> f32 { array::get(evolve(steps), index) }
+pub fn heat_energy(steps: i64) -> f32 { array::fold(evolve(steps), 0.0, |sum, x| sum + x) }
+extern "C" trampoline "heat_sample" = heat_sample;
+extern "C" trampoline "heat_energy" = heat_energy;
