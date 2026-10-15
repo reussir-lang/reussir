@@ -9,9 +9,10 @@ static void check(const char *name, uint64_t actual, uint64_t expected) {
   if (actual != expected) { fprintf(stderr, "%s: got %llu, expected %llu\n", name, (unsigned long long)actual, (unsigned long long)expected); abort(); }
 }
 #define CHECK(name, expected) check(#name, name(n), (expected))
+extern uint64_t captured_alias(uint64_t);
 int main(void) {
   for (uint64_t n = 0; n < 25; ++n) {
-    CHECK(regional_loop, n); CHECK(replace_unused, n); CHECK(condition_capture, n);
+    CHECK(captured_alias, 34); CHECK(regional_loop, n); CHECK(replace_unused, n); CHECK(condition_capture, n);
     CHECK(counter, n); CHECK(swap, n * 100 + (n % 2 ? 21 : 12));
     CHECK(effects, n * 10000 + (n + 1) * 100 + n + 3);
     CHECK(zero_state, n); CHECK(managed, n + 7); CHECK(managed_many, 2 * n + 30);

@@ -88,3 +88,12 @@ pub fn condition_capture(n: u64) -> u64 {
     while [i = 0] (i < limit.n) { i + 1 }
 }
 extern "C" trampoline "condition_capture" = condition_capture;
+
+pub fn captured_alias(n: u64) -> u64 {
+    let original = Boxed { n: 17 };
+    let (i, value) = while [i = 0, value = original] (i < n) {
+        (i + 1, original)
+    };
+    value.n + original.n
+}
+extern "C" trampoline "captured_alias" = captured_alias;
