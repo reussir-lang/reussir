@@ -4,7 +4,7 @@
 // RUN: %rrc %s --package-name app --extern dep=%t.rri --emit hir --no-source-locations -o %t.hir
 // RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.hir.round
 // RUN: diff %t.hir %t.hir.round
-// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --emit mir --no-source-locations -o %t.mir
 // RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.mir.round
 // RUN: diff %t.mir %t.mir.round
 // RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.mlir

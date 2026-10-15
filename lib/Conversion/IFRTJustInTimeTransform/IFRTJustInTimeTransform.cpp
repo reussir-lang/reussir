@@ -142,7 +142,8 @@ struct ReussirIFRTJustInTimeTransformPass
             if (optimizeKernels) {
               mlir::PassManager optimization(&getContext());
               optimization.addNestedPass<mlir::func::FuncOp>(
-                  mlir::stablehlo::createStablehloTargetIndependentOptimizationPass());
+                  mlir::stablehlo::
+                      createStablehloTargetIndependentOptimizationPass());
               if (mlir::failed(optimization.run(*copy)))
                 return mlir::WalkResult::interrupt();
             }

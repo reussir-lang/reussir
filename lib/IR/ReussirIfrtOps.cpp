@@ -107,7 +107,8 @@ mlir::LogicalResult ReussirPJRTJitCallOp::verify() {
       (!(*this)->hasAttrOfType<mlir::UnitAttr>("reussir.disable_donation") ||
        !getIoAliases().empty() || !getDonatedInputIndices().empty() ||
        !getDonationVariants().empty()))
-    return emitOpError("donation opt-out requires a unit attribute and no donation contracts or variants");
+    return emitOpError("donation opt-out requires a unit attribute and no "
+                       "donation contracts or variants");
 #ifdef REUSSIR_ENABLE_OPENXLA
   if (mlir::failed(verifyIfrtCallSignature(
           getOperation(), getInputs().getTypes(), getOutputs().getTypes(),
