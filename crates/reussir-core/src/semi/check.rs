@@ -1289,9 +1289,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return self.closure_apply(callee, args, span);
         }
 
-        if matches!(self.infer.shallow_resolve(raw).kind(), TyKind::Future(_)) {
+        let former = match self.infer.shallow_resolve(raw).kind() {
+            TyKind::Future(_) => Some(crate::semi::lang::FormerItem::TensorFuture),
+            TyKind::DevArray { .. } => Some(crate::semi::lang::FormerItem::DevArray),
+            _ => None,
+        };
+        if let Some(former) = former {
             let surface::Access::Named(name) = last else {
-                self.error(span, "a Future has no positional fields");
+                self.error(span, "a builtin device value has no positional fields");
                 return self.poison(span);
             };
             let receiver = if indices.is_empty() {
@@ -1301,16 +1306,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             };
             // The former's anchor supplies the ordinary inherent method path;
             // receiver inference and kernel checks are shared with records.
-            if let Some(anchor) = self.lang.get(crate::semi::lang::LangItem::Former(
-                crate::semi::lang::FormerItem::TensorFuture,
-            )) && let Some(method) = self.dot_method_candidate(anchor, *name)
+            if let Some(anchor) = self.lang.get(crate::semi::lang::LangItem::Former(former))
+                && let Some(method) = self.dot_method_candidate(anchor, *name)
             {
                 return self.infer_method_call(receiver, Some(anchor), method, *name, args, span);
             }
             self.error(
                 span,
                 format!(
-                    "no method `{}` on Future; load its core declaration to use inherent methods",
+                    "no method `{}` on builtin device value; load its core declaration to use inherent methods",
                     self.sym(*name)
                 ),
             );
@@ -3034,6 +3038,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             "panic" => Some(self.infer_panic_intrinsic(fc, span)),
             "math" => Some(self.infer_math_intrinsic(fc, span)),
             "array" => Some(self.infer_array_intrinsic(fc, span)),
+            "pjrt" => Some(self.infer_pjrt_intrinsic(fc, span)),
             "tensor" => Some(self.infer_tensor_intrinsic(fc, span)),
             "cell" => Some(self.infer_cell_intrinsic(fc, span)),
             "str" => Some(self.infer_str_intrinsic(fc, span)),
@@ -3045,6 +3050,127 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 Some(self.poison(span))
             }
         }
+    }
+
+    fn infer_pjrt_intrinsic(&mut self, fc: &surface::FuncCall, span: Option<Span>) -> Expr<'tcx> {
+        use crate::intrinsic::{IntrinsicOp, PjrtFn};
+        let Some(func) = PjrtFn::parse(self.sym(fc.name.basename)) else {
+            self.error(span, "unknown device array intrinsic");
+            return self.poison(span);
+        };
+        let (ty, args) = match func {
+            PjrtFn::Alloc => {
+                let [Some(t)] = fc.ty_args.as_slice() else {
+                    self.error(span, "pjrt::alloc requires one explicit DevArray type");
+                    return self.poison(span);
+                };
+                let ty = self.eval_type(t);
+                let TyKind::DevArray { elem, dims, .. } = *ty.kind() else {
+                    self.error(span, "pjrt::alloc requires a DevArray type");
+                    return self.poison(span);
+                };
+                let count = dims
+                    .iter()
+                    .filter(|&&d| d == crate::semi::ty::DYNAMIC_EXTENT)
+                    .count();
+                if fc.args.len() != count + 1 {
+                    self.error(span, format!("pjrt::alloc expects {count} dynamic extents followed by an initial value"));
+                    return self.poison(span);
+                }
+                let extent_ty = self.tcx.mk_int(crate::semi::ty::IntTy::Unsigned(64));
+                let mut args: Vec<_> = fc.args[..count]
+                    .iter()
+                    .map(|e| self.check_expr(e, extent_ty))
+                    .collect();
+                args.push(self.check_expr(&fc.args[count], elem));
+                (ty, args)
+            }
+            PjrtFn::Upload | PjrtFn::Download | PjrtFn::Dim => {
+                let count = if func == PjrtFn::Dim { 2 } else { 1 };
+                if fc.args.len() != count
+                    || (func != PjrtFn::Upload && !fc.ty_args.is_empty())
+                    || fc.ty_args.len() > 1
+                {
+                    self.error(
+                        span,
+                        "invalid device transfer argument or type argument count",
+                    );
+                    return self.poison(span);
+                }
+                let base = self.infer_expr(&fc.args[0]);
+                let base_ty = self.infer.shallow_resolve(base.ty);
+                let ty = if func == PjrtFn::Upload {
+                    let (elem, dims) = match *base_ty.kind() {
+                        TyKind::Array { elem, dims } => (elem, dims),
+                        _ => (base_ty, &[][..]),
+                    };
+                    if !crate::semi::ty_eval::device_element_supported(elem) {
+                        self.error(
+                            span,
+                            "device transfer requires a supported scalar element type",
+                        );
+                    }
+                    let placement = match fc.ty_args.as_slice() {
+                        [] => None,
+                        [Some(t)] => Some(self.eval_type(t)),
+                        _ => {
+                            self.error(span, "upload placement must be explicit");
+                            return self.poison(span);
+                        }
+                    };
+                    if let Some(p) = placement {
+                        let valid = match *p.kind() {
+                            TyKind::DefaultPlacement
+                            | TyKind::Generic(_)
+                            | TyKind::Hole(_)
+                            | TyKind::Bottom => true,
+                            TyKind::Record { def, args, .. } => {
+                                args.is_empty()
+                                    && self
+                                        .records
+                                        .get(&def)
+                                        .is_some_and(|r| r.placement.is_some())
+                            }
+                            _ => false,
+                        };
+                        if !valid {
+                            self.error(span, "upload placement must be a #[placement] marker type");
+                        }
+                    }
+                    self.tcx.mk_devarray(elem, dims, placement)
+                } else {
+                    let TyKind::DevArray { elem, dims, .. } = *base_ty.kind() else {
+                        self.error(span, "device operation expects a DevArray");
+                        return self.poison(span);
+                    };
+                    if func == PjrtFn::Download {
+                        if dims.is_empty() {
+                            elem
+                        } else {
+                            self.tcx.mk_array(elem, dims)
+                        }
+                    } else {
+                        self.tcx.mk_int(crate::semi::ty::IntTy::Unsigned(64))
+                    }
+                };
+                let mut args = vec![base];
+                if func == PjrtFn::Dim {
+                    args.push(self.check_expr(
+                        &fc.args[1],
+                        self.tcx.mk_int(crate::semi::ty::IntTy::Unsigned(64)),
+                    ));
+                }
+                (ty, args)
+            }
+        };
+        self.mk_expr(
+            ExprKind::Intrinsic {
+                op: IntrinsicOp::Pjrt { func },
+                args,
+            },
+            ty,
+            span,
+        )
     }
 
     /// (PANIC) `core::intrinsic::panic::panic::<T?>()`: emit an aborting

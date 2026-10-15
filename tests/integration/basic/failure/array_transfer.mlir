@@ -42,3 +42,30 @@ func.func @payload_token(%src: memref<1024xf32>, %t: !reussir.token<align: 8, si
   %d = reussir.array.to_device %src token(%t : !reussir.token<align: 8, size: 4104>) : memref<1024xf32> -> !reussir.rc<!reussir.array<1024 x f32, #reussir.target<devices = [0]>>>
   return
 }
+
+
+// -----
+func.func @extent_host(%d: !reussir.rc<!reussir.array<3 x i32>>) {
+  // expected-error @+1 {{requires a target-annotated device array}}
+  %n = reussir.array.device_extent %d[0] : !reussir.rc<!reussir.array<3 x i32>>
+  return
+}
+// -----
+!D = !reussir.rc<!reussir.array<? x i32, #reussir.target<devices = [0]>>>
+func.func @extent_rank(%d: !D) {
+  // expected-error @+1 {{dimension is outside the array rank}}
+  %n = reussir.array.device_extent %d[1] : !D
+  return
+}
+// -----
+func.func @wrong_width(%src: memref<4xi32>) {
+  // expected-error @+1 {{host and device element types must match}}
+  %d = reussir.array.to_device %src : memref<4xi32> -> !reussir.rc<!reussir.array<4 x ui64, #reussir.target<devices = [0]>>>
+  return
+}
+// -----
+func.func @bool_not_byte(%src: memref<4xi8>) {
+  // expected-error @+1 {{host and device element types must match}}
+  %d = reussir.array.to_device %src : memref<4xi8> -> !reussir.rc<!reussir.array<4 x i1, #reussir.target<devices = [0]>>>
+  return
+}

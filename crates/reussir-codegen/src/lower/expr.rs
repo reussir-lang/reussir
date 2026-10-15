@@ -28,6 +28,7 @@ use reussir_backend::melior::ir::attribute::{
     ArrayAttribute, Attribute, DenseI64ArrayAttribute, FlatSymbolRefAttribute, IntegerAttribute,
     StringAttribute, TypeAttribute,
 };
+use reussir_backend::melior::ir::operation::OperationBuilder;
 use reussir_backend::melior::ir::r#type::{FunctionType, IntegerType, MemRefType};
 use reussir_backend::melior::ir::{
     Block, BlockLike, Identifier, Location, Operation, Region, RegionLike, Type, Value,
@@ -869,6 +870,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     );
                     Ok(Some(self.append(block, built)))
                 }
+                IntrinsicOp::Pjrt { func } => self.lower_pjrt_intrinsic(block, env, e, *func, args),
                 IntrinsicOp::Cell { func } => self.lower_cell_intrinsic(block, env, e, *func, args),
                 IntrinsicOp::Str { func } => {
                     use reussir_core::intrinsic::StrFn;
@@ -3435,23 +3437,259 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         op: ArrayFn,
         args: &'tcx [Expr<'tcx>],
     ) -> Result<Option<Value<'c, 'b>>> {
-        // Frontend-complete, backend-pending: a dynamic-extent array lowers
-        // to the strided-header box; until that lands every op on one stops here.
-        let shaped = match op {
-            ArrayFn::Splat | ArrayFn::Tabulate => e.ty,
-            _ => args[0].ty,
-        };
-        if Self::array_dims(shaped).is_ok_and(reussir_core::semi::ty::has_dynamic_extent) {
-            return err("dynamic-extent arrays do not lower yet");
-        }
         match op {
             ArrayFn::Get => self.array_get(block, env, e, args).map(Some),
             ArrayFn::Set => self.array_set(block, env, args).map(Some),
             ArrayFn::Splat => self.array_splat(block, env, e, args).map(Some),
             ArrayFn::Tabulate => self.array_tabulate(block, env, e, args).map(Some),
             ArrayFn::Fold => self.array_fold(block, env, e, args).map(Some),
-            ArrayFn::Dim => err("`array::dim` does not lower yet"),
+            ArrayFn::Dim => self.array_dim(block, env, args).map(Some),
         }
+    }
+
+    fn array_extent_operands<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        args: &'tcx [Expr<'tcx>],
+    ) -> Result<Vec<Value<'c, 'b>>> {
+        let mut extents = Vec::new();
+        let loc = self.loc();
+        for arg in args {
+            let raw = self
+                .expr(block, env, arg)?
+                .ok_or_else(|| LoweringError("array extent is unit".into()))?;
+            let extent = self.append(
+                block,
+                arith::index_castui(raw, Type::index(self.context), loc),
+            );
+            let back = self.append(
+                block,
+                arith::index_castui(extent, IntegerType::new(self.context, 64).into(), loc),
+            );
+            let fits = self.append(
+                block,
+                arith::cmpi(self.context, CmpiPredicate::Eq, raw, back, loc),
+            );
+            self.array_assert(block, fits, "array extent exceeds target index width");
+            extents.push(extent);
+        }
+        Ok(extents)
+    }
+
+    fn array_assert(&self, block: &Block<'c>, condition: Value<'c, '_>, message: &str) {
+        block.append_operation(
+            OperationBuilder::new("cf.assert", self.loc())
+                .add_operands(&[condition])
+                .add_attributes(&[(
+                    Identifier::new(self.context, "msg"),
+                    StringAttribute::new(self.context, message).into(),
+                )])
+                .build()
+                .expect("valid array assertion"),
+        );
+    }
+
+    fn device_extent<'b>(
+        &self,
+        block: &'b Block<'c>,
+        array: Value<'c, 'b>,
+        dimension: usize,
+    ) -> Value<'c, 'b> {
+        self.append(
+            block,
+            OperationBuilder::new("reussir.array.device_extent", self.loc())
+                .add_operands(&[array])
+                .add_attributes(&[(
+                    Identifier::new(self.context, "dimension"),
+                    IntegerAttribute::new(
+                        IntegerType::new(self.context, 64).into(),
+                        dimension as i64,
+                    )
+                    .into(),
+                )])
+                .add_results(&[Type::index(self.context)])
+                .build()
+                .expect("valid device extent"),
+        )
+    }
+
+    fn array_dim<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        args: &'tcx [Expr<'tcx>],
+    ) -> Result<Value<'c, 'b>> {
+        if args.len() != 2 {
+            return err("array dim expects an array and an axis");
+        }
+        let rank = match args[0].ty.kind() {
+            TyKind::Array { dims, .. } | TyKind::DevArray { dims, .. } => dims.len(),
+            _ => return err("array dim expects an array"),
+        };
+        let array = self
+            .expr(block, env, &args[0])?
+            .ok_or_else(|| LoweringError("array is unit".into()))?;
+        self.remember_temp(env, &args[0], array);
+        let axis = self
+            .expr(block, env, &args[1])?
+            .ok_or_else(|| LoweringError("array axis is unit".into()))?;
+        let loc = self.loc();
+        let u64ty = IntegerType::new(self.context, 64).into();
+        let rank_value = self.append(
+            block,
+            arith::constant(
+                self.context,
+                IntegerAttribute::new(u64ty, rank as i64).into(),
+                loc,
+            ),
+        );
+        let valid = self.append(
+            block,
+            arith::cmpi(self.context, CmpiPredicate::Ult, axis, rank_value, loc),
+        );
+        self.array_assert(block, valid, "array dimension is outside the rank");
+        let extent = if matches!(args[0].ty.kind(), TyKind::DevArray { .. }) {
+            let mut value = self.index_const(block, 0);
+            for i in 0..rank {
+                let size = self.device_extent(block, array, i);
+                let index = self.append(
+                    block,
+                    arith::constant(
+                        self.context,
+                        IntegerAttribute::new(u64ty, i as i64).into(),
+                        loc,
+                    ),
+                );
+                let selected = self.append(
+                    block,
+                    arith::cmpi(self.context, CmpiPredicate::Eq, axis, index, loc),
+                );
+                value = self.append(block, arith::select(selected, size, value, loc));
+            }
+            value
+        } else {
+            let view = self.array_view_of(block, array, args[0].ty)?;
+            let axis = self.append(
+                block,
+                arith::index_castui(axis, Type::index(self.context), loc),
+            );
+            self.append(block, memref::dim(view, axis, loc))
+        };
+        Ok(self.append(block, arith::index_castui(extent, u64ty, loc)))
+    }
+
+    fn lower_pjrt_intrinsic<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        e: &Expr<'tcx>,
+        op: reussir_core::intrinsic::PjrtFn,
+        args: &'tcx [Expr<'tcx>],
+    ) -> Result<Option<Value<'c, 'b>>> {
+        use reussir_core::intrinsic::PjrtFn;
+        reussir_core::intrinsic::validate_pjrt(
+            op,
+            e.ty,
+            &args.iter().map(|e| e.ty).collect::<Vec<_>>(),
+        )
+        .map_err(|e| LoweringError(e.into()))?;
+        if op == PjrtFn::Dim {
+            return self.array_dim(block, env, args).map(Some);
+        }
+        let loc = self.loc();
+        let upload = |host, result| {
+            OperationBuilder::new("reussir.array.to_device", loc)
+                .add_operands(&[host])
+                .add_results(&[result])
+                .build()
+                .expect("valid device upload")
+        };
+        if op == PjrtFn::Alloc {
+            let TyKind::DevArray { elem, dims, .. } = *e.ty.kind() else {
+                return err("device allocation requires a DevArray result");
+            };
+            let count = dims
+                .iter()
+                .filter(|&&d| d == reussir_core::semi::ty::DYNAMIC_EXTENT)
+                .count();
+            if args.len() != count + 1 || args[count].ty != elem {
+                return err("invalid device allocation extent or element types");
+            }
+            let host_ty = self.tcx.mk_array(elem, dims);
+            let host_expr = Expr { ty: host_ty, ..*e };
+            let host = self.array_splat(block, env, &host_expr, args)?;
+            let view = self.array_view_of(block, host, host_ty)?;
+            let result = self.append(block, upload(view, self.tys.mlir_ty(e.ty)?));
+            self.emit_dec(block, host, host_ty)?;
+            return Ok(Some(result));
+        }
+        let [base] = args else {
+            return err("device transfer requires one array");
+        };
+        let (host_value_ty, device_ty) = if op == PjrtFn::Upload {
+            (base.ty, e.ty)
+        } else {
+            (e.ty, base.ty)
+        };
+        let TyKind::DevArray { elem, dims, .. } = *device_ty.kind() else {
+            return err("device transfer requires a DevArray");
+        };
+        let scalar = dims.is_empty();
+        let host_ty = self.tcx.mk_array(elem, dims);
+        if host_value_ty != if scalar { elem } else { host_ty } {
+            return err("device transfer shape and scalar type must match");
+        }
+        if op == PjrtFn::Upload && scalar {
+            let host_expr = Expr { ty: host_ty, ..*e };
+            let host = self.array_splat(block, env, &host_expr, args)?;
+            let view = self.array_view_of(block, host, host_ty)?;
+            let result = self.append(block, upload(view, self.tys.mlir_ty(device_ty)?));
+            self.emit_dec(block, host, host_ty)?;
+            return Ok(Some(result));
+        }
+        let array = self
+            .expr(block, env, base)?
+            .ok_or_else(|| LoweringError("transfer operand is unit".into()))?;
+        self.remember_temp(env, base, array);
+        let result = if op == PjrtFn::Upload {
+            let view = self.array_view_of(block, array, host_ty)?;
+            self.append(block, upload(view, self.tys.mlir_ty(device_ty)?))
+        } else {
+            let extents: Vec<_> = dims
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| **d == reussir_core::semi::ty::DYNAMIC_EXTENT)
+                .map(|(i, _)| self.device_extent(block, array, i))
+                .collect();
+            // This fresh allocation cannot escape before the synchronous copy
+            // initializes its entire logical payload.
+            let host = self.append(
+                block,
+                builders::array_create(
+                    self.context,
+                    &extents,
+                    Region::new(),
+                    self.tys.mlir_ty(host_ty)?,
+                    loc,
+                ),
+            );
+            let view = self.array_view_of(block, host, host_ty)?;
+            block.append_operation(
+                OperationBuilder::new("reussir.array.to_host", loc)
+                    .add_operands(&[array, view])
+                    .build()
+                    .expect("valid device download"),
+            );
+            if scalar {
+                let value = self.append(block, memref::load(view, &[], loc));
+                self.emit_dec(block, host, host_ty)?;
+                value
+            } else {
+                host
+            }
+        };
+        Ok(Some(result))
     }
 
     /// The extents of an array-typed MIR type.
@@ -3468,8 +3706,38 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             return err("array view requested for a non-array type");
         };
         let elem = self.tys.mlir_ty(elem)?;
-        let shape: Vec<i64> = dims.iter().map(|&d| d as i64).collect();
-        Ok(MemRefType::new(elem, &shape, None, None).into())
+        let dynamic = reussir_core::semi::ty::has_dynamic_extent(dims);
+        let shape: Vec<i64> = dims
+            .iter()
+            .map(|&d| {
+                if d == reussir_core::semi::ty::DYNAMIC_EXTENT {
+                    reussir_backend::dialect::ty::dynamic_dimension_size() as i64
+                } else {
+                    d as i64
+                }
+            })
+            .collect();
+        if dynamic {
+            let dimensions = dims
+                .iter()
+                .map(|&d| {
+                    if d == reussir_core::semi::ty::DYNAMIC_EXTENT {
+                        "?".to_string()
+                    } else {
+                        d.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("x");
+            let strides = vec!["?"; dims.len()].join(", ");
+            Type::parse(
+                self.context,
+                &format!("memref<{dimensions}x{elem}, strided<[{strides}], offset: ?>>"),
+            )
+            .ok_or_else(|| LoweringError("invalid dynamic array view type".into()))
+        } else {
+            Ok(MemRefType::new(elem, &shape, None, None).into())
+        }
     }
 
     /// Borrow an rc array and materialize the memref view of its payload.
@@ -3505,28 +3773,54 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         env: &mut Env<'c, 'b, 'tcx>,
         idx_exprs: &'tcx [Expr<'tcx>],
         dims: &[u64],
+        view: Value<'c, 'b>,
     ) -> Result<(Vec<Value<'c, 'b>>, Value<'c, 'b>)> {
         let loc = self.loc();
         let index_ty = Type::index(self.context);
         let mut idxs = Vec::with_capacity(idx_exprs.len());
         let mut ok: Option<Value<'c, 'b>> = None;
-        for (ie, &d) in idx_exprs.iter().zip(dims) {
+        for (axis, (ie, &d)) in idx_exprs.iter().zip(dims).enumerate() {
             let raw = self
                 .expr(block, env, ie)?
                 .ok_or_else(|| LoweringError("array index is unit".into()))?;
             let idx = self.append(block, arith::index_cast(raw, index_ty, loc));
-            let ext = self.index_const(block, d as i64);
+            let axis_value = self.index_const(block, axis as i64);
+            let ext = if d == reussir_core::semi::ty::DYNAMIC_EXTENT {
+                self.append(block, memref::dim(view, axis_value, loc))
+            } else {
+                self.index_const(block, d as i64)
+            };
             let in_range = self.append(
                 block,
                 arith::cmpi(self.context, CmpiPredicate::Ult, idx, ext, loc),
             );
+            // A narrowing index cast must not turn an out-of-range i64 into
+            // an otherwise valid index on targets with 32-bit indices.
+            let back = self.append(
+                block,
+                arith::index_cast(idx, IntegerType::new(self.context, 64).into(), loc),
+            );
+            let fits = self.append(
+                block,
+                arith::cmpi(self.context, CmpiPredicate::Eq, raw, back, loc),
+            );
+            let in_range = self.append(block, arith::andi(in_range, fits, loc));
             ok = Some(match ok {
                 None => in_range,
                 Some(acc) => self.append(block, arith::andi(acc, in_range, loc)),
             });
             idxs.push(idx);
         }
-        let ok = ok.ok_or_else(|| LoweringError("array access without indices".into()))?;
+        let ok = ok.unwrap_or_else(|| {
+            self.append(
+                block,
+                arith::constant(
+                    self.context,
+                    IntegerAttribute::new(IntegerType::new(self.context, 1).into(), 1).into(),
+                    loc,
+                ),
+            )
+        });
         Ok((idxs, ok))
     }
 
@@ -3585,7 +3879,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         // this node by a value-keyed drop; stash it where that op looks.
         self.remember_temp(env, base, rc_val);
         let view = self.array_view_of(block, rc_val, base.ty)?;
-        let (idxs, ok) = self.checked_indices(block, env, &args[1..], dims)?;
+        let (idxs, ok) = self.checked_indices(block, env, &args[1..], dims, view)?;
         let elem_ty = self.tys.mlir_ty(e.ty)?;
         self.guarded(block, ok, elem_ty, |then| {
             let loaded = then
@@ -3616,7 +3910,8 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let rc_val = self
             .expr(block, env, base)?
             .ok_or_else(|| LoweringError("array base is unit".into()))?;
-        let (idxs, ok) = self.checked_indices(block, env, &args[1..=rank], dims)?;
+        let view = self.array_view_of(block, rc_val, base.ty)?;
+        let (idxs, ok) = self.checked_indices(block, env, &args[1..=rank], dims, view)?;
         let value = self
             .expr(block, env, &args[rank + 1])?
             .ok_or_else(|| LoweringError("array element is unit".into()))?;
@@ -3691,13 +3986,18 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         e: &Expr<'tcx>,
         args: &'tcx [Expr<'tcx>],
     ) -> Result<Value<'c, 'b>> {
+        let dims = Self::array_dims(e.ty)?;
+        let count = dims
+            .iter()
+            .filter(|&&d| d == reussir_core::semi::ty::DYNAMIC_EXTENT)
+            .count();
+        let extents = self.array_extent_operands(block, env, &args[..count])?;
         let value = self
-            .expr(block, env, &args[0])?
+            .expr(block, env, &args[count])?
             .ok_or_else(|| LoweringError("array element is unit".into()))?;
         let loc = self.loc();
-        let dims = Self::array_dims(e.ty)?;
         let body = Block::new(&vec![(Type::index(self.context), loc); dims.len()]);
-        let elem_ty = args[0].ty;
+        let elem_ty = args[count].ty;
         let elem_rc = self.tys.is_managed_rc(elem_ty);
         if elem_rc {
             self.emit_inc(&body, value, elem_ty)?;
@@ -3707,7 +4007,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         region.append_block(body);
         let rc_val = self.append(
             block,
-            builders::array_create(self.context, &[], region, self.tys.mlir_ty(e.ty)?, loc),
+            builders::array_create(self.context, &extents, region, self.tys.mlir_ty(e.ty)?, loc),
         );
         if elem_rc {
             self.emit_dec(block, value, elem_ty)?;
@@ -3723,7 +4023,13 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         args: &'tcx [Expr<'tcx>],
     ) -> Result<Value<'c, 'b>> {
         let loc = self.loc();
-        let kernel = &args[0];
+        let dims = Self::array_dims(e.ty)?;
+        let count = dims
+            .iter()
+            .filter(|&&d| d == reussir_core::semi::ty::DYNAMIC_EXTENT)
+            .count();
+        let extents = self.array_extent_operands(block, env, &args[..count])?;
+        let kernel = &args[count];
         let closure = self
             .expr(block, env, kernel)?
             .ok_or_else(|| LoweringError("array kernel is unit".into()))?;
@@ -3747,7 +4053,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         region.append_block(body);
         let rc_val = self.append(
             block,
-            builders::array_create(self.context, &[], region, self.tys.mlir_ty(e.ty)?, loc),
+            builders::array_create(self.context, &extents, region, self.tys.mlir_ty(e.ty)?, loc),
         );
         block.append_operation(dialect::rc_dec(self.context, closure, loc).into());
         Ok(rc_val)
@@ -3815,7 +4121,12 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 .ok_or_else(|| LoweringError("fold kernel yields unit".into()));
         }
         let lb = self.index_const(block, 0);
-        let ub = self.index_const(block, dims[0] as i64);
+        let axis = self.index_const(block, ivs.len() as i64);
+        let ub = if dims[0] == reussir_core::semi::ty::DYNAMIC_EXTENT {
+            self.append(block, memref::dim(view, axis, loc))
+        } else {
+            self.index_const(block, dims[0] as i64)
+        };
         let step = self.index_const(block, 1);
         let inner = Block::new(&[(Type::index(self.context), loc), (acc_ty, loc)]);
         {

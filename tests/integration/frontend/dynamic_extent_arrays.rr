@@ -1,12 +1,11 @@
 // Dynamic-extent arrays: a `?` extent marks a dimension dynamic; its runtime
 // value is a leading operand of the constructing intrinsic.
-// Frontend-complete; lowering is pending the
-// strided-header box, so `--emit mlir` stops with a diagnostic.
+// Dynamic shapes lower through the native strided-header box.
 
 // RUN: %rrc %s --emit hir -o - | %FileCheck %s
-// RUN: %not %rrc %s --emit mlir -o - 2>&1 | %FileCheck %s --check-prefix=STUB
+// RUN: %rrc %s --emit mlir -o %t.mlir
+// RUN: %reussir-opt %t.mlir -o /dev/null
 
-// STUB: not lower yet
 
 import core::intrinsic::array;
 

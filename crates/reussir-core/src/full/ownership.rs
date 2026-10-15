@@ -645,6 +645,13 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 crate::intrinsic::IntrinsicOp::Cell { func } => {
                     self.place_cell_intrinsic(e, func, args, live_after)
                 }
+                crate::intrinsic::IntrinsicOp::Pjrt { func } => {
+                    if func == crate::intrinsic::PjrtFn::Alloc {
+                        self.place_args(args, live_after);
+                    } else {
+                        self.place_array_op(e, crate::intrinsic::ArrayFn::Dim, args, live_after);
+                    }
+                }
                 // Math and str operands are plain values (`str` is not
                 // reference-counted), so left-to-right placement suffices.
                 crate::intrinsic::IntrinsicOp::Math { .. }

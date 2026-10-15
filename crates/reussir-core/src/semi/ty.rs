@@ -240,7 +240,7 @@ pub enum TyKind<'tcx> {
     /// (`Tensor<f64>` or `Tensor<[f64; ?, 4]>`): the kernel-side tier that
     /// lowers to an MLIR ranked tensor type. Elements are numeric scalars or
     /// bool; extents are nonnegative signed-64-bit values or [`DYNAMIC_EXTENT`].
-    /// Unlike host arrays, tensors admit zero extents and have no allocation cap.
+    /// Tensors admit zero extents and have no host allocation cap.
     /// Tensors are scope-confined: not storable in records, not capturable
     /// by closures, not FFI-crossing, and absent from plain `fn`
     /// signatures — materialization back to an array is the only way out.
@@ -435,6 +435,16 @@ impl<'tcx> TyCtxt<'tcx> {
         dims: &[u64],
         placement: Option<Ty<'tcx>>,
     ) -> Ty<'tcx> {
+        // A generic scalar/shape argument becomes its ranked representation
+        // after substitution, just as DevArray<[f32; 2], P> does at the surface.
+        let (elem, dims) = if dims.is_empty() {
+            match *elem.kind() {
+                TyKind::Array { elem, dims } => (elem, dims),
+                _ => (elem, dims),
+            }
+        } else {
+            (elem, dims)
+        };
         self.mk(TyKind::DevArray {
             elem,
             dims: self.alloc_slice(dims),

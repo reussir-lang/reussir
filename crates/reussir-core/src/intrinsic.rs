@@ -371,12 +371,51 @@ pub enum IntrinsicOp {
     /// contextually expected result type.
     Panic,
     /// `core::intrinsic::math::<func>`, with an `arith.fastmath` flag.
-    Math { func: MathFn, flag: u32 },
+    Math {
+        func: MathFn,
+        flag: u32,
+    },
     /// `core::intrinsic::cell::<func>`; cell operations have no immediates
     /// and dispatch on the operand's cell flavor rather than encoding it.
-    Cell { func: CellFn },
+    Cell {
+        func: CellFn,
+    },
     /// `core::intrinsic::str::<func>`; string operations have no immediates.
-    Str { func: StrFn },
+    Str {
+        func: StrFn,
+    },
+    Pjrt {
+        func: PjrtFn,
+    },
+}
+
+/// Synchronous host/device operations. Transfers borrow their input and return
+/// fresh owned arrays; allocation initializes every logical element.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum PjrtFn {
+    Alloc,
+    Upload,
+    Download,
+    Dim,
+}
+impl PjrtFn {
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "alloc" => Self::Alloc,
+            "upload" => Self::Upload,
+            "download" => Self::Download,
+            "dim" => Self::Dim,
+            _ => return None,
+        })
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Alloc => "alloc",
+            Self::Upload => "upload",
+            Self::Download => "download",
+            Self::Dim => "dim",
+        }
+    }
 }
 
 /// A surfaced `str` intrinsic; [`Self::as_str`] is both the surface name
@@ -421,6 +460,7 @@ impl IntrinsicOp {
             IntrinsicOp::Math { .. } => "math",
             IntrinsicOp::Cell { .. } => "cell",
             IntrinsicOp::Str { .. } => "str",
+            IntrinsicOp::Pjrt { .. } => "pjrt",
         }
     }
 
@@ -431,6 +471,7 @@ impl IntrinsicOp {
             IntrinsicOp::Math { func, .. } => func.as_str(),
             IntrinsicOp::Cell { func, .. } => func.as_str(),
             IntrinsicOp::Str { func, .. } => func.as_str(),
+            IntrinsicOp::Pjrt { func } => func.as_str(),
         }
     }
 
@@ -441,6 +482,7 @@ impl IntrinsicOp {
             IntrinsicOp::Math { flag, .. } => flag,
             IntrinsicOp::Cell { .. } => 0,
             IntrinsicOp::Str { .. } => 0,
+            IntrinsicOp::Pjrt { .. } => 0,
         }
     }
 
@@ -456,10 +498,81 @@ impl IntrinsicOp {
             "cell" if imm == 0 => Some(IntrinsicOp::Cell {
                 func: CellFn::parse(name)?,
             }),
+            "pjrt" if imm == 0 => Some(IntrinsicOp::Pjrt {
+                func: PjrtFn::parse(name)?,
+            }),
             "str" if imm == 0 => Some(IntrinsicOp::Str {
                 func: StrFn::parse(name)?,
             }),
             _ => None,
+        }
+    }
+}
+
+/// Validate transfer signatures at textual-IR and code-generation boundaries.
+/// Source inference may retain a generic whole-shape element until substitution.
+pub fn validate_pjrt(
+    op: PjrtFn,
+    result: crate::semi::ty::Ty<'_>,
+    args: &[crate::semi::ty::Ty<'_>],
+) -> Result<(), String> {
+    use crate::semi::ty::{DYNAMIC_EXTENT, IntTy, TyKind};
+    let invalid = || {
+        Err(format!(
+            "invalid pjrt::{} operand or result types",
+            op.as_str()
+        ))
+    };
+    let is_extent =
+        |ty: crate::semi::ty::Ty<'_>| matches!(ty.kind(), TyKind::Int(IntTy::Unsigned(64)));
+    let device = if matches!(op, PjrtFn::Alloc | PjrtFn::Upload) {
+        result
+    } else {
+        let Some(&device) = args.first() else {
+            return invalid();
+        };
+        device
+    };
+    let TyKind::DevArray { elem, dims, .. } = *device.kind() else {
+        return invalid();
+    };
+    if !crate::semi::ty_eval::device_element_supported(elem) {
+        return invalid();
+    }
+    match op {
+        PjrtFn::Alloc => {
+            let count = dims.iter().filter(|&&d| d == DYNAMIC_EXTENT).count();
+            if args.len() == count + 1
+                && args[count] == elem
+                && args[..count].iter().all(|&t| is_extent(t))
+            {
+                Ok(())
+            } else {
+                invalid()
+            }
+        }
+        PjrtFn::Dim => {
+            if args.len() == 2 && is_extent(args[1]) && is_extent(result) {
+                Ok(())
+            } else {
+                invalid()
+            }
+        }
+        PjrtFn::Upload | PjrtFn::Download => {
+            if args.len() != 1 {
+                return invalid();
+            }
+            let host = if op == PjrtFn::Upload {
+                args[0]
+            } else {
+                result
+            };
+            let valid = if dims.is_empty() {
+                host == elem
+            } else {
+                matches!(host.kind(), TyKind::Array { elem: h, dims: d } if *h == elem && *d == dims)
+            };
+            if valid { Ok(()) } else { invalid() }
         }
     }
 }
@@ -472,6 +585,16 @@ mod tests {
     fn intrinsic_op_round_trips_through_textual_triple() {
         for op in [
             IntrinsicOp::Panic,
+            IntrinsicOp::Pjrt {
+                func: PjrtFn::Alloc,
+            },
+            IntrinsicOp::Pjrt {
+                func: PjrtFn::Upload,
+            },
+            IntrinsicOp::Pjrt {
+                func: PjrtFn::Download,
+            },
+            IntrinsicOp::Pjrt { func: PjrtFn::Dim },
             IntrinsicOp::Math {
                 func: MathFn::Sqrt,
                 flag: 0,
@@ -493,6 +616,8 @@ mod tests {
                 Some(op)
             );
         }
+        assert_eq!(IntrinsicOp::parse("pjrt", "upload", 1), None);
+        assert_eq!(IntrinsicOp::parse("pjrt", "unknown", 0), None);
         assert_eq!(IntrinsicOp::parse("math", "nope", 0), None);
         assert_eq!(IntrinsicOp::parse("panic", "panic", 1), None);
         assert_eq!(IntrinsicOp::parse("panic", "abort", 0), None);

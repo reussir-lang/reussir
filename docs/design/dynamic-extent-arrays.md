@@ -160,15 +160,12 @@ source view, retaining managed elements and constructing a canonical layout.
 Executable e2e: `dynamic_array_e2e.mlir`, `array_project_e2e.mlir`,
 `dynamic_array_clone_e2e.mlir`, `dynamic_array_managed_e2e.mlir`, and
 `dynamic_array_create_rc_e2e.mlir`.
-Open backend halves: restride ops, and wiring the frontend
-codegen off its `err(…)`
-stubs.
-
-Frontend landed: `?` extents, the `DYNAMIC_EXTENT` sentinel through the
-type system, leading runtime extents on `splat`/`tabulate`, `array::dim`,
-display/mangling/textual-IR spellings, and `err(…)` stubs at every
-lowering path (`--emit mlir` reports "do not lower yet"). The
-strided-header box and the descriptor lowering are the open backend half.
+The frontend lowers dynamic arrays through this strided-header representation.
+Runtime extents precede the fill value or tabulation kernel in shape order.
+Splat, tabulate, get, set, fold, and dim use checked runtime dimensions; empty
+arrays are supported. Restriding operations remain deferred.
+Device transfers preserve these logical dimensions as described in
+[device array transfers](device-array-transfers.md).
 
 ## Deferred
 

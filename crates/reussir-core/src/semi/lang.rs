@@ -35,6 +35,7 @@ pub enum IntrinsicItem {
     Tensor(crate::intrinsic::TensorFn),
     Cell(crate::intrinsic::CellFn),
     Str(crate::intrinsic::StrFn),
+    Pjrt(crate::intrinsic::PjrtFn),
 }
 
 impl IntrinsicItem {
@@ -46,6 +47,7 @@ impl IntrinsicItem {
             IntrinsicItem::Tensor(_) => "tensor",
             IntrinsicItem::Cell(_) => "cell",
             IntrinsicItem::Str(_) => "str",
+            IntrinsicItem::Pjrt(_) => "pjrt",
         }
     }
 
@@ -57,6 +59,7 @@ impl IntrinsicItem {
             IntrinsicItem::Tensor(f) => f.as_str(),
             IntrinsicItem::Cell(f) => f.as_str(),
             IntrinsicItem::Str(f) => f.as_str(),
+            IntrinsicItem::Pjrt(f) => f.as_str(),
         }
     }
 
@@ -68,6 +71,7 @@ impl IntrinsicItem {
             "tensor" => crate::intrinsic::TensorFn::parse(name).map(IntrinsicItem::Tensor),
             "cell" => crate::intrinsic::CellFn::parse(name).map(IntrinsicItem::Cell),
             "str" => crate::intrinsic::StrFn::parse(name).map(IntrinsicItem::Str),
+            "pjrt" => crate::intrinsic::PjrtFn::parse(name).map(IntrinsicItem::Pjrt),
             _ => None,
         }
     }

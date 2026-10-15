@@ -1,0 +1,22 @@
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
+// RUN: diff %t.hir %t.round.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: %rrc %t.mir --emit mlir -o - | %FileCheck %s
+// CHECK-DAG: reussir.array.to_device
+// CHECK-DAG: reussir.array.to_host
+// CHECK-DAG: reussir.array.device_extent
+// CHECK-DAG: memref<?x4xi32, strided<[?, ?], offset: ?>>
+
+import core::intrinsic::pjrt;
+pub fn scalar(x: u64) -> u64 { pjrt::download(pjrt::upload(x)) }
+pub fn static_shape(x: [f32; 3, 5]) -> [f32; 3, 5] { pjrt::download(pjrt::upload(x)) }
+pub fn dynamic(x: [i32; ?, 4]) -> [i32; ?, 4] { pjrt::download(pjrt::upload(x)) }
+pub fn filled(n: u64) -> DevArray<[i32; ?, 4]> {
+    pjrt::alloc<DevArray<[i32; ?, 4]>>(n, 9)
+}
+pub fn dimension(x: DevArray<[i32; ?, 4]>, axis: u64) -> u64 { pjrt::dim(x, axis) }
+fn generic<T,P>(x: DevArray<T,P>) -> T { pjrt::download(x) }
+pub fn generic_shape(x: DevArray<[f32; 3, 5]>) -> [f32; 3, 5] { generic(x) }

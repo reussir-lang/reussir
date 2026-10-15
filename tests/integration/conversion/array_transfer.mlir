@@ -56,3 +56,16 @@ func.func @reuse_device_header(%old: !D, %src: !V) -> !D {
   %d = reussir.array.to_device %src : !V -> !D
   return %d : !D
 }
+
+
+// PARSE-LABEL: func.func @logical_extent
+// PARSE: reussir.array.device_extent
+// LLVM-LABEL: llvm.func @logical_extent
+// LLVM: llvm.getelementptr
+// LLVM: llvm.load
+// LLVM-NOT: __reussir_pjrt
+// LLVM: llvm.return
+func.func @logical_extent(%d: !D) -> index {
+  %n = reussir.array.device_extent %d[0] : !D
+  return %n : index
+}

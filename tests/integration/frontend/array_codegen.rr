@@ -78,7 +78,10 @@ pub fn ones() -> [f64; 8] {
 // CHECK: %[[VIEW:.+]] = reussir.array.view(%[[REF]] : {{.*}}) : memref<8xf64>
 // CHECK: %[[IDX:.+]] = arith.index_cast %arg1 : i64 to index
 // CHECK: %[[OK:.+]] = arith.cmpi ult, %[[IDX]], %{{.+}} : index
-// CHECK: %[[R:.+]] = scf.if %[[OK]] -> (f64) {
+// CHECK: %[[BACK:.+]] = arith.index_cast %[[IDX]] : index to i64
+// CHECK: %[[FITS:.+]] = arith.cmpi eq, %arg1, %[[BACK]] : i64
+// CHECK: %[[GUARD:.+]] = arith.andi %[[OK]], %[[FITS]] : i1
+// CHECK: %[[R:.+]] = scf.if %[[GUARD]] -> (f64) {
 // CHECK: %[[V:.+]] = memref.load %[[VIEW]][%[[IDX]]] : memref<8xf64>
 // CHECK: scf.yield %[[V]] : f64
 // CHECK: } else {
@@ -93,7 +96,8 @@ pub fn read(a : [f64; 8], i : i64) -> f64 {
 
 // CHECK-LABEL: func.func @_RC5write
 // CHECK: %[[WOK:.+]] = arith.cmpi ult
-// CHECK: %[[OUT:.+]] = scf.if %[[WOK]] -> (!reussir.rc<!reussir.array<8 x f64>>) {
+// CHECK: %[[WGUARD:.+]] = arith.andi %[[WOK]], %{{.+}} : i1
+// CHECK: %[[OUT:.+]] = scf.if %[[WGUARD]] -> (!reussir.rc<!reussir.array<8 x f64>>) {
 // CHECK: %[[U:.+]] = reussir.array.with_unique_view(%arg0 : {{.*}}) -> !reussir.rc<!reussir.array<8 x f64>> {
 // CHECK: ^bb0(%[[MUT:.+]]: memref<8xf64>):
 // CHECK: memref.store %arg2, %[[MUT]][%{{.+}}] : memref<8xf64>
