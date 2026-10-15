@@ -102,6 +102,7 @@ Variant: raw::Variant =
 Sym: String = <s:"ident"> => s.into();
 
 Name: &'input str = {
+    "while" => "while",
     <name:"ident"> => name,
     "transform" => "transform",
     "transform_anchor" => "transform_anchor",

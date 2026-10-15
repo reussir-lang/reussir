@@ -72,7 +72,7 @@ extern "C" trampoline "captured_loop" = captured_loop;
 
 struct [regional] Regional { value: u64 }
 pub fn regional_loop(n: u64) -> u64 {
-    let result = region { while [p = Regional { value: 0 }] (p.value < n) { Regional { value: p.value + 1 } } };
+    let result = regional { while [p = Regional { value: 0 }] (p.value < n) { Regional { value: p.value + 1 } } };
     result.value
 }
 extern "C" trampoline "regional_loop" = regional_loop;

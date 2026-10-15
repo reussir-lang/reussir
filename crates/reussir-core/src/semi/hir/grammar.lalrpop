@@ -299,6 +299,7 @@ BoundItem: Bound = <first:Name> <rest:("::" <Name>)*> => {
 
 /// Source identifiers remain legal when they spell a transform directive.
 Name: &'input str = {
+    "while" => "while",
     <name:"ident"> => name,
     "lang" => "lang",
     "sealed" => "sealed",
