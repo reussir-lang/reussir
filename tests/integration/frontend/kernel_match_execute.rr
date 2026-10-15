@@ -3,7 +3,11 @@
 // The runtime test selects this source kernel as the PJRT entry point.
 // RUN: sed 's/@_RC3run(/@main(/' %t.mlir | %reussir-opt --emit-bytecode -o %t.bc
 // RUN: pjrt_test_blake3=$(ls -t "%pjrt_runtime_dir"/deps/libblake3-*.rlib | head -n 1) && %rustc_path --edition=2024 -C prefer-dynamic %S/../runtime/Inputs/kernel_execute.rs --extern blake3="$pjrt_test_blake3" --extern blake3="${pjrt_test_blake3%.rlib}.rmeta" -L "%pjrt_runtime_dir/deps" -L native="%pjrt_runtime_dir" -l dylib=reussir_rt -o %t.exe
-// RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc -- i64:10 i64:20 i64:21 i64:30 i64:40 i64:50 i64:60 i64:70 i64:123
+// RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc u64:0 bool:true i64:-9223372036854775808 -- i64:10 i64:50 i64:70
+// RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc u64:4294967296 bool:true i64:-1 -- i64:20 i64:60 i64:70
+// RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc u64:4294967296 bool:false i64:123 -- i64:21 i64:123 i64:123
+// RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc u64:18446744073709551615 bool:false i64:-2 -- i64:30 i64:-2 i64:70
+// RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc u64:7 bool:true i64:0 -- i64:40 i64:0 i64:0
 // RUN: rm -rf %t.cache
 #[kernel]
 fn classify(key: u64, accept: bool) -> i64 {
@@ -24,8 +28,6 @@ fn guarded(key: i64) -> i64 {
     match key { whole if whole < 0 => 70, whole => whole }
 }
 #[kernel]
-pub fn run() -> (i64, i64, i64, i64, i64, i64, i64, i64, i64, ()) {
-    (classify(0, true), classify(4294967296, true), classify(4294967296, false),
-     classify(18446744073709551615, false), classify(7, true),
-     signed(-9223372036854775808), signed(-1), guarded(-2), guarded(123), ())
+pub fn run(key: u64, accept: bool, signed_key: i64) -> (i64, (i64, i64), ()) {
+    (classify(key, accept), (signed(signed_key), guarded(signed_key)), ())
 }
