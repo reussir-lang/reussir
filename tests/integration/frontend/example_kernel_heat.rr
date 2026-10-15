@@ -15,10 +15,21 @@
 // RUN: rm -rf %t.cache
 import core::intrinsic::array;
 import core::intrinsic::pjrt;
+import core::intrinsic::tensor;
 
 #[placement(devices = "0", layout = "default")]
 #[launch(backend_optimization_level = "2", donation = "none")]
 struct [value] HeatConfig {}
+
+// No launch operands: construct the initial hot cell entirely on the device.
+#[kernel]
+fn seed() -> Tensor<[f32; 8]> {
+    let indices: Tensor<[i64; 8]> = tensor::iota(0);
+    let center: Tensor<[i64; 8]> = tensor::fill(4);
+    let hot: Tensor<[f32; 8]> = tensor::fill(1.0);
+    let cold: Tensor<[f32; 8]> = tensor::fill(0.0);
+    tensor::select(indices == center, hot, cold)
+}
 
 #[kernel]
 fn diffuse(matrix: Tensor<[f32; 8, 8]>, initial: Tensor<[f32; 8]>, steps: i64) -> Tensor<[f32; 8]> {
@@ -34,9 +45,8 @@ fn evolve(steps: i64) -> [f32; 8] {
         if row == col { 0.5 }
         else { if (row + 1) % 8 == col || (row + 7) % 8 == col { 0.25 } else { 0.0 } }
     });
-    let initial = array::tabulate<[f32; 8]>(|i| if i == 4 { 1.0 } else { 0.0 });
     let device_matrix = pjrt::upload(matrix);
-    let device_initial = pjrt::upload(initial);
+    let device_initial = launch(seed);
     let device_steps = pjrt::upload(steps);
     let result = launch<HeatConfig>(diffuse, device_matrix, device_initial, device_steps);
     result.download()
