@@ -1,13 +1,11 @@
 // Tuple structure is legal in kernel signatures and expressions, while this
-// type/value PR does not invent a host aggregate ABI for kernel SSA values.
+// source product is preserved through textual IR without a host aggregate ABI.
 // RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
 // RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
 // RUN: diff %t.hir %t.round.hir
 // RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
 // RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
 // RUN: diff %t.mir %t.round.mir
-// RUN: %not %rrc %t.mir --emit mlir -o - 2>&1 | %FileCheck %s
-// CHECK: kernel tuple ABI lowering requires flattening to SSA values and is not available
 
 #[kernel]
 pub fn a_pair(x: (Tensor<f32>, (Token,)), y: Tensor<f32>) -> (Tensor<f32>, Token) {

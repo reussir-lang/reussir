@@ -359,9 +359,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     | surface::ExprKind::AccessChain(..)
                     | surface::ExprKind::If(..)
                     | surface::ExprKind::FuncCallExpr(_)
+                    | surface::ExprKind::ConstExpr(_)
+                    | surface::ExprKind::BinOpExpr(..)
+                    | surface::ExprKind::UnaryOpExpr(..)
             )
         {
-            self.error(span, "host operations are not allowed in a kernel; only bindings, conditionals, and direct kernel calls are supported");
+            self.error(span, "host operations are not allowed in a kernel");
             return self.poison(span);
         }
         match &kind {
@@ -521,7 +524,18 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         span: Option<Span>,
     ) -> Expr<'tcx> {
         let bool_ty = self.tcx.mk_bool();
-        let c = self.check_expr(c, bool_ty);
+        let c = if self.inside_kernel {
+            let condition = self.infer_expr(c);
+            let ty = self.infer.shallow_resolve(condition.ty);
+            if !matches!(ty.kind(), TyKind::Tensor { elem, dims }
+                if dims.is_empty() && matches!(elem.kind(), TyKind::Bool))
+            {
+                self.expect(condition.ty, bool_ty, condition.span);
+            }
+            condition
+        } else {
+            self.check_expr(c, bool_ty)
+        };
         let (t, f) = match f {
             Some(f) => {
                 let t = self.infer_expr(t);

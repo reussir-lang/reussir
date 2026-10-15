@@ -1,0 +1,4 @@
+// UNSUPPORTED: stablehlo
+// RUN: %not %rrc %s --emit mlir -o - 2>&1 | %FileCheck %s
+// CHECK: kernel lowering requires REUSSIR_ENABLE_OPENXLA
+#[kernel] pub fn identity(x: i32) -> i32 { x }

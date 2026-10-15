@@ -48,19 +48,35 @@ struct ReussirPreparePjrtPass
       hasIfrt |= op->getName().getDialectNamespace() == "ifrt" ||
                  op->hasAttr("ifrt.function");
     });
-    if (!hasIfrt)
-      return;
+    if (hasIfrt) {
 #ifdef REUSSIR_ENABLE_OPENXLA
-    mlir::OpPassManager pipeline(mlir::ModuleOp::getOperationName());
-    pipeline.addPass(createReussirIFRTJustInTimeTransformPass());
-    pipeline.addPass(mlir::createSymbolDCEPass());
-    if (mlir::failed(runPipeline(pipeline, getOperation())))
-      signalPassFailure();
+      mlir::OpPassManager pipeline(mlir::ModuleOp::getOperationName());
+      pipeline.addPass(createReussirIFRTJustInTimeTransformPass());
+      pipeline.addPass(mlir::createSymbolDCEPass());
+      if (mlir::failed(runPipeline(pipeline, getOperation()))) {
+        signalPassFailure();
+        return;
+      }
 #else
-    getOperation().emitError(
-        "PJRT preparation requires an OpenXLA-enabled build");
-    signalPassFailure();
+      getOperation().emitError(
+          "PJRT preparation requires an OpenXLA-enabled build");
+      signalPassFailure();
+      return;
 #endif
+    }
+    // Source kernels remain StableHLO until a launch packages them into a
+    // device executable. Never send an unlaunched kernel to host conversion,
+    // even when its body happens to contain only func.return.
+    bool unlaunchedKernel = false;
+    getOperation().walk([&](mlir::func::FuncOp function) {
+      if (function->hasAttr("reussir.kernel")) {
+        function.emitError("kernel launching is not available; an unlaunched "
+                           "kernel cannot enter native host lowering");
+        unlaunchedKernel = true;
+      }
+    });
+    if (unlaunchedKernel)
+      signalPassFailure();
   }
 };
 

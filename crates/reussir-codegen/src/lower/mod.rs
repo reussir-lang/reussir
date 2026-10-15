@@ -52,6 +52,8 @@
 
 mod debug;
 mod expr;
+mod kernel;
+mod kernel_if;
 mod math;
 mod ty;
 
@@ -382,8 +384,13 @@ pub fn lower_unit<'c, 'tcx>(
             Location::unknown(context),
         ));
     }
+    let kernel_lowerer = kernel::KernelLowerer::new(context, tcx, program, source);
     for func in &program.functions {
-        body.append_operation(lowerer.function(func)?);
+        body.append_operation(if func.is_kernel {
+            kernel_lowerer.function(func, unit)?
+        } else {
+            lowerer.function(func)?
+        });
     }
     for t in &program.trampolines {
         // A trampoline is a body-carrying wrapper: it belongs to its target's

@@ -2347,6 +2347,13 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     | ExprKind::If(..)
                     | ExprKind::FuncCall { .. }
                     | ExprKind::TraitCall { .. }
+                    | ExprKind::ConstInt(_)
+                    | ExprKind::ConstFloat(_)
+                    | ExprKind::ConstBool(_)
+                    | ExprKind::Arith(..)
+                    | ExprKind::Cmp(..)
+                    | ExprKind::Negate(_)
+                    | ExprKind::Not(_)
                     | ExprKind::Poison
             );
             if !allowed {
