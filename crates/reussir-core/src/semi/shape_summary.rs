@@ -5,6 +5,10 @@
 //! supplies its normal fresh generic substitution when instantiating a summary.
 //! Calls remain explicit graph edges, so recursion never causes eager unfolding.
 
+mod expansion;
+mod fresh;
+pub use expansion::{Expansion, ResidualCall, ResidualReason, SummaryCache};
+
 use rustc_hash::FxHashMap;
 
 use crate::intrinsic::TensorFn;
