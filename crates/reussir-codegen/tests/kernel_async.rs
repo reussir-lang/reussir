@@ -98,3 +98,48 @@ fn isolated_async_slice_roundtrips_real_kernel_values() {
         assert!(!text.contains(host), "host operation {host}: {text}");
     }
 }
+
+#[test]
+fn ordinary_future_done_method_is_a_private_kernel_specialization() {
+    let result = lower(
+        r#"
+        #[lang("tensor_future")] pub struct Future<T> {}
+        impl<T> Future<T> {
+            #[kernel] pub fn done(self: Self) -> T {
+                core::intrinsic::tensor::async_done(self)
+            }
+        }
+        #[kernel] pub fn run(x: Tensor<f32>) -> Tensor<f32> {
+            let pending = async { core::intrinsic::tensor::collective_permute(x, ((0, 0),)) };
+            pending.done()
+        }
+    "#,
+    );
+    if !enabled() {
+        assert!(result.unwrap_err().contains("REUSSIR_ENABLE_OPENXLA"));
+        return;
+    }
+    let text = result.unwrap();
+    assert!(text.contains("func.func private @_RI"), "{text}");
+    assert!(
+        text.contains("call @_RI"),
+        "ordinary member must remain a call: {text}"
+    );
+    assert!(text.contains("stablehlo.async_done"), "{text}");
+}
+
+#[test]
+fn public_nongeneric_future_entry_is_still_rejected() {
+    let result = lower(
+        "#[kernel] pub fn bad(x: Future<Tensor<f32>>) -> Tensor<f32> { core::intrinsic::tensor::async_done(x) }",
+    );
+    let error = result.unwrap_err();
+    assert!(
+        error.contains(if enabled() {
+            "public kernel entry"
+        } else {
+            "REUSSIR_ENABLE_OPENXLA"
+        }),
+        "{error}"
+    );
+}

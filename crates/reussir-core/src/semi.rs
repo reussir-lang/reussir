@@ -126,6 +126,108 @@ mod tests {
     }
 
     #[test]
+    fn future_done_is_an_ordinary_generic_kernel_method() {
+        check_package(
+            "core",
+            &[
+                (
+                    &["intrinsic", "tensor"],
+                    include_str!("../../../library/core/src/intrinsic/tensor.rr"),
+                ),
+                (
+                    &["demo"],
+                    r#"
+                    import core::intrinsic::tensor::Future as Pending;
+                    #[kernel] fn finish<T>(x: Pending<Tensor<T>>) -> Tensor<T> { x.done() }
+                    #[kernel] fn projected(x: (Pending<Tensor<f32>>, ())) -> Tensor<f32> { x.0.done() }
+                    #[kernel] fn associated(x: Pending<Tensor<f32>>) -> Tensor<f32> {
+                        core::intrinsic::tensor::Future::done(x)
+                    }
+                    pub struct [value] Future { value: i32 }
+                    impl Future { pub fn done(self: Self) -> i32 { self.value } }
+                    pub fn shadow(x: Future) -> i32 { x.done() }
+                "#,
+                ),
+            ],
+            |elab, _| {
+                assert!(!elab.has_errors(), "{:?}", elab.reports);
+                let method = elab
+                    .elaborated
+                    .iter()
+                    .find(|f| {
+                        f.is_kernel
+                            && matches!(
+                                f.body.as_ref().map(|e| &e.kind),
+                                Some(hir::ExprKind::TensorOp {
+                                    op: crate::intrinsic::TensorFn::AsyncDone,
+                                    ..
+                                })
+                            )
+                    })
+                    .expect("ordinary done body");
+                let ty::TyKind::Future(payloads) = method.params[0].2.kind() else {
+                    panic!("receiver must be a real Future, not its nominal anchor");
+                };
+                assert_eq!(payloads.len(), 1);
+                assert_eq!(payloads[0], method.return_ty);
+                assert_eq!(method.generics.len(), 1);
+            },
+        );
+    }
+
+    #[test]
+    fn future_done_checks_receiver_scope_and_argument_count() {
+        for (source, expected) in [
+            (
+                "#[kernel] fn f(x: i32) -> bool { x.eq(1) }",
+                "host operations are not allowed",
+            ),
+            (
+                "#[kernel] fn f(x: (i32 -> i32,)) { x.0(1); }",
+                "host operations are not allowed",
+            ),
+            (
+                "#[kernel] fn f(x: Future<Tensor<f32>>) { x.done(1); }",
+                "expects 0 argument",
+            ),
+            (
+                "#[kernel] fn f(x: Future<Tensor<f32>, Tensor<i32>>) { x.done(); }",
+                "type mismatch",
+            ),
+            (
+                "fn f(x: Future<Tensor<f32>>) { x.done(); }",
+                "scope-confined",
+            ),
+            (
+                "#[kernel] fn f(x: Future<Tensor<f32>>) { x.missing(); }",
+                "no method",
+            ),
+        ] {
+            check_package(
+                "core",
+                &[
+                    (
+                        &["intrinsic", "tensor"],
+                        include_str!("../../../library/core/src/intrinsic/tensor.rr"),
+                    ),
+                    (&["demo"], source),
+                ],
+                |elab, _| {
+                    assert!(
+                        elab.reports.iter().any(|r| r.message.contains(expected)),
+                        "{source}: {:?}",
+                        elab.reports
+                    )
+                },
+            );
+        }
+        assert!(has_error(
+            "#[kernel] fn f(x: Future<Tensor<f32>>) { x.done(); }",
+            "load its core declaration"
+        ));
+    }
+
+    #[test]
     fn async_blocks_reject_host_scope_extra_operations_and_bad_slice_shapes() {
         for (source, error) in [
             ("fn host() { async {} }", "only allowed inside"),

@@ -2163,7 +2163,20 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                         DefaultCap::Value | DefaultCap::Shared => Flexivity::Irrelevant,
                         DefaultCap::Regional => Flexivity::Regional,
                     };
-                    Some(self.tcx.mk_record(target, &args, flex))
+                    // A former anchor supplies a declaration path, not a
+                    // nominal runtime type. Its methods retain the builtin
+                    // receiver in their signatures and exported interfaces.
+                    Some(
+                        if self.lang.item_of(target)
+                            == Some(crate::semi::lang::LangItem::Former(
+                                crate::semi::lang::FormerItem::TensorFuture,
+                            ))
+                        {
+                            self.tcx.mk_future(&args)
+                        } else {
+                            self.tcx.mk_record(target, &args, flex)
+                        },
+                    )
                 }
                 _ => None,
             };

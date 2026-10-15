@@ -348,7 +348,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     pub(super) fn infer_expr(&mut self, e: &surface::Expr) -> Expr<'tcx> {
         let span = Some(e.span());
         let kind = e.kind();
+        // Member syntax needs receiver inference before its kernel eligibility
+        // can be decided. infer_postfix_call permits only a Future receiver in
+        // this context; every other member retains the host-operation rejection.
+        let method_call = matches!(&kind, surface::ExprKind::CallExpr(callee, _)
+            if !callee.parenthesized() && matches!(callee.kind(), surface::ExprKind::AccessChain(..)));
         if self.inside_kernel
+            && !method_call
             && !matches!(
                 &kind,
                 surface::ExprKind::Var(_)
@@ -1267,6 +1273,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             raw = ty;
         }
 
+        if self.inside_kernel
+            && !matches!(self.infer.shallow_resolve(raw).kind(), TyKind::Future(_))
+        {
+            self.error(span, "host operations are not allowed in a kernel");
+            return self.poison(span);
+        }
+
         if matches!(self.infer.shallow_resolve(raw).kind(), TyKind::Tuple(_)) {
             let Some((idx, field_ty)) = self.project_step(raw, last, span) else {
                 return self.poison(span);
@@ -1274,6 +1287,34 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             indices.push(idx);
             let callee = self.mk_expr(ExprKind::Proj(Box::new(base), indices), field_ty, span);
             return self.closure_apply(callee, args, span);
+        }
+
+        if matches!(self.infer.shallow_resolve(raw).kind(), TyKind::Future(_)) {
+            let surface::Access::Named(name) = last else {
+                self.error(span, "a Future has no positional fields");
+                return self.poison(span);
+            };
+            let receiver = if indices.is_empty() {
+                base
+            } else {
+                self.mk_expr(ExprKind::Proj(Box::new(base), indices), raw, span)
+            };
+            // The former's anchor supplies the ordinary inherent method path;
+            // receiver inference and kernel checks are shared with records.
+            if let Some(anchor) = self.lang.get(crate::semi::lang::LangItem::Former(
+                crate::semi::lang::FormerItem::TensorFuture,
+            )) && let Some(method) = self.dot_method_candidate(anchor, *name)
+            {
+                return self.infer_method_call(receiver, Some(anchor), method, *name, args, span);
+            }
+            self.error(
+                span,
+                format!(
+                    "no method `{}` on Future; load its core declaration to use inherent methods",
+                    self.sym(*name)
+                ),
+            );
+            return self.poison(span);
         }
 
         let arced = matches!(raw.kind(), TyKind::Arc(_));
@@ -2954,6 +2995,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         span: Option<Span>,
     ) -> Option<Expr<'tcx>> {
         if fc.name.segments.first().map(|&k| self.sym(k)) != Some("core") {
+            return None;
+        }
+        // Core also declares ordinary helper bodies (including inherent
+        // methods). Only intrinsic anchors and fallback intrinsic paths use
+        // this checker; a loaded ordinary definition follows normal calls.
+        if self
+            .resolve_function_ref(&fc.name)
+            .is_some_and(|def| !self.lang.is_intrinsic_def(def))
+        {
             return None;
         }
         if self.inside_kernel

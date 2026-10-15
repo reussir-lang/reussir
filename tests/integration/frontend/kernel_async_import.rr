@@ -21,3 +21,9 @@ import dep::routed;
 pub fn permuted(x: Tensor<[f32; 8]>) -> Tensor<[f32; 8]> { complete(routed(x)) }
 // CORE-DAG: lang("core::intrinsic::tensor::collective_permute")
 // MIR-DAG: tensor#collective_permute
+
+import dep::finished;
+#[kernel]
+pub fn imported_done(x: Tensor<[f32; 8]>) -> Tensor<[f32; 8]> { finished(x) }
+// CORE-DAG: #[kernel] pub fn #core::intrinsic::tensor::Future::done
+// CORE-DAG: (self): Future<

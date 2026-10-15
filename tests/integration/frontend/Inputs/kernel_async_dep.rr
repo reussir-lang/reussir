@@ -9,3 +9,9 @@ import core::intrinsic::tensor::collective_permute as route;
 pub fn routed<T>(x: Tensor<[T; 8]>) -> Future<Tensor<[T; 8]>> {
     async { route(x, ((0, 0),)) }
 }
+
+#[kernel]
+pub fn finished<T>(x: Tensor<[T; 8]>) -> Tensor<[T; 8]> {
+    let future = async { route(x, ((0, 0),)) };
+    future.done()
+}

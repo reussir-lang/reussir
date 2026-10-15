@@ -752,6 +752,39 @@ mod tests {
     use crate::{surface, with_tcx};
 
     #[test]
+    fn qualified_nominal_builtin_names_roundtrip() {
+        for name in [
+            "Future",
+            "Token",
+            "Tensor",
+            "DevArray",
+            "DefaultPlacement",
+            "Arc",
+            "Nullable",
+            "Cell",
+            "RefCell",
+            "Atomic",
+            "Mutex",
+            "FlatLock",
+            "RwLock",
+        ] {
+            with_tcx(|tcx| {
+                let input = format!(
+                    "record @rec : value struct app::{name} {{ \"n\": i32 }}; fn @identity(v0 (x): app::{name}) -> app::{name} {{ v0 : app::{name} }}"
+                );
+                let parsed = parse_program(tcx, &input).expect("qualified nominal builtin name");
+                let printed = Printer::new(&parsed.defs, &parsed.names).program(&parsed.program);
+                let reparsed =
+                    parse_program(tcx, &printed).expect("reparse qualified nominal name");
+                assert_eq!(
+                    printed,
+                    Printer::new(&reparsed.defs, &reparsed.names).program(&reparsed.program)
+                );
+            });
+        }
+    }
+
+    #[test]
     fn async_captures_roundtrip() {
         roundtrip(
             r#"

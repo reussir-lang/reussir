@@ -20,6 +20,15 @@ pub struct Token {}
 #[lang("tensor_future")]
 pub struct Future<T> {}
 
+impl<T> Future<T> {
+    /// Resolve the single Tensor payload inside a kernel. The current XLA
+    /// backend requires one done per future; reuse the Tensor for fan-out.
+    #[kernel]
+    pub fn done(self: Self) -> T {
+        core::intrinsic::tensor::async_done(self)
+    }
+}
+
 /// Kernel-only slice. Result supplies static slice sizes. Start indices form
 /// a rank-sized tuple of same-typed integers (or rank-zero integer tensors).
 #[lang("core::intrinsic::tensor::dynamic_slice")]

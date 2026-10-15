@@ -1,0 +1,20 @@
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: echo '#[kernel] fn f(x:Future<Tensor<f32>>) { x.done(1); }' > %t.args.rr
+// RUN: %not %rrc %t.args.rr --package-name app --extern core=%t.core.rri --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=ARGS
+// RUN: echo '#[kernel] fn f(x:Future<Tensor<f32>,Tensor<i32>>) { x.done(); }' > %t.multi.rr
+// RUN: %not %rrc %t.multi.rr --package-name app --extern core=%t.core.rri --emit mir -o - 2>&1 | %FileCheck %s --check-prefix=MULTI
+// RUN: echo '#[kernel] fn f(x:Future<>) { x.done(); }' > %t.zero.rr
+// RUN: %not %rrc %t.zero.rr --package-name app --extern core=%t.core.rri --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=INVALID
+// RUN: echo '#[kernel] fn f(x:Future<i32>) { x.done(); }' > %t.scalar.rr
+// RUN: %not %rrc %t.scalar.rr --package-name app --extern core=%t.core.rri --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=INVALID
+// RUN: echo 'fn f(x:Future<Tensor<f32>>) { x.done(); }' > %t.host.rr
+// RUN: %not %rrc %t.host.rr --package-name app --extern core=%t.core.rri --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=HOST
+// RUN: echo '#[kernel] fn f(x:Future<Tensor<f32>>) { x.done(); }' > %t.bare.rr
+// RUN: %not %rrc %t.bare.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=BARE
+// RUN: echo '#[kernel] fn f(x:Future<Tensor<f32>>) { x.done<i32>(); }' > %t.typeargs.rr
+// RUN: %not %rrc %t.typeargs.rr --package-name app --extern core=%t.core.rri --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=INVALID
+// ARGS: expects 0 argument(s) besides the receiver
+// MULTI: type mismatch
+// INVALID: Error:
+// HOST: scope-confined
+// BARE: load its core declaration

@@ -2,7 +2,10 @@
 
 `async { ... }` starts one eligible StableHLO operation inside a `#[kernel]`
 function. The result is `core::intrinsic::tensor::Future<Tensor<...>>`;
-`core::intrinsic::tensor::async_done(future)` obtains its tensor result.
+`future.done()` obtains its tensor result when the core package is loaded.
+The member is an ordinary generic `#[kernel]` method in core whose body calls
+`core::intrinsic::tensor::async_done(self)`. The free intrinsic also works in
+bare compiler sessions without core declarations.
 The compiler emits `stablehlo.async_start` and `stablehlo.async_done`. These
 operations express a dependency; they do not guarantee concurrent execution.
 
@@ -17,7 +20,7 @@ fn begin(x: Tensor<[f32; 8]>, start: i32) -> Future<Tensor<[f32; 3]>> {
 #[kernel]
 pub fn slice(x: Tensor<[f32; 8]>, start: i32) -> Tensor<[f32; 3]> {
     let pending = begin(x, start);
-    tensor::async_done(pending)
+    pending.done()
 }
 ```
 
@@ -97,8 +100,20 @@ collective producers in `async_start`; it rejects slices even though the pinned
 StableHLO verifier permits them. It also requires an `async_done` operand to be
 defined directly by `async_start`, so Future values passed through helper calls
 remain valid compiler/StableHLO IR but are not accepted by this importer.
-The compiler preserves those valid IR forms. The execution regression uses
-actual collective permutations with start/done in the same kernel body and
+The existing MLIR inliner (`reussir-opt --inline --symbol-dce`) resolves ordinary
+kernel helper calls, including `Future.done`, before PJRT import. Source MLIR
+retains those calls until that preparation step; the compiler does not invent a
+second completion intrinsic or special-case the method body.
+
+The StableHLO specification and pinned verifier do not prohibit repeated
+`async_done` uses. The current [XLA async contract](https://openxla.org/xla/async_ops)
+requires exactly one user for an async-start result, and the CPU PJRT compiler
+rejects two completions of the same future. Call `done()` once and reuse the
+returned Tensor wherever needed. This backend restriction is not a claim of
+StableHLO undefined behavior, and this change adds no source consumption rule.
+
+The execution regression uses
+actual collective permutations, ordinary `done()` calls in a while body, and
 checks both delivered tensors and zero results for unmatched replicas.
 
 Rank-zero dynamic slice has no indices and is equivalent to rank-zero static

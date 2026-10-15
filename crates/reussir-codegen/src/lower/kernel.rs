@@ -20,7 +20,9 @@ use reussir_backend::melior::ir::{
     Block, BlockLike, Identifier, Location, Operation, Region, RegionLike, Type, TypeLike, Value,
     ValueLike,
 };
-use reussir_core::full::mir::{self, Binding, ClosureExpr, DecisionTree, Expr, ExprKind, SwitchCases};
+use reussir_core::full::mir::{
+    self, Binding, ClosureExpr, DecisionTree, Expr, ExprKind, SwitchCases,
+};
 use reussir_core::intrinsic::TensorFn;
 use reussir_core::literal::{self, Integer};
 use reussir_core::semi::hir::{ArithOp, CmpOp, VarId};
@@ -263,7 +265,12 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
             .collect::<Result<Vec<_>>>()?;
         let inputs_flat: Vec<_> = inputs.iter().flatten().copied().collect();
         let results = self.types(function.return_ty)?;
-        if function.visibility != Visibility::Private
+        let symbol = self.program.symbol(function.symbol);
+        // Generic instances are implementation helpers, even when their
+        // source declaration is public for cross-package use. This is the
+        // same `_RI` classification used by native generic-instance linkage.
+        let public_entry = function.visibility != Visibility::Private && !symbol.starts_with("_RI");
+        if public_entry
             && inputs_flat
                 .iter()
                 .chain(&results)
@@ -274,7 +281,6 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
                 function.body.and_then(|b| b.span),
             ));
         }
-        let symbol = self.program.symbol(function.symbol);
         let region = Region::new();
         let loc = self.loc(function.body.and_then(|b| b.span));
         if let Some(body) = function.body.filter(|_| unit.is_home(symbol)) {
@@ -303,10 +309,7 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
             Identifier::new(self.context, "reussir.kernel_function"),
             Attribute::unit(self.context),
         )];
-        if function.visibility == Visibility::Private
-            || function.body.is_none()
-            || !unit.is_home(symbol)
-        {
+        if !public_entry || function.body.is_none() || !unit.is_home(symbol) {
             attrs.push((
                 Identifier::new(self.context, "sym_visibility"),
                 StringAttribute::new(self.context, "private").into(),

@@ -1,0 +1,28 @@
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name app --extern core=%t.core.rri --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
+// RUN: diff %t.hir %t.round.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %s --package-name app --extern core=%t.core.rri --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: %FileCheck %s --check-prefix=MIR < %t.mir
+import core::intrinsic::tensor::Future as Pending;
+import core::intrinsic::tensor::Future::done as complete;
+#[kernel]
+fn generic<T>(x: Pending<Tensor<T>>) -> Tensor<T> { x.done() }
+#[kernel]
+pub fn member(x: Pending<Tensor<f32>>) -> Tensor<f32> { generic(x) }
+#[kernel]
+pub fn projected(x: (Pending<Tensor<[i32; 2]>>, ())) -> Tensor<[i32; 2]> { x.0.done() }
+#[kernel]
+pub fn associated(x: Pending<Tensor<u64>>) -> Tensor<u64> { Pending::done(x) }
+#[kernel]
+pub fn imported_function(x: Pending<Tensor<bool>>) -> Tensor<bool> { complete(x) }
+// A user nominal Future keeps ordinary member lookup and has no async meaning.
+pub struct [value] Future { pub value: i32 }
+impl Future { pub fn done(self: Self) -> i32 { self.value } }
+pub fn shadow(x: Future) -> i32 { x.done() }
+// HIR-DAG: #core::intrinsic::tensor::Future::done::<
+// MIR-DAG: tensor#async_done
+// MIR-DAG: 6Future4done
