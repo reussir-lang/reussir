@@ -213,6 +213,109 @@ mod tests {
         });
     }
     #[test]
+    fn selected_trait_body_propagates_tensor_shape_constraints() {
+        crate::with_tcx(|tcx| {
+            let interner = std::sync::Arc::new(reussir_syntax::new_threaded_interner());
+            let parsed = reussir_syntax::parse_with_interner(
+                r#"
+                pub trait Matrix { #[kernel] fn transpose<A, B>(x: Tensor<A>) -> Tensor<B>; }
+                pub struct Marker {}
+                impl Matrix for Marker {
+                    #[kernel] fn transpose<A, B>(x: Tensor<A>) -> Tensor<B> {
+                        core::intrinsic::tensor::transpose(x)
+                    }
+                }
+            "#,
+                interner.clone(),
+            );
+            assert!(parsed.ok(), "{:?}", parsed.errors);
+            let program = crate::surface::program(&parsed.root);
+            use reussir_syntax::Interner;
+            let mut keys = interner.clone();
+            let files = [crate::semi::PackageFile {
+                file: reussir_syntax::source::FileId::ROOT,
+                module: vec![keys.get_or_intern("dep")],
+                program: &program,
+            }];
+            let producer = crate::semi::elaborate_package(tcx, &files, &interner);
+            assert!(!producer.has_errors(), "{:?}", producer.reports);
+            let (traits, impls) =
+                crate::semi::hir::trait_texts(&producer.traits, &producer.defs, producer.resolver);
+            let text = crate::semi::hir::print::Printer::new(&producer.defs, producer.resolver)
+                .with_traits(&traits, &impls)
+                .program(
+                    &producer.elaborated,
+                    &producer.strings.entries(),
+                    &producer.records,
+                    &producer.trampolines,
+                );
+            let text = format!("interface 1 package \"dep\" producer \"rrc 0.1.0\";\n{text}");
+            let parsed =
+                crate::semi::hir::build::parse_program(tcx, &text).expect("trait RRI roundtrip");
+            let mut elab = Elaborator::new(tcx, &interner);
+            elab.declare_extern_package(
+                &mut keys,
+                &crate::semi::ExternPackage {
+                    name: "dep",
+                    parsed: &parsed,
+                    files: &[],
+                },
+            );
+            assert!(!elab.has_errors(), "{:?}", elab.reports);
+            let implementation = elab.traits.impls().find(|i| !i.methods.is_empty()).unwrap();
+            let trait_def = elab.traits.trait_def(implementation.trait_ref.trait_id).def;
+            let receiver = implementation.self_ty;
+            let elem = tcx.mk_fp(crate::semi::ty::FpTy::Ieee(32));
+            let source_shape = tcx.mk_array(elem, &[2, 3]);
+            let output_shape = elab.infer.new_hole_ty();
+            let result = tcx.mk_tensor(output_shape, &[]);
+            let args = [Argument::unknown(tcx.mk_tensor(elem, &[2, 3]))];
+            assert!(matches!(
+                elab.resolve_shape_trait_call(
+                    trait_def,
+                    0,
+                    &[receiver, source_shape, output_shape],
+                    &args,
+                    result,
+                    None
+                ),
+                Ok(RuleStatus::Solved)
+            ));
+            elab.resolve_shape_constraints(false);
+            assert!(!elab.has_errors(), "{:?}", elab.reports);
+            assert_eq!(elab.infer.resolve(result), tcx.mk_tensor(elem, &[3, 2]));
+        });
+    }
+    #[test]
+    fn source_trait_wrapper_schedules_forward_impl_body() {
+        crate::with_tcx(|tcx| {
+            let interner = std::sync::Arc::new(reussir_syntax::new_threaded_interner());
+            let parsed = reussir_syntax::parse_with_interner(
+                r#"
+                pub trait Matrix { #[kernel] fn transpose<A, B>(x: Tensor<A>) -> Tensor<B>; }
+                pub struct Marker {}
+                #[kernel] fn apply<M: Matrix, A, B>(x: Tensor<A>) -> Tensor<B> { M::transpose(x) }
+                #[kernel] pub fn caller(x: Tensor<[f32; 2, 3]>) -> Tensor<[f32; 3, 2]> {
+                    let result = apply<Marker, _, _>(x);
+                    result
+                }
+                impl Matrix for Marker {
+                    #[kernel] fn transpose<A, B>(x: Tensor<A>) -> Tensor<B> {
+                        core::intrinsic::tensor::transpose(x)
+                    }
+                }
+            "#,
+                interner.clone(),
+            );
+            assert!(parsed.ok(), "{:?}", parsed.errors);
+            let program = crate::surface::program(&parsed.root);
+            let elab = crate::semi::elaborate(tcx, &program, &interner);
+            assert!(!elab.has_errors(), "{:?}", elab.reports);
+            let (_, errors) = crate::full::mono::monomorphize(&elab.mono_input());
+            assert!(errors.is_empty(), "{errors:?}");
+        });
+    }
+    #[test]
     fn source_mutual_trait_and_direct_recursion_keeps_declared_contracts() {
         crate::with_tcx(|tcx| {
             let interner = std::sync::Arc::new(reussir_syntax::new_threaded_interner());

@@ -1,0 +1,69 @@
+// REQUIRES: stablehlo
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
+// RUN: diff %t.hir %t.round.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.mlir
+// RUN: %reussir-opt %t.mlir -o /dev/null
+// RUN: %FileCheck %s < %t.mlir
+import core::intrinsic::tensor;
+
+#[kernel]
+pub fn backward_transpose() -> Tensor<[f32; 3, 2]> {
+    let value = tensor::fill(1.0);
+    tensor::transpose(value)
+}
+#[kernel]
+pub fn backward_dot(right: Tensor<[f32; 3, 4]>) -> Tensor<[f32; 2, 4]> {
+    let left = tensor::fill(1.0);
+    tensor::dot(left, right)
+}
+#[kernel]
+pub fn tuple_context() -> (Tensor<[f32; 2, 3]>, Tensor<[f32; 3, 2]>) {
+    let x = tensor::fill(1.0);
+    (x, tensor::transpose(x))
+}
+#[kernel]
+pub fn explicit_partial_shape(right: Tensor<[f32; 3, 4]>) -> Tensor<[f32; 2, 4]> {
+    let left: Tensor<[f32; _, 3]> = tensor::fill(1.0);
+    tensor::dot(left, right)
+}
+
+
+#[kernel]
+fn transpose_helper<T, R>(value: Tensor<T>) -> R { tensor::transpose(value) }
+#[kernel]
+fn dot_helper<T, U, R>(a: Tensor<T>, b: Tensor<U>) -> R { tensor::dot(a, b) }
+#[kernel]
+pub fn direct_dynamic_transpose(x: Tensor<[f32; ?, 3]>) -> Tensor<[f32; 3, 4]> {
+    tensor::transpose(x)
+}
+#[kernel]
+pub fn later_dynamic_transpose(x: Tensor<[f32; ?, 3]>) -> Tensor<[f32; 3, 4]> {
+    let value = tensor::transpose(x);
+    value
+}
+#[kernel]
+pub fn wrapped_dynamic_transpose(x: Tensor<[f32; ?, 3]>) -> Tensor<[f32; 3, 4]> {
+    let value = transpose_helper(x);
+    value
+}
+#[kernel]
+pub fn direct_dynamic_dot(x: Tensor<[f32; ?, 3]>, y: Tensor<[f32; 3, 4]>) -> Tensor<[f32; 2, 4]> {
+    tensor::dot(x, y)
+}
+#[kernel]
+pub fn later_dynamic_dot(x: Tensor<[f32; ?, 3]>, y: Tensor<[f32; 3, 4]>) -> Tensor<[f32; 2, 4]> {
+    let value = tensor::dot(x, y);
+    value
+}
+#[kernel]
+pub fn wrapped_dynamic_dot(x: Tensor<[f32; ?, 3]>, y: Tensor<[f32; 3, 4]>) -> Tensor<[f32; 2, 4]> {
+    let value = dot_helper(x, y);
+    value
+}
+
+// CHECK-DAG: stablehlo.transpose
+// CHECK-DAG: stablehlo.dot_general

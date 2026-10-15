@@ -126,3 +126,24 @@ fn generic_fill_preserves_numeric_evidence_from_tuple_loop_state() {
     let errors = reports(source);
     assert!(errors.is_empty(), "{errors:#?}");
 }
+
+#[test]
+fn linalg_relations_flow_backward_through_direct_and_wrapped_calls() {
+    let source =
+        include_str!("../../../../../tests/integration/frontend/shape_inference_linalg.rr");
+    let errors = reports(source);
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+#[test]
+fn linalg_relations_reject_contradictions_and_ambiguous_ranks() {
+    for source in [
+        "#[kernel] pub fn bad()->Tensor<[f32;7]> { core::intrinsic::tensor::dot(core::intrinsic::tensor::fill(1.0),core::intrinsic::tensor::fill(2.0)) }",
+        "#[kernel] pub fn bad(x:Tensor<[f32;2,3]>)->Tensor<[f32;4,2]> { core::intrinsic::tensor::transpose(x) }",
+        "#[kernel] pub fn bad(x:Tensor<[f32;2,3]>,y:Tensor<[f32;4,5]>)->Tensor<[f32;2,5]> { core::intrinsic::tensor::dot(x,y) }",
+    ] {
+        assert!(
+            !reports(source).is_empty(),
+            "incorrectly accepted: {source}"
+        );
+    }
+}
