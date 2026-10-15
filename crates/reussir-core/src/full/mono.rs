@@ -2719,49 +2719,180 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     self.error(scrut.span, "kernel match scrutinee must be an integer");
                     return M::Poison;
                 }
-                if self.inside_kernel {
-                    if let TyKind::Int(int_ty) = *scrut_ty.kind() {
-                        self.check_kernel_match_keys(tree, int_ty, scrut.span);
-                    }
-                }
+                self.check_match_keys(tree, scrut_ty, &mut Vec::new(), scrut.span);
                 M::Match(self.lower_ref(scrut, subst), self.lower_tree(tree, subst))
             }
         }
     }
 
-    /// Integer patterns must fit the specialized source type, before a
-    /// backend can interpret a negative key as an unsigned bit pattern.
-    fn check_kernel_match_keys(
+    /// Resolve a decision-tree occurrence after specialization. Variant arms
+    /// refine each payload child; Nullable::NonNull refines the same occurrence
+    /// to its inner type. Longest-prefix lookup preserves outer refinements
+    /// while a deeper constructor is inspected, and the newest exact refinement
+    /// wins for nested nullable/enum combinations.
+    fn match_occurrence_type(
+        &self,
+        root: Ty<'tcx>,
+        path: &[u32],
+        refinements: &[(Vec<u32>, Ty<'tcx>)],
+    ) -> Option<Ty<'tcx>> {
+        let refined = refinements
+            .iter()
+            .enumerate()
+            .filter(|(_, (prefix, _))| path.starts_with(prefix))
+            .max_by_key(|(order, (prefix, _))| (prefix.len(), *order));
+        let (mut ty, suffix) = match refined {
+            Some((_, (prefix, ty))) => (*ty, &path[prefix.len()..]),
+            None => (root, path),
+        };
+        for index in suffix {
+            while let TyKind::Arc(inner) = *ty.kind() {
+                ty = inner;
+            }
+            ty = match *ty.kind() {
+                TyKind::Tuple(fields) => *fields.get(*index as usize)?,
+                TyKind::Record { def, args, .. } => {
+                    let record = self.record_defs.get(&def)?;
+                    let field = match record.fields.as_ref()? {
+                        RecordFields::Named(fields) => fields.get(*index as usize)?.1,
+                        RecordFields::Unnamed(fields) => fields.get(*index as usize)?.0,
+                        // Enum payload positions require a preceding variant
+                        // refinement; they are not fields of the whole enum.
+                        RecordFields::Variants(_) | RecordFields::Opaque => return None,
+                    };
+                    let subst: Subst<'tcx> = record
+                        .ty_params
+                        .iter()
+                        .map(|(_, generic)| *generic)
+                        .zip(args.iter().copied())
+                        .collect();
+                    subst_ty(self.tcx, field, &subst)
+                }
+                _ => return None,
+            };
+        }
+        while let TyKind::Arc(inner) = *ty.kind() {
+            ty = inner;
+        }
+        Some(ty)
+    }
+
+    /// Check all integer keys against the ground type at their occurrence,
+    /// including host matches and keys nested inside products/constructors.
+    /// This prevents an impossible negative unsigned pattern from becoming a
+    /// valid two's-complement switch key in the backend.
+    fn check_match_keys(
         &mut self,
         tree: &DecisionTree<'tcx>,
-        ty: IntTy,
+        root: Ty<'tcx>,
+        refinements: &mut Vec<(Vec<u32>, Ty<'tcx>)>,
         span: Option<Span>,
     ) {
         match tree {
             DecisionTree::Guard {
                 success, failure, ..
             } => {
-                self.check_kernel_match_keys(success, ty, span);
-                self.check_kernel_match_keys(failure, ty, span);
+                self.check_match_keys(success, root, refinements, span);
+                self.check_match_keys(failure, root, refinements, span);
             }
-            DecisionTree::Switch {
-                cases: SwitchCases::Int { cases, default },
-                ..
-            } => {
-                for (key, branch) in cases {
-                    if !literal::int_fits(key, ty) {
-                        self.error(
-                            span,
-                            format!(
-                                "integer pattern `{key}` is out of range for kernel match scrutinee"
-                            ),
-                        );
+            DecisionTree::Switch { scrutinee, cases } => {
+                let Some(ty) = self.match_occurrence_type(root, &scrutinee.0, refinements) else {
+                    self.error(span, "invalid pattern decision-tree projection");
+                    return;
+                };
+                match cases {
+                    SwitchCases::Int { cases, default } => {
+                        let TyKind::Int(int_ty) = *ty.kind() else {
+                            self.error(span, "integer pattern requires an integer scrutinee");
+                            return;
+                        };
+                        for (key, branch) in cases {
+                            if !literal::int_fits(key, int_ty) {
+                                self.error(span, format!(
+                                    "integer pattern `{key}` is out of range for match scrutinee"
+                                ));
+                            }
+                            self.check_match_keys(branch, root, refinements, span);
+                        }
+                        self.check_match_keys(default, root, refinements, span);
                     }
-                    self.check_kernel_match_keys(branch, ty, span);
+                    SwitchCases::Ctor(arms) => {
+                        let TyKind::Record { def, args, .. } = *ty.kind() else {
+                            self.error(span, "variant pattern requires an enum scrutinee");
+                            return;
+                        };
+                        let Some(record) = self.record_defs.get(&def) else {
+                            self.error(span, "unknown enum in pattern decision tree");
+                            return;
+                        };
+                        let Some(RecordFields::Variants(variants)) = &record.fields else {
+                            self.error(span, "variant pattern requires an enum scrutinee");
+                            return;
+                        };
+                        if arms.len() != variants.len() {
+                            self.error(
+                                span,
+                                "pattern decision tree has the wrong number of enum branches",
+                            );
+                            return;
+                        }
+                        let subst: Subst<'tcx> = record
+                            .ty_params
+                            .iter()
+                            .map(|(_, generic)| *generic)
+                            .zip(args.iter().copied())
+                            .collect();
+                        let payloads: Vec<Vec<_>> = variants
+                            .iter()
+                            .map(|variant| {
+                                variant
+                                    .fields
+                                    .iter()
+                                    .map(|field| subst_ty(self.tcx, *field, &subst))
+                                    .collect()
+                            })
+                            .collect();
+                        for (branch, fields) in arms.iter().zip(payloads) {
+                            let mark = refinements.len();
+                            for (index, ty) in fields.into_iter().enumerate() {
+                                let mut path = scrutinee.0.clone();
+                                path.push(index as u32);
+                                refinements.push((path, ty));
+                            }
+                            self.check_match_keys(branch, root, refinements, span);
+                            refinements.truncate(mark);
+                        }
+                    }
+                    SwitchCases::Nullable { non_null, null } => {
+                        let TyKind::Nullable(inner) = *ty.kind() else {
+                            self.error(span, "nullable pattern requires a nullable scrutinee");
+                            return;
+                        };
+                        let mark = refinements.len();
+                        refinements.push((scrutinee.0.clone(), inner));
+                        self.check_match_keys(non_null, root, refinements, span);
+                        refinements.truncate(mark);
+                        self.check_match_keys(null, root, refinements, span);
+                    }
+                    SwitchCases::Bool { if_true, if_false } => {
+                        self.check_match_keys(if_true, root, refinements, span);
+                        self.check_match_keys(if_false, root, refinements, span);
+                    }
+                    SwitchCases::Char { cases, default } => {
+                        for (_, branch) in cases {
+                            self.check_match_keys(branch, root, refinements, span);
+                        }
+                        self.check_match_keys(default, root, refinements, span);
+                    }
+                    SwitchCases::String { cases, default } => {
+                        for (_, branch) in cases {
+                            self.check_match_keys(branch, root, refinements, span);
+                        }
+                        self.check_match_keys(default, root, refinements, span);
+                    }
                 }
-                self.check_kernel_match_keys(default, ty, span);
             }
-            _ => {}
+            DecisionTree::Leaf { .. } | DecisionTree::Uncovered | DecisionTree::Unreachable => {}
         }
     }
 
@@ -2973,6 +3104,49 @@ mod tests {
             );
         }
         assert!(mono_reports("#[kernel] pub fn good(key: i8) -> i32 { match key { -128 => 1, 127 => 2, _ => 0 } }").is_empty());
+    }
+
+    #[test]
+    fn integer_patterns_reject_invalid_ground_ranges_in_nested_host_matches() {
+        for source in [
+            "pub fn bad(x: u64) -> i32 { match x { -1 => 1, _ => 0 } }",
+            "pub fn bad(x: i8) -> i32 { match x { -129 => 1, _ => 0 } }",
+            "pub fn bad(x: (bool, (u8,))) -> i32 { match x { (true, (-1,)) => 1, _ => 0 } }",
+            "fn pick<T: Integral>(x: (T,)) -> i32 { match x { (-1,) => 1, _ => 0 } } pub fn bad(x: (u64,)) -> i32 { pick(x) }",
+            "pub enum E<T> { Empty, Value((T,)) } pub fn bad(x: E<u8>) -> i32 { match x { E::Value((-1,)) => 1, _ => 0 } }",
+            "pub enum E<T> { Empty, Value(T) } fn pick<T: Integral>(x: E<T>) -> i32 { match x { E::Value(128) => 1, _ => 0 } } pub fn bad(x: E<i8>) -> i32 { pick(x) }",
+            "pub enum E<T> { Value(T) } pub fn bad(x: Nullable<E<u8>>) -> i32 { match x { Nullable::NonNull(E::Value(-1)) => 1, _ => 0 } }",
+            "pub enum E<T> { Value(T) } fn pick<T: Integral>(x: Nullable<E<T>>) -> i32 { match x { Nullable::NonNull(E::Value(-1)) => 1, _ => 0 } } pub fn bad(x: Nullable<E<u64>>) -> i32 { pick(x) }",
+            "pub enum E<T> { Value(T) } pub fn bad(x: Arc<E<u8>>) -> i32 { match x { E::Value(-1) => 1, _ => 0 } }",
+            "pub struct Wrapper<T> { value: (T,) } fn pick<T: Integral>(x: Wrapper<T>) -> i32 { match x.value { (-1,) => 1, _ => 0 } } pub fn bad(x: Wrapper<u8>) -> i32 { pick(x) }",
+            "pub enum E { Signed(i8), Unsigned(u8) } pub fn bad(x: E) -> i32 { match x { E::Signed(-128) => 1, E::Unsigned(-1) => 2, _ => 0 } }",
+        ] {
+            let reports = mono_reports(source);
+            assert!(
+                reports
+                    .iter()
+                    .any(|message| message.contains("integer pattern")
+                        && message.contains("out of range")),
+                "{source}: {reports:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn integer_patterns_preserve_valid_signed_minima_and_branch_refinements() {
+        for source in [
+            "pub fn good(x: i64) -> i32 { match x { -9223372036854775808 => 1, _ => 0 } }",
+            "pub fn good(x: u64) -> i32 { match x { 18446744073709551615 => 1, _ => 0 } }",
+            "fn pick<T: Integral>(x: (T,)) -> i32 { match x { (-128,) => 1, _ => 0 } } pub fn good(x: (i8,)) -> i32 { pick(x) }",
+            "pub enum E { Signed(i8), Unsigned(u8) } pub fn good(x: E, flag: bool) -> i32 { match x { E::Signed(-128) if flag => 1, E::Signed(-128) => 2, E::Unsigned(255) => 3, _ => 0 } }",
+            "pub enum E<T> { Empty, Value((T,)) } pub fn good(x: Nullable<E<i16>>) -> i32 { match x { Nullable::NonNull(E::Value((-32768,))) => 1, _ => 0 } }",
+            "pub enum E<T> { Value(T) } pub fn good(x: Arc<E<i32>>) -> i32 { match x { E::Value(-2147483648) => 1, _ => 0 } }",
+            "pub enum E<T> { Value(T) } pub fn good(x: Nullable<E<Nullable<E<i8>>>>) -> i32 { match x { Nullable::NonNull(E::Value(Nullable::NonNull(E::Value(-128)))) => 1, _ => 0 } }",
+            "pub struct Wrapper<T> { value: (T,) } fn pick<T: Integral>(x: Wrapper<T>) -> i32 { match x.value { (-128,) => 1, _ => 0 } } pub fn good(x: Wrapper<i8>) -> i32 { pick(x) }",
+        ] {
+            let reports = mono_reports(source);
+            assert!(reports.is_empty(), "{source}: {reports:?}");
+        }
     }
 
     #[test]
