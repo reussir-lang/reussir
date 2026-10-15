@@ -224,6 +224,14 @@ mod tests {
                 "#[kernel] fn k(c: i32, x: i32) -> i32 { if c { x } else { x } }",
                 "type mismatch",
             ),
+            (
+                "#[kernel] fn k(c: Tensor<[bool; 1]>, x: i32) -> i32 { if c { x } else { x } }",
+                "type mismatch",
+            ),
+            (
+                "#[kernel] fn k(c: Tensor<i32>, x: i32) -> i32 { if c { x } else { x } }",
+                "type mismatch",
+            ),
             ("#[kernel] #[kernel] fn k() {}", "duplicate `#[kernel]`"),
             (r#"#[kernel("unused")] fn k() {}"#, "takes no arguments"),
             ("#[kernel] struct S {}", "only valid on a function"),
