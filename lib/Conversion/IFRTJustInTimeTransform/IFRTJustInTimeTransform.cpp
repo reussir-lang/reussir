@@ -69,7 +69,7 @@ struct ReussirPreparePjrtPass
     // even when its body happens to contain only func.return.
     bool unlaunchedKernel = false;
     getOperation().walk([&](mlir::func::FuncOp function) {
-      if (function->hasAttr("reussir.kernel")) {
+      if (function->hasAttr("reussir.kernel_function")) {
         function.emitError("kernel launching is not available; an unlaunched "
                            "kernel cannot enter native host lowering");
         unlaunchedKernel = true;

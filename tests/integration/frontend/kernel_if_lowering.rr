@@ -8,7 +8,7 @@
 // RUN: %reussir-opt %t.replay.mlir | %FileCheck %s
 // CHECK: func.func
 // CHECK-SAME: tensor<i1>
-// CHECK-SAME: reussir.kernel
+// CHECK-SAME: reussir.kernel_function
 // CHECK: stablehlo.if
 // CHECK: stablehlo.return
 // CHECK: stablehlo.return

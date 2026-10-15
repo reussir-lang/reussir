@@ -24,7 +24,7 @@ heap allocation or legacy StableHLO tuple operation for a source tuple.
 
 The `is_kernel` flag survives HIR and MIR serialization, dependency interfaces,
 generic specialization, and the final lowering environment. Emitted kernel
-functions carry `reussir.kernel`. A native compilation attempt diagnoses an
+functions carry `reussir.kernel_function`. A native compilation attempt diagnoses an
 unlaunched kernel before host conversion. Host-to-kernel launching is not yet
 implemented; it cannot accidentally become an ordinary host call.
 

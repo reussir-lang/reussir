@@ -61,7 +61,7 @@ fn conditional_products_calls_and_scalars() {
         "stablehlo.divide",
         "stablehlo.not",
         "call",
-        "reussir.kernel",
+        "reussir.kernel_function",
         "tensor<ui64>",
     ] {
         assert!(text.contains(operation), "missing {operation}: {text}");

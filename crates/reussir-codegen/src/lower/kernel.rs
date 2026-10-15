@@ -297,7 +297,7 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
             region.append_block(block);
         }
         let mut attrs = vec![(
-            Identifier::new(self.context, "reussir.kernel"),
+            Identifier::new(self.context, "reussir.kernel_function"),
             Attribute::unit(self.context),
         )];
         if function.visibility == Visibility::Private
