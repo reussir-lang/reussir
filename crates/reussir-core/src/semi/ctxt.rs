@@ -2163,8 +2163,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             let self_ty = match (target, &impl_generics) {
                 (Some(target), Some(generics)) => {
                     self.generic_names = generics.iter().map(|(n, id)| (*n, *id)).collect();
-                    let args: Vec<Ty<'tcx>> =
-                        ib.target_args.iter().map(|a| self.eval_type(a)).collect();
+                    let args: Vec<Ty<'tcx>> = ib
+                        .target_args
+                        .iter()
+                        .map(|a| self.eval_decl_type(a))
+                        .collect();
                     self.generic_names.clear();
                     let flex = match self.records[&target].default_cap {
                         DefaultCap::Value | DefaultCap::Shared => Flexivity::Irrelevant,
@@ -2880,7 +2883,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self.error(span, "a builtin impl takes no generic parameters");
             return nones;
         }
-        let trait_args: Vec<Ty<'tcx>> = targs_surface.iter().map(|a| self.eval_type(a)).collect();
+        let trait_args: Vec<Ty<'tcx>> = targs_surface
+            .iter()
+            .map(|a| self.eval_decl_type(a))
+            .collect();
         let expected = self.traits.trait_def(tid).params.len();
         if trait_args.len() != expected {
             self.error(
@@ -3034,8 +3040,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // Trait arguments and the self type evaluate under the block
         // generics.
         self.generic_names = generics.iter().map(|(n, id)| (*n, *id)).collect();
-        let trait_args: Vec<Ty<'tcx>> = targs_surface.iter().map(|a| self.eval_type(a)).collect();
-        let self_args: Vec<Ty<'tcx>> = ib.target_args.iter().map(|a| self.eval_type(a)).collect();
+        let trait_args: Vec<Ty<'tcx>> = targs_surface
+            .iter()
+            .map(|a| self.eval_decl_type(a))
+            .collect();
+        let self_args: Vec<Ty<'tcx>> = ib
+            .target_args
+            .iter()
+            .map(|a| self.eval_decl_type(a))
+            .collect();
         self.generic_names.clear();
         let self_ty = match (scalar_target, target) {
             (Some(scalar), _) => scalar,
@@ -3492,7 +3505,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let mut regional_generics: Vec<GenericId> = Vec::new();
         let mut params = Vec::new();
         for (name, ty, flex) in &func.params {
-            let t = self.eval_type_flex(ty, *flex);
+            let t = self.eval_decl_type_flex(ty, *flex);
             if *flex {
                 collect_regional_generic(t, &mut regional_generics);
             }
@@ -3501,7 +3514,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         let return_ty = match &func.return_type {
             Some((ty, flex)) => {
-                let t = self.eval_type_flex(ty, *flex);
+                let t = self.eval_decl_type_flex(ty, *flex);
                 if *flex {
                     collect_regional_generic(t, &mut regional_generics);
                 }
@@ -3840,7 +3853,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             .params
             .iter()
             .map(|(_, ty, flex)| {
-                let t = self.eval_type_flex(ty, *flex);
+                let t = self.eval_decl_type_flex(ty, *flex);
                 self.check_function_signature_type(t, func.is_kernel, Some(ty.span()));
                 t
             })
@@ -3871,7 +3884,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             });
         let ret = match &func.return_type {
             Some((ty, flex)) => {
-                let t = self.eval_type_flex(ty, *flex);
+                let t = self.eval_decl_type_flex(ty, *flex);
                 self.check_function_signature_type(t, func.is_kernel, Some(ty.span()));
                 t
             }
@@ -4025,7 +4038,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                             fields: tys
                                 .iter()
                                 .map(|t| {
-                                    let fty = self.eval_type(t);
+                                    let fty = self.eval_decl_type(t);
                                     self.reject_arc_member(default_cap, fty, span);
                                     self.reject_tensor_member(fty, span);
                                     fty
@@ -4067,7 +4080,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// be collected rather than dropped.
     fn collect_trampoline(&mut self, tramp: &surface::ExternTrampoline, span: Option<Span>) {
         // The target's type arguments are concrete here (no generics in scope).
-        let ty_args: Vec<Ty<'tcx>> = tramp.ty_args.iter().map(|t| self.eval_type(t)).collect();
+        let ty_args: Vec<Ty<'tcx>> = tramp
+            .ty_args
+            .iter()
+            .map(|t| self.eval_decl_type(t))
+            .collect();
 
         let Some(target) = self.resolve_function_ref(&tramp.func) else {
             let hint = if tramp.func.segments.is_empty() {
@@ -4128,7 +4145,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// The stored type of a field. A mutable (`[field]`) field is a nullable
     /// regional link, so its type is wrapped in `Nullable`.
     fn field_ty(&mut self, ty: &surface::Type, mutable: bool) -> Ty<'tcx> {
-        let t = self.eval_type(ty);
+        let t = self.eval_decl_type(ty);
         if mutable { self.tcx.mk_nullable(t) } else { t }
     }
 

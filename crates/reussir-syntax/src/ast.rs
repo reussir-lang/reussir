@@ -507,13 +507,19 @@ impl Emitter<'_> {
                     .find(|n| is_type_kind(n.kind()))
                     .expect("array element type");
                 // A `?` extent (dynamic dimension) projects as `null`, the
-                // same convention as `_` in a type argument list.
+                // same convention as `_` in a type argument list. An inferred
+                // dimension has its own tag: runtime `?` and inference `_`
+                // must not become indistinguishable in the AST projection.
                 let extents: Vec<Value> = node
                     .children()
-                    .filter(|n| is_expr_kind(n.kind()) || n.kind() == DynExtent)
+                    .filter(|n| {
+                        is_expr_kind(n.kind()) || matches!(n.kind(), DynExtent | InferExtent)
+                    })
                     .map(|n| {
                         if n.kind() == DynExtent {
                             Value::Null
+                        } else if n.kind() == InferExtent {
+                            tagged0("InferExtent")
                         } else {
                             self.expr(n)
                         }
