@@ -1,0 +1,34 @@
+// Demand-checking a forward callee must preserve caller inference, locals and
+// generic names. Serialized HIR retains declaration order, even though nested
+// checking completes callees first. Mutual recursion stops at the signatures.
+// RUN: %rrc %s --package-name demo --emit hir --no-source-locations -o %t.hir
+// RUN: %FileCheck %s < %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
+// RUN: diff %t.hir %t.round.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit llvm-ir -o %t.ll
+
+pub fn caller<T: Num>(x: T) -> T { callee(x) + x }
+fn callee<T: Num>(x: T) -> T { x + x }
+
+pub struct Value<T> { value: T }
+pub fn method_caller(x: Value<i32>) -> i32 { x.doubled() + 1 }
+impl<T: Num> Value<T> {
+    pub fn doubled(self: Self) -> T { callee(self.value) }
+}
+
+pub fn odd(n: i32) -> bool {
+    if n == 0 { false } else { even(n - 1) }
+}
+fn even(n: i32) -> bool {
+    if n == 0 { true } else { odd(n - 1) }
+}
+pub fn concrete(n: i32) -> i32 { caller(n) + method_caller(Value { value: n }) }
+
+// CHECK: pub fn #demo::caller<
+// CHECK: fn #demo::callee<
+// CHECK: pub fn #demo::method_caller(
+// CHECK: pub fn #demo::odd(
+// CHECK: fn #demo::even(
+// CHECK: pub fn #demo::concrete(
+// CHECK: pub fn #demo::Value::doubled<

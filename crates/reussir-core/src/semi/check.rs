@@ -36,6 +36,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let Some(proto) = self.functions.get(&def).cloned() else {
             return;
         };
+        if !self.begin_body_check(def) {
+            return;
+        }
         // The body's references resolve (and its reports attribute) in the
         // function's own declaration scope — the package driver checks items
         // from many files/modules in one pass. An impl member's scope is the
@@ -116,6 +119,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             file: proto.file,
         });
         self.inside_kernel = false;
+        self.finish_body_check(def);
     }
 
     fn check_kernel_call(
@@ -1243,6 +1247,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return self.poison(span);
         };
         self.record_use(fc.name.basename);
+        self.ensure_body_checked(def);
         let proto = self.functions[&def].clone();
         if !self.check_kernel_call(proto.is_kernel, proto.return_ty, span) {
             return self.poison(span);
@@ -1766,6 +1771,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return self.poison(span);
         }
+        self.ensure_body_checked(def);
         let proto = self.functions[&def].clone();
         self.record_use(name);
         if !self.check_kernel_call(proto.is_kernel, proto.return_ty, span) {

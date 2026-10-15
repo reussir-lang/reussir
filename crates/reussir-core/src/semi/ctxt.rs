@@ -1,6 +1,8 @@
 //! The elaboration context: collected items, global + per-function state, and
 //! the scan/collect driver.
 
+mod bodies;
+
 use reussir_syntax::SharedInterner;
 use reussir_syntax::kind::{Resolver, TokenKey};
 use reussir_syntax::source::{FileId, SourceCache};
@@ -504,6 +506,7 @@ pub struct Elaborator<'a, 'tcx> {
     pub extern_ffi_imports: FxHashMap<DefId, FfiImport>,
     pub extern_ffi_preludes: Vec<FfiPrelude>,
     pub elaborated: Vec<Function<'tcx>>,
+    body_scheduler: bodies::BodyScheduler,
     pub reports: Vec<Report>,
     /// The file whose items are currently being processed; stamped onto every
     /// report and declared item. The driver sets it per input file
@@ -642,6 +645,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             extern_ffi_imports: FxHashMap::default(),
             extern_ffi_preludes: Vec::new(),
             elaborated: Vec::new(),
+            body_scheduler: bodies::BodyScheduler::default(),
             reports: Vec::new(),
             current_file: FileId::ROOT,
             records_complete: false,
@@ -1496,6 +1500,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let live = cp.defs as u32;
         self.records.retain(|def, _| def.0 < live);
         self.functions.retain(|def, _| def.0 < live);
+        self.body_scheduler.rollback(live);
         self.ffi_imports.retain(|def, _| def.0 < live);
         self.generics.truncate(cp.generics);
         self.traits.truncate(cp.traits, cp.impls);
@@ -2312,6 +2317,26 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
         }
         self.records_complete = true;
+        // Register every source body before checking any of them. A forward
+        // call can then demand the callee's typed body without depending on file
+        // traversal or declaration order.
+        let body_order: Vec<_> = function_defs
+            .iter()
+            .chain(method_defs.iter())
+            .flatten()
+            .copied()
+            .collect();
+        let first_body = self.elaborated.len();
+        for ((func, span, _, _, _, _, _), def) in functions.iter().zip(&function_defs) {
+            if let Some(def) = def {
+                self.body_scheduler.register(*def, func, *span);
+            }
+        }
+        for (func, span, def) in &methods {
+            if let Some(def) = def {
+                self.body_scheduler.register(*def, func, *span);
+            }
+        }
         functions
             .iter()
             .zip(function_defs)
@@ -2325,6 +2350,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             .for_each(|(func, span, def)| {
                 self.check_function(func, def, span);
             });
+        // Nested demand checking completes dependencies first, but external
+        // HIR order remains the driver's stable declaration order.
+        let ordinal: FxHashMap<_, _> = body_order
+            .into_iter()
+            .enumerate()
+            .map(|(i, def)| (def, i))
+            .collect();
+        self.elaborated[first_body..].sort_by_key(|function| ordinal[&function.def]);
         trampolines.iter().for_each(|(tramp, span, scope)| {
             self.set_current_file(scope.file);
             self.defs.set_module(scope.module.to_vec());
