@@ -508,6 +508,9 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
                 condition,
                 body,
             } => self.while_expr(block, env, state, initial, condition, body, e.span)?,
+            ExprKind::Match(scrutinee, tree) => {
+                self.match_expr(block, env, scrutinee, tree, e.ty, e.span)?
+            }
             ExprKind::If(condition, then, otherwise) => {
                 self.if_expr(block, env, condition, then, otherwise, e.ty, e.span)?
             }

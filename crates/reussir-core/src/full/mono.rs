@@ -2719,8 +2719,49 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     self.error(scrut.span, "kernel match scrutinee must be an integer");
                     return M::Poison;
                 }
+                if self.inside_kernel {
+                    if let TyKind::Int(int_ty) = *scrut_ty.kind() {
+                        self.check_kernel_match_keys(tree, int_ty, scrut.span);
+                    }
+                }
                 M::Match(self.lower_ref(scrut, subst), self.lower_tree(tree, subst))
             }
+        }
+    }
+
+    /// Integer patterns must fit the specialized source type, before a
+    /// backend can interpret a negative key as an unsigned bit pattern.
+    fn check_kernel_match_keys(
+        &mut self,
+        tree: &DecisionTree<'tcx>,
+        ty: IntTy,
+        span: Option<Span>,
+    ) {
+        match tree {
+            DecisionTree::Guard {
+                success, failure, ..
+            } => {
+                self.check_kernel_match_keys(success, ty, span);
+                self.check_kernel_match_keys(failure, ty, span);
+            }
+            DecisionTree::Switch {
+                cases: SwitchCases::Int { cases, default },
+                ..
+            } => {
+                for (key, branch) in cases {
+                    if !literal::int_fits(key, ty) {
+                        self.error(
+                            span,
+                            format!(
+                                "integer pattern `{key}` is out of range for kernel match scrutinee"
+                            ),
+                        );
+                    }
+                    self.check_kernel_match_keys(branch, ty, span);
+                }
+                self.check_kernel_match_keys(default, ty, span);
+            }
+            _ => {}
         }
     }
 
@@ -2914,6 +2955,24 @@ mod tests {
             );
             f(&full)
         })
+    }
+
+    #[test]
+    fn kernel_integer_patterns_check_the_specialized_range() {
+        for source in [
+            "#[kernel] pub fn bad(key: u8) -> i32 { match key { -1 => 1, _ => 0 } }",
+            "#[kernel] pub fn bad(key: i8) -> i32 { match key { 128 => 1, _ => 0 } }",
+            "#[kernel] fn choose<T: Integral>(key: T) -> i32 { match key { -1 => 1, _ => 0 } } #[kernel] pub fn bad(key: u64) -> i32 { choose(key) }",
+        ] {
+            let reports = mono_reports(source);
+            assert!(
+                reports
+                    .iter()
+                    .any(|m| m.contains("integer pattern") && m.contains("out of range")),
+                "{reports:?}"
+            );
+        }
+        assert!(mono_reports("#[kernel] pub fn good(key: i8) -> i32 { match key { -128 => 1, 127 => 2, _ => 0 } }").is_empty());
     }
 
     #[test]

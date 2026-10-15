@@ -614,7 +614,18 @@ fn pattern_kind_of(node: &ResolvedNode) -> PatternKind {
                 .collect(),
         ),
         ParenPat => pattern_kind_of(nodes(node).next().expect("grouped pattern")),
-        ConstPat => PatternKind::Const(constant(tokens(node).next().expect("constant token"))),
+        ConstPat => {
+            let mut parts = tokens(node);
+            let first = parts.next().expect("constant token");
+            let value = if first.kind() == Minus {
+                Const::ConstInt(-literal::parse_int(
+                    parts.next().expect("integer after minus").text(),
+                ))
+            } else {
+                constant(first)
+            };
+            PatternKind::Const(value)
+        }
         BindPat => {
             let path = child_node(node, PathKind).expect("binding path");
             PatternKind::Bind(key(tokens(path).next().expect("binding name")))

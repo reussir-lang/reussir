@@ -816,6 +816,12 @@ impl Parser<'_> {
                 self.bump();
                 m.complete(self, WildcardPat);
             }
+            Minus if self.nth(1) == IntLit => {
+                let m = self.start();
+                self.bump();
+                self.bump();
+                m.complete(self, ConstPat);
+            }
             IntLit | FloatLit | StringLit | CharLit | TrueKw | FalseKw => {
                 let m = self.start();
                 self.bump();

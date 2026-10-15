@@ -553,8 +553,28 @@ impl Emitter<'_> {
             ),
             ParenPat => self.pattern_kind(nodes(node).next().expect("grouped pattern")),
             ConstPat => {
-                let token = tokens(node).next().expect("constant token");
-                tagged("ConstPat", self.constant(token))
+                let mut parts = tokens(node);
+                let token = parts.next().expect("constant token");
+                let value = if token.kind() == Minus {
+                    let magnitude = int_value(parts.next().expect("integer after minus").text());
+                    let signed = match magnitude {
+                        Value::Number(number) => {
+                            let text = number.to_string();
+                            let text = if text == "0" {
+                                text
+                            } else {
+                                format!("-{text}")
+                            };
+                            Value::Number(Number::from_string_unchecked(text))
+                        }
+                        Value::String(radix) => Value::String(format!("-{radix}")),
+                        _ => unreachable!("integer literal value"),
+                    };
+                    tagged("ConstInt", signed)
+                } else {
+                    self.constant(token)
+                };
+                tagged("ConstPat", value)
             }
             BindPat => {
                 let path = child_node(node, Path).expect("binding path");

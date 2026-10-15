@@ -764,6 +764,20 @@ mod tests {
     }
 
     #[test]
+    fn negative_integer_patterns_preserve_exact_values() {
+        let value = json_of(
+            "fn f(x: i128) -> i32 { match x { -170141183460469231731687303715884105728 => 1, -0x80 => 2, -0 => 3, _ => 4 } }",
+        );
+        let text = value.to_string();
+        assert!(
+            text.contains("-170141183460469231731687303715884105728"),
+            "{text}"
+        );
+        assert!(text.contains("-0x80"), "{text}");
+        assert!(!text.contains("\"contents\":-0"), "{text}");
+    }
+
+    #[test]
     fn patterns_with_guards_and_ellipsis() {
         json_of(
             "fn classify(p: Pair<i32, i32>) -> i32 {\n    match p {\n        Pair { first: 0, .. } => 0,\n        Pair { first: x, second: y } if x > y => 1,\n        _ => 2\n    }\n}",
