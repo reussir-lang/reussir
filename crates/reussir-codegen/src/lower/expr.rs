@@ -369,16 +369,9 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         // The function's spans index its own declaration file; every
         // `location` below resolves against it.
         self.cur_file.set(func.file);
-        if func.is_kernel
-            && func
-                .params
-                .iter()
-                .map(|p| p.ty)
-                .chain([func.return_ty])
-                .any(|ty| matches!(ty.kind(), TyKind::Tuple(_)))
-        {
+        if func.is_kernel {
             return Err(LoweringError::at_source(
-                "kernel tuple ABI lowering requires flattening to SSA values and is not available",
+                "a kernel function must use kernel SSA lowering",
                 func.file,
                 func.body.and_then(|b| b.span),
             ));
@@ -455,14 +448,6 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 block.append_operation(func::r#return(&[v], loc));
             }
             region.append_block(block);
-        }
-
-        if func.is_kernel {
-            return Err(LoweringError::at_source(
-                "kernel compilation is not available; a #[kernel] function cannot be lowered as a host function",
-                func.file,
-                func.body.and_then(|b| b.span),
-            ));
         }
 
         // A `private` function carries an explicit `sym_visibility` attribute;
@@ -767,7 +752,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         use ExprKind::*;
         if env.is_kernel && !matches!(e.kind, Var(_) | Seq(_) | Let { .. } | If(..)) {
             return Err(LoweringError::at_source(
-                "kernel operation lowering is not available; host operations cannot be emitted in a kernel",
+                "a kernel operation cannot use host lowering",
                 self.cur_file.get(),
                 e.span,
             ));
@@ -924,7 +909,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             If(c, t, f) => {
                 if env.is_kernel {
                     return Err(LoweringError::at_source(
-                        "kernel if lowering is not available; a kernel conditional cannot use host control flow",
+                        "a kernel conditional must use kernel SSA lowering",
                         self.cur_file.get(),
                         e.span,
                     ));

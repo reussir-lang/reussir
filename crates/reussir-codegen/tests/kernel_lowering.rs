@@ -79,6 +79,7 @@ fn rank_zero_tensor_predicate_and_private_token_helpers() {
             if c { x } else { y }
         }
         #[kernel] fn token(c: bool, t: Token) -> Token { if c { t } else { t } }
+        #[kernel] fn future(x: Future<Tensor<u64>>) -> Future<Tensor<u64>> { x }
     "#,
     );
     if !enabled() {
@@ -106,4 +107,35 @@ fn rejects_future_control_results_and_public_non_tensor_abi() {
         public.contains("public kernel entry parameters and results must flatten to tensors"),
         "{public}"
     );
+}
+
+#[test]
+fn scalar_formats_and_mixed_host_kernel_contexts() {
+    let result = lower(
+        r#"
+        #[kernel] pub fn floats(c: bool) -> (f16, bfloat16, f32, f64) {
+            if c { (1.5, 2.5, -3.5, 4.5) } else { (-1.5, -2.5, 3.5, -4.5) }
+        }
+        #[kernel] pub fn bits(x: u32, n: u32) -> u32 { (x << n) | (x >> n) }
+        pub fn host(c: bool, n: i32) -> i32 { if c { n + 1 } else { n - 1 } }
+    "#,
+    );
+    if !enabled() {
+        assert!(result.unwrap_err().contains("REUSSIR_ENABLE_OPENXLA"));
+        return;
+    }
+    let text = result.unwrap();
+    for needle in [
+        "tensor<f16>",
+        "tensor<bf16>",
+        "tensor<f32>",
+        "tensor<f64>",
+        "stablehlo.shift_left",
+        "stablehlo.shift_right_logical",
+        "stablehlo.if",
+        "scf.if",
+        "arith.addi",
+    ] {
+        assert!(text.contains(needle), "missing {needle}: {text}");
+    }
 }
