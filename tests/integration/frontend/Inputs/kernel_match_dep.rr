@@ -4,3 +4,7 @@ pub fn choose<T: Integral>(key: T, a: T, b: T) -> (T, ()) {
 }
 #[kernel]
 pub fn deferred<T>(key: T, value: i32) -> i32 { match key { _ => value } }
+#[kernel]
+pub fn negative<T: Integral>(key: T, value: i32) -> i32 {
+    match key { -1 => value, _ => 0 }
+}

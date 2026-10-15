@@ -10,3 +10,8 @@
 // BAD: kernel match scrutinee must be an integer
 #[kernel]
 pub fn imported(key: u64, a: u64, b: u64) -> (u64, ()) { dep::choose(key, a, b) }
+// RUN: echo '#[kernel] pub fn bad(key: u64) -> i32 { dep::negative(key, 1) }' > %t.range.rr
+// RUN: %not %rrc %t.range.rr --package-name app --extern dep=%t.rri --emit mir -o - 2>&1 | %FileCheck %s --check-prefix=RANGE
+// RANGE: integer pattern `-1` is out of range
+#[kernel]
+pub fn imported_signed(key: i64) -> i32 { dep::negative(key, 1) }

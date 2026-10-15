@@ -96,3 +96,38 @@ fn integer_case_can_yield_tokens_but_not_futures() {
         "{nested}"
     );
 }
+
+#[test]
+fn serialized_integer_switches_reject_keys_outside_the_scrutinee_type() {
+    for kernel in [false, true] {
+        if kernel && !enabled() {
+            continue;
+        }
+        for (ty, key) in [("u64", "-1"), ("i8", "128")] {
+            let text = format!(
+                "{}pub fn @bad(v0 (x): {ty}) -> i32 {{ match v0 : {ty} {{ switch scrut {{ {key} => {{ => 1 : i32 }} _ => {{ => 2 : i32 }} }} }} : i32 }}",
+                if kernel { "#[kernel] " } else { "" }
+            );
+            let context = testing::context();
+            in_arena(|tcx| {
+                let parsed = reussir_core::full::mir::build::parse_program(tcx, &text)
+                    .expect("parse malformed-key MIR");
+                let error = lower_program(
+                    &context,
+                    tcx,
+                    &parsed.program,
+                    None,
+                    None,
+                    LinkagePolicy::Jit,
+                    &[],
+                )
+                .unwrap_err()
+                .to_string();
+                assert!(
+                    error.contains("integer pattern") && error.contains("out of range"),
+                    "{error}"
+                );
+            });
+        }
+    }
+}

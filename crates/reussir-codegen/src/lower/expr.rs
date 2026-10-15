@@ -1926,10 +1926,14 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     ) -> Result<Option<Value<'c, 'b>>> {
         let loc = self.loc();
         let (scrut_val, scrut_ty) = self.resolve_loaded(block, env, root_idx, path)?;
-        let width = match scrut_ty.kind() {
-            TyKind::Int(IntTy::Signed(w) | IntTy::Unsigned(w)) => *w,
+        let int_ty = match *scrut_ty.kind() {
+            TyKind::Int(ty) => ty,
             _ => return err("integer match on a non-integer scrutinee"),
         };
+        if cases.iter().any(|(key, _)| !literal::int_fits(key, int_ty)) {
+            return err("integer pattern is out of range for match scrutinee");
+        }
+        let (IntTy::Signed(width) | IntTy::Unsigned(width)) = int_ty;
         let (selector, case_values) = if width > 64 {
             // Reduce the wide keys to a dense selector, then switch on that.
             let selector = self.wide_int_selector(block, scrut_val, scrut_ty, cases, 0)?;
