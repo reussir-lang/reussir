@@ -2,8 +2,8 @@
 // RUN: %rrc %s --emit mlir --no-source-locations -o %t.mlir
 // The runtime test selects this source kernel as the PJRT entry point.
 // RUN: sed 's/@_RC3run(/@main(/' %t.mlir | %reussir-opt --emit-bytecode -o %t.bc
-// RUN: pjrt_test_blake3=$(ls -t "%pjrt_runtime_dir"/deps/libblake3-*.rlib | head -n 1) && %rustc_path --edition=2024 -C prefer-dynamic %S/Inputs/kernel_match_execute.rs --extern blake3="$pjrt_test_blake3" --extern blake3="${pjrt_test_blake3%.rlib}.rmeta" -L "%pjrt_runtime_dir/deps" -L native="%pjrt_runtime_dir" -l dylib=reussir_rt -o %t.exe
-// RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc
+// RUN: pjrt_test_blake3=$(ls -t "%pjrt_runtime_dir"/deps/libblake3-*.rlib | head -n 1) && %rustc_path --edition=2024 -C prefer-dynamic %S/../runtime/Inputs/kernel_execute.rs --extern blake3="$pjrt_test_blake3" --extern blake3="${pjrt_test_blake3%.rlib}.rmeta" -L "%pjrt_runtime_dir/deps" -L native="%pjrt_runtime_dir" -l dylib=reussir_rt -o %t.exe
+// RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc -- i64:10 i64:20 i64:21 i64:30 i64:40 i64:50 i64:60 i64:70 i64:123
 // RUN: rm -rf %t.cache
 #[kernel]
 fn classify(key: u64, accept: bool) -> i64 {
