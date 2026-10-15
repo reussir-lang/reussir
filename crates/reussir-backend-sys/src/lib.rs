@@ -323,6 +323,12 @@ unsafe extern "C" {
     // cannot build them; each constructor wraps the type's C++ `get` builder.
 
     pub fn reussirRawPtrTypeGet(element_type: MlirType) -> MlirType;
+    pub fn reussirStablehloTokenTypeGet(context: MlirContext) -> MlirType;
+    pub fn reussirStablehloFutureTypeGet(
+        context: MlirContext,
+        n: isize,
+        payloads: *const MlirType,
+    ) -> MlirType;
     pub fn reussirTokenTypeGet(context: MlirContext, align: usize, size: usize) -> MlirType;
     pub fn reussirRegionTypeGet(context: MlirContext) -> MlirType;
     pub fn reussirRcTypeGet(

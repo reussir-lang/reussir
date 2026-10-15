@@ -464,6 +464,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
                 let ty = subst_ty(tcx, *ty, &subst);
                 driver.note_records(ty);
                 driver.check_arc_inners(ty, func.span);
+                driver.reject_kernel_escape(ty, func.span, "a host function parameter");
                 mir::Param {
                     name: *name,
                     var: *var,
@@ -474,6 +475,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
         let return_ty = subst_ty(tcx, func.return_ty, &subst);
         driver.note_records(return_ty);
         driver.check_arc_inners(return_ty, func.span);
+        driver.reject_kernel_escape(return_ty, func.span, "a host function result");
         let body = func.body.as_ref().map(|b| driver.lower_ref(b, &subst));
 
         let symbol = driver.symbol_of(inst.def, inst.ty_args);
@@ -877,6 +879,7 @@ fn ty_depth(ty: Ty<'_>) -> usize {
         TyKind::DevArray {
             elem, placement, ..
         } => 1 + ty_depth(elem).max(ty_depth(placement)),
+        TyKind::Future(ps) => 1 + ps.iter().map(|&p| ty_depth(p)).max().unwrap_or(0),
         TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => 1 + ty_depth(elem),
         TyKind::Record { args, .. } => 1 + args.iter().map(|&a| ty_depth(a)).max().unwrap_or(0),
         TyKind::Closure { params, ret } => {
@@ -888,7 +891,8 @@ fn ty_depth(ty: Ty<'_>) -> usize {
                 .max()
                 .unwrap_or(0)
         }
-        TyKind::DefaultPlacement
+        TyKind::Token
+        | TyKind::DefaultPlacement
         | TyKind::Int(_)
         | TyKind::Fp(_)
         | TyKind::Bool
@@ -1836,6 +1840,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 self.note_records(elem);
                 self.note_records(placement);
             }
+            TyKind::Future(ps) => ps.iter().for_each(|&p| self.note_records(p)),
             TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => self.note_records(elem),
             _ => {}
         }
@@ -1935,8 +1940,12 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 }
                 self.check_arc_inners(ret, span);
             }
-            TyKind::Nullable(inner) => self.check_arc_inners(inner, span),
+            TyKind::Nullable(inner) => {
+                self.reject_kernel_escape(inner, span, "a nullable wrapper");
+                self.check_arc_inners(inner, span);
+            }
             TyKind::Cell { elem: inner, kind } => {
+                self.reject_kernel_escape(inner, span, "a cell");
                 // The ground half of the cell element bounds (see semi's
                 // `report_cell_wf`): a generic element defers to this point.
                 use crate::semi::ty::CellKind;
@@ -1999,6 +2008,19 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 }
                 self.check_arc_inners(inner, span);
             }
+            TyKind::Future(ps) => {
+                if (ps.is_empty()
+                    || ps
+                        .iter()
+                        .any(|&p| crate::semi::ty_eval::future_payload_rejection(p).is_some()))
+                    && self.reported_arcs.insert(ty)
+                {
+                    self.error(span, "this instantiation grounds a Future that requires one or more Tensor payloads");
+                }
+                for &p in ps {
+                    self.check_arc_inners(p, span);
+                }
+            }
             TyKind::Tensor { elem, .. } => {
                 if crate::semi::ty_eval::tensor_element_rejection(elem).is_some()
                     && self.reported_arcs.insert(ty)
@@ -2007,7 +2029,10 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 }
                 self.check_arc_inners(elem, span);
             }
-            TyKind::Array { elem, .. } => self.check_arc_inners(elem, span),
+            TyKind::Array { elem, .. } => {
+                self.reject_kernel_escape(elem, span, "a host array");
+                self.check_arc_inners(elem, span);
+            }
             _ => {}
         }
     }
@@ -2049,6 +2074,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 self.discover_records(elem, worklist);
                 self.discover_records(placement, worklist);
             }
+            TyKind::Future(ps) => ps.iter().for_each(|&p| self.discover_records(p, worklist)),
             TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => {
                 self.discover_records(elem, worklist)
             }
@@ -2098,6 +2124,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 // legal and semi's wf check blocks on the generic. This walk
                 // is its only ground checkpoint.
                 self.check_arc_inners(ground, record.span);
+                self.reject_kernel_escape(ground, record.span, "a record member");
             }
         }
     }
@@ -2534,6 +2561,15 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         }
     }
 
+    fn reject_kernel_escape(&mut self, ty: Ty<'tcx>, span: Option<Span>, position: &str) {
+        if crate::semi::ctxt::contains_kernel_value(ty) {
+            self.error(
+                span,
+                format!("this instantiation puts a scope-confined kernel value in {position}"),
+            );
+        }
+    }
+
     fn lower_closure(
         &mut self,
         c: &hir::ClosureExpr<'tcx>,
@@ -2546,6 +2582,13 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         let captures = self.lower_var_tys(&c.captures, subst);
         let params = self.lower_var_tys(&c.params, subst);
         let body = self.lower_ref(&c.body, subst);
+        for &(_, ty) in captures {
+            self.reject_kernel_escape(ty, c.body.span, "a closure capture");
+        }
+        for &(_, ty) in params {
+            self.reject_kernel_escape(ty, c.body.span, "a closure parameter");
+        }
+        self.reject_kernel_escape(body.ty, c.body.span, "a closure result");
         mir::ClosureExpr {
             captures,
             params,
@@ -3593,6 +3636,7 @@ mod tests {
             TyKind::DevArray {
                 elem, placement, ..
             } => is_ground(elem) && is_ground(placement),
+            TyKind::Future(ps) => ps.iter().all(|&p| is_ground(p)),
             TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => is_ground(elem),
             _ => true,
         }

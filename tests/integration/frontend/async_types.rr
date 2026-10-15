@@ -1,0 +1,23 @@
+// REQUIRES: ifrt
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
+// RUN: diff %t.hir %t.round.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o - | %FileCheck %s --check-prefix=MLIR
+// RUN: %rrc %s --emit mlir --no-source-locations -o - | %FileCheck %s --check-prefix=MLIR
+import core::intrinsic::tensor::Future as Pending;
+import core::intrinsic::tensor::Token as Ordered;
+fn generic<T>() { let f: Pending<T, Tensor<[i32; ?, 0]>> = core::intrinsic::panic::panic(); }
+pub fn types() {
+    let t: Ordered = core::intrinsic::panic::panic();
+    let f: Pending<Tensor<f32>, Tensor<[u64; 2, ?]>, Tensor<bool>> = core::intrinsic::panic::panic();
+    generic<Tensor<[bfloat16; 0, ?]>>();
+}
+// HIR-DAG: : Token
+// HIR-DAG: : Future<Tensor<f32>, Tensor<[u64; 2, ?]>, Tensor<bool>>
+// MLIR-DAG: ub.poison : !stablehlo.token
+// MLIR-DAG: ub.poison : !stablehlo.future<tensor<f32>, tensor<2x?xi64>, tensor<i1>>
+// MLIR-DAG: ub.poison : !stablehlo.future<tensor<0x?xbf16>, tensor<?x0xi32>>

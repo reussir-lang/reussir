@@ -2156,13 +2156,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     ),
                 );
             }
-            if crate::semi::ctxt::contains_tensor(self.infer.resolve(ty)) {
+            if crate::semi::ctxt::contains_kernel_value(self.infer.resolve(ty)) {
                 let name = self.sym(self.vars.def(v).name);
                 self.error(
                     span,
                     format!(
-                        "closure cannot capture `{name}`: a tensor is scope-confined \
-                         (materialize to an array first)"
+                        "closure cannot capture `{name}`: Tensor, Future, and Token are scope-confined"
                     ),
                 );
             }
@@ -2178,11 +2177,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 "closure cannot return a flex value: a flex value cannot escape its region",
             );
         }
-        if crate::semi::ctxt::contains_tensor(self.infer.resolve(body.ty)) {
+        if crate::semi::ctxt::contains_kernel_value(self.infer.resolve(body.ty)) {
             self.error(
                 span,
-                "closure cannot return a tensor: tensors are scope-confined \
-                 (materialize to an array first)",
+                "closure cannot return a kernel value: Tensor, Future, and Token are scope-confined",
             );
         }
 

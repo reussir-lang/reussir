@@ -184,6 +184,12 @@ impl<'a> Mangler<'a> {
                 let args = [elem, placement];
                 self.path_with_args_segs(out, &["core", "intrinsic", "pjrt", &name], &args);
             }
+            TyKind::Token => {
+                self.path_with_args_segs(out, &["core", "intrinsic", "tensor", "Token"], &[])
+            }
+            TyKind::Future(ps) => {
+                self.path_with_args_segs(out, &["core", "intrinsic", "tensor", "Future"], ps)
+            }
             TyKind::Tensor { elem, dims } => {
                 // Keep builtin tensors distinct from shadowing user records,
                 // including rank-zero `Tensor<T>` and shaped `Tensor4<T>`.

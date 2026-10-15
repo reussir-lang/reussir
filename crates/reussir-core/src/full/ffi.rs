@@ -313,6 +313,9 @@ impl<'a, 'tcx> FfiCtx<'a, 'tcx> {
             TyKind::DevArray { .. } => {
                 Err("a device array cannot cross the native FFI boundary".into())
             }
+            TyKind::Token | TyKind::Future(_) => {
+                Err("a kernel SSA value cannot cross the FFI boundary".into())
+            }
             TyKind::Tensor { .. } => Err("a tensor cannot cross the FFI boundary".into()),
             TyKind::Closure { .. } => Err("a closure cannot cross the FFI boundary yet".into()),
             TyKind::Bottom | TyKind::Generic(_) | TyKind::Hole(_) => {

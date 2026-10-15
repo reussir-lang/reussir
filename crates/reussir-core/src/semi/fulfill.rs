@@ -334,6 +334,7 @@ pub(super) fn ty_has_hole(ty: crate::semi::ty::Ty<'_>) -> bool {
         TyKind::DevArray {
             elem, placement, ..
         } => ty_has_hole(*elem) || ty_has_hole(*placement),
+        TyKind::Future(ps) => ps.iter().any(|&p| ty_has_hole(p)),
         TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => ty_has_hole(*elem),
         _ => false,
     }
@@ -360,6 +361,7 @@ pub(super) fn collect_holes(ty: crate::semi::ty::Ty<'_>, out: &mut Vec<HoleId>) 
             collect_holes(*elem, out);
             collect_holes(*placement, out);
         }
+        TyKind::Future(ps) => ps.iter().for_each(|&p| collect_holes(p, out)),
         TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => collect_holes(*elem, out),
         _ => {}
     }

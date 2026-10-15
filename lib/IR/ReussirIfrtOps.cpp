@@ -15,6 +15,9 @@
 
 #include "Reussir/Conversion/OpenXLATarget.h"
 #include "Reussir/IR/ReussirOps.h"
+#ifdef REUSSIR_ENABLE_OPENXLA
+#include "stablehlo/dialect/StablehloOps.h"
+#endif
 
 #include <llvm/ADT/SmallBitVector.h>
 #include <llvm/ADT/StringExtras.h>
@@ -46,8 +49,24 @@ mlir::LogicalResult verifyIfrtKernelModule(mlir::ModuleOp module) {
       }
       for (auto type : llvm::concat<const mlir::Type>(func.getArgumentTypes(),
                                                       func.getResultTypes())) {
-        if (!llvm::isa<mlir::RankedTensorType>(type)) {
-          func.emitOpError("kernel functions require ranked tensor signatures");
+        bool valid = llvm::isa<mlir::RankedTensorType>(type);
+#ifdef REUSSIR_ENABLE_OPENXLA
+        // Future/Token are kernel SSA values, not PJRT input/output buffers.
+        // Private helpers may pass them without exposing a host ABI.
+        if (func.isPrivate()) {
+          if (auto future = llvm::dyn_cast<mlir::stablehlo::FutureType>(type))
+            valid = !future.getTypes().empty() &&
+                    llvm::all_of(future.getTypes(), [](mlir::Type payload) {
+                      return llvm::isa<mlir::RankedTensorType>(payload);
+                    });
+          else
+            valid |= llvm::isa<mlir::stablehlo::TokenType>(type);
+        }
+#endif
+        if (!valid) {
+          func.emitOpError(func.isPrivate()
+                               ? "kernel helper signatures require ranked tensors or StableHLO Future/Token values"
+                               : "public kernel functions require ranked tensor signatures");
           return mlir::WalkResult::interrupt();
         }
       }

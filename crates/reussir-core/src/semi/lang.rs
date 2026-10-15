@@ -82,6 +82,8 @@ impl IntrinsicItem {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum FormerItem {
     Tensor,
+    Future,
+    Token,
     Arc,
     Nullable,
     DevArray,
@@ -96,8 +98,10 @@ pub enum FormerItem {
 }
 
 impl FormerItem {
-    pub const ALL: [FormerItem; 11] = [
+    pub const ALL: [FormerItem; 13] = [
         FormerItem::Tensor,
+        FormerItem::Future,
+        FormerItem::Token,
         FormerItem::Arc,
         FormerItem::Nullable,
         FormerItem::DevArray,
@@ -110,10 +114,12 @@ impl FormerItem {
         FormerItem::RwLock,
     ];
 
+    /// Declaration-anchor arity. Future declares its minimum payload; the
+    /// intrinsic source former accepts one or more payload arguments.
     pub fn arity(self) -> usize {
         match self {
             FormerItem::DevArray => 2,
-            FormerItem::DefaultPlacement => 0,
+            FormerItem::DefaultPlacement | FormerItem::Token => 0,
             _ => 1,
         }
     }
@@ -121,6 +127,8 @@ impl FormerItem {
     pub fn name(self) -> &'static str {
         match self {
             FormerItem::Tensor => "tensor",
+            FormerItem::Future => "future",
+            FormerItem::Token => "token",
             FormerItem::Arc => "arc",
             FormerItem::Nullable => "nullable",
             FormerItem::DevArray => "dev_array",

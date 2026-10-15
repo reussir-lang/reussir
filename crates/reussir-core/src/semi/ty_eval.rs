@@ -230,6 +230,32 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             };
         }
 
+        if (bare_unshadowed || self.is_core_intrinsic_prefix(&path.segments, "tensor"))
+            && self.sym(key) == "Token"
+        {
+            if !args.is_empty() {
+                self.error(Some(span), "`Token` takes no type arguments");
+            }
+            return self.tcx.mk(TyKind::Token);
+        }
+        if (bare_unshadowed || self.is_core_intrinsic_prefix(&path.segments, "tensor"))
+            && self.sym(key) == "Future"
+        {
+            if args.is_empty() {
+                self.error(
+                    Some(span),
+                    "`Future` takes one or more tensor type arguments",
+                );
+            }
+            let payloads: Vec<_> = args.iter().map(|arg| self.eval_type(arg)).collect();
+            for &payload in &payloads {
+                if future_payload_rejection(payload).is_some() {
+                    self.error(Some(span), "`Future` payload must be a Tensor type");
+                }
+            }
+            return self.tcx.mk_future(&payloads);
+        }
+
         // Tensor's shape syntax resembles an array but does not construct a
         // host array: zero extents and shapes larger than the host allocation
         // limit are valid. A scalar argument denotes a rank-zero tensor.
@@ -614,6 +640,7 @@ pub fn array_element_rejection<'tcx>(
         TyKind::Array { .. } => Some("a nested rc array"),
         TyKind::DevArray { .. } => Some("a device array"),
         TyKind::Tensor { .. } => Some("a tensor"),
+        TyKind::Token | TyKind::Future(_) => Some("a kernel SSA value"),
         TyKind::Str => Some("a string"),
         _ => Some("not a scalar or `[shared]` record"),
     }
@@ -685,6 +712,9 @@ pub fn arc_inner_rejection<'tcx>(
         // `[shared]` record, so it takes the atomic coloring the same way.
         TyKind::Array { .. } | TyKind::DevArray { .. } | TyKind::Closure { .. } => None,
         TyKind::Tensor { .. } => Some("a tensor is scope-confined and cannot be arc'd"),
+        TyKind::Future(_) | TyKind::Token => {
+            Some("a kernel SSA value is scope-confined and cannot be arc'd")
+        }
         TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => None,
         // A cell is a shared box too, but synchronization is the cell's own
         // axis (plain vs exclusive, and the atomic flavor at the MLIR level)
@@ -700,7 +730,10 @@ pub fn arc_inner_rejection<'tcx>(
 fn is_concretely_non_pointer(t: Ty<'_>) -> bool {
     matches!(
         t.kind(),
-        TyKind::DefaultPlacement
+        TyKind::Token
+            | TyKind::Future(_)
+            | TyKind::Tensor { .. }
+            | TyKind::DefaultPlacement
             | TyKind::Int(_)
             | TyKind::Fp(_)
             | TyKind::Bool
@@ -844,6 +877,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     ) {
         use crate::semi::traits::sync::sync_verdict;
         use crate::semi::ty::CellKind;
+        if crate::semi::ctxt::contains_kernel_value(elem) {
+            self.error(span, "a cell cannot contain a scope-confined kernel value");
+            return;
+        }
         match kind {
             CellKind::Plain | CellKind::Exclusive => {}
             CellKind::Atomic => {
@@ -939,6 +976,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 self.report_cell_wf(elem, kind, span);
                 self.sweep_arc_wf(elem, span);
             }
+            TyKind::Future(ps) => {
+                for &p in ps {
+                    if future_payload_rejection(p).is_some() {
+                        self.error(span, "`Future` payload must be a Tensor type");
+                    }
+                    self.sweep_arc_wf(p, span);
+                }
+            }
             TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => {
                 self.sweep_arc_wf(elem, span)
             }
@@ -960,6 +1005,15 @@ pub fn device_element_supported(ty: Ty<'_>) -> bool {
             | TyKind::Hole(_)
             | TyKind::Bottom
     )
+}
+
+/// StableHLO futures contain ranked tensors, never tokens, futures, or host
+/// values. Generic payloads defer this obligation until substitution.
+pub fn future_payload_rejection(payload: Ty<'_>) -> Option<&'static str> {
+    match payload.kind() {
+        TyKind::Tensor { .. } | TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => None,
+        _ => Some("future payload must be a Tensor type"),
+    }
 }
 
 /// Tensor elements have a native numeric MLIR representation. Unknown generic

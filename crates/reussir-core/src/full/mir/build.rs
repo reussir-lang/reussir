@@ -365,6 +365,11 @@ impl<'tcx> Builder<'_, 'tcx> {
                 let placement = placement.as_ref().map(|p| self.ty(p));
                 self.tcx.mk_devarray(elem, dims, placement)
             }
+            raw::Ty::Token => self.tcx.mk(TyKind::Token),
+            raw::Ty::Future(payloads) => {
+                let payloads: Vec<_> = payloads.iter().map(|p| self.ty(p)).collect();
+                self.tcx.mk_future(&payloads)
+            }
             raw::Ty::Tensor { elem, dims } => {
                 let elem = self.ty(elem);
                 self.tcx.mk_tensor(elem, dims)
@@ -778,8 +783,11 @@ mod tests {
     }
 
     #[test]
-    fn roundtrips_tensor_type_shapes() {
+    fn roundtrips_tensor_and_async_types() {
         for ty in [
+            "Token",
+            "Future<Tensor<f32>>",
+            "Future<Tensor<[u32; ?, 0]>, Tensor<bool>>",
             "Tensor<f32>",
             "Tensor<bool>",
             "Tensor<[i32; 2, 3]>",

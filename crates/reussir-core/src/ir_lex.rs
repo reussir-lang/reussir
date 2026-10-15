@@ -130,6 +130,10 @@ pub enum Token<'a> {
     DefaultPlacement,
     #[token("DevArray")]
     DevArray,
+    #[token("Token")]
+    StablehloToken,
+    #[token("Future")]
+    Future,
     #[token("Tensor")]
     Tensor,
     #[token("NonNull")]

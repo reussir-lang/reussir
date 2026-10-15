@@ -43,6 +43,26 @@ pub fn token(context: &Context, align: usize, size: usize) -> Type<'_> {
     unsafe { Type::from_raw(sys::reussirTokenTypeGet(context.to_raw(), align, size)) }
 }
 
+/// Creates a StableHLO side-effect token when OpenXLA is enabled.
+pub fn stablehlo_token(context: &Context) -> Option<Type<'_>> {
+    let raw = unsafe { sys::reussirStablehloTokenTypeGet(context.to_raw()) };
+    (!raw.ptr.is_null()).then(|| unsafe { Type::from_raw(raw) })
+}
+
+/// Creates a nonempty ordered StableHLO future of ranked tensor payloads.
+/// Returns None for invalid payloads or an OpenXLA-disabled build.
+pub fn stablehlo_future<'c>(context: &'c Context, payloads: &[Type<'c>]) -> Option<Type<'c>> {
+    let payloads: Vec<_> = payloads.iter().map(|t| t.to_raw()).collect();
+    let raw = unsafe {
+        sys::reussirStablehloFutureTypeGet(
+            context.to_raw(),
+            payloads.len() as isize,
+            payloads.as_ptr(),
+        )
+    };
+    (!raw.ptr.is_null()).then(|| unsafe { Type::from_raw(raw) })
+}
+
 /// Creates a `!reussir.region` type.
 pub fn region(context: &Context) -> Type<'_> {
     unsafe { Type::from_raw(sys::reussirRegionTypeGet(context.to_raw())) }

@@ -1,0 +1,16 @@
+// RUN: %not %rrc %s --emit mir -o - 2>&1 | %FileCheck %s
+// CHECK-DAG: scope-confined kernel value in a host function parameter
+// CHECK-DAG: scope-confined kernel value in a host function result
+// CHECK-DAG: scope-confined kernel value in a record member
+// CHECK-DAG: scope-confined kernel value in a closure capture
+// CHECK-DAG: scope-confined kernel value in a closure result
+struct Box<T> { value: T }
+fn identity<T>(x: T) -> T { x }
+fn stored<T>() { let b: Box<T> = core::intrinsic::panic::panic(); }
+fn captured<T>() { let t: T = core::intrinsic::panic::panic(); let f = || t; }
+pub fn escapes() {
+    let t: Token = core::intrinsic::panic::panic();
+    let again = identity(t);
+    stored<Future<Tensor<f32>>>();
+    captured<Token>();
+}

@@ -1,0 +1,19 @@
+// REQUIRES: ifrt
+// RUN: %rrc %s --emit mlir --no-source-locations -o - | %FileCheck %s
+pub struct Future<T> {}
+pub struct Token { value: i32 }
+pub fn host_future(x: Future<i32>) -> Future<i32> { x }
+pub fn host_token(x: Token) -> Token { x }
+fn instantiate<T>() { let x: T = core::intrinsic::panic::panic(); }
+pub fn instantiate_both() {
+    instantiate<core::intrinsic::tensor::Future<Tensor<f32>>>();
+    instantiate<Future<Tensor<f32>>>();
+    instantiate<core::intrinsic::tensor::Token>();
+    instantiate<Token>();
+}
+// CHECK-DAG: !stablehlo.future<tensor<f32>>
+// CHECK-DAG: !stablehlo.token
+// CHECK-DAG: func.func private @_RIC11instantiateINvNvNvC4core9intrinsic6tensor6FutureINvNvNvC4core9intrinsic6tensor6TensorfEEE()
+// CHECK-DAG: func.func private @_RIC11instantiateIC6FutureINvNvNvC4core9intrinsic6tensor6TensorfEEE()
+// CHECK-DAG: func.func private @_RIC11instantiateNvNvNvC4core9intrinsic6tensor5TokenE()
+// CHECK-DAG: func.func private @_RIC11instantiateC5TokenE()

@@ -594,6 +594,10 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
                 let placement = Some(self.ty(placement));
                 self.tcx.mk_devarray(elem, dims, placement)
             }
+            TyKind::Future(ps) => {
+                let ps: Vec<_> = ps.iter().map(|&p| self.ty(p)).collect();
+                self.tcx.mk_future(&ps)
+            }
             TyKind::Tensor { elem, dims } => {
                 let elem = self.ty(elem);
                 self.tcx.mk_tensor(elem, dims)
@@ -952,6 +956,9 @@ mod tests {
             let app = keys.get_or_intern("app");
             let parse = reussir_syntax::parse_with_interner(
                 "import core::intrinsic::tensor::Tensor as Tile; \
+                 import core::intrinsic::tensor::Future as Pending; \
+                 import core::intrinsic::tensor::Token as Ordered; \
+                 pub fn async_types() { let f: Pending<Tile<f32>, Tile<[i32; ?, 0]>> = core::intrinsic::panic::panic(); let t: Ordered = core::intrinsic::panic::panic(); } \
                  pub fn scalar() { let x: Tile<f32> = core::intrinsic::panic::panic(); } \
                  pub fn shaped() { let x: Tile<[f32; 0, ?]> = core::intrinsic::panic::panic(); }",
                 interner.clone(),
@@ -974,6 +981,14 @@ mod tests {
                 program: &program,
             }]);
             assert!(!elab.has_errors(), "{:#?}", elab.reports);
+            for former in [FormerItem::Future, FormerItem::Token] {
+                let item = LangItem::Former(former);
+                let def = elab.lang.get(item).expect("async anchor reloaded");
+                assert!(elab.lang.is_former_anchor(def));
+                let (file, span) = elab.lang_item_site(item).unwrap();
+                assert_eq!(file, source_file);
+                assert!(span.is_some());
+            }
             let item = LangItem::Former(FormerItem::Tensor);
             let def = elab.lang.get(item).expect("Tensor anchor reloaded");
             assert!(elab.lang.is_former_anchor(def));
@@ -991,6 +1006,11 @@ mod tests {
                 &elab.records,
                 &elab.trampolines,
             );
+            assert!(
+                text.contains(": Future<Tensor<f32>, Tensor<[i32; ?, 0]>>"),
+                "{text}"
+            );
+            assert!(text.contains(": Token"), "{text}");
             assert!(text.contains(": Tensor<f32>"), "{text}");
             assert!(text.contains(": Tensor<[f32; 0, ?]>"), "{text}");
             assert!(

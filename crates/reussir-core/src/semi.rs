@@ -2399,6 +2399,10 @@ mod tests {
                 pub struct BadDevice<T> {}
                 #[lang("default_placement")]
                 pub struct BadPlacement<T> {}
+                #[lang("future")]
+                pub struct BadFuture {}
+                #[lang("token")]
+                pub struct BadToken<T> {}
             "#;
             let parse = reussir_syntax::parse_with_interner(src, interner.clone());
             assert!(parse.ok(), "parse errors: {:#?}", parse.errors);

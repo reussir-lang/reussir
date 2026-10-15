@@ -318,6 +318,8 @@ pub enum Ty {
         dims: Vec<u64>,
         placement: Option<Box<Ty>>,
     },
+    Token,
+    Future(Vec<Ty>),
     /// `Tensor<elem>` (rank zero) or `Tensor<[elem; extents…]>`.
     Tensor {
         elem: Box<Ty>,

@@ -240,26 +240,22 @@ pub struct FuncProto<'tcx> {
     pub file: FileId,
 }
 
-/// Collects the private records `ty`'s structure mentions — nominal heads and
-/// their arguments, through every structural former — for the
-/// private-in-public check. Deduplicated so each offender reports once per
-/// surface.
-/// Whether a tensor occurs anywhere in `ty`'s structure. Tensors are
+/// Whether Tensor, Future, or Token occurs anywhere in `ty`'s structure. These are
 /// scope-confined values (docs/design/tensor-kernels.md); this is the
 /// predicate behind the escape rules (record members, function signatures,
 /// closure captures).
-pub(crate) fn contains_tensor(ty: Ty<'_>) -> bool {
+pub fn contains_kernel_value(ty: Ty<'_>) -> bool {
     match *ty.kind() {
         TyKind::DevArray {
             elem, placement, ..
-        } => contains_tensor(elem) || contains_tensor(placement),
-        TyKind::Tensor { .. } => true,
-        TyKind::Record { args, .. } => args.iter().any(|&a| contains_tensor(a)),
+        } => contains_kernel_value(elem) || contains_kernel_value(placement),
+        TyKind::Tensor { .. } | TyKind::Future(_) | TyKind::Token => true,
+        TyKind::Record { args, .. } => args.iter().any(|&a| contains_kernel_value(a)),
         TyKind::Closure { params, ret } => {
-            params.iter().any(|&p| contains_tensor(p)) || contains_tensor(ret)
+            params.iter().any(|&p| contains_kernel_value(p)) || contains_kernel_value(ret)
         }
-        TyKind::Array { elem, .. } | TyKind::Cell { elem, .. } => contains_tensor(elem),
-        TyKind::Nullable(inner) | TyKind::Arc(inner) => contains_tensor(inner),
+        TyKind::Array { elem, .. } | TyKind::Cell { elem, .. } => contains_kernel_value(elem),
+        TyKind::Nullable(inner) | TyKind::Arc(inner) => contains_kernel_value(inner),
         TyKind::DefaultPlacement
         | TyKind::Int(_)
         | TyKind::Fp(_)
@@ -273,6 +269,7 @@ pub(crate) fn contains_tensor(ty: Ty<'_>) -> bool {
     }
 }
 
+/// Collect private records through every structural type former.
 fn collect_private_records<'tcx>(
     records: &FxHashMap<DefId, Record<'tcx>>,
     ty: Ty<'tcx>,
@@ -303,13 +300,17 @@ fn collect_private_records<'tcx>(
             collect_private_records(records, elem, out);
             collect_private_records(records, placement, out);
         }
+        TyKind::Future(ps) => ps
+            .iter()
+            .for_each(|&p| collect_private_records(records, p, out)),
         TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } | TyKind::Cell { elem, .. } => {
             collect_private_records(records, elem, out);
         }
         TyKind::Nullable(inner) | TyKind::Arc(inner) => {
             collect_private_records(records, inner, out);
         }
-        TyKind::DefaultPlacement
+        TyKind::Token
+        | TyKind::DefaultPlacement
         | TyKind::Int(_)
         | TyKind::Fp(_)
         | TyKind::Bool
@@ -792,6 +793,17 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 if !matches!(placement.kind(), TyKind::DefaultPlacement) {
                     out.push_str(", ");
                     self.push_ty_display(out, placement);
+                }
+                out.push('>');
+            }
+            TyKind::Token => out.push_str("Token"),
+            TyKind::Future(ps) => {
+                out.push_str("Future<");
+                for (i, &p) in ps.iter().enumerate() {
+                    if i != 0 {
+                        out.push_str(", ");
+                    }
+                    self.push_ty_display(out, p);
                 }
                 out.push('>');
             }
@@ -4090,28 +4102,22 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// freeze/rigid release, region teardown) is deliberately left
     /// undecided. Shared and `[value]` records may hold `Arc` members —
     /// the member type spells its own atomic link (§3.3).
-    /// A tensor is scope-confined (docs/design/tensor-kernels.md): storing
-    /// one in a record would let the transient view outlive its chain, so a
-    /// member type may not contain a tensor anywhere in its structure.
+    /// Kernel SSA values have no host record storage representation.
     fn reject_tensor_member(&mut self, fty: Ty<'tcx>, span: Option<Span>) {
-        if contains_tensor(fty) {
+        if contains_kernel_value(fty) {
             self.error(
                 span,
-                "a record member cannot contain a tensor: tensors are \
-                 scope-confined (materialize to an array to store the data)",
+                "a record member cannot contain a kernel value: Tensor, Future, and Token are scope-confined",
             );
         }
     }
 
-    /// A tensor may not appear in a function signature: the transient view
-    /// stays inside the chain that produced it (kernels compose through
-    /// intrinsics for now; a future `kernel fn` would lift this).
+    /// Ordinary host function signatures cannot carry kernel SSA values.
     fn reject_tensor_signature(&mut self, ty: Ty<'tcx>, span: Option<Span>) {
-        if contains_tensor(ty) {
+        if contains_kernel_value(ty) {
             self.error(
                 span,
-                "a tensor cannot appear in a function signature: tensors are \
-                 scope-confined (pass the array and take the view inside)",
+                "a kernel value cannot appear in a function signature: Tensor, Future, and Token are scope-confined",
             );
         }
     }

@@ -1,0 +1,4 @@
+import core::intrinsic::tensor::Future as Pending;
+import core::intrinsic::tensor::Tensor as Tile;
+pub fn inspect<T>() { let future: Pending<T, Tile<[u32; ?, 0]>> = core::intrinsic::panic::panic(); }
+pub fn identity<T>(x: T) -> T { x }

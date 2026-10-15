@@ -24,6 +24,9 @@
 
 #include "Reussir/Conversion/OpenXLATarget.h"
 #include "Reussir/IR/ReussirTypes.h"
+#ifdef REUSSIR_ENABLE_OPENXLA
+#include "stablehlo/dialect/StablehloOps.h"
+#endif
 #include <llvm/ADT/DenseSet.h>
 
 #include "llvm/ADT/SmallVector.h"
@@ -59,6 +62,40 @@ RecordKind toRecordKind(ReussirRecordKind kind) {
 
 MlirType reussirRawPtrTypeGet(MlirType elementType) {
   return wrap(RawPtrType::get(unwrap(elementType)));
+}
+
+MlirType reussirStablehloTokenTypeGet(MlirContext context) {
+#ifdef REUSSIR_ENABLE_OPENXLA
+  auto *ctx = unwrap(context);
+  ctx->getOrLoadDialect<mlir::stablehlo::StablehloDialect>();
+  return wrap(mlir::stablehlo::TokenType::get(ctx));
+#else
+  (void)context;
+  return {nullptr};
+#endif
+}
+
+MlirType reussirStablehloFutureTypeGet(MlirContext context, intptr_t n,
+                                     const MlirType *payloads) {
+#ifdef REUSSIR_ENABLE_OPENXLA
+  auto *ctx = unwrap(context);
+  // The spec requires a nonempty ordered list of ranked tensors. Validate
+  // before the upstream builder, whose verifier permits an empty list.
+  if (n <= 0 || !payloads)
+    return {nullptr};
+  for (intptr_t i = 0; i < n; ++i) {
+    auto ty = unwrap(payloads[i]);
+    if (!ty || ty.getContext() != ctx || !mlir::isa<mlir::RankedTensorType>(ty))
+      return {nullptr};
+  }
+  ctx->getOrLoadDialect<mlir::stablehlo::StablehloDialect>();
+  return wrap(mlir::stablehlo::FutureType::get(ctx, unwrapTypes(n, payloads)));
+#else
+  (void)context;
+  (void)n;
+  (void)payloads;
+  return {nullptr};
+#endif
 }
 
 MlirType reussirTokenTypeGet(MlirContext context, size_t align, size_t size) {

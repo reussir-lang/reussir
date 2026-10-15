@@ -232,6 +232,10 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 let placement = Some(self.resolve(*placement));
                 self.tcx.mk_devarray(elem, dims, placement)
             }
+            TyKind::Future(ps) => {
+                let ps: Vec<_> = ps.iter().map(|&p| self.resolve(p)).collect();
+                self.tcx.mk_future(&ps)
+            }
             TyKind::Tensor { elem, dims } => {
                 let elem = self.resolve(*elem);
                 self.tcx.mk_tensor(elem, dims)
@@ -352,6 +356,12 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 self.unify(*e1, *e2)?;
                 self.unify(*p1, *p2)
             }
+            (TyKind::Future(xs), TyKind::Future(ys)) if xs.len() == ys.len() => {
+                for (&x, &y) in xs.iter().zip(ys.iter()) {
+                    self.unify(x, y)?;
+                }
+                Ok(())
+            }
             (TyKind::Tensor { elem: e1, dims: d1 }, TyKind::Tensor { elem: e2, dims: d2 })
                 if d1 == d2 =>
             {
@@ -411,6 +421,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             TyKind::DevArray {
                 elem, placement, ..
             } => self.occurs(h, *elem) || self.occurs(h, *placement),
+            TyKind::Future(ps) => ps.iter().any(|&p| self.occurs(h, p)),
             TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => self.occurs(h, *elem),
             _ => false,
         }
@@ -588,6 +599,12 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 self.unify_instantiated(*e1, inst, *e2)?;
                 self.unify_instantiated(*p1, inst, *p2)
             }
+            (TyKind::Future(xs), TyKind::Future(ys)) if xs.len() == ys.len() => {
+                for (&x, &y) in xs.iter().zip(ys.iter()) {
+                    self.unify_instantiated(x, inst, y)?;
+                }
+                Ok(())
+            }
             (TyKind::Tensor { elem: e1, dims: d1 }, TyKind::Tensor { elem: e2, dims: d2 })
                 if d1 == d2 =>
             {
@@ -664,6 +681,10 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 let placement = Some(self.materialize(*placement, inst));
                 self.tcx.mk_devarray(elem, dims, placement)
             }
+            TyKind::Future(ps) => {
+                let ps: Vec<_> = ps.iter().map(|&p| self.materialize(p, inst)).collect();
+                self.tcx.mk_future(&ps)
+            }
             TyKind::Tensor { elem, dims } => {
                 let elem = self.materialize(*elem, inst);
                 self.tcx.mk_tensor(elem, dims)
@@ -726,6 +747,25 @@ mod tests {
                     .unify(hole, tcx.mk_devarray(tcx.mk_bool(), &[], Some(hole)))
                     .is_err()
             );
+        });
+    }
+
+    #[test]
+    fn future_payloads_unify_in_order_and_check_occurs() {
+        with_tcx(|tcx| {
+            let mut infer = InferCtxt::new(tcx);
+            let first = infer.new_hole_ty();
+            let second = infer.new_hole_ty();
+            let a = tcx.mk_tensor(tcx.mk_bool(), &[0, crate::semi::ty::DYNAMIC_EXTENT]);
+            let b = tcx.mk_tensor(tcx.mk_int(IntTy::Signed(32)), &[]);
+            let actual = tcx.mk_future(&[first, second]);
+            let expected = tcx.mk_future(&[a, b]);
+            infer.unify(actual, expected).unwrap();
+            assert_eq!(infer.resolve(actual), expected);
+            assert!(infer.unify(expected, tcx.mk_future(&[b, a])).is_err());
+            assert!(infer.unify(expected, tcx.mk_future(&[a])).is_err());
+            let hole = infer.new_hole_ty();
+            assert!(infer.unify(hole, tcx.mk_future(&[hole])).is_err());
         });
     }
 

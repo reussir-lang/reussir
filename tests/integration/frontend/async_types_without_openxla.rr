@@ -1,0 +1,10 @@
+// UNSUPPORTED: ifrt
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
+// RUN: diff %t.hir %t.round.hir
+// RUN: %not %rrc %s --emit mlir -o - 2>&1 | %FileCheck %s --check-prefix=TOKEN
+// RUN: echo 'pub fn future() { let f: Future<Tensor<f32>, Tensor<[i32; ?, 0]>> = core::intrinsic::panic::panic(); }' > %t.future.rr
+// RUN: %not %rrc %t.future.rr --emit mlir -o - 2>&1 | %FileCheck %s --check-prefix=FUTURE
+// TOKEN: Token lowering requires REUSSIR_ENABLE_OPENXLA
+// FUTURE: Future lowering requires REUSSIR_ENABLE_OPENXLA
+pub fn token() { let t: Token = core::intrinsic::panic::panic(); }

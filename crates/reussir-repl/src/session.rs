@@ -685,6 +685,14 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
                 };
                 format!("DevArray<{inner}{placement}>")
             }
+            TyKind::Token => "Token".to_owned(),
+            TyKind::Future(ps) => format!(
+                "Future<{}>",
+                ps.iter()
+                    .map(|&p| Self::render_ty_with(elab, p))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             TyKind::Tensor { elem, dims } => {
                 let elem = Self::render_ty_with(elab, elem);
                 if dims.is_empty() {

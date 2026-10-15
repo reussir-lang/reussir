@@ -83,6 +83,7 @@ pub fn collect_record_defs<'tcx>(ty: Ty<'tcx>, out: &mut Vec<DefId>) {
             collect_record_defs(elem, out);
             collect_record_defs(placement, out);
         }
+        TyKind::Future(ps) => ps.iter().for_each(|&p| collect_record_defs(p, out)),
         TyKind::Cell { elem, .. } | TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => {
             collect_record_defs(elem, out)
         }
@@ -147,6 +148,8 @@ pub enum NotSyncReason {
     /// A bare shared rc box (record, array, or closure): its refcount is not
     /// atomic, so two threads bumping it race.
     NonAtomicBox,
+    /// A scope-confined kernel SSA value has no host thread-sharing ABI.
+    KernelValue,
     /// A regional object; regions and threads do not mix (for now).
     Regional,
     /// A plain `Cell`: whole-element stores with no synchronization.
@@ -161,6 +164,7 @@ pub enum NotSyncReason {
 impl NotSyncReason {
     pub fn describe(self) -> &'static str {
         match self {
+            NotSyncReason::KernelValue => "a scope-confined kernel SSA value",
             NotSyncReason::NonAtomicBox => "a plain `[shared]` rc box whose refcount is not atomic",
             NotSyncReason::Regional => "a regional object",
             NotSyncReason::PlainCell => "a plain `Cell`, which is unsynchronized",
@@ -324,6 +328,7 @@ impl<'tcx> Cx<'_, 'tcx> {
             // shareability is carried by the box coloring (`Arc`), not the
             // nominal type. A tensor refutes for the same reason its backing
             // array does: it is a scope-confined view of that box's data.
+            TyKind::Future(_) | TyKind::Token => self.refute(ty, NotSyncReason::KernelValue),
             TyKind::Array { .. } | TyKind::DevArray { .. } | TyKind::Tensor { .. } | TyKind::Closure { .. } => {
                 self.refute(ty, NotSyncReason::NonAtomicBox)
             }

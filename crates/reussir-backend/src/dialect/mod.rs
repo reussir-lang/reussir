@@ -91,6 +91,29 @@ mod tests {
     }
 
     #[test]
+    fn stablehlo_async_type_constructors_validate_and_roundtrip() {
+        let context = crate::context();
+        let tensor = Type::parse(&context, "tensor<?x0xi32>").unwrap();
+        let scalar = Type::parse(&context, "i32").unwrap();
+        assert!(ty::stablehlo_future(&context, &[]).is_none());
+        assert!(ty::stablehlo_future(&context, &[scalar]).is_none());
+        if let Some(token) = ty::stablehlo_token(&context) {
+            assert_eq!(token.to_string(), "!stablehlo.token");
+            assert_ne!(token, ty::token(&context, 8, 16));
+            assert!(ty::stablehlo_future(&context, &[token]).is_none());
+            let future = ty::stablehlo_future(&context, &[tensor, tensor]).unwrap();
+            assert_eq!(
+                future.to_string(),
+                "!stablehlo.future<tensor<?x0xi32>, tensor<?x0xi32>>"
+            );
+            assert_eq!(Type::parse(&context, &future.to_string()), Some(future));
+            assert!(ty::stablehlo_future(&context, &[future]).is_none());
+        } else {
+            assert!(ty::stablehlo_future(&context, &[tensor]).is_none());
+        }
+    }
+
+    #[test]
     fn generated_op_builder_constructs_reussir_op() {
         let context = crate::context();
         let location = Location::unknown(&context);

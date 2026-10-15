@@ -47,6 +47,12 @@ pub fn subst_ty<'tcx>(tcx: &TyCtxt<'tcx>, ty: Ty<'tcx>, subst: &Subst<'tcx>) -> 
             dims,
             Some(subst_ty(tcx, placement, subst)),
         ),
+        TyKind::Future(ps) => tcx.mk_future(
+            &ps.iter()
+                .map(|&p| subst_ty(tcx, p, subst))
+                .collect::<Vec<_>>(),
+        ),
+        TyKind::Token => ty,
         TyKind::Tensor { elem, dims } => tcx.mk_tensor(subst_ty(tcx, elem, subst), dims),
         TyKind::DefaultPlacement
         | TyKind::Int(_)

@@ -5,3 +5,17 @@
 /// `Tensor<[f32; ?, 4]>` carries an explicit shape. Zero extents are valid.
 #[lang("tensor")]
 pub struct Tensor<T> { }
+
+// Kernel SSA types from the StableHLO specification. Token orders side effects;
+// it is not a runtime completion handle and may fan out or join.
+#[lang("token")]
+pub struct Token {}
+
+// The intrinsic former is variadic: Future<Tensor<f32>, Tensor<[i32; ?]>>.
+// T anchors the minimum one payload; ordinary records are not variadic.
+// Every payload must be a Tensor. Payload order and shapes are preserved.
+// This is not a host promise: no RC ownership, host storage, closure capture,
+// or FFI. StableHLO's type supports multiple payloads even though the pinned
+// async_start/async_done operations currently accept a single result.
+#[lang("future")]
+pub struct Future<T> {}

@@ -39,3 +39,6 @@
 // OUT-NEXT: 4
 // OUT-NEXT: 7
 // OUT-NEXT: 3
+
+// IMPLS-DAG: #[lang("future")] pub [shared] struct #core::intrinsic::tensor::Future<
+// IMPLS-DAG: #[lang("token")] pub [shared] struct #core::intrinsic::tensor::Token

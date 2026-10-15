@@ -179,6 +179,8 @@ Ty: raw::Ty = {
         };
         raw::Ty::DevArray { elem, dims, placement: p.map(Box::new) }
     },
+    "Token" => raw::Ty::Token,
+    "Future" "<" <payloads:CommaPlus<Ty>> ">" => raw::Ty::Future(payloads),
     "Tensor" "<" <inner:Ty> ">" => match inner {
         raw::Ty::Array { elem, dims } => raw::Ty::Tensor { elem, dims },
         elem => raw::Ty::Tensor { elem: Box::new(elem), dims: vec![] },
@@ -446,6 +448,8 @@ extern {
         "FlatLock" => Token::FlatLockCell,
         "RwLock" => Token::RwLockCell,
         "Arc" => Token::Arc,
+        "Token" => Token::StablehloToken,
+        "Future" => Token::Future,
         "Tensor" => Token::Tensor,
         "DevArray" => Token::DevArray,
         "DefaultPlacement" => Token::DefaultPlacement,

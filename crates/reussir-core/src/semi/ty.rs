@@ -246,6 +246,13 @@ pub enum TyKind<'tcx> {
         elem: Ty<'tcx>,
         dims: &'tcx [u64],
     },
+    /// StableHLO async results: a nonempty, ordered list of ranked tensor types.
+    /// This is a kernel SSA value, not an RC-managed host future. Payload type
+    /// parameters remain symbolic until monomorphization.
+    Future(&'tcx [Ty<'tcx>]),
+    /// StableHLO side-effect ordering value. Tokens may fan out and join; the
+    /// type does not impose an affine ownership discipline.
+    Token,
     /// Builtin zero-field marker selecting logical device zero.
     DefaultPlacement,
     /// An immutable device-array handle, owned through one shared RC descriptor.
@@ -406,6 +413,10 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn mk_tensor(&self, elem: Ty<'tcx>, dims: &[u64]) -> Ty<'tcx> {
         let dims = self.alloc_slice(dims);
         self.mk(TyKind::Tensor { elem, dims })
+    }
+
+    pub fn mk_future(&self, payloads: &[Ty<'tcx>]) -> Ty<'tcx> {
+        self.mk(TyKind::Future(self.alloc_slice(payloads)))
     }
 
     pub fn mk_devarray(

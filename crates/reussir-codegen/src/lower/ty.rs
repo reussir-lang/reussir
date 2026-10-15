@@ -133,6 +133,17 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
     /// nullable pointer wraps its (pointer-typed) element, and everything else is
     /// a scalar.
     pub(super) fn mlir_ty(&self, ty: Ty<'tcx>) -> Result<Type<'c>> {
+        if matches!(
+            ty.kind(),
+            TyKind::Cell { .. }
+                | TyKind::Array { .. }
+                | TyKind::Arc(_)
+                | TyKind::Nullable(_)
+                | TyKind::Closure { .. }
+        ) && reussir_core::semi::ctxt::contains_kernel_value(ty)
+        {
+            return err("a host storage type cannot contain a scope-confined kernel value");
+        }
         match *ty.kind() {
             TyKind::Record { .. } => self.record_type(ty),
             // A `Nullable<T>` wraps its element's MLIR pointer type (an `rc` link
@@ -160,6 +171,26 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
             // payload (`!reussir.rc<!reussir.array<dims x elem>>`); see #344.
             TyKind::Array { .. } => Ok(self.rc_type(self.array_inner_of(ty)?)),
             TyKind::DevArray { .. } => Ok(self.rc_type(self.devarray_inner_of(ty)?)),
+            TyKind::Token => reussir_backend::dialect::ty::stablehlo_token(self.context)
+                .ok_or_else(|| {
+                    LoweringError("Token lowering requires REUSSIR_ENABLE_OPENXLA".into())
+                }),
+            TyKind::Future(payloads) => {
+                if payloads.is_empty()
+                    || payloads
+                        .iter()
+                        .any(|p| !matches!(p.kind(), TyKind::Tensor { .. }))
+                {
+                    return err("Future requires one or more Tensor payloads");
+                }
+                let payloads = payloads
+                    .iter()
+                    .map(|&p| self.mlir_ty(p))
+                    .collect::<Result<Vec<_>>>()?;
+                reussir_backend::dialect::ty::stablehlo_future(self.context, &payloads).ok_or_else(
+                    || LoweringError("Future lowering requires REUSSIR_ENABLE_OPENXLA".into()),
+                )
+            }
             TyKind::Tensor { elem, dims } => {
                 if reussir_core::semi::ty_eval::tensor_element_rejection(elem).is_some() {
                     return err(
@@ -747,6 +778,7 @@ fn scalar_ty<'c>(context: &'c Context, ty: Ty<'_>) -> Result<Type<'c>> {
         TyKind::Array { .. } | TyKind::DevArray { .. } => {
             err("array type reached scalar lowering without its rc wrapper")
         }
+        TyKind::Token | TyKind::Future(_) => err("kernel SSA type reached scalar lowering"),
         TyKind::Tensor { .. } => {
             err("tensor type reached scalar lowering without its ranked shape")
         }

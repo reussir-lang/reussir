@@ -715,6 +715,82 @@ mod tests {
     }
 
     #[test]
+    fn lowers_async_types_from_serialized_mir() {
+        let context = crate::testing::context();
+        let enabled = reussir_backend::dialect::ty::stablehlo_token(&context).is_some();
+        for (source_ty, mlir_ty) in [
+            ("Token", "!stablehlo.token"),
+            ("Future<Tensor<f32>>", "!stablehlo.future<tensor<f32>>"),
+            (
+                "Future<Tensor<[u32; ?, 0]>, Tensor<bool>>",
+                "!stablehlo.future<tensor<?x0xi32>, tensor<i1>>",
+            ),
+        ] {
+            in_arena(|tcx| {
+                let text = format!(
+                    "fn @identity(v0 (x): {source_ty}) -> {source_ty} {{ v0 : {source_ty} }}"
+                );
+                let parsed = parse_program(tcx, &text).unwrap();
+                let result = lower_program(
+                    &context,
+                    tcx,
+                    &parsed.program,
+                    None,
+                    None,
+                    LinkagePolicy::Jit,
+                    &[],
+                );
+                if !enabled {
+                    assert!(
+                        result
+                            .err()
+                            .unwrap()
+                            .to_string()
+                            .contains("requires REUSSIR_ENABLE_OPENXLA")
+                    );
+                    return;
+                }
+                let module = result.unwrap();
+                assert!(module.as_operation().verify(), "{}", module.as_operation());
+                let printed = module.as_operation().to_string();
+                assert!(printed.contains(mlir_ty), "{printed}");
+                assert!(!printed.contains("reussir.rc"), "{printed}");
+            });
+        }
+        for payload in [
+            "f32",
+            "Token",
+            "Future<Tensor<f32>>",
+            "[i32; 4]",
+            "Cell<i32>",
+        ] {
+            in_arena(|tcx| {
+                let text = format!(
+                    "fn @identity(v0 (x): Future<{payload}>) -> Future<{payload}> {{ v0 : Future<{payload}> }}"
+                );
+                let parsed = parse_program(tcx, &text).unwrap();
+                let error = lower_program(
+                    &context,
+                    tcx,
+                    &parsed.program,
+                    None,
+                    None,
+                    LinkagePolicy::Jit,
+                    &[],
+                )
+                .err()
+                .unwrap();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("Future requires one or more Tensor payloads"),
+                    "{error}"
+                );
+            });
+        }
+    }
+
+    #[test]
     fn lowers_tensor_types_from_serialized_mir() {
         let context = crate::testing::context();
         for (source_ty, mlir_ty) in [

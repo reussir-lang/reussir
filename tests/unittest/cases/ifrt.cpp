@@ -35,6 +35,36 @@ import reussir.test;
 void registerIfrtDialectsAndPasses(mlir::DialectRegistry &registry);
 
 namespace reussir {
+TEST_F(ReussirTest, KernelAsyncTypesStayInternal) {
+  mlir::DialectRegistry registry;
+  registerIfrtDialectsAndPasses(registry);
+  context->appendDialectRegistry(registry);
+  context->loadAllAvailableDialects();
+  auto module = parse(R"mlir(
+    module {
+      func.func @main(%arg: tensor<f32>) -> tensor<f32> { return %arg : tensor<f32> }
+      func.func private @token(%t: !stablehlo.token) -> !stablehlo.token {
+        return %t : !stablehlo.token
+      }
+      func.func private @future(%f: !stablehlo.future<tensor<?x0xf32>, tensor<i32>>) -> !stablehlo.future<tensor<?x0xf32>, tensor<i32>> {
+        return %f : !stablehlo.future<tensor<?x0xf32>, tensor<i32>>
+      }
+    }
+  )mlir");
+  ASSERT_TRUE(module);
+  EXPECT_TRUE(mlir::succeeded(verifyIfrtKernelModule(*module)));
+  mlir::ScopedDiagnosticHandler silence(context.get(), [](mlir::Diagnostic &) {
+    return mlir::success();
+  });
+  auto helper = module->lookupSymbol<mlir::func::FuncOp>("token");
+  helper.setPublic();
+  EXPECT_TRUE(mlir::failed(verifyIfrtKernelModule(*module)));
+  helper.setPrivate();
+  helper.setType(mlir::FunctionType::get(context.get(),
+      {mlir::OpaqueType::get(mlir::StringAttr::get(context.get(), "stablehlo"), "token")}, {}));
+  EXPECT_TRUE(mlir::failed(verifyIfrtKernelModule(*module)));
+}
+
 TEST_F(ReussirTest, HostTransferShardingUsesMeshPermutationAndReplicas) {
   mlir::DialectRegistry registry;
   registerIfrtDialectsAndPasses(registry);

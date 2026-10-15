@@ -1,0 +1,14 @@
+// RUN: %rrc %S/Inputs/async_types_dep.rr --package-name dep --emit rri -o %t.rri
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --emit mir --no-source-locations -o %t.mir
+// RUN: %FileCheck %s < %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: echo 'pub fn bad() { dep::inspect<str>() }' > %t.bad.rr
+// RUN: %not %rrc %t.bad.rr --package-name app --extern dep=%t.rri --emit mir -o - 2>&1 | %FileCheck %s --check-prefix=BAD
+// CHECK: : Future<Tensor<[f32; 0, ?]>, Tensor<[u32; ?, 0]>>
+// BAD: this instantiation grounds a Future that requires one or more Tensor payloads
+pub fn inspect() { dep::inspect<Tensor<[f32; 0, ?]>>() }
+// RUN: echo 'pub fn bad() { let t: Token = core::intrinsic::panic::panic(); let x = dep::identity(t); }' > %t.escape.rr
+// RUN: %not %rrc %t.escape.rr --package-name app --extern dep=%t.rri --emit mir -o - 2>&1 | %FileCheck %s --check-prefix=ESCAPE
+// ESCAPE-DAG: scope-confined kernel value in a host function parameter
+// ESCAPE-DAG: scope-confined kernel value in a host function result

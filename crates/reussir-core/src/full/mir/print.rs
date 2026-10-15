@@ -359,6 +359,12 @@ impl Render<'_> {
                     }
                     + text(">")
             }
+            TyKind::Token => text("Token"),
+            TyKind::Future(payloads) => {
+                text("Future<")
+                    + comma_sep(payloads.iter().map(|&p| self.ty(p)).collect())
+                    + text(">")
+            }
             TyKind::Tensor { elem, dims } => {
                 let inner = if dims.is_empty() {
                     self.ty(elem)

@@ -7,10 +7,10 @@
 
 import core::intrinsic::tensor;
 
-// CHECK-DAG: a record member cannot contain a tensor
+// CHECK-DAG: a record member cannot contain a kernel value
 pub struct Holder { t : Tensor<[i32; 4]> }
 
-// CHECK-DAG: a tensor cannot appear in a function signature
+// CHECK-DAG: a kernel value cannot appear in a function signature
 fn sig_escape(t : Tensor<[i32; 4]>) -> u64 {
     tensor::dim(t, 0)
 }
@@ -24,14 +24,14 @@ fn bad_arg(x : [i32; 4]) -> i64 {
     0
 }
 
-// CHECK: closure cannot capture `t`: a tensor is scope-confined
+// CHECK: closure cannot capture `t`: Tensor, Future, and Token are scope-confined
 fn capture_escape(a : [i32; 8]) -> i64 {
     let t = tensor::of(a);
     let f = |x : i64| tensor::dim(t, 0);
     0
 }
 
-// CHECK: closure cannot return a tensor
+// CHECK: closure cannot return a kernel value
 fn ret_escape(a : [i32; 8]) -> i64 {
     let f = |x : i64| tensor::of(a);
     0
