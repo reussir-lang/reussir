@@ -100,7 +100,7 @@ pub fn tensor_op(op: TensorFn, result: Ty<'_>, args: &[Ty<'_>]) -> Result<(), St
             }
             Ok(())
         }
-        _ => Ok(()),
+        _ => crate::tensor_check::operation(op, result, args),
     }
 }
 
@@ -153,6 +153,7 @@ macro_rules! validate {
         ) -> Result<(), String> {
             let types: Vec<_> = args.iter().map(|a| a.ty).collect();
             tensor_op(op, result, &types)?;
+            crate::tensor_check::$name(op, result, args)?;
             if op == TensorFn::Slice { $offsets(result, args)?; }
             if op == TensorFn::CollectivePermute { $pairs(args)?; }
             Ok(())

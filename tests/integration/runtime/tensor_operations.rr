@@ -1,0 +1,20 @@
+// REQUIRES: linux, stablehlo, pjrt-runtime
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name app --extern core=%t.core.rri --emit mlir --no-source-locations -o %t.mlir
+// RUN: sed 's/@_RNvC3app3run(/@main(/' %t.mlir | %reussir-opt --inline --symbol-dce --emit-bytecode -o %t.bc
+// RUN: pjrt_test_blake3=$(ls -t "%pjrt_runtime_dir"/deps/libblake3-*.rlib | head -n 1) && %rustc_path --edition=2024 -C prefer-dynamic %S/Inputs/tensor_operations.rs --extern blake3="$pjrt_test_blake3" --extern blake3="${pjrt_test_blake3%.rlib}.rmeta" -L "%pjrt_runtime_dir/deps" -L native="%pjrt_runtime_dir" -l dylib=reussir_rt -o %t.exe
+// RUN: env XDG_CACHE_HOME="%t.cache" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc
+// RUN: rm -rf %t.cache
+import core::intrinsic::tensor;
+#[kernel]
+pub fn run(x: Tensor<[f32; 2, 3]>) -> (Tensor<[f32; 2, 2]>, Tensor<[f32; 2]>, Tensor<[f32; 2]>, Tensor<f32>, Tensor<[f32; 3, 2]>, Tensor<[f32; 2, 3]>, Tensor<[f32; 2, 3]>, Tensor<[f32; 2, 3]>, Tensor<[f32; 3]>) {
+    let one: Tensor<[f32; 3, 2]> = tensor::fill(1.0);
+    let rhs = tensor::iota<Tensor<[f32; 3, 2]>>(1) + one;
+    let vector = tensor::iota<Tensor<[f32; 3]>>(0) + tensor::fill<Tensor<[f32; 3]>>(1.0);
+    let two: Tensor<[f32; 2, 3]> = tensor::fill(2.0);
+    let three: Tensor<[f32; 2, 3]> = tensor::fill(3.0);
+    let zero: Tensor<[f32; 2, 3]> = tensor::fill(0.0);
+    let arithmetic = x.add(two).mul(two).sub(two).div(two).rem(two).neg().abs();
+    let selected = tensor::select(x > three, x, zero);
+    (x.dot(rhs), tensor::dot(x, vector), tensor::dot(vector, rhs), tensor::dot(vector, vector), tensor::transpose(x), arithmetic, selected, tensor::dynamic_fill(3.0, (2, 3)), tensor::dynamic_iota((3,), 0))
+}

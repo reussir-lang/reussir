@@ -1,0 +1,7 @@
+// RUN: %not %rrc %s --emit mir -o /dev/null 2>&1 | %FileCheck %s
+import core::intrinsic::tensor;
+#[kernel]
+fn quotient<T>(x: Tensor<T>) -> Tensor<T> { tensor::div(x, x) }
+#[kernel]
+pub fn invalid(x: Tensor<[bool; 2]>) -> Tensor<[bool; 2]> { quotient(x) }
+// CHECK: div requires numeric elements

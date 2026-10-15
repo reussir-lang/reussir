@@ -2358,13 +2358,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     | ExprKind::If(..)
                     | ExprKind::Match(..)
                     | ExprKind::Async(_)
-                    | ExprKind::TensorOp {
-                        op: crate::intrinsic::TensorFn::DynamicSlice
-                            | crate::intrinsic::TensorFn::Slice
-                            | crate::intrinsic::TensorFn::CollectivePermute
-                            | crate::intrinsic::TensorFn::AsyncDone,
-                        ..
-                    }
+                    | ExprKind::TensorOp { .. }
                     | ExprKind::FuncCall { .. }
                     | ExprKind::TraitCall { .. }
                     | ExprKind::ConstInt(_)
@@ -2376,6 +2370,8 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     | ExprKind::Not(_)
                     | ExprKind::Poison
             );
+            let allowed =
+                allowed && !matches!(e.kind, ExprKind::TensorOp { op, .. } if !op.is_kernel());
             if !allowed {
                 self.error(e.span, "host operations are not allowed in a kernel");
                 return mir::Expr {
@@ -2731,19 +2727,10 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     args: self.lower_slice(args, subst),
                 }
             }
-            // The tensor boundary intrinsics are shape-generic pass-throughs
-            // here; `of`'s array operand goes through the array element
-            // checks on its own type, and the lowering stubs stop anything
-            // from reaching codegen.
+            // Recheck tensor shape and element constraints after generic
+            // substitution, before any backend operation is constructed.
             ExprKind::TensorOp { op, args } => {
-                if matches!(
-                    op,
-                    crate::intrinsic::TensorFn::DynamicSlice
-                        | crate::intrinsic::TensorFn::Slice
-                        | crate::intrinsic::TensorFn::CollectivePermute
-                        | crate::intrinsic::TensorFn::AsyncDone
-                ) && !self.inside_kernel
-                {
+                if op.is_kernel() && !self.inside_kernel {
                     self.error(
                         span,
                         "this tensor intrinsic is only allowed inside a #[kernel] function",

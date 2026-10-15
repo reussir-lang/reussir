@@ -349,8 +349,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let span = Some(e.span());
         let kind = e.kind();
         // Member syntax needs receiver inference before its kernel eligibility
-        // can be decided. infer_postfix_call permits only a Future receiver in
-        // this context; every other member retains the host-operation rejection.
+        // can be decided. Kernel SSA former anchors supply ordinary methods;
+        // host receivers retain the host-operation rejection.
         let method_call = matches!(&kind, surface::ExprKind::CallExpr(callee, _)
             if !callee.parenthesized() && matches!(callee.kind(), surface::ExprKind::AccessChain(..)));
         if self.inside_kernel
@@ -873,6 +873,24 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                 let l = self.infer_expr(l);
                 let ty = l.ty;
+                if matches!(self.infer.resolve(ty).kind(), TyKind::Tensor { .. }) {
+                    let r = self.check_expr(r, ty);
+                    let top = match op {
+                        BinOp::Add => crate::intrinsic::TensorFn::Add,
+                        BinOp::Sub => crate::intrinsic::TensorFn::Sub,
+                        BinOp::Mul => crate::intrinsic::TensorFn::Mul,
+                        BinOp::Div => crate::intrinsic::TensorFn::Div,
+                        _ => crate::intrinsic::TensorFn::Rem,
+                    };
+                    return self.mk_expr(
+                        ExprKind::TensorOp {
+                            op: top,
+                            args: vec![l, r],
+                        },
+                        ty,
+                        span,
+                    );
+                }
                 self.register_bound(self.lang.num, ty, span);
                 let r = self.check_expr(r, ty);
                 let aop = arith_op(op);
@@ -916,6 +934,28 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             _ => {
                 let l = self.infer_expr(l);
                 let ty = self.infer.shallow_resolve(l.ty);
+                if let TyKind::Tensor { dims, .. } = ty.kind() {
+                    let r = self.check_expr(r, l.ty);
+                    use crate::intrinsic::TensorFn;
+                    let top = match op {
+                        BinOp::Equ => TensorFn::Eq,
+                        BinOp::Neq => TensorFn::Ne,
+                        BinOp::Lt => TensorFn::Lt,
+                        BinOp::Lte => TensorFn::Le,
+                        BinOp::Gt => TensorFn::Gt,
+                        BinOp::Gte => TensorFn::Ge,
+                        _ => unreachable!(),
+                    };
+                    let result = self.tcx.mk_tensor(self.tcx.mk_bool(), dims);
+                    return self.mk_expr(
+                        ExprKind::TensorOp {
+                            op: top,
+                            args: vec![l, r],
+                        },
+                        result,
+                        span,
+                    );
+                }
                 if matches!(ty.kind(), TyKind::Hole(_)) {
                     // Inference: the operand is still an open hole — commit
                     // to the intrinsic form under a comparison obligation
@@ -1045,6 +1085,16 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             UnaryOp::Negate => {
                 let e = self.infer_expr(e);
                 let ty = e.ty;
+                if matches!(self.infer.resolve(ty).kind(), TyKind::Tensor { .. }) {
+                    return self.mk_expr(
+                        ExprKind::TensorOp {
+                            op: crate::intrinsic::TensorFn::Neg,
+                            args: vec![e],
+                        },
+                        ty,
+                        span,
+                    );
+                }
                 self.register_bound(self.lang.num, ty, span);
                 self.mk_expr(ExprKind::Negate(Box::new(e)), ty, span)
             }
@@ -1274,7 +1324,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
 
         if self.inside_kernel
-            && !matches!(self.infer.shallow_resolve(raw).kind(), TyKind::Future(_))
+            && !matches!(
+                self.infer.shallow_resolve(raw).kind(),
+                TyKind::Future(_) | TyKind::Tensor { .. }
+            )
         {
             self.error(span, "host operations are not allowed in a kernel");
             return self.poison(span);
@@ -1291,6 +1344,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 
         let former = match self.infer.shallow_resolve(raw).kind() {
             TyKind::Future(_) => Some(crate::semi::lang::FormerItem::TensorFuture),
+            TyKind::Tensor { .. } => Some(crate::semi::lang::FormerItem::Tensor),
             TyKind::DevArray { .. } => Some(crate::semi::lang::FormerItem::DevArray),
             _ => None,
         };
@@ -2507,6 +2561,131 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         )
     }
 
+    fn infer_basic_tensor_intrinsic(
+        &mut self,
+        op: crate::intrinsic::TensorFn,
+        fc: &surface::FuncCall,
+        span: Option<Span>,
+    ) -> Expr<'tcx> {
+        use crate::intrinsic::TensorFn;
+        if !self.inside_kernel {
+            self.error(
+                span,
+                "this tensor intrinsic is only allowed inside a #[kernel] function",
+            );
+            return self.poison(span);
+        }
+        if fc.args.len() != op.arity() {
+            self.error(
+                span,
+                format!("{} expects exactly {} arguments", op.as_str(), op.arity()),
+            );
+            return self.poison(span);
+        }
+        let explicit = match fc.ty_args.as_slice() {
+            [] | [None] => None,
+            [Some(t)] => Some(self.eval_type(t)),
+            _ => {
+                self.error(
+                    span,
+                    "tensor operation accepts at most one result type argument",
+                );
+                return self.poison(span);
+            }
+        };
+        let args: Vec<_> = fc.args.iter().map(|a| self.infer_expr(a)).collect();
+        if matches!(op, TensorFn::Iota | TensorFn::DynamicIota) {
+            let axis = usize::from(op == TensorFn::DynamicIota);
+            self.expect(
+                args[axis].ty,
+                self.tcx.mk_int(super::ty::IntTy::Signed(64)),
+                span,
+            );
+        }
+        let result = match op {
+            _ if explicit.is_some()
+                && (op.is_comparison() || matches!(op, TensorFn::Dot | TensorFn::Transpose)) =>
+            {
+                explicit.unwrap()
+            }
+            TensorFn::Fill | TensorFn::DynamicFill | TensorFn::Iota | TensorFn::DynamicIota => {
+                explicit.unwrap_or_else(|| self.infer.new_hole_ty())
+            }
+            TensorFn::Dot => {
+                if let (TyKind::Tensor { elem, dims: left }, TyKind::Tensor { dims: right, .. }) = (
+                    self.infer.resolve(args[0].ty).kind(),
+                    self.infer.resolve(args[1].ty).kind(),
+                ) {
+                    if (1..=2).contains(&left.len()) && (1..=2).contains(&right.len()) {
+                        let dims: Vec<_> = left[..left.len() - 1]
+                            .iter()
+                            .chain(right[1..].iter())
+                            .copied()
+                            .collect();
+                        self.tcx.mk_tensor(*elem, &dims)
+                    } else {
+                        explicit.unwrap_or_else(|| self.infer.new_hole_ty())
+                    }
+                } else {
+                    explicit.unwrap_or_else(|| self.infer.new_hole_ty())
+                }
+            }
+            TensorFn::Transpose => match self.infer.resolve(args[0].ty).kind() {
+                TyKind::Tensor { elem, dims } if dims.len() == 2 => {
+                    self.tcx.mk_tensor(*elem, &[dims[1], dims[0]])
+                }
+                _ => explicit.unwrap_or_else(|| self.infer.new_hole_ty()),
+            },
+            TensorFn::Select => {
+                self.expect(args[1].ty, args[2].ty, span);
+                args[1].ty
+            }
+            _ if op.is_comparison() => {
+                self.expect(args[0].ty, args[1].ty, span);
+                match self.infer.resolve(args[0].ty).kind() {
+                    TyKind::Tensor { dims, .. } => self.tcx.mk_tensor(self.tcx.mk_bool(), dims),
+                    _ => explicit.unwrap_or_else(|| self.infer.new_hole_ty()),
+                }
+            }
+            _ => {
+                if args.len() == 2 {
+                    self.expect(args[0].ty, args[1].ty, span);
+                }
+                args[0].ty
+            }
+        };
+        if let Some(explicit) = explicit {
+            self.expect(result, explicit, span);
+        }
+        if matches!(op, TensorFn::DynamicFill | TensorFn::DynamicIota) {
+            let index = usize::from(op == TensorFn::DynamicFill);
+            if let TyKind::Tuple(fields) = self.infer.resolve(args[index].ty).kind() {
+                let i64_ty = self.tcx.mk_int(super::ty::IntTy::Signed(64));
+                for field in *fields {
+                    if !matches!(
+                        self.infer.resolve(*field).kind(),
+                        TyKind::Tensor { .. } | TyKind::Generic(_)
+                    ) {
+                        self.expect(*field, i64_ty, span);
+                    }
+                }
+            }
+        }
+        let expression = self.mk_expr(ExprKind::TensorOp { op, args }, result, span);
+        if let ExprKind::TensorOp { args, .. } = &expression.kind {
+            if matches!(op, TensorFn::Fill | TensorFn::DynamicFill) {
+                self.fulfill.register_tensor_fill(result, args[0].ty, span);
+            }
+            let types: Vec<_> = args.iter().map(|a| self.infer.resolve(a.ty)).collect();
+            if let Err(reason) =
+                crate::tensor_check::operation(op, self.infer.resolve(result), &types)
+            {
+                self.error(span, reason);
+            }
+        }
+        expression
+    }
+
     fn infer_kernel_tensor_intrinsic(
         &mut self,
         op: crate::intrinsic::TensorFn,
@@ -3016,10 +3195,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 .segments
                 .last()
                 .is_some_and(|&s| self.sym(s) == "tensor")
-                && matches!(
-                    self.sym(fc.name.basename),
-                    "dynamic_slice" | "slice" | "collective_permute" | "async_done"
-                ))
+                && crate::intrinsic::TensorFn::parse(self.sym(fc.name.basename))
+                    .is_some_and(|op| op.is_kernel()))
         {
             self.error(span, "host intrinsics are not allowed in a kernel");
             return Some(self.poison(span));
@@ -3902,13 +4079,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return self.poison(span);
         };
-        if matches!(
-            op,
-            TensorFn::DynamicSlice
-                | TensorFn::Slice
-                | TensorFn::CollectivePermute
-                | TensorFn::AsyncDone
-        ) {
+        if op.is_basic() {
+            return self.infer_basic_tensor_intrinsic(op, fc, span);
+        }
+        if op.is_kernel() {
             return self.infer_kernel_tensor_intrinsic(op, fc, span);
         }
         if !fc.ty_args.is_empty() {
@@ -3924,10 +4098,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let expected_args = match op {
             TensorFn::Of | TensorFn::Materialize => 1,
             TensorFn::Dim => 2,
-            TensorFn::DynamicSlice
-            | TensorFn::Slice
-            | TensorFn::CollectivePermute
-            | TensorFn::AsyncDone => unreachable!(),
+            _ => unreachable!(),
         };
         if fc.args.len() != expected_args {
             self.error(
@@ -3943,10 +4114,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let base = self.infer_expr(&fc.args[0]);
         let bty = self.infer.shallow_resolve(base.ty);
         match op {
-            TensorFn::DynamicSlice
-            | TensorFn::Slice
-            | TensorFn::CollectivePermute
-            | TensorFn::AsyncDone => unreachable!(),
             TensorFn::Of => {
                 let TyKind::Array { elem, dims } = *bty.kind() else {
                     let shown = self.infer.resolve(base.ty);
@@ -4016,6 +4183,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     span,
                 )
             }
+            _ => unreachable!(),
         }
     }
 
