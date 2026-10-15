@@ -12,6 +12,8 @@
 //! generics are resolved through the instantiation on the fly, and a template is
 //! materialized into the arena only when it must be assigned into a hole.
 
+pub mod shape;
+
 use std::marker::PhantomData;
 
 use ena::unify::{InPlaceUnificationTable, NoError, UnifyKey, UnifyValue};
@@ -121,6 +123,7 @@ pub struct InferCtxt<'a, 'tcx> {
     tcx: &'a TyCtxt<'tcx>,
     table: InPlaceUnificationTable<HoleKey<'tcx>>,
     level: Level,
+    shapes: shape::ShapeStore<'tcx>,
 }
 
 impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
@@ -129,6 +132,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             tcx,
             table: InPlaceUnificationTable::new(),
             level: Level(0),
+            shapes: shape::ShapeStore::default(),
         }
     }
 
@@ -167,7 +171,15 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         match ty.kind() {
             TyKind::Hole(h) => match self.table.probe_value(key(*h)) {
                 HoleValue::Known(t) => self.shallow_resolve(t),
-                HoleValue::Unknown { .. } => self.tcx.mk_hole(self.table.find(key(*h)).id),
+                HoleValue::Unknown { .. } => {
+                    let root = self.table.find(key(*h)).id;
+                    if let Some(view) = self.hole_view(root) {
+                        if let Some(ty) = self.canonical_shaped(view) {
+                            return ty;
+                        }
+                    }
+                    self.tcx.mk_hole(root)
+                }
             },
             _ => ty,
         }
@@ -291,12 +303,14 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     pub fn unify(&mut self, a: Ty<'tcx>, b: Ty<'tcx>) -> Result<(), Mismatch<'tcx>> {
         let a = self.shallow_resolve(a);
         let b = self.shallow_resolve(b);
-        let a = if matches!(a.kind(), TyKind::Tensor { dims, .. } | TyKind::DevArray { dims, .. } if dims.is_empty()) {
+        let a = if matches!(a.kind(), TyKind::Tensor { dims, .. } | TyKind::DevArray { dims, .. } if dims.is_empty())
+        {
             self.resolve(a)
         } else {
             a
         };
-        let b = if matches!(b.kind(), TyKind::Tensor { dims, .. } | TyKind::DevArray { dims, .. } if dims.is_empty()) {
+        let b = if matches!(b.kind(), TyKind::Tensor { dims, .. } | TyKind::DevArray { dims, .. } if dims.is_empty())
+        {
             self.resolve(b)
         } else {
             b
@@ -305,9 +319,24 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             // Interned: identical handles are identical types.
             return Ok(());
         }
+        if let Some(result) = self.unify_shaped(a, b) {
+            return result;
+        }
         match (a.kind(), b.kind()) {
             (TyKind::Hole(h1), TyKind::Hole(h2)) => {
+                let v1 = self.hole_view(*h1);
+                let v2 = self.hole_view(*h2);
+                if (v1.is_some() && self.occurs(*h2, a)) || (v2.is_some() && self.occurs(*h1, b)) {
+                    return Err(Mismatch { left: a, right: b });
+                }
+                let view = v1.or(v2);
+                self.lower_levels(*h1, b);
+                self.lower_levels(*h2, a);
                 self.table.union(key(*h1), key(*h2));
+                if let Some(view) = view {
+                    self.set_hole_view(*h1, view);
+                }
+                self.shapes.progress += 1;
                 Ok(())
             }
             (TyKind::Hole(h), _) => self.solve(*h, b),
@@ -350,56 +379,6 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             {
                 self.unify(*x, *y)
             }
-            (TyKind::Array { elem: e1, dims: d1 }, TyKind::Array { elem: e2, dims: d2 })
-                if d1 == d2 =>
-            {
-                self.unify(*e1, *e2)
-            }
-            (
-                TyKind::DevArray {
-                    elem: spec,
-                    dims,
-                    placement: p1,
-                },
-                TyKind::DevArray {
-                    elem,
-                    dims: shape,
-                    placement: p2,
-                },
-            ) if dims.is_empty() && !shape.is_empty() && matches!(spec.kind(), TyKind::Hole(_)) => {
-                self.unify(*spec, self.tcx.mk_array(*elem, shape))?;
-                self.unify(*p1, *p2)
-            }
-            (
-                TyKind::DevArray {
-                    elem,
-                    dims: shape,
-                    placement: p1,
-                },
-                TyKind::DevArray {
-                    elem: spec,
-                    dims,
-                    placement: p2,
-                },
-            ) if dims.is_empty() && !shape.is_empty() && matches!(spec.kind(), TyKind::Hole(_)) => {
-                self.unify(*spec, self.tcx.mk_array(*elem, shape))?;
-                self.unify(*p1, *p2)
-            }
-            (
-                TyKind::DevArray {
-                    elem: e1,
-                    dims: d1,
-                    placement: p1,
-                },
-                TyKind::DevArray {
-                    elem: e2,
-                    dims: d2,
-                    placement: p2,
-                },
-            ) if d1 == d2 => {
-                self.unify(*e1, *e2)?;
-                self.unify(*p1, *p2)
-            }
             (TyKind::Future(xs), TyKind::Future(ys)) | (TyKind::Tuple(xs), TyKind::Tuple(ys))
                 if xs.len() == ys.len() =>
             {
@@ -408,36 +387,6 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 }
                 Ok(())
             }
-            (
-                TyKind::Tensor { elem, dims },
-                TyKind::Tensor {
-                    elem: other,
-                    dims: shape,
-                },
-            ) if dims.is_empty()
-                && !shape.is_empty()
-                && matches!(self.shallow_resolve(*elem).kind(), TyKind::Hole(_)) =>
-            {
-                self.unify(*elem, self.tcx.mk_array(*other, shape))
-            }
-            (
-                TyKind::Tensor {
-                    elem: other,
-                    dims: shape,
-                },
-                TyKind::Tensor { elem, dims },
-            ) if dims.is_empty()
-                && !shape.is_empty()
-                && matches!(self.shallow_resolve(*elem).kind(), TyKind::Hole(_)) =>
-            {
-                self.unify(*elem, self.tcx.mk_array(*other, shape))
-            }
-            (TyKind::Tensor { elem: e1, dims: d1 }, TyKind::Tensor { elem: e2, dims: d2 })
-                if d1 == d2 =>
-            {
-                self.unify(*e1, *e2)
-            }
-
             (TyKind::Int(x), TyKind::Int(y)) if x == y => Ok(()),
             (TyKind::Fp(x), TyKind::Fp(y)) if x == y => Ok(()),
             (TyKind::DefaultPlacement, TyKind::DefaultPlacement) => Ok(()),
@@ -461,12 +410,26 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 right: ty,
             });
         }
+        self.lower_levels(h, ty);
         self.table.union_value(key(h), HoleValue::Known(ty));
+        self.shapes.progress += 1;
         Ok(())
     }
 
     /// Does `h`'s class occur within `ty`? Prevents infinite types.
     fn occurs(&mut self, h: HoleId, ty: Ty<'tcx>) -> bool {
+        if let TyKind::Hole(other) = ty.kind() {
+            if self.table.find(key(h)) == self.table.find(key(*other)) {
+                return true;
+            }
+            if let Some(shaped) = self.hole_view(*other) {
+                return self.occurs(h, shaped.view.elem)
+                    || match shaped.family {
+                        shape::Family::DevArray(p) => self.occurs(h, p),
+                        _ => false,
+                    };
+            }
+        }
         match self.shallow_resolve(ty).kind() {
             TyKind::Hole(h2) => self.table.find(key(h)) == self.table.find(key(*h2)),
             TyKind::Record { args, .. } => {
@@ -502,13 +465,18 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     /// generic-argument ambiguity.
     pub fn probe<T, E>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, E>) -> Result<T, E> {
         let snapshot = self.table.snapshot();
+        let shape_snapshot = self.shapes.snapshot();
+        let level = self.level;
         match f(self) {
             Ok(value) => {
                 self.table.commit(snapshot);
+                self.shapes.commit(shape_snapshot);
                 Ok(value)
             }
             Err(err) => {
                 self.table.rollback_to(snapshot);
+                self.shapes.rollback(shape_snapshot);
+                self.level = level;
                 Err(err)
             }
         }
@@ -598,21 +566,25 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             _ => template,
         };
         let template = self.shallow_resolve(template);
+        if matches!(
+            template.kind(),
+            TyKind::Tensor { .. } | TyKind::DevArray { .. } | TyKind::Array { .. }
+        ) {
+            let template = self.materialize(template, inst);
+            return self.unify(template, ambient);
+        }
         let ambient = self.shallow_resolve(ambient);
         if template == ambient {
             return Ok(());
         }
         match (template.kind(), ambient.kind()) {
-            (TyKind::Hole(h1), TyKind::Hole(h2)) => {
-                self.table.union(key(*h1), key(*h2));
-                Ok(())
-            }
+            (TyKind::Hole(_), TyKind::Hole(_)) => self.unify(template, ambient),
             // Assigning the template into a hole: materialize its generics now.
             (_, TyKind::Hole(h)) => {
                 let solved = self.materialize(template, inst);
-                self.solve(*h, solved)
+                self.unify(self.tcx.mk_hole(*h), solved)
             }
-            (TyKind::Hole(h), _) => self.solve(*h, ambient),
+            (TyKind::Hole(_), _) => self.unify(template, ambient),
 
             (
                 TyKind::Record {
@@ -649,15 +621,6 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             {
                 self.unify_instantiated(*x, inst, *y)
             }
-            (TyKind::Array { elem: e1, dims: d1 }, TyKind::Array { elem: e2, dims: d2 })
-                if d1 == d2 =>
-            {
-                self.unify_instantiated(*e1, inst, *e2)
-            }
-            (TyKind::DevArray { .. }, TyKind::DevArray { .. }) => {
-                let instantiated = self.materialize(template, inst);
-                self.unify(instantiated, ambient)
-            }
             (TyKind::Future(xs), TyKind::Future(ys)) | (TyKind::Tuple(xs), TyKind::Tuple(ys))
                 if xs.len() == ys.len() =>
             {
@@ -666,24 +629,6 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 }
                 Ok(())
             }
-            (
-                TyKind::Tensor { elem, dims },
-                TyKind::Tensor {
-                    elem: other,
-                    dims: shape,
-                },
-            ) if dims.is_empty()
-                && !shape.is_empty()
-                && matches!(elem.kind(), TyKind::Generic(_) | TyKind::Hole(_)) =>
-            {
-                self.unify_instantiated(*elem, inst, self.tcx.mk_array(*other, shape))
-            }
-            (TyKind::Tensor { elem: e1, dims: d1 }, TyKind::Tensor { elem: e2, dims: d2 })
-                if d1 == d2 =>
-            {
-                self.unify_instantiated(*e1, inst, *e2)
-            }
-
             (TyKind::Int(x), TyKind::Int(y)) if x == y => Ok(()),
             (TyKind::Fp(x), TyKind::Fp(y)) if x == y => Ok(()),
             (TyKind::DefaultPlacement, TyKind::DefaultPlacement) => Ok(()),
