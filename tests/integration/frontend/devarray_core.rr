@@ -11,3 +11,11 @@ pub fn imported(x: Device<f32, Placement>) -> DevArray<f32> { x }
 pub fn inferred(x: Device<f32>) -> Device<f32, Placement> { x }
 // HIR-DAG: fn #app::imported(v0 (x): DevArray<f32>) -> DevArray<f32>
 // HIR-DAG: fn #app::inferred(v0 (x): DevArray<f32>) -> DevArray<f32>
+
+
+// Ordinary methods resolve through the builtin former's declaration anchor.
+pub fn method_copy(x: Device<[u32; ?, 3]>) -> [u32; ?, 3] { x.download() }
+pub fn method_dim(x: Device<[u32; ?, 3]>, axis:u64) -> u64 { x.dim(axis) }
+pub fn associated(x:[u32; ?, 3]) -> Device<[u32; ?, 3]> {
+    Device<[u32; ?, 3], Placement>::from_host(x)
+}

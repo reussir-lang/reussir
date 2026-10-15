@@ -778,6 +778,14 @@ fn interp<'tcx>(
                     interp(a, ot, rr, rc);
                 }
             }
+            crate::intrinsic::IntrinsicOp::Pjrt { func }
+                if func != crate::intrinsic::PjrtFn::Alloc =>
+            {
+                interp_borrow(&args[0], ot, rr, rc);
+                for a in &args[1..] {
+                    interp(a, ot, rr, rc);
+                }
+            }
             _ => {
                 for a in args {
                     interp(a, ot, rr, rc);
@@ -2392,6 +2400,53 @@ fn while_state_and_captures_balance_across_iterations() {
             let params = vec![b.param(incoming, ty), b.param(capture, ty)];
             let f = b.function("loop", params, ty, loop_expr);
             run(tcx, &f, &b);
+        }
+    });
+}
+
+#[test]
+fn device_transfers_borrow_live_inputs_and_release_last_use() {
+    use crate::intrinsic::{IntrinsicOp, PjrtFn};
+    with_tcx(|tcx| {
+        for live_after in [false, true] {
+            let mut b = MirBuilder::new(tcx);
+            let elem = b.i64();
+            let host = tcx.mk_array(elem, &[3]);
+            let dev = tcx.mk_devarray(elem, &[3], None);
+            let x = b.fresh_var();
+            let y = b.fresh_var();
+            let operand = b.var(x, host);
+            let upload = b.mk(
+                ExprKind::Intrinsic {
+                    op: IntrinsicOp::Pjrt {
+                        func: PjrtFn::Upload,
+                    },
+                    args: tcx.alloc_slice(&[operand]),
+                },
+                dev,
+            );
+            let upload_id = upload.id;
+            let bind = b.let_(y, upload);
+            let device = b.var(y, dev);
+            let download = b.mk(
+                ExprKind::Intrinsic {
+                    op: IntrinsicOp::Pjrt {
+                        func: PjrtFn::Download,
+                    },
+                    args: tcx.alloc_slice(&[device]),
+                },
+                host,
+            );
+            let body = if live_after {
+                let old = b.var(x, host);
+                b.seq(vec![bind, download, old], host)
+            } else {
+                b.seq(vec![bind, download], host)
+            };
+            let params = vec![b.param(x, host)];
+            let f = b.function("transfer", params, host, body);
+            let ot = run(tcx, &f, &b);
+            assert!(!ot.before(upload_id).contains(&RcOp::Dup(x)));
         }
     });
 }

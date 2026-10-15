@@ -9,3 +9,40 @@ pub struct DevArray<T, P> {}
 /// The compile-time placement selecting logical device zero.
 #[lang("default_placement")]
 pub struct [value] DefaultPlacement {}
+
+/// Allocate initialized device storage. Dynamic extents precede the fill value,
+/// in shape order. The runtime stages initialized host memory and waits for the
+/// upload; this is not a device-native fill.
+#[lang("core::intrinsic::pjrt::alloc")]
+pub fn alloc<Result, Args>(args: Args) -> Result;
+
+/// Copy a host scalar/array to placement P (default device zero when omitted).
+/// Upload borrows host storage until it completes and returns an owned DevArray.
+#[lang("core::intrinsic::pjrt::upload")]
+pub fn upload<P, Host, Result>(host: Host) -> Result;
+
+/// Copy a device array to fresh host storage and wait. Rank-zero returns its
+/// scalar; ranked results retain their static/dynamic host array shape.
+#[lang("core::intrinsic::pjrt::download")]
+pub fn download<Device, Host>(device: Device) -> Host;
+
+/// The logical extent along an axis, checked against the rank at runtime.
+#[lang("core::intrinsic::pjrt::dim")]
+pub fn dim<Device>(device: Device, axis: u64) -> u64;
+
+impl<T, P> DevArray<T, P> {
+    /// Copy back to the host, preserving the complete scalar/shape argument T.
+    pub fn download(self: Self) -> T {
+        core::intrinsic::pjrt::download(self)
+    }
+
+    /// Query the logical shape, including uneven sharding's original extents.
+    pub fn dim(self: Self, axis: u64) -> u64 {
+        core::intrinsic::pjrt::dim(self, axis)
+    }
+
+    /// Upload a host scalar or array using this type's placement.
+    pub fn from_host(value: T) -> Self {
+        core::intrinsic::pjrt::upload<P>(value)
+    }
+}

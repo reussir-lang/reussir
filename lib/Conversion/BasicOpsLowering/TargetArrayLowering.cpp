@@ -866,6 +866,35 @@ struct ToHost : mlir::ConvertOpToLLVMPattern<ReussirArrayToHostOp> {
   }
 };
 
+struct DeviceArrayExtent
+    : mlir::ConvertOpToLLVMPattern<ReussirDeviceArrayExtentOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  mlir::LogicalResult
+  matchAndRewrite(ReussirDeviceArrayExtentOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto rcType = op.getArray().getType();
+    auto array = llvm::cast<ArrayType>(rcType.getElementType());
+    auto dim = op.getDimension();
+    auto indexType = getTypeConverter()->getIndexType();
+    if (!array.isDynamicDim(dim)) {
+      rewriter.replaceOp(op, constant(rewriter, op.getLoc(), indexType,
+                                      array.getDimSize(dim)));
+      return mlir::success();
+    }
+    unsigned field = ArrayType::DYNAMIC_EXTENTS_INDEX;
+    for (uint64_t i = 0; i < dim; ++i)
+      field += array.isDynamicDim(i);
+    auto ptrType = mlir::LLVM::LLVMPointerType::get(getContext());
+    auto address = mlir::LLVM::GEPOp::create(
+        rewriter, op.getLoc(), ptrType,
+        getTypeConverter()->convertType(rcType.getInnerBoxType()),
+        adaptor.getArray(),
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1, static_cast<int32_t>(field)});
+    rewriter.replaceOpWithNewOp<mlir::LLVM::LoadOp>(op, indexType, address);
+    return mlir::success();
+  }
+};
+
 struct DropTargetArray : mlir::ConvertOpToLLVMPattern<ReussirRefDropOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
   mlir::LogicalResult
@@ -886,7 +915,7 @@ struct DropTargetArray : mlir::ConvertOpToLLVMPattern<ReussirRefDropOp> {
 
 void populateTargetArrayLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                          mlir::RewritePatternSet &patterns) {
-  patterns.add<CreateTargetArray, ToDevice, ToHost, ToIfrt, FromIfrt,
-               DropTargetArray>(converter);
+  patterns.add<DeviceArrayExtent, CreateTargetArray, ToDevice, ToHost, ToIfrt,
+               FromIfrt, DropTargetArray>(converter);
 }
 } // namespace reussir

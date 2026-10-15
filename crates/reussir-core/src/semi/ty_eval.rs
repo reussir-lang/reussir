@@ -264,8 +264,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
 
         // Tensor's shape syntax resembles an array but does not construct a
-        // host array: zero extents and shapes larger than the host allocation
-        // limit are valid. A scalar argument denotes a rank-zero tensor.
+        // host array: shapes larger than the host allocation limit are valid. A scalar argument denotes a rank-zero tensor.
         if (bare_unshadowed || self.is_core_intrinsic_prefix(&path.segments, "tensor"))
             && self.sym(key) == "Tensor"
         {
@@ -429,8 +428,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         span: surface::Span,
     ) -> Ty<'tcx> {
         if extents.is_empty() {
-            // Only reachable through parser recovery (`[T; ]` is a syntax
-            // error); avoid constructing a rank-0 array on top of it.
             return self.tcx.mk(TyKind::Bottom);
         }
         let elem = self.eval_type(elem);
@@ -458,11 +455,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 }
                 surface::ArrayExtent::Expr(e) => {
                     let extent = self.eval_extent(e);
-                    if extent == 0 {
-                        self.error(Some(e.span()), "array extents must be positive");
+                    if extent > i64::MAX as u64 {
+                        self.error(Some(e.span()), "array extent exceeds i64::MAX");
                     }
-                    product = product.saturating_mul(u128::from(extent.max(1)));
-                    dims.push(extent.max(1));
+                    product = product.saturating_mul(u128::from(extent));
+                    dims.push(extent);
                 }
             }
         }

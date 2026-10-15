@@ -291,13 +291,12 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     pub fn unify(&mut self, a: Ty<'tcx>, b: Ty<'tcx>) -> Result<(), Mismatch<'tcx>> {
         let a = self.shallow_resolve(a);
         let b = self.shallow_resolve(b);
-        // A solved Tensor former argument may now carry a ranked array shape.
-        let a = if matches!(a.kind(),TyKind::Tensor{dims,..} if dims.is_empty()) {
+        let a = if matches!(a.kind(), TyKind::Tensor { dims, .. } | TyKind::DevArray { dims, .. } if dims.is_empty()) {
             self.resolve(a)
         } else {
             a
         };
-        let b = if matches!(b.kind(),TyKind::Tensor{dims,..} if dims.is_empty()) {
+        let b = if matches!(b.kind(), TyKind::Tensor { dims, .. } | TyKind::DevArray { dims, .. } if dims.is_empty()) {
             self.resolve(b)
         } else {
             b
@@ -355,6 +354,36 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 if d1 == d2 =>
             {
                 self.unify(*e1, *e2)
+            }
+            (
+                TyKind::DevArray {
+                    elem: spec,
+                    dims,
+                    placement: p1,
+                },
+                TyKind::DevArray {
+                    elem,
+                    dims: shape,
+                    placement: p2,
+                },
+            ) if dims.is_empty() && !shape.is_empty() && matches!(spec.kind(), TyKind::Hole(_)) => {
+                self.unify(*spec, self.tcx.mk_array(*elem, shape))?;
+                self.unify(*p1, *p2)
+            }
+            (
+                TyKind::DevArray {
+                    elem,
+                    dims: shape,
+                    placement: p1,
+                },
+                TyKind::DevArray {
+                    elem: spec,
+                    dims,
+                    placement: p2,
+                },
+            ) if dims.is_empty() && !shape.is_empty() && matches!(spec.kind(), TyKind::Hole(_)) => {
+                self.unify(*spec, self.tcx.mk_array(*elem, shape))?;
+                self.unify(*p1, *p2)
             }
             (
                 TyKind::DevArray {
@@ -625,20 +654,9 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             {
                 self.unify_instantiated(*e1, inst, *e2)
             }
-            (
-                TyKind::DevArray {
-                    elem: e1,
-                    dims: d1,
-                    placement: p1,
-                },
-                TyKind::DevArray {
-                    elem: e2,
-                    dims: d2,
-                    placement: p2,
-                },
-            ) if d1 == d2 => {
-                self.unify_instantiated(*e1, inst, *e2)?;
-                self.unify_instantiated(*p1, inst, *p2)
+            (TyKind::DevArray { .. }, TyKind::DevArray { .. }) => {
+                let instantiated = self.materialize(template, inst);
+                self.unify(instantiated, ambient)
             }
             (TyKind::Future(xs), TyKind::Future(ys)) | (TyKind::Tuple(xs), TyKind::Tuple(ys))
                 if xs.len() == ys.len() =>
@@ -795,6 +813,36 @@ mod tests {
             assert!(
                 infer
                     .unify(fixed, tcx.mk_tensor(tcx.mk_bool(), &[2, 4]))
+                    .is_err()
+            );
+        });
+    }
+
+    #[test]
+    fn device_array_whole_shape_inference_is_stable() {
+        with_tcx(|tcx| {
+            let mut infer = InferCtxt::new(tcx);
+            let spec = infer.new_hole_ty();
+            let former = tcx.mk_devarray(spec, &[], None);
+            let elem = tcx.mk_bool();
+            let ranked = tcx.mk_devarray(elem, &[crate::semi::ty::DYNAMIC_EXTENT, 0, 4], None);
+            infer.unify(former, ranked).unwrap();
+            assert_eq!(infer.resolve(former), ranked);
+            infer.unify(former, ranked).unwrap();
+            assert!(
+                infer
+                    .unify(tcx.mk_devarray(elem, &[], None), ranked)
+                    .is_err()
+            );
+            let hole = infer.new_hole_ty();
+            let fixed = tcx.mk_devarray(hole, &[2, 3], None);
+            infer
+                .unify(fixed, tcx.mk_devarray(elem, &[2, 3], None))
+                .unwrap();
+            assert_eq!(infer.resolve(hole), elem);
+            assert!(
+                infer
+                    .unify(fixed, tcx.mk_devarray(elem, &[2, 4], None))
                     .is_err()
             );
         });

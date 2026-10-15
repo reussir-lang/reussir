@@ -1423,7 +1423,15 @@ verifyArrayTransfer(mlir::Operation *op, RcType rcType, mlir::MemRefType host) {
   auto array = llvm::cast<ArrayType>(rcType.getElementType());
   if (!array.hasTargetAttr())
     return op->emitOpError("requires a target-annotated device array");
-  if (host.getElementType() != array.getElementType())
+  // Host scalar operations use signless MLIR integers, while device unsigned
+  // dtypes must retain signedness for PJRT and StableHLO. Transfer bits without
+  // changing their width; explicitly signed/unsigned mismatches still reject.
+  auto hostInteger = llvm::dyn_cast<mlir::IntegerType>(host.getElementType());
+  auto deviceInteger =
+      llvm::dyn_cast<mlir::IntegerType>(array.getElementType());
+  bool sameStorage = hostInteger && deviceInteger && hostInteger.isSignless() &&
+                     hostInteger.getWidth() == deviceInteger.getWidth();
+  if (host.getElementType() != array.getElementType() && !sameStorage)
     return op->emitOpError("host and device element types must match");
   if (host.getRank() != static_cast<int64_t>(array.getRank()))
     return op->emitOpError("host and device ranks must match");
@@ -1440,6 +1448,15 @@ verifyArrayTransfer(mlir::Operation *op, RcType rcType, mlir::MemRefType host) {
   int64_t offset;
   if (mlir::failed(host.getStridesAndOffset(strides, offset)))
     return op->emitOpError("requires a strided host memref");
+  return mlir::success();
+}
+
+mlir::LogicalResult ReussirDeviceArrayExtentOp::verify() {
+  auto array = llvm::cast<ArrayType>(getArray().getType().getElementType());
+  if (!array.hasTargetAttr())
+    return emitOpError("requires a target-annotated device array");
+  if (getDimension() < 0 || getDimension() >= array.getRank())
+    return emitOpError("dimension is outside the array rank");
   return mlir::success();
 }
 

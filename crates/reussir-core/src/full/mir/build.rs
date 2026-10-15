@@ -613,11 +613,26 @@ impl<'tcx> Builder<'_, 'tcx> {
                 name,
                 imm,
                 args,
-            } => M::Intrinsic {
-                op: crate::intrinsic::IntrinsicOp::parse(family, name, *imm)
-                    .expect("known intrinsic in machine-emitted IR"),
-                args: self.expr_slice(args),
-            },
+            } => {
+                let op =
+                    crate::intrinsic::IntrinsicOp::parse(family, name, *imm).unwrap_or_else(|| {
+                        self.error.get_or_insert_with(|| {
+                            format!("unknown intrinsic {family}::{name} or invalid immediate")
+                        });
+                        crate::intrinsic::IntrinsicOp::Panic
+                    });
+                let args = self.expr_slice(args);
+                if let crate::intrinsic::IntrinsicOp::Pjrt { func } = op {
+                    if let Err(error) = crate::intrinsic::validate_pjrt(
+                        func,
+                        ty,
+                        &args.iter().map(|e| e.ty).collect::<Vec<_>>(),
+                    ) {
+                        self.error.get_or_insert(error);
+                    }
+                }
+                M::Intrinsic { op, args }
+            }
             raw::Kind::ArrayOp { op, args } => M::ArrayOp {
                 op: crate::intrinsic::ArrayFn::parse(op)
                     .expect("known array op in machine-emitted IR"),
@@ -750,6 +765,28 @@ mod tests {
     use crate::full::mono::monomorphize;
     use crate::semi::elaborate;
     use crate::{surface, with_tcx};
+
+    #[test]
+    fn device_transfers_roundtrip_and_reject_malformed_signatures() {
+        roundtrip(
+            r#"
+            import core::intrinsic::pjrt;
+            pub fn copy(x:[u32;?,3])->[u32;?,3] { pjrt::download(pjrt::upload(x)) }
+            pub fn alloc(n:u64)->DevArray<[i32;?,3]> { pjrt::alloc<DevArray<[i32;?,3]>>(n, 7) }
+        "#,
+        );
+        with_tcx(|tcx| {
+            for body in [
+                "intrinsic#pjrt#upload#0(v0 : u64) : DevArray<i32>",
+                "intrinsic#pjrt#alloc#0(v0 : u64) : DevArray<[i32;?,3]>",
+                "intrinsic#pjrt#unknown#0(v0 : u64) : DevArray<i32>",
+                "intrinsic#pjrt#upload#1(v0 : u64) : DevArray<u64>",
+            ] {
+                let text = format!("pub fn #bad(v0 (x): u64) -> DevArray<i32> {{ {body} }}");
+                assert!(parse_program(tcx, &text).is_err(), "accepted {body}");
+            }
+        });
+    }
 
     #[test]
     fn qualified_nominal_builtin_names_roundtrip() {

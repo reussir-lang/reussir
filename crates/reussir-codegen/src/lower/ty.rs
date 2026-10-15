@@ -630,12 +630,17 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
         let TyKind::Array { elem, dims } = *ty.kind() else {
             return err("array payload requested for a non-array type");
         };
-        if reussir_core::semi::ty::has_dynamic_extent(dims) {
-            // Frontend-complete, backend-pending: the strided-header box.
-            return err("dynamic-extent arrays do not lower yet");
-        }
         let elem = self.mlir_ty(elem)?;
-        let shape: Vec<i64> = dims.iter().map(|&d| d as i64).collect();
+        let shape: Vec<i64> = dims
+            .iter()
+            .map(|&d| {
+                if d == reussir_core::semi::ty::DYNAMIC_EXTENT {
+                    dynamic_dimension_size() as i64
+                } else {
+                    d as i64
+                }
+            })
+            .collect();
         Ok(array(&shape, elem))
     }
 

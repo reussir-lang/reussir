@@ -2180,6 +2180,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                             && args.len() == 1
                         {
                             self.tcx.mk_tensor(args[0], &[])
+                        } else if self.lang.item_of(target)
+                            == Some(crate::semi::lang::LangItem::Former(
+                                crate::semi::lang::FormerItem::DevArray,
+                            ))
+                            && args.len() == 2
+                        {
+                            self.tcx.mk_devarray(args[0], &[], Some(args[1]))
                         } else {
                             self.tcx.mk_record(target, &args, flex)
                         },

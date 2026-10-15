@@ -18,9 +18,6 @@ fn bad_elem(a : [S; 4]) -> i64 { 0 }
 // CHECK-DAG: a `[field]` link element must be a regional record
 struct [regional] MutHolder { data: [field] [f64; 4] }
 
-// CHECK-DAG: array extents must be positive
-fn zero_extent(a : [f64; 0]) -> i64 { 0 }
-
 // CHECK-DAG: this kind of array extent cannot be evaluated yet
 fn expr_extent(a : [f64; 2 + 2]) -> i64 { 0 }
 

@@ -476,4 +476,27 @@ TEST_F(ReussirTest, ArrayTransferOwnershipAndEffects) {
       });
 }
 
+TEST_F(ReussirTest, DeviceArrayLogicalExtentAndUnsignedStorage) {
+  withModule(R"mlir(
+    #device = #reussir.target<devices = [0]>
+    !D = !reussir.rc<!reussir.array<? x 3 x ui32, #device>>
+    func.func @transfer(%src: memref<?x3xi32>, %dst: memref<?x3xi32>) -> index {
+      %d = reussir.array.to_device %src : memref<?x3xi32> -> !D
+      %extent = reussir.array.device_extent %d[0] : !D
+      reussir.array.to_host %d into %dst : !D, memref<?x3xi32>
+      return %extent : index
+    }
+  )mlir",
+             [](mlir::ModuleOp module) {
+               EXPECT_TRUE(mlir::succeeded(mlir::verify(module)));
+               unsigned count = 0;
+               module.walk([&](ReussirDeviceArrayExtentOp op) {
+                 EXPECT_EQ(op.getDimension(), 0);
+                 EXPECT_FALSE(mlir::isMemoryEffectFree(op));
+                 ++count;
+               });
+               EXPECT_EQ(count, 1u);
+             });
+}
+
 } // namespace reussir

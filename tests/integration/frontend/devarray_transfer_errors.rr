@@ -1,0 +1,18 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+import core::intrinsic::pjrt;
+// CHECK-DAG: pjrt::alloc requires one explicit DevArray type
+fn missing() { pjrt::alloc(0) }
+// CHECK-DAG: pjrt::alloc requires a DevArray type
+fn host() { pjrt::alloc<[i32; 4]>(0) }
+// CHECK-DAG: pjrt::alloc expects 1 dynamic extents followed by an initial value
+fn extent() { pjrt::alloc<DevArray<[i32; ?]>>(0) }
+// CHECK-DAG: device transfer requires a supported scalar element type
+fn string() { pjrt::upload("bad") }
+// CHECK-DAG: upload placement must be a #[placement] marker type
+fn placement(x: [i32; 2]) { pjrt::upload<i32>(x) }
+// CHECK-DAG: device operation expects a DevArray
+fn download(x: [i32; 2]) { pjrt::download(x) }
+// CHECK-DAG: invalid device transfer argument or type argument count
+fn extra(x: DevArray<i32>) { pjrt::download(x, x) }
+// CHECK-DAG: host intrinsics are not allowed in a kernel
+#[kernel] fn kernel(x: i32) { pjrt::upload(x) }

@@ -1,0 +1,68 @@
+// REQUIRES: linux, ifrt, pjrt-runtime
+// RUN: %rrc %s --emit obj --relocation-mode pic -O none -o %t.o
+// RUN: %cc %t.o %S/devarray_transfer_e2e.c %pjrt_runtime %extra_sys_libs -o %t.exe
+// RUN: env XLA_FLAGS="--xla_force_host_platform_device_count=4" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe
+// RUN: %rrc %s --emit obj --relocation-mode pic -O aggressive -o %t.opt.o
+// RUN: %cc %t.opt.o %S/devarray_transfer_e2e.c %pjrt_runtime %extra_sys_libs -o %t.opt.exe
+// RUN: env XLA_FLAGS="--xla_force_host_platform_device_count=4" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.opt.exe
+
+import core::intrinsic::pjrt;
+import core::intrinsic::array;
+
+#[placement(devices = "3,1,2,0", sharding = "#ifrt.sharding_param<2x2 to [1,0] on 2x2>")]
+struct [value] Tiled {}
+
+pub fn scalar(x: u64) -> u64 { pjrt::download(pjrt::upload(x)) }
+extern "C" trampoline "scalar" = scalar;
+pub fn scalar_fill(x: i64) -> i64 { pjrt::download(pjrt::alloc<DevArray<i64>>(x)) }
+extern "C" trampoline "scalar_fill" = scalar_fill;
+
+pub fn sharded(n: u64, m: u64) -> i64 {
+    let host = array::tabulate<[i64; ?, ?]>(n, m, |i:i64, j:i64| i * 10 + j);
+    let device = pjrt::upload<Tiled>(host);
+    let copy = pjrt::download(device);
+    let filled = pjrt::alloc<DevArray<[i64; ?, ?], Tiled>>(n, m, 7);
+    let fill_host = pjrt::download(filled);
+    array::fold(copy, 0, |sum:i64, x:i64| sum + x)
+        + array::fold(host, 0, |sum:i64, x:i64| sum + x)
+        + array::fold(fill_host, 0, |sum:i64, x:i64| sum + x)
+}
+extern "C" trampoline "sharded" = sharded;
+
+pub fn dimensions(n:u64) -> u64 {
+    let device = pjrt::alloc<DevArray<[i64; ?, 5], Tiled>>(n, 0);
+    let copy = pjrt::download(device);
+    pjrt::dim(device, 0) + pjrt::dim(device, 1) + array::dim(copy, 0)
+}
+extern "C" trampoline "dimensions" = dimensions;
+
+pub fn isolation(x:i64) -> i64 {
+    let host = array::splat<[i64; 3]>(x);
+    let device = pjrt::upload(host);
+    let changed = array::set(host, 1, 99);
+    let first = pjrt::download(device);
+    let second = pjrt::download(device);
+    let changed_copy = array::set(first, 1, 88);
+    array::get(second, 1) + array::get(changed, 1) + array::get(changed_copy, 1)
+}
+extern "C" trampoline "isolation" = isolation;
+
+pub fn empty(n:u64) -> u64 {
+    let host = array::splat<[i32; 0, ?]>(n, 3);
+    let copy = pjrt::download(pjrt::upload<Tiled>(host));
+    array::dim(copy, 0) + array::dim(copy, 1)
+}
+extern "C" trampoline "empty" = empty;
+
+pub fn bool_copy(x:bool) -> bool { pjrt::download(pjrt::upload(x)) }
+extern "C" trampoline "bool_copy" = bool_copy;
+pub fn float_copy(x:f32) -> f32 { pjrt::download(pjrt::upload(x)) }
+extern "C" trampoline "float_copy" = float_copy;
+
+#[placement(devices = "3,1,2,0", sharding = "#ifrt.sharding_param<1 to [0] on 4>")]
+struct [value] Replicated {}
+pub fn replicated(x:i32) -> i32 {
+    let a = pjrt::alloc<DevArray<[i32;3],Replicated>>(x);
+    array::fold(pjrt::download(a), 0, |s:i32, v:i32| s+v)
+}
+extern "C" trampoline "replicated" = replicated;
