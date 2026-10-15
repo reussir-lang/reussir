@@ -105,6 +105,134 @@ mod tests {
     use crate::semi::ty::{Flexivity, IntTy, TyKind};
     use crate::with_tcx;
 
+    #[test]
+    fn kernel_context_tracks_helpers_conditionals_and_host_siblings() {
+        check(
+            "#[kernel] fn identity<T>(x: T) -> T { x }
+\
+             #[kernel] pub fn choose(c: bool, x: Tensor<f32>, y: Tensor<f32>) -> Tensor<f32> {
+\
+                 let z = if c { { identity(x) } } else { if c { y } else { x } }; z
+\
+             }
+\
+             pub fn host(x: i32) -> i32 { x + 1 }
+\
+             #[kernel] fn produce() -> Tensor<f32>;
+\
+             pub fn caller() { let t = produce(); }",
+            |elab, _| {
+                assert!(
+                    !elab.inside_kernel,
+                    "kernel context leaked after a function"
+                );
+                for f in &elab.elaborated {
+                    assert_eq!(f.is_kernel, !matches!(elab.sym(f.name), "host" | "caller"));
+                    assert_eq!(elab.functions[&f.def].is_kernel, f.is_kernel);
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn kernel_boundary_rejects_host_operations_and_invalid_calls() {
+        let cases = [
+            (
+                "pub trait Identity { #[kernel] fn id(x: i32) -> i32; } pub struct Marker {} impl Identity for Marker { fn id(x: i32) -> i32 { x } }",
+                "kernel",
+            ),
+            ("#[kernel] fn f(x: i32) -> i32 { x + x }", "host operations"),
+            (
+                "#[kernel] fn f() { core::intrinsic::panic::panic() }",
+                "host intrinsics",
+            ),
+            (
+                "fn h() {} #[kernel] fn f() { h() }",
+                "cannot call a host function",
+            ),
+            (
+                "#[kernel] fn k() {} fn h() { k() }",
+                "only call a kernel function that returns Tensor",
+            ),
+            (
+                "#[kernel] fn k(x: i32) -> i32 { x } fn h() { k(1); }",
+                "only call a kernel function that returns Tensor",
+            ),
+            (
+                "#[kernel] fn k(x: i32) -> i32 { x } fn h() { let f = k; }",
+                "ordinary closure value",
+            ),
+            (
+                "#[kernel] fn k(x: str) -> str { x }",
+                "invalid kernel signature type",
+            ),
+            (
+                "#[kernel] fn k(x: DevArray<f32>) -> DevArray<f32> { x }",
+                "invalid kernel signature type",
+            ),
+            (
+                "#[kernel] fn k(c: i32, x: i32) -> i32 { if c { x } else { x } }",
+                "type mismatch",
+            ),
+            ("#[kernel] #[kernel] fn k() {}", "duplicate `#[kernel]`"),
+            (r#"#[kernel("unused")] fn k() {}"#, "takes no arguments"),
+            ("#[kernel] struct S {}", "only valid on a function"),
+            ("#[kernel] regional fn k() {}", "cannot also be regional"),
+        ];
+        for (src, message) in cases {
+            with_tcx(|tcx| {
+                let interner = std::sync::Arc::new(reussir_syntax::new_threaded_interner());
+                let parsed = reussir_syntax::parse_with_interner(src, interner.clone());
+                assert!(parsed.ok(), "{src}: {:?}", parsed.errors);
+                let elab = elaborate(tcx, &surface::program(&parsed.root), &interner);
+                assert!(
+                    elab.reports.iter().any(|r| r.message.contains(message)),
+                    "{src}: {:?}",
+                    elab.reports
+                );
+                assert!(!elab.inside_kernel);
+            });
+        }
+    }
+
+    #[test]
+    fn kernel_trait_methods_preserve_and_check_execution_context() {
+        check(
+            "pub trait Identity { #[kernel] fn id(x: i32) -> i32; }
+             pub struct Marker {}
+             impl Identity for Marker { #[kernel] fn id(x: i32) -> i32 { x } }
+             #[kernel] pub fn caller(x: i32) -> i32 { Marker::id(x) }",
+            |elab, _| {
+                assert!(elab.elaborated.iter().all(|f| f.is_kernel));
+                assert!(!elab.inside_kernel);
+            },
+        );
+    }
+
+    #[test]
+    fn kernel_failed_incremental_batch_restores_context_and_definitions() {
+        with_tcx(|tcx| {
+            let interner = std::sync::Arc::new(reussir_syntax::new_threaded_interner());
+            let mut elab = Elaborator::new(tcx, &interner);
+            let batch = |src| {
+                let p = reussir_syntax::parse_with_interner(src, interner.clone());
+                assert!(p.ok(), "{:?}", p.errors);
+                surface::program(&p.root)
+            };
+            elab.try_extend(&batch("#[kernel] fn bad(x: i32) -> i32 { x + x }"))
+                .expect_err("host operation");
+            assert!(!elab.inside_kernel);
+            assert!(elab.elaborated.is_empty());
+            elab.try_extend(&batch("fn bad(x: i32) -> i32 { x + x }"))
+                .expect("normal function after rollback");
+            elab.try_extend(&batch("#[kernel] fn good(x: i32) -> i32 { x }"))
+                .expect("kernel definition");
+            assert!(!elab.inside_kernel);
+            assert!(!elab.elaborated[0].is_kernel);
+            assert!(elab.elaborated[1].is_kernel);
+        });
+    }
+
     /// Every session gets the comparison tower: the four lang traits
     /// (method-less compiler stand-ins at the crate root), the
     /// `Num ⊴ PartialOrd` edge, and the method-less scalar impls —

@@ -39,6 +39,7 @@ pub struct MethodSig<'tcx> {
     pub params: Vec<Ty<'tcx>>,
     pub ret: Ty<'tcx>,
     pub is_regional: bool,
+    pub is_kernel: bool,
     pub span: Option<Span>,
 }
 

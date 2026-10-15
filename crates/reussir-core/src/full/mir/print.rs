@@ -256,6 +256,9 @@ impl Render<'_> {
 
     fn function(&self, func: &mir::Function<'_>) -> Doc<'static> {
         let mut head = String::new();
+        if func.is_kernel {
+            head.push_str("#[kernel] ");
+        }
         if func.transform_anchor {
             head.push_str("#[transform_anchor] ");
         }

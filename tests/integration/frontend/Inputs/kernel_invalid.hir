@@ -1,0 +1,1 @@
+#[kernel] fn #bad(v0 (x): i32) -> i32 { 1 : i32 }

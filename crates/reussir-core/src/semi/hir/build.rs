@@ -196,6 +196,7 @@ impl<'tcx> Parsed<'tcx> {
                     params: m.params.clone(),
                     ret: m.ret,
                     is_regional: m.regional,
+                    is_kernel: m.kernel,
                     span: m.span,
                 })
                 .collect();
@@ -661,6 +662,7 @@ impl<'tcx> Builder<'_, 'tcx> {
             params,
             return_ty,
             is_regional: f.regional,
+            is_kernel: f.kernel,
             body,
             span: span_of(f.span),
             file: file_of(f.file),
@@ -701,6 +703,7 @@ impl<'tcx> Builder<'_, 'tcx> {
                 .iter()
                 .map(|m| TraitMethodText {
                     regional: m.regional,
+                    kernel: m.kernel,
                     name: m.name.clone(),
                     generics: self.text_generics(&m.generics),
                     receiver: match m.receiver {

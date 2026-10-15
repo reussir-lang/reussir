@@ -216,6 +216,7 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                         params: m.params.iter().map(|&p| remap.ty(p)).collect(),
                         ret: remap.ty(m.ret),
                         is_regional: m.regional,
+                        is_kernel: m.kernel,
                         span: m.span,
                     }
                 })
@@ -394,6 +395,7 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                     .collect(),
                 return_ty: remap.ty(func.return_ty),
                 is_regional: func.is_regional,
+                is_kernel: func.is_kernel,
                 body: func.body.as_ref().map(|b| remap.expr(b)),
                 span: func.span,
                 file: file_of(func.file),
@@ -413,6 +415,7 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                 impl_module: None,
                 self_ty: None,
                 is_regional: function.is_regional,
+                is_kernel: function.is_kernel,
                 span: function.span,
                 file: function.file,
             });

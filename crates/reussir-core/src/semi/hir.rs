@@ -328,6 +328,7 @@ pub struct TraitText<'tcx> {
 #[derive(Clone, Debug)]
 pub struct TraitMethodText<'tcx> {
     pub regional: bool,
+    pub kernel: bool,
     pub name: String,
     pub generics: Vec<(GenericId, Option<String>)>,
     /// `None` is an associated function (no receiver).
@@ -400,6 +401,7 @@ pub fn trait_texts<'tcx>(
                 .iter()
                 .map(|m| TraitMethodText {
                     regional: m.is_regional,
+                    kernel: m.is_kernel,
                     name: resolver.resolve(m.name).to_string(),
                     generics: m
                         .generics
@@ -453,6 +455,7 @@ pub struct Function<'tcx> {
     pub params: Vec<(TokenKey, VarId, Ty<'tcx>)>,
     pub return_ty: Ty<'tcx>,
     pub is_regional: bool,
+    pub is_kernel: bool,
     pub body: Option<Expr<'tcx>>,
     pub span: Option<Span>,
     /// The file the function is declared in; its spans (and its body's) index

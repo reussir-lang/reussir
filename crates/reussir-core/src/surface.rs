@@ -931,6 +931,7 @@ pub struct SourceBlock {
 /// A function definition. `params`/`return` carry the `[flex]` flag as a bool.
 #[derive(Clone, Debug)]
 pub struct Function {
+    pub attributes: Vec<Attribute>,
     pub visibility: Visibility,
     pub name: TokenKey,
     /// Each generic is `(name, bounds)`.
@@ -938,6 +939,7 @@ pub struct Function {
     pub params: SmallVec<[(TokenKey, Type, bool); 4]>,
     pub return_type: Option<(Type, bool)>,
     pub is_regional: bool,
+    pub is_kernel: bool,
     pub body: Option<Expr>,
     /// An opaque foreign body (`[{ ... }];`), for `#[ffi(import)]` functions.
     pub foreign_body: Option<SourceBlock>,
@@ -1206,12 +1208,21 @@ fn function_of(node: &ResolvedNode) -> Function {
             .collect()
     });
     Function {
+        attributes: nodes(node)
+            .filter(|n| n.kind() == AttrList)
+            .map(attribute_of)
+            .collect(),
         visibility: visibility_of(node),
         name: key(name_after(node, FnKw)),
         generics: generics_of(node),
         params,
         return_type,
         is_regional: tokens(node).any(|t| t.kind() == RegionalKw),
+        is_kernel: nodes(node).filter(|n| n.kind() == AttrList).any(|n| {
+            tokens(n)
+                .find(|t| t.kind().is_ident_like())
+                .is_some_and(|t| t.text() == "kernel")
+        }),
         body,
         foreign_body: source_block_of(node),
     }

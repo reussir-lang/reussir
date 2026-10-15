@@ -98,6 +98,7 @@ pub struct Function<'tcx> {
     /// defaults to `false`.
     pub mono_exported: bool,
     pub is_regional: bool,
+    pub is_kernel: bool,
     pub params: Vec<Param<'tcx>>,
     pub return_ty: Ty<'tcx>,
     /// `None` for a declared-but-undefined function.

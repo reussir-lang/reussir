@@ -307,6 +307,7 @@ impl<'tcx> Builder<'_, 'tcx> {
             // has no generic bodies left to witness reachability.
             mono_exported: false,
             is_regional: f.regional,
+            is_kernel: f.kernel,
             params,
             return_ty,
             body,

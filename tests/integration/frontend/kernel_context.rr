@@ -1,0 +1,22 @@
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
+// RUN: diff %t.hir %t.round.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: %FileCheck %s --check-prefix=MIR < %t.mir
+#[kernel]
+fn identity<T>(x: T) -> T { x }
+#[kernel]
+pub fn choose(c: bool, x: Tensor<[f32; ?, 0]>, y: Tensor<[f32; ?, 0]>) -> Tensor<[f32; ?, 0]> {
+    let z = if c { identity(x) } else { if c { y } else { x } };
+    z
+}
+pub fn host(x: i32) -> i32 { x + 1 }
+// HIR-DAG: #[kernel] fn #identity
+// HIR-DAG: #[kernel] pub fn #choose
+// HIR-DAG: pub fn #host
+// MIR-DAG: #[kernel] pub fn @_RC6choose
+// MIR-DAG: #[kernel] fn @_RIC8identity
+// MIR-DAG: pub fn @_RC4host

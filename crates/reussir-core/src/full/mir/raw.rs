@@ -186,6 +186,7 @@ pub struct Func {
     pub transform_anchor: bool,
     pub is_pub: bool,
     pub regional: bool,
+    pub kernel: bool,
     pub symbol: String,
     pub params: Vec<Param>,
     pub ret: Ty,

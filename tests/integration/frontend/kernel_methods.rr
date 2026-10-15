@@ -1,0 +1,15 @@
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
+// RUN: diff %t.hir %t.round.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %FileCheck %s --check-prefix=MIR < %t.mir
+// HIR: #[kernel] fn id
+// HIR: #[kernel] fn #Marker::id
+// MIR-DAG: #[kernel] fn @_RNvC6Marker2id
+// MIR-DAG: #[kernel] pub fn @_RC6caller
+pub trait Identity { #[kernel] fn id(x: i32) -> i32; }
+pub struct Marker {}
+impl Identity for Marker { #[kernel] fn id(x: i32) -> i32 { x } }
+#[kernel]
+pub fn caller(x: i32) -> i32 { Marker::id(x) }

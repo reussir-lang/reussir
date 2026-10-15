@@ -1,0 +1,10 @@
+// The flag survives source checking, generic specialization, and MIR replay
+// until the final operation dispatcher chooses the kernel branch for `if`.
+// RUN: %rrc %s --emit mir --no-source-locations -o %t.mir
+// RUN: %not %rrc %s --emit mlir -o - 2>&1 | %FileCheck %s
+// RUN: %not %rrc %t.mir --emit mlir -o - 2>&1 | %FileCheck %s
+// CHECK: kernel if lowering is not available
+#[kernel]
+pub fn choose(c: bool, x: Tensor<f32>, y: Tensor<f32>) -> Tensor<f32> {
+    if c { x } else { y }
+}

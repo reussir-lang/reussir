@@ -235,6 +235,7 @@ pub struct FuncProto<'tcx> {
     /// contains `Self`; it is resolved away at elaboration).
     pub self_ty: Option<Ty<'tcx>>,
     pub is_regional: bool,
+    pub is_kernel: bool,
     pub span: Option<Span>,
     /// The file the function is declared in (spans index it).
     pub file: FileId,
@@ -530,6 +531,7 @@ pub struct Elaborator<'a, 'tcx> {
     /// order in `core`'s declarations is not a compiler contract.
     pub(super) cmp_method_names: [TokenKey; 6],
     pub inside_region: bool,
+    pub inside_kernel: bool,
     /// Generics required to be regional, accumulated while checking the current
     /// function body (e.g. a generic assigned into a flex link). Seeded from the
     /// prototype's `[flex]`-position generics and folded into the elaborated
@@ -636,6 +638,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             prelude_names,
             cmp_method_names,
             inside_region: false,
+            inside_kernel: false,
             regional_generics: Vec::new(),
             fulfill: FulfillCtxt::default(),
             reported_holes: rustc_hash::FxHashSet::default(),
@@ -1413,6 +1416,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         self.generic_names.clear();
         self.self_alias = None;
         self.inside_region = false;
+        self.inside_kernel = false;
         self.fulfill = FulfillCtxt::default();
         self.reported_holes.clear();
         for (name, id) in generics {
@@ -1900,6 +1904,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 let attrs = stmt.attributes();
                 self.set_current_file(*file);
                 let ffi = self.ffi_attr(&attrs);
+                if !matches!(stmt.kind(), surface::StmtKind::Function(_))
+                    && attrs.iter().any(|a| self.sym(a.name) == "kernel")
+                {
+                    self.error(span, "`#[kernel]` is only valid on a function");
+                }
                 if !matches!(stmt.kind(), surface::StmtKind::Record(_))
                     && attrs.iter().any(|a| self.sym(a.name) == "placement")
                 {
@@ -3258,6 +3267,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 ),
             );
         }
+        if sig.is_kernel != proto.is_kernel {
+            self.error(
+                span,
+                format!("method `{name}` must match the #[kernel] annotation in trait `{tr}`"),
+            );
+        }
         if sig.is_regional != proto.is_regional {
             let (a, b) = if sig.is_regional {
                 ("is", "but not in this impl")
@@ -3333,6 +3348,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         impl_ctx: Option<&ImplCtx<'_, 'tcx>>,
         span: Option<Span>,
     ) -> Option<DefId> {
+        self.validate_kernel_function(func, span);
         // The block's own module, captured before declaration temporarily
         // switches to the type's path: the member's body scope.
         let impl_module = impl_ctx.map(|_| self.defs.module().to_vec());
@@ -3367,7 +3383,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             if *flex {
                 collect_regional_generic(t, &mut regional_generics);
             }
-            self.reject_tensor_signature(t, Some(ty.span()));
+            self.check_function_signature_type(t, func.is_kernel, Some(ty.span()));
             params.push((*name, t));
         }
         let return_ty = match &func.return_type {
@@ -3376,7 +3392,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 if *flex {
                     collect_regional_generic(t, &mut regional_generics);
                 }
-                self.reject_tensor_signature(t, Some(ty.span()));
+                self.check_function_signature_type(t, func.is_kernel, Some(ty.span()));
                 t
             }
             None => self.tcx.mk_unit(),
@@ -3509,6 +3525,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             impl_module,
             self_ty: impl_ctx.map(|ctx| ctx.self_ty),
             is_regional: func.is_regional,
+            is_kernel: func.is_kernel,
             span,
             file: self.current_file,
         };
@@ -3681,6 +3698,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         self_ty: Ty<'tcx>,
     ) -> Option<crate::semi::traits::def::MethodSig<'tcx>> {
         use crate::semi::traits::def::ReceiverForm;
+        self.validate_kernel_function(func, mspan);
 
         // The member's binder: the trait's params, then its own.
         self.generic_names = trait_params.iter().copied().collect();
@@ -3710,7 +3728,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             .iter()
             .map(|(_, ty, flex)| {
                 let t = self.eval_type_flex(ty, *flex);
-                self.reject_tensor_signature(t, Some(ty.span()));
+                self.check_function_signature_type(t, func.is_kernel, Some(ty.span()));
                 t
             })
             .collect();
@@ -3741,7 +3759,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let ret = match &func.return_type {
             Some((ty, flex)) => {
                 let t = self.eval_type_flex(ty, *flex);
-                self.reject_tensor_signature(t, Some(ty.span()));
+                self.check_function_signature_type(t, func.is_kernel, Some(ty.span()));
                 t
             }
             None => self.tcx.mk_unit(),
@@ -3766,6 +3784,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             params,
             ret,
             is_regional: func.is_regional,
+            is_kernel: func.is_kernel,
             span: mspan,
         })
     }
@@ -3967,6 +3986,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return;
         };
+        if proto.is_kernel {
+            self.error(span, "a kernel function cannot be a host trampoline target");
+            return;
+        }
         let expected = proto.generics.len();
         if ty_args.len() != expected {
             self.error(
@@ -4112,13 +4135,51 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
     }
 
-    /// Ordinary host function signatures cannot carry kernel SSA values.
-    fn reject_tensor_signature(&mut self, ty: Ty<'tcx>, span: Option<Span>) {
-        if contains_kernel_value(ty) {
-            self.error(
-                span,
-                "a kernel value cannot appear in a function signature: Tensor, Future, and Token are scope-confined",
-            );
+    fn check_function_signature_type(&mut self, ty: Ty<'tcx>, kernel: bool, span: Option<Span>) {
+        if kernel {
+            if let Some(reason) = crate::semi::ty_eval::kernel_type_rejection(ty) {
+                self.error(
+                    span,
+                    format!(
+                        "invalid kernel signature type `{}`: {reason}",
+                        self.ty_display(ty)
+                    ),
+                );
+            }
+        } else if contains_kernel_value(ty) {
+            self.error(span, "a kernel value cannot appear in a function signature: Tensor, Future, and Token are scope-confined (use a #[kernel] function or pass the host array)");
+        }
+    }
+
+    fn validate_kernel_function(&mut self, func: &surface::Function, span: Option<Span>) {
+        let attrs: Vec<_> = func
+            .attributes
+            .iter()
+            .filter(|a| self.sym(a.name) == "kernel")
+            .collect();
+        if attrs.is_empty() {
+            return;
+        }
+        if attrs.len() > 1 {
+            self.error(span, "duplicate `#[kernel]` attribute");
+        }
+        for attr in attrs {
+            if !attr.args.is_empty() || !attr.values.is_empty() || !attr.literals.is_empty() {
+                self.error(Some(attr.span), "`#[kernel]` takes no arguments");
+            }
+        }
+        if func.is_regional {
+            self.error(span, "a kernel function cannot also be regional");
+        }
+        if func.foreign_body.is_some()
+            || func.attributes.iter().any(|a| {
+                matches!(
+                    self.sym(a.name),
+                    "ffi" | "main" | "lang" | "transform_anchor"
+                )
+            })
+        {
+            self.error(span, "`#[kernel]` cannot be combined with host entry points, foreign bodies, intrinsic anchors, or transform anchors");
         }
     }
 

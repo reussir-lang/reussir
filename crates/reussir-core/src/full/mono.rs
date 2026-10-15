@@ -345,6 +345,12 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
         synthetic_cmps: FxHashMap::default(),
         bridge_attempts: FxHashSet::default(),
         synthetic_fns: Vec::new(),
+        inside_kernel: false,
+        kernel_functions: by_def
+            .values()
+            .filter(|f| f.is_kernel)
+            .map(|f| f.def)
+            .collect(),
     };
 
     // Seed roots: every *local* non-generic function, then every trampoline
@@ -438,6 +444,22 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
             continue;
         };
         driver.cur_file = func.file;
+        driver.inside_kernel = func.is_kernel;
+        if func.is_kernel && func.is_regional {
+            driver.error(func.span, "a kernel function cannot also be regional");
+        }
+        if func.is_kernel
+            && (input.ffi_imports.contains_key(&func.def)
+                || input
+                    .externs
+                    .ffi_imports
+                    .is_some_and(|imports| imports.contains_key(&func.def))
+                || input.transform_anchors.contains(&func.def)
+                || input.lang.contains_key(&func.def)
+                || input.trampolines.iter().any(|t| t.target == func.def))
+        {
+            driver.error(func.span, "a kernel function cannot be a host trampoline, foreign function, intrinsic anchor, or transform anchor");
+        }
         driver.reported_arcs.clear();
 
         // Bind this instance's generics, then ground the signature and lower the
@@ -464,7 +486,9 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
                 let ty = subst_ty(tcx, *ty, &subst);
                 driver.note_records(ty);
                 driver.check_arc_inners(ty, func.span);
-                driver.reject_kernel_escape(ty, func.span, "a host function parameter");
+                if !func.is_kernel {
+                    driver.reject_kernel_escape(ty, func.span, "a host function parameter");
+                }
                 mir::Param {
                     name: *name,
                     var: *var,
@@ -474,8 +498,20 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
             .collect();
         let return_ty = subst_ty(tcx, func.return_ty, &subst);
         driver.note_records(return_ty);
+        if func.is_kernel {
+            for ty in params.iter().map(|p| p.ty).chain([return_ty]) {
+                if let Some(reason) = crate::semi::ty_eval::kernel_type_rejection(ty) {
+                    driver.error(
+                        func.span,
+                        format!("invalid specialized kernel signature: {reason}"),
+                    );
+                }
+            }
+        }
         driver.check_arc_inners(return_ty, func.span);
-        driver.reject_kernel_escape(return_ty, func.span, "a host function result");
+        if !func.is_kernel {
+            driver.reject_kernel_escape(return_ty, func.span, "a host function result");
+        }
         let body = func.body.as_ref().map(|b| driver.lower_ref(b, &subst));
 
         let symbol = driver.symbol_of(inst.def, inst.ty_args);
@@ -601,6 +637,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
             visibility: func.visibility,
             mono_exported: exports.contains(&func.def),
             is_regional: func.is_regional,
+            is_kernel: func.is_kernel,
             params,
             return_ty,
             body,
@@ -1062,6 +1099,8 @@ struct Driver<'a, 'tcx> {
     /// once rather than once per site that wanted it.
     bridge_attempts: FxHashSet<String>,
     synthetic_fns: Vec<mir::Function<'tcx>>,
+    inside_kernel: bool,
+    kernel_functions: FxHashSet<DefId>,
 }
 
 /// What a [`hir::ExprKind::TraitCall`] resolves to at instance time.
@@ -1287,6 +1326,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
             visibility: crate::surface::Visibility::Private,
             mono_exported: false,
             is_regional: false,
+            is_kernel: false,
             params: vec![param(hir::VarId(0)), param(hir::VarId(1))],
             return_ty: ret,
             body: Some(self.tcx.alloc(body)),
@@ -1639,6 +1679,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
             visibility: crate::surface::Visibility::Private,
             mono_exported: false,
             is_regional: false,
+            is_kernel: false,
             params: vec![param(0), param(1)],
             return_ty: ret,
             body: Some(self.tcx.alloc(body)),
@@ -2251,11 +2292,57 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     }
 
     /// Lower one Semi expression into a ground MIR expression.
+    fn check_kernel_call(&mut self, target: DefId, result: Ty<'tcx>, span: Option<Span>) -> bool {
+        let callee_kernel = self.kernel_functions.contains(&target);
+        if callee_kernel == self.inside_kernel {
+            return true;
+        }
+        if callee_kernel && matches!(result.kind(), TyKind::Tensor { .. }) {
+            return true;
+        }
+        self.error(
+            span,
+            if callee_kernel {
+                "host code can only call a kernel function that returns Tensor"
+            } else {
+                "cannot call a host function from a kernel"
+            },
+        );
+        false
+    }
+
     fn lower_expr(&mut self, e: &Expr<'tcx>, subst: &Subst<'tcx>) -> mir::Expr<'tcx> {
         let ty = subst_ty(self.tcx, e.ty, subst);
+        if self.inside_kernel {
+            let allowed = matches!(
+                e.kind,
+                ExprKind::Var(_)
+                    | ExprKind::Seq(_)
+                    | ExprKind::Let { .. }
+                    | ExprKind::If(..)
+                    | ExprKind::FuncCall { .. }
+                    | ExprKind::TraitCall { .. }
+                    | ExprKind::Poison
+            );
+            if !allowed {
+                self.error(e.span, "host operations are not allowed in a kernel");
+                return mir::Expr {
+                    id: self.ids.fresh(),
+                    kind: mir::ExprKind::Poison,
+                    ty,
+                    span: e.span,
+                };
+            }
+            if let Some(reason) = crate::semi::ty_eval::kernel_type_rejection(ty) {
+                self.error(
+                    e.span,
+                    format!("invalid specialized kernel value: {reason}"),
+                );
+            }
+        }
         self.note_records(ty);
         self.check_arc_inners(ty, e.span);
-        let kind = self.lower_kind(&e.kind, subst, e.span);
+        let kind = self.lower_kind(&e.kind, subst, e.span, ty);
         self.check_literal_range(&kind, ty, e.span);
         mir::Expr {
             id: self.ids.fresh(),
@@ -2313,6 +2400,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         kind: &ExprKind<'tcx>,
         subst: &Subst<'tcx>,
         span: Option<Span>,
+        result_ty: Ty<'tcx>,
     ) -> mir::ExprKind<'tcx> {
         use mir::ExprKind as M;
         match kind {
@@ -2330,6 +2418,9 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                         ty_args: callee_args,
                         regional,
                     }) => {
+                        if !self.check_kernel_call(target, result_ty, span) {
+                            return M::Poison;
+                        }
                         self.enqueue(target, callee_args, span);
                         let callee = self.symbol_of(target, callee_args);
                         M::Call {
@@ -2339,6 +2430,10 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                         }
                     }
                     Some(TraitCallTarget::Intrinsic(op)) => {
+                        if self.inside_kernel {
+                            self.error(span, "host trait operations are not allowed in a kernel");
+                            return M::Poison;
+                        }
                         let lowered = self.lower_slice(args, subst);
                         if let [l, r] = lowered {
                             M::Cmp(l, op, r)
@@ -2351,6 +2446,10 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                         }
                     }
                     Some(TraitCallTarget::ThreeWay) => {
+                        if self.inside_kernel {
+                            self.error(span, "host trait operations are not allowed in a kernel");
+                            return M::Poison;
+                        }
                         match self.three_way_call(ty_args[0], *trait_def, *method, span) {
                             Some(callee) => M::Call {
                                 callee,
@@ -2446,6 +2545,9 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 args,
                 regional,
             } => {
+                if !self.check_kernel_call(*target, result_ty, span) {
+                    return M::Poison;
+                }
                 let ty_args = self.ground_args(ty_args, subst);
                 self.enqueue(*target, ty_args, span);
                 let callee = self.symbol_of(*target, ty_args);

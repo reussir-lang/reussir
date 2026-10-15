@@ -54,6 +54,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // parameters may already be flex and it may construct regional records
         // directly, so the body is checked with the region context active.
         self.inside_region = proto.is_regional;
+        self.inside_kernel = proto.is_kernel;
         // Seed the regional-requirement set from the prototype's `[flex]`-position
         // generics; the body may add more (e.g. a generic assigned into a link).
         self.regional_generics = proto.regional_generics.clone();
@@ -109,10 +110,40 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             params,
             return_ty,
             is_regional: proto.is_regional,
+            is_kernel: proto.is_kernel,
             body,
             span,
             file: proto.file,
         });
+        self.inside_kernel = false;
+    }
+
+    fn check_kernel_call(
+        &mut self,
+        callee_kernel: bool,
+        result: Ty<'tcx>,
+        span: Option<Span>,
+    ) -> bool {
+        if self.inside_kernel == callee_kernel {
+            return true;
+        }
+        if callee_kernel
+            && matches!(
+                self.infer.resolve(result).kind(),
+                TyKind::Tensor { .. } | TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom
+            )
+        {
+            return true;
+        }
+        self.error(
+            span,
+            if callee_kernel {
+                "host code can only call a kernel function that returns Tensor"
+            } else {
+                "cannot call a host function from a kernel"
+            },
+        );
+        false
     }
 
     fn mk_expr(&mut self, kind: ExprKind<'tcx>, ty: Ty<'tcx>, span: Option<Span>) -> Expr<'tcx> {
@@ -272,6 +303,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // unannotated parameters take the expected parameter types and the
         // body checks against the expected result, so lambdas in argument
         // position need no annotations.
+        if self.inside_kernel && matches!(e.kind(), surface::ExprKind::Lambda(_)) {
+            self.error(
+                Some(e.span()),
+                "closures are host operations and are not allowed in a kernel",
+            );
+            return self.poison(Some(e.span()));
+        }
         if let surface::ExprKind::Lambda(lam) = e.kind()
             && let TyKind::Closure { params, ret } = *self.infer.shallow_resolve(expected).kind()
             && params.len() == lam.args.len()
@@ -282,6 +320,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         let h = self.infer_expr(e);
         self.expect(h.ty, expected, h.span);
+        if self.inside_kernel {
+            if let Some(reason) =
+                crate::semi::ty_eval::kernel_type_rejection(self.infer.resolve(expected))
+            {
+                self.error(Some(e.span()), format!("invalid kernel value: {reason}"));
+            }
+        }
         h
     }
 
@@ -292,6 +337,19 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     pub(super) fn infer_expr(&mut self, e: &surface::Expr) -> Expr<'tcx> {
         let span = Some(e.span());
         let kind = e.kind();
+        if self.inside_kernel
+            && !matches!(
+                &kind,
+                surface::ExprKind::Var(_)
+                    | surface::ExprKind::ExprSeq(_)
+                    | surface::ExprKind::Let(..)
+                    | surface::ExprKind::If(..)
+                    | surface::ExprKind::FuncCallExpr(_)
+            )
+        {
+            self.error(span, "host operations are not allowed in a kernel; only bindings, conditionals, and direct kernel calls are supported");
+            return self.poison(span);
+        }
         match &kind {
             surface::ExprKind::ConstExpr(c) => self.infer_const(c, span),
             surface::ExprKind::Var(path) => self.infer_var(path, span),
@@ -851,6 +909,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         };
         self.record_use(fc.name.basename);
         let proto = self.functions[&def].clone();
+        if !self.check_kernel_call(proto.is_kernel, proto.return_ty, span) {
+            return self.poison(span);
+        }
         if proto.is_regional && !self.inside_region {
             self.error(span, "cannot call a regional function outside of a region");
         }
@@ -883,6 +944,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         let ty_args = self.inst_args(&proto.generics, &inst);
         let result = self.infer.instantiate_ty(proto.return_ty, &inst);
+        if !self.check_kernel_call(proto.is_kernel, result, span) {
+            return self.poison(span);
+        }
         self.mk_expr(
             ExprKind::FuncCall {
                 target: def,
@@ -1139,6 +1203,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         let proto = self.functions[&def].clone();
         self.record_use(name);
+        if !self.check_kernel_call(proto.is_kernel, proto.return_ty, span) {
+            return self.poison(span);
+        }
         if proto.is_regional && !self.inside_region {
             self.error(span, "cannot call a regional function outside of a region");
         }
@@ -1173,6 +1240,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         let ty_args = self.inst_args(&proto.generics, &inst);
         let result = self.infer.instantiate_ty(proto.return_ty, &inst);
+        if !self.check_kernel_call(proto.is_kernel, result, span) {
+            return self.poison(span);
+        }
         self.mk_expr(
             ExprKind::FuncCall {
                 target: def,
@@ -1594,6 +1664,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let self_param = tdef.self_param;
         let sig = tdef.methods[midx].clone();
         self.record_use(sig.name);
+        if !self.check_kernel_call(sig.is_kernel, sig.ret, span) {
+            return self.poison(span);
+        }
         if sig.is_regional && !self.inside_region {
             self.error(span, "cannot call a regional function outside of a region");
         }
@@ -1776,6 +1849,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let self_param = tdef.self_param;
         let sig = tdef.methods[midx].clone();
         debug_assert!(sig.receiver.is_none(), "assoc_trait_call needs no receiver");
+        if !self.check_kernel_call(sig.is_kernel, sig.ret, span) {
+            return self.poison(span);
+        }
         if sig.is_regional && !self.inside_region {
             self.error(span, "cannot call a regional function outside of a region");
         }
@@ -1932,6 +2008,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         args: &[surface::Expr],
         span: Option<Span>,
     ) -> Expr<'tcx> {
+        if self.inside_kernel {
+            self.error(span, "indirect closure calls are not allowed in a kernel");
+            return self.poison(span);
+        }
         let (params, ret) = match callee.ty.kind() {
             TyKind::Closure { params, ret } => (params.to_vec(), *ret),
             _ => {
@@ -2010,6 +2090,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     ) -> Expr<'tcx> {
         // A regional function takes an implicit region handle, so it has no
         // plain closure type to lift to.
+        if proto.is_kernel || self.inside_kernel {
+            self.error(
+                span,
+                "a kernel function cannot be used as an ordinary closure value",
+            );
+            return self.poison(span);
+        }
         if proto.is_regional {
             self.error(span, "cannot use a regional function as a closure value");
             return self.poison(span);
@@ -2441,6 +2528,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     ) -> Option<Expr<'tcx>> {
         if fc.name.segments.first().map(|&k| self.sym(k)) != Some("core") {
             return None;
+        }
+        if self.inside_kernel {
+            self.error(span, "host intrinsics are not allowed in a kernel");
+            return Some(self.poison(span));
         }
         let segs: Vec<&str> = fc.name.segments.iter().map(|&k| self.sym(k)).collect();
         // Everything under `core` is an intrinsic; nothing else lives there.
@@ -3309,6 +3400,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         args: &[(Option<TokenKey>, surface::Expr)],
         span: Option<Span>,
     ) -> Expr<'tcx> {
+        if self.inside_kernel {
+            self.error(
+                span,
+                "record constructors are host operations and are not allowed in a kernel",
+            );
+            return self.poison(span);
+        }
+
         // Expand `import` bindings before the builtin-spelling checks so an
         // imported `Nullable`/`Arc`/enum qualifier dispatches the same as
         // its full spelling.

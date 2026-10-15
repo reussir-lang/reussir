@@ -123,11 +123,12 @@ DebugName: Cow<'input, str> = {
 };
 
 Func: raw::Func =
-    <a:("#" "[" "transform_anchor" "]")?> <p:"pub"?> <r:"regional"?>
+    <kernel:KernelAttr?> <a:("#" "[" "transform_anchor" "]")?> <p:"pub"?> <r:"regional"?>
     "fn" "@" <symbol:Sym>
     "(" <params:Comma<Param>> ")" "->" <ret:Ty> <file:("in" <"int">)?> <body:Body>
     => raw::Func {
         transform_anchor: a.is_some(),
+        kernel: kernel.is_some(),
         is_pub: p.is_some(),
         regional: r.is_some(),
         symbol,
@@ -503,3 +504,9 @@ extern {
         "!" => Token::Bang,
     }
 }
+
+KernelAttr: () = <l:@L> "#" "[" <name:"ident"> "]" <r:@R> =>? {
+    if name == "kernel" { Ok(()) } else {
+        Err(lalrpop_util::ParseError::User { error: LexError { span: l..r } })
+    }
+};

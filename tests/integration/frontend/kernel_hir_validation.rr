@@ -1,0 +1,2 @@
+// RUN: %not %rrc %S/Inputs/kernel_invalid.hir --emit mir -o - 2>&1 | %FileCheck %s
+// CHECK: host operations are not allowed in a kernel

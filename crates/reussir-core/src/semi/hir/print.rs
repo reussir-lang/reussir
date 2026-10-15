@@ -371,6 +371,7 @@ impl<'a> Printer<'a> {
             .methods
             .iter()
             .map(|m| {
+                let kernel = if m.kernel { "#[kernel] " } else { "" };
                 let regional = if m.regional { "regional " } else { "" };
                 let recv = match m.receiver {
                     Some(crate::semi::traits::def::ReceiverForm::Value) => "",
@@ -380,7 +381,7 @@ impl<'a> Printer<'a> {
                     None => " !",
                 };
                 let params: Vec<Doc<'static>> = m.params.iter().map(|p| self.ty(*p)).collect();
-                text(format!("{regional}fn {}", m.name))
+                text(format!("{kernel}{regional}fn {}", m.name))
                     + self.text_binder(&m.generics)
                     + text(recv)
                     + text(" (")
@@ -517,6 +518,9 @@ impl<'a> Printer<'a> {
 
     fn function(&self, f: &Function<'_>) -> Doc<'static> {
         let mut head = String::new();
+        if f.is_kernel {
+            head.push_str("#[kernel] ");
+        }
         if let Some(item) = self.lang.and_then(|m| m.get(&f.def)) {
             head.push_str(&format!("#[lang({:?})] ", item.name()));
         }

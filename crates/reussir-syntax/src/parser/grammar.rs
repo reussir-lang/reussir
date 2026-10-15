@@ -11,8 +11,8 @@
 //! fn-stmt     ::= 'regional'? 'fn' name generics? '(' params ')' ('->' '[flex]'? type)?
 //!                     (block | ';' | RAW-MLIR-LITERAL ';')
 //! trait-stmt  ::= 'trait' name generics? (':' path ('+' path)*)? '{' trait-method* '}'
-//! trait-method ::= 'regional'? 'fn' name generics? '(' params ')' ('->' '[flex]'? type)? ';'
-//! impl-stmt   ::= 'impl' generics? (type-atom 'for')? type-atom '{' (pub? regional? fn ...)* '}'
+//! trait-method ::= attribute* 'regional'? 'fn' name generics? '(' params ')' ('->' '[flex]'? type)? ';'
+//! impl-stmt   ::= 'impl' generics? (type-atom 'for')? type-atom '{' (attribute* pub? regional? fn ...)* '}'
 //! struct-stmt ::= 'struct' capability? name generics? (named-fields | unnamed-fields | ';')
 //! enum-stmt   ::= 'enum' capability? name generics? '{' variant,* '}'
 //! mod-stmt    ::= 'mod' name ';'
@@ -145,8 +145,9 @@ impl Parser<'_> {
         }
         self.expect(LBrace);
         while !self.at(RBrace) && !self.at_eof() {
-            if self.at(RegionalKw) || self.at(FnKw) {
+            if self.at(Pound) || self.at(RegionalKw) || self.at(FnKw) {
                 let member = self.start();
+                self.attrs_opt();
                 self.trait_method(member);
             } else {
                 // Member-level recovery: `pub` is not a member starter —
@@ -156,7 +157,12 @@ impl Parser<'_> {
                     "expected `fn` or `regional fn` in a `trait` body, found {}",
                     self.current().describe()
                 ));
-                while !self.at_eof() && !self.at(RBrace) && !self.at(RegionalKw) && !self.at(FnKw) {
+                while !self.at_eof()
+                    && !self.at(RBrace)
+                    && !self.at(Pound)
+                    && !self.at(RegionalKw)
+                    && !self.at(FnKw)
+                {
                     self.bump();
                 }
                 e.complete(self, ErrorNode);
@@ -244,8 +250,9 @@ impl Parser<'_> {
         }
         self.expect(LBrace);
         while !self.at(RBrace) && !self.at_eof() {
-            if self.at(PubKw) || self.at(RegionalKw) || self.at(FnKw) {
+            if self.at(Pound) || self.at(PubKw) || self.at(RegionalKw) || self.at(FnKw) {
                 let member = self.start();
+                self.attrs_opt();
                 if self.at(PubKw) {
                     self.bump();
                 }
@@ -269,6 +276,7 @@ impl Parser<'_> {
                 while !self.at_eof()
                     && !self.at(RBrace)
                     && !self.at(PubKw)
+                    && !self.at(Pound)
                     && !self.at(RegionalKw)
                     && !self.at(FnKw)
                 {

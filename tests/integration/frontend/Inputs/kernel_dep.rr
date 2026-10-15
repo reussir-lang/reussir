@@ -1,0 +1,6 @@
+#[kernel]
+pub fn identity<T>(x: T) -> T { x }
+#[kernel]
+pub fn produce<T>() -> T;
+#[kernel]
+pub fn choose<T>(c: bool, x: T, y: T) -> T { if c { x } else { y } }

@@ -393,6 +393,7 @@ impl<'a, 'tcx> MirBuilder<'a, 'tcx> {
             visibility: Visibility::Private,
             mono_exported: false,
             is_regional: false,
+            is_kernel: false,
             params,
             return_ty: ret,
             body: Some(body),

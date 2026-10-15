@@ -1030,3 +1030,46 @@ pub fn tensor_element_rejection(elem: Ty<'_>) -> Option<&'static str> {
         _ => Some("a supported integer, floating-point, or bool scalar is required"),
     }
 }
+
+/// Types that can cross an internal kernel/helper boundary. Unknown generic
+/// arguments are checked again after specialization; host resources never
+/// acquire kernel semantics through an identity function. Keep this exhaustive
+/// so adding an SSA type requires an explicit decision here.
+pub fn kernel_type_rejection(ty: Ty<'_>) -> Option<&'static str> {
+    match *ty.kind() {
+        TyKind::Token => None,
+        TyKind::Future(payloads) => {
+            if payloads.is_empty() {
+                Some("Future requires one or more Tensor payloads")
+            } else {
+                payloads.iter().find_map(|&payload| {
+                    future_payload_rejection(payload).or_else(|| kernel_type_rejection(payload))
+                })
+            }
+        }
+        TyKind::Tensor { elem, dims } => {
+            if dims
+                .iter()
+                .any(|&d| d != crate::semi::ty::DYNAMIC_EXTENT && d > i64::MAX as u64)
+            {
+                Some("tensor dimensions must fit signed 64-bit MLIR extents")
+            } else {
+                tensor_element_rejection(elem)
+            }
+        }
+        TyKind::Int(_) | TyKind::Fp(_) | TyKind::Bool => tensor_element_rejection(ty),
+        TyKind::Unit | TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => None,
+        TyKind::Record { .. }
+        | TyKind::Str
+        | TyKind::Char
+        | TyKind::Closure { .. }
+        | TyKind::Array { .. }
+        | TyKind::DefaultPlacement
+        | TyKind::DevArray { .. }
+        | TyKind::Cell { .. }
+        | TyKind::Nullable(_)
+        | TyKind::Arc(_) => Some(
+            "kernel values must be tensors, futures, tokens, supported numeric/bool scalars, or unit",
+        ),
+    }
+}

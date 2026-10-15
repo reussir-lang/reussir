@@ -86,6 +86,8 @@ use super::{LinkagePolicy, LoweringError, Result, err};
 struct Env<'c, 'b, 'tcx> {
     vars: IndexMap<VarId, Value<'c, 'b>, rustc_hash::FxBuildHasher>,
     region: Option<Value<'c, 'b>>,
+    /// Function execution context, preserved through nested control-flow scopes.
+    is_kernel: bool,
     temps: IndexMap<ExprId, Value<'c, 'b>, rustc_hash::FxBuildHasher>,
     anchors: Vec<(SmallVec<[u32; 4]>, Anchor<'c, 'b, 'tcx>)>,
 }
@@ -121,10 +123,11 @@ enum Anchor<'c, 'b, 'tcx> {
 
 impl<'c, 'b, 'tcx> Env<'c, 'b, 'tcx> {
     /// An empty environment carrying `region` as its enclosing region handle.
-    fn new(region: Option<Value<'c, 'b>>) -> Self {
+    fn new(region: Option<Value<'c, 'b>>, is_kernel: bool) -> Self {
         Self {
             vars: IndexMap::default(),
             region,
+            is_kernel,
             temps: IndexMap::default(),
             anchors: Vec::new(),
         }
@@ -150,6 +153,7 @@ impl<'c, 'b, 'tcx> Env<'c, 'b, 'tcx> {
         let temps_mark = self.temps.len();
         let anchors_mark = self.anchors.len();
         let saved_region = self.region;
+        let saved_kernel = self.is_kernel;
         // SAFETY: `'b: 's`, so viewing the stored `Value<'c, 'b>`s as
         // `Value<'c, 's>` is a lifetime *shortening* — a sound covariant coercion
         // the compiler declines to perform through the invariant `&mut`. `short`
@@ -163,6 +167,7 @@ impl<'c, 'b, 'tcx> Env<'c, 'b, 'tcx> {
         self.temps.truncate(temps_mark);
         self.anchors.truncate(anchors_mark);
         self.region = saved_region;
+        self.is_kernel = saved_kernel;
         r
     }
 }
@@ -220,6 +225,7 @@ pub(super) struct Lowerer<'c, 'p, 'tcx> {
     pub(super) program: &'p mir::Program<'tcx>,
     pub(super) tys: TypeCtx<'c, 'p, 'tcx>,
     records: RecordTable<'tcx>,
+    kernel_functions: FxHashSet<mir::Symbol>,
     /// Resolves MIR byte spans to file/line/column; `None` lowers to `unknown`
     /// locations.
     pub(super) source: Option<&'p SourceCache>,
@@ -273,6 +279,12 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             program,
             tys: TypeCtx::new(context, program),
             records: RecordTable::from_records(&program.records),
+            kernel_functions: program
+                .functions
+                .iter()
+                .filter(|f| f.is_kernel)
+                .map(|f| f.symbol)
+                .collect(),
             source,
             names,
             ownership: RefCell::new(OwnershipTable::default()),
@@ -410,7 +422,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             } else {
                 (None, 0)
             };
-            let mut env = Env::new(region_handle);
+            let mut env = Env::new(region_handle, func.is_kernel);
             for (i, p) in func.params.iter().enumerate() {
                 let arg = block
                     .argument(param_base + i)
@@ -427,6 +439,14 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 block.append_operation(func::r#return(&[v], loc));
             }
             region.append_block(block);
+        }
+
+        if func.is_kernel {
+            return Err(LoweringError::at_source(
+                "kernel compilation is not available; a #[kernel] function cannot be lowered as a host function",
+                func.file,
+                func.body.and_then(|b| b.span),
+            ));
         }
 
         // A `private` function carries an explicit `sym_visibility` attribute;
@@ -729,6 +749,13 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         e: &Expr<'tcx>,
     ) -> Result<Option<Value<'c, 'b>>> {
         use ExprKind::*;
+        if env.is_kernel && !matches!(e.kind, Var(_) | Seq(_) | Let { .. } | If(..)) {
+            return Err(LoweringError::at_source(
+                "kernel operation lowering is not available; host operations cannot be emitted in a kernel",
+                self.cur_file.get(),
+                e.span,
+            ));
+        }
         let loc = self.loc();
         match &e.kind {
             // Emitted at full width via the textual APInt path — the value
@@ -877,7 +904,16 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             },
             Cmp(l, op, r) => self.cmp(block, env, l, *op, r).map(Some),
             Cast(x, t) => self.cast(block, env, x, *t),
-            If(c, t, f) => self.lower_if(block, env, c, t, f, e.ty),
+            If(c, t, f) => {
+                if env.is_kernel {
+                    return Err(LoweringError::at_source(
+                        "kernel if lowering is not available; a kernel conditional cannot use host control flow",
+                        self.cur_file.get(),
+                        e.span,
+                    ));
+                }
+                self.lower_if(block, env, c, t, f, e.ty)
+            }
             Seq(items) => {
                 let mut last = None;
                 for item in items.iter() {
@@ -898,6 +934,13 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 args,
                 regional,
             } => {
+                if self.kernel_functions.contains(callee) {
+                    return Err(LoweringError::at_source(
+                        "kernel launching is not available; a host-to-kernel call cannot be lowered as an ordinary function call",
+                        self.cur_file.get(),
+                        e.span,
+                    ));
+                }
                 // A `regional` callee takes the enclosing region as an implicit
                 // leading argument; thread it ahead of the source arguments.
                 let mut operands = Vec::with_capacity(args.len() + usize::from(*regional));
@@ -1250,7 +1293,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let block_args: SmallVec<[(Type<'c>, Location<'c>); 8]> =
             arg_mlir.iter().map(|t| (*t, loc)).collect();
         let body_block = Block::new(&block_args);
-        let mut body_env = Env::new(None);
+        let mut body_env = Env::new(None, false);
         for (i, &(var, ty)) in inputs.iter().enumerate() {
             let arg = body_block
                 .argument(i)

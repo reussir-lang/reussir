@@ -53,6 +53,7 @@ pub struct TraitItem {
 #[derive(Clone, Debug)]
 pub struct TraitMethodItem {
     pub regional: bool,
+    pub kernel: bool,
     pub name: String,
     pub generics: Vec<Generic>,
     pub receiver: RecvForm,
@@ -235,6 +236,7 @@ pub struct Func {
     pub transform_anchor: bool,
     pub is_pub: bool,
     pub regional: bool,
+    pub kernel: bool,
     pub path: String,
     pub generics: Vec<Generic>,
     pub params: Vec<Param>,
