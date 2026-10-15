@@ -1,0 +1,33 @@
+// REQUIRES: stablehlo
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name app --extern core=%t.core.rri --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %s --package-name app --extern core=%t.core.rri --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.mlir
+// RUN: %reussir-opt %t.mlir --inline --symbol-dce -o %t.inline.mlir
+// RUN: %FileCheck %s < %t.inline.mlir
+import core::intrinsic::tensor;
+#[kernel]
+pub fn members(x: Tensor<[f32; 2, 3]>, y: Tensor<[f32; 3, 4]>) -> Tensor<[f32; 2, 4]> {
+    let scalar: f32 = 2.0;
+    let filled: Tensor<[f32; 2, 3]> = tensor::Tensor::fill(scalar);
+    let ramp: Tensor<[f32; 2, 3]> = tensor::Tensor::iota();
+    let a = x.add(filled).sub(ramp).mul(filled).div(filled).rem(filled).neg().abs().min(x).max(x);
+    let pred: Tensor<[bool; 2, 3]> = a.lt(x);
+    let selected = pred.select(a, x);
+    selected.dot(y)
+}
+#[kernel]
+pub fn transpose(x: Tensor<[u64; 3, 2]>) -> Tensor<[u64; 2, 3]> { x.transpose() }
+#[kernel]
+pub fn dynamic(n: i64) -> Tensor<[f32; ?, 2]> {
+    let scalar: f32 = 2.0;
+    { let columns: i64 = 2; tensor::Tensor::dynamic_fill(scalar, (n, columns)) }
+}
+// CHECK-DAG: stablehlo.broadcast_in_dim
+// CHECK-DAG: stablehlo.iota
+// CHECK-DAG: stablehlo.dot_general
+// CHECK-DAG: stablehlo.compare
+// CHECK-DAG: stablehlo.select
+// CHECK-DAG: stablehlo.transpose

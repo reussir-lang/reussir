@@ -49,3 +49,98 @@ pub fn slice<Result, Input, Starts>(input: Input, starts: Starts) -> Result;
 /// replica ids; each source and each target may occur at most once.
 #[lang("core::intrinsic::tensor::collective_permute")]
 pub fn collective_permute<T, Pairs>(input: T, pairs: Pairs) -> T;
+
+// Basic StableHLO tensor operations. No implicit broadcast or dtype conversion.
+#[lang("core::intrinsic::tensor::fill")]
+pub fn fill<Result, Value>(value: Value) -> Result;
+#[lang("core::intrinsic::tensor::dynamic_fill")]
+pub fn dynamic_fill<Result, Value, Shape>(value: Value, shape: Shape) -> Result;
+#[lang("core::intrinsic::tensor::iota")]
+pub fn iota<Result>(axis: i64) -> Result;
+#[lang("core::intrinsic::tensor::dynamic_iota")]
+pub fn dynamic_iota<Result, Shape>(shape: Shape, axis: i64) -> Result;
+#[lang("core::intrinsic::tensor::add")]
+pub fn add<T>(lhs: T, rhs: T) -> T;
+#[lang("core::intrinsic::tensor::sub")]
+pub fn sub<T>(lhs: T, rhs: T) -> T;
+#[lang("core::intrinsic::tensor::mul")]
+pub fn mul<T>(lhs: T, rhs: T) -> T;
+#[lang("core::intrinsic::tensor::div")]
+pub fn div<T>(lhs: T, rhs: T) -> T;
+#[lang("core::intrinsic::tensor::rem")]
+pub fn rem<T>(lhs: T, rhs: T) -> T;
+#[lang("core::intrinsic::tensor::min")]
+pub fn min<T>(lhs: T, rhs: T) -> T;
+#[lang("core::intrinsic::tensor::max")]
+pub fn max<T>(lhs: T, rhs: T) -> T;
+#[lang("core::intrinsic::tensor::neg")]
+pub fn neg<T>(value: T) -> T;
+#[lang("core::intrinsic::tensor::abs")]
+pub fn abs<T>(value: T) -> T;
+#[lang("core::intrinsic::tensor::eq")]
+pub fn eq<Result, Left, Right>(lhs: Left, rhs: Right) -> Result;
+#[lang("core::intrinsic::tensor::ne")]
+pub fn ne<Result, Left, Right>(lhs: Left, rhs: Right) -> Result;
+#[lang("core::intrinsic::tensor::lt")]
+pub fn lt<Result, Left, Right>(lhs: Left, rhs: Right) -> Result;
+#[lang("core::intrinsic::tensor::le")]
+pub fn le<Result, Left, Right>(lhs: Left, rhs: Right) -> Result;
+#[lang("core::intrinsic::tensor::gt")]
+pub fn gt<Result, Left, Right>(lhs: Left, rhs: Right) -> Result;
+#[lang("core::intrinsic::tensor::ge")]
+pub fn ge<Result, Left, Right>(lhs: Left, rhs: Right) -> Result;
+#[lang("core::intrinsic::tensor::dot")]
+pub fn dot<Result, Left, Right>(lhs: Left, rhs: Right) -> Result;
+#[lang("core::intrinsic::tensor::select")]
+pub fn select<Predicate, T>(predicate: Predicate, lhs: T, rhs: T) -> T;
+#[lang("core::intrinsic::tensor::transpose")]
+pub fn transpose<Result, Input>(input: Input) -> Result;
+
+impl<T> Tensor<T> {
+    /// Fill a statically shaped tensor. Annotate the scalar dtype when needed.
+    #[kernel]
+    pub fn fill<V>(value: V) -> Self { core::intrinsic::tensor::fill<Self>(value) }
+    /// Enumerate along axis zero. Use the free iota intrinsic for another axis.
+    #[kernel]
+    pub fn iota() -> Self { core::intrinsic::tensor::iota<Self>(0) }
+    #[kernel]
+    pub fn dynamic_fill<V, S>(value: V, shape: S) -> Self { core::intrinsic::tensor::dynamic_fill<Self>(value, shape) }
+    #[kernel]
+    pub fn dynamic_iota<S>(shape: S) -> Self { core::intrinsic::tensor::dynamic_iota<Self>(shape, 0) }
+    #[kernel]
+    pub fn add(self: Self, rhs: Self) -> Self { core::intrinsic::tensor::add(self, rhs) }
+    #[kernel]
+    pub fn sub(self: Self, rhs: Self) -> Self { core::intrinsic::tensor::sub(self, rhs) }
+    #[kernel]
+    pub fn mul(self: Self, rhs: Self) -> Self { core::intrinsic::tensor::mul(self, rhs) }
+    #[kernel]
+    pub fn div(self: Self, rhs: Self) -> Self { core::intrinsic::tensor::div(self, rhs) }
+    #[kernel]
+    pub fn rem(self: Self, rhs: Self) -> Self { core::intrinsic::tensor::rem(self, rhs) }
+    #[kernel]
+    pub fn min(self: Self, rhs: Self) -> Self { core::intrinsic::tensor::min(self, rhs) }
+    #[kernel]
+    pub fn max(self: Self, rhs: Self) -> Self { core::intrinsic::tensor::max(self, rhs) }
+    #[kernel]
+    pub fn neg(self: Self) -> Self { core::intrinsic::tensor::neg(self) }
+    #[kernel]
+    pub fn abs(self: Self) -> Self { core::intrinsic::tensor::abs(self) }
+    #[kernel]
+    pub fn eq<R>(self: Self, rhs: Self) -> R { core::intrinsic::tensor::eq<R>(self, rhs) }
+    #[kernel]
+    pub fn ne<R>(self: Self, rhs: Self) -> R { core::intrinsic::tensor::ne<R>(self, rhs) }
+    #[kernel]
+    pub fn lt<R>(self: Self, rhs: Self) -> R { core::intrinsic::tensor::lt<R>(self, rhs) }
+    #[kernel]
+    pub fn le<R>(self: Self, rhs: Self) -> R { core::intrinsic::tensor::le<R>(self, rhs) }
+    #[kernel]
+    pub fn gt<R>(self: Self, rhs: Self) -> R { core::intrinsic::tensor::gt<R>(self, rhs) }
+    #[kernel]
+    pub fn ge<R>(self: Self, rhs: Self) -> R { core::intrinsic::tensor::ge<R>(self, rhs) }
+    #[kernel]
+    pub fn dot<R, O>(self: Self, rhs: R) -> O { core::intrinsic::tensor::dot<O>(self, rhs) }
+    #[kernel]
+    pub fn transpose<O>(self: Self) -> O { core::intrinsic::tensor::transpose<O>(self) }
+    #[kernel]
+    pub fn select<V>(self: Self, lhs: V, rhs: V) -> V { core::intrinsic::tensor::select(self, lhs, rhs) }
+}

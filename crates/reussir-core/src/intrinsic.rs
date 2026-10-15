@@ -300,12 +300,10 @@ impl ArrayFn {
     }
 }
 
-/// A built-in operation on a transient tensor (`TyKind::Tensor`), spelled
-/// `core::intrinsic::tensor::<fn>`. Like [`ArrayFn`], these carry their own
-/// HIR/MIR node (`ExprKind::TensorOp`). The boundary contract
-/// (docs/design/tensor-kernels.md): `of` roots a reference to the backing
-/// array for the tensor's lifetime, `materialize` is the only way a
-/// tensor's data escapes back into the rc world.
+/// A tensor operation spelled `core::intrinsic::tensor::<fn>` and represented
+/// by the same `TensorOp` node in HIR and MIR. Kernel operations are validated
+/// against the pinned StableHLO semantics; the original host boundary operations
+/// retain their separate confinement and lowering contract.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum TensorFn {
     /// `of(a)`: view an array as a tensor. Value operands: `[a]`; consumes
@@ -324,9 +322,55 @@ pub enum TensorFn {
     CollectivePermute,
     /// Resolve a single-result StableHLO future inside a kernel.
     AsyncDone,
+    Fill,
+    DynamicFill,
+    Iota,
+    DynamicIota,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Neg,
+    Abs,
+    Min,
+    Max,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Select,
+    Dot,
+    Transpose,
 }
 
 impl TensorFn {
+    pub fn is_kernel(self) -> bool {
+        !matches!(self, Self::Of | Self::Materialize | Self::Dim)
+    }
+    pub fn is_basic(self) -> bool {
+        self.is_kernel()
+            && !matches!(
+                self,
+                Self::DynamicSlice | Self::Slice | Self::CollectivePermute | Self::AsyncDone
+            )
+    }
+    pub fn is_comparison(self) -> bool {
+        matches!(
+            self,
+            Self::Eq | Self::Ne | Self::Lt | Self::Le | Self::Gt | Self::Ge
+        )
+    }
+    pub fn arity(self) -> usize {
+        match self {
+            Self::Fill | Self::Iota | Self::Neg | Self::Abs | Self::Transpose => 1,
+            Self::Select => 3,
+            _ => 2,
+        }
+    }
+
     /// Parse a surface / textual-IR name.
     pub fn parse(name: &str) -> Option<TensorFn> {
         match name {
@@ -337,6 +381,28 @@ impl TensorFn {
             "slice" => Some(TensorFn::Slice),
             "collective_permute" => Some(TensorFn::CollectivePermute),
             "async_done" => Some(TensorFn::AsyncDone),
+            "fill" => Some(TensorFn::Fill),
+            "dynamic_fill" => Some(TensorFn::DynamicFill),
+            "iota" => Some(TensorFn::Iota),
+            "dynamic_iota" => Some(TensorFn::DynamicIota),
+            "add" => Some(TensorFn::Add),
+            "sub" => Some(TensorFn::Sub),
+            "mul" => Some(TensorFn::Mul),
+            "div" => Some(TensorFn::Div),
+            "rem" => Some(TensorFn::Rem),
+            "neg" => Some(TensorFn::Neg),
+            "abs" => Some(TensorFn::Abs),
+            "min" => Some(TensorFn::Min),
+            "max" => Some(TensorFn::Max),
+            "eq" => Some(TensorFn::Eq),
+            "ne" => Some(TensorFn::Ne),
+            "lt" => Some(TensorFn::Lt),
+            "le" => Some(TensorFn::Le),
+            "gt" => Some(TensorFn::Gt),
+            "ge" => Some(TensorFn::Ge),
+            "select" => Some(TensorFn::Select),
+            "dot" => Some(TensorFn::Dot),
+            "transpose" => Some(TensorFn::Transpose),
             _ => None,
         }
     }
@@ -351,6 +417,28 @@ impl TensorFn {
             TensorFn::Slice => "slice",
             TensorFn::CollectivePermute => "collective_permute",
             TensorFn::AsyncDone => "async_done",
+            TensorFn::Fill => "fill",
+            TensorFn::DynamicFill => "dynamic_fill",
+            TensorFn::Iota => "iota",
+            TensorFn::DynamicIota => "dynamic_iota",
+            TensorFn::Add => "add",
+            TensorFn::Sub => "sub",
+            TensorFn::Mul => "mul",
+            TensorFn::Div => "div",
+            TensorFn::Rem => "rem",
+            TensorFn::Neg => "neg",
+            TensorFn::Abs => "abs",
+            TensorFn::Min => "min",
+            TensorFn::Max => "max",
+            TensorFn::Eq => "eq",
+            TensorFn::Ne => "ne",
+            TensorFn::Lt => "lt",
+            TensorFn::Le => "le",
+            TensorFn::Gt => "gt",
+            TensorFn::Ge => "ge",
+            TensorFn::Select => "select",
+            TensorFn::Dot => "dot",
+            TensorFn::Transpose => "transpose",
         }
     }
 }

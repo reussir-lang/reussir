@@ -1,0 +1,54 @@
+// REQUIRES: stablehlo
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
+// RUN: diff %t.hir %t.round.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.mlir
+// RUN: %reussir-opt %t.mlir -o /dev/null
+// RUN: %FileCheck %s < %t.mlir
+import core::intrinsic::tensor;
+#[kernel]
+fn twice<T>(x: Tensor<T>) -> Tensor<T> { tensor::add(x, x) }
+#[kernel]
+pub fn basic(x: Tensor<[f32; 2, 3]>, y: Tensor<[f32; 3, 4]>) -> (Tensor<[f32; 2, 4]>, Tensor<[f32; 3, 2]>, Tensor<[bool; 2, 3]>) {
+    let filled: Tensor<[f32; 2, 3]> = tensor::fill(2.0);
+    let ramp = tensor::iota<Tensor<[f32; 2, 3]>>(1);
+    let value = tensor::max(tensor::abs(-((x + filled) * ramp - filled) / filled), x % filled);
+    let pred = value >= x;
+    (tensor::dot(tensor::select(pred, twice(value), x), y), tensor::transpose(value), pred)
+}
+#[kernel]
+pub fn dynamic(n: Tensor<i64>) -> (Tensor<[f32; ?, 3]>, Tensor<[i64; ?, 3]>) {
+    (tensor::dynamic_fill(1.0, (n, 3)), tensor::dynamic_iota((n, 3), 1))
+}
+#[kernel]
+pub fn degenerate() -> (Tensor<f32>, Tensor<[bool; 0, 3]>, Tensor<[u64; 0]>) {
+    (tensor::fill(2.0), tensor::fill(true), tensor::iota(0))
+}
+// CHECK-DAG: stablehlo.broadcast_in_dim
+// CHECK-DAG: stablehlo.iota
+// CHECK-DAG: stablehlo.add
+// CHECK-DAG: stablehlo.multiply
+// CHECK-DAG: stablehlo.subtract
+// CHECK-DAG: stablehlo.divide
+// CHECK-DAG: stablehlo.remainder
+// CHECK-DAG: stablehlo.negate
+// CHECK-DAG: stablehlo.abs
+// CHECK-DAG: stablehlo.maximum
+// CHECK-DAG: stablehlo.compare
+// CHECK-DAG: stablehlo.select
+// CHECK-DAG: stablehlo.dot_general
+// CHECK-DAG: stablehlo.transpose
+// CHECK-DAG: stablehlo.dynamic_broadcast_in_dim
+// CHECK-DAG: stablehlo.dynamic_iota
+
+#[kernel]
+pub fn comparisons(x: Tensor<[u64; 2]>, y: Tensor<[u64; 2]>) -> (Tensor<[bool; 2]>, Tensor<[bool; 2]>, Tensor<[bool; 2]>, Tensor<[bool; 2]>, Tensor<[bool; 2]>, Tensor<[bool; 2]>) {
+    (x == y, x != y, x < y, x <= y, x > y, x >= y)
+}
+#[kernel]
+pub fn scalar_predicate(c: Tensor<bool>, x: Tensor<[i32; 2]>, y: Tensor<[i32; 2]>) -> Tensor<[i32; 2]> {
+    tensor::select(c, tensor::min(x, y), tensor::max(x, y))
+}

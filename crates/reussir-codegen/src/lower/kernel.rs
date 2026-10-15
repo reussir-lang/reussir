@@ -545,7 +545,11 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
             }
             ExprKind::Async(capture) => self.async_region(block, env, &capture, e.ty, e.span)?,
             ExprKind::TensorOp { op, args } => {
-                self.async_tensor_op(block, env, op, args, e.ty, e.span)?
+                if op.is_basic() {
+                    self.basic_tensor_op(block, env, op, args, e.ty, e.span)?
+                } else {
+                    self.async_tensor_op(block, env, op, args, e.ty, e.span)?
+                }
             }
             ExprKind::If(condition, then, otherwise) => {
                 self.if_expr(block, env, condition, then, otherwise, e.ty, e.span)?
@@ -998,6 +1002,189 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
             vec![region],
             span,
         )
+    }
+
+    fn basic_tensor_op<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut KernelEnv<'c, 'b>,
+        op: TensorFn,
+        args: &[Expr<'tcx>],
+        result: Ty<'tcx>,
+        span: Option<Span>,
+    ) -> Result<Vec<Value<'c, 'b>>> {
+        use TensorFn::*;
+        reussir_core::tensor_check::mir(op, result, args).map_err(|e| self.error(e, span))?;
+        let mut attrs = Vec::new();
+        let mut values = Vec::new();
+        let results = self.types(result)?;
+        let int_attr = |name: &str, value: i64| -> Result<_> {
+            Ok((
+                Identifier::new(self.context, name),
+                Attribute::parse(self.context, &format!("{value} : i64"))
+                    .ok_or_else(|| self.error("invalid integer attribute", span))?,
+            ))
+        };
+        let name = match op {
+            Fill | DynamicFill => {
+                values.extend(self.expr(block, env, &args[0])?);
+                attrs.push((
+                    Identifier::new(self.context, "broadcast_dimensions"),
+                    DenseI64ArrayAttribute::new(self.context, &[]).into(),
+                ));
+                if op == DynamicFill {
+                    values.push(self.tensor_shape(block, env, &args[1], span)?);
+                    "stablehlo.dynamic_broadcast_in_dim"
+                } else {
+                    "stablehlo.broadcast_in_dim"
+                }
+            }
+            Iota | DynamicIota => {
+                let axis = reussir_core::tensor_check::mir_axis(op, result, args)
+                    .map_err(|e| self.error(e, span))?;
+                attrs.push(int_attr("iota_dimension", axis)?);
+                if op == DynamicIota {
+                    values.push(self.tensor_shape(block, env, &args[0], span)?);
+                    "stablehlo.dynamic_iota"
+                } else {
+                    "stablehlo.iota"
+                }
+            }
+            _ => {
+                for arg in args {
+                    values.extend(self.expr(block, env, arg)?);
+                }
+                match op {
+                    Add => "stablehlo.add",
+                    Sub => "stablehlo.subtract",
+                    Mul => "stablehlo.multiply",
+                    Div => "stablehlo.divide",
+                    Rem => "stablehlo.remainder",
+                    Neg => "stablehlo.negate",
+                    Abs => "stablehlo.abs",
+                    Min => "stablehlo.minimum",
+                    Max => "stablehlo.maximum",
+                    Select => "stablehlo.select",
+                    Dot => {
+                        let TyKind::Tensor { dims, .. } = args[0].ty.kind() else {
+                            return err("dot requires Tensor operands");
+                        };
+                        let text = format!(
+                            "#stablehlo.dot<lhs_batching_dimensions = [], rhs_batching_dimensions = [], lhs_contracting_dimensions = [{}], rhs_contracting_dimensions = [0]>",
+                            dims.len() - 1
+                        );
+                        attrs.push((
+                            Identifier::new(self.context, "dot_dimension_numbers"),
+                            Attribute::parse(self.context, &text)
+                                .ok_or_else(|| self.error("invalid dot dimension numbers", span))?,
+                        ));
+                        "stablehlo.dot_general"
+                    }
+                    Transpose => {
+                        attrs.push((
+                            Identifier::new(self.context, "permutation"),
+                            DenseI64ArrayAttribute::new(self.context, &[1, 0]).into(),
+                        ));
+                        "stablehlo.transpose"
+                    }
+                    Eq | Ne | Lt | Le | Gt | Ge => {
+                        let direction = match op {
+                            Eq => "EQ",
+                            Ne => "NE",
+                            Lt => "LT",
+                            Le => "LE",
+                            Gt => "GT",
+                            Ge => "GE",
+                            _ => unreachable!(),
+                        };
+                        let TyKind::Tensor { elem, .. } = args[0].ty.kind() else {
+                            return err("comparison requires Tensor operands");
+                        };
+                        let comparison = match elem.kind() {
+                            TyKind::Fp(_) => "FLOAT",
+                            TyKind::Int(IntTy::Unsigned(_)) | TyKind::Bool => "UNSIGNED",
+                            _ => "SIGNED",
+                        };
+                        for (name, value) in [
+                            ("comparison_direction", direction),
+                            ("compare_type", comparison),
+                        ] {
+                            let kind = if name == "compare_type" {
+                                "comparison_type"
+                            } else {
+                                name
+                            };
+                            let attr = Attribute::parse(
+                                self.context,
+                                &format!("#stablehlo<{kind} {value}>"),
+                            )
+                            .ok_or_else(|| {
+                                self.error("invalid tensor comparison attribute", span)
+                            })?;
+                            attrs.push((Identifier::new(self.context, name), attr));
+                        }
+                        "stablehlo.compare"
+                    }
+                    _ => return err("not a basic tensor operation"),
+                }
+            }
+        };
+        self.operation(block, name, &values, &results, &attrs, vec![], span)
+    }
+
+    /// Assemble the source shape product into StableHLO's rank-one i64 value.
+    /// Source dimensions remain independent rank-zero values until this boundary.
+    fn tensor_shape<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut KernelEnv<'c, 'b>,
+        shape: &Expr<'tcx>,
+        span: Option<Span>,
+    ) -> Result<Value<'c, 'b>> {
+        let values = self.expr(block, env, shape)?;
+        let element: Type<'c> = IntegerType::new(self.context, 64).into();
+        let result: Type<'c> = RankedTensorType::new(&[values.len() as u64], element, None).into();
+        if values.is_empty() {
+            let value = DenseElementsAttribute::i64_values(result, &[]);
+            return Ok(self.operation(
+                block,
+                "stablehlo.constant",
+                &[],
+                &[result],
+                &[(Identifier::new(self.context, "value"), value.into())],
+                vec![],
+                span,
+            )?[0]);
+        }
+        let vector: Type<'c> = RankedTensorType::new(&[1], element, None).into();
+        let mut pieces = Vec::new();
+        for value in values {
+            pieces.push(
+                self.operation(
+                    block,
+                    "stablehlo.reshape",
+                    &[value],
+                    &[vector],
+                    &[],
+                    vec![],
+                    span,
+                )?[0],
+            );
+        }
+        if pieces.len() == 1 {
+            return Ok(pieces[0]);
+        }
+        let dimension = Attribute::parse(self.context, "0 : i64")
+            .ok_or_else(|| self.error("invalid concatenate dimension", span))?;
+        Ok(self.operation(
+            block,
+            "stablehlo.concatenate",
+            &pieces,
+            &[result],
+            &[(Identifier::new(self.context, "dimension"), dimension)],
+            vec![],
+            span,
+        )?[0])
     }
 
     pub(super) fn async_tensor_op<'b>(
