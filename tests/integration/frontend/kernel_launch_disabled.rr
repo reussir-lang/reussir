@@ -1,5 +1,5 @@
 // UNSUPPORTED: ifrt
 // RUN: not %rrc %s --emit mlir -o /dev/null 2>&1 | %FileCheck %s
 #[kernel] fn identity(x: Tensor<f32>) -> Tensor<f32> { x }
-pub fn run(x: DevArray<f32>) -> DevArray<f32> { launch(identity, x) }
+pub fn run(x: DevArray<f32>) -> DevArray<f32> { core::intrinsic::pjrt::launch(identity, x) }
 // CHECK: kernel launch requires REUSSIR_ENABLE_OPENXLA

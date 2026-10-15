@@ -19,17 +19,17 @@ pub struct [value] Config {}
     if x.1.1 { identity(x.0) } else { x.0 }
 }
 pub fn run<T>(x: DevArray<T>, condition: DevArray<bool>) -> DevArray<T, Config> {
-    launch<Config>(choose<T>, (x, ((), condition)))
+    core::intrinsic::pjrt::launch<Config>(choose<T>, (x, ((), condition)))
 }
 pub fn unsigned(x: DevArray<u64>, condition: DevArray<bool>) -> DevArray<u64, Config> {
     run(x, condition)
 }
-pub fn default(x: DevArray<f32>) -> DevArray<f32> { launch(identity, x) }
+pub fn default(x: DevArray<f32>) -> DevArray<f32> { core::intrinsic::pjrt::launch(identity, x) }
 pub fn reuse(x: DevArray<f32>) -> (DevArray<f32>, DevArray<f32>) {
-    (launch(identity, x), launch(identity, x))
+    (core::intrinsic::pjrt::launch(identity, x), core::intrinsic::pjrt::launch(identity, x))
 }
 pub fn launch_closure(x: DevArray<f32>) -> DevArray<f32> {
-    let f = |a: DevArray<f32>| launch(identity, a);
+    let f = |a: DevArray<f32>| core::intrinsic::pjrt::launch(identity, a);
     f(x)
 }
 // CHECK: module @_reussir_launch_

@@ -4,4 +4,4 @@ pub struct [value] Config {}
 #[kernel] fn private_helper<T>(x: T) -> T { x }
 #[kernel] pub fn identity<T>(x: Tensor<T>) -> Tensor<T> { private_helper(x) }
 #[kernel] pub fn concrete(x: Tensor<[f32; 4]>) -> Tensor<[f32; 4]> { private_helper(x) }
-pub fn generic_launch<T>(x: DevArray<T>) -> DevArray<T, Config> { launch<Config>(identity<T>, x) }
+pub fn generic_launch<T>(x: DevArray<T>) -> DevArray<T, Config> { core::intrinsic::pjrt::launch<Config>(identity<T>, x) }

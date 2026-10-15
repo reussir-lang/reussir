@@ -5,15 +5,15 @@
 // RUN: not %rrc %t.host.mir --emit mlir -o /dev/null 2>&1 | %FileCheck %s --check-prefix=HOST
 // RUN: echo 'record @P: value placement "#reussir.target<devices = [0]>" launch "optimization=9,donation=auto" struct P { };' > %t.config.mir
 // RUN: not %rrc %t.config.mir --emit mir -o /dev/null 2>&1 | %FileCheck %s --check-prefix=CONFIG
-// RUN: echo '#[kernel] fn k(x: Tensor<f32>) -> Tensor<f32> { k(x) } pub fn f(x: DevArray<f32>) -> DevArray<f32> { launch(k, x) }' > %t.recursive.rr
+// RUN: echo '#[kernel] fn k(x: Tensor<f32>) -> Tensor<f32> { k(x) } pub fn f(x: DevArray<f32>) -> DevArray<f32> { core::intrinsic::pjrt::launch(k, x) }' > %t.recursive.rr
 // RUN: not %rrc %t.recursive.rr --emit mlir -o /dev/null 2>&1 | %FileCheck %s --check-prefix=RECURSIVE
-// RUN: echo '#[placement(devices = "1")] pub struct [value] P {} #[kernel] fn k(x: Tensor<f32>) -> Tensor<f32> { x } pub fn f(x: DevArray<f32, P>) -> DevArray<f32> { launch(k, x) }' > %t.devices.rr
+// RUN: echo '#[placement(devices = "1")] pub struct [value] P {} #[kernel] fn k(x: Tensor<f32>) -> Tensor<f32> { x } pub fn f(x: DevArray<f32, P>) -> DevArray<f32> { core::intrinsic::pjrt::launch(k, x) }' > %t.devices.rr
 // RUN: not %rrc %t.devices.rr --emit mlir -o /dev/null 2>&1 | %FileCheck %s --check-prefix=DEVICES
 // DTYPE: launch buffer dtype, rank, shape, or product structure does not match
 // HOST: launch requires a kernel definition
 // CONFIG: error:
 // RECURSIVE: recursive kernel calls cannot be launched
 // DEVICES: launch input and output placements must use the same ordered devices
-// RUN: echo '#[placement(devices = "0,1", sharding = "#ifrt.sharding_param<2 to [0] on 2>")] pub struct [value] P {} #[kernel] fn k(x: Tensor<[f32; ?]>) -> Tensor<[f32; ?]> { x } pub fn f(x: DevArray<[f32; ?], P>) -> DevArray<[f32; ?], P> { launch<P>(k, x) }' > %t.dynamic.rr
+// RUN: echo '#[placement(devices = "0,1", sharding = "#ifrt.sharding_param<2 to [0] on 2>")] pub struct [value] P {} #[kernel] fn k(x: Tensor<[f32; ?]>) -> Tensor<[f32; ?]> { x } pub fn f(x: DevArray<[f32; ?], P>) -> DevArray<[f32; ?], P> { core::intrinsic::pjrt::launch<P>(k, x) }' > %t.dynamic.rr
 // RUN: not %rrc %t.dynamic.rr --emit mlir -o /dev/null 2>&1 | %FileCheck %s --check-prefix=DYNAMIC
 // DYNAMIC: partitioned dynamic launch results require an explicit logical result-shape contract

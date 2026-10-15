@@ -80,7 +80,6 @@ fn is_expr_kind(kind: SyntaxKind) -> bool {
             | MatchExpr
             | RegionalExpr
             | AsyncExpr
-            | LaunchExpr
             | LambdaExpr
             | BinExpr
             | PrefixExpr
@@ -714,20 +713,6 @@ impl Emitter<'_> {
                     })
                     .collect();
                 tagged("Match", json!([self.expr(scrutinee), arms]))
-            }
-            LaunchExpr => {
-                let target = child_node(node, LaunchTarget).expect("launch target");
-                let path = child_node(target, Path).expect("kernel path");
-                let args: Vec<Value> = expr_children(node).map(|e| self.expr(e)).collect();
-                tagged(
-                    "LaunchExpr",
-                    json!({
-                        "placement": self.type_args(node),
-                        "kernel": self.path(path),
-                        "typeArgs": self.type_args(target),
-                        "args": args,
-                    }),
-                )
             }
             AsyncExpr => {
                 let body = expr_children(node).next().expect("async body");

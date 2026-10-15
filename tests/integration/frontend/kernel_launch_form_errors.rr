@@ -1,0 +1,12 @@
+// RUN: %not %rrc %s --emit hir -o /dev/null 2>&1 | %FileCheck %s
+#[kernel] fn identity<T>(x: Tensor<T>) -> Tensor<T> { x }
+fn empty() { core::intrinsic::pjrt::launch(); }
+fn closure(x: DevArray<f32>) { core::intrinsic::pjrt::launch(|x| x, x); }
+fn constructor(x: DevArray<f32>) { core::intrinsic::pjrt::launch(identity<f32> {}, x); }
+fn call(x: DevArray<f32>) { core::intrinsic::pjrt::launch(identity<f32>(x), x); }
+fn local(x: DevArray<f32>) { let k = |x| x; core::intrinsic::pjrt::launch(k, x); }
+fn unimported(x: DevArray<f32>) { launch(identity<f32>, x); }
+// CHECK-DAG: launch requires a kernel reference as its first argument
+// CHECK-DAG: launch requires a named kernel reference, optionally with type arguments
+// CHECK-DAG: launch requires a named kernel function, not a local value
+// CHECK-DAG: unknown function `launch`

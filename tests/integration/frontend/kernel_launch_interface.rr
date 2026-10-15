@@ -12,9 +12,9 @@
 // RUN: %rrc %t.mir --emit mlir-llvm -O aggressive -o %t.llvm
 import dep::identity as kernel;
 pub fn imported(x: DevArray<f32>) -> DevArray<f32, dep::Config> {
-    launch<dep::Config>(kernel<f32>, x)
+    core::intrinsic::pjrt::launch<dep::Config>(kernel<f32>, x)
 }
-pub fn concrete(x: DevArray<[f32; 4]>) -> DevArray<[f32; 4]> { launch(dep::concrete, x) }
+pub fn concrete(x: DevArray<[f32; 4]>) -> DevArray<[f32; 4]> { core::intrinsic::pjrt::launch(dep::concrete, x) }
 pub fn host_generic(x: DevArray<u64>) -> DevArray<u64, dep::Config> { dep::generic_launch(x) }
 // RRI: launch "optimization=1,donation=none"
 // RRI: fn #dep::concrete

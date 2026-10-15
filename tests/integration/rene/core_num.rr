@@ -42,3 +42,5 @@
 
 // IMPLS-DAG: #[lang("tensor_future")] pub [shared] struct #core::intrinsic::tensor::Future<
 // IMPLS-DAG: #[lang("tensor_token")] pub [shared] struct #core::intrinsic::tensor::Token
+
+// RRI-DAG: #[lang("core::intrinsic::pjrt::launch")] pub fn #core::intrinsic::pjrt::launch<

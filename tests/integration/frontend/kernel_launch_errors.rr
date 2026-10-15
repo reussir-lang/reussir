@@ -3,16 +3,16 @@
 #[kernel] fn pair(x: Tensor<f32>) -> (Tensor<f32>, Tensor<f32>) { (x, x) }
 #[kernel] fn token(x: Token) -> Token { x }
 fn host(x: DevArray<f32>) -> DevArray<f32> { x }
-fn bad_host(x: DevArray<f32>) { launch(host, x) }
-fn bad_scalar(x: f32) { launch(identity, x) }
-fn bad_pair(x: DevArray<f32>) { launch(pair, x) }
-fn bad_arity(x: DevArray<f32>) { launch(identity, x, x) }
-fn bad_dtype(x: DevArray<i32>) { launch(identity, x) }
-fn bad_config(x: DevArray<f32>) { launch<i32>(identity, x) }
-#[kernel] fn nested(x: Tensor<f32>) -> Tensor<f32> { launch(identity, x) }
+fn bad_host(x: DevArray<f32>) { core::intrinsic::pjrt::launch(host, x) }
+fn bad_scalar(x: f32) { core::intrinsic::pjrt::launch(identity, x) }
+fn bad_pair(x: DevArray<f32>) { core::intrinsic::pjrt::launch(pair, x) }
+fn bad_arity(x: DevArray<f32>) { core::intrinsic::pjrt::launch(identity, x, x) }
+fn bad_dtype(x: DevArray<i32>) { core::intrinsic::pjrt::launch(identity, x) }
+fn bad_config(x: DevArray<f32>) { core::intrinsic::pjrt::launch<i32>(identity, x) }
+#[kernel] fn nested(x: Tensor<f32>) -> Tensor<f32> { core::intrinsic::pjrt::launch(identity, x) }
 // CHECK-DAG: launch target must be a #[kernel] function
 // CHECK-DAG: launch arguments must be DevArray buffers, tuples of buffers, or unit
 // CHECK-DAG: launch requires exactly one Tensor result
 // CHECK-DAG: launch expects 1 argument(s), got 2
 // CHECK-DAG: launch configuration must be a placement marker type
-// CHECK-DAG: host operations are not allowed in a kernel
+// CHECK-DAG: host intrinsics are not allowed in a kernel

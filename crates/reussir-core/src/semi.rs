@@ -1303,6 +1303,46 @@ mod tests {
     }
 
     #[test]
+    fn launch_intrinsic_respects_ordinary_name_resolution() {
+        check(
+            r#"
+            #[kernel] fn identity<T>(x: Tensor<T>) -> Tensor<T> { x }
+            fn launch(x: i32) -> i32 { x + 1 }
+            fn ordinary() -> i32 { let execute = |x: i32| x; launch(execute(2)) }
+            fn device(x: DevArray<f32>) -> DevArray<f32> {
+                core::intrinsic::pjrt::launch(identity<f32>, x)
+            }
+            "#,
+            |elab, _| {
+                assert!(format!("{:?}", function(elab, "device").body).contains("Launch"));
+                assert!(!format!("{:?}", function(elab, "ordinary").body).contains("Launch"));
+            },
+        );
+    }
+
+    #[test]
+    fn launch_intrinsic_rejects_values_and_constructor_syntax() {
+        for (argument, expected) in [
+            ("", "requires a kernel reference"),
+            ("|x| x", "requires a named kernel reference"),
+            ("identity<f32> {}", "requires a named kernel reference"),
+            ("identity<f32>(x)", "requires a named kernel reference"),
+        ] {
+            let source = format!(
+                "#[kernel] fn identity<T>(x: Tensor<T>) -> Tensor<T> {{ x }} \
+                 fn f(x: DevArray<f32>) {{ core::intrinsic::pjrt::launch({argument}); }}"
+            );
+            elaborate_source(&source, |elab| {
+                assert!(
+                    elab.reports.iter().any(|r| r.message.contains(expected)),
+                    "{:#?}",
+                    elab.reports
+                );
+            });
+        }
+    }
+
+    #[test]
     fn method_call_dispatches_when_field_misses() {
         check(
             "pub struct P { pub x: i64 }\n\

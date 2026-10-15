@@ -360,25 +360,6 @@ impl Parser<'_> {
             WhileKw => Some(self.while_expr()),
             LetKw => Some(self.let_expr()),
             MatchKw => Some(self.match_expr()),
-            LaunchKw => {
-                let m = self.start();
-                self.bump();
-                self.try_type_arg_list();
-                self.expect(LParen);
-                let target = self.start();
-                self.path();
-                self.try_type_arg_list();
-                target.complete(self, LaunchTarget);
-                while self.at(Comma) {
-                    self.bump();
-                    if self.at(RParen) {
-                        break;
-                    }
-                    self.expr();
-                }
-                self.expect(RParen);
-                Some(m.complete(self, LaunchExpr))
-            }
             AsyncKw if self.nth(1) == LBrace => {
                 let m = self.start();
                 self.bump();

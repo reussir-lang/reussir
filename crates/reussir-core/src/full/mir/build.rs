@@ -1076,10 +1076,10 @@ mod tests {
                 if x.1.1 { helper(x.0) } else { x.0 }
             }
             pub fn run<T>(x: DevArray<T>, c: DevArray<bool>) -> DevArray<T, Config> {
-                launch<Config>(nested<T>, (x, ((), c)))
+                core::intrinsic::pjrt::launch<Config>(nested<T>, (x, ((), c)))
             }
             pub fn scalar(x: DevArray<u32>, c: DevArray<bool>) -> DevArray<u32, Config> { run(x, c) }
-            pub fn default(x: DevArray<f32>) -> DevArray<f32> { launch(helper, x) }
+            pub fn default(x: DevArray<f32>) -> DevArray<f32> { core::intrinsic::pjrt::launch(helper, x) }
 "#,
         );
     }

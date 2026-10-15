@@ -395,9 +395,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             surface::ExprKind::UnaryOpExpr(op, e) => self.infer_unop(*op, e, span),
             surface::ExprKind::Cast(ty, e) => self.infer_cast(ty, e, span),
             surface::ExprKind::FuncCallExpr(fc) => self.infer_func_call(fc, span),
-            surface::ExprKind::LaunchExpr(placement, call) => {
-                self.infer_launch(placement, call, span)
-            }
             surface::ExprKind::CtorCallExpr(cc) => self.infer_ctor_call(cc, span),
             surface::ExprKind::CallExpr(callee, args) => {
                 // `e.f(x)` is a postfix call: the method wins when one
@@ -1297,6 +1294,32 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         )
     }
 
+    /// A special intrinsic form: the first argument names a kernel rather than
+    /// evaluating to a host closure. Ordinary path/import resolution selects
+    /// the intrinsic before this syntax is interpreted.
+    fn infer_launch_intrinsic(&mut self, fc: &surface::FuncCall, span: Option<Span>) -> Expr<'tcx> {
+        let Some(target) = fc.args.first() else {
+            self.error(
+                span,
+                "launch requires a kernel reference as its first argument",
+            );
+            return self.poison(span);
+        };
+        let Some((name, ty_args)) = target.function_reference() else {
+            self.error(
+                Some(target.span()),
+                "launch requires a named kernel reference, optionally with type arguments",
+            );
+            return self.poison(span);
+        };
+        let kernel = surface::FuncCall {
+            name,
+            ty_args,
+            args: fc.args.iter().skip(1).cloned().collect(),
+        };
+        self.infer_launch(&fc.ty_args, &kernel, span)
+    }
+
     fn infer_launch(
         &mut self,
         placement: &[Option<surface::Type>],
@@ -1311,12 +1334,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return self.poison(span);
         }
         if placement.len() > 1 {
-            self.error(span, "launch takes at most one placement type argument");
+            self.error(span, "launch takes at most one configuration type argument");
         }
         let placement = match placement.first() {
             Some(Some(p)) => self.eval_type(p),
             Some(None) => {
-                self.error(span, "launch placement must be explicit or omitted");
+                self.error(span, "launch configuration must be explicit or omitted");
                 self.tcx.mk(TyKind::DefaultPlacement)
             }
             None => self.tcx.mk(TyKind::DefaultPlacement),
@@ -3372,6 +3395,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             "array" => Some(self.infer_array_intrinsic(fc, span)),
             "pjrt" => Some(self.infer_pjrt_intrinsic(fc, span)),
             "tensor" => Some(self.infer_tensor_intrinsic(fc, span)),
+            "pjrt" if self.sym(fc.name.basename) == "launch" => {
+                Some(self.infer_launch_intrinsic(fc, span))
+            }
             "cell" => Some(self.infer_cell_intrinsic(fc, span)),
             "str" => Some(self.infer_str_intrinsic(fc, span)),
             other => {
