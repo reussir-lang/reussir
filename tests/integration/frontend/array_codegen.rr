@@ -39,7 +39,8 @@ pub fn sum(a : [f64; 8]) -> f64 {
 // CHECK-LABEL: func.func @_RC4cell
 // CHECK: arith.cmpi ult
 // CHECK: arith.cmpi ult
-// CHECK: %[[OK2:.+]] = arith.andi
+// CHECK: %[[DIM2:.+]] = arith.andi
+// CHECK: %[[OK2:.+]] = arith.andi %{{.+}}, %[[DIM2]]
 // CHECK: scf.if %[[OK2]] -> (i32) {
 // CHECK: memref.load %{{.+}}[%{{.+}}, %{{.+}}] : memref<4x4xi32>
 pub fn cell(m : [i32; 4, 4], i : i64, j : i64) -> i32 {
