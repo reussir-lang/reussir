@@ -1,17 +1,17 @@
 // RUN: %rrc %S/Inputs/kernel_dep.rr --package-name dep --emit rri -o %t.rri
 // RUN: %FileCheck %s --check-prefix=RRI < %t.rri
-// RUN: %rrc %s --extern dep=%t.rri --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %s --package-name consumer --extern dep=%t.rri --emit mir --no-source-locations -o %t.mir
 // RUN: %FileCheck %s --check-prefix=MIR < %t.mir
 // RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
 // RUN: diff %t.mir %t.round.mir
 // RUN: echo 'fn deferred<T>() { let x = dep::produce<T>(); } pub fn bad() { deferred<i32>(); }' > %t.bad.rr
-// RUN: %not %rrc %t.bad.rr --extern dep=%t.rri --emit mir -o - 2>&1 | %FileCheck %s --check-prefix=BAD
+// RUN: %not %rrc %t.bad.rr --package-name consumer --extern dep=%t.rri --emit mir -o - 2>&1 | %FileCheck %s --check-prefix=BAD
 // RRI-DAG: #[kernel] pub fn #dep::identity
 // RRI-DAG: #[kernel] pub fn #dep::produce
 // RRI-DAG: #[kernel] pub fn #dep::choose
-// MIR-DAG: #[kernel] fn @_RINvC3dep8identity
-// MIR-DAG: #[kernel] fn @_RINvC3dep7produce
-// MIR-DAG: #[kernel] fn @_RINvC3dep6choose
+// MIR-DAG: #[kernel] pub fn @_RINvC3dep8identity
+// MIR-DAG: #[kernel] pub fn @_RINvC3dep7produce
+// MIR-DAG: #[kernel] pub fn @_RINvC3dep6choose
 // BAD: host code can only call a kernel function that returns Tensor
 #[kernel]
 pub fn use_tensor(x: Tensor<f32>) -> Tensor<f32> { dep::identity(x) }
