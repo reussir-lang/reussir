@@ -629,6 +629,11 @@ impl<'a> Printer<'a> {
             TyKind::Str => text("str"),
             TyKind::Char => text("char"),
             TyKind::Unit => text("()"),
+            TyKind::Tuple(fields) => {
+                text("(")
+                    + comma_sep(fields.iter().map(|&f| self.ty(f)).collect())
+                    + text(if fields.len() == 1 { ",)" } else { ")" })
+            }
             TyKind::Bottom => text("!"),
             TyKind::Generic(g) => text(format!("${}", g.0)),
             TyKind::Hole(_) => unreachable!("a fully elaborated HIR carries no inference holes"),
@@ -796,6 +801,9 @@ impl<'a> Printer<'a> {
                     + text(format!("#{method}("))
                     + self.arg_list(args)
                     + text(")")
+            }
+            ExprKind::Tuple(fields) => {
+                text("(") + self.arg_list(fields) + text(if fields.len() == 1 { ",)" } else { ")" })
             }
             ExprKind::GlobalStr(s) => text(str_lit(s.words())),
             ExprKind::ConstInt(n) => text(format!("{n}")),

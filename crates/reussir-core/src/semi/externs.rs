@@ -601,6 +601,10 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
                 let ps: Vec<_> = ps.iter().map(|&p| self.ty(p)).collect();
                 self.tcx.mk_future(&ps)
             }
+            TyKind::Tuple(ps) => {
+                let ps: Vec<_> = ps.iter().map(|&p| self.ty(p)).collect();
+                self.tcx.mk_tuple(&ps)
+            }
             TyKind::Tensor { elem, dims } => {
                 let elem = self.ty(elem);
                 self.tcx.mk_tensor(elem, dims)
@@ -685,6 +689,7 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
                 value: self.boxed(value),
             },
             ExprKind::Seq(items) => ExprKind::Seq(self.exprs(items)),
+            ExprKind::Tuple(items) => ExprKind::Tuple(self.exprs(items)),
             ExprKind::FuncCall {
                 target,
                 ty_args,

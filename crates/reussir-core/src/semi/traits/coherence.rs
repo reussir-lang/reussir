@@ -43,6 +43,7 @@ pub enum HeadKey {
     Tensor,
     Token,
     Future,
+    Tuple(usize),
     DevArray,
     DefaultPlacement,
     Cell(CellKind),
@@ -66,6 +67,7 @@ pub fn head_key(ty: Ty<'_>) -> Option<HeadKey> {
         TyKind::Tensor { .. } => HeadKey::Tensor,
         TyKind::Token => HeadKey::Token,
         TyKind::Future(_) => HeadKey::Future,
+        TyKind::Tuple(fields) => HeadKey::Tuple(fields.len()),
         TyKind::DevArray { .. } => HeadKey::DevArray,
         TyKind::DefaultPlacement => HeadKey::DefaultPlacement,
         TyKind::Cell { kind, .. } => HeadKey::Cell(kind),
@@ -115,7 +117,7 @@ fn occurs(g: GenericId, ty: Ty<'_>, subst: &FxHashMap<GenericId, Ty<'_>>) -> boo
         TyKind::Cell { elem, .. } | TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => {
             occurs(g, elem, subst)
         }
-        TyKind::Future(ps) => ps.iter().any(|&p| occurs(g, p, subst)),
+        TyKind::Future(ps) | TyKind::Tuple(ps) => ps.iter().any(|&p| occurs(g, p, subst)),
         TyKind::Record { args, .. } => args.iter().any(|&a| occurs(g, a, subst)),
         TyKind::Closure { params, ret } => {
             params.iter().any(|&p| occurs(g, p, subst)) || occurs(g, ret, subst)
@@ -186,7 +188,7 @@ fn unify_ty<'tcx>(
                 placement: py,
             },
         ) => dx == dy && unify_ty(*x, *y, vars, subst) && unify_ty(*px, *py, vars, subst),
-        (TyKind::Future(xs), TyKind::Future(ys)) => {
+        (TyKind::Future(xs), TyKind::Future(ys)) | (TyKind::Tuple(xs), TyKind::Tuple(ys)) => {
             xs.len() == ys.len()
                 && xs
                     .iter()

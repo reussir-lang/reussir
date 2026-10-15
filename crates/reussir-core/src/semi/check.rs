@@ -162,7 +162,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// (CHECK) the unification-coercion that backs the checking judgment: unify the
     /// synthesized type `found` with `expected`. On failure emit a mismatch
     /// (CHECK-FAIL) but do not abort — checking always yields a node.
-    fn expect(&mut self, found: Ty<'tcx>, expected: Ty<'tcx>, span: Option<Span>) {
+    pub(super) fn expect(&mut self, found: Ty<'tcx>, expected: Ty<'tcx>, span: Option<Span>) {
         if self.infer.unify(expected, found).is_err() {
             let e = self.infer.resolve(expected);
             let f = self.infer.resolve(found);
@@ -318,6 +318,17 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self.expect(h.ty, expected, h.span);
             return h;
         }
+        if let surface::ExprKind::Tuple(fields) = e.kind()
+            && let TyKind::Tuple(types) = *self.infer.shallow_resolve(expected).kind()
+            && fields.len() == types.len()
+        {
+            let fields = fields
+                .iter()
+                .zip(types)
+                .map(|(f, &t)| self.check_expr(f, t))
+                .collect();
+            return self.checked_tuple(fields, Some(e.span()));
+        }
         let h = self.infer_expr(e);
         self.expect(h.ty, expected, h.span);
         if self.inside_kernel {
@@ -343,6 +354,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 surface::ExprKind::Var(_)
                     | surface::ExprKind::ExprSeq(_)
                     | surface::ExprKind::Let(..)
+                    | surface::ExprKind::LetPattern(..)
+                    | surface::ExprKind::Tuple(_)
+                    | surface::ExprKind::AccessChain(..)
                     | surface::ExprKind::If(..)
                     | surface::ExprKind::FuncCallExpr(_)
             )
@@ -354,6 +368,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             surface::ExprKind::ConstExpr(c) => self.infer_const(c, span),
             surface::ExprKind::Var(path) => self.infer_var(path, span),
             surface::ExprKind::ExprSeq(exprs) => self.infer_seq(exprs, span),
+            surface::ExprKind::Tuple(fields) => self.infer_tuple(fields, span),
+            surface::ExprKind::LetPattern(pat, ty, value) => {
+                self.infer_let_pattern(pat, ty.as_ref(), value, span)
+            }
             surface::ExprKind::If(c, t, f) => self.infer_if(c, t, f.as_ref(), span),
             surface::ExprKind::Let(name, ty, value) => {
                 self.infer_let(name, ty.as_ref(), value, span)
@@ -559,6 +577,161 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             unit,
             span,
         )
+    }
+
+    fn infer_tuple(&mut self, fields: &[surface::Expr], span: Option<Span>) -> Expr<'tcx> {
+        let fields: Vec<_> = fields.iter().map(|f| self.infer_expr(f)).collect();
+        self.checked_tuple(fields, span)
+    }
+
+    pub(super) fn checked_tuple(
+        &mut self,
+        fields: Vec<Expr<'tcx>>,
+        span: Option<Span>,
+    ) -> Expr<'tcx> {
+        for field in &fields {
+            if !self.inside_kernel
+                && super::ctxt::contains_kernel_value(self.infer.resolve(field.ty))
+            {
+                self.error(field.span, "a host tuple cannot contain a kernel value");
+            }
+            if let Some(reason) =
+                super::ty_eval::tuple_element_rejection(self.infer.resolve(field.ty))
+            {
+                self.error(field.span, reason);
+            }
+        }
+        let ty = self
+            .tcx
+            .mk_tuple(&fields.iter().map(|f| f.ty).collect::<Vec<_>>());
+        if fields.is_empty() {
+            self.mk_expr(ExprKind::Seq(vec![]), ty, span)
+        } else {
+            self.mk_expr(ExprKind::Tuple(fields), ty, span)
+        }
+    }
+
+    pub(super) fn infer_let_pattern(
+        &mut self,
+        pattern: &surface::Pattern,
+        annotation: Option<&(surface::Type, bool)>,
+        value: &surface::Expr,
+        span: Option<Span>,
+    ) -> Expr<'tcx> {
+        let value = if let Some((ty, flex)) = annotation {
+            let ty = self.eval_type_flex(ty, *flex);
+            self.check_expr(value, ty)
+        } else {
+            self.infer_expr(value)
+        };
+        let ty = self.infer.resolve(value.ty);
+        let name = self.tuple_temp_name;
+        let root = self.vars.fresh_anonymous(name, ty);
+        let unit = self.tcx.mk_unit();
+        let bind = self.mk_expr(
+            ExprKind::Let {
+                var: root,
+                name,
+                span: None,
+                value: Box::new(value),
+            },
+            unit,
+            span,
+        );
+        let mut out = vec![bind];
+        let mut names = rustc_hash::FxHashSet::default();
+        self.bind_tuple_pattern(
+            &pattern.kind(),
+            root,
+            ty,
+            ty,
+            &mut vec![],
+            &mut names,
+            &mut out,
+            Some(pattern.span()),
+        );
+        self.mk_expr(ExprKind::Seq(out), unit, span)
+    }
+
+    fn bind_tuple_pattern(
+        &mut self,
+        pattern: &surface::PatternKind,
+        root: VarId,
+        root_ty: Ty<'tcx>,
+        ty: Ty<'tcx>,
+        path: &mut Vec<u32>,
+        names: &mut rustc_hash::FxHashSet<reussir_syntax::kind::TokenKey>,
+        out: &mut Vec<Expr<'tcx>>,
+        span: Option<Span>,
+    ) {
+        match pattern {
+            surface::PatternKind::Wildcard => {}
+            surface::PatternKind::Bind(name) => {
+                if !names.insert(*name) {
+                    self.error(
+                        span,
+                        format!(
+                            "duplicate binding `{}` in destructuring pattern",
+                            self.sym(*name)
+                        ),
+                    );
+                    return;
+                }
+                let base = self.mk_expr(ExprKind::Var(root), root_ty, span);
+                let value = if path.is_empty() {
+                    base
+                } else {
+                    self.mk_expr(ExprKind::Proj(Box::new(base), path.clone()), ty, span)
+                };
+                let var = self.vars.fresh(*name, ty, span);
+                out.push(self.mk_expr(
+                    ExprKind::Let {
+                        var,
+                        name: *name,
+                        span,
+                        value: Box::new(value),
+                    },
+                    self.tcx.mk_unit(),
+                    span,
+                ));
+            }
+            surface::PatternKind::Tuple(patterns) => {
+                let ty = self.infer.shallow_resolve(ty);
+                let ty = if matches!(ty.kind(), TyKind::Hole(_)) {
+                    let fields: Vec<_> =
+                        patterns.iter().map(|_| self.infer.new_hole_ty()).collect();
+                    let tuple = self.tcx.mk_tuple(&fields);
+                    self.expect(ty, tuple, span);
+                    tuple
+                } else {
+                    ty
+                };
+                let fields = match ty.kind() {
+                    TyKind::Unit if patterns.is_empty() => return,
+                    TyKind::Tuple(fields) if fields.len() == patterns.len() => *fields,
+                    _ => {
+                        self.error(
+                            span,
+                            format!(
+                                "tuple pattern with {} fields does not match `{}`",
+                                patterns.len(),
+                                self.ty_display(ty)
+                            ),
+                        );
+                        return;
+                    }
+                };
+                for (i, (pattern, &field)) in patterns.iter().zip(fields).enumerate() {
+                    path.push(i as u32);
+                    self.bind_tuple_pattern(pattern, root, root_ty, field, path, names, out, span);
+                    path.pop();
+                }
+            }
+            _ => self.error(
+                span,
+                "let destructuring requires an irrefutable tuple, binding, or wildcard pattern",
+            ),
+        }
     }
 
     /// Binary operators synthesize:
@@ -986,6 +1159,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             };
             indices.push(idx);
             raw = ty;
+        }
+
+        if matches!(self.infer.shallow_resolve(raw).kind(), TyKind::Tuple(_)) {
+            let Some((idx, field_ty)) = self.project_step(raw, last, span) else {
+                return self.poison(span);
+            };
+            indices.push(idx);
+            let callee = self.mk_expr(ExprKind::Proj(Box::new(base), indices), field_ty, span);
+            return self.closure_apply(callee, args, span);
         }
 
         let arced = matches!(raw.kind(), TyKind::Arc(_));
@@ -2415,6 +2597,23 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         acc: &surface::Access,
         span: Option<Span>,
     ) -> Option<(u32, Ty<'tcx>)> {
+        if let TyKind::Tuple(fields) = *self.infer.shallow_resolve(raw).kind() {
+            if let surface::Access::Unnamed(index) = acc
+                && let Ok(index) = usize::try_from(*index)
+                && let Some(&field) = fields.get(index)
+            {
+                return Some((index as u32, field));
+            }
+            self.error(
+                span,
+                "tuple field index is out of bounds or is not positional",
+            );
+            return None;
+        }
+        if self.inside_kernel {
+            self.error(span, "only tuple projections are allowed in a kernel");
+            return None;
+        }
         let arced = matches!(raw.kind(), TyKind::Arc(_));
         let cur = self.peel_arc(raw);
         let TyKind::Record { def, args, flex } = cur.kind() else {
@@ -4089,6 +4288,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 value: zb(self, value),
             },
             Seq(es) => Seq(es.into_iter().map(|e| self.zonk_expr(e)).collect()),
+            Tuple(es) => Tuple(es.into_iter().map(|e| self.zonk_expr(e)).collect()),
             FuncCall {
                 target,
                 ty_args,
@@ -4254,7 +4454,7 @@ fn var_occurrences<'tcx>(e: &Expr<'tcx>, used: &mut Vec<VarId>, bound: &mut Vec<
             var_occurrences(value, used, bound);
             bound.push(*var);
         }
-        Seq(es) => es.iter().for_each(|e| var_occurrences(e, used, bound)),
+        Seq(es) | Tuple(es) => es.iter().for_each(|e| var_occurrences(e, used, bound)),
         FuncCall { args, .. }
         | TraitCall { args, .. }
         | CompoundCall { args, .. }

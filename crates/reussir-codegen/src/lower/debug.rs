@@ -9,7 +9,7 @@
 //!
 //! Emitted debug types cover scalars, by-value and managed (`[shared]`) records
 //! — the latter boxed, reached through a `DIExpression` past the rc-box header —
-//! and enums (`variant`), described as a tag plus a union of the per-case
+//! anonymous tuples, and enums (`variant`), described as a tag plus a union of the per-case
 //! payloads. Both `let` locals and parameters are emitted. A recursive type is
 //! emitted as a memberless placeholder at the recursion point (see
 //! [`Self::dbg_record`]); the backend ties it back to the enclosing composite as
@@ -108,6 +108,9 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let args: Vec<Attribute<'c>> = func
             .params
             .iter()
+            // Unit parameters have no block argument. Keep unsupported-debug
+            // non-unit parameters in the count so later argument indices match.
+            .filter(|p| !matches!(p.ty.kind(), TyKind::Unit))
             .enumerate()
             .filter_map(|(i, p)| {
                 let dbg_type = self.dbg_type(p.ty)?;
@@ -181,8 +184,71 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             // A by-value record: a composite of its (precisely-typed) fields. If
             // a field has no debug type the whole record is skipped.
             TyKind::Record { .. } => self.dbg_record(ty, mlir),
+            TyKind::Tuple(fields) => self.dbg_tuple(fields, mlir),
             _ => None,
         }
+    }
+
+    /// Tuples are inline composites with positional fields. Their complete
+    /// structural name matters: the backend uses names to recognize recursive
+    /// records, so calling every nested tuple simply "tuple" would create false
+    /// recursion. Nominal leaves use their existing instance symbols.
+    fn dbg_tuple_name(&self, ty: Ty<'tcx>) -> Option<String> {
+        Some(match *ty.kind() {
+            TyKind::Tuple(fields) => {
+                let names: Option<Vec<_>> =
+                    fields.iter().map(|&t| self.dbg_tuple_name(t)).collect();
+                let mut name = names?.join(", ");
+                if fields.len() == 1 {
+                    name.push(',');
+                }
+                format!("({name})")
+            }
+            TyKind::Unit => "()".into(),
+            TyKind::Int(IntTy::Signed(w)) => format!("i{w}"),
+            TyKind::Int(IntTy::Unsigned(w)) => format!("u{w}"),
+            TyKind::Fp(FpTy::Ieee(w)) => format!("f{w}"),
+            TyKind::Fp(FpTy::BFloat16) => "bf16".into(),
+            TyKind::Bool => "bool".into(),
+            TyKind::Char => "char".into(),
+            TyKind::Record { .. } => self.program.symbol(self.tys.record_of(ty)?.symbol).into(),
+            _ => return None,
+        })
+    }
+
+    fn dbg_tuple(&self, fields: &[Ty<'tcx>], underlying: Type<'c>) -> Option<Attribute<'c>> {
+        let members: Option<Vec<_>> = fields
+            .iter()
+            .enumerate()
+            .map(|(i, &ty)| {
+                // Unit fields have real zero-sized aggregate storage even though a
+                // standalone unit parameter/local has no MLIR value or debug slot.
+                let field_type = if matches!(ty.kind(), TyKind::Unit) {
+                    dbg::record_type(
+                        self.context,
+                        &[],
+                        false,
+                        self.tys.storage_ty(ty).ok()?,
+                        StringAttribute::new(self.context, "()"),
+                    )
+                } else {
+                    self.dbg_type(ty)?
+                };
+                Some(dbg::record_member(
+                    self.context,
+                    StringAttribute::new(self.context, &format!("f{i}")),
+                    field_type,
+                ))
+            })
+            .collect();
+        let name = self.dbg_tuple_name(self.tcx.mk_tuple(fields))?;
+        Some(dbg::record_type(
+            self.context,
+            &members?,
+            false,
+            underlying,
+            StringAttribute::new(self.context, &name),
+        ))
     }
 
     /// Build a `dbg_recordtype` for a record, or `None` if any field lacks a debug

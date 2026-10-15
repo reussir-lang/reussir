@@ -1,0 +1,27 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+// Cartesian coverage must find the missing (false, false) corner.
+// CHECK-DAG: non-exhaustive patterns in `match`
+fn missing_corner(x: (bool, bool)) -> u64 {
+    match x { (true, _) => 1, (_, true) => 2 }
+}
+
+// A guard does not prove coverage, even for the only product constructor.
+// CHECK-DAG: non-exhaustive patterns in `match`
+fn guarded_only(x: (u64,), accept: bool) -> u64 {
+    match x { (n,) if accept => n }
+}
+
+// CHECK-DAG: unreachable match arm
+fn redundant(x: (bool, bool)) -> u64 {
+    match x { (_, _) => 1, (false, false) => 2 }
+}
+
+// CHECK-DAG: tuple pattern with 1 fields does not match
+fn wrong_arity(x: (u64, bool)) -> u64 { let (a,) = x; a }
+
+// CHECK-DAG: duplicate binding `x` in destructuring pattern
+fn duplicate(x: (u64, (u64,))) -> u64 { let (x, (x,)) = x; x }
+
+// CHECK-DAG: duplicate binding `x` in match pattern
+fn duplicate_match(p: (u64, u64)) -> u64 { match p { (x, x) => x } }

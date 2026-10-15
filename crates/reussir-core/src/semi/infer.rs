@@ -236,6 +236,10 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 let ps: Vec<_> = ps.iter().map(|&p| self.resolve(p)).collect();
                 self.tcx.mk_future(&ps)
             }
+            TyKind::Tuple(ps) => {
+                let ps: Vec<_> = ps.iter().map(|&p| self.resolve(p)).collect();
+                self.tcx.mk_tuple(&ps)
+            }
             TyKind::Tensor { elem, dims } => {
                 let elem = self.resolve(*elem);
                 self.tcx.mk_tensor(elem, dims)
@@ -356,7 +360,9 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 self.unify(*e1, *e2)?;
                 self.unify(*p1, *p2)
             }
-            (TyKind::Future(xs), TyKind::Future(ys)) if xs.len() == ys.len() => {
+            (TyKind::Future(xs), TyKind::Future(ys)) | (TyKind::Tuple(xs), TyKind::Tuple(ys))
+                if xs.len() == ys.len() =>
+            {
                 for (&x, &y) in xs.iter().zip(ys.iter()) {
                     self.unify(x, y)?;
                 }
@@ -421,7 +427,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             TyKind::DevArray {
                 elem, placement, ..
             } => self.occurs(h, *elem) || self.occurs(h, *placement),
-            TyKind::Future(ps) => ps.iter().any(|&p| self.occurs(h, p)),
+            TyKind::Future(ps) | TyKind::Tuple(ps) => ps.iter().any(|&p| self.occurs(h, p)),
             TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => self.occurs(h, *elem),
             _ => false,
         }
@@ -599,7 +605,9 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 self.unify_instantiated(*e1, inst, *e2)?;
                 self.unify_instantiated(*p1, inst, *p2)
             }
-            (TyKind::Future(xs), TyKind::Future(ys)) if xs.len() == ys.len() => {
+            (TyKind::Future(xs), TyKind::Future(ys)) | (TyKind::Tuple(xs), TyKind::Tuple(ys))
+                if xs.len() == ys.len() =>
+            {
                 for (&x, &y) in xs.iter().zip(ys.iter()) {
                     self.unify_instantiated(x, inst, y)?;
                 }
@@ -684,6 +692,10 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             TyKind::Future(ps) => {
                 let ps: Vec<_> = ps.iter().map(|&p| self.materialize(p, inst)).collect();
                 self.tcx.mk_future(&ps)
+            }
+            TyKind::Tuple(ps) => {
+                let ps: Vec<_> = ps.iter().map(|&p| self.materialize(p, inst)).collect();
+                self.tcx.mk_tuple(&ps)
             }
             TyKind::Tensor { elem, dims } => {
                 let elem = self.materialize(*elem, inst);

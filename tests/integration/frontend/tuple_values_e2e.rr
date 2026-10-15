@@ -1,0 +1,232 @@
+// Tuple values are inline aggregates. Exercise both ordinary ownership and
+// optimized reconstruction/closure paths, including unit-valued members.
+// RUN: %rrc %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/tuple_values_e2e.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s -o %t.opt.o --relocation-mode pic -Oaggressive
+// RUN: %cc %t.opt.o %S/tuple_values_e2e.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit llvm-ir -o %t.ll
+
+import core::intrinsic::cell;
+import core::intrinsic::array;
+
+struct [shared] Boxed { value: u64 }
+struct [value] Inline { pair: (Boxed, u64) }
+struct [shared] Shared { pair: (Inline, Boxed) }
+enum Choice { Some(Boxed), None }
+
+fn identity<T>(x: T) -> T { x }
+fn returned(n: u64) -> (u64, (u64,), ()) { (n, (n + 1,), ()) }
+fn managed(n: u64) -> (Boxed, Boxed) { (Boxed { value: n }, Boxed { value: n + 1 }) }
+
+pub fn tuple_basic(n: u64) -> u64 {
+    let (x, (y,), ()) = identity(returned(n));
+    let grouped: (u64) = (n + 2);
+    x + y + grouped
+}
+extern "C" trampoline "tuple_basic_ffi" = tuple_basic;
+
+// Both tuple elements and the destructuring RHS execute exactly once.
+fn tick(c: Cell<u64>) -> u64 {
+    let old = cell::get(c);
+    cell::set(c, old + 1);
+    old
+}
+fn counted(c: Cell<u64>) -> (u64, u64) { (tick(c), tick(c)) }
+pub fn tuple_once(n: u64) -> u64 {
+    let c = cell::alloc(n);
+    let (a, b) = counted(c);
+    a * 100 + b * 10 + cell::get(c)
+}
+extern "C" trampoline "tuple_once_ffi" = tuple_once;
+
+pub fn tuple_units(n: u64) -> u64 {
+    let t = ((), Boxed { value: n }, (), n + 1, ());
+    let ((), kept, (), value, ()) = t;
+    kept.value + value
+}
+extern "C" trampoline "tuple_units_ffi" = tuple_units;
+
+pub fn tuple_duplicate(n: u64) -> u64 {
+    let x = Boxed { value: n };
+    let t = (x, x);
+    t.0.value + t.1.value + x.value
+}
+extern "C" trampoline "tuple_duplicate_ffi" = tuple_duplicate;
+
+pub fn tuple_partial(n: u64) -> u64 {
+    let kept = managed(n).0;
+    let (_, other) = managed(n + 10);
+    let _ = managed(n + 20);
+    kept.value + other.value
+}
+extern "C" trampoline "tuple_partial_ffi" = tuple_partial;
+
+pub fn tuple_records(n: u64) -> u64 {
+    let h = Shared { pair: (Inline { pair: (Boxed { value: n }, n + 1) }, Boxed { value: n + 2 }) };
+    let (i, b) = h.pair;
+    i.pair.0.value + i.pair.1 + b.value + h.pair.1.value
+}
+extern "C" trampoline "tuple_records_ffi" = tuple_records;
+
+pub fn tuple_cell(n: u64) -> u64 {
+    let (old, current) = {
+        let c = cell::alloc(managed(n));
+        let old = cell::get(c);
+        cell::set(c, managed(n + 10));
+        (old, cell::get(c))
+    };
+    old.0.value + old.1.value + current.0.value + current.1.value
+}
+extern "C" trampoline "tuple_cell_ffi" = tuple_cell;
+
+pub fn tuple_refcell(n: u64) -> u64 {
+    let c = cell::alloc<RefCell<(Boxed, u64)>>((Boxed { value: n }, 1));
+    cell::rmw(c, |t| (t.0, t.1 + 2));
+    let (b, count) = cell::get(c);
+    b.value + count
+}
+extern "C" trampoline "tuple_refcell_ffi" = tuple_refcell;
+
+fn apply_pair(f: ((u64, u64),) -> u64, p: (u64, u64)) -> u64 { f(p) }
+fn apply_two(f: (u64, u64) -> u64, x: u64, y: u64) -> u64 { f(x, y) }
+pub fn tuple_arrow(n: u64) -> u64 {
+    apply_pair(|p| p.0 + p.1, (n, n + 1)) + apply_two(|x, y| x + y, n, n + 2)
+}
+extern "C" trampoline "tuple_arrow_ffi" = tuple_arrow;
+
+pub fn tuple_closure(n: u64) -> u64 {
+    let pair = managed(n);
+    let f = |extra: u64| pair.0.value + pair.1.value + extra;
+    f(1) + f(2) + pair.0.value
+}
+extern "C" trampoline "tuple_closure_ffi" = tuple_closure;
+
+pub fn tuple_partial_apply(n: u64) -> u64 {
+    let f = |p: (Boxed, Boxed), extra: u64| (p.0.value + extra, p.1);
+    let g = f(managed(n));
+    let (a, b) = g(2);
+    let (c, d) = g(3);
+    a + b.value + c + d.value
+}
+extern "C" trampoline "tuple_partial_apply_ffi" = tuple_partial_apply;
+
+pub fn tuple_array(n: u64) -> u64 {
+    let original = array::splat<[u64; 4]>(n);
+    let pair = (original, array::set(original, 0, n + 5));
+    array::get(pair.0, 0) + array::get(pair.1, 0)
+}
+extern "C" trampoline "tuple_array_ffi" = tuple_array;
+
+pub fn tuple_fold(n: u64) -> u64 {
+    let a = array::splat<[u64; 4]>(n);
+    let (sum, count) = array::fold(a, (0, 0), |acc, x| (acc.0 + x, acc.1 + 1));
+    sum + count
+}
+extern "C" trampoline "tuple_fold_ffi" = tuple_fold;
+
+pub fn tuple_match(n: u64) -> u64 {
+    let t = (n == 0, (Choice::Some { Boxed { value: n } }, true));
+    match t {
+        (true, (Choice::Some(x), _)) => x.value + 10,
+        (_, (Choice::Some(x), true)) if x.value > 5 => x.value + 20,
+        (_, (Choice::Some(x), _)) => x.value + 30,
+        (_, (Choice::None, _)) => 40
+    }
+}
+extern "C" trampoline "tuple_match_ffi" = tuple_match;
+
+pub fn tuple_cartesian(n: u64) -> u64 {
+    match (n == 0, n < 2) {
+        (true, true) => 1,
+        (true, false) => 2,
+        (false, true) => 3,
+        (false, false) => 4
+    }
+}
+extern "C" trampoline "tuple_cartesian_ffi" = tuple_cartesian;
+
+// Native trampolines use the established packed argument/return ABI.
+pub fn tuple_native(p: (u64, u64)) -> (u64, u64) { (p.1, p.0 + 1) }
+extern "C" trampoline "tuple_native_ffi" = tuple_native;
+
+// Empty products still execute side effects; an all-unit singleton remains
+// distinct from unit in signatures, construction, projection, and patterns.
+fn return_unit(c: Cell<u64>) -> () { cell::set(c, cell::get(c) + 1); () }
+fn return_single_unit(c: Cell<u64>) -> ((),) { (return_unit(c),) }
+pub fn tuple_all_units(n: u64) -> u64 {
+    let c = cell::alloc(n);
+    let () = return_unit(c);
+    let single: ((),) = return_single_unit(c);
+    let () = single.0;
+    let ((),) = single;
+    cell::get(c)
+}
+extern "C" trampoline "tuple_all_units_ffi" = tuple_all_units;
+
+struct [regional] Frozen { value: u64 }
+pub fn tuple_frozen(n: u64) -> u64 {
+    let frozen = regional { Frozen { value: n } };
+    let t = (frozen, frozen);
+    let (kept, _) = t;
+    kept.value + frozen.value
+}
+extern "C" trampoline "tuple_frozen_ffi" = tuple_frozen;
+
+// An explicit atomic link remains atomic when stored inside an inline tuple.
+struct [shared] AtomicHolder { pair: (Arc<Boxed>, u64) }
+pub fn tuple_atomic(n: u64) -> u64 {
+    let h = Arc<AtomicHolder> { pair: (Arc<Boxed> { value: n }, n + 1) };
+    let (b, count) = h.pair;
+    b.value + count + h.pair.0.value
+}
+extern "C" trampoline "tuple_atomic_ffi" = tuple_atomic;
+
+// Unit is a product with no fields. Matching it still evaluates the scrutinee
+// once; matching a singleton unit tuple recursively specializes the product.
+pub fn tuple_unit_match(n: u64) -> u64 {
+    let c = cell::alloc(n);
+    let a = match return_unit(c) { () => 10 };
+    let b = match return_single_unit(c) { ((),) => 20 };
+    a + b + cell::get(c)
+}
+extern "C" trampoline "tuple_unit_match_ffi" = tuple_unit_match;
+
+fn consume_unit(u: ()) -> u64 { 7 }
+pub fn tuple_unit_bind(n: u64) -> u64 {
+    let c = cell::alloc(n);
+    let whole = match return_unit(c) { u => consume_unit(u) };
+    let guarded = match return_unit(c) { () if false => 100, () => 10 };
+    let (u,) = return_single_unit(c);
+    whole + guarded + consume_unit(u) + cell::get(c)
+}
+extern "C" trampoline "tuple_unit_bind_ffi" = tuple_unit_bind;
+
+pub fn tuple_unit_capture(n: u64) -> u64 {
+    let u = ((),).0;
+    let f = |x: u64| { let () = u; x + 1 };
+    f(n) + f(n + 1)
+}
+extern "C" trampoline "tuple_unit_capture_ffi" = tuple_unit_capture;
+
+pub fn tuple_unit_partial(n: u64) -> u64 {
+    let f = |x: u64, u: (), y: u64| { let () = u; x + y };
+    let g = f(n, ());
+    g(n + 1) + g(n + 2)
+}
+extern "C" trampoline "tuple_unit_partial_ffi" = tuple_unit_partial;
+
+fn unit_between(a: u64, u: (), b: u64) -> u64 { a * 100 + b }
+pub fn tuple_unit_order(n: u64) -> u64 {
+    let c = cell::alloc(n);
+    let result = unit_between(tick(c), return_unit(c), tick(c));
+    result + 1000 * cell::get(c)
+}
+extern "C" trampoline "tuple_unit_order_ffi" = tuple_unit_order;
+
+// The two unit parameters have no physical native ABI arguments.
+pub fn tuple_native_unit(before: (), n: u64, after: ()) -> u64 { n + 1 }
+extern "C" trampoline "tuple_native_unit_ffi" = tuple_native_unit;

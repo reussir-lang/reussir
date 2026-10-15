@@ -83,7 +83,9 @@ pub fn collect_record_defs<'tcx>(ty: Ty<'tcx>, out: &mut Vec<DefId>) {
             collect_record_defs(elem, out);
             collect_record_defs(placement, out);
         }
-        TyKind::Future(ps) => ps.iter().for_each(|&p| collect_record_defs(p, out)),
+        TyKind::Future(ps) | TyKind::Tuple(ps) => {
+            ps.iter().for_each(|&p| collect_record_defs(p, out))
+        }
         TyKind::Cell { elem, .. } | TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => {
             collect_record_defs(elem, out)
         }
@@ -299,6 +301,12 @@ impl<'tcx> Cx<'_, 'tcx> {
             // Error recovery: don't cascade.
             | TyKind::Bottom => SyncVerdict::Sync,
             TyKind::DefaultPlacement => SyncVerdict::Sync,
+            TyKind::Tuple(fields) => {
+                let saved = std::mem::take(&mut self.group);
+                let verdict = self.fold(fields.iter().enumerate().map(|(i, &ty)| (format!("tuple field {i}"), ty)));
+                self.group = saved;
+                verdict
+            }
             TyKind::Generic(_) | TyKind::Hole(_) => SyncVerdict::Blocked,
             TyKind::Nullable(inner) => self.check(inner),
             // The cell verdict follows the kind lattice (thread-safety

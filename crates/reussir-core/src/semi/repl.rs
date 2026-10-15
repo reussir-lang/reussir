@@ -33,6 +33,14 @@ use crate::semi::hir::{Expr, ExprKind, Function, VarId};
 use crate::semi::ty::{DefId, Flexivity, Ty, TyKind};
 use crate::surface::{self, Visibility};
 
+/// A persistent name projected from an owned REPL result box.
+pub struct ReplBinding<'tcx> {
+    pub name: TokenKey,
+    pub ty: Ty<'tcx>,
+    pub content_ty: Ty<'tcx>,
+    pub path: Vec<u32>,
+}
+
 /// One REPL expression evaluation request (see
 /// [`Elaborator::try_repl_expr`]).
 pub struct ReplExprRequest<'a, 'tcx> {
@@ -46,7 +54,9 @@ pub struct ReplExprRequest<'a, 'tcx> {
     pub ascription: Option<&'a (surface::Type, bool)>,
     /// The session's live global bindings (name, *value* type), in the
     /// order the host passes their boxes on every call.
-    pub bindings: &'a [(TokenKey, Ty<'tcx>)],
+    pub bindings: &'a [ReplBinding<'tcx>],
+    /// A top-level destructuring binding: retain only its named values.
+    pub destructure: Option<&'a surface::Pattern>,
     /// The `__ReplBox` prelude record ([`Elaborator::install_repl_box`]).
     pub repl_box: DefId,
 }
@@ -74,6 +84,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             export,
             ascription,
             bindings,
+            destructure,
             repl_box,
         } = request;
         // An expression batch never reaches `run_files`, so ensure the
@@ -104,11 +115,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             box_ty: Ty<'tcx>,
             value: VarId,
             value_ty: Ty<'tcx>,
+            path: Vec<u32>,
         }
         let seeded: Vec<Seeded<'tcx>> = bindings
             .iter()
-            .map(|&(bname, bty)| {
-                let box_ty = self.tcx.mk_record(repl_box, &[bty], Flexivity::Irrelevant);
+            .map(|binding| {
+                let (bname, bty) = (binding.name, binding.ty);
+                let box_ty =
+                    self.tcx
+                        .mk_record(repl_box, &[binding.content_ty], Flexivity::Irrelevant);
                 let param = self.vars.fresh(bname, box_ty, None);
                 let value = self.vars.fresh(bname, bty, None);
                 Seeded {
@@ -117,15 +132,45 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     box_ty,
                     value,
                     value_ty: bty,
+                    path: std::iter::once(0)
+                        .chain(binding.path.iter().copied())
+                        .collect(),
                 }
             })
             .collect();
 
-        let ret = match ascription {
-            Some((ty, flex)) => self.eval_type_flex(ty, *flex),
-            None => self.infer.new_hole_ty(),
+        let (body, ret) = if let Some(pattern) = destructure {
+            let binding = self.infer_let_pattern(pattern, ascription, expr, span);
+            let fields = pattern
+                .binding_names()
+                .into_iter()
+                .filter_map(|name| self.vars.lookup(name))
+                .collect::<Vec<_>>();
+            let fields = fields
+                .into_iter()
+                .map(|(var, ty)| Expr {
+                    kind: ExprKind::Var(var),
+                    ty,
+                    span,
+                    id: self.fresh_expr_id(),
+                })
+                .collect();
+            let result = self.checked_tuple(fields, span);
+            let ret = result.ty;
+            let body = Expr {
+                kind: ExprKind::Seq(vec![binding, result]),
+                ty: ret,
+                span,
+                id: self.fresh_expr_id(),
+            };
+            (body, ret)
+        } else {
+            let ret = match ascription {
+                Some((ty, flex)) => self.eval_type_flex(ty, *flex),
+                None => self.infer.new_hole_ty(),
+            };
+            (self.check_expr(expr, ret), ret)
         };
-        let body = self.check_expr(expr, ret);
         self.default_numeric_holes();
         self.resolve_obligations();
         let body = self.zonk_expr(body);
@@ -184,7 +229,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     id: self.fresh_expr_id(),
                 };
                 let projected = Expr {
-                    kind: ExprKind::Proj(Box::new(base), vec![0]),
+                    kind: ExprKind::Proj(Box::new(base), b.path.clone()),
                     ty: b.value_ty,
                     span,
                     id: self.fresh_expr_id(),
@@ -427,6 +472,7 @@ mod tests {
                         dec_name: dec_key,
                         export: &export,
                         ascription: None,
+                        destructure: None,
                         bindings: &[],
                         repl_box: self.repl_box,
                     },
@@ -594,7 +640,13 @@ mod tests {
                         dec_name: dec,
                         export: "__repl_expr_1",
                         ascription: None,
-                        bindings: &[(x_key, x_ty)],
+                        destructure: None,
+                        bindings: &[super::ReplBinding {
+                            name: x_key,
+                            ty: x_ty,
+                            content_ty: x_ty,
+                            path: vec![],
+                        }],
                         repl_box: s.repl_box,
                     },
                     &expr,
@@ -625,7 +677,13 @@ mod tests {
                         dec_name: dec,
                         export: "__repl_expr_2",
                         ascription: None,
-                        bindings: &[(x_key, x_ty)],
+                        destructure: None,
+                        bindings: &[super::ReplBinding {
+                            name: x_key,
+                            ty: x_ty,
+                            content_ty: x_ty,
+                            path: vec![],
+                        }],
                         repl_box: s.repl_box,
                     },
                     &expr,

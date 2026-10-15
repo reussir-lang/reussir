@@ -253,6 +253,7 @@ pub struct Transform {
 
 #[derive(Clone, Debug)]
 pub enum Ty {
+    Tuple(Vec<Ty>),
     Signed(u16),
     Unsigned(u16),
     Ieee(u16),
@@ -381,6 +382,7 @@ impl Expr {
 
 #[derive(Clone, Debug)]
 pub enum Kind {
+    Tuple(Vec<Expr>),
     ConstInt(Integer),
     ConstFloat(FloatLit),
     ConstBool(bool),

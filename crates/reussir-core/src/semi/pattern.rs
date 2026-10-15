@@ -56,6 +56,7 @@ use super::hir::{DecisionTree, Expr, ExprKind, PatVarRef, SwitchCases, VarId};
 /// A head constructor: what a (refutable) pattern tests for at an occurrence.
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Ctor<'tcx> {
+    Product,
     /// An enum variant, by index into the enum's variant list.
     Variant(usize),
     /// An integer key, arbitrary-precision (the scrutinee type bounds its
@@ -75,6 +76,7 @@ impl Ctor<'_> {
     fn family(&self) -> Family {
         match self {
             Ctor::Variant(_) => Family::Variant,
+            Ctor::Product => Family::Product,
             Ctor::Int(_) => Family::Int,
             Ctor::Char(_) => Family::Char,
             Ctor::Bool(_) => Family::Bool,
@@ -89,6 +91,7 @@ impl Ctor<'_> {
 /// [`SwitchCases`] are shaped and whether a default branch is needed.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Family {
+    Product,
     /// A closed family with one case per enum variant — exhaustive on its own.
     Variant,
     /// A closed two-case family (`true` / `false`).
@@ -191,6 +194,25 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let mut arm_spans = Vec::with_capacity(arms.len());
         for (i, (pat, body)) in arms.iter().enumerate() {
             let mark = self.vars.mark();
+            fn names(kind: &PatternKind, out: &mut Vec<reussir_syntax::kind::TokenKey>) {
+                match kind {
+                    PatternKind::Bind(name) => out.push(*name),
+                    PatternKind::Tuple(fields) => fields.iter().for_each(|p| names(p, out)),
+                    PatternKind::Ctor(ctor) => ctor.args.iter().for_each(|a| names(&a.kind, out)),
+                    _ => {}
+                }
+            }
+            let mut bound_names = Vec::new();
+            names(&pat.kind(), &mut bound_names);
+            let mut seen = rustc_hash::FxHashSet::default();
+            for name in bound_names {
+                if !seen.insert(name) {
+                    self.error(
+                        Some(pat.span()),
+                        format!("duplicate binding `{}` in match pattern", self.sym(name)),
+                    );
+                }
+            }
             let p = self.check_pat(&pat.kind(), Some(pat.span()), scrut_ty);
             let guard = pat.guard().map(|g| {
                 let bool_ty = self.tcx.mk_bool();
@@ -261,6 +283,39 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let ty = self.infer.shallow_resolve(ty);
         match kind {
             PatternKind::Wildcard => Pat::Wild,
+            PatternKind::Tuple(patterns) => {
+                let fields = match ty.kind() {
+                    TyKind::Unit if patterns.is_empty() => &[][..],
+                    TyKind::Tuple(fields) if fields.len() == patterns.len() => *fields,
+                    TyKind::Hole(_) => {
+                        let fields: Vec<_> =
+                            patterns.iter().map(|_| self.infer.new_hole_ty()).collect();
+                        let want = self.tcx.mk_tuple(&fields);
+                        let _ = self.infer.unify(ty, want);
+                        self.tcx.alloc_slice(&fields)
+                    }
+                    _ => {
+                        self.error(
+                            span,
+                            format!(
+                                "tuple pattern with {} fields does not match `{}`",
+                                patterns.len(),
+                                self.ty_display(ty)
+                            ),
+                        );
+                        return Pat::Wild;
+                    }
+                };
+                let fields = patterns
+                    .iter()
+                    .zip(fields)
+                    .map(|(p, &t)| self.check_pat(p, span, t))
+                    .collect();
+                Pat::Ctor {
+                    ctor: Ctor::Product,
+                    fields,
+                }
+            }
             PatternKind::Bind(name) => {
                 let var = self.vars.fresh(*name, ty, None);
                 Pat::Bind(var)
@@ -285,17 +340,17 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
             Const::ConstBool(b) => {
                 let want = self.tcx.mk_bool();
-                let _ = self.infer.unify(ty, want);
+                self.expect(ty, want, span);
                 Ctor::Bool(*b)
             }
             Const::ConstChar(c) => {
                 let want = self.tcx.mk_char();
-                let _ = self.infer.unify(ty, want);
+                self.expect(ty, want, span);
                 Ctor::Char(*c)
             }
             Const::ConstString(s) => {
                 let want = self.tcx.mk_str();
-                let _ = self.infer.unify(ty, want);
+                self.expect(ty, want, span);
                 Ctor::Str(self.strings.allocate(s))
             }
             Const::ConstFloat(_) => {
@@ -581,6 +636,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             .expect("the chosen column has a constructor");
 
         let cases = match family {
+            Family::Product => {
+                let fields = match col_ty.kind() {
+                    TyKind::Tuple(fields) => *fields,
+                    _ => &[],
+                };
+                let sub = self.specialize_constructor(&m, j, Ctor::Product, &occ, fields);
+                return self.compile_match(sub, reached, exhaustive);
+            }
             // Closed: one subtree per variant; an empty variant subtree is an
             // uncovered case (caught by the recursive call returning `Uncovered`).
             Family::Variant => {
@@ -588,7 +651,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 let mut subtrees = Vec::with_capacity(n);
                 for v in 0..n {
                     let child_tys = self.variant_field_tys(col_ty, v);
-                    let sub = self.specialize_variant(&m, j, v, &occ, &child_tys);
+                    let sub =
+                        self.specialize_constructor(&m, j, Ctor::Variant(v), &occ, &child_tys);
                     subtrees.push(self.compile_match(sub, reached, exhaustive));
                 }
                 SwitchCases::Ctor(subtrees)
@@ -659,11 +723,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 
     /// `S(Variant(v), P)`: keep the rows that can match variant `v`, expanding
     /// the matched constructor's fields into fresh columns at `occ ++ [i]`.
-    fn specialize_variant(
+    fn specialize_constructor(
         &self,
         m: &Matrix<'tcx>,
         j: usize,
-        v: usize,
+        ctor: Ctor<'tcx>,
         occ: &PatVarRef,
         child_tys: &[Ty<'tcx>],
     ) -> Matrix<'tcx> {
@@ -685,9 +749,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             // pattern bound the whole value.
             let (sub, bind): (Vec<Pat<'tcx>>, Option<(VarId, PatVarRef)>) = match &row.pats[j] {
                 Pat::Ctor {
-                    ctor: Ctor::Variant(w),
+                    ctor: actual,
                     fields,
-                } if *w == v => (fields.clone(), None),
+                } if *actual == ctor => (fields.clone(), None),
                 // A different variant cannot match this case.
                 Pat::Ctor { .. } => continue,
                 Pat::Wild => (vec![Pat::Wild; k], None),

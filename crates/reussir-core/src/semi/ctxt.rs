@@ -251,7 +251,9 @@ pub fn contains_kernel_value(ty: Ty<'_>) -> bool {
             elem, placement, ..
         } => contains_kernel_value(elem) || contains_kernel_value(placement),
         TyKind::Tensor { .. } | TyKind::Future(_) | TyKind::Token => true,
-        TyKind::Record { args, .. } => args.iter().any(|&a| contains_kernel_value(a)),
+        TyKind::Record { args, .. } | TyKind::Tuple(args) => {
+            args.iter().any(|&a| contains_kernel_value(a))
+        }
         TyKind::Closure { params, ret } => {
             params.iter().any(|&p| contains_kernel_value(p)) || contains_kernel_value(ret)
         }
@@ -301,7 +303,7 @@ fn collect_private_records<'tcx>(
             collect_private_records(records, elem, out);
             collect_private_records(records, placement, out);
         }
-        TyKind::Future(ps) => ps
+        TyKind::Future(ps) | TyKind::Tuple(ps) => ps
             .iter()
             .for_each(|&p| collect_private_records(records, p, out)),
         TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } | TyKind::Cell { elem, .. } => {
@@ -397,6 +399,17 @@ impl<'tcx> VarEnv<'tcx> {
         let id = VarId(self.defs.len() as u32);
         self.defs.push(VarDef { name, ty, span });
         self.scope.push((name, id));
+        id
+    }
+
+    /// Allocate a compiler temporary without introducing a source-visible name.
+    pub fn fresh_anonymous(&mut self, name: TokenKey, ty: Ty<'tcx>) -> VarId {
+        let id = VarId(self.defs.len() as u32);
+        self.defs.push(VarDef {
+            name,
+            ty,
+            span: None,
+        });
         id
     }
 
@@ -530,6 +543,7 @@ pub struct Elaborator<'a, 'tcx> {
     /// rewrites resolve the active trait's method *by name*, so method
     /// order in `core`'s declarations is not a compiler contract.
     pub(super) cmp_method_names: [TokenKey; 6],
+    pub(super) tuple_temp_name: TokenKey,
     pub inside_region: bool,
     pub inside_kernel: bool,
     /// Generics required to be regional, accumulated while checking the current
@@ -637,6 +651,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self_name,
             prelude_names,
             cmp_method_names,
+            tuple_temp_name: interner.intern("_tuple"),
             inside_region: false,
             inside_kernel: false,
             regional_generics: Vec::new(),
@@ -755,6 +770,19 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             TyKind::Str => out.push_str("str"),
             TyKind::Char => out.push_str("char"),
             TyKind::Unit => out.push_str("unit"),
+            TyKind::Tuple(fields) => {
+                out.push('(');
+                for (i, &field) in fields.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    self.push_ty_display(out, field);
+                }
+                if fields.len() == 1 {
+                    out.push(',');
+                }
+                out.push(')');
+            }
             TyKind::Bottom => out.push('!'),
             TyKind::Generic(g) => out.push_str(
                 self.generics
@@ -4038,20 +4066,23 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
             Some(RecordFields::Opaque) | None => Vec::new(),
         };
-        member_tys
-            .into_iter()
-            .filter_map(|t| match *t.kind() {
+        let mut pending = member_tys;
+        let mut heads = Vec::new();
+        while let Some(ty) = pending.pop() {
+            match *ty.kind() {
+                TyKind::Tuple(fields) => pending.extend_from_slice(fields),
                 TyKind::Record { def, .. }
                     if self
                         .records
                         .get(&def)
                         .is_some_and(|r| r.default_cap == DefaultCap::Value) =>
                 {
-                    Some(def)
+                    heads.push(def)
                 }
-                _ => None,
-            })
-            .collect()
+                _ => {}
+            }
+        }
+        heads
     }
 
     /// Reject inline-recursive record cycles — a `[value]` record reachable

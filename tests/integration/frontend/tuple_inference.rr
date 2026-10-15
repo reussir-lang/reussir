@@ -1,0 +1,22 @@
+// Destructuring can constrain an otherwise unknown generic result to a tuple.
+// Uses below ground every field; neither pattern needs a type annotation.
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit llvm-ir -o %t.ll
+
+fn produce<T>() -> T { core::intrinsic::panic::panic() }
+
+pub fn let_infers_product() -> u64 {
+    let (a, (b, c)) = produce();
+    let n: u64 = a;
+    let flag: bool = b;
+    let m: u64 = c;
+    if flag { n } else { m }
+}
+
+pub fn match_infers_product() -> u64 {
+    match produce() {
+        (true, n) => n,
+        (false, n) => n + 1
+    }
+}

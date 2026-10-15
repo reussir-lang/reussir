@@ -100,6 +100,8 @@ struct GlobalBinding<'jit, 'tcx> {
     name: reussir_syntax::kind::TokenKey,
     display: String,
     ty: Ty<'tcx>,
+    content_ty: Ty<'tcx>,
+    path: Vec<u32>,
     boxed: crate::value::BoundBox<'jit>,
 }
 
@@ -257,28 +259,44 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
                 // A single top-level `let` is a *global binding*: its value
                 // persists for later inputs. Multi-statement sequences keep
                 // ordinary block semantics.
-                let (rhs, binder) = match expr.kind() {
+                let (rhs, binder, destructure) = match expr.kind() {
                     surface::ExprKind::ExprSeq(mut exprs) if exprs.len() == 1 => {
                         let only = exprs.pop().expect("length checked");
                         match only.kind() {
                             surface::ExprKind::Let(bname, ascription, value) => {
-                                (value, Some((bname, ascription)))
+                                (value, Some((bname, ascription)), None)
                             }
-                            _ => (only, None),
+                            surface::ExprKind::LetPattern(pattern, ascription, value) => {
+                                (value, None, Some((pattern, ascription)))
+                            }
+                            _ => (only, None, None),
                         }
                     }
-                    _ => (expr, None),
+                    _ => (expr, None, None),
                 };
                 let export = format!("__repl_expr_{}", self.counter);
                 let name = self.interner.intern(&export);
                 let dec_name = self.interner.intern(&format!("{export}_dec"));
-                let in_scope: Vec<_> = self.bindings.iter().map(|b| (b.name, b.ty)).collect();
+                let in_scope: Vec<_> = self
+                    .bindings
+                    .iter()
+                    .map(|b| reussir_core::semi::repl::ReplBinding {
+                        name: b.name,
+                        ty: b.ty,
+                        content_ty: b.content_ty,
+                        path: b.path.clone(),
+                    })
+                    .collect();
                 match self.elab.try_repl_expr(
                     &reussir_core::semi::repl::ReplExprRequest {
                         name,
                         dec_name,
                         export: &export,
-                        ascription: binder.as_ref().and_then(|(_, a)| a.as_ref()),
+                        ascription: binder
+                            .as_ref()
+                            .and_then(|(_, a)| a.as_ref())
+                            .or_else(|| destructure.as_ref().and_then(|(_, a)| a.as_ref())),
+                        destructure: destructure.as_ref().map(|(p, _)| p),
                         bindings: &in_scope,
                         repl_box: self.repl_box,
                     },
@@ -306,7 +324,9 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
                                     .mk_record(self.repl_box, &[ty], Flexivity::Irrelevant);
                             let args: Vec<*const u8> =
                                 self.bindings.iter().map(|b| b.boxed.as_ptr()).collect();
-                            let result = if binder.is_some() {
+                            let result = if (binder.is_some() || destructure.is_some())
+                                && !matches!(ty.kind(), TyKind::Unit)
+                            {
                                 crate::value::call_and_bind(
                                     self.jit,
                                     &export,
@@ -352,6 +372,42 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
                                         self.elab.trampolines.len() < before,
                                         "the wrapper's roots must be registered"
                                     );
+                                    if let Some((pattern, _)) = destructure {
+                                        let names = pattern.binding_names();
+                                        if let Some(bound) = bound {
+                                            let TyKind::Tuple(fields) = *ty.kind() else {
+                                                unreachable!(
+                                                    "destructured bindings return a tuple"
+                                                );
+                                            };
+                                            for (index, (&name, &field_ty)) in
+                                                names.iter().zip(fields).enumerate()
+                                            {
+                                                let display = self.elab.sym(name).to_string();
+                                                self.register_projected_binding(
+                                                    name,
+                                                    display,
+                                                    field_ty,
+                                                    ty,
+                                                    vec![index as u32],
+                                                    bound.clone(),
+                                                );
+                                            }
+                                        }
+                                        return Outcome::Binding {
+                                            name: format!(
+                                                "({})",
+                                                names
+                                                    .iter()
+                                                    .map(|&n| self.elab.sym(n))
+                                                    .collect::<Vec<_>>()
+                                                    .join(", ")
+                                            ),
+                                            value,
+                                            ty: self.render_ty(ty),
+                                            warnings,
+                                        };
+                                    }
                                     match (binder, bound) {
                                         (Some((bname, _)), Some(bound)) => {
                                             let display = self.elab.sym(bname.value).to_string();
@@ -400,10 +456,24 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
         ty: Ty<'tcx>,
         boxed: crate::value::BoundBox<'a>,
     ) {
+        self.register_projected_binding(name, display, ty, ty, vec![], boxed);
+    }
+
+    fn register_projected_binding(
+        &mut self,
+        name: reussir_syntax::kind::TokenKey,
+        display: String,
+        ty: Ty<'tcx>,
+        content_ty: Ty<'tcx>,
+        path: Vec<u32>,
+        boxed: crate::value::BoundBox<'a>,
+    ) {
         let entry = GlobalBinding {
             name,
             display,
             ty,
+            content_ty,
+            path,
             boxed,
         };
         if let Some(existing) = self.bindings.iter_mut().find(|b| b.name == name) {
@@ -423,12 +493,25 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
         for b in &self.bindings {
             let box_ty = self
                 .tcx
-                .mk_record(self.repl_box, &[b.ty], Flexivity::Irrelevant);
+                .mk_record(self.repl_box, &[b.content_ty], Flexivity::Irrelevant);
             // SAFETY: the session owns one reference to each binding's box;
             // it is live until `register_binding`/`Drop` release it.
             let value = unsafe {
                 crate::reflect::shared_box_payload(b.boxed.as_ptr(), box_ty, &self.shapes).and_then(
-                    |payload| {
+                    |mut payload| {
+                        let mut ty = b.content_ty;
+                        for &index in &b.path {
+                            payload = crate::reflect::tuple_member_addr(
+                                payload,
+                                ty,
+                                index as usize,
+                                &self.shapes,
+                            )?;
+                            let TyKind::Tuple(fields) = *ty.kind() else {
+                                return Err("binding projection requires a tuple".into());
+                            };
+                            ty = fields[index as usize];
+                        }
                         crate::reflect::render_value(payload, b.ty, &self.shapes, &self.printers)
                     },
                 )
@@ -461,13 +544,23 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
         let cp = self.elab.checkpoint();
         let name = self.interner.intern("__repl_type_probe");
         let dec_name = self.interner.intern("__repl_type_probe_dec");
-        let in_scope: Vec<_> = self.bindings.iter().map(|b| (b.name, b.ty)).collect();
+        let in_scope: Vec<_> = self
+            .bindings
+            .iter()
+            .map(|b| reussir_core::semi::repl::ReplBinding {
+                name: b.name,
+                ty: b.ty,
+                content_ty: b.content_ty,
+                path: b.path.clone(),
+            })
+            .collect();
         let result = self.elab.try_repl_expr(
             &reussir_core::semi::repl::ReplExprRequest {
                 name,
                 dec_name,
                 export: "__repl_type_probe",
                 ascription: None,
+                destructure: None,
                 bindings: &in_scope,
                 repl_box: self.repl_box,
             },
@@ -642,6 +735,17 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
             TyKind::Str => "str".to_string(),
             TyKind::Char => "char".to_string(),
             TyKind::Unit => "()".to_string(),
+            TyKind::Tuple(fields) => {
+                let fields = fields
+                    .iter()
+                    .map(|&t| Self::render_ty_with(elab, t))
+                    .collect::<Vec<_>>();
+                format!(
+                    "({}{})",
+                    fields.join(", "),
+                    if fields.len() == 1 { "," } else { "" }
+                )
+            }
             TyKind::Bottom => "!".to_string(),
             TyKind::Nullable(inner) => {
                 format!("Nullable<{}>", Self::render_ty_with(elab, inner))

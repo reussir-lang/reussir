@@ -143,6 +143,13 @@ impl<'a> Mangler<'a> {
             TyKind::Str => out.push('e'),
             TyKind::Char => out.push('c'),
             TyKind::Unit => out.push('u'),
+            TyKind::Tuple(fields) => {
+                out.push('T');
+                for &field in fields {
+                    self.ty(out, field);
+                }
+                out.push('E');
+            }
             TyKind::Bottom => out.push('z'),
             TyKind::Int(int) => out.push_str(int_code(int)),
             TyKind::Fp(fp) => out.push_str(fp_code(fp)),
@@ -318,6 +325,32 @@ mod tests {
         let mut s = String::new();
         ident(&mut s, name);
         s
+    }
+
+    #[test]
+    fn structural_tuple_mangling_preserves_arity_order_and_nesting() {
+        crate::with_tcx(|tcx| {
+            let defs = DefTable::new();
+            let resolver = VecResolver(vec![]);
+            let m = Mangler::new(&defs, &resolver);
+            let i = tcx.mk_int(IntTy::Signed(32));
+            let b = tcx.mk_bool();
+            let unit = tcx.mk_unit();
+            let types = [
+                unit,
+                i,
+                tcx.mk_tuple(&[unit]),
+                tcx.mk_tuple(&[i]),
+                tcx.mk_tuple(&[i, b]),
+                tcx.mk_tuple(&[b, i]),
+                tcx.mk_tuple(&[tcx.mk_tuple(&[i]), b]),
+                tcx.mk_tuple(&[i, tcx.mk_tuple(&[b])]),
+            ];
+            let names: std::collections::HashSet<_> =
+                types.iter().map(|&ty| m.mangle_ty(ty)).collect();
+            assert_eq!(names.len(), types.len());
+            assert_eq!(tcx.mk_tuple(&[]), unit);
+        });
     }
 
     #[test]

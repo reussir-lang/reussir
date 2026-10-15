@@ -335,6 +335,11 @@ impl Render<'_> {
             TyKind::Str => text("str"),
             TyKind::Char => text("char"),
             TyKind::Unit => text("()"),
+            TyKind::Tuple(fields) => {
+                text("(")
+                    + comma_sep(fields.iter().map(|&f| self.ty(f)).collect())
+                    + text(if fields.len() == 1 { ",)" } else { ")" })
+            }
             TyKind::Bottom => text("!"),
             TyKind::Nullable(inner) => text("Nullable<") + self.ty(inner) + text(">"),
             TyKind::Cell { elem, kind } => {
@@ -495,6 +500,9 @@ impl Render<'_> {
     fn atom(&self, e: &mir::Expr<'_>) -> Doc<'static> {
         use mir::ExprKind::*;
         match e.kind {
+            Tuple(fields) => {
+                text("(") + self.arg_list(fields) + text(if fields.len() == 1 { ",)" } else { ")" })
+            }
             GlobalStr(s) => text(str_lit(s.words())),
             ConstInt(n) => text(format!("{n}")),
             ConstFloat(f) => text(f.to_string()),

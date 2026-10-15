@@ -440,6 +440,7 @@ fn kind_name(kind: &ExprKind<'_>) -> &'static str {
         ExprKind::Assign(..) => "Assign",
         ExprKind::Let { .. } => "Let",
         ExprKind::Seq(_) => "Seq",
+        ExprKind::Tuple(_) => "Tuple",
         ExprKind::Call { .. } => "Call",
         ExprKind::Ctor { .. } => "Ctor",
         ExprKind::Variant { .. } => "Variant",
@@ -754,7 +755,7 @@ fn interp<'tcx>(
                 rc.insert(var, 1);
             }
         }
-        ExprKind::Seq(es) => {
+        ExprKind::Seq(es) | ExprKind::Tuple(es) => {
             for s in es {
                 interp(s, ot, rr, rc);
             }
@@ -995,7 +996,7 @@ fn children<'tcx>(e: &Expr<'tcx>) -> Vec<&'tcx Expr<'tcx>> {
         Arith(l, _, r) | Cmp(l, _, r) | Assign(l, _, r) => vec![l, r],
         If(c, t, e) => vec![c, t, e],
         Let { value, .. } => vec![value],
-        Seq(es) => es.iter().collect(),
+        Seq(es) | Tuple(es) => es.iter().collect(),
         Call { args, .. } | Ctor { args, .. } | Variant { args, .. } | Intrinsic { args, .. } => {
             args.iter().collect()
         }

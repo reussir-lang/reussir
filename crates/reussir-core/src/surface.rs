@@ -218,6 +218,7 @@ fn is_expr_kind(kind: SyntaxKind) -> bool {
             | VarExpr
             | FuncCallExpr
             | CtorCallExpr
+            | TupleExpr
     )
 }
 
@@ -418,6 +419,7 @@ pub enum TypeKind {
     TypeExpr(Path, SmallVec<[Type; 2]>),
     /// A closure type: argument types and a result.
     TypeArrow(SmallVec<[Type; 2]>, Type),
+    TypeTuple(Vec<Type>),
     /// A statically shaped array: an element type and one extent expression
     /// per dimension (`[f64; 512]`, `[f64; 5, 16, 8]`). The extents are kept
     /// as expressions; the elaborator decides which forms it can evaluate.
@@ -443,7 +445,10 @@ impl Type {
     /// Wrap a type node, peeling transparent single-element parentheses.
     fn new(node: &ResolvedNode) -> Type {
         let mut n = node.clone();
-        while n.kind() == ParenTypeList {
+        while n.kind() == ParenTypeList
+            && !tokens(&n).any(|t| t.kind() == Comma)
+            && nodes(&n).filter(|c| is_type_kind(c.kind())).count() == 1
+        {
             let inner = nodes(&n)
                 .find(|c| is_type_kind(c.kind()))
                 .expect("parenthesized type")
@@ -461,6 +466,12 @@ impl Type {
         let node = &self.node;
         match node.kind() {
             PrimType => prim_type(tokens(node).next().expect("prim type token").text()),
+            ParenTypeList => TypeKind::TypeTuple(
+                nodes(node)
+                    .filter(|n| is_type_kind(n.kind()))
+                    .map(Type::new)
+                    .collect(),
+            ),
             SyntaxKind::ArrayType => {
                 let elem = nodes(node)
                     .find(|n| is_type_kind(n.kind()))
@@ -516,6 +527,7 @@ impl Type {
 #[derive(Clone, Debug)]
 pub enum PatternKind {
     Wildcard,
+    Tuple(Vec<PatternKind>),
     Const(Const),
     Bind(TokenKey),
     Ctor(CtorPat),
@@ -545,6 +557,21 @@ pub struct Pattern {
 }
 
 impl Pattern {
+    /// Names bound by this pattern in left-to-right structural order.
+    pub fn binding_names(&self) -> Vec<TokenKey> {
+        fn collect(pattern: &PatternKind, names: &mut Vec<TokenKey>) {
+            match pattern {
+                PatternKind::Bind(name) => names.push(*name),
+                PatternKind::Tuple(fields) => fields.iter().for_each(|p| collect(p, names)),
+                PatternKind::Ctor(ctor) => ctor.args.iter().for_each(|a| collect(&a.kind, names)),
+                _ => {}
+            }
+        }
+        let mut names = Vec::new();
+        collect(&self.kind(), &mut names);
+        names
+    }
+
     fn new(node: &ResolvedNode) -> Pattern {
         Pattern { node: node.clone() }
     }
@@ -558,7 +585,7 @@ impl Pattern {
             .find(|n| {
                 matches!(
                     n.kind(),
-                    WildcardPat | BindPat | SyntaxKind::CtorPat | ConstPat
+                    WildcardPat | BindPat | SyntaxKind::CtorPat | ConstPat | TuplePat | ParenPat
                 )
             })
             .expect("pattern kind");
@@ -574,6 +601,18 @@ impl Pattern {
 fn pattern_kind_of(node: &ResolvedNode) -> PatternKind {
     match node.kind() {
         WildcardPat => PatternKind::Wildcard,
+        TuplePat => PatternKind::Tuple(
+            nodes(node)
+                .filter(|n| {
+                    matches!(
+                        n.kind(),
+                        WildcardPat | BindPat | CtorPat | ConstPat | TuplePat | ParenPat
+                    )
+                })
+                .map(pattern_kind_of)
+                .collect(),
+        ),
+        ParenPat => pattern_kind_of(nodes(node).next().expect("grouped pattern")),
         ConstPat => PatternKind::Const(constant(tokens(node).next().expect("constant token"))),
         BindPat => {
             let path = child_node(node, PathKind).expect("binding path");
@@ -609,7 +648,7 @@ fn pat_arg_of(node: &ResolvedNode) -> PatArg {
     let kind = nodes(node).find(|n| {
         matches!(
             n.kind(),
-            WildcardPat | BindPat | SyntaxKind::CtorPat | ConstPat
+            WildcardPat | BindPat | SyntaxKind::CtorPat | ConstPat | TuplePat | ParenPat
         )
     });
     let kind = match kind {
@@ -652,6 +691,8 @@ pub struct CtorCall {
 pub enum ExprKind {
     ConstExpr(Const),
     ExprSeq(Vec<Expr>),
+    Tuple(Vec<Expr>),
+    LetPattern(Pattern, Option<(Type, bool)>, Expr),
     /// `if cond { then } else { other }`; `None` for the else branch means it
     /// was omitted, which is sugar for an empty (unit) `else {}`.
     If(Expr, Expr, Option<Expr>),
@@ -742,6 +783,7 @@ impl Expr {
                 ExprKind::ConstExpr(constant(tokens(node).next().expect("literal token")))
             }
             BlockExpr => ExprKind::ExprSeq(expr_children(node).map(Expr::new).collect()),
+            TupleExpr => ExprKind::Tuple(expr_children(node).map(Expr::new).collect()),
             IfExpr => {
                 let mut parts = expr_children(node);
                 let cond = Expr::new(parts.next().expect("condition"));
@@ -750,12 +792,15 @@ impl Expr {
                 ExprKind::If(cond, then, other)
             }
             LetExpr => {
-                let name = let_name(node).expect("let binding name");
                 let flex = child_node(node, FlexFlag).is_some();
                 let ty = nodes(node)
                     .find(|n| is_type_kind(n.kind()))
                     .map(|t| (Type::new(t), flex));
                 let value = expr_children(node).last().expect("bound value");
+                if let Some(pat) = child_node(node, SyntaxKind::Pattern) {
+                    return ExprKind::LetPattern(Pattern::new(pat), ty, Expr::new(value));
+                }
+                let name = let_name(node).expect("let binding name");
                 let ns = token_span(name);
                 ExprKind::Let(
                     Spanned {

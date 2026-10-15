@@ -66,6 +66,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             TypeKind::TypeStr => self.tcx.mk_str(),
             TypeKind::TypeChar => self.tcx.mk_char(),
             TypeKind::TypeUnit => self.tcx.mk_unit(),
+            TypeKind::TypeTuple(fields) => {
+                let fields: Vec<_> = fields
+                    .iter()
+                    .map(|t| self.eval_type_flex(t, false))
+                    .collect();
+                self.tcx.mk_tuple(&fields)
+            }
             TypeKind::TypeArrow(args, ret) => {
                 let args: Vec<Ty> = args.iter().map(|a| self.eval_type(a)).collect();
                 let ret = self.eval_type(ret);
@@ -636,6 +643,9 @@ pub fn array_element_rejection<'tcx>(
         },
         TyKind::Arc(_) => Some("an `Arc`"),
         TyKind::Cell { .. } => Some("a cell"),
+        TyKind::Tuple(_) => {
+            Some("an inline tuple (arrays currently require scalar or shared-record elements)")
+        }
         TyKind::Closure { .. } => Some("a closure"),
         TyKind::Array { .. } => Some("a nested rc array"),
         TyKind::DevArray { .. } => Some("a device array"),
@@ -680,6 +690,21 @@ pub fn atomic_cell_element_rejection(t: Ty<'_>) -> Option<&'static str> {
 /// element, so it stores a primitive or an rc pointer — inline aggregates
 /// and nullable wrappers do not qualify. (The `Sync` element bound is
 /// checked separately; this is only the storage-shape half.)
+/// Inline tuple slots are immutable values. Live regional references cannot
+/// be stored in them; deferred generic slots are checked again after grounding.
+pub fn tuple_element_rejection(ty: Ty<'_>) -> Option<&'static str> {
+    let unfrozen = match ty.kind() {
+        TyKind::Record {
+            flex: Flexivity::Flex | Flexivity::Regional,
+            ..
+        } => true,
+        TyKind::Nullable(inner) => tuple_element_rejection(*inner).is_some(),
+        TyKind::Tuple(fields) => fields.iter().any(|&t| tuple_element_rejection(t).is_some()),
+        _ => false,
+    };
+    unfrozen.then_some("a tuple cannot store an unfrozen regional value; freeze the element before constructing the tuple")
+}
+
 pub fn lock_cell_slot_rejection<'tcx>(
     cap_of: impl FnOnce(DefId) -> Option<DefaultCap>,
     t: Ty<'tcx>,
@@ -691,6 +716,9 @@ pub fn lock_cell_slot_rejection<'tcx>(
             }
             _ => None,
         },
+        TyKind::Tuple(_) => {
+            Some("an inline tuple, which is stored inline rather than as a pointer")
+        }
         TyKind::Nullable(_) => Some("a nullable, whose null case has no pointer to store"),
         TyKind::Str => Some("a `str`"),
         TyKind::Unit => Some("the unit type"),
@@ -730,7 +758,8 @@ pub fn arc_inner_rejection<'tcx>(
 fn is_concretely_non_pointer(t: Ty<'_>) -> bool {
     matches!(
         t.kind(),
-        TyKind::Token
+        TyKind::Tuple(_)
+            | TyKind::Token
             | TyKind::Future(_)
             | TyKind::Tensor { .. }
             | TyKind::DefaultPlacement
@@ -960,7 +989,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 self.report_arc_wf(inner, span);
                 self.sweep_arc_wf(inner, span);
             }
-            TyKind::Record { args, .. } => {
+            TyKind::Record { args, .. } | TyKind::Tuple(args) => {
                 for &arg in args {
                     self.sweep_arc_wf(arg, span);
                 }
@@ -1037,6 +1066,7 @@ pub fn tensor_element_rejection(elem: Ty<'_>) -> Option<&'static str> {
 /// so adding an SSA type requires an explicit decision here.
 pub fn kernel_type_rejection(ty: Ty<'_>) -> Option<&'static str> {
     match *ty.kind() {
+        TyKind::Tuple(fields) => fields.iter().find_map(|&f| kernel_type_rejection(f)),
         TyKind::Token => None,
         TyKind::Future(payloads) => {
             if payloads.is_empty() {

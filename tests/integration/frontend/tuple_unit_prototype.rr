@@ -1,0 +1,11 @@
+// A declaration and its forwarder agree on erasing unit ABI parameters;
+// textual HIR and MIR retain the complete source signature.
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o - | %FileCheck %s
+// RUN: %rrc %t.mir --emit llvm-ir -o %t.ll
+
+fn external(before: (), n: u64, after: ()) -> u64;
+pub fn forward(n: u64) -> u64 { external((), n, ()) }
+// CHECK-DAG: func.func private @_RC8external(i64) -> i64
+// CHECK-DAG: call @_RC8external(%{{.*}}) : (i64) -> i64

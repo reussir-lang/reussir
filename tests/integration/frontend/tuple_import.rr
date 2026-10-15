@@ -1,0 +1,15 @@
+// An independently serialized dependency supplies tuple-valued generic bodies,
+// nested tuple fields, managed records, and unit members.
+// RUN: %rrc --package-root %S/Inputs/tuple_import_dep --package-name dep --emit rri -o %t.rri
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o - | %FileCheck %s
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --emit llvm-ir -o %t.ll
+
+// CHECK: reussir.record.extract
+pub fn imported(n: u64) -> u64 {
+    let (x, ()) = dep::make(n);
+    let ((a, ()), (b, ())) = dep::pair(dep::identity((x, ())));
+    let h = dep::wrap((a, b));
+    h.value.0.0.value + h.value.1.0.1.value
+}

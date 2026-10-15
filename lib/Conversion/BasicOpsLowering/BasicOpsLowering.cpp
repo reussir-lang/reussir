@@ -3072,10 +3072,12 @@ struct ReussirClosureTransferOpConversionPattern
     if (size > 32)
       mlir::LLVM::MemcpyOp::create(rewriter, loc, dst, src, offset, false);
     else {
-      // directly copy the whole closure box
-      mlir::IntegerAttr sizeAttr = mlir::IntegerAttr::get(indexType, size);
-      mlir::LLVM::MemcpyInlineOp::create(rewriter, loc, dst, src, sizeAttr,
-                                         false);
+      // Copy the whole small closure box with a constant-length memcpy.
+      // LLVM can inline the copy itself; forcing memcpy.inline would exclude
+      // code generators such as TPDE that only implement ordinary memcpy.
+      auto sizeValue = mlir::LLVM::ConstantOp::create(
+          rewriter, loc, indexType, rewriter.getIntegerAttr(indexType, size));
+      mlir::LLVM::MemcpyOp::create(rewriter, loc, dst, src, sizeValue, false);
     }
     // (explicity transfer vtable)
     auto vtablePtrSlot = mlir::LLVM::GEPOp::create(

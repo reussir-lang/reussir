@@ -369,15 +369,31 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         // The function's spans index its own declaration file; every
         // `location` below resolves against it.
         self.cur_file.set(func.file);
+        if func.is_kernel
+            && func
+                .params
+                .iter()
+                .map(|p| p.ty)
+                .chain([func.return_ty])
+                .any(|ty| matches!(ty.kind(), TyKind::Tuple(_)))
+        {
+            return Err(LoweringError::at_source(
+                "kernel tuple ABI lowering requires flattening to SSA values and is not available",
+                func.file,
+                func.body.and_then(|b| b.span),
+            ));
+        }
         // The function and its entry-level ops (block args, return) take the
         // body's source position; nested nodes refine it as they are walked.
         let loc = self.location(func.body.and_then(|b| b.span));
         self.cur_loc.replace(loc);
         // A `regional` function takes the region it allocates into as an implicit
-        // leading `!reussir.region` parameter, ahead of its source parameters.
+        // leading `!reussir.region` parameter. Unit parameters retain their
+        // source positions in MIR but have no physical SSA argument.
         let user_param_tys = func
             .params
             .iter()
+            .filter(|p| !is_unit(p.ty))
             .map(|p| self.tys.mlir_ty(p.ty))
             .collect::<Result<Vec<_>>>()?;
         let mut param_tys = Vec::with_capacity(user_param_tys.len() + 1);
@@ -423,7 +439,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 (None, 0)
             };
             let mut env = Env::new(region_handle, func.is_kernel);
-            for (i, p) in func.params.iter().enumerate() {
+            for (i, p) in func.params.iter().filter(|p| !is_unit(p.ty)).enumerate() {
                 let arg = block
                     .argument(param_base + i)
                     .map_err(|e| LoweringError(format!("missing block argument: {e}").into()))?;
@@ -758,6 +774,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         }
         let loc = self.loc();
         match &e.kind {
+            Tuple(fields) => self.tuple(block, env, e.ty, fields).map(Some),
             // Emitted at full width via the textual APInt path — the value
             // was range-checked against `e.ty` at monomorphization.
             ConstInt(n) => Ok(Some(self.wide_int_constant(block, n, e.ty)?)),
@@ -949,11 +966,14 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                         LoweringError("regional call outside a region scope".into())
                     })?);
                 }
+                // Erasure does not erase evaluation: unit-valued arguments
+                // still run in source order before the call.
                 for a in args.iter() {
-                    operands.push(
-                        self.expr(block, env, a)?
-                            .ok_or_else(|| LoweringError("call argument is unit".into()))?,
-                    );
+                    match self.expr(block, env, a)? {
+                        Some(value) => operands.push(value),
+                        None if is_unit(a.ty) => {}
+                        None => return err("non-unit call argument produced no value"),
+                    }
                 }
                 let result_tys = if is_unit(e.ty) {
                     Vec::new()
@@ -976,7 +996,10 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 }
             }
             RegionRun(body) => self.region_run(block, env, body, e.ty),
-            Proj(base, path) => self.proj(block, env, base, path).map(Some),
+            Proj(base, path) => {
+                let value = self.proj(block, env, base, path)?;
+                Ok(if is_unit(e.ty) { None } else { Some(value) })
+            }
             Assign(dst, field, src) => {
                 self.assign(block, env, dst, *field, src)?;
                 Ok(None)
@@ -1020,6 +1043,38 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 .into(),
             )
         })
+    }
+
+    fn tuple<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        ty: Ty<'tcx>,
+        fields: &[Expr<'tcx>],
+    ) -> Result<Value<'c, 'b>> {
+        let TyKind::Tuple(types) = ty.kind() else {
+            return err("tuple expression has a non-tuple type");
+        };
+        if types.len() != fields.len() || types.iter().zip(fields).any(|(&ty, f)| ty != f.ty) {
+            return err("tuple expression fields do not match its annotated tuple type");
+        }
+        let payload_ty = self.tys.mlir_ty(ty)?;
+        let mut operands = Vec::with_capacity(fields.len());
+        for field in fields {
+            let value = self.expr(block, env, field)?;
+            operands.push(match value {
+                Some(value) => value,
+                None if is_unit(field.ty) => self.append(
+                    block,
+                    builders::record_compound(&[], self.tys.storage_ty(field.ty)?, self.loc()),
+                ),
+                None => return err("tuple field did not produce a value"),
+            });
+        }
+        Ok(self.append(
+            block,
+            builders::record_compound(&operands, payload_ty, self.loc()),
+        ))
     }
 
     /// Construct a record from its (declaration-ordered) field args.
@@ -1279,9 +1334,15 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     ) -> Result<Value<'c, 'b>> {
         let loc = self.loc();
         let ret = c.body.ty;
-        // The closure's inputs at creation: every capture, then every parameter.
-        let inputs: Vec<(VarId, Ty<'tcx>)> =
-            c.captures.iter().chain(c.params.iter()).copied().collect();
+        // Physical inputs: non-unit captures followed by non-unit parameters.
+        // Unit variables remain valueless in the body environment.
+        let inputs: Vec<(VarId, Ty<'tcx>)> = c
+            .captures
+            .iter()
+            .chain(c.params.iter())
+            .filter(|(_, ty)| !is_unit(*ty))
+            .copied()
+            .collect();
         let input_tys: Vec<Ty<'tcx>> = inputs.iter().map(|&(_, t)| t).collect();
         let created_ty = self.tys.closure_type(&input_tys, ret)?;
 
@@ -1318,7 +1379,12 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         // Supply the captured values, consuming the leading inputs in order; each
         // apply drops one input, so after capture `i` the residual closure keeps
         // `input_tys[i + 1..]` — a slice of the original inputs, no per-step shift.
-        for (i, &(var, _)) in c.captures.iter().enumerate() {
+        for (i, &(var, _)) in c
+            .captures
+            .iter()
+            .filter(|(_, ty)| !is_unit(*ty))
+            .enumerate()
+        {
             let cap_val = env.vars.get(&var).copied().ok_or_else(|| {
                 LoweringError(format!("unbound captured variable {var:?}").into())
             })?;
@@ -1378,9 +1444,13 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             builders::closure_uniqify(closure_val, target_ty, loc),
         );
         for (i, a) in args.iter().enumerate() {
-            let arg_val = self
-                .expr(block, env, a)?
-                .ok_or_else(|| LoweringError("closure call argument is unit".into()))?;
+            // Source arity controls partial application, even when an argument
+            // has no physical input slot. Its effects still execute here.
+            let arg_val = match self.expr(block, env, a)? {
+                Some(value) => value,
+                None if is_unit(a.ty) => continue,
+                None => return err("non-unit closure argument produced no value"),
+            };
             // Apply consumes the leading input, so after argument `i` the residual
             // closure keeps `params[i + 1..]` — a slice of the original parameters,
             // no per-step shift or copy.
@@ -1431,9 +1501,14 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         scrut: &Expr<'tcx>,
         tree: &DecisionTree<'tcx>,
     ) -> Result<Option<Value<'c, 'b>>> {
-        let scrut_val = self
-            .expr(block, env, scrut)?
-            .ok_or_else(|| LoweringError("match scrutinee is unit".into()))?;
+        let scrut_val = match self.expr(block, env, scrut)? {
+            Some(value) => value,
+            None if is_unit(scrut.ty) => self.append(
+                block,
+                builders::record_compound(&[], self.tys.storage_ty(scrut.ty)?, self.loc()),
+            ),
+            None => return err("match scrutinee has no value"),
+        };
         // Record the scrutinee's value and type so the ownership pass's per-arm
         // drop (keyed to the scrutinee id for a non-variable scrutinee) resolves
         // it.
@@ -2323,7 +2398,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     // An inline `[value]` record value: read the field out by value
                     // (an inline record has no `[field]` link members).
                     let (field_ty, _) = self.field_at(ty, idx)?;
-                    let field_mlir = self.tys.mlir_ty(field_ty)?;
+                    let field_mlir = self.tys.storage_ty(field_ty)?;
                     let extracted = self.append(
                         block,
                         builders::record_extract(self.context, val, idx as usize, field_mlir, loc),
@@ -2460,7 +2535,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             // container cannot derive it — an atomic island in normal space).
             Ok(ProjectedMember {
                 field_ty,
-                elem_ty: self.tys.mlir_ty(field_ty)?,
+                elem_ty: self.tys.storage_ty(field_ty)?,
                 proj_cap: ref_cap,
                 is_link: true,
                 atomic: ref_atomic,
@@ -2513,7 +2588,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             // whose atomicity the cell kind itself decides.
             Ok(ProjectedMember {
                 field_ty,
-                elem_ty: self.tys.mlir_ty(field_ty)?,
+                elem_ty: self.tys.storage_ty(field_ty)?,
                 proj_cap: ref_cap,
                 is_link: true,
                 atomic: ref_atomic,
@@ -2529,7 +2604,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             let field_ty = self.tcx.mk_nullable(self.tcx.mk_arc(elem));
             Ok(ProjectedMember {
                 field_ty,
-                elem_ty: self.tys.mlir_ty(field_ty)?,
+                elem_ty: self.tys.storage_ty(field_ty)?,
                 proj_cap: ref_cap,
                 is_link: false,
                 atomic: ref_atomic,
@@ -2537,7 +2612,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         } else {
             Ok(ProjectedMember {
                 field_ty,
-                elem_ty: self.tys.mlir_ty(field_ty)?,
+                elem_ty: self.tys.storage_ty(field_ty)?,
                 proj_cap: ref_cap,
                 is_link: false,
                 atomic: ref_atomic,
@@ -2548,6 +2623,15 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     /// The MIR type of field `idx` of a compound record, and whether it is a
     /// mutable `[field]` link.
     fn field_at(&self, record_ty: Ty<'tcx>, idx: u32) -> Result<(Ty<'tcx>, bool)> {
+        if let TyKind::Tuple(fields) = record_ty.kind() {
+            return fields
+                .get(idx as usize)
+                .copied()
+                .map(|ty| (ty, false))
+                .ok_or_else(|| {
+                    LoweringError(format!("tuple field index {idx} out of range").into())
+                });
+        }
         let rec = self
             .tys
             .record_of(record_ty)
@@ -2575,7 +2659,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         match cursor {
             Cursor::Value { val, .. } => Ok(val),
             Cursor::Ref { val, ty, .. } => {
-                let inner = self.tys.mlir_ty(ty)?;
+                let inner = self.tys.storage_ty(ty)?;
                 Ok(self.append(
                     block,
                     dialect::ref_load(self.context, inner, val, self.loc()).into(),
@@ -2729,7 +2813,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         if self.tys.is_managed_rc(ty) {
             block.append_operation(dialect::rc_inc(self.context, val, loc).into());
             Ok(())
-        } else if matches!(ty.kind(), TyKind::Record { .. }) {
+        } else if matches!(ty.kind(), TyKind::Record { .. } | TyKind::Tuple(_)) {
             let reference = self.spill(block, val, ty)?;
             block.append_operation(dialect::ref_acquire(self.context, reference, loc).into());
             Ok(())
@@ -2751,7 +2835,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         if self.tys.is_managed_rc(ty) {
             block.append_operation(dialect::rc_dec(self.context, val, loc).into());
             Ok(())
-        } else if matches!(ty.kind(), TyKind::Record { .. }) {
+        } else if matches!(ty.kind(), TyKind::Record { .. } | TyKind::Tuple(_)) {
             let reference = self.spill(block, val, ty)?;
             block.append_operation(dialect::ref_drop(self.context, reference, loc).into());
             Ok(())

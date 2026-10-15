@@ -60,6 +60,12 @@ pub fn replace_generics<'tcx>(
             let placement = Some(replace_generics(tcx, placement, map));
             tcx.mk_devarray(elem, dims, placement)
         }
+        TyKind::Tuple(fields) => tcx.mk_tuple(
+            &fields
+                .iter()
+                .map(|&t| replace_generics(tcx, t, map))
+                .collect::<Vec<_>>(),
+        ),
         TyKind::Future(ps) => tcx.mk_future(
             &ps.iter()
                 .map(|&p| replace_generics(tcx, p, map))
@@ -96,7 +102,9 @@ pub fn collect_generics_of(ty: Ty<'_>, out: &mut rustc_hash::FxHashSet<GenericId
             collect_generics_of(elem, out);
             collect_generics_of(placement, out);
         }
-        TyKind::Future(ps) => ps.iter().for_each(|&p| collect_generics_of(p, out)),
+        TyKind::Future(ps) | TyKind::Tuple(ps) => {
+            ps.iter().for_each(|&p| collect_generics_of(p, out))
+        }
         TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => collect_generics_of(elem, out),
         _ => {}
     }

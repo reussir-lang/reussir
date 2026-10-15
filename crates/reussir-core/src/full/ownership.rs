@@ -344,6 +344,7 @@ impl<'a, 'tcx> Rr<'a, 'tcx> {
                     None => false,
                 }
             }
+            TyKind::Tuple(fields) => fields.iter().any(|&f| self.is_rr(f)),
             TyKind::Closure { .. } => true,
             // An arc is its inner shared record behind an atomically counted
             // box — always managed.
@@ -486,7 +487,8 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                     s.union_with(&self.free(st));
                 }
             }
-            ExprKind::Call { args, .. }
+            ExprKind::Tuple(args)
+            | ExprKind::Call { args, .. }
             | ExprKind::Ctor { args, .. }
             | ExprKind::Variant { args, .. }
             | ExprKind::Intrinsic { args, .. } => {
@@ -616,7 +618,8 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 }
             }
             ExprKind::Seq(es) => self.place_seq(es, live_after),
-            ExprKind::Call { args, .. }
+            ExprKind::Tuple(args)
+            | ExprKind::Call { args, .. }
             | ExprKind::Ctor { args, .. }
             | ExprKind::Variant { args, .. } => self.place_args(args, live_after),
             ExprKind::Intrinsic { op, args } => match op {

@@ -279,6 +279,7 @@ pub struct ClosureExpr<'tcx> {
 
 #[derive(Clone, Copy, Debug)]
 pub enum ExprKind<'tcx> {
+    Tuple(&'tcx [Expr<'tcx>]),
     GlobalStr(StringToken),
     /// A Unicode scalar value, stored as its 32-bit code point.
     ConstChar(u32),

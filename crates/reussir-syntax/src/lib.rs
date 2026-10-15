@@ -267,6 +267,54 @@ mod tests {
         parse_ok(source).to_json(&map)
     }
 
+    #[test]
+    fn tuples_preserve_grouping_function_lists_and_json() {
+        let source = "fn f(x: ((i32, bool),) -> ((), i32,), y: (i32)) -> (i32,) { let (a, (b,)): (i32, (bool,)) = (y, (true,)); match (a, b) { (n, _) => (n,) } }";
+        let parsed = parse_ok(source);
+        let json = parsed.to_json(&CharMap::new(source)).to_string();
+        for tag in [
+            "TypeTuple",
+            "TypeArrow",
+            "LetPattern",
+            "TuplePat",
+            "SpannedExpr",
+        ] {
+            assert!(json.contains(tag), "missing {tag}: {json}");
+        }
+        assert!(!json.contains("ExprSpanned"));
+        for source in [
+            "fn f() { () }",
+            "fn f() { (1) }",
+            "fn f() { (1,) }",
+            "fn f() { let () = (); }",
+            "fn f() { let (x) = 1; x }",
+        ] {
+            json_of(source);
+        }
+    }
+
+    #[test]
+    fn malformed_tuples_recover_without_losing_following_items() {
+        for source in [
+            "fn f(x: (i32,,bool)) {} fn after() {}",
+            "fn f() { let (a,,b) = (1,2); } fn after() {}",
+            "fn f() { (1,,2) } fn after() {}",
+        ] {
+            let parsed = parse(source);
+            assert!(!parsed.ok(), "accepted {source}");
+            assert!(parsed.root.text() == source);
+            assert!(
+                parsed
+                    .root
+                    .descendants()
+                    .filter(|n| n.kind() == SyntaxKind::FnStmt)
+                    .count()
+                    >= 2,
+                "lost following function: {source}"
+            );
+        }
+    }
+
     /// The AST emitter re-encodes [`PRIM_TYPES`] and [`CAPABILITIES`] in
     /// `ast::prim_type_json` / the capability match, each ending in
     /// `unreachable!`. Feeding every name the parser recognizes through the

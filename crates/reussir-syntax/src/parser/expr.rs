@@ -335,9 +335,26 @@ impl Parser<'_> {
             LParen => {
                 let m = self.start();
                 self.bump();
-                self.expr();
+                let mut count = 0;
+                let mut comma = false;
+                while !self.at(RParen) && !self.at_eof() {
+                    self.expr();
+                    count += 1;
+                    if !self.at(Comma) {
+                        break;
+                    }
+                    comma = true;
+                    self.bump();
+                }
                 self.expect(RParen);
-                Some(m.complete(self, ParenExpr))
+                Some(m.complete(
+                    self,
+                    if count == 1 && !comma {
+                        ParenExpr
+                    } else {
+                        TupleExpr
+                    },
+                ))
             }
             IfKw => Some(self.if_expr()),
             LetKw => Some(self.let_expr()),
@@ -379,7 +396,13 @@ impl Parser<'_> {
     fn let_expr(&mut self) -> CompletedMarker {
         let m = self.start();
         self.bump(); // let
-        self.expect_ident("a binding name");
+        if self.at(LParen) || self.at(Underscore) {
+            let pat = self.start();
+            self.binding_pattern();
+            pat.complete(self, Pattern);
+        } else {
+            self.expect_ident("a binding name");
+        }
         if self.at(Colon) {
             self.bump();
             self.flex_flag_opt();

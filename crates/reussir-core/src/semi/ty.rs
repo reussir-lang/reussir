@@ -219,6 +219,8 @@ pub enum TyKind<'tcx> {
     Str,
     Char,
     Unit,
+    /// An anonymous ordered product, stored inline. Empty products are Unit.
+    Tuple(&'tcx [Ty<'tcx>]),
     Closure {
         params: &'tcx [Ty<'tcx>],
         ret: Ty<'tcx>,
@@ -413,6 +415,14 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn mk_tensor(&self, elem: Ty<'tcx>, dims: &[u64]) -> Ty<'tcx> {
         let dims = self.alloc_slice(dims);
         self.mk(TyKind::Tensor { elem, dims })
+    }
+
+    pub fn mk_tuple(&self, fields: &[Ty<'tcx>]) -> Ty<'tcx> {
+        if fields.is_empty() {
+            self.mk_unit()
+        } else {
+            self.mk(TyKind::Tuple(self.alloc_slice(fields)))
+        }
     }
 
     pub fn mk_future(&self, payloads: &[Ty<'tcx>]) -> Ty<'tcx> {

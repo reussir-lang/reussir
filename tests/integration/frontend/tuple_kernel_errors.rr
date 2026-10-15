@@ -1,0 +1,18 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+// CHECK-DAG: a kernel value cannot appear in a function signature
+pub fn host_parameter(x: (u64, (Tensor<f32>,))) {}
+// CHECK-DAG: a host tuple cannot contain a kernel value
+pub fn host_literal() {
+    let x: Token = core::intrinsic::panic::panic();
+    let p = (1, (x,));
+}
+// A tuple containing one Tensor is not the Tensor launch-return contract.
+#[kernel]
+fn produce() -> (Tensor<f32>,);
+// CHECK-DAG: host code can only call a kernel function that returns Tensor
+pub fn host_call() { produce(); }
+
+// CHECK-DAG: invalid kernel signature type
+#[kernel]
+pub fn host_storage(x: (u64, Cell<u64>)) -> u64 { x.0 }

@@ -1,0 +1,4 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+// Tuple storage is transparent to inline layout cycle detection.
+struct [value] Bad { value: (u64, (Bad,)) }
+// CHECK: recursive `[value]` record has infinite size

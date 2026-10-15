@@ -1,0 +1,6 @@
+pub struct [shared] Boxed { pub value: u64 }
+pub struct [value] Holder<T> { pub value: (T, (T,)) }
+pub fn identity<T>(x: T) -> T { x }
+pub fn pair<T>(x: T) -> (T, T) { (x, x) }
+pub fn wrap<T>(x: T) -> Holder<T> { Holder { value: (x, (x,)) } }
+pub fn make(n: u64) -> (Boxed, ()) { (Boxed { value: n }, ()) }

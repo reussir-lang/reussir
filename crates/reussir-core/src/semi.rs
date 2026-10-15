@@ -106,6 +106,53 @@ mod tests {
     use crate::with_tcx;
 
     #[test]
+    fn tuples_check_contextually_and_destructure_inferred_shapes() {
+        check(
+            r#"
+            fn unknown<T>() -> T { core::intrinsic::panic::panic() }
+            pub fn check_tuple(n: i32) -> i32 {
+                let functions: ((i32) -> i32, bool) = (|x| x, true);
+                let (a, (b,)) = unknown();
+                let a: i32 = a;
+                let b: bool = b;
+                functions.0(n)
+            }
+            #[kernel] fn swap(x: (Tensor<f32>, Token)) -> (Token, Tensor<f32>) {
+                let (tensor, token) = x; (token, tensor)
+            }
+        "#,
+            |_, _| {},
+        );
+    }
+
+    #[test]
+    fn tuples_reject_invalid_patterns_and_storage() {
+        for (source, error) in [
+            (
+                "fn f(x: (i32, bool)) { match x { (a, a) => {} } }",
+                "duplicate binding",
+            ),
+            (
+                "fn f(x: (i32, bool)) { match x { (true, _) => {}, _ => {} } }",
+                "type mismatch",
+            ),
+            ("struct [value] Bad { x: (Bad,) }", "infinite"),
+            ("fn f(x: Nullable<(i32,)>) {}", "not a pointer-like"),
+            ("fn f(x: ((i32,),)) -> bool { x == x }", "PartialEq"),
+            (
+                "#[kernel] fn k() -> (Tensor<f32>,); fn host() { k(); }",
+                "only call a kernel function that returns Tensor",
+            ),
+        ] {
+            assert!(
+                has_error(source, error),
+                "{source}: {:?}",
+                reports_of(source)
+            );
+        }
+    }
+
+    #[test]
     fn kernel_context_tracks_helpers_conditionals_and_host_siblings() {
         check(
             "#[kernel] fn identity<T>(x: T) -> T { x }

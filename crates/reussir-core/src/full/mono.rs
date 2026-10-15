@@ -244,7 +244,7 @@ pub(crate) fn for_each_expr<'e, 'tcx>(expr: &'e Expr<'tcx>, f: &mut impl FnMut(&
             tree_exprs(tree, f);
         }
         Let { value, .. } => for_each_expr(value, f),
-        Seq(es) => es.iter().for_each(|e| for_each_expr(e, f)),
+        Seq(es) | Tuple(es) => es.iter().for_each(|e| for_each_expr(e, f)),
         FuncCall { args, .. } | TraitCall { args, .. } => {
             args.iter().for_each(|e| for_each_expr(e, f));
         }
@@ -916,7 +916,9 @@ fn ty_depth(ty: Ty<'_>) -> usize {
         TyKind::DevArray {
             elem, placement, ..
         } => 1 + ty_depth(elem).max(ty_depth(placement)),
-        TyKind::Future(ps) => 1 + ps.iter().map(|&p| ty_depth(p)).max().unwrap_or(0),
+        TyKind::Future(ps) | TyKind::Tuple(ps) => {
+            1 + ps.iter().map(|&p| ty_depth(p)).max().unwrap_or(0)
+        }
         TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => 1 + ty_depth(elem),
         TyKind::Record { args, .. } => 1 + args.iter().map(|&a| ty_depth(a)).max().unwrap_or(0),
         TyKind::Closure { params, ret } => {
@@ -1881,7 +1883,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 self.note_records(elem);
                 self.note_records(placement);
             }
-            TyKind::Future(ps) => ps.iter().for_each(|&p| self.note_records(p)),
+            TyKind::Future(ps) | TyKind::Tuple(ps) => ps.iter().for_each(|&p| self.note_records(p)),
             TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => self.note_records(elem),
             _ => {}
         }
@@ -1895,6 +1897,19 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     /// [`reported_arcs`](Self::reported_arcs)).
     fn check_arc_inners(&mut self, ty: Ty<'tcx>, span: Option<Span>) {
         match *ty.kind() {
+            TyKind::Tuple(fields) => {
+                if !self.inside_kernel {
+                    self.reject_kernel_escape(ty, span, "a host tuple");
+                }
+                for &field in fields {
+                    if let Some(reason) = crate::semi::ty_eval::tuple_element_rejection(field)
+                        && self.reported_arcs.insert(ty)
+                    {
+                        self.error(span, reason);
+                    }
+                    self.check_arc_inners(field, span);
+                }
+            }
             TyKind::DevArray {
                 elem, placement, ..
             } => {
@@ -2115,7 +2130,9 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 self.discover_records(elem, worklist);
                 self.discover_records(placement, worklist);
             }
-            TyKind::Future(ps) => ps.iter().for_each(|&p| self.discover_records(p, worklist)),
+            TyKind::Future(ps) | TyKind::Tuple(ps) => {
+                ps.iter().for_each(|&p| self.discover_records(p, worklist))
+            }
             TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => {
                 self.discover_records(elem, worklist)
             }
@@ -2196,20 +2213,26 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 .collect(),
             Some(RecordFields::Opaque) | None => Vec::new(),
         };
-        field_tys
+        let mut pending: Vec<_> = field_tys
             .into_iter()
-            .filter_map(|t| match *subst_ty(tcx, t, &subst).kind() {
+            .map(|t| subst_ty(tcx, t, &subst))
+            .collect();
+        let mut instances = Vec::new();
+        while let Some(ty) = pending.pop() {
+            match *ty.kind() {
+                TyKind::Tuple(fields) => pending.extend_from_slice(fields),
                 TyKind::Record { def, args, .. }
                     if self
                         .record_defs
                         .get(&def)
                         .is_some_and(|r| r.default_cap == DefaultCap::Value) =>
                 {
-                    Some((def, args))
+                    instances.push((def, args))
                 }
-                _ => None,
-            })
-            .collect()
+                _ => {}
+            }
+        }
+        instances
     }
 
     /// The ground half of the infinite-size check (see semi's
@@ -2318,6 +2341,8 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 e.kind,
                 ExprKind::Var(_)
                     | ExprKind::Seq(_)
+                    | ExprKind::Tuple(_)
+                    | ExprKind::Proj(..)
                     | ExprKind::Let { .. }
                     | ExprKind::If(..)
                     | ExprKind::FuncCall { .. }
@@ -2539,6 +2564,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 value: self.lower_ref(value, subst),
             },
             ExprKind::Seq(es) => M::Seq(self.lower_slice(es, subst)),
+            ExprKind::Tuple(es) => M::Tuple(self.lower_slice(es, subst)),
             ExprKind::FuncCall {
                 target,
                 ty_args,
@@ -3738,7 +3764,7 @@ mod tests {
             TyKind::DevArray {
                 elem, placement, ..
             } => is_ground(elem) && is_ground(placement),
-            TyKind::Future(ps) => ps.iter().all(|&p| is_ground(p)),
+            TyKind::Future(ps) | TyKind::Tuple(ps) => ps.iter().all(|&p| is_ground(p)),
             TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => is_ground(elem),
             _ => true,
         }
@@ -3755,7 +3781,7 @@ mod tests {
             Arith(l, _, r) | Cmp(l, _, r) | Assign(l, _, r) => vec![l, r],
             If(c, t, f) => vec![c, t, f],
             Let { value, .. } => vec![value],
-            Seq(es) => es.iter().collect(),
+            Seq(es) | Tuple(es) => es.iter().collect(),
             Call { args, .. }
             | Ctor { args, .. }
             | Variant { args, .. }

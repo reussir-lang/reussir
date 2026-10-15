@@ -168,7 +168,12 @@ fn member_is_pointer<'tcx>(ty: Ty<'tcx>, is_field: bool, shapes: &ShapeTable<'tc
         return true;
     }
     match *ty.kind() {
-        TyKind::Closure { .. } | TyKind::Nullable(_) | TyKind::Cell { .. } => true,
+        TyKind::Closure { .. }
+        | TyKind::Nullable(_)
+        | TyKind::Cell { .. }
+        | TyKind::Array { .. }
+        | TyKind::DevArray { .. }
+        | TyKind::Arc(_) => true,
         TyKind::Record { def, args, .. } => shapes
             .get(&(def, args))
             .is_none_or(|s| s.default_cap != DefaultCap::Value),
@@ -225,7 +230,18 @@ pub fn inline_size_align<'tcx>(
         TyKind::Fp(FpTy::Ieee(64)) => scalar(8),
         TyKind::Fp(FpTy::Float8) => scalar(1),
         TyKind::Unit => Ok(SizeAlign { size: 0, align: 1 }),
-        TyKind::Nullable(_) | TyKind::Closure { .. } | TyKind::Cell { .. } => scalar(WORD),
+        TyKind::Nullable(_)
+        | TyKind::Closure { .. }
+        | TyKind::Cell { .. }
+        | TyKind::Array { .. }
+        | TyKind::DevArray { .. }
+        | TyKind::Arc(_) => scalar(WORD),
+        // The native JIT's string representation is { pointer, usize }.
+        TyKind::Str => Ok(SizeAlign {
+            size: 2 * WORD,
+            align: WORD,
+        }),
+        TyKind::Tuple(fields) => compound_size_align(&tuple_fields(fields), shapes),
         TyKind::Record { def, args, .. } => {
             let shape = shapes
                 .get(&(def, args))
@@ -247,6 +263,39 @@ pub fn inline_size_align<'tcx>(
         }
         ref other => Err(format!("cannot compute the layout of `{other:?}`")),
     }
+}
+
+fn tuple_fields<'tcx>(fields: &[Ty<'tcx>]) -> Vec<FieldShape<'tcx>> {
+    fields
+        .iter()
+        .map(|&ty| FieldShape {
+            name: None,
+            ty,
+            is_field: false,
+        })
+        .collect()
+}
+
+/// Address of a logical tuple member after physical alignment packing.
+///
+/// # Safety
+///
+/// `addr` must point at a live initialized inline value of `ty`. A unit member
+/// may point one byte past the payload; its zero-sized value must not be read.
+pub unsafe fn tuple_member_addr<'tcx>(
+    addr: *const u8,
+    ty: Ty<'tcx>,
+    index: usize,
+    shapes: &ShapeTable<'tcx>,
+) -> Result<*const u8, String> {
+    let TyKind::Tuple(fields) = ty.kind() else {
+        return Err("expected a tuple value".into());
+    };
+    if index >= fields.len() {
+        return Err(format!("tuple field index {index} out of bounds"));
+    }
+    let offsets = member_offsets(&tuple_fields(fields), shapes)?;
+    Ok(unsafe { addr.add(offsets[index] as usize) })
 }
 
 /// The payload address inside a **shared** rc box (`{ count: i32, T }`,
@@ -471,6 +520,24 @@ impl<'tcx> Walker<'_, 'tcx> {
                     ));
                 }
                 TyKind::Unit => out.push_str("()"),
+                TyKind::Tuple(fields) => {
+                    self.render_fields(addr, &tuple_fields(fields), depth, out, true)?;
+                }
+                TyKind::Str => {
+                    let ptr = addr.cast::<*const u8>().read_unaligned();
+                    let len = addr.add(WORD as usize).cast::<usize>().read_unaligned();
+                    let bytes = if len == 0 {
+                        &[][..]
+                    } else {
+                        std::slice::from_raw_parts(ptr, len)
+                    };
+                    let text = std::str::from_utf8(bytes)
+                        .map_err(|e| format!("invalid stored string: {e}"))?;
+                    out.push_str(&format!("{text:?}"));
+                }
+                TyKind::Array { .. } => out.push_str("<array>"),
+                TyKind::DevArray { .. } => out.push_str("<devarray>"),
+                TyKind::Arc(inner) => self.render(addr, inner, is_field, depth + 1, out)?,
                 TyKind::Closure { .. } => out.push_str("<closure>"),
                 TyKind::Cell { kind, .. } => {
                     out.push('<');
@@ -551,7 +618,7 @@ impl<'tcx> Walker<'_, 'tcx> {
         match &shape.layout {
             ShapeLayout::Compound(fields) => {
                 out.push_str(&shape.name);
-                unsafe { self.render_fields(payload, fields, depth, out) }
+                unsafe { self.render_fields(payload, fields, depth, out, false) }
             }
             ShapeLayout::Variants(variants) => {
                 let (tag_offset, tag_size, _) =
@@ -583,7 +650,7 @@ impl<'tcx> Walker<'_, 'tcx> {
                 let payload_area = variants_payload_size_align(variants, self.shapes)?;
                 let (_, _, header) = variant_tag_layout(shape.default_cap, variants.len());
                 let base = unsafe { payload.add(align_to(header, payload_area.align) as usize) };
-                unsafe { self.render_fields(base, &fields, depth, out) }
+                unsafe { self.render_fields(base, &fields, depth, out, false) }
             }
         }
     }
@@ -594,6 +661,7 @@ impl<'tcx> Walker<'_, 'tcx> {
         fields: &[FieldShape<'tcx>],
         depth: usize,
         out: &mut String,
+        trailing_singleton_comma: bool,
     ) -> Result<(), String> {
         let named = fields.iter().any(|f| f.name.is_some());
         out.push_str(if named { " { " } else { "(" });
@@ -616,7 +684,101 @@ impl<'tcx> Walker<'_, 'tcx> {
                 )?;
             }
         }
+        if trailing_singleton_comma && fields.len() == 1 {
+            out.push(',');
+        }
         out.push_str(if named { " }" } else { ")" });
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reussir_core::in_arena;
+
+    #[test]
+    fn tuple_reflection_respects_packed_order_and_zero_sized_slots() {
+        in_arena(|tcx| {
+            let ty = tcx.mk_tuple(&[
+                tcx.mk_int(IntTy::Unsigned(8)),
+                tcx.mk_int(IntTy::Unsigned(64)),
+                tcx.mk_unit(),
+                tcx.mk_int(IntTy::Unsigned(16)),
+            ]);
+            let shapes = ShapeTable::default();
+            assert_eq!(
+                inline_size_align(ty, &shapes).unwrap(),
+                SizeAlign { size: 16, align: 8 }
+            );
+            let mut bytes = [0u8; 16];
+            bytes[..8].copy_from_slice(&900u64.to_ne_bytes());
+            bytes[8..10].copy_from_slice(&400u16.to_ne_bytes());
+            bytes[10] = 7;
+            let ptr = bytes.as_ptr();
+            unsafe {
+                assert_eq!(tuple_member_addr(ptr, ty, 0, &shapes).unwrap(), ptr.add(10));
+                assert_eq!(tuple_member_addr(ptr, ty, 1, &shapes).unwrap(), ptr);
+                assert_eq!(tuple_member_addr(ptr, ty, 2, &shapes).unwrap(), ptr.add(11));
+                assert!(tuple_member_addr(ptr, ty, 4, &shapes).is_err());
+                assert_eq!(
+                    render_value(ptr, ty, &shapes, &PrinterRegistry::default()).unwrap(),
+                    "(7, 900, (), 400)"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn nested_and_singleton_unit_tuples_keep_tuple_spelling() {
+        in_arena(|tcx| {
+            let singleton = tcx.mk_tuple(&[tcx.mk_unit()]);
+            let nested = tcx.mk_tuple(&[singleton, tcx.mk_tuple(&[tcx.mk_bool()])]);
+            let shapes = ShapeTable::default();
+            assert_eq!(
+                inline_size_align(singleton, &shapes).unwrap(),
+                SizeAlign { size: 0, align: 1 }
+            );
+            let byte = 1u8;
+            unsafe {
+                assert_eq!(
+                    render_value(&byte, singleton, &shapes, &PrinterRegistry::default()).unwrap(),
+                    "((),)"
+                );
+                assert_eq!(
+                    render_value(&byte, nested, &shapes, &PrinterRegistry::default()).unwrap(),
+                    "(((),), (true,))"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn string_members_use_pointer_and_length_without_losing_escaping() {
+        in_arena(|tcx| {
+            let ty = tcx.mk_tuple(&[tcx.mk_str(), tcx.mk_bool()]);
+            let text = "hello\nλ";
+            let bytes = [text.as_ptr() as usize, text.len(), 1usize];
+            let shapes = ShapeTable::default();
+            assert_eq!(
+                inline_size_align(ty, &shapes).unwrap(),
+                SizeAlign {
+                    size: 3 * WORD,
+                    align: WORD
+                }
+            );
+            unsafe {
+                assert_eq!(
+                    render_value(
+                        bytes.as_ptr().cast(),
+                        ty,
+                        &shapes,
+                        &PrinterRegistry::default()
+                    )
+                    .unwrap(),
+                    "(\"hello\\nλ\", true)"
+                );
+            }
+        });
     }
 }

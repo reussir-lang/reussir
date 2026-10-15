@@ -371,7 +371,6 @@ Ty: raw::Ty = {
     "bool" => raw::Ty::Bool,
     "str" => raw::Ty::Str,
     "char" => raw::Ty::Char,
-    "(" ")" => raw::Ty::Unit,
     "!" => raw::Ty::Bottom,
     <g:"generic"> => raw::Ty::Generic(g),
     "Nullable" "<" <t:Ty> ">" => raw::Ty::Nullable(Box::new(t)),
@@ -400,8 +399,22 @@ Ty: raw::Ty = {
         raw::Ty::Array { elem, dims } => raw::Ty::Tensor { elem, dims },
         elem => raw::Ty::Tensor { elem: Box::new(elem), dims: vec![] },
     },
-    "(" ")" "->" <ret:Ty> => raw::Ty::Closure { params: vec![], ret: Box::new(ret) },
-    "(" <ps:CommaPlus<Ty>> ")" "->" <ret:Ty> => raw::Ty::Closure { params: ps, ret: Box::new(ret) },
+    <p:ParenTypes> <ret:("->" <Ty>)?> => match ret {
+        Some(ret) => raw::Ty::Closure { params: p.0, ret: Box::new(ret) },
+        None if p.0.is_empty() => raw::Ty::Unit,
+        None if p.0.len() == 1 && !p.1 => p.0.into_iter().next().unwrap(),
+        None => raw::Ty::Tuple(p.0),
+    },
+};
+
+ParenTypes: (Vec<raw::Ty>, bool) = {
+    "(" ")" => (vec![], false),
+    "(" <first:Ty> <rest:("," <Comma<Ty>>)?> ")" => {
+        let comma = rest.is_some();
+        let mut fields = vec![first];
+        fields.extend(rest.unwrap_or_default());
+        (fields, comma)
+    },
 };
 
 /// One shape dimension: a static extent, or `?` for a dynamic one
@@ -456,6 +469,9 @@ Expr: raw::Expr = {
 };
 
 Atom: raw::Kind = {
+    "(" <first:Expr> "," <rest:Comma<Expr>> ")" => {
+        let mut fields = vec![first]; fields.extend(rest); raw::Kind::Tuple(fields)
+    },
     <n:"int"> => raw::Kind::ConstInt(n),
     <f:"float"> => raw::Kind::ConstFloat(raw::float_lit(f)),
     "true" => raw::Kind::ConstBool(true),

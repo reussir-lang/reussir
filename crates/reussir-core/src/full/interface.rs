@@ -275,7 +275,9 @@ fn note_records<'tcx>(ty: Ty<'tcx>, records: &mut FxHashSet<DefId>, queue: &mut 
             note_records(elem, records, queue);
             note_records(placement, records, queue);
         }
-        TyKind::Future(ps) => ps.iter().for_each(|&p| note_records(p, records, queue)),
+        TyKind::Future(ps) | TyKind::Tuple(ps) => {
+            ps.iter().for_each(|&p| note_records(p, records, queue))
+        }
         TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } | TyKind::Cell { elem, .. } => {
             note_records(elem, records, queue);
         }

@@ -1,0 +1,17 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+struct [shared] Data { value: u64 }
+struct [shared] Carrier { pair: (Data, u64) }
+// CHECK-DAG: `Arc<Carrier>` is ill-formed
+// CHECK-DAG: tuple field 0
+pub fn ordinary_rc(c: Arc<Carrier>) {}
+
+// Tuple storage forms a value-aggregate boundary: atomic spine promotion
+// cannot cross it, even when the hidden shared type is in the same SCC.
+struct [shared] Recursive { next: (Nullable<Recursive>,) }
+// CHECK-DAG: `Arc<Recursive>` is ill-formed
+pub fn hidden_spine(c: Arc<Recursive>) {}
+
+struct [shared] CellCarrier { value: (RefCell<u64>,) }
+// CHECK-DAG: `Arc<CellCarrier>` is ill-formed
+pub fn unsynchronized(c: Arc<CellCarrier>) {}

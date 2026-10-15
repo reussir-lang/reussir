@@ -73,6 +73,7 @@ fn is_expr_kind(kind: SyntaxKind) -> bool {
         kind,
         BlockExpr
             | ParenExpr
+            | TupleExpr
             | IfExpr
             | LetExpr
             | MatchExpr
@@ -486,13 +487,18 @@ impl Emitter<'_> {
                 tagged("TypeArrow", json!([args, self.type_(rhs)]))
             }
             ParenTypeList => {
-                // A single-element parenthesized list is plain grouping; the
-                // parser rejects multi-element lists outside arrow-lhs
-                // position.
-                let inner = nodes(node)
-                    .find(|n| is_type_kind(n.kind()))
-                    .expect("parenthesized type");
-                return self.type_(inner);
+                let fields: Vec<_> = nodes(node).filter(|n| is_type_kind(n.kind())).collect();
+                if fields.len() == 1 && !tokens(node).any(|t| t.kind() == Comma) {
+                    return self.type_(fields[0]);
+                }
+                if fields.is_empty() {
+                    tagged0("TypeUnit")
+                } else {
+                    tagged(
+                        "TypeTuple",
+                        Value::Array(fields.into_iter().map(|f| self.type_(f)).collect()),
+                    )
+                }
             }
             ArrayType => {
                 let elem = nodes(node)
@@ -522,7 +528,12 @@ impl Emitter<'_> {
 
     fn pattern(&self, node: &ResolvedNode) -> Value {
         let kind = nodes(node)
-            .find(|n| matches!(n.kind(), WildcardPat | BindPat | CtorPat | ConstPat))
+            .find(|n| {
+                matches!(
+                    n.kind(),
+                    WildcardPat | BindPat | CtorPat | ConstPat | TuplePat | ParenPat
+                )
+            })
             .expect("pattern kind");
         let guard = child_node(node, PatGuard)
             .map(|g| self.expr(expr_children(g).next().expect("guard expression")));
@@ -535,6 +546,11 @@ impl Emitter<'_> {
     fn pattern_kind(&self, node: &ResolvedNode) -> Value {
         match node.kind() {
             WildcardPat => tagged0("WildcardPat"),
+            TuplePat => tagged(
+                "TuplePat",
+                Value::Array(nodes(node).map(|p| self.pattern_kind(p)).collect()),
+            ),
+            ParenPat => self.pattern_kind(nodes(node).next().expect("grouped pattern")),
             ConstPat => {
                 let token = tokens(node).next().expect("constant token");
                 tagged("ConstPat", self.constant(token))
@@ -574,8 +590,12 @@ impl Emitter<'_> {
         let field = tokens(node)
             .find(|t| is_ident_like(t.kind()))
             .map(|t| t.text());
-        let kind =
-            nodes(node).find(|n| matches!(n.kind(), WildcardPat | BindPat | CtorPat | ConstPat));
+        let kind = nodes(node).find(|n| {
+            matches!(
+                n.kind(),
+                WildcardPat | BindPat | CtorPat | ConstPat | TuplePat | ParenPat
+            )
+        });
         let kind_json = match kind {
             Some(k) => self.pattern_kind(k),
             // `{ x }` shorthand binds the field to a variable of the same
@@ -599,6 +619,10 @@ impl Emitter<'_> {
                 // Parentheses are transparent in the AST.
                 return self.expr(expr_children(node).next().expect("inner expression"));
             }
+            TupleExpr => tagged(
+                "Tuple",
+                Value::Array(expr_children(node).map(|e| self.expr(e)).collect()),
+            ),
             LiteralExpr => {
                 let token = tokens(node).next().expect("literal token");
                 tagged("ConstExpr", self.constant(token))
@@ -618,20 +642,27 @@ impl Emitter<'_> {
                 tagged("If", json!([cond, then, other]))
             }
             LetExpr => {
-                let name = self.let_name(node).expect("let binding name");
                 let flex = child_node(node, FlexFlag).is_some();
                 let ty = nodes(node)
                     .find(|n| is_type_kind(n.kind()))
                     .map(|t| json!([self.type_(t), flex]));
                 let value = expr_children(node).last().expect("bound value");
-                tagged(
-                    "Let",
-                    json!([
-                        self.with_token_span(name, Value::String(name.text().into())),
-                        ty,
-                        self.expr(value)
-                    ]),
-                )
+                if let Some(pat) = child_node(node, Pattern) {
+                    tagged(
+                        "LetPattern",
+                        json!([self.pattern(pat), ty, self.expr(value)]),
+                    )
+                } else {
+                    let name = self.let_name(node).expect("let binding name");
+                    tagged(
+                        "Let",
+                        json!([
+                            self.with_token_span(name, Value::String(name.text().into())),
+                            ty,
+                            self.expr(value)
+                        ]),
+                    )
+                }
             }
             MatchExpr => {
                 let scrutinee = expr_children(node).next().expect("scrutinee");

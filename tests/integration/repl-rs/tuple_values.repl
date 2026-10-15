@@ -1,0 +1,112 @@
+// REQUIRES: rrepl
+// RUN: %rrepl -i %s -lerror 2>&1 | %FileCheck %s
+// RUN: %rrepl -i %s -lerror -Onone 2>&1 | %FileCheck %s
+// RUN: %rrepl -i %s -lerror -Oaggressive 2>&1 | %FileCheck %s
+
+(10, (true, 20), ())
+// CHECK: (10, (true, 20), ()) : (i64, (bool, i64), ())
+
+(7,)
+// CHECK: (7,) : (i64,)
+
+((),)
+// CHECK: ((),) : ((),)
+
+()
+// CHECK: {{^}}(){{$}}
+
+// Heterogeneous physical layouts retain string storage and pointer leaves.
+(true, "hi", 2)
+// CHECK: (true, "hi", 2) : (bool, str, i64)
+
+(|x: i64| x + 1, ())
+// CHECK: (<closure>, ()) :
+
+(core::intrinsic::array::splat<[i64; 2]>(7), true)
+// CHECK: (<array>, true) : ([i64; 2], bool)
+
+// Persist every named field from one nested destructuring input.
+let (a, (b, _)) = (10, (20, 30))
+// CHECK: (a, b) = (10, 20) : (i64, i64)
+
+a + b
+// CHECK: 30 : i64
+
+// Type ascriptions and physical alignment must not change logical indices.
+let (small, wide, (), yes): (u8, u64, (), bool) = (3, 40, (), true)
+// CHECK: (small, wide, yes) = (3, 40, true) : (u8, u64, bool)
+
+wide + small as u64
+// CHECK: 43 : u64
+
+:type (a, (yes,))
+// CHECK: (a, (yes,)) : (i64, (bool,))
+
+// A rejected input cannot replace even the first existing binding.
+let (a, a) = (100, 200)
+// CHECK: duplicate binding `a` in destructuring pattern
+
+a + b
+// CHECK: 30 : i64
+
+let (a, b, c) = (100, 200)
+// CHECK: tuple pattern with 3 fields does not match
+
+a + b
+// CHECK: 30 : i64
+
+// Managed members survive later projection, output, and rebinding one sibling.
+struct Boxed { value: i64 }
+// CHECK: Definition added.
+
+let pair = (Boxed { value: 7 }, (Boxed { value: 9 },))
+// CHECK: pair = (Boxed { value: 7 }, (Boxed { value: 9 },)) : (Boxed, (Boxed,))
+
+let (left, (right,)) = pair
+// CHECK: (left, right) = (Boxed { value: 7 }, Boxed { value: 9 }) : (Boxed, Boxed)
+
+let left = Boxed { value: 100 }
+// CHECK: left = Boxed { value: 100 } : Boxed
+
+left.value + right.value + pair.0.value
+// CHECK: 116 : i64
+
+:dump bindings
+// CHECK: === Global Bindings ===
+// CHECK: a : i64 = 10
+// CHECK: b : i64 = 20
+// CHECK: small : u8 = 3
+// CHECK: wide : u64 = 40
+// CHECK: yes : bool = true
+// CHECK: pair : (Boxed, (Boxed,)) = (Boxed { value: 7 }, (Boxed { value: 9 },))
+// CHECK: left : Boxed = Boxed { value: 100 }
+// CHECK: right : Boxed = Boxed { value: 9 }
+
+// Destructuring evaluates the RHS once, then persists both projections.
+let counter = core::intrinsic::cell::alloc(0)
+// CHECK: counter =
+
+fn tick(c: Cell<i64>) -> i64 { let old = core::intrinsic::cell::get(c); core::intrinsic::cell::set(c, old + 1); old }
+// CHECK: Definition added.
+
+let (first, second) = (tick(counter), tick(counter))
+// CHECK: (first, second) = (0, 1) : (i64, i64)
+
+core::intrinsic::cell::get(counter)
+// CHECK: 2 : i64
+
+first * 10 + second
+// CHECK: 1 : i64
+
+// No global bindings are retained by an all-wildcard destructuring input.
+let (_, _) = (Boxed { value: 1 }, Boxed { value: 2 })
+// CHECK: () = () : ()
+
+right.value
+// CHECK: 9 : i64
+
+:clear
+// CHECK: Context cleared
+
+right
+// CHECK: unknown variable `right`

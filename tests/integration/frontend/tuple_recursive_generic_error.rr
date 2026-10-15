@@ -1,0 +1,6 @@
+// RUN: %not %rrc %s --emit mir -o - 2>&1 | %FileCheck %s
+// The cycle is only apparent after substituting Box<Recursive>'s field T.
+pub struct [value] Box<T> { value: (T,) }
+pub struct [value] Recursive { value: Box<Recursive> }
+pub fn ground(x: Recursive) {}
+// CHECK: this instantiation creates a recursive `[value]` record of infinite size

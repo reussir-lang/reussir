@@ -1,0 +1,21 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+// Inline tuple values obey the same storage restrictions as value records.
+// CHECK-DAG: inline tuple (arrays currently require scalar or shared-record elements)
+pub fn array_element(x: [(u64, bool); 2]) {}
+// CHECK-DAG: inline tuple, which is stored inline rather than as a pointer
+pub fn mutex_element(x: Mutex<(u64, u64)>) {}
+// CHECK-DAG: not an integer or floating-point primitive
+pub fn atomic_element(x: Atomic<(u64,)>) {}
+// CHECK-DAG: not a pointer-like type
+pub fn nullable_element(x: Nullable<(u64,)>) {}
+// CHECK-DAG: not an rc box
+pub fn arc_element(x: Arc<(u64,)>) {}
+// CHECK-DAG: tuple field index is out of bounds or is not positional
+pub fn out_of_bounds(x: (u64, bool)) -> u64 { x.2 }
+// CHECK-DAG: tuple field index is out of bounds or is not positional
+pub fn named_field(x: (u64, bool)) -> u64 { x.value }
+
+// Tuple positions are immutable; regional assignment rules do not apply.
+// CHECK-DAG: assignment target must be a flex record
+pub fn assign_field(x: (u64, u64)) { x->0 := 9; }

@@ -221,6 +221,10 @@ pub enum SyntaxKind {
     /// `..` inside a constructor pattern argument list.
     PatRest,
 
+    TupleExpr,
+    TuplePat,
+    ParenPat,
+
     /// End-of-file sentinel used by the parser; never stored in the tree.
     Eof,
 }

@@ -641,11 +641,11 @@ impl Parser<'_> {
     // ===== Types =====
 
     /// A right-associative chain of arrow segments. A parenthesized list of
-    /// two or more types denotes the argument tuple of a function type and
-    /// is only meaningful directly to the left of an `->`.
+    /// types before `->` denotes the function parameter list. Elsewhere, a
+    /// comma makes a structural tuple; `()` is unit and `(T)` groups `T`.
     pub(crate) fn type_(&mut self) {
         stacker::maybe_grow(STACK_RED_ZONE, STACK_GROW, || {
-            let Some((seg, arity)) = self.type_segment() else {
+            let Some((seg, _arity)) = self.type_segment() else {
                 self.error(format!(
                     "expected a type, found {}",
                     self.current().describe()
@@ -657,11 +657,6 @@ impl Parser<'_> {
                 self.bump();
                 self.type_();
                 m.complete(self, ArrowType);
-            } else if arity > 1 {
-                self.error(
-                    "a parenthesized type list is only allowed to the left of `->`; \
-                     use a single type here",
-                );
             }
         })
     }
@@ -672,12 +667,14 @@ impl Parser<'_> {
         if self.at(LParen) {
             let m = self.start();
             self.bump();
-            self.type_();
-            let mut arity = 1;
-            while self.at(Comma) {
-                self.bump();
+            let mut arity = 0;
+            while !self.at(RParen) && !self.at_eof() {
                 self.type_();
                 arity += 1;
+                if !self.at(Comma) {
+                    break;
+                }
+                self.bump();
             }
             self.expect(RParen);
             let done = m.complete(self, ParenTypeList);
@@ -773,7 +770,47 @@ impl Parser<'_> {
     }
 
     pub(crate) fn pattern_kind(&mut self) {
+        self.pattern_kind_in(false);
+    }
+
+    pub(crate) fn binding_pattern(&mut self) {
+        self.pattern_kind_in(true);
+    }
+
+    fn pattern_kind_in(&mut self, binding: bool) {
         stacker::maybe_grow(STACK_RED_ZONE, STACK_GROW, || match self.current() {
+            LParen => {
+                let m = self.start();
+                self.bump();
+                let mut comma = false;
+                let mut count = 0;
+                while !self.at(RParen) && !self.at_eof() {
+                    self.pattern_kind_in(binding);
+                    count += 1;
+                    if !self.at(Comma) {
+                        break;
+                    }
+                    comma = true;
+                    self.bump();
+                }
+                self.expect(RParen);
+                m.complete(
+                    self,
+                    if count == 1 && !comma {
+                        ParenPat
+                    } else {
+                        TuplePat
+                    },
+                );
+            }
+            k if binding
+                && k.is_ident_like()
+                && !matches!(self.nth(1), PathSep | LParen | LBrace) =>
+            {
+                let m = self.start();
+                self.path();
+                m.complete(self, BindPat);
+            }
             Underscore => {
                 let m = self.start();
                 self.bump();

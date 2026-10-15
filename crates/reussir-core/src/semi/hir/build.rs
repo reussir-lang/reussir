@@ -378,6 +378,7 @@ pub fn parse_program<'tcx>(tcx: &TyCtxt<'tcx>, text: &str) -> Result<Parsed<'tcx
     let strings = raw::string_entries(&raw.strings)?;
     let mut b = Builder {
         tcx,
+        error: None,
         names: Names::default(),
         defs: DefTable::new(),
         generic_bounds: FxHashMap::default(),
@@ -456,6 +457,9 @@ pub fn parse_program<'tcx>(tcx: &TyCtxt<'tcx>, text: &str) -> Result<Parsed<'tcx
         })
         .collect();
     let trampolines = raw.trampolines.iter().map(|t| b.trampoline(t)).collect();
+    if let Some(error) = b.error.take() {
+        return Err(error);
+    }
     Ok(Parsed {
         header: raw.header.clone(),
         funcs,
@@ -477,6 +481,7 @@ pub fn parse_program<'tcx>(tcx: &TyCtxt<'tcx>, text: &str) -> Result<Parsed<'tcx
 }
 
 struct Builder<'a, 'tcx> {
+    error: Option<String>,
     tcx: &'a TyCtxt<'tcx>,
     names: Names,
     defs: DefTable,
@@ -745,6 +750,10 @@ impl<'tcx> Builder<'_, 'tcx> {
             raw::Ty::Str => self.tcx.mk_str(),
             raw::Ty::Char => self.tcx.mk_char(),
             raw::Ty::Unit => self.tcx.mk_unit(),
+            raw::Ty::Tuple(fields) => {
+                let fields: Vec<_> = fields.iter().map(|f| self.ty(f)).collect();
+                self.tcx.mk_tuple(&fields)
+            }
             raw::Ty::Bottom => self.tcx.mk(TyKind::Bottom),
             raw::Ty::Generic(g) => self.tcx.mk_generic(GenericId(*g)),
             raw::Ty::Nullable(inner) => {
@@ -848,6 +857,16 @@ impl<'tcx> Builder<'_, 'tcx> {
                 }
             }
             raw::Kind::Seq(items) => ExprKind::Seq(self.exprs(items)),
+            raw::Kind::Tuple(items) => {
+                let fields = self.exprs(items);
+                if !matches!(ty.kind(), TyKind::Tuple(types) if types.len() == fields.len() && types.iter().zip(fields.iter()).all(|(&t, f)| t == f.ty))
+                {
+                    self.error = Some(
+                        "tuple expression fields do not match its annotated tuple type".into(),
+                    );
+                }
+                ExprKind::Tuple(fields)
+            }
             raw::Kind::FuncCall {
                 regional,
                 path,
@@ -1234,6 +1253,40 @@ mod tests {
                 "lossless round-trip mismatch\n=== printed ===\n{text}\n=== reparsed ===\n{text2}"
             );
         });
+    }
+
+    #[test]
+    fn rejects_malformed_tuple_annotations() {
+        for (value, ty) in [
+            ("(1 : i32, true : bool)", "(i32,)"),
+            ("(1 : i32, true : bool)", "(bool, i32)"),
+            ("(1 : i32,)", "i32"),
+        ] {
+            with_tcx(|tcx| {
+                let input = format!("fn #bad() -> {ty} {{ {value} : {ty} }}");
+                let error = match parse_program(tcx, &input) {
+                    Ok(_) => panic!("accepted {input}"),
+                    Err(error) => error,
+                };
+                assert!(error.contains("tuple expression fields"), "{error}");
+            });
+        }
+    }
+
+    #[test]
+    fn roundtrips_structural_tuples_and_destructuring() {
+        roundtrip(
+            r#"
+            pub fn id<T>(x: T) -> T { x }
+            pub fn pair(x: i32) -> ((), (i32, bool), ()) { ((), (id(x), true), ()) }
+            pub fn singleton(x: i32) -> (i32,) { (x,) }
+            pub fn use_pair(x: i32) -> i32 {
+                let ((), (n, b), ()): ((), (i32, bool), ()) = pair(x);
+                match (b, n) { (true, value) => value, (false, _) => 0 }
+            }
+            pub fn call_tuple(f: ((i32, bool),) -> i32, p: (i32, bool)) -> i32 { f(p) }
+        "#,
+        );
     }
 
     #[test]

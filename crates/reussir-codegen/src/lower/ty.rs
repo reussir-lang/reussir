@@ -146,6 +146,35 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
         }
         match *ty.kind() {
             TyKind::Record { .. } => self.record_type(ty),
+            TyKind::Tuple(fields) => {
+                if let Some(reason) = reussir_core::semi::ty_eval::tuple_element_rejection(ty) {
+                    return err(reason);
+                }
+                if reussir_core::semi::ctxt::contains_kernel_value(ty) {
+                    return err(
+                        "kernel tuples require SSA flattening and cannot use host aggregate storage",
+                    );
+                }
+                let fields: Vec<_> = fields
+                    .iter()
+                    .map(|&f| {
+                        if is_unit(f) {
+                            self.storage_ty(f)
+                        } else {
+                            self.member_ty(f)
+                        }
+                    })
+                    .collect::<Result<_>>()?;
+                Ok(reussir_backend::dialect::ty::record_complete(
+                    self.context,
+                    &fields,
+                    &vec![false; fields.len()],
+                    None,
+                    ReussirRecordKind::Compound,
+                    ReussirCapability::Value,
+                    false,
+                ))
+            }
             // A `Nullable<T>` wraps its element's MLIR pointer type (an `rc` link
             // for the regional/shared records that can sit behind a nullable
             // `[field]` slot) so it may additionally hold null. The dialect's
@@ -253,6 +282,24 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
                 }
             }
             _ => scalar_ty(self.context, ty),
+        }
+    }
+
+    /// Unit occupies a zero-sized anonymous value slot inside a tuple. Keeping
+    /// the slot preserves logical field indices while standalone unit stays void.
+    pub(super) fn storage_ty(&self, ty: Ty<'tcx>) -> Result<Type<'c>> {
+        if is_unit(ty) {
+            Ok(reussir_backend::dialect::ty::record_complete(
+                self.context,
+                &[],
+                &[],
+                None,
+                ReussirRecordKind::Compound,
+                ReussirCapability::Value,
+                false,
+            ))
+        } else {
+            self.mlir_ty(ty)
         }
     }
 
@@ -511,8 +558,11 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
     /// a `shared` record member is named by its inner type — see
     /// [`member_ty`](Self::member_ty).
     fn closure_inner(&self, inputs: &[Ty<'tcx>], ret: Ty<'tcx>) -> Result<Type<'c>> {
+        // Keep source parameter positions in Ty; only the physical signature
+        // erases Unit, matching ordinary function and closure-body lowering.
         let input_tys = inputs
             .iter()
+            .filter(|&&t| !is_unit(t))
             .map(|&t| self.mlir_ty(t))
             .collect::<Result<Vec<_>>>()?;
         let output = if is_unit(ret) {
@@ -774,6 +824,7 @@ fn scalar_ty<'c>(context: &'c Context, ty: Ty<'_>) -> Result<Type<'c>> {
         )),
         TyKind::Unit => err("unit has no MLIR value type"),
         TyKind::Str => Ok(str_type(context, ReussirLifeScope::Global)),
+        TyKind::Tuple(_) => err("tuple type reached scalar lowering without its aggregate layout"),
         TyKind::Record { .. } => err("record type reached scalar lowering without a layout"),
         TyKind::Array { .. } | TyKind::DevArray { .. } => {
             err("array type reached scalar lowering without its rc wrapper")
