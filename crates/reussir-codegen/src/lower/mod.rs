@@ -53,7 +53,6 @@
 mod debug;
 mod expr;
 mod kernel;
-mod kernel_if;
 mod math;
 mod ty;
 

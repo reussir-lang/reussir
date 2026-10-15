@@ -188,7 +188,10 @@ mod tests {
                 "pub trait Identity { #[kernel] fn id(x: i32) -> i32; } pub struct Marker {} impl Identity for Marker { fn id(x: i32) -> i32 { x } }",
                 "kernel",
             ),
-            ("#[kernel] fn f(x: i32) -> i32 { x + x }", "host operations"),
+            (
+                "#[kernel] fn f(x: i32) -> i32 { x as i32 }",
+                "host operations",
+            ),
             (
                 "#[kernel] fn f() { core::intrinsic::panic::panic() }",
                 "host intrinsics",
@@ -266,7 +269,7 @@ mod tests {
                 assert!(p.ok(), "{:?}", p.errors);
                 surface::program(&p.root)
             };
-            elab.try_extend(&batch("#[kernel] fn bad(x: i32) -> i32 { x + x }"))
+            elab.try_extend(&batch("#[kernel] fn bad(x: i32) -> i32 { x as i32 }"))
                 .expect_err("host operation");
             assert!(!elab.inside_kernel);
             assert!(elab.elaborated.is_empty());
