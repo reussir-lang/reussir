@@ -19,19 +19,20 @@ struct [value] MandelbrotConfig {}
 
 #[kernel]
 fn escape_times(limit: i64) -> Tensor<[i32; 1024, 1024]> {
-    let column: Tensor<[f32; 1024, 1024]> = tensor::iota(1);
-    let row: Tensor<[f32; 1024, 1024]> = tensor::iota(0);
-    let scale: Tensor<[f32; 1024, 1024]> = tensor::fill(3.0 / 1024.0);
-    let left: Tensor<[f32; 1024, 1024]> = tensor::fill(2.0);
-    let half_height: Tensor<[f32; 1024, 1024]> = tensor::fill(1.5);
+    let column = tensor::iota(1);
+    let row = tensor::iota(0);
+    let pixel_scale: f32 = 3.0 / 1024.0;
+    let scale = tensor::fill(pixel_scale);
+    let left = tensor::fill(2.0);
+    let half_height = tensor::fill(1.5);
     let real = column * scale - left;
     let imaginary = row * scale - half_height;
-    let zero: Tensor<[f32; 1024, 1024]> = tensor::fill(0.0);
-    let two: Tensor<[f32; 1024, 1024]> = tensor::fill(2.0);
-    let four: Tensor<[f32; 1024, 1024]> = tensor::fill(4.0);
-    let counts: Tensor<[i32; 1024, 1024]> = tensor::fill(0);
-    let one: Tensor<[i32; 1024, 1024]> = tensor::fill(1);
-    let active: Tensor<[bool; 1024, 1024]> = tensor::fill(true);
+    let zero = tensor::fill(0.0);
+    let two = tensor::fill(2.0);
+    let four = tensor::fill(4.0);
+    let counts = tensor::fill(0);
+    let one = tensor::fill(1);
+    let active = tensor::fill(true);
     let (step, zr, zi, live, result) = while [step = 0, zr = zero, zi = zero, live = active, result = counts] (step < limit) {
         let nr = zr * zr - zi * zi + real;
         let ni = two * zr * zi + imaginary;

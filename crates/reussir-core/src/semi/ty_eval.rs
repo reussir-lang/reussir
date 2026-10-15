@@ -39,7 +39,7 @@
 //! binding. Generics are left uncolored — their modality is resolved at
 //! monomorphization.
 
-use crate::semi::infer::Instantiation;
+use crate::semi::infer::{Instantiation, shape::Dim};
 use crate::semi::resolve::DefKind;
 use crate::semi::traits::sync::{SyncEnv, SyncVerdict, wf_arc};
 use crate::semi::ty::{DefId, Flexivity, FpTy, IntTy, Ty, TyKind};
@@ -48,6 +48,29 @@ use crate::surface::{self, FpType, IntegralType, TypeKind};
 use super::ctxt::{DefaultCap, Elaborator, RecordFields};
 
 impl<'a, 'tcx> Elaborator<'a, 'tcx> {
+    /// Evaluate an exported or reusable declaration type. Dimension holes are
+    /// local inference variables and cannot be retained across function contexts.
+    pub fn eval_decl_type(&mut self, ty: &surface::Type) -> Ty<'tcx> {
+        let mut holes = Vec::new();
+        inferred_dimension_spans(ty, &mut holes);
+        if holes.is_empty() {
+            self.eval_type(ty)
+        } else {
+            for span in holes {
+                self.error(Some(span), "inferred dimension `_` is only allowed in local type annotations and type arguments; use an explicit extent or `?` in a declaration");
+            }
+            // Do not allocate local inference IDs in a declaration, even during
+            // error recovery: entering the next function resets their context.
+            self.tcx.mk_unit()
+        }
+    }
+
+    /// Declaration counterpart of [`Self::eval_type_flex`].
+    pub fn eval_decl_type_flex(&mut self, ty: &surface::Type, is_flex: bool) -> Ty<'tcx> {
+        let t = self.eval_decl_type(ty);
+        self.refine_flex(t, is_flex)
+    }
+
     /// Evaluate a surface type, coloring concrete regional records as
     /// `Regional` (later refined by [`Elaborator::eval_type_flex`]).
     pub fn eval_type(&mut self, ty: &surface::Type) -> Ty<'tcx> {
@@ -277,8 +300,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                                 .iter()
                                 .map(|extent| match extent {
                                     surface::ArrayExtent::Dynamic(_) => {
-                                        crate::semi::ty::DYNAMIC_EXTENT
+                                        Dim::Known(crate::semi::ty::DYNAMIC_EXTENT)
                                     }
+                                    surface::ArrayExtent::Infer(_) => self.infer.new_dim(),
                                     surface::ArrayExtent::Expr(expr) => {
                                         let dim = self.eval_shape_extent(expr, "tensor");
                                         if dim > i64::MAX as u64 {
@@ -286,9 +310,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                                                 Some(expr.span()),
                                                 "tensor extent exceeds the signed 64-bit MLIR dimension limit",
                                             );
-                                            1
+                                            Dim::Known(1)
                                         } else {
-                                            dim
+                                            Dim::Known(dim)
                                         }
                                     }
                                 })
@@ -298,7 +322,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                         _ => (self.eval_type(inner), Vec::new()),
                     };
                     self.report_tensor_element(elem, Some(span));
-                    self.tcx.mk_tensor(elem, &dims)
+                    if let Some(dims) = known_extents(&dims) {
+                        self.tcx.mk_tensor(elem, &dims)
+                    } else {
+                        let shape = self.infer.ranked_shape(dims);
+                        self.infer.new_tensor_ty(elem, shape)
+                    }
                 }
                 _ => {
                     self.error(Some(span), "`Tensor` takes exactly one type argument");
@@ -331,7 +360,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     let mut dims = Vec::new();
                     for extent in extents {
                         dims.push(match extent {
-                            surface::ArrayExtent::Dynamic(_) => crate::semi::ty::DYNAMIC_EXTENT,
+                            surface::ArrayExtent::Dynamic(_) => {
+                                Dim::Known(crate::semi::ty::DYNAMIC_EXTENT)
+                            }
+                            surface::ArrayExtent::Infer(_) => self.infer.new_dim(),
                             surface::ArrayExtent::Expr(e) => {
                                 let n = self.eval_extent(&e);
                                 if n > i64::MAX as u64 {
@@ -340,7 +372,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                                         "device array extent exceeds i64::MAX",
                                     );
                                 }
-                                n.min(i64::MAX as u64)
+                                Dim::Known(n.min(i64::MAX as u64))
                             }
                         });
                     }
@@ -377,7 +409,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     );
                 }
             }
-            return self.tcx.mk_devarray(elem, &dims, placement);
+            return if let Some(dims) = known_extents(&dims) {
+                self.tcx.mk_devarray(elem, &dims, placement)
+            } else {
+                let shape = self.infer.ranked_shape(dims);
+                let placement = placement.unwrap_or_else(|| self.tcx.mk(TyKind::DefaultPlacement));
+                self.infer.new_devarray_ty(elem, shape, placement)
+            };
         }
 
         // Nothing else under the reserved `core` package names a type.
@@ -451,22 +489,28 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         for e in extents {
             match e {
                 surface::ArrayExtent::Dynamic(_) => {
-                    dims.push(crate::semi::ty::DYNAMIC_EXTENT);
+                    dims.push(Dim::Known(crate::semi::ty::DYNAMIC_EXTENT));
                 }
+                surface::ArrayExtent::Infer(_) => dims.push(self.infer.new_dim()),
                 surface::ArrayExtent::Expr(e) => {
                     let extent = self.eval_extent(e);
                     if extent > i64::MAX as u64 {
                         self.error(Some(e.span()), "array extent exceeds i64::MAX");
                     }
                     product = product.saturating_mul(u128::from(extent));
-                    dims.push(extent);
+                    dims.push(Dim::Known(extent));
                 }
             }
         }
         if product > (1u128 << 32) {
             self.error(Some(span), "array is too large (more than 2^32 elements)");
         }
-        self.tcx.mk_array(elem, &dims)
+        if let Some(dims) = known_extents(&dims) {
+            self.tcx.mk_array(elem, &dims)
+        } else {
+            let shape = self.infer.ranked_shape(dims);
+            self.infer.new_array_ty(elem, shape)
+        }
     }
 
     /// Evaluate one array extent expression. The grammar admits any
@@ -1018,6 +1062,54 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     }
 }
 
+/// Collect source dimension holes recursively, including those hidden in
+/// function types, structural products, and applications of named type formers.
+fn inferred_dimension_spans(ty: &surface::Type, out: &mut Vec<surface::Span>) {
+    match ty.kind() {
+        TypeKind::TypeArray(elem, extents) => {
+            inferred_dimension_spans(&elem, out);
+            out.extend(extents.iter().filter_map(|extent| match extent {
+                surface::ArrayExtent::Infer(span) => Some(*span),
+                _ => None,
+            }));
+        }
+        TypeKind::TypeTuple(fields) => {
+            for field in fields {
+                inferred_dimension_spans(&field, out);
+            }
+        }
+        TypeKind::TypeExpr(_, args) => {
+            for arg in args {
+                inferred_dimension_spans(&arg, out);
+            }
+        }
+        TypeKind::TypeArrow(args, ret) => {
+            for arg in args {
+                inferred_dimension_spans(&arg, out);
+            }
+            inferred_dimension_spans(&ret, out);
+        }
+        TypeKind::TypeIntegral(_)
+        | TypeKind::TypeFp(_)
+        | TypeKind::TypeBool
+        | TypeKind::TypeStr
+        | TypeKind::TypeChar
+        | TypeKind::TypeUnit => {}
+    }
+}
+
+/// Preserve the canonical type representation for fully specified shapes.
+/// Inference dimensions live only in InferCtxt; they are never encoded as a
+/// special integer extent or confused with the runtime dynamic marker.
+fn known_extents(dims: &[Dim]) -> Option<Vec<u64>> {
+    dims.iter()
+        .map(|dim| match dim {
+            Dim::Known(value) => Some(*value),
+            _ => None,
+        })
+        .collect()
+}
+
 /// PJRT scalar dtypes supported by the frontend. Generic elements are checked after substitution.
 pub fn device_element_supported(ty: Ty<'_>) -> bool {
     matches!(
@@ -1098,5 +1190,55 @@ pub fn kernel_type_rejection(ty: Ty<'_>) -> Option<&'static str> {
         | TyKind::Arc(_) => Some(
             "kernel values must be tensors, futures, tokens, supported numeric/bool scalars, or unit",
         ),
+    }
+}
+
+#[cfg(test)]
+mod dimension_annotation_tests {
+    use super::*;
+
+    #[test]
+    fn local_dimension_annotations_elaborate_without_exporting_holes() {
+        let source =
+            include_str!("../../../../tests/integration/frontend/shape_annotation_types.rr");
+        crate::with_tcx(|tcx| {
+            let interner = std::sync::Arc::new(reussir_syntax::new_threaded_interner());
+            let parsed = reussir_syntax::parse_with_interner(source, interner.clone());
+            assert!(parsed.ok(), "{:?}", parsed.errors);
+            let program = surface::program(&parsed.root);
+            let elab = crate::semi::elaborate(tcx, &program, &interner);
+            assert!(!elab.has_errors(), "{:#?}", elab.reports);
+        });
+    }
+
+    #[test]
+    fn declaration_holes_are_found_inside_all_type_constructors() {
+        let source = "fn f(x: (Tensor<[f32; _, ?]>, ([i32; _],) -> DevArray<[f32; 4, _]>)) {}";
+        let parsed = reussir_syntax::parse(source);
+        assert!(parsed.ok(), "{:?}", parsed.errors);
+        let program = surface::program(&parsed.root);
+        let surface::StmtKind::Function(function) = program[0].kind() else {
+            panic!("expected function");
+        };
+        let mut holes = Vec::new();
+        inferred_dimension_spans(&function.params[0].1, &mut holes);
+        assert_eq!(holes.len(), 3);
+        for span in holes {
+            assert_eq!(&source[span.start as usize..span.end as usize], "_");
+        }
+    }
+
+    #[test]
+    fn runtime_dimensions_and_fixed_shapes_are_valid_declaration_syntax() {
+        let source = "fn f(x: (Tensor<[f32; ?, 4]>, [i32; 2], DevArray<[f32; ?, ?]>)) {}";
+        let parsed = reussir_syntax::parse(source);
+        assert!(parsed.ok(), "{:?}", parsed.errors);
+        let program = surface::program(&parsed.root);
+        let surface::StmtKind::Function(function) = program[0].kind() else {
+            panic!("expected function");
+        };
+        let mut holes = Vec::new();
+        inferred_dimension_spans(&function.params[0].1, &mut holes);
+        assert!(holes.is_empty());
     }
 }

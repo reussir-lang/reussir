@@ -1,0 +1,55 @@
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
+// RUN: diff %t.hir %t.round.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+
+// Every underscore is fresh, and local unification resolves it before HIR.
+#[kernel]
+pub fn tensor_static(x: Tensor<[f32; 2, 3]>) -> Tensor<[f32; 2, 3]> {
+    let y: Tensor<[f32; _, _]> = x;
+    let z: Tensor<[f32; _, 3]> = y;
+    z
+}
+
+// Inference may discover a runtime dimension, but `_` itself is not `?`.
+#[kernel]
+pub fn tensor_dynamic(x: Tensor<[f32; ?, 3]>) -> Tensor<[f32; ?, 3]> {
+    let y: Tensor<[f32; _, 3]> = x;
+    y
+}
+
+#[kernel]
+pub fn tensor_zero(x: Tensor<[i32; 0, 4]>) -> Tensor<[i32; 0, 4]> {
+    let y: Tensor<[i32; _, _]> = x;
+    y
+}
+
+pub fn array_static(x: [i32; 2, 3]) -> [i32; 2, 3] {
+    let y: [i32; _, 3] = x;
+    y
+}
+
+pub fn device_static(x: DevArray<[f32; 2, 3]>) -> DevArray<[f32; 2, 3]> {
+    let y: DevArray<[f32; _, _]> = x;
+    y
+}
+
+pub fn nested(x: ([i32; 2], DevArray<[f32; 3]>)) -> ([i32; 2], DevArray<[f32; 3]>) {
+    let y: ([i32; _], DevArray<[f32; _]>) = x;
+    y
+}
+
+#[kernel]
+fn identity<T>(x: T) -> T { x }
+#[kernel]
+pub fn type_argument(x: Tensor<[f32; 2, 3]>) -> Tensor<[f32; 2, 3]> {
+    identity<Tensor<[f32; _, 3]>>(x)
+}
+
+// HIR-DAG: Tensor<[f32; 2, 3]>
+// HIR-DAG: Tensor<[f32; ?, 3]>
+// HIR-DAG: Tensor<[i32; 0, 4]>
+// HIR-NOT: InferExtent

@@ -231,6 +231,8 @@ pub enum SyntaxKind {
     // Append new stored kinds to preserve existing green-tree cache/hash IDs.
     AsyncKw,
     AsyncExpr,
+    /// `_` in array-extent position: a dimension inferred from context.
+    InferExtent,
 
     /// End-of-file sentinel used by the parser; never stored in the tree.
     Eof,

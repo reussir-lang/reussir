@@ -1,0 +1,11 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+#[kernel]
+fn parameter(x: Tensor<[f32; _]>) {}
+#[kernel]
+fn result() -> Tensor<[f32; _]> { core::intrinsic::tensor::fill(0.0) }
+struct [value] Stored { value: [i32; _] }
+fn nested_parameter(x: ([i32; 2], DevArray<[f32; _]>)) {}
+fn closure_parameter(x: ([i32; _]) -> [i32; 4]) {}
+
+// CHECK-COUNT-5: inferred dimension `_` is only allowed in local type annotations and type arguments

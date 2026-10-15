@@ -5,4 +5,4 @@ import dep::begin;
 pub fn invalid(n: i32) -> Tensor<[f32; 2]> {
     core::intrinsic::tensor::async_done(begin(n, n))
 }
-// CHECK: dynamic_slice input and result must be Tensor types
+// CHECK: type mismatch in shape relation: tensor operation requires Tensor operands and result

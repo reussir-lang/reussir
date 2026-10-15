@@ -428,13 +428,14 @@ pub enum TypeKind {
     TypeArray(Type, SmallVec<[ArrayExtent; 2]>),
 }
 
-/// One dimension of an array (or tensor) type: an extent expression, or `?`
-/// for a dynamic dimension whose value is a runtime operand of the
-/// constructing intrinsic (mirroring MLIR's `memref<?x…>`).
+/// One dimension of an array (or tensor) type: an extent expression, `_`
+/// inferred from local constraints, or `?` for a runtime dynamic dimension.
 #[derive(Debug, Clone)]
 pub enum ArrayExtent {
     Expr(Expr),
     Dynamic(Span),
+    /// A fresh inference variable, distinct from a runtime dynamic extent.
+    Infer(Span),
 }
 
 /// A type expression (a view over a `PrimType` / `PathType` / `ArrowType` node).
@@ -480,10 +481,14 @@ impl Type {
                     .expect("array element type");
                 let extents = node
                     .children()
-                    .filter(|n| is_expr_kind(n.kind()) || n.kind() == DynExtent)
+                    .filter(|n| {
+                        is_expr_kind(n.kind()) || matches!(n.kind(), DynExtent | InferExtent)
+                    })
                     .map(|n| {
                         if n.kind() == DynExtent {
                             ArrayExtent::Dynamic(node_span(n))
+                        } else if n.kind() == InferExtent {
+                            ArrayExtent::Infer(node_span(n))
                         } else {
                             ArrayExtent::Expr(Expr::new(n))
                         }

@@ -1,6 +1,8 @@
 //! The elaboration context: collected items, global + per-function state, and
 //! the scan/collect driver.
 
+mod bodies;
+
 use reussir_syntax::SharedInterner;
 use reussir_syntax::kind::{Resolver, TokenKey};
 use reussir_syntax::source::{FileId, SourceCache};
@@ -504,6 +506,7 @@ pub struct Elaborator<'a, 'tcx> {
     pub extern_ffi_imports: FxHashMap<DefId, FfiImport>,
     pub extern_ffi_preludes: Vec<FfiPrelude>,
     pub elaborated: Vec<Function<'tcx>>,
+    body_scheduler: bodies::BodyScheduler,
     pub reports: Vec<Report>,
     /// The file whose items are currently being processed; stamped onto every
     /// report and declared item. The driver sets it per input file
@@ -642,6 +645,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             extern_ffi_imports: FxHashMap::default(),
             extern_ffi_preludes: Vec::new(),
             elaborated: Vec::new(),
+            body_scheduler: bodies::BodyScheduler::default(),
             reports: Vec::new(),
             current_file: FileId::ROOT,
             records_complete: false,
@@ -1496,6 +1500,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let live = cp.defs as u32;
         self.records.retain(|def, _| def.0 < live);
         self.functions.retain(|def, _| def.0 < live);
+        self.body_scheduler.rollback(live);
         self.ffi_imports.retain(|def, _| def.0 < live);
         self.generics.truncate(cp.generics);
         self.traits.truncate(cp.traits, cp.impls);
@@ -2163,8 +2168,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             let self_ty = match (target, &impl_generics) {
                 (Some(target), Some(generics)) => {
                     self.generic_names = generics.iter().map(|(n, id)| (*n, *id)).collect();
-                    let args: Vec<Ty<'tcx>> =
-                        ib.target_args.iter().map(|a| self.eval_type(a)).collect();
+                    let args: Vec<Ty<'tcx>> = ib
+                        .target_args
+                        .iter()
+                        .map(|a| self.eval_decl_type(a))
+                        .collect();
                     self.generic_names.clear();
                     let flex = match self.records[&target].default_cap {
                         DefaultCap::Value | DefaultCap::Shared => Flexivity::Irrelevant,
@@ -2309,6 +2317,26 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
         }
         self.records_complete = true;
+        // Register every source body before checking any of them. A forward
+        // call can then demand the callee's summary without depending on file
+        // traversal or declaration order.
+        let body_order: Vec<_> = function_defs
+            .iter()
+            .chain(method_defs.iter())
+            .flatten()
+            .copied()
+            .collect();
+        let first_body = self.elaborated.len();
+        for ((func, span, _, _, _, _, _), def) in functions.iter().zip(&function_defs) {
+            if let Some(def) = def {
+                self.body_scheduler.register(*def, func, *span);
+            }
+        }
+        for (func, span, def) in &methods {
+            if let Some(def) = def {
+                self.body_scheduler.register(*def, func, *span);
+            }
+        }
         functions
             .iter()
             .zip(function_defs)
@@ -2322,6 +2350,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             .for_each(|(func, span, def)| {
                 self.check_function(func, def, span);
             });
+        // Nested demand checking completes dependencies first, but external
+        // HIR order remains the driver's stable declaration order.
+        let ordinal: FxHashMap<_, _> = body_order
+            .into_iter()
+            .enumerate()
+            .map(|(i, def)| (def, i))
+            .collect();
+        self.elaborated[first_body..].sort_by_key(|function| ordinal[&function.def]);
         trampolines.iter().for_each(|(tramp, span, scope)| {
             self.set_current_file(scope.file);
             self.defs.set_module(scope.module.to_vec());
@@ -2880,7 +2916,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self.error(span, "a builtin impl takes no generic parameters");
             return nones;
         }
-        let trait_args: Vec<Ty<'tcx>> = targs_surface.iter().map(|a| self.eval_type(a)).collect();
+        let trait_args: Vec<Ty<'tcx>> = targs_surface
+            .iter()
+            .map(|a| self.eval_decl_type(a))
+            .collect();
         let expected = self.traits.trait_def(tid).params.len();
         if trait_args.len() != expected {
             self.error(
@@ -3034,8 +3073,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // Trait arguments and the self type evaluate under the block
         // generics.
         self.generic_names = generics.iter().map(|(n, id)| (*n, *id)).collect();
-        let trait_args: Vec<Ty<'tcx>> = targs_surface.iter().map(|a| self.eval_type(a)).collect();
-        let self_args: Vec<Ty<'tcx>> = ib.target_args.iter().map(|a| self.eval_type(a)).collect();
+        let trait_args: Vec<Ty<'tcx>> = targs_surface
+            .iter()
+            .map(|a| self.eval_decl_type(a))
+            .collect();
+        let self_args: Vec<Ty<'tcx>> = ib
+            .target_args
+            .iter()
+            .map(|a| self.eval_decl_type(a))
+            .collect();
         self.generic_names.clear();
         let self_ty = match (scalar_target, target) {
             (Some(scalar), _) => scalar,
@@ -3492,7 +3538,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let mut regional_generics: Vec<GenericId> = Vec::new();
         let mut params = Vec::new();
         for (name, ty, flex) in &func.params {
-            let t = self.eval_type_flex(ty, *flex);
+            let t = self.eval_decl_type_flex(ty, *flex);
             if *flex {
                 collect_regional_generic(t, &mut regional_generics);
             }
@@ -3501,7 +3547,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         let return_ty = match &func.return_type {
             Some((ty, flex)) => {
-                let t = self.eval_type_flex(ty, *flex);
+                let t = self.eval_decl_type_flex(ty, *flex);
                 if *flex {
                     collect_regional_generic(t, &mut regional_generics);
                 }
@@ -3840,7 +3886,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             .params
             .iter()
             .map(|(_, ty, flex)| {
-                let t = self.eval_type_flex(ty, *flex);
+                let t = self.eval_decl_type_flex(ty, *flex);
                 self.check_function_signature_type(t, func.is_kernel, Some(ty.span()));
                 t
             })
@@ -3871,7 +3917,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             });
         let ret = match &func.return_type {
             Some((ty, flex)) => {
-                let t = self.eval_type_flex(ty, *flex);
+                let t = self.eval_decl_type_flex(ty, *flex);
                 self.check_function_signature_type(t, func.is_kernel, Some(ty.span()));
                 t
             }
@@ -4025,7 +4071,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                             fields: tys
                                 .iter()
                                 .map(|t| {
-                                    let fty = self.eval_type(t);
+                                    let fty = self.eval_decl_type(t);
                                     self.reject_arc_member(default_cap, fty, span);
                                     self.reject_tensor_member(fty, span);
                                     fty
@@ -4067,7 +4113,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// be collected rather than dropped.
     fn collect_trampoline(&mut self, tramp: &surface::ExternTrampoline, span: Option<Span>) {
         // The target's type arguments are concrete here (no generics in scope).
-        let ty_args: Vec<Ty<'tcx>> = tramp.ty_args.iter().map(|t| self.eval_type(t)).collect();
+        let ty_args: Vec<Ty<'tcx>> = tramp
+            .ty_args
+            .iter()
+            .map(|t| self.eval_decl_type(t))
+            .collect();
 
         let Some(target) = self.resolve_function_ref(&tramp.func) else {
             let hint = if tramp.func.segments.is_empty() {
@@ -4128,7 +4178,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// The stored type of a field. A mutable (`[field]`) field is a nullable
     /// regional link, so its type is wrapped in `Nullable`.
     fn field_ty(&mut self, ty: &surface::Type, mutable: bool) -> Ty<'tcx> {
-        let t = self.eval_type(ty);
+        let t = self.eval_decl_type(ty);
         if mutable { self.tcx.mk_nullable(t) } else { t }
     }
 

@@ -17,7 +17,7 @@
 //! concrete types and super-trait subsumption for in-scope generics.
 
 use crate::semi::traits::{Obligation, SelectCtxt, SelectError, TraitRef};
-use crate::semi::ty::{FpTy, HoleId, IntTy, Ty, TyKind};
+use crate::semi::ty::{FpTy, HoleId, IntTy, TyKind};
 use crate::surface::Span;
 
 use super::ctxt::Elaborator;
@@ -32,16 +32,10 @@ pub struct PendingObligation<'tcx> {
 #[derive(Default)]
 pub struct FulfillCtxt<'tcx> {
     pending: Vec<PendingObligation<'tcx>>,
-    // A constructor result may acquire its shape/dtype from a later use.
-    // Keep the scalar equality until ordinary expression inference completes.
-    tensor_fills: Vec<(Ty<'tcx>, Ty<'tcx>, Option<Span>)>,
+    pub(super) shapes: super::shape_constraints::ShapeConstraints<'tcx>,
 }
 
 impl<'tcx> FulfillCtxt<'tcx> {
-    pub fn register_tensor_fill(&mut self, result: Ty<'tcx>, value: Ty<'tcx>, span: Option<Span>) {
-        self.tensor_fills.push((result, value, span));
-    }
-
     pub fn register(&mut self, obligation: Obligation<'tcx>, span: Option<Span>) {
         self.pending.push(PendingObligation { obligation, span });
     }
@@ -55,52 +49,16 @@ enum Discharge {
 }
 
 impl<'a, 'tcx> Elaborator<'a, 'tcx> {
-    /// Discharge all pending obligations to a fixpoint, reporting any that fail
-    /// or remain ambiguous.
-    ///
-    /// Operational semantics (substructural). Read the pending obligations as a
-    /// *linear* context Δ — a multiset of resources, each to be discharged
-    /// *exactly once*. The machine state is ⟨Δ | σ | E⟩ with σ the inference
-    /// substitution and E the diagnostics. A decidable obligation is *consumed*
-    /// (`o ⇝ ρ` is the per-obligation judgment on `discharge_trait`; `Δ, o` is
-    /// multiset extension; `m @ span(o)` blames message `m` at `o`'s span). A
-    /// deferred obligation matches no rule and stays in Δ:
-    ///
-    /// ```text
-    ///         o ⇝ ✓                            o ⇝ ✗(m)
-    /// ────────────────────────────    ────────────────────────────────────
-    ///   ⟨Δ, o | σ | E⟩ ⟶ ⟨Δ | σ | E⟩    ⟨Δ, o | σ | E⟩ ⟶ ⟨Δ | σ | E, m@span(o)⟩
-    /// ```
-    ///
-    /// Reduce to a normal form ⟨Δ | σ | E⟩ in which every remaining `o` is
-    /// deferred. Those are *leaked* resources — obligations that could not be
-    /// consumed — and each is reported:
-    ///
-    /// ```text
-    ///   ⟨Δ | σ | E⟩ normal      o ∈ Δ
-    /// ────────────────────────────────────── (leak)
-    ///   E ∪= ("type annotations needed" @ span(o))
-    /// ```
-    ///
-    /// Linearity is the content: an obligation is discharged exactly once — no
-    /// contraction (a bound is not proved twice), no weakening (it cannot be
-    /// silently dropped) — so a leftover resource is *precisely* an ambiguity.
-    /// Termination is immediate: every ⟶ removes one obligation from Δ.
-    ///
-    /// Today no step advances σ — discharge only reads the table — so a deferred
-    /// obligation is permanently stuck and the normal form is one sweep away.
-    /// That holds only because every obligation is single-argument (`Self`). With
-    /// type-carrying traits — multi-parameter (`T: Add<Rhs>`) or an associated-
-    /// type output — the (✓) step would also step σ ⟶ σ′ (unifying the trait's
-    /// non-`Self` arguments, which may be holes), which can make a previously
-    /// stuck obligation reducible: the cascade, where discharge and unification
-    /// interleave (rustc's model). The code realizes this rewrite with a batched
-    /// schedule (`std::mem::take` the bag, sweep, keep the deferred) — one fair
-    /// ordering of the steps above.
+    /// Solve trait obligations and shape relations to a joint fixed point.
+    /// Either can refine types needed by the other. Once static propagation
+    /// stalls, operation rules may supply justified runtime extents; arbitrary
+    /// rank, dimension, and element-type choices remain annotation errors.
     pub fn resolve_obligations(&mut self) {
-        self.resolve_tensor_fill_constraints();
-        let mut pending = std::mem::take(&mut self.fulfill).into_pending();
+        let mut pending = Vec::new();
         loop {
+            let revision = self.infer.progress();
+            self.resolve_shape_constraints(false);
+            pending.append(&mut self.fulfill.pending);
             let mut progress = false;
             let mut deferred = Vec::new();
             for p in std::mem::take(&mut pending) {
@@ -114,10 +72,18 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 }
             }
             pending = deferred;
-            if !progress || pending.is_empty() {
-                break;
+            if !progress && self.infer.progress() == revision {
+                // Runtime extents are a justified fallback only after all
+                // static contextual information and trait facts are exhausted.
+                // Newly selected summaries may introduce further runtime sizes,
+                // so repeat the joint fixed point after each actual refinement.
+                self.default_runtime_shapes();
+                if self.infer.progress() == revision && self.fulfill.pending.is_empty() {
+                    break;
+                }
             }
         }
+        self.resolve_shape_constraints(true);
         for p in pending {
             self.error(p.span, "type annotations needed: cannot resolve a bound");
             // The unresolved bound is the root cause; suppress the zonk-time
@@ -128,25 +94,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             let mut holes = Vec::new();
             collect_holes(self_ty, &mut holes);
             self.reported_holes.extend(holes);
-        }
-    }
-
-    fn resolve_tensor_fill_constraints(&mut self) {
-        for (result, value, span) in std::mem::take(&mut self.fulfill.tensor_fills) {
-            if let TyKind::Tensor { elem, .. } = self.infer.resolve(result).kind() {
-                let value = self.infer.resolve(value);
-                let scalar = match value.kind() {
-                    TyKind::Tensor { elem, dims } if dims.is_empty() => *elem,
-                    _ => value,
-                };
-                // Generic wrapper bodies defer their relationship to the shared
-                // ground operation validator, just like other shape constraints.
-                if !matches!(scalar.kind(), TyKind::Generic(_))
-                    && !matches!(elem.kind(), TyKind::Generic(_))
-                {
-                    self.expect(scalar, *elem, span);
-                }
-            }
         }
     }
 
@@ -163,7 +110,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// `FloatingPoint` (from a float literal), e.g. `1.5 * 2`; the float
     /// default must win, so `FloatingPoint` holes are solved first.
     pub(super) fn default_numeric_holes(&mut self) {
-        self.resolve_tensor_fill_constraints();
+        self.resolve_shape_constraints(false);
         let f64_ty = self.tcx.mk_fp(FpTy::Ieee(64));
         let i64_ty = self.tcx.mk_int(IntTy::Signed(64));
         let passes = [
@@ -392,12 +339,6 @@ pub(super) fn collect_holes(ty: crate::semi::ty::Ty<'_>, out: &mut Vec<HoleId>) 
         TyKind::Future(ps) | TyKind::Tuple(ps) => ps.iter().for_each(|&p| collect_holes(p, out)),
         TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => collect_holes(*elem, out),
         _ => {}
-    }
-}
-
-impl<'tcx> FulfillCtxt<'tcx> {
-    fn into_pending(self) -> Vec<PendingObligation<'tcx>> {
-        self.pending
     }
 }
 

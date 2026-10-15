@@ -549,6 +549,24 @@ mod tests {
     }
 
     #[test]
+    fn inferred_dimensions_are_distinct_from_runtime_dimensions() {
+        let source = "fn f(x: Tensor<[f32; _, ?, 4]>, y: [i32; _]) { let z: DevArray<[f32; _, 4]> = g<Tensor<[f32; _, _]>>(); }";
+        let parsed = parse_ok(source);
+        let json = parsed.to_json(&CharMap::new(source)).to_string();
+        assert_eq!(json.matches("InferExtent").count(), 5, "{json}");
+        assert!(json.contains("null"), "runtime dimension was lost: {json}");
+        // `_` is a complete extent, not a new arithmetic expression form.
+        for source in [
+            "fn f(x: Tensor<[f32; _ + 1]>) {}",
+            "fn f(x: Tensor<[f32; _,]>) {}",
+            "fn f(x: Tensor<[f32; _ ?]>) {}",
+            "fn f() { _ }",
+        ] {
+            assert!(!super::parse(source).ok(), "accepted {source}");
+        }
+    }
+
+    #[test]
     fn parses_regional_and_assign() {
         json_of(
             "struct [regional] L<T> { v: T, next: [field] L<T> }\nregional fn push<T>(c : [flex] L<T>, e : T) { c->next := Nullable::NonNull{c} }",
