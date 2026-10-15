@@ -9,7 +9,7 @@
 //! Return `Deferred` while any required fact is unresolved; do not choose a
 //! rank or allocate fresh variables on every retry. Runtime metadata defaults
 //! belong only to `Phase::DefaultRuntime`. Add rule tests here and source-level
-//! direct/wrapper cases in `tests.rs`. The scheduler and summary composition
+//! direct/wrapper cases in `shape_constraints/tests.rs`. The scheduler and summary composition
 //! should not need operation-specific branches.
 use crate::intrinsic::TensorFn;
 use crate::semi::infer::{
@@ -45,10 +45,14 @@ pub(super) enum RuleError {
     Rank { expected: usize, actual: usize },
     #[error("tensor operation requires Tensor operands and result")]
     ExpectedTensor,
+    #[error("tensor host boundary requires an Array")]
+    ExpectedArray,
+    #[error("tensor shape or indices must be a tuple")]
+    ExpectedTuple,
+    #[error("async_done requires a Future with exactly one Tensor payload")]
+    ExpectedTensorFuture,
     #[error("dot has no compatible vector/matrix rank and dimension combination")]
     IncompatibleDotShapes,
-    #[error("cannot infer shape for {operation}: operation has no inference rule")]
-    CannotInfer { operation: &'static str },
     #[error("select predicate must be scalar or match the value shape")]
     PredicateShape,
     #[error("expected a scalar or rank-zero Tensor")]
@@ -127,6 +131,25 @@ fn tensor<'tcx>(
         return Ok(Some(TensorView { elem, shape }));
     }
     Err(RuleError::ExpectedTensor)
+}
+fn array<'tcx>(
+    i: &mut InferCtxt<'_, 'tcx>,
+    t: Ty<'tcx>,
+) -> Result<Option<TensorView<'tcx>>, RuleError> {
+    if let Some(view) = i.array_view(t) {
+        return Ok(Some(view));
+    }
+    match i.shallow_resolve(t).kind() {
+        TyKind::Generic(_) | TyKind::Bottom => Ok(None),
+        TyKind::Hole(_) => {
+            let elem = i.new_hole_ty();
+            let shape = i.new_shape();
+            let candidate = i.new_array_ty(elem, shape);
+            equal(i, t, candidate)?;
+            Ok(Some(TensorView { elem, shape }))
+        }
+        _ => Err(RuleError::ExpectedArray),
+    }
 }
 fn matching<'tcx>(
     i: &mut InferCtxt<'_, 'tcx>,
@@ -280,6 +303,56 @@ fn integer(arg: &Argument<'_>) -> Result<Option<u64>, RuleError> {
         _ => Ok(None),
     }
 }
+fn fields<'tcx>(
+    i: &mut InferCtxt<'_, 'tcx>,
+    arg: &Argument<'tcx>,
+) -> Result<Option<Vec<Argument<'tcx>>>, RuleError> {
+    if let Some(Value::Tuple(fields)) = &arg.value {
+        return Ok(Some(fields.clone()));
+    }
+    match i.shallow_resolve(arg.ty).kind() {
+        TyKind::Unit => Ok(Some(Vec::new())),
+        TyKind::Tuple(fields) => Ok(Some(
+            fields.iter().copied().map(Argument::unknown).collect(),
+        )),
+        TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => Ok(None),
+        _ => Err(RuleError::ExpectedTuple),
+    }
+}
+fn dynamic_shape<'tcx>(
+    i: &mut InferCtxt<'_, 'tcx>,
+    tcx: &TyCtxt<'tcx>,
+    output: ShapeId,
+    arg: &Argument<'tcx>,
+    phase: Phase,
+) -> Result<RuleStatus, RuleError> {
+    let Some(fields) = fields(i, arg)? else {
+        return Ok(RuleStatus::Deferred);
+    };
+    let dims = rank(i, output, fields.len())?;
+    let mut status = RuleStatus::Solved;
+    for (field, dim) in fields.iter().zip(dims) {
+        match scalar_element(i, field)? {
+            Some(elem) => equal(i, elem, tcx.mk_int(IntTy::Signed(64)))?,
+            None => status = RuleStatus::Deferred,
+        }
+        if let Some(value) = integer(field)? {
+            compatible(i, Dim::Known(value), dim)?;
+        } else if matches!(i.resolve_dim(dim), Dim::Var(_)) {
+            // Keep the original dimension meta live throughout propagation:
+            // a later result annotation may still constrain this runtime size.
+            // Only the final fallback can choose the conservative dynamic
+            // representation, and only for an actual runtime size operand.
+            if phase == Phase::DefaultRuntime {
+                i.unify_dims(dim, Dim::Known(DYNAMIC_EXTENT))
+                    .map_err(RuleError::from)?;
+            } else {
+                status = RuleStatus::Deferred;
+            }
+        }
+    }
+    Ok(status)
+}
 fn open(t: Ty<'_>) -> bool {
     match t.kind() {
         TyKind::Hole(_) | TyKind::Generic(_) => true,
@@ -287,34 +360,6 @@ fn open(t: Ty<'_>) -> bool {
         TyKind::Future(ts) | TyKind::Tuple(ts) => ts.iter().any(|&t| open(t)),
         _ => false,
     }
-}
-
-/// Existing operations without a shape rule keep their declared type checking.
-/// New domain rules opt in here as they are introduced.
-pub(in crate::semi) fn supports(op: TensorFn) -> bool {
-    use TensorFn::*;
-    matches!(
-        op,
-        Dot | Transpose
-            | Fill
-            | Iota
-            | Add
-            | Sub
-            | Mul
-            | Div
-            | Rem
-            | Neg
-            | Abs
-            | Min
-            | Max
-            | Eq
-            | Ne
-            | Lt
-            | Le
-            | Gt
-            | Ge
-            | Select
-    )
 }
 
 pub(super) fn apply<'tcx>(
@@ -342,33 +387,96 @@ pub(super) fn apply<'tcx>(
     // In a polymorphic body the operand may still be a rigid whole type V;
     // assigning its identity to a fresh result is valid without guessing V.
     match op {
-        Add | Sub | Mul | Div | Rem | Neg | Abs | Min | Max => equal(i, result, args[0].ty)?,
+        Add | Sub | Mul | Div | Rem | Neg | Abs | Min | Max | CollectivePermute => {
+            equal(i, result, args[0].ty)?
+        }
         Select => equal(i, result, args[1].ty)?,
         Of | Materialize | Dim | DynamicSlice | Slice | AsyncDone | Fill | DynamicFill | Iota
-        | DynamicIota | Eq | Ne | Lt | Le | Gt | Ge | Dot | Transpose | CollectivePermute => {}
+        | DynamicIota | Eq | Ne | Lt | Le | Gt | Ge | Dot | Transpose => {}
     }
     match op {
-        Fill | Iota => {
-            if op == Iota {
-                equal(i, args[0].ty, tcx.mk_int(IntTy::Signed(64)))?;
+        Of | Materialize => {
+            let (a, b) = if op == Of {
+                (array(i, args[0].ty)?, tensor(i, result)?)
+            } else {
+                (tensor(i, args[0].ty)?, array(i, result)?)
+            };
+            if let (Some(a), Some(b)) = (a, b) {
+                matching(i, a, b)?;
+            } else {
+                status = RuleStatus::Deferred;
+            }
+        }
+        Dim => {
+            tensor(i, args[0].ty)?;
+            equal(i, result, tcx.mk_int(IntTy::Unsigned(64)))?;
+            equal(i, args[1].ty, tcx.mk_int(IntTy::Unsigned(64)))?;
+        }
+        AsyncDone => {
+            tensor(i, result)?;
+            match i.shallow_resolve(args[0].ty).kind() {
+                TyKind::Future(payload) if payload.len() == 1 => equal(i, result, payload[0])?,
+                TyKind::Hole(_) => equal(i, args[0].ty, tcx.mk_future(&[result]))?,
+                TyKind::Generic(_) | TyKind::Bottom => status = RuleStatus::Deferred,
+                _ => {
+                    return Err(RuleError::ExpectedTensorFuture);
+                }
+            }
+        }
+        Fill | DynamicFill | Iota | DynamicIota => {
+            // Metadata has a type independently of the result's opaque generic
+            // shape. Core wrappers must type their literal axes and sizes too.
+            if matches!(op, Iota | DynamicIota) {
+                equal(
+                    i,
+                    args[usize::from(op == DynamicIota)].ty,
+                    tcx.mk_int(IntTy::Signed(64)),
+                )?;
+            }
+            if matches!(op, DynamicFill | DynamicIota) {
+                if let Some(fields) = fields(i, &args[usize::from(op == DynamicFill)])? {
+                    for field in fields {
+                        if let Some(elem) = scalar_element(i, &field)? {
+                            equal(i, elem, tcx.mk_int(IntTy::Signed(64)))?;
+                        }
+                        integer(&field)?;
+                    }
+                }
             }
             let Some(output) = tensor(i, result)? else {
                 return Ok(RuleStatus::Deferred);
             };
-            if op == Fill {
+            if matches!(op, Fill | DynamicFill) {
                 match scalar_element(i, &args[0])? {
                     Some(elem) => equal(i, elem, output.elem)?,
                     None => status = RuleStatus::Deferred,
                 }
-            } else if let Some(axis) = integer(&args[0])? {
-                let minimum = usize::try_from(axis)
-                    .ok()
-                    .and_then(|n| n.checked_add(1))
-                    .ok_or(RuleError::IotaAxisOverflow { axis })?;
-                i.require_rank_at_least(output.shape, minimum)
-                    .map_err(|source| RuleError::IotaAxisOutOfBounds { axis, source })?;
-            } else {
-                status = RuleStatus::Deferred;
+            }
+            if matches!(op, DynamicFill | DynamicIota) {
+                if dynamic_shape(
+                    i,
+                    tcx,
+                    output.shape,
+                    &args[usize::from(op == DynamicFill)],
+                    phase,
+                )? == RuleStatus::Deferred
+                {
+                    status = RuleStatus::Deferred;
+                }
+            }
+            if matches!(op, Iota | DynamicIota) {
+                let axis = &args[usize::from(op == DynamicIota)];
+                equal(i, axis.ty, tcx.mk_int(IntTy::Signed(64)))?;
+                if let Some(axis) = integer(axis)? {
+                    let minimum = usize::try_from(axis)
+                        .ok()
+                        .and_then(|n| n.checked_add(1))
+                        .ok_or(RuleError::IotaAxisOverflow { axis })?;
+                    i.require_rank_at_least(output.shape, minimum)
+                        .map_err(|source| RuleError::IotaAxisOutOfBounds { axis, source })?;
+                } else {
+                    status = RuleStatus::Deferred;
+                }
             }
         }
         Dot => {
@@ -404,8 +512,31 @@ pub(super) fn apply<'tcx>(
                 status = RuleStatus::Deferred;
             }
         }
-        Add | Sub | Mul | Div | Rem | Neg | Abs | Min | Max | Eq | Ne | Lt | Le | Gt | Ge
-        | Select => {
+        DynamicSlice | Slice => {
+            let a = tensor(i, args[0].ty)?;
+            let out = if a.is_some() {
+                tensor(i, result)?
+            } else {
+                None
+            };
+            if let (Some(a), Some(out)) = (a, out) {
+                equal(i, a.elem, out.elem)?;
+                if let Some(indices) = fields(i, &args[1])? {
+                    rank(i, a.shape, indices.len())?;
+                    rank(i, out.shape, indices.len())?;
+                } else if let Some(ds) = i.shape_dims(a.shape) {
+                    rank(i, out.shape, ds.len())?;
+                } else if let Some(ds) = i.shape_dims(out.shape) {
+                    rank(i, a.shape, ds.len())?;
+                } else {
+                    status = RuleStatus::Deferred;
+                }
+            } else {
+                status = RuleStatus::Deferred;
+            }
+        }
+        CollectivePermute | Add | Sub | Mul | Div | Rem | Neg | Abs | Min | Max | Eq | Ne | Lt
+        | Le | Gt | Ge | Select => {
             let first = usize::from(op == Select);
             let a = tensor(i, args[first].ty)?;
             let out = if a.is_some() {
@@ -420,11 +551,14 @@ pub(super) fn apply<'tcx>(
                 } else {
                     equal(i, a.elem, out.elem)?;
                 }
-                for arg in &args[first + 1..] {
-                    if let Some(b) = tensor(i, arg.ty)? {
-                        matching(i, a, b)?;
-                    } else {
-                        status = RuleStatus::Deferred;
+                // Collective-permute's second operand is replica-pair metadata.
+                if op != CollectivePermute {
+                    for arg in &args[first + 1..] {
+                        if let Some(b) = tensor(i, arg.ty)? {
+                            matching(i, a, b)?;
+                        } else {
+                            status = RuleStatus::Deferred;
+                        }
                     }
                 }
                 if op == Select {
@@ -438,12 +572,6 @@ pub(super) fn apply<'tcx>(
             } else {
                 status = RuleStatus::Deferred;
             }
-        }
-        Of | Materialize | Dim | AsyncDone | DynamicFill | DynamicIota | DynamicSlice | Slice
-        | CollectivePermute => {
-            return Err(RuleError::CannotInfer {
-                operation: op.as_str(),
-            });
         }
     }
     let result = i.resolve(result);
@@ -498,55 +626,6 @@ mod tests {
                 .map(Argument::unknown)
                 .collect::<Vec<_>>(),
         )
-    }
-
-    #[test]
-    fn unsupported_operations_return_cannot_infer_without_changing_inference() {
-        with_tcx(|tcx| {
-            use TensorFn::*;
-            for op in [
-                Of,
-                Materialize,
-                Dim,
-                AsyncDone,
-                DynamicFill,
-                DynamicIota,
-                DynamicSlice,
-                Slice,
-                CollectivePermute,
-            ] {
-                assert!(!supports(op));
-                for phase in [Phase::Propagate, Phase::DefaultRuntime] {
-                    let mut i = InferCtxt::new(tcx);
-                    let result = i.new_hole_ty();
-                    let count = match op {
-                        Of | Materialize | AsyncDone => 1,
-                        _ => op.arity(),
-                    };
-                    let args = unknowns(&mut i, count);
-                    let revision = i.progress();
-                    let err = super::apply(&mut i, tcx, op, result, &args, phase).unwrap_err();
-                    assert_eq!(
-                        err,
-                        RuleError::CannotInfer {
-                            operation: op.as_str()
-                        }
-                    );
-                    assert_eq!(
-                        err.to_string(),
-                        format!(
-                            "cannot infer shape for {}: operation has no inference rule",
-                            op.as_str()
-                        ),
-                    );
-                    assert_eq!(i.progress(), revision);
-                    assert_eq!(i.resolve(result), result);
-                    for arg in args {
-                        assert_eq!(i.resolve(arg.ty), arg.ty);
-                    }
-                }
-            }
-        });
     }
 
     #[test]
@@ -701,6 +780,22 @@ mod tests {
                 apply(&mut i, tcx, TensorFn::Iota, out, &[arg]).unwrap(),
                 RuleStatus::Solved
             );
+            let mut i = InferCtxt::new(tcx);
+            let out = i.new_hole_ty();
+            let shape = Argument {
+                ty: tcx.mk_tuple(&[tcx.mk_int(IntTy::Signed(64))]),
+                value: Some(Value::Tuple(vec![literal(tcx, 4)])),
+            };
+            apply(
+                &mut i,
+                tcx,
+                TensorFn::DynamicIota,
+                out,
+                &[shape, literal(tcx, 0)],
+            )
+            .unwrap();
+            let shape = i.tensor_view(out).unwrap().shape;
+            assert_eq!(i.shape_dims(shape), Some(vec![Dim::Known(4)]));
         });
     }
     #[test]
@@ -1007,6 +1102,214 @@ mod tests {
                 );
                 assert_eq!(i.resolve(result), expected);
             }
+        });
+    }
+    #[test]
+    fn dynamic_constructor_infers_literal_and_runtime_dimensions() {
+        with_tcx(|tcx| {
+            let f = tcx.mk_fp(FpTy::Ieee(32));
+            let it = tcx.mk_int(IntTy::Signed(64));
+            let mut i = InferCtxt::new(tcx);
+            let out = i.new_hole_ty();
+            let shape = Argument {
+                ty: tcx.mk_tuple(&[it, it]),
+                value: Some(Value::Tuple(vec![literal(tcx, 3), Argument::unknown(it)])),
+            };
+            assert_eq!(
+                super::apply(
+                    &mut i,
+                    tcx,
+                    TensorFn::DynamicFill,
+                    out,
+                    &[Argument::unknown(f), shape.clone()],
+                    Phase::DefaultRuntime,
+                )
+                .unwrap(),
+                RuleStatus::Solved
+            );
+            assert_eq!(i.resolve(out), tcx.mk_tensor(f, &[3, DYNAMIC_EXTENT]));
+            let explicit = tcx.mk_tensor(f, &[3, 4]);
+            apply(
+                &mut i,
+                tcx,
+                TensorFn::DynamicFill,
+                explicit,
+                &[Argument::unknown(f), shape],
+            )
+            .unwrap();
+            let bad = Argument {
+                ty: tcx.mk_tuple(&[it]),
+                value: Some(Value::Tuple(vec![literal(tcx, -1)])),
+            };
+            assert!(
+                apply(
+                    &mut i,
+                    tcx,
+                    TensorFn::DynamicFill,
+                    out,
+                    &[Argument::unknown(f), bad]
+                )
+                .is_err()
+            );
+        });
+    }
+    #[test]
+    fn runtime_dimensions_wait_for_late_static_context_without_freshening() {
+        with_tcx(|tcx| {
+            let mut i = InferCtxt::new(tcx);
+            let f = tcx.mk_fp(FpTy::Ieee(32));
+            let index = tcx.mk_int(IntTy::Signed(64));
+            let result = i.new_hole_ty();
+            let args = [
+                Argument::unknown(f),
+                Argument::unknown(tcx.mk_tuple(&[index])),
+            ];
+            assert_eq!(
+                apply(&mut i, tcx, TensorFn::DynamicFill, result, &args).unwrap(),
+                RuleStatus::Deferred
+            );
+            let view = i.tensor_view(result).unwrap();
+            let dims = i.shape_dims(view.shape).unwrap();
+            assert!(matches!(dims.as_slice(), [Dim::Var(_)]));
+            let revision = i.progress();
+            for _ in 0..4 {
+                assert_eq!(
+                    apply(&mut i, tcx, TensorFn::DynamicFill, result, &args).unwrap(),
+                    RuleStatus::Deferred
+                );
+                assert_eq!(i.shape_dims(view.shape).unwrap(), dims);
+                assert_eq!(i.progress(), revision);
+            }
+            let expected = tcx.mk_tensor(f, &[4]);
+            i.unify(result, expected).unwrap();
+            assert_eq!(
+                apply(&mut i, tcx, TensorFn::DynamicFill, result, &args).unwrap(),
+                RuleStatus::Solved
+            );
+            super::apply(
+                &mut i,
+                tcx,
+                TensorFn::DynamicFill,
+                result,
+                &args,
+                Phase::DefaultRuntime,
+            )
+            .unwrap();
+            assert_eq!(i.resolve(result), expected);
+        });
+    }
+
+    #[test]
+    fn final_runtime_defaulting_does_not_guess_unrelated_shapes_or_dtypes() {
+        with_tcx(|tcx| {
+            let mut i = InferCtxt::new(tcx);
+            let index = tcx.mk_int(IntTy::Signed(64));
+            let result = i.new_hole_ty();
+            let args = [Argument::unknown(tcx.mk_tuple(&[index])), literal(tcx, 0)];
+            assert_eq!(
+                apply(&mut i, tcx, TensorFn::DynamicIota, result, &args).unwrap(),
+                RuleStatus::Deferred
+            );
+            assert_eq!(
+                super::apply(
+                    &mut i,
+                    tcx,
+                    TensorFn::DynamicIota,
+                    result,
+                    &args,
+                    Phase::DefaultRuntime
+                )
+                .unwrap(),
+                RuleStatus::Deferred
+            );
+            let view = i.tensor_view(result).unwrap();
+            assert_eq!(
+                i.shape_dims(view.shape),
+                Some(vec![Dim::Known(DYNAMIC_EXTENT)])
+            );
+            assert!(matches!(i.resolve(view.elem).kind(), TyKind::Hole(_)));
+            i.unify(view.elem, index).unwrap();
+            assert_eq!(
+                apply(&mut i, tcx, TensorFn::DynamicIota, result, &args).unwrap(),
+                RuleStatus::Solved
+            );
+            assert_eq!(i.resolve(result), tcx.mk_tensor(index, &[DYNAMIC_EXTENT]));
+            let unrelated = i.new_hole_ty();
+            assert_eq!(
+                super::apply(
+                    &mut i,
+                    tcx,
+                    TensorFn::Fill,
+                    unrelated,
+                    &[Argument::unknown(index)],
+                    Phase::DefaultRuntime
+                )
+                .unwrap(),
+                RuleStatus::Deferred
+            );
+            let view = i.tensor_view(unrelated).unwrap();
+            assert_eq!(i.shape_dims(view.shape), None);
+        });
+    }
+
+    #[test]
+    fn boundaries_async_and_slice_have_explicit_relations() {
+        with_tcx(|tcx| {
+            let mut i = InferCtxt::new(tcx);
+            let f = tcx.mk_fp(FpTy::Ieee(32));
+            let t = tcx.mk_tensor(f, &[5, 6]);
+            let a = tcx.mk_array(f, &[5, 6]);
+            let out = i.new_hole_ty();
+            run(&mut i, tcx, TensorFn::Of, out, &[a]).unwrap();
+            assert_eq!(i.resolve(out), t);
+            let out = i.new_hole_ty();
+            run(&mut i, tcx, TensorFn::Materialize, out, &[t]).unwrap();
+            assert_eq!(i.resolve(out), a);
+            let out = i.new_hole_ty();
+            run(
+                &mut i,
+                tcx,
+                TensorFn::AsyncDone,
+                out,
+                &[tcx.mk_future(&[t])],
+            )
+            .unwrap();
+            assert_eq!(i.resolve(out), t);
+            let dim = i.new_hole_ty();
+            run(
+                &mut i,
+                tcx,
+                TensorFn::Dim,
+                dim,
+                &[t, tcx.mk_int(IntTy::Unsigned(64))],
+            )
+            .unwrap();
+            assert_eq!(i.resolve(dim), tcx.mk_int(IntTy::Unsigned(64)));
+            for op in [TensorFn::Slice, TensorFn::DynamicSlice] {
+                let input = i.new_hole_ty();
+                let out = tcx.mk_tensor(f, &[2, 3]);
+                run(
+                    &mut i,
+                    tcx,
+                    op,
+                    out,
+                    &[input, tcx.mk_tuple(&[tcx.mk_int(IntTy::Signed(64)); 2])],
+                )
+                .unwrap();
+                let view = i.tensor_view(input).unwrap();
+                assert_eq!(i.shape_dims(view.shape).unwrap().len(), 2);
+                assert_eq!(i.resolve(view.elem), f);
+            }
+            let out = i.new_hole_ty();
+            run(
+                &mut i,
+                tcx,
+                TensorFn::CollectivePermute,
+                out,
+                &[t, tcx.mk_unit()],
+            )
+            .unwrap();
+            assert_eq!(i.resolve(out), t);
         });
     }
 }

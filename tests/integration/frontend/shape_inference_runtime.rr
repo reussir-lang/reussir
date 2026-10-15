@@ -1,0 +1,59 @@
+// REQUIRES: stablehlo
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
+// RUN: diff %t.hir %t.round.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.mlir
+// RUN: %reussir-opt %t.mlir -o /dev/null
+// RUN: %FileCheck %s < %t.mlir
+import core::intrinsic::tensor;
+
+#[kernel]
+fn dynamic_helper<T>(value: f32, n: i64) -> Tensor<T> {
+    tensor::dynamic_fill(value, (n,))
+}
+#[kernel]
+pub fn direct_runtime_shape(n: i64) -> Tensor<[f32; 4]> {
+    tensor::dynamic_fill(1.0, (n,))
+}
+#[kernel]
+pub fn later_runtime_shape(n: i64) -> Tensor<[f32; 4]> {
+    let value = tensor::dynamic_fill(1.0, (n,));
+    let typed: Tensor<[f32; 4]> = value;
+    typed
+}
+#[kernel]
+pub fn wrapped_runtime_shape(n: i64) -> Tensor<[f32; 4]> {
+    let value = dynamic_helper(1.0, n);
+    let typed: Tensor<[f32; 4]> = value;
+    typed
+}
+#[kernel]
+pub fn runtime_fallback(n: i64) {
+    let scalar: f32 = 1.0;
+    let filled = tensor::dynamic_fill(scalar, (n,));
+    let ramp: Tensor<[i32; _]> = tensor::dynamic_iota((n,), 0);
+}
+
+#[kernel]
+fn dynamic_ramp_helper<T>(n: i64) -> Tensor<T> {
+    tensor::dynamic_iota((n,), 0)
+}
+#[kernel]
+pub fn direct_runtime_iota(n: i64) -> Tensor<[i32; 4]> {
+    tensor::dynamic_iota((n,), 0)
+}
+#[kernel]
+pub fn later_runtime_iota(n: i64) -> Tensor<[i32; 4]> {
+    let value = tensor::dynamic_iota((n,), 0);
+    value
+}
+#[kernel]
+pub fn wrapped_runtime_iota(n: i64) -> Tensor<[i32; 4]> {
+    let value = dynamic_ramp_helper(n);
+    value
+}
+// CHECK-DAG: stablehlo.dynamic_broadcast_in_dim
+// CHECK-DAG: stablehlo.dynamic_iota

@@ -17,7 +17,7 @@
 //! concrete types and super-trait subsumption for in-scope generics.
 
 use crate::semi::traits::{Obligation, SelectCtxt, SelectError, TraitRef};
-use crate::semi::ty::{FpTy, HoleId, IntTy, Ty, TyKind};
+use crate::semi::ty::{FpTy, HoleId, IntTy, TyKind};
 use crate::surface::Span;
 
 use super::ctxt::Elaborator;
@@ -32,17 +32,10 @@ pub struct PendingObligation<'tcx> {
 #[derive(Default)]
 pub struct FulfillCtxt<'tcx> {
     pending: Vec<PendingObligation<'tcx>>,
-    // Keep the existing constructor obligation for operation families whose
-    // shape rules have not yet migrated to the deferred relation solver.
-    tensor_fills: Vec<(Ty<'tcx>, Ty<'tcx>, Option<Span>)>,
     pub(super) shapes: super::shape_constraints::ShapeConstraints<'tcx>,
 }
 
 impl<'tcx> FulfillCtxt<'tcx> {
-    pub fn register_tensor_fill(&mut self, result: Ty<'tcx>, value: Ty<'tcx>, span: Option<Span>) {
-        self.tensor_fills.push((result, value, span));
-    }
-
     pub fn register(&mut self, obligation: Obligation<'tcx>, span: Option<Span>) {
         self.pending.push(PendingObligation { obligation, span });
     }
@@ -65,7 +58,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         loop {
             let revision = self.infer.progress();
             self.resolve_shape_constraints(false);
-            self.resolve_tensor_fill_constraints();
             pending.append(&mut self.fulfill.pending);
             let mut progress = false;
             let mut deferred = Vec::new();
@@ -105,25 +97,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
     }
 
-    fn resolve_tensor_fill_constraints(&mut self) {
-        for (result, value, span) in std::mem::take(&mut self.fulfill.tensor_fills) {
-            if let TyKind::Tensor { elem, .. } = self.infer.resolve(result).kind() {
-                let value = self.infer.resolve(value);
-                let scalar = match value.kind() {
-                    TyKind::Tensor { elem, dims } if dims.is_empty() => *elem,
-                    _ => value,
-                };
-                // Generic wrapper bodies defer their relationship to the shared
-                // ground operation validator, just like other shape constraints.
-                if !matches!(scalar.kind(), TyKind::Generic(_))
-                    && !matches!(elem.kind(), TyKind::Generic(_))
-                {
-                    self.expect(scalar, *elem, span);
-                }
-            }
-        }
-    }
-
     /// REPL defaulting: solve numeric holes that only literal/arithmetic
     /// bounds constrain. A hole pending a `FloatingPoint` obligation defaults
     /// to `f64`; a hole pending `Integral` or `Num` defaults to `i64` (the
@@ -138,7 +111,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// default must win, so `FloatingPoint` holes are solved first.
     pub(super) fn default_numeric_holes(&mut self) {
         self.resolve_shape_constraints(false);
-        self.resolve_tensor_fill_constraints();
         let f64_ty = self.tcx.mk_fp(FpTy::Ieee(64));
         let i64_ty = self.tcx.mk_int(IntTy::Signed(64));
         let passes = [

@@ -1,0 +1,48 @@
+// The CUDA-validated million-pixel orbit program, with one scalar f32 anchor.
+// All tensor shapes and remaining element types flow through ordinary expressions,
+// comparisons, tuples, and the loop state from that anchor and the result type.
+// REQUIRES: stablehlo
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
+// RUN: diff %t.hir %t.round.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
+// RUN: diff %t.mir %t.round.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.mlir
+// RUN: %reussir-opt %t.mlir -o /dev/null
+// RUN: %FileCheck %s < %t.mlir
+import core::intrinsic::tensor;
+
+#[kernel]
+pub fn escape_times(limit: i64) -> Tensor<[i32; 1024, 1024]> {
+    let column = tensor::iota(1);
+    let row = tensor::iota(0);
+    let pixel_scale: f32 = 3.0 / 1024.0;
+    let scale = tensor::fill(pixel_scale);
+    let left = tensor::fill(2.0);
+    let half_height = tensor::fill(1.5);
+    let real = column * scale - left;
+    let imaginary = row * scale - half_height;
+    let zero = tensor::fill(0.0);
+    let two = tensor::fill(2.0);
+    let four = tensor::fill(4.0);
+    let counts = tensor::fill(0);
+    let one = tensor::fill(1);
+    let active = tensor::fill(true);
+    let (step, zr, zi, live, result) = while [step = 0, zr = zero, zi = zero, live = active, result = counts] (step < limit) {
+        let nr = zr * zr - zi * zi + real;
+        let ni = two * zr * zi + imaginary;
+        // Bool multiplication is conjunction. Once escaped, an orbit stays
+        // inactive and its previous bounded coordinates are retained. Merely
+        // masking its count while iterating z would eventually create NaNs.
+        let next_live = live * (nr * nr + ni * ni <= four);
+        let next_count = tensor::select(live, result + one, result);
+        (step + 1, tensor::select(next_live, nr, zr), tensor::select(next_live, ni, zi), next_live, next_count)
+    };
+    result
+}
+
+// CHECK: stablehlo.iota
+// CHECK: stablehlo.while
+// CHECK: stablehlo.select
+// CHECK: tensor<1024x1024xi32>

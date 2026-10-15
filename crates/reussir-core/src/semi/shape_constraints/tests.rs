@@ -147,3 +147,45 @@ fn linalg_relations_reject_contradictions_and_ambiguous_ranks() {
         );
     }
 }
+
+#[test]
+fn mandelbrot_needs_only_one_scalar_float_anchor_and_the_kernel_result() {
+    let source =
+        include_str!("../../../../../tests/integration/frontend/shape_inference_mandelbrot.rr");
+    let errors = reports(source);
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+
+#[test]
+fn dynamic_fill_infers_computed_numeric_shape_metadata() {
+    let source = r#"
+    import core::intrinsic::tensor;
+    #[kernel]
+    pub fn computed_size() -> Tensor<[f32; 3]> {
+        tensor::dynamic_fill(1.0, (1 + 2,))
+    }
+    #[kernel]
+    fn dynamically_filled<T, S>(value: S, size: i64) -> Tensor<T> {
+        tensor::dynamic_fill(value, (size,))
+    }
+    #[kernel]
+    pub fn wrapped_computed_size() -> Tensor<[f32; 3]> {
+        dynamically_filled(1.0, 1 + 2)
+    }
+    #[kernel]
+    pub fn local_computed_size() -> Tensor<[f32; 3]> {
+        let sizes = (1 + 2,);
+        tensor::dynamic_fill(1.0, sizes)
+    }
+    "#;
+    let errors = reports(source);
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+
+#[test]
+fn runtime_shapes_wait_for_context_then_default_conservatively() {
+    let source =
+        include_str!("../../../../../tests/integration/frontend/shape_inference_runtime.rr");
+    let errors = reports(source);
+    assert!(errors.is_empty(), "{errors:#?}");
+}

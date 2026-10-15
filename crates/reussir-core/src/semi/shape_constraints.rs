@@ -172,9 +172,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         );
         self.fulfill.shapes.summaries = cache;
         for relation in expansion.relations {
-            if matches!(&relation, Relation::Tensor { op, .. } if !rules::supports(*op)) {
-                continue;
-            }
             self.fulfill
                 .shapes
                 .register(Constraint::Relation(relation), span);
@@ -263,9 +260,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         args: &[Expr<'tcx>],
         span: Option<Span>,
     ) {
-        if !rules::supports(op) {
-            return;
-        }
         let args = self.source_arguments(args);
         self.fulfill.shapes.register(
             Constraint::Relation(Relation::Tensor { op, result, args }),
