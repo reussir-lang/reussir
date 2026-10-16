@@ -6,7 +6,7 @@
 //! Operation dispatch and operation-specific constraints are added separately.
 use crate::semi::infer::{
     InferCtxt,
-    shape::{Dim, ShapeId, TensorView},
+    shape::{Dim, ShapeError, ShapeId, TensorView},
 };
 use crate::semi::ty::{Ty, TyKind};
 
@@ -24,7 +24,21 @@ pub(super) enum RuleStatus {
     Deferred,
 }
 
-fn equal<'tcx>(i: &mut InferCtxt<'_, 'tcx>, a: Ty<'tcx>, b: Ty<'tcx>) -> Result<(), String> {
+/// Structured failures from shape-rule propagation. Preserve shape conflicts
+/// so callers can inspect their dimensions or ranks without parsing messages.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub(super) enum RuleError {
+    #[error("tensor relation has incompatible element or operand types")]
+    IncompatibleTypes,
+    #[error(transparent)]
+    Shape(#[from] ShapeError),
+    #[error("expected tensor rank {expected}, found {actual}")]
+    Rank { expected: usize, actual: usize },
+    #[error("tensor operation requires Tensor operands and result")]
+    ExpectedTensor,
+}
+
+fn equal<'tcx>(i: &mut InferCtxt<'_, 'tcx>, a: Ty<'tcx>, b: Ty<'tcx>) -> Result<(), RuleError> {
     // Rigid declaration formals are relations to replay at instantiation, not
     // assignable inference variables. Concrete disagreements are still errors.
     let left = i.shallow_resolve(a);
@@ -34,18 +48,20 @@ fn equal<'tcx>(i: &mut InferCtxt<'_, 'tcx>, a: Ty<'tcx>, b: Ty<'tcx>) -> Result<
     {
         return Ok(());
     }
-    i.unify(a, b)
-        .map_err(|_| "tensor relation has incompatible element or operand types".into())
+    i.unify(a, b).map_err(|_| RuleError::IncompatibleTypes)
 }
-fn exact(i: &mut InferCtxt<'_, '_>, a: ShapeId, b: ShapeId) -> Result<(), String> {
-    i.unify_shapes(a, b).map_err(|e| e.to_string())
+fn exact(i: &mut InferCtxt<'_, '_>, a: ShapeId, b: ShapeId) -> Result<(), RuleError> {
+    i.unify_shapes(a, b).map_err(RuleError::from)
 }
-fn rank(i: &mut InferCtxt<'_, '_>, shape: ShapeId, n: usize) -> Result<Vec<Dim>, String> {
+fn rank(i: &mut InferCtxt<'_, '_>, shape: ShapeId, n: usize) -> Result<Vec<Dim>, RuleError> {
     if let Some(ds) = i.shape_dims(shape) {
         return if ds.len() == n {
             Ok(ds)
         } else {
-            Err(format!("expected tensor rank {n}, found {}", ds.len()))
+            Err(RuleError::Rank {
+                expected: n,
+                actual: ds.len(),
+            })
         };
     }
     let ds = (0..n).map(|_| i.new_dim()).collect::<Vec<_>>();
@@ -56,7 +72,7 @@ fn rank(i: &mut InferCtxt<'_, '_>, shape: ShapeId, n: usize) -> Result<Vec<Dim>,
 fn tensor<'tcx>(
     i: &mut InferCtxt<'_, 'tcx>,
     t: Ty<'tcx>,
-) -> Result<Option<TensorView<'tcx>>, String> {
+) -> Result<Option<TensorView<'tcx>>, RuleError> {
     let resolved = i.shallow_resolve(t);
     // A rigid whole-shape formal has no rank until the summary is instantiated.
     if matches!(resolved.kind(), TyKind::Generic(_) | TyKind::Bottom)
@@ -74,20 +90,20 @@ fn tensor<'tcx>(
         equal(i, t, candidate)?;
         return Ok(Some(TensorView { elem, shape }));
     }
-    Err("tensor operation requires Tensor operands and result".into())
+    Err(RuleError::ExpectedTensor)
 }
 fn matching<'tcx>(
     i: &mut InferCtxt<'_, 'tcx>,
     a: TensorView<'tcx>,
     b: TensorView<'tcx>,
-) -> Result<(), String> {
+) -> Result<(), RuleError> {
     equal(i, a.elem, b.elem)?;
     exact(i, a.shape, b.shape)
 }
 
 fn viable<'a, 'tcx>(
     i: &mut InferCtxt<'a, 'tcx>,
-    f: impl FnOnce(&mut InferCtxt<'a, 'tcx>) -> Result<(), String>,
+    f: impl FnOnce(&mut InferCtxt<'a, 'tcx>) -> Result<(), RuleError>,
 ) -> bool {
     // probe commits Ok; wrapping the outcome in Err rolls back every candidate.
     i.probe(|i| Err::<(), _>(f(i))).unwrap_err().is_ok()
@@ -116,7 +132,10 @@ mod framework_tests {
             assert_eq!(i.resolve(hole), generic);
             equal(&mut i, generic, tcx.mk_bool()).unwrap();
             assert!(open(i.resolve(hole)));
-            assert!(equal(&mut i, tcx.mk_bool(), tcx.mk_unit()).is_err());
+            assert_eq!(
+                equal(&mut i, tcx.mk_bool(), tcx.mk_unit()),
+                Err(RuleError::IncompatibleTypes)
+            );
         });
     }
 
@@ -136,7 +155,10 @@ mod framework_tests {
             matching(&mut i, view, other).unwrap();
             assert_eq!(i.resolve(ty), concrete);
             assert!(!open(i.resolve(ty)));
-            assert!(tensor(&mut i, tcx.mk_unit()).is_err());
+            assert_eq!(
+                tensor(&mut i, tcx.mk_unit()),
+                Err(RuleError::ExpectedTensor)
+            );
             assert!(
                 tensor(&mut i, tcx.mk_generic(GenericId(0)))
                     .unwrap()
@@ -157,7 +179,28 @@ mod framework_tests {
             let revision = i.progress();
             rank(&mut i, shape, 2).unwrap();
             assert_eq!(i.progress(), revision);
-            assert!(rank(&mut i, shape, 3).is_err());
+            assert_eq!(
+                rank(&mut i, shape, 3),
+                Err(RuleError::Rank {
+                    expected: 3,
+                    actual: 2
+                })
+            );
+        });
+    }
+
+    #[test]
+    fn shape_conflicts_preserve_their_category_and_dimensions() {
+        with_tcx(|tcx| {
+            let mut i = InferCtxt::new(tcx);
+            let left = i.ranked_shape(vec![Dim::Known(2)]);
+            let right = i.ranked_shape(vec![Dim::Known(3)]);
+            let err = exact(&mut i, left, right).unwrap_err();
+            assert_eq!(
+                err,
+                RuleError::Shape(ShapeError::Dimension { left: 2, right: 3 })
+            );
+            assert_eq!(err.to_string(), "incompatible dimensions 2 and 3");
         });
     }
 
@@ -176,7 +219,7 @@ mod framework_tests {
                         if succeeds {
                             Ok(())
                         } else {
-                            Err("reject candidate".into())
+                            Err(RuleError::IncompatibleTypes)
                         }
                     }),
                     succeeds,
