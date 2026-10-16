@@ -1,14 +1,23 @@
-//! Shared primitives for deferred tensor shape inference rules.
+//! Tensor-specific relations over inference-only shapes.
 //!
-//! Rules report whether their constraints are solved or need more evidence.
-//! These helpers preserve rigid generic contracts, refine inference-only
-//! tensor shapes, and probe alternatives without committing their effects.
-//! Operation dispatch and operation-specific constraints are added separately.
+//! This is the only operation dispatch in the shape solver. The controller
+//! schedules these monotone rules; it knows neither tensor ranks nor op names.
+//! Alternatives are probed transactionally and committed only when unique.
+//!
+//! To add an operation, extend the exhaustive `apply` dispatch here and put its
+//! rank, element-type, and dimension relations in a helper in this module.
+//! Return `Deferred` while any required fact is unresolved; do not choose a
+//! rank or allocate fresh variables on every retry. Runtime metadata defaults
+//! belong only to `Phase::DefaultRuntime`. Add rule tests here and source-level
+//! direct/wrapper cases in `tests.rs`. The scheduler and summary composition
+//! should not need operation-specific branches.
+use crate::intrinsic::TensorFn;
 use crate::semi::infer::{
     InferCtxt,
     shape::{Dim, ShapeError, ShapeId, TensorView},
 };
-use crate::semi::ty::{Ty, TyKind};
+use crate::semi::shape_summary::{Argument, Value};
+use crate::semi::ty::{IntTy, Ty, TyCtxt, TyKind};
 
 /// Runtime dimensions are a finalization choice, never an eager substitute for
 /// an unknown static dimension while later source constraints can still arrive.
@@ -108,12 +117,505 @@ fn viable<'a, 'tcx>(
     // probe commits Ok; wrapping the outcome in Err rolls back every candidate.
     i.probe(|i| Err::<(), _>(f(i))).unwrap_err().is_ok()
 }
+fn select_predicate(
+    i: &mut InferCtxt<'_, '_>,
+    predicate: ShapeId,
+    value: ShapeId,
+) -> Result<RuleStatus, String> {
+    if let Some(ds) = i.shape_dims(predicate) {
+        if ds.is_empty() {
+            return Ok(RuleStatus::Solved);
+        }
+        exact(i, predicate, value)?;
+        return Ok(RuleStatus::Solved);
+    }
+    if i.shape_dims(value).is_some_and(|ds| ds.is_empty()) {
+        rank(i, predicate, 0)?;
+        return Ok(RuleStatus::Solved);
+    }
+    let scalar = viable(i, |i| rank(i, predicate, 0).map(|_| ()));
+    let shaped = viable(i, |i| exact(i, predicate, value));
+    match (scalar, shaped) {
+        (true, false) => {
+            rank(i, predicate, 0)?;
+            Ok(RuleStatus::Solved)
+        }
+        (false, true) => {
+            exact(i, predicate, value)?;
+            Ok(RuleStatus::Solved)
+        }
+        (true, true) => Ok(RuleStatus::Deferred),
+        (false, false) => Err("select predicate must be scalar or match the value shape".into()),
+    }
+}
+fn scalar_element<'tcx>(
+    i: &mut InferCtxt<'_, 'tcx>,
+    arg: &Argument<'tcx>,
+) -> Result<Option<Ty<'tcx>>, String> {
+    let resolved = i.shallow_resolve(arg.ty);
+    if matches!(resolved.kind(), TyKind::Tensor { elem, dims } if dims.is_empty() && matches!(elem.kind(), TyKind::Generic(_)))
+    {
+        return Ok(None);
+    }
+    if let Some(view) = i.tensor_view(arg.ty) {
+        rank(i, view.shape, 0)?;
+        return Ok(Some(view.elem));
+    }
+    let ty = i.shallow_resolve(arg.ty);
+    match ty.kind() {
+        TyKind::Int(_) | TyKind::Fp(_) | TyKind::Bool => Ok(Some(ty)),
+        TyKind::Hole(_)
+            if matches!(
+                arg.value,
+                Some(
+                    Value::Integer(_)
+                        | Value::Bool(_)
+                        | Value::Scalar
+                        | Value::Opaque { scalar: true, .. }
+                )
+            ) =>
+        {
+            Ok(Some(ty))
+        }
+        TyKind::Hole(_) | TyKind::Generic(_) | TyKind::Bottom => Ok(None),
+        _ => Err("expected a scalar or rank-zero Tensor".into()),
+    }
+}
+fn integer(arg: &Argument<'_>) -> Result<Option<u64>, String> {
+    match arg.value {
+        Some(Value::Integer(n)) => u64::try_from(n)
+            .ok()
+            .filter(|&n| n <= i64::MAX as u64)
+            .map(Some)
+            .ok_or_else(|| {
+                "tensor dimension or axis must be a nonnegative signed 64-bit integer".into()
+            }),
+        _ => Ok(None),
+    }
+}
 fn open(t: Ty<'_>) -> bool {
     match t.kind() {
         TyKind::Hole(_) | TyKind::Generic(_) => true,
         TyKind::Tensor { elem, .. } | TyKind::Array { elem, .. } => open(*elem),
         TyKind::Future(ts) | TyKind::Tuple(ts) => ts.iter().any(|&t| open(t)),
         _ => false,
+    }
+}
+
+/// Existing operations without a shape rule keep their declared type checking.
+/// New domain rules opt in here as they are introduced.
+pub(in crate::semi) fn supports(op: TensorFn) -> bool {
+    use TensorFn::*;
+    matches!(
+        op,
+        Fill | Iota
+            | Add
+            | Sub
+            | Mul
+            | Div
+            | Rem
+            | Neg
+            | Abs
+            | Min
+            | Max
+            | Eq
+            | Ne
+            | Lt
+            | Le
+            | Gt
+            | Ge
+            | Select
+    )
+}
+
+pub(super) fn apply<'tcx>(
+    i: &mut InferCtxt<'_, 'tcx>,
+    tcx: &TyCtxt<'tcx>,
+    op: TensorFn,
+    result: Ty<'tcx>,
+    args: &[Argument<'tcx>],
+    _phase: Phase,
+) -> Result<RuleStatus, String> {
+    use TensorFn::*;
+    let count = match op {
+        Of | Materialize | AsyncDone => 1,
+        _ => op.arity(),
+    };
+    if args.len() != count {
+        return Err(format!("{} expects {count} operands", op.as_str()));
+    }
+    let mut status = RuleStatus::Solved;
+    // Preserve exact result identities before introducing a Tensor family.
+    // In a polymorphic body the operand may still be a rigid whole type V;
+    // assigning its identity to a fresh result is valid without guessing V.
+    match op {
+        Add | Sub | Mul | Div | Rem | Neg | Abs | Min | Max | CollectivePermute => {
+            equal(i, result, args[0].ty)?
+        }
+        Select => equal(i, result, args[1].ty)?,
+        Of | Materialize | Dim | DynamicSlice | Slice | AsyncDone | Fill | DynamicFill | Iota
+        | DynamicIota | Eq | Ne | Lt | Le | Gt | Ge | Dot | Transpose => {}
+    }
+    match op {
+        Fill | Iota => {
+            if op == Iota {
+                equal(i, args[0].ty, tcx.mk_int(IntTy::Signed(64)))?;
+            }
+            let Some(output) = tensor(i, result)? else {
+                return Ok(RuleStatus::Deferred);
+            };
+            if op == Fill {
+                match scalar_element(i, &args[0])? {
+                    Some(elem) => equal(i, elem, output.elem)?,
+                    None => status = RuleStatus::Deferred,
+                }
+            } else if let Some(axis) = integer(&args[0])? {
+                let minimum = usize::try_from(axis)
+                    .ok()
+                    .and_then(|n| n.checked_add(1))
+                    .ok_or("iota axis is too large")?;
+                i.require_rank_at_least(output.shape, minimum)
+                    .map_err(|_| "iota axis must be within the result rank".to_owned())?;
+            } else {
+                status = RuleStatus::Deferred;
+            }
+        }
+        Add | Sub | Mul | Div | Rem | Neg | Abs | Min | Max | Eq | Ne | Lt | Le | Gt | Ge
+        | Select => {
+            let first = usize::from(op == Select);
+            let a = tensor(i, args[first].ty)?;
+            let out = if a.is_some() {
+                tensor(i, result)?
+            } else {
+                None
+            };
+            if let (Some(a), Some(out)) = (a, out) {
+                exact(i, a.shape, out.shape)?;
+                if op.is_comparison() {
+                    equal(i, out.elem, tcx.mk_bool())?;
+                } else {
+                    equal(i, a.elem, out.elem)?;
+                }
+                for arg in &args[first + 1..] {
+                    if let Some(b) = tensor(i, arg.ty)? {
+                        matching(i, a, b)?;
+                    } else {
+                        status = RuleStatus::Deferred;
+                    }
+                }
+                if op == Select {
+                    if let Some(p) = tensor(i, args[0].ty)? {
+                        equal(i, p.elem, tcx.mk_bool())?;
+                        status = select_predicate(i, p.shape, a.shape)?;
+                    } else {
+                        status = RuleStatus::Deferred;
+                    }
+                }
+            } else {
+                status = RuleStatus::Deferred;
+            }
+        }
+        Of | Materialize | Dim | AsyncDone | DynamicFill | DynamicIota | Dot | Transpose
+        | DynamicSlice | Slice | CollectivePermute => {
+            unreachable!("operation has no inference rule")
+        }
+    }
+    let result = i.resolve(result);
+    let types = args.iter().map(|a| i.resolve(a.ty)).collect::<Vec<_>>();
+    crate::tensor_check::operation(op, result, &types)?;
+    if open(result) || types.iter().copied().any(open) {
+        status = RuleStatus::Deferred;
+    }
+    Ok(status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::semi::ty::FpTy;
+    use crate::{literal::Integer, with_tcx};
+
+    fn apply<'tcx>(
+        i: &mut InferCtxt<'_, 'tcx>,
+        tcx: &TyCtxt<'tcx>,
+        op: TensorFn,
+        result: Ty<'tcx>,
+        args: &[Argument<'tcx>],
+    ) -> Result<RuleStatus, String> {
+        super::apply(i, tcx, op, result, args, Phase::Propagate)
+    }
+
+    fn literal<'tcx>(tcx: &TyCtxt<'tcx>, n: i64) -> Argument<'tcx> {
+        Argument {
+            ty: tcx.mk_int(IntTy::Signed(64)),
+            value: Some(Value::Integer(tcx.alloc(Integer::from(n)))),
+        }
+    }
+    fn unknowns<'tcx>(i: &mut InferCtxt<'_, 'tcx>, n: usize) -> Vec<Argument<'tcx>> {
+        (0..n).map(|_| Argument::unknown(i.new_hole_ty())).collect()
+    }
+    fn run<'tcx>(
+        i: &mut InferCtxt<'_, 'tcx>,
+        tcx: &TyCtxt<'tcx>,
+        op: TensorFn,
+        result: Ty<'tcx>,
+        args: &[Ty<'tcx>],
+    ) -> Result<RuleStatus, String> {
+        apply(
+            i,
+            tcx,
+            op,
+            result,
+            &args
+                .iter()
+                .copied()
+                .map(Argument::unknown)
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    #[test]
+    fn elementwise_rules_flow_backward_and_reach_a_fixed_point() {
+        with_tcx(|tcx| {
+            let f = tcx.mk_fp(FpTy::Ieee(32));
+            let out = tcx.mk_tensor(f, &[2, 3]);
+            for op in [
+                TensorFn::Add,
+                TensorFn::Sub,
+                TensorFn::Mul,
+                TensorFn::Div,
+                TensorFn::Rem,
+                TensorFn::Min,
+                TensorFn::Max,
+                TensorFn::Neg,
+                TensorFn::Abs,
+            ] {
+                let mut i = InferCtxt::new(tcx);
+                let args = unknowns(&mut i, op.arity());
+                assert_eq!(
+                    apply(&mut i, tcx, op, out, &args).unwrap(),
+                    RuleStatus::Solved
+                );
+                for arg in &args {
+                    assert_eq!(i.resolve(arg.ty), out);
+                }
+                let revision = i.progress();
+                for _ in 0..4 {
+                    apply(&mut i, tcx, op, out, &args).unwrap();
+                }
+                assert_eq!(i.progress(), revision);
+            }
+        });
+    }
+    #[test]
+    fn comparison_preserves_shape_without_conflating_bool_and_input_dtype() {
+        with_tcx(|tcx| {
+            for op in [
+                TensorFn::Eq,
+                TensorFn::Ne,
+                TensorFn::Lt,
+                TensorFn::Le,
+                TensorFn::Gt,
+                TensorFn::Ge,
+            ] {
+                let mut i = InferCtxt::new(tcx);
+                let args = unknowns(&mut i, 2);
+                let output = tcx.mk_tensor(tcx.mk_bool(), &[4]);
+                assert_eq!(
+                    apply(&mut i, tcx, op, output, &args).unwrap(),
+                    RuleStatus::Deferred
+                );
+                let input = tcx.mk_tensor(tcx.mk_fp(FpTy::Ieee(32)), &[4]);
+                i.unify(args[0].ty, input).unwrap();
+                assert_eq!(
+                    apply(&mut i, tcx, op, output, &args).unwrap(),
+                    RuleStatus::Solved
+                );
+                assert_eq!(i.resolve(args[1].ty), input);
+            }
+        });
+    }
+    #[test]
+    fn fill_scalar_or_rank_zero_tensor_stays_ambiguous_without_evidence() {
+        with_tcx(|tcx| {
+            let mut i = InferCtxt::new(tcx);
+            let f = tcx.mk_fp(FpTy::Ieee(32));
+            let output = tcx.mk_tensor(f, &[2, 3]);
+            let args = unknowns(&mut i, 1);
+            assert_eq!(
+                apply(&mut i, tcx, TensorFn::Fill, output, &args).unwrap(),
+                RuleStatus::Deferred
+            );
+            assert!(matches!(i.resolve(args[0].ty).kind(), TyKind::Hole(_)));
+            i.unify(args[0].ty, tcx.mk_tensor(f, &[])).unwrap();
+            assert_eq!(
+                apply(&mut i, tcx, TensorFn::Fill, output, &args).unwrap(),
+                RuleStatus::Solved
+            );
+            let scalar = i.new_hole_ty();
+            apply(
+                &mut i,
+                tcx,
+                TensorFn::Fill,
+                output,
+                &[Argument {
+                    ty: scalar,
+                    value: Some(Value::Scalar),
+                }],
+            )
+            .unwrap();
+            assert_eq!(i.resolve(scalar), f);
+        });
+    }
+    #[test]
+    fn iota_axis_only_imposes_minimum_rank_and_never_guesses_shape() {
+        with_tcx(|tcx| {
+            let mut i = InferCtxt::new(tcx);
+            let out = i.new_hole_ty();
+            let arg = literal(tcx, 2);
+            assert_eq!(
+                apply(&mut i, tcx, TensorFn::Iota, out, &[arg.clone()]).unwrap(),
+                RuleStatus::Deferred
+            );
+            let shape = i.tensor_view(out).unwrap().shape;
+            assert_eq!(i.shape_rank_min(shape), 3);
+            assert_eq!(i.shape_dims(shape), None);
+            let revision = i.progress();
+            apply(&mut i, tcx, TensorFn::Iota, out, &[arg.clone()]).unwrap();
+            assert_eq!(revision, i.progress());
+            assert!(
+                i.unify(out, tcx.mk_tensor(tcx.mk_int(IntTy::Signed(32)), &[2, 3]))
+                    .is_err()
+            );
+            i.unify(
+                out,
+                tcx.mk_tensor(tcx.mk_int(IntTy::Signed(32)), &[2, 3, 4]),
+            )
+            .unwrap();
+            assert_eq!(
+                apply(&mut i, tcx, TensorFn::Iota, out, &[arg]).unwrap(),
+                RuleStatus::Solved
+            );
+        });
+    }
+    #[test]
+    fn select_does_not_guess_scalar_predicate_and_uses_later_rank_evidence() {
+        with_tcx(|tcx| {
+            let mut i = InferCtxt::new(tcx);
+            let value = tcx.mk_tensor(tcx.mk_bool(), &[3]);
+            let predicate = i.new_hole_ty();
+            assert_eq!(
+                run(
+                    &mut i,
+                    tcx,
+                    TensorFn::Select,
+                    value,
+                    &[predicate, value, value]
+                )
+                .unwrap(),
+                RuleStatus::Deferred
+            );
+            let s = i.tensor_view(predicate).unwrap().shape;
+            assert_eq!(i.shape_dims(s), None);
+            i.require_rank_at_least(s, 1).unwrap();
+            assert_eq!(
+                run(
+                    &mut i,
+                    tcx,
+                    TensorFn::Select,
+                    value,
+                    &[predicate, value, value]
+                )
+                .unwrap(),
+                RuleStatus::Solved
+            );
+            assert_eq!(i.resolve(predicate), value);
+        });
+    }
+    #[test]
+    fn opaque_generic_results_still_constrain_metadata_and_exact_identities() {
+        with_tcx(|tcx| {
+            let mut i = InferCtxt::new(tcx);
+            let generic = tcx.mk_generic(crate::semi::ty::GenericId(0));
+            let tensor = tcx.mk_tensor(generic, &[]);
+            let axis_ty = i.new_hole_ty();
+            let axis = Argument {
+                ty: axis_ty,
+                value: Some(Value::Integer(tcx.alloc(Integer::from(0)))),
+            };
+            assert_eq!(
+                apply(&mut i, tcx, TensorFn::Iota, tensor, &[axis]).unwrap(),
+                RuleStatus::Deferred
+            );
+            assert_eq!(i.resolve(axis_ty), tcx.mk_int(IntTy::Signed(64)));
+            let result = i.new_hole_ty();
+            assert_eq!(
+                run(
+                    &mut i,
+                    tcx,
+                    TensorFn::Select,
+                    result,
+                    &[tcx.mk_tensor(tcx.mk_bool(), &[]), generic, generic]
+                )
+                .unwrap(),
+                RuleStatus::Deferred
+            );
+            assert_eq!(i.resolve(result), generic);
+            let comparison = i.new_hole_ty();
+            assert_eq!(
+                run(&mut i, tcx, TensorFn::Eq, comparison, &[tensor, tensor]).unwrap(),
+                RuleStatus::Deferred
+            );
+            // The deferred shape contract must not prevent a later rigid
+            // return annotation from naming the result in a generic wrapper.
+            i.unify(comparison, generic).unwrap();
+        });
+    }
+
+    #[test]
+    fn ranked_generic_dtype_relations_wait_for_instantiation() {
+        with_tcx(|tcx| {
+            let mut i = InferCtxt::new(tcx);
+            let generic = tcx.mk_generic(crate::semi::ty::GenericId(0));
+            let output = tcx.mk_tensor(generic, &[3]);
+            let scalar = tcx.mk_fp(FpTy::Ieee(32));
+            assert_eq!(
+                run(&mut i, tcx, TensorFn::Fill, output, &[scalar]).unwrap(),
+                RuleStatus::Deferred
+            );
+            let input = tcx.mk_tensor(generic, &[]);
+            assert_eq!(
+                run(&mut i, tcx, TensorFn::Fill, output, &[input]).unwrap(),
+                RuleStatus::Deferred
+            );
+            assert!(
+                run(
+                    &mut i,
+                    tcx,
+                    TensorFn::Fill,
+                    tcx.mk_tensor(tcx.mk_bool(), &[3]),
+                    &[scalar]
+                )
+                .is_err()
+            );
+        });
+    }
+
+    #[test]
+    fn rigid_generic_formers_remain_deferred_and_wrong_families_are_rejected() {
+        with_tcx(|tcx| {
+            let mut i = InferCtxt::new(tcx);
+            let generic = tcx.mk_generic(crate::semi::ty::GenericId(0));
+            let t = tcx.mk_tensor(generic, &[]);
+            assert_eq!(
+                run(&mut i, tcx, TensorFn::Neg, t, &[t]).unwrap(),
+                RuleStatus::Deferred
+            );
+            let s = i.new_shape();
+            let array = i.new_array_ty(tcx.mk_bool(), s);
+            let result = i.new_hole_ty();
+            assert!(run(&mut i, tcx, TensorFn::Neg, result, &[array]).is_err());
+        });
     }
 }
 
