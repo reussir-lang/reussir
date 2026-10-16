@@ -7,3 +7,4 @@ description = "Safe runtime StableHLO shape specialization"
 
 [dependencies]
 reussir-stablehlo-sys = { path = "../reussir-stablehlo-sys" }
+thiserror.workspace = true

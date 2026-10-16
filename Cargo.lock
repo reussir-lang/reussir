@@ -3779,6 +3779,7 @@ name = "reussir-stablehlo"
 version = "0.1.0"
 dependencies = [
  "reussir-stablehlo-sys",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

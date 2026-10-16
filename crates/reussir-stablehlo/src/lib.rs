@@ -31,17 +31,12 @@ pub enum ErrorKind {
     ResidualDynamism,
     SerializationFailed,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("StableHLO {kind:?}: {diagnostic}")]
 pub struct Error {
     pub kind: ErrorKind,
     pub diagnostic: String,
 }
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "StableHLO {:?}: {}", self.kind, self.diagnostic)
-    }
-}
-impl std::error::Error for Error {}
 #[derive(Default)]
 struct Output {
     bytes: Vec<u8>,
