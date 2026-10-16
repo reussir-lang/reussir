@@ -1464,6 +1464,13 @@ mlir::LogicalResult ReussirArrayToDeviceOp::verify() {
   if (mlir::failed(verifyArrayTransfer(getOperation(), getArray().getType(),
                                        getSource().getType())))
     return mlir::failure();
+  if (auto marker = (*this)->getAttr("shape_value")) {
+    auto array = llvm::cast<ArrayType>(getArray().getType().getElementType());
+    if (!llvm::isa<mlir::UnitAttr>(marker) || !array.hasShapeValueStorage() ||
+        array.getElementType().isUnsignedInteger())
+      return emitOpError(
+          "shape_value requires a unit marker and a rank-zero i64 upload");
+  }
   if (getToken() && getToken().getType() != getTokenType())
     return emitOpError("expected descriptor token type ") << getTokenType();
   return mlir::success();

@@ -5,7 +5,8 @@
 // RUN: %rrc %t.mir --emit mir --no-source-locations -o %t.round.mir
 // RUN: diff %t.mir %t.round.mir
 // RUN: %rrc %t.mir --emit mlir -o - | %FileCheck %s
-// CHECK-DAG: reussir.array.to_device
+// CHECK-DAG: reussir.array.to_device {{%[0-9]+}} : memref
+// CHECK-DAG: reussir.array.to_device {{.*}}shape_value
 // CHECK-DAG: reussir.array.to_host
 // CHECK-DAG: reussir.array.device_extent
 // CHECK-DAG: memref<?x4xi32, strided<[?, ?], offset: ?>>
@@ -20,3 +21,5 @@ pub fn filled(n: u64) -> DevArray<[i32; ?, 4]> {
 pub fn dimension(x: DevArray<[i32; ?, 4]>, axis: u64) -> u64 { pjrt::dim(x, axis) }
 fn generic<T,P>(x: DevArray<T,P>) -> T { pjrt::download(x) }
 pub fn generic_shape(x: DevArray<[f32; 3, 5]>) -> [f32; 3, 5] { generic(x) }
+
+pub fn shape_value(n: i64) -> DevArray<i64> { pjrt::upload_shape(n) }

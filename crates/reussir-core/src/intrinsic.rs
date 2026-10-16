@@ -483,14 +483,20 @@ pub enum IntrinsicOp {
 pub enum PjrtFn {
     Alloc,
     Upload,
+    /// Upload a host-known i64 scalar and retain it for shape specialization.
+    UploadShape,
     Download,
     Dim,
 }
 impl PjrtFn {
+    pub fn is_upload(self) -> bool {
+        matches!(self, Self::Upload | Self::UploadShape)
+    }
     pub fn parse(name: &str) -> Option<Self> {
         Some(match name {
             "alloc" => Self::Alloc,
             "upload" => Self::Upload,
+            "upload_shape" => Self::UploadShape,
             "download" => Self::Download,
             "dim" => Self::Dim,
             _ => return None,
@@ -500,6 +506,7 @@ impl PjrtFn {
         match self {
             Self::Alloc => "alloc",
             Self::Upload => "upload",
+            Self::UploadShape => "upload_shape",
             Self::Download => "download",
             Self::Dim => "dim",
         }
@@ -613,7 +620,7 @@ pub fn validate_pjrt(
     };
     let is_extent =
         |ty: crate::semi::ty::Ty<'_>| matches!(ty.kind(), TyKind::Int(IntTy::Unsigned(64)));
-    let device = if matches!(op, PjrtFn::Alloc | PjrtFn::Upload) {
+    let device = if op == PjrtFn::Alloc || op.is_upload() {
         result
     } else {
         let Some(&device) = args.first() else {
@@ -646,15 +653,16 @@ pub fn validate_pjrt(
                 invalid()
             }
         }
-        PjrtFn::Upload | PjrtFn::Download => {
+        PjrtFn::Upload | PjrtFn::UploadShape | PjrtFn::Download => {
+            if op == PjrtFn::UploadShape
+                && (!dims.is_empty() || !matches!(elem.kind(), TyKind::Int(IntTy::Signed(64))))
+            {
+                return invalid();
+            }
             if args.len() != 1 {
                 return invalid();
             }
-            let host = if op == PjrtFn::Upload {
-                args[0]
-            } else {
-                result
-            };
+            let host = if op.is_upload() { args[0] } else { result };
             let valid = if dims.is_empty() {
                 host == elem
             } else {

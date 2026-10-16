@@ -1687,6 +1687,10 @@ llvm::SmallVector<mlir::Type> ArrayType::getDescriptorTypes() const {
                                              getTarget().getDevices().size());
   llvm::SmallVector<mlir::Type> members{handles, indexType};
   members.append(getNumDynamicDims(), indexType);
+  if (hasShapeValueStorage()) {
+    members.push_back(mlir::IntegerType::get(getContext(), 8));
+    members.push_back(mlir::IntegerType::get(getContext(), 64));
+  }
   return members;
 }
 

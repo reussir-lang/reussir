@@ -506,6 +506,16 @@ mod tests {
         assert!(pjrt.join("build.rs").is_file());
         assert!(pjrt.join("header.rs").is_file());
         assert!(pjrt.join("src/lib.rs").is_file());
+        for name in ["reussir-stablehlo", "reussir-stablehlo-sys"] {
+            let dir = tmp.path().join(name);
+            let manifest = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+            assert!(!manifest.contains("workspace = true"), "{manifest}");
+            assert!(dir.join("src/lib.rs").is_file());
+        }
+        let native = tmp.path().join("reussir-stablehlo-sys");
+        assert!(native.join("build.rs").is_file());
+        assert!(native.join("native_archive.rs").is_file());
+        assert!(native.join("native/specialize.h").is_file());
     }
 
     #[test]

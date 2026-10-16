@@ -22,6 +22,8 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", dir.display());
     println!("cargo:rustc-link-lib=static=ReussirStablehloSpecializer");
     for name in archives.lines() {
-        println!("cargo:rustc-link-lib=static:-bundle={name}");
+        // Runtime consumers (including PolyFFI executable links) must not need
+        // the compiler build tree to resolve optional native archives.
+        println!("cargo:rustc-link-lib=static={name}");
     }
 }

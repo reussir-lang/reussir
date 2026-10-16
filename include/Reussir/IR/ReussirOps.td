@@ -1236,6 +1236,9 @@ def ReussirArrayToDeviceOp
     Borrows initialized, immutable host storage until return. The result owns
     its device buffers; no host pointer escapes. Backend errors abort.
     The optional token supplies the host RC descriptor box, not device storage.
+    A `shape_value` unit attribute is allowed only for rank-zero i64 uploads.
+    It retains the exact host value with the descriptor for specialization;
+    ordinary uploads and all kernel outputs have no such promise.
   }];
   let arguments = (ins AnyMemRef:$source, Optional<ReussirTokenType>:$token);
   let results = (outs ReussirRcArrayType:$array);

@@ -690,7 +690,9 @@ def ReussirArrayType
     ```
 
     A single-device target stores one pointer instead of a pointer array.
-    Static target extents and placement remain in the type.
+    Static target extents and placement remain in the type. Rank-zero i64
+    targets additionally store an i8 presence flag and an i64 host-known shape
+    value after the offset. Ordinary uploads and adopted outputs clear the flag.
   }];
   let parameters = (ins ArrayRefParameter<"int64_t">:$shape,
       "mlir::Type":$eleTy,
@@ -713,6 +715,12 @@ def ReussirArrayType
     static constexpr unsigned ALLOCATION_INDEX = 0;
     static constexpr unsigned OFFSET_INDEX = 1;
     static constexpr unsigned DYNAMIC_EXTENTS_INDEX = 2;
+    // Scalar i64 descriptors reserve storage for explicitly marked host values.
+    bool hasShapeValueStorage() const {
+      return hasTargetAttr() && getRank() == 0 && getElementType().isInteger(64);
+    }
+    static constexpr unsigned SHAPE_VALUE_PRESENT_INDEX = 2;
+    static constexpr unsigned SHAPE_VALUE_INDEX = 3;
     llvm::SmallVector<mlir::Type> getDescriptorTypes() const;
   }];
 }

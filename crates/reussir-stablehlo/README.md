@@ -45,3 +45,18 @@ compile options, logical shapes, and presence and contents of each shape value.
 The disk identity also carries a specialization version and the existing
 plugin/platform/topology/XLA_FLAGS namespace. Refinement and PJRT compilation
 both run inside the coalesced cache miss; a disk hit avoids both.
+
+### Explicit host-known shape values
+
+`pjrt::upload_shape(n: i64)` copies a scalar to the device and retains its exact
+host value in the owned descriptor for specialization. Forwarding or sharing the
+DevArray preserves this marker. A kernel result, ordinary upload, or allocation
+clears it. Use this for dynamic-iota/fill extents; use ordinary `upload` for data
+such as iteration limits. Values are part of the cache key. There are no device
+readbacks, implicit scalar specialization, or host evaluation of kernel code.
+
+The compiler's target-array payload has handles, offset, and logical dynamic
+extents. Rank-zero i64 descriptors additionally have an i8 presence flag and an
+i64 value. Compiler-generated launches borrow this payload, including for scalar
+parameters; raw PJRT buffer handles alone are not that descriptor ABI. The older
+raw compile/execute runtime entry points remain available to C clients.

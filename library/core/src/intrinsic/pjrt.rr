@@ -21,6 +21,14 @@ pub fn alloc<Result, Args>(args: Args) -> Result;
 #[lang("core::intrinsic::pjrt::upload")]
 pub fn upload<P, Host, Result>(host: Host) -> Result;
 
+/// Upload an i64 scalar whose exact host value is available to kernel shape
+/// specialization. The value is retained with this immutable DevArray; forwarding
+/// or sharing it preserves the marker, while kernel outputs do not inherit it.
+/// Use this only for shape parameters. Ordinary upload keeps scalar data dynamic.
+/// Placement P defaults to device zero. No device readback is performed.
+#[lang("core::intrinsic::pjrt::upload_shape")]
+pub fn upload_shape<P, Result>(host: i64) -> Result;
+
 /// Copy a device array to fresh host storage and wait. Rank-zero returns its
 /// scalar; ranked results retain their static/dynamic host array shape.
 #[lang("core::intrinsic::pjrt::download")]
