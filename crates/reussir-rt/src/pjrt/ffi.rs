@@ -10,10 +10,10 @@
 //! Host data must remain live and aligned, immutable during upload and exclusively
 //! writable during download. Every address selected by strides must be in bounds.
 
-use std::{ffi::c_void, slice, sync::Arc};
+use std::{ffi::c_void, slice};
 
 use super::{
-    Buffer, Executable, Result,
+    Buffer, Result,
     layout::{Allocation, Layout},
     sys,
 };
@@ -156,139 +156,85 @@ fn checked<T>(result: Result<T>) -> T {
     })
 }
 
-/// Verify an MLIR payload's BLAKE3 checksum and return its cached compilation.
-/// `checksum` contains exactly 64 ASCII hex bytes (either case, no terminator).
-/// `options` contains a serialized PJRT CompileOptionsProto, including device
-/// assignment. The runtime borrows all input bytes only until this call returns.
-/// Acquires ownership before returning an opaque runtime executable. Pass it once
-/// to __reussir_pjrt_executable_execute, which consumes that reference. Failures
-/// use the runtime panic path.
-///
-/// # Safety
-/// All nonempty inputs must be readable and immutable for their stated lengths.
-/// Empty bytecode/options slices permit null pointers; checksum must be readable
-/// for 64 bytes. This function does not execute the compiled program.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __reussir_pjrt_compile(
-    bytecode: *const u8,
-    bytecode_size: usize,
-    checksum: *const u8,
-    options: *const u8,
-    options_size: usize,
-) -> *const Executable {
-    let bytecode = if bytecode_size == 0 {
-        &[]
-    } else {
-        unsafe { slice::from_raw_parts(bytecode, bytecode_size) }
-    };
-    let options = if options_size == 0 {
-        &[]
-    } else {
-        unsafe { slice::from_raw_parts(options, options_size) }
-    };
-    Arc::into_raw(checked(Executable::compile(
-        bytecode,
-        unsafe { slice::from_raw_parts(checksum, 64) },
-        options,
-    )))
+/// Logical (global) shape of one launch input. Physical shard dimensions
+/// (PJRT_Buffer_UnpaddedDimensions) never appear here.
+#[repr(C)]
+pub struct ShapeArgument {
+    pub dimensions: *const i64,
+    pub rank: usize,
 }
 
-/// Validate descriptor placement before execution; failure releases the executable reference.
-/// `executable` owns one compile reference, retained on success, and `devices`
-/// provides `count` readable nonnegative client device indices.
+/// Synchronous launch contract emitted by PJRT lowering. Counts describe the
+/// adjacent pointer arrays; all data is borrowed until launch completes.
+#[repr(C)]
+pub struct LaunchRequest {
+    pub bytecode: *const u8,
+    pub bytecode_size: usize,
+    pub checksum: *const u8,
+    pub options: *const u8,
+    pub options_size: usize,
+    pub arguments: *const ShapeArgument,
+    pub input_count: usize,
+    pub inputs: *const *const *mut sys::PJRT_Buffer,
+    pub devices: *const i32,
+    pub device_count: usize,
+    pub permissions: *const u8,
+    pub mapping: *const u32,
+    pub donors: *const u32,
+    pub donor_count: usize,
+    pub aliases: *const [u32; 2],
+    pub alias_count: usize,
+    pub outputs: *const *mut *mut sys::PJRT_Buffer,
+    pub output_count: usize,
+}
+
+/// Refine shapes, choose donation, compile, and execute synchronously. Static
+/// permission plus uniqueness guards are necessary; runtime physical alias
+/// checks and profitability decide automatic donation. Explicit contracts are
+/// enforced independently of the profitability policy.
 ///
 /// # Safety
-/// `executable` must carry one owned reference returned by
-/// `__reussir_pjrt_compile`. The caller retains that same reference on success
-/// and must pass it once to `__reussir_pjrt_executable_execute`. `devices` must
-/// be aligned and readable for `count` i32 entries; it may be null when zero.
+/// `request` and nonempty arrays must be valid/aligned for the stated lengths.
+/// Each input/output descriptor has `device_count` slots. Inputs are live from
+/// this client; output slots are exclusive, disjoint, writable and initially
+/// unowned. Permission is a compiler ownership proof, not user data: permitted
+/// inputs must have no later content uses, and their owners remain live until
+/// return. Donated inputs may only be destroyed afterward. Checksum has 64
+/// readable bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __reussir_pjrt_executable_validate_devices(
-    executable: *const Executable,
-    devices: *const i32,
-    count: usize,
-) {
-    let executable = unsafe { Arc::from_raw(executable) };
-    let result = (|| {
-        let context = super::context::get()?;
-        let indices = if count == 0 {
+pub unsafe extern "C" fn __reussir_pjrt_launch(request: *const LaunchRequest) {
+    unsafe fn borrowed<'a, T>(ptr: *const T, count: usize) -> &'a [T] {
+        if count == 0 {
             &[]
         } else {
-            unsafe { slice::from_raw_parts(devices, count) }
-        };
-        let expected = indices
-            .iter()
-            .map(|&index| {
-                let index = usize::try_from(index)
-                    .map_err(|_| super::Error::local("negative device index"))?;
-                context.device(index).map(|device| device.as_ptr())
-            })
-            .collect::<Result<Vec<_>>>()?;
-        executable.validate_devices(&expected)
-    })();
-    if result.is_err() {
-        drop(executable);
-        checked(result);
-    } else {
-        let _ = Arc::into_raw(executable);
+            unsafe { slice::from_raw_parts(ptr, count) }
+        }
     }
-}
-
-/// Invoke synchronously, borrowing inputs without donation and returning owned
-/// output shards for target-array drop lowering to release.
-/// Waits for all devices before releasing the consumed executable reference;
-/// failures release the reference before entering the runtime panic path.
-///
-/// # Safety
-///
-/// - **Executable:** one owned reference from compile, consumed on success or
-///   failure; compile again for another invocation.
-/// - **Lists:** `inputs` and `outputs` contain `num_inputs` and `num_outputs`
-///   pointers to logical arrays; either list may be null if its count is zero.
-/// - **Descriptors:** each pointer addresses the allocation-handle field after
-///   the RC header: `PJRT_Buffer *[d]`, where `d` is the executable's addressable
-///   device count and shards follow that device order.
-///   The compiler initializes offset/extents; only complete-buffer views with
-///   zero offset are supported.
-/// - **Inputs:** `d` live buffers per array, from the runtime's client and matching
-///   the executable's input sharding; owners must stay alive without donating or
-///   destroying buffers until return, after which inputs may be reused or released.
-/// - **Outputs:** exclusive writable storage for `d` handles per array, disjoint
-///   from inputs and other outputs; slots may be uninitialized.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __reussir_pjrt_executable_execute(
-    executable: *const Executable,
-    inputs: *const *const c_void,
-    num_inputs: usize,
-    outputs: *const *mut c_void,
-    num_outputs: usize,
-    non_donatable: *const i64,
-    num_non_donatable: usize,
-) {
-    // The ABI carries opaque array-descriptor pointers. Their first field is
-    // the existing allocation-handle array, not a standalone PJRT_Buffer.
-    let inputs = if num_inputs == 0 {
-        &[]
-    } else {
-        unsafe { slice::from_raw_parts(inputs.cast::<*const *mut sys::PJRT_Buffer>(), num_inputs) }
-    };
-    let executable = unsafe { Arc::from_raw(executable) };
-    // execute owns the reference and drops it before returning its Result,
-    // including on failure, before checked enters the aborting panic path.
-    let non_donatable = if num_non_donatable == 0 {
-        &[]
-    } else {
-        unsafe { slice::from_raw_parts(non_donatable, num_non_donatable) }
-    };
-    let results = checked(unsafe { executable.execute(inputs, num_outputs, non_donatable) });
-    for (array, shards) in results.iter().enumerate() {
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                shards.as_ptr(),
-                (*outputs.add(array)).cast::<*mut sys::PJRT_Buffer>(),
-                shards.len(),
-            )
-        };
+    let r = unsafe { &*request };
+    let args = unsafe { borrowed(r.arguments, r.input_count) }
+        .iter()
+        .map(|a| reussir_stablehlo::Argument {
+            dimensions: unsafe { borrowed(a.dimensions, a.rank) }.to_vec(),
+            shape_values: None,
+        })
+        .collect();
+    let results = checked(unsafe {
+        super::donation::launch(
+            borrowed(r.bytecode, r.bytecode_size),
+            borrowed(r.checksum, 64),
+            borrowed(r.options, r.options_size),
+            args,
+            borrowed(r.inputs, r.input_count),
+            borrowed(r.devices, r.device_count),
+            borrowed(r.permissions, r.input_count),
+            borrowed(r.mapping, r.input_count),
+            borrowed(r.donors, r.donor_count),
+            borrowed(r.aliases, r.alias_count),
+            r.output_count,
+        )
+    });
+    for (i, shards) in results.iter().enumerate() {
+        unsafe { std::ptr::copy_nonoverlapping(shards.as_ptr(), *r.outputs.add(i), shards.len()) };
     }
 }
 
@@ -466,16 +412,6 @@ pub unsafe extern "C" fn __reussir_pjrt_array_to_host_shard(
         unsafe { dimensions(coordinates, rank) },
     ));
     checked(unsafe { shard.download(buffer, data, element_bytes) });
-}
-
-/// Enqueue a device copy and return an owned handle; borrows initialized `buffer`.
-/// Does not wait for completion. The backend tracks pending storage use.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __reussir_pjrt_array_copy_to_device(
-    buffer: Buffer,
-    device: usize,
-) -> Buffer {
-    checked(unsafe { buffer.copy_to_device(device) })
 }
 
 /// Wait for pending work and report errors; borrows `buffer`.

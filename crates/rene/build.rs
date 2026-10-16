@@ -81,6 +81,33 @@ fn main() {
             );
         }
     }
+    // The PjRt runtime also depends on reussir-stablehlo. Its build script
+    // links archives from an OpenXLA-enabled CMake build, so ship only what
+    // cargo needs, including the helper the build script includes by path.
+    let stablehlo_dir = crates_dir.join("reussir-stablehlo");
+    println!("cargo::rerun-if-changed={}", stablehlo_dir.display());
+    append_text(
+        &mut tar,
+        "reussir-stablehlo/Cargo.toml",
+        &standalone_manifest(&stablehlo_dir.join("Cargo.toml"), &workspace_toml),
+    );
+    for file in [
+        "reussir-stablehlo/build.rs",
+        "reussir-backend-sys/native_archive.rs",
+    ] {
+        println!(
+            "cargo::rerun-if-changed={}",
+            crates_dir.join(file).display()
+        );
+        append_text(
+            &mut tar,
+            file,
+            &fs::read_to_string(crates_dir.join(file))
+                .expect("failed to read StableHLO build source"),
+        );
+    }
+    tar.append_dir_all("reussir-stablehlo/src", stablehlo_dir.join("src"))
+        .expect("failed to archive reussir-stablehlo source");
     let archive = tar.into_inner().expect("failed to finish the tar archive");
 
     let compressed =
@@ -194,7 +221,14 @@ fn standalone_manifest(crate_toml: &Path, workspace_toml: &Path) -> String {
                 "workspace dependency `{name}` carries extra keys; teach \
                  rene's build script to merge them"
             );
-            deps.insert(&name, ws["workspace"]["dependencies"][&name].clone());
+            // `[patch]` only applies inside the workspace, and the unpacked
+            // crates are their own workspace roots: use the patch source.
+            let patched = ws
+                .get("patch")
+                .and_then(|patch| patch.get("crates-io"))
+                .and_then(|patches| patches.get(&name));
+            let spec = patched.unwrap_or(&ws["workspace"]["dependencies"][&name]);
+            deps.insert(&name, spec.clone());
         }
 
         // The `nightly` feature of mlir_sync only gates optimizations (see the

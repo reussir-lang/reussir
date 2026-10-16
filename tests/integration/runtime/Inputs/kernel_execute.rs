@@ -1,22 +1,9 @@
-use std::{ffi::c_void, mem::MaybeUninit, ptr};
+use std::{ffi::c_void, ptr};
+
+#[path = "pjrt_launch.rs"]
+mod pjrt_launch;
 
 unsafe extern "C" {
-    fn __reussir_pjrt_compile(
-        bytecode: *const u8,
-        bytecode_size: usize,
-        checksum: *const u8,
-        options: *const u8,
-        options_size: usize,
-    ) -> *const c_void;
-    fn __reussir_pjrt_executable_execute(
-        executable: *const c_void,
-        inputs: *const *const c_void,
-        num_inputs: usize,
-        outputs: *const *mut c_void,
-        num_outputs: usize,
-        non_donatable: *const i64,
-        num_non_donatable: usize,
-    );
     fn __reussir_pjrt_array_from_host(
         device: usize,
         element_type: u32,
@@ -33,23 +20,6 @@ unsafe extern "C" {
         layout: *const c_void,
     );
     fn __reussir_pjrt_array_deallocate(buffer: *mut c_void);
-}
-
-const OPTIONS: &[u8] =
-    include_bytes!("../../../../crates/reussir-pjrt-sys/tests/fixtures/compile_options.pb");
-
-unsafe fn compile(path: &str, options: &[u8]) -> *const c_void {
-    let bytes = std::fs::read(path).unwrap();
-    let digest = blake3::hash(&bytes).to_hex();
-    unsafe {
-        __reussir_pjrt_compile(
-            bytes.as_ptr(),
-            bytes.len(),
-            digest.as_ptr(),
-            options.as_ptr(),
-            options.len(),
-        )
-    }
 }
 
 // Shared source-kernel execution harness. Arguments before `--` are rank-zero
@@ -95,27 +65,19 @@ fn main() {
                 )
             })
             .collect();
-        let inputs: Vec<*const c_void> = buffers
+        let shards: Vec<_> = buffers.iter().map(std::slice::from_ref).collect();
+        let inputs: Vec<_> = shards
             .iter()
-            .map(|buffer| ptr::from_ref(buffer).cast())
+            .map(|shards| pjrt_launch::Input {
+                shards,
+                dimensions: &[],
+            })
             .collect();
-        let mut outputs = vec![MaybeUninit::<*mut c_void>::uninit(); expected.len()];
-        let destinations: Vec<*mut c_void> = outputs
-            .iter_mut()
-            .map(|slot| ptr::from_mut(slot).cast())
-            .collect();
-        let non_donatable: Vec<_> = (0..buffers.len() as i64).collect();
-        __reussir_pjrt_executable_execute(
-            compile(&arguments[0], OPTIONS),
-            inputs.as_ptr(),
-            inputs.len(),
-            destinations.as_ptr(),
-            destinations.len(),
-            non_donatable.as_ptr(),
-            non_donatable.len(),
-        );
-        for (index, (slot, expected)) in outputs.into_iter().zip(expected).enumerate() {
-            let buffer = slot.assume_init();
+        let bytecode = std::fs::read(&arguments[0]).unwrap();
+        let outputs =
+            pjrt_launch::launch(&bytecode, pjrt_launch::OPTIONS, &[0], &inputs, expected.len());
+        for (index, (shards, expected)) in outputs.into_iter().zip(expected).enumerate() {
+            let buffer = shards[0];
             let mut actual = vec![0u8; expected.len()];
             __reussir_pjrt_array_to_host(
                 buffer,

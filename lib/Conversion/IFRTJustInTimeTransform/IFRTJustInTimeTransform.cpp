@@ -213,7 +213,8 @@ struct ReussirIFRTJustInTimeTransformPass
           call.op->getOperands().drop_front(call.info.numInputs),
           mlir::ValueRange{}, callee, call.info.devices, call.compileOptions,
           call.info.ioAliases, call.info.donatedInputIndices,
-          call.info.argAttrs, call.info.resAttrs, builder.getArrayAttr({}));
+          call.info.argAttrs, call.info.resAttrs,
+          builder.getDenseI32ArrayAttr({}));
       jit->setDiscardableAttrs(call.op->getDiscardableAttrDictionary());
       call.op->replaceAllUsesWith(jit.getResults());
       call.op->erase();

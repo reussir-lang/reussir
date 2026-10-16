@@ -6,7 +6,6 @@ use super::{
     artifact::Artifacts,
     cache_config::CacheConfig,
     client::Client,
-    context,
     sys::*,
 };
 use foyer::{Cache, CacheBuilder, S3FifoConfig};
@@ -42,15 +41,6 @@ impl Executable {
     /// The caller must not delete or destroy the returned PJRT object.
     pub fn as_ptr(&self) -> *mut PJRT_LoadedExecutable {
         self.native.as_ptr()
-    }
-
-    pub(super) fn compile(bytecode: &[u8], checksum: &[u8], options: &[u8]) -> Result<Arc<Self>> {
-        let digest = verify_checksum(bytecode, checksum)?;
-        let executable = context::get()?
-            .executables
-            .get_or_compile(bytecode, digest, options)?;
-        context::register_compiled_shutdown()?;
-        Ok(executable)
     }
 
     fn serialize(&self) -> Result<Vec<u8>> {
@@ -241,13 +231,16 @@ fn verify_checksum(bytecode: &[u8], checksum: &[u8]) -> Result<blake3::Hash> {
 struct CacheKey {
     digest: blake3::Hash,
     options: Vec<u8>,
+    donation: Option<reussir_stablehlo::Donation>,
 }
 
 pub(super) struct CompilationCache {
     entries: Cache<CacheKey, Arc<Executable>>,
+    programs:
+        Cache<(blake3::Hash, Vec<reussir_stablehlo::Argument>), Arc<reussir_stablehlo::Refined>>,
     artifacts: Option<Arc<Artifacts>>,
     namespace: [u8; 32],
-    owner: Arc<CompilationClient>,
+    pub(super) owner: Arc<CompilationClient>,
     // Taken by the first of `shutdown` and `Drop`.
     runtime: Mutex<Option<tokio::runtime::Runtime>>,
     handle: tokio::runtime::Handle,
@@ -278,6 +271,10 @@ impl CompilationCache {
             None
         };
         Ok(Self {
+            programs: CacheBuilder::new(config.memory.loaded_entries)
+                .with_shards(1)
+                .with_eviction_config(S3FifoConfig::default())
+                .build(),
             entries: CacheBuilder::new(config.memory.loaded_entries)
                 .with_shards(1)
                 .with_eviction_config(S3FifoConfig::default())
@@ -297,24 +294,61 @@ impl CompilationCache {
         futures::executor::block_on(future)
     }
 
-    fn get_or_compile(
+    /// Compile a refined program, rewritten for `donation` if given.
+    pub(super) fn compile_refined(
+        &self,
+        program: &[u8],
+        options: &[u8],
+        donation: Option<reussir_stablehlo::Donation>,
+    ) -> Result<Arc<Executable>> {
+        self.get_or_build(program, blake3::hash(program), options, donation)
+    }
+
+    /// Refine a verified program for one launch's argument shapes. Refined
+    /// programs have their own bounded cache, separate from executables.
+    pub(super) fn refine_program(
+        &self,
+        code: &[u8],
+        checksum: &[u8],
+        arguments: Vec<reussir_stablehlo::Argument>,
+    ) -> Result<Arc<reussir_stablehlo::Refined>> {
+        let key = (verify_checksum(code, checksum)?, arguments.clone());
+        if let Some(entry) = self.programs.get(&key) {
+            return Ok(entry.value().clone());
+        }
+        let code = code.to_vec();
+        let _enter = self.handle.enter();
+        self.wait(self.programs.get_or_fetch(&key, || async move {
+            tokio::task::spawn_blocking(move || {
+                reussir_stablehlo::refine_shapes(&code, &arguments)
+                    .map(Arc::new)
+                    .map_err(|e| Error::local(e.to_string()))
+            })
+            .await
+            .map_err(|e| Error::local(e.to_string()))?
+        }))
+        .map(|entry| entry.value().clone())
+        .map_err(|e| Error::local(e.to_string()))
+    }
+
+    fn get_or_build(
         &self,
         code: &[u8],
         digest: blake3::Hash,
         options: &[u8],
+        donation: Option<reussir_stablehlo::Donation>,
     ) -> Result<Arc<Executable>> {
         let key = CacheKey {
             digest,
             options: options.into(),
+            donation: donation.clone(),
         };
         if let Some(entry) = self.entries.get(&key) {
             return Ok(entry.value().clone());
         }
         let owner = self.owner.clone();
         let artifacts = self.artifacts.clone();
-        let mut artifact_key = self.namespace.to_vec();
-        artifact_key.extend_from_slice(digest.as_bytes());
-        artifact_key.extend_from_slice(options);
+        let artifact_key = self.artifact_key(&key);
         let code = code.to_vec();
         let options = options.to_vec();
         let _enter = self.handle.enter();
@@ -350,6 +384,14 @@ impl CompilationCache {
                         artifacts.cache.remove(&artifact_key);
                     }
                 }
+                // The donation rewrite is inside the coalesced cache miss, like
+                // PJRT compilation; hits and restored artifacts need neither.
+                let code = if let Some(donation) = donation {
+                    reussir_stablehlo::apply_donation(&code, &donation)
+                        .map_err(|error| Error::local(error.to_string()))?
+                } else {
+                    code
+                };
                 let executable = owner.compile(&code, &options)?;
                 if let Some(artifacts) = &artifacts {
                     match executable.serialize() {
@@ -376,6 +418,29 @@ impl CompilationCache {
         })
     }
 
+    /// Length-delimited, versioned identity of a disk artifact.
+    fn artifact_key(&self, key: &CacheKey) -> Vec<u8> {
+        let mut artifact_key = self.namespace.to_vec();
+        artifact_key.extend_from_slice(b"reussir-pjrt-artifact-v1");
+        artifact_key.extend_from_slice(key.digest.as_bytes());
+        artifact_key.extend_from_slice(&(key.options.len() as u64).to_le_bytes());
+        artifact_key.extend_from_slice(&key.options);
+        artifact_key.push(u8::from(key.donation.is_some()));
+        if let Some(donation) = &key.donation {
+            for values in [
+                &donation.mapping[..],
+                &donation.donors[..],
+                donation.aliases.as_flattened(),
+            ] {
+                artifact_key.extend_from_slice(&(values.len() as u64).to_le_bytes());
+                for value in values {
+                    artifact_key.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+        }
+        artifact_key
+    }
+
     fn close_artifacts(&self) {
         if let Some(artifacts) = &self.artifacts {
             self.wait(artifacts.close());
@@ -393,6 +458,7 @@ impl CompilationCache {
         self.close_artifacts();
         drop(runtime);
         self.entries.clear();
+        self.programs.clear();
     }
 }
 

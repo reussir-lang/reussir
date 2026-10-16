@@ -178,7 +178,7 @@ fn disk_config(directory: &Path) -> CacheConfig {
 fn request(cache: &CompilationCache, code: &[u8], options: &[u8]) -> Result<Arc<Executable>> {
     let checksum = blake3::hash(code).to_hex();
     let digest = verify_checksum(code, checksum.as_bytes())?;
-    cache.get_or_compile(code, digest, options)
+    cache.get_or_build(code, digest, options, None)
 }
 
 #[test]
@@ -295,8 +295,11 @@ fn bad_artifacts_recompile_and_replace() {
     let api = api();
     let dir = tempfile::tempdir().unwrap();
     let (cache, state) = cache(&api, &disk_config(dir.path()), [0; 32]);
-    let mut key = vec![0; 32];
-    key.extend_from_slice(blake3::hash(b"kernel").as_bytes());
+    let key = cache.artifact_key(&CacheKey {
+        digest: blake3::hash(b"kernel"),
+        options: vec![],
+        donation: None,
+    });
     let artifacts = cache.artifacts.as_ref().unwrap();
     for bad in [b"corrupt".to_vec(), {
         let mut bytes = blake3::hash(b"incompatible").as_bytes().to_vec();
@@ -343,7 +346,7 @@ fn synchronous_api_works_inside_tokio() {
 #[test]
 #[ignore = "requires REUSSIR_PJRT_PLUGIN pointing to a trusted CPU plugin"]
 fn real_plugin_serializes_and_restores_without_compiling() {
-    let context = context::get().unwrap();
+    let context = crate::pjrt::context::get().unwrap();
     let owner = context.executables.owner.clone();
     let plugin = std::env::var_os("REUSSIR_PJRT_PLUGIN").unwrap();
     let namespace = owner.namespace(Path::new(&plugin)).unwrap();
@@ -367,7 +370,7 @@ fn real_plugin_serializes_and_restores_without_compiling() {
     // Exercise the internal cache layer after checksum verification: supplying
     // uncompileable code here makes any unexpected compilation fail the test.
     second
-        .get_or_compile(b"must restore the artifact", digest, options)
+        .get_or_build(b"must restore the artifact", digest, options, None)
         .unwrap();
 }
 
@@ -412,4 +415,71 @@ fn artifact_memory_eviction_writes_back_within_disk_capacity() {
     let (second, state) = cache(&api, &config, [0; 32]);
     request(&second, b"kernel", b"").unwrap();
     assert_eq!(state.loads.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn refined_programs_are_keyed_by_shapes_and_shape_values() {
+    use reussir_stablehlo::Argument;
+    let api = api();
+    let (cache, _) = cache(&api, &memory_config(128), [0; 32]);
+    let code = br#"module { func.func @main(%s: tensor<1xi64>) -> tensor<?xi32> {
+        %v = stablehlo.dynamic_iota %s, dim = 0 : (tensor<1xi64>) -> tensor<?xi32>
+        return %v : tensor<?xi32>
+    }}"#;
+    let checksum = blake3::hash(code).to_hex();
+    let refine = |values: Option<Vec<i64>>| {
+        cache.refine_program(
+            code,
+            checksum.as_bytes(),
+            vec![Argument {
+                dimensions: vec![1],
+                shape_values: values,
+            }],
+        )
+    };
+    let three = refine(Some(vec![3])).unwrap();
+    assert_eq!(three.result_types[0].dimensions, [3]);
+    assert!(Arc::ptr_eq(&three, &refine(Some(vec![3])).unwrap()));
+    assert_eq!(
+        refine(Some(vec![7])).unwrap().result_types[0].dimensions,
+        [7]
+    );
+    assert!(refine(None).is_err());
+}
+
+#[test]
+fn refined_and_donated_programs_are_cached_separately() {
+    use reussir_stablehlo::{Argument, Donation};
+    let api = api();
+    let (cache, state) = cache(&api, &memory_config(128), [0; 32]);
+    let code = br#"module { func.func @main(%a: tensor<?xf32>) -> tensor<?xf32> {
+        %v = stablehlo.add %a, %a : tensor<?xf32>
+        return %v : tensor<?xf32>
+    }}"#;
+    let checksum = blake3::hash(code).to_hex();
+    let prepare = || {
+        cache
+            .refine_program(code, checksum.as_bytes(), vec![Argument::shape(vec![2048])])
+            .unwrap()
+    };
+    let first = prepare();
+    assert!(Arc::ptr_eq(&first, &prepare()));
+    let donation = Donation {
+        mapping: vec![0],
+        donors: vec![0],
+        aliases: vec![],
+    };
+    cache.compile_refined(&first.bytecode, b"", None).unwrap();
+    let donated = cache
+        .compile_refined(&first.bytecode, b"", Some(donation.clone()))
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        &donated,
+        &cache
+            .compile_refined(&first.bytecode, b"", Some(donation))
+            .unwrap()
+    ));
+    assert_eq!(state.compiles.load(Ordering::SeqCst), 2);
+    let programs = state.programs.lock().unwrap();
+    assert_ne!(programs[0].0, programs[1].0);
 }

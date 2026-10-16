@@ -9,6 +9,5 @@
 // includes StableHLO arithmetic, repeated calls, multiple results, and control
 // dependencies; its separate E2E test checks execution when a plugin is present.
 // CHECK-LABEL: define {{.*}}@examples(
-// CHECK: call {{.*}}@__reussir_pjrt_compile
-// CHECK: call {{.*}}@__reussir_pjrt_executable_execute
+// CHECK: call {{.*}}@__reussir_pjrt_launch
 // CHECK: call {{.*}}@__reussir_pjrt_array_to_host

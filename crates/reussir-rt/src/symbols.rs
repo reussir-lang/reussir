@@ -78,11 +78,7 @@ pub fn exported_symbols() -> &'static [RuntimeSymbol] {
         __reussir_acquire_rigid_object,
         __reussir_release_rigid_object,
         #[cfg(feature = "pjrt")]
-        __reussir_pjrt_compile,
-        #[cfg(feature = "pjrt")]
-        __reussir_pjrt_executable_validate_devices,
-        #[cfg(feature = "pjrt")]
-        __reussir_pjrt_executable_execute,
+        __reussir_pjrt_launch,
         #[cfg(feature = "pjrt")]
         __reussir_pjrt_array_allocate,
         #[cfg(feature = "pjrt")]
@@ -97,8 +93,6 @@ pub fn exported_symbols() -> &'static [RuntimeSymbol] {
         __reussir_pjrt_array_from_host_shard,
         #[cfg(feature = "pjrt")]
         __reussir_pjrt_array_to_host_shard,
-        #[cfg(feature = "pjrt")]
-        __reussir_pjrt_array_copy_to_device,
         #[cfg(feature = "pjrt")]
         __reussir_pjrt_array_wait_ready,
         #[cfg(feature = "pjrt")]

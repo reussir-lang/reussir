@@ -137,7 +137,7 @@ fn empty_array_transfer_with_explicit_layout() {
 }
 
 #[test]
-#[ignore = "requires REUSSIR_PJRT_PLUGIN pointing to a trusted CPU plugin with two devices"]
+#[ignore = "requires REUSSIR_PJRT_PLUGIN pointing to a trusted CPU plugin"]
 fn compiler_abi_uses_native_buffer_handles() {
     // SAFETY: host arrays have the advertised shape/type and stay live until
     // transfer completion. Each opaque array handle is released once.
@@ -175,18 +175,15 @@ fn compiler_abi_uses_native_buffer_handles() {
             __reussir_pjrt_array_host_size(array, std::ptr::null()),
             size_of_val(&input)
         );
-        let copied = __reussir_pjrt_array_copy_to_device(array, 1);
-        __reussir_pjrt_array_deallocate(array);
-        __reussir_pjrt_array_wait_ready(copied);
         let mut output = [0.0f32; 8];
         __reussir_pjrt_array_to_host(
-            copied,
+            array,
             output.as_mut_ptr().cast(),
             size_of_val(&output),
             std::ptr::null(),
         );
         assert_eq!(output, expected);
-        __reussir_pjrt_array_deallocate(copied);
+        __reussir_pjrt_array_deallocate(array);
 
         let scalar = 17i32;
         let array = __reussir_pjrt_array_from_host(
