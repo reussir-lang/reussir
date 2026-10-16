@@ -3774,6 +3774,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "reussir-stablehlo"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "mlir-sys",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "reussir-syntax"
 version = "0.1.0"
 dependencies = [

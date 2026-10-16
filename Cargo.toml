@@ -10,6 +10,7 @@ members = [
     "crates/reussir-backend",
     "crates/reussir-jit",
     "crates/reussir-pjrt-sys",
+    "crates/reussir-stablehlo",
     "crates/reussir-codegen",
     "crates/reussir-compiler",
     "crates/reussir-repl",
@@ -21,6 +22,7 @@ members = [
 # `cargo build`; build them explicitly (e.g. `cargo build -p reussir-backend`
 # or `cargo build -p reussir-codegen`) with the CMake build wiring up the env.
 # reussir-pjrt-sys is also explicit: bindgen requires libclang and a PjRt header.
+# So is reussir-stablehlo, which links archives from an OpenXLA-enabled build.
 default-members = [
     "crates/reussir-rt",
     "crates/reussir-syntax",
