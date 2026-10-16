@@ -3,7 +3,7 @@
 //! builds exactly one selected program on a cache miss.
 use super::{
     Error, Result,
-    api::{call, non_null},
+    api::{Api, non_null},
     context,
     sys::*,
 };
@@ -133,6 +133,38 @@ fn element_bytes(element: PJRT_Buffer_Type) -> Option<u64> {
     }
 }
 
+// Profitability queries are optional. A missing or failed query means there
+// is insufficient information to justify automatic donation of this input.
+fn allocation_info(api: Api, buffer: *mut PJRT_Buffer) -> Option<(PJRT_Buffer_Type, u64, u64)> {
+    // Api validates a prefix containing these fields; avoid borrowing its tail.
+    let element = unsafe { (*api.0.as_ptr()).PJRT_Buffer_ElementType }?;
+    let size = unsafe { (*api.0.as_ptr()).PJRT_Buffer_OnDeviceSizeInBytes }?;
+    let element = api
+        .call(
+            element,
+            PJRT_Buffer_ElementType_Args {
+                struct_size: PJRT_Buffer_ElementType_STRUCT_SIZE as usize,
+                buffer,
+                ..Default::default()
+            },
+        )
+        .ok()?
+        .type_;
+    let bytes = element_bytes(element)?;
+    let size = api
+        .call(
+            size,
+            PJRT_Buffer_OnDeviceSizeInBytes_Args {
+                struct_size: PJRT_Buffer_OnDeviceSizeInBytes_STRUCT_SIZE as usize,
+                buffer,
+                ..Default::default()
+            },
+        )
+        .ok()?
+        .on_device_size_in_bytes;
+    Some((element, bytes, size as u64))
+}
+
 /// Inputs and shards are live borrowed buffers until synchronous execution ends.
 #[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn launch(
@@ -175,21 +207,25 @@ pub(super) unsafe fn launch(
             logical_bytes: 0,
             allocated_bytes: 0,
         };
-        let permitted = permissions.get(i).copied().unwrap_or(0) != 0;
+        let permitted = explicit.is_empty()
+            && aliases.is_empty()
+            && permissions.get(i).copied().unwrap_or(0) != 0;
         let mut first_element = None;
         for (device, &buffer) in row.iter().enumerate() {
             non_null(buffer, "input shard")?;
             if !permitted {
                 continue;
             }
-            let element = call!(api, PJRT_Buffer_ElementType { buffer })?.type_;
-            let physical =
-                call!(api, PJRT_Buffer_OnDeviceSizeInBytes { buffer })?.on_device_size_in_bytes;
+            let Some((element, element_bytes, physical)) = allocation_info(api, buffer) else {
+                fact.logical_bytes = 0;
+                fact.allocated_bytes = 0;
+                break;
+            };
             fact.allocated_bytes = fact
                 .allocated_bytes
                 .checked_add(physical as u64)
                 .ok_or_else(|| Error::local("physical allocation size overflow"))?;
-            let logical = element_bytes(element)
+            let logical = Some(element_bytes)
                 .and_then(|bytes| {
                     argument
                         .dimensions
@@ -244,6 +280,30 @@ pub(super) unsafe fn launch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn missing_profitability_queries_disable_automatic_donation() {
+        unsafe extern "C" fn element(args: *mut PJRT_Buffer_ElementType_Args) -> *mut PJRT_Error {
+            unsafe { (*args).type_ = 11 }; // PJRT F32.
+            std::ptr::null_mut()
+        }
+        unsafe extern "C" fn size(
+            args: *mut PJRT_Buffer_OnDeviceSizeInBytes_Args,
+        ) -> *mut PJRT_Error {
+            unsafe { (*args).on_device_size_in_bytes = 8192 };
+            std::ptr::null_mut()
+        }
+        let mut table = PJRT_Api::default();
+        let api = Api(std::ptr::NonNull::from(&mut table));
+        let buffer = std::ptr::null_mut(); // Mock callbacks do not dereference it.
+        assert_eq!(allocation_info(api, buffer), None);
+        table.PJRT_Buffer_ElementType = Some(element);
+        assert_eq!(allocation_info(api, buffer), None);
+        table.PJRT_Buffer_OnDeviceSizeInBytes = Some(size);
+        assert_eq!(allocation_info(api, buffer), Some((11, 4, 8192)));
+        table.PJRT_Buffer_ElementType = None;
+        assert_eq!(allocation_info(api, buffer), None);
+    }
+
     fn fact(handles: &[usize], logical: u64, actual: u64) -> BufferFacts {
         BufferFacts {
             handles: handles.to_vec(),
