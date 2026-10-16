@@ -87,7 +87,7 @@ if os.environ.get('REUSSIR_LIBRARY_PATH_OVERRIDE'):
 for _var, _value in os.environ.items():
     if (_var.startswith(('NIX_', 'CARGO_', 'CC_', 'CXX_', 'AR_'))
             or _var in ('LIBRARY_PATH', 'LD_LIBRARY_PATH', 'WINEPATH',
-                        'LIB', 'INCLUDE', 'RUSTFLAGS')):
+                        'LIB', 'INCLUDE', 'RUSTFLAGS', 'RUSTC_WRAPPER')):
         config.environment[_var] = _value
 
 # The runtime dylib links libstd dynamically, and nothing stages libstd next
@@ -126,6 +126,10 @@ if _pjrt_runtime and _pjrt_plugin:
     config.substitutions.append((r'%pjrt_runtime_dir', sh_path(os.path.dirname(_pjrt_runtime))))
     config.substitutions.append((r'%pjrt_runtime', sh_path(_pjrt_runtime)))
     config.environment['REUSSIR_PJRT_PLUGIN'] = _pjrt_plugin
+    # Preserve explicit backend tuning for optional CPU/CUDA execution tests.
+    for _var in ('XLA_FLAGS', 'TF_FORCE_UNIFIED_MEMORY', 'REUSSIR_PJRT_CACHE_CONFIG'):
+        if _var in os.environ:
+            config.environment[_var] = os.environ[_var]
 
 def append_flags(command, flags):
     return ' '.join(
