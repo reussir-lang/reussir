@@ -151,8 +151,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     }
 
     fn mk_expr(&mut self, kind: ExprKind<'tcx>, ty: Ty<'tcx>, span: Option<Span>) -> Expr<'tcx> {
-        self.register_expression_relations(&kind, ty, span);
         let id = self.fresh_expr_id();
+        self.register_expression_relations(&kind, ty, span, id);
         Expr { kind, ty, span, id }
     }
 
@@ -5084,8 +5084,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             ExprKind::TensorOp { op, args } => crate::async_check::hir_tensor_op(*op, e.ty, args),
             _ => Ok(()),
         };
+        let shape_error = self.fulfill.shapes.take_tensor_error(e.id);
         if let Err(reason) = validation {
             self.error(e.span, reason);
+        } else if let Some(reason) = shape_error {
+            self.error(e.span, format!("type mismatch in shape relation: {reason}"));
+        } else if self.fulfill.shapes.tensor_relation_deferred(e.id) {
+            self.error(e.span, "cannot establish the deferred shape relation");
         }
         e
     }

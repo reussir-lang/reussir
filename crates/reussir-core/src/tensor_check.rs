@@ -134,8 +134,18 @@ pub fn operation(op: TensorFn, result: Ty<'_>, args: &[Ty<'_>]) -> Result<(), St
         }
         Transpose => {
             if let (Some((ie, id)), Some((oe, od))) = (tensor(args[0])?, output) {
-                if id.len() != 2 || od.len() != 2 || !same(ie, oe) || !shape(&[id[1], id[0]], od) {
+                if id.len() != 2 || od.len() != 2 || !same(ie, oe) {
                     return Err("transpose requires a matrix and its transposed result type".into());
+                }
+                for (axis, (expected, actual)) in [id[1], id[0]].into_iter().zip(od).enumerate() {
+                    if expected != *actual
+                        && expected != DYNAMIC_EXTENT
+                        && *actual != DYNAMIC_EXTENT
+                    {
+                        return Err(format!(
+                            "transpose result axis {axis} must have extent {expected}, found {actual}"
+                        ));
+                    }
                 }
             }
         }
@@ -308,7 +318,7 @@ mod tests {
             ),
             (
                 "#[kernel] pub fn bad(x:Tensor<[f32;2,3]>)->Tensor<[f32;2,3]> { core::intrinsic::tensor::transpose(x) }",
-                "type mismatch",
+                "transpose result axis",
             ),
             (
                 "#[kernel] pub fn bad(x:Tensor<[i32;2]>)->Tensor<[i32;2]> { core::intrinsic::tensor::select(x,x,x) }",

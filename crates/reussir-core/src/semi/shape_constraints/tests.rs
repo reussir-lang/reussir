@@ -189,3 +189,50 @@ fn runtime_shapes_wait_for_context_then_default_conservatively() {
     let errors = reports(source);
     assert!(errors.is_empty(), "{errors:#?}");
 }
+
+#[test]
+fn tensor_operation_diagnostics_are_not_repeated_by_zonking() {
+    for (source, reason) in [
+        (
+            "#[kernel] pub fn bad(x:Tensor<[f32;2,3]>)->Tensor<[f32;4,2]> { core::intrinsic::tensor::transpose(x) }",
+            "transpose result axis 0 must have extent 3, found 4",
+        ),
+        (
+            "#[kernel] pub fn bad(axis:i64)->Tensor<[i32;2,3]> { core::intrinsic::tensor::iota(axis) }",
+            "iota axis must be a compile-time integer literal",
+        ),
+        (
+            "#[kernel] pub fn bad(axis:i64)->Tensor<[i32;2,3]> { core::intrinsic::tensor::dynamic_iota((2,3),axis) }",
+            "iota axis must be a compile-time integer literal",
+        ),
+        (
+            "#[kernel] pub fn bad()->Tensor<[i32;2,3]> { core::intrinsic::tensor::iota(0+1) }",
+            "iota axis must be a compile-time integer literal",
+        ),
+        (
+            "#[kernel] pub fn bad()->Tensor<[i32;2,3]> { core::intrinsic::tensor::iota(-1) }",
+            "iota axis must be within the result rank",
+        ),
+    ] {
+        assert_eq!(reports(source), [reason], "{source}");
+    }
+}
+
+#[test]
+fn tensor_diagnostic_recovery_preserves_independent_errors() {
+    let errors = reports(
+        r#"
+        #[kernel]
+        pub fn bad(x:Tensor<[f32;2,3]>) -> (Tensor<[f32;4,2]>,Tensor<[f32;5,2]>) {
+            (core::intrinsic::tensor::transpose(x), core::intrinsic::tensor::transpose(x))
+        }
+    "#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "transpose result axis 0 must have extent 3, found 4",
+            "transpose result axis 0 must have extent 3, found 5",
+        ]
+    );
+}

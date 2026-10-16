@@ -1,0 +1,23 @@
+// RUN: %not %rrc %s --emit hir --color never -o /dev/null 2>&1 | %FileCheck %s --implicit-check-not="Error:"
+import core::intrinsic::tensor;
+
+#[kernel]
+pub fn transpose_mismatch(x: Tensor<[f32; 2, 3]>) -> Tensor<[f32; 4, 2]> {
+    tensor::transpose(x)
+}
+// CHECK: Error: transpose result axis 0 must have extent 3, found 4
+// CHECK: tensor::transpose(x)
+
+#[kernel]
+pub fn runtime_axis(axis: i64) -> Tensor<[i32; 2, 3]> {
+    tensor::iota(axis)
+}
+// CHECK: Error: iota axis must be a compile-time integer literal
+// CHECK: tensor::iota(axis)
+
+#[kernel]
+pub fn dynamic_runtime_axis(axis: i64) -> Tensor<[i32; 2, 3]> {
+    tensor::dynamic_iota((2, 3), axis)
+}
+// CHECK: Error: iota axis must be a compile-time integer literal
+// CHECK: tensor::dynamic_iota((2, 3), axis)

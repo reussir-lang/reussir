@@ -12,7 +12,7 @@ mod tests;
 
 use crate::intrinsic::TensorFn;
 use crate::semi::ctxt::Elaborator;
-use crate::semi::hir::{Expr, ExprKind, VarId};
+use crate::semi::hir::{Expr, ExprId, ExprKind, VarId};
 use crate::semi::shape_summary::{
     Argument, Call, Relation, ResidualReason, ScalarBound, SummaryCache, Value,
 };
@@ -42,6 +42,7 @@ pub(super) struct Pending<'tcx> {
     constraint: Constraint<'tcx>,
     span: Option<Span>,
     ancestry: Vec<DefId>,
+    tensor_expr: Option<ExprId>,
 }
 
 #[derive(Default)]
@@ -54,6 +55,14 @@ pub(super) struct ShapeConstraints<'tcx> {
     scalar_types: Vec<Ty<'tcx>>,
     active_ancestry: Vec<DefId>,
     values: rustc_hash::FxHashMap<VarId, Argument<'tcx>>,
+    // Source operations are diagnosed once, after their types are resolved.
+    // Keep inference failures as a fallback when expression validation cannot
+    // explain them. IDs distinguish operations even without source spans.
+    tensor_errors: rustc_hash::FxHashMap<ExprId, String>,
+    // Ground source operations may still need expression-level validation
+    // (for example, a literal axis). Let zonking report that specific failure
+    // before falling back to an unresolved-relation diagnostic.
+    deferred_tensors: rustc_hash::FxHashSet<ExprId>,
 }
 
 impl<'tcx> ShapeConstraints<'tcx> {
@@ -62,11 +71,29 @@ impl<'tcx> ShapeConstraints<'tcx> {
     }
 
     pub(super) fn register(&mut self, constraint: Constraint<'tcx>, span: Option<Span>) {
+        self.register_at(constraint, span, None);
+    }
+
+    fn register_at(
+        &mut self,
+        constraint: Constraint<'tcx>,
+        span: Option<Span>,
+        tensor_expr: Option<ExprId>,
+    ) {
         self.pending.push(Pending {
             constraint,
             span,
             ancestry: self.active_ancestry.clone(),
+            tensor_expr,
         });
+    }
+
+    pub(super) fn take_tensor_error(&mut self, id: ExprId) -> Option<String> {
+        self.tensor_errors.remove(&id)
+    }
+
+    pub(super) fn tensor_relation_deferred(&self, id: ExprId) -> bool {
+        self.deferred_tensors.contains(&id)
     }
 }
 
@@ -79,13 +106,16 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         kind: &ExprKind<'tcx>,
         ty: Ty<'tcx>,
         span: Option<Span>,
+        id: ExprId,
     ) {
         match kind {
             ExprKind::Let { var, value, .. } => {
                 let fact = Argument::from_expr_with(value, &self.fulfill.shapes.values);
                 self.fulfill.shapes.values.insert(*var, fact);
             }
-            ExprKind::TensorOp { op, args } => self.register_tensor_relation(*op, ty, args, span),
+            ExprKind::TensorOp { op, args } => {
+                self.register_tensor_relation(*op, ty, args, span, id)
+            }
             ExprKind::FuncCall {
                 target,
                 ty_args,
@@ -253,17 +283,19 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         arg
     }
 
-    pub(super) fn register_tensor_relation(
+    fn register_tensor_relation(
         &mut self,
         op: TensorFn,
         result: Ty<'tcx>,
         args: &[Expr<'tcx>],
         span: Option<Span>,
+        id: ExprId,
     ) {
         let args = self.source_arguments(args);
-        self.fulfill.shapes.register(
+        self.fulfill.shapes.register_at(
             Constraint::Relation(Relation::Tensor { op, result, args }),
             span,
+            Some(id),
         );
         self.resolve_shape_constraints(false);
     }
@@ -315,10 +347,16 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 match outcome {
                     Ok(RuleStatus::Solved) => {}
                     Ok(RuleStatus::Deferred) => deferred.push(entry),
-                    Err(reason) => self.error(
-                        entry.span,
-                        format!("type mismatch in shape relation: {reason}"),
-                    ),
+                    Err(reason) => {
+                        if let Some(id) = entry.tensor_expr {
+                            self.fulfill.shapes.tensor_errors.insert(id, reason);
+                        } else {
+                            self.error(
+                                entry.span,
+                                format!("type mismatch in shape relation: {reason}"),
+                            );
+                        }
+                    }
                 }
             }
             pending = deferred;
@@ -350,6 +388,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     Constraint::Relation(Relation::Call { target, .. }) if self.is_body_check_active(*target))
                 {
                     self.fulfill.shapes.residual.push(entry);
+                } else if let Some(id) = entry.tensor_expr {
+                    self.fulfill.shapes.deferred_tensors.insert(id);
                 } else {
                     self.error(entry.span, "cannot establish the deferred shape relation");
                 }
