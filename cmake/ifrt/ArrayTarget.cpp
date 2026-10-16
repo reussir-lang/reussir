@@ -91,6 +91,10 @@ bool isIfrtControlType(mlir::Type type) {
   return llvm::isa<xla::ifrt::IfrtControlType>(type);
 }
 
+mlir::RankedTensorType getIfrtArrayShape(mlir::Type type) {
+  return llvm::cast<xla::ifrt::IfrtArrayType>(type).getShape();
+}
+
 llvm::ArrayRef<int32_t> getIfrtArrayDevices(mlir::Type type) {
   return llvm::cast<xla::ifrt::IfrtArrayType>(type).getDevices();
 }

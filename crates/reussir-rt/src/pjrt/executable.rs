@@ -53,6 +53,23 @@ impl Executable {
         Ok(executable)
     }
 
+    pub(super) fn compile_with_shapes(
+        bytecode: &[u8],
+        checksum: &[u8],
+        options: &[u8],
+        arguments: Vec<reussir_stablehlo::Argument>,
+    ) -> Result<Arc<Self>> {
+        let digest = verify_checksum(bytecode, checksum)?;
+        let executable = context::get()?.executables.get_or_refine(
+            bytecode,
+            digest,
+            options,
+            Some(arguments),
+        )?;
+        context::register_compiled_shutdown()?;
+        Ok(executable)
+    }
+
     fn serialize(&self) -> Result<Vec<u8>> {
         let api = self.owner.api;
         let executable = call!(
@@ -237,10 +254,43 @@ fn verify_checksum(bytecode: &[u8], checksum: &[u8]) -> Result<blake3::Hash> {
     Ok(actual)
 }
 
+// Length-delimited, versioned identity of a disk artifact. Logical dimensions
+// and shape values are distinct inputs, and absent values differ from empty.
+fn artifact_identity(
+    digest: blake3::Hash,
+    options: &[u8],
+    arguments: Option<&[reussir_stablehlo::Argument]>,
+) -> blake3::Hash {
+    let mut hash = blake3::Hasher::new();
+    hash.update(b"reussir-pjrt-artifact-v1")
+        .update(digest.as_bytes());
+    hash.update(&(options.len() as u64).to_le_bytes())
+        .update(options);
+    hash.update(&[u8::from(arguments.is_some())]);
+    if let Some(arguments) = arguments {
+        hash.update(&(arguments.len() as u64).to_le_bytes());
+        for argument in arguments {
+            hash.update(&(argument.dimensions.len() as u64).to_le_bytes());
+            for dim in &argument.dimensions {
+                hash.update(&dim.to_le_bytes());
+            }
+            hash.update(&[u8::from(argument.shape_values.is_some())]);
+            if let Some(values) = &argument.shape_values {
+                hash.update(&(values.len() as u64).to_le_bytes());
+                for value in values {
+                    hash.update(&value.to_le_bytes());
+                }
+            }
+        }
+    }
+    hash.finalize()
+}
+
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct CacheKey {
     digest: blake3::Hash,
     options: Vec<u8>,
+    arguments: Option<Vec<reussir_stablehlo::Argument>>,
 }
 
 pub(super) struct CompilationCache {
@@ -303,18 +353,27 @@ impl CompilationCache {
         digest: blake3::Hash,
         options: &[u8],
     ) -> Result<Arc<Executable>> {
+        self.get_or_refine(code, digest, options, None)
+    }
+
+    fn get_or_refine(
+        &self,
+        code: &[u8],
+        digest: blake3::Hash,
+        options: &[u8],
+        arguments: Option<Vec<reussir_stablehlo::Argument>>,
+    ) -> Result<Arc<Executable>> {
         let key = CacheKey {
             digest,
             options: options.into(),
+            arguments: arguments.clone(),
         };
         if let Some(entry) = self.entries.get(&key) {
             return Ok(entry.value().clone());
         }
         let owner = self.owner.clone();
         let artifacts = self.artifacts.clone();
-        let mut artifact_key = self.namespace.to_vec();
-        artifact_key.extend_from_slice(digest.as_bytes());
-        artifact_key.extend_from_slice(options);
+        let artifact_key = self.artifact_key(&key);
         let code = code.to_vec();
         let options = options.to_vec();
         let _enter = self.handle.enter();
@@ -350,6 +409,15 @@ impl CompilationCache {
                         artifacts.cache.remove(&artifact_key);
                     }
                 }
+                // Refinement is inside the coalesced cache miss, just like PJRT
+                // compilation. Hits and restored disk artifacts need neither.
+                let code = if let Some(arguments) = arguments {
+                    reussir_stablehlo::refine_shapes(&code, &arguments)
+                        .map_err(|error| Error::local(error.to_string()))?
+                        .bytecode
+                } else {
+                    code
+                };
                 let executable = owner.compile(&code, &options)?;
                 if let Some(artifacts) = &artifacts {
                     match executable.serialize() {
@@ -374,6 +442,14 @@ impl CompilationCache {
                 .cloned()
                 .unwrap_or_else(|| Error::local(e.to_string()))
         })
+    }
+
+    fn artifact_key(&self, key: &CacheKey) -> Vec<u8> {
+        let mut artifact_key = self.namespace.to_vec();
+        artifact_key.extend_from_slice(
+            artifact_identity(key.digest, &key.options, key.arguments.as_deref()).as_bytes(),
+        );
+        artifact_key
     }
 
     fn close_artifacts(&self) {

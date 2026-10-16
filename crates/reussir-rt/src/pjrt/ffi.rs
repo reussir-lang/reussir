@@ -193,6 +193,67 @@ pub unsafe extern "C" fn __reussir_pjrt_compile(
     )))
 }
 
+/// Logical (global) shape of one input and, optionally, its host-known shape
+/// values. Matches `ReussirStablehloArgument`; physical shard dimensions
+/// (PJRT_Buffer_UnpaddedDimensions) never appear here.
+#[repr(C)]
+pub struct ShapeArgument {
+    pub dimensions: *const i64,
+    pub rank: usize,
+    pub values: *const i64,
+    pub value_count: usize,
+    pub has_values: u8,
+}
+
+/// Refine the kernel's dynamic shapes from its inputs' logical shapes, then
+/// compile. Integer inputs stay runtime data unless `has_values` supplies
+/// their contents, which the caller guarantees match the input; device
+/// buffers are never read. Returns ownership as `__reussir_pjrt_compile` does.
+///
+/// # Safety
+/// Byte buffers have the same contract as `__reussir_pjrt_compile`; arguments
+/// and their nonempty arrays must be aligned/readable for their stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_pjrt_compile_with_shapes(
+    bytecode: *const u8,
+    bytecode_size: usize,
+    checksum: *const u8,
+    options: *const u8,
+    options_size: usize,
+    arguments: *const ShapeArgument,
+    argument_count: usize,
+) -> *const Executable {
+    let code = if bytecode_size == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(bytecode, bytecode_size) }
+    };
+    let options = if options_size == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(options, options_size) }
+    };
+    let arguments = if argument_count == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(arguments, argument_count) }
+    };
+    let arguments = arguments
+        .iter()
+        .map(|a| reussir_stablehlo::Argument {
+            dimensions: unsafe { dimensions(a.dimensions, a.rank) }.to_vec(),
+            shape_values: (a.has_values != 0)
+                .then(|| unsafe { dimensions(a.values, a.value_count).to_vec() }),
+        })
+        .collect();
+    Arc::into_raw(checked(Executable::compile_with_shapes(
+        code,
+        unsafe { slice::from_raw_parts(checksum, 64) },
+        options,
+        arguments,
+    )))
+}
+
 /// Validate descriptor placement before execution; failure releases the executable reference.
 /// `executable` owns one compile reference, retained on success, and `devices`
 /// provides `count` readable nonnegative client device indices.
