@@ -143,7 +143,7 @@ fn allocation_info(api: Api, buffer: *mut PJRT_Buffer) -> Option<(PJRT_Buffer_Ty
         .call(
             element,
             PJRT_Buffer_ElementType_Args {
-                struct_size: PJRT_Buffer_ElementType_STRUCT_SIZE as usize,
+                struct_size: PJRT_Buffer_ElementType_Args_STRUCT_SIZE as usize,
                 buffer,
                 ..Default::default()
             },
@@ -155,7 +155,7 @@ fn allocation_info(api: Api, buffer: *mut PJRT_Buffer) -> Option<(PJRT_Buffer_Ty
         .call(
             size,
             PJRT_Buffer_OnDeviceSizeInBytes_Args {
-                struct_size: PJRT_Buffer_OnDeviceSizeInBytes_STRUCT_SIZE as usize,
+                struct_size: PJRT_Buffer_OnDeviceSizeInBytes_Args_STRUCT_SIZE as usize,
                 buffer,
                 ..Default::default()
             },
@@ -293,15 +293,17 @@ mod tests {
             std::ptr::null_mut()
         }
         let mut table = PJRT_Api::default();
-        let api = Api(std::ptr::NonNull::from(&mut table));
-        let buffer = std::ptr::null_mut(); // Mock callbacks do not dereference it.
-        assert_eq!(allocation_info(api, buffer), None);
+        // Mock callbacks do not dereference their buffer argument.
+        let info = |table: &mut PJRT_Api| {
+            allocation_info(Api(std::ptr::NonNull::from(table)), std::ptr::null_mut())
+        };
+        assert_eq!(info(&mut table), None);
         table.PJRT_Buffer_ElementType = Some(element);
-        assert_eq!(allocation_info(api, buffer), None);
+        assert_eq!(info(&mut table), None);
         table.PJRT_Buffer_OnDeviceSizeInBytes = Some(size);
-        assert_eq!(allocation_info(api, buffer), Some((11, 4, 8192)));
+        assert_eq!(info(&mut table), Some((11, 4, 8192)));
         table.PJRT_Buffer_ElementType = None;
-        assert_eq!(allocation_info(api, buffer), None);
+        assert_eq!(info(&mut table), None);
     }
 
     fn fact(handles: &[usize], logical: u64, actual: u64) -> BufferFacts {
