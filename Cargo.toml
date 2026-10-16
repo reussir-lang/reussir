@@ -10,6 +10,8 @@ members = [
     "crates/reussir-backend",
     "crates/reussir-jit",
     "crates/reussir-pjrt-sys",
+    "crates/reussir-stablehlo-sys",
+    "crates/reussir-stablehlo",
     "crates/reussir-codegen",
     "crates/reussir-compiler",
     "crates/reussir-repl",

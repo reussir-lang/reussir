@@ -67,6 +67,7 @@ include(cmake/MlirSync.cmake)
 if(REUSSIR_ENABLE_OPENXLA)
   add_subdirectory(cmake/stablehlo)
   add_subdirectory(cmake/ifrt)
+  add_subdirectory(crates/reussir-stablehlo-sys/native)
 endif()
 
 # Detect object format

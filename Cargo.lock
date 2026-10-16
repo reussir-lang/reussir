@@ -3774,6 +3774,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "reussir-stablehlo"
+version = "0.1.0"
+dependencies = [
+ "reussir-stablehlo-sys",
+]
+
+[[package]]
+name = "reussir-stablehlo-sys"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "mlir-sys",
+]
+
+[[package]]
 name = "reussir-syntax"
 version = "0.1.0"
 dependencies = [

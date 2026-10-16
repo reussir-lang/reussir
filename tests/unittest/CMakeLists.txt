@@ -48,6 +48,7 @@ add_dependencies(reussir-ut reussir-rt)
 
 if(REUSSIR_ENABLE_OPENXLA)
   target_compile_definitions(reussir-ut PRIVATE REUSSIR_ENABLE_OPENXLA)
+  target_link_libraries(reussir-ut PRIVATE ReussirStablehloSpecializer)
 endif()
 
 # The RustCompiler tests invoke rustc and resolve `extern crate reussir_rt`

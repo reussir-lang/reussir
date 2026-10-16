@@ -1,0 +1,13 @@
+[package]
+name = "reussir-stablehlo-sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Narrow native ABI for runtime StableHLO specialization"
+links = "ReussirStablehloSpecializer"
+
+[dependencies]
+mlir-sys.workspace = true
+
+[build-dependencies]
+blake3.workspace = true
