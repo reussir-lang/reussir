@@ -3788,11 +3788,16 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         }
         let loc = self.loc();
         let upload = |host, result| {
-            OperationBuilder::new("reussir.array.to_device", loc)
+            let mut builder = OperationBuilder::new("reussir.array.to_device", loc)
                 .add_operands(&[host])
-                .add_results(&[result])
-                .build()
-                .expect("valid device upload")
+                .add_results(&[result]);
+            if op == PjrtFn::UploadShape {
+                builder = builder.add_attributes(&[(
+                    Identifier::new(self.context, "shape_value"),
+                    Attribute::unit(self.context),
+                )]);
+            }
+            builder.build().expect("valid device upload")
         };
         if op == PjrtFn::Alloc {
             let TyKind::DevArray { elem, dims, .. } = *e.ty.kind() else {
@@ -3816,7 +3821,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let [base] = args else {
             return err("device transfer requires one array");
         };
-        let (host_value_ty, device_ty) = if op == PjrtFn::Upload {
+        let (host_value_ty, device_ty) = if op.is_upload() {
             (base.ty, e.ty)
         } else {
             (e.ty, base.ty)
@@ -3829,7 +3834,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         if host_value_ty != if scalar { elem } else { host_ty } {
             return err("device transfer shape and scalar type must match");
         }
-        if op == PjrtFn::Upload && scalar {
+        if op.is_upload() && scalar {
             let host_expr = Expr { ty: host_ty, ..*e };
             let host = self.array_splat(block, env, &host_expr, args)?;
             let view = self.array_view_of(block, host, host_ty)?;
@@ -3841,7 +3846,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             .expr(block, env, base)?
             .ok_or_else(|| LoweringError("transfer operand is unit".into()))?;
         self.remember_temp(env, base, array);
-        let result = if op == PjrtFn::Upload {
+        let result = if op.is_upload() {
             let view = self.array_view_of(block, array, host_ty)?;
             self.append(block, upload(view, self.tys.mlir_ty(device_ty)?))
         } else {

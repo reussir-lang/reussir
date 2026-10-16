@@ -783,6 +783,7 @@ mod tests {
             r#"
             import core::intrinsic::pjrt;
             pub fn copy(x:[u32;?,3])->[u32;?,3] { pjrt::download(pjrt::upload(x)) }
+            pub fn shape(x:i64)->DevArray<i64> { pjrt::upload_shape(x) }
             pub fn alloc(n:u64)->DevArray<[i32;?,3]> { pjrt::alloc<DevArray<[i32;?,3]>>(n, 7) }
         "#,
         );
@@ -791,6 +792,7 @@ mod tests {
                 "intrinsic#pjrt#upload#0(v0 : u64) : DevArray<i32>",
                 "intrinsic#pjrt#alloc#0(v0 : u64) : DevArray<[i32;?,3]>",
                 "intrinsic#pjrt#unknown#0(v0 : u64) : DevArray<i32>",
+                "intrinsic#pjrt#upload_shape#0(v0 : u64) : DevArray<u64>",
                 "intrinsic#pjrt#upload#1(v0 : u64) : DevArray<u64>",
             ] {
                 let text = format!("pub fn #bad(v0 (x): u64) -> DevArray<i32> {{ {body} }}");

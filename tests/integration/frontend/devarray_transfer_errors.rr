@@ -16,3 +16,8 @@ fn download(x: [i32; 2]) { pjrt::download(x) }
 fn extra(x: DevArray<i32>) { pjrt::download(x, x) }
 // CHECK-DAG: host intrinsics are not allowed in a kernel
 #[kernel] fn kernel(x: i32) { pjrt::upload(x) }
+
+// CHECK-DAG: type mismatch
+fn shape_unsigned(n: u64) { pjrt::upload_shape(n) }
+// CHECK-DAG: type mismatch
+fn shape_array(n: [i64; 1]) { pjrt::upload_shape(n) }

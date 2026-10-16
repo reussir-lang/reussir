@@ -1,0 +1,23 @@
+// REQUIRES: ifrt, linux, pjrt-runtime
+// RUN: %rrc %s --emit executable --runtime-linkage static --relocation-mode pic --polyffi-libdir %pjrt_runtime_dir/deps -O aggressive -o %t.exe
+// RUN: env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe | %FileCheck %s
+// CHECK: 9 15 20 9
+import core::intrinsic::array;
+import core::intrinsic::pjrt;
+import core::intrinsic::tensor;
+#[kernel]
+fn sequence(n: i64, offset: i64) -> Tensor<[i64; ?]> {
+    tensor::dynamic_iota((n,), 0) + tensor::dynamic_fill(offset, (n,))
+}
+// A function boundary must preserve the exact host value in the descriptor.
+fn mark(n: i64) -> DevArray<i64> { pjrt::upload_shape(n) }
+fn sum(n: i64, offset: i64) -> i64 {
+    let size = mark(n);
+    let data = pjrt::upload(offset);
+    let values = pjrt::download(pjrt::launch(sequence, size, data));
+    array::fold(values, 0, |a, b| a + b)
+}
+#[ffi(import)]
+fn print_results(a:i64,b:i64,c:i64,d:i64) [{ println!("{a} {b} {c} {d}"); }];
+#[main]
+pub fn entry() { print_results(sum(3,2), sum(3,4), sum(5,2), sum(3,2)); }

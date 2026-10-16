@@ -236,6 +236,12 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
       llvm::SmallVector<mlir::Type> payload{
           mlir::LLVM::LLVMArrayType::get(ptr, op.getDevices().size()), index};
       payload.append(shape.getNumDynamicDims(), index);
+      bool shapeValueStorage =
+          shape.getRank() == 0 && shape.getElementType().isInteger(64);
+      if (shapeValueStorage) {
+        payload.push_back(rewriter.getI8Type());
+        payload.push_back(rewriter.getI64Type());
+      }
       auto payloadType =
           mlir::LLVM::LLVMStructType::getLiteral(getContext(), payload);
       unsigned dynamicField = 2;
@@ -260,6 +266,18 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
           dims, length(shape.getRank()),
           mlir::LLVM::ZeroOp::create(rewriter, loc, ptr), length(0),
           integer(rewriter, loc, rewriter.getI8Type(), 0)};
+      if (shapeValueStorage) {
+        auto field = [&](int32_t index) {
+          return mlir::LLVM::GEPOp::create(
+              rewriter, loc, ptr, payloadType, adaptor.getInputs()[i],
+              llvm::ArrayRef<mlir::LLVM::GEPArg>{0, index});
+        };
+        metadata[2] = field(ArrayType::SHAPE_VALUE_INDEX);
+        metadata[3] = length(1);
+        metadata[4] = mlir::LLVM::LoadOp::create(
+            rewriter, loc, rewriter.getI8Type(),
+            field(ArrayType::SHAPE_VALUE_PRESENT_INDEX));
+      }
       for (auto [field, item] : llvm::enumerate(metadata))
         value = mlir::LLVM::InsertValueOp::create(
             rewriter, loc, value, item,

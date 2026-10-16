@@ -3501,10 +3501,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 args.push(self.check_expr(&fc.args[count], elem));
                 (ty, args)
             }
-            PjrtFn::Upload | PjrtFn::Download | PjrtFn::Dim => {
+            PjrtFn::Upload | PjrtFn::UploadShape | PjrtFn::Download | PjrtFn::Dim => {
                 let count = if func == PjrtFn::Dim { 2 } else { 1 };
                 if fc.args.len() != count
-                    || (func != PjrtFn::Upload && !fc.ty_args.is_empty())
+                    || (!func.is_upload() && !fc.ty_args.is_empty())
                     || fc.ty_args.len() > 1
                 {
                     self.error(
@@ -3513,9 +3513,16 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     );
                     return self.poison(span);
                 }
-                let base = self.infer_expr(&fc.args[0]);
+                let base = if func == PjrtFn::UploadShape {
+                    self.check_expr(
+                        &fc.args[0],
+                        self.tcx.mk_int(crate::semi::ty::IntTy::Signed(64)),
+                    )
+                } else {
+                    self.infer_expr(&fc.args[0])
+                };
                 let base_ty = self.infer.shallow_resolve(base.ty);
-                let ty = if func == PjrtFn::Upload {
+                let ty = if func.is_upload() {
                     let (elem, dims) = match *base_ty.kind() {
                         TyKind::Array { elem, dims } => (elem, dims),
                         _ => (base_ty, &[][..]),
