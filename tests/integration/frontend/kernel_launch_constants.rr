@@ -17,8 +17,7 @@ fn sequence(n: i64, offset: i64) -> Tensor<[i64; ?]> {
 #[kernel]
 fn plus_one(n: i64) -> Tensor<i64> { tensor::fill(n + 1) }
 fn sum(n: DevArray<i64>, offset: i64) -> i64 {
-    let offset = pjrt::upload(offset);
-    let values = pjrt::download(pjrt::launch<Sized>(sequence, n, offset));
+    let values = pjrt::download(pjrt::launch<Sized>(sequence, n, pjrt::upload(offset)));
     array::fold(values, 0, |a, b| a + b)
 }
 #[ffi(import)]

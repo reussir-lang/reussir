@@ -2449,15 +2449,22 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             .ok_or_else(|| LoweringError("IFRT control type is unavailable".into()))?;
         let devices =
             ifrt_devices(output).ok_or_else(|| LoweringError("invalid launch placement".into()))?;
-        let mut operands = Vec::new();
-        // Each argument's first operand: tuple arguments flatten into several.
-        let mut starts = Vec::with_capacity(args.len());
+        let mut values = Vec::with_capacity(args.len());
         for arg in args {
-            starts.push(operands.len() as i32);
             let value = self.expr(block, env, arg)?;
             if let Some(value) = value {
                 self.remember_temp(env, arg, value);
             }
+            values.push(value);
+        }
+        // Borrowed IFRT views must share the call's block, so create them only
+        // after every argument is evaluated: a later argument's evaluation may
+        // lower to control flow that splits the block.
+        let mut operands = Vec::new();
+        // Each argument's first operand: tuple arguments flatten into several.
+        let mut starts = Vec::with_capacity(args.len());
+        for (arg, value) in args.iter().zip(values) {
+            starts.push(operands.len() as i32);
             self.launch_operand(block, value, arg.ty, &mut operands)?;
         }
         let callee = Attribute::parse(

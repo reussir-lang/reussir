@@ -8,10 +8,12 @@
 // RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.mlir
 // RUN: %FileCheck %s < %t.mlir
 // RUN: %FileCheck %s --check-prefix=CALL < %t.mlir
+// RUN: %FileCheck %s --check-prefix=VIEWS < %t.mlir
 // RUN: %reussir-opt %t.mlir --reussir-prepare-pjrt -o %t.prepared
 // RUN: %FileCheck %s --check-prefix=PREP < %t.prepared
 // RUN: %FileCheck %s --check-prefix=CONSTANT < %t.prepared
 // RUN: %rrc %t.mir --emit mlir-llvm -O aggressive -o %t.llvm
+// RUN: %rrc %t.mir --emit mlir-llvm -O none -o %t.none.llvm
 
 #[placement(devices = "0")]
 #[launch(backend_optimization_level = "2", donation = "none")]
@@ -44,6 +46,22 @@ pub struct [value] Sized {}
 pub fn sized(x: DevArray<f32>, n: DevArray<i64>) -> DevArray<[i64; ?], Sized> {
     core::intrinsic::pjrt::launch<Sized>(ramp, (x, x), n)
 }
+// Arguments that build host data in place: views are created at the call.
+#[kernel] fn add(x: Tensor<[i64; 4]>, y: Tensor<[i64; 4]>) -> Tensor<[i64; 4]> { x + y }
+pub fn filled(a: i64, b: i64) -> DevArray<[i64; 4]> {
+    core::intrinsic::pjrt::launch(
+        add,
+        core::intrinsic::pjrt::alloc<DevArray<[i64; 4]>>(a),
+        core::intrinsic::pjrt::alloc<DevArray<[i64; 4]>>(b),
+    )
+}
+// VIEWS-LABEL: func.func {{.*}}filled
+// VIEWS: reussir.array.to_device
+// VIEWS: reussir.array.to_device
+// VIEWS-NEXT: reussir.rc.dec
+// VIEWS-NEXT: reussir.array.to_ifrt
+// VIEWS-NEXT: reussir.array.to_ifrt
+// VIEWS-NEXT: ifrt.Call
 // CHECK: module @_reussir_launch_
 // CHECK: tensor<ui64>
 // CHECK: ifrt.Call {{.*}}reussir.backend_optimization_level = 2 : i32
