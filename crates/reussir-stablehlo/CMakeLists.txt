@@ -5,7 +5,8 @@
 #   ninja -C build ReussirStablehloRuntime   # native library
 #   ninja -C build reussir-stablehlo-test    # the crate's tests
 
-add_library(ReussirStablehloRuntime STATIC native/program.cpp native/refine.cpp)
+add_library(ReussirStablehloRuntime STATIC
+  native/program.cpp native/refine.cpp native/donation.cpp)
 set_target_properties(ReussirStablehloRuntime PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(ReussirStablehloRuntime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/native)
 target_link_libraries(ReussirStablehloRuntime PRIVATE

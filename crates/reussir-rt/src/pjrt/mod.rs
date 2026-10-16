@@ -21,6 +21,7 @@ mod buffer;
 mod cache_config;
 mod client;
 mod context;
+mod donation;
 mod error;
 mod executable;
 pub mod ffi;

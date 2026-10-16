@@ -298,7 +298,7 @@ fn bad_artifacts_recompile_and_replace() {
     let key = cache.artifact_key(&CacheKey {
         digest: blake3::hash(b"kernel"),
         options: vec![],
-        arguments: None,
+        donation: None,
     });
     let artifacts = cache.artifacts.as_ref().unwrap();
     for bad in [b"corrupt".to_vec(), {
@@ -418,83 +418,68 @@ fn artifact_memory_eviction_writes_back_within_disk_capacity() {
 }
 
 #[test]
-fn runtime_shapes_key_and_refine_compilation() {
+fn refined_programs_are_keyed_by_shapes_and_shape_values() {
     use reussir_stablehlo::Argument;
     let api = api();
-    let (cache, state) = cache(&api, &memory_config(128), [0; 32]);
-    let code = br#"module { func.func @main(%x: tensor<?xf32>) -> tensor<?xf32> {
-        %y = stablehlo.add %x, %x : tensor<?xf32>
-        return %y : tensor<?xf32>
-    }}"#;
-    let compile = |n| {
-        cache
-            .get_or_refine(
-                code,
-                blake3::hash(code),
-                b"",
-                Some(vec![Argument::shape(vec![n])]),
-            )
-            .unwrap()
-    };
-    let first = compile(3);
-    assert!(Arc::ptr_eq(&first, &compile(3)));
-    assert!(!Arc::ptr_eq(&first, &compile(5)));
-    assert_eq!(state.compiles.load(Ordering::SeqCst), 2);
-    let programs = state.programs.lock().unwrap();
-    assert_ne!(programs[0].0, programs[1].0);
-    assert_eq!(
-        reussir_stablehlo::refine_shapes(&programs[0].0, &[Argument::shape(vec![3])])
-            .unwrap()
-            .result_types[0]
-            .dimensions,
-        [3]
-    );
-}
-
-#[test]
-fn shape_values_are_distinct_cache_inputs() {
-    use reussir_stablehlo::Argument;
-    let hash = |values| {
-        artifact_identity(
-            blake3::hash(b"code"),
-            b"opts",
-            Some(&[Argument {
-                dimensions: vec![],
-                shape_values: values,
-            }]),
-        )
-    };
-    assert_ne!(hash(None), hash(Some(vec![])));
-    assert_ne!(hash(Some(vec![3])), hash(Some(vec![5])));
-    let api = api();
-    let (cache, state) = cache(&api, &memory_config(128), [0; 32]);
+    let (cache, _) = cache(&api, &memory_config(128), [0; 32]);
     let code = br#"module { func.func @main(%s: tensor<1xi64>) -> tensor<?xi32> {
         %v = stablehlo.dynamic_iota %s, dim = 0 : (tensor<1xi64>) -> tensor<?xi32>
         return %v : tensor<?xi32>
     }}"#;
-    for n in [3, 7, 3] {
-        cache
-            .get_or_refine(
-                code,
-                blake3::hash(code),
-                b"",
-                Some(vec![Argument {
-                    dimensions: vec![1],
-                    shape_values: Some(vec![n]),
-                }]),
-            )
-            .unwrap();
-    }
-    assert_eq!(state.compiles.load(Ordering::SeqCst), 2);
-    assert!(
-        cache
-            .get_or_refine(
-                code,
-                blake3::hash(code),
-                b"",
-                Some(vec![Argument::shape(vec![1])])
-            )
-            .is_err()
+    let checksum = blake3::hash(code).to_hex();
+    let refine = |values: Option<Vec<i64>>| {
+        cache.refine_program(
+            code,
+            checksum.as_bytes(),
+            vec![Argument {
+                dimensions: vec![1],
+                shape_values: values,
+            }],
+        )
+    };
+    let three = refine(Some(vec![3])).unwrap();
+    assert_eq!(three.result_types[0].dimensions, [3]);
+    assert!(Arc::ptr_eq(&three, &refine(Some(vec![3])).unwrap()));
+    assert_eq!(
+        refine(Some(vec![7])).unwrap().result_types[0].dimensions,
+        [7]
     );
+    assert!(refine(None).is_err());
+}
+
+#[test]
+fn refined_and_donated_programs_are_cached_separately() {
+    use reussir_stablehlo::{Argument, Donation};
+    let api = api();
+    let (cache, state) = cache(&api, &memory_config(128), [0; 32]);
+    let code = br#"module { func.func @main(%a: tensor<?xf32>) -> tensor<?xf32> {
+        %v = stablehlo.add %a, %a : tensor<?xf32>
+        return %v : tensor<?xf32>
+    }}"#;
+    let checksum = blake3::hash(code).to_hex();
+    let prepare = || {
+        cache
+            .refine_program(code, checksum.as_bytes(), vec![Argument::shape(vec![2048])])
+            .unwrap()
+    };
+    let first = prepare();
+    assert!(Arc::ptr_eq(&first, &prepare()));
+    let donation = Donation {
+        mapping: vec![0],
+        donors: vec![0],
+        aliases: vec![],
+    };
+    cache.compile_refined(&first.bytecode, b"", None).unwrap();
+    let donated = cache
+        .compile_refined(&first.bytecode, b"", Some(donation.clone()))
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        &donated,
+        &cache
+            .compile_refined(&first.bytecode, b"", Some(donation))
+            .unwrap()
+    ));
     assert_eq!(state.compiles.load(Ordering::SeqCst), 2);
+    let programs = state.programs.lock().unwrap();
+    assert_ne!(programs[0].0, programs[1].0);
 }

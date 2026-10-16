@@ -205,55 +205,6 @@ pub struct ShapeArgument {
     pub has_values: u8,
 }
 
-/// Refine the kernel's dynamic shapes from its inputs' logical shapes, then
-/// compile. Integer inputs stay runtime data unless `has_values` supplies
-/// their contents, which the caller guarantees match the input; device
-/// buffers are never read. Returns ownership as `__reussir_pjrt_compile` does.
-///
-/// # Safety
-/// Byte buffers have the same contract as `__reussir_pjrt_compile`; arguments
-/// and their nonempty arrays must be aligned/readable for their stated lengths.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __reussir_pjrt_compile_with_shapes(
-    bytecode: *const u8,
-    bytecode_size: usize,
-    checksum: *const u8,
-    options: *const u8,
-    options_size: usize,
-    arguments: *const ShapeArgument,
-    argument_count: usize,
-) -> *const Executable {
-    let code = if bytecode_size == 0 {
-        &[]
-    } else {
-        unsafe { slice::from_raw_parts(bytecode, bytecode_size) }
-    };
-    let options = if options_size == 0 {
-        &[]
-    } else {
-        unsafe { slice::from_raw_parts(options, options_size) }
-    };
-    let arguments = if argument_count == 0 {
-        &[]
-    } else {
-        unsafe { slice::from_raw_parts(arguments, argument_count) }
-    };
-    let arguments = arguments
-        .iter()
-        .map(|a| reussir_stablehlo::Argument {
-            dimensions: unsafe { dimensions(a.dimensions, a.rank) }.to_vec(),
-            shape_values: (a.has_values != 0)
-                .then(|| unsafe { dimensions(a.values, a.value_count).to_vec() }),
-        })
-        .collect();
-    Arc::into_raw(checked(Executable::compile_with_shapes(
-        code,
-        unsafe { slice::from_raw_parts(checksum, 64) },
-        options,
-        arguments,
-    )))
-}
-
 /// Validate descriptor placement before execution; failure releases the executable reference.
 /// `executable` owns one compile reference, retained on success, and `devices`
 /// provides `count` readable nonnegative client device indices.
@@ -607,5 +558,80 @@ mod tests {
             layout.tile_dim_sizes = overflow.as_ptr();
             assert!(layout.layout().is_err());
         }
+    }
+}
+
+/// Synchronous launch contract emitted by PJRT lowering. Counts describe the
+/// adjacent pointer arrays; all data is borrowed until launch completes.
+#[repr(C)]
+pub struct LaunchRequest {
+    pub bytecode: *const u8,
+    pub bytecode_size: usize,
+    pub checksum: *const u8,
+    pub options: *const u8,
+    pub options_size: usize,
+    pub arguments: *const ShapeArgument,
+    pub input_count: usize,
+    pub inputs: *const *const *mut sys::PJRT_Buffer,
+    pub devices: *const i32,
+    pub device_count: usize,
+    pub permissions: *const u8,
+    pub mapping: *const u32,
+    pub donors: *const u32,
+    pub donor_count: usize,
+    pub aliases: *const [u32; 2],
+    pub alias_count: usize,
+    pub outputs: *const *mut *mut sys::PJRT_Buffer,
+    pub output_count: usize,
+}
+
+/// Refine shapes, choose donation, compile, and execute synchronously. Static
+/// permission plus uniqueness guards are necessary; runtime physical alias
+/// checks and profitability decide automatic donation. Explicit contracts are
+/// enforced independently of the profitability policy.
+///
+/// # Safety
+/// `request` and nonempty arrays must be valid/aligned for the stated lengths.
+/// Each input/output descriptor has `device_count` slots. Inputs are live from
+/// this client; output slots are exclusive, disjoint, writable and initially
+/// unowned. Permission is a compiler ownership proof, not user data: permitted
+/// inputs must have no later content uses, and their owners remain live until
+/// return. Donated inputs may only be destroyed afterward. Shape values must
+/// equal their corresponding input contents. Checksum has 64 readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_pjrt_launch(request: *const LaunchRequest) {
+    unsafe fn borrowed<'a, T>(ptr: *const T, count: usize) -> &'a [T] {
+        if count == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(ptr, count) }
+        }
+    }
+    let r = unsafe { &*request };
+    let args = unsafe { borrowed(r.arguments, r.input_count) }
+        .iter()
+        .map(|a| reussir_stablehlo::Argument {
+            dimensions: unsafe { borrowed(a.dimensions, a.rank) }.to_vec(),
+            shape_values: (a.has_values != 0)
+                .then(|| unsafe { borrowed(a.values, a.value_count) }.to_vec()),
+        })
+        .collect();
+    let results = checked(unsafe {
+        super::donation::launch(
+            borrowed(r.bytecode, r.bytecode_size),
+            borrowed(r.checksum, 64),
+            borrowed(r.options, r.options_size),
+            args,
+            borrowed(r.inputs, r.input_count),
+            borrowed(r.devices, r.device_count),
+            borrowed(r.permissions, r.input_count),
+            borrowed(r.mapping, r.input_count),
+            borrowed(r.donors, r.donor_count),
+            borrowed(r.aliases, r.alias_count),
+            r.output_count,
+        )
+    });
+    for (i, shards) in results.iter().enumerate() {
+        unsafe { std::ptr::copy_nonoverlapping(shards.as_ptr(), *r.outputs.add(i), shards.len()) };
     }
 }

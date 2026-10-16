@@ -53,23 +53,6 @@ impl Executable {
         Ok(executable)
     }
 
-    pub(super) fn compile_with_shapes(
-        bytecode: &[u8],
-        checksum: &[u8],
-        options: &[u8],
-        arguments: Vec<reussir_stablehlo::Argument>,
-    ) -> Result<Arc<Self>> {
-        let digest = verify_checksum(bytecode, checksum)?;
-        let executable = context::get()?.executables.get_or_refine(
-            bytecode,
-            digest,
-            options,
-            Some(arguments),
-        )?;
-        context::register_compiled_shutdown()?;
-        Ok(executable)
-    }
-
     fn serialize(&self) -> Result<Vec<u8>> {
         let api = self.owner.api;
         let executable = call!(
@@ -254,50 +237,20 @@ fn verify_checksum(bytecode: &[u8], checksum: &[u8]) -> Result<blake3::Hash> {
     Ok(actual)
 }
 
-// Length-delimited, versioned identity of a disk artifact. Logical dimensions
-// and shape values are distinct inputs, and absent values differ from empty.
-fn artifact_identity(
-    digest: blake3::Hash,
-    options: &[u8],
-    arguments: Option<&[reussir_stablehlo::Argument]>,
-) -> blake3::Hash {
-    let mut hash = blake3::Hasher::new();
-    hash.update(b"reussir-pjrt-artifact-v1")
-        .update(digest.as_bytes());
-    hash.update(&(options.len() as u64).to_le_bytes())
-        .update(options);
-    hash.update(&[u8::from(arguments.is_some())]);
-    if let Some(arguments) = arguments {
-        hash.update(&(arguments.len() as u64).to_le_bytes());
-        for argument in arguments {
-            hash.update(&(argument.dimensions.len() as u64).to_le_bytes());
-            for dim in &argument.dimensions {
-                hash.update(&dim.to_le_bytes());
-            }
-            hash.update(&[u8::from(argument.shape_values.is_some())]);
-            if let Some(values) = &argument.shape_values {
-                hash.update(&(values.len() as u64).to_le_bytes());
-                for value in values {
-                    hash.update(&value.to_le_bytes());
-                }
-            }
-        }
-    }
-    hash.finalize()
-}
-
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct CacheKey {
     digest: blake3::Hash,
     options: Vec<u8>,
-    arguments: Option<Vec<reussir_stablehlo::Argument>>,
+    donation: Option<reussir_stablehlo::Donation>,
 }
 
 pub(super) struct CompilationCache {
     entries: Cache<CacheKey, Arc<Executable>>,
+    programs:
+        Cache<(blake3::Hash, Vec<reussir_stablehlo::Argument>), Arc<reussir_stablehlo::Refined>>,
     artifacts: Option<Arc<Artifacts>>,
     namespace: [u8; 32],
-    owner: Arc<CompilationClient>,
+    pub(super) owner: Arc<CompilationClient>,
     // Taken by the first of `shutdown` and `Drop`.
     runtime: Mutex<Option<tokio::runtime::Runtime>>,
     handle: tokio::runtime::Handle,
@@ -328,6 +281,10 @@ impl CompilationCache {
             None
         };
         Ok(Self {
+            programs: CacheBuilder::new(config.memory.loaded_entries)
+                .with_shards(1)
+                .with_eviction_config(S3FifoConfig::default())
+                .build(),
             entries: CacheBuilder::new(config.memory.loaded_entries)
                 .with_shards(1)
                 .with_eviction_config(S3FifoConfig::default())
@@ -353,20 +310,57 @@ impl CompilationCache {
         digest: blake3::Hash,
         options: &[u8],
     ) -> Result<Arc<Executable>> {
-        self.get_or_refine(code, digest, options, None)
+        self.get_or_build(code, digest, options, None)
     }
 
-    fn get_or_refine(
+    /// Compile a refined program, rewritten for `donation` if given.
+    pub(super) fn compile_refined(
+        &self,
+        program: &[u8],
+        options: &[u8],
+        donation: Option<reussir_stablehlo::Donation>,
+    ) -> Result<Arc<Executable>> {
+        self.get_or_build(program, blake3::hash(program), options, donation)
+    }
+
+    /// Refine a verified program for one launch's argument shapes. Refined
+    /// programs have their own bounded cache, separate from executables.
+    pub(super) fn refine_program(
+        &self,
+        code: &[u8],
+        checksum: &[u8],
+        arguments: Vec<reussir_stablehlo::Argument>,
+    ) -> Result<Arc<reussir_stablehlo::Refined>> {
+        let key = (verify_checksum(code, checksum)?, arguments.clone());
+        if let Some(entry) = self.programs.get(&key) {
+            return Ok(entry.value().clone());
+        }
+        let code = code.to_vec();
+        let _enter = self.handle.enter();
+        self.wait(self.programs.get_or_fetch(&key, || async move {
+            tokio::task::spawn_blocking(move || {
+                reussir_stablehlo::refine_shapes(&code, &arguments)
+                    .map(Arc::new)
+                    .map_err(|e| Error::local(e.to_string()))
+            })
+            .await
+            .map_err(|e| Error::local(e.to_string()))?
+        }))
+        .map(|entry| entry.value().clone())
+        .map_err(|e| Error::local(e.to_string()))
+    }
+
+    fn get_or_build(
         &self,
         code: &[u8],
         digest: blake3::Hash,
         options: &[u8],
-        arguments: Option<Vec<reussir_stablehlo::Argument>>,
+        donation: Option<reussir_stablehlo::Donation>,
     ) -> Result<Arc<Executable>> {
         let key = CacheKey {
             digest,
             options: options.into(),
-            arguments: arguments.clone(),
+            donation: donation.clone(),
         };
         if let Some(entry) = self.entries.get(&key) {
             return Ok(entry.value().clone());
@@ -409,12 +403,11 @@ impl CompilationCache {
                         artifacts.cache.remove(&artifact_key);
                     }
                 }
-                // Refinement is inside the coalesced cache miss, just like PJRT
-                // compilation. Hits and restored disk artifacts need neither.
-                let code = if let Some(arguments) = arguments {
-                    reussir_stablehlo::refine_shapes(&code, &arguments)
+                // The donation rewrite is inside the coalesced cache miss, like
+                // PJRT compilation; hits and restored artifacts need neither.
+                let code = if let Some(donation) = donation {
+                    reussir_stablehlo::apply_donation(&code, &donation)
                         .map_err(|error| Error::local(error.to_string()))?
-                        .bytecode
                 } else {
                     code
                 };
@@ -444,11 +437,26 @@ impl CompilationCache {
         })
     }
 
+    /// Length-delimited, versioned identity of a disk artifact.
     fn artifact_key(&self, key: &CacheKey) -> Vec<u8> {
         let mut artifact_key = self.namespace.to_vec();
-        artifact_key.extend_from_slice(
-            artifact_identity(key.digest, &key.options, key.arguments.as_deref()).as_bytes(),
-        );
+        artifact_key.extend_from_slice(b"reussir-pjrt-artifact-v1");
+        artifact_key.extend_from_slice(key.digest.as_bytes());
+        artifact_key.extend_from_slice(&(key.options.len() as u64).to_le_bytes());
+        artifact_key.extend_from_slice(&key.options);
+        artifact_key.push(u8::from(key.donation.is_some()));
+        if let Some(donation) = &key.donation {
+            for values in [
+                &donation.mapping[..],
+                &donation.donors[..],
+                donation.aliases.as_flattened(),
+            ] {
+                artifact_key.extend_from_slice(&(values.len() as u64).to_le_bytes());
+                for value in values {
+                    artifact_key.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+        }
         artifact_key
     }
 
@@ -469,6 +477,7 @@ impl CompilationCache {
         self.close_artifacts();
         drop(runtime);
         self.entries.clear();
+        self.programs.clear();
     }
 }
 

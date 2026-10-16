@@ -68,7 +68,9 @@ def ReussirPJRTJitCallOp
     Borrowed RC inputs cannot be donated or aliased. Returned handles are owned
     and must be adopted once with `array.from_ifrt` during LLVM lowering.
     Runtime execution is synchronous and requires every array to use all call
-    devices in call order; donation and aliases are not yet supported.
+    devices in call order. Donation guards carry static permission and any
+    necessary runtime uniqueness check; `donation_mapping` records inputs proven
+    to be the same array. The runtime chooses donors from the actual buffers.
   }];
   let arguments = (ins Variadic<AnyType>:$inputs,
                        Variadic<AnyType>:$control_inputs,
@@ -79,7 +81,7 @@ def ReussirPJRTJitCallOp
                        DefaultValuedAttr<DenseI32ArrayAttr, "{}">:$donated_input_indices,
                        OptionalAttr<DictArrayAttr>:$arg_attrs,
                        OptionalAttr<DictArrayAttr>:$res_attrs,
-                       DefaultValuedAttr<ArrayAttr, "{}">:$donation_variants);
+                       DefaultValuedAttr<DenseI32ArrayAttr, "{}">:$donation_mapping);
   let results = (outs Variadic<AnyType>:$outputs, AnyType:$control_output);
   let assemblyFormat = [{
     $callee `(` $inputs `)` (`after` `(` $control_inputs^ `)`)?

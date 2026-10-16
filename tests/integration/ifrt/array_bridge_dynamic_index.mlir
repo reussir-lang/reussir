@@ -14,9 +14,7 @@ module attributes {
   llvm.target_triple = "wasm32-unknown-unknown"
 } {
   // CHECK-LABEL: llvm.func @narrow(
-  // CHECK: llvm.call @__reussir_pjrt_compile({{.*}}) : (!llvm.ptr, i32, !llvm.ptr, !llvm.ptr, i32) -> !llvm.ptr
-  // CHECK: llvm.call @__reussir_pjrt_executable_validate_devices({{.*}}) : (!llvm.ptr, !llvm.ptr, i32) -> ()
-  // CHECK: llvm.call @__reussir_pjrt_executable_execute({{.*}}) : (!llvm.ptr, !llvm.ptr, i32, !llvm.ptr, i32, !llvm.ptr, i32) -> ()
+  // CHECK: llvm.call @__reussir_pjrt_launch({{.*}}) : (!llvm.ptr) -> ()
   // CHECK: llvm.call @__reussir_pjrt_array_dimensions({{.*}}) : (!llvm.ptr, !llvm.ptr, i32) -> ()
   // CHECK: %[[SIZE:.*]] = llvm.load {{.*}} : !llvm.ptr -> i64
   // CHECK: %[[NARROW:.*]] = llvm.trunc %[[SIZE]] : i64 to i32

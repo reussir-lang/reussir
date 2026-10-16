@@ -6,9 +6,11 @@
 //! `REUSSIR_STABLEHLO_LIB_DIR` to its `lib` directory and `MLIR_SYS_230_PREFIX`
 //! to the LLVM/MLIR prefix CMake used.
 
+mod donation;
 mod ffi;
 mod refine;
 
+pub use donation::{Donation, apply_donation};
 pub use refine::{Argument, Refined, ResultType, refine_shapes};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

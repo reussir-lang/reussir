@@ -1498,10 +1498,18 @@ mlir::LogicalResult ReussirArrayToIfrtOp::verify() {
                                          getView().getType())))
     return mlir::failure();
 #ifdef REUSSIR_ENABLE_OPENXLA
-  if (getMayDonate() &&
-      (!getView().hasOneUse() ||
-       !llvm::isa<ReussirPJRTJitCallOp>(*getView().getUsers().begin())))
-    return emitOpError("donation-capable view requires one PJRT invocation");
+  if (getMayDonate()) {
+    // CSE can merge duplicate views used by multiple operands of one call.
+    // Ownership is limited to one invocation; runtime mapping/alias checks
+    // decide whether those repeated operands can actually be donated.
+    if (getView().use_empty())
+      return emitOpError("donation-capable view requires one PJRT invocation");
+    auto *invocation = *getView().getUsers().begin();
+    if (!llvm::isa<ReussirPJRTJitCallOp>(invocation) ||
+        !llvm::all_of(getView().getUsers(),
+                      [&](auto *user) { return user == invocation; }))
+      return emitOpError("donation-capable view requires one PJRT invocation");
+  }
   for (mlir::OpOperand &use : getView().getUses()) {
     if (use.getOwner()->getBlock() != getOperation()->getBlock())
       return emitOpError("borrowed IFRT array must stay in its defining block");

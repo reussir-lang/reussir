@@ -63,6 +63,21 @@ uint32_t reussir_stablehlo_refine_shapes(
     ReussirStablehloBytes refined, ReussirStablehloResultType result_type,
     ReussirStablehloBytes diagnostic, void *user_data);
 
+// Rewrite `@main` in `program` (MLIR text or bytecode) for one donation
+// choice, given in original argument numbering. Argument `i` is replaced by
+// `mapping[i]`, which must be an earlier equivalent argument or `i` itself,
+// and replaced arguments are erased. `donors` are retained arguments marked
+// `jax.buffer_donor`; `aliases` holds `alias_count` (input, result) pairs that
+// additionally set `tf.aliasing_output`, each input being a donor. On success,
+// `rewritten` receives the verified bytecode. Choosing donors is the caller's
+// responsibility.
+uint32_t reussir_stablehlo_apply_donation(
+    const uint8_t *program, size_t program_size, const uint32_t *mapping,
+    size_t argument_count, const uint32_t *donors, size_t donor_count,
+    const uint32_t *aliases, size_t alias_count,
+    ReussirStablehloBytes rewritten, ReussirStablehloBytes diagnostic,
+    void *user_data);
+
 #ifdef __cplusplus
 }
 #endif

@@ -33,4 +33,18 @@ unsafe extern "C" {
         diagnostic: Bytes,
         user_data: *mut c_void,
     ) -> u32;
+
+    pub fn reussir_stablehlo_apply_donation(
+        program: *const u8,
+        program_size: usize,
+        mapping: *const u32,
+        argument_count: usize,
+        donors: *const u32,
+        donor_count: usize,
+        aliases: *const u32,
+        alias_count: usize,
+        rewritten: Bytes,
+        diagnostic: Bytes,
+        user_data: *mut c_void,
+    ) -> u32;
 }
