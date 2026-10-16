@@ -1,0 +1,14 @@
+// REQUIRES: ifrt, linux, pjrt-runtime
+// RUN: %rrc %s --emit executable --runtime-linkage static --relocation-mode pic --polyffi-libdir %pjrt_runtime_dir/deps -O aggressive -o %t.exe
+// RUN: env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %not --crash %t.exe 2>&1 | %FileCheck %s
+// CHECK: kernel shapes depend on the value of a runtime argument; mark it in the launch configuration's `constants`
+import core::intrinsic::pjrt;
+import core::intrinsic::tensor;
+
+// `n` sizes the result but is not a constant launch argument.
+#[kernel]
+fn ramp(n: i64) -> Tensor<[i64; ?]> { tensor::dynamic_iota((n,), 0) }
+#[main]
+pub fn entry() {
+    let values: [i64; ?] = pjrt::download(pjrt::launch(ramp, pjrt::upload(3)));
+}

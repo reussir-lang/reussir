@@ -9,6 +9,10 @@ fn bad_pair(x: DevArray<f32>) { core::intrinsic::pjrt::launch(pair, x) }
 fn bad_arity(x: DevArray<f32>) { core::intrinsic::pjrt::launch(identity, x, x) }
 fn bad_dtype(x: DevArray<i32>) { core::intrinsic::pjrt::launch(identity, x) }
 fn bad_config(x: DevArray<f32>) { core::intrinsic::pjrt::launch<i32>(identity, x) }
+#[placement(devices = "0")]
+#[launch(constants = "0")]
+struct [value] Constant {}
+fn bad_constant(x: DevArray<f32>) { core::intrinsic::pjrt::launch<Constant>(identity, x) }
 #[kernel] fn nested(x: Tensor<f32>) -> Tensor<f32> { core::intrinsic::pjrt::launch(identity, x) }
 // CHECK-DAG: launch target must be a #[kernel] function
 // CHECK-DAG: launch arguments must be DevArray buffers, tuples of buffers, or unit
@@ -16,3 +20,4 @@ fn bad_config(x: DevArray<f32>) { core::intrinsic::pjrt::launch<i32>(identity, x
 // CHECK-DAG: launch expects 1 argument(s), got 2
 // CHECK-DAG: launch configuration must be a placement marker type
 // CHECK-DAG: host intrinsics are not allowed in a kernel
+// CHECK-DAG: constant launch argument 0 must be an i64 or u64 kernel parameter

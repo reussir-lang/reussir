@@ -1,0 +1,33 @@
+// REQUIRES: ifrt, linux, pjrt-runtime
+// RUN: %rrc %s --emit executable --runtime-linkage static --relocation-mode pic --polyffi-libdir %pjrt_runtime_dir/deps -O aggressive -o %t.exe
+// RUN: env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe | %FileCheck %s
+// CHECK: 9 15 20 9 11
+import core::intrinsic::array;
+import core::intrinsic::pjrt;
+import core::intrinsic::tensor;
+
+// The kernel is specialized on `n`; `offset` stays runtime data.
+#[placement(devices = "0")]
+#[launch(constants = "0")]
+struct [value] Sized {}
+#[kernel]
+fn sequence(n: i64, offset: i64) -> Tensor<[i64; ?]> {
+    tensor::dynamic_iota((n,), 0) + tensor::dynamic_fill(offset, (n,))
+}
+#[kernel]
+fn plus_one(n: i64) -> Tensor<i64> { tensor::fill(n + 1) }
+fn sum(n: DevArray<i64>, offset: i64) -> i64 {
+    let offset = pjrt::upload(offset);
+    let values = pjrt::download(pjrt::launch<Sized>(sequence, n, offset));
+    array::fold(values, 0, |a, b| a + b)
+}
+#[ffi(import)]
+fn print_results(a: i64, b: i64, c: i64, d: i64, e: i64) [{ println!("{a} {b} {c} {d} {e}"); }];
+#[main]
+pub fn entry() {
+    let three = pjrt::upload(3);
+    // A constant may also be the output of an earlier kernel.
+    let one = pjrt::upload(1);
+    let two = pjrt::launch(plus_one, one);
+    print_results(sum(three, 2), sum(three, 4), sum(pjrt::upload(5), 2), sum(three, 2), sum(two, 5));
+}

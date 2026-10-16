@@ -6,9 +6,17 @@ struct [value] Bad {}
 struct [value] MissingPlacement {}
 #[launch(donation = "none")]
 fn misplaced() {}
+#[placement(devices = "0")]
+#[launch(constants = "0, 0")]
+struct [value] Repeated {}
+#[placement(devices = "0")]
+#[launch(constants = "64")]
+struct [value] Far {}
 // CHECK-DAG: backend optimization level must be 0, 1, 2, or 3
 // CHECK-DAG: donation must be auto or none
 // CHECK-DAG: launch supports global view only
 // CHECK-DAG: unknown launch option `compile_options`
 // CHECK-DAG: `#[launch]` requires a #[placement] marker
 // CHECK-DAG: `#[launch]` requires a placement marker struct
+// CHECK-DAG: constant launch arguments must be distinct
+// CHECK-DAG: constant launch arguments must be argument positions below 64

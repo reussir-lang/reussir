@@ -1,0 +1,155 @@
+// Standalone Reussir + PolyFFI Mandelbrot. Input: M rows, N columns, iterations.
+// Pixel centers span real [-2.2, 0.8]; imaginary bounds preserve the aspect
+// ratio of terminal cells (approximately twice as tall as they are wide).
+// A terminal gets truecolor; pipes and NO_COLOR get plain ASCII.
+// One dynamically sized kernel computes the complete image in a single launch.
+// Rows and columns are constant launch arguments; iterations remain runtime data.
+// REQUIRES: linux, ifrt, pjrt-runtime
+// RUN: %rrc %s --emit executable --runtime-linkage static --relocation-mode pic --polyffi-libdir %pjrt_runtime_dir/deps -O aggressive -o %t.exe
+// RUN: echo '3 5 32' | env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe | %FileCheck %s --check-prefix=SMALL --match-full-lines
+// RUN: echo '1 1 32' | env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe | %FileCheck %s --check-prefix=CENTER --match-full-lines
+// RUN: env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %python %S/Inputs/mandelbrot_ascii_check.py %t.exe
+// RUN: echo '0 5 32' | %not %t.exe 2>&1 | %FileCheck %s --check-prefix=INVALID
+// SMALL: :rssr
+// SMALL-NEXT: @@@@2
+// SMALL-NEXT: :rssr
+// CENTER: @
+// INVALID: expected positive M, N and iterations, each at most 2147483647
+
+import core::intrinsic::array;
+import core::intrinsic::math;
+import core::intrinsic::pjrt;
+import core::intrinsic::str;
+import core::intrinsic::tensor;
+
+#[placement(devices = "0", layout = "default")]
+#[launch(constants = "0, 1")]
+struct [value] Device {}
+
+// Only console I/O crosses PolyFFI. Tokens may be separated by spaces or newlines.
+#[ffi(import)]
+fn read_integer() -> u64 [{
+    use std::io::Read;
+    let mut input = std::io::stdin().lock();
+    let mut token = String::new();
+    let mut byte = [0];
+    loop {
+        match input.read(&mut byte) {
+            Ok(0) => break,
+            Ok(_) if byte[0].is_ascii_whitespace() => {
+                if !token.is_empty() { break; }
+            }
+            Ok(_) => token.push(byte[0] as char),
+            Err(error) => {
+                eprintln!("cannot read input: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    token.parse().unwrap_or_else(|_| {
+        eprintln!("expected three unsigned integers: M rows, N columns, iterations");
+        std::process::exit(1)
+    })
+}];
+
+#[ffi(import)]
+fn invalid_input() [{
+    eprintln!("expected positive M, N and iterations, each at most 2147483647");
+    std::process::exit(1);
+}];
+
+#[ffi(import)]
+fn write_pixel(value: u8, red: u8, green: u8, blue: u8) [{
+    use std::io::{IsTerminal, Write};
+    static COLOR: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let color = *COLOR.get_or_init(|| std::io::stdout().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none()
+        && std::env::var("TERM").as_deref() != Ok("dumb"));
+    let mut out = std::io::stdout().lock();
+    let result = if !color {
+        out.write_all(&[value])
+    } else if value == b'\n' {
+        out.write_all(b"\x1b[0m\n")
+    } else {
+        write!(out, "\x1b[38;2;{red};{green};{blue}m{}", value as char)
+    };
+    if let Err(error) = result {
+        eprintln!("cannot write image: {error}");
+        std::process::exit(1);
+    }
+}];
+
+#[kernel]
+fn escape_times(rows: i64, columns: i64, dx: f32, half_height: f32, limit: i64)
+    -> Tensor<[i32; ?, ?]> {
+    let shape = (rows, columns);
+    let x = tensor::dynamic_iota(shape, 1) + tensor::dynamic_fill(0.5, shape);
+    let y = tensor::dynamic_iota(shape, 0) + tensor::dynamic_fill(0.5, shape);
+    let real = x * tensor::dynamic_fill(dx, shape) - tensor::dynamic_fill(2.2, shape);
+    let imaginary = y * tensor::dynamic_fill(dx * 2.0, shape) - tensor::dynamic_fill(half_height, shape);
+    let zero = tensor::dynamic_fill(0.0, shape);
+    let two = tensor::dynamic_fill(2.0, shape);
+    let four = tensor::dynamic_fill(4.0, shape);
+    let one = tensor::dynamic_fill(1, shape);
+    let counts = tensor::dynamic_fill(0, shape);
+    let active = tensor::dynamic_fill(true, shape);
+    let (step, zr, zi, live, result) = while [step = 0, zr = zero, zi = zero, live = active, result = counts] (step < limit) {
+        let nr = zr * zr - zi * zi + real;
+        let ni = two * zr * zi + imaginary;
+        let next_live = live * (nr * nr + ni * ni <= four);
+        // Freeze escaped orbits to avoid overflow/NaNs in later iterations.
+        (step + 1, tensor::select(next_live, nr, zr), tensor::select(next_live, ni, zi),
+         next_live, tensor::select(live, result + one, result))
+    };
+    // A separate sentinel distinguishes escape on the last iteration from
+    // points still bounded at the limit.
+    tensor::select(live, tensor::dynamic_fill(-1, shape), result)
+}
+
+fn plot_pixel(count: i32, log_limit: f64) {
+    if count < 0 { write_pixel(str::byte_at("@", 0), 232, 244, 255); }
+    else {
+        // Logarithmic shading keeps the fast-escaping exterior visible even
+        // when the iteration budget is large.
+        let t = math::log2(count as f64 + 1.0, 0) / log_limit;
+        let index = (t * 20.0) as u64;
+        let v = 0.1 + 0.8 * t;
+        let u = 1.0 - v;
+        let red = (255.0 * 9.0 * u * v * v * v) as u8;
+        let green = (255.0 * 15.0 * u * u * v * v) as u8;
+        let blue = (255.0 * 8.5 * u * u * u * v) as u8;
+        write_pixel(str::byte_at(" .,:;irsXA253hMHGS#9B&", index), red, green, blue);
+    }
+}
+
+fn render(rows: u64, columns: u64, limit: i64) {
+    let height = pjrt::upload(rows as i64);
+    let width = pjrt::upload(columns as i64);
+    let scale = 3.0 as f32 / columns as f32;
+    let dx = pjrt::upload(scale);
+    let half_height = pjrt::upload(scale * rows as f32);
+    let iterations = pjrt::upload(limit);
+    let image = pjrt::download(pjrt::launch<Device>(escape_times, height, width, dx, half_height, iterations));
+    let log_limit = math::log2(limit as f64 + 1.0, 0);
+    let end_row = while [row = 0] (row < rows) {
+        let end_column = while [column = 0] (column < columns) {
+            plot_pixel(array::get(image, row as i64, column as i64), log_limit);
+            column + 1
+        };
+        write_pixel(10, 0, 0, 0);
+        row + 1
+    };
+}
+
+#[main]
+pub fn entry() {
+    let rows = read_integer();
+    let columns = read_integer();
+    let iterations = read_integer();
+    if rows == 0 || columns == 0 || iterations == 0
+        || rows > 2147483647 || columns > 2147483647 || iterations > 2147483647 {
+        invalid_input();
+    } else {
+        render(rows, columns, iterations as i64);
+    }
+}

@@ -15,7 +15,7 @@
 //! subsets are enumerated. Donation lets PJRT reuse a buffer; it does not
 //! guarantee that it will.
 use super::{
-    Error, Result,
+    Buffer, Error, Result,
     api::{Api, non_null},
     context,
     sys::*,
@@ -188,7 +188,102 @@ fn allocation_info(api: Api, buffer: *mut PJRT_Buffer) -> Option<(PJRT_Buffer_Ty
     Some((element, bytes, size as u64))
 }
 
-/// Inputs and shards are live borrowed buffers until synchronous execution ends.
+/// The launch inputs that remain arguments of the specialized program, in
+/// order, with the donation contracts renumbered to their positions.
+#[derive(Debug, PartialEq, Eq)]
+struct RuntimeInputs {
+    inputs: Vec<usize>,
+    mapping: Vec<u32>,
+    explicit: Vec<u32>,
+    aliases: Vec<[u32; 2]>,
+}
+
+fn runtime_inputs(
+    count: usize,
+    constants: &[u32],
+    mapping: &[u32],
+    explicit: &[u32],
+    aliases: &[[u32; 2]],
+) -> Result<RuntimeInputs> {
+    if !constants.windows(2).all(|pair| pair[0] < pair[1])
+        || constants.last().is_some_and(|&last| last as usize >= count)
+        || mapping.len() != count
+        || mapping.iter().any(|&rep| rep as usize >= count)
+    {
+        return Err(Error::local("invalid constant inputs or donation mapping"));
+    }
+    let mut position = vec![None; count];
+    let mut inputs = Vec::new();
+    for (i, slot) in position.iter_mut().enumerate() {
+        if constants.binary_search(&(i as u32)).is_err() {
+            *slot = Some(inputs.len() as u32);
+            inputs.push(i);
+        }
+    }
+    // Inputs proven identical to a constant input map to the first of them.
+    let mut constant_representatives = std::collections::HashMap::new();
+    let mapping = inputs
+        .iter()
+        .map(|&i| {
+            let rep = mapping[i] as usize;
+            position[rep].unwrap_or_else(|| {
+                *constant_representatives
+                    .entry(rep)
+                    .or_insert_with(|| position[i].unwrap())
+            })
+        })
+        .collect();
+    let renumber = |input: u32| {
+        position
+            .get(input as usize)
+            .copied()
+            .flatten()
+            .ok_or_else(|| Error::local("constant inputs cannot be donated or aliased"))
+    };
+    Ok(RuntimeInputs {
+        mapping,
+        explicit: explicit
+            .iter()
+            .map(|&i| renumber(i))
+            .collect::<Result<_>>()?,
+        aliases: aliases
+            .iter()
+            .map(|&[input, output]| Ok([renumber(input)?, output]))
+            .collect::<Result<_>>()?,
+        inputs,
+    })
+}
+
+/// Read each constant input's value from its first shard; every other input
+/// contributes its logical shape.
+///
+/// # Safety
+/// Each constant input descriptor addresses a live rank-zero buffer.
+unsafe fn specialization(
+    shapes: &[Vec<i64>],
+    inputs: &[*const *mut PJRT_Buffer],
+    constants: &[u32],
+) -> Result<Vec<Argument>> {
+    let mut arguments: Vec<_> = shapes.iter().cloned().map(Argument::Shape).collect();
+    for &constant in constants {
+        let descriptor = inputs[constant as usize];
+        non_null(descriptor.cast_mut(), "input descriptor")?;
+        let mut value = 0i64;
+        unsafe {
+            Buffer::new(*descriptor)?.to_host(
+                std::ptr::from_mut(&mut value).cast(),
+                size_of::<i64>(),
+                None,
+            )
+        }?;
+        arguments[constant as usize] = Argument::Constant(value);
+    }
+    Ok(arguments)
+}
+
+/// Inputs and shards are live borrowed buffers until synchronous execution
+/// ends. `constants` lists, in increasing order, the inputs whose values the
+/// kernel is specialized on; they are not passed to the executable.
 #[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn launch(
     code: &[u8],
@@ -196,6 +291,7 @@ pub(super) unsafe fn launch(
     options: &[u8],
     shapes: Vec<Vec<i64>>,
     inputs: &[*const *mut PJRT_Buffer],
+    constants: &[u32],
     devices: &[i32],
     permissions: &[u8],
     mapping: &[u32],
@@ -204,7 +300,7 @@ pub(super) unsafe fn launch(
     output_count: usize,
 ) -> Result<Vec<Vec<*mut PJRT_Buffer>>> {
     let context = context::get()?;
-    if inputs.len() != shapes.len() || devices.is_empty() {
+    if inputs.len() != shapes.len() || permissions.len() != inputs.len() || devices.is_empty() {
         return Err(Error::local("invalid launch input or device count"));
     }
     let expected = devices
@@ -215,15 +311,19 @@ pub(super) unsafe fn launch(
                 .map(|device| device.as_ptr())
         })
         .collect::<Result<Vec<_>>>()?;
+    let runtime = runtime_inputs(inputs.len(), constants, mapping, explicit, aliases)?;
     let cache = &context.executables;
-    let arguments = shapes.iter().cloned().map(Argument::Shape).collect();
+    let arguments = unsafe { specialization(&shapes, inputs, constants) }?;
     let program = cache.refine_program(code, checksum, arguments)?;
     if program.result_types.len() != output_count {
         return Err(Error::local("refined result count mismatch"));
     }
     let api = cache.owner.api;
-    let mut facts = Vec::with_capacity(inputs.len());
-    for (i, (&input, shape)) in inputs.iter().zip(&shapes).enumerate() {
+    let explicit = &runtime.explicit[..];
+    let aliases = &runtime.aliases[..];
+    let mut facts = Vec::with_capacity(runtime.inputs.len());
+    for &i in &runtime.inputs {
+        let input = inputs[i];
         non_null(input.cast_mut(), "input descriptor")?;
         let row = unsafe { std::slice::from_raw_parts(input, devices.len()) };
         let mut fact = BufferFacts {
@@ -231,9 +331,7 @@ pub(super) unsafe fn launch(
             logical_bytes: 0,
             allocated_bytes: 0,
         };
-        let permitted = explicit.is_empty()
-            && aliases.is_empty()
-            && permissions.get(i).copied().unwrap_or(0) != 0;
+        let permitted = explicit.is_empty() && aliases.is_empty() && permissions[i] != 0;
         let mut first_element = None;
         for (device, &buffer) in row.iter().enumerate() {
             non_null(buffer, "input shard")?;
@@ -251,7 +349,7 @@ pub(super) unsafe fn launch(
                 .ok_or_else(|| Error::local("physical allocation size overflow"))?;
             let logical = Some(element_bytes)
                 .and_then(|bytes| {
-                    shape
+                    shapes[i]
                         .iter()
                         .try_fold(bytes, |n, &dim| n.checked_mul(u64::try_from(dim).ok()?))
                 })
@@ -265,16 +363,17 @@ pub(super) unsafe fn launch(
         }
         facts.push(fact);
     }
-    for (i, &rep) in mapping.iter().enumerate() {
-        if shapes.get(rep as usize) != shapes.get(i) {
+    for (j, &rep) in runtime.mapping.iter().enumerate() {
+        if shapes[runtime.inputs[rep as usize]] != shapes[runtime.inputs[j]] {
             return Err(Error::local("deduplicated arguments have different shapes"));
         }
     }
+    let permissions: Vec<_> = runtime.inputs.iter().map(|&i| permissions[i]).collect();
     let output_bytes: Vec<_> = program.result_types.iter().map(result_bytes).collect();
     let selected = select(
         &facts,
-        permissions,
-        mapping,
+        &permissions,
+        &runtime.mapping,
         explicit,
         aliases,
         &output_bytes,
@@ -284,14 +383,14 @@ pub(super) unsafe fn launch(
         .mapping
         .iter()
         .enumerate()
-        .filter_map(|(i, &rep)| (i == rep as usize).then_some(i))
+        .filter_map(|(j, &rep)| (j == rep as usize).then_some(j))
         .collect();
     let denied: Vec<_> = kept
         .iter()
         .enumerate()
         .filter_map(|(new, &old)| (!selected.donors.contains(&(old as u32))).then_some(new as i64))
         .collect();
-    let remapped: Vec<_> = kept.iter().map(|&i| inputs[i]).collect();
+    let remapped: Vec<_> = kept.iter().map(|&j| inputs[runtime.inputs[j]]).collect();
     let transformation =
         (!selected.donors.is_empty() || !selected.aliases.is_empty()).then_some(selected);
     let executable = cache.compile_refined(&program.bytecode, options, transformation)?;
@@ -303,6 +402,27 @@ pub(super) unsafe fn launch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn constant_inputs_leave_the_program_and_renumber_contracts() {
+        let plain = runtime_inputs(2, &[], &[0, 0], &[], &[]).unwrap();
+        assert_eq!((plain.inputs, plain.mapping), (vec![0, 1], vec![0, 0]));
+        // Input 2 is the same array as constant input 1, so it becomes its
+        // own representative; input 3 then maps to it.
+        let mixed = runtime_inputs(4, &[1], &[0, 1, 1, 1], &[3], &[[3, 0]]).unwrap();
+        assert_eq!(
+            mixed,
+            RuntimeInputs {
+                inputs: vec![0, 2, 3],
+                mapping: vec![0, 1, 1],
+                explicit: vec![2],
+                aliases: vec![[2, 0]],
+            }
+        );
+        for (constants, explicit) in [(&[1, 0][..], &[][..]), (&[2], &[]), (&[0], &[0])] {
+            assert!(runtime_inputs(2, constants, &[0, 1], explicit, &[]).is_err());
+        }
+    }
     #[test]
     fn missing_profitability_queries_disable_automatic_donation() {
         unsafe extern "C" fn element(args: *mut PJRT_Buffer_ElementType_Args) -> *mut PJRT_Error {

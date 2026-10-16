@@ -16,7 +16,7 @@ pub fn imported(x: DevArray<f32>) -> DevArray<f32, dep::Config> {
 }
 pub fn concrete(x: DevArray<[f32; 4]>) -> DevArray<[f32; 4]> { core::intrinsic::pjrt::launch(dep::concrete, x) }
 pub fn host_generic(x: DevArray<u64>) -> DevArray<u64, dep::Config> { dep::generic_launch(x) }
-// RRI: launch "optimization=1,donation=none"
+// RRI: launch "optimization=1,donation=none,constants="
 // RRI: fn #dep::concrete
 // RRI: #dep::private_helper
 // CHECK: module @_reussir_launch_

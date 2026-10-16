@@ -176,6 +176,9 @@ pub struct LaunchRequest {
     pub arguments: *const ShapeArgument,
     pub input_count: usize,
     pub inputs: *const *const *mut sys::PJRT_Buffer,
+    /// Increasing positions of the inputs the kernel is specialized on.
+    pub constants: *const u32,
+    pub constant_count: usize,
     pub devices: *const i32,
     pub device_count: usize,
     pub permissions: *const u8,
@@ -188,7 +191,10 @@ pub struct LaunchRequest {
     pub output_count: usize,
 }
 
-/// Refine shapes, choose donation, compile, and execute synchronously. Static
+/// Specialize the kernel on its constant inputs, refine shapes, choose
+/// donation, compile, and execute synchronously. A constant input's value is
+/// read from its buffer at each launch, and a new value compiles a new
+/// program. Static
 /// permission plus uniqueness guards are necessary; runtime physical alias
 /// checks and profitability decide automatic donation. Explicit contracts are
 /// enforced independently of the profitability policy.
@@ -222,6 +228,7 @@ pub unsafe extern "C" fn __reussir_pjrt_launch(request: *const LaunchRequest) {
             borrowed(r.options, r.options_size),
             shapes,
             borrowed(r.inputs, r.input_count),
+            borrowed(r.constants, r.constant_count),
             borrowed(r.devices, r.device_count),
             borrowed(r.permissions, r.input_count),
             borrowed(r.mapping, r.input_count),

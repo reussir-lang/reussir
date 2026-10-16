@@ -115,6 +115,30 @@ mlir::LogicalResult ReussirPJRTJitCallOp::verify() {
           getControlInputs().getTypes(), getControlOutput().getType(),
           getDevices(), getIoAliases(), getDonatedInputIndices())))
     return mlir::failure();
+  if (auto attr = (*this)->getAttr("reussir.constant_inputs")) {
+    // The runtime reads each constant input's value from its buffer and
+    // specializes the kernel on it.
+    auto constants = llvm::dyn_cast<mlir::DenseI32ArrayAttr>(attr);
+    if (!constants)
+      return emitOpError("constant inputs must be an i32 array");
+    llvm::SmallVector<int32_t> donors(getDonatedInputIndices());
+    for (auto alias : getIoAliases())
+      donors.push_back(llvm::cast<mlir::DenseI32ArrayAttr>(alias)[0]);
+    int32_t previous = -1;
+    for (int32_t input : constants.asArrayRef()) {
+      if (input <= previous || size_t(input) >= getInputs().size())
+        return emitOpError(
+            "constant inputs must be increasing input positions");
+      previous = input;
+      auto shape = getIfrtArrayShape(getInputs()[input].getType());
+      if (shape.getRank() != 0 || !shape.getElementType().isInteger(64))
+        return emitOpError("constant input ")
+               << input << " must be a rank-zero 64-bit integer array";
+      if (llvm::is_contained(donors, input))
+        return emitOpError("constant input ")
+               << input << " cannot be donated or aliased";
+    }
+  }
   if (getArgAttrs() && getArgAttrs()->size() != getInputs().size())
     return emitOpError("arg_attrs must match the input count");
   if (getResAttrs() && getResAttrs()->size() != getOutputs().size())

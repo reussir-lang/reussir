@@ -2651,6 +2651,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     ("donation", "auto") => config.disable_donation = false,
                     ("donation", "none") => config.disable_donation = true,
                     ("donation", _) => self.error(Some(attr.span), "donation must be auto or none"),
+                    ("constants", _) => match crate::launch::parse_positions(value.split(',')) {
+                        Ok(positions) => config.constants = positions,
+                        Err(message) => self.error(Some(attr.span), message),
+                    },
                     ("view", "global") => {},
                     ("view", _) => self.error(Some(attr.span), "launch supports global view only; local-view execution requires different global/local shape mapping"),
                     _ => self.error(Some(attr.span), format!("unknown launch option `{key}`")),

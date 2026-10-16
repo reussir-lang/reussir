@@ -7,8 +7,10 @@
 // RUN: diff %t.mir %t.mir.round
 // RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.mlir
 // RUN: %FileCheck %s < %t.mlir
+// RUN: %FileCheck %s --check-prefix=CALL < %t.mlir
 // RUN: %reussir-opt %t.mlir --reussir-prepare-pjrt -o %t.prepared
 // RUN: %FileCheck %s --check-prefix=PREP < %t.prepared
+// RUN: %FileCheck %s --check-prefix=CONSTANT < %t.prepared
 // RUN: %rrc %t.mir --emit mlir-llvm -O aggressive -o %t.llvm
 
 #[placement(devices = "0")]
@@ -32,11 +34,23 @@ pub fn launch_closure(x: DevArray<f32>) -> DevArray<f32> {
     let f = |a: DevArray<f32>| core::intrinsic::pjrt::launch(identity, a);
     f(x)
 }
+// Constant positions count kernel parameters; the tuple flattens into two inputs.
+#[placement(devices = "0")]
+#[launch(constants = "1")]
+pub struct [value] Sized {}
+#[kernel] fn ramp(x: (Tensor<f32>, Tensor<f32>), n: i64) -> Tensor<[i64; ?]> {
+    core::intrinsic::tensor::dynamic_iota((n,), 0)
+}
+pub fn sized(x: DevArray<f32>, n: DevArray<i64>) -> DevArray<[i64; ?], Sized> {
+    core::intrinsic::pjrt::launch<Sized>(ramp, (x, x), n)
+}
 // CHECK: module @_reussir_launch_
 // CHECK: tensor<ui64>
 // CHECK: ifrt.Call {{.*}}reussir.backend_optimization_level = 2 : i32
 // CHECK-SAME: reussir.disable_donation
 // CHECK: reussir.array.from_ifrt
+// CALL: ifrt.Call {{.*}}reussir.constant_inputs = array<i32: 2>
 // PREP: reussir.pjrt.jit_call
 // PREP: reussir.ifrt.bytecode
 // PREP-NOT: module @_reussir_launch_
+// CONSTANT: reussir.pjrt.jit_call {{.*}}reussir.constant_inputs = array<i32: 2>

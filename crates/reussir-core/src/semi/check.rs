@@ -1509,6 +1509,31 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self.error(span, "launch target must be a #[kernel] function");
             return self.poison(span);
         }
+        // The runtime reads constant arguments as 64-bit integers; whether a
+        // kernel needs one is only known when the backend refines it.
+        if let TyKind::Record { def: marker, .. } = placement.kind()
+            && let Some(config) = self.records.get(marker).and_then(|r| r.launch)
+        {
+            for position in config.constant_positions() {
+                let integer = proto.params.get(position as usize).is_some_and(|(_, ty)| {
+                    matches!(
+                        ty.kind(),
+                        TyKind::Int(
+                            crate::semi::ty::IntTy::Signed(64)
+                                | crate::semi::ty::IntTy::Unsigned(64)
+                        )
+                    )
+                });
+                if !integer {
+                    self.error(
+                        span,
+                        format!(
+                            "constant launch argument {position} must be an i64 or u64 kernel parameter"
+                        ),
+                    );
+                }
+            }
+        }
         if fc.args.len() != proto.params.len() {
             self.error(
                 span,

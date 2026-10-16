@@ -24,6 +24,8 @@ struct LaunchRequest {
   const void *arguments;
   size_t input_count;
   const void *inputs;
+  const void *constants;
+  size_t constant_count;
   const int32_t *devices;
   size_t device_count;
   const void *permissions, *mapping, *donors;

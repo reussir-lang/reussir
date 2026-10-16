@@ -19,6 +19,11 @@ use super::{
 pub struct Buffer(NonNull<PJRT_Buffer>);
 
 impl Buffer {
+    /// Wrap a native handle without taking ownership of it.
+    pub(super) fn new(buffer: *mut PJRT_Buffer) -> Result<Self> {
+        Ok(Self(non_null(buffer, "buffer")?))
+    }
+
     pub fn as_ptr(self) -> *mut PJRT_Buffer {
         self.0.as_ptr()
     }

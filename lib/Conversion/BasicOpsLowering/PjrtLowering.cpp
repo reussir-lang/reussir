@@ -256,6 +256,15 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
                   integer(rewriter, loc, rewriter.getI32Type(),
                           llvm::cast<mlir::DenseI32ArrayAttr>(alias)[j]),
                   rewriter);
+    llvm::ArrayRef<int32_t> constantInputs;
+    if (auto attr =
+            op->getAttrOfType<mlir::DenseI32ArrayAttr>("reussir.constant_inputs"))
+      constantInputs = attr.asArrayRef();
+    auto constants = slots(op, rewriter.getI32Type(), index,
+                           constantInputs.size(), rewriter);
+    for (auto [i, input] : llvm::enumerate(constantInputs))
+      storeSlot(op, constants, i,
+                integer(rewriter, loc, rewriter.getI32Type(), input), rewriter);
     auto options = op.getCompileOptions().value_or(llvm::StringRef{});
     auto devices = slots(op, rewriter.getI32Type(), index,
                          op.getDevices().size(), rewriter);
@@ -280,6 +289,8 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
         shapeArguments,
         length(identity.size()),
         inputs,
+        constants,
+        length(constantInputs.size()),
         devices,
         length(op.getDevices().size()),
         eligibility,

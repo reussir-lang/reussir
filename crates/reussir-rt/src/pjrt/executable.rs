@@ -322,7 +322,13 @@ impl CompilationCache {
             tokio::task::spawn_blocking(move || {
                 reussir_stablehlo::refine_shapes(&code, &arguments)
                     .map(Arc::new)
-                    .map_err(|e| Error::local(e.to_string()))
+                    .map_err(|e| match e.kind {
+                        reussir_stablehlo::ErrorKind::ResidualDynamism => Error::local(
+                            "kernel shapes depend on the value of a runtime argument; \
+                             mark it in the launch configuration's `constants`",
+                        ),
+                        _ => Error::local(e.to_string()),
+                    })
             })
             .await
             .map_err(|e| Error::local(e.to_string()))?

@@ -2450,7 +2450,10 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let devices =
             ifrt_devices(output).ok_or_else(|| LoweringError("invalid launch placement".into()))?;
         let mut operands = Vec::new();
+        // Each argument's first operand: tuple arguments flatten into several.
+        let mut starts = Vec::with_capacity(args.len());
         for arg in args {
+            starts.push(operands.len() as i32);
             let value = self.expr(block, env, arg)?;
             if let Some(value) = value {
                 self.remember_temp(env, arg, value);
@@ -2492,6 +2495,16 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 attrs.push((
                     Identifier::new(self.context, "reussir.disable_donation"),
                     Attribute::unit(self.context),
+                ));
+            }
+            if config.constants != 0 {
+                let inputs: Vec<i32> = config
+                    .constant_positions()
+                    .map(|position| starts[position as usize])
+                    .collect();
+                attrs.push((
+                    Identifier::new(self.context, "reussir.constant_inputs"),
+                    DenseI32ArrayAttribute::new(self.context, &inputs).into(),
                 ));
             }
         }

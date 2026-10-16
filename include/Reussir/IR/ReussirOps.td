@@ -71,6 +71,9 @@ def ReussirPJRTJitCallOp
     devices in call order. Donation guards carry static permission and any
     necessary runtime uniqueness check; `donation_mapping` records inputs proven
     to be the same array. The runtime chooses donors from the actual buffers.
+    A `reussir.constant_inputs` array lists rank-zero 64-bit integer inputs
+    whose values the runtime reads at each launch and specializes the kernel
+    on; they cannot be donated.
   }];
   let arguments = (ins Variadic<AnyType>:$inputs,
                        Variadic<AnyType>:$control_inputs,

@@ -47,6 +47,7 @@ fn outlines_launches_and_preserves_configuration() {
         "reussir.array.from_ifrt",
         "reussir.disable_donation",
         "reussir.backend_optimization_level",
+        "reussir.constant_inputs = array<i32: 2>",
         "tensor<ui64>",
     ] {
         assert!(text.contains(expected), "missing {expected}: {text}");
