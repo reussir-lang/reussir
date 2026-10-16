@@ -36,11 +36,28 @@ extern "C" fn close_cache() {
         // Foyer/Tokio shutdown needs fresh TLS even though its workers are live.
         if let Ok(worker) = std::thread::Builder::new()
             .name("reussir-pjrt-shutdown".into())
-            .spawn(move || context.executables.close())
+            .spawn(move || context.executables.shutdown())
         {
             let _ = worker.join();
         }
     }
+}
+
+// CPU plugins initialize lazy JIT listeners during compilation. Their C++
+// destructors are registered after client creation, so the initial exit hook
+// alone runs too late. Register a second, idempotent hook after compilation.
+// It joins cache workers before those listeners (and their mutexes) disappear.
+pub(super) fn register_compiled_shutdown() -> Result<()> {
+    static REGISTERED: OnceLock<Result<()>> = OnceLock::new();
+    REGISTERED
+        .get_or_init(|| {
+            if unsafe { libc::atexit(close_cache) } == 0 {
+                Ok(())
+            } else {
+                Err(Error::local("could not register compiled PJRT shutdown"))
+            }
+        })
+        .clone()
 }
 
 pub(super) fn get() -> Result<&'static Context> {
