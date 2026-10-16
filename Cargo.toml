@@ -77,6 +77,7 @@ cstree = { version = "0.14", features = ["derive", "lasso_compat", "multi_thread
 # rustc's extracted union-find: keyed unification with value merging and
 # snapshot/rollback (the logged path-compression makes speculation correct).
 ena = "0.14"
+thiserror = "2"
 # Bump arena backing the type interner: with_scope yields a generative
 # ArenaRef whose `alloc(&self) -> &'scope mut T` hands out arena-lifetimed
 # references, so interned `Ty<'tcx>` handles compare by pointer.

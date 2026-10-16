@@ -16,6 +16,7 @@ lalrpop.workspace = true
 [dependencies]
 blake3.workspace = true
 ena.workspace = true
+thiserror.workspace = true
 ftree.workspace = true
 lasso.workspace = true
 rapidhash.workspace = true

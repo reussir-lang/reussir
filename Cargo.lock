@@ -3683,6 +3683,7 @@ dependencies = [
  "smallvec",
  "strsim",
  "stumpalo",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

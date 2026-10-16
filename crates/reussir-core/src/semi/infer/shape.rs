@@ -1,43 +1,39 @@
 //! Inference-only shapes. Metavariables never occupy serialized extent slots.
 use super::{InferCtxt, Level, Mismatch, key};
 use crate::semi::ty::{HoleId, Ty, TyKind};
+use ena::unify::{InPlace, InPlaceUnificationTable, UnifyKey, UnifyValue};
 use rustc_hash::FxHashMap;
-use std::fmt;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct DimId(pub(crate) usize);
+#[repr(transparent)]
+pub struct DimId(pub(crate) u32);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ShapeId(pub(crate) usize);
+#[repr(transparent)]
+pub struct ShapeId(pub(crate) u32);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Dim {
     Known(u64),
     Var(DimId),
 }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TensorView<'tcx> {
     pub elem: Ty<'tcx>,
     pub shape: ShapeId,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ShapeError {
+    #[error("incompatible dimensions {left} and {right}")]
     Dimension { left: u64, right: u64 },
+    #[error("incompatible tensor ranks {left} and {right}")]
     Rank { left: usize, right: usize },
+    #[error("rank {actual} is smaller than required rank {minimum}")]
     MinimumRank { minimum: usize, actual: usize },
 }
-impl fmt::Display for ShapeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Dimension { left, right } => {
-                write!(f, "incompatible dimensions {left} and {right}")
-            }
-            Self::Rank { left, right } => write!(f, "incompatible tensor ranks {left} and {right}"),
-            Self::MinimumRank { minimum, actual } => {
-                write!(f, "rank {actual} is smaller than required rank {minimum}")
-            }
-        }
-    }
-}
-impl std::error::Error for ShapeError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Family<'tcx> {
     Tensor,
@@ -50,36 +46,107 @@ pub(super) struct Shaped<'tcx> {
     pub family: Family<'tcx>,
     pub view: TensorView<'tcx>,
 }
-#[derive(Clone)]
-struct DimNode {
-    parent: usize,
-    size: usize,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+struct DimKey(DimId);
+
+impl UnifyKey for DimKey {
+    type Value = DimValue;
+    fn index(&self) -> u32 {
+        self.0.0
+    }
+    fn from_index(index: u32) -> Self {
+        Self(DimId(index))
+    }
+    fn tag() -> &'static str {
+        "DimKey"
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+struct ShapeKey(ShapeId);
+impl UnifyKey for ShapeKey {
+    type Value = ShapeValue;
+    fn index(&self) -> u32 {
+        self.0.0
+    }
+    fn from_index(index: u32) -> Self {
+        Self(ShapeId(index))
+    }
+    fn tag() -> &'static str {
+        "ShapeKey"
+    }
+}
+#[derive(Clone, Debug)]
+struct DimValue {
     value: Option<u64>,
     level: Level,
 }
-#[derive(Clone)]
-struct ShapeNode {
-    parent: usize,
-    size: usize,
-    dims: Option<Vec<Dim>>,
+impl UnifyValue for DimValue {
+    type Error = ShapeError;
+    fn unify_values(a: &Self, b: &Self) -> Result<Self, Self::Error> {
+        if let (Some(left), Some(right)) = (a.value, b.value) {
+            if left != right {
+                return Err(ShapeError::Dimension { left, right });
+            }
+        }
+        Ok(Self {
+            value: a.value.or(b.value),
+            level: a.level.min(b.level),
+        })
+    }
+}
+#[derive(Clone, Debug)]
+struct ShapeValue {
+    // Immutable lists make ena's value probes and undo records cheap to clone.
+    dims: Option<Arc<[Dim]>>,
     minimum: usize,
     level: Level,
 }
+impl UnifyValue for ShapeValue {
+    type Error = ShapeError;
+    // This merges shape metadata only. Before merging two ranked classes,
+    // unify_shapes_inner must equate their dimensions in the dimension table.
+    fn unify_values(a: &Self, b: &Self) -> Result<Self, Self::Error> {
+        if let (Some(xs), Some(ys)) = (&a.dims, &b.dims) {
+            if xs.len() != ys.len() {
+                return Err(ShapeError::Rank {
+                    left: xs.len(),
+                    right: ys.len(),
+                });
+            }
+        }
+        let minimum = a.minimum.max(b.minimum);
+        let dims = a.dims.as_ref().or(b.dims.as_ref());
+        if let Some(ds) = dims {
+            if ds.len() < minimum {
+                return Err(ShapeError::MinimumRank {
+                    minimum,
+                    actual: ds.len(),
+                });
+            }
+        }
+        Ok(Self {
+            dims: dims.cloned(),
+            minimum,
+            level: a.level.min(b.level),
+        })
+    }
+}
+// ena owns all node and allocation rollback; only the side maps need a log.
 enum Undo<'tcx> {
-    Dim(usize, DimNode),
-    Shape(usize, ShapeNode),
     View(HoleId, Option<Shaped<'tcx>>),
     Cache(Ty<'tcx>),
 }
 pub(super) struct Snapshot {
-    dims: usize,
-    shapes: usize,
+    dims: ena::unify::Snapshot<InPlace<DimKey>>,
+    shapes: ena::unify::Snapshot<InPlace<ShapeKey>>,
     undo: usize,
     progress: u64,
 }
 pub(super) struct ShapeStore<'tcx> {
-    dims: Vec<DimNode>,
-    shapes: Vec<ShapeNode>,
+    dims: InPlaceUnificationTable<DimKey>,
+    shapes: InPlaceUnificationTable<ShapeKey>,
     views: FxHashMap<HoleId, Shaped<'tcx>>,
     cache: FxHashMap<Ty<'tcx>, Shaped<'tcx>>,
     undo: Vec<Undo<'tcx>>,
@@ -89,8 +156,8 @@ pub(super) struct ShapeStore<'tcx> {
 impl<'tcx> Default for ShapeStore<'tcx> {
     fn default() -> Self {
         Self {
-            dims: Vec::new(),
-            shapes: Vec::new(),
+            dims: InPlaceUnificationTable::new(),
+            shapes: InPlaceUnificationTable::new(),
             views: FxHashMap::default(),
             cache: FxHashMap::default(),
             undo: Vec::new(),
@@ -103,13 +170,15 @@ impl<'tcx> ShapeStore<'tcx> {
     pub(super) fn snapshot(&mut self) -> Snapshot {
         self.snapshots += 1;
         Snapshot {
-            dims: self.dims.len(),
-            shapes: self.shapes.len(),
+            dims: self.dims.snapshot(),
+            shapes: self.shapes.snapshot(),
             undo: self.undo.len(),
             progress: self.progress,
         }
     }
-    pub(super) fn commit(&mut self, _: Snapshot) {
+    pub(super) fn commit(&mut self, snapshot: Snapshot) {
+        self.dims.commit(snapshot.dims);
+        self.shapes.commit(snapshot.shapes);
         self.snapshots -= 1;
         if self.snapshots == 0 {
             self.undo.clear();
@@ -121,8 +190,6 @@ impl<'tcx> ShapeStore<'tcx> {
                 Undo::Cache(ty) => {
                     self.cache.remove(&ty);
                 }
-                Undo::Dim(i, old) => self.dims[i] = old,
-                Undo::Shape(i, old) => self.shapes[i] = old,
                 Undo::View(i, old) => match old {
                     Some(v) => {
                         self.views.insert(i, v);
@@ -133,20 +200,10 @@ impl<'tcx> ShapeStore<'tcx> {
                 },
             }
         }
-        self.dims.truncate(snapshot.dims);
-        self.shapes.truncate(snapshot.shapes);
+        self.dims.rollback_to(snapshot.dims);
+        self.shapes.rollback_to(snapshot.shapes);
         self.progress = snapshot.progress;
         self.snapshots -= 1;
-    }
-    fn save_dim(&mut self, id: usize) {
-        if self.snapshots != 0 {
-            self.undo.push(Undo::Dim(id, self.dims[id].clone()));
-        }
-    }
-    fn save_shape(&mut self, id: usize) {
-        if self.snapshots != 0 {
-            self.undo.push(Undo::Shape(id, self.shapes[id].clone()));
-        }
     }
     pub(super) fn set_view(&mut self, id: HoleId, view: Shaped<'tcx>) {
         if self.views.get(&id) == Some(&view) {
@@ -158,31 +215,27 @@ impl<'tcx> ShapeStore<'tcx> {
         }
         self.progress += 1;
     }
-    fn dim_root(&self, mut id: usize) -> usize {
-        while self.dims[id].parent != id {
-            id = self.dims[id].parent;
-        }
-        id
-    }
-    fn shape_root(&self, mut id: usize) -> usize {
-        while self.shapes[id].parent != id {
-            id = self.shapes[id].parent;
-        }
-        id
-    }
     fn lower_shape_level(&mut self, id: ShapeId, level: Level) {
-        let root = self.shape_root(id.0);
-        if self.shapes[root].level > level {
-            self.save_shape(root);
-            self.shapes[root].level = level;
+        let shape = self.shapes.probe_value(ShapeKey(id));
+        if shape.level > level {
+            self.shapes
+                .unify_var_value(
+                    ShapeKey(id),
+                    ShapeValue {
+                        dims: None,
+                        minimum: 0,
+                        level,
+                    },
+                )
+                .expect("lowering a level preserves shape constraints");
         }
-        if let Some(dims) = self.shapes[root].dims.clone() {
-            for dim in dims {
+        if let Some(dims) = shape.dims {
+            for &dim in dims.iter() {
                 if let Dim::Var(id) = dim {
-                    let root = self.dim_root(id.0);
-                    if self.dims[root].level > level {
-                        self.save_dim(root);
-                        self.dims[root].level = level;
+                    if self.dims.probe_value(DimKey(id)).level > level {
+                        self.dims
+                            .unify_var_value(DimKey(id), DimValue { value: None, level })
+                            .expect("lowering a level preserves dimension constraints");
                     }
                 }
             }
@@ -195,60 +248,64 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         self.shapes.progress
     }
     pub fn new_dim(&mut self) -> Dim {
-        let id = self.shapes.dims.len();
-        self.shapes.dims.push(DimNode {
-            parent: id,
-            size: 1,
+        let id = self.shapes.dims.new_key(DimValue {
             value: None,
             level: self.level,
         });
-        Dim::Var(DimId(id))
+        Dim::Var(id.0)
     }
     pub fn new_shape(&mut self) -> ShapeId {
-        let id = self.shapes.shapes.len();
-        self.shapes.shapes.push(ShapeNode {
-            parent: id,
-            size: 1,
-            dims: None,
-            minimum: 0,
-            level: self.level,
-        });
-        ShapeId(id)
+        self.shapes
+            .shapes
+            .new_key(ShapeValue {
+                dims: None,
+                minimum: 0,
+                level: self.level,
+            })
+            .0
     }
     pub fn ranked_shape(&mut self, dims: Vec<Dim>) -> ShapeId {
-        let id = self.new_shape();
-        self.shapes.shapes[id.0].dims = Some(dims);
-        id
+        self.shapes
+            .shapes
+            .new_key(ShapeValue {
+                dims: Some(dims.into()),
+                minimum: 0,
+                level: self.level,
+            })
+            .0
     }
-    pub fn resolve_dim(&self, dim: Dim) -> Dim {
+    pub fn resolve_dim(&mut self, dim: Dim) -> Dim {
         match dim {
             Dim::Known(_) => dim,
             Dim::Var(id) => {
-                let root = self.shapes.dim_root(id.0);
-                self.shapes.dims[root]
+                let root = self.shapes.dims.find(DimKey(id));
+                self.shapes
+                    .dims
+                    .probe_value(root)
                     .value
                     .map(Dim::Known)
-                    .unwrap_or(Dim::Var(DimId(root)))
+                    .unwrap_or(Dim::Var(root.0))
             }
         }
     }
-    pub fn shape_dims(&self, shape: ShapeId) -> Option<Vec<Dim>> {
-        self.shapes.shapes[self.shapes.shape_root(shape.0)]
+    pub fn shape_dims(&mut self, shape: ShapeId) -> Option<Vec<Dim>> {
+        self.shapes
+            .shapes
+            .probe_value(ShapeKey(shape))
             .dims
             .as_ref()
             .map(|dims| dims.iter().map(|&d| self.resolve_dim(d)).collect())
     }
-    pub fn shape_rank_min(&self, shape: ShapeId) -> usize {
-        let node = &self.shapes.shapes[self.shapes.shape_root(shape.0)];
-        node.dims.as_ref().map_or(node.minimum, Vec::len)
+    pub fn shape_rank_min(&mut self, shape: ShapeId) -> usize {
+        let node = self.shapes.shapes.probe_value(ShapeKey(shape));
+        node.dims.as_ref().map_or(node.minimum, |dims| dims.len())
     }
     pub fn require_rank_at_least(
         &mut self,
         shape: ShapeId,
         minimum: usize,
     ) -> Result<(), ShapeError> {
-        let root = self.shapes.shape_root(shape.0);
-        let node = &self.shapes.shapes[root];
+        let node = self.shapes.shapes.probe_value(ShapeKey(shape));
         if let Some(dims) = &node.dims {
             return if dims.len() >= minimum {
                 Ok(())
@@ -260,8 +317,14 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             };
         }
         if node.minimum < minimum {
-            self.shapes.save_shape(root);
-            self.shapes.shapes[root].minimum = minimum;
+            self.shapes.shapes.unify_var_value(
+                ShapeKey(shape),
+                ShapeValue {
+                    dims: None,
+                    minimum,
+                    level: node.level,
+                },
+            )?;
             self.shapes.progress += 1;
         }
         Ok(())
@@ -273,24 +336,20 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             }
             (Dim::Known(_), Dim::Known(_)) => Ok(()),
             (Dim::Var(a), Dim::Known(b)) | (Dim::Known(b), Dim::Var(a)) => {
-                self.shapes.save_dim(a.0);
-                self.shapes.dims[a.0].value = Some(b);
+                let level = self.shapes.dims.probe_value(DimKey(a)).level;
+                self.shapes.dims.unify_var_value(
+                    DimKey(a),
+                    DimValue {
+                        value: Some(b),
+                        level,
+                    },
+                )?;
                 self.shapes.progress += 1;
                 Ok(())
             }
             (Dim::Var(a), Dim::Var(b)) if a == b => Ok(()),
             (Dim::Var(a), Dim::Var(b)) => {
-                let (a, b) = if self.shapes.dims[a.0].size >= self.shapes.dims[b.0].size {
-                    (a.0, b.0)
-                } else {
-                    (b.0, a.0)
-                };
-                self.shapes.save_dim(a);
-                self.shapes.save_dim(b);
-                self.shapes.dims[b].parent = a;
-                self.shapes.dims[a].size += self.shapes.dims[b].size;
-                self.shapes.dims[a].level =
-                    self.shapes.dims[a].level.min(self.shapes.dims[b].level);
+                self.shapes.dims.unify_var_var(DimKey(a), DimKey(b))?;
                 self.shapes.progress += 1;
                 Ok(())
             }
@@ -308,32 +367,17 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         result
     }
     fn unify_shapes_inner(&mut self, left: ShapeId, right: ShapeId) -> Result<(), ShapeError> {
-        let a = self.shapes.shape_root(left.0);
-        let b = self.shapes.shape_root(right.0);
+        let a = self.shapes.shapes.find(ShapeKey(left));
+        let b = self.shapes.shapes.find(ShapeKey(right));
         if a == b {
             return Ok(());
         }
-        let na = self.shapes.shapes[a].clone();
-        let nb = self.shapes.shapes[b].clone();
-        let minimum = na.minimum.max(nb.minimum);
+        let na = self.shapes.shapes.probe_value(a);
+        let nb = self.shapes.shapes.probe_value(b);
+        let merged = ShapeValue::unify_values(&na, &nb)?;
         if let (Some(xs), Some(ys)) = (&na.dims, &nb.dims) {
-            if xs.len() != ys.len() {
-                return Err(ShapeError::Rank {
-                    left: xs.len(),
-                    right: ys.len(),
-                });
-            }
-            for (&x, &y) in xs.iter().zip(ys) {
+            for (&x, &y) in xs.iter().zip(ys.iter()) {
                 self.unify_dims(x, y)?;
-            }
-        }
-        let dims = na.dims.or(nb.dims);
-        if let Some(ds) = &dims {
-            if ds.len() < minimum {
-                return Err(ShapeError::MinimumRank {
-                    minimum,
-                    actual: ds.len(),
-                });
             }
         }
         // Re-observing two fully known equal shapes adds no information.
@@ -348,16 +392,10 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         {
             return Ok(());
         }
-        let (a, b) = if na.size >= nb.size { (a, b) } else { (b, a) };
-        self.shapes.save_shape(a);
-        self.shapes.save_shape(b);
-        self.shapes.shapes[b].parent = a;
-        self.shapes.shapes[a].size += self.shapes.shapes[b].size;
-        self.shapes.shapes[a].dims = dims;
-        self.shapes.shapes[a].minimum = minimum;
-        self.shapes.shapes[a].level = na.level.min(nb.level);
-        self.shapes
-            .lower_shape_level(ShapeId(a), na.level.min(nb.level));
+        self.shapes.shapes.unify_var_var(a, b)?;
+        // ena chooses the representative; this lookup follows it even if a
+        // became a child, then propagates the merged level into the dimensions.
+        self.shapes.lower_shape_level(a.0, merged.level);
         self.shapes.progress += 1;
         Ok(())
     }
@@ -739,6 +777,81 @@ mod tests {
         });
     }
     #[test]
+    fn probe_restores_shape_and_dimension_classes_after_compressed_lookups() {
+        with_tcx(|tcx| {
+            let mut i = InferCtxt::new(tcx);
+            let dims = std::array::from_fn::<_, 4, _>(|_| i.new_dim());
+            let shapes = dims.map(|d| i.ranked_shape(vec![d]));
+            i.unify_shapes(shapes[0], shapes[1]).unwrap();
+            i.unify_shapes(shapes[2], shapes[3]).unwrap();
+            let before = dims.map(|d| i.resolve_dim(d));
+            let revision = i.progress();
+
+            let result: Result<(), ()> = i.probe(|i| {
+                // Joining two nontrivial classes creates paths that resolution
+                // compresses in both tables. Neither the merge nor those reads
+                // may leave the independent classes linked after rollback.
+                i.unify_shapes(shapes[0], shapes[2]).unwrap();
+                for shape in shapes {
+                    assert_eq!(i.shape_dims(shape), i.shape_dims(shapes[0]));
+                }
+                i.unify_dims(dims[0], Dim::Known(17)).unwrap();
+                for shape in shapes {
+                    assert_eq!(i.shape_dims(shape), Some(vec![Dim::Known(17)]));
+                }
+                Err(())
+            });
+            assert!(result.is_err());
+            assert_eq!(i.progress(), revision);
+            assert_eq!(dims.map(|d| i.resolve_dim(d)), before);
+            for (shape, dim) in shapes.into_iter().zip(before) {
+                assert_eq!(i.shape_dims(shape), Some(vec![dim]));
+            }
+            i.unify_dims(dims[0], Dim::Known(3)).unwrap();
+            i.unify_dims(dims[2], Dim::Known(5)).unwrap();
+            assert_eq!(i.shape_dims(shapes[1]), Some(vec![Dim::Known(3)]));
+            assert_eq!(i.shape_dims(shapes[3]), Some(vec![Dim::Known(5)]));
+        });
+    }
+    #[test]
+    fn outer_probe_discards_allocations_committed_by_inner_probe() {
+        with_tcx(|tcx| {
+            let mut i = InferCtxt::new(tcx);
+            let shape = i.new_shape();
+            let elem = i.new_hole_ty();
+            let tensor = i.new_tensor_ty(elem, shape);
+            let counts = (i.table.len(), i.shapes.dims.len(), i.shapes.shapes.len());
+            let revision = i.progress();
+            let result: Result<(), ()> = i.probe(|i| {
+                i.enter_level();
+                i.probe::<_, ()>(|i| {
+                    let d = i.new_dim();
+                    let s = i.ranked_shape(vec![d]);
+                    let t = i.new_tensor_ty(tcx.mk_bool(), s);
+                    i.unify(tensor, t).unwrap();
+                    i.unify_dims(d, Dim::Known(7)).unwrap();
+                    Ok(())
+                })
+                .unwrap();
+                assert_eq!(i.resolve(tensor), tcx.mk_tensor(tcx.mk_bool(), &[7]));
+                Err(())
+            });
+            assert!(result.is_err());
+            assert_eq!(
+                (i.table.len(), i.shapes.dims.len(), i.shapes.shapes.len()),
+                counts
+            );
+            assert_eq!(i.level(), Level(0));
+            assert_eq!(i.progress(), revision);
+            assert_eq!(i.shape_dims(shape), None);
+            assert_eq!(i.resolve(elem), elem);
+            // The rolled-back ids can be reused without retaining old views.
+            i.unify(tensor, tcx.mk_tensor(tcx.mk_char(), &[2, 3]))
+                .unwrap();
+            assert_eq!(i.resolve(tensor), tcx.mk_tensor(tcx.mk_char(), &[2, 3]));
+        });
+    }
+    #[test]
     fn shaped_holes_keep_identity_when_unioned_with_plain_holes() {
         with_tcx(|tcx| {
             for reverse in [false, true] {
@@ -864,9 +977,9 @@ mod tests {
             let inner = i.new_tensor_ty(elem, s);
             i.exit_level();
             i.unify(outer, inner).unwrap();
-            assert_eq!(i.shapes.shapes[i.shapes.shape_root(s.0)].level, Level(0));
+            assert_eq!(i.shapes.shapes.probe_value(ShapeKey(s)).level, Level(0));
             let Dim::Var(d) = d else { unreachable!() };
-            assert_eq!(i.shapes.dims[i.shapes.dim_root(d.0)].level, Level(0));
+            assert_eq!(i.shapes.dims.probe_value(DimKey(d)).level, Level(0));
             let TyKind::Hole(h) = elem.kind() else {
                 unreachable!()
             };
@@ -919,7 +1032,7 @@ mod tests {
             });
             assert!(result.is_err());
             assert!(i.shapes.cache.is_empty());
-            assert!(i.shapes.shapes.is_empty());
+            assert_eq!(i.shapes.shapes.len(), 0);
             let first = i.tensor_view(t).unwrap();
             let count = i.shapes.shapes.len();
             for _ in 0..100 {
