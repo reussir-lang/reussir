@@ -121,6 +121,34 @@ jobs:
             cmake --build build --parallel --target all reussir-rt-sanitizers
           '
 
+      # PJRT execution tests run against the pinned prebuilt CPU plugin.
+      # Nothing from XLA is compiled: the PJRT-enabled runtime only needs the
+      # C API header from the XLA checkout the OpenXLA build already fetched,
+      # and it builds through sccache. The exported variables enable the
+      # `pjrt-runtime` lit feature for the integration tests below.
+      - name: Prepare PJRT CPU runtime
+        run: |
+          scripts/ci/fetch-pjrt-cpu-plugin.sh "$RUNNER_TEMP/pjrt-cpu"
+          nix develop --command bash -c '
+            env RUSTC_WRAPPER=sccache \
+            CARGO_TARGET_DIR="$PWD/build/target-rt-pjrt" \
+            REUSSIR_PJRT_PATH="$PWD/build/_deps/xla-src" \
+            cargo build --locked --release -p reussir-rt --features pjrt
+          '
+          {
+            echo "REUSSIR_PJRT_PLUGIN=$RUNNER_TEMP/pjrt-cpu/libpjrt_cpu.so"
+            echo "REUSSIR_PJRT_TEST_RUNTIME=$PWD/build/target-rt-pjrt/release/libreussir_rt.so"
+          } >> "$GITHUB_ENV"
+
+      - name: Run PJRT runtime tests
+        run: |
+          nix develop --command bash -c '
+            env RUSTC_WRAPPER=sccache \
+            CARGO_TARGET_DIR="$PWD/build/target-rt-pjrt" \
+            REUSSIR_PJRT_PATH="$PWD/build/_deps/xla-src" \
+            cargo test --locked --release -p reussir-rt --features pjrt -- --include-ignored
+          '
+
       - name: Run Unit Tests
         run: |
           nix develop --command bash -c '
