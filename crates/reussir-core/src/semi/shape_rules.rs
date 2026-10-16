@@ -45,6 +45,29 @@ pub(super) enum RuleError {
     Rank { expected: usize, actual: usize },
     #[error("tensor operation requires Tensor operands and result")]
     ExpectedTensor,
+    #[error("select predicate must be scalar or match the value shape")]
+    PredicateShape,
+    #[error("expected a scalar or rank-zero Tensor")]
+    ExpectedScalar,
+    #[error("tensor dimension or axis must be a nonnegative signed 64-bit integer")]
+    InvalidInteger,
+    #[error("{operation} expects {expected} operands")]
+    OperandCount {
+        operation: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+    #[error("iota axis is too large")]
+    IotaAxisOverflow { axis: u64 },
+    #[error("iota axis must be within the result rank")]
+    IotaAxisOutOfBounds {
+        axis: u64,
+        #[source]
+        source: ShapeError,
+    },
+    // The shared concrete validator still exposes text diagnostics.
+    #[error("{0}")]
+    Validation(String),
 }
 
 fn equal<'tcx>(i: &mut InferCtxt<'_, 'tcx>, a: Ty<'tcx>, b: Ty<'tcx>) -> Result<(), RuleError> {
@@ -121,7 +144,7 @@ fn select_predicate(
     i: &mut InferCtxt<'_, '_>,
     predicate: ShapeId,
     value: ShapeId,
-) -> Result<RuleStatus, String> {
+) -> Result<RuleStatus, RuleError> {
     if let Some(ds) = i.shape_dims(predicate) {
         if ds.is_empty() {
             return Ok(RuleStatus::Solved);
@@ -145,13 +168,13 @@ fn select_predicate(
             Ok(RuleStatus::Solved)
         }
         (true, true) => Ok(RuleStatus::Deferred),
-        (false, false) => Err("select predicate must be scalar or match the value shape".into()),
+        (false, false) => Err(RuleError::PredicateShape),
     }
 }
 fn scalar_element<'tcx>(
     i: &mut InferCtxt<'_, 'tcx>,
     arg: &Argument<'tcx>,
-) -> Result<Option<Ty<'tcx>>, String> {
+) -> Result<Option<Ty<'tcx>>, RuleError> {
     let resolved = i.shallow_resolve(arg.ty);
     if matches!(resolved.kind(), TyKind::Tensor { elem, dims } if dims.is_empty() && matches!(elem.kind(), TyKind::Generic(_)))
     {
@@ -178,18 +201,16 @@ fn scalar_element<'tcx>(
             Ok(Some(ty))
         }
         TyKind::Hole(_) | TyKind::Generic(_) | TyKind::Bottom => Ok(None),
-        _ => Err("expected a scalar or rank-zero Tensor".into()),
+        _ => Err(RuleError::ExpectedScalar),
     }
 }
-fn integer(arg: &Argument<'_>) -> Result<Option<u64>, String> {
+fn integer(arg: &Argument<'_>) -> Result<Option<u64>, RuleError> {
     match arg.value {
         Some(Value::Integer(n)) => u64::try_from(n)
             .ok()
             .filter(|&n| n <= i64::MAX as u64)
             .map(Some)
-            .ok_or_else(|| {
-                "tensor dimension or axis must be a nonnegative signed 64-bit integer".into()
-            }),
+            .ok_or(RuleError::InvalidInteger),
         _ => Ok(None),
     }
 }
@@ -235,14 +256,18 @@ pub(super) fn apply<'tcx>(
     result: Ty<'tcx>,
     args: &[Argument<'tcx>],
     _phase: Phase,
-) -> Result<RuleStatus, String> {
+) -> Result<RuleStatus, RuleError> {
     use TensorFn::*;
     let count = match op {
         Of | Materialize | AsyncDone => 1,
         _ => op.arity(),
     };
     if args.len() != count {
-        return Err(format!("{} expects {count} operands", op.as_str()));
+        return Err(RuleError::OperandCount {
+            operation: op.as_str(),
+            expected: count,
+            actual: args.len(),
+        });
     }
     let mut status = RuleStatus::Solved;
     // Preserve exact result identities before introducing a Tensor family.
@@ -273,9 +298,9 @@ pub(super) fn apply<'tcx>(
                 let minimum = usize::try_from(axis)
                     .ok()
                     .and_then(|n| n.checked_add(1))
-                    .ok_or("iota axis is too large")?;
+                    .ok_or(RuleError::IotaAxisOverflow { axis })?;
                 i.require_rank_at_least(output.shape, minimum)
-                    .map_err(|_| "iota axis must be within the result rank".to_owned())?;
+                    .map_err(|source| RuleError::IotaAxisOutOfBounds { axis, source })?;
             } else {
                 status = RuleStatus::Deferred;
             }
@@ -322,7 +347,7 @@ pub(super) fn apply<'tcx>(
     }
     let result = i.resolve(result);
     let types = args.iter().map(|a| i.resolve(a.ty)).collect::<Vec<_>>();
-    crate::tensor_check::operation(op, result, &types)?;
+    crate::tensor_check::operation(op, result, &types).map_err(RuleError::Validation)?;
     if open(result) || types.iter().copied().any(open) {
         status = RuleStatus::Deferred;
     }
@@ -341,7 +366,7 @@ mod tests {
         op: TensorFn,
         result: Ty<'tcx>,
         args: &[Argument<'tcx>],
-    ) -> Result<RuleStatus, String> {
+    ) -> Result<RuleStatus, RuleError> {
         super::apply(i, tcx, op, result, args, Phase::Propagate)
     }
 
@@ -360,7 +385,7 @@ mod tests {
         op: TensorFn,
         result: Ty<'tcx>,
         args: &[Ty<'tcx>],
-    ) -> Result<RuleStatus, String> {
+    ) -> Result<RuleStatus, RuleError> {
         apply(
             i,
             tcx,
@@ -372,6 +397,36 @@ mod tests {
                 .map(Argument::unknown)
                 .collect::<Vec<_>>(),
         )
+    }
+
+    #[test]
+    fn operation_errors_preserve_operand_counts_and_invalid_axes() {
+        with_tcx(|tcx| {
+            let mut i = InferCtxt::new(tcx);
+            let output = tcx.mk_tensor(tcx.mk_int(IntTy::Signed(32)), &[4]);
+            assert_eq!(
+                apply(&mut i, tcx, TensorFn::Iota, output, &[]),
+                Err(RuleError::OperandCount {
+                    operation: TensorFn::Iota.as_str(),
+                    expected: 1,
+                    actual: 0,
+                }),
+            );
+            assert_eq!(
+                apply(&mut i, tcx, TensorFn::Iota, output, &[literal(tcx, -1)]),
+                Err(RuleError::InvalidInteger),
+            );
+            assert_eq!(
+                apply(&mut i, tcx, TensorFn::Iota, output, &[literal(tcx, 1)]),
+                Err(RuleError::IotaAxisOutOfBounds {
+                    axis: 1,
+                    source: ShapeError::MinimumRank {
+                        minimum: 2,
+                        actual: 1
+                    },
+                }),
+            );
+        });
     }
 
     #[test]
