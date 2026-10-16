@@ -447,10 +447,10 @@ impl CompilationCache {
         }
     }
 
-    /// Process-exit shutdown, called from a fresh non-Tokio thread; no request
-    /// may start afterwards. Foyer can wake a fetch waiter before it finishes
-    /// evicting, so join the cache workers before destroying the remaining
-    /// executables. Idempotent.
+    /// Shut down from outside any Tokio runtime: at process exit, or when the
+    /// cache is dropped there. No request may start afterwards. Foyer can wake
+    /// a fetch waiter before it finishes evicting, so join the cache workers
+    /// before destroying the remaining executables. Idempotent.
     pub fn shutdown(&self) {
         let Some(runtime) = self.runtime.lock().unwrap().take() else {
             return;
@@ -464,13 +464,17 @@ impl CompilationCache {
 
 impl Drop for CompilationCache {
     fn drop(&mut self) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            return self.shutdown();
+        }
         let Some(runtime) = self.runtime.get_mut().unwrap().take() else {
             return;
         };
         self.close_artifacts();
         self.entries.clear();
-        // Closing the store already waits for I/O. Avoid Tokio's blocking
-        // Runtime destructor when an embedding drops us on its async worker.
+        // Joining the workers would block, which Tokio forbids when an
+        // embedding drops us on its async worker. Closing the store already
+        // waits for I/O; an eviction still in flight finishes in the background.
         runtime.shutdown_background();
     }
 }
