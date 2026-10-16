@@ -7,7 +7,8 @@ description = "Narrow native ABI for runtime StableHLO specialization"
 links = "ReussirStablehloSpecializer"
 
 [dependencies]
-mlir-sys.workspace = true
+# Keep standalone rene bundles on the same LLVM 23 ABI as CMake.
+mlir-sys = { git = "https://github.com/reussir-lang/mlir-sys", rev = "5541512807e3feee2ef20897261afd58b0ef859b" }
 
 [build-dependencies]
 blake3.workspace = true

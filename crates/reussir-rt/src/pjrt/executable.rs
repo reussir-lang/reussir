@@ -46,6 +46,18 @@ impl Executable {
             .get_or_compile(bytecode, digest, options)
     }
 
+    pub(super) fn compile_specialized(
+        bytecode: &[u8],
+        checksum: &[u8],
+        options: &[u8],
+        arguments: Vec<reussir_stablehlo::Argument>,
+    ) -> Result<Arc<Self>> {
+        let digest = verify_checksum(bytecode, checksum)?;
+        context::get()?
+            .executables
+            .get_or_specialize(bytecode, digest, options, Some(arguments))
+    }
+
     fn serialize(&self) -> Result<Vec<u8>> {
         let api = self.owner.api;
         let executable = call!(
@@ -230,10 +242,43 @@ fn verify_checksum(bytecode: &[u8], checksum: &[u8]) -> Result<blake3::Hash> {
     Ok(actual)
 }
 
+// Length-delimited, versioned specialization identity. Logical dimensions and
+// explicitly supplied contents are distinct inputs, including empty values.
+fn specialization_identity(
+    digest: blake3::Hash,
+    options: &[u8],
+    arguments: Option<&[reussir_stablehlo::Argument]>,
+) -> blake3::Hash {
+    let mut hash = blake3::Hasher::new();
+    hash.update(b"reussir-stablehlo-specialization-v1")
+        .update(digest.as_bytes());
+    hash.update(&(options.len() as u64).to_le_bytes())
+        .update(options);
+    hash.update(&[u8::from(arguments.is_some())]);
+    if let Some(arguments) = arguments {
+        hash.update(&(arguments.len() as u64).to_le_bytes());
+        for argument in arguments {
+            hash.update(&(argument.dimensions.len() as u64).to_le_bytes());
+            for dim in &argument.dimensions {
+                hash.update(&dim.to_le_bytes());
+            }
+            hash.update(&[u8::from(argument.shape_values.is_some())]);
+            if let Some(values) = &argument.shape_values {
+                hash.update(&(values.len() as u64).to_le_bytes());
+                for value in values {
+                    hash.update(&value.to_le_bytes());
+                }
+            }
+        }
+    }
+    hash.finalize()
+}
+
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct CacheKey {
     digest: blake3::Hash,
     options: Vec<u8>,
+    arguments: Option<Vec<reussir_stablehlo::Argument>>,
 }
 
 pub(super) struct CompilationCache {
@@ -293,9 +338,20 @@ impl CompilationCache {
         digest: blake3::Hash,
         options: &[u8],
     ) -> Result<Arc<Executable>> {
+        self.get_or_specialize(code, digest, options, None)
+    }
+
+    fn get_or_specialize(
+        &self,
+        code: &[u8],
+        digest: blake3::Hash,
+        options: &[u8],
+        arguments: Option<Vec<reussir_stablehlo::Argument>>,
+    ) -> Result<Arc<Executable>> {
         let key = CacheKey {
             digest,
             options: options.into(),
+            arguments: arguments.clone(),
         };
         if let Some(entry) = self.entries.get(&key) {
             return Ok(entry.value().clone());
@@ -303,8 +359,9 @@ impl CompilationCache {
         let owner = self.owner.clone();
         let artifacts = self.artifacts.clone();
         let mut artifact_key = self.namespace.to_vec();
-        artifact_key.extend_from_slice(digest.as_bytes());
-        artifact_key.extend_from_slice(options);
+        artifact_key.extend_from_slice(
+            specialization_identity(digest, options, arguments.as_deref()).as_bytes(),
+        );
         let code = code.to_vec();
         let options = options.to_vec();
         let _enter = self.runtime.as_ref().unwrap().enter();
@@ -340,6 +397,15 @@ impl CompilationCache {
                         artifacts.cache.remove(&artifact_key);
                     }
                 }
+                // Refinement is inside the coalesced cache miss, just like PJRT
+                // compilation. Hits and restored disk artifacts need neither.
+                let code = if let Some(arguments) = arguments {
+                    reussir_stablehlo::specialize(&code, &arguments)
+                        .map_err(|error| Error::local(error.to_string()))?
+                        .bytecode
+                } else {
+                    code
+                };
                 let executable = owner.compile(&code, &options)?;
                 if let Some(artifacts) = &artifacts {
                     match executable.serialize() {

@@ -3763,6 +3763,7 @@ dependencies = [
  "num_enum",
  "paste",
  "reussir-pjrt-sys",
+ "reussir-stablehlo",
  "serde",
  "smallvec",
  "stacker",

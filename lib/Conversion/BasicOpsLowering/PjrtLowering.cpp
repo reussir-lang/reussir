@@ -134,8 +134,8 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
     auto voidTy = mlir::LLVM::LLVMVoidType::get(getContext());
     auto module = op->getParentOfType<mlir::ModuleOp>();
     auto compile =
-        mlir::LLVM::lookupOrCreateFn(rewriter, module, "__reussir_pjrt_compile",
-                                     {ptr, index, ptr, ptr, index}, ptr);
+        mlir::LLVM::lookupOrCreateFn(rewriter, module, "__reussir_pjrt_compile_specialized",
+                                     {ptr, index, ptr, ptr, index, ptr, index}, ptr);
     auto validate = mlir::LLVM::lookupOrCreateFn(
         rewriter, module, "__reussir_pjrt_executable_validate_devices",
         {ptr, ptr, index}, voidTy);
@@ -221,6 +221,46 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
     auto inputs = slots(op, ptr, index, adaptor.getInputs().size(), rewriter);
     for (auto [i, input] : llvm::enumerate(adaptor.getInputs()))
       storeSlot(op, inputs, i, input, rewriter);
+    // Matches pjrt::ffi::SpecializationArgument. Input descriptors borrowed
+    // from array.to_ifrt retain the RC payload's global dynamic extents after
+    // the handles and offset. Never reconstruct these from physical shards.
+    auto argumentType = mlir::LLVM::LLVMStructType::getLiteral(
+        getContext(), {ptr, index, ptr, index, rewriter.getI8Type()});
+    auto shapeArguments = slots(op, argumentType, index, identity.size(), rewriter);
+    llvm::SmallVector<mlir::Value> argumentValues;
+    for (auto [i, original] : llvm::enumerate(op.getInputs())) {
+      auto shape = getIfrtArrayShape(original.getType());
+      auto dims = slots(op, rewriter.getI64Type(), index, shape.getRank(), rewriter);
+      llvm::SmallVector<mlir::Type> payload{
+          mlir::LLVM::LLVMArrayType::get(ptr, op.getDevices().size()), index};
+      payload.append(shape.getNumDynamicDims(), index);
+      auto payloadType = mlir::LLVM::LLVMStructType::getLiteral(getContext(), payload);
+      unsigned dynamicField = 2;
+      for (auto [dim, size] : llvm::enumerate(shape.getShape())) {
+        mlir::Value extent;
+        if (mlir::ShapedType::isDynamic(size)) {
+          auto address = mlir::LLVM::GEPOp::create(
+              rewriter, loc, ptr, payloadType, adaptor.getInputs()[i],
+              llvm::ArrayRef<mlir::LLVM::GEPArg>{0, int32_t(dynamicField++)});
+          extent = mlir::LLVM::LoadOp::create(rewriter, loc, index, address);
+          if (index.getIntOrFloatBitWidth() < 64)
+            extent = mlir::LLVM::SExtOp::create(rewriter, loc, rewriter.getI64Type(), extent);
+        } else {
+          extent = integer(rewriter, loc, rewriter.getI64Type(), size);
+        }
+        storeSlot(op, dims, dim, extent, rewriter);
+      }
+      mlir::Value value = mlir::LLVM::PoisonOp::create(rewriter, loc, argumentType);
+      llvm::SmallVector<mlir::Value> metadata{
+          dims, length(shape.getRank()), mlir::LLVM::ZeroOp::create(rewriter, loc, ptr),
+          length(0), integer(rewriter, loc, rewriter.getI8Type(), 0)};
+      for (auto [field, item] : llvm::enumerate(metadata))
+        value = mlir::LLVM::InsertValueOp::create(
+            rewriter, loc, value, item, llvm::ArrayRef<int64_t>{int64_t(field)});
+      argumentValues.push_back(value);
+      storeSlot(op, shapeArguments, i, value, rewriter);
+    }
+    mlir::Value selectedShapes = shapeArguments;
     mlir::Value inputCount = length(identity.size());
     llvm::SmallVector<int32_t> explicitDonors(op.getDonatedInputIndices());
     for (auto alias : op.getIoAliases())
@@ -277,12 +317,17 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
       denied = select(candidateDenied, denied);
       deniedCount = select(candidateCount, deniedCount);
       mlir::Value variantInputs = baselineInputs;
+      mlir::Value variantShapes = shapeArguments;
       if (arguments != llvm::ArrayRef<int32_t>(identity)) {
+        variantShapes = slots(op, argumentType, index, arguments.size(), rewriter);
+        for (auto [i, original] : llvm::enumerate(arguments))
+          storeSlot(op, variantShapes, i, argumentValues[original], rewriter);
         auto storage = slots(op, ptr, index, arguments.size(), rewriter);
         for (auto [i, original] : llvm::enumerate(arguments))
           storeSlot(op, storage, i, adaptor.getInputs()[original], rewriter);
         variantInputs = storage;
       }
+      selectedShapes = select(variantShapes, selectedShapes);
       inputs = select(variantInputs, inputs);
       inputCount = select(length(arguments.size()), inputCount);
     }
@@ -292,7 +337,7 @@ struct JitCall : mlir::ConvertOpToLLVMPattern<ReussirPJRTJitCallOp> {
             rewriter, loc, *compile,
             mlir::ValueRange{(*fields)[0], (*fields)[1], (*fields)[2],
                              bytesAddress(op, options, rewriter),
-                             length(options.size())})
+                             length(options.size()), selectedShapes, inputCount})
             .getResult();
     auto devices = slots(op, rewriter.getI32Type(), index,
                          op.getDevices().size(), rewriter);

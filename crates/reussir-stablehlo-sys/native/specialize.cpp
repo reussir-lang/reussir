@@ -18,11 +18,12 @@
 // without a dependency on the Reussir compiler or JIT.
 void registerIfrtDialects(mlir::DialectRegistry &);
 
-extern "C" uint32_t reussir_stablehlo_specialize(
-    const uint8_t *program, size_t programSize,
-    const ReussirStablehloArgument *arguments, size_t argumentCount,
-    ReussirStablehloBytes output, ReussirStablehloShape outputShape,
-    ReussirStablehloBytes diagnostic, void *userData) {
+extern "C" uint32_t
+reussir_stablehlo_specialize(const uint8_t *program, size_t programSize,
+                             const ReussirStablehloArgument *arguments,
+                             size_t argumentCount, ReussirStablehloBytes output,
+                             ReussirStablehloShape outputShape,
+                             ReussirStablehloBytes diagnostic, void *userData) {
   auto report = [&](llvm::StringRef message) {
     diagnostic(reinterpret_cast<const uint8_t *>(message.data()),
                message.size(), userData);
@@ -51,14 +52,17 @@ extern "C" uint32_t reussir_stablehlo_specialize(
   if (!module || mlir::failed(mlir::verify(*module)))
     return REUSSIR_STABLEHLO_INVALID_INPUT;
   auto entry = module->lookupSymbol<mlir::func::FuncOp>("main");
-  if (!entry || entry.isExternal() || entry.getNumArguments() != argumentCount) {
-    report("specialization requires a defined @main with matching argument count");
+  if (!entry || entry.isExternal() ||
+      entry.getNumArguments() != argumentCount) {
+    report(
+        "specialization requires a defined @main with matching argument count");
     return REUSSIR_STABLEHLO_INVALID_INPUT;
   }
   llvm::SmallVector<mlir::Type> types;
   for (size_t i = 0; i < argumentCount; ++i) {
     const auto &arg = arguments[i];
-    auto type = llvm::dyn_cast<mlir::RankedTensorType>(entry.getArgument(i).getType());
+    auto type =
+        llvm::dyn_cast<mlir::RankedTensorType>(entry.getArgument(i).getType());
     if (!type || size_t(type.getRank()) != arg.rank ||
         (arg.rank && !arg.dimensions) || (arg.value_count && !arg.values)) {
       report("invalid ranked tensor argument descriptor");
@@ -66,8 +70,10 @@ extern "C" uint32_t reussir_stablehlo_specialize(
     }
     llvm::ArrayRef<int64_t> dims(arg.dimensions, arg.rank);
     for (auto [original, actual] : llvm::zip(type.getShape(), dims)) {
-      if (actual < 0 || (!mlir::ShapedType::isDynamic(original) && original != actual)) {
-        report("logical dimensions must be nonnegative and match static dimensions");
+      if (actual < 0 ||
+          (!mlir::ShapedType::isDynamic(original) && original != actual)) {
+        report("logical dimensions must be nonnegative and match static "
+               "dimensions");
         return REUSSIR_STABLEHLO_INVALID_INPUT;
       }
     }
@@ -77,9 +83,11 @@ extern "C" uint32_t reussir_stablehlo_specialize(
       continue;
     auto integer = llvm::dyn_cast<mlir::IntegerType>(type.getElementType());
     if (arg.rank > 1 || !type.hasStaticShape() || !integer ||
-        !integer.isSignless() || (integer.getWidth() != 32 && integer.getWidth() != 64) ||
+        !integer.isSignless() ||
+        (integer.getWidth() != 32 && integer.getWidth() != 64) ||
         uint64_t(type.getNumElements()) != arg.value_count) {
-      report("shape values require a static scalar/vector of i32 or i64 with matching length");
+      report("shape values require a static scalar/vector of i32 or i64 with "
+             "matching length");
       return REUSSIR_STABLEHLO_INVALID_INPUT;
     }
     llvm::SmallVector<llvm::APInt> values;
@@ -123,10 +131,12 @@ extern "C" uint32_t reussir_stablehlo_specialize(
         check(type);
     if (auto call = llvm::dyn_cast<mlir::stablehlo::CustomCallOp>(op))
       dynamic |= call.getCallTargetName() == "shape_assertion" ||
-                 call.getCallTargetName() == "stablehlo.shape_refinement_operand_wrapper";
+                 call.getCallTargetName() ==
+                     "stablehlo.shape_refinement_operand_wrapper";
   });
   if (dynamic) {
-    report("unsupported residual dynamism or unresolved shape assertion after specialization");
+    report("unsupported residual dynamism or unresolved shape assertion after "
+           "specialization");
     return REUSSIR_STABLEHLO_RESIDUAL_DYNAMISM;
   }
   if (mlir::failed(mlir::verify(*module)))
@@ -142,7 +152,8 @@ extern "C" uint32_t reussir_stablehlo_specialize(
   llvm::raw_string_ostream stream(bytes);
   if (mlir::failed(mlir::writeBytecodeToFile(*module, stream)))
     return REUSSIR_STABLEHLO_SERIALIZATION_FAILED;
-  output(reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size(), userData);
+  output(reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size(),
+         userData);
   for (auto type : entry.getResultTypes()) {
     auto shape = llvm::cast<mlir::RankedTensorType>(type).getShape();
     outputShape(shape.data(), shape.size(), userData);

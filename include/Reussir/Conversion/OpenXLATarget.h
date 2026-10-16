@@ -73,6 +73,7 @@ bool ifrtArrayRequiresGlobalExtents(mlir::Type type);
 bool isIfrtArrayType(mlir::Type type);
 bool isIfrtControlType(mlir::Type type);
 llvm::ArrayRef<int32_t> getIfrtArrayDevices(mlir::Type type);
+mlir::RankedTensorType getIfrtArrayShape(mlir::Type type);
 mlir::LogicalResult verifyIfrtArrayMetadata(
     mlir::Operation *op, mlir::Type type, mlir::RankedTensorType shape,
     llvm::ArrayRef<int32_t> devices, mlir::Attribute sharding,

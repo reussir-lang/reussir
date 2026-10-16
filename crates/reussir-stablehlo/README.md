@@ -31,3 +31,17 @@ Shape propagation uses the pinned upstream
 with inlining, CSE, canonicalization and final static-shape validation, following
 XLA's `xla/python/refine_polymorphic_shapes.cc`. The library does not enumerate
 program variants or make ownership/donation decisions.
+
+The PJRT runtime enables this library only through its `pjrt` feature. Compiler
+launches pass `SpecializationArgument` records to
+`__reussir_pjrt_compile_specialized`. Dynamic input extents come from the RC
+array descriptor. The ABI also supports explicit host-known shape values;
+ordinary compiler launches leave them absent. Partitioned dynamic outputs still
+require the existing explicit global-extent contract and remain rejected by the
+frontend without it.
+
+Executable-cache identities include the original verified bytecode digest,
+compile options, logical shapes, and presence and contents of each shape value.
+The disk identity also carries a specialization version and the existing
+plugin/platform/topology/XLA_FLAGS namespace. Refinement and PJRT compilation
+both run inside the coalesced cache miss; a disk hit avoids both.

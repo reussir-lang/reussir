@@ -81,6 +81,30 @@ fn main() {
             );
         }
     }
+    // Optional path dependencies must resolve even when PJRT is disabled.
+    // Include native build sources for consumers that stage their own archives.
+    for name in ["reussir-stablehlo", "reussir-stablehlo-sys"] {
+        let dir = crates_dir.join(name);
+        println!("cargo::rerun-if-changed={}", dir.display());
+        append_text(
+            &mut tar,
+            &format!("{name}/Cargo.toml"),
+            &standalone_manifest(&dir.join("Cargo.toml"), &workspace_toml),
+        );
+        tar.append_dir_all(format!("{name}/src"), dir.join("src"))
+            .expect("failed to archive StableHLO crate source");
+        if name.ends_with("-sys") {
+            for file in ["build.rs", "native_archive.rs"] {
+                append_text(
+                    &mut tar,
+                    &format!("{name}/{file}"),
+                    &fs::read_to_string(dir.join(file)).expect("missing native build source"),
+                );
+            }
+            tar.append_dir_all(format!("{name}/native"), dir.join("native"))
+                .expect("failed to archive native specialization sources");
+        }
+    }
     let archive = tar.into_inner().expect("failed to finish the tar archive");
 
     let compressed =

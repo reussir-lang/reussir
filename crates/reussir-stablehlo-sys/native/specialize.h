@@ -11,8 +11,8 @@ extern "C" {
 typedef struct {
   const int64_t *dimensions;
   size_t rank;
-  // Explicit host-known shape values only, never implicit scalar specialization.
-  // Constant arguments remain in the executable signature.
+  // Explicit host-known shape values only, never implicit scalar
+  // specialization. Constant arguments remain in the executable signature.
   const int64_t *values;
   size_t value_count;
   uint8_t has_values;
@@ -27,7 +27,8 @@ enum ReussirStablehloStatus {
   REUSSIR_STABLEHLO_SERIALIZATION_FAILED = 4
 };
 // Accepts MLIR text or bytecode, returns bytecode and logical output shapes in
-// result order. Output callbacks run only on success. All callbacks are required.
+// result order. Output callbacks run only on success. All callbacks are
+// required.
 uint32_t reussir_stablehlo_specialize(
     const uint8_t *program, size_t program_size,
     const ReussirStablehloArgument *arguments, size_t argument_count,

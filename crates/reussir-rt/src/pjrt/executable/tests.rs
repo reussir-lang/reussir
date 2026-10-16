@@ -398,3 +398,84 @@ fn artifact_memory_eviction_writes_back_within_disk_capacity() {
     request(&second, b"kernel", b"").unwrap();
     assert_eq!(state.loads.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn runtime_shapes_key_and_refine_compilation() {
+    use reussir_stablehlo::Argument;
+    let api = api();
+    let (cache, state) = cache(&api, &memory_config(128), [0; 32]);
+    let code = br#"module { func.func @main(%x: tensor<?xf32>) -> tensor<?xf32> {
+        %y = stablehlo.add %x, %x : tensor<?xf32>
+        return %y : tensor<?xf32>
+    }}"#;
+    let compile = |n| {
+        cache
+            .get_or_specialize(
+                code,
+                blake3::hash(code),
+                b"",
+                Some(vec![Argument::shape(vec![n])]),
+            )
+            .unwrap()
+    };
+    let first = compile(3);
+    assert!(Arc::ptr_eq(&first, &compile(3)));
+    assert!(!Arc::ptr_eq(&first, &compile(5)));
+    assert_eq!(state.compiles.load(Ordering::SeqCst), 2);
+    let programs = state.programs.lock().unwrap();
+    assert_ne!(programs[0].0, programs[1].0);
+    assert_eq!(
+        reussir_stablehlo::specialize(&programs[0].0, &[Argument::shape(vec![3])])
+            .unwrap()
+            .output_shapes,
+        [vec![3]]
+    );
+}
+
+#[test]
+fn shape_values_are_distinct_cache_inputs() {
+    use reussir_stablehlo::Argument;
+    let hash = |values| {
+        specialization_identity(
+            blake3::hash(b"code"),
+            b"opts",
+            Some(&[Argument {
+                dimensions: vec![],
+                shape_values: values,
+            }]),
+        )
+    };
+    assert_ne!(hash(None), hash(Some(vec![])));
+    assert_ne!(hash(Some(vec![3])), hash(Some(vec![5])));
+    let api = api();
+    let (cache, state) = cache(&api, &memory_config(128), [0; 32]);
+    let code = br#"module { func.func @main(%s: tensor<1xi64>) -> tensor<?xi32> {
+        %v = stablehlo.dynamic_iota %s, dim = 0 : (tensor<1xi64>) -> tensor<?xi32>
+        return %v : tensor<?xi32>
+    }}"#;
+    for n in [3, 7, 3] {
+        cache
+            .get_or_specialize(
+                code,
+                blake3::hash(code),
+                b"",
+                Some(vec![Argument {
+                    dimensions: vec![1],
+                    shape_values: Some(vec![n]),
+                }]),
+            )
+            .unwrap();
+    }
+    assert_eq!(state.compiles.load(Ordering::SeqCst), 2);
+    assert!(
+        cache
+            .get_or_specialize(
+                code,
+                blake3::hash(code),
+                b"",
+                Some(vec![Argument::shape(vec![1])])
+            )
+            .is_err()
+    );
+    assert_eq!(state.compiles.load(Ordering::SeqCst), 2);
+}
