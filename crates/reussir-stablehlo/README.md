@@ -33,18 +33,20 @@ XLA's `xla/python/refine_polymorphic_shapes.cc`. The library does not enumerate
 program variants or make ownership/donation decisions.
 
 The PJRT runtime enables this library only through its `pjrt` feature. Compiler
-launches pass `SpecializationArgument` records to
-`__reussir_pjrt_compile_specialized`. Dynamic input extents come from the RC
-array descriptor. The ABI also supports explicit host-known shape values;
-ordinary compiler launches leave them absent. Partitioned dynamic outputs still
+launches pass `SpecializationArgument` records and donation permissions to
+`__reussir_pjrt_launch`. Dynamic input extents come from the RC array descriptor.
+Explicit host-known shape values come from marked uploads; ordinary uploads
+leave scalar contents dynamic. Partitioned dynamic outputs still
 require the existing explicit global-extent contract and remain rejected by the
 frontend without it.
 
-Executable-cache identities include the original verified bytecode digest,
-compile options, logical shapes, and presence and contents of each shape value.
-The disk identity also carries a specialization version and the existing
-plugin/platform/topology/XLA_FLAGS namespace. Refinement and PJRT compilation
-both run inside the coalesced cache miss; a disk hit avoids both.
+Shape-cache identities include the original verified bytecode digest, logical
+shapes, and presence and contents of each shape value. Executable identities
+include the refined program digest, compile options, and selected mapping and
+contracts. Disk identities also carry a specialization version and the existing
+plugin/platform/topology/XLA_FLAGS namespace. Both caches coalesce same-key
+misses. An executable disk hit avoids program selection and PJRT compilation;
+a cold process still refines the logical shapes before looking up that identity.
 
 Donation permission and profitability are separate. The compiler's donation
 pass now emits only ownership guards and proven duplicate-argument mappings;
@@ -58,7 +60,9 @@ guard where required, an output with matching logical byte size, and at least
 4096 bytes of actual device allocation. Larger candidates are considered first,
 with at most one candidate per matching output. This is a conservative policy,
 not a guarantee that PJRT will reuse storage. Explicit donors/aliases bypass the
-size policy but fail on ownership or physical-alias violations. A selected
+size policy but fail on ownership or physical-alias violations. Missing or failed
+optional allocation queries disable automatic donation; explicit contracts do
+not depend on these profitability queries. A selected
 program is constructed on demand, remapped consistently with execution inputs
 and non-donatable indices, and cached. No donor subsets are enumerated at runtime.
 
