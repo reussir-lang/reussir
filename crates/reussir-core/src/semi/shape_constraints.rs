@@ -403,6 +403,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             Constraint::Relation(Relation::Tensor { op, result, args }) => {
                 let args = self.argument_evidence(args);
                 rules::apply(&mut self.infer, self.tcx, *op, *result, &args, phase)
+                    .map_err(|error| error.to_string())
             }
             Constraint::Relation(Relation::Operator {
                 op,
@@ -453,7 +454,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 if self.infer.tensor_view(first.ty).is_some()
                     || self.infer.tensor_view(*result).is_some()
                 {
-                    return rules::apply(&mut self.infer, self.tcx, *op, *result, args, phase);
+                    return rules::apply(&mut self.infer, self.tcx, *op, *result, args, phase)
+                        .map_err(|error| error.to_string());
                 }
                 let operand = self.infer.resolve(first.ty);
                 let scalar_literal = self.has_scalar_evidence(first.ty)
