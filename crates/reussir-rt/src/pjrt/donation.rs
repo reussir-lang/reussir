@@ -273,6 +273,7 @@ pub(super) unsafe fn launch(
     let transformation =
         (!selected.donors.is_empty() || !selected.aliases.is_empty()).then_some(selected);
     let executable = cache.compile_selected(&program.bytecode, options, transformation)?;
+    context::register_compiled_shutdown()?;
     executable.validate_devices(&expected)?;
     unsafe { executable.execute(&remapped, output_count, &denied) }
 }
