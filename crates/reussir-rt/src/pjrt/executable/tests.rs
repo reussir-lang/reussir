@@ -251,6 +251,21 @@ fn eviction_and_cache_drop_preserve_live_executable_and_client() {
 }
 
 #[test]
+fn shutdown_joins_eviction_workers_and_is_idempotent() {
+    let api = api();
+    let (cache, state) = cache(&api, &memory_config(1), [0; 32]);
+    for i in 0u8..20 {
+        request(&cache, &[i], b"").unwrap();
+    }
+    cache.shutdown();
+    assert_eq!(state.destroys.load(Ordering::SeqCst), 20);
+    cache.shutdown();
+    drop(cache);
+    assert_eq!(state.destroys.load(Ordering::SeqCst), 20);
+    assert_eq!(state.clients_destroyed.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn disk_restores_across_clients_and_namespaces_isolate() {
     let api = api();
     let dir = tempfile::tempdir().unwrap();

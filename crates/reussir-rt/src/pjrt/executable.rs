@@ -10,7 +10,12 @@ use super::{
     sys::*,
 };
 use foyer::{Cache, CacheBuilder, S3FifoConfig};
-use std::{future::Future, path::Path, ptr::NonNull, sync::Arc};
+use std::{
+    future::Future,
+    path::Path,
+    ptr::NonNull,
+    sync::{Arc, Mutex},
+};
 
 mod execute;
 
@@ -41,9 +46,11 @@ impl Executable {
 
     pub(super) fn compile(bytecode: &[u8], checksum: &[u8], options: &[u8]) -> Result<Arc<Self>> {
         let digest = verify_checksum(bytecode, checksum)?;
-        context::get()?
+        let executable = context::get()?
             .executables
-            .get_or_compile(bytecode, digest, options)
+            .get_or_compile(bytecode, digest, options)?;
+        context::register_compiled_shutdown()?;
+        Ok(executable)
     }
 
     fn serialize(&self) -> Result<Vec<u8>> {
@@ -241,7 +248,9 @@ pub(super) struct CompilationCache {
     artifacts: Option<Arc<Artifacts>>,
     namespace: [u8; 32],
     owner: Arc<CompilationClient>,
-    runtime: Option<tokio::runtime::Runtime>,
+    // Taken by the first of `shutdown` and `Drop`.
+    runtime: Mutex<Option<tokio::runtime::Runtime>>,
+    handle: tokio::runtime::Handle,
 }
 
 impl CompilationCache {
@@ -276,14 +285,15 @@ impl CompilationCache {
             artifacts,
             namespace: namespace.unwrap_or_default(),
             owner,
-            runtime: Some(runtime),
+            handle: runtime.handle().clone(),
+            runtime: Mutex::new(Some(runtime)),
         })
     }
 
     fn wait<F: Future>(&self, future: F) -> F::Output {
         // A separate runtime drives I/O even if the FFI caller is itself on a
         // Tokio worker. No nested Runtime::block_on and no caller executor needed.
-        let _enter = self.runtime.as_ref().unwrap().enter();
+        let _enter = self.handle.enter();
         futures::executor::block_on(future)
     }
 
@@ -307,7 +317,7 @@ impl CompilationCache {
         artifact_key.extend_from_slice(options);
         let code = code.to_vec();
         let options = options.to_vec();
-        let _enter = self.runtime.as_ref().unwrap().enter();
+        let _enter = self.handle.enter();
         self.wait(self.entries.get_or_fetch(&key, || async move {
             let stored = if let Some(artifacts) = &artifacts {
                 match artifacts.cache.get(&artifact_key).await {
@@ -366,20 +376,36 @@ impl CompilationCache {
         })
     }
 
-    pub fn close(&self) {
+    fn close_artifacts(&self) {
         if let Some(artifacts) = &self.artifacts {
             self.wait(artifacts.close());
         }
+    }
+
+    /// Process-exit shutdown, called from a fresh non-Tokio thread; no request
+    /// may start afterwards. Foyer can wake a fetch waiter before it finishes
+    /// evicting, so join the cache workers before destroying the remaining
+    /// executables. Idempotent.
+    pub fn shutdown(&self) {
+        let Some(runtime) = self.runtime.lock().unwrap().take() else {
+            return;
+        };
+        self.close_artifacts();
+        drop(runtime);
+        self.entries.clear();
     }
 }
 
 impl Drop for CompilationCache {
     fn drop(&mut self) {
-        self.close();
+        let Some(runtime) = self.runtime.get_mut().unwrap().take() else {
+            return;
+        };
+        self.close_artifacts();
         self.entries.clear();
         // Closing the store already waits for I/O. Avoid Tokio's blocking
         // Runtime destructor when an embedding drops us on its async worker.
-        self.runtime.take().unwrap().shutdown_background();
+        runtime.shutdown_background();
     }
 }
 
