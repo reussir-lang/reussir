@@ -1,22 +1,9 @@
 use std::{ffi::c_void, ptr};
 
+#[path = "pjrt_launch.rs"]
+mod pjrt_launch;
+
 unsafe extern "C" {
-    fn __reussir_pjrt_compile(
-        bytecode: *const u8,
-        bytecode_size: usize,
-        checksum: *const u8,
-        options: *const u8,
-        options_size: usize,
-    ) -> *const c_void;
-    fn __reussir_pjrt_executable_execute(
-        executable: *const c_void,
-        inputs: *const *const c_void,
-        num_inputs: usize,
-        outputs: *const *mut c_void,
-        num_outputs: usize,
-        non_donatable: *const i64,
-        num_non_donatable: usize,
-    );
     fn __reussir_pjrt_array_from_host(
         device: usize,
         element_type: u32,
@@ -35,12 +22,8 @@ unsafe extern "C" {
     fn __reussir_pjrt_array_deallocate(buffer: *mut c_void);
 }
 
-const OPTIONS: &[u8] =
-    include_bytes!("../../../../crates/reussir-pjrt-sys/tests/fixtures/compile_options.pb");
-
 fn main() {
     let bytes = std::fs::read(std::env::args().nth(1).unwrap()).unwrap();
-    let digest = blake3::hash(&bytes).to_hex();
     let expected: &[&[f32]] = &[
         &[6., 12., 15., 30.],
         &[14., 32.],
@@ -63,29 +46,14 @@ fn main() {
             ptr::null(),
         );
         for _ in 0..2 {
-            let executable = __reussir_pjrt_compile(
-                bytes.as_ptr(),
-                bytes.len(),
-                digest.as_ptr(),
-                OPTIONS.as_ptr(),
-                OPTIONS.len(),
-            );
-            let inputs = [ptr::from_ref(&input).cast()];
-            let mut outputs = vec![ptr::null_mut::<c_void>(); expected.len()];
-            let destinations: Vec<_> = outputs
-                .iter_mut()
-                .map(|s| ptr::from_mut(s).cast())
-                .collect();
-            __reussir_pjrt_executable_execute(
-                executable,
-                inputs.as_ptr(),
-                1,
-                destinations.as_ptr(),
-                outputs.len(),
-                [0i64].as_ptr(),
-                1,
-            );
-            for (output, expected) in outputs.into_iter().zip(expected) {
+            let inputs = [pjrt_launch::Input {
+                shards: &[input],
+                dimensions: &[2, 3],
+            }];
+            let outputs =
+                pjrt_launch::launch(&bytes, pjrt_launch::OPTIONS, &[0], &inputs, expected.len());
+            for (shards, expected) in outputs.into_iter().zip(expected) {
+                let output = shards[0];
                 let mut actual = vec![0f32; expected.len()];
                 __reussir_pjrt_array_to_host(
                     output,

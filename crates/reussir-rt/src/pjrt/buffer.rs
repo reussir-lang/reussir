@@ -202,21 +202,6 @@ impl Buffer {
         Ok(args.dst_size)
     }
 
-    /// Borrow a live initialized buffer and enqueue a copy to an addressable device.
-    pub(super) unsafe fn copy_to_device(self, device: usize) -> Result<Self> {
-        let context = context::get()?;
-        let args = call!(
-            context.api,
-            PJRT_Buffer_CopyToDevice {
-                buffer: self.as_ptr(),
-                dst_device: context.device(device)?.as_ptr(),
-            }
-        )?;
-        let copy = Self(non_null(args.dst_buffer, "copied buffer")?);
-        tracing::debug!(source = ?self, destination = ?copy, device, "enqueued PjRt device copy");
-        Ok(copy)
-    }
-
     /// Borrow a live initialized buffer and download it. `dst` must be non-null,
     /// aligned and exclusively writable at every address in the host layout
     /// until this returns. The plugin checks `bytes` against that same layout.

@@ -7,7 +7,7 @@
 // RUN: env REUSSIR_PJRT_CACHE_CONFIG="%S/Inputs/pjrt_cache.toml" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %not --crash %t.exe %t.bc %t.empty.bc wrong-output-count 2>&1 | %FileCheck %s --check-prefix=OUTPUTS
 // RUN: env REUSSIR_PJRT_CACHE_CONFIG="%S/Inputs/pjrt_cache.toml" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %not --crash %t.exe %t.bc %t.empty.bc wrong-input-count 2>&1 | %FileCheck %s --check-prefix=INPUTS
 // RUN: env XLA_FLAGS="--xla_force_host_platform_device_count=2" REUSSIR_PJRT_CACHE_CONFIG="%S/Inputs/pjrt_cache.toml" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.sharded.bc %t.empty.bc sharded
-// OUTPUTS: executable returns 2 outputs, but invocation provides 1 slots
+// OUTPUTS: refined result count mismatch
 // INPUTS: PjRt:
 
 // Invoke MLIR bytecode through the runtime ABI, preserving both input buffers

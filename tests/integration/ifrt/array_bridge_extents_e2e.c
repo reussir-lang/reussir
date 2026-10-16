@@ -15,34 +15,38 @@ struct Box {
 static int64_t shape[] = {3, 2, 7};
 static int unequal;
 static size_t released;
-static int executable;
-void *__reussir_pjrt_compile(const void *code, size_t bytes,
-                             const void *checksum, const void *options,
-                             size_t option_bytes) {
-  assert(code && bytes && checksum && options && option_bytes);
-  return &executable;
-}
-void __reussir_pjrt_executable_validate_devices(void *code,
-                                                const int32_t *devices,
-                                                size_t count) {
+struct LaunchRequest {
+  const void *code;
+  size_t code_size;
+  const void *checksum;
+  const void *options;
+  size_t options_size;
+  const void *arguments;
+  size_t input_count;
+  const void *inputs;
+  const int32_t *devices;
+  size_t device_count;
+  const void *permissions, *mapping, *donors;
+  size_t donor_count;
+  const void *aliases;
+  size_t alias_count;
+  void ***outputs;
+  size_t output_count;
+};
+void __reussir_pjrt_launch(const struct LaunchRequest *r) {
   const int32_t expected[] = {3, 1, 2, 0};
-  assert(code == &executable && count == 4 &&
-         memcmp(devices, expected, sizeof(expected)) == 0);
-}
-void __reussir_pjrt_executable_execute(void *code, const void *inputs,
-                                       size_t input_count, void ***outputs,
-                                       size_t output_count,
-                                       const int64_t *denied,
-                                       size_t denied_count) {
-  assert(code == &executable && input_count == 0 && output_count == 1 &&
-         denied_count == 0);
+  assert(r->code && r->code_size && r->checksum && r->options &&
+         r->options_size);
+  assert(r->device_count == 4 &&
+         memcmp(r->devices, expected, sizeof(expected)) == 0);
+  assert(r->input_count == 0 && r->output_count == 1 && r->donor_count == 0);
   for (size_t i = 0; i < 4; ++i) {
     struct Buffer *buffer = malloc(sizeof(*buffer));
     assert(buffer);
     memcpy(buffer->dims, shape, sizeof(shape));
     if (unequal && i == 3)
       ++buffer->dims[0];
-    outputs[0][i] = buffer;
+    r->outputs[0][i] = buffer;
   }
 }
 void __reussir_pjrt_array_dimensions(struct Buffer *buffer, int64_t *dims,

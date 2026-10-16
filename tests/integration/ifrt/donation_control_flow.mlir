@@ -9,7 +9,7 @@ module {
   // CHECK: reussir.rc.is_unique
   // CHECK: scf.while
   // CHECK-NOT: reussir.rc.is_unique
-  // CHECK: donation_variants
+  // CHECK: donation_mapping = array<i32: 0>
   func.func @while_loop(%a: !R, %n: index) -> !R attributes {ifrt.function} {
     %zero = arith.constant 0 : index
     %one = arith.constant 1 : index
@@ -29,7 +29,7 @@ module {
   }
 
   // CHECK-LABEL: func.func @forwarded_live_alias
-  // CHECK-NOT: donation_variants
+  // CHECK-NOT: may_donate
   // CHECK: return
   func.func @forwarded_live_alias(%a: !R, %condition: i1, %dst: memref<4xf32>) -> !R attributes {ifrt.function} {
     %forwarded = scf.if %condition -> !R {
@@ -45,7 +45,7 @@ module {
     return %result : !R
   }
   // CHECK-LABEL: func.func @forwarded_dead_alias
-  // CHECK: donation_variants
+  // CHECK: donation_mapping = array<i32: 0>
   func.func @forwarded_dead_alias(%a: !R, %condition: i1) -> !R attributes {ifrt.function} {
     %forwarded = scf.if %condition -> !R {
       scf.yield %a : !R
@@ -62,7 +62,7 @@ module {
   // CHECK-LABEL: func.func @opaque_observer
   // CHECK: call @observe
   // CHECK: reussir.rc.is_unique
-  // CHECK: donation_variants
+  // CHECK: donation_mapping = array<i32: 0>
   func.func @opaque_observer(%host: memref<4xf32>) -> !R attributes {ifrt.function} {
     %a = reussir.array.to_device %host : memref<4xf32> -> !R
     func.call @observe(%a) : (!R) -> ()

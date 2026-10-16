@@ -1,5 +1,5 @@
 use super::*;
-use crate::pjrt::{api::Api, client::Client, executable::CompilationClient, ffi};
+use crate::pjrt::{api::Api, client::Client, executable::CompilationClient};
 use std::{cell::RefCell, ptr::NonNull, sync::Arc};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -218,13 +218,7 @@ impl Fixture {
 }
 
 #[test]
-fn abi_accepts_logical_array_descriptors_and_packs_devices_internally() {
-    #[repr(C)]
-    struct Descriptor {
-        shards: [std::mem::MaybeUninit<*mut PJRT_Buffer>; 2],
-        offset: usize,
-        extent: usize,
-    }
+fn packs_logical_inputs_and_returns_outputs_by_device() {
     let fixture = Fixture::new(2, 2, Failure::None);
     let first = [
         ptr::without_provenance_mut(1),
@@ -234,32 +228,12 @@ fn abi_accepts_logical_array_descriptors_and_packs_devices_internally() {
         ptr::without_provenance_mut(3),
         ptr::without_provenance_mut(4),
     ];
-    let arrays = [first, second, first].map(|shards| Descriptor {
-        shards: shards.map(std::mem::MaybeUninit::new),
-        offset: 0,
-        extent: 8,
-    });
     // Three logical arguments, two devices; the third reuses the first array.
-    let inputs = arrays.each_ref().map(|array| ptr::from_ref(array).cast());
+    let inputs = [first.as_ptr(), second.as_ptr(), first.as_ptr()];
     for _ in 0..2 {
         fixture.state.log.borrow_mut().clear();
-        let mut outputs = [0; 2].map(|_| Descriptor {
-            shards: [std::mem::MaybeUninit::<*mut PJRT_Buffer>::uninit(); 2],
-            offset: 0,
-            extent: 8,
-        });
-        let destinations = outputs.each_mut().map(|array| ptr::from_mut(array).cast());
-        unsafe {
-            ffi::__reussir_pjrt_executable_execute(
-                Arc::into_raw(fixture.executable.clone()),
-                inputs.as_ptr(),
-                inputs.len(),
-                destinations.as_ptr(),
-                destinations.len(),
-                (0..(inputs.len()) as i64).collect::<Vec<_>>().as_ptr(),
-                inputs.len(),
-            )
-        };
+        let outputs =
+            unsafe { fixture.executable.clone().execute(&inputs, 2, &[0, 1, 2]) }.unwrap();
         assert_eq!(
             *fixture.state.inputs.borrow(),
             [
@@ -279,18 +253,13 @@ fn abi_accepts_logical_array_descriptors_and_packs_devices_internally() {
             ]
         );
         assert_eq!(Arc::strong_count(&fixture.executable), 1);
-        for (result, array) in outputs.into_iter().enumerate() {
-            assert_eq!(array.offset, 0);
-            assert_eq!(array.extent, 8);
-            for (device, shard) in array.shards.into_iter().enumerate() {
-                let buffer =
-                    unsafe { &*shard.assume_init().cast::<(*const State, usize, usize)>() };
+        for (result, shards) in outputs.into_iter().enumerate() {
+            for (device, shard) in shards.into_iter().enumerate() {
+                let buffer = unsafe { &*shard.cast::<(*const State, usize, usize)>() };
                 assert_eq!((buffer.1, buffer.2), (device, result));
                 call!(
                     fixture.executable.owner.api,
-                    PJRT_Buffer_Destroy {
-                        buffer: unsafe { shard.assume_init() }
-                    }
+                    PJRT_Buffer_Destroy { buffer: shard }
                 )
                 .unwrap();
             }
@@ -309,19 +278,9 @@ fn abi_accepts_logical_array_descriptors_and_packs_devices_internally() {
 }
 
 #[test]
-fn zero_outputs_still_wait_on_every_device_and_allow_null_lists() {
+fn zero_outputs_still_wait_on_every_device() {
     let fixture = Fixture::new(2, 0, Failure::None);
-    unsafe {
-        ffi::__reussir_pjrt_executable_execute(
-            Arc::into_raw(fixture.executable.clone()),
-            ptr::null(),
-            0,
-            ptr::null(),
-            0,
-            (0..(0) as i64).collect::<Vec<_>>().as_ptr(),
-            0,
-        )
-    };
+    unsafe { fixture.executable.clone().execute(&[], 0, &[]) }.unwrap();
     assert_eq!(
         *fixture.state.log.borrow(),
         [
@@ -404,24 +363,14 @@ fn invalid_output_waits_before_releasing_other_outputs() {
 }
 
 #[test]
-fn consuming_ffi_drops_last_executable_reference_after_every_device_finishes() {
+fn success_drops_consumed_reference_after_every_device_finishes() {
     let Fixture {
         executable,
         _api,
         state,
     } = Fixture::new(2, 0, Failure::None);
     let weak = Arc::downgrade(&executable);
-    unsafe {
-        ffi::__reussir_pjrt_executable_execute(
-            Arc::into_raw(executable),
-            ptr::null(),
-            0,
-            ptr::null(),
-            0,
-            (0..(0) as i64).collect::<Vec<_>>().as_ptr(),
-            0,
-        )
-    };
+    unsafe { executable.execute(&[], 0, &[]) }.unwrap();
     assert!(weak.upgrade().is_none());
     assert_eq!(
         *state.log.borrow(),

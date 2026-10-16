@@ -26,6 +26,7 @@
 #include <mlir/Bytecode/BytecodeReader.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/IR/Matchers.h>
 #include <mlir/IR/Verifier.h>
 #include <mlir/Parser/Parser.h>
 
@@ -105,10 +106,9 @@ mlir::LogicalResult ReussirIFRTBytecodeOp::verify() {
 mlir::LogicalResult ReussirPJRTJitCallOp::verify() {
   if ((*this)->hasAttr("reussir.disable_donation") &&
       (!(*this)->hasAttrOfType<mlir::UnitAttr>("reussir.disable_donation") ||
-       !getIoAliases().empty() || !getDonatedInputIndices().empty() ||
-       !getDonationVariants().empty()))
+       !getIoAliases().empty() || !getDonatedInputIndices().empty()))
     return emitOpError("donation opt-out requires a unit attribute and no "
-                       "donation contracts or variants");
+                       "donation contracts");
 #ifdef REUSSIR_ENABLE_OPENXLA
   if (mlir::failed(verifyIfrtCallSignature(
           getOperation(), getInputs().getTypes(), getOutputs().getTypes(),
@@ -119,43 +119,30 @@ mlir::LogicalResult ReussirPJRTJitCallOp::verify() {
     return emitOpError("arg_attrs must match the input count");
   if (getResAttrs() && getResAttrs()->size() != getOutputs().size())
     return emitOpError("res_attrs must match the output count");
-  if (getDonationGuards().empty() != getDonationVariants().empty())
-    return emitOpError(
-        "donation guards and variants must be provided together");
   if (!getDonationGuards().empty() &&
       getDonationGuards().size() != getInputs().size())
     return emitOpError("donation guards must match input count");
-  if (!getDonationVariants().empty() &&
-      (!getIoAliases().empty() || !getDonatedInputIndices().empty()))
-    return emitOpError(
-        "guarded variants cannot override an explicit donation contract");
-  for (auto attr : getDonationVariants()) {
-    auto variant = llvm::dyn_cast<mlir::DictionaryAttr>(attr);
-    auto arguments =
-        variant ? variant.getAs<mlir::DenseI32ArrayAttr>("arguments") : nullptr;
-    auto donors =
-        variant ? variant.getAs<mlir::DenseI32ArrayAttr>("donors") : nullptr;
-    auto callee =
-        variant ? variant.getAs<mlir::FlatSymbolRefAttr>("callee") : nullptr;
-    if (!arguments || !donors || !callee || donors.empty())
+  if (getDonationMapping().size() != getDonationGuards().size())
+    return emitOpError("donation mapping and guards must have equal size");
+  for (auto [input, guard] : llvm::zip(getInputs(), getDonationGuards())) {
+    if (auto view = input.getDefiningOp<ReussirArrayToIfrtOp>();
+        view && !view.getMayDonate() &&
+        !mlir::matchPattern(guard, mlir::m_Zero()))
       return emitOpError(
-          "variant requires callee, arguments, and nonempty donors");
-    llvm::SmallBitVector present(getInputs().size());
-    for (int32_t i : arguments.asArrayRef()) {
-      if (i < 0 || unsigned(i) >= getInputs().size() || present.test(i))
+          "borrowed array views cannot grant donation permission");
+  }
+  for (auto [i, rep] : llvm::enumerate(getDonationMapping())) {
+    if (rep < 0 || unsigned(rep) > i || getDonationMapping()[rep] != rep ||
+        getInputs()[i].getType() != getInputs()[rep].getType() ||
+        (getArgAttrs() && (*getArgAttrs())[i] != (*getArgAttrs())[rep]))
+      return emitOpError(
+          "donation mapping requires earlier equivalent input representatives");
+    if (rep != int32_t(i) && getInputs()[i] != getInputs()[rep]) {
+      auto lhs = getInputs()[i].getDefiningOp<ReussirArrayToIfrtOp>();
+      auto rhs = getInputs()[rep].getDefiningOp<ReussirArrayToIfrtOp>();
+      if (!lhs || !rhs || lhs.getArray() != rhs.getArray())
         return emitOpError(
-            "variant arguments must be distinct in-range indices");
-      present.set(i);
-    }
-    llvm::SmallBitVector seen(getInputs().size());
-    for (int32_t i : donors.asArrayRef()) {
-      if (i < 0 || unsigned(i) >= getInputs().size() || !present.test(i) ||
-          seen.test(i))
-        return emitOpError("variant donors must be distinct argument indices");
-      seen.set(i);
-      auto view = getInputs()[i].getDefiningOp<ReussirArrayToIfrtOp>();
-      if (view && !view.getMayDonate())
-        return emitOpError("variant donor requires a donation-capable view");
+            "donation mapping must prove identical input owners");
     }
   }
   if (auto options = getCompileOptions())
@@ -219,26 +206,6 @@ ReussirPJRTJitCallOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
   if (kernelType(code) != *signature)
     return emitOpError(
         "IFRT array shapes and dtypes must match the kernel signature");
-  for (auto attribute : getDonationVariants()) {
-    auto variant = llvm::cast<mlir::DictionaryAttr>(attribute);
-    auto reference = variant.getAs<mlir::FlatSymbolRefAttr>("callee");
-    auto target = symbols.lookupNearestSymbolFrom<ReussirIFRTBytecodeOp>(
-        getOperation(), reference);
-    if (!target) {
-      if (symbols.lookupNearestSymbolFrom<mlir::LLVM::GlobalOp>(getOperation(),
-                                                                reference))
-        continue;
-      return emitOpError("donation variant must reference kernel bytecode");
-    }
-    llvm::SmallVector<mlir::Type> inputs;
-    for (int32_t i :
-         variant.getAs<mlir::DenseI32ArrayAttr>("arguments").asArrayRef())
-      inputs.push_back(signature->getInput(i));
-    if (kernelType(target) !=
-        mlir::FunctionType::get(getContext(), inputs, signature->getResults()))
-      return emitOpError(
-          "donation variant signature does not match argument mapping");
-  }
 #endif
   return mlir::success();
 }

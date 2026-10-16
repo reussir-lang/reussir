@@ -1,10 +1,9 @@
 // REQUIRES: ifrt
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --symbol-dce --reussir-pjrt-donation | %FileCheck %s
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --symbol-dce --reussir-pjrt-donation --reussir-pjrt-donation | %FileCheck %s
-// RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --symbol-dce --reussir-pjrt-donation='max-extra-bytes=0' | %FileCheck %s --check-prefix=NONE
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --symbol-dce --reussir-pjrt-donation='max-analysis-work=1' | %FileCheck %s --check-prefix=NONE
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --symbol-dce --reussir-pjrt-donation='infer-donation=false' | %FileCheck %s --check-prefix=NONE --implicit-check-not=may_donate --implicit-check-not=donation_guards
-// NONE-NOT: donation_variants
+// NONE-NOT: may_donate
 
 #s = #ifrt.sharding_param<1 to [0] on 1>
 !I = !ifrt.array<tensor<4xf32>, #s, [0]>
@@ -13,7 +12,7 @@ module {
   // CHECK-LABEL: func.func @fresh
   // CHECK-NOT: reussir.rc.is_unique
   // CHECK: reussir.array.to_ifrt {{.*}} {may_donate}
-  // CHECK: donation_variants = [
+  // CHECK: donation_mapping = array<i32: 0>
   func.func @fresh(%host: memref<4xf32>) -> !R attributes {ifrt.function} {
     %a = reussir.array.to_device %host : memref<4xf32> -> !R
     %v = reussir.array.to_ifrt %a : !R -> !I
@@ -24,7 +23,7 @@ module {
   }
   // CHECK-LABEL: func.func @guarded
   // CHECK: reussir.rc.is_unique
-  // CHECK: donation_variants = [
+  // CHECK: donation_mapping = array<i32: 0>
   func.func @guarded(%a: !R) -> !R attributes {ifrt.function} {
     %v = reussir.array.to_ifrt %a : !R -> !I
     %o, %c = ifrt.Call @kernel::@main(%v) on devices [0] : (!I) -> !I
@@ -33,7 +32,7 @@ module {
     return %r : !R
   }
   // CHECK-LABEL: func.func @live_contents
-  // CHECK-NOT: donation_variants
+  // CHECK-NOT: may_donate
   // CHECK: return
   func.func @live_contents(%a: !R, %dst: memref<4xf32>) -> !R attributes {ifrt.function} {
     %v = reussir.array.to_ifrt %a : !R -> !I
@@ -44,7 +43,7 @@ module {
     return %r : !R
   }
   // CHECK-LABEL: func.func @borrow_only
-  // CHECK-NOT: donation_variants
+  // CHECK-NOT: may_donate
   // CHECK: return
   func.func @borrow_only(%a: !R) -> !R attributes {ifrt.function} {
     %v = reussir.array.to_ifrt %a : !R -> !I
@@ -56,7 +55,7 @@ module {
   // CHECK: reussir.rc.is_unique
   // CHECK: reussir.rc.dec
   // CHECK-NOT: reussir.rc.is_unique
-  // CHECK: donation_variants = [
+  // CHECK: donation_mapping = array<i32: 0>
   func.func @temporary_share(%host: memref<4xf32>) -> (!R, i1) attributes {ifrt.function} {
     %a = reussir.array.to_device %host : memref<4xf32> -> !R
     reussir.rc.inc(%a : !R)
@@ -70,9 +69,9 @@ module {
   }
   // CHECK-LABEL: func.func @branches
   // CHECK: scf.if
-  // CHECK: donation_variants = [
+  // CHECK: donation_mapping = array<i32: 0>
   // CHECK: } else {
-  // CHECK: donation_variants = [
+  // CHECK: donation_mapping = array<i32: 0>
   func.func @branches(%a: !R, %choose: i1) -> !R attributes {ifrt.function} {
     %r = scf.if %choose -> !R {
       %v = reussir.array.to_ifrt %a : !R -> !I
@@ -91,7 +90,7 @@ module {
   }
   // CHECK-LABEL: func.func @loop_state
   // CHECK: scf.for
-  // CHECK: donation_variants = [
+  // CHECK: donation_mapping = array<i32: 0>
   func.func @loop_state(%a: !R, %n: index) -> !R attributes {ifrt.function} {
     %zero = arith.constant 0 : index
     %one = arith.constant 1 : index
@@ -105,7 +104,7 @@ module {
     return %r : !R
   }
   // CHECK-LABEL: func.func @captured
-  // CHECK-NOT: donation_variants
+  // CHECK-NOT: may_donate
   // CHECK: return
   func.func @captured(%a: !R, %n: index) attributes {ifrt.function} {
     %zero = arith.constant 0 : index
@@ -120,7 +119,7 @@ module {
     return
   }
   // CHECK-LABEL: func.func @duplicate
-  // CHECK: arguments = array<i32: 0>
+  // CHECK: donation_mapping = array<i32: 0, 0>
   func.func @duplicate(%a: !R) -> !R attributes {ifrt.function} {
     %v = reussir.array.to_ifrt %a : !R -> !I
     %o, %c = ifrt.Call @pair::@main(%v, %v) on devices [0] : (!I, !I) -> !I

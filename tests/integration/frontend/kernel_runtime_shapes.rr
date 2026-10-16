@@ -1,0 +1,18 @@
+// REQUIRES: ifrt, linux, pjrt-runtime
+// RUN: %rrc %s --emit executable --runtime-linkage static --relocation-mode pic --polyffi-libdir %pjrt_runtime_dir/deps -O aggressive -o %t.exe
+// RUN: env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe | %FileCheck %s
+// CHECK: 6 20 6
+import core::intrinsic::array;
+import core::intrinsic::pjrt;
+#[kernel]
+fn twice(x: Tensor<[i64; ?]>) -> Tensor<[i64; ?]> { x + x }
+fn sum(n: u64) -> i64 {
+    let host = array::tabulate<[i64; ?]>(n, |i: i64| i);
+    let device = pjrt::upload(host);
+    let output = pjrt::download(pjrt::launch(twice, device));
+    array::fold(output, 0, |a, b| a + b)
+}
+#[ffi(import)]
+fn print_results(a: i64, b: i64, c: i64) [{ println!("{a} {b} {c}"); }];
+#[main]
+pub fn entry() { print_results(sum(3), sum(5), sum(3)); }

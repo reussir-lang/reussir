@@ -506,6 +506,18 @@ mod tests {
         assert!(pjrt.join("build.rs").is_file());
         assert!(pjrt.join("header.rs").is_file());
         assert!(pjrt.join("src/lib.rs").is_file());
+        let stablehlo = tmp.path().join("reussir-stablehlo");
+        let manifest = std::fs::read_to_string(stablehlo.join("Cargo.toml")).unwrap();
+        assert!(!manifest.contains("workspace = true"), "{manifest}");
+        // The workspace patch, not the crates.io release, provides LLVM 23.
+        assert!(manifest.contains("reussir-lang/mlir-sys"), "{manifest}");
+        assert!(stablehlo.join("build.rs").is_file());
+        assert!(stablehlo.join("src/lib.rs").is_file());
+        assert!(
+            tmp.path()
+                .join("reussir-backend-sys/native_archive.rs")
+                .is_file()
+        );
     }
 
     #[test]
