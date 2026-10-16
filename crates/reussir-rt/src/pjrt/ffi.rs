@@ -156,12 +156,16 @@ fn checked<T>(result: Result<T>) -> T {
     })
 }
 
-/// Logical (global) shape of one launch input. Physical shard dimensions
-/// (PJRT_Buffer_UnpaddedDimensions) never appear here.
+/// Logical (global) shape of one launch input and, when `has_values` is set,
+/// its host-known shape values (`pjrt::upload_shape`). Physical shard
+/// dimensions (PJRT_Buffer_UnpaddedDimensions) never appear here.
 #[repr(C)]
 pub struct ShapeArgument {
     pub dimensions: *const i64,
     pub rank: usize,
+    pub values: *const i64,
+    pub value_count: usize,
+    pub has_values: u8,
 }
 
 /// Synchronous launch contract emitted by PJRT lowering. Counts describe the
@@ -199,8 +203,8 @@ pub struct LaunchRequest {
 /// this client; output slots are exclusive, disjoint, writable and initially
 /// unowned. Permission is a compiler ownership proof, not user data: permitted
 /// inputs must have no later content uses, and their owners remain live until
-/// return. Donated inputs may only be destroyed afterward. Checksum has 64
-/// readable bytes.
+/// return. Donated inputs may only be destroyed afterward. Shape values must
+/// equal their corresponding input contents. Checksum has 64 readable bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __reussir_pjrt_launch(request: *const LaunchRequest) {
     unsafe fn borrowed<'a, T>(ptr: *const T, count: usize) -> &'a [T] {
@@ -215,7 +219,8 @@ pub unsafe extern "C" fn __reussir_pjrt_launch(request: *const LaunchRequest) {
         .iter()
         .map(|a| reussir_stablehlo::Argument {
             dimensions: unsafe { borrowed(a.dimensions, a.rank) }.to_vec(),
-            shape_values: None,
+            shape_values: (a.has_values != 0)
+                .then(|| unsafe { borrowed(a.values, a.value_count) }.to_vec()),
         })
         .collect();
     let results = checked(unsafe {

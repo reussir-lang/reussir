@@ -8,6 +8,9 @@ use std::{ffi::c_void, ptr};
 struct ShapeArgument {
     dimensions: *const i64,
     rank: usize,
+    values: *const i64,
+    value_count: usize,
+    has_values: u8,
 }
 
 #[repr(C)]
@@ -65,6 +68,9 @@ pub unsafe fn launch(
         .map(|input| ShapeArgument {
             dimensions: input.dimensions.as_ptr(),
             rank: input.dimensions.len(),
+            values: ptr::null(),
+            value_count: 0,
+            has_values: 0,
         })
         .collect();
     let descriptors: Vec<_> = inputs.iter().map(|input| input.shards.as_ptr()).collect();

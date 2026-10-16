@@ -207,6 +207,12 @@ void initializeTargetBox(mlir::Operation *op, RcType rcType,
   storeField(ArrayType::OFFSET_INDEX, constant(rewriter, loc, indexType, 0));
   for (auto [i, extent] : llvm::enumerate(extents))
     storeField(ArrayType::DYNAMIC_EXTENTS_INDEX + i, extent);
+  if (llvm::cast<ArrayType>(rcType.getElementType()).hasShapeValueStorage()) {
+    storeField(ArrayType::SHAPE_VALUE_PRESENT_INDEX,
+               constant(rewriter, loc, rewriter.getI8Type(), 0));
+    storeField(ArrayType::SHAPE_VALUE_INDEX,
+               constant(rewriter, loc, rewriter.getI64Type(), 0));
+  }
 }
 
 mlir::FailureOr<std::optional<PjrtLayout>> resolveLayout(mlir::Operation *op,
@@ -684,6 +690,20 @@ struct ToDevice : mlir::ConvertOpToLLVMPattern<ReussirArrayToDeviceOp> {
     }
     initializeTargetBox(op, rcType, handles, extents, *getTypeConverter(),
                         rewriter, adaptor.getToken());
+    if (op.getShapeValue()) {
+      auto boxType = getTypeConverter()->convertType(rcType.getInnerBoxType());
+      auto field = [&](unsigned index) {
+        return mlir::LLVM::GEPOp::create(
+            rewriter, loc, ptrType, boxType, adaptor.getToken(),
+            llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1, int32_t(index)});
+      };
+      auto value = mlir::LLVM::LoadOp::create(rewriter, loc, i64, data);
+      mlir::LLVM::StoreOp::create(rewriter, loc, value,
+                                  field(ArrayType::SHAPE_VALUE_INDEX));
+      mlir::LLVM::StoreOp::create(
+          rewriter, loc, constant(rewriter, loc, rewriter.getI8Type(), 1),
+          field(ArrayType::SHAPE_VALUE_PRESENT_INDEX));
+    }
     rewriter.replaceOp(op, adaptor.getToken());
     return mlir::success();
   }
