@@ -45,6 +45,8 @@ pub(super) enum RuleError {
     Rank { expected: usize, actual: usize },
     #[error("tensor operation requires Tensor operands and result")]
     ExpectedTensor,
+    #[error("cannot infer shape for {operation}: operation has no inference rule")]
+    CannotInfer { operation: &'static str },
     #[error("select predicate must be scalar or match the value shape")]
     PredicateShape,
     #[error("expected a scalar or rank-zero Tensor")]
@@ -274,12 +276,10 @@ pub(super) fn apply<'tcx>(
     // In a polymorphic body the operand may still be a rigid whole type V;
     // assigning its identity to a fresh result is valid without guessing V.
     match op {
-        Add | Sub | Mul | Div | Rem | Neg | Abs | Min | Max | CollectivePermute => {
-            equal(i, result, args[0].ty)?
-        }
+        Add | Sub | Mul | Div | Rem | Neg | Abs | Min | Max => equal(i, result, args[0].ty)?,
         Select => equal(i, result, args[1].ty)?,
         Of | Materialize | Dim | DynamicSlice | Slice | AsyncDone | Fill | DynamicFill | Iota
-        | DynamicIota | Eq | Ne | Lt | Le | Gt | Ge | Dot | Transpose => {}
+        | DynamicIota | Eq | Ne | Lt | Le | Gt | Ge | Dot | Transpose | CollectivePermute => {}
     }
     match op {
         Fill | Iota => {
@@ -342,7 +342,9 @@ pub(super) fn apply<'tcx>(
         }
         Of | Materialize | Dim | AsyncDone | DynamicFill | DynamicIota | Dot | Transpose
         | DynamicSlice | Slice | CollectivePermute => {
-            unreachable!("operation has no inference rule")
+            return Err(RuleError::CannotInfer {
+                operation: op.as_str(),
+            });
         }
     }
     let result = i.resolve(result);
@@ -397,6 +399,57 @@ mod tests {
                 .map(Argument::unknown)
                 .collect::<Vec<_>>(),
         )
+    }
+
+    #[test]
+    fn unsupported_operations_return_cannot_infer_without_changing_inference() {
+        with_tcx(|tcx| {
+            use TensorFn::*;
+            for op in [
+                Of,
+                Materialize,
+                Dim,
+                AsyncDone,
+                DynamicFill,
+                DynamicIota,
+                Dot,
+                Transpose,
+                DynamicSlice,
+                Slice,
+                CollectivePermute,
+            ] {
+                assert!(!supports(op));
+                for phase in [Phase::Propagate, Phase::DefaultRuntime] {
+                    let mut i = InferCtxt::new(tcx);
+                    let result = i.new_hole_ty();
+                    let count = match op {
+                        Of | Materialize | AsyncDone => 1,
+                        _ => op.arity(),
+                    };
+                    let args = unknowns(&mut i, count);
+                    let revision = i.progress();
+                    let err = super::apply(&mut i, tcx, op, result, &args, phase).unwrap_err();
+                    assert_eq!(
+                        err,
+                        RuleError::CannotInfer {
+                            operation: op.as_str()
+                        }
+                    );
+                    assert_eq!(
+                        err.to_string(),
+                        format!(
+                            "cannot infer shape for {}: operation has no inference rule",
+                            op.as_str()
+                        ),
+                    );
+                    assert_eq!(i.progress(), revision);
+                    assert_eq!(i.resolve(result), result);
+                    for arg in args {
+                        assert_eq!(i.resolve(arg.ty), arg.ty);
+                    }
+                }
+            }
+        });
     }
 
     #[test]
