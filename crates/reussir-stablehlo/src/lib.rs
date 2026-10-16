@@ -22,6 +22,7 @@ impl Argument {
 pub struct Specialized {
     pub bytecode: Vec<u8>,
     pub output_shapes: Vec<Vec<i64>>,
+    pub output_bytes: Vec<u64>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorKind {
@@ -45,6 +46,7 @@ impl std::error::Error for Error {}
 struct Output {
     bytes: Vec<u8>,
     shapes: Vec<Vec<i64>>,
+    sizes: Vec<u64>,
     diagnostic: Vec<u8>,
 }
 unsafe extern "C" fn bytes(data: *const u8, len: usize, state: *mut c_void) {
@@ -54,13 +56,14 @@ unsafe extern "C" fn bytes(data: *const u8, len: usize, state: *mut c_void) {
             .extend_from_slice(unsafe { slice::from_raw_parts(data, len) });
     }
 }
-unsafe extern "C" fn shape(data: *const i64, len: usize, state: *mut c_void) {
+unsafe extern "C" fn shape(data: *const i64, len: usize, bytes: u64, state: *mut c_void) {
     let dims = if len == 0 {
         Vec::new()
     } else {
         unsafe { slice::from_raw_parts(data, len) }.to_vec()
     };
     unsafe { &mut *state.cast::<Output>() }.shapes.push(dims);
+    unsafe { &mut *state.cast::<Output>() }.sizes.push(bytes);
 }
 unsafe extern "C" fn diagnostic(data: *const u8, len: usize, state: *mut c_void) {
     if len != 0 {
@@ -112,6 +115,7 @@ pub fn specialize(program: &[u8], arguments: &[Argument]) -> Result<Specialized,
     Ok(Specialized {
         bytecode: output.bytes,
         output_shapes: output.shapes,
+        output_bytes: output.sizes,
     })
 }
 #[cfg(test)]
@@ -198,5 +202,145 @@ mod tests {
         for thread in threads {
             thread.join().unwrap();
         }
+    }
+}
+
+/// One selected donation program, in original argument numbering. Mapping is a
+/// compiler proof of identical operands, checked again against physical buffers
+/// by the runtime before this transformation. No variants are enumerated here.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Selection {
+    pub mapping: Vec<u32>,
+    pub donors: Vec<u32>,
+    pub aliases: Vec<[u32; 2]>,
+}
+
+pub fn select_program(program: &[u8], selection: &Selection) -> Result<Vec<u8>, Error> {
+    let mut output = Output::default();
+    // SAFETY: borrowed slices live throughout the synchronous call; pairs are
+    // contiguous u32 values and callbacks copy all returned bytes.
+    let status = unsafe {
+        sys::reussir_stablehlo_select(
+            program.as_ptr(),
+            program.len(),
+            selection.mapping.as_ptr(),
+            selection.mapping.len(),
+            selection.donors.as_ptr(),
+            selection.donors.len(),
+            selection.aliases.as_ptr().cast(),
+            selection.aliases.len(),
+            bytes,
+            diagnostic,
+            (&mut output as *mut Output).cast(),
+        )
+    };
+    if status != 0 {
+        return Err(Error {
+            kind: ErrorKind::InvalidInput,
+            diagnostic: String::from_utf8_lossy(&output.diagnostic).into_owned(),
+        });
+    }
+    Ok(output.bytes)
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    const ADD: &[u8] =
+        br#"module { func.func @main(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+        %v = stablehlo.add %a, %b : tensor<4xf32>
+        return %v : tensor<4xf32>
+    }}"#;
+    #[test]
+    fn selected_program_deduplicates_and_retains_result_shape() {
+        let original =
+            specialize(ADD, &[Argument::shape(vec![4]), Argument::shape(vec![4])]).unwrap();
+        assert_eq!(original.output_bytes, [16]);
+        let selected = select_program(
+            &original.bytecode,
+            &Selection {
+                mapping: vec![0, 0],
+                donors: vec![0],
+                aliases: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            specialize(&selected, &[Argument::shape(vec![4])])
+                .unwrap()
+                .output_shapes,
+            [vec![4]]
+        );
+        assert!(
+            specialize(
+                &selected,
+                &[Argument::shape(vec![4]), Argument::shape(vec![4])]
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn explicit_aliases_and_invalid_mappings() {
+        let selected = select_program(
+            ADD,
+            &Selection {
+                mapping: vec![0, 1],
+                donors: vec![1],
+                aliases: vec![[1, 0]],
+            },
+        )
+        .unwrap();
+        assert!(
+            specialize(
+                &selected,
+                &[Argument::shape(vec![4]), Argument::shape(vec![4])]
+            )
+            .is_ok()
+        );
+        for selection in [
+            Selection {
+                mapping: vec![1, 1],
+                donors: vec![],
+                aliases: vec![],
+            },
+            Selection {
+                mapping: vec![0, 0],
+                donors: vec![1],
+                aliases: vec![],
+            },
+            Selection {
+                mapping: vec![0, 1],
+                donors: vec![0],
+                aliases: vec![[0, 1]],
+            },
+        ] {
+            assert!(select_program(ADD, &selection).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::*;
+
+    #[test]
+    fn unused_arguments_still_enforce_dimension_bounds() {
+        let program = br#"module {
+          func.func @main(%x: tensor<?xf32, #stablehlo.type_extensions<bounds = [4]>>) -> tensor<i32> {
+            %c = stablehlo.constant dense<1> : tensor<i32>
+            return %c : tensor<i32>
+          }
+        }"#;
+        for extent in [0, 4] {
+            assert_eq!(
+                specialize(program, &[Argument::shape(vec![extent])])
+                    .unwrap()
+                    .output_shapes,
+                [Vec::<i64>::new()]
+            );
+        }
+        let error = specialize(program, &[Argument::shape(vec![5])]).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::InvalidInput);
+        assert!(error.diagnostic.contains("exceeds its declared bound"));
     }
 }

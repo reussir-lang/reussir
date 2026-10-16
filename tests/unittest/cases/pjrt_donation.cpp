@@ -5,6 +5,7 @@
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/Transformation/Passes.h"
 #include <gtest/gtest.h>
+#include <mlir/IR/Matchers.h>
 #include <mlir/IR/Verifier.h>
 #include <mlir/Parser/Parser.h>
 #include <mlir/Pass/PassManager.h>
@@ -68,19 +69,19 @@ TEST_F(ReussirTest, PjrtDonationSharedKernelAndIdempotence) {
   ASSERT_TRUE(module);
   ASSERT_TRUE(mlir::succeeded(prepare(*module)));
   ASSERT_TRUE(mlir::succeeded(donate(*module)));
-  EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 2u);
+  EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 1u);
   unsigned calls = 0;
   module->walk([&](ReussirPJRTJitCallOp call) {
     ++calls;
     EXPECT_EQ(call.getDonationGuards().size(), 1u);
-    EXPECT_EQ(call.getDonationVariants().size(), 1u);
+    EXPECT_EQ(call.getDonationMapping().size(), 1u);
   });
   EXPECT_EQ(calls, 100u);
   ASSERT_TRUE(mlir::succeeded(donate(*module)));
-  EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 2u);
+  EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 1u);
 }
 
-TEST_F(ReussirTest, PjrtDonationSerializedContractAndChecksum) {
+TEST_F(ReussirTest, PjrtDonationLeavesBytecodeUnchanged) {
   load(*context);
   auto module = parse(program(1));
   ASSERT_TRUE(module);
@@ -98,7 +99,7 @@ TEST_F(ReussirTest, PjrtDonationSerializedContractAndChecksum) {
     else
       ++baseline;
   }
-  EXPECT_EQ(donors, 1u);
+  EXPECT_EQ(donors, 0u);
   EXPECT_EQ(baseline, 1u);
 }
 
@@ -115,8 +116,9 @@ TEST_F(ReussirTest, PjrtDonationInferenceCanBeDisabled) {
     unsigned calls = 0;
     module->walk([&](ReussirPJRTJitCallOp call) {
       ++calls;
-      EXPECT_TRUE(call.getDonationVariants().empty());
-      EXPECT_TRUE(call.getDonationGuards().empty());
+      ASSERT_EQ(call.getDonationGuards().size(), 1u);
+      EXPECT_TRUE(
+          mlir::matchPattern(call.getDonationGuards()[0], mlir::m_Zero()));
       EXPECT_FALSE(call.getInputs()[0]
                        .getDefiningOp<ReussirArrayToIfrtOp>()
                        .getMayDonate());
@@ -134,22 +136,18 @@ TEST_F(ReussirTest, PjrtDonationInferenceCanBeDisabled) {
 
 TEST_F(ReussirTest, PjrtDonationBudgetsFallBackWithoutGuards) {
   load(*context);
-  for (unsigned kind = 0; kind < 3; ++kind) {
+  for (unsigned kind = 0; kind < 1; ++kind) {
     auto module = parse(program(2));
     ASSERT_TRUE(module);
     ASSERT_TRUE(mlir::succeeded(prepare(*module)));
     ReussirPjrtDonationPassOptions options;
-    if (kind == 0)
-      options.maxExtraBytes = 0;
-    if (kind == 1)
-      options.maxVariants = 1;
-    if (kind == 2)
-      options.maxAnalysisWork = 1;
+    options.maxAnalysisWork = 1;
     ASSERT_TRUE(mlir::succeeded(donate(*module, options)));
     EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 1u);
     module->walk([](ReussirPJRTJitCallOp call) {
-      EXPECT_TRUE(call.getDonationVariants().empty());
-      EXPECT_TRUE(call.getDonationGuards().empty());
+      ASSERT_EQ(call.getDonationGuards().size(), 1u);
+      EXPECT_TRUE(
+          mlir::matchPattern(call.getDonationGuards()[0], mlir::m_Zero()));
     });
   }
 }
@@ -210,19 +208,13 @@ TEST_F(ReussirTest, PjrtDonationRejectsInvalidContract) {
   ASSERT_TRUE(mlir::succeeded(donate(*module)));
   module->walk([&](ReussirPJRTJitCallOp call) {
     mlir::OpBuilder builder(context.get());
-    auto original =
-        llvm::cast<mlir::DictionaryAttr>(call.getDonationVariants()[0]);
-    auto invalid = builder.getDictionaryAttr(
-        {builder.getNamedAttr("callee", original.get("callee")),
-         builder.getNamedAttr("arguments", builder.getDenseI32ArrayAttr({0})),
-         builder.getNamedAttr("donors", builder.getDenseI32ArrayAttr({1}))});
-    call.setDonationVariantsAttr(builder.getArrayAttr({invalid}));
+    call.setDonationMappingAttr(builder.getDenseI32ArrayAttr({1}));
     mlir::ScopedDiagnosticHandler suppress(
         context.get(), [](mlir::Diagnostic &) { return mlir::success(); });
     EXPECT_TRUE(mlir::failed(call.verify()));
   });
 }
-TEST_F(ReussirTest, PjrtDonationExplicitContractReachesBytecode) {
+TEST_F(ReussirTest, PjrtDonationExplicitContractIsRetainedForRuntime) {
   load(*context);
   for (bool infer : {false, true}) {
     SCOPED_TRACE(infer ? "inference enabled" : "inference disabled");
@@ -251,12 +243,16 @@ TEST_F(ReussirTest, PjrtDonationExplicitContractReachesBytecode) {
             code.getBytecode(), context.get());
         ASSERT_TRUE(kernel);
         auto entry = kernel->lookupSymbol<mlir::func::FuncOp>("main");
-        EXPECT_TRUE(entry.getArgAttr(0, alias ? "tf.aliasing_output"
-                                              : "jax.buffer_donor"));
-        EXPECT_TRUE(call.getDonationVariants().empty());
+        EXPECT_FALSE(entry.getArgAttr(0, "tf.aliasing_output"));
+        EXPECT_FALSE(entry.getArgAttr(0, "jax.buffer_donor"));
+        EXPECT_EQ(call.getDonationGuards().size(), 1u);
+        EXPECT_TRUE(call->hasAttr("pjrt.donation_planned"));
+        EXPECT_EQ(alias ? call.getIoAliases().size()
+                        : call.getDonatedInputIndices().size(),
+                  1u);
       });
       ASSERT_TRUE(mlir::succeeded(donate(*module, options)));
-      EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 2u);
+      EXPECT_EQ(llvm::range_size(module->getOps<ReussirIFRTBytecodeOp>()), 1u);
     }
   }
 }

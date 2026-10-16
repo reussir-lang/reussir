@@ -1,5 +1,6 @@
 // Part of the Reussir Project, dual licensed under Apache-2.0 OR MIT.
 #include "specialize.h"
+#include <llvm/ADT/BitVector.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/raw_ostream.h>
 #include <mlir/Bytecode/BytecodeWriter.h>
@@ -77,7 +78,23 @@ reussir_stablehlo_specialize(const uint8_t *program, size_t programSize,
         return REUSSIR_STABLEHLO_INVALID_INPUT;
       }
     }
-    // Bounds disappear once all dimensions become concrete.
+    // Validate the input contract even when an unused argument's refinement
+    // barrier would be removed before shape refinement can inspect it.
+    if (auto encoding = type.getEncoding()) {
+      auto bounds =
+          llvm::dyn_cast<mlir::stablehlo::TypeExtensionsAttr>(encoding);
+      if (!bounds) {
+        report("unsupported tensor encoding in specialization input");
+        return REUSSIR_STABLEHLO_INVALID_INPUT;
+      }
+      for (auto [actual, bound] : llvm::zip(dims, bounds.getBounds())) {
+        if (!mlir::ShapedType::isDynamic(bound) && actual > bound) {
+          report("logical dimension exceeds its declared bound");
+          return REUSSIR_STABLEHLO_INVALID_INPUT;
+        }
+      }
+    }
+    // Validated bounds disappear once all dimensions become concrete.
     types.push_back(mlir::RankedTensorType::get(dims, type.getElementType()));
     if (!arg.has_values)
       continue;
@@ -156,7 +173,111 @@ reussir_stablehlo_specialize(const uint8_t *program, size_t programSize,
          userData);
   for (auto type : entry.getResultTypes()) {
     auto shape = llvm::cast<mlir::RankedTensorType>(type).getShape();
-    outputShape(shape.data(), shape.size(), userData);
+    auto element = llvm::cast<mlir::RankedTensorType>(type).getElementType();
+    uint64_t bytes = 0;
+    if (element.isIntOrFloat())
+      bytes = (element.getIntOrFloatBitWidth() + 7) / 8;
+    else if (auto complex = llvm::dyn_cast<mlir::ComplexType>(element))
+      bytes = 2 * ((complex.getElementType().getIntOrFloatBitWidth() + 7) / 8);
+    for (int64_t dim : shape) {
+      if (dim && bytes > UINT64_MAX / uint64_t(dim)) {
+        bytes = 0; // Unknown/overflowing size cannot justify donation.
+        break;
+      }
+      bytes *= dim;
+    }
+    outputShape(shape.data(), shape.size(), bytes, userData);
   }
+  return REUSSIR_STABLEHLO_OK;
+}
+
+extern "C" uint32_t reussir_stablehlo_select(
+    const uint8_t *program, size_t programSize, const uint32_t *mapping,
+    size_t argumentCount, const uint32_t *donors, size_t donorCount,
+    const uint32_t *aliases, size_t aliasCount, ReussirStablehloBytes output,
+    ReussirStablehloBytes diagnostic, void *userData) {
+  auto report = [&](llvm::StringRef message) {
+    diagnostic(reinterpret_cast<const uint8_t *>(message.data()),
+               message.size(), userData);
+  };
+  if ((!program && programSize) || (!mapping && argumentCount) ||
+      (!donors && donorCount) || (!aliases && aliasCount)) {
+    report("null nonempty selection input");
+    return REUSSIR_STABLEHLO_INVALID_INPUT;
+  }
+  mlir::DialectRegistry registry;
+  mlir::stablehlo::registerAllDialects(registry);
+  registry.insert<mlir::func::FuncDialect>();
+  registerIfrtDialects(registry);
+  mlir::MLIRContext context(registry, mlir::MLIRContext::Threading::DISABLED);
+  mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &diag) {
+    std::string message;
+    llvm::raw_string_ostream stream(message);
+    diag.print(stream);
+    report(message);
+    return mlir::success();
+  });
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(
+      llvm::StringRef(reinterpret_cast<const char *>(program), programSize),
+      &context);
+  if (!module)
+    return REUSSIR_STABLEHLO_INVALID_INPUT;
+  auto entry = module->lookupSymbol<mlir::func::FuncOp>("main");
+  if (!entry || entry.isExternal() ||
+      entry.getNumArguments() != argumentCount) {
+    report("selected mapping must match the defined @main argument count");
+    return REUSSIR_STABLEHLO_INVALID_INPUT;
+  }
+  llvm::BitVector erased(argumentCount);
+  for (size_t i = 0; i < argumentCount; ++i) {
+    auto rep = mapping[i];
+    if (rep > i || mapping[rep] != rep ||
+        entry.getArgument(i).getType() != entry.getArgument(rep).getType() ||
+        entry.getArgAttrDict(i) != entry.getArgAttrDict(rep)) {
+      report("mapping requires earlier equivalent argument representatives");
+      return REUSSIR_STABLEHLO_INVALID_INPUT;
+    }
+    erased[i] = rep != i;
+  }
+  for (size_t i = 0; i < argumentCount; ++i) {
+    entry.removeArgAttr(i, "jax.buffer_donor");
+    entry.removeArgAttr(i, "tf.aliasing_output");
+  }
+  mlir::Builder builder(&context);
+  llvm::BitVector seen(argumentCount), outputs(entry.getNumResults());
+  for (size_t i = 0; i < donorCount; ++i) {
+    auto donor = donors[i];
+    if (donor >= argumentCount || erased[donor] || seen[donor]) {
+      report("donors must be distinct retained input indices");
+      return REUSSIR_STABLEHLO_INVALID_INPUT;
+    }
+    seen.set(donor);
+    entry.setArgAttr(donor, "jax.buffer_donor", builder.getBoolAttr(true));
+  }
+  for (size_t i = 0; i < aliasCount; ++i) {
+    auto input = aliases[2 * i], result = aliases[2 * i + 1];
+    if (input >= argumentCount || result >= entry.getNumResults() ||
+        erased[input] || !seen[input] || outputs[result] ||
+        entry.getArgAttr(input, "tf.aliasing_output") ||
+        entry.getArgument(input).getType() != entry.getResultTypes()[result]) {
+      report("invalid selected input/output alias");
+      return REUSSIR_STABLEHLO_INVALID_INPUT;
+    }
+    outputs.set(result);
+    entry.setArgAttr(input, "tf.aliasing_output",
+                     builder.getI32IntegerAttr(result));
+  }
+  for (size_t i = 0; i < argumentCount; ++i)
+    if (erased[i])
+      entry.getArgument(i).replaceAllUsesWith(entry.getArgument(mapping[i]));
+  if (mlir::failed(entry.eraseArguments(erased)) ||
+      mlir::failed(mlir::verify(*module)))
+    return REUSSIR_STABLEHLO_INVALID_INPUT;
+  std::string bytes;
+  llvm::raw_string_ostream stream(bytes);
+  if (mlir::failed(mlir::writeBytecodeToFile(*module, stream)))
+    return REUSSIR_STABLEHLO_SERIALIZATION_FAILED;
+  output(reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size(),
+         userData);
   return REUSSIR_STABLEHLO_OK;
 }

@@ -280,8 +280,12 @@ fn bad_artifacts_recompile_and_replace() {
     let api = api();
     let dir = tempfile::tempdir().unwrap();
     let (cache, state) = cache(&api, &disk_config(dir.path()), [0; 32]);
-    let mut key = vec![0; 32];
-    key.extend_from_slice(blake3::hash(b"kernel").as_bytes());
+    let key = cache.artifact_key(&CacheKey {
+        digest: blake3::hash(b"kernel"),
+        options: vec![],
+        arguments: None,
+        selection: None,
+    });
     let artifacts = cache.artifacts.as_ref().unwrap();
     for bad in [b"corrupt".to_vec(), {
         let mut bytes = blake3::hash(b"incompatible").as_bytes().to_vec();
@@ -478,4 +482,41 @@ fn shape_values_are_distinct_cache_inputs() {
             .is_err()
     );
     assert_eq!(state.compiles.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn preparation_and_selected_programs_are_cached_separately() {
+    use reussir_stablehlo::{Argument, Selection};
+    let api = api();
+    let (cache, state) = cache(&api, &memory_config(128), [0; 32]);
+    let code = br#"module { func.func @main(%a: tensor<?xf32>) -> tensor<?xf32> {
+        %v = stablehlo.add %a, %a : tensor<?xf32>
+        return %v : tensor<?xf32>
+    }}"#;
+    let checksum = blake3::hash(code).to_hex();
+    let prepare = || {
+        cache
+            .specialize_program(code, checksum.as_bytes(), vec![Argument::shape(vec![2048])])
+            .unwrap()
+    };
+    let first = prepare();
+    assert!(Arc::ptr_eq(&first, &prepare()));
+    let selected = Selection {
+        mapping: vec![0],
+        donors: vec![0],
+        aliases: vec![],
+    };
+    cache.compile_selected(&first.bytecode, b"", None).unwrap();
+    let donated = cache
+        .compile_selected(&first.bytecode, b"", Some(selected.clone()))
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        &donated,
+        &cache
+            .compile_selected(&first.bytecode, b"", Some(selected))
+            .unwrap()
+    ));
+    assert_eq!(state.compiles.load(Ordering::SeqCst), 2);
+    let programs = state.programs.lock().unwrap();
+    assert_ne!(programs[0].0, programs[1].0);
 }

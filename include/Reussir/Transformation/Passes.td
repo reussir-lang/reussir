@@ -331,22 +331,15 @@ def ReussirSCCPPass : Pass<"reussir-sccp", "::mlir::ModuleOp"> {
 }
 
 def ReussirPjrtDonationPass : Pass<"reussir-pjrt-donation", "::mlir::ModuleOp"> {
-  let summary = "Infer array donation and emit bounded PJRT kernel variants";
+  let summary = "Prove PJRT donation permission and retain runtime guards";
   let options = [
     Option<"inferDonation", "infer-donation", "bool", "true",
-      "Infer optional donation variants; explicit contracts are always materialized">,
-    Option<"maxVariants", "max-variants", "unsigned", "4", "Artifacts per kernel including baseline">,
-    Option<"maxExtraBytes", "max-extra-bytes", "uint64_t", "16777216", "Module-wide additional bytecode budget">,
-    Option<"maxCandidates", "max-candidates", "unsigned", "128", "Candidate contracts per kernel">,
-    Option<"maxAnalysisWork", "max-analysis-work", "uint64_t", "1000000", "Maximum analysis work items">,
-    Option<"maxGuardComparisons", "max-guard-comparisons", "unsigned", "256", "Buffer identity comparisons per invocation">
+      "Infer optional donation permission; explicit contracts are retained">,
+    Option<"maxAnalysisWork", "max-analysis-work", "uint64_t", "1000000", "Maximum analysis work items">
   ];
   let statistics = [
     Statistic<"analysisWork", "analysis-work", "Analysis work items">,
     Statistic<"exhaustedAnalyses", "analysis-budget-exhausted", "Conservative analysis budget fallbacks">,
-    Statistic<"decodedKernels", "decoded-kernels", "Decoded kernel families">,
-    Statistic<"emittedVariants", "emitted-variants", "New kernel variants">,
-    Statistic<"extraBytes", "extra-bytes", "Additional serialized bytes">,
     Statistic<"staticDonors", "static-donors", "Statically exclusive input sites">,
     Statistic<"guardedDonors", "guarded-donors", "Dynamically guarded input sites">
   ];

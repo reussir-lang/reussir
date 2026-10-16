@@ -46,6 +46,26 @@ The disk identity also carries a specialization version and the existing
 plugin/platform/topology/XLA_FLAGS namespace. Refinement and PJRT compilation
 both run inside the coalesced cache miss; a disk hit avoids both.
 
+Donation permission and profitability are separate. The compiler's donation
+pass now emits only ownership guards and proven duplicate-argument mappings;
+it no longer decodes kernels, scores static tensor sizes, enumerates donor sets,
+or serializes extra AOT bytecode. The old variant-count and extra-bytecode budget
+options are removed; the ownership analysis work budget remains.
+
+The runtime checks all physical shard handles, including aliases across device
+positions. Automatic donors need static permission, a successful uniqueness
+guard where required, an output with matching logical byte size, and at least
+4096 bytes of actual device allocation. Larger candidates are considered first,
+with at most one candidate per matching output. This is a conservative policy,
+not a guarantee that PJRT will reuse storage. Explicit donors/aliases bypass the
+size policy but fail on ownership or physical-alias violations. A selected
+program is constructed on demand, remapped consistently with execution inputs
+and non-donatable indices, and cached. No donor subsets are enumerated at runtime.
+
+Shape refinement has a bounded memory cache separate from the executable cache.
+The executable identity includes the selected argument mapping, donors and
+aliases; hits avoid repeated selection transformations and PJRT compilation.
+
 ### Explicit host-known shape values
 
 `pjrt::upload_shape(n: i64)` copies a scalar to the device and retains its exact

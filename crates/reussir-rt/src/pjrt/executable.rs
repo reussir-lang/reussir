@@ -279,13 +279,18 @@ struct CacheKey {
     digest: blake3::Hash,
     options: Vec<u8>,
     arguments: Option<Vec<reussir_stablehlo::Argument>>,
+    selection: Option<reussir_stablehlo::Selection>,
 }
 
 pub(super) struct CompilationCache {
     entries: Cache<CacheKey, Arc<Executable>>,
+    programs: Cache<
+        (blake3::Hash, Vec<reussir_stablehlo::Argument>),
+        Arc<reussir_stablehlo::Specialized>,
+    >,
     artifacts: Option<Arc<Artifacts>>,
     namespace: [u8; 32],
-    owner: Arc<CompilationClient>,
+    pub(super) owner: Arc<CompilationClient>,
     runtime: Option<tokio::runtime::Runtime>,
 }
 
@@ -314,6 +319,10 @@ impl CompilationCache {
             None
         };
         Ok(Self {
+            programs: CacheBuilder::new(config.memory.loaded_entries)
+                .with_shards(1)
+                .with_eviction_config(S3FifoConfig::default())
+                .build(),
             entries: CacheBuilder::new(config.memory.loaded_entries)
                 .with_shards(1)
                 .with_eviction_config(S3FifoConfig::default())
@@ -348,20 +357,63 @@ impl CompilationCache {
         options: &[u8],
         arguments: Option<Vec<reussir_stablehlo::Argument>>,
     ) -> Result<Arc<Executable>> {
+        self.get_or_build(code, digest, options, arguments, None)
+    }
+
+    pub(super) fn compile_selected(
+        &self,
+        program: &[u8],
+        options: &[u8],
+        selection: Option<reussir_stablehlo::Selection>,
+    ) -> Result<Arc<Executable>> {
+        self.get_or_build(program, blake3::hash(program), options, None, selection)
+    }
+
+    pub(super) fn specialize_program(
+        &self,
+        code: &[u8],
+        checksum: &[u8],
+        arguments: Vec<reussir_stablehlo::Argument>,
+    ) -> Result<Arc<reussir_stablehlo::Specialized>> {
+        let key = (verify_checksum(code, checksum)?, arguments.clone());
+        if let Some(entry) = self.programs.get(&key) {
+            return Ok(entry.value().clone());
+        }
+        let code = code.to_vec();
+        let _enter = self.runtime.as_ref().unwrap().enter();
+        self.wait(self.programs.get_or_fetch(&key, || async move {
+            tokio::task::spawn_blocking(move || {
+                reussir_stablehlo::specialize(&code, &arguments)
+                    .map(Arc::new)
+                    .map_err(|e| Error::local(e.to_string()))
+            })
+            .await
+            .map_err(|e| Error::local(e.to_string()))?
+        }))
+        .map(|entry| entry.value().clone())
+        .map_err(|e| Error::local(e.to_string()))
+    }
+
+    fn get_or_build(
+        &self,
+        code: &[u8],
+        digest: blake3::Hash,
+        options: &[u8],
+        arguments: Option<Vec<reussir_stablehlo::Argument>>,
+        selection: Option<reussir_stablehlo::Selection>,
+    ) -> Result<Arc<Executable>> {
         let key = CacheKey {
             digest,
             options: options.into(),
             arguments: arguments.clone(),
+            selection: selection.clone(),
         };
         if let Some(entry) = self.entries.get(&key) {
             return Ok(entry.value().clone());
         }
         let owner = self.owner.clone();
         let artifacts = self.artifacts.clone();
-        let mut artifact_key = self.namespace.to_vec();
-        artifact_key.extend_from_slice(
-            specialization_identity(digest, options, arguments.as_deref()).as_bytes(),
-        );
+        let artifact_key = self.artifact_key(&key);
         let code = code.to_vec();
         let options = options.to_vec();
         let _enter = self.runtime.as_ref().unwrap().enter();
@@ -406,6 +458,12 @@ impl CompilationCache {
                 } else {
                     code
                 };
+                let code = if let Some(selection) = selection {
+                    reussir_stablehlo::select_program(&code, &selection)
+                        .map_err(|error| Error::local(error.to_string()))?
+                } else {
+                    code
+                };
                 let executable = owner.compile(&code, &options)?;
                 if let Some(artifacts) = &artifacts {
                     match executable.serialize() {
@@ -430,6 +488,27 @@ impl CompilationCache {
                 .cloned()
                 .unwrap_or_else(|| Error::local(e.to_string()))
         })
+    }
+
+    fn artifact_key(&self, key: &CacheKey) -> Vec<u8> {
+        let mut artifact_key = self.namespace.to_vec();
+        artifact_key.extend_from_slice(
+            specialization_identity(key.digest, &key.options, key.arguments.as_deref()).as_bytes(),
+        );
+        artifact_key.push(u8::from(key.selection.is_some()));
+        if let Some(selected) = &key.selection {
+            for values in [
+                &selected.mapping[..],
+                &selected.donors[..],
+                selected.aliases.as_flattened(),
+            ] {
+                artifact_key.extend_from_slice(&(values.len() as u64).to_le_bytes());
+                for value in values {
+                    artifact_key.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+        }
+        artifact_key
     }
 
     pub fn close(&self) {

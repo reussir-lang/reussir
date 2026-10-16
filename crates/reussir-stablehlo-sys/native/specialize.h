@@ -18,7 +18,8 @@ typedef struct {
   uint8_t has_values;
 } ReussirStablehloArgument;
 typedef void (*ReussirStablehloBytes)(const uint8_t *, size_t, void *);
-typedef void (*ReussirStablehloShape)(const int64_t *, size_t, void *);
+typedef void (*ReussirStablehloShape)(const int64_t *, size_t, uint64_t,
+                                      void *);
 enum ReussirStablehloStatus {
   REUSSIR_STABLEHLO_OK = 0,
   REUSSIR_STABLEHLO_INVALID_INPUT = 1,
@@ -33,6 +34,15 @@ uint32_t reussir_stablehlo_specialize(
     const uint8_t *program, size_t program_size,
     const ReussirStablehloArgument *arguments, size_t argument_count,
     ReussirStablehloBytes output, ReussirStablehloShape output_shape,
+    ReussirStablehloBytes diagnostic, void *user_data);
+// Select one already-refined program. mapping[i] names its original-argument
+// representative, donors are original indices, aliases are input/output pairs.
+// This function applies a caller-selected contract; it performs no enumeration
+// and grants no ownership permission. All counts and indices are validated.
+uint32_t reussir_stablehlo_select(
+    const uint8_t *program, size_t program_size, const uint32_t *mapping,
+    size_t argument_count, const uint32_t *donors, size_t donor_count,
+    const uint32_t *aliases, size_t alias_count, ReussirStablehloBytes output,
     ReussirStablehloBytes diagnostic, void *user_data);
 #ifdef __cplusplus
 }

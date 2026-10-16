@@ -17,7 +17,7 @@ void error(const uint8_t *data, size_t size, void *user) {
   static_cast<Result *>(user)->error.append(
       reinterpret_cast<const char *>(data), size);
 }
-void shape(const int64_t *data, size_t size, void *user) {
+void shape(const int64_t *data, size_t size, uint64_t, void *user) {
   auto &result = static_cast<Result *>(user)->shapes.emplace_back();
   if (size)
     result.assign(data, data + size);
