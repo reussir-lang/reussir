@@ -378,6 +378,7 @@ unsafe extern "C" {
         cleanup_hook: MlirAttribute,
     ) -> MlirType;
     pub fn reussirStrTypeGet(context: MlirContext, life_scope: ReussirLifeScope) -> MlirType;
+    pub fn reussirConstSeqTypeGet(element_type: MlirType) -> MlirType;
 
     pub fn reussirRecordTypeGetComplete(
         context: MlirContext,

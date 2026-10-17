@@ -4414,6 +4414,44 @@ mlir::LogicalResult ReussirStrCastOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// ConstSeq operations
+//===----------------------------------------------------------------------===//
+mlir::LogicalResult ReussirConstSeqGlobalOp::verify() {
+  auto payload = llvm::dyn_cast<mlir::DenseElementsAttr>(getPayload());
+  if (!payload || payload.getType().getRank() != 1)
+    return emitOpError("payload must be a rank-1 dense elements attribute");
+  return ConstSeqType::verify([&] { return emitOpError(); },
+                              payload.getElementType());
+}
+
+mlir::LogicalResult ReussirConstSeqLiteralOp::verifySymbolUses(
+    mlir::SymbolTableCollection &symbolTable) {
+  auto global = symbolTable.lookupNearestSymbolFrom<ReussirConstSeqGlobalOp>(
+      getOperation(), getSymNameAttr());
+  if (!global)
+    return emitOpError("referenced symbol is not a reussir.const_seq.global: ")
+           << getSymNameAttr();
+  mlir::Type payloadElement = global.getPayload().getElementType();
+  if (payloadElement != getSeq().getType().getElementType())
+    return emitOpError("element type does not match the global payload: ")
+           << payloadElement;
+  return mlir::success();
+}
+
+mlir::Speculation::Speculatability
+ReussirConstSeqUnsafeGetOp::getSpeculatability() {
+  auto literal = getSeq().getDefiningOp<ReussirConstSeqLiteralOp>();
+  if (!literal)
+    return mlir::Speculation::NotSpeculatable;
+  auto global =
+      mlir::SymbolTable::lookupNearestSymbolFrom<ReussirConstSeqGlobalOp>(
+          literal, literal.getSymNameAttr());
+  return global && isIndexInRange(getIndex(), global.getPayload().size())
+             ? mlir::Speculation::Speculatable
+             : mlir::Speculation::NotSpeculatable;
+}
+
+//===----------------------------------------------------------------------===//
 // RegionRunOp RegionBranchOpInterface implementation
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRecordExtractOp::verify() {

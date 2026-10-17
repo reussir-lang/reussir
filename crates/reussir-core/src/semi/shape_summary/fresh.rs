@@ -66,6 +66,7 @@ impl<'tcx> FreshSubstitution<'_, '_, '_, 'tcx> {
             }
             TyKind::Nullable(inner) => tcx.mk_nullable(self.ty(inner)),
             TyKind::Arc(inner) => tcx.mk_arc(self.ty(inner)),
+            TyKind::ConstSeq(elem) => tcx.mk_const_seq(self.ty(elem)),
             TyKind::Cell { elem, kind } => tcx.mk_cell(self.ty(elem), kind),
             TyKind::Array { elem, dims } => tcx.mk_array(self.ty(elem), dims),
             TyKind::Tensor { elem, dims } => tcx.mk_tensor(self.ty(elem), dims),

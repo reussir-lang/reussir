@@ -93,9 +93,8 @@ fn intrinsic_wrapper_body<'tcx>(function: &mir::Function<'tcx>) -> Option<&'tcx 
                 *intrinsics += 1;
                 *intrinsics == 1 && args.iter().all(|arg| simple(arg, intrinsics))
             }
-            Var(_) | GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_) => {
-                true
-            }
+            Var(_) | GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_)
+            | ConstSeq(_) => true,
             Tuple(fields) | Seq(fields) => fields.iter().all(|field| simple(field, intrinsics)),
             Proj(value, _) | Cast(value, _) | Negate(value) | Not(value) => {
                 simple(value, intrinsics)
@@ -419,6 +418,30 @@ pub fn lower_unit<'c, 'tcx>(
             payload,
             Location::unknown(context),
         ));
+    }
+    // Constant sequences live inline in the MIR; their globals are collected
+    // from every body, since intrinsic wrappers inline across functions.
+    let mut const_seqs = Vec::new();
+    for function in &program.functions {
+        if let Some(body) = function.body {
+            mir::for_each_expr(body, &mut |expr| {
+                if let mir::ExprKind::ConstSeq(elems) = expr.kind {
+                    const_seqs.push((expr.ty, elems));
+                }
+            });
+        }
+    }
+    let mut const_seq_symbols = rustc_hash::FxHashSet::default();
+    for (ty, elems) in const_seqs {
+        let (symbol, payload) = lowerer.const_seq_payload(ty, elems)?;
+        if const_seq_symbols.insert(symbol.clone()) {
+            body.append_operation(builders::const_seq_global(
+                context,
+                &symbol,
+                payload,
+                Location::unknown(context),
+            ));
+        }
     }
     let kernel_lowerer = kernel::KernelLowerer::new(context, tcx, program, source);
     let mut launches = Vec::new();

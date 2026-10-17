@@ -377,6 +377,19 @@ impl Parser<'_> {
                 self.bump();
                 Some(m.complete(self, LiteralExpr))
             }
+            LBracket => {
+                let m = self.start();
+                self.bump();
+                while !self.at(RBracket) && !self.at_eof() {
+                    self.expr();
+                    if !self.at(Comma) {
+                        break;
+                    }
+                    self.bump();
+                }
+                self.expect(RBracket);
+                Some(m.complete(self, SeqLitExpr))
+            }
             LBrace => Some(self.block_expr()),
             k if k.is_ident_like() => Some(self.path_based_expr(allow_struct)),
             _ => None,

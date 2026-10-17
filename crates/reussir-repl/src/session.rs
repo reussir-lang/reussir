@@ -760,6 +760,9 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
             TyKind::Arc(inner) => {
                 format!("Arc<{}>", Self::render_ty_with(elab, inner))
             }
+            TyKind::ConstSeq(elem) => {
+                format!("ConstSeq<{}>", Self::render_ty_with(elab, elem))
+            }
             TyKind::Array { elem, dims } => {
                 format!(
                     "[{}; {}]",

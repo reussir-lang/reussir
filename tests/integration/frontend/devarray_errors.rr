@@ -2,7 +2,7 @@
 
 // CHECK-DAG: device array extent exceeds i64::MAX
 fn huge(x: DevArray<[f32; 9223372036854775808]>) {}
-// CHECK-DAG: only integer literals are supported
+// CHECK-DAG: integer literal `-1` is out of range for `u64`
 fn negative(x: DevArray<[f32; -1]>) {}
 // CHECK-DAG: `DevArray` elements must be integer, bool, f16, bf16, f32, or f64 scalars
 fn string(x: DevArray<str>) {}

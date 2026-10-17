@@ -20,6 +20,7 @@ use reussir_syntax::kind::TokenKey;
 use reussir_syntax::source::FileId;
 
 use crate::literal::{FloatLit, Integer};
+use crate::semi::const_eval::ConstScalar;
 use crate::semi::ctxt::{DefaultCap, TransformScript};
 use crate::semi::hir::{ArithOp, CmpOp, ExprId, VarId};
 use crate::semi::ty::Ty;
@@ -298,6 +299,9 @@ pub enum ExprKind<'tcx> {
     /// performs the single correctly-rounded conversion to the ground format.
     ConstFloat(&'tcx FloatLit),
     ConstBool(bool),
+    /// A `ConstSeq<T>` constant; codegen emits its elements as an immutable
+    /// global.
+    ConstSeq(&'tcx [ConstScalar]),
     Var(VarId),
     Negate(&'tcx Expr<'tcx>),
     Not(&'tcx Expr<'tcx>),
@@ -473,8 +477,8 @@ pub fn for_each_expr<'e, 'tcx>(expr: &'e Expr<'tcx>, f: &mut impl FnMut(&'e Expr
             for_each_expr(e, f);
             for_each_tree_expr(&tree, f);
         }
-        GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_) | Var(_)
-        | NullableCall(None) | Poison => {}
+        GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_) | ConstSeq(_)
+        | Var(_) | NullableCall(None) | Poison => {}
     }
 }
 

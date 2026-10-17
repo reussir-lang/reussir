@@ -154,6 +154,9 @@ MlirType reussirFFIObjectTypeGet(MlirContext context, MlirAttribute ffiName,
 // `!reussir.str<lifeScope>`.
 MlirType reussirStrTypeGet(MlirContext context, ReussirLifeScope lifeScope);
 
+// `!reussir.const_seq<elementType>`. The context is taken from `elementType`.
+MlirType reussirConstSeqTypeGet(MlirType elementType);
+
 //===----------------------------------------------------------------------===//
 // Record types
 //===----------------------------------------------------------------------===//

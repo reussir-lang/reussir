@@ -262,7 +262,8 @@ pub fn contains_kernel_value(ty: Ty<'_>) -> bool {
         }
         TyKind::Array { elem, .. } | TyKind::Cell { elem, .. } => contains_kernel_value(elem),
         TyKind::Nullable(inner) | TyKind::Arc(inner) => contains_kernel_value(inner),
-        TyKind::DefaultPlacement
+        TyKind::ConstSeq(_)
+        | TyKind::DefaultPlacement
         | TyKind::Int(_)
         | TyKind::Fp(_)
         | TyKind::Bool
@@ -316,6 +317,7 @@ fn collect_private_records<'tcx>(
             collect_private_records(records, inner, out);
         }
         TyKind::Token
+        | TyKind::ConstSeq(_)
         | TyKind::DefaultPlacement
         | TyKind::Int(_)
         | TyKind::Fp(_)
@@ -798,6 +800,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             TyKind::Nullable(inner) => {
                 out.push_str("Nullable<");
                 self.push_ty_display(out, inner);
+                out.push('>');
+            }
+            TyKind::ConstSeq(elem) => {
+                out.push_str("ConstSeq<");
+                self.push_ty_display(out, elem);
                 out.push('>');
             }
             TyKind::Cell { elem, kind } => {

@@ -298,6 +298,8 @@ impl<'tcx> Cx<'_, 'tcx> {
             // does not carry a lifescope (yet), so global and local strs are
             // not distinguished here — see the design doc's str caveat.
             | TyKind::Str
+            // Immutable static data with scalar elements.
+            | TyKind::ConstSeq(_)
             // Error recovery: don't cascade.
             | TyKind::Bottom => SyncVerdict::Sync,
             TyKind::DefaultPlacement => SyncVerdict::Sync,

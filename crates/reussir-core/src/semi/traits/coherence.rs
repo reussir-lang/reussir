@@ -49,6 +49,7 @@ pub enum HeadKey {
     Cell(CellKind),
     Nullable,
     Arc,
+    ConstSeq,
 }
 
 /// The head key of a self type, `None` for headless types
@@ -73,6 +74,7 @@ pub fn head_key(ty: Ty<'_>) -> Option<HeadKey> {
         TyKind::Cell { kind, .. } => HeadKey::Cell(kind),
         TyKind::Nullable(_) => HeadKey::Nullable,
         TyKind::Arc(_) => HeadKey::Arc,
+        TyKind::ConstSeq(_) => HeadKey::ConstSeq,
         TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => return None,
     })
 }
@@ -113,7 +115,9 @@ fn occurs(g: GenericId, ty: Ty<'_>, subst: &FxHashMap<GenericId, Ty<'_>>) -> boo
         TyKind::DevArray {
             elem, placement, ..
         } => occurs(g, elem, subst) || occurs(g, placement, subst),
-        TyKind::Nullable(inner) | TyKind::Arc(inner) => occurs(g, inner, subst),
+        TyKind::Nullable(inner) | TyKind::Arc(inner) | TyKind::ConstSeq(inner) => {
+            occurs(g, inner, subst)
+        }
         TyKind::Cell { elem, .. } | TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => {
             occurs(g, elem, subst)
         }
@@ -152,9 +156,9 @@ fn unify_ty<'tcx>(
             subst.insert(g, a);
             true
         }
-        (TyKind::Nullable(x), TyKind::Nullable(y)) | (TyKind::Arc(x), TyKind::Arc(y)) => {
-            unify_ty(*x, *y, vars, subst)
-        }
+        (TyKind::Nullable(x), TyKind::Nullable(y))
+        | (TyKind::Arc(x), TyKind::Arc(y))
+        | (TyKind::ConstSeq(x), TyKind::ConstSeq(y)) => unify_ty(*x, *y, vars, subst),
         (TyKind::Cell { elem: x, kind: kx }, TyKind::Cell { elem: y, kind: ky }) => {
             kx == ky && unify_ty(*x, *y, vars, subst)
         }

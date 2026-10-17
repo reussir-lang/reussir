@@ -194,6 +194,11 @@ impl<'a> Mangler<'a> {
             TyKind::Token => {
                 self.path_with_args_segs(out, &["core", "intrinsic", "tensor", "Token"], &[])
             }
+            TyKind::ConstSeq(elem) => self.path_with_args_segs(
+                out,
+                &["core", "intrinsic", "const_seq", "ConstSeq"],
+                &[elem],
+            ),
             TyKind::Future(ps) => {
                 self.path_with_args_segs(out, &["core", "intrinsic", "tensor", "Future"], ps)
             }

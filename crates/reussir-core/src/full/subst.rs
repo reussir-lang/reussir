@@ -37,6 +37,7 @@ pub fn subst_ty<'tcx>(tcx: &TyCtxt<'tcx>, ty: Ty<'tcx>, subst: &Subst<'tcx>) -> 
         TyKind::Nullable(inner) => tcx.mk_nullable(subst_ty(tcx, inner, subst)),
         TyKind::Cell { elem, kind } => tcx.mk_cell(subst_ty(tcx, elem, subst), kind),
         TyKind::Arc(inner) => tcx.mk_arc(subst_ty(tcx, inner, subst)),
+        TyKind::ConstSeq(elem) => tcx.mk_const_seq(subst_ty(tcx, elem, subst)),
         TyKind::Array { elem, dims } => tcx.mk_array(subst_ty(tcx, elem, subst), dims),
         TyKind::DevArray {
             elem,

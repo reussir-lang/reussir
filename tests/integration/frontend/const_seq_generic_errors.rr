@@ -1,0 +1,9 @@
+// A generic `ConstSeq<T>` element is checked once monomorphization grounds it.
+
+// RUN: %rrc %s --emit hir -o %t.hir
+// RUN: %not %rrc %s --emit mir -o - 2>&1 | %FileCheck %s
+
+fn first<T>(xs: ConstSeq<T>) -> T { core::intrinsic::const_seq::get(xs, 0) }
+
+// CHECK: this instantiation grounds a `ConstSeq` whose element must be an integer, floating-point, `bool`, or `char` scalar
+pub fn bad() -> str { first<str>(core::intrinsic::panic::panic()) }

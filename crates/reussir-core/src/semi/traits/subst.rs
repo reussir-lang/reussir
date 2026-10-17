@@ -24,6 +24,10 @@ pub fn replace_generics<'tcx>(
             let n = replace_generics(tcx, inner, map);
             if n == inner { ty } else { tcx.mk_arc(n) }
         }
+        TyKind::ConstSeq(elem) => {
+            let n = replace_generics(tcx, elem, map);
+            if n == elem { ty } else { tcx.mk_const_seq(n) }
+        }
         TyKind::Cell { elem, kind } => {
             let n = replace_generics(tcx, elem, map);
             if n == elem { ty } else { tcx.mk_cell(n, kind) }
@@ -89,7 +93,9 @@ pub fn collect_generics_of(ty: Ty<'_>, out: &mut rustc_hash::FxHashSet<GenericId
         TyKind::Generic(g) => {
             out.insert(g);
         }
-        TyKind::Nullable(inner) | TyKind::Arc(inner) => collect_generics_of(inner, out),
+        TyKind::Nullable(inner) | TyKind::Arc(inner) | TyKind::ConstSeq(inner) => {
+            collect_generics_of(inner, out)
+        }
         TyKind::Cell { elem, .. } => collect_generics_of(elem, out),
         TyKind::Record { args, .. } => args.iter().for_each(|&a| collect_generics_of(a, out)),
         TyKind::Closure { params, ret } => {

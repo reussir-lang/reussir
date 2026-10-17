@@ -236,8 +236,9 @@ pub fn inline_size_align<'tcx>(
         | TyKind::Array { .. }
         | TyKind::DevArray { .. }
         | TyKind::Arc(_) => scalar(WORD),
-        // The native JIT's string representation is { pointer, usize }.
-        TyKind::Str => Ok(SizeAlign {
+        // The native JIT's string and constant sequence representation is
+        // { pointer, usize }.
+        TyKind::Str | TyKind::ConstSeq(_) => Ok(SizeAlign {
             size: 2 * WORD,
             align: WORD,
         }),
@@ -534,6 +535,19 @@ impl<'tcx> Walker<'_, 'tcx> {
                     let text = std::str::from_utf8(bytes)
                         .map_err(|e| format!("invalid stored string: {e}"))?;
                     out.push_str(&format!("{text:?}"));
+                }
+                TyKind::ConstSeq(elem) => {
+                    let ptr = addr.cast::<*const u8>().read_unaligned();
+                    let len = addr.add(WORD as usize).cast::<usize>().read_unaligned();
+                    let stride = inline_size_align(elem, self.shapes)?.size as usize;
+                    out.push('[');
+                    for i in 0..len {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        self.render(ptr.add(i * stride), elem, false, depth + 1, out)?;
+                    }
+                    out.push(']');
                 }
                 TyKind::Array { .. } => out.push_str("<array>"),
                 TyKind::DevArray { .. } => out.push_str("<devarray>"),

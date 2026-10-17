@@ -225,8 +225,8 @@ pub(crate) fn for_each_expr<'e, 'tcx>(expr: &'e Expr<'tcx>, f: &mut impl FnMut(&
     use ExprKind::*;
     f(expr);
     match &expr.kind {
-        GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_) | Var(_)
-        | Poison => {}
+        GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_) | ConstSeq(_)
+        | Var(_) | Poison => {}
         Negate(e) | Not(e) | Cast(e, _) | RegionRun(e) | Proj(e, _) => {
             for_each_expr(e, f);
         }
@@ -924,7 +924,7 @@ fn ty_depth(ty: Ty<'_>) -> usize {
     match *ty.kind() {
         TyKind::Nullable(inner) => 1 + ty_depth(inner),
         TyKind::Cell { elem: inner, .. } => 1 + ty_depth(inner),
-        TyKind::Arc(inner) => 1 + ty_depth(inner),
+        TyKind::Arc(inner) | TyKind::ConstSeq(inner) => 1 + ty_depth(inner),
         TyKind::DevArray {
             elem, placement, ..
         } => 1 + ty_depth(elem).max(ty_depth(placement)),
@@ -2097,6 +2097,13 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 }
                 self.check_arc_inners(elem, span);
             }
+            TyKind::ConstSeq(elem) => {
+                if !crate::semi::ty_eval::const_seq_element_supported(elem)
+                    && self.reported_arcs.insert(ty)
+                {
+                    self.error(span, "this instantiation grounds a `ConstSeq` whose element must be an integer, floating-point, `bool`, or `char` scalar");
+                }
+            }
             TyKind::Array { elem, .. } => {
                 self.reject_kernel_escape(elem, span, "a host array");
                 self.check_arc_inners(elem, span);
@@ -2455,6 +2462,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         use mir::ExprKind as M;
         match kind {
             ExprKind::GlobalStr(s) => M::GlobalStr(*s),
+            ExprKind::ConstSeq(elems) => M::ConstSeq(elems),
             ExprKind::TraitCall {
                 trait_def,
                 method,
@@ -4098,7 +4106,7 @@ mod tests {
             }
             TyKind::Nullable(inner) => is_ground(inner),
             TyKind::Cell { elem: inner, .. } => is_ground(inner),
-            TyKind::Arc(inner) => is_ground(inner),
+            TyKind::Arc(inner) | TyKind::ConstSeq(inner) => is_ground(inner),
             TyKind::DevArray {
                 elem, placement, ..
             } => is_ground(elem) && is_ground(placement),
@@ -4113,8 +4121,8 @@ mod tests {
         use mir::ExprKind::*;
         match e.kind {
             ArrayOp { args, .. } | TensorOp { args, .. } => args.iter().collect(),
-            GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_) | Var(_)
-            | Poison => vec![],
+            GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_)
+            | ConstSeq(_) | Var(_) | Poison => vec![],
             Negate(x) | Not(x) | Cast(x, _) | RegionRun(x) | Proj(x, _) => vec![x],
             Arith(l, _, r) | Cmp(l, _, r) | Assign(l, _, r) => vec![l, r],
             If(c, t, f) => vec![c, t, f],

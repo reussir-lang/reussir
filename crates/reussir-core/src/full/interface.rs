@@ -285,6 +285,7 @@ fn note_records<'tcx>(ty: Ty<'tcx>, records: &mut FxHashSet<DefId>, queue: &mut 
             note_records(inner, records, queue);
         }
         TyKind::Token
+        | TyKind::ConstSeq(_)
         | TyKind::DefaultPlacement
         | TyKind::Int(_)
         | TyKind::Fp(_)

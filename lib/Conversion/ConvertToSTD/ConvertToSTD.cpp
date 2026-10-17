@@ -1311,6 +1311,36 @@ struct ReussirStrByteAtOpRewritePattern
     return mlir::success();
   }
 };
+struct ReussirConstSeqGetOpRewritePattern
+    : public mlir::OpConversionPattern<ReussirConstSeqGetOp> {
+  using OpConversionPattern::OpConversionPattern;
+  mlir::LogicalResult
+  matchAndRewrite(ReussirConstSeqGetOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    auto len = ReussirConstSeqLenOp::create(
+        rewriter, loc, rewriter.getIndexType(), op.getSeq());
+    auto inBounds = mlir::arith::CmpIOp::create(
+        rewriter, loc, mlir::arith::CmpIPredicate::ult, op.getIndex(), len);
+    auto ifOp = mlir::scf::IfOp::create(rewriter, loc, op.getType(), inBounds,
+                                        /*addThenRegion=*/true,
+                                        /*addElseRegion=*/true);
+    rewriter.setInsertionPointToStart(ifOp.thenBlock());
+    auto value = ReussirConstSeqUnsafeGetOp::create(rewriter, loc, op.getType(),
+                                                    op.getSeq(), op.getIndex());
+    mlir::scf::YieldOp::create(rewriter, loc, value.getResult());
+
+    rewriter.setInsertionPointToStart(ifOp.elseBlock());
+    ReussirPanicOp::create(
+        rewriter, loc, rewriter.getStringAttr("const_seq index out of bounds"));
+    auto poison = mlir::ub::PoisonOp::create(rewriter, loc, op.getType());
+    mlir::scf::YieldOp::create(rewriter, loc, poison.getResult());
+
+    rewriter.replaceOp(op, ifOp.getResults());
+    return mlir::success();
+  }
+};
+
 struct ReussirStrSelectOpRewritePattern
     : public mlir::OpConversionPattern<ReussirStrSelectOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -2319,8 +2349,9 @@ struct ConvertToSTDPass
                         ReussirArrayProjectOp, ReussirTokenEnsureOp,
                         ReussirStrByteAtOp, ReussirStrSelectOp,
                         ReussirStrStartWithOp, ReussirStrEqualOp,
-                        ReussirStrCompareOp, ReussirCellCreateOp,
-                        ReussirCellRdlockOp, ReussirCellInUseOp>();
+                        ReussirStrCompareOp, ReussirConstSeqGetOp,
+                        ReussirCellCreateOp, ReussirCellRdlockOp,
+                        ReussirCellInUseOp>();
 
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns)))) {
@@ -2369,7 +2400,8 @@ void populateConvertToSTDConversionPatterns(mlir::RewritePatternSet &patterns) {
       ReussirNullableTokenFreeOpRewritePattern,
       ReussirStrByteAtOpRewritePattern, ReussirStrSelectOpRewritePattern,
       ReussirStrStartWithOpRewritePattern, ReussirStrEqualOpRewritePattern,
-      ReussirStrCompareOpRewritePattern, ReussirCellCreateOpRewritePattern,
+      ReussirStrCompareOpRewritePattern, ReussirConstSeqGetOpRewritePattern,
+      ReussirCellCreateOpRewritePattern,
       ReussirCellGetOpRewritePattern, ReussirCellSetOpRewritePattern,
       ReussirCellRmwOpRewritePattern, ReussirCellRdlockOpRewritePattern,
       ReussirAtomicCellRmwOpRewritePattern, ReussirCellInUseOpRewritePattern>(
