@@ -58,6 +58,8 @@ pub enum Token<'a> {
     Sealed,
     #[token("impl")]
     Impl,
+    #[token("const")]
+    Const,
     #[token("transform_anchor")]
     TransformAnchor,
     #[token("interface")]

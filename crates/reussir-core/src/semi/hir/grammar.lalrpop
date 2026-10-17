@@ -187,7 +187,7 @@ SealedAttr: () = "#" "[" "sealed" "]" => ();
 TraitDecl: raw::TraitItem =
     <lang:LangAttr?> <sealed:SealedAttr?> <p:"pub"?> "trait" "#" <path:QPath> <generics:Generics>
     <supers:(":" <CommaPlus<SuperRef>>)?>
-    <loc:ItemLoc?> "{" <methods:TraitMethodSig*> "}"
+    <loc:ItemLoc?> "{" <consts:TraitConstSig*> <methods:TraitMethodSig*> "}"
     => raw::TraitItem {
         lang,
         sealed: sealed.is_some(),
@@ -195,6 +195,7 @@ TraitDecl: raw::TraitItem =
         path,
         generics,
         supers: supers.unwrap_or_default(),
+        consts,
         methods,
         file: loc.map(|l| l.0),
         span: loc.and_then(|l| l.1),
@@ -219,6 +220,11 @@ TraitMethodSig: raw::TraitMethodItem =
         span: sp,
     };
 
+/// An associated const declaration: `const NAME : ty;`.
+TraitConstSig: raw::TraitConstItem =
+    "const" <name:DebugName> ":" <ty:Ty> <sp:Span?> ";"
+    => raw::TraitConstItem { name: name.into(), ty, span: sp };
+
 RecvForm: raw::RecvForm = {
     "Arc" => raw::RecvForm::Arc,
     "flex" => raw::RecvForm::Flex,
@@ -228,21 +234,35 @@ RecvForm: raw::RecvForm = {
 };
 
 /// An impl item: the trait reference carries its full argument list
-/// (args[0] is the self type), and the body lists the impl's method
-/// definitions by qualified path in trait-method order — the functions
-/// themselves serialize as ordinary items.
+/// (args[0] is the self type), and the body lists the impl's associated
+/// const values by name, then its method definitions by qualified path in
+/// trait-method order — the functions themselves serialize as ordinary
+/// items.
 ImplDecl: raw::ImplItem =
-    "impl" <generics:Generics?> "#" <tr:PathArgs> <loc:ItemLoc?> "{" <methods:Comma<MethodRef>> "}"
+    "impl" <generics:Generics?> "#" <tr:PathArgs> <loc:ItemLoc?>
+    "{" <consts:ImplConstValue*> <methods:Comma<MethodRef>> "}"
     => raw::ImplItem {
         generics: generics.unwrap_or_default(),
         trait_path: tr.0,
         args: tr.1,
+        consts,
         methods,
         file: loc.map(|l| l.0),
         span: loc.and_then(|l| l.1),
     };
 
 MethodRef: String = "#" <p:QPath> => p;
+
+/// An associated const value: `const NAME = 4;` or, for a sequence,
+/// `const NAME = ConstSeq[1, 2] : ConstSeq<i64>;`.
+ImplConstValue: (String, raw::ConstValue) =
+    "const" <name:DebugName> "=" <value:ConstValue> ";" => (name.into(), value);
+
+ConstValue: raw::ConstValue = {
+    <s:ConstScalar> => raw::ConstValue::Scalar(s),
+    "ConstSeq" "[" <elems:Comma<ConstScalar>> "]" ":" "ConstSeq" "<" <elem:Ty> ">"
+        => raw::ConstValue::Seq { elem, elems },
+};
 
 Generics: Vec<raw::Generic> = "<" <CommaPlus<Generic>> ">";
 
@@ -328,6 +348,7 @@ Name: &'input str = {
     "tensor" => "tensor",
     "trait" => "trait",
     "impl" => "impl",
+    "const" => "const",
     "transform" => "transform",
     "transform_anchor" => "transform_anchor",
     "import" => "import",
@@ -508,6 +529,8 @@ Atom: raw::Kind = {
         => raw::Kind::FuncCall { regional: r.is_some(), path: path.0, ty_args: path.1, args },
     "trait" "#" <path:PathArgs> "#" <m:"int"> "(" <args:Comma<Expr>> ")"
         => raw::Kind::TraitCall { path: path.0, ty_args: path.1, method: raw::small_u32(&m), args },
+    "trait" "#" <path:PathArgs> "#" <name:DebugName>
+        => raw::Kind::TraitConst { path: path.0, ty_args: path.1, name: name.into() },
     "#" <path:PathArgs> "{" <args:Comma<Expr>> "}"
         => raw::Kind::CompoundCall { path: path.0, ty_args: path.1, args },
     "#" <path:PathArgs> "#" <v:"int"> "(" <args:Comma<Expr>> ")"
@@ -651,6 +674,7 @@ extern {
         "lang" => Token::Lang,
         "sealed" => Token::Sealed,
         "impl" => Token::Impl,
+        "const" => Token::Const,
         "transform_anchor" => Token::TransformAnchor,
         "interface" => Token::Interface,
         "package" => Token::Package,

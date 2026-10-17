@@ -159,6 +159,7 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                         supertraits: vec![#(#supers),*],
                         methods: vec![],
                         assoc_tys: vec![],
+                        assoc_consts: vec![],
                         span: None,
                         file: reussir_syntax::source::FileId::ROOT,
                     });
@@ -188,6 +189,7 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                             self_ty,
                             where_clauses: vec![],
                             methods: vec![],
+                            assoc_consts: vec![],
                             span: None,
                             file: reussir_syntax::source::FileId::ROOT,
                         });

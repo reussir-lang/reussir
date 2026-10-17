@@ -17,10 +17,10 @@
 
 // The Semi-phase type machinery.
 pub mod infer;
+pub mod lang;
 mod shape_constraints;
 pub(crate) mod shape_rules;
 pub mod shape_summary;
-pub mod lang;
 pub mod traits;
 pub mod ty;
 
@@ -2237,6 +2237,103 @@ mod tests {
                 assert_eq!(calls.len(), 1, "{calls:?}");
                 assert!(calls[0].0, "generic receiver defers to a TraitCall");
                 assert_eq!(calls[0].1, "Show");
+            },
+        );
+    }
+
+    #[test]
+    fn assoc_const_lookup_selects_the_impl_value() {
+        use crate::literal::Integer;
+        use crate::semi::const_eval::{ConstScalar, ConstValue};
+        use crate::semi::traits::{AssocConstError, SelectError, TraitId};
+        check(
+            "pub trait Shape { const SIDES: i64; const ROUND: bool; const DIMS: ConstSeq<u8>; }\n\
+             pub struct Square { pub x: i64 }\n\
+             pub struct Disc { pub r: i64 }\n\
+             pub struct Line { pub l: i64 }\n\
+             impl Shape for Square {\n\
+                 const SIDES: i64 = 4; const ROUND: bool = false; const DIMS: ConstSeq<u8> = [2, 2];\n\
+             }\n\
+             impl Shape for Disc {\n\
+                 const SIDES: i64 = -1; const ROUND: bool = true; const DIMS: ConstSeq<u8> = [];\n\
+             }\n\
+             pub fn concrete() -> i64 { Square::SIDES }\n\
+             pub fn generic<T: Shape>(x: T) -> bool { T::ROUND }",
+            |elab, tcx| {
+                let tid = (0..elab.traits.traits_len() as u32)
+                    .map(TraitId)
+                    .find(|&t| {
+                        elab.sym(elab.defs.path(elab.traits.trait_def(t).def).name()) == "Shape"
+                    })
+                    .expect("trait Shape");
+                let tdef = elab.traits.trait_def(tid);
+                let [sides, round, dims] = [0, 1, 2].map(|k| tdef.assoc_consts[k].name);
+                let record = |name: &str| {
+                    let def = *elab
+                        .records
+                        .keys()
+                        .find(|&&d| elab.sym(elab.defs.path(d).name()) == name)
+                        .expect("record");
+                    tcx.mk_record(def, &[], crate::semi::ty::Flexivity::Irrelevant)
+                };
+                let value = |ty, name| elab.traits.assoc_const_value(tcx, tid, ty, name);
+                let int = |n: i64| Ok(ConstValue::Scalar(ConstScalar::Int(Integer::from(n))));
+                assert_eq!(value(record("Square"), sides), int(4));
+                assert_eq!(value(record("Disc"), sides), int(-1));
+                assert_eq!(
+                    value(record("Disc"), round),
+                    Ok(ConstValue::Scalar(ConstScalar::Bool(true)))
+                );
+                let u8_ty = tcx.mk_int(crate::semi::ty::IntTy::Unsigned(8));
+                assert_eq!(
+                    value(record("Square"), dims),
+                    Ok(ConstValue::Seq {
+                        elem: u8_ty,
+                        elems: vec![ConstScalar::Int(Integer::from(2)); 2],
+                    })
+                );
+                assert!(matches!(
+                    value(record("Line"), sides),
+                    Err(AssocConstError::Select(SelectError::NoImpl(_)))
+                ));
+                // The trait's own name is no const of it.
+                let undeclared = elab.defs.path(tdef.def).name();
+                assert_eq!(
+                    value(record("Square"), undeclared),
+                    Err(AssocConstError::Undeclared)
+                );
+                // Both spellings defer to monomorphization.
+                for (function, name) in [("concrete", sides), ("generic", round)] {
+                    assert!(
+                        matches!(
+                            &body_of(elab, function).kind,
+                            crate::semi::hir::ExprKind::TraitConst { name: n, .. } if *n == name
+                        ),
+                        "{function}"
+                    );
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn assoc_const_conformance_is_checked_per_impl() {
+        elaborate_source(
+            "pub trait Limits { const MAX: u8; const ON: bool; }\n\
+             pub struct A { pub x: i64 }\n\
+             pub struct B { pub x: i64 }\n\
+             impl Limits for A { const MAX: u16 = 1; }\n\
+             impl Limits for B { const MAX: u8 = 255; const ON: bool = true; const OFF: bool = false; }",
+            |elab| {
+                let messages: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
+                for expected in [
+                    "associated const `MAX` has type `u16` but trait `Limits` requires `u8`",
+                    "impl of trait `Limits` for `A` is missing associated const(s) `ON`",
+                    "`OFF` is not an associated const of trait `Limits`",
+                ] {
+                    assert!(messages.contains(&expected), "{expected}: {messages:#?}");
+                }
+                assert_eq!(messages.len(), 3, "{messages:#?}");
             },
         );
     }

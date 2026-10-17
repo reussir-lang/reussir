@@ -376,6 +376,7 @@ mod tests {
             supertraits: supers,
             methods: vec![],
             assoc_tys: vec![],
+            assoc_consts: vec![],
             span: None,
             file: reussir_syntax::source::FileId::ROOT,
         }
@@ -398,6 +399,7 @@ mod tests {
             self_ty,
             where_clauses,
             methods: vec![],
+            assoc_consts: vec![],
             span: None,
             file: reussir_syntax::source::FileId::ROOT,
         }

@@ -5,14 +5,17 @@
 //! registry; coherence (the overlap and orphan gates in the elaborator)
 //! is what entitles selection to commit to the first matching candidate.
 
+use reussir_syntax::kind::TokenKey;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use crate::semi::ty::DefId;
+use crate::semi::const_eval::ConstValue;
+use crate::semi::ty::{DefId, Ty, TyCtxt};
 
 use super::coherence::{HeadKey, head_key};
 use super::def::{ImplDef, TraitDef};
-use super::{ImplId, TraitId, TraitRef};
+use super::select::SelectCtxt;
+use super::{Evidence, ImplId, Obligation, TraitId, TraitRef};
 
 /// The collected trait program plus resolution.
 #[derive(Default)]
@@ -35,6 +38,18 @@ pub enum SelectError<'tcx> {
     NoImpl(TraitRef<'tcx>),
     /// Proof search exceeded [`super::select::SELECT_DEPTH_LIMIT`].
     DepthLimit(TraitRef<'tcx>),
+}
+
+/// Why [`TraitDb::assoc_const_value`] has no value to give.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AssocConstError<'tcx> {
+    /// The trait declares no associated const of that name.
+    Undeclared,
+    /// Selection proves no impl of the trait for the self type.
+    Select(SelectError<'tcx>),
+    /// The bound holds only through a sub-trait, so no impl of the trait
+    /// itself defines the value.
+    Indirect,
 }
 
 impl<'tcx> TraitDb<'tcx> {
@@ -154,6 +169,35 @@ impl<'tcx> TraitDb<'tcx> {
             .any(|s| s.trait_id == target || self.reaches(self.trait_def(s.trait_id), target))
     }
 
+    /// The value associated const `name` of `trait_id` takes for the ground
+    /// `self_ty`. Selection runs with no assumptions (everything is ground)
+    /// and names the unique impl, which defines every const of its trait.
+    pub fn assoc_const_value(
+        &self,
+        tcx: &TyCtxt<'tcx>,
+        trait_id: TraitId,
+        self_ty: Ty<'tcx>,
+        name: TokenKey,
+    ) -> Result<ConstValue<'tcx>, AssocConstError<'tcx>> {
+        let index = self
+            .trait_def(trait_id)
+            .assoc_consts
+            .iter()
+            .position(|c| c.name == name)
+            .ok_or(AssocConstError::Undeclared)?;
+        let goal = Obligation::Trait(TraitRef {
+            trait_id,
+            args: vec![self_ty],
+        });
+        match SelectCtxt::new(self, tcx, &[]).select(&goal) {
+            Ok(Evidence::Impl { impl_id, .. }) => {
+                Ok(self.impl_def(impl_id).assoc_consts[index].clone())
+            }
+            Ok(_) => Err(AssocConstError::Indirect),
+            Err(error) => Err(AssocConstError::Select(error)),
+        }
+    }
+
     /// All impls in registration (dense-id) order — the deterministic scan
     /// order for super-trait projection in selection.
     pub fn impls(&self) -> impl Iterator<Item = &ImplDef<'tcx>> {
@@ -191,6 +235,7 @@ mod tests {
                 supertraits: vec![],
                 methods: vec![],
                 assoc_tys: vec![],
+                assoc_consts: vec![],
                 span: None,
                 file: reussir_syntax::source::FileId::ROOT,
             });
@@ -205,6 +250,7 @@ mod tests {
                 self_ty: unit,
                 where_clauses: vec![],
                 methods: vec![],
+                assoc_consts: vec![],
                 span: None,
                 file: reussir_syntax::source::FileId::ROOT,
             });
@@ -226,6 +272,7 @@ mod tests {
                 supertraits: vec![],
                 methods: vec![],
                 assoc_tys: vec![],
+                assoc_consts: vec![],
                 span: None,
                 file: reussir_syntax::source::FileId::ROOT,
             });

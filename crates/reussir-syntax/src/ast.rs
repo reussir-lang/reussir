@@ -106,6 +106,22 @@ fn expr_children(node: &ResolvedNode) -> impl Iterator<Item = &ResolvedNode> {
     node.children().filter(|n| is_expr_kind(n.kind()))
 }
 
+/// The defining name of an item introduced by a contextual keyword (which
+/// lexes as a plain `Ident`): the first ident-like token after the `Ident`
+/// spelled `intro`. (`pub trait trait` names a trait `trait`: PubKw is
+/// ident-like but not Ident-kind, so the introducer scan skips it.)
+fn name_after_text<'n>(node: &'n ResolvedNode, intro: &str) -> &'n ResolvedToken {
+    let mut seen_intro = false;
+    for t in tokens(node) {
+        if !seen_intro && t.kind() == Ident && t.text() == intro {
+            seen_intro = true;
+        } else if seen_intro && is_ident_like(t.kind()) {
+            return t;
+        }
+    }
+    panic!("missing name token in {:?}", node.kind())
+}
+
 impl Emitter<'_> {
     fn char_span(&self, node: &ResolvedNode) -> (u64, u64) {
         let range = node.text_range();
@@ -365,25 +381,37 @@ impl Emitter<'_> {
                 "implTrait": trait_ref.map_or(Value::Null, |t| self.type_(t)),
                 "implTarget": self.type_(target),
                 "implMembers": members,
+                "implConsts": self.assoc_consts(node),
             }),
         )
     }
 
+    /// The `const NAME: Type (= expr)?;` members of a trait or impl body,
+    /// each spanned; `constValue` is `null` for a trait declaration.
+    fn assoc_consts(&self, node: &ResolvedNode) -> Value {
+        nodes(node)
+            .filter(|n| n.kind() == ConstStmt)
+            .map(|c| {
+                let name = name_after_text(c, "const");
+                let ty = nodes(c)
+                    .find(|n| is_type_kind(n.kind()))
+                    .expect("const type");
+                let value = expr_children(c).next().map(|e| self.expr(e));
+                self.with_node_span(
+                    c,
+                    json!({
+                        "constVisibility": self.visibility(c),
+                        "constName": name.text(),
+                        "constType": self.type_(ty),
+                        "constValue": value,
+                    }),
+                )
+            })
+            .collect()
+    }
+
     fn trait_stmt(&self, node: &ResolvedNode) -> Value {
-        // The introducer lexes as a plain `Ident` spelled `trait`; the name
-        // is the first ident-like token after it (`pub trait trait` names a
-        // trait `trait` — PubKw is ident-like but not Ident-kind).
-        let mut seen_intro = false;
-        let mut name = None;
-        for t in tokens(node) {
-            if !seen_intro && t.kind() == Ident && t.text() == "trait" {
-                seen_intro = true;
-            } else if seen_intro && is_ident_like(t.kind()) {
-                name = Some(t);
-                break;
-            }
-        }
-        let name = name.expect("trait name");
+        let name = name_after_text(node, "trait");
         // Supertrait references are path types, emitted exactly like the
         // `impl` trait head so both spellings share one JSON shape.
         let supers: Vec<Value> = nodes(node)
@@ -402,6 +430,7 @@ impl Emitter<'_> {
                 "traitGenerics": self.generic_params(node),
                 "traitSupers": supers,
                 "traitMembers": members,
+                "traitConsts": self.assoc_consts(node),
             }),
         )
     }

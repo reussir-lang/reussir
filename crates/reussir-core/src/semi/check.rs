@@ -4,7 +4,9 @@ use reussir_syntax::kind::TokenKey;
 
 use crate::semi::infer::Instantiation;
 use crate::semi::resolve::DefKind;
-use crate::semi::traits::{Evidence, Obligation, SelectCtxt, SelectError, TraitId, TraitRef};
+use crate::semi::traits::{
+    Evidence, Obligation, SelectCtxt, SelectError, TraitDef, TraitId, TraitRef,
+};
 use crate::semi::ty::CellKind;
 use crate::semi::ty::{DefId, Flexivity, GenericId, Ty, TyKind};
 use crate::surface::{self, BinOp, Const, Span, UnaryOp};
@@ -569,8 +571,119 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return self.poison(span);
         }
-        // A qualified path with no arguments: a nullary constructor.
+        // A qualified path with no arguments: an associated const named
+        // through its self type, else a nullary constructor.
+        if let Some(done) = self.try_type_assoc_const(path, span) {
+            return done;
+        }
         self.infer_ctor(path, &[], &[], span)
+    }
+
+    /// The `Type::NAME` / `G::NAME` spellings of an associated const: the
+    /// path prefix names a type — a generic parameter in scope or a record
+    /// — and `NAME` resolves among the traits that type implements (or
+    /// that bound it), as for [`Self::try_type_assoc_call`]. The node is a
+    /// deferred [`ExprKind::TraitConst`] whichever the self type; the bound
+    /// obligation reports a missing impl. `None` when no trait offers the
+    /// const (or an enum variant of that name wins) — the caller falls back
+    /// to constructor resolution.
+    fn try_type_assoc_const(
+        &mut self,
+        path: &surface::Path,
+        span: Option<Span>,
+    ) -> Option<Expr<'tcx>> {
+        let expanded = self.expand_path(path);
+        let path = expanded.as_ref().unwrap_or(path);
+        let (tname, prefix) = path.segments.split_last()?;
+        let name = path.basename;
+        let self_ty = if prefix.is_empty()
+            && let Some(&g) = self.generic_names.get(tname)
+        {
+            self.tcx.mk_generic(g)
+        } else {
+            let tpath = surface::Path {
+                basename: *tname,
+                segments: prefix.iter().copied().collect(),
+            };
+            let def = self.resolve_record_ref(&tpath)?;
+            let rec = &self.records[&def];
+            if let Some(RecordFields::Variants(variants)) = &rec.fields
+                && variants.iter().any(|v| v.name == name)
+            {
+                return None;
+            }
+            if !rec.ty_params.is_empty() {
+                if self.traits_declaring(const_named(name)).is_empty() {
+                    return None;
+                }
+                let shown = self.path_display(&tpath);
+                self.error(
+                    span,
+                    format!(
+                        "cannot name associated const `{}` through generic type \
+                         `{shown}`: a path cannot supply its type arguments",
+                        self.sym(name)
+                    ),
+                );
+                return Some(self.poison(span));
+            }
+            let flex = match rec.default_cap {
+                crate::semi::ctxt::DefaultCap::Value | crate::semi::ctxt::DefaultCap::Shared => {
+                    Flexivity::Irrelevant
+                }
+                crate::semi::ctxt::DefaultCap::Regional => Flexivity::Rigid,
+            };
+            self.tcx.mk_record(def, &[], flex)
+        };
+        let cands = match self_ty.kind() {
+            TyKind::Generic(g) => self.generic_trait_candidates(*g, const_named(name)),
+            _ => self.ground_trait_candidates(self_ty, const_named(name)),
+        };
+        let (tid, idx) = match cands[..] {
+            // A trait declares the const but the type holds no impl (or
+            // bound): steer toward the missing impl, as for a method.
+            [] => {
+                let (declaring, _) = *self.traits_declaring(const_named(name)).first()?;
+                let shown = self.ty_display(self_ty);
+                self.error(
+                    span,
+                    format!(
+                        "no associated const `{}` on `{shown}`; trait `{}` declares it, \
+                         but `{shown}` does not implement `{1}`",
+                        self.sym(name),
+                        self.trait_display(declaring)
+                    ),
+                );
+                return Some(self.poison(span));
+            }
+            [one] => one,
+            [(a, _), (b, _), ..] => {
+                let (da, db) = (self.trait_display(a), self.trait_display(b));
+                self.error(
+                    span,
+                    format!(
+                        "multiple traits provide associated const `{}` for `{}`: `{da}` \
+                         and `{db}`",
+                        self.sym(name),
+                        self.ty_display(self_ty),
+                    ),
+                );
+                return Some(self.poison(span));
+            }
+        };
+        self.record_use(name);
+        let tdef = self.traits.trait_def(tid);
+        let (trait_def, ty) = (tdef.def, tdef.assoc_consts[idx].ty);
+        self.register_bound(tid, self_ty, span);
+        Some(self.mk_expr(
+            ExprKind::TraitConst {
+                trait_def,
+                name,
+                ty_args: vec![self_ty],
+            },
+            ty,
+            span,
+        ))
     }
 
     /// (SEQ) `Γ ⊢ {e₁;…;eₙ} ⇒ (Seq[hᵢ] : Tₙ)`: synthesize each element in a scope
@@ -1814,7 +1927,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             // ask for annotations when a matching trait method could exist.
             let rcur = self.infer.resolve(cur);
             if ty_has_hole(rcur) {
-                if !self.traits_declaring(*name).is_empty() {
+                if !self.traits_declaring(method_named(*name)).is_empty() {
                     self.error(
                         span,
                         format!(
@@ -1826,7 +1939,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     return self.poison(span);
                 }
             } else {
-                let cands = self.ground_trait_candidates(rcur, *name);
+                let cands = self.ground_trait_candidates(rcur, method_named(*name));
                 match cands[..] {
                     [] => {}
                     [(tid, midx)] => {
@@ -1890,7 +2003,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     // A trait declares it but the receiver holds no impl:
                     // steer toward the missing impl instead of a bare miss.
                     let hint = self
-                        .traits_declaring(*name)
+                        .traits_declaring(method_named(*name))
                         .first()
                         .map(|&(tid, _)| {
                             format!(
@@ -2029,12 +2142,16 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 
     // ----- trait-method dispatch -----
 
-    /// Every trait whose method table declares `name`, with the method's
-    /// index. Deterministic: ascending trait id. Multi-parameter traits
-    /// never qualify — a dot call (or `Trait::m` path call) supplies only
-    /// `Self`, so their non-`Self` arguments have no instantiation source
-    /// until turbofish lands on trait-method calls.
-    fn traits_declaring(&self, name: TokenKey) -> Vec<(TraitId, usize)> {
+    /// Every trait declaring the `member` ([`method_named`] or
+    /// [`const_named`]), with the member's index. Deterministic: ascending
+    /// trait id. Multi-parameter traits never qualify — a dot call (or a
+    /// `Trait::m` / `Type::m` path) supplies only `Self`, so their
+    /// non-`Self` arguments have no instantiation source until turbofish
+    /// lands on trait-member paths.
+    fn traits_declaring(
+        &self,
+        member: impl Fn(&TraitDef<'tcx>) -> Option<usize>,
+    ) -> Vec<(TraitId, usize)> {
         (0..self.traits.traits_len() as u32)
             .map(TraitId)
             .filter_map(|tid| {
@@ -2042,10 +2159,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 if !def.params.is_empty() {
                     return None;
                 }
-                def.methods
-                    .iter()
-                    .position(|m| m.name == name)
-                    .map(|idx| (tid, idx))
+                member(def).map(|idx| (tid, idx))
             })
             .collect()
     }
@@ -2054,8 +2168,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// whose goal `recv : Trait` the solver proves. Probing runs real
     /// selection, so a candidate impl's where-clauses count — `Box<bool>`
     /// is not a `Show` candidate under `impl<T: Num> Show for Box<T>`.
-    fn ground_trait_candidates(&self, recv: Ty<'tcx>, name: TokenKey) -> Vec<(TraitId, usize)> {
-        self.traits_declaring(name)
+    fn ground_trait_candidates(
+        &self,
+        recv: Ty<'tcx>,
+        member: impl Fn(&TraitDef<'tcx>) -> Option<usize>,
+    ) -> Vec<(TraitId, usize)> {
+        self.traits_declaring(member)
             .into_iter()
             .filter(|&(tid, _)| {
                 let goal = Obligation::Trait(TraitRef {
@@ -2072,7 +2190,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// Dot candidates for a bare-generic receiver: declaring traits
     /// reachable from the generic's bounds — a bound's super-traits
     /// dispatch too (`T: Integral` reaches a method `Num` declares).
-    fn generic_trait_candidates(&self, g: GenericId, name: TokenKey) -> Vec<(TraitId, usize)> {
+    fn generic_trait_candidates(
+        &self,
+        g: GenericId,
+        member: impl Fn(&TraitDef<'tcx>) -> Option<usize>,
+    ) -> Vec<(TraitId, usize)> {
         let mut reach: Vec<TraitId> = Vec::new();
         let mut work: Vec<TraitId> = self.generic_bounds(g).to_vec();
         while let Some(t) = work.pop() {
@@ -2096,10 +2218,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 if !def.params.is_empty() {
                     return None;
                 }
-                def.methods
-                    .iter()
-                    .position(|m| m.name == name)
-                    .map(|idx| (tid, idx))
+                member(def).map(|idx| (tid, idx))
             })
             .collect()
     }
@@ -2491,7 +2610,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         args: &[surface::Expr],
         span: Option<Span>,
     ) -> Expr<'tcx> {
-        let cands = self.generic_trait_candidates(g, name);
+        let cands = self.generic_trait_candidates(g, method_named(name));
         match cands[..] {
             [] => {
                 self.error(
@@ -2707,8 +2826,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         };
         let name = fc.name.basename;
         let cands = match self_ty.kind() {
-            TyKind::Generic(g) => self.generic_trait_candidates(*g, name),
-            _ => self.ground_trait_candidates(self_ty, name),
+            TyKind::Generic(g) => self.generic_trait_candidates(*g, method_named(name)),
+            _ => self.ground_trait_candidates(self_ty, method_named(name)),
         };
         let (tid, midx) = match cands[..] {
             [] => return None,
@@ -5426,9 +5545,30 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 ty_args: ty_args.into_iter().map(|t| self.zonk_ty(t, span)).collect(),
                 args: args.into_iter().map(|e| self.zonk_expr(e)).collect(),
             },
+            TraitConst {
+                trait_def,
+                name,
+                ty_args,
+            } => TraitConst {
+                trait_def,
+                name,
+                ty_args: ty_args.into_iter().map(|t| self.zonk_ty(t, span)).collect(),
+            },
             other => other,
         }
     }
+}
+
+/// A trait-member selector for the candidate searches: the index of the
+/// method named `name`.
+fn method_named<'tcx>(name: TokenKey) -> impl Fn(&TraitDef<'tcx>) -> Option<usize> {
+    move |def| def.methods.iter().position(|m| m.name == name)
+}
+
+/// A trait-member selector for the candidate searches: the index of the
+/// associated const named `name`.
+fn const_named<'tcx>(name: TokenKey) -> impl Fn(&TraitDef<'tcx>) -> Option<usize> {
+    move |def| def.assoc_consts.iter().position(|c| c.name == name)
 }
 
 /// Map a surface arithmetic/boolean/bitwise operator to the HIR form.
@@ -5555,7 +5695,13 @@ fn var_occurrences<'tcx>(e: &Expr<'tcx>, used: &mut Vec<VarId>, bound: &mut Vec<
             var_occurrences(scrut, used, bound);
             tree_occurrences(tree, used, bound);
         }
-        GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_) | ConstSeq(_)
+        GlobalStr(_)
+        | ConstChar(_)
+        | ConstInt(_)
+        | ConstFloat(_)
+        | ConstBool(_)
+        | ConstSeq(_)
+        | TraitConst { .. }
         | Poison => {}
     }
 }

@@ -43,9 +43,29 @@ pub struct TraitItem {
     /// Super-trait references: qualified path + full argument list
     /// (`args[0]` = `Self`).
     pub supers: Vec<(String, Vec<Ty>)>,
+    pub consts: Vec<TraitConstItem>,
     pub methods: Vec<TraitMethodItem>,
     pub file: Option<u32>,
     pub span: Option<Span>,
+}
+
+/// An associated const declaration.
+#[derive(Clone, Debug)]
+pub struct TraitConstItem {
+    pub name: String,
+    pub ty: Ty,
+    pub span: Option<Span>,
+}
+
+/// An associated const value, as its literal; a sequence names its
+/// element type.
+#[derive(Clone, Debug)]
+pub enum ConstValue {
+    Scalar(crate::semi::const_eval::ConstScalar),
+    Seq {
+        elem: Ty,
+        elems: Vec<crate::semi::const_eval::ConstScalar>,
+    },
 }
 
 /// A trait method signature; parameters are positional types with the
@@ -72,13 +92,15 @@ pub enum RecvForm {
     None,
 }
 
-/// An impl item: trait path + full argument list (`args[0]` = self type)
-/// and the method definitions by qualified path in trait-method order.
+/// An impl item: trait path + full argument list (`args[0]` = self type),
+/// the associated const values by name, and the method definitions by
+/// qualified path in trait-method order.
 #[derive(Clone, Debug)]
 pub struct ImplItem {
     pub generics: Vec<Generic>,
     pub trait_path: String,
     pub args: Vec<Ty>,
+    pub consts: Vec<(String, ConstValue)>,
     pub methods: Vec<String>,
     pub file: Option<u32>,
     pub span: Option<Span>,
@@ -418,6 +440,11 @@ pub enum Kind {
         method: u32,
         ty_args: Vec<Ty>,
         args: Vec<Expr>,
+    },
+    TraitConst {
+        path: String,
+        ty_args: Vec<Ty>,
+        name: String,
     },
     CompoundCall {
         path: String,

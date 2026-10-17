@@ -17,7 +17,7 @@ use reussir_syntax::kind::{Resolver, TokenKey};
 use reussir_syntax::source::SourceCache;
 
 use crate::ir_lex::spell_name;
-use crate::semi::const_eval::ConstScalar;
+use crate::semi::const_eval::{ConstScalar, ConstValue};
 use crate::semi::ctxt::{
     DefaultCap, FfiImport, FfiPrelude, Record, RecordFields, TrampolineRoot, TransformScript,
 };
@@ -368,6 +368,12 @@ impl<'a> Printer<'a> {
             head = head + text(" : ") + comma_sep(supers);
         }
         head = head + self.item_loc(t.file, t.span);
+        let consts = t.consts.iter().map(|c| {
+            text(format!("const {} : ", spell_name(&c.name)))
+                + self.ty(c.ty)
+                + self.span_doc(c.span)
+                + text(";")
+        });
         let methods: Vec<Doc<'static>> = t
             .methods
             .iter()
@@ -393,13 +399,29 @@ impl<'a> Printer<'a> {
                     + text(";")
             })
             .collect();
-        let body = methods
-            .into_iter()
+        let body = consts
+            .chain(methods)
             .fold(Doc::Null, |body, m| body + hardline() + m);
         head + text(" {") + indent(body) + hardline() + text("}")
     }
 
     fn impl_item(&self, i: &super::ImplText<'_>) -> Doc<'static> {
+        // `{ const A = 1; const B = ConstSeq[2] : ConstSeq<i64>; #m, #n }`.
+        let mut consts = Doc::Null;
+        for (k, (name, value)) in i.consts.iter().enumerate() {
+            if k > 0 {
+                consts = consts + text(" ");
+            }
+            consts = consts
+                + text(format!("const {} = ", spell_name(name)))
+                + self.const_value(value)
+                + text(";");
+        }
+        let gap = if i.consts.is_empty() || i.methods.is_empty() {
+            ""
+        } else {
+            " "
+        };
         let methods: Vec<Doc<'static>> = i.methods.iter().map(|m| text(format!("#{m}"))).collect();
         text("impl")
             + self.text_binder(&i.generics)
@@ -407,8 +429,21 @@ impl<'a> Printer<'a> {
             + self.ty_args(&i.args)
             + self.item_loc(i.file, i.span)
             + text(" { ")
+            + consts
+            + text(gap)
             + comma_sep(methods)
             + text(" }")
+    }
+
+    /// An associated const value, spelled like the matching HIR literal; a
+    /// sequence carries its type, as a `ConstSeq` expression does.
+    fn const_value(&self, value: &ConstValue<'_>) -> Doc<'static> {
+        match value {
+            ConstValue::Scalar(scalar) => text(const_scalar_lit(scalar)),
+            ConstValue::Seq { elem, elems } => {
+                text(format!("{} : ConstSeq<", const_seq_lit(elems))) + self.ty(*elem) + text(">")
+            }
+        }
     }
 
     fn record(&self, r: &Record<'_>) -> Doc<'static> {
@@ -806,6 +841,15 @@ impl<'a> Printer<'a> {
                     + self.arg_list(args)
                     + text(")")
             }
+            ExprKind::TraitConst {
+                trait_def,
+                name,
+                ty_args,
+            } => {
+                text(format!("trait#{}", self.path(*trait_def)))
+                    + self.ty_args(ty_args)
+                    + text(format!("#{}", spell_name(self.resolver.resolve(*name))))
+            }
             ExprKind::While {
                 state,
                 initial,
@@ -1114,16 +1158,18 @@ fn str_lit(w: [u64; 4]) -> String {
 /// The textual HIR/MIR spelling of a constant sequence: `ConstSeq[1, -2]`,
 /// with the scalar literal forms of the expression syntax.
 pub(crate) fn const_seq_lit(elems: &[ConstScalar]) -> String {
-    let elems: Vec<String> = elems
-        .iter()
-        .map(|elem| match elem {
-            ConstScalar::Int(n) => n.to_string(),
-            ConstScalar::Float(f) => f.to_string(),
-            ConstScalar::Bool(b) => b.to_string(),
-            ConstScalar::Char(c) => format!("char#{c}"),
-        })
-        .collect();
+    let elems: Vec<String> = elems.iter().map(const_scalar_lit).collect();
     format!("ConstSeq[{}]", elems.join(", "))
+}
+
+/// A scalar constant in the expression syntax's literal form.
+fn const_scalar_lit(scalar: &ConstScalar) -> String {
+    match scalar {
+        ConstScalar::Int(n) => n.to_string(),
+        ConstScalar::Float(f) => f.to_string(),
+        ConstScalar::Bool(b) => b.to_string(),
+        ConstScalar::Char(c) => format!("char#{c}"),
+    }
 }
 
 fn string_decl(token: StringToken, payload: &str) -> Doc<'static> {
