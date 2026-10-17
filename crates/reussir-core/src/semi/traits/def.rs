@@ -6,6 +6,7 @@
 use reussir_syntax::kind::TokenKey;
 use reussir_syntax::source::FileId;
 
+use crate::semi::const_eval::ConstValue;
 use crate::semi::ty::{DefId, GenericId, Ty};
 use crate::surface::{self, Span};
 
@@ -58,6 +59,16 @@ pub struct AssocTyDef {
     pub name: String,
 }
 
+/// An associated const declared by a trait (`const NAME: Ty;`). Every impl
+/// supplies its value ([`ImplDef::assoc_consts`]); there are no defaults.
+#[derive(Clone, Debug)]
+pub struct AssocConstDef<'tcx> {
+    pub name: TokenKey,
+    /// A constant type ([`crate::semi::const_eval::is_const_ty`]).
+    pub ty: Ty<'tcx>,
+    pub span: Option<Span>,
+}
+
 /// A trait declaration.
 #[derive(Clone, Debug)]
 pub struct TraitDef<'tcx> {
@@ -84,6 +95,7 @@ pub struct TraitDef<'tcx> {
     pub supertraits: Vec<TraitRef<'tcx>>,
     pub methods: Vec<MethodSig<'tcx>>,
     pub assoc_tys: Vec<AssocTyDef>,
+    pub assoc_consts: Vec<AssocConstDef<'tcx>>,
     pub span: Option<Span>,
     pub file: FileId,
 }
@@ -104,6 +116,8 @@ pub struct ImplDef<'tcx> {
     /// — the future `TraitCall { method index }` targets. Empty for the
     /// builtin (method-less) impls.
     pub methods: Vec<DefId>,
+    /// The associated const values, in *trait-const order*.
+    pub assoc_consts: Vec<ConstValue<'tcx>>,
     pub span: Option<Span>,
     pub file: FileId,
 }

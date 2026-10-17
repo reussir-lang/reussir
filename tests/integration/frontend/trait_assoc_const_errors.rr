@@ -1,0 +1,89 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+// A trait's member names are one namespace across consts and methods, and
+// const types are constant types: scalars or `ConstSeq`s of them.
+// CHECK-DAG: trait `Shape` declares `SIDES` more than once
+// CHECK-DAG: trait `Shape` declares `area` more than once
+// CHECK-DAG: associated const `NAME` must have a constant type (an integer, float, `bool`, or `char` scalar, or a `ConstSeq` of one), found `str`
+pub trait Shape {
+    const SIDES: i64;
+    const SIDES: i64;
+    const area: i64;
+    const NAME: str;
+    fn area(self: Self) -> f64;
+}
+
+pub trait Limits {
+    const MAX: u8;
+    const STEP: f16;
+    const ON: bool;
+}
+
+pub struct Square { side: f64 }
+pub struct Cube { side: f64 }
+pub struct Plain { x: i64 }
+pub struct Wrap<T> { v: T }
+
+// Conformance: the type must match the trait's, every const is defined
+// exactly once, and nothing outside the trait is defined.
+// CHECK-DAG: associated const `SIDES` has type `u32` but trait `Shape` requires `i64`
+// CHECK-DAG: `EDGES` is not an associated const of trait `Shape`
+// CHECK-DAG: visibility is not allowed on a trait impl const; the trait's visibility applies
+impl Shape for Square {
+    pub const SIDES: u32 = 4;
+    const EDGES: i64 = 4;
+    fn area(self: Self) -> f64 { self.side * self.side }
+}
+
+// CHECK-DAG: impl of trait `Limits` for `Cube` is missing associated const(s) `STEP`, `ON`
+// CHECK-DAG: associated const `MAX` is defined more than once
+impl Limits for Cube {
+    const MAX: u8 = 1;
+    const MAX: u8 = 2;
+}
+
+// Initializers are constants of the declared type, in range.
+// CHECK-DAG: integer literal `256` is out of range for `u8`
+// CHECK-DAG: float literal `100000.0` is out of range for `f16` (it would round to infinity)
+// CHECK-DAG: expected a constant of type `bool`, found an integer literal
+impl Limits for Plain {
+    const MAX: u8 = 256;
+    const STEP: f16 = 1e5;
+    const ON: bool = 1;
+}
+
+// CHECK-DAG: integer literal `-1` is out of range for `u8`
+// CHECK-DAG: expected a constant of type `bool`, found an expression that cannot be evaluated at compile time
+// CHECK-DAG: expected a constant of type `f16`, found an integer literal
+impl<T> Limits for Wrap<T> {
+    const MAX: u8 = -1;
+    const STEP: f16 = 1;
+    const ON: bool = !false;
+}
+
+// Like inherent methods, which are functions declared under the type's
+// path, an inherent const would be a const item — and consts are trait
+// members only.
+// CHECK-DAG: associated const `ZERO` must be declared by a trait; an inherent `impl` cannot define consts
+impl Plain {
+    const ZERO: i64 = 0;
+}
+
+// Uses: the self type must implement (or be bounded by) the declaring
+// trait, and a generic record cannot name its arguments in a path.
+// CHECK-DAG: no associated const `MAX` on `T`; trait `Limits` declares it, but `T` does not implement `Limits`
+fn unbounded<T>(x: T) -> u8 { T::MAX }
+
+// CHECK-DAG: no associated const `MAX` on `Square`; trait `Limits` declares it, but `Square` does not implement `Limits`
+fn unimplemented() -> u8 { Square::MAX }
+
+// CHECK-DAG: cannot name associated const `MAX` through generic type `Wrap`: a path cannot supply its type arguments
+fn generic_head() -> u8 { Wrap::MAX }
+
+pub trait One { const N: i64; }
+pub trait Two { const N: i64; }
+impl One for Plain { const N: i64 = 1; }
+impl Two for Plain { const N: i64 = 2; }
+
+// CHECK-DAG: multiple traits provide associated const `N` for `Plain`: `One` and `Two`
+fn ambiguous() -> i64 { Plain::N }

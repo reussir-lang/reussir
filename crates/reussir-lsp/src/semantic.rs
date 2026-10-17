@@ -187,6 +187,7 @@ fn classify_reussir(token: &ResolvedToken) -> Option<(SemanticKind, u32)> {
                 Some(S::Namespace)
             }
             K::TraitStmt if contextual_name_after(parent, token, "trait") => Some(S::Interface),
+            K::ConstStmt if contextual_name_after(parent, token, "const") => Some(S::Variable),
             K::WhileBinding if first_ident(parent, token) => Some(S::Variable),
             K::LetExpr if name_after(parent, token, |candidate| candidate.kind() == K::LetKw) => {
                 Some(S::Variable)
@@ -219,6 +220,7 @@ fn classify_reussir(token: &ResolvedToken) -> Option<(SemanticKind, u32)> {
                 && token.text() == "trait"
                 && first_ident(parent, token)
             || parent.kind() == K::ImplStmt && matches!(token.text(), "impl" | "for")
+            || parent.kind() == K::ConstStmt && token.text() == "const"
             || parent.kind() == K::ExternTrampolineStmt && token.text() == "trampoline"
         {
             return Some((S::Keyword, 0));
@@ -665,7 +667,7 @@ mod tests {
         let source = r#"#[repr(fixed)]
 pub struct Point<T> { pub x: T }
 enum Maybe<T> { Some(T), None }
-trait Show<T> { fn show(self: Point<T>) -> T; }
+trait Show<T> { const WIDTH: i64; fn show(self: Point<T>) -> T; }
 impl<T> Point<T> { pub fn get(self: Point<T>) -> T { self.x } }
 mod math;
 import core::intrinsic::math as m;
@@ -679,6 +681,8 @@ fn use_it(p: Point<i64>) -> i64 { m::sqrt(p.get()) }"#;
             ("Maybe", SemanticKind::Enum),
             ("Some", SemanticKind::EnumMember),
             ("Show", SemanticKind::Interface),
+            ("const", SemanticKind::Keyword),
+            ("WIDTH", SemanticKind::Variable),
             ("show", SemanticKind::Method),
             ("get", SemanticKind::Method),
             ("math", SemanticKind::Namespace),

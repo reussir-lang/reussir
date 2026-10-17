@@ -25,6 +25,7 @@ use crate::semi::ctxt::{Elaborator, FuncProto, Record, RecordFields, Variant};
 use crate::semi::hir::build::Parsed;
 use crate::semi::hir::{ClosureExpr, DecisionTree, Expr, ExprKind, Function, SwitchCases};
 use crate::semi::resolve::DefKind;
+use crate::semi::traits::AssocConstDef;
 use crate::semi::traits::coherence::{head_key, unify_args};
 use crate::semi::traits::def::MethodSig;
 use crate::semi::traits::{ImplDef, ImplId, Obligation, TraitDef, TraitId, TraitRef};
@@ -152,6 +153,7 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                 supertraits: Vec::new(),
                 methods: Vec::new(),
                 assoc_tys: Vec::new(),
+                assoc_consts: Vec::new(),
                 span: t.span,
                 file: file_of(t.file),
             });
@@ -221,9 +223,20 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                     }
                 })
                 .collect();
+            // Constant types mention no records or generics: nothing to remap.
+            let assoc_consts: Vec<AssocConstDef<'tcx>> = t
+                .consts
+                .iter()
+                .map(|c| AssocConstDef {
+                    name: interner.get_or_intern(&c.name),
+                    ty: c.ty,
+                    span: c.span,
+                })
+                .collect();
             let def = self.traits.trait_def_mut(id);
             def.supertraits = supertraits;
             def.methods = methods;
+            def.assoc_consts = assoc_consts;
         }
 
         // Record items. After the traits above: a record binder's bounds may
@@ -296,6 +309,22 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                     self.defs.lookup_function(&segs)
                 })
                 .collect();
+            let Some(assoc_consts) = i
+                .assoc_consts_in_order(&self.traits.trait_def(tid).assoc_consts, |n| {
+                    interner.get_or_intern(n)
+                })
+            else {
+                self.error(
+                    None,
+                    format!(
+                        "package `{}` ships an impl of `{}` without all of its \
+                         associated consts; the dependency set is inconsistent",
+                        ext.name,
+                        self.trait_display(tid)
+                    ),
+                );
+                continue;
+            };
             let head = head_key(self_ty).expect("shipped impls have ground heads");
             let duplicate = self.traits.impls_for(tid, head).iter().any(|&e| {
                 let other = self.traits.impl_def(e);
@@ -354,6 +383,7 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                 self_ty,
                 where_clauses,
                 methods,
+                assoc_consts,
                 span: i.span,
                 file: file_of(i.file),
             });
@@ -728,6 +758,15 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
                 method: *method,
                 ty_args: self.tys(ty_args),
                 args: self.exprs(args),
+            },
+            ExprKind::TraitConst {
+                trait_def,
+                name,
+                ty_args,
+            } => ExprKind::TraitConst {
+                trait_def: self.def(*trait_def),
+                name: self.key(*name),
+                ty_args: self.tys(ty_args),
             },
             ExprKind::Launch {
                 target,

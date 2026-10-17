@@ -1,0 +1,22 @@
+// The dependency behind trait_assoc_const_extern.rr: a pub trait with an
+// scalar and a `ConstSeq` associated const, an impl giving their values,
+// and a pub generic reading one through a bound.
+
+pub trait Arity {
+    const ARITY: i64;
+    const SLOTS: ConstSeq<u64>;
+}
+
+pub struct Pair {
+    pub a: i64,
+    pub b: i64,
+}
+
+impl Arity for Pair {
+    const ARITY: i64 = 2;
+    const SLOTS: ConstSeq<u64> = [0, 1];
+}
+
+pub fn arity_of<T: Arity>(x: T) -> i64 {
+    T::ARITY
+}

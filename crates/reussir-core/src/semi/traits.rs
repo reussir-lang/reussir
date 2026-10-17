@@ -18,8 +18,8 @@ pub mod select;
 pub mod subst;
 pub mod sync;
 
-pub use db::{SelectError, TraitDb};
-pub use def::{AssocTyDef, ImplDef, MethodSig, TraitDef};
+pub use db::{AssocConstError, SelectError, TraitDb};
+pub use def::{AssocConstDef, AssocTyDef, ImplDef, MethodSig, TraitDef};
 pub use select::{ParamEnv, SELECT_DEPTH_LIMIT, SelectCtxt};
 
 use crate::semi::ty::{GenericId, Ty};

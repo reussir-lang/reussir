@@ -136,6 +136,7 @@ BareName: &'input str = {
     "texture" => "texture",
     "glue" => "glue",
     "trait" => "trait",
+    "const" => "const",
 };
 
 /// A user debug name (parameter and let names, variant names). A name that
@@ -474,6 +475,7 @@ extern {
         "texture" => Token::Texture,
         "glue" => Token::Glue,
         "trait" => Token::Trait,
+        "const" => Token::Const,
         "transform" => Token::Transform,
         "transform_anchor" => Token::TransformAnchor,
         "interface" => Token::Interface,

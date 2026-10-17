@@ -1142,6 +1142,21 @@ pub struct TraitDecl {
     /// Supertrait references from the `: A + B<C>` list.
     pub supertraits: Vec<TraitRef>,
     pub members: Vec<Spanned<Function>>,
+    /// Associated const declarations (`value` = `None`).
+    pub consts: Vec<Spanned<AssocConst>>,
+}
+
+/// An associated const member: `const NAME: Type;` in a trait, `const NAME:
+/// Type = value;` in an impl. The parser rejects a trait default and a
+/// missing impl initializer, so `value` is `Some` exactly in an impl.
+#[derive(Clone, Debug)]
+pub struct AssocConst {
+    /// Parses for uniformity with impl methods; the elaborator rejects
+    /// `pub` (the trait's visibility applies).
+    pub visibility: Visibility,
+    pub name: TokenKey,
+    pub ty: Type,
+    pub value: Option<Expr>,
 }
 
 /// A trait reference in the surface syntax: a qualified path plus its type
@@ -1158,7 +1173,8 @@ pub struct TraitRef {
 }
 
 /// An `impl<T: B> Type<args> { fn ... }` block: the block-level generics, the
-/// target type head with its applied arguments, and the member functions.
+/// target type head with its applied arguments, and the member functions and
+/// associated consts.
 #[derive(Clone, Debug)]
 pub struct ImplBlock {
     /// Parses for uniformity with the other items; `pub impl` is rejected at
@@ -1172,6 +1188,7 @@ pub struct ImplBlock {
     pub target: Path,
     pub target_args: SmallVec<[Type; 2]>,
     pub members: Vec<Spanned<Function>>,
+    pub consts: Vec<Spanned<AssocConst>>,
 }
 
 /// A statement (a view over a top-level item node).
@@ -1406,7 +1423,26 @@ fn impl_of(node: &ResolvedNode) -> ImplBlock {
         target,
         target_args,
         members,
+        consts: assoc_consts_of(node),
     }
+}
+
+fn assoc_consts_of(node: &ResolvedNode) -> Vec<Spanned<AssocConst>> {
+    nodes(node)
+        .filter(|n| n.kind() == ConstStmt)
+        .map(|c| {
+            let ty = nodes(c)
+                .find(|n| is_type_kind(n.kind()))
+                .expect("const type");
+            let member = AssocConst {
+                visibility: visibility_of(c),
+                name: key(name_after_text(c, "const")),
+                ty: Type::new(ty),
+                value: expr_children(c).next().map(Expr::new),
+            };
+            spanned(c, member)
+        })
+        .collect()
 }
 
 fn trait_of(node: &ResolvedNode) -> TraitDecl {
@@ -1425,6 +1461,7 @@ fn trait_of(node: &ResolvedNode) -> TraitDecl {
             .filter(|n| n.kind() == FnStmt)
             .map(|f| spanned(f, function_of(f)))
             .collect(),
+        consts: assoc_consts_of(node),
     }
 }
 
@@ -1733,6 +1770,43 @@ mod tests {
         assert_eq!(resolver.resolve(ib.target.basename), "Vec");
         assert_eq!(ib.target_args.len(), 1);
         assert_eq!(ib.members.len(), 1);
+    }
+
+    #[test]
+    fn assoc_consts_project_beside_methods() {
+        let parse = parse(
+            "trait Shape { const SIDES: i64; fn area(self: Self) -> f64; }
+             impl Shape for Square { const SIDES: i64 = -4; fn area(self: Self) -> f64 { 1.0 } }",
+        );
+        let prog = program(&parse.root);
+        let resolver = parse.resolver();
+        let StmtKind::Trait(decl) = prog[0].kind() else {
+            panic!("expected a trait declaration");
+        };
+        assert_eq!(decl.members.len(), 1);
+        let [declared] = decl.consts.as_slice() else {
+            panic!("expected one trait const");
+        };
+        assert_eq!(resolver.resolve(declared.value.name), "SIDES");
+        assert!(declared.value.value.is_none());
+        assert!(matches!(
+            declared.value.ty.kind(),
+            TypeKind::TypeIntegral(IntegralType::Signed(64))
+        ));
+
+        let StmtKind::Impl(ib) = prog[1].kind() else {
+            panic!("expected an impl block");
+        };
+        assert_eq!(ib.members.len(), 1);
+        let [defined] = ib.consts.as_slice() else {
+            panic!("expected one impl const");
+        };
+        assert_eq!(resolver.resolve(defined.value.name), "SIDES");
+        let value = defined.value.value.as_ref().expect("initializer");
+        assert!(matches!(
+            value.kind(),
+            ExprKind::UnaryOpExpr(UnaryOp::Negate, _)
+        ));
     }
 
     /// The greedy `for` projection rule: a lone head named `for` is the

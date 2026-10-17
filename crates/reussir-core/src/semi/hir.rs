@@ -213,6 +213,18 @@ pub enum ExprKind<'tcx> {
         /// The receiver first, then the remaining arguments.
         args: Vec<Expr<'tcx>>,
     },
+    /// An associated const named through its self type — `Type::NAME`, or
+    /// `T::NAME` for a generic bounded by the declaring trait. Like an
+    /// associated function's [`ExprKind::TraitCall`], one deferred form
+    /// covers both: monomorphization grounds `Self`, selects the impl, and
+    /// replaces the node by the const's value.
+    TraitConst {
+        /// The declaring trait's path-keyed identity.
+        trait_def: DefId,
+        name: TokenKey,
+        /// `[Self] ++ trait args`.
+        ty_args: Vec<Ty<'tcx>>,
+    },
     /// A struct (compound) constructor call.
     CompoundCall {
         target: DefId,
@@ -340,8 +352,17 @@ pub struct TraitText<'tcx> {
     pub generics: Vec<(GenericId, Option<String>)>,
     /// Super-references: rendered path + full args (`args[0]` = `Self`).
     pub supers: Vec<(String, Vec<Ty<'tcx>>)>,
+    pub consts: Vec<TraitConstText<'tcx>>,
     pub methods: Vec<TraitMethodText<'tcx>>,
     pub file: FileId,
+    pub span: Option<Span>,
+}
+
+/// An associated const declaration in print-ready form.
+#[derive(Clone, Debug)]
+pub struct TraitConstText<'tcx> {
+    pub name: String,
+    pub ty: Ty<'tcx>,
     pub span: Option<Span>,
 }
 
@@ -360,7 +381,8 @@ pub struct TraitMethodText<'tcx> {
 }
 
 /// An impl item in print-ready form: trait path + full args
-/// (`args[0]` = the self type) and method paths in trait-method order.
+/// (`args[0]` = the self type), the associated const values by name in
+/// trait-const order, and method paths in trait-method order.
 #[derive(Clone, Debug)]
 pub struct ImplText<'tcx> {
     /// The implemented trait's def (identity only, like [`TraitText::def`]).
@@ -368,9 +390,30 @@ pub struct ImplText<'tcx> {
     pub generics: Vec<(GenericId, Option<String>)>,
     pub trait_path: String,
     pub args: Vec<Ty<'tcx>>,
+    pub consts: Vec<(String, crate::semi::const_eval::ConstValue<'tcx>)>,
     pub methods: Vec<String>,
     pub file: FileId,
     pub span: Option<Span>,
+}
+
+impl<'tcx> ImplText<'tcx> {
+    /// The const values in the order of the trait's declarations `decls`,
+    /// matched by name (`key` interns a name in the session's key space);
+    /// `None` when a declared const has no value here.
+    pub fn assoc_consts_in_order(
+        &self,
+        decls: &[crate::semi::traits::AssocConstDef<'tcx>],
+        mut key: impl FnMut(&str) -> TokenKey,
+    ) -> Option<Vec<crate::semi::const_eval::ConstValue<'tcx>>> {
+        let keys: Vec<TokenKey> = self.consts.iter().map(|(name, _)| key(name)).collect();
+        decls
+            .iter()
+            .map(|d| {
+                let at = keys.iter().position(|&k| k == d.name)?;
+                Some(self.consts[at].1.clone())
+            })
+            .collect()
+    }
 }
 
 /// Render the user-declared traits and impls of `db` print-ready. Sealed
@@ -417,6 +460,15 @@ pub fn trait_texts<'tcx>(
                 .iter()
                 .map(|s| (path_of(db.trait_def(s.trait_id).def), s.args.clone()))
                 .collect(),
+            consts: t
+                .assoc_consts
+                .iter()
+                .map(|c| TraitConstText {
+                    name: resolver.resolve(c.name).to_string(),
+                    ty: c.ty,
+                    span: c.span,
+                })
+                .collect(),
             methods: t
                 .methods
                 .iter()
@@ -452,6 +504,13 @@ pub fn trait_texts<'tcx>(
             generics: imp.generics.iter().map(|&g| (g, None)).collect(),
             trait_path: path_of(db.trait_def(imp.trait_ref.trait_id).def),
             args: imp.trait_ref.args.clone(),
+            consts: db
+                .trait_def(imp.trait_ref.trait_id)
+                .assoc_consts
+                .iter()
+                .zip(&imp.assoc_consts)
+                .map(|(c, value)| (resolver.resolve(c.name).to_string(), value.clone()))
+                .collect(),
             methods: imp.methods.iter().map(|&d| path_of(d)).collect(),
             file: imp.file,
             span: imp.span,
