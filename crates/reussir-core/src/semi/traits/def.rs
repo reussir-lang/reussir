@@ -59,13 +59,17 @@ pub struct AssocTyDef {
     pub name: String,
 }
 
-/// An associated const declared by a trait (`const NAME: Ty;`). Every impl
-/// supplies its value ([`ImplDef::assoc_consts`]); there are no defaults.
+/// An associated const declared by a trait (`const NAME: Ty;`, or `const
+/// NAME: Ty = default;`). An impl supplies its value
+/// ([`ImplDef::assoc_consts`]) or, when the trait gives a default value,
+/// may omit it.
 #[derive(Clone, Debug)]
 pub struct AssocConstDef<'tcx> {
     pub name: TokenKey,
     /// A constant type ([`crate::semi::const_eval::is_const_ty`]).
     pub ty: Ty<'tcx>,
+    /// The value an impl that omits the const takes.
+    pub default: Option<ConstValue<'tcx>>,
     pub span: Option<Span>,
 }
 
@@ -116,8 +120,10 @@ pub struct ImplDef<'tcx> {
     /// — the future `TraitCall { method index }` targets. Empty for the
     /// builtin (method-less) impls.
     pub methods: Vec<DefId>,
-    /// The associated const values, in *trait-const order*.
-    pub assoc_consts: Vec<ConstValue<'tcx>>,
+    /// The associated const values the impl defines, in *trait-const
+    /// order*; `None` where the impl omits a const and the trait's default
+    /// value applies.
+    pub assoc_consts: Vec<Option<ConstValue<'tcx>>>,
     pub span: Option<Span>,
     pub file: FileId,
 }

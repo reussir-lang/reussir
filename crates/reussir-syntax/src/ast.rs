@@ -387,7 +387,8 @@ impl Emitter<'_> {
     }
 
     /// The `const NAME: Type (= expr)?;` members of a trait or impl body,
-    /// each spanned; `constValue` is `null` for a trait declaration.
+    /// each spanned; `constValue` is `null` for a trait const without a
+    /// default value.
     fn assoc_consts(&self, node: &ResolvedNode) -> Value {
         nodes(node)
             .filter(|n| n.kind() == ConstStmt)

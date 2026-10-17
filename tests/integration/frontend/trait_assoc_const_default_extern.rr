@@ -1,0 +1,41 @@
+// Default values of associated consts across a package boundary: the
+// dependency's `.rri` ships each default on the trait and only the values
+// its impl writes. Both the dependency's impl and the consumer's impl of the
+// extern trait fall back to the dependency's defaults.
+
+// RUN: %rrc --package-root %S/trait_assoc_const_default_extern_dep --package-name dep --emit rri -o %t.rri
+// RUN: %FileCheck %s --check-prefix=RRI < %t.rri
+
+// RRI-DAG: const LEVEL : i64 = 7 {{\[[0-9.]+\]}};
+// RRI-DAG: const STEPS : ConstSeq<u8> = ConstSeq[1, 2] : ConstSeq<u8> {{\[[0-9.]+\]}};
+// RRI-DAG: impl #dep::Mode::<#dep::Base> in 0 {{\[[0-9.]+\]}} { const LEVEL = 1; }
+
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --extern-src dep=%S/trait_assoc_const_default_extern_dep \
+// RUN:   --emit mir --no-source-locations -o - | %FileCheck %s --check-prefix=MIR
+
+// MIR: pub fn @_RINvC3dep8level_ofNvC3app5LocalE(v0 (x): app::Local) -> i64 {
+// MIR-NEXT: 7 : i64
+// MIR: pub fn @_RNvC3app10base_steps() -> ConstSeq<u8> {
+// MIR-NEXT: ConstSeq[1, 2] : ConstSeq<u8>
+// MIR: pub fn @_RNvC3app11local_steps() -> ConstSeq<u8> {
+// MIR-NEXT: ConstSeq[9] : ConstSeq<u8>
+
+pub struct Local {
+    pub a: i64,
+}
+
+impl dep::Mode for Local {
+    const STEPS: ConstSeq<u8> = [9];
+}
+
+pub fn base_steps() -> ConstSeq<u8> {
+    dep::Base::STEPS
+}
+
+pub fn local_steps() -> ConstSeq<u8> {
+    Local::STEPS
+}
+
+pub fn through_dep() -> i64 {
+    dep::level_of(Local { a: 1 })
+}

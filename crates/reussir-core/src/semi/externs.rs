@@ -223,13 +223,15 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                     }
                 })
                 .collect();
-            // Constant types mention no records or generics: nothing to remap.
+            // Constant types and values mention no records or generics:
+            // nothing to remap.
             let assoc_consts: Vec<AssocConstDef<'tcx>> = t
                 .consts
                 .iter()
                 .map(|c| AssocConstDef {
                     name: interner.get_or_intern(&c.name),
                     ty: c.ty,
+                    default: c.default.clone(),
                     span: c.span,
                 })
                 .collect();

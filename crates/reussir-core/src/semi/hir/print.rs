@@ -369,8 +369,13 @@ impl<'a> Printer<'a> {
         }
         head = head + self.item_loc(t.file, t.span);
         let consts = t.consts.iter().map(|c| {
+            let default = match &c.default {
+                Some(value) => text(" = ") + self.const_value(value),
+                None => Doc::Null,
+            };
             text(format!("const {} : ", spell_name(&c.name)))
                 + self.ty(c.ty)
+                + default
                 + self.span_doc(c.span)
                 + text(";")
         });

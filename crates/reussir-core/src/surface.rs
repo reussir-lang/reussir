@@ -1142,13 +1142,13 @@ pub struct TraitDecl {
     /// Supertrait references from the `: A + B<C>` list.
     pub supertraits: Vec<TraitRef>,
     pub members: Vec<Spanned<Function>>,
-    /// Associated const declarations (`value` = `None`).
+    /// Associated const declarations; `value` is the default value, if any.
     pub consts: Vec<Spanned<AssocConst>>,
 }
 
-/// An associated const member: `const NAME: Type;` in a trait, `const NAME:
-/// Type = value;` in an impl. The parser rejects a trait default and a
-/// missing impl initializer, so `value` is `Some` exactly in an impl.
+/// An associated const member: `const NAME: Type;` or `const NAME: Type =
+/// default;` in a trait, `const NAME: Type = value;` in an impl. The parser
+/// rejects a missing impl initializer, so `value` is always `Some` in an impl.
 #[derive(Clone, Debug)]
 pub struct AssocConst {
     /// Parses for uniformity with impl methods; the elaborator rejects
@@ -1775,7 +1775,7 @@ mod tests {
     #[test]
     fn assoc_consts_project_beside_methods() {
         let parse = parse(
-            "trait Shape { const SIDES: i64; fn area(self: Self) -> f64; }
+            "trait Shape { const SIDES: i64; const ROUND: bool = false; fn area(self: Self) -> f64; }
              impl Shape for Square { const SIDES: i64 = -4; fn area(self: Self) -> f64 { 1.0 } }",
         );
         let prog = program(&parse.root);
@@ -1784,14 +1784,19 @@ mod tests {
             panic!("expected a trait declaration");
         };
         assert_eq!(decl.members.len(), 1);
-        let [declared] = decl.consts.as_slice() else {
-            panic!("expected one trait const");
+        let [declared, defaulted] = decl.consts.as_slice() else {
+            panic!("expected two trait consts");
         };
         assert_eq!(resolver.resolve(declared.value.name), "SIDES");
         assert!(declared.value.value.is_none());
         assert!(matches!(
             declared.value.ty.kind(),
             TypeKind::TypeIntegral(IntegralType::Signed(64))
+        ));
+        let default = defaulted.value.value.as_ref().expect("default value");
+        assert!(matches!(
+            default.kind(),
+            ExprKind::ConstExpr(Const::ConstBool(false))
         ));
 
         let StmtKind::Impl(ib) = prog[1].kind() else {
