@@ -1,0 +1,54 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+// Diagnostics for a `ConstSeq<i32>` associated const: the impl's declared
+// type must match the trait's, and its initializer must be a sequence
+// literal whose every element is an in-range `i32` literal.
+
+trait Table {
+    const TEST: ConstSeq<i32>;
+}
+
+trait Count {
+    const N: i64;
+}
+
+struct Range { x: i64 }
+struct Kinds { x: i64 }
+struct Calls { x: i64 }
+struct Wider { x: i64 }
+struct Scalar { x: i64 }
+
+fn one() -> i32 { 1 }
+
+// CHECK-DAG: integer literal `2147483648` is out of range for `i32`
+// CHECK-DAG: integer literal `-2147483649` is out of range for `i32`
+impl Table for Range {
+    const TEST: ConstSeq<i32> = [2147483647, 2147483648, -2147483648, -2147483649];
+}
+
+// CHECK-DAG: expected a constant of type `i32`, found a float literal
+// CHECK-DAG: expected a constant of type `i32`, found a bool literal
+impl Table for Kinds {
+    const TEST: ConstSeq<i32> = [1.5, true];
+}
+
+// CHECK-DAG: expected a constant of type `i32`, found an expression that cannot be evaluated at compile time
+// CHECK-DAG: expected a constant of type `i32`, found an expression that cannot be evaluated at compile time
+impl Table for Calls {
+    const TEST: ConstSeq<i32> = [one(), x];
+}
+
+// CHECK-DAG: associated const `TEST` has type `ConstSeq<i64>` but trait `Table` requires `ConstSeq<i32>`
+impl Table for Wider {
+    const TEST: ConstSeq<i64> = [1];
+}
+
+// CHECK-DAG: expected a constant of type `ConstSeq<i32>`, found an integer literal
+impl Table for Scalar {
+    const TEST: ConstSeq<i32> = 1;
+}
+
+// CHECK-DAG: expected a constant of type `i64`, found a sequence literal
+impl Count for Scalar {
+    const N: i64 = [1];
+}
