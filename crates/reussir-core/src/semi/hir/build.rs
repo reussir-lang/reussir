@@ -192,6 +192,7 @@ impl<'tcx> Parsed<'tcx> {
                 .map(|c| AssocConstDef {
                     name: self.names.intern(&c.name),
                     ty: c.ty,
+                    default: c.default.clone(),
                     span: c.span,
                 })
                 .collect();
@@ -733,6 +734,7 @@ impl<'tcx> Builder<'_, 'tcx> {
                 .map(|c| TraitConstText {
                     name: c.name.clone(),
                     ty: self.ty(&c.ty),
+                    default: c.default.as_ref().map(|v| self.const_value(v)),
                     span: span_of(c.span),
                 })
                 .collect(),

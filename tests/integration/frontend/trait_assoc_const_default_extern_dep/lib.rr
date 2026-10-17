@@ -1,0 +1,20 @@
+// The dependency behind trait_assoc_const_default_extern.rr: a pub trait
+// whose associated consts have default values, an impl overriding one of
+// them, and a pub generic reading one through a bound.
+
+pub trait Mode {
+    const LEVEL: i64 = 7;
+    const STEPS: ConstSeq<u8> = [1, 2];
+}
+
+pub struct Base {
+    pub a: i64,
+}
+
+impl Mode for Base {
+    const LEVEL: i64 = 1;
+}
+
+pub fn level_of<T: Mode>(x: T) -> i64 {
+    T::LEVEL
+}

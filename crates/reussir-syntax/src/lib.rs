@@ -1050,7 +1050,7 @@ mod tests {
     #[test]
     fn assoc_consts_encode_in_traits_and_impls() {
         let json = json_of(
-            "trait Shape { const SIDES: i64; fn area(self: Self) -> f64; }
+            "trait Shape { const SIDES: i64; const ROUND: bool = false; fn area(self: Self) -> f64; }
              impl Shape for Square {
                  const SIDES: i64 = -4;
                  fn area(self: Self) -> f64 { 1.0 }
@@ -1058,9 +1058,12 @@ mod tests {
         );
         let decl = &unwrap_span(&json[0])["contents"];
         let consts = decl["traitConsts"].as_array().expect("trait consts");
-        assert_eq!(consts.len(), 1);
+        assert_eq!(consts.len(), 2);
         assert_eq!(consts[0]["spanValue"]["constName"], "SIDES");
         assert!(consts[0]["spanValue"]["constValue"].is_null());
+        // A default value encodes like an impl initializer.
+        assert_eq!(consts[1]["spanValue"]["constName"], "ROUND");
+        assert!(!consts[1]["spanValue"]["constValue"].is_null());
         assert_eq!(decl["traitMembers"].as_array().expect("members").len(), 1);
 
         let block = &unwrap_span(&json[1])["contents"];
@@ -1072,12 +1075,8 @@ mod tests {
     }
 
     #[test]
-    fn assoc_const_trait_default_and_missing_initializer_are_rejected() {
+    fn assoc_const_missing_initializer_and_attributes_are_rejected() {
         for (source, message) in [
-            (
-                "trait T { const N: i64 = 1; fn ok(self: Self) -> i64; }",
-                "default values are not supported",
-            ),
             (
                 "impl T for P { const N: i64; fn ok(self: Self) -> i64 { 1 } }",
                 "expected `=` and an initializer",

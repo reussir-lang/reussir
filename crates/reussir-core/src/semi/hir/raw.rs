@@ -54,6 +54,7 @@ pub struct TraitItem {
 pub struct TraitConstItem {
     pub name: String,
     pub ty: Ty,
+    pub default: Option<ConstValue>,
     pub span: Option<Span>,
 }
 

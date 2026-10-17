@@ -220,10 +220,11 @@ TraitMethodSig: raw::TraitMethodItem =
         span: sp,
     };
 
-/// An associated const declaration: `const NAME : ty;`.
+/// An associated const declaration, `const NAME : ty;`, or with a default
+/// value, `const NAME : ty = value;`.
 TraitConstSig: raw::TraitConstItem =
-    "const" <name:DebugName> ":" <ty:Ty> <sp:Span?> ";"
-    => raw::TraitConstItem { name: name.into(), ty, span: sp };
+    "const" <name:DebugName> ":" <ty:Ty> <default:("=" <ConstValue>)?> <sp:Span?> ";"
+    => raw::TraitConstItem { name: name.into(), ty, default, span: sp };
 
 RecvForm: raw::RecvForm = {
     "Arc" => raw::RecvForm::Arc,

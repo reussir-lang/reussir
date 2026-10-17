@@ -171,7 +171,8 @@ impl<'tcx> TraitDb<'tcx> {
 
     /// The value associated const `name` of `trait_id` takes for the ground
     /// `self_ty`. Selection runs with no assumptions (everything is ground)
-    /// and names the unique impl, which defines every const of its trait.
+    /// and names the unique impl; the impl's own value wins, and an impl
+    /// that omits the const takes the trait's default value.
     pub fn assoc_const_value(
         &self,
         tcx: &TyCtxt<'tcx>,
@@ -179,9 +180,8 @@ impl<'tcx> TraitDb<'tcx> {
         self_ty: Ty<'tcx>,
         name: TokenKey,
     ) -> Result<ConstValue<'tcx>, AssocConstError<'tcx>> {
-        let index = self
-            .trait_def(trait_id)
-            .assoc_consts
+        let decls = &self.trait_def(trait_id).assoc_consts;
+        let index = decls
             .iter()
             .position(|c| c.name == name)
             .ok_or(AssocConstError::Undeclared)?;
@@ -190,9 +190,11 @@ impl<'tcx> TraitDb<'tcx> {
             args: vec![self_ty],
         });
         match SelectCtxt::new(self, tcx, &[]).select(&goal) {
-            Ok(Evidence::Impl { impl_id, .. }) => {
-                Ok(self.impl_def(impl_id).assoc_consts[index].clone())
-            }
+            Ok(Evidence::Impl { impl_id, .. }) => Ok(self.impl_def(impl_id).assoc_consts[index]
+                .as_ref()
+                .or(decls[index].default.as_ref())
+                .expect("conformance requires a value or a default value")
+                .clone()),
             Ok(_) => Err(AssocConstError::Indirect),
             Err(error) => Err(AssocConstError::Select(error)),
         }

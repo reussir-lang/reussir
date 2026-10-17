@@ -1,0 +1,78 @@
+// Default values of associated consts: a trait may give a const a default
+// value, which an impl that omits the const takes. The HIR keeps the default
+// on the trait and lists only the values each impl writes; monomorphization
+// substitutes the impl's value, or the default when the impl has none.
+
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.a.hir
+// RUN: %rrc %t.a.hir --emit hir --no-source-locations -o %t.b.hir
+// RUN: diff %t.a.hir %t.b.hir
+// RUN: %FileCheck %s --check-prefix=HIR --input-file=%t.a.hir
+// RUN: %rrc %s --emit mir --no-source-locations -o %t.direct.mir
+// RUN: %rrc %t.a.hir --emit mir --no-source-locations -o %t.via.mir
+// RUN: diff %t.direct.mir %t.via.mir
+// RUN: %FileCheck %s --check-prefix=MIR --input-file=%t.direct.mir
+// RUN: %rrc %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/trait_assoc_const_default.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// HIR: pub trait #Config<$0 (Self)> {
+// HIR-NEXT: const WEIGHTS : ConstSeq<u64> = ConstSeq[] : ConstSeq<u64>;
+// HIR-NEXT: const ENABLED : bool = true;
+// HIR-NEXT: const WIDTH : i64;
+pub trait Config {
+    const WEIGHTS: ConstSeq<u64> = [];
+    const ENABLED: bool = true;
+    const WIDTH: i64;
+}
+
+pub struct Wide { n: i64 }
+pub struct Narrow { n: i64 }
+
+// HIR-DAG: impl #Config::<#Wide> { const WEIGHTS = ConstSeq[3, 4] : ConstSeq<u64>; const WIDTH = 8; }
+impl Config for Wide {
+    const WEIGHTS: ConstSeq<u64> = [3, 4];
+    const WIDTH: i64 = 8;
+}
+
+// HIR-DAG: impl #Config::<#Narrow> { const ENABLED = false; const WIDTH = 2; }
+impl Config for Narrow {
+    const ENABLED: bool = false;
+    const WIDTH: i64 = 2;
+}
+
+// Generic uses take the selected impl's value, or the default where the
+// impl omits the const.
+// MIR: pub fn @_RC8concrete() -> u64 {
+// MIR-NEXT: len#0(ConstSeq[] : ConstSeq<u64>){{.*}}#get#0(ConstSeq[3, 4] : ConstSeq<u64>, 1 : u64)
+// MIR: fn @_RIC12weight_countC4WideE(v0 (x): Wide) -> u64 {
+// MIR-NEXT: len#0(ConstSeq[3, 4] : ConstSeq<u64>)
+// MIR: fn @_RIC12weight_countC6NarrowE(v0 (x): Narrow) -> u64 {
+// MIR-NEXT: len#0(ConstSeq[] : ConstSeq<u64>)
+// MIR: fn @_RIC7enabledC4WideE(v0 (x): Wide) -> i64 {
+// MIR-NEXT: if true : bool then {
+// MIR: fn @_RIC7enabledC6NarrowE(v0 (x): Narrow) -> i64 {
+// MIR-NEXT: if false : bool then {
+fn enabled<T: Config>(x: T) -> i64 {
+    if T::ENABLED { 1 } else { 0 }
+}
+
+fn weight_count<T: Config>(x: T) -> u64 {
+    core::intrinsic::const_seq::len(T::WEIGHTS)
+}
+
+// Concrete uses too (checked above): 0 * 10 + 4 = 4.
+pub fn concrete() -> u64 {
+    core::intrinsic::const_seq::len(Narrow::WEIGHTS) * 10
+        + core::intrinsic::const_seq::get(Wide::WEIGHTS, 1)
+}
+
+// 2 * 1000 + 0 * 100 + 1 * 10 + 0 = 2010
+pub fn checksum() -> i64 {
+    (weight_count(Wide { n: 1 }) as i64) * 1000
+        + (weight_count(Narrow { n: 1 }) as i64) * 100
+        + enabled(Wide { n: 1 }) * 10
+        + enabled(Narrow { n: 1 })
+}
+
+extern "C" trampoline "reussir_default_checksum" = checksum;
+extern "C" trampoline "reussir_default_concrete" = concrete;

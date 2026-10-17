@@ -3496,9 +3496,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// The associated consts of a trait impl, in trait-const order: each
     /// member names a const the trait declares, its annotated type equals
     /// the declared one with the trait's binder substituted (as in
-    /// [`Self::check_conformance`]), and its initializer evaluates. `None`
-    /// (with every problem reported) unless all of the trait's consts are
-    /// defined exactly once and evaluate.
+    /// [`Self::check_conformance`]), and its initializer evaluates. A const
+    /// with a default value may be omitted, leaving `None` in its slot.
+    /// `None` overall (with every problem reported) unless every const
+    /// without a default value is defined, none twice, and every defined
+    /// one evaluates.
     fn scan_impl_assoc_consts(
         &mut self,
         ib: &surface::ImplBlock,
@@ -3507,7 +3509,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         self_ty: Ty<'tcx>,
         trait_args: &[Ty<'tcx>],
         span: Option<Span>,
-    ) -> Option<Vec<crate::semi::const_eval::ConstValue<'tcx>>> {
+    ) -> Option<Vec<Option<crate::semi::const_eval::ConstValue<'tcx>>>> {
         let tdef = self.traits.trait_def(tid);
         let decls = tdef.assoc_consts.clone();
         let map: FxHashMap<GenericId, Ty<'tcx>> = std::iter::once((tdef.self_param, self_ty))
@@ -3575,7 +3577,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let missing: Vec<String> = decls
             .iter()
             .zip(&defined)
-            .filter(|(_, d)| !**d)
+            .filter(|(decl, d)| !**d && decl.default.is_none())
             .map(|(decl, _)| format!("`{}`", self.sym(decl.name)))
             .collect();
         if !missing.is_empty() {
@@ -3588,7 +3590,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 ),
             );
         }
-        values.into_iter().collect()
+        // A defined const without a value failed its type or initializer.
+        let evaluated = defined.iter().zip(&values).all(|(&d, v)| d == v.is_some());
+        (missing.is_empty() && evaluated).then_some(values)
     }
 
     /// Validate an `impl` block's target: it must resolve to a record this
@@ -4024,9 +4028,18 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 );
                 continue;
             }
+            // A constant type mentions neither `Self` nor the trait's
+            // generics, so a default value is checked once, here, for every
+            // impl. One that fails to evaluate drops the const, as an invalid
+            // type does.
+            let default = match member.value.value.as_ref().map(|e| self.eval_const(e, ty)) {
+                Some(None) => continue,
+                default => default.flatten(),
+            };
             assoc_consts.push(crate::semi::traits::AssocConstDef {
                 name,
                 ty,
+                default,
                 span: cspan,
             });
         }

@@ -363,6 +363,7 @@ pub struct TraitText<'tcx> {
 pub struct TraitConstText<'tcx> {
     pub name: String,
     pub ty: Ty<'tcx>,
+    pub default: Option<crate::semi::const_eval::ConstValue<'tcx>>,
     pub span: Option<Span>,
 }
 
@@ -381,8 +382,8 @@ pub struct TraitMethodText<'tcx> {
 }
 
 /// An impl item in print-ready form: trait path + full args
-/// (`args[0]` = the self type), the associated const values by name in
-/// trait-const order, and method paths in trait-method order.
+/// (`args[0]` = the self type), the associated const values the impl defines
+/// by name in trait-const order, and method paths in trait-method order.
 #[derive(Clone, Debug)]
 pub struct ImplText<'tcx> {
     /// The implemented trait's def (identity only, like [`TraitText::def`]).
@@ -398,19 +399,23 @@ pub struct ImplText<'tcx> {
 
 impl<'tcx> ImplText<'tcx> {
     /// The const values in the order of the trait's declarations `decls`,
-    /// matched by name (`key` interns a name in the session's key space);
-    /// `None` when a declared const has no value here.
+    /// matched by name (`key` interns a name in the session's key space),
+    /// as [`ImplDef::assoc_consts`] stores them: `None` where the impl omits
+    /// a const with a default value. `None` overall when a declared const
+    /// without a default value has no value here.
+    ///
+    /// [`ImplDef::assoc_consts`]: crate::semi::traits::ImplDef::assoc_consts
     pub fn assoc_consts_in_order(
         &self,
         decls: &[crate::semi::traits::AssocConstDef<'tcx>],
         mut key: impl FnMut(&str) -> TokenKey,
-    ) -> Option<Vec<crate::semi::const_eval::ConstValue<'tcx>>> {
+    ) -> Option<Vec<Option<crate::semi::const_eval::ConstValue<'tcx>>>> {
         let keys: Vec<TokenKey> = self.consts.iter().map(|(name, _)| key(name)).collect();
         decls
             .iter()
-            .map(|d| {
-                let at = keys.iter().position(|&k| k == d.name)?;
-                Some(self.consts[at].1.clone())
+            .map(|d| match keys.iter().position(|&k| k == d.name) {
+                Some(at) => Some(Some(self.consts[at].1.clone())),
+                None => d.default.is_some().then_some(None),
             })
             .collect()
     }
@@ -466,6 +471,7 @@ pub fn trait_texts<'tcx>(
                 .map(|c| TraitConstText {
                     name: resolver.resolve(c.name).to_string(),
                     ty: c.ty,
+                    default: c.default.clone(),
                     span: c.span,
                 })
                 .collect(),
@@ -509,7 +515,9 @@ pub fn trait_texts<'tcx>(
                 .assoc_consts
                 .iter()
                 .zip(&imp.assoc_consts)
-                .map(|(c, value)| (resolver.resolve(c.name).to_string(), value.clone()))
+                .filter_map(|(c, value)| {
+                    Some((resolver.resolve(c.name).to_string(), value.clone()?))
+                })
                 .collect(),
             methods: imp.methods.iter().map(|&d| path_of(d)).collect(),
             file: imp.file,
