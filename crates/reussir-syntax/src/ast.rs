@@ -74,6 +74,7 @@ fn is_expr_kind(kind: SyntaxKind) -> bool {
         BlockExpr
             | ParenExpr
             | TupleExpr
+            | SeqLitExpr
             | WhileExpr
             | IfExpr
             | LetExpr
@@ -649,6 +650,10 @@ impl Emitter<'_> {
             }
             TupleExpr => tagged(
                 "Tuple",
+                Value::Array(expr_children(node).map(|e| self.expr(e)).collect()),
+            ),
+            SeqLitExpr => tagged(
+                "SeqLit",
                 Value::Array(expr_children(node).map(|e| self.expr(e)).collect()),
             ),
             LiteralExpr => {

@@ -1,0 +1,17 @@
+// The constant sequence former and its intrinsics' declaration sites.
+// `ConstSeq<T>` is an immutable static sequence of integer, floating-point,
+// `bool`, or `char` scalars, created from a sequence literal `[e0, e1, ...]`
+// that the compiler evaluates. Like `str`, a value is a view of a global and
+// its length, and is not reference-counted.
+
+/// An immutable static sequence of `T` scalars.
+#[lang("const_seq")]
+pub struct ConstSeq<T> { }
+
+/// The number of elements.
+#[lang("core::intrinsic::const_seq::len")]
+pub fn len<T>(seq: ConstSeq<T>) -> u64;
+
+/// The element at `index`; panics when `index` is out of bounds.
+#[lang("core::intrinsic::const_seq::get")]
+pub fn get<T>(seq: ConstSeq<T>, index: u64) -> T;

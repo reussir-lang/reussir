@@ -262,6 +262,8 @@ bool isTriviallyCopyable(mlir::Type type) {
       // A str is a borrowed {ptr, len} view of immutable storage: no
       // ownership to transfer, copying the pair is the copy.
       .Case<StrType>([](auto) { return true; })
+      // A const_seq is the same kind of view over static storage.
+      .Case<ConstSeqType>([](auto) { return true; })
       // Default: check if it's a built-in MLIR type that might be trivially
       // copyable
       .Default([](mlir::Type type) { return false; });
@@ -1194,37 +1196,47 @@ MLIR_DATA_LAYOUT_EXPAND_PREFERRED_ALIGN(
     })
 
 //===----------------------------------------------------------------------===//
-// Reussir Str Type DataLayoutInterface
+// Reussir Str and ConstSeq Type DataLayoutInterface
 //===----------------------------------------------------------------------===//
-// A str lowers to `{ptr, index}` (see the type converter). The two fields
-// need not share a size or alignment — a CHERI-style target has 128-bit,
-// 16-byte-aligned capabilities over a 64-bit index — so the layout is the
-// ordinary struct computation: index at the aligned offset past the
-// pointer, the whole padded to the max field alignment. This must agree
-// with what LLVM derives for the literal `{ptr, index}` struct.
+// A str or const_seq lowers to a `{ptr, index}` view (see the type
+// converter). The two fields need not share a size or alignment — a
+// CHERI-style target has 128-bit, 16-byte-aligned capabilities over a 64-bit
+// index — so the layout is the ordinary struct computation: index at the
+// aligned offset past the pointer, the whole padded to the max field
+// alignment. This must agree with what LLVM derives for the literal
+// `{ptr, index}` struct.
 
-llvm::TypeSize
-StrType::getTypeSizeInBits(const mlir::DataLayout &dataLayout,
-                           [[maybe_unused]] mlir::DataLayoutEntryListRef params)
-    const {
-  auto ptrTy = mlir::LLVM::LLVMPointerType::get(getContext());
-  auto indexTy = mlir::IndexType::get(getContext());
+static uint64_t viewABIAlignment(mlir::MLIRContext *context,
+                                 const mlir::DataLayout &dataLayout) {
+  auto ptrTy = mlir::LLVM::LLVMPointerType::get(context);
+  auto indexTy = mlir::IndexType::get(context);
+  return std::max(dataLayout.getTypeABIAlignment(ptrTy),
+                  dataLayout.getTypeABIAlignment(indexTy));
+}
+
+static llvm::TypeSize viewTypeSizeInBits(mlir::MLIRContext *context,
+                                         const mlir::DataLayout &dataLayout) {
+  auto ptrTy = mlir::LLVM::LLVMPointerType::get(context);
+  auto indexTy = mlir::IndexType::get(context);
   uint64_t ptrSize = dataLayout.getTypeSize(ptrTy).getFixedValue();
   uint64_t idxSize = dataLayout.getTypeSize(indexTy).getFixedValue();
   uint64_t idxAlign = dataLayout.getTypeABIAlignment(indexTy);
-  uint64_t align = getABIAlignment(dataLayout, params);
+  uint64_t align = viewABIAlignment(context, dataLayout);
   uint64_t idxOffset = llvm::alignTo(ptrSize, idxAlign);
   return llvm::TypeSize::getFixed(llvm::alignTo(idxOffset + idxSize, align) *
                                   8);
 }
 
+llvm::TypeSize StrType::getTypeSizeInBits(
+    const mlir::DataLayout &dataLayout,
+    [[maybe_unused]] mlir::DataLayoutEntryListRef params) const {
+  return viewTypeSizeInBits(getContext(), dataLayout);
+}
+
 uint64_t StrType::getABIAlignment(
     const mlir::DataLayout &dataLayout,
     [[maybe_unused]] mlir::DataLayoutEntryListRef params) const {
-  auto ptrTy = mlir::LLVM::LLVMPointerType::get(getContext());
-  auto indexTy = mlir::IndexType::get(getContext());
-  return std::max(dataLayout.getTypeABIAlignment(ptrTy),
-                  dataLayout.getTypeABIAlignment(indexTy));
+  return viewABIAlignment(getContext(), dataLayout);
 }
 
 MLIR_DATA_LAYOUT_EXPAND_PREFERRED_ALIGN(
@@ -1234,6 +1246,36 @@ MLIR_DATA_LAYOUT_EXPAND_PREFERRED_ALIGN(
       auto ptrTy = mlir::LLVM::LLVMPointerType::get(getContext());
       return dataLayout.getTypePreferredAlignment(ptrTy);
     })
+
+llvm::TypeSize ConstSeqType::getTypeSizeInBits(
+    const mlir::DataLayout &dataLayout,
+    [[maybe_unused]] mlir::DataLayoutEntryListRef params) const {
+  return viewTypeSizeInBits(getContext(), dataLayout);
+}
+
+uint64_t ConstSeqType::getABIAlignment(
+    const mlir::DataLayout &dataLayout,
+    [[maybe_unused]] mlir::DataLayoutEntryListRef params) const {
+  return viewABIAlignment(getContext(), dataLayout);
+}
+
+MLIR_DATA_LAYOUT_EXPAND_PREFERRED_ALIGN(
+    uint64_t ConstSeqType::getPreferredAlignment(
+        const mlir::DataLayout &dataLayout,
+        mlir::DataLayoutEntryListRef params) const {
+      auto ptrTy = mlir::LLVM::LLVMPointerType::get(getContext());
+      return dataLayout.getTypePreferredAlignment(ptrTy);
+    })
+
+mlir::LogicalResult
+ConstSeqType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+                     mlir::Type elementType) {
+  if (!llvm::isa<mlir::IntegerType, mlir::FloatType>(elementType))
+    return emitError() << "const_seq element type must be an integer or "
+                          "floating-point type, got "
+                       << elementType;
+  return mlir::success();
+}
 
 //===----------------------------------------------------------------------===//
 // Reussir Cell Type Parse/Print

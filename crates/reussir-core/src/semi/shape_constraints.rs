@@ -630,6 +630,7 @@ fn has_generic(ty: Ty<'_>) -> bool {
         }
         TyKind::Nullable(t)
         | TyKind::Arc(t)
+        | TyKind::ConstSeq(t)
         | TyKind::Cell { elem: t, .. }
         | TyKind::Array { elem: t, .. }
         | TyKind::Tensor { elem: t, .. } => has_generic(*t),

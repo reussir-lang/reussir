@@ -6,10 +6,10 @@
 
 import core::intrinsic::array;
 
-// CHECK-DAG: this kind of array extent cannot be evaluated yet
+// CHECK-DAG: expected a constant of type `u64`, found an expression that cannot be evaluated at compile time
 fn expr_extent(a : [f64; 2 + 2]) -> i64 { 0 }
 
-// CHECK-DAG: this kind of array extent cannot be evaluated yet
+// CHECK-DAG: expected a constant of type `u64`, found an expression that cannot be evaluated at compile time
 fn name_extent(a : [f64; n]) -> i64 { 0 }
 
 // CHECK: `core::intrinsic::array::splat` expects exactly one argument and 1 leading dynamic extent(s)

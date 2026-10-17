@@ -472,6 +472,10 @@ pub enum IntrinsicOp {
     Str {
         func: StrFn,
     },
+    /// `core::intrinsic::const_seq::<func>`; no immediates.
+    ConstSeq {
+        func: ConstSeqFn,
+    },
     Pjrt {
         func: PjrtFn,
     },
@@ -540,6 +544,35 @@ impl StrFn {
     }
 }
 
+/// A surfaced `ConstSeq` intrinsic; [`Self::as_str`] is both the surface
+/// name and the `reussir.const_seq.<name>` op it lowers to.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ConstSeqFn {
+    /// `len(seq)`: the number of elements.
+    Len,
+    /// `get(seq, index)`: the element at `index`; panics when out of bounds.
+    Get,
+}
+
+impl ConstSeqFn {
+    /// Parse a surface / textual-IR name.
+    pub fn parse(name: &str) -> Option<ConstSeqFn> {
+        match name {
+            "len" => Some(ConstSeqFn::Len),
+            "get" => Some(ConstSeqFn::Get),
+            _ => None,
+        }
+    }
+
+    /// The surface name, also used by the textual IR.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ConstSeqFn::Len => "len",
+            ConstSeqFn::Get => "get",
+        }
+    }
+}
+
 impl IntrinsicOp {
     /// The family segment under `core::intrinsic::` (`math`, …).
     pub fn family(self) -> &'static str {
@@ -548,6 +581,7 @@ impl IntrinsicOp {
             IntrinsicOp::Math { .. } => "math",
             IntrinsicOp::Cell { .. } => "cell",
             IntrinsicOp::Str { .. } => "str",
+            IntrinsicOp::ConstSeq { .. } => "const_seq",
             IntrinsicOp::Pjrt { .. } => "pjrt",
         }
     }
@@ -559,6 +593,7 @@ impl IntrinsicOp {
             IntrinsicOp::Math { func, .. } => func.as_str(),
             IntrinsicOp::Cell { func, .. } => func.as_str(),
             IntrinsicOp::Str { func, .. } => func.as_str(),
+            IntrinsicOp::ConstSeq { func } => func.as_str(),
             IntrinsicOp::Pjrt { func } => func.as_str(),
         }
     }
@@ -570,6 +605,7 @@ impl IntrinsicOp {
             IntrinsicOp::Math { flag, .. } => flag,
             IntrinsicOp::Cell { .. } => 0,
             IntrinsicOp::Str { .. } => 0,
+            IntrinsicOp::ConstSeq { .. } => 0,
             IntrinsicOp::Pjrt { .. } => 0,
         }
     }
@@ -591,6 +627,9 @@ impl IntrinsicOp {
             }),
             "str" if imm == 0 => Some(IntrinsicOp::Str {
                 func: StrFn::parse(name)?,
+            }),
+            "const_seq" if imm == 0 => Some(IntrinsicOp::ConstSeq {
+                func: ConstSeqFn::parse(name)?,
             }),
             _ => None,
         }
@@ -697,6 +736,12 @@ mod tests {
             IntrinsicOp::Cell { func: CellFn::Rmw },
             IntrinsicOp::Cell {
                 func: CellFn::InUse,
+            },
+            IntrinsicOp::ConstSeq {
+                func: ConstSeqFn::Len,
+            },
+            IntrinsicOp::ConstSeq {
+                func: ConstSeqFn::Get,
             },
         ] {
             assert_eq!(

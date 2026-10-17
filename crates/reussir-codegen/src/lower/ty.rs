@@ -28,9 +28,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use reussir_backend::dialect::ty::{
     ReussirAtomicKind, ReussirCapability, ReussirCellKind, ReussirLifeScope, ReussirRecordKind,
-    array, array_with_target, cell_with_kind, closure, dynamic_dimension_size, ffi_object,
-    nullable, rc, record_complete_in_place, record_incomplete, record_is_complete, r#ref, region,
-    str as str_type,
+    array, array_with_target, cell_with_kind, closure, const_seq as const_seq_type,
+    dynamic_dimension_size, ffi_object, nullable, rc, record_complete_in_place, record_incomplete,
+    record_is_complete, r#ref, region, str as str_type,
 };
 use reussir_backend::melior::Context;
 use reussir_backend::melior::ir::Type;
@@ -837,6 +837,7 @@ fn scalar_ty<'c>(context: &'c Context, ty: Ty<'_>) -> Result<Type<'c>> {
         )),
         TyKind::Unit => err("unit has no MLIR value type"),
         TyKind::Str => Ok(str_type(context, ReussirLifeScope::Global)),
+        TyKind::ConstSeq(elem) => Ok(const_seq_type(scalar_ty(context, elem)?)),
         TyKind::Tuple(_) => err("tuple type reached scalar lowering without its aggregate layout"),
         TyKind::Record { .. } => err("record type reached scalar lowering without a layout"),
         TyKind::Array { .. } | TyKind::DevArray { .. } => {

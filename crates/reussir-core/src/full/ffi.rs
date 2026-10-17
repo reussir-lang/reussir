@@ -299,6 +299,7 @@ impl<'a, 'tcx> FfiCtx<'a, 'tcx> {
             TyKind::Unit => Err("`unit` only crosses the FFI boundary as a return type".into()),
             TyKind::Arc(_) => Err("an `Arc` coloring cannot cross the FFI boundary yet".into()),
             TyKind::Nullable(_) => Err("`Nullable` cannot cross the FFI boundary yet".into()),
+            TyKind::ConstSeq(_) => Err("a `ConstSeq` cannot cross the FFI boundary yet".into()),
             // `str` lowers to `{ptr, len}`; the runtime's `#[repr(C)]`
             // borrowed view is bit-identical. Every surface `str` today is a
             // `'static` global literal, so the spelled lifetime is sound —

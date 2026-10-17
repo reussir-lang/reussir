@@ -5,8 +5,8 @@
 // CHECK-DAG: tensor element type `Record` must be a supported
 // CHECK-DAG: tensor element type `Tensor<f32>` must be a supported
 // CHECK-DAG: tensor extent exceeds the signed 64-bit MLIR dimension limit
-// CHECK-DAG: tensor extent is out of range
-// CHECK-DAG: only integer literals are supported
+// CHECK-DAG: integer literal `18446744073709551616` is out of range for `u64`
+// CHECK-DAG: integer literal `-1` is out of range for `u64`
 // CHECK-DAG: `Tensor` takes exactly one type argument
 pub struct Record { x: i32 }
 pub fn bad() {

@@ -277,6 +277,11 @@ pub enum TyKind<'tcx> {
         kind: CellKind,
     },
     Nullable(Ty<'tcx>),
+    /// An immutable static sequence of scalars (`ConstSeq<T>`): a view of
+    /// compile-time constant data and its length, with no reference count.
+    /// The element is an integer, float, `bool`, or `char` scalar; a generic
+    /// element is checked again after substitution.
+    ConstSeq(Ty<'tcx>),
     /// An atomically reference-counted coloring of a `[shared]` record:
     /// `Arc<X>` is the same nominal `X` behind a box whose refcount is
     /// adjusted with atomic operations, so the value may cross threads. Only
@@ -465,6 +470,10 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn mk_nullable(&self, inner: Ty<'tcx>) -> Ty<'tcx> {
         self.mk(TyKind::Nullable(inner))
+    }
+
+    pub fn mk_const_seq(&self, elem: Ty<'tcx>) -> Ty<'tcx> {
+        self.mk(TyKind::ConstSeq(elem))
     }
 
     pub fn mk_arc(&self, inner: Ty<'tcx>) -> Ty<'tcx> {

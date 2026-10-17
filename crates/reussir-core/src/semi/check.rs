@@ -150,7 +150,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         false
     }
 
-    fn mk_expr(&mut self, kind: ExprKind<'tcx>, ty: Ty<'tcx>, span: Option<Span>) -> Expr<'tcx> {
+    pub(super) fn mk_expr(
+        &mut self,
+        kind: ExprKind<'tcx>,
+        ty: Ty<'tcx>,
+        span: Option<Span>,
+    ) -> Expr<'tcx> {
         let id = self.fresh_expr_id();
         self.register_expression_relations(&kind, ty, span, id);
         Expr { kind, ty, span, id }
@@ -361,6 +366,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 Some(e.span()),
                 Some(expected),
             ),
+            surface::ExprKind::SeqLit(_) if !self.inside_kernel => {
+                self.infer_seq_lit(e, Some(expected))
+            }
             _ => self.infer_expr(e),
         };
         self.expect(h.ty, expected, h.span);
@@ -411,6 +419,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         match &kind {
             surface::ExprKind::ConstExpr(c) => self.infer_const(c, span),
+            surface::ExprKind::SeqLit(_) => self.infer_seq_lit(e, None),
             surface::ExprKind::Var(path) => self.infer_var(path, span),
             surface::ExprKind::ExprSeq(exprs) => self.infer_seq(exprs, span),
             surface::ExprKind::Tuple(fields) => self.infer_tuple(fields, span),
@@ -477,6 +486,36 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             Const::ConstBool(b) => {
                 let ty = self.tcx.mk_bool();
                 self.mk_expr(ExprKind::ConstBool(*b), ty, span)
+            }
+        }
+    }
+
+    /// (SEQ) a sequence literal is a compile-time constant: checked against
+    /// `ConstSeq<T>`, it is evaluated ([`Self::eval_const`]) and denotes that
+    /// constant. Its type is never inferred from the elements.
+    fn infer_seq_lit(&mut self, e: &surface::Expr, expected: Option<Ty<'tcx>>) -> Expr<'tcx> {
+        let span = Some(e.span());
+        let expected = expected.map(|ty| self.infer.resolve(ty));
+        match expected.map(|ty| (ty, ty.kind())) {
+            Some((ty, TyKind::ConstSeq(_))) => match self.eval_const(e, ty) {
+                Some(value) => self.const_value_expr(&value, ty, span),
+                None => self.poison(span),
+            },
+            Some((_, TyKind::Bottom)) => self.poison(span),
+            Some((ty, kind)) if !matches!(kind, TyKind::Hole(_)) => {
+                let shown = self.ty_display(ty);
+                self.error(
+                    span,
+                    format!("expected `{shown}`, found a sequence literal"),
+                );
+                self.poison(span)
+            }
+            _ => {
+                self.error(
+                    span,
+                    "the type of a sequence literal must be known; annotate it as `ConstSeq<T>`",
+                );
+                self.poison(span)
             }
         }
     }
@@ -3483,6 +3522,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             "tensor" => Some(self.infer_tensor_intrinsic(fc, span, expected)),
             "cell" => Some(self.infer_cell_intrinsic(fc, span)),
             "str" => Some(self.infer_str_intrinsic(fc, span)),
+            "const_seq" => Some(self.infer_const_seq_intrinsic(fc, span)),
             other => {
                 self.error(
                     span,
@@ -3836,6 +3876,65 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         self.mk_expr(
             ExprKind::Intrinsic {
                 op: IntrinsicOp::Str { func },
+                args,
+            },
+            result,
+            span,
+        )
+    }
+
+    /// (CONST_SEQ) `core::intrinsic::const_seq::<fn>(…)`: `len(seq:
+    /// ConstSeq<T>) -> u64` and `get(seq: ConstSeq<T>, index: u64) -> T`,
+    /// which panics when `index` is out of bounds. No type arguments.
+    fn infer_const_seq_intrinsic(
+        &mut self,
+        fc: &surface::FuncCall,
+        span: Option<Span>,
+    ) -> Expr<'tcx> {
+        use crate::intrinsic::{ConstSeqFn, IntrinsicOp};
+
+        let name = self.sym(fc.name.basename).to_string();
+        let Some(func) = ConstSeqFn::parse(&name) else {
+            self.error(
+                span,
+                format!("unknown const_seq intrinsic `core::intrinsic::const_seq::{name}`"),
+            );
+            return self.poison(span);
+        };
+        if !fc.ty_args.is_empty() {
+            self.error(
+                span,
+                format!("`core::intrinsic::const_seq::{name}` takes no type arguments"),
+            );
+            return self.poison(span);
+        }
+        let elem = self.infer.new_hole_ty();
+        let seq_ty = self.tcx.mk_const_seq(elem);
+        let u64_ty = self.tcx.mk_int(crate::semi::ty::IntTy::Unsigned(64));
+        let (params, result) = match func {
+            ConstSeqFn::Len => (vec![seq_ty], u64_ty),
+            ConstSeqFn::Get => (vec![seq_ty, u64_ty], elem),
+        };
+        if fc.args.len() != params.len() {
+            self.error(
+                span,
+                format!(
+                    "`core::intrinsic::const_seq::{name}` expects {} argument(s), got {}",
+                    params.len(),
+                    fc.args.len()
+                ),
+            );
+            return self.poison(span);
+        }
+        let args = fc
+            .args
+            .iter()
+            .zip(&params)
+            .map(|(a, &t)| self.check_expr(a, t))
+            .collect();
+        self.mk_expr(
+            ExprKind::Intrinsic {
+                op: IntrinsicOp::ConstSeq { func },
                 args,
             },
             result,
@@ -5455,7 +5554,8 @@ fn var_occurrences<'tcx>(e: &Expr<'tcx>, used: &mut Vec<VarId>, bound: &mut Vec<
             var_occurrences(scrut, used, bound);
             tree_occurrences(tree, used, bound);
         }
-        GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_) | Poison => {}
+        GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_) | ConstSeq(_)
+        | Poison => {}
     }
 }
 

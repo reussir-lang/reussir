@@ -320,6 +320,8 @@ impl<'a, 'tcx> Rr<'a, 'tcx> {
             | TyKind::Future(_)
             | TyKind::DefaultPlacement
             | TyKind::Tensor { .. } => false,
+            // A constant sequence views immutable static data, like `str`.
+            TyKind::ConstSeq(_) => false,
             // A cell is always one shared rc-managed box, independent of its
             // element type (which the cell's drop recursively releases).
             TyKind::Cell { .. } => true,
@@ -473,6 +475,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             | ExprKind::ConstInt(_)
             | ExprKind::ConstFloat(_)
             | ExprKind::ConstBool(_)
+            | ExprKind::ConstSeq(_)
             | ExprKind::Poison => {}
             ExprKind::Negate(x) | ExprKind::Not(x) | ExprKind::Cast(x, _) => {
                 s.union_with(&self.free(x));
@@ -616,6 +619,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             | ExprKind::ConstInt(_)
             | ExprKind::ConstFloat(_)
             | ExprKind::ConstBool(_)
+            | ExprKind::ConstSeq(_)
             | ExprKind::Poison => {}
             // Scalar unary: the operand never holds an RR value, but recurse for
             // generality (and to keep liveness threading uniform).
@@ -654,10 +658,12 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                         self.place_array_op(e, crate::intrinsic::ArrayFn::Dim, args, live_after);
                     }
                 }
-                // Math and str operands are plain values (`str` is not
-                // reference-counted), so left-to-right placement suffices.
+                // Math, str, and const_seq operands are plain values (`str`
+                // and `ConstSeq` are not reference-counted), so left-to-right
+                // placement suffices.
                 crate::intrinsic::IntrinsicOp::Math { .. }
                 | crate::intrinsic::IntrinsicOp::Str { .. }
+                | crate::intrinsic::IntrinsicOp::ConstSeq { .. }
                 | crate::intrinsic::IntrinsicOp::Panic => self.place_args(args, live_after),
             },
             ExprKind::NullableCall(opt) => {

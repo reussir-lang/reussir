@@ -221,6 +221,7 @@ fn is_expr_kind(kind: SyntaxKind) -> bool {
             | FuncCallExpr
             | CtorCallExpr
             | TupleExpr
+            | SeqLitExpr
     )
 }
 
@@ -710,6 +711,9 @@ pub enum ExprKind {
     ConstExpr(Const),
     ExprSeq(Vec<Expr>),
     Tuple(Vec<Expr>),
+    /// A sequence literal `[e0, e1, ...]`, evaluated at compile time to a
+    /// `ConstSeq<T>` value.
+    SeqLit(Vec<Expr>),
     LetPattern(Pattern, Option<(Type, bool)>, Expr),
     /// `if cond { then } else { other }`; `None` for the else branch means it
     /// was omitted, which is sugar for an empty (unit) `else {}`.
@@ -816,6 +820,7 @@ impl Expr {
             }
             BlockExpr => ExprKind::ExprSeq(expr_children(node).map(Expr::new).collect()),
             TupleExpr => ExprKind::Tuple(expr_children(node).map(Expr::new).collect()),
+            SeqLitExpr => ExprKind::SeqLit(expr_children(node).map(Expr::new).collect()),
             IfExpr => {
                 let mut parts = expr_children(node);
                 let cond = Expr::new(parts.next().expect("condition"));

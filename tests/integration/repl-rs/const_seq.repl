@@ -1,0 +1,19 @@
+// REQUIRES: rrepl
+// RUN: %rrepl -i %s -lerror | %FileCheck %s
+
+// A constant sequence prints its elements through the host-side layout mirror.
+
+fn ints() -> ConstSeq<i64> { [1, -2, 30] }
+// CHECK: Definition added.
+
+ints()
+// CHECK: [1, -2, 30] : ConstSeq<i64>
+
+fn flags() -> ConstSeq<bool> { [true, false] }
+// CHECK: Definition added.
+
+flags()
+// CHECK: [true, false] : ConstSeq<bool>
+
+core::intrinsic::const_seq::get(ints(), 2)
+// CHECK: 30 : i64

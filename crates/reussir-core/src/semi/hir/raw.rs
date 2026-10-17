@@ -297,6 +297,7 @@ pub enum Ty {
     Bottom,
     Generic(u32),
     Nullable(Box<Ty>),
+    ConstSeq(Box<Ty>),
     Cell {
         inner: Box<Ty>,
         kind: crate::semi::ty::CellKind,
@@ -371,6 +372,7 @@ pub enum Kind {
     ConstChar(u32),
     /// An interned string literal, as its four raw `StringToken` words.
     GlobalStr([u64; 4]),
+    ConstSeq(Vec<crate::semi::const_eval::ConstScalar>),
     Var(u32),
     Poison,
     Negate(Expr),

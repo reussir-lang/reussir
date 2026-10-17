@@ -162,6 +162,71 @@ pub fn str_literal<'c>(
         .expect("valid reussir.str.literal")
 }
 
+/// `reussir.const_seq.global @<sym_name> = <payload>`, where `payload` is a
+/// rank-1 dense elements attribute.
+pub fn const_seq_global<'c>(
+    context: &'c Context,
+    sym_name: &str,
+    payload: Attribute<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.const_seq.global", location)
+        .add_attributes(&[
+            (
+                Identifier::new(context, "sym_name"),
+                StringAttribute::new(context, sym_name).into(),
+            ),
+            (Identifier::new(context, "payload"), payload),
+        ])
+        .build()
+        .expect("valid reussir.const_seq.global")
+}
+
+/// `reussir.const_seq.literal @<sym_name> : <result_type>`.
+pub fn const_seq_literal<'c>(
+    context: &'c Context,
+    sym_name: &str,
+    result_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.const_seq.literal", location)
+        .add_attributes(&[(
+            Identifier::new(context, "sym_name"),
+            FlatSymbolRefAttribute::new(context, sym_name).into(),
+        )])
+        .add_results(&[result_type])
+        .build()
+        .expect("valid reussir.const_seq.literal")
+}
+
+/// `reussir.const_seq.len (<seq>) : index`.
+pub fn const_seq_len<'c>(
+    context: &'c Context,
+    seq: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.const_seq.len", location)
+        .add_operands(&[seq])
+        .add_results(&[Type::index(context)])
+        .build()
+        .expect("valid reussir.const_seq.len")
+}
+
+/// `reussir.const_seq.get (<seq>) [<index>] : <element_type>` — panics when
+/// the index is out of bounds.
+pub fn const_seq_get<'c>(
+    seq: Value<'c, '_>,
+    index: Value<'c, '_>,
+    element_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.const_seq.get", location)
+        .add_operands(&[seq, index])
+        .add_results(&[element_type])
+        .build()
+        .expect("valid reussir.const_seq.get")
+}
+
 /// `reussir.str.cast (<global>) : <result_type>`.
 pub fn str_cast<'c>(
     value: Value<'c, '_>,

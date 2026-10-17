@@ -262,6 +262,11 @@ MlirType reussirStrTypeGet(MlirContext context, ReussirLifeScope lifeScope) {
   return wrap(StrType::get(unwrap(context), static_cast<LifeScope>(lifeScope)));
 }
 
+MlirType reussirConstSeqTypeGet(MlirType elementType) {
+  mlir::Type ele = unwrap(elementType);
+  return wrap(ConstSeqType::get(ele.getContext(), ele));
+}
+
 MlirType
 reussirRecordTypeGetComplete(MlirContext context, intptr_t nMembers,
                              MlirType const *members, bool const *memberIsField,

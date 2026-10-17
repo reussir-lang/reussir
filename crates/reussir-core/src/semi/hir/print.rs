@@ -17,6 +17,7 @@ use reussir_syntax::kind::{Resolver, TokenKey};
 use reussir_syntax::source::SourceCache;
 
 use crate::ir_lex::spell_name;
+use crate::semi::const_eval::ConstScalar;
 use crate::semi::ctxt::{
     DefaultCap, FfiImport, FfiPrelude, Record, RecordFields, TrampolineRoot, TransformScript,
 };
@@ -640,6 +641,7 @@ impl<'a> Printer<'a> {
             TyKind::Generic(g) => text(format!("${}", g.0)),
             TyKind::Hole(_) => unreachable!("a fully elaborated HIR carries no inference holes"),
             TyKind::Nullable(inner) => text("Nullable<") + self.ty(inner) + text(">"),
+            TyKind::ConstSeq(elem) => text("ConstSeq<") + self.ty(elem) + text(">"),
             TyKind::Cell { elem, kind } => {
                 text(kind.surface_name()) + text("<") + self.ty(elem) + text(">")
             }
@@ -828,6 +830,7 @@ impl<'a> Printer<'a> {
             ExprKind::ConstFloat(f) => text(f.to_string()),
             ExprKind::ConstBool(b) => text(format!("{b}")),
             ExprKind::ConstChar(c) => text(format!("char#{c}")),
+            ExprKind::ConstSeq(elems) => text(const_seq_lit(elems)),
             ExprKind::Var(v) => var(*v),
             ExprKind::Poison => text("poison"),
             ExprKind::Negate(x) => text("-(") + self.value(x) + text(")"),
@@ -1106,6 +1109,21 @@ fn cap_name(c: Flexivity) -> &'static str {
 /// round-trips faithfully.
 fn str_lit(w: [u64; 4]) -> String {
     format!("str#{}#{}#{}#{}", w[0], w[1], w[2], w[3])
+}
+
+/// The textual HIR/MIR spelling of a constant sequence: `ConstSeq[1, -2]`,
+/// with the scalar literal forms of the expression syntax.
+pub(crate) fn const_seq_lit(elems: &[ConstScalar]) -> String {
+    let elems: Vec<String> = elems
+        .iter()
+        .map(|elem| match elem {
+            ConstScalar::Int(n) => n.to_string(),
+            ConstScalar::Float(f) => f.to_string(),
+            ConstScalar::Bool(b) => b.to_string(),
+            ConstScalar::Char(c) => format!("char#{c}"),
+        })
+        .collect();
+    format!("ConstSeq[{}]", elems.join(", "))
 }
 
 fn string_decl(token: StringToken, payload: &str) -> Doc<'static> {
