@@ -1,0 +1,47 @@
+// REQUIRES: tsan
+// TSan leg for RwLock cells: four threads alternate `cell::rmw` (write lock)
+// and `cell::rdlock` (read lock) on one shared `RwLock<i64>`. Both fast paths
+// read the lock state word before the cmpxchg that takes the lock, while the
+// other threads cmpxchg/atomicrmw that word, so that read must be an atomic
+// load; a plain load is a data race TSan reports in `go`. The final count
+// checks that no increment was lost.
+
+// RUN: %rrc %s -o %t.none.ll -t llvm-ir --relocation-mode pic -Onone --sanitizer thread --nullary-variant-encoding arch-independent
+// RUN: %cc %tsan_flags -c -x ir %t.none.ll -o %t.none.o
+// RUN: %cc %tsan_flags -pthread %t.none.o %S/Inputs/rwlock-cell-tsan-harness.c %reussir_rt_tsan -o %t.none.exe %rpath_flag %rpath_san_flag %extra_sys_libs
+// RUN: %tsan_env %t.none.exe | %FileCheck %s
+
+// RUN: %rrc %s -o %t.aggr.ll -t llvm-ir --relocation-mode pic -Oaggressive --sanitizer thread --nullary-variant-encoding arch-independent
+// RUN: %cc %tsan_flags -c -x ir %t.aggr.ll -o %t.aggr.o
+// RUN: %cc %tsan_flags -pthread %t.aggr.o %S/Inputs/rwlock-cell-tsan-harness.c %reussir_rt_tsan -o %t.aggr.exe %rpath_flag %rpath_san_flag %extra_sys_libs
+// RUN: %tsan_env %t.aggr.exe | %FileCheck %s
+
+// CHECK: total = 8000
+
+import core::intrinsic::cell;
+
+pub fn make() -> RwLock<i64> { cell::alloc<RwLock<i64>>(0) }
+
+// Each iteration takes the write lock once and the read lock once.
+fn go(m: RwLock<i64>, n: i64, seen: i64) -> i64 {
+    if n > 0 {
+        cell::rmw(m, |x| x + 1);
+        let now = cell::rdlock(m, |x| x);
+        go(m, n - 1, if now > seen { now } else { seen })
+    } else {
+        seen
+    }
+}
+
+pub fn work(m: RwLock<i64>, iters: i64) -> i64 { go(m, iters, 0) }
+
+pub fn total(m: RwLock<i64>) -> i64 { cell::rdlock(m, |x| x) }
+
+// Splits one reference into two, so each thread owns its own.
+pub struct [value] Pair { a: RwLock<i64>, b: RwLock<i64> }
+pub fn dup(s: RwLock<i64>) -> Pair { Pair { a: s, b: s } }
+
+extern "C" trampoline "make_ffi" = make;
+extern "C" trampoline "dup_ffi" = dup;
+extern "C" trampoline "work_ffi" = work;
+extern "C" trampoline "total_ffi" = total;
