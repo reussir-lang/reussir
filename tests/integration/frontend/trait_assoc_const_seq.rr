@@ -1,0 +1,103 @@
+// A `ConstSeq<i32>` associated const read through concrete and generic self
+// types: the deferred HIR node, the per-instantiation MIR literal, one
+// global per distinct contents, and an end-to-end run that prints the reads
+// and panics on an out-of-bounds `get`.
+
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %FileCheck %s --check-prefix=HIR --input-file=%t.hir
+// RUN: %rrc %s --emit mir --no-source-locations -o %t.direct.mir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.via.mir
+// RUN: diff %t.direct.mir %t.via.mir
+// RUN: %FileCheck %s --check-prefix=MIR --input-file=%t.direct.mir
+// RUN: %rrc %s --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s --check-prefix=MLIR --input-file=%t.mlir
+// RUN: %FileCheck %s --check-prefix=SHARED --input-file=%t.mlir
+// RUN: %rrc %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/trait_assoc_const_seq.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe | %FileCheck %s --check-prefix=OUT
+// RUN: %if wine-quirks %{ %not %} %else %{ %not --crash %} %t.exe oob 2>&1 | %FileCheck %s --check-prefix=PANIC
+
+import core::intrinsic::const_seq;
+
+// HIR: trait #Table<$0 (Self)> {
+// HIR-NEXT: const TEST : ConstSeq<i32>;
+trait Table {
+    const TEST: ConstSeq<i32>;
+}
+
+struct Wide { x: i64 }
+struct Twin { x: i64 }
+struct Empty { x: i64 }
+struct Holder { label: str, rows: ConstSeq<i32> }
+
+// HIR-DAG: impl #Table::<#Wide> { const TEST = ConstSeq[-2147483648, -7, 0, 7, 2147483647] : ConstSeq<i32>; }
+impl Table for Wide {
+    const TEST: ConstSeq<i32> = [-2147483648, -7, 0, 7, 2147483647];
+}
+
+impl Table for Twin {
+    const TEST: ConstSeq<i32> = [-2147483648, -7, 0, 7, 2147483647];
+}
+
+// HIR-DAG: impl #Table::<#Empty> { const TEST = ConstSeq[] : ConstSeq<i32>; }
+impl Table for Empty {
+    const TEST: ConstSeq<i32> = [];
+}
+
+fn total(xs: ConstSeq<i32>) -> i64 {
+    let n = const_seq::len(xs);
+    while [i = 0, acc = 0] (i < n) {
+        (i + 1, acc + (const_seq::get(xs, i) as i64))
+    }.1
+}
+
+// HIR-DAG: trait#Table::<${{[0-9]+}}>#TEST : ConstSeq<i32>
+fn count<G: Table>() -> u64 { const_seq::len(G::TEST) }
+
+fn sum<G: Table>() -> i64 { total(G::TEST) }
+
+fn nth<G: Table>(i: u64) -> i32 { const_seq::get(G::TEST, i) }
+
+// HIR-DAG: trait#Table::<#Wide>#TEST : ConstSeq<i32>
+fn last() -> i32 { const_seq::get(Wide::TEST, const_seq::len(Wide::TEST) - 1) }
+
+fn stored() -> i32 {
+    let h = Holder { label: "twin", rows: Twin::TEST };
+    const_seq::get(h.rows, 1)
+}
+
+extern "C" trampoline "reussir_count_wide" = count<Wide>;
+extern "C" trampoline "reussir_count_empty" = count<Empty>;
+extern "C" trampoline "reussir_sum_wide" = sum<Wide>;
+extern "C" trampoline "reussir_sum_empty" = sum<Empty>;
+extern "C" trampoline "reussir_nth_wide" = nth<Wide>;
+extern "C" trampoline "reussir_last" = last;
+extern "C" trampoline "reussir_stored" = stored;
+
+// Each instantiation reads its impl's value as a literal.
+// MIR: fn @_RC6stored() -> i32 {
+// MIR-NEXT: let v0 (h) = @_RC6Holder{{.*}}, ConstSeq[-2147483648, -7, 0, 7, 2147483647] : ConstSeq<i32>} : Holder;
+// MIR: fn @_RIC3nthC4WideE(v0 (i): u64) -> i32 {
+// MIR-NEXT: intrinsic#const_seq#get#0(ConstSeq[-2147483648, -7, 0, 7, 2147483647] : ConstSeq<i32>, v0 : u64) : i32
+// MIR: fn @_RIC3sumC4WideE() -> i64 {
+// MIR-NEXT: @_RC5total(ConstSeq[-2147483648, -7, 0, 7, 2147483647] : ConstSeq<i32>) : i64
+// MIR: fn @_RIC3sumC5EmptyE() -> i64 {
+// MIR-NEXT: @_RC5total(ConstSeq[] : ConstSeq<i32>) : i64
+// MIR: fn @_RIC5countC4WideE() -> u64 {
+// MIR-NEXT: intrinsic#const_seq#len#0(ConstSeq[-2147483648, -7, 0, 7, 2147483647] : ConstSeq<i32>) : u64
+// MIR: fn @_RIC5countC5EmptyE() -> u64 {
+// MIR-NEXT: intrinsic#const_seq#len#0(ConstSeq[] : ConstSeq<i32>) : u64
+
+// Equal contents from `Wide` and `Twin` share one global.
+// SHARED-COUNT-1: reussir.const_seq.global {{.*}} = dense<[-2147483648, -7, 0, 7, 2147483647]> : tensor<5xi32>
+// SHARED-NOT: dense<[-2147483648, -7, 0, 7, 2147483647]>
+// MLIR-DAG: reussir.const_seq.global {{.*}} = dense<> : tensor<0xi32>
+// MLIR-DAG: reussir.const_seq.literal
+
+// OUT: count 5 0
+// OUT-NEXT: sum -1 0
+// OUT-NEXT: elems -2147483648 -7 0 7 2147483647
+// OUT-NEXT: last 2147483647
+// OUT-NEXT: stored -7
+
+// PANIC: Panic: const_seq index out of bounds
