@@ -14,7 +14,7 @@
 
 use crate::literal::{self, FloatLit, Integer};
 use crate::semi::hir::{Expr, ExprKind};
-use crate::semi::ty::{Ty, TyKind};
+use crate::semi::ty::{Ty, TyCtxt, TyKind};
 use crate::surface::{self, Const, Span, UnaryOp};
 
 use super::ctxt::Elaborator;
@@ -47,6 +47,27 @@ pub fn is_const_scalar_ty(ty: Ty<'_>) -> bool {
         TyKind::Int(_) | TyKind::Bool | TyKind::Char => true,
         TyKind::Fp(fp) => literal::ieee_params(fp).is_some(),
         _ => false,
+    }
+}
+
+/// Whether a constant can have type `ty`: a scalar accepted by
+/// [`is_const_scalar_ty`], or `ConstSeq<T>` of one.
+pub fn is_const_ty(ty: Ty<'_>) -> bool {
+    match *ty.kind() {
+        TyKind::ConstSeq(elem) => is_const_scalar_ty(elem),
+        _ => is_const_scalar_ty(ty),
+    }
+}
+
+/// The HIR expression kind denoting `value`: scalars become literals, and a
+/// sequence becomes [`ExprKind::ConstSeq`].
+pub fn const_value_kind<'tcx>(tcx: &TyCtxt<'tcx>, value: &ConstValue<'tcx>) -> ExprKind<'tcx> {
+    match value {
+        ConstValue::Scalar(ConstScalar::Int(n)) => ExprKind::ConstInt(tcx.alloc(n.clone())),
+        ConstValue::Scalar(ConstScalar::Float(f)) => ExprKind::ConstFloat(tcx.alloc(f.clone())),
+        ConstValue::Scalar(ConstScalar::Bool(b)) => ExprKind::ConstBool(*b),
+        ConstValue::Scalar(ConstScalar::Char(c)) => ExprKind::ConstChar(*c),
+        ConstValue::Seq { elems, .. } => ExprKind::ConstSeq(tcx.alloc(elems.clone()).as_slice()),
     }
 }
 
@@ -174,19 +195,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         ty: Ty<'tcx>,
         span: Option<Span>,
     ) -> Expr<'tcx> {
-        let kind = match value {
-            ConstValue::Scalar(ConstScalar::Int(n)) => {
-                ExprKind::ConstInt(self.tcx.alloc(n.clone()))
-            }
-            ConstValue::Scalar(ConstScalar::Float(f)) => {
-                ExprKind::ConstFloat(self.tcx.alloc(f.clone()))
-            }
-            ConstValue::Scalar(ConstScalar::Bool(b)) => ExprKind::ConstBool(*b),
-            ConstValue::Scalar(ConstScalar::Char(c)) => ExprKind::ConstChar(*c),
-            ConstValue::Seq { elems, .. } => {
-                ExprKind::ConstSeq(self.tcx.alloc(elems.clone()).as_slice())
-            }
-        };
+        let kind = const_value_kind(self.tcx, value);
         self.mk_expr(kind, ty, span)
     }
 }

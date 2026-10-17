@@ -16,6 +16,7 @@ use reussir_syntax::source::FileId;
 use rustc_hash::FxHashMap;
 
 use crate::ir_lex::lex;
+use crate::semi::const_eval::ConstValue;
 use crate::semi::ctxt::{
     DefaultCap, FfiImport, FfiPrelude, Record, RecordFields, TrampolineRoot, TransformScript,
     Variant,
@@ -24,7 +25,7 @@ use crate::semi::hir::grammar as hir_ir;
 use crate::semi::hir::raw;
 use crate::semi::hir::{
     ArithOp, Bound, ClosureExpr, CmpOp, DecisionTree, Expr, ExprId, ExprKind, Function, ImplText,
-    PatVarRef, SwitchCases, TraitMethodText, TraitText, VarId,
+    PatVarRef, SwitchCases, TraitConstText, TraitMethodText, TraitText, VarId,
 };
 use crate::semi::resolve::DefTable;
 use crate::semi::ty::{DefId, Flexivity, FpTy, GenericId, IntTy, Ty, TyCtxt, TyKind};
@@ -128,7 +129,9 @@ impl<'tcx> Parsed<'tcx> {
     pub fn rebuild_traits(&mut self, tcx: &TyCtxt<'tcx>) -> crate::semi::traits::TraitDb<'tcx> {
         use crate::semi::traits::builtins::Builtins;
         use crate::semi::traits::def::MethodSig;
-        use crate::semi::traits::{ImplDef, ImplId, Obligation, TraitDef, TraitId, TraitRef};
+        use crate::semi::traits::{
+            AssocConstDef, ImplDef, ImplId, Obligation, TraitDef, TraitId, TraitRef,
+        };
 
         let mut db = crate::semi::traits::TraitDb::new();
         let _ = Builtins::register(&mut db, &mut self.defs, &mut self.names, tcx);
@@ -163,6 +166,7 @@ impl<'tcx> Parsed<'tcx> {
                 supertraits: Vec::new(),
                 methods: Vec::new(),
                 assoc_tys: Vec::new(),
+                assoc_consts: Vec::new(),
                 span: t.span,
                 file: t.file,
             });
@@ -180,6 +184,15 @@ impl<'tcx> Parsed<'tcx> {
                         trait_id: db.trait_by_def(def)?,
                         args: args.clone(),
                     })
+                })
+                .collect();
+            let assoc_consts: Vec<AssocConstDef<'tcx>> = t
+                .consts
+                .iter()
+                .map(|c| AssocConstDef {
+                    name: self.names.intern(&c.name),
+                    ty: c.ty,
+                    span: c.span,
                 })
                 .collect();
             let methods: Vec<MethodSig<'tcx>> = t
@@ -203,12 +216,18 @@ impl<'tcx> Parsed<'tcx> {
             let def = db.trait_def_mut(id);
             def.supertraits = supertraits;
             def.methods = methods;
+            def.assoc_consts = assoc_consts;
         }
         for i in &self.impls {
             let Some(tid) = db.trait_by_def(i.trait_def) else {
                 continue;
             };
             let self_ty = i.args[0];
+            let Some(assoc_consts) =
+                i.assoc_consts_in_order(&db.trait_def(tid).assoc_consts, |n| self.names.intern(n))
+            else {
+                continue;
+            };
             let methods: Vec<DefId> = i
                 .methods
                 .iter()
@@ -252,6 +271,7 @@ impl<'tcx> Parsed<'tcx> {
                 self_ty,
                 where_clauses,
                 methods,
+                assoc_consts,
                 span: i.span,
                 file: i.file,
             });
@@ -707,6 +727,15 @@ impl<'tcx> Builder<'_, 'tcx> {
                 .iter()
                 .map(|(p, args)| (p.clone(), self.tys(args)))
                 .collect(),
+            consts: t
+                .consts
+                .iter()
+                .map(|c| TraitConstText {
+                    name: c.name.clone(),
+                    ty: self.ty(&c.ty),
+                    span: span_of(c.span),
+                })
+                .collect(),
             methods: t
                 .methods
                 .iter()
@@ -737,9 +766,24 @@ impl<'tcx> Builder<'_, 'tcx> {
             generics: self.text_generics(&i.generics),
             trait_path: i.trait_path.clone(),
             args: self.tys(&i.args),
+            consts: i
+                .consts
+                .iter()
+                .map(|(name, value)| (name.clone(), self.const_value(value)))
+                .collect(),
             methods: i.methods.clone(),
             file: file_of(i.file),
             span: span_of(i.span),
+        }
+    }
+
+    fn const_value(&mut self, value: &raw::ConstValue) -> ConstValue<'tcx> {
+        match value {
+            raw::ConstValue::Scalar(scalar) => ConstValue::Scalar(scalar.clone()),
+            raw::ConstValue::Seq { elem, elems } => ConstValue::Seq {
+                elem: self.ty(elem),
+                elems: elems.clone(),
+            },
         }
     }
 
@@ -953,6 +997,15 @@ impl<'tcx> Builder<'_, 'tcx> {
                     args: self.exprs(args),
                 }
             }
+            raw::Kind::TraitConst {
+                path,
+                ty_args,
+                name,
+            } => ExprKind::TraitConst {
+                trait_def: self.trait_item_def(path),
+                name: self.names.intern(name),
+                ty_args: self.tys(ty_args),
+            },
             raw::Kind::CompoundCall {
                 path,
                 ty_args,

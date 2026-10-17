@@ -1,0 +1,96 @@
+// Associated consts: a trait declares typed consts, each impl gives them
+// values, and a use names one through its self type — `Square::SIDES` for a
+// concrete type, `T::SIDES` for a generic bounded by the trait. Both stay a
+// deferred `trait#…#NAME` node in the HIR (which round-trips with the
+// impls' values) until monomorphization substitutes the selected impl's
+// value as a literal.
+
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.a.hir
+// RUN: %rrc %t.a.hir --emit hir --no-source-locations -o %t.b.hir
+// RUN: diff %t.a.hir %t.b.hir
+// RUN: %FileCheck %s --check-prefix=HIR --input-file=%t.a.hir
+// RUN: %rrc %s --emit mir --no-source-locations -o %t.direct.mir
+// RUN: %rrc %t.a.hir --emit mir --no-source-locations -o %t.via.mir
+// RUN: diff %t.direct.mir %t.via.mir
+// RUN: %FileCheck %s --check-prefix=MIR --input-file=%t.direct.mir
+// RUN: %rrc %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/trait_assoc_const.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// HIR: pub trait #Shape<$0 (Self)> {
+// HIR-NEXT: const SIDES : i64;
+// HIR-NEXT: const SCALE : f64;
+// HIR-NEXT: const CLOSED : bool;
+// HIR-NEXT: const TAG : char;
+// HIR-NEXT: fn area ($0) -> f64;
+pub trait Shape {
+    const SIDES: i64;
+    const SCALE: f64;
+    const CLOSED: bool;
+    const TAG: char;
+    fn area(self: Self) -> f64;
+}
+
+pub struct Square { side: f64 }
+pub struct Wedge { a: f64, b: f64 }
+
+// HIR-DAG: impl #Shape::<#Square> { const SIDES = 4; const SCALE = -0.5; const CLOSED = true; const TAG = char#115; #Shape::Square::area }
+impl Shape for Square {
+    const SIDES: i64 = 4;
+    const SCALE: f64 = -0.5;
+    const CLOSED: bool = true;
+    const TAG: char = 's';
+    fn area(self: Self) -> f64 { self.side * self.side }
+}
+
+impl Shape for Wedge {
+    const SIDES: i64 = 3;
+    const SCALE: f64 = 2.0;
+    const CLOSED: bool = false;
+    const TAG: char = 'w';
+    fn area(self: Self) -> f64 { self.a * self.b / 2.0 }
+}
+
+// HIR-DAG: trait#Shape::<${{[0-9]+}}>#SIDES : i64
+fn sides<T: Shape>(shape: T) -> i64 { T::SIDES }
+
+fn scaled<T: Shape>(shape: T) -> f64 { T::SCALE * shape.area() }
+
+fn tag_code<T: Shape>(shape: T) -> i64 {
+    match T::TAG {
+        's' => 1,
+        'w' => 2,
+        _ => 0
+    }
+}
+
+fn closed<T: Shape>(shape: T) -> i64 {
+    if T::CLOSED { 1 } else { 0 }
+}
+
+// The concrete spelling also defers, and both forms reach a literal:
+// HIR-DAG: trait#Shape::<#Square>#SIDES : i64
+// MIR: pub fn @_RC8concrete() -> i64 {
+// MIR-NEXT: 4 : i64
+// MIR: fn @_RIC5sidesC5WedgeE(v0 (shape): Wedge) -> i64 {
+// MIR-NEXT: 3 : i64
+// MIR: fn @_RIC6scaledC6SquareE(v0 (shape): Square) -> f64 {
+// MIR-NEXT: (-0.5 : f64 *
+pub fn concrete() -> i64 { Square::SIDES }
+
+// 4 * 1000 + 3 * 100 + (1 + 0) * 10 + (1 + 2) = 4313
+pub fn checksum() -> i64 {
+    concrete() * 1000
+        + sides(Wedge { a: 1.0, b: 1.0 }) * 100
+        + (closed(Square { side: 1.0 }) + closed(Wedge { a: 1.0, b: 1.0 })) * 10
+        + tag_code(Square { side: 1.0 })
+        + tag_code(Wedge { a: 1.0, b: 1.0 })
+}
+
+// -0.5 * 4.0 + 2.0 * 3.0 = 4.0
+pub fn area_sum() -> f64 {
+    scaled(Square { side: 2.0 }) + scaled(Wedge { a: 2.0, b: 3.0 })
+}
+
+extern "C" trampoline "reussir_assoc_checksum" = checksum;
+extern "C" trampoline "reussir_assoc_area_sum" = area_sum;

@@ -225,8 +225,15 @@ pub(crate) fn for_each_expr<'e, 'tcx>(expr: &'e Expr<'tcx>, f: &mut impl FnMut(&
     use ExprKind::*;
     f(expr);
     match &expr.kind {
-        GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_) | ConstSeq(_)
-        | Var(_) | Poison => {}
+        GlobalStr(_)
+        | ConstChar(_)
+        | ConstInt(_)
+        | ConstFloat(_)
+        | ConstBool(_)
+        | ConstSeq(_)
+        | Var(_)
+        | TraitConst { .. }
+        | Poison => {}
         Negate(e) | Not(e) | Cast(e, _) | RegionRun(e) | Proj(e, _) => {
             for_each_expr(e, f);
         }
@@ -1842,6 +1849,56 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         }
     }
 
+    /// The value a `TraitConst` takes: the one the impl selected for the
+    /// ground `self_ty` defines ([`TraitDb::assoc_const_value`]). A failed
+    /// lookup is reported and yields `None`.
+    ///
+    /// [`TraitDb::assoc_const_value`]: crate::semi::traits::TraitDb::assoc_const_value
+    fn resolve_trait_const(
+        &mut self,
+        trait_def: DefId,
+        name: TokenKey,
+        self_ty: Ty<'tcx>,
+        span: Option<Span>,
+    ) -> Option<crate::semi::const_eval::ConstValue<'tcx>> {
+        use crate::semi::traits::{AssocConstError, SelectError};
+        let shown = self.defs.path(trait_def).display(self.resolver);
+        let cname = self.resolver.try_resolve(name).unwrap_or("?").to_string();
+        let Some(db) = self.traits.db else {
+            self.error(
+                span,
+                format!("cannot resolve `{shown}::{cname}`: this input carries no trait tables"),
+            );
+            return None;
+        };
+        let Some(tid) = db.trait_by_def(trait_def) else {
+            self.error(
+                span,
+                format!("unknown trait `{shown}` in an associated const"),
+            );
+            return None;
+        };
+        let message = match db.assoc_const_value(self.tcx, tid, self_ty, name) {
+            Ok(value) => return Some(value),
+            Err(AssocConstError::Undeclared) => {
+                format!("trait `{shown}` declares no associated const `{cname}`")
+            }
+            Err(AssocConstError::Select(SelectError::NoImpl(_))) => format!(
+                "no implementation of `{shown}` applies in this instantiation, so \
+                 `{cname}` has no value"
+            ),
+            Err(AssocConstError::Select(SelectError::DepthLimit(_))) => {
+                format!("overflow selecting an `impl {shown}` for this instantiation")
+            }
+            Err(AssocConstError::Indirect) => format!(
+                "no direct `impl {shown}` defines associated const `{cname}` for this \
+                 instantiation (the bound holds only through a sub-trait)"
+            ),
+        };
+        self.error(span, message);
+        None
+    }
+
     /// Enqueue a function instance if it has not been seen, recording the
     /// demanding site (`span` in [`cur_file`](Self::cur_file)) for the
     /// missing-definition diagnostic.
@@ -2370,6 +2427,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     | ExprKind::TensorOp { .. }
                     | ExprKind::FuncCall { .. }
                     | ExprKind::TraitCall { .. }
+                    | ExprKind::TraitConst { .. }
                     | ExprKind::ConstInt(_)
                     | ExprKind::ConstFloat(_)
                     | ExprKind::ConstBool(_)
@@ -2519,6 +2577,22 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     }
                     // The failure is already reported; poison keeps the
                     // instance lowering so one bad call yields one report.
+                    None => M::Poison,
+                }
+            }
+            ExprKind::TraitConst {
+                trait_def,
+                name,
+                ty_args,
+            } => {
+                let self_ty = subst_ty(self.tcx, ty_args[0], subst);
+                // The value lowers as the literal (or `ConstSeq`) expression
+                // denoting it.
+                match self.resolve_trait_const(*trait_def, *name, self_ty, span) {
+                    Some(value) => {
+                        let kind = crate::semi::const_eval::const_value_kind(self.tcx, &value);
+                        self.lower_kind(&kind, subst, span, result_ty)
+                    }
                     None => M::Poison,
                 }
             }

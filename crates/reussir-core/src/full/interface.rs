@@ -167,7 +167,8 @@ pub fn export_closure(input: &MonoInput<'_, '_>) -> ExportClosure {
                             queue.push_back(*target);
                         }
                     }
-                    ExprKind::TraitCall { trait_def, .. } => {
+                    ExprKind::TraitCall { trait_def, .. }
+                    | ExprKind::TraitConst { trait_def, .. } => {
                         if closure.traits.insert(*trait_def)
                             && let Some(db) = db
                             && let Some(id) = db.trait_by_def(*trait_def)

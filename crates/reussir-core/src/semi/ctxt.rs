@@ -1847,6 +1847,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 .collect(),
             methods: Vec::new(),
             assoc_tys: Vec::new(),
+            assoc_consts: Vec::new(),
             span: None,
             file: FileId::ROOT,
         });
@@ -1875,6 +1876,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self_ty,
             where_clauses: Vec::new(),
             methods: Vec::new(),
+            assoc_consts: Vec::new(),
             span: None,
             file: FileId::ROOT,
         });
@@ -2167,6 +2169,22 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     methods.push((&m.value, mspan, def));
                 }
                 continue;
+            }
+            // An inherent method is a function declared under the type's
+            // path; an inherent const would likewise be a const item under
+            // it, and the language has no const items outside traits.
+            for c in &ib.consts {
+                self.error(
+                    Some(Span {
+                        start: c.start,
+                        end: c.end,
+                    }),
+                    format!(
+                        "associated const `{}` must be declared by a trait; an \
+                         inherent `impl` cannot define consts",
+                        self.sym(c.value.name)
+                    ),
+                );
             }
             let target = self.scan_impl_target(ib, false, *span);
             let impl_generics = target.map(|_| self.collect_generics(&ib.generics, *span));
@@ -2915,11 +2933,22 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return nones;
         }
-        if !ib.members.is_empty() {
+        if !ib.members.is_empty() || !ib.consts.is_empty() {
             self.error(
                 span,
                 "the members of a builtin impl are compiler-provided; the \
                  impl body must be empty",
+            );
+            return nones;
+        }
+        if !self.traits.trait_def(tid).assoc_consts.is_empty() {
+            self.error(
+                span,
+                format!(
+                    "trait `{}` declares associated consts, which the compiler \
+                     does not provide for a builtin impl",
+                    self.trait_display(tid)
+                ),
             );
             return nones;
         }
@@ -2969,6 +2998,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self_ty,
             where_clauses: Vec::new(),
             methods: Vec::new(),
+            assoc_consts: Vec::new(),
             span,
             file: self.current_file,
         });
@@ -3263,6 +3293,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             })
             .collect();
 
+        let assoc_consts =
+            self.scan_impl_assoc_consts(ib, tid, &generics, self_ty, &trait_args, span);
+
         let missing: Vec<String> = sigs
             .iter()
             .zip(&by_sig)
@@ -3281,6 +3314,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return declared;
         }
+        let Some(assoc_consts) = assoc_consts else {
+            return declared;
+        };
 
         let id = crate::semi::traits::ImplId(self.traits.impls_len() as u32);
         let mut args = Vec::with_capacity(1 + trait_args.len());
@@ -3314,6 +3350,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 .into_iter()
                 .map(|d| d.expect("missing checked"))
                 .collect(),
+            assoc_consts,
             span,
             file: self.current_file,
         });
@@ -3454,6 +3491,104 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 format!("method `{name}` {a} `regional` in trait `{tr}` {b}"),
             );
         }
+    }
+
+    /// The associated consts of a trait impl, in trait-const order: each
+    /// member names a const the trait declares, its annotated type equals
+    /// the declared one with the trait's binder substituted (as in
+    /// [`Self::check_conformance`]), and its initializer evaluates. `None`
+    /// (with every problem reported) unless all of the trait's consts are
+    /// defined exactly once and evaluate.
+    fn scan_impl_assoc_consts(
+        &mut self,
+        ib: &surface::ImplBlock,
+        tid: TraitId,
+        generics: &[(TokenKey, GenericId)],
+        self_ty: Ty<'tcx>,
+        trait_args: &[Ty<'tcx>],
+        span: Option<Span>,
+    ) -> Option<Vec<crate::semi::const_eval::ConstValue<'tcx>>> {
+        let tdef = self.traits.trait_def(tid);
+        let decls = tdef.assoc_consts.clone();
+        let map: FxHashMap<GenericId, Ty<'tcx>> = std::iter::once((tdef.self_param, self_ty))
+            .chain(
+                tdef.params
+                    .iter()
+                    .zip(trait_args)
+                    .map(|(&(_, p), &a)| (p, a)),
+            )
+            .collect();
+        let tr = self.trait_display(tid);
+        let mut defined = vec![false; decls.len()];
+        let mut values = vec![None; decls.len()];
+        for member in &ib.consts {
+            let cspan = Some(Span {
+                start: member.start,
+                end: member.end,
+            });
+            let c = &member.value;
+            let name = self.sym(c.name).to_owned();
+            let Some(idx) = decls.iter().position(|d| d.name == c.name) else {
+                self.error(
+                    cspan,
+                    format!("`{name}` is not an associated const of trait `{tr}`"),
+                );
+                continue;
+            };
+            if std::mem::replace(&mut defined[idx], true) {
+                self.error(
+                    cspan,
+                    format!("associated const `{name}` is defined more than once"),
+                );
+                continue;
+            }
+            if c.visibility == surface::Visibility::Public {
+                self.error(
+                    cspan,
+                    "visibility is not allowed on a trait impl const; the trait's \
+                     visibility applies",
+                );
+            }
+            self.generic_names = generics.iter().copied().collect();
+            self.self_alias = Some(self_ty);
+            let ty = self.eval_decl_type(&c.ty);
+            self.generic_names.clear();
+            self.self_alias = None;
+            let want = crate::semi::traits::subst::replace_generics(self.tcx, decls[idx].ty, &map);
+            if ty != want {
+                self.error(
+                    Some(c.ty.span()),
+                    format!(
+                        "associated const `{name}` has type `{}` but trait `{tr}` requires `{}`",
+                        self.ty_display(ty),
+                        self.ty_display(want)
+                    ),
+                );
+                continue;
+            }
+            let init = c
+                .value
+                .as_ref()
+                .expect("the parser requires an impl initializer");
+            values[idx] = self.eval_const(init, ty);
+        }
+        let missing: Vec<String> = decls
+            .iter()
+            .zip(&defined)
+            .filter(|(_, d)| !**d)
+            .map(|(decl, _)| format!("`{}`", self.sym(decl.name)))
+            .collect();
+        if !missing.is_empty() {
+            self.error(
+                span,
+                format!(
+                    "impl of trait `{tr}` for `{}` is missing associated const(s) {}",
+                    self.ty_display(self_ty),
+                    missing.join(", ")
+                ),
+            );
+        }
+        values.into_iter().collect()
     }
 
     /// Validate an `impl` block's target: it must resolve to a record this
@@ -3757,6 +3892,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             supertraits: Vec::new(),
             methods: Vec::new(),
             assoc_tys: Vec::new(),
+            assoc_consts: Vec::new(),
             span,
             file: self.current_file,
         });
@@ -3849,9 +3985,58 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
             methods.extend(self.trait_method_sig(&member.value, mspan, &trait_params, self_ty));
         }
+
+        // Associated consts share the member namespace with the methods.
+        // Their types evaluate under the trait's binder like a signature's,
+        // so a `Self` or trait-generic type is rejected as non-constant
+        // rather than as unknown.
+        let mut assoc_consts: Vec<crate::semi::traits::AssocConstDef<'tcx>> = Vec::new();
+        self.generic_names = trait_params.iter().copied().collect();
+        self.self_alias = Some(self_ty);
+        for member in &td.consts {
+            let cspan = Some(Span {
+                start: member.start,
+                end: member.end,
+            });
+            let name = member.value.name;
+            if methods.iter().any(|m| m.name == name) || assoc_consts.iter().any(|c| c.name == name)
+            {
+                self.error(
+                    cspan,
+                    format!(
+                        "trait `{}` declares `{}` more than once",
+                        self.sym(td.name),
+                        self.sym(name)
+                    ),
+                );
+                continue;
+            }
+            let ty = self.eval_decl_type(&member.value.ty);
+            if !crate::semi::const_eval::is_const_ty(ty) {
+                self.error(
+                    Some(member.value.ty.span()),
+                    format!(
+                        "associated const `{}` must have a constant type (an integer, \
+                         float, `bool`, or `char` scalar, or a `ConstSeq` of one), found `{}`",
+                        self.sym(name),
+                        self.ty_display(ty)
+                    ),
+                );
+                continue;
+            }
+            assoc_consts.push(crate::semi::traits::AssocConstDef {
+                name,
+                ty,
+                span: cspan,
+            });
+        }
+        self.generic_names.clear();
+        self.self_alias = None;
+
         let def = self.traits.trait_def_mut(id);
         def.supertraits = supertraits;
         def.methods = methods;
+        def.assoc_consts = assoc_consts;
     }
 
     /// One member of a `trait` body as a [`MethodSig`]: allocate its own

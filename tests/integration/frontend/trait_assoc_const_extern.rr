@@ -1,0 +1,45 @@
+// Associated consts across a package boundary: the dependency's `.rri`
+// ships the trait's const declarations (a `ConstSeq` among them), each
+// impl's values, and the generic body reading `T::ARITY`. The consumer reads
+// the dependency's values through a concrete type, implements the extern
+// trait for a local type, and monomorphizes the dependency's generic at that
+// local type.
+
+// RUN: %rrc --package-root %S/trait_assoc_const_extern_dep --package-name dep --emit rri -o %t.rri
+// RUN: %FileCheck %s --check-prefix=RRI < %t.rri
+
+// RRI-DAG: const ARITY : i64 {{\[[0-9.]+\]}};
+// RRI-DAG: const SLOTS : ConstSeq<u64> {{\[[0-9.]+\]}};
+// RRI-DAG: impl #dep::Arity::<#dep::Pair> in 0 {{\[[0-9.]+\]}} { const ARITY = 2; const SLOTS = ConstSeq[0, 1] : ConstSeq<u64>; }
+// RRI-DAG: trait#dep::Arity::<${{[0-9]+}}>#ARITY : i64
+
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --extern-src dep=%S/trait_assoc_const_extern_dep \
+// RUN:   --emit mir --no-source-locations -o - | %FileCheck %s --check-prefix=MIR
+
+// MIR: pub fn @_RINvC3dep8arity_ofNvC3app6TripleE(v0 (x): app::Triple) -> i64 {
+// MIR-NEXT: 3 : i64
+// MIR: pub fn @_RNvC3app5slots() -> ConstSeq<u64> {
+// MIR-NEXT: ConstSeq[0, 1] : ConstSeq<u64>
+// MIR: pub fn @_RNvC3app6direct() -> i64 {
+// MIR-NEXT: 2 : i64
+
+pub struct Triple {
+    pub a: i64,
+}
+
+impl dep::Arity for Triple {
+    const ARITY: i64 = 3;
+    const SLOTS: ConstSeq<u64> = [0, 1, 2];
+}
+
+pub fn direct() -> i64 {
+    dep::Pair::ARITY
+}
+
+pub fn slots() -> ConstSeq<u64> {
+    dep::Pair::SLOTS
+}
+
+pub fn through_dep() -> i64 {
+    dep::arity_of(Triple { a: 1 })
+}
