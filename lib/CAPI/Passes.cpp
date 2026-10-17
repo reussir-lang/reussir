@@ -125,6 +125,9 @@ MlirPass reussirCreateRcCreateSinkPass(void) {
 MlirPass reussirCreateRcDispatchFusionPass(void) {
   return wrapOwned(reussir::createReussirRcDispatchFusionPass());
 }
+MlirPass reussirCreateEarlyPartialMovePass(void) {
+  return wrapOwned(reussir::createReussirEarlyPartialMovePass());
+}
 MlirPass reussirCreatePartialMovePass(void) {
   return wrapOwned(reussir::createReussirPartialMovePass());
 }
