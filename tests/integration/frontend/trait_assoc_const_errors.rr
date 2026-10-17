@@ -87,3 +87,24 @@ impl Two for Plain { const N: i64 = 2; }
 
 // CHECK-DAG: multiple traits provide associated const `N` for `Plain`: `One` and `Two`
 fn ambiguous() -> i64 { Plain::N }
+
+// Default values are constants of the declared type, in range. A constant
+// type mentions neither `Self` nor the trait's generics, so each default is
+// checked once, in the trait; it cannot read another const through `Self`.
+// CHECK-DAG: integer literal `300` is out of range for `u8`
+// CHECK-DAG: expected a constant of type `bool`, found a char literal
+// CHECK-DAG: expected a constant of type `i64`, found an expression that cannot be evaluated at compile time
+// CHECK-DAG: associated const `ITEMS` must have a constant type (an integer, float, `bool`, or `char` scalar, or a `ConstSeq` of one), found `ConstSeq<Self>`
+pub trait Defaults {
+    const MAX: u8 = 300;
+    const ON: bool = 'y';
+    const NEXT: i64 = Self::BASE;
+    const ITEMS: ConstSeq<Self> = [];
+    const BASE: i64 = 0;
+}
+
+// An override is checked against the declaration as before.
+// CHECK-DAG: associated const `BASE` has type `u8` but trait `Defaults` requires `i64`
+impl Defaults for Cube {
+    const BASE: u8 = 1;
+}

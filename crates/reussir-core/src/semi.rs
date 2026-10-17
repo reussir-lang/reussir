@@ -2318,8 +2318,9 @@ mod tests {
 
     #[test]
     fn assoc_const_conformance_is_checked_per_impl() {
+        // `STEP` has a default value, so neither impl must define it.
         elaborate_source(
-            "pub trait Limits { const MAX: u8; const ON: bool; }\n\
+            "pub trait Limits { const MAX: u8; const ON: bool; const STEP: u8 = 1; }\n\
              pub struct A { pub x: i64 }\n\
              pub struct B { pub x: i64 }\n\
              impl Limits for A { const MAX: u16 = 1; }\n\
@@ -2334,6 +2335,53 @@ mod tests {
                     assert!(messages.contains(&expected), "{expected}: {messages:#?}");
                 }
                 assert_eq!(messages.len(), 3, "{messages:#?}");
+            },
+        );
+    }
+
+    #[test]
+    fn assoc_const_lookup_falls_back_to_the_default() {
+        use crate::literal::Integer;
+        use crate::semi::const_eval::{ConstScalar, ConstValue};
+        use crate::semi::traits::TraitId;
+        check(
+            "pub trait Limits { const MAX: u8 = 7; const STEPS: ConstSeq<u8> = [1]; const ON: bool; }\n\
+             pub struct A { pub x: i64 }\n\
+             pub struct B { pub x: i64 }\n\
+             impl Limits for A { const MAX: u8 = 9; const ON: bool = true; }\n\
+             impl Limits for B { const STEPS: ConstSeq<u8> = []; const ON: bool = false; }",
+            |elab, tcx| {
+                let tid = (0..elab.traits.traits_len() as u32)
+                    .map(TraitId)
+                    .find(|&t| {
+                        elab.sym(elab.defs.path(elab.traits.trait_def(t).def).name()) == "Limits"
+                    })
+                    .expect("trait Limits");
+                let tdef = elab.traits.trait_def(tid);
+                let [max, steps] = [0, 1].map(|k| tdef.assoc_consts[k].name);
+                let record = |name: &str| {
+                    let def = *elab
+                        .records
+                        .keys()
+                        .find(|&&d| elab.sym(elab.defs.path(d).name()) == name)
+                        .expect("record");
+                    tcx.mk_record(def, &[], crate::semi::ty::Flexivity::Irrelevant)
+                };
+                let value = |ty, name| elab.traits.assoc_const_value(tcx, tid, ty, name);
+                let int = |n: i64| Ok(ConstValue::Scalar(ConstScalar::Int(Integer::from(n))));
+                let seq = |elems: &[i64]| {
+                    Ok(ConstValue::Seq {
+                        elem: tcx.mk_int(crate::semi::ty::IntTy::Unsigned(8)),
+                        elems: elems
+                            .iter()
+                            .map(|&n| ConstScalar::Int(Integer::from(n)))
+                            .collect(),
+                    })
+                };
+                assert_eq!(value(record("A"), max), int(9));
+                assert_eq!(value(record("B"), max), int(7));
+                assert_eq!(value(record("A"), steps), seq(&[1]));
+                assert_eq!(value(record("B"), steps), seq(&[]));
             },
         );
     }

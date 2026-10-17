@@ -236,7 +236,8 @@ pub enum SyntaxKind {
     /// `[e0, e1, ...]`: a sequence literal.
     SeqLitExpr,
     /// An associated const member of a `trait` or `impl` body:
-    /// `const NAME: Type;` in a trait, `const NAME: Type = expr;` in an impl.
+    /// `const NAME: Type;` or, with a default value, `const NAME: Type =
+    /// expr;` in a trait, `const NAME: Type = expr;` in an impl.
     ConstStmt,
 
     /// End-of-file sentinel used by the parser; never stored in the tree.

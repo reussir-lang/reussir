@@ -12,7 +12,7 @@
 //!                     (block | ';' | RAW-MLIR-LITERAL ';')
 //! trait-stmt  ::= 'trait' name generics? (':' path ('+' path)*)? '{' (trait-method | trait-const)* '}'
 //! trait-method ::= attribute* 'regional'? 'fn' name generics? '(' params ')' ('->' '[flex]'? type)? ';'
-//! trait-const ::= 'const' name ':' type ';'
+//! trait-const ::= 'const' name ':' type ('=' expr)? ';'
 //! impl-stmt   ::= 'impl' generics? (type-atom 'for')? type-atom '{' (impl-method | impl-const)* '}'
 //! impl-method ::= attribute* pub? regional? fn ...
 //! impl-const  ::= pub? 'const' name ':' type '=' expr ';'
@@ -131,7 +131,7 @@ impl Parser<'_> {
     }
 
     /// `trait Name generics? (':' path ('+' path)*)? '{' (trait-method | trait-const)* '}'`.
-    /// Supertraits are bare `+`-separated paths; members are signatures only.
+    /// Supertraits are bare `+`-separated paths; methods are signatures only.
     fn trait_stmt(&mut self, m: Marker) {
         self.bump(); // the `trait` ident
         self.expect_ident("a trait name");
@@ -320,20 +320,16 @@ impl Parser<'_> {
     }
 
     /// An associated const member, completing a `ConstStmt`: a trait
-    /// declares `const NAME: Type;`, an impl defines `const NAME: Type =
-    /// expr;`. A trait default or a missing impl initializer still parses
-    /// losslessly so recovery continues at the next member.
+    /// declares `const NAME: Type;`, optionally with a default value
+    /// (`= expr`), and an impl defines `const NAME: Type = expr;`. A missing
+    /// impl initializer still parses losslessly so recovery continues at
+    /// the next member.
     fn assoc_const(&mut self, m: Marker, in_impl: bool) {
         self.bump(); // the `const` ident
         self.expect_ident("an associated const name");
         self.expect(Colon);
         self.type_();
         if self.at(Eq) {
-            if !in_impl {
-                self.error(
-                    "associated consts in a trait are declarations; default values are not supported",
-                );
-            }
             self.bump();
             self.expr();
         } else if in_impl {
