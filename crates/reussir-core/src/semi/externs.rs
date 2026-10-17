@@ -581,6 +581,10 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
                 let inner = self.ty(inner);
                 self.tcx.mk_arc(inner)
             }
+            TyKind::ConstSeq(elem) => {
+                let elem = self.ty(elem);
+                self.tcx.mk_const_seq(elem)
+            }
             TyKind::Cell { elem, kind } => {
                 let elem = self.ty(elem);
                 self.tcx.mk_cell(elem, kind)
@@ -664,6 +668,7 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
             | ExprKind::ConstInt(_)
             | ExprKind::ConstFloat(_)
             | ExprKind::ConstBool(_)
+            | ExprKind::ConstSeq(_)
             | ExprKind::Var(_)
             | ExprKind::Poison => expr.kind.clone(),
             ExprKind::Negate(x) => ExprKind::Negate(self.boxed(x)),

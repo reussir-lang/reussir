@@ -1,0 +1,80 @@
+// `ConstSeq<T>` is an immutable static sequence of scalars created from a
+// sequence literal: element types, the `core::intrinsic::const_seq` reads and
+// their `len`/`get` methods, argument and record-field use, the textual IR
+// round trip, and an end-to-end run including the out-of-bounds panic.
+
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name constseq --extern core=%t.core.rri --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %FileCheck %s --check-prefix=SHARED < %t.mlir
+// RUN: %rrc %s --package-name constseq --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/const_seq_e2e.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %if wine-quirks %{ %not %} %else %{ %not --crash %} %t.exe oob 2>&1 | %FileCheck %s --check-prefix=PANIC
+// RUN: %rrc %s --package-name constseq --extern core=%t.core.rri --emit hir --no-source-locations -o %t.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %s --package-name constseq --extern core=%t.core.rri --emit mir --no-source-locations -o %t.mir
+// RUN: %FileCheck %s --check-prefix=MIR < %t.mir
+// RUN: %rrc %t.mir -o %t.rt.o --relocation-mode pic
+// RUN: %cc %t.rt.o %S/const_seq_e2e.c -o %t.rt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.rt.exe
+
+pub struct Table { name: str, rows: ConstSeq<u16> }
+
+fn sum(xs: ConstSeq<i64>) -> i64 {
+    let n = core::intrinsic::const_seq::len(xs);
+    while [i = 0, acc = 0] (i < n) {
+        (i + 1, acc + core::intrinsic::const_seq::get(xs, i))
+    }.1
+}
+
+pub fn main() -> i64 {
+    let xs: ConstSeq<i64> = [1, -2, 30];
+    let fs: ConstSeq<f32> = [1.5, -0.25];
+    let bs: ConstSeq<bool> = [true, false];
+    let cs: ConstSeq<char> = ['a', 'z'];
+    let empty: ConstSeq<u8> = [];
+    let wide: ConstSeq<u64> = [18446744073709551615];
+    let table = Table { name: "t", rows: [7, 8, 9] };
+    let len_ok = if xs.len() == 3 { 1 } else { 0 };
+    let sum_ok = if sum(xs) == 29 && sum([1, -2, 30]) == 29 { 1 } else { 0 };
+    let float_ok = if fs.get(1) == -0.25 { 1 } else { 0 };
+    let bool_ok = if bs.get(0) { 1 } else { 0 };
+    let char_ok = if cs.get(1) == 'z' { 1 } else { 0 };
+    let empty_ok = if empty.len() == 0 { 1 } else { 0 };
+    let wide_ok = if wide.get(0) == 18446744073709551615 { 1 } else { 0 };
+    let field_ok = if table.rows.get(2) == 9 { 1 } else { 0 };
+    len_ok + sum_ok * 10 + float_ok * 100 + bool_ok * 1000 + char_ok * 10000
+        + empty_ok * 100000 + wide_ok * 1000000 + field_ok * 10000000
+}
+
+pub fn read_past_end() -> u16 {
+    let rows: ConstSeq<u16> = [1, 2];
+    core::intrinsic::const_seq::get(rows, 2)
+}
+
+extern "C" trampoline "reussir_main" = main;
+extern "C" trampoline "reussir_read_past_end" = read_past_end;
+
+// Equal literals share one global.
+// SHARED-COUNT-1: reussir.const_seq.global {{.*}} = dense<[1, -2, 30]> : tensor<3xi64>
+// SHARED-NOT: dense<[1, -2, 30]>
+// CHECK-DAG: reussir.const_seq.global {{.*}} = dense<[1.500000e+00, -2.500000e-01]> : tensor<2xf32>
+// CHECK-DAG: reussir.const_seq.global {{.*}} = dense<[true, false]> : tensor<2xi1>
+// CHECK-DAG: reussir.const_seq.global {{.*}} = dense<[97, 122]> : tensor<2xi32>
+// CHECK-DAG: reussir.const_seq.global {{.*}} = dense<> : tensor<0xi8>
+// CHECK-DAG: reussir.const_seq.global {{.*}} = dense<-1> : tensor<1xi64>
+// CHECK-DAG: reussir.const_seq.literal
+// CHECK-DAG: reussir.const_seq.len
+// CHECK-DAG: reussir.const_seq.get
+
+// HIR-DAG: ConstSeq[1, -2, 30] : ConstSeq<i64>
+// HIR-DAG: ConstSeq[1.5, -0.25] : ConstSeq<f32>
+// HIR-DAG: ConstSeq[char#97, char#122] : ConstSeq<char>
+// HIR-DAG: ConstSeq[] : ConstSeq<u8>
+// HIR-DAG: intrinsic#const_seq#get#0(
+// MIR-DAG: ConstSeq[true, false] : ConstSeq<bool>
+// MIR-DAG: ConstSeq[18446744073709551615] : ConstSeq<u64>
+// MIR-DAG: intrinsic#const_seq#len#0(
+
+// PANIC: Panic: const_seq index out of bounds

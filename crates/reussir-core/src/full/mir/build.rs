@@ -347,6 +347,10 @@ impl<'tcx> Builder<'_, 'tcx> {
                 let inner = self.ty(inner);
                 self.tcx.mk_nullable(inner)
             }
+            raw::Ty::ConstSeq(elem) => {
+                let elem = self.ty(elem);
+                self.tcx.mk_const_seq(elem)
+            }
             raw::Ty::Cell { inner, kind } => {
                 let inner = self.ty(inner);
                 self.tcx.mk_cell(inner, *kind)
@@ -508,6 +512,7 @@ impl<'tcx> Builder<'_, 'tcx> {
             raw::Kind::ConstBool(b) => M::ConstBool(*b),
             raw::Kind::ConstChar(c) => M::ConstChar(*c),
             raw::Kind::GlobalStr(words) => M::GlobalStr(StringToken::from_words(*words)),
+            raw::Kind::ConstSeq(elems) => M::ConstSeq(self.tcx.alloc(elems.clone()).as_slice()),
             raw::Kind::Var(v) => M::Var(VarId(*v)),
             raw::Kind::Poison => M::Poison,
             raw::Kind::Negate(x) => M::Negate(self.expr_ref(x)),
@@ -975,6 +980,21 @@ mod tests {
             pub fn call_tuple(f: ((i32, bool),) -> i32, p: (i32, bool)) -> i32 { f(p) }
         "#,
         );
+    }
+
+    #[test]
+    fn roundtrips_const_seq_literals() {
+        for (ty, value) in [
+            ("ConstSeq<u64>", "ConstSeq[0, 18446744073709551615]"),
+            ("ConstSeq<bool>", "ConstSeq[true, false]"),
+        ] {
+            with_tcx(|tcx| {
+                let input = format!("fn @seq() -> {ty} {{ {value} : {ty} }}");
+                let p = parse_program(tcx, &input).expect("parse const_seq literal");
+                let printed = Printer::new(&p.defs, &p.names).program(&p.program);
+                assert!(printed.contains(&format!("{value} : {ty}")), "{printed}");
+            });
+        }
     }
 
     #[test]

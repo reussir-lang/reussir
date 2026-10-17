@@ -26,6 +26,7 @@ pub mod ty;
 
 // The elaboration passes.
 pub mod check;
+pub mod const_eval;
 pub mod ctxt;
 pub mod externs;
 pub mod fulfill;
@@ -2527,7 +2528,7 @@ mod tests {
     /// `cargo test`, before any rene build.
     #[test]
     fn bundled_core_covers_surfaced_intrinsics() {
-        use crate::intrinsic::MathFn;
+        use crate::intrinsic::{ConstSeqFn, MathFn};
         use crate::semi::lang::{IntrinsicItem, LangItem};
         check_package(
             "core",
@@ -2560,6 +2561,10 @@ mod tests {
                     include_str!("../../../library/core/src/intrinsic/nullable.rr"),
                 ),
                 (
+                    &["intrinsic", "const_seq"],
+                    include_str!("../../../library/core/src/intrinsic/const_seq.rr"),
+                ),
+                (
                     &["intrinsic", "tensor"],
                     include_str!("../../../library/core/src/intrinsic/tensor.rr"),
                 ),
@@ -2587,6 +2592,14 @@ mod tests {
                     elab.lang.get(panic_item).is_some(),
                     "core declares no prototype for `panic`"
                 );
+                for f in [ConstSeqFn::Len, ConstSeqFn::Get] {
+                    let item = LangItem::Intrinsic(IntrinsicItem::ConstSeq(f));
+                    assert!(
+                        elab.lang.get(item).is_some(),
+                        "core declares no prototype for `const_seq::{}`",
+                        f.as_str()
+                    );
+                }
                 assert!(
                     elab.lang_item_site(panic_item).is_some(),
                     "core's `panic` prototype has no declaration site"

@@ -345,6 +345,7 @@ impl Render<'_> {
             }
             TyKind::Bottom => text("!"),
             TyKind::Nullable(inner) => text("Nullable<") + self.ty(inner) + text(">"),
+            TyKind::ConstSeq(elem) => text("ConstSeq<") + self.ty(elem) + text(">"),
             TyKind::Cell { elem, kind } => {
                 text(kind.surface_name()) + text("<") + self.ty(elem) + text(">")
             }
@@ -527,6 +528,7 @@ impl Render<'_> {
             ConstFloat(f) => text(f.to_string()),
             ConstBool(b) => text(format!("{b}")),
             ConstChar(c) => text(format!("char#{c}")),
+            ConstSeq(elems) => text(crate::semi::hir::print::const_seq_lit(elems)),
             Var(v) => var(v),
             Poison => text("poison"),
             Negate(x) => text("-(") + self.value(x) + text(")"),

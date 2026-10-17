@@ -231,6 +231,10 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 let inner = self.resolve(*inner);
                 self.tcx.mk_arc(inner)
             }
+            TyKind::ConstSeq(elem) => {
+                let elem = self.resolve(*elem);
+                self.tcx.mk_const_seq(elem)
+            }
             TyKind::Array { elem, dims } => {
                 let elem = self.resolve(*elem);
                 self.tcx.mk_array(elem, dims)
@@ -374,6 +378,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             }
             (TyKind::Nullable(x), TyKind::Nullable(y)) => self.unify(*x, *y),
             (TyKind::Arc(x), TyKind::Arc(y)) => self.unify(*x, *y),
+            (TyKind::ConstSeq(x), TyKind::ConstSeq(y)) => self.unify(*x, *y),
             (TyKind::Cell { elem: x, kind: e1 }, TyKind::Cell { elem: y, kind: e2 })
                 if e1 == e2 =>
             {
@@ -449,7 +454,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 self.occurs(h, *ret)
             }
             TyKind::Nullable(inner) => self.occurs(h, *inner),
-            TyKind::Arc(inner) => self.occurs(h, *inner),
+            TyKind::Arc(inner) | TyKind::ConstSeq(inner) => self.occurs(h, *inner),
             TyKind::Cell { elem: inner, .. } => self.occurs(h, *inner),
             TyKind::DevArray {
                 elem, placement, ..
@@ -616,6 +621,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             }
             (TyKind::Nullable(x), TyKind::Nullable(y)) => self.unify_instantiated(*x, inst, *y),
             (TyKind::Arc(x), TyKind::Arc(y)) => self.unify_instantiated(*x, inst, *y),
+            (TyKind::ConstSeq(x), TyKind::ConstSeq(y)) => self.unify_instantiated(*x, inst, *y),
             (TyKind::Cell { elem: x, kind: e1 }, TyKind::Cell { elem: y, kind: e2 })
                 if e1 == e2 =>
             {
@@ -685,6 +691,10 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             TyKind::Arc(inner) => {
                 let inner = self.materialize(*inner, inst);
                 self.tcx.mk_arc(inner)
+            }
+            TyKind::ConstSeq(elem) => {
+                let elem = self.materialize(*elem, inst);
+                self.tcx.mk_const_seq(elem)
             }
             TyKind::Array { elem, dims } => {
                 let elem = self.materialize(*elem, inst);

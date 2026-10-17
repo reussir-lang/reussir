@@ -2710,6 +2710,80 @@ def ReussirStrCompareOp : ReussirStrOp<"compare", [Pure]> {
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// Reussir ConstSeq Operations
+//===----------------------------------------------------------------------===//
+// Constant sequences follow the str scheme: a global holds the data, and a
+// literal is a `{ptr, len}` view of it.
+
+class ReussirConstSeqOp<string mnemonic, list<Trait> traits>
+    : ReussirOp<"const_seq."#mnemonic, traits>;
+
+def ReussirConstSeqGlobalOp : ReussirConstSeqOp<"global", [Symbol]> {
+  let summary = "Create a global constant sequence";
+  let description = [{
+    `reussir.const_seq.global` creates an immutable static array holding the
+    elements of `payload`, a rank-1 dense integer or floating-point
+    attribute.
+  }];
+  let arguments = (ins SymbolNameAttr:$sym_name, ElementsAttr:$payload);
+  let assemblyFormat = [{
+    $sym_name `=` $payload attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def ReussirConstSeqLiteralOp
+    : ReussirConstSeqOp<"literal", [Pure, DeclareOpInterfaceMethods<
+                                              SymbolUserOpInterface>]> {
+  let summary = "Reference a global constant sequence";
+  let description = [{
+    `reussir.const_seq.literal` creates a view of a
+    `reussir.const_seq.global` with the same element type.
+  }];
+  let arguments = (ins FlatSymbolRefAttr:$sym_name);
+  let results = (outs Res<ReussirConstSeqType, "Sequence view">:$seq);
+  let assemblyFormat = [{
+    $sym_name `:` type($seq) attr-dict
+  }];
+}
+
+def ReussirConstSeqLenOp : ReussirConstSeqOp<"len", [Pure]> {
+  let summary = "Get the length of a constant sequence";
+  let arguments = (ins Arg<ReussirConstSeqType, "Sequence">:$seq);
+  let results = (outs Res<Index, "Number of elements">:$len);
+  let assemblyFormat = [{
+    `(` $seq `:` type($seq) `)` `:` type($len) attr-dict
+  }];
+}
+
+def ReussirConstSeqGetOp
+    : ReussirConstSeqOp<"get",
+                        [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+                         DeclareOpInterfaceMethods<ConditionallySpeculatable>,
+                         TypesMatchWith<"result type matches the element type",
+                                        "seq", "value",
+                                        "::llvm::cast<ConstSeqType>($_self)"
+                                        ".getElementType()">]> {
+  let summary = "Read an element of a constant sequence";
+  let description = [{
+    `reussir.const_seq.get` reads the element at `index`, panicking when the
+    index is out of bounds. Convert-to-std expands the check into an `scf.if`
+    whose successful branch is the same read marked `unsafe`.
+
+    With `unsafe`, the read is not checked and an out-of-bounds index is
+    undefined behavior. Speculation and effect-free elimination require a
+    statically proven in-bounds index of a literal sequence.
+  }];
+  let arguments = (ins Arg<ReussirConstSeqType, "Sequence">:$seq,
+      Arg<Index, "Element index">:$index, UnitAttr:$unsafe);
+  let results = (outs Res<AnyType, "Element">:$value);
+  let assemblyFormat = [{
+    (`unsafe` $unsafe^)? `(` $seq `:` type($seq) `)` `[` $index `]`
+    `:` type($value) attr-dict
+  }];
+}
+
 def ReussirTrampolineOp
     : ReussirOp<"trampoline", [Symbol, DeclareOpInterfaceMethods<
                                            SymbolUserOpInterface>]> {

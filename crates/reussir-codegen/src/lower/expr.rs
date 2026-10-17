@@ -38,6 +38,7 @@ use reussir_core::full::mir::{self, DecisionTree, Expr, ExprKind, SwitchCases};
 use reussir_core::full::ownership::{OwnershipTable, RcOp, RecordTable, analyze_function};
 use reussir_core::intrinsic::{ArrayFn, CellFn, IntrinsicOp};
 use reussir_core::literal::{self, Integer};
+use reussir_core::semi::const_eval::ConstScalar;
 use reussir_core::semi::hir::{ArithOp, CmpOp, ExprId, VarId};
 use reussir_core::semi::ty::{Flexivity, IntTy, Ty, TyCtxt, TyKind};
 use reussir_core::surface::{Span, Visibility};
@@ -878,6 +879,39 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 }
                 IntrinsicOp::Pjrt { func } => self.lower_pjrt_intrinsic(block, env, e, *func, args),
                 IntrinsicOp::Cell { func } => self.lower_cell_intrinsic(block, env, e, *func, args),
+                IntrinsicOp::ConstSeq { func } => {
+                    use reussir_core::intrinsic::ConstSeqFn;
+                    let mut operands = Vec::with_capacity(args.len());
+                    for a in args.iter() {
+                        let v = self.expr(block, env, a)?.ok_or_else(|| {
+                            LoweringError("intrinsic operand produced no value".into())
+                        })?;
+                        operands.push(v);
+                    }
+                    // The dialect ops speak `index`; the surface speaks `u64`.
+                    match func {
+                        ConstSeqFn::Len => {
+                            let len = self.append(
+                                block,
+                                builders::const_seq_len(self.context, operands[0], loc),
+                            );
+                            let u64_ty = IntegerType::new(self.context, 64).into();
+                            Ok(Some(
+                                self.append(block, arith::index_castui(len, u64_ty, loc)),
+                            ))
+                        }
+                        ConstSeqFn::Get => {
+                            let index_ty = Type::index(self.context);
+                            let index =
+                                self.append(block, arith::index_castui(operands[1], index_ty, loc));
+                            let elem = self.tys.mlir_ty(e.ty)?;
+                            Ok(Some(self.append(
+                                block,
+                                builders::const_seq_get(operands[0], index, elem, loc),
+                            )))
+                        }
+                    }
+                }
                 IntrinsicOp::Str { func } => {
                     use reussir_core::intrinsic::StrFn;
                     let mut operands = Vec::with_capacity(args.len());
@@ -1073,6 +1107,14 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             Async(_) => err("async blocks are only available inside kernels"),
             TensorOp { .. } => err("tensor operations do not lower yet"),
             GlobalStr(token) => self.global_str(block, e, *token).map(Some),
+            ConstSeq(elems) => {
+                let (symbol, _) = self.const_seq_payload(e.ty, elems)?;
+                let ty = self.tys.mlir_ty(e.ty)?;
+                Ok(Some(self.append(
+                    block,
+                    builders::const_seq_literal(self.context, &symbol, ty, loc),
+                )))
+            }
             Poison => err("poison expression reached lowering"),
         }
     }
@@ -1088,6 +1130,56 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             block,
             builders::str_literal(self.context, &token.mangle(), ty, self.loc()),
         ))
+    }
+
+    /// The global symbol and dense payload of a `ConstSeq<T>` constant. The
+    /// symbol is content-addressed (like a string literal's), so every use of
+    /// equal data in a module shares one global.
+    pub(super) fn const_seq_payload(
+        &self,
+        ty: Ty<'tcx>,
+        elems: &[ConstScalar],
+    ) -> Result<(String, Attribute<'c>)> {
+        let TyKind::ConstSeq(elem_ty) = *ty.kind() else {
+            return err("constant sequence with a non-`ConstSeq` type");
+        };
+        let elem_mlir = self.tys.mlir_ty(elem_ty)?;
+        let mut texts = Vec::with_capacity(elems.len());
+        for elem in elems {
+            let text = match (elem, *elem_ty.kind()) {
+                (ConstScalar::Int(n), TyKind::Int(int_ty)) if literal::int_fits(n, int_ty) => {
+                    n.to_string()
+                }
+                (ConstScalar::Float(f), TyKind::Fp(fp)) => {
+                    let (exp_bits, mant_bits) = literal::ieee_params(fp).ok_or_else(|| {
+                        LoweringError(format!("`{fp:?}` has no settled encoding").into())
+                    })?;
+                    let bits = f.to_ieee_bits(exp_bits, mant_bits).map_err(|_| {
+                        LoweringError(format!("float element `{f}` overflows its type").into())
+                    })?;
+                    let digits = ((1 + exp_bits + mant_bits) as usize).div_ceil(4);
+                    format!("0x{bits:0digits$X}")
+                }
+                (ConstScalar::Bool(b), TyKind::Bool) => b.to_string(),
+                (ConstScalar::Char(c), TyKind::Char) => c.to_string(),
+                _ => return err("constant sequence element does not fit its element type"),
+            };
+            texts.push(text);
+        }
+        let payload = if texts.is_empty() {
+            format!("dense<> : tensor<0x{elem_mlir}>")
+        } else {
+            format!(
+                "dense<[{}]> : tensor<{}x{elem_mlir}>",
+                texts.join(", "),
+                texts.len()
+            )
+        };
+        let attr = Attribute::parse(self.context, &payload).ok_or_else(|| {
+            LoweringError(format!("could not build constant sequence `{payload}`").into())
+        })?;
+        let symbol = StringToken::hash(payload.as_bytes()).mangle_in("REUSSIR_CONST_SEQ");
+        Ok((symbol, attr))
     }
 
     fn string_payload(&self, token: StringToken) -> Result<&'p str> {

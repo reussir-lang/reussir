@@ -8,6 +8,7 @@
 
 pub mod arc;
 pub mod cell;
+pub mod const_seq;
 pub mod math;
 pub mod nullable;
 pub mod panic;

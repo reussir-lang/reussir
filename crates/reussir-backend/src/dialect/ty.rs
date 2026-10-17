@@ -255,6 +255,11 @@ pub fn str(context: &Context, life_scope: ReussirLifeScope) -> Type<'_> {
     unsafe { Type::from_raw(sys::reussirStrTypeGet(context.to_raw(), life_scope)) }
 }
 
+/// Creates a `!reussir.const_seq<element>` type.
+pub fn const_seq(element: Type<'_>) -> Type<'_> {
+    unsafe { Type::from_raw(sys::reussirConstSeqTypeGet(element.to_raw())) }
+}
+
 /// Creates a complete `!reussir.record` type. Pass `None` for `name` to build an
 /// anonymous record, or a [`StringAttribute`] to build an identified one.
 /// `members` and `member_is_field` must have the same length. `fixed` pins

@@ -262,7 +262,8 @@ pub fn contains_kernel_value(ty: Ty<'_>) -> bool {
         }
         TyKind::Array { elem, .. } | TyKind::Cell { elem, .. } => contains_kernel_value(elem),
         TyKind::Nullable(inner) | TyKind::Arc(inner) => contains_kernel_value(inner),
-        TyKind::DefaultPlacement
+        TyKind::ConstSeq(_)
+        | TyKind::DefaultPlacement
         | TyKind::Int(_)
         | TyKind::Fp(_)
         | TyKind::Bool
@@ -316,6 +317,7 @@ fn collect_private_records<'tcx>(
             collect_private_records(records, inner, out);
         }
         TyKind::Token
+        | TyKind::ConstSeq(_)
         | TyKind::DefaultPlacement
         | TyKind::Int(_)
         | TyKind::Fp(_)
@@ -798,6 +800,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             TyKind::Nullable(inner) => {
                 out.push_str("Nullable<");
                 self.push_ty_display(out, inner);
+                out.push('>');
+            }
+            TyKind::ConstSeq(elem) => {
+                out.push_str("ConstSeq<");
+                self.push_ty_display(out, elem);
                 out.push('>');
             }
             TyKind::Cell { elem, kind } => {
@@ -2181,31 +2188,22 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     // A former anchor supplies a declaration path, not a
                     // nominal runtime type. Its methods retain the builtin
                     // receiver in their signatures and exported interfaces.
-                    Some(
-                        if self.lang.item_of(target)
-                            == Some(crate::semi::lang::LangItem::Former(
-                                crate::semi::lang::FormerItem::TensorFuture,
-                            ))
-                        {
+                    use crate::semi::lang::{FormerItem, LangItem};
+                    Some(match (self.lang.item_of(target), args.as_slice()) {
+                        (Some(LangItem::Former(FormerItem::TensorFuture)), _) => {
                             self.tcx.mk_future(&args)
-                        } else if self.lang.item_of(target)
-                            == Some(crate::semi::lang::LangItem::Former(
-                                crate::semi::lang::FormerItem::DevArray,
-                            ))
-                            && args.len() == 2
-                        {
-                            self.tcx.mk_devarray(args[0], &[], Some(args[1]))
-                        } else if self.lang.item_of(target)
-                            == Some(crate::semi::lang::LangItem::Former(
-                                crate::semi::lang::FormerItem::Tensor,
-                            ))
-                            && args.len() == 1
-                        {
-                            self.tcx.mk_tensor(args[0], &[])
-                        } else {
-                            self.tcx.mk_record(target, &args, flex)
-                        },
-                    )
+                        }
+                        (Some(LangItem::Former(FormerItem::DevArray)), [elem, placement]) => {
+                            self.tcx.mk_devarray(*elem, &[], Some(*placement))
+                        }
+                        (Some(LangItem::Former(FormerItem::Tensor)), [elem]) => {
+                            self.tcx.mk_tensor(*elem, &[])
+                        }
+                        (Some(LangItem::Former(FormerItem::ConstSeq)), [elem]) => {
+                            self.tcx.mk_const_seq(*elem)
+                        }
+                        _ => self.tcx.mk_record(target, &args, flex),
+                    })
                 }
                 _ => None,
             };

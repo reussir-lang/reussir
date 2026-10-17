@@ -7,6 +7,7 @@
 use std::borrow::Cow;
 
 use crate::full::mir::raw as raw;
+use crate::semi::const_eval::ConstScalar;
 use crate::semi::ty::CellKind;
 use crate::ir_lex::{LexError, Token, unescape_debug_str};
 use crate::literal::{FloatLit, Integer};
@@ -116,6 +117,7 @@ Name: &'input str = {
     "FlatLock" => "FlatLock",
     "RwLock" => "RwLock",
     "Arc" => "Arc",
+    "ConstSeq" => "ConstSeq",
     "Tensor" => "Tensor",
     "Token" => "Token",
     "DevArray" => "DevArray",
@@ -191,6 +193,7 @@ Ty: raw::Ty = {
     "FlatLock" "<" <t:Ty> ">" => raw::Ty::Cell { inner: Box::new(t), kind: CellKind::Flatlock },
     "RwLock" "<" <t:Ty> ">" => raw::Ty::Cell { inner: Box::new(t), kind: CellKind::Rwlock },
     "Arc" "<" <t:Ty> ">" => raw::Ty::Arc(Box::new(t)),
+    "ConstSeq" "<" <t:Ty> ">" => raw::Ty::ConstSeq(Box::new(t)),
     <cap:Cap> <path:TyPathArgs>
         => raw::Ty::Record { cap, path: path.0, args: path.1 },
 
@@ -310,6 +313,7 @@ Atom: raw::Kind = {
     "false" => raw::Kind::ConstBool(false),
     "char" "#" <c:"int"> => raw::Kind::ConstChar(raw::char_scalar(&c)),
     <w:StrWords> => raw::Kind::GlobalStr(w),
+    "ConstSeq" "[" <elems:Comma<ConstScalar>> "]" => raw::Kind::ConstSeq(elems),
     <v:"var"> => raw::Kind::Var(v),
     "poison" => raw::Kind::Poison,
     "-" "(" <e:Expr> ")" => raw::Kind::Negate(e),
@@ -420,6 +424,15 @@ CmpOp: raw::CmpOp = {
 // ----- shared helpers -----
 
 /// Comma-separated, possibly empty, no trailing comma.
+/// An element of a `ConstSeq[...]` literal.
+ConstScalar: ConstScalar = {
+    <n:"int"> => ConstScalar::Int(n),
+    <f:"float"> => ConstScalar::Float(raw::float_lit(f)),
+    "true" => ConstScalar::Bool(true),
+    "false" => ConstScalar::Bool(false),
+    "char" "#" <c:"int"> => ConstScalar::Char(raw::char_scalar(&c)),
+};
+
 Comma<T>: Vec<T> = <mut v:(<T> ",")*> <last:T?> => {
     if let Some(l) = last { v.push(l); }
     v
@@ -497,6 +510,7 @@ extern {
         "FlatLock" => Token::FlatLockCell,
         "RwLock" => Token::RwLockCell,
         "Arc" => Token::Arc,
+        "ConstSeq" => Token::ConstSeq,
         "Token" => Token::StablehloToken,
         "Future" => Token::Future,
         "Tensor" => Token::Tensor,

@@ -39,6 +39,7 @@
 //! binding. Generics are left uncolored — their modality is resolved at
 //! monomorphization.
 
+use crate::semi::const_eval::{ConstScalar, ConstValue};
 use crate::semi::infer::{Instantiation, shape::Dim};
 use crate::semi::resolve::DefKind;
 use crate::semi::traits::sync::{SyncEnv, SyncVerdict, wf_arc};
@@ -260,6 +261,31 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             };
         }
 
+        // The built-in constant sequence, `core::intrinsic::const_seq::ConstSeq`.
+        if (bare_unshadowed || self.is_core_intrinsic_prefix(&path.segments, "const_seq"))
+            && self.sym(key) == "ConstSeq"
+        {
+            return match args {
+                [elem] => {
+                    let elem = self.eval_type(elem);
+                    if !const_seq_element_supported(elem) {
+                        self.error(
+                            Some(span),
+                            format!(
+                                "`ConstSeq` element type `{}` must be an integer, floating-point, `bool`, or `char` scalar",
+                                self.ty_display(elem)
+                            ),
+                        );
+                    }
+                    self.tcx.mk_const_seq(elem)
+                }
+                _ => {
+                    self.error(Some(span), "`ConstSeq` takes exactly one type argument");
+                    self.tcx.mk(TyKind::Bottom)
+                }
+            };
+        }
+
         if (bare_unshadowed || self.is_core_intrinsic_prefix(&path.segments, "tensor"))
             && self.sym(key) == "Token"
         {
@@ -304,7 +330,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                                     }
                                     surface::ArrayExtent::Infer(_) => self.infer.new_dim(),
                                     surface::ArrayExtent::Expr(expr) => {
-                                        let dim = self.eval_shape_extent(expr, "tensor");
+                                        let dim = self.eval_extent(expr);
                                         if dim > i64::MAX as u64 {
                                             self.error(
                                                 Some(expr.span()),
@@ -513,32 +539,16 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
     }
 
-    /// Evaluate one array extent expression. The grammar admits any
-    /// expression; for now only an integer literal evaluates — everything
-    /// else reports and recovers with extent 1 (a *dynamic* dimension is
-    /// spelled `?`, not an expression).
+    /// Evaluate one array or tensor extent expression as a `u64` constant
+    /// ([`Self::eval_const`]). An invalid extent is reported and recovers as
+    /// extent 1 (a *dynamic* dimension is spelled `?`, not an expression).
     fn eval_extent(&mut self, e: &surface::Expr) -> u64 {
-        self.eval_shape_extent(e, "array")
-    }
-
-    fn eval_shape_extent(&mut self, e: &surface::Expr, kind: &str) -> u64 {
-        match e.kind() {
-            surface::ExprKind::ConstExpr(crate::surface::Const::ConstInt(n)) => {
-                match u64::try_from(&n) {
-                    Ok(v) => v,
-                    Err(_) => {
-                        self.error(Some(e.span()), format!("{kind} extent is out of range"));
-                        1
-                    }
-                }
+        let u64_ty = self.tcx.mk_int(IntTy::Unsigned(64));
+        match self.eval_const(e, u64_ty) {
+            Some(ConstValue::Scalar(ConstScalar::Int(n))) => {
+                u64::try_from(&n).expect("a `u64` constant fits `u64`")
             }
-            _ => {
-                self.error(
-                    Some(e.span()),
-                    format!("this kind of {kind} extent cannot be evaluated yet (only integer literals are supported)"),
-                );
-                1
-            }
+            _ => 1,
         }
     }
 
@@ -1125,6 +1135,17 @@ pub fn device_element_supported(ty: Ty<'_>) -> bool {
     )
 }
 
+/// Whether `elem` may be the element of a `ConstSeq`: a scalar constant type
+/// (see [`crate::semi::const_eval::is_const_scalar_ty`]). A generic element is
+/// checked again after substitution.
+pub fn const_seq_element_supported(elem: Ty<'_>) -> bool {
+    crate::semi::const_eval::is_const_scalar_ty(elem)
+        || matches!(
+            elem.kind(),
+            TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom
+        )
+}
+
 /// StableHLO futures contain ranked tensors, never tokens, futures, or host
 /// values. Generic payloads defer this obligation until substitution.
 pub fn future_payload_rejection(payload: Ty<'_>) -> Option<&'static str> {
@@ -1187,6 +1208,7 @@ pub fn kernel_type_rejection(ty: Ty<'_>) -> Option<&'static str> {
         | TyKind::DevArray { .. }
         | TyKind::Cell { .. }
         | TyKind::Nullable(_)
+        | TyKind::ConstSeq(_)
         | TyKind::Arc(_) => Some(
             "kernel values must be tensors, futures, tokens, supported numeric/bool scalars, or unit",
         ),

@@ -1,0 +1,58 @@
+// Diagnostics for `ConstSeq<T>` and the compile-time evaluation of sequence
+// literals: rejected element types, out-of-range elements, non-constant
+// elements, and literals without a `ConstSeq` type.
+
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+pub struct Record { x: i32 }
+
+// CHECK-DAG: `ConstSeq` element type `str` must be an integer, floating-point, `bool`, or `char` scalar
+fn str_elem(xs: ConstSeq<str>) {}
+// CHECK-DAG: `ConstSeq` element type `Record` must be an integer, floating-point, `bool`, or `char` scalar
+fn record_elem(xs: ConstSeq<Record>) {}
+// CHECK-DAG: `ConstSeq` element type `float8` must be an integer, floating-point, `bool`, or `char` scalar
+fn float8_elem(xs: ConstSeq<float8>) {}
+// CHECK-DAG: `ConstSeq` element type `ConstSeq<i32>` must be an integer, floating-point, `bool`, or `char` scalar
+fn nested_elem(xs: ConstSeq<ConstSeq<i32>>) {}
+// CHECK-DAG: `ConstSeq` takes exactly one type argument
+fn arity(xs: ConstSeq<i32, i32>) {}
+
+fn out_of_range() {
+    // CHECK-DAG: integer literal `256` is out of range for `u8`
+    let a: ConstSeq<u8> = [0, 255, 256];
+    // CHECK-DAG: integer literal `-1` is out of range for `u32`
+    let b: ConstSeq<u32> = [-1];
+    // CHECK-DAG: integer literal `-129` is out of range for `i8`
+    let c: ConstSeq<i8> = [-128, -129];
+    // CHECK-DAG: float literal `1e39` is out of range for `f32` (it would round to infinity)
+    let d: ConstSeq<f32> = [1e39];
+}
+
+fn not_constant(x: u64) {
+    // CHECK-DAG: expected a constant of type `u64`, found an expression that cannot be evaluated at compile time
+    let a: ConstSeq<u64> = [1, x];
+    // CHECK-DAG: expected a constant of type `u64`, found an expression that cannot be evaluated at compile time
+    let b: ConstSeq<u64> = [1 + 2];
+    // CHECK-DAG: expected a constant of type `i32`, found a float literal
+    let c: ConstSeq<i32> = [1.5];
+    // CHECK-DAG: expected a constant of type `bool`, found a negated non-numeric literal
+    let d: ConstSeq<bool> = [-true];
+    // CHECK-DAG: expected a constant of type `u8`, found a sequence literal
+    let e: ConstSeq<u8> = [[1]];
+    // CHECK-DAG: expected a constant of type `u8`, found a string literal
+    let f: ConstSeq<u8> = ["a"];
+}
+
+fn untyped<T>() -> ConstSeq<T> {
+    // CHECK-DAG: the type of a sequence literal must be known; annotate it as `ConstSeq<T>`
+    let a = [1, 2];
+    // CHECK-DAG: expected `u64`, found a sequence literal
+    let b: u64 = [1];
+    // CHECK-DAG: a constant must have a concrete integer, float, `bool`, `char`, or `ConstSeq` type, found `ConstSeq<T>`
+    []
+}
+
+// CHECK-DAG: unknown const_seq intrinsic `core::intrinsic::const_seq::first`
+fn unknown(xs: ConstSeq<i64>) -> i64 { core::intrinsic::const_seq::first(xs) }
+// CHECK-DAG: type mismatch: expected `ConstSeq<_>`, found `u64`
+fn not_a_seq(x: u64) -> u64 { core::intrinsic::const_seq::len(x) }

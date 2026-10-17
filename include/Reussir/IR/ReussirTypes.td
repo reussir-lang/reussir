@@ -746,6 +746,20 @@ def ReussirStrType : ReussirType<"Str", "str",
   let assemblyFormat = "`<` $lifeScope `>`";
 }
 
+def ReussirConstSeqType : ReussirType<"ConstSeq", "const_seq",
+                  [DeclareTypeInterfaceMethods<DataLayoutTypeInterface>]> {
+  let summary = "Reussir Constant Sequence Type";
+  let description = [{
+    `reussir.const_seq<T>` is a view of an immutable static array of integer
+    or floating-point scalars, created by `reussir.const_seq.literal`. Like
+    `reussir.str`, it lowers to a `{ptr, index}` pair of the data and its
+    length, and carries no reference count.
+  }];
+  let parameters = (ins "::mlir::Type":$elementType);
+  let assemblyFormat = "`<` $elementType `>`";
+  let genVerifyDecl = 1;
+}
+
 ///===---------------------------------------------------------------------===//
 // Special Type Constraints
 //===----------------------------------------------------------------------===//

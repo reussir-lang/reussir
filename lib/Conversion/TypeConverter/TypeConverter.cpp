@@ -480,6 +480,13 @@ void populateReussirToLLVMTypeConversions(mlir::LLVMTypeConverter &converter) {
                                                   {ptrTy, indexTy});
   });
 
+  converter.addConversion([&converter](ConstSeqType type) {
+    auto indexTy = converter.getIndexType();
+    auto ptrTy = mlir::LLVM::LLVMPointerType::get(type.getContext());
+    return mlir::LLVM::LLVMStructType::getLiteral(type.getContext(),
+                                                  {ptrTy, indexTy});
+  });
+
   converter.addConversion([&converter](ArrayType type) -> mlir::Type {
     if (type.hasTargetAttr()) {
       llvm::SmallVector<mlir::Type> members;

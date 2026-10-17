@@ -764,6 +764,10 @@ impl<'tcx> Builder<'_, 'tcx> {
                 let inner = self.ty(inner);
                 self.tcx.mk_nullable(inner)
             }
+            raw::Ty::ConstSeq(elem) => {
+                let elem = self.ty(elem);
+                self.tcx.mk_const_seq(elem)
+            }
             raw::Ty::Cell { inner, kind } => {
                 let inner = self.ty(inner);
                 self.tcx.mk_cell(inner, *kind)
@@ -830,6 +834,9 @@ impl<'tcx> Builder<'_, 'tcx> {
             raw::Kind::ConstBool(b) => ExprKind::ConstBool(*b),
             raw::Kind::ConstChar(c) => ExprKind::ConstChar(*c),
             raw::Kind::GlobalStr(words) => ExprKind::GlobalStr(StringToken::from_words(*words)),
+            raw::Kind::ConstSeq(elems) => {
+                ExprKind::ConstSeq(self.tcx.alloc(elems.clone()).as_slice())
+            }
             raw::Kind::Var(v) => ExprKind::Var(VarId(*v)),
             raw::Kind::Poison => ExprKind::Poison,
             raw::Kind::Negate(x) => ExprKind::Negate(self.boxed(x)),
@@ -1400,6 +1407,28 @@ mod tests {
             pub fn call_tuple(f: ((i32, bool),) -> i32, p: (i32, bool)) -> i32 { f(p) }
         "#,
         );
+    }
+
+    #[test]
+    fn roundtrips_const_seq_literals() {
+        for (ty, value) in [
+            ("ConstSeq<i64>", "ConstSeq[1, -2, 9223372036854775807]"),
+            ("ConstSeq<f32>", "ConstSeq[1.5, -0.25]"),
+            ("ConstSeq<char>", "ConstSeq[char#97]"),
+            ("ConstSeq<bool>", "ConstSeq[]"),
+        ] {
+            with_tcx(|tcx| {
+                let input = format!("fn #seq() -> {ty} {{ {value} : {ty} }}");
+                let p = parse_program(tcx, &input).expect("parse const_seq literal");
+                let printed = Printer::new(&p.defs, &p.names).program(
+                    &p.funcs,
+                    &p.strings,
+                    &p.records,
+                    &p.trampolines,
+                );
+                assert!(printed.contains(&format!("{value} : {ty}")), "{printed}");
+            });
+        }
     }
 
     #[test]

@@ -130,6 +130,8 @@ pub enum Token<'a> {
     RwLockCell,
     #[token("Arc")]
     Arc,
+    #[token("ConstSeq")]
+    ConstSeq,
     #[token("placement")]
     Placement,
     #[token("DefaultPlacement")]

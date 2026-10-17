@@ -3271,6 +3271,98 @@ struct ReussirStrUnsafeByteAtOpConversionPattern
   }
 };
 
+struct ReussirConstSeqGlobalOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirConstSeqGlobalOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirConstSeqGlobalOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto payload = llvm::cast<mlir::DenseElementsAttr>(op.getPayload());
+    auto arrayType = mlir::LLVM::LLVMArrayType::get(payload.getElementType(),
+                                                    payload.getNumElements());
+    rewriter.replaceOpWithNewOp<mlir::LLVM::GlobalOp>(
+        op, arrayType, /*isConstant=*/true, mlir::LLVM::Linkage::Internal,
+        op.getSymName(), payload);
+    return mlir::success();
+  }
+};
+
+struct ReussirConstSeqLiteralOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirConstSeqLiteralOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirConstSeqLiteralOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    auto converter =
+        static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter());
+    auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto indexType = converter->getIndexType();
+
+    // As for str literals, the length is the converted global's extent.
+    auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
+    auto globalOp =
+        moduleOp.lookupSymbol<mlir::LLVM::GlobalOp>(op.getSymName());
+    if (!globalOp)
+      return op.emitOpError("referenced global sequence not found");
+    uint64_t length = llvm::cast<mlir::LLVM::LLVMArrayType>(globalOp.getType())
+                          .getNumElements();
+
+    auto structType = mlir::LLVM::LLVMStructType::getLiteral(
+        rewriter.getContext(), {llvmPtrType, indexType});
+    auto dataPtr = mlir::LLVM::AddressOfOp::create(rewriter, loc, llvmPtrType,
+                                                   op.getSymName());
+    auto lenVal = mlir::arith::ConstantOp::create(
+        rewriter, loc, mlir::IntegerAttr::get(indexType, length));
+    auto undef = mlir::LLVM::UndefOp::create(rewriter, loc, structType);
+    auto withPtr = mlir::LLVM::InsertValueOp::create(
+        rewriter, loc, undef, dataPtr, llvm::ArrayRef<int64_t>{0});
+    auto withLen = mlir::LLVM::InsertValueOp::create(
+        rewriter, loc, withPtr, lenVal, llvm::ArrayRef<int64_t>{1});
+    rewriter.replaceOp(op, withLen);
+    return mlir::success();
+  }
+};
+
+struct ReussirConstSeqLenOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirConstSeqLenOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirConstSeqLenOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<mlir::LLVM::ExtractValueOp>(
+        op, adaptor.getSeq(), llvm::ArrayRef<int64_t>{1});
+    return mlir::success();
+  }
+};
+
+struct ReussirConstSeqGetOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirConstSeqGetOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirConstSeqGetOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    if (!op.getUnsafe())
+      return rewriter.notifyMatchFailure(
+          op, "convert-to-std expands the bounds check first");
+    mlir::Location loc = op.getLoc();
+    mlir::Type elementType = op.getSeq().getType().getElementType();
+    auto ptrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto dataPtr = mlir::LLVM::ExtractValueOp::create(
+        rewriter, loc, adaptor.getSeq(), llvm::ArrayRef<int64_t>{0});
+    auto elementPtr =
+        mlir::LLVM::GEPOp::create(rewriter, loc, ptrType, elementType, dataPtr,
+                                  mlir::ValueRange{adaptor.getIndex()});
+    rewriter.replaceOpWithNewOp<mlir::LLVM::LoadOp>(op, elementType,
+                                                    elementPtr);
+    return mlir::success();
+  }
+};
+
 struct ReussirStrUnsafeStartWithOpConversionPattern
     : public mlir::OpConversionPattern<ReussirStrUnsafeStartWithOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -4011,7 +4103,9 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirRcSetOp, ReussirStrGlobalOp, ReussirStrLiteralOp,
         ReussirStrCastOp, ReussirStrLenOp, ReussirStrUnsafeByteAtOp,
         ReussirStrUnsafeStartWithOp, ReussirStrSliceOp, ReussirStrRefEqOp,
-        ReussirStrUnsafeMemcmpOp, ReussirTrampolineOp, ReussirTokenLaunderOp>();
+        ReussirStrUnsafeMemcmpOp, ReussirConstSeqGlobalOp,
+        ReussirConstSeqLiteralOp, ReussirConstSeqLenOp,
+        ReussirConstSeqGetOp, ReussirTrampolineOp, ReussirTokenLaunderOp>();
     // `reussir.closure.wpd_test` is created BY the dispatch conversion
     // patterns above, already in its final form (operand = the loaded vtable
     // pointer), and must survive conversion: the LLVM dialect cannot express
@@ -4237,6 +4331,10 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirStrUnsafeStartWithOpConversionPattern,
       ReussirStrSliceOpConversionPattern, ReussirStrRefEqOpConversionPattern,
       ReussirStrUnsafeMemcmpOpConversionPattern,
+      ReussirConstSeqGlobalOpConversionPattern,
+      ReussirConstSeqLiteralOpConversionPattern,
+      ReussirConstSeqLenOpConversionPattern,
+      ReussirConstSeqGetOpConversionPattern,
       ReussirTokenLaunderOpConversionPattern,
       ReussirRcFetchSubConversionPattern>(converter, patterns.getContext());
 }

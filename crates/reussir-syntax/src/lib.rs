@@ -294,6 +294,14 @@ mod tests {
     }
 
     #[test]
+    fn sequence_literals_parse_as_expressions() {
+        let source = "fn f() { g([], [1], [-1, 2.5, 'c',], [[true]]) }";
+        let json = json_of(source).to_string();
+        assert_eq!(json.matches("SeqLit").count(), 5, "{json}");
+        assert!(!super::parse("fn f() { [1, 2 }").ok());
+    }
+
+    #[test]
     fn malformed_tuples_recover_without_losing_following_items() {
         for source in [
             "fn f(x: (i32,,bool)) {} fn after() {}",

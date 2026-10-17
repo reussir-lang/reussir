@@ -50,17 +50,26 @@ impl StringToken {
         self.0
     }
 
+    /// Mangles the token into the string literal's Rust v0 linker symbol,
+    /// `_RNvC22REUSSIR_STRING_LITERAL<len><sep><digits>` (see
+    /// [`Self::mangle_in`]).
+    pub fn mangle(&self) -> String {
+        self.mangle_in("REUSSIR_STRING_LITERAL")
+    }
+
     /// Mangles the token into a Rust v0 linker symbol of the form
-    /// `_RNvC22REUSSIR_STRING_LITERAL<len><sep><digits>`.
+    /// `_RNvC<n><name_space><len><sep><digits>`, the scheme the C++ bridge's
+    /// `mangledBlake3Symbol` uses for its own content-addressed globals.
     ///
     /// `<digits>` is the base-62 encoding of the 256-bit token, `<len>` is its
     /// length, and `<sep>` is a single `_` inserted only when the leading digit
     /// is numeric — the v0 grammar forbids an identifier starting with a digit.
-    pub fn mangle(&self) -> String {
+    pub fn mangle_in(&self, name_space: &str) -> String {
         let encoded = b62::encode(self.0);
         let sep = if encoded.leading_is_numeric { "_" } else { "" };
         format!(
-            "_RNvC22REUSSIR_STRING_LITERAL{}{sep}{}",
+            "_RNvC{}{name_space}{}{sep}{}",
+            name_space.len(),
             encoded.len(),
             encoded.digits
         )

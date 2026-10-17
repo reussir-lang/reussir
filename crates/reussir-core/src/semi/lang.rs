@@ -36,6 +36,7 @@ pub enum IntrinsicItem {
     Tensor(crate::intrinsic::TensorFn),
     Cell(crate::intrinsic::CellFn),
     Str(crate::intrinsic::StrFn),
+    ConstSeq(crate::intrinsic::ConstSeqFn),
     Pjrt(crate::intrinsic::PjrtFn),
 }
 
@@ -49,6 +50,7 @@ impl IntrinsicItem {
             IntrinsicItem::Tensor(_) => "tensor",
             IntrinsicItem::Cell(_) => "cell",
             IntrinsicItem::Str(_) => "str",
+            IntrinsicItem::ConstSeq(_) => "const_seq",
             IntrinsicItem::Pjrt(_) => "pjrt",
         }
     }
@@ -62,6 +64,7 @@ impl IntrinsicItem {
             IntrinsicItem::Tensor(f) => f.as_str(),
             IntrinsicItem::Cell(f) => f.as_str(),
             IntrinsicItem::Str(f) => f.as_str(),
+            IntrinsicItem::ConstSeq(f) => f.as_str(),
             IntrinsicItem::Pjrt(f) => f.as_str(),
         }
     }
@@ -75,13 +78,14 @@ impl IntrinsicItem {
             "tensor" => crate::intrinsic::TensorFn::parse(name).map(IntrinsicItem::Tensor),
             "cell" => crate::intrinsic::CellFn::parse(name).map(IntrinsicItem::Cell),
             "str" => crate::intrinsic::StrFn::parse(name).map(IntrinsicItem::Str),
+            "const_seq" => crate::intrinsic::ConstSeqFn::parse(name).map(IntrinsicItem::ConstSeq),
             "pjrt" => crate::intrinsic::PjrtFn::parse(name).map(IntrinsicItem::Pjrt),
             _ => None,
         }
     }
 }
 
-/// A built-in type *former* — `Arc`, `Nullable`, `Tensor`, and the cell family —
+/// A built-in type *former* — `Arc`, `Nullable`, `ConstSeq`, `Tensor`, and the cell family —
 /// as a lang item: the marker on the anchor record `core` declares for
 /// it. The former itself stays wired (its canonical
 /// `core::intrinsic::…` spelling and bare prelude name resolve in
@@ -94,6 +98,7 @@ pub enum FormerItem {
     TensorToken,
     Arc,
     Nullable,
+    ConstSeq,
     DevArray,
     DefaultPlacement,
     /// One per [`crate::semi::ty::CellKind`].
@@ -106,12 +111,13 @@ pub enum FormerItem {
 }
 
 impl FormerItem {
-    pub const ALL: [FormerItem; 13] = [
+    pub const ALL: [FormerItem; 14] = [
         FormerItem::Tensor,
         FormerItem::TensorFuture,
         FormerItem::TensorToken,
         FormerItem::Arc,
         FormerItem::Nullable,
+        FormerItem::ConstSeq,
         FormerItem::DevArray,
         FormerItem::DefaultPlacement,
         FormerItem::Cell,
@@ -139,6 +145,7 @@ impl FormerItem {
             FormerItem::TensorToken => "tensor_token",
             FormerItem::Arc => "arc",
             FormerItem::Nullable => "nullable",
+            FormerItem::ConstSeq => "const_seq",
             FormerItem::DevArray => "dev_array",
             FormerItem::DefaultPlacement => "default_placement",
             FormerItem::Cell => "cell",
