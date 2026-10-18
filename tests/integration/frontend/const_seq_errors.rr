@@ -48,7 +48,7 @@ fn untyped<T>() -> ConstSeq<T> {
     let a = [1, 2];
     // CHECK-DAG: expected `u64`, found a sequence literal
     let b: u64 = [1];
-    // CHECK-DAG: a constant must have a concrete integer, float, `bool`, `char`, or `ConstSeq` type, found `ConstSeq<T>`
+    // CHECK-DAG: a constant must have a constant type (an integer, float, `bool`, or `char` scalar, a `ConstSeq` of one, or a non-generic `[value]` record whose fields have constant types), found `ConstSeq<T>`
     []
 }
 

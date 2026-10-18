@@ -1,0 +1,29 @@
+// The dependency behind trait_assoc_const_record_extern.rr: a pub trait whose
+// associated const is a record with a default value, an impl overriding it,
+// and a pub generic reading it through a bound.
+
+pub enum [value] Sharding { Replicated, Tiled(Tiling) }
+pub struct [value] Tiling { pub dims: ConstSeq<u64>, pub axis: u64 }
+pub struct [value] Placement { pub devices: ConstSeq<i32>, pub sharding: Sharding }
+
+pub trait Placed {
+    const PLACEMENT: Placement = Placement { devices: [0], sharding: Sharding::Replicated };
+}
+
+pub struct Base {
+    pub a: i64,
+}
+
+impl Placed for Base {
+    const PLACEMENT: Placement = Placement {
+        devices: [5],
+        sharding: Sharding::Tiled { Tiling { dims: [8], axis: 2 } },
+    };
+}
+
+pub fn axis_of<T: Placed>(x: T) -> u64 {
+    match T::PLACEMENT.sharding {
+        Sharding::Replicated => 99,
+        Sharding::Tiled(t) => t.axis
+    }
+}

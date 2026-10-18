@@ -59,13 +59,18 @@ pub struct TraitConstItem {
 }
 
 /// An associated const value, as its literal; a sequence names its
-/// element type.
+/// element type, and a record value its record's qualified path.
 #[derive(Clone, Debug)]
 pub enum ConstValue {
     Scalar(crate::semi::const_eval::ConstScalar),
     Seq {
         elem: Ty,
         elems: Vec<crate::semi::const_eval::ConstScalar>,
+    },
+    Record {
+        path: String,
+        variant: Option<usize>,
+        fields: Vec<ConstValue>,
     },
 }
 

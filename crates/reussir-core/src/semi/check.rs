@@ -4744,7 +4744,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// is a module path instead falls through to a module-qualified struct
     /// (`m::Foo{…}`); a bare path names a struct. An unknown path is
     /// reported and yields `None`.
-    fn resolve_ctor_path(
+    pub(super) fn resolve_ctor_path(
         &mut self,
         path: &surface::Path,
         span: Option<Span>,
@@ -5041,7 +5041,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// The index of variant `variant` of the enum `def` (spelled
     /// `enum_name`), as [`ExprKind::VariantCall`] names it; an unknown
     /// variant is reported.
-    fn variant_index(
+    pub(super) fn variant_index(
         &mut self,
         def: DefId,
         enum_name: TokenKey,
@@ -5069,7 +5069,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// private field makes the constructor itself module-private: report one
     /// error listing the private fields. Variant construction is exempt by
     /// design: variant payloads carry no per-field visibility.
-    fn report_private_ctor_fields(&mut self, def: DefId, span: Option<Span>) {
+    pub(super) fn report_private_ctor_fields(&mut self, def: DefId, span: Option<Span>) {
         if self.may_access_private_fields(def) {
             return;
         }
@@ -5109,7 +5109,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         span: Option<Span>,
     ) -> Vec<Expr<'tcx>> {
         let names: Vec<Option<TokenKey>> = field_tys.iter().map(|&(name, _)| name).collect();
-        self.match_ctor_args(name, args, &names, span)
+        let (by_field, _) = self.match_ctor_args(name, args, &names, span);
+        by_field
             .iter()
             .zip(field_tys)
             .map(|(&arg, &(_, fty))| match arg {
@@ -5121,21 +5122,23 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 
     /// Match the arguments of constructor `name` to its `fields` (their
     /// names in declaration order; `None` for a positional field): the
-    /// argument supplying each field, if any. Named arguments are
+    /// argument supplying each field, if any, and whether every field has
+    /// exactly one argument and every argument a field. Named arguments are
     /// matched by field name (an interned key compare); positional by order.
     /// Field shorthand auto-forwards: a bare in-scope variable whose name
     /// matches a field acts as that named argument, so `Point { y, x }` is
     /// order-independent and composes with explicit named arguments
     /// (`Point { x, y: 10 }`). An arity mismatch and a missing, unknown, or
     /// repeated field are reported.
-    fn match_ctor_args(
+    pub(super) fn match_ctor_args(
         &mut self,
         name: TokenKey,
         args: &[(Option<TokenKey>, surface::Expr)],
         fields: &[Option<TokenKey>],
         span: Option<Span>,
-    ) -> Vec<Option<usize>> {
-        if args.len() != fields.len() {
+    ) -> (Vec<Option<usize>>, bool) {
+        let mut exact = args.len() == fields.len();
+        if !exact {
             self.error(
                 span,
                 format!(
@@ -5163,7 +5166,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             .collect();
         if !arg_fields.iter().any(Option::is_some) {
             let by_field = (0..fields.len()).map(|i| (i < args.len()).then_some(i));
-            return by_field.collect();
+            return (by_field.collect(), exact);
         }
         for (i, &field) in arg_fields.iter().enumerate() {
             let Some(field) = field else { continue };
@@ -5174,6 +5177,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 (true, false) => continue,
             };
             self.error(span, message);
+            exact = false;
         }
         let mut by_field = Vec::with_capacity(fields.len());
         for &field in fields {
@@ -5182,10 +5186,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 && let Some(field) = field
             {
                 self.error(span, format!("missing field `{}`", self.sym(field)));
+                exact = false;
             }
             by_field.push(arg);
         }
-        by_field
+        (by_field, exact)
     }
 
     fn field_types(

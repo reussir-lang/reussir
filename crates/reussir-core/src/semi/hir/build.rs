@@ -786,6 +786,15 @@ impl<'tcx> Builder<'_, 'tcx> {
                 elem: self.ty(elem),
                 elems: elems.clone(),
             },
+            raw::ConstValue::Record {
+                path,
+                variant,
+                fields,
+            } => ConstValue::Record {
+                def: self.record_def(path),
+                variant: *variant,
+                fields: fields.iter().map(|f| self.const_value(f)).collect(),
+            },
         }
     }
 

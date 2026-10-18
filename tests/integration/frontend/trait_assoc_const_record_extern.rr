@@ -1,0 +1,50 @@
+// Record-valued associated consts across a package boundary: the
+// dependency's `.rri` spells each value with the dependency's record paths,
+// and loading it resolves them to the dependency's records. The consumer
+// reads the dependency's impl value and default, and builds its own value
+// from the dependency's records.
+
+// RUN: %rrc --package-root %S/trait_assoc_const_record_extern_dep --package-name dep --emit rri -o %t.rri
+// RUN: %FileCheck %s --check-prefix=RRI < %t.rri
+
+// RRI-DAG: const PLACEMENT : #dep::Placement = #dep::Placement{ConstSeq[0] : ConstSeq<i32>, #dep::Sharding#0()} {{\[[0-9.]+\]}};
+// RRI-DAG: impl #dep::Placed::<#dep::Base> in 0 {{\[[0-9.]+\]}} { const PLACEMENT = #dep::Placement{ConstSeq[5] : ConstSeq<i32>, #dep::Sharding#1(#dep::Tiling{ConstSeq[8] : ConstSeq<u64>, 2})}; }
+
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --extern-src dep=%S/trait_assoc_const_record_extern_dep \
+// RUN:   --emit mir --no-source-locations -o - | %FileCheck %s --check-prefix=MIR
+
+// MIR: pub fn @_RINvC3dep7axis_ofNvC3app5LocalE(v0 (x): app::Local) -> u64 {
+// MIR-NEXT: match proj(@_RNvC3dep9Placement{ConstSeq[] : ConstSeq<i32>, @_RNvC3dep8Sharding::#1(@_RNvC3dep6Tiling{ConstSeq[6, 7] : ConstSeq<u64>, 1 : u64} : dep::Tiling) : dep::Sharding} : dep::Placement, 1) : dep::Sharding {
+// MIR: pub fn @_RNvC3app10base_first() -> i32 {
+// MIR-NEXT: intrinsic#const_seq#get#0(proj(@_RNvC3dep9Placement{ConstSeq[5] : ConstSeq<i32>, @_RNvC3dep8Sharding::#1(@_RNvC3dep6Tiling{ConstSeq[8] : ConstSeq<u64>, 2 : u64} : dep::Tiling) : dep::Sharding} : dep::Placement, 0) : ConstSeq<i32>, 0 : u64) : i32
+// MIR: pub fn @_RNvC3app14default_device() -> i32 {
+// MIR-NEXT: intrinsic#const_seq#get#0(proj(@_RNvC3dep9Placement{ConstSeq[0] : ConstSeq<i32>, @_RNvC3dep8Sharding::#0() : dep::Sharding} : dep::Placement, 0) : ConstSeq<i32>, 0 : u64) : i32
+
+pub struct Local {
+    pub a: i64,
+}
+
+pub struct Defaulted {
+    pub a: i64,
+}
+
+impl dep::Placed for Local {
+    const PLACEMENT: dep::Placement = dep::Placement {
+        devices: [],
+        sharding: dep::Sharding::Tiled { dep::Tiling { dims: [6, 7], axis: 1 } },
+    };
+}
+
+impl dep::Placed for Defaulted {}
+
+pub fn base_first() -> i32 {
+    core::intrinsic::const_seq::get(dep::Base::PLACEMENT.devices, 0)
+}
+
+pub fn default_device() -> i32 {
+    core::intrinsic::const_seq::get(Defaulted::PLACEMENT.devices, 0)
+}
+
+pub fn through_dep() -> u64 {
+    dep::axis_of(Local { a: 1 })
+}

@@ -1,0 +1,93 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+struct [value] Tiling { dims: ConstSeq<u64>, axis: u64 }
+enum [value] Sharding { Replicated, Tiled(Tiling), Split(u64, u64) }
+struct [value] Placement { devices: ConstSeq<i32>, sharding: Sharding }
+
+struct Shared { x: i64 }
+struct [value] Named { name: str }
+enum [value] Labeled { Plain, Named(Named) }
+struct [value] Holder { shared: Shared }
+struct [value] Pair<T> { a: T, b: T }
+struct [value] Nested { label: Labeled }
+
+// A record is a constant type when it is a non-generic `[value]` record
+// whose fields have constant types, recursively; the diagnostic names the
+// offending field.
+// CHECK-DAG: associated const `HOLDER` must have a constant type (an integer, float, `bool`, or `char` scalar, a `ConstSeq` of one, or a non-generic `[value]` record whose fields have constant types), found `Holder`, whose field `shared` has type `Shared`
+// CHECK-DAG: associated const `NESTED` must have a constant type ({{.*}}), found `Nested`, whose field `label.Named.0.name` has type `str`
+// CHECK-DAG: associated const `PAIR` must have a constant type ({{.*}}), found `Pair<u8>`
+// CHECK-DAG: associated const `SHARED` must have a constant type ({{.*}}), found `Shared`
+pub trait Kinds {
+    const HOLDER: Holder;
+    const NESTED: Nested;
+    const PAIR: Pair<u8>;
+    const SHARED: Shared;
+}
+
+pub trait Placed {
+    const PLACEMENT: Placement;
+}
+
+pub struct A { n: i64 }
+pub struct B { n: i64 }
+pub struct C { n: i64 }
+pub struct D { n: i64 }
+pub struct E { n: i64 }
+
+// Fields match as in a constructor call in a body.
+// CHECK-DAG: missing field `sharding`
+// CHECK-DAG: `Placement` has no field `device`
+impl Placed for A {
+    const PLACEMENT: Placement = Placement { device: [1], devices: [1] };
+}
+
+// CHECK-DAG: field `devices` is given more than once
+// CHECK-DAG: `Placement` expects 2 field(s), got 3
+impl Placed for B {
+    const PLACEMENT: Placement = Placement { devices: [1], devices: [2], sharding: Sharding::Replicated };
+}
+
+// A variant's payload is positional and has the variant's arity.
+// CHECK-DAG: `Split` expects 2 field(s), got 1
+impl Placed for C {
+    const PLACEMENT: Placement = Placement { devices: [], sharding: Sharding::Split { 1 } };
+}
+
+// Every field is a constant of its declared type.
+// CHECK-DAG: expected a constant of type `u64`, found an expression that cannot be evaluated at compile time
+impl Placed for D {
+    const PLACEMENT: Placement = Placement {
+        devices: [],
+        sharding: Sharding::Tiled { Tiling { dims: [1], axis: 1 + 1 } },
+    };
+}
+
+// CHECK-DAG: type mismatch: expected `Tiling`, found `Placement`
+// CHECK-DAG: expected a constant of type `ConstSeq<u64>`, found a bool literal
+impl Placed for E {
+    const PLACEMENT: Placement = Placement {
+        devices: [],
+        sharding: Sharding::Tiled { Placement { devices: [], sharding: Sharding::Replicated } },
+    };
+}
+
+// CHECK-DAG: `Sharding` is an enum, not a struct
+// CHECK-DAG: `Sharding` has no variant `Whole`
+// CHECK-DAG: expected a constant of type `Sharding`, found an integer literal
+pub trait Shards {
+    const ONE: Sharding = Sharding { 1 };
+    const TWO: Sharding = Sharding::Whole;
+    const THREE: Sharding = 3;
+    const FOUR: Tiling = Tiling { dims: true, axis: 0 };
+}
+
+// An inline `[value]` cycle has no finite size; checking a const of it ends
+// at the record that encloses itself.
+// CHECK-DAG: recursive `[value]` record has infinite size
+// CHECK-DAG: associated const `LOOP` must have a constant type ({{.*}}), found `Ring`, whose field `next.back` has type `Ring`
+struct [value] Ring { next: Link }
+struct [value] Link { back: Ring }
+pub trait Cyclic {
+    const LOOP: Ring;
+}

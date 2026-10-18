@@ -254,8 +254,9 @@ ImplDecl: raw::ImplItem =
 
 MethodRef: String = "#" <p:QPath> => p;
 
-/// An associated const value: `const NAME = 4;` or, for a sequence,
-/// `const NAME = ConstSeq[1, 2] : ConstSeq<i64>;`.
+/// An associated const value: `const NAME = 4;`, for a sequence
+/// `const NAME = ConstSeq[1, 2] : ConstSeq<i64>;`, and for a record value
+/// its constructor call over field values, `const NAME = #S{1, #E#0()};`.
 ImplConstValue: (String, raw::ConstValue) =
     "const" <name:DebugName> "=" <value:ConstValue> ";" => (name.into(), value);
 
@@ -263,6 +264,10 @@ ConstValue: raw::ConstValue = {
     <s:ConstScalar> => raw::ConstValue::Scalar(s),
     "ConstSeq" "[" <elems:Comma<ConstScalar>> "]" ":" "ConstSeq" "<" <elem:Ty> ">"
         => raw::ConstValue::Seq { elem, elems },
+    "#" <path:QPath> "{" <fields:Comma<ConstValue>> "}"
+        => raw::ConstValue::Record { path, variant: None, fields },
+    "#" <path:QPath> "#" <v:"int"> "(" <fields:Comma<ConstValue>> ")"
+        => raw::ConstValue::Record { path, variant: Some(raw::small_usize(&v)), fields },
 };
 
 Generics: Vec<raw::Generic> = "<" <CommaPlus<Generic>> ">";

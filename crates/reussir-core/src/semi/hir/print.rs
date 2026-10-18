@@ -440,13 +440,27 @@ impl<'a> Printer<'a> {
             + text(" }")
     }
 
-    /// An associated const value, spelled like the matching HIR literal; a
-    /// sequence carries its type, as a `ConstSeq` expression does.
+    /// An associated const value, spelled like the matching HIR expression
+    /// without its type annotations: a literal, a sequence (which carries its
+    /// type, as a `ConstSeq` expression does), or a record value as the
+    /// constructor call building it from its field values.
     fn const_value(&self, value: &ConstValue<'_>) -> Doc<'static> {
         match value {
             ConstValue::Scalar(scalar) => text(const_scalar_lit(scalar)),
             ConstValue::Seq { elem, elems } => {
                 text(format!("{} : ConstSeq<", const_seq_lit(elems))) + self.ty(*elem) + text(">")
+            }
+            ConstValue::Record {
+                def,
+                variant,
+                fields,
+            } => {
+                let fields = comma_sep(fields.iter().map(|f| self.const_value(f)).collect());
+                let head = text(format!("#{}", self.path(*def)));
+                match variant {
+                    None => head + text("{") + fields + text("}"),
+                    Some(v) => head + text(format!("#{v}(")) + fields + text(")"),
+                }
             }
         }
     }

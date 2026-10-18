@@ -21,6 +21,7 @@ use reussir_syntax::kind::{InternKey, TokenKey};
 use reussir_syntax::source::FileId;
 use rustc_hash::FxHashMap;
 
+use crate::semi::const_eval::ConstValue;
 use crate::semi::ctxt::{Elaborator, FuncProto, Record, RecordFields, Variant};
 use crate::semi::hir::build::Parsed;
 use crate::semi::hir::{ClosureExpr, DecisionTree, Expr, ExprKind, Function, SwitchCases};
@@ -223,15 +224,21 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                     }
                 })
                 .collect();
-            // Constant types and values mention no records or generics:
-            // nothing to remap.
+            // Constant types and values mention no generics, but may name
+            // the dependency's records.
+            let remap = Remapper {
+                tcx: self.tcx,
+                defs: &defs,
+                keys: &keys,
+                generics: &ids,
+            };
             let assoc_consts: Vec<AssocConstDef<'tcx>> = t
                 .consts
                 .iter()
                 .map(|c| AssocConstDef {
                     name: interner.get_or_intern(&c.name),
-                    ty: c.ty,
-                    default: c.default.clone(),
+                    ty: remap.ty(c.ty),
+                    default: c.default.as_ref().map(|v| remap.const_value(v)),
                     span: c.span,
                 })
                 .collect();
@@ -314,6 +321,12 @@ impl<'tcx> Elaborator<'_, 'tcx> {
             let Some(assoc_consts) = i
                 .assoc_consts_in_order(&self.traits.trait_def(tid).assoc_consts, |n| {
                     interner.get_or_intern(n)
+                })
+                .map(|values| {
+                    values
+                        .iter()
+                        .map(|v| v.as_ref().map(|v| remap.const_value(v)))
+                        .collect::<Vec<_>>()
                 })
             else {
                 self.error(
@@ -581,6 +594,25 @@ struct Remapper<'m, 'a, 'tcx> {
 impl<'tcx> Remapper<'_, '_, 'tcx> {
     fn def(&self, def: DefId) -> DefId {
         self.defs[def.0 as usize]
+    }
+
+    fn const_value(&self, value: &ConstValue<'tcx>) -> ConstValue<'tcx> {
+        match value {
+            ConstValue::Scalar(_) => value.clone(),
+            ConstValue::Seq { elem, elems } => ConstValue::Seq {
+                elem: self.ty(*elem),
+                elems: elems.clone(),
+            },
+            ConstValue::Record {
+                def,
+                variant,
+                fields,
+            } => ConstValue::Record {
+                def: self.def(*def),
+                variant: *variant,
+                fields: fields.iter().map(|f| self.const_value(f)).collect(),
+            },
+        }
     }
 
     fn key(&self, key: TokenKey) -> TokenKey {

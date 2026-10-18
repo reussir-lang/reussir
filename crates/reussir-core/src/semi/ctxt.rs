@@ -562,7 +562,7 @@ pub struct Elaborator<'a, 'tcx> {
     /// yields exactly one diagnostic — from `resolve_obligations` when a bound
     /// on it can't be resolved, else from zonking (see `zonk_ty`).
     pub(super) reported_holes: rustc_hash::FxHashSet<HoleId>,
-    expr_counter: u32,
+    pub(super) expr_counter: u32,
 }
 
 /// A checkpoint of the elaborator's accumulated state; see
@@ -4009,14 +4009,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 continue;
             }
             let ty = self.eval_decl_type(&member.value.ty);
-            if !crate::semi::const_eval::is_const_ty(ty) {
+            if let Err(part) = self.check_const_ty(ty) {
                 self.error(
                     Some(member.value.ty.span()),
                     format!(
-                        "associated const `{}` must have a constant type (an integer, \
-                         float, `bool`, or `char` scalar, or a `ConstSeq` of one), found `{}`",
+                        "associated const `{}` must have a constant type ({}), found {}",
                         self.sym(name),
-                        self.ty_display(ty)
+                        crate::semi::const_eval::CONST_TYS,
+                        self.non_const_ty_display(ty, &part)
                     ),
                 );
                 continue;

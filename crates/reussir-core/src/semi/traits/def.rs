@@ -66,7 +66,9 @@ pub struct AssocTyDef {
 #[derive(Clone, Debug)]
 pub struct AssocConstDef<'tcx> {
     pub name: TokenKey,
-    /// A constant type ([`crate::semi::const_eval::is_const_ty`]).
+    /// A constant type ([`Elaborator::check_const_ty`]).
+    ///
+    /// [`Elaborator::check_const_ty`]: crate::semi::ctxt::Elaborator::check_const_ty
     pub ty: Ty<'tcx>,
     /// The value an impl that omits the const takes.
     pub default: Option<ConstValue<'tcx>>,

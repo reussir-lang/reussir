@@ -2586,11 +2586,23 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 ty_args,
             } => {
                 let self_ty = subst_ty(self.tcx, ty_args[0], subst);
-                // The value lowers as the literal (or `ConstSeq`) expression
-                // denoting it.
+                // The value lowers as the expression denoting it: a literal,
+                // a `ConstSeq`, or a record constructor call. HIR expression
+                // ids only key facts recorded during elaboration, so the
+                // constructor's field expressions are numbered locally.
                 match self.resolve_trait_const(*trait_def, *name, self_ty, span) {
                     Some(value) => {
-                        let kind = crate::semi::const_eval::const_value_kind(self.tcx, &value);
+                        let mut next = 0;
+                        let kind = crate::semi::const_eval::const_value_kind(
+                            self.tcx,
+                            self.record_defs,
+                            &value,
+                            span,
+                            &mut || {
+                                next += 1;
+                                hir::ExprId(next)
+                            },
+                        );
                         self.lower_kind(&kind, subst, span, result_ty)
                     }
                     None => M::Poison,

@@ -1,0 +1,100 @@
+// Records as associated const values: a `[value]` struct or enum whose
+// fields have constant types is a constant type, nested to any depth. The
+// HIR keeps each value as the constructor call building it from its field
+// values; monomorphization substitutes that call, so a use reads fields and
+// matches variants like any other value.
+
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.a.hir
+// RUN: %rrc %t.a.hir --emit hir --no-source-locations -o %t.b.hir
+// RUN: diff %t.a.hir %t.b.hir
+// RUN: %FileCheck %s --check-prefix=HIR --input-file=%t.a.hir
+// RUN: %rrc %s --emit mir --no-source-locations -o %t.direct.mir
+// RUN: %rrc %t.a.hir --emit mir --no-source-locations -o %t.via.mir
+// RUN: diff %t.direct.mir %t.via.mir
+// RUN: %FileCheck %s --check-prefix=MIR --input-file=%t.direct.mir
+// RUN: %rrc %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/trait_assoc_const_record.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+enum [value] MemoryKind { Device, PinnedHost }
+struct [value] Tiling { dims: ConstSeq<u64>, axis: u64 }
+enum [value] Sharding { Replicated, Tiled(Tiling) }
+struct [value] Placement { devices: ConstSeq<i32>, sharding: Sharding, memory: MemoryKind }
+
+// HIR: pub trait #Placed<$0 (Self)> {
+// HIR-NEXT: const PLACEMENT : #Placement = #Placement{ConstSeq[0] : ConstSeq<i32>, #Sharding#0(), #MemoryKind#0()};
+pub trait Placed {
+    const PLACEMENT: Placement = Placement {
+        devices: [0],
+        sharding: Sharding::Replicated,
+        memory: MemoryKind::Device,
+    };
+}
+
+pub struct Sized { n: i64 }
+pub struct Pinned { n: i64 }
+pub struct Plain { n: i64 }
+
+// HIR-DAG: impl #Placed::<#Sized> { const PLACEMENT = #Placement{ConstSeq[3, 1] : ConstSeq<i32>, #Sharding#1(#Tiling{ConstSeq[2, 1] : ConstSeq<u64>, 0}), #MemoryKind#0()}; }
+impl Placed for Sized {
+    const PLACEMENT: Placement = Placement {
+        devices: [3, 1],
+        sharding: Sharding::Tiled { Tiling { dims: [2, 1], axis: 0 } },
+        memory: MemoryKind::Device,
+    };
+}
+
+// Fields given in another order still store in declaration order.
+// HIR-DAG: impl #Placed::<#Pinned> { const PLACEMENT = #Placement{ConstSeq[] : ConstSeq<i32>, #Sharding#1(#Tiling{ConstSeq[4] : ConstSeq<u64>, 1}), #MemoryKind#1()}; }
+impl Placed for Pinned {
+    const PLACEMENT: Placement = Placement {
+        memory: MemoryKind::PinnedHost {},
+        sharding: Sharding::Tiled { Tiling { axis: 1, dims: [4] } },
+        devices: [],
+    };
+}
+
+// HIR-DAG: impl #Placed::<#Plain> {  }
+impl Placed for Plain {}
+
+fn shard_code(s: Sharding) -> u64 {
+    match s {
+        Sharding::Replicated => 9,
+        Sharding::Tiled(t) => t.axis * 10 + core::intrinsic::const_seq::get(t.dims, 0)
+    }
+}
+
+fn memory_code(m: MemoryKind) -> u64 {
+    match m {
+        MemoryKind::Device => 1,
+        MemoryKind::PinnedHost => 2
+    }
+}
+
+// A concrete use projects a field of the value directly: 3.
+// MIR: pub fn @_RC12first_device() -> i32 {
+// MIR-NEXT: intrinsic#const_seq#get#0(proj(@_RC9Placement{ConstSeq[3, 1] : ConstSeq<i32>, {{.*}}} : Placement, 0) : ConstSeq<i32>, 0 : u64) : i32
+pub fn first_device() -> i32 {
+    core::intrinsic::const_seq::get(Sized::PLACEMENT.devices, 0)
+}
+
+// Each instance builds the value its impl selects, or the default.
+// MIR: fn @_RIC7summaryC5PlainE(v0 (x): Plain) -> u64 {
+// MIR-NEXT: let v1 (p) = @_RC9Placement{ConstSeq[0] : ConstSeq<i32>, @_RC8Sharding::#0() : Sharding, @_RC10MemoryKind::#0() : MemoryKind} : Placement;
+// MIR: fn @_RIC7summaryC5SizedE(v0 (x): Sized) -> u64 {
+// MIR-NEXT: let v1 (p) = @_RC9Placement{ConstSeq[3, 1] : ConstSeq<i32>, @_RC8Sharding::#1(@_RC6Tiling{ConstSeq[2, 1] : ConstSeq<u64>, 0 : u64} : Tiling) : Sharding, @_RC10MemoryKind::#0() : MemoryKind} : Placement;
+// MIR: fn @_RIC7summaryC6PinnedE(v0 (x): Pinned) -> u64 {
+// MIR-NEXT: let v1 (p) = @_RC9Placement{ConstSeq[] : ConstSeq<i32>, @_RC8Sharding::#1(@_RC6Tiling{ConstSeq[4] : ConstSeq<u64>, 1 : u64} : Tiling) : Sharding, @_RC10MemoryKind::#1() : MemoryKind} : Placement;
+fn summary<T: Placed>(x: T) -> u64 {
+    let p = T::PLACEMENT;
+    core::intrinsic::const_seq::len(p.devices) * 1000 + shard_code(p.sharding) * 10 + memory_code(p.memory)
+}
+
+// Sized: 2 * 1000 + 2 * 10 + 1 = 2021; Pinned: 0 + 14 * 10 + 2 = 142;
+// Plain: 1000 + 9 * 10 + 1 = 1091.
+pub fn checksum() -> u64 {
+    summary(Sized { n: 1 }) * 100000000 + summary(Pinned { n: 1 }) * 10000 + summary(Plain { n: 1 })
+}
+
+extern "C" trampoline "reussir_record_checksum" = checksum;
+extern "C" trampoline "reussir_record_first_device" = first_device;
