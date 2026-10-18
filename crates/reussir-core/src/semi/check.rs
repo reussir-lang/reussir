@@ -4726,44 +4726,67 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         {
             return self.infer_arc_ctor(ty_args, Some(path.basename), args, span);
         }
-        if let Some(enum_key) = qualifier {
-            // The qualifier resolving to an enum wins (`Enum::Variant`); a
-            // qualifier that is a module path instead falls through to a
-            // module-qualified struct constructor (`m::Foo{…}`).
-            if let Some(def) = self.resolve_ctor_qualifier(path)
-                && matches!(self.records[&def].fields, Some(RecordFields::Variants(_)))
-            {
-                self.record_use(enum_key);
-                return self.infer_variant(
-                    def,
-                    enum_key,
-                    path.basename,
-                    ty_args,
-                    args,
-                    false,
-                    span,
-                );
+        match self.resolve_ctor_path(path, span) {
+            Some((def, Some(variant))) => {
+                let enum_key = qualifier.expect("a variant path is qualified");
+                self.infer_variant(def, enum_key, variant, ty_args, args, false, span)
             }
-            let Some(def) = self.resolve_record_ref(path) else {
-                // Either the qualifier (`dep::Enum::Variant`) or the record
-                // itself (`dep::Struct{…}`) may be the private extern hit.
-                if let Some(msg) = self
-                    .extern_private_ctor_msg(path)
-                    .or_else(|| self.extern_private_msg(path, DefKind::Record))
-                {
-                    self.error(span, msg);
-                    return self.poison(span);
-                }
-                let hint = self.record_suggestion(enum_key);
-                let shown = self.path_display(path);
-                self.error(span, format!("unknown constructor `{shown}`{hint}"));
-                return self.poison(span);
+            Some((def, None)) => {
+                self.infer_struct_def(def, path.basename, ty_args, args, false, span)
+            }
+            None => self.poison(span),
+        }
+    }
+
+    /// Resolve a constructor path, imports already expanded, to the record
+    /// it builds and, for `Enum::Variant` (also `m::Enum::Variant`), the
+    /// variant's name: a qualifier resolving to an enum wins, and one that
+    /// is a module path instead falls through to a module-qualified struct
+    /// (`m::Foo{…}`); a bare path names a struct. An unknown path is
+    /// reported and yields `None`.
+    fn resolve_ctor_path(
+        &mut self,
+        path: &surface::Path,
+        span: Option<Span>,
+    ) -> Option<(DefId, Option<TokenKey>)> {
+        let Some(&enum_key) = path.segments.last() else {
+            let resolved = self.defs.resolve_record(path.basename).or_else(|| {
+                self.prelude_lookup(path.basename, crate::semi::lang::LangItemKind::Record)
+            });
+            let Some(def) = resolved else {
+                let hint = self.record_suggestion(path.basename);
+                self.error(
+                    span,
+                    format!("unknown type `{}`{hint}", self.sym(path.basename)),
+                );
+                return None;
             };
             self.record_use(path.basename);
-            return self.infer_struct_def(def, path.basename, ty_args, args, false, span);
+            return Some((def, None));
+        };
+        if let Some(def) = self.resolve_ctor_qualifier(path)
+            && matches!(self.records[&def].fields, Some(RecordFields::Variants(_)))
+        {
+            self.record_use(enum_key);
+            return Some((def, Some(path.basename)));
         }
-        // A bare struct constructor.
-        self.infer_struct(path.basename, ty_args, args, span)
+        let Some(def) = self.resolve_record_ref(path) else {
+            // Either the qualifier (`dep::Enum::Variant`) or the record
+            // itself (`dep::Struct{…}`) may be the private extern hit.
+            if let Some(msg) = self
+                .extern_private_ctor_msg(path)
+                .or_else(|| self.extern_private_msg(path, DefKind::Record))
+            {
+                self.error(span, msg);
+                return None;
+            }
+            let hint = self.record_suggestion(enum_key);
+            let shown = self.path_display(path);
+            self.error(span, format!("unknown constructor `{shown}`{hint}"));
+            return None;
+        };
+        self.record_use(path.basename);
+        Some((def, None))
     }
 
     /// (ARC) `Γ ⊢ Arc<Inner>{args} ⇒ (CompoundCall{…} : Arc<R>)` and
@@ -4865,32 +4888,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
     }
 
-    /// (STRUCT) `Γ ⊢ name⟨ty_args⟩{args} ⇒ (CompoundCall{…} : R)`: resolve the struct,
-    /// instantiate its generics to θ, check each field argument against its instantiated
-    /// field type, and return the record type `R`. Constructing a regional struct
-    /// outside a region is a diagnostic.
-    fn infer_struct(
-        &mut self,
-        name: TokenKey,
-        ty_args: &[Option<surface::Type>],
-        args: &[(Option<TokenKey>, surface::Expr)],
-        span: Option<Span>,
-    ) -> Expr<'tcx> {
-        let resolved = self
-            .defs
-            .resolve_record(name)
-            .or_else(|| self.prelude_lookup(name, crate::semi::lang::LangItemKind::Record));
-        let Some(def) = resolved else {
-            let hint = self.record_suggestion(name);
-            self.error(span, format!("unknown type `{}`{hint}", self.sym(name)));
-            return self.poison(span);
-        };
-        self.record_use(name);
-        self.infer_struct_def(def, name, ty_args, args, false, span)
-    }
-
-    /// The resolved-def core of [`Self::infer_struct`] (shared with the
-    /// module-qualified constructor path).
+    /// (STRUCT) `Γ ⊢ name⟨ty_args⟩{args} ⇒ (CompoundCall{…} : R)` for the struct `def`
+    /// ([`Self::resolve_ctor_path`]): instantiate its generics to θ, check each field
+    /// argument against its instantiated field type, and return the record type `R`.
+    /// Constructing a regional struct outside a region is a diagnostic.
     fn infer_struct_def(
         &mut self,
         def: DefId,
@@ -4939,37 +4940,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 "cannot construct a regional record outside of a region",
             );
         }
-        // Constructing a record supplies every field, so a single private
-        // field makes the constructor itself module-private. One error listing
-        // the private fields, then checking continues (no poison — matches the
-        // regional check above). Variant construction is exempt by design:
-        // variant payloads carry no per-field visibility.
-        if !self.may_access_private_fields(def) {
-            let private: Vec<String> = match &record.fields {
-                Some(RecordFields::Named(fs)) => fs
-                    .iter()
-                    .filter(|(_, _, _, v)| *v == surface::Visibility::Private)
-                    .map(|(n, _, _, _)| format!("`{}`", self.sym(*n)))
-                    .collect(),
-                Some(RecordFields::Unnamed(fs)) => fs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (_, _, v))| *v == surface::Visibility::Private)
-                    .map(|(i, _)| format!("`{i}`"))
-                    .collect(),
-                _ => Vec::new(),
-            };
-            if !private.is_empty() {
-                self.error(
-                    span,
-                    format!(
-                        "cannot construct `{}` outside its module: field(s) {} are private",
-                        self.defs.path(def).display(self.resolver),
-                        private.join(", ")
-                    ),
-                );
-            }
-        }
+        // Checking continues past a private field (no poison — matches the
+        // regional check above).
+        self.report_private_ctor_fields(def, span);
         let inst = self.instantiate(&record.generics_as_decls(), ty_args, span);
         let mut field_tys = self.field_types(&record.fields, &inst);
         if arc {
@@ -5022,15 +4995,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         if matches!(record.default_cap, super::ctxt::DefaultCap::Regional) && !self.inside_region {
             self.error(span, "cannot construct a regional enum outside of a region");
         }
-        let Some(vidx) = variants.iter().position(|v| v.name == variant) else {
-            self.error(
-                span,
-                format!(
-                    "`{}` has no variant `{}`",
-                    self.sym(enum_name),
-                    self.sym(variant)
-                ),
-            );
+        let Some(vidx) = self.variant_index(def, enum_name, variant, span) else {
             return self.poison(span);
         };
         let payload = variants[vidx].fields.clone();
@@ -5055,10 +5020,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             })
             .collect();
 
-        let mut checked = Vec::new();
-        for ((_, arg), pty) in args.iter().zip(&payload_tys) {
-            checked.push(self.check_expr(arg, *pty));
-        }
+        // Variant payloads are positional.
+        let payload_fields: Vec<(Option<TokenKey>, Ty<'tcx>)> =
+            payload_tys.into_iter().map(|ty| (None, ty)).collect();
+        let checked = self.check_ctor_args(variant, args, &payload_fields, span);
         let ty_args = self.inst_args(&record.generics_as_decls(), &inst);
         let result = self.record_ty(&record, &inst);
         self.mk_expr(
@@ -5073,6 +5038,69 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         )
     }
 
+    /// The index of variant `variant` of the enum `def` (spelled
+    /// `enum_name`), as [`ExprKind::VariantCall`] names it; an unknown
+    /// variant is reported.
+    fn variant_index(
+        &mut self,
+        def: DefId,
+        enum_name: TokenKey,
+        variant: TokenKey,
+        span: Option<Span>,
+    ) -> Option<usize> {
+        let Some(RecordFields::Variants(variants)) = &self.records[&def].fields else {
+            unreachable!("only an enum has variants");
+        };
+        let index = variants.iter().position(|v| v.name == variant);
+        if index.is_none() {
+            self.error(
+                span,
+                format!(
+                    "`{}` has no variant `{}`",
+                    self.sym(enum_name),
+                    self.sym(variant)
+                ),
+            );
+        }
+        index
+    }
+
+    /// Constructing the struct `def` supplies every field, so a single
+    /// private field makes the constructor itself module-private: report one
+    /// error listing the private fields. Variant construction is exempt by
+    /// design: variant payloads carry no per-field visibility.
+    fn report_private_ctor_fields(&mut self, def: DefId, span: Option<Span>) {
+        if self.may_access_private_fields(def) {
+            return;
+        }
+        let private: Vec<String> = match &self.records[&def].fields {
+            Some(RecordFields::Named(fs)) => fs
+                .iter()
+                .filter(|(_, _, _, v)| *v == surface::Visibility::Private)
+                .map(|(n, _, _, _)| format!("`{}`", self.sym(*n)))
+                .collect(),
+            Some(RecordFields::Unnamed(fs)) => fs
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, _, v))| *v == surface::Visibility::Private)
+                .map(|(i, _)| format!("`{i}`"))
+                .collect(),
+            _ => Vec::new(),
+        };
+        if !private.is_empty() {
+            self.error(
+                span,
+                format!(
+                    "cannot construct `{}` outside its module: field(s) {} are private",
+                    self.defs.path(def).display(self.resolver),
+                    private.join(", ")
+                ),
+            );
+        }
+    }
+
+    /// Check each constructor argument against the type of the field it
+    /// supplies ([`Self::match_ctor_args`]); a field without one is poison.
     fn check_ctor_args(
         &mut self,
         name: TokenKey,
@@ -5080,31 +5108,51 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         field_tys: &[(Option<TokenKey>, Ty<'tcx>)],
         span: Option<Span>,
     ) -> Vec<Expr<'tcx>> {
-        if args.len() != field_tys.len() {
+        let names: Vec<Option<TokenKey>> = field_tys.iter().map(|&(name, _)| name).collect();
+        self.match_ctor_args(name, args, &names, span)
+            .iter()
+            .zip(field_tys)
+            .map(|(&arg, &(_, fty))| match arg {
+                Some(i) => self.check_expr(&args[i].1, fty),
+                None => self.poison(span),
+            })
+            .collect()
+    }
+
+    /// Match the arguments of constructor `name` to its `fields` (their
+    /// names in declaration order; `None` for a positional field): the
+    /// argument supplying each field, if any. Named arguments are
+    /// matched by field name (an interned key compare); positional by order.
+    /// Field shorthand auto-forwards: a bare in-scope variable whose name
+    /// matches a field acts as that named argument, so `Point { y, x }` is
+    /// order-independent and composes with explicit named arguments
+    /// (`Point { x, y: 10 }`). An arity mismatch and a missing, unknown, or
+    /// repeated field are reported.
+    fn match_ctor_args(
+        &mut self,
+        name: TokenKey,
+        args: &[(Option<TokenKey>, surface::Expr)],
+        fields: &[Option<TokenKey>],
+        span: Option<Span>,
+    ) -> Vec<Option<usize>> {
+        if args.len() != fields.len() {
             self.error(
                 span,
                 format!(
                     "`{}` expects {} field(s), got {}",
                     self.sym(name),
-                    field_tys.len(),
+                    fields.len(),
                     args.len()
                 ),
             );
         }
-        // Named arguments are matched by field name (an interned key compare);
-        // positional by order. Field shorthand auto-forwards: a bare in-scope
-        // variable whose name matches a field acts as that named argument, so
-        // `Point { y, x }` is order-independent and composes with explicit
-        // named arguments (`Point { x, y: 10 }`).
         let arg_fields: Vec<Option<TokenKey>> = args
             .iter()
             .map(|(f, e)| {
                 f.or_else(|| match e.kind() {
                     surface::ExprKind::Var(path)
                         if path.segments.is_empty()
-                            && field_tys
-                                .iter()
-                                .any(|(fname, _)| *fname == Some(path.basename))
+                            && fields.contains(&Some(path.basename))
                             && self.vars.lookup(path.basename).is_some() =>
                     {
                         Some(path.basename)
@@ -5113,25 +5161,31 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 })
             })
             .collect();
-        let named = arg_fields.iter().any(|f| f.is_some());
-        let mut out = Vec::new();
-        if named {
-            for (fname, fty) in field_tys {
-                let Some(fname) = fname else { continue };
-                match arg_fields.iter().position(|af| *af == Some(*fname)) {
-                    Some(i) => out.push(self.check_expr(&args[i].1, *fty)),
-                    None => {
-                        self.error(span, format!("missing field `{}`", self.sym(*fname)));
-                        out.push(self.poison(span));
-                    }
-                }
-            }
-        } else {
-            for ((_, e), (_, fty)) in args.iter().zip(field_tys) {
-                out.push(self.check_expr(e, *fty));
-            }
+        if !arg_fields.iter().any(Option::is_some) {
+            let by_field = (0..fields.len()).map(|i| (i < args.len()).then_some(i));
+            return by_field.collect();
         }
-        out
+        for (i, &field) in arg_fields.iter().enumerate() {
+            let Some(field) = field else { continue };
+            let known = fields.contains(&Some(field));
+            let message = match (known, arg_fields[..i].contains(&Some(field))) {
+                (false, _) => format!("`{}` has no field `{}`", self.sym(name), self.sym(field)),
+                (true, true) => format!("field `{}` is given more than once", self.sym(field)),
+                (true, false) => continue,
+            };
+            self.error(span, message);
+        }
+        let mut by_field = Vec::with_capacity(fields.len());
+        for &field in fields {
+            let arg = field.and_then(|f| arg_fields.iter().position(|&af| af == Some(f)));
+            if arg.is_none()
+                && let Some(field) = field
+            {
+                self.error(span, format!("missing field `{}`", self.sym(field)));
+            }
+            by_field.push(arg);
+        }
+        by_field
     }
 
     fn field_types(

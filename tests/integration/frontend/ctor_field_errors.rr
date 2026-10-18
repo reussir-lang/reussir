@@ -1,0 +1,40 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+// A constructor supplies every field exactly once: arguments match the
+// fields by name, or by position, and a variant's payload is positional.
+
+struct Tiling { dims: u64, axis: u64 }
+struct Pair(u64, u64)
+enum Sharding { Replicated, Split(u64, u64) }
+
+// CHECK-DAG: `Tiling` expects 2 field(s), got 3
+// CHECK-DAG: `Tiling` has no field `rank`
+fn unknown_field(n: u64) -> Tiling {
+    Tiling { dims: n, axis: n, rank: n }
+}
+
+// CHECK-DAG: field `dims` is given more than once
+// CHECK-DAG: missing field `axis`
+fn repeated_field(n: u64) -> Tiling {
+    Tiling { dims: n, dims: n }
+}
+
+// CHECK-DAG: `Pair` expects 2 field(s), got 1
+fn missing_positional(n: u64) -> Pair {
+    Pair { n }
+}
+
+// CHECK-DAG: `Split` expects 2 field(s), got 3
+fn too_many_payload(n: u64) -> Sharding {
+    Sharding::Split { n, n, n }
+}
+
+// CHECK-DAG: `Split` expects 2 field(s), got 1
+fn too_few_payload(n: u64) -> Sharding {
+    Sharding::Split { n }
+}
+
+// CHECK-DAG: `Replicated` expects 0 field(s), got 1
+fn unit_payload(n: u64) -> Sharding {
+    Sharding::Replicated { n }
+}
