@@ -44,8 +44,6 @@ rene build -j 4                   # cap the compile-process pool
 rene inspect --solved --graph     # dependency resolution + graph as JSON
 rene inspect --commands           # the rrc commands the build would run
 rene clean                        # delete the build directory
-rene prebake --target wasm32-wasip1  # fill the shared cache ahead of time
-                                  # (runtime bake + core, dev and release)
 ```
 
 Both commands take `--manifest-path` and `--build-dir`; by default rene finds

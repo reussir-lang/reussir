@@ -161,7 +161,7 @@ config.substitutions.append((r'%FileCheck', sh_path(config.filecheck_path)))
 # test at one cache under the test tree: it stays out of the developer's
 # home, and the rene suites share a single bake, which also exercises the
 # cache lock under lit's parallelism. An explicit RENE_CACHE_DIR wins, so CI
-# can reuse a prebaked cache.
+# can reuse a warm cache.
 config.environment['RENE_CACHE_DIR'] = os.environ.get(
     'RENE_CACHE_DIR', os.path.join(config.test_exec_root, 'rene-cache'))
 # The std integration executables are targets of one rene package. All of

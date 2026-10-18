@@ -16,8 +16,7 @@
 //! `rrc --polyffi-libdir` by hand. `rene inspect` reports the source graph as
 //! JSON; `rene clean` deletes the build directory unless another instance
 //! holds it. The runtime bake, the bundled core sources, and core's compiled
-//! artifacts live in a shared per-user cache (see `rene::cache`), which
-//! `rene prebake` fills ahead of time for chosen targets and profiles.
+//! artifacts live in a shared per-user cache (see `rene::cache`).
 //!
 //! Progress goes to stderr via `tracing`; stdout carries only the final
 //! machine-readable listing. Exit 0 on success, 1 on a failed command, 2 on
@@ -90,7 +89,6 @@ enum Command {
     Clean(CleanArgs),
     Inspect(InspectArgs),
     New(NewArgs),
-    Prebake(PrebakeArgs),
 }
 
 /// Create a new package: a directory with a commented `rene.ncl` manifest, a
@@ -185,37 +183,6 @@ struct BuildArgs {
     /// dependency archives).
     #[arg(long)]
     token_reuse_remarks: bool,
-}
-
-/// Fill the shared cache ahead of time, for each machine target: unpack the
-/// bundled core sources, bake reussir-rt, and build core under each profile.
-/// Later builds of any package with the same toolchain then start warm, which
-/// suits CI images and containers. Prints the cache directory on stdout.
-#[derive(palc::Args)]
-struct PrebakeArgs {
-    /// A machine target triple to prebake for (repeatable). Defaults to
-    /// rustc's host.
-    #[arg(long = "target", value_name = "TRIPLE")]
-    targets: Vec<String>,
-
-    /// A built-in profile (`dev`, `release`) to build core under
-    /// (repeatable). Defaults to both.
-    #[arg(long = "profile", value_name = "NAME")]
-    profiles: Vec<String>,
-
-    /// The linker the later builds will pass as `rene build --linker`:
-    /// pinned for the bake's own links, and part of core's cache key.
-    #[arg(long)]
-    linker: Option<PathBuf>,
-
-    /// How many compile processes may run at once (default: the machine's
-    /// available parallelism).
-    #[arg(short = 'j', long = "jobs")]
-    jobs: Option<std::num::NonZeroUsize>,
-
-    /// Only bake the runtime; do not build core (which needs `rrc`).
-    #[arg(long)]
-    runtime_only: bool,
 }
 
 /// Delete the build directory, unless another rene is using it.
@@ -313,7 +280,6 @@ fn main() -> ExitCode {
             Command::Build(args) => build(&args, color).await,
             Command::Clean(args) => clean(&args.location),
             Command::Inspect(args) => inspect(&args, color).await,
-            Command::Prebake(args) => prebake(&args, color).await,
             Command::New(args) => new::run(&new::Options {
                 path: args.path,
                 name: args.name,
@@ -681,95 +647,6 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), String> {
         "{}",
         serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
     );
-    Ok(())
-}
-
-/// `rene prebake`: drive the ordinary bake and dependency pipeline for an
-/// empty package in a scratch build directory inside the cache. The scratch
-/// package depends on nothing but the bundled core, so all the pipeline
-/// builds is core, and it publishes that to the cache exactly as a real
-/// build would; the scratch directory is removed afterwards.
-async fn prebake(args: &PrebakeArgs, color: bool) -> Result<(), String> {
-    let cache = Cache::shared()?;
-    let staging = rene::cache::temp_sibling(&cache.root().join("prebake"));
-    let result = prebake_in(args, color, &cache, &staging).await;
-    // Best effort: a leftover scratch directory is harmless.
-    let _ = std::fs::remove_dir_all(&staging);
-    result?;
-    println!("{}", cache.root().display());
-    Ok(())
-}
-
-async fn prebake_in(
-    args: &PrebakeArgs,
-    color: bool,
-    cache: &Cache,
-    staging: &std::path::Path,
-) -> Result<(), String> {
-    let manifest_path = staging.join(manifest::MANIFEST_FILE);
-    std::fs::create_dir_all(staging.join("src"))
-        .and_then(|()| {
-            std::fs::write(
-                &manifest_path,
-                "{ package = { name = \"prebake\", version = \"0.0.0\" } }\n",
-            )
-        })
-        .map_err(|e| format!("cannot create `{}`: {e}", staging.display()))?;
-    let loaded = manifest::load(&manifest_path).map_err(|e| e.to_string())?;
-    let root = staging.join(BUILD_DIR);
-    let dir = BuildDir::open(&root).map_err(|e| e.to_string())?;
-    let core_dir = core_src::unpack(cache).await?;
-    let graph = resolve::load_graph_with(&loaded, Some(&core_dir))?;
-    let shared = Shared::new(
-        cache.clone(),
-        [("core".to_owned(), core_src::content_hash())].into(),
-    );
-    let profiles = if args.profiles.is_empty() {
-        vec!["dev".to_owned(), "release".to_owned()]
-    } else {
-        args.profiles.clone()
-    };
-    let targets: Vec<Option<&str>> = if args.targets.is_empty() {
-        vec![None]
-    } else {
-        args.targets
-            .iter()
-            .map(|target| Some(target.as_str()))
-            .collect()
-    };
-    let progress = indicatif::MultiProgress::new();
-    let pool = pool::Pool::new(args.jobs);
-    for requested in targets {
-        let artifacts =
-            rt::prepare(&dir, cache, requested, args.linker.as_deref(), &progress).await?;
-        tracing::info!(target = %artifacts.target, "reussir-rt is baked");
-        if args.runtime_only {
-            continue;
-        }
-        for profile_name in &profiles {
-            let profile = manifest::resolve_profile(&loaded.manifest, profile_name)?;
-            exec::build_deps(
-                &dir,
-                &graph,
-                &artifacts,
-                &exec::Options {
-                    profile_name,
-                    profile: &profile,
-                    target: &artifacts.target,
-                    linker: args.linker.as_deref(),
-                    jobs: args.jobs,
-                    build_dir: &root,
-                    token_reuse_remarks: false,
-                    color,
-                    shared: Some(&shared),
-                },
-                &pool,
-                &progress,
-            )
-            .await?;
-            tracing::info!(target = %artifacts.target, profile = %profile_name, "core is built");
-        }
-    }
     Ok(())
 }
 

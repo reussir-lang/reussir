@@ -161,7 +161,7 @@ with `RENE_CACHE_DIR`. Entries are `<root>/<kind>/<key>`:
 
 Writers take an OS advisory lock on `<key>.lock`, then re-check the entry,
 so concurrent builds wait for one bake. A process that dies releases its
-lock. `rene prebake` plays the role of `rrc rt build` above.
+lock.
 
 Everything downstream reads the manifest:
 

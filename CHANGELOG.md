@@ -148,9 +148,6 @@
   redone rather than trusted. A new project's first build therefore skips
   the cargo bake when any earlier project used the same toolchain. If the
   cache cannot be created, rene warns and caches in the build directory.
-- `rene prebake [--target TRIPLE]... [--profile NAME]...` fills the cache
-  ahead of time (the runtime bake, and core under `dev` and `release` by
-  default), for CI images and containers.
 
 ## 0.1.0
 

@@ -569,61 +569,6 @@ fn packages_share_the_runtime_bake_and_core_through_the_cache() {
     assert_eq!(fakes.rt_entries(), bakes);
 }
 
-/// `rene prebake` fills the cache, so a package's first build bakes and
-/// compiles nothing shared.
-#[cfg(unix)]
-#[test]
-fn prebake_warms_the_cache_for_later_builds() {
-    let tmp_dir = tempfile::tempdir().unwrap();
-    let tmp = tmp_dir.path().canonicalize().unwrap();
-    let fakes = Fakes::new(&tmp);
-
-    let out = run(rene(&["prebake", "--target", "wasm32-wasip1"])
-        .env("REUSSIR_RRC", &fakes.rrc)
-        .env("REUSSIR_CARGO", &fakes.cargo)
-        .env("REUSSIR_RUSTC", &fakes.rustc)
-        .env(rene::cache::CACHE_DIR_ENV, &fakes.cache));
-    assert!(out.status.success(), "stderr: {}", stderr(&out));
-    assert_eq!(
-        String::from_utf8(out.stdout).unwrap().trim(),
-        fakes.cache.display().to_string()
-    );
-    assert_eq!(fakes.runs("cargo"), 1);
-    // dev and release, interface and archive each.
-    assert_eq!(fakes.compiles().len(), 4, "{:#?}", fakes.compiles());
-    // The scratch package is gone.
-    assert!(std::fs::read_dir(&fakes.cache).unwrap().all(|entry| {
-        !entry
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with("prebake")
-    }),);
-
-    let pkg = tmp.join("pkg");
-    let manifest = package(&pkg, "pkg");
-    std::fs::write(
-        &manifest,
-        "{ package = { name = \"pkg\", version = \"0.1.0\" }, targets.pkg.kind = 'executable }\n",
-    )
-    .unwrap();
-    for profile in ["dev", "release"] {
-        let out = fakes.rene(
-            &["build", "--target", "wasm32-wasip1", "--profile", profile],
-            &manifest,
-            &pkg.join("reussir-build"),
-        );
-        assert!(out.status.success(), "stderr: {}", stderr(&out));
-    }
-    assert_eq!(fakes.runs("cargo"), 1, "the build rebaked");
-    assert_eq!(
-        fakes.compiles().len() - fakes.package_compiles().len(),
-        4,
-        "the build recompiled core: {:#?}",
-        fakes.compiles()
-    );
-}
-
 /// An unusable cache location is not fatal: the build warns and caches in
 /// its own build directory.
 #[cfg(unix)]
