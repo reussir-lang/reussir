@@ -2127,6 +2127,23 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 self.populate_trait_params(td, *id, *span);
             }
         }
+        // Record fields populate before the trait members, so checking an
+        // associated const's type and value can read them.
+        let record_defs: Vec<DefId> = records
+            .iter()
+            .zip(record_defs)
+            .filter_map(|((rec, _, _, _, _), def)| Some((rec, def?)))
+            .map(|(rec, def)| {
+                self.populate_record(rec, def);
+                def
+            })
+            .collect();
+        // Now that this batch's fields exist, reject inline-recursive record
+        // cycles: a `[value]` record stored inside a `[value]` record, around
+        // to itself, never crosses a box and has no finite layout. Forward
+        // references only resolve within a batch, so a new cycle is always
+        // rooted in this batch's defs.
+        self.reject_infinite_value_recursion(&record_defs);
         for ((td, span, scope, ..), id) in trait_decls.iter().zip(&trait_ids) {
             if let Some(id) = id {
                 self.set_current_file(scope.file);
@@ -2270,21 +2287,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             })
             .collect();
         self.register_main_entry(&mains);
-        let record_defs: Vec<DefId> = records
-            .iter()
-            .zip(record_defs)
-            .filter_map(|((rec, _, _, _, _), def)| Some((rec, def?)))
-            .map(|(rec, def)| {
-                self.populate_record(rec, def);
-                def
-            })
-            .collect();
-        // Now that this batch's fields exist, reject inline-recursive record
-        // cycles: a `[value]` record stored inside a `[value]` record, around
-        // to itself, never crosses a box and has no finite layout. Forward
-        // references only resolve within a batch, so a new cycle is always
-        // rooted in this batch's defs.
-        self.reject_infinite_value_recursion(&record_defs);
         // Post-populate sweep: signatures and record members were evaluated
         // before fields existed, so their `Arc` nodes wf-check only now.
         // Restricted to this batch's items so a REPL re-run does not re-report
