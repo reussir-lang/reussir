@@ -569,6 +569,73 @@ fn packages_share_the_runtime_bake_and_core_through_the_cache() {
     assert_eq!(fakes.rt_entries(), bakes);
 }
 
+/// `std = { bundled = true }` builds the std bundled in rene: compiled once
+/// for every package that asks for it, after the core it depends on.
+#[cfg(unix)]
+#[test]
+fn bundled_std_is_compiled_once_for_every_package() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let std_compiles = || {
+        fakes
+            .compiles()
+            .iter()
+            .filter(|line| line.contains("--package-name std"))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    for name in ["first", "second"] {
+        let pkg = tmp.join(name);
+        let manifest = package(&pkg, name);
+        std::fs::write(
+            &manifest,
+            format!(
+                "{{ package = {{ name = \"{name}\", version = \"0.1.0\" }}, \
+                 dependencies.std = {{ bundled = true, version = \"^0.1\" }}, \
+                 targets.{name}.kind = 'executable }}\n"
+            ),
+        )
+        .unwrap();
+        let root = pkg.join("reussir-build");
+        let out = fakes.rene(&["build"], &manifest, &root);
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        assert!(root.join("dev/deps/std.rri").is_file());
+    }
+    let compiles = std_compiles();
+    assert_eq!(compiles.len(), 2, "{compiles:#?}");
+    // The std sources come from the cache, and std links against core.
+    let std_src = cache_entries(&fakes.cache.join("std-src"));
+    assert_eq!(std_src.len(), 1);
+    assert!(
+        compiles[0].contains(&format!(
+            "--package-root {}",
+            std_src[0].join("src").display()
+        )),
+        "{compiles:#?}"
+    );
+    assert!(compiles[0].contains("--extern core="), "{compiles:#?}");
+    // core and std, each once.
+    assert_eq!(cache_entries(&fakes.cache.join("deps")).len(), 2);
+
+    // The root's targets see std.
+    let report = frozen_report(
+        &fakes,
+        &tmp.join("second/rene.ncl"),
+        &tmp.join("second/reussir-build"),
+    );
+    assert_eq!(report["state"], "up-to-date", "{report:#}");
+    let out = fakes.rene(
+        &["inspect", "--frozen", "--commands"],
+        &tmp.join("second/rene.ncl"),
+        &tmp.join("second/reussir-build"),
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let plan = String::from_utf8(out.stdout).unwrap();
+    assert!(plan.contains("std="), "{plan}");
+}
+
 /// An unusable cache location is not fatal: the build warns and caches in
 /// its own build directory.
 #[cfg(unix)]

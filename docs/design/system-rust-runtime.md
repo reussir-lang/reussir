@@ -151,9 +151,9 @@ with `RENE_CACHE_DIR`. Entries are `<root>/<kind>/<key>`:
   rustflags environment. The source unpacks into the entry, and cargo's
   target directory stays inside it; `artifacts.json` (the `RtArtifacts`
   record) is written atomically last and marks the entry complete.
-- `core-src/<content hash>`: the bundled core sources, unpacked into a
-  temporary sibling and renamed into place.
-- `deps/<key>`: core's compiled `.rri` and archive. The key hashes the
+- `core-src/<content hash>`, `std-src/<content hash>`: the bundled library
+  sources, unpacked into a temporary sibling and renamed into place.
+- `deps/<key>`: a bundled package's compiled `.rri` and archive. The key hashes the
   content, the planned `rrc` argv (build-directory paths abstracted), the
   upstream artifact digests, the bake, and the `rrc` binary's identity.
   Builds copy the files into their own `deps/`, so freshness and linking

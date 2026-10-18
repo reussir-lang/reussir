@@ -50,16 +50,24 @@ pub struct Solution {
     pub pinned: BTreeMap<String, SemanticVersion>,
 }
 
-/// Load the transitive graph rooted at `root`'s manifest.
+/// Load the transitive graph rooted at `root`'s manifest, with no bundled
+/// packages available.
 pub fn load_graph(root: &Loaded) -> Result<Graph, String> {
-    load_graph_with(root, None)
+    load_graph_with(root, &BTreeMap::new())
 }
 
-/// [`load_graph`], with the bundled `core` package (at `core_dir`) grafted
-/// in: loaded like any other node and made an implicit dependency of every
-/// package that does not set `package.no_core`. Its edge carries no
-/// manifest entry, so constraint lookups fall back to `*`.
-pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, String> {
+/// [`load_graph`], with the bundled packages unpacked at `bundles` (name to
+/// source directory, [`crate::bundled::unpack_all`]):
+///
+/// - a `bundled = true` dependency loads from its bundle's directory;
+/// - the bundled `core`, if present, is grafted in: loaded like any other
+///   node and made an implicit dependency of every package that does not
+///   set `package.no_core`. Its edge carries no manifest entry, so
+///   constraint lookups fall back to `*`.
+pub fn load_graph_with(
+    root: &Loaded,
+    bundles: &BTreeMap<String, PathBuf>,
+) -> Result<Graph, String> {
     let mut nodes: BTreeMap<String, Node> = BTreeMap::new();
     let root_name = root.manifest.package.name.clone();
     let mut queue: Vec<(String, Loaded)> = vec![(root_name.clone(), root.clone())];
@@ -77,7 +85,16 @@ pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, 
         }
         let mut dependencies = Vec::new();
         for (dep_name, dep) in &loaded.manifest.dependencies {
-            let dep_dir = dir.join(dep.path());
+            let dep_dir = if dep.bundled {
+                bundles.get(dep_name).cloned().ok_or_else(|| {
+                    format!(
+                        "dependency `{dep_name}` of `{name}` asks for the bundled \
+                         package, which this build does not provide"
+                    )
+                })?
+            } else {
+                dir.join(dep.path())
+            };
             let dep_manifest = dep_dir.join(manifest::MANIFEST_FILE);
             let dep_loaded = manifest::load(&dep_manifest).map_err(|e| {
                 format!(
@@ -110,7 +127,7 @@ pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, 
             },
         );
     }
-    if let Some(core_dir) = core_dir
+    if let Some(core_dir) = bundles.get("core")
         && !nodes.contains_key("core")
     {
         let manifest = core_dir.join(manifest::MANIFEST_FILE);
@@ -383,5 +400,31 @@ mod tests {
         assert!(within(Some("^0.0"), "0.0.9") && !within(Some("^0.0"), "0.1.0"));
         assert!(parse_constraint(Some("nope")).is_err());
         assert!(parse_constraint(Some("1.2.3.4")).is_err());
+    }
+
+    /// A `bundled = true` dependency loads from the bundle's directory, and
+    /// a build without that bundle refuses it by name.
+    #[test]
+    fn a_bundled_dependency_loads_from_its_bundle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tmp.path().join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(
+            app.join(manifest::MANIFEST_FILE),
+            r#"{ package.name = "app", dependencies.std = { bundled = true, version = "^0.1" } }"#,
+        )
+        .unwrap();
+        let bundle = tmp.path().join("cache/std-src/abc");
+        write_pkg(&bundle, "std", Some("0.1.0"), &[]);
+        let loaded = manifest::load(&app.join(manifest::MANIFEST_FILE)).unwrap();
+
+        let bundles = BTreeMap::from([("std".to_owned(), bundle.clone())]);
+        let graph = load_graph_with(&loaded, &bundles).unwrap();
+        assert_eq!(graph.nodes["app"].dependencies, ["std"]);
+        assert_eq!(graph.nodes["std"].dir, bundle.canonicalize().unwrap());
+        check(&graph).unwrap();
+
+        let err = load_graph(&loaded).unwrap_err();
+        assert!(err.contains("asks for the bundled package"), "{err}");
     }
 }

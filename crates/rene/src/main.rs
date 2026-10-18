@@ -31,7 +31,7 @@ use palc::Parser;
 use rene::cache::Cache;
 use rene::db::{self, BuildDir, CleanOutcome};
 use rene::shared::Shared;
-use rene::{compile, core_src, deps, exec, fresh, manifest, new, plan, pool, resolve, rt};
+use rene::{bundled, compile, deps, exec, fresh, manifest, new, plan, pool, resolve, rt};
 
 /// The default build directory name, next to the manifest.
 const BUILD_DIR: &str = "reussir-build";
@@ -387,8 +387,8 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // The dependencies every build shares (the core sources, the runtime
     // bake, core's compiled artifacts) live in the per-user cache.
     let cache = Cache::locate(&root);
-    let core_dir = core_src::unpack(&cache).await?;
-    let graph = resolve::load_graph_with(&loaded, Some(&core_dir))?;
+    let bundles = bundled::unpack_all(&cache).await?;
+    let graph = resolve::load_graph_with(&loaded, &bundles)?;
     if graph.nodes.len() > 1 {
         let solution = resolve::check(&graph)?;
         for (name, version) in &solution.pinned {
@@ -435,19 +435,10 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // One pool for the whole build: `-j` admission over the main event
     // loop, which monitors every child process.
     let pool = pool::Pool::new(args.jobs);
-    // Only the bundled core is shared: it is the same source in every
-    // build. (A package may bring its own `core` instead of the bundled one;
+    // Only the bundled packages are shared: they are the same source in
+    // every build. (A package may bring its own `core` or `std` by path;
     // that one is built locally like any other dependency.)
-    let shared = Shared::new(
-        cache,
-        graph
-            .nodes
-            .get("core")
-            .filter(|node| node.dir == core_dir)
-            .map(|_| ("core".to_owned(), core_src::content_hash()))
-            .into_iter()
-            .collect(),
-    );
+    let shared = Shared::new(cache, bundled::in_graph(&graph, &bundles));
 
     // The dependency pipeline: every node of the graph but the root, each
     // dispatched the moment its last dependency finishes, each freshness-
@@ -568,8 +559,8 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), String> {
     // The dependency-graph sections, on demand. One load serves all three;
     // `--solved` additionally requires the feasibility check to hold.
     if args.solved || args.graph || args.commands {
-        let core_dir = core_src::unpack(&Cache::locate(&root)).await?;
-        let graph = resolve::load_graph_with(&loaded, Some(&core_dir))?;
+        let bundles = bundled::unpack_all(&Cache::locate(&root)).await?;
+        let graph = resolve::load_graph_with(&loaded, &bundles)?;
         if args.solved {
             let solution = resolve::check(&graph)?;
             report["resolution"] = solution

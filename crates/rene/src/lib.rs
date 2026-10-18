@@ -10,12 +10,12 @@
 //! products of the manifest's declared targets ([`compile`]). Dependencies
 //! resolve over local paths ([`resolve`]), and `rene new` scaffolds a fresh
 //! package ([`new`]). What every build has in common — the bundled `core`
-//! sources ([`core_src`]), the runtime bake, and `core`'s compiled artifacts
-//! ([`shared`]) — lives once per user in the shared [`cache`].
+//! and `std` sources ([`bundled`]), the runtime bake, and their compiled
+//! artifacts ([`shared`]) — lives once per user in the shared [`cache`].
 
+pub mod bundled;
 pub mod cache;
 pub mod compile;
-pub mod core_src;
 pub mod db;
 pub mod deps;
 pub mod exec;

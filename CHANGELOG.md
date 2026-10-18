@@ -149,6 +149,13 @@
   the cargo bake when any earlier project used the same toolchain. If the
   cache cannot be created, rene warns and caches in the build directory.
 
+- `rene` bundles `std` alongside `core`. A package uses it with
+  `dependencies.std = { bundled = true, version = "^0.1" }` instead of a
+  path to `library/std`; it unpacks into the shared cache and is compiled
+  once per target, profile, and toolchain for every package that asks for
+  it. `bundled` is exclusive with `path`, and naming a package rene does not
+  bundle is a manifest error.
+
 ## 0.1.0
 
 The first tagged release of Reussir: an MLIR-based compiler framework for
