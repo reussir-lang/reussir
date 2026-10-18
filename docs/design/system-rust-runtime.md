@@ -141,6 +141,28 @@ the runtime is built for the resolved toolchain:
   "Building Reussir runtime (once per Rust toolchain)..." message.
   `rrc rt build` allows explicit prebuild in CI images/containers.
 
+**Status in `rene`.** `rene` implements this cache (`crates/rene/src/cache.rs`)
+for the bake it drives. The root is `dirs::cache_dir()/reussir`
+(`~/Library/Caches` on macOS, `%LOCALAPPDATA%` on Windows), overridable
+with `RENE_CACHE_DIR`. Entries are `<root>/<kind>/<key>`:
+
+- `rt/<key>`: the bake. The key hashes the bundle content, the target, the
+  rustc path and version, the cargo path, the allocator backend, and the
+  rustflags environment. The source unpacks into the entry, and cargo's
+  target directory stays inside it; `artifacts.json` (the `RtArtifacts`
+  record) is written atomically last and marks the entry complete.
+- `core-src/<content hash>`: the bundled core sources, unpacked into a
+  temporary sibling and renamed into place.
+- `deps/<key>`: core's compiled `.rri` and archive. The key hashes the
+  content, the planned `rrc` argv (build-directory paths abstracted), the
+  upstream artifact digests, the bake, and the `rrc` binary's identity.
+  Builds copy the files into their own `deps/`, so freshness and linking
+  are unchanged.
+
+Writers take an OS advisory lock on `<key>.lock`, then re-check the entry,
+so concurrent builds wait for one bake. A process that dies releases its
+lock. `rene prebake` plays the role of `rrc rt build` above.
+
 Everything downstream reads the manifest:
 
 - **Polyffi compiles** pass `--extern reussir_rt=<rlib>` and

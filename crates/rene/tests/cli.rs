@@ -52,6 +52,13 @@ fn write_manifest(dir: &Path, name: &str, version: &str) -> PathBuf {
 fn rene(args: &[&str]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_rene"));
     cmd.args(args);
+    // Keep the shared cache out of the user's home. Tests share this one;
+    // their fake toolchains live at distinct paths, which key distinct
+    // entries. Tests that inspect the cache point at their own.
+    cmd.env(
+        rene::cache::CACHE_DIR_ENV,
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join("rene-cache"),
+    );
     cmd
 }
 
@@ -180,6 +187,8 @@ struct Fakes {
     rustc: PathBuf,
     /// The libdir the fake `rustc` reports as its target libdir.
     libdir: PathBuf,
+    /// The shared cache [`Fakes::rene`] runs against.
+    cache: PathBuf,
 }
 
 #[cfg(unix)]
@@ -317,6 +326,7 @@ printf ']}\n'
             cargo,
             rustc,
             libdir,
+            cache: dir.join("cache"),
         }
     }
 
@@ -364,8 +374,30 @@ printf ']}\n'
             .arg(build_dir)
             .env("REUSSIR_RRC", &self.rrc)
             .env("REUSSIR_CARGO", &self.cargo)
-            .env("REUSSIR_RUSTC", &self.rustc))
+            .env("REUSSIR_RUSTC", &self.rustc)
+            .env(rene::cache::CACHE_DIR_ENV, &self.cache))
     }
+
+    /// The runtime bakes in the cache, one entry directory each.
+    fn rt_entries(&self) -> Vec<PathBuf> {
+        cache_entries(&self.cache.join("rt"))
+    }
+}
+
+/// The entry directories of one cache kind, sorted (lock files and
+/// temporaries excluded).
+#[cfg(unix)]
+fn cache_entries(kind: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(kind) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir() && !path.to_string_lossy().contains(".tmp-"))
+        .collect();
+    dirs.sort();
+    dirs
 }
 
 /// `rene inspect --frozen`'s report, parsed.
@@ -399,8 +431,15 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
     let target = "x86_64-unknown-fake";
-    let target_deps = root.join(format!("{target}/reussir-rt/target/{target}/release/deps"));
-    let host_deps = root.join(format!("{target}/reussir-rt/target/release/deps"));
+    // The bake lives in the shared cache, not the build directory.
+    let bakes = fakes.rt_entries();
+    assert_eq!(bakes.len(), 1, "{bakes:#?}");
+    let crate_dir = bakes[0].join("src/reussir-rt");
+    let target_deps = crate_dir.join(format!("target/{target}/release/deps"));
+    let host_deps = crate_dir.join("target/release/deps");
+    assert!(!root.join(target).exists());
+    assert!(bakes[0].join("artifacts.json").is_file());
+    assert!(fakes.cache.join("CACHEDIR.TAG").is_file());
     assert_eq!(
         lines,
         [
@@ -411,7 +450,7 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     );
 
     // The bundle really was unpacked, and the bake recorded.
-    assert!(root.join(target).join("reussir-rt/Cargo.toml").is_file());
+    assert!(crate_dir.join("Cargo.toml").is_file());
     let dir = BuildDir::open(&root).unwrap();
     assert!(
         dir.status(&tables::rt_source_hash_key(target))
@@ -452,6 +491,168 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     let out = with_alternate();
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(fakes.runs("cargo"), 2, "the new rustc path was not cached");
+}
+
+/// Builds of different packages in different build directories share one
+/// runtime bake and one core build through the cache; each build directory
+/// still gets its own copy of core's artifacts.
+#[cfg(unix)]
+#[test]
+fn packages_share_the_runtime_bake_and_core_through_the_cache() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let core_compiles = || {
+        fakes
+            .compiles()
+            .iter()
+            .filter(|line| line.contains("--package-name core"))
+            .count()
+    };
+
+    let mut built = Vec::new();
+    for name in ["first", "second"] {
+        let pkg = tmp.join(name);
+        let manifest = package(&pkg, name);
+        std::fs::write(
+            &manifest,
+            format!(
+                "{{ package = {{ name = \"{name}\", version = \"0.1.0\" }}, \
+                 targets.{name}.kind = 'executable }}\n"
+            ),
+        )
+        .unwrap();
+        let root = pkg.join("reussir-build");
+        let out = fakes.rene(&["build"], &manifest, &root);
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        built.push(root);
+    }
+    assert_eq!(fakes.runs("cargo"), 1, "the second package rebaked");
+    // Interface and archive, once for both packages.
+    assert_eq!(core_compiles(), 2, "{:#?}", fakes.compiles());
+    for root in &built {
+        assert!(
+            root.join("dev/deps/core.rri").is_file(),
+            "{}",
+            root.display()
+        );
+    }
+    assert_eq!(cache_entries(&fakes.cache.join("deps")).len(), 1);
+
+    // Another profile is another core build, and a deleted cached file
+    // makes the entry incomplete: rebuilt and republished, not trusted.
+    let manifest = tmp.join("first/rene.ncl");
+    let out = fakes.rene(&["build", "--profile", "release"], &manifest, &built[0]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(core_compiles(), 4);
+    let entries = cache_entries(&fakes.cache.join("deps"));
+    assert_eq!(entries.len(), 2);
+    for entry in &entries {
+        std::fs::remove_file(entry.join("core.rri")).unwrap();
+    }
+    std::fs::remove_dir_all(&built[1]).unwrap();
+    let out = fakes.rene(&["build"], &tmp.join("second/rene.ncl"), &built[1]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(core_compiles(), 6);
+    assert_eq!(fakes.runs("cargo"), 1);
+
+    // A runtime bake whose artifacts vanished is rebaked in place.
+    let bakes = fakes.rt_entries();
+    assert_eq!(bakes.len(), 1);
+    let record: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(bakes[0].join("artifacts.json")).unwrap())
+            .unwrap();
+    std::fs::remove_file(record["staticlib"].as_str().unwrap()).unwrap();
+    let out = fakes.rene(&["build"], &tmp.join("second/rene.ncl"), &built[1]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(fakes.runs("cargo"), 2, "a broken bake was trusted");
+    assert_eq!(fakes.rt_entries(), bakes);
+}
+
+/// `rene prebake` fills the cache, so a package's first build bakes and
+/// compiles nothing shared.
+#[cfg(unix)]
+#[test]
+fn prebake_warms_the_cache_for_later_builds() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+
+    let out = run(rene(&["prebake", "--target", "wasm32-wasip1"])
+        .env("REUSSIR_RRC", &fakes.rrc)
+        .env("REUSSIR_CARGO", &fakes.cargo)
+        .env("REUSSIR_RUSTC", &fakes.rustc)
+        .env(rene::cache::CACHE_DIR_ENV, &fakes.cache));
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap().trim(),
+        fakes.cache.display().to_string()
+    );
+    assert_eq!(fakes.runs("cargo"), 1);
+    // dev and release, interface and archive each.
+    assert_eq!(fakes.compiles().len(), 4, "{:#?}", fakes.compiles());
+    // The scratch package is gone.
+    assert!(std::fs::read_dir(&fakes.cache).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("prebake")
+    }),);
+
+    let pkg = tmp.join("pkg");
+    let manifest = package(&pkg, "pkg");
+    std::fs::write(
+        &manifest,
+        "{ package = { name = \"pkg\", version = \"0.1.0\" }, targets.pkg.kind = 'executable }\n",
+    )
+    .unwrap();
+    for profile in ["dev", "release"] {
+        let out = fakes.rene(
+            &["build", "--target", "wasm32-wasip1", "--profile", profile],
+            &manifest,
+            &pkg.join("reussir-build"),
+        );
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+    }
+    assert_eq!(fakes.runs("cargo"), 1, "the build rebaked");
+    assert_eq!(
+        fakes.compiles().len() - fakes.package_compiles().len(),
+        4,
+        "the build recompiled core: {:#?}",
+        fakes.compiles()
+    );
+}
+
+/// An unusable cache location is not fatal: the build warns and caches in
+/// its own build directory.
+#[cfg(unix)]
+#[test]
+fn an_unusable_cache_falls_back_to_the_build_directory() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let root = tmp.join("reussir-build");
+    let manifest = package(&tmp, "demo");
+    let fakes = Fakes::new(&tmp);
+    let blocker = tmp.join("not-a-directory");
+    std::fs::write(&blocker, "").unwrap();
+
+    let out = run(rene(&["build", "--manifest-path"])
+        .arg(&manifest)
+        .arg("--build-dir")
+        .arg(&root)
+        .env("REUSSIR_RRC", &fakes.rrc)
+        .env("REUSSIR_CARGO", &fakes.cargo)
+        .env("REUSSIR_RUSTC", &fakes.rustc)
+        .env(rene::cache::CACHE_DIR_ENV, blocker.join("cache")));
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("caching shared dependencies in"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(cache_entries(&root.join("cache/rt")).len(), 1);
+    assert!(root.join("cache/core-src").is_dir());
 }
 
 /// The profile supplies a default target, the CLI overrides it, and the two
@@ -495,8 +696,13 @@ fn build_resolves_the_target_and_keeps_each_runtime_bake() {
         root.join("dev/demo").display().to_string()
     );
 
+    // One cache entry per target.
+    let bakes = fakes.rt_entries();
+    assert_eq!(bakes.len(), 2, "{bakes:#?}");
+    for bake in &bakes {
+        assert!(bake.join("src/reussir-rt/Cargo.toml").is_file());
+    }
     for target in ["wasm32-unknown-unknown", override_target] {
-        assert!(root.join(target).join("reussir-rt/Cargo.toml").is_file());
         let dir = BuildDir::open(&root).unwrap();
         assert!(
             dir.status(&tables::rt_artifacts_key(target))

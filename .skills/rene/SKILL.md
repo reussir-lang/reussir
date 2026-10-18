@@ -44,6 +44,8 @@ rene build -j 4                   # cap the compile-process pool
 rene inspect --solved --graph     # dependency resolution + graph as JSON
 rene inspect --commands           # the rrc commands the build would run
 rene clean                        # delete the build directory
+rene prebake --target wasm32-wasip1  # fill the shared cache ahead of time
+                                  # (runtime bake + core, dev and release)
 ```
 
 Both commands take `--manifest-path` and `--build-dir`; by default rene finds
@@ -51,6 +53,15 @@ the nearest `rene.ncl` at or above the current directory and builds into
 `reussir-build/` next to it. Artifact paths are printed on stdout (progress
 goes to stderr); a package declaring no targets stops after the runtime bake
 and prints the library directories to pass to `rrc --polyffi-libdir` by hand.
+
+The runtime bake, the bundled `core` sources, and core's compiled artifacts
+are shared by every build through a per-user cache: `$XDG_CACHE_HOME/reussir`
+(or `~/.cache/reussir`) on Linux, `~/Library/Caches/reussir` on macOS, and
+`%LOCALAPPDATA%\reussir` on Windows. Set `RENE_CACHE_DIR` to use another
+directory; the lit suites point it at `build/tests/integration/rene-cache`.
+Entries are keyed by content, target, and toolchain, built under a file
+lock (a second rene waits and says so), and safe to delete while no rene
+runs. `rene clean` does not touch the cache.
 
 `rene` shells out to `rrc`, `cargo`, and `rustc`; set `REUSSIR_RRC`,
 `REUSSIR_CARGO`, or `REUSSIR_RUSTC` to pin specific binaries (otherwise

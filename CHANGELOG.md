@@ -134,6 +134,24 @@
   purely diagnostic and runs after all rc optimization passes, so the
   observed count is the final one.
 
+### Tooling
+
+- `rene` keeps the dependencies every build shares in a per-user cache
+  instead of each build directory: the bundled `core` sources, the
+  `reussir-rt` bake, and `core`'s compiled interface and archive. The cache
+  is `$XDG_CACHE_HOME/reussir` (`~/.cache/reussir`) on Linux,
+  `~/Library/Caches/reussir` on macOS, and `%LOCALAPPDATA%\reussir` on
+  Windows; `RENE_CACHE_DIR` overrides it. Entries are keyed by content,
+  target, toolchain, and (for core) the profile's flags and the `rrc`
+  binary, built under an advisory file lock that a concurrent rene waits on
+  with a message, and published atomically, so an interrupted bake is
+  redone rather than trusted. A new project's first build therefore skips
+  the cargo bake when any earlier project used the same toolchain. If the
+  cache cannot be created, rene warns and caches in the build directory.
+- `rene prebake [--target TRIPLE]... [--profile NAME]...` fills the cache
+  ahead of time (the runtime bake, and core under `dev` and `release` by
+  default), for CI images and containers.
+
 ## 0.1.0
 
 The first tagged release of Reussir: an MLIR-based compiler framework for
