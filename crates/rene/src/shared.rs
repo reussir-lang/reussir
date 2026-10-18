@@ -1,6 +1,6 @@
 //! Compiled artifacts of the bundled packages, shared through the cache.
 //!
-//! A bundled package (today only `core`) is the same source in every build,
+//! A bundled package (`core`, `std`) is the same source in every build,
 //! so compiling it again in each build directory is wasted work. When the
 //! dependency pipeline has to build one, it first takes the package's
 //! [`Cache`] entry lock and looks for a complete entry. If it finds one, it

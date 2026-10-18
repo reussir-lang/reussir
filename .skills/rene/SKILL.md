@@ -18,6 +18,7 @@ sources under `src/` (`src/lib.rr` is the root module). A minimal manifest:
     version = "1.0.0",
   },
   dependencies = {
+    std = { bundled = true, version = "^0.1" },
     textio = { path = "vendor/textio", version = "^0.5" },
   },
   targets = {
@@ -52,8 +53,12 @@ the nearest `rene.ncl` at or above the current directory and builds into
 goes to stderr); a package declaring no targets stops after the runtime bake
 and prints the library directories to pass to `rrc --polyffi-libdir` by hand.
 
-The runtime bake, the bundled `core` sources, and core's compiled artifacts
-are shared by every build through a per-user cache: `$XDG_CACHE_HOME/reussir`
+`core` is bundled inside rene and injected into every package (opt out with
+`package.no_core`). `std` is bundled too, but opt-in: `bundled = true`
+instead of a `path`. Both are packed from `library/` when rene is built.
+
+The runtime bake, the bundled `core` and `std` sources, and their compiled
+artifacts are shared by every build through a per-user cache: `$XDG_CACHE_HOME/reussir`
 (or `~/.cache/reussir`) on Linux, `~/Library/Caches/reussir` on macOS, and
 `%LOCALAPPDATA%\reussir` on Windows. Set `RENE_CACHE_DIR` to use another
 directory; the lit suites point it at `build/tests/integration/rene-cache`.
