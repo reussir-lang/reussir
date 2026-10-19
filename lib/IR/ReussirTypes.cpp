@@ -1270,11 +1270,19 @@ MLIR_DATA_LAYOUT_EXPAND_PREFERRED_ALIGN(
 mlir::LogicalResult
 ConstSeqType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
                      mlir::Type elementType) {
-  if (!llvm::isa<mlir::IntegerType, mlir::FloatType>(elementType))
-    return emitError() << "const_seq element type must be an integer or "
-                          "floating-point type, got "
-                       << elementType;
-  return mlir::success();
+  if (llvm::isa<mlir::IntegerType, mlir::FloatType, ConstSeqType>(elementType))
+    return mlir::success();
+  // A record element is stored inline, so it must be a value record. An
+  // incomplete record has no capability yet; the global holding the data
+  // checks the completed layout (see `ReussirConstSeqGlobalOp::verify`).
+  if (auto record = llvm::dyn_cast<RecordType>(elementType);
+      record && (!record.getComplete() ||
+                 record.getDefaultCapability() == Capability::value))
+    return mlir::success();
+  return emitError() << "const_seq element type must be an integer, a "
+                        "floating-point type, a const_seq, or a value "
+                        "record, got "
+                     << elementType;
 }
 
 //===----------------------------------------------------------------------===//

@@ -4416,12 +4416,139 @@ mlir::LogicalResult ReussirStrCastOp::verify() {
 //===----------------------------------------------------------------------===//
 // ConstSeq operations
 //===----------------------------------------------------------------------===//
+// A constant value of `type` as an attribute (see the global op's
+// description), checked structurally; `checkRef` sees each nested sequence
+// reference with its expected sequence type.
+static mlir::LogicalResult verifyConstantValue(
+    mlir::Attribute value, mlir::Type type,
+    llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+    llvm::function_ref<mlir::LogicalResult(mlir::FlatSymbolRefAttr,
+                                           ConstSeqType)>
+        checkRef) {
+  if (llvm::isa<mlir::IntegerType, mlir::FloatType>(type)) {
+    auto typed = llvm::dyn_cast<mlir::TypedAttr>(value);
+    if (!typed || typed.getType() != type ||
+        !llvm::isa<mlir::IntegerAttr, mlir::FloatAttr>(value))
+      return emitError() << "expected a " << type << " constant, got " << value;
+    return mlir::success();
+  }
+  if (auto seq = llvm::dyn_cast<ConstSeqType>(type)) {
+    auto ref = llvm::dyn_cast<mlir::FlatSymbolRefAttr>(value);
+    if (!ref)
+      return emitError() << "expected the symbol of a " << seq
+                         << " global, got " << value;
+    return checkRef(ref, seq);
+  }
+  auto record = llvm::dyn_cast<RecordType>(type);
+  if (!record || !record.getComplete() ||
+      record.getDefaultCapability() != Capability::value)
+    return emitError() << "type " << type << " has no constant form";
+  auto fields = llvm::dyn_cast<mlir::ArrayAttr>(value);
+  if (!fields)
+    return emitError() << "expected a " << type << " value as an array, got "
+                       << value;
+  auto members = record.getMembers();
+  auto memberIsField = record.getMemberIsField();
+  if (record.isVariant()) {
+    auto tag = fields.size() == 2 ? llvm::dyn_cast<mlir::IntegerAttr>(fields[0])
+                                  : mlir::IntegerAttr{};
+    if (!tag)
+      return emitError() << "expected a variant value as [tag, arm], got "
+                         << value;
+    uint64_t index = tag.getValue().getZExtValue();
+    if (tag.getValue().isNegative() || index >= members.size())
+      return emitError() << "variant tag " << tag << " is out of "
+                         << members.size() << " arms";
+    mlir::Type arm = getProjectedType(members[index], memberIsField[index],
+                                      Capability::value);
+    return verifyConstantValue(fields[1], arm, emitError, checkRef);
+  }
+  if (fields.size() != members.size())
+    return emitError() << "expected " << members.size()
+                       << " member value(s) for " << type << ", got "
+                       << fields.size();
+  for (auto [field, member, isField] :
+       llvm::zip(fields, members, memberIsField)) {
+    mlir::Type memberType =
+        getProjectedType(member, isField, Capability::value);
+    if (mlir::failed(
+            verifyConstantValue(field, memberType, emitError, checkRef)))
+      return mlir::failure();
+  }
+  return mlir::success();
+}
+
+ConstSeqType ReussirConstSeqGlobalOp::getSequenceType() {
+  if (auto type = getSeqType())
+    return *type;
+  auto payload = llvm::cast<mlir::DenseElementsAttr>(getPayload());
+  return ConstSeqType::get(getContext(), payload.getElementType());
+}
+
+uint64_t ReussirConstSeqGlobalOp::getLength() {
+  if (auto dense = llvm::dyn_cast<mlir::DenseElementsAttr>(getPayload()))
+    return dense.getNumElements();
+  return llvm::cast<mlir::ArrayAttr>(getPayload()).size();
+}
+
 mlir::LogicalResult ReussirConstSeqGlobalOp::verify() {
-  auto payload = llvm::dyn_cast<mlir::DenseElementsAttr>(getPayload());
-  if (!payload || payload.getType().getRank() != 1)
-    return emitOpError("payload must be a rank-1 dense elements attribute");
-  return ConstSeqType::verify([&] { return emitOpError(); },
-                              payload.getElementType());
+  auto emitError = [&] { return emitOpError(); };
+  if (auto dense = llvm::dyn_cast<mlir::DenseElementsAttr>(getPayload())) {
+    if (dense.getType().getRank() != 1)
+      return emitOpError("dense payload must have rank 1");
+    mlir::Type element = dense.getElementType();
+    if (!llvm::isa<mlir::IntegerType, mlir::FloatType>(element))
+      return emitOpError("dense payload must hold integer or floating-point "
+                         "elements, got ")
+             << element;
+    if (getSeqType() && getSeqType()->getElementType() != element)
+      return emitOpError("dense payload element type ")
+             << element << " does not match " << *getSeqType();
+    return mlir::success();
+  }
+  auto elements = llvm::dyn_cast<mlir::ArrayAttr>(getPayload());
+  if (!elements)
+    return emitOpError("payload must be a rank-1 dense elements attribute or "
+                       "an array of constant values");
+  if (!getSeqType())
+    return emitOpError("an array payload requires the sequence type");
+  // Symbol references are resolved in `verifySymbolUses`.
+  auto acceptRef = [](mlir::FlatSymbolRefAttr,
+                      ConstSeqType) -> mlir::LogicalResult {
+    return mlir::success();
+  };
+  for (mlir::Attribute element : elements)
+    if (mlir::failed(verifyConstantValue(element, getElementType(), emitError,
+                                         acceptRef)))
+      return mlir::failure();
+  return mlir::success();
+}
+
+mlir::LogicalResult ReussirConstSeqGlobalOp::verifySymbolUses(
+    mlir::SymbolTableCollection &symbolTable) {
+  auto elements = llvm::dyn_cast<mlir::ArrayAttr>(getPayload());
+  if (!elements)
+    return mlir::success();
+  auto checkRef = [&](mlir::FlatSymbolRefAttr ref,
+                      ConstSeqType expected) -> mlir::LogicalResult {
+    auto global = symbolTable.lookupNearestSymbolFrom<ReussirConstSeqGlobalOp>(
+        getOperation(), ref);
+    if (!global)
+      return emitOpError(
+                 "referenced symbol is not a reussir.const_seq.global: ")
+             << ref;
+    if (global.getSequenceType() != expected)
+      return emitOpError("nested sequence ")
+             << ref << " has type " << global.getSequenceType() << ", expected "
+             << expected;
+    return mlir::success();
+  };
+  for (mlir::Attribute element : elements)
+    if (mlir::failed(verifyConstantValue(
+            element, getElementType(), [&] { return emitOpError(); },
+            checkRef)))
+      return mlir::failure();
+  return mlir::success();
 }
 
 mlir::LogicalResult ReussirConstSeqLiteralOp::verifySymbolUses(
@@ -4431,10 +4558,9 @@ mlir::LogicalResult ReussirConstSeqLiteralOp::verifySymbolUses(
   if (!global)
     return emitOpError("referenced symbol is not a reussir.const_seq.global: ")
            << getSymNameAttr();
-  mlir::Type payloadElement = global.getPayload().getElementType();
-  if (payloadElement != getSeq().getType().getElementType())
-    return emitOpError("element type does not match the global payload: ")
-           << payloadElement;
+  if (global.getSequenceType() != getSeq().getType())
+    return emitOpError("type does not match the global's ")
+           << global.getSequenceType();
   return mlir::success();
 }
 
@@ -4446,7 +4572,7 @@ ReussirConstSeqGetOp::getSpeculatability() {
   auto global =
       mlir::SymbolTable::lookupNearestSymbolFrom<ReussirConstSeqGlobalOp>(
           literal, literal.getSymNameAttr());
-  return global && isIndexInRange(getIndex(), global.getPayload().size())
+  return global && isIndexInRange(getIndex(), global.getLength())
              ? mlir::Speculation::Speculatable
              : mlir::Speculation::NotSpeculatable;
 }

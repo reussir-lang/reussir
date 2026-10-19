@@ -2719,18 +2719,47 @@ def ReussirStrCompareOp : ReussirStrOp<"compare", [Pure]> {
 class ReussirConstSeqOp<string mnemonic, list<Trait> traits>
     : ReussirOp<"const_seq."#mnemonic, traits>;
 
-def ReussirConstSeqGlobalOp : ReussirConstSeqOp<"global", [Symbol]> {
+def ReussirConstSeqGlobalOp
+    : ReussirConstSeqOp<"global", [Symbol, DeclareOpInterfaceMethods<
+                                               SymbolUserOpInterface>]> {
   let summary = "Create a global constant sequence";
   let description = [{
     `reussir.const_seq.global` creates an immutable static array holding the
-    elements of `payload`, a rank-1 dense integer or floating-point
-    attribute.
+    elements of `payload`. A sequence of integer or floating-point scalars
+    is a rank-1 dense attribute, which also determines the sequence type:
+
+    ```mlir
+    reussir.const_seq.global @ints = dense<[1, 2]> : tensor<2xi64>
+    ```
+
+    A sequence of aggregates names its type and lists its elements in an
+    array attribute. Each element follows the element type: a scalar is a
+    typed integer or float attribute; a nested sequence is the symbol of the
+    `reussir.const_seq.global` holding its elements, whose element type must
+    match; a compound value record is an array of its member values in
+    member order; a variant value record is a two-element array of its tag
+    and the arm's compound value.
+
+    ```mlir
+    reussir.const_seq.global @rows : !reussir.const_seq<!reussir.const_seq<i64>> = [@ints, @ints]
+    reussir.const_seq.global @tiles : !reussir.const_seq<!tile> = [[@ints, true], [@ints, false]]
+    reussir.const_seq.global @layouts : !reussir.const_seq<!layout> = [[0, []], [1, [[@ints, true]]]]
+    ```
   }];
-  let arguments = (ins SymbolNameAttr:$sym_name, ElementsAttr:$payload);
+  let arguments = (ins SymbolNameAttr:$sym_name,
+      OptionalAttr<TypeAttrOf<ReussirConstSeqType>>:$seq_type,
+      AnyAttr:$payload);
   let assemblyFormat = [{
-    $sym_name `=` $payload attr-dict
+    $sym_name (`:` $seq_type^)? `=` $payload attr-dict
   }];
   let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    /// The sequence type: `seq_type` when given, else the dense payload's.
+    ::reussir::ConstSeqType getSequenceType();
+    mlir::Type getElementType() { return getSequenceType().getElementType(); }
+    /// The number of elements.
+    uint64_t getLength();
+  }];
 }
 
 def ReussirConstSeqLiteralOp

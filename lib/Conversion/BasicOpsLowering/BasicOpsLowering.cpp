@@ -3278,7 +3278,9 @@ struct ReussirConstSeqGlobalOpConversionPattern
   mlir::LogicalResult
   matchAndRewrite(ReussirConstSeqGlobalOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    auto payload = llvm::cast<mlir::DenseElementsAttr>(op.getPayload());
+    auto payload = llvm::dyn_cast<mlir::DenseElementsAttr>(op.getPayload());
+    if (!payload)
+      return op.emitOpError("aggregate constant sequences do not lower yet");
     auto arrayType = mlir::LLVM::LLVMArrayType::get(payload.getElementType(),
                                                     payload.getNumElements());
     rewriter.replaceOpWithNewOp<mlir::LLVM::GlobalOp>(
