@@ -91,6 +91,33 @@ const TOTAL: &str = "total";
 /// How often a session retries a ledger another session has open.
 const OPEN_POLL: Duration = Duration::from_millis(10);
 
+/// One pruner at a time: tried, never waited on.
+const PRUNE_LOCK: &str = "prune.lock";
+
+/// When this session prunes on its own: after registering an entry that
+/// takes the total over `limit`, it removes entries unused for `max_age`.
+/// Either `None` turns that off; [`Session::prune`] still works on demand.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Policy {
+    pub limit: Option<u64>,
+    pub max_age: Option<Duration>,
+}
+
+/// What a prune did, or (dry run) would do.
+#[derive(Debug, Default)]
+pub struct Pruned {
+    /// `<kind>/<key>` and size of every entry removed.
+    pub removed: Vec<(String, u64)>,
+    /// Aged entries kept because a running build pins them.
+    pub in_use: usize,
+    /// Live entries kept because they were used recently.
+    pub recent: usize,
+    /// The ledger's total afterwards.
+    pub total: u64,
+    /// Another session was pruning: nothing was done.
+    pub skipped: bool,
+}
+
 /// An entry row's state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -174,6 +201,7 @@ pub struct Session {
     /// Set by [`Session::abandon`] (tests): leave everything behind, as a
     /// crash would.
     abandoned: Cell<bool>,
+    policy: Policy,
 }
 
 impl Session {
@@ -181,10 +209,20 @@ impl Session {
     /// session row. Never fails: a ledger that cannot be used leaves the
     /// session disabled, with a warning.
     pub async fn start(cache: &Cache) -> Session {
-        Self::start_as(cache, &format!("{}-{:x}", std::process::id(), now_nanos())).await
+        Self::start_with(cache, Policy::default()).await
     }
 
-    async fn start_as(cache: &Cache, id: &str) -> Session {
+    /// [`Session::start`], pruning automatically as `policy` says.
+    pub async fn start_with(cache: &Cache, policy: Policy) -> Session {
+        Self::start_as(
+            cache,
+            &format!("{}-{:x}", std::process::id(), now_nanos()),
+            policy,
+        )
+        .await
+    }
+
+    async fn start_as(cache: &Cache, id: &str, policy: Policy) -> Session {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -196,6 +234,7 @@ impl Session {
             runtime,
             enabled: Cell::new(true),
             abandoned: Cell::new(false),
+            policy,
         };
         match take_session_lock(&session.root, id) {
             Ok(lock) => session.lock = Some(lock),
@@ -311,10 +350,29 @@ impl Session {
         })
     }
 
-    /// The entry is published: mark it live with its `size` on disk. Returns
-    /// the ledger's new total, which the caller may compare with the size
-    /// limit. The pin taken at lookup stays.
+    /// The entry is published: mark it live with its `size` on disk, and
+    /// prune if that takes the total over the session's [`Policy`] limit.
+    /// Returns the ledger's total. The pin taken at lookup stays.
     pub async fn register(&self, kind: &str, key: &str, size: u64) -> u64 {
+        let total = self.register_only(kind, key, size).await;
+        if let (Some(limit), Some(max_age)) = (self.policy.limit, self.policy.max_age)
+            && total > limit
+        {
+            match self.prune(max_age, false).await {
+                Ok(pruned) if pruned.removed.is_empty() => {}
+                Ok(pruned) => tracing::info!(
+                    "cache over {}: removed {} unused for more than {}",
+                    human_size(limit),
+                    pruned.summary(),
+                    human_age(max_age)
+                ),
+                Err(e) => tracing::warn!("cannot prune the cache: {e}"),
+            }
+        }
+        total
+    }
+
+    async fn register_only(&self, kind: &str, key: &str, size: u64) -> u64 {
         let kk = kk(kind, key);
         let id = self.id.clone();
         self.transact(move |view| {
@@ -353,6 +411,127 @@ impl Session {
                 Ok(())
             })
             .await;
+    }
+
+    /// Remove every live entry unused for `max_age` that no running build
+    /// pins (this session's own pins included). `dry_run` only reports.
+    ///
+    /// Victims are first marked `pruning` in one transaction, then removed
+    /// one per transaction: the row is re-read and, if still this session's
+    /// to prune, the directory is renamed out inside the transaction and
+    /// the row deleted in the same batch. A victim another session reclaimed
+    /// meanwhile reads as live and is skipped. The renamed-out trees are
+    /// deleted afterwards, outside any lock, along with any left over from a
+    /// pruner that crashed.
+    pub async fn prune(&self, max_age: Duration, dry_run: bool) -> Result<Pruned, String> {
+        let Some(_one_at_a_time) = take_prune_lock(&self.root)? else {
+            return Ok(Pruned {
+                skipped: true,
+                ..Pruned::default()
+            });
+        };
+        let (victims, mut pruned) = self.mark(max_age, dry_run).await?;
+        if dry_run {
+            pruned.removed = victims;
+            return Ok(pruned);
+        }
+        let mut trash = Vec::new();
+        for (kk, size) in victims {
+            if let Some(dest) = self.remove_marked(&kk).await? {
+                pruned.removed.push((kk, size));
+                trash.push(dest);
+            }
+        }
+        pruned.total = self.transact(|view| Ok(view.total)).await?;
+        for dir in trash {
+            if let Err(e) = std::fs::remove_dir_all(&dir) {
+                tracing::debug!("cannot delete `{}`: {e}", dir.display());
+            }
+        }
+        sweep_trash(&self.root);
+        Ok(pruned)
+    }
+
+    /// Flip the eligible entries to `pruning` (unless `dry_run`), and count
+    /// what is kept and why. Returns the victims with their sizes.
+    async fn mark(
+        &self,
+        max_age: Duration,
+        dry_run: bool,
+    ) -> Result<(Vec<(String, u64)>, Pruned), String> {
+        let id = self.id.clone();
+        self.transact(move |view| {
+            let cutoff = view.now.saturating_sub(max_age.as_secs());
+            let pinned: BTreeSet<&str> = view.pins.iter().map(|(_, kk)| kk.as_str()).collect();
+            let mut victims = Vec::new();
+            let mut pruned = Pruned::default();
+            for (kk, entry) in &view.entries {
+                if entry.state != State::Live {
+                    continue;
+                }
+                if entry.last_used > cutoff {
+                    pruned.recent += 1;
+                } else if pinned.contains(kk.as_str()) {
+                    pruned.in_use += 1;
+                } else {
+                    victims.push((kk.clone(), entry.size));
+                }
+            }
+            if !dry_run {
+                for (kk, size) in &victims {
+                    let entry = view.entries[kk].clone();
+                    view.set_entry(
+                        kk,
+                        Entry {
+                            state: State::Pruning,
+                            owner: Some(id.clone()),
+                            ..entry
+                        },
+                    );
+                    view.total = view.total.saturating_sub(*size);
+                }
+                view.set_total();
+            }
+            pruned.total = view.total;
+            Ok((victims, pruned))
+        })
+        .await
+    }
+
+    /// Remove one marked victim, if it is still ours to remove. Returns
+    /// where its directory went, for deletion outside the transaction.
+    async fn remove_marked(&self, kk: &str) -> Result<Option<PathBuf>, String> {
+        let id = self.id.clone();
+        let kk = kk.to_owned();
+        self.transact(move |view| {
+            let Some(entry) = view.entries.get(&kk).cloned() else {
+                return Ok(None);
+            };
+            if entry.state != State::Pruning || entry.owner.as_deref() != Some(&id) {
+                // Reclaimed by a session that asked for it meanwhile.
+                return Ok(None);
+            }
+            let dir = view.entry_dir(&kk);
+            let dest = trash_sibling(&dir);
+            match std::fs::rename(&dir, &dest) {
+                Ok(()) => {
+                    view.remove_entry(&kk);
+                    Ok(Some(dest))
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    view.remove_entry(&kk);
+                    Ok(None)
+                }
+                Err(e) => {
+                    // Transient on Windows (a scanner holding a handle):
+                    // keep the entry, try again another time.
+                    tracing::debug!("cannot move `{}` out of the cache: {e}", dir.display());
+                    view.revive(&kk, entry);
+                    Ok(None)
+                }
+            }
+        })
+        .await
     }
 
     /// A copy of the ledger, after reaping.
@@ -802,6 +981,98 @@ fn lock_if_dead(path: &Path) -> Option<Option<File>> {
     }
 }
 
+/// Take the prune lock if free: `None` when another session is pruning.
+fn take_prune_lock(root: &Path) -> Result<Option<File>, String> {
+    let path = root.join(PRUNE_LOCK);
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| format!("cannot open `{}`: {e}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(e)) => Err(format!("cannot lock `{}`: {e}", path.display())),
+    }
+}
+
+/// Where a victim directory is renamed before deletion: a sibling whose
+/// name no lookup ever forms.
+fn trash_sibling(dir: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut name = dir.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(
+        ".rm-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    dir.with_file_name(name)
+}
+
+/// Delete renamed-out trees a crashed pruner left behind. Nothing refers to
+/// them, so deleting one twice is harmless.
+fn sweep_trash(root: &Path) {
+    let Ok(kinds) = std::fs::read_dir(root) else {
+        return;
+    };
+    for kind in kinds.flatten() {
+        let Ok(entries) = std::fs::read_dir(kind.path()) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().contains(".rm-") && entry.path().is_dir() {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+}
+
+impl Pruned {
+    /// "3 entries (1.2 GiB)".
+    pub fn summary(&self) -> String {
+        let bytes: u64 = self.removed.iter().map(|(_, size)| size).sum();
+        let n = self.removed.len();
+        format!(
+            "{n} {} ({})",
+            if n == 1 { "entry" } else { "entries" },
+            human_size(bytes)
+        )
+    }
+}
+
+/// `1.5 GiB`, `312 MiB`, `17 KiB`, `9 B`.
+pub fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+/// `120 days`, `36 hours`, `90 seconds`.
+pub fn human_age(age: Duration) -> String {
+    let secs = age.as_secs();
+    let (n, unit) = if secs >= 86_400 && secs.is_multiple_of(86_400) {
+        (secs / 86_400, "day")
+    } else if secs >= 3600 && secs.is_multiple_of(3600) {
+        (secs / 3600, "hour")
+    } else if secs >= 60 && secs.is_multiple_of(60) {
+        (secs / 60, "minute")
+    } else {
+        (secs, "second")
+    };
+    format!("{n} {unit}{}", if n == 1 { "" } else { "s" })
+}
+
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -815,20 +1086,20 @@ fn now_nanos() -> u128 {
 }
 
 #[cfg(test)]
-mod tests {
+mod tests_support {
     use super::*;
 
-    fn block_on<T>(fut: impl Future<Output = T>) -> T {
+    pub fn block_on<T>(fut: impl Future<Output = T>) -> T {
         compio::runtime::Runtime::new().unwrap().block_on(fut)
     }
 
-    fn cache(tmp: &Path) -> Cache {
+    pub fn cache(tmp: &Path) -> Cache {
         Cache::at(tmp.join("cache")).unwrap()
     }
 
     /// Build `<kind>/<key>` as `session` would: look it up, take the build
     /// lock, recheck, create the directory, register it.
-    async fn build(cache: &Cache, session: &Session, kind: &str, key: &str, size: u64) {
+    pub async fn build(cache: &Cache, session: &Session, kind: &str, key: &str, size: u64) {
         let dir = cache.entry(kind, key);
         assert_eq!(session.lookup(kind, key, &dir).await, Lookup::Build);
         let _lock = cache.lock(kind, key, "testing", |_| {}).await.unwrap();
@@ -840,6 +1111,12 @@ mod tests {
         std::fs::write(dir.join("marker"), "x".repeat(size as usize)).unwrap();
         session.register(kind, key, size).await;
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tests_support::*;
+    use super::*;
 
     #[test]
     fn an_entry_is_built_once_then_used_by_everyone() {
@@ -935,7 +1212,7 @@ mod tests {
             // was building (directory half written), one it was pruning
             // whose directory survives, and one it was pruning whose
             // directory is gone.
-            let dead = Session::start_as(&cache, "dead").await;
+            let dead = Session::start_as(&cache, "dead", Policy::default()).await;
             build(&cache, &dead, "k", "used", 1).await;
             build(&cache, &dead, "k", "kept", 2).await;
             build(&cache, &dead, "k", "gone", 3).await;
@@ -994,7 +1271,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cache = cache(tmp.path());
         block_on(async {
-            let dead = Session::start_as(&cache, "dead").await;
+            let dead = Session::start_as(&cache, "dead", Policy::default()).await;
             let dir = cache.entry("k", "e");
             assert_eq!(dead.lookup("k", "e", &dir).await, Lookup::Build);
             {
@@ -1044,5 +1321,128 @@ mod tests {
             assert_eq!(s.recheck("k", "e", &dir, true).await, Recheck::Live);
             assert_eq!(s.register("k", "e", 1).await, 0);
         });
+    }
+}
+
+#[cfg(test)]
+mod prune_tests {
+    use super::tests_support::*;
+    use super::*;
+
+    /// Make `<kind>/<key>` look unused for a year.
+    async fn age(session: &Session, kk: &str) {
+        let kk = kk.to_owned();
+        session
+            .transact(move |view| {
+                let mut entry = view.entries[&kk].clone();
+                entry.last_used = view.now - 365 * 86_400;
+                view.set_entry(&kk, entry);
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn prune_removes_aged_entries_nobody_pins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = cache(tmp.path());
+        block_on(async {
+            let a = Session::start(&cache).await;
+            build(&cache, &a, "k", "old", 10).await;
+            build(&cache, &a, "k", "new", 20).await;
+            build(&cache, &a, "k", "mine", 30).await;
+            build(&cache, &a, "k", "theirs", 40).await;
+            for key in ["old", "new", "theirs"] {
+                a.unpin("k", key).await;
+            }
+            for key in ["old", "mine", "theirs"] {
+                age(&a, &format!("k/{key}")).await;
+            }
+            let b = Session::start(&cache).await;
+            assert_eq!(
+                b.lookup("k", "theirs", &cache.entry("k", "theirs")).await,
+                Lookup::Live
+            );
+            // `b`'s lookup refreshed `theirs`; age it again so the pin alone
+            // protects it.
+            age(&a, "k/theirs").await;
+
+            let dry = a
+                .prune(Duration::from_secs(30 * 86_400), true)
+                .await
+                .unwrap();
+            assert_eq!(dry.removed, vec![("k/old".to_owned(), 10)]);
+            assert_eq!((dry.in_use, dry.recent), (2, 1));
+            assert!(cache.entry("k", "old").is_dir());
+
+            let pruned = a
+                .prune(Duration::from_secs(30 * 86_400), false)
+                .await
+                .unwrap();
+            assert_eq!(pruned.removed, vec![("k/old".to_owned(), 10)]);
+            assert_eq!(pruned.total, 20 + 30 + 40);
+            assert!(!pruned.skipped);
+            assert!(!cache.entry("k", "old").exists());
+            let leftovers: Vec<_> = std::fs::read_dir(cache.root().join("k"))
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.contains(".rm-"))
+                .collect();
+            assert!(leftovers.is_empty(), "{leftovers:?}");
+            let snap = a.snapshot().await.unwrap();
+            assert_eq!(snap.entries.len(), 3);
+            assert!(snap.entries.values().all(|e| e.state == State::Live));
+            assert_eq!(snap.total, 90);
+        });
+    }
+
+    #[test]
+    fn a_victim_reclaimed_between_mark_and_remove_survives() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = cache(tmp.path());
+        block_on(async {
+            let a = Session::start(&cache).await;
+            build(&cache, &a, "k", "e", 5).await;
+            a.unpin("k", "e").await;
+            age(&a, "k/e").await;
+            let (victims, _) = a.mark(Duration::ZERO, false).await.unwrap();
+            assert_eq!(victims, vec![("k/e".to_owned(), 5)]);
+            assert_eq!(a.snapshot().await.unwrap().total, 0);
+
+            let b = Session::start(&cache).await;
+            assert_eq!(
+                b.lookup("k", "e", &cache.entry("k", "e")).await,
+                Lookup::Live
+            );
+            assert_eq!(a.remove_marked("k/e").await.unwrap(), None);
+            assert!(cache.entry("k", "e").is_dir());
+            let snap = a.snapshot().await.unwrap();
+            assert_eq!(snap.entries["k/e"].state, State::Live);
+            assert_eq!(snap.total, 5);
+        });
+    }
+
+    #[test]
+    fn only_one_session_prunes_at_a_time() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = cache(tmp.path());
+        block_on(async {
+            let a = Session::start(&cache).await;
+            let _held = take_prune_lock(cache.root()).unwrap().unwrap();
+            let pruned = a.prune(Duration::ZERO, false).await.unwrap();
+            assert!(pruned.skipped);
+        });
+    }
+
+    #[test]
+    fn sizes_and_ages_read_well() {
+        assert_eq!(human_size(9), "9 B");
+        assert_eq!(human_size(17 * 1024), "17.0 KiB");
+        assert_eq!(human_size(3 * 1024 * 1024 * 1024 / 2), "1.5 GiB");
+        assert_eq!(human_age(Duration::from_secs(120 * 86_400)), "120 days");
+        assert_eq!(human_age(Duration::from_secs(3600)), "1 hour");
+        assert_eq!(human_age(Duration::from_secs(90)), "90 seconds");
     }
 }

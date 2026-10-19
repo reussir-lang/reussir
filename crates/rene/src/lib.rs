@@ -16,6 +16,7 @@
 
 pub mod cache;
 pub mod compile;
+pub mod config;
 pub mod core_src;
 pub mod db;
 pub mod deps;

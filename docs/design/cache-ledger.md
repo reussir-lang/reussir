@@ -11,9 +11,8 @@ wanted.
 
 This document describes the ledger that records those facts, and the prune
 protocol built on it. The protocol is specified and model-checked in
-`cache-prune/CachePrune.tla`. The ledger itself is implemented in
-`crates/rene/src/ledger.rs`; pruning and its configuration follow in a
-separate change.
+`cache-prune/CachePrune.tla` and implemented in `crates/rene/src/ledger.rs`;
+its settings come from the user configuration (`crates/rene/src/config.rs`).
 
 ## Goals
 
@@ -96,17 +95,42 @@ directory, so their entry is unpinned right after the copy. Entries used in
 place (the bake, the core sources) stay pinned until the session ends, which
 drops all its pins and its row.
 
-**Prune** (next change). Only when the total is over the limit, and only one
-pruner at a time (`<root>/prune.lock`, tried, never waited on). In one open,
-the pruner selects `live` rows past the age limit with no pin from a live
+**Prune.** A build prunes right after registering an entry that takes the
+total over `cache.limit`; `rene cache prune` does it on demand whatever the
+size. Only one pruner runs at a time (`<root>/prune.lock`, tried, never
+waited on; a second pruner simply skips). In one open, the pruner selects
+`live` rows last used more than `cache.max_age` ago with no pin from a live
 session and flips them to `pruning`, owned by itself, subtracting their
 sizes. Then, one victim per open: re-read the row, and only if it is still
 `pruning` and still this pruner's, rename the directory out (one atomic
 syscall, inside the critical section) and delete the row in the same batch.
 A row that a waiter reclaimed meanwhile reads as `live` and is skipped. The
-renamed-out trees are deleted afterwards, outside any lock. A rename that
-fails, which Windows allows transiently, puts the row back to `live` in the
-same batch.
+renamed-out trees are deleted afterwards, outside any lock, together with
+any a crashed pruner left behind. A rename that fails, which Windows allows
+transiently, puts the row back to `live` in the same batch.
+
+## Configuration
+
+`config.ncl` in the platform configuration directory (`~/.config/rene` on
+Linux via XDG, `~/Library/Application Support/rene` on macOS,
+`%APPDATA%\rene` on Windows; `RENE_CONFIG_DIR` overrides it) is a Nickel
+program evaluated like a manifest. A missing file means the defaults; an
+unknown field or a bad unit is an error, so a typo cannot silently restore
+defaults that delete things.
+
+```nickel
+{
+  cache = {
+    limit = "10 GiB",   # a build prunes once the cache is larger than this
+    max_age = "120d",   # entries unused this long may be removed
+  },
+}
+```
+
+Either set to `null` turns automatic pruning off; `rene cache prune
+--max-age` still works. The access time is the last lookup, so an entry a
+build asked for is young again even if the build then found it incomplete
+and rebuilt it.
 
 ## Why these rules
 

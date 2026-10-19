@@ -164,6 +164,10 @@ config.substitutions.append((r'%FileCheck', sh_path(config.filecheck_path)))
 # can reuse a warm cache.
 config.environment['RENE_CACHE_DIR'] = os.environ.get(
     'RENE_CACHE_DIR', os.path.join(config.test_exec_root, 'rene-cache'))
+# Likewise the user's configuration file: a directory without one means the
+# defaults, so no developer setting changes what the suites do.
+config.environment['RENE_CONFIG_DIR'] = os.environ.get(
+    'RENE_CONFIG_DIR', os.path.join(config.test_exec_root, 'rene-config'))
 # The std integration executables are targets of one rene package. All of
 # their tests deliberately share one build directory; rene's database lock
 # serializes concurrent writers while preserving the compiled target cache.

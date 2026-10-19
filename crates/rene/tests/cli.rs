@@ -59,6 +59,13 @@ fn rene(args: &[&str]) -> Command {
         rene::cache::CACHE_DIR_ENV,
         Path::new(env!("CARGO_TARGET_TMPDIR")).join("rene-cache"),
     );
+    // And the user's configuration out of the tests: a directory with no
+    // file means the defaults. Tests about the configuration point at
+    // their own.
+    cmd.env(
+        rene::config::CONFIG_DIR_ENV,
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join("rene-config"),
+    );
     cmd
 }
 
@@ -615,6 +622,150 @@ fn the_ledger_records_the_entries_a_build_used() {
     assert!(snapshot.pins.is_empty(), "{snapshot:#?}");
     // Only the inspecting session itself remains.
     assert_eq!(snapshot.sessions.len(), 1, "{snapshot:#?}");
+}
+
+/// `rene cache prune` removes aged entries no running build pins, and keeps
+/// the ones a build (here: an in-process session) still uses.
+#[cfg(unix)]
+#[test]
+fn cache_prune_removes_aged_entries_nobody_uses() {
+    use rene::ledger::{Lookup, Session};
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let root = tmp.join("reussir-build");
+    let manifest = package(&tmp, "demo");
+    std::fs::write(
+        &manifest,
+        "{ package = { name = \"demo\", version = \"0.1.0\" }, \
+         targets.demo.kind = 'executable }\n",
+    )
+    .unwrap();
+    let fakes = Fakes::new(&tmp);
+    let out = fakes.rene(&["build"], &manifest, &root);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let bakes = fakes.rt_entries();
+    assert_eq!(bakes.len(), 1);
+    assert_eq!(cache_entries(&fakes.cache.join("deps")).len(), 1);
+
+    let prune = |extra: &[&str]| {
+        let mut args = vec!["cache", "prune"];
+        args.extend_from_slice(extra);
+        run(rene(&args).env(rene::cache::CACHE_DIR_ENV, &fakes.cache))
+    };
+
+    // Nothing is old enough with the default age: a dry run says so.
+    let out = prune(&["--dry-run"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(String::from_utf8_lossy(&out.stdout).is_empty());
+    assert!(
+        stderr(&out).contains("3 kept as recent"),
+        "{}",
+        stderr(&out)
+    );
+
+    // A build still using the bake keeps it; the rest goes.
+    let cache = rene::cache::Cache::at(&fakes.cache).unwrap();
+    let runtime = compio::runtime::Runtime::new().unwrap();
+    let session = runtime.block_on(async {
+        let session = Session::start(&cache).await;
+        let key = bakes[0].file_name().unwrap().to_str().unwrap().to_owned();
+        assert_eq!(session.lookup("rt", &key, &bakes[0]).await, Lookup::Live);
+        session
+    });
+    let out = prune(&["--max-age", "0s"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("removed core-src/"), "{stdout}");
+    assert!(stdout.contains("removed deps/"), "{stdout}");
+    assert!(!stdout.contains("removed rt/"), "{stdout}");
+    assert!(stderr(&out).contains("1 kept in use"), "{}", stderr(&out));
+    assert_eq!(fakes.rt_entries(), bakes);
+    assert!(cache_entries(&fakes.cache.join("deps")).is_empty());
+    assert!(cache_entries(&fakes.cache.join("core-src")).is_empty());
+    let snapshot = runtime.block_on(session.snapshot()).unwrap();
+    assert_eq!(snapshot.entries.len(), 1, "{snapshot:#?}");
+    assert_eq!(
+        snapshot.total,
+        snapshot.entries.values().next().unwrap().size
+    );
+    drop(session);
+
+    // With the pin gone, so goes the bake. The next build rebuilds all.
+    let out = prune(&["--max-age", "0s"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(fakes.rt_entries().is_empty());
+    let out = fakes.rene(&["build"], &manifest, &root);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(fakes.runs("cargo"), 2);
+    assert_eq!(fakes.rt_entries().len(), 1);
+}
+
+/// With the configured limit exceeded, a build that adds an entry prunes
+/// the aged entries it does not use, and keeps the ones it does.
+#[cfg(unix)]
+#[test]
+fn a_build_prunes_on_its_own_past_the_configured_limit() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let root = tmp.join("reussir-build");
+    let manifest = package(&tmp, "demo");
+    std::fs::write(
+        &manifest,
+        "{ package = { name = \"demo\", version = \"0.1.0\" }, \
+         targets.demo.kind = 'executable }\n",
+    )
+    .unwrap();
+    let fakes = Fakes::new(&tmp);
+    let config_dir = tmp.join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let configured = |text: &str, args: &[&str]| {
+        std::fs::write(config_dir.join(rene::config::CONFIG_FILE), text).unwrap();
+        run(rene(args)
+            .arg("--manifest-path")
+            .arg(&manifest)
+            .arg("--build-dir")
+            .arg(&root)
+            .env("REUSSIR_RRC", &fakes.rrc)
+            .env("REUSSIR_CARGO", &fakes.cargo)
+            .env("REUSSIR_RUSTC", &fakes.rustc)
+            .env(rene::cache::CACHE_DIR_ENV, &fakes.cache)
+            .env(rene::config::CONFIG_DIR_ENV, &config_dir))
+    };
+
+    // A mistake in the configuration stops the build and names the field.
+    let out = configured("{ cache = { limti = 1 } }", &["build"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("limti"), "{}", stderr(&out));
+
+    // Everything is over a zero limit and past a zero age. The first build
+    // keeps what it pins (the bake, the core sources) and the core
+    // artifacts it just registered.
+    let out = configured("{ cache = { limit = 0, max_age = \"0s\" } }", &["build"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(fakes.rt_entries().len(), 1);
+    assert_eq!(cache_entries(&fakes.cache.join("deps")).len(), 1);
+
+    // Another profile registers a second core entry; the first one, aged
+    // and unpinned, goes. The bake and the sources stay pinned.
+    let out = configured(
+        "{ cache = { limit = 0, max_age = \"0s\" } }",
+        &["build", "--profile", "release"],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stderr(&out).contains("removed 1 entry"), "{}", stderr(&out));
+    assert_eq!(fakes.rt_entries().len(), 1);
+    assert_eq!(cache_entries(&fakes.cache.join("deps")).len(), 1);
+    assert_eq!(cache_entries(&fakes.cache.join("core-src")).len(), 1);
+
+    // `null` turns automatic pruning off: a third core entry keeps the
+    // second.
+    let out = configured(
+        "{ cache = { limit = null, max_age = \"0s\" } }",
+        &["build", "--profile", "release", "--token-reuse-remarks"],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(cache_entries(&fakes.cache.join("deps")).len(), 2);
 }
 
 /// An unusable cache location is not fatal: the build warns and caches in
