@@ -382,6 +382,23 @@ impl Expr {
     }
 }
 
+/// A constant value, as its literal; a sequence names its element type,
+/// and a record value its record's qualified path (as in HIR, since a
+/// constant record is not generic).
+#[derive(Clone, Debug)]
+pub enum ConstValue {
+    Scalar(crate::semi::const_eval::ConstScalar),
+    Seq {
+        elem: Ty,
+        elems: Vec<ConstValue>,
+    },
+    Record {
+        path: String,
+        variant: Option<usize>,
+        fields: Vec<ConstValue>,
+    },
+}
+
 #[derive(Clone, Debug)]
 pub enum Kind {
     Tuple(Vec<Expr>),
@@ -392,7 +409,7 @@ pub enum Kind {
     ConstChar(u32),
     /// An interned string literal, as its four raw `StringToken` words.
     GlobalStr([u64; 4]),
-    ConstSeq(Vec<crate::semi::const_eval::ConstScalar>),
+    ConstSeq(Vec<ConstValue>),
     Var(u32),
     Poison,
     Negate(Expr),

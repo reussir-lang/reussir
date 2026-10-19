@@ -5,7 +5,7 @@
 // records of constant types.
 // CHECK-DAG: trait `Shape` declares `SIDES` more than once
 // CHECK-DAG: trait `Shape` declares `area` more than once
-// CHECK-DAG: associated const `NAME` must have a constant type (an integer, float, `bool`, or `char` scalar, a `ConstSeq` of one, or a non-generic `[value]` record whose fields have constant types), found `str`
+// CHECK-DAG: associated const `NAME` must have a constant type (an integer, float, `bool`, or `char` scalar, a `ConstSeq` of a constant type, or a non-generic `[value]` record whose fields have constant types), found `str`
 pub trait Shape {
     const SIDES: i64;
     const SIDES: i64;
@@ -95,7 +95,7 @@ fn ambiguous() -> i64 { Plain::N }
 // CHECK-DAG: integer literal `300` is out of range for `u8`
 // CHECK-DAG: expected a constant of type `bool`, found a char literal
 // CHECK-DAG: expected a constant of type `i64`, found an expression that cannot be evaluated at compile time
-// CHECK-DAG: associated const `ITEMS` must have a constant type (an integer, float, `bool`, or `char` scalar, a `ConstSeq` of one, or a non-generic `[value]` record whose fields have constant types), found `ConstSeq<Self>`
+// CHECK-DAG: associated const `ITEMS` must have a constant type (an integer, float, `bool`, or `char` scalar, a `ConstSeq` of a constant type, or a non-generic `[value]` record whose fields have constant types), found `ConstSeq<Self>`, whose element `[]` has type `Self`
 pub trait Defaults {
     const MAX: u8 = 300;
     const ON: bool = 'y';

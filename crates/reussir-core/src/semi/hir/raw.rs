@@ -58,14 +58,14 @@ pub struct TraitConstItem {
     pub span: Option<Span>,
 }
 
-/// An associated const value, as its literal; a sequence names its
-/// element type, and a record value its record's qualified path.
+/// A constant value, as its literal; a sequence names its element type,
+/// and a record value its record's qualified path.
 #[derive(Clone, Debug)]
 pub enum ConstValue {
     Scalar(crate::semi::const_eval::ConstScalar),
     Seq {
         elem: Ty,
-        elems: Vec<crate::semi::const_eval::ConstScalar>,
+        elems: Vec<ConstValue>,
     },
     Record {
         path: String,
@@ -400,7 +400,7 @@ pub enum Kind {
     ConstChar(u32),
     /// An interned string literal, as its four raw `StringToken` words.
     GlobalStr([u64; 4]),
-    ConstSeq(Vec<crate::semi::const_eval::ConstScalar>),
+    ConstSeq(Vec<ConstValue>),
     Var(u32),
     Poison,
     Negate(Expr),

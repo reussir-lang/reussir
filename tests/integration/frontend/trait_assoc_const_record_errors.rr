@@ -14,7 +14,7 @@ struct [value] Nested { label: Labeled }
 // A record is a constant type when it is a non-generic `[value]` record
 // whose fields have constant types, recursively; the diagnostic names the
 // offending field.
-// CHECK-DAG: associated const `HOLDER` must have a constant type (an integer, float, `bool`, or `char` scalar, a `ConstSeq` of one, or a non-generic `[value]` record whose fields have constant types), found `Holder`, whose field `shared` has type `Shared`
+// CHECK-DAG: associated const `HOLDER` must have a constant type (an integer, float, `bool`, or `char` scalar, a `ConstSeq` of a constant type, or a non-generic `[value]` record whose fields have constant types), found `Holder`, whose field `shared` has type `Shared`
 // CHECK-DAG: associated const `NESTED` must have a constant type ({{.*}}), found `Nested`, whose field `label.Named.0.name` has type `str`
 // CHECK-DAG: associated const `PAIR` must have a constant type ({{.*}}), found `Pair<u8>`
 // CHECK-DAG: associated const `SHARED` must have a constant type ({{.*}}), found `Shared`

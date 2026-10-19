@@ -16,6 +16,7 @@ use rustc_hash::FxHashMap;
 
 use crate::full::mir::{self, grammar as ir, raw};
 use crate::ir_lex::lex;
+use crate::semi::const_eval::ConstValue;
 use crate::semi::ctxt::{DefaultCap, TransformScript};
 use crate::semi::hir::{ArithOp, CmpOp, VarId};
 use crate::semi::resolve::DefTable;
@@ -139,6 +140,26 @@ impl<'tcx> Builder<'_, 'tcx> {
 
     /// The `DefId` for a record path, declaring it on first sight.
     /// Multi-segment paths (`pkg::m::Cell`) split back into module + item
+    /// A constant value; a record value names its record by path.
+    fn const_value(&mut self, value: &raw::ConstValue) -> ConstValue<'tcx> {
+        match value {
+            raw::ConstValue::Scalar(scalar) => ConstValue::Scalar(scalar.clone()),
+            raw::ConstValue::Seq { elem, elems } => ConstValue::Seq {
+                elem: self.ty(elem),
+                elems: elems.iter().map(|e| self.const_value(e)).collect(),
+            },
+            raw::ConstValue::Record {
+                path,
+                variant,
+                fields,
+            } => ConstValue::Record {
+                def: self.record_def(path),
+                variant: *variant,
+                fields: fields.iter().map(|f| self.const_value(f)).collect(),
+            },
+        }
+    }
+
     /// name, so re-prints display the same qualified path.
     fn record_def(&mut self, path: &str) -> crate::semi::ty::DefId {
         let segs: Vec<_> = path.split("::").map(|s| self.names.intern(s)).collect();
@@ -512,7 +533,10 @@ impl<'tcx> Builder<'_, 'tcx> {
             raw::Kind::ConstBool(b) => M::ConstBool(*b),
             raw::Kind::ConstChar(c) => M::ConstChar(*c),
             raw::Kind::GlobalStr(words) => M::GlobalStr(StringToken::from_words(*words)),
-            raw::Kind::ConstSeq(elems) => M::ConstSeq(self.tcx.alloc(elems.clone()).as_slice()),
+            raw::Kind::ConstSeq(elems) => {
+                let elems: Vec<_> = elems.iter().map(|e| self.const_value(e)).collect();
+                M::ConstSeq(self.tcx.alloc(elems).as_slice())
+            }
             raw::Kind::Var(v) => M::Var(VarId(*v)),
             raw::Kind::Poison => M::Poison,
             raw::Kind::Negate(x) => M::Negate(self.expr_ref(x)),
@@ -987,6 +1011,10 @@ mod tests {
         for (ty, value) in [
             ("ConstSeq<u64>", "ConstSeq[0, 18446744073709551615]"),
             ("ConstSeq<bool>", "ConstSeq[true, false]"),
+            (
+                "ConstSeq<ConstSeq<u8>>",
+                "ConstSeq[ConstSeq[] : ConstSeq<u8>, ConstSeq[7] : ConstSeq<u8>]",
+            ),
         ] {
             with_tcx(|tcx| {
                 let input = format!("fn @seq() -> {ty} {{ {value} : {ty} }}");

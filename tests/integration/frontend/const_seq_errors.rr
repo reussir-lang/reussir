@@ -5,15 +5,25 @@
 // RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
 
 pub struct Record { x: i32 }
+struct [value] Named { name: str }
+enum [value] Labeled { Plain, Named(Named) }
 
-// CHECK-DAG: `ConstSeq` element type `str` must be an integer, floating-point, `bool`, or `char` scalar
+// CHECK-DAG: `ConstSeq` requires a constant element type (an integer, float, `bool`, or `char` scalar, a `ConstSeq` of a constant type, or a non-generic `[value]` record whose fields have constant types), found `str`
 fn str_elem(xs: ConstSeq<str>) {}
-// CHECK-DAG: `ConstSeq` element type `Record` must be an integer, floating-point, `bool`, or `char` scalar
+// A record element must be a `[value]` record of constant fields.
+// CHECK-DAG: `ConstSeq` requires a constant element type ({{.*}}), found `Record`
 fn record_elem(xs: ConstSeq<Record>) {}
-// CHECK-DAG: `ConstSeq` element type `float8` must be an integer, floating-point, `bool`, or `char` scalar
+// CHECK-DAG: `ConstSeq` requires a constant element type ({{.*}}), found `Labeled`, whose field `Named.0.name` has type `str`
+fn labeled_elem(xs: ConstSeq<Labeled>) {}
+// CHECK-DAG: `ConstSeq` requires a constant element type ({{.*}}), found `float8`
 fn float8_elem(xs: ConstSeq<float8>) {}
-// CHECK-DAG: `ConstSeq` element type `ConstSeq<i32>` must be an integer, floating-point, `bool`, or `char` scalar
-fn nested_elem(xs: ConstSeq<ConstSeq<i32>>) {}
+// A record member's sequence is checked once record fields populate.
+// CHECK-DAG: `ConstSeq` requires a constant element type ({{.*}}), found `Named`, whose field `name` has type `str`
+struct [value] Tagged { labels: ConstSeq<Named> }
+// A nested sequence is checked by the inner sequence; the path into an
+// element reads `[]`.
+// CHECK-DAG: `ConstSeq` requires a constant element type ({{.*}}), found `Tagged`, whose field `labels[].name` has type `str`
+fn nested_elem(xs: ConstSeq<ConstSeq<Tagged>>) {}
 // CHECK-DAG: `ConstSeq` takes exactly one type argument
 fn arity(xs: ConstSeq<i32, i32>) {}
 
@@ -48,7 +58,7 @@ fn untyped<T>() -> ConstSeq<T> {
     let a = [1, 2];
     // CHECK-DAG: expected `u64`, found a sequence literal
     let b: u64 = [1];
-    // CHECK-DAG: a constant must have a constant type (an integer, float, `bool`, or `char` scalar, a `ConstSeq` of one, or a non-generic `[value]` record whose fields have constant types), found `ConstSeq<T>`
+    // CHECK-DAG: a constant must have a constant type (an integer, float, `bool`, or `char` scalar, a `ConstSeq` of a constant type, or a non-generic `[value]` record whose fields have constant types), found `ConstSeq<T>`, whose element `[]` has type `T`
     []
 }
 

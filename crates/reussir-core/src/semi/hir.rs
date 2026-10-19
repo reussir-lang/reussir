@@ -7,7 +7,7 @@ use reussir_syntax::kind::TokenKey;
 use reussir_syntax::source::FileId;
 
 use crate::literal::{FloatLit, Integer};
-use crate::semi::const_eval::ConstScalar;
+use crate::semi::const_eval::ConstValue;
 use crate::semi::ty::{DefId, GenericId, Ty};
 use crate::surface::Span;
 use crate::utils::string::StringToken;
@@ -158,9 +158,9 @@ pub enum ExprKind<'tcx> {
     /// to its ground format only in codegen.
     ConstFloat(&'tcx FloatLit),
     ConstBool(bool),
-    /// A `ConstSeq<T>` constant: its elements, each representable in `T`
-    /// (see [`crate::semi::const_eval`]).
-    ConstSeq(&'tcx [ConstScalar]),
+    /// A `ConstSeq<T>` constant: its elements, each a constant of `T` (see
+    /// [`crate::semi::const_eval`]).
+    ConstSeq(&'tcx [ConstValue<'tcx>]),
     Negate(Box<Expr<'tcx>>),
     Not(Box<Expr<'tcx>>),
     Arith(Box<Expr<'tcx>>, ArithOp, Box<Expr<'tcx>>),

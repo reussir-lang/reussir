@@ -268,14 +268,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return match args {
                 [elem] => {
                     let elem = self.eval_type(elem);
-                    if !const_seq_element_supported(elem) {
-                        self.error(
-                            Some(span),
-                            format!(
-                                "`ConstSeq` element type `{}` must be an integer, floating-point, `bool`, or `char` scalar",
-                                self.ty_display(elem)
-                            ),
-                        );
+                    // A record element's fields decide: checked once they
+                    // populate (`report_const_seq_wf`), as for cells.
+                    if self.records_complete {
+                        self.report_const_seq_wf(elem, Some(span));
                     }
                     self.tcx.mk_const_seq(elem)
                 }
@@ -1067,7 +1063,37 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => {
                 self.sweep_arc_wf(elem, span)
             }
+            TyKind::ConstSeq(elem) => {
+                self.report_const_seq_wf(elem, span);
+                self.sweep_arc_wf(elem, span);
+            }
             _ => {}
+        }
+    }
+
+    /// Report an ill-formed `ConstSeq<elem>`: the element must be a constant
+    /// type ([`Elaborator::check_const_ty`]), which needs record members, so
+    /// this runs once they populate (like [`Self::report_cell_wf`]). A
+    /// generic part defers the check to monomorphization. An element that is
+    /// itself a sequence is reported by that sequence's own check.
+    pub(crate) fn report_const_seq_wf(&mut self, elem: Ty<'tcx>, span: Option<surface::Span>) {
+        if matches!(elem.kind(), TyKind::ConstSeq(_)) {
+            return;
+        }
+        if let Err(part) = self.check_const_ty(elem)
+            && !matches!(
+                part.ty.kind(),
+                TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom
+            )
+        {
+            let found = self.non_const_ty_display(elem, &part);
+            self.error(
+                span,
+                format!(
+                    "`ConstSeq` requires a constant element type ({}), found {found}",
+                    crate::semi::const_eval::CONST_TYS
+                ),
+            );
         }
     }
 }
@@ -1133,17 +1159,6 @@ pub fn device_element_supported(ty: Ty<'_>) -> bool {
             | TyKind::Hole(_)
             | TyKind::Bottom
     )
-}
-
-/// Whether `elem` may be the element of a `ConstSeq`: a scalar constant type
-/// (see [`crate::semi::const_eval::is_const_scalar_ty`]). A generic element is
-/// checked again after substitution.
-pub fn const_seq_element_supported(elem: Ty<'_>) -> bool {
-    crate::semi::const_eval::is_const_scalar_ty(elem)
-        || matches!(
-            elem.kind(),
-            TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom
-        )
 }
 
 /// StableHLO futures contain ranked tensors, never tokens, futures, or host

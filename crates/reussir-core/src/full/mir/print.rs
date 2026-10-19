@@ -528,7 +528,11 @@ impl Render<'_> {
             ConstFloat(f) => text(f.to_string()),
             ConstBool(b) => text(format!("{b}")),
             ConstChar(c) => text(format!("char#{c}")),
-            ConstSeq(elems) => text(crate::semi::hir::print::const_seq_lit(elems)),
+            ConstSeq(elems) => {
+                crate::semi::hir::print::const_seq_doc(elems, &|t| self.ty(t), &|def| {
+                    self.defs.path(def).display(self.resolver)
+                })
+            }
             Var(v) => var(v),
             Poison => text("poison"),
             Negate(x) => text("-(") + self.value(x) + text(")"),

@@ -277,10 +277,10 @@ pub enum TyKind<'tcx> {
         kind: CellKind,
     },
     Nullable(Ty<'tcx>),
-    /// An immutable static sequence of scalars (`ConstSeq<T>`): a view of
+    /// An immutable static sequence of constants (`ConstSeq<T>`): a view of
     /// compile-time constant data and its length, with no reference count.
-    /// The element is an integer, float, `bool`, or `char` scalar; a generic
-    /// element is checked again after substitution.
+    /// The element is a constant type (see [`crate::semi::const_eval`]); a
+    /// generic element is checked again after substitution.
     ConstSeq(Ty<'tcx>),
     /// An atomically reference-counted coloring of a `[shared]` record:
     /// `Arc<X>` is the same nominal `X` behind a box whose refcount is

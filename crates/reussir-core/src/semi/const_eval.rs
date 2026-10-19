@@ -5,10 +5,10 @@
 //! (an array extent reads its `u64`, for example). A constant is a scalar
 //! literal — an integer, float, `bool`, or `char`, where unary minus folds into
 //! a numeric literal — a sequence literal `[e0, e1, ...]` of type
-//! `ConstSeq<T>`, or a constructor of a `[value]` record whose fields are
-//! constants (`S { f: e }`, `E::V { e }`, `E::V`). Numbers stay exact
-//! ([`crate::literal`]) and are checked against their type here, so a value is
-//! always representable in it.
+//! `ConstSeq<T>` whose elements are constants of `T`, or a constructor of a
+//! `[value]` record whose fields are constants (`S { f: e }`, `E::V { e }`,
+//! `E::V`). Numbers stay exact ([`crate::literal`]) and are checked against
+//! their type here, so a value is always representable in it.
 //!
 //! [`const_value_kind`] turns a value back into a HIR expression for the
 //! program to use at runtime: scalars become literals, a sequence becomes
@@ -39,10 +39,10 @@ pub enum ConstScalar {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConstValue<'tcx> {
     Scalar(ConstScalar),
-    /// A `ConstSeq<elem>` value.
+    /// A `ConstSeq<elem>` value: its elements, each a constant of `elem`.
     Seq {
         elem: Ty<'tcx>,
-        elems: Vec<ConstScalar>,
+        elems: Vec<ConstValue<'tcx>>,
     },
     /// A value of the `[value]` record `def`: a struct when `variant` is
     /// `None`, else that variant of an enum (its index, as in
@@ -56,17 +56,119 @@ pub enum ConstValue<'tcx> {
 
 /// What [`Elaborator::check_const_ty`] lists as the constant types, for
 /// diagnostics.
-pub(super) const CONST_TYS: &str = "an integer, float, `bool`, or `char` scalar, a `ConstSeq` \
-     of one, or a non-generic `[value]` record whose fields have constant types";
+pub const CONST_TYS: &str = "an integer, float, `bool`, or `char` scalar, a `ConstSeq` of a \
+     constant type, or a non-generic `[value]` record whose fields have constant types";
 
 /// The part of a type that keeps it from being a constant type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NonConstField<'tcx> {
-    /// The field path from the checked type, such as `sharding.Tiled.0` (a
-    /// variant contributes its name and the payload index); empty when the
-    /// checked type itself is the offending part.
+    /// The path from the checked type, such as `sharding.Tiled.0` (a variant
+    /// contributes its name and the payload index) or `tiles[].dims` (a
+    /// sequence contributes [`ELEM_STEP`]); empty when the checked type
+    /// itself is the offending part.
     pub path: Vec<String>,
     pub ty: Ty<'tcx>,
+}
+
+/// The [`NonConstField::path`] step into a sequence's element.
+pub const ELEM_STEP: &str = "[]";
+
+impl NonConstField<'_> {
+    /// The path as it reads in a diagnostic: `label.Named.0`, `tiles[].dims`.
+    pub fn path_display(&self) -> String {
+        let mut out = String::new();
+        for step in &self.path {
+            if step != ELEM_STEP && !out.is_empty() {
+                out.push('.');
+            }
+            out.push_str(step);
+        }
+        out
+    }
+}
+
+/// Whether a constant can have type `ty`: a scalar accepted by
+/// [`is_const_scalar_ty`], `ConstSeq<T>` of a constant type `T`, or a
+/// non-generic `[value]` struct or enum (from `records`, its field names
+/// read through `sym`) all of whose fields (of every variant) have constant
+/// types. `Err` names the first part that does not. A record enclosing
+/// itself through a sequence (a view) is finite, and its element checks as
+/// part of the enclosing walk; one enclosing itself inline is an
+/// infinite-size `[value]` cycle, reported where the records are declared,
+/// and no constant type.
+pub fn const_ty_rejection<'tcx>(
+    records: &FxHashMap<DefId, Record<'tcx>>,
+    sym: &dyn Fn(TokenKey) -> String,
+    ty: Ty<'tcx>,
+) -> Result<(), NonConstField<'tcx>> {
+    const_ty_rejection_in(records, sym, ty, &mut Vec::new(), 0)
+}
+
+/// `enclosing` pairs each record being walked with the number of sequences
+/// crossed before entering it; `seqs` is that count at `ty`.
+fn const_ty_rejection_in<'tcx>(
+    records: &FxHashMap<DefId, Record<'tcx>>,
+    sym: &dyn Fn(TokenKey) -> String,
+    ty: Ty<'tcx>,
+    enclosing: &mut Vec<(DefId, usize)>,
+    seqs: usize,
+) -> Result<(), NonConstField<'tcx>> {
+    let here = Err(NonConstField {
+        path: Vec::new(),
+        ty,
+    });
+    let def = match *ty.kind() {
+        TyKind::ConstSeq(elem) => {
+            return const_ty_rejection_in(records, sym, elem, enclosing, seqs + 1).map_err(
+                |mut part| {
+                    part.path.insert(0, ELEM_STEP.to_owned());
+                    part
+                },
+            );
+        }
+        TyKind::Record { def, .. }
+            if let Some(&(_, entered)) = enclosing.iter().find(|e| e.0 == def) =>
+        {
+            return if entered == seqs { here } else { Ok(()) };
+        }
+        TyKind::Record { def, args, .. } if args.is_empty() => def,
+        _ if is_const_scalar_ty(ty) => return Ok(()),
+        _ => return here,
+    };
+    let Some(record) = records.get(&def) else {
+        return here;
+    };
+    if record.default_cap != DefaultCap::Value {
+        return here;
+    }
+    let fields: Vec<(String, Ty<'tcx>)> = match &record.fields {
+        Some(RecordFields::Named(fs)) => fs.iter().map(|f| (sym(f.0), f.1)).collect(),
+        Some(RecordFields::Unnamed(fs)) => fs
+            .iter()
+            .enumerate()
+            .map(|(k, f)| (k.to_string(), f.0))
+            .collect(),
+        Some(RecordFields::Variants(vs)) => vs
+            .iter()
+            .flat_map(|v| {
+                let name = sym(v.name);
+                v.fields
+                    .iter()
+                    .enumerate()
+                    .map(move |(k, &f)| (format!("{name}.{k}"), f))
+            })
+            .collect(),
+        Some(RecordFields::Opaque) | None => return here,
+    };
+    enclosing.push((def, seqs));
+    let checked = fields.into_iter().try_for_each(|(step, field_ty)| {
+        const_ty_rejection_in(records, sym, field_ty, enclosing, seqs).map_err(|mut part| {
+            part.path.insert(0, step);
+            part
+        })
+    });
+    enclosing.pop();
+    checked
 }
 
 /// Whether a scalar constant can have type `ty`: an integer, a float with an
@@ -177,79 +279,26 @@ fn scalar_description(value: &ConstScalar) -> &'static str {
 }
 
 impl<'a, 'tcx> Elaborator<'a, 'tcx> {
-    /// Whether a constant can have type `ty`: a scalar accepted by
-    /// [`is_const_scalar_ty`], `ConstSeq<T>` of one, or a non-generic
-    /// `[value]` struct or enum all of whose fields (of every variant) have
-    /// constant types. `Err` names the first part that does not.
+    /// [`const_ty_rejection`] over the elaborator's records.
     pub fn check_const_ty(&self, ty: Ty<'tcx>) -> Result<(), NonConstField<'tcx>> {
-        self.check_const_ty_in(ty, &mut Vec::new())
-    }
-
-    /// [`Self::check_const_ty`] inside the records `enclosing`. A record
-    /// enclosing itself is an infinite-size `[value]` cycle, reported where
-    /// the records are declared; here it only stops the walk.
-    fn check_const_ty_in(
-        &self,
-        ty: Ty<'tcx>,
-        enclosing: &mut Vec<DefId>,
-    ) -> Result<(), NonConstField<'tcx>> {
-        let here = Err(NonConstField {
-            path: Vec::new(),
-            ty,
-        });
-        let def = match *ty.kind() {
-            TyKind::ConstSeq(elem) if is_const_scalar_ty(elem) => return Ok(()),
-            TyKind::Record { def, args, .. } if args.is_empty() && !enclosing.contains(&def) => def,
-            _ if is_const_scalar_ty(ty) => return Ok(()),
-            _ => return here,
-        };
-        let record = &self.records[&def];
-        if record.default_cap != DefaultCap::Value {
-            return here;
-        }
-        let fields: Vec<(String, Ty<'tcx>)> = match &record.fields {
-            Some(RecordFields::Named(fs)) => {
-                fs.iter().map(|f| (self.sym(f.0).to_owned(), f.1)).collect()
-            }
-            Some(RecordFields::Unnamed(fs)) => fs
-                .iter()
-                .enumerate()
-                .map(|(k, f)| (k.to_string(), f.0))
-                .collect(),
-            Some(RecordFields::Variants(vs)) => vs
-                .iter()
-                .flat_map(|v| {
-                    let name = self.sym(v.name);
-                    v.fields
-                        .iter()
-                        .enumerate()
-                        .map(move |(k, &f)| (format!("{name}.{k}"), f))
-                })
-                .collect(),
-            Some(RecordFields::Opaque) | None => return here,
-        };
-        enclosing.push(def);
-        let checked = fields.into_iter().try_for_each(|(step, field_ty)| {
-            self.check_const_ty_in(field_ty, enclosing)
-                .map_err(|mut part| {
-                    part.path.insert(0, step);
-                    part
-                })
-        });
-        enclosing.pop();
-        checked
+        const_ty_rejection(&self.records, &|key| self.sym(key).to_owned(), ty)
     }
 
     /// `ty`, a type [`Self::check_const_ty`] rejects with `part`, shown with
-    /// the offending field for a diagnostic.
+    /// the offending part for a diagnostic.
     pub(super) fn non_const_ty_display(&self, ty: Ty<'tcx>, part: &NonConstField<'tcx>) -> String {
         let shown = self.ty_display(ty);
         if part.path.is_empty() {
             return format!("`{shown}`");
         }
+        let what = if part.path.last().is_some_and(|step| step == ELEM_STEP) {
+            "element"
+        } else {
+            "field"
+        };
         format!(
-            "`{shown}`, whose field `{}` has type `{}`",
-            part.path.join("."),
+            "`{shown}`, whose {what} `{}` has type `{}`",
+            part.path_display(),
             self.ty_display(part.ty)
         )
     }
@@ -279,7 +328,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 // Evaluate every element, so each invalid one is reported.
                 let elems: Vec<_> = items
                     .iter()
-                    .map(|item| self.eval_scalar(item, elem))
+                    .map(|item| self.eval_const(item, elem))
                     .collect();
                 let elems = elems.into_iter().collect::<Option<_>>()?;
                 Some(ConstValue::Seq { elem, elems })
@@ -512,19 +561,21 @@ mod tests {
         ConstScalar::Int(Integer::from(n))
     }
 
+    /// A sequence of integer scalars.
+    fn ints<'tcx>(elem: Ty<'tcx>, elems: &[i64]) -> ConstValue<'tcx> {
+        ConstValue::Seq {
+            elem,
+            elems: elems.iter().map(|&n| ConstValue::Scalar(int(n))).collect(),
+        }
+    }
+
     #[test]
     fn sequence_literals_evaluate_to_range_checked_elements() {
         crate::with_tcx(|tcx| {
             let i8_ty = tcx.mk_int(IntTy::Signed(8));
             let (value, errors) = eval(tcx, "[-128, 127, -(1)]", tcx.mk_const_seq(i8_ty));
             assert!(errors.is_empty(), "{errors:?}");
-            assert_eq!(
-                value,
-                Some(ConstValue::Seq {
-                    elem: i8_ty,
-                    elems: vec![int(-128), int(127), int(-1)],
-                })
-            );
+            assert_eq!(value, Some(ints(i8_ty, &[-128, 127, -1])));
 
             let f32_ty = tcx.mk_fp(FpTy::Ieee(32));
             let (value, _) = eval(tcx, "[-1.5]", tcx.mk_const_seq(f32_ty));
@@ -533,14 +584,49 @@ mod tests {
             };
             assert_eq!(
                 elems,
-                [ConstScalar::Float(literal::parse_float("1.5").neg())]
+                [ConstValue::Scalar(ConstScalar::Float(
+                    literal::parse_float("1.5").neg()
+                ))]
             );
 
             let (value, _) = eval(tcx, "['a', 'b']", tcx.mk_const_seq(tcx.mk_char()));
             let Some(ConstValue::Seq { elems, .. }) = value else {
                 panic!("expected a sequence");
             };
-            assert_eq!(elems, [ConstScalar::Char(97), ConstScalar::Char(98)]);
+            let chars = [97, 98].map(|c| ConstValue::Scalar(ConstScalar::Char(c)));
+            assert_eq!(elems, chars);
+        });
+    }
+
+    #[test]
+    fn nested_sequences_evaluate_elementwise() {
+        crate::with_tcx(|tcx| {
+            let i64_ty = tcx.mk_int(IntTy::Signed(64));
+            let inner = tcx.mk_const_seq(i64_ty);
+            let (value, errors) = eval(tcx, "[[8, 128], [], [2]]", tcx.mk_const_seq(inner));
+            assert!(errors.is_empty(), "{errors:?}");
+            assert_eq!(
+                value,
+                Some(ConstValue::Seq {
+                    elem: inner,
+                    elems: vec![
+                        ints(i64_ty, &[8, 128]),
+                        ints(i64_ty, &[]),
+                        ints(i64_ty, &[2])
+                    ],
+                })
+            );
+
+            // Each element is checked against the element type, at any depth.
+            let (value, errors) = eval(tcx, "[[1], 2, [x]]", tcx.mk_const_seq(inner));
+            assert_eq!(value, None);
+            assert_eq!(
+                errors,
+                [
+                    "expected a constant of type `ConstSeq<i64>`, found an integer literal",
+                    "expected a constant of type `i64`, found an expression that cannot be evaluated at compile time",
+                ]
+            );
         });
     }
 
@@ -586,7 +672,16 @@ mod tests {
             assert_eq!(
                 errors,
                 [
-                    "a constant must have a constant type (an integer, float, `bool`, or `char` scalar, a `ConstSeq` of one, or a non-generic `[value]` record whose fields have constant types), found `str`"
+                    "a constant must have a constant type (an integer, float, `bool`, or `char` scalar, a `ConstSeq` of a constant type, or a non-generic `[value]` record whose fields have constant types), found `str`"
+                ]
+            );
+
+            let (value, errors) = eval(tcx, "[]", tcx.mk_const_seq(tcx.mk_const_seq(tcx.mk_str())));
+            assert_eq!(value, None);
+            assert_eq!(
+                errors,
+                [
+                    "a constant must have a constant type (an integer, float, `bool`, or `char` scalar, a `ConstSeq` of a constant type, or a non-generic `[value]` record whose fields have constant types), found `ConstSeq<ConstSeq<str>>`, whose element `[][]` has type `str`"
                 ]
             );
         });
@@ -599,17 +694,17 @@ mod tests {
             let mut elab = Elaborator::new(tcx, &interner);
             let bool_ty = tcx.mk_bool();
             let ty = tcx.mk_const_seq(bool_ty);
-            let elems = vec![ConstScalar::Bool(true), ConstScalar::Bool(false)];
+            let elems = [true, false].map(|b| ConstValue::Scalar(ConstScalar::Bool(b)));
             let value = ConstValue::Seq {
                 elem: bool_ty,
-                elems: elems.clone(),
+                elems: elems.to_vec(),
             };
             let expr = elab.const_value_expr(&value, ty, None);
             assert_eq!(expr.ty, ty);
             let ExprKind::ConstSeq(stored) = expr.kind else {
                 panic!("expected a ConstSeq node, got {:?}", expr.kind);
             };
-            assert_eq!(stored, elems.as_slice());
+            assert_eq!(stored, elems);
         });
     }
 
@@ -637,16 +732,12 @@ mod tests {
                 TyKind::Record { def, .. } => def,
                 _ => unreachable!(),
             };
-            let seq = |elem, elems: &[i64]| ConstValue::Seq {
-                elem,
-                elems: elems.iter().map(|&n| int(n)).collect(),
-            };
             let i32_ty = elab.tcx.mk_int(IntTy::Signed(32));
             let u64_ty = elab.tcx.mk_int(IntTy::Unsigned(64));
             let tiling = ConstValue::Record {
                 def: def("Tiling"),
                 variant: None,
-                fields: vec![seq(u64_ty, &[2, 1]), ConstValue::Scalar(int(0))],
+                fields: vec![ints(u64_ty, &[2, 1]), ConstValue::Scalar(int(0))],
             };
             assert_eq!(
                 value,
@@ -654,7 +745,7 @@ mod tests {
                     def: def("Placement"),
                     variant: None,
                     fields: vec![
-                        seq(i32_ty, &[3, -1]),
+                        ints(i32_ty, &[3, -1]),
                         ConstValue::Record {
                             def: def("Sharding"),
                             variant: Some(1),
@@ -701,11 +792,22 @@ mod tests {
             struct [value] Holder {{ inner: Placement, label: Labeled, shared: Shared }}
             struct [value] Pair<T> {{ a: T, b: T }}
             struct [value] Wrapped {{ pair: Pair<u8> }}
+            struct [value] Tree {{ kids: ConstSeq<Tree>, tag: u8 }}
             "#
         );
         with_records(&decls, |elab, record_ty, _| {
             let str_ty = elab.tcx.mk_str();
             assert_eq!(elab.check_const_ty(record_ty(elab, "Placement")), Ok(()));
+            // Sequences of constants are constants, including a record's
+            // sequence of itself (a view, so finite). The path into an
+            // element reads `[]`.
+            let placements = elab.tcx.mk_const_seq(record_ty(elab, "Placement"));
+            assert_eq!(elab.check_const_ty(placements), Ok(()));
+            assert_eq!(elab.check_const_ty(record_ty(elab, "Tree")), Ok(()));
+            let labels = elab.tcx.mk_const_seq(record_ty(elab, "Labeled"));
+            let labels = elab.check_const_ty(labels).unwrap_err();
+            assert_eq!(labels.path_display(), "[].Named.0");
+            assert_eq!(labels.ty, str_ty);
             let holder = elab.check_const_ty(record_ty(elab, "Holder"));
             assert_eq!(
                 holder.map_err(|part| part.path),
@@ -722,7 +824,10 @@ mod tests {
                     ty: shared
                 })
             );
-            assert!(elab.check_const_ty(elab.tcx.mk_const_seq(str_ty)).is_err());
+            let strs = elab
+                .check_const_ty(elab.tcx.mk_const_seq(str_ty))
+                .unwrap_err();
+            assert_eq!((strs.path_display(), strs.ty), ("[]".to_owned(), str_ty));
         });
     }
 
@@ -750,7 +855,10 @@ mod tests {
             let [dims, axis] = args.as_slice() else {
                 panic!("expected two fields");
             };
-            assert!(matches!(dims.kind, ExprKind::ConstSeq(elems) if elems == [int(7)]));
+            assert!(matches!(
+                dims.kind,
+                ExprKind::ConstSeq(elems) if elems == [ConstValue::Scalar(int(7))]
+            ));
             let ExprKind::ConstInt(n) = axis.kind else {
                 panic!("expected an integer literal, got {:?}", axis.kind);
             };

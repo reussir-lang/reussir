@@ -440,29 +440,9 @@ impl<'a> Printer<'a> {
             + text(" }")
     }
 
-    /// An associated const value, spelled like the matching HIR expression
-    /// without its type annotations: a literal, a sequence (which carries its
-    /// type, as a `ConstSeq` expression does), or a record value as the
-    /// constructor call building it from its field values.
+    /// An associated const value ([`const_value_doc`]).
     fn const_value(&self, value: &ConstValue<'_>) -> Doc<'static> {
-        match value {
-            ConstValue::Scalar(scalar) => text(const_scalar_lit(scalar)),
-            ConstValue::Seq { elem, elems } => {
-                text(format!("{} : ConstSeq<", const_seq_lit(elems))) + self.ty(*elem) + text(">")
-            }
-            ConstValue::Record {
-                def,
-                variant,
-                fields,
-            } => {
-                let fields = comma_sep(fields.iter().map(|f| self.const_value(f)).collect());
-                let head = text(format!("#{}", self.path(*def)));
-                match variant {
-                    None => head + text("{") + fields + text("}"),
-                    Some(v) => head + text(format!("#{v}(")) + fields + text(")"),
-                }
-            }
-        }
+        const_value_doc(value, &|t| self.ty(t), &|def| self.path(def))
     }
 
     fn record(&self, r: &Record<'_>) -> Doc<'static> {
@@ -893,7 +873,9 @@ impl<'a> Printer<'a> {
             ExprKind::ConstFloat(f) => text(f.to_string()),
             ExprKind::ConstBool(b) => text(format!("{b}")),
             ExprKind::ConstChar(c) => text(format!("char#{c}")),
-            ExprKind::ConstSeq(elems) => text(const_seq_lit(elems)),
+            ExprKind::ConstSeq(elems) => {
+                const_seq_doc(elems, &|t| self.ty(t), &|def| self.path(def))
+            }
             ExprKind::Var(v) => var(*v),
             ExprKind::Poison => text("poison"),
             ExprKind::Negate(x) => text("-(") + self.value(x) + text(")"),
@@ -1174,11 +1156,52 @@ fn str_lit(w: [u64; 4]) -> String {
     format!("str#{}#{}#{}#{}", w[0], w[1], w[2], w[3])
 }
 
-/// The textual HIR/MIR spelling of a constant sequence: `ConstSeq[1, -2]`,
-/// with the scalar literal forms of the expression syntax.
-pub(crate) fn const_seq_lit(elems: &[ConstScalar]) -> String {
-    let elems: Vec<String> = elems.iter().map(const_scalar_lit).collect();
-    format!("ConstSeq[{}]", elems.join(", "))
+/// The textual HIR/MIR spelling of a constant value, as the matching
+/// expression without its type annotation: a scalar in the expression
+/// syntax's literal form; a sequence as `ConstSeq[e0, e1] : ConstSeq<T>`,
+/// which carries its element type (spelled by `ty`) as a `ConstSeq`
+/// expression does; and a record value as the constructor call building it
+/// from its field values, `#S{e0, e1}` or `#E#1(e0)` (its path spelled by
+/// `path`).
+pub(crate) fn const_value_doc(
+    value: &ConstValue<'_>,
+    ty: &dyn Fn(Ty<'_>) -> Doc<'static>,
+    path: &dyn Fn(DefId) -> String,
+) -> Doc<'static> {
+    match value {
+        ConstValue::Scalar(scalar) => text(const_scalar_lit(scalar)),
+        ConstValue::Seq { elem, elems } => {
+            const_seq_doc(elems, ty, path) + text(" : ConstSeq<") + ty(*elem) + text(">")
+        }
+        ConstValue::Record {
+            def,
+            variant,
+            fields,
+        } => {
+            let fields = comma_sep(
+                fields
+                    .iter()
+                    .map(|f| const_value_doc(f, ty, path))
+                    .collect(),
+            );
+            let head = text(format!("#{}", path(*def)));
+            match variant {
+                None => head + text("{") + fields + text("}"),
+                Some(v) => head + text(format!("#{v}(")) + fields + text(")"),
+            }
+        }
+    }
+}
+
+/// The spelling of [`ExprKind::ConstSeq`]: `ConstSeq[e0, e1]`, each element
+/// as [`const_value_doc`].
+pub(crate) fn const_seq_doc(
+    elems: &[ConstValue<'_>],
+    ty: &dyn Fn(Ty<'_>) -> Doc<'static>,
+    path: &dyn Fn(DefId) -> String,
+) -> Doc<'static> {
+    let elems = elems.iter().map(|e| const_value_doc(e, ty, path)).collect();
+    text("ConstSeq[") + comma_sep(elems) + text("]")
 }
 
 /// A scalar constant in the expression syntax's literal form.

@@ -601,7 +601,7 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
             ConstValue::Scalar(_) => value.clone(),
             ConstValue::Seq { elem, elems } => ConstValue::Seq {
                 elem: self.ty(*elem),
-                elems: elems.clone(),
+                elems: elems.iter().map(|e| self.const_value(e)).collect(),
             },
             ConstValue::Record {
                 def,

@@ -38,7 +38,7 @@ use reussir_core::full::mir::{self, DecisionTree, Expr, ExprKind, SwitchCases};
 use reussir_core::full::ownership::{OwnershipTable, RcOp, RecordTable, analyze_function};
 use reussir_core::intrinsic::{ArrayFn, CellFn, IntrinsicOp};
 use reussir_core::literal::{self, Integer};
-use reussir_core::semi::const_eval::ConstScalar;
+use reussir_core::semi::const_eval::{ConstScalar, ConstValue};
 use reussir_core::semi::hir::{ArithOp, CmpOp, ExprId, VarId};
 use reussir_core::semi::ty::{Flexivity, IntTy, Ty, TyCtxt, TyKind};
 use reussir_core::surface::{Span, Visibility};
@@ -1138,7 +1138,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     pub(super) fn const_seq_payload(
         &self,
         ty: Ty<'tcx>,
-        elems: &[ConstScalar],
+        elems: &[ConstValue<'tcx>],
     ) -> Result<(String, Attribute<'c>)> {
         let TyKind::ConstSeq(elem_ty) = *ty.kind() else {
             return err("constant sequence with a non-`ConstSeq` type");
@@ -1146,6 +1146,9 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let elem_mlir = self.tys.mlir_ty(elem_ty)?;
         let mut texts = Vec::with_capacity(elems.len());
         for elem in elems {
+            let ConstValue::Scalar(elem) = elem else {
+                return err("constant sequences of records or sequences do not lower yet");
+            };
             let text = match (elem, *elem_ty.kind()) {
                 (ConstScalar::Int(n), TyKind::Int(int_ty)) if literal::int_fits(n, int_ty) => {
                     n.to_string()

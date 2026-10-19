@@ -20,7 +20,7 @@ use reussir_syntax::kind::TokenKey;
 use reussir_syntax::source::FileId;
 
 use crate::literal::{FloatLit, Integer};
-use crate::semi::const_eval::ConstScalar;
+use crate::semi::const_eval::ConstValue;
 use crate::semi::ctxt::{DefaultCap, TransformScript};
 use crate::semi::hir::{ArithOp, CmpOp, ExprId, VarId};
 use crate::semi::ty::Ty;
@@ -301,7 +301,7 @@ pub enum ExprKind<'tcx> {
     ConstBool(bool),
     /// A `ConstSeq<T>` constant; codegen emits its elements as an immutable
     /// global.
-    ConstSeq(&'tcx [ConstScalar]),
+    ConstSeq(&'tcx [ConstValue<'tcx>]),
     Var(VarId),
     Negate(&'tcx Expr<'tcx>),
     Not(&'tcx Expr<'tcx>),

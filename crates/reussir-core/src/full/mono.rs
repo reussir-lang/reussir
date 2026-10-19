@@ -2155,10 +2155,14 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 self.check_arc_inners(elem, span);
             }
             TyKind::ConstSeq(elem) => {
-                if !crate::semi::ty_eval::const_seq_element_supported(elem)
+                // The ground backstop of `ty_eval`'s element check: a generic
+                // element deferred to here.
+                let sym = |key: TokenKey| self.resolver.try_resolve(key).unwrap_or("?").to_owned();
+                if crate::semi::const_eval::const_ty_rejection(self.record_defs, &sym, elem)
+                    .is_err()
                     && self.reported_arcs.insert(ty)
                 {
-                    self.error(span, "this instantiation grounds a `ConstSeq` whose element must be an integer, floating-point, `bool`, or `char` scalar");
+                    self.error(span, "this instantiation grounds a `ConstSeq` whose element is not a constant type");
                 }
             }
             TyKind::Array { elem, .. } => {

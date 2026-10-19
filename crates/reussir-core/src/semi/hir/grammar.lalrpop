@@ -262,7 +262,7 @@ ImplConstValue: (String, raw::ConstValue) =
 
 ConstValue: raw::ConstValue = {
     <s:ConstScalar> => raw::ConstValue::Scalar(s),
-    "ConstSeq" "[" <elems:Comma<ConstScalar>> "]" ":" "ConstSeq" "<" <elem:Ty> ">"
+    "ConstSeq" "[" <elems:Comma<ConstValue>> "]" ":" "ConstSeq" "<" <elem:Ty> ">"
         => raw::ConstValue::Seq { elem, elems },
     "#" <path:QPath> "{" <fields:Comma<ConstValue>> "}"
         => raw::ConstValue::Record { path, variant: None, fields },
@@ -515,7 +515,7 @@ Atom: raw::Kind = {
     "false" => raw::Kind::ConstBool(false),
     "char" "#" <c:"int"> => raw::Kind::ConstChar(raw::char_scalar(&c)),
     <w:StrWords> => raw::Kind::GlobalStr(w),
-    "ConstSeq" "[" <elems:Comma<ConstScalar>> "]" => raw::Kind::ConstSeq(elems),
+    "ConstSeq" "[" <elems:Comma<ConstValue>> "]" => raw::Kind::ConstSeq(elems),
     <v:"var"> => raw::Kind::Var(v),
     "poison" => raw::Kind::Poison,
     "-" "(" <e:Expr> ")" => raw::Kind::Negate(e),
@@ -628,7 +628,7 @@ CmpOp: raw::CmpOp = {
     "!=" => raw::CmpOp::Ne,
 };
 
-/// An element of a `ConstSeq[...]` literal.
+/// A scalar constant, in its literal form.
 ConstScalar: ConstScalar = {
     <n:"int"> => ConstScalar::Int(n),
     <f:"float"> => ConstScalar::Float(raw::float_lit(f)),

@@ -784,7 +784,7 @@ impl<'tcx> Builder<'_, 'tcx> {
             raw::ConstValue::Scalar(scalar) => ConstValue::Scalar(scalar.clone()),
             raw::ConstValue::Seq { elem, elems } => ConstValue::Seq {
                 elem: self.ty(elem),
-                elems: elems.clone(),
+                elems: elems.iter().map(|e| self.const_value(e)).collect(),
             },
             raw::ConstValue::Record {
                 path,
@@ -890,7 +890,8 @@ impl<'tcx> Builder<'_, 'tcx> {
             raw::Kind::ConstChar(c) => ExprKind::ConstChar(*c),
             raw::Kind::GlobalStr(words) => ExprKind::GlobalStr(StringToken::from_words(*words)),
             raw::Kind::ConstSeq(elems) => {
-                ExprKind::ConstSeq(self.tcx.alloc(elems.clone()).as_slice())
+                let elems: Vec<_> = elems.iter().map(|e| self.const_value(e)).collect();
+                ExprKind::ConstSeq(self.tcx.alloc(elems).as_slice())
             }
             raw::Kind::Var(v) => ExprKind::Var(VarId(*v)),
             raw::Kind::Poison => ExprKind::Poison,
@@ -1480,6 +1481,10 @@ mod tests {
             ("ConstSeq<f32>", "ConstSeq[1.5, -0.25]"),
             ("ConstSeq<char>", "ConstSeq[char#97]"),
             ("ConstSeq<bool>", "ConstSeq[]"),
+            (
+                "ConstSeq<ConstSeq<i64>>",
+                "ConstSeq[ConstSeq[1, -2] : ConstSeq<i64>, ConstSeq[] : ConstSeq<i64>]",
+            ),
         ] {
             with_tcx(|tcx| {
                 let input = format!("fn #seq() -> {ty} {{ {value} : {ty} }}");

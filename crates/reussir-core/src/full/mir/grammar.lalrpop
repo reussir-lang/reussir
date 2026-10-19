@@ -314,7 +314,7 @@ Atom: raw::Kind = {
     "false" => raw::Kind::ConstBool(false),
     "char" "#" <c:"int"> => raw::Kind::ConstChar(raw::char_scalar(&c)),
     <w:StrWords> => raw::Kind::GlobalStr(w),
-    "ConstSeq" "[" <elems:Comma<ConstScalar>> "]" => raw::Kind::ConstSeq(elems),
+    "ConstSeq" "[" <elems:Comma<ConstValue>> "]" => raw::Kind::ConstSeq(elems),
     <v:"var"> => raw::Kind::Var(v),
     "poison" => raw::Kind::Poison,
     "-" "(" <e:Expr> ")" => raw::Kind::Negate(e),
@@ -425,13 +425,37 @@ CmpOp: raw::CmpOp = {
 // ----- shared helpers -----
 
 /// Comma-separated, possibly empty, no trailing comma.
-/// An element of a `ConstSeq[...]` literal.
+/// A scalar constant, in its literal form.
 ConstScalar: ConstScalar = {
     <n:"int"> => ConstScalar::Int(n),
     <f:"float"> => ConstScalar::Float(raw::float_lit(f)),
     "true" => ConstScalar::Bool(true),
     "false" => ConstScalar::Bool(false),
     "char" "#" <c:"int"> => ConstScalar::Char(raw::char_scalar(&c)),
+};
+
+/// A qualified record path, `a::b::Name`, as a constant record value names
+/// its record.
+QPath: String = <first:Name> <rest:("::" <Name>)*> => {
+    let mut s = first.to_string();
+    for seg in rest {
+        s.push_str("::");
+        s.push_str(seg);
+    }
+    s
+};
+
+/// A constant value, spelled as in HIR: a scalar, a sequence with its
+/// element type (`ConstSeq[1, 2] : ConstSeq<i64>`), or a record value as
+/// the constructor call over its field values (`#S{1, #E#0()}`).
+ConstValue: raw::ConstValue = {
+    <s:ConstScalar> => raw::ConstValue::Scalar(s),
+    "ConstSeq" "[" <elems:Comma<ConstValue>> "]" ":" "ConstSeq" "<" <elem:Ty> ">"
+        => raw::ConstValue::Seq { elem, elems },
+    "#" <path:QPath> "{" <fields:Comma<ConstValue>> "}"
+        => raw::ConstValue::Record { path, variant: None, fields },
+    "#" <path:QPath> "#" <v:"int"> "(" <fields:Comma<ConstValue>> ")"
+        => raw::ConstValue::Record { path, variant: Some(raw::small_usize(&v)), fields },
 };
 
 Comma<T>: Vec<T> = <mut v:(<T> ",")*> <last:T?> => {

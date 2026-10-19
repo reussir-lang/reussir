@@ -1,10 +1,11 @@
 // The constant sequence former and its intrinsics' declaration sites.
-// `ConstSeq<T>` is an immutable static sequence of integer, floating-point,
-// `bool`, or `char` scalars, created from a sequence literal `[e0, e1, ...]`
-// that the compiler evaluates. Like `str`, a value is a view of a global and
-// its length, and is not reference-counted.
+// `ConstSeq<T>` is an immutable static sequence of constants of `T` — an
+// integer, floating-point, `bool`, or `char` scalar, another constant
+// sequence, or a `[value]` record whose fields are constants — created from
+// a sequence literal `[e0, e1, ...]` that the compiler evaluates. Like `str`,
+// a value is a view of a global and its length, and is not reference-counted.
 
-/// An immutable static sequence of `T` scalars.
+/// An immutable static sequence of `T` constants.
 #[lang("const_seq")]
 pub struct ConstSeq<T> { }
 

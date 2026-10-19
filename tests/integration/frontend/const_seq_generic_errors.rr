@@ -5,5 +5,5 @@
 
 fn first<T>(xs: ConstSeq<T>) -> T { core::intrinsic::const_seq::get(xs, 0) }
 
-// CHECK: this instantiation grounds a `ConstSeq` whose element must be an integer, floating-point, `bool`, or `char` scalar
+// CHECK: this instantiation grounds a `ConstSeq` whose element is not a constant type
 pub fn bad() -> str { first<str>(core::intrinsic::panic::panic()) }

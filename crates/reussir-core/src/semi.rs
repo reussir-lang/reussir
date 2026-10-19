@@ -2289,7 +2289,7 @@ mod tests {
                     value(record("Square"), dims),
                     Ok(ConstValue::Seq {
                         elem: u8_ty,
-                        elems: vec![ConstScalar::Int(Integer::from(2)); 2],
+                        elems: vec![ConstValue::Scalar(ConstScalar::Int(Integer::from(2))); 2],
                     })
                 );
                 assert!(matches!(
@@ -2374,7 +2374,7 @@ mod tests {
                         elem: tcx.mk_int(crate::semi::ty::IntTy::Unsigned(8)),
                         elems: elems
                             .iter()
-                            .map(|&n| ConstScalar::Int(Integer::from(n)))
+                            .map(|&n| ConstValue::Scalar(ConstScalar::Int(Integer::from(n))))
                             .collect(),
                     })
                 };

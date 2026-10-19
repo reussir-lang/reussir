@@ -1,0 +1,56 @@
+// `ConstSeq<T>` for any constant `T`: the element may itself be a sequence
+// or a `[value]` record whose fields are constants, to any depth. A literal
+// evaluates elementwise against the element type, a record element reads
+// as the constructor call building it, and the values survive the HIR and
+// MIR text round trips.
+
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.a.hir
+// RUN: %rrc %t.a.hir --emit hir --no-source-locations -o %t.b.hir
+// RUN: diff %t.a.hir %t.b.hir
+// RUN: %FileCheck %s --check-prefix=HIR --input-file=%t.a.hir
+// RUN: %rrc %s --emit mir --no-source-locations -o %t.direct.mir
+// RUN: %rrc %t.a.hir --emit mir --no-source-locations -o %t.via.mir
+// RUN: diff %t.direct.mir %t.via.mir
+// RUN: %rrc %t.direct.mir --emit mir --no-source-locations -o %t.again.mir
+// RUN: diff %t.direct.mir %t.again.mir
+// RUN: %FileCheck %s --check-prefix=MIR --input-file=%t.direct.mir
+
+pub struct [value] Tile { dims: ConstSeq<i64>, major: bool }
+pub enum [value] Layout { Auto, Tiled(Tile) }
+// A record may hold a sequence of itself: the sequence is a view, so the
+// record stays finite.
+pub struct [value] Tree { kids: ConstSeq<Tree>, tag: u8 }
+
+// HIR-DAG: ConstSeq[ConstSeq[8, 128] : ConstSeq<i64>, ConstSeq[] : ConstSeq<i64>, ConstSeq[2, 1] : ConstSeq<i64>] : ConstSeq<ConstSeq<i64>>
+pub fn tiles() -> ConstSeq<ConstSeq<i64>> { [[8, 128], [], [2, 1]] }
+
+// HIR-DAG: ConstSeq[#Layout#0(), #Layout#1(#Tile{ConstSeq[8, 128] : ConstSeq<i64>, true})] : ConstSeq<#Layout>
+pub fn layouts() -> ConstSeq<Layout> {
+    [Layout::Auto, Layout::Tiled { Tile { dims: [8, 128], major: true } }]
+}
+
+// HIR-DAG: ConstSeq[#Tree{ConstSeq[#Tree{ConstSeq[] : ConstSeq<#Tree>, 2}] : ConstSeq<#Tree>, 1}] : ConstSeq<#Tree>
+pub fn forest() -> ConstSeq<Tree> {
+    [Tree { kids: [Tree { kids: [], tag: 2 }], tag: 1 }]
+}
+
+// The intrinsics read elements of any constant type.
+pub fn first_tile(ts: ConstSeq<Tile>) -> Tile { core::intrinsic::const_seq::get(ts, 0) }
+pub fn inner_len(ts: ConstSeq<ConstSeq<i64>>) -> u64 {
+    core::intrinsic::const_seq::len(core::intrinsic::const_seq::get(ts, 1))
+}
+
+pub trait Shaped {
+    const TILES: ConstSeq<Tile> = [Tile { dims: [1], major: false }];
+}
+pub struct Square { n: i64 }
+impl Shaped for Square {
+    const TILES: ConstSeq<Tile> = [Tile { dims: [2, 2], major: true }, Tile { dims: [], major: false }];
+}
+// HIR-DAG: const TILES : ConstSeq<#Tile> = ConstSeq[#Tile{ConstSeq[1] : ConstSeq<i64>, false}] : ConstSeq<#Tile>;
+// HIR-DAG: const TILES = ConstSeq[#Tile{ConstSeq[2, 2] : ConstSeq<i64>, true}, #Tile{ConstSeq[] : ConstSeq<i64>, false}] : ConstSeq<#Tile>;
+pub fn square_tiles() -> ConstSeq<Tile> { Square::TILES }
+
+// MIR-DAG: ConstSeq[ConstSeq[8, 128] : ConstSeq<i64>, ConstSeq[] : ConstSeq<i64>, ConstSeq[2, 1] : ConstSeq<i64>] : ConstSeq<ConstSeq<i64>>
+// MIR-DAG: ConstSeq[#Layout#0(), #Layout#1(#Tile{ConstSeq[8, 128] : ConstSeq<i64>, true})] : ConstSeq<
+// MIR-DAG: ConstSeq[#Tile{ConstSeq[2, 2] : ConstSeq<i64>, true}, #Tile{ConstSeq[] : ConstSeq<i64>, false}] : ConstSeq<
