@@ -10,7 +10,7 @@
 use melior::Context;
 use melior::ir::attribute::{
     ArrayAttribute, Attribute, DenseI32ArrayAttribute, DenseI64ArrayAttribute,
-    FlatSymbolRefAttribute, IntegerAttribute, StringAttribute,
+    FlatSymbolRefAttribute, IntegerAttribute, StringAttribute, TypeAttribute,
 };
 use melior::ir::operation::{OperationBuilder, OperationRef};
 use melior::ir::r#type::IntegerType;
@@ -162,22 +162,32 @@ pub fn str_literal<'c>(
         .expect("valid reussir.str.literal")
 }
 
-/// `reussir.const_seq.global @<sym_name> = <payload>`, where `payload` is a
-/// rank-1 dense elements attribute.
+/// `reussir.const_seq.global @<sym_name> (: <seq_type>)? = <payload>`, where
+/// `payload` is a rank-1 dense elements attribute (`seq_type` then omitted)
+/// or, for a sequence of aggregates, an array of the elements' constants
+/// with `seq_type` the `!reussir.const_seq<…>` type.
 pub fn const_seq_global<'c>(
     context: &'c Context,
     sym_name: &str,
+    seq_type: Option<Type<'c>>,
     payload: Attribute<'c>,
     location: Location<'c>,
 ) -> Operation<'c> {
+    let mut attributes = vec![
+        (
+            Identifier::new(context, "sym_name"),
+            StringAttribute::new(context, sym_name).into(),
+        ),
+        (Identifier::new(context, "payload"), payload),
+    ];
+    if let Some(seq_type) = seq_type {
+        attributes.push((
+            Identifier::new(context, "seq_type"),
+            TypeAttribute::new(seq_type).into(),
+        ));
+    }
     OperationBuilder::new("reussir.const_seq.global", location)
-        .add_attributes(&[
-            (
-                Identifier::new(context, "sym_name"),
-                StringAttribute::new(context, sym_name).into(),
-            ),
-            (Identifier::new(context, "payload"), payload),
-        ])
+        .add_attributes(&attributes)
         .build()
         .expect("valid reussir.const_seq.global")
 }

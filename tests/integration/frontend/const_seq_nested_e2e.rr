@@ -1,0 +1,79 @@
+// Constant sequences of aggregates at runtime: nested sequences, records
+// with sequence fields, enum elements matched by variant, and a record
+// holding a sequence of itself. Each nested sequence is its own
+// content-addressed global, shared wherever its data recurs.
+
+// RUN: %rrc %s --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s --input-file=%t.mlir
+// RUN: %FileCheck %s --check-prefix=SHARED --input-file=%t.mlir
+// RUN: %rrc %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/const_seq_nested_e2e.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe | %FileCheck %s --check-prefix=OUT
+
+import core::intrinsic::const_seq;
+
+pub struct [value] Tile { dims: ConstSeq<i64>, major: bool }
+pub enum [value] Layout { Auto, Tiled(Tile) }
+pub struct [value] Tree { kids: ConstSeq<Tree>, tag: u8 }
+
+fn rows() -> ConstSeq<ConstSeq<i64>> { [[8, 128], [], [2, 1]] }
+
+fn layouts() -> ConstSeq<Layout> {
+    [
+        Layout::Auto,
+        Layout::Tiled { Tile { dims: [8, 128], major: true } },
+        Layout::Tiled { Tile { dims: [], major: false } },
+    ]
+}
+
+fn forest() -> ConstSeq<Tree> {
+    [Tree { kids: [Tree { kids: [], tag: 2 }, Tree { kids: [Tree { kids: [], tag: 4 }], tag: 3 }], tag: 1 }]
+}
+
+fn sum(xs: ConstSeq<i64>) -> i64 {
+    let n = const_seq::len(xs);
+    while [i = 0, acc = 0] (i < n) {
+        (i + 1, acc + const_seq::get(xs, i))
+    }.1
+}
+
+pub fn row_count() -> u64 { const_seq::len(rows()) }
+
+pub fn row_sum(i: u64) -> i64 { sum(const_seq::get(rows(), i)) }
+
+// `-1` for `Auto`; else the dimensions' sum, plus 1000 for a major tile.
+pub fn layout_code(i: u64) -> i64 {
+    match const_seq::get(layouts(), i) {
+        Layout::Auto => -1,
+        Layout::Tiled(t) => (if t.major { 1000 } else { 0 }) + sum(t.dims)
+    }
+}
+
+fn tree_sum(t: Tree) -> u64 {
+    let n = const_seq::len(t.kids);
+    while [i = 0, acc = t.tag as u64] (i < n) {
+        (i + 1, acc + tree_sum(const_seq::get(t.kids, i)))
+    }.1
+}
+
+pub fn forest_sum() -> u64 { tree_sum(const_seq::get(forest(), 0)) }
+
+extern "C" trampoline "reussir_row_count" = row_count;
+extern "C" trampoline "reussir_row_sum" = row_sum;
+extern "C" trampoline "reussir_layout_code" = layout_code;
+extern "C" trampoline "reussir_forest_sum" = forest_sum;
+
+// The `[8, 128]` dimensions appear in `rows` and in a `layouts` tile: one
+// global, referenced by symbol from both.
+// SHARED-COUNT-1: reussir.const_seq.global @[[DIMS:[A-Za-z0-9_]+]] = dense<[8, 128]> : tensor<2xi64>
+// SHARED-NOT: dense<[8, 128]>
+// CHECK-DAG: reussir.const_seq.global @[[DIMS:[A-Za-z0-9_]+]] = dense<[8, 128]> : tensor<2xi64>
+// CHECK-DAG: reussir.const_seq.global @[[NONE:[A-Za-z0-9_]+]] = dense<> : tensor<0xi64>
+// CHECK-DAG: reussir.const_seq.global @{{[A-Za-z0-9_]+}} : !reussir.const_seq<!reussir.const_seq<i64>> = [@[[DIMS]], @[[NONE]], @{{[A-Za-z0-9_]+}}]
+// CHECK-DAG: reussir.const_seq.global @{{[A-Za-z0-9_]+}} : !reussir.const_seq<!reussir.record<variant "{{.*}}Layout" [value] {{.*}}>> = {{\[}}[0, []], [1, {{\[}}[@[[DIMS]], true]]], [1, {{\[}}[@[[NONE]], false]]]]
+// CHECK-DAG: reussir.const_seq.global @[[LEAVES:[A-Za-z0-9_]+]] : !reussir.const_seq<!reussir.record<compound "{{.*}}Tree" [value] {{.*}}>> = []
+// CHECK-DAG: reussir.const_seq.global @{{[A-Za-z0-9_]+}} : !reussir.const_seq<!reussir.record<compound "{{.*}}Tree" [value] {{.*}}>> = {{\[}}[@[[LEAVES]], 4 : i8]]
+
+// OUT: rows 3: 136 0 3
+// OUT-NEXT: layouts -1 1136 0
+// OUT-NEXT: forest 10

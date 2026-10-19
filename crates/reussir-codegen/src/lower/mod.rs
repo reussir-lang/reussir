@@ -433,14 +433,18 @@ pub fn lower_unit<'c, 'tcx>(
     }
     let mut const_seq_symbols = rustc_hash::FxHashSet::default();
     for (ty, elems) in const_seqs {
-        let (symbol, payload) = lowerer.const_seq_payload(ty, elems)?;
-        if const_seq_symbols.insert(symbol.clone()) {
-            body.append_operation(builders::const_seq_global(
-                context,
-                &symbol,
-                payload,
-                Location::unknown(context),
-            ));
+        let mut globals = Vec::new();
+        lowerer.const_seq_globals(ty, elems, &mut globals)?;
+        for global in globals {
+            if const_seq_symbols.insert(global.symbol.clone()) {
+                body.append_operation(builders::const_seq_global(
+                    context,
+                    &global.symbol,
+                    global.seq_type,
+                    global.payload,
+                    Location::unknown(context),
+                ));
+            }
         }
     }
     let kernel_lowerer = kernel::KernelLowerer::new(context, tcx, program, source);

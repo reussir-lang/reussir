@@ -38,6 +38,7 @@ use reussir_backend::melior::ir::attribute::{FlatSymbolRefAttribute, StringAttri
 use reussir_backend::melior::ir::r#type::{IntegerType, RankedTensorType};
 
 use reussir_core::full::mir;
+use reussir_core::semi::const_eval::is_const_scalar_ty;
 use reussir_core::semi::ctxt::DefaultCap;
 use reussir_core::semi::ty::{DefId, Flexivity, FpTy, IntTy, Ty, TyKind};
 
@@ -146,6 +147,11 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
         }
         match *ty.kind() {
             TyKind::Record { .. } => self.record_type(ty),
+            // An aggregate element is laid out like the record or view it
+            // is; a scalar one reads through `scalar_ty`.
+            TyKind::ConstSeq(elem) if !is_const_scalar_ty(elem) => {
+                Ok(const_seq_type(self.mlir_ty(elem)?))
+            }
             TyKind::Tuple(fields) => {
                 if let Some(reason) = reussir_core::semi::ty_eval::tuple_element_rejection(ty) {
                     return err(reason);

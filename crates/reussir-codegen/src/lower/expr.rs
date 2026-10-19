@@ -38,7 +38,7 @@ use reussir_core::full::mir::{self, DecisionTree, Expr, ExprKind, SwitchCases};
 use reussir_core::full::ownership::{OwnershipTable, RcOp, RecordTable, analyze_function};
 use reussir_core::intrinsic::{ArrayFn, CellFn, IntrinsicOp};
 use reussir_core::literal::{self, Integer};
-use reussir_core::semi::const_eval::{ConstScalar, ConstValue};
+use reussir_core::semi::const_eval::{ConstScalar, ConstValue, is_const_scalar_ty};
 use reussir_core::semi::hir::{ArithOp, CmpOp, ExprId, VarId};
 use reussir_core::semi::ty::{Flexivity, IntTy, Ty, TyCtxt, TyKind};
 use reussir_core::surface::{Span, Visibility};
@@ -221,6 +221,14 @@ struct ProjectedMember<'c, 'tcx> {
 /// to emit reference-count ops, and the type of each named local (so a `dup`/
 /// `drop` keyed by a variable knows whether to emit an `rc` op or to recurse
 /// through an inline record).
+/// A `reussir.const_seq.global` to emit: its symbol, its sequence type for
+/// an array payload (a dense payload implies it), and the payload.
+pub(super) struct ConstSeqGlobal<'c> {
+    pub symbol: String,
+    pub seq_type: Option<Type<'c>>,
+    pub payload: Attribute<'c>,
+}
+
 pub(super) struct Lowerer<'c, 'p, 'tcx> {
     pub(super) context: &'c Context,
     pub(super) tcx: &'p TyCtxt<'tcx>,
@@ -1108,7 +1116,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             TensorOp { .. } => err("tensor operations do not lower yet"),
             GlobalStr(token) => self.global_str(block, e, *token).map(Some),
             ConstSeq(elems) => {
-                let (symbol, _) = self.const_seq_payload(e.ty, elems)?;
+                let symbol = self.const_seq_symbol(e.ty, elems)?;
                 let ty = self.tys.mlir_ty(e.ty)?;
                 Ok(Some(self.append(
                     block,
@@ -1132,57 +1140,151 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         ))
     }
 
-    /// The global symbol and dense payload of a `ConstSeq<T>` constant. The
-    /// symbol is content-addressed (like a string literal's), so every use of
-    /// equal data in a module shares one global.
-    pub(super) fn const_seq_payload(
+    /// The `reussir.const_seq.global`s denoting a `ConstSeq<T>` constant:
+    /// the symbol of the sequence's own global, with every global it needs
+    /// appended to `globals`, a nested sequence's before the one referencing
+    /// it. Symbols are content-addressed (like a string literal's), so every
+    /// use of equal data in a module shares one global.
+    ///
+    /// A sequence of scalars is a dense payload, which implies the sequence
+    /// type. A sequence of aggregates names its type and lists its elements
+    /// in an array payload (see the dialect op): a scalar as a typed
+    /// attribute, a nested sequence as its global's symbol, a compound
+    /// record as the array of its field values, and a variant as
+    /// `[tag, [payload fields]]`.
+    pub(super) fn const_seq_globals(
         &self,
         ty: Ty<'tcx>,
         elems: &[ConstValue<'tcx>],
-    ) -> Result<(String, Attribute<'c>)> {
+        globals: &mut Vec<ConstSeqGlobal<'c>>,
+    ) -> Result<String> {
         let TyKind::ConstSeq(elem_ty) = *ty.kind() else {
             return err("constant sequence with a non-`ConstSeq` type");
         };
         let elem_mlir = self.tys.mlir_ty(elem_ty)?;
-        let mut texts = Vec::with_capacity(elems.len());
-        for elem in elems {
-            let ConstValue::Scalar(elem) = elem else {
-                return err("constant sequences of records or sequences do not lower yet");
+        let (seq_type, payload) = if is_const_scalar_ty(elem_ty) {
+            let mut texts = Vec::with_capacity(elems.len());
+            for elem in elems {
+                texts.push(self.const_scalar_text(elem, elem_ty)?);
+            }
+            let payload = if texts.is_empty() {
+                format!("dense<> : tensor<0x{elem_mlir}>")
+            } else {
+                format!(
+                    "dense<[{}]> : tensor<{}x{elem_mlir}>",
+                    texts.join(", "),
+                    texts.len()
+                )
             };
-            let text = match (elem, *elem_ty.kind()) {
-                (ConstScalar::Int(n), TyKind::Int(int_ty)) if literal::int_fits(n, int_ty) => {
-                    n.to_string()
-                }
-                (ConstScalar::Float(f), TyKind::Fp(fp)) => {
-                    let (exp_bits, mant_bits) = literal::ieee_params(fp).ok_or_else(|| {
-                        LoweringError(format!("`{fp:?}` has no settled encoding").into())
-                    })?;
-                    let bits = f.to_ieee_bits(exp_bits, mant_bits).map_err(|_| {
-                        LoweringError(format!("float element `{f}` overflows its type").into())
-                    })?;
-                    let digits = ((1 + exp_bits + mant_bits) as usize).div_ceil(4);
-                    format!("0x{bits:0digits$X}")
-                }
-                (ConstScalar::Bool(b), TyKind::Bool) => b.to_string(),
-                (ConstScalar::Char(c), TyKind::Char) => c.to_string(),
-                _ => return err("constant sequence element does not fit its element type"),
-            };
-            texts.push(text);
-        }
-        let payload = if texts.is_empty() {
-            format!("dense<> : tensor<0x{elem_mlir}>")
+            (None, payload)
         } else {
-            format!(
-                "dense<[{}]> : tensor<{}x{elem_mlir}>",
-                texts.join(", "),
-                texts.len()
-            )
+            let mut texts = Vec::with_capacity(elems.len());
+            for elem in elems {
+                texts.push(self.const_value_text(elem, elem_ty, globals)?);
+            }
+            let seq_type = self.tys.mlir_ty(ty)?;
+            (Some(seq_type), format!("[{}]", texts.join(", ")))
         };
         let attr = Attribute::parse(self.context, &payload).ok_or_else(|| {
             LoweringError(format!("could not build constant sequence `{payload}`").into())
         })?;
-        let symbol = StringToken::hash(payload.as_bytes()).mangle_in("REUSSIR_CONST_SEQ");
-        Ok((symbol, attr))
+        // The type is part of the identity: equal element lists of different
+        // record types are different data.
+        let identity = match seq_type {
+            Some(seq_type) => format!("{seq_type} = {payload}"),
+            None => payload,
+        };
+        let symbol = StringToken::hash(identity.as_bytes()).mangle_in("REUSSIR_CONST_SEQ");
+        globals.push(ConstSeqGlobal {
+            symbol: symbol.clone(),
+            seq_type,
+            payload: attr,
+        });
+        Ok(symbol)
+    }
+
+    /// The symbol of the global denoting a `ConstSeq<T>` constant
+    /// ([`Self::const_seq_globals`]).
+    fn const_seq_symbol(&self, ty: Ty<'tcx>, elems: &[ConstValue<'tcx>]) -> Result<String> {
+        self.const_seq_globals(ty, elems, &mut Vec::new())
+    }
+
+    /// A constant of the aggregate-sequence element form, as attribute text.
+    fn const_value_text(
+        &self,
+        value: &ConstValue<'tcx>,
+        ty: Ty<'tcx>,
+        globals: &mut Vec<ConstSeqGlobal<'c>>,
+    ) -> Result<String> {
+        match value {
+            ConstValue::Scalar(_) => {
+                let text = self.const_scalar_text(value, ty)?;
+                // A typed attribute; `true`/`false` are typed already.
+                if matches!(ty.kind(), TyKind::Bool) {
+                    Ok(text)
+                } else {
+                    Ok(format!("{text} : {}", self.tys.mlir_ty(ty)?))
+                }
+            }
+            ConstValue::Seq { elems, .. } => {
+                Ok(format!("@{}", self.const_seq_globals(ty, elems, globals)?))
+            }
+            ConstValue::Record {
+                def,
+                variant,
+                fields,
+            } => {
+                // A constant record is not generic, so its instance is the
+                // definition's only one.
+                let record_ty = self.tcx.mk_record(*def, &[], Flexivity::Irrelevant);
+                let rec = self
+                    .tys
+                    .record_of(record_ty)
+                    .ok_or_else(|| LoweringError("constant record has no layout".into()))?;
+                let field_tys: Vec<Ty<'tcx>> = match (rec.layout, variant) {
+                    (mir::RecordLayout::Compound(members), None) => {
+                        members.iter().map(|m| m.ty).collect()
+                    }
+                    (mir::RecordLayout::Variant(variants), Some(v)) => variants[*v].fields.to_vec(),
+                    _ => return err("constant record value does not match its layout"),
+                };
+                let mut texts = Vec::with_capacity(fields.len());
+                for (field, field_ty) in fields.iter().zip(field_tys) {
+                    texts.push(self.const_value_text(field, field_ty, globals)?);
+                }
+                let fields = format!("[{}]", texts.join(", "));
+                Ok(match variant {
+                    None => fields,
+                    Some(v) => format!("[{v}, {fields}]"),
+                })
+            }
+        }
+    }
+
+    /// A scalar constant of type `ty` in the literal form MLIR attributes
+    /// use; a float as the hexadecimal bits of its IEEE encoding.
+    fn const_scalar_text(&self, value: &ConstValue<'tcx>, ty: Ty<'tcx>) -> Result<String> {
+        let ConstValue::Scalar(scalar) = value else {
+            return err("constant sequence element does not fit its element type");
+        };
+        match (scalar, *ty.kind()) {
+            (ConstScalar::Int(n), TyKind::Int(int_ty)) if literal::int_fits(n, int_ty) => {
+                Ok(n.to_string())
+            }
+            (ConstScalar::Float(f), TyKind::Fp(fp)) => {
+                let (exp_bits, mant_bits) = literal::ieee_params(fp).ok_or_else(|| {
+                    LoweringError(format!("`{fp:?}` has no settled encoding").into())
+                })?;
+                let bits = f.to_ieee_bits(exp_bits, mant_bits).map_err(|_| {
+                    LoweringError(format!("float element `{f}` overflows its type").into())
+                })?;
+                let digits = ((1 + exp_bits + mant_bits) as usize).div_ceil(4);
+                Ok(format!("0x{bits:0digits$X}"))
+            }
+            (ConstScalar::Bool(b), TyKind::Bool) => Ok(b.to_string()),
+            (ConstScalar::Char(c), TyKind::Char) => Ok(c.to_string()),
+            _ => err("constant sequence element does not fit its element type"),
+        }
     }
 
     fn string_payload(&self, token: StringToken) -> Result<&'p str> {
