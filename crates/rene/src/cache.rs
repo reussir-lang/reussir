@@ -7,9 +7,9 @@
 //! under the platform cache directory (docs/design/system-rust-runtime.md
 //! §4):
 //!
-//! - Linux and other Unix: `$XDG_CACHE_HOME/reussir`, or `~/.cache/reussir`;
-//! - macOS: `~/Library/Caches/reussir`;
-//! - Windows: `%LOCALAPPDATA%\reussir`.
+//! - Linux and other Unix: `$XDG_CACHE_HOME/rene`, or `~/.cache/rene`;
+//! - macOS: `~/Library/Caches/rene`;
+//! - Windows: `%LOCALAPPDATA%\rene`.
 //!
 //! [`CACHE_DIR_ENV`] overrides the location, for hermetic builds and tests.
 //!
@@ -54,7 +54,7 @@ use std::time::{Duration, UNIX_EPOCH};
 pub const CACHE_DIR_ENV: &str = "RENE_CACHE_DIR";
 
 /// The cache directory's name under the platform cache directory.
-const CACHE_NAME: &str = "reussir";
+const CACHE_NAME: &str = "rene";
 
 /// The cache's name inside the build directory, when the shared location is
 /// unusable.

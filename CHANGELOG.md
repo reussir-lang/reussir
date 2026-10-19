@@ -139,8 +139,8 @@
 - `rene` keeps the dependencies every build shares in a per-user cache
   instead of each build directory: the bundled `core` sources, the
   `reussir-rt` bake, and `core`'s compiled interface and archive. The cache
-  is `$XDG_CACHE_HOME/reussir` (`~/.cache/reussir`) on Linux,
-  `~/Library/Caches/reussir` on macOS, and `%LOCALAPPDATA%\reussir` on
+  is `$XDG_CACHE_HOME/rene` (`~/.cache/rene`) on Linux,
+  `~/Library/Caches/rene` on macOS, and `%LOCALAPPDATA%\rene` on
   Windows; `RENE_CACHE_DIR` overrides it. Entries are keyed by content,
   target, toolchain, and (for core) the profile's flags and the `rrc`
   binary, built under an advisory file lock that a concurrent rene waits on

@@ -126,7 +126,7 @@ the resolved toolchain, cache state, and chosen polyffi mode.
 The driver guarantees, before any polyffi compile or link-flag query, that
 the runtime is built for the resolved toolchain:
 
-- Cache location: `${XDG_CACHE_HOME:-~/.cache}/reussir/rt/<key>/` where
+- Cache location: `${XDG_CACHE_HOME:-~/.cache}/rene/rt/<key>/` where
   `<key> = hash(rustc commit hash, rt source hash, target triple, profile,
   feature set)`.
 - Build: run `cargo build --locked --offline --release
@@ -142,7 +142,7 @@ the runtime is built for the resolved toolchain:
   `rrc rt build` allows explicit prebuild in CI images/containers.
 
 **Status in `rene`.** `rene` implements this cache (`crates/rene/src/cache.rs`)
-for the bake it drives. The root is `dirs::cache_dir()/reussir`
+for the bake it drives. The root is `dirs::cache_dir()/rene`
 (`~/Library/Caches` on macOS, `%LOCALAPPDATA%` on Windows), overridable
 with `RENE_CACHE_DIR`. Entries are `<root>/<kind>/<key>`:
 
