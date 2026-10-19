@@ -225,6 +225,30 @@ pub fn publish_dir(tmp: &Path, dest: &Path) -> Result<(), String> {
     }
 }
 
+/// The bytes of every regular file under `path`, following no links: what
+/// an entry costs on disk, as the ledger records it. Unreadable parts count
+/// as zero.
+pub fn dir_size(path: &Path) -> u64 {
+    fn walk(dir: &Path, total: &mut u64) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                walk(&entry.path(), total);
+            } else if meta.is_file() {
+                *total += meta.len();
+            }
+        }
+    }
+    let mut total = 0;
+    walk(path, &mut total);
+    total
+}
+
 /// Hash cache-key components into an entry key (32 hex digits). Every
 /// component is length-prefixed, so `["ab", "c"]` and `["a", "bc"]` differ.
 pub fn key<'a>(parts: impl IntoIterator<Item = &'a [u8]>) -> String {

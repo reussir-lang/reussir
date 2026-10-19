@@ -569,6 +569,54 @@ fn packages_share_the_runtime_bake_and_core_through_the_cache() {
     assert_eq!(fakes.rt_entries(), bakes);
 }
 
+/// The cache ledger records what a build used: one live, sized row per
+/// entry, no pin left behind, and no session row once the build is over.
+#[cfg(unix)]
+#[test]
+fn the_ledger_records_the_entries_a_build_used() {
+    use rene::ledger::{Session, State};
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let root = tmp.join("reussir-build");
+    let manifest = package(&tmp, "demo");
+    // A declared target, so the build goes past the bake and compiles core.
+    std::fs::write(
+        &manifest,
+        "{ package = { name = \"demo\", version = \"0.1.0\" }, \
+         targets.demo.kind = 'executable }\n",
+    )
+    .unwrap();
+    let fakes = Fakes::new(&tmp);
+    let out = fakes.rene(&["build"], &manifest, &root);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+
+    let cache = rene::cache::Cache::at(&fakes.cache).unwrap();
+    let snapshot = compio::runtime::Runtime::new().unwrap().block_on(async {
+        let session = Session::start(&cache).await;
+        assert!(session.enabled());
+        session.snapshot().await.unwrap()
+    });
+    let kinds: Vec<&str> = snapshot
+        .entries
+        .keys()
+        .map(|kk| kk.split_once('/').unwrap().0)
+        .collect();
+    assert_eq!(kinds, ["core-src", "deps", "rt"], "{snapshot:#?}");
+    for entry in snapshot.entries.values() {
+        assert_eq!(entry.state, State::Live);
+        assert!(entry.size > 0, "{entry:?}");
+        assert!(entry.last_used > 0, "{entry:?}");
+    }
+    assert_eq!(
+        snapshot.total,
+        snapshot.entries.values().map(|e| e.size).sum::<u64>()
+    );
+    assert!(snapshot.pins.is_empty(), "{snapshot:#?}");
+    // Only the inspecting session itself remains.
+    assert_eq!(snapshot.sessions.len(), 1, "{snapshot:#?}");
+}
+
 /// An unusable cache location is not fatal: the build warns and caches in
 /// its own build directory.
 #[cfg(unix)]

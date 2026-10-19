@@ -2,14 +2,16 @@
 //!
 //! A bundled package (today only `core`) is the same source in every build,
 //! so compiling it again in each build directory is wasted work. When the
-//! dependency pipeline has to build one, it first takes the package's
-//! [`Cache`] entry lock and looks for a complete entry. If it finds one, it
-//! copies the interface, the archive, and any token-reuse report into the
-//! build directory and records the cached source graph, the same record a
-//! local build would write. Otherwise it builds locally as usual, then
-//! publishes the outputs to the entry. Either way the build directory ends
-//! up with its own copy, so freshness, the plan dump, and linking are
-//! unchanged: the cache only replaces the compile.
+//! dependency pipeline has to build one, it first asks the cache's ledger
+//! ([`Session::lookup`]) for the package's entry. A live, complete entry is
+//! copied into the build directory (the interface, the archive, and any
+//! token-reuse report) along with the cached source graph, the same record a
+//! local build would write, and the entry is unpinned at once: nothing reads
+//! it in place afterwards. Otherwise the package's [`Cache`] entry lock is
+//! taken, the ledger asked again, and if there is still nothing the package
+//! is built locally as usual and its outputs published to the entry. Either
+//! way the build directory ends up with its own copy, so freshness, the plan
+//! dump, and linking are unchanged: the cache only replaces the compile.
 //!
 //! The entry key hashes everything the outputs depend on:
 //!
@@ -25,12 +27,14 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::cache::{self, Cache};
 use crate::deps::{self, SourceFile};
 use crate::fresh;
+use crate::ledger::{Lookup, Recheck, Session};
 use crate::plan::{self, PlannedCommand};
 use crate::rt::RtArtifacts;
 
@@ -43,9 +47,13 @@ const RECORD: &str = "record.json";
 /// Stands for the build directory's `deps/` path in hashed argv.
 const DEPS_DIR: &str = "<deps-dir>";
 
+/// How long to wait before asking again for an entry being removed.
+const WAIT: Duration = Duration::from_millis(100);
+
 /// The bundled packages a build may share, and where they are cached.
-pub struct Shared {
+pub struct Shared<'s> {
     cache: Cache,
+    session: &'s Session,
     /// Package name to its bundled content hash.
     packages: BTreeMap<String, String>,
     /// [`cache::program_identity`] of `rrc`, resolved once per build.
@@ -66,14 +74,17 @@ struct Record {
 /// path, for [`Shared::publish`] after a local build.
 pub struct Claim {
     entry: PathBuf,
+    key: String,
     _lock: cache::EntryLock,
 }
 
-impl Shared {
-    /// Share the `packages` (name to bundled content hash) through `cache`.
-    pub fn new(cache: Cache, packages: BTreeMap<String, String>) -> Self {
+impl<'s> Shared<'s> {
+    /// Share the `packages` (name to bundled content hash) through `cache`,
+    /// as `session`.
+    pub fn new(cache: Cache, session: &'s Session, packages: BTreeMap<String, String>) -> Self {
         Shared {
             cache,
+            session,
             packages,
             rrc: cache::program_identity(&deps::resolve_rrc()),
         }
@@ -91,38 +102,99 @@ impl Shared {
         let name = node.name;
         let content = self.packages.get(name)?;
         let key = self.key(node, content, rt);
-        let lock = match self
-            .cache
-            .lock(KIND, &key, &format!("building `{name}`"), notify)
-            .await
-        {
-            Ok(lock) => lock,
-            Err(e) => {
-                tracing::warn!("{e}; building `{name}` without the shared cache");
-                return None;
-            }
-        };
         let entry = self.cache.entry(KIND, &key);
-        match restore(&entry, node.deps_dir) {
-            Ok(Some(sources)) => {
-                tracing::debug!(package = name, entry = %entry.display(), "restored from the cache");
-                Some(Outcome::Restored(sources))
+        let mut notify = Some(notify);
+        loop {
+            let found = match self.session.lookup(KIND, &key, &entry).await {
+                Lookup::Live => complete(&entry),
+                Lookup::Build => false,
+                Lookup::Wait => {
+                    compio::runtime::time::sleep(WAIT).await;
+                    continue;
+                }
+            };
+            if found {
+                return self.restore(name, &key, &entry, node.deps_dir).await;
             }
-            Ok(None) => Some(Outcome::Build(Claim { entry, _lock: lock })),
-            Err(e) => {
-                tracing::warn!("{e}; building `{name}` locally");
-                Some(Outcome::Build(Claim { entry, _lock: lock }))
+            let lock = match self
+                .cache
+                .lock(KIND, &key, &format!("building `{name}`"), |msg| {
+                    if let Some(notify) = notify.take() {
+                        notify(msg)
+                    }
+                })
+                .await
+            {
+                Ok(lock) => lock,
+                Err(e) => {
+                    tracing::warn!("{e}; building `{name}` without the shared cache");
+                    return None;
+                }
+            };
+            // Whoever held the lock may have just published this entry.
+            match self
+                .session
+                .recheck(KIND, &key, &entry, complete(&entry))
+                .await
+            {
+                Recheck::Live => return self.restore(name, &key, &entry, node.deps_dir).await,
+                Recheck::Build => {
+                    return Some(Outcome::Build(Claim {
+                        entry,
+                        key,
+                        _lock: lock,
+                    }));
+                }
+                Recheck::Wait => {
+                    drop(lock);
+                    compio::runtime::time::sleep(WAIT).await;
+                }
             }
         }
     }
 
+    /// Copy the complete entry into the build directory and unpin it.
+    async fn restore(
+        &self,
+        name: &str,
+        key: &str,
+        entry: &Path,
+        deps_dir: &Path,
+    ) -> Option<Outcome> {
+        let outcome = match restore(entry, deps_dir) {
+            Ok(Some(sources)) => {
+                tracing::debug!(package = name, entry = %entry.display(), "restored from the cache");
+                Some(Outcome::Restored(sources))
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    "the cache entry `{}` vanished while restoring `{name}`; building it locally",
+                    entry.display()
+                );
+                None
+            }
+            Err(e) => {
+                tracing::warn!("{e}; building `{name}` locally");
+                None
+            }
+        };
+        self.session.unpin(KIND, key).await;
+        outcome
+    }
+
     /// Publish a local build's outputs (those of [`outputs`] that exist) to
-    /// the claimed entry. Best effort: a failure only warns, since the build
-    /// itself succeeded.
-    pub fn publish(claim: Claim, outputs: &[PathBuf], sources: &[SourceFile]) {
-        if let Err(e) = publish(&claim.entry, outputs, sources) {
-            tracing::warn!("cannot share the build through the cache: {e}");
+    /// the claimed entry and register it. Best effort: a failure only warns,
+    /// since the build itself succeeded.
+    pub async fn publish(&self, claim: Claim, outputs: &[PathBuf], sources: &[SourceFile]) {
+        match publish(&claim.entry, outputs, sources) {
+            Ok(()) => {
+                self.session
+                    .register(KIND, &claim.key, cache::dir_size(&claim.entry))
+                    .await;
+            }
+            Err(e) => tracing::warn!("cannot share the build through the cache: {e}"),
         }
+        self.session.unpin(KIND, &claim.key).await;
     }
 
     fn key(&self, node: &Node<'_>, content: &str, rt: &RtArtifacts) -> String {
@@ -198,18 +270,28 @@ pub(crate) fn outputs(commands: &[PlannedCommand]) -> Vec<PathBuf> {
         .collect()
 }
 
+/// The entry's record, if the entry is complete: the record parses and
+/// every file it lists is there.
+fn read_record(entry: &Path) -> Option<Record> {
+    let record = std::fs::read_to_string(entry.join(RECORD)).ok()?;
+    let record = serde_json::from_str::<Record>(&record).ok()?;
+    record
+        .files
+        .iter()
+        .all(|file| entry.join(file).is_file())
+        .then_some(record)
+}
+
+fn complete(entry: &Path) -> bool {
+    read_record(entry).is_some()
+}
+
 /// Copy a complete entry's outputs into `deps_dir`. `Ok(None)` when the
 /// entry is absent or incomplete.
 fn restore(entry: &Path, deps_dir: &Path) -> Result<Option<Vec<SourceFile>>, String> {
-    let Ok(record) = std::fs::read_to_string(entry.join(RECORD)) else {
+    let Some(record) = read_record(entry) else {
         return Ok(None);
     };
-    let Ok(record) = serde_json::from_str::<Record>(&record) else {
-        return Ok(None);
-    };
-    if record.files.iter().any(|file| !entry.join(file).is_file()) {
-        return Ok(None);
-    }
     for file in &record.files {
         let dest = deps_dir.join(file);
         let tmp = cache::temp_sibling(&dest);

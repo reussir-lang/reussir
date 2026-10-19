@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cache::{self, Cache};
 use crate::db::BuildDir;
+use crate::ledger::{Lookup, Recheck, Session};
 use crate::tables;
 
 /// The runtime crate's directory name inside the unpacked bundle.
@@ -243,10 +244,15 @@ async fn capture(program: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
 }
 
+/// How long to wait before asking again for an entry being removed.
+const WAIT: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// Ensure the runtime is baked for the resolved toolchain and target, and
-/// record the bake in `dir`. A complete cache entry is used as is; otherwise
-/// the entry lock is taken (waiting politely for another rene baking the
-/// same entry), the entry is checked again, and only then baked.
+/// record the bake in `dir`. A complete cache entry is used as is, pinned by
+/// the `session` for the rest of the build since its artifacts are linked in
+/// place; otherwise the entry lock is taken (waiting politely for another
+/// rene baking the same entry), the entry is checked again, and only then
+/// baked.
 ///
 /// `linker`, when given, is pinned for the bake's own links (the runtime
 /// dylib) — the same pinning `rrc --linker` gives the driver-level links,
@@ -257,6 +263,7 @@ async fn capture(program: &Path, args: &[&str]) -> Result<String, String> {
 pub async fn prepare(
     dir: &BuildDir,
     cache: &Cache,
+    session: &Session,
     requested_target: Option<&str>,
     linker: Option<&Path>,
     progress: &indicatif::MultiProgress,
@@ -268,21 +275,41 @@ pub async fn prepare(
     let key = bake_key(&hash, &toolchain, platform_allocator);
     let entry = cache.entry(KIND, &key);
 
-    let artifacts = match cached_bake(&entry, &toolchain) {
-        Some(artifacts) => {
+    let artifacts = loop {
+        let found = match session.lookup(KIND, &key, &entry).await {
+            Lookup::Live => cached_bake(&entry, &toolchain),
+            Lookup::Build => None,
+            Lookup::Wait => {
+                compio::runtime::time::sleep(WAIT).await;
+                continue;
+            }
+        };
+        if let Some(artifacts) = found {
             tracing::debug!(entry = %entry.display(), "reussir-rt is up to date");
-            artifacts
+            break artifacts;
         }
-        None => {
-            let _lock = cache
-                .lock(KIND, &key, "baking reussir-rt", |msg| {
-                    progress.suspend(|| tracing::info!("{msg}"))
-                })
-                .await?;
-            // Whoever held the lock may have just baked this entry.
-            match cached_bake(&entry, &toolchain) {
-                Some(artifacts) => artifacts,
-                None => bake(&entry, toolchain, platform_allocator, linker, progress).await?,
+        let _lock = cache
+            .lock(KIND, &key, "baking reussir-rt", |msg| {
+                progress.suspend(|| tracing::info!("{msg}"))
+            })
+            .await?;
+        // Whoever held the lock may have just baked this entry.
+        let found = cached_bake(&entry, &toolchain);
+        match session.recheck(KIND, &key, &entry, found.is_some()).await {
+            Recheck::Live => {
+                if let Some(artifacts) = found {
+                    break artifacts;
+                }
+            }
+            Recheck::Build => {
+                let artifacts =
+                    bake(&entry, toolchain, platform_allocator, linker, progress).await?;
+                session.register(KIND, &key, cache::dir_size(&entry)).await;
+                break artifacts;
+            }
+            Recheck::Wait => {
+                drop(_lock);
+                compio::runtime::time::sleep(WAIT).await;
             }
         }
     };

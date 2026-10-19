@@ -161,7 +161,9 @@ with `RENE_CACHE_DIR`. Entries are `<root>/<kind>/<key>`:
 
 Writers take an OS advisory lock on `<key>.lock`, then re-check the entry,
 so concurrent builds wait for one bake. A process that dies releases its
-lock.
+lock. A ledger (`cache-ledger.md`) records which build uses which entry and
+when each entry was last wanted, which is what lets old entries be removed
+safely.
 
 Everything downstream reads the manifest:
 

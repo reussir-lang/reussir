@@ -11,7 +11,8 @@
 //! resolve over local paths ([`resolve`]), and `rene new` scaffolds a fresh
 //! package ([`new`]). What every build has in common — the bundled `core`
 //! sources ([`core_src`]), the runtime bake, and `core`'s compiled artifacts
-//! ([`shared`]) — lives once per user in the shared [`cache`].
+//! ([`shared`]) — lives once per user in the shared [`cache`], whose
+//! [`ledger`] records which build uses which entry.
 
 pub mod cache;
 pub mod compile;
@@ -20,6 +21,7 @@ pub mod db;
 pub mod deps;
 pub mod exec;
 pub mod fresh;
+pub mod ledger;
 pub mod manifest;
 pub mod new;
 pub mod plan;

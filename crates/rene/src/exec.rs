@@ -52,7 +52,7 @@ pub struct Options<'a> {
     pub color: bool,
     /// The bundled packages whose compiled artifacts are shared through the
     /// cache, if any.
-    pub shared: Option<&'a Shared>,
+    pub shared: Option<&'a Shared<'a>>,
 }
 
 /// Build every dependency of the graph through the pool, each dispatched
@@ -221,8 +221,8 @@ async fn build_node(
         progress.suspend(|| completed.report())?;
     }
     fresh::record_dep(graph, name, &ctx, rt, &sources)?;
-    if let Some(claim) = claim {
-        Shared::publish(claim, &outputs, &sources);
+    if let (Some(shared), Some(claim)) = (opts.shared, claim) {
+        shared.publish(claim, &outputs, &sources).await;
     }
     bar.finish_and_clear();
     progress.remove(&bar);

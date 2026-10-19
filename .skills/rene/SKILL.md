@@ -58,7 +58,9 @@ are shared by every build through a per-user cache: `$XDG_CACHE_HOME/rene`
 `%LOCALAPPDATA%\rene` on Windows. Set `RENE_CACHE_DIR` to use another
 directory; the lit suites point it at `build/tests/integration/rene-cache`.
 Entries are keyed by content, target, and toolchain, built under a file
-lock (a second rene waits and says so), and safe to delete while no rene
+lock (a second rene waits and says so), tracked by a ledger (`ledger/` and
+`sessions/` under the cache root, see docs/design/cache-ledger.md), and
+safe to delete while no rene
 runs. `rene clean` does not touch the cache.
 
 `rene` shells out to `rrc`, `cargo`, and `rustc`; set `REUSSIR_RRC`,

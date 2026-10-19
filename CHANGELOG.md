@@ -136,6 +136,12 @@
 
 ### Tooling
 
+- `rene` records in a ledger inside the per-user cache which build uses
+  which cache entry and when each entry was last wanted (TurboKV at
+  `<cache>/ledger`, plus one OS lock per run under `<cache>/sessions/`),
+  the groundwork for removing old entries safely; see
+  docs/design/cache-ledger.md. A ledger that cannot be used disables itself
+  with a warning and the build goes on as before.
 - `rene` keeps the dependencies every build shares in a per-user cache
   instead of each build directory: the bundled `core` sources, the
   `reussir-rt` bake, and `core`'s compiled interface and archive. The cache
