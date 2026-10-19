@@ -3271,6 +3271,176 @@ struct ReussirStrUnsafeByteAtOpConversionPattern
   }
 };
 
+// The number of elements of the constant sequence global `name`, which the
+// conversion may already have rewritten: a scalar sequence lowers to an LLVM
+// array, an aggregate one to a literal struct with one field per element.
+static mlir::FailureOr<uint64_t> constSeqLength(mlir::ModuleOp module,
+                                                llvm::StringRef name) {
+  if (auto global = module.lookupSymbol<ReussirConstSeqGlobalOp>(name))
+    return global.getLength();
+  auto global = module.lookupSymbol<mlir::LLVM::GlobalOp>(name);
+  if (!global)
+    return mlir::failure();
+  return llvm::TypeSwitch<mlir::Type, mlir::FailureOr<uint64_t>>(
+             global.getType())
+      .Case([](mlir::LLVM::LLVMArrayType array) -> mlir::FailureOr<uint64_t> {
+        return array.getNumElements();
+      })
+      .Case(
+          [](mlir::LLVM::LLVMStructType elements) -> mlir::FailureOr<uint64_t> {
+            return static_cast<uint64_t>(elements.getBody().size());
+          })
+      .Default(mlir::failure());
+}
+
+// Builds the elements of an aggregate `reussir.const_seq.global` as LLVM
+// constants inside the global's initializer. A `reussir.const_seq.get` reads
+// an element through the converted element type, so each element is laid out
+// byte-exactly like that type: a literal struct holding the members at the
+// offsets the type converter gives them, with explicit `[n x i8]` padding
+// between and after them (zero-initialized). The converted struct itself is
+// not used as the constant's type: it widens members over padding, and types
+// a variant's payload as one arm (or as opaque words), so a constant of
+// another arm could not be expressed in it. Nested records recurse into the
+// same shape, and a nested sequence is the `{ptr, len}` view of its own
+// global.
+class ConstSeqConstantBuilder {
+public:
+  ConstSeqConstantBuilder(mlir::OpBuilder &builder, mlir::Location loc,
+                          const mlir::LLVMTypeConverter &converter,
+                          const mlir::DataLayout &dataLayout,
+                          mlir::ModuleOp module)
+      : builder(builder), loc(loc), converter(converter),
+        dataLayout(dataLayout), module(module) {}
+
+  // A built constant: its LLVM type, value, and byte size (that of the
+  // Reussir type it stands for).
+  struct Constant {
+    mlir::Type type;
+    mlir::Value value;
+    uint64_t size;
+  };
+
+  mlir::FailureOr<Constant> build(mlir::Attribute value, mlir::Type type) {
+    if (llvm::isa<mlir::IntegerType, mlir::FloatType>(type)) {
+      auto constant = mlir::LLVM::ConstantOp::create(
+          builder, loc, type, llvm::cast<mlir::TypedAttr>(value));
+      return Constant{type, constant, dataLayout.getTypeSize(type)};
+    }
+    if (auto seq = llvm::dyn_cast<ConstSeqType>(type))
+      return buildView(llvm::cast<mlir::FlatSymbolRefAttr>(value), seq);
+    return buildRecord(llvm::cast<mlir::ArrayAttr>(value),
+                       llvm::cast<RecordType>(type));
+  }
+
+private:
+  mlir::FailureOr<Constant> buildView(mlir::FlatSymbolRefAttr ref,
+                                      ConstSeqType seq) {
+    auto length = constSeqLength(module, ref.getValue());
+    if (mlir::failed(length))
+      return mlir::emitError(loc)
+             << "referenced global sequence " << ref << " not found";
+    auto ptrType = mlir::LLVM::LLVMPointerType::get(builder.getContext());
+    auto indexType = converter.getIndexType();
+    auto viewType = mlir::LLVM::LLVMStructType::getLiteral(
+        builder.getContext(), {ptrType, indexType});
+    mlir::Value data =
+        mlir::LLVM::AddressOfOp::create(builder, loc, ptrType, ref);
+    mlir::Value len = mlir::LLVM::ConstantOp::create(
+        builder, loc, indexType, builder.getIntegerAttr(indexType, *length));
+    mlir::Value view = mlir::LLVM::ZeroOp::create(builder, loc, viewType);
+    view = mlir::LLVM::InsertValueOp::create(builder, loc, view, data,
+                                             llvm::ArrayRef<int64_t>{0});
+    view = mlir::LLVM::InsertValueOp::create(builder, loc, view, len,
+                                             llvm::ArrayRef<int64_t>{1});
+    return Constant{viewType, view, dataLayout.getTypeSize(seq)};
+  }
+
+  mlir::FailureOr<Constant> buildRecord(mlir::ArrayAttr fields,
+                                        RecordType record) {
+    auto members = record.getMembers();
+    auto memberIsField = record.getMemberIsField();
+    // (byte offset, constant) of each stored part.
+    llvm::SmallVector<std::pair<uint64_t, Constant>> parts;
+    if (record.isVariant()) {
+      // `{tag, payload}`: the arm's value at the payload offset, the tag's
+      // size aligned to the arms' alignment (see
+      // `RecordType::getTypeSizeInBits`).
+      mlir::IntegerType tagType = record.getTagType();
+      auto tag = llvm::cast<mlir::IntegerAttr>(fields[0]);
+      uint64_t index = tag.getValue().getZExtValue();
+      mlir::Value tagValue = mlir::LLVM::ConstantOp::create(
+          builder, loc, tagType, builder.getIntegerAttr(tagType, index));
+      parts.push_back(
+          {0, Constant{tagType, tagValue, dataLayout.getTypeSize(tagType)}});
+      mlir::Type arm = getProjectedType(members[index], memberIsField[index],
+                                        Capability::value);
+      auto armValue = build(fields[1], arm);
+      if (mlir::failed(armValue))
+        return mlir::failure();
+      uint64_t armOffset = llvm::alignTo(
+          dataLayout.getTypeSize(tagType),
+          record.getElementRegionLayoutInfo(dataLayout).alignment.value());
+      parts.push_back({armOffset, *armValue});
+    } else {
+      for (auto [index, field] : llvm::enumerate(fields)) {
+        mlir::Type member = getProjectedType(
+            members[index], memberIsField[index], Capability::value);
+        auto value = build(field, member);
+        if (mlir::failed(value))
+          return mlir::failure();
+        parts.push_back({record.getMemberOffset(dataLayout, index), *value});
+      }
+      llvm::stable_sort(parts, [](const auto &a, const auto &b) {
+        return a.first < b.first;
+      });
+    }
+    return assemble(parts, dataLayout.getTypeSize(record));
+  }
+
+  // `{[pad] part [pad] part ... [pad]}`: the parts at their offsets, padded
+  // to `size` bytes; a part of no size (an empty arm) takes no field.
+  mlir::FailureOr<Constant>
+  assemble(llvm::ArrayRef<std::pair<uint64_t, Constant>> parts, uint64_t size) {
+    auto byteType = mlir::IntegerType::get(builder.getContext(), 8);
+    llvm::SmallVector<mlir::Type> fieldTypes;
+    // (field index, value) of the stored parts.
+    llvm::SmallVector<std::pair<int64_t, mlir::Value>> stored;
+    uint64_t end = 0;
+    auto padTo = [&](uint64_t offset) {
+      if (offset > end)
+        fieldTypes.push_back(
+            mlir::LLVM::LLVMArrayType::get(byteType, offset - end));
+      end = offset;
+    };
+    for (const auto &[offset, part] : parts) {
+      if (part.size == 0)
+        continue;
+      padTo(offset);
+      stored.push_back({static_cast<int64_t>(fieldTypes.size()), part.value});
+      fieldTypes.push_back(part.type);
+      end = offset + part.size;
+    }
+    padTo(size);
+    auto type = mlir::LLVM::LLVMStructType::getLiteral(builder.getContext(),
+                                                       fieldTypes);
+    if (dataLayout.getTypeSize(type) != size)
+      return mlir::emitError(loc)
+             << "constant " << type << " does not fill " << size << " bytes";
+    mlir::Value value = mlir::LLVM::ZeroOp::create(builder, loc, type);
+    for (const auto &[field, part] : stored)
+      value = mlir::LLVM::InsertValueOp::create(builder, loc, value, part,
+                                                llvm::ArrayRef<int64_t>{field});
+    return Constant{type, value, size};
+  }
+
+  mlir::OpBuilder &builder;
+  mlir::Location loc;
+  const mlir::LLVMTypeConverter &converter;
+  const mlir::DataLayout &dataLayout;
+  mlir::ModuleOp module;
+};
+
 struct ReussirConstSeqGlobalOpConversionPattern
     : public mlir::OpConversionPattern<ReussirConstSeqGlobalOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -3278,14 +3448,56 @@ struct ReussirConstSeqGlobalOpConversionPattern
   mlir::LogicalResult
   matchAndRewrite(ReussirConstSeqGlobalOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    auto payload = llvm::dyn_cast<mlir::DenseElementsAttr>(op.getPayload());
-    if (!payload)
-      return op.emitOpError("aggregate constant sequences do not lower yet");
-    auto arrayType = mlir::LLVM::LLVMArrayType::get(payload.getElementType(),
-                                                    payload.getNumElements());
-    rewriter.replaceOpWithNewOp<mlir::LLVM::GlobalOp>(
-        op, arrayType, /*isConstant=*/true, mlir::LLVM::Linkage::Internal,
-        op.getSymName(), payload);
+    if (auto payload =
+            llvm::dyn_cast<mlir::DenseElementsAttr>(op.getPayload())) {
+      auto arrayType = mlir::LLVM::LLVMArrayType::get(payload.getElementType(),
+                                                      payload.getNumElements());
+      rewriter.replaceOpWithNewOp<mlir::LLVM::GlobalOp>(
+          op, arrayType, /*isConstant=*/true, mlir::LLVM::Linkage::Internal,
+          op.getSymName(), payload);
+      return mlir::success();
+    }
+    // An aggregate sequence: a literal struct of the elements' constants,
+    // one field each, built in the initializer. Each constant has the
+    // element's size, a multiple of its alignment, so field `i` sits at
+    // `i * size`, where a `get` through the converted element type expects
+    // it; the global is aligned for the element.
+    mlir::Location loc = op.getLoc();
+    auto converter =
+        static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter());
+    auto dataLayout = getDataLayout(*converter, op.getOperation());
+    mlir::Type elementType = op.getElementType();
+    auto elements = llvm::cast<mlir::ArrayAttr>(op.getPayload());
+
+    auto global = mlir::LLVM::GlobalOp::create(
+        rewriter, loc,
+        mlir::LLVM::LLVMStructType::getLiteral(rewriter.getContext(), {}),
+        /*isConstant=*/true, mlir::LLVM::Linkage::Internal, op.getSymName(),
+        /*value=*/nullptr, dataLayout.getTypeABIAlignment(elementType));
+    mlir::Block *initializer =
+        rewriter.createBlock(&global.getInitializerRegion());
+    rewriter.setInsertionPointToEnd(initializer);
+    ConstSeqConstantBuilder constants(rewriter, loc, *converter, dataLayout,
+                                      op->getParentOfType<mlir::ModuleOp>());
+    llvm::SmallVector<mlir::Type> fieldTypes;
+    llvm::SmallVector<mlir::Value> values;
+    for (mlir::Attribute element : elements) {
+      auto constant = constants.build(element, elementType);
+      if (mlir::failed(constant))
+        return mlir::failure();
+      fieldTypes.push_back(constant->type);
+      values.push_back(constant->value);
+    }
+    auto type = mlir::LLVM::LLVMStructType::getLiteral(rewriter.getContext(),
+                                                       fieldTypes);
+    global.setGlobalType(type);
+    mlir::Value value = mlir::LLVM::ZeroOp::create(rewriter, loc, type);
+    for (auto [index, element] : llvm::enumerate(values))
+      value = mlir::LLVM::InsertValueOp::create(
+          rewriter, loc, value, element,
+          llvm::ArrayRef<int64_t>{static_cast<int64_t>(index)});
+    mlir::LLVM::ReturnOp::create(rewriter, loc, value);
+    rewriter.eraseOp(op);
     return mlir::success();
   }
 };
@@ -3303,21 +3515,17 @@ struct ReussirConstSeqLiteralOpConversionPattern
     auto llvmPtrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
     auto indexType = converter->getIndexType();
 
-    // As for str literals, the length is the converted global's extent.
-    auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
-    auto globalOp =
-        moduleOp.lookupSymbol<mlir::LLVM::GlobalOp>(op.getSymName());
-    if (!globalOp)
+    auto length =
+        constSeqLength(op->getParentOfType<mlir::ModuleOp>(), op.getSymName());
+    if (mlir::failed(length))
       return op.emitOpError("referenced global sequence not found");
-    uint64_t length = llvm::cast<mlir::LLVM::LLVMArrayType>(globalOp.getType())
-                          .getNumElements();
 
     auto structType = mlir::LLVM::LLVMStructType::getLiteral(
         rewriter.getContext(), {llvmPtrType, indexType});
     auto dataPtr = mlir::LLVM::AddressOfOp::create(rewriter, loc, llvmPtrType,
                                                    op.getSymName());
     auto lenVal = mlir::arith::ConstantOp::create(
-        rewriter, loc, mlir::IntegerAttr::get(indexType, length));
+        rewriter, loc, mlir::IntegerAttr::get(indexType, *length));
     auto undef = mlir::LLVM::UndefOp::create(rewriter, loc, structType);
     auto withPtr = mlir::LLVM::InsertValueOp::create(
         rewriter, loc, undef, dataPtr, llvm::ArrayRef<int64_t>{0});
@@ -3352,7 +3560,10 @@ struct ReussirConstSeqGetOpConversionPattern
       return rewriter.notifyMatchFailure(
           op, "convert-to-std expands the bounds check first");
     mlir::Location loc = op.getLoc();
-    mlir::Type elementType = op.getSeq().getType().getElementType();
+    mlir::Type elementType =
+        getTypeConverter()->convertType(op.getSeq().getType().getElementType());
+    if (!elementType)
+      return op.emitOpError("failed to convert the element type");
     auto ptrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
     auto dataPtr = mlir::LLVM::ExtractValueOp::create(
         rewriter, loc, adaptor.getSeq(), llvm::ArrayRef<int64_t>{0});
