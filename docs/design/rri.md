@@ -50,9 +50,10 @@ Closure, walking only the bodies that ship:
 - a **ground** callee (any visibility) ships as a prototype — its symbol is
   external in this package's artifact, exactly the #467 `mono_exports`
   guarantee. Ground bodies never ship, `pub` or not;
-- every **record** mentioned by a shipped signature, body, or shipped record
-  field ships in full (fields included — the consumer's mono must resolve
-  layouts), closed to fixed point mirroring `close_records_over_fields`;
+- every **record** mentioned by a shipped signature, body, shipped trait's
+  associated const type, or shipped record field ships in full (fields
+  included — the consumer's mono must resolve layouts), closed to fixed point
+  mirroring `close_records_over_fields`;
 - **strings** referenced by shipped bodies ship (table filtered and
   reindexed);
 - **transform anchors/scripts** referenced by shipped bodies ship;

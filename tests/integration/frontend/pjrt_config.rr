@@ -1,0 +1,157 @@
+// Device placement and kernel-launch settings as typed associated consts:
+// the `core::pjrt` traits give every setting a default, a marker overrides
+// the ones it needs, and generic code reads them as ordinary values.
+
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %FileCheck %s --check-prefix=CORE < %t.core.rri
+// RUN: %rrc %s --package-name app --extern core=%t.core.rri --emit mir --no-source-locations -o - | %FileCheck %s --check-prefix=MIR
+// RUN: %rrc %s --package-name app --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/pjrt_config.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// The interface ships the traits with their defaults, the records the
+// defaults are built from, and the default marker's impls.
+// CORE-DAG: pub trait #core::pjrt::Placement<{{.*}}(Self)> in {{[0-9]+}} {{\[[0-9.]+\]}} {
+// CORE-DAG: const DEVICES : ConstSeq<i32> = ConstSeq[0] : ConstSeq<i32> {{\[[0-9.]+\]}};
+// CORE-DAG: const SHARDING : #core::pjrt::Sharding = #core::pjrt::Sharding#0() {{\[[0-9.]+\]}};
+// CORE-DAG: const MEMORY : #core::pjrt::MemoryKind = #core::pjrt::MemoryKind#0() {{\[[0-9.]+\]}};
+// CORE-DAG: const LAYOUT : #core::pjrt::Layout = #core::pjrt::Layout#0() {{\[[0-9.]+\]}};
+// CORE-DAG: pub trait #core::pjrt::Launch<{{.*}}(Self)> : #core::pjrt::Placement::<{{.*}}> in {{[0-9]+}} {{\[[0-9.]+\]}} {
+// CORE-DAG: const OPTIMIZATION : #core::pjrt::OptimizationLevel = #core::pjrt::OptimizationLevel#0() {{\[[0-9.]+\]}};
+// CORE-DAG: const DONATION : #core::pjrt::Donation = #core::pjrt::Donation#0() {{\[[0-9.]+\]}};
+// CORE-DAG: const CONSTANTS : ConstSeq<u64> = ConstSeq[] : ConstSeq<u64> {{\[[0-9.]+\]}};
+// CORE-DAG: pub [value] enum #core::pjrt::Sharding in {{[0-9]+}} {{\[[0-9.]+\]}} { Unspecified(), Replicated(), Param(#core::pjrt::ShardingParam) };
+// CORE-DAG: pub [value] struct #core::pjrt::TiledLayout in {{[0-9]+}} {{\[[0-9.]+\]}} { pub "minor_to_major": ConstSeq<i64>, pub "tiles": ConstSeq<ConstSeq<i64>> };
+// CORE-DAG: impl #core::pjrt::Placement::<#core::intrinsic::pjrt::DefaultPlacement> in {{[0-9]+}} {{\[[0-9.]+\]}} {  }
+// CORE-DAG: impl #core::pjrt::Launch::<#core::intrinsic::pjrt::DefaultPlacement> in {{[0-9]+}} {{\[[0-9.]+\]}} {  }
+
+import core::intrinsic::const_seq;
+import core::pjrt;
+
+// Two devices, a sharding parameter, a tiled layout, and launch settings.
+pub struct [value] Mesh {}
+impl pjrt::Placement for Mesh {
+    const DEVICES: ConstSeq<i32> = [3, 1];
+    const SHARDING: pjrt::Sharding = pjrt::Sharding::Param {
+        pjrt::ShardingParam { dim_shards: [2, 1], permutation: [0], axis_sizes: [2] }
+    };
+    const LAYOUT: pjrt::Layout = pjrt::Layout::Explicit {
+        pjrt::TiledLayout { minor_to_major: [1, 0], tiles: [[8, 128], [2, 1]] }
+    };
+}
+impl pjrt::Launch for Mesh {
+    const OPTIMIZATION: pjrt::OptimizationLevel = pjrt::OptimizationLevel::O2;
+    const CONSTANTS: ConstSeq<u64> = [1];
+}
+
+// One override each; everything else defaulted.
+pub struct [value] Pinned {}
+impl pjrt::Placement for Pinned {
+    const MEMORY: pjrt::MemoryKind = pjrt::MemoryKind::PinnedHost;
+}
+
+pub struct [value] Plain {}
+impl pjrt::Placement for Plain {}
+impl pjrt::Launch for Plain {
+    const DONATION: pjrt::Donation = pjrt::Donation::None;
+}
+
+fn sum(xs: ConstSeq<i64>) -> i64 {
+    let n = const_seq::len(xs);
+    while [i = 0, acc = 0] (i < n) {
+        (i + 1, acc + const_seq::get(xs, i))
+    }.1
+}
+
+fn sharding_code(s: pjrt::Sharding) -> i64 {
+    match s {
+        pjrt::Sharding::Unspecified => 0,
+        pjrt::Sharding::Replicated => 1,
+        pjrt::Sharding::Param(p) => 2 + sum(p.dim_shards) * 100 + sum(p.permutation) * 10 + sum(p.axis_sizes)
+    }
+}
+
+fn memory_code(m: pjrt::MemoryKind) -> i64 {
+    match m {
+        pjrt::MemoryKind::Default => 0,
+        pjrt::MemoryKind::Device => 1,
+        pjrt::MemoryKind::PinnedHost => 2,
+        pjrt::MemoryKind::UnpinnedHost => 3
+    }
+}
+
+fn layout_code(l: pjrt::Layout) -> i64 {
+    match l {
+        pjrt::Layout::Inherit => 0,
+        pjrt::Layout::Default => 1,
+        pjrt::Layout::Auto => 2,
+        pjrt::Layout::Explicit(t) => {
+            let n = const_seq::len(t.tiles);
+            let extents = while [i = 0, acc = 0] (i < n) {
+                (i + 1, acc + sum(const_seq::get(t.tiles, i)))
+            }.1;
+            3 + sum(t.minor_to_major) * 100 + extents
+        }
+    }
+}
+
+fn devices_sum(ds: ConstSeq<i32>) -> i64 {
+    let n = const_seq::len(ds);
+    while [i = 0, acc = 0] (i < n) {
+        (i + 1, acc + const_seq::get(ds, i) as i64)
+    }.1
+}
+
+// Generic code reads the selected impl's values, or the defaults.
+// MIR: fn @{{.*}}placement_code{{.*}}Mesh{{.*}}(v0 (p): app::Mesh) -> i64 {
+// MIR: ConstSeq[3, 1] : ConstSeq<i32>
+// MIR: @{{.*}}Sharding::#2(@{{.*}}ShardingParam{ConstSeq[2, 1] : ConstSeq<i64>, ConstSeq[0] : ConstSeq<i64>, ConstSeq[2] : ConstSeq<i64>} : core::pjrt::ShardingParam) : core::pjrt::Sharding
+// MIR: @{{.*}}MemoryKind::#0() : core::pjrt::MemoryKind
+// MIR: @{{.*}}Layout::#3(@{{.*}}TiledLayout{ConstSeq[1, 0] : ConstSeq<i64>, ConstSeq[ConstSeq[8, 128] : ConstSeq<i64>, ConstSeq[2, 1] : ConstSeq<i64>] : ConstSeq<ConstSeq<i64>>} : core::pjrt::TiledLayout) : core::pjrt::Layout
+// MIR: fn @{{.*}}placement_code{{.*}}Plain{{.*}}(v0 (p): app::Plain) -> i64 {
+// MIR: ConstSeq[0] : ConstSeq<i32>
+// MIR: @{{.*}}Sharding::#0() : core::pjrt::Sharding
+// MIR: @{{.*}}Layout::#0() : core::pjrt::Layout
+fn placement_code<P: pjrt::Placement>(p: P) -> i64 {
+    devices_sum(P::DEVICES) * 10000000
+        + sharding_code(P::SHARDING) * 10000
+        + memory_code(P::MEMORY) * 1000
+        + layout_code(P::LAYOUT)
+}
+
+fn launch_code<P: pjrt::Launch>(p: P) -> i64 {
+    let optimization = match P::OPTIMIZATION {
+        pjrt::OptimizationLevel::Default => 0,
+        pjrt::OptimizationLevel::O0 => 1,
+        pjrt::OptimizationLevel::O1 => 2,
+        pjrt::OptimizationLevel::O2 => 3,
+        pjrt::OptimizationLevel::O3 => 4
+    };
+    let donation = match P::DONATION {
+        pjrt::Donation::Auto => 0,
+        pjrt::Donation::None => 1
+    };
+    let n = const_seq::len(P::CONSTANTS);
+    let constants = while [i = 0, acc = 0] (i < n) {
+        (i + 1, acc + const_seq::get(P::CONSTANTS, i) as i64)
+    }.1;
+    optimization * 100 + donation * 10 + constants
+}
+
+// Mesh: devices 4, sharding 2 + 300 + 0 + 2 = 304, memory 0, layout
+// 3 + 100 + 139 = 242. Pinned: memory 2. Plain: all defaults.
+pub fn mesh_placement() -> i64 { placement_code(Mesh {}) }
+pub fn pinned_placement() -> i64 { placement_code(Pinned {}) }
+pub fn plain_placement() -> i64 { placement_code(Plain {}) }
+// Mesh: O2, auto, [1]. Plain: default, none, [].
+pub fn mesh_launch() -> i64 { launch_code(Mesh {}) }
+pub fn plain_launch() -> i64 { launch_code(Plain {}) }
+// A concrete read projects the value directly.
+pub fn mesh_first_device() -> i32 { const_seq::get(Mesh::DEVICES, 0) }
+
+extern "C" trampoline "reussir_pjrt_mesh_placement" = mesh_placement;
+extern "C" trampoline "reussir_pjrt_pinned_placement" = pinned_placement;
+extern "C" trampoline "reussir_pjrt_plain_placement" = plain_placement;
+extern "C" trampoline "reussir_pjrt_mesh_launch" = mesh_launch;
+extern "C" trampoline "reussir_pjrt_plain_launch" = plain_launch;
+extern "C" trampoline "reussir_pjrt_mesh_first_device" = mesh_first_device;

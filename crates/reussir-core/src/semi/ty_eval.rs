@@ -440,8 +440,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             };
         }
 
-        // Nothing else under the reserved `core` package names a type.
-        if path.segments.first().map(|&k| self.sym(k)) == Some("core") {
+        // Nothing else under the reserved `core` package names a type,
+        // except a record the loaded `core` interface declares (the
+        // `core::pjrt` configuration records, say), which resolves like any
+        // extern package's.
+        if path.segments.first().map(|&k| self.sym(k)) == Some("core")
+            && self.resolve_record_ref(path).is_none()
+        {
             let shown = self.path_display(path);
             self.error(
                 Some(span),

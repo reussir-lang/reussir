@@ -1,0 +1,121 @@
+//! Device placement and kernel-launch configuration as typed constants.
+//!
+//! A placement is a type implementing `Placement`: its associated consts
+//! say where a `DevArray<T, P>` lives (which logical devices), how it is
+//! split across them, which memory they hold it in, and how its elements
+//! are laid out. `Launch` extends a placement with the settings of a
+//! kernel launch whose result takes that placement. Every setting has a
+//! default, so an implementation overrides only what it needs;
+//! `DefaultPlacement` overrides nothing.
+//!
+//! The values mirror what the IFRT and PJRT runtimes accept. Checking them
+//! against an array's rank and device count happens where the placement is
+//! used, with a source location.
+
+/// How an array is split across the devices of its placement.
+pub enum [value] Sharding {
+    /// No sharding is given. A single-device array is stored whole.
+    Unspecified,
+    /// Every device holds the whole array.
+    Replicated,
+    /// An explicit IFRT sharding parameter.
+    Param(ShardingParam),
+}
+
+/// An IFRT `sharding_param`: `dim_shards` splits each array dimension into
+/// that many equal pieces, and the pieces are assigned to the devices
+/// through a device mesh of `axis_sizes` extents, read in `permutation`
+/// order (minor to major). IFRT's `2x1 to [0] on 2` is
+/// `dim_shards: [2, 1], permutation: [0], axis_sizes: [2]`.
+pub struct [value] ShardingParam {
+    pub dim_shards: ConstSeq<i64>,
+    pub permutation: ConstSeq<i64>,
+    pub axis_sizes: ConstSeq<i64>,
+}
+
+/// The memory an array is allocated in, among the memory spaces a device
+/// exposes.
+pub enum [value] MemoryKind {
+    /// The device's default memory.
+    Default,
+    /// Device memory, requested explicitly.
+    Device,
+    /// Page-locked host memory the device can access directly.
+    PinnedHost,
+    /// Ordinary host memory.
+    UnpinnedHost,
+}
+
+/// How an array's elements are arranged in memory.
+pub enum [value] Layout {
+    /// No layout is requested: the array keeps the layout of the operation
+    /// producing it.
+    Inherit,
+    /// The device's default layout for the array's shape.
+    Default,
+    /// The compiler chooses a layout.
+    Auto,
+    /// An explicit XLA layout.
+    Explicit(TiledLayout),
+}
+
+/// An XLA layout: the dimension order, and the tiling applied to it. XLA's
+/// `{1,0:T(8,128)(2,1)}` is `minor_to_major: [1, 0], tiles: [[8, 128],
+/// [2, 1]]`; `tiles: []` is an untiled layout.
+pub struct [value] TiledLayout {
+    /// The dimensions from fastest to slowest varying.
+    pub minor_to_major: ConstSeq<i64>,
+    /// The tiles, outermost first; each lists its extents along the minor
+    /// dimensions.
+    pub tiles: ConstSeq<ConstSeq<i64>>,
+}
+
+/// Where a device array lives. Implement it on a `[value]` marker struct
+/// and use the marker as the placement argument of `DevArray<T, P>`,
+/// `upload<P>`, and `launch<P>`.
+pub trait Placement {
+    /// The ordered logical device IDs of the array, within the program's
+    /// device assignment. The IDs must be distinct and nonnegative.
+    const DEVICES: ConstSeq<i32> = [0];
+    /// How the array is split across `DEVICES`.
+    const SHARDING: Sharding = Sharding::Unspecified;
+    /// The memory the array is allocated in.
+    const MEMORY: MemoryKind = MemoryKind::Default;
+    /// The layout of the array's elements.
+    const LAYOUT: Layout = Layout::Inherit;
+}
+
+/// The backend optimization level of a kernel's compilation.
+pub enum [value] OptimizationLevel {
+    /// The backend's own default.
+    Default,
+    O0,
+    O1,
+    O2,
+    O3,
+}
+
+/// Whether a launch may donate an argument buffer to its result.
+pub enum [value] Donation {
+    /// Donate when the ownership analysis proves the buffer is not used
+    /// again.
+    Auto,
+    /// Never donate.
+    None,
+}
+
+/// How a kernel is compiled and launched. A launch configuration is also
+/// the placement of the launch's result.
+pub trait Launch: Placement {
+    /// XLA's backend optimization level for the compiled kernel.
+    const OPTIMIZATION: OptimizationLevel = OptimizationLevel::Default;
+    /// Whether argument buffers may be donated to the result.
+    const DONATION: Donation = Donation::Auto;
+    /// The positions of the kernel arguments treated as constants: each
+    /// launch reads the argument's value and specializes the kernel on it.
+    const CONSTANTS: ConstSeq<u64> = [];
+}
+
+impl Placement for core::intrinsic::pjrt::DefaultPlacement {}
+
+impl Launch for core::intrinsic::pjrt::DefaultPlacement {}

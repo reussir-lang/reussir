@@ -12,9 +12,10 @@
 //!   symbol stays externally linkable in this package's artifacts (the
 //!   [`mono_exports`](super::mono::mono_exports) guarantee from the linkage
 //!   side, which is *derived from this closure* so the two cannot drift);
-//! - every **record** the shipped signatures, bodies, or shipped record fields
-//!   mention ships in full (layout resolution downstream needs fields),
-//!   closed to a fixed point over field types;
+//! - every **record** the shipped signatures, bodies, associated const
+//!   types, or shipped record fields mention ships in full (layout
+//!   resolution downstream needs fields), closed to a fixed point over field
+//!   types;
 //! - **strings** shipped bodies reference travel with them.
 //!
 //! Trampolines (`#[main]`, `extern "C" trampoline`) never ship: they are this
@@ -195,6 +196,11 @@ pub fn export_closure(input: &MonoInput<'_, '_>) -> ExportClosure {
             tys.extend(m.params.iter().copied());
             tys.insert(m.ret);
         }
+        // A const's value (the trait's default or an impl's) has the
+        // declared type, so that type alone closes the records it mentions.
+        for c in &t.assoc_consts {
+            tys.insert(c.ty);
+        }
         for imp in db.impls() {
             if imp.trait_ref.trait_id != id {
                 continue;
@@ -309,11 +315,15 @@ mod tests {
     /// ships; a private trait ships when a shipped body's `TraitCall` or a
     /// shipped binder's bound names it; an unreferenced private trait stays
     /// home; shipped traits pull their impls' methods (generic ones as
-    /// walked bodies, ground ones as prototypes) and their impl heads into
-    /// the record closure; sealed builtins never ship.
+    /// walked bodies, ground ones as prototypes), their impl heads, and the
+    /// records their associated const types mention into the record
+    /// closure; sealed builtins never ship.
     #[test]
     fn export_closure_ships_traits_with_their_impls() {
         let source = "
+            pub struct [value] Knob { pub level: i64 }
+            pub enum [value] Mode { Off, On(Knob) }
+            pub trait Configured { const MODE: Mode = Mode::Off; }
             pub trait Show { fn show(self: Self) -> i64; }
             trait Hidden { fn h(self: Self) -> i64; }
             trait Used { fn u(self: Self) -> i64; }
@@ -352,7 +362,10 @@ mod tests {
             // nothing compiler-provided ever ships: not the sealed builtins
             // (`Num` bounds the generic impl) nor the site-less
             // comparison-tower fallback.
-            assert_eq!(names(&closure.traits), ["BoundOnly", "Show", "Used"]);
+            assert_eq!(
+                names(&closure.traits),
+                ["BoundOnly", "Configured", "Show", "Used"]
+            );
             let bodies = names(&closure.bodies);
             assert!(
                 bodies.contains(&"Show::Box::show".to_string()),
@@ -374,6 +387,10 @@ mod tests {
             assert!(
                 records.contains(&"P".to_string()) && records.contains(&"Box".to_string()),
                 "impl heads join the record closure: {records:?}"
+            );
+            assert!(
+                records.contains(&"Mode".to_string()) && records.contains(&"Knob".to_string()),
+                "associated const types join the record closure: {records:?}"
             );
         });
     }
