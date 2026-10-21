@@ -564,3 +564,45 @@ fn completion_does_not_require_a_child_output() {
     };
     unsafe { __reussir_run_dtor(&mut DtorExecutor::new(), ptr::null_mut(), &routine) };
 }
+
+// Drop a chain of `depth` levels through the lazy entry point.
+unsafe fn finish_chain(depth: usize) -> Vec<usize> {
+    let mut output = Vec::<usize>::new();
+    let mut args = (depth, ptr::addr_of_mut!(output));
+    let mut root = MaybeUninit::<State>::uninit();
+    let buffer = root.as_mut_ptr();
+    let mut child = MaybeUninit::<*const DtorTask>::uninit();
+    unsafe {
+        let resume = start(
+            buffer.cast(),
+            ptr::addr_of_mut!(args).cast(),
+            child.as_mut_ptr(),
+        );
+        __reussir_finish_dtor(buffer.cast(), resume, child.assume_init());
+    }
+    output
+}
+
+#[test]
+fn root_drops_reuse_the_thread_scratch_within_bounds() {
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| unsafe {
+            let cached_table = || {
+                let scratch = Scratch::take().expect("a small drop keeps its scratch");
+                let table = scratch.buffers.as_ptr();
+                SCRATCH.with(|cache| cache.set(Some(scratch)));
+                table
+            };
+            assert_eq!(finish_chain(4), [0, 1, 2, 3, 4]);
+            let table = cached_table();
+            assert_eq!(finish_chain(4), [0, 1, 2, 3, 4]);
+            assert_eq!(cached_table(), table);
+            // A deep drop takes the cache and does not give its storage back.
+            assert_eq!(finish_chain(DEEP_DEPTH).len(), DEEP_DEPTH + 1);
+            assert!(Scratch::take().is_none());
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

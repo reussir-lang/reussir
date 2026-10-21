@@ -1,4 +1,4 @@
-use core::{alloc::Layout, ffi::c_void, mem::MaybeUninit};
+use core::{alloc::Layout, cell::Cell, ffi::c_void, mem::MaybeUninit};
 use stumpalo::Arena;
 
 // A null return completes the destructor without initializing the child output.
@@ -74,6 +74,46 @@ impl FrameBuffers {
             slot.pointer = arena.alloc_layout(layout).as_ptr().cast();
         }
         slot.pointer
+    }
+}
+
+// A drain's slot table and arena, kept per thread between root drops. Without
+// it, every root drop that suspends allocates and frees both, even for a small
+// value. A drain takes the cached pair if there is one (a nested drain finds
+// the cache empty and allocates its own) and gives it back when it ends.
+struct Scratch {
+    buffers: Vec<FrameBuffer>,
+    arena: Arena,
+}
+
+thread_local! {
+    static SCRATCH: Cell<Option<Scratch>> = const { Cell::new(None) };
+}
+
+impl Scratch {
+    // A table or chunk that grew past these bounds came from a deep drop and
+    // is freed rather than kept for the rest of the thread's life.
+    const MAX_SLOTS: usize = 64;
+    const MAX_CHUNK_BYTES: usize = 4096;
+
+    fn take() -> Option<Self> {
+        // The cache is gone while the thread's locals are destroyed; drops run
+        // then (from other locals' destructors) use fresh storage.
+        SCRATCH.try_with(Cell::take).ok().flatten()
+    }
+
+    fn put(mut buffers: Vec<FrameBuffer>, mut arena: Arena) {
+        if buffers.capacity() > Self::MAX_SLOTS {
+            return;
+        }
+        // Keep only the current chunk, and only if it is small.
+        arena.clear();
+        arena.free_fresh_chunks();
+        if arena.chunk_capacity() > Self::MAX_CHUNK_BYTES {
+            return;
+        }
+        buffers.clear();
+        let _ = SCRATCH.try_with(|cache| cache.set(Some(Self { buffers, arena })));
     }
 }
 
@@ -201,6 +241,12 @@ pub unsafe extern "C" fn __reussir_finish_dtor(
 
 unsafe fn drain(context: *mut DtorExecutor, mut task: DtorTask, root: Option<Continuation>) {
     let mut buffers = FrameBuffers::default();
+    if let Some(scratch) = Scratch::take() {
+        buffers.0 = scratch.buffers;
+        // No frame of this drain is allocated yet, and a drain starts with no
+        // live executor allocation, so the executor's own arena can be replaced.
+        unsafe { (*context).arena = scratch.arena };
+    }
     let mut depth = 0;
     if let Some(root) = root {
         // Slot zero belongs to the caller. It is only resumed, never allocated
@@ -238,8 +284,9 @@ unsafe fn drain(context: *mut DtorExecutor, mut task: DtorTask, root: Option<Con
                 unsafe {
                     let executor = &mut *context;
                     assert_eq!(executor.allocations, 0, "destructor allocations are active");
-                    executor.arena = Arena::new();
+                    let arena = core::mem::take(&mut executor.arena);
                     executor.running = false;
+                    Scratch::put(core::mem::take(&mut buffers.0), arena);
                 }
                 return;
             }
