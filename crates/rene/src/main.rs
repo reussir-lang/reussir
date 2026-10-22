@@ -15,7 +15,8 @@
 //! stops after the bake and prints the library directories to pass to
 //! `rrc --polyffi-libdir` by hand. `rene inspect` reports the source graph as
 //! JSON; `rene clean` deletes the build directory unless another instance
-//! holds it.
+//! holds it. The runtime bake, the bundled core sources, and core's compiled
+//! artifacts live in a shared per-user cache (see `rene::cache`).
 //!
 //! Progress goes to stderr via `tracing`; stdout carries only the final
 //! machine-readable listing. Exit 0 on success, 1 on a failed command, 2 on
@@ -27,7 +28,11 @@ use std::process::ExitCode;
 
 use palc::Parser;
 
+use rene::cache::Cache;
+use rene::config::{self, Config};
 use rene::db::{self, BuildDir, CleanOutcome};
+use rene::ledger::{self, Policy, Session};
+use rene::shared::Shared;
 use rene::{compile, core_src, deps, exec, fresh, manifest, new, plan, pool, resolve, rt};
 
 /// The default build directory name, next to the manifest.
@@ -83,9 +88,39 @@ struct Location {
 #[derive(palc::Subcommand)]
 enum Command {
     Build(BuildArgs),
+    Cache(CacheArgs),
     Clean(CleanArgs),
     Inspect(InspectArgs),
     New(NewArgs),
+}
+
+/// Maintain the per-user cache shared by every build (`RENE_CACHE_DIR`, or
+/// the platform cache directory).
+#[derive(palc::Args)]
+struct CacheArgs {
+    #[command(subcommand)]
+    command: CacheCommand,
+}
+
+#[derive(palc::Subcommand)]
+enum CacheCommand {
+    Prune(PruneArgs),
+}
+
+/// Remove cache entries no running build uses and that went unused for
+/// longer than the configured age (`cache.max_age` in the user
+/// configuration, 120 days by default), whatever the cache's size. Builds
+/// do the same on their own once the cache is over `cache.limit`.
+#[derive(palc::Args)]
+struct PruneArgs {
+    /// Remove entries unused for longer than AGE (`30d`, `4 months`, `12h`)
+    /// instead of the configured age.
+    #[arg(long, value_name = "AGE")]
+    max_age: Option<String>,
+
+    /// Report what would be removed without removing anything.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 /// Create a new package: a directory with a commented `rene.ncl` manifest, a
@@ -275,6 +310,9 @@ fn main() -> ExitCode {
     let result = runtime.block_on(async {
         match cli.command {
             Command::Build(args) => build(&args, color).await,
+            Command::Cache(args) => match args.command {
+                CacheCommand::Prune(args) => prune(&args).await,
+            },
             Command::Clean(args) => clean(&args.location),
             Command::Inspect(args) => inspect(&args, color).await,
             Command::New(args) => new::run(&new::Options {
@@ -365,6 +403,9 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // Resolve the profile before any work: an unknown name is a usage
     // problem, not something to discover after a runtime bake.
     let profile = manifest::resolve_profile(&loaded.manifest, &args.profile)?;
+    // The user configuration, before anything is built: a mistake in it
+    // stops the build rather than silently restoring defaults that prune.
+    let config = Config::load()?;
     let root = resolve_build_dir(location)?;
     // Builds sharing a directory queue on its database lock. Take it before
     // materializing bundled sources so concurrent invocations serialize all
@@ -381,7 +422,20 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // together (each package exists in exactly one version today, so this is
     // a feasibility check; see `resolve`). A dependency-less package is a
     // one-node graph through the same machinery.
-    let core_dir = core_src::unpack(&root)?;
+    // The dependencies every build shares (the core sources, the runtime
+    // bake, core's compiled artifacts) live in the per-user cache.
+    // This build's session in the cache ledger pins every entry it uses in
+    // place until it ends, so nothing removes them underneath it.
+    let cache = Cache::locate(&root);
+    let session = Session::start_with(
+        &cache,
+        Policy {
+            limit: config.cache.limit,
+            max_age: config.cache.max_age,
+        },
+    )
+    .await;
+    let core_dir = core_src::unpack(&cache, &session).await?;
     let graph = resolve::load_graph_with(&loaded, Some(&core_dir))?;
     if graph.nodes.len() > 1 {
         let solution = resolve::check(&graph)?;
@@ -403,7 +457,15 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
         .target
         .as_deref()
         .or(profile.default_target_triple.as_deref());
-    let artifacts = rt::prepare(&dir, requested_target, bake_linker.as_deref(), &progress).await?;
+    let artifacts = rt::prepare(
+        &dir,
+        &cache,
+        &session,
+        requested_target,
+        bake_linker.as_deref(),
+        &progress,
+    )
+    .await?;
     let target = artifacts.target.clone();
 
     // No declared targets: stop after the bake, reporting the libdirs for
@@ -422,6 +484,20 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // One pool for the whole build: `-j` admission over the main event
     // loop, which monitors every child process.
     let pool = pool::Pool::new(args.jobs);
+    // Only the bundled core is shared: it is the same source in every
+    // build. (A package may bring its own `core` instead of the bundled one;
+    // that one is built locally like any other dependency.)
+    let shared = Shared::new(
+        cache,
+        &session,
+        graph
+            .nodes
+            .get("core")
+            .filter(|node| node.dir == core_dir)
+            .map(|_| ("core".to_owned(), core_src::content_hash()))
+            .into_iter()
+            .collect(),
+    );
 
     // The dependency pipeline: every node of the graph but the root, each
     // dispatched the moment its last dependency finishes, each freshness-
@@ -439,6 +515,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
             build_dir: &root,
             token_reuse_remarks: args.token_reuse_remarks,
             color,
+            shared: Some(&shared),
         },
         &pool,
         &progress,
@@ -496,6 +573,55 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
 /// default a stale record is refreshed first (the same scan `build` runs, but
 /// without the runtime bake), so the report describes the package as it is
 /// now; `--frozen` reports what is on record and never writes.
+/// `rene cache prune`.
+async fn prune(args: &PruneArgs) -> Result<(), String> {
+    let config = Config::load()?;
+    let max_age = match &args.max_age {
+        Some(text) => {
+            config::parse_age_text(text).map_err(|e| format!("invalid --max-age: {e}"))?
+        }
+        None => config.cache.max_age.ok_or_else(|| {
+            format!(
+                "`cache.max_age` is null in {}; pass --max-age",
+                config::path().map_or("the configuration".to_owned(), |p| format!(
+                    "`{}`",
+                    p.display()
+                ))
+            )
+        })?,
+    };
+    let cache = Cache::shared()?;
+    let session = Session::start(&cache).await;
+    if !session.enabled() {
+        return Err(format!(
+            "the cache ledger in `{}` cannot be used, so nothing can be pruned safely",
+            cache.root().display()
+        ));
+    }
+    let pruned = session.prune(max_age, args.dry_run).await?;
+    if pruned.skipped {
+        tracing::info!("another rene is pruning the cache; nothing to do");
+        return Ok(());
+    }
+    let verb = if args.dry_run {
+        "would remove"
+    } else {
+        "removed"
+    };
+    for (entry, size) in &pruned.removed {
+        println!("{verb} {entry} ({})", ledger::human_size(*size));
+    }
+    tracing::info!(
+        "{verb} {} unused for more than {}; {} kept in use, {} kept as recent; cache is {}",
+        pruned.summary(),
+        ledger::human_age(max_age),
+        pruned.in_use,
+        pruned.recent,
+        ledger::human_size(pruned.total)
+    );
+    Ok(())
+}
+
 async fn inspect(args: &InspectArgs, color: bool) -> Result<(), String> {
     let location = &args.location;
     let frozen = args.frozen;
@@ -541,7 +667,9 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), String> {
     // The dependency-graph sections, on demand. One load serves all three;
     // `--solved` additionally requires the feasibility check to hold.
     if args.solved || args.graph || args.commands {
-        let core_dir = core_src::unpack(&root)?;
+        let cache = Cache::locate(&root);
+        let session = Session::start(&cache).await;
+        let core_dir = core_src::unpack(&cache, &session).await?;
         let graph = resolve::load_graph_with(&loaded, Some(&core_dir))?;
         if args.solved {
             let solution = resolve::check(&graph)?;

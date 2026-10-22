@@ -9,18 +9,25 @@
 //! source graph as `rrc --scan-deps` reported it ([`deps`]), and the built
 //! products of the manifest's declared targets ([`compile`]). Dependencies
 //! resolve over local paths ([`resolve`]), and `rene new` scaffolds a fresh
-//! package ([`new`]).
+//! package ([`new`]). What every build has in common — the bundled `core`
+//! sources ([`core_src`]), the runtime bake, and `core`'s compiled artifacts
+//! ([`shared`]) — lives once per user in the shared [`cache`], whose
+//! [`ledger`] records which build uses which entry.
 
+pub mod cache;
 pub mod compile;
+pub mod config;
 pub mod core_src;
 pub mod db;
 pub mod deps;
 pub mod exec;
 pub mod fresh;
+pub mod ledger;
 pub mod manifest;
 pub mod new;
 pub mod plan;
 pub mod pool;
 pub mod resolve;
 pub mod rt;
+pub mod shared;
 pub mod tables;
