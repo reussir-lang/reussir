@@ -1,8 +1,8 @@
 // `rene build`, end to end: the manifest declares the targets, the profile
 // picks the knobs, and rene drives the real `rrc` — package scan, runtime
 // bake, compile, link — to a running executable. The runtime is baked with
-// the host toolchain inside the test's build directory: slow once, then
-// shared by every RUN line below through the one `--build-dir`.
+// the host toolchain in rene's shared cache (lit points `RENE_CACHE_DIR` at
+// one cache for the whole suite): slow once, then shared by every rene test.
 //
 // `%rrc_linker` pins MSVC's link.exe on Windows and is empty elsewhere.
 // rene threads it end to end: through cargo's target-specific environment

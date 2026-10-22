@@ -52,6 +52,15 @@ the nearest `rene.ncl` at or above the current directory and builds into
 goes to stderr); a package declaring no targets stops after the runtime bake
 and prints the library directories to pass to `rrc --polyffi-libdir` by hand.
 
+The runtime bake, the bundled `core` sources, and core's compiled artifacts
+are shared by every build through a per-user cache: `$XDG_CACHE_HOME/rene`
+(or `~/.cache/rene`) on Linux, `~/Library/Caches/rene` on macOS, and
+`%LOCALAPPDATA%\rene` on Windows. Set `RENE_CACHE_DIR` to use another
+directory; the lit suites point it at `build/tests/integration/rene-cache`.
+Entries are keyed by content, target, and toolchain, built under a file
+lock (a second rene waits and says so), and safe to delete while no rene
+runs. `rene clean` does not touch the cache.
+
 `rene` shells out to `rrc`, `cargo`, and `rustc`; set `REUSSIR_RRC`,
 `REUSSIR_CARGO`, or `REUSSIR_RUSTC` to pin specific binaries (otherwise
 `rrc` is found through `PATH`).
