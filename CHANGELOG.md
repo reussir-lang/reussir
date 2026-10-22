@@ -134,6 +134,27 @@
   purely diagnostic and runs after all rc optimization passes, so the
   observed count is the final one.
 
+### Tooling
+
+- `rene` records in a ledger inside the per-user cache which build uses
+  which cache entry and when each entry was last wanted (TurboKV at
+  `<cache>/ledger`, plus one OS lock per run under `<cache>/sessions/`),
+  the groundwork for removing old entries safely; see
+  docs/design/cache-ledger.md. A ledger that cannot be used disables itself
+  with a warning and the build goes on as before.
+- `rene` keeps the dependencies every build shares in a per-user cache
+  instead of each build directory: the bundled `core` sources, the
+  `reussir-rt` bake, and `core`'s compiled interface and archive. The cache
+  is `$XDG_CACHE_HOME/rene` (`~/.cache/rene`) on Linux,
+  `~/Library/Caches/rene` on macOS, and `%LOCALAPPDATA%\rene` on
+  Windows; `RENE_CACHE_DIR` overrides it. Entries are keyed by content,
+  target, toolchain, and (for core) the profile's flags and the `rrc`
+  binary, built under an advisory file lock that a concurrent rene waits on
+  with a message, and published atomically, so an interrupted bake is
+  redone rather than trusted. A new project's first build therefore skips
+  the cargo bake when any earlier project used the same toolchain. If the
+  cache cannot be created, rene warns and caches in the build directory.
+
 ## 0.1.0
 
 The first tagged release of Reussir: an MLIR-based compiler framework for

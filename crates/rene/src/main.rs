@@ -15,7 +15,8 @@
 //! stops after the bake and prints the library directories to pass to
 //! `rrc --polyffi-libdir` by hand. `rene inspect` reports the source graph as
 //! JSON; `rene clean` deletes the build directory unless another instance
-//! holds it.
+//! holds it. The runtime bake, the bundled core sources, and core's compiled
+//! artifacts live in a shared per-user cache (see `rene::cache`).
 //!
 //! Progress goes to stderr via `tracing`; stdout carries only the final
 //! machine-readable listing. Exit 0 on success, 1 on a failed command, 2 on
@@ -27,7 +28,10 @@ use std::process::ExitCode;
 
 use palc::Parser;
 
+use rene::cache::Cache;
 use rene::db::{self, BuildDir, CleanOutcome};
+use rene::ledger::Session;
+use rene::shared::Shared;
 use rene::{compile, core_src, deps, exec, fresh, manifest, new, plan, pool, resolve, rt};
 
 /// The default build directory name, next to the manifest.
@@ -381,7 +385,13 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // together (each package exists in exactly one version today, so this is
     // a feasibility check; see `resolve`). A dependency-less package is a
     // one-node graph through the same machinery.
-    let core_dir = core_src::unpack(&root)?;
+    // The dependencies every build shares (the core sources, the runtime
+    // bake, core's compiled artifacts) live in the per-user cache.
+    // This build's session in the cache ledger pins every entry it uses in
+    // place until it ends, so nothing removes them underneath it.
+    let cache = Cache::locate(&root);
+    let session = Session::start(&cache).await;
+    let core_dir = core_src::unpack(&cache, &session).await?;
     let graph = resolve::load_graph_with(&loaded, Some(&core_dir))?;
     if graph.nodes.len() > 1 {
         let solution = resolve::check(&graph)?;
@@ -403,7 +413,15 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
         .target
         .as_deref()
         .or(profile.default_target_triple.as_deref());
-    let artifacts = rt::prepare(&dir, requested_target, bake_linker.as_deref(), &progress).await?;
+    let artifacts = rt::prepare(
+        &dir,
+        &cache,
+        &session,
+        requested_target,
+        bake_linker.as_deref(),
+        &progress,
+    )
+    .await?;
     let target = artifacts.target.clone();
 
     // No declared targets: stop after the bake, reporting the libdirs for
@@ -422,6 +440,20 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // One pool for the whole build: `-j` admission over the main event
     // loop, which monitors every child process.
     let pool = pool::Pool::new(args.jobs);
+    // Only the bundled core is shared: it is the same source in every
+    // build. (A package may bring its own `core` instead of the bundled one;
+    // that one is built locally like any other dependency.)
+    let shared = Shared::new(
+        cache,
+        &session,
+        graph
+            .nodes
+            .get("core")
+            .filter(|node| node.dir == core_dir)
+            .map(|_| ("core".to_owned(), core_src::content_hash()))
+            .into_iter()
+            .collect(),
+    );
 
     // The dependency pipeline: every node of the graph but the root, each
     // dispatched the moment its last dependency finishes, each freshness-
@@ -439,6 +471,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
             build_dir: &root,
             token_reuse_remarks: args.token_reuse_remarks,
             color,
+            shared: Some(&shared),
         },
         &pool,
         &progress,
@@ -541,7 +574,9 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), String> {
     // The dependency-graph sections, on demand. One load serves all three;
     // `--solved` additionally requires the feasibility check to hold.
     if args.solved || args.graph || args.commands {
-        let core_dir = core_src::unpack(&root)?;
+        let cache = Cache::locate(&root);
+        let session = Session::start(&cache).await;
+        let core_dir = core_src::unpack(&cache, &session).await?;
         let graph = resolve::load_graph_with(&loaded, Some(&core_dir))?;
         if args.solved {
             let solution = resolve::check(&graph)?;
