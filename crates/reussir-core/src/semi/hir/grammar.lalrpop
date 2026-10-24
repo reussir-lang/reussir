@@ -157,12 +157,14 @@ FfiPreludeDecl: raw::FfiPrelude =
     };
 
 Func: raw::Func =
-    <kernel:KernelAttr?> <lang:LangAttr?> <a:("#" "[" "transform_anchor" "]")?> <p:"pub"?> <r:"regional"?>
+    <kernel:KernelAttr?> <lang:LangAttr?> <a:("#" "[" "transform_anchor" "]")?> <requires:RequiresAttr?>
+    <p:"pub"?> <r:"regional"?>
     "fn" "#" <path:QPath> <generics:Generics?>
     "(" <params:Comma<Param>> ")" "->" <ret:Ty> <loc:ItemLoc?> <body:Body>
     => raw::Func {
         lang,
         transform_anchor: a.is_some(),
+        requires: requires.unwrap_or_default(),
         kernel: kernel.is_some(),
         is_pub: p.is_some(),
         regional: r.is_some(),
@@ -178,6 +180,18 @@ Func: raw::Func =
 /// The `#[lang("…")]` marker: the item is a language item the loading
 /// compiler wires into checking.
 LangAttr: String = "#" "[" "lang" "(" <s:"quoted"> ")" "]" => s.into();
+
+/// The `#[requires("…", …)]` marker on an interface prototype: the optional
+/// features its compiled definition needs. `requires` stays an identifier,
+/// like `kernel`, so it remains usable as a name.
+RequiresAttr: Vec<String> =
+    <l:@L> "#" "[" <name:"ident"> "(" <features:Comma<"quoted">> ")" "]" <r:@R> =>? {
+        if name == "requires" {
+            Ok(features.into_iter().map(|f| unescape_debug_str(f).into_owned()).collect())
+        } else {
+            Err(lalrpop_util::ParseError::User { error: LexError { span: l..r } })
+        }
+    };
 
 SealedAttr: () = "#" "[" "sealed" "]" => ();
 

@@ -82,6 +82,9 @@ pub struct InterfaceEmit<'a> {
     pub protos: &'a rustc_hash::FxHashSet<DefId>,
     /// Records printed; everything else is dropped.
     pub records: &'a rustc_hash::FxHashSet<DefId>,
+    /// The optional features each function needs; a prototype that needs
+    /// some carries them as `#[requires("…")]`.
+    pub requirements: &'a rustc_hash::FxHashMap<DefId, crate::feature::FeatureSet>,
     /// Strip this prefix from file-table paths and normalize separators to
     /// `/`, so the emitted interface is stable across checkouts and hosts.
     pub file_root: Option<&'a std::path::Path>,
@@ -564,6 +567,22 @@ impl<'a> Printer<'a> {
         if self.transform_anchors.contains(&f.def) {
             head.push_str("#[transform_anchor] ");
         }
+        // An interface prototype prints bodyless whatever it carries: the
+        // body (and any `ffi` texture) stays home, only the signature — and
+        // through it the externally-linkable symbol — crosses.
+        let proto = self
+            .interface
+            .as_ref()
+            .is_some_and(|i| i.protos.contains(&f.def));
+        let needed = self
+            .interface
+            .as_ref()
+            .filter(|_| proto)
+            .and_then(|i| i.requirements.get(&f.def));
+        if let Some(needed) = needed {
+            let names: Vec<String> = needed.iter().map(|f| format!("{:?}", f.name())).collect();
+            head.push_str(&format!("#[requires({})] ", names.join(", ")));
+        }
         if f.visibility == Visibility::Public {
             head.push_str("pub ");
         }
@@ -592,13 +611,6 @@ impl<'a> Printer<'a> {
             + self.ty(f.return_ty)
             + self.item_loc(f.file, f.span);
 
-        // An interface prototype prints bodyless whatever it carries: the
-        // body (and any `ffi` texture) stays home, only the signature — and
-        // through it the externally-linkable symbol — crosses.
-        let proto = self
-            .interface
-            .as_ref()
-            .is_some_and(|i| i.protos.contains(&f.def));
         match &f.body {
             Some(body) if !proto => {
                 sig + text(" {") + indent(hardline() + self.expr(body)) + hardline() + text("}")

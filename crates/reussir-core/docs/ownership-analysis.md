@@ -408,6 +408,14 @@ table.
    *Note:* binding-type resolution via an enriched `RecordTable` proved
    **unnecessary** here — an unused binding needs no op (the scrutinee drop frees
    it), and a used binding's type is on its `Var` node.
+   **Built-in integers** are the exception to borrow-dup: a switch on a `Nat` or
+   `Int` is one `rcgmp.match` (`full::bigint_match` plans its arms), which
+   consumes the integer and gives its arms owned values (a `Succ`/`OfNat`/
+   `NegSucc` field, the value in a `default` arm). Bindings of those values are
+   moves; a root switch takes a dying scrutinee unless a range arm still needs
+   it (`OwnershipTable::moves_scrutinee`), otherwise code generation retains
+   the switched value for the match. Telling these switches apart needs the
+   occurrence types, so `RecordTable` now also keeps each enum's variant fields.
 4. **Containers — landed.** `Proj` borrow-dup (the extracted field is inc'd while
    the parent keeps the original; nested projections are pure navigation; the dead
    base drops early at the projection), `Assign` (`src` moved into the field, `dst`

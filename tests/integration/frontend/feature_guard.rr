@@ -1,0 +1,24 @@
+// A library compiled with every feature leaves its ground functions that need
+// a feature this compiler lacks unlowered, ships them in its interface marked
+// with what they need, and a program calling one is rejected at the call.
+
+// UNSUPPORTED: rcgmp
+// RUN: %rrc --package-root %S/Inputs/feature_guard_core --package-name core --core --emit rri -o %t.rri
+// RUN: %FileCheck %s --check-prefix=RRI < %t.rri
+// RUN: %rrc --package-root %S/Inputs/feature_guard_core --package-name core --core --emit obj -o %t.o
+// RUN: %not %rrc %s --package-name app --extern core=%t.rri --emit hir -o /dev/null 2>&1 | %FileCheck %s
+
+// RRI-DAG: #[requires("rcgmp")] pub fn #core::two() -> Nat
+// RRI-DAG: #[requires("rcgmp")] pub fn #core::hidden(
+// RRI-DAG: #[requires("rcgmp")] pub fn #core::calls_hidden(
+// RRI-DAG: {{^}}pub fn #core::plain(
+
+// CHECK: `core::calls_hidden` requires the `rcgmp` feature, which this compiler was built without
+// CHECK: `core::two` requires the `rcgmp` feature, which this compiler was built without
+// CHECK-NOT: plain
+
+pub fn via_body() -> u64 { core::calls_hidden(1) }
+
+pub fn ordinary() -> u64 { core::plain(1) }
+
+pub fn via_signature() { let n = core::two(); }
