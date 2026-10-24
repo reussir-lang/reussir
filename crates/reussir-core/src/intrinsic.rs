@@ -608,6 +608,16 @@ pub enum BigIntFn {
     /// `trunci_overflow(x) -> (U, bool)`: the low bits of `x` at the
     /// fixed-width integer `U`, and whether `x` does not fit `U`.
     TrunciOverflow,
+    /// `sitofp(x) -> f64`: `x` rounded to the nearest `f64`, ties to even.
+    Sitofp,
+    /// `fptosi(value: f64) -> Int`: `value` truncated toward zero; a NaN or
+    /// an infinity terminates the program.
+    Fptosi,
+    /// `limb_count(x) -> u64`: the number of 64-bit limbs of the magnitude.
+    LimbCount,
+    /// `limb(x, i: u64) -> u64`: limb `i` of the magnitude, least significant
+    /// first, or zero past the last one.
+    Limb,
 }
 
 impl BigIntFn {
@@ -623,6 +633,10 @@ impl BigIntFn {
         BigIntFn::Floormodsi,
         BigIntFn::Absi,
         BigIntFn::TrunciOverflow,
+        BigIntFn::Sitofp,
+        BigIntFn::Fptosi,
+        BigIntFn::LimbCount,
+        BigIntFn::Limb,
     ];
 
     /// Parse a surface / textual-IR name.
@@ -644,6 +658,10 @@ impl BigIntFn {
             BigIntFn::Floormodsi => "floormodsi",
             BigIntFn::Absi => "absi",
             BigIntFn::TrunciOverflow => "trunci_overflow",
+            BigIntFn::Sitofp => "sitofp",
+            BigIntFn::Fptosi => "fptosi",
+            BigIntFn::LimbCount => "limb_count",
+            BigIntFn::Limb => "limb",
         }
     }
 
@@ -652,8 +670,19 @@ impl BigIntFn {
     pub fn borrows_operand(self) -> bool {
         matches!(
             self,
-            BigIntFn::Log2i | BigIntFn::Testbiti | BigIntFn::TrunciOverflow
+            BigIntFn::Log2i
+                | BigIntFn::Testbiti
+                | BigIntFn::TrunciOverflow
+                | BigIntFn::Sitofp
+                | BigIntFn::LimbCount
+                | BigIntFn::Limb
         )
+    }
+
+    /// Whether the operation takes a `Nat` or an `Int` as its first operand;
+    /// only `fptosi`, which makes one from a float, does not.
+    pub fn takes_integer(self) -> bool {
+        self != BigIntFn::Fptosi
     }
 }
 

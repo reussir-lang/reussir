@@ -1,0 +1,54 @@
+// `Nat` and `Int` to and from `f64`, and the magnitude's 64-bit limbs, on
+// immediate and heap values: rounding to nearest with ties to even and to
+// infinity beyond `f64`, truncation toward zero, and a NaN that terminates the
+// program.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core -o %t.core.o --relocation-mode pic
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %t.core.o %S/bigint_floats.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %if wine-quirks %{ %not %} %else %{ %not --crash %} %t.exe nan
+
+fn int(x : i64) -> Int { x as Int }
+
+fn to_f64_ok() -> bool {
+    let two : Nat = 2;
+    let tie : Nat = 9007199254740993;
+    let huge = two.pow(1024).to_f64();
+    tie.to_f64() == 9007199254740992.0 && two.pow(100).to_f64() == 1267650600228229401496703205376.0
+        && int(-7).to_f64() == -7.0 && (int(0) - two.pow(100) as Int).to_f64() < -1.0
+        && huge > 0.0 && huge * 0.0 != huge * 0.0
+}
+
+fn from_f64_ok() -> bool {
+    let two : Nat = 2;
+    Int::from_f64(-2.75) == -2 && Int::from_f64(2.75) == 2 && Int::from_f64(-0.5) == 0
+        && Int::from_f64(1267650600228229401496703205376.0) == two.pow(100) as Int
+}
+
+fn limbs_ok() -> bool {
+    let zero : Nat = 0;
+    let five : Nat = 5;
+    let wide : Nat = 18446744073709551619;
+    let negative = int(0) - wide as Int;
+    core::intrinsic::bigint::limb_count(zero) == 0 && core::intrinsic::bigint::limb(zero, 0) == 0
+        && core::intrinsic::bigint::limb_count(five) == 1 && core::intrinsic::bigint::limb(five, 0) == 5
+        && core::intrinsic::bigint::limb(five, 1) == 0
+        && core::intrinsic::bigint::limb_count(wide) == 2 && core::intrinsic::bigint::limb(wide, 0) == 3
+        && core::intrinsic::bigint::limb(wide, 1) == 1 && core::intrinsic::bigint::limb(wide, 7) == 0
+        && core::intrinsic::bigint::limb_count(negative) == 2 && core::intrinsic::bigint::limb(negative, 0) == 3
+        && core::intrinsic::bigint::limb_count(int(-9)) == 1 && core::intrinsic::bigint::limb(int(-9), 0) == 9
+}
+
+pub fn truncate(value : f64) -> i64 { (Int::from_f64(value)) as i64 }
+
+fn digit(ok : bool) -> i64 { if ok { 1 } else { 0 } }
+
+pub fn main() -> i64 {
+    digit(to_f64_ok()) + digit(from_f64_ok()) * 10 + digit(limbs_ok()) * 100
+}
+
+extern "C" trampoline "reussir_main" = main;
+extern "C" trampoline "truncate" = truncate;

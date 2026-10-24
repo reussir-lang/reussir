@@ -27,6 +27,12 @@ pub fn reading(a : Nat) -> u64 {
     }
 }
 
+pub fn conversions(a : Int, i : u64) -> u64 {
+    let f = core::intrinsic::bigint::sitofp(a);
+    let b = core::intrinsic::bigint::fptosi(f);
+    core::intrinsic::bigint::limb_count(b) + core::intrinsic::bigint::limb(a, i)
+}
+
 // MIR-DAG: intrinsic#bigint#edivsi#0
 // MIR-DAG: intrinsic#bigint#trunci_overflow#0
 
@@ -41,3 +47,7 @@ pub fn reading(a : Nat) -> u64 {
 // CHECK-DAG: rcgmp.trunci_overflow {{.*}}unsigned{{.*}} to i32
 // CHECK-DAG: rcgmp.testbiti
 // CHECK-DAG: rcgmp.log2i
+// CHECK-DAG: rcgmp.sitofp {{.*}} to f64
+// CHECK-DAG: rcgmp.fptosi {{.*}} : f64 to !rcgmp.mpz
+// CHECK-DAG: rcgmp.limb_count
+// CHECK-DAG: rcgmp.limb {{.*}} to i64

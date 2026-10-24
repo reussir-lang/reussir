@@ -9,9 +9,10 @@
 //!
 //! Ownership follows the dialect: consuming operations take one owned
 //! reference per operand, while [`cmpi`], [`trunci`], [`trunci_overflow`],
-//! [`log2i`] and [`testbiti`] borrow their integer operands and leave their
-//! references with the caller. [`match_`] consumes its scrutinee and gives an
-//! arm that takes an argument an owned reference.
+//! [`log2i`], [`testbiti`], [`sitofp`], [`limb_count`] and [`limb`] borrow
+//! their integer operands and leave their references with the caller.
+//! [`match_`] consumes its scrutinee and gives an arm that takes an argument an
+//! owned reference.
 
 use melior::Context;
 use melior::ir::attribute::{Attribute, IntegerAttribute};
@@ -368,4 +369,54 @@ pub fn yield_<'c>(values: &[Value<'c, '_>], location: Location<'c>) -> Operation
         .add_operands(values)
         .build()
         .expect("valid rcgmp.yield")
+}
+
+/// `rcgmp.sitofp <value> : !rcgmp.mpz to <ty>`: a borrowed integer rounded to
+/// the nearest value of the float type `ty`, ties to even.
+pub fn sitofp<'c>(value: Value<'c, '_>, ty: Type<'c>, location: Location<'c>) -> Operation<'c> {
+    OperationBuilder::new("rcgmp.sitofp", location)
+        .add_operands(&[value])
+        .add_results(&[ty])
+        .build()
+        .expect("valid rcgmp.sitofp")
+}
+
+/// `rcgmp.fptosi <value> : <float> to !rcgmp.mpz`: a new integer holding the
+/// float truncated toward zero; a NaN or an infinity terminates the program.
+pub fn fptosi<'c>(value: Value<'c, '_>, ty: Type<'c>, location: Location<'c>) -> Operation<'c> {
+    OperationBuilder::new("rcgmp.fptosi", location)
+        .add_operands(&[value])
+        .add_results(&[ty])
+        .build()
+        .expect("valid rcgmp.fptosi")
+}
+
+/// `rcgmp.limb_count <value>`: the number of limbs of a borrowed integer's
+/// magnitude, as an `index`; zero has none.
+pub fn limb_count<'c>(
+    context: &'c Context,
+    value: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("rcgmp.limb_count", location)
+        .add_operands(&[value])
+        .add_results(&[Type::index(context)])
+        .build()
+        .expect("valid rcgmp.limb_count")
+}
+
+/// `rcgmp.limb <value>[<index>] : !rcgmp.mpz to <ty>`: limb `index` of a
+/// borrowed integer's magnitude, least significant first, or zero past the
+/// last one. `ty` must be as wide as a limb, the target's pointer width.
+pub fn limb<'c>(
+    value: Value<'c, '_>,
+    index: Value<'c, '_>,
+    ty: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("rcgmp.limb", location)
+        .add_operands(&[value, index])
+        .add_results(&[ty])
+        .build()
+        .expect("valid rcgmp.limb")
 }
