@@ -1271,7 +1271,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
 }
 
 /// The immediate sub-trees of a switch's cases, in source order.
-fn subtrees<'tcx>(cases: &SwitchCases<'tcx>) -> SmallVec<[&'tcx DecisionTree<'tcx>; 8]> {
+pub(crate) fn subtrees<'tcx>(cases: &SwitchCases<'tcx>) -> SmallVec<[&'tcx DecisionTree<'tcx>; 8]> {
     let mut v = SmallVec::new();
     match *cases {
         SwitchCases::Int { cases, default } => {

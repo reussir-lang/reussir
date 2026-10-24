@@ -252,6 +252,26 @@ impl<'a, 'tcx> MirBuilder<'a, 'tcx> {
         }
     }
 
+    /// An integer-key switch on the value at `path`.
+    fn switch_int(
+        &self,
+        path: Vec<u32>,
+        cases: Vec<(i64, DecisionTree<'tcx>)>,
+        default: DecisionTree<'tcx>,
+    ) -> DecisionTree<'tcx> {
+        let cases: Vec<_> = cases
+            .into_iter()
+            .map(|(k, t)| (&*self.tcx.alloc(crate::literal::Integer::from(k)), t))
+            .collect();
+        DecisionTree::Switch {
+            scrutinee: self.tcx.alloc_slice(&path),
+            cases: SwitchCases::Int {
+                cases: self.tcx.alloc_slice(&cases),
+                default: self.tcx.alloc(default),
+            },
+        }
+    }
+
     fn match_(&mut self, scrut: Expr<'tcx>, tree: DecisionTree<'tcx>, ty: Ty<'tcx>) -> Expr<'tcx> {
         let scrut = self.tcx.alloc(scrut);
         self.mk(ExprKind::Match(scrut, tree), ty)
@@ -2601,5 +2621,86 @@ fn device_transfers_borrow_live_inputs_and_release_last_use() {
             let ot = run(tcx, &f, &b);
             assert!(!ot.before(upload_id).contains(&RcOp::Dup(x)));
         }
+    });
+}
+
+// ----- built-in integer matches (one consuming `rcgmp.match`) -----
+
+#[test]
+fn bigint_match_plans_merged_constructor_levels() {
+    // match n { Zero => a, 1000 => b, Succ(m) => c(m) }: the literal under
+    // `Succ` is `case 1000`, the rest of `Succ` one `at_least 1` arm.
+    use crate::full::bigint_match::{ArmTest, plan};
+    use crate::literal::Integer;
+    use crate::semi::ty::BigIntTy;
+    with_tcx(|tcx| {
+        let mut b = MirBuilder::new(tcx);
+        let nat = tcx.mk_bigint(BigIntTy::Nat);
+        let i64t = b.i64();
+        let m = b.fresh_var();
+        let zero = b.const_int(0);
+        let a = b.leaf(zero, vec![]);
+        let one = b.const_int(1);
+        let bl = b.leaf(one, vec![]);
+        let vm = b.var(m, nat);
+        let use_m = b.call("use", vec![vm], i64t);
+        let c = b.leaf(use_m, vec![(m, vec![0])]);
+        let succ = b.switch_int(vec![0], vec![(999, bl)], c);
+        let DecisionTree::Switch { cases, .. } = b.switch_ctor(vec![], vec![a, succ]) else {
+            unreachable!()
+        };
+        let p = plan(BigIntTy::Nat, &[], &cases);
+        let tests: Vec<_> = p.arms.iter().map(|a| a.test.clone()).collect();
+        assert_eq!(
+            tests,
+            [
+                ArmTest::Case(Integer::from(0)),
+                ArmTest::Case(Integer::from(1000)),
+                ArmTest::AtLeast(Integer::from(1)),
+            ]
+        );
+        assert_eq!(p.arms[1].constants, [(vec![0], Integer::from(999))]);
+        assert_eq!(p.arms[2].argument, Some(vec![0]));
+        assert!(!p.keeps_scrutinee);
+    });
+}
+
+#[test]
+fn bigint_match_plans_int_constructors() {
+    // match i { OfNat(Zero) => a, OfNat(Succ(k)) => b(k), NegSucc(j) => c(j) }
+    use crate::full::bigint_match::{ArmTest, plan};
+    use crate::literal::Integer;
+    use crate::semi::ty::BigIntTy;
+    with_tcx(|tcx| {
+        let mut b = MirBuilder::new(tcx);
+        let nat = tcx.mk_bigint(BigIntTy::Nat);
+        let i64t = b.i64();
+        let (k, j) = (b.fresh_var(), b.fresh_var());
+        let zero = b.const_int(0);
+        let a = b.leaf(zero, vec![]);
+        let vk = b.var(k, nat);
+        let use_k = b.call("use", vec![vk], i64t);
+        let bl = b.leaf(use_k, vec![(k, vec![0, 0])]);
+        let of_nat = b.switch_ctor(vec![0], vec![a, bl]);
+        let vj = b.var(j, nat);
+        let use_j = b.call("use", vec![vj], i64t);
+        let c = b.leaf(use_j, vec![(j, vec![0])]);
+        let DecisionTree::Switch { cases, .. } = b.switch_ctor(vec![], vec![of_nat, c]) else {
+            unreachable!()
+        };
+        let p = plan(BigIntTy::Int, &[], &cases);
+        let arms: Vec<_> = p
+            .arms
+            .iter()
+            .map(|a| (a.test.clone(), a.argument.clone()))
+            .collect();
+        assert_eq!(
+            arms,
+            [
+                (ArmTest::Case(Integer::from(0)), None),
+                (ArmTest::AtLeast(Integer::from(1)), Some(vec![0, 0])),
+                (ArmTest::AtMost(Integer::from(-1)), Some(vec![0])),
+            ]
+        );
     });
 }
