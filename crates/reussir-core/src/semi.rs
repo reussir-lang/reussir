@@ -2904,6 +2904,66 @@ mod tests {
         );
     }
 
+    /// The match diagnostics of `src` (a `core` module `t`), and the printed
+    /// HIR of its function `f`.
+    fn bigint_match(src: &str) -> (Vec<String>, String) {
+        let mut out = (Vec::new(), String::new());
+        check_with_bigint(src, |elab, _| {
+            out.0 = elab.reports.iter().map(|r| r.message.clone()).collect();
+            let strings = elab.strings.entries();
+            let hir = crate::semi::hir::print::Printer::new(&elab.defs, elab.resolver).program(
+                &elab.elaborated,
+                &strings,
+                &elab.records,
+                &elab.trampolines,
+            );
+            out.1 = hir
+                .split("\n\n")
+                .find(|item| item.contains("fn #core::t::f("))
+                .unwrap_or_default()
+                .to_owned();
+        });
+        out
+    }
+
+    #[test]
+    fn bigint_match_sees_literals_through_constructors() {
+        // A literal under `Succ` tests the predecessor; one that no `Succ`
+        // level resolves stays a literal switch on the remaining value.
+        let (reports, hir) = bigint_match(
+            "fn f(n: Nat) -> i64 { match n { 1000 => 1, Nat::Succ(m) => 2, Nat::Zero => 3 } }",
+        );
+        assert!(reports.is_empty(), "{reports:#?}");
+        let switches: Vec<&str> = hir
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("switch") || l.starts_with("999"))
+            .collect();
+        assert_eq!(
+            switches,
+            ["switch scrut {", "switch scrut.0 {", "999 => {"],
+            "{hir}"
+        );
+
+        let (reports, _) = bigint_match(
+            "fn f(i: Int) -> i64 {\n\
+                 match i { -1 => 1, Int::OfNat(Nat::Succ(_)) => 2, 0 => 3, Int::NegSucc(_) => 4 }\n\
+             }",
+        );
+        assert!(reports.is_empty(), "{reports:#?}");
+    }
+
+    #[test]
+    fn bigint_match_checks_mixed_columns() {
+        let (reports, _) = bigint_match(
+            "fn f(n: Nat) -> i64 { match n { 0 => 1, Nat::Succ(Nat::Succ(_)) => 2 } }",
+        );
+        assert_eq!(reports, ["non-exhaustive patterns in `match`"]);
+        let (reports, _) =
+            bigint_match("fn f(n: Nat) -> i64 { match n { Nat::Succ(_) => 1, 5 => 2, _ => 3 } }");
+        assert_eq!(reports, ["unreachable match arm"]);
+    }
+
     #[test]
     fn bigint_literals_and_comparisons_check() {
         check_with_bigint(
