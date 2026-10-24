@@ -1,0 +1,229 @@
+// `match` on `Nat` and `Int` end to end: literal and constructor patterns on
+// small and heap values. Each switch is one `rcgmp.match` over the integer
+// intervals of its patterns; the match consumes the integer and hands its arms
+// owned values.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri --emit mlir -o %t.mlir
+// RUN: %FileCheck %s --check-prefix=CLASSIFY < %t.mlir
+// RUN: %FileCheck %s --check-prefix=FOUR < %t.mlir
+// RUN: %FileCheck %s --check-prefix=FIRST < %t.mlir
+// RUN: %FileCheck %s --check-prefix=SIGN < %t.mlir
+// RUN: %FileCheck %s --check-prefix=GAP < %t.mlir
+// RUN: %FileCheck %s --check-prefix=GUARDED < %t.mlir
+// RUN: %FileCheck %s --check-prefix=LIVE < %t.mlir
+// RUN: %FileCheck %s --check-prefix=DEFER < %t.mlir
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/bigint_match.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+fn factorial(n : Nat) -> Nat { if n == 0 { 1 } else { n * factorial(n - 1) } }
+
+// Literals and a `Succ` chain: `case 0`, `case 1`, and `at_least 2`, whose
+// argument is `m` itself.
+fn classify(n : Nat) -> i64 {
+    match n {
+        0 => 0,
+        Nat::Succ(Nat::Zero) => 1,
+        Nat::Succ(Nat::Succ(m)) => if m < 100 { 2 } else { 3 }
+    }
+}
+
+// A constructor chain is one key; the wildcard is the default.
+fn four(n : Nat) -> i64 {
+    match n {
+        Nat::Succ(Nat::Succ(Nat::Succ(Nat::Succ(Nat::Zero)))) => 1,
+        _ => 0
+    }
+}
+
+// Overlapping literals and a range: first match wins.
+fn first(n : Nat) -> i64 {
+    match n {
+        3 => 30,
+        Nat::Succ(Nat::Succ(1000)) => 1002,
+        Nat::Succ(_) => 1,
+        Nat::Zero => 0
+    }
+}
+
+// The scrutinee is still used in an arm: the match gets a retained reference.
+fn sum_to(n : Nat) -> Nat {
+    match n {
+        Nat::Zero => 0,
+        Nat::Succ(m) => n + sum_to(m)
+    }
+}
+
+// The default arm takes the scrutinee itself.
+fn double_unless_zero(n : Nat) -> Nat {
+    match n {
+        0 => 1,
+        x => x * 2
+    }
+}
+
+// A guard; its failure path rebuilds the scrutinee from the arm's distance.
+fn guarded(n : Nat) -> Nat {
+    match n {
+        Nat::Succ(m) if m > 10 => m,
+        x => x + 100
+    }
+}
+
+// Used again after the match.
+fn pred_plus_self(n : Nat) -> Nat {
+    let p = match n {
+        Nat::Zero => 0,
+        Nat::Succ(m) => m
+    };
+    p + n
+}
+
+// A value the match produced, matched again.
+fn nested(n : Nat) -> i64 {
+    match n {
+        Nat::Zero => 0,
+        Nat::Succ(m) => match m {
+            7 => 7,
+            _ => 1
+        }
+    }
+}
+
+// `OfNat` and `NegSucc` beside literals: `case` keys, then `at_least` and
+// `at_most`, each binding its distance unchanged.
+fn sign(i : Int) -> i64 {
+    match i {
+        0 => 0,
+        -1 => -1,
+        Int::OfNat(Nat::Succ(k)) => if k == 0 { 1 } else { 2 },
+        Int::NegSucc(k) => if k < 1000 { -2 } else { -3 }
+    }
+}
+
+// Ranges on both sides of zero; the values between them are the default's.
+fn gap(i : Int) -> i64 {
+    match i {
+        Int::OfNat(Nat::Succ(_)) => 1,
+        Int::NegSucc(Nat::Succ(Nat::Succ(_))) => 2,
+        _ => 0
+    }
+}
+
+// The guard does not read `m`: the success leaf binds it from the arm's
+// distance, and no path retains or rebuilds it for the guard.
+fn ready(n : Nat, flag : bool) -> Nat {
+    match n {
+        Nat::Succ(m) if flag => m,
+        _ => 7
+    }
+}
+
+pub fn owning() -> i64 {
+    let f25 = factorial(25);
+    if ready(8, true) == 7 && ready(8, false) == 7 && ready(f25, true) == f25 - 1
+        && ready(0, true) == 7 { 1 } else { 0 }
+}
+extern "C" trampoline "owning" = owning;
+
+pub fn gap_of(x : i64) -> i64 { gap(x as Int) }
+extern "C" trampoline "gap_of" = gap_of;
+
+fn int(x : i64) -> Int { x as Int }
+
+pub fn main() -> i64 {
+    let f30 = factorial(30);
+    let classify_ok = if classify(0) == 0 && classify(1) == 1 && classify(50) == 2
+        && classify(factorial(30)) == 3 { 1 } else { 0 };
+    let four_ok = if four(4) == 1 && four(3) == 0 && four(5) == 0 && four(factorial(25)) == 0 { 1 } else { 0 };
+    let first_ok = if first(3) == 30 && first(1002) == 1002 && first(4) == 1 && first(0) == 0
+        && first(factorial(25)) == 1 { 1 } else { 0 };
+    let sum_ok = if sum_to(100) == 5050 { 1 } else { 0 };
+    let default_ok = if double_unless_zero(0) == 1 && double_unless_zero(21) == 42
+        && double_unless_zero(factorial(30)) == factorial(30) * 2 { 1 } else { 0 };
+    let guard_ok = if guarded(20) == 19 && guarded(5) == 105 && guarded(0) == 100
+        && guarded(factorial(25)) == factorial(25) - 1 { 1 } else { 0 };
+    let after_ok = if pred_plus_self(10) == 19 && pred_plus_self(0) == 0
+        && pred_plus_self(factorial(30)) == f30 * 2 - 1 { 1 } else { 0 };
+    let nested_ok = if nested(8) == 7 && nested(9) == 1 && nested(0) == 0 { 1 } else { 0 };
+    let big : Int = -340282366920938463463374607431768211456;
+    let sign_ok = if sign(int(0)) == 0 && sign(int(-1)) == -1 && sign(int(1)) == 1
+        && sign(int(5)) == 2 && sign(int(-5)) == -2 && sign(big) == -3 { 1 } else { 0 };
+    classify_ok + four_ok * 10 + first_ok * 100 + sum_ok * 1000 + default_ok * 10000
+        + guard_ok * 100000 + after_ok * 1000000 + nested_ok * 10000000 + sign_ok * 100000000
+}
+
+extern "C" trampoline "reussir_main" = main;
+
+// A dying scrutinee moves into the match; the `Succ` chain's arm argument is
+// the remaining natural.
+// CLASSIFY-LABEL: func.func private @{{.*}}classify(%arg0
+// CLASSIFY-NOT: rcgmp.retain
+// CLASSIFY: rcgmp.match %arg0 : !rcgmp.mpz -> i64 {
+// CLASSIFY-NEXT: case 0 {
+// CLASSIFY: case 1 {
+// CLASSIFY: at_least 2 (%arg1) {
+// CLASSIFY-NOT: rcgmp.addi
+// CLASSIFY-NOT: rcgmp.match
+// CLASSIFY: return
+
+// FOUR-LABEL: func.func private @{{.*}}four(%arg0
+// FOUR: rcgmp.match %arg0 : !rcgmp.mpz -> i64 {
+// FOUR-NEXT: case 4 {
+// FOUR: default {
+// FOUR-NOT: case
+// FOUR: return
+
+// FIRST-LABEL: func.func private @{{.*}}first(%arg0
+// FIRST: rcgmp.match %arg0 : !rcgmp.mpz -> i64 {
+// FIRST-NEXT: case 0 {
+// FIRST: case 3 {
+// FIRST: case 1002 {
+// FIRST: default {
+// FIRST: return
+
+// SIGN-LABEL: func.func private @{{.*}}sign(%arg0
+// SIGN: rcgmp.match %arg0 : !rcgmp.mpz -> i64 {
+// SIGN-NEXT: case -1 {
+// SIGN: case 0 {
+// SIGN: at_least 1 (%arg1) {
+// SIGN: at_most -1 (%arg1) {
+// SIGN-NOT: rcgmp.addi
+// SIGN-NOT: rcgmp.match
+// SIGN: return
+
+// GAP-LABEL: func.func private @{{.*}}gap(%arg0
+// GAP: rcgmp.match %arg0 : !rcgmp.mpz -> i64 {
+// GAP-NEXT: at_least 1 {
+// GAP: at_most -3 {
+// GAP: default {
+// GAP: return
+
+// The guard reads `m` from the arm's distance; the success path releases the
+// arm's reference and the failure path rebuilds `x` from it.
+// GUARDED-LABEL: func.func private @{{.*}}guarded(%arg0
+// GUARDED-NOT: rcgmp.retain %arg0
+// GUARDED: rcgmp.match %arg0 : !rcgmp.mpz -> !rcgmp.mpz {
+// GUARDED: case 0 {
+// GUARDED: at_least 1 (%arg1) {
+// GUARDED: scf.if
+// GUARDED: rcgmp.release %arg1
+// GUARDED: } else {
+// GUARDED: rcgmp.addi %arg1
+
+// A scrutinee used after the match is retained for it.
+// LIVE-LABEL: func.func private @{{.*}}pred_plus_self(%arg0
+// LIVE: rcgmp.retain %arg0
+// LIVE-NEXT: rcgmp.match %arg0
+
+// DEFER-LABEL: func.func private @{{.*}}ready(%arg0
+// DEFER: rcgmp.match %arg0 : !rcgmp.mpz -> !rcgmp.mpz {
+// DEFER: at_least 1 (%[[D:[a-z0-9]+]]) {
+// DEFER-NOT: rcgmp.retain
+// DEFER-NOT: rcgmp.addi
+// DEFER: scf.if
+// DEFER: scf.yield %[[D]]
+// DEFER: } else {
+// DEFER: rcgmp.release %[[D]]

@@ -95,6 +95,16 @@ struct Env<'c, 'b, 'tcx> {
     is_kernel: bool,
     temps: IndexMap<ExprId, Value<'c, 'b>, rustc_hash::FxBuildHasher>,
     anchors: Vec<(SmallVec<[u32; 4]>, Anchor<'c, 'b, 'tcx>)>,
+    /// The arms of `Nat`/`Int` matches the walk is inside (see
+    /// [`bigint_switch`](Lowerer::bigint_switch)).
+    int_arms: Vec<bigint::IntArm<'c, 'b>>,
+    /// The root anchors whose scrutinee the ownership analysis gave to the
+    /// root switch of their match.
+    moved_roots: Vec<usize>,
+    /// Guard bindings of values a `Nat`/`Int` match produced that the guard
+    /// itself does not read: the success leaf binds them, taking the arm's
+    /// value, so the guard never computes them.
+    deferred: Vec<(usize, VarId, &'tcx [u32])>,
 }
 
 /// A point already materialized while walking a `match`
@@ -135,6 +145,9 @@ impl<'c, 'b, 'tcx> Env<'c, 'b, 'tcx> {
             is_kernel,
             temps: IndexMap::default(),
             anchors: Vec::new(),
+            int_arms: Vec::new(),
+            moved_roots: Vec::new(),
+            deferred: Vec::new(),
         }
     }
 
@@ -157,6 +170,10 @@ impl<'c, 'b, 'tcx> Env<'c, 'b, 'tcx> {
         let vars_mark = self.vars.len();
         let temps_mark = self.temps.len();
         let anchors_mark = self.anchors.len();
+        // A branch may settle an arm value its sibling still owns: restore them.
+        let saved_arms = self.int_arms.clone();
+        let saved_moved = self.moved_roots.clone();
+        let deferred_mark = self.deferred.len();
         let saved_region = self.region;
         let saved_kernel = self.is_kernel;
         // SAFETY: `'b: 's`, so viewing the stored `Value<'c, 'b>`s as
@@ -171,6 +188,9 @@ impl<'c, 'b, 'tcx> Env<'c, 'b, 'tcx> {
         self.vars.truncate(vars_mark);
         self.temps.truncate(temps_mark);
         self.anchors.truncate(anchors_mark);
+        self.int_arms = saved_arms;
+        self.moved_roots = saved_moved;
+        self.deferred.truncate(deferred_mark);
         self.region = saved_region;
         self.is_kernel = saved_kernel;
         r
@@ -1789,7 +1809,14 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 ty: scrut.ty,
             },
         ));
+        // A `Nat`/`Int` scrutinee the ownership analysis gave to the match is
+        // taken by its root switch.
+        let moved_mark = env.moved_roots.len();
+        if self.ownership.borrow().moves_scrutinee(e.id) {
+            env.moved_roots.push(root_idx);
+        }
         let result = self.lower_tree(block, env, root_idx, tree, e.ty);
+        env.moved_roots.truncate(moved_mark);
         env.anchors.truncate(anchors_mark);
         env.temps.truncate(temps_mark);
         result
@@ -1842,12 +1869,6 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         cases: SwitchCases<'tcx>,
         result_ty: Ty<'tcx>,
     ) -> Result<Option<Value<'c, 'b>>> {
-        if let Some((_, Anchor::Root { ty, .. })) = env.anchors.get(root_idx)
-            && path.is_empty()
-            && let TyKind::BigInt(int) = ty.kind()
-        {
-            return err(format!("matching on `{}` does not lower yet", int.name()));
-        }
         match cases {
             SwitchCases::Ctor(subtrees) => {
                 self.ctor_switch(block, env, root_idx, path, subtrees, result_ty)
@@ -1857,10 +1878,27 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             }
             SwitchCases::Int {
                 cases,
-                ranges: [],
+                ranges,
                 default,
-            } => self.int_switch(block, env, root_idx, path, cases, default, result_ty),
-            SwitchCases::Int { .. } => err("range arms switch on a fixed-width integer"),
+            } => {
+                let (scrut_val, scrut_ty) = self.resolve_loaded(block, env, root_idx, path)?;
+                if let TyKind::BigInt(int) = *scrut_ty.kind() {
+                    return self.bigint_switch(
+                        block,
+                        env,
+                        (root_idx, path),
+                        (scrut_val, int),
+                        (cases, ranges, default),
+                        result_ty,
+                    );
+                }
+                if !ranges.is_empty() {
+                    return err("range arms switch on a fixed-width integer");
+                }
+                self.int_switch(
+                    block, env, root_idx, scrut_val, scrut_ty, cases, default, result_ty,
+                )
+            }
             SwitchCases::Char { cases, default } => {
                 self.char_switch(block, env, root_idx, path, cases, default, result_ty)
             }
@@ -2203,13 +2241,13 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         block: &'b Block<'c>,
         env: &mut Env<'c, 'b, 'tcx>,
         root_idx: usize,
-        path: &[u32],
+        scrut_val: Value<'c, 'b>,
+        scrut_ty: Ty<'tcx>,
         cases: &'tcx [(&'tcx Integer, DecisionTree<'tcx>)],
         default: &'tcx DecisionTree<'tcx>,
         result_ty: Ty<'tcx>,
     ) -> Result<Option<Value<'c, 'b>>> {
         let loc = self.loc();
-        let (scrut_val, scrut_ty) = self.resolve_loaded(block, env, root_idx, path)?;
         let int_ty = match *scrut_ty.kind() {
             TyKind::Int(ty) => ty,
             _ => return err("integer match on a non-integer scrutinee"),
@@ -2365,7 +2403,15 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         result_ty: Ty<'tcx>,
     ) -> Result<Option<Value<'c, 'b>>> {
         let _ = result_ty;
-        self.bind_pattern(block, env, root_idx, bindings)?;
+        let mut all: Vec<(VarId, &'tcx [u32])> = env
+            .deferred
+            .iter()
+            .filter(|&&(root, _, _)| root == root_idx)
+            .map(|&(_, var, path)| (var, path))
+            .collect();
+        all.extend_from_slice(bindings);
+        self.bind_pattern(block, env, root_idx, &all, Some(body))?;
+        self.settle_int_arms(block, env, root_idx);
         self.expr(block, env, body)
     }
 
@@ -2385,7 +2431,12 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         result_ty: Ty<'tcx>,
     ) -> Result<Option<Value<'c, 'b>>> {
         let loc = self.loc();
-        self.bind_pattern(block, env, root_idx, bindings)?;
+        // A value a `Nat`/`Int` match produced that only the success branch
+        // uses is bound there, not computed for a guard that never reads it.
+        let (read, deferred): (Vec<_>, Vec<_>) = bindings.iter().partition(|&&(var, path)| {
+            mir::uses_var(guard, var) || self.int_arm_value(env, root_idx, path).is_none()
+        });
+        self.bind_pattern(block, env, root_idx, &read, None)?;
         let cond = self
             .expr(block, env, guard)?
             .ok_or_else(|| LoweringError("match guard is unit".into()))?;
@@ -2395,7 +2446,11 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         } else {
             vec![self.tys.mlir_ty(result_ty)?]
         };
+        let mark = env.deferred.len();
+        env.deferred
+            .extend(deferred.iter().map(|&(var, path)| (root_idx, var, path)));
         let then_region = self.tree_branch_region(env, root_idx, success, result_ty)?;
+        env.deferred.truncate(mark);
         let else_region = self.tree_branch_region(env, root_idx, failure, result_ty)?;
         let op =
             block.append_operation(scf::r#if(cond, &result_tys, then_region, else_region, loc));
@@ -2414,9 +2469,23 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         block: &'b Block<'c>,
         env: &mut Env<'c, 'b, 'tcx>,
         root_idx: usize,
-        bindings: &'tcx [(VarId, &'tcx [u32])],
+        bindings: &[(VarId, &'tcx [u32])],
+        leaf_body: Option<&Expr<'tcx>>,
     ) -> Result<()> {
         for &(var, path) in bindings {
+            // A value a `Nat`/`Int` match produced comes from its arm: a leaf
+            // whose body uses it takes the arm's value, a guard reads it.
+            if let Some(found) = self.int_arm_value(env, root_idx, path) {
+                let take = match leaf_body {
+                    Some(body) if !mir::uses_var(body, var) => continue,
+                    Some(_) => true,
+                    None => false,
+                };
+                let (val, ty) = self.bind_int_arm_value(block, env, found, take)?;
+                self.bind_var_ty(var, ty);
+                env.vars.insert(var, val);
+                continue;
+            }
             // An empty path goes through `resolve` like everything else: a
             // dispatch may have re-anchored the root's own path (a nullable
             // switch on the scrutinee binds its unwrapped payload there), and

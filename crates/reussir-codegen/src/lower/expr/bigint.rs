@@ -7,20 +7,31 @@
 //! onto arithmetic: `Nat::Zero` is `0`, `Nat::Succ(n)` is `n + 1`,
 //! `Int::OfNat(n)` is `n` itself, and `Int::NegSucc(n)` is `-(n + 1)`, the
 //! bitwise complement of `n`.
+//!
+//! A switch on either type is one `rcgmp.match` whose arms are the switch's
+//! keys, ranges and default (see the pattern compiler's "Built-in integers").
+//! The match consumes the integer and gives a range arm its distance from the
+//! bound, and a `default` arm the integer, as an owned region argument; every
+//! occurrence derived from the integer (it, and the fields of `Succ`, `OfNat`
+//! and `NegSucc`) is a constant in a `case` arm and that argument plus a
+//! constant otherwise.
 
 use reussir_backend::builders;
 use reussir_backend::melior::dialect::arith::{self, CmpiPredicate};
 use reussir_backend::melior::ir::attribute::{Attribute, IntegerAttribute};
-use reussir_backend::melior::ir::{Block, BlockLike, Value, ValueLike};
-use reussir_backend::rcgmp::{self, Binary, Predicate, Shift, Unary};
-use reussir_core::full::mir::{Expr, ExprKind};
+use reussir_backend::melior::ir::{Block, BlockLike, Region, RegionLike, Value, ValueLike};
+use reussir_backend::rcgmp::{self, ArmKind, Binary, Predicate, Shift, Unary};
+use reussir_core::full::mir::{self, DecisionTree, Expr, ExprKind};
+use reussir_core::full::ownership::subtrees;
 use reussir_core::intrinsic::BigIntFn;
 use reussir_core::literal::{self, Integer};
-use reussir_core::semi::hir::{ArithOp, CmpOp};
+use reussir_core::semi::hir::{ArithOp, CmpOp, IntRange, VarId};
 use reussir_core::semi::ty::{BigIntTy, Ty, TyKind};
 
+use smallvec::SmallVec;
+
 use super::{Env, Lowerer};
-use crate::lower::ty::num_class;
+use crate::lower::ty::{is_unit, num_class};
 use crate::lower::{LoweringError, Result, err};
 
 impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
@@ -270,5 +281,324 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 ))
             }
         }
+    }
+
+    /// Lower a switch on the `Nat`/`Int` value at `path` to one `rcgmp.match`.
+    /// The match consumes its operand: the scrutinee itself when the ownership
+    /// analysis gave it to this root switch, else a retained reference, its
+    /// owner keeping the value as for a borrowed scrutinee.
+    pub(super) fn bigint_switch<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        (root_idx, path): (usize, &[u32]),
+        (value, int): (Value<'c, 'b>, BigIntTy),
+        (cases, ranges, default): IntCases<'tcx>,
+        result_ty: Ty<'tcx>,
+    ) -> Result<Option<Value<'c, 'b>>> {
+        let loc = self.loc();
+        match env.moved_roots.iter().position(|&r| r == root_idx) {
+            Some(i) if path.is_empty() => {
+                env.moved_roots.remove(i);
+            }
+            _ => {
+                block.append_operation(rcgmp::retain(value, loc));
+            }
+        }
+
+        let mut arms: Vec<(ArmTest, &'tcx DecisionTree<'tcx>)> = cases
+            .iter()
+            .map(|(k, t)| (ArmTest::Case((*k).clone()), t))
+            .collect();
+        arms.extend(ranges.iter().map(|(r, t)| match r {
+            IntRange::AtLeast(c) => (ArmTest::AtLeast((*c).clone()), t),
+            IntRange::AtMost(c) => (ArmTest::AtMost((*c).clone()), t),
+        }));
+        if !matches!(default, DecisionTree::Unreachable | DecisionTree::Uncovered) {
+            arms.push((ArmTest::Default, default));
+        }
+
+        let mpz = value.r#type();
+        let unit = is_unit(result_ty);
+        let result_types = if unit {
+            Vec::new()
+        } else {
+            vec![self.tys.mlir_ty(result_ty)?]
+        };
+        let mut attrs = Vec::with_capacity(arms.len());
+        let mut regions = Vec::with_capacity(arms.len());
+        for (test, tree) in arms {
+            let (kind, key) = match &test {
+                ArmTest::Case(k) => (ArmKind::Case, Some(k)),
+                ArmTest::AtLeast(c) => (ArmKind::AtLeast, Some(c)),
+                ArmTest::AtMost(c) => (ArmKind::AtMost, Some(c)),
+                ArmTest::Default => (ArmKind::Default, None),
+            };
+            attrs.push((kind, key.map(|k| self.narrowest(k)).transpose()?));
+            // Only an arm whose sub-tree uses a derived occurrence takes the
+            // argument; otherwise the match releases the integer itself.
+            let argument = kind != ArmKind::Case && uses_derived(tree, path);
+            let arm_block = if argument {
+                Block::new(&[(mpz, loc)])
+            } else {
+                Block::new(&[])
+            };
+            env.subscope(|scope| {
+                let arg = if argument {
+                    let val: Value<'c, '_> = arm_block
+                        .argument(0)
+                        .map_err(|e| LoweringError(format!("missing match argument: {e}").into()))?
+                        .into();
+                    Some(val)
+                } else {
+                    None
+                };
+                scope.int_arms.push(IntArm {
+                    root_idx,
+                    path: SmallVec::from_slice(path),
+                    int,
+                    test,
+                    arg,
+                    views: Vec::new(),
+                });
+                let value = self.lower_tree(&arm_block, scope, root_idx, tree, result_ty)?;
+                if !unit && value.is_none() {
+                    return err("match arm produced no value");
+                }
+                arm_block.append_operation(rcgmp::yield_(value.as_slice(), loc));
+                Ok(())
+            })?;
+            let region = Region::new();
+            region.append_block(arm_block);
+            regions.push(region);
+        }
+        let attrs = rcgmp::match_arms(self.context, &attrs);
+        let op = block.append_operation(rcgmp::match_(
+            self.context,
+            value,
+            attrs,
+            &result_types,
+            regions,
+            loc,
+        ));
+        Ok((!unit).then(|| op.result(0).unwrap().into()))
+    }
+
+    /// `n` as an integer attribute of the narrowest signless type holding it in
+    /// two's complement, the form the dialect's constants and match arms take.
+    fn narrowest(&self, n: &Integer) -> Result<Attribute<'c>> {
+        let text = format!("{n} : i{}", literal::signed_width(n));
+        Attribute::parse(self.context, &text)
+            .ok_or_else(|| LoweringError(format!("could not build integer `{text}`").into()))
+    }
+
+    /// The innermost arm of the match at `root_idx` that produced the value at
+    /// `path`, with how that value follows from the arm.
+    pub(super) fn int_arm_value(
+        &self,
+        env: &Env<'c, '_, 'tcx>,
+        root_idx: usize,
+        path: &[u32],
+    ) -> Option<(usize, Derived)> {
+        let i = env.int_arms.iter().rposition(|arm| {
+            arm.root_idx == root_idx
+                && path.starts_with(&arm.path)
+                && path[arm.path.len()..].iter().all(|&f| f == 0)
+        })?;
+        let arm = &env.int_arms[i];
+        Some((i, derived(arm, path.len() - arm.path.len())))
+    }
+
+    /// Materialize a value an arm produced. Taken, it is owned by the binding:
+    /// the arm's argument moves into it (or into the arithmetic computing it).
+    /// Read for a guard, the arm keeps its argument; a computed value is kept
+    /// with the arm and released at each leaf.
+    pub(super) fn bind_int_arm_value<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        (i, derived): (usize, Derived),
+        take: bool,
+    ) -> Result<(Value<'c, 'b>, Ty<'tcx>)> {
+        let loc = self.loc();
+        let arm = &env.int_arms[i];
+        let ty = match derived {
+            Derived::Whole(_) | Derived::Constant { whole: true, .. } => {
+                self.tcx.mk_bigint(arm.int)
+            }
+            _ => self.tcx.mk_bigint(BigIntTy::Nat),
+        };
+        let offset = match &derived {
+            Derived::Constant { value, .. } => {
+                return Ok((self.bigint_constant(block, value, ty)?, ty));
+            }
+            Derived::Whole(offset) | Derived::Field(offset) => offset.clone(),
+        };
+        let arg = arm
+            .arg
+            .ok_or_else(|| LoweringError("match arm value has no argument".into()))?;
+        let identity = matches!(&offset, Offset::Plus(c) if *c == 0);
+        if identity {
+            if take {
+                env.int_arms[i].arg = None;
+            }
+            return Ok((arg, ty));
+        }
+        if !take {
+            block.append_operation(rcgmp::retain(arg, loc));
+        }
+        let computed = match &offset {
+            Offset::Plus(c) => {
+                let c = self.bigint_constant(block, c, ty)?;
+                self.append(block, rcgmp::binary(Binary::Add, arg, c, loc))
+            }
+            Offset::Minus(c) => {
+                let c = self.bigint_constant(block, c, ty)?;
+                self.append(block, rcgmp::binary(Binary::Sub, c, arg, loc))
+            }
+        };
+        if take {
+            env.int_arms[i].arg = None;
+        } else {
+            env.int_arms[i].views.push(computed);
+        }
+        Ok((computed, ty))
+    }
+
+    /// At a leaf, release what the arms of the match at `root_idx` still own:
+    /// arguments no binding took, and values computed for guards.
+    pub(super) fn settle_int_arms<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        root_idx: usize,
+    ) {
+        let loc = self.loc();
+        for arm in env.int_arms.iter_mut().filter(|a| a.root_idx == root_idx) {
+            for view in arm.views.drain(..) {
+                block.append_operation(rcgmp::release(view, loc));
+            }
+            if let Some(arg) = arm.arg.take() {
+                block.append_operation(rcgmp::release(arg, loc));
+            }
+        }
+    }
+}
+
+/// The cases of a switch on an integer: keys, ordered ranges, and the default.
+pub(super) type IntCases<'tcx> = (
+    &'tcx [(&'tcx Integer, DecisionTree<'tcx>)],
+    &'tcx [(IntRange<'tcx>, DecisionTree<'tcx>)],
+    &'tcx DecisionTree<'tcx>,
+);
+
+/// The integers an arm of a `Nat`/`Int` match selects.
+#[derive(Clone, Debug)]
+pub(super) enum ArmTest {
+    Case(Integer),
+    AtLeast(Integer),
+    AtMost(Integer),
+    Default,
+}
+
+/// One arm of a `Nat`/`Int` match the walk is inside.
+#[derive(Clone)]
+pub(super) struct IntArm<'c, 'b> {
+    root_idx: usize,
+    path: SmallVec<[u32; 4]>,
+    int: BigIntTy,
+    test: ArmTest,
+    /// The region argument while the arm owns it: the distance from a range's
+    /// bound, or the integer in a `default` arm.
+    arg: Option<Value<'c, 'b>>,
+    /// Values computed for guard bindings, released at each leaf.
+    views: Vec<Value<'c, 'b>>,
+}
+
+/// A value derived from the integer an arm switched on.
+#[derive(Clone, Debug)]
+pub(super) enum Derived {
+    /// A constant, the integer itself (`whole`) or a constructor field.
+    Constant { value: Integer, whole: bool },
+    /// The integer itself.
+    Whole(Offset),
+    /// The field of a nested constructor.
+    Field(Offset),
+}
+
+/// How a derived value follows from the arm's argument `d`.
+#[derive(Clone, Debug)]
+pub(super) enum Offset {
+    /// `d + c`, with `c >= 0`.
+    Plus(Integer),
+    /// `c - d`.
+    Minus(Integer),
+}
+
+/// The occurrence `depth` constructor fields below the integer `x` an arm
+/// switched on: `x - depth` on a `Nat`; on an `Int`, `x` itself at depth 0,
+/// else `x - (depth - 1)` for `OfNat` and `-depth - x` for `NegSucc`.
+fn derived(arm: &IntArm<'_, '_>, depth: usize) -> Derived {
+    let depth = Integer::from(depth as u64);
+    let negative = match &arm.test {
+        ArmTest::Case(k) => *k < 0,
+        ArmTest::AtMost(_) => true,
+        ArmTest::AtLeast(_) | ArmTest::Default => false,
+    };
+    // The value as `x - c`, or as `-c - x` on the negative side.
+    let c = match arm.int {
+        BigIntTy::Nat => depth.clone(),
+        BigIntTy::Int if depth == 0 => Integer::from(0),
+        BigIntTy::Int if negative => depth.clone(),
+        BigIntTy::Int => depth.clone() - Integer::from(1),
+    };
+    let flipped = arm.int == BigIntTy::Int && negative && depth != 0;
+    let wrap = |o| {
+        if depth == 0 {
+            Derived::Whole(o)
+        } else {
+            Derived::Field(o)
+        }
+    };
+    match &arm.test {
+        ArmTest::Case(k) => Derived::Constant {
+            value: if flipped { -c - k } else { k - c },
+            whole: depth == 0,
+        },
+        // `d = x - l`.
+        ArmTest::AtLeast(l) => wrap(Offset::Plus(l - c)),
+        ArmTest::Default => wrap(Offset::Plus(-c)),
+        // `d = m - x`: `-c - x` is `d - c - m`, and `x` itself is `m - d`.
+        ArmTest::AtMost(m) if flipped => wrap(Offset::Plus(-c - m)),
+        ArmTest::AtMost(m) => wrap(Offset::Minus(m.clone())),
+    }
+}
+
+/// Whether a binding below `tree` that its scope uses names the integer at
+/// `path` or a constructor field derived from it.
+fn uses_derived(tree: &DecisionTree<'_>, path: &[u32]) -> bool {
+    let derived = |at: &[u32]| at.starts_with(path) && at[path.len()..].iter().all(|&f| f == 0);
+    match *tree {
+        DecisionTree::Leaf { body, bindings } => bindings
+            .iter()
+            .any(|&(var, at): &(VarId, &[u32])| derived(at) && mir::uses_var(body, var)),
+        DecisionTree::Guard {
+            bindings,
+            guard,
+            success,
+            failure,
+        } => {
+            bindings.iter().any(|&(var, at): &(VarId, &[u32])| {
+                derived(at)
+                    && (mir::uses_var(guard, var)
+                        || mir::tree_uses_var(success, var)
+                        || mir::tree_uses_var(failure, var))
+            }) || uses_derived(success, path)
+                || uses_derived(failure, path)
+        }
+        DecisionTree::Switch { cases, .. } => {
+            subtrees(&cases).iter().any(|t| uses_derived(t, path))
+        }
+        DecisionTree::Uncovered | DecisionTree::Unreachable => false,
     }
 }

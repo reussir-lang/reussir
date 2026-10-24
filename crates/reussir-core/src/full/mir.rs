@@ -538,6 +538,32 @@ pub fn for_each_expr<'e, 'tcx>(expr: &'e Expr<'tcx>, f: &mut impl FnMut(&'e Expr
     }
 }
 
+/// Whether `var` occurs in `expr`, a closure capture included.
+pub fn uses_var(expr: &Expr<'_>, var: VarId) -> bool {
+    let mut found = false;
+    for_each_expr(expr, &mut |e| match e.kind {
+        ExprKind::Var(v) => found |= v == var,
+        ExprKind::Closure(c) | ExprKind::Async(c) => {
+            found |= c.captures.iter().any(|&(v, _)| v == var);
+        }
+        _ => {}
+    });
+    found
+}
+
+/// Whether `var` occurs in an arm body or guard of `tree`.
+pub fn tree_uses_var(tree: &DecisionTree<'_>, var: VarId) -> bool {
+    let mut found = false;
+    for_each_tree_expr(tree, &mut |e| match e.kind {
+        ExprKind::Var(v) => found |= v == var,
+        ExprKind::Closure(c) | ExprKind::Async(c) => {
+            found |= c.captures.iter().any(|&(v, _)| v == var);
+        }
+        _ => {}
+    });
+    found
+}
+
 fn for_each_tree_expr<'e, 'tcx>(tree: &DecisionTree<'tcx>, f: &mut impl FnMut(&'e Expr<'tcx>))
 where
     'tcx: 'e,
