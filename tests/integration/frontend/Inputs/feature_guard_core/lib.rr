@@ -1,0 +1,13 @@
+// A stand-in `core` for feature_guard.rr: ground functions that need the
+// `rcgmp` feature through their signature, their body, or a call.
+
+#[lang("nat")]
+pub enum Nat { Zero, Succ(Nat) }
+
+pub fn two() -> Nat { Nat::Succ{Nat::Succ{Nat::Zero}} }
+
+pub fn hidden(x: u64) -> u64 { let n = Nat::Zero; x }
+
+pub fn calls_hidden(x: u64) -> u64 { hidden(x) }
+
+pub fn plain(x: u64) -> u64 { x }

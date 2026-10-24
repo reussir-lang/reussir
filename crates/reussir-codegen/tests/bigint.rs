@@ -114,3 +114,42 @@ fn constructors_and_comparisons_cross_the_immediate_range() {
         }
     });
 }
+
+#[test]
+fn matches_select_by_value_on_both_sides_of_the_immediate_range() {
+    // One `rcgmp.match` per switch: `case` arms for literals and `Zero`,
+    // `at_least` for `Succ` chains and `OfNat`, `at_most` for `NegSucc`.
+    let source = r#"
+        fn succ(n: Nat) -> Nat { Nat::Succ{n} }
+        fn depth(n: Nat) -> i64 {
+            match n {
+                0 => 0,
+                Nat::Succ(Nat::Succ(m)) => if m == 18446744073709551615 { 3 } else { 2 },
+                _ => 1
+            }
+        }
+        fn sign(i: Int) -> i64 {
+            match i {
+                Int::OfNat(Nat::Zero) => 0,
+                Int::OfNat(_) => 1,
+                Int::NegSucc(k) => if k > 2305843009213693951 { -2 } else { -1 }
+            }
+        }
+        fn holds(case: i64) -> bool {
+            match case {
+                0 => depth(0) == 0 && depth(1) == 1 && depth(5) == 2,
+                1 => depth(succ(succ(18446744073709551615))) == 3,
+                2 => sign(0) == 0 && sign(7) == 1 && sign(-7) == -1,
+                _ => sign(Int::NegSucc{succ(2305843009213693951)}) == -2
+            }
+        }
+        pub fn check(case: i64) -> i64 { if holds(case) { 1 } else { 0 } }
+        extern "C" trampoline "check" = check;
+    "#;
+    jit_run_each(source, |jit| {
+        let check = entry(jit, "check");
+        for case in 0..4 {
+            assert_eq!(check(case), 1, "case {case}");
+        }
+    });
+}

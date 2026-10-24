@@ -88,6 +88,20 @@
 //! uniqueness-guarded move) is the backend's job, exactly as Koka separates
 //! Perceus from its reuse analysis — the frontend only emits the early drop.
 //!
+//! A switch on a `Nat` or `Int` occurrence is one `rcgmp.match`, which
+//! *consumes* the integer and hands its arms owned references (see
+//! [`bigint_match`](crate::full::bigint_match)):
+//!
+//! - a value the match produces — a `Succ`/`OfNat`/`NegSucc` field, or a
+//!   whole-scrutinee binding in a `case` or `default` arm of a match that took
+//!   the scrutinee — is owned by its binding, so a used binding is *moved*
+//!   (no `dup`) and an unused one costs nothing (code generation releases the
+//!   arm's reference where no binding takes it);
+//! - when the scrutinee itself is a `Nat`/`Int` that dies in the match and no
+//!   range arm still needs it, the root switch takes it: no per-leaf drop.
+//!   Otherwise code generation retains the switched value for the match and
+//!   the borrow rules above apply to it unchanged.
+//!
 //! A **guard** keeps the scrutinee live across its re-testable `failure` path, so
 //! the scrutinee drop is *not* hoisted above the guard — it stays in each terminal
 //! leaf. The guard's pattern bindings are borrow-extracted (dup at the guard,
@@ -108,12 +122,13 @@
 use std::cell::RefCell;
 
 use crate::utils::bitset::HybridBitSet;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
+use crate::full::bigint_match;
 use crate::full::mir::{self, DecisionTree, Expr, ExprKind, Function, SwitchCases};
 use crate::semi::hir::{ExprId, VarId};
-use crate::semi::ty::{Flexivity, Ty, TyCtxt, TyKind};
+use crate::semi::ty::{BigIntTy, Flexivity, Ty, TyCtxt, TyKind};
 
 // ---------------------------------------------------------------------------
 // Output data model
@@ -152,6 +167,9 @@ pub struct Action {
 #[derive(Default, Debug)]
 pub struct OwnershipTable {
     actions: FxHashMap<ExprId, Action>,
+    /// The `match`es whose root switch on a `Nat`/`Int` scrutinee takes the
+    /// scrutinee's reference (see the module's "Match" section).
+    bigint_moves: FxHashSet<ExprId>,
 }
 
 const NO_OPS: &[RcOp] = &[];
@@ -170,6 +188,12 @@ impl OwnershipTable {
     /// The ops to run after evaluating the node `id` (empty if none).
     pub fn after(&self, id: ExprId) -> &[RcOp] {
         self.actions.get(&id).map_or(NO_OPS, |a| &a.after)
+    }
+
+    /// Whether the root switch of `match` node `id`, on a `Nat`/`Int`
+    /// scrutinee, takes the scrutinee's reference rather than a retained one.
+    pub fn moves_scrutinee(&self, id: ExprId) -> bool {
+        self.bigint_moves.contains(&id)
     }
 }
 
@@ -220,12 +244,15 @@ pub struct RecordShape<'tcx> {
 #[derive(Default)]
 pub struct RecordTable<'tcx> {
     shapes: FxHashMap<Ty<'tcx>, RecordShape<'tcx>>,
+    /// Each enum's variant field types, for the types of match occurrences.
+    variants: FxHashMap<Ty<'tcx>, Vec<&'tcx [Ty<'tcx>]>>,
 }
 
 impl<'tcx> RecordTable<'tcx> {
     pub fn new() -> Self {
         RecordTable {
             shapes: FxHashMap::default(),
+            variants: FxHashMap::default(),
         }
     }
 
@@ -244,10 +271,14 @@ impl<'tcx> RecordTable<'tcx> {
             };
             let fields = match r.layout {
                 mir::RecordLayout::Compound(members) => members.iter().map(|m| m.ty).collect(),
-                mir::RecordLayout::Variant(variants) => variants
-                    .iter()
-                    .flat_map(|v| v.fields.iter().copied())
-                    .collect(),
+                mir::RecordLayout::Variant(variants) => {
+                    let payloads = variants.iter().map(|v| v.fields).collect();
+                    table.variants.insert(r.ty, payloads);
+                    variants
+                        .iter()
+                        .flat_map(|v| v.fields.iter().copied())
+                        .collect()
+                }
                 // An opaque `#[ffi]` box: rc-managed, but its payload is
                 // foreign — nothing for the ownership pass to walk into.
                 mir::RecordLayout::Opaque { .. } => Vec::new(),
@@ -422,6 +453,7 @@ pub fn analyze_function<'tcx>(
         rr: Rr::new(tcx, table),
         free_memo: FxHashMap::default(),
         actions: FxHashMap::default(),
+        bigint_moves: FxHashSet::default(),
     };
     if let Some(body) = func.body {
         // Top-level continuation is empty: the return value is moved to the
@@ -435,7 +467,10 @@ pub fn analyze_function<'tcx>(
             }
         }
     }
-    OwnershipTable { actions: a.actions }
+    OwnershipTable {
+        actions: a.actions,
+        bigint_moves: a.bigint_moves,
+    }
 }
 
 struct Analyzer<'a, 'tcx> {
@@ -444,6 +479,113 @@ struct Analyzer<'a, 'tcx> {
     /// threading `live_after` top-down.
     free_memo: FxHashMap<ExprId, VarSet>,
     actions: FxHashMap<ExprId, Action>,
+    bigint_moves: FxHashSet<ExprId>,
+}
+
+/// The occurrences of a decision tree as a walk reaches them: the type at each
+/// path, refined by the switches above, and the paths of the switches on
+/// built-in integers, below which every value is one the match produced.
+pub(crate) struct Occurrences<'tcx> {
+    root: Ty<'tcx>,
+    refined: Vec<(Vec<u32>, Ty<'tcx>)>,
+    bigint: Vec<Vec<u32>>,
+}
+
+/// One sub-tree of a switch, with what entering it teaches [`Occurrences`].
+pub(crate) struct Branch<'tcx> {
+    pub(crate) tree: &'tcx DecisionTree<'tcx>,
+    refined: Vec<(Vec<u32>, Ty<'tcx>)>,
+    bigint: Option<Vec<u32>>,
+}
+
+impl<'tcx> Occurrences<'tcx> {
+    pub(crate) fn new(root: Ty<'tcx>) -> Self {
+        Occurrences {
+            root,
+            refined: Vec::new(),
+            bigint: Vec::new(),
+        }
+    }
+
+    /// The type at `path`, when the walk knows it.
+    pub(crate) fn ty(&self, path: &[u32]) -> Option<Ty<'tcx>> {
+        if let Some((_, ty)) = self.refined.iter().rev().find(|(p, _)| p == path) {
+            return Some(*ty);
+        }
+        let Some((&last, parent)) = path.split_last() else {
+            return Some(self.root);
+        };
+        match *self.ty(parent)?.kind() {
+            TyKind::Tuple(fields) => fields.get(last as usize).copied(),
+            _ => None,
+        }
+    }
+
+    /// Whether the value at `path` is produced by the match: it lies strictly
+    /// below a switch on a built-in integer.
+    pub(crate) fn produced(&self, path: &[u32]) -> bool {
+        self.bigint
+            .iter()
+            .any(|p| path.len() > p.len() && path.starts_with(p))
+    }
+
+    /// The sub-trees of the switch of `cases` at `path`, each with the
+    /// occurrence types it refines.
+    pub(crate) fn branches(
+        &self,
+        rr: &Rr<'_, 'tcx>,
+        path: &[u32],
+        cases: &SwitchCases<'tcx>,
+    ) -> Vec<Branch<'tcx>> {
+        let child = |i: usize| path.iter().copied().chain([i as u32]).collect::<Vec<_>>();
+        let ty = self.ty(path);
+        subtrees(cases)
+            .into_iter()
+            .enumerate()
+            .map(|(v, tree)| {
+                let mut branch = Branch {
+                    tree,
+                    refined: Vec::new(),
+                    bigint: None,
+                };
+                match (ty.map(|t| *t.kind()), cases) {
+                    (Some(TyKind::BigInt(_)), _) => {
+                        branch.bigint = Some(path.to_vec());
+                        let nat = rr.tcx.mk_bigint(BigIntTy::Nat);
+                        branch.refined.push((child(0), nat));
+                    }
+                    (Some(TyKind::Nullable(inner)), SwitchCases::Nullable { .. }) if v == 0 => {
+                        branch.refined.push((path.to_vec(), inner));
+                    }
+                    (Some(TyKind::Record { def, args, .. }), SwitchCases::Ctor(_)) => {
+                        let canonical = rr.tcx.mk_record(def, args, Flexivity::Irrelevant);
+                        if let Some(fields) =
+                            rr.table.variants.get(&canonical).and_then(|vs| vs.get(v))
+                        {
+                            for (i, &field) in fields.iter().enumerate() {
+                                branch.refined.push((child(i), field));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                branch
+            })
+            .collect()
+    }
+
+    /// Enter `branch`, returning the mark [`leave`](Self::leave) restores.
+    pub(crate) fn enter(&mut self, branch: &Branch<'tcx>) -> (usize, usize) {
+        let mark = (self.refined.len(), self.bigint.len());
+        self.refined.extend(branch.refined.iter().cloned());
+        self.bigint.extend(branch.bigint.clone());
+        mark
+    }
+
+    pub(crate) fn leave(&mut self, (refined, bigint): (usize, usize)) {
+        self.refined.truncate(refined);
+        self.bigint.truncate(bigint);
+    }
 }
 
 impl<'tcx> Analyzer<'_, 'tcx> {
@@ -733,7 +875,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                     }
                 }
             }
-            ExprKind::Match(scrut, tree) => self.place_match(scrut, &tree, live_after),
+            ExprKind::Match(scrut, tree) => self.place_match(e.id, scrut, &tree, live_after),
             // Borrow-extract: the result is an owned field copy (inc'd, since the
             // parent keeps the original); the base is navigated and its root
             // dropped early if this is its last use.
@@ -974,6 +1116,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
     /// dead-after outer var it does not use (N-way [If-Reconcile]).
     fn place_match(
         &mut self,
+        id: ExprId,
         scrut: &'tcx Expr<'tcx>,
         tree: &DecisionTree<'tcx>,
         live_after: &VarSet,
@@ -1000,12 +1143,29 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             }
         };
 
+        // A root switch on a dying `Nat`/`Int` takes the scrutinee, unless a
+        // range arm still needs it; nothing is left to drop per leaf.
+        let held = match (*scrut.ty.kind(), *tree) {
+            (
+                TyKind::BigInt(int),
+                DecisionTree::Switch {
+                    scrutinee: [],
+                    cases,
+                },
+            ) if consumed && !bigint_match::plan(int, &[], &cases).keeps_scrutinee => {
+                self.bigint_moves.insert(id);
+                None
+            }
+            _ => held,
+        };
+
         // Outer RR vars that die within the match: settled per leaf.
         let mut must_settle = tree_free;
         must_settle.subtract(live_after);
         let must_settle: Vec<VarId> = must_settle.iter().collect();
 
-        self.place_tree(tree, live_after, consumed, held, &must_settle);
+        let mut occ = Occurrences::new(scrut.ty);
+        self.place_tree(tree, live_after, consumed, held, &must_settle, &mut occ);
     }
 
     fn place_tree(
@@ -1015,11 +1175,12 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         consumed: bool,
         held: Option<RcOp>,
         must_settle: &[VarId],
+        occ: &mut Occurrences<'tcx>,
     ) {
         match *tree {
             DecisionTree::Uncovered | DecisionTree::Unreachable => {}
             DecisionTree::Leaf { body, bindings } => {
-                self.place_leaf(body, bindings, live_after, consumed, held, must_settle);
+                self.place_leaf(body, bindings, live_after, consumed, held, must_settle, occ);
             }
             DecisionTree::Guard {
                 bindings,
@@ -1035,10 +1196,13 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 consumed,
                 held,
                 must_settle,
+                occ,
             ),
-            DecisionTree::Switch { cases, .. } => {
-                for sub in subtrees(&cases) {
-                    self.place_tree(sub, live_after, consumed, held, must_settle);
+            DecisionTree::Switch { scrutinee, cases } => {
+                for branch in occ.branches(&self.rr, scrutinee, &cases) {
+                    let mark = occ.enter(&branch);
+                    self.place_tree(branch.tree, live_after, consumed, held, must_settle, occ);
+                    occ.leave(mark);
                 }
             }
         }
@@ -1061,6 +1225,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         consumed: bool,
         held: Option<RcOp>,
         must_settle: &[VarId],
+        occ: &mut Occurrences<'tcx>,
     ) {
         let guard_free = self.free(guard);
         let mut below = self.free_tree(success);
@@ -1092,10 +1257,11 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 sub_settle.push(y);
             }
         }
-        self.place_tree(success, live_after, consumed, held, &sub_settle);
-        self.place_tree(failure, live_after, consumed, held, &sub_settle);
+        self.place_tree(success, live_after, consumed, held, &sub_settle, occ);
+        self.place_tree(failure, live_after, consumed, held, &sub_settle, occ);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn place_leaf(
         &mut self,
         body: &'tcx Expr<'tcx>,
@@ -1104,6 +1270,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         consumed: bool,
         held: Option<RcOp>,
         must_settle: &[VarId],
+        occ: &Occurrences<'tcx>,
     ) {
         let body_free = self.free(body);
         // A used binding of the whole scrutinee (path `[]`) takes ownership of the
@@ -1122,9 +1289,10 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                     self.add_before(body.id, RcOp::Dup(y)); // borrowed root → alias
                 }
                 // consumed whole binding ⇒ move (no op)
-            } else {
+            } else if !occ.produced(path) {
                 self.add_before(body.id, RcOp::Dup(y)); // borrow-extract a field
             }
+            // a value the match produced is owned by its binding ⇒ move (no op)
         }
 
         // 2. Drop the consumed scrutinee (after the field dups), unless a whole
@@ -1271,7 +1439,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
 }
 
 /// The immediate sub-trees of a switch's cases, in source order.
-fn subtrees<'tcx>(cases: &SwitchCases<'tcx>) -> SmallVec<[&'tcx DecisionTree<'tcx>; 8]> {
+pub(crate) fn subtrees<'tcx>(cases: &SwitchCases<'tcx>) -> SmallVec<[&'tcx DecisionTree<'tcx>; 8]> {
     let mut v = SmallVec::new();
     match *cases {
         SwitchCases::Int { cases, default } => {
