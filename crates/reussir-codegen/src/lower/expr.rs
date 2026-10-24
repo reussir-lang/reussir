@@ -1855,9 +1855,12 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             SwitchCases::Bool { if_true, if_false } => {
                 self.bool_switch(block, env, root_idx, path, if_true, if_false, result_ty)
             }
-            SwitchCases::Int { cases, default } => {
-                self.int_switch(block, env, root_idx, path, cases, default, result_ty)
-            }
+            SwitchCases::Int {
+                cases,
+                ranges: [],
+                default,
+            } => self.int_switch(block, env, root_idx, path, cases, default, result_ty),
+            SwitchCases::Int { .. } => err("range arms switch on a fixed-width integer"),
             SwitchCases::Char { cases, default } => {
                 self.char_switch(block, env, root_idx, path, cases, default, result_ty)
             }

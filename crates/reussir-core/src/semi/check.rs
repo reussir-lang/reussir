@@ -5953,8 +5953,15 @@ fn tree_occurrences<'tcx>(
             tree_occurrences(failure, used, bound);
         }
         DecisionTree::Switch { cases, .. } => match cases {
-            SwitchCases::Int { cases, default } => {
+            SwitchCases::Int {
+                cases,
+                ranges,
+                default,
+            } => {
                 cases
+                    .iter()
+                    .for_each(|(_, t)| tree_occurrences(t, used, bound));
+                ranges
                     .iter()
                     .for_each(|(_, t)| tree_occurrences(t, used, bound));
                 tree_occurrences(default, used, bound);

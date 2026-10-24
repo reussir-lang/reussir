@@ -1274,8 +1274,15 @@ impl<'tcx> Analyzer<'_, 'tcx> {
 fn subtrees<'tcx>(cases: &SwitchCases<'tcx>) -> SmallVec<[&'tcx DecisionTree<'tcx>; 8]> {
     let mut v = SmallVec::new();
     match *cases {
-        SwitchCases::Int { cases, default } => {
+        SwitchCases::Int {
+            cases,
+            ranges,
+            default,
+        } => {
             for (_, t) in cases {
+                v.push(t);
+            }
+            for (_, t) in ranges {
                 v.push(t);
             }
             v.push(default);

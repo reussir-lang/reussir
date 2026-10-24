@@ -877,7 +877,12 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
             }
             DecisionTree::Switch {
                 scrutinee,
-                cases: SwitchCases::Int { cases, default },
+                cases:
+                    SwitchCases::Int {
+                        cases,
+                        ranges: [],
+                        default,
+                    },
             } => {
                 if !scrutinee.is_empty() {
                     return err("kernel integer switch cannot project its scrutinee");

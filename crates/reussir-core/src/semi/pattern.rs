@@ -704,7 +704,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 }
                 let def = self.default_matrix(&m, j, &occ);
                 let default = Box::new(self.compile_match(def, reached, exhaustive));
-                SwitchCases::Int { cases, default }
+                SwitchCases::Int {
+                    cases,
+                    ranges: Vec::new(),
+                    default,
+                }
             }
             Family::Char => {
                 let mut cases = Vec::new();
@@ -989,10 +993,18 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 
     fn zonk_cases(&mut self, cases: SwitchCases<'tcx>) -> SwitchCases<'tcx> {
         match cases {
-            SwitchCases::Int { cases, default } => SwitchCases::Int {
+            SwitchCases::Int {
+                cases,
+                ranges,
+                default,
+            } => SwitchCases::Int {
                 cases: cases
                     .into_iter()
                     .map(|(k, t)| (k, self.zonk_tree(t)))
+                    .collect(),
+                ranges: ranges
+                    .into_iter()
+                    .map(|(r, t)| (r, self.zonk_tree(t)))
                     .collect(),
                 default: Box::new(self.zonk_tree(*default)),
             },

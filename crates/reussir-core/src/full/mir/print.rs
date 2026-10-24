@@ -689,11 +689,20 @@ impl Render<'_> {
 
     fn cases(&self, cases: &mir::SwitchCases<'_>) -> Doc<'static> {
         let arms: Vec<Doc<'static>> = match *cases {
-            mir::SwitchCases::Int { cases, default } => {
+            mir::SwitchCases::Int {
+                cases,
+                ranges,
+                default,
+            } => {
                 let mut v: Vec<Doc<'static>> = cases
                     .iter()
                     .map(|(n, t)| self.arm(text(format!("{n}")), t))
                     .collect();
+                v.extend(
+                    ranges
+                        .iter()
+                        .map(|(r, t)| self.arm(text(crate::semi::hir::print::range_label(r)), t)),
+                );
                 v.push(self.arm(text("_"), default));
                 v
             }

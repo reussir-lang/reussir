@@ -528,6 +528,7 @@ pub enum Tree {
 pub enum Cases {
     Int {
         cases: Vec<(Integer, Tree)>,
+        ranges: Vec<(Range, Tree)>,
         default: Box<Tree>,
     },
     Bool {
@@ -549,10 +550,18 @@ pub enum Cases {
     },
 }
 
+/// A range arm of an integer switch: `k..` or `..k`.
+#[derive(Clone, Debug)]
+pub enum Range {
+    AtLeast(Integer),
+    AtMost(Integer),
+}
+
 /// A switch-arm label (see [`crate::full::mir::raw::Label`]).
 #[derive(Clone, Debug)]
 pub enum Label {
     Int(Integer),
+    Range(Range),
     Ctor(usize),
     Str([u64; 4]),
     Bool(bool),
@@ -638,16 +647,18 @@ pub fn build_switch(scrutinee: Path, arms: Vec<(Label, Tree)>) -> Tree {
             }
         }
         _ => {
-            let (mut cases, mut default) = (Vec::new(), None);
+            let (mut cases, mut ranges, mut default) = (Vec::new(), Vec::new(), None);
             for (l, t) in arms {
                 match l {
                     Label::Int(n) => cases.push((n, t)),
+                    Label::Range(r) => ranges.push((r, t)),
                     Label::Wildcard => default = Some(Box::new(t)),
                     _ => {}
                 }
             }
             Cases::Int {
                 cases,
+                ranges,
                 default: default.unwrap(),
             }
         }

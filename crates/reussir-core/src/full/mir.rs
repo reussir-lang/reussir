@@ -22,7 +22,7 @@ use reussir_syntax::source::FileId;
 use crate::literal::{FloatLit, Integer};
 use crate::semi::const_eval::ConstValue;
 use crate::semi::ctxt::{DefaultCap, TransformScript};
-use crate::semi::hir::{ArithOp, CmpOp, ExprId, VarId};
+use crate::semi::hir::{ArithOp, CmpOp, ExprId, IntRange, VarId};
 use crate::semi::ty::{Ty, TyKind};
 use crate::surface::{Span, Visibility};
 use crate::utils::string::StringToken;
@@ -456,8 +456,10 @@ pub enum DecisionTree<'tcx> {
 
 #[derive(Clone, Copy, Debug)]
 pub enum SwitchCases<'tcx> {
+    /// See [`crate::semi::hir::SwitchCases::Int`].
     Int {
         cases: &'tcx [(&'tcx Integer, DecisionTree<'tcx>)],
+        ranges: &'tcx [(IntRange<'tcx>, DecisionTree<'tcx>)],
         default: &'tcx DecisionTree<'tcx>,
     },
     Bool {
@@ -553,8 +555,15 @@ where
             for_each_tree_expr(failure, f);
         }
         DecisionTree::Switch { cases, .. } => match cases {
-            SwitchCases::Int { cases, default } => {
+            SwitchCases::Int {
+                cases,
+                ranges,
+                default,
+            } => {
                 for (_, t) in cases {
+                    for_each_tree_expr(t, f);
+                }
+                for (_, t) in ranges {
                     for_each_tree_expr(t, f);
                 }
                 for_each_tree_expr(default, f);

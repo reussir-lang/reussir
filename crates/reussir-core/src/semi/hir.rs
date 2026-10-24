@@ -305,10 +305,22 @@ pub enum DecisionTree<'tcx> {
     },
 }
 
+/// A range arm of an integer switch, selecting the values at least or at most
+/// its bound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IntRange<'tcx> {
+    AtLeast(&'tcx Integer),
+    AtMost(&'tcx Integer),
+}
+
 #[derive(Clone, Debug)]
 pub enum SwitchCases<'tcx> {
+    /// The value's key in `cases`, else the first of `ranges` that selects it,
+    /// else `default`. A range arm may select keys of `cases` or values of an
+    /// earlier range; only switches on `Nat` and `Int` have range arms.
     Int {
         cases: Vec<(&'tcx Integer, DecisionTree<'tcx>)>,
+        ranges: Vec<(IntRange<'tcx>, DecisionTree<'tcx>)>,
         default: Box<DecisionTree<'tcx>>,
     },
     Bool {

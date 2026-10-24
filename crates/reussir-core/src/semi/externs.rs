@@ -917,8 +917,13 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
     fn cases(&self, cases: &SwitchCases<'tcx>) -> SwitchCases<'tcx> {
         let boxed = |t: &DecisionTree<'tcx>| Box::new(self.tree(t));
         match cases {
-            SwitchCases::Int { cases, default } => SwitchCases::Int {
+            SwitchCases::Int {
+                cases,
+                ranges,
+                default,
+            } => SwitchCases::Int {
                 cases: cases.iter().map(|&(n, ref t)| (n, self.tree(t))).collect(),
+                ranges: ranges.iter().map(|&(r, ref t)| (r, self.tree(t))).collect(),
                 default: boxed(default),
             },
             SwitchCases::Bool { if_true, if_false } => SwitchCases::Bool {

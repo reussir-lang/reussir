@@ -374,6 +374,8 @@ Arm: (raw::Label, raw::Tree) = <l:Label> "=>" "{" <t:Tree> "}" => (l, t);
 Label: raw::Label = {
     "#" <n:"int"> => raw::Label::Ctor(raw::small_usize(&n)),
     <n:"int"> => raw::Label::Int(n),
+    <n:"int"> ".." => raw::Label::Range(raw::Range::AtLeast(n)),
+    ".." <n:"int"> => raw::Label::Range(raw::Range::AtMost(n)),
     "_" => raw::Label::Wildcard,
     "true" => raw::Label::Bool(true),
     "false" => raw::Label::Bool(false),

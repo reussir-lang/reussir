@@ -329,8 +329,13 @@ fn tree_exprs<'e, 'tcx>(tree: &'e DecisionTree<'tcx>, f: &mut impl FnMut(&'e Exp
             tree_exprs(failure, f);
         }
         Switch { cases, .. } => match cases {
-            SwitchCases::Int { cases, default } => {
+            SwitchCases::Int {
+                cases,
+                ranges,
+                default,
+            } => {
                 cases.iter().for_each(|(_, t)| tree_exprs(t, f));
+                ranges.iter().for_each(|(_, t)| tree_exprs(t, f));
                 tree_exprs(default, f);
             }
             SwitchCases::Bool { if_true, if_false } => {
@@ -3057,7 +3062,14 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     return;
                 };
                 match cases {
-                    SwitchCases::Int { cases, default } => {
+                    SwitchCases::Int {
+                        cases,
+                        ranges,
+                        default,
+                    } => {
+                        for (_, branch) in ranges {
+                            self.check_match_keys(branch, root, refinements, span);
+                        }
                         let fits = |key: &literal::Integer| match *ty.kind() {
                             TyKind::Int(int_ty) => Some(literal::int_fits(key, int_ty)),
                             TyKind::BigInt(BigIntTy::Nat) => Some(*key >= 0),
@@ -3299,8 +3311,19 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     ) -> mir::SwitchCases<'tcx> {
         use mir::SwitchCases as M;
         match cases {
-            SwitchCases::Int { cases, default } => M::Int {
+            SwitchCases::Int {
+                cases,
+                ranges,
+                default,
+            } => M::Int {
                 cases: self.lower_keyed(cases, subst),
+                ranges: {
+                    let lowered: Vec<_> = ranges
+                        .iter()
+                        .map(|(r, t)| (*r, self.lower_tree(t, subst)))
+                        .collect();
+                    self.tcx.alloc_slice(&lowered)
+                },
                 default: self.lower_tree_ref(default, subst),
             },
             SwitchCases::Bool { if_true, if_false } => M::Bool {

@@ -25,7 +25,7 @@ use crate::semi::hir::grammar as hir_ir;
 use crate::semi::hir::raw;
 use crate::semi::hir::{
     ArithOp, Bound, ClosureExpr, CmpOp, DecisionTree, Expr, ExprId, ExprKind, Function, ImplText,
-    PatVarRef, SwitchCases, TraitConstText, TraitMethodText, TraitText, VarId,
+    IntRange, PatVarRef, SwitchCases, TraitConstText, TraitMethodText, TraitText, VarId,
 };
 use crate::semi::resolve::DefTable;
 use crate::semi::ty::{DefId, Flexivity, FpTy, GenericId, IntTy, Ty, TyCtxt, TyKind};
@@ -1185,13 +1185,28 @@ impl<'tcx> Builder<'_, 'tcx> {
 
     fn cases(&mut self, c: &raw::Cases) -> SwitchCases<'tcx> {
         match c {
-            raw::Cases::Int { cases, default } => {
+            raw::Cases::Int {
+                cases,
+                ranges,
+                default,
+            } => {
                 let cases = cases
                     .iter()
                     .map(|(n, t)| (self.tcx.alloc(n.clone()), self.tree(t)))
                     .collect();
+                let ranges = ranges
+                    .iter()
+                    .map(|(r, t)| {
+                        let range = match r {
+                            raw::Range::AtLeast(n) => IntRange::AtLeast(self.tcx.alloc(n.clone())),
+                            raw::Range::AtMost(n) => IntRange::AtMost(self.tcx.alloc(n.clone())),
+                        };
+                        (range, self.tree(t))
+                    })
+                    .collect();
                 SwitchCases::Int {
                     cases,
+                    ranges,
                     default: Box::new(self.tree(default)),
                 }
             }
@@ -1489,6 +1504,28 @@ mod tests {
             pub fn call_tuple(f: ((i32, bool),) -> i32, p: (i32, bool)) -> i32 { f(p) }
         "#,
         );
+    }
+
+    #[test]
+    fn roundtrips_integer_range_arms() {
+        with_tcx(|tcx| {
+            let input = "fn #sign(v0 (i): Int) -> Nat { match v0 : Int { switch scrut { \
+             0 => { => 0 : Nat } \
+             1.. => { v1=scrut.0.0 => v1 : Nat } \
+             ..-1 => { v2=scrut.0 => v2 : Nat } \
+             _ => { unreachable } } } : Nat }";
+            let p = parse_program(tcx, input).expect("parse range arms");
+            let printed = Printer::new(&p.defs, &p.names).program(
+                &p.funcs,
+                &p.strings,
+                &p.records,
+                &p.trampolines,
+            );
+            for arm in ["0 => {", "1.. => {", "..-1 => {", "_ => {"] {
+                assert!(printed.contains(arm), "{printed}");
+            }
+            assert!(printed.find("1..") < printed.find("..-1"), "{printed}");
+        });
     }
 
     #[test]

@@ -1066,11 +1066,20 @@ impl<'a> Printer<'a> {
 
     fn cases(&self, cases: &SwitchCases<'_>) -> Doc<'static> {
         let arms: Vec<Doc<'static>> = match cases {
-            SwitchCases::Int { cases, default } => {
+            SwitchCases::Int {
+                cases,
+                ranges,
+                default,
+            } => {
                 let mut v: Vec<Doc<'static>> = cases
                     .iter()
                     .map(|(n, t)| self.arm(text(format!("{n}")), t))
                     .collect();
+                v.extend(
+                    ranges
+                        .iter()
+                        .map(|(r, t)| self.arm(text(range_label(r)), t)),
+                );
                 v.push(self.arm(text("_"), default));
                 v
             }
@@ -1256,5 +1265,14 @@ fn cmp_sym(op: CmpOp) -> &'static str {
         CmpOp::Ge => ">=",
         CmpOp::Eq => "==",
         CmpOp::Ne => "!=",
+    }
+}
+
+/// The label of a range arm: `k..` selects the values at least `k`, `..k` those
+/// at most `k`.
+pub(crate) fn range_label(range: &crate::semi::hir::IntRange<'_>) -> String {
+    match range {
+        crate::semi::hir::IntRange::AtLeast(k) => format!("{k}.."),
+        crate::semi::hir::IntRange::AtMost(k) => format!("..{k}"),
     }
 }
