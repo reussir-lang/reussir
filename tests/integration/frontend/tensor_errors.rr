@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // Tensor escape rules (docs/design/tensor-kernels.md): a tensor is
 // scope-confined — flex : freeze :: tensor : materialize. It may not be
 // stored in a record, captured or returned by a closure, appear in a

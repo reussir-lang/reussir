@@ -9,13 +9,14 @@ use reussir_codegen::lower::{
     CodegenUnit, LinkagePolicy, LoweringError, Sanitizer, lower_program, lower_unit,
 };
 use reussir_codegen::source::{FileId, SourceCache};
+use reussir_core::feature::FeatureSet;
 use reussir_core::full::interface;
 use reussir_core::full::mir;
 use reussir_core::full::mono::{MonoInput, MonoTraits, monomorphize};
 use reussir_core::semi::hir;
 use reussir_core::semi::resolve::DefTable;
 use reussir_core::semi::ty::TyCtxt;
-use reussir_core::semi::{Report, elaborate, render_reports_to};
+use reussir_core::semi::{Elaborator, Report, render_reports_to};
 use reussir_core::surface;
 use reussir_syntax::diagnostics;
 use reussir_syntax::kind::{Resolver, TokenKey};
@@ -25,6 +26,16 @@ use crate::package;
 use super::Produced;
 use super::cli::Cli;
 use super::stage::Stage;
+
+/// The optional features the program may use: those this build includes, or
+/// every feature when compiling `core`, which declares them all.
+fn program_features(cli: &Cli) -> FeatureSet {
+    if cli.core {
+        FeatureSet::all()
+    } else {
+        FeatureSet::from_fn(|feature| reussir_backend::features::enabled(feature.name()))
+    }
+}
 
 /// Render middle-end reports with the driver's explicit color policy.
 fn render_reports(cli: &Cli, cache: &SourceCache, reports: &[Report]) -> bool {
@@ -99,7 +110,8 @@ pub(crate) fn frontend_package<'c, 'tcx>(
             files,
         })
         .collect();
-    let elab = elaborate_package_with_externs(tcx, &files, interner, &extern_pkgs);
+    let elab =
+        elaborate_package_with_externs(tcx, &files, interner, &extern_pkgs, program_features(cli));
     if render_reports(cli, &pkg.cache, &elab.reports) {
         return Err(String::new());
     }
@@ -245,7 +257,9 @@ pub(crate) fn frontend<'c, 'tcx>(
                 return Err(String::new());
             }
             let prog = surface::program(&parse.root);
-            let elab = elaborate(tcx, &prog, &interner);
+            let mut elab = Elaborator::new(tcx, &interner);
+            elab.features = program_features(cli);
+            elab.run(&prog);
             if render_reports(cli, sources, &elab.reports) {
                 return Err(String::new());
             }
@@ -521,4 +535,17 @@ pub(crate) fn finish_mir<'c, 'tcx>(
         cli.use_color(),
     )?;
     Ok(Produced::Module(module, Some(exports)))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn frontend_features_are_registered() {
+        for feature in reussir_core::feature::Feature::ALL {
+            assert!(
+                reussir_backend::features::all().any(|f| f.name == feature.name()),
+                "{feature:?} is not in the compiler's feature registry"
+            );
+        }
+    }
 }

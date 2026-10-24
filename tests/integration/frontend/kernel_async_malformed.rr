@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // RUN: %rrc %S/kernel_async.rr --emit hir --no-source-locations -o %t.hir
 // RUN: %rrc %S/kernel_async.rr --emit mir --no-source-locations -o %t.mir
 // RUN: sed 's/async\[/async[v999: Tensor<f32>, /g' %t.hir > %t.unused.hir

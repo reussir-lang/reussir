@@ -171,6 +171,9 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
         let box_param = Interner::get_or_intern(&mut interning, "T");
         let box_field = Interner::get_or_intern(&mut interning, "value");
         let mut elab = Elaborator::new(tcx, interner);
+        elab.features = reussir_core::feature::FeatureSet::from_fn(|feature| {
+            reussir_backend::features::enabled(feature.name())
+        });
         // Before the first checkpoint, so no rollback can ever retract it.
         let repl_box = elab
             .install_repl_box(box_name, box_param, box_field)

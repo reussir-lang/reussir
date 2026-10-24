@@ -47,7 +47,7 @@ fn conditional_products_calls_and_scalars() {
     "#,
     );
     if !enabled() {
-        assert!(result.unwrap_err().contains("REUSSIR_ENABLE_OPENXLA"));
+        assert!(result.unwrap_err().contains("the `openxla` feature"));
         return;
     }
     let text = result.unwrap();
@@ -82,7 +82,7 @@ fn rank_zero_tensor_predicate_and_private_token_helpers() {
     "#,
     );
     if !enabled() {
-        assert!(result.unwrap_err().contains("REUSSIR_ENABLE_OPENXLA"));
+        assert!(result.unwrap_err().contains("the `openxla` feature"));
         return;
     }
     let text = result.unwrap();
@@ -120,7 +120,7 @@ fn scalar_formats_and_mixed_host_kernel_contexts() {
     "#,
     );
     if !enabled() {
-        assert!(result.unwrap_err().contains("REUSSIR_ENABLE_OPENXLA"));
+        assert!(result.unwrap_err().contains("the `openxla` feature"));
         return;
     }
     let text = result.unwrap();
@@ -156,7 +156,7 @@ fn while_flattens_state_and_supports_nested_control() {
     "#,
     );
     if !enabled() {
-        assert!(result.unwrap_err().contains("REUSSIR_ENABLE_OPENXLA"));
+        assert!(result.unwrap_err().contains("the `openxla` feature"));
         return;
     }
     let text = result.unwrap();

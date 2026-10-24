@@ -37,7 +37,7 @@ fn wide_signed_guarded_nested_and_tuple_matches_verify() {
         "../../../tests/integration/frontend/kernel_integer_match.rr"
     ));
     if !enabled() {
-        assert!(result.unwrap_err().contains("REUSSIR_ENABLE_OPENXLA"));
+        assert!(result.unwrap_err().contains("the `openxla` feature"));
         return;
     }
     let text = result.unwrap();
@@ -71,7 +71,7 @@ fn match_execution_demo_verifies() {
     if enabled() {
         result.unwrap();
     } else {
-        assert!(result.unwrap_err().contains("REUSSIR_ENABLE_OPENXLA"));
+        assert!(result.unwrap_err().contains("the `openxla` feature"));
     }
 }
 

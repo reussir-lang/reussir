@@ -19,6 +19,7 @@
 
 use rustc_hash::FxHashMap;
 
+use crate::feature::Feature;
 use crate::semi::traits::TraitId;
 use crate::semi::traits::builtins::Builtins;
 use crate::semi::ty::DefId;
@@ -69,7 +70,15 @@ impl IntrinsicItem {
         }
     }
 
-    fn from_parts(family: &str, name: &str) -> Option<IntrinsicItem> {
+    /// The optional feature a program needs to call this intrinsic.
+    pub fn required_feature(self) -> Option<Feature> {
+        match self {
+            IntrinsicItem::PjrtLaunch | IntrinsicItem::Tensor(_) => Some(Feature::OpenXla),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn from_parts(family: &str, name: &str) -> Option<IntrinsicItem> {
         match family {
             "panic" if name == "panic" => Some(IntrinsicItem::Panic),
             "pjrt" if name == "launch" => Some(IntrinsicItem::PjrtLaunch),
@@ -135,6 +144,14 @@ impl FormerItem {
             FormerItem::DevArray => 2,
             FormerItem::DefaultPlacement | FormerItem::TensorToken => 0,
             _ => 1,
+        }
+    }
+
+    /// The optional feature a program needs to name this former.
+    pub fn required_feature(self) -> Option<Feature> {
+        match self {
+            FormerItem::TensorFuture | FormerItem::TensorToken => Some(Feature::OpenXla),
+            _ => None,
         }
     }
 

@@ -50,7 +50,7 @@ fn initialization_arithmetic_comparison_and_dot_verify() {
     "#,
     );
     if !enabled() {
-        assert!(result.unwrap_err().contains("OPENXLA"));
+        assert!(result.unwrap_err().contains("the `openxla` feature"));
         return;
     }
     let text = result.unwrap();
@@ -92,7 +92,7 @@ fn dynamic_shapes_rank_zero_zero_extent_and_shape_generics_verify() {
     "#,
     );
     if !enabled() {
-        assert!(result.unwrap_err().contains("OPENXLA"));
+        assert!(result.unwrap_err().contains("the `openxla` feature"));
         return;
     }
     let text = result.unwrap();
@@ -114,7 +114,7 @@ fn every_supported_numeric_element_verifies_without_changing_signedness() {
         if enabled() {
             assert!(result.is_ok(), "{ty}: {result:?}");
         } else {
-            assert!(result.unwrap_err().contains("OPENXLA"));
+            assert!(result.unwrap_err().contains("the `openxla` feature"));
         }
     }
 }

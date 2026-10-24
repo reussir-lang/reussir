@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // RUN: %rrc %S/Inputs/kernel_async_bad_generic.rr --package-name dep --emit rri -o %t.rri
 // RUN: %not %rrc %s --package-name app --extern dep=%t.rri --emit mir -o - 2>&1 | %FileCheck %s
 import dep::begin;

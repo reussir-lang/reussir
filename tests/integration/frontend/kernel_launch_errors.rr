@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // RUN: not %rrc %s --emit hir -o /dev/null 2>&1 | %FileCheck %s
 #[kernel] fn identity(x: Tensor<f32>) -> Tensor<f32> { x }
 #[kernel] fn pair(x: Tensor<f32>) -> (Tensor<f32>, Tensor<f32>) { (x, x) }

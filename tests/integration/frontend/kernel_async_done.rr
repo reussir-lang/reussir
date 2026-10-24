@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
 // RUN: %rrc %s --package-name app --extern core=%t.core.rri --emit hir --no-source-locations -o %t.hir
 // RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir

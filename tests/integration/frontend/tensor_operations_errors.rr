@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // RUN: %not %rrc %s --emit mir -o /dev/null 2>&1 | %FileCheck %s
 import core::intrinsic::tensor;
 #[kernel]

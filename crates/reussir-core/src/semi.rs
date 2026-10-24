@@ -82,14 +82,16 @@ pub fn elaborate_package<'a, 'tcx>(
 /// package's items are declared first (the declare-only twin of the
 /// in-package scan, see [`externs`]), so consumer references `dep::item`
 /// resolve during the same run — `pub` items only. Extern paths re-intern
-/// into the session table.
+/// into the session table. The package may use only `features`.
 pub fn elaborate_package_with_externs<'a, 'tcx>(
     tcx: &'a TyCtxt<'tcx>,
     files: &[PackageFile<'_>],
     interner: &'a SessionInterner,
     externs: &[ExternPackage<'_, 'tcx>],
+    features: crate::feature::FeatureSet,
 ) -> Elaborator<'a, 'tcx> {
     let mut elab = Elaborator::new(tcx, interner);
+    elab.features = features;
     for ext in externs {
         // The extern declare pass is generic over `&mut impl Interner` (it
         // also serves owned tables); the session table satisfies that
@@ -5118,5 +5120,44 @@ pub struct Rect { pub w: i64 }",
                    fn f(p: Frobnicate) -> i32 { 0 }";
         assert!(has_error(src, "unknown type"), "{:#?}", reports_of(src));
         assert!(!has_error(src, "did you mean"), "{:#?}", reports_of(src));
+    }
+
+    #[test]
+    fn disabled_features_are_reported_where_they_are_used() {
+        use crate::feature::{Feature, FeatureSet};
+
+        let source = r#"
+            #[kernel] fn identity(x: Tensor<f32>) -> Tensor<f32> { x }
+            pub fn run(x: DevArray<f32>) -> DevArray<f32> { core::intrinsic::pjrt::launch(identity, x) }
+            pub fn token() { let t: Token = core::intrinsic::panic::panic(); }
+            pub fn future() { let f: Future<Tensor<f32>> = core::intrinsic::panic::panic(); }
+        "#;
+        let messages = |features: FeatureSet| {
+            with_tcx(|tcx| {
+                let interner = std::sync::Arc::new(reussir_syntax::new_threaded_interner());
+                let parse = reussir_syntax::parse_with_interner(source, interner.clone());
+                assert!(parse.ok(), "parse errors: {:#?}", parse.errors);
+                let mut elab = Elaborator::new(tcx, &interner);
+                elab.features = features;
+                elab.run(&surface::program(&parse.root));
+                elab.reports
+                    .iter()
+                    .map(|r| r.message.clone())
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(messages(FeatureSet::all()), Vec::<String>::new());
+        let disabled = messages(FeatureSet::from_fn(|f| f != Feature::OpenXla));
+        for what in [
+            "`#[kernel]`",
+            "`core::intrinsic::pjrt::launch`",
+            "`Token`",
+            "`Future`",
+        ] {
+            let expected = format!(
+                "{what} requires the `openxla` feature, which this compiler was built without"
+            );
+            assert!(disabled.contains(&expected), "{disabled:#?}");
+        }
     }
 }

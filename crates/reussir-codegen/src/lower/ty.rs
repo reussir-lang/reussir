@@ -207,9 +207,7 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
             TyKind::Array { .. } => Ok(self.rc_type(self.array_inner_of(ty)?)),
             TyKind::DevArray { .. } => Ok(self.rc_type(self.devarray_inner_of(ty)?)),
             TyKind::Token => reussir_backend::dialect::ty::stablehlo_token(self.context)
-                .ok_or_else(|| {
-                    LoweringError("Token lowering requires REUSSIR_ENABLE_OPENXLA".into())
-                }),
+                .ok_or_else(|| LoweringError::openxla_disabled("Token lowering")),
             TyKind::Future(payloads) => {
                 if payloads.is_empty()
                     || payloads
@@ -222,9 +220,8 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
                     .iter()
                     .map(|&p| self.mlir_ty(p))
                     .collect::<Result<Vec<_>>>()?;
-                reussir_backend::dialect::ty::stablehlo_future(self.context, &payloads).ok_or_else(
-                    || LoweringError("Future lowering requires REUSSIR_ENABLE_OPENXLA".into()),
-                )
+                reussir_backend::dialect::ty::stablehlo_future(self.context, &payloads)
+                    .ok_or_else(|| LoweringError::openxla_disabled("Future lowering"))
             }
             TyKind::Tensor { elem, dims } => {
                 if reussir_core::semi::ty_eval::tensor_element_rejection(elem).is_some() {

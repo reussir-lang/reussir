@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // RUN: %not %rrc %s --emit hir -o /dev/null 2>&1 | %FileCheck %s
 #[kernel] fn identity<T>(x: Tensor<T>) -> Tensor<T> { x }
 fn empty() { core::intrinsic::pjrt::launch(); }

@@ -3,6 +3,7 @@
 use reussir_syntax::kind::TokenKey;
 
 use crate::semi::infer::Instantiation;
+use crate::semi::lang::IntrinsicItem;
 use crate::semi::resolve::DefKind;
 use crate::semi::traits::{
     Evidence, Obligation, SelectCtxt, SelectError, TraitDef, TraitId, TraitRef,
@@ -3631,6 +3632,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return Some(self.poison(span));
         };
+        if let Some(feature) = IntrinsicItem::from_parts(family, self.sym(fc.name.basename))
+            .and_then(IntrinsicItem::required_feature)
+        {
+            let shown = format!("`{}`", self.path_display(&fc.name));
+            if !self.require_feature(feature, &shown, span) {
+                return Some(self.poison(span));
+            }
+        }
         match *family {
             "panic" => Some(self.infer_panic_intrinsic(fc, span)),
             "pjrt" if self.sym(fc.name.basename) == "launch" => {

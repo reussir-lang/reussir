@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // The actual package-interface writer and loader preserve generic Tensor
 // elements in shipped bodies, and the consumer substitutes them at mono time.
 // RUN: %rrc %S/Inputs/tensor_types_dep.rr --package-name dep --emit rri -o %t.rri

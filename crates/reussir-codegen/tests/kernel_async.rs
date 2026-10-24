@@ -74,7 +74,7 @@ fn isolated_async_slice_roundtrips_real_kernel_values() {
     "#,
     );
     if !enabled() {
-        assert!(result.unwrap_err().contains("REUSSIR_ENABLE_OPENXLA"));
+        assert!(result.unwrap_err().contains("the `openxla` feature"));
         return;
     }
     let text = result.unwrap();
@@ -115,7 +115,7 @@ fn ordinary_future_done_method_is_a_private_kernel_specialization() {
     "#,
     );
     if !enabled() {
-        assert!(result.unwrap_err().contains("REUSSIR_ENABLE_OPENXLA"));
+        assert!(result.unwrap_err().contains("the `openxla` feature"));
         return;
     }
     let text = result.unwrap();
@@ -137,7 +137,7 @@ fn public_nongeneric_future_entry_is_still_rejected() {
         error.contains(if enabled() {
             "public kernel entry"
         } else {
-            "REUSSIR_ENABLE_OPENXLA"
+            "the `openxla` feature"
         }),
         "{error}"
     );

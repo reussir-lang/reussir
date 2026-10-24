@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // RUN: %rrc %S/Inputs/async_types_dep.rr --package-name dep --emit rri -o %t.rri
 // RUN: %rrc %s --package-name app --extern dep=%t.rri --emit mir --no-source-locations -o %t.mir
 // RUN: %FileCheck %s < %t.mir

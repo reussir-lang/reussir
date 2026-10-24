@@ -36,7 +36,7 @@ fn outlines_launches_and_preserves_configuration() {
     let source = include_str!("../../../tests/integration/frontend/kernel_launch.rr");
     let result = lower(source);
     if !enabled() {
-        assert!(result.unwrap_err().contains("REUSSIR_ENABLE_OPENXLA"));
+        assert!(result.unwrap_err().contains("the `openxla` feature"));
         return;
     }
     let text = result.unwrap();

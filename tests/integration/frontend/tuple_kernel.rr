@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // Tuple structure is legal in kernel signatures and expressions, while this
 // source product is preserved through textual IR without a host aggregate ABI.
 // RUN: %rrc %s --emit hir --no-source-locations -o %t.hir

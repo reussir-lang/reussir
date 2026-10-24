@@ -2641,7 +2641,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         use reussir_backend::melior::ir::operation::OperationBuilder;
         let result = self.tys.mlir_ty(expr.ty)?;
         let output = ifrt_array(self.tys.devarray_inner_of(expr.ty)?)
-            .ok_or_else(|| LoweringError("kernel launch requires REUSSIR_ENABLE_OPENXLA".into()))?;
+            .ok_or_else(|| LoweringError::openxla_disabled("kernel launch"))?;
         let control = Type::parse(self.context, "!ifrt.control")
             .ok_or_else(|| LoweringError("IFRT control type is unavailable".into()))?;
         let devices =
@@ -2760,9 +2760,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     .ok_or_else(|| LoweringError("device launch operand has no value".into()))?;
                 let view =
                     reussir_backend::dialect::ty::ifrt_array(self.tys.devarray_inner_of(ty)?)
-                        .ok_or_else(|| {
-                            LoweringError("kernel launch requires REUSSIR_ENABLE_OPENXLA".into())
-                        })?;
+                        .ok_or_else(|| LoweringError::openxla_disabled("kernel launch"))?;
                 let op = OperationBuilder::new("reussir.array.to_ifrt", self.loc())
                     .add_operands(&[value])
                     .add_results(&[view])

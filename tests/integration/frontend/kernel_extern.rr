@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // RUN: %rrc %S/Inputs/kernel_dep.rr --package-name dep --emit rri -o %t.rri
 // RUN: %FileCheck %s --check-prefix=RRI < %t.rri
 // RUN: %rrc %s --package-name consumer --extern dep=%t.rri --emit mir --no-source-locations -o %t.mir

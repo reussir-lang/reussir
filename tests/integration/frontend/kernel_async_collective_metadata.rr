@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
 // RUN: %rrc %s --emit mir --no-source-locations -o %t.mir
 // RUN: sed 's/i64/Tensor<i64>/g' %t.hir > %t.type.hir

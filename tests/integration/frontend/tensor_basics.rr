@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // The tensor type and its boundary intrinsics
 // (docs/design/tensor-kernels.md): `Tensor<[T; dims]>` is the transient
 // value-semantics view of an array — `of` takes the view (consuming the

@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
 // RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
 // RUN: diff %t.hir %t.round.hir

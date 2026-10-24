@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // RUN: echo 'fn host() { async {} }' > %t.host.rr
 // RUN: %not %rrc %t.host.rr --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=HOST
 // RUN: echo '#[kernel] fn k(x:Tensor<f32>)->Future<Tensor<f32>> { async { x } }' > %t.empty.rr

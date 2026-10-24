@@ -1,4 +1,4 @@
 // UNSUPPORTED: openxla
-// RUN: %not %rrc %s --emit mlir -o - 2>&1 | %FileCheck %s
-// CHECK: kernel lowering requires REUSSIR_ENABLE_OPENXLA
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+// CHECK: `#[kernel]` requires the `openxla` feature, which this compiler was built without
 #[kernel] pub fn identity(x: i32) -> i32 { x }

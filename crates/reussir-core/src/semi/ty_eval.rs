@@ -41,6 +41,7 @@
 
 use crate::semi::const_eval::{ConstScalar, ConstValue};
 use crate::semi::infer::{Instantiation, shape::Dim};
+use crate::semi::lang::FormerItem;
 use crate::semi::resolve::DefKind;
 use crate::semi::traits::sync::{SyncEnv, SyncVerdict, wf_arc};
 use crate::semi::ty::{DefId, Flexivity, FpTy, IntTy, Ty, TyKind};
@@ -285,6 +286,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         if (bare_unshadowed || self.is_core_intrinsic_prefix(&path.segments, "tensor"))
             && self.sym(key) == "Token"
         {
+            self.require_former(FormerItem::TensorToken, "`Token`", Some(span));
             if !args.is_empty() {
                 self.error(Some(span), "`Token` takes no type arguments");
             }
@@ -293,6 +295,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         if (bare_unshadowed || self.is_core_intrinsic_prefix(&path.segments, "tensor"))
             && self.sym(key) == "Future"
         {
+            self.require_former(FormerItem::TensorFuture, "`Future`", Some(span));
             if args.is_empty() {
                 self.error(
                     Some(span),

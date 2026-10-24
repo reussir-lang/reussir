@@ -455,6 +455,9 @@ impl<'tcx> VarEnv<'tcx> {
 /// The whole elaborator: global collected state plus per-function working state.
 pub struct Elaborator<'a, 'tcx> {
     pub tcx: &'a TyCtxt<'tcx>,
+    /// The optional features the program may use; uses of anything else are
+    /// rejected where they appear. Every feature unless the driver narrows it.
+    pub features: crate::feature::FeatureSet,
     /// Resolves the surface AST's interned token keys back into source text.
     pub resolver: &'a dyn Resolver<TokenKey>,
     pub traits: TraitDb<'tcx>,
@@ -625,6 +628,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             ["eq", "lt", "le", "gt", "ge", "cmp"].map(|name| interner.intern(name));
         Elaborator {
             tcx,
+            features: crate::feature::FeatureSet::all(),
             resolver: &**interner,
             defs,
             frecency: Frecency::new(),
@@ -683,6 +687,39 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             span,
             file: self.current_file,
         });
+    }
+
+    /// Reports `what` (a quoted source construct) as unusable unless the
+    /// program may use `feature`. Returns whether it may.
+    pub(super) fn require_feature(
+        &mut self,
+        feature: crate::feature::Feature,
+        what: &str,
+        span: Option<Span>,
+    ) -> bool {
+        let enabled = self.features.contains(feature);
+        if !enabled {
+            self.error(
+                span,
+                format!(
+                    "{what} requires the `{}` feature, which this compiler was built without",
+                    feature.name()
+                ),
+            );
+        }
+        enabled
+    }
+
+    /// [`Self::require_feature`] for the feature a built-in type former needs.
+    pub(super) fn require_former(
+        &mut self,
+        former: crate::semi::lang::FormerItem,
+        what: &str,
+        span: Option<Span>,
+    ) {
+        if let Some(feature) = former.required_feature() {
+            self.require_feature(feature, what, span);
+        }
     }
 
     pub fn warn(&mut self, span: Option<Span>, message: impl Into<String>) {
@@ -4528,6 +4565,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         if attrs.is_empty() {
             return;
         }
+        self.require_feature(
+            crate::feature::Feature::OpenXla,
+            "`#[kernel]`",
+            Some(attrs[0].span),
+        );
         if attrs.len() > 1 {
             self.error(span, "duplicate `#[kernel]` attribute");
         }

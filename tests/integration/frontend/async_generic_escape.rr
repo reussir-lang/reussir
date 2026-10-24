@@ -1,3 +1,4 @@
+// REQUIRES: openxla
 // RUN: %not %rrc %s --emit mir -o - 2>&1 | %FileCheck %s
 // CHECK-DAG: scope-confined kernel value in a host function parameter
 // CHECK-DAG: scope-confined kernel value in a host function result
