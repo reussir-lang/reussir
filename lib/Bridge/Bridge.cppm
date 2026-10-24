@@ -384,6 +384,7 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
                   ub::UBDialect, func::FuncDialect, cf::ControlFlowDialect>();
 #ifdef REUSSIR_ENABLE_RCGMP
   registry.insert<mlir::rcgmp::RCGMPDialect>();
+  reussir::registerRCGMPExternalModels(registry);
 #endif
   reussir::registerReussirBasicOpsLoweringInterface(registry);
   mlir::registerConvertToLLVMDependentDialectLoading(registry);

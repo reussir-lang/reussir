@@ -2305,6 +2305,9 @@ struct ConvertToSTDPass
                            mlir::ptr::PtrDialect, mlir::scf::SCFDialect,
                            mlir::sync::SyncDialect, mlir::tensor::TensorDialect,
                            mlir::ub::UBDialect, reussir::ReussirDialect>();
+    // Integer retains and releases (from expanding the acquires and drops of
+    // integer members) stay for `convert-rcgmp-to-scf`.
+    target.addLegalDialect("rcgmp");
     target.addDynamicallyLegalOp<ReussirArrayViewOp>([](ReussirArrayViewOp op) {
       return llvm::isa<mlir::MemRefType>(op.getView().getType());
     });

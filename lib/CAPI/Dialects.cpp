@@ -51,6 +51,7 @@
 
 #include "Reussir/Conversion/Passes.h"
 #include "Reussir/IR/ReussirDialect.h"
+#include "Reussir/IR/ReussirTypes.h"
 #include "Sync/IR/SyncDialect.h"
 
 MLIR_DEFINE_CAPI_DIALECT_REGISTRATION(Reussir, reussir,
@@ -87,6 +88,7 @@ void populateReussirRegistry(mlir::DialectRegistry &registry) {
                   mlir::ptr::PtrDialect, mlir::sync::SyncDialect>();
 #ifdef REUSSIR_ENABLE_RCGMP
   registry.insert<mlir::rcgmp::RCGMPDialect>();
+  reussir::registerRCGMPExternalModels(registry);
 #endif
 
   // Since MLIR 17 the func dialect's DialectInlinerInterface lives in a
