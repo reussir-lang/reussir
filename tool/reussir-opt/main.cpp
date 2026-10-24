@@ -25,6 +25,7 @@
 #include "Reussir/Conversion/BasicOpsLowering.h"
 #include "Reussir/Conversion/Passes.h"
 #include "Reussir/IR/ReussirDialect.h"
+#include "Reussir/IR/ReussirTypes.h"
 #include "Reussir/Transformation/Passes.h"
 
 #include "Sync/Conversion/ConvertSyncToLLVM.h"
@@ -54,6 +55,7 @@ int main(int argc, char **argv) {
   mlir::sync::registerConvertSyncToLLVMInterface(registry);
 #ifdef REUSSIR_ENABLE_RCGMP
   registry.insert<mlir::rcgmp::RCGMPDialect>();
+  reussir::registerRCGMPExternalModels(registry);
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return mlir::rcgmp::createConvertRCGMPToSCFPass();
   });

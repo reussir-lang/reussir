@@ -130,6 +130,14 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
             )
     }
 
+    /// Whether a value of type `ty` is one word owning one reference, which
+    /// `emit_inc`/`emit_dec` retain and release directly: a managed rc pointer
+    /// or a `Nat`/`Int` handle. An array slot of such an element shares that
+    /// reference with the array.
+    pub(super) fn is_counted_word(&self, ty: Ty<'tcx>) -> bool {
+        self.is_managed_rc(ty) || matches!(ty.kind(), TyKind::BigInt(_))
+    }
+
     /// Lower a ground type to MLIR: records resolve through the layout table, a
     /// nullable pointer wraps its (pointer-typed) element, and everything else is
     /// a scalar.
@@ -320,7 +328,6 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
     /// as the explicit member type `rc<…, shared, atomic>` — the only rc member
     /// form the dialect admits.
     fn member_ty(&self, ty: Ty<'tcx>) -> Result<Type<'c>> {
-        reject_bigint_member(ty, "a record or tuple")?;
         match *ty.kind() {
             TyKind::Arc(_) => self.mlir_ty(ty),
             // An opaque `#[ffi]` member cannot be spelled as a bare record
@@ -567,11 +574,7 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
         let input_tys = inputs
             .iter()
             .filter(|&&t| !is_unit(t))
-            .map(|&t| {
-                // Applying an argument stores it in the closure's box.
-                reject_bigint_member(t, "a closure")?;
-                self.mlir_ty(t)
-            })
+            .map(|&t| self.mlir_ty(t))
             .collect::<Result<Vec<_>>>()?;
         let output = if is_unit(ret) {
             None
@@ -638,7 +641,6 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
         let TyKind::Array { elem, dims } = *ty.kind() else {
             return err("array payload requested for a non-array type");
         };
-        reject_bigint_member(elem, "an array")?;
         let elem = self.mlir_ty(elem)?;
         let shape: Vec<i64> = dims
             .iter()
@@ -660,7 +662,6 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
         let TyKind::Cell { elem, kind } = *ty.kind() else {
             return err("cell payload requested for a non-cell type");
         };
-        reject_bigint_member(elem, "a cell")?;
         Ok(cell_with_kind(self.mlir_ty(elem)?, backend_cell_kind(kind)))
     }
 
@@ -806,18 +807,6 @@ fn capability(cap: DefaultCap) -> ReussirCapability {
         DefaultCap::Value => ReussirCapability::Value,
         DefaultCap::Shared => ReussirCapability::Shared,
         DefaultCap::Regional => ReussirCapability::Regional,
-    }
-}
-
-/// `Nat` and `Int` cannot be stored inside another value yet: the dialect's
-/// member acquire and drop do not reach `!rcgmp.mpz`.
-fn reject_bigint_member(ty: Ty<'_>, container: &str) -> Result<()> {
-    match *ty.kind() {
-        TyKind::BigInt(b) => err(format!(
-            "`{}` cannot be stored in {container} yet",
-            b.name()
-        )),
-        _ => Ok(()),
     }
 }
 

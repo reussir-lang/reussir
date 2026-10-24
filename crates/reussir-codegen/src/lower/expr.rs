@@ -95,6 +95,21 @@ struct Env<'c, 'b, 'tcx> {
     is_kernel: bool,
     temps: IndexMap<ExprId, Value<'c, 'b>, rustc_hash::FxBuildHasher>,
     anchors: Vec<(SmallVec<[u32; 4]>, Anchor<'c, 'b, 'tcx>)>,
+    holders: Vec<Holder<'c, 'b>>,
+}
+
+/// A reference a `Nat`/`Int` match hands one of its arms: the switched value
+/// in a `default` arm, or a distance in a range arm (see
+/// [`bigint_switch`](Lowerer::bigint_switch)). The arm owns it until a nested
+/// match consumes it, a pattern binding takes it, or a leaf releases it.
+#[derive(Clone)]
+struct Holder<'c, 'b> {
+    /// The root [`Anchor`] index of the match it belongs to.
+    root_idx: usize,
+    path: SmallVec<[u32; 4]>,
+    val: Value<'c, 'b>,
+    /// Whether it has been consumed or released.
+    settled: bool,
 }
 
 /// A point already materialized while walking a `match`
@@ -135,6 +150,7 @@ impl<'c, 'b, 'tcx> Env<'c, 'b, 'tcx> {
             is_kernel,
             temps: IndexMap::default(),
             anchors: Vec::new(),
+            holders: Vec::new(),
         }
     }
 
@@ -157,6 +173,8 @@ impl<'c, 'b, 'tcx> Env<'c, 'b, 'tcx> {
         let vars_mark = self.vars.len();
         let temps_mark = self.temps.len();
         let anchors_mark = self.anchors.len();
+        // A branch may settle a holder its sibling still owns: restore them all.
+        let saved_holders = self.holders.clone();
         let saved_region = self.region;
         let saved_kernel = self.is_kernel;
         // SAFETY: `'b: 's`, so viewing the stored `Value<'c, 'b>`s as
@@ -171,6 +189,7 @@ impl<'c, 'b, 'tcx> Env<'c, 'b, 'tcx> {
         self.vars.truncate(vars_mark);
         self.temps.truncate(temps_mark);
         self.anchors.truncate(anchors_mark);
+        self.holders = saved_holders;
         self.region = saved_region;
         self.is_kernel = saved_kernel;
         r
@@ -198,6 +217,14 @@ enum Cursor<'c, 'b, 'tcx> {
         cap: ReussirCapability,
         atomic: bool,
     },
+}
+
+impl<'tcx> Cursor<'_, '_, 'tcx> {
+    fn ty(&self) -> Ty<'tcx> {
+        match *self {
+            Cursor::Value { ty, .. } | Cursor::Ref { ty, .. } => ty,
+        }
+    }
 }
 
 /// How a single field projects out of a record reference: the field's MIR type,
@@ -1789,7 +1816,19 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 ty: scrut.ty,
             },
         ));
+        // A `Nat`/`Int` scrutinee the ownership analysis gave to the match is
+        // held for its root switch to consume.
+        let holders_mark = env.holders.len();
+        if self.ownership.borrow().moves_scrutinee(e.id) {
+            env.holders.push(Holder {
+                root_idx,
+                path: SmallVec::new(),
+                val: scrut_val,
+                settled: false,
+            });
+        }
         let result = self.lower_tree(block, env, root_idx, tree, e.ty);
+        env.holders.truncate(holders_mark);
         env.anchors.truncate(anchors_mark);
         env.temps.truncate(temps_mark);
         result
@@ -1842,21 +1881,30 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         cases: SwitchCases<'tcx>,
         result_ty: Ty<'tcx>,
     ) -> Result<Option<Value<'c, 'b>>> {
-        if let Some((_, Anchor::Root { ty, .. })) = env.anchors.get(root_idx)
-            && path.is_empty()
-            && let TyKind::BigInt(int) = ty.kind()
-        {
-            return err(format!("matching on `{}` does not lower yet", int.name()));
-        }
         match cases {
+            // On a built-in integer, a variant or key switch is one
+            // `rcgmp.match`.
             SwitchCases::Ctor(subtrees) => {
-                self.ctor_switch(block, env, root_idx, path, subtrees, result_ty)
+                let whole = self.resolve(block, env, root_idx, path)?;
+                if let TyKind::BigInt(int) = *whole.ty().kind() {
+                    return self
+                        .bigint_switch(block, env, root_idx, path, whole, int, cases, result_ty);
+                }
+                self.ctor_switch(block, env, root_idx, path, whole, subtrees, result_ty)
+            }
+            SwitchCases::Int {
+                cases: keys,
+                default,
+            } => {
+                let cursor = self.resolve(block, env, root_idx, path)?;
+                if let TyKind::BigInt(int) = *cursor.ty().kind() {
+                    return self
+                        .bigint_switch(block, env, root_idx, path, cursor, int, cases, result_ty);
+                }
+                self.int_switch(block, env, root_idx, cursor, keys, default, result_ty)
             }
             SwitchCases::Bool { if_true, if_false } => {
                 self.bool_switch(block, env, root_idx, path, if_true, if_false, result_ty)
-            }
-            SwitchCases::Int { cases, default } => {
-                self.int_switch(block, env, root_idx, path, cases, default, result_ty)
             }
             SwitchCases::Char { cases, default } => {
                 self.char_switch(block, env, root_idx, path, cases, default, result_ty)
@@ -1950,20 +1998,21 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     /// Lower an enum `Switch` to `reussir.record.dispatch`: one arm per variant
     /// (in tag order), each receiving a `!reussir.ref` to that variant's case
     /// payload, which becomes the narrowed anchor for the arm's sub-tree.
+    /// `whole` is the un-narrowed value at `path` (kept in each arm's `Case`
+    /// anchor for a whole-value binding), and its variant reference feeds the
+    /// dispatch.
+    #[allow(clippy::too_many_arguments)]
     fn ctor_switch<'b>(
         &self,
         block: &'b Block<'c>,
         env: &mut Env<'c, 'b, 'tcx>,
         root_idx: usize,
         path: &[u32],
+        whole: Cursor<'c, 'b, 'tcx>,
         subtrees: &'tcx [DecisionTree<'tcx>],
         result_ty: Ty<'tcx>,
     ) -> Result<Option<Value<'c, 'b>>> {
         let loc = self.loc();
-        // Resolve the enum once: `whole` is the un-narrowed value at this path
-        // (kept in each arm's `Case` anchor for a whole-value binding), and the
-        // variant reference feeds the dispatch.
-        let whole = self.resolve(block, env, root_idx, path)?;
         let (variant_ref, enum_ty, cap, atomic) = self.resolve_variant_ref(block, whole)?;
         let variants = match self.tys.record_of(enum_ty).map(|r| r.layout) {
             Some(mir::RecordLayout::Variant(variants)) => variants,
@@ -2200,13 +2249,14 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         block: &'b Block<'c>,
         env: &mut Env<'c, 'b, 'tcx>,
         root_idx: usize,
-        path: &[u32],
+        cursor: Cursor<'c, 'b, 'tcx>,
         cases: &'tcx [(&'tcx Integer, DecisionTree<'tcx>)],
         default: &'tcx DecisionTree<'tcx>,
         result_ty: Ty<'tcx>,
     ) -> Result<Option<Value<'c, 'b>>> {
         let loc = self.loc();
-        let (scrut_val, scrut_ty) = self.resolve_loaded(block, env, root_idx, path)?;
+        let scrut_ty = cursor.ty();
+        let scrut_val = self.load_cursor(block, cursor)?;
         let int_ty = match *scrut_ty.kind() {
             TyKind::Int(ty) => ty,
             _ => return err("integer match on a non-integer scrutinee"),
@@ -2363,6 +2413,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     ) -> Result<Option<Value<'c, 'b>>> {
         let _ = result_ty;
         self.bind_pattern(block, env, root_idx, bindings)?;
+        self.settle_holders(block, env, root_idx, body, bindings);
         self.expr(block, env, body)
     }
 
@@ -2454,9 +2505,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         path: &[u32],
     ) -> Result<(Value<'c, 'b>, Ty<'tcx>)> {
         let cursor = self.resolve(block, env, root_idx, path)?;
-        let ty = match &cursor {
-            Cursor::Value { ty, .. } | Cursor::Ref { ty, .. } => *ty,
-        };
+        let ty = cursor.ty();
         Ok((self.load_cursor(block, cursor)?, ty))
     }
 
@@ -4332,7 +4381,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 .into();
             // An rc element is shared with the array: the caller receives an
             // owned +1 reference, the payload keeps its own.
-            if self.tys.is_managed_rc(e.ty) {
+            if self.tys.is_counted_word(e.ty) {
                 self.emit_inc(then, loaded, e.ty)?;
             }
             then.append_operation(scf::r#yield(&[loaded], loc));
@@ -4370,7 +4419,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             // The store overwrites the old element: for an rc element that
             // reference is the payload's own, released here — inside the
             // unique view, so the slot is not shared with another array.
-            if self.tys.is_managed_rc(elem_ty) {
+            if self.tys.is_counted_word(elem_ty) {
                 let old = body
                     .append_operation(memref::load(view, &idxs, loc))
                     .result(0)
@@ -4441,7 +4490,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let loc = self.loc();
         let body = Block::new(&vec![(Type::index(self.context), loc); dims.len()]);
         let elem_ty = args[count].ty;
-        let elem_rc = self.tys.is_managed_rc(elem_ty);
+        let elem_rc = self.tys.is_counted_word(elem_ty);
         if elem_rc {
             self.emit_inc(&body, value, elem_ty)?;
         }

@@ -675,8 +675,9 @@ pub(crate) fn is_plain_scalar_or_deferred(t: Ty<'_>) -> bool {
 }
 
 /// Why `t` cannot be an array element, or `None` when it can: a plain
-/// scalar, or a shared rc box — a `[shared]` record (struct or enum), whose
-/// payload slot is one pointer the acquire/drop expansions already walk.
+/// scalar, a shared rc box — a `[shared]` record (struct or enum), whose
+/// payload slot is one pointer the acquire/drop expansions already walk — or
+/// a `Nat`/`Int`, whose slot is one integer handle they retain and release.
 /// Value records (member-wise rc traffic through a view), regional records
 /// (region lifetimes), cells, closures, and `Arc` (atomic context through a
 /// plain view) stay rejected. Generic/hole/bottom defer to the
@@ -689,6 +690,7 @@ pub fn array_element_rejection<'tcx>(
         return None;
     }
     match t.kind() {
+        TyKind::BigInt(_) => None,
         TyKind::Record { def, flex, .. } => match flex {
             Flexivity::Flex | Flexivity::Rigid => Some("a regional record"),
             _ => match cap_of(*def) {

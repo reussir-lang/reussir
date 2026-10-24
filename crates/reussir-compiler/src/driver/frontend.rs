@@ -27,13 +27,18 @@ use super::Produced;
 use super::cli::Cli;
 use super::stage::Stage;
 
+/// The optional features this build includes, and so can lower.
+fn build_features() -> FeatureSet {
+    FeatureSet::from_fn(|feature| reussir_backend::features::enabled(feature.name()))
+}
+
 /// The optional features the program may use: those this build includes, or
 /// every feature when compiling `core`, which declares them all.
 fn program_features(cli: &Cli) -> FeatureSet {
     if cli.core {
         FeatureSet::all()
     } else {
-        FeatureSet::from_fn(|feature| reussir_backend::features::enabled(feature.name()))
+        build_features()
     }
 }
 
@@ -110,8 +115,9 @@ pub(crate) fn frontend_package<'c, 'tcx>(
             files,
         })
         .collect();
-    let elab =
+    let mut elab =
         elaborate_package_with_externs(tcx, &files, interner, &extern_pkgs, program_features(cli));
+    elab.lowered_features = build_features();
     if render_reports(cli, &pkg.cache, &elab.reports) {
         return Err(String::new());
     }
@@ -198,6 +204,7 @@ pub(crate) fn frontend_package<'c, 'tcx>(
             bodies: &closure.bodies,
             protos: &closure.protos,
             records: &closure.records,
+            requirements: &elab.feature_requirements,
             file_root: file_root.as_deref(),
         });
         let (mut traits, mut impls) = hir::trait_texts(&elab.traits, &elab.defs, elab.resolver);
@@ -259,6 +266,7 @@ pub(crate) fn frontend<'c, 'tcx>(
             let prog = surface::program(&parse.root);
             let mut elab = Elaborator::new(tcx, &interner);
             elab.features = program_features(cli);
+            elab.lowered_features = build_features();
             elab.run(&prog);
             if render_reports(cli, sources, &elab.reports) {
                 return Err(String::new());
@@ -363,6 +371,7 @@ pub(crate) fn frontend<'c, 'tcx>(
                 // The dump's `#[lang]` markers, so re-entered comparison
                 // dispatch keeps its intrinsic lowering.
                 lang: parsed.lang.clone(),
+                features: Default::default(),
             };
             let (full, reports) = monomorphize(&input);
             match &dump_sources {

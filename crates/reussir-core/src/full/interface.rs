@@ -466,6 +466,7 @@ mod tests {
                     bodies: &closure.bodies,
                     protos: &closure.protos,
                     records: &closure.records,
+                    requirements: &elab.feature_requirements,
                     file_root: None,
                 })
                 .program(&elab.elaborated, &strings, &elab.records, &[]);
