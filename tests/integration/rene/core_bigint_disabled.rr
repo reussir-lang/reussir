@@ -1,0 +1,8 @@
+// A compiler built without the `rcgmp` feature rejects `Nat` and `Int`
+// where a program names them, though `core` still declares both.
+
+// UNSUPPORTED: rcgmp
+// RUN: %not %rene build --manifest-path %S/core_bigint/rene.ncl --build-dir %t.bdir %rrc_linker 2>&1 | %FileCheck %s
+
+// CHECK: `Nat` requires the `rcgmp` feature, which this compiler was built without
+// CHECK: `Int` requires the `rcgmp` feature, which this compiler was built without

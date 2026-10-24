@@ -2484,10 +2484,8 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         span: Option<Span>,
     ) {
         match *kind {
-            mir::ExprKind::ConstInt(n) => {
-                if let TyKind::Int(int_ty) = *ty.kind()
-                    && !literal::int_fits(n, int_ty)
-                {
+            mir::ExprKind::ConstInt(n) => match *ty.kind() {
+                TyKind::Int(int_ty) if !literal::int_fits(n, int_ty) => {
                     self.error(
                         span,
                         format!(
@@ -2496,7 +2494,14 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                         ),
                     );
                 }
-            }
+                TyKind::BigInt(BigIntTy::Nat) if *n < 0 => {
+                    self.error(
+                        span,
+                        format!("integer literal `{n}` is out of range for `Nat`"),
+                    );
+                }
+                _ => {}
+            },
             mir::ExprKind::ConstFloat(f) => {
                 if let TyKind::Fp(fp) = *ty.kind()
                     && let Some((exp_bits, mant_bits)) = literal::ieee_params(fp)
@@ -2643,9 +2648,9 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 // the operator committed to the scalar path (a late-solved
                 // hole).
                 let ty = subst_ty(self.tcx, l.ty, subst);
-                // `str` compares intrinsically too: codegen lowers its
-                // comparisons through the dedicated string-compare ops.
-                if !ty.is_scalar() && !matches!(ty.kind(), TyKind::Str) {
+                // `str` and the built-in integers compare intrinsically too:
+                // codegen lowers their comparisons through dedicated ops.
+                if !ty.is_scalar() && !matches!(ty.kind(), TyKind::Str | TyKind::BigInt(_)) {
                     let shown = match ty.kind() {
                         TyKind::Record { def, .. } => self.defs.path(*def).display(self.resolver),
                         _ => format!("{ty:?}"),
@@ -2957,12 +2962,18 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 };
                 match cases {
                     SwitchCases::Int { cases, default } => {
-                        let TyKind::Int(int_ty) = *ty.kind() else {
-                            self.error(span, "integer pattern requires an integer scrutinee");
-                            return;
+                        let fits = |key: &literal::Integer| match *ty.kind() {
+                            TyKind::Int(int_ty) => Some(literal::int_fits(key, int_ty)),
+                            TyKind::BigInt(BigIntTy::Nat) => Some(*key >= 0),
+                            TyKind::BigInt(BigIntTy::Int) => Some(true),
+                            _ => None,
                         };
                         for (key, branch) in cases {
-                            if !literal::int_fits(key, int_ty) {
+                            let Some(fits) = fits(key) else {
+                                self.error(span, "integer pattern requires an integer scrutinee");
+                                return;
+                            };
+                            if !fits {
                                 self.error(span, format!(
                                     "integer pattern `{key}` is out of range for match scrutinee"
                                 ));

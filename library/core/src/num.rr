@@ -11,7 +11,7 @@
 #[sealed]
 pub trait Num: PartialOrd {}
 
-/// Whole-number scalars: `i8`…`i64`, `u8`…`u64`.
+/// Whole numbers: `i8`…`i64`, `u8`…`u64`, `Nat`, and `Int`.
 #[lang("integral")]
 #[sealed]
 pub trait Integral: Num {}
@@ -20,6 +20,23 @@ pub trait Integral: Num {}
 #[lang("floating_point")]
 #[sealed]
 pub trait FloatingPoint: Num {}
+
+/// The natural numbers, without bound. `Nat` is a built-in integer type,
+/// not a record: small values need no allocation. The enum declares how
+/// `Nat` values are built and matched: `Zero` is 0 and `Succ(n)` is `n + 1`.
+#[lang("nat")]
+pub enum Nat {
+    Zero,
+    Succ(Nat)
+}
+
+/// The integers, without bound. Like `Nat`, `Int` is a built-in integer
+/// type: `OfNat(n)` is the nonnegative `n` and `NegSucc(n)` is `-(n + 1)`.
+#[lang("int")]
+pub enum Int {
+    OfNat(Nat),
+    NegSucc(Nat)
+}
 
 // The builtin impls (see `core::cmp` for the form): membership of the
 // sealed numeric classes, declared in source.
@@ -32,9 +49,22 @@ impl Integral for u8 { }
 impl Integral for u16 { }
 impl Integral for u32 { }
 impl Integral for u64 { }
+impl Integral for Nat { }
+impl Integral for Int { }
 
 impl FloatingPoint for f16 { }
 impl FloatingPoint for f32 { }
 impl FloatingPoint for f64 { }
 impl FloatingPoint for bfloat16 { }
 impl FloatingPoint for float8 { }
+
+// The built-in integers are totally ordered; their comparison impls live
+// beside their declarations.
+impl PartialEq for Nat { }
+impl PartialEq for Int { }
+impl Eq for Nat { }
+impl Eq for Int { }
+impl PartialOrd for Nat { }
+impl PartialOrd for Int { }
+impl Ord for Nat { }
+impl Ord for Int { }

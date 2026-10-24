@@ -11,15 +11,18 @@ pub enum Feature {
     /// StableHLO kernels: `#[kernel]` functions, `Token`, `Future`, the tensor
     /// intrinsics, and kernel launches.
     OpenXla,
+    /// Arbitrary-precision integers: `Nat` and `Int`.
+    Rcgmp,
 }
 
 impl Feature {
-    pub const ALL: [Feature; 1] = [Feature::OpenXla];
+    pub const ALL: [Feature; 2] = [Feature::OpenXla, Feature::Rcgmp];
 
     /// The feature's name in the compiler's feature registry.
     pub fn name(self) -> &'static str {
         match self {
             Feature::OpenXla => "openxla",
+            Feature::Rcgmp => "rcgmp",
         }
     }
 

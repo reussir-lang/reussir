@@ -580,6 +580,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return self.tcx.mk(TyKind::Bottom);
         };
         self.record_use(key);
+        self.require_bigint(def, Some(span));
         let default_cap = self.records[&def].default_cap;
         let args: Vec<Ty> = args.iter().map(|a| self.eval_type(a)).collect();
         let flex = match default_cap {

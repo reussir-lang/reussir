@@ -691,6 +691,16 @@ mod tests {
         files: &[(&[&str], &str)],
         f: impl for<'a, 'tcx> FnOnce(&Elaborator<'a, 'tcx>, &TyCtxt<'tcx>),
     ) {
+        check_package_with_features(pkg, files, crate::feature::FeatureSet::all(), f);
+    }
+
+    /// [`check_package`] for a program that may use only `features`.
+    fn check_package_with_features(
+        pkg: &str,
+        files: &[(&[&str], &str)],
+        features: crate::feature::FeatureSet,
+        f: impl for<'a, 'tcx> FnOnce(&Elaborator<'a, 'tcx>, &TyCtxt<'tcx>),
+    ) {
         use std::sync::Arc;
 
         use reussir_syntax::Interner;
@@ -728,7 +738,7 @@ mod tests {
                     }
                 })
                 .collect();
-            let elab = elaborate_package(tcx, &pkg_files, &interner);
+            let elab = elaborate_package_with_externs(tcx, &pkg_files, &interner, &[], features);
             f(&elab, tcx);
         });
     }
@@ -2811,7 +2821,8 @@ mod tests {
                     );
                 }
                 // The builtin impls come from source: located, none
-                // compiler-provided, every scalar covered for `PartialEq`.
+                // compiler-provided, every scalar and built-in integer
+                // covered for `PartialEq`.
                 let pe = elab
                     .traits
                     .trait_by_def(elab.lang.get(LangItem::PartialEq).expect("declared"))
@@ -2821,23 +2832,28 @@ mod tests {
                     .impls()
                     .filter(|i| i.trait_ref.trait_id == pe)
                     .collect();
-                assert_eq!(pe_impls.len(), 16);
+                assert_eq!(pe_impls.len(), 18);
                 assert!(pe_impls.iter().all(|i| !i.compiler_provided()));
             },
         );
     }
 
-    /// The root of a package declaring `Nat` and `Int` the way `core::num`
-    /// does; test sources elaborate as its module `t`.
-    const BIGINT_ROOT: &str = "pub mod t;\n\
-        #[lang(\"nat\")]\npub enum Nat { Zero, Succ(Nat) }\n\
-        #[lang(\"int\")]\npub enum Int { OfNat(Nat), NegSucc(Nat) }";
-
+    /// Elaborate `src` as module `t` of a package carrying `core`'s numeric
+    /// and comparison modules, which declare `Nat` and `Int`.
     fn check_with_bigint(
         src: &str,
         f: impl for<'a, 'tcx> FnOnce(&Elaborator<'a, 'tcx>, &TyCtxt<'tcx>),
     ) {
-        check_package("core", &[(&[], BIGINT_ROOT), (&["t"], src)], f);
+        check_package(
+            "core",
+            &[
+                (&[], "pub mod cmp;\npub mod num;\npub mod t;"),
+                (&["cmp"], include_str!("../../../library/core/src/cmp.rr")),
+                (&["num"], include_str!("../../../library/core/src/num.rr")),
+                (&["t"], src),
+            ],
+            f,
+        );
     }
 
     #[test]
@@ -2857,6 +2873,87 @@ mod tests {
                 assert!(!elab.has_errors(), "{:#?}", elab.reports);
                 let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
                 assert!(reports.is_empty(), "{reports:#?}");
+            },
+        );
+    }
+
+    #[test]
+    fn bigint_literals_and_comparisons_check() {
+        check_with_bigint(
+            "pub fn big() -> Int { 340282366920938463463374607431768211456 }\n\
+             pub fn less(a: Int, b: Int) -> bool { a < b }\n\
+             pub fn small(n: Nat) -> bool { match n { 0 => true, 1 => true, _ => n < 10 } }",
+            |elab, _| {
+                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
+                assert!(reports.is_empty(), "{reports:#?}");
+            },
+        );
+    }
+
+    #[test]
+    fn bigint_dot_calls_reach_inherent_and_trait_methods() {
+        check_with_bigint(
+            "impl Nat { pub fn is_zero(self: Self) -> bool { self == Nat::Zero } }\n\
+             pub fn f(n: Nat, m: Nat) -> bool {\n\
+                 n.is_zero() || match n.cmp(m) { Ordering::Less => true, _ => false }\n\
+             }",
+            |elab, _| {
+                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
+                assert!(reports.is_empty(), "{reports:#?}");
+            },
+        );
+    }
+
+    #[test]
+    fn negative_nat_literals_are_diagnosed() {
+        check_with_bigint(
+            "pub fn f() -> Nat { -1 }\n\
+             pub fn g() -> Int { -1 }\n\
+             pub fn h(n: Nat) -> bool { match n { -1 => true, _ => false } }",
+            |elab, _| {
+                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
+                let messages: Vec<&str> = reports.iter().map(|r| r.message.as_str()).collect();
+                assert_eq!(
+                    messages,
+                    [
+                        "integer literal `-1` is out of range for `Nat`",
+                        "integer pattern `-1` is out of range for match scrutinee",
+                    ],
+                    "{messages:#?}"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn bigint_uses_require_the_rcgmp_feature() {
+        use crate::feature::{Feature, FeatureSet};
+        check_package_with_features(
+            "core",
+            &[
+                (&[], "pub mod cmp;\npub mod num;\npub mod t;"),
+                (&["cmp"], include_str!("../../../library/core/src/cmp.rr")),
+                (&["num"], include_str!("../../../library/core/src/num.rr")),
+                (&["t"], "pub fn one(n: Nat) -> Nat { Nat::Succ{n} }"),
+            ],
+            FeatureSet::from_fn(|f| f != Feature::Rcgmp),
+            |elab, _| {
+                let app: Vec<&str> = elab
+                    .reports
+                    .iter()
+                    .filter(|r| r.file == reussir_syntax::source::FileId::from_index(3))
+                    .map(|r| r.message.as_str())
+                    .collect();
+                assert_eq!(
+                    app,
+                    ["`Nat` requires the `rcgmp` feature, which this compiler was built without";
+                        3],
+                    "{:#?}",
+                    elab.reports
+                );
             },
         );
     }

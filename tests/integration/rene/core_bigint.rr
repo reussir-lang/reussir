@@ -1,0 +1,21 @@
+// `core::num` declares `Nat` and `Int` as enums whose constructors and
+// patterns are those of the built-in arbitrary-precision integers. The
+// interface ships both declarations with their builtin impls, and a
+// dependent package resolves `Nat` and `Int` to the built-in types: values
+// are built, matched, and compared at those types, and their diagnostics
+// name them.
+
+// REQUIRES: rcgmp
+// RUN: %not %rene build --manifest-path %S/core_bigint/rene.ncl --build-dir %t.bdir %rrc_linker 2>&1 | %FileCheck %s --check-prefix=DIAG
+
+// DIAG: type mismatch: expected `bool`, found `Nat`
+// DIAG: non-exhaustive patterns in `match`
+
+// RUN: %FileCheck %s --check-prefix=RRI < %t.bdir/dev/deps/core.rri
+
+// RRI-DAG: #[lang("nat")] pub [shared] enum #core::num::Nat in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] { Zero(), Succ(Nat) };
+// RRI-DAG: #[lang("int")] pub [shared] enum #core::num::Int in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] { OfNat(Nat), NegSucc(Nat) };
+// RRI-DAG: impl #core::num::Integral::<Nat> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {  }
+// RRI-DAG: impl #core::num::Integral::<Int> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {  }
+// RRI-DAG: impl #core::cmp::Ord::<Nat> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {  }
+// RRI-DAG: impl #core::cmp::Ord::<Int> in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] {  }

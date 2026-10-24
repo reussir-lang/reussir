@@ -1073,6 +1073,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
     }
 
+    /// Report a use of `core`'s `Nat` or `Int` enum, at `span`, unless the
+    /// program may use the built-in integers.
+    pub(super) fn require_bigint(&mut self, def: DefId, span: Option<Span>) {
+        if let Some(b) = self.lang.bigint_of(def) {
+            let what = format!("`{}`", b.name());
+            self.require_feature(crate::feature::Feature::Rcgmp, &what, span);
+        }
+    }
+
     /// The enum declaring the constructors of `ty`, with its type arguments:
     /// a record's own def, or `core`'s enum for a built-in integer.
     pub(super) fn ctor_enum(&self, ty: Ty<'tcx>) -> Option<(DefId, &'tcx [Ty<'tcx>])> {
@@ -2298,7 +2307,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                         (Some(LangItem::Former(FormerItem::ConstSeq)), [elem]) => {
                             self.tcx.mk_const_seq(*elem)
                         }
-                        _ => self.tcx.mk_record(target, &args, flex),
+                        // `Nat` and `Int` methods take the built-in integers.
+                        _ => self.record_def_ty(target, &args, flex),
                     })
                 }
                 _ => None,
@@ -2930,10 +2940,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         target_args: &[surface::Type],
     ) -> Option<Ty<'tcx>> {
         use crate::semi::ty::{FpTy, IntTy};
-        if !target.segments.is_empty()
-            || !target_args.is_empty()
-            || self.resolve_record_ref(target).is_some()
-        {
+        if !target_args.is_empty() {
+            return None;
+        }
+        if let Some(def) = self.resolve_record_ref(target) {
+            return self.lang.bigint_of(def).map(|b| self.tcx.mk_bigint(b));
+        }
+        if !target.segments.is_empty() {
             return None;
         }
         Some(match self.sym(target.basename) {

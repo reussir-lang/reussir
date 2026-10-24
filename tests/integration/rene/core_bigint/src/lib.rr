@@ -1,0 +1,19 @@
+fn pred(n: Nat) -> Nat {
+    match n { Nat::Zero => Nat::Zero, Nat::Succ(m) => m }
+}
+
+fn negate(n: Nat) -> Int {
+    match n { Nat::Zero => Int::OfNat{Nat::Zero}, Nat::Succ(m) => Int::NegSucc{m} }
+}
+
+fn is_negative(i: Int) -> bool {
+    match i { Int::OfNat(_) => false, Int::NegSucc(_) => true }
+}
+
+fn below(a: Nat, b: Nat) -> bool { a < b && b < 340282366920938463463374607431768211456 }
+
+fn mismatched(n: Nat) -> bool { pred(n) }
+
+fn partial(i: Int) -> bool {
+    match i { Int::OfNat(_) => true }
+}

@@ -1900,6 +1900,24 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             };
             return self.dispatch_scalar_dot(cur, receiver, *name, args, span);
         }
+        // A built-in integer has no fields: its dot calls reach the inherent
+        // methods declared on its `core` enum, then, like a scalar's, the
+        // traits its builtin impls provide.
+        if let TyKind::BigInt(int) = *cur.kind()
+            && let surface::Access::Named(name) = last
+        {
+            let receiver = if indices.is_empty() {
+                base
+            } else {
+                self.mk_expr(ExprKind::Proj(Box::new(base), indices), raw, span)
+            };
+            if let Some(def) = self.lang.bigint_def(int)
+                && let Some(method) = self.dot_method_candidate(def, *name)
+            {
+                return self.infer_method_call(receiver, Some(def), method, *name, args, span);
+            }
+            return self.dispatch_scalar_dot(cur, receiver, *name, args, span);
+        }
         let TyKind::Record {
             def,
             args: rargs,
@@ -5007,6 +5025,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let Some(vidx) = self.variant_index(def, enum_name, variant, span) else {
             return self.poison(span);
         };
+        self.require_bigint(def, span);
         let payload = variants[vidx].fields.clone();
         let inst = self.instantiate(&record.generics_as_decls(), ty_args, span);
         // Under the arc'd constructor, the atomic context flows into the
