@@ -60,6 +60,34 @@ add_custom_target(reussir-rt ALL
     COMMENT "Building reussir-rt with cargo (${CARGO_PROFILE} profile)"
 )
 
+# The PJRT-enabled runtime: device arrays and kernel launches through a PJRT
+# plugin. It links this build's StableHLO runtime archives, so it exists only
+# with OpenXLA. Programs that move data to devices or launch kernels link it
+# in place of the default runtime.
+set(REUSSIR_RT_PJRT_LIBRARY "")
+if(REUSSIR_ENABLE_OPENXLA)
+    FetchContent_GetProperties(xla)
+    set(REUSSIR_RT_PJRT_TARGET_DIR ${CMAKE_BINARY_DIR}/target-rt-pjrt)
+    add_custom_target(reussir-rt-pjrt ALL
+        COMMAND ${CMAKE_COMMAND} -E env
+            CARGO_TARGET_DIR=${REUSSIR_RT_PJRT_TARGET_DIR}
+            ${REUSSIR_CARGO_CXX_ENV}
+            MLIR_SYS_230_PREFIX=${REUSSIR_LLVM_PREFIX}
+            REUSSIR_PJRT_PATH=${xla_SOURCE_DIR}
+            REUSSIR_STABLEHLO_LIB_DIR=${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
+            RUSTFLAGS=-Awarnings
+            ${REUSSIR_CARGO} build ${REUSSIR_CARGO_TARGET_ARGS} --locked --profile ${CARGO_PROFILE}
+            --features pjrt --quiet
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        DEPENDS ReussirStablehloRuntime
+        COMMENT "Building the PJRT-enabled reussir-rt with cargo (${CARGO_PROFILE} profile)"
+    )
+    set(REUSSIR_RT_PJRT_LIBRARY
+        ${REUSSIR_RT_PJRT_TARGET_DIR}/${REUSSIR_CARGO_TARGET_SUBDIR}${CARGO_PROFILE_DIR}/libreussir_rt.so)
+    message(STATUS "PJRT-enabled runtime: ${REUSSIR_RT_PJRT_LIBRARY}")
+endif()
+set(REUSSIR_RT_PJRT_LIBRARY "${REUSSIR_RT_PJRT_LIBRARY}" PARENT_SCOPE)
+
 if(WIN32)
     set(REUSSIR_RT_OUTPUT_DIR ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
     set(REUSSIR_RT_SHARED_LIB reussir_rt.dll)

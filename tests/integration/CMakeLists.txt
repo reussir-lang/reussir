@@ -284,7 +284,7 @@ add_custom_target(check
   USES_TERMINAL)
 
 if(REUSSIR_ENABLE_OPENXLA)
-  add_dependencies(check reussir-ifrt-translate)
+  add_dependencies(check reussir-ifrt-translate reussir-rt-pjrt)
 endif()
 
 # Rust compiler caches need an explicit content key for native archives. The

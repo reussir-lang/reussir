@@ -117,9 +117,9 @@ config.environment[_loader_var] = os.pathsep.join(_loader_dirs)
 def sh_path(path):
     return path.replace('\\', '/') if isinstance(path, str) else path
 
-# Optional runtime ABI tests use an explicitly supplied pjrt-enabled runtime
-# and trusted CPU plugin. The normal CMake runtime does not enable pjrt.
-_pjrt_runtime = os.environ.get('REUSSIR_PJRT_TEST_RUNTIME')
+# Device tests link the PJRT-enabled runtime this build provides with OpenXLA
+# and load an explicitly supplied, trusted PJRT plugin.
+_pjrt_runtime = config.reussir_rt_pjrt_path
 _pjrt_plugin = os.environ.get('REUSSIR_PJRT_PLUGIN')
 if _pjrt_runtime and _pjrt_plugin:
     config.available_features.add('pjrt-runtime')
