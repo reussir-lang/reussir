@@ -29,6 +29,7 @@ pub mod check;
 pub mod const_eval;
 pub mod ctxt;
 pub mod externs;
+pub mod feature_use;
 pub mod fulfill;
 pub mod hir;
 pub mod pattern;
@@ -3099,6 +3100,64 @@ mod tests {
                         3],
                     "{:#?}",
                     elab.reports
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn functions_needing_a_missing_feature_are_not_lowered() {
+        use crate::feature::{Feature, FeatureSet};
+        check_package(
+            "core",
+            &[
+                (&[], "pub mod cmp;\npub mod num;\npub mod t;"),
+                (&["cmp"], include_str!("../../../library/core/src/cmp.rr")),
+                (&["num"], include_str!("../../../library/core/src/num.rr")),
+                (
+                    &["t"],
+                    "pub fn twice(n: Nat) -> Nat { n + n }\n\
+                     pub fn hidden(x: u64) -> u64 { let n = x as Nat; x }\n\
+                     pub fn calls_hidden(x: u64) -> u64 { hidden(x) }\n\
+                     pub fn plain(x: u64) -> u64 { x + 1 }",
+                ),
+            ],
+            |elab, _| {
+                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let needs = |name: &str| {
+                    let f = elab
+                        .elaborated
+                        .iter()
+                        .find(|f| elab.resolver.resolve(f.name) == name)
+                        .unwrap();
+                    elab.feature_requirements.get(&f.def).copied()
+                };
+                let rcgmp = FeatureSet::from_fn(|f| f == Feature::Rcgmp);
+                assert_eq!(needs("twice"), Some(rcgmp));
+                assert_eq!(needs("hidden"), Some(rcgmp));
+                assert_eq!(needs("calls_hidden"), Some(rcgmp));
+                assert_eq!(needs("plain"), None);
+
+                let lowered = |features: FeatureSet| {
+                    let mut input = elab.mono_input();
+                    input.features.lowered = features;
+                    let (program, reports) = crate::full::mono::monomorphize(&input);
+                    assert!(reports.is_empty(), "{reports:#?}");
+                    program
+                        .functions
+                        .iter()
+                        .map(|f| program.symbol(f.symbol).to_string())
+                        .collect::<Vec<_>>()
+                };
+                let all = lowered(FeatureSet::all());
+                assert!(all.iter().any(|s| s.contains("twice")), "{all:#?}");
+                let without = lowered(FeatureSet::from_fn(|f| f != Feature::Rcgmp));
+                assert!(without.iter().any(|s| s.contains("plain")), "{without:#?}");
+                assert!(
+                    !without
+                        .iter()
+                        .any(|s| s.contains("twice") || s.contains("hidden")),
+                    "{without:#?}"
                 );
             },
         );
