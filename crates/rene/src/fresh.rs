@@ -147,6 +147,13 @@ pub fn recorded_bake(dir: Option<&BuildDir>, target: &str) -> Result<Option<RtAr
         .and_then(|record| serde_json::from_str(&record).ok()))
 }
 
+/// Whether `path` lies under `dir`, comparing canonical paths so that one
+/// spelled relative and one absolute agree.
+fn within(path: &Path, dir: &Path) -> bool {
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    canonical(path).starts_with(canonical(dir))
+}
+
 /// One node's local freshness — no upstream-stale propagation, so at
 /// execution time (when the cone is final) the answer is exact.
 pub fn node_state(graph: &Graph, name: &str, ctx: &Context<'_>) -> Result<State, String> {
@@ -230,6 +237,15 @@ fn dep_state(
     }
     if record.toolchain != bake.rustc_version {
         return Ok(State::ToolchainChanged);
+    }
+    // The recorded sources must still be the package's: the bundled `core`
+    // unpacks under a content-hashed directory, so a rene upgrade moves its
+    // root while the old files stay in place, unchanged.
+    if let Some(moved) = sources
+        .iter()
+        .find(|file| !within(Path::new(&file.path), &node.dir))
+    {
+        return Ok(State::FileChanged(moved.path.clone()));
     }
     if let Some((path, _)) = deps::changed_file(&sources) {
         return Ok(State::FileChanged(path));
@@ -522,6 +538,40 @@ mod tests {
                 hash: *blake3::hash(&contents).as_bytes(),
             },
         }]
+    }
+
+    /// A dependency whose package directory moved (the bundled `core` after
+    /// a rene upgrade) is rebuilt, though its old files are untouched.
+    #[test]
+    fn moved_package_sources_are_stale() {
+        let mut f = fixture();
+        let profile =
+            manifest::resolve_profile(&f.graph.nodes["app"].loaded.manifest, "dev").unwrap();
+        record_dep(
+            &f.graph,
+            "util",
+            &ctx(&f, &profile),
+            &fake_bake(),
+            &util_sources(&f),
+        )
+        .unwrap();
+        assert_eq!(
+            states(&f.graph, &ctx(&f, &profile)).unwrap()["util"],
+            State::Current
+        );
+
+        let old = f.graph.nodes["util"].dir.clone();
+        let moved = old.with_file_name("util-v2");
+        std::fs::create_dir_all(moved.join("src")).unwrap();
+        for file in [manifest::MANIFEST_FILE, "src/lib.rr"] {
+            std::fs::copy(old.join(file), moved.join(file)).unwrap();
+        }
+        f.graph.nodes.get_mut("util").unwrap().dir = moved;
+        let state = &states(&f.graph, &ctx(&f, &profile)).unwrap()["util"];
+        assert!(
+            matches!(state, State::FileChanged(path) if path.starts_with(&*old.to_string_lossy())),
+            "{state:?}"
+        );
     }
 
     /// The full lifecycle: uninitialized → recorded (current, dependents
