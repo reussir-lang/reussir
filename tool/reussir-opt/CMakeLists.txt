@@ -35,6 +35,10 @@ target_link_libraries(reussir-opt
     MLIROptLib
 )
 
+if(REUSSIR_ENABLE_RCGMP)
+  target_link_libraries(reussir-opt PRIVATE ReussirRCGMP)
+endif()
+
 if(REUSSIR_ENABLE_OPENXLA)
   target_compile_definitions(reussir-opt PRIVATE REUSSIR_ENABLE_OPENXLA)
   target_link_libraries(reussir-opt PRIVATE ReussirStablehlo ReussirIfrt)

@@ -31,6 +31,11 @@
 #include "Sync/Conversion/Passes.h"
 #include "Sync/IR/SyncDialect.h"
 
+#ifdef REUSSIR_ENABLE_RCGMP
+#include "RCGMP/Conversion/ConvertRCGMPToSCF.h"
+#include "RCGMP/IR/RCGMPDialect.h"
+#endif
+
 #ifdef REUSSIR_ENABLE_OPENXLA
 void registerStablehloDialectsAndPasses(mlir::DialectRegistry &registry);
 void registerIfrtDialectsAndPasses(mlir::DialectRegistry &registry);
@@ -47,6 +52,12 @@ int main(int argc, char **argv) {
   registry.insert<mlir::sync::SyncDialect>();
   reussir::registerReussirBasicOpsLoweringInterface(registry);
   mlir::sync::registerConvertSyncToLLVMInterface(registry);
+#ifdef REUSSIR_ENABLE_RCGMP
+  registry.insert<mlir::rcgmp::RCGMPDialect>();
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return mlir::rcgmp::createConvertRCGMPToSCFPass();
+  });
+#endif
   mlir::registerConvertToLLVMDependentDialectLoading(registry);
   mlir::registerAllExtensions(registry);
   mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);

@@ -119,4 +119,27 @@ mod tests {
         let module = Module::parse(&context, source).expect("module should parse");
         assert!(module.as_operation().verify());
     }
+
+    #[test]
+    fn rcgmp_dialect_follows_its_feature() {
+        let context = Context::new();
+        register_all_dialects(&context);
+
+        let source = r#"
+            module {
+              func.func @double(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+                rcgmp.retain %x : !rcgmp.mpz
+                %r = rcgmp.addi %x, %x : !rcgmp.mpz
+                func.return %r : !rcgmp.mpz
+              }
+            }
+        "#;
+
+        let module = Module::parse(&context, source);
+        if crate::features::enabled("rcgmp") {
+            assert!(module.expect("module should parse").as_operation().verify());
+        } else {
+            assert!(module.is_none());
+        }
+    }
 }

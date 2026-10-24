@@ -61,6 +61,10 @@ MLIR_DEFINE_CAPI_DIALECT_REGISTRATION(Reussir, reussir,
 void registerIfrtDialects(mlir::DialectRegistry &registry);
 #endif
 
+#ifdef REUSSIR_ENABLE_RCGMP
+#include "RCGMP/IR/RCGMPDialect.h"
+#endif
+
 namespace {
 // Populates a registry with the Reussir dialect plus the minimal set of
 // upstream dialects, ConvertToLLVM interfaces and translations the lowering
@@ -81,6 +85,9 @@ void populateReussirRegistry(mlir::DialectRegistry &registry) {
                   mlir::math::MathDialect, mlir::ub::UBDialect,
                   mlir::func::FuncDialect, mlir::cf::ControlFlowDialect,
                   mlir::ptr::PtrDialect, mlir::sync::SyncDialect>();
+#ifdef REUSSIR_ENABLE_RCGMP
+  registry.insert<mlir::rcgmp::RCGMPDialect>();
+#endif
 
   // Since MLIR 17 the func dialect's DialectInlinerInterface lives in a
   // separately registered extension; without it the inliner pass resolves no

@@ -96,6 +96,15 @@ if(REUSSIR_ENABLE_OPENXLA)
     list(APPEND REUSSIR_BACKEND_OPTIONAL_ARCHIVES "plain ${archive}")
   endforeach()
 endif()
+if(REUSSIR_ENABLE_RCGMP)
+  target_link_libraries(ReussirCAPI PRIVATE ReussirRCGMP)
+  # Conversions before the dialect library they reference.
+  set(REUSSIR_RCGMP_ARCHIVES MLIRRCGMPToSCF MLIRRCGMPToLLVM MLIRRCGMP)
+  add_dependencies(ReussirCAPI ${REUSSIR_RCGMP_ARCHIVES})
+  foreach(archive ${REUSSIR_RCGMP_ARCHIVES})
+    list(APPEND REUSSIR_BACKEND_OPTIONAL_ARCHIVES "plain ${archive}")
+  endforeach()
+endif()
 file(GENERATE
   OUTPUT ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/reussir-backend-optional-archives.txt
   CONTENT "$<JOIN:${REUSSIR_BACKEND_OPTIONAL_ARCHIVES},\n>")

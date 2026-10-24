@@ -377,8 +377,14 @@
           # Default nixpkgs openmp, not llvmPkgs.openmp: libomp's
           # interface/ABI is stable across majors — the probe and the e2e
           # runs only need a working libomp.
+          #
+          # GMP: the rcgmp integer runtime (REUSSIR_ENABLE_RCGMP, on by
+          # default) and the programs linking it need libgmp; as a buildInput
+          # its headers and library reach both the CMake configure and the cc
+          # wrapper.
           buildInputs = [
             pkgs.llvmPackages.openmp
+            pkgs.gmp
           ];
 
           # --- CMake discovery: tell cmake exactly where the LLVM/MLIR configs are

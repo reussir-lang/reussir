@@ -5,6 +5,15 @@ project(Reussir LANGUAGES CXX C VERSION 0.1.0)
 option(REUSSIR_ENABLE_TESTS "Build tests for Reussir" ON)
 option(REUSSIR_ENABLE_PEDANTIC "Use pedantic compiler flags" OFF)
 option(REUSSIR_ENABLE_OPENXLA "Build StableHLO and IFRT tooling (requires Bazel)" OFF)
+# GMP is not readily available to MSVC toolchains, so arbitrary-precision
+# integers are opt-in there.
+if(MSVC OR REUSSIR_CARGO_BUILD_TARGET MATCHES "windows-msvc")
+  set(REUSSIR_ENABLE_RCGMP_DEFAULT OFF)
+else()
+  set(REUSSIR_ENABLE_RCGMP_DEFAULT ON)
+endif()
+option(REUSSIR_ENABLE_RCGMP "Build arbitrary-precision integers on the rcgmp dialect (requires GMP)"
+       ${REUSSIR_ENABLE_RCGMP_DEFAULT})
 set(REUSSIR_RUNTIME_SANITIZERS "" CACHE STRING "Semicolon-separated sanitizer runtimes to build (address, leak, memory, thread)")
 option(REUSSIR_MSAN_TRACK_ORIGINS "Enable origin tracking in the MSan runtime variant" ON)
 
@@ -64,6 +73,10 @@ include(cmake/Immer.cmake)
 # lock-guarded cells lower onto this dialect.
 include(cmake/MlirSync.cmake)
 
+if(REUSSIR_ENABLE_RCGMP)
+  include(cmake/RCGMP.cmake)
+endif()
+
 if(REUSSIR_ENABLE_OPENXLA)
   add_subdirectory(cmake/stablehlo)
   add_subdirectory(cmake/ifrt)
@@ -85,6 +98,7 @@ endif()
 include(cmake/ReussirFeatures.cmake)
 reussir_feature(tpde "${REUSSIR_HAS_TPDE}" "TPDE baseline code generation for the JIT")
 reussir_feature(openxla "${REUSSIR_ENABLE_OPENXLA}" "StableHLO kernels and PJRT device arrays")
+reussir_feature(rcgmp "${REUSSIR_ENABLE_RCGMP}" "Arbitrary-precision integers backed by GMP")
 reussir_write_features(${MLIR_TABLEGEN_OUTPUT_DIR}/Reussir/Features.def)
 
 include_directories(
