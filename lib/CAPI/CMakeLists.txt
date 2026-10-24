@@ -109,5 +109,17 @@ file(GENERATE
   OUTPUT ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/reussir-backend-optional-archives.txt
   CONTENT "$<JOIN:${REUSSIR_BACKEND_OPTIONAL_ARCHIVES},\n>")
 
+# The rcgmp integer runtime and the GMP library that in-process JIT hosts link
+# (crates/reussir-jit/build.rs), one path per line. Like the manifest above, it
+# is written empty when rcgmp is disabled.
+set(REUSSIR_JIT_RCGMP_RUNTIME "")
+if(REUSSIR_ENABLE_RCGMP)
+  set(REUSSIR_JIT_RCGMP_RUNTIME "$<TARGET_FILE:RCGMPRuntime>\n${GMP_LIBRARY}\n")
+  add_dependencies(ReussirCAPI RCGMPRuntime)
+endif()
+file(GENERATE
+  OUTPUT ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/reussir-jit-rcgmp-runtime.txt
+  CONTENT "${REUSSIR_JIT_RCGMP_RUNTIME}")
+
 # Aggregate target the Rust crates depend on.
 add_custom_target(reussir-capi DEPENDS ReussirCAPI ${REUSSIR_BACKEND_ARCHIVES})

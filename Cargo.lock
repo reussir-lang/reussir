@@ -3692,6 +3692,7 @@ version = "0.1.0"
 dependencies = [
  "llvm-sys",
  "melior",
+ "object",
  "reussir-backend",
  "reussir-backend-sys",
  "reussir-rt",

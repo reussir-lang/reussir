@@ -237,3 +237,55 @@ fn rc_create_fetch_refcount() {
     // `index` is pointer-sized; on a 64-bit host it reads back as an i64.
     assert_eq!(call_returning_i64(&jit, "rc_refcount"), 1);
 }
+
+/// Example 4: arbitrary-precision integers. 25! outgrows the immediate range,
+/// so the multiplications and the comparison call the linked-in rcgmp runtime,
+/// whose entry points [`OrcJit::with_runtime`] defines alongside the Reussir
+/// runtime's. Both JIT code generators run it, TPDE being the REPL's default.
+#[test]
+fn rcgmp_factorial_calls_the_linked_in_runtime() {
+    if !reussir_backend::features::enabled("rcgmp") {
+        return;
+    }
+    let mut levels = vec![OptLevel::Default];
+    if reussir_backend::features::enabled("tpde") {
+        levels.push(OptLevel::Tpde);
+    }
+    for level in levels {
+        assert_eq!(rcgmp_factorial_matches(level), 1, "{level:?}");
+    }
+}
+
+fn rcgmp_factorial_matches(level: OptLevel) -> i64 {
+    let context = reussir_backend::context();
+    let source = r#"
+        module {
+          func.func @factorial_matches() -> i64 {
+            %one = rcgmp.constant 1 : !rcgmp.mpz
+            %c1 = arith.constant 1 : i64
+            %c26 = arith.constant 26 : i64
+            %f = scf.for %i = %c1 to %c26 step %c1 iter_args(%acc = %one) -> (!rcgmp.mpz) : i64 {
+              %k = rcgmp.extsi %i : i64 to !rcgmp.mpz
+              %next = rcgmp.muli %acc, %k : !rcgmp.mpz
+              scf.yield %next : !rcgmp.mpz
+            }
+            %expected = rcgmp.constant 15511210043330985984000000 : !rcgmp.mpz
+            %eq = rcgmp.cmpi eq, %f, %expected : !rcgmp.mpz
+            rcgmp.release %f : !rcgmp.mpz
+            %r = arith.extui %eq : i1 to i64
+            func.return %r : i64
+          }
+        }
+    "#;
+    let mut module = Module::parse(&context, source).expect("module should parse");
+    let options = LoweringOptions {
+        opt: level,
+        ..LoweringOptions::default()
+    };
+    run_lowering_pipeline(&context, &mut module, &options)
+        .expect("lowering pipeline should succeed");
+
+    let jit = OrcJit::with_runtime().expect("create JIT with the runtimes");
+    jit.add_module(&module, level).expect("add module to JIT");
+    call_returning_i64(&jit, "factorial_matches")
+}

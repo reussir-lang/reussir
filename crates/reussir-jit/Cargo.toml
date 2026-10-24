@@ -26,3 +26,7 @@ reussir-backend-sys = { path = "../reussir-backend-sys" }
 # allocator of anything that links the JIT.
 reussir-rt = { path = "../reussir-rt", default-features = false }
 tracing.workspace = true
+
+[build-dependencies]
+# Reads the rcgmp runtime archive's symbol index for the JIT symbol table.
+object = { version = "0.37", default-features = false, features = ["read_core", "archive"] }
