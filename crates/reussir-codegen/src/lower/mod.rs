@@ -178,8 +178,8 @@ enum LoweringErrorKind {
     },
 }
 
-fn openxla_disabled_message(what: &str) -> String {
-    format!("{what} requires the `openxla` feature, which this compiler was built without")
+fn feature_disabled_message(feature: &str, what: &str) -> String {
+    format!("{what} requires the `{feature}` feature, which this compiler was built without")
 }
 
 impl From<&'static str> for LoweringErrorKind {
@@ -201,10 +201,13 @@ impl From<Cow<'static, str>> for LoweringErrorKind {
 }
 
 impl LoweringError {
-    /// `what` reached lowering although this build lacks OpenXLA. The frontend
-    /// rejects such programs; textual HIR or MIR input can still carry them.
-    pub(crate) fn openxla_disabled(what: &str) -> Self {
-        Self(LoweringErrorKind::from(openxla_disabled_message(what)))
+    /// `what` reached lowering although this build lacks `feature`. The
+    /// frontend rejects such programs; textual HIR or MIR input can still carry
+    /// them.
+    pub(crate) fn feature_disabled(feature: &str, what: &str) -> Self {
+        Self(LoweringErrorKind::from(feature_disabled_message(
+            feature, what,
+        )))
     }
 
     fn at_source(message: impl Into<Cow<'static, str>>, file: FileId, span: Option<Span>) -> Self {

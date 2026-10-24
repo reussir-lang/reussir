@@ -1,0 +1,42 @@
+// `Nat` and `Int` end to end: constructors, literals, and comparisons on both
+// sides of the immediate range (2^61 - 1 is the largest immediate on a 64-bit
+// target), verified through the emitted ops and an end-to-end run.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri --emit mlir -o - | %FileCheck %s
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/bigint_basics.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+fn succ(n : Nat) -> Nat { Nat::Succ{n} }
+fn neg_succ(n : Nat) -> Int { Int::NegSucc{n} }
+fn of_nat(n : Nat) -> Int { Int::OfNat{n} }
+fn max(a : Nat, b : Nat) -> Nat { if a < b { b } else { a } }
+
+pub fn main() -> i64 {
+    let small_ok = if succ(Nat::Zero) == 1 && succ(41) == 42 { 1 } else { 0 };
+    let heap_ok = if succ(2305843009213693951) == 2305843009213693952
+        && succ(18446744073709551615) == 18446744073709551616 { 1 } else { 0 };
+    let int_ok = if neg_succ(0) == -1 && of_nat(7) == 7
+        && neg_succ(2305843009213693951) == -2305843009213693952
+        && neg_succ(2305843009213693952) == -2305843009213693953 { 1 } else { 0 };
+    let order_ok = if neg_succ(5) < of_nat(0) && of_nat(0) <= of_nat(Nat::Zero)
+        && -340282366920938463463374607431768211456 < neg_succ(0) { 1 } else { 0 };
+    // `big` is compared several times before its last use releases it.
+    let big = max(3, succ(18446744073709551616));
+    let shared_ok = if big == 18446744073709551617 && big > 3 && big != Nat::Zero
+        && big >= big { 1 } else { 0 };
+    let cmp_ok = match succ(1).cmp(2) { Ordering::Equal => 1, _ => 0 };
+    small_ok + heap_ok * 10 + int_ok * 100 + order_ok * 1000 + shared_ok * 10000
+        + cmp_ok * 100000
+}
+
+extern "C" trampoline "reussir_main" = main;
+
+// CHECK-DAG: rcgmp.constant 18446744073709551616 : !rcgmp.mpz
+// CHECK-DAG: rcgmp.addi
+// CHECK-DAG: rcgmp.noti
+// CHECK-DAG: rcgmp.cmpi slt
+// CHECK-DAG: rcgmp.release
+// CHECK-NOT: reussir.rc.inc

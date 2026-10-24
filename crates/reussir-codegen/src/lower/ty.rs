@@ -207,7 +207,7 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
             TyKind::Array { .. } => Ok(self.rc_type(self.array_inner_of(ty)?)),
             TyKind::DevArray { .. } => Ok(self.rc_type(self.devarray_inner_of(ty)?)),
             TyKind::Token => reussir_backend::dialect::ty::stablehlo_token(self.context)
-                .ok_or_else(|| LoweringError::openxla_disabled("Token lowering")),
+                .ok_or_else(|| LoweringError::feature_disabled("openxla", "Token lowering")),
             TyKind::Future(payloads) => {
                 if payloads.is_empty()
                     || payloads
@@ -221,7 +221,7 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
                     .map(|&p| self.mlir_ty(p))
                     .collect::<Result<Vec<_>>>()?;
                 reussir_backend::dialect::ty::stablehlo_future(self.context, &payloads)
-                    .ok_or_else(|| LoweringError::openxla_disabled("Future lowering"))
+                    .ok_or_else(|| LoweringError::feature_disabled("openxla", "Future lowering"))
             }
             TyKind::Tensor { elem, dims } => {
                 if reussir_core::semi::ty_eval::tensor_element_rejection(elem).is_some() {
@@ -320,6 +320,7 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
     /// as the explicit member type `rc<…, shared, atomic>` — the only rc member
     /// form the dialect admits.
     fn member_ty(&self, ty: Ty<'tcx>) -> Result<Type<'c>> {
+        reject_bigint_member(ty, "a record or tuple")?;
         match *ty.kind() {
             TyKind::Arc(_) => self.mlir_ty(ty),
             // An opaque `#[ffi]` member cannot be spelled as a bare record
@@ -566,7 +567,11 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
         let input_tys = inputs
             .iter()
             .filter(|&&t| !is_unit(t))
-            .map(|&t| self.mlir_ty(t))
+            .map(|&t| {
+                // Applying an argument stores it in the closure's box.
+                reject_bigint_member(t, "a closure")?;
+                self.mlir_ty(t)
+            })
             .collect::<Result<Vec<_>>>()?;
         let output = if is_unit(ret) {
             None
@@ -633,6 +638,7 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
         let TyKind::Array { elem, dims } = *ty.kind() else {
             return err("array payload requested for a non-array type");
         };
+        reject_bigint_member(elem, "an array")?;
         let elem = self.mlir_ty(elem)?;
         let shape: Vec<i64> = dims
             .iter()
@@ -654,6 +660,7 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
         let TyKind::Cell { elem, kind } = *ty.kind() else {
             return err("cell payload requested for a non-cell type");
         };
+        reject_bigint_member(elem, "a cell")?;
         Ok(cell_with_kind(self.mlir_ty(elem)?, backend_cell_kind(kind)))
     }
 
@@ -802,6 +809,18 @@ fn capability(cap: DefaultCap) -> ReussirCapability {
     }
 }
 
+/// `Nat` and `Int` cannot be stored inside another value yet: the dialect's
+/// member acquire and drop do not reach `!rcgmp.mpz`.
+fn reject_bigint_member(ty: Ty<'_>, container: &str) -> Result<()> {
+    match *ty.kind() {
+        TyKind::BigInt(b) => err(format!(
+            "`{}` cannot be stored in {container} yet",
+            b.name()
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Whether `ty` is the unit type (which carries no MLIR SSA value).
 pub(super) fn is_unit(ty: Ty<'_>) -> bool {
     matches!(ty.kind(), TyKind::Unit)
@@ -829,7 +848,8 @@ fn scalar_ty<'c>(context: &'c Context, ty: Ty<'_>) -> Result<Type<'c>> {
         TyKind::Fp(FpTy::Float8) => err("float8 has no standard MLIR builtin type"),
         TyKind::Bool => Ok(IntegerType::new(context, 1).into()),
         TyKind::Char => Ok(IntegerType::new(context, 32).into()),
-        TyKind::BigInt(b) => err(format!("`{}` values cannot be compiled yet", b.name())),
+        TyKind::BigInt(b) => reussir_backend::rcgmp::mpz_type(context)
+            .ok_or_else(|| LoweringError::feature_disabled("rcgmp", &format!("`{}`", b.name()))),
         TyKind::DefaultPlacement => Ok(reussir_backend::dialect::ty::record_complete(
             context,
             &[],

@@ -629,6 +629,15 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             ExprKind::Negate(x) | ExprKind::Not(x) | ExprKind::Cast(x, _) => {
                 self.place(x, live_after);
             }
+            // A comparison of reference-counted operands (the built-in
+            // integers) borrows them: each is released after the comparison
+            // when it was the operand's last use, left to right as below.
+            ExprKind::Cmp(l, _, r) if self.rr.is_rr(l.ty) => {
+                let mut la = self.free(r);
+                la.union_with(live_after);
+                self.navigate_base(l, e.id, &la);
+                self.navigate_base(r, e.id, live_after);
+            }
             // Scalar binary, left-to-right: `l` is live across `r`.
             ExprKind::Arith(l, _, r) | ExprKind::Cmp(l, _, r) => {
                 let mut la = self.free(r);

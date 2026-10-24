@@ -805,6 +805,11 @@ fn interp<'tcx>(
             }
         }
         ExprKind::Negate(x) | ExprKind::Not(x) | ExprKind::Cast(x, _) => interp(x, ot, rr, rc),
+        // Comparing reference-counted operands borrows them.
+        ExprKind::Cmp(l, _, r) if rr.is_rr(l.ty) => {
+            interp_borrow(l, ot, rr, rc);
+            interp_borrow(r, ot, rr, rc);
+        }
         ExprKind::Arith(l, _, r) | ExprKind::Cmp(l, _, r) => {
             interp(l, ot, rr, rc);
             interp(r, ot, rr, rc);
@@ -1204,6 +1209,39 @@ fn case2_two_uses_dup_all_but_last() {
 
         assert_eq!(ot.before(a0_id), &[RcOp::Dup(x)], "first occurrence dup'd");
         assert!(ot.before(a1_id).is_empty(), "last occurrence moved");
+    });
+}
+
+#[test]
+fn bigint_comparison_borrows_its_operands() {
+    // fn f(x: Nat, y: Nat) -> Nat { let c = x < y; x }
+    //   the comparison borrows: y (dead afterwards) is dropped after it, x is
+    //   neither dup'd for the comparison nor dropped, and is moved out.
+    with_tcx(|tcx| {
+        use crate::semi::hir::CmpOp;
+        use crate::semi::ty::BigIntTy;
+        let mut b = MirBuilder::new(tcx);
+        let nat = tcx.mk_bigint(BigIntTy::Nat);
+        let bool_ty = tcx.mk_bool();
+        let (x, y, c) = (b.fresh_var(), b.fresh_var(), b.fresh_var());
+
+        let lhs = b.var(x, nat);
+        let rhs = b.var(y, nat);
+        let (lhs_id, rhs_id) = (lhs.id, rhs.id);
+        let (lhs, rhs) = (tcx.alloc(lhs), tcx.alloc(rhs));
+        let less = b.mk(ExprKind::Cmp(lhs, CmpOp::Lt, rhs), bool_ty);
+        let less_id = less.id;
+        let let_stmt = b.let_(c, less);
+        let result = b.var(x, nat);
+        let body = b.seq(vec![let_stmt, result], nat);
+
+        let (px, py) = (b.param(x, nat), b.param(y, nat));
+        let func = b.function("f", vec![px, py], nat, body);
+        let ot = run(tcx, &func, &b);
+
+        assert!(ot.before(lhs_id).is_empty(), "x is borrowed, not dup'd");
+        assert!(ot.before(rhs_id).is_empty(), "y is borrowed, not dup'd");
+        assert_eq!(ot.after(less_id), &[RcOp::Drop(y)], "y released after");
     });
 }
 

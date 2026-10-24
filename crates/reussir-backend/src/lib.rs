@@ -21,6 +21,7 @@ pub mod dialect;
 pub mod features;
 pub mod llvm;
 pub mod pipeline;
+pub mod rcgmp;
 
 /// Returns the [`DialectHandle`] for the Reussir dialect.
 ///
@@ -66,6 +67,10 @@ pub fn context() -> Context {
     context.get_or_load_dialect("cf");
     // The array ops (issue #344) build `memref` views/loads/stores directly.
     context.get_or_load_dialect("memref");
+    // `Nat` and `Int` lower to the optional arbitrary-precision integers.
+    if features::enabled("rcgmp") {
+        context.get_or_load_dialect("rcgmp");
+    }
     context
 }
 

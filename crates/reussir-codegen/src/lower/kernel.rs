@@ -153,7 +153,10 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
             TyKind::Token => stablehlo_token(self.context)
                 .map(|t| vec![t])
                 .ok_or_else(|| {
-                    self.error(super::openxla_disabled_message("kernel lowering"), None)
+                    self.error(
+                        super::feature_disabled_message("openxla", "kernel lowering"),
+                        None,
+                    )
                 }),
             TyKind::Future(payloads) => {
                 let mut types = Vec::new();
@@ -253,7 +256,7 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
         self.file.set(function.file);
         if stablehlo_token(self.context).is_none() {
             return Err(self.error(
-                super::openxla_disabled_message("kernel lowering"),
+                super::feature_disabled_message("openxla", "kernel lowering"),
                 function.body.and_then(|b| b.span),
             ));
         }

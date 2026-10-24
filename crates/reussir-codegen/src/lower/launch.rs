@@ -36,7 +36,7 @@ pub(super) fn buffer_types<'c>(
     match ty.kind() {
         TyKind::DevArray { .. } => out.push(
             ifrt_array(tys.devarray_inner_of(ty)?)
-                .ok_or_else(|| LoweringError::openxla_disabled("kernel launch"))?,
+                .ok_or_else(|| LoweringError::feature_disabled("openxla", "kernel launch"))?,
         ),
         TyKind::Tuple(fields) => {
             for &field in *fields {
@@ -90,7 +90,7 @@ pub(super) fn outline<'c, 'p, 'tcx>(
         buffer_types(tys, arg.ty, &mut input_buffers)?;
     }
     let output = ifrt_array(tys.devarray_inner_of(expr.ty)?)
-        .ok_or_else(|| LoweringError::openxla_disabled("kernel launch"))?;
+        .ok_or_else(|| LoweringError::feature_disabled("openxla", "kernel launch"))?;
     if reussir_backend::dialect::ty::ifrt_requires_global_extents(output) {
         return err(
             "partitioned dynamic launch results require an explicit logical result-shape contract; use a static result shape or an unpartitioned placement",

@@ -33,6 +33,7 @@ use reussir_backend::melior::ir::r#type::{FunctionType, IntegerType, MemRefType}
 use reussir_backend::melior::ir::{
     Block, BlockLike, Identifier, Location, Operation, Region, RegionLike, Type, Value, ValueLike,
 };
+use reussir_backend::rcgmp;
 
 use reussir_core::full::mir::{self, DecisionTree, Expr, ExprKind, SwitchCases};
 use reussir_core::full::ownership::{OwnershipTable, RcOp, RecordTable, analyze_function};
@@ -50,6 +51,8 @@ use crate::source::{FileId, SourceCache};
 
 use super::ty::{TypeCtx, field_link_element, is_unit, num_class, regional_capability};
 use super::{LinkagePolicy, LoweringError, Result, err};
+
+mod bigint;
 
 /// The lexical environment threaded through one block scope: the SSA value bound
 /// to each in-scope variable, together with the enclosing region handle regional
@@ -784,6 +787,9 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             } => self.lower_while(block, env, *state, initial, condition, body),
             // Emitted at full width via the textual APInt path — the value
             // was range-checked against `e.ty` at monomorphization.
+            ConstInt(n) if matches!(e.ty.kind(), TyKind::BigInt(_)) => {
+                Ok(Some(self.bigint_constant(block, n, e.ty)?))
+            }
             ConstInt(n) => Ok(Some(self.wide_int_constant(block, n, e.ty)?)),
             ConstBool(b) => {
                 let i1 = IntegerType::new(self.context, 1).into();
@@ -1104,6 +1110,9 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             }
             Match(scrut, tree) => self.lower_match(block, env, e, scrut, tree),
             Ctor { args, .. } => self.compound(block, env, e, args).map(Some),
+            Variant { variant, args, .. } if matches!(e.ty.kind(), TyKind::BigInt(_)) => {
+                self.bigint_ctor(block, env, e, *variant, args).map(Some)
+            }
             Variant { variant, args, .. } => self.variant(block, env, e, *variant, args).map(Some),
             NullableCall(inner) => self.nullable_call(block, env, e, *inner).map(Some),
             Closure(c) => self.closure(block, env, c).map(Some),
@@ -1830,6 +1839,12 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         cases: SwitchCases<'tcx>,
         result_ty: Ty<'tcx>,
     ) -> Result<Option<Value<'c, 'b>>> {
+        if let Some((_, Anchor::Root { ty, .. })) = env.anchors.get(root_idx)
+            && path.is_empty()
+            && let TyKind::BigInt(int) = ty.kind()
+        {
+            return err(format!("matching on `{}` does not lower yet", int.name()));
+        }
         match cases {
             SwitchCases::Ctor(subtrees) => {
                 self.ctor_switch(block, env, root_idx, path, subtrees, result_ty)
@@ -2641,7 +2656,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         use reussir_backend::melior::ir::operation::OperationBuilder;
         let result = self.tys.mlir_ty(expr.ty)?;
         let output = ifrt_array(self.tys.devarray_inner_of(expr.ty)?)
-            .ok_or_else(|| LoweringError::openxla_disabled("kernel launch"))?;
+            .ok_or_else(|| LoweringError::feature_disabled("openxla", "kernel launch"))?;
         let control = Type::parse(self.context, "!ifrt.control")
             .ok_or_else(|| LoweringError("IFRT control type is unavailable".into()))?;
         let devices =
@@ -2760,7 +2775,9 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     .ok_or_else(|| LoweringError("device launch operand has no value".into()))?;
                 let view =
                     reussir_backend::dialect::ty::ifrt_array(self.tys.devarray_inner_of(ty)?)
-                        .ok_or_else(|| LoweringError::openxla_disabled("kernel launch"))?;
+                        .ok_or_else(|| {
+                            LoweringError::feature_disabled("openxla", "kernel launch")
+                        })?;
                 let op = OperationBuilder::new("reussir.array.to_ifrt", self.loc())
                     .add_operands(&[value])
                     .add_results(&[view])
@@ -3209,6 +3226,10 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     /// a reference (which increments every rc pointer it reaches).
     fn emit_inc<'b>(&self, block: &'b Block<'c>, val: Value<'c, 'b>, ty: Ty<'tcx>) -> Result<()> {
         let loc = self.loc();
+        if matches!(ty.kind(), TyKind::BigInt(_)) {
+            block.append_operation(rcgmp::retain(val, loc));
+            return Ok(());
+        }
         // A managed `rc` pointer — a shared record, a rigid regional record, or a
         // closure — is bumped directly; an inline `[value]` record is acquired
         // through a reference (which reaches the rc pointers inside it).
@@ -3231,6 +3252,10 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     /// reference (releasing every rc pointer it reaches).
     fn emit_dec<'b>(&self, block: &'b Block<'c>, val: Value<'c, 'b>, ty: Ty<'tcx>) -> Result<()> {
         let loc = self.loc();
+        if matches!(ty.kind(), TyKind::BigInt(_)) {
+            block.append_operation(rcgmp::release(val, loc));
+            return Ok(());
+        }
         // The dual of [`emit_inc`](Self::emit_inc): a managed `rc` pointer (shared
         // record, rigid regional record, or closure) is decremented directly, an
         // inline `[value]` record dropped through a reference.
@@ -3408,6 +3433,9 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let rv = self
             .expr(block, env, r)?
             .ok_or_else(|| LoweringError("cmp operand is unit".into()))?;
+        if matches!(operand_ty.kind(), TyKind::BigInt(_)) {
+            return Ok(self.bigint_cmp(block, env, l, lv, op, r, rv));
+        }
         // Strings compare through the dedicated ops: `==`/`!=` via byte
         // equality, orderings via the memcmp-convention three-way compare
         // against zero. This also serves `Ord::cmp` — the synthesized

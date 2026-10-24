@@ -349,6 +349,17 @@ pub fn int_fits(n: &Integer, ty: IntTy) -> bool {
     }
 }
 
+/// The width of the narrowest two's-complement integer holding `n`: one sign
+/// bit above its magnitude, so zero and `-1` take one bit.
+pub fn signed_width(n: &Integer) -> u64 {
+    let magnitude_bits = if *n >= 0 {
+        n.unsigned_abs_ref().significant_bits()
+    } else {
+        (n.unsigned_abs_ref() - Natural::ONE).significant_bits()
+    };
+    magnitude_bits + 1
+}
+
 /// The low 64 bits of `n`, two's complement — the value MLIR's
 /// `DenseI64ArrayAttribute` and friends want for a key that fits its type.
 pub fn low_u64(n: &Integer) -> u64 {
@@ -362,6 +373,19 @@ mod tests {
 
     fn lit(s: &str) -> FloatLit {
         parse_float(s)
+    }
+
+    #[test]
+    fn signed_width_is_the_narrowest_twos_complement() {
+        let width = |text: &str| signed_width(&text.parse::<Integer>().unwrap());
+        assert_eq!(width("0"), 1);
+        assert_eq!(width("-1"), 1);
+        assert_eq!(width("1"), 2);
+        assert_eq!(width("-2"), 2);
+        assert_eq!(width("127"), 8);
+        assert_eq!(width("-128"), 8);
+        assert_eq!(width("128"), 9);
+        assert_eq!(width("18446744073709551616"), 66);
     }
 
     #[test]
