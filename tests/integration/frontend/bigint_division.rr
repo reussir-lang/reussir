@@ -1,0 +1,38 @@
+// `Nat` and `Int` division and remainder end to end: both truncate, as they do
+// for fixed-width integers, on immediate and heap operands, and a zero divisor
+// terminates the program.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri --emit mlir -o - | %FileCheck %s
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/bigint_division.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %if wine-quirks %{ %not %} %else %{ %not --crash %} %t.exe zero
+
+fn factorial(n : Nat) -> Nat { if n == 0 { 1 } else { n * factorial(n - 1) } }
+
+fn int(x : i64) -> Int { x as Int }
+
+pub fn divide_by(divisor : u64) -> i64 { (factorial(30) / (divisor as Nat)) as i64 }
+
+pub fn main() -> i64 {
+    let seventeen : Nat = 17;
+    let nat_ok = if seventeen / 5 == 3 && seventeen % 5 == 2 && seventeen / 18 == 0 { 1 } else { 0 };
+    let heap_ok = if factorial(30) / factorial(28) == 870
+        && factorial(30) % 2305843009213693953 == 458678032916775756 { 1 } else { 0 };
+    let int_ok = if int(-17) / int(5) == -3 && int(-17) % int(5) == -2
+        && int(17) / int(-5) == -3 && int(17) % int(-5) == 2 { 1 } else { 0 };
+    // The smallest immediate divided by -1 leaves the immediate range.
+    let big : Int = -340282366920938463463374607431768211456;
+    let edge_ok = if int(-2305843009213693952) / int(-1) == 2305843009213693952
+        && big / int(3) == -113427455640312821154458202477256070485
+        && big % int(3) == -1 { 1 } else { 0 };
+    nat_ok + heap_ok * 10 + int_ok * 100 + edge_ok * 1000
+}
+
+extern "C" trampoline "reussir_main" = main;
+extern "C" trampoline "divide_by" = divide_by;
+
+// CHECK-DAG: rcgmp.divsi
+// CHECK-DAG: rcgmp.remsi

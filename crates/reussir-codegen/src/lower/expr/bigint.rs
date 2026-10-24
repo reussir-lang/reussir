@@ -105,7 +105,9 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     }
 
     /// Integer arithmetic, consuming both operands. Subtraction on `Nat` is
-    /// truncated at zero, so the type stays closed under it.
+    /// truncated at zero, so the type stays closed under it. Division and
+    /// remainder truncate, as they do for fixed-width integers, and a zero
+    /// divisor terminates the program.
     pub(super) fn bigint_arith<'b>(
         &self,
         block: &'b Block<'c>,
@@ -119,6 +121,8 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             (ArithOp::Sub, BigIntTy::Nat) => Binary::Monus,
             (ArithOp::Sub, BigIntTy::Int) => Binary::Sub,
             (ArithOp::Mul, _) => Binary::Mul,
+            (ArithOp::Div, _) => Binary::Div,
+            (ArithOp::Mod, _) => Binary::Rem,
             _ => return err(format!("`{op:?}` on `{}` does not lower yet", int.name())),
         };
         Ok(self.append(block, rcgmp::binary(binary, lv, rv, self.loc())))

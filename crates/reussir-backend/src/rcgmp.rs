@@ -63,6 +63,10 @@ pub enum Binary {
     /// Subtraction clamped at zero.
     Monus,
     Mul,
+    /// Truncated quotient; a zero divisor terminates the program.
+    Div,
+    /// Truncated remainder; a zero divisor terminates the program.
+    Rem,
 }
 
 impl Binary {
@@ -72,6 +76,8 @@ impl Binary {
             Binary::Sub => "rcgmp.subi",
             Binary::Monus => "rcgmp.monusi",
             Binary::Mul => "rcgmp.muli",
+            Binary::Div => "rcgmp.divsi",
+            Binary::Rem => "rcgmp.remsi",
         }
     }
 }
