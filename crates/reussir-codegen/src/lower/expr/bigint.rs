@@ -13,10 +13,11 @@ use reussir_backend::melior::ir::{Block, Value};
 use reussir_backend::rcgmp::{self, Binary, Predicate, Unary};
 use reussir_core::full::mir::{Expr, ExprKind};
 use reussir_core::literal::{self, Integer};
-use reussir_core::semi::hir::CmpOp;
+use reussir_core::semi::hir::{ArithOp, CmpOp};
 use reussir_core::semi::ty::{BigIntTy, Ty, TyKind};
 
 use super::{Env, Lowerer};
+use crate::lower::ty::num_class;
 use crate::lower::{LoweringError, Result, err};
 
 impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
@@ -101,5 +102,57 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             block,
             rcgmp::cmpi(self.context, predicate, lv, rv, self.loc()),
         )
+    }
+
+    /// Integer arithmetic, consuming both operands. Subtraction on `Nat` is
+    /// truncated at zero, so the type stays closed under it.
+    pub(super) fn bigint_arith<'b>(
+        &self,
+        block: &'b Block<'c>,
+        int: BigIntTy,
+        op: ArithOp,
+        lv: Value<'c, 'b>,
+        rv: Value<'c, 'b>,
+    ) -> Result<Value<'c, 'b>> {
+        let binary = match (op, int) {
+            (ArithOp::Add, _) => Binary::Add,
+            (ArithOp::Sub, BigIntTy::Nat) => Binary::Monus,
+            (ArithOp::Sub, BigIntTy::Int) => Binary::Sub,
+            (ArithOp::Mul, _) => Binary::Mul,
+            _ => return err(format!("`{op:?}` on `{}` does not lower yet", int.name())),
+        };
+        Ok(self.append(block, rcgmp::binary(binary, lv, rv, self.loc())))
+    }
+
+    /// `as` between a built-in integer and another integer type. A fixed-width
+    /// source becomes a new integer: sign-extended into `Int` when signed, and
+    /// zero-extended otherwise (the checker admits only unsigned sources and
+    /// `char` into `Nat`). A fixed-width target takes the low bits of the
+    /// integer's two's complement, as a narrowing `as` does, and borrows the
+    /// operand. `Nat` into `Int` is the same integer.
+    pub(super) fn bigint_cast<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        x: &Expr<'tcx>,
+        xv: Value<'c, 'b>,
+        to: Ty<'tcx>,
+    ) -> Result<Value<'c, 'b>> {
+        let loc = self.loc();
+        let to_ty = self.tys.mlir_ty(to)?;
+        match (*x.ty.kind(), *to.kind()) {
+            (TyKind::BigInt(_), TyKind::BigInt(_)) => Ok(xv),
+            (TyKind::BigInt(_), _) => {
+                if !matches!(x.kind, ExprKind::Var(_) | ExprKind::Proj(..)) {
+                    self.remember_temp(env, x, xv);
+                }
+                Ok(self.append(block, rcgmp::trunci(xv, to_ty, loc)))
+            }
+            (_, TyKind::BigInt(int)) => {
+                let signed = int == BigIntTy::Int && num_class(x.ty)?.signed;
+                Ok(self.append(block, rcgmp::extend(xv, signed, to_ty, loc)))
+            }
+            _ => err("integer cast without a built-in integer"),
+        }
     }
 }

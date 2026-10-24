@@ -8,8 +8,8 @@
 //! [`mpz_type`] reports whether the dialect is present at all.
 //!
 //! Ownership follows the dialect: consuming operations take one owned
-//! reference per operand, while [`cmpi`] borrows its operands and leaves their
-//! references with the caller.
+//! reference per operand, while [`cmpi`] and [`trunci`] borrow their operands
+//! and leave their references with the caller.
 
 use melior::Context;
 use melior::ir::attribute::{Attribute, IntegerAttribute};
@@ -59,12 +59,19 @@ pub fn release<'c>(value: Value<'c, '_>, location: Location<'c>) -> Operation<'c
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Binary {
     Add,
+    Sub,
+    /// Subtraction clamped at zero.
+    Monus,
+    Mul,
 }
 
 impl Binary {
     fn name(self) -> &'static str {
         match self {
             Binary::Add => "rcgmp.addi",
+            Binary::Sub => "rcgmp.subi",
+            Binary::Monus => "rcgmp.monusi",
+            Binary::Mul => "rcgmp.muli",
         }
     }
 }
@@ -88,12 +95,14 @@ pub fn binary<'c>(
 pub enum Unary {
     /// Bitwise complement, `-x - 1`.
     Not,
+    Neg,
 }
 
 /// `<op> <operand>`: consume the operand and produce one owned result.
 pub fn unary<'c>(op: Unary, operand: Value<'c, '_>, location: Location<'c>) -> Operation<'c> {
     let name = match op {
         Unary::Not => "rcgmp.noti",
+        Unary::Neg => "rcgmp.negi",
     };
     OperationBuilder::new(name, location)
         .add_operands(&[operand])
@@ -131,4 +140,30 @@ pub fn cmpi<'c>(
         .add_results(&[IntegerType::new(context, 1).into()])
         .build()
         .expect("valid rcgmp.cmpi")
+}
+
+/// `rcgmp.extsi` (`signed`) or `rcgmp.extui`: a new owned integer holding a
+/// fixed-width integer read as signed or unsigned.
+pub fn extend<'c>(
+    value: Value<'c, '_>,
+    signed: bool,
+    ty: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let name = if signed { "rcgmp.extsi" } else { "rcgmp.extui" };
+    OperationBuilder::new(name, location)
+        .add_operands(&[value])
+        .add_results(&[ty])
+        .build()
+        .unwrap_or_else(|_| panic!("valid {name}"))
+}
+
+/// `rcgmp.trunci <value> : … to <ty>`: the low bits of a borrowed integer's
+/// infinite two's complement.
+pub fn trunci<'c>(value: Value<'c, '_>, ty: Type<'c>, location: Location<'c>) -> Operation<'c> {
+    OperationBuilder::new("rcgmp.trunci", location)
+        .add_operands(&[value])
+        .add_results(&[ty])
+        .build()
+        .expect("valid rcgmp.trunci")
 }

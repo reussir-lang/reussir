@@ -2907,6 +2907,55 @@ mod tests {
     }
 
     #[test]
+    fn nat_negation_and_lossy_bigint_casts_are_diagnosed() {
+        check_with_bigint(
+            "pub fn f(n: Nat) -> Nat { -n }\n\
+             pub fn g(i: Int) -> Nat { i as Nat }\n\
+             pub fn h(x: i64) -> Nat { x as Nat }\n\
+             pub fn k(n: Nat) -> f64 { n as f64 }\n\
+             pub fn ok(n: Nat, x: i32, y: u8) -> u8 { ((n as Int) - (x as Int) + ((y as Nat) as Int)) as u8 }",
+            |elab, _| {
+                let messages: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
+                assert_eq!(
+                    messages,
+                    [
+                        "a `Nat` cannot be negated",
+                        "cannot cast `Int` to `Nat`: an `Int` may be negative; convert it to `Nat` explicitly",
+                        "cannot cast `i64` to `Nat`: a signed integer may be negative; cast it to `Int` \
+                         and convert that to `Nat` explicitly",
+                        "cannot cast `Nat` to `f64`: floats do not convert to or from built-in integers",
+                    ],
+                    "{messages:#?}"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn generic_nat_negation_and_casts_are_diagnosed_at_their_instance() {
+        check_with_bigint(
+            "fn neg<T: Num>(x: T) -> T { -x }\n\
+             fn to<T: Num, U: Num>(x: T) -> U { x as U }\n\
+             pub fn f(n: Nat) -> Nat { neg(n) }\n\
+             pub fn g(x: i64) -> Nat { to(x) }",
+            |elab, _| {
+                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
+                let messages: Vec<&str> = reports.iter().map(|r| r.message.as_str()).collect();
+                assert_eq!(
+                    messages,
+                    [
+                        "a `Nat` cannot be negated",
+                        "cannot cast `i64` to `Nat`: a signed integer may be negative; cast it to `Int` \
+                         and convert that to `Nat` explicitly",
+                    ],
+                    "{messages:#?}"
+                );
+            },
+        );
+    }
+
+    #[test]
     fn negative_nat_literals_are_diagnosed() {
         check_with_bigint(
             "pub fn f() -> Nat { -1 }\n\

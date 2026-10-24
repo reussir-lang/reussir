@@ -72,7 +72,7 @@ use crate::semi::ctxt::{
 use crate::semi::hir::{self, CmpOp, DecisionTree, Expr, ExprKind, Function, SwitchCases};
 use crate::semi::resolve::DefTable;
 use crate::semi::traits::sync::{SyncEnv, SyncVerdict, wf_arc};
-use crate::semi::ty::{BigIntTy, FpTy, IntTy};
+use crate::semi::ty::{BigIntTy, FpTy, IntTy, bigint_cast_rejection};
 use crate::semi::ty::{DefId, Flexivity, Ty, TyCtxt, TyKind};
 use crate::semi::ty_eval::arc_inner_rejection;
 use crate::surface::Span;
@@ -2636,7 +2636,14 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 ExprKind::ConstFloat(f) if *f.mantissa() != 0 => {
                     M::ConstFloat(self.tcx.alloc(f.neg()))
                 }
-                _ => M::Negate(self.lower_ref(e, subst)),
+                _ => {
+                    // The checker rejects negating a `Nat` it can see; generic
+                    // code negating a `Num` reaches here at its `Nat` instance.
+                    if matches!(result_ty.kind(), TyKind::BigInt(BigIntTy::Nat)) {
+                        self.error(span, "a `Nat` cannot be negated");
+                    }
+                    M::Negate(self.lower_ref(e, subst))
+                }
             },
             ExprKind::Not(e) => M::Not(self.lower_ref(e, subst)),
             ExprKind::Arith(l, op, r) => {
@@ -2670,6 +2677,19 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
             ExprKind::Cast(e, t) => {
                 let t = subst_ty(self.tcx, *t, subst);
                 self.note_records(t);
+                let from = subst_ty(self.tcx, e.ty, subst);
+                // The checker rejects these casts when it sees both types; a
+                // generic cast reaches here once its instance is known.
+                if let Some(reason) = bigint_cast_rejection(from, t) {
+                    let name = |ty: Ty<'_>| match *ty.kind() {
+                        TyKind::BigInt(int) => int.name().to_owned(),
+                        _ => scalar_ty_name(ty),
+                    };
+                    self.error(
+                        span,
+                        format!("cannot cast `{}` to `{}`: {reason}", name(from), name(t)),
+                    );
+                }
                 M::Cast(self.lower_ref(e, subst), t)
             }
             ExprKind::If(c, t, f) => M::If(

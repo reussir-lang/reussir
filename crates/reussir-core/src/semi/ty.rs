@@ -141,6 +141,26 @@ impl BigIntTy {
     }
 }
 
+/// Why `from as to` cannot convert when a built-in integer is involved, as a
+/// clause the caller appends to its "cannot cast" diagnostic. A `Nat` holds no
+/// negative value, so neither an `Int` nor a signed fixed-width integer casts
+/// to it; floats do not convert to or from either built-in integer. Unsigned
+/// integers and `char` cast to `Nat`, and every integer casts to `Int`.
+pub fn bigint_cast_rejection(from: Ty<'_>, to: Ty<'_>) -> Option<&'static str> {
+    match (*from.kind(), *to.kind()) {
+        (TyKind::BigInt(BigIntTy::Int), TyKind::BigInt(BigIntTy::Nat)) => {
+            Some("an `Int` may be negative; convert it to `Nat` explicitly")
+        }
+        (TyKind::Int(IntTy::Signed(_)), TyKind::BigInt(BigIntTy::Nat)) => Some(
+            "a signed integer may be negative; cast it to `Int` and convert that to `Nat` explicitly",
+        ),
+        (TyKind::BigInt(_), TyKind::Fp(_)) | (TyKind::Fp(_), TyKind::BigInt(_)) => {
+            Some("floats do not convert to or from built-in integers")
+        }
+        _ => None,
+    }
+}
+
 /// A floating-point type.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum FpTy {

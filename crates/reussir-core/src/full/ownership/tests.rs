@@ -804,6 +804,7 @@ fn interp<'tcx>(
                 interp(x, ot, rr, rc);
             }
         }
+        ExprKind::Cast(x, to) if rr.is_rr(x.ty) && !rr.is_rr(to) => interp_borrow(x, ot, rr, rc),
         ExprKind::Negate(x) | ExprKind::Not(x) | ExprKind::Cast(x, _) => interp(x, ot, rr, rc),
         // Comparing reference-counted operands borrows them.
         ExprKind::Cmp(l, _, r) if rr.is_rr(l.ty) => {
@@ -1242,6 +1243,31 @@ fn bigint_comparison_borrows_its_operands() {
         assert!(ot.before(lhs_id).is_empty(), "x is borrowed, not dup'd");
         assert!(ot.before(rhs_id).is_empty(), "y is borrowed, not dup'd");
         assert_eq!(ot.after(less_id), &[RcOp::Drop(y)], "y released after");
+    });
+}
+
+#[test]
+fn bigint_narrowing_cast_borrows_its_operand() {
+    // fn f(x: Nat) -> i64 { x as i64 }  — x is borrowed, then released.
+    with_tcx(|tcx| {
+        use crate::semi::ty::BigIntTy;
+        let mut b = MirBuilder::new(tcx);
+        let nat = tcx.mk_bigint(BigIntTy::Nat);
+        let i64t = b.i64();
+        let x = b.fresh_var();
+
+        let operand = b.var(x, nat);
+        let operand_id = operand.id;
+        let operand = tcx.alloc(operand);
+        let cast = b.mk(ExprKind::Cast(operand, i64t), i64t);
+        let cast_id = cast.id;
+
+        let p = b.param(x, nat);
+        let func = b.function("f", vec![p], i64t, cast);
+        let ot = run(tcx, &func, &b);
+
+        assert!(ot.before(operand_id).is_empty(), "x is borrowed, not moved");
+        assert_eq!(ot.after(cast_id), &[RcOp::Drop(x)], "x released after");
     });
 }
 

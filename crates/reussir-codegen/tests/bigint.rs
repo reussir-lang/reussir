@@ -80,7 +80,9 @@ fn jit_run_each(source: &str, run: impl Fn(&OrcJit)) {
 }
 
 fn entry(jit: &OrcJit, name: &str) -> extern "C" fn(i64) -> i64 {
-    let address = jit.lookup(name).unwrap_or_else(|e| panic!("lookup {name}: {e}"));
+    let address = jit
+        .lookup(name)
+        .unwrap_or_else(|e| panic!("lookup {name}: {e}"));
     unsafe { std::mem::transmute(address as usize) }
 }
 

@@ -1,0 +1,10 @@
+// REQUIRES: asan, rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %S/../frontend/bigint_arith.rr --package-name bigint --extern core=%t.core.rri -o %t.ll -t llvm-ir --relocation-mode pic --sanitizer address --nullary-variant-encoding arch-independent
+// RUN: %cc %asan_flags -c -x ir %t.ll -o %t.o
+// RUN: %cc %asan_flags %t.o %S/../frontend/bigint_arith.c %reussir_rt_asan %rcgmp_runtime -o %t.exe %rpath_flag %rpath_san_flag %extra_sys_libs
+// RUN: %asan_env %t.exe
+
+// Heap integers come from the sanitized runtime's allocator through the rcgmp
+// allocation hooks, so ASan sees every retain, release and in-place reuse of
+// them, and its leak check catches an unreleased one.

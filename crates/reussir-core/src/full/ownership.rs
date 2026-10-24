@@ -624,8 +624,13 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             | ExprKind::ConstBool(_)
             | ExprKind::ConstSeq(_)
             | ExprKind::Poison => {}
-            // Scalar unary: the operand never holds an RR value, but recurse for
-            // generality (and to keep liveness threading uniform).
+            // Narrowing a reference-counted integer to a fixed-width one
+            // borrows it, like a comparison.
+            ExprKind::Cast(x, to) if self.rr.is_rr(x.ty) && !self.rr.is_rr(to) => {
+                self.navigate_base(x, e.id, live_after);
+            }
+            // Unary: a reference-counted operand (a built-in integer) is
+            // consumed; recurse to keep liveness threading uniform.
             ExprKind::Negate(x) | ExprKind::Not(x) | ExprKind::Cast(x, _) => {
                 self.place(x, live_after);
             }

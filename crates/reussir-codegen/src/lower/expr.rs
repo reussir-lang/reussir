@@ -3348,6 +3348,8 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 );
                 Ok(self.append(block, arith::subi(zero, xv, loc)))
             }
+            // Monomorphization rejects negating a `Nat`.
+            TyKind::BigInt(_) => Ok(self.append(block, rcgmp::unary(rcgmp::Unary::Neg, xv, loc))),
             _ => err("negate on non-numeric type"),
         }
     }
@@ -3386,6 +3388,9 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let rv = self
             .expr(block, env, r)?
             .ok_or_else(|| LoweringError("arith operand is unit".into()))?;
+        if let TyKind::BigInt(int) = *ty.kind() {
+            return self.bigint_arith(block, int, op, lv, rv);
+        }
         let signed = matches!(ty.kind(), TyKind::Int(IntTy::Signed(_)));
         let float = matches!(ty.kind(), TyKind::Fp(_));
         let op = match (op, float, signed) {
@@ -3516,6 +3521,9 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let xv = self
             .expr(block, env, x)?
             .ok_or_else(|| LoweringError("cast operand is unit".into()))?;
+        if matches!(x.ty.kind(), TyKind::BigInt(_)) || matches!(to.kind(), TyKind::BigInt(_)) {
+            return self.bigint_cast(block, env, x, xv, to).map(Some);
+        }
         let src = num_class(x.ty)?;
         let dst = num_class(to)?;
         let to_ty = self.tys.mlir_ty(to)?;

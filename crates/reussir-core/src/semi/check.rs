@@ -9,7 +9,7 @@ use crate::semi::traits::{
     Evidence, Obligation, SelectCtxt, SelectError, TraitDef, TraitId, TraitRef,
 };
 use crate::semi::ty::CellKind;
-use crate::semi::ty::{DefId, Flexivity, GenericId, Ty, TyKind};
+use crate::semi::ty::{BigIntTy, DefId, Flexivity, GenericId, Ty, TyKind, bigint_cast_rejection};
 use crate::surface::{self, BinOp, Const, Span, UnaryOp};
 
 use super::ctxt::{Elaborator, FuncProto, RecordFields};
@@ -1376,6 +1376,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 } else {
                     self.register_bound(self.lang.num, ty, span);
                 }
+                // `Nat` satisfies `Num` for `+` and `*`, but has no negatives.
+                if matches!(
+                    self.infer.shallow_resolve(ty).kind(),
+                    TyKind::BigInt(BigIntTy::Nat)
+                ) {
+                    self.error(span, "a `Nat` cannot be negated");
+                    return self.poison(span);
+                }
                 self.mk_expr(ExprKind::Negate(Box::new(e)), ty, span)
             }
             UnaryOp::Not => {
@@ -1404,8 +1412,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // clear diagnostic, instead of surviving to a lowering-time crash.
         //
         // `char` is its own rule outside `Num`: the value is a code point, so
-        // a cast to any integer type is allowed (`as u8` truncates to the low
-        // byte, wider targets zero-extend), but nothing casts *to* `char` —
+        // a cast to any integer type, built-in ones included, is allowed
+        // (`as u8` truncates to the low byte, wider targets zero-extend), but
+        // nothing casts *to* `char` —
         // an arbitrary integer is not necessarily a scalar value, and the FFI
         // boundary relies on every `char` being one.
         let src_ty = self.infer.shallow_resolve(e.ty);
@@ -1418,7 +1427,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return self.poison(span);
         }
         if matches!(src_ty.kind(), TyKind::Char) {
-            if !matches!(target_head.kind(), TyKind::Int(_)) {
+            if !matches!(target_head.kind(), TyKind::Int(_) | TyKind::BigInt(_)) {
                 self.error(
                     span,
                     format!(
@@ -1429,6 +1438,17 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 return self.poison(span);
             }
             return self.mk_expr(ExprKind::Cast(Box::new(e), target), target, span);
+        }
+        if let Some(reason) = bigint_cast_rejection(src_ty, target_head) {
+            self.error(
+                span,
+                format!(
+                    "cannot cast `{}` to `{}`: {reason}",
+                    self.ty_display(src_ty),
+                    self.ty_display(target_head)
+                ),
+            );
+            return self.poison(span);
         }
         self.register_bound(self.lang.num, target, span);
         self.register_bound(self.lang.num, src_ty, span);

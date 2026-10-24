@@ -1,0 +1,54 @@
+// `Nat` and `Int` arithmetic and casts end to end: results cross the
+// immediate range (2^61 - 1 is the largest immediate on a 64-bit target) in
+// both directions, `Nat` subtraction stops at zero, and casts to fixed-width
+// integers keep the low bits.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri --emit mlir -o - | %FileCheck %s
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/bigint_arith.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+fn factorial(n : Nat) -> Nat { if n == 0 { 1 } else { n * factorial(n - 1) } }
+
+fn fib(n : Nat, a : Nat, b : Nat) -> Nat { if n == 0 { a } else { fib(n - 1, b, a + b) } }
+
+fn wide(x : i64) -> Int { x as Int }
+
+pub fn main() -> i64 {
+    let max_immediate : Nat = 2305843009213693951;
+    let add_ok = if max_immediate + 1 == 2305843009213693952
+        && max_immediate + 1 - 1 == max_immediate { 1 } else { 0 };
+    let mul_ok = if factorial(30) == 265252859812191058636308480000000
+        && fib(100, 0, 1) == 354224848179261915075 { 1 } else { 0 };
+    let three : Nat = 3;
+    let monus_ok = if three - 5 == 0 && factorial(25) - factorial(26) == 0
+        && factorial(26) - factorial(25) == 387780251083274649600000000 { 1 } else { 0 };
+    let x : Int = 3;
+    let y : Int = 5;
+    let int_ok = if x - y == -2 && (x - y) * (x - y) == 4
+        && -(x * 2305843009213693952) == -6917529027641081856 { 1 } else { 0 };
+    // Negating the smallest immediate leaves the immediate range.
+    let neg_ok = if -wide(-2305843009213693952) == 2305843009213693952
+        && -(-wide(7)) == 7 { 1 } else { 0 };
+    let n : Nat = 18446744073709551621;
+    let three_hundred : u64 = 300;
+    let narrow_ok = if n as u64 == 5 && (three_hundred as Nat) as u8 == 44
+        && (wide(-1) * 256) as u16 == 65280 && wide(-1) as u64 == 18446744073709551615 { 1 } else { 0 };
+    let minus_one : i64 = -1;
+    let widen_ok = if minus_one as Int == -1 && (minus_one as u64) as Nat == 18446744073709551615
+        && 'a' as Nat == 97 && (factorial(21) as Int) - wide(1) == 51090942171709439999 { 1 } else { 0 };
+    add_ok + mul_ok * 10 + monus_ok * 100 + int_ok * 1000 + neg_ok * 10000
+        + narrow_ok * 100000 + widen_ok * 1000000
+}
+
+extern "C" trampoline "reussir_main" = main;
+
+// CHECK-DAG: rcgmp.muli
+// CHECK-DAG: rcgmp.monusi
+// CHECK-DAG: rcgmp.subi
+// CHECK-DAG: rcgmp.negi
+// CHECK-DAG: rcgmp.extsi
+// CHECK-DAG: rcgmp.extui
+// CHECK-DAG: rcgmp.trunci
