@@ -465,6 +465,9 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                 span: function.span,
                 file: function.file,
             });
+            if let Some(&needed) = parsed.requirements.get(&func.def) {
+                self.feature_requirements.insert(def, needed);
+            }
             if let Some(import) = parsed.ffi_imports.get(&func.def) {
                 let mut import = import.clone();
                 import.file = file_of(import.file);

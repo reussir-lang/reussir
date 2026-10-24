@@ -174,6 +174,7 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
         elab.features = reussir_core::feature::FeatureSet::from_fn(|feature| {
             reussir_backend::features::enabled(feature.name())
         });
+        elab.lowered_features = elab.features;
         // Before the first checkpoint, so no rollback can ever retract it.
         let repl_box = elab
             .install_repl_box(box_name, box_param, box_field)

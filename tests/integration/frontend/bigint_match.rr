@@ -1,0 +1,145 @@
+// `match` on `Nat` and `Int` end to end: literal and constructor patterns, on
+// immediate and heap values, each switch one `rcgmp.match` that consumes the
+// integer and hands its arms owned values.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri --emit mlir -o %t.mlir
+// RUN: %FileCheck %s --check-prefix=CLASSIFY < %t.mlir
+// RUN: %FileCheck %s --check-prefix=SIGN < %t.mlir
+// RUN: %FileCheck %s --check-prefix=GUARDED < %t.mlir
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/bigint_match.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+fn factorial(n : Nat) -> Nat { if n == 0 { 1 } else { n * factorial(n - 1) } }
+
+// Literals and a `Succ` chain: `case 0`, `case 1` and `at_least 2`.
+fn classify(n : Nat) -> i64 {
+    match n {
+        0 => 0,
+        1 => 1,
+        Nat::Succ(Nat::Succ(m)) => if m < 100 { 2 } else { 3 }
+    }
+}
+
+// A literal under `Succ` and an earlier, overlapping literal; first match wins.
+fn first(n : Nat) -> i64 {
+    match n {
+        3 => 30,
+        Nat::Succ(Nat::Succ(1000)) => 1002,
+        Nat::Succ(_) => 1,
+        Nat::Zero => 0
+    }
+}
+
+// The scrutinee is still used in an arm: the match gets a retained reference.
+fn sum_to(n : Nat) -> Nat {
+    match n {
+        Nat::Zero => 0,
+        Nat::Succ(m) => n + sum_to(m)
+    }
+}
+
+// The default arm takes the scrutinee itself.
+fn double_unless_zero(n : Nat) -> Nat {
+    match n {
+        0 => 1,
+        x => x * 2
+    }
+}
+
+// A guard whose failure path needs the whole scrutinee.
+fn guarded(n : Nat) -> Nat {
+    match n {
+        Nat::Succ(m) if m > 10 => m,
+        x => x + 100
+    }
+}
+
+// Used again after the match.
+fn pred_plus_self(n : Nat) -> Nat {
+    let p = match n {
+        Nat::Zero => 0,
+        Nat::Succ(m) => m
+    };
+    p + n
+}
+
+// A value the match produced, matched again.
+fn nested(n : Nat) -> i64 {
+    match n {
+        Nat::Zero => 0,
+        Nat::Succ(m) => match m {
+            7 => 7,
+            _ => 1
+        }
+    }
+}
+
+// `OfNat` and `NegSucc` with literals: `at_least`, `at_most` and `case` arms.
+fn sign(i : Int) -> i64 {
+    match i {
+        0 => 0,
+        -1 => -1,
+        Int::OfNat(Nat::Succ(k)) => if k == 0 { 1 } else { 2 },
+        Int::NegSucc(k) => if k < 1000 { -2 } else { -3 }
+    }
+}
+
+fn int(x : i64) -> Int { x as Int }
+
+pub fn main() -> i64 {
+    let f30 = factorial(30);
+    let classify_ok = if classify(0) == 0 && classify(1) == 1 && classify(50) == 2
+        && classify(factorial(30)) == 3 { 1 } else { 0 };
+    let first_ok = if first(3) == 30 && first(1002) == 1002 && first(4) == 1 && first(0) == 0
+        && first(factorial(25)) == 1 { 1 } else { 0 };
+    let sum_ok = if sum_to(100) == 5050 { 1 } else { 0 };
+    let default_ok = if double_unless_zero(0) == 1 && double_unless_zero(21) == 42
+        && double_unless_zero(factorial(30)) == factorial(30) * 2 { 1 } else { 0 };
+    let guard_ok = if guarded(20) == 19 && guarded(5) == 105 && guarded(0) == 100
+        && guarded(factorial(25)) == factorial(25) - 1 { 1 } else { 0 };
+    let after_ok = if pred_plus_self(10) == 19 && pred_plus_self(0) == 0
+        && pred_plus_self(factorial(30)) == f30 * 2 - 1 { 1 } else { 0 };
+    let nested_ok = if nested(8) == 7 && nested(9) == 1 && nested(0) == 0 { 1 } else { 0 };
+    let big : Int = -340282366920938463463374607431768211456;
+    let sign_ok = if sign(int(0)) == 0 && sign(int(-1)) == -1 && sign(int(1)) == 1
+        && sign(int(5)) == 2 && sign(int(-5)) == -2 && sign(big) == -3 { 1 } else { 0 };
+    classify_ok + first_ok * 10 + sum_ok * 100 + default_ok * 1000 + guard_ok * 10000
+        + after_ok * 100000 + nested_ok * 1000000 + sign_ok * 10000000
+}
+
+extern "C" trampoline "reussir_main" = main;
+
+// A dying scrutinee moves into the match; the `Succ` chain is one arm whose
+// argument is the remaining natural.
+// CLASSIFY-LABEL: func.func private @{{.*}}classify(%arg0
+// CLASSIFY-NOT: rcgmp.retain
+// CLASSIFY: rcgmp.match %arg0 : !rcgmp.mpz -> i64 {
+// CLASSIFY-NEXT: case 0 {
+// CLASSIFY: case 1 {
+// CLASSIFY: at_least 2 (%arg1) {
+// CLASSIFY-NOT: rcgmp.match
+// CLASSIFY: return
+
+// The `OfNat` and `NegSucc` sub-switches merge into one match.
+// SIGN-LABEL: func.func private @{{.*}}sign(%arg0
+// SIGN: rcgmp.match %arg0 : !rcgmp.mpz -> i64 {
+// SIGN-NEXT: case 0 {
+// SIGN: at_least 1 (%arg1) {
+// SIGN: case -1 {
+// SIGN: at_most -1 (%arg1) {
+// SIGN-NOT: rcgmp.match
+// SIGN: return
+
+// The failure path of the range arm needs `x`, so the match gets a retained
+// reference; the range arm's own reference is released on both paths.
+// GUARDED-LABEL: func.func private @{{.*}}guarded(%arg0
+// GUARDED: rcgmp.retain %arg0
+// GUARDED-NEXT: rcgmp.match %arg0 : !rcgmp.mpz -> !rcgmp.mpz {
+// GUARDED: at_least 1 (%arg1) {
+// GUARDED: scf.if
+// GUARDED: rcgmp.release %arg1
+// GUARDED: } else {
+// GUARDED: rcgmp.release %arg1

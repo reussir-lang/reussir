@@ -460,6 +460,16 @@ pub struct Elaborator<'a, 'tcx> {
     /// The optional features the program may use; uses of anything else are
     /// rejected where they appear. Every feature unless the driver narrows it.
     pub features: crate::feature::FeatureSet,
+    /// The optional features this compiler can lower. A ground function
+    /// needing another one is still checked and exported, but never lowered:
+    /// `core` is elaborated with every feature yet compiled by builds that
+    /// lack some. Every feature unless the driver narrows it.
+    pub lowered_features: crate::feature::FeatureSet,
+    /// The features each function needs, closed over calls (see
+    /// [`crate::semi::feature_use`]); functions needing none are absent.
+    /// Seeded with interface prototypes' needs when an extern package is
+    /// declared, then completed after each run.
+    pub feature_requirements: FxHashMap<DefId, crate::feature::FeatureSet>,
     /// Resolves the surface AST's interned token keys back into source text.
     pub resolver: &'a dyn Resolver<TokenKey>,
     pub traits: TraitDb<'tcx>,
@@ -633,6 +643,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         Elaborator {
             tcx,
             features: crate::feature::FeatureSet::all(),
+            lowered_features: crate::feature::FeatureSet::all(),
+            feature_requirements: FxHashMap::default(),
             resolver: &**interner,
             defs,
             frecency: Frecency::new(),
@@ -1142,7 +1154,25 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         } else {
             self.defs
                 .resolve_function_path(&self.classify_segs(path), path.basename)
+                .or_else(|| self.resolve_prelude_assoc_function(path))
         }
+    }
+
+    /// `T::f` where `T` is a prelude type no local record shadows: the
+    /// public function `f` declared under `T`'s own path, as its inherent
+    /// `impl` declares associated functions.
+    fn resolve_prelude_assoc_function(&self, path: &surface::Path) -> Option<DefId> {
+        let [type_name] = path.segments.as_slice() else {
+            return None;
+        };
+        if self.defs.resolve_record(*type_name).is_some() {
+            return None;
+        }
+        let record = self.prelude_lookup(*type_name, crate::semi::lang::LangItemKind::Record)?;
+        let mut key = self.defs.path(record).0.clone();
+        key.push(path.basename);
+        let def = self.defs.lookup_function(&key)?;
+        (self.item_visibility(def)? == surface::Visibility::Public).then_some(def)
     }
 
     /// Resolve a constructor path's *qualifier* as a record: for
@@ -2452,6 +2482,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self.defs.set_module(scope.module.to_vec());
             self.collect_trampoline(tramp, *span);
         });
+        self.check_feature_requirements(first_body);
     }
 
     fn validate_transform_anchor(
