@@ -106,6 +106,28 @@ pub struct MonoInput<'a, 'tcx> {
     /// compiler impl of an operator trait lowers intrinsically). Empty for
     /// re-entered dumps predating lang serialization.
     pub lang: FxHashMap<DefId, crate::semi::lang::LangItem>,
+    /// Which local ground functions this compiler can lower.
+    pub features: MonoFeatures<'a>,
+}
+
+/// The feature side of a [`MonoInput`]: a local ground function that needs a
+/// feature outside `lowered` is never a root. It stays in the export surface,
+/// and consumers that call it are rejected by the elaborator, so nothing
+/// lowered here refers to it.
+#[derive(Default, Clone, Copy)]
+pub struct MonoFeatures<'a> {
+    /// The features each function needs ([`Elaborator::feature_requirements`]);
+    /// `None` when every function can be lowered.
+    pub requirements: Option<&'a FxHashMap<DefId, crate::feature::FeatureSet>>,
+    pub lowered: crate::feature::FeatureSet,
+}
+
+impl MonoFeatures<'_> {
+    fn lowers(&self, def: DefId) -> bool {
+        self.requirements
+            .and_then(|needs| needs.get(&def))
+            .is_none_or(|&needed| self.lowered.missing(needed).is_empty())
+    }
 }
 
 /// The trait side of a [`MonoInput`]: the session registry (for resolving
@@ -173,6 +195,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 env: Some(&self.generics),
             },
             lang: self.lang.declared_by_def(),
+            features: MonoFeatures {
+                requirements: Some(&self.feature_requirements),
+                lowered: self.lowered_features,
+            },
         }
     }
 }
@@ -374,7 +400,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
     // target. Imported grounds must not seed — their definitions live in the
     // dependency's artifact and only calls reach them (as declarations).
     for f in input.elaborated {
-        if f.generics.is_empty() {
+        if f.generics.is_empty() && input.features.lowers(f.def) {
             driver.enqueue(f.def, tcx.intern_tys(&[]), f.span);
         }
     }
@@ -2490,7 +2516,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     ) {
         let name = func.as_str();
         let integer = args.first().map(|a| subst_ty(self.tcx, a.ty, subst));
-        if !integer.is_some_and(|ty| matches!(ty.kind(), TyKind::BigInt(_))) {
+        if func.takes_integer() && !integer.is_some_and(|ty| matches!(ty.kind(), TyKind::BigInt(_))) {
             self.error(
                 span,
                 format!("`core::intrinsic::bigint::{name}` takes a `Nat` or an `Int`"),
@@ -3664,6 +3690,7 @@ mod tests {
                     env: Some(&generic_env),
                 },
                 lang: parsed.lang.clone(),
+                features: Default::default(),
             };
             let (mir1, r1) = monomorphize(&input);
             assert!(r1.is_empty(), "{r1:#?}");
@@ -3982,6 +4009,7 @@ mod tests {
                 externs: MonoExterns::default(),
                 traits: MonoTraits::default(),
                 lang: Default::default(),
+                features: Default::default(),
             };
             let (mir1, r1) = monomorphize(&input);
             assert!(r1.is_empty(), "{r1:#?}");
@@ -4086,6 +4114,7 @@ mod tests {
                     env: Some(&generic_env),
                 },
                 lang: Default::default(),
+                features: Default::default(),
             };
             let (mir1, r1) = monomorphize(&input);
             assert!(r1.is_empty(), "{r1:#?}");
@@ -4143,6 +4172,7 @@ mod tests {
                 externs: MonoExterns::default(),
                 traits: MonoTraits::default(),
                 lang: Default::default(),
+                features: Default::default(),
             };
             let (_, reports) = monomorphize(&input);
             assert!(
@@ -4253,6 +4283,7 @@ mod tests {
                 externs: MonoExterns::default(),
                 traits: MonoTraits::default(),
                 lang: Default::default(),
+                features: Default::default(),
             };
             let (mir_resumed, r_resumed) = monomorphize(&resumed_input);
             assert!(r_resumed.is_empty(), "resumed mono reports: {r_resumed:#?}");
@@ -4841,6 +4872,7 @@ mod tests {
                     bodies: &closure.bodies,
                     protos: &closure.protos,
                     records: &closure.records,
+                    requirements: &dep_elab.feature_requirements,
                     file_root: None,
                 })
                 .program(&dep_elab.elaborated, &strings, &dep_elab.records, &[]);

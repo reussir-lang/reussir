@@ -46,7 +46,7 @@
 
 use crate::literal::Integer;
 use crate::semi::infer::Instantiation;
-use crate::semi::ty::{Ty, TyKind};
+use crate::semi::ty::{BigIntTy, Ty, TyKind};
 use crate::surface::{self, Const, PatternKind, Span};
 use crate::utils::string::StringToken;
 
@@ -646,6 +646,28 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 _ => None,
             })
             .expect("the chosen column has a constructor");
+        // A built-in integer column may mix literals with constructor patterns.
+        // It then switches on the constructors, and each literal is seen
+        // through them (see `peel_literal`); a literal-only column stays an
+        // integer switch.
+        let bigint = match *col_ty.kind() {
+            TyKind::BigInt(int) => Some(int),
+            _ => None,
+        };
+        let family = if bigint.is_some()
+            && m.rows.iter().any(|r| {
+                matches!(
+                    r.pats[j],
+                    Pat::Ctor {
+                        ctor: Ctor::Variant(_),
+                        ..
+                    }
+                )
+            }) {
+            Family::Variant
+        } else {
+            family
+        };
 
         let cases = match family {
             Family::Product => {
@@ -653,7 +675,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     TyKind::Tuple(fields) => *fields,
                     _ => &[],
                 };
-                let sub = self.specialize_constructor(&m, j, Ctor::Product, &occ, fields);
+                let sub = self.specialize_constructor(&m, j, Ctor::Product, &occ, fields, None);
                 return self.compile_match(sub, reached, exhaustive);
             }
             // Closed: one subtree per variant; an empty variant subtree is an
@@ -663,8 +685,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 let mut subtrees = Vec::with_capacity(n);
                 for v in 0..n {
                     let child_tys = self.variant_field_tys(col_ty, v);
-                    let sub =
-                        self.specialize_constructor(&m, j, Ctor::Variant(v), &occ, &child_tys);
+                    let sub = self.specialize_constructor(
+                        &m,
+                        j,
+                        Ctor::Variant(v),
+                        &occ,
+                        &child_tys,
+                        bigint,
+                    );
                     subtrees.push(self.compile_match(sub, reached, exhaustive));
                 }
                 SwitchCases::Ctor(subtrees)
@@ -735,6 +763,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 
     /// `S(Variant(v), P)`: keep the rows that can match variant `v`, expanding
     /// the matched constructor's fields into fresh columns at `occ ++ [i]`.
+    /// `bigint` is set when the column is a built-in integer, whose literal
+    /// rows are seen through the constructor (see `peel_literal`).
     fn specialize_constructor(
         &self,
         m: &Matrix<'tcx>,
@@ -742,6 +772,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         ctor: Ctor<'tcx>,
         occ: &PatVarRef,
         child_tys: &[Ty<'tcx>],
+        bigint: Option<BigIntTy>,
     ) -> Matrix<'tcx> {
         let k = child_tys.len();
         let mut cols = m.cols[..j].to_vec();
@@ -764,6 +795,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     ctor: actual,
                     fields,
                 } if *actual == ctor => (fields.clone(), None),
+                Pat::Ctor {
+                    ctor: Ctor::Int(k), ..
+                } if let (Some(int), Ctor::Variant(v)) = (bigint, &ctor) => {
+                    match self.peel_literal(int, k, *v) {
+                        Some(field) => (field.into_iter().collect(), None),
+                        None => continue,
+                    }
+                }
                 // A different variant cannot match this case.
                 Pat::Ctor { .. } => continue,
                 Pat::Wild => (vec![Pat::Wild; k], None),
@@ -783,6 +822,26 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             });
         }
         Matrix { cols, rows }
+    }
+
+    /// A literal `k` at a built-in integer seen through variant `v` of its
+    /// enum: `None` when no value of that variant equals `k`, otherwise the
+    /// pattern `k` imposes on the variant's field (`None` inside for `Zero`,
+    /// which has none). `Succ(n)` is `n + 1`, `OfNat(n)` is `n`, and
+    /// `NegSucc(n)` is `-1 - n`.
+    fn peel_literal(&self, int: BigIntTy, k: &Integer, v: usize) -> Option<Option<Pat<'tcx>>> {
+        let literal = |n: Integer| Pat::Ctor {
+            ctor: Ctor::Int(self.tcx.alloc(n)),
+            fields: Vec::new(),
+        };
+        let zero = Integer::from(0);
+        let one = Integer::from(1);
+        match (int, v) {
+            (BigIntTy::Nat, 0) => (*k == zero).then_some(None),
+            (BigIntTy::Nat, _) => (*k > zero).then(|| Some(literal(k - one))),
+            (BigIntTy::Int, 0) => (*k >= zero).then(|| Some(literal(k.clone()))),
+            (BigIntTy::Int, _) => (*k < zero).then(|| Some(literal(-one - k))),
+        }
     }
 
     /// `S(NonNull, P)`: keep the rows that can match the non-null case,

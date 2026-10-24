@@ -52,6 +52,9 @@ pub struct Parsed<'tcx> {
     pub lang: FxHashMap<DefId, crate::semi::lang::LangItem>,
     pub transform_anchors: Vec<DefId>,
     pub transform_scripts: Vec<TransformScript>,
+    /// The `#[requires]` markers of interface prototypes: the optional
+    /// features each one's compiled definition needs.
+    pub requirements: FxHashMap<DefId, crate::feature::FeatureSet>,
     pub strings: Vec<(StringToken, String)>,
     pub records: FxHashMap<DefId, Record<'tcx>>,
     pub trampolines: Vec<TrampolineRoot<'tcx>>,
@@ -446,6 +449,18 @@ pub fn parse_program<'tcx>(tcx: &TyCtxt<'tcx>, text: &str) -> Result<Parsed<'tcx
         .zip(&funcs)
         .filter_map(|(raw, func)| raw.transform_anchor.then_some(func.def))
         .collect();
+    let mut requirements = FxHashMap::default();
+    for (raw, func) in raw.funcs.iter().zip(&funcs) {
+        let mut needed = crate::feature::FeatureSet::EMPTY;
+        for name in &raw.requires {
+            let feature = crate::feature::Feature::from_name(name)
+                .ok_or_else(|| format!("unknown feature `{name}` in `#[requires]`"))?;
+            needed.insert(feature);
+        }
+        if !needed.is_empty() {
+            requirements.insert(func.def, needed);
+        }
+    }
     let ffi_imports: FxHashMap<DefId, FfiImport> = raw
         .funcs
         .iter()
@@ -492,6 +507,7 @@ pub fn parse_program<'tcx>(tcx: &TyCtxt<'tcx>, text: &str) -> Result<Parsed<'tcx
         lang,
         transform_anchors,
         transform_scripts,
+        requirements,
         strings,
         records,
         trampolines,
