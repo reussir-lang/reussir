@@ -4404,7 +4404,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 .into();
             // An rc element is shared with the array: the caller receives an
             // owned +1 reference, the payload keeps its own.
-            if self.tys.is_managed_rc(e.ty) {
+            if self.tys.is_counted_word(e.ty) {
                 self.emit_inc(then, loaded, e.ty)?;
             }
             then.append_operation(scf::r#yield(&[loaded], loc));
@@ -4442,7 +4442,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             // The store overwrites the old element: for an rc element that
             // reference is the payload's own, released here — inside the
             // unique view, so the slot is not shared with another array.
-            if self.tys.is_managed_rc(elem_ty) {
+            if self.tys.is_counted_word(elem_ty) {
                 let old = body
                     .append_operation(memref::load(view, &idxs, loc))
                     .result(0)
@@ -4513,7 +4513,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let loc = self.loc();
         let body = Block::new(&vec![(Type::index(self.context), loc); dims.len()]);
         let elem_ty = args[count].ty;
-        let elem_rc = self.tys.is_managed_rc(elem_ty);
+        let elem_rc = self.tys.is_counted_word(elem_ty);
         if elem_rc {
             self.emit_inc(&body, value, elem_ty)?;
         }
