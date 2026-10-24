@@ -20,10 +20,17 @@ use melior::ir::operation::OperationBuilder;
 use melior::ir::r#type::IntegerType;
 use melior::ir::{Identifier, Location, Operation, Region, Type, Value, ValueLike};
 
-/// `!rcgmp.mpz`, the nonatomic integer handle, or `None` when this build lacks
-/// the dialect.
-pub fn mpz_type(context: &Context) -> Option<Type<'_>> {
-    Type::parse(context, "!rcgmp.mpz")
+/// `!rcgmp.mpz`, the nonatomic integer handle, or `!rcgmp.mpz<atomic>` with
+/// `atomic`; `None` when this build lacks the dialect.
+pub fn mpz_type(context: &Context, atomic: bool) -> Option<Type<'_>> {
+    Type::parse(
+        context,
+        if atomic {
+            "!rcgmp.mpz<atomic>"
+        } else {
+            "!rcgmp.mpz"
+        },
+    )
 }
 
 /// `rcgmp.constant <value> : <ty>`. `value` is an integer attribute of the

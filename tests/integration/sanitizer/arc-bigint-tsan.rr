@@ -1,0 +1,10 @@
+// REQUIRES: tsan, openmp, rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %S/../frontend/arc_bigint_parallel.rr --package-name arcpar --extern core=%t.core.rri -o %t.ll -t llvm-ir --relocation-mode pic --sanitizer thread --nullary-variant-encoding arch-independent
+// RUN: %cc %tsan_flags -c -x ir %t.ll -o %t.o
+// RUN: %cc %tsan_flags %openmp_flags %t.o %S/../frontend/arc_bigint_parallel.c %reussir_rt_tsan %rcgmp_runtime -o %t.exe %rpath_flag %rpath_san_flag %extra_sys_libs
+// RUN: TSAN_OPTIONS=abort_on_error=1:halt_on_error=1:ignore_noninstrumented_modules=1:suppressions=%S/Inputs/tsan-libomp.supp %t.exe
+
+// Threads retain and release one heap `Arc<Nat>` outside its mutex, so a
+// plain (non-atomic) count would race; TSan reports it. Only libomp-internal
+// reports are suppressed, as in atomic-rc-omp-tsan.mlir.

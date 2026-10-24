@@ -127,7 +127,7 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
                     | TyKind::DevArray { .. }
                     | TyKind::Cell { .. }
                     | TyKind::Arc(_)
-            )
+            ) && ty.bigint().is_none()
     }
 
     /// Whether a value of type `ty` is one word owning one reference, which
@@ -135,7 +135,7 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
     /// or a `Nat`/`Int` handle. An array slot of such an element shares that
     /// reference with the array.
     pub(super) fn is_counted_word(&self, ty: Ty<'tcx>) -> bool {
-        self.is_managed_rc(ty) || matches!(ty.kind(), TyKind::BigInt(_))
+        self.is_managed_rc(ty) || ty.bigint().is_some()
     }
 
     /// Lower a ground type to MLIR: records resolve through the layout table, a
@@ -271,6 +271,9 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
             // Any other inner is kept out by elaboration and mono's
             // instantiation check — rejecting it here is the backstop for
             // directly lowered textual MIR.
+            TyKind::Arc(inner) if matches!(inner.kind(), TyKind::BigInt(_)) => {
+                scalar_ty(self.context, ty)
+            }
             TyKind::Arc(inner) => {
                 if self.is_shared_record(inner) {
                     Ok(rc(
@@ -837,8 +840,14 @@ fn scalar_ty<'c>(context: &'c Context, ty: Ty<'_>) -> Result<Type<'c>> {
         TyKind::Fp(FpTy::Float8) => err("float8 has no standard MLIR builtin type"),
         TyKind::Bool => Ok(IntegerType::new(context, 1).into()),
         TyKind::Char => Ok(IntegerType::new(context, 32).into()),
-        TyKind::BigInt(b) => reussir_backend::rcgmp::mpz_type(context)
+        TyKind::BigInt(b) => reussir_backend::rcgmp::mpz_type(context, false)
             .ok_or_else(|| LoweringError::feature_disabled("rcgmp", &format!("`{}`", b.name()))),
+        // `Arc<Nat>`/`Arc<Int>`: the same handle, counted atomically.
+        TyKind::Arc(inner) if let TyKind::BigInt(b) = *inner.kind() => {
+            reussir_backend::rcgmp::mpz_type(context, true).ok_or_else(|| {
+                LoweringError::feature_disabled("rcgmp", &format!("`Arc<{}>`", b.name()))
+            })
+        }
         TyKind::DefaultPlacement => Ok(reussir_backend::dialect::ty::record_complete(
             context,
             &[],

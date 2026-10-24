@@ -15,6 +15,9 @@
 //! occurrence derived from the integer (it, and the fields of `Succ`, `OfNat`
 //! and `NegSucc`) is a constant in a `case` arm and that argument plus a
 //! constant otherwise.
+//!
+//! Their `Arc` colorings lower the same way onto `!rcgmp.mpz<atomic>`, whose
+//! operations count atomically; a match on one derives `Arc<Nat>` values.
 
 use reussir_backend::builders;
 use reussir_backend::melior::dialect::arith::{self, CmpiPredicate};
@@ -61,7 +64,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         variant: usize,
         args: &[Expr<'tcx>],
     ) -> Result<Value<'c, 'b>> {
-        let TyKind::BigInt(int) = *e.ty.kind() else {
+        let Some((int, _)) = e.ty.bigint() else {
             return err("built-in integer constructor of a non-integer type");
         };
         let loc = self.loc();
@@ -198,19 +201,19 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     ) -> Result<Value<'c, 'b>> {
         let loc = self.loc();
         let to_ty = self.tys.mlir_ty(to)?;
-        match (*x.ty.kind(), *to.kind()) {
-            (TyKind::BigInt(_), TyKind::BigInt(_)) => Ok(xv),
-            (TyKind::BigInt(_), _) => {
+        match (x.ty.bigint(), to.bigint()) {
+            (Some(_), Some(_)) => Ok(xv),
+            (Some(_), None) => {
                 if !matches!(x.kind, ExprKind::Var(_) | ExprKind::Proj(..)) {
                     self.remember_temp(env, x, xv);
                 }
                 Ok(self.append(block, rcgmp::trunci(xv, to_ty, loc)))
             }
-            (_, TyKind::BigInt(int)) => {
+            (None, Some((int, _))) => {
                 let signed = int == BigIntTy::Int && num_class(x.ty)?.signed;
                 Ok(self.append(block, rcgmp::extend(xv, signed, to_ty, loc)))
             }
-            _ => err("integer cast without a built-in integer"),
+            (None, None) => err("integer cast without a built-in integer"),
         }
     }
 
@@ -316,7 +319,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         block: &'b Block<'c>,
         env: &mut Env<'c, 'b, 'tcx>,
         (root_idx, path): (usize, &[u32]),
-        (value, int): (Value<'c, 'b>, BigIntTy),
+        (value, int, atomic): (Value<'c, 'b>, BigIntTy, bool),
         (cases, ranges, default): IntCases<'tcx>,
         result_ty: Ty<'tcx>,
     ) -> Result<Option<Value<'c, 'b>>> {
@@ -381,6 +384,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     root_idx,
                     path: SmallVec::from_slice(path),
                     int,
+                    atomic,
                     test,
                     arg,
                     views: Vec::new(),
@@ -452,6 +456,8 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             }
             _ => self.tcx.mk_bigint(BigIntTy::Nat),
         };
+        // Values derived from an atomically counted integer are counted alike.
+        let ty = if arm.atomic { self.tcx.mk_arc(ty) } else { ty };
         let offset = match &derived {
             Derived::Constant { value, .. } => {
                 return Ok((self.bigint_constant(block, value, ty)?, ty));
@@ -531,6 +537,8 @@ pub(super) struct IntArm<'c, 'b> {
     root_idx: usize,
     path: SmallVec<[u32; 4]>,
     int: BigIntTy,
+    /// Whether the integer is an `Arc` coloring, counted atomically.
+    atomic: bool,
     test: ArmTest,
     /// The region argument while the arm owns it: the distance from a range's
     /// bound, or the integer in a `default` arm.

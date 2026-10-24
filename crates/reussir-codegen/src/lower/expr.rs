@@ -807,7 +807,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             } => self.lower_while(block, env, *state, initial, condition, body),
             // Emitted at full width via the textual APInt path — the value
             // was range-checked against `e.ty` at monomorphization.
-            ConstInt(n) if matches!(e.ty.kind(), TyKind::BigInt(_)) => {
+            ConstInt(n) if e.ty.bigint().is_some() => {
                 Ok(Some(self.bigint_constant(block, n, e.ty)?))
             }
             ConstInt(n) => Ok(Some(self.wide_int_constant(block, n, e.ty)?)),
@@ -1133,7 +1133,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             }
             Match(scrut, tree) => self.lower_match(block, env, e, scrut, tree),
             Ctor { args, .. } => self.compound(block, env, e, args).map(Some),
-            Variant { variant, args, .. } if matches!(e.ty.kind(), TyKind::BigInt(_)) => {
+            Variant { variant, args, .. } if e.ty.bigint().is_some() => {
                 self.bigint_ctor(block, env, e, *variant, args).map(Some)
             }
             Variant { variant, args, .. } => self.variant(block, env, e, *variant, args).map(Some),
@@ -1882,12 +1882,12 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 default,
             } => {
                 let (scrut_val, scrut_ty) = self.resolve_loaded(block, env, root_idx, path)?;
-                if let TyKind::BigInt(int) = *scrut_ty.kind() {
+                if let Some((int, atomic)) = scrut_ty.bigint() {
                     return self.bigint_switch(
                         block,
                         env,
                         (root_idx, path),
-                        (scrut_val, int),
+                        (scrut_val, int, atomic),
                         (cases, ranges, default),
                         result_ty,
                     );
@@ -3024,7 +3024,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 is_link: true,
                 atomic: ref_atomic,
             })
-        } else if matches!(field_ty.kind(), TyKind::Arc(_)) {
+        } else if matches!(field_ty.kind(), TyKind::Arc(_)) && field_ty.bigint().is_none() {
             // An explicit `Arc` member: the link's atomicity is *written* (the
             // container cannot derive it — an atomic island in normal space).
             Ok(ProjectedMember {
@@ -3301,7 +3301,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     /// a reference (which increments every rc pointer it reaches).
     fn emit_inc<'b>(&self, block: &'b Block<'c>, val: Value<'c, 'b>, ty: Ty<'tcx>) -> Result<()> {
         let loc = self.loc();
-        if matches!(ty.kind(), TyKind::BigInt(_)) {
+        if ty.bigint().is_some() {
             block.append_operation(rcgmp::retain(val, loc));
             return Ok(());
         }
@@ -3327,7 +3327,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     /// reference (releasing every rc pointer it reaches).
     fn emit_dec<'b>(&self, block: &'b Block<'c>, val: Value<'c, 'b>, ty: Ty<'tcx>) -> Result<()> {
         let loc = self.loc();
-        if matches!(ty.kind(), TyKind::BigInt(_)) {
+        if ty.bigint().is_some() {
             block.append_operation(rcgmp::release(val, loc));
             return Ok(());
         }
@@ -3424,7 +3424,9 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 Ok(self.append(block, arith::subi(zero, xv, loc)))
             }
             // Monomorphization rejects negating a `Nat`.
-            TyKind::BigInt(_) => Ok(self.append(block, rcgmp::unary(rcgmp::Unary::Neg, xv, loc))),
+            _ if x.ty.bigint().is_some() => {
+                Ok(self.append(block, rcgmp::unary(rcgmp::Unary::Neg, xv, loc)))
+            }
             _ => err("negate on non-numeric type"),
         }
     }
@@ -3463,7 +3465,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let rv = self
             .expr(block, env, r)?
             .ok_or_else(|| LoweringError("arith operand is unit".into()))?;
-        if let TyKind::BigInt(int) = *ty.kind() {
+        if let Some((int, _)) = ty.bigint() {
             return self.bigint_arith(block, int, op, lv, rv);
         }
         let signed = matches!(ty.kind(), TyKind::Int(IntTy::Signed(_)));
@@ -3513,7 +3515,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let rv = self
             .expr(block, env, r)?
             .ok_or_else(|| LoweringError("cmp operand is unit".into()))?;
-        if matches!(operand_ty.kind(), TyKind::BigInt(_)) {
+        if operand_ty.bigint().is_some() {
             return Ok(self.bigint_cmp(block, env, l, lv, op, r, rv));
         }
         // Strings compare through the dedicated ops: `==`/`!=` via byte
@@ -3596,7 +3598,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let xv = self
             .expr(block, env, x)?
             .ok_or_else(|| LoweringError("cast operand is unit".into()))?;
-        if matches!(x.ty.kind(), TyKind::BigInt(_)) || matches!(to.kind(), TyKind::BigInt(_)) {
+        if x.ty.bigint().is_some() || to.bigint().is_some() {
             return self.bigint_cast(block, env, x, xv, to).map(Some);
         }
         let src = num_class(x.ty)?;

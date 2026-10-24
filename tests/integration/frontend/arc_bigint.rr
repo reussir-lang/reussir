@@ -1,0 +1,95 @@
+// `Arc<Nat>` and `Arc<Int>`: the built-in integers counted atomically. The
+// coloring is a closed world: arithmetic, comparisons, literals, constructors,
+// matching, and members of arc'd records all stay in it. Heap values (2^61 is
+// the smallest heap `Nat` on a 64-bit target) make a lost retain a use after
+// free and a lost release a leak under the sanitizer run of this file.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name arcint --extern core=%t.core.rri -o %t.mlir -t mlir --relocation-mode pic
+// RUN: %FileCheck %s --check-prefix=MLIR < %t.mlir
+// RUN: %rrc %s --package-name arcint --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/arc_bigint.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s --package-name arcint --extern core=%t.core.rri -o %t.opt.o --relocation-mode pic -Oaggressive
+// RUN: %cc %t.opt.o %S/arc_bigint.c -o %t.opt.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+
+// MLIR-LABEL: func.func{{.*}}@{{.*}}big
+// MLIR: rcgmp.constant 2305843009213693952 : <atomic>
+
+fn big() -> Arc<Nat> { 2305843009213693952 }
+
+pub fn test_arith() -> u64 {
+    let a = big();
+    let b = a * a + 1;
+    let c: Arc<Int> = -5;
+    let d = (a as Arc<Int>) * c;
+    let seven: u64 = 7;
+    let e = (seven as Arc<Nat>) << 70;
+    if b > a && d < c && e >> 70 == 7 && b - a * a == 1 && a - b == 0 && (b % a) as u64 == 1 {
+        1
+    } else {
+        0
+    }
+}
+extern "C" trampoline "test_arith_ffi" = test_arith;
+
+fn pred(n: Arc<Nat>) -> Arc<Nat> {
+    match n { Nat::Zero => 0, Nat::Succ(m) => m }
+}
+
+fn classify(i: Arc<Int>) -> u64 {
+    match i { 0 => 0, Int::OfNat(_) => 1, Int::NegSucc(_) => 2 }
+}
+
+fn count_down(n: Arc<Nat>) -> u64 {
+    match n { Nat::Zero => 0, Nat::Succ(m) => 1 + count_down(m) }
+}
+
+pub fn test_match() -> u64 {
+    let a = big();
+    if pred(a + 1) == a && classify(-3) == 2 && classify(a as Arc<Int>) == 1 && classify(0) == 0
+        && count_down(5) == 5
+    {
+        1
+    } else {
+        0
+    }
+}
+extern "C" trampoline "test_match_ffi" = test_match;
+
+pub fn test_ctors() -> u64 {
+    let s = Arc<Nat>::Succ{big()};
+    let z = Arc<Nat>::Zero;
+    let i = Arc<Int>::NegSucc{Arc<Nat>::Zero};
+    let j = Arc<Int>::OfNat{big()};
+    if s == big() + 1 && z == 0 && i == -1 && j == big() as Arc<Int> { 1 } else { 0 }
+}
+extern "C" trampoline "test_ctors_ffi" = test_ctors;
+
+// An arc'd record holds integers through `Arc<Nat>` members, and an arc'd
+// enum's same-group links color while its `Arc<Nat>` payloads are written.
+struct [shared] Counter { name: u64, hits: Arc<Nat> }
+
+fn bump(c: Arc<Counter>) -> Arc<Counter> {
+    Arc<Counter>{ name: c.name, hits: c.hits + 1 }
+}
+
+pub enum Stack { Empty, Push(Arc<Nat>, Stack) }
+
+fn sum(s: Arc<Stack>) -> Arc<Nat> {
+    match s { Stack::Empty => 0, Stack::Push(h, t) => h + sum(t) }
+}
+
+pub fn test_records() -> u64 {
+    let c = Arc<Counter>{ name: 1, hits: big() };
+    let d = bump(c);
+    let s = Arc<Stack>::Push{big(), Arc<Stack>::Push{3, Arc<Stack>::Empty}};
+    if d.hits == big() + 1 && c.hits == big() && sum(s) == big() + 3 && sum(s) == big() + 3 {
+        1
+    } else {
+        0
+    }
+}
+extern "C" trampoline "test_records_ffi" = test_records;

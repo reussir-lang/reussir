@@ -1,0 +1,57 @@
+// An `Arc<Nat>` shared across OS threads through a `Mutex<Arc<Nat>>`. Each
+// step reads the shared heap integer (a retain under the lock) and computes
+// with it outside the lock, where the other threads retain and release the
+// same object, then adds one under the lock. The final value proves no
+// increment was lost; the sanitizer leg reports a non-atomic count as a race.
+// The handles split as in `cells_sync_parallel_e2e.rr`.
+
+// REQUIRES: rcgmp, openmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name arcpar --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %openmp_flags %t.o %S/arc_bigint_parallel.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s --package-name arcpar --extern core=%t.core.rri -o %t.opt.o --relocation-mode pic -Oaggressive
+// RUN: %cc %openmp_flags %t.opt.o %S/arc_bigint_parallel.c -o %t.opt.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+
+import core::intrinsic::cell;
+
+// 2^61, the smallest heap `Nat` on a 64-bit target.
+fn base() -> Arc<Nat> { 2305843009213693952 }
+
+pub fn make_shared() -> Mutex<Arc<Nat>> {
+    cell::alloc<Mutex<Arc<Nat>>>(base())
+}
+extern "C" trampoline "make_shared_ffi" = make_shared;
+
+pub struct [value] Pair {
+    keep: Mutex<Arc<Nat>>,
+    extra: Mutex<Arc<Nat>>
+}
+
+pub fn dup(s: Mutex<Arc<Nat>>) -> Pair {
+    Pair { keep: s, extra: s }
+}
+extern "C" trampoline "dup_ffi" = dup;
+
+fn work(s: Mutex<Arc<Nat>>, k: i64, steps: i64) -> i64 {
+    if k < steps {
+        let seen = cell::get(s);
+        let ok = if seen * 2 > seen { 1 } else { 0 };
+        cell::rmw(s, |n| n + 1);
+        ok + work(s, k + 1, steps)
+    } else {
+        0
+    }
+}
+
+pub fn worker(s: Mutex<Arc<Nat>>, steps: i64) -> i64 {
+    work(s, 0, steps)
+}
+extern "C" trampoline "worker_ffi" = worker;
+
+// The increments added to the base, consuming the last reference.
+pub fn added(s: Mutex<Arc<Nat>>) -> i64 {
+    (cell::get(s) - base()) as i64
+}
+extern "C" trampoline "added_ffi" = added;
