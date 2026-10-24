@@ -18,7 +18,9 @@ use lasso::Rodeo;
 use pprint::{Doc, Printer as PpPrinter, hardline, indent, pprint};
 use rustc_hash::FxHashMap;
 
-use super::{Managed, OwnershipTable, RcOp, RecordShape, RecordTable, Rr, analyze_function};
+use super::{
+    Managed, Occurrences, OwnershipTable, RcOp, RecordShape, RecordTable, Rr, analyze_function,
+};
 use crate::full::mir::{
     self, ClosureExpr, DecisionTree, Expr, ExprKind, Function, Param, SwitchCases,
 };
@@ -249,6 +251,30 @@ impl<'a, 'tcx> MirBuilder<'a, 'tcx> {
         DecisionTree::Switch {
             scrutinee,
             cases: SwitchCases::Ctor(arms),
+        }
+    }
+
+    /// An integer switch on the value at `path`: keys, then `at_least` ranges.
+    fn switch_int(
+        &self,
+        path: Vec<u32>,
+        cases: Vec<(i64, DecisionTree<'tcx>)>,
+        at_least: Vec<(i64, DecisionTree<'tcx>)>,
+        default: DecisionTree<'tcx>,
+    ) -> DecisionTree<'tcx> {
+        let int = |k: i64| &*self.tcx.alloc(crate::literal::Integer::from(k));
+        let cases: Vec<_> = cases.into_iter().map(|(k, t)| (int(k), t)).collect();
+        let ranges: Vec<_> = at_least
+            .into_iter()
+            .map(|(k, t)| (crate::semi::hir::IntRange::AtLeast(int(k)), t))
+            .collect();
+        DecisionTree::Switch {
+            scrutinee: self.tcx.alloc_slice(&path),
+            cases: SwitchCases::Int {
+                cases: self.tcx.alloc_slice(&cases),
+                ranges: self.tcx.alloc_slice(&ranges),
+                default: self.tcx.alloc(default),
+            },
         }
     }
 
@@ -880,8 +906,21 @@ fn interp<'tcx>(
             if !matches!(scrut.kind, ExprKind::Var(_)) {
                 interp(scrut, ot, rr, rc);
             }
+            // A root switch that takes its `Nat`/`Int` scrutinee consumes it.
+            let mut entry = rc.clone();
+            if ot.moves_scrutinee(e.id)
+                && let ExprKind::Var(s) = scrut.kind
+            {
+                let c = entry
+                    .get_mut(&s)
+                    .unwrap_or_else(|| panic!("match takes unowned v{}", s.0));
+                assert!(*c >= 1, "match takes settled v{} (rc {c})", s.0);
+                *c -= 1;
+            }
             let mut states = Vec::new();
-            interp_tree(scrut, &tree, ot, rr, rc.clone(), &[], &mut states);
+            let mut occ = Occurrences::new(scrut.ty);
+            let walk = TreeWalk { scrut, ot, rr };
+            walk.tree(&tree, entry, &[], &mut states, &mut occ);
             for s in &states[1..] {
                 assert_eq!(
                     states[0], *s,
@@ -970,64 +1009,91 @@ fn interp_borrow<'tcx>(
     }
 }
 
-/// Walk the decision tree, collecting one terminal ownership state per leaf path.
-/// `bound_above` are the pattern vars bound by enclosing guards (removed from the
-/// state at each leaf, like the leaf's own bindings, since they are match-local).
-fn interp_tree<'tcx>(
-    scrut: &Expr<'tcx>,
-    tree: &DecisionTree<'tcx>,
-    ot: &OwnershipTable,
-    rr: &Rr<'_, 'tcx>,
-    rc: FxHashMap<VarId, i32>,
-    bound_above: &[VarId],
-    states: &mut Vec<FxHashMap<VarId, i32>>,
-) {
-    match *tree {
-        DecisionTree::Uncovered | DecisionTree::Unreachable => {}
-        DecisionTree::Leaf { body, bindings } => {
-            let mut rcl = rc;
-            // A moved whole-binding has no op: transfer the scrutinee's ownership
-            // to the bound var so it can be consumed in the body.
-            for &(y, path) in bindings {
-                if path.is_empty() && uses_var(body, y) {
-                    let dup_established = ot.before(body.id).contains(&RcOp::Dup(y));
-                    if !dup_established {
-                        let taken = match scrut.kind {
+/// A walk of one match's decision tree, collecting one terminal ownership
+/// state per leaf path.
+struct TreeWalk<'a, 'r, 'tcx> {
+    scrut: &'a Expr<'tcx>,
+    ot: &'a OwnershipTable,
+    rr: &'a Rr<'r, 'tcx>,
+}
+
+impl<'tcx> TreeWalk<'_, '_, 'tcx> {
+    /// `bound_above` are the pattern vars bound by enclosing guards (removed
+    /// from the state at each leaf, like the leaf's own bindings, since they
+    /// are match-local).
+    fn tree(
+        &self,
+        tree: &DecisionTree<'tcx>,
+        rc: FxHashMap<VarId, i32>,
+        bound_above: &[VarId],
+        states: &mut Vec<FxHashMap<VarId, i32>>,
+        occ: &mut Occurrences<'tcx>,
+    ) {
+        let (ot, rr) = (self.ot, self.rr);
+        match *tree {
+            DecisionTree::Uncovered | DecisionTree::Unreachable => {}
+            DecisionTree::Leaf { body, bindings } => {
+                let mut rcl = rc;
+                for &(y, path) in bindings {
+                    if !uses_var(body, y) || ot.before(body.id).contains(&RcOp::Dup(y)) {
+                        continue;
+                    }
+                    if occ.produced(path) {
+                        // The match produced the value: the binding owns it.
+                        rcl.insert(y, 1);
+                    } else if path.is_empty() {
+                        // A moved whole-binding has no op: transfer the
+                        // scrutinee's ownership to the bound var so it can be
+                        // consumed in the body.
+                        let taken = match self.scrut.kind {
                             ExprKind::Var(s) => rcl.remove(&s).unwrap_or(1),
                             _ => 1,
                         };
                         rcl.insert(y, taken);
                     }
                 }
+                interp(body, ot, rr, &mut rcl);
+                for &(y, _) in bindings {
+                    rcl.remove(&y);
+                }
+                for &y in bound_above {
+                    rcl.remove(&y);
+                }
+                // A var settled by a move is gone, one settled by a drop is at
+                // zero: the same state.
+                rcl.retain(|_, count| *count != 0);
+                states.push(rcl);
             }
-            interp(body, ot, rr, &mut rcl);
-            for &(y, _) in bindings {
-                rcl.remove(&y);
+            DecisionTree::Switch { scrutinee, cases } => {
+                for branch in occ.branches(rr, scrutinee, &cases) {
+                    let mark = occ.enter(&branch);
+                    self.tree(branch.tree, rc.clone(), bound_above, states, occ);
+                    occ.leave(mark);
+                }
             }
-            for &y in bound_above {
-                rcl.remove(&y);
+            DecisionTree::Guard {
+                bindings,
+                guard,
+                success,
+                failure,
+            } => {
+                let mut rcg = rc;
+                interp(guard, ot, rr, &mut rcg);
+                let mut nested = bound_above.to_vec();
+                for &(y, _) in bindings {
+                    nested.push(y);
+                }
+                // A value the match produced that the guard does not read is
+                // bound by the success leaf, which owns it.
+                let mut rcs = rcg.clone();
+                for &(y, path) in bindings {
+                    if occ.produced(path) && !uses_var(guard, y) {
+                        rcs.insert(y, 1);
+                    }
+                }
+                self.tree(success, rcs, &nested, states, occ);
+                self.tree(failure, rcg, &nested, states, occ);
             }
-            states.push(rcl);
-        }
-        DecisionTree::Switch { cases, .. } => {
-            for sub in super::subtrees(&cases) {
-                interp_tree(scrut, sub, ot, rr, rc.clone(), bound_above, states);
-            }
-        }
-        DecisionTree::Guard {
-            bindings,
-            guard,
-            success,
-            failure,
-        } => {
-            let mut rcg = rc;
-            interp(guard, ot, rr, &mut rcg);
-            let mut nested = bound_above.to_vec();
-            for &(y, _) in bindings {
-                nested.push(y);
-            }
-            interp_tree(scrut, success, ot, rr, rcg.clone(), &nested, states);
-            interp_tree(scrut, failure, ot, rr, rcg, &nested, states);
         }
     }
 }
@@ -2601,5 +2667,207 @@ fn device_transfers_borrow_live_inputs_and_release_last_use() {
             let ot = run(tcx, &f, &b);
             assert!(!ot.before(upload_id).contains(&RcOp::Dup(x)));
         }
+    });
+}
+
+// ----- built-in integer matches (one consuming `rcgmp.match`) -----
+
+/// `match n { 0 => 0, Succ(m) => use(m) }` on a `Nat` param, the switch's
+/// `case 0` and `at_least 1` arms, with `n` optionally used after the match.
+fn nat_pred_match<'tcx>(
+    tcx: &TyCtxt<'tcx>,
+    use_after: bool,
+) -> (OwnershipTable, ExprId, [ExprId; 2], VarId, VarId) {
+    use crate::semi::ty::BigIntTy;
+    let mut b = MirBuilder::new(tcx);
+    let nat = tcx.mk_bigint(BigIntTy::Nat);
+    let i64t = b.i64();
+    let (n, m) = (b.fresh_var(), b.fresh_var());
+    let zero = b.const_int(0);
+    let zero_id = zero.id;
+    let leaf0 = b.leaf(zero, vec![]);
+    let vm = b.var(m, nat);
+    let use_m = b.call("use", vec![vm], i64t);
+    let use_m_id = use_m.id;
+    let leaf1 = b.leaf(use_m, vec![(m, vec![0])]);
+    let tree = b.switch_int(
+        vec![],
+        vec![(0, leaf0)],
+        vec![(1, leaf1)],
+        DecisionTree::Unreachable,
+    );
+    let scrut = b.var(n, nat);
+    let matched = b.match_(scrut, tree, i64t);
+    let match_id = matched.id;
+    let body = if use_after {
+        let vn = b.var(n, nat);
+        let again = b.call("use", vec![vn], i64t);
+        b.call("add", vec![matched, again], i64t)
+    } else {
+        matched
+    };
+    let params = vec![b.param(n, nat)];
+    let func = b.function("f", params, i64t, body);
+    (run(tcx, &func, &b), match_id, [zero_id, use_m_id], n, m)
+}
+
+#[test]
+fn bigint_match_takes_a_dying_scrutinee() {
+    // n dies in the match: the switch takes it, nothing drops it per leaf, and
+    // the predecessor the match produced is moved into `use`.
+    with_tcx(|tcx| {
+        let (ot, match_id, leaves, ..) = nat_pred_match(tcx, false);
+        assert!(ot.moves_scrutinee(match_id));
+        for leaf in leaves {
+            assert!(ot.get(leaf).is_none(), "no rc ops in the arms");
+        }
+    });
+}
+
+#[test]
+fn bigint_match_borrows_a_live_scrutinee() {
+    // n is used after the match: the switch gets a retained reference (in code
+    // generation) and n survives; `m` is still owned by its binding.
+    with_tcx(|tcx| {
+        let (ot, match_id, leaves, n, m) = nat_pred_match(tcx, true);
+        assert!(!ot.moves_scrutinee(match_id));
+        for leaf in leaves {
+            assert!(!ot.before(leaf).contains(&RcOp::Drop(n)));
+            assert!(!ot.before(leaf).contains(&RcOp::Dup(m)));
+        }
+    });
+}
+
+#[test]
+fn bigint_match_rebuilds_the_scrutinee_in_its_arms() {
+    // match n { 0 => use(x0), Succ(m) if pred(m) => use(m), x1 => use(x1) }: the
+    // whole-value bindings are values the match produced (a constant, and
+    // `m + 1` from the range arm's distance), so the switch still takes `n`;
+    // `m` is extracted at the guard and dropped where it is not used.
+    use crate::semi::ty::BigIntTy;
+    with_tcx(|tcx| {
+        let mut b = MirBuilder::new(tcx);
+        let nat = tcx.mk_bigint(BigIntTy::Nat);
+        let i64t = b.i64();
+        let bool_t = b.tcx.mk_bool();
+        let (n, m, x0, x1) = (b.fresh_var(), b.fresh_var(), b.fresh_var(), b.fresh_var());
+        let vx0 = b.var(x0, nat);
+        let use_x0 = b.call("use", vec![vx0], i64t);
+        let zero_id = use_x0.id;
+        let leaf0 = b.leaf(use_x0, vec![(x0, vec![])]);
+        let vm_guard = b.var(m, nat);
+        let guard = b.call("pred", vec![vm_guard], bool_t);
+        let guard_id = guard.id;
+        let vm = b.var(m, nat);
+        let use_m = b.call("use", vec![vm], i64t);
+        let success_id = use_m.id;
+        let success = b.leaf(use_m, vec![]);
+        let vx1 = b.var(x1, nat);
+        let use_x1 = b.call("use", vec![vx1], i64t);
+        let failure_id = use_x1.id;
+        let failure = b.leaf(use_x1, vec![(x1, vec![])]);
+        let succ = b.guard(vec![(m, vec![0])], guard, success, failure);
+        let tree = b.switch_int(
+            vec![],
+            vec![(0, leaf0)],
+            vec![(1, succ)],
+            DecisionTree::Unreachable,
+        );
+        let scrut = b.var(n, nat);
+        let matched = b.match_(scrut, tree, i64t);
+        let match_id = matched.id;
+        let params = vec![b.param(n, nat)];
+        let func = b.function("f", params, i64t, matched);
+        let ot = run(tcx, &func, &b);
+
+        assert!(ot.moves_scrutinee(match_id));
+        assert!(ot.get(zero_id).is_none());
+        assert_eq!(ot.before(guard_id), &[RcOp::Dup(m)]);
+        assert!(ot.get(success_id).is_none());
+        assert_eq!(ot.before(failure_id), &[RcOp::Drop(m)]);
+    });
+}
+
+#[test]
+fn bigint_match_binds_unread_guard_values_in_the_success_leaf() {
+    // match n { Succ(m) if ready() => use(m), _ => 0 }: the guard does not read
+    // `m`, so nothing extracts it at the guard or drops it on failure; the
+    // success leaf binds it, taking the arm's value.
+    use crate::semi::ty::BigIntTy;
+    with_tcx(|tcx| {
+        let mut b = MirBuilder::new(tcx);
+        let nat = tcx.mk_bigint(BigIntTy::Nat);
+        let i64t = b.i64();
+        let bool_t = b.tcx.mk_bool();
+        let (n, m) = (b.fresh_var(), b.fresh_var());
+        let guard = b.call("ready", vec![], bool_t);
+        let guard_id = guard.id;
+        let vm = b.var(m, nat);
+        let use_m = b.call("use", vec![vm], i64t);
+        let success_id = use_m.id;
+        let success = b.leaf(use_m, vec![]);
+        let zero = b.const_int(0);
+        let failure_id = zero.id;
+        let failure = b.leaf(zero, vec![]);
+        let succ = b.guard(vec![(m, vec![0])], guard, success, failure);
+        let zero_arm = b.const_int(0);
+        let leaf0 = b.leaf(zero_arm, vec![]);
+        let tree = b.switch_int(
+            vec![],
+            vec![(0, leaf0)],
+            vec![(1, succ)],
+            DecisionTree::Unreachable,
+        );
+        let scrut = b.var(n, nat);
+        let matched = b.match_(scrut, tree, i64t);
+        let match_id = matched.id;
+        let params = vec![b.param(n, nat)];
+        let func = b.function("f", params, i64t, matched);
+        let ot = run(tcx, &func, &b);
+
+        assert!(ot.moves_scrutinee(match_id));
+        assert!(ot.get(guard_id).is_none());
+        assert!(ot.get(success_id).is_none());
+        assert!(ot.get(failure_id).is_none());
+    });
+}
+
+#[test]
+fn bigint_match_on_a_field_keeps_the_parent_borrowed() {
+    // match p { (Succ(a), _) => use(a), (0, b) => use(b) } on a dying `(Nat,
+    // Nat)` pair: the switch on `p.0` gets a retained field (in code
+    // generation), `a` is a value it produced and is moved, the pair is
+    // dropped per leaf, and `b` is extracted from it.
+    use crate::semi::ty::BigIntTy;
+    with_tcx(|tcx| {
+        let mut b = MirBuilder::new(tcx);
+        let nat = tcx.mk_bigint(BigIntTy::Nat);
+        let pair = tcx.mk_tuple(&[nat, nat]);
+        let i64t = b.i64();
+        let (p, a, bv) = (b.fresh_var(), b.fresh_var(), b.fresh_var());
+        let va = b.var(a, nat);
+        let use_a = b.call("use", vec![va], i64t);
+        let use_a_id = use_a.id;
+        let leaf_a = b.leaf(use_a, vec![(a, vec![0, 0])]);
+        let vb = b.var(bv, nat);
+        let use_b = b.call("use", vec![vb], i64t);
+        let use_b_id = use_b.id;
+        let leaf_b = b.leaf(use_b, vec![(bv, vec![1])]);
+        let tree = b.switch_int(
+            vec![0],
+            vec![(0, leaf_b)],
+            vec![(1, leaf_a)],
+            DecisionTree::Unreachable,
+        );
+        let scrut = b.var(p, pair);
+        let matched = b.match_(scrut, tree, i64t);
+        let match_id = matched.id;
+        let params = vec![b.param(p, pair)];
+        let func = b.function("f", params, i64t, matched);
+        let ot = run(tcx, &func, &b);
+
+        assert!(!ot.moves_scrutinee(match_id));
+        assert_eq!(ot.before(use_a_id), &[RcOp::Drop(p)]);
+        assert_eq!(ot.before(use_b_id), &[RcOp::Dup(bv), RcOp::Drop(p)]);
     });
 }
