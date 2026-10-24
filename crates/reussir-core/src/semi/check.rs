@@ -9,7 +9,9 @@ use crate::semi::traits::{
     Evidence, Obligation, SelectCtxt, SelectError, TraitDef, TraitId, TraitRef,
 };
 use crate::semi::ty::CellKind;
-use crate::semi::ty::{BigIntTy, DefId, Flexivity, GenericId, Ty, TyKind, bigint_cast_rejection};
+use crate::semi::ty::{
+    BigIntTy, DefId, Flexivity, GenericId, IntTy, Ty, TyKind, bigint_cast_rejection,
+};
 use crate::surface::{self, BinOp, Const, Span, UnaryOp};
 
 use super::ctxt::{Elaborator, FuncProto, RecordFields};
@@ -1140,10 +1142,23 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 // (BIT) like (ARITH) but integers only, `Integral ⊳ T`.
                 // Both operands share `T` — a shift amount is the operand
                 // type, not a separate width.
+                // (SHIFT-BIGINT) the exception: when `l ⇒ Nat` or `l ⇒ Int`,
+                // a shift amount `r ⇐ i64`, a bit count rather than another
+                // arbitrary-precision integer. The rule applies only when the
+                // left operand's type is known here; a shift whose operands
+                // are later solved to a built-in integer is rejected by
+                // monomorphization.
                 let l = self.infer_expr(l);
                 let ty = l.ty;
                 self.register_bound(self.lang.integral, ty, span);
-                let r = self.check_expr(r, ty);
+                let shifts_bigint = matches!(op, BinOp::Shl | BinOp::Shr)
+                    && matches!(self.infer.shallow_resolve(ty).kind(), TyKind::BigInt(_));
+                let amount_ty = if shifts_bigint {
+                    self.tcx.mk_int(IntTy::Signed(64))
+                } else {
+                    ty
+                };
+                let r = self.check_expr(r, amount_ty);
                 let aop = arith_op(op);
                 self.mk_expr(ExprKind::Arith(Box::new(l), aop, Box::new(r)), ty, span)
             }

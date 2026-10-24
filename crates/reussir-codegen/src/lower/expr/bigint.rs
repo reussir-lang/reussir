@@ -8,9 +8,10 @@
 //! `Int::OfNat(n)` is `n` itself, and `Int::NegSucc(n)` is `-(n + 1)`, the
 //! bitwise complement of `n`.
 
-use reussir_backend::melior::ir::attribute::Attribute;
-use reussir_backend::melior::ir::{Block, Value};
-use reussir_backend::rcgmp::{self, Binary, Predicate, Unary};
+use reussir_backend::melior::dialect::arith::{self, CmpiPredicate};
+use reussir_backend::melior::ir::attribute::{Attribute, IntegerAttribute};
+use reussir_backend::melior::ir::{Block, Value, ValueLike};
+use reussir_backend::rcgmp::{self, Binary, Predicate, Shift, Unary};
 use reussir_core::full::mir::{Expr, ExprKind};
 use reussir_core::literal::{self, Integer};
 use reussir_core::semi::hir::{ArithOp, CmpOp};
@@ -107,7 +108,8 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     /// Integer arithmetic, consuming both operands. Subtraction on `Nat` is
     /// truncated at zero, so the type stays closed under it. Division and
     /// remainder truncate, as they do for fixed-width integers, and a zero
-    /// divisor terminates the program.
+    /// divisor terminates the program. Bitwise operations act on the infinite
+    /// two's complement, so `>>` rounds toward negative infinity.
     pub(super) fn bigint_arith<'b>(
         &self,
         block: &'b Block<'c>,
@@ -123,9 +125,48 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             (ArithOp::Mul, _) => Binary::Mul,
             (ArithOp::Div, _) => Binary::Div,
             (ArithOp::Mod, _) => Binary::Rem,
-            _ => return err(format!("`{op:?}` on `{}` does not lower yet", int.name())),
+            (ArithOp::BitAnd, _) => Binary::And,
+            (ArithOp::BitOr, _) => Binary::Or,
+            (ArithOp::BitXor, _) => Binary::Xor,
+            (ArithOp::Shl | ArithOp::Shr, _) => {
+                let shift = if matches!(op, ArithOp::Shl) {
+                    Shift::Left
+                } else {
+                    Shift::Right
+                };
+                let amount = self.bigint_shift_amount(block, rv);
+                return Ok(self.append(block, rcgmp::shift(shift, lv, amount, self.loc())));
+            }
+            (ArithOp::And | ArithOp::Or, _) => {
+                return err("logical operator on a built-in integer");
+            }
         };
         Ok(self.append(block, rcgmp::binary(binary, lv, rv, self.loc())))
+    }
+
+    /// The bit count a shift takes, from the `i64` shift amount: the rcgmp
+    /// shifts read it as unsigned, so a negative amount terminates the
+    /// program instead.
+    fn bigint_shift_amount<'b>(
+        &self,
+        block: &'b Block<'c>,
+        amount: Value<'c, 'b>,
+    ) -> Value<'c, 'b> {
+        let loc = self.loc();
+        let zero = self.append(
+            block,
+            arith::constant(
+                self.context,
+                IntegerAttribute::new(amount.r#type(), 0).into(),
+                loc,
+            ),
+        );
+        let nonnegative = self.append(
+            block,
+            arith::cmpi(self.context, CmpiPredicate::Sge, amount, zero, loc),
+        );
+        self.runtime_assert(block, nonnegative, "shift amount is negative");
+        amount
     }
 
     /// `as` between a built-in integer and another integer type. A fixed-width

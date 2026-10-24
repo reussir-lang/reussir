@@ -2956,6 +2956,37 @@ mod tests {
     }
 
     #[test]
+    fn bigint_shift_amounts_are_i64() {
+        check_with_bigint(
+            "pub fn ok(n: Nat, i: Int, k: i64) -> Int { ((n << k) as Int) + (i >> 3) }\n\
+             pub fn bad(n: Nat, m: Nat) -> Nat { n << m }",
+            |elab, _| {
+                let messages: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
+                assert!(
+                    messages.len() == 1
+                        && messages[0].contains("`i64`")
+                        && messages[0].contains("`Nat`"),
+                    "{messages:#?}"
+                );
+            },
+        );
+        check_with_bigint(
+            "fn shl<T: Integral>(x: T, k: T) -> T { x << k }\n\
+             pub fn f(n: Nat) -> Nat { shl(n, n) }",
+            |elab, _| {
+                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
+                let messages: Vec<&str> = reports.iter().map(|r| r.message.as_str()).collect();
+                assert_eq!(
+                    messages,
+                    ["the shift amount of a `Nat` must be an `i64`"],
+                    "{messages:#?}"
+                );
+            },
+        );
+    }
+
+    #[test]
     fn negative_nat_literals_are_diagnosed() {
         check_with_bigint(
             "pub fn f() -> Nat { -1 }\n\

@@ -67,6 +67,10 @@ pub enum Binary {
     Div,
     /// Truncated remainder; a zero divisor terminates the program.
     Rem,
+    /// Bitwise operations, on the infinite two's complement.
+    And,
+    Or,
+    Xor,
 }
 
 impl Binary {
@@ -78,6 +82,9 @@ impl Binary {
             Binary::Mul => "rcgmp.muli",
             Binary::Div => "rcgmp.divsi",
             Binary::Rem => "rcgmp.remsi",
+            Binary::And => "rcgmp.andi",
+            Binary::Or => "rcgmp.ori",
+            Binary::Xor => "rcgmp.xori",
         }
     }
 }
@@ -113,6 +120,32 @@ pub fn unary<'c>(op: Unary, operand: Value<'c, '_>, location: Location<'c>) -> O
     OperationBuilder::new(name, location)
         .add_operands(&[operand])
         .add_results(&[operand.r#type()])
+        .build()
+        .unwrap_or_else(|_| panic!("valid {name}"))
+}
+
+/// A shift by a fixed-width, unsigned number of bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shift {
+    Left,
+    /// Arithmetic: rounds toward negative infinity.
+    Right,
+}
+
+/// `<op> <value>, <amount>`: consume `value` and shift it by `amount` bits.
+pub fn shift<'c>(
+    op: Shift,
+    value: Value<'c, '_>,
+    amount: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let name = match op {
+        Shift::Left => "rcgmp.shli",
+        Shift::Right => "rcgmp.shrsi",
+    };
+    OperationBuilder::new(name, location)
+        .add_operands(&[value, amount])
+        .add_results(&[value.r#type()])
         .build()
         .unwrap_or_else(|_| panic!("valid {name}"))
 }

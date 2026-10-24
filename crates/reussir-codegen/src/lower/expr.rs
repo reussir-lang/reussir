@@ -3911,13 +3911,13 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 block,
                 arith::cmpi(self.context, CmpiPredicate::Eq, raw, back, loc),
             );
-            self.array_assert(block, fits, "array extent exceeds target index width");
+            self.runtime_assert(block, fits, "array extent exceeds target index width");
             extents.push(extent);
         }
         Ok(extents)
     }
 
-    fn array_assert(&self, block: &Block<'c>, condition: Value<'c, '_>, message: &str) {
+    fn runtime_assert(&self, block: &Block<'c>, condition: Value<'c, '_>, message: &str) {
         block.append_operation(
             OperationBuilder::new("cf.assert", self.loc())
                 .add_operands(&[condition])
@@ -3926,7 +3926,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     StringAttribute::new(self.context, message).into(),
                 )])
                 .build()
-                .expect("valid array assertion"),
+                .expect("valid cf.assert"),
         );
     }
 
@@ -3988,7 +3988,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             block,
             arith::cmpi(self.context, CmpiPredicate::Ult, axis, rank_value, loc),
         );
-        self.array_assert(block, valid, "array dimension is outside the rank");
+        self.runtime_assert(block, valid, "array dimension is outside the rank");
         let extent = if matches!(args[0].ty.kind(), TyKind::DevArray { .. }) {
             let mut value = self.index_const(block, 0);
             for i in 0..rank {

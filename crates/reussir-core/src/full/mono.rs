@@ -2647,6 +2647,22 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
             },
             ExprKind::Not(e) => M::Not(self.lower_ref(e, subst)),
             ExprKind::Arith(l, op, r) => {
+                // A built-in integer shifts by an `i64` bit count. The checker
+                // types the amount so when it sees the left operand's type;
+                // generic code, or operands solved after the shift, can still
+                // arrive here with the amount at the operand's own type.
+                if matches!(op, hir::ArithOp::Shl | hir::ArithOp::Shr)
+                    && let TyKind::BigInt(int) = *result_ty.kind()
+                    && !matches!(
+                        subst_ty(self.tcx, r.ty, subst).kind(),
+                        TyKind::Int(IntTy::Signed(64))
+                    )
+                {
+                    self.error(
+                        span,
+                        format!("the shift amount of a `{}` must be an `i64`", int.name()),
+                    );
+                }
                 M::Arith(self.lower_ref(l, subst), *op, self.lower_ref(r, subst))
             }
             ExprKind::Cmp(l, op, r) => {
