@@ -429,6 +429,21 @@ pub unsafe extern "C" fn __reussir_realloc_unsized(
     ptr
 }
 
+/// Allocation hook of the rcgmp integer runtime (`RCGMP/Runtime/Allocation.h`).
+/// The runtime is built without its default hooks, so heap integers live on the
+/// language heap and share its out-of-memory behavior.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rcgmp_allocate(size: usize, alignment: usize) -> *mut u8 {
+    unsafe { __reussir_allocate(alignment, size) }
+}
+
+/// Deallocation hook of the rcgmp integer runtime, the counterpart of
+/// [`rcgmp_allocate`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rcgmp_dealloc(pointer: *mut u8, size: usize, alignment: usize) {
+    unsafe { __reussir_deallocate(pointer, alignment, size) }
+}
+
 #[cfg(test)]
 mod tests {
     /// Alloc → grow (realloc) → free, straight through the selected backend.
@@ -458,6 +473,21 @@ mod tests {
                 }
                 super::backend::free(q);
             }
+        }
+    }
+
+    /// The rcgmp hooks take `(size, alignment)`, the reverse of the language
+    /// heap's entry points.
+    #[test]
+    fn rcgmp_hooks_allocate_aligned_blocks() {
+        unsafe {
+            let p = super::rcgmp_allocate(40, 16);
+            assert!(!p.is_null());
+            assert_eq!(p as usize % 16, 0);
+            for i in 0..40 {
+                p.add(i).write(i as u8);
+            }
+            super::rcgmp_dealloc(p, 40, 16);
         }
     }
 

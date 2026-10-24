@@ -15,6 +15,8 @@ use melior::pass::{Pass, PassManager};
 
 use reussir_backend_sys as sys;
 
+use crate::features;
+
 /// Temporary module marker set by codegen when source contains inline transforms.
 pub const INLINE_TRANSFORM_ATTR: &str = "reussir.inline_transform";
 /// Embedded transform entry point invoked at the kernel anchor.
@@ -446,6 +448,12 @@ pub fn run_lowering_pipeline(
         module: sys::reussirCreateCanonicalizerPass();
         func: sys::reussirCreateLoopInvariantCodeMotionPass();
         module: sys::reussirCreateConvertToSTDPass(true);
+        // Arbitrary-precision integer operations expand into SCF fast paths
+        // and runtime calls with the rest of the standard conversion, once
+        // the Reussir-level RC work has emitted their retains and releases.
+        if features::enabled("rcgmp") => {
+            module: sys::reussirCreateConvertRCGMPToSCFPass();
+        }
         func:   sys::reussirCreateRcCreateSinkPass();
         func:   sys::reussirCreateRcCreateFusionPass();
         module: sys::reussirCreateTRMCRecursionAnalysisPass();
@@ -660,6 +668,36 @@ mod tests {
         );
         assert!(!rendered.contains("sync."), "got:\n{rendered}");
         assert!(!rendered.contains("ptr."), "got:\n{rendered}");
+    }
+
+    #[test]
+    fn lowers_rcgmp_integers_through_c_api_pipeline() {
+        if !features::enabled("rcgmp") {
+            return;
+        }
+        let context = crate::context();
+        let source = r#"
+            module {
+              func.func @square(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+                rcgmp.retain %x : !rcgmp.mpz
+                %r = rcgmp.muli %x, %x : !rcgmp.mpz
+                func.return %r : !rcgmp.mpz
+              }
+            }
+        "#;
+        let mut module = Module::parse(&context, source).expect("module should parse");
+
+        run_lowering_pipeline(&context, &mut module, &LoweringOptions::default())
+            .expect("pipeline should succeed");
+
+        assert!(module.as_operation().verify());
+        let rendered = module.as_operation().to_string();
+        assert!(
+            rendered.contains("llvm.func @square(") && rendered.contains("-> !llvm.ptr"),
+            "got:\n{rendered}"
+        );
+        assert!(rendered.contains("@rcgmp_mpz_mul"), "got:\n{rendered}");
+        assert!(!rendered.contains("rcgmp."), "got:\n{rendered}");
     }
 
     #[test]

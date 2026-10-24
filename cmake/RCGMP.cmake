@@ -21,6 +21,9 @@ endif()
 
 set(RCGMP_ENABLE_TESTS OFF CACHE BOOL "Build rcgmp tests" FORCE)
 set(RCGMP_ENABLE_BENCHMARKS OFF CACHE BOOL "Build rcgmp benchmarks" FORCE)
+# reussir-rt defines the runtime's allocation hooks (`rcgmp_allocate` and
+# `rcgmp_dealloc`), so heap integers live on the language heap.
+set(RCGMP_RUNTIME_DEFAULT_ALLOCATOR OFF CACHE BOOL "Provide default allocation hooks" FORCE)
 
 # Upstream add_mlir_* helpers append to global link collections. Keep the rcgmp
 # libraries out of the `${dialect_libs}` every Reussir library links, and expose
@@ -56,3 +59,11 @@ target_link_libraries(ReussirRCGMP INTERFACE
   MLIRRCGMPToLLVM
 )
 target_compile_definitions(ReussirRCGMP INTERFACE REUSSIR_ENABLE_RCGMP)
+
+# Nix scan-deps workaround (see lib/Bridge/CMakeLists.txt): GMP's include
+# directory is one of the nix cc wrapper's implicit directories, so CMake elides
+# its -I flag, and the raw clang-scan-deps cannot find gmp.h while scanning the
+# runtime's modules. Raw compile options are never elided.
+if(DEFINED ENV{NIX_STORE})
+  target_compile_options(RCGMPRuntime PRIVATE "-I${GMP_INCLUDE_DIR}")
+endif()

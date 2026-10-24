@@ -61,6 +61,10 @@
 #include "Reussir/Transformation/Passes.h"
 #include "Reussir/Transformation/SpecialPointerTag.h"
 
+#ifdef REUSSIR_ENABLE_RCGMP
+#include "RCGMP/Conversion/ConvertRCGMPToSCF.h"
+#endif
+
 using namespace mlir;
 
 namespace {
@@ -224,6 +228,13 @@ MlirPass reussirCreateSCFToControlFlowPass(void) {
   mlir::SCFToControlFlowPassOptions options;
   options.allowPatternRollback = false;
   return wrapOwned(mlir::createSCFToControlFlowPass(options));
+}
+MlirPass reussirCreateConvertRCGMPToSCFPass(void) {
+#ifdef REUSSIR_ENABLE_RCGMP
+  return wrapOwned(mlir::rcgmp::createConvertRCGMPToSCFPass());
+#else
+  return {nullptr};
+#endif
 }
 MlirPass reussirCreateExpandStridedMetadataPass(void) {
   return wrapOwned(mlir::memref::createExpandStridedMetadataPass());

@@ -100,6 +100,11 @@ module;
 void registerIfrtDialects(mlir::DialectRegistry &registry);
 #endif
 
+#ifdef REUSSIR_ENABLE_RCGMP
+#include "RCGMP/Conversion/ConvertRCGMPToSCF.h"
+#include "RCGMP/IR/RCGMPDialect.h"
+#endif
+
 export module Reussir.Bridge;
 
 using namespace mlir;
@@ -208,6 +213,9 @@ void createLoweringPipeline(mlir::PassManager &pm,
         reussir::createReussirTokenReusePass(tokenReuseOpts));
   }
   pm.addPass(reussir::createReussirConvertToSTDPass());
+#ifdef REUSSIR_ENABLE_RCGMP
+  pm.addPass(mlir::rcgmp::createConvertRCGMPToSCFPass());
+#endif
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirRcCreateSinkPass());
   pm.addNestedPass<mlir::func::FuncOp>(
@@ -374,6 +382,9 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
   registry.insert<reussir::ReussirDialect, DLTIDialect, LLVM::LLVMDialect,
                   arith::ArithDialect, memref::MemRefDialect, scf::SCFDialect,
                   ub::UBDialect, func::FuncDialect, cf::ControlFlowDialect>();
+#ifdef REUSSIR_ENABLE_RCGMP
+  registry.insert<mlir::rcgmp::RCGMPDialect>();
+#endif
   reussir::registerReussirBasicOpsLoweringInterface(registry);
   mlir::registerConvertToLLVMDependentDialectLoading(registry);
   mlir::registerAllExtensions(registry);

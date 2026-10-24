@@ -4,6 +4,8 @@ import sys
 
 # The compiler's enabled optional features (cmake/ReussirFeatures.cmake).
 config.available_features.update(config.reussir_features)
+if 'rcgmp' in config.available_features:
+    config.substitutions.append((r'%rcgmp_runtime', config.rcgmp_runtime_flags))
 
 config.name = 'Reussir'
 # lit 23 (LLVM 23) hard-errors on execute_external=True unless the migration

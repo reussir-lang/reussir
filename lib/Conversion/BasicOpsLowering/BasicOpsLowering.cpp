@@ -72,6 +72,9 @@
 #include "Reussir/Support/AllocatorBinModel.h"
 #include "Reussir/Transformation/SpecialPointerTag.h"
 #include "Sync/Conversion/ConvertSyncToLLVM.h"
+#ifdef REUSSIR_ENABLE_RCGMP
+#include "RCGMP/Conversion/ConvertRCGMPToLLVM.h"
+#endif
 #include "mlir/IR/Location.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/BinaryFormat/Dwarf.h"
@@ -4476,6 +4479,11 @@ void registerReussirBasicOpsLoweringInterface(mlir::DialectRegistry &registry) {
   // operations to LLVM through this interface during the basic-ops lowering's
   // `convert-to-llvm` step.
   mlir::sync::registerConvertSyncToLLVMInterface(registry);
+#ifdef REUSSIR_ENABLE_RCGMP
+  // Arbitrary-precision integers reach this step as rcgmp bridge operations
+  // (`convert-rcgmp-to-scf` expands the rest); lower them the same way.
+  mlir::rcgmp::registerConvertRCGMPToLLVMInterface(registry);
+#endif
   registry.addExtension(
       +[](mlir::MLIRContext *context, ReussirDialect *dialect) {
         dialect->addInterfaces<ReussirConvertToLLVMPatternInterface>();

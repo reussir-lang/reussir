@@ -18,6 +18,9 @@
 #include "Reussir/Conversion/OpenXLATarget.h"
 #endif
 #include "Reussir/IR/ReussirTypes.h"
+#ifdef REUSSIR_ENABLE_RCGMP
+#include "RCGMP/Conversion/ConvertRCGMPToLLVM.h"
+#endif
 #include "Sync/Conversion/TypeConverter.h"
 #include "Sync/IR/SyncTypes.h"
 #include <llvm/ADT/DenseMap.h>
@@ -345,6 +348,11 @@ void populateReussirToLLVMTypeConversions(mlir::LLVMTypeConverter &converter) {
   // conversions so that `convertType` can resolve `!sync.*` wrappers (and, via
   // the CellType conversion below, the reussir cell types built on them).
   mlir::sync::populateSyncToLLVMTypeConversions(converter);
+#ifdef REUSSIR_ENABLE_RCGMP
+  // Arbitrary-precision integers are pointer-sized handles wherever they
+  // appear: in signatures, block arguments, and record members alike.
+  mlir::rcgmp::populateRCGMPToLLVMTypeConversions(converter);
+#endif
   converter.addConversion(
       [&converter, dataLayout](RecordType type,
                                llvm::SmallVectorImpl<mlir::Type> &results) {

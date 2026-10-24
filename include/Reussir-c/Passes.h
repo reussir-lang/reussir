@@ -122,6 +122,9 @@ MlirPass reussirCreateLoopInvariantCodeMotionPass(void);
 MlirPass reussirCreateCSEPass(void);
 MlirPass reussirCreateControlFlowSinkPass(void);
 MlirPass reussirCreateSCFToControlFlowPass(void);
+// Expands arbitrary-precision integer operations into SCF and rcgmp bridge
+// operations. Null when rcgmp support is not compiled in.
+MlirPass reussirCreateConvertRCGMPToSCFPass(void);
 MlirPass reussirCreateExpandStridedMetadataPass(void);
 MlirPass reussirCreateLowerAffinePass(void);
 MlirPass reussirCreateConvertToLLVMPass(void);
