@@ -67,7 +67,7 @@ pub fn main() -> ExitCode {
         Ok(cli) => cli,
         Err(err) => match err.try_into_help() {
             Ok(help) => {
-                println!("{help}");
+                println!("{help}\n{}", reussir_backend::features::help_section());
                 return ExitCode::SUCCESS;
             }
             Err(err) => {

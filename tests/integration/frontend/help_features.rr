@@ -1,0 +1,5 @@
+// `--help` ends with the optional features this build includes or lacks.
+// RUN: %rrc --help | %FileCheck %s
+// CHECK: Features:
+// CHECK-NEXT: tpde {{enabled|disabled}} TPDE baseline code generation for the JIT
+// CHECK-NEXT: openxla {{enabled|disabled}} StableHLO kernels and PJRT device arrays

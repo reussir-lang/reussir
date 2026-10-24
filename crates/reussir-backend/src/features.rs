@@ -46,6 +46,25 @@ pub fn enabled(name: &str) -> bool {
         .enabled
 }
 
+/// The feature list the drivers append to their `--help`.
+pub fn help_section() -> String {
+    let features: Vec<_> = all().collect();
+    let width = features.iter().map(|f| f.name.len()).max().unwrap_or(0);
+    let mut section = String::from("Features:\n");
+    for feature in features {
+        let status = if feature.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        section.push_str(&format!(
+            "  {:<width$}  {status:<8}  {}\n",
+            feature.name, feature.description
+        ));
+    }
+    section
+}
+
 fn static_str(ptr: *const c_char) -> &'static str {
     // SAFETY: the C API hands out pointers to static, NUL-terminated strings.
     unsafe { CStr::from_ptr(ptr) }
@@ -71,6 +90,25 @@ mod tests {
                 "duplicate feature {feature:?}"
             );
             assert_eq!(enabled(feature.name), feature.enabled);
+        }
+    }
+
+    #[test]
+    fn help_section_lists_every_feature() {
+        let section = help_section();
+        for feature in all() {
+            let status = if feature.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            };
+            assert!(
+                section.lines().any(|line| {
+                    let words: Vec<_> = line.split_whitespace().collect();
+                    words.starts_with(&[feature.name, status])
+                }),
+                "{section}"
+            );
         }
     }
 

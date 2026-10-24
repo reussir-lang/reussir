@@ -7,3 +7,6 @@
 
 // HELP: Reussir REPL (Rust pipeline).
 // HELP: Usage: rrepl{{(\.exe)?}} [OPTIONS]
+// HELP: Features:
+// HELP: tpde {{enabled|disabled}}
+// HELP: openxla {{enabled|disabled}}
