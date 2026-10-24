@@ -2870,6 +2870,18 @@ mod tests {
     }
 
     #[test]
+    fn prelude_types_reach_their_associated_functions() {
+        // `Int` and `Nat` name the prelude types from a module that does not
+        // declare them, so `Int::abs` must find the function their inherent
+        // impl declares under `core::num::Int`.
+        check_with_bigint(
+            "pub fn f(i: Int) -> Int { Int::abs(i) }\n\
+             pub fn g(n: Nat) -> Nat { Nat::gcd(n, n) }",
+            |elab, _| assert!(!elab.has_errors(), "{:#?}", elab.reports),
+        );
+    }
+
+    #[test]
     fn bigint_intrinsics_accept_generic_operands() {
         // A generic operand is checked where monomorphization grounds it.
         check_with_bigint(

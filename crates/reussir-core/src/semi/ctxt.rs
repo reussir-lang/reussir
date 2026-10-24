@@ -1154,7 +1154,25 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         } else {
             self.defs
                 .resolve_function_path(&self.classify_segs(path), path.basename)
+                .or_else(|| self.resolve_prelude_assoc_function(path))
         }
+    }
+
+    /// `T::f` where `T` is a prelude type no local record shadows: the
+    /// public function `f` declared under `T`'s own path, as its inherent
+    /// `impl` declares associated functions.
+    fn resolve_prelude_assoc_function(&self, path: &surface::Path) -> Option<DefId> {
+        let [type_name] = path.segments.as_slice() else {
+            return None;
+        };
+        if self.defs.resolve_record(*type_name).is_some() {
+            return None;
+        }
+        let record = self.prelude_lookup(*type_name, crate::semi::lang::LangItemKind::Record)?;
+        let mut key = self.defs.path(record).0.clone();
+        key.push(path.basename);
+        let def = self.defs.lookup_function(&key)?;
+        (self.item_visibility(def)? == surface::Visibility::Public).then_some(def)
     }
 
     /// Resolve a constructor path's *qualifier* as a record: for
