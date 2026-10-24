@@ -18,6 +18,9 @@ if(NOT GMP_INCLUDE_DIR OR NOT GMP_LIBRARY)
     "not found. Install GMP (add its prefix to CMAKE_PREFIX_PATH if it is not "
     "in a standard location), or configure with -DREUSSIR_ENABLE_RCGMP=OFF.")
 endif()
+# rrc records this directory as the run path of products that link GMP, so
+# they find it at load time without an environment setting.
+get_filename_component(REUSSIR_GMP_LIBRARY_DIR "${GMP_LIBRARY}" DIRECTORY)
 
 set(RCGMP_ENABLE_TESTS OFF CACHE BOOL "Build rcgmp tests" FORCE)
 set(RCGMP_ENABLE_BENCHMARKS OFF CACHE BOOL "Build rcgmp benchmarks" FORCE)

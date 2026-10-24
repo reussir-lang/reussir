@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use reussir_backend::features;
 use reussir_backend::llvm::PolyffiPaths;
 
 use crate::write_archive;
@@ -148,6 +149,13 @@ fn add_native_staticlib(
     Ok(())
 }
 
+/// The rcgmp integer runtime's static archive, looked up in the runtime
+/// library directories.
+pub(crate) const RCGMP_RUNTIME_ARCHIVE: &str = "libRCGMPRuntime.a";
+
+/// The directory holding the GMP library found when the compiler was built.
+const GMP_LIBRARY_DIR: Option<&str> = option_env!("REUSSIR_GMP_LIBRARY_DIR");
+
 /// The launcher a Reussir executable is built around, embedded at compile
 /// time: a real Rust `bin` whose `main` calls `__reussir_main`, so rustc
 /// emits the C entry that runs `lang_start` and the program starts under the
@@ -265,6 +273,25 @@ pub(crate) fn link_product(
     // under a single-pass archive linker such as GNU BFD.
     for lib in &cli.link_libs {
         add_native_staticlib(&mut cmd, lib, false, triple)?;
+    }
+
+    // The arbitrary-precision integer runtime, staged beside the Reussir
+    // runtime for the targets it is built for. Only the archive members a
+    // product references enter it, and rustc links dynamic libraries such as
+    // GMP as needed. Its allocation hooks come from the Reussir runtime below.
+    if features::enabled("rcgmp")
+        && let Ok(archive) = find_in_libdirs(&libdirs, RCGMP_RUNTIME_ARCHIVE)
+    {
+        add_native_staticlib(&mut cmd, &archive, false, triple)?;
+        cmd.arg("-l").arg("dylib=gmp");
+        // The GMP the compiler was built against, also as the product's run
+        // path, so the product starts without an environment setting.
+        if let Some(dir) = GMP_LIBRARY_DIR
+            && !msvc
+        {
+            cmd.arg("-L").arg(format!("native={dir}"));
+            cmd.arg(format!("-Clink-arg=-Wl,-rpath,{dir}"));
+        }
     }
 
     // The runtime.

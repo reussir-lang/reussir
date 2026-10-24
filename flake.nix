@@ -436,7 +436,9 @@
             # (no rpath — `-print-file-name=libomp.so` does not see wrapper
             # -L paths), so the probe binary finds libomp.so only through
             # LD_LIBRARY_PATH.
-            export LD_LIBRARY_PATH="${llvmPkgs.llvm.lib}/lib:${llvmPkgs.mlir}/lib:${pkgs.llvmPackages.openmp}/lib:${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.zlib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            # gmp: like zlib, rustc links GMP without an rpath entry into
+            # products that use the rcgmp integer runtime.
+            export LD_LIBRARY_PATH="${llvmPkgs.llvm.lib}/lib:${llvmPkgs.mlir}/lib:${pkgs.llvmPackages.openmp}/lib:${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.zlib}/lib:${pkgs.gmp}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
             # Write CMakeUserPresets.json (user-local, gitignored) so that
             # `cmake --preset nix-dev` just works with no extra flags.

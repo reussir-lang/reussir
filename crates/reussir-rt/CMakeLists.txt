@@ -60,6 +60,16 @@ add_custom_target(reussir-rt ALL
     COMMENT "Building reussir-rt with cargo (${CARGO_PROFILE} profile)"
 )
 
+if(REUSSIR_ENABLE_RCGMP)
+    # The rcgmp integer runtime sits beside the Reussir runtime, where the
+    # driver's link step looks for it: the layout rene's runtime bake produces.
+    add_dependencies(reussir-rt RCGMPRuntime)
+    add_custom_command(TARGET reussir-rt POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:RCGMPRuntime> ${REUSSIR_RT_TARGET_DIR}/deps/
+        VERBATIM)
+endif()
+
 # The PJRT-enabled runtime: device arrays and kernel launches through a PJRT
 # plugin. It links this build's StableHLO runtime archives, so it exists only
 # with OpenXLA. Programs that move data to devices or launch kernels link it

@@ -40,6 +40,10 @@ if(REUSSIR_ENABLE_OPENXLA)
     FetchContent_GetProperties(xla)
     list(APPEND RENE_CARGO_ENV "REUSSIR_PJRT_PATH=${xla_SOURCE_DIR}")
 endif()
+if(REUSSIR_ENABLE_RCGMP)
+    # Bundled into rene and staged by its runtime bake (crates/rene/build.rs).
+    list(APPEND RENE_CARGO_ENV "REUSSIR_RCGMP_RUNTIME=$<TARGET_FILE:RCGMPRuntime>")
+endif()
 
 set(RENE_BIN rene${CMAKE_EXECUTABLE_SUFFIX})
 
@@ -62,6 +66,9 @@ add_custom_target(rene-install ALL
 )
 
 add_custom_target(rene DEPENDS rene-build rene-install)
+if(REUSSIR_ENABLE_RCGMP)
+    add_dependencies(rene-build RCGMPRuntime)
+endif()
 
 add_custom_target(rene-test
     COMMAND ${CMAKE_COMMAND} -E env ${RENE_CARGO_ENV}

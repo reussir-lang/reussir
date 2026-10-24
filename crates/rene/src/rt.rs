@@ -25,9 +25,32 @@ pub const RT_DIR: &str = "reussir-rt";
 /// The bundled runtime source (tar.zst), packed by `build.rs`.
 static RT_BUNDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reussir-rt.tar.zst"));
 
-/// Blake3 hex digest of the bundle — the staleness key for the baked runtime.
+/// The rcgmp integer runtime archive built for rene's own target, or empty
+/// when rene was built without it (packed by `build.rs`).
+static RCGMP_RUNTIME: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rcgmp-runtime.a"));
+
+/// The file name `rrc`'s link step looks up in the runtime library directories.
+const RCGMP_RUNTIME_ARCHIVE: &str = "libRCGMPRuntime.a";
+
+/// Blake3 hex digest of the bundles — the staleness key for the baked runtime.
 pub fn bundle_hash() -> String {
-    blake3::hash(RT_BUNDLE).to_hex().to_string()
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(RT_BUNDLE);
+    hasher.update(RCGMP_RUNTIME);
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Where a bake for `target` stages the rcgmp runtime: the dependency
+/// directory in which `rrc` finds the runtime rlib, which it searches for the
+/// archive too. `None` for targets rene carries no archive for.
+fn rcgmp_runtime_path(target: &str, deps_dirs: &[PathBuf]) -> Option<PathBuf> {
+    if RCGMP_RUNTIME.is_empty() || target != env!("RENE_RCGMP_RUNTIME_TARGET") {
+        return None;
+    }
+    deps_dirs
+        .iter()
+        .find(|dir| dir.join("libreussir_rt.rlib").is_file())
+        .map(|dir| dir.join(RCGMP_RUNTIME_ARCHIVE))
 }
 
 /// Unpack the bundled source into `dest` (creating `dest/reussir-rt/…`).
@@ -281,6 +304,10 @@ pub async fn prepare(
     bar.finish_and_clear();
     progress.remove(&bar);
     let (rlib, staticlib, deps_dirs) = result?;
+    if let Some(path) = rcgmp_runtime_path(&toolchain.target, &deps_dirs) {
+        std::fs::write(&path, RCGMP_RUNTIME)
+            .map_err(|e| format!("cannot stage `{}`: {e}", path.display()))?;
+    }
 
     let artifacts = RtArtifacts {
         target: toolchain.target.clone(),
@@ -332,6 +359,8 @@ fn fresh_bake(
         && artifacts.rustc_version == toolchain.version
         && artifacts.rlib.is_file()
         && artifacts.staticlib.is_file()
+        && rcgmp_runtime_path(&artifacts.target, &artifacts.deps_dirs)
+            .is_none_or(|path| path.is_file())
         && artifacts.libdirs().all(Path::is_dir);
     Ok(valid.then_some(artifacts))
 }
@@ -531,6 +560,25 @@ mod tests {
         }
         for target in ["", ".", "..", "../wasm32", "x/y", "target.json"] {
             assert!(validate_target(target).is_err(), "{target}");
+        }
+    }
+
+    #[test]
+    fn rcgmp_runtime_is_staged_beside_the_runtime_rlib() {
+        let root = tempfile::tempdir().unwrap();
+        let (host_deps, target_deps) = (root.path().join("host"), root.path().join("target"));
+        for dir in [&host_deps, &target_deps] {
+            std::fs::create_dir(dir).unwrap();
+        }
+        std::fs::write(target_deps.join("libreussir_rt.rlib"), []).unwrap();
+        let deps_dirs = [host_deps, target_deps.clone()];
+
+        assert_eq!(rcgmp_runtime_path("wasm32-wasip1", &deps_dirs), None);
+        let own = rcgmp_runtime_path(env!("RENE_RCGMP_RUNTIME_TARGET"), &deps_dirs);
+        if RCGMP_RUNTIME.is_empty() {
+            assert_eq!(own, None);
+        } else {
+            assert_eq!(own, Some(target_deps.join("libRCGMPRuntime.a")));
         }
     }
 

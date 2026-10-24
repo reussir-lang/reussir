@@ -115,7 +115,28 @@ fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("reussir-rt.tar.zst");
     fs::write(&out, compressed).expect("failed to write the runtime bundle");
 
+    bundle_rcgmp_runtime();
     bundle_core(workspace_dir);
+}
+
+/// Bundle the rcgmp integer runtime archive that CMake built for rene's own
+/// target, when the build enables it (an empty file otherwise). Unlike
+/// `reussir-rt`, it is C++ with no Rust ABI to match, so a prebuilt archive
+/// serves every toolchain; runtime bakes for that target stage it.
+fn bundle_rcgmp_runtime() {
+    println!("cargo::rerun-if-env-changed=REUSSIR_RCGMP_RUNTIME");
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("rcgmp-runtime.a");
+    match env::var_os("REUSSIR_RCGMP_RUNTIME") {
+        Some(archive) => {
+            println!("cargo::rerun-if-changed={}", Path::new(&archive).display());
+            fs::copy(&archive, &out).expect("failed to bundle the rcgmp runtime archive");
+        }
+        None => fs::write(&out, []).expect("failed to write the empty rcgmp runtime bundle"),
+    }
+    println!(
+        "cargo::rustc-env=RENE_RCGMP_RUNTIME_TARGET={}",
+        env::var("TARGET").unwrap()
+    );
 }
 
 /// Bundle the `library/core` package the same way as the runtime: a
