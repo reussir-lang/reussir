@@ -9,6 +9,11 @@
 // RUN: %cc %t.o %S/bigint_basics.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
 // RUN: %t.exe
 
+// A linked program needs the integer runtime for its target.
+// RUN: mkdir -p %t.empty
+// RUN: %not %rrc %s --package-name bigint --extern core=%t.core.rri --emit executable --polyffi-libdir %t.empty --target-triple aarch64-unknown-linux-gnu -o %t.cross 2>&1 | %FileCheck %s --check-prefix=CROSS
+// CROSS: `Nat` and `Int` need the rcgmp integer runtime, which is not available for `aarch64-unknown-linux-gnu`
+
 fn succ(n : Nat) -> Nat { Nat::Succ{n} }
 fn neg_succ(n : Nat) -> Int { Int::NegSucc{n} }
 fn of_nat(n : Nat) -> Int { Int::OfNat{n} }

@@ -23,7 +23,7 @@ use crate::literal::{FloatLit, Integer};
 use crate::semi::const_eval::ConstValue;
 use crate::semi::ctxt::{DefaultCap, TransformScript};
 use crate::semi::hir::{ArithOp, CmpOp, ExprId, VarId};
-use crate::semi::ty::Ty;
+use crate::semi::ty::{Ty, TyKind};
 use crate::surface::{Span, Visibility};
 use crate::utils::string::StringToken;
 
@@ -80,6 +80,60 @@ impl<'tcx> Program<'tcx> {
     /// Resolve an interned symbol to its mangled text.
     pub fn symbol(&self, sym: Symbol) -> &str {
         self.symbols.resolve(&sym.0)
+    }
+
+    /// Whether the program handles a built-in integer (`Nat` or `Int`) — in a
+    /// signature, an expression, or a record it lays out — and so needs the
+    /// rcgmp runtime when it is linked.
+    pub fn uses_bigint(&self) -> bool {
+        let in_records = self.records.iter().any(|record| match record.layout {
+            RecordLayout::Compound(members) => members.iter().any(|m| contains_bigint(m.ty)),
+            RecordLayout::Variant(variants) => variants
+                .iter()
+                .any(|v| v.fields.iter().any(|&ty| contains_bigint(ty))),
+            RecordLayout::Opaque { .. } => false,
+        });
+        in_records
+            || self.functions.iter().any(|function| {
+                function.params.iter().any(|p| contains_bigint(p.ty))
+                    || contains_bigint(function.return_ty)
+                    || function.body.is_some_and(|body| {
+                        let mut found = false;
+                        for_each_expr(body, &mut |e| found |= contains_bigint(e.ty));
+                        found
+                    })
+            })
+    }
+}
+
+/// Whether `ty` is or structurally contains a built-in integer.
+fn contains_bigint(ty: Ty<'_>) -> bool {
+    match *ty.kind() {
+        TyKind::BigInt(_) => true,
+        TyKind::Record { args, .. } | TyKind::Tuple(args) | TyKind::Future(args) => {
+            args.iter().any(|&a| contains_bigint(a))
+        }
+        TyKind::Closure { params, ret } => {
+            params.iter().any(|&p| contains_bigint(p)) || contains_bigint(ret)
+        }
+        TyKind::Array { elem, .. }
+        | TyKind::DevArray { elem, .. }
+        | TyKind::Cell { elem, .. }
+        | TyKind::Tensor { elem, .. }
+        | TyKind::ConstSeq(elem)
+        | TyKind::Nullable(elem)
+        | TyKind::Arc(elem) => contains_bigint(elem),
+        TyKind::Int(_)
+        | TyKind::Fp(_)
+        | TyKind::Bool
+        | TyKind::Str
+        | TyKind::Char
+        | TyKind::Unit
+        | TyKind::Token
+        | TyKind::DefaultPlacement
+        | TyKind::Generic(_)
+        | TyKind::Hole(_)
+        | TyKind::Bottom => false,
     }
 }
 

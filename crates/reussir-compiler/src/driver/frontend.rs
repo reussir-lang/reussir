@@ -464,6 +464,26 @@ pub(crate) fn lower_or_render<T>(
     }
 }
 
+/// A linked program using `Nat` or `Int` needs the rcgmp runtime, which is
+/// built for the targets the toolchain carries it for: report its absence
+/// before compiling rather than as unresolved symbols at link time.
+fn check_rcgmp_runtime(cli: &Cli) -> Result<(), String> {
+    // Without runtime directories the link step reports the missing runtime.
+    let Ok(libdirs) = super::link::runtime_libdirs(cli) else {
+        return Ok(());
+    };
+    if super::link::find_in_libdirs(&libdirs, super::link::RCGMP_RUNTIME_ARCHIVE).is_ok() {
+        return Ok(());
+    }
+    let target = match &cli.target_triple {
+        Some(triple) => format!("`{triple}`"),
+        None => "the host target".to_owned(),
+    };
+    Err(format!(
+        "`Nat` and `Int` need the rcgmp integer runtime, which is not available for {target}"
+    ))
+}
+
 /// Finish the front leg from a ground MIR program: a `mir` dump, or lowering to
 /// an MLIR module for `mlir` and beyond.
 #[allow(clippy::too_many_arguments)]
@@ -486,6 +506,9 @@ pub(crate) fn finish_mir<'c, 'tcx>(
             _ => mir::print::Printer::new(defs, resolver),
         };
         return Ok(Produced::Text(printer.program(program)));
+    }
+    if target.is_linked() && program.uses_bigint() {
+        check_rcgmp_runtime(cli)?;
     }
     // Names feed variable/function debug info; only meaningful with `-g`.
     let names = cli.debug.then_some(resolver);
