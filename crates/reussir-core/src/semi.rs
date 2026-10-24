@@ -2918,6 +2918,30 @@ mod tests {
     }
 
     #[test]
+    fn bigint_methods_check_and_monomorphize() {
+        check_with_bigint(
+            "pub fn nat(a: Nat, b: Nat) -> (u64, bool) {\n\
+                 let g = a.gcd(b).pow(3);\n\
+                 let bit = g.test_bit(2);\n\
+                 let q = g.div_exact(2);\n\
+                 let (low, over) = q.overflowing_to_u64();\n\
+                 (low + q.log2(), bit || over)\n\
+             }\n\
+             pub fn int(a: Int, b: Int) -> (i64, bool) {\n\
+                 let n: Nat = a.nat_abs() + b.to_nat() + a.gcd(b);\n\
+                 let i = a.abs().div_euclid(b) + a.rem_euclid(b) + a.div_floor(b) + a.rem_floor(b);\n\
+                 let (low, over) = i.pow(2).div_exact(n as Int).overflowing_to_i64();\n\
+                 (low, over || a.test_bit(1))\n\
+             }",
+            |elab, _| {
+                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
+                assert!(reports.is_empty(), "{reports:#?}");
+            },
+        );
+    }
+
+    #[test]
     fn bigint_intrinsics_reject_fixed_width_integers() {
         check_with_bigint(
             "pub fn f(a: i64) -> u64 { core::intrinsic::bigint::log2i(a) }",

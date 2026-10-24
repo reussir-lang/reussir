@@ -4,6 +4,12 @@
 // RUN: %cc %asan_flags -c -x ir %t.ll -o %t.o
 // RUN: %cc %asan_flags %t.o %S/../frontend/bigint_arith.c %reussir_rt_asan %rcgmp_runtime -o %t.exe %rpath_flag %rpath_san_flag %extra_sys_libs
 // RUN: %asan_env %t.exe
+// RUN: %rrc %S/../frontend/bigint_methods.rr --package-name bigint --extern core=%t.core.rri -o %t.methods.ll -t llvm-ir --relocation-mode pic --sanitizer address --nullary-variant-encoding arch-independent
+// RUN: %cc %asan_flags -c -x ir %t.methods.ll -o %t.methods.o
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core -o %t.core.ll -t llvm-ir --relocation-mode pic --sanitizer address --nullary-variant-encoding arch-independent
+// RUN: %cc %asan_flags -c -x ir %t.core.ll -o %t.core.o
+// RUN: %cc %asan_flags %t.methods.o %t.core.o %S/../frontend/bigint_methods.c %reussir_rt_asan %rcgmp_runtime -o %t.methods.exe %rpath_flag %rpath_san_flag %extra_sys_libs
+// RUN: %asan_env %t.methods.exe
 
 // Heap integers come from the sanitized runtime's allocator through the rcgmp
 // allocation hooks, so ASan sees every retain, release and in-place reuse of

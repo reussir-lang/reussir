@@ -1,0 +1,72 @@
+// The `Nat` and `Int` methods end to end, on immediate and heap values: the
+// greatest common divisor, powers, logarithms, bit tests, exact division,
+// checked narrowing, absolute values, and the Euclidean and floored rounding
+// modes, whose zero divisor terminates the program.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core -o %t.core.o --relocation-mode pic
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %t.core.o %S/bigint_methods.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %if wine-quirks %{ %not %} %else %{ %not --crash %} %t.exe zero
+
+fn factorial(n : Nat) -> Nat { if n == 0 { 1 } else { n * factorial(n - 1) } }
+
+fn int(x : i64) -> Int { x as Int }
+
+fn nat_ok() -> bool {
+    let twelve : Nat = 12;
+    let zero : Nat = 0;
+    let two : Nat = 2;
+    let five : Nat = 5;
+    let big = two.pow(100);
+    twelve.gcd(18) == 6 && zero.gcd(0) == 0
+        && factorial(30).gcd(factorial(25)) == factorial(25)
+        && big == 1267650600228229401496703205376 && five.pow(0) == 1
+        && zero.log2() == 0 && five.log2() == 2 && big.log2() == 100 && (big - 1).log2() == 99
+        && five.test_bit(0) && !five.test_bit(1) && big.test_bit(100) && !big.test_bit(99)
+        && factorial(30).div_exact(factorial(28)) == 870
+}
+
+fn narrowing_ok() -> bool {
+    let max : Nat = 18446744073709551615;
+    let (max_low, max_over) = max.overflowing_to_u64();
+    let (wrap_low, wrap_over) = (max + 1).overflowing_to_u64();
+    let half : Nat = 9223372036854775808;
+    let (half_low, half_over) = half.overflowing_to_i64();
+    let (neg_low, neg_over) = int(-1).overflowing_to_u64();
+    let (small_low, small_over) = int(-1).overflowing_to_i64();
+    max_low == 18446744073709551615 && !max_over && wrap_low == 0 && wrap_over
+        && half_low == -9223372036854775808 && half_over
+        && neg_low == 18446744073709551615 && neg_over && small_low == -1 && !small_over
+}
+
+fn int_ok() -> bool {
+    let big : Int = -1267650600228229401496703205376;
+    let magnitude : Nat = 1267650600228229401496703205376;
+    int(-5).abs() == 5 && big.abs() == magnitude as Int && big.nat_abs() == magnitude
+        && int(-3).to_nat() == 0 && int(7).to_nat() == 7 && big.to_nat() == 0
+        && int(-12).gcd(int(18)) == 6 && int(-2).pow(3) == -8 && int(-1).test_bit(1000)
+        && int(-870).div_exact(int(29)) == -30
+}
+
+fn rounding_ok() -> bool {
+    let big : Int = -1267650600228229401496703205376;
+    int(-7).div_euclid(int(2)) == -4 && int(-7).rem_euclid(int(2)) == 1
+        && int(7).div_euclid(int(-2)) == -3 && int(7).rem_euclid(int(-2)) == 1
+        && int(7).div_floor(int(-2)) == -4 && int(7).rem_floor(int(-2)) == -1
+        && big.div_floor(int(3)) == -422550200076076467165567735126 && big.rem_floor(int(3)) == 2
+        && big.div_euclid(int(-3)) == 422550200076076467165567735126 && big.rem_euclid(int(-3)) == 2
+}
+
+pub fn floor_by(divisor : i64) -> i64 { (int(7).div_floor(divisor as Int)) as i64 }
+
+fn digit(ok : bool) -> i64 { if ok { 1 } else { 0 } }
+
+pub fn main() -> i64 {
+    digit(nat_ok()) + digit(narrowing_ok()) * 10 + digit(int_ok()) * 100 + digit(rounding_ok()) * 1000
+}
+
+extern "C" trampoline "reussir_main" = main;
+extern "C" trampoline "floor_by" = floor_by;

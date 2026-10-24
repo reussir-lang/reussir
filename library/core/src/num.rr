@@ -68,3 +68,123 @@ impl PartialOrd for Nat { }
 impl PartialOrd for Int { }
 impl Ord for Nat { }
 impl Ord for Int { }
+
+// Operations beyond the operators, through `core::intrinsic::bigint`. The
+// operators keep the fixed-width integers' conventions: `/` and `%`
+// truncate. The other rounding modes are methods.
+
+impl Nat {
+    /// The greatest common divisor; `0.gcd(0)` is `0`.
+    pub fn gcd(self: Self, other: Self) -> Nat {
+        core::intrinsic::bigint::gcdi(self, other)
+    }
+
+    /// `self` to the power `exp`; anything to the power `0` is `1`.
+    pub fn pow(self: Self, exp: u64) -> Self {
+        core::intrinsic::bigint::ipowi(self, exp)
+    }
+
+    /// The base-2 logarithm, rounded down; `0` for zero.
+    pub fn log2(self: Self) -> u64 {
+        core::intrinsic::bigint::log2i(self)
+    }
+
+    /// Whether bit `i` (counted from the least significant) is set.
+    pub fn test_bit(self: Self, i: u64) -> bool {
+        core::intrinsic::bigint::testbiti(self, i)
+    }
+
+    /// `self / d` for a `d` known to divide `self`, faster than `/`. If `d`
+    /// does not divide `self`, the result is unspecified; a zero `d`
+    /// terminates the program.
+    pub fn div_exact(self: Self, d: Self) -> Self {
+        core::intrinsic::bigint::divsi_exact(self, d)
+    }
+
+    /// The low 64 bits, and whether `self` does not fit a `u64`.
+    pub fn overflowing_to_u64(self: Self) -> (u64, bool) {
+        core::intrinsic::bigint::trunci_overflow(self)
+    }
+
+    /// The low 64 bits as an `i64`, and whether `self` does not fit an `i64`.
+    pub fn overflowing_to_i64(self: Self) -> (i64, bool) {
+        core::intrinsic::bigint::trunci_overflow(self)
+    }
+}
+
+impl Int {
+    /// The greatest common divisor of the magnitudes; `0.gcd(0)` is `0`.
+    pub fn gcd(self: Self, other: Self) -> Nat {
+        core::intrinsic::bigint::gcdi(self, other)
+    }
+
+    /// `self` to the power `exp`; anything to the power `0` is `1`.
+    pub fn pow(self: Self, exp: u64) -> Self {
+        core::intrinsic::bigint::ipowi(self, exp)
+    }
+
+    /// Whether bit `i` (counted from the least significant) of the infinite
+    /// two's complement is set: past the magnitude, bits are clear for a
+    /// nonnegative integer and set for a negative one.
+    pub fn test_bit(self: Self, i: u64) -> bool {
+        core::intrinsic::bigint::testbiti(self, i)
+    }
+
+    /// `self / d` for a `d` known to divide `self`, faster than `/`. If `d`
+    /// does not divide `self`, the result is unspecified; a zero `d`
+    /// terminates the program.
+    pub fn div_exact(self: Self, d: Self) -> Self {
+        core::intrinsic::bigint::divsi_exact(self, d)
+    }
+
+    /// The low 64 bits of the two's complement, and whether `self` does not
+    /// fit a `u64`.
+    pub fn overflowing_to_u64(self: Self) -> (u64, bool) {
+        core::intrinsic::bigint::trunci_overflow(self)
+    }
+
+    /// The low 64 bits of the two's complement as an `i64`, and whether
+    /// `self` does not fit an `i64`.
+    pub fn overflowing_to_i64(self: Self) -> (i64, bool) {
+        core::intrinsic::bigint::trunci_overflow(self)
+    }
+
+    /// The absolute value.
+    pub fn abs(self: Self) -> Int {
+        core::intrinsic::bigint::absi(self) as Int
+    }
+
+    /// The absolute value, as a `Nat`.
+    pub fn nat_abs(self: Self) -> Nat {
+        core::intrinsic::bigint::absi(self)
+    }
+
+    /// `self` as a `Nat`, with negative integers becoming `0`.
+    pub fn to_nat(self: Self) -> Nat {
+        if self < 0 { 0 } else { core::intrinsic::bigint::absi(self) }
+    }
+
+    /// The Euclidean quotient: `self == d * q + r` with `0 <= r < |d|`. A
+    /// zero `d` terminates the program.
+    pub fn div_euclid(self: Self, d: Self) -> Int {
+        core::intrinsic::bigint::edivsi(self, d)
+    }
+
+    /// The Euclidean remainder, never negative. A zero `d` terminates the
+    /// program.
+    pub fn rem_euclid(self: Self, d: Self) -> Int {
+        core::intrinsic::bigint::emodsi(self, d)
+    }
+
+    /// The quotient rounded toward negative infinity. A zero `d` terminates
+    /// the program.
+    pub fn div_floor(self: Self, d: Self) -> Int {
+        core::intrinsic::bigint::floordivsi(self, d)
+    }
+
+    /// The remainder of `div_floor`, with the sign of `d`. A zero `d`
+    /// terminates the program.
+    pub fn rem_floor(self: Self, d: Self) -> Int {
+        core::intrinsic::bigint::floormodsi(self, d)
+    }
+}
