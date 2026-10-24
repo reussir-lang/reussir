@@ -1,0 +1,12 @@
+// `std::bigint`: decimal text of `Nat` and `Int` in both directions, and
+// their `Hash`. One that fits an `i64` hashes as that `i64`, and a heap
+// integer its sign, limbs, and count, so equal values hash equal however
+// they are stored.
+
+// REQUIRES: rcgmp
+// RUN: %rene build --manifest-path %S/std_bigint/rene.ncl --build-dir %t.bdir %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: {{[/\\]}}dev{{[/\\]}}std_bigint
+
+// RUN: %t.bdir/dev/std_bigint%exe_ext | %FileCheck %s
+// CHECK-COUNT-11: 1
+// CHECK-NOT: 0

@@ -1,0 +1,65 @@
+// Converts and hashes `Nat` and `Int` through `std::bigint` and prints
+// whether each property holds.
+
+import std::bigint::int_to_string;
+import std::bigint::nat_to_string;
+import std::bigint::parse_int;
+import std::bigint::parse_nat;
+import std::hash::fast_hash;
+import std::hash::strong_hash;
+import std::option::Option;
+
+#[ffi(import)]
+fn print_u64(value: u64) [{ println!("{value}") }];
+
+fn check(ok: bool) { print_u64(if ok { 1 } else { 0 }) }
+
+fn int(x: i64) -> Int { x as Int }
+
+fn nat_is(parsed: Option<Nat>, expected: Nat) -> bool {
+    match parsed { Option::Some(n) => n == expected, Option::None => false }
+}
+
+fn int_is(parsed: Option<Int>, expected: Int) -> bool {
+    match parsed { Option::Some(n) => n == expected, Option::None => false }
+}
+
+#[main]
+pub fn entry() {
+    let two: Nat = 2;
+    let five: Nat = 5;
+    let big: Nat = 1267650600228229401496703205376;
+    let negative_big: Int = -1267650600228229401496703205376;
+    let i64_max: Nat = 9223372036854775807;
+    // Small, heap and negative values print their digits.
+    check(nat_to_string(five).eq_str("5") && nat_to_string(0).eq_str("0")
+        && int_to_string(int(-7)).eq_str("-7"));
+    check(nat_to_string(two.pow(100)).eq_str("1267650600228229401496703205376")
+        && int_to_string(negative_big).eq_str("-1267650600228229401496703205376"));
+    // Parsing gives the same values back, leading zeros allowed.
+    check(nat_is(parse_nat("1267650600228229401496703205376"), big)
+        && nat_is(parse_nat("0042"), 42) && int_is(parse_int("-0"), int(0))
+        && int_is(parse_int("-1267650600228229401496703205376"), negative_big));
+    // A `Nat` has no sign, and malformed text is rejected.
+    check(parse_nat("-5").is_none() && parse_nat("").is_none() && parse_nat("12a").is_none()
+        && parse_int("-").is_none() && parse_int("+1").is_none() && parse_int(" 1").is_none());
+    // An integer that fits an `i64` hashes as that `i64`.
+    check(fast_hash(five) == fast_hash(5 as i64) && fast_hash(int(-7)) == fast_hash(-7 as i64));
+    // A heap integer hashes equal to the same value computed at run time.
+    check(fast_hash(big) == fast_hash(two.pow(100)) && strong_hash(big) == strong_hash(two.pow(100)));
+    // Neighbouring heap integers differ.
+    check(fast_hash(big) != fast_hash(two.pow(100) + 1));
+    // The sign separates `Int`s with equal magnitudes.
+    check(fast_hash(negative_big) == fast_hash(int(0) - two.pow(100) as Int)
+        && fast_hash(negative_big) != fast_hash(big as Int));
+    // Both sides of the `i64` boundary.
+    check(fast_hash(i64_max) == fast_hash(9223372036854775807 as i64)
+        && fast_hash(i64_max + 1) == fast_hash(two.pow(63)));
+    // A small `Nat` and the equal `Int` hash alike, both as that `i64`.
+    check(fast_hash(five) == fast_hash(int(5)) && fast_hash(i64_max) == fast_hash(i64_max as Int));
+    // A parsed heap value hashes like the computed one.
+    check(match parse_nat("1267650600228229401496703205376") {
+        Option::Some(n) => fast_hash(n) == fast_hash(big),
+        Option::None => false
+    });
+}

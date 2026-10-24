@@ -1,0 +1,7 @@
+// A compiler built without the `rcgmp` feature still builds `std`, whose
+// `std::bigint` stays unlowered, and rejects a program's call into it.
+
+// UNSUPPORTED: rcgmp
+// RUN: %not %rene build --manifest-path %S/std_bigint_disabled/rene.ncl --build-dir %t.bdir %rrc_linker 2>&1 | %FileCheck %s
+
+// CHECK: `std::bigint::parse_nat` requires the `rcgmp` feature, which this compiler was built without

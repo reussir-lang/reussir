@@ -1,3 +1,4 @@
+pub mod bigint;
 pub mod collections;
 pub mod hash;
 pub mod option;

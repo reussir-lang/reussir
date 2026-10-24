@@ -53,6 +53,12 @@ impl String {
         String { raw: raw_new() }
     }
 
+    /// Wraps a raw runtime string, such as one an `#[ffi(import)]` body
+    /// built. O(1).
+    pub fn from_raw(raw : RawString) -> Self {
+        String { raw: raw }
+    }
+
     /// Creates a string holding a copy of `value`. O(n).
     pub fn from_str(value : str) -> Self {
         String::new().push_str(value)

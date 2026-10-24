@@ -1,0 +1,6 @@
+import std::bigint::parse_nat;
+import std::option::Option;
+
+pub fn parses() -> bool {
+    match parse_nat("12") { Option::Some(_) => true, Option::None => false }
+}

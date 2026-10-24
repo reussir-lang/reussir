@@ -1,0 +1,126 @@
+//! Decimal text and hashing for the built-in integers `Nat` and `Int`.
+//!
+//! The integers live in `core`; the parts that need `String`, `Option` and
+//! `Hasher` live here. Conversion goes through the rcgmp runtime: the
+//! integers cross the FFI boundary as raw handles that the Rust bodies
+//! borrow (`docs/design/polymorphic-ffi.md`).
+
+import std::hash::Hash;
+import std::hash::Hasher;
+import std::option::Option;
+import std::string::RawString;
+import std::string::String;
+
+extern "rust" [{
+    use reussir_rt::collections::string::String as RString;
+
+    unsafe extern "C" {
+        fn rcgmp_mpz_decimal_size(value: *mut ::std::ffi::c_void) -> usize;
+        fn rcgmp_mpz_to_decimal(value: *mut ::std::ffi::c_void, buffer: *mut u8) -> usize;
+        fn rcgmp_mpz_from_decimal(text: *const u8, length: usize, atomic: u32)
+            -> *mut ::std::ffi::c_void;
+    }
+
+    // The decimal digits of a borrowed integer, written in place into one
+    // allocation of the size the runtime asks for.
+    unsafe fn decimal(value: *mut ::std::ffi::c_void) -> RString {
+        let mut text = RString::with_capacity(rcgmp_mpz_decimal_size(value));
+        let bytes = text.make_mut().as_mut_vec();
+        let length = rcgmp_mpz_to_decimal(value, bytes.as_mut_ptr());
+        bytes.set_len(length);
+        text
+    }
+
+    // Whether `text` is one or more ASCII digits, after a minus sign when
+    // `signed`: exactly the form `rcgmp_mpz_from_decimal` accepts.
+    fn is_decimal(text: &[u8], signed: bool) -> bool {
+        let digits = match text {
+            [b'-', rest @ ..] if signed => rest,
+            _ => text,
+        };
+        !digits.is_empty() && digits.iter().all(u8::is_ascii_digit)
+    }
+}];
+
+#[ffi(import)]
+fn raw_nat_decimal(n : Nat) -> RawString [{ decimal(n) }];
+
+#[ffi(import)]
+fn raw_int_decimal(n : Int) -> RawString [{ decimal(n) }];
+
+#[ffi(import)]
+fn raw_is_decimal(s : str, signed : bool) -> bool [{ is_decimal(s.as_bytes(), signed) }];
+
+// `s` has been checked by `raw_is_decimal`, so the runtime never rejects it.
+#[ffi(import)]
+fn raw_parse_nat(s : str) -> Nat [{
+    rcgmp_mpz_from_decimal(s.as_bytes().as_ptr(), s.as_bytes().len(), 0)
+}];
+
+#[ffi(import)]
+fn raw_parse_int(s : str) -> Int [{
+    rcgmp_mpz_from_decimal(s.as_bytes().as_ptr(), s.as_bytes().len(), 0)
+}];
+
+/// The decimal digits of `n`, without leading zeros. O(n log n) in the
+/// number of digits.
+pub fn nat_to_string(n : Nat) -> String {
+    String::from_raw(raw_nat_decimal(n))
+}
+
+/// The decimal digits of `n`, after a minus sign when it is negative.
+pub fn int_to_string(n : Int) -> String {
+    String::from_raw(raw_int_decimal(n))
+}
+
+/// The natural number written in `s`: one or more ASCII digits, leading
+/// zeros allowed. Any other text, including a sign, is `None`.
+pub fn parse_nat(s : str) -> Option<Nat> {
+    if raw_is_decimal(s, false) { Option::Some { raw_parse_nat(s) } } else { Option::None }
+}
+
+/// The integer written in `s`: one or more ASCII digits after an optional
+/// minus sign. Any other text is `None`.
+pub fn parse_int(s : str) -> Option<Int> {
+    if raw_is_decimal(s, true) { Option::Some { raw_parse_int(s) } } else { Option::None }
+}
+
+// The built-in integers hash by value. One that fits an `i64` writes it as
+// one `write_i64`; any other writes its sign (`Int` only), the magnitude's
+// 64-bit limbs from the least significant, and their count, so that no
+// value's writes are a prefix of another's. The choice depends only on the
+// value, never on whether it is stored inline or on the heap, so equal
+// integers always make equal writes.
+
+impl Hash for Nat {
+    fn hash<H: Hasher>(self: Self, state: H) -> H {
+        let (small, overflow) = self.overflowing_to_i64();
+        if overflow {
+            write_limbs(self, 0, core::intrinsic::bigint::limb_count(self), state)
+        } else {
+            state.write_i64(small)
+        }
+    }
+}
+
+impl Hash for Int {
+    fn hash<H: Hasher>(self: Self, state: H) -> H {
+        let (small, overflow) = self.overflowing_to_i64();
+        if overflow {
+            let count = core::intrinsic::bigint::limb_count(self);
+            write_limbs(self, 0, count, state.write_bool(self < 0))
+        } else {
+            state.write_i64(small)
+        }
+    }
+}
+
+// Limbs `i` up to `count` of the magnitude of `x`, then `count`.
+fn write_limbs<T: Integral, H: Hasher>(x: T, i: u64, count: u64, state: H) -> H {
+    if i == count {
+        state.write_u64(count)
+    } else {
+        let limb = core::intrinsic::bigint::limb(x, i);
+        write_limbs(x, i + 1, count, state.write_u64(limb))
+    }
+}
