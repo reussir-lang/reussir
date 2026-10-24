@@ -4072,7 +4072,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// `testbiti(T, u64) -> bool`, `divsi_exact`/`edivsi`/`emodsi`/
     /// `floordivsi`/`floormodsi(T, T) -> T`, `absi(T) -> Nat`, and
     /// `trunci_overflow(T) -> (U, bool)` for a fixed-width integer `U`, the
-    /// optional second type argument. A `T` this check cannot see yet is
+    /// optional second type argument, `sitofp(T) -> f64`,
+    /// `limb_count(T) -> u64`, `limb(T, u64) -> u64`, and `fptosi(f64) ->
+    /// Int`, which takes no type argument. A `T` this check cannot see yet is
     /// left to monomorphization, which rejects anything but `Nat` and `Int`.
     fn infer_bigint_intrinsic(&mut self, fc: &surface::FuncCall, span: Option<Span>) -> Expr<'tcx> {
         use crate::intrinsic::{BigIntFn, IntrinsicOp};
@@ -4086,10 +4088,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return self.poison(span);
         };
-        let max_ty_args = if func == BigIntFn::TrunciOverflow {
-            2
-        } else {
-            1
+        let max_ty_args = match func {
+            BigIntFn::TrunciOverflow => 2,
+            BigIntFn::Fptosi => 0,
+            _ => 1,
         };
         if fc.ty_args.len() > max_ty_args {
             self.error(
@@ -4104,9 +4106,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             Some(Some(t)) => this.eval_type(t),
             _ => this.infer.new_hole_ty(),
         };
-        let int = ty_arg(0, self);
-        self.register_bound(self.lang.integral, int, span);
+        let int = if func.takes_integer() {
+            let int = ty_arg(0, self);
+            self.register_bound(self.lang.integral, int, span);
+            int
+        } else {
+            self.tcx.mk_bigint(BigIntTy::Int)
+        };
         let u64_ty = self.tcx.mk_int(IntTy::Unsigned(64));
+        let f64_ty = self.tcx.mk_fp(crate::semi::ty::FpTy::Ieee(64));
         let nat_ty = self.tcx.mk_bigint(BigIntTy::Nat);
         let (params, result) = match func {
             BigIntFn::Gcdi => (vec![int, int], nat_ty),
@@ -4124,6 +4132,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 self.register_bound(self.lang.integral, fixed, span);
                 (vec![int], self.tcx.mk_tuple(&[fixed, self.tcx.mk_bool()]))
             }
+            BigIntFn::Sitofp => (vec![int], f64_ty),
+            BigIntFn::Fptosi => (vec![f64_ty], int),
+            BigIntFn::LimbCount => (vec![int], u64_ty),
+            BigIntFn::Limb => (vec![int, u64_ty], u64_ty),
         };
         if fc.args.len() != params.len() {
             self.error(

@@ -2521,7 +2521,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     ) {
         let name = func.as_str();
         let integer = args.first().map(|a| subst_ty(self.tcx, a.ty, subst));
-        if !integer.is_some_and(|ty| matches!(ty.kind(), TyKind::BigInt(_))) {
+        if func.takes_integer() && !integer.is_some_and(|ty| matches!(ty.kind(), TyKind::BigInt(_))) {
             self.error(
                 span,
                 format!("`core::intrinsic::bigint::{name}` takes a `Nat` or an `Int`"),

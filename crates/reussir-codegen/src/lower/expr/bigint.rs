@@ -19,7 +19,7 @@
 use reussir_backend::builders;
 use reussir_backend::melior::dialect::arith::{self, CmpiPredicate};
 use reussir_backend::melior::ir::attribute::{Attribute, IntegerAttribute};
-use reussir_backend::melior::ir::{Block, BlockLike, Region, RegionLike, Value, ValueLike};
+use reussir_backend::melior::ir::{Block, BlockLike, Region, RegionLike, Type, Value, ValueLike};
 use reussir_backend::rcgmp::{self, ArmKind, Binary, Predicate, Shift, Unary};
 use reussir_core::full::mir::{self, DecisionTree, Expr, ExprKind};
 use reussir_core::full::ownership::subtrees;
@@ -259,6 +259,30 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 block,
                 rcgmp::testbiti(self.context, operands[0], operands[1], loc),
             )),
+            BigIntFn::Sitofp => {
+                let ty = self.tys.mlir_ty(e.ty)?;
+                Ok(self.append(block, rcgmp::sitofp(operands[0], ty, loc)))
+            }
+            BigIntFn::Fptosi => {
+                let ty = self.tys.mlir_ty(e.ty)?;
+                Ok(self.append(block, rcgmp::fptosi(operands[0], ty, loc)))
+            }
+            BigIntFn::LimbCount => {
+                let count = self.append(block, rcgmp::limb_count(self.context, operands[0], loc));
+                let ty = self.tys.mlir_ty(e.ty)?;
+                Ok(self.append(block, arith::index_castui(count, ty, loc)))
+            }
+            // A limb is as wide as a pointer, which the rcgmp runtime (built
+            // only for the 64-bit hosts) and the `u64` result both assume;
+            // the dialect's verifier rejects any other target.
+            BigIntFn::Limb => {
+                let index = self.append(
+                    block,
+                    arith::index_castui(operands[1], Type::index(self.context), loc),
+                );
+                let ty = self.tys.mlir_ty(e.ty)?;
+                Ok(self.append(block, rcgmp::limb(operands[0], index, ty, loc)))
+            }
             BigIntFn::TrunciOverflow => {
                 let TyKind::Tuple([fixed, _]) = e.ty.kind() else {
                     return err("`trunci_overflow` result is not a pair");

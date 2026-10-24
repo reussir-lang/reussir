@@ -252,11 +252,12 @@ set(lsan_env "LSAN_OPTIONS=abort_on_error=1:report_objects=1")
 set(msan_env "MSAN_OPTIONS=abort_on_error=1:halt_on_error=1:poison_in_dtor=1")
 set(tsan_env "TSAN_OPTIONS=abort_on_error=1:halt_on_error=1")
 
-# The rcgmp integer runtime and GMP, for tests that link lowered code by hand.
+# The rcgmp integer runtime, GMP, and the C math library its float
+# conversions call, for tests that link lowered code by hand.
 if(REUSSIR_ENABLE_RCGMP)
   get_filename_component(gmp_library_dir "${GMP_LIBRARY}" DIRECTORY)
   set(rcgmp_runtime_flags
-    "${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/${CMAKE_STATIC_LIBRARY_PREFIX}RCGMPRuntime${CMAKE_STATIC_LIBRARY_SUFFIX} -L${gmp_library_dir} -lgmp -Wl,-rpath,${gmp_library_dir}")
+    "${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/${CMAKE_STATIC_LIBRARY_PREFIX}RCGMPRuntime${CMAKE_STATIC_LIBRARY_SUFFIX} -L${gmp_library_dir} -lgmp -lm -Wl,-rpath,${gmp_library_dir}")
 endif()
 
 configure_file(lit.site.cfg.py.in lit.site.cfg.py @ONLY)

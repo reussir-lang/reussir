@@ -110,6 +110,12 @@ impl Nat {
     pub fn overflowing_to_i64(self: Self) -> (i64, bool) {
         core::intrinsic::bigint::trunci_overflow(self)
     }
+
+    /// The nearest `f64`, ties to even; beyond the largest finite value,
+    /// infinity.
+    pub fn to_f64(self: Self) -> f64 {
+        core::intrinsic::bigint::sitofp(self)
+    }
 }
 
 impl Int {
@@ -186,5 +192,17 @@ impl Int {
     /// terminates the program.
     pub fn rem_floor(self: Self, d: Self) -> Int {
         core::intrinsic::bigint::floormodsi(self, d)
+    }
+
+    /// The nearest `f64`, ties to even; beyond the largest finite value, an
+    /// infinity of the same sign.
+    pub fn to_f64(self: Self) -> f64 {
+        core::intrinsic::bigint::sitofp(self)
+    }
+
+    /// `value` truncated toward zero. A NaN or an infinity terminates the
+    /// program.
+    pub fn from_f64(value: f64) -> Int {
+        core::intrinsic::bigint::fptosi(value)
     }
 }
