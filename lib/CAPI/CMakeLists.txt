@@ -66,23 +66,35 @@ set(REUSSIR_BACKEND_ARCHIVES
 add_dependencies(ReussirCAPI ${REUSSIR_BACKEND_ARCHIVES})
 
 # Cargo does not inherit CMake's transitive link dependencies. Export the
-# optional lowering dependencies explicitly, including an empty list when
-# OpenXLA is disabled so stale archives cannot enable it in a reused build.
+# optional archives explicitly, one `<mode> <archive>` line each, writing an
+# empty manifest when no optional component is enabled so that stale archives
+# cannot be linked from a reused build directory. `whole` archives are
+# whole-archived next to the Reussir components; `plain` archives are extracted
+# on demand after them.
 set(REUSSIR_BACKEND_OPTIONAL_ARCHIVES "")
+if(REUSSIR_HAS_TPDE)
+  # TPDE and its vendored spdlog and instruction encoders, referenced by Jit.cpp.
+  foreach(archive tpde_llvm tpde spdlog fadec disarm64)
+    list(APPEND REUSSIR_BACKEND_OPTIONAL_ARCHIVES "whole ${archive}")
+  endforeach()
+endif()
 if(REUSSIR_ENABLE_OPENXLA)
   target_compile_definitions(ReussirCAPI PRIVATE REUSSIR_ENABLE_OPENXLA)
   target_link_libraries(ReussirCAPI PRIVATE ReussirIfrt StablehloRegister)
   # XLA's layout parser also reaches its HLO importer and StableHLO support.
   # Keep the ReussirIfrt/StablehloPortableApi/ReussirStablehlo closure in static
   # link order; the remaining LLVM/MLIR dependencies come from mlir-sys.
-  list(APPEND REUSSIR_BACKEND_OPTIONAL_ARCHIVES
+  set(REUSSIR_OPENXLA_ARCHIVES
     ReussirIfrt StablehloPortableApi StablehloRegister StablehloSerialization
     StablehloPasses StablehloOptimizationPasses StablehloLinalgTransforms
     StablehloTypeConversion StablehloReplicaGroupUtils StablehloPassUtils
     ChloOps StablehloBroadcastUtils StablehloBroadcastLowering StablehloOps
     StablehloTypeInference VhloOps VhloTypes StablehloAssemblyFormat
     StablehloBase Version)
-  add_dependencies(ReussirCAPI ${REUSSIR_BACKEND_OPTIONAL_ARCHIVES})
+  add_dependencies(ReussirCAPI ${REUSSIR_OPENXLA_ARCHIVES})
+  foreach(archive ${REUSSIR_OPENXLA_ARCHIVES})
+    list(APPEND REUSSIR_BACKEND_OPTIONAL_ARCHIVES "plain ${archive}")
+  endforeach()
 endif()
 file(GENERATE
   OUTPUT ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/reussir-backend-optional-archives.txt

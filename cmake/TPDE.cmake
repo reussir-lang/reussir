@@ -3,8 +3,9 @@
 
 include(FetchContent)
 
-# Set TPDE version to the specified commit
-set(TPDE_VERSION "master")
+# Pinned TPDE commit. TPDE has no releases; bump this deliberately and rerun
+# the JIT tests, since its LLVM support tracks LLVM main.
+set(TPDE_VERSION "9779acf4ada3736e779391da1e4b3369dba08024")
 
 # Disable TPDE_ENABLE_ENCODEGEN as requested
 set(TPDE_ENABLE_LLVM ON CACHE BOOL "Disable TPDE LLVM" FORCE)
@@ -19,7 +20,6 @@ FetchContent_Declare(
     tpde
     GIT_REPOSITORY https://github.com/tpde2/tpde.git
     GIT_TAG ${TPDE_VERSION}
-    GIT_SHALLOW TRUE
 )
 
 # Make TPDE available

@@ -72,8 +72,7 @@ endif()
 # Detect object format
 include(cmake/ObjectFormat.cmake)
 
-# Include TPDE only for ELF object format and LLVM <= 21
-
+# TPDE generates ELF objects only.
 if(TARGET_OBJECT_FORMAT STREQUAL "ELF")
   message(STATUS "ELF object format detected, including TPDE support")
   include(cmake/TPDE.cmake)

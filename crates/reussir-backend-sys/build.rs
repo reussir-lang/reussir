@@ -1,7 +1,7 @@
 mod native_archive;
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // Locates the directory holding the staged Reussir static archives
 // (libReussirCAPI.a/ReussirCAPI.lib plus the MLIRReussir* and MLIRSync*
@@ -64,17 +64,28 @@ const REUSSIR_ARCHIVES: &[&str] = &[
     "ReussirLLVMRetconDropPass",
 ];
 
-// TPDE static archives (and TPDE's own vendored dependencies: spdlog plus the
-// fadec/disarm64 instruction encoders), referenced by Jit.cpp only when TPDE
-// support is compiled in (ELF targets). They are linked when present; on
-// platforms where TPDE is unavailable the archives are absent and Jit.cpp has no
-// references to them, so they are simply skipped.
-const TPDE_ARCHIVES: &[&str] = &["tpde_llvm", "tpde", "spdlog", "fadec", "disarm64"];
+// How an optional archive from CMake's manifest is linked.
+enum LinkMode {
+    // Whole-archived next to the Reussir components, like REUSSIR_ARCHIVES.
+    Whole,
+    // Extracted on demand, after the whole-archived components.
+    Plain,
+}
 
-fn linked_archives() -> Vec<&'static str> {
-    std::iter::once("ReussirCAPI")
-        .chain(REUSSIR_ARCHIVES.iter().copied())
-        .chain(TPDE_ARCHIVES.iter().copied())
+// Reads the optional archives that CMake enabled for this build directory: one
+// `<mode> <archive>` line each. The manifest is rewritten on every configure, so
+// archives of components that are now disabled are never picked up.
+fn optional_archives(manifest: &Path) -> Vec<(LinkMode, String)> {
+    let contents = std::fs::read_to_string(manifest)
+        .expect("failed to read optional Reussir archives; rerun CMake configuration");
+    contents
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| match line.split_once(' ') {
+            Some(("whole", archive)) => (LinkMode::Whole, archive.to_owned()),
+            Some(("plain", archive)) => (LinkMode::Plain, archive.to_owned()),
+            _ => panic!("malformed line in {}: {line:?}", manifest.display()),
+        })
         .collect()
 }
 
@@ -82,10 +93,22 @@ fn main() {
     let lib_dir = capi_lib_dir();
     let optional_manifest = lib_dir.join("reussir-backend-optional-archives.txt");
     println!("cargo:rerun-if-changed={}", optional_manifest.display());
-    let optional_archives = std::fs::read_to_string(&optional_manifest)
-        .expect("failed to read optional Reussir archives; rerun CMake configuration");
-    let mut archives = linked_archives();
-    archives.extend(optional_archives.lines());
+    let optional_archives = optional_archives(&optional_manifest);
+    let mut archives: Vec<&str> = std::iter::once("ReussirCAPI")
+        .chain(REUSSIR_ARCHIVES.iter().copied())
+        .collect();
+    archives.extend(
+        optional_archives
+            .iter()
+            .map(|(_, archive)| archive.as_str()),
+    );
+    for archive in &archives {
+        assert!(
+            native_archive::archive_exists(&lib_dir, archive),
+            "missing native archive {archive} in {}",
+            lib_dir.display()
+        );
+    }
     native_archive::track(&lib_dir, &archives)
         .expect("failed to fingerprint native Reussir archives");
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
@@ -98,20 +121,23 @@ fn main() {
     for archive in REUSSIR_ARCHIVES {
         println!("cargo:rustc-link-lib=static:+whole-archive={archive}");
     }
-    for archive in TPDE_ARCHIVES {
-        if native_archive::archive_exists(&lib_dir, archive) {
+    for (mode, archive) in &optional_archives {
+        if let LinkMode::Whole = mode {
             println!("cargo:rustc-link-lib=static:+whole-archive={archive}");
         }
     }
-    // OpenXLA's support archive contains the target-array layout and sharding
-    // helpers. Use ordinary archive extraction: whole-archiving it would also
-    // pull in unrelated IFRT tools and serializer registrations. Its MLIR/LLVM
+    // Plain archives, such as OpenXLA's support archive with the target-array
+    // layout and sharding helpers, use ordinary archive extraction:
+    // whole-archiving it would also pull in unrelated IFRT tools and serializer
+    // registrations. Its MLIR/LLVM
     // references resolve against the same mlir-sys libraries as the core code.
     // Keep these archives outside the rlib so rustc places them after the
     // whole-archived Reussir components. Bundling them moves them ahead of
     // their callers, which leaves unresolved symbols with GNU BFD.
-    for archive in optional_archives.lines() {
-        println!("cargo:rustc-link-lib=static:-bundle={archive}");
+    for (mode, archive) in &optional_archives {
+        if let LinkMode::Plain = mode {
+            println!("cargo:rustc-link-lib=static:-bundle={archive}");
+        }
     }
 
     // Cargo does not track the contents of native static libraries, so without
