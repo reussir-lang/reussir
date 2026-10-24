@@ -2834,8 +2834,8 @@ mod tests {
                     );
                 }
                 // The builtin impls come from source: located, none
-                // compiler-provided, every scalar and built-in integer
-                // covered for `PartialEq`.
+                // compiler-provided, every scalar and built-in integer (and
+                // the integers' `Arc` colorings) covered for `PartialEq`.
                 let pe = elab
                     .traits
                     .trait_by_def(elab.lang.get(LangItem::PartialEq).expect("declared"))
@@ -2845,7 +2845,7 @@ mod tests {
                     .impls()
                     .filter(|i| i.trait_ref.trait_id == pe)
                     .collect();
-                assert_eq!(pe_impls.len(), 18);
+                assert_eq!(pe_impls.len(), 20);
                 assert!(pe_impls.iter().all(|i| !i.compiler_provided()));
             },
         );
@@ -2912,6 +2912,152 @@ mod tests {
                 assert!(!elab.has_errors(), "{:#?}", elab.reports);
                 let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
                 assert!(reports.is_empty(), "{reports:#?}");
+            },
+        );
+    }
+
+    #[test]
+    fn arc_bigints_compute_in_the_atomic_world() {
+        check_with_bigint(
+            "pub fn f(a: Arc<Nat>, b: Arc<Nat>) -> Arc<Nat> { a * b + 1 }\n\
+             pub fn g(a: Arc<Int>) -> bool { a < -3 }\n\
+             pub fn h(n: Arc<Nat>) -> Arc<Nat> { match n { Nat::Zero => 0, Nat::Succ(m) => m } }\n\
+             pub fn s(n: Arc<Nat>) -> Arc<Nat> { Arc<Nat>::Succ{n} }\n\
+             pub fn i(n: Arc<Nat>) -> Arc<Int> { Arc<Int>::OfNat{n} }\n\
+             pub fn c(x: u64) -> Arc<Nat> { x as Arc<Nat> }",
+            |elab, _| {
+                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
+                assert!(reports.is_empty(), "{reports:#?}");
+            },
+        );
+    }
+
+    #[test]
+    fn arc_bigints_stay_apart_from_bare_integers() {
+        check_with_bigint(
+            "pub fn f(n: Nat) -> Arc<Nat> { n as Arc<Nat> }\n\
+             struct [shared] Holder { v: Nat }\n\
+             pub fn g(h: Arc<Holder>) -> i64 { 0 }",
+            |elab, _| {
+                let messages: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
+                assert!(
+                    messages
+                        .iter()
+                        .any(|m| m.contains("a built-in integer and its `Arc` coloring")),
+                    "{messages:#?}"
+                );
+                assert!(
+                    messages.iter().any(|m| m.contains("member `v`")),
+                    "{messages:#?}"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn arc_bigint_literals_type_at_the_atomic_integers() {
+        check_with_bigint(
+            "pub fn small() -> Arc<Nat> { 5 }\n\
+             pub fn negative() -> Arc<Int> { -3 }\n\
+             pub fn big() -> Arc<Nat> { 340282366920938463463374607431768211456 }\n\
+             pub fn bound() -> Arc<Int> {\n\
+                 let a: Arc<Int> = -340282366920938463463374607431768211456;\n\
+                 a\n\
+             }",
+            |elab, _| {
+                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
+                assert!(reports.is_empty(), "{reports:#?}");
+            },
+        );
+        let big = bigint_hir(
+            "pub fn big() -> Arc<Nat> { 340282366920938463463374607431768211456 }",
+            "big",
+        );
+        assert!(big.contains("Arc<Nat>"), "{big}");
+    }
+
+    #[test]
+    fn negative_arc_nat_literals_are_diagnosed() {
+        // The same range checks as for `Nat`, at its atomic coloring.
+        check_with_bigint(
+            "pub fn f() -> Arc<Nat> { -1 }\n\
+             pub fn g(a: Arc<Nat>) -> i64 { match a { -1 => 1, _ => 0 } }",
+            |elab, _| {
+                let errors: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
+                assert_eq!(
+                    errors,
+                    ["integer pattern `-1` is out of range for `Nat`"],
+                    "{errors:#?}"
+                );
+                let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
+                let messages: Vec<&str> = reports.iter().map(|r| r.message.as_str()).collect();
+                assert_eq!(
+                    messages,
+                    ["integer literal `-1` is out of range for `Nat`"],
+                    "{messages:#?}"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn arc_bigint_constructors_build_within_the_atomic_group() {
+        check_with_bigint(
+            "pub fn zero() -> Arc<Nat> { Arc<Nat>::Zero{} }\n\
+             pub fn two() -> Arc<Nat> { Arc<Nat>::Succ{Arc<Nat>::Succ{Arc<Nat>::Zero{}}} }\n\
+             pub fn of(k: Arc<Nat>) -> Arc<Int> { Arc<Int>::OfNat{k} }\n\
+             pub fn neg(k: Arc<Nat>) -> Arc<Int> { Arc<Int>::NegSucc{k} }",
+            |elab, _| {
+                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
+                assert!(reports.is_empty(), "{reports:#?}");
+            },
+        );
+        // A plain payload is never re-colored.
+        check_with_bigint(
+            "pub fn succ(m: Nat) -> Arc<Nat> { Arc<Nat>::Succ{m} }\n\
+             pub fn of(k: Nat) -> Arc<Int> { Arc<Int>::OfNat{k} }\n\
+             pub fn neg(k: Nat) -> Arc<Int> { Arc<Int>::NegSucc{k} }",
+            |elab, _| {
+                let errors: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
+                assert_eq!(errors.len(), 3, "{errors:#?}");
+                assert!(
+                    errors.iter().all(|e| e.starts_with(
+                        "cannot reconcile thread-safety: expected `Arc<Nat>`, found `Nat`"
+                    )),
+                    "{errors:#?}"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn arc_bigint_patterns_bind_atomic_payloads() {
+        check_with_bigint(
+            "pub fn pred(a: Arc<Nat>) -> Arc<Nat> { match a { Nat::Succ(p) => p + 1, Nat::Zero => 0 } }\n\
+             pub fn sign(i: Arc<Int>) -> Arc<Nat> { match i { Int::OfNat(n) => n, Int::NegSucc(m) => m } }\n\
+             pub fn small(a: Arc<Nat>) -> i64 { match a { 0 => 1, 3 => 2, _ => 0 } }",
+            |elab, _| {
+                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
+                assert!(reports.is_empty(), "{reports:#?}");
+            },
+        );
+        // The payload keeps the scrutinee's coloring.
+        check_with_bigint(
+            "fn takes_nat(n: Nat) -> Nat { n }\n\
+             pub fn f(a: Arc<Nat>) -> Nat { match a { Nat::Succ(p) => takes_nat(p), Nat::Zero => 0 } }",
+            |elab, _| {
+                let errors: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
+                assert_eq!(errors.len(), 1, "{errors:#?}");
+                assert!(
+                    errors[0].starts_with(
+                        "cannot reconcile thread-safety: expected `Nat`, found `Arc<Nat>`"
+                    ),
+                    "{errors:#?}"
+                );
             },
         );
     }
@@ -4747,7 +4893,7 @@ pub struct Rect { pub w: i64 }",
         assert!(
             has_error(
                 src,
-                "is not a `[shared]` record, array, or closure (not an rc box)"
+                "is not a `[shared]` record, array, closure, or built-in integer (not an rc box)"
             ),
             "{:#?}",
             reports_of(src)
@@ -4762,7 +4908,7 @@ pub struct Rect { pub w: i64 }",
         assert!(
             has_error(
                 src,
-                "is not a `[shared]` record, array, or closure (a cell)"
+                "is not a `[shared]` record, array, closure, or built-in integer (a cell)"
             ),
             "{:#?}",
             reports_of(src)
@@ -4775,7 +4921,7 @@ pub struct Rect { pub w: i64 }",
         assert!(
             has_error(
                 src,
-                "is not a `[shared]` record, array, or closure (already an `Arc`)"
+                "is not a `[shared]` record, array, closure, or built-in integer (already an `Arc`)"
             ),
             "{:#?}",
             reports_of(src)
@@ -4788,7 +4934,7 @@ pub struct Rect { pub w: i64 }",
         assert!(
             has_error(
                 src,
-                "is not a `[shared]` record, array, or closure (a `[value]` record)"
+                "is not a `[shared]` record, array, closure, or built-in integer (a `[value]` record)"
             ),
             "{:#?}",
             reports_of(src)
@@ -4802,7 +4948,7 @@ pub struct Rect { pub w: i64 }",
         assert!(
             has_error(
                 src,
-                "is not a `[shared]` record, array, or closure (a `[regional]` record)"
+                "is not a `[shared]` record, array, closure, or built-in integer (a `[regional]` record)"
             ),
             "{:#?}",
             reports_of(src)

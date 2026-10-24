@@ -1152,7 +1152,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 let ty = l.ty;
                 self.register_bound(self.lang.integral, ty, span);
                 let shifts_bigint = matches!(op, BinOp::Shl | BinOp::Shr)
-                    && matches!(self.infer.shallow_resolve(ty).kind(), TyKind::BigInt(_));
+                    && self.infer.shallow_resolve(ty).bigint().is_some();
                 let amount_ty = if shifts_bigint {
                     self.tcx.mk_int(IntTy::Signed(64))
                 } else {
@@ -1393,8 +1393,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 }
                 // `Nat` satisfies `Num` for `+` and `*`, but has no negatives.
                 if matches!(
-                    self.infer.shallow_resolve(ty).kind(),
-                    TyKind::BigInt(BigIntTy::Nat)
+                    self.infer.shallow_resolve(ty).bigint(),
+                    Some((BigIntTy::Nat, _))
                 ) {
                     self.error(span, "a `Nat` cannot be negated");
                     return self.poison(span);
@@ -1442,7 +1442,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return self.poison(span);
         }
         if matches!(src_ty.kind(), TyKind::Char) {
-            if !matches!(target_head.kind(), TyKind::Int(_) | TyKind::BigInt(_)) {
+            if !matches!(target_head.kind(), TyKind::Int(_)) && target_head.bigint().is_none() {
                 self.error(
                     span,
                     format!(
@@ -5001,10 +5001,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self.error(span, format!("unknown record `{shown}`"));
             return self.poison(span);
         };
-        if !matches!(
-            self.records[&def].default_cap,
-            super::ctxt::DefaultCap::Shared
-        ) {
+        let bigint = self.lang.bigint_of(def).is_some();
+        if !bigint
+            && !matches!(
+                self.records[&def].default_cap,
+                super::ctxt::DefaultCap::Shared
+            )
+        {
             let shown = self.path_display(&ipath);
             self.error(
                 span,
@@ -5020,7 +5023,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         };
         // Wrap only a successfully built constructor; an error path stays the
         // poison it already is.
-        if matches!(e.ty.kind(), TyKind::Record { .. }) {
+        if matches!(e.ty.kind(), TyKind::Record { .. } | TyKind::BigInt(_)) {
             // The coloring site: the arc's contents must be `Sync`. (Ctors
             // run during body checking, after record fields populate; a
             // generic-blocked verdict defers to the mono backstop.)

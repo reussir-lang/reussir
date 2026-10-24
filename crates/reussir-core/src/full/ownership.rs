@@ -548,7 +548,10 @@ impl<'tcx> Occurrences<'tcx> {
                     bigint: None,
                 };
                 match (ty.map(|t| *t.kind()), cases) {
-                    (Some(TyKind::BigInt(_)), _) => branch.bigint = Some(path.to_vec()),
+                    // A switch on a built-in integer, in either coloring.
+                    (Some(_), _) if ty.is_some_and(|t| t.bigint().is_some()) => {
+                        branch.bigint = Some(path.to_vec())
+                    }
                     (Some(TyKind::Nullable(inner)), SwitchCases::Nullable { .. }) if v == 0 => {
                         branch.refined.push((path.to_vec(), inner));
                     }
@@ -1142,8 +1145,8 @@ impl<'tcx> Analyzer<'_, 'tcx> {
 
         // A root switch on a dying `Nat`/`Int` takes the scrutinee: nothing is
         // left to drop per leaf.
-        let held = match (*scrut.ty.kind(), tree) {
-            (TyKind::BigInt(_), DecisionTree::Switch { scrutinee: [], .. }) if consumed => {
+        let held = match (scrut.ty.bigint(), tree) {
+            (Some(_), DecisionTree::Switch { scrutinee: [], .. }) if consumed => {
                 self.bigint_moves.insert(id);
                 None
             }

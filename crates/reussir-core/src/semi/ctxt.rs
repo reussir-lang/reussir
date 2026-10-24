@@ -2971,6 +2971,22 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         target_args: &[surface::Type],
     ) -> Option<Ty<'tcx>> {
         use crate::semi::ty::{FpTy, IntTy};
+        // `Arc<Nat>` / `Arc<Int>`: the atomically counted built-in integers
+        // take their builtin impls in the same form.
+        if let [inner] = target_args
+            && self.sym(target.basename) == "Arc"
+            && (target.segments.is_empty()
+                && self
+                    .resolve_record_ref(target)
+                    .is_none_or(|def| self.lang.is_former_anchor(def))
+                || self.is_core_intrinsic_prefix(&target.segments, "arc"))
+            && let surface::TypeKind::TypeExpr(ipath, iargs) = inner.kind()
+            && iargs.is_empty()
+            && let Some(def) = self.resolve_record_ref(&ipath)
+            && let Some(b) = self.lang.bigint_of(def)
+        {
+            return Some(self.tcx.mk_arc(self.tcx.mk_bigint(b)));
+        }
         if !target_args.is_empty() {
             return None;
         }
@@ -3070,8 +3086,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return nones;
         }
+        // Builtin impls are ground, so an existing impl conflicts exactly when
+        // it has the same self type (`Arc<Nat>` and `Arc<Int>` share a head).
         let head = crate::semi::traits::coherence::head_key(self_ty).expect("scalars have heads");
-        if !self.traits.impls_for(tid, head).is_empty() {
+        if self
+            .traits
+            .impls_for(tid, head)
+            .iter()
+            .any(|&other| self.traits.impl_def(other).self_ty == self_ty)
+        {
             self.error(
                 span,
                 format!(

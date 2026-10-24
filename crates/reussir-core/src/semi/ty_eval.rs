@@ -241,7 +241,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                         self.error(
                             Some(span),
                             format!(
-                                "`Arc` inner type `{}` is not a `[shared]` record, array, or closure ({kind})",
+                                "`Arc` inner type `{}` is not a `[shared]` record, array, closure, or built-in integer ({kind})",
                                 self.ty_display(inner)
                             ),
                         );
@@ -797,6 +797,9 @@ pub fn arc_inner_rejection<'tcx>(
         // An array or a closure is one shared rc box exactly like a
         // `[shared]` record, so it takes the atomic coloring the same way.
         TyKind::Array { .. } | TyKind::DevArray { .. } | TyKind::Closure { .. } => None,
+        // A built-in integer is a counted handle of its own: `Arc<Nat>` is
+        // the same integer with an atomically counted heap representation.
+        TyKind::BigInt(_) => None,
         TyKind::Tensor { .. } => Some("a tensor is scope-confined and cannot be arc'd"),
         TyKind::Future(_) | TyKind::Token => {
             Some("a kernel SSA value is scope-confined and cannot be arc'd")
@@ -932,6 +935,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                         .get(&def)
                         .is_some_and(|r| r.default_cap == DefaultCap::Shared) =>
             {
+                self.tcx.mk_arc(ty)
+            }
+            // The built-in integers' own constructors stay in the atomic
+            // world: under `Arc<Nat>`/`Arc<Int>` their `Nat` payloads are
+            // `Arc<Nat>`, since one integer is never counted both ways.
+            TyKind::BigInt(_) if group.iter().any(|&def| self.lang.bigint_of(def).is_some()) => {
                 self.tcx.mk_arc(ty)
             }
             TyKind::Nullable(inner) => {

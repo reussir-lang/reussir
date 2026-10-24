@@ -502,8 +502,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 self.register_bound(self.lang.integral, ty, span);
                 if *i < 0
                     && matches!(
-                        self.infer.shallow_resolve(ty).kind(),
-                        TyKind::BigInt(BigIntTy::Nat)
+                        self.infer.shallow_resolve(ty).bigint(),
+                        Some((BigIntTy::Nat, _))
                     )
                 {
                     self.error(
@@ -801,7 +801,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             .expect("a constructor column exists when some row tests one");
         let occ = m.cols[j].occ.clone();
         let col_ty = self.infer.shallow_resolve(m.cols[j].ty);
-        if let TyKind::BigInt(int) = *col_ty.kind() {
+        if let Some((int, _)) = col_ty.bigint() {
             return self.compile_bigint_column(&m, j, int, reached, exhaustive);
         }
         let family = m

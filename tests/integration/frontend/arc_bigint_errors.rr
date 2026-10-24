@@ -1,0 +1,17 @@
+// An arc'd record holds an integer only through an `Arc<Nat>` member, and no
+// cast re-colors an integer.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %not %rrc %s --package-name arcerr --extern core=%t.core.rri -o %t.o 2>&1 | %FileCheck %s
+
+struct [shared] Holder { v: Nat }
+
+// CHECK-DAG: `Arc<arcerr::Holder>` is ill-formed: member `v` is an arbitrary-precision integer, whose refcount is not atomic
+pub fn hold(h: Arc<Holder>) -> u64 { 0 }
+
+// CHECK-DAG: cannot cast `Nat` to `Arc<Nat>`: a built-in integer and its `Arc` coloring do not convert into each other
+pub fn recolor(n: Nat) -> Arc<Nat> { n as Arc<Nat> }
+
+// CHECK-DAG: cannot cast `Arc<Int>` to `Int`: a built-in integer and its `Arc` coloring do not convert into each other
+pub fn uncolor(i: Arc<Int>) -> Int { i as Int }

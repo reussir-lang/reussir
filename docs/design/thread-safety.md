@@ -127,6 +127,8 @@ WF(Arc<X>)          where X is a [shared] record
 WF(Arc<Array<T>>)   ⟺  Sync(T)
 
 WF(Arc<(A₁,…,Aₙ) -> R>)   ⟺  Sync(Aᵢ) for all i        (R unconstrained, §3.2)
+
+WF(Arc<Nat>), WF(Arc<Int>)                                (§3.4)
 ```
 
 Everything else is rejected as an `Arc` inner, matching
@@ -287,6 +289,22 @@ members outside the promotion group; such shapes are expressed with an
 explicit `Arc` member inside the value record instead. (Variant *arms* are
 the enum's own members and promote normally — `Cons`'s tail is the canonical
 case.)
+
+### 3.4 The built-in integers
+
+`Nat` and `Int` are counted handles of their own (a small value is an
+immediate, a large one a heap object), so they take the coloring directly:
+`Arc<Nat>` is the same integer with an atomically counted heap object,
+lowered to `!rcgmp.mpz<atomic>` with no further box. It has no members, so it
+is always well-formed and `Sync`; a bare `Nat` is not `Sync`.
+
+The coloring is a closed world, as for recursive records. Arithmetic,
+comparisons, literals, constructors and matching on `Arc<Nat>` stay in it:
+`Arc<Nat>::Succ{n}` takes `n : Arc<Nat>`, and matching binds `Arc<Nat>`.
+The integers' own constructors are their recursive group, so `Int`'s `Nat`
+payloads color too. A `Nat` field of a user record is not in that record's
+group: a record whose arc'd form should hold an integer declares the field
+`Arc<Nat>`. No cast converts between `Nat` and `Arc<Nat>`.
 
 ## 4. Cells
 

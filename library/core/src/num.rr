@@ -51,6 +51,8 @@ impl Integral for u32 { }
 impl Integral for u64 { }
 impl Integral for Nat { }
 impl Integral for Int { }
+impl Integral for Arc<Nat> { }
+impl Integral for Arc<Int> { }
 
 impl FloatingPoint for f16 { }
 impl FloatingPoint for f32 { }
@@ -68,6 +70,17 @@ impl PartialOrd for Nat { }
 impl PartialOrd for Int { }
 impl Ord for Nat { }
 impl Ord for Int { }
+
+// Their `Arc` colorings, the same integers counted atomically, compare and
+// compute alike.
+impl PartialEq for Arc<Nat> { }
+impl PartialEq for Arc<Int> { }
+impl Eq for Arc<Nat> { }
+impl Eq for Arc<Int> { }
+impl PartialOrd for Arc<Nat> { }
+impl PartialOrd for Arc<Int> { }
+impl Ord for Arc<Nat> { }
+impl Ord for Arc<Int> { }
 
 // Operations beyond the operators, through `core::intrinsic::bigint`. The
 // operators keep the fixed-width integers' conventions: `/` and `%`

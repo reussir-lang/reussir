@@ -397,6 +397,9 @@ impl<'tcx> Cx<'_, 'tcx> {
     fn wf(&mut self, inner: Ty<'tcx>) -> SyncVerdict<'tcx> {
         use crate::semi::ctxt::DefaultCap;
         match *inner.kind() {
+            // An arc'd built-in integer has no members: the atomic count is
+            // its whole thread-safety story.
+            TyKind::BigInt(_) => SyncVerdict::Sync,
             TyKind::Record { def, args, .. } => match self.env.default_cap(def) {
                 // The kind gate admits an opaque `#[ffi]` record as a shared
                 // box, but its box is the foreign `Rc` — the atomic coloring

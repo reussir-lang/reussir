@@ -2056,7 +2056,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                             span,
                             format!(
                                 "this instantiation grounds an `Arc` inner type that is not a \
-                                 `[shared]` record, array, or closure ({kind})"
+                                 `[shared]` record, array, closure, or built-in integer ({kind})"
                             ),
                         );
                     }
@@ -2521,7 +2521,8 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     ) {
         let name = func.as_str();
         let integer = args.first().map(|a| subst_ty(self.tcx, a.ty, subst));
-        if func.takes_integer() && !integer.is_some_and(|ty| matches!(ty.kind(), TyKind::BigInt(_))) {
+        if func.takes_integer() && !integer.is_some_and(|ty| matches!(ty.kind(), TyKind::BigInt(_)))
+        {
             self.error(
                 span,
                 format!("`core::intrinsic::bigint::{name}` takes a `Nat` or an `Int`"),
@@ -2554,7 +2555,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                         ),
                     );
                 }
-                TyKind::BigInt(BigIntTy::Nat) if *n < 0 => {
+                _ if *n < 0 && matches!(ty.bigint(), Some((BigIntTy::Nat, _))) => {
                     self.error(
                         span,
                         format!("integer literal `{n}` is out of range for `Nat`"),
@@ -2699,7 +2700,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 _ => {
                     // The checker rejects negating a `Nat` it can see; generic
                     // code negating a `Num` reaches here at its `Nat` instance.
-                    if matches!(result_ty.kind(), TyKind::BigInt(BigIntTy::Nat)) {
+                    if matches!(result_ty.bigint(), Some((BigIntTy::Nat, _))) {
                         self.error(span, "a `Nat` cannot be negated");
                     }
                     M::Negate(self.lower_ref(e, subst))
@@ -2712,7 +2713,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 // generic code, or operands solved after the shift, can still
                 // arrive here with the amount at the operand's own type.
                 if matches!(op, hir::ArithOp::Shl | hir::ArithOp::Shr)
-                    && let TyKind::BigInt(int) = *result_ty.kind()
+                    && let Some((int, _)) = result_ty.bigint()
                     && !matches!(
                         subst_ty(self.tcx, r.ty, subst).kind(),
                         TyKind::Int(IntTy::Signed(64))
@@ -2733,7 +2734,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 let ty = subst_ty(self.tcx, l.ty, subst);
                 // `str` and the built-in integers compare intrinsically too:
                 // codegen lowers their comparisons through dedicated ops.
-                if !ty.is_scalar() && !matches!(ty.kind(), TyKind::Str | TyKind::BigInt(_)) {
+                if !ty.is_scalar() && !matches!(ty.kind(), TyKind::Str) && ty.bigint().is_none() {
                     let shown = match ty.kind() {
                         TyKind::Record { def, .. } => self.defs.path(*def).display(self.resolver),
                         _ => format!("{ty:?}"),
@@ -2757,9 +2758,10 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 // The checker rejects these casts when it sees both types; a
                 // generic cast reaches here once its instance is known.
                 if let Some(reason) = bigint_cast_rejection(from, t) {
-                    let name = |ty: Ty<'_>| match *ty.kind() {
-                        TyKind::BigInt(int) => int.name().to_owned(),
-                        _ => scalar_ty_name(ty),
+                    let name = |ty: Ty<'_>| match ty.bigint() {
+                        Some((int, false)) => int.name().to_owned(),
+                        Some((int, true)) => format!("Arc<{}>", int.name()),
+                        None => scalar_ty_name(ty),
                     };
                     self.error(
                         span,
@@ -4655,14 +4657,14 @@ mod tests {
         assert!(
             reports.iter().any(|m| m.contains(
                 "grounds an `Arc` inner type that is not a `[shared]` record, \
-                 array, or closure (not an rc box)"
+                 array, closure, or built-in integer (not an rc box)"
             )),
             "{reports:#?}"
         );
         assert!(
             reports.iter().any(|m| m.contains(
                 "grounds an `Arc` inner type that is not a `[shared]` record, \
-                 array, or closure (a cell)"
+                 array, closure, or built-in integer (a cell)"
             )),
             "{reports:#?}"
         );
@@ -4725,7 +4727,7 @@ mod tests {
         assert!(
             reports
                 .iter()
-                .any(|m| m.contains("not a `[shared]` record, array, or closure")),
+                .any(|m| m.contains("not a `[shared]` record, array, closure, or built-in integer")),
             "{reports:#?}"
         );
     }
