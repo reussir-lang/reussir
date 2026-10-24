@@ -263,6 +263,9 @@ pub struct Func {
     /// A `#[lang("…")]` marker naming the language item this declares.
     pub lang: Option<String>,
     pub transform_anchor: bool,
+    /// A `#[requires("…")]` marker: the registry names of the optional
+    /// features the prototype's definition needs.
+    pub requires: Vec<String>,
     pub is_pub: bool,
     pub regional: bool,
     pub kernel: bool,

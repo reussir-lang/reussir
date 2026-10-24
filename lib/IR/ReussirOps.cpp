@@ -3796,7 +3796,7 @@ mlir::LogicalResult ReussirRefAcquireOp::verify() {
   if (isTriviallyCopyable(elementType))
     return mlir::success();
 
-  if (llvm::isa<RcType>(elementType))
+  if (llvm::isa<RcType>(elementType) || isRCGMPIntegerType(elementType))
     return mlir::success();
 
   if (auto recordType = llvm::dyn_cast<RecordType>(elementType)) {
@@ -3876,6 +3876,11 @@ emitOwnershipAcquisitionImpl(mlir::Value value, mlir::OpBuilder &builder,
   mlir::OpBuilder::InsertionGuard guard(builder);
   mlir::Type type = value.getType();
 
+  if (isRCGMPIntegerType(type)) {
+    emitRCGMPRetain(builder, loc, value, delta);
+    return mlir::success();
+  }
+
   return llvm::TypeSwitch<mlir::Type, mlir::LogicalResult>(type)
       // For Rc types, emit an Inc operation
       .Case<RcType>([&](RcType) {
@@ -3889,8 +3894,9 @@ emitOwnershipAcquisitionImpl(mlir::Value value, mlir::OpBuilder &builder,
         if (isTriviallyCopyable(elementType))
           return mlir::success();
 
-        // If reference points to an RC pointer, load it and recursively apply
-        if (llvm::isa<RcType>(elementType)) {
+        // An integer handle is a one-word member like an RC pointer: load it
+        // and recursively apply.
+        if (llvm::isa<RcType>(elementType) || isRCGMPIntegerType(elementType)) {
           auto loadedValue =
               ReussirRefLoadOp::create(builder, loc, elementType, value);
           return emitOwnershipAcquisitionImpl(loadedValue, builder, loc, delta,

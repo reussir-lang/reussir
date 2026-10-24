@@ -3,8 +3,9 @@
 // rcgmp operation its name spells. `T` is `Nat` or `Int`; the methods in
 // `core::num` wrap these for each type.
 //
-// Ownership follows the operation: `log2i`, `testbiti` and `trunci_overflow`
-// read their integer operand, and the others consume theirs.
+// Ownership follows the operation: `log2i`, `testbiti`, `trunci_overflow`,
+// `sitofp`, `limb_count` and `limb` read their integer operand, and the others
+// consume theirs.
 
 /// The greatest common divisor of the magnitudes of `a` and `b`.
 #[lang("core::intrinsic::bigint::gcdi")]
@@ -55,3 +56,23 @@ pub fn absi<T: Integral>(x: T) -> Nat;
 /// not fit `U`.
 #[lang("core::intrinsic::bigint::trunci_overflow")]
 pub fn trunci_overflow<T: Integral, U: Integral>(x: T) -> (U, bool);
+
+/// `x` rounded to the nearest `f64`, ties to even; beyond the largest finite
+/// value, an infinity of its sign.
+#[lang("core::intrinsic::bigint::sitofp")]
+pub fn sitofp<T: Integral>(x: T) -> f64;
+
+/// `value` truncated toward zero. A NaN or an infinity terminates the
+/// program.
+#[lang("core::intrinsic::bigint::fptosi")]
+pub fn fptosi(value: f64) -> Int;
+
+/// The number of 64-bit limbs of the magnitude of `x`: the least `n` with
+/// `|x| < 2^(64 * n)`, so `0` for zero.
+#[lang("core::intrinsic::bigint::limb_count")]
+pub fn limb_count<T: Integral>(x: T) -> u64;
+
+/// Limb `i` of the magnitude of `x`, the least significant first: the low 64
+/// bits of `|x| >> (64 * i)`, so `0` from `limb_count(x)` on.
+#[lang("core::intrinsic::bigint::limb")]
+pub fn limb<T: Integral>(x: T, i: u64) -> u64;

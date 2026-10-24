@@ -92,6 +92,14 @@ mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,
                                              mlir::Location loc,
                                              mlir::Value delta = {});
 
+// Retains an `!rcgmp.mpz` handle `delta` times (once when `delta` is null), or
+// releases one reference to it. Only valid for values whose type satisfies
+// `isRCGMPIntegerType`.
+void emitRCGMPRetain(mlir::OpBuilder &builder, mlir::Location loc,
+                     mlir::Value value, mlir::Value delta = {});
+void emitRCGMPRelease(mlir::OpBuilder &builder, mlir::Location loc,
+                      mlir::Value value);
+
 /// The memref type `reussir.array.view` produces for an array: identity
 /// layout for a static shape, a fully dynamic strided layout for a
 /// dynamic-extent one (the box header carries the strided encoding).

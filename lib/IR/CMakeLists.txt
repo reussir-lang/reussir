@@ -25,3 +25,9 @@ if(REUSSIR_ENABLE_OPENXLA)
   target_compile_definitions(obj.MLIRReussir PRIVATE REUSSIR_ENABLE_OPENXLA)
   target_link_libraries(MLIRReussir PUBLIC ReussirIfrt)
 endif()
+
+if(REUSSIR_ENABLE_RCGMP)
+  # Arbitrary-precision integer members retain and release through rcgmp.
+  target_link_libraries(obj.MLIRReussir PRIVATE ReussirRCGMP)
+  target_link_libraries(MLIRReussir PUBLIC ReussirRCGMP)
+endif()

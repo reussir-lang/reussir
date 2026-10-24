@@ -10,6 +10,10 @@
 #include "Reussir/IR/ReussirTypes.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include <gtest/gtest.h>
+#ifdef REUSSIR_ENABLE_RCGMP
+#include "RCGMP/IR/RCGMPDialect.h"
+#include "RCGMP/IR/RCGMPTypes.h"
+#endif
 
 namespace reussir {
 namespace {
@@ -274,5 +278,24 @@ TEST_F(RecordDropTest, SharedAcyclicGraphDoesNotExpandPaths) {
   }
   EXPECT_EQ(record.classifyRecordDrop(), RecordDropKind::Direct);
 }
+
+#ifdef REUSSIR_ENABLE_RCGMP
+// An integer member is a managed leaf released in source order: before the
+// recursive link it keeps the tail loop, after it the drop needs a worklist.
+TEST_F(RecordDropTest, IntegerMemberPositionPreservesTailEligibility) {
+  context.getOrLoadDialect<mlir::rcgmp::RCGMPDialect>();
+  auto integer = mlir::rcgmp::MpzType::get(&context, /*atomic=*/false);
+  auto leaf = declare("IntegerLeaf");
+  complete(leaf, {integer, scalar()});
+  EXPECT_FALSE(isTriviallyCopyable(leaf));
+  EXPECT_EQ(leaf.classifyRecordDrop(), RecordDropKind::Direct);
+  auto before = declare("IntegerBefore");
+  complete(before, {integer, before});
+  EXPECT_EQ(before.classifyRecordDrop(), RecordDropKind::TailLoop);
+  auto after = declare("IntegerAfter");
+  complete(after, {after, integer});
+  EXPECT_EQ(after.classifyRecordDrop(), RecordDropKind::Worklist);
+}
+#endif
 } // namespace
 } // namespace reussir
