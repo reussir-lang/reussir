@@ -6,21 +6,24 @@
 //! become `rcgmp.retain` and `rcgmp.release`. The core enums' constructors map
 //! onto arithmetic: `Nat::Zero` is `0`, `Nat::Succ(n)` is `n + 1`,
 //! `Int::OfNat(n)` is `n` itself, and `Int::NegSucc(n)` is `-(n + 1)`, the
-//! bitwise complement of `n`.
+//! bitwise complement of `n`. A match on either type is one `rcgmp.match`
+//! over the arms of [`bigint_match::plan`].
 
 use reussir_backend::builders;
 use reussir_backend::melior::dialect::arith::{self, CmpiPredicate};
 use reussir_backend::melior::ir::attribute::{Attribute, IntegerAttribute};
-use reussir_backend::melior::ir::{Block, BlockLike, Value, ValueLike};
-use reussir_backend::rcgmp::{self, Binary, Predicate, Shift, Unary};
-use reussir_core::full::mir::{Expr, ExprKind};
+use reussir_backend::melior::ir::{Block, BlockLike, Region, RegionLike, Value, ValueLike};
+use reussir_backend::rcgmp::{self, ArmKind, Binary, Predicate, Shift, Unary};
+use reussir_core::full::bigint_match::{self, ArmTest};
+use reussir_core::full::mir::{self, Expr, ExprKind, SwitchCases};
 use reussir_core::intrinsic::BigIntFn;
 use reussir_core::literal::{self, Integer};
-use reussir_core::semi::hir::{ArithOp, CmpOp};
+use reussir_core::semi::hir::{ArithOp, CmpOp, VarId};
 use reussir_core::semi::ty::{BigIntTy, Ty, TyKind};
+use smallvec::SmallVec;
 
-use super::{Env, Lowerer};
-use crate::lower::ty::num_class;
+use super::{Anchor, Cursor, Env, Holder, Lowerer};
+use crate::lower::ty::{is_unit, num_class};
 use crate::lower::{LoweringError, Result, err};
 
 impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
@@ -32,12 +35,166 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         n: &Integer,
         ty: Ty<'tcx>,
     ) -> Result<Value<'c, 'b>> {
-        let text = format!("{n} : i{}", literal::signed_width(n));
-        let value = Attribute::parse(self.context, &text).ok_or_else(|| {
-            LoweringError(format!("could not build integer constant `{text}`").into())
-        })?;
+        let value = self.narrowest(n)?;
         let ty = self.tys.mlir_ty(ty)?;
         Ok(self.append(block, rcgmp::constant(self.context, value, ty, self.loc())))
+    }
+
+    /// `n` as an integer attribute of the narrowest signless type holding it in
+    /// two's complement, the form the dialect's constants and match arms take.
+    fn narrowest(&self, n: &Integer) -> Result<Attribute<'c>> {
+        let text = format!("{n} : i{}", literal::signed_width(n));
+        Attribute::parse(self.context, &text)
+            .ok_or_else(|| LoweringError(format!("could not build integer `{text}`").into()))
+    }
+
+    /// Lower a switch on the `Nat`/`Int` value at `path` to one `rcgmp.match`
+    /// over the arms of [`bigint_match::plan`]. The match consumes its operand:
+    /// a reference this match holds for `path` moves in, unless a range arm
+    /// still needs the value; any other value is retained for the match, its
+    /// owner keeping it as for a borrowed scrutinee.
+    ///
+    /// In each arm, the occurrences it fixes resolve to constants: the merged
+    /// constructor fields, and in a `case` arm of a match that took its operand
+    /// the switched value itself. An arm argument (a distance, or the switched
+    /// value in a `default` arm of a match that took it) is a [`Holder`].
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn bigint_switch<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        root_idx: usize,
+        path: &[u32],
+        cursor: Cursor<'c, 'b, 'tcx>,
+        int: BigIntTy,
+        cases: SwitchCases<'tcx>,
+        result_ty: Ty<'tcx>,
+    ) -> Result<Option<Value<'c, 'b>>> {
+        let loc = self.loc();
+        let plan = bigint_match::plan(int, path, &cases);
+        let scrut_ty = cursor.ty();
+        let value = self.load_cursor(block, cursor)?;
+        let held = env
+            .holders
+            .iter()
+            .rposition(|h| h.root_idx == root_idx && !h.settled && h.path[..] == *path);
+        let moved = match held {
+            Some(i) if !plan.keeps_scrutinee => {
+                env.holders[i].settled = true;
+                true
+            }
+            _ => {
+                block.append_operation(rcgmp::retain(value, loc));
+                false
+            }
+        };
+
+        let mpz = self.tys.mlir_ty(scrut_ty)?;
+        let nat = self.tcx.mk_bigint(BigIntTy::Nat);
+        let unit = is_unit(result_ty);
+        let result_types = if unit {
+            Vec::new()
+        } else {
+            vec![self.tys.mlir_ty(result_ty)?]
+        };
+        let mut arms = Vec::with_capacity(plan.arms.len());
+        let mut regions = Vec::with_capacity(plan.arms.len());
+        for arm in &plan.arms {
+            let (kind, key) = match &arm.test {
+                ArmTest::Case(k) => (ArmKind::Case, Some(k)),
+                ArmTest::AtLeast(c) => (ArmKind::AtLeast, Some(c)),
+                ArmTest::AtMost(c) => (ArmKind::AtMost, Some(c)),
+                ArmTest::Default => (ArmKind::Default, None),
+            };
+            arms.push((kind, key.map(|k| self.narrowest(k)).transpose()?));
+            let argument = arm
+                .argument
+                .as_ref()
+                .filter(|_| moved || kind != ArmKind::Default);
+            let arm_block = if argument.is_some() {
+                Block::new(&[(mpz, loc)])
+            } else {
+                Block::new(&[])
+            };
+            env.subscope(|scope| {
+                let own = key
+                    .filter(|_| moved && kind == ArmKind::Case)
+                    .map(|k| (path.to_vec(), k.clone(), scrut_ty));
+                let fixed = arm
+                    .constants
+                    .iter()
+                    .map(|(at, k)| (at.clone(), k.clone(), nat));
+                let used = fixed
+                    .chain(own)
+                    .filter(|(at, ..)| bigint_match::uses_path(arm.tree, at));
+                for (at, k, ty) in used {
+                    let val = self.bigint_constant(&arm_block, &k, ty)?;
+                    scope
+                        .anchors
+                        .push((SmallVec::from_vec(at), Anchor::Root { val, ty }));
+                }
+                if let Some(at) = argument {
+                    let val: Value<'c, '_> = arm_block
+                        .argument(0)
+                        .map_err(|e| LoweringError(format!("missing match argument: {e}").into()))?
+                        .into();
+                    let ty = if at[..] == *path { scrut_ty } else { nat };
+                    let at = SmallVec::from_slice(at);
+                    scope.anchors.push((at.clone(), Anchor::Root { val, ty }));
+                    scope.holders.push(Holder {
+                        root_idx,
+                        path: at,
+                        val,
+                        settled: false,
+                    });
+                }
+                let value = self.lower_tree(&arm_block, scope, root_idx, arm.tree, result_ty)?;
+                if !unit && value.is_none() {
+                    return err("match arm produced no value");
+                }
+                arm_block.append_operation(rcgmp::yield_(value.as_slice(), loc));
+                Ok(())
+            })?;
+            let region = Region::new();
+            region.append_block(arm_block);
+            regions.push(region);
+        }
+        let arms = rcgmp::match_arms(self.context, &arms);
+        let op = block.append_operation(rcgmp::match_(
+            self.context,
+            value,
+            arms,
+            &result_types,
+            regions,
+            loc,
+        ));
+        Ok((!unit).then(|| op.result(0).unwrap().into()))
+    }
+
+    /// At a leaf, settle the references its match's arms still hold: one bound
+    /// to a variable the body uses becomes that variable's value (a move, as
+    /// the ownership analysis treats it); any other is released here.
+    pub(super) fn settle_holders<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        root_idx: usize,
+        body: &Expr<'tcx>,
+        bindings: &[(VarId, &[u32])],
+    ) {
+        let loc = self.loc();
+        for holder in env.holders.iter_mut() {
+            if holder.root_idx != root_idx || holder.settled {
+                continue;
+            }
+            holder.settled = true;
+            let taken = bindings
+                .iter()
+                .any(|&(var, at)| at == &holder.path[..] && mir::uses_var(body, var));
+            if !taken {
+                block.append_operation(rcgmp::release(holder.val, loc));
+            }
+        }
     }
 
     /// A constructor of `Nat` or `Int`, numbered in declaration order (the
