@@ -1,0 +1,127 @@
+// `Nat` and `Int` stored inside other values: shared and value records, enum
+// payloads, tuples, closure captures, array elements and cells. Each test mixes
+// immediates with heap integers (2^61 is the smallest heap `Nat` on a 64-bit
+// target), so a lost retain shows up as a use after free and a lost release as
+// a leak under the sanitizer runs of this file.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/bigint_aggregates.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri -o %t.opt.o --relocation-mode pic -Oaggressive
+// RUN: %cc %t.opt.o %S/bigint_aggregates.c -o %t.opt.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+
+import core::intrinsic::array;
+import core::intrinsic::cell;
+
+fn big() -> Nat { 2305843009213693952 }
+
+pub enum List { Nil, Cons(Nat, List) }
+
+fn sum(l : List) -> Nat {
+    match l { List::Nil => 0, List::Cons(h, t) => h + sum(t) }
+}
+
+fn len(l : List) -> u64 {
+    match l { List::Nil => 0, List::Cons(_, t) => 1 + len(t) }
+}
+
+// A unique list is rebuilt in place: each cell's old head is released when the
+// cell is reused for the new one.
+fn incr(l : List) -> List {
+    match l { List::Nil => List::Nil, List::Cons(h, t) => List::Cons { h + 1, incr(t) } }
+}
+
+fn upto(n : u64) -> List {
+    if n == 0 { List::Nil } else { List::Cons { big() * (n as Nat), upto(n - 1) } }
+}
+
+pub fn test_list() -> u64 {
+    let l = upto(10);
+    let shared_ok = sum(l) == big() * 55 && len(l) == 10;
+    let bumped = incr(l);
+    let small = List::Cons { 3, List::Cons { 4, List::Nil } };
+    if shared_ok && sum(bumped) == big() * 55 + 10 && sum(incr(small)) == 9 { 1 } else { 0 }
+}
+extern "C" trampoline "test_list_ffi" = test_list;
+
+pub enum Tree { Leaf, Node(Tree, Nat, Tree) }
+
+fn insert(t : Tree, k : Nat) -> Tree {
+    match t {
+        Tree::Leaf => Tree::Node { Tree::Leaf, k, Tree::Leaf },
+        Tree::Node(l, x, r) =>
+            if k < x { Tree::Node { insert(l, k), x, r } }
+            else { Tree::Node { l, x, insert(r, k) } }
+    }
+}
+
+fn total(t : Tree) -> Nat {
+    match t { Tree::Leaf => 0, Tree::Node(l, x, r) => total(l) + x + total(r) }
+}
+
+pub fn test_tree() -> u64 {
+    let t = insert(insert(insert(insert(Tree::Leaf, big() * 3), 7), big()), 5);
+    // `t` stays live, so this insert copies the path it rebuilds.
+    let u = insert(t, big() * 2);
+    if total(t) == big() * 4 + 12 && total(u) == big() * 6 + 12 { 1 } else { 0 }
+}
+extern "C" trampoline "test_tree_ffi" = test_tree;
+
+struct [value] Pair { lo : Nat, hi : Int }
+
+struct [shared] Account { owner : u64, balance : Int }
+
+fn deposit(a : Account, amount : Int) -> Account {
+    Account { owner: a.owner, balance: a.balance + amount }
+}
+
+pub fn test_records() -> u64 {
+    let p = Pair { lo: big(), hi: -(big() as Int) };
+    let q = Pair { lo: p.lo + 1, hi: p.hi };
+    let pair_ok = q.lo - p.lo == 1 && p.hi + q.hi == -(big() as Int) * 2;
+    let a = Account { owner: 7, balance: big() as Int };
+    let b = deposit(a, -1);
+    let account_ok = a.balance - b.balance == 1 && b.owner == 7;
+    let t : (Nat, Int) = (big() * big(), -3);
+    let (x, y) = t;
+    let tuple_ok = x / big() == big() && y * y == 9;
+    if pair_ok && account_ok && tuple_ok { 1 } else { 0 }
+}
+extern "C" trampoline "test_records_ffi" = test_records;
+
+fn apply(f : Nat -> Nat, x : Nat) -> Nat { f(x) }
+
+pub fn test_closure() -> u64 {
+    let k = big() * 5;
+    let add_k = |x : Nat| x + k;
+    let scale = |a : Nat, b : Nat| a * b + k;
+    let scale_big = scale(big());
+    if apply(add_k, 1) == big() * 5 + 1 && apply(add_k, big()) == big() * 6
+        && apply(scale_big, 2) == big() * 7 { 1 } else { 0 }
+}
+extern "C" trampoline "test_closure_ffi" = test_closure;
+
+pub fn test_array() -> u64 {
+    let a = array::splat<[Nat; 4]>(big());
+    // `a` stays live across the set, so the update clones every element.
+    let b = array::set(a, 1, big() * big());
+    let b = array::set(b, 2, 9);
+    if array::get(a, 1) == big() && array::get(b, 1) == big() * big()
+        && array::get(b, 2) == 9 && array::get(b, 3) == big() { 1 } else { 0 }
+}
+extern "C" trampoline "test_array_ffi" = test_array;
+
+pub fn test_cell() -> u64 {
+    let c = cell::alloc<RefCell<Nat>>(big());
+    let first = cell::get(c);
+    cell::set(c, big() * 3);
+    cell::rmw(c, |x| x + 1);
+    let plain = cell::alloc<Cell<Int>>(-1);
+    cell::set(plain, -(big() as Int));
+    if first == big() && cell::get(c) == big() * 3 + 1
+        && cell::get(plain) == -(big() as Int) { 1 } else { 0 }
+}
+extern "C" trampoline "test_cell_ffi" = test_cell;
