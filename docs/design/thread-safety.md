@@ -306,6 +306,16 @@ payloads color too. A `Nat` field of a user record is not in that record's
 group: a record whose arc'd form should hold an integer declares the field
 `Arc<Nat>`. No cast converts between `Nat` and `Arc<Nat>`.
 
+Methods lift into the same world. A method of `impl Nat`/`impl Int` called
+on an `Arc<Nat>`/`Arc<Int>` receiver runs its *atomic instance*: the method
+with every `Nat`/`Int` it mentions colored, so `a.gcd(b)` with `a : Arc<Nat>`
+takes and returns `Arc<Nat>`. A method lifts when its signature is built from
+scalars, the integers and tuples of these, so the coloring maps it
+structurally; its body may hold integers only in the same positions (an
+integer stored in a record would keep its plain count beside the atomic
+one). The atomic instance is compiled where the method's body is, beside the
+plain one, and consumers only declare it.
+
 ## 4. Cells
 
 The MLIR cell lattice (`CellKind`): `plain`, `exclusive`, `atomic`, `mutex`,

@@ -1937,10 +1937,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         // A built-in integer has no fields: its dot calls reach the inherent
         // methods declared on its `core` enum, then, like a scalar's, the
-        // traits its builtin impls provide.
-        if let TyKind::BigInt(int) = *cur.kind()
+        // traits its builtin impls provide. Under the `Arc` coloring the same
+        // methods apply, lifted into the atomic world.
+        if let Some((int, colored)) = cur.bigint()
             && let surface::Access::Named(name) = last
         {
+            let atomic = colored || arced;
             let receiver = if indices.is_empty() {
                 base
             } else {
@@ -1949,9 +1951,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             if let Some(def) = self.lang.bigint_def(int)
                 && let Some(method) = self.dot_method_candidate(def, *name)
             {
-                return self.infer_method_call(receiver, Some(def), method, *name, args, span);
+                return if atomic {
+                    self.infer_lifted_method_call(receiver, def, method, *name, args, span)
+                } else {
+                    self.infer_method_call(receiver, Some(def), method, *name, args, span)
+                };
             }
-            return self.dispatch_scalar_dot(cur, receiver, *name, args, span);
+            let recv_ty = if arced { raw } else { cur };
+            return self.dispatch_scalar_dot(recv_ty, receiver, *name, args, span);
         }
         let TyKind::Record {
             def,
@@ -2112,6 +2119,24 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         args: &[surface::Expr],
         span: Option<Span>,
     ) -> Expr<'tcx> {
+        self.check_method_call(receiver, record_def, def, name, args, span, false)
+    }
+
+    /// [`Self::infer_method_call`], with the callee's signature colored atomic
+    /// when `lift` (see [`Self::infer_lifted_method_call`]).
+    #[allow(clippy::too_many_arguments)]
+    fn check_method_call(
+        &mut self,
+        receiver: Expr<'tcx>,
+        record_def: Option<DefId>,
+        def: DefId,
+        name: TokenKey,
+        args: &[surface::Expr],
+        span: Option<Span>,
+        lift: bool,
+    ) -> Expr<'tcx> {
+        let tcx = self.tcx;
+        let color = |t: Ty<'tcx>| if lift { tcx.color_atomic(t) } else { t };
         // A builtin receiver has no def; its type spelling names it.
         let type_display = match record_def {
             Some(record_def) => self.defs.path(record_def).display(self.resolver),
@@ -2148,7 +2173,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self.error(span, "cannot call a regional function outside of a region");
         }
         let inst = self.instantiate(&proto.generics, &[], span);
-        let expected_recv = self.infer.instantiate_ty(proto.params[0].1, &inst);
+        let expected_recv = self.infer.instantiate_ty(color(proto.params[0].1), &inst);
         self.expect(receiver.ty, expected_recv, span);
         let rest = &proto.params[1..];
         if args.len() < rest.len() {
@@ -2173,11 +2198,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         let mut out = vec![receiver];
         for (arg, (_, pty)) in args.iter().zip(rest) {
-            let expected = self.infer.instantiate_ty(*pty, &inst);
+            let expected = self.infer.instantiate_ty(color(*pty), &inst);
             out.push(self.check_expr(arg, expected));
         }
         let ty_args = self.inst_args(&proto.generics, &inst);
-        let result = self.infer.instantiate_ty(proto.return_ty, &inst);
+        let result = self.infer.instantiate_ty(color(proto.return_ty), &inst);
         if !self.check_kernel_call(proto.is_kernel, result, span) {
             return self.poison(span);
         }
@@ -2192,6 +2217,46 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             result,
             span,
         )
+    }
+
+    /// (METHOD-ARC) `Γ ⊢ recv.m(args)` with `recv : Arc<Nat>` or `Arc<Int>`:
+    /// the plain integer's method `m`, instantiated in the atomic world. Its
+    /// signature is colored (every `Nat`/`Int` becomes `Arc<Nat>`/`Arc<Int>`,
+    /// see [`TyCtxt::color_atomic`]) and checked like any method call;
+    /// monomorphization then selects the atomic instance of `m`. Only
+    /// methods whose signatures the coloring maps structurally (see
+    /// [`Ty::is_liftable`]) lift.
+    fn infer_lifted_method_call(
+        &mut self,
+        receiver: Expr<'tcx>,
+        record_def: DefId,
+        def: DefId,
+        name: TokenKey,
+        args: &[surface::Expr],
+        span: Option<Span>,
+    ) -> Expr<'tcx> {
+        let proto = &self.functions[&def];
+        let liftable = proto.generics.is_empty()
+            && proto
+                .params
+                .iter()
+                .map(|(_, t)| *t)
+                .chain([proto.return_ty])
+                .all(|t| t.is_liftable());
+        if !liftable {
+            let recv = self.infer.resolve(receiver.ty);
+            self.error(
+                span,
+                format!(
+                    "method `{}` cannot be called on `{}`: its signature does not lift \
+                     into the atomic world",
+                    self.sym(name),
+                    self.ty_display(recv)
+                ),
+            );
+            return self.poison(span);
+        }
+        self.check_method_call(receiver, Some(record_def), def, name, args, span, true)
     }
 
     // ----- trait-method dispatch -----

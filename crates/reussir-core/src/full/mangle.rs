@@ -73,6 +73,18 @@ impl<'a> Mangler<'a> {
         out
     }
 
+    /// The symbol for the atomic lifting of a built-in integer method (its
+    /// instance in the `Arc<Nat>`/`Arc<Int>` world): the instance path with an
+    /// `atomic` segment nested under it, a place no declared item can occupy.
+    pub fn mangle_lifted_instance(&self, def: DefId, ty_args: &[Ty<'_>]) -> String {
+        let mut out = String::from("_R");
+        out.push('N');
+        out.push('v');
+        self.path_with_args(&mut out, def, ty_args);
+        ident(&mut out, "atomic");
+        out
+    }
+
     /// The symbol for an enum's variant *payload* record: the variant name nested
     /// as a path component *under the enum applied to its type arguments*, so a
     /// generic enum mangles as `Record<Params>::Variant` — the arguments stay on

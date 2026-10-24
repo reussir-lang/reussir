@@ -13,8 +13,45 @@ use rustc_hash::FxHashMap;
 
 use crate::semi::ty::{GenericId, Ty, TyCtxt, TyKind};
 
-/// A ground assignment for a function's generic parameters.
-pub type Subst<'tcx> = FxHashMap<GenericId, Ty<'tcx>>;
+/// A ground assignment for a function's generic parameters, and whether the
+/// instance is the atomic lifting of a built-in integer method: such an
+/// instance colors every `Nat`/`Int` it mentions as `Arc<Nat>`/`Arc<Int>`.
+#[derive(Clone, Default, Debug)]
+pub struct Subst<'tcx> {
+    generics: FxHashMap<GenericId, Ty<'tcx>>,
+    atomic_bigints: bool,
+}
+
+impl<'tcx> Subst<'tcx> {
+    /// The substitution of an atomic lifted instance (see [`Subst`]).
+    pub fn atomic() -> Self {
+        Subst {
+            generics: FxHashMap::default(),
+            atomic_bigints: true,
+        }
+    }
+
+    pub fn insert(&mut self, id: GenericId, ty: Ty<'tcx>) {
+        self.generics.insert(id, ty);
+    }
+
+    pub fn get(&self, id: &GenericId) -> Option<&Ty<'tcx>> {
+        self.generics.get(id)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.generics.is_empty() && !self.atomic_bigints
+    }
+}
+
+impl<'tcx> FromIterator<(GenericId, Ty<'tcx>)> for Subst<'tcx> {
+    fn from_iter<I: IntoIterator<Item = (GenericId, Ty<'tcx>)>>(iter: I) -> Self {
+        Subst {
+            generics: iter.into_iter().collect(),
+            atomic_bigints: false,
+        }
+    }
+}
 
 /// Substitute generics in a type, re-interning into `tcx`. An empty `subst`
 /// short-circuits (the type is already ground).
@@ -26,6 +63,11 @@ pub fn subst_ty<'tcx>(tcx: &TyCtxt<'tcx>, ty: Ty<'tcx>, subst: &Subst<'tcx>) -> 
         TyKind::Generic(id) => *subst
             .get(&id)
             .unwrap_or_else(|| panic!("subst: generic {id:?} is not bound by this instance")),
+        TyKind::BigInt(_) if subst.atomic_bigints => tcx.mk_arc(ty),
+        // Already atomic: lifting does not color it twice.
+        TyKind::Arc(inner) if subst.atomic_bigints && matches!(inner.kind(), TyKind::BigInt(_)) => {
+            ty
+        }
         TyKind::Record { def, args, flex } => {
             let args: Vec<Ty<'tcx>> = args.iter().map(|&a| subst_ty(tcx, a, subst)).collect();
             tcx.mk_record(def, &args, flex)

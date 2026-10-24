@@ -209,6 +209,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 pub struct Instance<'tcx> {
     pub def: DefId,
     pub ty_args: &'tcx [Ty<'tcx>],
+    /// The atomic lifting of a built-in integer method: the instance in the
+    /// `Arc<Nat>`/`Arc<Int>` world (see [`lifted_methods`]).
+    pub atomic: bool,
 }
 
 /// The private ground functions whose symbols must stay externally linkable:
@@ -359,6 +362,43 @@ fn tree_exprs<'e, 'tcx>(tree: &'e DecisionTree<'tcx>, f: &mut impl FnMut(&'e Exp
     }
 }
 
+/// The methods of the built-in integers' `core` enums that lift onto an
+/// `Arc<Nat>`/`Arc<Int>` receiver: ground, with an integer receiver and a
+/// signature the atomic coloring maps structurally (see [`Ty::is_liftable`]).
+/// Each has an atomic instance besides its plain one.
+fn lifted_methods<'tcx>(
+    input: &MonoInput<'_, 'tcx>,
+    by_def: &FxHashMap<DefId, &Function<'tcx>>,
+) -> FxHashSet<DefId> {
+    use crate::semi::lang::LangItem;
+    let enums: Vec<&[TokenKey]> = input
+        .lang
+        .iter()
+        .filter(|(_, item)| matches!(item, LangItem::Nat | LangItem::Int))
+        .map(|(def, _)| input.defs.path(*def).0.as_slice())
+        .collect();
+    by_def
+        .values()
+        .filter(|f| {
+            let path = &input.defs.path(f.def).0;
+            f.generics.is_empty()
+                && !f.is_kernel
+                && f.params
+                    .first()
+                    .is_some_and(|(_, _, t)| matches!(t.bigint(), Some((_, false))))
+                && f.params
+                    .iter()
+                    .map(|(_, _, t)| *t)
+                    .chain([f.return_ty])
+                    .all(|t| t.is_liftable())
+                && path
+                    .split_last()
+                    .is_some_and(|(_, parent)| enums.contains(&parent))
+        })
+        .map(|f| f.def)
+        .collect()
+}
+
 /// Monomorphize an elaborated program into its ground Full MIR, alongside any
 /// diagnostics raised by the call-boundary regional check.
 pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx>, Vec<Report>) {
@@ -399,6 +439,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
             .filter(|f| f.is_kernel)
             .map(|f| f.def)
             .collect(),
+        lifted: lifted_methods(input, &by_def),
     };
 
     // Seed roots: every *local* non-generic function, then every trampoline
@@ -406,11 +447,16 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
     // dependency's artifact and only calls reach them (as declarations).
     for f in input.elaborated {
         if f.generics.is_empty() && input.features.lowers(f.def) {
-            driver.enqueue(f.def, tcx.intern_tys(&[]), f.span);
+            driver.enqueue(f.def, tcx.intern_tys(&[]), false, f.span);
+            // A lifted method's atomic instance is compiled where its body
+            // is, like its plain one; consumers only declare it.
+            if driver.lifted.contains(&f.def) {
+                driver.enqueue(f.def, tcx.intern_tys(&[]), true, f.span);
+            }
         }
     }
     for t in input.trampolines {
-        driver.enqueue(t.target, tcx.intern_tys(&t.ty_args), None);
+        driver.enqueue(t.target, tcx.intern_tys(&t.ty_args), false, None);
     }
 
     // FFI accumulators. `ffi_mangler` is a second (stateless) mangler the
@@ -512,7 +558,12 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
 
         // Bind this instance's generics, then ground the signature and lower the
         // body into the MIR.
-        let mut subst = Subst::default();
+        let mut subst = if inst.atomic {
+            driver.check_liftable_body(func);
+            Subst::atomic()
+        } else {
+            Subst::default()
+        };
         for ((_, gid), &ty) in func.generics.iter().zip(inst.ty_args.iter()) {
             subst.insert(*gid, ty);
             // Call-boundary check: a generic used at a `[flex]` position must be
@@ -562,7 +613,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
         }
         let body = func.body.as_ref().map(|b| driver.lower_ref(b, &subst));
 
-        let symbol = driver.symbol_of(inst.def, inst.ty_args);
+        let symbol = driver.instance_symbol(inst);
 
         // An `#[ffi(import)]` instance (local or imported — a polyffi texture
         // inside a shipped body compiles in the consumer's pipeline): render
@@ -1154,6 +1205,8 @@ struct Driver<'a, 'tcx> {
     synthetic_fns: Vec<mir::Function<'tcx>>,
     inside_kernel: bool,
     kernel_functions: FxHashSet<DefId>,
+    /// The built-in integer methods that have atomic instances.
+    lifted: FxHashSet<DefId>,
 }
 
 /// What a [`hir::ExprKind::TraitCall`] resolves to at instance time.
@@ -1179,6 +1232,17 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         mir::Symbol(
             self.symbols
                 .get_or_intern(self.mangler.mangle_instance(def, ty_args)),
+        )
+    }
+
+    /// The symbol of a function instance, plain or lifted.
+    fn instance_symbol(&mut self, inst: Instance<'tcx>) -> mir::Symbol {
+        if !inst.atomic {
+            return self.symbol_of(inst.def, inst.ty_args);
+        }
+        mir::Symbol(
+            self.symbols
+                .get_or_intern(self.mangler.mangle_lifted_instance(inst.def, inst.ty_args)),
         )
     }
 
@@ -1263,7 +1327,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 ty_args,
                 regional: false,
             } => {
-                self.enqueue(target, ty_args, span);
+                self.enqueue(target, ty_args, false, span);
                 Some((self.symbol_of(target, ty_args), ret, name))
             }
             _ => {
@@ -1931,11 +1995,41 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         None
     }
 
+    /// A lifted method's body may mention built-in integers only where the
+    /// atomic coloring maps them structurally (see [`Ty::is_liftable`]): an
+    /// integer stored in a record, closure, array or cell would keep its
+    /// plain count beside the atomic one.
+    fn check_liftable_body(&mut self, func: &Function<'tcx>) {
+        let Some(body) = func.body.as_ref() else {
+            return;
+        };
+        let mut offending = None;
+        for_each_expr(body, &mut |e| {
+            if offending.is_none() && e.ty.mentions_bigint(false) && !e.ty.is_liftable() {
+                offending = Some(e.ty);
+            }
+        });
+        if let Some(ty) = offending {
+            let path = self.defs.path(func.def).display(self.resolver);
+            self.error(
+                func.span,
+                format!(
+                    "`{path}` cannot be lifted onto an `Arc` integer: its body uses \
+                     a built-in integer inside `{ty:?}`"
+                ),
+            );
+        }
+    }
+
     /// Enqueue a function instance if it has not been seen, recording the
     /// demanding site (`span` in [`cur_file`](Self::cur_file)) for the
     /// missing-definition diagnostic.
-    fn enqueue(&mut self, def: DefId, ty_args: &'tcx [Ty<'tcx>], span: Option<Span>) {
-        let inst = Instance { def, ty_args };
+    fn enqueue(&mut self, def: DefId, ty_args: &'tcx [Ty<'tcx>], atomic: bool, span: Option<Span>) {
+        let inst = Instance {
+            def,
+            ty_args,
+            atomic,
+        };
         if self.seen.insert(inst) {
             self.origins.insert(inst, (self.cur_file, span));
             // Bound the queue by type-argument depth. The queue is the only thing
@@ -2521,8 +2615,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     ) {
         let name = func.as_str();
         let integer = args.first().map(|a| subst_ty(self.tcx, a.ty, subst));
-        if func.takes_integer() && !integer.is_some_and(|ty| matches!(ty.kind(), TyKind::BigInt(_)))
-        {
+        if func.takes_integer() && !integer.is_some_and(|ty| ty.bigint().is_some()) {
             self.error(
                 span,
                 format!("`core::intrinsic::bigint::{name}` takes a `Nat` or an `Int`"),
@@ -2608,7 +2701,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                         if !self.check_kernel_call(target, result_ty, span) {
                             return M::Poison;
                         }
-                        self.enqueue(target, callee_args, span);
+                        self.enqueue(target, callee_args, false, span);
                         let callee = self.symbol_of(target, callee_args);
                         M::Call {
                             callee,
@@ -2809,7 +2902,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 args,
             } => {
                 let ty_args = self.ground_args(ty_args, subst);
-                self.enqueue(*target, ty_args, span);
+                self.enqueue(*target, ty_args, false, span);
                 let callee = self.symbol_of(*target, ty_args);
                 M::Launch {
                     callee,
@@ -2826,8 +2919,20 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     return M::Poison;
                 }
                 let ty_args = self.ground_args(ty_args, subst);
-                self.enqueue(*target, ty_args, span);
-                let callee = self.symbol_of(*target, ty_args);
+                // `Arc`-colored integers at a lifted method's call select its
+                // atomic instance: a method called on an `Arc<Nat>`/`Arc<Int>`
+                // receiver, or any such call inside a lifted body.
+                let atomic = self.lifted.contains(target)
+                    && (result_ty.mentions_bigint(true)
+                        || args
+                            .iter()
+                            .any(|a| subst_ty(self.tcx, a.ty, subst).mentions_bigint(true)));
+                self.enqueue(*target, ty_args, atomic, span);
+                let callee = self.instance_symbol(Instance {
+                    def: *target,
+                    ty_args,
+                    atomic,
+                });
                 M::Call {
                     callee,
                     args: self.lower_slice(args, subst),

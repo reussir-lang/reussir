@@ -371,6 +371,47 @@ impl<'tcx> Ty<'tcx> {
         }
     }
 
+    /// Whether a method mentioning this type in its signature can be lifted
+    /// onto an `Arc<Nat>`/`Arc<Int>` receiver: the type is built only from
+    /// machine scalars, `Unit`, built-in integers of either coloring, and
+    /// tuples of these, so the atomic coloring maps it structurally.
+    pub fn is_liftable(self) -> bool {
+        match *self.kind() {
+            TyKind::Int(_)
+            | TyKind::Fp(_)
+            | TyKind::Bool
+            | TyKind::Char
+            | TyKind::Unit
+            | TyKind::BigInt(_) => true,
+            TyKind::Arc(_) => self.bigint().is_some(),
+            TyKind::Tuple(ps) => ps.iter().all(|p| p.is_liftable()),
+            _ => false,
+        }
+    }
+
+    /// Whether a built-in integer occurs anywhere in this type, plain
+    /// (`atomic = false`) or `Arc`-colored (`atomic = true`).
+    pub fn mentions_bigint(self, atomic: bool) -> bool {
+        if let Some((_, a)) = self.bigint() {
+            return a == atomic;
+        }
+        match *self.kind() {
+            TyKind::Record { args, .. } => args.iter().any(|a| a.mentions_bigint(atomic)),
+            TyKind::Closure { params, ret } => {
+                params.iter().any(|p| p.mentions_bigint(atomic)) || ret.mentions_bigint(atomic)
+            }
+            TyKind::Nullable(inner) | TyKind::Arc(inner) | TyKind::ConstSeq(inner) => {
+                inner.mentions_bigint(atomic)
+            }
+            TyKind::Cell { elem, .. }
+            | TyKind::Array { elem, .. }
+            | TyKind::Tensor { elem, .. } => elem.mentions_bigint(atomic),
+            TyKind::DevArray { elem, .. } => elem.mentions_bigint(atomic),
+            TyKind::Tuple(ps) | TyKind::Future(ps) => ps.iter().any(|p| p.mentions_bigint(atomic)),
+            _ => false,
+        }
+    }
+
     /// Whether this is a machine scalar (integer, float, `bool`, `char`) —
     /// the types whose comparisons the backend lowers directly and whose
     /// comparison-trait impls the compiler registers itself.
@@ -456,6 +497,19 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn mk_bigint(&self, ty: BigIntTy) -> Ty<'tcx> {
         self.mk(TyKind::BigInt(ty))
+    }
+
+    /// The atomic coloring of a liftable type (see [`Ty::is_liftable`]):
+    /// every plain `Nat`/`Int` becomes `Arc<Nat>`/`Arc<Int>`.
+    pub fn color_atomic(&self, ty: Ty<'tcx>) -> Ty<'tcx> {
+        match *ty.kind() {
+            TyKind::BigInt(_) => self.mk_arc(ty),
+            TyKind::Tuple(ps) => {
+                let ps: Vec<Ty<'tcx>> = ps.iter().map(|&p| self.color_atomic(p)).collect();
+                self.mk_tuple(&ps)
+            }
+            _ => ty,
+        }
     }
 
     pub fn mk_fp(&self, fp: FpTy) -> Ty<'tcx> {

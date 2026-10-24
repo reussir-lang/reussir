@@ -2934,6 +2934,48 @@ mod tests {
     }
 
     #[test]
+    fn arc_bigint_receivers_lift_integer_methods() {
+        // `Nat`/`Int` methods called on `Arc` receivers check against their
+        // atomically colored signatures and select the atomic instances.
+        check_with_bigint(
+            "pub fn f(a: Arc<Nat>, b: Arc<Nat>) -> Arc<Nat> { a.gcd(b) }\n\
+             pub fn g(i: Arc<Int>) -> Arc<Nat> { i.nat_abs() }\n\
+             pub fn h(n: Arc<Nat>) -> (u64, bool) { n.overflowing_to_u64() }\n\
+             pub fn p(n: Arc<Nat>) -> Arc<Nat> { n.pow(3) }",
+            |elab, _| {
+                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let (full, reports) = crate::full::mono::monomorphize(&elab.mono_input());
+                assert!(reports.is_empty(), "{reports:#?}");
+                let text =
+                    crate::full::mir::print::Printer::new(&elab.defs, elab.resolver).program(&full);
+                let lifted = "fn @_RNvNvNvNvC4core3num3Nat3gcd6atomic(";
+                let item = text
+                    .split("\n\n")
+                    .find(|item| item.contains(lifted))
+                    .unwrap_or_else(|| panic!("no lifted `gcd` in:\n{text}"));
+                assert!(item.contains("Arc<Nat>"), "{item}");
+                assert!(text.contains("@_RNvNvNvNvC4core3num3Int7nat_abs6atomic"), "{text}");
+            },
+        );
+    }
+
+    #[test]
+    fn arc_bigint_receivers_reject_unliftable_methods() {
+        check_with_bigint(
+            "pub struct Holder { n: Nat }\n\
+             impl Nat { pub fn hold(self: Self) -> Holder { Holder { n: self } } }\n\
+             pub fn f(a: Arc<Nat>) -> Holder { a.hold() }",
+            |elab, _| {
+                let errors: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
+                assert!(
+                    errors.iter().any(|e| e.starts_with("method `hold` cannot be called on")),
+                    "{errors:#?}"
+                );
+            },
+        );
+    }
+
+    #[test]
     fn arc_bigints_stay_apart_from_bare_integers() {
         check_with_bigint(
             "pub fn f(n: Nat) -> Arc<Nat> { n as Arc<Nat> }\n\

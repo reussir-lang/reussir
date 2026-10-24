@@ -1,0 +1,59 @@
+// `Nat`/`Int` methods called on `Arc<Nat>`/`Arc<Int>` receivers run their
+// atomic instances, compiled in core beside the plain ones: every integer the
+// method takes or returns is `Arc`-colored. Heap values make a lost retain a
+// use after free and a lost release a leak.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core -o %t.core.o --relocation-mode pic
+// RUN: %rrc %s --package-name arcmeth --extern core=%t.core.rri -o %t.mlir -t mlir --relocation-mode pic
+// RUN: %FileCheck %s --check-prefix=MLIR < %t.mlir
+// RUN: %rrc %s --package-name arcmeth --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %t.core.o %S/arc_bigint_methods.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// MLIR-DAG: func.func private @_RNvNvNvNvC4core3num3Int7nat_abs6atomic(!rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic>
+// MLIR-DAG: func.func private @_RNvNvNvNvC4core3num3Nat3gcd6atomic(!rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic>
+// MLIR-DAG: func.func private @_RNvNvNvNvC4core3num3Nat3pow6atomic(!rcgmp.mpz<atomic>, i64) -> !rcgmp.mpz<atomic>
+
+fn int(x : i64) -> Arc<Int> { x as Arc<Int> }
+
+fn nat_ok() -> bool {
+    let twelve : Arc<Nat> = 12;
+    let two : Arc<Nat> = 2;
+    let five : Arc<Nat> = 5;
+    let big = two.pow(100);
+    twelve.gcd(18) == 6 && big.gcd(big) == big
+        && big == 1267650600228229401496703205376 && big.log2() == 100
+        && five.test_bit(0) && !five.test_bit(1) && big.test_bit(100)
+        && (big * 7).div_exact(big) == 7
+}
+
+fn narrowing_ok() -> bool {
+    let max : Arc<Nat> = 18446744073709551615;
+    let (max_low, max_over) = max.overflowing_to_u64();
+    let (wrap_low, wrap_over) = (max + 1).overflowing_to_u64();
+    max_low == 18446744073709551615 && !max_over && wrap_low == 0 && wrap_over
+}
+
+fn int_ok() -> bool {
+    let big : Arc<Int> = -1267650600228229401496703205376;
+    let magnitude : Arc<Nat> = 1267650600228229401496703205376;
+    int(-5).abs() == 5 && big.nat_abs() == magnitude && big.to_nat() == 0
+        && int(7).to_nat() == 7 && int(-12).gcd(int(18)) == 6
+}
+
+fn rounding_ok() -> bool {
+    let big : Arc<Int> = -1267650600228229401496703205376;
+    int(-7).div_euclid(int(2)) == -4 && int(-7).rem_euclid(int(2)) == 1
+        && int(7).div_floor(int(-2)) == -4 && int(7).rem_floor(int(-2)) == -1
+        && big.div_floor(int(3)) == -422550200076076467165567735126 && big.rem_floor(int(3)) == 2
+}
+
+fn digit(ok : bool) -> i64 { if ok { 1 } else { 0 } }
+
+pub fn main() -> i64 {
+    digit(nat_ok()) + digit(narrowing_ok()) * 10 + digit(int_ok()) * 100 + digit(rounding_ok()) * 1000
+}
+
+extern "C" trampoline "reussir_main" = main;
