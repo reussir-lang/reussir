@@ -7,6 +7,7 @@
 // compiler-only status.
 
 pub mod arc;
+pub mod bigint;
 pub mod cell;
 pub mod const_seq;
 pub mod math;

@@ -892,6 +892,9 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     Ok(Some(self.append(block, built)))
                 }
                 IntrinsicOp::Pjrt { func } => self.lower_pjrt_intrinsic(block, env, e, *func, args),
+                IntrinsicOp::BigInt { func } => self
+                    .lower_bigint_intrinsic(block, env, e, *func, args)
+                    .map(Some),
                 IntrinsicOp::Cell { func } => self.lower_cell_intrinsic(block, env, e, *func, args),
                 IntrinsicOp::ConstSeq { func } => {
                     use reussir_core::intrinsic::ConstSeqFn;

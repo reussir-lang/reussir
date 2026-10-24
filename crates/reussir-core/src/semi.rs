@@ -2685,7 +2685,7 @@ mod tests {
     /// `cargo test`, before any rene build.
     #[test]
     fn bundled_core_covers_surfaced_intrinsics() {
-        use crate::intrinsic::{ConstSeqFn, MathFn};
+        use crate::intrinsic::{BigIntFn, ConstSeqFn, MathFn};
         use crate::semi::lang::{IntrinsicItem, LangItem};
         check_package(
             "core",
@@ -2722,6 +2722,10 @@ mod tests {
                     include_str!("../../../library/core/src/intrinsic/const_seq.rr"),
                 ),
                 (
+                    &["intrinsic", "bigint"],
+                    include_str!("../../../library/core/src/intrinsic/bigint.rr"),
+                ),
+                (
                     &["intrinsic", "tensor"],
                     include_str!("../../../library/core/src/intrinsic/tensor.rr"),
                 ),
@@ -2749,6 +2753,14 @@ mod tests {
                     elab.lang.get(panic_item).is_some(),
                     "core declares no prototype for `panic`"
                 );
+                for &f in BigIntFn::ALL {
+                    let item = LangItem::Intrinsic(IntrinsicItem::BigInt(f));
+                    assert!(
+                        elab.lang.get(item).is_some(),
+                        "core declares no prototype for `bigint::{}`",
+                        f.as_str()
+                    );
+                }
                 for f in [ConstSeqFn::Len, ConstSeqFn::Get] {
                     let item = LangItem::Intrinsic(IntrinsicItem::ConstSeq(f));
                     assert!(
@@ -2857,6 +2869,20 @@ mod tests {
     }
 
     #[test]
+    fn bigint_intrinsics_accept_generic_operands() {
+        // A generic operand is checked where monomorphization grounds it.
+        check_with_bigint(
+            "fn log2_of<T: Integral>(x: T) -> u64 { core::intrinsic::bigint::log2i(x) }\n\
+             pub fn f(n: Nat) -> u64 { log2_of(n) }",
+            |elab, _| {
+                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
+                assert!(reports.is_empty(), "{reports:#?}");
+            },
+        );
+    }
+
+    #[test]
     fn bigint_enums_build_and_match_the_builtin_integers() {
         check_with_bigint(
             "fn pred(n: Nat) -> Nat {\n\
@@ -2887,6 +2913,22 @@ mod tests {
                 assert!(!elab.has_errors(), "{:#?}", elab.reports);
                 let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
                 assert!(reports.is_empty(), "{reports:#?}");
+            },
+        );
+    }
+
+    #[test]
+    fn bigint_intrinsics_reject_fixed_width_integers() {
+        check_with_bigint(
+            "pub fn f(a: i64) -> u64 { core::intrinsic::bigint::log2i(a) }",
+            |elab, _| {
+                let messages: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
+                assert!(
+                    messages.contains(
+                        &"`core::intrinsic::bigint::log2i` takes a `Nat` or an `Int`, found `i64`"
+                    ),
+                    "{messages:#?}"
+                );
             },
         );
     }

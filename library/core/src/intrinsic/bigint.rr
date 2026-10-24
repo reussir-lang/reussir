@@ -1,0 +1,57 @@
+// The built-in integers' intrinsics' declaration sites. Each prototype is
+// bound to the compiler's operation by its `#[lang]` marker, and lowers to the
+// rcgmp operation its name spells. `T` is `Nat` or `Int`; the methods in
+// `core::num` wrap these for each type.
+//
+// Ownership follows the operation: `log2i`, `testbiti` and `trunci_overflow`
+// read their integer operand, and the others consume theirs.
+
+/// The greatest common divisor of the magnitudes of `a` and `b`.
+#[lang("core::intrinsic::bigint::gcdi")]
+pub fn gcdi<T: Integral>(a: T, b: T) -> Nat;
+
+/// `base` to the power `exp`.
+#[lang("core::intrinsic::bigint::ipowi")]
+pub fn ipowi<T: Integral>(base: T, exp: u64) -> T;
+
+/// The base-2 logarithm of the magnitude of `x`, rounded down; `0` for zero.
+#[lang("core::intrinsic::bigint::log2i")]
+pub fn log2i<T: Integral>(x: T) -> u64;
+
+/// Bit `i` of the infinite two's complement of `x`.
+#[lang("core::intrinsic::bigint::testbiti")]
+pub fn testbiti<T: Integral>(x: T, i: u64) -> bool;
+
+/// The quotient `a / b` of an exact division: `a` must be a multiple of `b`,
+/// otherwise the result is unspecified. A zero divisor terminates the program.
+#[lang("core::intrinsic::bigint::divsi_exact")]
+pub fn divsi_exact<T: Integral>(a: T, b: T) -> T;
+
+/// The Euclidean quotient of `a` by `b`. A zero divisor terminates the
+/// program.
+#[lang("core::intrinsic::bigint::edivsi")]
+pub fn edivsi<T: Integral>(a: T, b: T) -> T;
+
+/// The Euclidean remainder of `a` by `b`, never negative. A zero divisor
+/// terminates the program.
+#[lang("core::intrinsic::bigint::emodsi")]
+pub fn emodsi<T: Integral>(a: T, b: T) -> T;
+
+/// The quotient of `a` by `b` rounded toward negative infinity. A zero divisor
+/// terminates the program.
+#[lang("core::intrinsic::bigint::floordivsi")]
+pub fn floordivsi<T: Integral>(a: T, b: T) -> T;
+
+/// The remainder of `floordivsi(a, b)`, with the sign of `b`. A zero divisor
+/// terminates the program.
+#[lang("core::intrinsic::bigint::floormodsi")]
+pub fn floormodsi<T: Integral>(a: T, b: T) -> T;
+
+/// The magnitude of `x`.
+#[lang("core::intrinsic::bigint::absi")]
+pub fn absi<T: Integral>(x: T) -> Nat;
+
+/// The low bits of `x` at the fixed-width integer `U`, and whether `x` does
+/// not fit `U`.
+#[lang("core::intrinsic::bigint::trunci_overflow")]
+pub fn trunci_overflow<T: Integral, U: Integral>(x: T) -> (U, bool);

@@ -675,6 +675,20 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                         self.place_array_op(e, crate::intrinsic::ArrayFn::Dim, args, live_after);
                     }
                 }
+                // A borrowing `bigint` op reads its integer operand, released
+                // after the op on its last use, like a comparison's; the
+                // consuming ops and every other operand move left to right.
+                crate::intrinsic::IntrinsicOp::BigInt { func } if func.borrows_operand() => {
+                    let (integer, rest) = args.split_first().expect("a bigint operand");
+                    let mut held = VarSet::default();
+                    for arg in rest {
+                        held.union_with(&self.free(arg));
+                    }
+                    held.union_with(live_after);
+                    self.navigate_base(integer, e.id, &held);
+                    self.place_args(rest, live_after);
+                }
+                crate::intrinsic::IntrinsicOp::BigInt { .. } => self.place_args(args, live_after),
                 // Math, str, and const_seq operands are plain values (`str`
                 // and `ConstSeq` are not reference-counted), so left-to-right
                 // placement suffices.

@@ -2477,6 +2477,35 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     /// range; a float that would round to infinity is an error (there is no
     /// literal syntax for `inf`, so it can only be a mistake). Checked on the
     /// *lowered* kind so folded negations (`-128 : i8`) see the signed value.
+    /// The `bigint` intrinsics take a `Nat` or an `Int`, and
+    /// `trunci_overflow` truncates to a fixed-width integer. The checker
+    /// enforces this where it sees the types; generic callers reach here.
+    fn check_bigint_intrinsic(
+        &mut self,
+        func: crate::intrinsic::BigIntFn,
+        args: &[Expr<'tcx>],
+        result_ty: Ty<'tcx>,
+        subst: &Subst<'tcx>,
+        span: Option<Span>,
+    ) {
+        let name = func.as_str();
+        let integer = args.first().map(|a| subst_ty(self.tcx, a.ty, subst));
+        if !integer.is_some_and(|ty| matches!(ty.kind(), TyKind::BigInt(_))) {
+            self.error(
+                span,
+                format!("`core::intrinsic::bigint::{name}` takes a `Nat` or an `Int`"),
+            );
+        }
+        if func == crate::intrinsic::BigIntFn::TrunciOverflow
+            && !matches!(result_ty.kind(), TyKind::Tuple([fixed, _]) if matches!(fixed.kind(), TyKind::Int(_)))
+        {
+            self.error(
+                span,
+                format!("`core::intrinsic::bigint::{name}` truncates to a fixed-width integer"),
+            );
+        }
+    }
+
     fn check_literal_range(
         &mut self,
         kind: &mir::ExprKind<'tcx>,
@@ -2772,10 +2801,15 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     regional: *regional,
                 }
             }
-            ExprKind::Intrinsic { op, args } => M::Intrinsic {
-                op: *op,
-                args: self.lower_slice(args, subst),
-            },
+            ExprKind::Intrinsic { op, args } => {
+                if let crate::intrinsic::IntrinsicOp::BigInt { func } = *op {
+                    self.check_bigint_intrinsic(func, args, result_ty, subst, span);
+                }
+                M::Intrinsic {
+                    op: *op,
+                    args: self.lower_slice(args, subst),
+                }
+            }
             ExprKind::CompoundCall {
                 target,
                 ty_args,

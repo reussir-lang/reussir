@@ -793,6 +793,12 @@ fn interp<'tcx>(
                     interp(a, ot, rr, rc);
                 }
             }
+            crate::intrinsic::IntrinsicOp::BigInt { func } if func.borrows_operand() => {
+                interp_borrow(&args[0], ot, rr, rc);
+                for a in &args[1..] {
+                    interp(a, ot, rr, rc);
+                }
+            }
             _ => {
                 for a in args {
                     interp(a, ot, rr, rc);
@@ -1268,6 +1274,79 @@ fn bigint_narrowing_cast_borrows_its_operand() {
 
         assert!(ot.before(operand_id).is_empty(), "x is borrowed, not moved");
         assert_eq!(ot.after(cast_id), &[RcOp::Drop(x)], "x released after");
+    });
+}
+
+#[test]
+fn bigint_reading_intrinsic_borrows_its_integer() {
+    // fn f(x: Nat) -> u64 { log2i(x) }  — x is borrowed, then released.
+    with_tcx(|tcx| {
+        use crate::intrinsic::{BigIntFn, IntrinsicOp};
+        use crate::semi::ty::{BigIntTy, IntTy};
+        let mut b = MirBuilder::new(tcx);
+        let nat = tcx.mk_bigint(BigIntTy::Nat);
+        let u64t = tcx.mk_int(IntTy::Unsigned(64));
+        let x = b.fresh_var();
+
+        let operand = b.var(x, nat);
+        let operand_id = operand.id;
+        let args = tcx.alloc_slice(&[operand]);
+        let call = b.mk(
+            ExprKind::Intrinsic {
+                op: IntrinsicOp::BigInt {
+                    func: BigIntFn::Log2i,
+                },
+                args,
+            },
+            u64t,
+        );
+        let call_id = call.id;
+
+        let p = b.param(x, nat);
+        let func = b.function("f", vec![p], u64t, call);
+        let ot = run(tcx, &func, &b);
+
+        assert!(ot.before(operand_id).is_empty(), "x is borrowed, not moved");
+        assert_eq!(ot.after(call_id), &[RcOp::Drop(x)], "x released after");
+    });
+}
+
+#[test]
+fn bigint_consuming_intrinsic_moves_its_last_use() {
+    // fn f(x: Nat) -> Nat { gcdi(x, x) }  — the first x is dup'd, the second
+    // moved.
+    with_tcx(|tcx| {
+        use crate::intrinsic::{BigIntFn, IntrinsicOp};
+        use crate::semi::ty::BigIntTy;
+        let mut b = MirBuilder::new(tcx);
+        let nat = tcx.mk_bigint(BigIntTy::Nat);
+        let x = b.fresh_var();
+
+        let first = b.var(x, nat);
+        let first_id = first.id;
+        let second = b.var(x, nat);
+        let second_id = second.id;
+        let args = tcx.alloc_slice(&[first, second]);
+        let call = b.mk(
+            ExprKind::Intrinsic {
+                op: IntrinsicOp::BigInt {
+                    func: BigIntFn::Gcdi,
+                },
+                args,
+            },
+            nat,
+        );
+
+        let p = b.param(x, nat);
+        let func = b.function("f", vec![p], nat, call);
+        let ot = run(tcx, &func, &b);
+
+        assert_eq!(
+            ot.before(first_id),
+            &[RcOp::Dup(x)],
+            "x is live across the first use"
+        );
+        assert!(ot.get(second_id).is_none(), "the last use moves x");
     });
 }
 

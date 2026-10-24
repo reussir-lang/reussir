@@ -1,0 +1,43 @@
+// The `core::intrinsic::bigint` operations lower to the rcgmp operations their
+// names spell, and survive the textual MIR.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri --emit mlir -o - | %FileCheck %s
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri --emit mir -o %t.mir
+// RUN: %FileCheck %s --check-prefix=MIR < %t.mir
+// RUN: %rrc %t.mir --emit mlir -o - | %FileCheck %s
+
+pub fn rounding(a : Int, b : Int) -> Int {
+    core::intrinsic::bigint::edivsi(a, b) + core::intrinsic::bigint::emodsi(a, b)
+        + core::intrinsic::bigint::floordivsi(a, b) + core::intrinsic::bigint::floormodsi(a, b)
+}
+
+pub fn arithmetic(a : Nat, b : Nat) -> Nat {
+    core::intrinsic::bigint::ipowi(core::intrinsic::bigint::gcdi(a, b), 3)
+        + core::intrinsic::bigint::divsi_exact(a, 2) + core::intrinsic::bigint::absi(b)
+}
+
+pub fn reading(a : Nat) -> u64 {
+    let (low, over) : (u32, bool) = core::intrinsic::bigint::trunci_overflow(a);
+    if over || core::intrinsic::bigint::testbiti(a, 7) {
+        core::intrinsic::bigint::log2i(a)
+    } else {
+        low as u64
+    }
+}
+
+// MIR-DAG: intrinsic#bigint#edivsi#0
+// MIR-DAG: intrinsic#bigint#trunci_overflow#0
+
+// CHECK-DAG: rcgmp.edivsi
+// CHECK-DAG: rcgmp.emodsi
+// CHECK-DAG: rcgmp.floordivsi
+// CHECK-DAG: rcgmp.floormodsi
+// CHECK-DAG: rcgmp.gcdi
+// CHECK-DAG: rcgmp.ipowi
+// CHECK-DAG: rcgmp.divsi {{.*}}exact
+// CHECK-DAG: rcgmp.absi
+// CHECK-DAG: rcgmp.trunci_overflow {{.*}}unsigned{{.*}} to i32
+// CHECK-DAG: rcgmp.testbiti
+// CHECK-DAG: rcgmp.log2i

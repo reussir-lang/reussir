@@ -39,6 +39,7 @@ pub enum IntrinsicItem {
     Str(crate::intrinsic::StrFn),
     ConstSeq(crate::intrinsic::ConstSeqFn),
     Pjrt(crate::intrinsic::PjrtFn),
+    BigInt(crate::intrinsic::BigIntFn),
 }
 
 impl IntrinsicItem {
@@ -53,6 +54,7 @@ impl IntrinsicItem {
             IntrinsicItem::Str(_) => "str",
             IntrinsicItem::ConstSeq(_) => "const_seq",
             IntrinsicItem::Pjrt(_) => "pjrt",
+            IntrinsicItem::BigInt(_) => "bigint",
         }
     }
 
@@ -67,6 +69,7 @@ impl IntrinsicItem {
             IntrinsicItem::Str(f) => f.as_str(),
             IntrinsicItem::ConstSeq(f) => f.as_str(),
             IntrinsicItem::Pjrt(f) => f.as_str(),
+            IntrinsicItem::BigInt(f) => f.as_str(),
         }
     }
 
@@ -74,6 +77,7 @@ impl IntrinsicItem {
     pub fn required_feature(self) -> Option<Feature> {
         match self {
             IntrinsicItem::PjrtLaunch | IntrinsicItem::Tensor(_) => Some(Feature::OpenXla),
+            IntrinsicItem::BigInt(_) => Some(Feature::Rcgmp),
             _ => None,
         }
     }
@@ -89,6 +93,7 @@ impl IntrinsicItem {
             "str" => crate::intrinsic::StrFn::parse(name).map(IntrinsicItem::Str),
             "const_seq" => crate::intrinsic::ConstSeqFn::parse(name).map(IntrinsicItem::ConstSeq),
             "pjrt" => crate::intrinsic::PjrtFn::parse(name).map(IntrinsicItem::Pjrt),
+            "bigint" => crate::intrinsic::BigIntFn::parse(name).map(IntrinsicItem::BigInt),
             _ => None,
         }
     }

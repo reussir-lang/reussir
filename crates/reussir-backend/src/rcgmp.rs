@@ -8,8 +8,9 @@
 //! [`mpz_type`] reports whether the dialect is present at all.
 //!
 //! Ownership follows the dialect: consuming operations take one owned
-//! reference per operand, while [`cmpi`] and [`trunci`] borrow their operands
-//! and leave their references with the caller.
+//! reference per operand, while [`cmpi`], [`trunci`], [`trunci_overflow`],
+//! [`log2i`] and [`testbiti`] borrow their integer operands and leave their
+//! references with the caller.
 
 use melior::Context;
 use melior::ir::attribute::{Attribute, IntegerAttribute};
@@ -67,6 +68,15 @@ pub enum Binary {
     Div,
     /// Truncated remainder; a zero divisor terminates the program.
     Rem,
+    /// Euclidean quotient and remainder, and the quotient rounded toward
+    /// negative infinity with its remainder; a zero divisor terminates the
+    /// program.
+    EuclidDiv,
+    EuclidRem,
+    FloorDiv,
+    FloorRem,
+    /// The greatest common divisor of the magnitudes.
+    Gcd,
     /// Bitwise operations, on the infinite two's complement.
     And,
     Or,
@@ -82,6 +92,11 @@ impl Binary {
             Binary::Mul => "rcgmp.muli",
             Binary::Div => "rcgmp.divsi",
             Binary::Rem => "rcgmp.remsi",
+            Binary::EuclidDiv => "rcgmp.edivsi",
+            Binary::EuclidRem => "rcgmp.emodsi",
+            Binary::FloorDiv => "rcgmp.floordivsi",
+            Binary::FloorRem => "rcgmp.floormodsi",
+            Binary::Gcd => "rcgmp.gcdi",
             Binary::And => "rcgmp.andi",
             Binary::Or => "rcgmp.ori",
             Binary::Xor => "rcgmp.xori",
@@ -109,6 +124,7 @@ pub enum Unary {
     /// Bitwise complement, `-x - 1`.
     Not,
     Neg,
+    Abs,
 }
 
 /// `<op> <operand>`: consume the operand and produce one owned result.
@@ -116,12 +132,69 @@ pub fn unary<'c>(op: Unary, operand: Value<'c, '_>, location: Location<'c>) -> O
     let name = match op {
         Unary::Not => "rcgmp.noti",
         Unary::Neg => "rcgmp.negi",
+        Unary::Abs => "rcgmp.absi",
     };
     OperationBuilder::new(name, location)
         .add_operands(&[operand])
         .add_results(&[operand.r#type()])
         .build()
         .unwrap_or_else(|_| panic!("valid {name}"))
+}
+
+/// `rcgmp.divsi <lhs>, <rhs> exact`: the quotient of an exact division,
+/// consuming both operands. `lhs` must be a multiple of `rhs`; a zero divisor
+/// terminates the program.
+pub fn divsi_exact<'c>(
+    context: &'c Context,
+    lhs: Value<'c, '_>,
+    rhs: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("rcgmp.divsi", location)
+        .add_attributes(&[(Identifier::new(context, "exact"), Attribute::unit(context))])
+        .add_operands(&[lhs, rhs])
+        .add_results(&[lhs.r#type()])
+        .build()
+        .expect("valid rcgmp.divsi")
+}
+
+/// `rcgmp.ipowi <base>, <exponent>`: consume `base` and raise it to the
+/// unsigned fixed-width `exponent`.
+pub fn ipowi<'c>(
+    base: Value<'c, '_>,
+    exponent: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("rcgmp.ipowi", location)
+        .add_operands(&[base, exponent])
+        .add_results(&[base.r#type()])
+        .build()
+        .expect("valid rcgmp.ipowi")
+}
+
+/// `rcgmp.log2i <value> : … to <ty>`: the base-2 logarithm of a borrowed
+/// integer's magnitude, rounded down (zero for zero).
+pub fn log2i<'c>(value: Value<'c, '_>, ty: Type<'c>, location: Location<'c>) -> Operation<'c> {
+    OperationBuilder::new("rcgmp.log2i", location)
+        .add_operands(&[value])
+        .add_results(&[ty])
+        .build()
+        .expect("valid rcgmp.log2i")
+}
+
+/// `rcgmp.testbiti <value>, <index>`: bit `index` of a borrowed integer's
+/// infinite two's complement.
+pub fn testbiti<'c>(
+    context: &'c Context,
+    value: Value<'c, '_>,
+    index: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("rcgmp.testbiti", location)
+        .add_operands(&[value, index])
+        .add_results(&[IntegerType::new(context, 1).into()])
+        .build()
+        .expect("valid rcgmp.testbiti")
 }
 
 /// A shift by a fixed-width, unsigned number of bits.
@@ -205,4 +278,28 @@ pub fn trunci<'c>(value: Value<'c, '_>, ty: Type<'c>, location: Location<'c>) ->
         .add_results(&[ty])
         .build()
         .expect("valid rcgmp.trunci")
+}
+
+/// `rcgmp.trunci_overflow <value> [unsigned] : … to <ty>`: the low bits of a
+/// borrowed integer, and whether it does not fit `ty` as a signed integer, or
+/// as an unsigned one with `unsigned`.
+pub fn trunci_overflow<'c>(
+    context: &'c Context,
+    value: Value<'c, '_>,
+    unsigned: bool,
+    ty: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let mut builder = OperationBuilder::new("rcgmp.trunci_overflow", location);
+    if unsigned {
+        builder = builder.add_attributes(&[(
+            Identifier::new(context, "isUnsigned"),
+            Attribute::unit(context),
+        )]);
+    }
+    builder
+        .add_operands(&[value])
+        .add_results(&[ty, IntegerType::new(context, 1).into()])
+        .build()
+        .expect("valid rcgmp.trunci_overflow")
 }

@@ -479,6 +479,10 @@ pub enum IntrinsicOp {
     Pjrt {
         func: PjrtFn,
     },
+    /// `core::intrinsic::bigint::<func>`; no immediates.
+    BigInt {
+        func: BigIntFn,
+    },
 }
 
 /// Synchronous host/device operations. Transfers borrow their input and return
@@ -573,6 +577,86 @@ impl ConstSeqFn {
     }
 }
 
+/// A surfaced `bigint` intrinsic over the built-in integers `Nat` and `Int`.
+/// Each lowers to the rcgmp operation its name spells; [`Self::as_str`] is
+/// the surface name.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum BigIntFn {
+    /// `gcdi(a, b) -> Nat`: the greatest common divisor of the magnitudes.
+    Gcdi,
+    /// `ipowi(base, exp: u64)`: `base` to the power `exp`.
+    Ipowi,
+    /// `log2i(x) -> u64`: the base-2 logarithm of the magnitude, rounded
+    /// down; `0` for zero.
+    Log2i,
+    /// `testbiti(x, i: u64) -> bool`: bit `i` of the infinite two's
+    /// complement.
+    Testbiti,
+    /// `divsi_exact(a, b)`: the quotient of an exact division; `a` must be a
+    /// multiple of `b`.
+    DivsiExact,
+    /// `edivsi(a, b)`: the Euclidean quotient.
+    Edivsi,
+    /// `emodsi(a, b)`: the Euclidean remainder, never negative.
+    Emodsi,
+    /// `floordivsi(a, b)`: the quotient rounded toward negative infinity.
+    Floordivsi,
+    /// `floormodsi(a, b)`: the remainder with the sign of `b`.
+    Floormodsi,
+    /// `absi(x) -> Nat`: the magnitude.
+    Absi,
+    /// `trunci_overflow(x) -> (U, bool)`: the low bits of `x` at the
+    /// fixed-width integer `U`, and whether `x` does not fit `U`.
+    TrunciOverflow,
+}
+
+impl BigIntFn {
+    pub const ALL: &[BigIntFn] = &[
+        BigIntFn::Gcdi,
+        BigIntFn::Ipowi,
+        BigIntFn::Log2i,
+        BigIntFn::Testbiti,
+        BigIntFn::DivsiExact,
+        BigIntFn::Edivsi,
+        BigIntFn::Emodsi,
+        BigIntFn::Floordivsi,
+        BigIntFn::Floormodsi,
+        BigIntFn::Absi,
+        BigIntFn::TrunciOverflow,
+    ];
+
+    /// Parse a surface / textual-IR name.
+    pub fn parse(name: &str) -> Option<BigIntFn> {
+        BigIntFn::ALL.iter().copied().find(|f| f.as_str() == name)
+    }
+
+    /// The surface name, also used by the textual IR.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BigIntFn::Gcdi => "gcdi",
+            BigIntFn::Ipowi => "ipowi",
+            BigIntFn::Log2i => "log2i",
+            BigIntFn::Testbiti => "testbiti",
+            BigIntFn::DivsiExact => "divsi_exact",
+            BigIntFn::Edivsi => "edivsi",
+            BigIntFn::Emodsi => "emodsi",
+            BigIntFn::Floordivsi => "floordivsi",
+            BigIntFn::Floormodsi => "floormodsi",
+            BigIntFn::Absi => "absi",
+            BigIntFn::TrunciOverflow => "trunci_overflow",
+        }
+    }
+
+    /// Whether the operation borrows its integer operand (the first) rather
+    /// than consuming it. Every other integer operand is consumed.
+    pub fn borrows_operand(self) -> bool {
+        matches!(
+            self,
+            BigIntFn::Log2i | BigIntFn::Testbiti | BigIntFn::TrunciOverflow
+        )
+    }
+}
+
 impl IntrinsicOp {
     /// The family segment under `core::intrinsic::` (`math`, …).
     pub fn family(self) -> &'static str {
@@ -583,6 +667,7 @@ impl IntrinsicOp {
             IntrinsicOp::Str { .. } => "str",
             IntrinsicOp::ConstSeq { .. } => "const_seq",
             IntrinsicOp::Pjrt { .. } => "pjrt",
+            IntrinsicOp::BigInt { .. } => "bigint",
         }
     }
 
@@ -595,6 +680,7 @@ impl IntrinsicOp {
             IntrinsicOp::Str { func, .. } => func.as_str(),
             IntrinsicOp::ConstSeq { func } => func.as_str(),
             IntrinsicOp::Pjrt { func } => func.as_str(),
+            IntrinsicOp::BigInt { func } => func.as_str(),
         }
     }
 
@@ -607,6 +693,7 @@ impl IntrinsicOp {
             IntrinsicOp::Str { .. } => 0,
             IntrinsicOp::ConstSeq { .. } => 0,
             IntrinsicOp::Pjrt { .. } => 0,
+            IntrinsicOp::BigInt { .. } => 0,
         }
     }
 
@@ -630,6 +717,9 @@ impl IntrinsicOp {
             }),
             "const_seq" if imm == 0 => Some(IntrinsicOp::ConstSeq {
                 func: ConstSeqFn::parse(name)?,
+            }),
+            "bigint" if imm == 0 => Some(IntrinsicOp::BigInt {
+                func: BigIntFn::parse(name)?,
             }),
             _ => None,
         }

@@ -8,11 +8,13 @@
 //! `Int::OfNat(n)` is `n` itself, and `Int::NegSucc(n)` is `-(n + 1)`, the
 //! bitwise complement of `n`.
 
+use reussir_backend::builders;
 use reussir_backend::melior::dialect::arith::{self, CmpiPredicate};
 use reussir_backend::melior::ir::attribute::{Attribute, IntegerAttribute};
-use reussir_backend::melior::ir::{Block, Value, ValueLike};
+use reussir_backend::melior::ir::{Block, BlockLike, Value, ValueLike};
 use reussir_backend::rcgmp::{self, Binary, Predicate, Shift, Unary};
 use reussir_core::full::mir::{Expr, ExprKind};
+use reussir_core::intrinsic::BigIntFn;
 use reussir_core::literal::{self, Integer};
 use reussir_core::semi::hir::{ArithOp, CmpOp};
 use reussir_core::semi::ty::{BigIntTy, Ty, TyKind};
@@ -198,6 +200,75 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 Ok(self.append(block, rcgmp::extend(xv, signed, to_ty, loc)))
             }
             _ => err("integer cast without a built-in integer"),
+        }
+    }
+
+    /// A `core::intrinsic::bigint` call. The borrowing operations leave their
+    /// integer operand with the caller, which releases it afterwards when
+    /// this was its last use, through the temporary recorded here; the others
+    /// consume their integer operands.
+    pub(super) fn lower_bigint_intrinsic<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        e: &Expr<'tcx>,
+        func: BigIntFn,
+        args: &[Expr<'tcx>],
+    ) -> Result<Value<'c, 'b>> {
+        let mut operands = Vec::with_capacity(args.len());
+        for arg in args {
+            operands.push(
+                self.expr(block, env, arg)?
+                    .ok_or_else(|| LoweringError("bigint intrinsic operand is unit".into()))?,
+            );
+        }
+        if func.borrows_operand() && !matches!(args[0].kind, ExprKind::Var(_) | ExprKind::Proj(..))
+        {
+            self.remember_temp(env, &args[0], operands[0]);
+        }
+        let loc = self.loc();
+        let binary = |op| Ok(self.append(block, rcgmp::binary(op, operands[0], operands[1], loc)));
+        match func {
+            BigIntFn::Gcdi => binary(Binary::Gcd),
+            BigIntFn::Edivsi => binary(Binary::EuclidDiv),
+            BigIntFn::Emodsi => binary(Binary::EuclidRem),
+            BigIntFn::Floordivsi => binary(Binary::FloorDiv),
+            BigIntFn::Floormodsi => binary(Binary::FloorRem),
+            BigIntFn::DivsiExact => Ok(self.append(
+                block,
+                rcgmp::divsi_exact(self.context, operands[0], operands[1], loc),
+            )),
+            BigIntFn::Ipowi => Ok(self.append(block, rcgmp::ipowi(operands[0], operands[1], loc))),
+            BigIntFn::Absi => Ok(self.append(block, rcgmp::unary(Unary::Abs, operands[0], loc))),
+            BigIntFn::Log2i => {
+                let ty = self.tys.mlir_ty(e.ty)?;
+                Ok(self.append(block, rcgmp::log2i(operands[0], ty, loc)))
+            }
+            BigIntFn::Testbiti => Ok(self.append(
+                block,
+                rcgmp::testbiti(self.context, operands[0], operands[1], loc),
+            )),
+            BigIntFn::TrunciOverflow => {
+                let TyKind::Tuple([fixed, _]) = e.ty.kind() else {
+                    return err("`trunci_overflow` result is not a pair");
+                };
+                let unsigned = !num_class(*fixed)?.signed;
+                let op = block.append_operation(rcgmp::trunci_overflow(
+                    self.context,
+                    operands[0],
+                    unsigned,
+                    self.tys.mlir_ty(*fixed)?,
+                    loc,
+                ));
+                let (value, overflow) = (
+                    op.result(0).expect("truncated value").into(),
+                    op.result(1).expect("overflow flag").into(),
+                );
+                Ok(self.append(
+                    block,
+                    builders::record_compound(&[value, overflow], self.tys.mlir_ty(e.ty)?, loc),
+                ))
+            }
         }
     }
 }

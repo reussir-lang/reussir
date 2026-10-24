@@ -3705,6 +3705,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             "cell" => Some(self.infer_cell_intrinsic(fc, span)),
             "str" => Some(self.infer_str_intrinsic(fc, span)),
             "const_seq" => Some(self.infer_const_seq_intrinsic(fc, span)),
+            "bigint" => Some(self.infer_bigint_intrinsic(fc, span)),
             other => {
                 self.error(
                     span,
@@ -4058,6 +4059,106 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         self.mk_expr(
             ExprKind::Intrinsic {
                 op: IntrinsicOp::Str { func },
+                args,
+            },
+            result,
+            span,
+        )
+    }
+
+    /// (BIGINT) `core::intrinsic::bigint::<fn>(…)`, over a built-in integer
+    /// `T` (`Nat` or `Int`), the optional first type argument:
+    /// `gcdi(T, T) -> Nat`, `ipowi(T, u64) -> T`, `log2i(T) -> u64`,
+    /// `testbiti(T, u64) -> bool`, `divsi_exact`/`edivsi`/`emodsi`/
+    /// `floordivsi`/`floormodsi(T, T) -> T`, `absi(T) -> Nat`, and
+    /// `trunci_overflow(T) -> (U, bool)` for a fixed-width integer `U`, the
+    /// optional second type argument. A `T` this check cannot see yet is
+    /// left to monomorphization, which rejects anything but `Nat` and `Int`.
+    fn infer_bigint_intrinsic(&mut self, fc: &surface::FuncCall, span: Option<Span>) -> Expr<'tcx> {
+        use crate::intrinsic::{BigIntFn, IntrinsicOp};
+        use crate::semi::ty::{BigIntTy, IntTy};
+
+        let name = self.sym(fc.name.basename).to_string();
+        let Some(func) = BigIntFn::parse(&name) else {
+            self.error(
+                span,
+                format!("unknown bigint intrinsic `core::intrinsic::bigint::{name}`"),
+            );
+            return self.poison(span);
+        };
+        let max_ty_args = if func == BigIntFn::TrunciOverflow {
+            2
+        } else {
+            1
+        };
+        if fc.ty_args.len() > max_ty_args {
+            self.error(
+                span,
+                format!(
+                    "`core::intrinsic::bigint::{name}` takes at most {max_ty_args} type argument(s)"
+                ),
+            );
+            return self.poison(span);
+        }
+        let ty_arg = |i: usize, this: &mut Self| match fc.ty_args.get(i) {
+            Some(Some(t)) => this.eval_type(t),
+            _ => this.infer.new_hole_ty(),
+        };
+        let int = ty_arg(0, self);
+        self.register_bound(self.lang.integral, int, span);
+        let u64_ty = self.tcx.mk_int(IntTy::Unsigned(64));
+        let nat_ty = self.tcx.mk_bigint(BigIntTy::Nat);
+        let (params, result) = match func {
+            BigIntFn::Gcdi => (vec![int, int], nat_ty),
+            BigIntFn::Ipowi => (vec![int, u64_ty], int),
+            BigIntFn::Log2i => (vec![int], u64_ty),
+            BigIntFn::Testbiti => (vec![int, u64_ty], self.tcx.mk_bool()),
+            BigIntFn::DivsiExact
+            | BigIntFn::Edivsi
+            | BigIntFn::Emodsi
+            | BigIntFn::Floordivsi
+            | BigIntFn::Floormodsi => (vec![int, int], int),
+            BigIntFn::Absi => (vec![int], nat_ty),
+            BigIntFn::TrunciOverflow => {
+                let fixed = ty_arg(1, self);
+                self.register_bound(self.lang.integral, fixed, span);
+                (vec![int], self.tcx.mk_tuple(&[fixed, self.tcx.mk_bool()]))
+            }
+        };
+        if fc.args.len() != params.len() {
+            self.error(
+                span,
+                format!(
+                    "`core::intrinsic::bigint::{name}` expects {} argument(s), got {}",
+                    params.len(),
+                    fc.args.len()
+                ),
+            );
+            return self.poison(span);
+        }
+        let args = fc
+            .args
+            .iter()
+            .zip(&params)
+            .map(|(a, &t)| self.check_expr(a, t))
+            .collect();
+        let resolved = self.infer.shallow_resolve(int);
+        if !matches!(
+            resolved.kind(),
+            TyKind::BigInt(_) | TyKind::Hole(_) | TyKind::Generic(_)
+        ) {
+            self.error(
+                span,
+                format!(
+                    "`core::intrinsic::bigint::{name}` takes a `Nat` or an `Int`, found `{}`",
+                    self.ty_display(resolved)
+                ),
+            );
+            return self.poison(span);
+        }
+        self.mk_expr(
+            ExprKind::Intrinsic {
+                op: IntrinsicOp::BigInt { func },
                 args,
             },
             result,
