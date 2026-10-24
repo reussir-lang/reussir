@@ -13,6 +13,7 @@
 //!
 //! [`semi`]: crate::semi
 
+pub mod bigint_match;
 pub mod ffi;
 pub mod interface;
 pub mod mangle;
