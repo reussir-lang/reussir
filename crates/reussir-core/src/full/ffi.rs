@@ -32,6 +32,11 @@
 //! * shared Reussir records — a generated `#[repr(transparent)]` pointer
 //!   wrapper named by the instance's v0 symbol, whose `Clone`/`Drop` bind to
 //!   compiler-emitted `<sym>_ffi_acquire`/`<sym>_ffi_release` rc glue.
+//! * `Nat` / `Int` — the raw rcgmp handle, `*mut ::std::ffi::c_void`. The
+//!   wrapper owns the argument's reference, as for every boundary type, and
+//!   releases it after the body: the body only borrows the handle and must
+//!   not release it. A returned handle carries one reference, which the
+//!   caller owns.
 //!
 //! Symbol scheme (all suffixes appended to complete v0 manglings, which is
 //! injective — no valid v0 symbol is a prefix of another):
@@ -300,7 +305,7 @@ impl<'a, 'tcx> FfiCtx<'a, 'tcx> {
             TyKind::Arc(_) => Err("an `Arc` coloring cannot cross the FFI boundary yet".into()),
             TyKind::Nullable(_) => Err("`Nullable` cannot cross the FFI boundary yet".into()),
             TyKind::ConstSeq(_) => Err("a `ConstSeq` cannot cross the FFI boundary yet".into()),
-            TyKind::BigInt(b) => Err(format!("`{}` cannot cross the FFI boundary yet", b.name())),
+            TyKind::BigInt(_) => Ok(RCGMP_HANDLE.into()),
             // `str` lowers to `{ptr, len}`; the runtime's `#[repr(C)]`
             // borrowed view is bit-identical. Every surface `str` today is a
             // `'static` global literal, so the spelled lifetime is sound —
@@ -382,7 +387,7 @@ impl<'a, 'tcx> FfiCtx<'a, 'tcx> {
     /// qualify; floats and aggregates do not.
     pub fn integer_like(&self, ty: Ty<'tcx>) -> bool {
         match *ty.kind() {
-            TyKind::Int(_) | TyKind::Bool | TyKind::Char => true,
+            TyKind::Int(_) | TyKind::Bool | TyKind::Char | TyKind::BigInt(_) => true,
             TyKind::Record { def, .. } => self
                 .records
                 .get(&def)
@@ -435,11 +440,41 @@ fn texture_head(preludes: &[&str]) -> String {
     out
 }
 
+/// The Rust spelling of a `Nat` / `Int` crossing the boundary: the raw
+/// rcgmp handle.
+const RCGMP_HANDLE: &str = "*mut ::std::ffi::c_void";
+
 /// One parameter of a generated wrapper: its Rust binding identifier and its
 /// Rust type spelling.
 pub struct WrapperParam {
     pub ident: String,
     pub rust_ty: String,
+    /// The parameter is an rcgmp handle (`Nat` / `Int`): the wrapper owns its
+    /// reference and releases it once the body has run, so the body borrows.
+    pub rcgmp_handle: bool,
+}
+
+/// `body` followed by the release of every borrowed rcgmp handle in
+/// `params`, keeping the body's value. Non-atomic: an `Arc` coloring never
+/// crosses the boundary.
+fn release_handles_after(body: &str, params: &[WrapperParam]) -> String {
+    let handles: Vec<&str> = params
+        .iter()
+        .filter(|p| p.rcgmp_handle)
+        .map(|p| p.ident.as_str())
+        .collect();
+    if handles.is_empty() {
+        return body.to_owned();
+    }
+    let mut out = format!("{{\n    let __reussir_value = {body};\n");
+    for handle in handles {
+        let _ = writeln!(
+            out,
+            "    unsafe {{ __reussir_rcgmp::rcgmp_mpz_release({handle}, 0) }};"
+        );
+    }
+    out.push_str("    __reussir_value\n}");
+    out
 }
 
 /// Render the boundary wrapper texture for one `#[ffi(import)]` function
@@ -462,6 +497,16 @@ pub fn import_texture(
     for decl in decls.values() {
         out.push_str(&decl.render());
     }
+    // A private module keeps the declaration clear of a prelude declaring
+    // the same runtime entry.
+    if params.iter().any(|p| p.rcgmp_handle) {
+        out.push_str(
+            "mod __reussir_rcgmp {\n    unsafe extern \"C\" {\n        \
+             pub fn rcgmp_mpz_release(value: *mut ::std::ffi::c_void, atomic: u32);\n    \
+             }\n}\n",
+        );
+    }
+    let body = &release_handles_after(body, params);
     let attrs = "#[linkage = \"weak_odr\"]\n#[unsafe(no_mangle)]\n";
     if trivial {
         let sig: Vec<String> = params

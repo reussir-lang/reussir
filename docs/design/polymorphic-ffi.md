@@ -262,11 +262,18 @@ valid v0 mangling is a prefix of another:
 ## Boundary types (v1)
 
 Signatures of imported functions may use: integers, `f32`/`f64`, `bool`,
-`char`, `unit` (return only), opaque `#[ffi]` types, and **shared Reussir
-records** (struct or enum). Everything else — value/regional records,
+`char`, `unit` (return only), opaque `#[ffi]` types, **shared Reussir
+records** (struct or enum), and `Nat`/`Int`. Everything else — value/regional records,
 `Nullable`, `Arc`, `str`, cells, arrays, closures — is rejected with a
 diagnostic at the ground instance (monomorphization), where the offending
 type is concrete.
+
+`Nat` and `Int` cross as the raw rcgmp handle, `*mut c_void`. The wrapper
+owns the argument's reference like any other, and releases it after the body
+returns, so the body only borrows the handle and must not release it; to
+return a parameter, the body retains it first. A returned handle carries one
+reference, which the caller owns. The body calls the rcgmp runtime's C entry
+points (`RCGMP/Runtime/Mpz.h`) directly.
 
 ## Exposing a new type
 

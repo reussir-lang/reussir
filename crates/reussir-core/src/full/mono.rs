@@ -644,7 +644,12 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
                 let rust_ty = fctx.rust_name(p.ty, &mut decls);
                 match (ident, rust_ty) {
                     (Ok(ident), Ok(rust_ty)) => {
-                        wrapper_params.push(WrapperParam { ident, rust_ty });
+                        let rcgmp_handle = matches!(*p.ty.kind(), TyKind::BigInt(_));
+                        wrapper_params.push(WrapperParam {
+                            ident,
+                            rust_ty,
+                            rcgmp_handle,
+                        });
                     }
                     (ident, rust_ty) => {
                         for err in [ident.err(), rust_ty.err()].into_iter().flatten() {

@@ -1,0 +1,52 @@
+// `Nat` and `Int` cross `#[ffi(import)]` as raw rcgmp handles. A parameter
+// is borrowed by the Rust body (its wrapper releases the caller's reference
+// afterwards), and a returned handle carries one reference the caller owns.
+// Heap values make a missed or doubled release visible; the sanitizer
+// variant (`sanitizer/bigint-ffi-asan.rr`) checks the balance.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name bigintffi --extern core=%t.core.rri --emit mlir --no-source-locations -o - | %FileCheck %s
+// RUN: %rrc %s --package-name bigintffi --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/bigint_ffi.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// CHECK: rcgmp_mpz_release(r#n, 0)
+
+extern "rust" [{
+    unsafe extern "C" {
+        fn rcgmp_mpz_retain(value: *mut ::std::ffi::c_void, atomic: u32) -> *mut ::std::ffi::c_void;
+        fn rcgmp_mpz_decimal_size(value: *mut ::std::ffi::c_void) -> usize;
+        fn rcgmp_mpz_from_decimal(text: *const u8, length: usize, atomic: u32) -> *mut ::std::ffi::c_void;
+    }
+}];
+
+// Borrows its argument: reads it and leaves the reference alone.
+#[ffi(import)]
+fn decimal_bound(n : Nat) -> u64 [{ rcgmp_mpz_decimal_size(n) as u64 }];
+
+// Returns its borrowed argument, so it takes a reference of its own first.
+#[ffi(import)]
+fn echo(n : Int) -> Int [{ rcgmp_mpz_retain(n, 0) }];
+
+// Returns a fresh owned integer.
+#[ffi(import)]
+fn ten_to_forty() -> Nat [{
+    let text = b"10000000000000000000000000000000000000000";
+    rcgmp_mpz_from_decimal(text.as_ptr(), text.len(), 0)
+}];
+
+fn power(base : Nat, exp : u64) -> Nat { if exp == 0 { 1 } else { base * power(base, exp - 1) } }
+
+pub fn main() -> i64 {
+    let big = power(10, 40);
+    // The bound covers the digits, a sign and a terminator; `big` stays live.
+    let read_ok = if decimal_bound(big) >= 41 && big == ten_to_forty() { 1 } else { 0 };
+    let negative : Int = -(big as Int);
+    let echo_ok = if echo(negative) == negative && echo(echo(-7)) == -7 { 1 } else { 0 };
+    // Repeated crossings of one heap value: each borrows it.
+    let mut_ok = if decimal_bound(big) + decimal_bound(big) == 2 * decimal_bound(big) { 1 } else { 0 };
+    read_ok + echo_ok * 10 + mut_ok * 100
+}
+
+extern "C" trampoline "reussir_main" = main;
