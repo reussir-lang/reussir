@@ -426,6 +426,15 @@ public:
 
     mlir::Type elementType = refType.getElementType();
 
+    // An integer handle releases its one reference through rcgmp.
+    if (isRCGMPIntegerType(elementType)) {
+      mlir::Value handle = ReussirRefLoadOp::create(rewriter, op.getLoc(),
+                                                    elementType, op.getRef());
+      emitRCGMPRelease(rewriter, op.getLoc(), handle);
+      rewriter.eraseOp(op);
+      return mlir::success();
+    }
+
     return llvm::TypeSwitch<mlir::Type, llvm::LogicalResult>(elementType)
         .Case<RcType>(
             [&](RcType rcType) { return rewriteDropRc(rcType, op, rewriter); })

@@ -22,6 +22,7 @@
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/BuiltinTypeInterfaces.h>
+#include <mlir/IR/DialectRegistry.h>
 #include <mlir/IR/Types.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
 #include <mlir/Support/LLVM.h>
@@ -40,6 +41,15 @@ deriveCompoundSizeAndAlignment(mlir::MLIRContext *context,
                                bool memBoxInternal = false);
 bool isNonNullPointerType(mlir::Type type);
 bool isTriviallyCopyable(mlir::Type type);
+// Whether `type` is the rcgmp dialect's arbitrary-precision integer handle,
+// `!rcgmp.mpz`: a one-word member that is not trivially copyable, retained and
+// released through rcgmp's own operations. Always false when Reussir is built
+// without rcgmp.
+bool isRCGMPIntegerType(mlir::Type type);
+// Registers the models that let Reussir store `!rcgmp.mpz` handles, such as
+// array elements viewed as memrefs. Call wherever the rcgmp dialect is
+// registered; a no-op without rcgmp.
+void registerRCGMPExternalModels(mlir::DialectRegistry &registry);
 // Checks that `eleTy` is eligible for atomic accesses: a byte-addressable,
 // power-of-two-width signless integer or floating-point primitive. `what`
 // names the checked entity in diagnostics (e.g. "atomic cell element").
