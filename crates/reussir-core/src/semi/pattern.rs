@@ -35,6 +35,28 @@
 //! the simple "leftmost column that has a constructor" heuristic and leave
 //! Maranget's necessity-based heuristics as a future refinement.
 //!
+//! ## Built-in integers
+//!
+//! The constructors of `Nat { Zero, Succ(Nat) }` and `Int { OfNat(Nat),
+//! NegSucc(Nat) }` are views of one integer, so a `Nat` or `Int` column is not
+//! switched constructor by constructor. Each of its patterns denotes an
+//! interval: `Zero` and a literal `k` the single value, `Succ^k(p)` the values
+//! of `p` shifted by `k` (a binder or wildcard: all from `k` up), `OfNat(p)`
+//! the values of `p`, and `NegSucc(p)` their images under `n ↦ -1 - n`. A
+//! binder inside binds the value at that depth, `x - k` for `Succ^k(n)` on a
+//! `Nat`; its occurrence extends the column's with one `0` per constructor.
+//!
+//! The column's domain is split at every interval endpoint into segments that
+//! no pattern splits, as rustc's pattern analysis splits integer ranges, and
+//! each segment specializes the matrix to the rows covering it. Adjacent
+//! segments with the same rows merge, each distinct row set is compiled once,
+//! and the segments become the arms of one [`SwitchCases::Int`]: single values
+//! as keys, nonnegative runs as `at_least` ranges from the highest down,
+//! negative runs as `at_most` ranges from the lowest up, so that the arms
+//! before a range have taken every value beyond it. Runs of one row set that
+//! binds no field and recurs across segments stay for the `default` arm when
+//! no range arm would take them first.
+//!
 //! ## Bindings
 //!
 //! A variable pattern matches anything but records `(var, occurrence)`. When a
@@ -46,12 +68,12 @@
 
 use crate::literal::Integer;
 use crate::semi::infer::Instantiation;
-use crate::semi::ty::{Ty, TyKind};
+use crate::semi::ty::{BigIntTy, Ty, TyKind};
 use crate::surface::{self, Const, PatternKind, Span};
 use crate::utils::string::StringToken;
 
 use super::ctxt::{Elaborator, RecordFields};
-use super::hir::{DecisionTree, Expr, ExprKind, PatVarRef, SwitchCases, VarId};
+use super::hir::{DecisionTree, Expr, ExprKind, IntRange, PatVarRef, SwitchCases, VarId};
 
 /// A head constructor: what a (refutable) pattern tests for at an occurrence.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -170,6 +192,136 @@ impl<'tcx> Row<'tcx> {
 struct Matrix<'tcx> {
     cols: Vec<Column<'tcx>>,
     rows: Vec<Row<'tcx>>,
+}
+
+/// A set of consecutive integers; a `None` bound is infinite.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Interval {
+    lo: Option<Integer>,
+    hi: Option<Integer>,
+}
+
+impl Interval {
+    fn from(lo: Option<Integer>, hi: Option<Integer>) -> Option<Interval> {
+        match (&lo, &hi) {
+            (Some(lo), Some(hi)) if lo > hi => None,
+            _ => Some(Interval { lo, hi }),
+        }
+    }
+
+    fn is_singleton(&self) -> bool {
+        matches!((&self.lo, &self.hi), (Some(lo), Some(hi)) if lo == hi)
+    }
+
+    /// Whether `segment`, which no endpoint of `self` splits, lies in `self`.
+    fn covers(&self, segment: &Interval) -> bool {
+        let at = segment
+            .lo
+            .as_ref()
+            .or(segment.hi.as_ref())
+            .expect("a segment of a split domain has a finite bound");
+        self.lo.as_ref().is_none_or(|lo| lo <= at) && self.hi.as_ref().is_none_or(|hi| at <= hi)
+    }
+
+    fn shift(self, by: i64) -> Interval {
+        let by = Integer::from(by);
+        Interval {
+            lo: self.lo.map(|lo| lo + &by),
+            hi: self.hi.map(|hi| hi + &by),
+        }
+    }
+}
+
+/// A pattern on a `Nat` or `Int` column as the integers it matches, and the
+/// variable it binds with the depth of its occurrence below the column: 0 for
+/// the column's own value, `d` for the field of the `d`-th nested constructor.
+#[derive(Clone, Debug)]
+struct IntervalPat {
+    interval: Interval,
+    binder: Option<(VarId, usize)>,
+}
+
+impl IntervalPat {
+    fn field_binder(&self) -> bool {
+        self.binder.is_some_and(|(_, depth)| depth > 0)
+    }
+}
+
+/// `pat` on a column of `int`, or `None` when it matches no integer (a
+/// negative literal on a `Nat`, already diagnosed). The lang enums fix the
+/// variant order: `Nat { Zero, Succ(Nat) }` and `Int { OfNat(Nat), NegSucc(Nat) }`.
+fn interval_pat(pat: &Pat<'_>, int: BigIntTy) -> Option<IntervalPat> {
+    let whole = |binder| match int {
+        BigIntTy::Nat => IntervalPat {
+            interval: Interval {
+                lo: Some(Integer::from(0)),
+                hi: None,
+            },
+            binder,
+        },
+        BigIntTy::Int => IntervalPat {
+            interval: Interval { lo: None, hi: None },
+            binder,
+        },
+    };
+    let field = |fields: &[Pat<'_>]| {
+        let field = interval_pat(fields.first().unwrap_or(&Pat::Wild), BigIntTy::Nat)?;
+        Some((
+            field.interval,
+            field.binder.map(|(v, depth)| (v, depth + 1)),
+        ))
+    };
+    match pat {
+        Pat::Wild => Some(whole(None)),
+        Pat::Bind(v) => Some(whole(Some((*v, 0)))),
+        Pat::Ctor {
+            ctor: Ctor::Int(k), ..
+        } => {
+            let k = (*k).clone();
+            Interval::from(Some(k.clone()), Some(k))
+                .filter(|i| int == BigIntTy::Int || i.lo.as_ref().is_some_and(|lo| *lo >= 0))
+                .map(|interval| IntervalPat {
+                    interval,
+                    binder: None,
+                })
+        }
+        Pat::Ctor {
+            ctor: Ctor::Variant(v),
+            fields,
+        } => match (int, v) {
+            (BigIntTy::Nat, 0) => Some(IntervalPat {
+                interval: Interval {
+                    lo: Some(Integer::from(0)),
+                    hi: Some(Integer::from(0)),
+                },
+                binder: None,
+            }),
+            // `Succ(n)` is `n + 1`; `OfNat(n)` is `n`.
+            (BigIntTy::Nat, _) | (BigIntTy::Int, 0) => {
+                let (interval, binder) = field(fields)?;
+                let interval = if int == BigIntTy::Nat {
+                    interval.shift(1)
+                } else {
+                    interval
+                };
+                Some(IntervalPat { interval, binder })
+            }
+            // `NegSucc(n)` is `-1 - n`.
+            (BigIntTy::Int, _) => {
+                let (interval, binder) = field(fields)?;
+                let neg = |b: Integer| Integer::from(-1) - b;
+                Some(IntervalPat {
+                    interval: Interval {
+                        lo: interval.hi.map(neg),
+                        hi: interval.lo.map(neg),
+                    },
+                    binder,
+                })
+            }
+        },
+        // Any other constructor was diagnosed at the pattern.
+        Pat::Ctor { .. } => Some(whole(None)),
+    }
 }
 
 impl<'a, 'tcx> Elaborator<'a, 'tcx> {
@@ -348,6 +500,17 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 // literal *expression* does; the eventual int-switch lowering
                 // reads the column's real type to pick the signed/unsigned cast.
                 self.register_bound(self.lang.integral, ty, span);
+                if *i < 0
+                    && matches!(
+                        self.infer.shallow_resolve(ty).kind(),
+                        TyKind::BigInt(BigIntTy::Nat)
+                    )
+                {
+                    self.error(
+                        span,
+                        format!("integer pattern `{i}` is out of range for `Nat`"),
+                    );
+                }
                 Ctor::Int(self.tcx.alloc(i.clone()))
             }
             Const::ConstBool(b) => {
@@ -638,6 +801,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             .expect("a constructor column exists when some row tests one");
         let occ = m.cols[j].occ.clone();
         let col_ty = self.infer.shallow_resolve(m.cols[j].ty);
+        if let TyKind::BigInt(int) = *col_ty.kind() {
+            return self.compile_bigint_column(&m, j, int, reached, exhaustive);
+        }
         let family = m
             .rows
             .iter()
@@ -734,6 +900,247 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         DecisionTree::Switch {
             scrutinee: occ,
             cases,
+        }
+    }
+
+    /// Switch on a `Nat` or `Int` column (see the module's "Built-in
+    /// integers" section): split the integers at every endpoint of the rows'
+    /// intervals, compile the rows covering each segment once, and select the
+    /// segments with `case` keys and range arms in first-match order.
+    fn compile_bigint_column(
+        &mut self,
+        m: &Matrix<'tcx>,
+        j: usize,
+        int: BigIntTy,
+        reached: &mut [bool],
+        exhaustive: &mut bool,
+    ) -> DecisionTree<'tcx> {
+        let occ = m.cols[j].occ.clone();
+        let pats: Vec<Option<IntervalPat>> = m
+            .rows
+            .iter()
+            .map(|row| interval_pat(&row.pats[j], int))
+            .collect();
+        // A row matching no integer was diagnosed at its literal.
+        for (row, pat) in m.rows.iter().zip(&pats) {
+            if pat.is_none() {
+                reached[row.arm] = true;
+            }
+        }
+
+        // Cut the domain at every interval endpoint (`Int` also at zero, where
+        // the sign of the constructor fields changes), and give each segment
+        // the rows covering it, in order.
+        let mut cuts = vec![Integer::from(0)];
+        for pat in pats.iter().flatten() {
+            cuts.extend(pat.interval.lo.clone());
+            cuts.extend(pat.interval.hi.as_ref().map(|hi| hi + Integer::from(1)));
+        }
+        if int == BigIntTy::Nat {
+            cuts.retain(|c| *c >= 0);
+        }
+        cuts.sort();
+        cuts.dedup();
+        let mut segments: Vec<(Interval, Vec<usize>)> = Vec::new();
+        let mut bounds: Vec<Option<Integer>> = match int {
+            BigIntTy::Nat => Vec::new(),
+            BigIntTy::Int => vec![None],
+        };
+        bounds.extend(cuts.iter().cloned().map(Some));
+        for lo in &bounds {
+            let hi = cuts
+                .iter()
+                .find(|c| lo.as_ref().is_none_or(|lo| *c > lo))
+                .map(|c| c - Integer::from(1));
+            let segment = Interval { lo: lo.clone(), hi };
+            let rows = (0..m.rows.len())
+                .filter(|&r| {
+                    pats[r]
+                        .as_ref()
+                        .is_some_and(|p| p.interval.covers(&segment))
+                })
+                .collect::<Vec<_>>();
+            // A segment never straddles zero: range arms are built from the
+            // runs on one side of it.
+            match segments.last_mut() {
+                Some((last, last_rows))
+                    if *last_rows == rows && segment.lo.as_ref().is_none_or(|lo| *lo != 0) =>
+                {
+                    last.hi = segment.hi
+                }
+                _ => segments.push((segment, rows)),
+            }
+        }
+
+        // Compile each distinct row set once.
+        let mut classes: Vec<(Vec<usize>, DecisionTree<'tcx>, bool)> = Vec::new();
+        let mut class_of = Vec::with_capacity(segments.len());
+        for (_, rows) in &segments {
+            let c = match classes.iter().position(|(r, ..)| r == rows) {
+                Some(c) => c,
+                None => {
+                    let cols = cols_without(&m.cols, j);
+                    let sub = rows
+                        .iter()
+                        .map(|&r| {
+                            let bind = pats[r].as_ref().and_then(|p| p.binder).map(|(v, depth)| {
+                                let mut path = occ.0.clone();
+                                path.extend(std::iter::repeat_n(0, depth));
+                                (v, PatVarRef(path))
+                            });
+                            m.rows[r].without_col(j, bind)
+                        })
+                        .collect();
+                    let tree = self.compile_match(Matrix { cols, rows: sub }, reached, exhaustive);
+                    let fields = rows
+                        .iter()
+                        .any(|&r| pats[r].as_ref().is_some_and(|p| p.field_binder()));
+                    classes.push((rows.clone(), tree, fields));
+                    classes.len() - 1
+                }
+            };
+            class_of.push(c);
+        }
+
+        // The default arm's class: one binding no constructor field that saves
+        // arms over spelling its segments out, covering the most segments.
+        let default = (0..classes.len())
+            .filter(|&c| !classes[c].2)
+            .filter(|&c| {
+                let mine: Vec<_> = (0..segments.len()).filter(|&s| class_of[s] == c).collect();
+                mine.len() >= 2 || mine.iter().any(|&s| !segments[s].0.is_singleton())
+            })
+            .max_by_key(|&c| {
+                let count = class_of.iter().filter(|&&k| k == c).count();
+                (count, classes[c].0.first().copied())
+            });
+        let tree = |c: usize| classes[c].1.clone();
+
+        // Single values first, as `case` keys, unless their row set also has a
+        // wider segment on the same side of zero, whose range arm can take
+        // them too.
+        let negative = |i: &Interval| i.hi.as_ref().is_some_and(|hi| *hi < 0);
+        let ranged = |s: usize| {
+            (0..segments.len()).any(|t| {
+                class_of[t] == class_of[s]
+                    && !segments[t].0.is_singleton()
+                    && negative(&segments[t].0) == negative(&segments[s].0)
+            })
+        };
+        let mut cases = Vec::new();
+        let mut taken = vec![false; segments.len()];
+        for (s, (segment, _)) in segments.iter().enumerate() {
+            if segment.is_singleton() && Some(class_of[s]) != default && !ranged(s) {
+                let key = segment.lo.clone().expect("a singleton is bounded");
+                cases.push((&*self.tcx.alloc(key), tree(class_of[s])));
+                taken[s] = true;
+            }
+        }
+
+        // Then the nonnegative runs, highest first, each `at_least` its lower
+        // bound, and the negative runs, lowest first, each `at_most` its upper
+        // bound: the arms before a run have taken every value above (below)
+        // it. Runs of the default class nearest zero are left to `default`.
+        let runs = |side: &dyn Fn(&Interval) -> bool| {
+            let mut runs: Vec<(Interval, usize)> = Vec::new();
+            for (s, (segment, _)) in segments.iter().enumerate() {
+                if taken[s] || !side(segment) {
+                    continue;
+                }
+                match runs.last_mut() {
+                    Some((run, c)) if *c == class_of[s] => run.hi = segment.hi.clone(),
+                    _ => runs.push((segment.clone(), class_of[s])),
+                }
+            }
+            runs
+        };
+        // A range arm's region argument is the distance from its bound; a row
+        // binding `Succ^k(n)` reads it unchanged at bound `k` (`OfNat`: `k - 1`,
+        // `NegSucc`: `at_most -k`). Extending a run's bound over values the
+        // `case` keys already took keeps the arm's selection and saves the
+        // arithmetic.
+        let natural = |c: usize, upper: bool| {
+            classes[c].0.iter().find_map(|&r| {
+                let pat = pats[r].as_ref()?;
+                let (_, depth) = pat.binder.filter(|&(_, d)| d > 0)?;
+                let depth = Integer::from(depth as u64);
+                let on_upper = pat.interval.lo.as_ref().is_some_and(|lo| *lo >= 0);
+                match (int, upper && on_upper, !upper && !on_upper) {
+                    (BigIntTy::Nat, true, _) => Some(depth),
+                    (BigIntTy::Int, true, _) => Some(depth - Integer::from(1)),
+                    (BigIntTy::Int, _, true) => Some(-depth),
+                    _ => None,
+                }
+            })
+        };
+        let all_taken = |lo: &Integer, hi: &Integer| {
+            segments.iter().zip(&taken).all(|((seg, _), &t)| {
+                t || seg.lo.as_ref().is_some_and(|l| l > hi)
+                    || seg.hi.as_ref().is_some_and(|h| h < lo)
+            })
+        };
+        let mut ranges = Vec::new();
+        let mut leftover = false;
+        let upper = runs(&|i: &Interval| i.lo.as_ref().is_some_and(|lo| *lo >= 0));
+        for i in (0..upper.len()).rev() {
+            if default.is_some() && upper[..=i].iter().all(|(_, c)| Some(*c) == default) {
+                leftover = true;
+                break;
+            }
+            let (run, c) = &upper[i];
+            let mut lo = run.lo.clone().expect("a nonnegative run is bounded below");
+            if let Some(n) = natural(*c, true)
+                && n >= 0
+                && n < lo
+                && all_taken(&n, &(lo.clone() - Integer::from(1)))
+            {
+                lo = n;
+            }
+            if int == BigIntTy::Nat && lo == 0 {
+                // `at_least 0` selects every `Nat`.
+                return self.int_switch(occ, cases, ranges, tree(*c));
+            }
+            ranges.push((IntRange::AtLeast(self.tcx.alloc(lo)), tree(*c)));
+        }
+        let mut lower = runs(&|i: &Interval| i.hi.as_ref().is_some_and(|hi| *hi < 0));
+        lower.reverse();
+        for i in (0..lower.len()).rev() {
+            if default.is_some() && lower[..=i].iter().all(|(_, c)| Some(*c) == default) {
+                leftover = true;
+                break;
+            }
+            let (run, c) = &lower[i];
+            let mut hi = run.hi.clone().expect("a negative run is bounded above");
+            if let Some(m) = natural(*c, false)
+                && m < 0
+                && m > hi
+                && all_taken(&(hi.clone() + Integer::from(1)), &m)
+            {
+                hi = m;
+            }
+            ranges.push((IntRange::AtMost(self.tcx.alloc(hi)), tree(*c)));
+        }
+        let fallback = match default {
+            Some(c) if leftover => tree(c),
+            _ => DecisionTree::Unreachable,
+        };
+        self.int_switch(occ, cases, ranges, fallback)
+    }
+
+    fn int_switch(
+        &self,
+        scrutinee: PatVarRef,
+        cases: Vec<(&'tcx Integer, DecisionTree<'tcx>)>,
+        ranges: Vec<(IntRange<'tcx>, DecisionTree<'tcx>)>,
+        default: DecisionTree<'tcx>,
+    ) -> DecisionTree<'tcx> {
+        DecisionTree::Switch {
+            scrutinee,
+            cases: SwitchCases::Int {
+                cases,
+                ranges,
+                default: Box::new(default),
+            },
         }
     }
 

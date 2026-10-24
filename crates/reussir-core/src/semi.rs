@@ -3053,6 +3053,129 @@ mod tests {
         );
     }
 
+    /// The HIR text of `f`'s body after checking `src` against core's `Nat`
+    /// and `Int`.
+    fn bigint_hir(src: &str, f: &str) -> String {
+        let mut out = String::new();
+        check_with_bigint(src, |elab, _| {
+            assert!(!elab.has_errors(), "{:#?}", elab.reports);
+            let strings = elab.strings.entries();
+            let text = crate::semi::hir::print::Printer::new(&elab.defs, elab.resolver).program(
+                &elab.elaborated,
+                &strings,
+                &elab.records,
+                &elab.trampolines,
+            );
+            let start = text
+                .find(&format!("::{f}("))
+                .unwrap_or_else(|| panic!("{text}"));
+            let end = text[start..]
+                .find("\n}\n")
+                .map_or(text.len(), |e| start + e + 2);
+            out = text[start..end].to_string();
+        });
+        out
+    }
+
+    /// The arm labels of the switch whose arms sit at `indent` spaces.
+    fn switch_arms(text: &str, indent: usize) -> Vec<&str> {
+        text.lines()
+            .filter(|l| l.len() > indent && l[..indent].trim().is_empty())
+            .map(|l| &l[indent..])
+            .filter(|l| !l.starts_with(' ') && l.ends_with(" => {"))
+            .map(|l| l.trim_end_matches(" => {"))
+            .collect()
+    }
+
+    #[test]
+    fn bigint_match_columns_switch_once_on_intervals() {
+        // A constructor chain is one key, and the rows binding no field that
+        // recur around it are the default.
+        let four = bigint_hir(
+            "pub fn four(n: Nat) -> i64 { match n { \
+             Nat::Succ(Nat::Succ(Nat::Succ(Nat::Succ(Nat::Zero)))) => 1, _ => 0 } }",
+            "four",
+        );
+        assert_eq!(switch_arms(&four, 12), ["4", "_"], "{four}");
+        // Literals and constructors mix; a range arm binds the distance from
+        // its bound, here `k` itself.
+        let low = bigint_hir(
+            "pub fn low(n: Nat) -> Nat { match n { \
+             0 => 10, Nat::Succ(Nat::Zero) => 11, Nat::Succ(Nat::Succ(k)) => k } }",
+            "low",
+        );
+        assert_eq!(switch_arms(&low, 12), ["0", "1", "2..", "_"], "{low}");
+        assert!(low.contains("v1=scrut.0.0 => v1"), "{low}");
+        assert!(low.contains("unreachable"), "{low}");
+        let sign = bigint_hir(
+            "pub fn sign(i: Int) -> Nat { match i { Int::OfNat(Nat::Zero) => 0, \
+             Int::OfNat(Nat::Succ(n)) => n, Int::NegSucc(m) => m } }",
+            "sign",
+        );
+        assert_eq!(switch_arms(&sign, 12), ["0", "1..", "..-1", "_"], "{sign}");
+        assert!(sign.contains("v2=scrut.0 => v2"), "{sign}");
+        // A range's bound reaches over the keys before it to where its binder
+        // is the distance itself: `at_most -1`, not `at_most -2`.
+        let keyed = bigint_hir(
+            "pub fn keyed(i: Int) -> Nat { match i { 0 => 0, -1 => 1, \
+             Int::OfNat(Nat::Succ(k)) => k, Int::NegSucc(k) => k } }",
+            "keyed",
+        );
+        assert_eq!(switch_arms(&keyed, 12), ["-1", "0", "1..", "..-1", "_"], "{keyed}");
+        // The rows around zero that neither range takes are the default.
+        let gap = bigint_hir(
+            "pub fn gap(i: Int) -> i64 { match i { Int::OfNat(Nat::Succ(_)) => 1, \
+             Int::NegSucc(Nat::Succ(Nat::Succ(_))) => 2, _ => 0 } }",
+            "gap",
+        );
+        assert_eq!(switch_arms(&gap, 12), ["1..", "..-3", "_"], "{gap}");
+        assert!(!gap.contains("unreachable"), "{gap}");
+        // Overlaps keep first-match order: `3` is a key before the range that
+        // also covers it.
+        let over = bigint_hir(
+            "pub fn over(n: Nat) -> Nat { match n { \
+             3 => 30, Nat::Succ(Nat::Succ(k)) => k, 0 => 1, _ => 2 } }",
+            "over",
+        );
+        assert_eq!(
+            switch_arms(&over, 12),
+            ["0", "1", "3", "2..", "_"],
+            "{over}"
+        );
+        assert!(over.contains("=> 30"), "{over}");
+        // A column inside a tuple switches the same way; its constructor
+        // fields extend its occurrence.
+        let pair = bigint_hir(
+            "pub fn pair(p: (Nat, Nat)) -> Nat { match p { \
+             (0, b) => b, (Nat::Succ(a), 0) => a, (_, Nat::Succ(b)) => b } }",
+            "pair",
+        );
+        assert_eq!(switch_arms(&pair, 12), ["0", "1..", "_"], "{pair}");
+        assert_eq!(switch_arms(&pair, 20), ["0", "1..", "_"], "{pair}");
+        assert!(pair.contains("v2=scrut.0.0 => v2"), "{pair}");
+    }
+
+    #[test]
+    fn bigint_range_arms_roundtrip_through_mir_text() {
+        check_with_bigint(
+            "pub fn sign(i: Int) -> Nat { match i { Int::OfNat(Nat::Zero) => 0, \
+             Int::OfNat(Nat::Succ(n)) => n, Int::NegSucc(m) => m } }",
+            |elab, tcx| {
+                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let (full, reports) = crate::full::mono::monomorphize(&elab.mono_input());
+                assert!(reports.is_empty(), "{reports:#?}");
+                let text =
+                    crate::full::mir::print::Printer::new(&elab.defs, elab.resolver).program(&full);
+                let parsed = crate::full::mir::build::parse_program(tcx, &text).expect("re-parse");
+                let again = crate::full::mir::print::Printer::new(&parsed.defs, &parsed.names)
+                    .program(&parsed.program);
+                for arm in ["1.. => {", "..-1 => {"] {
+                    assert!(text.contains(arm) && again.contains(arm), "{again}");
+                }
+            },
+        );
+    }
+
     #[test]
     fn negative_nat_literals_are_diagnosed() {
         check_with_bigint(
@@ -3060,15 +3183,17 @@ mod tests {
              pub fn g() -> Int { -1 }\n\
              pub fn h(n: Nat) -> bool { match n { -1 => true, _ => false } }",
             |elab, _| {
-                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let errors: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
+                assert_eq!(
+                    errors,
+                    ["integer pattern `-1` is out of range for `Nat`"],
+                    "{errors:#?}"
+                );
                 let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
                 let messages: Vec<&str> = reports.iter().map(|r| r.message.as_str()).collect();
                 assert_eq!(
                     messages,
-                    [
-                        "integer literal `-1` is out of range for `Nat`",
-                        "integer pattern `-1` is out of range for match scrutinee",
-                    ],
+                    ["integer literal `-1` is out of range for `Nat`"],
                     "{messages:#?}"
                 );
             },
