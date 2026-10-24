@@ -12,7 +12,7 @@ use crate::literal::{FloatLit, Integer};
 use crate::semi::hir::raw as raw;
 use crate::semi::const_eval::ConstScalar;
 use crate::semi::hir::{Bound, BoundPath};
-use crate::semi::ty::CellKind;
+use crate::semi::ty::{BigIntTy, CellKind};
 
 grammar<'input>;
 
@@ -344,6 +344,8 @@ Name: &'input str = {
     "RwLock" => "RwLock",
     "Arc" => "Arc",
     "ConstSeq" => "ConstSeq",
+    "Nat" => "Nat",
+    "Int" => "Int",
     "Tensor" => "Tensor",
     "Token" => "Token",
     "Future" => "Future",
@@ -417,6 +419,8 @@ Ty: raw::Ty = {
     "RwLock" "<" <t:Ty> ">" => raw::Ty::Cell { inner: Box::new(t), kind: CellKind::Rwlock },
     "Arc" "<" <t:Ty> ">" => raw::Ty::Arc(Box::new(t)),
     "ConstSeq" "<" <t:Ty> ">" => raw::Ty::ConstSeq(Box::new(t)),
+    "Nat" => raw::Ty::BigInt(BigIntTy::Nat),
+    "Int" => raw::Ty::BigInt(BigIntTy::Int),
     <cap:Cap> "#" <path:PathArgs>
         => raw::Ty::Record { cap, path: path.0, args: path.1 },
     "[" <elem:Ty> ";" <dims:CommaPlus<Extent>> "]"
@@ -718,6 +722,8 @@ extern {
         "RwLock" => Token::RwLockCell,
         "Arc" => Token::Arc,
         "ConstSeq" => Token::ConstSeq,
+        "Nat" => Token::NatTy,
+        "Int" => Token::IntTy,
         "Token" => Token::StablehloToken,
         "Future" => Token::Future,
         "Tensor" => Token::Tensor,

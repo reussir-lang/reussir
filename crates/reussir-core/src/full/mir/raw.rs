@@ -267,6 +267,7 @@ pub enum Ty {
     Bottom,
     Nullable(Box<Ty>),
     ConstSeq(Box<Ty>),
+    BigInt(crate::semi::ty::BigIntTy),
     Cell {
         inner: Box<Ty>,
         kind: crate::semi::ty::CellKind,

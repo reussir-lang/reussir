@@ -72,8 +72,8 @@ use crate::semi::ctxt::{
 use crate::semi::hir::{self, CmpOp, DecisionTree, Expr, ExprKind, Function, SwitchCases};
 use crate::semi::resolve::DefTable;
 use crate::semi::traits::sync::{SyncEnv, SyncVerdict, wf_arc};
+use crate::semi::ty::{BigIntTy, FpTy, IntTy};
 use crate::semi::ty::{DefId, Flexivity, Ty, TyCtxt, TyKind};
-use crate::semi::ty::{FpTy, IntTy};
 use crate::semi::ty_eval::arc_inner_rejection;
 use crate::surface::Span;
 use crate::utils::string::StringToken;
@@ -952,6 +952,7 @@ fn ty_depth(ty: Ty<'_>) -> usize {
         TyKind::Token
         | TyKind::DefaultPlacement
         | TyKind::Int(_)
+        | TyKind::BigInt(_)
         | TyKind::Fp(_)
         | TyKind::Bool
         | TyKind::Str
@@ -2919,6 +2920,18 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         Some(ty)
     }
 
+    /// The `core` enum declaring the constructors of a built-in integer.
+    fn bigint_def(&self, ty: BigIntTy) -> Option<DefId> {
+        use crate::semi::lang::LangItem;
+        let item = match ty {
+            BigIntTy::Nat => LangItem::Nat,
+            BigIntTy::Int => LangItem::Int,
+        };
+        self.lang
+            .iter()
+            .find_map(|(&def, &found)| (found == item).then_some(def))
+    }
+
     /// Check all integer keys against the ground type at their occurrence,
     /// including host matches and keys nested inside products/constructors.
     /// This prevents an impossible negative unsigned pattern from becoming a
@@ -2959,9 +2972,19 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                         self.check_match_keys(default, root, refinements, span);
                     }
                     SwitchCases::Ctor(arms) => {
-                        let TyKind::Record { def, args, .. } = *ty.kind() else {
-                            self.error(span, "variant pattern requires an enum scrutinee");
-                            return;
+                        let (def, args) = match *ty.kind() {
+                            TyKind::Record { def, args, .. } => (def, args),
+                            TyKind::BigInt(b) => match self.bigint_def(b) {
+                                Some(def) => (def, &[][..]),
+                                None => {
+                                    self.error(span, "unknown enum in pattern decision tree");
+                                    return;
+                                }
+                            },
+                            _ => {
+                                self.error(span, "variant pattern requires an enum scrutinee");
+                                return;
+                            }
                         };
                         let Some(record) = self.record_defs.get(&def) else {
                             self.error(span, "unknown enum in pattern decision tree");

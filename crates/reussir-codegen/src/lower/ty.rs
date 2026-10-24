@@ -829,6 +829,7 @@ fn scalar_ty<'c>(context: &'c Context, ty: Ty<'_>) -> Result<Type<'c>> {
         TyKind::Fp(FpTy::Float8) => err("float8 has no standard MLIR builtin type"),
         TyKind::Bool => Ok(IntegerType::new(context, 1).into()),
         TyKind::Char => Ok(IntegerType::new(context, 32).into()),
+        TyKind::BigInt(b) => err(format!("`{}` values cannot be compiled yet", b.name())),
         TyKind::DefaultPlacement => Ok(reussir_backend::dialect::ty::record_complete(
             context,
             &[],

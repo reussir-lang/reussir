@@ -352,6 +352,9 @@ impl<'a, 'tcx> Rr<'a, 'tcx> {
             // box — always managed.
             TyKind::Arc(_) => true,
             TyKind::Nullable(inner) => self.is_rr(inner),
+            // An arbitrary-precision integer is a reference-counted handle;
+            // small values are immediates whose retain and release are no-ops.
+            TyKind::BigInt(_) => true,
             TyKind::Int(_)
             | TyKind::Fp(_)
             | TyKind::Bool

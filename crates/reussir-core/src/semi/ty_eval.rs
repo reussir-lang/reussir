@@ -586,7 +586,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             DefaultCap::Value | DefaultCap::Shared => Flexivity::Irrelevant,
             DefaultCap::Regional => Flexivity::Regional,
         };
-        self.tcx.mk_record(def, &args, flex)
+        self.record_def_ty(def, &args, flex)
     }
 
     /// Evaluate a type that carries a `[flex]` flag (a parameter, return type,
@@ -1223,6 +1223,7 @@ pub fn kernel_type_rejection(ty: Ty<'_>) -> Option<&'static str> {
         TyKind::Int(_) | TyKind::Fp(_) | TyKind::Bool => tensor_element_rejection(ty),
         TyKind::Unit | TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => None,
         TyKind::Record { .. }
+        | TyKind::BigInt(_)
         | TyKind::Str
         | TyKind::Char
         | TyKind::Closure { .. }

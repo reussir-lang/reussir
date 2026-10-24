@@ -331,6 +331,7 @@ impl Render<'_> {
         match *ty.kind() {
             TyKind::Int(IntTy::Signed(w)) => text(format!("i{w}")),
             TyKind::Int(IntTy::Unsigned(w)) => text(format!("u{w}")),
+            TyKind::BigInt(b) => text(b.name()),
             TyKind::Fp(FpTy::Ieee(w)) => text(format!("f{w}")),
             TyKind::Fp(FpTy::BFloat16) => text("bf16"),
             TyKind::Fp(FpTy::Float8) => text("f8"),

@@ -161,6 +161,8 @@ pub enum NotSyncReason {
     /// An opaque `#[ffi]` record: its box is the foreign non-atomic `Rc`,
     /// which no coloring can make atomic.
     ForeignBox,
+    /// A `Nat` or `Int`: a heap integer's refcount is not atomic.
+    BigInt,
 }
 
 impl NotSyncReason {
@@ -174,6 +176,7 @@ impl NotSyncReason {
             NotSyncReason::ForeignBox => {
                 "an opaque `#[ffi]` record, whose foreign box is never atomic"
             }
+            NotSyncReason::BigInt => "an arbitrary-precision integer, whose refcount is not atomic",
         }
     }
 }
@@ -339,6 +342,7 @@ impl<'tcx> Cx<'_, 'tcx> {
             // nominal type. A tensor refutes for the same reason its backing
             // array does: it is a scope-confined view of that box's data.
             TyKind::Future(_) | TyKind::Token => self.refute(ty, NotSyncReason::KernelValue),
+            TyKind::BigInt(_) => self.refute(ty, NotSyncReason::BigInt),
             TyKind::Array { .. } | TyKind::DevArray { .. } | TyKind::Tensor { .. } | TyKind::Closure { .. } => {
                 self.refute(ty, NotSyncReason::NonAtomicBox)
             }

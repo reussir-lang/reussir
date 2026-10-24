@@ -195,6 +195,12 @@ pub enum LangItem {
     Ord,
     /// `core::cmp::Ordering`, the result of `Ord::cmp`.
     Ordering,
+    /// `core::num::Nat` and `core::num::Int`: enums whose constructors and
+    /// patterns are those of the built-in arbitrary-precision integers
+    /// ([`crate::semi::ty::BigIntTy`]). Naming either enum names the built-in
+    /// type, never a record.
+    Nat,
+    Int,
     /// A `core::intrinsic` operation's prototype
     /// (`#[lang("core::intrinsic::math::sqrt")]`).
     Intrinsic(IntrinsicItem),
@@ -222,7 +228,7 @@ impl LangItem {
     ];
 
     /// The fixed (non-intrinsic) items, for enumeration.
-    pub const FIXED: [LangItem; 10] = [
+    pub const FIXED: [LangItem; 12] = [
         LangItem::Num,
         LangItem::Integral,
         LangItem::FloatingPoint,
@@ -233,6 +239,8 @@ impl LangItem {
         LangItem::PartialOrd,
         LangItem::Ord,
         LangItem::Ordering,
+        LangItem::Nat,
+        LangItem::Int,
     ];
 
     /// The attribute spelling: `#[lang("partial_eq")]`,
@@ -249,6 +257,8 @@ impl LangItem {
             LangItem::PartialOrd => "partial_ord".into(),
             LangItem::Ord => "ord".into(),
             LangItem::Ordering => "ordering".into(),
+            LangItem::Nat => "nat".into(),
+            LangItem::Int => "int".into(),
             LangItem::Intrinsic(op) => {
                 format!("core::intrinsic::{}::{}", op.family(), op.op_name())
             }
@@ -282,7 +292,9 @@ impl LangItem {
 
     pub fn kind(self) -> LangItemKind {
         match self {
-            LangItem::Ordering | LangItem::Former(_) => LangItemKind::Record,
+            LangItem::Ordering | LangItem::Nat | LangItem::Int | LangItem::Former(_) => {
+                LangItemKind::Record
+            }
             LangItem::Intrinsic(_) => LangItemKind::Function,
             _ => LangItemKind::Trait,
         }
@@ -419,6 +431,25 @@ impl LangItems {
     /// spelling; the anchor cannot be constructed).
     pub fn is_former_anchor(&self, def: DefId) -> bool {
         matches!(self.item_of(def), Some(LangItem::Former(_)))
+    }
+
+    /// The built-in integer whose constructors the enum `def` declares.
+    pub fn bigint_of(&self, def: DefId) -> Option<crate::semi::ty::BigIntTy> {
+        use crate::semi::ty::BigIntTy;
+        match self.item_of(def)? {
+            LangItem::Nat => Some(BigIntTy::Nat),
+            LangItem::Int => Some(BigIntTy::Int),
+            _ => None,
+        }
+    }
+
+    /// The enum declaring the constructors of the built-in integer `ty`.
+    pub fn bigint_def(&self, ty: crate::semi::ty::BigIntTy) -> Option<DefId> {
+        use crate::semi::ty::BigIntTy;
+        self.get(match ty {
+            BigIntTy::Nat => LangItem::Nat,
+            BigIntTy::Int => LangItem::Int,
+        })
     }
 
     /// The lang item bound to `def`, if any.

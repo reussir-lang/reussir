@@ -22,7 +22,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::semi::ty::{CellKind, DefId, FpTy, GenericId, IntTy, Ty, TyKind};
+use crate::semi::ty::{BigIntTy, CellKind, DefId, FpTy, GenericId, IntTy, Ty, TyKind};
 
 /// The head constructor an impl's self type is keyed under —
 /// `(TraitId, HeadKey)` buckets make candidate lookup and overlap checking
@@ -33,6 +33,7 @@ use crate::semi::ty::{CellKind, DefId, FpTy, GenericId, IntTy, Ty, TyKind};
 pub enum HeadKey {
     Record(DefId),
     Int(IntTy),
+    BigInt(BigIntTy),
     Fp(FpTy),
     Bool,
     Str,
@@ -58,6 +59,7 @@ pub fn head_key(ty: Ty<'_>) -> Option<HeadKey> {
     Some(match *ty.kind() {
         TyKind::Record { def, .. } => HeadKey::Record(def),
         TyKind::Int(i) => HeadKey::Int(i),
+        TyKind::BigInt(b) => HeadKey::BigInt(b),
         TyKind::Fp(f) => HeadKey::Fp(f),
         TyKind::Bool => HeadKey::Bool,
         TyKind::Str => HeadKey::Str,

@@ -2827,6 +2827,88 @@ mod tests {
         );
     }
 
+    /// The root of a package declaring `Nat` and `Int` the way `core::num`
+    /// does; test sources elaborate as its module `t`.
+    const BIGINT_ROOT: &str = "pub mod t;\n\
+        #[lang(\"nat\")]\npub enum Nat { Zero, Succ(Nat) }\n\
+        #[lang(\"int\")]\npub enum Int { OfNat(Nat), NegSucc(Nat) }";
+
+    fn check_with_bigint(
+        src: &str,
+        f: impl for<'a, 'tcx> FnOnce(&Elaborator<'a, 'tcx>, &TyCtxt<'tcx>),
+    ) {
+        check_package("core", &[(&[], BIGINT_ROOT), (&["t"], src)], f);
+    }
+
+    #[test]
+    fn bigint_enums_build_and_match_the_builtin_integers() {
+        check_with_bigint(
+            "fn pred(n: Nat) -> Nat {\n\
+                 match n { Nat::Zero => Nat::Zero, Nat::Succ(m) => m }\n\
+             }\n\
+             fn negate(n: Nat) -> Int {\n\
+                 match n { Nat::Zero => Int::OfNat{Nat::Zero}, Nat::Succ(m) => Int::NegSucc{m} }\n\
+             }\n\
+             pub fn is_negative(i: Int) -> bool {\n\
+                 match i { Int::OfNat(_) => false, Int::NegSucc(_) => true }\n\
+             }\n\
+             pub fn round_trip(n: Nat) -> bool { is_negative(negate(pred(n))) }",
+            |elab, _| {
+                assert!(!elab.has_errors(), "{:#?}", elab.reports);
+                let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
+                assert!(reports.is_empty(), "{reports:#?}");
+            },
+        );
+    }
+
+    #[test]
+    fn bigint_types_display_and_match_exhaustively() {
+        check_with_bigint(
+            "fn f(n: Nat) -> bool { n }\n\
+             fn g(i: Int) -> i64 { match i { Int::OfNat(_) => 0 } }",
+            |elab, _| {
+                let messages: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
+                assert!(
+                    messages
+                        .iter()
+                        .any(|m| m.contains("`Nat`") && m.contains("`bool`")),
+                    "{messages:#?}"
+                );
+                assert!(
+                    messages.iter().any(|m| m.contains("non-exhaustive")),
+                    "{messages:#?}"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn module_local_nat_shadows_the_builtin_integer() {
+        check_with_bigint(
+            "struct Nat { v: i64 }\n\
+             fn get(n: Nat) -> i64 { n.v }\n\
+             fn make() -> Nat { Nat { v: 1 } }",
+            |elab, _| assert!(!elab.has_errors(), "{:#?}", elab.reports),
+        );
+    }
+
+    #[test]
+    fn bigint_lang_enums_must_have_the_builtin_shape() {
+        check_package(
+            "core",
+            &[(&[], "#[lang(\"nat\")]\npub enum Nat { Zero, Succ(i64) }")],
+            |elab, _| {
+                assert!(
+                    elab.reports.iter().any(|r| r.message.contains(
+                        "lang item `nat` must be declared as `enum Nat { Zero, Succ(Nat) }`"
+                    )),
+                    "{:#?}",
+                    elab.reports
+                );
+            },
+        );
+    }
+
     /// `#[sealed]`: declarable on traits only, argument-free, and an
     /// impl of a sealed trait is rejected wherever it was declared.
     #[test]

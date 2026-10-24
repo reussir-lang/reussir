@@ -120,6 +120,27 @@ pub enum IntTy {
     Unsigned(u16),
 }
 
+/// An arbitrary-precision integer type. `core` declares both as enums
+/// (`Nat { Zero, Succ(Nat) }`, `Int { OfNat(Nat), NegSucc(Nat) }`) for their
+/// constructors and patterns, but the type itself is built in: values are
+/// integers, never records.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum BigIntTy {
+    /// `Nat`: the nonnegative integers.
+    Nat,
+    /// `Int`: all integers.
+    Int,
+}
+
+impl BigIntTy {
+    pub fn name(self) -> &'static str {
+        match self {
+            BigIntTy::Nat => "Nat",
+            BigIntTy::Int => "Int",
+        }
+    }
+}
+
 /// A floating-point type.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum FpTy {
@@ -214,6 +235,7 @@ pub enum TyKind<'tcx> {
         flex: Flexivity,
     },
     Int(IntTy),
+    BigInt(BigIntTy),
     Fp(FpTy),
     Bool,
     Str,
@@ -382,6 +404,10 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn mk_int(&self, int: IntTy) -> Ty<'tcx> {
         self.mk(TyKind::Int(int))
+    }
+
+    pub fn mk_bigint(&self, ty: BigIntTy) -> Ty<'tcx> {
+        self.mk(TyKind::BigInt(ty))
     }
 
     pub fn mk_fp(&self, fp: FpTy) -> Ty<'tcx> {

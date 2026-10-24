@@ -731,6 +731,7 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
         match *ty.kind() {
             TyKind::Int(reussir_core::semi::ty::IntTy::Signed(w)) => format!("i{w}"),
             TyKind::Int(reussir_core::semi::ty::IntTy::Unsigned(w)) => format!("u{w}"),
+            TyKind::BigInt(b) => b.name().to_string(),
             TyKind::Fp(reussir_core::semi::ty::FpTy::Ieee(w)) => format!("f{w}"),
             TyKind::Fp(reussir_core::semi::ty::FpTy::BFloat16) => "bf16".to_string(),
             TyKind::Fp(reussir_core::semi::ty::FpTy::Float8) => "f8".to_string(),

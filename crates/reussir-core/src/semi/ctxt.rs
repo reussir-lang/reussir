@@ -265,6 +265,7 @@ pub fn contains_kernel_value(ty: Ty<'_>) -> bool {
         TyKind::ConstSeq(_)
         | TyKind::DefaultPlacement
         | TyKind::Int(_)
+        | TyKind::BigInt(_)
         | TyKind::Fp(_)
         | TyKind::Bool
         | TyKind::Str
@@ -320,6 +321,7 @@ fn collect_private_records<'tcx>(
         | TyKind::ConstSeq(_)
         | TyKind::DefaultPlacement
         | TyKind::Int(_)
+        | TyKind::BigInt(_)
         | TyKind::Fp(_)
         | TyKind::Bool
         | TyKind::Str
@@ -546,7 +548,7 @@ pub struct Elaborator<'a, 'tcx> {
     /// `core` declares under its own modules still resolve unqualified;
     /// the fallback registration ([`Elaborator::ensure_cmp_fallback`])
     /// draws its declared names from the same table.
-    pub(super) prelude_names: [(TokenKey, crate::semi::lang::LangItem); 10],
+    pub(super) prelude_names: [(TokenKey, crate::semi::lang::LangItem); 12],
     /// The operator-method names (`eq`, `lt`, `le`, `gt`, `ge`, `cmp`),
     /// interned at construction: operator desugaring and the builtin-impl
     /// rewrites resolve the active trait's method *by name*, so method
@@ -616,6 +618,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 ("PartialOrd", LangItem::PartialOrd),
                 ("Ord", LangItem::Ord),
                 ("Ordering", LangItem::Ordering),
+                ("Nat", LangItem::Nat),
+                ("Int", LangItem::Int),
                 ("Num", LangItem::Num),
                 ("Integral", LangItem::Integral),
                 ("FloatingPoint", LangItem::FloatingPoint),
@@ -805,6 +809,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             TyKind::Int(IntTy::Unsigned(w)) => {
                 let _ = write!(out, "u{w}");
             }
+            TyKind::BigInt(b) => out.push_str(b.name()),
             TyKind::Fp(FpTy::Ieee(w)) => {
                 let _ = write!(out, "f{w}");
             }
@@ -1057,6 +1062,25 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         out.push_str(self.sym(path.basename));
         out
+    }
+
+    /// The type naming the record `def` at `args`: the built-in integer for
+    /// `core`'s `Nat` and `Int` enums, which are never records.
+    pub(super) fn record_def_ty(&self, def: DefId, args: &[Ty<'tcx>], flex: Flexivity) -> Ty<'tcx> {
+        match self.lang.bigint_of(def) {
+            Some(b) => self.tcx.mk_bigint(b),
+            None => self.tcx.mk_record(def, args, flex),
+        }
+    }
+
+    /// The enum declaring the constructors of `ty`, with its type arguments:
+    /// a record's own def, or `core`'s enum for a built-in integer.
+    pub(super) fn ctor_enum(&self, ty: Ty<'tcx>) -> Option<(DefId, &'tcx [Ty<'tcx>])> {
+        match *ty.kind() {
+            TyKind::Record { def, args, .. } => Some((def, args)),
+            TyKind::BigInt(b) => self.lang.bigint_def(b).map(|def| (def, &[][..])),
+            _ => None,
+        }
     }
 
     /// The prelude: a bare name's lang-item def, kind-filtered (`Trait`
@@ -4339,9 +4363,49 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
         }
 
+        if let Some(b) = self.lang.bigint_of(def) {
+            self.validate_bigint_enum(b, ty_params.is_empty(), &fields, span);
+        }
         if let Some(r) = self.records.get_mut(&def) {
             r.fields = Some(fields);
             r.regional_generics = regional_generics;
+        }
+    }
+
+    /// `core`'s `Nat` and `Int` enums declare exactly the constructors the
+    /// compiler lowers onto the built-in integers:
+    /// `Nat { Zero, Succ(Nat) }` and `Int { OfNat(Nat), NegSucc(Nat) }`.
+    fn validate_bigint_enum(
+        &mut self,
+        ty: crate::semi::ty::BigIntTy,
+        no_params: bool,
+        fields: &RecordFields<'tcx>,
+        span: Option<Span>,
+    ) {
+        use crate::semi::ty::BigIntTy;
+        let nat = self.tcx.mk_bigint(BigIntTy::Nat);
+        let (expected, shape): (&[(&str, &[Ty<'tcx>])], &str) = match ty {
+            BigIntTy::Nat => (&[("Zero", &[]), ("Succ", &[nat])], "{ Zero, Succ(Nat) }"),
+            BigIntTy::Int => (
+                &[("OfNat", &[nat]), ("NegSucc", &[nat])],
+                "{ OfNat(Nat), NegSucc(Nat) }",
+            ),
+        };
+        let matches = no_params
+            && matches!(fields, RecordFields::Variants(vs)
+            if vs.len() == expected.len()
+                && vs.iter().zip(expected).all(|(v, (name, payload))| {
+                    self.sym(v.name) == *name && v.fields.as_slice() == *payload
+                }));
+        if !matches {
+            let name = ty.name();
+            self.error(
+                span,
+                format!(
+                    "lang item `{}` must be declared as `enum {name} {shape}`",
+                    name.to_lowercase()
+                ),
+            );
         }
     }
 

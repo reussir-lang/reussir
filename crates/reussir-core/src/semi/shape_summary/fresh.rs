@@ -86,6 +86,7 @@ impl<'tcx> FreshSubstitution<'_, '_, '_, 'tcx> {
             TyKind::Token
             | TyKind::DefaultPlacement
             | TyKind::Int(_)
+            | TyKind::BigInt(_)
             | TyKind::Fp(_)
             | TyKind::Bool
             | TyKind::Str

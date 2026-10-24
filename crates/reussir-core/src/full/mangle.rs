@@ -152,6 +152,8 @@ impl<'a> Mangler<'a> {
             }
             TyKind::Bottom => out.push('z'),
             TyKind::Int(int) => out.push_str(int_code(int)),
+            // `Nat` and `Int` mangle as their `core` declarations' paths.
+            TyKind::BigInt(b) => self.path_with_args_segs(out, &["core", "num", b.name()], &[]),
             TyKind::Fp(fp) => out.push_str(fp_code(fp)),
             TyKind::Nullable(inner) => {
                 // `Nullable<T>` mangles as a synthetic one-segment record applied

@@ -634,7 +634,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 }
                 crate::semi::ctxt::DefaultCap::Regional => Flexivity::Rigid,
             };
-            self.tcx.mk_record(def, &[], flex)
+            self.record_def_ty(def, &[], flex)
         };
         let cands = match self_ty.kind() {
             TyKind::Generic(g) => self.generic_trait_candidates(*g, const_named(name)),
@@ -2823,7 +2823,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 }
                 crate::semi::ctxt::DefaultCap::Regional => Flexivity::Rigid,
             };
-            self.tcx.mk_record(def, &args, flex)
+            self.record_def_ty(def, &args, flex)
         };
         let name = fc.name.basename;
         let cands = match self_ty.kind() {
@@ -5329,7 +5329,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             super::ctxt::DefaultCap::Regional => crate::semi::ty::Flexivity::Flex,
             _ => crate::semi::ty::Flexivity::Irrelevant,
         };
-        self.tcx.mk_record(record.def, &args, flex)
+        self.record_def_ty(record.def, &args, flex)
     }
 
     // ----- instantiation helpers -----

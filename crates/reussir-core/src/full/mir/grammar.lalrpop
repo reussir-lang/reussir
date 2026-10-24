@@ -8,7 +8,7 @@ use std::borrow::Cow;
 
 use crate::full::mir::raw as raw;
 use crate::semi::const_eval::ConstScalar;
-use crate::semi::ty::CellKind;
+use crate::semi::ty::{BigIntTy, CellKind};
 use crate::ir_lex::{LexError, Token, unescape_debug_str};
 use crate::literal::{FloatLit, Integer};
 
@@ -118,6 +118,8 @@ Name: &'input str = {
     "RwLock" => "RwLock",
     "Arc" => "Arc",
     "ConstSeq" => "ConstSeq",
+    "Nat" => "Nat",
+    "Int" => "Int",
     "Tensor" => "Tensor",
     "Token" => "Token",
     "DevArray" => "DevArray",
@@ -195,6 +197,8 @@ Ty: raw::Ty = {
     "RwLock" "<" <t:Ty> ">" => raw::Ty::Cell { inner: Box::new(t), kind: CellKind::Rwlock },
     "Arc" "<" <t:Ty> ">" => raw::Ty::Arc(Box::new(t)),
     "ConstSeq" "<" <t:Ty> ">" => raw::Ty::ConstSeq(Box::new(t)),
+    "Nat" => raw::Ty::BigInt(BigIntTy::Nat),
+    "Int" => raw::Ty::BigInt(BigIntTy::Int),
     <cap:Cap> <path:TyPathArgs>
         => raw::Ty::Record { cap, path: path.0, args: path.1 },
 
@@ -537,6 +541,8 @@ extern {
         "RwLock" => Token::RwLockCell,
         "Arc" => Token::Arc,
         "ConstSeq" => Token::ConstSeq,
+        "Nat" => Token::NatTy,
+        "Int" => Token::IntTy,
         "Token" => Token::StablehloToken,
         "Future" => Token::Future,
         "Tensor" => Token::Tensor,

@@ -413,7 +413,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         {
             return self.check_nullable_pat(ctor, span, ty);
         }
-        let TyKind::Record { def, args, .. } = ty.kind() else {
+        let Some((def, args)) = self.ctor_enum(ty) else {
             let shown = self.infer.resolve(ty);
             self.error(
                 span,
@@ -444,7 +444,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     return Pat::Wild;
                 }
             },
-            None => *def,
+            None => def,
         };
         let Some(record) = self.records.get(&enum_def).cloned() else {
             self.error(span, "unknown enum".to_string());
@@ -922,10 +922,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// enum's type arguments.
     fn variant_field_tys(&mut self, ty: Ty<'tcx>, v: usize) -> Vec<Ty<'tcx>> {
         let ty = self.peel_arc(ty);
-        let TyKind::Record { def, args, .. } = ty.kind() else {
+        let Some((def, args)) = self.ctor_enum(ty) else {
             return Vec::new();
         };
-        let Some(record) = self.records.get(def).cloned() else {
+        let Some(record) = self.records.get(&def).cloned() else {
             return Vec::new();
         };
         let Some(RecordFields::Variants(variants)) = &record.fields else {
@@ -950,8 +950,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 
     fn variant_count(&mut self, ty: Ty<'tcx>) -> usize {
         let ty = self.peel_arc(ty);
-        if let TyKind::Record { def, .. } = ty.kind()
-            && let Some(record) = self.records.get(def)
+        if let Some((def, _)) = self.ctor_enum(ty)
+            && let Some(record) = self.records.get(&def)
             && let Some(RecordFields::Variants(vs)) = &record.fields
         {
             return vs.len();

@@ -134,6 +134,10 @@ pub enum Token<'a> {
     Arc,
     #[token("ConstSeq")]
     ConstSeq,
+    #[token("Nat")]
+    NatTy,
+    #[token("Int")]
+    IntTy,
     #[token("placement")]
     Placement,
     #[token("DefaultPlacement")]

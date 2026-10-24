@@ -372,6 +372,7 @@ impl<'tcx> Builder<'_, 'tcx> {
                 let elem = self.ty(elem);
                 self.tcx.mk_const_seq(elem)
             }
+            raw::Ty::BigInt(b) => self.tcx.mk(TyKind::BigInt(*b)),
             raw::Ty::Cell { inner, kind } => {
                 let inner = self.ty(inner);
                 self.tcx.mk_cell(inner, *kind)
@@ -1004,6 +1005,17 @@ mod tests {
             pub fn call_tuple(f: ((i32, bool),) -> i32, p: (i32, bool)) -> i32 { f(p) }
         "#,
         );
+    }
+
+    #[test]
+    fn roundtrips_bigint_types() {
+        with_tcx(|tcx| {
+            let input = "fn @widen(v0 (n): Nat) -> Int { 5 : Int }";
+            let p = parse_program(tcx, input).expect("parse built-in integer types");
+            let printed = Printer::new(&p.defs, &p.names).program(&p.program);
+            assert!(printed.contains("(n): Nat) -> Int {"), "{printed}");
+            assert!(printed.contains("5 : Int"), "{printed}");
+        });
     }
 
     #[test]
