@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --symbol-dce | %FileCheck %s --implicit-check-not=ifrt.function --implicit-check-not=ifrt.donated
 
 #s = #ifrt.sharding_param<2 to [0] on 2>

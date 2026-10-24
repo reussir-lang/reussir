@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --reussir-convert-to-llvm | %FileCheck %s --implicit-check-not=ifrt.function --implicit-check-not=ifrt.donated
 // RUN: %rrc %s --emit mlir-llvm -O none -o - | %FileCheck %s --implicit-check-not=ifrt.function --implicit-check-not=ifrt.donated
 

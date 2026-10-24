@@ -4,7 +4,7 @@
 // A terminal gets truecolor; pipes and NO_COLOR get plain ASCII.
 // One dynamically sized kernel computes the complete image in a single launch.
 // Rows and columns are constant launch arguments; iterations remain runtime data.
-// REQUIRES: linux, ifrt, pjrt-runtime
+// REQUIRES: linux, openxla, pjrt-runtime
 // RUN: %rrc %s --emit executable --runtime-linkage static --relocation-mode pic --polyffi-libdir %pjrt_runtime_dir/deps -O aggressive -o %t.exe
 // RUN: echo '3 5 32' | env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe | %FileCheck %s --check-prefix=SMALL --match-full-lines
 // RUN: echo '1 1 32' | env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe | %FileCheck %s --check-prefix=CENTER --match-full-lines

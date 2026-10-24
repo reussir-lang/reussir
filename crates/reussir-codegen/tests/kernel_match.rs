@@ -1,5 +1,4 @@
 //! Compile source match expressions and verify their real StableHLO regions.
-use reussir_backend::dialect::ty::stablehlo_token;
 use reussir_backend::melior::ir::operation::OperationLike;
 use reussir_codegen::lower::{LinkagePolicy, lower_program};
 use reussir_core::full::mono::monomorphize;
@@ -29,7 +28,7 @@ fn lower(source: &str) -> Result<String, String> {
     })
 }
 fn enabled() -> bool {
-    stablehlo_token(&testing::context()).is_some()
+    reussir_backend::features::enabled("openxla")
 }
 
 #[test]

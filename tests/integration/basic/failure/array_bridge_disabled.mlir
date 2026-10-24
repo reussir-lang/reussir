@@ -1,4 +1,4 @@
-// UNSUPPORTED: ifrt
+// UNSUPPORTED: openxla
 // RUN: %reussir-opt %s --split-input-file --verify-diagnostics
 
 !R = !reussir.rc<!reussir.array<8 x f32, #reussir.target<devices = [0]>>>

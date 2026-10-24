@@ -56,13 +56,12 @@ unsafe extern "C" {
         triple: *const c_char,
         strip_invariant_group_barriers: c_int,
     ) -> LLVMMemoryBufferRef;
-    fn reussirHasTPDE() -> c_int;
 }
 
-/// Reports whether TPDE support was compiled into the backend. [`OptLevel::Tpde`]
-/// falls back to an error when this is false.
-pub fn has_tpde() -> bool {
-    unsafe { reussirHasTPDE() != 0 }
+/// Reports whether this build includes TPDE. [`OptLevel::Tpde`] falls back to an
+/// error when it does not.
+fn has_tpde() -> bool {
+    reussir_backend::features::enabled("tpde")
 }
 
 // LLJIT codegen requires the native target to be initialized, exactly once.

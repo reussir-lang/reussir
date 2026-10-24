@@ -18,6 +18,7 @@ use reussir_backend_sys as sys;
 
 pub mod builders;
 pub mod dialect;
+pub mod features;
 pub mod llvm;
 pub mod pipeline;
 

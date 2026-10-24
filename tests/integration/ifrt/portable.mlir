@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --ifrt-legalize-to-vifrt --vifrt-to-version='target_version=0.5.0' --emit-bytecode -o %t
 // RUN: %reussir-opt %t | %FileCheck %s --check-prefix=VERSIONED
 // RUN: %reussir-opt %t --vifrt-legalize-to-ifrt --ifrt-verify-donation | %FileCheck %s

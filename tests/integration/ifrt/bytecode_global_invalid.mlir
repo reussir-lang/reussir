@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --split-input-file --verify-diagnostics
 
 llvm.mlir.global external @mutable() : !llvm.struct<(array<64 x i8>, array<4 x i8>)>

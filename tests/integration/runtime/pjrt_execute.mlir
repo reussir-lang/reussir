@@ -1,4 +1,4 @@
-// REQUIRES: linux, stablehlo, pjrt-runtime
+// REQUIRES: linux, openxla, pjrt-runtime
 // RUN: %reussir-opt %s --emit-bytecode -o %t.bc
 // RUN: %reussir-opt %S/Inputs/pjrt_execute_empty.mlir --emit-bytecode -o %t.empty.bc
 // RUN: %reussir-opt %S/Inputs/pjrt_execute_sharded.mlir --emit-bytecode -o %t.sharded.bc

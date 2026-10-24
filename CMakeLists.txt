@@ -82,6 +82,11 @@ else()
   set(REUSSIR_HAS_TPDE OFF)
 endif()
 
+include(cmake/ReussirFeatures.cmake)
+reussir_feature(tpde "${REUSSIR_HAS_TPDE}" "TPDE baseline code generation for the JIT")
+reussir_feature(openxla "${REUSSIR_ENABLE_OPENXLA}" "StableHLO kernels and PJRT device arrays")
+reussir_write_features(${MLIR_TABLEGEN_OUTPUT_DIR}/Reussir/Features.def)
+
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${MLIR_TABLEGEN_OUTPUT_DIR}

@@ -1,7 +1,7 @@
 // The CUDA-validated million-pixel orbit program, with one scalar f32 anchor.
 // All tensor shapes and remaining element types flow through ordinary expressions,
 // comparisons, tuples, and the loop state from that anchor and the result type.
-// REQUIRES: stablehlo
+// REQUIRES: openxla
 // RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
 // RUN: %rrc %t.hir --emit hir --no-source-locations -o %t.round.hir
 // RUN: diff %t.hir %t.round.hir

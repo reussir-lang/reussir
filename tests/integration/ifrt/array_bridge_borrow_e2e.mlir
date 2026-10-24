@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --reussir-attach-native-target --reussir-convert-to-llvm --reconcile-unrealized-casts --canonicalize -o %t.mlir
 // RUN: %reussir-translate --mlir-to-llvmir %t.mlir | %opt -S -O2 -o %t.ll
 // RUN: %llc %t.ll -relocation-model=pic -filetype=obj -o %t.o

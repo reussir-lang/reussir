@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --split-input-file --reussir-ifrt-just-in-time-transform --verify-diagnostics
 #s = #ifrt.sharding_param<1 to [0] on 1>
 !I = !ifrt.array<tensor<8xf32>, #s, [0]>

@@ -51,7 +51,7 @@ fn parse_log_level(level: &str) -> Result<tracing::Level, String> {
 fn resolve_opt(cli: &Cli) -> Result<OptLevel, String> {
     match cli.opt_level.as_deref() {
         Some(level) => match reussir_repl::commands::parse_opt(level) {
-            Some(OptLevel::Tpde) if !reussir_jit::orc::has_tpde() => {
+            Some(OptLevel::Tpde) if !reussir_backend::features::enabled("tpde") => {
                 Err("TPDE support is not compiled into the backend".to_string())
             }
             Some(opt) => Ok(opt),
@@ -59,7 +59,7 @@ fn resolve_opt(cli: &Cli) -> Result<OptLevel, String> {
         },
         // The historical default is TPDE (fastest compile); fall back when
         // the backend was built without it.
-        None if reussir_jit::orc::has_tpde() => Ok(OptLevel::Tpde),
+        None if reussir_backend::features::enabled("tpde") => Ok(OptLevel::Tpde),
         None => Ok(OptLevel::Default),
     }
 }

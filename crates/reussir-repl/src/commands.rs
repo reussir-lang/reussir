@@ -111,7 +111,7 @@ pub fn dispatch(session: &mut ReplSession<'_, '_>, command: &str) -> Outcome {
             (Some("opt"), Some(level)) => match parse_opt(level) {
                 // Same guard as the CLI's `-O tpde`: reject here rather than
                 // letting the *next* input fail with a misattributed JIT error.
-                Some(OptLevel::Tpde) if !reussir_jit::orc::has_tpde() => {
+                Some(OptLevel::Tpde) if !reussir_backend::features::enabled("tpde") => {
                     Outcome::Text("TPDE support is not compiled into the backend".to_string())
                 }
                 Some(opt) => {

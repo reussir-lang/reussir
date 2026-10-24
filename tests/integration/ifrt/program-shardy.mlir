@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --ifrt-to-outlined-atom-programs-pipeline -o %t.mlir
 // RUN: %FileCheck %s < %t.mlir
 // RUN: %reussir-ifrt-translate %t.mlir --serialize -o %t.ifrt.bc

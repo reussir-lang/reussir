@@ -182,9 +182,6 @@ void reussirFixupVariantDebugInfo(LLVMModuleRef module);
 // comdats outright, ELF weak binding dedups without them.
 void reussirAttachCoffComdats(LLVMModuleRef module);
 
-// Reports whether TPDE support was compiled into the backend.
-int reussirHasTPDE(void);
-
 // Stamps `module` with the target's layout facts before the lowering pipeline
 // runs: the LLVM data layout string (`llvm.data_layout`), the target triple
 // (`llvm.target_triple`), and the translated DLTI spec (`dlti.dl_spec`) that

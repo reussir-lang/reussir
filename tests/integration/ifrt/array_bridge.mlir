@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --emit-bytecode -o %t
 // RUN: %reussir-opt %t | %FileCheck %s
 // RUN: %reussir-opt %s --reussir-attach-native-target --reussir-token-instantiation --reussir-token-reuse --ifrt-verify-donation | %FileCheck %s --check-prefix=TOKEN

@@ -1,6 +1,6 @@
 // Eight cells on a periodic ring: one hot cell spreads its heat to neighbors.
 // This is a full host -> upload -> launch -> download example, not a raw-MLIR runner.
-// REQUIRES: linux, ifrt, pjrt-runtime
+// REQUIRES: linux, openxla, pjrt-runtime
 // RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
 // RUN: %rrc %s --package-name heat_demo --extern core=%t.core.rri --emit hir --no-source-locations -o %t.hir
 // RUN: %rrc %s --package-name heat_demo --extern core=%t.core.rri --emit mir --no-source-locations -o %t.mir

@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --split-input-file --verify-diagnostics --ifrt-verify-sharding-specified --ifrt-verify-donation
 
 // Layout validation must still call the real XLA layout parser.

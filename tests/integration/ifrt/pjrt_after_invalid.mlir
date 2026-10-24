@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --split-input-file --verify-diagnostics
 func.func @bad_input(%input: i32) {
   // expected-error @+1 {{requires IFRT arrays and a control result}}

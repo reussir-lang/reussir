@@ -301,14 +301,6 @@ void reussirAttachCoffComdats(LLVMModuleRef module) {
     attach(g);
 }
 
-int reussirHasTPDE(void) {
-#ifdef REUSSIR_HAS_TPDE
-  return 1;
-#else
-  return 0;
-#endif
-}
-
 bool reussirModuleAttachTargetSpec(MlirModule module, const char *dataLayout,
                                    const char *triple) {
   mlir::ModuleOp moduleOp = unwrap(module);

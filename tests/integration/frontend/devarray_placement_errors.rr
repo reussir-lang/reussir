@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: echo '#[placement(devices = "0,1", sharding = "#ifrt.sharding_param<2x1 to [0] on 2>")] pub struct [value] P {} pub fn f(x: DevArray<[f32; 4], P>) -> DevArray<[f32; 4], P> { x }' > %t.rank.rr
 // RUN: %not %rrc %t.rank.rr --emit mlir -o - 2>&1 | %FileCheck %s --check-prefix=RANK
 // RUN: echo '#[placement(devices = "0", sharding = "#ifrt.sharding_param<2 to [0] on 2>")] pub struct [value] P {} pub fn f(x: DevArray<[f32; 4], P>) -> DevArray<[f32; 4], P> { x }' > %t.devices.rr

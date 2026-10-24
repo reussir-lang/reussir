@@ -1,4 +1,4 @@
-// REQUIRES: stablehlo
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --stablehlo-legalize-to-vhlo --emit-bytecode -o %t
 // RUN: %reussir-opt %t --stablehlo-deserialize | %FileCheck %s
 

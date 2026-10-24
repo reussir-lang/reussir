@@ -1,4 +1,4 @@
-// REQUIRES: stablehlo
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --chlo-legalize-to-stablehlo | %FileCheck %s
 
 // CHECK-LABEL: func.func @broadcast_add

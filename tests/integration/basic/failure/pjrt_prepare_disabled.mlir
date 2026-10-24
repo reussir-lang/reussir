@@ -1,4 +1,4 @@
-// UNSUPPORTED: ifrt
+// UNSUPPORTED: openxla
 // RUN: %reussir-opt %s --reussir-prepare-pjrt --verify-diagnostics
 
 // Even a call-free annotated host requires IFRT preparation support.

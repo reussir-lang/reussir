@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %not %reussir-opt %s --split-input-file --reussir-ifrt-just-in-time-transform --symbol-dce --reussir-convert-to-llvm --mlir-print-op-on-diagnostic=false 2>&1 | %FileCheck %s
 
 #s = #ifrt.sharding_param<1 to [0] on 1>

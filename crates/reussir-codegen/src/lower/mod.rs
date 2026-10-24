@@ -815,7 +815,7 @@ mod tests {
     #[test]
     fn lowers_async_types_from_serialized_mir() {
         let context = crate::testing::context();
-        let enabled = reussir_backend::dialect::ty::stablehlo_token(&context).is_some();
+        let enabled = reussir_backend::features::enabled("openxla");
         for (source_ty, mlir_ty) in [
             ("Token", "!stablehlo.token"),
             ("Future<Tensor<f32>>", "!stablehlo.future<tensor<f32>>"),

@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
 // RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
 // RUN: %rrc %t.mir --emit mlir -o - | %FileCheck %s

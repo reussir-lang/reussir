@@ -1,4 +1,4 @@
-// REQUIRES: linux, stablehlo, pjrt-runtime
+// REQUIRES: linux, openxla, pjrt-runtime
 // RUN: %rrc %s --emit mlir -o %t.source.mlir
 // RUN: sed 's/@_RC4main/@main/g' %t.source.mlir > %t.entry.mlir
 // RUN: %reussir-opt %t.entry.mlir --emit-bytecode -o %t.bc

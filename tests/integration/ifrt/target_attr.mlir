@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s | %reussir-opt | %FileCheck %s
 // RUN: %reussir-opt %s --emit-bytecode -o %t
 // RUN: %reussir-opt %t | %FileCheck %s

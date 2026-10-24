@@ -1,4 +1,4 @@
-// REQUIRES: stablehlo
+// REQUIRES: openxla
 // Source, generic specialization, and both textual IR replay paths retain kernel lowering.
 // RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
 // RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir

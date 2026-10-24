@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // Protobuf fixtures below are encoded with upstream protoc.
 // RUN: %reussir-opt %s --split-input-file --verify-diagnostics
 

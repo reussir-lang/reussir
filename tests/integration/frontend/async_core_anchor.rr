@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.rri
 // RUN: %FileCheck %s --check-prefix=RRI < %t.rri
 // RUN: %rrc %s --package-name app --extern core=%t.rri --emit hir --no-source-locations -o - | %FileCheck %s --check-prefix=HIR

@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --reussir-attach-native-target --reussir-ifrt-just-in-time-transform --symbol-dce --reussir-convert-to-llvm | %FileCheck %s --implicit-check-not=reussir.array.to_ifrt --implicit-check-not=reussir.array.from_ifrt --implicit-check-not=__reussir_pjrt_array_allocate --implicit-check-not=__reussir_pjrt_array_deallocate --implicit-check-not=__reussir_pjrt_array_wait_ready --implicit-check-not=__reussir_pjrt_array_dimensions
 
 #s = #ifrt.sharding_param<1 to [0] on 1>

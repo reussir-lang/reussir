@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --split-input-file --verify-diagnostics
 // -----
 #S = #ifrt.sharding_param<1 to [0] on 1>

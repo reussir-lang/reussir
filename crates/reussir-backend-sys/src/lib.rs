@@ -101,7 +101,26 @@ pub type LLVMContextRef = *mut LlvmOpaqueContext;
 /// Mirrors `LLVMMemoryBufferRef`.
 pub type LLVMMemoryBufferRef = *mut LlvmOpaqueMemoryBuffer;
 
+/// One optional compiler feature. Mirrors `ReussirFeature`; the strings are
+/// static and NUL-terminated.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ReussirFeature {
+    pub name: *const c_char,
+    pub description: *const c_char,
+    pub enabled: bool,
+}
+
 unsafe extern "C" {
+    //==-- Optional features --==//
+
+    /// Returns the number of optional features, enabled or not.
+    pub fn reussirFeatureCount() -> usize;
+
+    /// Returns the feature at `index`, which must be below
+    /// `reussirFeatureCount()`.
+    pub fn reussirFeatureGet(index: usize) -> ReussirFeature;
+
     //==-- Dialect registration --==//
 
     /// Returns the dialect handle for the Reussir dialect. The handle can be
@@ -249,9 +268,6 @@ unsafe extern "C" {
     /// in two objects fail the link. Run on the final module, after every
     /// definition exists. A no-op for every other object format.
     pub fn reussirAttachCoffComdats(module: LLVMModuleRef);
-
-    /// Reports whether TPDE support was compiled into the backend.
-    pub fn reussirHasTPDE() -> c_int;
 
     /// Stamps `module` with the target's layout facts before the lowering
     /// pipeline runs: the `llvm.data_layout` string, the `llvm.target_triple`,

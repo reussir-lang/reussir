@@ -1,4 +1,4 @@
-// REQUIRES: stablehlo
+// REQUIRES: openxla
 // RUN: %rrc %S/Inputs/kernel_dep.rr --package-name dep --emit rri -o %t.rri
 // RUN: %rrc %s --package-name consumer --extern dep=%t.rri --emit mir --no-source-locations -o %t.mir
 // RUN: %rrc %t.mir --emit mlir -o %t.mlir

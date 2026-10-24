@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --ifrt-to-outlined-atom-programs-pipeline --reussir-ifrt-just-in-time-transform --symbol-dce -o %t.mlir
 // RUN: %FileCheck %s --implicit-check-not=ifrt.function < %t.mlir
 // RUN: %reussir-opt %S/program-shardy.mlir --ifrt-to-outlined-atom-programs-pipeline --reussir-ifrt-just-in-time-transform --symbol-dce | %FileCheck %s --check-prefix=SHARDY

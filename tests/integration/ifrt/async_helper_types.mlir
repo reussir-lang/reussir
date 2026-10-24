@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform | %FileCheck %s
 // CHECK: reussir.pjrt.jit_call
 // CHECK: reussir.ifrt.bytecode

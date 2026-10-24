@@ -1,4 +1,4 @@
-// REQUIRES: ifrt, linux, pjrt-runtime
+// REQUIRES: openxla, linux, pjrt-runtime
 // RUN: %rrc %s -o %t.source.o -O aggressive --relocation-mode pic
 // RUN: %rrc %S/Inputs/kernel_launch_driver.mlir -o %t.driver.o -O aggressive --relocation-mode pic
 // RUN: %cc %t.source.o %t.driver.o %S/Inputs/kernel_launch_execute.c -o %t.exe %pjrt_runtime %extra_sys_libs

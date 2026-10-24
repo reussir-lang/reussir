@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %rrc %s --emit mlir-llvm -O none -o - | %FileCheck %s
 
 // Exercise the XLA layout helper through the statically linked Rust driver.

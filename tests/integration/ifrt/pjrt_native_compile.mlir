@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %rrc %S/pjrt_call_e2e.mlir -O none --emit llvm-ir -o %t.none.ll
 // RUN: %FileCheck %s < %t.none.ll
 // RUN: %rrc %S/pjrt_call_e2e.mlir -O aggressive --emit llvm-ir -o %t.opt.ll

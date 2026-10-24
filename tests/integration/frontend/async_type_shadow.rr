@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %rrc %s --emit mlir --no-source-locations -o - | %FileCheck %s
 pub struct Future<T> {}
 pub struct Token { value: i32 }

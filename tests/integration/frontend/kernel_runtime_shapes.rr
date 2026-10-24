@@ -1,4 +1,4 @@
-// REQUIRES: ifrt, linux, pjrt-runtime
+// REQUIRES: openxla, linux, pjrt-runtime
 // RUN: %rrc %s --emit executable --runtime-linkage static --relocation-mode pic --polyffi-libdir %pjrt_runtime_dir/deps -O aggressive -o %t.exe
 // RUN: env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe | %FileCheck %s
 // CHECK: 6 20 6

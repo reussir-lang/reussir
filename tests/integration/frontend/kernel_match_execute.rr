@@ -1,4 +1,4 @@
-// REQUIRES: linux, stablehlo, pjrt-runtime
+// REQUIRES: linux, openxla, pjrt-runtime
 // RUN: %rrc %s --emit mlir --no-source-locations -o %t.mlir
 // The runtime test selects this source kernel as the PJRT entry point.
 // RUN: sed 's/@_RC3run(/@main(/' %t.mlir | %reussir-opt --emit-bytecode -o %t.bc

@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: echo '#[kernel] fn @kernel(v0 (x): Tensor<f32>) -> Tensor<f32> { v0 : Tensor<f32> } pub fn @host(v1 (x): DevArray<i32>) -> DevArray<f32> { launch(@kernel, v1 : DevArray<i32>) : DevArray<f32> }' > %t.dtype.mir
 // RUN: not %rrc %t.dtype.mir --emit mlir -o /dev/null 2>&1 | %FileCheck %s --check-prefix=DTYPE
 // RUN: echo 'fn @ordinary(v0 (x): Tensor<f32>) -> Tensor<f32> { v0 : Tensor<f32> } pub fn @host(v1 (x): DevArray<f32>) -> DevArray<f32> { launch(@ordinary, v1 : DevArray<f32>) : DevArray<f32> }' > %t.host.mir

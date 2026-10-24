@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform | %FileCheck %s --check-prefix=JIT --implicit-check-not=ifrt.function --implicit-check-not=ifrt.After
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --reussir-convert-to-llvm --reconcile-unrealized-casts | %FileCheck %s --check-prefix=LLVM --implicit-check-not=ifrt. --implicit-check-not=reussir.pjrt
 

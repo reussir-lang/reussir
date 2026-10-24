@@ -1,4 +1,4 @@
-// REQUIRES: stablehlo
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --stablehlo-target-independent-optimization | %FileCheck %s
 
 // CHECK-LABEL: func.func @add_zero

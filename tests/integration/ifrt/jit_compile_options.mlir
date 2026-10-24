@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --reussir-ifrt-just-in-time-transform --symbol-dce -o %t.mlir
 // RUN: %FileCheck %s < %t.mlir
 // RUN: %reussir-opt %t.mlir --reussir-ifrt-just-in-time-transform --emit-bytecode -o %t.bc

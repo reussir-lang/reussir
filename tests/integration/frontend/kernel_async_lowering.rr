@@ -1,4 +1,4 @@
-// REQUIRES: stablehlo
+// REQUIRES: openxla
 // RUN: %rrc %S/kernel_async.rr --emit mlir --no-source-locations -o %t.mlir
 // RUN: %reussir-opt %t.mlir -o /dev/null
 // RUN: %FileCheck %s < %t.mlir

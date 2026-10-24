@@ -2,8 +2,8 @@ import lit.formats
 import os
 import sys
 
-if config.enable_openxla:
-    config.available_features.update(['stablehlo', 'ifrt'])
+# The compiler's enabled optional features (cmake/ReussirFeatures.cmake).
+config.available_features.update(config.reussir_features)
 
 config.name = 'Reussir'
 # lit 23 (LLVM 23) hard-errors on execute_external=True unless the migration

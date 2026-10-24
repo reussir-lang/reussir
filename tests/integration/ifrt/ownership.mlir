@@ -1,4 +1,4 @@
-// REQUIRES: ifrt
+// REQUIRES: openxla
 // RUN: %reussir-opt %s --ifrt-insert-copy-arrays-for-returned-many-times --ifrt-verify-donation | %FileCheck %s
 
 !array = !ifrt.array<tensor<8xf32>, #ifrt.sharding_param<1 to [0] on 1>, [0], memory_kind = "device">
