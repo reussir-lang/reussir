@@ -127,6 +127,9 @@ pub(crate) struct Cli {
     pub(crate) opt: String,
 
     /// Relocation model: `default`, `pic`, `static`, or `dynamic-no-pic`.
+    /// `default` is the target's default, except for `executable` and
+    /// `dynlib`, which default to `pic`: on ELF targets, their link step
+    /// makes a position-independent executable or a shared object.
     #[arg(long = "relocation-mode", default_value = "default")]
     pub(crate) relocation_mode: String,
 

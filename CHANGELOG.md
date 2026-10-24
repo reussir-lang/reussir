@@ -133,6 +133,14 @@
   degrades to copy-on-write instead of updating in place; the check is
   purely diagnostic and runs after all rc optimization passes, so the
   observed count is the final one.
+- `rrc --emit executable` and `--emit dynlib` now compile
+  position-independent code when no `--relocation-mode` is given, as
+  `rene` already did. Their link step makes a position-independent
+  executable or a shared object, but the code was static on ELF: a table of
+  code addresses (a closure vtable, or a retcon table of a recursive drop)
+  in `.rodata` gave the executable text relocations (`DT_TEXTREL`), and lld
+  refused to link it. An explicit `--relocation-mode` is kept, and the other
+  outputs keep the target's default.
 
 ## 0.1.0
 

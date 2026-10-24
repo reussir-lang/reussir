@@ -20,7 +20,7 @@ use std::process::ExitCode;
 use palc::Parser;
 
 use crate::package;
-use crate::{TargetMachine, TargetSpec, emit_to_file, parse_llvm_ir};
+use crate::{RelocMode, TargetMachine, TargetSpec, emit_to_file, parse_llvm_ir};
 use reussir_backend::melior::ir::Module;
 use reussir_codegen::source::FileId;
 use reussir_core::in_arena;
@@ -222,7 +222,17 @@ fn run(cli: &Cli) -> Result<bool, String> {
         );
     }
     let opt = parse_opt(&cli.opt)?;
-    let reloc = parse_reloc(&cli.relocation_mode)?;
+    let reloc = match parse_reloc(&cli.relocation_mode)? {
+        // On ELF targets, the link step has rustc build a position-independent
+        // executable or a shared object, so the code linked into it must be
+        // position-independent too. LLVM's default on ELF is static code,
+        // whose absolute addresses (a closure vtable in `.rodata`; on x86-64
+        // also addresses in the instructions) need text relocations there,
+        // which lld refuses. So the linked products default to PIC, as
+        // `rene` builds them; an explicit mode is kept.
+        RelocMode::Default if target.is_linked() => RelocMode::Pic,
+        mode => mode,
+    };
     let spec = TargetSpec {
         triple: cli.target_triple.clone(),
         cpu: cli.target_cpu.clone(),
