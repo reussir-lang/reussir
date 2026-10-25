@@ -2,7 +2,7 @@
 // the `core::pjrt` traits give every setting a default, a marker overrides
 // the ones it needs, and generic code reads them as ordinary values.
 
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
 // RUN: %FileCheck %s --check-prefix=CORE < %t.core.rri
 // RUN: %rrc %s --package-name app --extern core=%t.core.rri --emit mir --no-source-locations -o - | %FileCheck %s --check-prefix=MIR
 // RUN: %rrc %s --package-name app --extern core=%t.core.rri -o %t.o --relocation-mode pic

@@ -5,7 +5,7 @@
 // numeric payload, so `largest` answering with the numerically smaller value
 // proves Rust reached the Reussir implementation rather than any fallback.
 
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
 // RUN: %rrc %s --package-name fnbound --extern core=%t.core.rri --emit mlir --no-source-locations -o %t.texture.mlir
 // RUN: %FileCheck %s --check-prefix=TEXTURE --input-file=%t.texture.mlir
 // RUN: %rrc %s --package-name fnbound --extern core=%t.core.rri -o %t.o --relocation-mode pic

@@ -8,7 +8,7 @@
 // The absent patterns run as their own prefix over the same texture rather
 // than through `--implicit-check-not`: the Python `filecheck` replacement used
 // on Windows rejects that flag.
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
 // RUN: %rrc %s --package-name btreeset --extern core=%t.core.rri --emit mlir --no-source-locations -o %t.texture.mlir
 // RUN: %FileCheck %s --check-prefix=TEXTURE --input-file=%t.texture.mlir
 // RUN: %FileCheck %s --check-prefix=ABSENT --input-file=%t.texture.mlir

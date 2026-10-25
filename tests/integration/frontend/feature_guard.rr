@@ -3,9 +3,9 @@
 // with what they need, and a program calling one is rejected at the call.
 
 // UNSUPPORTED: rcgmp
-// RUN: %rrc --package-root %S/Inputs/feature_guard_core --package-name core --core --emit rri -o %t.rri
+// RUN: %rrc --package-root %S/Inputs/feature_guard_core --package-name core --builtin --emit rri -o %t.rri
 // RUN: %FileCheck %s --check-prefix=RRI < %t.rri
-// RUN: %rrc --package-root %S/Inputs/feature_guard_core --package-name core --core --emit obj -o %t.o
+// RUN: %rrc --package-root %S/Inputs/feature_guard_core --package-name core --builtin --emit obj -o %t.o
 // RUN: %not %rrc %s --package-name app --extern core=%t.rri --emit hir -o /dev/null 2>&1 | %FileCheck %s
 
 // RRI-DAG: #[requires("rcgmp")] pub fn #core::two() -> Nat

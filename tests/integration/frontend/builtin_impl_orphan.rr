@@ -3,7 +3,7 @@
 // the ordinary orphan report, not an internal error. (A lang trait declared
 // by the current package keeps the intrinsic builtin-impl special form.)
 
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
 // RUN: %not %rrc %s --package-name orphan --extern core=%t.core.rri --emit mir -o - 2>&1 | %FileCheck %s
 
 impl PartialEq for u64 {

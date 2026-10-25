@@ -236,10 +236,10 @@ fn package_args(
         "-o".to_owned(),
         out.display().to_string(),
     ]);
-    // The bundled core carries the reserved name; `--core` lifts the
-    // reservation for exactly this build.
-    if node.loaded.manifest.package.name == "core" {
-        args.push("--core".to_owned());
+    // The bundled libraries carry reserved names; `--builtin` lifts the
+    // reservation for exactly their builds.
+    if crate::resolve::BUILTIN_PACKAGES.contains(&node.loaded.manifest.package.name.as_str()) {
+        args.push("--builtin".to_owned());
     }
     args
 }

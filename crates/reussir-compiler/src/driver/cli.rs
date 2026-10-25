@@ -55,11 +55,12 @@ pub(crate) struct Cli {
     #[arg(long = "package-name")]
     pub(crate) package_name: Option<String>,
 
-    /// Compile the built-in `core` package itself: lifts the reservation on
-    /// the `core` package name. Passed by `rene` when it builds the bundled
-    /// core sources; not for user packages.
-    #[arg(long = "core", default_value_t = false)]
-    pub(crate) core: bool,
+    /// Compile a built-in package (`core` or `std`) itself: lifts the
+    /// reservation on its name and elaborates it with every optional feature.
+    /// Passed by `rene` when it builds the bundled libraries; not for user
+    /// packages.
+    #[arg(long = "builtin", default_value_t = false)]
+    pub(crate) builtin: bool,
 
     /// Instead of compiling, describe the package's source graph — `lib.rr`
     /// plus everything reachable through `mod` declarations — as JSON:

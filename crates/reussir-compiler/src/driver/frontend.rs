@@ -33,9 +33,10 @@ fn build_features() -> FeatureSet {
 }
 
 /// The optional features the program may use: those this build includes, or
-/// every feature when compiling `core`, which declares them all.
+/// every feature when compiling a built-in package, which declares items for
+/// all of them; what this build cannot lower stays unlowered.
 fn program_features(cli: &Cli) -> FeatureSet {
-    if cli.core {
+    if cli.builtin {
         FeatureSet::all()
     } else {
         build_features()

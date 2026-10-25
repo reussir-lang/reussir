@@ -1,6 +1,6 @@
 // REQUIRES: tsan, openmp, rcgmp
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core -o %t.core.ll -t llvm-ir --relocation-mode pic --sanitizer thread --nullary-variant-encoding arch-independent
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin -o %t.core.ll -t llvm-ir --relocation-mode pic --sanitizer thread --nullary-variant-encoding arch-independent
 // RUN: %cc %tsan_flags -c -x ir %t.core.ll -o %t.core.o
 // RUN: %rrc %S/../frontend/arc_bigint_parallel.rr --package-name arcpar --extern core=%t.core.rri -o %t.ll -t llvm-ir --relocation-mode pic --sanitizer thread --nullary-variant-encoding arch-independent
 // RUN: %cc %tsan_flags -c -x ir %t.ll -o %t.o

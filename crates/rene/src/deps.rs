@@ -331,10 +331,10 @@ async fn scan_root(root: ScanRoot, package: &str, color: bool) -> Result<Vec<Sou
         // color policy while rrc renders into its private stderr pipe.
         .arg("--color")
         .arg(if color { "always" } else { "never" });
-    // The bundled core carries the reserved name; scanning it needs the
-    // same lift its compile commands get.
-    if package == "core" {
-        cmd.arg("--core");
+    // The bundled libraries carry reserved names; scanning them needs the
+    // same lift their compile commands get.
+    if crate::resolve::BUILTIN_PACKAGES.contains(&package) {
+        cmd.arg("--builtin");
     }
     let out = cmd
         // Keep the JSON and diagnostics on separate private pipes. A failed

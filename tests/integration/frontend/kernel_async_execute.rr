@@ -1,5 +1,5 @@
 // REQUIRES: linux, openxla, pjrt-runtime
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
 // RUN: %rrc %s --package-name app --extern core=%t.core.rri --emit mlir --no-source-locations -o %t.mlir
 // RUN: %FileCheck %s --check-prefix=METHOD < %t.mlir
 // RUN: sed 's/@_RNvC3app3run(/@main(/' %t.mlir | %reussir-opt --emit-bytecode -o %t.bc

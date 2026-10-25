@@ -3,7 +3,7 @@
 // current opaque-record application gap: `empty` omits `T: Ord`, so `Key`
 // reaches monomorphization without satisfying BTreeSet's declared bound.
 
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
 // RUN: %not %rrc %s --package-name cmpbridge_error --extern core=%t.core.rri --emit mir -o - 2>&1 | %FileCheck %s
 
 #[ffi(rust = "::reussir_rt::collections::btree_set::BTreeSet")]

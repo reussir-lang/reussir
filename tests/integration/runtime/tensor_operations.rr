@@ -1,5 +1,5 @@
 // REQUIRES: linux, openxla, pjrt-runtime
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
 // RUN: %rrc %s --package-name app --extern core=%t.core.rri --emit mlir --no-source-locations -o %t.mlir
 // RUN: sed 's/@_RNvC3app3run(/@main(/' %t.mlir | %reussir-opt --inline --symbol-dce --emit-bytecode -o %t.bc
 // RUN: pjrt_test_blake3=$(ls -t "%pjrt_runtime_dir"/deps/libblake3-*.rlib | head -n 1) && %rustc_path --edition=2024 -C prefer-dynamic %S/Inputs/tensor_operations.rs --extern blake3="$pjrt_test_blake3" --extern blake3="${pjrt_test_blake3%.rlib}.rmeta" -L "%pjrt_runtime_dir/deps" -L native="%pjrt_runtime_dir" -l dylib=reussir_rt -o %t.exe

@@ -4,7 +4,7 @@
 // owned values.
 
 // REQUIRES: rcgmp
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
 // RUN: %rrc %s --package-name bigint --extern core=%t.core.rri --emit mlir -o %t.mlir
 // RUN: %FileCheck %s --check-prefix=CLASSIFY < %t.mlir
 // RUN: %FileCheck %s --check-prefix=FOUR < %t.mlir

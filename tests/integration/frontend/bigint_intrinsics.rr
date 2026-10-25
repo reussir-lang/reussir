@@ -2,7 +2,7 @@
 // names spell, and survive the textual MIR.
 
 // REQUIRES: rcgmp
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
 // RUN: %rrc %s --package-name bigint --extern core=%t.core.rri --emit mlir -o - | %FileCheck %s
 // RUN: %rrc %s --package-name bigint --extern core=%t.core.rri --emit mir -o %t.mir
 // RUN: %FileCheck %s --check-prefix=MIR < %t.mir

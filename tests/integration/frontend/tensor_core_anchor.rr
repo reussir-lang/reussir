@@ -1,6 +1,6 @@
 // The actual core package exports Tensor's lang anchor and source location.
 // Importing that declaration must still produce builtin Tensor types.
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.rri
 // RUN: %FileCheck %s --check-prefix=RRI < %t.rri
 // RUN: %rrc %s --package-name app --extern core=%t.rri --emit hir --no-source-locations -o - | %FileCheck %s --check-prefix=HIR
 // RUN: %rrc %s --package-name app --extern core=%t.rri --emit mlir --no-source-locations -o - | %FileCheck %s --check-prefix=MLIR

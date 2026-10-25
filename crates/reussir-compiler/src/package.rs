@@ -57,6 +57,11 @@ pub enum PackageError {
 
 /// Load the package rooted at the directory `root` under `name`: `lib.rr` is
 /// the crate root; see [`load_package_rooted`].
+/// The bundled libraries. Their names are reserved, and `rrc --builtin` builds
+/// them with every optional feature, leaving what this build cannot lower
+/// unlowered.
+pub const BUILTIN_PACKAGES: &[&str] = &["core", "std"];
+
 pub fn load_package(
     root: &Path,
     name: &str,
@@ -65,12 +70,13 @@ pub fn load_package(
     load_package_with(root, name, interner, false)
 }
 
-/// [`load_package`], with the `core` reservation lifted for `rrc --core`.
+/// [`load_package`], with the built-in package reservation lifted for
+/// `rrc --builtin`.
 pub fn load_package_with(
     root: &Path,
     name: &str,
     interner: &Arc<MultiThreadedTokenInterner>,
-    allow_core: bool,
+    allow_builtin: bool,
 ) -> Result<PackageSource, PackageError> {
     let root = root.canonicalize().map_err(|e| {
         PackageError::Message(format!("cannot open package root {}: {e}", root.display()))
@@ -82,7 +88,7 @@ pub fn load_package_with(
             root.display()
         )));
     }
-    load_package_rooted_with(&lib, name, interner, allow_core)
+    load_package_rooted_with(&lib, name, interner, allow_builtin)
 }
 
 /// Load the package whose crate root is the file `root_file` under `name`:
@@ -98,18 +104,18 @@ pub fn load_package_rooted(
     load_package_rooted_with(root_file, name, interner, false)
 }
 
-/// [`load_package_rooted`], with the `core` reservation lifted when the
-/// caller *is* building the built-in core package (`rrc --core`).
+/// [`load_package_rooted`], with the reservation lifted when the caller *is*
+/// building a built-in package (`rrc --builtin`).
 pub fn load_package_rooted_with(
     root_file: &Path,
     name: &str,
     interner: &Arc<MultiThreadedTokenInterner>,
-    allow_core: bool,
+    allow_builtin: bool,
 ) -> Result<PackageSource, PackageError> {
-    if name == "core" && !allow_core {
-        return Err(PackageError::Message(
-            "package name 'core' is reserved for the built-in core package".into(),
-        ));
+    if BUILTIN_PACKAGES.contains(&name) && !allow_builtin {
+        return Err(PackageError::Message(format!(
+            "package name '{name}' is reserved for the built-in {name} package"
+        )));
     }
     let root_file = root_file.canonicalize().map_err(|e| {
         PackageError::Message(format!(
@@ -329,15 +335,20 @@ mod tests {
     }
 
     #[test]
-    fn rejects_the_reserved_core_package_name() {
+    fn rejects_the_reserved_builtin_package_names() {
         let dir = tempfile::tempdir().unwrap();
         write(dir.path(), "lib.rr", "pub fn e() -> u64 { 0 }");
-        let Err(PackageError::Message(msg)) = load_package(dir.path(), "core", &interner()) else {
-            panic!("expected the reserved-name error");
-        };
-        assert!(
-            msg.contains("'core' is reserved for the built-in core package"),
-            "{msg}"
-        );
+        for name in BUILTIN_PACKAGES {
+            let Err(PackageError::Message(msg)) = load_package(dir.path(), name, &interner())
+            else {
+                panic!("expected the reserved-name error for {name}");
+            };
+            assert!(
+                msg.contains(&format!(
+                    "'{name}' is reserved for the built-in {name} package"
+                )),
+                "{msg}"
+            );
+        }
     }
 }

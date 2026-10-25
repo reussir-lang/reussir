@@ -2,7 +2,7 @@
 // cast re-colors an integer.
 
 // REQUIRES: rcgmp
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
 // RUN: %not %rrc %s --package-name arcerr --extern core=%t.core.rri -o %t.o 2>&1 | %FileCheck %s
 
 struct [shared] Holder { v: Nat }

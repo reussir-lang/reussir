@@ -50,6 +50,10 @@ pub struct Solution {
     pub pinned: BTreeMap<String, SemanticVersion>,
 }
 
+/// The bundled libraries, whose names are reserved: `rrc --builtin` lifts the
+/// reservation for their own builds and elaborates them with every feature.
+pub(crate) const BUILTIN_PACKAGES: &[&str] = &["core", "std"];
+
 /// Load the transitive graph rooted at `root`'s manifest.
 pub fn load_graph(root: &Loaded) -> Result<Graph, String> {
     load_graph_with(root, None)

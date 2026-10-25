@@ -5,7 +5,7 @@
 // free and a lost release a leak under the sanitizer run of this file.
 
 // REQUIRES: rcgmp
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
 // RUN: %rrc %s --package-name arcint --extern core=%t.core.rri -o %t.mlir -t mlir --relocation-mode pic
 // RUN: %FileCheck %s --check-prefix=MLIR < %t.mlir
 // RUN: %rrc %s --package-name arcint --extern core=%t.core.rri -o %t.o --relocation-mode pic

@@ -1,4 +1,4 @@
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
 // RUN: echo '#[kernel] fn f(x:Future<Tensor<f32>>) { x.done(1); }' > %t.args.rr
 // RUN: %not %rrc %t.args.rr --package-name app --extern core=%t.core.rri --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=ARGS
 // RUN: echo '#[kernel] fn f(x:Future<Tensor<f32>,Tensor<i32>>) { x.done(); }' > %t.multi.rr

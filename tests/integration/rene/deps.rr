@@ -37,14 +37,14 @@
 // CHECK: "REUSSIR_RUSTC": "<baked-rustc>"
 
 // The bundled core first: it depends on nothing, and its compiles carry
-// `--core` to lift the reserved-name check for exactly this build.
+// `--builtin` to lift the reserved-name check for exactly this build.
 // CHECK: "--package-name",
 // CHECK-NEXT: "core",
 // CHECK-NEXT: "--emit",
 // CHECK-NEXT: "rri",
 // CHECK-NEXT: "-o",
 // CHECK-NEXT: "{{.*}}{{[/\\]+}}dev{{[/\\]+}}deps{{[/\\]+}}core.rri",
-// CHECK-NEXT: "--core"
+// CHECK-NEXT: "--builtin"
 // CHECK: "package": "core"
 
 // logs: no declared dependencies, so its interface sees only the implicit

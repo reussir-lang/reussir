@@ -864,7 +864,7 @@ fn build_compiles_the_declared_targets_with_the_profile_knobs() {
         .filter(|l| l.contains("--package-name core"))
         .collect();
     assert_eq!(core.len(), 2, "{core:#?}");
-    assert!(core.iter().all(|l| l.contains("--core")), "{core:#?}");
+    assert!(core.iter().all(|l| l.contains("--builtin")), "{core:#?}");
 
     let compiles = fakes.package_compiles();
     assert_eq!(compiles.len(), 3, "{compiles:#?}");

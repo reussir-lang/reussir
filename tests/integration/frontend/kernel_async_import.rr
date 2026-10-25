@@ -1,5 +1,5 @@
 // REQUIRES: openxla
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --core --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
 // RUN: %FileCheck %s --check-prefix=CORE < %t.core.rri
 // RUN: %rrc %S/Inputs/kernel_async_dep.rr --package-name dep --extern core=%t.core.rri --emit rri -o %t.dep.rri
 // RUN: %rrc %s --package-name app --extern core=%t.core.rri --extern dep=%t.dep.rri --emit hir --no-source-locations -o %t.hir
