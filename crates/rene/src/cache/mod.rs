@@ -36,6 +36,9 @@
 //!
 //! Consumers use entries through one protocol, [`Cache::acquire`] (see
 //! [`entry`]), and every lock the cache takes is a [`FileLock`] ([`lock`]).
+//! A cache [`with_session`](Cache::with_session) records in the cache
+//! [`ledger`](crate::ledger) every entry the build uses, which keeps the
+//! entry from being removed while the build needs it.
 
 pub mod entry;
 pub mod lock;
@@ -44,11 +47,14 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 pub use entry::{Acquired, RecordedFile, Request, Slot, Staging, Usage};
 pub use lock::{FileLock, Probe};
+
+use crate::ledger::Session;
 
 /// Overrides the cache location.
 pub const CACHE_DIR_ENV: &str = "RENE_CACHE_DIR";
@@ -73,6 +79,10 @@ pub struct Cache {
     /// Always absolute: entry paths end up in build records, which must not
     /// depend on the directory rene happened to run in.
     root: PathBuf,
+    /// The ledger session the entries used through this cache are recorded
+    /// in. Shared by the clones a build hands around; rene's runtime is
+    /// single-threaded, so an `Rc` suffices.
+    session: Option<Rc<Session>>,
 }
 
 /// The kinds of entry, each a directory directly under the root. Besides
@@ -153,7 +163,10 @@ impl Cache {
                 probe.display()
             )
         })?;
-        Ok(Cache { root })
+        Ok(Cache {
+            root,
+            session: None,
+        })
     }
 
     /// The shared cache: [`CACHE_DIR_ENV`], else the platform cache
@@ -173,6 +186,27 @@ impl Cache {
             );
             Self::at(local)
         })
+    }
+
+    /// This cache, recording the entries it is used for in `session`.
+    pub fn with_session(self, session: Rc<Session>) -> Self {
+        Cache {
+            session: Some(session),
+            ..self
+        }
+    }
+
+    /// The session entries are recorded in, if any.
+    pub fn session(&self) -> Option<&Session> {
+        self.session.as_deref()
+    }
+
+    /// This cache without its session, for the session itself to hold.
+    pub(crate) fn detached(&self) -> Cache {
+        Cache {
+            root: self.root.clone(),
+            session: None,
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -291,6 +325,22 @@ pub fn publish_dir(tmp: &Path, dest: &Path) -> Result<(), String> {
             Err(format!("cannot publish `{}`: {e}", dest.display()))
         }
     }
+}
+
+/// The bytes of every regular file under `path`, following no links: what
+/// an entry costs on disk. Unreadable parts count as nothing.
+pub fn dir_size(path: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| match entry.file_type() {
+            Ok(kind) if kind.is_dir() => dir_size(&entry.path()),
+            Ok(kind) if kind.is_file() => entry.metadata().map_or(0, |meta| meta.len()),
+            _ => 0,
+        })
+        .sum()
 }
 
 /// A cheap identity of the program `program` would run: its resolved path
@@ -469,6 +519,17 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dest.join("f")).unwrap(), "first");
         // The atomic write left nothing but the file behind.
         assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_directory_size_counts_its_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("entry");
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a"), "12345").unwrap();
+        std::fs::write(dir.join("sub/b"), "123").unwrap();
+        assert_eq!(dir_size(&dir), 8);
+        assert_eq!(dir_size(&tmp.path().join("absent")), 0);
     }
 
     #[test]

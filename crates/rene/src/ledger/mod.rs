@@ -109,6 +109,7 @@ pub enum Recheck {
 }
 
 /// This rene's session in the cache ledger. Dropping it ends the session.
+#[derive(Debug)]
 pub struct Session {
     cache: Cache,
     id: String,
@@ -131,7 +132,7 @@ impl Session {
 
     async fn start_as(cache: &Cache, id: &str) -> Session {
         let mut session = Session {
-            cache: cache.clone(),
+            cache: cache.detached(),
             id: id.to_owned(),
             lock: None,
             store: None,
@@ -551,6 +552,47 @@ mod tests {
             assert_eq!(snapshot.entries[&e].owner(), Some(a.id()));
             assert!(!snapshot.sessions.contains_key("dead"));
             drop(held);
+        });
+    }
+
+    /// A request for an entry being removed, whose directory is gone
+    /// already, waits for the removal to end, saying so once, and then
+    /// builds the entry.
+    #[test]
+    fn a_request_waits_once_for_an_entry_being_removed() {
+        use crate::cache::{Acquired, Request, Usage};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let bare = cache(tmp.path());
+        let e = id("e");
+        block_on(async {
+            let pruner = Session::start_as(&bare, "pruner").await;
+            build(&bare, &pruner, &e, 1).await;
+            pruner.unpin(&e).await;
+            mark(&pruner, &e, "pruner").await;
+            std::fs::remove_dir_all(bare.entry(&e)).unwrap();
+
+            let session = std::rc::Rc::new(Session::start(&bare).await);
+            let cache = bare.clone().with_session(session);
+            let messages = std::cell::RefCell::new(Vec::new());
+            let notify = |msg: &str| messages.borrow_mut().push(msg.to_owned());
+            let request = Request {
+                id: e.clone(),
+                usage: Usage::Copied,
+                what: "testing",
+                notify: &notify,
+            };
+            let pruner_exits = async {
+                compio::runtime::time::sleep(Duration::from_millis(300)).await;
+                // The next lookup reaps the row of the pruner that is gone.
+                drop(pruner);
+            };
+            let acquire = cache.acquire(&request, |_| None::<()>);
+            let (acquired, ()) = futures_util::future::join(acquire, pruner_exits).await;
+            assert!(matches!(acquired.unwrap(), Acquired::Build(_)));
+            let messages = messages.into_inner();
+            assert_eq!(messages.len(), 1, "{messages:#?}");
+            assert!(messages[0].contains("removing `deps/e`"), "{}", messages[0]);
         });
     }
 

@@ -198,10 +198,9 @@ no two processes ever hold "the same" lock on different files. A file
 system that cannot lock files makes the root unusable, so the cache moves
 to the build directory instead of running unlocked.
 
-Nothing removes entries yet. Doing so safely needs two facts no directory
-listing gives, whether a running build uses an entry and when it was last
-wanted; `cache-ledger.md` designs the ledger that records them and the
-pruning built on it.
+Every build records the entries it uses in the cache's ledger, which pins
+them for the build and stamps their last use: the two facts removing
+entries safely needs, which no directory listing gives (`cache-ledger.md`).
 
 Everything downstream reads the manifest:
 

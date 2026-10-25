@@ -151,7 +151,7 @@ impl Bundle {
                     staging.path().display()
                 )
             })?;
-        slot.publish(staging)
+        slot.publish(staging).await
     }
 }
 

@@ -32,17 +32,43 @@
 //! ([`RecordedFile`]), which `ready` checks: outputs are not synced to disk
 //! before the record is, so after a power loss a record can outlive the
 //! contents of a file it names.
+//!
+//! # With a ledger session
+//!
+//! A cache [`with_session`](Cache::with_session) runs the same protocol
+//! through the session's ledger (docs/design/cache-ledger.md), here and
+//! nowhere else, so consumers never see it:
+//!
+//! 1. the entry is looked up first, which pins it for the session. Only an
+//!    entry whose row is live is checked with no lock; one being removed
+//!    is waited for, saying so once; any other goes to the lock;
+//! 2. under the lock, the ledger rechecks with `ready`'s verdict and the
+//!    entry's size: a complete entry is used, and adopted if no row
+//!    tracked it, while an incomplete one becomes this session's to build;
+//! 3. completing the entry ([`Slot::publish`], [`Slot::commit`]) registers
+//!    it, live and sized, before the lock is released.
+//!
+//! An entry used [`Usage::Copied`] is unpinned as soon as it has been copied
+//! out or published; one used [`Usage::InPlace`] stays pinned until the
+//! session ends. A disabled session has no opinion, and the protocol runs
+//! as without one.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use super::lock::FileLock;
 use super::{Cache, EntryId, Tag};
+use crate::ledger::{Lookup, Recheck, Session};
+
+/// How often a request retries an entry another rene is removing.
+const REMOVAL_POLL: Duration = Duration::from_millis(100);
 
 /// How a consumer uses an entry once it has it, which says how long the
-/// entry must outlive the request. Nothing removes entries yet; this is the
-/// contract whatever reclaims space must honor.
+/// entry must outlive the request: how long the session pins it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Usage {
     /// Read in place for the rest of the build (sources, a runtime bake).
@@ -79,6 +105,10 @@ pub enum Acquired<T> {
 pub struct Slot {
     dir: PathBuf,
     lock: FileLock,
+    /// The entry's id and usage, for the session to register it.
+    id: EntryId,
+    usage: Usage,
+    session: Option<Rc<Session>>,
 }
 
 /// A private directory an entry is staged in, deleted when dropped unless
@@ -130,27 +160,96 @@ impl Cache {
         mut ready: impl FnMut(&Path) -> Option<T>,
     ) -> Result<Acquired<T>, String> {
         let dir = self.entry(&request.id);
-        if let Some(found) = ready(&dir) {
-            return Ok(Acquired::Ready(found));
+        let session = self.session().filter(|session| session.enabled());
+        let id = &request.id;
+        // One message per request for each wait, however often it loops.
+        let (said_locked, said_removing) = (Cell::new(false), Cell::new(false));
+        let removing = || {
+            if !said_removing.replace(true) {
+                (request.notify)(&format!(
+                    "waiting for another rene to finish removing `{id}` from the cache"
+                ));
+            }
+        };
+        loop {
+            let lookup = match session {
+                Some(session) => session.lookup(id).await,
+                None => None,
+            };
+            match lookup {
+                Some(Lookup::Wait) => {
+                    removing();
+                    compio::runtime::time::sleep(REMOVAL_POLL).await;
+                    continue;
+                }
+                Some(Lookup::Build) => {}
+                Some(Lookup::Live) | None => {
+                    if let Some(found) = ready(&dir) {
+                        self.done(request).await;
+                        return Ok(Acquired::Ready(found));
+                    }
+                }
+            }
+            let lock = self.lock(request, &said_locked).await?;
+            // Whoever held the lock may have just completed the entry.
+            let found = ready(&dir);
+            let recheck = match session {
+                Some(session) => {
+                    let size = found.as_ref().map(|_| super::dir_size(&dir));
+                    session.recheck(id, size).await
+                }
+                None => None,
+            };
+            match (recheck, found) {
+                (Some(Recheck::Wait), _) => {
+                    drop(lock);
+                    removing();
+                    compio::runtime::time::sleep(REMOVAL_POLL).await;
+                }
+                (Some(Recheck::Live) | None, Some(found)) => {
+                    drop(lock);
+                    self.done(request).await;
+                    return Ok(Acquired::Ready(found));
+                }
+                _ => {
+                    return Ok(Acquired::Build(Slot {
+                        dir,
+                        lock,
+                        id: id.clone(),
+                        usage: request.usage,
+                        session: self.session.clone(),
+                    }));
+                }
+            }
         }
+    }
+
+    /// Take the lock of the entry `request` names, saying once per request
+    /// that it waits for the rene holding it.
+    async fn lock(&self, request: &Request<'_>, said: &Cell<bool>) -> Result<FileLock, String> {
         let lock_path = self.lock_path(&request.id);
         let kind_dir = lock_path.parent().expect("a lock file lies in its kind");
         std::fs::create_dir_all(kind_dir)
             .map_err(|e| format!("cannot create `{}`: {e}", kind_dir.display()))?;
-        let lock = FileLock::lock(&lock_path, |path| {
-            (request.notify)(&format!(
-                "waiting for another rene to finish {} (lock `{}`)",
-                request.what,
-                path.display()
-            ))
+        FileLock::lock(&lock_path, |path| {
+            if !said.replace(true) {
+                (request.notify)(&format!(
+                    "waiting for another rene to finish {} (lock `{}`)",
+                    request.what,
+                    path.display()
+                ));
+            }
         })
         .await
-        .map_err(|e| format!("cannot lock `{}`: {e}", lock_path.display()))?;
-        // Whoever held the lock may have just completed the entry.
-        if let Some(found) = ready(&dir) {
-            return Ok(Acquired::Ready(found));
+        .map_err(|e| format!("cannot lock `{}`: {e}", lock_path.display()))
+    }
+
+    /// The request has the entry it asked for: unpin it if it was copied
+    /// out.
+    async fn done(&self, request: &Request<'_>) {
+        if let (Some(session), Usage::Copied) = (self.session(), request.usage) {
+            session.unpin(&request.id).await;
         }
-        Ok(Acquired::Build(Slot { dir, lock }))
     }
 }
 
@@ -175,14 +274,13 @@ impl Slot {
     }
 
     /// Move the complete `staging` into place, replacing whatever stale
-    /// directory the entry held, and release the lock. Returns the entry's
-    /// directory.
-    pub fn publish(self, mut staging: Staging) -> Result<PathBuf, String> {
+    /// directory the entry held, register the entry, and release the lock.
+    /// Returns the entry's directory.
+    pub async fn publish(self, mut staging: Staging) -> Result<PathBuf, String> {
         let stale = discard(&self.dir)?;
         super::publish_dir(&staging.path, &self.dir)?;
         staging.published = true;
-        let Slot { dir, lock } = self;
-        drop(lock);
+        let dir = self.complete().await;
         delete(stale);
         Ok(dir)
     }
@@ -197,11 +295,31 @@ impl Slot {
     }
 
     /// Complete an entry built in place: write its `marker` file atomically,
-    /// after everything else, and release the lock. Returns the entry's
-    /// directory.
-    pub fn commit(self, marker: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+    /// after everything else, register the entry, and release the lock.
+    /// Returns the entry's directory.
+    pub async fn commit(self, marker: &str, bytes: &[u8]) -> Result<PathBuf, String> {
         super::write_atomically(&self.dir.join(marker), bytes)?;
-        Ok(self.dir)
+        Ok(self.complete().await)
+    }
+
+    /// The entry is complete on disk: register it, live and sized, then
+    /// release the lock, and unpin it if it is not read in place.
+    async fn complete(self) -> PathBuf {
+        let Slot {
+            dir,
+            lock,
+            id,
+            usage,
+            session,
+        } = self;
+        if let Some(session) = session.filter(|session| session.enabled()) {
+            session.register(&id, super::dir_size(&dir)).await;
+            drop(lock);
+            if usage == Usage::Copied {
+                session.unpin(&id).await;
+            }
+        }
+        dir
     }
 }
 
@@ -287,7 +405,9 @@ mod tests {
         let _held = FileLock::try_lock(&cache.lock_path(&id)).unwrap().unwrap();
 
         let (tx, rx) = std::sync::mpsc::channel();
+        let root = cache.root().to_owned();
         std::thread::spawn(move || {
+            let cache = Cache::at(root).unwrap();
             let notified = Cell::new(false);
             let notify = |_: &str| notified.set(true);
             let acquired = block_on(cache.acquire(&request(&notify), marked)).unwrap();
@@ -314,8 +434,9 @@ mod tests {
 
         let (tx, rx) = std::sync::mpsc::channel();
         let waiter = {
-            let cache = cache.clone();
+            let root = cache.root().to_owned();
             std::thread::spawn(move || {
+                let cache = Cache::at(root).unwrap();
                 let messages = std::cell::RefCell::new(Vec::new());
                 let notify = |msg: &str| {
                     messages.borrow_mut().push(msg.to_owned());
@@ -332,7 +453,7 @@ mod tests {
         let staging = slot.stage().unwrap();
         std::fs::write(staging.path().join("marker"), "built").unwrap();
         assert!(!waiter.is_finished());
-        slot.publish(staging).unwrap();
+        block_on(slot.publish(staging)).unwrap();
 
         let (found, messages) = waiter.join().unwrap();
         assert_eq!(found, "built");
@@ -363,7 +484,7 @@ mod tests {
 
         let staging = slot.stage().unwrap();
         std::fs::write(staging.path().join("marker"), "built").unwrap();
-        assert_eq!(slot.publish(staging).unwrap(), dir);
+        assert_eq!(block_on(slot.publish(staging)).unwrap(), dir);
         assert_eq!(marked(&dir).as_deref(), Some("built"));
         assert!(!dir.join("half").exists());
         assert_eq!(kind_dir(&cache), ["key", "key.lock"]);
@@ -414,10 +535,61 @@ mod tests {
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
         std::fs::write(dir.join("artifact"), "").unwrap();
         assert!(marked(&dir).is_none());
-        assert_eq!(slot.commit("marker", b"baked").unwrap(), dir);
+        assert_eq!(block_on(slot.commit("marker", b"baked")).unwrap(), dir);
 
         let acquired = block_on(cache.acquire(&request(&|_| {}), marked)).unwrap();
         assert!(matches!(acquired, Acquired::Ready(found) if found == "baked"));
         assert_eq!(kind_dir(&cache), ["key", "key.lock"]);
+    }
+
+    /// With a session, every entry the cache hands out is recorded: what is
+    /// built is registered live at its size, entries read in place stay
+    /// pinned, and copied ones are unpinned once copied or published.
+    #[test]
+    fn a_session_records_the_entries_it_uses() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bare = Cache::at(tmp.path()).unwrap();
+        block_on(async {
+            let session = Rc::new(Session::start(&bare).await);
+            let cache = bare.clone().with_session(session.clone());
+            let [sources, built, restored] = [
+                (crate::cache::kind::CORE_SRC, "sources", Usage::InPlace),
+                (crate::cache::kind::DEPS, "built", Usage::Copied),
+                (crate::cache::kind::DEPS, "restored", Usage::Copied),
+            ]
+            .map(|(kind, key, usage)| Request {
+                id: EntryId::new(kind, key),
+                usage,
+                what: "testing",
+                notify: &|_| {},
+            });
+            for request in [&sources, &built] {
+                let Acquired::Build(slot) = cache.acquire(request, marked).await.unwrap() else {
+                    panic!("an absent entry is ready");
+                };
+                let staging = slot.stage().unwrap();
+                std::fs::write(staging.path().join("marker"), "12345").unwrap();
+                slot.publish(staging).await.unwrap();
+            }
+            // Completed without the ledger: adopted, at its size.
+            let dir = cache.entry(&restored.id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("marker"), "123").unwrap();
+            let acquired = cache.acquire(&restored, marked).await.unwrap();
+            assert!(matches!(acquired, Acquired::Ready(found) if found == "123"));
+
+            let snapshot = session.snapshot().await.unwrap();
+            let sizes: Vec<u64> = [&sources, &built, &restored]
+                .map(|request| &snapshot.entries[&request.id])
+                .iter()
+                .map(|entry| {
+                    assert_eq!(entry.state, crate::ledger::State::Live);
+                    entry.size
+                })
+                .collect();
+            assert_eq!(sizes, [5, 5, 3]);
+            let pinned: Vec<&EntryId> = snapshot.pins.iter().map(|(_, id)| id).collect();
+            assert_eq!(pinned, [&sources.id]);
+        });
     }
 }

@@ -62,8 +62,9 @@ lives in a per-user cache: `$XDG_CACHE_HOME/rene` (or `~/.cache/rene`) on
 Linux, `~/Library/Caches/rene` on macOS, and `%LOCALAPPDATA%\rene` on
 Windows. Set `RENE_CACHE_DIR` to use another directory; the lit suites point
 it at `build/tests/integration/test/rene-cache`. Entries are built under a
-file lock (a second rene waits and says so) and are safe to delete while no
-rene runs. `rene clean` does not touch the cache.
+file lock (a second rene waits and says so), recorded in a ledger (`ledger/`
+and `sessions/` under the cache root; see docs/design/cache-ledger.md), and
+safe to delete while no rene runs. `rene clean` does not touch the cache.
 
 `rene` shells out to `rrc`, `cargo`, and `rustc`; set `REUSSIR_RRC`,
 `REUSSIR_CARGO`, or `REUSSIR_RUSTC` to pin specific binaries (otherwise

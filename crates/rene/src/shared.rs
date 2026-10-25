@@ -180,8 +180,8 @@ impl Publication {
     /// Publish the local build, with its source graph `sources`, as the
     /// claimed entry. Best effort: a failure only warns, since the build
     /// itself succeeded.
-    pub fn publish(self, sources: &[SourceFile]) {
-        if let Err(e) = publish(self.slot, &self.outputs, sources) {
+    pub async fn publish(self, sources: &[SourceFile]) {
+        if let Err(e) = publish(self.slot, &self.outputs, sources).await {
             tracing::warn!("cannot share the build through the cache: {e}");
         }
     }
@@ -221,7 +221,7 @@ fn restore(entry: &Path, deps_dir: &Path) -> Option<Result<Vec<SourceFile>, Stri
 
 /// Stage `outputs` and their record, then publish them as the slot's
 /// entry.
-fn publish(slot: Slot, outputs: &[PathBuf], sources: &[SourceFile]) -> Result<(), String> {
+async fn publish(slot: Slot, outputs: &[PathBuf], sources: &[SourceFile]) -> Result<(), String> {
     let staging = slot.stage()?;
     let mut files = Vec::new();
     for output in outputs {
@@ -239,7 +239,7 @@ fn publish(slot: Slot, outputs: &[PathBuf], sources: &[SourceFile]) -> Result<()
     };
     let record = serde_json::to_string(&record).map_err(|e| e.to_string())?;
     cache::write_atomically(&staging.path().join(RECORD), record.as_bytes())?;
-    slot.publish(staging)?;
+    slot.publish(staging).await?;
     Ok(())
 }
 
@@ -293,7 +293,7 @@ mod tests {
         let cache = Cache::at(tmp.path().join("cache")).unwrap();
         let first = tmp.path().join("first");
         let sources = vec![source(&tmp.path().join("lib.rr"))];
-        publish(slot(&cache, "k"), &outputs_in(&first), &sources).unwrap();
+        block_on(publish(slot(&cache, "k"), &outputs_in(&first), &sources)).unwrap();
 
         let second = tmp.path().join("second");
         std::fs::create_dir_all(&second).unwrap();
@@ -317,13 +317,13 @@ mod tests {
         let cache = Cache::at(tmp.path().join("cache")).unwrap();
         let build = tmp.path().join("build");
         let entry = cache.entry(&EntryId::new(cache::kind::DEPS, "k"));
-        publish(slot(&cache, "k"), &outputs_in(&build), &[]).unwrap();
+        block_on(publish(slot(&cache, "k"), &outputs_in(&build), &[])).unwrap();
         std::fs::write(entry.join("libcore.a"), "arch").unwrap();
         assert_eq!(restore(&entry, &build), None);
         std::fs::remove_file(entry.join("core.rri")).unwrap();
         assert_eq!(restore(&entry, &build), None);
 
-        publish(slot(&cache, "k"), &outputs_in(&build), &[]).unwrap();
+        block_on(publish(slot(&cache, "k"), &outputs_in(&build), &[])).unwrap();
         assert_eq!(restore(&entry, &build), Some(Ok(Vec::new())));
     }
 
@@ -345,7 +345,7 @@ mod tests {
         });
         outputs_in(&build);
         std::fs::write(build.join("libcore.a.token-reuse.json"), "stale").unwrap();
-        publish(slot(&cache, "k"), &outputs(&commands), &[]).unwrap();
+        block_on(publish(slot(&cache, "k"), &outputs(&commands), &[])).unwrap();
 
         let entry = cache.entry(&EntryId::new(cache::kind::DEPS, "k"));
         let mut names: Vec<String> = std::fs::read_dir(&entry)

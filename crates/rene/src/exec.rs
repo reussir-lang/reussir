@@ -228,7 +228,7 @@ async fn build_node(
     }
     fresh::record_dep(graph, name, &ctx, rt, &sources)?;
     if let Some(publication) = publication {
-        publication.publish(&sources);
+        publication.publish(&sources).await;
     }
     bar.finish_and_clear();
     progress.remove(&bar);

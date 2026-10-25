@@ -720,6 +720,80 @@ fn bundled_std_is_compiled_once_for_every_package() {
     assert!(plan.contains("std="), "{plan}");
 }
 
+/// The cache ledger as an in-process session sees it, after reaping.
+#[cfg(unix)]
+fn ledger(cache: &Path) -> rene::ledger::Snapshot {
+    let cache = rene::cache::Cache::at(cache).unwrap();
+    compio::runtime::Runtime::new().unwrap().block_on(async {
+        let session = rene::ledger::Session::start(&cache).await;
+        assert!(session.enabled());
+        session.snapshot().await.unwrap()
+    })
+}
+
+/// The ledger records every entry a build used, of every kind: one live,
+/// sized row each, and once the build is over, no pin and no session.
+#[cfg(unix)]
+#[test]
+fn the_ledger_records_the_entries_a_build_used() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let manifest = std_package(&tmp, "demo");
+    let out = fakes.rene(&["build"], &manifest, &tmp.join("reussir-build"));
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+
+    let snapshot = ledger(&fakes.cache);
+    let kinds: Vec<&str> = snapshot.entries.keys().map(|id| id.kind).collect();
+    // core's and std's compiled packages are two `deps` entries.
+    assert_eq!(
+        kinds,
+        ["core-src", "deps", "deps", "rt", "std-src"],
+        "{snapshot:#?}"
+    );
+    for entry in snapshot.entries.values() {
+        assert_eq!(entry.state, rene::ledger::State::Live);
+        assert!(entry.size > 0 && entry.last_used > 0, "{entry:?}");
+    }
+    let sizes: u64 = snapshot.entries.values().map(|entry| entry.size).sum();
+    assert_eq!(snapshot.total, sizes);
+    assert!(snapshot.pins.is_empty(), "{snapshot:#?}");
+    // Only the inspecting session itself.
+    assert_eq!(snapshot.sessions.len(), 1, "{snapshot:#?}");
+}
+
+/// A cache filled while the ledger was unusable has no rows. Builds that
+/// can use the ledger again adopt its entries as they need them, without
+/// baking or compiling anything again.
+#[cfg(unix)]
+#[test]
+fn entries_completed_without_the_ledger_are_adopted() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let manifest = executable_package(&tmp, "demo");
+    let ledger_dir = fakes.cache.join(rene::ledger::LEDGER_DIR);
+    std::fs::create_dir_all(&fakes.cache).unwrap();
+    std::fs::write(&ledger_dir, "not a database").unwrap();
+    let out = fakes.rene(&["build"], &manifest, &tmp.join("first"));
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let warnings = stderr(&out).matches("without the cache ledger").count();
+    assert_eq!(warnings, 1, "{}", stderr(&out));
+    let core_compiles = || fakes.compiles().len() - fakes.package_compiles().len();
+    assert_eq!(core_compiles(), 2);
+
+    std::fs::remove_file(&ledger_dir).unwrap();
+    let out = fakes.rene(&["build"], &manifest, &tmp.join("second"));
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(!stderr(&out).contains("ledger"), "{}", stderr(&out));
+    assert_eq!(fakes.runs("cargo"), 1, "the bake was rebuilt");
+    assert_eq!(core_compiles(), 2, "core was compiled again");
+    let snapshot = ledger(&fakes.cache);
+    let kinds: Vec<&str> = snapshot.entries.keys().map(|id| id.kind).collect();
+    assert_eq!(kinds, ["core-src", "deps", "rt"], "{snapshot:#?}");
+    assert!(snapshot.entries.values().all(|entry| entry.size > 0));
+}
+
 /// Two renes needing the same bake and the same core at once run cargo once
 /// and compile core once: the second waits for the first's bake, says so
 /// once, and then shares the bake and core through the cache.

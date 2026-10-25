@@ -23,6 +23,7 @@ use super::LEDGER_DIR;
 use super::view::{Move, View};
 use crate::cache::Cache;
 
+#[derive(Debug)]
 pub(super) struct Store {
     path: PathBuf,
     runtime: Runtime,

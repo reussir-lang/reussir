@@ -510,7 +510,7 @@ async fn bake(
         artifacts,
     };
     let json = serde_json::to_string(&record).map_err(|e| e.to_string())?;
-    slot.commit(RECORD, json.as_bytes())?;
+    slot.commit(RECORD, json.as_bytes()).await?;
     tracing::debug!(staticlib = %record.artifacts.staticlib.display(), "reussir-rt ready");
     Ok(record.artifacts)
 }

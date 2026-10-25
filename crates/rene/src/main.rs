@@ -17,20 +17,23 @@
 //! JSON; `rene clean` deletes the build directory unless another instance
 //! holds it. The bundled libraries, the runtime bake, and their compiled
 //! artifacts live in a shared per-user cache (see `rene::cache`), which
-//! `clean` leaves alone.
+//! `clean` leaves alone; each build records the entries it uses in the
+//! cache's ledger (`rene::ledger`).
 //!
 //! Progress goes to stderr via `tracing`; stdout carries only the final
 //! machine-readable listing. Exit 0 on success, 1 on a failed command, 2 on
 //! a usage error.
 
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::rc::Rc;
 
 use palc::Parser;
 
 use rene::cache::Cache;
 use rene::db::{self, BuildDir, CleanOutcome};
+use rene::ledger::Session;
 use rene::shared::Shared;
 use rene::{bundled, compile, deps, exec, fresh, manifest, new, plan, pool, resolve, rt};
 
@@ -336,7 +339,7 @@ fn resolve_build_dir(location: &Location) -> Result<PathBuf, String> {
     let manifest = locate_manifest(&location.manifest_path)?;
     Ok(manifest
         .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
+        .unwrap_or_else(|| Path::new("."))
         .join(BUILD_DIR))
 }
 
@@ -387,7 +390,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // a feasibility check; see `resolve`). A dependency-less package is a
     // one-node graph through the same machinery. The bundled packages it
     // uses come from the per-user cache.
-    let cache = Cache::locate(&root)?;
+    let cache = open_cache(&root).await?;
     let graph = bundled::load_graph(&cache, &loaded).await?;
     if graph.nodes.len() > 1 {
         let solution = resolve::check(&graph)?;
@@ -560,7 +563,9 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), String> {
     // The dependency-graph sections, on demand. One load serves all three;
     // `--solved` additionally requires the feasibility check to hold.
     if args.solved || args.graph || args.commands {
-        let graph = bundled::load_graph(&Cache::locate(&root)?, &loaded).await?;
+        // Held for the sections below, which read the bundled sources.
+        let cache = open_cache(&root).await?;
+        let graph = bundled::load_graph(&cache, &loaded).await?;
         if args.solved {
             let solution = resolve::check(&graph)?;
             report["resolution"] = solution
@@ -642,7 +647,15 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn pending_clean(root: &std::path::Path) -> String {
+/// The per-user cache for a build in `root`, with a session of the cache
+/// ledger that pins every entry the build uses until it ends.
+async fn open_cache(root: &Path) -> Result<Cache, String> {
+    let cache = Cache::locate(root)?;
+    let session = Session::start(&cache).await;
+    Ok(cache.with_session(Rc::new(session)))
+}
+
+fn pending_clean(root: &Path) -> String {
     format!(
         "build directory `{}` has a pending or interrupted clean; \
          run `rene clean` first",

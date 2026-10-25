@@ -169,6 +169,13 @@
   for every package that asks for it. `bundled` is exclusive with `path`,
   and naming a package rene does not bundle is a manifest error. The
   bundled libraries are also the package names `rrc --builtin` reserves.
+- `rene` records which build uses which entry of its per-user cache, and
+  when each entry was last wanted, in a ledger inside the cache (a TurboKV
+  database at `<cache>/ledger`, plus one OS lock per running rene under
+  `<cache>/sessions/`): the groundwork for removing old entries safely; see
+  docs/design/cache-ledger.md. A complete entry the ledger does not know
+  is adopted, not rebuilt. A ledger that cannot be used disables itself
+  with one warning, and the build goes on as before.
 
 ## 0.1.0
 
