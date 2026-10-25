@@ -4138,9 +4138,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// `floordivsi`/`floormodsi(T, T) -> T`, `absi(T) -> Nat`, and
     /// `trunci_overflow(T) -> (U, bool)` for a fixed-width integer `U`, the
     /// optional second type argument, `sitofp(T) -> f64`,
-    /// `limb_count(T) -> u64`, `limb(T, u64) -> u64`, and `fptosi(f64) ->
-    /// Int`, which takes no type argument. A `T` this check cannot see yet is
-    /// left to monomorphization, which rejects anything but `Nat` and `Int`.
+    /// `limb_count(T) -> u64`, `limb(T, u64) -> u64`, `fptosi(f64) -> Int`,
+    /// which takes no type argument, the Lean divisions `divsi_lean`/
+    /// `remsi_lean`/`edivsi_lean`/`emodsi_lean`/`floordivsi_lean`/
+    /// `floormodsi_lean`/`divsi_exact_lean(T, T) -> T`, and
+    /// `floormod2expi(T, u64) -> T`. A `T` this check cannot see yet is left
+    /// to monomorphization, which rejects anything but `Nat` and `Int`.
     fn infer_bigint_intrinsic(&mut self, fc: &surface::FuncCall, span: Option<Span>) -> Expr<'tcx> {
         use crate::intrinsic::{BigIntFn, IntrinsicOp};
         use crate::semi::ty::{BigIntTy, IntTy};
@@ -4201,6 +4204,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             BigIntFn::Fptosi => (vec![f64_ty], int),
             BigIntFn::LimbCount => (vec![int], u64_ty),
             BigIntFn::Limb => (vec![int, u64_ty], u64_ty),
+            BigIntFn::DivsiLean
+            | BigIntFn::RemsiLean
+            | BigIntFn::EdivsiLean
+            | BigIntFn::EmodsiLean
+            | BigIntFn::FloordivsiLean
+            | BigIntFn::FloormodsiLean
+            | BigIntFn::DivsiExactLean => (vec![int, int], int),
+            BigIntFn::Floormod2expi => (vec![int, u64_ty], int),
         };
         if fc.args.len() != params.len() {
             self.error(

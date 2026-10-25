@@ -1,0 +1,122 @@
+// `floormod2expi(x, amount)` reduces a `Nat` or an `Int` modulo two to the
+// power `amount`, rounded toward negative infinity: the low `amount` bits of
+// the infinite two's complement, never negative. Immediates and heap values,
+// amounts on both sides of the immediate width and the saturated largest one,
+// and a cross-check against `floormodsi` by the power itself. The driver
+// supplies the operands, so the runtime paths are taken; constant operands fold
+// to the same results.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri --emit mlir -o - | %FileCheck %s
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/bigint_floormod2exp.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+fn int(x : i64) -> Int { x as Int }
+
+fn nat(x : u64) -> Nat { x as Nat }
+
+fn digit(ok : bool) -> i64 { if ok { 1 } else { 0 } }
+
+fn low_nat(x : Nat, amount : u64) -> Nat { core::intrinsic::bigint::floormod2expi(x, amount) }
+
+fn low_int(x : Int, amount : u64) -> Int { core::intrinsic::bigint::floormod2expi(x, amount) }
+
+// Immediate `Nat`s: an amount of zero, amounts within the value, and amounts
+// past the immediate width up to the largest one.
+fn nat_small(one : u64, all : u64) -> bool {
+    low_nat(nat(13 * one), 2 * one) == 1 && low_nat(nat(13 * one), 0 * one) == 0
+        && low_nat(nat(13 * one), 4 * one) == 13 && low_nat(nat(13 * one), 62 * one) == 13
+        && low_nat(nat(13 * one), 100 * one) == 13 && low_nat(nat(13 * one), all) == 13
+}
+
+// Negative immediates: the remainder is the power minus the magnitude's
+// remainder, which leaves the immediate range from 62 bits on.
+fn int_small(one : u64, all : u64) -> bool {
+    let m1 = int(-1) * (one as Int);
+    let m13 = int(-13) * (one as Int);
+    low_int(m13, 2 * one) == 3 && low_int(m1, 0 * one) == 0
+        && low_int(m1, 61 * one) == 2305843009213693951
+        && low_int(m1, 62 * one) == 4611686018427387903
+        && low_int(m1, 64 * one) == 18446744073709551615
+        && low_int(m13, 100 * one) == 1267650600228229401496703205363
+        && low_int(int(13) * (one as Int), all) == 13
+}
+
+// Heap values with amounts that keep the remainder immediate.
+fn heap_narrow(one : u64, big : Int) -> bool {
+    let positive = big + 13;
+    let negative = int(0) - positive;
+    let wide = big + core::intrinsic::bigint::ipowi(int(2), 60 * one) + 5;
+    low_int(positive, 4 * one) == 13 && low_int(positive, 61 * one) == 13
+        && low_int(negative, 4 * one) == 3 && low_int(negative, 61 * one) == 2305843009213693939
+        && low_int(wide, 61 * one) == 1152921504606846981
+        && low_nat(core::intrinsic::bigint::absi(big + 13), 4 * one) == 13
+}
+
+// Heap values with amounts past the immediate width, the largest one among
+// them.
+fn heap_wide(one : u64, all : u64, big : Int) -> bool {
+    let positive = big + 13;
+    let negative = int(0) - positive;
+    let wide = big + core::intrinsic::bigint::ipowi(int(2), 70 * one) + 5;
+    low_int(positive, 64 * one) == 13 && low_int(positive, 100 * one) == 13
+        && low_int(positive, 101 * one) == 1267650600228229401496703205389
+        && low_int(positive, all) == 1267650600228229401496703205389
+        && low_int(wide, 80 * one) == 1180591620717411303429
+        && low_int(negative, 64 * one) == 18446744073709551603
+        && low_int(int(0) - big, 101 * one) == 1267650600228229401496703205376
+        && low_int(int(0) - big, 100 * one) == 0
+}
+
+// Constant operands, which the dialect folds.
+fn folded() -> bool {
+    let c : Int = -13;
+    let h : Nat = 1267650600228229401496703205389;
+    low_int(c, 2) == 3 && low_int(c, 100) == 1267650600228229401496703205363 && low_nat(h, 64) == 13
+        && low_nat(h, 0) == 0
+}
+
+// `floormod2expi(x, k)` against `floormodsi(x, 2^k)` for every `k` up to `stop`.
+// The base `two` is unknown to the compiler, so the division is not rewritten
+// into the reduction it checks.
+fn agrees(x : Int, k : u64, stop : u64, two : Int) -> bool {
+    if k > stop {
+        true
+    } else {
+        let power = core::intrinsic::bigint::ipowi(two, k);
+        low_int(x, k) == core::intrinsic::bigint::floormodsi(x, power) && agrees(x, k + 1, stop, two)
+    }
+}
+
+// The same reduction of a uniquely owned heap value, step after step, through
+// `floormod2expi` and through `%` by the power.
+fn chain(x : Nat, n : u64) -> Nat { if n == 0 { x } else { chain(low_nat(x * x + 3, 90), n - 1) } }
+
+fn chain_rem(x : Nat, n : u64, power : Nat) -> Nat {
+    if n == 0 { x } else { chain_rem((x * x + 3) % power, n - 1, power) }
+}
+
+fn cross(one : u64, big : Int) -> bool {
+    let o = one as Int;
+    let two = int(2) * o;
+    let near = core::intrinsic::bigint::ipowi(int(2), 61 * one);
+    agrees(int(0) * o, 0, 130, two) && agrees(int(13) * o, 0, 130, two)
+        && agrees(int(-1) * o, 0, 130, two) && agrees(int(-13) * o, 0, 130, two)
+        && agrees(near - 1, 0, 130, two) && agrees(near, 0, 130, two)
+        && agrees(int(0) - near, 0, 130, two) && agrees(int(-1) - near, 0, 130, two)
+        && agrees(big + 13, 0, 130, two) && agrees(int(0) - big - 13, 0, 130, two)
+        && chain(nat(5 * one), 20) == chain_rem(nat(5 * one), 20, core::intrinsic::bigint::ipowi(nat(2 * one), 90))
+}
+
+pub fn main(one : u64, all : u64) -> i64 {
+    let big = core::intrinsic::bigint::ipowi(int(2), 100 * one);
+    digit(nat_small(one, all)) + digit(int_small(one, all)) * 10 + digit(heap_narrow(one, big)) * 100
+        + digit(heap_wide(one, all, big)) * 1000 + digit(folded()) * 10000
+        + digit(cross(one, big)) * 100000
+}
+
+extern "C" trampoline "reussir_main" = main;
+
+// CHECK-DAG: rcgmp.floormod2expi {{.*}} : !rcgmp.mpz, i64

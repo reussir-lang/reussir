@@ -111,6 +111,20 @@ impl Binary {
             Binary::Xor => "rcgmp.xori",
         }
     }
+
+    /// Whether the operation is a quotient or a remainder, which takes a
+    /// [`DivisionMode`].
+    fn is_division(self) -> bool {
+        matches!(
+            self,
+            Binary::Div
+                | Binary::Rem
+                | Binary::EuclidDiv
+                | Binary::EuclidRem
+                | Binary::FloorDiv
+                | Binary::FloorRem
+        )
+    }
 }
 
 /// `<op> <lhs>, <rhs>`: consume both operands and produce one owned result.
@@ -121,6 +135,65 @@ pub fn binary<'c>(
     location: Location<'c>,
 ) -> Operation<'c> {
     OperationBuilder::new(op.name(), location)
+        .add_operands(&[lhs, rhs])
+        .add_results(&[lhs.r#type()])
+        .build()
+        .unwrap_or_else(|_| panic!("valid {}", op.name()))
+}
+
+/// How a division treats its operands, beyond the dialect's defaults (a zero
+/// divisor terminates the program; operands of either sign).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DivisionMode {
+    /// `divzero<lean>`: a zero divisor gives the quotient zero and the
+    /// remainder the dividend, as Lean's integer division does.
+    pub lean: bool,
+    /// `nonnegative`: both operands are nonnegative, as `Nat`s are, so
+    /// immediates divide unsigned and every rounding agrees.
+    pub nonnegative: bool,
+}
+
+impl DivisionMode {
+    /// The attributes setting this mode on a division, after `exact` for an
+    /// exact quotient.
+    fn attributes<'c>(
+        self,
+        context: &'c Context,
+        exact: bool,
+    ) -> Vec<(Identifier<'c>, Attribute<'c>)> {
+        let mut attributes = Vec::new();
+        if exact {
+            attributes.push((Identifier::new(context, "exact"), Attribute::unit(context)));
+        }
+        if self.nonnegative {
+            attributes.push((
+                Identifier::new(context, "nonnegative"),
+                Attribute::unit(context),
+            ));
+        }
+        if self.lean {
+            attributes.push((
+                Identifier::new(context, "divZero"),
+                Attribute::parse(context, "#rcgmp.divzero<lean>").expect("valid #rcgmp.divzero"),
+            ));
+        }
+        attributes
+    }
+}
+
+/// `<op> <lhs>, <rhs> [nonnegative] [divzero<lean>]`: a quotient or remainder
+/// `op` in `mode`, consuming both operands.
+pub fn division<'c>(
+    context: &'c Context,
+    op: Binary,
+    lhs: Value<'c, '_>,
+    rhs: Value<'c, '_>,
+    mode: DivisionMode,
+    location: Location<'c>,
+) -> Operation<'c> {
+    assert!(op.is_division(), "{} is not a division", op.name());
+    OperationBuilder::new(op.name(), location)
+        .add_attributes(&mode.attributes(context, false))
         .add_operands(&[lhs, rhs])
         .add_results(&[lhs.r#type()])
         .build()
@@ -161,6 +234,24 @@ pub fn divsi_exact<'c>(
 ) -> Operation<'c> {
     OperationBuilder::new("rcgmp.divsi", location)
         .add_attributes(&[(Identifier::new(context, "exact"), Attribute::unit(context))])
+        .add_operands(&[lhs, rhs])
+        .add_results(&[lhs.r#type()])
+        .build()
+        .expect("valid rcgmp.divsi")
+}
+
+/// `rcgmp.divsi <lhs>, <rhs> exact [nonnegative] [divzero<lean>]`:
+/// [`divsi_exact`] in `mode`. With a Lean zero divisor, the only multiple of
+/// zero is zero, whose quotient is zero.
+pub fn exact_division<'c>(
+    context: &'c Context,
+    lhs: Value<'c, '_>,
+    rhs: Value<'c, '_>,
+    mode: DivisionMode,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("rcgmp.divsi", location)
+        .add_attributes(&mode.attributes(context, true))
         .add_operands(&[lhs, rhs])
         .add_results(&[lhs.r#type()])
         .build()
@@ -212,6 +303,10 @@ pub enum Shift {
     Left,
     /// Arithmetic: rounds toward negative infinity.
     Right,
+    /// The remainder of [`Shift::Right`], `rcgmp.floormod2expi`: the integer
+    /// modulo two to the power of the amount, the low bits of its infinite
+    /// two's complement read as a nonnegative integer.
+    FloorMod2Exp,
 }
 
 /// `<op> <value>, <amount>`: consume `value` and shift it by `amount` bits.
@@ -224,6 +319,7 @@ pub fn shift<'c>(
     let name = match op {
         Shift::Left => "rcgmp.shli",
         Shift::Right => "rcgmp.shrsi",
+        Shift::FloorMod2Exp => "rcgmp.floormod2expi",
     };
     OperationBuilder::new(name, location)
         .add_operands(&[value, amount])

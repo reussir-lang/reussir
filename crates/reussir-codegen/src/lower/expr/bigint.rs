@@ -23,7 +23,7 @@ use reussir_backend::builders;
 use reussir_backend::melior::dialect::arith::{self, CmpiPredicate};
 use reussir_backend::melior::ir::attribute::{Attribute, IntegerAttribute};
 use reussir_backend::melior::ir::{Block, BlockLike, Region, RegionLike, Type, Value, ValueLike};
-use reussir_backend::rcgmp::{self, ArmKind, Binary, Predicate, Shift, Unary};
+use reussir_backend::rcgmp::{self, ArmKind, Binary, DivisionMode, Predicate, Shift, Unary};
 use reussir_core::full::mir::{self, DecisionTree, Expr, ExprKind};
 use reussir_core::full::ownership::subtrees;
 use reussir_core::intrinsic::BigIntFn;
@@ -124,7 +124,8 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     /// Integer arithmetic, consuming both operands. Subtraction on `Nat` is
     /// truncated at zero, so the type stays closed under it. Division and
     /// remainder truncate, as they do for fixed-width integers, and a zero
-    /// divisor terminates the program. Bitwise operations act on the infinite
+    /// divisor terminates the program; on `Nat` they are `nonnegative`, so
+    /// immediates divide unsigned. Bitwise operations act on the infinite
     /// two's complement, so `>>` rounds toward negative infinity.
     pub(super) fn bigint_arith<'b>(
         &self,
@@ -139,6 +140,21 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             (ArithOp::Sub, BigIntTy::Nat) => Binary::Monus,
             (ArithOp::Sub, BigIntTy::Int) => Binary::Sub,
             (ArithOp::Mul, _) => Binary::Mul,
+            (ArithOp::Div | ArithOp::Mod, BigIntTy::Nat) => {
+                let division = if matches!(op, ArithOp::Div) {
+                    Binary::Div
+                } else {
+                    Binary::Rem
+                };
+                let mode = DivisionMode {
+                    nonnegative: true,
+                    ..DivisionMode::default()
+                };
+                return Ok(self.append(
+                    block,
+                    rcgmp::division(self.context, division, lv, rv, mode, self.loc()),
+                ));
+            }
             (ArithOp::Div, _) => Binary::Div,
             (ArithOp::Mod, _) => Binary::Rem,
             (ArithOp::BitAnd, _) => Binary::And,
@@ -220,7 +236,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     /// A `core::intrinsic::bigint` call. The borrowing operations leave their
     /// integer operand with the caller, which releases it afterwards when
     /// this was its last use, through the temporary recorded here; the others
-    /// consume their integer operands.
+    /// consume their integer operands. Divisions of `Nat`s are `nonnegative`.
     pub(super) fn lower_bigint_intrinsic<'b>(
         &self,
         block: &'b Block<'c>,
@@ -242,16 +258,30 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         }
         let loc = self.loc();
         let binary = |op| Ok(self.append(block, rcgmp::binary(op, operands[0], operands[1], loc)));
+        let nonnegative = args
+            .first()
+            .and_then(|a| a.ty.bigint())
+            .is_some_and(|(int, _)| int == BigIntTy::Nat);
+        let mode = |lean| DivisionMode { lean, nonnegative };
+        let divide = |op, lean| {
+            Ok(self.append(
+                block,
+                rcgmp::division(self.context, op, operands[0], operands[1], mode(lean), loc),
+            ))
+        };
+        let divide_exact = |lean| {
+            Ok(self.append(
+                block,
+                rcgmp::exact_division(self.context, operands[0], operands[1], mode(lean), loc),
+            ))
+        };
         match func {
             BigIntFn::Gcdi => binary(Binary::Gcd),
-            BigIntFn::Edivsi => binary(Binary::EuclidDiv),
-            BigIntFn::Emodsi => binary(Binary::EuclidRem),
-            BigIntFn::Floordivsi => binary(Binary::FloorDiv),
-            BigIntFn::Floormodsi => binary(Binary::FloorRem),
-            BigIntFn::DivsiExact => Ok(self.append(
-                block,
-                rcgmp::divsi_exact(self.context, operands[0], operands[1], loc),
-            )),
+            BigIntFn::Edivsi => divide(Binary::EuclidDiv, false),
+            BigIntFn::Emodsi => divide(Binary::EuclidRem, false),
+            BigIntFn::Floordivsi => divide(Binary::FloorDiv, false),
+            BigIntFn::Floormodsi => divide(Binary::FloorRem, false),
+            BigIntFn::DivsiExact => divide_exact(false),
             BigIntFn::Ipowi => Ok(self.append(block, rcgmp::ipowi(operands[0], operands[1], loc))),
             BigIntFn::Absi => Ok(self.append(block, rcgmp::unary(Unary::Abs, operands[0], loc))),
             BigIntFn::Log2i => {
@@ -286,6 +316,17 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 let ty = self.tys.mlir_ty(e.ty)?;
                 Ok(self.append(block, rcgmp::limb(operands[0], index, ty, loc)))
             }
+            BigIntFn::DivsiLean => divide(Binary::Div, true),
+            BigIntFn::RemsiLean => divide(Binary::Rem, true),
+            BigIntFn::EdivsiLean => divide(Binary::EuclidDiv, true),
+            BigIntFn::EmodsiLean => divide(Binary::EuclidRem, true),
+            BigIntFn::FloordivsiLean => divide(Binary::FloorDiv, true),
+            BigIntFn::FloormodsiLean => divide(Binary::FloorRem, true),
+            BigIntFn::DivsiExactLean => divide_exact(true),
+            BigIntFn::Floormod2expi => Ok(self.append(
+                block,
+                rcgmp::shift(Shift::FloorMod2Exp, operands[0], operands[1], loc),
+            )),
             BigIntFn::TrunciOverflow => {
                 let TyKind::Tuple([fixed, _]) = e.ty.kind() else {
                     return err("`trunci_overflow` result is not a pair");

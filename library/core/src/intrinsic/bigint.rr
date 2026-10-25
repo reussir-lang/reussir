@@ -76,3 +76,46 @@ pub fn limb_count<T: Integral>(x: T) -> u64;
 /// bits of `|x| >> (64 * i)`, so `0` from `limb_count(x)` on.
 #[lang("core::intrinsic::bigint::limb")]
 pub fn limb<T: Integral>(x: T, i: u64) -> u64;
+
+/// The quotient of `a` by `b` rounded toward zero, or `0` when `b` is zero,
+/// as Lean's `Nat.div` and `Int.tdiv` give.
+#[lang("core::intrinsic::bigint::divsi_lean")]
+pub fn divsi_lean<T: Integral>(a: T, b: T) -> T;
+
+/// The remainder of `divsi_lean(a, b)`, with the sign of `a`, or `a` when `b`
+/// is zero, as Lean's `Nat.mod` and `Int.tmod` give.
+#[lang("core::intrinsic::bigint::remsi_lean")]
+pub fn remsi_lean<T: Integral>(a: T, b: T) -> T;
+
+/// The Euclidean quotient of `a` by `b`, or `0` when `b` is zero, as Lean's
+/// `Int.ediv` gives.
+#[lang("core::intrinsic::bigint::edivsi_lean")]
+pub fn edivsi_lean<T: Integral>(a: T, b: T) -> T;
+
+/// The Euclidean remainder of `a` by `b`, never negative, or `a` when `b` is
+/// zero, as Lean's `Int.emod` gives.
+#[lang("core::intrinsic::bigint::emodsi_lean")]
+pub fn emodsi_lean<T: Integral>(a: T, b: T) -> T;
+
+/// The quotient of `a` by `b` rounded toward negative infinity, or `0` when
+/// `b` is zero, as Lean's `Int.fdiv` gives.
+#[lang("core::intrinsic::bigint::floordivsi_lean")]
+pub fn floordivsi_lean<T: Integral>(a: T, b: T) -> T;
+
+/// The remainder of `floordivsi_lean(a, b)`, with the sign of `b`, or `a` when
+/// `b` is zero, as Lean's `Int.fmod` gives.
+#[lang("core::intrinsic::bigint::floormodsi_lean")]
+pub fn floormodsi_lean<T: Integral>(a: T, b: T) -> T;
+
+/// The quotient `a / b` of an exact division: `a` must be a multiple of `b`,
+/// otherwise the result is unspecified. The only multiple of zero is `0`,
+/// whose quotient by zero is `0`, as for Lean's `Nat.divExact` and
+/// `Int.divExact`.
+#[lang("core::intrinsic::bigint::divsi_exact_lean")]
+pub fn divsi_exact_lean<T: Integral>(a: T, b: T) -> T;
+
+/// `x` modulo `2^amount`, rounded toward negative infinity: the low `amount`
+/// bits of the infinite two's complement of `x`, read as a nonnegative
+/// integer. `0` for an amount of zero.
+#[lang("core::intrinsic::bigint::floormod2expi")]
+pub fn floormod2expi<T: Integral>(x: T, amount: u64) -> T;

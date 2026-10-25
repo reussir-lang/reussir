@@ -33,9 +33,37 @@ pub fn conversions(a : Int, i : u64) -> u64 {
     core::intrinsic::bigint::limb_count(b) + core::intrinsic::bigint::limb(a, i)
 }
 
+pub fn lean(a : Int, b : Int, k : u64) -> Int {
+    core::intrinsic::bigint::divsi_lean(a, b) + core::intrinsic::bigint::remsi_lean(a, b)
+        + core::intrinsic::bigint::edivsi_lean(a, b) + core::intrinsic::bigint::emodsi_lean(a, b)
+        + core::intrinsic::bigint::floordivsi_lean(a, b) + core::intrinsic::bigint::floormodsi_lean(a, b)
+        + core::intrinsic::bigint::divsi_exact_lean(a, b) + core::intrinsic::bigint::floormod2expi(a, k)
+}
+
+// The divisions of `Nat`s are `nonnegative`, those of `Int`s above are not.
+pub fn natural(a : Nat, b : Nat) -> Nat {
+    core::intrinsic::bigint::remsi_lean(a, b) + core::intrinsic::bigint::floordivsi(a, b)
+        + core::intrinsic::bigint::divsi_exact_lean(a, b) + a / b + a % b
+}
+
 // MIR-DAG: intrinsic#bigint#edivsi#0
 // MIR-DAG: intrinsic#bigint#trunci_overflow#0
+// MIR-DAG: intrinsic#bigint#divsi_lean#0
+// MIR-DAG: intrinsic#bigint#floormod2expi#0
 
+// The `Nat` divisions first, then the Lean divisions: a pattern below without
+// `nonnegative` or `divzero` would also match one of them, and leave its
+// namesake unmatched.
+// CHECK-DAG: rcgmp.remsi {{.*}} nonnegative divzero<lean>
+// CHECK-DAG: rcgmp.floordivsi %{{[^ ]*}} %{{[^ ]*}} nonnegative :
+// CHECK-DAG: rcgmp.divsi {{.*}} exact nonnegative divzero<lean>
+// CHECK-DAG: rcgmp.divsi %{{[^ ]*}} %{{[^ ]*}} nonnegative :
+// CHECK-DAG: rcgmp.remsi %{{[^ ]*}} %{{[^ ]*}} nonnegative :
+// CHECK-DAG: rcgmp.remsi {{.*}} divzero<lean>
+// CHECK-DAG: rcgmp.emodsi {{.*}} divzero<lean>
+// CHECK-DAG: rcgmp.floordivsi {{.*}} divzero<lean>
+// CHECK-DAG: rcgmp.divsi {{.*}} exact divzero<lean>
+// CHECK-DAG: rcgmp.floormod2expi
 // CHECK-DAG: rcgmp.edivsi
 // CHECK-DAG: rcgmp.emodsi
 // CHECK-DAG: rcgmp.floordivsi

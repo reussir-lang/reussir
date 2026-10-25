@@ -618,6 +618,30 @@ pub enum BigIntFn {
     /// `limb(x, i: u64) -> u64`: limb `i` of the magnitude, least significant
     /// first, or zero past the last one.
     Limb,
+    /// `divsi_lean(a, b)`: the quotient rounded toward zero, with Lean's zero
+    /// divisor: `a / 0 = 0`.
+    DivsiLean,
+    /// `remsi_lean(a, b)`: the remainder with the sign of `a`, with Lean's
+    /// zero divisor: `a % 0 = a`.
+    RemsiLean,
+    /// `edivsi_lean(a, b)`: the Euclidean quotient; `0` for a zero divisor.
+    EdivsiLean,
+    /// `emodsi_lean(a, b)`: the Euclidean remainder; `a` for a zero divisor.
+    EmodsiLean,
+    /// `floordivsi_lean(a, b)`: the quotient rounded toward negative
+    /// infinity; `0` for a zero divisor.
+    FloordivsiLean,
+    /// `floormodsi_lean(a, b)`: the remainder with the sign of `b`; `a` for a
+    /// zero divisor.
+    FloormodsiLean,
+    /// `divsi_exact_lean(a, b)`: the quotient of an exact division; `a` must
+    /// be a multiple of `b`, and the only multiple of zero, `0`, divided by
+    /// zero is `0`.
+    DivsiExactLean,
+    /// `floormod2expi(x, amount: u64)`: `x` modulo `2^amount`, rounded toward
+    /// negative infinity: the low `amount` bits of the infinite two's
+    /// complement, read as a nonnegative integer.
+    Floormod2expi,
 }
 
 impl BigIntFn {
@@ -637,6 +661,14 @@ impl BigIntFn {
         BigIntFn::Fptosi,
         BigIntFn::LimbCount,
         BigIntFn::Limb,
+        BigIntFn::DivsiLean,
+        BigIntFn::RemsiLean,
+        BigIntFn::EdivsiLean,
+        BigIntFn::EmodsiLean,
+        BigIntFn::FloordivsiLean,
+        BigIntFn::FloormodsiLean,
+        BigIntFn::DivsiExactLean,
+        BigIntFn::Floormod2expi,
     ];
 
     /// Parse a surface / textual-IR name.
@@ -662,6 +694,14 @@ impl BigIntFn {
             BigIntFn::Fptosi => "fptosi",
             BigIntFn::LimbCount => "limb_count",
             BigIntFn::Limb => "limb",
+            BigIntFn::DivsiLean => "divsi_lean",
+            BigIntFn::RemsiLean => "remsi_lean",
+            BigIntFn::EdivsiLean => "edivsi_lean",
+            BigIntFn::EmodsiLean => "emodsi_lean",
+            BigIntFn::FloordivsiLean => "floordivsi_lean",
+            BigIntFn::FloormodsiLean => "floormodsi_lean",
+            BigIntFn::DivsiExactLean => "divsi_exact_lean",
+            BigIntFn::Floormod2expi => "floormod2expi",
         }
     }
 

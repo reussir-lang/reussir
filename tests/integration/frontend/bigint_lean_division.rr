@@ -1,0 +1,239 @@
+// Lean's integer division on `Nat` and `Int`: the `_lean` intrinsics divide
+// as their trapping namesakes, rounding toward zero, toward negative infinity,
+// or to a nonnegative remainder, but a zero divisor gives the quotient zero and
+// the remainder the dividend instead of terminating the program. The driver
+// supplies the operands, so the runtime paths are taken, on immediate and heap
+// values of every sign; constant operands fold to the same results.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri --emit mlir -o - | %FileCheck %s
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri -t llvm-ir -Oaggressive -o %t.ll
+// RUN: %FileCheck %s --check-prefix=NATDIV --input-file=%t.ll
+// RUN: %FileCheck %s --check-prefix=NATREM --input-file=%t.ll
+// RUN: %FileCheck %s --check-prefix=INTDIV --input-file=%t.ll
+// RUN: %rrc %s --package-name bigint --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/bigint_lean_division.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+fn int(x : i64) -> Int { x as Int }
+
+fn nat(x : u64) -> Nat { x as Nat }
+
+fn digit(ok : bool) -> i64 { if ok { 1 } else { 0 } }
+
+// Immediate `Nat`s, a zero divisor among them.
+fn nat_small(zero : Nat, seven : Nat) -> bool {
+    core::intrinsic::bigint::divsi_lean(seven, 2) == 3 && core::intrinsic::bigint::remsi_lean(seven, 2) == 1
+        && core::intrinsic::bigint::divsi_lean(seven, zero) == 0
+        && core::intrinsic::bigint::remsi_lean(seven, zero) == 7
+        && core::intrinsic::bigint::edivsi_lean(seven, zero) == 0
+        && core::intrinsic::bigint::emodsi_lean(seven, zero) == 7
+        && core::intrinsic::bigint::floordivsi_lean(seven, zero) == 0
+        && core::intrinsic::bigint::floormodsi_lean(seven, zero) == 7
+        && core::intrinsic::bigint::divsi_exact_lean(seven * 4, 4) == 7
+        && core::intrinsic::bigint::divsi_exact_lean(zero, zero) == 0
+}
+
+// Heap `Nat`s as dividends and divisors.
+fn nat_heap(zero : Nat, seven : Nat, big : Nat) -> bool {
+    core::intrinsic::bigint::divsi_lean(big, zero) == 0
+        && core::intrinsic::bigint::remsi_lean(big, zero) == 1267650600228229401496703205376
+        && core::intrinsic::bigint::emodsi_lean(big, zero) == 1267650600228229401496703205376
+        && core::intrinsic::bigint::floormodsi_lean(big, zero) == 1267650600228229401496703205376
+        && core::intrinsic::bigint::divsi_lean(big, 1099511627776) == 1152921504606846976
+        && core::intrinsic::bigint::remsi_lean(big + 5, 1099511627776) == 5
+        && core::intrinsic::bigint::divsi_lean(seven, big) == 0
+        && core::intrinsic::bigint::remsi_lean(seven, big) == 7
+        && core::intrinsic::bigint::divsi_exact_lean(big * 3, 3) == 1267650600228229401496703205376
+}
+
+// Truncated `Int` division of immediates: the remainder has the sign of the
+// dividend.
+fn int_truncated(zero : Int, one : Int) -> bool {
+    core::intrinsic::bigint::divsi_lean(int(-7) * one, int(2)) == -3
+        && core::intrinsic::bigint::remsi_lean(int(-7) * one, int(2)) == -1
+        && core::intrinsic::bigint::divsi_lean(int(7) * one, int(-2)) == -3
+        && core::intrinsic::bigint::remsi_lean(int(7) * one, int(-2)) == 1
+        && core::intrinsic::bigint::divsi_lean(int(-7) * one, int(-2)) == 3
+        && core::intrinsic::bigint::remsi_lean(int(-7) * one, int(-2)) == -1
+        && core::intrinsic::bigint::divsi_lean(int(-7) * one, zero) == 0
+        && core::intrinsic::bigint::remsi_lean(int(-7) * one, zero) == -7
+        && core::intrinsic::bigint::divsi_exact_lean(int(-12) * one, int(4)) == -3
+}
+
+// Euclidean `Int` division of immediates: the remainder is never negative.
+fn int_euclidean(zero : Int, one : Int) -> bool {
+    core::intrinsic::bigint::edivsi_lean(int(-7) * one, int(2)) == -4
+        && core::intrinsic::bigint::emodsi_lean(int(-7) * one, int(2)) == 1
+        && core::intrinsic::bigint::edivsi_lean(int(7) * one, int(-2)) == -3
+        && core::intrinsic::bigint::emodsi_lean(int(7) * one, int(-2)) == 1
+        && core::intrinsic::bigint::edivsi_lean(int(-7) * one, int(-2)) == 4
+        && core::intrinsic::bigint::emodsi_lean(int(-7) * one, int(-2)) == 1
+        && core::intrinsic::bigint::edivsi_lean(int(-7) * one, zero) == 0
+        && core::intrinsic::bigint::emodsi_lean(int(-7) * one, zero) == -7
+}
+
+// Floored `Int` division of immediates: the remainder has the sign of the
+// divisor.
+fn int_floored(zero : Int, one : Int) -> bool {
+    core::intrinsic::bigint::floordivsi_lean(int(-7) * one, int(2)) == -4
+        && core::intrinsic::bigint::floormodsi_lean(int(-7) * one, int(2)) == 1
+        && core::intrinsic::bigint::floordivsi_lean(int(7) * one, int(-2)) == -4
+        && core::intrinsic::bigint::floormodsi_lean(int(7) * one, int(-2)) == -1
+        && core::intrinsic::bigint::floordivsi_lean(int(-7) * one, int(-2)) == 3
+        && core::intrinsic::bigint::floormodsi_lean(int(-7) * one, int(-2)) == -1
+        && core::intrinsic::bigint::floordivsi_lean(int(-7) * one, zero) == 0
+        && core::intrinsic::bigint::floormodsi_lean(int(-7) * one, zero) == -7
+}
+
+// Heap `Int`s: a zero divisor of a heap dividend, an immediate divided by a
+// heap divisor, and a heap dividend by an immediate, in every rounding.
+fn int_heap(zero : Int, big : Int) -> bool {
+    let negative = int(0) - big;
+    let odd = negative - 1;
+    core::intrinsic::bigint::divsi_lean(negative, zero) == 0
+        && core::intrinsic::bigint::remsi_lean(negative, zero) == -1267650600228229401496703205376
+        && core::intrinsic::bigint::edivsi_lean(negative, zero) == 0
+        && core::intrinsic::bigint::emodsi_lean(negative, zero) == -1267650600228229401496703205376
+        && core::intrinsic::bigint::floordivsi_lean(negative, zero) == 0
+        && core::intrinsic::bigint::floormodsi_lean(negative, zero) == -1267650600228229401496703205376
+        && core::intrinsic::bigint::divsi_lean(int(-7), big) == 0
+        && core::intrinsic::bigint::remsi_lean(int(-7), big) == -7
+        && core::intrinsic::bigint::floordivsi_lean(int(-7), big) == -1
+        && core::intrinsic::bigint::floormodsi_lean(int(-7), big) == 1267650600228229401496703205369
+        && core::intrinsic::bigint::edivsi_lean(int(-7), negative) == 1
+        && core::intrinsic::bigint::emodsi_lean(int(-7), negative) == 1267650600228229401496703205369
+        && core::intrinsic::bigint::divsi_lean(odd, int(2)) == -633825300114114700748351602688
+        && core::intrinsic::bigint::remsi_lean(odd, int(2)) == -1
+        && core::intrinsic::bigint::floordivsi_lean(odd, int(2)) == -633825300114114700748351602689
+        && core::intrinsic::bigint::floormodsi_lean(odd, int(2)) == 1
+        && core::intrinsic::bigint::edivsi_lean(odd, int(-2)) == 633825300114114700748351602689
+        && core::intrinsic::bigint::emodsi_lean(odd, int(-2)) == 1
+        && core::intrinsic::bigint::divsi_exact_lean(negative, int(-4)) == 316912650057057350374175801344
+}
+
+// The quotient of the smallest immediate by -1 leaves the immediate range in
+// every rounding.
+fn int_minimum(one : Int) -> bool {
+    let minimum = int(-2305843009213693952) * one;
+    let m1 = int(-1) * one;
+    core::intrinsic::bigint::divsi_lean(minimum, m1) == 2305843009213693952
+        && core::intrinsic::bigint::edivsi_lean(minimum, m1) == 2305843009213693952
+        && core::intrinsic::bigint::floordivsi_lean(minimum, m1) == 2305843009213693952
+        && core::intrinsic::bigint::divsi_exact_lean(minimum, m1) == 2305843009213693952
+        && core::intrinsic::bigint::remsi_lean(minimum, m1) == 0
+        && core::intrinsic::bigint::emodsi_lean(minimum, m1) == 0
+        && core::intrinsic::bigint::floormodsi_lean(minimum, m1) == 0
+}
+
+// Heap dividends by heap divisors of every sign, and an immediate by a
+// negative heap divisor, in every rounding.
+fn int_heap_heap(one : Int) -> bool {
+    let a = (core::intrinsic::bigint::ipowi(int(2), 100) + 7) * one;
+    let b = (core::intrinsic::bigint::ipowi(int(2), 70) + 3) * one;
+    let na = int(0) - a;
+    let nb = int(0) - b;
+    let seven = int(7) * one;
+    core::intrinsic::bigint::divsi_lean(a, b) == 1073741823
+        && core::intrinsic::bigint::remsi_lean(a, b) == 1180591620714190077962
+        && core::intrinsic::bigint::edivsi_lean(a, b) == 1073741823
+        && core::intrinsic::bigint::emodsi_lean(a, b) == 1180591620714190077962
+        && core::intrinsic::bigint::floordivsi_lean(a, b) == 1073741823
+        && core::intrinsic::bigint::floormodsi_lean(a, b) == 1180591620714190077962
+        && core::intrinsic::bigint::divsi_lean(a, nb) == -1073741823
+        && core::intrinsic::bigint::remsi_lean(a, nb) == 1180591620714190077962
+        && core::intrinsic::bigint::edivsi_lean(a, nb) == -1073741823
+        && core::intrinsic::bigint::emodsi_lean(a, nb) == 1180591620714190077962
+        && core::intrinsic::bigint::floordivsi_lean(a, nb) == -1073741824
+        && core::intrinsic::bigint::floormodsi_lean(a, nb) == -3221225465
+        && core::intrinsic::bigint::divsi_lean(na, b) == -1073741823
+        && core::intrinsic::bigint::remsi_lean(na, b) == -1180591620714190077962
+        && core::intrinsic::bigint::edivsi_lean(na, b) == -1073741824
+        && core::intrinsic::bigint::emodsi_lean(na, b) == 3221225465
+        && core::intrinsic::bigint::floordivsi_lean(na, b) == -1073741824
+        && core::intrinsic::bigint::floormodsi_lean(na, b) == 3221225465
+        && core::intrinsic::bigint::divsi_lean(na, nb) == 1073741823
+        && core::intrinsic::bigint::remsi_lean(na, nb) == -1180591620714190077962
+        && core::intrinsic::bigint::edivsi_lean(na, nb) == 1073741824
+        && core::intrinsic::bigint::emodsi_lean(na, nb) == 3221225465
+        && core::intrinsic::bigint::floordivsi_lean(na, nb) == 1073741823
+        && core::intrinsic::bigint::floormodsi_lean(na, nb) == -1180591620714190077962
+        && core::intrinsic::bigint::divsi_lean(seven, nb) == 0
+        && core::intrinsic::bigint::remsi_lean(seven, nb) == 7
+        && core::intrinsic::bigint::edivsi_lean(seven, nb) == 0
+        && core::intrinsic::bigint::emodsi_lean(seven, nb) == 7
+        && core::intrinsic::bigint::floordivsi_lean(seven, nb) == -1
+        && core::intrinsic::bigint::floormodsi_lean(seven, nb) == -1180591620717411303420
+        && core::intrinsic::bigint::divsi_exact_lean(a * b, nb) == -1267650600228229401496703205383
+}
+
+// Constant operands, which the dialect folds.
+fn folded() -> bool {
+    let z : Int = 0;
+    let n : Int = -7;
+    let h : Int = -1267650600228229401496703205376;
+    let zn : Nat = 0;
+    core::intrinsic::bigint::divsi_lean(n, z) == 0 && core::intrinsic::bigint::remsi_lean(n, z) == -7
+        && core::intrinsic::bigint::edivsi_lean(n, z) == 0 && core::intrinsic::bigint::emodsi_lean(n, z) == -7
+        && core::intrinsic::bigint::floordivsi_lean(n, z) == 0
+        && core::intrinsic::bigint::floormodsi_lean(n, z) == -7
+        && core::intrinsic::bigint::remsi_lean(h, z) == -1267650600228229401496703205376
+        && core::intrinsic::bigint::emodsi_lean(n, 2) == 1
+        && core::intrinsic::bigint::floordivsi_lean(n, 2) == -4
+        && core::intrinsic::bigint::divsi_exact_lean(zn, zn) == 0
+}
+
+pub fn main(zero : i64, one : i64) -> i64 {
+    let nzero = nat(zero as u64);
+    let seven = nat((7 * one) as u64);
+    let nbig = core::intrinsic::bigint::ipowi(nat((2 * one) as u64), 100);
+    let ibig = core::intrinsic::bigint::ipowi(int(2 * one), 100);
+    digit(nat_small(nzero, seven)) + digit(nat_heap(nzero, seven, nbig)) * 10
+        + digit(int_truncated(int(zero), int(one))) * 100
+        + digit(int_euclidean(int(zero), int(one))) * 1000
+        + digit(int_floored(int(zero), int(one))) * 10000
+        + digit(int_heap(int(zero), ibig)) * 100000 + digit(folded()) * 1000000
+        + digit(int_minimum(int(one))) * 10000000 + digit(int_heap_heap(int(one))) * 100000000
+}
+
+extern "C" trampoline "reussir_main" = main;
+
+// The divisions of `Nat`s are `nonnegative`: their immediates untag by a
+// logical shift and divide unsigned. An `Int` division divides signed. Each
+// function's checks run as their own prefix, independent of the order of the
+// functions.
+pub fn nat_div(x : Nat, m : Nat) -> Nat { x / m }
+
+pub fn nat_rem(x : Nat, m : Nat) -> Nat { core::intrinsic::bigint::remsi_lean(x, m) }
+
+pub fn int_div(x : Int, m : Int) -> Int { x / m }
+
+// CHECK-DAG: rcgmp.divsi {{.*}} divzero<lean>
+// CHECK-DAG: rcgmp.remsi {{.*}} divzero<lean>
+// CHECK-DAG: rcgmp.edivsi {{.*}} divzero<lean>
+// CHECK-DAG: rcgmp.emodsi {{.*}} divzero<lean>
+// CHECK-DAG: rcgmp.floordivsi {{.*}} divzero<lean>
+// CHECK-DAG: rcgmp.floormodsi {{.*}} divzero<lean>
+// CHECK-DAG: rcgmp.divsi {{.*}} exact divzero<lean>
+
+// NATDIV: define {{.*}}@{{.*}}7nat_div(
+// NATDIV-NOT: sdiv
+// NATDIV: lshr i64 %{{[0-9]+}}, 2
+// NATDIV: udiv i64
+// NATDIV-NOT: sdiv
+// NATDIV: {{^}}}
+
+// NATREM: define {{.*}}@{{.*}}7nat_rem(
+// NATREM-NOT: srem
+// NATREM: lshr i64 %{{[0-9]+}}, 2
+// NATREM: urem i64
+// NATREM-NOT: srem
+// NATREM: {{^}}}
+
+// INTDIV: define {{.*}}@{{.*}}7int_div(
+// INTDIV-NOT: udiv
+// INTDIV: ashr i64 %{{[0-9]+}}, 2
+// INTDIV: sdiv i64
+// INTDIV-NOT: udiv
+// INTDIV: {{^}}}
