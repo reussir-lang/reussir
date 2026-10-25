@@ -18,7 +18,9 @@
 //! holds it. The bundled libraries, the runtime bake, and their compiled
 //! artifacts live in a shared per-user cache (see `rene::cache`), which
 //! `clean` leaves alone; each build records the entries it uses in the
-//! cache's ledger (`rene::ledger`).
+//! cache's ledger (`rene::ledger`). A build that took the cache over the
+//! per-user configuration's size limit (`rene::config`) prunes it once it
+//! is done; `rene cache prune` does so on demand.
 //!
 //! Progress goes to stderr via `tracing`; stdout carries only the final
 //! machine-readable listing. Exit 0 on success, 1 on a failed command, 2 on
@@ -32,6 +34,7 @@ use std::rc::Rc;
 use palc::Parser;
 
 use rene::cache::Cache;
+use rene::config::{self, CacheConfig, Config};
 use rene::db::{self, BuildDir, CleanOutcome};
 use rene::ledger::Session;
 use rene::shared::Shared;
@@ -90,9 +93,39 @@ struct Location {
 #[derive(palc::Subcommand)]
 enum Command {
     Build(BuildArgs),
+    Cache(CacheArgs),
     Clean(CleanArgs),
     Inspect(InspectArgs),
     New(NewArgs),
+}
+
+/// Maintain the per-user cache shared by every build (`RENE_CACHE_DIR`, or
+/// the platform cache directory).
+#[derive(palc::Args)]
+struct CacheArgs {
+    #[command(subcommand)]
+    command: CacheCommand,
+}
+
+#[derive(palc::Subcommand)]
+enum CacheCommand {
+    Prune(PruneArgs),
+}
+
+/// Remove the cache entries no running build uses that went unused for
+/// longer than the configured age (`cache.max_age` in the user
+/// configuration, 120 days by default), whatever the cache's size. Builds
+/// do the same on their own once the cache is over `cache.limit`.
+#[derive(palc::Args)]
+struct PruneArgs {
+    /// Remove entries unused for longer than AGE (`30d`, `4 months`, `12h`)
+    /// instead of the configured age.
+    #[arg(long, value_name = "AGE")]
+    max_age: Option<String>,
+
+    /// Report what would be removed without removing anything.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 /// Create a new package: a directory with a commented `rene.ncl` manifest, a
@@ -282,6 +315,9 @@ fn main() -> ExitCode {
     let result = runtime.block_on(async {
         match cli.command {
             Command::Build(args) => build(&args, color).await,
+            Command::Cache(CacheArgs {
+                command: CacheCommand::Prune(args),
+            }) => prune(&args).await,
             Command::Clean(args) => clean(&args.location),
             Command::Inspect(args) => inspect(&args, color).await,
             Command::New(args) => new::run(&new::Options {
@@ -372,6 +408,9 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // Resolve the profile before any work: an unknown name is a usage
     // problem, not something to discover after a runtime bake.
     let profile = manifest::resolve_profile(&loaded.manifest, &args.profile)?;
+    // Likewise the user's configuration: a mistake in it stops the build
+    // rather than silently restoring defaults that prune.
+    let config = Config::load()?;
     let root = resolve_build_dir(location)?;
     // Builds sharing a directory queue on its database lock. Take it before
     // anything is written, then hold it (`dir`) for the rest of the build:
@@ -433,6 +472,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
         for libdir in artifacts.libdirs() {
             println!("{}", libdir.display());
         }
+        prune_past_limit(&cache, &config.cache).await;
         return Ok(());
     }
 
@@ -442,7 +482,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // Only the bundled packages are shared: they are the same source in
     // every build.
     let shared_packages = bundled::in_graph(&graph, &cache);
-    let shared = Shared::new(cache, shared_packages);
+    let shared = Shared::new(cache.clone(), shared_packages);
 
     // The dependency pipeline: every node of the graph but the root, each
     // dispatched the moment its last dependency finishes, each freshness-
@@ -511,6 +551,85 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     for product in &products {
         println!("{}", product.path.display());
     }
+    prune_past_limit(&cache, &config.cache).await;
+    Ok(())
+}
+
+/// Once a build is done: if the entries it added took the cache over
+/// `policy.limit`, remove the entries unused for longer than
+/// `policy.max_age` that no running build uses. The build's session still
+/// pins everything it used in place, and holds no entry lock, so no build
+/// waits on the prune. A failure only warns: the build itself succeeded.
+/// A session that lost the ledger during the build does not try.
+async fn prune_past_limit(cache: &Cache, policy: &CacheConfig) {
+    let Some(session) = cache.session().filter(|session| session.enabled()) else {
+        return;
+    };
+    let (Some(limit), Some(max_age), Some(total)) =
+        (policy.limit, policy.max_age, session.last_total())
+    else {
+        return;
+    };
+    if total <= limit {
+        return;
+    }
+    match session.prune(max_age, false).await {
+        Ok(pruned) if pruned.removed.is_empty() => {}
+        Ok(pruned) => tracing::info!(
+            "the cache is over {}: removed {} unused for more than {}",
+            config::human_size(limit),
+            pruned.summary(),
+            config::human_age(max_age)
+        ),
+        Err(e) => tracing::warn!("cannot prune the cache: {e}"),
+    }
+}
+
+/// `rene cache prune`: remove what no build will miss, whatever the size;
+/// `--dry-run` only lists it. Refuses to run without the ledger, the only
+/// safe way to tell what is in use.
+async fn prune(args: &PruneArgs) -> Result<(), String> {
+    let config = Config::load()?;
+    let max_age = match &args.max_age {
+        Some(text) => config::parse_age(text).map_err(|e| format!("invalid --max-age: {e}"))?,
+        None => config.cache.max_age.ok_or_else(|| {
+            let file = config::path().map_or("the configuration".to_owned(), |path| {
+                format!("`{}`", path.display())
+            });
+            format!("`cache.max_age` is null in {file}; pass --max-age")
+        })?,
+    };
+    let cache = Cache::shared()?;
+    let session = Session::start(&cache).await;
+    if !session.enabled() {
+        return Err(format!(
+            "the cache ledger in `{}` cannot be used, so nothing can be pruned safely",
+            cache.root().display()
+        ));
+    }
+    let pruned = session.prune(max_age, args.dry_run).await?;
+    if pruned.skipped {
+        tracing::info!("another rene is pruning the cache; nothing to do");
+        return Ok(());
+    }
+    let verb = if args.dry_run {
+        "would remove"
+    } else {
+        "removed"
+    };
+    // Stdout lists the entries, one per line.
+    for (entry, size) in &pruned.removed {
+        println!("{verb} {entry} ({})", config::human_size(*size));
+    }
+    tracing::info!(
+        "{verb} {} unused for more than {}; kept {} in use and {} recently used; the cache \
+         holds {}",
+        pruned.summary(),
+        config::human_age(max_age),
+        pruned.in_use,
+        pruned.recent,
+        config::human_size(pruned.total)
+    );
     Ok(())
 }
 

@@ -58,6 +58,12 @@ fn rene(args: &[&str]) -> Command {
         rene::cache::CACHE_DIR_ENV,
         Path::new(env!("CARGO_TARGET_TMPDIR")).join("rene-cache"),
     );
+    // And the user's configuration: a directory without one means the
+    // defaults. Tests about the configuration use their own.
+    cmd.env(
+        rene::config::CONFIG_DIR_ENV,
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join("rene-config"),
+    );
     cmd
 }
 
@@ -792,6 +798,166 @@ fn entries_completed_without_the_ledger_are_adopted() {
     let kinds: Vec<&str> = snapshot.entries.keys().map(|id| id.kind).collect();
     assert_eq!(kinds, ["core-src", "deps", "rt"], "{snapshot:#?}");
     assert!(snapshot.entries.values().all(|entry| entry.size > 0));
+}
+
+/// `rene cache prune` removes the old entries no running build pins, and
+/// keeps the ones a build (here an in-process session) still uses.
+#[cfg(unix)]
+#[test]
+fn cache_prune_removes_old_entries_nobody_uses() {
+    use rene::cache::{Cache, EntryId, kind};
+    use rene::ledger::{Lookup, Session};
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let manifest = executable_package(&tmp, "demo");
+    let root = tmp.join("reussir-build");
+    let out = fakes.rene(&["build"], &manifest, &root);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let bakes = fakes.rt_entries();
+    assert_eq!(bakes.len(), 1);
+    let prune = |extra: &[&str]| {
+        let mut args = vec!["cache", "prune"];
+        args.extend_from_slice(extra);
+        run(&mut fakes.command(&args))
+    };
+
+    // Nothing is old enough at the default age: a dry run says so.
+    let out = prune(&["--dry-run"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(out.stdout.is_empty());
+    assert!(
+        stderr(&out).contains("and 3 recently used"),
+        "{}",
+        stderr(&out)
+    );
+
+    // A build still using the bake keeps it; the rest goes.
+    let cache = Cache::at(&fakes.cache).unwrap();
+    let runtime = compio::runtime::Runtime::new().unwrap();
+    let session = runtime.block_on(async {
+        let session = Session::start(&cache).await;
+        let key = bakes[0].file_name().unwrap().to_str().unwrap();
+        let bake = EntryId::new(kind::RT, key);
+        assert_eq!(session.lookup(&bake).await, Some(Lookup::Live));
+        session
+    });
+    let out = prune(&["--max-age", "0s"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("removed core-src/"), "{stdout}");
+    assert!(stdout.contains("removed deps/"), "{stdout}");
+    assert!(!stdout.contains("removed rt/"), "{stdout}");
+    assert!(stderr(&out).contains("kept 1 in use"), "{}", stderr(&out));
+    assert_eq!(fakes.rt_entries(), bakes);
+    assert!(cache_entries(&fakes.cache.join("deps")).is_empty());
+    assert!(cache_entries(&fakes.cache.join("core-src")).is_empty());
+    let snapshot = runtime.block_on(session.snapshot()).unwrap();
+    assert_eq!(snapshot.entries.len(), 1, "{snapshot:#?}");
+    drop(session);
+
+    // With the pin gone, so goes the bake; the next build bakes again.
+    let out = prune(&["--max-age", "0s"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(fakes.rt_entries().is_empty());
+    let out = fakes.rene(&["build"], &manifest, &root);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(fakes.runs("cargo"), 2);
+}
+
+/// Without a ledger it can trust (unusable, or written by a newer rene),
+/// `rene cache prune` removes nothing and says why.
+#[cfg(unix)]
+#[test]
+fn cache_prune_refuses_a_ledger_it_cannot_use() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let fakes = Fakes::new(tmp_dir.path());
+    let ledger_dir = fakes.cache.join(rene::ledger::LEDGER_DIR);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let options = turbokv::DbOptions::paranoid();
+        let db = turbokv::Db::open_with_options(&ledger_dir, options)
+            .await
+            .unwrap();
+        db.insert("schema", "99").await.unwrap();
+        db.close().await.unwrap();
+    });
+    let out = run(&mut fakes.command(&["cache", "prune"]));
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("newer rene"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("nothing can be pruned"),
+        "{}",
+        stderr(&out)
+    );
+
+    std::fs::remove_dir_all(&ledger_dir).unwrap();
+    std::fs::write(&ledger_dir, "not a database").unwrap();
+    let out = run(&mut fakes.command(&["cache", "prune"]));
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("nothing can be pruned"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// A build that took the cache over the configured limit prunes once it is
+/// done: the old entries it does not use go, those it reads in place stay.
+/// A mistake in the configuration stops the build, and `null` turns
+/// automatic pruning off.
+#[cfg(unix)]
+#[test]
+fn a_build_prunes_past_the_configured_limit() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let manifest = executable_package(&tmp, "demo");
+    let root = tmp.join("reussir-build");
+    let config_dir = tmp.join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let configured = |text: &str, args: &[&str]| {
+        std::fs::write(config_dir.join(rene::config::CONFIG_FILE), text).unwrap();
+        let out = run(fakes
+            .command(args)
+            .arg("--manifest-path")
+            .arg(&manifest)
+            .arg("--build-dir")
+            .arg(&root)
+            .env(rene::config::CONFIG_DIR_ENV, &config_dir));
+        (out.status.code(), stderr(&out))
+    };
+    let deps = || cache_entries(&fakes.cache.join("deps")).len();
+
+    let (code, err) = configured("{ cache = { limti = 1 } }", &["build"]);
+    assert_eq!(code, Some(1));
+    assert!(err.contains("limti"), "{err}");
+
+    // `null` turns pruning off: every entry is past a zero age, yet both
+    // profiles' core stay.
+    let off = "{ cache = { limit = null, max_age = \"0s\" } }";
+    for profile in ["dev", "release"] {
+        let (code, err) = configured(off, &["build", "--profile", profile]);
+        assert_eq!(code, Some(0), "{err}");
+    }
+    assert_eq!(deps(), 2);
+
+    // Over a zero limit, the build that adds a third core entry removes
+    // all three, copied out and unused; the bake and the core sources it
+    // reads in place stay.
+    let (code, err) = configured(
+        "{ cache = { limit = 0, max_age = \"0s\" } }",
+        &["build", "--profile", "release", "--token-reuse-remarks"],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert!(err.contains("removed 3 entries"), "{err}");
+    assert_eq!(deps(), 0);
+    assert_eq!(fakes.rt_entries().len(), 1);
+    assert_eq!(cache_entries(&fakes.cache.join("core-src")).len(), 1);
 }
 
 /// Two renes needing the same bake and the same core at once run cargo once

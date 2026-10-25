@@ -176,6 +176,19 @@
   docs/design/cache-ledger.md. A complete entry the ledger does not know
   is adopted, not rebuilt. A ledger that cannot be used disables itself
   with one warning, and the build goes on as before.
+- `rene` prunes its per-user cache. A build that took the cache over
+  `cache.limit` (10 GiB by default) removes, once it is done, the entries
+  no running build uses that went unused for longer than `cache.max_age`
+  (120 days by default), along with what crashed or older renes left
+  behind. Both settings come from a new per-user configuration file,
+  `config.ncl` in `~/.config/rene` (`$XDG_CONFIG_HOME`),
+  `~/Library/Application Support/rene`, or `%APPDATA%\rene`
+  (`RENE_CONFIG_DIR` overrides it), a Nickel program like a manifest;
+  `null` for either turns automatic pruning off, and a mistake in it stops
+  the build. `rene cache prune [--max-age AGE] [--dry-run]` prunes on
+  demand, whatever the size. A build that asks for an entry being removed
+  gets it back if its directory is still there; see
+  docs/design/cache-ledger.md.
 
 ## 0.1.0
 

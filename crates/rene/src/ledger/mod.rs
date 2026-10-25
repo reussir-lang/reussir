@@ -129,6 +129,8 @@ pub struct Session {
     store: Option<Store>,
     /// Cleared, with a warning, on the first failure.
     enabled: Cell<bool>,
+    /// The total the last registration saw, for deciding to prune.
+    last_total: Cell<Option<u64>>,
 }
 
 impl Session {
@@ -146,6 +148,7 @@ impl Session {
             lock: None,
             store: None,
             enabled: Cell::new(true),
+            last_total: Cell::new(None),
         };
         match Store::new(cache.root()) {
             Ok(store) => session.store = Some(store),
@@ -271,18 +274,28 @@ impl Session {
     }
 
     /// The entry `id` is complete, `size` bytes on disk: mark it live.
-    /// Returns the ledger's total. The pin taken at lookup stays.
+    /// Returns the ledger's total, which [`last_total`](Self::last_total)
+    /// then reports. The pin taken at lookup stays.
     pub async fn register(&self, id: &EntryId, size: u64) -> Option<u64> {
-        self.transact(|view| {
-            let live = Entry {
-                state: State::Live,
-                size,
-                last_used: view.now,
-            };
-            view.set_entry(id, live);
-            view.total()
-        })
-        .await
+        let total = self
+            .transact(|view| {
+                let live = Entry {
+                    state: State::Live,
+                    size,
+                    last_used: view.now,
+                };
+                view.set_entry(id, live);
+                view.total()
+            })
+            .await;
+        self.last_total.set(total.or(self.last_total.get()));
+        total
+    }
+
+    /// The total the session's last registration saw: whether the entries
+    /// it added took the cache over a limit. `None` if it added none.
+    pub fn last_total(&self) -> Option<u64> {
+        self.last_total.get()
     }
 
     /// Drop this session's pin on the entry `id`, which it no longer reads

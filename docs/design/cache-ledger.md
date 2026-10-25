@@ -1,6 +1,7 @@
 # The Cache Ledger
 
-Status: design
+Status: implemented in `crates/rene/src/ledger/`, with the configuration
+in `crates/rene/src/config.rs`.
 
 `rene` keeps what every build has in common (the bundled libraries'
 sources, the `reussir-rt` bake, the bundled libraries' compiled artifacts)

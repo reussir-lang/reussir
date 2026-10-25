@@ -200,7 +200,10 @@ to the build directory instead of running unlocked.
 
 Every build records the entries it uses in the cache's ledger, which pins
 them for the build and stamps their last use: the two facts removing
-entries safely needs, which no directory listing gives (`cache-ledger.md`).
+entries safely needs, which no directory listing gives. A build that took
+the cache over its configured size prunes the entries no running build
+uses that went unused for too long, and `rene cache prune` does so on
+demand (`cache-ledger.md`).
 
 Everything downstream reads the manifest:
 

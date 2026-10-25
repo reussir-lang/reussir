@@ -15,13 +15,17 @@
 //!    transactions because reclaiming decides from the row and the
 //!    directory too; a rename outside could take a directory from under a
 //!    session that just reclaimed it.
+//! 3. **Sweep** what crashed renes left in the kind directories: trash,
+//!    staging nobody is writing, and the lock files of entries that are
+//!    gone.
 
+use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
 
 use super::Session;
 use super::reap::remove;
 use super::view::{Entry, State, View};
-use crate::cache::{self, Cache, EntryId, FileLock, Probe};
+use crate::cache::{self, Cache, EntryId, FileLock, Probe, Tag};
 use crate::config::human_size;
 
 /// The file only one pruner at a time holds, under the cache root.
@@ -119,6 +123,7 @@ impl Session {
                 pruned.removed.push((id, size));
             }
         }
+        sweep(&self.cache);
         Ok(pruned)
     }
 }
@@ -262,10 +267,65 @@ fn entry_dirs(cache: &Cache) -> Vec<(EntryId, u64)> {
     found
 }
 
+/// Delete what crashed renes left in the kind directories: trash; staging
+/// whose entry lock is free, since only that lock's holder stages; and
+/// the free lock files of entries that are gone. Nothing else is touched.
+///
+/// The sweep runs outside the ledger, so it may delete trash that another
+/// rene's transaction has just made and would rename back if its commit
+/// failed. Such trash is always an abandoned build a reaper discarded (this
+/// pruner's own transactions are over by now), so losing it only leaves its
+/// row to the next reaper, which then finds nothing left to discard.
+fn sweep(cache: &Cache) {
+    for kind in cache::kind::ALL {
+        let dir = cache.root().join(kind);
+        let Ok(names) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for name in names.flatten() {
+            let path = name.path();
+            let Ok(name) = name.file_name().into_string() else {
+                continue;
+            };
+            match cache::parse_sibling(&name) {
+                Some((_, Tag::Trash)) => delete(&path),
+                Some((key, Tag::Tmp)) => match FileLock::probe(&dir.join(format!("{key}.lock"))) {
+                    Ok(Probe::Free(lock)) => {
+                        delete(&path);
+                        drop(lock);
+                    }
+                    Ok(Probe::Absent) => delete(&path),
+                    Ok(Probe::Held) | Err(_) => {}
+                },
+                None => {
+                    if let Some(key) = name.strip_suffix(".lock")
+                        && !dir.join(key).exists()
+                        && let Ok(Probe::Free(lock)) = FileLock::probe(&path)
+                    {
+                        remove(lock);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Delete the entry's lock file, if nobody holds it.
 fn remove_lock(cache: &Cache, id: &EntryId) {
     if let Ok(Probe::Free(lock)) = FileLock::probe(&cache.lock_path(id)) {
         remove(lock);
+    }
+}
+
+/// Delete a leftover file or directory tree.
+fn delete(path: &Path) {
+    let deleted = if path.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+    if let Err(e) = deleted {
+        tracing::debug!("cannot delete `{}`: {e}", path.display());
     }
 }
 
@@ -438,6 +498,39 @@ mod tests {
             assert!(cache.entry(&wanted).is_dir() && cache.entry(&building).is_dir());
             // Recent untracked directories are kept.
             assert_eq!(a.prune(MONTH, false).await.unwrap().recent, 2);
+        });
+    }
+
+    /// The sweep deletes trash, staging nobody writes, and the free lock
+    /// files of entries that are gone, and nothing else.
+    #[test]
+    fn the_sweep_removes_what_crashed_renes_left() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = cache(tmp.path());
+        let live = id("live");
+        block_on(async {
+            let a = Session::start(&cache).await;
+            build(&cache, &a, &live, 1).await;
+            let dir = cache.root().join(cache::kind::DEPS);
+            for leftover in ["gone.rm-1-1", "crashed.tmp-1-2", "staging.tmp-1-3"] {
+                std::fs::create_dir_all(dir.join(leftover).join("sub")).unwrap();
+            }
+            let _staging = lock(&cache, &id("staging"));
+            let _held = lock(&cache, &id("held"));
+            let _gone = FileLock::try_lock(&dir.join("gone.lock")).unwrap();
+            drop(_gone);
+
+            a.prune(MONTH, false).await.unwrap();
+            assert_eq!(
+                names(&cache),
+                [
+                    "held.lock",
+                    "live",
+                    "live.lock",
+                    "staging.lock",
+                    "staging.tmp-1-3"
+                ]
+            );
         });
     }
 }
