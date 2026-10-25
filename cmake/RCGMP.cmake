@@ -38,7 +38,7 @@ endforeach()
 FetchContent_Declare(
   rcgmp
   GIT_REPOSITORY https://github.com/reussir-lang/mlir-rcgmp.git
-  GIT_TAG 05ffb84c5f8ddd762bb1d87566d3b585db8988c0
+  GIT_TAG c2a68d81c5462e0f63c5b8cad34506b7b0452f88
   # Only the libraries Reussir links are built; `rcgmp-opt` is not.
   EXCLUDE_FROM_ALL
 )
