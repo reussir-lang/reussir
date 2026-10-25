@@ -13,11 +13,12 @@
 //! libraries bundled inside rene ([`bundled`]), the runtime bake, and the
 //! bundled libraries' compiled artifacts ([`shared`]) — lives once per user
 //! in the shared [`cache`], whose [`ledger`] records which build uses which
-//! entry.
+//! entry. The user's own settings come from a per-user [`config`] file.
 
 pub mod bundled;
 pub mod cache;
 pub mod compile;
+pub mod config;
 pub mod db;
 pub mod deps;
 pub mod exec;
@@ -25,6 +26,7 @@ pub mod fresh;
 pub mod ledger;
 pub mod manifest;
 pub mod new;
+pub mod nickel;
 pub mod plan;
 pub mod pool;
 pub mod resolve;
