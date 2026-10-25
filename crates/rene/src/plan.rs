@@ -52,6 +52,8 @@ pub(crate) struct PlannedCommand {
     pub(crate) target: Option<String>,
     /// The artifact the command writes.
     pub(crate) out: PathBuf,
+    /// The token-reuse report the command writes beside it, if asked to.
+    pub(crate) report: Option<PathBuf>,
     /// Full argv minus the leading program.
     pub(crate) args: Vec<String>,
 }
@@ -89,7 +91,7 @@ pub(crate) fn node_commands(
                     decl.kind,
                     opts.linker,
                 ));
-                add_token_reuse_report(&mut args, &out, opts.token_reuse_remarks);
+                let report = add_token_reuse_report(&mut args, &out, opts.token_reuse_remarks);
                 args.extend(polyffi_args(bake));
                 args.extend(externs.iter().cloned());
                 if decl.kind.is_linked() {
@@ -106,6 +108,7 @@ pub(crate) fn node_commands(
                     emit: decl.kind.emit(),
                     target: Some(target.clone()),
                     out,
+                    report,
                     args,
                 }
             })
@@ -122,7 +125,7 @@ pub(crate) fn node_commands(
             TargetKind::Staticlib,
             opts.linker,
         ));
-        add_token_reuse_report(&mut staticlib, &archive, opts.token_reuse_remarks);
+        let report = add_token_reuse_report(&mut staticlib, &archive, opts.token_reuse_remarks);
         staticlib.extend(polyffi_args(bake));
         staticlib.extend(externs.iter().cloned());
         vec![
@@ -130,12 +133,14 @@ pub(crate) fn node_commands(
                 emit: "rri",
                 target: None,
                 out: rri,
+                report: None,
                 args: interface,
             },
             PlannedCommand {
                 emit: "staticlib",
                 target: None,
                 out: archive,
+                report,
                 args: staticlib,
             },
         ]
@@ -152,11 +157,19 @@ pub(crate) fn token_reuse_report_path(artifact: &Path) -> PathBuf {
     artifact.with_file_name(name)
 }
 
-fn add_token_reuse_report(args: &mut Vec<String>, artifact: &Path, enabled: bool) {
-    if enabled {
+/// Ask the command producing `artifact` for its token-reuse report, if
+/// `enabled`, returning the report's path.
+fn add_token_reuse_report(
+    args: &mut Vec<String>,
+    artifact: &Path,
+    enabled: bool,
+) -> Option<PathBuf> {
+    enabled.then(|| {
+        let report = token_reuse_report_path(artifact);
         args.push("--token-reuse-remarks".to_owned());
-        args.push(token_reuse_report_path(artifact).display().to_string());
-    }
+        args.push(report.display().to_string());
+        report
+    })
 }
 
 /// Render the plan as JSON: `nodes` in dependency-first order (each node's

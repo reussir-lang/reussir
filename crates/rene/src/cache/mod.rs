@@ -83,9 +83,11 @@ pub mod kind {
     pub const CORE_SRC: &str = "core-src";
     /// `reussir-rt` bakes ([`crate::rt`]).
     pub const RT: &str = "rt";
+    /// Compiled bundled packages ([`crate::shared`]).
+    pub const DEPS: &str = "deps";
 
     /// Every kind.
-    pub const ALL: &[&str] = &[CORE_SRC, RT];
+    pub const ALL: &[&str] = &[CORE_SRC, RT, DEPS];
 }
 
 /// One entry: the directory `<root>/<kind>/<key>`.
