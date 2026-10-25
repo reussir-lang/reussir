@@ -10,12 +10,15 @@
 //! Per node: freshness is checked at dispatch time (its upstream artifacts
 //! are final by then — a current node is skipped whole), its sources are
 //! scanned, its interface and archive compile, and [`fresh::record_dep`]
-//! writes what the next build proves currency against. Progress renders on
-//! an indicatif multi-bar (hidden when stderr is not a terminal).
+//! writes what the next build proves currency against. A bundled package
+//! (`core`) is first claimed in the shared cache ([`crate::shared`]) and
+//! restored from there when another build already compiled it. Progress
+//! renders on an indicatif multi-bar (hidden when stderr is not a
+//! terminal).
 
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -31,6 +34,7 @@ use crate::plan;
 use crate::pool::Pool;
 use crate::resolve::Graph;
 use crate::rt::RtArtifacts;
+use crate::shared::{self, Claim, Shared};
 
 /// What the pipeline runs under.
 pub struct Options<'a> {
@@ -46,6 +50,16 @@ pub struct Options<'a> {
     pub token_reuse_remarks: bool,
     /// Whether buffered rrc diagnostics retain ANSI styling.
     pub color: bool,
+    /// The bundled packages whose compiled artifacts are shared through the
+    /// cache, if any.
+    pub shared: Option<&'a Shared>,
+}
+
+impl Options<'_> {
+    /// The profile's `deps/`, where every dependency's artifacts land.
+    fn deps_dir(&self) -> PathBuf {
+        self.build_dir.join(self.profile_name).join("deps")
+    }
 }
 
 /// Build every dependency of the graph through the pool, each dispatched
@@ -68,7 +82,7 @@ pub async fn build_deps(
     if dep_names.is_empty() {
         return Ok(0);
     }
-    let deps_dir = opts.build_dir.join(opts.profile_name).join("deps");
+    let deps_dir = opts.deps_dir();
     std::fs::create_dir_all(&deps_dir)
         .map_err(|e| format!("cannot create `{}`: {e}", deps_dir.display()))?;
 
@@ -156,6 +170,40 @@ async fn build_node(
     }
     tracing::debug!(package = name, reason = %state, "building");
 
+    let plan_opts = plan::Options {
+        profile_name: opts.profile_name,
+        profile: opts.profile,
+        target: opts.target,
+        linker: opts.linker,
+        build_dir: opts.build_dir,
+        token_reuse_remarks: opts.token_reuse_remarks,
+    };
+    let commands = plan::node_commands(graph, name, &plan_opts, Some(rt));
+
+    // A bundled package may already be built in the shared cache, by this
+    // or another package's build: restore it rather than compile it again.
+    let mut publication = None;
+    if let Some(shared) = opts.shared {
+        let deps_dir = opts.deps_dir();
+        let notify = |msg: &str| progress.suspend(|| tracing::info!("{msg}"));
+        let node = shared::Node {
+            name,
+            dependencies: &graph.nodes[name].dependencies,
+            commands: &commands,
+            deps_dir: &deps_dir,
+            target: opts.target,
+        };
+        match shared.claim(&node, rt, &notify).await {
+            Some(Claim::Restored(sources)) => {
+                fresh::record_dep(graph, name, &ctx, rt, &sources)?;
+                tracing::debug!(package = name, "restored");
+                return Ok(true);
+            }
+            Some(Claim::Build(claimed)) => publication = Some(claimed),
+            None => {}
+        }
+    }
+
     let bar =
         progress.add(ProgressBar::new_spinner().with_message(format!("{name}: scanning sources")));
     bar.enable_steady_tick(Duration::from_millis(120));
@@ -170,15 +218,7 @@ async fn build_node(
         .await?;
     sources.sort_by(|a, b| a.path.cmp(&b.path));
 
-    let plan_opts = plan::Options {
-        profile_name: opts.profile_name,
-        profile: opts.profile,
-        target: opts.target,
-        linker: opts.linker,
-        build_dir: opts.build_dir,
-        token_reuse_remarks: opts.token_reuse_remarks,
-    };
-    for command in plan::node_commands(graph, name, &plan_opts, Some(rt)) {
+    for command in commands {
         bar.set_message(format!("{name}: {}", command.emit));
         let invocation = compile::Invocation::from_planned(command, &rt.rustc, opts.color);
         let completed = pool.run(move || invocation.run()).await?;
@@ -187,6 +227,9 @@ async fn build_node(
         progress.suspend(|| completed.report())?;
     }
     fresh::record_dep(graph, name, &ctx, rt, &sources)?;
+    if let Some(publication) = publication {
+        publication.publish(&sources);
+    }
     bar.finish_and_clear();
     progress.remove(&bar);
     tracing::debug!(package = name, "built");

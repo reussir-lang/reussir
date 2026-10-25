@@ -11,11 +11,14 @@
 //! content hash. Every build of every package reads the same tree, a rene
 //! upgrade materializes a new one, and the ordinary per-package freshness
 //! machinery sees the change: a dependency whose recorded sources no longer
-//! lie under its directory is rebuilt.
+//! lie under its directory is rebuilt. Their compiled artifacts are shared
+//! through the cache as well ([`crate::shared`]).
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::cache::{self, Acquired, Cache, EntryId, Request, Usage};
+use crate::resolve::Graph;
 
 /// One bundled package.
 pub struct Bundle {
@@ -41,6 +44,23 @@ pub static ALL: [&Bundle; 1] = [&CORE];
 /// The bundle named `name`, if rene ships one.
 pub fn find(name: &str) -> Option<&'static Bundle> {
     ALL.iter().copied().find(|bundle| bundle.name == name)
+}
+
+/// The bundles `graph` builds from their bundled sources, as name to
+/// content hash: the packages [`crate::shared::Shared`] may share. A package
+/// of the same name brought by path is built locally like any other.
+pub fn in_graph(graph: &Graph, cache: &Cache) -> BTreeMap<String, String> {
+    ALL.iter()
+        .filter(|bundle| {
+            // Node directories are canonical.
+            let dir = bundle.dir(cache).canonicalize();
+            graph
+                .nodes
+                .get(bundle.name)
+                .is_some_and(|node| dir.is_ok_and(|dir| dir == node.dir))
+        })
+        .map(|bundle| (bundle.name.to_owned(), bundle.content_hash()))
+        .collect()
 }
 
 impl Bundle {

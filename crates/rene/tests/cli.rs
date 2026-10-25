@@ -214,7 +214,8 @@ impl Fakes {
         // and the rustc it pinned, fabricates the artifacts in the target
         // directory (`--target-dir`, else `CARGO_TARGET_DIR`, else `target`
         // under the cwd, which is the unpacked source dir), and reports them
-        // the way `--message-format=json` does.
+        // the way `--message-format=json` does. With `FAKE_CARGO_GATE` set,
+        // it says it started (`<gate>.started`) and waits for the gate file.
         let cargo = script(
             "fake-cargo",
             r#"log="$(dirname "$0")"
@@ -229,6 +230,11 @@ for arg in "$@"; do
   prev="$arg"
 done
 [ -n "$target" ] || exit 2
+if [ -n "$FAKE_CARGO_GATE" ]; then
+  touch "$FAKE_CARGO_GATE.started"
+  i=0
+  while [ ! -e "$FAKE_CARGO_GATE" ] && [ "$i" -lt 6000 ]; do sleep 0.01; i=$((i + 1)); done
+fi
 mkdir -p "$target_dir/$target/release/deps" "$target_dir/release/deps"
 proc_macro="$target_dir/release/deps/libnum_enum_derive-fake.so"
 rlib="$target_dir/$target/release/deps/libreussir_rt-0000.rlib"
@@ -553,6 +559,197 @@ fn packages_share_one_runtime_bake() {
     assert_eq!(build("second"), libdirs);
     assert_eq!(fakes.runs("cargo"), 2, "a broken bake was trusted");
     assert_eq!(fakes.rt_entries(), bakes);
+}
+
+/// Write a package `name` under `dir` that declares one executable, so a
+/// build runs the dependency pipeline (and compiles `core`).
+#[cfg(unix)]
+fn executable_package(dir: &Path, name: &str) -> PathBuf {
+    let manifest = package(dir, name);
+    std::fs::write(
+        &manifest,
+        format!(
+            "{{ package = {{ name = \"{name}\", version = \"0.1.0\" }}, \
+             targets.{name}.kind = 'executable }}\n"
+        ),
+    )
+    .unwrap();
+    manifest
+}
+
+/// Builds of different packages in different build directories compile the
+/// bundled core once, through the cache; each build directory still gets
+/// its own copy of core's artifacts. Another profile is another entry, and
+/// an entry missing a file is rebuilt, not trusted.
+#[cfg(unix)]
+#[test]
+fn packages_share_compiled_core_through_the_cache() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let core_compiles = || {
+        let compiles = fakes.compiles();
+        compiles.len() - fakes.package_compiles().len()
+    };
+    let build = |name: &str, profile: &str| {
+        let pkg = tmp.join(name);
+        let manifest = executable_package(&pkg, name);
+        let root = pkg.join("reussir-build");
+        let out = fakes.rene(&["build", "--profile", profile], &manifest, &root);
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        root
+    };
+    let built = [build("first", "dev"), build("second", "dev")];
+    // Interface and archive, once for both packages.
+    assert_eq!(core_compiles(), 2, "{:#?}", fakes.compiles());
+    for root in &built {
+        assert!(
+            root.join("dev/deps/core.rri").is_file(),
+            "{}",
+            root.display()
+        );
+    }
+    assert_eq!(cache_entries(&fakes.cache.join("deps")).len(), 1);
+
+    build("first", "release");
+    assert_eq!(core_compiles(), 4);
+    let entries = cache_entries(&fakes.cache.join("deps"));
+    assert_eq!(entries.len(), 2);
+    for entry in &entries {
+        std::fs::remove_file(entry.join("core.rri")).unwrap();
+    }
+    std::fs::remove_dir_all(&built[1]).unwrap();
+    build("second", "dev");
+    assert_eq!(core_compiles(), 6);
+    assert_eq!(cache_entries(&fakes.cache.join("deps")), entries);
+    assert_eq!(fakes.runs("cargo"), 1);
+
+    // Restoring takes no lock, so concurrent restores never queue.
+    let restores = ["third", "fourth"].map(|name| {
+        let pkg = tmp.join(name);
+        fakes
+            .command(&["build", "--manifest-path"])
+            .arg(executable_package(&pkg, name))
+            .arg("--build-dir")
+            .arg(pkg.join("reussir-build"))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    });
+    for restore in restores {
+        let out = restore.wait_with_output().unwrap();
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        assert!(!stderr(&out).contains("waiting for"), "{}", stderr(&out));
+    }
+    assert_eq!(core_compiles(), 6);
+}
+
+/// Two renes needing the same bake and the same core at once run cargo once
+/// and compile core once: the second waits for the first's bake, says so
+/// once, and then shares the bake and core through the cache.
+#[cfg(unix)]
+#[test]
+fn concurrent_builds_bake_once_and_compile_core_once() {
+    use std::io::BufRead;
+    use std::process::Stdio;
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let gate = tmp.join("gate");
+    let spawn = |name: &str| {
+        let pkg = tmp.join(name);
+        fakes
+            .command(&["build", "--manifest-path"])
+            .arg(executable_package(&pkg, name))
+            .arg("--build-dir")
+            .arg(pkg.join("reussir-build"))
+            .env("FAKE_CARGO_GATE", &gate)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let first = spawn("first");
+    let started = tmp.join("gate.started");
+    for _ in 0..3000 {
+        if started.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(started.exists(), "the first bake never started");
+
+    // Release the first bake only once the second says it waits for it.
+    let mut second = spawn("second");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let reader = {
+        let stderr = second.stderr.take().unwrap();
+        std::thread::spawn(move || {
+            let mut lines = Vec::new();
+            for line in std::io::BufReader::new(stderr).lines() {
+                let line = line.unwrap();
+                if line.contains("waiting for another rene to finish baking reussir-rt") {
+                    let _ = tx.send(());
+                }
+                lines.push(line);
+            }
+            lines
+        })
+    };
+    rx.recv_timeout(std::time::Duration::from_secs(60))
+        .expect("the second build never waited for the first");
+    std::fs::write(&gate, "").unwrap();
+
+    let first = first.wait_with_output().unwrap();
+    assert!(first.status.success(), "stderr: {}", stderr(&first));
+    assert!(!stderr(&first).contains("waiting for"));
+    assert!(second.wait().unwrap().success());
+    let lines = reader.join().unwrap();
+    let waits = |what: &str| lines.iter().filter(|line| line.contains(what)).count();
+    // The bake is waited for once. Whether core is waited for as well
+    // depends on which rene reaches it first; it is compiled once either way.
+    assert_eq!(waits("finish baking reussir-rt"), 1, "{lines:#?}");
+    assert!(waits("waiting for") <= 2, "{lines:#?}");
+    assert_eq!(fakes.runs("cargo"), 1);
+    // Interface and archive, once for both packages, and a copy in each
+    // build directory.
+    let core_compiles = fakes.compiles().len() - fakes.package_compiles().len();
+    assert_eq!(core_compiles, 2, "{:#?}", fakes.compiles());
+    for name in ["first", "second"] {
+        let rri = tmp.join(name).join("reussir-build/dev/deps/core.rri");
+        assert!(rri.is_file(), "{}", rri.display());
+    }
+}
+
+/// A package that brings its own `core` by path builds it locally, in each
+/// build directory, like any other dependency: only the bundled core is
+/// shared through the cache.
+#[cfg(unix)]
+#[test]
+fn a_core_brought_by_path_is_built_locally() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let core = tmp.join("core");
+    package(&core, "core");
+    let pkg = tmp.join("app");
+    let manifest = executable_package(&pkg, "app");
+    std::fs::write(
+        &manifest,
+        "{ package = { name = \"app\", version = \"0.1.0\" }, \
+         dependencies.core.path = \"../core\", targets.app.kind = 'executable }\n",
+    )
+    .unwrap();
+    for build_dir in ["one", "two"] {
+        let out = fakes.rene(&["build"], &manifest, &pkg.join(build_dir));
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+    }
+    // Interface and archive, in each build directory.
+    let core_compiles = fakes.compiles().len() - fakes.package_compiles().len();
+    assert_eq!(core_compiles, 4, "{:#?}", fakes.compiles());
+    assert!(cache_entries(&fakes.cache.join("deps")).is_empty());
 }
 
 /// rustup picks a toolchain by the directory its proxy runs in, which need

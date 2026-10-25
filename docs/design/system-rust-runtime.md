@@ -172,6 +172,14 @@ The kinds:
   sysroot, and the size of every file it vouches for) is written last. An
   entry naming anything outside itself, or a file of another size, is
   rebaked. Build directories still record the bake they use.
+- `deps/<key>`: a bundled library's compiled `.rri` and archive, and its
+  token-reuse report when one was asked for, with `record.json` (each
+  file's size and the library's source graph). The key hashes the content,
+  the planned `rrc` argv (the build directory's `deps/` path abstracted),
+  the upstream artifact digests, the bake, the `rrc` binary's identity, and
+  rene's version. Builds copy the files into their own `deps/`, so
+  freshness and linking are unchanged; a build that compiles the library
+  itself publishes exactly the outputs its commands declare.
 
 Every consumer uses an entry through one protocol (`Cache::acquire`): use
 the entry if it is complete, with no lock; otherwise take its lock, waiting

@@ -15,8 +15,9 @@
 //! stops after the bake and prints the library directories to pass to
 //! `rrc --polyffi-libdir` by hand. `rene inspect` reports the source graph as
 //! JSON; `rene clean` deletes the build directory unless another instance
-//! holds it. The bundled core sources and the runtime bake live in a shared
-//! per-user cache (see `rene::cache`), which `clean` leaves alone.
+//! holds it. The bundled libraries, the runtime bake, and their compiled
+//! artifacts live in a shared per-user cache (see `rene::cache`), which
+//! `clean` leaves alone.
 //!
 //! Progress goes to stderr via `tracing`; stdout carries only the final
 //! machine-readable listing. Exit 0 on success, 1 on a failed command, 2 on
@@ -30,6 +31,7 @@ use palc::Parser;
 
 use rene::cache::Cache;
 use rene::db::{self, BuildDir, CleanOutcome};
+use rene::shared::Shared;
 use rene::{bundled, compile, deps, exec, fresh, manifest, new, plan, pool, resolve, rt};
 
 /// The default build directory name, next to the manifest.
@@ -383,8 +385,8 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // transitive path graph and let pubgrub verify the constraints hold
     // together (each package exists in exactly one version today, so this is
     // a feasibility check; see `resolve`). A dependency-less package is a
-    // one-node graph through the same machinery. The bundled core comes
-    // from the per-user cache.
+    // one-node graph through the same machinery. The bundled packages it
+    // uses come from the per-user cache.
     let cache = Cache::locate(&root)?;
     let core_dir = bundled::CORE.unpack(&cache).await?;
     let graph = resolve::load_graph_with(&loaded, Some(&core_dir))?;
@@ -435,6 +437,10 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // One pool for the whole build: `-j` admission over the main event
     // loop, which monitors every child process.
     let pool = pool::Pool::new(args.jobs);
+    // Only the bundled packages are shared: they are the same source in
+    // every build.
+    let shared_packages = bundled::in_graph(&graph, &cache);
+    let shared = Shared::new(cache, shared_packages);
 
     // The dependency pipeline: every node of the graph but the root, each
     // dispatched the moment its last dependency finishes, each freshness-
@@ -452,6 +458,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
             build_dir: &root,
             token_reuse_remarks: args.token_reuse_remarks,
             color,
+            shared: Some(&shared),
         },
         &pool,
         &progress,
