@@ -6,13 +6,13 @@
 //! live rows whenever it is asked for, so it cannot drift from them.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Runtime;
 use turbokv::{Db, WriteBatch};
 
-use crate::cache::EntryId;
+use crate::cache::{self, EntryId, Tag};
 
 pub(super) const SCHEMA_KEY: &str = "schema";
 /// Bumped only for changes an older rene could misread: a new entry kind,
@@ -79,6 +79,12 @@ pub struct Snapshot {
     pub total: u64,
 }
 
+/// A directory a transaction renamed to the trash.
+pub(super) struct Move {
+    pub(super) from: PathBuf,
+    pub(super) trash: PathBuf,
+}
+
 pub(super) struct View {
     /// Unix seconds when the transaction started.
     pub(super) now: u64,
@@ -87,6 +93,8 @@ pub(super) struct View {
     pub(super) sessions: BTreeMap<String, SessionRow>,
     /// What the transaction changed.
     pub(super) batch: WriteBatch,
+    /// The directories it discarded, deleted once it has committed.
+    pub(super) moves: Vec<Move>,
 }
 
 impl View {
@@ -155,6 +163,7 @@ impl View {
             pins,
             sessions,
             batch,
+            moves: Vec::new(),
         })
     }
 
@@ -175,6 +184,34 @@ impl View {
         self.entries.insert(id.clone(), entry);
     }
 
+    pub(super) fn remove_entry(&mut self, id: &EntryId) {
+        self.batch.delete(format!("{ENTRY}{id}"));
+        self.entries.remove(id);
+    }
+
+    /// Whether any entry row names `session` as its owner.
+    pub(super) fn names(&self, session: &str) -> bool {
+        self.entries
+            .values()
+            .any(|entry| entry.owner() == Some(session))
+    }
+
+    /// Rename the directory `dir`, if any, to a trash sibling, which the
+    /// transaction deletes once it has committed, or renames back if the
+    /// commit fails.
+    pub(super) fn discard(&mut self, dir: &Path) -> std::io::Result<()> {
+        if !dir.exists() {
+            return Ok(());
+        }
+        let trash = cache::sibling(dir, Tag::Trash);
+        std::fs::rename(dir, &trash)?;
+        self.moves.push(Move {
+            from: dir.to_owned(),
+            trash,
+        });
+        Ok(())
+    }
+
     pub(super) fn add_pin(&mut self, session: &str, id: &EntryId) {
         if self.pins.insert((session.to_owned(), id.clone())) {
             self.batch.put(format!("{PIN}{session}/{id}"), "");
@@ -187,12 +224,29 @@ impl View {
         }
     }
 
+    pub(super) fn remove_pins_of(&mut self, session: &str) {
+        let theirs: Vec<EntryId> = self
+            .pins
+            .iter()
+            .filter(|(owner, _)| owner == session)
+            .map(|(_, id)| id.clone())
+            .collect();
+        for id in theirs {
+            self.remove_pin(session, &id);
+        }
+    }
+
     pub(super) fn set_session(&mut self, id: &str, row: SessionRow) {
         self.batch.put(
             format!("{SESSION}{id}"),
             serde_json::to_vec(&row).expect("a session row serializes"),
         );
         self.sessions.insert(id.to_owned(), row);
+    }
+
+    pub(super) fn remove_session(&mut self, id: &str) {
+        self.batch.delete(format!("{SESSION}{id}"));
+        self.sessions.remove(id);
     }
 
     pub(super) fn snapshot(&self) -> Snapshot {

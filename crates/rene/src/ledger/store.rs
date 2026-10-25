@@ -1,22 +1,34 @@
-//! One ledger transaction: open, load, operate, commit, close.
+//! One ledger transaction: open, load, reap, operate, commit, close.
 //!
 //! TurboKV runs on Tokio while rene runs on compio, so the store keeps a
 //! private current-thread runtime that runs only inside its calls, as the
 //! build directory's database does ([`crate::db`]). Every call blocks on it
 //! briefly; the only wait that can be long, for another session's
 //! transaction, polls on compio instead ([`super::Session`]).
+//!
+//! A transaction never deletes a directory tree while it holds the ledger.
+//! A directory leaving the cache is renamed to a trash sibling inside the
+//! transaction ([`View::discard`]), which is atomic and cheap, and deleted
+//! once the ledger is closed. If the commit fails, every such rename is
+//! undone first, so the directories match the rows the ledger still holds.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
 use tokio::runtime::Runtime;
 use turbokv::{Db, DbError, DbOptions};
 
 use super::LEDGER_DIR;
-use super::view::View;
+use super::view::{Move, View};
+use crate::cache::Cache;
 
 pub(super) struct Store {
     path: PathBuf,
     runtime: Runtime,
+    /// Make the next commit fail, as a full disk would.
+    #[cfg(test)]
+    pub(super) fail_commit: Cell<bool>,
 }
 
 impl Store {
@@ -29,6 +41,8 @@ impl Store {
         Ok(Store {
             path: root.join(LEDGER_DIR),
             runtime,
+            #[cfg(test)]
+            fail_commit: Cell::new(false),
         })
     }
 
@@ -50,28 +64,71 @@ impl Store {
         }
     }
 
-    /// Run `op` on the ledger `db`, opened by [`try_open`](Self::try_open):
-    /// load every row, run `op`, commit what it changed in one batch, and
-    /// close.
-    pub(super) fn run<T>(&self, db: Db, op: impl FnOnce(&mut View) -> T) -> Result<T, String> {
+    /// Run `op` as session `me` on the ledger `db`, opened by
+    /// [`try_open`](Self::try_open): load every row, reap the dead sessions
+    /// ([`super::reap`]), run `op`, commit what it and the reaper changed in
+    /// one batch, close, and delete what they discarded.
+    pub(super) fn run<T>(
+        &self,
+        db: Db,
+        cache: &Cache,
+        me: &str,
+        op: impl FnOnce(&mut View) -> T,
+    ) -> Result<T, String> {
         let result = (|| {
             let mut view = View::load(&self.runtime, &db, &self.path)?;
+            view.reap(cache, me);
             let value = op(&mut view);
-            if !view.batch.is_empty() {
-                self.runtime
-                    .block_on(db.write_batch(&view.batch))
-                    .map_err(|e| {
-                        format!(
-                            "cannot write the cache ledger `{}`: {e}",
-                            self.path.display()
-                        )
-                    })?;
+            match self.commit(&db, &view) {
+                Ok(()) => Ok((value, view.moves)),
+                Err(e) => {
+                    undo(&view.moves);
+                    Err(e)
+                }
             }
-            Ok(value)
         })();
         if let Err(e) = self.runtime.block_on(db.close()) {
             tracing::debug!("cannot close the cache ledger: {e}");
         }
-        result
+        let (value, moves) = result?;
+        for Move { trash, .. } in moves {
+            if let Err(e) = std::fs::remove_dir_all(&trash) {
+                tracing::debug!("cannot delete `{}`: {e}", trash.display());
+            }
+        }
+        Ok(value)
+    }
+
+    fn commit(&self, db: &Db, view: &View) -> Result<(), String> {
+        let failed = |e: &dyn std::fmt::Display| {
+            format!(
+                "cannot write the cache ledger `{}`: {e}",
+                self.path.display()
+            )
+        };
+        #[cfg(test)]
+        if self.fail_commit.take() {
+            return Err(failed(&"the test made the commit fail"));
+        }
+        if view.batch.is_empty() {
+            return Ok(());
+        }
+        self.runtime
+            .block_on(db.write_batch(&view.batch))
+            .map_err(|e| failed(&e))
+    }
+}
+
+/// Put back what a transaction that failed to commit discarded, newest
+/// first.
+fn undo(moves: &[Move]) {
+    for Move { from, trash } in moves.iter().rev() {
+        if let Err(e) = std::fs::rename(trash, from) {
+            tracing::warn!(
+                "cannot move `{}` back to `{}`: {e}",
+                trash.display(),
+                from.display()
+            );
+        }
     }
 }

@@ -27,7 +27,9 @@
 //! names the file it locked) is what makes a missing file proof of death.
 //!
 //! A session ends by releasing its lock and deleting the file, with no
-//! ledger operation, so an exiting rene never waits for the ledger.
+//! ledger operation, so an exiting rene never waits for the ledger. The next
+//! operation of any session reaps it ([`reap`]) exactly as it reaps a
+//! session that crashed: one code path, exercised by every build.
 //!
 //! # Entries
 //!
@@ -48,7 +50,7 @@
 //!
 //! TurboKV holds an exclusive directory lock while a database is open, so
 //! the ledger is opened for one operation at a time ([`store`]): open, load
-//! every row ([`view`]), operate, commit one atomic batch, close.
+//! every row ([`view`]), reap, operate, commit one atomic batch, close.
 //! Nobody keeps it open across a build; a session that finds it open
 //! elsewhere polls. An operation never awaits and does only bounded I/O, so
 //! nobody holds the ledger for long.
@@ -60,6 +62,7 @@
 //! A disabled session has no opinion on anything (its queries return
 //! `None`), and rene goes on exactly as it does without a ledger.
 
+mod reap;
 mod store;
 mod view;
 
@@ -278,7 +281,7 @@ impl Session {
         self.transact(|view| view.remove_pin(&self.id, id)).await;
     }
 
-    /// A copy of the ledger. `None` when disabled.
+    /// A copy of the ledger, after reaping. `None` when disabled.
     pub async fn snapshot(&self) -> Option<Snapshot> {
         self.transact(|view| view.snapshot()).await
     }
@@ -298,7 +301,10 @@ impl Session {
                 }
             }
         };
-        store.run(db, op).map_err(|e| self.disable(&e)).ok()
+        store
+            .run(db, &self.cache, &self.id, op)
+            .map_err(|e| self.disable(&e))
+            .ok()
     }
 
     fn disable(&self, why: &str) {
@@ -306,10 +312,18 @@ impl Session {
             tracing::warn!("{why}; continuing without the cache ledger");
         }
     }
+
+    /// End the session as a crash would: release the lock, and leave its
+    /// file and rows to the next reaper.
+    #[cfg(test)]
+    fn crash(mut self) {
+        drop(self.lock.take());
+    }
 }
 
 impl Drop for Session {
-    /// End the session: release its lock and delete the file.
+    /// End the session: release its lock and delete the file. Its rows stay
+    /// until the next operation of any session reaps them.
     fn drop(&mut self) {
         if let Some(lock) = self.lock.take()
             && let Err(e) = lock.remove()
@@ -371,6 +385,20 @@ mod tests {
         session.register(id, size).await.unwrap();
     }
 
+    /// The names in the `deps` kind directory, sorted.
+    fn entry_names(cache: &Cache) -> Vec<String> {
+        let dir = cache.root().join(crate::cache::kind::DEPS);
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
     /// Mark the entry `id` for removal by a pruner named `owner`.
     async fn mark(session: &Session, id: &EntryId, owner: &str) {
         session
@@ -386,9 +414,10 @@ mod tests {
     }
 
     #[test]
-    fn a_session_is_recorded_and_ends_with_its_lock() {
+    fn a_session_is_reaped_by_the_next_operation_after_it_ends() {
         let tmp = tempfile::tempdir().unwrap();
         let cache = cache(tmp.path());
+        let e = id("e");
         block_on(async {
             let a = Session::start(&cache).await;
             assert!(a.enabled());
@@ -396,16 +425,159 @@ mod tests {
             assert_eq!(snapshot.sessions[a.id()].pid, std::process::id());
             let a_lock = a.lock_path();
             assert!(FileLock::try_lock(&a_lock).unwrap().is_none());
+            build(&cache, &a, &e, 1).await;
 
             let b = Session::start(&cache).await;
             let snapshot = b.snapshot().await.unwrap();
             assert_eq!(snapshot.sessions.len(), 2, "{snapshot:#?}");
 
-            // Ending a session releases its lock and deletes the file, and
-            // touches nothing else.
+            // Ending a session only releases its lock and deletes the file;
+            // the next operation reaps its row and its pins.
+            let a_id = a.id().to_owned();
             drop(a);
             assert!(!a_lock.exists());
-            assert_eq!(b.snapshot().await.unwrap().sessions.len(), 2);
+            let snapshot = b.snapshot().await.unwrap();
+            assert!(!snapshot.sessions.contains_key(&a_id), "{snapshot:#?}");
+            assert!(snapshot.pins.is_empty(), "{snapshot:#?}");
+            assert_eq!(snapshot.entries[&e].state, State::Live);
+        });
+    }
+
+    #[test]
+    fn a_crashed_session_is_reaped_by_the_next_operation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = cache(tmp.path());
+        block_on(async {
+            let dead = Session::start_as(&cache, "dead").await;
+            let dead_lock = dead.lock_path();
+            dead.crash();
+            assert!(dead_lock.is_file());
+
+            let a = Session::start(&cache).await;
+            let snapshot = a.snapshot().await.unwrap();
+            assert!(!snapshot.sessions.contains_key("dead"), "{snapshot:#?}");
+            assert!(!dead_lock.exists());
+        });
+    }
+
+    /// A rene that has locked its session file but not yet written its row
+    /// is alive: no reaper deletes its file. Once it is gone (crashed before
+    /// writing the row), its file is deleted.
+    #[test]
+    fn a_starting_session_keeps_its_lock_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = cache(tmp.path());
+        block_on(async {
+            let a = Session::start(&cache).await;
+            let starting = session_lock(&cache, "starting");
+            let held = FileLock::try_lock(&starting).unwrap().unwrap();
+            a.snapshot().await.unwrap();
+            assert!(starting.is_file());
+            drop(held);
+            a.snapshot().await.unwrap();
+            assert!(!starting.exists());
+        });
+    }
+
+    /// What a crashed session leaves behind is repaired by the next
+    /// operation: its pins go, an entry it used stays, one it was pruning
+    /// is live again if its directory survived and forgotten if not, and
+    /// one it was building is discarded with its lock file.
+    #[test]
+    fn a_dead_session_is_repaired_by_the_next_operation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = cache(tmp.path());
+        let [used, kept, gone, building] = ["used", "kept", "gone", "building"].map(id);
+        block_on(async {
+            let dead = Session::start_as(&cache, "dead").await;
+            for (entry, size) in [(&used, 1), (&kept, 2), (&gone, 3)] {
+                build(&cache, &dead, entry, size).await;
+            }
+            assert_eq!(dead.lookup(&building).await, Some(Lookup::Build));
+            {
+                let _lock = lock(&cache, &building);
+                assert_eq!(dead.recheck(&building, None).await, Some(Recheck::Build));
+                std::fs::create_dir_all(cache.entry(&building).join("half")).unwrap();
+            }
+            mark(&dead, &kept, "dead").await;
+            mark(&dead, &gone, "dead").await;
+            std::fs::remove_dir_all(cache.entry(&gone)).unwrap();
+            dead.crash();
+
+            let a = Session::start(&cache).await;
+            let snapshot = a.snapshot().await.unwrap();
+            assert!(!snapshot.sessions.contains_key("dead"), "{snapshot:#?}");
+            assert!(snapshot.pins.is_empty(), "{snapshot:#?}");
+            assert_eq!(snapshot.entries[&used].state, State::Live);
+            assert_eq!(snapshot.entries[&kept].state, State::Live);
+            assert!(!snapshot.entries.contains_key(&gone));
+            assert!(!snapshot.entries.contains_key(&building));
+            assert_eq!(snapshot.total, 1 + 2);
+            // Renamed out inside the transaction and deleted after it. (The
+            // lock files of entries that are gone are a pruner's to sweep.)
+            let names = entry_names(&cache);
+            assert_eq!(
+                names,
+                ["gone.lock", "kept", "kept.lock", "used", "used.lock"]
+            );
+        });
+    }
+
+    #[test]
+    fn a_dead_builder_whose_lock_was_taken_over_is_left_to_the_new_holder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = cache(tmp.path());
+        let e = id("e");
+        block_on(async {
+            let dead = Session::start_as(&cache, "dead").await;
+            assert_eq!(dead.lookup(&e).await, Some(Lookup::Build));
+            {
+                let _lock = lock(&cache, &e);
+                assert_eq!(dead.recheck(&e, None).await, Some(Recheck::Build));
+            }
+            std::fs::create_dir_all(cache.entry(&e)).unwrap();
+            dead.crash();
+
+            // The lock is taken before any reaper runs: the row and the dead
+            // session must survive until the holder takes the row over.
+            let held = lock(&cache, &e);
+            let a = Session::start(&cache).await;
+            let snapshot = a.snapshot().await.unwrap();
+            assert_eq!(snapshot.entries[&e].owner(), Some("dead"));
+            assert!(snapshot.sessions.contains_key("dead"));
+            assert!(cache.entry(&e).is_dir());
+            assert_eq!(a.recheck(&e, None).await, Some(Recheck::Build));
+            let snapshot = a.snapshot().await.unwrap();
+            assert_eq!(snapshot.entries[&e].owner(), Some(a.id()));
+            assert!(!snapshot.sessions.contains_key("dead"));
+            drop(held);
+        });
+    }
+
+    /// A transaction that cannot commit puts back the directories it
+    /// renamed out, so they still match the rows the ledger holds.
+    #[test]
+    fn a_failed_commit_puts_discarded_directories_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = cache(tmp.path());
+        let e = id("e");
+        block_on(async {
+            let a = Session::start(&cache).await;
+            let dead = Session::start_as(&cache, "dead").await;
+            assert_eq!(dead.lookup(&e).await, Some(Lookup::Build));
+            assert_eq!(dead.recheck(&e, None).await, Some(Recheck::Build));
+            std::fs::create_dir_all(cache.entry(&e)).unwrap();
+            dead.crash();
+
+            // Reaping discards the abandoned build; the commit fails.
+            a.store.as_ref().unwrap().fail_commit.set(true);
+            assert!(a.snapshot().await.is_none());
+            assert!(!a.enabled());
+            assert_eq!(entry_names(&cache), ["e"]);
+
+            let b = Session::start(&cache).await;
+            assert!(!b.snapshot().await.unwrap().entries.contains_key(&e));
+            assert!(entry_names(&cache).is_empty());
         });
     }
 
