@@ -944,8 +944,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
     let Driver {
         symbols, reports, ..
     } = driver;
-    (
-        mir::Program {
+    let mut program = mir::Program {
             drop_order: input.drop_order,
             functions,
             records,
@@ -957,9 +956,25 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
             ffi_rc_glue,
             ffi_trait_glue: ffi_trait_glue.into_values().collect(),
             symbols,
-        },
-        reports,
-    )
+    };
+    // The owned `Nat`/`Int` handle's glue (`reussir_rt::rcgmp::Mpz`) belongs
+    // in every program that uses the integers, not only in those whose
+    // textures spell the handle: runtime code outside the textures linked
+    // into the program may hold one, and binds the program's hidden copy.
+    if program.uses_bigint() && !program.ffi_rc_glue.iter().any(|g| g.ty.bigint().is_some()) {
+        let acquire = program
+            .symbols
+            .get_or_intern(format!("{}_ffi_acquire", ffi_render::RCGMP_GLUE));
+        let release = program
+            .symbols
+            .get_or_intern(format!("{}_ffi_release", ffi_render::RCGMP_GLUE));
+        program.ffi_rc_glue.push(mir::FfiRcGlue {
+            ty: tcx.mk_bigint(crate::semi::ty::BigIntTy::Nat),
+            acquire: mir::Symbol(acquire),
+            release: mir::Symbol(release),
+        });
+    }
+    (program, reports)
 }
 
 /// Resolve a record instance to its ground layout: the field types with the

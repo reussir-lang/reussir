@@ -1,0 +1,19 @@
+// REQUIRES: rcgmp, linux
+// A Reussir shared library with `Nat` textures, which links its own copies
+// of the runtime and of the rcgmp runtime, loaded into a host that also links
+// the shared Reussir runtime ahead of it. The library's rcgmp glue
+// (`__reussir_rcgmp_ffi_acquire` and friends) is hidden, so its textures bind
+// their own copy, next to their own rcgmp runtime, whatever else the process
+// loads; the library exports none of it.
+
+// RUN: rm -rf %t.dir && mkdir -p %t.dir
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc %S/bigint_ffi_edge.rr --package-name bigintffiedge --extern core=%t.core.rri --emit dynlib -o %t.dir/libedge.so %rrc_linker
+// RUN: %cc %S/bigint_ffi_edge.c -o %t.exe -Wl,--no-as-needed -L%library_path -lreussir_rt -L%t.dir -ledge -Wl,-rpath,%t.dir %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %llvm-nm -D --defined-only %t.dir/libedge.so > %t.exports
+// RUN: %FileCheck %s --check-prefix=EXPORT --input-file=%t.exports
+// RUN: %FileCheck %s --check-prefix=HIDDEN --input-file=%t.exports
+
+// EXPORT: reussir_main
+// HIDDEN-NOT: __reussir_rcgmp_ffi

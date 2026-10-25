@@ -1,0 +1,118 @@
+// UNSUPPORTED: darwin
+// The owned `Nat`/`Int` handle of the polymorphic FFI (`reussir_rt::rcgmp::Mpz`)
+// retains and releases through glue the program defines,
+// `__reussir_rcgmp_ffi_acquire` and `__reussir_rcgmp_ffi_release`: `rcgmp.retain`
+// and `rcgmp.release`, `weak_odr`, which survive the textual MIR. Linked into
+// the textures' module, the glue inlines at -O, so cloning or dropping an
+// immediate element of a `Vec<Nat>` is a bit test and calls nothing; only the
+// last release of a heap integer calls the runtime, to free it. The glue is
+// hidden, and every program that uses `Nat` or `Int` defines it, textures or
+// not (`bigint_division.rr`); one without integers does not
+// (`ffi_vec_e2e.rr`). The textures
+// are compiled for rustc's generic target, so the program is too
+// (`--target-cpu generic`): LLVM inlines a callee only into a caller whose
+// target features include its own.
+
+// Each function's checks run as their own prefix over the same IR, so that
+// they do not depend on the order of the functions.
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name bigintffiglue --extern core=%t.core.rri --emit mlir --no-source-locations -o - | %FileCheck %s --check-prefix=GLUE
+// RUN: %rrc %s --package-name bigintffiglue --extern core=%t.core.rri --emit mir -o %t.mir
+// RUN: %FileCheck %s --check-prefix=MIR --input-file=%t.mir
+// RUN: %rrc %t.mir --emit mlir -o - | %FileCheck %s --check-prefix=GLUE
+// RUN: %rrc %s --package-name bigintffiglue --extern core=%t.core.rri -t llvm-ir -Oaggressive --target-cpu generic --target-features= -o %t.ll
+// RUN: %FileCheck %s --check-prefix=CHURN --input-file=%t.ll
+// RUN: %FileCheck %s --check-prefix=PAIR --input-file=%t.ll
+// RUN: %FileCheck %s --check-prefix=DISCARD --input-file=%t.ll
+// RUN: %FileCheck %s --check-prefix=HIDDEN --input-file=%t.ll
+// RUN: %rrc %S/bigint_division.rr --package-name bigint --extern core=%t.core.rri -t llvm-ir -o %t.plain.ll
+// RUN: %FileCheck %s --check-prefix=HIDDEN --input-file=%t.plain.ll
+// RUN: %rrc %S/ffi_vec_e2e.rr -t llvm-ir -o %t.none.ll
+// RUN: %FileCheck %s --check-prefix=NONE --input-file=%t.none.ll
+// RUN: %rrc %s --package-name bigintffiglue --extern core=%t.core.rri -o %t.o --relocation-mode pic -Oaggressive --target-cpu generic --target-features=
+// RUN: %cc %t.o %S/bigint_ffi_glue.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+extern "rust" [{
+    use reussir_rt::collections::vec::Vec as RVec;
+}];
+
+#[ffi(rust = "::reussir_rt::collections::vec::Vec")]
+pub struct Vec<T>;
+
+#[ffi(import)]
+fn new<T>() -> Vec<T> [{ RVec::new() }];
+
+#[ffi(import)]
+fn push<T>(v : Vec<T>, x : T) -> Vec<T> [{ v.push(x) }];
+
+#[ffi(import)]
+fn len<T>(v : Vec<T>) -> u64 [{ v.len() as u64 }];
+
+// Copies the vector's buffer, cloning every element, then drops the copy,
+// releasing every element.
+#[ffi(import)]
+fn churn<T>(v : Vec<T>) -> u64 [{
+    let w = v.clone().pop();
+    w.len() as u64
+}];
+
+// One clone.
+#[ffi(import)]
+fn pair<T>(x : T) -> Vec<T> [{ RVec::new().push(x.clone()).push(x) }];
+
+// One release.
+#[ffi(import)]
+fn discard<T>(x : T) -> u64 [{
+    ::std::mem::drop(x);
+    7
+}];
+
+fn nat(x : u64) -> Nat { x as Nat }
+
+fn fill(v : Vec<Nat>, x : Nat, n : u64) -> Vec<Nat> {
+    if n == 0 { v } else { fill(push(v, x), x + 1, n - 1) }
+}
+
+pub fn main(one : u64) -> u64 {
+    let big = core::intrinsic::bigint::ipowi(nat(2 * one), 100);
+    churn(fill(new<Nat>(), nat(one), 10)) + churn(fill(new<Nat>(), big, 10)) * 100
+        + len(pair(big)) * 10000 + discard(big + 1) * 100000
+}
+
+extern "C" trampoline "reussir_main" = main;
+
+// GLUE: func.func @__reussir_rcgmp_ffi_acquire(%arg0: !rcgmp.mpz) attributes {llvm.linkage = #llvm.linkage<weak_odr>}
+// GLUE-NEXT: rcgmp.retain %arg0
+// GLUE: func.func @__reussir_rcgmp_ffi_release(%arg0: !rcgmp.mpz) attributes {llvm.linkage = #llvm.linkage<weak_odr>}
+// GLUE-NEXT: rcgmp.release %arg0
+
+// MIR: ffi glue @__reussir_rcgmp_ffi_acquire @__reussir_rcgmp_ffi_release : Nat;
+
+// HIDDEN-DAG: define weak_odr hidden void @__reussir_rcgmp_ffi_acquire(ptr
+// HIDDEN-DAG: define weak_odr hidden void @__reussir_rcgmp_ffi_release(ptr
+
+// NONE-NOT: __reussir_rcgmp_ffi
+
+// The copy's clone loop and the drop loop each test an element's low bit, and
+// neither calls the glue or the runtime's retain and release.
+// CHURN: define {{.*}}@{{.*}}5churnNvNvC4core3num3NatE_ffi(
+// CHURN-NOT: call {{.*}}@{{__reussir_rcgmp_ffi_|rcgmp_mpz_retain|rcgmp_mpz_release}}
+// CHURN: and i64 {{.*}}, 1
+// CHURN-NOT: call {{.*}}@{{__reussir_rcgmp_ffi_|rcgmp_mpz_retain|rcgmp_mpz_release}}
+// CHURN: and i64 {{.*}}, 1
+// CHURN-NOT: call {{.*}}@{{__reussir_rcgmp_ffi_|rcgmp_mpz_retain|rcgmp_mpz_release}}
+// CHURN: {{^}}}
+
+// PAIR: define {{.*}}@{{.*}}4pairNvNvC4core3num3NatE_ffi(
+// PAIR-NOT: call {{.*}}@{{__reussir_rcgmp_ffi_acquire|rcgmp_mpz_retain}}
+// PAIR: and i64 {{.*}}, 1
+// PAIR-NOT: call {{.*}}@{{__reussir_rcgmp_ffi_acquire|rcgmp_mpz_retain}}
+// PAIR: {{^}}}
+
+// DISCARD: define {{.*}}@{{.*}}7discardNvNvC4core3num3NatE_ffi(
+// DISCARD-NOT: call {{.*}}@{{__reussir_rcgmp_ffi_|rcgmp_mpz_release}}
+// DISCARD: and i64 {{.*}}, 1
+// DISCARD-NOT: call {{.*}}@{{__reussir_rcgmp_ffi_|rcgmp_mpz_release}}
+// DISCARD: {{^}}}

@@ -20,6 +20,14 @@ use melior::ir::operation::OperationBuilder;
 use melior::ir::r#type::IntegerType;
 use melior::ir::{Identifier, Location, Operation, Region, Type, Value, ValueLike};
 
+/// The names of the glue the codegen emits for the owned `Nat`/`Int` handle
+/// of the polymorphic FFI (`reussir_rt::rcgmp::Mpz`): reussir-core's
+/// `RCGMP_GLUE` base followed by `_ffi_`. [`crate::llvm::LlvmLowering`]
+/// gives their definitions hidden visibility, so that every linked module and
+/// shared library binds its own copy, next to its own view of the rcgmp
+/// runtime.
+pub const FFI_GLUE_PREFIX: &str = "__reussir_rcgmp_ffi_";
+
 /// `!rcgmp.mpz`, the nonatomic integer handle, or `!rcgmp.mpz<atomic>` with
 /// `atomic`; `None` when this build lacks the dialect.
 pub fn mpz_type(context: &Context, atomic: bool) -> Option<Type<'_>> {

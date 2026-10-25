@@ -18,7 +18,12 @@
 
 use std::ffi::CString;
 
-use llvm_sys::core::{LLVMContextCreate, LLVMContextDispose, LLVMDisposeModule, LLVMSetDataLayout};
+use llvm_sys::LLVMVisibility;
+use llvm_sys::core::{
+    LLVMContextCreate, LLVMContextDispose, LLVMDisposeModule, LLVMGetFirstFunction,
+    LLVMGetNextFunction, LLVMGetValueName2, LLVMIsDeclaration, LLVMSetDataLayout,
+    LLVMSetVisibility,
+};
 use llvm_sys::linker::LLVMLinkModules2;
 use llvm_sys::prelude::{LLVMContextRef, LLVMModuleRef};
 
@@ -258,12 +263,33 @@ impl LlvmLowering {
             // two objects carry the same instance. No-op off COFF (Mach-O
             // rejects comdats; ELF weak binding needs none).
             sys::reussirAttachCoffComdats(main as sys::LLVMModuleRef);
+            hide_rcgmp_glue(main);
             // Hand the context off to `Finalized`; null it so our `Drop` is inert.
             let context = std::mem::replace(&mut self.context, std::ptr::null_mut());
             Ok(Finalized {
                 context,
                 module: main,
             })
+        }
+    }
+}
+
+/// Give the owned rcgmp handle's glue ([`crate::rcgmp::FFI_GLUE_PREFIX`])
+/// hidden visibility: a shared library's references then bind its own copy,
+/// next to its own rcgmp runtime, and no copy of another library or of the
+/// executable preempts it.
+unsafe fn hide_rcgmp_glue(module: LLVMModuleRef) {
+    unsafe {
+        let prefix = crate::rcgmp::FFI_GLUE_PREFIX.as_bytes();
+        let mut function = LLVMGetFirstFunction(module);
+        while !function.is_null() {
+            let mut length = 0;
+            let name = LLVMGetValueName2(function, &mut length);
+            let name = std::slice::from_raw_parts(name.cast::<u8>(), length);
+            if name.starts_with(prefix) && LLVMIsDeclaration(function) == 0 {
+                LLVMSetVisibility(function, LLVMVisibility::LLVMHiddenVisibility);
+            }
+            function = LLVMGetNextFunction(function);
         }
     }
 }

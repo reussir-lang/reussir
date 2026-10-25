@@ -583,7 +583,13 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     ) -> Result<[Operation<'c>; 2]> {
         let loc = Location::unknown(self.context);
         let ty = self.tys.mlir_ty(glue.ty)?;
-        let attributes = if define {
+        let attributes = if define && glue.ty.bigint().is_some() {
+            SmallVec::from_buf([(
+                Identifier::new(self.context, "llvm.linkage"),
+                Attribute::parse(self.context, "#llvm.linkage<weak_odr>")
+                    .expect("valid weak_odr linkage attribute"),
+            )])
+        } else if define {
             self.ffi_glue_attributes()
         } else {
             SmallVec::from_buf([(
@@ -606,10 +612,11 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     .argument(0)
                     .map_err(|e| LoweringError(format!("missing glue argument: {e}").into()))?
                     .into();
-                let op = if inc {
-                    dialect::rc_inc(self.context, arg, loc).into()
-                } else {
-                    self.build_rc_dec(arg, glue.ty, loc)
+                let op = match (glue.ty.bigint().is_some(), inc) {
+                    (true, true) => rcgmp::retain(arg, loc),
+                    (true, false) => rcgmp::release(arg, loc),
+                    (false, true) => dialect::rc_inc(self.context, arg, loc).into(),
+                    (false, false) => self.build_rc_dec(arg, glue.ty, loc),
                 };
                 block.append_operation(op);
                 block.append_operation(func::r#return(&[], loc));

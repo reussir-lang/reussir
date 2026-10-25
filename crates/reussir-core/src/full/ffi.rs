@@ -41,7 +41,11 @@
 //!   (`Vec<Nat>`, `[:T:]`), a parameter or result declared as a generic
 //!   instantiated at `Nat` — the owned handle `::reussir_rt::rcgmp::Mpz`,
 //!   whose `Clone`/`Drop` retain and release: the body owns it like any other
-//!   value of the generic, so it may store or return it.
+//!   value of the generic, so it may store or return it. They call the
+//!   compiler-emitted rcgmp glue `__reussir_rcgmp_ffi_acquire` /
+//!   `__reussir_rcgmp_ffi_release` (`rcgmp.retain` / `rcgmp.release`,
+//!   hidden, in every module that uses `Nat` or `Int`), which LLVM inlines
+//!   into the linked texture, immediate test included.
 //!
 //! Symbol scheme (all suffixes appended to complete v0 manglings, which is
 //! injective — no valid v0 symbol is a prefix of another):
@@ -49,7 +53,8 @@
 //! * `<fn instance>` — the native function callers call;
 //! * `<fn instance>_ffi` — the Rust-side boundary wrapper;
 //! * `<record instance>_ffi_drop` — an opaque instance's drop hook;
-//! * `<record instance>_ffi_acquire` / `_ffi_release` — Reussir rc glue.
+//! * `<record instance>_ffi_acquire` / `_ffi_release` — Reussir rc glue;
+//!   `__reussir_rcgmp_ffi_acquire` / `_ffi_release` for `Nat` / `Int`.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -107,6 +112,11 @@ impl ComparisonBridgeNeeds {
 /// A shared-record boundary wrapper collected while rendering. Its declaration
 /// is rendered only after all mentions have unioned their comparison needs.
 /// Keyed by the instance's v0 symbol in a `BTreeMap` for deterministic output.
+///
+/// The owned `Nat` / `Int` handle has an entry too, keyed [`RCGMP_GLUE`]: it
+/// declares nothing (`reussir_rt::rcgmp::Mpz` is the wrapper) and needs no
+/// comparison bridge (`Mpz` compares by value itself); it only makes
+/// monomorphization emit the handle's acquire/release glue.
 #[derive(Clone)]
 pub struct WrapperDecl<'tcx> {
     pub symbol: String,
@@ -124,6 +134,9 @@ impl WrapperDecl<'_> {
     /// on `reussir_rt::bridge::Bridge<T>`; this inner type implements only the
     /// local bridge traits, preserving the orphan-rule boundary.
     pub fn render(&self) -> String {
+        if matches!(self.ty.kind(), TyKind::BigInt(_)) {
+            return String::new();
+        }
         let sym = &self.symbol;
         let release = self.release_symbol();
         let mut d = String::new();
@@ -333,7 +346,16 @@ impl<'a, 'tcx> FfiCtx<'a, 'tcx> {
             TyKind::Arc(_) => Err("an `Arc` coloring cannot cross the FFI boundary yet".into()),
             TyKind::Nullable(_) => Err("`Nullable` cannot cross the FFI boundary yet".into()),
             TyKind::ConstSeq(_) => Err("a `ConstSeq` cannot cross the FFI boundary yet".into()),
-            TyKind::BigInt(_) => Ok(RCGMP_OWNED.into()),
+            TyKind::BigInt(_) => {
+                decls
+                    .entry(RCGMP_GLUE.to_owned())
+                    .or_insert_with(|| WrapperDecl {
+                        symbol: RCGMP_GLUE.to_owned(),
+                        ty,
+                        needs: ComparisonBridgeNeeds::default(),
+                    });
+                Ok(RCGMP_OWNED.into())
+            }
             // `str` lowers to `{ptr, len}`; the runtime's `#[repr(C)]`
             // borrowed view is bit-identical. Every surface `str` today is a
             // `'static` global literal, so the spelled lifetime is sound —
@@ -475,6 +497,13 @@ const RCGMP_HANDLE: &str = "*mut ::std::ffi::c_void";
 /// The Rust spelling of a `Nat` / `Int` anywhere else: the owned handle,
 /// which retains when cloned and releases when dropped.
 const RCGMP_OWNED: &str = "::reussir_rt::rcgmp::Mpz";
+
+/// The glue base of the owned handle: its `Clone`/`Drop` call
+/// `__reussir_rcgmp_ffi_acquire` / `__reussir_rcgmp_ffi_release`, which every
+/// program that renders it or otherwise uses `Nat` or `Int` defines (see
+/// `monomorphize`), hidden, so runtime code outside the textures linked into
+/// such a program finds them too.
+pub const RCGMP_GLUE: &str = "__reussir_rcgmp";
 
 /// Whether an `#[ffi(import)]` parameter or result of type `ty`, declared as
 /// `declared`, crosses as the raw rcgmp handle: the signature spells `Nat` or

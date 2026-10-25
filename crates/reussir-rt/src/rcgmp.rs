@@ -2,23 +2,32 @@
 //! integers as its own values, such as the textures of the polymorphic FFI.
 //!
 //! An [`Mpz`] owns one reference of an rcgmp integer
-//! (`RCGMP/Runtime/Mpz.h`): cloning retains it and dropping releases it,
-//! through the rcgmp runtime's C entry points, and it has the layout of the
-//! handle itself (`#[repr(transparent)]`). Counting is nonatomic: an `Arc`
-//! coloring never crosses the FFI boundary. Comparisons read the values
-//! (`rcgmp_mpz_cmp`), so ordered containers keyed by integers order them by
-//! value.
+//! (`RCGMP/Runtime/Mpz.h`): cloning retains it and dropping releases it, and
+//! it has the layout of the handle itself (`#[repr(transparent)]`). Counting
+//! is nonatomic: an `Arc` coloring never crosses the FFI boundary.
+//! Comparisons read the values (`rcgmp_mpz_cmp`), so ordered containers keyed
+//! by integers order them by value.
 //!
-//! Every method that calls the rcgmp runtime is `#[inline]`, so it is compiled
-//! only into the code that uses it: this crate itself references no rcgmp
-//! symbol, and a program without integers links without the rcgmp runtime.
+//! Cloning and dropping call `__reussir_rcgmp_ffi_acquire` and
+//! `__reussir_rcgmp_ffi_release`, glue the compiler emits into every module
+//! that uses `Nat` or `Int`: `rcgmp.retain` and `rcgmp.release`, `weak_odr`
+//! and hidden, so that each linked module or shared library binds its own
+//! copy, next to its own view of the rcgmp runtime. LLVM inlines the glue
+//! into the linked texture code: an immediate costs a bit test, and the rcgmp
+//! lowering decides the test, as the dialect does not make its tag an ABI.
+//! Runtime code outside the textures that holds an `Mpz` resolves the glue
+//! against the program it is linked into, which uses integers.
+//!
+//! Every method of [`Mpz`] is `#[inline]`, compiled only into the code that
+//! uses it: this crate references neither the glue nor the rcgmp runtime, and
+//! a program without integers links without them.
 
 use core::cmp::Ordering;
 use core::ffi::c_void;
 
 unsafe extern "C" {
-    fn rcgmp_mpz_retain(value: *mut c_void, atomic: u32) -> *mut c_void;
-    fn rcgmp_mpz_release(value: *mut c_void, atomic: u32);
+    fn __reussir_rcgmp_ffi_acquire(value: *mut c_void);
+    fn __reussir_rcgmp_ffi_release(value: *mut c_void);
     fn rcgmp_mpz_cmp(lhs: *mut c_void, rhs: *mut c_void) -> i32;
 }
 
@@ -56,14 +65,15 @@ impl Mpz {
 impl Clone for Mpz {
     #[inline]
     fn clone(&self) -> Self {
-        Self(unsafe { rcgmp_mpz_retain(self.0, 0) })
+        unsafe { __reussir_rcgmp_ffi_acquire(self.0) };
+        Self(self.0)
     }
 }
 
 impl Drop for Mpz {
     #[inline]
     fn drop(&mut self) {
-        unsafe { rcgmp_mpz_release(self.0, 0) }
+        unsafe { __reussir_rcgmp_ffi_release(self.0) }
     }
 }
 
