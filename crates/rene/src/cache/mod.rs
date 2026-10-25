@@ -110,6 +110,17 @@ impl EntryId {
             key: key.into(),
         }
     }
+
+    /// The entry a [`Display`](std::fmt::Display)ed id names: `kind/key`,
+    /// with a kind of [`kind::ALL`] and an alphanumeric key, as [`key`]
+    /// makes them. `None` for anything else, so a corrupt record never
+    /// names a path outside the cache.
+    pub fn parse(text: &str) -> Option<Self> {
+        let (kind, key) = text.split_once('/')?;
+        let kind = kind::ALL.iter().find(|known| **known == kind)?;
+        let plain = !key.is_empty() && key.bytes().all(|b| b.is_ascii_alphanumeric());
+        plain.then(|| EntryId::new(kind, key))
+    }
 }
 
 impl std::fmt::Display for EntryId {
@@ -336,6 +347,10 @@ mod tests {
         assert!(tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55"));
         let id = EntryId::new("rt", "abc");
         assert_eq!(id.to_string(), "rt/abc");
+        assert_eq!(EntryId::parse("rt/abc"), Some(id.clone()));
+        for text in ["rt", "rt/", "rt/a/b", "rt/..", "rt/.", "unknown/abc"] {
+            assert_eq!(EntryId::parse(text), None, "{text}");
+        }
         let entry = cache.entry(&id);
         assert_eq!(entry, cache.root().join("rt").join("abc"));
         assert_eq!(
