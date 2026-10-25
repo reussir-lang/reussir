@@ -17,6 +17,9 @@
 //! lowering decides the test, as the dialect does not make its tag an ABI.
 //! Runtime code outside the textures that holds an `Mpz` resolves the glue
 //! against the program it is linked into, which uses integers.
+//! [`Mpz::is_shared`] asks a third glue function emitted with them,
+//! `__reussir_rcgmp_ffi_is_unique`: an immediate test, then
+//! `rcgmp.bridge.mpz.is_unique`.
 //!
 //! Every method of [`Mpz`] is `#[inline]`, compiled only into the code that
 //! uses it: this crate references neither the glue nor the rcgmp runtime, and
@@ -28,6 +31,7 @@ use core::ffi::c_void;
 unsafe extern "C" {
     fn __reussir_rcgmp_ffi_acquire(value: *mut c_void);
     fn __reussir_rcgmp_ffi_release(value: *mut c_void);
+    fn __reussir_rcgmp_ffi_is_unique(value: *mut c_void) -> u8;
     fn rcgmp_mpz_cmp(lhs: *mut c_void, rhs: *mut c_void) -> i32;
 }
 
@@ -59,6 +63,17 @@ impl Mpz {
     #[inline]
     pub fn as_ptr(&self) -> *mut c_void {
         self.0
+    }
+
+    /// Whether another reference also holds this integer, the question of
+    /// Lean's `dbgTraceIfShared` (`!lean_is_scalar(a) && !lean_is_exclusive(a)`):
+    /// never for an immediate, and for a heap integer unless `self` is its
+    /// only reference. An immortal one (a literal) is shared, as a persistent
+    /// Lean object is not exclusive. It asks the compiler's
+    /// `__reussir_rcgmp_ffi_is_unique` glue (`rcgmp.bridge.mpz.is_unique`).
+    #[inline]
+    pub fn is_shared(&self) -> bool {
+        unsafe { __reussir_rcgmp_ffi_is_unique(self.0) == 0 }
     }
 }
 

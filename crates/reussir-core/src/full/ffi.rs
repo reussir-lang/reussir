@@ -505,6 +505,11 @@ const RCGMP_OWNED: &str = "::reussir_rt::rcgmp::Mpz";
 /// such a program finds them too.
 pub const RCGMP_GLUE: &str = "__reussir_rcgmp";
 
+/// The third glue function of the owned handle, emitted with its
+/// acquire/release pair: whether a handle is an immediate or the only
+/// reference of a heap integer (`Mpz::is_shared` negates it).
+pub const RCGMP_IS_UNIQUE: &str = "__reussir_rcgmp_ffi_is_unique";
+
 /// Whether an `#[ffi(import)]` parameter or result of type `ty`, declared as
 /// `declared`, crosses as the raw rcgmp handle: the signature spells `Nat` or
 /// `Int` itself. A generic instantiated at `Nat` or `Int` crosses as the

@@ -73,6 +73,35 @@ pub fn release<'c>(value: Value<'c, '_>, location: Location<'c>) -> Operation<'c
         .expect("valid rcgmp.release")
 }
 
+/// `rcgmp.bridge.mpz.is_immediate <value>`: whether a handle is an
+/// immediate, from its tag alone.
+pub fn is_immediate<'c>(
+    context: &'c Context,
+    value: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("rcgmp.bridge.mpz.is_immediate", location)
+        .add_operands(&[value])
+        .add_results(&[IntegerType::new(context, 1).into()])
+        .build()
+        .expect("valid rcgmp.bridge.mpz.is_immediate")
+}
+
+/// `rcgmp.bridge.mpz.is_unique <value>`: whether a heap integer, which the
+/// caller holds a reference of, has no other reference; false for an
+/// immortal. `value` must not be an immediate.
+pub fn is_unique<'c>(
+    context: &'c Context,
+    value: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("rcgmp.bridge.mpz.is_unique", location)
+        .add_operands(&[value])
+        .add_results(&[IntegerType::new(context, 1).into()])
+        .build()
+        .expect("valid rcgmp.bridge.mpz.is_unique")
+}
+
 /// A binary operation consuming both operands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Binary {

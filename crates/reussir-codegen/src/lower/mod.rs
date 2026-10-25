@@ -573,7 +573,7 @@ pub fn lower_unit<'c, 'tcx>(
             continue;
         }
         ffi_symbols.push(program.symbol(glue.release));
-        for op in lowerer.ffi_rc_glue_pair(glue, define)? {
+        for op in lowerer.ffi_rc_glue(glue, define)? {
             body.append_operation(op);
         }
     }

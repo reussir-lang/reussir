@@ -1,0 +1,74 @@
+// UNSUPPORTED: darwin
+// `reussir_rt::rcgmp::Mpz::is_shared`, the question of Lean's
+// `dbgTraceIfShared`, asks the compiler-emitted glue
+// `__reussir_rcgmp_ffi_is_unique`: an immediate test, then
+// `rcgmp.bridge.mpz.is_unique`. An immediate is never shared, a heap integer
+// only while another reference holds it, and an immortal literal always, as a
+// persistent Lean object is never exclusive. The program runs with the glue out
+// of line (textures for rustc's generic target, the program for the host) and
+// inlined (`--target-cpu generic`); the sanitizer variant
+// (`sanitizer/bigint-ffi-shared-asan.rr`) checks the balance.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name bigintffishared --extern core=%t.core.rri --emit mlir --no-source-locations -o - | %FileCheck %s --check-prefix=GLUE
+// RUN: %rrc %s --package-name bigintffishared --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/bigint_ffi_shared.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s --package-name bigintffishared --extern core=%t.core.rri -o %t.inline.o --relocation-mode pic -Oaggressive --target-cpu generic --target-features=
+// RUN: %cc %t.inline.o %S/bigint_ffi_shared.c -o %t.inline.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.inline.exe
+
+extern "rust" [{
+    use reussir_rt::collections::vec::Vec as RVec;
+}];
+
+#[ffi(rust = "::reussir_rt::collections::vec::Vec")]
+pub struct Vec<T>;
+
+#[ffi(import)]
+fn new<T>() -> Vec<T> [{ RVec::new() }];
+
+#[ffi(import)]
+fn push<T>(v : Vec<T>, x : T) -> Vec<T> [{ v.push(x) }];
+
+// Whether the argument is shared while the texture holds it.
+#[ffi(import)]
+fn shared<T>(x : T) -> bool [{ x.is_shared() }];
+
+// Whether the argument and its clone are both shared.
+#[ffi(import)]
+fn shared_after_clone<T>(x : T) -> bool [{
+    let y = x.clone();
+    x.is_shared() && y.is_shared()
+}];
+
+// Whether element `i` is shared, read while the vector also holds it.
+#[ffi(import)]
+fn element_shared<T>(v : Vec<T>, i : u64) -> bool [{ v.get(i as usize).unwrap().is_shared() }];
+
+fn nat(x : u64) -> Nat { x as Nat }
+
+fn int(x : i64) -> Int { x as Int }
+
+fn digit(ok : bool) -> i64 { if ok { 1 } else { 0 } }
+
+// Another reference, the caller's, holds `y` during the call.
+fn kept(y : Nat) -> bool { shared(y) && y == y }
+
+pub fn main(one : u64) -> i64 {
+    let big = core::intrinsic::bigint::ipowi(nat(2 * one), 100);
+    let literal : Nat = 1267650600228229401496703205376;
+    let v = push(push(new<Nat>(), big + 4), nat(5 * one));
+    digit(!shared(nat(7 * one))) + digit(!shared(big + 1)) * 10 + digit(kept(big + 2)) * 100
+        + digit(shared_after_clone(big + 3)) * 1000 + digit(shared(literal)) * 10000
+        + digit(!shared(int(0) - big as Int)) * 100000
+        + digit(element_shared(v, 0) && !element_shared(v, 1)) * 1000000
+}
+
+extern "C" trampoline "reussir_main" = main;
+
+// GLUE: func.func @__reussir_rcgmp_ffi_is_unique(%arg0: !rcgmp.mpz) -> i8 attributes {llvm.linkage = #llvm.linkage<weak_odr>}
+// GLUE-NEXT: rcgmp.bridge.mpz.is_immediate %arg0
+// GLUE: rcgmp.bridge.mpz.is_unique %arg0
+// GLUE: arith.extui

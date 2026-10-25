@@ -576,11 +576,11 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     /// `release` decrements the box of a value of `glue.ty`. Bound by the
     /// generated foreign wrappers' `Clone`/`Drop` impls, so the symbols must
     /// stay external for the linked bitcode to resolve them.
-    pub(super) fn ffi_rc_glue_pair(
+    pub(super) fn ffi_rc_glue(
         &self,
         glue: &mir::FfiRcGlue<'tcx>,
         define: bool,
-    ) -> Result<[Operation<'c>; 2]> {
+    ) -> Result<Vec<Operation<'c>>> {
         let loc = Location::unknown(self.context);
         let ty = self.tys.mlir_ty(glue.ty)?;
         let attributes = if define && glue.ty.bigint().is_some() {
@@ -631,10 +631,65 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 loc,
             ))
         };
-        Ok([
+        let mut functions = vec![
             build(self.program.symbol(glue.acquire), true)?,
             build(self.program.symbol(glue.release), false)?,
-        ])
+        ];
+        if define && glue.ty.bigint().is_some() {
+            functions.push(self.rcgmp_is_unique_glue(ty, &attributes)?);
+        }
+        Ok(functions)
+    }
+
+    /// `__reussir_rcgmp_ffi_is_unique(x) -> u8`: 1 when the borrowed handle
+    /// `x` is an immediate or the only reference of a heap integer, 0 when
+    /// another reference holds it or it is immortal (`rcgmp.bridge.mpz.
+    /// is_unique`, which only a heap handle may take). It returns a byte
+    /// rather than an `i1`, as the borrowed comparison entries do, so that
+    /// the C ABI's value is defined.
+    fn rcgmp_is_unique_glue(
+        &self,
+        ty: Type<'c>,
+        attributes: &[(Identifier<'c>, Attribute<'c>)],
+    ) -> Result<Operation<'c>> {
+        let loc = Location::unknown(self.context);
+        let i1: Type<'c> = IntegerType::new(self.context, 1).into();
+        let byte: Type<'c> = IntegerType::new(self.context, 8).into();
+        let block = Block::new(&[(ty, loc)]);
+        let arg: Value<'c, '_> = block
+            .argument(0)
+            .map_err(|e| LoweringError(format!("missing glue argument: {e}").into()))?
+            .into();
+        let immediate = self.append(&block, rcgmp::is_immediate(self.context, arg, loc));
+        let then_block = Block::new(&[]);
+        let unique = self.append(
+            &then_block,
+            arith::constant(self.context, IntegerAttribute::new(i1, 1).into(), loc),
+        );
+        then_block.append_operation(scf::r#yield(&[unique], loc));
+        let then_region = Region::new();
+        then_region.append_block(then_block);
+        let else_block = Block::new(&[]);
+        let unique = self.append(&else_block, rcgmp::is_unique(self.context, arg, loc));
+        else_block.append_operation(scf::r#yield(&[unique], loc));
+        let else_region = Region::new();
+        else_region.append_block(else_block);
+        let unique = self.append(
+            &block,
+            scf::r#if(immediate, &[i1], then_region, else_region, loc),
+        );
+        let result = self.append(&block, arith::extui(unique, byte, loc));
+        block.append_operation(func::r#return(&[result], loc));
+        let region = Region::new();
+        region.append_block(block);
+        Ok(func::func(
+            self.context,
+            StringAttribute::new(self.context, reussir_core::full::ffi::RCGMP_IS_UNIQUE),
+            TypeAttribute::new(FunctionType::new(self.context, &[ty], &[byte]).into()),
+            region,
+            attributes,
+            loc,
+        ))
     }
 
     /// Build one borrowed comparison entry. The foreign caller retains both

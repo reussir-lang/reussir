@@ -92,6 +92,7 @@ extern "C" trampoline "reussir_main" = main;
 
 // HIDDEN-DAG: define weak_odr hidden void @__reussir_rcgmp_ffi_acquire(ptr
 // HIDDEN-DAG: define weak_odr hidden void @__reussir_rcgmp_ffi_release(ptr
+// HIDDEN-DAG: define weak_odr hidden i8 @__reussir_rcgmp_ffi_is_unique(ptr
 
 // NONE-NOT: __reussir_rcgmp_ffi
 
