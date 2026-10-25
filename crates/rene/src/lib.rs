@@ -12,7 +12,8 @@
 //! package ([`new`]). What every build has in common — the sources of the
 //! libraries bundled inside rene ([`bundled`]), the runtime bake, and the
 //! bundled libraries' compiled artifacts ([`shared`]) — lives once per user
-//! in the shared [`cache`].
+//! in the shared [`cache`], whose [`ledger`] records which build uses which
+//! entry.
 
 pub mod bundled;
 pub mod cache;
@@ -21,6 +22,7 @@ pub mod db;
 pub mod deps;
 pub mod exec;
 pub mod fresh;
+pub mod ledger;
 pub mod manifest;
 pub mod new;
 pub mod plan;

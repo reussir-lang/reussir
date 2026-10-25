@@ -75,9 +75,10 @@ pub struct Cache {
     root: PathBuf,
 }
 
-/// The kinds of entry, each a directory directly under the root. Nothing
-/// else lives there but `CACHEDIR.TAG` and `rene.lock`, so whatever walks
-/// the cache walks exactly [`kind::ALL`].
+/// The kinds of entry, each a directory directly under the root. Besides
+/// them the root holds only `CACHEDIR.TAG`, `rene.lock`, and the cache
+/// [`ledger`](crate::ledger)'s `ledger/` and `sessions/`, so whatever walks
+/// the entries walks exactly [`kind::ALL`].
 pub mod kind {
     /// The bundled `core` package's sources ([`crate::bundled`]).
     pub const CORE_SRC: &str = "core-src";
