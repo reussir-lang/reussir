@@ -18,6 +18,7 @@ sources under `src/` (`src/lib.rr` is the root module). A minimal manifest:
     version = "1.0.0",
   },
   dependencies = {
+    std = { bundled = true, version = "^0.1" },
     textio = { path = "vendor/textio", version = "^0.5" },
   },
   targets = {
@@ -52,7 +53,11 @@ the nearest `rene.ncl` at or above the current directory and builds into
 goes to stderr); a package declaring no targets stops after the runtime bake
 and prints the library directories to pass to `rrc --polyffi-libdir` by hand.
 
-What every build has in common (the bundled `core` and the runtime bake)
+`core` is bundled inside rene and injected into every package (opt out with
+`package.no_core`). `std` is bundled too, but opt-in: `bundled = true`
+instead of a `path`. Both are packed from `library/` when rene is built.
+
+What every build has in common (the bundled libraries and the runtime bake)
 lives in a per-user cache: `$XDG_CACHE_HOME/rene` (or `~/.cache/rene`) on
 Linux, `~/Library/Caches/rene` on macOS, and `%LOCALAPPDATA%\rene` on
 Windows. Set `RENE_CACHE_DIR` to use another directory; the lit suites point

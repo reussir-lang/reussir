@@ -1,24 +1,33 @@
-//! The library packages bundled inside rene.
+//! The library packages bundled inside rene: `core` and `std`.
 //!
-//! `core`, the language-coupled layer of the standard library, is written in
-//! Reussir and compiled like any other dependency, but shipped *inside*
-//! rene, exactly like the `reussir-rt` bundle: a zstd-compressed tar of its
-//! manifest and sources, packed by `build.rs`. It is injected into every
-//! build's dependency graph unless a package opts out with
-//! `package.no_core`.
+//! Both are written in Reussir and compiled like any other dependency, but
+//! shipped *inside* rene, exactly like the `reussir-rt` bundle: a
+//! zstd-compressed tar of each package's manifest and sources, packed by
+//! `build.rs`.
 //!
-//! A bundle's sources unpack once into the shared [`Cache`], under its
-//! content hash. Every build of every package reads the same tree, a rene
-//! upgrade materializes a new one, and the ordinary per-package freshness
-//! machinery sees the change: a dependency whose recorded sources no longer
-//! lie under its directory is rebuilt. Their compiled artifacts are shared
-//! through the cache as well ([`crate::shared`]).
+//! - `core` is the language-coupled layer. It is injected into every
+//!   build's dependency graph unless a package opts out with
+//!   `package.no_core`.
+//! - `std` is opt-in: a package depends on it with
+//!   `dependencies.std = { bundled = true }`.
+//!
+//! This table is also the list of reserved package names, which `rrc
+//! --builtin` lifts for exactly these packages' builds.
+//!
+//! A bundle's sources unpack into the shared [`Cache`], under its content
+//! hash, the first time a graph uses it ([`load_graph`]). Every build of
+//! every package reads the same tree, a rene upgrade materializes a new one,
+//! and the ordinary per-package freshness machinery sees the change: a
+//! dependency whose recorded sources no longer lie under its directory is
+//! rebuilt. Their compiled artifacts are shared through the cache as well
+//! ([`crate::shared`]).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::cache::{self, Acquired, Cache, EntryId, Request, Usage};
-use crate::resolve::Graph;
+use crate::manifest::Loaded;
+use crate::resolve::{self, Graph};
 
 /// One bundled package.
 pub struct Bundle {
@@ -38,12 +47,43 @@ pub static CORE: Bundle = Bundle {
     bytes: include_bytes!(concat!(env!("OUT_DIR"), "/core-src.tar.zst")),
 };
 
+/// The bundled `std`.
+pub static STD: Bundle = Bundle {
+    name: "std",
+    kind: cache::kind::STD_SRC,
+    bytes: include_bytes!(concat!(env!("OUT_DIR"), "/std-src.tar.zst")),
+};
+
 /// Every bundle.
-pub static ALL: [&Bundle; 1] = [&CORE];
+pub static ALL: [&Bundle; 2] = [&CORE, &STD];
 
 /// The bundle named `name`, if rene ships one.
 pub fn find(name: &str) -> Option<&'static Bundle> {
     ALL.iter().copied().find(|bundle| bundle.name == name)
+}
+
+/// The names of the bundles, for diagnostics.
+pub fn names() -> String {
+    ALL.iter()
+        .map(|bundle| format!("`{}`", bundle.name))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Load the dependency graph rooted at `root`, unpacking into `cache`
+/// exactly the bundles it uses: those its `bundled = true` dependencies
+/// name, and `core` unless every package opts out of it.
+pub async fn load_graph(cache: &Cache, root: &Loaded) -> Result<Graph, String> {
+    let mut loader = resolve::Loader::new(root);
+    while let Some(name) = loader.next_bundle()? {
+        // Manifest validation admits only the names of bundles.
+        let bundle = find(&name).ok_or_else(|| format!("rene bundles no `{name}`"))?;
+        loader.provide(&name, bundle.unpack(cache).await?);
+    }
+    if loader.wants_core() {
+        loader.provide(CORE.name, CORE.unpack(cache).await?);
+    }
+    loader.finish()
 }
 
 /// The bundles `graph` builds from their bundled sources, as name to
@@ -146,8 +186,9 @@ mod tests {
 
     #[test]
     fn bundles_are_found_by_name() {
-        assert_eq!(find("core").map(|b| b.name), Some("core"));
+        assert_eq!(find("std").map(|b| b.name), Some("std"));
         assert!(find("serde").is_none());
+        assert_eq!(names(), "`core`, `std`");
     }
 
     /// A bundle holds exactly the package's manifest and sources: nothing a

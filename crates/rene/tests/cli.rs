@@ -645,6 +645,81 @@ fn packages_share_compiled_core_through_the_cache() {
     assert_eq!(core_compiles(), 6);
 }
 
+/// Write a package `name` under `dir` that declares one executable and
+/// depends on the bundled std.
+#[cfg(unix)]
+fn std_package(dir: &Path, name: &str) -> PathBuf {
+    let manifest = package(dir, name);
+    std::fs::write(
+        &manifest,
+        format!(
+            "{{ package = {{ name = \"{name}\", version = \"0.1.0\" }}, \
+             dependencies.std = {{ bundled = true, version = \"^0.1\" }}, \
+             targets.{name}.kind = 'executable }}\n"
+        ),
+    )
+    .unwrap();
+    manifest
+}
+
+/// `std = { bundled = true }` builds the std bundled in rene: unpacked only
+/// once a package asks for it, and compiled once for every package that
+/// does, after the core it depends on.
+#[cfg(unix)]
+#[test]
+fn bundled_std_is_compiled_once_for_every_package() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let std_compiles = || {
+        fakes
+            .compiles()
+            .into_iter()
+            .filter(|line| line.contains("--package-name std"))
+            .collect::<Vec<_>>()
+    };
+    let plain = tmp.join("plain");
+    let manifest = executable_package(&plain, "plain");
+    let out = fakes.rene(&["build"], &manifest, &plain.join("reussir-build"));
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(!fakes.cache.join("std-src").exists());
+
+    for name in ["first", "second"] {
+        let pkg = tmp.join(name);
+        let manifest = std_package(&pkg, name);
+        let root = pkg.join("reussir-build");
+        let out = fakes.rene(&["build"], &manifest, &root);
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        assert!(root.join("dev/deps/std.rri").is_file());
+    }
+    let compiles = std_compiles();
+    assert_eq!(compiles.len(), 2, "{compiles:#?}");
+    // The std sources come from the cache, and std builds against core, both
+    // as built-ins.
+    let std_src = cache_entries(&fakes.cache.join("std-src"));
+    assert_eq!(std_src.len(), 1);
+    let root = format!("--package-root {}", std_src[0].join("src").display());
+    for line in &compiles {
+        assert!(line.contains(&root), "{line}");
+        assert!(line.contains("--extern core="), "{line}");
+        assert!(line.contains("--builtin"), "{line}");
+    }
+    // core and std, each once.
+    assert_eq!(cache_entries(&fakes.cache.join("deps")).len(), 2);
+
+    // The root's targets see std.
+    let manifest = tmp.join("second/rene.ncl");
+    let root = tmp.join("second/reussir-build");
+    assert_eq!(
+        frozen_report(&fakes, &manifest, &root)["state"],
+        "up-to-date"
+    );
+    let out = fakes.rene(&["inspect", "--frozen", "--commands"], &manifest, &root);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let plan = String::from_utf8(out.stdout).unwrap();
+    assert!(plan.contains("std="), "{plan}");
+}
+
 /// Two renes needing the same bake and the same core at once run cargo once
 /// and compile core once: the second waits for the first's bake, says so
 /// once, and then shares the bake and core through the cache.

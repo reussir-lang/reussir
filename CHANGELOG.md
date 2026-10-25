@@ -162,6 +162,13 @@
   `rustc` and (unless one is configured) its `cargo` by path; `rrc` gets the
   same `rustc`. Cargo's outputs stay inside the bake whatever
   `CARGO_TARGET_DIR` or the cargo configuration says.
+- `rene` bundles `std` alongside `core`. A package uses it with
+  `dependencies.std = { bundled = true, version = "^0.1" }` instead of a
+  path to `library/std`; it unpacks into the per-user cache the first time
+  a build uses it, and is compiled once per target, profile, and toolchain
+  for every package that asks for it. `bundled` is exclusive with `path`,
+  and naming a package rene does not bundle is a manifest error. The
+  bundled libraries are also the package names `rrc --builtin` reserves.
 
 ## 0.1.0
 

@@ -160,9 +160,10 @@ never changed in place. Beside it live only `<key>.lock` and the unique
 siblings `<key>.tmp-<pid>-<n>` (staging) and `<key>.rm-<pid>-<n>` (trash).
 The kinds:
 
-- `core-src/<content hash>`: the bundled `core` package's manifest and
-  sources, unpacked into a staging sibling and renamed into place. Builds
-  read them in place.
+- `core-src/<content hash>`, `std-src/<content hash>`: a bundled library's
+  manifest and sources, unpacked into a staging sibling and renamed into
+  place the first time a build's graph uses the library. Builds read them
+  in place.
 - `rt/<key>`: a bake. The key hashes the bundle content (with the rcgmp
   archive), the target, the toolchain (its `rustc` binary, sysroot, and
   version, resolved as §3's status describes), the cargo path, the

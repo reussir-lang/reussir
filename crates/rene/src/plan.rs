@@ -251,7 +251,7 @@ fn package_args(
     ]);
     // The bundled libraries carry reserved names; `--builtin` lifts the
     // reservation for exactly their builds.
-    if crate::resolve::BUILTIN_PACKAGES.contains(&node.loaded.manifest.package.name.as_str()) {
+    if crate::bundled::find(&node.loaded.manifest.package.name).is_some() {
         args.push("--builtin".to_owned());
     }
     args

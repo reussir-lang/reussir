@@ -50,26 +50,128 @@ pub struct Solution {
     pub pinned: BTreeMap<String, SemanticVersion>,
 }
 
-/// The bundled libraries, whose names are reserved: `rrc --builtin` lifts the
-/// reservation for their own builds and elaborates them with every feature.
-pub(crate) const BUILTIN_PACKAGES: &[&str] = &["core", "std"];
+/// The bundled package every package depends on unless it opts out.
+const CORE: &str = "core";
 
-/// Load the transitive graph rooted at `root`'s manifest.
+/// Load the transitive graph rooted at `root`'s manifest, with no bundled
+/// packages: no implicit `core`, and a `bundled = true` dependency is an
+/// error.
 pub fn load_graph(root: &Loaded) -> Result<Graph, String> {
-    load_graph_with(root, None)
+    let mut loader = Loader::new(root);
+    if let Some(name) = loader.next_bundle()? {
+        return Err(format!(
+            "a dependency asks for the bundled package `{name}`, which this \
+             build does not provide"
+        ));
+    }
+    loader.finish()
 }
 
-/// [`load_graph`], with the bundled `core` package (at `core_dir`) grafted
-/// in: loaded like any other node and made an implicit dependency of every
-/// package that does not set `package.no_core`. Its edge carries no
-/// manifest entry, so constraint lookups fall back to `*`.
-pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, String> {
-    let mut nodes: BTreeMap<String, Node> = BTreeMap::new();
-    let root_name = root.manifest.package.name.clone();
-    let mut queue: Vec<(String, Loaded)> = vec![(root_name.clone(), root.clone())];
-    while let Some((name, loaded)) = queue.pop() {
+/// Loads the transitive graph rooted at a manifest, asking its driver for
+/// each bundled package as the graph first needs it, so a bundle is
+/// unpacked only when some package uses it. The driver loops on
+/// [`next_bundle`](Self::next_bundle), [`provide`](Self::provide)s each
+/// bundle it names, provides `core` if the graph
+/// [`wants_core`](Self::wants_core), and [`finish`](Self::finish)es. No
+/// manifest is evaluated twice.
+pub struct Loader {
+    root: String,
+    nodes: BTreeMap<String, Node>,
+    /// Packages whose manifests are loaded, but not yet their dependencies'.
+    queue: Vec<(String, Loaded)>,
+    /// The provided bundles' source directories, by package name.
+    bundles: BTreeMap<String, PathBuf>,
+}
+
+impl Loader {
+    pub fn new(root: &Loaded) -> Self {
+        let root_name = root.manifest.package.name.clone();
+        Loader {
+            queue: vec![(root_name.clone(), root.clone())],
+            root: root_name,
+            nodes: BTreeMap::new(),
+            bundles: BTreeMap::new(),
+        }
+    }
+
+    /// Load every package the graph reaches with the bundles provided so
+    /// far, and name the next bundle a dependency asks for
+    /// (`bundled = true`) that is not provided yet; `None` once every
+    /// package is loaded.
+    pub fn next_bundle(&mut self) -> Result<Option<String>, String> {
+        while let Some((name, loaded)) = self.queue.pop() {
+            let missing = loaded
+                .manifest
+                .dependencies
+                .iter()
+                .find(|(dep_name, dep)| dep.bundled && !self.bundles.contains_key(*dep_name))
+                .map(|(dep_name, _)| dep_name.clone());
+            if let Some(missing) = missing {
+                self.queue.push((name, loaded));
+                return Ok(Some(missing));
+            }
+            self.load(name, loaded)?;
+        }
+        Ok(None)
+    }
+
+    /// Supply the source directory of the bundled package `name`.
+    pub fn provide(&mut self, name: &str, dir: PathBuf) {
+        self.bundles.insert(name.to_owned(), dir);
+    }
+
+    /// Whether the loaded graph wants the bundled `core`: some package does
+    /// not set `package.no_core`, and none is itself named `core`.
+    pub fn wants_core(&self) -> bool {
+        !self.nodes.contains_key(CORE)
+            && self
+                .nodes
+                .values()
+                .any(|node| !node.loaded.manifest.package.no_core)
+    }
+
+    /// The graph, once [`next_bundle`](Self::next_bundle) asks for nothing
+    /// more. A provided bundled `core` the graph wants is grafted in: loaded
+    /// like any other node and made an implicit dependency of every package
+    /// that does not set `package.no_core`. Its edge carries no manifest
+    /// entry, so constraint lookups fall back to `*`.
+    pub fn finish(mut self) -> Result<Graph, String> {
+        if let Some(core_dir) = self.bundles.get(CORE)
+            && self.wants_core()
+        {
+            let manifest = core_dir.join(manifest::MANIFEST_FILE);
+            let loaded = manifest::load(&manifest)
+                .map_err(|e| format!("loading the bundled core package: {e}"))?;
+            let version = declared_version(&loaded)?;
+            self.nodes.insert(
+                CORE.to_owned(),
+                Node {
+                    dir: manifest_dir(&loaded)?,
+                    version,
+                    loaded,
+                    dependencies: Vec::new(),
+                },
+            );
+            for (name, node) in self.nodes.iter_mut() {
+                if name != CORE
+                    && !node.loaded.manifest.package.no_core
+                    && !node.dependencies.iter().any(|dep| dep == CORE)
+                {
+                    node.dependencies.push(CORE.to_owned());
+                }
+            }
+        }
+        Ok(Graph {
+            root: self.root,
+            nodes: self.nodes,
+        })
+    }
+
+    /// Make `loaded` the node `name`, loading its dependencies' manifests
+    /// onto the queue. Every bundle it asks for is provided.
+    fn load(&mut self, name: String, loaded: Loaded) -> Result<(), String> {
         let dir = manifest_dir(&loaded)?;
-        if let Some(existing) = nodes.get(&name) {
+        if let Some(existing) = self.nodes.get(&name) {
             if existing.dir != dir {
                 return Err(format!(
                     "two packages claim the name `{name}`: `{}` and `{}`",
@@ -77,11 +179,15 @@ pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, 
                     dir.display()
                 ));
             }
-            continue;
+            return Ok(());
         }
         let mut dependencies = Vec::new();
         for (dep_name, dep) in &loaded.manifest.dependencies {
-            let dep_dir = dir.join(dep.path());
+            let dep_dir = if dep.bundled {
+                self.bundles[dep_name].clone()
+            } else {
+                dir.join(dep.path())
+            };
             let dep_manifest = dep_dir.join(manifest::MANIFEST_FILE);
             let dep_loaded = manifest::load(&dep_manifest).map_err(|e| {
                 format!(
@@ -101,10 +207,10 @@ pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, 
                 ));
             }
             dependencies.push(dep_name.clone());
-            queue.push((dep_name.clone(), dep_loaded));
+            self.queue.push((dep_name.clone(), dep_loaded));
         }
         let version = declared_version(&loaded)?;
-        nodes.insert(
+        self.nodes.insert(
             name,
             Node {
                 dir,
@@ -113,36 +219,8 @@ pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, 
                 dependencies,
             },
         );
+        Ok(())
     }
-    if let Some(core_dir) = core_dir
-        && !nodes.contains_key("core")
-    {
-        let manifest = core_dir.join(manifest::MANIFEST_FILE);
-        let loaded = manifest::load(&manifest)
-            .map_err(|e| format!("loading the bundled core package: {e}"))?;
-        let version = declared_version(&loaded)?;
-        nodes.insert(
-            "core".to_owned(),
-            Node {
-                dir: manifest_dir(&loaded)?,
-                version,
-                loaded,
-                dependencies: Vec::new(),
-            },
-        );
-        for (name, node) in nodes.iter_mut() {
-            if name != "core"
-                && !node.loaded.manifest.package.no_core
-                && !node.dependencies.contains(&"core".to_owned())
-            {
-                node.dependencies.push("core".to_owned());
-            }
-        }
-    }
-    Ok(Graph {
-        root: root_name,
-        nodes,
-    })
 }
 
 /// Run the pubgrub feasibility check over the loaded graph.
@@ -366,6 +444,47 @@ mod tests {
             err.contains("the key and the package name must agree"),
             "{err}"
         );
+    }
+
+    /// A `bundled = true` dependency loads from the directory its driver
+    /// provides, once asked for; without bundles it is refused by name. The
+    /// bundled `core` is wanted only while some package does not opt out.
+    #[test]
+    fn bundles_are_asked_for_as_the_graph_needs_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tmp.path().join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(
+            app.join(manifest::MANIFEST_FILE),
+            r#"{ package.name = "app", dependencies.std = { bundled = true, version = "^0.1" } }"#,
+        )
+        .unwrap();
+        let bundle = tmp.path().join("cache/std-src/abc");
+        write_pkg(&bundle, "std", Some("0.1.0"), &[]);
+        let loaded = manifest::load(&app.join(manifest::MANIFEST_FILE)).unwrap();
+
+        let mut loader = Loader::new(&loaded);
+        assert_eq!(loader.next_bundle().unwrap().as_deref(), Some("std"));
+        loader.provide("std", bundle.clone());
+        assert_eq!(loader.next_bundle().unwrap(), None);
+        assert!(loader.wants_core());
+        let graph = loader.finish().unwrap();
+        assert_eq!(graph.nodes["app"].dependencies, ["std"]);
+        assert_eq!(graph.nodes["std"].dir, bundle.canonicalize().unwrap());
+        check(&graph).unwrap();
+
+        let err = load_graph(&loaded).unwrap_err();
+        assert!(err.contains("the bundled package `std`"), "{err}");
+
+        std::fs::write(
+            app.join(manifest::MANIFEST_FILE),
+            r#"{ package = { name = "app", no_core = true } }"#,
+        )
+        .unwrap();
+        let loaded = manifest::load(&app.join(manifest::MANIFEST_FILE)).unwrap();
+        let mut loader = Loader::new(&loaded);
+        assert_eq!(loader.next_bundle().unwrap(), None);
+        assert!(!loader.wants_core());
     }
 
     /// The constraint grammar, at its edges.

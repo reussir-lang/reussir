@@ -116,7 +116,11 @@ fn main() {
     fs::write(&out, compressed).expect("failed to write the runtime bundle");
 
     bundle_rcgmp_runtime();
-    bundle_library(workspace_dir, "core");
+    // `core` is injected into every package; `std` is there for packages
+    // that ask for it (`dependencies.std.bundled = true`).
+    for name in ["core", "std"] {
+        bundle_library(workspace_dir, name);
+    }
 }
 
 /// Bundle the rcgmp integer runtime archive that CMake built for rene's own

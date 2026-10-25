@@ -388,8 +388,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // one-node graph through the same machinery. The bundled packages it
     // uses come from the per-user cache.
     let cache = Cache::locate(&root)?;
-    let core_dir = bundled::CORE.unpack(&cache).await?;
-    let graph = resolve::load_graph_with(&loaded, Some(&core_dir))?;
+    let graph = bundled::load_graph(&cache, &loaded).await?;
     if graph.nodes.len() > 1 {
         let solution = resolve::check(&graph)?;
         for (name, version) in &solution.pinned {
@@ -561,8 +560,7 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), String> {
     // The dependency-graph sections, on demand. One load serves all three;
     // `--solved` additionally requires the feasibility check to hold.
     if args.solved || args.graph || args.commands {
-        let core_dir = bundled::CORE.unpack(&Cache::locate(&root)?).await?;
-        let graph = resolve::load_graph_with(&loaded, Some(&core_dir))?;
+        let graph = bundled::load_graph(&Cache::locate(&root)?, &loaded).await?;
         if args.solved {
             let solution = resolve::check(&graph)?;
             report["resolution"] = solution

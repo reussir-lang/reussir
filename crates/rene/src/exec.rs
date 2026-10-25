@@ -11,7 +11,7 @@
 //! are final by then — a current node is skipped whole), its sources are
 //! scanned, its interface and archive compile, and [`fresh::record_dep`]
 //! writes what the next build proves currency against. A bundled package
-//! (`core`) is first claimed in the shared cache ([`crate::shared`]) and
+//! (`core`, `std`) is first claimed in the cache ([`crate::shared`]) and
 //! restored from there when another build already compiled it. Progress
 //! renders on an indicatif multi-bar (hidden when stderr is not a
 //! terminal).
