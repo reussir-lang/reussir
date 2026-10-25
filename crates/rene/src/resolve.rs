@@ -124,7 +124,7 @@ pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, 
         nodes.insert(
             "core".to_owned(),
             Node {
-                dir: core_dir.to_path_buf(),
+                dir: manifest_dir(&loaded)?,
                 version,
                 loaded,
                 dependencies: Vec::new(),

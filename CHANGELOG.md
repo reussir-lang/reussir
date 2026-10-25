@@ -142,6 +142,18 @@
   refused to link it. An explicit `--relocation-mode` is kept, and the other
   outputs keep the target's default.
 
+### Tooling
+
+- `rene` keeps what every build has in common in a per-user cache instead
+  of each build directory, starting with the sources of the bundled
+  `core`. The cache is `$XDG_CACHE_HOME/rene` (`~/.cache/rene`) on Linux,
+  `~/Library/Caches/rene` on macOS, and `%LOCALAPPDATA%\rene` on Windows;
+  `RENE_CACHE_DIR` overrides it. Entries are keyed by their contents and
+  built under an OS file lock, which a concurrent rene waits on with a
+  message. A cache that cannot be created, or whose file system cannot lock
+  files, falls back to `<build-dir>/cache` with a warning. Because core's
+  sources move, an existing build directory rebuilds core once.
+
 ## 0.1.0
 
 The first tagged release of Reussir: an MLIR-based compiler framework for

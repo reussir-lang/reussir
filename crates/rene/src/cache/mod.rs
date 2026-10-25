@@ -75,11 +75,22 @@ pub struct Cache {
     root: PathBuf,
 }
 
+/// The kinds of entry, each a directory directly under the root. Nothing
+/// else lives there but `CACHEDIR.TAG` and `rene.lock`, so whatever walks
+/// the cache walks exactly [`kind::ALL`].
+pub mod kind {
+    /// The bundled `core` package's sources ([`crate::bundled`]).
+    pub const CORE_SRC: &str = "core-src";
+
+    /// Every kind.
+    pub const ALL: &[&str] = &[CORE_SRC];
+}
+
 /// One entry: the directory `<root>/<kind>/<key>`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EntryId {
-    /// The sort of entry, and the directory under the root holding every
-    /// entry of that sort.
+    /// The sort of entry ([`kind`]), and the directory under the root
+    /// holding every entry of that sort.
     pub kind: &'static str,
     /// Hashes the entry's inputs ([`key`]); a directory name.
     pub key: String,

@@ -9,12 +9,13 @@
 //! source graph as `rrc --scan-deps` reported it ([`deps`]), and the built
 //! products of the manifest's declared targets ([`compile`]). Dependencies
 //! resolve over local paths ([`resolve`]), and `rene new` scaffolds a fresh
-//! package ([`new`]). What every build has in common belongs in the per-user
-//! [`cache`].
+//! package ([`new`]). What every build has in common, such as the sources of
+//! the libraries bundled inside rene ([`bundled`]), lives once per user in
+//! the shared [`cache`].
 
+pub mod bundled;
 pub mod cache;
 pub mod compile;
-pub mod core_src;
 pub mod db;
 pub mod deps;
 pub mod exec;

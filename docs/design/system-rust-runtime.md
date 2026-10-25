@@ -151,6 +151,11 @@ carries a `CACHEDIR.TAG`. A root that cannot be used moves the cache to
 depend on; different inputs get a different entry, so a published entry is
 never changed in place. Beside it live only `<key>.lock` and the unique
 siblings `<key>.tmp-<pid>-<n>` (staging) and `<key>.rm-<pid>-<n>` (trash).
+The kinds:
+
+- `core-src/<content hash>`: the bundled `core` package's manifest and
+  sources, unpacked into a staging sibling and renamed into place. Builds
+  read them in place.
 
 Every consumer uses an entry through one protocol (`Cache::acquire`): use
 the entry if it is complete, with no lock; otherwise take its lock, waiting

@@ -52,6 +52,12 @@ fn write_manifest(dir: &Path, name: &str, version: &str) -> PathBuf {
 fn rene(args: &[&str]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_rene"));
     cmd.args(args);
+    // Keep the per-user cache out of the user's home. Tests that look into
+    // the cache use their own ([`Fakes::cache`]).
+    cmd.env(
+        rene::cache::CACHE_DIR_ENV,
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join("rene-cache"),
+    );
     cmd
 }
 
@@ -180,6 +186,8 @@ struct Fakes {
     rustc: PathBuf,
     /// The libdir the fake `rustc` reports as its target libdir.
     libdir: PathBuf,
+    /// The per-user cache [`Fakes::rene`] runs against.
+    cache: PathBuf,
 }
 
 #[cfg(unix)]
@@ -317,6 +325,7 @@ printf ']}\n'
             cargo,
             rustc,
             libdir,
+            cache: dir.join("cache"),
         }
     }
 
@@ -364,8 +373,28 @@ printf ']}\n'
             .arg(build_dir)
             .env("REUSSIR_RRC", &self.rrc)
             .env("REUSSIR_CARGO", &self.cargo)
-            .env("REUSSIR_RUSTC", &self.rustc))
+            .env("REUSSIR_RUSTC", &self.rustc)
+            .env(rene::cache::CACHE_DIR_ENV, &self.cache))
     }
+}
+
+/// The entry directories of one cache kind, sorted (lock files and staging
+/// or trash siblings excluded).
+#[cfg(unix)]
+fn cache_entries(kind: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(kind) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<PathBuf> = entries
+        .map(|entry| entry.unwrap())
+        .filter(|entry| {
+            let name = entry.file_name().into_string().unwrap();
+            entry.path().is_dir() && rene::cache::parse_sibling(&name).is_none()
+        })
+        .map(|entry| entry.path())
+        .collect();
+    dirs.sort();
+    dirs
 }
 
 /// `rene inspect --frozen`'s report, parsed.
@@ -795,6 +824,69 @@ fn inspect_frozen_neither_scans_nor_creates_a_build_directory() {
     assert_eq!(report["files"].as_array().unwrap().len(), 0);
     assert_eq!(fakes.runs("rrc"), 0);
     assert!(!root.exists(), "--frozen created `{}`", root.display());
+}
+
+/// The bundled core unpacks once into the per-user cache, which every build
+/// directory then reads; a relative cache location is resolved once, so
+/// what the build records stays valid wherever rene runs next.
+#[cfg(unix)]
+#[test]
+fn the_core_sources_unpack_once_into_the_cache() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let manifest = package(&tmp, "demo");
+    let fakes = Fakes::new(&tmp);
+    for build_dir in ["first", "second"] {
+        let out = run(rene(&["inspect", "--frozen", "--graph", "--manifest-path"])
+            .arg(&manifest)
+            .arg("--build-dir")
+            .arg(tmp.join(build_dir))
+            .current_dir(&tmp)
+            .env(rene::cache::CACHE_DIR_ENV, "relative-cache")
+            .env("REUSSIR_RRC", &fakes.rrc));
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let core = cache_entries(&tmp.join("relative-cache/core-src"));
+        assert_eq!(core.len(), 1, "{core:#?}");
+        assert_eq!(
+            report["graph"]["nodes"]["core"]["dir"],
+            core[0].display().to_string()
+        );
+        assert!(!tmp.join(build_dir).join("core-src").exists());
+    }
+}
+
+/// An unusable cache location is not fatal: the build warns and caches in
+/// its own build directory.
+#[cfg(unix)]
+#[test]
+fn an_unusable_cache_falls_back_to_the_build_directory() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let root = tmp.join("reussir-build");
+    let manifest = package(&tmp, "demo");
+    let fakes = Fakes::new(&tmp);
+    let blocker = tmp.join("not-a-directory");
+    std::fs::write(&blocker, "").unwrap();
+
+    let out = run(rene(&["build", "--manifest-path"])
+        .arg(&manifest)
+        .arg("--build-dir")
+        .arg(&root)
+        .env("REUSSIR_RRC", &fakes.rrc)
+        .env("REUSSIR_CARGO", &fakes.cargo)
+        .env("REUSSIR_RUSTC", &fakes.rustc)
+        .env(rene::cache::CACHE_DIR_ENV, blocker.join("cache")));
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stderr(&out)
+            .matches("caching shared dependencies in")
+            .count(),
+        1,
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(cache_entries(&root.join("cache/core-src")).len(), 1);
 }
 
 /// (Re)write the scratch package's manifest with targets of every kind and a
