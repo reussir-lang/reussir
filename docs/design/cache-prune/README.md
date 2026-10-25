@@ -11,6 +11,18 @@ lock, with no ledger operation.
 Which entries are past their age is policy and is abstracted: the pruner
 may pick any subset of the eligible entries (live, pinned by nobody alive).
 
+Run with TLC (nixpkgs `tlaplus`), from this directory:
+
+```
+nix shell nixpkgs#tlaplus --command tlc -workers auto -config CachePrune.cfg CachePrune.tla
+nix shell nixpkgs#tlaplus --command tlc -workers auto -config CachePruneLimit0.cfg CachePrune.tla
+nix shell nixpkgs#tlaplus --command tlc -workers auto -config CachePruneNoPins.cfg CachePrune.tla
+nix shell nixpkgs#tlaplus --command tlc -workers auto -config CachePruneRenameOutside.cfg CachePrune.tla
+```
+
+Every configuration has three sessions, of which `p1` never crashes, and
+two keys.
+
 ## Checked properties
 
 - `Safety`, an invariant:
@@ -27,6 +39,25 @@ may pick any subset of the eligible entries (live, pinned by nobody alive).
 
 The ledger stores no running total: it is derived from the live rows, in
 the model as in the implementation, so it is exact by construction.
+
+## Results
+
+Measured with TLC 2.19 (nixpkgs `tlaplus` 1.7.4):
+
+| configuration | result | states generated | distinct | depth |
+|---|---|---|---|---|
+| `CachePrune.cfg` | no error | 92,437 | 28,740 | 32 |
+| `CachePruneLimit0.cfg` | no error | 100,165 | 30,874 | 32 |
+| `CachePruneNoPins.cfg` | `UseSafety` violated | | | |
+| `CachePruneRenameOutside.cfg` | `LiveIsComplete`, `PinSafety`, `UseSafety` violated | | | |
+
+The two mutations must fail, and do:
+
+- `NoPins` drops the reader's pin: a session uses an entry another
+  session has just renamed away.
+- `RenameOutside` renames victims outside the ledger transaction: a
+  session reclaims an entry under prune, then the pruner renames it away
+  anyway.
 
 ## Correspondence with the implementation
 
