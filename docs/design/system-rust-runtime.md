@@ -126,7 +126,7 @@ the resolved toolchain, cache state, and chosen polyffi mode.
 The driver guarantees, before any polyffi compile or link-flag query, that
 the runtime is built for the resolved toolchain:
 
-- Cache location: `${XDG_CACHE_HOME:-~/.cache}/reussir/rt/<key>/` where
+- Cache location: `${XDG_CACHE_HOME:-~/.cache}/rene/rt/<key>/` where
   `<key> = hash(rustc commit hash, rt source hash, target triple, profile,
   feature set)`.
 - Build: run `cargo build --locked --offline --release
@@ -140,6 +140,17 @@ the runtime is built for the resolved toolchain:
 - First-use UX mirrors Koka's first `kklib` build: a one-time
   "Building Reussir runtime (once per Rust toolchain)..." message.
   `rrc rt build` allows explicit prebuild in CI images/containers.
+
+**Status in `rene`.** `rene` keeps a per-user cache (`crates/rene/src/cache/`)
+for what every build has in common. The root is `dirs::cache_dir()/rene`
+(`~/.cache/rene` on Linux, `~/Library/Caches/rene` on macOS,
+`%LOCALAPPDATA%\rene` on Windows), overridable with `RENE_CACHE_DIR`, and
+carries a `CACHEDIR.TAG`. A root that cannot be used moves the cache to
+`<build-dir>/cache`, with a warning. An entry is the directory
+`<root>/<kind>/<key>`, where the key hashes everything the entry's contents
+depend on; different inputs get a different entry, so a published entry is
+never changed in place. Beside it live only `<key>.lock` and the unique
+siblings `<key>.tmp-<pid>-<n>` (staging) and `<key>.rm-<pid>-<n>` (trash).
 
 Everything downstream reads the manifest:
 

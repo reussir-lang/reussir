@@ -9,8 +9,10 @@
 //! source graph as `rrc --scan-deps` reported it ([`deps`]), and the built
 //! products of the manifest's declared targets ([`compile`]). Dependencies
 //! resolve over local paths ([`resolve`]), and `rene new` scaffolds a fresh
-//! package ([`new`]).
+//! package ([`new`]). What every build has in common belongs in the per-user
+//! [`cache`].
 
+pub mod cache;
 pub mod compile;
 pub mod core_src;
 pub mod db;

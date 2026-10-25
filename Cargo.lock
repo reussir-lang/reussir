@@ -3581,6 +3581,7 @@ dependencies = [
  "async-lock",
  "blake3",
  "compio",
+ "dirs",
  "futures-util",
  "image",
  "indicatif",
