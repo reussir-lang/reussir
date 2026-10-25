@@ -22,23 +22,39 @@
 (*   in the implementation, counts them, and the pruner may pick any       *)
 (*   subset of the eligible entries.  Ages and LRU order are policy, not   *)
 (*   safety, and are left out.                                             *)
-(* - Every session can use the ledger, every commit succeeds, and a        *)
-(*   session drops its pin once it is done with an entry.                  *)
+(* - Entries in `InPlace` are read in place (sources, the runtime bake)    *)
+(*   and stay pinned until their session ends; the others are copied out   *)
+(*   (compiled packages) and unpinned at once.                             *)
+(* - `Degraded` sessions run without the ledger (it was unusable for       *)
+(*   them).  They use a complete entry without pinning it, and build a     *)
+(*   missing one under its entry lock, so the entry they publish has no    *)
+(*   row.  A session with the ledger adopts such an entry under its lock;  *)
+(*   the pruner removes one that nobody pins or locks.  What a degraded    *)
+(*   session uses is not protected.                                        *)
 (* - Mutation switches, each of which must make TLC find a violation:      *)
 (*   `ReadersPin` = FALSE drops the reader's pin; `RenameInLedger` = FALSE *)
-(*   renames victims outside the ledger transaction.                       *)
+(*   renames victims outside the ledger transaction; `RenameBack` = FALSE  *)
+(*   leaves a victim renamed out when its transaction fails to commit.     *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS Procs,      \* sessions
           Reliable,   \* the sessions that never crash (for liveness)
+          Degraded,   \* the sessions running without the ledger
           Keys,       \* cache entry keys
+          InPlace,    \* the keys whose entries are read in place
           Limit,      \* prune when the total exceeds it
           NULL,
           ReadersPin,
-          RenameInLedger
+          RenameInLedger,
+          RenameBack
 
-ASSUME Reliable \subseteq Procs
+ASSUME /\ Reliable \subseteq Procs
+       /\ Degraded \subseteq Procs
+       /\ InPlace \subseteq Keys
+
+\* The sessions with a working ledger.
+Ledgered == Procs \ Degraded
 
 VARIABLES
   fs,        \* [Keys -> {"absent", "partial", "complete"}]: the entry dir
@@ -49,13 +65,17 @@ VARIABLES
   alive,     \* [Procs -> BOOLEAN]: FALSE once ended (session lock free)
   pc,        \* [Procs -> label]
   cur,       \* [Procs -> Keys \cup {NULL}]: the key a session works on
-  victims    \* [Procs -> SUBSET Keys]: rows a pruner marked
+  held,      \* [Procs -> SUBSET Keys]: entries a session used in place
+  victims,   \* [Procs -> SUBSET Keys]: rows a pruner marked
+  orphans,   \* [Procs -> SUBSET Keys]: untracked entries a pruner chose
+  untracked  \* SUBSET Keys (ghost): directories a degraded session wrote
 
-vars == <<fs, row, pins, sessions, buildLock, alive, pc, cur, victims>>
+vars == <<fs, row, pins, sessions, buildLock, alive, pc, cur, held, victims,
+          orphans, untracked>>
 
 Labels == {"start", "idle", "lookup", "acquire", "recheck", "unpack",
            "publish", "register", "using", "mark", "remove", "unmark",
-           "dead"}
+           "exit", "dead"}
 
 \* Where a session is still getting its current entry.
 Getting == {"lookup", "acquire", "recheck", "unpack", "publish", "register"}
@@ -102,9 +122,12 @@ Init == /\ fs = [k \in Keys |-> "absent"]
         /\ sessions = {}
         /\ buildLock = [k \in Keys |-> NULL]
         /\ alive = [p \in Procs |-> TRUE]
-        /\ pc = [p \in Procs |-> "start"]
+        /\ pc = [p \in Procs |-> IF p \in Degraded THEN "idle" ELSE "start"]
         /\ cur = [p \in Procs |-> NULL]
+        /\ held = [p \in Procs |-> {}]
         /\ victims = [p \in Procs |-> {}]
+        /\ orphans = [p \in Procs |-> {}]
+        /\ untracked = {}
 
 \* Ledger op: create the session row.  The session lock is already held:
 \* it is taken before the row exists, so no row ever names a session whose
@@ -113,18 +136,26 @@ Start(p) == /\ alive[p] /\ pc[p] = "start"
             /\ sessions' = RSessions \cup {p}
             /\ row' = RRow /\ fs' = RFs /\ pins' = RPins
             /\ pc' = [pc EXCEPT ![p] = "idle"]
-            /\ UNCHANGED <<buildLock, alive, cur, victims>>
+            /\ UNCHANGED <<buildLock, alive, cur, held, victims, orphans,
+                           untracked>>
 
 Pick(p) == /\ alive[p] /\ pc[p] = "idle"
            /\ \E k \in Keys : cur' = [cur EXCEPT ![p] = k]
            /\ pc' = [pc EXCEPT ![p] = "lookup"]
-           /\ UNCHANGED <<fs, row, pins, sessions, buildLock, alive, victims>>
+           /\ UNCHANGED <<fs, row, pins, sessions, buildLock, alive, held,
+                          victims, orphans, untracked>>
+
+\* `rene cache prune`: prune now, whatever the total.
+PruneNow(p) == /\ alive[p] /\ p \in Ledgered /\ pc[p] = "idle"
+               /\ pc' = [pc EXCEPT ![p] = "mark"]
+               /\ UNCHANGED <<fs, row, pins, sessions, buildLock, alive, cur,
+                              held, victims, orphans, untracked>>
 
 \* Ledger op: pin the key first (a pin means "I want this entry", whether
 \* or not it exists yet, so a pruner never takes it from under a waiter),
 \* then use a live entry, reclaim one under prune, wait out a prune whose
 \* directory is gone, or go and take the entry lock.
-Lookup(p) == /\ alive[p] /\ pc[p] = "lookup"
+Lookup(p) == /\ alive[p] /\ p \in Ledgered /\ pc[p] = "lookup"
              /\ LET k == cur[p]
                     r == RRow[k]
                 IN /\ sessions' = RSessions /\ fs' = RFs
@@ -144,53 +175,82 @@ Lookup(p) == /\ alive[p] /\ pc[p] = "lookup"
                         [] OTHER ->
                            /\ row' = RRow
                            /\ pc' = [pc EXCEPT ![p] = "acquire"]
-             /\ UNCHANGED <<buildLock, alive, cur, victims>>
+             /\ UNCHANGED <<buildLock, alive, cur, held, victims, orphans,
+                            untracked>>
+
+\* Without the ledger: a complete entry is used as it is, unpinned.
+DLookup(p) == /\ alive[p] /\ p \in Degraded /\ pc[p] = "lookup"
+              /\ pc' = [pc EXCEPT ![p] = IF fs[cur[p]] = "complete"
+                                         THEN "using" ELSE "acquire"]
+              /\ UNCHANGED <<fs, row, pins, sessions, buildLock, alive, cur,
+                             held, victims, orphans, untracked>>
 
 \* OS lock: the entry lock.
 Acquire(p) == /\ alive[p] /\ pc[p] = "acquire"
               /\ buildLock[cur[p]] = NULL
               /\ buildLock' = [buildLock EXCEPT ![cur[p]] = p]
               /\ pc' = [pc EXCEPT ![p] = "recheck"]
-              /\ UNCHANGED <<fs, row, pins, sessions, alive, cur, victims>>
+              /\ UNCHANGED <<fs, row, pins, sessions, alive, cur, held,
+                             victims, orphans, untracked>>
 
 \* Ledger op under the entry lock: whoever held it may have completed the
 \* entry.  A complete entry is used, whatever its row says: live, under
-\* prune (reclaimed), or building by a session that crashed after
-\* completing it (adopted).  Otherwise claim the row and clear the
-\* directory.
+\* prune (reclaimed), building by a session that crashed after publishing,
+\* or untracked (adopted).  Otherwise claim the row and clear the directory.
 Recheck(p) ==
-  /\ alive[p] /\ pc[p] = "recheck"
+  /\ alive[p] /\ p \in Ledgered /\ pc[p] = "recheck"
   /\ LET k == cur[p]
          r == RRow[k]
      IN /\ sessions' = RSessions /\ pins' = RPins
         /\ CASE RFs[k] = "complete" ->
                 /\ row' = [RRow EXCEPT ![k] = Row("live", NULL)]
-                /\ fs' = RFs
+                /\ fs' = RFs /\ untracked' = untracked
                 /\ buildLock' = [buildLock EXCEPT ![k] = NULL]
                 /\ pc' = [pc EXCEPT ![p] = "using"]
              [] r.state = "pruning" ->
-                /\ row' = RRow /\ fs' = RFs
+                /\ row' = RRow /\ fs' = RFs /\ untracked' = untracked
                 /\ buildLock' = [buildLock EXCEPT ![k] = NULL]
                 /\ pc' = [pc EXCEPT ![p] = "lookup"]
              [] OTHER ->
                 /\ row' = [RRow EXCEPT ![k] = Row("building", p)]
                 /\ fs' = [RFs EXCEPT ![k] = "absent"]
+                /\ untracked' = untracked \ {k}
                 /\ buildLock' = buildLock
                 /\ pc' = [pc EXCEPT ![p] = "unpack"]
-  /\ UNCHANGED <<alive, cur, victims>>
+  /\ UNCHANGED <<alive, cur, held, victims, orphans>>
+
+\* Without the ledger, under the entry lock: use a complete entry, or clear
+\* the directory and build one that no row will track.
+DRecheck(p) ==
+  /\ alive[p] /\ p \in Degraded /\ pc[p] = "recheck"
+  /\ LET k == cur[p]
+     IN IF fs[k] = "complete"
+        THEN /\ buildLock' = [buildLock EXCEPT ![k] = NULL]
+             /\ pc' = [pc EXCEPT ![p] = "using"]
+             /\ UNCHANGED <<fs, untracked>>
+        ELSE /\ fs' = [fs EXCEPT ![k] = "absent"]
+             /\ untracked' = untracked \cup {k}
+             /\ buildLock' = buildLock
+             /\ pc' = [pc EXCEPT ![p] = "unpack"]
+  /\ UNCHANGED <<row, pins, sessions, alive, cur, held, victims, orphans>>
 
 Unpack(p) == /\ alive[p] /\ pc[p] = "unpack"
              /\ fs' = [fs EXCEPT ![cur[p]] = "partial"]
              /\ pc' = [pc EXCEPT ![p] = "publish"]
-             /\ UNCHANGED <<row, pins, sessions, buildLock, alive, cur,
-                            victims>>
+             /\ UNCHANGED <<row, pins, sessions, buildLock, alive, cur, held,
+                            victims, orphans, untracked>>
 
-\* The atomic rename or marker write that completes the entry on disk.
+\* The atomic rename or marker write that completes the entry on disk.  A
+\* degraded session has nothing to register and releases the lock.
 Publish(p) == /\ alive[p] /\ pc[p] = "publish"
               /\ fs' = [fs EXCEPT ![cur[p]] = "complete"]
-              /\ pc' = [pc EXCEPT ![p] = "register"]
-              /\ UNCHANGED <<row, pins, sessions, buildLock, alive, cur,
-                             victims>>
+              /\ IF p \in Degraded
+                 THEN /\ buildLock' = [buildLock EXCEPT ![cur[p]] = NULL]
+                      /\ pc' = [pc EXCEPT ![p] = "using"]
+                 ELSE /\ buildLock' = buildLock
+                      /\ pc' = [pc EXCEPT ![p] = "register"]
+              /\ UNCHANGED <<row, pins, sessions, alive, cur, held, victims,
+                             orphans, untracked>>
 
 \* Ledger op: the entry becomes live, then the entry lock is released.
 \* A session that saw the total over the limit prunes, holding no entry
@@ -205,20 +265,24 @@ Register(p) ==
         /\ buildLock' = [buildLock EXCEPT ![k] = NULL]
         /\ pc' = [pc EXCEPT ![p] = IF Total(r) > Limit THEN "mark"
                                                         ELSE "using"]
-  /\ UNCHANGED <<alive, cur, victims>>
+  /\ UNCHANGED <<alive, cur, held, victims, orphans, untracked>>
 
-\* Ledger op: choose victims among the live rows nobody alive pins, and
-\* announce the prune by flipping them to "pruning".
+\* Ledger op: choose victims among the live rows nobody alive pins and
+\* announce the prune by flipping them to "pruning"; choose the untracked
+\* directories nobody pins to remove too.
 Mark(p) ==
   /\ alive[p] /\ pc[p] = "mark"
   /\ LET eligible == {k \in Keys : RRow[k].state = "live" /\ Unpinned(k)}
-     IN \E V \in SUBSET eligible :
+         loose == {k \in Keys : RRow[k].state = "none" /\ RFs[k] # "absent"
+                                /\ Unpinned(k)}
+     IN \E V \in SUBSET eligible, O \in SUBSET loose :
           /\ row' = [k \in Keys |-> IF k \in V THEN Row("pruning", p)
                                     ELSE RRow[k]]
           /\ victims' = [victims EXCEPT ![p] = V]
+          /\ orphans' = [orphans EXCEPT ![p] = O]
   /\ pins' = RPins /\ sessions' = RSessions /\ fs' = RFs
   /\ pc' = [pc EXCEPT ![p] = "remove"]
-  /\ UNCHANGED <<buildLock, alive, cur>>
+  /\ UNCHANGED <<buildLock, alive, cur, held, untracked>>
 
 \* Ledger op, one victim at a time: re-read the row; if it is still ours,
 \* rename the directory out (one atomic syscall, inside the critical
@@ -235,26 +299,55 @@ RemoveInLedger(p) ==
                /\ row' = RRow
        /\ victims' = [victims EXCEPT ![p] = victims[p] \ {k}]
   /\ pins' = RPins /\ sessions' = RSessions
-  /\ UNCHANGED pc
+  /\ UNCHANGED <<pc, orphans>>
+
+\* Ledger op, one untracked directory at a time: still no row, still
+\* unpinned, and its entry lock free (taken while renaming): rename it out.
+RemoveOrphan(p) ==
+  /\ \E k \in orphans[p] :
+       /\ IF RRow[k].state = "none" /\ Unpinned(k) /\ buildLock[k] = NULL
+          THEN fs' = [RFs EXCEPT ![k] = "absent"]
+          ELSE fs' = RFs
+       /\ orphans' = [orphans EXCEPT ![p] = orphans[p] \ {k}]
+  /\ row' = RRow /\ pins' = RPins /\ sessions' = RSessions
+  /\ UNCHANGED <<pc, victims>>
+
+\* The commit of a removal fails after the rename.  The batch, reaping
+\* included, is lost, and every directory the transaction renamed out is
+\* renamed back (unless `RenameBack` is FALSE).  The session can no longer
+\* use the ledger, so it stops pruning and its process exits.  (Reliable
+\* sessions never fail.)
+RemoveFailed(p) ==
+  /\ RenameInLedger /\ p \notin Reliable
+  /\ \E k \in victims[p] :
+       /\ RRow[k] = Row("pruning", p)
+       /\ fs' = IF RenameBack THEN fs ELSE [fs EXCEPT ![k] = "absent"]
+  /\ pc' = [pc EXCEPT ![p] = "exit"]
+  /\ UNCHANGED <<row, pins, sessions, victims, orphans>>
 
 \* Mutation: rename outside any ledger open, then delete rows afterwards.
 RemoveOutside(p) ==
   /\ ~RenameInLedger
   /\ \E k \in victims[p] : /\ fs[k] # "absent"
                            /\ fs' = [fs EXCEPT ![k] = "absent"]
-  /\ UNCHANGED <<row, pins, sessions, pc, victims>>
+  /\ UNCHANGED <<row, pins, sessions, pc, victims, orphans>>
 
 Remove(p) == /\ alive[p] /\ pc[p] = "remove"
-             /\ RemoveInLedger(p) \/ RemoveOutside(p)
-             /\ UNCHANGED <<buildLock, alive, cur>>
+             /\ \/ RemoveInLedger(p) \/ RemoveOrphan(p) \/ RemoveFailed(p)
+                \/ RemoveOutside(p)
+             /\ UNCHANGED <<buildLock, alive, cur, held, untracked>>
+
+\* Back to what the session was doing: its build, or nothing.
+AfterPrune(p) == IF cur[p] = NULL THEN "idle" ELSE "using"
 
 Removed(p) == /\ alive[p] /\ pc[p] = "remove"
+              /\ orphans[p] = {}
               /\ IF RenameInLedger THEN victims[p] = {}
                  ELSE \A k \in victims[p] : fs[k] = "absent"
-              /\ pc' = [pc EXCEPT ![p] = IF RenameInLedger THEN "using"
+              /\ pc' = [pc EXCEPT ![p] = IF RenameInLedger THEN AfterPrune(p)
                                          ELSE "unmark"]
               /\ UNCHANGED <<fs, row, pins, sessions, buildLock, alive, cur,
-                             victims>>
+                             held, victims, orphans, untracked>>
 
 \* Mutation only: the ledger op that deletes the victims' rows afterwards.
 Unmark(p) == /\ alive[p] /\ pc[p] = "unmark"
@@ -263,29 +356,43 @@ Unmark(p) == /\ alive[p] /\ pc[p] = "unmark"
                                        THEN NoRow ELSE RRow[k]]
              /\ pins' = RPins /\ sessions' = RSessions /\ fs' = RFs
              /\ victims' = [victims EXCEPT ![p] = {}]
-             /\ pc' = [pc EXCEPT ![p] = "using"]
-             /\ UNCHANGED <<buildLock, alive, cur>>
+             /\ pc' = [pc EXCEPT ![p] = AfterPrune(p)]
+             /\ UNCHANGED <<buildLock, alive, cur, held, orphans, untracked>>
 
-\* Ledger op: done with the entry, drop the pin.
-Finish(p) == /\ alive[p] /\ pc[p] = "using"
-             /\ pins' = RPins \ {<<p, cur[p]>>}
-             /\ row' = RRow /\ sessions' = RSessions /\ fs' = RFs
-             /\ pc' = [pc EXCEPT ![p] = "idle"]
-             /\ cur' = [cur EXCEPT ![p] = NULL]
-             /\ UNCHANGED <<buildLock, alive, victims>>
+\* Done with the entry.  A copied entry is unpinned at once (a ledger op);
+\* one read in place stays pinned until the session ends.
+Finish(p) ==
+  /\ alive[p] /\ pc[p] = "using"
+  /\ pc' = [pc EXCEPT ![p] = "idle"]
+  /\ cur' = [cur EXCEPT ![p] = NULL]
+  /\ IF p \in Ledgered /\ cur[p] \notin InPlace
+     THEN /\ pins' = RPins \ {<<p, cur[p]>>}
+          /\ row' = RRow /\ sessions' = RSessions /\ fs' = RFs
+          /\ held' = held
+     ELSE /\ held' = IF p \in Ledgered
+                     THEN [held EXCEPT ![p] = held[p] \cup {cur[p]}]
+                     ELSE held
+          /\ UNCHANGED <<fs, row, pins, sessions>>
+  /\ UNCHANGED <<buildLock, alive, victims, orphans, untracked>>
 
-\* The process dies, or ends normally, which leaves the ledger alone just
-\* the same: the OS releases its locks; its rows stay.
-Crash(p) == /\ alive[p] /\ p \notin Reliable
-            /\ alive' = [alive EXCEPT ![p] = FALSE]
-            /\ pc' = [pc EXCEPT ![p] = "dead"]
-            /\ buildLock' = [k \in Keys |-> IF buildLock[k] = p THEN NULL
-                                            ELSE buildLock[k]]
-            /\ UNCHANGED <<fs, row, pins, sessions, cur, victims>>
+\* The process is gone: the OS releases its locks; its rows stay.
+Die(p) == /\ alive' = [alive EXCEPT ![p] = FALSE]
+          /\ pc' = [pc EXCEPT ![p] = "dead"]
+          /\ buildLock' = [k \in Keys |-> IF buildLock[k] = p THEN NULL
+                                          ELSE buildLock[k]]
+          /\ UNCHANGED <<fs, row, pins, sessions, cur, held, victims, orphans,
+                         untracked>>
 
-Step(p) == \/ Start(p) \/ Pick(p) \/ Lookup(p) \/ Acquire(p) \/ Recheck(p)
-           \/ Unpack(p) \/ Publish(p) \/ Register(p) \/ Mark(p) \/ Remove(p)
-           \/ Removed(p) \/ Unmark(p) \/ Finish(p)
+\* A crash, or a normal exit, which leaves the ledger alone just the same.
+Crash(p) == alive[p] /\ p \notin Reliable /\ Die(p)
+
+\* The exit of a session whose ledger failed.
+Exit(p) == alive[p] /\ pc[p] = "exit" /\ Die(p)
+
+Step(p) == \/ Start(p) \/ Pick(p) \/ PruneNow(p) \/ Lookup(p) \/ DLookup(p)
+           \/ Acquire(p) \/ Recheck(p) \/ DRecheck(p) \/ Unpack(p)
+           \/ Publish(p) \/ Register(p) \/ Mark(p) \/ Remove(p) \/ Removed(p)
+           \/ Unmark(p) \/ Finish(p) \/ Exit(p)
 
 Next == \E p \in Procs : Step(p) \/ Crash(p)
 
@@ -301,12 +408,15 @@ TypeOK ==
   /\ row \in [Keys -> [state : {"none", "building", "live", "pruning"},
                        owner : Procs \cup {NULL}]]
   /\ pins \subseteq Procs \X Keys
-  /\ sessions \subseteq Procs
+  /\ sessions \subseteq Ledgered
   /\ buildLock \in [Keys -> Procs \cup {NULL}]
   /\ alive \in [Procs -> BOOLEAN]
   /\ pc \in [Procs -> Labels]
   /\ cur \in [Procs -> Keys \cup {NULL}]
+  /\ held \in [Procs -> SUBSET InPlace]
   /\ victims \in [Procs -> SUBSET Keys]
+  /\ orphans \in [Procs -> SUBSET Keys]
+  /\ untracked \subseteq Keys
 
 \* A live row always has a complete directory behind it.
 LiveIsComplete == \A k \in Keys : row[k].state = "live" => fs[k] = "complete"
@@ -317,10 +427,12 @@ PinSafety == \A pk \in pins :
   alive[pk[1]] /\ ~(cur[pk[1]] = pk[2] /\ pc[pk[1]] \in Getting)
     => fs[pk[2]] = "complete"
 
-\* The same, seen from the session: what it is using is on disk.
-UseSafety == \A p \in Procs :
-  alive[p] /\ pc[p] \in {"using", "mark", "remove", "unmark"}
-    => fs[cur[p]] = "complete"
+\* The same, seen from the session: what it is using, or used in place, is
+\* on disk, and an entry read in place stays pinned.
+UseSafety == \A p \in Ledgered : alive[p] =>
+  /\ cur[p] # NULL /\ pc[p] \in {"using", "mark", "remove", "unmark"}
+       => fs[cur[p]] = "complete"
+  /\ \A k \in held[p] : fs[k] = "complete" /\ <<p, k>> \in pins
 
 \* Only entries nobody alive uses or waits for are ever marked for pruning.
 \* (A waiter in lookup may pin a pruning row whose directory is gone: it
@@ -329,8 +441,14 @@ PrunedUnpinned == \A k \in Keys : row[k].state = "pruning" =>
   \A pk \in pins : pk[2] = k =>
     ~alive[pk[1]] \/ (pc[pk[1]] = "lookup" /\ cur[pk[1]] = k)
 
-\* Everything on disk is tracked by a row, so nothing can leak.
-Tracked == \A k \in Keys : fs[k] # "absent" => row[k].state # "none"
+\* While its pruner lives, a row under prune keeps its directory, so a
+\* session asking for it reclaims it instead of waiting.
+PruningPresent == \A k \in Keys :
+  row[k].state = "pruning" /\ alive[row[k].owner] => fs[k] = "complete"
+
+\* Everything on disk has a row, unless a degraded session wrote it.
+Tracked == \A k \in Keys :
+  fs[k] # "absent" /\ row[k].state = "none" => k \in untracked
 
 \* A live builder holds the entry lock of the row it owns, and only the
 \* holder of an entry's lock writes its directory.
@@ -341,7 +459,7 @@ BuildExcl ==
                         => buildLock[cur[p]] = p
 
 Safety == /\ TypeOK /\ LiveIsComplete /\ PinSafety /\ UseSafety
-          /\ PrunedUnpinned /\ Tracked /\ BuildExcl
+          /\ PrunedUnpinned /\ PruningPresent /\ Tracked /\ BuildExcl
 
 -----------------------------------------------------------------------------
 (* Liveness, given at least one session that never crashes. *)
@@ -351,7 +469,8 @@ Recovery == \A k \in Keys :
   [](row[k].state \in {"building", "pruning"} =>
        <>(row[k].state \in {"live", "none"}))
 
-\* A reliable session that wants an entry eventually uses it.
-Progress == \A p \in Reliable : [](pc[p] = "lookup" => <>(pc[p] = "using"))
+\* A reliable session with the ledger that wants an entry eventually uses it.
+Progress == \A p \in Reliable \cap Ledgered :
+  [](pc[p] = "lookup" => <>(pc[p] = "using"))
 
 =============================================================================
