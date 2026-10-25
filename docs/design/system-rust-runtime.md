@@ -152,12 +152,21 @@ depend on; different inputs get a different entry, so a published entry is
 never changed in place. Beside it live only `<key>.lock` and the unique
 siblings `<key>.tmp-<pid>-<n>` (staging) and `<key>.rm-<pid>-<n>` (trash).
 
-Writers of an entry hold its lock, `<key>.lock`: an OS file lock, which the
-OS releases when its holder exits, even by crashing. A lock file is deleted
-only while held, and a locker checks that the path still names the file it
-locked, so no two processes ever hold "the same" lock on different files.
-A file system that cannot lock files makes the root unusable, so the cache
-moves to the build directory instead of running unlocked.
+Every consumer uses an entry through one protocol (`Cache::acquire`): use
+the entry if it is complete, with no lock; otherwise take its lock, waiting
+(and saying so, once) for the rene holding it; check again, since that
+rene may have just completed it; and only then build it. So concurrent
+builds wait for one build of an entry, and only a lock holder ever writes
+one: an entry is staged in a private sibling and renamed into place, or
+built in place and completed by a record written atomically and last. A
+stale directory is renamed to trash before it is deleted.
+
+An entry's lock is `<key>.lock`, an OS file lock, which the OS releases
+when its holder exits, even by crashing. A lock file is deleted only while
+held, and a locker checks that the path still names the file it locked, so
+no two processes ever hold "the same" lock on different files. A file
+system that cannot lock files makes the root unusable, so the cache moves
+to the build directory instead of running unlocked.
 
 Everything downstream reads the manifest:
 

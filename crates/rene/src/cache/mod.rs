@@ -34,8 +34,10 @@
 //! for one being deleted. [`parse_sibling`] recognizes the latter two, so
 //! whatever cleans up after a crashed process never has to guess.
 //!
-//! Every lock the cache takes is a [`FileLock`] ([`lock`]).
+//! Consumers use entries through one protocol, [`Cache::acquire`] (see
+//! [`entry`]), and every lock the cache takes is a [`FileLock`] ([`lock`]).
 
+pub mod entry;
 pub mod lock;
 
 use std::ffi::OsString;
@@ -45,6 +47,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
+pub use entry::{Acquired, RecordedFile, Request, Slot, Staging, Usage};
 pub use lock::{FileLock, Probe};
 
 /// Overrides the cache location.
