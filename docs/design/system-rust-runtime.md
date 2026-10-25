@@ -163,6 +163,15 @@ The kinds:
 - `core-src/<content hash>`: the bundled `core` package's manifest and
   sources, unpacked into a staging sibling and renamed into place. Builds
   read them in place.
+- `rt/<key>`: a bake. The key hashes the bundle content (with the rcgmp
+  archive), the target, the toolchain (its `rustc` binary, sysroot, and
+  version, resolved as §3's status describes), the cargo path, the
+  allocator backend, and the rustflags environment. The bake runs in place:
+  the source unpacks into `src/`, cargo builds with
+  `--target-dir <entry>/target`, and `artifacts.json` (the artifacts, the
+  sysroot, and the size of every file it vouches for) is written last. An
+  entry naming anything outside itself, or a file of another size, is
+  rebaked. Build directories still record the bake they use.
 
 Every consumer uses an entry through one protocol (`Cache::acquire`): use
 the entry if it is complete, with no lock; otherwise take its lock, waiting

@@ -145,8 +145,10 @@
 ### Tooling
 
 - `rene` keeps what every build has in common in a per-user cache instead
-  of each build directory, starting with the sources of the bundled
-  `core`. The cache is `$XDG_CACHE_HOME/rene` (`~/.cache/rene`) on Linux,
+  of each build directory: the sources of the bundled `core` and the
+  `reussir-rt` bake, so a new project's first build skips the cargo bake
+  when any earlier build used the same toolchain and target. The cache is
+  `$XDG_CACHE_HOME/rene` (`~/.cache/rene`) on Linux,
   `~/Library/Caches/rene` on macOS, and `%LOCALAPPDATA%\rene` on Windows;
   `RENE_CACHE_DIR` overrides it. Entries are keyed by their contents and
   built under an OS file lock, which a concurrent rene waits on with a

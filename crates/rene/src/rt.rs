@@ -1,15 +1,18 @@
-//! Baking the bundled `reussir-rt` runtime inside the build directory.
+//! Baking the bundled `reussir-rt` runtime in the per-user cache.
 //!
 //! The `rene` binary embeds the runtime *source* as a zstd-compressed tar
 //! (packed by `build.rs` — source, not binaries, is what keeps the bundle
 //! cross-platform: rlibs and symbol hashes are version-locked to the rustc
 //! that produced them, so the runtime must be built by the user's toolchain;
-//! see docs/design/system-rust-runtime.md). `prepare` unpacks it into
-//! `<build-dir>/<target>/reussir-rt/` and runs Cargo with `--target <target>`
-//! there, yielding the rlib+deps directory polymorphic FFI
-//! links against (`rustc -L`) and the static library final executables link.
-//! The result is recorded per target in the status database and reused until
-//! the bundle hash or the toolchain changes.
+//! see docs/design/system-rust-runtime.md). `prepare` bakes it in a
+//! [`Cache`] entry keyed by everything the bake depends on: the bundle's
+//! content, the target, the toolchain, the allocator backend, and the
+//! environment's rustflags. It unpacks the source into the entry and runs
+//! Cargo with `--target <target>` there, yielding the rlib+deps directory
+//! polymorphic FFI links against (`rustc -L`) and the static library final
+//! executables link. Every build of every package on the machine thus
+//! shares one bake per toolchain and target. Each build directory still
+//! records the bake it uses, which its freshness checks and `inspect` read.
 //!
 //! The bake does not depend on where it runs. The toolchain is resolved
 //! once, in the package's directory, and its binaries are pinned by path:
@@ -23,11 +26,22 @@ use std::process::Stdio;
 
 use serde::{Deserialize, Serialize};
 
+use crate::cache::{self, Acquired, Cache, EntryId, RecordedFile, Request, Slot, Usage};
 use crate::db::BuildDir;
 use crate::tables;
 
-/// The runtime's directory name inside the build directory.
+/// The runtime crate's directory name inside the unpacked bundle.
 pub const RT_DIR: &str = "reussir-rt";
+
+/// The unpacked source tree inside a bake's cache entry.
+const SRC_DIR: &str = "src";
+
+/// Cargo's target directory inside a bake's cache entry.
+const TARGET_DIR: &str = "target";
+
+/// The bake's record inside its cache entry, a JSON [`BakeRecord`]. Written
+/// last and atomically: its presence marks the entry complete.
+const RECORD: &str = "artifacts.json";
 
 /// The bundled runtime source (tar.zst), packed by `build.rs`.
 static RT_BUNDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reussir-rt.tar.zst"));
@@ -39,7 +53,7 @@ static RCGMP_RUNTIME: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rcgmp-ru
 /// The file name `rrc`'s link step looks up in the runtime library directories.
 const RCGMP_RUNTIME_ARCHIVE: &str = "libRCGMPRuntime.a";
 
-/// Blake3 hex digest of the bundles — the staleness key for the baked runtime.
+/// Blake3 hex digest of the bundles, part of a bake's cache key.
 pub fn bundle_hash() -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(RT_BUNDLE);
@@ -107,6 +121,7 @@ struct Toolchain {
     /// directory: `<sysroot>/bin/rustc`, or the selection itself when the
     /// sysroot has no such binary.
     rustc: PathBuf,
+    sysroot: PathBuf,
     /// `rustc --version` of the toolchain.
     version: String,
     /// The configured cargo (`REUSSIR_CARGO`, `CARGO`), else the sysroot's,
@@ -171,6 +186,7 @@ impl Toolchain {
         Ok(Toolchain {
             rustc,
             rust_libdir: PathBuf::from(rust_libdir),
+            sysroot,
             version,
             cargo,
             target,
@@ -290,49 +306,158 @@ async fn capture(program: &Path, args: &[&str], dir: &Path) -> Result<String, St
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
 }
 
-/// Ensure the runtime is baked in `dir` with the toolchain `package_dir`
-/// selects, reusing the recorded artifacts when the bundle and toolchain
-/// are unchanged. The caller holds the build directory's lock (it *is* the
-/// open [`BuildDir`]), so no other instance can race the
-/// extract/build/record sequence.
+/// Ensure the runtime is baked for the target and the toolchain
+/// `package_dir` selects, and record the bake in `dir`. The bake is a
+/// [`Cache`] entry used in place: a complete one as it is, otherwise baked
+/// by whoever holds its lock while concurrent builds wait for it.
 ///
 /// `linker`, when given, is pinned for the bake's own links (the runtime
 /// dylib) — the same pinning `rrc --linker` gives the driver-level links,
 /// needed where rustc's discovery resolves the wrong tool (a vcvars shell
 /// whose PATH carries a coreutils `link` ahead of MSVC's). It is not part of
-/// the bake's freshness: whichever working linker linked the runtime, the
+/// the bake's key: whichever working linker linked the runtime, the
 /// artifacts are equivalent.
 pub async fn prepare(
     dir: &BuildDir,
+    cache: &Cache,
     package_dir: &Path,
     requested_target: Option<&str>,
     linker: Option<&Path>,
     progress: &indicatif::MultiProgress,
 ) -> Result<RtArtifacts, String> {
     let toolchain = Toolchain::resolve(requested_target, package_dir).await?;
-    let hash = bundle_hash();
+    let platform_allocator =
+        target_should_disable_mimalloc(&toolchain.target) || platform_allocator_forced();
+    let notify = |msg: &str| progress.suspend(|| tracing::info!("{msg}"));
+    let request = Request {
+        id: EntryId::new(cache::kind::RT, bake_key(&toolchain, platform_allocator)),
+        usage: Usage::InPlace,
+        what: "baking reussir-rt",
+        notify: &notify,
+    };
+    let artifacts = match cache
+        .acquire(&request, |entry| cached_bake(entry, &toolchain))
+        .await?
+    {
+        Acquired::Ready(artifacts) => {
+            tracing::debug!("reussir-rt is up to date");
+            artifacts
+        }
+        Acquired::Build(slot) => {
+            bake(slot, &toolchain, platform_allocator, linker, progress).await?
+        }
+    };
 
-    let target_dir = dir.root().join(&toolchain.target);
-    let src_dir = target_dir.join(RT_DIR);
-    if let Some(cached) = fresh_bake(dir, &src_dir, &toolchain, &hash)? {
-        tracing::debug!("reussir-rt is up to date");
-        return Ok(cached);
+    let record = serde_json::to_string(&artifacts).map_err(|e| e.to_string())?;
+    let key = tables::rt_artifacts_key(&artifacts.target);
+    if dir.status(&key).map_err(|e| e.to_string())?.as_deref() != Some(record.as_str()) {
+        dir.set_status(&[(key.as_str(), record.as_str())])
+            .map_err(|e| e.to_string())?;
     }
+    Ok(artifacts)
+}
 
-    if src_dir.exists() {
-        // Stale source: re-extract from scratch rather than patching files
-        // into an unknown tree. Other targets' trees remain intact.
-        std::fs::remove_dir_all(&src_dir)
-            .map_err(|e| format!("cannot clear `{}`: {e}", src_dir.display()))?;
+/// The cache key of a bake: everything its artifacts depend on. The
+/// rustc's path is part of it, not just its version: a binary at another
+/// path must never inherit a bake merely because it reports the same
+/// version string. The rustflags environment changes the code cargo emits,
+/// so it is part of the key too.
+fn bake_key(toolchain: &Toolchain, platform_allocator: bool) -> String {
+    let mut env: Vec<(String, String)> = std::env::vars_os()
+        .filter_map(|(name, value)| {
+            let name = name.into_string().ok()?;
+            let relevant = matches!(
+                name.as_str(),
+                "RUSTFLAGS" | "CARGO_ENCODED_RUSTFLAGS" | "CARGO_BUILD_RUSTFLAGS"
+            ) || (name.starts_with("CARGO_TARGET_") && name.ends_with("_RUSTFLAGS"))
+                || name.starts_with("CARGO_PROFILE_RELEASE_");
+            relevant.then(|| (name, value.to_string_lossy().into_owned()))
+        })
+        .collect();
+    env.sort();
+    let env = env
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("\0");
+    cache::key([
+        b"reussir-rt bake v1".as_slice(),
+        bundle_hash().as_bytes(),
+        toolchain.target.as_bytes(),
+        toolchain.rustc.as_os_str().as_encoded_bytes(),
+        toolchain.sysroot.as_os_str().as_encoded_bytes(),
+        toolchain.version.as_bytes(),
+        toolchain.cargo.as_os_str().as_encoded_bytes(),
+        &[u8::from(platform_allocator)],
+        env.as_bytes(),
+    ])
+}
+
+/// A bake's record in its cache entry ([`RECORD`]).
+#[derive(Serialize, Deserialize)]
+struct BakeRecord {
+    artifacts: RtArtifacts,
+    /// The sysroot of the toolchain that baked it.
+    sysroot: PathBuf,
+    /// The files the bake vouches for, with their sizes: the runtime's rlib
+    /// and staticlib, and the staged rcgmp archive.
+    files: Vec<RecordedFile>,
+}
+
+/// The complete bake in `entry`, if it is usable: its record parses,
+/// describes this toolchain, names nothing outside the entry, and every
+/// file it vouches for is still there, whole.
+fn cached_bake(entry: &Path, toolchain: &Toolchain) -> Option<RtArtifacts> {
+    let record = std::fs::read_to_string(entry.join(RECORD)).ok()?;
+    let record = serde_json::from_str::<BakeRecord>(&record).ok()?;
+    let artifacts = &record.artifacts;
+    let valid = artifacts.target == toolchain.target
+        && artifacts.rustc == toolchain.rustc
+        && artifacts.rustc_version == toolchain.version
+        && record.sysroot == toolchain.sysroot
+        && within(artifacts, entry)
+        && record.files.iter().all(|file| file.intact(entry))
+        && rcgmp_runtime_path(&artifacts.target, &artifacts.deps_dirs)
+            .is_none_or(|path| path.is_file())
+        && artifacts.libdirs().all(Path::is_dir);
+    if !valid {
+        tracing::debug!(entry = %entry.display(), "the cached reussir-rt bake is incomplete");
     }
-    std::fs::create_dir_all(&target_dir)
-        .map_err(|e| format!("cannot create `{}`: {e}", target_dir.display()))?;
-    tracing::debug!(dest = %src_dir.display(), "extracting bundled reussir-rt source");
-    unpack(&target_dir).map_err(|e| format!("cannot unpack the runtime bundle: {e}"))?;
+    valid.then_some(record.artifacts)
+}
+
+/// Whether every cargo artifact of the bake lies inside its entry. Cargo
+/// writes wherever its configuration says; artifacts outside the entry
+/// could be another bake's to overwrite.
+fn within(artifacts: &RtArtifacts, entry: &Path) -> bool {
+    [&artifacts.rlib, &artifacts.staticlib]
+        .into_iter()
+        .chain(&artifacts.deps_dirs)
+        .all(|path| path.starts_with(entry))
+}
+
+/// Bake into the slot's entry from scratch, in place: the cargo target
+/// directory records absolute paths, so the bake cannot be staged elsewhere
+/// and moved. The record is written last.
+async fn bake(
+    slot: Slot,
+    toolchain: &Toolchain,
+    platform_allocator: bool,
+    linker: Option<&Path>,
+    progress: &indicatif::MultiProgress,
+) -> Result<RtArtifacts, String> {
+    slot.clear()?;
+    let entry = slot.dir().to_owned();
+    let src_root = entry.join(SRC_DIR);
+    std::fs::create_dir(&src_root)
+        .map_err(|e| format!("cannot create `{}`: {e}", src_root.display()))?;
+    tracing::debug!(dest = %src_root.display(), "extracting bundled reussir-rt source");
+    unpack(&src_root).map_err(|e| format!("cannot unpack the runtime bundle: {e}"))?;
 
     tracing::debug!(
         cargo = %toolchain.cargo.display(),
         rustc = %toolchain.version,
+        entry = %entry.display(),
         "building reussir-rt"
     );
     // The bake is the build's one slow cold step (a real cargo build, with
@@ -340,85 +465,54 @@ pub async fn prepare(
     // cargo's own output is captured — and replayed if the bake fails.
     let bar = progress.add(
         indicatif::ProgressBar::new_spinner()
-            .with_message("baking reussir-rt (once per toolchain or runtime change)"),
+            .with_message("baking reussir-rt (once per toolchain and target)"),
     );
     bar.enable_steady_tick(std::time::Duration::from_millis(120));
-    let result = cargo_build(&toolchain, &src_dir, &src_dir.join("target"), linker).await;
+    let result = cargo_build(
+        toolchain,
+        &src_root.join(RT_DIR),
+        &entry.join(TARGET_DIR),
+        platform_allocator,
+        linker,
+    )
+    .await;
     bar.finish_and_clear();
     progress.remove(&bar);
     let (rlib, staticlib, deps_dirs) = result?;
-    if ![&rlib, &staticlib]
-        .into_iter()
-        .chain(&deps_dirs)
-        .all(|path| path.starts_with(&src_dir))
-    {
-        return Err(format!(
-            "cargo put reussir-rt's artifacts outside `{}`",
-            src_dir.display()
-        ));
-    }
+    let mut files = vec![rlib.clone(), staticlib.clone()];
     if let Some(path) = rcgmp_runtime_path(&toolchain.target, &deps_dirs) {
         std::fs::write(&path, RCGMP_RUNTIME)
             .map_err(|e| format!("cannot stage `{}`: {e}", path.display()))?;
+        files.push(path);
     }
 
     let artifacts = RtArtifacts {
         target: toolchain.target.clone(),
-        rustc: toolchain.rustc,
-        rustc_version: toolchain.version,
-        rust_libdir: toolchain.rust_libdir,
+        rustc: toolchain.rustc.clone(),
+        rustc_version: toolchain.version.clone(),
+        rust_libdir: toolchain.rust_libdir.clone(),
         deps_dirs,
         staticlib,
         rlib,
     };
-    let record = serde_json::to_string(&artifacts).map_err(|e| e.to_string())?;
-    let source_key = tables::rt_source_hash_key(&artifacts.target);
-    let artifacts_key = tables::rt_artifacts_key(&artifacts.target);
-    dir.set_status(&[
-        (source_key.as_str(), hash.as_str()),
-        (artifacts_key.as_str(), record.as_str()),
-    ])
-    .map_err(|e| e.to_string())?;
-    tracing::debug!(staticlib = %artifacts.staticlib.display(), "reussir-rt ready");
-    Ok(artifacts)
-}
-
-/// The recorded bake, if it is still valid: same bundle, same rustc, and the
-/// artifacts still on disk, inside the bake's directory `src_dir`.
-fn fresh_bake(
-    dir: &BuildDir,
-    src_dir: &Path,
-    toolchain: &Toolchain,
-    hash: &str,
-) -> Result<Option<RtArtifacts>, String> {
-    let source_key = tables::rt_source_hash_key(&toolchain.target);
-    let artifacts_key = tables::rt_artifacts_key(&toolchain.target);
-    let recorded_hash = dir.status(&source_key).map_err(|e| e.to_string())?;
-    if recorded_hash.as_deref() != Some(hash) {
-        return Ok(None);
+    if !within(&artifacts, &entry) {
+        return Err(format!(
+            "cargo put reussir-rt's artifacts outside its cache entry `{}`",
+            entry.display()
+        ));
     }
-    let Some(record) = dir.status(&artifacts_key).map_err(|e| e.to_string())? else {
-        return Ok(None);
+    let record = BakeRecord {
+        sysroot: toolchain.sysroot.clone(),
+        files: files
+            .iter()
+            .map(|file| RecordedFile::measure(&entry, file))
+            .collect::<Result<_, _>>()?,
+        artifacts,
     };
-    let Ok(artifacts) = serde_json::from_str::<RtArtifacts>(&record) else {
-        // An older rene may have written a different shape; just rebake.
-        return Ok(None);
-    };
-    let valid = artifacts.target == toolchain.target
-        // The path is part of the toolchain's identity: a binary at another
-        // path must not inherit this bake merely because it reports the
-        // same version string.
-        && artifacts.rustc == toolchain.rustc
-        && artifacts.rustc_version == toolchain.version
-        && artifacts.deps_dirs.iter().all(|deps| deps.starts_with(src_dir))
-        && artifacts.rlib.starts_with(src_dir)
-        && artifacts.staticlib.starts_with(src_dir)
-        && artifacts.rlib.is_file()
-        && artifacts.staticlib.is_file()
-        && rcgmp_runtime_path(&artifacts.target, &artifacts.deps_dirs)
-            .is_none_or(|path| path.is_file())
-        && artifacts.libdirs().all(Path::is_dir);
-    Ok(valid.then_some(artifacts))
+    let json = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+    slot.commit(RECORD, json.as_bytes())?;
+    tracing::debug!(staticlib = %record.artifacts.staticlib.display(), "reussir-rt ready");
+    Ok(record.artifacts)
 }
 
 /// Run `cargo build --release` in `src_dir`, into `target_dir`, reading the
@@ -430,6 +524,7 @@ async fn cargo_build(
     toolchain: &Toolchain,
     src_dir: &Path,
     target_dir: &Path,
+    platform_allocator: bool,
     linker: Option<&Path>,
 ) -> Result<(PathBuf, PathBuf, Vec<PathBuf>), String> {
     let mut cmd = compio::process::Command::new(&toolchain.cargo);
@@ -437,12 +532,13 @@ async fn cargo_build(
     // The bundled mimalloc backend builds C code and is not yet a WebAssembly
     // allocator. WASI supplies the libc malloc family used by the runtime's
     // size-recovering fallback, so select that backend for wasm targets.
-    if target_should_disable_mimalloc(&toolchain.target) || platform_allocator_forced() {
+    // (`RENE_RT_PLATFORM_ALLOCATOR` forces the same backend everywhere.)
+    if platform_allocator {
         cmd.arg("--no-default-features");
     }
     cmd.arg("--message-format=json-render-diagnostics")
         // The bake owns every artifact it hands out: the target directory,
-        // and cargo's separate build directory, stay inside the bake
+        // and cargo's separate build directory, stay inside the cache entry
         // whatever `CARGO_TARGET_DIR` or the user's cargo configuration say.
         .arg("--target-dir")
         .arg(target_dir)
@@ -644,6 +740,68 @@ mod tests {
         } else {
             assert_eq!(own, Some(target_deps.join("libRCGMPRuntime.a")));
         }
+    }
+
+    /// A cached bake serves only the toolchain it names, only while it owns
+    /// every artifact it names, and only while each file it vouches for is
+    /// whole.
+    #[test]
+    fn a_cached_bake_is_ready_only_while_whole() {
+        let tmp = tempfile::tempdir().unwrap();
+        let entry = tmp.path().join("rt/key");
+        let release = entry.join("target/x86_64-unknown-test/release");
+        let rust_libdir = tmp.path().join("sysroot/lib");
+        for dir in [&release.join("deps"), &rust_libdir] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let rlib = release.join("deps/libreussir_rt-0.rlib");
+        let staticlib = release.join("libreussir_rt.a");
+        std::fs::write(&rlib, "rlib").unwrap();
+        std::fs::write(&staticlib, "staticlib").unwrap();
+        let toolchain = |version: &str| Toolchain {
+            rustc: tmp.path().join("sysroot/bin/rustc"),
+            sysroot: tmp.path().join("sysroot"),
+            version: version.to_owned(),
+            cargo: PathBuf::from("cargo"),
+            target: "x86_64-unknown-test".to_owned(),
+            rust_libdir: rust_libdir.clone(),
+        };
+        let ours = toolchain("rustc 1.0.0-test");
+        let artifacts = RtArtifacts {
+            target: ours.target.clone(),
+            rustc: ours.rustc.clone(),
+            rustc_version: ours.version.clone(),
+            rust_libdir: rust_libdir.clone(),
+            deps_dirs: vec![release.join("deps")],
+            staticlib: staticlib.clone(),
+            rlib: rlib.clone(),
+        };
+        let record = |artifacts: &RtArtifacts| {
+            let record = BakeRecord {
+                artifacts: artifacts.clone(),
+                sysroot: ours.sysroot.clone(),
+                files: [&rlib, &staticlib]
+                    .map(|file| RecordedFile::measure(&entry, file).unwrap())
+                    .to_vec(),
+            };
+            std::fs::write(entry.join(RECORD), serde_json::to_string(&record).unwrap()).unwrap();
+        };
+        record(&artifacts);
+        assert!(cached_bake(&entry, &ours).is_some());
+        assert!(cached_bake(&entry, &toolchain("rustc 2.0.0-test")).is_none());
+
+        // A staticlib cut short, as a crash before it reached the disk
+        // leaves it.
+        std::fs::write(&staticlib, "static").unwrap();
+        assert!(cached_bake(&entry, &ours).is_none());
+        std::fs::write(&staticlib, "staticlib").unwrap();
+
+        // A dependency directory outside the entry: another bake's to
+        // overwrite.
+        let mut escaped = artifacts.clone();
+        escaped.deps_dirs.push(rust_libdir.clone());
+        record(&escaped);
+        assert!(cached_bake(&entry, &ours).is_none());
     }
 
     #[test]

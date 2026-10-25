@@ -81,9 +81,11 @@ pub struct Cache {
 pub mod kind {
     /// The bundled `core` package's sources ([`crate::bundled`]).
     pub const CORE_SRC: &str = "core-src";
+    /// `reussir-rt` bakes ([`crate::rt`]).
+    pub const RT: &str = "rt";
 
     /// Every kind.
-    pub const ALL: &[&str] = &[CORE_SRC];
+    pub const ALL: &[&str] = &[CORE_SRC, RT];
 }
 
 /// One entry: the directory `<root>/<kind>/<key>`.

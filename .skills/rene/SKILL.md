@@ -52,7 +52,7 @@ the nearest `rene.ncl` at or above the current directory and builds into
 goes to stderr); a package declaring no targets stops after the runtime bake
 and prints the library directories to pass to `rrc --polyffi-libdir` by hand.
 
-What every build has in common, such as the sources of the bundled `core`,
+What every build has in common (the bundled `core` and the runtime bake)
 lives in a per-user cache: `$XDG_CACHE_HOME/rene` (or `~/.cache/rene`) on
 Linux, `~/Library/Caches/rene` on macOS, and `%LOCALAPPDATA%\rene` on
 Windows. Set `RENE_CACHE_DIR` to use another directory; the lit suites point

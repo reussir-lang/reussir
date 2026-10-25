@@ -15,8 +15,8 @@
 //! stops after the bake and prints the library directories to pass to
 //! `rrc --polyffi-libdir` by hand. `rene inspect` reports the source graph as
 //! JSON; `rene clean` deletes the build directory unless another instance
-//! holds it. The bundled core sources live in a shared per-user cache (see
-//! `rene::cache`), which `clean` leaves alone.
+//! holds it. The bundled core sources and the runtime bake live in a shared
+//! per-user cache (see `rene::cache`), which `clean` leaves alone.
 //!
 //! Progress goes to stderr via `tracing`; stdout carries only the final
 //! machine-readable listing. Exit 0 on success, 1 on a failed command, 2 on
@@ -410,6 +410,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
         .or(profile.default_target_triple.as_deref());
     let artifacts = rt::prepare(
         &dir,
+        &cache,
         &graph.nodes[&graph.root].dir,
         requested_target,
         bake_linker.as_deref(),

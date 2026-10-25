@@ -354,6 +354,11 @@ printf ']}\n'
             .collect()
     }
 
+    /// The runtime bakes in the cache, one entry directory each.
+    fn rt_entries(&self) -> Vec<PathBuf> {
+        cache_entries(&self.cache.join("rt"))
+    }
+
     /// The cargo bake invocations, one argv line each.
     fn cargo_invocations(&self) -> Vec<String> {
         match std::fs::read_to_string(self.dir.join("cargo-args")) {
@@ -460,8 +465,11 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
     let target = "x86_64-unknown-fake";
-    let target_deps = root.join(format!("{target}/reussir-rt/target/{target}/release/deps"));
-    let host_deps = root.join(format!("{target}/reussir-rt/target/release/deps"));
+    // The bake lives in the cache, cargo's target directory inside it.
+    let bakes = fakes.rt_entries();
+    assert_eq!(bakes.len(), 1, "{bakes:#?}");
+    let target_deps = bakes[0].join(format!("target/{target}/release/deps"));
+    let host_deps = bakes[0].join("target/release/deps");
     assert_eq!(
         lines,
         [
@@ -471,14 +479,12 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
         ]
     );
 
-    // The bundle really was unpacked, and the bake recorded.
-    assert!(root.join(target).join("reussir-rt/Cargo.toml").is_file());
+    // The bundle really was unpacked, and the bake recorded, in the cache
+    // and in the build directory, which holds nothing of the bake itself.
+    assert!(bakes[0].join("src/reussir-rt/Cargo.toml").is_file());
+    assert!(bakes[0].join("artifacts.json").is_file());
+    assert!(!root.join(target).exists());
     let dir = BuildDir::open(&root).unwrap();
-    assert!(
-        dir.status(&tables::rt_source_hash_key(target))
-            .unwrap()
-            .is_some()
-    );
     assert!(
         dir.status(&tables::rt_artifacts_key(target))
             .unwrap()
@@ -516,6 +522,37 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     let out = with_alternate();
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(fakes.runs("cargo"), 2, "the new rustc path was not cached");
+    assert_eq!(fakes.rt_entries().len(), 2);
+}
+
+/// Builds of different packages in different build directories share one
+/// runtime bake through the cache, and a bake whose staticlib vanished is
+/// baked again in the same entry.
+#[cfg(unix)]
+#[test]
+fn packages_share_one_runtime_bake() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let build = |name: &str| {
+        let pkg = tmp.join(name);
+        let out = fakes.rene(&["build"], &package(&pkg, name), &pkg.join("reussir-build"));
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let libdirs = build("first");
+    assert_eq!(build("second"), libdirs);
+    assert_eq!(fakes.runs("cargo"), 1, "the second package rebaked");
+    let bakes = fakes.rt_entries();
+    assert_eq!(bakes.len(), 1, "{bakes:#?}");
+
+    let record: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(bakes[0].join("artifacts.json")).unwrap())
+            .unwrap();
+    std::fs::remove_file(record["artifacts"]["staticlib"].as_str().unwrap()).unwrap();
+    assert_eq!(build("second"), libdirs);
+    assert_eq!(fakes.runs("cargo"), 2, "a broken bake was trusted");
+    assert_eq!(fakes.rt_entries(), bakes);
 }
 
 /// rustup picks a toolchain by the directory its proxy runs in, which need
@@ -607,9 +644,9 @@ exec '{}'/"$toolchain"/bin/rustc "$@"
     }
 }
 
-/// Cargo's outputs stay inside the bake, whatever `CARGO_TARGET_DIR` says:
-/// a target directory shared between bakes would let one overwrite
-/// another's artifacts.
+/// Cargo's outputs stay inside the bake's cache entry, whatever
+/// `CARGO_TARGET_DIR` says: a target directory shared between bakes would
+/// let one overwrite another's artifacts.
 #[cfg(unix)]
 #[test]
 fn the_bake_keeps_its_outputs_whatever_cargo_target_dir_says() {
@@ -631,10 +668,12 @@ fn the_bake_keeps_its_outputs_whatever_cargo_target_dir_says() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     let cargo_dirs: Vec<&str> = stdout.lines().skip(1).collect();
     assert_eq!(cargo_dirs.len(), 2, "{stdout}");
+    let bakes = fakes.rt_entries();
+    assert_eq!(bakes.len(), 1, "{bakes:#?}");
     assert!(
         cargo_dirs
             .iter()
-            .all(|dir| Path::new(dir).starts_with(&root)),
+            .all(|dir| Path::new(dir).starts_with(&bakes[0])),
         "{stdout}"
     );
 }
@@ -680,8 +719,13 @@ fn build_resolves_the_target_and_keeps_each_runtime_bake() {
         root.join("dev/demo").display().to_string()
     );
 
+    // One cache entry per target.
+    let bakes = fakes.rt_entries();
+    assert_eq!(bakes.len(), 2, "{bakes:#?}");
+    for bake in &bakes {
+        assert!(bake.join("src/reussir-rt/Cargo.toml").is_file());
+    }
     for target in ["wasm32-unknown-unknown", override_target] {
-        assert!(root.join(target).join("reussir-rt/Cargo.toml").is_file());
         let dir = BuildDir::open(&root).unwrap();
         assert!(
             dir.status(&tables::rt_artifacts_key(target))
@@ -1489,7 +1533,8 @@ fn build_bakes_the_runtime_with_the_host_toolchain() {
         .arg(demo_manifest())
         .arg("--build-dir")
         .arg(&root)
-        .env("REUSSIR_RRC", &fakes.rrc));
+        .env("REUSSIR_RRC", &fakes.rrc)
+        .env(rene::cache::CACHE_DIR_ENV, &fakes.cache));
     assert!(out.status.success(), "stderr: {}", stderr(&out));
 
     let stdout = String::from_utf8(out.stdout).unwrap();
