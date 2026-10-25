@@ -5925,7 +5925,7 @@ fn cmp_op(op: BinOp) -> CmpOp {
 /// minus every variable the tree itself binds (`let`s, pattern bindings,
 /// nested closure parameters). Variable ids are fresh per binder within a
 /// function body, so a single flat bound set is enough — no scoping needed.
-fn free_vars<'tcx>(e: &Expr<'tcx>, out: &mut Vec<VarId>) {
+pub(super) fn free_vars<'tcx>(e: &Expr<'tcx>, out: &mut Vec<VarId>) {
     let mut used = Vec::new();
     let mut bound = Vec::new();
     var_occurrences(e, &mut used, &mut bound);

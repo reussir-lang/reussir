@@ -2472,16 +2472,25 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         bindings: &[(VarId, &'tcx [u32])],
         leaf_body: Option<&Expr<'tcx>>,
     ) -> Result<()> {
-        for &(var, path) in bindings {
+        // The arm each used binding of a value a `Nat`/`Int` match produced
+        // comes from: a leaf's bindings sharing an arm take it in turn, all but
+        // the last one keeping it.
+        let arm_of = |var: VarId, path: &[u32]| match leaf_body {
+            Some(body) if !mir::uses_var(body, var) => None,
+            _ => self.int_arm_value(env, root_idx, path).map(|(i, _)| i),
+        };
+        let arms: Vec<Option<usize>> = bindings.iter().map(|&(v, p)| arm_of(v, p)).collect();
+        for (k, &(var, path)) in bindings.iter().enumerate() {
             // A value a `Nat`/`Int` match produced comes from its arm: a leaf
             // whose body uses it takes the arm's value, a guard reads it.
             if let Some(found) = self.int_arm_value(env, root_idx, path) {
-                let take = match leaf_body {
+                let mode = match leaf_body {
                     Some(body) if !mir::uses_var(body, var) => continue,
-                    Some(_) => true,
-                    None => false,
+                    Some(_) if arms[k + 1..].contains(&arms[k]) => bigint::ArmUse::Share,
+                    Some(_) => bigint::ArmUse::Take,
+                    None => bigint::ArmUse::Read,
                 };
-                let (val, ty) = self.bind_int_arm_value(block, env, found, take)?;
+                let (val, ty) = self.bind_int_arm_value(block, env, found, mode)?;
                 self.bind_var_ty(var, ty);
                 env.vars.insert(var, val);
                 continue;

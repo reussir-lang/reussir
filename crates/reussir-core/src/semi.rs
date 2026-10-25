@@ -2954,7 +2954,10 @@ mod tests {
                     .find(|item| item.contains(lifted))
                     .unwrap_or_else(|| panic!("no lifted `gcd` in:\n{text}"));
                 assert!(item.contains("Arc<Nat>"), "{item}");
-                assert!(text.contains("@_RNvNvNvNvC4core3num3Int7nat_abs6atomic"), "{text}");
+                assert!(
+                    text.contains("@_RNvNvNvNvC4core3num3Int7nat_abs6atomic"),
+                    "{text}"
+                );
             },
         );
     }
@@ -2968,7 +2971,9 @@ mod tests {
             |elab, _| {
                 let errors: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
                 assert!(
-                    errors.iter().any(|e| e.starts_with("method `hold` cannot be called on")),
+                    errors
+                        .iter()
+                        .any(|e| e.starts_with("method `hold` cannot be called on")),
                     "{errors:#?}"
                 );
             },
@@ -3287,6 +3292,15 @@ mod tests {
             .collect()
     }
 
+    /// Whether `text` binds some variable at `path` and returns it from that
+    /// leaf (`vN=<path> => vN`), whatever its number.
+    fn returns_binder_at(text: &str, path: &str) -> bool {
+        let suffix = format!("={path}");
+        text.split_whitespace()
+            .filter_map(|w| w.strip_suffix(suffix.as_str()))
+            .any(|v| text.contains(&format!("{v}{suffix} => {v} ")))
+    }
+
     #[test]
     fn bigint_match_columns_switch_once_on_intervals() {
         // A constructor chain is one key, and the rows binding no field that
@@ -3305,7 +3319,7 @@ mod tests {
             "low",
         );
         assert_eq!(switch_arms(&low, 12), ["0", "1", "2..", "_"], "{low}");
-        assert!(low.contains("v1=scrut.0.0 => v1"), "{low}");
+        assert!(returns_binder_at(&low, "scrut.0.0"), "{low}");
         assert!(low.contains("unreachable"), "{low}");
         let sign = bigint_hir(
             "pub fn sign(i: Int) -> Nat { match i { Int::OfNat(Nat::Zero) => 0, \
@@ -3313,7 +3327,7 @@ mod tests {
             "sign",
         );
         assert_eq!(switch_arms(&sign, 12), ["0", "1..", "..-1", "_"], "{sign}");
-        assert!(sign.contains("v2=scrut.0 => v2"), "{sign}");
+        assert!(returns_binder_at(&sign, "scrut.0"), "{sign}");
         // A range's bound reaches over the keys before it to where its binder
         // is the distance itself: `at_most -1`, not `at_most -2`.
         let keyed = bigint_hir(
@@ -3321,7 +3335,11 @@ mod tests {
              Int::OfNat(Nat::Succ(k)) => k, Int::NegSucc(k) => k } }",
             "keyed",
         );
-        assert_eq!(switch_arms(&keyed, 12), ["-1", "0", "1..", "..-1", "_"], "{keyed}");
+        assert_eq!(
+            switch_arms(&keyed, 12),
+            ["-1", "0", "1..", "..-1", "_"],
+            "{keyed}"
+        );
         // The rows around zero that neither range takes are the default.
         let gap = bigint_hir(
             "pub fn gap(i: Int) -> i64 { match i { Int::OfNat(Nat::Succ(_)) => 1, \
@@ -3352,7 +3370,7 @@ mod tests {
         );
         assert_eq!(switch_arms(&pair, 12), ["0", "1..", "_"], "{pair}");
         assert_eq!(switch_arms(&pair, 20), ["0", "1..", "_"], "{pair}");
-        assert!(pair.contains("v2=scrut.0.0 => v2"), "{pair}");
+        assert!(returns_binder_at(&pair, "scrut.0.0"), "{pair}");
     }
 
     #[test]

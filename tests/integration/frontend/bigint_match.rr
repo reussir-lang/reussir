@@ -13,6 +13,9 @@
 // RUN: %FileCheck %s --check-prefix=GAP < %t.mlir
 // RUN: %FileCheck %s --check-prefix=GUARDED < %t.mlir
 // RUN: %FileCheck %s --check-prefix=LIVE < %t.mlir
+// RUN: %FileCheck %s --check-prefix=SUMTO < %t.mlir
+// RUN: %FileCheck %s --check-prefix=COLLATZ < %t.mlir
+// RUN: %FileCheck %s --check-prefix=CASESELF < %t.mlir
 // RUN: %FileCheck %s --check-prefix=DEFER < %t.mlir
 // RUN: %rrc %s --package-name bigint --extern core=%t.core.rri -o %t.o --relocation-mode pic
 // RUN: %cc %t.o %S/bigint_match.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
@@ -48,7 +51,8 @@ fn first(n : Nat) -> i64 {
     }
 }
 
-// The scrutinee is still used in an arm: the match gets a retained reference.
+// An arm naming the scrutinee rebuilds it from the arm's distance, so the
+// match still takes `n`; `n` and `m` share that distance.
 fn sum_to(n : Nat) -> Nat {
     match n {
         Nat::Zero => 0,
@@ -112,6 +116,30 @@ fn gap(i : Int) -> i64 {
     }
 }
 
+// A collatz step: the default arm reads the scrutinee, which is the arm's own
+// value, so nothing is retained for the match.
+fn collatz_step(n : Nat) -> Nat {
+    match n {
+        1 => 0,
+        _ => if n % 2 == 0 { n / 2 } else { 3 * n + 1 }
+    }
+}
+
+fn collatz_len(n : Nat) -> i64 {
+    match n {
+        0 => 0,
+        _ => 1 + collatz_len(collatz_step(n))
+    }
+}
+
+// In a `case` arm the scrutinee is the constant.
+fn case_self(n : Nat) -> Nat {
+    match n {
+        5 => n * 2,
+        _ => 0
+    }
+}
+
 // The guard does not read `m`: the success leaf binds it from the arm's
 // distance, and no path retains or rebuilds it for the guard.
 fn ready(n : Nat, flag : bool) -> Nat {
@@ -121,10 +149,24 @@ fn ready(n : Nat, flag : bool) -> Nat {
     }
 }
 
+// A guard and its arms naming the scrutinee.
+fn guard_self(n : Nat) -> Nat {
+    match n {
+        Nat::Succ(m) if n > 10 => m + n,
+        _ => n
+    }
+}
+
 pub fn owning() -> i64 {
     let f25 = factorial(25);
-    if ready(8, true) == 7 && ready(8, false) == 7 && ready(f25, true) == f25 - 1
-        && ready(0, true) == 7 { 1 } else { 0 }
+    let collatz_ok = if collatz_len(27) == 112 && collatz_step(f25) == f25 / 2
+        && collatz_step(f25 + 1) == f25 * 3 + 4 { 1 } else { 0 };
+    let case_ok = if case_self(5) == 10 && case_self(6) == 0 && case_self(f25) == 0 { 1 } else { 0 };
+    let ready_ok = if ready(8, true) == 7 && ready(8, false) == 7 && ready(f25, true) == f25 - 1
+        && ready(0, true) == 7 { 1 } else { 0 };
+    let guard_ok = if guard_self(20) == 39 && guard_self(5) == 5 && guard_self(0) == 0
+        && guard_self(f25) == f25 * 2 - 1 { 1 } else { 0 };
+    collatz_ok + case_ok * 10 + ready_ok * 100 + guard_ok * 1000
 }
 extern "C" trampoline "owning" = owning;
 
@@ -217,6 +259,26 @@ extern "C" trampoline "reussir_main" = main;
 // LIVE-LABEL: func.func private @{{.*}}pred_plus_self(%arg0
 // LIVE: rcgmp.retain %arg0
 // LIVE-NEXT: rcgmp.match %arg0
+
+// SUMTO-LABEL: func.func private @{{.*}}sum_to(%arg0
+// SUMTO-NOT: rcgmp.retain %arg0
+// SUMTO: rcgmp.match %arg0 : !rcgmp.mpz -> !rcgmp.mpz {
+// SUMTO: at_least 1 (%[[D:[a-z0-9]+]]) {
+// SUMTO: rcgmp.retain %[[D]]
+// SUMTO: rcgmp.addi %[[D]]
+
+// COLLATZ-LABEL: func.func private @{{.*}}collatz_step(%arg0
+// COLLATZ-NOT: rcgmp.retain
+// COLLATZ: rcgmp.match %arg0 : !rcgmp.mpz -> !rcgmp.mpz {
+// COLLATZ-NEXT: case 1 {
+// COLLATZ: default (%{{[a-z0-9]+}}) {
+
+// CASESELF-LABEL: func.func private @{{.*}}case_self(%arg0
+// CASESELF-NOT: rcgmp.retain
+// CASESELF: rcgmp.match %arg0 : !rcgmp.mpz -> !rcgmp.mpz {
+// CASESELF-NEXT: case 5 {
+// CASESELF: rcgmp.constant 5
+// CASESELF: default {
 
 // DEFER-LABEL: func.func private @{{.*}}ready(%arg0
 // DEFER: rcgmp.match %arg0 : !rcgmp.mpz -> !rcgmp.mpz {

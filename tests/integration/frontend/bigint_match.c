@@ -8,7 +8,7 @@
 //
 //===----------------------------------------------------------------------===//
 // Driver for bigint_match.rr: nine independent properties, one decimal digit
-// each, and one more of the arms' ownership.
+// each, and four more of the arms' ownership.
 
 extern long long reussir_main(void);
 
@@ -21,7 +21,7 @@ int main(void) {
   for (long long x = -4; x <= 2; ++x)
     if (gap_of(x) != expect[x + 4])
       return 1;
-  if (owning() != 1)
+  if (owning() != 1111)
     return 1;
   return reussir_main() == 111111111 ? 0 : 1;
 }

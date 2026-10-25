@@ -72,6 +72,7 @@ use crate::semi::ty::{BigIntTy, Ty, TyKind};
 use crate::surface::{self, Const, PatternKind, Span};
 use crate::utils::string::StringToken;
 
+use super::check::free_vars;
 use super::ctxt::{Elaborator, RecordFields};
 use super::hir::{DecisionTree, Expr, ExprKind, IntRange, PatVarRef, SwitchCases, VarId};
 
@@ -352,6 +353,16 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         let result = self.infer.new_hole_ty();
 
+        // A match on a `Nat`/`Int` variable consumes the integer and gives each
+        // arm the parts it selects. An arm naming the variable itself reads it
+        // through a binding of the whole scrutinee instead, so the match can
+        // still take the integer: in a `case` arm that binding is the constant,
+        // elsewhere the arm's own value.
+        let bigint_var = match scrut.kind {
+            ExprKind::Var(v) if scrut_ty.bigint().is_some() => Some(v),
+            _ => None,
+        };
+
         // Type-check every arm, turning each surface pattern into a `Pat` (with
         // binders allocated and in scope for the guard and body).
         let mut rows = Vec::with_capacity(arms.len());
@@ -366,6 +377,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     _ => {}
                 }
             }
+            let alias = bigint_var.map(|v| {
+                let def = self.vars.def(v).clone();
+                self.vars.fresh(def.name, scrut_ty, def.span)
+            });
             let mut bound_names = Vec::new();
             names(&pat.kind(), &mut bound_names);
             let mut seen = rustc_hash::FxHashSet::default();
@@ -385,10 +400,20 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             let checked_body = self.check_expr(body, result);
             self.vars.restore(mark);
 
+            let mut used = Vec::new();
+            free_vars(&checked_body, &mut used);
+            if let Some(g) = &guard {
+                free_vars(g, &mut used);
+            }
+            let bindings = alias
+                .filter(|a| used.contains(a))
+                .map(|a| vec![(a, PatVarRef::default())])
+                .unwrap_or_default();
+
             arm_spans.push(Some(body.span()));
             rows.push(Row {
                 pats: vec![p],
-                bindings: Vec::new(),
+                bindings,
                 guard,
                 body: checked_body,
                 arm: i,

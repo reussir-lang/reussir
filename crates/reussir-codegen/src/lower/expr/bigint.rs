@@ -437,16 +437,13 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         Some((i, derived(arm, path.len() - arm.path.len())))
     }
 
-    /// Materialize a value an arm produced. Taken, it is owned by the binding:
-    /// the arm's argument moves into it (or into the arithmetic computing it).
-    /// Read for a guard, the arm keeps its argument; a computed value is kept
-    /// with the arm and released at each leaf.
+    /// Materialize a value an arm produced (see [`ArmUse`]).
     pub(super) fn bind_int_arm_value<'b>(
         &self,
         block: &'b Block<'c>,
         env: &mut Env<'c, 'b, 'tcx>,
         (i, derived): (usize, Derived),
-        take: bool,
+        mode: ArmUse,
     ) -> Result<(Value<'c, 'b>, Ty<'tcx>)> {
         let loc = self.loc();
         let arm = &env.int_arms[i];
@@ -468,13 +465,16 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             .arg
             .ok_or_else(|| LoweringError("match arm value has no argument".into()))?;
         let identity = matches!(&offset, Offset::Plus(c) if *c == 0);
+        if mode == ArmUse::Share {
+            block.append_operation(rcgmp::retain(arg, loc));
+        }
         if identity {
-            if take {
+            if mode == ArmUse::Take {
                 env.int_arms[i].arg = None;
             }
             return Ok((arg, ty));
         }
-        if !take {
+        if mode == ArmUse::Read {
             block.append_operation(rcgmp::retain(arg, loc));
         }
         let computed = match &offset {
@@ -487,10 +487,10 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 self.append(block, rcgmp::binary(Binary::Sub, c, arg, loc))
             }
         };
-        if take {
-            env.int_arms[i].arg = None;
-        } else {
-            env.int_arms[i].views.push(computed);
+        match mode {
+            ArmUse::Take => env.int_arms[i].arg = None,
+            ArmUse::Read => env.int_arms[i].views.push(computed),
+            ArmUse::Share => {}
         }
         Ok((computed, ty))
     }
@@ -521,6 +521,20 @@ pub(super) type IntCases<'tcx> = (
     &'tcx [(IntRange<'tcx>, DecisionTree<'tcx>)],
     &'tcx DecisionTree<'tcx>,
 );
+
+/// How a binding uses a value an arm of a `Nat`/`Int` match produced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ArmUse {
+    /// A leaf binding owns it: the arm's argument moves into it (or into the
+    /// arithmetic computing it).
+    Take,
+    /// A leaf binding owns it while a later binding of the leaf still takes
+    /// the argument: it gets a retained reference.
+    Share,
+    /// A guard reads it: the arm keeps its argument, and a computed value is
+    /// kept with the arm and released at each leaf.
+    Read,
+}
 
 /// The integers an arm of a `Nat`/`Int` match selects.
 #[derive(Clone, Debug)]
