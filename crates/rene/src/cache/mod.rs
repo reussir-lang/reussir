@@ -13,8 +13,13 @@
 //!
 //! [`CACHE_DIR_ENV`] overrides the location, for hermetic builds and tests.
 //! A root that cannot be used moves the cache into the build directory,
-//! with a warning ([`Cache::locate`]). The root carries a `CACHEDIR.TAG`
-//! (<https://bford.info/cachedir/>), so backup tools skip it.
+//! with a warning ([`Cache::locate`]); the build directory's own lock then
+//! serializes its writers. A root counts as unusable when it cannot be
+//! created or when its file system cannot lock files: there is no unlocked
+//! mode, since an entry built in place by two processes at once is
+//! corrupted. The root carries a `CACHEDIR.TAG`
+//! (<https://bford.info/cachedir/>), so backup tools skip it, and
+//! `rene.lock`, the file that probe locks.
 //!
 //! # Layout
 //!
@@ -28,6 +33,10 @@
 //! `<key>.tmp-<pid>-<n>` for a copy being staged and `<key>.rm-<pid>-<n>`
 //! for one being deleted. [`parse_sibling`] recognizes the latter two, so
 //! whatever cleans up after a crashed process never has to guess.
+//!
+//! Every lock the cache takes is a [`FileLock`] ([`lock`]).
+
+pub mod lock;
 
 use std::ffi::OsString;
 use std::fs::File;
@@ -35,6 +44,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
+
+pub use lock::{FileLock, Probe};
 
 /// Overrides the cache location.
 pub const CACHE_DIR_ENV: &str = "RENE_CACHE_DIR";
@@ -45,6 +56,9 @@ const CACHE_NAME: &str = "rene";
 /// The cache's name inside the build directory, when the shared location is
 /// unusable.
 const LOCAL_CACHE: &str = "cache";
+
+/// The root's file [`Cache::at`] locks to probe whether locking works.
+const LOCK_PROBE: &str = "rene.lock";
 
 const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
 # This file is a cache directory tag created by rene, the Reussir package manager.\n\
@@ -85,7 +99,8 @@ impl std::fmt::Display for EntryId {
 
 impl Cache {
     /// Use `root`, made absolute, as the cache, creating it (and its
-    /// `CACHEDIR.TAG`) if needed.
+    /// `CACHEDIR.TAG`) if needed. A root whose file system cannot lock
+    /// files is an error.
     pub fn at(root: impl AsRef<Path>) -> Result<Self, String> {
         let root = root.as_ref();
         let root = std::path::absolute(root)
@@ -97,6 +112,15 @@ impl Cache {
             // The tag is advisory, and racing writers write the same bytes.
             write_atomically(&tag, CACHEDIR_TAG.as_bytes())?;
         }
+        // Held or free, the probe only asks whether locking works at all.
+        let probe = root.join(LOCK_PROBE);
+        FileLock::try_lock(&probe).map_err(|e| {
+            format!(
+                "the cache `{}` cannot lock files (`{}`: {e})",
+                root.display(),
+                probe.display()
+            )
+        })?;
         Ok(Cache { root })
     }
 
@@ -306,6 +330,21 @@ mod tests {
         let file = tmp.path().join("file");
         std::fs::write(&file, "").unwrap();
         assert!(Cache::at(file.join("c")).is_err());
+    }
+
+    /// A root where the lock probe fails is unusable, so the build falls
+    /// back to its own directory instead of building entries unlocked.
+    #[test]
+    fn a_root_that_cannot_lock_is_unusable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("c");
+        Cache::at(&root).unwrap();
+        assert!(root.join(LOCK_PROBE).is_file());
+        // A directory where the probe file belongs cannot be locked.
+        let broken = tmp.path().join("broken");
+        std::fs::create_dir_all(broken.join(LOCK_PROBE)).unwrap();
+        let err = Cache::at(&broken).unwrap_err();
+        assert!(err.contains("cannot lock files"), "{err}");
     }
 
     /// A relative root (a relative `RENE_CACHE_DIR`, or a relative build

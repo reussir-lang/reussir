@@ -152,6 +152,13 @@ depend on; different inputs get a different entry, so a published entry is
 never changed in place. Beside it live only `<key>.lock` and the unique
 siblings `<key>.tmp-<pid>-<n>` (staging) and `<key>.rm-<pid>-<n>` (trash).
 
+Writers of an entry hold its lock, `<key>.lock`: an OS file lock, which the
+OS releases when its holder exits, even by crashing. A lock file is deleted
+only while held, and a locker checks that the path still names the file it
+locked, so no two processes ever hold "the same" lock on different files.
+A file system that cannot lock files makes the root unusable, so the cache
+moves to the build directory instead of running unlocked.
+
 Everything downstream reads the manifest:
 
 - **Polyffi compiles** pass `--extern reussir_rt=<rlib>` and
