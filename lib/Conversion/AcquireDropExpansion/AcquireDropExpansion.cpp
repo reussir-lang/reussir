@@ -32,12 +32,14 @@
 #include <mlir/IR/Block.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributes.h>
+#include <mlir/IR/Dominance.h>
 #include <mlir/IR/ValueRange.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/GreedyPatternRewriteDriver.h>
 
 #include "Reussir/Conversion/AcquireDropExpansion.h"
+#include "Reussir/Analysis/EquivalenceAnalysis.h"
 #include "Reussir/Conversion/RcDecrementExpansion.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirEnumAttrs.h"
@@ -569,6 +571,38 @@ public:
 
 } // namespace
 
+// Expanding a drop reloads members that the function may already have loaded
+// to retain them. Loads from equivalent storage inside a record box read the
+// same value (see `EquivalenceAnalysis`), so each later load is replaced by a
+// dominating equivalent one, and a member's retain and release see one SSA
+// value.
+static void forwardEquivalentLoads(mlir::func::FuncOp func) {
+  mlir::DominanceInfo dominance(func);
+  EquivalenceAnalysis equivalence;
+  llvm::SmallVector<ReussirRefLoadOp> loads;
+  func.walk([&](ReussirRefLoadOp load) {
+    if (!isTriviallyCopyable(load.getType()) &&
+        isImmutableRecordStorage(load.getRef()))
+      loads.push_back(load);
+  });
+  llvm::SmallVector<ReussirRefLoadOp> leaders;
+  for (ReussirRefLoadOp load : loads) {
+    auto leader = llvm::find_if(leaders, [&](ReussirRefLoadOp candidate) {
+      return candidate.getType() == load.getType() &&
+             dominance.properlyDominates(candidate.getOperation(),
+                                         load.getOperation()) &&
+             equivalence.areEquivalent(candidate.getResult(),
+                                       load.getResult());
+    });
+    if (leader == leaders.end()) {
+      leaders.push_back(load);
+      continue;
+    }
+    load.replaceAllUsesWith(leader->getResult());
+    load.erase();
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // AcquireDropExpansionPass
 //===----------------------------------------------------------------------===//
@@ -589,8 +623,12 @@ struct AcquireDropExpansionPass
     if (expandDecrement)
       populateRcDecrementExpansionConversionPatterns(patterns);
     if (failed(
-            mlir::applyPatternsGreedily(getOperation(), std::move(patterns))))
+            mlir::applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       signalPassFailure();
+      return;
+    }
+    getOperation()->walk(
+        [](mlir::func::FuncOp func) { forwardEquivalentLoads(func); });
   }
 };
 } // namespace

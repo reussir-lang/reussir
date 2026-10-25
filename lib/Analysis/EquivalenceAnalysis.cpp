@@ -60,7 +60,7 @@ bool EquivalenceAnalysis::areEquivalent(Value lhs, Value rhs) {
                 return decideEquivalent(
                     typedLhs, llvm::cast<TypedValue<NullableType>>(rhs));
               })
-          .Default([](Value) { return false; });
+          .Default([&](Value) { return decideLoadedEquivalent(lhs, rhs); });
 
   if (equivalent)
     equivalenceClasses.join(lhsIndex, rhsIndex);
@@ -256,6 +256,53 @@ bool EquivalenceAnalysis::decideEquivalent(TypedValue<RcType> lhs,
   auto rhsField = valueRecordField(rhs);
   return lhsField && rhsField && lhsField->first == rhsField->first &&
          lhsField->second == rhsField->second;
+}
+
+bool isImmutableRecordStorage(Value ref) {
+  while (ref) {
+    // Regional fields are the only storage `reussir.ref.store` writes.
+    if (auto refType = llvm::dyn_cast<RefType>(ref.getType());
+        refType && refType.getCapability() == Capability::field)
+      return false;
+    Operation *def = ref.getDefiningOp();
+    if (auto project = llvm::dyn_cast_if_present<ReussirRefProjectOp>(def)) {
+      ref = project.getRef();
+      continue;
+    }
+    if (auto coerce = llvm::dyn_cast_if_present<ReussirRecordCoerceOp>(def)) {
+      ref = coerce.getVariant();
+      continue;
+    }
+    if (auto arg = llvm::dyn_cast<BlockArgument>(ref)) {
+      auto dispatch = llvm::dyn_cast_if_present<ReussirRecordDispatchOp>(
+          arg.getOwner()->getParentOp());
+      if (!dispatch)
+        return false;
+      ref = dispatch.getVariant();
+      continue;
+    }
+    if (llvm::isa_and_present<ReussirRefSpilledOp>(def))
+      return true;
+    if (auto borrow = llvm::dyn_cast_if_present<ReussirRcBorrowOp>(def))
+      return llvm::isa<RecordType>(borrow.getRcPtr().getType().getElementType());
+    return false;
+  }
+  return false;
+}
+
+// Values of any other type agree when both are loaded from equivalent
+// storage inside a record box or a spilled value: such storage is never
+// written while it is reachable, by the same argument as for RC pointers.
+bool EquivalenceAnalysis::decideLoadedEquivalent(Value lhs, Value rhs) {
+  auto lhsOp = llvm::dyn_cast_if_present<ReussirRefLoadOp>(lhs.getDefiningOp());
+  auto rhsOp = llvm::dyn_cast_if_present<ReussirRefLoadOp>(rhs.getDefiningOp());
+  if (!lhsOp || !rhsOp || lhs.getType() != rhs.getType())
+    return false;
+  if (!isImmutableRecordStorage(lhsOp.getRef()) ||
+      !isImmutableRecordStorage(rhsOp.getRef()))
+    return false;
+  return loadedFromSameStorage(lhsOp.getRef(), rhsOp.getRef()) ||
+         areEquivalent(lhsOp.getRef(), rhsOp.getRef());
 }
 
 bool EquivalenceAnalysis::decideEquivalent(TypedValue<NullableType> lhs,

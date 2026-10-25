@@ -82,10 +82,16 @@ private:
                         mlir::TypedValue<RcType> rhs);
   bool decideEquivalent(mlir::TypedValue<NullableType> lhs,
                         mlir::TypedValue<NullableType> rhs);
+  bool decideLoadedEquivalent(mlir::Value lhs, mlir::Value rhs);
   mlir::TypedValue<RefType> getProducerAsRef(mlir::TypedValue<RefType> value);
   mlir::TypedValue<NullableType> getProducerAsNullable(mlir::Value value);
   bool loadedFromSameStorage(mlir::Value lhs, mlir::Value rhs);
 };
+
+/// Whether `ref` addresses storage inside a record box or a spilled value,
+/// reached through projections, coercions and dispatch arms. Such storage is
+/// never written while it is reachable, so loads from it can be shared.
+bool isImmutableRecordStorage(mlir::Value ref);
 
 /// Register the Reussir equivalence analysis on the given aggregate, adapted
 /// to the `mlir::AliasAnalysis` vocabulary: equivalent values report

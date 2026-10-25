@@ -10,6 +10,7 @@ add_mlir_conversion_library(MLIRReussirAcquireDropExpansion
 
   LINK_LIBS PUBLIC
   MLIRReussir
+  MLIRReussirAnalysis
   MLIRFuncDialect
   MLIRSCFDialect
   MLIRTransforms
