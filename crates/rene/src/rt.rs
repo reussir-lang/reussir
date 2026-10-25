@@ -10,6 +10,13 @@
 //! links against (`rustc -L`) and the static library final executables link.
 //! The result is recorded per target in the status database and reused until
 //! the bundle hash or the toolchain changes.
+//!
+//! The bake does not depend on where it runs. The toolchain is resolved
+//! once, in the package's directory, and its binaries are pinned by path:
+//! rustup picks a toolchain by the directory its proxy runs in, which need
+//! not be one the project's `rust-toolchain.toml` covers. Cargo's target
+//! directory is pinned inside the bake, whatever `CARGO_TARGET_DIR` or the
+//! user's cargo configuration say.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -93,11 +100,18 @@ impl RtArtifacts {
     }
 }
 
-/// The resolved `cargo`/`rustc` pair used for baking.
+/// The toolchain a bake runs, and so the one everything linked against
+/// the runtime must use.
 struct Toolchain {
-    cargo: PathBuf,
+    /// The compiler the selected rustc resolves to in the package
+    /// directory: `<sysroot>/bin/rustc`, or the selection itself when the
+    /// sysroot has no such binary.
     rustc: PathBuf,
+    /// `rustc --version` of the toolchain.
     version: String,
+    /// The configured cargo (`REUSSIR_CARGO`, `CARGO`), else the sysroot's,
+    /// else `cargo` on `PATH`.
+    cargo: PathBuf,
     /// The resolved target the bake builds for, and so the key of cargo's
     /// target-specific configuration.
     target: String,
@@ -108,72 +122,97 @@ impl Toolchain {
     /// `REUSSIR_CARGO`/`REUSSIR_RUSTC` first (the explicit override rrc also
     /// honors), then cargo's own `CARGO`/`RUSTC`, then `PATH` — which
     /// respects rustup shims, so a `rust-toolchain.toml` in the user's
-    /// project still picks the toolchain naturally.
-    async fn resolve(requested_target: Option<&str>) -> Result<Self, String> {
-        let cargo = pick_program("REUSSIR_CARGO", "CARGO", "cargo");
-        let rustc = pick_program("REUSSIR_RUSTC", "RUSTC", "rustc");
-        let verbose_version = capture(&rustc, &["-vV"]).await?;
+    /// project still picks the toolchain naturally. The selected rustc runs
+    /// in `package_dir`, the directory whose toolchain file applies, and
+    /// names its sysroot, whose binaries the bake then runs by path.
+    async fn resolve(requested_target: Option<&str>, package_dir: &Path) -> Result<Self, String> {
+        let selected = pick_program("REUSSIR_RUSTC", "RUSTC", "rustc");
+        let verbose_version = capture(&selected, &["-vV"], package_dir).await?;
         let version = verbose_version
             .lines()
             .next()
             .unwrap_or_default()
             .to_owned();
-        let host = verbose_version
-            .lines()
-            .find_map(|line| line.strip_prefix("host: "))
-            .ok_or_else(|| {
-                format!(
-                    "`{} -vV` reported no `host:` line:\n{verbose_version}",
-                    rustc.display()
-                )
-            })?
-            .trim()
-            .to_owned();
         let target = match requested_target {
             Some(target) => validate_target(target)?,
-            None => validate_target(&host)?,
+            None => validate_target(&host(&selected, &verbose_version)?)?,
         };
-        let rust_libdir = PathBuf::from(
-            capture(
-                &rustc,
-                &["--print", "target-libdir", "--target", target.as_str()],
-            )
-            .await?,
-        );
+        let printed = capture(
+            &selected,
+            &[
+                "--print",
+                "sysroot",
+                "--print",
+                "target-libdir",
+                "--target",
+                &target,
+            ],
+            package_dir,
+        )
+        .await?;
+        let mut lines = printed.lines().map(str::trim);
+        let (Some(sysroot), Some(rust_libdir)) = (lines.next(), lines.next()) else {
+            return Err(format!(
+                "`{}` printed no sysroot and target libdir:\n{printed}",
+                selected.display()
+            ));
+        };
+        let sysroot = PathBuf::from(sysroot);
+        let binary = |name: &str| {
+            let path = sysroot
+                .join("bin")
+                .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+            path.is_file().then_some(path)
+        };
+        let rustc = binary("rustc").unwrap_or(selected);
+        let cargo = configured_program("REUSSIR_CARGO", "CARGO")
+            .or_else(|| binary("cargo"))
+            .unwrap_or_else(|| PathBuf::from("cargo"));
         Ok(Toolchain {
-            cargo,
             rustc,
+            rust_libdir: PathBuf::from(rust_libdir),
             version,
+            cargo,
             target,
-            rust_libdir,
         })
     }
 }
 
-fn pick_program(specific: &str, generic: &str, default: &str) -> PathBuf {
+/// The program `specific`, else `generic`, names, if either is set.
+fn configured_program(specific: &str, generic: &str) -> Option<PathBuf> {
     std::env::var_os(specific)
         .or_else(|| std::env::var_os(generic))
-        .map_or_else(|| PathBuf::from(default), PathBuf::from)
+        .map(PathBuf::from)
 }
 
-/// Resolve the target used by a command that does not bake the runtime:
-/// an explicit/profile target wins, otherwise use the selected rustc's host.
-pub async fn resolve_target(requested: Option<&str>) -> Result<String, String> {
-    if let Some(target) = requested {
-        return validate_target(target);
-    }
-    let rustc = pick_program("REUSSIR_RUSTC", "RUSTC", "rustc");
-    let verbose_version = capture(&rustc, &["-vV"]).await?;
+fn pick_program(specific: &str, generic: &str, default: &str) -> PathBuf {
+    configured_program(specific, generic).unwrap_or_else(|| PathBuf::from(default))
+}
+
+/// The host triple in `rustc -vV`'s report.
+fn host(rustc: &Path, verbose_version: &str) -> Result<String, String> {
     verbose_version
         .lines()
         .find_map(|line| line.strip_prefix("host: "))
+        .map(|host| host.trim().to_owned())
         .ok_or_else(|| {
             format!(
                 "`{} -vV` reported no `host:` line:\n{verbose_version}",
                 rustc.display()
             )
         })
-        .and_then(|host| validate_target(host.trim()))
+}
+
+/// Resolve the target used by a command that does not bake the runtime:
+/// an explicit/profile target wins, otherwise use the host of the rustc
+/// `package_dir` selects.
+pub async fn resolve_target(requested: Option<&str>, package_dir: &Path) -> Result<String, String> {
+    if let Some(target) = requested {
+        return validate_target(target);
+    }
+    let rustc = pick_program("REUSSIR_RUSTC", "RUSTC", "rustc");
+    let verbose_version = capture(&rustc, &["-vV"], package_dir).await?;
+    validate_target(&host(&rustc, &verbose_version)?)
 }
 
 /// Target triples become one build-directory path component and one status
@@ -228,9 +267,11 @@ fn platform_allocator_forced() -> bool {
     std::env::var_os("RENE_RT_PLATFORM_ALLOCATOR").is_some_and(|value| value != "0")
 }
 
-async fn capture(program: &Path, args: &[&str]) -> Result<String, String> {
+/// Run `program` with `args` in `dir`, returning its trimmed stdout.
+async fn capture(program: &Path, args: &[&str], dir: &Path) -> Result<String, String> {
     let out = compio::process::Command::new(program)
         .args(args)
+        .current_dir(dir)
         .stdout(Stdio::piped())
         .expect("pipe stdout")
         .stderr(Stdio::piped())
@@ -249,10 +290,11 @@ async fn capture(program: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
 }
 
-/// Ensure the runtime is baked in `dir`, reusing the recorded artifacts when
-/// the bundle and toolchain are unchanged. The caller holds the build
-/// directory's lock (it *is* the open [`BuildDir`]), so no other instance can
-/// race the extract/build/record sequence.
+/// Ensure the runtime is baked in `dir` with the toolchain `package_dir`
+/// selects, reusing the recorded artifacts when the bundle and toolchain
+/// are unchanged. The caller holds the build directory's lock (it *is* the
+/// open [`BuildDir`]), so no other instance can race the
+/// extract/build/record sequence.
 ///
 /// `linker`, when given, is pinned for the bake's own links (the runtime
 /// dylib) — the same pinning `rrc --linker` gives the driver-level links,
@@ -262,20 +304,21 @@ async fn capture(program: &Path, args: &[&str]) -> Result<String, String> {
 /// artifacts are equivalent.
 pub async fn prepare(
     dir: &BuildDir,
+    package_dir: &Path,
     requested_target: Option<&str>,
     linker: Option<&Path>,
     progress: &indicatif::MultiProgress,
 ) -> Result<RtArtifacts, String> {
-    let toolchain = Toolchain::resolve(requested_target).await?;
+    let toolchain = Toolchain::resolve(requested_target, package_dir).await?;
     let hash = bundle_hash();
 
-    if let Some(cached) = fresh_bake(dir, &toolchain, &hash)? {
+    let target_dir = dir.root().join(&toolchain.target);
+    let src_dir = target_dir.join(RT_DIR);
+    if let Some(cached) = fresh_bake(dir, &src_dir, &toolchain, &hash)? {
         tracing::debug!("reussir-rt is up to date");
         return Ok(cached);
     }
 
-    let target_dir = dir.root().join(&toolchain.target);
-    let src_dir = target_dir.join(RT_DIR);
     if src_dir.exists() {
         // Stale source: re-extract from scratch rather than patching files
         // into an unknown tree. Other targets' trees remain intact.
@@ -300,10 +343,20 @@ pub async fn prepare(
             .with_message("baking reussir-rt (once per toolchain or runtime change)"),
     );
     bar.enable_steady_tick(std::time::Duration::from_millis(120));
-    let result = cargo_build(&toolchain, &src_dir, linker).await;
+    let result = cargo_build(&toolchain, &src_dir, &src_dir.join("target"), linker).await;
     bar.finish_and_clear();
     progress.remove(&bar);
     let (rlib, staticlib, deps_dirs) = result?;
+    if ![&rlib, &staticlib]
+        .into_iter()
+        .chain(&deps_dirs)
+        .all(|path| path.starts_with(&src_dir))
+    {
+        return Err(format!(
+            "cargo put reussir-rt's artifacts outside `{}`",
+            src_dir.display()
+        ));
+    }
     if let Some(path) = rcgmp_runtime_path(&toolchain.target, &deps_dirs) {
         std::fs::write(&path, RCGMP_RUNTIME)
             .map_err(|e| format!("cannot stage `{}`: {e}", path.display()))?;
@@ -331,9 +384,10 @@ pub async fn prepare(
 }
 
 /// The recorded bake, if it is still valid: same bundle, same rustc, and the
-/// artifacts still on disk.
+/// artifacts still on disk, inside the bake's directory `src_dir`.
 fn fresh_bake(
     dir: &BuildDir,
+    src_dir: &Path,
     toolchain: &Toolchain,
     hash: &str,
 ) -> Result<Option<RtArtifacts>, String> {
@@ -351,12 +405,14 @@ fn fresh_bake(
         return Ok(None);
     };
     let valid = artifacts.target == toolchain.target
-        // The path is part of an explicit toolchain selection. In
-        // particular, changing REUSSIR_RUSTC from a cached bare `rustc` to a
-        // rustup/Nix absolute path must not silently restore the old value
-        // merely because both binaries report the same version string.
+        // The path is part of the toolchain's identity: a binary at another
+        // path must not inherit this bake merely because it reports the
+        // same version string.
         && artifacts.rustc == toolchain.rustc
         && artifacts.rustc_version == toolchain.version
+        && artifacts.deps_dirs.iter().all(|deps| deps.starts_with(src_dir))
+        && artifacts.rlib.starts_with(src_dir)
+        && artifacts.staticlib.starts_with(src_dir)
         && artifacts.rlib.is_file()
         && artifacts.staticlib.is_file()
         && rcgmp_runtime_path(&artifacts.target, &artifacts.deps_dirs)
@@ -365,13 +421,15 @@ fn fresh_bake(
     Ok(valid.then_some(artifacts))
 }
 
-/// Run `cargo build --release` in `src_dir`, reading the JSON message
-/// stream for the artifact locations (no directory guessing). The stream is
-/// parsed once cargo exits — live progress reaches the user through the
-/// inherited stderr regardless. Returns the runtime's (rlib, staticlib).
+/// Run `cargo build --release` in `src_dir`, into `target_dir`, reading the
+/// JSON message stream for the artifact locations (no directory guessing).
+/// The stream is parsed once cargo exits — live progress reaches the user
+/// through the inherited stderr regardless. Returns the runtime's (rlib,
+/// staticlib) and its dependency directories.
 async fn cargo_build(
     toolchain: &Toolchain,
     src_dir: &Path,
+    target_dir: &Path,
     linker: Option<&Path>,
 ) -> Result<(PathBuf, PathBuf, Vec<PathBuf>), String> {
     let mut cmd = compio::process::Command::new(&toolchain.cargo);
@@ -383,6 +441,12 @@ async fn cargo_build(
         cmd.arg("--no-default-features");
     }
     cmd.arg("--message-format=json-render-diagnostics")
+        // The bake owns every artifact it hands out: the target directory,
+        // and cargo's separate build directory, stay inside the bake
+        // whatever `CARGO_TARGET_DIR` or the user's cargo configuration say.
+        .arg("--target-dir")
+        .arg(target_dir)
+        .env("CARGO_BUILD_BUILD_DIR", target_dir)
         .current_dir(src_dir)
         // Pin the rustc cargo delegates to, so the recorded version and
         // libdir describe the compiler that actually built the artifacts.

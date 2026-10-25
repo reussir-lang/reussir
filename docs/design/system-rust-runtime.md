@@ -121,6 +121,13 @@ hash, host triple, and **LLVM version**. This record feeds the cache key (§4)
 and the bitcode/object mode decision (§5). A `rrc doctor` subcommand prints
 the resolved toolchain, cache state, and chosen polyffi mode.
 
+**Status in `rene`.** `rene` resolves the selection in the package's
+directory, where the project's `rust-toolchain.toml` applies to a rustup
+proxy, and asks it for its sysroot. The bake then runs that sysroot's
+`rustc` and, unless one is configured, its `cargo` by path, and records that
+`rustc` for `rrc`: the bake does not run where the selection was made, and a
+proxy would pick its toolchain by the directory it runs in.
+
 ### 4. On-demand runtime build with a shared cache
 
 The driver guarantees, before any polyffi compile or link-flag query, that

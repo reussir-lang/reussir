@@ -207,39 +207,37 @@ impl Fakes {
 
         let rustc = script(
             "fake-rustc",
-            format!(
-                "case \"$1\" in\n\
-                 --version) echo 'rustc 9.9.9 (fake)';;\n\
-                 -vV) printf 'rustc 9.9.9 (fake)\\nhost: x86_64-unknown-fake\\n';;\n\
-                 --print) echo '{}';;\n\
-                 esac\n",
-                libdir.display()
-            ),
+            fake_rustc("9.9.9 (fake)", &dir.join("fake-sysroot"), &libdir),
         );
         // Counts invocations, records the linker rene pinned through cargo's
-        // target-specific environment (keyed by the fake host triple above),
-        // fabricates the artifacts, and reports them the way
-        // `--message-format=json` does. Runs with cwd = the unpacked source
-        // dir.
+        // target-specific environment (keyed by the fake host triple above)
+        // and the rustc it pinned, fabricates the artifacts in the target
+        // directory (`--target-dir`, else `CARGO_TARGET_DIR`, else `target`
+        // under the cwd, which is the unpacked source dir), and reports them
+        // the way `--message-format=json` does.
         let cargo = script(
             "fake-cargo",
-            "echo run >> \"$(dirname \"$0\")/cargo-runs\"\n\
-             echo \"$*\" >> \"$(dirname \"$0\")/cargo-args\"\n\
-             echo \"linker=$CARGO_TARGET_X86_64_UNKNOWN_FAKE_LINKER\" >> \"$(dirname \"$0\")/cargo-env\"\n\
-             target=\"\"; prev=\"\"\n\
-             for arg in \"$@\"; do\n\
-               [ \"$prev\" = \"--target\" ] && target=\"$arg\"\n\
-               prev=\"$arg\"\n\
-             done\n\
-             [ -n \"$target\" ] || exit 2\n\
-             mkdir -p \"target/$target/release/deps\" target/release/deps\n\
-             proc_macro=\"$PWD/target/release/deps/libnum_enum_derive-fake.so\"\n\
-             rlib=\"$PWD/target/$target/release/deps/libreussir_rt-0000.rlib\"\n\
-             staticlib=\"$PWD/target/$target/release/libreussir_rt.a\"\n\
-             touch \"$proc_macro\" \"$rlib\" \"$staticlib\"\n\
-             printf '{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"num_enum_derive\"},\"filenames\":[\"%s\"]}\\n' \"$proc_macro\"\n\
-             printf '{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"reussir-rt\"},\"filenames\":[\"%s\",\"%s\"]}\\n' \"$rlib\" \"$staticlib\"\n"
-                .to_owned(),
+            r#"log="$(dirname "$0")"
+echo run >> "$log/cargo-runs"
+echo "$*" >> "$log/cargo-args"
+echo "linker=$CARGO_TARGET_X86_64_UNKNOWN_FAKE_LINKER" >> "$log/cargo-env"
+echo "$RUSTC" >> "$log/cargo-rustc"
+target=""; target_dir="${CARGO_TARGET_DIR:-$PWD/target}"; prev=""
+for arg in "$@"; do
+  [ "$prev" = "--target" ] && target="$arg"
+  [ "$prev" = "--target-dir" ] && target_dir="$arg"
+  prev="$arg"
+done
+[ -n "$target" ] || exit 2
+mkdir -p "$target_dir/$target/release/deps" "$target_dir/release/deps"
+proc_macro="$target_dir/release/deps/libnum_enum_derive-fake.so"
+rlib="$target_dir/$target/release/deps/libreussir_rt-0000.rlib"
+staticlib="$target_dir/$target/release/libreussir_rt.a"
+touch "$proc_macro" "$rlib" "$staticlib"
+printf '{"reason":"compiler-artifact","target":{"name":"num_enum_derive"},"filenames":["%s"]}\n' "$proc_macro"
+printf '{"reason":"compiler-artifact","target":{"name":"reussir-rt"},"filenames":["%s","%s"]}\n' "$rlib" "$staticlib"
+"#
+            .to_owned(),
         );
         // Stands in for `rrc`. A `--scan-deps` invocation counts itself and
         // reports the package root's `.rr` files as the source graph, crate
@@ -364,18 +362,52 @@ printf ']}\n'
         }
     }
 
+    /// A `rene` command wired to the fake toolchain and the test's own
+    /// cache.
+    fn command(&self, args: &[&str]) -> Command {
+        let mut cmd = rene(args);
+        cmd.env("REUSSIR_RRC", &self.rrc)
+            .env("REUSSIR_CARGO", &self.cargo)
+            .env("REUSSIR_RUSTC", &self.rustc)
+            .env(rene::cache::CACHE_DIR_ENV, &self.cache);
+        cmd
+    }
+
     /// A `rene` invocation wired to the fake toolchain.
     fn rene(&self, args: &[&str], manifest: &Path, build_dir: &Path) -> Output {
-        run(rene(args)
+        run(self
+            .command(args)
             .arg("--manifest-path")
             .arg(manifest)
             .arg("--build-dir")
-            .arg(build_dir)
-            .env("REUSSIR_RRC", &self.rrc)
-            .env("REUSSIR_CARGO", &self.cargo)
-            .env("REUSSIR_RUSTC", &self.rustc)
-            .env(rene::cache::CACHE_DIR_ENV, &self.cache))
+            .arg(build_dir))
     }
+}
+
+/// The body of a fake `rustc` reporting `version` and the host
+/// `x86_64-unknown-fake`, with `sysroot` and `libdir` for `--print`.
+#[cfg(unix)]
+fn fake_rustc(version: &str, sysroot: &Path, libdir: &Path) -> String {
+    format!(
+        r#"case "$1" in
+--version) echo 'rustc {version}';;
+-vV) printf 'rustc {version}\nhost: x86_64-unknown-fake\n';;
+--print)
+  prev=""
+  for arg in "$@"; do
+    if [ "$prev" = --print ]; then
+      case "$arg" in
+      sysroot) echo '{}';;
+      target-libdir) echo '{}';;
+      esac
+    fi
+    prev="$arg"
+  done;;
+esac
+"#,
+        sysroot.display(),
+        libdir.display()
+    )
 }
 
 /// The entry directories of one cache kind, sorted (lock files and staging
@@ -460,6 +492,10 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     assert_eq!(String::from_utf8(out.stdout).unwrap(), stdout);
     assert_eq!(fakes.runs("cargo"), 1, "the second build re-ran cargo");
     assert!(fakes.cargo_invocations()[0].contains("--target x86_64-unknown-fake"));
+    // The sysroot of the fake has no `bin/rustc`, so the selection itself is
+    // what cargo ran.
+    let pinned = std::fs::read_to_string(tmp.join("cargo-rustc")).unwrap();
+    assert_eq!(pinned.trim(), fakes.rustc.display().to_string());
 
     // A compiler at a different explicit path is a different toolchain
     // selection even when it reports the same version. Do not restore the
@@ -467,12 +503,11 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     let alternate_rustc = tmp.join("alternate-rustc");
     std::fs::copy(&fakes.rustc, &alternate_rustc).unwrap();
     let with_alternate = || {
-        run(rene(&["build", "--manifest-path"])
+        run(fakes
+            .command(&["build", "--manifest-path"])
             .arg(&manifest)
             .arg("--build-dir")
             .arg(&root)
-            .env("REUSSIR_RRC", &fakes.rrc)
-            .env("REUSSIR_CARGO", &fakes.cargo)
             .env("REUSSIR_RUSTC", &alternate_rustc))
     };
     let out = with_alternate();
@@ -481,6 +516,127 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     let out = with_alternate();
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(fakes.runs("cargo"), 2, "the new rustc path was not cached");
+}
+
+/// rustup picks a toolchain by the directory its proxy runs in, which need
+/// not be the package's. The toolchain is resolved in the package's
+/// directory and its binaries are pinned: cargo runs that toolchain's cargo
+/// and rustc, and rrc is handed the same rustc.
+#[cfg(unix)]
+#[test]
+fn the_bake_uses_the_toolchain_of_the_package_directory() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let executable = |path: &Path, body: &str| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    // Two toolchains, each with its own rustc and a cargo that hands over to
+    // the logging fake.
+    for (name, version) in [("default", "9.9.9 (default)"), ("pinned", "8.8.8 (pinned)")] {
+        let sysroot = tmp.join("toolchains").join(name);
+        executable(
+            &sysroot.join("bin/rustc"),
+            &fake_rustc(version, &sysroot, &fakes.libdir),
+        );
+        executable(
+            &sysroot.join("bin/cargo"),
+            &format!("exec '{}' \"$@\"\n", fakes.cargo.display()),
+        );
+    }
+    // A rustup-like proxy: a `rust-toolchain.toml` at or above its working
+    // directory selects `pinned`.
+    let proxy = tmp.join("proxy-rustc");
+    executable(
+        &proxy,
+        &format!(
+            r#"dir="$PWD"; toolchain=default
+while [ "$dir" != / ]; do
+  [ -f "$dir/rust-toolchain.toml" ] && {{ toolchain=pinned; break; }}
+  dir=$(dirname "$dir")
+done
+exec '{}'/"$toolchain"/bin/rustc "$@"
+"#,
+            tmp.join("toolchains").display()
+        ),
+    );
+    let pkg = tmp.join("pkg");
+    let manifest = package(&pkg, "demo");
+    std::fs::write(
+        &manifest,
+        "{ package = { name = \"demo\", version = \"0.1.0\" }, targets.demo.kind = 'executable }\n",
+    )
+    .unwrap();
+    std::fs::write(pkg.join("rust-toolchain.toml"), "[toolchain]\n").unwrap();
+    let root = pkg.join("reussir-build");
+
+    // rene runs from outside the package, with no cargo configured.
+    let out = run(fakes
+        .command(&["build", "--manifest-path"])
+        .arg(&manifest)
+        .arg("--build-dir")
+        .arg(&root)
+        .current_dir(&tmp)
+        .env_remove("CARGO")
+        .env_remove("REUSSIR_CARGO")
+        .env("REUSSIR_RUSTC", &proxy));
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let pinned = tmp.join("toolchains/pinned/bin/rustc");
+    let ran = std::fs::read_to_string(tmp.join("cargo-rustc")).unwrap();
+    assert_eq!(ran.trim(), pinned.display().to_string());
+    let dir = BuildDir::open(&root).unwrap();
+    let record: serde_json::Value = serde_json::from_str(
+        &dir.status(&tables::rt_artifacts_key("x86_64-unknown-fake"))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["rustc_version"], "rustc 8.8.8 (pinned)");
+    assert_eq!(record["rustc"], pinned.display().to_string());
+    let compiles = fakes.package_compiles();
+    assert!(!compiles.is_empty());
+    for line in &compiles {
+        assert!(
+            line.ends_with(&format!("rustc={}", pinned.display())),
+            "{line}"
+        );
+    }
+}
+
+/// Cargo's outputs stay inside the bake, whatever `CARGO_TARGET_DIR` says:
+/// a target directory shared between bakes would let one overwrite
+/// another's artifacts.
+#[cfg(unix)]
+#[test]
+fn the_bake_keeps_its_outputs_whatever_cargo_target_dir_says() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let root = tmp.join("reussir-build");
+    let manifest = package(&tmp, "demo");
+    let fakes = Fakes::new(&tmp);
+    let shared = tmp.join("shared-target");
+
+    let out = run(fakes
+        .command(&["build", "--manifest-path"])
+        .arg(&manifest)
+        .arg("--build-dir")
+        .arg(&root)
+        .env("CARGO_TARGET_DIR", &shared));
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(!shared.exists());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let cargo_dirs: Vec<&str> = stdout.lines().skip(1).collect();
+    assert_eq!(cargo_dirs.len(), 2, "{stdout}");
+    assert!(
+        cargo_dirs
+            .iter()
+            .all(|dir| Path::new(dir).starts_with(&root)),
+        "{stdout}"
+    );
 }
 
 /// The profile supplies a default target, the CLI overrides it, and the two
@@ -533,8 +689,14 @@ fn build_resolves_the_target_and_keeps_each_runtime_bake() {
                 .is_some()
         );
     }
+    // Each bake also pins its target directory, at the end.
+    let invocations: Vec<String> = fakes
+        .cargo_invocations()
+        .iter()
+        .map(|line| line.split(" --target-dir ").next().unwrap().to_owned())
+        .collect();
     assert_eq!(
-        fakes.cargo_invocations(),
+        invocations,
         [
             "build --release --target wasm32-unknown-unknown --no-default-features --message-format=json-render-diagnostics",
             "build --release --target aarch64-unknown-linux-gnu --message-format=json-render-diagnostics",
@@ -869,13 +1031,11 @@ fn an_unusable_cache_falls_back_to_the_build_directory() {
     let blocker = tmp.join("not-a-directory");
     std::fs::write(&blocker, "").unwrap();
 
-    let out = run(rene(&["build", "--manifest-path"])
+    let out = run(fakes
+        .command(&["build", "--manifest-path"])
         .arg(&manifest)
         .arg("--build-dir")
         .arg(&root)
-        .env("REUSSIR_RRC", &fakes.rrc)
-        .env("REUSSIR_CARGO", &fakes.cargo)
-        .env("REUSSIR_RUSTC", &fakes.rustc)
         .env(rene::cache::CACHE_DIR_ENV, blocker.join("cache")));
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(
@@ -1253,14 +1413,12 @@ fn build_keeps_parallel_colored_diagnostics_intact() {
     .unwrap();
     let fakes = Fakes::new(&tmp);
 
-    let out = run(rene(&["--color", "always", "build", "--jobs", "2"])
+    let out = run(fakes
+        .command(&["--color", "always", "build", "--jobs", "2"])
         .arg("--manifest-path")
         .arg(&manifest)
         .arg("--build-dir")
         .arg(&root)
-        .env("REUSSIR_RRC", &fakes.rrc)
-        .env("REUSSIR_CARGO", &fakes.cargo)
-        .env("REUSSIR_RUSTC", &fakes.rustc)
         .env("FAKE_RRC_FRAGMENTED_DIAGNOSTIC", "yes"));
     assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
 
@@ -1278,14 +1436,12 @@ fn build_keeps_parallel_colored_diagnostics_intact() {
 
     // The default resolves against rene's stderr, not the child's pipe. The
     // test harness captures stderr, so the same failed build must be plain.
-    let plain = run(rene(&["build", "--jobs", "2"])
+    let plain = run(fakes
+        .command(&["build", "--jobs", "2"])
         .arg("--manifest-path")
         .arg(&manifest)
         .arg("--build-dir")
         .arg(&root)
-        .env("REUSSIR_RRC", &fakes.rrc)
-        .env("REUSSIR_CARGO", &fakes.cargo)
-        .env("REUSSIR_RUSTC", &fakes.rustc)
         .env("FAKE_RRC_FRAGMENTED_DIAGNOSTIC", "yes"));
     assert_eq!(plain.status.code(), Some(1), "stderr: {}", stderr(&plain));
     assert!(

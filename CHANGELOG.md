@@ -153,6 +153,12 @@
   message. A cache that cannot be created, or whose file system cannot lock
   files, falls back to `<build-dir>/cache` with a warning. Because core's
   sources move, an existing build directory rebuilds core once.
+- The `reussir-rt` bake no longer depends on where rene runs. rene asks the
+  selected `rustc` for its sysroot from the package's directory, so the
+  project's `rust-toolchain.toml` decides, and then runs that toolchain's
+  `rustc` and (unless one is configured) its `cargo` by path; `rrc` gets the
+  same `rustc`. Cargo's outputs stay inside the bake whatever
+  `CARGO_TARGET_DIR` or the cargo configuration says.
 
 ## 0.1.0
 
