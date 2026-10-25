@@ -82,6 +82,16 @@ void emitRCGMPRelease(mlir::OpBuilder &builder, mlir::Location loc,
                       mlir::Value value) {
   mlir::rcgmp::ReleaseOp::create(builder, loc, value);
 }
+
+mlir::Value getRCGMPRetainedValue(mlir::Operation *op) {
+  auto retain = llvm::dyn_cast<mlir::rcgmp::RetainOp>(op);
+  return retain ? retain.getValue() : mlir::Value{};
+}
+
+mlir::Value getRCGMPReleasedValue(mlir::Operation *op) {
+  auto release = llvm::dyn_cast<mlir::rcgmp::ReleaseOp>(op);
+  return release ? release.getValue() : mlir::Value{};
+}
 #else
 void registerRCGMPExternalModels(mlir::DialectRegistry &) {}
 
@@ -93,6 +103,10 @@ void emitRCGMPRetain(mlir::OpBuilder &, mlir::Location, mlir::Value,
 void emitRCGMPRelease(mlir::OpBuilder &, mlir::Location, mlir::Value) {
   llvm_unreachable("Reussir is built without rcgmp");
 }
+
+mlir::Value getRCGMPRetainedValue(mlir::Operation *) { return {}; }
+
+mlir::Value getRCGMPReleasedValue(mlir::Operation *) { return {}; }
 #endif
 
 } // namespace reussir

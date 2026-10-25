@@ -100,6 +100,11 @@ void emitRCGMPRetain(mlir::OpBuilder &builder, mlir::Location loc,
 void emitRCGMPRelease(mlir::OpBuilder &builder, mlir::Location loc,
                       mlir::Value value);
 
+// The `!rcgmp.mpz` handle that `op` retains or releases when `op` is a single
+// retain or a release of one; null otherwise.
+mlir::Value getRCGMPRetainedValue(mlir::Operation *op);
+mlir::Value getRCGMPReleasedValue(mlir::Operation *op);
+
 /// The memref type `reussir.array.view` produces for an array: identity
 /// layout for a static shape, a fully dynamic strided layout for a
 /// dynamic-extent one (the box header carries the strided encoding).

@@ -26,6 +26,7 @@
 #include <mlir/IR/Visitors.h>
 #include <mlir/Interfaces/CallInterfaces.h>
 #include <mlir/Interfaces/ControlFlowInterfaces.h>
+#include <mlir/Interfaces/SideEffectInterfaces.h>
 #include <mlir/Pass/Pass.h>
 
 namespace reussir {
@@ -176,6 +177,84 @@ bool cancelIntoDispatch(ReussirRcIncOp incOp, ReussirRecordDispatchOp dispatch,
   return true;
 }
 
+// The release of `word` (a counted word, e.g. an integer member) on every
+// path through `dropRegion`, if any.
+mlir::Operation *findPostDominantAliasedRelease(
+    mlir::Value word, mlir::AliasAnalysis &aliasAnalysis,
+    mlir::PostDominanceInfo &postDominanceInfo, mlir::Region &dropRegion) {
+  mlir::Operation *fusionTarget = nullptr;
+  dropRegion.walk([&](mlir::Operation *op) {
+    mlir::Value released = getRCGMPReleasedValue(op);
+    if (released &&
+        postDominanceInfo.postDominates(op->getBlock(), &dropRegion.front()) &&
+        aliasAnalysis.alias(released, word) == mlir::AliasResult::MustAlias) {
+      fusionTarget = op;
+      return mlir::WalkResult::interrupt();
+    }
+    return mlir::WalkResult::advance();
+  });
+  return fusionTarget;
+}
+
+// Whether `op` leaves every count and every stored value alone: it only
+// adds references or at most reads memory.
+bool leavesCountsAlone(mlir::Operation *op) {
+  if (llvm::isa<ReussirRcIncOp>(op) || getRCGMPRetainedValue(op))
+    return true;
+  if (op->getNumRegions() > 0 || llvm::isa<mlir::CallOpInterface>(op))
+    return false;
+  if (mlir::isMemoryEffectFree(op))
+    return true;
+  auto effects = llvm::dyn_cast<mlir::MemoryEffectOpInterface>(op);
+  return effects && effects.onlyHasEffect<mlir::MemoryEffects::Read>();
+}
+
+// A counted word's retain cancels with a release of the same word under the
+// rules `rc.inc` follows: a release in the unique branch of an expanded
+// decrement moves the retain into the shared branch, and a directly
+// following release cancels it outright.
+void cancelCountedWordRetains(mlir::func::FuncOp func,
+                              mlir::AliasAnalysis &aliasAnalysis,
+                              mlir::PostDominanceInfo &postDominanceInfo) {
+  llvm::SmallVector<mlir::Operation *> retains;
+  func->walk([&](mlir::Operation *op) {
+    if (getRCGMPRetainedValue(op))
+      retains.push_back(op);
+  });
+  for (mlir::Operation *retain : retains) {
+    mlir::Value word = getRCGMPRetainedValue(retain);
+    for (mlir::Operation *next = retain->getNextNode(); next;
+         next = next->getNextNode()) {
+      if (auto ifOp = llvm::dyn_cast<mlir::scf::IfOp>(next)) {
+        if (!ifOp->hasAttr(kExpandedDecrementAttr))
+          break;
+        mlir::Operation *release = findPostDominantAliasedRelease(
+            word, aliasAnalysis, postDominanceInfo, ifOp.getThenRegion());
+        if (release) {
+          if (ifOp.getElseRegion().empty()) {
+            mlir::OpBuilder builder(ifOp);
+            builder.createBlock(&ifOp.getElseRegion());
+            mlir::scf::YieldOp::create(builder, ifOp.getLoc());
+          }
+          retain->moveBefore(ifOp.elseYield());
+          release->erase();
+        }
+        break;
+      }
+      if (mlir::Value released = getRCGMPReleasedValue(next)) {
+        if (aliasAnalysis.alias(released, word) ==
+            mlir::AliasResult::MustAlias) {
+          next->erase();
+          retain->erase();
+        }
+        break;
+      }
+      if (!leavesCountsAlone(next))
+        break;
+    }
+  }
+}
+
 } // namespace
 
 llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func) {
@@ -303,6 +382,7 @@ llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func) {
       next = next->getNextNode();
     }
   }
+  cancelCountedWordRetains(func, aliasAnalysis, postDominanceInfo);
   return mlir::success();
 }
 
