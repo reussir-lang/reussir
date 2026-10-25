@@ -198,6 +198,11 @@ no two processes ever hold "the same" lock on different files. A file
 system that cannot lock files makes the root unusable, so the cache moves
 to the build directory instead of running unlocked.
 
+Nothing removes entries yet. Doing so safely needs two facts no directory
+listing gives, whether a running build uses an entry and when it was last
+wanted; `cache-ledger.md` designs the ledger that records them and the
+pruning built on it.
+
 Everything downstream reads the manifest:
 
 - **Polyffi compiles** pass `--extern reussir_rt=<rlib>` and
