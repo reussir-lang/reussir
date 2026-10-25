@@ -124,8 +124,8 @@ impl View {
     }
 }
 
-/// Delete a lock file the reaper holds.
-fn remove(lock: FileLock) {
+/// Delete a lock file the caller holds.
+pub(super) fn remove(lock: FileLock) {
     let path = lock.path().to_owned();
     if let Err(e) = lock.remove() {
         tracing::debug!("cannot delete `{}`: {e}", path.display());

@@ -46,6 +46,13 @@
 //! size. A session drops a pin with [`Session::unpin`] once it has copied
 //! the entry out; entries read in place stay pinned for the session's life.
 //!
+//! # Pruning
+//!
+//! [`Session::prune`] removes the entries no running build uses that went
+//! unused for longer than a given age ([`prune`]). The pruner renames a
+//! victim out inside the transaction that re-reads its row, so it never
+//! takes an entry from under a session that reclaimed it.
+//!
 //! # Transactions
 //!
 //! TurboKV holds an exclusive directory lock while a database is open, so
@@ -62,6 +69,7 @@
 //! A disabled session has no opinion on anything (its queries return
 //! `None`), and rene goes on exactly as it does without a ledger.
 
+mod prune;
 mod reap;
 mod store;
 mod view;
@@ -71,6 +79,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::cache::{Cache, EntryId, FileLock};
+pub use prune::Pruned;
 use store::Store;
 use view::View;
 pub use view::{Entry, SessionRow, Snapshot, State};
@@ -355,20 +364,20 @@ fn now_nanos() -> u128 {
 mod tests {
     use super::*;
 
-    fn block_on<T>(fut: impl Future<Output = T>) -> T {
+    pub(super) fn block_on<T>(fut: impl Future<Output = T>) -> T {
         compio::runtime::Runtime::new().unwrap().block_on(fut)
     }
 
-    fn cache(tmp: &std::path::Path) -> Cache {
+    pub(super) fn cache(tmp: &std::path::Path) -> Cache {
         Cache::at(tmp.join("cache")).unwrap()
     }
 
-    fn id(key: &str) -> EntryId {
+    pub(super) fn id(key: &str) -> EntryId {
         EntryId::new(crate::cache::kind::DEPS, key)
     }
 
     /// Take the lock of the entry `id`, as `Cache::acquire` does.
-    fn lock(cache: &Cache, id: &EntryId) -> FileLock {
+    pub(super) fn lock(cache: &Cache, id: &EntryId) -> FileLock {
         let path = cache.lock_path(id);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         FileLock::try_lock(&path).unwrap().unwrap()
@@ -376,7 +385,7 @@ mod tests {
 
     /// Build the entry `id`, `size` bytes, as `session` would: look it up,
     /// take its lock, recheck, create it, register it.
-    async fn build(cache: &Cache, session: &Session, id: &EntryId, size: u64) {
+    pub(super) async fn build(cache: &Cache, session: &Session, id: &EntryId, size: u64) {
         assert_eq!(session.lookup(id).await, Some(Lookup::Build));
         let _lock = lock(cache, id);
         assert_eq!(session.recheck(id, None).await, Some(Recheck::Build));
@@ -387,7 +396,7 @@ mod tests {
     }
 
     /// The names in the `deps` kind directory, sorted.
-    fn entry_names(cache: &Cache) -> Vec<String> {
+    pub(super) fn entry_names(cache: &Cache) -> Vec<String> {
         let dir = cache.root().join(crate::cache::kind::DEPS);
         let mut names: Vec<String> = std::fs::read_dir(dir)
             .map(|entries| {
