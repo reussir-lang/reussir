@@ -1,0 +1,107 @@
+// UNSUPPORTED: darwin
+// std's copy-on-write collections at `Nat` and `Int` with heap values: Vec,
+// HashMap, HashSet, BTreeMap, BTreeSet, VecDeque and BinaryHeap hold their
+// elements as the owned handle `reussir_rt::rcgmp::Mpz` in the runtime's Rust
+// containers, which clone, drop and compare them by value (a heap key equal to
+// a stored one but built apart finds it). Heap values make a missed or doubled
+// release visible; the sanitizer variant (`sanitizer/bigint-ffi-std-asan.rr`)
+// checks the balance.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin -o %t.core.o --relocation-mode pic
+// RUN: %rrc --package-root %S/../../../library/std/src --package-name std --builtin --extern core=%t.core.rri --emit rri -o %t.std.rri
+// RUN: %rrc --package-root %S/../../../library/std/src --package-name std --builtin --extern core=%t.core.rri -o %t.std.o --relocation-mode pic
+// RUN: %rrc %s --package-name bigintffistd --extern core=%t.core.rri --extern std=%t.std.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %t.std.o %t.core.o %S/bigint_ffi_std.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+import std::collections::cow::vec::Vec;
+import std::collections::cow::hashmap::HashMap;
+import std::collections::cow::hashset::HashSet;
+import std::collections::cow::btreemap::BTreeMap;
+import std::collections::cow::btreeset::BTreeSet;
+import std::collections::cow::vecdeque::VecDeque;
+import std::collections::cow::binaryheap::BinaryHeap;
+import std::option::Option;
+
+fn nat(x : u64) -> Nat { x as Nat }
+
+fn val(o : Option<Nat>) -> Nat {
+    match o {
+        Option::Some(k) => k,
+        Option::None => 999
+    }
+}
+
+fn digit(ok : bool) -> i64 { if ok { 1 } else { 0 } }
+
+fn vec_ok(big : Nat) -> bool {
+    let v0 : Vec<Nat> = Vec::new();
+    let v = v0.push(big + 1).push(big).push(nat(7));
+    let w = v.set(1, big + 5);
+    val(v.get(1)) == 1267650600228229401496703205376 && val(w.get(1)) == 1267650600228229401496703205381
+        && val(v.last()) == 7 && v.len() == 3 && val(w.get(0)) == 1267650600228229401496703205377
+}
+
+fn hashmap_ok(big : Nat, one : u64) -> bool {
+    let m0 : HashMap<Nat, Nat> = HashMap::new();
+    let m = m0.insert(big + 1, big).insert(nat(7), big + 2).insert(big * 3, nat(5));
+    // A key equal by value to a stored heap key, built apart.
+    let k = core::intrinsic::bigint::ipowi(nat(2 * one), 100) + 1;
+    let m2 = m.insert(k, nat(1));
+    val(m.get(big + 1)) == 1267650600228229401496703205376 && val(m2.get(big + 1)) == 1
+        && m2.len() == 3 && m.contains_key(big * 3) && val(m.get(nat(7))) == 1267650600228229401496703205378
+        && m.remove(big + 1).len() == 2 && m.len() == 3
+}
+
+fn hashset_ok(big : Nat) -> bool {
+    let s0 : HashSet<Nat> = HashSet::new();
+    let s = s0.insert(big).insert(big + 0).insert(nat(3)).insert(big * 1);
+    s.len() == 2 && s.contains(big) && s.remove(big).len() == 1
+}
+
+fn btreemap_ok(big : Nat) -> bool {
+    let m0 : BTreeMap<Nat, Nat> = BTreeMap::new();
+    let m = m0.insert(big, nat(1)).insert(nat(3), big).insert(big + 1, big * 2);
+    m.len() == 3 && val(m.first_key()) == 3 && val(m.last_key()) == 1267650600228229401496703205377
+        && val(m.get(nat(3))) == 1267650600228229401496703205376 && val(m.get(big + 1)) == 2535301200456458802993406410752
+        && m.remove(big).len() == 2
+}
+
+fn btreeset_ok(big : Nat) -> bool {
+    let s0 : BTreeSet<Nat> = BTreeSet::new();
+    let s = s0.insert(big).insert(big + 0).insert(nat(3)).insert(big - 1);
+    s.len() == 3 && val(s.first()) == 3 && val(s.last()) == 1267650600228229401496703205376 && s.contains(big - 1)
+}
+
+fn deque_ok(big : Nat) -> bool {
+    let d0 : VecDeque<Nat> = VecDeque::new();
+    let d = d0.push_back(big).push_front(big + 1).push_back(nat(4));
+    val(d.front()) == 1267650600228229401496703205377 && val(d.back()) == 4 && val(d.pop_front().front()) == 1267650600228229401496703205376
+        && d.len() == 3
+}
+
+fn heap_ok(big : Nat) -> bool {
+    let h0 : BinaryHeap<Nat> = BinaryHeap::new();
+    let h = h0.push(nat(5)).push(big).push(big + 1).push(nat(9));
+    val(h.peek()) == 1267650600228229401496703205377 && val(h.pop().peek()) == 1267650600228229401496703205376 && h.len() == 4
+}
+
+fn ivec_ok(big : Int) -> bool {
+    let v0 : Vec<Int> = Vec::new();
+    let v = v0.push(0 - big).push(big);
+    match v.get(0) {
+        Option::Some(x) => x == -1267650600228229401496703205376,
+        Option::None => false
+    }
+}
+
+pub fn main(one : u64) -> i64 {
+    let big = core::intrinsic::bigint::ipowi(nat(2 * one), 100);
+    digit(vec_ok(big)) + digit(hashmap_ok(big, one)) * 10 + digit(hashset_ok(big)) * 100
+        + digit(btreemap_ok(big)) * 1000 + digit(btreeset_ok(big)) * 10000 + digit(deque_ok(big)) * 100000
+        + digit(heap_ok(big)) * 1000000 + digit(ivec_ok(big as Int)) * 10000000
+}
+
+extern "C" trampoline "reussir_main" = main;

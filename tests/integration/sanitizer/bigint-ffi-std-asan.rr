@@ -1,0 +1,23 @@
+// UNSUPPORTED: darwin
+// REQUIRES: asan, rcgmp
+// std's textures call the runtime's non-generic functions, so every texture
+// here compiles against the sanitized runtime's crates (%polyffi_asan_libdirs).
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/std/src --package-name std --builtin --extern core=%t.core.rri --emit rri -o %t.std.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin -o %t.core.ll -t llvm-ir --relocation-mode pic --sanitizer address --nullary-variant-encoding arch-independent %polyffi_asan_libdirs
+// RUN: %cc %asan_flags -c -x ir %t.core.ll -o %t.core.o
+// RUN: %rrc --package-root %S/../../../library/std/src --package-name std --builtin --extern core=%t.core.rri -o %t.std.ll -t llvm-ir --relocation-mode pic --sanitizer address --nullary-variant-encoding arch-independent %polyffi_asan_libdirs
+// RUN: %cc %asan_flags -c -x ir %t.std.ll -o %t.std.o
+// RUN: %rrc %S/../frontend/bigint_ffi_std.rr --package-name bigintffistd --extern core=%t.core.rri --extern std=%t.std.rri -o %t.ll -t llvm-ir --relocation-mode pic --sanitizer address --nullary-variant-encoding arch-independent %polyffi_asan_libdirs
+// RUN: %cc %asan_flags -c -x ir %t.ll -o %t.o
+// RUN: %cc %asan_flags %t.o %t.std.o %t.core.o %S/../frontend/bigint_ffi_std.c %reussir_rt_asan %rcgmp_runtime -o %t.exe %rpath_flag %rpath_san_flag %extra_sys_libs
+// RUN: %asan_env %t.exe
+// RUN: %rrc %S/../frontend/bigint_ffi_edge.rr --package-name bigintffiedge --extern core=%t.core.rri -o %t.edge.ll -t llvm-ir --relocation-mode pic --sanitizer address --nullary-variant-encoding arch-independent
+// RUN: %cc %asan_flags -c -x ir %t.edge.ll -o %t.edge.o
+// RUN: %cc %asan_flags %t.edge.o %S/../frontend/bigint_ffi_edge.c %reussir_rt_asan %rcgmp_runtime -o %t.edge.exe %rpath_flag %rpath_san_flag %extra_sys_libs
+// RUN: %asan_env %t.edge.exe
+
+// The sanitized allocator backs every heap integer, so a handle a std
+// collection keeps after its wrapper released it is a use after free, a
+// handle released by both sides a double free, and one neither releases a
+// leak.

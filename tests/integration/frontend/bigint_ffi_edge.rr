@@ -1,0 +1,122 @@
+// UNSUPPORTED: darwin
+// Edge cases of `Nat` and `Int` as polymorphic FFI type arguments (the owned
+// handle `reussir_rt::rcgmp::Mpz`). Heap values make a missed or doubled
+// release visible; `sanitizer/bigint-ffi-std-asan.rr` checks the balance.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name bigintffiedge --extern core=%t.core.rri -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/bigint_ffi_edge.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+extern "rust" [{
+    use reussir_rt::collections::btree_set::BTreeSet as RSet;
+    use reussir_rt::collections::vec::Vec as RVec;
+    unsafe extern "C" {
+        fn rcgmp_mpz_retain(value: *mut ::std::ffi::c_void, atomic: u32) -> *mut ::std::ffi::c_void;
+    }
+}];
+
+#[ffi(rust = "::reussir_rt::collections::vec::Vec")]
+pub struct Vec<T>;
+
+#[ffi(rust = "::reussir_rt::collections::btree_set::BTreeSet")]
+pub struct Set<T : Ord>;
+
+#[ffi(import)]
+fn new<T>() -> Vec<T> [{ RVec::<[:T:]>::new() }];
+
+#[ffi(import)]
+fn push<T>(v : Vec<T>, x : T) -> Vec<T> [{ v.push(x) }];
+
+#[ffi(import)]
+fn get<T>(v : Vec<T>, i : u64) -> T [{ v.get(i as usize).unwrap() }];
+
+#[ffi(import)]
+fn len<T>(v : Vec<T>) -> u64 [{ v.len() as u64 }];
+
+// A generic parameter the body never uses: the body drops it.
+#[ffi(import)]
+fn ignore<T>(x : T, k : u64) -> u64 [{ k + 1 }];
+
+// The parameter used twice: one clone.
+#[ffi(import)]
+fn twice<T>(x : T) -> Vec<T> [{ RVec::<[:T:]>::new().push(x.clone()).push(x) }];
+
+// A declared `Nat` among generic `T`s, through the packed boundary.
+#[ffi(import)]
+fn mix<T>(a : Nat, b : T, c : T, which : u64) -> T [{ if which == 0 { b } else { c } }];
+
+// A declared `Nat` result of a generic texture: a new reference of the
+// borrowed raw handle.
+#[ffi(import)]
+fn keep<T>(v : Vec<T>, n : Nat) -> Nat [{ unsafe { rcgmp_mpz_retain(n, 0) } }];
+
+// A closure moving the owned handle.
+#[ffi(import)]
+fn via_closure<T>(x : T, y : T) -> T [{ let f = move |first: bool| if first { x } else { y }; f(false) }];
+
+// A placeholder spelled in a local annotation, and a clone of the whole
+// vector.
+#[ffi(import)]
+fn last_of<T>(v : Vec<T>) -> T [{ let w = v.clone(); let n = w.len(); let e: [:T:] = w.get(n - 1).unwrap(); e }];
+
+#[ffi(import)]
+fn set_new<T : Ord>() -> Set<T> [{ RSet::new() }];
+
+#[ffi(import)]
+fn insert<T : Ord>(s : Set<T>, x : T) -> Set<T> [{ s.insert(x) }];
+
+#[ffi(import)]
+fn size<T : Ord>(s : Set<T>) -> u64 [{ s.len() as u64 }];
+
+#[ffi(import)]
+fn first<T : Ord>(s : Set<T>) -> T [{ s.first().unwrap() }];
+
+#[ffi(import)]
+fn last<T : Ord>(s : Set<T>) -> T [{ s.last().unwrap() }];
+
+fn nat(x : u64) -> Nat { x as Nat }
+fn int(x : i64) -> Int { x as Int }
+fn digit(ok : bool) -> i64 { if ok { 1 } else { 0 } }
+
+fn nested_ok(big : Nat) -> bool {
+    let inner = push(push(new<Nat>(), big + 1), nat(3));
+    let outer = push(push(new<Vec<Nat>>(), inner), push(new<Nat>(), big + 2));
+    let back = get(outer, 0);
+    len(outer) == 2 && get(back, 0) == 1267650600228229401496703205377 && get(get(outer, 1), 0) == 1267650600228229401496703205378
+        && get(inner, 1) == 3 && get(last_of(outer), 0) == 1267650600228229401496703205378
+}
+
+fn params_ok(big : Nat) -> bool {
+    let t = twice(big + 7);
+    ignore(big + 1, 4) == 5 && ignore(big, 1) == 2 && len(t) == 2 && get(t, 0) == get(t, 1)
+        && get(t, 1) == 1267650600228229401496703205383
+        && mix(big + 3, big + 4, nat(6), 0) == 1267650600228229401496703205380
+        && mix(big, nat(6), big + 5, 1) == 1267650600228229401496703205381
+        && keep(t, big + 9) == 1267650600228229401496703205385
+        && via_closure(big + 1, big + 2) == 1267650600228229401496703205378
+        && via_closure(big, big) == 1267650600228229401496703205376
+        && last_of(push(push(new<Nat>(), big), big + 1)) == 1267650600228229401496703205377
+}
+
+fn order_ok(big : Int, one : Int) -> bool {
+    let negbig = int(0) - big;
+    let s = insert(insert(insert(insert(insert(insert(set_new<Int>(), big), negbig - 1), int(-3) * one), int(0) * one), negbig), int(5) * one);
+    let s2 = insert(s, (int(0) - big) * one);
+    size(s) == 6 && size(s2) == 6 && first(s) == -1267650600228229401496703205377 && last(s) == 1267650600228229401496703205376
+}
+
+// A vector that Reussir drops while it holds heap elements.
+fn dropped_ok(big : Nat) -> bool {
+    let v = push(push(push(new<Nat>(), big + 1), big * big), nat(2));
+    len(v) == 3
+}
+
+pub fn main(one : u64) -> i64 {
+    let big = core::intrinsic::bigint::ipowi(nat(2 * one), 100);
+    digit(nested_ok(big)) + digit(params_ok(big)) * 10 + digit(order_ok(big as Int, one as Int)) * 100
+        + digit(dropped_ok(big)) * 1000
+}
+
+extern "C" trampoline "reussir_main" = main;

@@ -215,6 +215,8 @@ set(rrepl_path ${REUSSIR_RREPL_BINARY})
 set(reussir_syntax_path ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/reussir-syntax${CMAKE_EXECUTABLE_SUFFIX})
 set(reussir_lsp_path ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/reussir-lsp${CMAKE_EXECUTABLE_SUFFIX})
 set(reussir_rt_asan_path ${REUSSIR_RT_ASAN_LIBRARY})
+# The sanitized runtime's crates, for textures (`%polyffi_asan_libdirs`).
+set(reussir_rt_asan_deps "${REUSSIR_RT_ASAN_DEPS}")
 set(reussir_rt_lsan_path ${REUSSIR_RT_LSAN_LIBRARY})
 set(reussir_rt_msan_path ${REUSSIR_RT_MSAN_LIBRARY})
 set(reussir_rt_tsan_path ${REUSSIR_RT_TSAN_LIBRARY})

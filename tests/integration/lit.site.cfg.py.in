@@ -38,6 +38,7 @@ config.reussir_lsp_path = r'@reussir_lsp_path@'
 config.rpath_san_flag = r'@rpath_san_flag@'
 config.reussir_rt_pjrt_path = r'@REUSSIR_RT_PJRT_LIBRARY@'
 config.reussir_rt_asan_path = r'@reussir_rt_asan_path@'
+config.reussir_rt_asan_deps = [d for d in r'@reussir_rt_asan_deps@'.split(';') if d]
 config.reussir_rt_lsan_path = r'@reussir_rt_lsan_path@'
 config.reussir_rt_msan_path = r'@reussir_rt_msan_path@'
 config.reussir_rt_tsan_path = r'@reussir_rt_tsan_path@'

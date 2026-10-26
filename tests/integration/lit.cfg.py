@@ -385,6 +385,10 @@ config.substitutions.append((r'%msan_env', config.msan_env))
 config.substitutions.append((r'%tsan_env', config.tsan_env))
 config.substitutions.append((r'%rpath_san_flag', sh_path(config.rpath_san_flag)))
 config.substitutions.append((r'%reussir_rt_asan', sh_path(config.reussir_rt_asan_path)))
+# rrc flags compiling polymorphic-FFI textures against the sanitized runtime's
+# crates, for a texture calling its non-generic functions (std's).
+config.substitutions.append((r'%polyffi_asan_libdirs', ' '.join(
+    '--polyffi-libdir "%s"' % sh_path(d) for d in config.reussir_rt_asan_deps)))
 config.substitutions.append((r'%reussir_rt_lsan', sh_path(config.reussir_rt_lsan_path)))
 config.substitutions.append((r'%reussir_rt_msan', sh_path(config.reussir_rt_msan_path)))
 config.substitutions.append((r'%reussir_rt_tsan', sh_path(config.reussir_rt_tsan_path)))

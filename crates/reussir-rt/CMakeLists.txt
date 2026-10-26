@@ -329,6 +329,12 @@ foreach(sanitizer IN LISTS REUSSIR_RUNTIME_SANITIZERS)
 
     if(sanitizer STREQUAL "address")
         add_reussir_sanitized_runtime(address asan REUSSIR_RT_ASAN_LIBRARY)
+        # The crates the sanitized runtime was built from, for polymorphic-FFI
+        # textures that call its non-generic functions: their symbols are
+        # those of this build, not of the default runtime.
+        set(REUSSIR_RT_ASAN_DEPS
+            "${CMAKE_BINARY_DIR}/target-asan/${RUST_HOST_TRIPLE}/${CARGO_PROFILE_DIR}/deps"
+            "${CMAKE_BINARY_DIR}/target-asan/${CARGO_PROFILE_DIR}/deps")
     elseif(sanitizer STREQUAL "leak")
         add_reussir_sanitized_runtime(leak lsan REUSSIR_RT_LSAN_LIBRARY)
     elseif(sanitizer STREQUAL "memory")
@@ -350,6 +356,7 @@ else()
 endif()
 
 set(REUSSIR_RT_ASAN_LIBRARY "${REUSSIR_RT_ASAN_LIBRARY}" PARENT_SCOPE)
+set(REUSSIR_RT_ASAN_DEPS "${REUSSIR_RT_ASAN_DEPS}" PARENT_SCOPE)
 set(REUSSIR_RT_LSAN_LIBRARY "${REUSSIR_RT_LSAN_LIBRARY}" PARENT_SCOPE)
 set(REUSSIR_RT_MSAN_LIBRARY "${REUSSIR_RT_MSAN_LIBRARY}" PARENT_SCOPE)
 set(REUSSIR_RT_TSAN_LIBRARY "${REUSSIR_RT_TSAN_LIBRARY}" PARENT_SCOPE)
