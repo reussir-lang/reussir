@@ -17,6 +17,7 @@ pub mod db;
 pub mod deps;
 pub mod exec;
 pub mod fresh;
+pub mod ledger;
 pub mod lock;
 pub mod manifest;
 pub mod new;
