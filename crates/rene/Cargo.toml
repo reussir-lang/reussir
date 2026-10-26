@@ -69,6 +69,15 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 # at build time so the binary stays self-contained.
 sailfish = "0.9"
 
+[target.'cfg(unix)'.dependencies]
+# `statfs`, to refuse a cache on a network file system (`lock`).
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# `GetVolumePathNameW` and `GetDriveTypeW`, to refuse a cache on a remote
+# drive (`lock`).
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_WindowsProgramming"] }
+
 [build-dependencies]
 # Pack the `reussir-rt` source tree (tar + zstd) into the binary, with its
 # manifest rewritten standalone (toml_edit resolves workspace inheritance).
