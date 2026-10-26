@@ -53,10 +53,15 @@ pub struct Package {
 #[serde(deny_unknown_fields)]
 pub struct Dependency {
     /// Directory of the dependency package, relative to the manifest's
-    /// directory unless absolute. The only *source* supported today; a
-    /// dependency giving no path is reserved for remote registries and is
-    /// rejected at load with that explanation.
+    /// directory unless absolute. One of the two sources supported today,
+    /// with [`bundled`](Self::bundled); a dependency giving neither is
+    /// reserved for remote registries and is rejected at load with that
+    /// explanation.
     pub path: Option<PathBuf>,
+    /// Use the package bundled inside rene ([`crate::bundled`]), as in
+    /// `std = { bundled = true }`, instead of a path.
+    #[serde(default)]
+    pub bundled: bool,
     /// The version constraint the resolved dependency must satisfy:
     /// `"1.2.3"` (exact), `"^1.2.3"` (compatible), `"1.2"`/`"1"` (prefix),
     /// or `"*"` (any, the default when absent). Checked by resolution
@@ -65,12 +70,13 @@ pub struct Dependency {
 }
 
 impl Dependency {
-    /// The dependency's source directory. The load-time validation
-    /// guarantees this for every manifest that got past [`load`].
+    /// The dependency's source directory, unless it is bundled. The
+    /// load-time validation guarantees one for every other dependency of a
+    /// manifest that got past [`load`].
     pub fn path(&self) -> &Path {
         self.path
             .as_deref()
-            .expect("validated at load: only path dependencies exist today")
+            .expect("validated at load: a dependency is a path unless bundled")
     }
 }
 
@@ -320,13 +326,22 @@ pub fn load(path: &Path) -> Result<Loaded, ManifestError> {
         .to_serde()
         .map_err(|e| ManifestError::Schema(e.to_string()))?;
     for (name, dep) in &manifest.dependencies {
-        if dep.path.is_none() {
-            return Err(ManifestError::Schema(format!(
-                "dependency `{name}` gives no `path`; only local path \
-                 dependencies are supported today (a bare version constraint \
-                 will later select a registry release)"
-            )));
-        }
+        let problem = match (&dep.path, dep.bundled) {
+            (Some(_), true) => "sets both `path` and `bundled`; give one source".to_owned(),
+            (None, true) if crate::bundled::find(name).is_none() => format!(
+                "asks for a bundled package, but rene bundles only {}",
+                crate::bundled::names()
+            ),
+            (None, false) => "gives no `path`; only local path and bundled \
+                              (`bundled = true`) dependencies are supported today \
+                              (a bare version constraint will later select a \
+                              registry release)"
+                .to_owned(),
+            _ => continue,
+        };
+        return Err(ManifestError::Schema(format!(
+            "dependency `{name}` {problem}"
+        )));
     }
 
     // Nickel exports compact JSON; re-render pretty for the dump.
@@ -420,6 +435,33 @@ mod tests {
         let err = load(&path).unwrap_err().to_string();
         assert!(err.contains("dependency `utils` gives no `path`"), "{err}");
         assert!(err.contains("registry release"), "{err}");
+    }
+
+    /// `bundled = true` names a package rene ships, and is the dependency's
+    /// only source.
+    #[test]
+    fn bundled_dependencies_are_validated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dependency = |dep: &str| {
+            let text = format!(r#"{{ package.name = "app", dependencies.{dep} }}"#);
+            load(&write_manifest(tmp.path(), &text))
+        };
+        let loaded = dependency(r#"std = { bundled = true, version = "^0.1" }"#).unwrap();
+        assert!(loaded.manifest.dependencies["std"].bundled);
+        let err = dependency(r#"std = { bundled = true, path = "../std" }"#).unwrap_err();
+        let err = err.to_string();
+        assert!(
+            err.contains("`std` sets both `path` and `bundled`"),
+            "{err}"
+        );
+        let err = dependency("serde = { bundled = true }")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("rene bundles only `core`, `std`"), "{err}");
+        let err = dependency("std = { bundled = false }")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`std` gives no `path`"), "{err}");
     }
 
     /// A typo'd constraint field must not silently vanish.

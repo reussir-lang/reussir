@@ -18,6 +18,7 @@ sources under `src/` (`src/lib.rr` is the root module). A minimal manifest:
     version = "1.0.0",
   },
   dependencies = {
+    std = { bundled = true, version = "^0.1" },
     textio = { path = "vendor/textio", version = "^0.5" },
   },
   targets = {
@@ -64,6 +65,12 @@ cache (docs/design/cache-ledger.md), and safe to delete while no rene runs.
 
 The `reussir-rt` bake lives in the cache too, one per toolchain (the one the
 package's directory selects) and target.
+
+`core` is bundled inside rene and injected into every package (opt out with
+`package.no_core`). `std` is bundled too, but opt-in: depend on it with
+`std = { bundled = true, version = "^0.1" }` instead of a `path`. Both are
+packed from `library/` when rene is built, and their compiled interfaces and
+archives live in the cache too, one per toolchain, target, and profile.
 
 `rene` shells out to `rrc`, `cargo`, and `rustc`; set `REUSSIR_RRC`,
 `REUSSIR_CARGO`, or `REUSSIR_RUSTC` to pin specific binaries (otherwise

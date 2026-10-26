@@ -1297,6 +1297,54 @@ fn a_core_brought_by_path_is_built_locally() {
     assert!(cache_entries(&fakes.cache.join("deps")).is_empty());
 }
 
+/// `std = { bundled = true }` builds the std bundled in rene: unpacked only
+/// once a package asks for it, and compiled once for every package that
+/// does, from its sources in the cache, against core.
+#[cfg(unix)]
+#[test]
+fn bundled_std_is_compiled_once_for_every_package() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let plain = tmp.join("plain");
+    let manifest = executable_package(&plain, "plain");
+    let out = fakes.rene(&["build"], &manifest, &plain.join("reussir-build"));
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(!fakes.cache.join("std-src").exists());
+
+    for name in ["first", "second"] {
+        let pkg = tmp.join(name);
+        let manifest = executable_package(&pkg, name);
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        let text = text.replace(", targets", ", dependencies.std.bundled = true, targets");
+        std::fs::write(&manifest, text).unwrap();
+        let root = pkg.join("reussir-build");
+        let out = fakes.rene(&["build"], &manifest, &root);
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        assert!(root.join("dev/deps/std.rri").is_file());
+    }
+    let compiles = fakes.compiles();
+    let of = |package: &str| {
+        let name = format!("--package-name {package} ");
+        compiles.iter().filter(move |line| line.contains(&name))
+    };
+    let std_src = cache_entries(&fakes.cache.join("std-src"));
+    assert_eq!(std_src.len(), 1);
+    let sources = format!("--package-root {}", std_src[0].join("src").display());
+    assert_eq!(of("std").count(), 2, "{compiles:#?}");
+    for line in of("std") {
+        assert!(
+            line.contains(&sources) && line.contains("--builtin"),
+            "{line}"
+        );
+        assert!(line.contains("--extern core="), "{line}");
+    }
+    let against_std = of("second").filter(|line| line.contains("--extern std="));
+    assert_eq!(against_std.count(), 1, "{compiles:#?}");
+    // core and std, one entry each.
+    assert_eq!(cache_entries(&fakes.cache.join("deps")).len(), 2);
+}
+
 /// (Re)write the scratch package's manifest with targets of every kind and a
 /// `release` profile refining the built-in.
 #[cfg(unix)]

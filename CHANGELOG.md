@@ -175,6 +175,12 @@
   compiling `core` again. A second rene compiling the same `core` waits for
   the first and says so. A `core` a package brings by path is compiled in
   each build directory, like any other dependency.
+- `rene` bundles `std` beside `core`. A package uses it with
+  `dependencies.std = { bundled = true, version = "^0.1" }` instead of a
+  path to `library/std`: it unpacks into the per-user cache the first time
+  a build uses it, and like `core` it is compiled once per toolchain,
+  target, and profile for every package on the machine. `bundled` excludes
+  `path`, and naming a package rene does not bundle is a manifest error.
 
 ## 0.1.0
 

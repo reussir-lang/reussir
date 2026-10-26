@@ -6,13 +6,15 @@
 //! sorted order with a fixed mtime, so the bytes, the unpacked files, and
 //! the source graphs recorded against them depend only on the sources.
 //! `core` is injected into every package's dependency graph unless the
-//! package sets `package.no_core`.
+//! package sets `package.no_core`; `std` is opt-in, as
+//! `dependencies.std = { bundled = true }`.
 //!
 //! This table is also the list of reserved package names: `rrc --builtin`
 //! lifts the reservation for exactly these packages' builds ([`find`]).
 //!
 //! A bundle's sources unpack once into the per-user [`Cache`], keyed by the
-//! bundle's content, and every build reads them in place. A rene upgrade
+//! bundle's content, the first time a graph uses the bundle
+//! ([`load_graph`]), and every build reads them in place. A rene upgrade
 //! unpacks a new entry, and the per-package freshness checks see the
 //! change: a dependency whose recorded sources no longer lie under its
 //! directory is rebuilt. The bundles' compiled artifacts are shared through
@@ -59,6 +61,15 @@ pub fn find(name: &str) -> Option<&'static Bundle> {
     ALL.iter().copied().find(|bundle| bundle.name == name)
 }
 
+/// The bundles' names, for diagnostics: "`core`, `std`".
+pub fn names() -> String {
+    let names: Vec<String> = ALL
+        .iter()
+        .map(|bundle| format!("`{}`", bundle.name))
+        .collect();
+    names.join(", ")
+}
+
 /// The bundles `graph` builds from their own sources in `cache`, as name
 /// to content hash: the packages whose compiled artifacts
 /// [`crate::shared::Shared`] shares. A package of the same name brought by
@@ -73,11 +84,20 @@ pub fn in_graph(graph: &Graph, cache: &Cache) -> BTreeMap<String, String> {
     hashes.collect()
 }
 
-/// Load the dependency graph rooted at `root`, with the bundled `core`
-/// unpacked into `cache`.
+/// Load the dependency graph rooted at `root`, unpacking into `cache` the
+/// bundles it uses, and only those: the ones its `bundled = true`
+/// dependencies name, and `core` unless every package opts out of it.
 pub async fn load_graph(cache: &Cache, root: &Loaded) -> Result<Graph, String> {
-    let core = CORE.unpack(cache).await?;
-    resolve::load_graph_with(root, Some(&core))
+    let mut loader = resolve::Loader::new(root);
+    while let Some(name) = loader.next_bundle()? {
+        // Manifest validation admits only the names of bundles.
+        let bundle = find(&name).ok_or_else(|| format!("rene bundles no `{name}`"))?;
+        loader.provide(&name, bundle.unpack(cache).await?);
+    }
+    if loader.wants_core() {
+        loader.provide(CORE.name, CORE.unpack(cache).await?);
+    }
+    loader.finish()
 }
 
 impl Bundle {
@@ -160,6 +180,7 @@ mod tests {
         assert_eq!(find("core").map(|bundle| bundle.name), Some("core"));
         assert_eq!(find("std").map(|bundle| bundle.name), Some("std"));
         assert!(find("serde").is_none());
+        assert_eq!(names(), "`core`, `std`");
     }
 
     /// A bundle holds exactly the package's manifest and sources: nothing a

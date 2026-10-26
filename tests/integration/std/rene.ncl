@@ -4,7 +4,9 @@
     version = "0.1.0",
   },
   dependencies = {
-    std = { path = "../../../library/std", version = "^0.1" },
+    # The std bundled inside rene (packed from library/std when rene is
+    # built), so this suite also covers bundled dependencies.
+    std = { bundled = true, version = "^0.1" },
     test_utils = { path = "../../../library/test_utils", version = "^0.1" },
   },
   targets = {
