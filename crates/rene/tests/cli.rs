@@ -207,25 +207,24 @@ impl Fakes {
 
         let rustc = script(
             "fake-rustc",
-            format!(
-                "case \"$1\" in\n\
-                 --version) echo 'rustc 9.9.9 (fake)';;\n\
-                 -vV) printf 'rustc 9.9.9 (fake)\\nhost: x86_64-unknown-fake\\n';;\n\
-                 --print) echo '{}';;\n\
-                 esac\n",
-                libdir.display()
+            fake_rustc(
+                "9.9.9 (fake)",
+                "x86_64-unknown-fake",
+                &dir.join("fake-sysroot"),
+                &libdir,
             ),
         );
         // Counts invocations, records the linker rene pinned through cargo's
-        // target-specific environment (keyed by the fake host triple above),
-        // fabricates the artifacts, and reports them the way
-        // `--message-format=json` does. Runs with cwd = the unpacked source
-        // dir.
+        // target-specific environment (keyed by the fake host triple above)
+        // and the rustc it pinned, fabricates the artifacts, and reports them
+        // the way `--message-format=json` does. Runs with cwd = the unpacked
+        // source dir.
         let cargo = script(
             "fake-cargo",
             "echo run >> \"$(dirname \"$0\")/cargo-runs\"\n\
              echo \"$*\" >> \"$(dirname \"$0\")/cargo-args\"\n\
              echo \"linker=$CARGO_TARGET_X86_64_UNKNOWN_FAKE_LINKER\" >> \"$(dirname \"$0\")/cargo-env\"\n\
+             echo \"$RUSTC\" >> \"$(dirname \"$0\")/cargo-rustc\"\n\
              target=\"\"; prev=\"\"\n\
              for arg in \"$@\"; do\n\
                [ \"$prev\" = \"--target\" ] && target=\"$arg\"\n\
@@ -386,6 +385,32 @@ printf ']}\n'
     }
 }
 
+/// The body of a fake `rustc` reporting `version` and `host`, and printing
+/// `sysroot` and `libdir`.
+#[cfg(unix)]
+fn fake_rustc(version: &str, host: &str, sysroot: &Path, libdir: &Path) -> String {
+    format!(
+        r#"case "$1" in
+--version) echo 'rustc {version}';;
+-vV) printf 'rustc {version}\nhost: {host}\n';;
+--print)
+  prev=""
+  for arg in "$@"; do
+    if [ "$prev" = --print ]; then
+      case "$arg" in
+      sysroot) echo '{}';;
+      target-libdir) echo '{}';;
+      esac
+    fi
+    prev="$arg"
+  done;;
+esac
+"#,
+        sysroot.display(),
+        libdir.display()
+    )
+}
+
 /// The entry directories of one cache kind, sorted: no lock files, and no
 /// staging or trash directories.
 #[cfg(unix)]
@@ -468,6 +493,9 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     assert_eq!(String::from_utf8(out.stdout).unwrap(), stdout);
     assert_eq!(fakes.runs("cargo"), 1, "the second build re-ran cargo");
     assert!(fakes.cargo_invocations()[0].contains("--target x86_64-unknown-fake"));
+    // The fake's sysroot has no `bin/rustc`, so cargo ran the selection.
+    let pinned = std::fs::read_to_string(tmp.join("cargo-rustc")).unwrap();
+    assert_eq!(pinned.trim(), fakes.rustc.display().to_string());
 
     // A compiler at a different explicit path is a different toolchain
     // selection even when it reports the same version. Do not restore the
@@ -488,6 +516,107 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     let out = with_alternate();
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(fakes.runs("cargo"), 2, "the new rustc path was not cached");
+}
+
+/// rustup picks a toolchain by the directory its proxy runs in, which need
+/// not be the package's. The toolchain is resolved in the package's
+/// directory and its binaries are pinned: cargo runs that toolchain's cargo
+/// and rustc, and rrc is handed the same rustc.
+#[cfg(unix)]
+#[test]
+fn the_bake_uses_the_toolchain_the_package_directory_selects() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let executable = |path: &Path, body: &str| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    // Two toolchains, each with its own rustc and host, and a cargo that
+    // hands over to the logging fake.
+    let toolchains = tmp.join("toolchains");
+    let both = [
+        ("default", "9.9.9 (default)", "x86_64-unknown-fake"),
+        ("pinned", "8.8.8 (pinned)", "aarch64-unknown-fake"),
+    ];
+    for (name, version, host) in both {
+        let sysroot = toolchains.join(name);
+        let rustc = fake_rustc(version, host, &sysroot, &fakes.libdir);
+        executable(&sysroot.join("bin/rustc"), &rustc);
+        let cargo = format!("exec '{}' \"$@\"\n", fakes.cargo.display());
+        executable(&sysroot.join("bin/cargo"), &cargo);
+    }
+    // A rustup-like proxy: a `rust-toolchain.toml` at or above its working
+    // directory selects `pinned`.
+    let proxy = tmp.join("proxy-rustc");
+    let toolchains = toolchains.display();
+    executable(
+        &proxy,
+        &format!(
+            r#"dir="$PWD"; toolchain=default
+while [ "$dir" != / ]; do
+  [ -f "$dir/rust-toolchain.toml" ] && {{ toolchain=pinned; break; }}
+  dir=$(dirname "$dir")
+done
+exec '{toolchains}'/"$toolchain"/bin/rustc "$@"
+"#
+        ),
+    );
+    // The toolchain file sits above the pinned package.
+    std::fs::create_dir(tmp.join("project")).unwrap();
+    std::fs::write(tmp.join("project/rust-toolchain.toml"), "[toolchain]\n").unwrap();
+    for (pkg, (toolchain, version, host)) in ["plain", "project/pkg"].into_iter().zip(both) {
+        let pkg = tmp.join(pkg);
+        let manifest = package(&pkg, "demo");
+        std::fs::write(
+            &manifest,
+            "{ package = { name = \"demo\", version = \"0.1.0\" }, targets.demo.kind = 'executable }\n",
+        )
+        .unwrap();
+        let root = pkg.join("reussir-build");
+        // rene runs from outside the package, with no cargo configured.
+        let out = run(fakes
+            .command(&["build", "--manifest-path"])
+            .arg(&manifest)
+            .arg("--build-dir")
+            .arg(&root)
+            .current_dir(&tmp)
+            .env_remove("CARGO")
+            .env_remove("REUSSIR_CARGO")
+            .env("REUSSIR_RUSTC", &proxy));
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        let rustc = tmp.join("toolchains").join(toolchain).join("bin/rustc");
+        let ran = std::fs::read_to_string(tmp.join("cargo-rustc")).unwrap();
+        assert_eq!(ran.lines().last(), Some(&*rustc.display().to_string()));
+        let dir = BuildDir::open(&root).unwrap();
+        let key = tables::rt_artifacts_key(host);
+        let record: serde_json::Value =
+            serde_json::from_str(&dir.status(&key).unwrap().unwrap()).unwrap();
+        drop(dir);
+        assert_eq!(record["rustc"], rustc.display().to_string());
+        assert_eq!(record["rustc_version"], format!("rustc {version}"));
+        let compile = fakes.package_compiles().pop().unwrap();
+        assert!(
+            compile.ends_with(&format!("rustc={}", rustc.display())),
+            "{compile}"
+        );
+
+        // A command that does not bake resolves the target there too.
+        let out = run(fakes
+            .command(&["inspect", "--frozen", "--commands", "--manifest-path"])
+            .arg(&manifest)
+            .arg("--build-dir")
+            .arg(&root)
+            .current_dir(&tmp)
+            .env("REUSSIR_RUSTC", &proxy));
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(report["plan"]["target"], host);
+        assert_eq!(report["plan"]["env"]["REUSSIR_RUSTC"], record["rustc"]);
+    }
 }
 
 /// The profile supplies a default target, the CLI overrides it, and the two

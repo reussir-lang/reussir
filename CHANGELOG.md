@@ -157,6 +157,12 @@
   fails the command with an error naming the cache and suggesting
   `RENE_CACHE_DIR` on a local disk. Because core's sources move, an
   existing build directory rebuilds core once.
+- The `reussir-rt` bake uses the toolchain the package's directory
+  selects, wherever rene runs. rene asks the selected `rustc` for its
+  sysroot from the package's directory, so the project's
+  `rust-toolchain.toml` decides, and then runs that toolchain's `rustc` and
+  (unless one is configured) its `cargo` by path; `rrc` gets the same
+  `rustc`.
 
 ## 0.1.0
 

@@ -406,7 +406,14 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
         .target
         .as_deref()
         .or(profile.default_target_triple.as_deref());
-    let artifacts = rt::prepare(&dir, requested_target, bake_linker.as_deref(), &progress).await?;
+    let artifacts = rt::prepare(
+        &dir,
+        &graph.nodes[&graph.root].dir,
+        requested_target,
+        bake_linker.as_deref(),
+        &progress,
+    )
+    .await?;
     let target = artifacts.target.clone();
 
     // No declared targets: stop after the bake, reporting the libdirs for
@@ -590,7 +597,8 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), String> {
                 .target
                 .as_deref()
                 .or(profile.default_target_triple.as_deref());
-            let target = rt::resolve_target(requested_target).await?;
+            let target =
+                rt::resolve_target(requested_target, &graph.nodes[&graph.root].dir).await?;
             let bake = fresh::recorded_bake(held.as_ref(), &target)?;
             let states = fresh::states(
                 &graph,
