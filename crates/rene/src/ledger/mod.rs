@@ -27,6 +27,10 @@ use turbokv::{Db, DbError, DbOptions, WriteBatch};
 
 use crate::lock::{Backoff, NOTICE_AFTER};
 
+mod session;
+
+pub use session::{Pins, SESSIONS_DIR, Session, Tag, alive, parse_sibling};
+
 /// The ledger's directory under the cache root.
 pub const LEDGER_DIR: &str = "ledger";
 
