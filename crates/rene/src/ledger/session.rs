@@ -13,6 +13,9 @@
 //! code path thus serves every way a session ends, and every build runs it.
 //! Everything else a dead session leaves carries its id in its name
 //! ([`Session::sibling`]), for the sweep to recognize.
+//!
+//! Every transaction also reads when the cache was last pruned, so that a
+//! session knows whether a repair is due ([`Session::repair_due`]).
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::prune::repair_due;
 use super::{Ledger, Txn, unusable};
 use crate::lock::{self, FileLock, Probe};
 
@@ -42,6 +46,8 @@ pub struct Session {
     lock: Option<FileLock>,
     /// The number of the next [`sibling`](Self::sibling).
     next: Cell<u64>,
+    /// What [`Session::repair_due`] says.
+    repair_due: Cell<bool>,
 }
 
 /// What a [`Session::sibling`] is for.
@@ -88,6 +94,7 @@ impl Session {
             ledger,
             lock: Some(lock),
             next: Cell::new(0),
+            repair_due: Cell::new(false),
         })
     }
 
@@ -100,9 +107,18 @@ impl Session {
         &self.root
     }
 
+    /// Whether the cache was due for a repair when this session's latest
+    /// transaction began: it had never been pruned, or not for an hour
+    /// ([`REPAIR_INTERVAL`](super::REPAIR_INTERVAL)). False before the
+    /// session's first transaction.
+    pub fn repair_due(&self) -> bool {
+        self.repair_due.get()
+    }
+
     /// Run `op` as one ledger transaction of this session, after reaping
-    /// the pins of dead sessions. `op` reads and changes the pins through
-    /// [`Pins`]; only the `pin/` rows are read for it.
+    /// the pins of dead sessions and reading whether a repair is due. `op`
+    /// reads and changes the pins through [`Pins`]; only the `pin/` rows
+    /// are read for it.
     pub async fn transact<T>(
         &self,
         mut op: impl FnMut(&mut Txn<'_>, &mut Pins) -> Result<T, String>,
@@ -110,6 +126,7 @@ impl Session {
         self.ledger
             .transact(|txn| {
                 let mut pins = reap(txn, &self.root, &self.id)?;
+                self.repair_due.set(repair_due(txn)?);
                 let value = op(txn, &mut pins)?;
                 pins.write(txn, &self.id);
                 Ok(value)
@@ -348,6 +365,19 @@ mod tests {
         block_on(session.transact(|_, _| Ok(()))).unwrap();
         assert!(starting.is_file() && dead.is_file());
         drop(held);
+    }
+
+    #[test]
+    fn every_transaction_reads_whether_a_repair_is_due() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = block_on(Session::start(tmp.path())).unwrap();
+        let transact = || block_on(session.transact(|_, _| Ok(()))).unwrap();
+        assert!(!session.repair_due(), "nothing was read yet");
+        transact();
+        assert!(session.repair_due(), "a fresh cache was never pruned");
+        block_on(session.prune(&["deps"], None, false)).unwrap();
+        transact();
+        assert!(!session.repair_due());
     }
 
     #[test]

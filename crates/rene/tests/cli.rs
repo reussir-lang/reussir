@@ -58,6 +58,12 @@ fn rene(args: &[&str]) -> Command {
         rene::cache::CACHE_DIR_ENV,
         Path::new(env!("CARGO_TARGET_TMPDIR")).join("rene-cache"),
     );
+    // And the user's configuration: a directory without one means the
+    // defaults. Tests about the configuration use their own.
+    cmd.env(
+        rene::config::CONFIG_DIR_ENV,
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join("rene-config"),
+    );
     cmd
 }
 
@@ -1343,6 +1349,157 @@ fn bundled_std_is_compiled_once_for_every_package() {
     assert_eq!(against_std.count(), 1, "{compiles:#?}");
     // core and std, one entry each.
     assert_eq!(cache_entries(&fakes.cache.join("deps")).len(), 2);
+}
+
+/// `rene cache prune` removes the old entries no running rene pins, and
+/// keeps those a rene (here an in-process session) still uses.
+#[cfg(unix)]
+#[test]
+fn cache_prune_removes_what_no_running_rene_uses() {
+    use rene::ledger::{EntryId, Session};
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let manifest = executable_package(&tmp, "demo");
+    let root = tmp.join("reussir-build");
+    let out = fakes.rene(&["build"], &manifest, &root);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let bakes = fakes.rt_entries();
+    let prune = |args: &[&str]| {
+        let out = run(&mut fakes.command(&[&["cache", "prune"], args].concat()));
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        let err = stderr(&out);
+        (String::from_utf8(out.stdout).unwrap(), err)
+    };
+
+    // Nothing is old at the default age.
+    let (stdout, err) = prune(&["--dry-run"]);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(err.contains("would remove 0 entries"), "{err}");
+    assert!(err.contains("3 recently used"), "{err}");
+
+    let session = block_on(Session::start(&fakes.cache)).unwrap();
+    let key = bakes[0].file_name().unwrap().to_str().unwrap();
+    let bake = EntryId::parse(&format!("rt/{key}"), rene::cache::kind::ALL).unwrap();
+    assert!(block_on(session.lookup(&bake)).unwrap().is_some());
+    let (stdout, err) = prune(&["--max-age", "0s"]);
+    assert!(stdout.contains("removed core-src/"), "{stdout}");
+    assert!(
+        stdout.contains("removed deps/") && !stdout.contains("rt/"),
+        "{stdout}"
+    );
+    assert!(err.contains("kept 1 in use"), "{err}");
+    assert_eq!(fakes.rt_entries(), bakes);
+    assert!(cache_entries(&fakes.cache.join("deps")).is_empty());
+    assert!(cache_entries(&fakes.cache.join("core-src")).is_empty());
+
+    // Once nobody uses the bake, it goes too, and the next build bakes again.
+    drop(session);
+    prune(&["--max-age", "0s"]);
+    assert!(fakes.rt_entries().is_empty());
+    let out = fakes.rene(&["build"], &manifest, &root);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(fakes.runs("cargo"), 2);
+}
+
+/// A ledger written by a newer rene fails the build and `rene cache prune`
+/// alike, naming the ledger and the way out.
+#[cfg(unix)]
+#[test]
+fn a_ledger_from_a_newer_rene_fails_build_and_prune() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    std::fs::create_dir_all(&fakes.cache).unwrap();
+    let ledger = rene::ledger::Ledger::new(&fakes.cache).unwrap();
+    block_on(ledger.transact(|_| Ok(()))).unwrap();
+    block_on(ledger.transact(|txn| {
+        txn.put("schema", "2");
+        Ok(())
+    }))
+    .unwrap();
+    let manifest = executable_package(&tmp, "demo");
+    for out in [
+        fakes.rene(&["build"], &manifest, &tmp.join("reussir-build")),
+        run(&mut fakes.command(&["cache", "prune"])),
+    ] {
+        assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
+        let err = stderr(&out);
+        let ledger = format!("`{}`", fakes.cache.join("ledger").display());
+        assert!(err.contains(&ledger) && err.contains("newer rene"), "{err}");
+        assert!(err.contains("RENE_CACHE_DIR"), "{err}");
+    }
+    assert_eq!(fakes.runs("cargo") + fakes.compiles().len(), 0);
+}
+
+/// A build that took the cache over the configured limit prunes once it is
+/// done: the old entries it does not use go, those it reads in place stay.
+/// A mistake in the configuration stops the build before any work, and with
+/// `limit = null` builds remove nothing, yet still repair.
+#[cfg(unix)]
+#[test]
+fn a_build_prunes_past_the_configured_limit() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let manifest = executable_package(&tmp, "demo");
+    let config_dir = tmp.join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let configured = |text: &str, args: &[&str]| {
+        std::fs::write(config_dir.join(rene::config::CONFIG_FILE), text).unwrap();
+        let mut build = fakes.command(&[&["build"], args].concat());
+        build.env(rene::config::CONFIG_DIR_ENV, &config_dir);
+        let out = run(build.arg("--manifest-path").arg(&manifest));
+        (out.status.code(), stderr(&out))
+    };
+    let deps = || cache_entries(&fakes.cache.join("deps")).len();
+
+    let (code, err) = configured("{ cache = { limti = 1 } }", &[]);
+    assert_eq!(code, Some(1));
+    assert!(err.contains("limti"), "{err}");
+    assert!(!fakes.cache.exists());
+
+    // Every entry is past a zero age, yet both profiles' cores stay. The
+    // first build in the fresh cache repairs it, which stamps `pruned`.
+    let off = "{ cache = { limit = null, max_age = \"0s\" } }";
+    for profile in ["dev", "release"] {
+        let (code, err) = configured(off, &["--profile", profile]);
+        assert_eq!(code, Some(0), "{err}");
+    }
+    assert_eq!(deps(), 2);
+    assert_eq!(ledger_rows(&fakes.cache, "pruned").len(), 1);
+
+    // Over a zero limit, the build that publishes a third core removes all
+    // three, copied out and unused; the bake and the core sources it reads
+    // in place stay.
+    let (code, err) = configured(
+        "{ cache = { limit = 0, max_age = \"0s\" } }",
+        &["--profile", "release", "--token-reuse-remarks"],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert!(err.contains("removed 3 entries"), "{err}");
+    assert_eq!(deps(), 0);
+    assert_eq!(fakes.rt_entries().len(), 1);
+    assert_eq!(cache_entries(&fakes.cache.join("core-src")).len(), 1);
+}
+
+/// The first build in a fresh cache repairs and sweeps it, so a crashed
+/// rene's staging directory does not outlive it, even when the build stops
+/// after the bake.
+#[cfg(unix)]
+#[test]
+fn a_build_sweeps_what_a_crashed_rene_left() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let staging = fakes.cache.join("rt/0123abcd.stage-0123456789abcdef-0");
+    std::fs::create_dir_all(staging.join("target")).unwrap();
+    let manifest = package(&tmp, "demo");
+    let out = fakes.rene(&["build"], &manifest, &tmp.join("reussir-build"));
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(!staging.exists());
+    assert_eq!(fakes.rt_entries().len(), 1);
 }
 
 /// (Re)write the scratch package's manifest with targets of every kind and a

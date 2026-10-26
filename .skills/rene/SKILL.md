@@ -72,6 +72,18 @@ package's directory selects) and target.
 packed from `library/` when rene is built, and their compiled interfaces and
 archives live in the cache too, one per toolchain, target, and profile.
 
+Once a build has succeeded, it prunes the cache if the entries it published
+took it over `cache.limit` (10 GiB by default): the entries no running rene
+uses that went unused for longer than `cache.max_age` (120 days) go.
+Otherwise it repairs the cache at most once an hour, removing only what
+crashed renes left. Both settings live in the per-user `config.ncl`
+(`~/.config/rene`, `~/Library/Application Support/rene`, or
+`%APPDATA%\rene`; `RENE_CONFIG_DIR` overrides it, and the lit suites point
+it at `build/tests/integration/test/rene-config`), a Nickel program:
+`{ cache = { limit = "10 GiB", max_age = "120d" } }`, where `null` stops
+builds from removing entries. `rene cache prune [--max-age AGE] [--dry-run]`
+prunes on demand, whatever the size.
+
 `rene` shells out to `rrc`, `cargo`, and `rustc`; set `REUSSIR_RRC`,
 `REUSSIR_CARGO`, or `REUSSIR_RUSTC` to pin specific binaries (otherwise
 `rrc` is found through `PATH`).

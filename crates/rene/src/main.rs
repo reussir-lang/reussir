@@ -17,6 +17,9 @@
 //! JSON; `rene clean` deletes the build directory unless another instance
 //! holds it. What every build has in common lives in the per-user cache (see
 //! `rene::cache`), which `clean` leaves alone.
+//! Once a build has succeeded it prunes the cache if it took it over the
+//! user's size limit (`rene::config`), and otherwise repairs it at most once
+//! an hour; `rene cache prune` prunes on demand.
 //!
 //! Progress goes to stderr via `tracing`; stdout carries only the final
 //! machine-readable listing. Exit 0 on success, 1 on a failed command, 2 on
@@ -25,10 +28,12 @@
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use palc::Parser;
 
 use rene::cache::Cache;
+use rene::config::{self, CacheConfig, Config};
 use rene::db::{self, BuildDir, CleanOutcome};
 use rene::shared::Shared;
 use rene::{bundled, compile, deps, exec, fresh, manifest, new, plan, pool, resolve, rt};
@@ -86,9 +91,39 @@ struct Location {
 #[derive(palc::Subcommand)]
 enum Command {
     Build(BuildArgs),
+    Cache(CacheArgs),
     Clean(CleanArgs),
     Inspect(InspectArgs),
     New(NewArgs),
+}
+
+/// Maintain the per-user cache every build shares (`RENE_CACHE_DIR`, or the
+/// platform cache directory).
+#[derive(palc::Args)]
+struct CacheArgs {
+    #[command(subcommand)]
+    command: CacheCommand,
+}
+
+#[derive(palc::Subcommand)]
+enum CacheCommand {
+    Prune(PruneArgs),
+}
+
+/// Remove the cache entries no running rene uses that went unused for longer
+/// than the configured age (`cache.max_age` in the user's `config.ncl`, 120
+/// days by default), whatever the cache's size, and what crashed renes left.
+/// The removed entries are listed on stdout.
+#[derive(palc::Args)]
+struct PruneArgs {
+    /// Remove the entries unused for longer than AGE (`30d`, `4 months`,
+    /// `12h`, `0s`) instead.
+    #[arg(long, value_name = "AGE")]
+    max_age: Option<String>,
+
+    /// List what would be removed, and remove nothing.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 /// Create a new package: a directory with a commented `rene.ncl` manifest, a
@@ -278,6 +313,9 @@ fn main() -> ExitCode {
     let result = runtime.block_on(async {
         match cli.command {
             Command::Build(args) => build(&args, color).await,
+            Command::Cache(CacheArgs {
+                command: CacheCommand::Prune(args),
+            }) => prune(&args).await,
             Command::Clean(args) => clean(&args.location),
             Command::Inspect(args) => inspect(&args, color).await,
             Command::New(args) => new::run(&new::Options {
@@ -368,6 +406,9 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // Resolve the profile before any work: an unknown name is a usage
     // problem, not something to discover after a runtime bake.
     let profile = manifest::resolve_profile(&loaded.manifest, &args.profile)?;
+    // Likewise the user's configuration: a mistake in it stops the build
+    // rather than silently restoring defaults that prune.
+    let config = Config::load()?;
     let root = resolve_build_dir(location)?;
     // Builds sharing a directory queue on its database lock. Take it before
     // anything is written, then hold it (`dir`) for the rest of the build.
@@ -424,6 +465,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
         if !sources.rescanned() {
             tracing::debug!(files = sources.files.len(), "nothing to do");
         }
+        maintain(&cache, &config.cache).await?;
         tracing::info!("no targets declared; pass these directories to `rrc --polyffi-libdir`:");
         for libdir in artifacts.libdirs() {
             println!("{}", libdir.display());
@@ -500,11 +542,96 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
         },
     )
     .await?;
+    maintain(&cache, &config.cache).await?;
     // Stdout carries the artifact listing, one path per target, in the
     // order they were declared (or selected).
     for product in &products {
         println!("{}", product.path.display());
     }
+    Ok(())
+}
+
+/// What a successful build does to the cache (docs/design/cache-ledger.md,
+/// "Pruning, repair and sweeping").
+#[derive(Debug, PartialEq, Eq)]
+enum Maintenance {
+    /// Its publications took the cache over `limit`: prune at `max_age`.
+    Prune {
+        limit: u64,
+        max_age: Duration,
+    },
+    /// The cache was last pruned more than an hour ago, or never: repair.
+    Repair,
+    Nothing,
+}
+
+impl Maintenance {
+    fn decide(policy: &CacheConfig, published_total: Option<u64>, repair_due: bool) -> Self {
+        match (policy.limit, policy.max_age, published_total) {
+            (Some(limit), Some(max_age), Some(total)) if total > limit => {
+                Maintenance::Prune { limit, max_age }
+            }
+            _ if repair_due => Maintenance::Repair,
+            _ => Maintenance::Nothing,
+        }
+    }
+}
+
+/// Prune or repair the cache once a build has succeeded ([`Maintenance`]),
+/// then sweep it. The build holds no entry lock by now, so nobody waits for
+/// this, and its session still pins everything it read in place.
+async fn maintain(cache: &Cache, policy: &CacheConfig) -> Result<(), String> {
+    let published = cache.total_published();
+    match Maintenance::decide(policy, published, cache.session().repair_due()) {
+        Maintenance::Prune { limit, max_age } => {
+            let pruned = cache.prune(Some(max_age), false).await?;
+            tracing::info!(
+                "the cache is over {}: removed {} unused for more than {}",
+                config::human_size(limit),
+                pruned.summary(),
+                config::human_age(max_age)
+            );
+        }
+        Maintenance::Repair => {
+            cache.prune(None, false).await?;
+        }
+        Maintenance::Nothing => {}
+    }
+    Ok(())
+}
+
+/// `rene cache prune`: remove what no running rene will miss, whatever the
+/// cache's size, and list it on stdout; `--dry-run` only lists it.
+async fn prune(args: &PruneArgs) -> Result<(), String> {
+    let config = Config::load()?;
+    let max_age = match &args.max_age {
+        Some(text) => config::parse_age(text).map_err(|e| format!("invalid --max-age: {e}"))?,
+        None => config.cache.max_age.ok_or_else(|| {
+            let file = config::path().map_or("the configuration".to_owned(), |path| {
+                format!("`{}`", path.display())
+            });
+            format!("`cache.max_age` is null in {file}; pass --max-age")
+        })?,
+    };
+    let cache = Cache::open_user().await?;
+    let pruned = cache.prune(Some(max_age), args.dry_run).await?;
+    let verb = if args.dry_run {
+        "would remove"
+    } else {
+        "removed"
+    };
+    for (entry, size) in &pruned.removed {
+        println!("{verb} {entry} ({})", config::human_size(*size));
+    }
+    tracing::info!(
+        "{verb} {} unused for more than {}; kept {} in use and {} recently used; the cache \
+         holds {}",
+        pruned.summary(),
+        config::human_age(max_age),
+        pruned.in_use,
+        pruned.recent,
+        config::human_size(pruned.total)
+    );
     Ok(())
 }
 
@@ -655,4 +782,35 @@ fn clean(location: &Location) -> Result<(), String> {
         CleanOutcome::Removed => tracing::info!(dir = %root.display(), "removed"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_build_prunes_past_the_limit_and_otherwise_repairs_when_due() {
+        let day = Duration::from_secs(24 * 60 * 60);
+        let policy = |limit, max_age| CacheConfig { limit, max_age };
+        let (on, no_limit, no_age) = (
+            policy(Some(100), Some(day)),
+            policy(None, Some(day)),
+            policy(Some(0), None),
+        );
+        let prune = Maintenance::Prune {
+            limit: 100,
+            max_age: day,
+        };
+        for (policy, total, due, expected) in [
+            (&on, Some(101), false, prune),
+            (&on, Some(100), true, Maintenance::Repair),
+            (&on, Some(100), false, Maintenance::Nothing),
+            (&on, None, true, Maintenance::Repair),
+            (&no_limit, Some(u64::MAX), true, Maintenance::Repair),
+            (&no_age, Some(1), false, Maintenance::Nothing),
+        ] {
+            let decided = Maintenance::decide(policy, total, due);
+            assert_eq!(decided, expected, "{total:?} {due}");
+        }
+    }
 }

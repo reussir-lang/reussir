@@ -165,6 +165,11 @@ config.substitutions.append((r'%FileCheck', sh_path(config.filecheck_path)))
 # locks under lit's parallelism. An explicit RENE_CACHE_DIR wins.
 config.environment['RENE_CACHE_DIR'] = os.environ.get(
     'RENE_CACHE_DIR', os.path.join(config.test_exec_root, 'rene-cache'))
+# Likewise the user's configuration (`RENE_CONFIG_DIR`): a directory without
+# a `config.ncl` means the defaults, so no developer's setting changes what
+# the suites do.
+config.environment['RENE_CONFIG_DIR'] = os.environ.get(
+    'RENE_CONFIG_DIR', os.path.join(config.test_exec_root, 'rene-config'))
 # The std integration executables are targets of one rene package. All of
 # their tests deliberately share one build directory; rene's database lock
 # serializes concurrent writers while preserving the compiled target cache.

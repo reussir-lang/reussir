@@ -181,6 +181,19 @@
   a build uses it, and like `core` it is compiled once per toolchain,
   target, and profile for every package on the machine. `bundled` excludes
   `path`, and naming a package rene does not bundle is a manifest error.
+- `rene` prunes its per-user cache. Once a build has succeeded, if the
+  entries it published took the cache over `cache.limit` (10 GiB by
+  default), it removes the entries no running rene uses that went unused
+  for longer than `cache.max_age` (120 days by default); otherwise, at most
+  once an hour, it repairs what crashed renes left behind. Both settings
+  come from a new per-user configuration file, `config.ncl` in
+  `~/.config/rene` (`$XDG_CONFIG_HOME`),
+  `~/Library/Application Support/rene`, or `%APPDATA%\rene`
+  (`RENE_CONFIG_DIR` overrides it), a Nickel program like a manifest;
+  `null` for either stops builds from removing entries, and a mistake in
+  the file stops the build.
+  `rene cache prune [--max-age AGE] [--dry-run]` prunes on demand, whatever
+  the size, and lists what it removes.
 
 ## 0.1.0
 
