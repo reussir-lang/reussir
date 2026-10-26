@@ -27,8 +27,10 @@ use turbokv::{Db, DbError, DbOptions, WriteBatch};
 
 use crate::lock::{Backoff, NOTICE_AFTER};
 
+mod entry;
 mod session;
 
+pub use entry::{EntryId, Live, Published, Row};
 pub use session::{Pins, SESSIONS_DIR, Session, Tag, alive, parse_sibling};
 
 /// The ledger's directory under the cache root.

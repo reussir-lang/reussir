@@ -39,8 +39,9 @@ tokio.workspace = true
 serde.workspace = true
 # Re-render the evaluated manifest's JSON export pretty-printed for `build`'s
 # config dump, parse `cargo --message-format=json` output, and encode the
-# build-status records.
-serde_json.workspace = true
+# build-status records. `raw_value` keeps a cache entry's record as the
+# consumer wrote it, inside its ledger row.
+serde_json = { workspace = true, features = ["raw_value"] }
 # Unpack the bundled runtime source into the build directory.
 tar.workspace = true
 tracing.workspace = true
