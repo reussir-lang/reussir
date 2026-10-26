@@ -20,7 +20,8 @@
 //! Its [`key`] hashes everything the entry's contents depend on, so equal
 //! keys mean interchangeable contents, and an entry never changes once it
 //! exists. Whether a directory is an entry, and which rene wants it, is
-//! recorded in the cache's [`ledger`](crate::ledger).
+//! recorded in the cache's [`ledger`](crate::ledger). Consumers use an
+//! entry only through one protocol, [`Cache::acquire`] (see [`entry`]).
 //!
 //! Opening the cache starts this rene's [`Session`] in it, which ends when
 //! the last clone of the [`Cache`] is dropped. A cache that cannot be used
@@ -28,6 +29,7 @@
 //! system, a ledger that cannot be used) is an error that names the root
 //! and suggests [`CACHE_DIR_ENV`]: there is no weaker mode.
 
+use std::cell::Cell;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -36,8 +38,10 @@ pub use crate::ledger::CACHE_DIR_ENV;
 use crate::ledger::{Session, unusable};
 
 mod durable;
+pub mod entry;
 
 pub use durable::durable;
+pub use entry::{Acquired, Request, Slot, Staging, Usage};
 
 /// The cache's directory under the platform cache directory.
 const CACHE_NAME: &str = "rene";
@@ -67,6 +71,8 @@ pub mod kind {
 #[derive(Debug, Clone)]
 pub struct Cache {
     session: Rc<Session>,
+    /// What [`Cache::total_published`] reports, shared by the clones.
+    published: Rc<Cell<Option<u64>>>,
 }
 
 impl Cache {
@@ -88,6 +94,7 @@ impl Cache {
         let session = Session::start(&root).await?;
         Ok(Cache {
             session: Rc::new(session),
+            published: Rc::default(),
         })
     }
 
