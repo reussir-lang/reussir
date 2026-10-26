@@ -169,6 +169,12 @@
   when an earlier build used the same toolchain and target. Cargo's outputs
   stay inside the bake whatever `CARGO_TARGET_DIR` or the cargo
   configuration says.
+- The bundled `core` is compiled once per toolchain, target, and profile
+  on the machine: its interface and archive live in the per-user cache,
+  and a build directory that needs them copies them in instead of
+  compiling `core` again. A second rene compiling the same `core` waits for
+  the first and says so. A `core` a package brings by path is compiled in
+  each build directory, like any other dependency.
 
 ## 0.1.0
 

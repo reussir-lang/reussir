@@ -15,8 +15,10 @@
 //! bundle's content, and every build reads them in place. A rene upgrade
 //! unpacks a new entry, and the per-package freshness checks see the
 //! change: a dependency whose recorded sources no longer lie under its
-//! directory is rebuilt.
+//! directory is rebuilt. The bundles' compiled artifacts are shared through
+//! the cache too ([`crate::shared`]).
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::cache::{self, Acquired, Cache, Request, Usage, kind};
@@ -55,6 +57,20 @@ pub static ALL: [&Bundle; 2] = [&CORE, &STD];
 /// The bundle named `name`, if rene ships one.
 pub fn find(name: &str) -> Option<&'static Bundle> {
     ALL.iter().copied().find(|bundle| bundle.name == name)
+}
+
+/// The bundles `graph` builds from their own sources in `cache`, as name
+/// to content hash: the packages whose compiled artifacts
+/// [`crate::shared::Shared`] shares. A package of the same name brought by
+/// path is built locally like any other.
+pub fn in_graph(graph: &Graph, cache: &Cache) -> BTreeMap<String, String> {
+    let from_bundle = |bundle: &&&Bundle| {
+        let node = graph.nodes.get(bundle.name);
+        node.is_some_and(|node| node.dir == bundle.id().dir(cache.root()))
+    };
+    let bundles = ALL.iter().filter(from_bundle);
+    let hashes = bundles.map(|bundle| (bundle.name.to_owned(), bundle.content_hash()));
+    hashes.collect()
 }
 
 /// Load the dependency graph rooted at `root`, with the bundled `core`

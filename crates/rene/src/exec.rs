@@ -10,8 +10,11 @@
 //! Per node: freshness is checked at dispatch time (its upstream artifacts
 //! are final by then — a current node is skipped whole), its sources are
 //! scanned, its interface and archive compile, and [`fresh::record_dep`]
-//! writes what the next build proves currency against. Progress renders on
-//! an indicatif multi-bar (hidden when stderr is not a terminal).
+//! writes what the next build proves currency against. A bundled package
+//! is first claimed in the per-user cache ([`crate::shared`]): restored
+//! from there when any build on the machine compiled it already, and
+//! published there once compiled here. Progress renders on an indicatif
+//! multi-bar (hidden when stderr is not a terminal).
 
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
@@ -31,6 +34,7 @@ use crate::plan;
 use crate::pool::Pool;
 use crate::resolve::Graph;
 use crate::rt::RtArtifacts;
+use crate::shared::{self, Claim, Shared};
 
 /// What the pipeline runs under.
 pub struct Options<'a> {
@@ -46,6 +50,8 @@ pub struct Options<'a> {
     pub token_reuse_remarks: bool,
     /// Whether buffered rrc diagnostics retain ANSI styling.
     pub color: bool,
+    /// The bundled packages whose compiled artifacts the cache shares.
+    pub shared: &'a Shared,
 }
 
 /// Build every dependency of the graph through the pool, each dispatched
@@ -156,6 +162,37 @@ async fn build_node(
     }
     tracing::debug!(package = name, reason = %state, "building");
 
+    let plan_opts = plan::Options {
+        profile_name: opts.profile_name,
+        profile: opts.profile,
+        target: opts.target,
+        linker: opts.linker,
+        build_dir: opts.build_dir,
+        token_reuse_remarks: opts.token_reuse_remarks,
+    };
+    let commands = plan::node_commands(graph, name, &plan_opts, Some(rt));
+    // A bundled package may be compiled in the cache already, by this or
+    // another package's build: restore it rather than compile it again.
+    let deps_dir = opts.build_dir.join(opts.profile_name).join("deps");
+    let cones = plan::transitive_deps(graph);
+    let node = shared::Node {
+        name,
+        upstream: &cones[name],
+        commands: &commands,
+        deps_dir: &deps_dir,
+        target: opts.target,
+    };
+    let notify = |message: &str| progress.suspend(|| tracing::info!("{message}"));
+    let publication = match opts.shared.claim(&node, rt, &notify).await? {
+        Some(Claim::Restored(sources)) => {
+            fresh::record_dep(graph, name, &ctx, rt, &sources)?;
+            tracing::debug!(package = name, "restored from the cache");
+            return Ok(true);
+        }
+        Some(Claim::Build(publication)) => Some(publication),
+        None => None,
+    };
+
     let bar =
         progress.add(ProgressBar::new_spinner().with_message(format!("{name}: scanning sources")));
     bar.enable_steady_tick(Duration::from_millis(120));
@@ -170,15 +207,7 @@ async fn build_node(
         .await?;
     sources.sort_by(|a, b| a.path.cmp(&b.path));
 
-    let plan_opts = plan::Options {
-        profile_name: opts.profile_name,
-        profile: opts.profile,
-        target: opts.target,
-        linker: opts.linker,
-        build_dir: opts.build_dir,
-        token_reuse_remarks: opts.token_reuse_remarks,
-    };
-    for command in plan::node_commands(graph, name, &plan_opts, Some(rt)) {
+    for command in commands {
         bar.set_message(format!("{name}: {}", command.emit));
         let invocation = compile::Invocation::from_planned(command, &rt.rustc, opts.color);
         let completed = pool.run(move || invocation.run()).await?;
@@ -187,6 +216,10 @@ async fn build_node(
         progress.suspend(|| completed.report())?;
     }
     fresh::record_dep(graph, name, &ctx, rt, &sources)?;
+    if let Some(publication) = publication {
+        bar.set_message(format!("{name}: sharing through the cache"));
+        publication.publish(&sources).await?;
+    }
     bar.finish_and_clear();
     progress.remove(&bar);
     tracing::debug!(package = name, "built");

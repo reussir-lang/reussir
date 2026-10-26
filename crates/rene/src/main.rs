@@ -30,6 +30,7 @@ use palc::Parser;
 
 use rene::cache::Cache;
 use rene::db::{self, BuildDir, CleanOutcome};
+use rene::shared::Shared;
 use rene::{bundled, compile, deps, exec, fresh, manifest, new, plan, pool, resolve, rt};
 
 /// The default build directory name, next to the manifest.
@@ -433,6 +434,9 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // One pool for the whole build: `-j` admission over the main event
     // loop, which monitors every child process.
     let pool = pool::Pool::new(args.jobs);
+    // The bundled packages are the same source in every build: their
+    // compiled artifacts are shared through the cache.
+    let shared = Shared::new(cache.clone(), bundled::in_graph(&graph, &cache));
 
     // The dependency pipeline: every node of the graph but the root, each
     // dispatched the moment its last dependency finishes, each freshness-
@@ -450,6 +454,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
             build_dir: &root,
             token_reuse_remarks: args.token_reuse_remarks,
             color,
+            shared: &shared,
         },
         &pool,
         &progress,

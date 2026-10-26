@@ -219,7 +219,9 @@ impl Fakes {
         // and the rustc it pinned, fabricates the artifacts in the target
         // directory (`--target-dir`, else `CARGO_TARGET_DIR`, else `target`
         // under the cwd, which is the unpacked source dir), and reports them
-        // the way `--message-format=json` does.
+        // the way `--message-format=json` does. With `FAKE_CARGO_GATE` set,
+        // it says it started (`<gate>.started`) and waits up to a minute for
+        // the gate file.
         let cargo = script(
             "fake-cargo",
             "echo run >> \"$(dirname \"$0\")/cargo-runs\"\n\
@@ -233,6 +235,10 @@ impl Fakes {
                prev=\"$arg\"\n\
              done\n\
              [ -n \"$target\" ] || exit 2\n\
+             if [ -n \"$FAKE_CARGO_GATE\" ]; then\n\
+               touch \"$FAKE_CARGO_GATE.started\"; i=0\n\
+               while [ ! -e \"$FAKE_CARGO_GATE\" ] && [ \"$i\" -lt 6000 ]; do sleep 0.01; i=$((i + 1)); done\n\
+             fi\n\
              mkdir -p \"$dir/$target/release/deps\" \"$dir/release/deps\"\n\
              proc_macro=\"$dir/release/deps/libnum_enum_derive-fake.so\"\n\
              rlib=\"$dir/$target/release/deps/libreussir_rt-0000.rlib\"\n\
@@ -355,6 +361,12 @@ printf ']}\n'
             .into_iter()
             .filter(|l| !l.contains("--package-name core"))
             .collect()
+    }
+
+    /// How many compiles the bundled `core` took: its interface and its
+    /// archive count one each.
+    fn core_compiles(&self) -> usize {
+        self.compiles().len() - self.package_compiles().len()
     }
 
     /// The runtime bakes in the cache, one entry directory each.
@@ -1054,6 +1066,235 @@ fn an_unusable_cache_fails_the_build() {
     );
     assert!(err.contains("RENE_CACHE_DIR"), "{err}");
     assert_eq!(fakes.runs("cargo") + fakes.compiles().len(), 0);
+}
+
+/// Write a package `name` under `dir` that declares one executable, so that
+/// a build runs the dependency pipeline, which compiles `core`.
+#[cfg(unix)]
+fn executable_package(dir: &Path, name: &str) -> PathBuf {
+    let manifest = package(dir, name);
+    let text = format!(
+        "{{ package = {{ name = \"{name}\", version = \"0.1.0\" }}, \
+         targets.{name}.kind = 'executable }}\n"
+    );
+    std::fs::write(&manifest, text).unwrap();
+    manifest
+}
+
+/// `rene build` of a fresh executable package `name` under `tmp`, wired to
+/// the fakes, with stderr piped.
+#[cfg(unix)]
+fn build_command(fakes: &Fakes, tmp: &Path, name: &str) -> Command {
+    let pkg = tmp.join(name);
+    let mut cmd = fakes.command(&["build", "--manifest-path"]);
+    cmd.arg(executable_package(&pkg, name))
+        .arg("--build-dir")
+        .arg(pkg.join("reussir-build"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    cmd
+}
+
+#[cfg(unix)]
+fn block_on<T>(fut: impl Future<Output = T>) -> T {
+    compio::runtime::Runtime::new().unwrap().block_on(fut)
+}
+
+/// The rows of the ledger of the cache at `root` whose keys start with
+/// `prefix`, read without reaping anything.
+#[cfg(unix)]
+fn ledger_rows(root: &Path, prefix: &str) -> Vec<(String, Vec<u8>)> {
+    let ledger = rene::ledger::Ledger::new(root).unwrap();
+    block_on(ledger.transact(|txn| txn.scan(prefix))).unwrap()
+}
+
+/// The bytes of the files under `dir`.
+#[cfg(unix)]
+fn tree_size(dir: &Path) -> u64 {
+    let entries = std::fs::read_dir(dir).unwrap().map(|entry| entry.unwrap());
+    let size = |entry: std::fs::DirEntry| match entry.metadata().unwrap() {
+        meta if meta.is_dir() => tree_size(&entry.path()),
+        meta => meta.len(),
+    };
+    entries.map(size).sum()
+}
+
+/// Builds of two packages in two build directories compile the bundled
+/// core once, through the cache, and each build directory gets its own
+/// copy; another profile is another entry. Builds that restore core at the
+/// same time wait for nobody long enough to say so.
+#[cfg(unix)]
+#[test]
+fn packages_share_compiled_core_through_the_cache() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let build = |name: &str, profile: &str| {
+        let pkg = tmp.join(name);
+        let (manifest, root) = (executable_package(&pkg, name), pkg.join("reussir-build"));
+        let out = fakes.rene(&["build", "--profile", profile], &manifest, &root);
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        root.join(profile).join("deps")
+    };
+    let first = build("first", "dev");
+
+    // One row per entry of every kind, sized as its directory. The build
+    // unpinned the core it copied out; a later session reaps the rest.
+    let mut entries = Vec::new();
+    for kind in rene::cache::kind::ALL {
+        for dir in cache_entries(&fakes.cache.join(kind)) {
+            entries.push(format!("{kind}/{}", dir.file_name().unwrap().display()));
+        }
+    }
+    entries.sort();
+    assert_eq!(entries.len(), 3, "{entries:#?}");
+    let rows = ledger_rows(&fakes.cache, "entry/");
+    let names: Vec<&str> = rows.iter().map(|(key, _)| &key["entry/".len()..]).collect();
+    assert_eq!(names, entries);
+    for (name, (_, raw)) in names.iter().zip(&rows) {
+        let row: serde_json::Value = serde_json::from_slice(raw).unwrap();
+        assert_eq!(row["size"], tree_size(&fakes.cache.join(name)), "{name}");
+    }
+    let pins = ledger_rows(&fakes.cache, "pin/");
+    let pinned: Vec<&str> = pins
+        .iter()
+        .map(|(key, _)| key.splitn(3, '/').nth(2).unwrap())
+        .collect();
+    let read_in_place = names.iter().filter(|name| !name.starts_with("deps/"));
+    assert_eq!(pinned, read_in_place.copied().collect::<Vec<_>>());
+    let session = block_on(rene::ledger::Session::start(&fakes.cache)).unwrap();
+    block_on(session.transact(|_, _| Ok(()))).unwrap();
+    drop(session);
+    assert_eq!(ledger_rows(&fakes.cache, "pin/"), []);
+
+    let second = build("second", "dev");
+    // Interface and archive, once for both packages, and a copy of each in
+    // each build directory, where the restored core is then current.
+    assert_eq!(fakes.core_compiles(), 2, "{:#?}", fakes.compiles());
+    let manifest = tmp.join("second/rene.ncl");
+    let again = fakes.rene(
+        &["-v", "build"],
+        &manifest,
+        &tmp.join("second/reussir-build"),
+    );
+    assert!(
+        stderr(&again).contains("built=0 fresh=1"),
+        "{}",
+        stderr(&again)
+    );
+    for file in [first.join("core.rri"), second.join("libcore.a")] {
+        assert!(
+            std::fs::symlink_metadata(&file).unwrap().is_file(),
+            "{}",
+            file.display()
+        );
+    }
+    assert_eq!(cache_entries(&fakes.cache.join("deps")).len(), 1);
+    build("first", "release");
+    assert_eq!(fakes.core_compiles(), 4);
+    assert_eq!(cache_entries(&fakes.cache.join("deps")).len(), 2);
+
+    let restores =
+        ["third", "fourth"].map(|name| build_command(&fakes, &tmp, name).spawn().unwrap());
+    for restore in restores {
+        let out = restore.wait_with_output().unwrap();
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        assert!(!stderr(&out).contains("waiting for"), "{}", stderr(&out));
+    }
+    assert_eq!(fakes.core_compiles(), 4);
+    assert_eq!(fakes.runs("cargo"), 1);
+}
+
+/// Two renes needing the same bake and the same core at once run cargo once
+/// and compile core once: the second waits for the first's bake, says so
+/// once, and then shares the bake and core through the cache.
+#[cfg(unix)]
+#[test]
+fn concurrent_builds_bake_once_and_compile_core_once() {
+    use std::io::BufRead;
+    use std::time::Duration;
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    let gate = tmp.join("gate");
+    let spawn = |name| {
+        let mut build = build_command(&fakes, &tmp, name);
+        build.env("FAKE_CARGO_GATE", &gate).spawn().unwrap()
+    };
+    let first = spawn("first");
+    let started = tmp.join("gate.started");
+    for _ in 0..3000 {
+        if started.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(started.exists(), "the first bake never started");
+
+    // The first bake goes on once the second says it waits for it.
+    let mut second = spawn("second");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let second_stderr = second.stderr.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let lines = std::io::BufReader::new(second_stderr).lines();
+        let lines = lines.map(|line| line.unwrap());
+        let lines = lines.inspect(|line| {
+            if line.contains("waiting for") {
+                let _ = tx.send(());
+            }
+        });
+        lines.collect::<Vec<_>>()
+    });
+    rx.recv_timeout(Duration::from_secs(60))
+        .expect("the second build never waited for the first");
+    std::fs::write(&gate, "").unwrap();
+
+    let first = first.wait_with_output().unwrap();
+    assert!(first.status.success(), "stderr: {}", stderr(&first));
+    assert!(
+        !stderr(&first).contains("waiting for"),
+        "{}",
+        stderr(&first)
+    );
+    assert!(second.wait().unwrap().success());
+    let lines = reader.join().unwrap();
+    let waits = |what: &str| lines.iter().filter(|line| line.contains(what)).count();
+    let bake = waits("waiting for another rene to finish baking reussir-rt");
+    assert_eq!(bake, 1, "{lines:#?}");
+    // Whether the second also waits for core, and says so, depends on how
+    // long the first takes to compile it; core is compiled once either way.
+    let core = waits("waiting for another rene to finish compiling the bundled core");
+    assert!(core <= 1, "{lines:#?}");
+    assert_eq!(waits("waiting for"), bake + core, "{lines:#?}");
+    assert_eq!(fakes.runs("cargo"), 1);
+    assert_eq!(fakes.core_compiles(), 2, "{:#?}", fakes.compiles());
+}
+
+/// A package that brings its own `core` by path builds it in each build
+/// directory, like any other dependency: only the bundled core is shared.
+#[cfg(unix)]
+#[test]
+fn a_core_brought_by_path_is_built_locally() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let fakes = Fakes::new(&tmp);
+    package(&tmp.join("core"), "core");
+    let pkg = tmp.join("app");
+    let manifest = executable_package(&pkg, "app");
+    std::fs::write(
+        &manifest,
+        "{ package = { name = \"app\", version = \"0.1.0\" }, \
+         dependencies.core.path = \"../core\", targets.app.kind = 'executable }\n",
+    )
+    .unwrap();
+    for build_dir in ["one", "two"] {
+        let out = fakes.rene(&["build"], &manifest, &pkg.join(build_dir));
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+    }
+    // Interface and archive, in each build directory.
+    assert_eq!(fakes.core_compiles(), 4, "{:#?}", fakes.compiles());
+    assert!(cache_entries(&fakes.cache.join("deps")).is_empty());
 }
 
 /// (Re)write the scratch package's manifest with targets of every kind and a
