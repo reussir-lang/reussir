@@ -28,20 +28,26 @@
 //! safely (a root that cannot be created or written, one on a network file
 //! system, a ledger that cannot be used) is an error that names the root
 //! and suggests [`CACHE_DIR_ENV`]: there is no weaker mode.
+//!
+//! [`Cache::prune`] removes the entries no build will miss, and repairs and
+//! [`sweep`]s what crashed renes left.
 
 use std::cell::Cell;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Duration;
 
 pub use crate::ledger::CACHE_DIR_ENV;
-use crate::ledger::{Session, unusable};
+use crate::ledger::{Pruned, Session, unusable};
 
 mod durable;
 pub mod entry;
+mod sweep;
 
 pub use durable::durable;
 pub use entry::{Acquired, Request, Slot, Staging, Usage};
+pub use sweep::{Swept, sweep};
 
 /// The cache's directory under the platform cache directory.
 const CACHE_NAME: &str = "rene";
@@ -112,6 +118,19 @@ impl Cache {
     /// This rene's session in the cache.
     pub fn session(&self) -> &Session {
         &self.session
+    }
+
+    /// Prune the entries of every [`kind`] ([`Session::prune`]): with
+    /// `max_age`, remove those unused for that long that no running rene
+    /// uses; without, only repair. Then, unless `dry_run`, [`sweep`] what
+    /// ended sessions left.
+    pub async fn prune(&self, max_age: Option<Duration>, dry_run: bool) -> Result<Pruned, String> {
+        let pruned = self.session.prune(kind::ALL, max_age, dry_run).await?;
+        if !dry_run {
+            let Swept { dirs, locks } = sweep(self.root(), kind::ALL);
+            tracing::debug!(dirs, locks, "swept the cache");
+        }
+        Ok(pruned)
     }
 }
 
