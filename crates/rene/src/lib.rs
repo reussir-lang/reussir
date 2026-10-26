@@ -11,11 +11,13 @@
 //! resolve over local paths ([`resolve`]), and `rene new` scaffolds a fresh
 //! package ([`new`]). What every build has in common, such as the sources of
 //! the libraries bundled inside rene ([`bundled`]) and their compiled
-//! artifacts ([`shared`]), lives once per user in the [`cache`].
+//! artifacts ([`shared`]), lives once per user in the [`cache`]. The user's
+//! own settings come from a per-user [`config`] file.
 
 pub mod bundled;
 pub mod cache;
 pub mod compile;
+pub mod config;
 pub mod db;
 pub mod deps;
 pub mod exec;
@@ -24,6 +26,7 @@ pub mod ledger;
 pub mod lock;
 pub mod manifest;
 pub mod new;
+pub mod nickel;
 pub mod plan;
 pub mod pool;
 pub mod resolve;

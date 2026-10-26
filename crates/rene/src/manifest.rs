@@ -10,7 +10,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use nickel_lang::{Context, ErrorFormat};
 use serde::Deserialize;
 
 /// The manifest file name a package directory is identified by.
@@ -306,25 +305,9 @@ pub fn load(path: &Path) -> Result<Loaded, ManifestError> {
         error,
     })?;
 
-    // The source name is the real path, so `import` resolves relative to the
-    // manifest and diagnostics point at it; the parent directory is also an
-    // explicit import root as a fallback.
-    let mut ctx = Context::new().with_source_name(path.display().to_string());
-    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        ctx = ctx.with_added_import_paths(vec![dir.as_os_str().to_owned()]);
-    }
-
-    // `for_export` honors `not_exported`, letting a manifest keep private
-    // helper fields out of the configuration it presents.
-    let expr = ctx
-        .eval_deep_for_export(&source)
-        .map_err(|e| ManifestError::Eval(render(&e)))?;
-    let json = ctx
-        .expr_to_json(&expr)
-        .map_err(|e| ManifestError::Eval(render(&e)))?;
-    let manifest: Manifest = expr
-        .to_serde()
-        .map_err(|e| ManifestError::Schema(e.to_string()))?;
+    let evaluated = crate::nickel::evaluate(path, &source).map_err(ManifestError::Eval)?;
+    let json = evaluated.to_json().map_err(ManifestError::Eval)?;
+    let manifest: Manifest = evaluated.to_serde().map_err(ManifestError::Schema)?;
     for (name, dep) in &manifest.dependencies {
         let problem = match (&dep.path, dep.bundled) {
             (Some(_), true) => "sets both `path` and `bundled`; give one source".to_owned(),
@@ -354,16 +337,6 @@ pub fn load(path: &Path) -> Result<Loaded, ManifestError> {
         manifest,
         dump,
     })
-}
-
-/// Render a Nickel error's diagnostics as plain text (no ANSI: the result is
-/// embedded in a [`ManifestError`] and may end up in logs or test output).
-fn render(error: &nickel_lang::Error) -> String {
-    let mut out = Vec::new();
-    match error.format(&mut out, ErrorFormat::Text) {
-        Ok(()) => String::from_utf8_lossy(&out).trim_end().to_owned(),
-        Err(e) => format!("(diagnostics unavailable: {e})"),
-    }
 }
 
 #[cfg(test)]
