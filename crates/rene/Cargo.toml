@@ -14,8 +14,7 @@ name = "rene"
 path = "src/main.rs"
 
 [dependencies]
-# Content hash of the bundled runtime source, the staleness key for the baked
-# artifacts recorded in the build-status database.
+# Content hashes of the bundles, and the keys of the per-user cache's entries.
 blake3.workspace = true
 # The platform cache directory (`$XDG_CACHE_HOME` or `~/.cache` on Linux,
 # `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on Windows) holding the
@@ -46,7 +45,7 @@ serde.workspace = true
 # build-status records. `raw_value` keeps a cache entry's record as the
 # consumer wrote it, inside its ledger row.
 serde_json = { workspace = true, features = ["raw_value"] }
-# Unpack the bundled runtime source into the build directory.
+# Unpack the bundled sources into the per-user cache.
 tar.workspace = true
 tracing.workspace = true
 # Install a subscriber so `-v`/`RUST_LOG` surface events (to stderr, never

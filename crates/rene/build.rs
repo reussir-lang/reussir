@@ -1,6 +1,6 @@
 //! Bundles the `reussir-rt` crate source into the `rene` binary as a
-//! zstd-compressed tar, so `rene build` can materialize and bake the runtime
-//! inside any project's build directory with the user's own Rust toolchain
+//! zstd-compressed tar, so `rene build` can bake the runtime in the per-user
+//! cache with the user's own Rust toolchain
 //! (docs/design/system-rust-runtime.md). Shipping *source* is what makes the
 //! bundle cross-platform: the produced rlib/staticlib are version-locked to
 //! the rustc that builds them, so they must be baked on the user's machine,

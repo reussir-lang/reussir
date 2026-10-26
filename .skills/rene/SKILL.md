@@ -62,6 +62,9 @@ lock (a second rene waits and says so), recorded in a ledger inside the
 cache (docs/design/cache-ledger.md), and safe to delete while no rene runs.
 `rene clean` does not touch the cache.
 
+The `reussir-rt` bake lives in the cache too, one per toolchain (the one the
+package's directory selects) and target.
+
 `rene` shells out to `rrc`, `cargo`, and `rustc`; set `REUSSIR_RRC`,
 `REUSSIR_CARGO`, or `REUSSIR_RUSTC` to pin specific binaries (otherwise
 `rrc` is found through `PATH`).

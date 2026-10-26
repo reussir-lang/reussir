@@ -163,6 +163,12 @@
   `rust-toolchain.toml` decides, and then runs that toolchain's `rustc` and
   (unless one is configured) its `cargo` by path; `rrc` gets the same
   `rustc`.
+- The `reussir-rt` bake lives in the per-user cache too, one per toolchain,
+  target, allocator backend, and rustflags environment, which every build
+  on the machine shares: a new project's first build skips the cargo bake
+  when an earlier build used the same toolchain and target. Cargo's outputs
+  stay inside the bake whatever `CARGO_TARGET_DIR` or the cargo
+  configuration says.
 
 ## 0.1.0
 

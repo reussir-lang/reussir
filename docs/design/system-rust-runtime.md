@@ -159,6 +159,13 @@ Everything downstream reads the manifest:
   emits `-L <cache> -lreussir_rt <platform sys libs>`. Tests and build
   systems consume this instead of hardcoding `%library_path`.
 
+**Status in `rene`.** `rene` bakes the runtime in its per-user cache, as
+`rt/<key>`, keyed by the bundle (with the rcgmp archive), the target, the
+toolchain §3's status resolves, the cargo binary, the allocator backend,
+and the rustflags environment; every build on the machine shares the bake.
+The cache, its ledger, and the protocol every consumer uses an entry
+through are designed in `cache-ledger.md`.
+
 ### 5. Runtime linkage: staticlib by default
 
 Switch the advertised link artifact from the Rust *dylib* to the

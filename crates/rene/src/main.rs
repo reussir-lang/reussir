@@ -408,6 +408,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
         .or(profile.default_target_triple.as_deref());
     let artifacts = rt::prepare(
         &dir,
+        &cache,
         &graph.nodes[&graph.root].dir,
         requested_target,
         bake_linker.as_deref(),

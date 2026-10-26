@@ -216,25 +216,27 @@ impl Fakes {
         );
         // Counts invocations, records the linker rene pinned through cargo's
         // target-specific environment (keyed by the fake host triple above)
-        // and the rustc it pinned, fabricates the artifacts, and reports them
-        // the way `--message-format=json` does. Runs with cwd = the unpacked
-        // source dir.
+        // and the rustc it pinned, fabricates the artifacts in the target
+        // directory (`--target-dir`, else `CARGO_TARGET_DIR`, else `target`
+        // under the cwd, which is the unpacked source dir), and reports them
+        // the way `--message-format=json` does.
         let cargo = script(
             "fake-cargo",
             "echo run >> \"$(dirname \"$0\")/cargo-runs\"\n\
              echo \"$*\" >> \"$(dirname \"$0\")/cargo-args\"\n\
              echo \"linker=$CARGO_TARGET_X86_64_UNKNOWN_FAKE_LINKER\" >> \"$(dirname \"$0\")/cargo-env\"\n\
              echo \"$RUSTC\" >> \"$(dirname \"$0\")/cargo-rustc\"\n\
-             target=\"\"; prev=\"\"\n\
+             target=\"\"; dir=\"${CARGO_TARGET_DIR:-$PWD/target}\"; prev=\"\"\n\
              for arg in \"$@\"; do\n\
                [ \"$prev\" = \"--target\" ] && target=\"$arg\"\n\
+               [ \"$prev\" = \"--target-dir\" ] && dir=\"$arg\"\n\
                prev=\"$arg\"\n\
              done\n\
              [ -n \"$target\" ] || exit 2\n\
-             mkdir -p \"target/$target/release/deps\" target/release/deps\n\
-             proc_macro=\"$PWD/target/release/deps/libnum_enum_derive-fake.so\"\n\
-             rlib=\"$PWD/target/$target/release/deps/libreussir_rt-0000.rlib\"\n\
-             staticlib=\"$PWD/target/$target/release/libreussir_rt.a\"\n\
+             mkdir -p \"$dir/$target/release/deps\" \"$dir/release/deps\"\n\
+             proc_macro=\"$dir/release/deps/libnum_enum_derive-fake.so\"\n\
+             rlib=\"$dir/$target/release/deps/libreussir_rt-0000.rlib\"\n\
+             staticlib=\"$dir/$target/release/libreussir_rt.a\"\n\
              touch \"$proc_macro\" \"$rlib\" \"$staticlib\"\n\
              printf '{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"num_enum_derive\"},\"filenames\":[\"%s\"]}\\n' \"$proc_macro\"\n\
              printf '{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"reussir-rt\"},\"filenames\":[\"%s\",\"%s\"]}\\n' \"$rlib\" \"$staticlib\"\n"
@@ -355,6 +357,11 @@ printf ']}\n'
             .collect()
     }
 
+    /// The runtime bakes in the cache, one entry directory each.
+    fn rt_entries(&self) -> Vec<PathBuf> {
+        cache_entries(&self.cache.join("rt"))
+    }
+
     /// The cargo bake invocations, one argv line each.
     fn cargo_invocations(&self) -> Vec<String> {
         match std::fs::read_to_string(self.dir.join("cargo-args")) {
@@ -452,8 +459,17 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     let root = tmp.join("reussir-build");
     let manifest = package(&tmp, "demo");
     let fakes = Fakes::new(&tmp);
+    // Cargo's outputs stay inside the bake whatever `CARGO_TARGET_DIR` says:
+    // a target directory bakes share would let one overwrite another's
+    // artifacts, and only the bake's entry is published.
+    let shared = tmp.join("shared-target");
 
-    let out = fakes.rene(&["build"], &manifest, &root);
+    let out = run(fakes
+        .command(&["build", "--manifest-path"])
+        .arg(&manifest)
+        .arg("--build-dir")
+        .arg(&root)
+        .env("CARGO_TARGET_DIR", &shared));
     assert!(out.status.success(), "stderr: {}", stderr(&out));
 
     // Stdout is exactly the `--polyffi-libdir` directories: the detected
@@ -461,8 +477,11 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
     let target = "x86_64-unknown-fake";
-    let target_deps = root.join(format!("{target}/reussir-rt/target/{target}/release/deps"));
-    let host_deps = root.join(format!("{target}/reussir-rt/target/release/deps"));
+    // The bake lives in the cache, cargo's target directory inside it.
+    let bakes = fakes.rt_entries();
+    assert_eq!(bakes.len(), 1, "{bakes:#?}");
+    let target_deps = bakes[0].join(format!("target/{target}/release/deps"));
+    let host_deps = bakes[0].join("target/release/deps");
     assert_eq!(
         lines,
         [
@@ -472,14 +491,13 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
         ]
     );
 
-    // The bundle really was unpacked, and the bake recorded.
-    assert!(root.join(target).join("reussir-rt/Cargo.toml").is_file());
+    // The bundle really was unpacked in the bake, and the bake recorded in
+    // the build directory, which holds nothing of the bake itself.
+    assert!(bakes[0].join("src/reussir-rt/Cargo.toml").is_file());
+    assert!(!root.join(target).exists() && !shared.exists());
+    let staged = format!("--target-dir {}.stage-", bakes[0].display());
+    assert!(fakes.cargo_invocations()[0].contains(&staged));
     let dir = BuildDir::open(&root).unwrap();
-    assert!(
-        dir.status(&tables::rt_source_hash_key(target))
-            .unwrap()
-            .is_some()
-    );
     assert!(
         dir.status(&tables::rt_artifacts_key(target))
             .unwrap()
@@ -496,6 +514,12 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     // The fake's sysroot has no `bin/rustc`, so cargo ran the selection.
     let pinned = std::fs::read_to_string(tmp.join("cargo-rustc")).unwrap();
     assert_eq!(pinned.trim(), fakes.rustc.display().to_string());
+    // Another package, in another build directory, shares the bake.
+    let other = tmp.join("other");
+    let out = fakes.rene(&["build"], &package(&other, "other"), &other.join("build"));
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), stdout);
+    assert_eq!(fakes.runs("cargo"), 1, "another package baked again");
 
     // A compiler at a different explicit path is a different toolchain
     // selection even when it reports the same version. Do not restore the
@@ -516,6 +540,7 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     let out = with_alternate();
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(fakes.runs("cargo"), 2, "the new rustc path was not cached");
+    assert_eq!(fakes.rt_entries().len(), 2);
 }
 
 /// rustup picks a toolchain by the directory its proxy runs in, which need
@@ -660,8 +685,13 @@ fn build_resolves_the_target_and_keeps_each_runtime_bake() {
         root.join("dev/demo").display().to_string()
     );
 
+    // One cache entry per target.
+    let bakes = fakes.rt_entries();
+    assert_eq!(bakes.len(), 2, "{bakes:#?}");
+    for bake in &bakes {
+        assert!(bake.join("src/reussir-rt/Cargo.toml").is_file());
+    }
     for target in ["wasm32-unknown-unknown", override_target] {
-        assert!(root.join(target).join("reussir-rt/Cargo.toml").is_file());
         let dir = BuildDir::open(&root).unwrap();
         assert!(
             dir.status(&tables::rt_artifacts_key(target))
@@ -669,8 +699,14 @@ fn build_resolves_the_target_and_keeps_each_runtime_bake() {
                 .is_some()
         );
     }
+    // Each bake also pins its target directory, at the end.
+    let invocations: Vec<String> = fakes
+        .cargo_invocations()
+        .iter()
+        .map(|line| line.split(" --target-dir ").next().unwrap().to_owned())
+        .collect();
     assert_eq!(
-        fakes.cargo_invocations(),
+        invocations,
         [
             "build --release --target wasm32-unknown-unknown --no-default-features --message-format=json-render-diagnostics",
             "build --release --target aarch64-unknown-linux-gnu --message-format=json-render-diagnostics",
@@ -1460,7 +1496,8 @@ fn build_bakes_the_runtime_with_the_host_toolchain() {
         .arg(demo_manifest())
         .arg("--build-dir")
         .arg(&root)
-        .env("REUSSIR_RRC", &fakes.rrc));
+        .env("REUSSIR_RRC", &fakes.rrc)
+        .env(rene::cache::CACHE_DIR_ENV, &fakes.cache));
     assert!(out.status.success(), "stderr: {}", stderr(&out));
 
     let stdout = String::from_utf8(out.stdout).unwrap();
@@ -1487,6 +1524,31 @@ fn build_bakes_the_runtime_with_the_host_toolchain() {
         "no libreussir_rt in {:#?}",
         &libdirs[1..]
     );
+
+    // The bake was built in a staging directory and renamed into the cache,
+    // where a program using the runtime still links against it, as rrc
+    // links polyffi code, with the toolchain the package selects.
+    let bakes = cache_entries(&fakes.cache.join("rt"));
+    assert_eq!(bakes.len(), 1, "{bakes:#?}");
+    assert!(libdirs[1..].iter().all(|dir| dir.starts_with(&bakes[0])));
+    let program = tmp.path().join("uses_rt.rs");
+    std::fs::write(&program, "extern crate reussir_rt;\nfn main() {}\n").unwrap();
+    let mut rustc = Command::new("rustc");
+    rustc.current_dir(demo_manifest().parent().unwrap());
+    for dir in &libdirs[1..] {
+        rustc.arg("-L").arg(format!("dependency={}", dir.display()));
+        // The rlib carries stub metadata; the full metadata is its `.rmeta`.
+        for file in ["libreussir_rt.rlib", "libreussir_rt.rmeta"] {
+            if dir.join(file).is_file() {
+                rustc.arg(format!("--extern=reussir_rt={}", dir.join(file).display()));
+            }
+        }
+    }
+    let linked = run(rustc
+        .args(["--edition", "2024", "-o"])
+        .arg(tmp.path().join("uses_rt"))
+        .arg(&program));
+    assert!(linked.status.success(), "stderr: {}", stderr(&linked));
 }
 
 /// The cross-package pipeline under the fake toolchain: the dependency's
