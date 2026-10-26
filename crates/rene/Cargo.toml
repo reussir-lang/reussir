@@ -17,6 +17,10 @@ path = "src/main.rs"
 # Content hash of the bundled runtime source, the staleness key for the baked
 # artifacts recorded in the build-status database.
 blake3.workspace = true
+# The platform cache directory (`$XDG_CACHE_HOME` or `~/.cache` on Linux,
+# `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on Windows) holding the
+# per-user cache of what every build has in common.
+dirs.workspace = true
 # The async runtime: completion-based (io_uring/IOCP), driving the child
 # processes (rrc, cargo, rustc) and the source-digest reads. 0.18 pinned:
 # 0.19's executor needs a `cfg_select!` newer than the pinned toolchain.
@@ -71,7 +75,8 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 sailfish = "0.9"
 
 [target.'cfg(unix)'.dependencies]
-# `statfs`, to refuse a cache on a network file system (`lock`).
+# `statfs`, to refuse a cache on a network file system (`lock`), and on
+# macOS a plain `fsync` and one `F_FULLFSYNC` per staged tree (`cache`).
 libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
