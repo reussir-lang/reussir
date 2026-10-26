@@ -15,7 +15,8 @@
 //! stops after the bake and prints the library directories to pass to
 //! `rrc --polyffi-libdir` by hand. `rene inspect` reports the source graph as
 //! JSON; `rene clean` deletes the build directory unless another instance
-//! holds it.
+//! holds it. What every build has in common lives in the per-user cache (see
+//! `rene::cache`), which `clean` leaves alone.
 //!
 //! Progress goes to stderr via `tracing`; stdout carries only the final
 //! machine-readable listing. Exit 0 on success, 1 on a failed command, 2 on
@@ -27,8 +28,9 @@ use std::process::ExitCode;
 
 use palc::Parser;
 
+use rene::cache::Cache;
 use rene::db::{self, BuildDir, CleanOutcome};
-use rene::{compile, core_src, deps, exec, fresh, manifest, new, plan, pool, resolve, rt};
+use rene::{bundled, compile, deps, exec, fresh, manifest, new, plan, pool, resolve, rt};
 
 /// The default build directory name, next to the manifest.
 const BUILD_DIR: &str = "reussir-build";
@@ -367,8 +369,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     let profile = manifest::resolve_profile(&loaded.manifest, &args.profile)?;
     let root = resolve_build_dir(location)?;
     // Builds sharing a directory queue on its database lock. Take it before
-    // materializing bundled sources so concurrent invocations serialize all
-    // writes, then hold it (`dir`) for the rest of the build.
+    // anything is written, then hold it (`dir`) for the rest of the build.
     let dir = BuildDir::open_wait(&root)
         .await
         .map_err(|e| e.to_string())?;
@@ -380,9 +381,11 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // transitive path graph and let pubgrub verify the constraints hold
     // together (each package exists in exactly one version today, so this is
     // a feasibility check; see `resolve`). A dependency-less package is a
-    // one-node graph through the same machinery.
-    let core_dir = core_src::unpack(&root)?;
-    let graph = resolve::load_graph_with(&loaded, Some(&core_dir))?;
+    // one-node graph through the same machinery. The bundled packages it
+    // uses come from the per-user cache, where this build's session pins
+    // what it reads.
+    let cache = Cache::open_user().await?;
+    let graph = bundled::load_graph(&cache, &loaded).await?;
     if graph.nodes.len() > 1 {
         let solution = resolve::check(&graph)?;
         for (name, version) in &solution.pinned {
@@ -541,8 +544,8 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), String> {
     // The dependency-graph sections, on demand. One load serves all three;
     // `--solved` additionally requires the feasibility check to hold.
     if args.solved || args.graph || args.commands {
-        let core_dir = core_src::unpack(&root)?;
-        let graph = resolve::load_graph_with(&loaded, Some(&core_dir))?;
+        let cache = Cache::open_user().await?;
+        let graph = bundled::load_graph(&cache, &loaded).await?;
         if args.solved {
             let solution = resolve::check(&graph)?;
             report["resolution"] = solution

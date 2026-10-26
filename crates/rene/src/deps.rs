@@ -333,7 +333,7 @@ async fn scan_root(root: ScanRoot, package: &str, color: bool) -> Result<Vec<Sou
         .arg(if color { "always" } else { "never" });
     // The bundled libraries carry reserved names; scanning them needs the
     // same lift their compile commands get.
-    if crate::resolve::BUILTIN_PACKAGES.contains(&package) {
+    if crate::bundled::find(package).is_some() {
         cmd.arg("--builtin");
     }
     let out = cmd

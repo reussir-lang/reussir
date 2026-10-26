@@ -158,6 +158,13 @@ config.substitutions.append((r'%reussir-llvm-opt',
 config.substitutions.append((r'%cc', append_flags(config.cc_path, config.cc_runtime_flags)))
 
 config.substitutions.append((r'%FileCheck', sh_path(config.filecheck_path)))
+# rene keeps what every build has in common in a per-user cache
+# (`RENE_CACHE_DIR`, by default the user's cache directory). Point every
+# test at one cache under the test tree: it stays out of the developer's
+# home, and the suites share one copy, which also exercises the cache's
+# locks under lit's parallelism. An explicit RENE_CACHE_DIR wins.
+config.environment['RENE_CACHE_DIR'] = os.environ.get(
+    'RENE_CACHE_DIR', os.path.join(config.test_exec_root, 'rene-cache'))
 # The std integration executables are targets of one rene package. All of
 # their tests deliberately share one build directory; rene's database lock
 # serializes concurrent writers while preserving the compiled target cache.

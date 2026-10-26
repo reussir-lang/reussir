@@ -52,6 +52,12 @@ fn write_manifest(dir: &Path, name: &str, version: &str) -> PathBuf {
 fn rene(args: &[&str]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_rene"));
     cmd.args(args);
+    // Keep the per-user cache out of the user's home. Tests that look into
+    // the cache use their own ([`Fakes::cache`]).
+    cmd.env(
+        rene::cache::CACHE_DIR_ENV,
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join("rene-cache"),
+    );
     cmd
 }
 
@@ -180,6 +186,8 @@ struct Fakes {
     rustc: PathBuf,
     /// The libdir the fake `rustc` reports as its target libdir.
     libdir: PathBuf,
+    /// The per-user cache [`Fakes::command`] runs against.
+    cache: PathBuf,
 }
 
 #[cfg(unix)]
@@ -317,6 +325,7 @@ printf ']}\n'
             cargo,
             rustc,
             libdir,
+            cache: dir.join("cache"),
         }
     }
 
@@ -355,17 +364,45 @@ printf ']}\n'
         }
     }
 
+    /// A `rene` command wired to the fake toolchain and the test's own
+    /// cache.
+    fn command(&self, args: &[&str]) -> Command {
+        let mut cmd = rene(args);
+        cmd.env("REUSSIR_RRC", &self.rrc)
+            .env("REUSSIR_CARGO", &self.cargo)
+            .env("REUSSIR_RUSTC", &self.rustc)
+            .env(rene::cache::CACHE_DIR_ENV, &self.cache);
+        cmd
+    }
+
     /// A `rene` invocation wired to the fake toolchain.
     fn rene(&self, args: &[&str], manifest: &Path, build_dir: &Path) -> Output {
-        run(rene(args)
+        run(self
+            .command(args)
             .arg("--manifest-path")
             .arg(manifest)
             .arg("--build-dir")
-            .arg(build_dir)
-            .env("REUSSIR_RRC", &self.rrc)
-            .env("REUSSIR_CARGO", &self.cargo)
-            .env("REUSSIR_RUSTC", &self.rustc))
+            .arg(build_dir))
     }
+}
+
+/// The entry directories of one cache kind, sorted: no lock files, and no
+/// staging or trash directories.
+#[cfg(unix)]
+fn cache_entries(kind: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(kind) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<PathBuf> = entries
+        .map(|entry| entry.unwrap())
+        .filter(|entry| {
+            let name = entry.file_name().into_string().unwrap();
+            entry.path().is_dir() && rene::ledger::parse_sibling(&name).is_none()
+        })
+        .map(|entry| entry.path())
+        .collect();
+    dirs.sort();
+    dirs
 }
 
 /// `rene inspect --frozen`'s report, parsed.
@@ -438,12 +475,11 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     let alternate_rustc = tmp.join("alternate-rustc");
     std::fs::copy(&fakes.rustc, &alternate_rustc).unwrap();
     let with_alternate = || {
-        run(rene(&["build", "--manifest-path"])
+        run(fakes
+            .command(&["build", "--manifest-path"])
             .arg(&manifest)
             .arg("--build-dir")
             .arg(&root)
-            .env("REUSSIR_RRC", &fakes.rrc)
-            .env("REUSSIR_CARGO", &fakes.cargo)
             .env("REUSSIR_RUSTC", &alternate_rustc))
     };
     let out = with_alternate();
@@ -795,6 +831,64 @@ fn inspect_frozen_neither_scans_nor_creates_a_build_directory() {
     assert_eq!(report["files"].as_array().unwrap().len(), 0);
     assert_eq!(fakes.runs("rrc"), 0);
     assert!(!root.exists(), "--frozen created `{}`", root.display());
+}
+
+/// The bundled core unpacks once into the per-user cache, which every build
+/// directory then reads; a relative cache location is made absolute once,
+/// so what the build records stays valid wherever rene runs next.
+#[cfg(unix)]
+#[test]
+fn build_directories_share_one_unpacked_core() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let manifest = package(&tmp, "demo");
+    let fakes = Fakes::new(&tmp);
+    for build_dir in ["first", "second"] {
+        let out = run(fakes
+            .command(&["inspect", "--frozen", "--graph", "--manifest-path"])
+            .arg(&manifest)
+            .arg("--build-dir")
+            .arg(tmp.join(build_dir))
+            .current_dir(&tmp)
+            .env(rene::cache::CACHE_DIR_ENV, "relative-cache"));
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let core = cache_entries(&tmp.join("relative-cache/core-src"));
+        assert_eq!(core.len(), 1, "{core:#?}");
+        assert_eq!(
+            report["graph"]["nodes"]["core"]["dir"],
+            core[0].display().to_string()
+        );
+        assert!(!tmp.join(build_dir).exists());
+    }
+}
+
+/// A cache that cannot be used fails the build, naming its path and the
+/// way out; there is no weaker mode.
+#[cfg(unix)]
+#[test]
+fn an_unusable_cache_fails_the_build() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let manifest = package(&tmp, "demo");
+    let fakes = Fakes::new(&tmp);
+    let blocker = tmp.join("not-a-directory");
+    std::fs::write(&blocker, "").unwrap();
+
+    let out = run(fakes
+        .command(&["build", "--manifest-path"])
+        .arg(&manifest)
+        .arg("--build-dir")
+        .arg(tmp.join("reussir-build"))
+        .env(rene::cache::CACHE_DIR_ENV, blocker.join("cache")));
+    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains(&format!("`{}`", blocker.join("cache").display())),
+        "{err}"
+    );
+    assert!(err.contains("RENE_CACHE_DIR"), "{err}");
+    assert_eq!(fakes.runs("cargo") + fakes.compiles().len(), 0);
 }
 
 /// (Re)write the scratch package's manifest with targets of every kind and a
@@ -1161,14 +1255,12 @@ fn build_keeps_parallel_colored_diagnostics_intact() {
     .unwrap();
     let fakes = Fakes::new(&tmp);
 
-    let out = run(rene(&["--color", "always", "build", "--jobs", "2"])
+    let out = run(fakes
+        .command(&["--color", "always", "build", "--jobs", "2"])
         .arg("--manifest-path")
         .arg(&manifest)
         .arg("--build-dir")
         .arg(&root)
-        .env("REUSSIR_RRC", &fakes.rrc)
-        .env("REUSSIR_CARGO", &fakes.cargo)
-        .env("REUSSIR_RUSTC", &fakes.rustc)
         .env("FAKE_RRC_FRAGMENTED_DIAGNOSTIC", "yes"));
     assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
 
@@ -1186,14 +1278,12 @@ fn build_keeps_parallel_colored_diagnostics_intact() {
 
     // The default resolves against rene's stderr, not the child's pipe. The
     // test harness captures stderr, so the same failed build must be plain.
-    let plain = run(rene(&["build", "--jobs", "2"])
+    let plain = run(fakes
+        .command(&["build", "--jobs", "2"])
         .arg("--manifest-path")
         .arg(&manifest)
         .arg("--build-dir")
         .arg(&root)
-        .env("REUSSIR_RRC", &fakes.rrc)
-        .env("REUSSIR_CARGO", &fakes.cargo)
-        .env("REUSSIR_RUSTC", &fakes.rustc)
         .env("FAKE_RRC_FRAGMENTED_DIAGNOSTIC", "yes"));
     assert_eq!(plain.status.code(), Some(1), "stderr: {}", stderr(&plain));
     assert!(

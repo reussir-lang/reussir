@@ -116,7 +116,10 @@ fn main() {
     fs::write(&out, compressed).expect("failed to write the runtime bundle");
 
     bundle_rcgmp_runtime();
-    bundle_core(workspace_dir);
+    // The libraries bundled inside rene (`src/bundled.rs`).
+    for name in ["core", "std"] {
+        bundle_library(workspace_dir, name);
+    }
 }
 
 /// Bundle the rcgmp integer runtime archive that CMake built for rene's own
@@ -139,41 +142,51 @@ fn bundle_rcgmp_runtime() {
     );
 }
 
-/// Bundle the `library/core` package the same way as the runtime: a
-/// zstd-compressed tar. Entries are appended in sorted order with fixed
-/// metadata, so the archive bytes — and the content hash that keys the
-/// unpacked directory — depend only on the sources.
-fn bundle_core(workspace_dir: &Path) {
-    let core_dir = workspace_dir.join("library").join("core");
-    println!("cargo::rerun-if-changed={}", core_dir.display());
+/// Bundle the `library/<name>` package the same way as the runtime: a
+/// zstd-compressed tar, `<name>-src.tar.zst`, of its manifest and its
+/// `src/` tree, so nothing a build or an editor leaves in the library's
+/// directory (a `reussir-build/`, dotfiles) ships. Entries are appended in
+/// sorted order with fixed metadata, so the archive bytes, and the content
+/// hash that keys the unpacked sources, depend only on the sources.
+fn bundle_library(workspace_dir: &Path, name: &str) {
+    let lib_dir = workspace_dir.join("library").join(name);
+    let manifest = lib_dir.join("rene.ncl");
+    let src_dir = lib_dir.join("src");
+    println!("cargo::rerun-if-changed={}", manifest.display());
+    println!("cargo::rerun-if-changed={}", src_dir.display());
 
-    let mut files = Vec::new();
-    collect_files(&core_dir, &mut files);
+    let mut files = vec![manifest];
+    collect_sources(&src_dir, &mut files);
     files.sort();
 
     let mut tar = tar::Builder::new(Vec::new());
     for path in &files {
         let rel = path
-            .strip_prefix(&core_dir)
+            .strip_prefix(&lib_dir)
             .unwrap()
             .to_str()
-            .expect("core source paths are UTF-8")
+            .expect("library source paths are UTF-8")
             .replace('\\', "/");
-        let text = fs::read_to_string(path).expect("failed to read a core source");
+        let text = fs::read_to_string(path).expect("failed to read a library source");
         append_text(&mut tar, &rel, &text);
     }
-    let archive = tar.into_inner().expect("failed to finish the core tar");
+    let archive = tar.into_inner().expect("failed to finish a library tar");
     let compressed =
-        zstd::encode_all(&archive[..], 19).expect("failed to zstd-compress the core bundle");
-    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("core-src.tar.zst");
-    fs::write(&out, compressed).expect("failed to write the core bundle");
+        zstd::encode_all(&archive[..], 19).expect("failed to zstd-compress a library bundle");
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join(format!("{name}-src.tar.zst"));
+    fs::write(&out, compressed).expect("failed to write a library bundle");
 }
 
-fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    for entry in fs::read_dir(dir).expect("failed to read library/core") {
-        let path = entry.expect("failed to read a directory entry").path();
+/// Every file under `dir`, skipping dotfiles and dot-directories.
+fn collect_sources(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(dir).expect("failed to read a library directory") {
+        let entry = entry.expect("failed to read a directory entry");
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
         if path.is_dir() {
-            collect_files(&path, out);
+            collect_sources(&path, out);
         } else {
             out.push(path);
         }
