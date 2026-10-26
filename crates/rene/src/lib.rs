@@ -10,8 +10,8 @@
 //! products of the manifest's declared targets ([`compile`]). Dependencies
 //! resolve over local paths ([`resolve`]), and `rene new` scaffolds a fresh
 //! package ([`new`]). What every build has in common, such as the sources of
-//! the libraries bundled inside rene ([`bundled`]), lives once per user in
-//! the [`cache`].
+//! the libraries bundled inside rene ([`bundled`]) and their compiled
+//! artifacts ([`shared`]), lives once per user in the [`cache`].
 
 pub mod bundled;
 pub mod cache;
@@ -28,4 +28,5 @@ pub mod plan;
 pub mod pool;
 pub mod resolve;
 pub mod rt;
+pub mod shared;
 pub mod tables;
