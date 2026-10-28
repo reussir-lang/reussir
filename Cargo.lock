@@ -3584,7 +3584,6 @@ dependencies = [
  "futures-util",
  "image",
  "indicatif",
- "libc",
  "nickel-lang",
  "palc",
  "ratatui",
@@ -3599,7 +3598,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "turbokv",
- "windows-sys 0.61.2",
  "zstd",
 ]
 
