@@ -1,6 +1,6 @@
 //! Dependency resolution over the local path graph.
 //!
-//! Every dependency is a filesystem path today, so each package exists in
+//! Dependencies come from local paths or the shipped std bundle. Each exists in
 //! exactly one version — its manifest's `package.version`. Resolution is
 //! therefore a **feasibility check**, not solution finding: load the
 //! transitive graph, hand pubgrub a universe with one version per package,
@@ -67,6 +67,21 @@ pub fn load_graph(root: &Loaded) -> Result<Graph, Error> {
 /// package that does not set `package.no_core`. Its edge carries no
 /// manifest entry, so constraint lookups fall back to `*`.
 pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, Error> {
+    load_graph_impl(root, core_dir, None)
+}
+
+/// Load shipped libraries on demand. std enters the graph only when a package
+/// explicitly declares a pathless `std` dependency; explicit paths win.
+pub fn load_graph_bundled(root: &Loaded, build_dir: &Path) -> Result<Graph, Error> {
+    let core_dir = crate::bundled::CORE.unpack(build_dir)?;
+    load_graph_impl(root, Some(&core_dir), Some(build_dir))
+}
+
+fn load_graph_impl(
+    root: &Loaded,
+    core_dir: Option<&Path>,
+    build_dir: Option<&Path>,
+) -> Result<Graph, Error> {
     let mut nodes: BTreeMap<String, Node> = BTreeMap::new();
     let root_name = root.manifest.package.name.clone();
     let mut queue: Vec<(String, Loaded)> = vec![(root_name.clone(), root.clone())];
@@ -84,7 +99,13 @@ pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, 
         }
         let mut dependencies = Vec::new();
         for (dep_name, dep) in &loaded.manifest.dependencies {
-            let dep_dir = dir.join(dep.path());
+            let dep_dir = match &dep.path {
+                Some(path) => dir.join(path),
+                None if dep_name == "std" => crate::bundled::STD.unpack(
+                    build_dir.ok_or(Error::MissingBundleDirectory)?,
+                )?,
+                None => return Err(Error::MissingDependencyPath { dependency: dep_name.clone() }),
+            };
             let dep_manifest = dep_dir.join(manifest::MANIFEST_FILE);
             let dep_loaded =
                 manifest::load(&dep_manifest).map_err(|source| Error::DependencyManifest {
@@ -398,5 +419,62 @@ mod tests {
         assert!(within(Some("^0.0"), "0.0.9") && !within(Some("^0.0"), "0.1.0"));
         assert!(parse_constraint(Some("nope")).is_err());
         assert!(parse_constraint(Some("1.2.3.4")).is_err());
+    }
+    #[test]
+    fn bundled_std_is_opt_in_and_checked_by_the_solver() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("rene.ncl");
+        let build = tmp.path().join("build");
+        std::fs::write(&path, r#"{ package.name = "app" }"#).unwrap();
+        let root = manifest::load(&path).unwrap();
+        let graph = load_graph_bundled(&root, &build).unwrap();
+        assert!(!graph.nodes.contains_key("std"));
+        assert!(!build.join("std-src").exists());
+        std::fs::write(
+            &path,
+            r#"{ package.name = "app", dependencies.std.version = "^0.1" }"#,
+        )
+        .unwrap();
+        let graph = load_graph_bundled(&manifest::load(&path).unwrap(), &build).unwrap();
+        assert!(graph.nodes["app"].dependencies.contains(&"std".into()));
+        assert!(graph.nodes["std"].dependencies.contains(&"core".into()));
+        assert_eq!(
+            graph.nodes["std"].dir,
+            crate::bundled::STD.dir(&build).canonicalize().unwrap()
+        );
+        assert!(check(&graph).is_ok());
+        std::fs::write(
+            &path,
+            r#"{ package.name = "app", dependencies.std.version = "^9" }"#,
+        )
+        .unwrap();
+        let graph = load_graph_bundled(&manifest::load(&path).unwrap(), &build).unwrap();
+        assert!(check(&graph).unwrap_err().to_string().contains("std"));
+    }
+
+    #[test]
+    fn local_std_paths_win_and_transitive_bundled_requests_resolve() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("app");
+        let local = tmp.path().join("local-std");
+        let build = tmp.path().join("build");
+        write_pkg(&root, "app", None, &[("std", "../local-std", None)]);
+        write_pkg(&local, "std", Some("0.1.0"), &[]);
+        let graph =
+            load_graph_bundled(&manifest::load(&root.join("rene.ncl")).unwrap(), &build).unwrap();
+        assert_eq!(graph.nodes["std"].dir, local.canonicalize().unwrap());
+        assert!(!build.join("std-src").exists());
+        let util = tmp.path().join("util");
+        write_pkg(&root, "app", None, &[("util", "../util", None)]);
+        std::fs::create_dir_all(&util).unwrap();
+        std::fs::write(
+            util.join("rene.ncl"),
+            r#"{ package.name = "util", dependencies.std = {} }"#,
+        )
+        .unwrap();
+        let graph =
+            load_graph_bundled(&manifest::load(&root.join("rene.ncl")).unwrap(), &build).unwrap();
+        assert!(graph.nodes["util"].dependencies.contains(&"std".into()));
+        assert!(check(&graph).is_ok());
     }
 }
