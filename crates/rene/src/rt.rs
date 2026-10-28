@@ -6,7 +6,7 @@
 //! that produced them, so the runtime must be built by the user's toolchain;
 //! see docs/design/system-rust-runtime.md). One immutable runtime is shared by
 //! every project with the same toolchain, target and runtime settings. Project
-//! records hold its paths; the cache handle holds its reader lease through use.
+//! records hold its paths; live artifacts share its reader lease through use.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -79,6 +79,9 @@ pub struct RtArtifacts {
     /// The static library final executables link the runtime from.
     pub staticlib: PathBuf,
     pub rlib: PathBuf,
+    /// Live ownership only: loading recorded paths does not acquire a lease.
+    #[serde(skip)]
+    pub(crate) lease: Option<std::sync::Arc<compcache::RuntimeLease>>,
 }
 
 impl RtArtifacts {
@@ -286,7 +289,7 @@ struct RuntimeRecipe<'a> {
 }
 
 /// Acquire the globally shared runtime for this toolchain and target. The
-/// cache owns its reader lease through every compiler and final linker.
+/// returned artifacts own its reader lease through every compiler and final linker.
 pub async fn prepare(
     cache: &std::sync::Arc<crate::cache::Cache>,
     dir: &BuildDir,
@@ -298,7 +301,7 @@ pub async fn prepare(
     let toolchain = Toolchain::resolve(requested_target).await?;
     let hash = bundle_hash();
     let key = compcache::Key::from_serde(
-        "rene-rust-runtime-v1",
+        "rene-rust-runtime-v0",
         &RuntimeRecipe {
             bundle: &hash,
             rustc: &toolchain.rustc,
@@ -372,6 +375,7 @@ pub async fn prepare(
                     rustc: toolchain.rustc.clone(),
                     rustc_version: toolchain.version.clone(),
                     rust_libdir: toolchain.rust_libdir.clone(),
+                    lease: None,
                     rlib: relative(&rlib)?,
                     staticlib: relative(&staticlib)?,
                     deps_dirs: deps_dirs
@@ -398,7 +402,7 @@ pub async fn prepare(
             .iter()
             .map(|p| lease.path().join(p))
             .collect();
-        cache.retain(lease);
+        record.lease = Some(std::sync::Arc::new(lease));
         Ok(record)
     })
     .await

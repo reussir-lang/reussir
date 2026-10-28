@@ -104,8 +104,8 @@ pub async fn build_deps(
             }
         }
         overall.inc(1);
-        // Keep the cache's reader leases alive until every already-running
-        // compiler/producer finishes. Stop admitting new dependents on error.
+        // Drain admitted compiler work before reporting failure. Commands own
+        // their input leases; stop admitting new dependents on error.
         if failure.is_some() {
             continue;
         }

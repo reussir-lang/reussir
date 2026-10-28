@@ -13,7 +13,7 @@ complete path; relative overrides resolve against the working directory.
 The integration uses compcache's built-in pruning settings (4 GiB trigger,
 seven-day retention, pruning on writes), without loading a configuration file.
 
-Each versioned recipe includes bundled and materialized source digests, the
+Each v0 recipe includes bundled and materialized source digests, the
 library manifest, compiler executable identity, Rust compiler version, target,
 static-library codegen flags, optional report selection, and upstream artifact
 digests. The flags include the project's optimization profile, sanitizers, CPU
@@ -29,9 +29,13 @@ worker under rene's process admission bound.
 
 Each dependency's selected interface, archive and optional report are recorded
 as their actual cache paths. Compiler `--extern` arguments and linker inputs use
-those paths directly. The cache handle owns reader leases until every dependent
-compiler and final linker finishes. Producers also retain their upstream leases;
-on error the scheduler drains admitted work before releasing the cache's leases.
+those paths directly. Runtime and library artifact handles own
+`Arc<RuntimeLease>` guards. Planned commands clone their input guards into
+compiler invocations, including blocking cache producers, so input files remain
+protected through subprocess completion.
+The graph retains library handles between stages; runtime handles retain the
+runtime. On error the scheduler drains admitted work. Lease ownership needs no
+shared registry or mutex.
 A static-library cache entry may be pruned after the build returns, without
 affecting linked outputs. The next build reacquires a lease and rebuilds a missing entry as needed.
 Source bundles remain local to each project. The Rust runtime is globally
@@ -50,10 +54,10 @@ the same paths. Project optimization profiles do not repeat this fixed-release
 Rust runtime build. The core/std library recipes independently retain the
 project's optimization, reuse ABI, sanitizer and layout settings.
 
-One cache handle owns the store and active runtime/library leases. The
-`runtime.json` record inside a runtime entry uses relative artifact paths;
-project metadata only records the selected paths. Cargo's target and build
-directories are pinned inside the cache entry. A project-selected rustup toolchain
+The cache handle owns only the store. The `runtime.json` record inside a runtime
+entry uses relative artifact paths; project metadata only records the selected
+paths, never live lease ownership. Cargo's target and build directories are
+pinned inside the cache entry. A project-selected rustup toolchain
 is resolved before changing working directory, so the global cache does not
 change which Rust compiler builds its runtime.
 
@@ -63,6 +67,6 @@ isolated fake-toolchain CLI tests verify cold publication, failure recovery and
 pruning.
 
 Runtime and core/std entries share one compcache store, including its metadata,
-object directory and automatic size/age pruning policy. Their versioned recipe
-namespaces distinguish runtime and library entries. The store bypasses the
+object directory and automatic size/age pruning policy. The `rene-rust-runtime-v0`
+and `rene-bundled-library-v0` namespaces distinguish their recipes. The store bypasses the
 memory cache and uses managed on-disk directories.

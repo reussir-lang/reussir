@@ -18,6 +18,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::compile;
 use crate::fresh;
@@ -55,15 +56,17 @@ pub(crate) struct PlannedCommand {
     pub(crate) out: PathBuf,
     /// Full argv minus the leading program.
     pub(crate) args: Vec<String>,
+    /// Input leases follow the command into a worker, including detached producers.
+    pub(crate) leases: Vec<Arc<compcache::RuntimeLease>>,
 }
 
-/// A dependency's actual input files. The cache handle owns the reader leases
-/// protecting cached inputs through all compiler and linker invocations.
+/// A dependency's actual input files and shared ownership of its cache entry.
 #[derive(Debug, Clone)]
 pub(crate) struct Artifacts {
     pub rri: PathBuf,
     pub archive: PathBuf,
     pub report: Option<PathBuf>,
+    pub lease: Option<Arc<compcache::RuntimeLease>>,
 }
 
 pub(crate) fn dependency_artifacts(
@@ -80,6 +83,7 @@ pub(crate) fn dependency_artifacts(
             rri: deps_dir.join(format!("{name}.rri")),
             archive: archive_path(deps_dir, name, target),
             report: None,
+            lease: None,
         })
 }
 
@@ -95,6 +99,11 @@ pub(crate) fn node_commands(
     let node = &graph.nodes[name];
     let transitive = transitive_deps(graph);
     let externs = extern_args(graph, &transitive[name], &deps_dir, opts.target);
+    let leases: Vec<_> = transitive[name]
+        .iter()
+        .filter_map(|dep| graph.nodes[dep].artifacts.get()?.lease.clone())
+        .chain(bake.and_then(|rt| rt.lease.clone()))
+        .collect();
     if name == graph.root {
         // Archives joined in dependency order: dependents before
         // dependencies (the reverse of the build order, root excluded).
@@ -135,6 +144,7 @@ pub(crate) fn node_commands(
                     target: Some(target.clone()),
                     out,
                     args,
+                    leases: leases.clone(),
                 }
             })
             .collect()
@@ -159,12 +169,14 @@ pub(crate) fn node_commands(
                 target: None,
                 out: rri,
                 args: interface,
+                leases: leases.clone(),
             },
             PlannedCommand {
                 emit: "staticlib",
                 target: None,
                 out: archive,
                 args: staticlib,
+                leases,
             },
         ]
     }
@@ -373,4 +385,110 @@ pub(crate) fn transitive_deps(graph: &Graph) -> BTreeMap<String, Vec<String>> {
         cone(graph, &name, &mut memo);
     }
     memo
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A worker's input ownership must survive its caller's graph and runtime
+    /// handles, then release promptly even while the cache stays open.
+    #[test]
+    fn invocation_owns_inputs_until_the_worker_drops_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = compcache::Config::default();
+        config.memory.enabled = false;
+        let cache = crate::cache::Cache {
+            store: compcache::StoreBuilder::new()
+                .path(tmp.path().join("cache"))
+                .config(config)
+                .open()
+                .unwrap(),
+        };
+        let acquire = |name: &[u8]| {
+            Arc::new(
+                cache
+                    .store
+                    .get_or_insert_runtime(
+                        compcache::Key::from_parts("lease-test", name),
+                        &|dir: &Path| {
+                            let mut writer = compcache::ArtifactWriter::new(dir);
+                            writer.write_file("input", b"compiled input")?;
+                            writer.finish()
+                        },
+                    )
+                    .unwrap(),
+            )
+        };
+        let library = acquire(b"library");
+        let runtime = acquire(b"runtime");
+        let manifest = tmp.path().join("rene.ncl");
+        std::fs::write(
+            &manifest,
+            r#"{ package.name = "app", dependencies.util.path = "util", targets.app.kind = 'executable }"#,
+        )
+        .unwrap();
+        std::fs::create_dir(tmp.path().join("util")).unwrap();
+        std::fs::write(
+            tmp.path().join("util/rene.ncl"),
+            r#"{ package.name = "util" }"#,
+        )
+        .unwrap();
+        let graph = crate::resolve::load_graph(&crate::manifest::load(&manifest).unwrap()).unwrap();
+        graph.nodes["util"]
+            .artifacts
+            .set(Artifacts {
+                rri: library.path().join("input"),
+                archive: library.path().join("input"),
+                report: None,
+                lease: Some(library),
+            })
+            .unwrap();
+        let rt = RtArtifacts {
+            target: "x86_64-unknown-linux-gnu".into(),
+            rustc: "rustc".into(),
+            rustc_version: "test".into(),
+            rust_libdir: "rustlib".into(),
+            deps_dirs: vec![runtime.path().to_owned()],
+            staticlib: runtime.path().join("input"),
+            rlib: runtime.path().join("input"),
+            lease: Some(runtime),
+        };
+        // Persistent records describe paths; they cannot recreate live guards.
+        let recorded: RtArtifacts =
+            serde_json::from_slice(&serde_json::to_vec(&rt).unwrap()).unwrap();
+        assert!(recorded.lease.is_none());
+        let profile = Profile::default();
+        let opts = Options {
+            profile_name: "dev",
+            profile: &profile,
+            target: &rt.target,
+            linker: None,
+            build_dir: tmp.path(),
+            token_reuse_remarks: false,
+        };
+        let command = node_commands(&graph, "app", &opts, Some(&rt))
+            .pop()
+            .unwrap();
+        let invocation = compile::Invocation::from_planned(command, &rt.rustc, false);
+        drop(graph);
+        drop(rt);
+        let (release, wait) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            wait.recv().unwrap();
+            drop(invocation);
+        });
+        // Pruning uses whole Unix seconds and a strictly older-than comparison.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let deadline = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let while_running = cache.store.prune_before(deadline).unwrap();
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        assert_eq!(while_running.removed, 0);
+        assert_eq!(while_running.skipped_busy, 2);
+        assert_eq!(cache.store.prune_before(deadline).unwrap().removed, 2);
+    }
 }

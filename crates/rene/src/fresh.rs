@@ -467,6 +467,7 @@ pub fn recorded_artifacts(
                 rri: record.rri,
                 archive: record.archive,
                 report: record.token_reuse_report,
+                lease: None,
             });
         }
     }
@@ -586,6 +587,7 @@ mod tests {
             deps_dirs: vec![PathBuf::from("deps")],
             staticlib: PathBuf::from("librt.a"),
             rlib: PathBuf::from("librt.rlib"),
+            lease: None,
         }
     }
 

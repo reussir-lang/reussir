@@ -24,11 +24,10 @@ impl StoreDefaults for Rene {
     }
 }
 
-/// One handle to the global on-disk cache. Reader leases live until all work
-/// using this handle has finished; entries themselves outlive every build.
+/// One handle to the global on-disk store. Acquired artifacts own their leases;
+/// the store does not retain them.
 pub struct Cache {
     pub(crate) store: compcache::Store<Bypass, ManagedDirectory>,
-    leases: std::sync::Mutex<Vec<compcache::RuntimeLease>>,
 }
 
 impl Cache {
@@ -36,17 +35,7 @@ impl Cache {
         let store = StoreBuilder::<Bypass, ManagedDirectory>::with_defaults::<Rene>()
             .and_then(|builder| builder.config(Rene::config()).open())
             .map_err(cache_error)?;
-        Ok(Arc::new(Self {
-            store,
-            leases: Default::default(),
-        }))
-    }
-
-    pub(crate) fn retain(&self, lease: compcache::RuntimeLease) {
-        self.leases
-            .lock()
-            .expect("cache lease mutex poisoned")
-            .push(lease);
+        Ok(Arc::new(Self { store }))
     }
 }
 
@@ -141,7 +130,7 @@ impl Request {
             ),
         };
         Ok(Self {
-            key: Key::from_serde("rene-bundled-library-v2", &recipe).map_err(|e| e.to_string())?,
+            key: Key::from_serde("rene-bundled-library-v0", &recipe).map_err(|e| e.to_string())?,
             name: name.to_owned(),
             target: opts.target.to_owned(),
             reports: opts.token_reuse_remarks,
@@ -210,12 +199,12 @@ impl Request {
             .reports
             .then(|| plan::token_reuse_report_path(&archive));
         tracing::debug!(package = %self.name, path = %lease.path().display(), "using cached bundled library in place");
-        cache.retain(lease);
         Ok((
             plan::Artifacts {
                 rri,
                 archive,
                 report,
+                lease: Some(Arc::new(lease)),
             },
             produced.get(),
         ))

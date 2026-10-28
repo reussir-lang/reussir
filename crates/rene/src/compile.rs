@@ -66,7 +66,7 @@ pub struct Options {
 
 /// The shared execution resources used by every target compilation.
 pub struct Execution<'a> {
-    /// Retains global runtime and library leases through all invocations.
+    /// The disk-only store used to acquire bundled dependency artifacts.
     pub cache: &'a std::sync::Arc<crate::cache::Cache>,
     pub pool: &'a Pool,
     pub progress: &'a MultiProgress,
@@ -293,6 +293,8 @@ pub(crate) struct Invocation {
     /// The parent terminal's resolved color policy. The child writes to a
     /// pipe, so `auto` inside rrc would otherwise discard styling.
     color: bool,
+    /// Own input leases until the subprocess finishes, independently of its caller.
+    _leases: Vec<std::sync::Arc<compcache::RuntimeLease>>,
 }
 
 impl Invocation {
@@ -333,6 +335,7 @@ impl Invocation {
             envs: vec![("REUSSIR_RUSTC", rustc.into())],
             out: command.out,
             color,
+            _leases: command.leases,
         }
     }
 
