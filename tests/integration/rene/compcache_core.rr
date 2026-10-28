@@ -1,5 +1,6 @@
 // A cold core bake is shared with a second build directory. Execute the second
 // result too: this covers relocation of the cached interface and native archive.
+// RUN: rm -rf %t.cache %t.first %t.second
 // RUN: env RENE_CACHE_DIR=%t.cache %rene build --manifest-path %S/core_num/rene.ncl --build-dir %t.first %rrc_linker
 // RUN: env RENE_CACHE_DIR=%t.cache %rene -v build --manifest-path %S/core_num/rene.ncl --build-dir %t.second %rrc_linker 2>&1 | %FileCheck %s
 // CHECK-NOT: baking bundled library
