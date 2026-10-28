@@ -3589,6 +3589,7 @@ dependencies = [
  "reussir-pjrt-sys",
  "reussir-stablehlo",
  "serde",
+ "serde_json",
  "smallvec",
  "stacker",
  "stumpalo",

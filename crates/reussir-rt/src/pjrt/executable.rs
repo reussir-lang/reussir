@@ -3,9 +3,10 @@
 use super::{
     Error, Result,
     api::{Api, call, non_null},
-    artifact::{self, Memory, Payload},
+    artifact::Memory,
     cache_config::{self, Reussir},
     client::Client,
+    donation::DonationInputs,
     sys::*,
 };
 use compcache::{Key, NoExtraData, Produced, QuickCache, Store, StoreBuilder};
@@ -27,6 +28,14 @@ pub struct Executable {
     native: NonNull<PJRT_LoadedExecutable>,
     owner: Arc<CompilationClient>,
     estimated_bytes: AtomicU64,
+    pub(super) plan: LaunchPlan,
+}
+
+/// Execution metadata produced by compilation and persisted with its executable.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) struct LaunchPlan {
+    pub inputs: Vec<usize>,
+    pub non_donatable: Vec<i64>,
 }
 
 // SAFETY: PJRT executable/client operations are thread-safe. The last strong
@@ -115,7 +124,12 @@ impl Drop for CompilationClient {
 }
 
 impl CompilationClient {
-    fn compile(self: &Arc<Self>, code: &[u8], options: &[u8]) -> Result<Arc<Executable>> {
+    fn compile(
+        self: &Arc<Self>,
+        code: &[u8],
+        options: &[u8],
+        plan: LaunchPlan,
+    ) -> Result<Arc<Executable>> {
         let program = PJRT_Program {
             struct_size: PJRT_Program_STRUCT_SIZE as usize,
             code: code.as_ptr().cast_mut().cast(),
@@ -133,18 +147,27 @@ impl CompilationClient {
                 compile_options_size: options.len(),
             }
         )?;
-        self.loaded(compiled.executable)
+        self.loaded(compiled.executable, plan)
     }
 
-    fn loaded(self: &Arc<Self>, native: *mut PJRT_LoadedExecutable) -> Result<Arc<Executable>> {
+    fn loaded(
+        self: &Arc<Self>,
+        native: *mut PJRT_LoadedExecutable,
+        plan: LaunchPlan,
+    ) -> Result<Arc<Executable>> {
         Ok(Arc::new(Executable {
             native: non_null(native, "loaded executable")?,
             owner: self.clone(),
             estimated_bytes: AtomicU64::new(128),
+            plan,
         }))
     }
 
-    pub(super) fn deserialize(self: &Arc<Self>, bytes: &[u8]) -> Result<Arc<Executable>> {
+    pub(super) fn deserialize(
+        self: &Arc<Self>,
+        bytes: &[u8],
+        plan: LaunchPlan,
+    ) -> Result<Arc<Executable>> {
         let loaded = call!(
             self.api,
             PJRT_Executable_DeserializeAndLoad {
@@ -153,7 +176,7 @@ impl CompilationClient {
                 serialized_executable_size: bytes.len(),
             }
         )?;
-        self.loaded(loaded.loaded_executable)
+        self.loaded(loaded.loaded_executable, plan)
     }
 
     /// Backend compatibility is part of the key, not a cache/config version.
@@ -238,16 +261,9 @@ fn verify_checksum(bytecode: &[u8], checksum: &[u8]) -> Result<blake3::Hash> {
     Ok(actual)
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
-struct CacheKey {
-    digest: blake3::Hash,
-    options: Vec<u8>,
-    donation: Option<reussir_stablehlo::Donation>,
-}
-
 pub(super) struct CompilationCache {
     store: Store<Memory, NoExtraData>,
-    memory: Arc<QuickCache<Payload>>,
+    memory: Arc<QuickCache<Arc<Executable>>>,
     namespace: [u8; 32],
     pub(super) owner: Arc<CompilationClient>,
 }
@@ -276,91 +292,94 @@ impl CompilationCache {
         })
     }
 
-    pub(super) fn compile_refined(
-        &self,
-        program: &[u8],
-        options: &[u8],
-        donation: Option<reussir_stablehlo::Donation>,
-    ) -> Result<Arc<Executable>> {
-        self.get_or_build(program, blake3::hash(program), options, donation)
-    }
-
-    pub(super) fn refine_program(
+    pub(super) fn compile_program(
         &self,
         code: &[u8],
         checksum: &[u8],
-        arguments: Vec<reussir_stablehlo::Argument>,
-    ) -> Result<Arc<reussir_stablehlo::Refined>> {
-        #[derive(Serialize)]
-        enum Argument<'a> {
-            Shape(&'a [i64]),
-            Constant(i64),
-        }
-        let arguments_key: Vec<_> = arguments
-            .iter()
-            .map(|arg| match arg {
-                reussir_stablehlo::Argument::Shape(dims) => Argument::Shape(dims),
-                reussir_stablehlo::Argument::Constant(value) => Argument::Constant(*value),
-            })
-            .collect();
-        let key = Key::from_serde(
-            "reussir-pjrt-refined-v0",
-            &(verify_checksum(code, checksum)?.as_bytes(), arguments_key),
-        )?;
-        let result = self.store.get_or_insert_payload(key, || {
-            let program =
-                reussir_stablehlo::refine_shapes(code, &arguments).map_err(
-                    |source| match source.kind {
-                        reussir_stablehlo::ErrorKind::ResidualDynamism => {
-                            Error::ResidualDynamism(Arc::new(source))
-                        }
-                        _ => Error::Stablehlo(Arc::new(source)),
-                    },
-                )?;
-            Ok(Produced {
-                payload: Payload::Refined(Arc::new(program)),
-                serialized: Ok(None),
-            })
-        })?;
-        match result.payload {
-            Payload::Refined(program) => Ok(program),
-            Payload::Executable(_) => Err(Error::UnexpectedPayload),
-        }
+        options: &[u8],
+        arguments: &[reussir_stablehlo::Argument],
+        donation: &DonationInputs,
+        output_count: usize,
+    ) -> Result<Arc<Executable>> {
+        let digest = verify_checksum(code, checksum)?;
+        self.get_or_compile(code, digest, options, arguments, donation, output_count)
     }
 
-    fn get_or_build(
+    fn get_or_compile(
         &self,
         code: &[u8],
         digest: blake3::Hash,
         options: &[u8],
-        donation: Option<reussir_stablehlo::Donation>,
+        arguments: &[reussir_stablehlo::Argument],
+        donation: &DonationInputs,
+        output_count: usize,
     ) -> Result<Arc<Executable>> {
-        let key = self.artifact_key(&CacheKey {
-            digest,
-            options: options.into(),
-            donation: donation.clone(),
-        })?;
+        let key = self.artifact_key(digest, options, arguments, donation, output_count)?;
+        self.get_or_build(key, options, || {
+            let refined =
+                reussir_stablehlo::refine_shapes(code, arguments).map_err(|source| match source
+                    .kind
+                {
+                    reussir_stablehlo::ErrorKind::ResidualDynamism => {
+                        Error::ResidualDynamism(Arc::new(source))
+                    }
+                    _ => Error::Stablehlo(Arc::new(source)),
+                })?;
+            if refined.result_types.len() != output_count {
+                return Err(Error::local("refined result count mismatch"));
+            }
+            let selected = donation.select(&refined.result_types)?;
+            let inputs: Vec<_> = selected
+                .mapping
+                .iter()
+                .enumerate()
+                .filter_map(|(j, &rep)| (j == rep as usize).then_some(j))
+                .collect();
+            let non_donatable = inputs
+                .iter()
+                .enumerate()
+                .filter_map(|(new, &old)| {
+                    (!selected.donors.contains(&(old as u32))).then_some(new as i64)
+                })
+                .collect();
+            let bytecode = if selected.donors.is_empty() && selected.aliases.is_empty() {
+                refined.bytecode
+            } else {
+                reussir_stablehlo::apply_donation(&refined.bytecode, &selected)
+                    .map_err(|source| Error::Stablehlo(Arc::new(source)))?
+            };
+            Ok((
+                bytecode,
+                LaunchPlan {
+                    inputs,
+                    non_donatable,
+                },
+            ))
+        })
+    }
+
+    fn get_or_build(
+        &self,
+        key: Key,
+        options: &[u8],
+        prepare: impl Fn() -> Result<(Vec<u8>, LaunchPlan)>,
+    ) -> Result<Arc<Executable>> {
         // A materialization failure means cached bytes were corrupt or rejected
         // by the plugin. Repair once; actual compilation errors are not retried.
         for attempt in 0..2 {
             let cached = self.store.get_or_insert_payload(key, || {
-                let code = match &donation {
-                    Some(donation) => reussir_stablehlo::apply_donation(code, donation)
-                        .map_err(|source| Error::Stablehlo(Arc::new(source)))?,
-                    None => code.to_vec(),
-                };
-                let executable = self.owner.compile(&code, options)?;
+                let (code, plan) = prepare()?;
+                let executable = self.owner.compile(&code, options, plan)?;
                 let serialized = executable
                     .serialize()
-                    .map(|bytes| {
-                        let mut record = blake3::hash(&bytes).as_bytes().to_vec();
-                        record.extend_from_slice(&bytes);
+                    .and_then(|bytes| {
+                        let record = super::artifact::encode(&executable.plan, &bytes)?;
                         executable.set_weight(record.len());
-                        Some(record)
+                        Ok(Some(record))
                     })
                     .map_err(compcache::Error::producer);
                 Ok(Produced {
-                    payload: Payload::Executable(executable),
+                    payload: executable,
                     serialized,
                 })
             });
@@ -374,38 +393,50 @@ impl CompilationCache {
                     if let Some(error) = result.cache_error {
                         tracing::warn!(%error, "PJRT executable usable but persistence failed");
                     }
-                    return artifact::executable(result.payload);
+                    return Ok(result.payload);
                 }
             }
         }
         unreachable!("the final cache attempt returns its result")
     }
 
-    fn artifact_key(&self, key: &CacheKey) -> compcache::Result<Key> {
+    fn artifact_key(
+        &self,
+        digest: blake3::Hash,
+        options: &[u8],
+        arguments: &[reussir_stablehlo::Argument],
+        donation: &DonationInputs,
+        output_count: usize,
+    ) -> compcache::Result<Key> {
         #[derive(Serialize)]
-        struct Donation<'a> {
-            mapping: &'a [u32],
-            donors: &'a [u32],
-            aliases: &'a [[u32; 2]],
+        enum Argument<'a> {
+            Shape(&'a [i64]),
+            Constant(i64),
         }
         #[derive(Serialize)]
         struct Recipe<'a> {
             backend: &'a [u8; 32],
             bytecode: &'a [u8; 32],
             options: &'a [u8],
-            donation: Option<Donation<'a>>,
+            arguments: Vec<Argument<'a>>,
+            donation: &'a DonationInputs,
+            output_count: usize,
         }
         Key::from_serde(
-            "reussir-pjrt-executable-v0",
+            "reussir-pjrt-executable-v1",
             &Recipe {
                 backend: &self.namespace,
-                bytecode: key.digest.as_bytes(),
-                options: &key.options,
-                donation: key.donation.as_ref().map(|d| Donation {
-                    mapping: &d.mapping,
-                    donors: &d.donors,
-                    aliases: &d.aliases,
-                }),
+                bytecode: digest.as_bytes(),
+                options,
+                arguments: arguments
+                    .iter()
+                    .map(|arg| match arg {
+                        reussir_stablehlo::Argument::Shape(dims) => Argument::Shape(dims),
+                        reussir_stablehlo::Argument::Constant(value) => Argument::Constant(*value),
+                    })
+                    .collect(),
+                donation,
+                output_count,
             },
         )
     }

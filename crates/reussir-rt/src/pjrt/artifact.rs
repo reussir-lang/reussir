@@ -2,15 +2,38 @@
 
 use super::{
     Error, Result,
-    executable::{CompilationClient, Executable},
+    executable::{CompilationClient, Executable, LaunchPlan},
 };
 use compcache::{InMemoryCache, Key, MemoryConfig, MemoryEntry, QuickCache};
 use std::sync::Arc;
 
-#[derive(Clone)]
-pub(super) enum Payload {
-    Executable(Arc<Executable>),
-    Refined(Arc<reussir_stablehlo::Refined>),
+type Payload = Arc<Executable>;
+
+/// A checksummed record containing length-delimited JSON execution metadata
+/// followed by the plugin's opaque executable bytes. No source is persisted.
+pub(super) fn encode(plan: &LaunchPlan, executable: &[u8]) -> Result<Vec<u8>> {
+    let metadata = serde_json::to_vec(plan).map_err(Arc::new)?;
+    let mut record = vec![0; 32];
+    record.extend_from_slice(&(metadata.len() as u64).to_le_bytes());
+    record.extend_from_slice(&metadata);
+    record.extend_from_slice(executable);
+    let digest = blake3::hash(&record[32..]);
+    record[..32].copy_from_slice(digest.as_bytes());
+    Ok(record)
+}
+
+fn decode(bytes: &[u8]) -> Result<(LaunchPlan, &[u8])> {
+    if bytes.len() < 40 || blake3::hash(&bytes[32..]).as_bytes() != &bytes[..32] {
+        return Err(Error::CorruptArtifact);
+    }
+    let length = u64::from_le_bytes(bytes[32..40].try_into().unwrap());
+    let end = usize::try_from(length)
+        .ok()
+        .and_then(|n| n.checked_add(40))
+        .filter(|&n| n <= bytes.len())
+        .ok_or(Error::CorruptArtifact)?;
+    let plan = serde_json::from_slice(&bytes[40..end]).map_err(Arc::new)?;
+    Ok((plan, &bytes[end..]))
 }
 
 pub(super) struct Memory {
@@ -38,31 +61,18 @@ impl InMemoryCache for Memory {
     }
 
     fn materialize(&self, bytes: Arc<[u8]>) -> compcache::Result<Payload> {
-        if bytes.len() < 32 || blake3::hash(&bytes[32..]).as_bytes() != &bytes[..32] {
-            return Err(compcache::Error::producer(Error::CorruptArtifact));
-        }
+        let (plan, executable) = decode(&bytes).map_err(compcache::Error::producer)?;
         let executable = self
             .owner
-            .deserialize(&bytes[32..])
+            .deserialize(executable, plan)
             .map_err(compcache::Error::producer)?;
         executable.set_weight(bytes.len());
         tracing::debug!("PJRT executable loaded from persistent compcache");
-        Ok(Payload::Executable(executable))
+        Ok(executable)
     }
 
     fn weight(&self, payload: &Payload) -> u64 {
-        match payload {
-            Payload::Executable(executable) => executable.weight(),
-            Payload::Refined(program) => {
-                (program.bytecode.len()
-                    + program
-                        .result_types
-                        .iter()
-                        .map(|ty| ty.dimensions.len() * 8 + 32)
-                        .sum::<usize>()
-                    + 128) as u64
-            }
-        }
+        payload.weight()
     }
     fn get(&self, key: &Key) -> Option<Arc<MemoryEntry<Payload>>> {
         self.entries.get(key)
@@ -75,12 +85,5 @@ impl InMemoryCache for Memory {
     }
     fn clear(&self) -> Vec<Arc<MemoryEntry<Payload>>> {
         self.entries.clear()
-    }
-}
-
-pub(super) fn executable(payload: Payload) -> Result<Arc<Executable>> {
-    match payload {
-        Payload::Executable(executable) => Ok(executable),
-        Payload::Refined(_) => Err(Error::UnexpectedPayload),
     }
 }

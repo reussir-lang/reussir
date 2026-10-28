@@ -97,11 +97,18 @@ so eviction or cache shutdown does not invalidate callers' handles. Serializatio
 or cache-write failures retain a successfully compiled payload and report the
 cache failure. Actual compiler errors remain typed failures and are not cached.
 
-The executable's v0 recipe includes the verified bytecode digest, compile
-options, donation mapping/donors/aliases, plugin digest, platform version,
-serialized topology and `XLA_FLAGS`. A checksum or deserialization failure causes
-one eviction/retry. Refinement keys separately include argument shapes and
-constant values. compcache coalesces requests with the same key while allowing
+The executable's v1 recipe includes the verified original bytecode digest,
+argument shapes and constant values, compile options, donation permissions,
+mapping and explicit contracts, logical and allocated buffer sizes, physical
+alias safety, output count, plugin digest, platform version, serialized topology
+and `XLA_FLAGS`. Buffer addresses themselves never enter the key. Ownership and
+physical alias checks run at every launch before lookup. Shape refinement,
+donation selection and rewriting, and native compilation run only inside the
+coalesced cache miss. The executable record includes its input mapping and
+non-donatable argument indices, so resident and persistent hits skip the entire
+compilation pipeline. Refined sources have no cache or persistent record.
+A checksum or deserialization failure causes one eviction/retry.
+compcache coalesces executable requests with the same key while allowing
 different kernels to compile concurrently. Native destruction happens outside
 cache locks. The cache has no private executor or background I/O workers.
 

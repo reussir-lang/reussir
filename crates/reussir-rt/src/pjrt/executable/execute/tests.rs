@@ -211,6 +211,7 @@ impl Fixture {
                 native: native.cast(),
                 owner,
                 estimated_bytes: std::sync::atomic::AtomicU64::new(128),
+                plan: Default::default(),
             }),
             _api: api,
             state,

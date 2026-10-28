@@ -26,10 +26,10 @@ pub(super) enum Error {
     PersistenceUnsupported,
     #[error("cached PJRT executable checksum is invalid")]
     CorruptArtifact,
+    #[error("PJRT executable metadata: {0}")]
+    ArtifactMetadata(#[from] Arc<serde_json::Error>),
     #[error("no platform configuration directory available for reussir")]
     ConfigDirectoryUnavailable,
-    #[error("PJRT cache returned an unexpected payload kind")]
-    UnexpectedPayload,
 }
 impl Error {
     /// Validation diagnostics, rather than converted errors from another API.

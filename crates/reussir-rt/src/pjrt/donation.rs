@@ -28,21 +28,20 @@ use std::collections::HashSet;
 const MIN_DONATION_BYTES: u64 = 4096;
 
 #[derive(Debug)]
-struct BufferFacts {
-    handles: Vec<usize>,
-    logical_bytes: u64,
-    allocated_bytes: u64,
+pub(super) struct BufferFacts {
+    pub(super) handles: Vec<usize>,
+    pub(super) logical_bytes: u64,
+    pub(super) allocated_bytes: u64,
 }
 
-fn select(
+pub(super) fn donation_inputs(
     facts: &[BufferFacts],
     permissions: &[u8],
     mapping: &[u32],
     explicit: &[u32],
     aliases: &[[u32; 2]],
-    output_bytes: &[u64],
     minimum: u64,
-) -> Result<Donation> {
+) -> Result<DonationInputs> {
     let count = facts.len();
     if permissions.len() != count || mapping.len() != count {
         return Err(Error::local("donation permission/mapping count mismatch"));
@@ -64,75 +63,134 @@ fn select(
                 mapping[j] as usize == i || other.handles.iter().all(|p| !handles.contains(p))
             })
     };
-    let mut donors = Vec::new();
-    if !explicit.is_empty() || !aliases.is_empty() {
-        if mapping
-            .iter()
-            .enumerate()
-            .any(|(i, &rep)| rep as usize != i)
-        {
-            return Err(Error::local(
-                "explicit donation contracts cannot remap inputs",
-            ));
-        }
-        for &i in explicit {
-            let i = i as usize;
-            if i >= count || permissions[i] == 0 || !distinct(i) || donors.contains(&(i as u32)) {
+    let normalized = facts
+        .iter()
+        .enumerate()
+        .map(|(i, fact)| DonationFact {
+            distinct: distinct(i),
+            logical_bytes: fact.logical_bytes,
+            allocated_bytes: fact.allocated_bytes,
+        })
+        .collect();
+    Ok(DonationInputs {
+        facts: normalized,
+        permissions: permissions.to_vec(),
+        mapping: mapping.to_vec(),
+        explicit: explicit.to_vec(),
+        aliases: aliases.to_vec(),
+        minimum,
+    })
+}
+
+/// Compilation-relevant buffer facts, without process-local buffer addresses.
+/// Revalidate physical identities at every launch before looking up this key.
+#[derive(Debug, serde::Serialize)]
+pub(super) struct DonationInputs {
+    facts: Vec<DonationFact>,
+    permissions: Vec<u8>,
+    mapping: Vec<u32>,
+    explicit: Vec<u32>,
+    aliases: Vec<[u32; 2]>,
+    minimum: u64,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct DonationFact {
+    distinct: bool,
+    logical_bytes: u64,
+    allocated_bytes: u64,
+}
+
+impl DonationInputs {
+    pub(super) fn select(&self, results: &[ResultType]) -> Result<Donation> {
+        let output_bytes: Vec<_> = results.iter().map(result_bytes).collect();
+        self.select_bytes(&output_bytes)
+    }
+
+    fn select_bytes(&self, output_bytes: &[u64]) -> Result<Donation> {
+        let Self {
+            facts,
+            permissions,
+            mapping,
+            explicit,
+            aliases,
+            minimum,
+        } = self;
+        let count = facts.len();
+        let mut donors = Vec::new();
+        if !explicit.is_empty() || !aliases.is_empty() {
+            if mapping
+                .iter()
+                .enumerate()
+                .any(|(i, &rep)| rep as usize != i)
+            {
                 return Err(Error::local(
-                    "explicit donation requires unique ownership and distinct physical buffers",
+                    "explicit donation contracts cannot remap inputs",
                 ));
             }
-            donors.push(i as u32);
-        }
-        let mut outputs = HashSet::new();
-        let mut inputs = HashSet::new();
-        for &[input, output] in aliases {
-            if !donors.contains(&input)
-                || output as usize >= output_bytes.len()
-                || !outputs.insert(output)
-                || !inputs.insert(input)
-            {
-                return Err(Error::local("invalid explicit input/output alias"));
-            }
-        }
-    } else {
-        let mut candidates: Vec<_> = (0..count)
-            .filter(|&i| {
-                mapping[i] as usize == i
-                    && mapping
-                        .iter()
-                        .enumerate()
-                        .all(|(j, &rep)| rep as usize != i || permissions[j] != 0)
-                    && facts[i].logical_bytes != 0
-                    && facts[i].allocated_bytes >= minimum
-                    && distinct(i)
-            })
-            .collect();
-        candidates.sort_by_key(|&i| (std::cmp::Reverse(facts[i].allocated_bytes), i));
-        let mut available = output_bytes.to_vec();
-        for i in candidates {
-            if let Some(output) = available
-                .iter_mut()
-                .find(|bytes| **bytes == facts[i].logical_bytes)
-            {
-                *output = 0;
+            for &i in explicit {
+                let i = i as usize;
+                if i >= count
+                    || permissions[i] == 0
+                    || !facts[i].distinct
+                    || donors.contains(&(i as u32))
+                {
+                    return Err(Error::local(
+                        "explicit donation requires unique ownership and distinct physical buffers",
+                    ));
+                }
                 donors.push(i as u32);
             }
+            let mut outputs = HashSet::new();
+            let mut inputs = HashSet::new();
+            for &[input, output] in aliases {
+                if !donors.contains(&input)
+                    || output as usize >= output_bytes.len()
+                    || !outputs.insert(output)
+                    || !inputs.insert(input)
+                {
+                    return Err(Error::local("invalid explicit input/output alias"));
+                }
+            }
+        } else {
+            let mut candidates: Vec<_> = (0..count)
+                .filter(|&i| {
+                    mapping[i] as usize == i
+                        && mapping
+                            .iter()
+                            .enumerate()
+                            .all(|(j, &rep)| rep as usize != i || permissions[j] != 0)
+                        && facts[i].logical_bytes != 0
+                        && facts[i].allocated_bytes >= *minimum
+                        && facts[i].distinct
+                })
+                .collect();
+            candidates.sort_by_key(|&i| (std::cmp::Reverse(facts[i].allocated_bytes), i));
+            let mut available = output_bytes.to_vec();
+            for i in candidates {
+                if let Some(output) = available
+                    .iter_mut()
+                    .find(|bytes| **bytes == facts[i].logical_bytes)
+                {
+                    *output = 0;
+                    donors.push(i as u32);
+                }
+            }
         }
+        donors.sort_unstable();
+        // Keep the baseline signature when there is no profitable donation. Do not
+        // manufacture a second bytecode form merely because inputs are duplicated.
+        let mapping = if donors.is_empty() {
+            (0..count as u32).collect()
+        } else {
+            mapping.to_vec()
+        };
+        Ok(Donation {
+            mapping,
+            donors,
+            aliases: aliases.to_vec(),
+        })
     }
-    donors.sort_unstable();
-    // Keep the baseline signature when there is no profitable donation. Do not
-    // manufacture a second bytecode form merely because inputs are duplicated.
-    let mapping = if donors.is_empty() {
-        (0..count as u32).collect()
-    } else {
-        mapping.to_vec()
-    };
-    Ok(Donation {
-        mapping,
-        donors,
-        aliases: aliases.to_vec(),
-    })
 }
 
 // Bytes of a refined result, or 0 when unknown, which never matches a donor.
@@ -314,10 +372,6 @@ pub(super) unsafe fn launch(
     let runtime = runtime_inputs(inputs.len(), constants, mapping, explicit, aliases)?;
     let cache = &context.executables;
     let arguments = unsafe { specialization(&shapes, inputs, constants) }?;
-    let program = cache.refine_program(code, checksum, arguments)?;
-    if program.result_types.len() != output_count {
-        return Err(Error::local("refined result count mismatch"));
-    }
     let api = cache.owner.api;
     let explicit = &runtime.explicit[..];
     let aliases = &runtime.aliases[..];
@@ -369,31 +423,23 @@ pub(super) unsafe fn launch(
         }
     }
     let permissions: Vec<_> = runtime.inputs.iter().map(|&i| permissions[i]).collect();
-    let output_bytes: Vec<_> = program.result_types.iter().map(result_bytes).collect();
-    let selected = select(
+    let donation = donation_inputs(
         &facts,
         &permissions,
         &runtime.mapping,
         explicit,
         aliases,
-        &output_bytes,
         MIN_DONATION_BYTES,
     )?;
-    let kept: Vec<_> = selected
-        .mapping
+    let executable =
+        cache.compile_program(code, checksum, options, &arguments, &donation, output_count)?;
+    let plan = &executable.plan;
+    let remapped: Vec<_> = plan
+        .inputs
         .iter()
-        .enumerate()
-        .filter_map(|(j, &rep)| (j == rep as usize).then_some(j))
+        .map(|&j| inputs[runtime.inputs[j]])
         .collect();
-    let denied: Vec<_> = kept
-        .iter()
-        .enumerate()
-        .filter_map(|(new, &old)| (!selected.donors.contains(&(old as u32))).then_some(new as i64))
-        .collect();
-    let remapped: Vec<_> = kept.iter().map(|&j| inputs[runtime.inputs[j]]).collect();
-    let transformation =
-        (!selected.donors.is_empty() || !selected.aliases.is_empty()).then_some(selected);
-    let executable = cache.compile_refined(&program.bytecode, options, transformation)?;
+    let denied = plan.non_donatable.clone();
     context::register_compiled_shutdown()?;
     executable.validate_devices(&expected)?;
     unsafe { executable.execute(&remapped, output_count, &denied) }
@@ -447,6 +493,19 @@ mod tests {
         assert_eq!(info(&mut table), Some((11, 4, 8192)));
         table.PJRT_Buffer_ElementType = None;
         assert_eq!(info(&mut table), None);
+    }
+
+    fn select(
+        facts: &[BufferFacts],
+        permissions: &[u8],
+        mapping: &[u32],
+        explicit: &[u32],
+        aliases: &[[u32; 2]],
+        output_bytes: &[u64],
+        minimum: u64,
+    ) -> Result<Donation> {
+        donation_inputs(facts, permissions, mapping, explicit, aliases, minimum)?
+            .select_bytes(output_bytes)
     }
 
     fn fact(handles: &[usize], logical: u64, actual: u64) -> BufferFacts {
