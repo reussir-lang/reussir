@@ -92,6 +92,12 @@ jobs:
       - name: Cross-build for x86_64-pc-windows-msvc
         run: nix develop .#windows-cross --command env RUSTC_WRAPPER=sccache cargo xwin build --target x86_64-pc-windows-msvc
 
+      # The standalone runtime bundle test spawns Cargo from the test process.
+      # It needs a Windows-native toolchain under Wine, just like the lit job.
+      # The next nix shell adds its binaries to WINEPATH and shares CARGO_HOME.
+      - name: Bake windows rustc
+        run: nix develop .#windows-cross --command reussir-bake-msvc-rustc
+
       - name: Run test suites under Wine
         run: nix develop .#windows-cross --command env RUSTC_WRAPPER=sccache cargo xwin test --target x86_64-pc-windows-msvc
 

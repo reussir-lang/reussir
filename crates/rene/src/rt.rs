@@ -630,9 +630,20 @@ mod tests {
             .unwrap();
         // Cargo prunes the workspace's superset lock on the first standalone
         // resolution. It must retain the bundled version/source pins offline.
-        let output = std::process::Command::new(env!("CARGO"))
-            .env("CARGO_ENCODED_RUSTFLAGS", "")
-            .env("RUSTFLAGS", "")
+        // This test may run on a different platform from the build host (Wine
+        // in CI). Resolve the runtime's Cargo, not the host binary in CARGO at
+        // compile time, and don't pass host compiler wrappers to it.
+        let metadata_command = || {
+            let mut command = std::process::Command::new("cargo");
+            command
+                .env_remove("RUSTC")
+                .env("RUSTC_WRAPPER", "")
+                .env("RUSTC_WORKSPACE_WRAPPER", "")
+                .env("CARGO_ENCODED_RUSTFLAGS", "")
+                .env("RUSTFLAGS", "");
+            command
+        };
+        let output = metadata_command()
             .args([
                 "metadata",
                 "--format-version=1",
@@ -676,9 +687,7 @@ mod tests {
                 "standalone resolution changed a bundled dependency pin: {package}"
             );
         }
-        let locked = std::process::Command::new(env!("CARGO"))
-            .env("CARGO_ENCODED_RUSTFLAGS", "")
-            .env("RUSTFLAGS", "")
+        let locked = metadata_command()
             .args([
                 "metadata",
                 "--format-version=1",
