@@ -1,5 +1,5 @@
 use super::*;
-use std::ffi::CString;
+use std::path::Path;
 
 #[derive(Default)]
 struct Request {
@@ -29,13 +29,13 @@ unsafe extern "C" fn receive(data: *const u8, size: usize, context: *mut c_void)
 unsafe extern "C" fn diagnostic(_: *const u8, _: usize, context: *mut c_void) {
     unsafe { &mut *context.cast::<Request>() }.diagnostics += 1;
 }
+fn open(directory: &Path) -> *mut Cache {
+    Box::into_raw(Box::new(Cache(
+        StoreBuilder::new().path(directory).open().unwrap(),
+    )))
+}
+
 impl Request {
-    fn open(&mut self, directory: &Path) -> *mut Cache {
-        let directory = CString::new(directory.to_str().unwrap()).unwrap();
-        unsafe {
-            reussir_polyffi_cache_open(directory.as_ptr(), diagnostic, ptr::from_mut(self).cast())
-        }
-    }
     fn run(&mut self, cache: *mut Cache, key: u8) -> u32 {
         self.output.clear();
         unsafe {
@@ -59,7 +59,7 @@ fn hits_skip_production_and_read_verbatim_database_bytes() {
         persist: true,
         ..Default::default()
     };
-    let cache = request.open(directory.path());
+    let cache = open(directory.path());
     assert!(!cache.is_null());
     assert_eq!(request.run(cache, 1), 0);
     assert_eq!(request.run(cache, 1), 0);
@@ -87,7 +87,7 @@ fn hits_skip_production_and_read_verbatim_database_bytes() {
     // The callback copied its borrowed bytes; they survive closing the store.
     assert_eq!(request.output, b"new!");
     request.fail = true;
-    let reopened = request.open(directory.path());
+    let reopened = open(directory.path());
     assert!(!reopened.is_null());
     assert_eq!(request.run(reopened, 1), 0);
     assert_eq!(request.calls, 1);
@@ -103,7 +103,7 @@ fn producer_failures_and_uncacheable_results_are_not_published() {
         fail: true,
         ..Default::default()
     };
-    let cache = request.open(directory.path());
+    let cache = open(directory.path());
     assert!(!cache.is_null());
     assert_eq!(request.run(cache, 2), 2);
     assert_eq!(request.calls, 1);
@@ -131,17 +131,13 @@ fn cache_failures_report_diagnostics_and_preserve_produced_bytes() {
         persist: true,
         ..Default::default()
     };
-    let file = directory.path().join("not-a-directory");
-    std::fs::write(&file, b"x").unwrap();
-    assert!(request.open(&file).is_null());
-    assert_eq!(request.diagnostics, 1);
-    let cache = request.open(directory.path());
+    let cache = open(directory.path());
     assert!(!cache.is_null());
     let db = rusqlite::Connection::open(directory.path().join("cache.db")).unwrap();
     db.execute_batch("CREATE TRIGGER reject_blob BEFORE INSERT ON entries BEGIN SELECT RAISE(FAIL, 'write failure'); END;").unwrap();
     assert_eq!(request.run(cache, 3), 0);
     assert_eq!(request.output, request.input);
     assert_eq!(request.calls, 1);
-    assert_eq!(request.diagnostics, 2);
+    assert_eq!(request.diagnostics, 1);
     unsafe { reussir_polyffi_cache_close(cache) };
 }

@@ -1,12 +1,12 @@
 //! Database-only cache bindings. Byte callbacks are synchronous and borrowed.
 
-use compcache::{Bypass, Key, NoExtraData, Store, StoreBuilder};
-use std::{
-    ffi::{CStr, c_char, c_void},
-    path::Path,
-    ptr,
-    sync::Arc,
-};
+use compcache::{Bypass, Key, NoExtraData, Store, StoreBuilder, StoreDefaults};
+use std::{ffi::c_void, ptr, sync::Arc};
+
+struct Rrc;
+impl StoreDefaults for Rrc {
+    const APP_NAME: &'static str = "rrc";
+}
 
 pub struct Cache(Store<Bypass, NoExtraData>);
 pub type Bytes = unsafe extern "C" fn(*const u8, usize, *mut c_void);
@@ -28,31 +28,17 @@ unsafe fn report(error: &dyn std::error::Error, diagnostic: Bytes, context: *mut
     unsafe { diagnostic(message.as_ptr(), message.len(), context) };
 }
 
-/// Open a store once for a batch of requests; return null on failure.
+/// Open with compcache's rrc application defaults; return null on failure.
 /// # Safety
-/// Directory is a live NUL-terminated path (native bytes on Unix, UTF-8 on
-/// Windows). The diagnostic callback must not unwind.
+/// The diagnostic callback must not unwind.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn reussir_polyffi_cache_open(
-    directory: *const c_char,
     diagnostic: Bytes,
     context: *mut c_void,
 ) -> *mut Cache {
-    let directory = unsafe { CStr::from_ptr(directory) };
-    #[cfg(unix)]
-    let path = {
-        use std::os::unix::ffi::OsStrExt;
-        Path::new(std::ffi::OsStr::from_bytes(directory.to_bytes()))
-    };
-    #[cfg(not(unix))]
-    let path = match directory.to_str() {
-        Ok(path) => Path::new(path),
-        Err(error) => {
-            unsafe { report(&error, diagnostic, context) };
-            return ptr::null_mut();
-        }
-    };
-    match StoreBuilder::<Bypass, NoExtraData>::new().path(path).open() {
+    match StoreBuilder::<Bypass, NoExtraData>::with_defaults::<Rrc>()
+        .and_then(|builder| builder.open())
+    {
         Ok(store) => Box::into_raw(Box::new(Cache(store))),
         Err(error) => {
             unsafe { report(&error, diagnostic, context) };

@@ -20,10 +20,9 @@ static void receive(const uint8_t *data, size_t size, void *context) {
   static_cast<Request *>(context)->bytes.assign(data, data + size);
 }
 static void diagnostic(const uint8_t *, size_t, void *) { std::abort(); }
-int main(int argc, char **argv) {
-  check(argc == 2);
+int main() {
   Request request;
-  auto *cache = reussir_polyffi_cache_open(argv[1], diagnostic, &request);
+  auto *cache = reussir_polyffi_cache_open(diagnostic, &request);
   check(cache);
   const uint8_t key[32] = {};
   for (unsigned i = 0; i != 2; ++i)

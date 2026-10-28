@@ -17,11 +17,10 @@ typedef bool (*ReussirPolyffiCacheProducer)(void *,
                                             ReussirPolyffiCacheProduced *);
 typedef void (*ReussirPolyffiCacheBytes)(const uint8_t *, size_t, void *);
 
-/* Open once per batch. A null return reports failure through diagnostic.
- * Directory is NUL-terminated: native bytes on Unix, UTF-8 on Windows. */
+/* Open with compcache's rrc application defaults.
+ * A null return reports failure through diagnostic. */
 ReussirPolyffiCache *
-reussir_polyffi_cache_open(const char *directory,
-                           ReussirPolyffiCacheBytes diagnostic, void *context);
+reussir_polyffi_cache_open(ReussirPolyffiCacheBytes diagnostic, void *context);
 
 /* Cache and key must be valid; callbacks are synchronous and must not unwind
  * or recursively request the same key. Producer returns false on failure;
