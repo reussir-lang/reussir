@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 
 use sailfish::TemplateSimple;
 
+use crate::Error;
 use crate::manifest::MANIFEST_FILE;
 
 /// The version-control choice for `rene new --vcs`.
@@ -92,7 +93,7 @@ struct RootTemplate<'a> {
 const GITIGNORE: &str = include_str!("../../templates/gitignore");
 
 /// Create the package described by `opts`.
-pub fn run(opts: &Options) -> Result<(), String> {
+pub fn run(opts: &Options) -> Result<(), Error> {
     let dir = &opts.path;
 
     // Refuse to write into anything that already has content: scaffolding
@@ -103,18 +104,15 @@ pub fn run(opts: &Options) -> Result<(), String> {
     // ask its questions only to fail here.
     if dir.exists() {
         if !dir.is_dir() {
-            return Err(format!("`{}` exists and is not a directory", dir.display()));
+            return Err(Error::DestinationNotDirectory { path: dir.clone() });
         }
         let occupied = dir
             .read_dir()
-            .map_err(|e| format!("cannot read `{}`: {e}", dir.display()))?
+            .map_err(|source| Error::file("read", dir, source))?
             .next()
             .is_some();
         if occupied {
-            return Err(format!(
-                "destination `{}` already exists and is not empty",
-                dir.display()
-            ));
+            return Err(Error::DestinationNotEmpty { path: dir.clone() });
         }
     }
 
@@ -137,7 +135,7 @@ pub fn run(opts: &Options) -> Result<(), String> {
     )?;
 
     let src = dir.join("src");
-    std::fs::create_dir_all(&src).map_err(|e| format!("cannot create `{}`: {e}", src.display()))?;
+    std::fs::create_dir_all(&src).map_err(|source| Error::file("create", &src, source))?;
     write(&dir.join(MANIFEST_FILE), &manifest)?;
     write(&src.join("lib.rr"), &root)?;
     if plan.vcs == Vcs::Git {
@@ -154,7 +152,7 @@ pub fn run(opts: &Options) -> Result<(), String> {
 
 /// Pin every choice: the flags as given, or — interactively — the answers,
 /// with the flags as the offered defaults.
-fn resolve(opts: &Options) -> Result<Plan, String> {
+fn resolve(opts: &Options) -> Result<Plan, Error> {
     // The directory's own name is the natural default; `--name` overrides
     // it, and interactive mode offers whichever of the two applies.
     let default_name = match &opts.name {
@@ -196,7 +194,7 @@ fn resolve(opts: &Options) -> Result<Plan, String> {
 /// stdin, the flags (or their defaults) shown as the value an empty answer
 /// keeps. Invalid names re-prompt rather than abort: the user is right
 /// there.
-fn prompt_lines(opts: &Options, default_name: &str) -> Result<Plan, String> {
+fn prompt_lines(opts: &Options, default_name: &str) -> Result<Plan, Error> {
     let stdin = std::io::stdin();
     let mut input = stdin.lock();
     let name = loop {
@@ -260,13 +258,16 @@ fn prompt_lines(opts: &Options, default_name: &str) -> Result<Plan, String> {
 /// Prompt for a line; an empty answer (or EOF) keeps `default`. The flag
 /// reports EOF so re-prompting loops can stop instead of spinning on a
 /// default that keeps failing validation.
-fn ask(input: &mut impl BufRead, question: &str, default: &str) -> Result<(String, bool), String> {
+fn ask(input: &mut impl BufRead, question: &str, default: &str) -> Result<(String, bool), Error> {
     eprint!("{question} [{default}]: ");
     let _ = std::io::stderr().flush();
     let mut line = String::new();
     let read = input
         .read_line(&mut line)
-        .map_err(|e| format!("cannot read the answer: {e}"))?;
+        .map_err(|source| Error::Terminal {
+            operation: "read the answer",
+            source,
+        })?;
     let answer = line.trim();
     let answer = if answer.is_empty() {
         default.to_owned()
@@ -278,7 +279,7 @@ fn ask(input: &mut impl BufRead, question: &str, default: &str) -> Result<(Strin
 
 /// Prompt for yes/no; anything but a y/n answer (including EOF) keeps
 /// `default`.
-fn confirm(input: &mut impl BufRead, question: &str, default: bool) -> Result<bool, String> {
+fn confirm(input: &mut impl BufRead, question: &str, default: bool) -> Result<bool, Error> {
     let hint = if default { "Y/n" } else { "y/N" };
     let (answer, _) = ask(input, question, hint)?;
     Ok(match answer.to_ascii_lowercase().as_str() {
@@ -291,7 +292,7 @@ fn confirm(input: &mut impl BufRead, question: &str, default: bool) -> Result<bo
 /// The package name becomes `rrc --package-name` — the first segment of
 /// every item's module path — and is embedded in the manifest as a string
 /// literal, so it is held to identifier shape.
-fn check_name(name: &str) -> Result<(), String> {
+fn check_name(name: &str) -> Result<(), Error> {
     let mut chars = name.chars();
     let lead_ok = chars
         .next()
@@ -299,17 +300,15 @@ fn check_name(name: &str) -> Result<(), String> {
     if lead_ok && chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Ok(());
     }
-    Err(format!(
-        "`{name}` cannot name a package: the name becomes the first segment \
-         of every item's module path, so it must be an identifier \
-         (`[A-Za-z_][A-Za-z0-9_]*`); pick one with `--name`"
-    ))
+    Err(Error::InvalidPackageName {
+        name: name.to_owned(),
+    })
 }
 
 /// Versions and triples are embedded in the manifest as string literals;
 /// keep them to characters that cannot escape the quotes (or confuse
 /// Nickel's `%{` interpolation).
-fn check_literal(value: &str, what: &str) -> Result<(), String> {
+fn check_literal(value: &str, what: &str) -> Result<(), Error> {
     if !value.is_empty()
         && value
             .chars()
@@ -317,10 +316,10 @@ fn check_literal(value: &str, what: &str) -> Result<(), String> {
     {
         return Ok(());
     }
-    Err(format!(
-        "`{value}` is not a plausible {what}: expected only ASCII letters, \
-         digits, `.`, `-`, `_`, or `+`"
-    ))
+    Err(Error::InvalidLiteral {
+        value: value.to_owned(),
+        kind: what.to_owned(),
+    })
 }
 
 /// The declared targets as `(key, kind)` pairs. A single kind claims the
@@ -359,7 +358,7 @@ fn targets(plan: &Plan) -> Vec<(String, &'static str)> {
 /// not already inside a work tree (a package inside an existing repository
 /// must not become a nested one). A missing `git` binary degrades to a
 /// warning — the scaffold itself is complete without it.
-fn init_git(dir: &Path) -> Result<(), String> {
+fn init_git(dir: &Path) -> Result<(), Error> {
     write(&dir.join(".gitignore"), GITIGNORE)?;
     if dir
         .ancestors()
@@ -377,11 +376,12 @@ fn init_git(dir: &Path) -> Result<(), String> {
         .output()
     {
         Ok(output) if output.status.success() => Ok(()),
-        Ok(output) => Err(format!(
-            "`git init` failed in `{}`: {}",
-            dir.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        )),
+        Ok(output) => Err(Error::CommandFailed {
+            program: "git".into(),
+            args: "init".into(),
+            status: output.status,
+            diagnostics: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        }),
         Err(error) => {
             tracing::warn!(%error, "cannot run `git init`; skipping (`--vcs none` silences this)");
             Ok(())
@@ -389,16 +389,17 @@ fn init_git(dir: &Path) -> Result<(), String> {
     }
 }
 
-fn write(path: &Path, contents: &str) -> Result<(), String> {
-    std::fs::write(path, contents).map_err(|e| format!("cannot write `{}`: {e}", path.display()))
+fn write(path: &Path, contents: &str) -> Result<(), Error> {
+    std::fs::write(path, contents).map_err(|source| Error::file("write", path, source))
 }
 
 /// Render a template, restoring the trailing newline sailfish trims from
 /// the template file — the scaffold's files must end in one.
-fn render(template: impl TemplateSimple, what: &str) -> Result<String, String> {
-    let mut text = template
-        .render_once()
-        .map_err(|e| format!("cannot render the {what} template: {e}"))?;
+fn render(template: impl TemplateSimple, what: &str) -> Result<String, Error> {
+    let mut text = template.render_once().map_err(|source| Error::Template {
+        template: what.to_owned(),
+        source,
+    })?;
     if !text.ends_with('\n') {
         text.push('\n');
     }
@@ -503,11 +504,11 @@ mod tests {
         std::fs::create_dir_all(&occupied).unwrap();
         std::fs::write(occupied.join("keep.txt"), "").unwrap();
         let err = run(&options(&occupied)).unwrap_err();
-        assert!(err.contains("not empty"), "{err}");
+        assert!(matches!(err, Error::DestinationNotEmpty { .. }));
 
         let bad = tmp.path().join("my-pkg");
         let err = run(&options(&bad)).unwrap_err();
-        assert!(err.contains("--name"), "{err}");
+        assert!(matches!(err, Error::InvalidPackageName { .. }));
         assert!(!bad.exists(), "a refused scaffold must leave nothing");
 
         // `--name` rescues a directory whose own name cannot be a package's.

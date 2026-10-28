@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::UNIX_EPOCH;
 
+use crate::Error;
 use crate::db::BuildDir;
 use crate::manifest::Loaded;
 use crate::tables;
@@ -186,11 +187,9 @@ fn package_roots(loaded: &Loaded) -> Vec<ScanRoot> {
 
 /// Compare the recorded graph against the manifest and the files on disk,
 /// reading no file contents.
-pub fn staleness(dir: &BuildDir, config_hash: &str) -> Result<Staleness, String> {
-    let recorded_config = dir
-        .status(tables::SOURCES_CONFIG_HASH_KEY)
-        .map_err(|e| e.to_string())?;
-    let files = dir.sources().map_err(|e| e.to_string())?;
+pub fn staleness(dir: &BuildDir, config_hash: &str) -> Result<Staleness, Error> {
+    let recorded_config = dir.status(tables::SOURCES_CONFIG_HASH_KEY)?;
+    let files = dir.sources()?;
     // Both halves must be present: a config hash without files (or the
     // reverse) is a half-written record from an interrupted scan.
     let Some(recorded_config) = recorded_config else {
@@ -243,13 +242,13 @@ impl Prepared {
 /// Bring the recorded source graph up to date, re-scanning through `rrc` when
 /// it cannot be trusted. A run where every recorded file still matches does
 /// nothing at all — no subprocess, no write.
-pub async fn prepare(dir: &BuildDir, loaded: &Loaded, color: bool) -> Result<Prepared, String> {
+pub async fn prepare(dir: &BuildDir, loaded: &Loaded, color: bool) -> Result<Prepared, Error> {
     let hash = config_hash(&loaded.dump);
     let reason = staleness(dir, &hash)?;
     if reason.is_up_to_date() {
         tracing::debug!("package sources are up to date");
         return Ok(Prepared {
-            files: dir.sources().map_err(|e| e.to_string())?,
+            files: dir.sources()?,
             reason,
         });
     }
@@ -270,47 +269,35 @@ pub async fn prepare(dir: &BuildDir, loaded: &Loaded, color: bool) -> Result<Pre
         if let Some(existing) = by_path.get(&file.path)
             && existing.record != file.record
         {
-            return Err(format!(
-                "source `{}` has different module identities under separate target roots",
-                file.path
-            ));
+            return Err(Error::ConflictingSourceIdentity { path: file.path });
         }
         by_path.insert(file.path.clone(), file);
     }
     // BTreeMap order is the path order the table reads back in, so what this
     // returns does not depend on whether it came from the scan or the record.
     let files: Vec<SourceFile> = by_path.into_values().collect();
-    dir.replace_sources(&files).map_err(|e| e.to_string())?;
-    dir.set_status(&[(tables::SOURCES_CONFIG_HASH_KEY, hash.as_str())])
-        .map_err(|e| e.to_string())?;
+    dir.replace_sources(&files)?;
+    dir.set_status(&[(tables::SOURCES_CONFIG_HASH_KEY, hash.as_str())])?;
     tracing::debug!(files = files.len(), "recorded the source graph");
     Ok(Prepared { files, reason })
 }
 
 /// Ask `rrc --scan-deps` for the package's source graph and stat every file
 /// it names.
-pub async fn scan(root: &Path, package: &str, color: bool) -> Result<Vec<SourceFile>, String> {
+pub async fn scan(root: &Path, package: &str, color: bool) -> Result<Vec<SourceFile>, Error> {
     scan_root(ScanRoot::Dir(root.to_owned()), package, color).await
 }
 
 /// Ask `rrc --scan-deps` for one directory- or file-rooted source graph and
 /// stat every file it names.
-async fn scan_root(root: ScanRoot, package: &str, color: bool) -> Result<Vec<SourceFile>, String> {
+async fn scan_root(root: ScanRoot, package: &str, color: bool) -> Result<Vec<SourceFile>, Error> {
     let rrc = resolve_rrc();
     match &root {
         ScanRoot::Dir(path) if !path.is_dir() => {
-            return Err(format!(
-                "package source root `{}` does not exist; a package's crate root \
-                 is `{}/lib.rr`",
-                path.display(),
-                SRC_DIR
-            ));
+            return Err(Error::MissingSourceRoot { path: path.clone() });
         }
         ScanRoot::File(path) if !path.is_file() => {
-            return Err(format!(
-                "target crate root `{}` does not exist or is not a file",
-                path.display()
-            ));
+            return Err(Error::MissingCrateRoot { path: path.clone() });
         }
         _ => {}
     }
@@ -345,20 +332,23 @@ async fn scan_root(root: ScanRoot, package: &str, color: bool) -> Result<Vec<Sou
         .expect("pipe stderr")
         .output()
         .await
-        .map_err(|e| format!("cannot run `{}`: {e}", rrc.display()))?;
+        .map_err(|source| Error::spawn(&rrc, source))?;
     if !out.status.success() {
         // rrc has already rendered its diagnostics; pass them on rather than
         // paraphrasing.
         let stderr = String::from_utf8_lossy(&out.stderr);
         let stderr = stderr.trim();
-        return Err(if stderr.is_empty() {
-            format!("`{} --scan-deps` failed", rrc.display())
-        } else {
-            format!("`{} --scan-deps` failed:\n{stderr}", rrc.display())
+        return Err(Error::CommandFailed {
+            program: rrc,
+            args: "--scan-deps".into(),
+            status: out.status,
+            diagnostics: stderr.to_owned(),
         });
     }
-    let stdout = String::from_utf8(out.stdout)
-        .map_err(|e| format!("`{} --scan-deps` printed invalid UTF-8: {e}", rrc.display()))?;
+    let stdout = String::from_utf8(out.stdout).map_err(|source| Error::ScanUtf8 {
+        program: rrc,
+        source,
+    })?;
     // Every scanned file is stat'ed, read, and hashed concurrently — the
     // digests are the scan's real cost on a large package.
     futures_util::future::try_join_all(
@@ -377,18 +367,21 @@ pub(crate) fn resolve_rrc() -> PathBuf {
 
 /// Pull `(path, module)` out of `rrc --scan-deps`' JSON, in the order it
 /// reported them (discovery order).
-fn parse_scan(stdout: &str) -> Result<Vec<(String, Vec<String>)>, String> {
-    let graph: serde_json::Value = serde_json::from_str(stdout)
-        .map_err(|e| format!("cannot parse the `--scan-deps` output: {e}"))?;
-    let files = graph["files"]
-        .as_array()
-        .ok_or("the `--scan-deps` output has no `files` array")?;
+fn parse_scan(stdout: &str) -> Result<Vec<(String, Vec<String>)>, Error> {
+    let graph: serde_json::Value = serde_json::from_str(stdout).map_err(Error::ScanJson)?;
+    let files = graph["files"].as_array().ok_or(Error::MissingScanField {
+        field: "files",
+        kind: "array",
+    })?;
     files
         .iter()
         .map(|file| {
             let path = file["path"]
                 .as_str()
-                .ok_or("a `--scan-deps` entry has no `path`")?
+                .ok_or(Error::MissingScanField {
+                    field: "path",
+                    kind: "string",
+                })?
                 .to_owned();
             let module = file["module"]
                 .as_array()
@@ -404,11 +397,12 @@ fn parse_scan(stdout: &str) -> Result<Vec<(String, Vec<String>)>, String> {
 }
 
 /// Stat and hash one scanned file.
-async fn record(path: String, module: Vec<String>) -> Result<SourceFile, String> {
-    let meta = std::fs::metadata(&path).map_err(|e| format!("cannot stat `{path}`: {e}"))?;
+async fn record(path: String, module: Vec<String>) -> Result<SourceFile, Error> {
+    let meta =
+        std::fs::metadata(&path).map_err(|source| Error::file("stat", Path::new(&path), source))?;
     let contents = compio::fs::read(&path)
         .await
-        .map_err(|e| format!("cannot read `{path}`: {e}"))?;
+        .map_err(|source| Error::file("read", Path::new(&path), source))?;
     Ok(SourceFile {
         record: SourceRecord {
             module,

@@ -11,11 +11,14 @@
 //! resolve over local paths ([`resolve`]), and `rene new` scaffolds a fresh
 //! package ([`new`]).
 
+pub mod cache;
 pub mod compile;
 pub mod core_src;
 pub mod db;
 pub mod deps;
+pub mod error;
 pub mod exec;
+pub use error::{Error, Result};
 pub mod fresh;
 pub mod manifest;
 pub mod new;

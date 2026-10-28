@@ -20,15 +20,15 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle};
 
+use crate::Error;
 use crate::compile;
 use crate::db::BuildDir;
 use crate::deps;
 use crate::fresh;
 use crate::manifest::Profile;
 use crate::plan;
-use crate::pool::Pool;
 use crate::resolve::Graph;
 use crate::rt::RtArtifacts;
 
@@ -56,9 +56,9 @@ pub async fn build_deps(
     graph: &Graph,
     rt: &RtArtifacts,
     opts: &Options<'_>,
-    pool: &Pool,
-    progress: &MultiProgress,
-) -> Result<usize, String> {
+    execution: &compile::Execution<'_>,
+) -> Result<usize, Error> {
+    let progress = execution.progress;
     let dep_names: Vec<&str> = graph
         .nodes
         .keys()
@@ -70,7 +70,7 @@ pub async fn build_deps(
     }
     let deps_dir = opts.build_dir.join(opts.profile_name).join("deps");
     std::fs::create_dir_all(&deps_dir)
-        .map_err(|e| format!("cannot create `{}`: {e}", deps_dir.display()))?;
+        .map_err(|source| Error::file("create", &deps_dir, source))?;
 
     let overall = progress.add(ProgressBar::new(dep_names.len() as u64).with_style(
         ProgressStyle::with_template("{bar:24} {pos}/{len} dependencies").expect("static template"),
@@ -92,25 +92,39 @@ pub async fn build_deps(
     let mut in_flight = FuturesUnordered::new();
     for (name, waiting) in &waiting_on {
         if *waiting == 0 {
-            in_flight.push(run_node(name, dir, graph, rt, opts, pool, progress));
+            in_flight.push(run_node(name, dir, graph, rt, opts, execution));
         }
     }
     let mut built = 0;
+    let mut failure = None;
     while let Some((finished, result)) = in_flight.next().await {
-        built += result? as usize;
+        match result {
+            Ok(was_built) => built += was_built as usize,
+            Err(error) => {
+                failure.get_or_insert(error);
+            }
+        }
         overall.inc(1);
+        // Drain admitted compiler work before reporting failure. Commands own
+        // their input leases; stop admitting new dependents on error.
+        if failure.is_some() {
+            continue;
+        }
         for dependent in dependents.get(finished).into_iter().flatten() {
             let waiting = waiting_on
                 .get_mut(dependent)
                 .expect("every dependent is a known node");
             *waiting -= 1;
             if *waiting == 0 {
-                in_flight.push(run_node(dependent, dir, graph, rt, opts, pool, progress));
+                in_flight.push(run_node(dependent, dir, graph, rt, opts, execution));
             }
         }
     }
     overall.finish_and_clear();
     progress.remove(&overall);
+    if let Some(error) = failure {
+        return Err(error);
+    }
     Ok(built)
 }
 
@@ -122,10 +136,9 @@ async fn run_node<'g>(
     graph: &'g Graph,
     rt: &RtArtifacts,
     opts: &Options<'_>,
-    pool: &Pool,
-    progress: &MultiProgress,
-) -> (&'g str, Result<bool, String>) {
-    let result = build_node(name, dir, graph, rt, opts, pool, progress).await;
+    execution: &compile::Execution<'_>,
+) -> (&'g str, Result<bool, Error>) {
+    let result = build_node(name, dir, graph, rt, opts, execution).await;
     (name, result)
 }
 
@@ -135,9 +148,11 @@ async fn build_node(
     graph: &Graph,
     rt: &RtArtifacts,
     opts: &Options<'_>,
-    pool: &Pool,
-    progress: &MultiProgress,
-) -> Result<bool, String> {
+    execution: &compile::Execution<'_>,
+) -> Result<bool, Error> {
+    let pool = execution.pool;
+    let progress = execution.progress;
+    let cache = execution.cache;
     let ctx = fresh::Context {
         dir: Some(dir),
         profile_name: opts.profile_name,
@@ -147,10 +162,17 @@ async fn build_node(
         build_dir: opts.build_dir,
         token_reuse_remarks: opts.token_reuse_remarks,
     };
-    // At this point the node's upstream artifacts are final, so the local
-    // check is exact: current means nothing to do at all.
+    let cached_bundle = name == "core"
+        && crate::core_src::dir(opts.build_dir)
+            .canonicalize()
+            .is_ok_and(|expected| {
+                graph.nodes[name]
+                    .dir
+                    .canonicalize()
+                    .is_ok_and(|actual| actual == expected)
+            });
     let state = fresh::node_state(graph, name, &ctx)?;
-    if state.is_current() {
+    if state.is_current() && !cached_bundle {
         tracing::debug!(package = name, "up to date");
         return Ok(false);
     }
@@ -165,9 +187,17 @@ async fn build_node(
     let src_root = graph.nodes[name].dir.join("src");
     let package = name.to_owned();
     let color = opts.color;
-    let mut sources = pool
-        .run(move || async move { deps::scan(&src_root, &package, color).await })
-        .await?;
+    let mut sources = if state.is_current() {
+        let json = dir
+            .status(&crate::tables::dep_sources_key(name))?
+            .ok_or_else(|| Error::MissingRecordedSources {
+                package: name.to_owned(),
+            })?;
+        serde_json::from_str(&json)?
+    } else {
+        pool.run(move || async move { deps::scan(&src_root, &package, color).await })
+            .await?
+    };
     sources.sort_by(|a, b| a.path.cmp(&b.path));
 
     let plan_opts = plan::Options {
@@ -178,17 +208,50 @@ async fn build_node(
         build_dir: opts.build_dir,
         token_reuse_remarks: opts.token_reuse_remarks,
     };
-    for command in plan::node_commands(graph, name, &plan_opts, Some(rt)) {
-        bar.set_message(format!("{name}: {}", command.emit));
-        let invocation = compile::Invocation::from_planned(command, &rt.rustc, opts.color);
-        let completed = pool.run(move || invocation.run()).await?;
-        // Clear/redraw every active bar around the indivisible diagnostic
-        // block. `suspend` also serializes these callbacks on the scheduler.
-        progress.suspend(|| completed.report())?;
+    let commands = plan::node_commands(graph, name, &plan_opts, Some(rt));
+    let built;
+    if cached_bundle {
+        let request = crate::cache::Request::new(
+            graph,
+            name,
+            &plan_opts,
+            &rt.rustc,
+            &rt.rustc_version,
+            commands,
+            &sources,
+        )?;
+        let progress = progress.clone();
+        let color = opts.color;
+        let cache = std::sync::Arc::clone(cache);
+        let (artifacts, produced) = pool
+            .run(move || async move {
+                compio::runtime::spawn_blocking(move || request.acquire(cache, color, &progress))
+                    .await
+                    .map_err(|_| Error::WorkerPanicked {
+                        stage: "bundled library cache",
+                    })?
+            })
+            .await?;
+        graph.nodes[name].artifacts.set(artifacts).map_err(|_| {
+            Error::ArtifactsAlreadySelected {
+                package: name.to_owned(),
+            }
+        })?;
+        built = produced;
+    } else {
+        built = true;
+        for command in commands {
+            bar.set_message(format!("{name}: {}", command.emit));
+            let invocation = compile::Invocation::from_planned(command, &rt.rustc, opts.color);
+            let completed = pool.run(move || invocation.run()).await?;
+            // Clear/redraw every active bar around the indivisible diagnostic
+            // block. `suspend` also serializes these callbacks on the scheduler.
+            progress.suspend(|| completed.report())?;
+        }
     }
     fresh::record_dep(graph, name, &ctx, rt, &sources)?;
     bar.finish_and_clear();
     progress.remove(&bar);
     tracing::debug!(package = name, "built");
-    Ok(true)
+    Ok(built)
 }

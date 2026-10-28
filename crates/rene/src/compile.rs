@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use std::ffi::OsString;
 
+use crate::Error;
 use crate::db::BuildDir;
 use crate::deps::{self, Prepared};
 use crate::manifest::{Loaded, Profile, TargetKind};
@@ -66,6 +67,8 @@ pub struct Options {
 
 /// The shared execution resources used by every target compilation.
 pub struct Execution<'a> {
+    /// The disk-only store used to acquire bundled dependency artifacts.
+    pub cache: &'a std::sync::Arc<crate::cache::Cache>,
     pub pool: &'a Pool,
     pub progress: &'a MultiProgress,
 }
@@ -99,7 +102,7 @@ pub async fn build(
     opts: &Options,
     graph: &Graph,
     execution: &Execution<'_>,
-) -> Result<Vec<Product>, String> {
+) -> Result<Vec<Product>, Error> {
     let manifest = &loaded.manifest;
     let selected: Vec<&str> = if opts.bins.is_empty() && opts.libs.is_empty() {
         manifest.targets.keys().map(String::as_str).collect()
@@ -118,8 +121,7 @@ pub async fn build(
     };
 
     let out_dir = dir.root().join(&opts.profile_name);
-    std::fs::create_dir_all(&out_dir)
-        .map_err(|e| format!("cannot create `{}`: {e}", out_dir.display()))?;
+    std::fs::create_dir_all(&out_dir).map_err(|source| Error::file("create", &out_dir, source))?;
     let fingerprint = fingerprint(loaded, &sources.files, rt, opts);
 
     // Partition into current and stale first, so the stale ones can run
@@ -172,7 +174,9 @@ pub async fn build(
         tracing::debug!(target = name, kind = kind.emit(), out = %path.display(), "compiling");
         let command = planned
             .remove(*name)
-            .ok_or_else(|| format!("target `{name}` missing from the plan"))?;
+            .ok_or_else(|| Error::MissingPlannedTarget {
+                name: (*name).to_owned(),
+            })?;
         let bar = execution.progress.add(
             ProgressBar::new_spinner().with_message(format!("{name}: compiling {}", kind.emit())),
         );
@@ -215,9 +219,8 @@ pub async fn build(
                 path: path.clone(),
                 token_reuse_report,
             };
-            let record = serde_json::to_string(&record).map_err(|e| e.to_string())?;
-            dir.set_status(&[(key.as_str(), record.as_str())])
-                .map_err(|e| e.to_string())?;
+            let record = serde_json::to_string(&record)?;
+            dir.set_status(&[(key.as_str(), record.as_str())])?;
         }
         products.push(Product {
             name: name.to_owned(),
@@ -227,22 +230,24 @@ pub async fn build(
     Ok(products)
 }
 
-fn check_selected_bin(manifest: &crate::manifest::Manifest, name: &str) -> Result<(), String> {
+fn check_selected_bin(manifest: &crate::manifest::Manifest, name: &str) -> Result<(), Error> {
     let Some(target) = manifest.targets.get(name) else {
         return Err(unknown_selection(manifest, name, "binary", |kind| {
             kind == TargetKind::Executable
         }));
     };
     if target.kind != TargetKind::Executable {
-        return Err(format!(
-            "target `{name}` is {}, not a binary; select it with `--lib {name}`",
-            target.kind.emit()
-        ));
+        return Err(Error::SelectionKind {
+            name: name.to_owned(),
+            actual: target.kind.emit(),
+            expected: "a binary",
+            selection: "--lib",
+        });
     }
     Ok(())
 }
 
-fn check_selected_library(manifest: &crate::manifest::Manifest, name: &str) -> Result<(), String> {
+fn check_selected_library(manifest: &crate::manifest::Manifest, name: &str) -> Result<(), Error> {
     let Some(target) = manifest.targets.get(name) else {
         return Err(unknown_selection(
             manifest,
@@ -252,10 +257,12 @@ fn check_selected_library(manifest: &crate::manifest::Manifest, name: &str) -> R
         ));
     };
     if !target.kind.is_library() {
-        return Err(format!(
-            "target `{name}` is {}, not a library; select it with `--bin {name}`",
-            target.kind.emit()
-        ));
+        return Err(Error::SelectionKind {
+            name: name.to_owned(),
+            actual: target.kind.emit(),
+            expected: "a library",
+            selection: "--bin",
+        });
     }
     Ok(())
 }
@@ -263,9 +270,9 @@ fn check_selected_library(manifest: &crate::manifest::Manifest, name: &str) -> R
 fn unknown_selection(
     manifest: &crate::manifest::Manifest,
     name: &str,
-    group: &str,
+    group: &'static str,
     accepts: impl Fn(TargetKind) -> bool,
-) -> String {
+) -> Error {
     let declared = manifest
         .targets
         .iter()
@@ -277,7 +284,11 @@ fn unknown_selection(
     } else {
         format!("the manifest declares {}", declared.join(", "))
     };
-    format!("no {group} target named `{name}`: {suffix}")
+    Error::UnknownSelection {
+        name: name.to_owned(),
+        group,
+        available: suffix,
+    }
 }
 
 /// One `rrc` compile as owned data — everything a pool worker needs to
@@ -291,9 +302,33 @@ pub(crate) struct Invocation {
     /// The parent terminal's resolved color policy. The child writes to a
     /// pipe, so `auto` inside rrc would otherwise discard styling.
     color: bool,
+    /// Own input leases until the subprocess finishes, independently of its caller.
+    _leases: Vec<std::sync::Arc<compcache::RuntimeLease>>,
 }
 
 impl Invocation {
+    /// The directory-cache producer is synchronous and runs off the event
+    /// loop. Keep its invocation and diagnostic contract identical to `run`.
+    pub(crate) fn run_blocking(self) -> Result<CompletedInvocation, Error> {
+        let mut cmd = std::process::Command::new(&self.program);
+        cmd.args(&self.args);
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            cmd.arg("-v");
+        }
+        for (key, value) in &self.envs {
+            cmd.env(key, value);
+        }
+        let output = cmd
+            .args(["--color", if self.color { "always" } else { "never" }])
+            .output()
+            .map_err(|source| Error::spawn(&self.program, source))?;
+        Ok(CompletedInvocation {
+            status: output.status,
+            diagnostics: output.stderr,
+            out: self.out,
+        })
+    }
+
     /// An `rrc` invocation from a planned command: the real program
     /// resolved, the baking toolchain pinned through `REUSSIR_RUSTC`.
     pub(crate) fn from_planned(
@@ -309,13 +344,14 @@ impl Invocation {
             envs: vec![("REUSSIR_RUSTC", rustc.into())],
             out: command.out,
             color,
+            _leases: command.leases,
         }
     }
 
     /// Spawn and await the process (on whichever runtime polls this), keeping
     /// its diagnostics private until the scheduler can replay them as one
     /// indivisible block.
-    pub(crate) async fn run(self) -> Result<CompletedInvocation, String> {
+    pub(crate) async fn run(self) -> Result<CompletedInvocation, Error> {
         let mut cmd = compio::process::Command::new(&self.program);
         cmd.args(&self.args);
         // A verbose `rene` runs a verbose `rrc`; its DEBUG phase events join
@@ -336,7 +372,7 @@ impl Invocation {
             .expect("pipe rrc stderr")
             .output()
             .await
-            .map_err(|e| format!("cannot run `{}`: {e}", self.program.display()))?;
+            .map_err(|source| Error::spawn(&self.program, source))?;
         Ok(CompletedInvocation {
             status: output.status,
             diagnostics: output.stderr,
@@ -356,19 +392,22 @@ pub(crate) struct CompletedInvocation {
 impl CompletedInvocation {
     /// Replay the complete diagnostic block under stderr's process-wide lock,
     /// then turn a failing exit status into rene's target-level error.
-    pub(crate) fn report(self) -> Result<(), String> {
+    pub(crate) fn report(self) -> Result<(), Error> {
         if !self.diagnostics.is_empty() {
             let mut stderr = std::io::stderr().lock();
             stderr
                 .write_all(&self.diagnostics)
                 .and_then(|()| stderr.flush())
-                .map_err(|e| format!("cannot write rrc diagnostics: {e}"))?;
+                .map_err(|source| Error::Terminal {
+                    operation: "write rrc diagnostics",
+                    source,
+                })?;
         }
         if !self.status.success() {
-            return Err(format!(
-                "compiling `{}` failed (see rrc's diagnostics above)",
-                self.out.display()
-            ));
+            return Err(Error::CompilationFailed {
+                output: self.out,
+                status: self.status,
+            });
         }
         Ok(())
     }
@@ -489,8 +528,8 @@ pub(crate) fn product_is_current(
     fingerprint: &str,
     path: &Path,
     token_reuse_report: Option<&Path>,
-) -> Result<bool, String> {
-    let Some(record) = dir.status(key).map_err(|e| e.to_string())? else {
+) -> Result<bool, Error> {
+    let Some(record) = dir.status(key)? else {
         return Ok(false);
     };
     let Ok(record) = serde_json::from_str::<ProductRecord>(&record) else {

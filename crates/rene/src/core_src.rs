@@ -9,6 +9,7 @@
 //! re-materializes them and the ordinary per-package freshness machinery
 //! sees the change.
 
+use crate::Error;
 use std::path::{Path, PathBuf};
 
 /// The bundled package source (tar.zst), packed by `build.rs` with fixed
@@ -17,31 +18,27 @@ static CORE_BUNDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/core-src.t
 
 /// The bundle's content hash — the directory name component that keys
 /// unpacked sources to this rene build.
-fn content_hash() -> String {
-    blake3::hash(CORE_BUNDLE).to_hex()[..16].to_string()
+pub(crate) fn content_hash() -> String {
+    blake3::hash(CORE_BUNDLE).to_hex().to_string()
 }
 
 /// Where the bundle lives (or will live) under `build_dir`. Pure — inspect
 /// paths print without writing anything.
 pub fn dir(build_dir: &Path) -> PathBuf {
-    build_dir.join("core-src").join(content_hash())
+    build_dir.join("core-src").join(&content_hash()[..16])
 }
 
 /// Materialize the bundle under `build_dir`, idempotently, and return its
 /// root. The directory is content-keyed, so its manifest's presence means
 /// the whole bundle is already there.
-pub fn unpack(build_dir: &Path) -> Result<PathBuf, String> {
+pub fn unpack(build_dir: &Path) -> Result<PathBuf, Error> {
     let root = dir(build_dir);
     if root.join("rene.ncl").is_file() {
         return Ok(root);
     }
-    let decoder = zstd::Decoder::new(CORE_BUNDLE)
-        .map_err(|e| format!("cannot decode the bundled core source: {e}"))?;
-    tar::Archive::new(decoder).unpack(&root).map_err(|e| {
-        format!(
-            "cannot unpack the bundled core source into {}: {e}",
-            root.display()
-        )
-    })?;
+    let decoder = zstd::Decoder::new(CORE_BUNDLE)?;
+    tar::Archive::new(decoder)
+        .unpack(&root)
+        .map_err(|source| Error::file("unpack bundled core into", &root, source))?;
     Ok(root)
 }

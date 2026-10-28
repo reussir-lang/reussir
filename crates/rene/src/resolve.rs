@@ -18,6 +18,7 @@ use pubgrub::{
     SemanticVersion,
 };
 
+use crate::Error;
 use crate::manifest::{self, Loaded};
 
 /// One package of the loaded graph.
@@ -31,6 +32,8 @@ pub struct Node {
     pub loaded: Loaded,
     /// Dependency names, in name order (the manifest map is sorted).
     pub dependencies: Vec<String>,
+    /// Selected cache artifacts and their lease, retained for this build.
+    pub(crate) artifacts: std::cell::OnceCell<crate::plan::Artifacts>,
 }
 
 /// The transitive path-dependency graph, keyed by package name. One
@@ -55,7 +58,7 @@ pub struct Solution {
 pub(crate) const BUILTIN_PACKAGES: &[&str] = &["core", "std"];
 
 /// Load the transitive graph rooted at `root`'s manifest.
-pub fn load_graph(root: &Loaded) -> Result<Graph, String> {
+pub fn load_graph(root: &Loaded) -> Result<Graph, Error> {
     load_graph_with(root, None)
 }
 
@@ -63,7 +66,7 @@ pub fn load_graph(root: &Loaded) -> Result<Graph, String> {
 /// in: loaded like any other node and made an implicit dependency of every
 /// package that does not set `package.no_core`. Its edge carries no
 /// manifest entry, so constraint lookups fall back to `*`.
-pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, String> {
+pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, Error> {
     let mut nodes: BTreeMap<String, Node> = BTreeMap::new();
     let root_name = root.manifest.package.name.clone();
     let mut queue: Vec<(String, Loaded)> = vec![(root_name.clone(), root.clone())];
@@ -71,11 +74,11 @@ pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, 
         let dir = manifest_dir(&loaded)?;
         if let Some(existing) = nodes.get(&name) {
             if existing.dir != dir {
-                return Err(format!(
-                    "two packages claim the name `{name}`: `{}` and `{}`",
-                    existing.dir.display(),
-                    dir.display()
-                ));
+                return Err(Error::ConflictingPackages {
+                    name: name.clone(),
+                    first: existing.dir.clone(),
+                    second: dir,
+                });
             }
             continue;
         }
@@ -83,22 +86,22 @@ pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, 
         for (dep_name, dep) in &loaded.manifest.dependencies {
             let dep_dir = dir.join(dep.path());
             let dep_manifest = dep_dir.join(manifest::MANIFEST_FILE);
-            let dep_loaded = manifest::load(&dep_manifest).map_err(|e| {
-                format!(
-                    "loading dependency `{dep_name}` of `{name}` \
-                     (`{}`): {e}",
-                    dep_manifest.display()
-                )
-            })?;
+            let dep_loaded =
+                manifest::load(&dep_manifest).map_err(|source| Error::DependencyManifest {
+                    dependency: dep_name.clone(),
+                    package: name.clone(),
+                    path: dep_manifest.clone(),
+                    source,
+                })?;
             // The key is the name everything references the package by;
             // renaming would silently fork one package into two identities.
             if dep_loaded.manifest.package.name != *dep_name {
-                return Err(format!(
-                    "dependency `{dep_name}` of `{name}` declares itself \
-                     `{}` (in `{}`); the key and the package name must agree",
-                    dep_loaded.manifest.package.name,
-                    dep_manifest.display()
-                ));
+                return Err(Error::DependencyName {
+                    dependency: dep_name.clone(),
+                    package: name.clone(),
+                    declared: dep_loaded.manifest.package.name.clone(),
+                    path: dep_manifest,
+                });
             }
             dependencies.push(dep_name.clone());
             queue.push((dep_name.clone(), dep_loaded));
@@ -111,6 +114,7 @@ pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, 
                 version,
                 loaded,
                 dependencies,
+                artifacts: Default::default(),
             },
         );
     }
@@ -118,8 +122,7 @@ pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, 
         && !nodes.contains_key("core")
     {
         let manifest = core_dir.join(manifest::MANIFEST_FILE);
-        let loaded = manifest::load(&manifest)
-            .map_err(|e| format!("loading the bundled core package: {e}"))?;
+        let loaded = manifest::load(&manifest).map_err(Error::CoreManifest)?;
         let version = declared_version(&loaded)?;
         nodes.insert(
             "core".to_owned(),
@@ -128,6 +131,7 @@ pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, 
                 version,
                 loaded,
                 dependencies: Vec::new(),
+                artifacts: Default::default(),
             },
         );
         for (name, node) in nodes.iter_mut() {
@@ -146,7 +150,7 @@ pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, 
 }
 
 /// Run the pubgrub feasibility check over the loaded graph.
-pub fn check(graph: &Graph) -> Result<Solution, String> {
+pub fn check(graph: &Graph) -> Result<Solution, Error> {
     let mut provider = OfflineDependencyProvider::<String, Ranges<SemanticVersion>>::new();
     for (name, node) in &graph.nodes {
         let deps: Vec<(String, Ranges<SemanticVersion>)> = node
@@ -162,20 +166,23 @@ pub fn check(graph: &Graph) -> Result<Solution, String> {
                     .and_then(|d| d.version.as_deref());
                 Ok((dep_name.clone(), parse_constraint(constraint)?))
             })
-            .collect::<Result<_, String>>()?;
+            .collect::<Result<_, Error>>()?;
         provider.add_dependencies(name.clone(), node.version, deps);
     }
     let root = &graph.nodes[&graph.root];
     let solution =
-        pubgrub::resolve(&provider, graph.root.clone(), root.version).map_err(|err| match err {
-            PubGrubError::NoSolution(mut tree) => {
-                tree.collapse_no_versions();
-                format!(
-                    "dependency resolution failed:\n{}",
-                    DefaultStringReporter::report(&tree)
-                )
+        pubgrub::resolve(&provider, graph.root.clone(), root.version).map_err(|mut source| {
+            let diagnostic = match &mut source {
+                PubGrubError::NoSolution(tree) => {
+                    tree.collapse_no_versions();
+                    DefaultStringReporter::report(tree)
+                }
+                other => other.to_string(),
+            };
+            Error::Resolution {
+                diagnostic,
+                source: Box::new(source),
             }
-            other => format!("dependency resolution failed: {other}"),
         })?;
     Ok(Solution {
         pinned: solution.into_iter().collect(),
@@ -184,25 +191,24 @@ pub fn check(graph: &Graph) -> Result<Solution, String> {
 
 /// The manifest's directory, canonicalized — the identity that detects one
 /// package reached through two different relative spellings.
-fn manifest_dir(loaded: &Loaded) -> Result<PathBuf, String> {
+fn manifest_dir(loaded: &Loaded) -> Result<PathBuf, Error> {
     let dir = loaded
         .path
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     dir.canonicalize()
-        .map_err(|e| format!("cannot canonicalize `{}`: {e}", dir.display()))
+        .map_err(|source| Error::file("canonicalize", dir, source))
 }
 
 /// The package's declared version, `0.0.0` when absent.
-fn declared_version(loaded: &Loaded) -> Result<SemanticVersion, String> {
+fn declared_version(loaded: &Loaded) -> Result<SemanticVersion, Error> {
     match &loaded.manifest.package.version {
         None => Ok(SemanticVersion::zero()),
-        Some(text) => text.parse().map_err(|e| {
-            format!(
-                "package `{}` declares version `{text}`: {e}",
-                loaded.manifest.package.name
-            )
+        Some(text) => text.parse().map_err(|source| Error::PackageVersion {
+            package: loaded.manifest.package.name.clone(),
+            version: text.clone(),
+            source,
         }),
     }
 }
@@ -210,7 +216,7 @@ fn declared_version(loaded: &Loaded) -> Result<SemanticVersion, String> {
 /// Parse a manifest constraint into a version range: `*`/absent (any),
 /// `1.2.3` (exact), `^x[.y[.z]]` (compatible: up to the next breaking
 /// version, semver's caret rule), `1.2` / `1` (prefix).
-fn parse_constraint(text: Option<&str>) -> Result<Ranges<SemanticVersion>, String> {
+fn parse_constraint(text: Option<&str>) -> Result<Ranges<SemanticVersion>, Error> {
     let Some(text) = text else {
         return Ok(Ranges::full());
     };
@@ -218,9 +224,11 @@ fn parse_constraint(text: Option<&str>) -> Result<Ranges<SemanticVersion>, Strin
     if text == "*" {
         return Ok(Ranges::full());
     }
-    let parse = |t: &str| -> Result<SemanticVersion, String> {
-        t.parse()
-            .map_err(|e| format!("invalid version constraint `{text}`: {e}"))
+    let parse = |t: &str| -> Result<SemanticVersion, Error> {
+        t.parse().map_err(|source| Error::VersionConstraint {
+            constraint: text.to_owned(),
+            source,
+        })
     };
     if let Some(rest) = text.strip_prefix('^') {
         let (low, given) = parse_prefix(rest, &parse)?;
@@ -238,18 +246,17 @@ fn parse_constraint(text: Option<&str>) -> Result<Ranges<SemanticVersion>, Strin
 /// how many components were given.
 fn parse_prefix(
     text: &str,
-    parse: &impl Fn(&str) -> Result<SemanticVersion, String>,
-) -> Result<(SemanticVersion, usize), String> {
+    parse: &impl Fn(&str) -> Result<SemanticVersion, Error>,
+) -> Result<(SemanticVersion, usize), Error> {
     let given = text.split('.').count();
     let padded = match given {
         3 => text.to_owned(),
         2 => format!("{text}.0"),
         1 => format!("{text}.0.0"),
         _ => {
-            return Err(format!(
-                "invalid version constraint `{text}`: expected `x`, `x.y`, \
-                 `x.y.z`, optionally behind `^`, or `*`"
-            ));
+            return Err(Error::InvalidConstraintShape {
+                constraint: text.to_owned(),
+            });
         }
     };
     Ok((parse(&padded)?, given))
@@ -298,7 +305,7 @@ mod tests {
         .unwrap();
     }
 
-    fn graph_of(root: &Path) -> Result<Graph, String> {
+    fn graph_of(root: &Path) -> Result<Graph, Error> {
         let loaded = manifest::load(&root.join(manifest::MANIFEST_FILE)).unwrap();
         load_graph(&loaded)
     }
@@ -345,8 +352,11 @@ mod tests {
         write_pkg(&tmp.path().join("util"), "util", Some("1.2.9"), &[]);
 
         let err = check(&graph_of(&tmp.path().join("app")).unwrap()).unwrap_err();
-        assert!(err.contains("dependency resolution failed"), "{err}");
-        assert!(err.contains("util"), "{err}");
+        assert!(
+            err.to_string().contains("dependency resolution failed"),
+            "{err}"
+        );
+        assert!(err.to_string().contains("util"), "{err}");
     }
 
     /// A shared dependency reached through two spellings is one node; a key
@@ -363,7 +373,8 @@ mod tests {
         write_pkg(&tmp.path().join("util"), "util", Some("1.0.0"), &[]);
         let err = graph_of(&tmp.path().join("app")).unwrap_err();
         assert!(
-            err.contains("the key and the package name must agree"),
+            err.to_string()
+                .contains("the key and the package name must agree"),
             "{err}"
         );
     }

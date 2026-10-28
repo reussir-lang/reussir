@@ -357,6 +357,10 @@ config.substitutions.append((r'%rrc', sh_path(config.reussir_rrc_path)))
 # point it at the staged driver rather than whatever `rrc` a PATH lookup finds.
 config.substitutions.append((r'%rene', sh_path(config.rene_path)))
 config.environment['REUSSIR_RRC'] = sh_path(config.reussir_rrc_path)
+# Share bundled-library bakes within this test run without touching the user's
+# cache. An explicit override remains useful for cold/warm cache checks.
+config.environment['RENE_CACHE_DIR'] = os.environ.get(
+    'RENE_CACHE_DIR', os.path.join(config.test_exec_root, 'rene-cache'))
 # The Rust REPL; its suite lives in repl-rs/ and only runs when the `rrepl`
 # CMake target has been built.
 config.substitutions.append((r'%rrepl', sh_path(config.rrepl_path)))

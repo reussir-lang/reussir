@@ -11,7 +11,7 @@
 // DIAG: type mismatch: expected `bool`, found `Nat`
 // DIAG: non-exhaustive patterns in `match`
 
-// RUN: %FileCheck %s --check-prefix=RRI < %t.bdir/dev/deps/core.rri
+// RUN: %rene inspect --manifest-path %S/core_bigint/rene.ncl --build-dir %t.bdir --frozen --commands | %python -c "import json,sys; p=next(n['artifacts']['rri'] for n in json.load(sys.stdin)['plan']['nodes'] if n['package']=='core'); print(open(p).read(), end='')" | %FileCheck %s --check-prefix=RRI
 
 // RRI-DAG: #[lang("nat")] pub [shared] enum #core::num::Nat in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] { Zero(), Succ(Nat) };
 // RRI-DAG: #[lang("int")] pub [shared] enum #core::num::Int in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}] { OfNat(Nat), NegSucc(Nat) };

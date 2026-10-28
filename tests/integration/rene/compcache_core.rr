@@ -1,0 +1,9 @@
+// Core and the Rust runtime are shared across independent build directories. Execute the second
+// result too: its compiler and linker read the leased cache files directly.
+// RUN: rm -rf %t.first %t.second
+// RUN: %rene build --manifest-path %S/core_num/rene.ncl --build-dir %t.first %rrc_linker
+// RUN: %rene -v build --manifest-path %S/core_num/rene.ncl --build-dir %t.second %rrc_linker 2>&1 | %FileCheck %s
+// CHECK-NOT: baking shared reussir-rt
+// CHECK-NOT: baking bundled library
+// CHECK: using cached bundled library in place
+// RUN: %t.second/dev/numdemo%exe_ext

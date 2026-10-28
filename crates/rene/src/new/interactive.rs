@@ -19,6 +19,7 @@
 //! the unit tests drive with synthetic key events — no terminal involved;
 //! only [`wizard`] touches the real one.
 
+use crate::Error;
 use std::io::IsTerminal;
 
 use ratatui::Terminal;
@@ -40,22 +41,33 @@ use super::{Options, Plan, Vcs, check_literal, check_name};
 
 /// Run the wizard on the real terminal and return the submitted plan.
 /// Cancelling is an error — the caller must not scaffold anything.
-pub(super) fn wizard(opts: &Options, default_name: &str) -> Result<Plan, String> {
+pub(super) fn wizard(opts: &Options, default_name: &str) -> Result<Plan, Error> {
     let mut wizard = Wizard::new(opts, default_name);
     let _screen = RawScreen::enter()?;
     // Per ratatui-image's contract the graphics query must run after
     // entering the alternate screen and before the first event read.
     let mut logo = Logo::detect();
-    let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stderr()))
-        .map_err(|e| format!("cannot start the terminal UI: {e}"))?;
+    let mut terminal =
+        Terminal::new(CrosstermBackend::new(std::io::stderr())).map_err(|source| {
+            Error::Terminal {
+                operation: "start the terminal UI",
+                source,
+            }
+        })?;
     loop {
         terminal
             .draw(|frame| wizard.render(frame, logo.as_mut()))
-            .map_err(|e| format!("cannot draw the wizard: {e}"))?;
-        if let Event::Key(key) = event::read().map_err(|e| format!("cannot read a key: {e}"))? {
+            .map_err(|source| Error::Terminal {
+                operation: "draw the wizard",
+                source,
+            })?;
+        if let Event::Key(key) = event::read().map_err(|source| Error::Terminal {
+            operation: "read a key",
+            source,
+        })? {
             match wizard.handle_key(&key) {
                 Outcome::Continue => {}
-                Outcome::Cancel => return Err("cancelled; nothing was created".to_owned()),
+                Outcome::Cancel => return Err(Error::Cancelled),
                 Outcome::Submit => return Ok(wizard.into_plan()),
             }
         }
@@ -67,11 +79,17 @@ pub(super) fn wizard(opts: &Options, default_name: &str) -> Result<Plan, String>
 struct RawScreen;
 
 impl RawScreen {
-    fn enter() -> Result<Self, String> {
-        enable_raw_mode().map_err(|e| format!("cannot enter raw mode: {e}"))?;
+    fn enter() -> Result<Self, Error> {
+        enable_raw_mode().map_err(|source| Error::Terminal {
+            operation: "enter raw mode",
+            source,
+        })?;
         if let Err(e) = execute!(std::io::stderr(), EnterAlternateScreen) {
             let _ = disable_raw_mode();
-            return Err(format!("cannot enter the alternate screen: {e}"));
+            return Err(Error::Terminal {
+                operation: "enter the alternate screen",
+                source: e,
+            });
         }
         Ok(Self)
     }
@@ -220,7 +238,7 @@ impl Wizard {
                 self.error = None;
             }
             KeyCode::Enter => match self.validate_step() {
-                Err(reason) => self.error = Some(reason),
+                Err(reason) => self.error = Some(reason.to_string()),
                 Ok(()) if self.step == STEP_REVIEW => return Outcome::Submit,
                 Ok(()) => {
                     self.step += 1;
@@ -276,7 +294,7 @@ impl Wizard {
     /// they belong to so a mistake surfaces before the step is left. Every
     /// step between an edit and the review step re-validates on the way, so
     /// reaching the end means the whole plan is sound.
-    fn validate_step(&self) -> Result<(), String> {
+    fn validate_step(&self) -> Result<(), Error> {
         match self.step {
             STEP_PACKAGE => {
                 check_name(&self.name)?;

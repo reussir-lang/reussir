@@ -7,6 +7,7 @@
 //! so a manifest can carry fields for future `rene` stages (or for other
 //! tools) without being rejected.
 
+use crate::Error;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -229,17 +230,16 @@ fn builtin_profile(name: &str) -> Option<Profile> {
 /// The profile `name` resolves to: the built-in of that name refined by the
 /// manifest's, either alone, and an error when the name is neither — an
 /// unknown profile silently meaning "all defaults" would be a typo trap.
-pub fn resolve_profile(manifest: &Manifest, name: &str) -> Result<Profile, String> {
+pub fn resolve_profile(manifest: &Manifest, name: &str) -> Result<Profile, Error> {
     let builtin = builtin_profile(name);
     let declared = manifest.profiles.get(name);
     match (builtin, declared) {
         (Some(base), Some(over)) => Ok(base.refined_by(over)),
         (Some(base), None) => Ok(base),
         (None, Some(profile)) => Ok(profile.clone()),
-        (None, None) => Err(format!(
-            "no profile named `{name}`: the manifest declares none by that \
-             name and it is not a built-in (`dev`, `release`)"
-        )),
+        (None, None) => Err(Error::UnknownProfile {
+            name: name.to_owned(),
+        }),
     }
 }
 
@@ -255,33 +255,30 @@ pub struct Loaded {
 }
 
 /// Why a manifest could not be loaded.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
+    #[error("cannot read `{}`: {error}", path.display())]
     Io {
         path: PathBuf,
+        #[source]
         error: std::io::Error,
     },
-    /// Nickel evaluation failed; carries the rendered diagnostics.
+    /// Nickel exposes rendered diagnostics, not a std::error::Error source.
+    #[error("failed to evaluate the manifest\n{0}")]
     Eval(String),
-    /// The evaluated configuration does not match the [`Manifest`] shape.
-    Schema(String),
+    #[error("invalid manifest: {0}")]
+    Schema(#[source] SchemaError),
 }
 
-impl std::fmt::Display for ManifestError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ManifestError::Io { path, error } => {
-                write!(f, "cannot read `{}`: {error}", path.display())
-            }
-            ManifestError::Eval(diagnostics) => {
-                write!(f, "failed to evaluate the manifest\n{diagnostics}")
-            }
-            ManifestError::Schema(msg) => write!(f, "invalid manifest: {msg}"),
-        }
-    }
+#[derive(Debug, thiserror::Error)]
+pub enum SchemaError {
+    #[error(transparent)]
+    Deserialize(Box<dyn std::error::Error + Send + Sync>),
+    #[error(
+        "dependency `{name}` gives no `path`; only local path dependencies are supported today (a bare version constraint will later select a registry release)"
+    )]
+    MissingDependencyPath { name: String },
 }
-
-impl std::error::Error for ManifestError {}
 
 /// Find the nearest `rene.ncl` at or above `start`, cargo-style, so `rene`
 /// works from any subdirectory of a package.
@@ -318,14 +315,12 @@ pub fn load(path: &Path) -> Result<Loaded, ManifestError> {
         .map_err(|e| ManifestError::Eval(render(&e)))?;
     let manifest: Manifest = expr
         .to_serde()
-        .map_err(|e| ManifestError::Schema(e.to_string()))?;
+        .map_err(|e| ManifestError::Schema(SchemaError::Deserialize(Box::new(e))))?;
     for (name, dep) in &manifest.dependencies {
         if dep.path.is_none() {
-            return Err(ManifestError::Schema(format!(
-                "dependency `{name}` gives no `path`; only local path \
-                 dependencies are supported today (a bare version constraint \
-                 will later select a registry release)"
-            )));
+            return Err(ManifestError::Schema(SchemaError::MissingDependencyPath {
+                name: name.clone(),
+            }));
         }
     }
 
@@ -515,7 +510,7 @@ mod tests {
         assert_eq!(custom.debug, None);
 
         let err = resolve_profile(&manifest, "bogus").unwrap_err();
-        assert!(err.contains("no profile named `bogus`"), "{err}");
+        assert!(matches!(err, Error::UnknownProfile { name } if name == "bogus"));
     }
 
     /// A typo'd knob must be a schema error, not a silently ignored field —
