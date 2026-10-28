@@ -52,6 +52,11 @@ the nearest `rene.ncl` at or above the current directory and builds into
 goes to stderr); a package declaring no targets stops after the runtime bake
 and prints the library directories to pass to `rrc --polyffi-libdir` by hand.
 
+The Rust runtime and bundled core libraries live in a global disk-only cache,
+shared across projects with matching toolchain, target and codegen settings.
+Compiler and linker inputs use those cache paths directly. `RENE_CACHE_DIR`
+overrides the platform cache location; `rene clean` only removes project state.
+
 `rene` shells out to `rrc`, `cargo`, and `rustc`; set `REUSSIR_RRC`,
 `REUSSIR_CARGO`, or `REUSSIR_RUSTC` to pin specific binaries (otherwise
 `rrc` is found through `PATH`).

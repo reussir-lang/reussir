@@ -21,6 +21,7 @@ blake3.workspace = true
 # memory cache or SQLite blob payloads.
 compcache = { git = "https://github.com/reussir-lang/compcache", rev = "9c297bffc30401e06cdb751c783f1c6987cdd6fe" }
 which = "8"
+walkdir = "2"
 # The async runtime: completion-based (io_uring/IOCP), driving the child
 # processes (rrc, cargo, rustc) and the source-digest reads. 0.18 pinned:
 # 0.19's executor needs a `cfg_select!` newer than the pinned toolchain.

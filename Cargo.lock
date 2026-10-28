@@ -3662,6 +3662,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "turbokv",
+ "walkdir",
  "which",
  "zstd",
 ]

@@ -66,6 +66,8 @@ pub struct Options {
 
 /// The shared execution resources used by every target compilation.
 pub struct Execution<'a> {
+    /// Retains global runtime and library leases through all invocations.
+    pub cache: &'a std::sync::Arc<crate::cache::Cache>,
     pub pool: &'a Pool,
     pub progress: &'a MultiProgress,
 }

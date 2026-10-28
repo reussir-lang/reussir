@@ -1,8 +1,9 @@
-// A cold core bake is shared with a second build directory. Execute the second
-// result too: this covers relocation of the cached interface and native archive.
-// RUN: rm -rf %t.cache %t.first %t.second
-// RUN: env RENE_CACHE_DIR=%t.cache %rene build --manifest-path %S/core_num/rene.ncl --build-dir %t.first %rrc_linker
-// RUN: env RENE_CACHE_DIR=%t.cache %rene -v build --manifest-path %S/core_num/rene.ncl --build-dir %t.second %rrc_linker 2>&1 | %FileCheck %s
+// Core and the Rust runtime are shared across independent build directories. Execute the second
+// result too: its compiler and linker read the leased cache files directly.
+// RUN: rm -rf %t.first %t.second
+// RUN: %rene build --manifest-path %S/core_num/rene.ncl --build-dir %t.first %rrc_linker
+// RUN: %rene -v build --manifest-path %S/core_num/rene.ncl --build-dir %t.second %rrc_linker 2>&1 | %FileCheck %s
+// CHECK-NOT: baking shared reussir-rt
 // CHECK-NOT: baking bundled library
-// CHECK: restored bundled library from disk cache
+// CHECK: using cached bundled library in place
 // RUN: %t.second/dev/numdemo%exe_ext

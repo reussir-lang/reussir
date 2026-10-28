@@ -403,7 +403,16 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
         .target
         .as_deref()
         .or(profile.default_target_triple.as_deref());
-    let artifacts = rt::prepare(&dir, requested_target, bake_linker.as_deref(), &progress).await?;
+    let cache = rene::cache::Cache::open()?;
+    let artifacts = rt::prepare(
+        &cache,
+        &dir,
+        requested_target,
+        bake_linker.as_deref(),
+        &profile.sanitizers,
+        &progress,
+    )
+    .await?;
     let target = artifacts.target.clone();
 
     // No declared targets: stop after the bake, reporting the libdirs for
@@ -440,8 +449,11 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
             token_reuse_remarks: args.token_reuse_remarks,
             color,
         },
-        &pool,
-        &progress,
+        &compile::Execution {
+            cache: &cache,
+            pool: &pool,
+            progress: &progress,
+        },
     )
     .await?;
     if graph.nodes.len() > 1 {
@@ -479,6 +491,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
         },
         &graph,
         &compile::Execution {
+            cache: &cache,
             pool: &pool,
             progress: &progress,
         },
@@ -589,6 +602,7 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), String> {
                 .or(profile.default_target_triple.as_deref());
             let target = rt::resolve_target(requested_target).await?;
             let bake = fresh::recorded_bake(held.as_ref(), &target)?;
+            fresh::recorded_artifacts(&graph, held.as_ref(), &args.profile, &root)?;
             let states = fresh::states(
                 &graph,
                 &fresh::Context {

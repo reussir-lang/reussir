@@ -107,7 +107,7 @@ pub struct DepRecord {
     pub config_hash: String,
     /// Digest of the profile knobs its compile ran under.
     pub profile_digest: String,
-    /// `rustc --version` of the baking toolchain.
+    /// Rust compiler identity used for polyffi.
     pub toolchain: String,
     /// Per upstream cone member: the digest of the artifacts this node's
     /// compile consumed ([`artifact_digest`]).
@@ -264,7 +264,7 @@ fn dep_state(
     for dep in &graph.nodes[name].dependencies {
         // Direct edges suffice locally: transitive drift reaches this node
         // through its dependency's own record (and the propagation pass).
-        if record.upstream.get(dep) != Some(&artifact_digest(deps_dir, dep, ctx.target)) {
+        if record.upstream.get(dep) != Some(&dependency_digest(graph, deps_dir, dep, ctx.target)) {
             return Ok(State::UpstreamChanged(dep.clone()));
         }
     }
@@ -293,7 +293,8 @@ fn root_state(
     }
     let files = dir.sources().map_err(|e| e.to_string())?;
     let deps_dir = ctx.build_dir.join(ctx.profile_name).join("deps");
-    let upstream = upstream_digests(
+    let upstream = graph_upstream_digests(
+        graph,
         &deps_dir,
         &plan::transitive_deps(graph)[&graph.root],
         ctx.target,
@@ -351,6 +352,7 @@ pub fn record_dep(
         .ok_or("recording a build needs an open build directory")?;
     let node = &graph.nodes[name];
     let deps_dir = ctx.build_dir.join(ctx.profile_name).join("deps");
+    let paths = plan::dependency_artifacts(graph, name, &deps_dir, ctx.target);
     let record = DepRecord {
         config_hash: deps::config_hash(&node.loaded.dump),
         profile_digest: profile_digest(ctx.profile_name, ctx.profile, ctx.target),
@@ -358,13 +360,22 @@ pub fn record_dep(
         upstream: graph.nodes[name]
             .dependencies
             .iter()
-            .map(|dep| (dep.clone(), artifact_digest(&deps_dir, dep, ctx.target)))
+            .map(|dep| {
+                (
+                    dep.clone(),
+                    dependency_digest(graph, &deps_dir, dep, ctx.target),
+                )
+            })
             .collect(),
-        rri: deps_dir.join(format!("{name}.rri")),
-        archive: plan::archive_path(&deps_dir, name, ctx.target),
-        token_reuse_report: ctx.token_reuse_remarks.then(|| {
-            plan::token_reuse_report_path(&plan::archive_path(&deps_dir, name, ctx.target))
-        }),
+        rri: paths.rri,
+        archive: paths.archive.clone(),
+        token_reuse_report: if ctx.token_reuse_remarks {
+            paths
+                .report
+                .or_else(|| Some(plan::token_reuse_report_path(&paths.archive)))
+        } else {
+            None
+        },
     };
     let record = serde_json::to_string(&record).map_err(|e| e.to_string())?;
     let sources = serde_json::to_string(sources).map_err(|e| e.to_string())?;
@@ -397,6 +408,71 @@ pub fn artifact_digest(deps_dir: &Path, name: &str, target: &str) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
+pub(crate) fn dependency_digest(
+    graph: &Graph,
+    deps_dir: &Path,
+    name: &str,
+    target: &str,
+) -> String {
+    let paths = plan::dependency_artifacts(graph, name, deps_dir, target);
+    let mut hasher = blake3::Hasher::new();
+    for path in [&paths.rri, &paths.archive] {
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                hasher.update(&bytes);
+            }
+            Err(_) => {
+                hasher.update(b"<absent>");
+            }
+        }
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+pub(crate) fn graph_upstream_digests(
+    graph: &Graph,
+    deps_dir: &Path,
+    cone: &[String],
+    target: &str,
+) -> BTreeMap<String, String> {
+    cone.iter()
+        .map(|name| {
+            (
+                name.clone(),
+                dependency_digest(graph, deps_dir, name, target),
+            )
+        })
+        .collect()
+}
+
+/// Populate read-only path hints for inspection. Builds acquire real leases
+/// instead; a persisted path alone never authorizes consuming a cache entry.
+pub fn recorded_artifacts(
+    graph: &Graph,
+    dir: Option<&BuildDir>,
+    profile: &str,
+    build_dir: &Path,
+) -> Result<(), String> {
+    let Some(dir) = dir else { return Ok(()) };
+    let deps_dir = build_dir.join(profile).join("deps");
+    for (name, node) in &graph.nodes {
+        let record = dir
+            .status(&tables::dep_product_key(profile, name))
+            .map_err(|e| e.to_string())?
+            .and_then(|json| serde_json::from_str::<DepRecord>(&json).ok());
+        if let Some(record) = record
+            && record.rri != deps_dir.join(format!("{name}.rri"))
+        {
+            let _ = node.artifacts.set(plan::Artifacts {
+                rri: record.rri,
+                archive: record.archive,
+                report: record.token_reuse_report,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// The root's whole cone digested — what `rene build` folds into the
 /// product fingerprints.
 pub fn root_upstream_digests(
@@ -404,7 +480,12 @@ pub fn root_upstream_digests(
     deps_dir: &Path,
     target: &str,
 ) -> BTreeMap<String, String> {
-    upstream_digests(deps_dir, &plan::transitive_deps(graph)[&graph.root], target)
+    graph_upstream_digests(
+        graph,
+        deps_dir,
+        &plan::transitive_deps(graph)[&graph.root],
+        target,
+    )
 }
 
 /// The whole cone's artifact digests, name-keyed — what a consumer's

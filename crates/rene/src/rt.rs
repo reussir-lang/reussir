@@ -1,18 +1,16 @@
-//! Baking the bundled `reussir-rt` runtime inside the build directory.
+//! Baking the bundled `reussir-rt` runtime in the global compiler cache.
 //!
 //! The `rene` binary embeds the runtime *source* as a zstd-compressed tar
 //! (packed by `build.rs` — source, not binaries, is what keeps the bundle
 //! cross-platform: rlibs and symbol hashes are version-locked to the rustc
 //! that produced them, so the runtime must be built by the user's toolchain;
-//! see docs/design/system-rust-runtime.md). `prepare` unpacks it into
-//! `<build-dir>/<target>/reussir-rt/` and runs Cargo with `--target <target>`
-//! there, yielding the rlib+deps directory polymorphic FFI
-//! links against (`rustc -L`) and the static library final executables link.
-//! The result is recorded per target in the status database and reused until
-//! the bundle hash or the toolchain changes.
+//! see docs/design/system-rust-runtime.md). One immutable runtime is shared by
+//! every project with the same toolchain, target and runtime settings. Project
+//! records hold its paths; the cache handle holds its reader lease through use.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -94,6 +92,7 @@ impl RtArtifacts {
 }
 
 /// The resolved `cargo`/`rustc` pair used for baking.
+#[derive(Clone)]
 struct Toolchain {
     cargo: PathBuf,
     rustc: PathBuf,
@@ -110,8 +109,30 @@ impl Toolchain {
     /// respects rustup shims, so a `rust-toolchain.toml` in the user's
     /// project still picks the toolchain naturally.
     async fn resolve(requested_target: Option<&str>) -> Result<Self, String> {
-        let cargo = pick_program("REUSSIR_CARGO", "CARGO", "cargo");
-        let rustc = pick_program("REUSSIR_RUSTC", "RUSTC", "rustc");
+        let mut cargo = which::which(pick_program("REUSSIR_CARGO", "CARGO", "cargo"))
+            .map_err(|e| e.to_string())?;
+        let mut rustc = which::which(pick_program("REUSSIR_RUSTC", "RUSTC", "rustc"))
+            .map_err(|e| e.to_string())?;
+        // Resolve rustup's project selection before changing cwd to the global
+        // cache. Otherwise its shim would select the cache directory's default.
+        let is_rustup = |program: &Path| {
+            program
+                .canonicalize()
+                .ok()
+                .and_then(|p| p.file_stem().map(|s| s == "rustup"))
+                .unwrap_or(false)
+        };
+        if is_rustup(&rustc) {
+            let root = PathBuf::from(capture(&rustc, &["--print", "sysroot"]).await?);
+            rustc = root
+                .join("bin")
+                .join(format!("rustc{}", std::env::consts::EXE_SUFFIX));
+            if is_rustup(&cargo) {
+                cargo = root
+                    .join("bin")
+                    .join(format!("cargo{}", std::env::consts::EXE_SUFFIX));
+            }
+        }
         let verbose_version = capture(&rustc, &["-vV"]).await?;
         let version = verbose_version
             .lines()
@@ -249,120 +270,146 @@ async fn capture(program: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
 }
 
-/// Ensure the runtime is baked in `dir`, reusing the recorded artifacts when
-/// the bundle and toolchain are unchanged. The caller holds the build
-/// directory's lock (it *is* the open [`BuildDir`]), so no other instance can
-/// race the extract/build/record sequence.
-///
-/// `linker`, when given, is pinned for the bake's own links (the runtime
-/// dylib) — the same pinning `rrc --linker` gives the driver-level links,
-/// needed where rustc's discovery resolves the wrong tool (a vcvars shell
-/// whose PATH carries a coreutils `link` ahead of MSVC's). It is not part of
-/// the bake's freshness: whichever working linker linked the runtime, the
-/// artifacts are equivalent.
+#[derive(Serialize)]
+struct RuntimeRecipe<'a> {
+    bundle: &'a str,
+    rustc: &'a Path,
+    rustc_version: &'a str,
+    target: &'a str,
+    rust_libdir: &'a Path,
+    cargo: &'a Path,
+    platform_allocator: bool,
+    sanitizers: &'a [String],
+    rustflags: Option<std::ffi::OsString>,
+    encoded_flags: Option<std::ffi::OsString>,
+    codegen_environment: std::collections::BTreeMap<String, std::ffi::OsString>,
+}
+
+/// Acquire the globally shared runtime for this toolchain and target. The
+/// cache owns its reader lease through every compiler and final linker.
 pub async fn prepare(
+    cache: &std::sync::Arc<crate::cache::Cache>,
     dir: &BuildDir,
     requested_target: Option<&str>,
     linker: Option<&Path>,
+    sanitizers: &[String],
     progress: &indicatif::MultiProgress,
 ) -> Result<RtArtifacts, String> {
     let toolchain = Toolchain::resolve(requested_target).await?;
     let hash = bundle_hash();
-
-    if let Some(cached) = fresh_bake(dir, &toolchain, &hash)? {
-        tracing::debug!("reussir-rt is up to date");
-        return Ok(cached);
-    }
-
-    let target_dir = dir.root().join(&toolchain.target);
-    let src_dir = target_dir.join(RT_DIR);
-    if src_dir.exists() {
-        // Stale source: re-extract from scratch rather than patching files
-        // into an unknown tree. Other targets' trees remain intact.
-        std::fs::remove_dir_all(&src_dir)
-            .map_err(|e| format!("cannot clear `{}`: {e}", src_dir.display()))?;
-    }
-    std::fs::create_dir_all(&target_dir)
-        .map_err(|e| format!("cannot create `{}`: {e}", target_dir.display()))?;
-    tracing::debug!(dest = %src_dir.display(), "extracting bundled reussir-rt source");
-    unpack(&target_dir).map_err(|e| format!("cannot unpack the runtime bundle: {e}"))?;
-
-    tracing::debug!(
-        cargo = %toolchain.cargo.display(),
-        rustc = %toolchain.version,
-        "building reussir-rt"
-    );
-    // The bake is the build's one slow cold step (a real cargo build, with
-    // the network on a fresh directory); a spinner carries that while
-    // cargo's own output is captured — and replayed if the bake fails.
-    let bar = progress.add(
-        indicatif::ProgressBar::new_spinner()
-            .with_message("baking reussir-rt (once per toolchain or runtime change)"),
-    );
-    bar.enable_steady_tick(std::time::Duration::from_millis(120));
-    let result = cargo_build(&toolchain, &src_dir, linker).await;
-    bar.finish_and_clear();
-    progress.remove(&bar);
-    let (rlib, staticlib, deps_dirs) = result?;
-    if let Some(path) = rcgmp_runtime_path(&toolchain.target, &deps_dirs) {
-        std::fs::write(&path, RCGMP_RUNTIME)
-            .map_err(|e| format!("cannot stage `{}`: {e}", path.display()))?;
-    }
-
-    let artifacts = RtArtifacts {
-        target: toolchain.target.clone(),
-        rustc: toolchain.rustc,
-        rustc_version: toolchain.version,
-        rust_libdir: toolchain.rust_libdir,
-        deps_dirs,
-        staticlib,
-        rlib,
-    };
+    let key = compcache::Key::from_serde(
+        "rene-rust-runtime-v1",
+        &RuntimeRecipe {
+            bundle: &hash,
+            rustc: &toolchain.rustc,
+            rustc_version: &toolchain.version,
+            target: &toolchain.target,
+            rust_libdir: &toolchain.rust_libdir,
+            cargo: &toolchain.cargo,
+            platform_allocator: target_should_disable_mimalloc(&toolchain.target)
+                || platform_allocator_forced()
+                || !sanitizers.is_empty(),
+            sanitizers,
+            rustflags: std::env::var_os("RUSTFLAGS"),
+            encoded_flags: std::env::var_os("CARGO_ENCODED_RUSTFLAGS"),
+            codegen_environment: std::env::vars_os()
+                .filter_map(|(key, value)| {
+                    let key = key.into_string().ok()?;
+                    (key.starts_with("CARGO_PROFILE_RELEASE_")
+                        || (key.starts_with("CARGO_TARGET_") && key.ends_with("_RUSTFLAGS"))
+                        || matches!(key.as_str(), "CC" | "CXX" | "CFLAGS" | "CXXFLAGS")
+                        || key.starts_with("CC_")
+                        || key.starts_with("CFLAGS_"))
+                    .then_some((key, value))
+                })
+                .collect(),
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    let cache = std::sync::Arc::clone(cache);
+    let linker = linker.map(Path::to_owned);
+    let sanitizers = sanitizers.to_vec();
+    let progress = progress.clone();
+    let artifacts = compio::runtime::spawn_blocking(move || -> Result<RtArtifacts, String> {
+        let lease = cache
+            .runtimes
+            .get_or_insert_runtime(key, &|directory: &Path| {
+                tracing::debug!(target = %toolchain.target, "baking shared reussir-rt");
+                unpack(directory).map_err(compcache::Error::producer)?;
+                let src_dir = directory.join(RT_DIR);
+                let bar = progress.add(
+                    indicatif::ProgressBar::new_spinner().with_message("baking shared reussir-rt"),
+                );
+                bar.enable_steady_tick(Duration::from_millis(120));
+                let runtime =
+                    compio::runtime::Runtime::new().map_err(compcache::Error::producer)?;
+                let built = runtime.block_on(cargo_build(
+                    &toolchain,
+                    &src_dir,
+                    linker.as_deref(),
+                    &sanitizers,
+                ));
+                bar.finish_and_clear();
+                progress.remove(&bar);
+                let (rlib, staticlib, deps_dirs) =
+                    built.map_err(|e| compcache::Error::producer(std::io::Error::other(e)))?;
+                if let Some(path) = rcgmp_runtime_path(&toolchain.target, &deps_dirs) {
+                    std::fs::write(path, RCGMP_RUNTIME).map_err(compcache::Error::producer)?;
+                }
+                let relative = |path: &Path| {
+                    let canonical = path.canonicalize().map_err(compcache::Error::producer)?;
+                    canonical
+                        .strip_prefix(directory)
+                        .map(Path::to_owned)
+                        .map_err(|e| {
+                            compcache::Error::producer(std::io::Error::other(format!(
+                                "runtime artifact outside cache: {e}"
+                            )))
+                        })
+                };
+                let record = RtArtifacts {
+                    target: toolchain.target.clone(),
+                    rustc: toolchain.rustc.clone(),
+                    rustc_version: toolchain.version.clone(),
+                    rust_libdir: toolchain.rust_libdir.clone(),
+                    rlib: relative(&rlib)?,
+                    staticlib: relative(&staticlib)?,
+                    deps_dirs: deps_dirs
+                        .iter()
+                        .map(|p| relative(p))
+                        .collect::<compcache::Result<_>>()?,
+                };
+                std::fs::write(
+                    directory.join("runtime.json"),
+                    serde_json::to_vec(&record).map_err(compcache::Error::producer)?,
+                )
+                .map_err(compcache::Error::producer)?;
+                crate::cache::sync_tree(directory)
+            })
+            .map_err(|e| format!("runtime cache (RENE_CACHE_DIR): {e}"))?;
+        let mut record: RtArtifacts = serde_json::from_slice(
+            &std::fs::read(lease.path().join("runtime.json")).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        record.rlib = lease.path().join(&record.rlib);
+        record.staticlib = lease.path().join(&record.staticlib);
+        record.deps_dirs = record
+            .deps_dirs
+            .iter()
+            .map(|p| lease.path().join(p))
+            .collect();
+        cache.retain(lease);
+        Ok(record)
+    })
+    .await
+    .map_err(|e| format!("runtime cache worker failed: {e:?}"))??;
     let record = serde_json::to_string(&artifacts).map_err(|e| e.to_string())?;
-    let source_key = tables::rt_source_hash_key(&artifacts.target);
-    let artifacts_key = tables::rt_artifacts_key(&artifacts.target);
     dir.set_status(&[
-        (source_key.as_str(), hash.as_str()),
-        (artifacts_key.as_str(), record.as_str()),
+        (&tables::rt_source_hash_key(&artifacts.target), &hash),
+        (&tables::rt_artifacts_key(&artifacts.target), &record),
     ])
     .map_err(|e| e.to_string())?;
-    tracing::debug!(staticlib = %artifacts.staticlib.display(), "reussir-rt ready");
     Ok(artifacts)
-}
-
-/// The recorded bake, if it is still valid: same bundle, same rustc, and the
-/// artifacts still on disk.
-fn fresh_bake(
-    dir: &BuildDir,
-    toolchain: &Toolchain,
-    hash: &str,
-) -> Result<Option<RtArtifacts>, String> {
-    let source_key = tables::rt_source_hash_key(&toolchain.target);
-    let artifacts_key = tables::rt_artifacts_key(&toolchain.target);
-    let recorded_hash = dir.status(&source_key).map_err(|e| e.to_string())?;
-    if recorded_hash.as_deref() != Some(hash) {
-        return Ok(None);
-    }
-    let Some(record) = dir.status(&artifacts_key).map_err(|e| e.to_string())? else {
-        return Ok(None);
-    };
-    let Ok(artifacts) = serde_json::from_str::<RtArtifacts>(&record) else {
-        // An older rene may have written a different shape; just rebake.
-        return Ok(None);
-    };
-    let valid = artifacts.target == toolchain.target
-        // The path is part of an explicit toolchain selection. In
-        // particular, changing REUSSIR_RUSTC from a cached bare `rustc` to a
-        // rustup/Nix absolute path must not silently restore the old value
-        // merely because both binaries report the same version string.
-        && artifacts.rustc == toolchain.rustc
-        && artifacts.rustc_version == toolchain.version
-        && artifacts.rlib.is_file()
-        && artifacts.staticlib.is_file()
-        && rcgmp_runtime_path(&artifacts.target, &artifacts.deps_dirs)
-            .is_none_or(|path| path.is_file())
-        && artifacts.libdirs().all(Path::is_dir);
-    Ok(valid.then_some(artifacts))
 }
 
 /// Run `cargo build --release` in `src_dir`, reading the JSON message
@@ -373,13 +420,17 @@ async fn cargo_build(
     toolchain: &Toolchain,
     src_dir: &Path,
     linker: Option<&Path>,
+    sanitizers: &[String],
 ) -> Result<(PathBuf, PathBuf, Vec<PathBuf>), String> {
     let mut cmd = compio::process::Command::new(&toolchain.cargo);
     cmd.args(["build", "--release", "--target", toolchain.target.as_str()]);
     // The bundled mimalloc backend builds C code and is not yet a WebAssembly
     // allocator. WASI supplies the libc malloc family used by the runtime's
     // size-recovering fallback, so select that backend for wasm targets.
-    if target_should_disable_mimalloc(&toolchain.target) || platform_allocator_forced() {
+    if target_should_disable_mimalloc(&toolchain.target)
+        || platform_allocator_forced()
+        || !sanitizers.is_empty()
+    {
         cmd.arg("--no-default-features");
     }
     cmd.arg("--message-format=json-render-diagnostics")
@@ -392,7 +443,27 @@ async fn cargo_build(
         // unpacked runtime tree sits outside the workspace, so the repo's
         // .cargo/config.toml opt-out does not reach it; pin the old layout
         // here until the bake hands rrc explicit artifact paths instead.
-        .env("CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT", "false");
+        .env("CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT", "false")
+        .env("CARGO_TARGET_DIR", src_dir.join("target"))
+        .env("CARGO_BUILD_BUILD_DIR", src_dir.join("target"));
+    if !sanitizers.is_empty() {
+        let mut flags: Vec<String> = if let Ok(encoded) = std::env::var("CARGO_ENCODED_RUSTFLAGS") {
+            encoded.split('\x1f').map(str::to_owned).collect()
+        } else {
+            std::env::var("RUSTFLAGS")
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect()
+        };
+        for sanitizer in sanitizers
+            .iter()
+            .filter(|s| matches!(s.as_str(), "address" | "memory" | "thread"))
+        {
+            flags.push(format!("-Zsanitizer={sanitizer}"));
+        }
+        cmd.env("CARGO_ENCODED_RUSTFLAGS", flags.join("\x1f"));
+    }
     if let Some(linker) = linker {
         // Cargo's target-specific linker configuration, as an environment
         // variable: `CARGO_TARGET_<TARGET>_LINKER`. Unlike RUSTFLAGS this

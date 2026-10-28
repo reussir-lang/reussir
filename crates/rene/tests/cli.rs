@@ -178,8 +178,6 @@ struct Fakes {
     rrc: PathBuf,
     cargo: PathBuf,
     rustc: PathBuf,
-    /// The libdir the fake `rustc` reports as its target libdir.
-    libdir: PathBuf,
 }
 
 #[cfg(unix)]
@@ -316,7 +314,6 @@ printf ']}\n'
             rrc,
             cargo,
             rustc,
-            libdir,
         }
     }
 
@@ -400,19 +397,27 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
     let target = "x86_64-unknown-fake";
-    let target_deps = root.join(format!("{target}/reussir-rt/target/{target}/release/deps"));
-    let host_deps = root.join(format!("{target}/reussir-rt/target/release/deps"));
-    assert_eq!(
-        lines,
-        [
-            fakes.libdir.display().to_string(),
-            host_deps.display().to_string(),
-            target_deps.display().to_string(),
-        ]
+    let artifacts = runtime_record(&root, target);
+    let expected: Vec<String> = artifacts
+        .libdirs()
+        .map(|p| p.display().to_string())
+        .collect();
+    assert_eq!(lines, expected);
+    assert!(
+        artifacts
+            .rlib
+            .starts_with(tmp.join("cache/runtimes/objects"))
     );
-
-    // The bundle really was unpacked, and the bake recorded.
-    assert!(root.join(target).join("reussir-rt/Cargo.toml").is_file());
+    assert!(
+        artifacts
+            .rlib
+            .ancestors()
+            .find(|p| p.file_name().is_some_and(|n| n == "reussir-rt"))
+            .unwrap()
+            .join("Cargo.toml")
+            .is_file()
+    );
+    assert!(!root.join(target).join("reussir-rt").exists());
     let dir = BuildDir::open(&root).unwrap();
     assert!(
         dir.status(&tables::rt_source_hash_key(target))
@@ -432,6 +437,14 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     assert_eq!(String::from_utf8(out.stdout).unwrap(), stdout);
     assert_eq!(fakes.runs("cargo"), 1, "the second build re-ran cargo");
     assert!(fakes.cargo_invocations()[0].contains("--target x86_64-unknown-fake"));
+    // Another project/build directory with the same target uses exactly the
+    // same runtime without a second Cargo invocation.
+    let other = tmp.join("other-build");
+    let out = fakes.rene(&["build"], &manifest, &other);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), stdout);
+    assert_eq!(fakes.runs("cargo"), 1);
+    assert_eq!(runtime_record(&other, target).rlib, artifacts.rlib);
 
     // A compiler at a different explicit path is a different toolchain
     // selection even when it reports the same version. Do not restore the
@@ -445,6 +458,7 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
             .arg(&root)
             .env("REUSSIR_RRC", &fakes.rrc)
             .env("REUSSIR_CARGO", &fakes.cargo)
+            .env("RENE_CACHE_DIR", fakes.dir.join("cache"))
             .env("REUSSIR_RUSTC", &alternate_rustc))
     };
     let out = with_alternate();
@@ -453,6 +467,17 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
     let out = with_alternate();
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(fakes.runs("cargo"), 2, "the new rustc path was not cached");
+}
+
+#[cfg(unix)]
+fn runtime_record(build_dir: &Path, target: &str) -> rene::rt::RtArtifacts {
+    let dir = BuildDir::open(build_dir).unwrap();
+    serde_json::from_str(
+        &dir.status(&tables::rt_artifacts_key(target))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap()
 }
 
 /// The profile supplies a default target, the CLI overrides it, and the two
@@ -497,7 +522,13 @@ fn build_resolves_the_target_and_keeps_each_runtime_bake() {
     );
 
     for target in ["wasm32-unknown-unknown", override_target] {
-        assert!(root.join(target).join("reussir-rt/Cargo.toml").is_file());
+        let artifacts = runtime_record(&root, target);
+        assert!(artifacts.rlib.is_file());
+        assert!(
+            artifacts
+                .rlib
+                .starts_with(tmp.join("cache/runtimes/objects"))
+        );
         let dir = BuildDir::open(&root).unwrap();
         assert!(
             dir.status(&tables::rt_artifacts_key(target))
@@ -1169,6 +1200,7 @@ fn build_keeps_parallel_colored_diagnostics_intact() {
         .arg(&root)
         .env("REUSSIR_RRC", &fakes.rrc)
         .env("REUSSIR_CARGO", &fakes.cargo)
+        .env("RENE_CACHE_DIR", fakes.dir.join("cache"))
         .env("REUSSIR_RUSTC", &fakes.rustc)
         .env("FAKE_RRC_FRAGMENTED_DIAGNOSTIC", "yes"));
     assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
@@ -1194,6 +1226,7 @@ fn build_keeps_parallel_colored_diagnostics_intact() {
         .arg(&root)
         .env("REUSSIR_RRC", &fakes.rrc)
         .env("REUSSIR_CARGO", &fakes.cargo)
+        .env("RENE_CACHE_DIR", fakes.dir.join("cache"))
         .env("REUSSIR_RUSTC", &fakes.rustc)
         .env("FAKE_RRC_FRAGMENTED_DIAGNOSTIC", "yes"));
     assert_eq!(plain.status.code(), Some(1), "stderr: {}", stderr(&plain));
@@ -1523,8 +1556,8 @@ fn new_inits_git_once_and_never_nested() {
     assert!(nested.join(".gitignore").exists());
 }
 
-/// Independent projects restore the bundled core's interface and archive from
-/// disk, including the diagnostic sidecar. A local edit cannot poison the cache.
+/// Independent projects pass the same leased library paths to their compiler;
+/// no interface, archive, or report is copied into either build directory.
 #[cfg(unix)]
 #[test]
 fn bundled_core_is_baked_once_across_build_directories() {
@@ -1534,15 +1567,54 @@ fn bundled_core_is_baked_once_across_build_directories() {
     let fakes = Fakes::new(tmp.path());
     let first = tmp.path().join("first");
     let second = tmp.path().join("second");
-    let third = tmp.path().join("third");
-    let args = ["build", "--token-reuse-remarks"];
+    let mut selected = Vec::new();
     for root in [&first, &second] {
-        let out = fakes.rene(&args, &manifest, root);
+        let out = if root == &second {
+            // A distinct runtime bake and allocator choice do not change the
+            // library's codegen settings or reuse ABI.
+            run(rene(&["build", "--token-reuse-remarks", "--manifest-path"])
+                .arg(&manifest)
+                .arg("--build-dir")
+                .arg(root)
+                .env("REUSSIR_RRC", &fakes.rrc)
+                .env("REUSSIR_CARGO", &fakes.cargo)
+                .env("RENE_CACHE_DIR", fakes.dir.join("cache"))
+                .env("REUSSIR_RUSTC", &fakes.rustc)
+                .env("RENE_CACHE_DIR", tmp.path().join("cache"))
+                .env("RENE_RT_PLATFORM_ALLOCATOR", "1"))
+        } else {
+            fakes.rene(&["build", "--token-reuse-remarks"], &manifest, root)
+        };
         assert!(out.status.success(), "{}", stderr(&out));
-        for file in ["core.rri", "libcore.a", "libcore.a.token-reuse.json"] {
-            assert!(root.join("dev/deps").join(file).is_file(), "missing {file}");
+        let record = dependency_record(root, "core");
+        assert!(record.rri.starts_with(tmp.path().join("cache/objects")));
+        for path in [
+            &record.rri,
+            &record.archive,
+            record.token_reuse_report.as_ref().unwrap(),
+        ] {
+            assert!(path.is_file(), "missing {}", path.display());
+            assert!(
+                !root
+                    .join("dev/deps")
+                    .join(path.file_name().unwrap())
+                    .exists()
+            );
         }
+        let inspected = fakes.rene(&["inspect", "--frozen", "--commands"], &manifest, root);
+        assert!(inspected.status.success(), "{}", stderr(&inspected));
+        let report: serde_json::Value = serde_json::from_slice(&inspected.stdout).unwrap();
+        let core = report["plan"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["package"] == "core")
+            .unwrap();
+        assert_eq!(core["artifacts"]["rri"], record.rri.display().to_string());
+        assert!(core["commands"].as_array().unwrap().is_empty());
+        selected.push(record.rri);
     }
+    assert_eq!(selected[0], selected[1]);
     assert_eq!(
         fakes
             .compiles()
@@ -1551,38 +1623,23 @@ fn bundled_core_is_baked_once_across_build_directories() {
             .count(),
         2
     );
-    for command in fakes
-        .compiles()
-        .iter()
-        .filter(|s| s.contains("--package-name core"))
-    {
-        let output = command
-            .split(" -o ")
-            .nth(1)
-            .unwrap()
-            .split_whitespace()
-            .next()
-            .unwrap();
+    for command in fakes.package_compiles() {
         assert!(
-            Path::new(output).starts_with(tmp.path().join("cache/objects")),
-            "a cache worker wrote outside its managed directory: {command}"
+            command.contains(&format!("--extern core={}", selected[0].display())),
+            "{command}"
         );
     }
-    std::fs::write(second.join("dev/deps/core.rri"), b"local modification").unwrap();
-    let out = fakes.rene(&args, &manifest, &third);
-    assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(
-        std::fs::read(third.join("dev/deps/core.rri")).unwrap(),
-        b"compiled\n"
-    );
-    assert_eq!(
-        fakes
-            .compiles()
-            .iter()
-            .filter(|s| s.contains("--package-name core"))
-            .count(),
-        2
-    );
+}
+
+#[cfg(unix)]
+fn dependency_record(build_dir: &Path, name: &str) -> rene::fresh::DepRecord {
+    let dir = BuildDir::open(build_dir).unwrap();
+    serde_json::from_str(
+        &dir.status(&tables::dep_product_key("dev", name))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap()
 }
 
 #[cfg(unix)]
@@ -1644,7 +1701,11 @@ fn failed_core_production_does_not_publish_partial_outputs() {
     std::fs::remove_file(tmp.path().join("fail")).unwrap();
     let out = fakes.rene(&["build"], &manifest, &tmp.path().join("recovered"));
     assert!(out.status.success(), "{}", stderr(&out));
-    assert!(tmp.path().join("recovered/dev/deps/libcore.a").is_file());
+    assert!(
+        dependency_record(&tmp.path().join("recovered"), "core")
+            .archive
+            .is_file()
+    );
     assert_eq!(
         fakes
             .compiles()
@@ -1698,6 +1759,7 @@ fn bundled_core_cache_accepts_a_relative_build_directory() {
             .current_dir(tmp.path())
             .env("REUSSIR_RRC", &fakes.rrc)
             .env("REUSSIR_CARGO", &fakes.cargo)
+            .env("RENE_CACHE_DIR", fakes.dir.join("cache"))
             .env("REUSSIR_RUSTC", &fakes.rustc)
             .env("RENE_CACHE_DIR", tmp.path().join("cache")),
     );
@@ -1712,4 +1774,85 @@ fn bundled_core_cache_accepts_a_relative_build_directory() {
             .count(),
         2
     );
+}
+
+/// Pruning must see the reader lease while a project linker is using the
+/// library, and may remove it once the whole build has finished.
+#[cfg(unix)]
+#[test]
+fn cached_core_stays_leased_through_project_linking() {
+    use std::process::Stdio;
+    let tmp = tempfile::tempdir().unwrap();
+    package(tmp.path(), "demo");
+    let manifest = write_targets_manifest(tmp.path());
+    let fakes = Fakes::new(tmp.path());
+    let source = std::fs::read_to_string(&fakes.rrc).unwrap();
+    let wait = format!(
+        r#"
+if [ "$package" = demo ]; then
+  touch '{base}/link-started'
+  while [ ! -f '{base}/release-link' ]; do sleep 0.01; done
+fi
+"#,
+        base = tmp.path().display()
+    );
+    std::fs::write(
+        &fakes.rrc,
+        source.replace("  echo compiled >", &(wait + "  echo compiled >")),
+    )
+    .unwrap();
+    let mut child = rene(&["build", "--manifest-path"])
+        .arg(&manifest)
+        .arg("--build-dir")
+        .arg(tmp.path().join("build"))
+        .env("REUSSIR_RRC", &fakes.rrc)
+        .env("REUSSIR_CARGO", &fakes.cargo)
+        .env("RENE_CACHE_DIR", fakes.dir.join("cache"))
+        .env("REUSSIR_RUSTC", &fakes.rustc)
+        .env("RENE_CACHE_DIR", tmp.path().join("cache"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    for _ in 0..1000 {
+        if tmp.path().join("link-started").is_file() {
+            break;
+        }
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    if !tmp.path().join("link-started").is_file() {
+        let _ = child.kill();
+        let out = child.wait_with_output().unwrap();
+        panic!("linker did not start: {}", stderr(&out));
+    }
+    let mut config = compcache::Config::default();
+    config.memory.enabled = false;
+    let store = compcache::StoreBuilder::<compcache::Bypass, compcache::ManagedDirectory>::new()
+        .path(tmp.path().join("cache"))
+        .config(config)
+        .open()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let deadline = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let runtimes = compcache::StoreBuilder::<compcache::Bypass, compcache::ManagedDirectory>::new()
+        .path(tmp.path().join("cache/runtimes"))
+        .config(compcache::Config::default())
+        .open()
+        .unwrap();
+    let pruning = store.prune_before(deadline).unwrap();
+    let runtime_pruning = runtimes.prune_before(deadline).unwrap();
+    std::fs::write(tmp.path().join("release-link"), []).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(pruning.removed, 0);
+    assert_eq!(pruning.skipped_busy, 1);
+    assert_eq!(runtime_pruning.skipped_busy, 1);
+    assert_eq!(store.prune_before(deadline).unwrap().removed, 1);
+    assert_eq!(runtimes.prune_before(deadline).unwrap().removed, 1);
 }

@@ -1,5 +1,12 @@
 # Shipping the Runtime as Source: Using System Rust/Cargo
 
+The current implementation stores runtime bakes in the global compcache store,
+shared across projects by toolchain, target, source bundle and runtime settings.
+Artifacts are linked in place under reader leases. See
+[bundled-library-cache.md](bundled-library-cache.md) for the implemented layout
+and cache key; references below to per-project runtime output describe the
+original implementation.
+
 Status: draft / proposal
 
 ## Motivation

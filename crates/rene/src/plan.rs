@@ -57,6 +57,32 @@ pub(crate) struct PlannedCommand {
     pub(crate) args: Vec<String>,
 }
 
+/// A dependency's actual input files. The cache handle owns the reader leases
+/// protecting cached inputs through all compiler and linker invocations.
+#[derive(Debug, Clone)]
+pub(crate) struct Artifacts {
+    pub rri: PathBuf,
+    pub archive: PathBuf,
+    pub report: Option<PathBuf>,
+}
+
+pub(crate) fn dependency_artifacts(
+    graph: &Graph,
+    name: &str,
+    deps_dir: &Path,
+    target: &str,
+) -> Artifacts {
+    graph.nodes[name]
+        .artifacts
+        .get()
+        .cloned()
+        .unwrap_or_else(|| Artifacts {
+            rri: deps_dir.join(format!("{name}.rri")),
+            archive: archive_path(deps_dir, name, target),
+            report: None,
+        })
+}
+
 /// The commands that build one node of the graph, in execution order.
 pub(crate) fn node_commands(
     graph: &Graph,
@@ -68,7 +94,7 @@ pub(crate) fn node_commands(
     let deps_dir = profile_dir.join("deps");
     let node = &graph.nodes[name];
     let transitive = transitive_deps(graph);
-    let externs = extern_args(graph, &transitive[name], &deps_dir);
+    let externs = extern_args(graph, &transitive[name], &deps_dir, opts.target);
     if name == graph.root {
         // Archives joined in dependency order: dependents before
         // dependencies (the reverse of the build order, root excluded).
@@ -97,7 +123,8 @@ pub(crate) fn node_commands(
                     for dep in &link_order {
                         args.push("--link-lib".to_owned());
                         args.push(
-                            archive_path(&deps_dir, dep, opts.target)
+                            dependency_artifacts(graph, dep, &deps_dir, opts.target)
+                                .archive
                                 .display()
                                 .to_string(),
                         );
@@ -173,8 +200,13 @@ pub fn render(
         .iter()
         .map(|name| {
             let node = &graph.nodes[name.as_str()];
-            let commands: Vec<serde_json::Value> = node_commands(graph, name, opts, bake)
-                .into_iter()
+            let cached = node.artifacts.get();
+            let selected = if cached.is_some() && states.and_then(|s| s.get(name.as_str())).is_some_and(fresh::State::is_current) {
+                Vec::new()
+            } else {
+                node_commands(graph, name, opts, bake)
+            };
+            let commands: Vec<serde_json::Value> = selected.into_iter()
                 .map(|command| {
                     let mut argv = vec!["rrc".to_owned()];
                     argv.extend(command.args);
@@ -194,6 +226,9 @@ pub fn render(
                 "dir": node.dir.display().to_string(),
                 "commands": commands,
             });
+            if let Some(paths) = cached {
+                rendered["artifacts"] = serde_json::json!({ "rri": paths.rri, "archive": paths.archive, "token_reuse_report": paths.report });
+            }
             if let Some(state) = states.and_then(|states| states.get(name.as_str())) {
                 rendered["state"] = state.tag().into();
                 rendered["reason"] = state.to_string().into();
@@ -248,14 +283,16 @@ fn package_args(
 /// `--extern`/`--extern-src` pairs for a package's (transitive) dependency
 /// set: the interface to elaborate against, and the source root diagnostics
 /// re-anchor onto.
-fn extern_args(graph: &Graph, deps: &[String], deps_dir: &Path) -> Vec<String> {
+fn extern_args(graph: &Graph, deps: &[String], deps_dir: &Path, target: &str) -> Vec<String> {
     let mut args = Vec::new();
     for dep in deps {
         let node = &graph.nodes[dep.as_str()];
         args.push("--extern".to_owned());
         args.push(format!(
             "{dep}={}",
-            deps_dir.join(format!("{dep}.rri")).display()
+            dependency_artifacts(graph, dep, deps_dir, target)
+                .rri
+                .display()
         ));
         args.push("--extern-src".to_owned());
         args.push(format!("{dep}={}", node.dir.join("src").display()));

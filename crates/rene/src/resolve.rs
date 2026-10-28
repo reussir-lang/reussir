@@ -31,6 +31,8 @@ pub struct Node {
     pub loaded: Loaded,
     /// Dependency names, in name order (the manifest map is sorted).
     pub dependencies: Vec<String>,
+    /// Selected cache artifacts and their lease, retained for this build.
+    pub(crate) artifacts: std::cell::OnceCell<crate::plan::Artifacts>,
 }
 
 /// The transitive path-dependency graph, keyed by package name. One
@@ -111,6 +113,7 @@ pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, 
                 version,
                 loaded,
                 dependencies,
+                artifacts: Default::default(),
             },
         );
     }
@@ -128,6 +131,7 @@ pub fn load_graph_with(root: &Loaded, core_dir: Option<&Path>) -> Result<Graph, 
                 version,
                 loaded,
                 dependencies: Vec::new(),
+                artifacts: Default::default(),
             },
         );
         for (name, node) in nodes.iter_mut() {
