@@ -163,7 +163,8 @@ async fn build_node(
         token_reuse_remarks: opts.token_reuse_remarks,
     };
     let cached_bundle = crate::bundled::find(name).is_some_and(|bundle| {
-        bundle.dir(opts.build_dir)
+        bundle
+            .dir(opts.build_dir)
             .canonicalize()
             .is_ok_and(|expected| {
                 graph.nodes[name]

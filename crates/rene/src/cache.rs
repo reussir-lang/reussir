@@ -105,7 +105,9 @@ impl Request {
             compiler: file_digest(&compiler)?,
             rustc_version: rustc_version.to_owned(),
             package: name.to_owned(),
-            bundle: bundled::find(name).expect("a bundled library").content_hash(),
+            bundle: bundled::find(name)
+                .expect("a bundled library")
+                .content_hash(),
             config_hash: deps::config_hash(&graph.nodes[name].loaded.dump),
             sources: sources
                 .iter()

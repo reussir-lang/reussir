@@ -101,10 +101,14 @@ fn load_graph_impl(
         for (dep_name, dep) in &loaded.manifest.dependencies {
             let dep_dir = match &dep.path {
                 Some(path) => dir.join(path),
-                None if dep_name == "std" => crate::bundled::STD.unpack(
-                    build_dir.ok_or(Error::MissingBundleDirectory)?,
-                )?,
-                None => return Err(Error::MissingDependencyPath { dependency: dep_name.clone() }),
+                None if dep_name == "std" => {
+                    crate::bundled::STD.unpack(build_dir.ok_or(Error::MissingBundleDirectory)?)?
+                }
+                None => {
+                    return Err(Error::MissingDependencyPath {
+                        dependency: dep_name.clone(),
+                    });
+                }
             };
             let dep_manifest = dep_dir.join(manifest::MANIFEST_FILE);
             let dep_loaded =

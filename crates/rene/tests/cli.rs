@@ -1721,14 +1721,30 @@ fn bundled_std_is_baked_once_after_core_and_reused_across_projects() {
     )
     .unwrap();
     let fakes = Fakes::new(tmp.path());
+    let mut selected = Vec::new();
     for build in ["first", "second"] {
         let root = tmp.path().join(build);
         let out = fakes.rene(&["build"], &manifest, &root);
         assert!(out.status.success(), "{}", stderr(&out));
-        for file in ["core.rri", "libcore.a", "std.rri", "libstd.a"] {
-            assert!(root.join("dev/deps").join(file).is_file(), "missing {file}");
+        let mut paths = Vec::new();
+        for name in ["core", "std"] {
+            let record = dependency_record(&root, name);
+            for path in [&record.rri, &record.archive] {
+                assert!(path.starts_with(tmp.path().join("cache/objects")));
+                assert!(path.is_file());
+                assert!(
+                    !root
+                        .join("dev/deps")
+                        .join(path.file_name().unwrap())
+                        .exists()
+                );
+                paths.push(path.clone());
+            }
         }
+        selected.push(paths);
     }
+    assert_eq!(selected[0], selected[1]);
+    assert_eq!(fakes.runs("cargo"), 1);
     let commands: Vec<_> = fakes
         .compiles()
         .into_iter()
@@ -1743,7 +1759,8 @@ fn bundled_std_is_baked_once_after_core_and_reused_across_projects() {
     assert!(
         commands[2..]
             .iter()
-            .all(|s| s.contains("--package-name std") && s.contains("--extern core="))
+            .all(|s| s.contains("--package-name std")
+                && s.contains(&format!("--extern core={}", selected[0][0].display())))
     );
 }
 

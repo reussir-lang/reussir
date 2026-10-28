@@ -46,25 +46,28 @@ impl Bundle {
         if root.join("rene.ncl").is_file() {
             return Ok(root);
         }
-        std::fs::create_dir_all(&root).map_err(|source| Error::file("create bundled source directory", &root, source))?;
+        std::fs::create_dir_all(&root)
+            .map_err(|source| Error::file("create bundled source directory", &root, source))?;
         let decoder = zstd::Decoder::new(self.bytes)?;
         let mut manifest = None;
-        for entry in tar::Archive::new(decoder)
-            .entries()
-            ?
-        {
+        for entry in tar::Archive::new(decoder).entries()? {
             let mut entry = entry?;
             if entry.path()?.as_ref() == Path::new("rene.ncl") {
                 let mut bytes = Vec::new();
                 std::io::Read::read_to_end(&mut entry, &mut bytes)?;
                 manifest = Some(bytes);
             } else {
-                entry.unpack_in(&root).map_err(|source| Error::file("unpack bundled source into", &root, source))?;
+                entry
+                    .unpack_in(&root)
+                    .map_err(|source| Error::file("unpack bundled source into", &root, source))?;
             }
         }
         let staged_manifest = root.join("rene.ncl.tmp");
-        std::fs::write(&staged_manifest, manifest.ok_or(Error::MissingBundleManifest { package: self.name })?)
-            .map_err(|source| Error::file("write bundled manifest", &staged_manifest, source))?;
+        std::fs::write(
+            &staged_manifest,
+            manifest.ok_or(Error::MissingBundleManifest { package: self.name })?,
+        )
+        .map_err(|source| Error::file("write bundled manifest", &staged_manifest, source))?;
         std::fs::rename(&staged_manifest, root.join("rene.ncl"))
             .map_err(|source| Error::file("publish bundled manifest in", &root, source))?;
         Ok(root)
