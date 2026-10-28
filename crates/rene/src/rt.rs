@@ -332,7 +332,7 @@ pub async fn prepare(
     let progress = progress.clone();
     let artifacts = compio::runtime::spawn_blocking(move || -> Result<RtArtifacts, String> {
         let lease = cache
-            .runtimes
+            .store
             .get_or_insert_runtime(key, &|directory: &Path| {
                 tracing::debug!(target = %toolchain.target, "baking shared reussir-rt");
                 unpack(directory).map_err(compcache::Error::producer)?;

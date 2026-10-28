@@ -403,11 +403,7 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
         .map(|p| p.display().to_string())
         .collect();
     assert_eq!(lines, expected);
-    assert!(
-        artifacts
-            .rlib
-            .starts_with(tmp.join("cache/runtimes/objects"))
-    );
+    assert!(artifacts.rlib.starts_with(tmp.join("cache/objects")));
     assert!(
         artifacts
             .rlib
@@ -524,11 +520,7 @@ fn build_resolves_the_target_and_keeps_each_runtime_bake() {
     for target in ["wasm32-unknown-unknown", override_target] {
         let artifacts = runtime_record(&root, target);
         assert!(artifacts.rlib.is_file());
-        assert!(
-            artifacts
-                .rlib
-                .starts_with(tmp.join("cache/runtimes/objects"))
-        );
+        assert!(artifacts.rlib.starts_with(tmp.join("cache/objects")));
         let dir = BuildDir::open(&root).unwrap();
         assert!(
             dir.status(&tables::rt_artifacts_key(target))
@@ -1840,19 +1832,11 @@ fi
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
-    let runtimes = compcache::StoreBuilder::<compcache::Bypass, compcache::ManagedDirectory>::new()
-        .path(tmp.path().join("cache/runtimes"))
-        .config(compcache::Config::default())
-        .open()
-        .unwrap();
     let pruning = store.prune_before(deadline).unwrap();
-    let runtime_pruning = runtimes.prune_before(deadline).unwrap();
     std::fs::write(tmp.path().join("release-link"), []).unwrap();
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(pruning.removed, 0);
-    assert_eq!(pruning.skipped_busy, 1);
-    assert_eq!(runtime_pruning.skipped_busy, 1);
-    assert_eq!(store.prune_before(deadline).unwrap().removed, 1);
-    assert_eq!(runtimes.prune_before(deadline).unwrap().removed, 1);
+    assert_eq!(pruning.skipped_busy, 2, "runtime and core share the store");
+    assert_eq!(store.prune_before(deadline).unwrap().removed, 2);
 }

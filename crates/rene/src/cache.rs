@@ -28,7 +28,6 @@ impl StoreDefaults for Rene {
 /// using this handle has finished; entries themselves outlive every build.
 pub struct Cache {
     pub(crate) store: compcache::Store<Bypass, ManagedDirectory>,
-    pub(crate) runtimes: compcache::Store<Bypass, ManagedDirectory>,
     leases: std::sync::Mutex<Vec<compcache::RuntimeLease>>,
 }
 
@@ -37,19 +36,8 @@ impl Cache {
         let store = StoreBuilder::<Bypass, ManagedDirectory>::with_defaults::<Rene>()
             .and_then(|builder| builder.config(Rene::config()).open())
             .map_err(cache_error)?;
-        // Explicit dynamic-runtime links may outlive the build process. Keep
-        // globally installed runtimes until an explicit cache cleanup, while
-        // ordinary static library entries retain automatic pruning.
-        let mut runtime_config = Rene::config();
-        runtime_config.disk.prune_on_write = false;
-        let runtimes = StoreBuilder::<Bypass, ManagedDirectory>::new()
-            .path(store.root().join("runtimes"))
-            .config(runtime_config)
-            .open()
-            .map_err(cache_error)?;
         Ok(Arc::new(Self {
             store,
-            runtimes,
             leases: Default::default(),
         }))
     }

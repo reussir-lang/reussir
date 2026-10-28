@@ -62,8 +62,7 @@ settings reuse one Cargo bake. The native cache tests also use that shared root;
 isolated fake-toolchain CLI tests verify cold publication, failure recovery and
 pruning.
 
-Runtime entries use the `runtimes/` store below the same global cache root.
-They are retained until explicit cleanup, because an explicitly dynamic-linked
-program may need its runtime after the build has ended. Automatic size/age
-pruning applies to the core/std static-library store. Both stores bypass the
-memory cache and use managed on-disk directories.
+Runtime and core/std entries share one compcache store, including its metadata,
+object directory and automatic size/age pruning policy. Their versioned recipe
+namespaces distinguish runtime and library entries. The store bypasses the
+memory cache and uses managed on-disk directories.
