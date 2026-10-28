@@ -6,8 +6,10 @@ option(REUSSIR_ENABLE_TESTS "Build tests for Reussir" ON)
 option(REUSSIR_ENABLE_PEDANTIC "Use pedantic compiler flags" OFF)
 option(REUSSIR_ENABLE_OPENXLA "Build StableHLO and IFRT tooling (requires Bazel)" OFF)
 # GMP is not readily available to MSVC toolchains, so arbitrary-precision
-# integers are opt-in there.
-if(MSVC OR REUSSIR_CARGO_BUILD_TARGET MATCHES "windows-msvc")
+# integers are opt-in there. GNU-driver Clang can target the same ABI without
+# setting MSVC, which describes cl-compatible command-line syntax.
+if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC"
+   OR REUSSIR_CARGO_BUILD_TARGET MATCHES "windows-msvc")
   set(REUSSIR_ENABLE_RCGMP_DEFAULT OFF)
 else()
   set(REUSSIR_ENABLE_RCGMP_DEFAULT ON)
