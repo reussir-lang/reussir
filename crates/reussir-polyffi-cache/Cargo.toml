@@ -1,0 +1,17 @@
+[package]
+name = "reussir-polyffi-cache"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Thin C bindings for compcache's database-only byte cache"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+compcache.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+rusqlite = { version = "0.38", features = ["bundled"] }

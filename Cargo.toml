@@ -10,6 +10,7 @@ members = [
     "crates/reussir-backend",
     "crates/reussir-jit",
     "crates/reussir-pjrt-sys",
+    "crates/reussir-polyffi-cache",
     "crates/reussir-stablehlo",
     "crates/reussir-codegen",
     "crates/reussir-compiler",
@@ -24,6 +25,7 @@ members = [
 # reussir-pjrt-sys is also explicit: bindgen requires libclang and a PjRt header.
 # So is reussir-stablehlo, which links archives from an OpenXLA-enabled build.
 default-members = [
+    "crates/reussir-polyffi-cache",
     "crates/reussir-rt",
     "crates/reussir-syntax",
     "crates/reussir-lsp",
