@@ -631,6 +631,8 @@ mod tests {
         // Cargo prunes the workspace's superset lock on the first standalone
         // resolution. It must retain the bundled version/source pins offline.
         let output = std::process::Command::new(env!("CARGO"))
+            .env("CARGO_ENCODED_RUSTFLAGS", "")
+            .env("RUSTFLAGS", "")
             .args([
                 "metadata",
                 "--format-version=1",
@@ -675,6 +677,8 @@ mod tests {
             );
         }
         let locked = std::process::Command::new(env!("CARGO"))
+            .env("CARGO_ENCODED_RUSTFLAGS", "")
+            .env("RUSTFLAGS", "")
             .args([
                 "metadata",
                 "--format-version=1",

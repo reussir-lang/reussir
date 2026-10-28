@@ -321,10 +321,19 @@ fn standalone_manifest(crate_toml: &Path, workspace_toml: &Path) -> String {
 }
 
 /// Cargo metadata identifies the pinned dependency without assuming a Cargo-home
-/// layout. Resolution is offline and locked; source fetching precedes build.rs.
+/// layout. Keep resolution locked, but allow Cargo to fetch missing sources:
+/// metadata covers the whole workspace and all targets, whereas the outer build
+/// only fetches dependencies needed by its selected packages and target. Explicit
+/// offline builds can prefetch with `cargo fetch --locked`; Cargo's offline
+/// configuration is inherited here.
 fn bundle_compcache(tar: &mut tar::Builder<Vec<u8>>, workspace: &Path) {
     let output = std::process::Command::new(env::var_os("CARGO").unwrap())
-        .args(["metadata", "--format-version=1", "--locked", "--offline"])
+        .args(["metadata", "--format-version=1", "--locked"])
+        // Metadata probes the host compiler too. In particular, cargo-xwin's
+        // target linker flags must not leak into that host probe. An empty
+        // encoded value also overrides rustflags from Cargo configuration.
+        .env("CARGO_ENCODED_RUSTFLAGS", "")
+        .env("RUSTFLAGS", "")
         .current_dir(workspace)
         .output()
         .expect("cannot inspect compcache dependency");
