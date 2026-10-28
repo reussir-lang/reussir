@@ -1840,7 +1840,7 @@ fn cached_core_stays_leased_through_project_linking() {
     let source = std::fs::read_to_string(&fakes.rrc).unwrap();
     let wait = format!(
         r#"
-if [ "$package" = demo ]; then
+if [ "$package" = demo ] && [ -f '{base}/block-link' ]; then
   touch '{base}/link-started'
   while [ ! -f '{base}/release-link' ]; do sleep 0.01; done
 fi
@@ -1852,6 +1852,12 @@ fi
         source.replace("  echo compiled >", &(wait + "  echo compiled >")),
     )
     .unwrap();
+    // This checks leases held by a cache consumer, not how fast a cold runtime
+    // (including vendored sources) can unpack under parallel CI load. Prepare
+    // the same cache with the same compiler before timing the blocked link.
+    let warm = fakes.rene(&["build"], &manifest, &tmp.path().join("warmup"));
+    assert!(warm.status.success(), "{}", stderr(&warm));
+    std::fs::write(tmp.path().join("block-link"), []).unwrap();
     let mut child = rene(&["build", "--manifest-path"])
         .arg(&manifest)
         .arg("--build-dir")
