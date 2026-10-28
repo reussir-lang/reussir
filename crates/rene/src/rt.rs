@@ -593,8 +593,7 @@ mod tests {
         assert!(!manifest.contains("\"nightly\""), "{manifest}");
 
         assert!(tmp.path().join(RT_DIR).join("src").join("lib.rs").is_file());
-        // Versions are pinned through the bundled lock file (no vendoring;
-        // the host cargo fetches, the lock decides versions).
+        // Other dependencies are pinned through the bundled lock file.
         assert!(tmp.path().join(RT_DIR).join("Cargo.lock").is_file());
 
         // Even a feature-off Cargo build must resolve optional path dependencies.
@@ -615,6 +614,93 @@ mod tests {
             tmp.path()
                 .join("reussir-backend-sys/native_archive.rs")
                 .is_file()
+        );
+    }
+
+    #[test]
+    fn bundled_compcache_resolves_offline_as_a_local_dependency() {
+        let tmp = tempfile::tempdir().unwrap();
+        unpack(tmp.path()).unwrap();
+        assert!(tmp.path().join("compcache/src/lib.rs").is_file());
+        let manifest = tmp.path().join(RT_DIR).join("Cargo.toml");
+        let lock_path = tmp.path().join(RT_DIR).join("Cargo.lock");
+        let seed: toml_edit::DocumentMut = std::fs::read_to_string(&lock_path)
+            .unwrap()
+            .parse()
+            .unwrap();
+        // Cargo prunes the workspace's superset lock on the first standalone
+        // resolution. It must retain the bundled version/source pins offline.
+        let output = std::process::Command::new(env!("CARGO"))
+            .args([
+                "metadata",
+                "--format-version=1",
+                "--offline",
+                "--features",
+                "pjrt",
+                "--manifest-path",
+            ])
+            .arg(&manifest)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let cache = metadata["packages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|package| package["name"] == "compcache")
+            .unwrap();
+        assert!(cache["source"].is_null());
+        let resolved: toml_edit::DocumentMut = std::fs::read_to_string(&lock_path)
+            .unwrap()
+            .parse()
+            .unwrap();
+        for package in resolved["package"].as_array_of_tables().unwrap() {
+            assert!(
+                seed["package"]
+                    .as_array_of_tables()
+                    .unwrap()
+                    .iter()
+                    .any(|old| {
+                        ["name", "version", "source"].iter().all(|field| {
+                            old.get(field).and_then(toml_edit::Item::as_str)
+                                == package.get(field).and_then(toml_edit::Item::as_str)
+                        })
+                    }),
+                "standalone resolution changed a bundled dependency pin: {package}"
+            );
+        }
+        let locked = std::process::Command::new(env!("CARGO"))
+            .args([
+                "metadata",
+                "--format-version=1",
+                "--offline",
+                "--locked",
+                "--features",
+                "pjrt",
+                "--manifest-path",
+            ])
+            .arg(&manifest)
+            .output()
+            .unwrap();
+        assert!(
+            locked.status.success(),
+            "{}",
+            String::from_utf8_lossy(&locked.stderr)
+        );
+
+        assert_eq!(
+            Path::new(cache["manifest_path"].as_str().unwrap())
+                .canonicalize()
+                .unwrap(),
+            tmp.path()
+                .join("compcache/Cargo.toml")
+                .canonicalize()
+                .unwrap()
         );
     }
 

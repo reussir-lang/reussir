@@ -31,16 +31,41 @@ fn main() {
     println!("cargo::rerun-if-changed={}", workspace_toml.display());
     println!("cargo::rerun-if-changed={}", workspace_lock.display());
 
-    let manifest = standalone_manifest(&rt_dir.join("Cargo.toml"), &workspace_toml);
-    // Dependencies are fetched by the host cargo (no vendoring), but their
+    let mut manifest: DocumentMut =
+        standalone_manifest(&rt_dir.join("Cargo.toml"), &workspace_toml)
+            .parse()
+            .unwrap();
+    // The runtime bundle carries this exact Cargo-resolved compcache source.
+    manifest["dependencies"]["compcache"]
+        .as_table_like_mut()
+        .unwrap()
+        .remove("git");
+    manifest["dependencies"]["compcache"]
+        .as_table_like_mut()
+        .unwrap()
+        .remove("rev");
+    manifest["dependencies"]["compcache"]["path"] = toml_edit::value("../compcache");
+    let manifest = manifest.to_string();
+    // Other dependencies are fetched by the host cargo; their
     // versions are pinned: the workspace lock ships as the standalone crate's
     // lock file. Cargo accepts a superset Cargo.lock, keeping the pinned
     // versions of the reachable packages and pruning the rest.
-    let lock = fs::read_to_string(&workspace_lock).expect("failed to read Cargo.lock");
+    let mut lock: DocumentMut = fs::read_to_string(&workspace_lock)
+        .expect("failed to read Cargo.lock")
+        .parse()
+        .unwrap();
+    for package in lock["package"].as_array_of_tables_mut().unwrap().iter_mut() {
+        if package["name"].as_str() == Some("compcache") {
+            package.remove("source");
+            package.remove("checksum");
+        }
+    }
+    let lock = lock.to_string();
 
     // Unpack the runtime and its optional PjRt bindings side by side, preserving
     // the relative path dependency in the runtime's manifest.
     let mut tar = tar::Builder::new(Vec::new());
+    bundle_compcache(&mut tar, workspace_dir);
     append_text(&mut tar, "reussir-rt/Cargo.toml", &manifest);
     append_text(&mut tar, "reussir-rt/Cargo.lock", &lock);
     tar.append_dir_all("reussir-rt/src", rt_dir.join("src"))
@@ -236,14 +261,13 @@ fn standalone_manifest(crate_toml: &Path, workspace_toml: &Path) -> String {
             if !inherits(spec) {
                 continue;
             }
-            // Only the plain `dep.workspace = true` form is handled; a
-            // workspace dep that also sets `features`/`optional` locally
-            // would need those keys merged over the workspace entry.
-            assert!(
-                spec.as_table_like().unwrap().len() == 1,
-                "workspace dependency `{name}` carries extra keys; teach \
-                 rene's build script to merge them"
-            );
+            let overrides: Vec<_> = spec
+                .as_table_like()
+                .unwrap()
+                .iter()
+                .filter(|(key, _)| *key != "workspace")
+                .map(|(key, item)| (key.to_owned(), item.clone()))
+                .collect();
             // `[patch]` only applies inside the workspace, and the unpacked
             // crates are their own workspace roots: use the patch source.
             let patched = ws
@@ -251,7 +275,27 @@ fn standalone_manifest(crate_toml: &Path, workspace_toml: &Path) -> String {
                 .and_then(|patch| patch.get("crates-io"))
                 .and_then(|patches| patches.get(&name));
             let spec = patched.unwrap_or(&ws["workspace"]["dependencies"][&name]);
-            deps.insert(&name, spec.clone());
+            let mut resolved = spec.clone();
+            if !overrides.is_empty() {
+                if let Some(version) = resolved.as_str() {
+                    let mut table = toml_edit::Table::new();
+                    table.insert("version", toml_edit::value(version));
+                    resolved = Item::Table(table);
+                }
+                for (key, value) in overrides {
+                    if key == "features" && resolved.get("features").is_some() {
+                        let features = resolved["features"].as_array_mut().unwrap();
+                        for feature in value.as_array().unwrap() {
+                            if !features.iter().any(|old| old.as_str() == feature.as_str()) {
+                                features.push(feature.clone());
+                            }
+                        }
+                    } else {
+                        resolved.as_table_like_mut().unwrap().insert(&key, value);
+                    }
+                }
+            }
+            deps.insert(&name, resolved);
         }
 
         // The `nightly` feature of mlir_sync only gates optimizations (see the
@@ -274,4 +318,66 @@ fn standalone_manifest(crate_toml: &Path, workspace_toml: &Path) -> String {
     doc["workspace"] = toml_edit::Item::Table(toml_edit::Table::new());
 
     doc.to_string()
+}
+
+/// Cargo metadata identifies the pinned dependency without assuming a Cargo-home
+/// layout. Resolution is offline and locked; source fetching precedes build.rs.
+fn bundle_compcache(tar: &mut tar::Builder<Vec<u8>>, workspace: &Path) {
+    let output = std::process::Command::new(env::var_os("CARGO").unwrap())
+        .args(["metadata", "--format-version=1", "--locked", "--offline"])
+        .current_dir(workspace)
+        .output()
+        .expect("cannot inspect compcache dependency");
+    assert!(
+        output.status.success(),
+        "cargo metadata: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let packages: Vec<_> = metadata["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|package| package["name"] == "compcache")
+        .collect();
+    assert_eq!(
+        packages.len(),
+        1,
+        "runtime bundle requires one pinned compcache"
+    );
+    let manifest = Path::new(packages[0]["manifest_path"].as_str().unwrap());
+    let root = manifest.parent().unwrap();
+    let mut doc: DocumentMut = fs::read_to_string(manifest).unwrap().parse().unwrap();
+    doc.remove("dev-dependencies");
+    doc.remove("bench");
+    append_text(tar, "compcache/Cargo.toml", &doc.to_string());
+    let mut files = Vec::new();
+    collect_files(&root.join("src"), &mut files);
+    for name in [
+        "README.md",
+        "LICENSE",
+        "LICENSE-MIT",
+        "LICENSE-APACHE",
+        "COPYING",
+    ] {
+        let path = root.join(name);
+        if path.is_file() {
+            files.push(path);
+        }
+    }
+    files.sort();
+    for path in files {
+        println!("cargo::rerun-if-changed={}", path.display());
+        let relative = path
+            .strip_prefix(root)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .replace('\\', "/");
+        append_text(
+            tar,
+            &format!("compcache/{relative}"),
+            &fs::read_to_string(path).unwrap(),
+        );
+    }
 }

@@ -2,10 +2,10 @@
 // RUN: %rrc %s -o %t.source.o -O aggressive --relocation-mode pic
 // RUN: %rrc %S/Inputs/kernel_launch_shapes_driver.mlir -o %t.driver.o -O aggressive --relocation-mode pic
 // RUN: %cc %t.source.o %t.driver.o %S/Inputs/kernel_launch_shapes_execute.c -o %t.exe %pjrt_runtime %extra_sys_libs
-// RUN: env XLA_FLAGS="--xla_force_host_platform_device_count=2" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" REUSSIR_PJRT_CACHE_CONFIG="%S/../runtime/Inputs/pjrt_cache.toml" %t.exe
+// RUN: env XLA_FLAGS="--xla_force_host_platform_device_count=2" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" REUSSIR_CACHE_DIR="%t.cache" REUSSIR_CONFIG_DIR="%t.config" %t.exe
 // RUN: %rrc %s -o %t.none.o -O none --relocation-mode pic
 // RUN: %cc %t.none.o %t.driver.o %S/Inputs/kernel_launch_shapes_execute.c -o %t.none.exe %pjrt_runtime %extra_sys_libs
-// RUN: env XLA_FLAGS="--xla_force_host_platform_device_count=2" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" REUSSIR_PJRT_CACHE_CONFIG="%S/../runtime/Inputs/pjrt_cache.toml" %t.none.exe
+// RUN: env XLA_FLAGS="--xla_force_host_platform_device_count=2" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" REUSSIR_CACHE_DIR="%t.cache" REUSSIR_CONFIG_DIR="%t.config" %t.none.exe
 
 #[placement(devices = "1,0", sharding = "#ifrt.sharding_param<2 to [0] on 2>")]
 pub struct [value] Tiled {}

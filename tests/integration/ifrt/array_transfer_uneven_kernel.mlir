@@ -3,7 +3,7 @@
 // RUN: %reussir-translate --mlir-to-llvmir %t.mlir | %opt -S -O2 -o %t.ll
 // RUN: %llc %t.ll -relocation-model=pic -filetype=obj -o %t.o
 // RUN: %cc %t.o %S/array_transfer_uneven_kernel.c -o %t.exe %pjrt_runtime %extra_sys_libs
-// RUN: env XLA_FLAGS="--xla_force_host_platform_device_count=4" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" REUSSIR_PJRT_CACHE_CONFIG="%S/../runtime/Inputs/pjrt_cache.toml" %t.exe
+// RUN: env XLA_FLAGS="--xla_force_host_platform_device_count=4" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" REUSSIR_CACHE_DIR="%t.cache" REUSSIR_CONFIG_DIR="%t.config" %t.exe
 
 #s = #ifrt.sharding_param<2x2 to [1,0] on 2x2>
 !I = !ifrt.array<tensor<3x5xf32>, #s, [3, 1, 2, 0]>

@@ -210,6 +210,7 @@ impl Fixture {
             executable: Arc::new(Executable {
                 native: native.cast(),
                 owner,
+                estimated_bytes: std::sync::atomic::AtomicU64::new(128),
             }),
             _api: api,
             state,
@@ -324,7 +325,7 @@ fn launch_failure_does_not_await_unpopulated_event() {
 fn first_device_failure_still_waits_on_other_devices_before_cleanup() {
     let fixture = Fixture::new(2, 2, Failure::Completion);
     let error = unsafe { fixture.executable.clone().execute(&[], 2, &[]) }.unwrap_err();
-    assert_eq!(error.message, "execution failed");
+    assert_eq!(error.message(), "execution failed");
     assert_eq!(
         *fixture.state.log.borrow(),
         [
@@ -425,7 +426,7 @@ fn descriptor_placement_must_match_executable_before_accessing_shards() {
                 .executable
                 .validate_devices(invalid)
                 .unwrap_err()
-                .message
+                .message()
                 .contains("device count")
         );
     }
@@ -435,7 +436,7 @@ fn descriptor_placement_must_match_executable_before_accessing_shards() {
             .executable
             .validate_devices(&reversed)
             .unwrap_err()
-            .message
+            .message()
             .contains("device order")
     );
     assert!(fixture.state.log.borrow().is_empty());
@@ -464,7 +465,7 @@ fn malformed_donation_contract_is_rejected_before_execution() {
     let inputs = [shards.as_ptr(); 3];
     for denied in [&[-1i64][..], &[3], &[1, 1], &[2, 0]] {
         let error = unsafe { fixture.executable.clone().execute(&inputs, 0, denied) }.unwrap_err();
-        assert!(error.message.contains("non-donatable indices"));
+        assert!(error.message().contains("non-donatable indices"));
         assert!(!fixture.state.log.borrow().contains(&"execute"));
     }
 }

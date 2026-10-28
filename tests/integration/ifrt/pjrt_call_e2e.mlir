@@ -3,10 +3,10 @@
 // RUN: %reussir-translate --mlir-to-llvmir %t.mlir | %opt -S -O2 -o %t.ll
 // RUN: %llc %t.ll -relocation-model=pic -filetype=obj -o %t.o
 // RUN: %cc %t.o %S/pjrt_call_e2e.c -o %t.exe %pjrt_runtime %extra_sys_libs
-// RUN: env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" REUSSIR_PJRT_CACHE_CONFIG="%S/../runtime/Inputs/pjrt_cache.toml" %t.exe
+// RUN: env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" REUSSIR_CACHE_DIR="%t.cache" REUSSIR_CONFIG_DIR="%t.config" %t.exe
 // RUN: %rrc %s -o %t.rrc.o -O aggressive --relocation-mode pic
 // RUN: %cc %t.rrc.o %S/pjrt_call_e2e.c -o %t.rrc.exe %pjrt_runtime %extra_sys_libs
-// RUN: env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" REUSSIR_PJRT_CACHE_CONFIG="%S/../runtime/Inputs/pjrt_cache.toml" %t.rrc.exe
+// RUN: env LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" REUSSIR_CACHE_DIR="%t.cache" REUSSIR_CONFIG_DIR="%t.config" %t.rrc.exe
 
 #s = #ifrt.sharding_param<1 to [0] on 1>
 !I = !ifrt.array<tensor<4xf32>, #s, [0]>

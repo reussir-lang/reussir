@@ -86,3 +86,33 @@ outside the shipped bundles continue to require a local path.
 
 Only each library's `rene.ncl` and `src/` are embedded. Build directories and
 other checkout files never enter the bundle or change its cache identity.
+
+## Persistent PJRT kernel compilation
+
+The PJRT-enabled runtime uses compcache directly, with application name
+`reussir`. A synchronous miss compiles and serializes the executable into SQLite;
+a later process deserializes those bytes with its own PJRT client. A resident
+hit returns a client-owned `Arc<Executable>`. Executables retain their clients,
+so eviction or cache shutdown does not invalidate callers' handles. Serialization
+or cache-write failures retain a successfully compiled payload and report the
+cache failure. Actual compiler errors remain typed failures and are not cached.
+
+The executable's v0 recipe includes the verified bytecode digest, compile
+options, donation mapping/donors/aliases, plugin digest, platform version,
+serialized topology and `XLA_FLAGS`. A checksum or deserialization failure causes
+one eviction/retry. Refinement keys separately include argument shapes and
+constant values. compcache coalesces requests with the same key while allowing
+different kernels to compile concurrently. Native destruction happens outside
+cache locks. The cache has no private executor or background I/O workers.
+
+Configuration follows compcache: `reussir/config.ncl` under the platform config
+root, and `reussir` under its cache root. `REUSSIR_CONFIG_DIR` and
+`REUSSIR_CACHE_DIR` override the complete directories. Memory weights, pruning,
+SQLite and retry settings use compcache's schema and defaults. The former
+`REUSSIR_PJRT_CACHE_CONFIG` TOML settings and foyer storage files are no longer
+used.
+
+Rene embeds the Cargo-pinned compcache sources beside `reussir-rt`, rewrites the
+runtime dependency to that local path, and adjusts its seeded lock entry.
+Standalone Cargo resolution prunes the workspace's superset lock while retaining
+its version/source pins; it does not need the original compcache checkout.
