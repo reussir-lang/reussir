@@ -1637,3 +1637,33 @@ fn failed_core_production_does_not_publish_partial_outputs() {
         3
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn edits_to_materialized_core_sources_do_not_reuse_an_old_bake() {
+    use std::io::Write;
+    let tmp = tempfile::tempdir().unwrap();
+    package(tmp.path(), "demo");
+    let manifest = write_targets_manifest(tmp.path());
+    let fakes = Fakes::new(tmp.path());
+    let root = tmp.path().join("build");
+    let out = fakes.rene(&["build"], &manifest, &root);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let source = rene::core_src::dir(&root).join("src/lib.rr");
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(source)
+        .unwrap()
+        .write_all(b"\n// modified materialized source\n")
+        .unwrap();
+    let out = fakes.rene(&["build"], &manifest, &root);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        fakes
+            .compiles()
+            .iter()
+            .filter(|s| s.contains("--package-name core"))
+            .count(),
+        4
+    );
+}

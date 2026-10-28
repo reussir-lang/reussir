@@ -182,7 +182,8 @@ async fn build_node(
     // Only rene's bundled core participates. A path dependency called core
     // must continue to build from its own sources.
     if name == "core" && graph.nodes[name].dir == crate::core_src::dir(opts.build_dir) {
-        let request = crate::compcache::Request::new(graph, name, &plan_opts, rt, commands)?;
+        let request =
+            crate::compcache::Request::new(graph, name, &plan_opts, rt, commands, &sources)?;
         let progress = progress.clone();
         let color = opts.color;
         pool.run(move || async move {

@@ -37,6 +37,8 @@ struct Recipe {
     rene: &'static str,
     package: String,
     bundle: String,
+    config_hash: String,
+    sources: BTreeMap<PathBuf, [u8; 32]>,
     compiler: String,
     rustc: PathBuf,
     rustc_version: String,
@@ -61,6 +63,7 @@ impl Request {
         opts: &plan::Options<'_>,
         runtime: &rt::RtArtifacts,
         commands: Vec<plan::PlannedCommand>,
+        sources: &[deps::SourceFile],
     ) -> Result<Self, String> {
         let deps_dir = opts.build_dir.join(opts.profile_name).join("deps");
         let compiler = which::which(deps::resolve_rrc())
@@ -69,6 +72,16 @@ impl Request {
             rene: env!("CARGO_PKG_VERSION"),
             package: name.to_owned(),
             bundle: core_src::content_hash(),
+            config_hash: deps::config_hash(&graph.nodes[name].loaded.dump),
+            sources: sources
+                .iter()
+                .map(|source| {
+                    let relative = Path::new(&source.path)
+                        .strip_prefix(&graph.nodes[name].dir)
+                        .map_err(|e| format!("bundled source is outside its package: {e}"))?;
+                    Ok((relative.to_owned(), source.record.hash))
+                })
+                .collect::<Result<_, String>>()?,
             compiler: file_digest(&compiler)?,
             rustc: runtime.rustc.clone(),
             rustc_version: runtime.rustc_version.clone(),

@@ -14,7 +14,7 @@ The integration uses compcache's built-in pruning settings (4 GiB trigger,
 seven-day retention, pruning on writes), without loading a configuration file.
 
 Each versioned recipe includes the bundled source digest, rene version, full
-compiler executable digest, Rust toolchain, runtime bundle digest, target,
+compiler executable digest, actual source digests, evaluated manifest, Rust toolchain, runtime bundle digest, target,
 planned commands, upstream artifact digests, and relevant Rust environment
 flags. Only known build-directory and bundled-source arguments are normalized;
 user flags and external library paths remain part of the recipe. A dependency
