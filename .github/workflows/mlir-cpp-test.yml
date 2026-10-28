@@ -121,6 +121,17 @@ jobs:
             cmake --build build --parallel --target all reussir-rt-sanitizers
           '
 
+      # A clean Cargo home and target directory prove the extracted bundle
+      # supplies every Cargo dependency. LLVM/StableHLO remain native inputs.
+      - name: Build vendored PJRT runtime offline
+        run: |
+          nix develop --command bash -c '
+            REUSSIR_PJRT_PATH="$PWD/build/_deps/xla-src" \
+            REUSSIR_STABLEHLO_LIB_DIR="$PWD/build/lib" \
+            REUSSIR_TEST_BUNDLED_PJRT=1 \
+            cargo test --locked -p rene --lib bundled_runtime_builds_locked_offline_with_an_empty_cargo_home -- --ignored
+          '
+
       # PJRT execution tests run against the pinned prebuilt CPU plugin and
       # the PJRT-enabled runtime the build above produced. The exported
       # plugin enables the `pjrt-runtime` lit feature for the integration
@@ -170,14 +181,14 @@ jobs:
       - name: Build and Test rene
         run: |
           nix develop --command bash -c '
+            export REUSSIR_PJRT_PATH="$PWD/build/_deps/xla-src"
             cargo clippy -p rene --lib
             cargo clippy -p rene --all-targets -- -D warnings
             cargo test -p rene
           '
 
-      # The real thing, ignored by default because it is slow and
-      # network-dependent: unpack the bundled runtime and bake reussir-rt
-      # with the host toolchain (crates.io + the pinned mlir-sync git rev).
+      # The real thing, ignored by default because it compiles the runtime:
+      # unpack the bundled sources and bake with the host toolchain offline.
       - name: Run rene host-toolchain bake test
         run: nix develop --command cargo test -p rene --test cli -- --ignored
 

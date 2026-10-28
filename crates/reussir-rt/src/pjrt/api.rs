@@ -127,7 +127,7 @@ impl Api {
                     ..Default::default()
                 });
             }
-            Err(Error {
+            Err(Error::Backend {
                 code: status,
                 message,
             })

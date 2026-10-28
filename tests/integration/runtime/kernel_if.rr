@@ -3,10 +3,10 @@
 // RUN: sed 's/@_RC4main/@main/g' %t.source.mlir > %t.entry.mlir
 // RUN: %reussir-opt %t.entry.mlir --emit-bytecode -o %t.bc
 // RUN: pjrt_test_blake3=$(ls -t "%pjrt_runtime_dir"/deps/libblake3-*.rlib | head -n 1) && %rustc_path --edition=2024 -C prefer-dynamic %S/Inputs/kernel_execute.rs --extern blake3="$pjrt_test_blake3" --extern blake3="${pjrt_test_blake3%.rlib}.rmeta" -L "%pjrt_runtime_dir/deps" -L native="%pjrt_runtime_dir" -l dylib=reussir_rt -o %t.exe
-// RUN: env REUSSIR_PJRT_CACHE_CONFIG="%S/Inputs/pjrt_cache.toml" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc bool:true i64:-5 u64:18446744073709551615 -- i64:2 u64:9223372036854775807
-// RUN: env REUSSIR_PJRT_CACHE_CONFIG="%S/Inputs/pjrt_cache.toml" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc bool:false i64:3 u64:1 -- i64:-1 u64:2
-// RUN: env REUSSIR_PJRT_CACHE_CONFIG="%S/Inputs/pjrt_cache.toml" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc bool:false i64:-3 u64:18446744073709551615 -- i64:-6 u64:18446744073709551614
-// RUN: env REUSSIR_PJRT_CACHE_CONFIG="%S/Inputs/pjrt_cache.toml" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc bool:true i64:100 u64:9223372036854775809 -- i64:107 u64:4611686018427387904
+// RUN: env REUSSIR_CACHE_DIR="%t.cache" REUSSIR_CONFIG_DIR="%t.config" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc bool:true i64:-5 u64:18446744073709551615 -- i64:2 u64:9223372036854775807
+// RUN: env REUSSIR_CACHE_DIR="%t.cache" REUSSIR_CONFIG_DIR="%t.config" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc bool:false i64:3 u64:1 -- i64:-1 u64:2
+// RUN: env REUSSIR_CACHE_DIR="%t.cache" REUSSIR_CONFIG_DIR="%t.config" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc bool:false i64:-3 u64:18446744073709551615 -- i64:-6 u64:18446744073709551614
+// RUN: env REUSSIR_CACHE_DIR="%t.cache" REUSSIR_CONFIG_DIR="%t.config" LD_LIBRARY_PATH="%pjrt_runtime_dir:$LD_LIBRARY_PATH" %t.exe %t.bc bool:true i64:100 u64:9223372036854775809 -- i64:107 u64:4611686018427387904
 // The standalone harness supplies the PJRT entry name; the compiler keeps its
 // ordinary collision-free symbols. No host launch operation is synthesized.
 #[kernel]

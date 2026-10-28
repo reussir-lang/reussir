@@ -320,8 +320,8 @@ mod tests {
         let mut output = [99; 2];
         let error =
             unsafe { buffer.dimensions(api, output.as_mut_ptr(), output.len()) }.unwrap_err();
-        assert_eq!(error.message, "shape unavailable");
-        assert_eq!(error.code, Some(PJRT_Error_Code_PJRT_Error_Code_INTERNAL));
+        assert_eq!(error.message(), "shape unavailable");
+        assert_eq!(error.code(), Some(PJRT_Error_Code_PJRT_Error_Code_INTERNAL));
         assert_eq!(output, [99; 2]);
         assert!(destroyed.load(Ordering::Relaxed));
     }
@@ -370,7 +370,7 @@ mod tests {
         ] {
             let mut output = [99; 2];
             let error = query_dimensions(&mut dimensions, &mut output).unwrap_err();
-            assert!(error.message.contains(message), "{}", error.message);
+            assert!(error.message().contains(message), "{}", error.message());
             assert_eq!(output, [99; 2]);
         }
     }
@@ -397,7 +397,7 @@ mod tests {
                     buffer.deallocate().unwrap();
                 },
                 Err(error) => assert_eq!(
-                    error.code,
+                    error.code(),
                     Some(PJRT_Error_Code_PJRT_Error_Code_UNIMPLEMENTED)
                 ),
             }
@@ -412,7 +412,7 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(missing_memory.message.contains("no memory kind"));
+        assert!(missing_memory.message().contains("no memory kind"));
         assert!(
             Buffer::allocate(
                 usize::MAX,
@@ -444,7 +444,7 @@ mod tests {
                 .to_host((&mut output as *mut f32).cast(), 1, Some(&layout))
                 .unwrap_err();
             assert_eq!(
-                error.code,
+                error.code(),
                 Some(PJRT_Error_Code_PJRT_Error_Code_INVALID_ARGUMENT)
             );
             buffer
@@ -467,10 +467,10 @@ mod tests {
                 )
                 .unwrap_err();
             assert_eq!(
-                size_error.code,
+                size_error.code(),
                 Some(PJRT_Error_Code_PJRT_Error_Code_INVALID_ARGUMENT)
             );
-            assert_eq!(copy_error.code, size_error.code);
+            assert_eq!(copy_error.code(), size_error.code());
             buffer.deallocate().unwrap();
         }
     }

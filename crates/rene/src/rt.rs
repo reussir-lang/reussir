@@ -421,7 +421,14 @@ async fn cargo_build(
     sanitizers: &[String],
 ) -> Result<(PathBuf, PathBuf, Vec<PathBuf>), Error> {
     let mut cmd = compio::process::Command::new(&toolchain.cargo);
-    cmd.args(["build", "--release", "--target", toolchain.target.as_str()]);
+    cmd.args([
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--target",
+        toolchain.target.as_str(),
+    ]);
     // The bundled mimalloc backend builds C code and is not yet a WebAssembly
     // allocator. WASI supplies the libc malloc family used by the runtime's
     // size-recovering fallback, so select that backend for wasm targets.
@@ -593,8 +600,7 @@ mod tests {
         assert!(!manifest.contains("\"nightly\""), "{manifest}");
 
         assert!(tmp.path().join(RT_DIR).join("src").join("lib.rs").is_file());
-        // Versions are pinned through the bundled lock file (no vendoring;
-        // the host cargo fetches, the lock decides versions).
+        // Other dependencies are pinned through the bundled lock file.
         assert!(tmp.path().join(RT_DIR).join("Cargo.lock").is_file());
 
         // Even a feature-off Cargo build must resolve optional path dependencies.
@@ -616,6 +622,132 @@ mod tests {
                 .join("reussir-backend-sys/native_archive.rs")
                 .is_file()
         );
+    }
+
+    // Cargo must run on the test's platform, including Wine, rather than using
+    // the Linux host executable embedded by a cross-build. Use a fresh home and
+    // target directory so no downloaded sources or compiled artifacts can hide
+    // an incomplete bundle.
+    fn bundle_cargo(runtime: &Path, cargo_home: &Path) -> std::process::Command {
+        let mut command = std::process::Command::new("cargo");
+        command
+            .current_dir(runtime)
+            .env("CARGO_HOME", cargo_home)
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("CARGO_TARGET_DIR", runtime.join("target"))
+            .env("CARGO_BUILD_BUILD_DIR", runtime.join("target"))
+            .env_remove("CARGO_BUILD_TARGET")
+            .env_remove("RUSTC")
+            .env("RUSTC_WRAPPER", "")
+            .env("RUSTC_WORKSPACE_WRAPPER", "")
+            .env("CARGO_ENCODED_RUSTFLAGS", "")
+            .env("RUSTFLAGS", "");
+        command
+    }
+
+    #[test]
+    fn bundled_dependencies_resolve_offline_with_an_empty_cargo_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        unpack(tmp.path()).unwrap();
+        let runtime = tmp.path().join(RT_DIR);
+        let home = tmp.path().join("empty-cargo-home");
+        let lock_path = runtime.join("Cargo.lock");
+        let lock = std::fs::read(&lock_path).unwrap();
+        let output = bundle_cargo(&runtime, &home)
+            .args([
+                "metadata",
+                "--format-version=1",
+                "--all-features",
+                "--locked",
+                "--offline",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let vendor = runtime.join("vendor").canonicalize().unwrap();
+        for package in metadata["packages"].as_array().unwrap() {
+            if !package["source"].is_null() {
+                assert!(
+                    Path::new(package["manifest_path"].as_str().unwrap())
+                        .canonicalize()
+                        .unwrap()
+                        .starts_with(&vendor)
+                );
+            }
+        }
+        let seed: toml_edit::DocumentMut = include_str!("../../../Cargo.lock").parse().unwrap();
+        let resolved: toml_edit::DocumentMut = std::str::from_utf8(&lock).unwrap().parse().unwrap();
+        for package in resolved["package"].as_array_of_tables().unwrap() {
+            assert!(
+                seed["package"]
+                    .as_array_of_tables()
+                    .unwrap()
+                    .iter()
+                    .any(|old| {
+                        ["name", "version", "source", "checksum"]
+                            .iter()
+                            .all(|field| {
+                                old.get(field).and_then(toml_edit::Item::as_str)
+                                    == package.get(field).and_then(toml_edit::Item::as_str)
+                            })
+                    }),
+                "standalone resolution changed a dependency pin: {package}"
+            );
+        }
+        assert_eq!(lock, std::fs::read(lock_path).unwrap());
+        for cache in [
+            "registry/src",
+            "registry/cache",
+            "registry/index",
+            "git/db",
+            "git/checkouts",
+        ] {
+            assert!(
+                !home.join(cache).exists(),
+                "unexpected Cargo cache: {cache}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "compiles the extracted runtime with a native C/Rust toolchain"]
+    fn bundled_runtime_builds_locked_offline_with_an_empty_cargo_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        unpack(tmp.path()).unwrap();
+        let runtime = tmp.path().join(RT_DIR);
+        let home = tmp.path().join("empty-cargo-home");
+        let lock = std::fs::read(runtime.join("Cargo.lock")).unwrap();
+        let mut command = bundle_cargo(&runtime, &home);
+        command.args(["build", "--release", "--locked", "--offline"]);
+        // PJRT additionally needs the native LLVM/StableHLO archives and a C
+        // header/libclang. Cargo vendoring does not replace those prerequisites.
+        if std::env::var_os("REUSSIR_TEST_BUNDLED_PJRT").is_some() {
+            command.args(["--features", "pjrt"]);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(lock, std::fs::read(runtime.join("Cargo.lock")).unwrap());
+        for cache in [
+            "registry/src",
+            "registry/cache",
+            "registry/index",
+            "git/db",
+            "git/checkouts",
+        ] {
+            assert!(
+                !home.join(cache).exists(),
+                "unexpected Cargo cache: {cache}"
+            );
+        }
     }
 
     #[test]

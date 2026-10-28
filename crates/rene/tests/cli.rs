@@ -531,8 +531,8 @@ fn build_resolves_the_target_and_keeps_each_runtime_bake() {
     assert_eq!(
         fakes.cargo_invocations(),
         [
-            "build --release --target wasm32-unknown-unknown --no-default-features --message-format=json-render-diagnostics",
-            "build --release --target aarch64-unknown-linux-gnu --message-format=json-render-diagnostics",
+            "build --release --locked --offline --target wasm32-unknown-unknown --no-default-features --message-format=json-render-diagnostics",
+            "build --release --locked --offline --target aarch64-unknown-linux-gnu --message-format=json-render-diagnostics",
         ]
     );
     let compiles = fakes.package_compiles();
@@ -1249,15 +1249,15 @@ fn build_rejects_a_zero_jobs_cap() {
 }
 
 /// The real thing: bake `reussir-rt` with the host toolchain. Slow (a full
-/// release build of the runtime) and network-dependent (crates.io + the
-/// pinned mlir-sync git revision), hence ignored by default:
+/// release build of the runtime), hence ignored by default. A clean Cargo home
+/// and compiler cache ensure the vendored bundle supplies the offline bake:
 /// `cargo test -p rene -- --ignored`.
 ///
 /// The source scan still runs through the fake `rrc`: this test is about the
 /// runtime bake, and a real `rrc` needs the whole LLVM/MLIR build.
 #[cfg(unix)]
 #[test]
-#[ignore = "builds reussir-rt with the host cargo (slow, needs network)"]
+#[ignore = "builds reussir-rt with the host cargo (slow, needs a C toolchain)"]
 fn build_bakes_the_runtime_with_the_host_toolchain() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("reussir-build");
@@ -1267,6 +1267,9 @@ fn build_bakes_the_runtime_with_the_host_toolchain() {
         .arg(demo_manifest())
         .arg("--build-dir")
         .arg(&root)
+        .env("CARGO_HOME", tmp.path().join("empty-cargo-home"))
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("RENE_CACHE_DIR", tmp.path().join("cache"))
         .env("REUSSIR_RRC", &fakes.rrc));
     assert!(out.status.success(), "stderr: {}", stderr(&out));
 
@@ -1837,7 +1840,7 @@ fn cached_core_stays_leased_through_project_linking() {
     let source = std::fs::read_to_string(&fakes.rrc).unwrap();
     let wait = format!(
         r#"
-if [ "$package" = demo ]; then
+if [ "$package" = demo ] && [ -f '{base}/block-link' ]; then
   touch '{base}/link-started'
   while [ ! -f '{base}/release-link' ]; do sleep 0.01; done
 fi
@@ -1849,6 +1852,12 @@ fi
         source.replace("  echo compiled >", &(wait + "  echo compiled >")),
     )
     .unwrap();
+    // This checks leases held by a cache consumer, not how fast a cold runtime
+    // (including vendored sources) can unpack under parallel CI load. Prepare
+    // the same cache with the same compiler before timing the blocked link.
+    let warm = fakes.rene(&["build"], &manifest, &tmp.path().join("warmup"));
+    assert!(warm.status.success(), "{}", stderr(&warm));
+    std::fs::write(tmp.path().join("block-link"), []).unwrap();
     let mut child = rene(&["build", "--manifest-path"])
         .arg(&manifest)
         .arg("--build-dir")

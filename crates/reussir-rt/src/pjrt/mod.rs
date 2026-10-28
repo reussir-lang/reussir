@@ -9,9 +9,10 @@
 //!   inputs' logical shapes, chooses donation from the actual buffers, compiles
 //!   or reuses a cached executable, waits for all devices, and transfers
 //!   ownership of output buffers.
-//! - **Caching:** uses memory and disk caches, configurable through the TOML file
-//!   named by `REUSSIR_PJRT_CACHE_CONFIG`; unavailable disk caching falls back to
-//!   memory, while invalid configuration is an error.
+//! - **Caching:** compcache persists serialized executables across processes and
+//!   keeps client-owned live Arcs in bounded memory. Standard `reussir/config.ncl`
+//!   settings apply; `REUSSIR_CONFIG_DIR` and `REUSSIR_CACHE_DIR` override roots.
+//!   Cache misses run synchronously, with no background cache runtime.
 //!
 //! See [`ffi`] for ABI and ownership requirements, and `cache_config.rs` for
 //! cache settings and defaults.

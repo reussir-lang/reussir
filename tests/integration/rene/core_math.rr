@@ -11,7 +11,8 @@
 
 // The baked interface: the package header, and located, lang-marked
 // prototypes.
-// RUN: %rene inspect --manifest-path %S/core_math/rene.ncl --build-dir %t.bdir --frozen --commands | %python -c "import json,sys; p=next(n['artifacts']['rri'] for n in json.load(sys.stdin)['plan']['nodes'] if n['package']=='core'); print(open(p).read(), end='')" | %FileCheck %s --check-prefix=RRI
+// Host Python needs Wine paths translated; native paths stay unchanged.
+// RUN: %rene inspect --manifest-path %S/core_math/rene.ncl --build-dir %t.bdir --frozen --commands | %python -c "import json,ntpath,os,subprocess,sys; p=next(n['artifacts']['rri'] for n in json.load(sys.stdin)['plan']['nodes'] if n['package']=='core'); p=subprocess.check_output(['winepath','-u',p], text=True).strip() if os.name != 'nt' and ntpath.splitdrive(p)[0] else p; print(open(p).read(), end='')" | %FileCheck %s --check-prefix=RRI
 
 // RRI: interface 1 package "core"
 // RRI-DAG: #[lang("core::intrinsic::math::sqrt")] pub fn #core::intrinsic::math::sqrt<{{.*}}: core::num::FloatingPoint>({{.*}}) -> {{.*}} in {{[0-9]+}} [{{[0-9]+}}..{{[0-9]+}}];

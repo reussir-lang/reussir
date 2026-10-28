@@ -7,7 +7,6 @@ use std::{
 use super::{
     Error, Result,
     api::{Api, call},
-    cache_config::CacheConfig,
     client::{Client, Device},
     executable::{CompilationCache, CompilationClient},
     sys::*,
@@ -33,7 +32,7 @@ static CONTEXT: OnceLock<Result<Context>> = OnceLock::new();
 extern "C" fn close_cache() {
     if let Some(Ok(context)) = CONTEXT.get() {
         // C/C++ hosts may have already run this thread's TLS destructors.
-        // Foyer/Tokio shutdown needs fresh TLS even though its workers are live.
+        // Native executable destruction may still need fresh plugin TLS.
         if let Ok(worker) = std::thread::Builder::new()
             .name("reussir-pjrt-shutdown".into())
             .spawn(move || context.executables.shutdown())
@@ -90,13 +89,12 @@ impl Context {
     /// `path` must identify a trusted, ABI-conforming native PjRt plugin. Plugin
     /// initialization must not race with a separate loader outside this module.
     unsafe fn load(path: impl AsRef<OsStr>) -> Result<Self> {
-        let config = CacheConfig::load()?;
         let path = path.as_ref();
         let library = unsafe { libloading::Library::new(path) }
-            .map_err(|error| Error::local(error.to_string()))?;
+            .map_err(|error| Error::Library(Arc::new(error)))?;
         let get =
             unsafe { library.get::<unsafe extern "C" fn() -> *const PJRT_Api>(b"GetPjrtApi\0") }
-                .map_err(|error| Error::local(error.to_string()))?;
+                .map_err(|error| Error::Library(Arc::new(error)))?;
         let raw = unsafe { get() };
         mem::forget(library);
         let api = unsafe { Api::new(raw) }?;
@@ -104,18 +102,8 @@ impl Context {
         call!(api, PJRT_Plugin_Initialize {})?;
         let client = Client::create(api)?;
         let owner = Arc::new(CompilationClient { api, client });
-        let namespace = if config.disk.enabled {
-            match owner.namespace(std::path::Path::new(path)) {
-                Ok(namespace) => Some(namespace),
-                Err(error) => {
-                    tracing::warn!(%error, "PJRT disk cache disabled");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        let executables = CompilationCache::new(owner, &config, namespace)?;
+        let namespace = owner.namespace(std::path::Path::new(path))?;
+        let executables = CompilationCache::new(owner, namespace)?;
         let mut context = Self {
             api,
             client,

@@ -3,17 +3,21 @@
 use super::{
     Error, Result,
     api::{Api, call, non_null},
-    artifact::Artifacts,
-    cache_config::CacheConfig,
+    artifact::Memory,
+    cache_config::{self, Reussir},
     client::Client,
+    donation::DonationInputs,
     sys::*,
 };
-use foyer::{Cache, CacheBuilder, S3FifoConfig};
+use compcache::{Key, NoExtraData, Produced, QuickCache, Store, StoreBuilder};
+use serde::Serialize;
 use std::{
-    future::Future,
     path::Path,
     ptr::NonNull,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 mod execute;
@@ -23,6 +27,15 @@ mod execute;
 pub struct Executable {
     native: NonNull<PJRT_LoadedExecutable>,
     owner: Arc<CompilationClient>,
+    estimated_bytes: AtomicU64,
+    pub(super) plan: LaunchPlan,
+}
+
+/// Execution metadata produced by compilation and persisted with its executable.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) struct LaunchPlan {
+    pub inputs: Vec<usize>,
+    pub non_donatable: Vec<i64>,
 }
 
 // SAFETY: PJRT executable/client operations are thread-safe. The last strong
@@ -41,6 +54,14 @@ impl Executable {
     /// The caller must not delete or destroy the returned PJRT object.
     pub fn as_ptr(&self) -> *mut PJRT_LoadedExecutable {
         self.native.as_ptr()
+    }
+
+    pub(super) fn set_weight(&self, bytes: usize) {
+        self.estimated_bytes
+            .store((bytes as u64).max(128), Ordering::Relaxed);
+    }
+    pub(super) fn weight(&self) -> u64 {
+        self.estimated_bytes.load(Ordering::Relaxed)
     }
 
     fn serialize(&self) -> Result<Vec<u8>> {
@@ -103,7 +124,12 @@ impl Drop for CompilationClient {
 }
 
 impl CompilationClient {
-    fn compile(self: &Arc<Self>, code: &[u8], options: &[u8]) -> Result<Arc<Executable>> {
+    fn compile(
+        self: &Arc<Self>,
+        code: &[u8],
+        options: &[u8],
+        plan: LaunchPlan,
+    ) -> Result<Arc<Executable>> {
         let program = PJRT_Program {
             struct_size: PJRT_Program_STRUCT_SIZE as usize,
             code: code.as_ptr().cast_mut().cast(),
@@ -121,17 +147,27 @@ impl CompilationClient {
                 compile_options_size: options.len(),
             }
         )?;
-        self.loaded(compiled.executable)
+        self.loaded(compiled.executable, plan)
     }
 
-    fn loaded(self: &Arc<Self>, native: *mut PJRT_LoadedExecutable) -> Result<Arc<Executable>> {
+    fn loaded(
+        self: &Arc<Self>,
+        native: *mut PJRT_LoadedExecutable,
+        plan: LaunchPlan,
+    ) -> Result<Arc<Executable>> {
         Ok(Arc::new(Executable {
             native: non_null(native, "loaded executable")?,
             owner: self.clone(),
+            estimated_bytes: AtomicU64::new(128),
+            plan,
         }))
     }
 
-    fn deserialize(self: &Arc<Self>, bytes: &[u8]) -> Result<Arc<Executable>> {
+    pub(super) fn deserialize(
+        self: &Arc<Self>,
+        bytes: &[u8],
+        plan: LaunchPlan,
+    ) -> Result<Arc<Executable>> {
         let loaded = call!(
             self.api,
             PJRT_Executable_DeserializeAndLoad {
@@ -140,11 +176,11 @@ impl CompilationClient {
                 serialized_executable_size: bytes.len(),
             }
         )?;
-        self.loaded(loaded.loaded_executable)
+        self.loaded(loaded.loaded_executable, plan)
     }
 
     /// Backend compatibility is part of the key, not a cache/config version.
-    /// If the plugin cannot describe its target or serialize, use memory only.
+    /// Persistent compilation requires target identity and serialization APIs.
     pub fn namespace(&self, plugin: &Path) -> Result<[u8; 32]> {
         let api = self.api;
         // These optional fields are within the prefix validated by Api::new.
@@ -164,14 +200,12 @@ impl CompilationClient {
                 && (*api.0.as_ptr()).PJRT_Client_PlatformVersion.is_some()
         };
         if !supported {
-            return Err(Error::local(
-                "plugin does not support persistent executable caching",
-            ));
+            return Err(Error::PersistenceUnsupported);
         }
         let mut hasher = blake3::Hasher::new();
         hasher
-            .update_reader(std::fs::File::open(plugin).map_err(|e| Error::local(e.to_string()))?)
-            .map_err(|e| Error::local(e.to_string()))?;
+            .update_reader(std::fs::File::open(plugin).map_err(|e| Error::Io(Arc::new(e)))?)
+            .map_err(|e| Error::Io(Arc::new(e)))?;
         let plugin_digest = hasher.finalize();
         hasher = blake3::Hasher::new();
         hasher.update(plugin_digest.as_bytes());
@@ -227,261 +261,196 @@ fn verify_checksum(bytecode: &[u8], checksum: &[u8]) -> Result<blake3::Hash> {
     Ok(actual)
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
-struct CacheKey {
-    digest: blake3::Hash,
-    options: Vec<u8>,
-    donation: Option<reussir_stablehlo::Donation>,
-}
-
 pub(super) struct CompilationCache {
-    entries: Cache<CacheKey, Arc<Executable>>,
-    programs:
-        Cache<(blake3::Hash, Vec<reussir_stablehlo::Argument>), Arc<reussir_stablehlo::Refined>>,
-    artifacts: Option<Arc<Artifacts>>,
+    store: Store<Memory, NoExtraData>,
+    memory: Arc<QuickCache<Arc<Executable>>>,
     namespace: [u8; 32],
     pub(super) owner: Arc<CompilationClient>,
-    // Taken by the first of `shutdown` and `Drop`.
-    runtime: Mutex<Option<tokio::runtime::Runtime>>,
-    handle: tokio::runtime::Handle,
 }
 
 impl CompilationCache {
-    pub fn new(
+    pub fn new(owner: Arc<CompilationClient>, namespace: [u8; 32]) -> Result<Self> {
+        let config = cache_config::load()?;
+        let builder = StoreBuilder::with_defaults::<Reussir>()?.config(config.clone());
+        Self::open(owner, namespace, config, builder)
+    }
+
+    fn open(
         owner: Arc<CompilationClient>,
-        config: &CacheConfig,
-        namespace: Option<[u8; 32]>,
+        namespace: [u8; 32],
+        config: compcache::Config,
+        builder: StoreBuilder<Memory, NoExtraData>,
     ) -> Result<Self> {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("reussir-pjrt-cache")
-            .enable_all()
-            .build()
-            .map_err(|e| Error::local(e.to_string()))?;
-        let artifacts = if config.disk.enabled && namespace.is_some() {
-            let _enter = runtime.enter();
-            match futures::executor::block_on(Artifacts::open(&config.disk)) {
-                Ok(artifacts) => Some(artifacts),
-                Err(error) => {
-                    tracing::warn!(%error, "PJRT disk cache disabled");
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        let memory = Memory::new(owner.clone(), &config.memory)?;
+        let entries = memory.entries.clone();
+        let store = builder.in_memory(memory).open()?;
         Ok(Self {
-            programs: CacheBuilder::new(config.memory.loaded_entries)
-                .with_shards(1)
-                .with_eviction_config(S3FifoConfig::default())
-                .build(),
-            entries: CacheBuilder::new(config.memory.loaded_entries)
-                .with_shards(1)
-                .with_eviction_config(S3FifoConfig::default())
-                .build(),
-            artifacts,
-            namespace: namespace.unwrap_or_default(),
+            store,
+            memory: entries,
+            namespace,
             owner,
-            handle: runtime.handle().clone(),
-            runtime: Mutex::new(Some(runtime)),
         })
     }
 
-    fn wait<F: Future>(&self, future: F) -> F::Output {
-        // A separate runtime drives I/O even if the FFI caller is itself on a
-        // Tokio worker. No nested Runtime::block_on and no caller executor needed.
-        let _enter = self.handle.enter();
-        futures::executor::block_on(future)
-    }
-
-    /// Compile a refined program, rewritten for `donation` if given.
-    pub(super) fn compile_refined(
-        &self,
-        program: &[u8],
-        options: &[u8],
-        donation: Option<reussir_stablehlo::Donation>,
-    ) -> Result<Arc<Executable>> {
-        self.get_or_build(program, blake3::hash(program), options, donation)
-    }
-
-    /// Refine a verified program for one launch's argument shapes. Refined
-    /// programs have their own bounded cache, separate from executables.
-    pub(super) fn refine_program(
+    pub(super) fn compile_program(
         &self,
         code: &[u8],
         checksum: &[u8],
-        arguments: Vec<reussir_stablehlo::Argument>,
-    ) -> Result<Arc<reussir_stablehlo::Refined>> {
-        let key = (verify_checksum(code, checksum)?, arguments.clone());
-        if let Some(entry) = self.programs.get(&key) {
-            return Ok(entry.value().clone());
-        }
-        let code = code.to_vec();
-        let _enter = self.handle.enter();
-        self.wait(self.programs.get_or_fetch(&key, || async move {
-            tokio::task::spawn_blocking(move || {
-                reussir_stablehlo::refine_shapes(&code, &arguments)
-                    .map(Arc::new)
-                    .map_err(|e| match e.kind {
-                        reussir_stablehlo::ErrorKind::ResidualDynamism => Error::local(
-                            "kernel shapes depend on the value of a runtime argument; \
-                             mark it in the launch configuration's `constants`",
-                        ),
-                        _ => Error::local(e.to_string()),
-                    })
-            })
-            .await
-            .map_err(|e| Error::local(e.to_string()))?
-        }))
-        .map(|entry| entry.value().clone())
-        .map_err(|e| Error::local(e.to_string()))
+        options: &[u8],
+        arguments: &[reussir_stablehlo::Argument],
+        donation: &DonationInputs,
+        output_count: usize,
+    ) -> Result<Arc<Executable>> {
+        let digest = verify_checksum(code, checksum)?;
+        self.get_or_compile(code, digest, options, arguments, donation, output_count)
     }
 
-    fn get_or_build(
+    fn get_or_compile(
         &self,
         code: &[u8],
         digest: blake3::Hash,
         options: &[u8],
-        donation: Option<reussir_stablehlo::Donation>,
+        arguments: &[reussir_stablehlo::Argument],
+        donation: &DonationInputs,
+        output_count: usize,
     ) -> Result<Arc<Executable>> {
-        let key = CacheKey {
-            digest,
-            options: options.into(),
-            donation: donation.clone(),
-        };
-        if let Some(entry) = self.entries.get(&key) {
-            return Ok(entry.value().clone());
-        }
-        let owner = self.owner.clone();
-        let artifacts = self.artifacts.clone();
-        let artifact_key = self.artifact_key(&key);
-        let code = code.to_vec();
-        let options = options.to_vec();
-        let _enter = self.handle.enter();
-        self.wait(self.entries.get_or_fetch(&key, || async move {
-            let stored = if let Some(artifacts) = &artifacts {
-                match artifacts.cache.get(&artifact_key).await {
-                    Ok(entry) => entry,
-                    Err(error) => {
-                        tracing::warn!(%error, "PJRT artifact read failed");
-                        None
+        let key = self.artifact_key(digest, options, arguments, donation, output_count)?;
+        self.get_or_build(key, options, || {
+            let refined =
+                reussir_stablehlo::refine_shapes(code, arguments).map_err(|source| match source
+                    .kind
+                {
+                    reussir_stablehlo::ErrorKind::ResidualDynamism => {
+                        Error::ResidualDynamism(Arc::new(source))
                     }
-                }
+                    _ => Error::Stablehlo(Arc::new(source)),
+                })?;
+            if refined.result_types.len() != output_count {
+                return Err(Error::local("refined result count mismatch"));
+            }
+            let selected = donation.select(&refined.result_types)?;
+            let inputs: Vec<_> = selected
+                .mapping
+                .iter()
+                .enumerate()
+                .filter_map(|(j, &rep)| (j == rep as usize).then_some(j))
+                .collect();
+            let non_donatable = inputs
+                .iter()
+                .enumerate()
+                .filter_map(|(new, &old)| {
+                    (!selected.donors.contains(&(old as u32))).then_some(new as i64)
+                })
+                .collect();
+            let bytecode = if selected.donors.is_empty() && selected.aliases.is_empty() {
+                refined.bytecode
             } else {
-                None
+                reussir_stablehlo::apply_donation(&refined.bytecode, &selected)
+                    .map_err(|source| Error::Stablehlo(Arc::new(source)))?
             };
-            // Backend compilation/serialization may block for a long time.
-            // Keep it off foyer's I/O workers; same-key requests are coalesced.
-            tokio::task::spawn_blocking(move || {
-                if let Some(entry) = stored {
-                    let bytes = entry.value();
-                    if bytes.len() >= 32 && blake3::hash(&bytes[32..]).as_bytes() == &bytes[..32] {
-                        match owner.deserialize(&bytes[32..]) {
-                            Ok(executable) => {
-                                tracing::debug!("PJRT executable restored from artifact cache");
-                                return Ok(executable);
-                            }
-                            Err(error) => {
-                                tracing::warn!(%error, "PJRT artifact rejected; recompiling")
-                            }
-                        }
-                    }
-                    if let Some(artifacts) = &artifacts {
-                        artifacts.cache.remove(&artifact_key);
-                    }
-                }
-                // The donation rewrite is inside the coalesced cache miss, like
-                // PJRT compilation; hits and restored artifacts need neither.
-                let code = if let Some(donation) = donation {
-                    reussir_stablehlo::apply_donation(&code, &donation)
-                        .map_err(|error| Error::local(error.to_string()))?
-                } else {
-                    code
-                };
-                let executable = owner.compile(&code, &options)?;
-                if let Some(artifacts) = &artifacts {
-                    match executable.serialize() {
-                        Ok(bytes) => {
-                            let mut record = blake3::hash(&bytes).as_bytes().to_vec();
-                            record.extend_from_slice(&bytes);
-                            artifacts.cache.insert(artifact_key, record);
-                        }
-                        Err(error) => {
-                            tracing::warn!(%error, "PJRT executable is only cached in memory")
-                        }
-                    }
-                }
-                Ok::<_, Error>(executable)
-            })
-            .await
-            .map_err(|e| Error::local(e.to_string()))?
-        }))
-        .map(|entry| entry.value().clone())
-        .map_err(|e| {
-            e.downcast_ref::<Error>()
-                .cloned()
-                .unwrap_or_else(|| Error::local(e.to_string()))
+            Ok((
+                bytecode,
+                LaunchPlan {
+                    inputs,
+                    non_donatable,
+                },
+            ))
         })
     }
 
-    /// Length-delimited, versioned identity of a disk artifact.
-    fn artifact_key(&self, key: &CacheKey) -> Vec<u8> {
-        let mut artifact_key = self.namespace.to_vec();
-        artifact_key.extend_from_slice(b"reussir-pjrt-artifact-v1");
-        artifact_key.extend_from_slice(key.digest.as_bytes());
-        artifact_key.extend_from_slice(&(key.options.len() as u64).to_le_bytes());
-        artifact_key.extend_from_slice(&key.options);
-        artifact_key.push(u8::from(key.donation.is_some()));
-        if let Some(donation) = &key.donation {
-            for values in [
-                &donation.mapping[..],
-                &donation.donors[..],
-                donation.aliases.as_flattened(),
-            ] {
-                artifact_key.extend_from_slice(&(values.len() as u64).to_le_bytes());
-                for value in values {
-                    artifact_key.extend_from_slice(&value.to_le_bytes());
+    fn get_or_build(
+        &self,
+        key: Key,
+        options: &[u8],
+        prepare: impl Fn() -> Result<(Vec<u8>, LaunchPlan)>,
+    ) -> Result<Arc<Executable>> {
+        // A materialization failure means cached bytes were corrupt or rejected
+        // by the plugin. Repair once; actual compilation errors are not retried.
+        for attempt in 0..2 {
+            let cached = self.store.get_or_insert_payload(key, || {
+                let (code, plan) = prepare()?;
+                let executable = self.owner.compile(&code, options, plan)?;
+                let serialized = executable
+                    .serialize()
+                    .and_then(|bytes| {
+                        let record = super::artifact::encode(&executable.plan, &bytes)?;
+                        executable.set_weight(record.len());
+                        Ok(Some(record))
+                    })
+                    .map_err(compcache::Error::producer);
+                Ok(Produced {
+                    payload: executable,
+                    serialized,
+                })
+            });
+            match cached {
+                Err(compcache::Error::Materialize(_)) if attempt == 0 => {
+                    tracing::warn!("PJRT artifact rejected; recompiling");
+                    self.store.force_evict_blob(&key)?;
+                }
+                result => {
+                    let result = result?;
+                    if let Some(error) = result.cache_error {
+                        tracing::warn!(%error, "PJRT executable usable but persistence failed");
+                    }
+                    return Ok(result.payload);
                 }
             }
         }
-        artifact_key
+        unreachable!("the final cache attempt returns its result")
     }
 
-    fn close_artifacts(&self) {
-        if let Some(artifacts) = &self.artifacts {
-            self.wait(artifacts.close());
+    fn artifact_key(
+        &self,
+        digest: blake3::Hash,
+        options: &[u8],
+        arguments: &[reussir_stablehlo::Argument],
+        donation: &DonationInputs,
+        output_count: usize,
+    ) -> compcache::Result<Key> {
+        #[derive(Serialize)]
+        enum Argument<'a> {
+            Shape(&'a [i64]),
+            Constant(i64),
         }
+        #[derive(Serialize)]
+        struct Recipe<'a> {
+            backend: &'a [u8; 32],
+            bytecode: &'a [u8; 32],
+            options: &'a [u8],
+            arguments: Vec<Argument<'a>>,
+            donation: &'a DonationInputs,
+            output_count: usize,
+        }
+        Key::from_serde(
+            "reussir-pjrt-executable-v1",
+            &Recipe {
+                backend: &self.namespace,
+                bytecode: digest.as_bytes(),
+                options,
+                arguments: arguments
+                    .iter()
+                    .map(|arg| match arg {
+                        reussir_stablehlo::Argument::Shape(dims) => Argument::Shape(dims),
+                        reussir_stablehlo::Argument::Constant(value) => Argument::Constant(*value),
+                    })
+                    .collect(),
+                donation,
+                output_count,
+            },
+        )
     }
 
-    /// Shut down from outside any Tokio runtime: at process exit, or when the
-    /// cache is dropped there. No request may start afterwards. Foyer can wake
-    /// a fetch waiter before it finishes evicting, so join the cache workers
-    /// before destroying the remaining executables. Idempotent.
+    /// All writes are synchronous. Clear cached ownership before native plugin
+    /// teardown; external executable Arcs keep their native client alive.
     pub fn shutdown(&self) {
-        let Some(runtime) = self.runtime.lock().unwrap().take() else {
-            return;
-        };
-        self.close_artifacts();
-        drop(runtime);
-        self.entries.clear();
-        self.programs.clear();
+        drop(self.memory.clear());
     }
 }
 
 impl Drop for CompilationCache {
     fn drop(&mut self) {
-        if tokio::runtime::Handle::try_current().is_err() {
-            return self.shutdown();
-        }
-        let Some(runtime) = self.runtime.get_mut().unwrap().take() else {
-            return;
-        };
-        self.close_artifacts();
-        self.entries.clear();
-        // Joining the workers would block, which Tokio forbids when an
-        // embedding drops us on its async worker. Closing the store already
-        // waits for I/O; an eviction still in flight finishes in the background.
-        runtime.shutdown_background();
+        self.shutdown();
     }
 }
 

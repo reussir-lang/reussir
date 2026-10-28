@@ -19,7 +19,7 @@ path = "src/main.rs"
 blake3.workspace = true
 # Share compiled bundled libraries as leased on-disk directories, without a
 # memory cache or SQLite blob payloads.
-compcache = { git = "https://github.com/reussir-lang/compcache", rev = "9c297bffc30401e06cdb751c783f1c6987cdd6fe" }
+compcache.workspace = true
 which = "8"
 walkdir = "2"
 # The async runtime: completion-based (io_uring/IOCP), driving the child
@@ -83,6 +83,7 @@ toml_edit.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]
+toml_edit.workspace = true
 # Auto-cleaned scratch directories for the manifest loading tests.
 tempfile = "3"
 # The CLI tests check `rene inspect`'s JSON report, and that the digests it

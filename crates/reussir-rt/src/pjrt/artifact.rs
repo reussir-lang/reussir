@@ -1,90 +1,89 @@
-//! Serialized executable storage; no PJRT pointers enter this cache.
+//! Client-owned live payloads backed by compcache's persistent executable bytes.
 
 use super::{
     Error, Result,
-    cache_config::{DiskConfig, WritePolicy},
+    executable::{CompilationClient, Executable, LaunchPlan},
 };
-use foyer::{
-    BlockEngineConfig, DeviceBuilder, FsDeviceBuilder, HybridCache, HybridCacheBuilder,
-    HybridCachePolicy, PsyncIoEngineConfig, S3FifoConfig,
-};
-use std::{
-    fs::{self, File},
-    sync::Arc,
-};
+use compcache::{InMemoryCache, Key, MemoryConfig, MemoryEntry, QuickCache};
+use std::sync::Arc;
 
-pub(super) struct Artifacts {
-    pub cache: HybridCache<Vec<u8>, Vec<u8>>,
-    // Hold the directory lock until the store has closed and its tasks stopped.
-    _lock: File,
+type Payload = Arc<Executable>;
+
+/// A checksummed record containing length-delimited JSON execution metadata
+/// followed by the plugin's opaque executable bytes. No source is persisted.
+pub(super) fn encode(plan: &LaunchPlan, executable: &[u8]) -> Result<Vec<u8>> {
+    let metadata = serde_json::to_vec(plan).map_err(Arc::new)?;
+    let mut record = vec![0; 32];
+    record.extend_from_slice(&(metadata.len() as u64).to_le_bytes());
+    record.extend_from_slice(&metadata);
+    record.extend_from_slice(executable);
+    let digest = blake3::hash(&record[32..]);
+    record[..32].copy_from_slice(digest.as_bytes());
+    Ok(record)
 }
 
-impl Artifacts {
-    pub async fn open(config: &DiskConfig) -> Result<Arc<Self>> {
-        let directory = config
-            .directory
-            .as_ref()
-            .ok_or_else(|| Error::local("no platform cache directory available"))?;
-        fs::create_dir_all(directory).map_err(|e| Error::local(e.to_string()))?;
-        let lock = File::options()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(directory.join(".lock"))
-            .map_err(|e| Error::local(e.to_string()))?;
-        lock.try_lock()
-            .map_err(|e| Error::local(format!("PJRT cache directory is unavailable: {e}")))?;
-        // Foyer resizes active partitions but does not remove surplus files.
-        // Reset our disposable data when its physical layout changes, so a
-        // smaller configured capacity also bounds an existing cache directory.
-        let layout = format!("{}:{}", config.capacity_bytes, config.block_bytes);
-        let layout_path = directory.join("layout");
-        let data = directory.join("data");
-        let previous = match fs::read_to_string(&layout_path) {
-            Ok(layout) => Some(layout),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(Error::local(error.to_string())),
-        };
-        if previous.as_deref() != Some(&layout) {
-            match fs::remove_dir_all(&data) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(Error::local(error.to_string())),
-            }
-            fs::write(layout_path, layout).map_err(|e| Error::local(e.to_string()))?;
-        }
-        let device = FsDeviceBuilder::new(data)
-            .with_capacity(config.capacity_bytes)
-            .build()
-            .map_err(|e| Error::local(e.to_string()))?;
-        let cache = HybridCacheBuilder::new()
-            .with_name("reussir-pjrt-artifacts")
-            .with_policy(match config.write_policy {
-                WritePolicy::OnEviction => HybridCachePolicy::WriteOnEviction,
-                WritePolicy::OnInsertion => HybridCachePolicy::WriteOnInsertion,
-            })
-            .with_flush_on_close(config.flush_on_shutdown)
-            .memory(config.buffer_bytes)
-            .with_shards(1)
-            .with_eviction_config(S3FifoConfig::default())
-            .with_weighter(|key: &Vec<u8>, value: &Vec<u8>| key.len().saturating_add(value.len()))
-            .storage()
-            .with_io_engine_config(PsyncIoEngineConfig::new())
-            .with_engine_config(
-                BlockEngineConfig::new(device)
-                    .with_block_size(config.block_bytes)
-                    .with_buffer_pool_size(config.buffer_bytes)
-                    .with_submit_queue_size_threshold(config.buffer_bytes),
-            )
-            .build()
-            .await
-            .map_err(|e| Error::local(e.to_string()))?;
-        Ok(Arc::new(Self { cache, _lock: lock }))
+fn decode(bytes: &[u8]) -> Result<(LaunchPlan, &[u8])> {
+    if bytes.len() < 40 || blake3::hash(&bytes[32..]).as_bytes() != &bytes[..32] {
+        return Err(Error::CorruptArtifact);
+    }
+    let length = u64::from_le_bytes(bytes[32..40].try_into().unwrap());
+    let end = usize::try_from(length)
+        .ok()
+        .and_then(|n| n.checked_add(40))
+        .filter(|&n| n <= bytes.len())
+        .ok_or(Error::CorruptArtifact)?;
+    let plan = serde_json::from_slice(&bytes[40..end]).map_err(Arc::new)?;
+    Ok((plan, &bytes[end..]))
+}
+
+pub(super) struct Memory {
+    pub owner: Arc<CompilationClient>,
+    pub entries: Arc<QuickCache<Payload>>,
+}
+
+impl Memory {
+    pub fn new(owner: Arc<CompilationClient>, config: &MemoryConfig) -> compcache::Result<Self> {
+        Ok(Self {
+            owner,
+            entries: Arc::new(QuickCache::new(config)?),
+        })
+    }
+}
+
+impl InMemoryCache for Memory {
+    type Payload = Payload;
+
+    fn from_config(_: &MemoryConfig) -> compcache::Result<Self> {
+        Err(compcache::Error::Config {
+            field: "pjrt.client",
+            reason: "supply a PJRT client with in_memory",
+        })
     }
 
-    pub async fn close(&self) {
-        if let Err(error) = self.cache.close().await {
-            tracing::warn!(%error, "PJRT artifact cache close failed");
-        }
+    fn materialize(&self, bytes: Arc<[u8]>) -> compcache::Result<Payload> {
+        let (plan, executable) = decode(&bytes).map_err(compcache::Error::producer)?;
+        let executable = self
+            .owner
+            .deserialize(executable, plan)
+            .map_err(compcache::Error::producer)?;
+        executable.set_weight(bytes.len());
+        tracing::debug!("PJRT executable loaded from persistent compcache");
+        Ok(executable)
+    }
+
+    fn weight(&self, payload: &Payload) -> u64 {
+        payload.weight()
+    }
+    fn get(&self, key: &Key) -> Option<Arc<MemoryEntry<Payload>>> {
+        self.entries.get(key)
+    }
+    fn insert(&self, key: Key, entry: Arc<MemoryEntry<Payload>>) -> Vec<Arc<MemoryEntry<Payload>>> {
+        self.entries.insert(key, entry)
+    }
+    fn remove(&self, key: &Key) -> Option<Arc<MemoryEntry<Payload>>> {
+        self.entries.remove(key)
+    }
+    fn clear(&self) -> Vec<Arc<MemoryEntry<Payload>>> {
+        self.entries.clear()
     }
 }
