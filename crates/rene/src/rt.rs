@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::Error;
 use crate::db::BuildDir;
 use crate::tables;
 
@@ -111,11 +112,9 @@ impl Toolchain {
     /// honors), then cargo's own `CARGO`/`RUSTC`, then `PATH` — which
     /// respects rustup shims, so a `rust-toolchain.toml` in the user's
     /// project still picks the toolchain naturally.
-    async fn resolve(requested_target: Option<&str>) -> Result<Self, String> {
-        let mut cargo = which::which(pick_program("REUSSIR_CARGO", "CARGO", "cargo"))
-            .map_err(|e| e.to_string())?;
-        let mut rustc = which::which(pick_program("REUSSIR_RUSTC", "RUSTC", "rustc"))
-            .map_err(|e| e.to_string())?;
+    async fn resolve(requested_target: Option<&str>) -> Result<Self, Error> {
+        let mut cargo = which::which(pick_program("REUSSIR_CARGO", "CARGO", "cargo"))?;
+        let mut rustc = which::which(pick_program("REUSSIR_RUSTC", "RUSTC", "rustc"))?;
         // Resolve rustup's project selection before changing cwd to the global
         // cache. Otherwise its shim would select the cache directory's default.
         let is_rustup = |program: &Path| {
@@ -145,11 +144,9 @@ impl Toolchain {
         let host = verbose_version
             .lines()
             .find_map(|line| line.strip_prefix("host: "))
-            .ok_or_else(|| {
-                format!(
-                    "`{} -vV` reported no `host:` line:\n{verbose_version}",
-                    rustc.display()
-                )
+            .ok_or_else(|| Error::MissingHost {
+                rustc: rustc.clone(),
+                output: verbose_version.clone(),
             })?
             .trim()
             .to_owned();
@@ -182,7 +179,7 @@ fn pick_program(specific: &str, generic: &str, default: &str) -> PathBuf {
 
 /// Resolve the target used by a command that does not bake the runtime:
 /// an explicit/profile target wins, otherwise use the selected rustc's host.
-pub async fn resolve_target(requested: Option<&str>) -> Result<String, String> {
+pub async fn resolve_target(requested: Option<&str>) -> Result<String, Error> {
     if let Some(target) = requested {
         return validate_target(target);
     }
@@ -191,11 +188,9 @@ pub async fn resolve_target(requested: Option<&str>) -> Result<String, String> {
     verbose_version
         .lines()
         .find_map(|line| line.strip_prefix("host: "))
-        .ok_or_else(|| {
-            format!(
-                "`{} -vV` reported no `host:` line:\n{verbose_version}",
-                rustc.display()
-            )
+        .ok_or_else(|| Error::MissingHost {
+            rustc: rustc.clone(),
+            output: verbose_version.clone(),
         })
         .and_then(|host| validate_target(host.trim()))
 }
@@ -203,11 +198,11 @@ pub async fn resolve_target(requested: Option<&str>) -> Result<String, String> {
 /// Target triples become one build-directory path component and one status
 /// key component. Accept Rust-style triples, including dotted ARM targets,
 /// while rejecting path syntax and empty/special components.
-fn validate_target(target: &str) -> Result<String, String> {
+fn validate_target(target: &str) -> Result<String, Error> {
     if target.ends_with(".json") {
-        return Err(format!(
-            "invalid target triple `{target}`: custom target JSON specifications are not supported"
-        ));
+        return Err(Error::CustomTargetUnsupported {
+            target: target.to_owned(),
+        });
     }
     let valid = !target.is_empty()
         && target != "."
@@ -218,9 +213,9 @@ fn validate_target(target: &str) -> Result<String, String> {
     if valid {
         Ok(target.to_owned())
     } else {
-        Err(format!(
-            "invalid target triple `{target}`: expected only ASCII letters, digits, `-`, `_`, or `.`"
-        ))
+        Err(Error::InvalidTarget {
+            target: target.to_owned(),
+        })
     }
 }
 
@@ -252,7 +247,7 @@ fn platform_allocator_forced() -> bool {
     std::env::var_os("RENE_RT_PLATFORM_ALLOCATOR").is_some_and(|value| value != "0")
 }
 
-async fn capture(program: &Path, args: &[&str]) -> Result<String, String> {
+async fn capture(program: &Path, args: &[&str]) -> Result<String, Error> {
     let out = compio::process::Command::new(program)
         .args(args)
         .stdout(Stdio::piped())
@@ -261,14 +256,14 @@ async fn capture(program: &Path, args: &[&str]) -> Result<String, String> {
         .expect("pipe stderr")
         .output()
         .await
-        .map_err(|e| format!("cannot run `{} {}`: {e}", program.display(), args.join(" ")))?;
+        .map_err(|source| Error::spawn(program, source))?;
     if !out.status.success() {
-        return Err(format!(
-            "`{} {}` failed: {}",
-            program.display(),
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        return Err(Error::CommandFailed {
+            program: program.to_owned(),
+            args: args.join(" "),
+            status: out.status,
+            diagnostics: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+        });
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
 }
@@ -297,7 +292,7 @@ pub async fn prepare(
     linker: Option<&Path>,
     sanitizers: &[String],
     progress: &indicatif::MultiProgress,
-) -> Result<RtArtifacts, String> {
+) -> Result<RtArtifacts, Error> {
     let toolchain = Toolchain::resolve(requested_target).await?;
     let hash = bundle_hash();
     let key = compcache::Key::from_serde(
@@ -327,13 +322,12 @@ pub async fn prepare(
                 })
                 .collect(),
         },
-    )
-    .map_err(|e| e.to_string())?;
+    )?;
     let cache = std::sync::Arc::clone(cache);
     let linker = linker.map(Path::to_owned);
     let sanitizers = sanitizers.to_vec();
     let progress = progress.clone();
-    let artifacts = compio::runtime::spawn_blocking(move || -> Result<RtArtifacts, String> {
+    let artifacts = compio::runtime::spawn_blocking(move || -> Result<RtArtifacts, Error> {
         let lease = cache
             .store
             .get_or_insert_runtime(key, &|directory: &Path| {
@@ -354,8 +348,7 @@ pub async fn prepare(
                 ));
                 bar.finish_and_clear();
                 progress.remove(&bar);
-                let (rlib, staticlib, deps_dirs) =
-                    built.map_err(|e| compcache::Error::producer(std::io::Error::other(e)))?;
+                let (rlib, staticlib, deps_dirs) = built.map_err(compcache::Error::producer)?;
                 if let Some(path) = rcgmp_runtime_path(&toolchain.target, &deps_dirs) {
                     std::fs::write(path, RCGMP_RUNTIME).map_err(compcache::Error::producer)?;
                 }
@@ -364,10 +357,12 @@ pub async fn prepare(
                     canonical
                         .strip_prefix(directory)
                         .map(Path::to_owned)
-                        .map_err(|e| {
-                            compcache::Error::producer(std::io::Error::other(format!(
-                                "runtime artifact outside cache: {e}"
-                            )))
+                        .map_err(|source| {
+                            compcache::Error::producer(Error::ArtifactOutsideRoot {
+                                path: canonical.clone(),
+                                root: directory.to_owned(),
+                                source,
+                            })
                         })
                 };
                 let record = RtArtifacts {
@@ -390,11 +385,9 @@ pub async fn prepare(
                 .map_err(compcache::Error::producer)?;
                 crate::cache::sync_tree(directory)
             })
-            .map_err(|e| format!("runtime cache (RENE_CACHE_DIR): {e}"))?;
-        let mut record: RtArtifacts = serde_json::from_slice(
-            &std::fs::read(lease.path().join("runtime.json")).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
+            .map_err(Error::Cache)?;
+        let mut record: RtArtifacts =
+            serde_json::from_slice(&std::fs::read(lease.path().join("runtime.json"))?)?;
         record.rlib = lease.path().join(&record.rlib);
         record.staticlib = lease.path().join(&record.staticlib);
         record.deps_dirs = record
@@ -406,13 +399,14 @@ pub async fn prepare(
         Ok(record)
     })
     .await
-    .map_err(|e| format!("runtime cache worker failed: {e:?}"))??;
-    let record = serde_json::to_string(&artifacts).map_err(|e| e.to_string())?;
+    .map_err(|_| Error::WorkerPanicked {
+        stage: "runtime cache",
+    })??;
+    let record = serde_json::to_string(&artifacts)?;
     dir.set_status(&[
         (&tables::rt_source_hash_key(&artifacts.target), &hash),
         (&tables::rt_artifacts_key(&artifacts.target), &record),
-    ])
-    .map_err(|e| e.to_string())?;
+    ])?;
     Ok(artifacts)
 }
 
@@ -425,7 +419,7 @@ async fn cargo_build(
     src_dir: &Path,
     linker: Option<&Path>,
     sanitizers: &[String],
-) -> Result<(PathBuf, PathBuf, Vec<PathBuf>), String> {
+) -> Result<(PathBuf, PathBuf, Vec<PathBuf>), Error> {
     let mut cmd = compio::process::Command::new(&toolchain.cargo);
     cmd.args(["build", "--release", "--target", toolchain.target.as_str()]);
     // The bundled mimalloc backend builds C code and is not yet a WebAssembly
@@ -498,7 +492,7 @@ async fn cargo_build(
         .expect("pipe stderr")
         .output()
         .await
-        .map_err(|e| format!("cannot run `{}`: {e}", toolchain.cargo.display()))?;
+        .map_err(|source| Error::spawn(&toolchain.cargo, source))?;
 
     let mut rlib = None;
     let mut staticlib = None;
@@ -535,10 +529,10 @@ async fn cargo_build(
         }
     }
     if !out.status.success() {
-        return Err(format!(
-            "building reussir-rt failed:\n{}",
-            String::from_utf8_lossy(&out.stderr).trim_end()
-        ));
+        return Err(Error::RuntimeBuildFailed {
+            status: out.status,
+            diagnostics: String::from_utf8_lossy(&out.stderr).trim_end().to_owned(),
+        });
     }
     match (rlib, staticlib) {
         (Some(rlib), Some(staticlib)) => {
@@ -555,7 +549,7 @@ async fn cargo_build(
             deps_dirs.insert(runtime_deps);
             Ok((rlib, staticlib, deps_dirs.into_iter().collect()))
         }
-        _ => Err("cargo succeeded but did not report the runtime's rlib and staticlib".to_owned()),
+        _ => Err(Error::MissingRuntimeArtifacts),
     }
 }
 

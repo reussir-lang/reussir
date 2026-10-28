@@ -22,6 +22,7 @@ use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use indicatif::{ProgressBar, ProgressStyle};
 
+use crate::Error;
 use crate::compile;
 use crate::db::BuildDir;
 use crate::deps;
@@ -56,7 +57,7 @@ pub async fn build_deps(
     rt: &RtArtifacts,
     opts: &Options<'_>,
     execution: &compile::Execution<'_>,
-) -> Result<usize, String> {
+) -> Result<usize, Error> {
     let progress = execution.progress;
     let dep_names: Vec<&str> = graph
         .nodes
@@ -69,7 +70,7 @@ pub async fn build_deps(
     }
     let deps_dir = opts.build_dir.join(opts.profile_name).join("deps");
     std::fs::create_dir_all(&deps_dir)
-        .map_err(|e| format!("cannot create `{}`: {e}", deps_dir.display()))?;
+        .map_err(|source| Error::file("create", &deps_dir, source))?;
 
     let overall = progress.add(ProgressBar::new(dep_names.len() as u64).with_style(
         ProgressStyle::with_template("{bar:24} {pos}/{len} dependencies").expect("static template"),
@@ -136,7 +137,7 @@ async fn run_node<'g>(
     rt: &RtArtifacts,
     opts: &Options<'_>,
     execution: &compile::Execution<'_>,
-) -> (&'g str, Result<bool, String>) {
+) -> (&'g str, Result<bool, Error>) {
     let result = build_node(name, dir, graph, rt, opts, execution).await;
     (name, result)
 }
@@ -148,7 +149,7 @@ async fn build_node(
     rt: &RtArtifacts,
     opts: &Options<'_>,
     execution: &compile::Execution<'_>,
-) -> Result<bool, String> {
+) -> Result<bool, Error> {
     let pool = execution.pool;
     let progress = execution.progress;
     let cache = execution.cache;
@@ -188,10 +189,11 @@ async fn build_node(
     let color = opts.color;
     let mut sources = if state.is_current() {
         let json = dir
-            .status(&crate::tables::dep_sources_key(name))
-            .map_err(|e| e.to_string())?
-            .ok_or("current dependency has no recorded sources")?;
-        serde_json::from_str(&json).map_err(|e| e.to_string())?
+            .status(&crate::tables::dep_sources_key(name))?
+            .ok_or_else(|| Error::MissingRecordedSources {
+                package: name.to_owned(),
+            })?;
+        serde_json::from_str(&json)?
     } else {
         pool.run(move || async move { deps::scan(&src_root, &package, color).await })
             .await?
@@ -225,13 +227,16 @@ async fn build_node(
             .run(move || async move {
                 compio::runtime::spawn_blocking(move || request.acquire(cache, color, &progress))
                     .await
-                    .map_err(|e| format!("bundled library cache worker failed: {e:?}"))?
+                    .map_err(|_| Error::WorkerPanicked {
+                        stage: "bundled library cache",
+                    })?
             })
             .await?;
-        graph.nodes[name]
-            .artifacts
-            .set(artifacts)
-            .map_err(|_| "dependency artifacts already selected")?;
+        graph.nodes[name].artifacts.set(artifacts).map_err(|_| {
+            Error::ArtifactsAlreadySelected {
+                package: name.to_owned(),
+            }
+        })?;
         built = produced;
     } else {
         built = true;

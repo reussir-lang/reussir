@@ -41,6 +41,7 @@ astral-pubgrub = "0.6"
 turbokv.workspace = true
 # TurboKV's I/O and maintenance run on a private runtime in `db`.
 tokio.workspace = true
+thiserror.workspace = true
 serde.workspace = true
 # Re-render the evaluated manifest's JSON export pretty-printed for `build`'s
 # config dump, parse `cargo --message-format=json` output, and encode the

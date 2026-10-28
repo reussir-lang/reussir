@@ -3657,6 +3657,7 @@ dependencies = [
  "serde_json",
  "tar",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "toml_edit 0.25.12+spec-1.1.0",
  "tracing",

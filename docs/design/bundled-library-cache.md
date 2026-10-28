@@ -41,9 +41,11 @@ affecting linked outputs. The next build reacquires a lease and rebuilds a missi
 Source bundles remain local to each project. The Rust runtime is globally
 shared as described below.
 
-Cache failures are reported with `RENE_CACHE_DIR` in the diagnostic; compiler
-errors retain their normal diagnostics. Failed compilation never publishes a
-partial library. CLI tests use isolated cache directories.
+Cache failures use typed `thiserror` variants and identify `RENE_CACHE_DIR` in
+their diagnostics. Producer errors retain their typed source chains, including
+compiler, I/O and decoding failures; display formatting happens at the CLI or
+terminal UI boundary. Failed compilation never publishes a partial library.
+CLI tests use isolated cache directories.
 
 ## Globally shared Rust runtime
 

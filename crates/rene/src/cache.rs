@@ -11,6 +11,7 @@ use compcache::{
 use indicatif::MultiProgress;
 use serde::Serialize;
 
+use crate::Error;
 use crate::{compile, core_src, deps, fresh, manifest::TargetKind, plan, resolve::Graph};
 
 struct Rene;
@@ -31,10 +32,10 @@ pub struct Cache {
 }
 
 impl Cache {
-    pub fn open() -> Result<Arc<Self>, String> {
+    pub fn open() -> Result<Arc<Self>, Error> {
         let store = StoreBuilder::<Bypass, ManagedDirectory>::with_defaults::<Rene>()
             .and_then(|builder| builder.config(Rene::config()).open())
-            .map_err(cache_error)?;
+            .map_err(Error::Cache)?;
         Ok(Arc::new(Self { store }))
     }
 }
@@ -96,13 +97,10 @@ impl Request {
         rustc_version: &str,
         commands: Vec<plan::PlannedCommand>,
         sources: &[deps::SourceFile],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, Error> {
         let deps_dir = opts.build_dir.join(opts.profile_name).join("deps");
-        let compiler = which::which(deps::resolve_rrc()).map_err(|e| e.to_string())?;
-        let source_root = graph.nodes[name]
-            .dir
-            .canonicalize()
-            .map_err(|e| e.to_string())?;
+        let compiler = which::which(deps::resolve_rrc())?;
+        let source_root = graph.nodes[name].dir.canonicalize()?;
         let recipe = Recipe {
             compiler: file_digest(&compiler)?,
             rustc_version: rustc_version.to_owned(),
@@ -112,13 +110,17 @@ impl Request {
             sources: sources
                 .iter()
                 .map(|source| {
-                    let path = Path::new(&source.path)
-                        .canonicalize()
-                        .map_err(|e| e.to_string())?;
-                    let relative = path.strip_prefix(&source_root).map_err(|e| e.to_string())?;
+                    let path = Path::new(&source.path).canonicalize()?;
+                    let relative = path.strip_prefix(&source_root).map_err(|source| {
+                        Error::ArtifactOutsideRoot {
+                            path: path.clone(),
+                            root: source_root.clone(),
+                            source,
+                        }
+                    })?;
                     Ok((relative.to_owned(), source.record.hash))
                 })
-                .collect::<Result<_, String>>()?,
+                .collect::<Result<_, Error>>()?,
             target: opts.target.to_owned(),
             flags: compile::profile_flags(opts.profile, opts.target, TargetKind::Staticlib, None),
             reports: opts.token_reuse_remarks,
@@ -130,7 +132,7 @@ impl Request {
             ),
         };
         Ok(Self {
-            key: Key::from_serde("rene-bundled-library-v0", &recipe).map_err(|e| e.to_string())?,
+            key: Key::from_serde("rene-bundled-library-v0", &recipe)?,
             name: name.to_owned(),
             target: opts.target.to_owned(),
             reports: opts.token_reuse_remarks,
@@ -146,7 +148,7 @@ impl Request {
         cache: Arc<Cache>,
         color: bool,
         progress: &MultiProgress,
-    ) -> Result<(plan::Artifacts, bool), String> {
+    ) -> Result<(plan::Artifacts, bool), Error> {
         let produced = std::cell::Cell::new(false);
         let lease = cache
             .store
@@ -170,10 +172,10 @@ impl Request {
                     }
                     let completed = compile::Invocation::from_planned(command, &self.rustc, color)
                         .run_blocking()
-                        .map_err(producer_error)?;
+                        .map_err(compcache::Error::producer)?;
                     progress
                         .suspend(|| completed.report())
-                        .map_err(producer_error)?;
+                        .map_err(compcache::Error::producer)?;
                 }
                 let mut bytes = 0u64;
                 for path in outputs {
@@ -192,7 +194,7 @@ impl Request {
                 ArtifactWriter::new(directory).finish()?;
                 Ok(bytes)
             })
-            .map_err(cache_error)?;
+            .map_err(Error::Cache)?;
         let rri = lease.path().join(format!("{}.rri", self.name));
         let archive = plan::archive_path(lease.path(), &self.name, &self.target);
         let report = self
@@ -211,16 +213,10 @@ impl Request {
     }
 }
 
-fn cache_error(error: compcache::Error) -> String {
-    format!("compiler cache (RENE_CACHE_DIR): {error}")
-}
-fn producer_error(error: String) -> compcache::Error {
-    compcache::Error::producer(std::io::Error::other(error))
-}
-fn file_digest(path: &Path) -> Result<String, String> {
-    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+fn file_digest(path: &Path) -> Result<String, Error> {
+    let mut file = std::fs::File::open(path)?;
     let mut hash = blake3::Hasher::new();
-    std::io::copy(&mut file, &mut hash).map_err(|e| e.to_string())?;
+    std::io::copy(&mut file, &mut hash)?;
     Ok(hash.finalize().to_hex().to_string())
 }
 

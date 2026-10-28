@@ -27,6 +27,7 @@ use std::process::ExitCode;
 
 use palc::Parser;
 
+use rene::Error;
 use rene::db::{self, BuildDir, CleanOutcome};
 use rene::{compile, core_src, deps, exec, fresh, manifest, new, plan, pool, resolve, rt};
 
@@ -325,7 +326,7 @@ fn init_tracing(verbose: bool, color: bool) {
 /// Resolve the build directory: the flag as given, else `reussir-build` next
 /// to the (located) manifest. The manifest is only searched for when needed,
 /// so `clean --build-dir …` works outside any package.
-fn resolve_build_dir(location: &Location) -> Result<PathBuf, String> {
+fn resolve_build_dir(location: &Location) -> Result<PathBuf, Error> {
     if let Some(dir) = &location.build_dir {
         return Ok(dir.clone());
     }
@@ -336,26 +337,20 @@ fn resolve_build_dir(location: &Location) -> Result<PathBuf, String> {
         .join(BUILD_DIR))
 }
 
-fn locate_manifest(flag: &Option<PathBuf>) -> Result<PathBuf, String> {
+fn locate_manifest(flag: &Option<PathBuf>) -> Result<PathBuf, Error> {
     match flag {
         Some(path) => Ok(path.clone()),
         None => {
-            let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-            manifest::locate(&cwd).ok_or_else(|| {
-                format!(
-                    "no `{}` found in `{}` or any parent directory",
-                    manifest::MANIFEST_FILE,
-                    cwd.display()
-                )
-            })
+            let cwd = std::env::current_dir()?;
+            manifest::locate(&cwd).ok_or(Error::ManifestNotFound { directory: cwd })
         }
     }
 }
 
-async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
+async fn build(args: &BuildArgs, color: bool) -> Result<(), Error> {
     let location = &args.location;
     let manifest_path = locate_manifest(&location.manifest_path)?;
-    let loaded = manifest::load(&manifest_path).map_err(|e| e.to_string())?;
+    let loaded = manifest::load(&manifest_path)?;
     tracing::debug!(
         package = %loaded.manifest.package.name,
         manifest = %loaded.path.display(),
@@ -369,10 +364,8 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
     // Builds sharing a directory queue on its database lock. Take it before
     // materializing bundled sources so concurrent invocations serialize all
     // writes, then hold it (`dir`) for the rest of the build.
-    let dir = BuildDir::open_wait(&root)
-        .await
-        .map_err(|e| e.to_string())?;
-    if dir.is_cleaning().map_err(|e| e.to_string())? {
+    let dir = BuildDir::open_wait(&root).await?;
+    if dir.is_cleaning()? {
         return Err(pending_clean(&root));
     }
 
@@ -509,21 +502,21 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), String> {
 /// default a stale record is refreshed first (the same scan `build` runs, but
 /// without the runtime bake), so the report describes the package as it is
 /// now; `--frozen` reports what is on record and never writes.
-async fn inspect(args: &InspectArgs, color: bool) -> Result<(), String> {
+async fn inspect(args: &InspectArgs, color: bool) -> Result<(), Error> {
     let location = &args.location;
     let frozen = args.frozen;
     let manifest_path = locate_manifest(&location.manifest_path)?;
-    let loaded = manifest::load(&manifest_path).map_err(|e| e.to_string())?;
+    let loaded = manifest::load(&manifest_path)?;
     let root = resolve_build_dir(location)?;
     let hash = deps::config_hash(&loaded.dump);
 
     // The handle is held for the section rendering below: freshness reads
     // the same records a build would.
     let (state, files, held) = if frozen {
-        match BuildDir::open_existing(&root).map_err(|e| e.to_string())? {
+        match BuildDir::open_existing(&root)? {
             Some(dir) => {
                 let state = deps::staleness(&dir, &hash)?;
-                let files = dir.sources().map_err(|e| e.to_string())?;
+                let files = dir.sources()?;
                 (state, files, Some(dir))
             }
             // No build directory at all: nothing has been recorded, and
@@ -531,8 +524,8 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), String> {
             None => (deps::Staleness::Uninitialized, Vec::new(), None),
         }
     } else {
-        let dir = BuildDir::open(&root).map_err(|e| e.to_string())?;
-        if dir.is_cleaning().map_err(|e| e.to_string())? {
+        let dir = BuildDir::open(&root)?;
+        if dir.is_cleaning()? {
             return Err(pending_clean(&root));
         }
         let prepared = deps::prepare(&dir, &loaded, color).await?;
@@ -630,24 +623,19 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), String> {
             );
         }
     }
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
-    );
+    println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
 }
 
-fn pending_clean(root: &std::path::Path) -> String {
-    format!(
-        "build directory `{}` has a pending or interrupted clean; \
-         run `rene clean` first",
-        root.display()
-    )
+fn pending_clean(root: &std::path::Path) -> Error {
+    Error::PendingClean {
+        path: root.to_owned(),
+    }
 }
 
-fn clean(location: &Location) -> Result<(), String> {
+fn clean(location: &Location) -> Result<(), Error> {
     let root = resolve_build_dir(location)?;
-    match db::clean(&root).map_err(|e| e.to_string())? {
+    match db::clean(&root)? {
         CleanOutcome::Missing => tracing::info!(dir = %root.display(), "nothing to clean"),
         CleanOutcome::Removed => tracing::info!(dir = %root.display(), "removed"),
     }

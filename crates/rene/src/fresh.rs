@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::Error;
 use crate::db::BuildDir;
 use crate::deps::{self, SourceFile};
 use crate::manifest::{Profile, TargetKind};
@@ -139,11 +140,10 @@ pub struct Context<'a> {
 /// The recorded runtime bake, if any — the toolchain identity freshness
 /// compares against, and the real paths the plan dump expands its
 /// placeholders with.
-pub fn recorded_bake(dir: Option<&BuildDir>, target: &str) -> Result<Option<RtArtifacts>, String> {
+pub fn recorded_bake(dir: Option<&BuildDir>, target: &str) -> Result<Option<RtArtifacts>, Error> {
     let Some(dir) = dir else { return Ok(None) };
     Ok(dir
-        .status(&tables::rt_artifacts_key(target))
-        .map_err(|e| e.to_string())?
+        .status(&tables::rt_artifacts_key(target))?
         .and_then(|record| serde_json::from_str(&record).ok()))
 }
 
@@ -156,7 +156,7 @@ fn within(path: &Path, dir: &Path) -> bool {
 
 /// One node's local freshness — no upstream-stale propagation, so at
 /// execution time (when the cone is final) the answer is exact.
-pub fn node_state(graph: &Graph, name: &str, ctx: &Context<'_>) -> Result<State, String> {
+pub fn node_state(graph: &Graph, name: &str, ctx: &Context<'_>) -> Result<State, Error> {
     let bake = recorded_bake(ctx.dir, ctx.target)?;
     let deps_dir = ctx.build_dir.join(ctx.profile_name).join("deps");
     if name == graph.root {
@@ -167,7 +167,7 @@ pub fn node_state(graph: &Graph, name: &str, ctx: &Context<'_>) -> Result<State,
 }
 
 /// The freshness of every node of the graph, keyed by package name.
-pub fn states(graph: &Graph, ctx: &Context<'_>) -> Result<BTreeMap<String, State>, String> {
+pub fn states(graph: &Graph, ctx: &Context<'_>) -> Result<BTreeMap<String, State>, Error> {
     let deps_dir = ctx.build_dir.join(ctx.profile_name).join("deps");
     let bake = recorded_bake(ctx.dir, ctx.target)?;
     let cones = plan::transitive_deps(graph);
@@ -202,7 +202,7 @@ fn dep_state(
     ctx: &Context<'_>,
     bake: Option<&RtArtifacts>,
     deps_dir: &Path,
-) -> Result<State, String> {
+) -> Result<State, Error> {
     let Some(dir) = ctx.dir else {
         return Ok(State::Uninitialized);
     };
@@ -210,15 +210,13 @@ fn dep_state(
         return Ok(State::Uninitialized);
     };
     let Some(record) = dir
-        .status(&tables::dep_product_key(ctx.profile_name, name))
-        .map_err(|e| e.to_string())?
+        .status(&tables::dep_product_key(ctx.profile_name, name))?
         .and_then(|json| serde_json::from_str::<DepRecord>(&json).ok())
     else {
         return Ok(State::Uninitialized);
     };
     let sources: Vec<SourceFile> = match dir
-        .status(&tables::dep_sources_key(name))
-        .map_err(|e| e.to_string())?
+        .status(&tables::dep_sources_key(name))?
         .and_then(|json| serde_json::from_str(&json).ok())
     {
         Some(files) => files,
@@ -277,7 +275,7 @@ fn root_state(
     graph: &Graph,
     ctx: &Context<'_>,
     bake: Option<&RtArtifacts>,
-) -> Result<State, String> {
+) -> Result<State, Error> {
     let Some(dir) = ctx.dir else {
         return Ok(State::Uninitialized);
     };
@@ -291,7 +289,7 @@ fn root_state(
         deps::Staleness::ConfigChanged => return Ok(State::ConfigChanged),
         deps::Staleness::FileChanged { path, .. } => return Ok(State::FileChanged(path)),
     }
-    let files = dir.sources().map_err(|e| e.to_string())?;
+    let files = dir.sources()?;
     let deps_dir = ctx.build_dir.join(ctx.profile_name).join("deps");
     let upstream = graph_upstream_digests(
         graph,
@@ -346,10 +344,8 @@ pub fn record_dep(
     ctx: &Context<'_>,
     bake: &RtArtifacts,
     sources: &[SourceFile],
-) -> Result<(), String> {
-    let dir = ctx
-        .dir
-        .ok_or("recording a build needs an open build directory")?;
+) -> Result<(), Error> {
+    let dir = ctx.dir.ok_or(Error::MissingBuildDirectory)?;
     let node = &graph.nodes[name];
     let deps_dir = ctx.build_dir.join(ctx.profile_name).join("deps");
     let paths = plan::dependency_artifacts(graph, name, &deps_dir, ctx.target);
@@ -377,13 +373,13 @@ pub fn record_dep(
             None
         },
     };
-    let record = serde_json::to_string(&record).map_err(|e| e.to_string())?;
-    let sources = serde_json::to_string(sources).map_err(|e| e.to_string())?;
+    let record = serde_json::to_string(&record)?;
+    let sources = serde_json::to_string(sources)?;
     dir.set_status(&[
         (&tables::dep_product_key(ctx.profile_name, name), &record),
         (&tables::dep_sources_key(name), &sources),
     ])
-    .map_err(|e| e.to_string())
+    .map_err(Error::from)
 }
 
 /// Digest of one dependency's on-disk artifacts (interface then archive).
@@ -452,13 +448,12 @@ pub fn recorded_artifacts(
     dir: Option<&BuildDir>,
     profile: &str,
     build_dir: &Path,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let Some(dir) = dir else { return Ok(()) };
     let deps_dir = build_dir.join(profile).join("deps");
     for (name, node) in &graph.nodes {
         let record = dir
-            .status(&tables::dep_product_key(profile, name))
-            .map_err(|e| e.to_string())?
+            .status(&tables::dep_product_key(profile, name))?
             .and_then(|json| serde_json::from_str::<DepRecord>(&json).ok());
         if let Some(record) = record
             && record.rri != deps_dir.join(format!("{name}.rri"))

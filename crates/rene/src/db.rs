@@ -43,45 +43,58 @@ pub struct BuildDir {
 }
 
 /// Why the build directory could not be opened or cleaned.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum DbError {
-    /// Another process holds the status database open.
+    #[error("build directory is in use: another rene holds `{}`", .0.display())]
     InUse(PathBuf),
-    Other(String),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Storage(#[from] TurboError),
+    #[error(transparent)]
+    Utf8(#[from] std::string::FromUtf8Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("cannot {operation} `{}`: {source}", path.display())]
+    File {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("cannot open `{}`: {source}", path.display())]
+    Open {
+        path: PathBuf,
+        #[source]
+        source: TurboError,
+    },
+    #[error("source-table write lock is poisoned")]
+    SourcesLockPoisoned,
 }
-
-impl std::fmt::Display for DbError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DbError::InUse(path) => write!(
-                f,
-                "build directory is in use: another rene holds `{}`",
-                path.display()
-            ),
-            DbError::Other(msg) => f.write_str(msg),
-        }
-    }
-}
-
-impl std::error::Error for DbError {}
 
 impl BuildDir {
     /// Create/open the build directory rooted at `root` and take its lock.
     pub fn open(root: &Path) -> Result<Self, DbError> {
-        std::fs::create_dir_all(root)
-            .map_err(|e| DbError::Other(format!("cannot create `{}`: {e}", root.display())))?;
+        std::fs::create_dir_all(root).map_err(|source| DbError::File {
+            operation: "create",
+            path: root.to_owned(),
+            source,
+        })?;
         let path = root.join(DB_DIR);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(other)?;
+            .map_err(DbError::from)?;
         // Acknowledge each batch only after its WAL has been synced,
         // preserving immediate commit durability for the cleaning marker.
         let db = runtime
             .block_on(Db::open_with_options(&path, DbOptions::paranoid()))
             .map_err(|e| match e {
                 TurboError::DirectoryLocked { .. } => DbError::InUse(path.clone()),
-                other => DbError::Other(format!("cannot open `{}`: {other}", path.display())),
+                source => DbError::Open {
+                    path: path.clone(),
+                    source,
+                },
             })?;
         Ok(BuildDir {
             root: root.to_owned(),
@@ -118,7 +131,7 @@ impl BuildDir {
     /// package that was never built.
     pub fn open_existing(root: &Path) -> Result<Option<Self>, DbError> {
         let path = root.join(DB_DIR);
-        if !path.try_exists().map_err(other)? {
+        if !path.try_exists().map_err(DbError::from)? {
             return Ok(None);
         }
         Self::open(root).map(Some)
@@ -133,10 +146,10 @@ impl BuildDir {
     pub fn status(&self, key: &str) -> Result<Option<String>, DbError> {
         self.runtime
             .block_on(self.database().get(format!("{}{key}", tables::STATUS)))
-            .map_err(other)?
+            .map_err(DbError::from)?
             .map(String::from_utf8)
             .transpose()
-            .map_err(other)
+            .map_err(DbError::from)
     }
 
     /// Is the directory's teardown in flight or interrupted? Set by
@@ -154,7 +167,7 @@ impl BuildDir {
         }
         self.runtime
             .block_on(self.database().write_batch(&batch))
-            .map_err(other)
+            .map_err(DbError::from)
     }
 
     /// The recorded source graph, in path order (TurboKV scans keys in byte
@@ -163,13 +176,13 @@ impl BuildDir {
     pub fn sources(&self) -> Result<Vec<deps::SourceFile>, DbError> {
         self.runtime
             .block_on(self.database().scan_prefix(tables::SOURCES))
-            .map_err(other)?
+            .map_err(DbError::from)?
             .into_iter()
             .map(|(key, value)| {
                 Ok(deps::SourceFile {
                     path: String::from_utf8(key[tables::SOURCES.len()..].to_vec())
-                        .map_err(other)?,
-                    record: serde_json::from_slice(&value).map_err(other)?,
+                        .map_err(DbError::from)?,
+                    record: serde_json::from_slice(&value).map_err(DbError::from)?,
                 })
             })
             .collect()
@@ -179,24 +192,27 @@ impl BuildDir {
     /// rebuilt graph is a new snapshot, and a file that dropped out must not
     /// survive as a phantom row that would keep invalidating later builds.
     pub fn replace_sources(&self, files: &[deps::SourceFile]) -> Result<(), DbError> {
-        let _guard = self.sources_write.lock().map_err(other)?;
+        let _guard = self
+            .sources_write
+            .lock()
+            .map_err(|_| DbError::SourcesLockPoisoned)?;
         let mut batch = WriteBatch::new();
         for (key, _) in self
             .runtime
             .block_on(self.database().scan_prefix(tables::SOURCES))
-            .map_err(other)?
+            .map_err(DbError::from)?
         {
             batch.delete(key);
         }
         for file in files {
             batch.put(
                 format!("{}{}", tables::SOURCES, file.path),
-                serde_json::to_vec(&file.record).map_err(other)?,
+                serde_json::to_vec(&file.record).map_err(DbError::from)?,
             );
         }
         self.runtime
             .block_on(self.database().write_batch(&batch))
-            .map_err(other)
+            .map_err(DbError::from)
     }
 
     fn database(&self) -> &Db {
@@ -212,10 +228,6 @@ impl Drop for BuildDir {
             tracing::warn!("cannot close `{}`: {e}", self.root.join(DB_DIR).display());
         }
     }
-}
-
-fn other(e: impl std::fmt::Display) -> DbError {
-    DbError::Other(e.to_string())
 }
 
 /// The outcome of [`clean`].
@@ -250,8 +262,11 @@ pub fn clean(root: &Path) -> Result<CleanOutcome, DbError> {
             Err(e) => tracing::warn!("ignoring unreadable `{}`: {e}", path.display()),
         }
     }
-    std::fs::remove_dir_all(root)
-        .map_err(|e| DbError::Other(format!("cannot remove `{}`: {e}", root.display())))?;
+    std::fs::remove_dir_all(root).map_err(|source| DbError::File {
+        operation: "remove",
+        path: root.to_owned(),
+        source,
+    })?;
     Ok(CleanOutcome::Removed)
 }
 
