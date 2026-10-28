@@ -30,42 +30,19 @@ fn main() {
     println!("cargo::rerun-if-changed={}", rt_dir.join("src").display());
     println!("cargo::rerun-if-changed={}", workspace_toml.display());
     println!("cargo::rerun-if-changed={}", workspace_lock.display());
+    println!(
+        "cargo::rerun-if-changed={}",
+        workspace_dir.join(".cargo/config.toml").display()
+    );
 
-    let mut manifest: DocumentMut =
-        standalone_manifest(&rt_dir.join("Cargo.toml"), &workspace_toml)
-            .parse()
-            .unwrap();
-    // The runtime bundle carries this exact Cargo-resolved compcache source.
-    manifest["dependencies"]["compcache"]
-        .as_table_like_mut()
-        .unwrap()
-        .remove("git");
-    manifest["dependencies"]["compcache"]
-        .as_table_like_mut()
-        .unwrap()
-        .remove("rev");
-    manifest["dependencies"]["compcache"]["path"] = toml_edit::value("../compcache");
-    let manifest = manifest.to_string();
-    // Other dependencies are fetched by the host cargo; their
-    // versions are pinned: the workspace lock ships as the standalone crate's
-    // lock file. Cargo accepts a superset Cargo.lock, keeping the pinned
-    // versions of the reachable packages and pruning the rest.
-    let mut lock: DocumentMut = fs::read_to_string(&workspace_lock)
-        .expect("failed to read Cargo.lock")
-        .parse()
-        .unwrap();
-    for package in lock["package"].as_array_of_tables_mut().unwrap().iter_mut() {
-        if package["name"].as_str() == Some("compcache") {
-            package.remove("source");
-            package.remove("checksum");
-        }
-    }
-    let lock = lock.to_string();
+    let manifest = standalone_manifest(&rt_dir.join("Cargo.toml"), &workspace_toml);
+    // Seed the standalone graph from the workspace pins. The packaging step
+    // below prunes unreachable packages and verifies every surviving pin.
+    let lock = fs::read_to_string(&workspace_lock).expect("failed to read Cargo.lock");
 
     // Unpack the runtime and its optional PjRt bindings side by side, preserving
     // the relative path dependency in the runtime's manifest.
     let mut tar = tar::Builder::new(Vec::new());
-    bundle_compcache(&mut tar, workspace_dir);
     append_text(&mut tar, "reussir-rt/Cargo.toml", &manifest);
     append_text(&mut tar, "reussir-rt/Cargo.lock", &lock);
     tar.append_dir_all("reussir-rt/src", rt_dir.join("src"))
@@ -135,10 +112,7 @@ fn main() {
         .expect("failed to archive reussir-stablehlo source");
     let archive = tar.into_inner().expect("failed to finish the tar archive");
 
-    let compressed =
-        zstd::encode_all(&archive[..], 19).expect("failed to zstd-compress the runtime bundle");
-    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("reussir-rt.tar.zst");
-    fs::write(&out, compressed).expect("failed to write the runtime bundle");
+    bundle_vendored_runtime(&archive, &workspace_lock);
 
     bundle_rcgmp_runtime();
     bundle_library(workspace_dir, "core");
@@ -320,73 +294,113 @@ fn standalone_manifest(crate_toml: &Path, workspace_toml: &Path) -> String {
     doc.to_string()
 }
 
-/// Cargo metadata identifies the pinned dependency without assuming a Cargo-home
-/// layout. Keep resolution locked, but allow Cargo to fetch missing sources:
-/// metadata covers the whole workspace and all targets, whereas the outer build
-/// only fetches dependencies needed by its selected packages and target. Explicit
-/// offline builds can prefetch with `cargo fetch --locked`; Cargo's offline
-/// configuration is inherited here.
-fn bundle_compcache(tar: &mut tar::Builder<Vec<u8>>, workspace: &Path) {
-    let output = std::process::Command::new(env::var_os("CARGO").unwrap())
-        .args(["metadata", "--format-version=1", "--locked"])
-        // Metadata probes the host compiler too. In particular, cargo-xwin's
-        // target linker flags must not leak into that host probe. An empty
-        // encoded value also overrides rustflags from Cargo configuration.
-        .env("CARGO_ENCODED_RUSTFLAGS", "")
-        .env("RUSTFLAGS", "")
-        .current_dir(workspace)
+/// Generate a self-contained Cargo source distribution at packaging time.
+/// `cargo vendor` resolves every target and optional dependency, not only the
+/// build host's selected features. Unlike the old workspace metadata query,
+/// it fetches exactly the standalone runtime closure and retains those sources
+/// in the artifact; runtime baking never contacts a registry or Git server.
+fn bundle_vendored_runtime(sources: &[u8], workspace_lock: &Path) {
+    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    let staging = out.join("runtime-src");
+    if staging.exists() {
+        fs::remove_dir_all(&staging).expect("failed to clear runtime staging directory");
+    }
+    fs::create_dir_all(&staging).unwrap();
+    tar::Archive::new(sources)
+        .unpack(&staging)
+        .expect("failed to stage runtime sources");
+    let runtime = staging.join("reussir-rt");
+    let cargo = || {
+        let mut command = std::process::Command::new(env::var_os("CARGO").unwrap());
+        command
+            .current_dir(&runtime)
+            // The host packages sources even for a Windows cross-build.
+            .env("CARGO_ENCODED_RUSTFLAGS", "")
+            .env("RUSTFLAGS", "");
+        command
+    };
+    // Cargo must prune the workspace's superset lock for this new root. Do not
+    // permit that normalization to update any reachable version/source/checksum.
+    // Subsequent validation and every consumer use --locked --offline.
+    let output = cargo()
+        .args([
+            "vendor",
+            "--respect-source-config",
+            "--versioned-dirs",
+            "vendor",
+        ])
         .output()
-        .expect("cannot inspect compcache dependency");
+        .expect("cannot vendor runtime dependencies");
     assert!(
         output.status.success(),
-        "cargo metadata: {}",
+        "cargo vendor: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let packages: Vec<_> = metadata["packages"]
-        .as_array()
+    let seed: DocumentMut = fs::read_to_string(workspace_lock).unwrap().parse().unwrap();
+    let resolved: DocumentMut = fs::read_to_string(runtime.join("Cargo.lock"))
         .unwrap()
-        .iter()
-        .filter(|package| package["name"] == "compcache")
-        .collect();
-    assert_eq!(
-        packages.len(),
-        1,
-        "runtime bundle requires one pinned compcache"
-    );
-    let manifest = Path::new(packages[0]["manifest_path"].as_str().unwrap());
-    let root = manifest.parent().unwrap();
-    let mut doc: DocumentMut = fs::read_to_string(manifest).unwrap().parse().unwrap();
-    doc.remove("dev-dependencies");
-    doc.remove("bench");
-    append_text(tar, "compcache/Cargo.toml", &doc.to_string());
-    let mut files = Vec::new();
-    collect_files(&root.join("src"), &mut files);
-    for name in [
-        "README.md",
-        "LICENSE",
-        "LICENSE-MIT",
-        "LICENSE-APACHE",
-        "COPYING",
-    ] {
-        let path = root.join(name);
-        if path.is_file() {
-            files.push(path);
-        }
-    }
-    files.sort();
-    for path in files {
-        println!("cargo::rerun-if-changed={}", path.display());
-        let relative = path
-            .strip_prefix(root)
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .replace('\\', "/");
-        append_text(
-            tar,
-            &format!("compcache/{relative}"),
-            &fs::read_to_string(path).unwrap(),
+        .parse()
+        .unwrap();
+    for package in resolved["package"].as_array_of_tables().unwrap() {
+        assert!(
+            seed["package"]
+                .as_array_of_tables()
+                .unwrap()
+                .iter()
+                .any(|old| {
+                    ["name", "version", "source", "checksum"]
+                        .iter()
+                        .all(|field| {
+                            old.get(field).and_then(Item::as_str)
+                                == package.get(field).and_then(Item::as_str)
+                        })
+                }),
+            "runtime vendoring changed a workspace dependency pin: {package}"
         );
     }
+    let mut config: DocumentMut = String::from_utf8(output.stdout).unwrap().parse().unwrap();
+    // Relative to .cargo's parent, so extraction works at any path/on Wine.
+    config["source"]["vendored-sources"]["directory"] = toml_edit::value("vendor");
+    config["net"]["offline"] = toml_edit::value(true);
+    fs::create_dir_all(runtime.join(".cargo")).unwrap();
+    fs::write(runtime.join(".cargo/config.toml"), config.to_string()).unwrap();
+    let checked = cargo()
+        .args([
+            "metadata",
+            "--format-version=1",
+            "--all-features",
+            "--locked",
+            "--offline",
+        ])
+        .output()
+        .expect("cannot validate vendored runtime");
+    assert!(
+        checked.status.success(),
+        "vendored runtime metadata: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+
+    // Normalize ordering, timestamps, owners and permissions for all source
+    // files (including binary vendor assets), not just generated manifests.
+    let file = fs::File::create(out.join("reussir-rt.tar.zst")).unwrap();
+    let encoder = zstd::Encoder::new(file, 9).unwrap();
+    let mut tar = tar::Builder::new(encoder);
+    let mut files = Vec::new();
+    collect_files(&staging, &mut files);
+    files.sort();
+    for path in files {
+        let mut header = tar::Header::new_gnu();
+        let contents = fs::read(&path).expect("failed to read runtime source");
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o644);
+        header.set_mtime(0);
+        header.set_cksum();
+        tar.append_data(
+            &mut header,
+            path.strip_prefix(&staging).unwrap(),
+            &contents[..],
+        )
+        .expect("failed to archive runtime source");
+    }
+    tar.into_inner().unwrap().finish().unwrap();
 }

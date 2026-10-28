@@ -76,7 +76,6 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 sailfish = "0.9"
 
 [build-dependencies]
-serde_json.workspace = true
 # Pack the `reussir-rt` source tree (tar + zstd) into the binary, with its
 # manifest rewritten standalone (toml_edit resolves workspace inheritance).
 tar.workspace = true

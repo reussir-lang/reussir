@@ -7,6 +7,14 @@ Artifacts are linked in place under reader leases. See
 and cache key; references below to per-project runtime output describe the
 original implementation.
 
+The runtime source archive embedded in `rene` also contains generated Cargo
+vendor sources and a relative `.cargo/config.toml`. Packaging resolves the full
+standalone dependency graph, including optional PJRT and other-target packages,
+from the workspace lock and rejects changes to version, source or checksum pins.
+Runtime baking uses `--locked --offline`; no vendor tree is checked into Git.
+The Rust/C toolchains and PJRT's native LLVM/StableHLO libraries remain external
+prerequisites. Cargo sources alone do not provide those native dependencies.
+
 Status: draft / proposal
 
 ## Motivation
@@ -72,7 +80,7 @@ Ship, under `<prefix>/share/reussir/runtime/`:
 
 - The `reussir-rt` crate source (self-contained: its own `Cargo.toml`,
   standalone — not a workspace member — plus `Cargo.lock`).
-- A `vendor/` directory produced by `cargo vendor`, and a checked-in
+- A `vendor/` directory produced by `cargo vendor`, and a generated
   `.cargo/config.toml` pointing at it. This makes runtime builds fully
   offline and removes the git dependency on `mlir-sync` from user machines.
 
