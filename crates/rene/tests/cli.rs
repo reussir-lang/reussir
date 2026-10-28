@@ -1710,6 +1710,62 @@ fn failed_core_production_does_not_publish_partial_outputs() {
 
 #[cfg(unix)]
 #[test]
+fn bundled_std_is_baked_once_after_core_and_reused_across_projects() {
+    let tmp = tempfile::tempdir().unwrap();
+    package(tmp.path(), "demo");
+    let manifest = write_targets_manifest(tmp.path());
+    let source = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        source.replacen('{', "{ dependencies.std = { version = \"^0.1\" },", 1),
+    )
+    .unwrap();
+    let fakes = Fakes::new(tmp.path());
+    let mut selected = Vec::new();
+    for build in ["first", "second"] {
+        let root = tmp.path().join(build);
+        let out = fakes.rene(&["build"], &manifest, &root);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let mut paths = Vec::new();
+        for name in ["core", "std"] {
+            let record = dependency_record(&root, name);
+            for path in [&record.rri, &record.archive] {
+                assert!(path.starts_with(tmp.path().join("cache/objects")));
+                assert!(path.is_file());
+                assert!(
+                    !root
+                        .join("dev/deps")
+                        .join(path.file_name().unwrap())
+                        .exists()
+                );
+                paths.push(path.clone());
+            }
+        }
+        selected.push(paths);
+    }
+    assert_eq!(selected[0], selected[1]);
+    assert_eq!(fakes.runs("cargo"), 1);
+    let commands: Vec<_> = fakes
+        .compiles()
+        .into_iter()
+        .filter(|s| s.contains("--package-name core") || s.contains("--package-name std"))
+        .collect();
+    assert_eq!(commands.len(), 4, "{commands:#?}");
+    assert!(
+        commands[..2]
+            .iter()
+            .all(|s| s.contains("--package-name core"))
+    );
+    assert!(
+        commands[2..]
+            .iter()
+            .all(|s| s.contains("--package-name std")
+                && s.contains(&format!("--extern core={}", selected[0][0].display())))
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn edits_to_materialized_core_sources_do_not_reuse_an_old_bake() {
     use std::io::Write;
     let tmp = tempfile::tempdir().unwrap();

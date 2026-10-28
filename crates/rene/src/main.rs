@@ -29,7 +29,7 @@ use palc::Parser;
 
 use rene::Error;
 use rene::db::{self, BuildDir, CleanOutcome};
-use rene::{compile, core_src, deps, exec, fresh, manifest, new, plan, pool, resolve, rt};
+use rene::{compile, deps, exec, fresh, manifest, new, plan, pool, resolve, rt};
 
 /// The default build directory name, next to the manifest.
 const BUILD_DIR: &str = "reussir-build";
@@ -374,8 +374,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), Error> {
     // together (each package exists in exactly one version today, so this is
     // a feasibility check; see `resolve`). A dependency-less package is a
     // one-node graph through the same machinery.
-    let core_dir = core_src::unpack(&root)?;
-    let graph = resolve::load_graph_with(&loaded, Some(&core_dir))?;
+    let graph = resolve::load_graph_bundled(&loaded, &root)?;
     if graph.nodes.len() > 1 {
         let solution = resolve::check(&graph)?;
         for (name, version) in &solution.pinned {
@@ -547,8 +546,7 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), Error> {
     // The dependency-graph sections, on demand. One load serves all three;
     // `--solved` additionally requires the feasibility check to hold.
     if args.solved || args.graph || args.commands {
-        let core_dir = core_src::unpack(&root)?;
-        let graph = resolve::load_graph_with(&loaded, Some(&core_dir))?;
+        let graph = resolve::load_graph_bundled(&loaded, &root)?;
         if args.solved {
             let solution = resolve::check(&graph)?;
             report["resolution"] = solution

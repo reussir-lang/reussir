@@ -72,3 +72,17 @@ Runtime and core/std entries share one compcache store, including its metadata,
 object directory and automatic size/age pruning policy. The `rene-rust-runtime-v0`
 and `rene-bundled-library-v0` namespaces distinguish their recipes. The store bypasses the
 memory cache and uses managed on-disk directories.
+
+## Bundled std
+
+The std source ships inside rene and uses the same disk cache after its core
+dependency is ready. It remains opt-in: declare
+`dependencies.std = { version = "^0.1" }` in `rene.ncl` to select the shipped
+version. Omitting the dependency
+neither loads nor builds std. The normal version solver checks the constraint;
+an explicit `path` selects a local std checkout and bypasses the bundled cache.
+Transitive path dependencies can request bundled std in the same way. Packages
+outside the shipped bundles continue to require a local path.
+
+Only each library's `rene.ncl` and `src/` are embedded. Build directories and
+other checkout files never enter the bundle or change its cache identity.

@@ -11,6 +11,7 @@
 //! resolve over local paths ([`resolve`]), and `rene new` scaffolds a fresh
 //! package ([`new`]).
 
+pub mod bundled;
 pub mod cache;
 pub mod compile;
 pub mod core_src;

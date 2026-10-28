@@ -162,15 +162,17 @@ async fn build_node(
         build_dir: opts.build_dir,
         token_reuse_remarks: opts.token_reuse_remarks,
     };
-    let cached_bundle = name == "core"
-        && crate::core_src::dir(opts.build_dir)
+    let cached_bundle = crate::bundled::find(name).is_some_and(|bundle| {
+        bundle
+            .dir(opts.build_dir)
             .canonicalize()
             .is_ok_and(|expected| {
                 graph.nodes[name]
                     .dir
                     .canonicalize()
                     .is_ok_and(|actual| actual == expected)
-            });
+            })
+    });
     let state = fresh::node_state(graph, name, &ctx)?;
     if state.is_current() && !cached_bundle {
         tracing::debug!(package = name, "up to date");

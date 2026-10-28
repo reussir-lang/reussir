@@ -21,7 +21,7 @@ pub const MANIFEST_FILE: &str = "rene.ncl";
 #[derive(Debug, Clone, Deserialize)]
 pub struct Manifest {
     pub package: Package,
-    /// Dependencies by name. First stage: file-system paths only.
+    /// Dependencies by name: local paths, or the bundled std without a path.
     #[serde(default)]
     pub dependencies: BTreeMap<String, Dependency>,
     /// The products `rene build` compiles, by name — the name becomes the
@@ -54,9 +54,8 @@ pub struct Package {
 #[serde(deny_unknown_fields)]
 pub struct Dependency {
     /// Directory of the dependency package, relative to the manifest's
-    /// directory unless absolute. The only *source* supported today; a
-    /// dependency giving no path is reserved for remote registries and is
-    /// rejected at load with that explanation.
+    /// directory unless absolute. Omitting it selects the bundled library
+    /// for `std`; other pathless dependencies await registry support.
     pub path: Option<PathBuf>,
     /// The version constraint the resolved dependency must satisfy:
     /// `"1.2.3"` (exact), `"^1.2.3"` (compatible), `"1.2"`/`"1"` (prefix),
@@ -67,11 +66,11 @@ pub struct Dependency {
 
 impl Dependency {
     /// The dependency's source directory. The load-time validation
-    /// guarantees this for every manifest that got past [`load`].
+    /// guarantees this for local dependencies; bundled `std` has no path.
     pub fn path(&self) -> &Path {
         self.path
             .as_deref()
-            .expect("validated at load: only path dependencies exist today")
+            .expect("path() requires a local dependency")
     }
 }
 
@@ -275,7 +274,7 @@ pub enum SchemaError {
     #[error(transparent)]
     Deserialize(Box<dyn std::error::Error + Send + Sync>),
     #[error(
-        "dependency `{name}` gives no `path`; only local path dependencies are supported today (a bare version constraint will later select a registry release)"
+        "dependency `{name}` gives no `path`; only local path dependencies and bundled `std` are supported today (a bare version constraint will later select a registry release)"
     )]
     MissingDependencyPath { name: String },
 }
@@ -317,7 +316,7 @@ pub fn load(path: &Path) -> Result<Loaded, ManifestError> {
         .to_serde()
         .map_err(|e| ManifestError::Schema(SchemaError::Deserialize(Box::new(e))))?;
     for (name, dep) in &manifest.dependencies {
-        if dep.path.is_none() {
+        if dep.path.is_none() && name != "std" {
             return Err(ManifestError::Schema(SchemaError::MissingDependencyPath {
                 name: name.clone(),
             }));

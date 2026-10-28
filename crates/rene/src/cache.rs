@@ -12,7 +12,7 @@ use indicatif::MultiProgress;
 use serde::Serialize;
 
 use crate::Error;
-use crate::{compile, core_src, deps, fresh, manifest::TargetKind, plan, resolve::Graph};
+use crate::{bundled, compile, deps, fresh, manifest::TargetKind, plan, resolve::Graph};
 
 struct Rene;
 impl StoreDefaults for Rene {
@@ -105,7 +105,9 @@ impl Request {
             compiler: file_digest(&compiler)?,
             rustc_version: rustc_version.to_owned(),
             package: name.to_owned(),
-            bundle: core_src::content_hash(),
+            bundle: bundled::find(name)
+                .expect("a bundled library")
+                .content_hash(),
             config_hash: deps::config_hash(&graph.nodes[name].loaded.dump),
             sources: sources
                 .iter()

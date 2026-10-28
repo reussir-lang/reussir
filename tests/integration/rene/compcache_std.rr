@@ -1,0 +1,12 @@
+// std is an explicit bundled dependency. Both core and std are baked once and
+// linked in place by independent builds; execute the second result too.
+// RUN: rm -rf %t.first %t.second
+// RUN: %rene build --manifest-path %S/bundled_std/rene.ncl --build-dir %t.first %rrc_linker
+// RUN: %rene -v build --manifest-path %S/bundled_std/rene.ncl --build-dir %t.second %rrc_linker 2>&1 | %FileCheck %s --check-prefix=CACHE
+// CACHE-NOT: baking shared reussir-rt
+// CACHE-NOT: baking bundled library
+// CACHE: using cached bundled library in place
+// CACHE-NOT: baking bundled library
+// CACHE: using cached bundled library in place
+// RUN: %t.second/dev/demo%exe_ext | %FileCheck %s
+// CHECK: 42

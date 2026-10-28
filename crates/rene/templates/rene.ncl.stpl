@@ -34,11 +34,12 @@ let cross_target = { default_target_triple = "<%= triple %>" } in
 <% for (key, kind) in targets { %>    <%= key %> = { kind = <%= kind %> },
 <% } %>  },
 <% } %>
-  # Dependencies by name — file-system paths only today, relative to this
+  # Dependencies by name — local paths are relative to this
   # file; `version` ("1.2.3" exact, "^1.2" compatible, "1" prefix, "*" any)
   # is checked against the dependency's declared `package.version`.
   #
   # dependencies = {
+  #   std = { version = "^0.1" }, # the std bundled with rene
   #   utils = { path = "../utils", version = "^0.1" },
   # },
 
