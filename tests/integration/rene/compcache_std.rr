@@ -1,5 +1,6 @@
 // std is an explicit bundled dependency. Both core and std are baked once and
 // restored into an independent build; execute the latter to check relocation.
+// RUN: rm -rf %t.cache %t.first %t.second
 // RUN: env RENE_CACHE_DIR=%t.cache %rene build --manifest-path %S/bundled_std/rene.ncl --build-dir %t.first %rrc_linker
 // RUN: env RENE_CACHE_DIR=%t.cache %rene -v build --manifest-path %S/bundled_std/rene.ncl --build-dir %t.second %rrc_linker 2>&1 | %FileCheck %s --check-prefix=CACHE
 // CACHE-NOT: baking bundled library
