@@ -5,9 +5,9 @@ fn print_u64(value: u64) [{ println!("{value}") }];
 
 #[main]
 pub fn entry() {
-    let value: Option<u64> = Option::Some(42);
+    let value: Option<u64> = Option::Some { 42 };
     match value {
         Option::Some(n) => print_u64(n),
-        Option::None => print_u64(0),
+        Option::None => print_u64(0)
     }
 }
