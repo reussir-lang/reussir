@@ -17,14 +17,14 @@ static CORE_BUNDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/core-src.t
 
 /// The bundle's content hash — the directory name component that keys
 /// unpacked sources to this rene build.
-fn content_hash() -> String {
-    blake3::hash(CORE_BUNDLE).to_hex()[..16].to_string()
+pub(crate) fn content_hash() -> String {
+    blake3::hash(CORE_BUNDLE).to_hex().to_string()
 }
 
 /// Where the bundle lives (or will live) under `build_dir`. Pure — inspect
 /// paths print without writing anything.
 pub fn dir(build_dir: &Path) -> PathBuf {
-    build_dir.join("core-src").join(content_hash())
+    build_dir.join("core-src").join(&content_hash()[..16])
 }
 
 /// Materialize the bundle under `build_dir`, idempotently, and return its

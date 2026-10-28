@@ -45,6 +45,7 @@ const BAKED_RUSTC: &str = "<baked-rustc>";
 /// One planned `rrc` invocation for a node — the shared synthesis behind
 /// both the dump ([`render`]) and the executed build ([`crate::exec`]), so
 /// the two cannot drift: what `inspect --commands` prints is what runs.
+#[derive(Clone)]
 pub(crate) struct PlannedCommand {
     /// The `--emit` stage (`rri`, `staticlib`, or a root target's kind).
     pub(crate) emit: &'static str,

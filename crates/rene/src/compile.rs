@@ -294,6 +294,28 @@ pub(crate) struct Invocation {
 }
 
 impl Invocation {
+    /// The directory-cache producer is synchronous and runs off the event
+    /// loop. Keep its invocation and diagnostic contract identical to `run`.
+    pub(crate) fn run_blocking(self) -> Result<CompletedInvocation, String> {
+        let mut cmd = std::process::Command::new(&self.program);
+        cmd.args(&self.args);
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            cmd.arg("-v");
+        }
+        for (key, value) in &self.envs {
+            cmd.env(key, value);
+        }
+        let output = cmd
+            .args(["--color", if self.color { "always" } else { "never" }])
+            .output()
+            .map_err(|e| format!("cannot run `{}`: {e}", self.program.display()))?;
+        Ok(CompletedInvocation {
+            status: output.status,
+            diagnostics: output.stderr,
+            out: self.out,
+        })
+    }
+
     /// An `rrc` invocation from a planned command: the real program
     /// resolved, the baking toolchain pinned through `REUSSIR_RUSTC`.
     pub(crate) fn from_planned(

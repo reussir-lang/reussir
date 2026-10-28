@@ -363,6 +363,7 @@ printf ']}\n'
             .arg("--build-dir")
             .arg(build_dir)
             .env("REUSSIR_RRC", &self.rrc)
+            .env("RENE_CACHE_DIR", self.dir.join("cache"))
             .env("REUSSIR_CARGO", &self.cargo)
             .env("REUSSIR_RUSTC", &self.rustc))
     }
@@ -1520,4 +1521,119 @@ fn new_inits_git_once_and_never_nested() {
         "must not nest a repository inside `outer`'s"
     );
     assert!(nested.join(".gitignore").exists());
+}
+
+/// Independent projects restore the bundled core's interface and archive from
+/// disk, including the diagnostic sidecar. A local edit cannot poison the cache.
+#[cfg(unix)]
+#[test]
+fn bundled_core_is_baked_once_across_build_directories() {
+    let tmp = tempfile::tempdir().unwrap();
+    package(tmp.path(), "demo");
+    let manifest = write_targets_manifest(tmp.path());
+    let fakes = Fakes::new(tmp.path());
+    let first = tmp.path().join("first");
+    let second = tmp.path().join("second");
+    let third = tmp.path().join("third");
+    let args = ["build", "--token-reuse-remarks"];
+    for root in [&first, &second] {
+        let out = fakes.rene(&args, &manifest, root);
+        assert!(out.status.success(), "{}", stderr(&out));
+        for file in ["core.rri", "libcore.a", "libcore.a.token-reuse.json"] {
+            assert!(root.join("dev/deps").join(file).is_file(), "missing {file}");
+        }
+    }
+    assert_eq!(
+        fakes
+            .compiles()
+            .iter()
+            .filter(|s| s.contains("--package-name core"))
+            .count(),
+        2
+    );
+    std::fs::write(second.join("dev/deps/core.rri"), b"local modification").unwrap();
+    let out = fakes.rene(&args, &manifest, &third);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        std::fs::read(third.join("dev/deps/core.rri")).unwrap(),
+        b"compiled\n"
+    );
+    assert_eq!(
+        fakes
+            .compiles()
+            .iter()
+            .filter(|s| s.contains("--package-name core"))
+            .count(),
+        2
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn bundled_core_cache_separates_profile_target_and_compiler() {
+    use std::io::Write;
+    let tmp = tempfile::tempdir().unwrap();
+    package(tmp.path(), "demo");
+    let manifest = write_targets_manifest(tmp.path());
+    let fakes = Fakes::new(tmp.path());
+    for (index, args) in [
+        vec!["build"],
+        vec!["build", "--profile", "release"],
+        vec!["build", "--target", "other-unknown-fake"],
+    ]
+    .iter()
+    .enumerate()
+    {
+        let out = fakes.rene(args, &manifest, &tmp.path().join(format!("build-{index}")));
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&fakes.rrc)
+        .unwrap()
+        .write_all(b"\n# a different compiler build\n")
+        .unwrap();
+    let out = fakes.rene(&["build"], &manifest, &tmp.path().join("changed-compiler"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        fakes
+            .compiles()
+            .iter()
+            .filter(|s| s.contains("--package-name core"))
+            .count(),
+        8
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_core_production_does_not_publish_partial_outputs() {
+    let tmp = tempfile::tempdir().unwrap();
+    package(tmp.path(), "demo");
+    let manifest = write_targets_manifest(tmp.path());
+    let fakes = Fakes::new(tmp.path());
+    let source = std::fs::read_to_string(&fakes.rrc).unwrap();
+    std::fs::write(&fakes.rrc, source.replace("echo compiled >", &format!(
+        "if [ \"$package\" = core ] && [ -f '{}' ]; then echo 'core compiler failure' >&2; exit 1; fi\necho compiled >",
+        tmp.path().join("fail").display()))).unwrap();
+    std::fs::write(tmp.path().join("fail"), []).unwrap();
+    let out = fakes.rene(&["build"], &manifest, &tmp.path().join("failed"));
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("core compiler failure"),
+        "{}",
+        stderr(&out)
+    );
+    std::fs::remove_file(tmp.path().join("fail")).unwrap();
+    let out = fakes.rene(&["build"], &manifest, &tmp.path().join("recovered"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(tmp.path().join("recovered/dev/deps/libcore.a").is_file());
+    assert_eq!(
+        fakes
+            .compiles()
+            .iter()
+            .filter(|s| s.contains("--package-name core"))
+            .count(),
+        3
+    );
 }

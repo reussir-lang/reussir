@@ -178,13 +178,28 @@ async fn build_node(
         build_dir: opts.build_dir,
         token_reuse_remarks: opts.token_reuse_remarks,
     };
-    for command in plan::node_commands(graph, name, &plan_opts, Some(rt)) {
-        bar.set_message(format!("{name}: {}", command.emit));
-        let invocation = compile::Invocation::from_planned(command, &rt.rustc, opts.color);
-        let completed = pool.run(move || invocation.run()).await?;
-        // Clear/redraw every active bar around the indivisible diagnostic
-        // block. `suspend` also serializes these callbacks on the scheduler.
-        progress.suspend(|| completed.report())?;
+    let commands = plan::node_commands(graph, name, &plan_opts, Some(rt));
+    // Only rene's bundled core participates. A path dependency called core
+    // must continue to build from its own sources.
+    if name == "core" && graph.nodes[name].dir == crate::core_src::dir(opts.build_dir) {
+        let request = crate::compcache::Request::new(graph, name, &plan_opts, rt, commands)?;
+        let progress = progress.clone();
+        let color = opts.color;
+        pool.run(move || async move {
+            compio::runtime::spawn_blocking(move || request.build(color, &progress))
+                .await
+                .map_err(|e| format!("bundled library cache worker failed: {e:?}"))?
+        })
+        .await?;
+    } else {
+        for command in commands {
+            bar.set_message(format!("{name}: {}", command.emit));
+            let invocation = compile::Invocation::from_planned(command, &rt.rustc, opts.color);
+            let completed = pool.run(move || invocation.run()).await?;
+            // Clear/redraw every active bar around the indivisible diagnostic
+            // block. `suspend` also serializes these callbacks on the scheduler.
+            progress.suspend(|| completed.report())?;
+        }
     }
     fresh::record_dep(graph, name, &ctx, rt, &sources)?;
     bar.finish_and_clear();
