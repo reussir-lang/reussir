@@ -181,17 +181,28 @@ async fn build_node(
     let commands = plan::node_commands(graph, name, &plan_opts, Some(rt));
     // Only rene's bundled core participates. A path dependency called core
     // must continue to build from its own sources.
-    if name == "core" && graph.nodes[name].dir == crate::core_src::dir(opts.build_dir) {
+    if name == "core"
+        && crate::core_src::dir(opts.build_dir)
+            .canonicalize()
+            .is_ok_and(|expected| {
+                graph.nodes[name]
+                    .dir
+                    .canonicalize()
+                    .is_ok_and(|actual| actual == expected)
+            })
+    {
         let request =
             crate::compcache::Request::new(graph, name, &plan_opts, rt, commands, &sources)?;
         let progress = progress.clone();
         let color = opts.color;
-        pool.run(move || async move {
-            compio::runtime::spawn_blocking(move || request.build(color, &progress))
-                .await
-                .map_err(|e| format!("bundled library cache worker failed: {e:?}"))?
-        })
-        .await?;
+        let restoration = pool
+            .run(move || async move {
+                compio::runtime::spawn_blocking(move || request.build(color, &progress))
+                    .await
+                    .map_err(|e| format!("bundled library cache worker failed: {e:?}"))?
+            })
+            .await?;
+        restoration.restore()?;
     } else {
         for command in commands {
             bar.set_message(format!("{name}: {}", command.emit));

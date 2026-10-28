@@ -1,8 +1,8 @@
 //! Disk-only compilation cache for rene's bundled libraries.
 //!
 //! compcache owns publication, cross-process exclusion, recovery and pruning.
-//! A producer compiles into the locked project build directory and streams only
-//! the declared outputs into an immutable managed directory. Readers retain a
+//! A producer compiles inside its managed directory and streams only the
+//! declared outputs through the counted, durable writer. Readers retain a
 //! lease until their private copies are complete; linkers never read a path
 //! that cache pruning can remove.
 
@@ -10,7 +10,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use compcache::{
-    ArtifactWriter, Bypass, Config, Key, ManagedDirectory, StoreBuilder, StoreDefaults,
+    ArtifactWriter, Bypass, Config, Key, ManagedDirectory, RuntimeLease, StoreBuilder,
+    StoreDefaults,
 };
 use indicatif::MultiProgress;
 use serde::Serialize;
@@ -68,6 +69,10 @@ impl Request {
         let deps_dir = opts.build_dir.join(opts.profile_name).join("deps");
         let compiler = which::which(deps::resolve_rrc())
             .map_err(|e| format!("cannot locate rrc for the bundled library cache: {e}"))?;
+        let source_root = graph.nodes[name]
+            .dir
+            .canonicalize()
+            .map_err(|e| format!("cannot resolve bundled source root: {e}"))?;
         let recipe = Recipe {
             rene: env!("CARGO_PKG_VERSION"),
             package: name.to_owned(),
@@ -76,8 +81,11 @@ impl Request {
             sources: sources
                 .iter()
                 .map(|source| {
-                    let relative = Path::new(&source.path)
-                        .strip_prefix(&graph.nodes[name].dir)
+                    let path = Path::new(&source.path)
+                        .canonicalize()
+                        .map_err(|e| format!("cannot resolve bundled source: {e}"))?;
+                    let relative = path
+                        .strip_prefix(&source_root)
                         .map_err(|e| format!("bundled source is outside its package: {e}"))?;
                     Ok((relative.to_owned(), source.record.hash))
                 })
@@ -123,15 +131,24 @@ impl Request {
     }
 
     /// Run on a blocking worker under the process pool's admission permit.
-    pub(crate) fn build(self, color: bool, progress: &MultiProgress) -> Result<(), String> {
-        self.build_inner(color, progress).map_err(|e| {
+    pub(crate) fn build(
+        self,
+        color: bool,
+        progress: &MultiProgress,
+    ) -> Result<Restoration, String> {
+        let lease = self.build_inner(color, progress).map_err(|e| {
             format!(
                 "bundled library disk cache (set RENE_CACHE_DIR to a writable local directory): {e}"
             )
+        })?;
+        Ok(Restoration {
+            lease,
+            outputs: self.outputs,
+            key: self.key,
         })
     }
 
-    fn build_inner(&self, color: bool, progress: &MultiProgress) -> Result<(), String> {
+    fn build_inner(&self, color: bool, progress: &MultiProgress) -> Result<RuntimeLease, String> {
         // Deliberately use the built-in settings: this integration needs no
         // external Nickel executable or separate user configuration file.
         let store = StoreBuilder::<Bypass, ManagedDirectory>::with_defaults::<Rene>()
@@ -140,30 +157,62 @@ impl Request {
         let lease = store
             .get_or_insert_runtime(self.key, &|directory: &Path| {
                 tracing::debug!(key = %self.key, "baking bundled library");
+                // A blocking task can outlive a cancelled future. Keep all of
+                // its compiler writes inside the managed object, never in the
+                // project whose lock the caller may release after an error.
+                let work = directory.join("compile");
+                std::fs::create_dir(&work).map_err(compcache::Error::producer)?;
                 for command in &self.commands {
-                    let completed =
-                        compile::Invocation::from_planned(command.clone(), &self.rustc, color)
-                            .run_blocking()
-                            .map_err(producer_error)?;
+                    let mut staged = command.clone();
+                    staged.out = work.join(command.out.file_name().unwrap());
+                    for i in 1..staged.args.len() {
+                        if matches!(staged.args[i - 1].as_str(), "-o" | "--token-reuse-remarks")
+                            && let Some(file) = Path::new(&staged.args[i]).file_name()
+                        {
+                            staged.args[i] = work.join(file).display().to_string();
+                        }
+                    }
+                    let completed = compile::Invocation::from_planned(staged, &self.rustc, color)
+                        .run_blocking()
+                        .map_err(producer_error)?;
                     progress
                         .suspend(|| completed.report())
                         .map_err(producer_error)?;
                 }
                 let mut writer = ArtifactWriter::new(directory);
                 for path in &self.outputs {
-                    let mut file = std::fs::File::open(path).map_err(compcache::Error::producer)?;
+                    let mut file = std::fs::File::open(work.join(path.file_name().unwrap()))
+                        .map_err(compcache::Error::producer)?;
                     writer.copy_file(
                         path.file_name().expect("planned artifact has a name"),
                         &mut file,
                     )?;
                 }
+                std::fs::remove_dir_all(&work).map_err(compcache::Error::producer)?;
                 writer.finish()
             })
             .map_err(|e| e.to_string())?;
+        Ok(lease)
+    }
+}
+
+/// The worker returns ownership of a lease, with no writes to project paths.
+/// Restoration runs on the caller's build thread after awaiting the worker;
+/// dropping an in-flight dependency can therefore never leave a background
+/// worker writing into an unlocked project directory.
+pub(crate) struct Restoration {
+    lease: RuntimeLease,
+    outputs: Vec<PathBuf>,
+    key: Key,
+}
+
+impl Restoration {
+    pub(crate) fn restore(self) -> Result<(), String> {
         // Copy instead of hard-linking: a later local rebuild must not mutate
         // the immutable cached copy. Hold the reader lease through every copy.
         for path in &self.outputs {
-            let cached = lease
+            let cached = self
+                .lease
                 .path()
                 .join(path.file_name().expect("planned artifact has a name"));
             std::fs::copy(&cached, path).map_err(|e| {
@@ -200,15 +249,17 @@ fn normalize(command: &plan::PlannedCommand, runtime: &rt::RtArtifacts) -> Vec<S
             "--package-root" => "<bundled-source>".into(),
             "-o" | "--token-reuse-remarks" => Path::new(&args[i])
                 .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .into_owned(),
+                .map(|file| file.to_string_lossy().into_owned())
+                .unwrap_or_else(|| args[i].clone()),
             "--extern" => args[i]
                 .split_once('=')
                 .map(|(name, path)| {
                     format!(
                         "{name}=<deps>/{}",
-                        Path::new(path).file_name().unwrap().to_string_lossy()
+                        Path::new(path)
+                            .file_name()
+                            .unwrap_or(std::ffi::OsStr::new(path))
+                            .to_string_lossy()
                     )
                 })
                 .unwrap_or_else(|| args[i].clone()),

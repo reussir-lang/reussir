@@ -1551,6 +1551,23 @@ fn bundled_core_is_baked_once_across_build_directories() {
             .count(),
         2
     );
+    for command in fakes
+        .compiles()
+        .iter()
+        .filter(|s| s.contains("--package-name core"))
+    {
+        let output = command
+            .split(" -o ")
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap();
+        assert!(
+            Path::new(output).starts_with(tmp.path().join("cache/objects")),
+            "a cache worker wrote outside its managed directory: {command}"
+        );
+    }
     std::fs::write(second.join("dev/deps/core.rri"), b"local modification").unwrap();
     let out = fakes.rene(&args, &manifest, &third);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -1665,5 +1682,34 @@ fn edits_to_materialized_core_sources_do_not_reuse_an_old_bake() {
             .filter(|s| s.contains("--package-name core"))
             .count(),
         4
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn bundled_core_cache_accepts_a_relative_build_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    package(tmp.path(), "demo");
+    let manifest = write_targets_manifest(tmp.path());
+    let fakes = Fakes::new(tmp.path());
+    let out = run(
+        rene(&["build", "--build-dir", "relative", "--manifest-path"])
+            .arg(&manifest)
+            .current_dir(tmp.path())
+            .env("REUSSIR_RRC", &fakes.rrc)
+            .env("REUSSIR_CARGO", &fakes.cargo)
+            .env("REUSSIR_RUSTC", &fakes.rustc)
+            .env("RENE_CACHE_DIR", tmp.path().join("cache")),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = fakes.rene(&["build"], &manifest, &tmp.path().join("absolute"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        fakes
+            .compiles()
+            .iter()
+            .filter(|s| s.contains("--package-name core"))
+            .count(),
+        2
     );
 }

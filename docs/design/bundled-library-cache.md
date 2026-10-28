@@ -20,11 +20,13 @@ flags. Only known build-directory and bundled-source arguments are normalized;
 user flags and external library paths remain part of the recipe. A dependency
 called `core` that comes from a user path is compiled normally.
 
-A cache miss compiles the interface and archive using the existing plan. Only
-successful, complete outputs (including the token-reuse report when requested)
+A cache miss compiles the interface and archive inside the managed directory
+using the existing plan. Only successful, complete outputs (including the token-reuse report when requested)
 are streamed through compcache's `ArtifactWriter`. compcache serializes producers
 across processes and manages publication, recovery and eviction. Its synchronous
-work runs on a blocking worker under rene's process admission limit.
+work runs on a blocking worker under rene's process admission limit. Project
+files are restored on the build thread after awaiting that worker; cancellation
+cannot leave a background producer writing into an unlocked build directory.
 
 A hit copies the artifacts into the project's ordinary dependency directory
 while holding a reader lease. Copies are independent files, so rebuilding or
