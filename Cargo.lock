@@ -492,7 +492,7 @@ dependencies = [
 [[package]]
 name = "compcache"
 version = "0.1.0"
-source = "git+https://github.com/reussir-lang/compcache?rev=0f7ff61794d7139c8ce12e14a93525eba6fe127e#0f7ff61794d7139c8ce12e14a93525eba6fe127e"
+source = "git+https://github.com/reussir-lang/compcache?rev=570e35c220223af29804eb7db76181592c94722f#570e35c220223af29804eb7db76181592c94722f"
 dependencies = [
  "blake3",
  "dirs",
