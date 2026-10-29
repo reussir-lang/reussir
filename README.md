@@ -260,6 +260,23 @@ rene clean                        # delete the build directory
 The example packages under `tests/integration/rene/` (e.g. `calc-project`,
 `inventory-project`) show what a manifest looks like.
 
+### Caches
+
+All three caches use [compcache](https://github.com/reussir-lang/compcache).
+`CACHE` and `CONFIG` below mean the platform's user cache and configuration roots.
+
+| Cache | Stores | Cache directory (environment override) | Configuration |
+| --- | --- | --- | --- |
+| Rene | Bundled libraries and Rust runtime bakes; files on disk | `CACHE/rene` (`RENE_CACHE_DIR`) | `CONFIG/rene/config.ncl`; `RENE_CONFIG_DIR` overrides its directory |
+| PJRT | Executables in memory and serialized executables in SQLite | `CACHE/reussir` (`REUSSIR_CACHE_DIR`) | `CONFIG/reussir/config.ncl`; `REUSSIR_CONFIG_DIR` overrides its directory |
+| Polyffi | Rust bitcode in SQLite; memory bypass | `CACHE/rrc` (no dedicated override) | `CONFIG/rrc/config.ncl` |
+
+On Linux, the roots are `${XDG_CACHE_HOME:-~/.cache}` and
+`${XDG_CONFIG_HOME:-~/.config}`. Directory overrides replace the complete
+application directory. Nickel configuration is evaluated in process.
+See the [cache design notes](docs/design/bundled-library-cache.md)
+and [polyffi binding](crates/reussir-polyffi-cache/README.md) for details.
+
 ## Testing
 
 Reussir has both unit tests and integration tests.

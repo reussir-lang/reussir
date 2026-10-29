@@ -18,6 +18,7 @@ struct Rene;
 impl StoreDefaults for Rene {
     const APP_NAME: &'static str = "rene";
     const CACHE_DIR_ENV: Option<&'static str> = Some("RENE_CACHE_DIR");
+    const CONFIG_DIR_ENV: Option<&'static str> = Some("RENE_CONFIG_DIR");
     fn config() -> Config {
         let mut config = Config::default();
         config.memory.enabled = false;
@@ -34,7 +35,7 @@ pub struct Cache {
 impl Cache {
     pub fn open() -> Result<Arc<Self>, Error> {
         let store = StoreBuilder::<Bypass, ManagedDirectory>::with_defaults::<Rene>()
-            .and_then(|builder| builder.config(Rene::config()).open())
+            .and_then(|builder| builder.open())
             .map_err(Error::Cache)?;
         Ok(Arc::new(Self { store }))
     }

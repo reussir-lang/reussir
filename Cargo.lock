@@ -492,12 +492,13 @@ dependencies = [
 [[package]]
 name = "compcache"
 version = "0.1.0"
-source = "git+https://github.com/reussir-lang/compcache?rev=9c297bffc30401e06cdb751c783f1c6987cdd6fe#9c297bffc30401e06cdb751c783f1c6987cdd6fe"
+source = "git+https://github.com/reussir-lang/compcache?rev=570e35c220223af29804eb7db76181592c94722f#570e35c220223af29804eb7db76181592c94722f"
 dependencies = [
  "blake3",
  "dirs",
  "fs4",
  "libc",
+ "nickel-lang",
  "parking_lot",
  "quick_cache",
  "rapidhash",

@@ -82,7 +82,7 @@ cstree = { version = "0.14", features = ["derive", "lasso_compat", "multi_thread
 # snapshot/rollback (the logged path-compression makes speculation correct).
 ena = "0.14"
 thiserror = "2"
-compcache = { git = "https://github.com/reussir-lang/compcache", rev = "9c297bffc30401e06cdb751c783f1c6987cdd6fe" }
+compcache = { git = "https://github.com/reussir-lang/compcache", rev = "570e35c220223af29804eb7db76181592c94722f" }
 # Bump arena backing the type interner: with_scope yields a generative
 # ArenaRef whose `alloc(&self) -> &'scope mut T` hands out arena-lifetimed
 # references, so interned `Ty<'tcx>` handles compare by pointer.
