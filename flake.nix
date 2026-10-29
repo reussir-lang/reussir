@@ -304,9 +304,6 @@
             pkgs.bazel_8 # Optional IFRT tooling build
             pkgs.pkg-config
 
-            # compcache evaluates config.ncl with the Nickel CLI.
-            pkgs.nickel
-
             # Compiler cache for C++ and rustc; CI points it at the shared S3
             # bucket (.github/actions/s3-cache), locally it caches on disk.
             pkgs.sccache

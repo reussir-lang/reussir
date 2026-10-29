@@ -273,7 +273,7 @@ All three caches use [compcache](https://github.com/reussir-lang/compcache).
 
 On Linux, the roots are `${XDG_CACHE_HOME:-~/.cache}` and
 `${XDG_CONFIG_HOME:-~/.config}`. Directory overrides replace the complete
-application directory. Reading `config.ncl` requires `nickel` on `PATH`.
+application directory. Nickel configuration is evaluated in process.
 See the [cache design notes](docs/design/bundled-library-cache.md)
 and [polyffi binding](crates/reussir-polyffi-cache/README.md) for details.
 
