@@ -1,0 +1,38 @@
+// REQUIRES: linux
+// Baked dependency directories are part of the fixed request. Relative -L
+// paths, including search-kind prefixes, resolve against the caller's cwd.
+// RUN: rm -rf %t && mkdir -p %t/v1 %t/v2
+// RUN: printf '#[inline] pub fn k() -> u64 { 1111 }\n' > %t/v1.rs
+// RUN: printf '#[inline] pub fn k() -> u64 { 2222 }\n' > %t/v2.rs
+// RUN: %rustc_path --crate-type rlib --crate-name fcrdep %t/v1.rs -o %t/v1/libfcrdep.rlib
+// RUN: %rustc_path --crate-type rlib --crate-name fcrdep %t/v2.rs -o %t/v2/libfcrdep.rlib
+// RUN: printf '#!/bin/sh\nif [ -n "$NO_COMPILE" ]; then exit 1; fi\nexec "$REAL_RUSTC" "$@"\n' > %t/rustc
+// RUN: chmod +x %t/rustc
+// RUN: cd %t/v1 && env REAL_RUSTC=%rustc_path REUSSIR_RUSTC_DEPS=%library_path:crate=. XDG_CONFIG_HOME=%t/config XDG_CACHE_HOME=%t/cache \
+// RUN:   %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir -O aggressive -o %t/v1.ll
+// RUN: %FileCheck %s --check-prefix=V1 < %t/v1.ll
+// RUN: cd %t/v2 && env REAL_RUSTC=%rustc_path REUSSIR_RUSTC_DEPS=%library_path:crate=. XDG_CONFIG_HOME=%t/config XDG_CACHE_HOME=%t/cache \
+// RUN:   %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir -O aggressive -o %t/v2.ll
+// RUN: %FileCheck %s --check-prefix=V2 < %t/v2.ll
+// RUN: cd %t/v1 && env REAL_RUSTC=%rustc_path REUSSIR_RUSTC_DEPS=%library_path:crate=. XDG_CONFIG_HOME=%t/config XDG_CACHE_HOME=%t/cache NO_COMPILE=1 \
+// RUN:   %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir -O aggressive -o %t/v1-warm.ll
+// RUN: diff %t/v1.ll %t/v1-warm.ll
+// RUN: cd %t/v2 && env REAL_RUSTC=%rustc_path REUSSIR_RUSTC_DEPS=%library_path:crate=. XDG_CONFIG_HOME=%t/config XDG_CACHE_HOME=%t/cache NO_COMPILE=1 \
+// RUN:   %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir -O aggressive -o %t/v2-warm.ll
+// RUN: diff %t/v2.ll %t/v2-warm.ll
+// V1-DAG: add i64 %x, 1111
+// V1-DAG: add i64 %x, 1113
+// V2-DAG: add i64 %x, 2222
+// V2-DAG: add i64 %x, 2224
+
+extern "rust" [{
+    extern crate fcrdep;
+}];
+
+#[ffi(import)]
+pub fn kplus(x: u64) -> u64 [{ fcrdep::k() + x }];
+#[ffi(import)]
+pub fn kplus2(x: u64) -> u64 [{ fcrdep::k() + x + 2 }];
+pub fn main() -> u64 {
+    kplus2(kplus(1))
+}

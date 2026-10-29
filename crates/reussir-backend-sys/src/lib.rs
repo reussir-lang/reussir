@@ -8,6 +8,9 @@
 #![allow(non_snake_case)]
 
 pub use mlir_sys;
+// The C++ Rust compiler helper calls these symbols. Link the rlib here rather
+// than embedding a second Rust standard library through the C++ staticlib.
+use reussir_polyffi_cache as _;
 
 use core::ffi::{c_char, c_int};
 
