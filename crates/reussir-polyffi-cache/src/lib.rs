@@ -16,7 +16,6 @@ pub type Producer = unsafe extern "C" fn(*mut c_void, *mut Produced) -> bool;
 pub struct Produced {
     pub data: *const u8,
     pub size: usize,
-    pub persist: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -69,7 +68,6 @@ pub unsafe extern "C" fn reussir_polyffi_cache_get_or_produce(
                 let mut produced = Produced {
                     data: ptr::null(),
                     size: 0,
-                    persist: true,
                 };
                 if !unsafe { producer(context, &mut produced) } {
                     return Err(Box::new(ProducerFailed) as compcache::ProducerError);
@@ -81,7 +79,7 @@ pub unsafe extern "C" fn reussir_polyffi_cache_get_or_produce(
                 };
                 Ok(compcache::Produced {
                     payload: Arc::<[u8]>::from(bytes),
-                    serialized: Ok(produced.persist.then(|| bytes.to_vec())),
+                    serialized: Ok(Some(bytes.to_vec())),
                 })
             });
     match cached {

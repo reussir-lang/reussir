@@ -8,10 +8,10 @@ The store uses compcache's standard locations and configuration for app `rrc`.
 
 The public header is `include/reussir_polyffi_cache.h`. Result and diagnostic
 callbacks borrow bytes synchronously, so the caller copies any bytes it needs.
-The producer returns false on failure, or sets `persist=false` when its output
-should be returned without publication. A write failure reports a diagnostic
-while preserving successful output. Cache failures and producer failures have
-distinct return codes, allowing the caller to choose its fallback.
+The producer returns false on failure; successful output is cached. A write
+failure reports a diagnostic while preserving successful output. Cache failures
+and producer failures have distinct return codes, allowing the caller to choose
+its fallback.
 
 There is no compiler integration. Keys, validation, and compilation remain the
 caller's responsibility. Build and test with `cargo test -p reussir-polyffi-cache`.

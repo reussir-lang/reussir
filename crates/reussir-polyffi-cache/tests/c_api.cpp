@@ -13,7 +13,7 @@ struct Request {
 static bool produce(void *context, ReussirPolyffiCacheProduced *result) {
   ++static_cast<Request *>(context)->calls;
   static const uint8_t bytes[] = {0, 255, 42};
-  *result = {bytes, sizeof(bytes), true};
+  *result = {bytes, sizeof(bytes)};
   return true;
 }
 static void receive(const uint8_t *data, size_t size, void *context) {

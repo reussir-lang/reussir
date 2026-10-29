@@ -7,7 +7,6 @@ struct Request {
     output: Vec<u8>,
     calls: usize,
     diagnostics: usize,
-    persist: bool,
     fail: bool,
 }
 unsafe extern "C" fn produce(context: *mut c_void, output: *mut Produced) -> bool {
@@ -17,7 +16,6 @@ unsafe extern "C" fn produce(context: *mut c_void, output: *mut Produced) -> boo
         *output = Produced {
             data: request.input.as_ptr(),
             size: request.input.len(),
-            persist: request.persist,
         }
     };
     !request.fail
@@ -56,7 +54,6 @@ fn hits_skip_production_and_read_verbatim_database_bytes() {
     let directory = tempfile::tempdir().unwrap();
     let mut request = Request {
         input: b"\0BC\xff",
-        persist: true,
         ..Default::default()
     };
     let cache = open(directory.path());
@@ -96,7 +93,7 @@ fn hits_skip_production_and_read_verbatim_database_bytes() {
 }
 
 #[test]
-fn producer_failures_and_uncacheable_results_are_not_published() {
+fn producer_failures_are_not_cached_and_successful_retries_are() {
     let directory = tempfile::tempdir().unwrap();
     let mut request = Request {
         input: b"bitcode",
@@ -111,14 +108,14 @@ fn producer_failures_and_uncacheable_results_are_not_published() {
     request.fail = false;
     assert_eq!(request.run(cache, 2), 0);
     assert_eq!(request.run(cache, 2), 0);
-    assert_eq!(request.calls, 3);
+    assert_eq!(request.calls, 2);
     assert_eq!(request.output, request.input);
     let db = rusqlite::Connection::open(directory.path().join("cache.db")).unwrap();
     assert_eq!(
         db.query_row("SELECT count(*) FROM entries", [], |row| row
             .get::<_, i64>(0))
             .unwrap(),
-        0
+        1
     );
     unsafe { reussir_polyffi_cache_close(cache) };
 }
@@ -128,7 +125,6 @@ fn cache_failures_report_diagnostics_and_preserve_produced_bytes() {
     let directory = tempfile::tempdir().unwrap();
     let mut request = Request {
         input: b"usable",
-        persist: true,
         ..Default::default()
     };
     let cache = open(directory.path());
