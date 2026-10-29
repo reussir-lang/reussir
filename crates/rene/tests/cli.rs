@@ -366,6 +366,43 @@ printf ']}\n'
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn cache_config_overrides_application_defaults() {
+    let tmp = tempfile::tempdir().unwrap();
+    let manifest = package(&tmp.path().join("pkg"), "pkg");
+    let fakes = Fakes::new(tmp.path());
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir(&config_dir).unwrap();
+    let config = config_dir.join("config.ncl");
+    let build = |directory: &str| {
+        run(rene(&["build", "--manifest-path"])
+            .arg(&manifest)
+            .arg("--build-dir")
+            .arg(tmp.path().join(directory))
+            .env("REUSSIR_RRC", &fakes.rrc)
+            .env("REUSSIR_CARGO", &fakes.cargo)
+            .env("REUSSIR_RUSTC", &fakes.rustc)
+            .env("RENE_CACHE_DIR", tmp.path().join("cache"))
+            .env("RENE_CONFIG_DIR", &config_dir))
+    };
+
+    // A partial file inherits the other application defaults.
+    std::fs::write(&config, "{ disk = { sqlite_cache_kib = 128 } }").unwrap();
+    let out = build("valid");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // Invalid settings must be reported rather than silently ignored.
+    std::fs::write(&config, "{ disk = { sqlite_cache_kib = 0 } }").unwrap();
+    let out = build("invalid");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("disk.sqlite_cache_kib"),
+        "{}",
+        stderr(&out)
+    );
+}
+
 /// `rene inspect --frozen`'s report, parsed.
 #[cfg(unix)]
 fn frozen_report(fakes: &Fakes, manifest: &Path, build_dir: &Path) -> serde_json::Value {

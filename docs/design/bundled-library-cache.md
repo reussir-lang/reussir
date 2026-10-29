@@ -10,8 +10,10 @@ The cache lives in the platform cache directory's `rene` subdirectory
 (`$XDG_CACHE_HOME/rene` or `~/.cache/rene` on Linux, `~/Library/Caches/rene` on
 macOS, and Local AppData's `rene` on Windows). `RENE_CACHE_DIR` overrides that
 complete path; relative overrides resolve against the working directory.
-The integration uses compcache's built-in pruning settings (4 GiB trigger,
-seven-day retention, pruning on writes), without loading a configuration file.
+`rene/config.ncl` under the platform config root overrides the application's
+defaults (4 GiB pruning trigger, seven-day retention, pruning on writes).
+`RENE_CONFIG_DIR` overrides the complete config directory. Omitted settings
+retain their defaults; an absent file uses defaults.
 
 Each v0 recipe includes bundled and materialized source digests, the
 library manifest, compiler executable identity, Rust compiler version, target,
