@@ -4,6 +4,7 @@ add_mlir_library(ReussirRustCompiler
     Core
     Support
     BitReader
-    TargetParser
+  LINK_LIBS PUBLIC
+    ReussirPolyffiCache
 )
 

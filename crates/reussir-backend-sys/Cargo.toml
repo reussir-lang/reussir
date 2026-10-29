@@ -12,6 +12,7 @@ name = "reussir_backend_sys"
 
 [dependencies]
 mlir-sys.workspace = true
+reussir-polyffi-cache = { path = "../reussir-polyffi-cache" }
 
 [build-dependencies]
 blake3.workspace = true

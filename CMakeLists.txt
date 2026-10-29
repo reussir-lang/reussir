@@ -117,6 +117,7 @@ include_directories(SYSTEM
 
 # Subdirectories
 add_subdirectory(include)
+add_subdirectory(crates/reussir-polyffi-cache)
 add_subdirectory(lib)
 add_subdirectory(tool)
 add_subdirectory(crates/reussir-rt)

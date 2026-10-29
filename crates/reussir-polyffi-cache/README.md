@@ -13,8 +13,9 @@ failure reports a diagnostic while preserving successful output. Cache failures
 and producer failures have distinct return codes, allowing the caller to choose
 its fallback.
 
-There is no compiler integration. Keys, validation, and compilation remain the
-caller's responsibility. Build and test with `cargo test -p reussir-polyffi-cache`.
+Keys, validation, and compilation remain the caller's responsibility. Reussir's
+compiler integration lives in `lib/RustCompiler`, outside this binding.
+Build and test with `cargo test -p reussir-polyffi-cache`.
 The standalone `tests/c_api.cpp` exercises the public ABI. On Linux, isolate
 the application defaults using the standard XDG environment:
 

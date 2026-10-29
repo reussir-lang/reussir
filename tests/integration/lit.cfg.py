@@ -361,6 +361,10 @@ config.environment['REUSSIR_RRC'] = sh_path(config.reussir_rrc_path)
 # cache. An explicit override remains useful for cold/warm cache checks.
 config.environment['RENE_CACHE_DIR'] = os.environ.get(
     'RENE_CACHE_DIR', os.path.join(config.test_exec_root, 'rene-cache'))
+# Polyffi caching uses compcache's standard application roots on Linux.
+if sys.platform.startswith('linux') and not _target_is_windows:
+    config.environment['XDG_CACHE_HOME'] = os.path.join(config.test_exec_root, 'cache')
+    config.environment['XDG_CONFIG_HOME'] = os.path.join(config.test_exec_root, 'config')
 # The Rust REPL; its suite lives in repl-rs/ and only runs when the `rrepl`
 # CMake target has been built.
 config.substitutions.append((r'%rrepl', sh_path(config.rrepl_path)))
