@@ -61,6 +61,7 @@ set(REUSSIR_BACKEND_ARCHIVES
   MLIRReussirSpecialPointerTag
   MLIRReussirInvariantGroupAnalysis
   MLIRReussirUniqueCarryingRecursionAnalysis
+  MLIRReussirSpecialization
   MLIRReussirTRMCRecursionAnalysis
   MLIRReussirPjrtDonation)
 add_dependencies(ReussirCAPI ${REUSSIR_BACKEND_ARCHIVES})

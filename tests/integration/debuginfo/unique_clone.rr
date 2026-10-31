@@ -1,0 +1,29 @@
+// RUN: %rrc %s -O aggressive -g --relocation-mode pic -t llvm-ir -o %t.ll
+// RUN: %FileCheck %s --input-file %t.ll
+
+// A specialized clone keeps the original's debug info. UCRA turns `build`,
+// whose accumulator is unique on every call, into `build.unique`; lowering
+// gives the clone its own subprogram, under the source name with the clone's
+// symbol as linkage name, so a debugger can stop in it.
+
+// CHECK: distinct !DISubprogram(name: "_RC5build", linkageName: "_RC5build.unique",
+
+enum List {
+    Nil,
+    Cons(i64, List)
+}
+
+fn build(n: i64, acc: List) -> List {
+    if n == 0 { acc } else { build(n - 1, List::Cons{n, acc}) }
+}
+
+fn length(xs: List) -> i64 {
+    match xs {
+        List::Nil => 0,
+        List::Cons(_, t) => 1 + length(t)
+    }
+}
+
+fn run(n: i64) -> i64 { length(build(n, List::Nil)) }
+
+extern "C" trampoline "run_ffi" = run;

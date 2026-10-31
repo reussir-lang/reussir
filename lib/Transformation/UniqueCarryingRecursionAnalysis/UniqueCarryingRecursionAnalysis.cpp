@@ -99,6 +99,7 @@
 #include "Reussir/IR/ReussirTypes.h"
 #include "Reussir/Transformation/Passes.h"
 #include "Reussir/Transformation/SpecialPointerTag.h"
+#include "Reussir/Transformation/Specialization.h"
 
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/DenseSet.h>
@@ -536,40 +537,6 @@ static void resetDirectSelfCallsToBase(mlir::func::FuncOp funcOp,
   });
 }
 
-static mlir::LocationAttr stripDebugMetadata(mlir::LocationAttr loc) {
-  if (!loc)
-    return loc;
-  auto *context = loc.getContext();
-
-  if (auto fusedLoc = llvm::dyn_cast<mlir::FusedLoc>(loc)) {
-    llvm::SmallVector<mlir::Location> strippedLocations;
-    strippedLocations.reserve(fusedLoc.getLocations().size());
-    for (mlir::Location innerLoc : fusedLoc.getLocations())
-      strippedLocations.push_back(stripDebugMetadata(innerLoc));
-    return mlir::FusedLoc::get(context, strippedLocations);
-  }
-
-  if (auto nameLoc = llvm::dyn_cast<mlir::NameLoc>(loc))
-    return mlir::NameLoc::get(nameLoc.getName(),
-                              stripDebugMetadata(nameLoc.getChildLoc()));
-
-  if (auto callSiteLoc = llvm::dyn_cast<mlir::CallSiteLoc>(loc))
-    return mlir::CallSiteLoc::get(stripDebugMetadata(callSiteLoc.getCallee()),
-                                  stripDebugMetadata(callSiteLoc.getCaller()));
-
-  return loc;
-}
-
-static void stripCloneDebugInfo(mlir::func::FuncOp funcOp) {
-  funcOp->removeAttr("reussir.dbg_func_args");
-  funcOp->setLoc(stripDebugMetadata(funcOp.getLoc()));
-  funcOp.walk([&](mlir::Operation *op) {
-    if (op == funcOp)
-      return;
-    op->setLoc(stripDebugMetadata(op->getLoc()));
-  });
-}
-
 static llvm::BitVector
 collectCarriedRcArguments(mlir::func::FuncOp funcOp,
                           const FunctionSummaryMap &summaries) {
@@ -690,17 +657,9 @@ static mlir::func::FuncOp getOrCreateUniqueClone(
   if (auto existing = symbolTable.lookup<mlir::func::FuncOp>(uniqueName))
     return existing;
 
-  auto uniqueFunc = llvm::cast<mlir::func::FuncOp>(funcOp->clone());
-  uniqueFunc.setName(uniqueName);
-  uniqueFunc.setPrivate();
-  uniqueFunc->removeAttr("llvm.visibility");
-  uniqueFunc->setAttr("llvm.linkage",
-                      mlir::LLVM::LinkageAttr::get(
-                          funcOp.getContext(), mlir::LLVM::Linkage::Internal));
+  auto uniqueFunc = clonePrivateSpecialization(funcOp, uniqueName, symbolTable);
   uniqueFunc->setAttr(kUniqueCloneAttr,
                       mlir::UnitAttr::get(funcOp.getContext()));
-  stripCloneDebugInfo(uniqueFunc);
-  symbolTable.insert(uniqueFunc);
 
   insertAssumeUniqueAtEntry(uniqueFunc, carriedArgs);
   return uniqueFunc;
