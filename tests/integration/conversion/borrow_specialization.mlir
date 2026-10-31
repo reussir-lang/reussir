@@ -1,4 +1,5 @@
 // RUN: %reussir-opt %s --reussir-borrow-specialization | %FileCheck %s
+// RUN: %reussir-opt %s --reussir-borrow-specialization | %FileCheck %s --check-prefix=TWICE
 
 !list_ = !reussir.record<variant "List" incomplete>
 !nil = !reussir.record<compound "List::Nil" [value] { }>
@@ -70,6 +71,43 @@ module {
     return %r : i64
   }
 
+  // A caller-live call from the function to itself: the loaded tail is
+  // retained twice, once for the borrowed call and once for the external
+  // consumer. The clone must keep exactly the consumer's retain.
+  // TWICE-LABEL: func.func private @twice(
+  // TWICE: call @twice.borrowed_0(
+  func.func private @sink(!L) -> i64
+  func.func private @twice(%xs: !L) -> i64 {
+    %ref = reussir.rc.borrow(%xs : !L) : !reussir.ref<!list shared>
+    %r = reussir.record.dispatch(%ref : !reussir.ref<!list shared>) -> i64 {
+      [0] -> {
+      ^bb0(%nil: !reussir.ref<!nil shared>):
+        reussir.rc.dec(%xs : !L)
+        %z = arith.constant 0 : i64
+        reussir.scf.yield %z : i64
+      }
+      [1] -> {
+      ^bb0(%cell: !reussir.ref<!cons shared>):
+        %tr = reussir.ref.project(%cell : !reussir.ref<!cons shared>) [1] : !reussir.ref<!L shared>
+        %t = reussir.ref.load(%tr : !reussir.ref<!L shared>) : !L
+        reussir.rc.inc(%t : !L)
+        reussir.rc.dec(%xs : !L)
+        reussir.rc.inc(%t : !L)
+        %a = func.call @twice(%t) : (!L) -> i64
+        %b = func.call @sink(%t) : (!L) -> i64
+        %s = arith.addi %a, %b : i64
+        reussir.scf.yield %s : i64
+      }
+    }
+    return %r : i64
+  }
+  // TWICE-LABEL: func.func private @twice.borrowed_0(
+  // TWICE: reussir.ref.load
+  // TWICE-NEXT: reussir.rc.inc
+  // TWICE-NOT: reussir.rc.inc
+  // TWICE: call @twice.borrowed_0(
+  // TWICE-NEXT: call @sink(
+
   // A retain separated from its call by a release of something else might
   // be what keeps the list alive until the call: the call stays owned.
   // CHECK-LABEL: func.func private @unclear(
@@ -84,14 +122,88 @@ module {
     return %a : i1
   }
 
-  // The clone never releases its borrowed list. The loaded tail keeps its
-  // counts for now, so the recursive call passes it owned.
+  // Returns a loan: the loan keeps its retain (the caller gets a reference),
+  // only the parameter's release goes.
+  func.func private @tail(%xs: !L) -> !L {
+    %ref = reussir.rc.borrow(%xs : !L) : !reussir.ref<!list shared>
+    %r = reussir.record.dispatch(%ref : !reussir.ref<!list shared>) -> !L {
+      [0] -> {
+      ^bb0(%nil: !reussir.ref<!nil shared>):
+        reussir.rc.inc(%xs : !L)
+        reussir.rc.dec(%xs : !L)
+        %n = reussir.record.compound : !nil
+        %v = reussir.record.variant [0] (%n : !nil) : !list
+        %e = reussir.rc.create value(%v : !list) : !L
+        reussir.scf.yield %e : !L
+      }
+      [1] -> {
+      ^bb0(%cell: !reussir.ref<!cons shared>):
+        %tr = reussir.ref.project(%cell : !reussir.ref<!cons shared>) [1] : !reussir.ref<!L shared>
+        %t = reussir.ref.load(%tr : !reussir.ref<!L shared>) : !L
+        reussir.rc.inc(%t : !L)
+        reussir.rc.dec(%xs : !L)
+        reussir.scf.yield %t : !L
+      }
+    }
+    return %r : !L
+  }
+  func.func private @peek(%xs: !L) -> !L {
+    reussir.rc.inc(%xs : !L)
+    %t = func.call @tail(%xs) : (!L) -> !L
+    reussir.rc.dec(%xs : !L)
+    return %t : !L
+  }
+
+  // Mutual recursion: each clone calls the other's clone.
+  func.func private @even(%x: !L, %n: i64) -> i1 {
+    %c0 = arith.constant 0 : i64
+    %z = arith.cmpi eq, %n, %c0 : i64
+    %r = scf.if %z -> (i1) {
+      reussir.rc.dec(%x : !L)
+      %t = arith.constant true
+      scf.yield %t : i1
+    } else {
+      %c1 = arith.constant 1 : i64
+      %m = arith.subi %n, %c1 : i64
+      %o = func.call @odd(%x, %m) : (!L, i64) -> i1
+      scf.yield %o : i1
+    }
+    return %r : i1
+  }
+  func.func private @odd(%x: !L, %n: i64) -> i1 {
+    %e = func.call @even(%x, %n) : (!L, i64) -> i1
+    return %e : i1
+  }
+  // CHECK-LABEL: func.func @parity(
+  // CHECK-NOT: reussir.rc.inc
+  // CHECK: call @even.borrowed_0(
+  func.func @parity(%x: !L, %n: i64) -> i1 {
+    reussir.rc.inc(%x : !L)
+    %e = func.call @even(%x, %n) : (!L, i64) -> i1
+    reussir.rc.dec(%x : !L)
+    return %e : i1
+  }
+
+  // The clone never releases its borrowed list, and the loaded tail needs
+  // no reference either: the recursive call borrows it too.
   // CHECK-LABEL: func.func private @mem.borrowed_1(
   // CHECK-SAME: %{{.+}}: !reussir.rc<{{.+}}> {reussir.borrowed = #reussir.borrowed})
   // CHECK-SAME: attributes {llvm.linkage = #llvm.linkage<internal>}
-  // CHECK-NOT: reussir.rc.dec(%arg1
-  // CHECK: reussir.rc.inc(%[[TAIL:.+]] :
-  // CHECK-NOT: reussir.rc.dec(%arg1
-  // CHECK: call @mem(%arg0, %[[TAIL]])
+  // CHECK-NOT: reussir.rc.inc
+  // CHECK-NOT: reussir.rc.dec
+  // CHECK: call @mem.borrowed_1(
   // CHECK: return
+
+  // CHECK-LABEL: func.func private @tail.borrowed_0(
+  // CHECK-NOT: reussir.rc.dec
+  // CHECK: reussir.ref.load
+  // CHECK-NEXT: reussir.rc.inc
+  // CHECK-NOT: reussir.rc.dec
+  // CHECK: return
+
+  // CHECK-LABEL: func.func private @even.borrowed_0(
+  // CHECK-NOT: reussir.rc.dec
+  // CHECK: call @odd.borrowed_0(
+  // CHECK-LABEL: func.func private @odd.borrowed_0(
+  // CHECK: call @even.borrowed_0(
 }

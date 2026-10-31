@@ -377,11 +377,12 @@ def ReussirBorrowSpecializationPass
     to a private clone of the callee that takes it borrowed
     (`reussir.borrowed`). The caller's retain feeding the call goes away; the
     owned original stays for every other call, so last-use calls keep their
-    reuse. In a clone, the borrowed parameters are alive for the whole call:
-    they lose their retains and releases, and the calls that pass them on go
-    to borrowed clones as well. No release is added after a call. The pass
-    is meant to run on frontend IR, before inlining, uniqueness analysis and
-    token instantiation.
+    reuse. In a clone, the borrowed parameters and the counted values loaded
+    through them are alive for the whole call: those that the body only
+    releases or passes at borrowable positions lose their retains and
+    releases, and those calls go to borrowed clones as well. No release is
+    added after a call. The pass is meant to run on frontend IR, before
+    inlining, uniqueness analysis and token instantiation.
   }];
   let dependentDialects = ["::reussir::ReussirDialect",
                            "::mlir::func::FuncDialect",
