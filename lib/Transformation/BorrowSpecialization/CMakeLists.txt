@@ -7,5 +7,6 @@ add_mlir_library(MLIRReussirBorrowSpecialization
   LINK_LIBS PUBLIC
   MLIRReussir
   MLIRReussirAnalysis
+  MLIRReussirSpecialization
   MLIRFuncDialect
 )

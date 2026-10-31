@@ -365,4 +365,27 @@ def ReussirBorrowAnalysisPass
                            "::mlir::func::FuncDialect"];
 }
 
+//===----------------------------------------------------------------------===//
+// BorrowSpecialization
+//===----------------------------------------------------------------------===//
+def ReussirBorrowSpecializationPass
+    : Pass<"reussir-borrow-specialization", "::mlir::ModuleOp"> {
+  let summary = "pass counted arguments borrowed where the caller keeps them";
+  let description = [{
+    `reussir-borrow-specialization` switches every call that passes a
+    caller-live argument at a borrowable position (`reussir-borrow-analysis`)
+    to a private clone of the callee that takes it borrowed
+    (`reussir.borrowed`). The caller's retain feeding the call goes away; the
+    owned original stays for every other call, so last-use calls keep their
+    reuse. In a clone, the borrowed parameters are alive for the whole call:
+    they lose their retains and releases, and the calls that pass them on go
+    to borrowed clones as well. No release is added after a call. The pass
+    is meant to run on frontend IR, before inlining, uniqueness analysis and
+    token instantiation.
+  }];
+  let dependentDialects = ["::reussir::ReussirDialect",
+                           "::mlir::func::FuncDialect",
+                           "::mlir::LLVM::LLVMDialect"];
+}
+
 #endif // REUSSIR_TRANSFORMATION_PASSES_TD

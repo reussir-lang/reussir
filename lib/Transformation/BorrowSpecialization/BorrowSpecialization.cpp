@@ -11,16 +11,40 @@
 /// \file
 /// Borrowed-parameter passes. `reussir-borrow-analysis` reports what
 /// `BorrowAnalysis` finds without changing the module.
+/// `reussir-borrow-specialization` acts on it.
+///
+/// A call whose argument is caller-live at a borrowable position is switched
+/// to a private clone of the callee that takes the argument borrowed. The
+/// owned original stays for every other call. The caller's retain feeding the
+/// call goes away; the clone neither retains nor releases the parameter.
+///
+/// In a clone, the borrowed parameters are pinned: their caller keeps them
+/// alive for the whole call. The body only releases them or passes them at
+/// borrowable positions (`BorrowAnalysis`), so it needs no reference of its
+/// own: their retains and releases are erased, and the calls that pass them
+/// are switched too (a pinned argument always outlives the call). No release
+/// is ever added after a call, so tail calls stay tail calls.
+///
+/// Clones are made on demand, one per callee and set of borrowed positions,
+/// and their bodies get the same treatment; this covers recursion, mutual
+/// recursion and chains of borrowed calls.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "Reussir/Analysis/BorrowAnalysis.h"
 #include "Reussir/IR/ReussirDialect.h"
+#include "Reussir/IR/ReussirOps.h"
+#include "Reussir/IR/ReussirTypes.h"
 #include "Reussir/Transformation/Passes.h"
+#include "Reussir/Transformation/Specialization.h"
+
+#include <llvm/ADT/DenseSet.h>
+#include <llvm/ADT/StringMap.h>
 
 namespace reussir {
 
 #define GEN_PASS_DEF_REUSSIRBORROWANALYSISPASS
+#define GEN_PASS_DEF_REUSSIRBORROWSPECIALIZATIONPASS
 #include "Reussir/Transformation/Passes.h.inc"
 
 namespace {
@@ -42,6 +66,172 @@ struct BorrowAnalysisPass
         call->emitRemark() << "argument #" << index
                            << " is at its last use: stays owned";
     }
+  }
+};
+
+// The retain right before `call` that gives it its reference to `value`. In
+// between there may only be ops that cannot release anything: retains of
+// other values, or ops that take no counted value and have no regions.
+ReussirRcIncOp findFeedingRetain(mlir::Value value, mlir::func::CallOp call) {
+  for (mlir::Operation *op = call->getPrevNode(); op; op = op->getPrevNode()) {
+    if (auto retain = llvm::dyn_cast<ReussirRcIncOp>(op)) {
+      if (retain.getRcPtr() == value)
+        return retain.getDelta() ? ReussirRcIncOp() : retain;
+      continue;
+    }
+    if (op->getNumRegions() != 0 ||
+        llvm::any_of(op->getOperandTypes(),
+                     [](mlir::Type type) { return llvm::isa<RcType>(type); }))
+      return {};
+  }
+  return {};
+}
+
+class BorrowSpecializer {
+public:
+  explicit BorrowSpecializer(mlir::ModuleOp module)
+      : module(module), symbols(module), analysis(module) {}
+
+  mlir::LogicalResult run() {
+    llvm::SmallVector<mlir::func::FuncOp> functions(
+        module.getOps<mlir::func::FuncOp>());
+    for (auto function : functions)
+      if (!function.isExternal())
+        rewriteCalls(function, {});
+    while (!pending.empty()) {
+      auto [clone, positions] = pending.pop_back_val();
+      llvm::DenseSet<mlir::Value> pinned;
+      if (mlir::failed(unpin(clone, positions, pinned)))
+        return mlir::failure();
+      rewriteCalls(clone, pinned);
+    }
+    return mlir::success();
+  }
+
+private:
+  // A callee as the function it copies and the positions it borrows.
+  struct Origin {
+    mlir::func::FuncOp function;
+    llvm::BitVector positions;
+  };
+
+  Origin resolve(mlir::func::CallOp call) {
+    auto callee = symbols.lookup<mlir::func::FuncOp>(call.getCallee());
+    if (auto it = origins.find(callee); it != origins.end())
+      return it->second;
+    return {callee, llvm::BitVector(callee ? callee.getNumArguments() : 0u)};
+  }
+
+  mlir::func::FuncOp getClone(mlir::func::FuncOp function,
+                              const llvm::BitVector &positions) {
+    std::string name = (function.getName() + ".borrowed").str();
+    for (unsigned index : positions.set_bits())
+      name += "_" + std::to_string(index);
+    if (auto it = clones.find(name); it != clones.end())
+      return it->second;
+    auto clone = clonePrivateSpecialization(function, name, symbols);
+    for (unsigned index : positions.set_bits())
+      clone.setArgAttr(index, BorrowedAttr::name,
+                       BorrowedAttr::get(module.getContext()));
+    clones[name] = clone;
+    origins[clone] = {function, positions};
+    pending.push_back({clone, positions});
+    return clone;
+  }
+
+  // A use that leaves a pinned value unconsumed once the calls are switched.
+  bool isPinnedUse(mlir::OpOperand &use) {
+    mlir::Operation *user = use.getOwner();
+    if (llvm::isa<ReussirRcBorrowOp, ReussirRcIncOp>(user))
+      return true;
+    if (auto dec = llvm::dyn_cast<ReussirRcDecOp>(user))
+      return !dec.isDestructuring() && dec->use_empty();
+    if (auto call = llvm::dyn_cast<mlir::func::CallOp>(user)) {
+      Origin origin = resolve(call);
+      return origin.function &&
+             analysis.isBorrowable(origin.function, use.getOperandNumber());
+    }
+    return false;
+  }
+
+  // Erases the counts of the clone's pinned values and collects them.
+  mlir::LogicalResult unpin(mlir::func::FuncOp clone,
+                            const llvm::BitVector &positions,
+                            llvm::DenseSet<mlir::Value> &pinned) {
+    llvm::SmallVector<mlir::Value> candidates;
+    for (unsigned index : positions.set_bits())
+      candidates.push_back(clone.getArgument(index));
+    for (mlir::Value value : candidates)
+      if (llvm::all_of(value.getUses(),
+                       [&](mlir::OpOperand &use) { return isPinnedUse(use); }))
+        pinned.insert(value);
+    for (unsigned index : positions.set_bits())
+      if (!pinned.contains(clone.getArgument(index)))
+        return clone.emitError()
+               << "borrowed parameter #" << index << " escapes its clone";
+    for (mlir::Value value : pinned)
+      for (mlir::Operation *user : llvm::make_early_inc_range(value.getUsers()))
+        if (llvm::isa<ReussirRcIncOp, ReussirRcDecOp>(user))
+          user->erase();
+    return mlir::success();
+  }
+
+  // Switches the calls of `function` that can take arguments borrowed:
+  // pinned ones, and caller-live ones whose feeding retain is removed.
+  void rewriteCalls(mlir::func::FuncOp function,
+                    const llvm::DenseSet<mlir::Value> &pinned) {
+    llvm::SmallVector<mlir::func::CallOp> calls;
+    function.walk([&](mlir::func::CallOp call) { calls.push_back(call); });
+    for (auto call : calls) {
+      Origin origin = resolve(call);
+      if (!origin.function)
+        continue;
+      llvm::BitVector positions = origin.positions;
+      llvm::SmallVector<ReussirRcIncOp> retains;
+      for (unsigned index :
+           analysis.getBorrowable(origin.function).set_bits()) {
+        mlir::Value arg = call.getOperand(index);
+        if (positions.test(index))
+          continue;
+        if (pinned.contains(arg)) {
+          positions.set(index);
+          continue;
+        }
+        if (llvm::count(call.getOperands(), arg) != 1 ||
+            !isUsedAfter(arg, call))
+          continue;
+        if (auto retain = findFeedingRetain(arg, call)) {
+          positions.set(index);
+          retains.push_back(retain);
+        }
+      }
+      if (positions == origin.positions)
+        continue;
+      // Clone before dropping the retains: the callee may be this very
+      // function, and its clone must copy a body in which every call and
+      // its retains still agree.
+      mlir::func::FuncOp clone = getClone(origin.function, positions);
+      for (ReussirRcIncOp retain : retains)
+        retain.erase();
+      call.setCallee(clone.getName());
+    }
+  }
+
+  mlir::ModuleOp module;
+  mlir::SymbolTable symbols;
+  BorrowAnalysis analysis;
+  llvm::StringMap<mlir::func::FuncOp> clones;
+  llvm::DenseMap<mlir::func::FuncOp, Origin> origins;
+  llvm::SmallVector<std::pair<mlir::func::FuncOp, llvm::BitVector>> pending;
+};
+
+struct BorrowSpecializationPass
+    : public impl::ReussirBorrowSpecializationPassBase<
+          BorrowSpecializationPass> {
+  using Base::Base;
+  void runOnOperation() override {
+    if (mlir::failed(BorrowSpecializer(getOperation()).run()))
+      signalPassFailure();
   }
 };
 } // namespace
