@@ -221,7 +221,7 @@ MlirPass reussirCreateLoopInvariantCodeMotionPass(void) {
 }
 MlirPass reussirCreateCSEPass(void) { return wrapOwned(mlir::createCSEPass()); }
 MlirPass reussirCreateSymbolDCEPass(void) {
-  return wrapOwned(reussir::createReussirSymbolDCEPass());
+  return wrapOwned(mlir::createSymbolDCEPass());
 }
 MlirPass reussirCreateControlFlowSinkPass(void) {
   return wrapOwned(mlir::createControlFlowSinkPass());

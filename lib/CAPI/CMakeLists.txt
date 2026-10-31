@@ -51,7 +51,6 @@ set(REUSSIR_BACKEND_ARCHIVES
   # transformations
   MLIRReussirClosureBetaReduction
   MLIRReussirDefaultInliner
-  MLIRReussirSymbolDCE
   MLIRReussirSCCP
   MLIRReussirRcCreateSink
   MLIRReussirRcCreateFusion
