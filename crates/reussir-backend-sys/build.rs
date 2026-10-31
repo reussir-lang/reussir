@@ -51,6 +51,7 @@ const REUSSIR_ARCHIVES: &[&str] = &[
     "MLIRReussirInvariantGroupAnalysis",
     "MLIRReussirUniqueCarryingRecursionAnalysis",
     "MLIRReussirSpecialization",
+    "MLIRReussirBorrowSpecialization",
     "MLIRReussirPjrtDonation",
     "MLIRReussirTRMCRecursionAnalysis",
     // mlir-sync components referenced by Reussir's type converter,

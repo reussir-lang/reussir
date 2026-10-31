@@ -35,6 +35,10 @@ extern "C" {
 //===----------------------------------------------------------------------===//
 
 MlirPass reussirCreateUniqueCarryingRecursionAnalysisPass(void);
+// Switches calls whose caller keeps a counted argument to borrowed clones of
+// the callee (`reussir-borrow-specialization`). Schedule on frontend IR,
+// first in the optimization prologue.
+MlirPass reussirCreateBorrowSpecializationPass(void);
 MlirPass reussirCreateTokenInstantiationPass(bool acceptors, bool producers);
 MlirPass reussirCreateClosureOutliningPass(void);
 MlirPass reussirCreateRegionPatternsPass(void);
