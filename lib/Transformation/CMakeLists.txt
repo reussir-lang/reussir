@@ -1,6 +1,7 @@
 add_subdirectory(Specialization)
 add_subdirectory(ClosureBetaReduction)
 add_subdirectory(DefaultInliner)
+add_subdirectory(SymbolDCE)
 add_subdirectory(SCCP)
 add_subdirectory(RcCreateSink)
 add_subdirectory(RcCreateFusion)
@@ -19,6 +20,7 @@ add_subdirectory(BorrowSpecialization)
 set(REUSSIR_TRANSFORMATION_AGGREGATE_LIBS
   MLIRReussirClosureBetaReduction
   MLIRReussirDefaultInliner
+  MLIRReussirSymbolDCE
   MLIRReussirSCCP
   MLIRReussirRcCreateSink
   MLIRReussirRcCreateFusion

@@ -19,6 +19,14 @@
 
 include "mlir/Pass/PassBase.td"
 
+def ReussirSymbolDCEPass : Pass<"reussir-symbol-dce", "::mlir::ModuleOp"> {
+  let summary = "eliminate dead symbols while preserving SSA type references";
+  let description = [{
+    Expose symbol references in function-local SSA types to MLIR's symbol DCE.
+    This preserves opaque-object cleanup hooks until their calls are lowered.
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // SpecialPointerTag
 //===----------------------------------------------------------------------===//
