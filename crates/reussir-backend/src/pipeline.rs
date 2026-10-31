@@ -143,9 +143,9 @@ pub struct LoweringOptions {
     /// Allow the token-reuse pass to reuse tokens across function calls.
     pub reuse_token_across_call: bool,
     /// Pass counted arguments borrowed where the caller keeps them
-    /// (`reussir-borrow-specialization`, optimizing levels only). `rrc`
-    /// exposes this as `--borrow-params`.
-    pub borrow_params: bool,
+    /// (`reussir-borrow-specialization`, optimizing levels only). On by
+    /// default; `rrc` turns it off with `--disable-borrow-analysis`.
+    pub borrow_analysis: bool,
     /// Emit structured decisions from the token-reuse pass. A driver enabling
     /// this must install a remark streamer on the MLIR context.
     pub emit_token_reuse_remarks: bool,
@@ -189,7 +189,7 @@ impl Default for LoweringOptions {
             opt: OptLevel::Default,
             reuse_token_across_call: false,
             // Off by default while it is being evaluated.
-            borrow_params: false,
+            borrow_analysis: true,
             emit_token_reuse_remarks: false,
             // Boxed by default: only target-aware drivers (rrc) pick an
             // immediate encoding, so embedders (REPL/JIT, tests) keep the
@@ -307,7 +307,7 @@ pub fn run_lowering_pipeline(
         "reussir_lowering",
         opt = ?options.opt,
         reuse_token_across_call = options.reuse_token_across_call,
-        borrow_params = options.borrow_params,
+        borrow_analysis = options.borrow_analysis,
         emit_token_reuse_remarks = options.emit_token_reuse_remarks,
         enable_invariant_analysis = options.enable_invariant_analysis,
         nullary_variant_encoding = ?options.nullary_variant_encoding,
@@ -383,7 +383,7 @@ pub fn run_lowering_pipeline(
             // Borrowing reads frontend IR (plain retains and releases, no
             // tokens or destructuring decrements), so it comes first; the
             // inliner and UCRA then see the borrowed clones.
-            if options.borrow_params => {
+            if options.borrow_analysis => {
                 module: sys::reussirCreateBorrowSpecializationPass();
             }
             if options.opt == OptLevel::Aggressive => {

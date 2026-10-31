@@ -103,6 +103,18 @@
 
 ### Compiler and runtime
 
+- Counted arguments are passed borrowed where the caller keeps them
+  (reussir-lang/reussir#762), at every optimizing level. The new
+  `reussir-borrow-specialization` pass switches such a call to a private
+  clone of the callee that neither retains nor releases the argument, nor
+  the values loaded through it, so a read-only traversal of retained data
+  updates no counts. Calls at an argument's last use keep the owned callee,
+  so their in-place reuse is unchanged. `rrc --disable-borrow-analysis` (and
+  the matching `disable_borrow_analysis` profile knob in `rene`) turns it
+  off; `reussir-borrow-analysis-remark` reports the decisions. Borrowed
+  parameters carry the new `#reussir.borrowed` argument attribute, which
+  PJRT donation and UCRA treat as not owned.
+
 - Trait impls with method bodies are now accepted for builtin types
   (`impl Hash for u64 { … }`) when the trait is local to the package,
   taking the ordinary impl path with the scalar as the self type; dot

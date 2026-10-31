@@ -1,9 +1,9 @@
-// RUN: %rrc %s -o %t.o --relocation-mode pic -Oaggressive --reuse-across-call --borrow-params
+// RUN: %rrc %s -o %t.o --relocation-mode pic -Oaggressive --reuse-across-call
 // RUN: %cc %t.o %S/borrow_params.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
 // RUN: %t.exe
 
 // reussir-lang/reussir#762: membership queries against a list the caller
-// keeps. With --borrow-params the queries borrow the list (no count update
+// keeps. Optimized builds borrow the list in the queries (no count update
 // per visited cell) and the walk is a tail-recursive loop that survives a
 // list far longer than the stack could hold as frames.
 

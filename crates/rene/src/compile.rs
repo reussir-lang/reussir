@@ -463,6 +463,9 @@ pub(crate) fn profile_flags(
     if profile.reuse_across_call == Some(true) {
         args.push("--reuse-across-call".to_owned());
     }
+    if profile.disable_borrow_analysis == Some(true) {
+        args.push("--disable-borrow-analysis".to_owned());
+    }
     if profile.instrument_nonlinear_ffi == Some(true) {
         args.push("--instrument-nonlinear-ffi".to_owned());
     }
