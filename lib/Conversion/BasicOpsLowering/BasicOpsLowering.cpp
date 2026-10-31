@@ -3911,6 +3911,13 @@ struct ReussirTrampolineOpConversionPattern
         cabiSig.abiReturnType, cabiSig.abiParamTypes);
     auto trampoline = mlir::LLVM::LLVMFuncOp::create(
         rewriter, op.getLoc(), op.getSymName(), trampolineTy);
+    // With debug info, codegen fuses the trampoline's location with its
+    // `DBGSubprogramAttr`, just as for a source function's `func.func`: that
+    // describes the entry function itself, so its body takes the plain
+    // declaration position.
+    mlir::Location loc = op.getLoc();
+    if (auto fused = mlir::dyn_cast<mlir::FusedLocWith<DBGSubprogramAttr>>(loc))
+      loc = mlir::FusedLoc::get(op.getContext(), fused.getLocations());
     // The wrapper copies arguments/results through memory; instrument it
     // like the functions it fronts.
     inheritSanitizerPassthrough(op->getParentOfType<mlir::ModuleOp>(),
@@ -3925,11 +3932,11 @@ struct ReussirTrampolineOpConversionPattern
       for (const auto &[idx, paramType] : llvm::enumerate(llvmParamTys)) {
         llvm::SmallVector<mlir::LLVM::GEPArg, 2> gepArgs{
             0, static_cast<int32_t>(idx)};
-        auto fieldPtr = mlir::LLVM::GEPOp::create(
-            rewriter, op.getLoc(), ptrType, cabiSig.packedArgsType,
-            packedArgsPtr, gepArgs);
-        targetArgs.push_back(mlir::LLVM::LoadOp::create(rewriter, op.getLoc(),
-                                                        paramType, fieldPtr));
+        auto fieldPtr = mlir::LLVM::GEPOp::create(rewriter, loc, ptrType,
+                                                  cabiSig.packedArgsType,
+                                                  packedArgsPtr, gepArgs);
+        targetArgs.push_back(
+            mlir::LLVM::LoadOp::create(rewriter, loc, paramType, fieldPtr));
       }
     } else {
       auto trampolineArgs = trampoline.getArguments();
@@ -3941,26 +3948,25 @@ struct ReussirTrampolineOpConversionPattern
     mlir::Operation *callOp;
 
     if (auto llvmFuncOp = mlir::dyn_cast<mlir::LLVM::LLVMFuncOp>(funcOp)) {
-      callOp = mlir::LLVM::CallOp::create(rewriter, op.getLoc(), llvmFuncOp,
-                                          targetArgs);
+      callOp =
+          mlir::LLVM::CallOp::create(rewriter, loc, llvmFuncOp, targetArgs);
     } else if (auto mlirFuncOp = mlir::dyn_cast<mlir::func::FuncOp>(funcOp)) {
-      callOp = mlir::func::CallOp::create(rewriter, op.getLoc(), mlirFuncOp,
-                                          targetArgs);
+      callOp =
+          mlir::func::CallOp::create(rewriter, loc, mlirFuncOp, targetArgs);
     } else {
       return mlir::failure();
     }
 
     if (cabiSig.hasReturnPtr) {
       mlir::LLVM::StoreOp::create(
-          rewriter, op.getLoc(), callOp->getResult(0),
+          rewriter, loc, callOp->getResult(0),
           trampoline.getArgument(cabiSig.returnPtrIndex));
-      mlir::LLVM::ReturnOp::create(rewriter, op.getLoc(), mlir::ValueRange{});
+      mlir::LLVM::ReturnOp::create(rewriter, loc, mlir::ValueRange{});
     } else {
       if (llvm::isa<mlir::LLVM::LLVMVoidType>(cabiSig.abiReturnType))
-        mlir::LLVM::ReturnOp::create(rewriter, op.getLoc(), mlir::ValueRange{});
+        mlir::LLVM::ReturnOp::create(rewriter, loc, mlir::ValueRange{});
       else
-        mlir::LLVM::ReturnOp::create(rewriter, op.getLoc(),
-                                     callOp->getResults());
+        mlir::LLVM::ReturnOp::create(rewriter, loc, callOp->getResults());
     }
 
     if (symbolTables) {

@@ -402,6 +402,11 @@ pub fn parse_program<'tcx>(tcx: &TyCtxt<'tcx>, text: &str) -> Result<Parsed<'tcx
             return Err(id);
         }
     }
+    for t in &raw.trampolines {
+        if let Some(id) = file_ref_check(&files, t.file) {
+            return Err(id);
+        }
+    }
     let strings = raw::string_entries(&raw.strings)?;
     let mut b = Builder {
         tcx,
@@ -678,6 +683,8 @@ impl<'tcx> Builder<'_, 'tcx> {
             abi: t.abi.clone(),
             target: self.function_def(&t.target),
             ty_args: self.tys(&t.ty_args),
+            span: span_of(t.span),
+            file: file_of(t.file),
         }
     }
 
@@ -1450,6 +1457,15 @@ mod tests {
                     .map(|script| (&script.body, script.file, script.span))
                     .collect::<Vec<_>>()
             );
+            let tramp_locs = |ts: &[crate::semi::ctxt::TrampolineRoot<'_>]| {
+                ts.iter()
+                    .map(|t| (t.name.clone(), t.file, t.span))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                tramp_locs(&parsed.trampolines),
+                tramp_locs(&elab.trampolines)
+            );
             // Rebuild the render cache exactly as a driver would from the table.
             let mut cache2 = SourceCache::new();
             for name in &parsed.files {
@@ -1666,7 +1682,8 @@ mod tests {
     fn locations_survive_the_textual_round_trip() {
         roundtrip_with_locations(
             "pub struct Pair { a: i64, b: i64 }\n\
-             pub fn f(n: i64) -> i64 { let p = Pair { a: n, b: 1 }; p.a + p.b }",
+             pub fn f(n: i64) -> i64 { let p = Pair { a: n, b: 1 }; p.a + p.b }\n\
+             extern \"C\" trampoline \"f_ffi\" = f;",
         );
     }
 

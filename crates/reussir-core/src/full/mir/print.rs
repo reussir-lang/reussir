@@ -16,7 +16,7 @@ use std::fmt::Write;
 
 use pprint::{Doc, Printer as PpPrinter, hardline, indent, pprint};
 use reussir_syntax::kind::{Resolver, TokenKey};
-use reussir_syntax::source::SourceCache;
+use reussir_syntax::source::{FileId, SourceCache};
 
 use crate::full::mir;
 use crate::semi::ctxt::DefaultCap;
@@ -106,10 +106,11 @@ impl<'a> Printer<'a> {
         items.extend(program.trampolines.iter().map(|trampoline| {
             let direction = if trampoline.import { "import " } else { "" };
             text(format!(
-                "extern \"{}\" trampoline {direction}\"{}\" = @{};",
+                "extern \"{}\" trampoline {direction}\"{}\" = @{}{};",
                 trampoline.abi,
                 r.sym(trampoline.export),
                 r.sym(trampoline.target),
+                r.item_loc(trampoline.file, trampoline.span),
             ))
         }));
         items.extend(program.ffi_imports.iter().map(|import| {
@@ -299,15 +300,20 @@ impl Render<'_> {
     }
 
     fn transform(&self, script: &crate::semi::ctxt::TransformScript) -> Doc<'static> {
-        let loc = if self.sources.is_some() {
-            let span = script.span.map_or_else(String::new, |span| {
-                format!(" [{}..{}]", span.start, span.end)
-            });
-            format!(" in {}{span}", script.file.index())
-        } else {
-            String::new()
-        };
+        let loc = self.item_loc(script.file, script.span);
         text(format!("transform {:?}{loc};", script.body))
+    }
+
+    /// ` in <file> [start..end]` — a top-level item's location suffix
+    /// (locations mode only).
+    fn item_loc(&self, file: FileId, span: Option<crate::surface::Span>) -> String {
+        if self.sources.is_none() {
+            return String::new();
+        }
+        let span = span.map_or_else(String::new, |span| {
+            format!(" [{}..{}]", span.start, span.end)
+        });
+        format!(" in {}{span}", file.index())
     }
 
     // ----- types -----

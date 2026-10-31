@@ -317,6 +317,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             abi: "C".to_string(),
             target: def,
             ty_args: Vec::new(),
+            span,
+            file: self.current_file,
         });
 
         // The dec companion: an empty function *consuming* the box. The
@@ -371,6 +373,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 abi: "C".to_string(),
                 target: dec_def,
                 ty_args: Vec::new(),
+                span,
+                file: self.current_file,
             });
         }
         Ok((return_ty, new))

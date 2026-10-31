@@ -95,6 +95,24 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         Location::fused(self.context, &[base], subprogram)
     }
 
+    /// The location for a `reussir.trampoline`: its declaration's position,
+    /// fused for an export with a debug subprogram named by the exported
+    /// symbol when debug info is on. The backend expands the op into the C
+    /// entry function, which this gives a `DISubprogram` like any source
+    /// function's — without one, LLVM drops the locations of all code it
+    /// inlines into the entry, which at `-O default` is the whole program.
+    pub(super) fn trampoline_location(&self, t: &mir::Trampoline) -> Location<'c> {
+        // The span indexes the declaration's own file.
+        self.cur_file.set(t.file);
+        let base = self.location(t.span);
+        if !self.debug_enabled() || t.import {
+            return base;
+        }
+        let raw_name = StringAttribute::new(self.context, self.program.symbol(t.export));
+        let subprogram = dbg::subprogram(self.context, raw_name, &[]);
+        Location::fused(self.context, &[base], subprogram)
+    }
+
     /// The `reussir.dbg_func_args` attribute describing a function's parameters
     /// (name, debug type, 1-based index), or `None` when debug info is off or no
     /// parameter has a representable debug type.

@@ -276,8 +276,9 @@ pub(super) struct Lowerer<'c, 'p, 'tcx> {
     /// node), so every op a node emits shares that node's source position.
     cur_loc: RefCell<Location<'c>>,
     /// The file the current function's spans index (functions from different
-    /// files share one module); set by [`function`](Self::function).
-    cur_file: std::cell::Cell<FileId>,
+    /// files share one module); set by [`function`](Self::function) and, for
+    /// a trampoline, by [`trampoline_location`](Self::trampoline_location).
+    pub(super) cur_file: std::cell::Cell<FileId>,
     /// The codegen unit being emitted; functions outside it lower to
     /// declarations (see [`super::CodegenUnit`]).
     unit: super::CodegenUnit,

@@ -1,0 +1,39 @@
+// REQUIRES: gdb
+// UNSUPPORTED: windows
+// RUN: %rrc %s -O default -g --relocation-mode pic -o %t.o
+// RUN: %cc %t.o %S/gdb_inlined.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %gdb -x %S/gdb_inlined.gdb %t.exe | %FileCheck %s
+
+// Debugging an optimized build: at `-O default` the whole program is inlined
+// into the `extern "C" trampoline` entry, which keeps the inlined code's
+// locations only because the entry has a debug subprogram of its own. gdb
+// can then stop on a line of an inlined function, unwind the inlined frames
+// back to the entry, and read a variable.
+
+enum List { Nil, Cons(i64, List) }
+
+fn build(n: i64, acc: List) -> List {
+    if n == 0 { acc } else { build(n - 1, List::Cons{n, acc}) }
+}
+
+fn sum(xs: List, acc: i64) -> i64 {
+    match xs {
+        List::Nil => acc,
+        List::Cons(x, t) => {
+            // CHECK: Breakpoint 1, _RC3sum ({{.*}}) at {{.*}}gdb_inlined.rr:[[#STEP:@LINE+1]]
+            let next = acc + x * 2;
+            sum(t, next)
+        }
+    }
+}
+
+// CHECK: #0 _RC3sum ({{.*}}) at {{.*}}gdb_inlined.rr:[[#STEP]]
+// CHECK-NEXT: #1 _RC3run ({{.*}}) at {{.*}}gdb_inlined.rr:[[#@LINE+1]]
+fn run(n: i64) -> i64 { sum(build(n, List::Nil), 0) }
+
+// CHECK-NEXT: #2 gdb_inlined_ffi () at {{.*}}gdb_inlined.rr:[[#@LINE+1]]
+extern "C" trampoline "gdb_inlined_ffi" = run;
+
+// The accumulator over the list 1, 2, 3, 4, on the first two stops.
+// CHECK: $1 = 0
+// CHECK: $2 = 2

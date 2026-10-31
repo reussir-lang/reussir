@@ -1,0 +1,33 @@
+// RUN: %rrc %s -O default -g --relocation-mode pic --emit llvm-ir -o %t.ll
+// RUN: %FileCheck %s < %t.ll
+
+// An `extern "C" trampoline` entry carries a `DISubprogram` of its own. At
+// `-O default` LLVM inlines the whole program into the entry, and it drops
+// the debug locations of code inlined into a function without one: before
+// the entry had a subprogram, an optimized `-g` build had no DWARF at all.
+
+enum List { Nil, Cons(i64, List) }
+
+fn build(n: i64, acc: List) -> List {
+    if n == 0 { acc } else { build(n - 1, List::Cons{n, acc}) }
+}
+
+fn length(xs: List) -> i64 {
+    match xs { List::Nil => 0, List::Cons(_, t) => 1 + length(t) }
+}
+
+fn run(n: i64) -> i64 { length(build(n, List::Nil)) }
+
+// The entry's subprogram sits at the trampoline declaration.
+// CHECK: define i64 @run_ffi(i64 %0) {{.*}}!dbg ![[ENTRY:[0-9]+]] {
+// CHECK: ![[ENTRY]] = distinct !DISubprogram(name: "run_ffi", linkageName: "run_ffi", {{.*}}line: [[#DECL:@LINE+1]],
+extern "C" trampoline "run_ffi" = run;
+
+// The inlined source functions keep their subprograms and locations,
+// chained to the call the entry makes from the declaration line.
+// CHECK-DAG: ![[TARGET:[0-9]+]] = distinct !DISubprogram(name: "_RC3run",
+// CHECK-DAG: ![[LENGTH:[0-9]+]] = distinct !DISubprogram(name: "_RC6length",
+// CHECK-DAG: distinct !DISubprogram(name: "_RC5build",
+// CHECK-DAG: ![[CALL:[0-9]+]] = distinct !DILocation(line: [[#DECL]], column: 1, scope: ![[ENTRY]])
+// CHECK-DAG: !DILocation(line: {{[0-9]+}}, column: {{[0-9]+}}, scope: ![[TARGET]], inlinedAt: ![[CALL]])
+// CHECK-DAG: !DILocation(line: {{[0-9]+}}, column: {{[0-9]+}}, scope: ![[LENGTH]], inlinedAt: !{{[0-9]+}})

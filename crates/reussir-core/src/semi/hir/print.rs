@@ -541,6 +541,7 @@ impl<'a> Printer<'a> {
             t.name,
             self.path(t.target)
         )) + self.ty_args(&t.ty_args)
+            + self.item_loc(t.file, t.span)
             + text(";")
     }
 
