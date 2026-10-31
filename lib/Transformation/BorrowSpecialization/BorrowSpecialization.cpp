@@ -19,11 +19,14 @@
 /// the call it copies.
 ///
 /// In a clone, the borrowed parameters are pinned: their caller keeps them
-/// alive for the whole call. The body only releases them or passes them at
-/// borrowable positions (`BorrowAnalysis`), so it needs no reference of its
-/// own: their retains and releases are erased, and the calls that pass them
-/// are switched too (a pinned argument always outlives the call). No release
-/// is ever added after a call, so tail calls stay tail calls.
+/// alive for the whole call. So is every counted value loaded through them,
+/// because fields of a shared box never change. A pinned value that the body
+/// only releases or passes at borrowable positions needs no reference: its
+/// retains and releases are erased, and those calls are switched too (a
+/// pinned argument always outlives the call). A loan that is stored, returned
+/// or passed owned keeps the owned body's retain and its calls stay owned.
+/// The parameters themselves never escape (`BorrowAnalysis`). No release is
+/// ever added after a call, so tail calls stay tail calls.
 ///
 /// Clones are made on demand, one per callee and set of borrowed positions,
 /// and their bodies get the same treatment; this covers recursion, mutual
@@ -47,6 +50,27 @@ namespace reussir {
 #include "Reussir/Transformation/Passes.h.inc"
 
 namespace {
+// Counted values loaded through `root`: a read-only `rc.borrow`, then
+// projections and dispatch arms, then a load.
+void collectLoans(mlir::Value root, llvm::SmallVectorImpl<mlir::Value> &out) {
+  llvm::SmallVector<mlir::Value> refs;
+  for (mlir::Operation *user : root.getUsers())
+    if (auto borrow = llvm::dyn_cast<ReussirRcBorrowOp>(user);
+        borrow && isReadOnlyBorrow(borrow))
+      refs.push_back(borrow.getResult());
+  for (size_t i = 0; i < refs.size(); ++i)
+    for (mlir::Operation *user : refs[i].getUsers()) {
+      if (auto project = llvm::dyn_cast<ReussirRefProjectOp>(user))
+        refs.push_back(project.getResult());
+      else if (llvm::isa<ReussirRecordDispatchOp>(user))
+        for (mlir::Region &arm : user->getRegions())
+          llvm::append_range(refs, arm.getArguments());
+      else if (auto load = llvm::dyn_cast<ReussirRefLoadOp>(user);
+               load && llvm::isa<RcType>(load.getType()))
+        out.push_back(load.getResult());
+    }
+}
+
 class BorrowSpecializer {
 public:
   explicit BorrowSpecializer(mlir::ModuleOp module)
@@ -114,13 +138,17 @@ private:
     });
   }
 
-  // Erases the counts of the clone's pinned values and collects them.
+  // Erases the counts of the clone's pinned values that need none and
+  // collects those values: the borrowed parameters, and the loans through
+  // them that never escape.
   mlir::LogicalResult unpin(mlir::func::FuncOp clone,
                             const llvm::BitVector &positions,
                             llvm::DenseSet<mlir::Value> &pinned) {
     llvm::SmallVector<mlir::Value> candidates;
     for (unsigned index : positions.set_bits())
       candidates.push_back(clone.getArgument(index));
+    for (size_t i = 0; i < candidates.size(); ++i)
+      collectLoans(candidates[i], candidates);
     for (mlir::Value value : candidates)
       if (llvm::all_of(value.getUses(),
                        [&](mlir::OpOperand &use) { return isPinnedUse(use); }))
