@@ -2,6 +2,7 @@
 //! checking that each input/output pair produces the expected artifact and that
 //! the re-entry points (`.mir`/`.mlir`/`.ll` inputs) rejoin the pipeline.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -1283,5 +1284,100 @@ pub fn walk(n: i64, k: i64) -> i64 { search(k, build(n, List::Nil), 0) }
             cloned,
             "-O {opt}, borrow: {borrow}"
         );
+    }
+}
+
+/// The token-reuse decisions of a program: how many times each function makes
+/// each decision (`kind/strategy`) at each site (the sink and source locations,
+/// resolved through call sites, so inlined copies stay apart).
+fn reuse_decisions(report: &Path) -> BTreeMap<(String, String, String), u64> {
+    let text = read(report);
+    let report: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("bad reuse JSON ({e}):\n{text}"));
+    let locations = report["locations"].as_array().expect("locations");
+    fn resolve(locations: &[serde_json::Value], id: &serde_json::Value) -> String {
+        let Some(location) = id.as_u64().and_then(|i| locations.get(i as usize)) else {
+            return "-".to_owned();
+        };
+        match location["kind"].as_str() {
+            Some("file") => format!(
+                "{}:{}:{}",
+                location["file"], location["start"]["line"], location["start"]["column"]
+            ),
+            Some("callsite") => format!(
+                "{}@{}",
+                resolve(locations, &location["callee"]),
+                resolve(locations, &location["caller"])
+            ),
+            kind => kind.unwrap_or("?").to_owned(),
+        }
+    }
+    let mut decisions = BTreeMap::new();
+    for decision in report["decisions"].as_array().expect("decisions") {
+        let outcome = format!(
+            "{}/{}",
+            decision["kind"].as_str().unwrap_or("?"),
+            decision["strategy"].as_str().unwrap_or("-")
+        );
+        let site = format!(
+            "{} <- {}",
+            resolve(locations, &decision["sink"]),
+            resolve(locations, &decision["source"])
+        );
+        let occurrences = decision["occurrences"].as_u64().unwrap_or(1);
+        for instance in decision["instances"].as_array().expect("instances") {
+            let function = instance.as_str().expect("instance name").to_owned();
+            *decisions
+                .entry((function, site.clone(), outcome.clone()))
+                .or_default() += occurrences;
+        }
+    }
+    decisions
+}
+
+/// `--borrow-params` must not cost reuse: every decision the build makes
+/// without the flag (function, site and outcome) it still makes with it. The
+/// flag only adds decisions, in the borrowed clones and wherever the inliner
+/// copies them, and the call a clone serves never freed anything anyway.
+#[test]
+fn borrow_params_keeps_reuse_decisions() {
+    let dir = scratch("borrow-reuse");
+    let frontend = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/integration/frontend");
+    for program in ["borrow_params.rr", "borrow_params_reuse.rr"] {
+        let src = frontend.join(program);
+        let mut runs = Vec::new();
+        for borrow in [false, true] {
+            let out = dir.path().join(format!("{program}-{borrow}.mlir"));
+            let report = dir.path().join(format!("{program}-{borrow}.json"));
+            let mut args: Vec<&Path> = vec![
+                &src,
+                Path::new("-o"),
+                &out,
+                Path::new("--emit"),
+                Path::new("mlir-llvm"),
+                Path::new("-O"),
+                Path::new("aggressive"),
+                Path::new("--reuse-across-call"),
+                Path::new("--token-reuse-remarks"),
+                &report,
+            ];
+            if borrow {
+                args.push(Path::new("--borrow-params"));
+            }
+            let output = rrc(&args);
+            assert!(
+                output.status.success(),
+                "rrc {program} (borrow: {borrow}) failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            runs.push(reuse_decisions(&report));
+        }
+        let (owned, borrowed) = (&runs[0], &runs[1]);
+        for (decision, count) in owned {
+            assert!(
+                borrowed.get(decision).copied().unwrap_or(0) >= *count,
+                "{program}: lost {decision:?} (x{count})"
+            );
+        }
     }
 }

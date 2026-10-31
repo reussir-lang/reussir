@@ -1,0 +1,76 @@
+// RUN: %rrc %s -o %t.o --relocation-mode pic -Oaggressive --reuse-across-call --borrow-params --token-reuse-remarks %t.json
+// RUN: %FileCheck %s < %t.json
+// RUN: %FileCheck %s --check-prefix=CLONE < %t.json
+// RUN: %cc %t.o %S/borrow_params_reuse.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// Borrowing must not cost reuse. inc_all rebuilds a list. Threaded linearly
+// (unique_loop) the list is consumed at its last use and every cell is
+// reused in place; that call stays owned, so it keeps the reuse.
+// CHECK: "kind": "reuse",
+// CHECK-NEXT: "sink": {{[0-9]+}},
+// CHECK-NEXT: "source": {{[0-9]+}},
+// CHECK-NEXT: "strategy": "ensure",
+// CHECK: "instances": [
+// CHECK-NEXT: "_RC7inc_all"
+// CHECK-NEXT: ],
+// Kept by its caller (shared_loop) the list is never unique, so the rebuild
+// copies either way. That call borrows, and its clone allocates.
+// CLONE: "kind": "allocate",
+// CLONE: "instances": [
+// CLONE-NEXT: "_RC7inc_all.borrowed_0"
+
+pub enum List { Nil, Cons(i64, List) }
+
+fn inc_all(xs: List) -> List {
+    match xs {
+        List::Nil => List::Nil,
+        List::Cons(x, t) => List::Cons{x + 1, inc_all(t)}
+    }
+}
+
+fn head(xs: List) -> i64 {
+    match xs {
+        List::Nil => 0,
+        List::Cons(x, _) => x
+    }
+}
+
+fn build(n: i64, acc: List) -> List {
+    if n == 0 { acc } else { build(n - 1, List::Cons{n, acc}) }
+}
+
+fn unique_loop(k: i64, xs: List) -> i64 {
+    if k == 0 { head(xs) } else { unique_loop(k - 1, inc_all(xs)) }
+}
+
+fn shared_loop(k: i64, xs: List, acc: i64) -> i64 {
+    if k == 0 { acc } else { shared_loop(k - 1, xs, acc + head(inc_all(xs))) }
+}
+
+pub fn run_unique(n: i64, k: i64) -> i64 { unique_loop(k, build(n, List::Nil)) }
+pub fn run_shared(n: i64, k: i64) -> i64 { shared_loop(k, build(n, List::Nil), 0) }
+
+// A read-only fold over a DAG of shared subterms, kept across rounds.
+pub enum Expr { Leaf(i64), Node(Expr, Expr) }
+
+fn mk(d: i64) -> Expr {
+    if d == 0 { Expr::Leaf{1} } else { let s = mk(d - 1); Expr::Node{s, s} }
+}
+
+fn count(e: Expr) -> i64 {
+    match e {
+        Expr::Leaf(v) => v,
+        Expr::Node(l, r) => count(l) + count(r)
+    }
+}
+
+fn repeat(k: i64, e: Expr, acc: i64) -> i64 {
+    if k == 0 { acc } else { repeat(k - 1, e, acc + count(e)) }
+}
+
+pub fn dag_run(d: i64, k: i64) -> i64 { repeat(k, mk(d), 0) }
+
+extern "C" trampoline "run_unique" = run_unique;
+extern "C" trampoline "run_shared" = run_shared;
+extern "C" trampoline "dag_run" = dag_run;

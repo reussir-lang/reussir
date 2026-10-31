@@ -1,0 +1,10 @@
+// REQUIRES: linux
+// RUN: %rrc %S/borrow_params_reuse.rr -o %t.o --relocation-mode pic -Oaggressive --reuse-across-call --borrow-params
+// RUN: %cc %t.o %S/borrow_params_allocations.c -o %t.exe -Wl,--wrap=__reussir_allocate_small -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// The dynamic side of borrow_params_reuse.rr: the driver counts allocations
+// (the allocator entry point is wrapped at link time). With --borrow-params
+// the rebuild at the list's last use must still reuse every cell, so the
+// unique loop allocates only the list it builds. The rebuild of a list its
+// caller keeps copies it each round, borrowed or not.
