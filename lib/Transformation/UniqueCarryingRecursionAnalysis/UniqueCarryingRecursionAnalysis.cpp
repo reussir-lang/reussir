@@ -263,8 +263,11 @@ public:
     UniqueCarryingValue result = UniqueCarryingValue::getUnknown();
     if (auto blockArg = llvm::dyn_cast<mlir::BlockArgument>(value)) {
       auto *owner = blockArg.getOwner();
+      // A borrowed argument carries nothing: its caller still holds it, so
+      // it is never unique here whatever the caller passed.
       if (owner && owner->isEntryBlock()) {
-        if (llvm::isa<mlir::func::FuncOp>(owner->getParentOp()))
+        if (llvm::isa<mlir::func::FuncOp>(owner->getParentOp()) &&
+            !isBorrowedArgument(blockArg))
           result = UniqueCarryingValue::getArgument(blockArg.getArgNumber());
       }
     } else if (mlir::Operation *def = value.getDefiningOp()) {

@@ -51,6 +51,26 @@ def Reussir_Target : ReussirAttr<"Target", "target"> {
 }
 
 //===----------------------------------------------------------------------===//
+// Borrowed parameters
+//===----------------------------------------------------------------------===//
+def Reussir_Borrowed : ReussirAttr<"Borrowed", "borrowed"> {
+  let summary = "a parameter its function receives borrowed";
+  let description = [{
+    On a `func.func` argument, under its own name
+    (`reussir.borrowed = #reussir.borrowed`), it marks a shared `!reussir.rc`
+    parameter that the function receives without a reference of its own: the
+    function never releases it, and the caller keeps the object alive for the
+    whole call. Every other counted parameter is owned.
+
+    It belongs on compiler-made private functions only, so external callers
+    keep passing parameters owned: the dialect accepts it only on a shared
+    `!reussir.rc` argument of a non-public function with a body. Whether the
+    body really treats the parameter as borrowed is a property of the code
+    that made it, not something the IR can check. Lowering to LLVM drops it.
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Atomicity Attributes
 //===----------------------------------------------------------------------===//
 def AK_Normal : I32EnumAttrCase<"normal", 0>;

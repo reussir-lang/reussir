@@ -1,5 +1,6 @@
 // Part of the Reussir Project, dual licensed under Apache-2.0 OR MIT.
 #include "Reussir/Analysis/PjrtDonationAnalysis.h"
+#include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/DenseSet.h>
@@ -115,9 +116,11 @@ public:
 private:
   void setToEntryState(OwnershipLattice *lattice) override {
     Value value = lattice->getAnchor();
+    // Parameters are owned unless borrowed (`isBorrowedArgument`).
     auto arg = dyn_cast<BlockArgument>(value);
     bool owned = targetArray(value.getType()) &&
-                 ((arg && isa<func::FuncOp>(arg.getOwner()->getParentOp())) ||
+                 ((arg && isa<func::FuncOp>(arg.getOwner()->getParentOp()) &&
+                   !isBorrowedArgument(arg)) ||
                   isa_and_nonnull<CallOpInterface>(value.getDefiningOp()));
     propagateIfChanged(lattice,
                        lattice->join(Ownership{owned ? Ownership::Owned
@@ -225,7 +228,8 @@ struct PjrtDonationAnalysis::Impl {
       return {Ownership::Unique};
     if (auto arg = dyn_cast<BlockArgument>(value);
         arg && arg.getOwner()->isEntryBlock() &&
-        isa<func::FuncOp>(arg.getOwner()->getParentOp()))
+        isa<func::FuncOp>(arg.getOwner()->getParentOp()) &&
+        !isBorrowedArgument(arg))
       return {Ownership::Owned};
     auto *solver = getSolver(value);
     const auto *lattice =
