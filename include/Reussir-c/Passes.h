@@ -124,6 +124,7 @@ MlirPass reussirCreateCanonicalizerPass(void);
 MlirPass reussirCreateSCCPPass(void);
 MlirPass reussirCreateLoopInvariantCodeMotionPass(void);
 MlirPass reussirCreateCSEPass(void);
+MlirPass reussirCreateSymbolDCEPass(void);
 MlirPass reussirCreateControlFlowSinkPass(void);
 MlirPass reussirCreateSCFToControlFlowPass(void);
 // Expands arbitrary-precision integer operations into SCF and rcgmp bridge

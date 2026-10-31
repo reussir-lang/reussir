@@ -1,0 +1,20 @@
+// RUN: %rrc %s -O none -t mlir-llvm -o - | %FileCheck %s --check-prefix=NONE
+// RUN: %rrc %s -O default -t mlir-llvm -o - | %FileCheck %s --check-prefix=OPT
+
+// After inlining, optimizing builds drop the private functions nothing
+// public reaches. `countdown` only calls itself, so the inliner, which
+// counts that call as a use, keeps it; symbol DCE does not. `kept` is
+// `pub`, a public symbol, and stays even though nothing calls it.
+
+// NONE: llvm.func internal @_RC9countdown
+// OPT-NOT: @_RC9countdown
+// OPT-DAG: llvm.func @_RC4kept
+// OPT-DAG: llvm.func internal @_RC3run
+
+fn countdown(n: i64) -> i64 { if n == 0 { 0 } else { countdown(n - 1) } }
+
+pub fn kept(x: i64) -> i64 { x * 3 }
+
+fn run(x: i64) -> i64 { x + 1 }
+
+extern "C" trampoline "run_ffi" = run;

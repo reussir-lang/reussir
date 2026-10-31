@@ -210,6 +210,7 @@ unsafe extern "C" {
     pub fn reussirCreateSCCPPass() -> MlirPass;
     pub fn reussirCreateLoopInvariantCodeMotionPass() -> MlirPass;
     pub fn reussirCreateCSEPass() -> MlirPass;
+    pub fn reussirCreateSymbolDCEPass() -> MlirPass;
     pub fn reussirCreateControlFlowSinkPass() -> MlirPass;
     pub fn reussirCreateSCFToControlFlowPass() -> MlirPass;
     pub fn reussirCreateConvertRCGMPToSCFPass() -> MlirPass;
