@@ -13,20 +13,11 @@
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/Diagnostics.h>
 #include <mlir/Parser/Parser.h>
+import reussir.test;
 
 namespace reussir {
 namespace {
-class BorrowedArgumentTest : public testing::Test {
-protected:
-  mlir::MLIRContext context;
-  BorrowedArgumentTest() {
-    context.loadDialect<ReussirDialect, mlir::func::FuncDialect,
-                        mlir::arith::ArithDialect, mlir::scf::SCFDialect>();
-  }
-  mlir::OwningOpRef<mlir::ModuleOp> parse(llvm::StringRef source) {
-    return mlir::parseSourceString<mlir::ModuleOp>(source, &context);
-  }
-};
+class BorrowedArgumentTest : public ReussirTest {};
 
 // Only an entry-block argument of the function that carries the attribute
 // is borrowed; the next parameter and a region argument inside the body are
@@ -61,15 +52,17 @@ TEST_F(BorrowedArgumentTest, OnlyAttributedParameters) {
 // owned.
 TEST_F(BorrowedArgumentTest, PublicFunctionIsRejected) {
   std::string message;
-  mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &d) {
-    message = d.str();
-    return mlir::success();
-  });
-  auto module = parse(R"(
+  mlir::ScopedDiagnosticHandler handler(context.get(),
+                                        [&](mlir::Diagnostic &d) {
+                                          message = d.str();
+                                          return mlir::success();
+                                        });
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(R"(
     func.func @f(%x: !reussir.rc<i64> {reussir.borrowed = #reussir.borrowed}) {
       return
     }
-  )");
+  )",
+                                                        context.get());
   EXPECT_FALSE(module);
   EXPECT_NE(message.find("requires a non-public function"), std::string::npos);
 }

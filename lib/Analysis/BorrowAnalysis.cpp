@@ -20,7 +20,6 @@
 
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/Interfaces/FunctionInterfaces.h>
-#include <mlir/Interfaces/SideEffectInterfaces.h>
 
 namespace reussir {
 namespace {
@@ -84,26 +83,18 @@ bool isNonConsuming(mlir::OpOperand &use, mlir::SymbolTable &symbols,
   return false;
 }
 
-// Whether `op` cannot release anything: it at most reads memory.
-bool onlyReads(mlir::Operation *op) {
-  auto effects = mlir::getEffectsRecursively(op);
-  return effects &&
-         llvm::all_of(*effects, [](mlir::MemoryEffects::EffectInstance &e) {
-           return llvm::isa<mlir::MemoryEffects::Read>(e.getEffect());
-         });
-}
-
-// Whether the reference is only read: each user at most reads memory, and
-// what it derives (a projection, a view) is only read too. A dispatch binds
-// references to the payload in its arms; a terminator would pass the
-// reference on.
+// Whether the reference is only read: each user leaves every count and
+// stored value alone (`leavesCountsAlone`), and what it derives (a
+// projection, a view) is only read too. A dispatch binds references to the
+// payload in its arms; a terminator would pass the reference on.
 bool isReadOnlyRef(mlir::Value ref) {
   return llvm::all_of(ref.getUsers(), [](mlir::Operation *user) {
     if (auto dispatch = llvm::dyn_cast<ReussirRecordDispatchOp>(user))
       return llvm::all_of(dispatch->getRegions(), [](mlir::Region &arm) {
         return llvm::all_of(arm.getArguments(), isReadOnlyRef);
       });
-    if (user->hasTrait<mlir::OpTrait::IsTerminator>() || !onlyReads(user))
+    if (user->hasTrait<mlir::OpTrait::IsTerminator>() ||
+        !leavesCountsAlone(user))
       return false;
     return llvm::all_of(user->getResults(), [](mlir::Value result) {
       return !llvm::isa<RefType, mlir::MemRefType>(result.getType()) ||
