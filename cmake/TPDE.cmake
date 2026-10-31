@@ -23,7 +23,13 @@ FetchContent_Declare(
 )
 
 # Make TPDE available
-FetchContent_MakeAvailable(tpde)
+block(SCOPE_FOR VARIABLES)
+    if(REUSSIR_ENABLE_PEDANTIC)
+        string(APPEND CMAKE_CXX_FLAGS " -Wno-error")
+    endif()
+    FetchContent_MakeAvailable(tpde)
+endblock()
+FetchContent_GetProperties(tpde)
 
 # Add TPDE include directories to the project
 if(TARGET tpde)
