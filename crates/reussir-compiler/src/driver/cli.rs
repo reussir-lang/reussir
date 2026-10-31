@@ -184,6 +184,13 @@ pub(crate) struct Cli {
     #[arg(long = "reuse-across-call")]
     pub(crate) reuse_across_call: bool,
 
+    /// Pass counted arguments borrowed where the caller keeps them: such a
+    /// call goes to a clone of the callee that neither retains nor releases
+    /// the argument, while last-use calls keep the owned callee and its
+    /// in-place reuse. Only at optimizing levels; off by default.
+    #[arg(long = "borrow-params")]
+    pub(crate) borrow_params: bool,
+
     /// Instrument non-linear ffi/array usage: before every FFI-import call
     /// that consumes an rc'd ffi/array value, check its reference count and
     /// report the call's source location on stderr when it is not 1 — the

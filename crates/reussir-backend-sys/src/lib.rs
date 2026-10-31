@@ -144,6 +144,7 @@ unsafe extern "C" {
 
     pub fn reussirCreatePjrtDonationPass(infer_donation: bool) -> MlirPass;
     pub fn reussirCreateUniqueCarryingRecursionAnalysisPass() -> MlirPass;
+    pub fn reussirCreateBorrowSpecializationPass() -> MlirPass;
     pub fn reussirCreateTokenInstantiationPass(acceptors: bool, producers: bool) -> MlirPass;
     pub fn reussirCreateClosureOutliningPass() -> MlirPass;
     pub fn reussirCreateRegionPatternsPass() -> MlirPass;

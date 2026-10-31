@@ -87,6 +87,9 @@ MlirPass reussirCreatePjrtDonationPass(bool inferDonation) {
 MlirPass reussirCreateUniqueCarryingRecursionAnalysisPass(void) {
   return wrapOwned(reussir::createReussirUniqueCarryingRecursionAnalysisPass());
 }
+MlirPass reussirCreateBorrowSpecializationPass(void) {
+  return wrapOwned(reussir::createReussirBorrowSpecializationPass());
+}
 MlirPass reussirCreateTokenInstantiationPass(bool acceptors, bool producers) {
   reussir::ReussirTokenInstantiationPassOptions options;
   options.acceptors = acceptors;

@@ -1,0 +1,39 @@
+// RUN: %rrc %s -o %t.o --relocation-mode pic -Oaggressive --reuse-across-call --borrow-params
+// RUN: %cc %t.o %S/borrow_params.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// reussir-lang/reussir#762: membership queries against a list the caller
+// keeps. With --borrow-params the queries borrow the list (no count update
+// per visited cell) and the walk is a tail-recursive loop that survives a
+// list far longer than the stack could hold as frames.
+
+enum List {
+    Nil,
+    Cons(i64, List)
+}
+
+fn mem(x: i64, xs: List) -> bool {
+    match xs {
+        List::Nil => false,
+        List::Cons(y, ys) => if x == y { true } else { mem(x, ys) }
+    }
+}
+
+fn build(n: i64, acc: List) -> List {
+    if n == 0 { acc } else { build(n - 1, List::Cons{n, acc}) }
+}
+
+fn search(q: i64, n: i64, xs: List, hits: i64) -> i64 {
+    if q == 0 {
+        hits
+    } else {
+        let x = (q * 499999) % (2 * n) + 1;
+        if mem(x, xs) { search(q - 1, n, xs, hits + 1) } else { search(q - 1, n, xs, hits) }
+    }
+}
+
+fn membership(n: i64, queries: i64) -> i64 {
+    search(queries, n, build(n, List::Nil), 0)
+}
+
+extern "C" trampoline "membership_ffi" = membership;

@@ -1223,3 +1223,65 @@ fn emits_a_package_interface() {
         String::from_utf8_lossy(&reenter.stderr)
     );
 }
+
+/// `--borrow-params` sends a call whose caller keeps the argument to a
+/// borrowed clone of the callee; without it, or without optimization, the
+/// module has no clone.
+#[test]
+fn borrow_params_clones_only_when_enabled() {
+    let dir = scratch("borrow-params");
+    let src = dir.path().join("walk.rr");
+    std::fs::write(
+        &src,
+        r#"
+enum List { Nil, Cons(i64, List) }
+fn mem(x: i64, xs: List) -> bool {
+    match xs {
+        List::Nil => false,
+        List::Cons(y, ys) => if x == y { true } else { mem(x, ys) }
+    }
+}
+fn build(n: i64, acc: List) -> List {
+    if n == 0 { acc } else { build(n - 1, List::Cons{n, acc}) }
+}
+fn search(k: i64, xs: List, hits: i64) -> i64 {
+    if k == 0 { hits } else {
+        if mem(0 - k, xs) { search(k - 1, xs, hits + 1) } else { search(k - 1, xs, hits) }
+    }
+}
+pub fn walk(n: i64, k: i64) -> i64 { search(k, build(n, List::Nil), 0) }
+"#,
+    )
+    .expect("write walk source");
+    for (opt, borrow, cloned) in [
+        ("aggressive", true, true),
+        ("aggressive", false, false),
+        ("none", true, false),
+    ] {
+        // Before LLVM, which may inline the clone's loop into its caller.
+        let out = dir.path().join(format!("walk-{opt}-{borrow}.mlir"));
+        let mut args: Vec<&Path> = vec![
+            &src,
+            Path::new("-o"),
+            &out,
+            Path::new("--emit"),
+            Path::new("mlir-llvm"),
+            Path::new("-O"),
+            Path::new(opt),
+        ];
+        if borrow {
+            args.push(Path::new("--borrow-params"));
+        }
+        let output = rrc(&args);
+        assert!(
+            output.status.success(),
+            "rrc -O {opt} (borrow: {borrow}) failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            read(&out).contains("mem.borrowed_1"),
+            cloned,
+            "-O {opt}, borrow: {borrow}"
+        );
+    }
+}
