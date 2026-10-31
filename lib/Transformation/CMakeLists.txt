@@ -1,3 +1,4 @@
+add_subdirectory(Specialization)
 add_subdirectory(ClosureBetaReduction)
 add_subdirectory(DefaultInliner)
 add_subdirectory(SCCP)

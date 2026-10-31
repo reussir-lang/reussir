@@ -11,6 +11,7 @@ add_mlir_library(MLIRReussirUniqueCarryingRecursionAnalysis
   MLIRAnalysis
   MLIRFuncDialect
   MLIRReussir
+  MLIRReussirSpecialization
   MLIRSCFDialect
   MLIRTransforms
   MLIRUBDialect
