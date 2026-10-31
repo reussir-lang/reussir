@@ -248,6 +248,10 @@ mod tests {
                 ..base.clone()
             },
             Profile {
+                disable_borrow_analysis: Some(true),
+                ..base.clone()
+            },
+            Profile {
                 nullary_variant_encoding: Some("arch-independent".into()),
                 ..base.clone()
             },

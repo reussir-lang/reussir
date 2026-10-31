@@ -1225,11 +1225,11 @@ fn emits_a_package_interface() {
     );
 }
 
-/// `--borrow-params` sends a call whose caller keeps the argument to a
-/// borrowed clone of the callee; without it, or without optimization, the
-/// module has no clone.
+/// An optimizing build sends a call whose caller keeps the argument to a
+/// borrowed clone of the callee; with `--disable-borrow-analysis`, or
+/// without optimization, the module has no clone.
 #[test]
-fn borrow_params_clones_only_when_enabled() {
+fn borrow_params_clones_unless_disabled() {
     let dir = scratch("borrow-params");
     let src = dir.path().join("walk.rr");
     std::fs::write(
@@ -1270,8 +1270,8 @@ pub fn walk(n: i64, k: i64) -> i64 { search(k, build(n, List::Nil), 0) }
             Path::new("-O"),
             Path::new(opt),
         ];
-        if borrow {
-            args.push(Path::new("--borrow-params"));
+        if !borrow {
+            args.push(Path::new("--disable-borrow-analysis"));
         }
         let output = rrc(&args);
         assert!(
@@ -1335,10 +1335,11 @@ fn reuse_decisions(report: &Path) -> BTreeMap<(String, String, String), u64> {
     decisions
 }
 
-/// `--borrow-params` must not cost reuse: every decision the build makes
-/// without the flag (function, site and outcome) it still makes with it. The
-/// flag only adds decisions, in the borrowed clones and wherever the inliner
-/// copies them, and the call a clone serves never freed anything anyway.
+/// Borrowing must not cost reuse: every decision a build with
+/// `--disable-borrow-analysis` makes (function, site and outcome), the
+/// default build still makes. Borrowing only adds decisions, in the borrowed
+/// clones and wherever the inliner copies them, and the call a clone serves
+/// never freed anything anyway.
 #[test]
 fn borrow_params_keeps_reuse_decisions() {
     let dir = scratch("borrow-reuse");
@@ -1361,8 +1362,8 @@ fn borrow_params_keeps_reuse_decisions() {
                 Path::new("--token-reuse-remarks"),
                 &report,
             ];
-            if borrow {
-                args.push(Path::new("--borrow-params"));
+            if !borrow {
+                args.push(Path::new("--disable-borrow-analysis"));
             }
             let output = rrc(&args);
             assert!(

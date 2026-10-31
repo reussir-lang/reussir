@@ -1,4 +1,4 @@
-// RUN: %rrc %s -o %t.o --relocation-mode pic -Oaggressive --reuse-across-call --borrow-params --token-reuse-remarks %t.json
+// RUN: %rrc %s -o %t.o --relocation-mode pic -Oaggressive --reuse-across-call --token-reuse-remarks %t.json
 // RUN: %FileCheck %s < %t.json
 // RUN: %FileCheck %s --check-prefix=CLONE < %t.json
 // RUN: %cc %t.o %S/borrow_params_reuse.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
