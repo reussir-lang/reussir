@@ -44,6 +44,7 @@
 #include <mlir/IR/OperationSupport.h>
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/IR/Types.h>
+#include <mlir/Interfaces/CallInterfaces.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
 #include <mlir/Interfaces/FunctionInterfaces.h>
 #include <mlir/Interfaces/SideEffectInterfaces.h>
@@ -4056,6 +4057,17 @@ emitOwnershipAcquisitionImpl(mlir::Value value, mlir::OpBuilder &builder,
       })
       // For other types, return failure
       .Default([&](mlir::Type) { return mlir::failure(); });
+}
+
+bool leavesCountsAlone(mlir::Operation *op) {
+  if (llvm::isa<ReussirRcIncOp>(op) || getRCGMPRetainedValue(op))
+    return true;
+  if (op->getNumRegions() > 0 || llvm::isa<mlir::CallOpInterface>(op))
+    return false;
+  if (mlir::isMemoryEffectFree(op))
+    return true;
+  auto effects = llvm::dyn_cast<mlir::MemoryEffectOpInterface>(op);
+  return effects && effects.onlyHasEffect<mlir::MemoryEffects::Read>();
 }
 
 mlir::LogicalResult emitOwnershipAcquisition(mlir::Value value,

@@ -8,24 +8,15 @@
 //
 //===----------------------------------------------------------------------===//
 #include "Reussir/Analysis/BorrowAnalysis.h"
-#include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
 #include <gtest/gtest.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
-#include <mlir/Parser/Parser.h>
+import reussir.test;
 
 namespace reussir {
 namespace {
-class BorrowAnalysisTest : public testing::Test {
+class BorrowAnalysisTest : public ReussirTest {
 protected:
-  mlir::MLIRContext context;
-  BorrowAnalysisTest() {
-    context.loadDialect<ReussirDialect, mlir::func::FuncDialect,
-                        mlir::arith::ArithDialect, mlir::scf::SCFDialect>();
-  }
-  mlir::OwningOpRef<mlir::ModuleOp> parse(llvm::StringRef source) {
-    return mlir::parseSourceString<mlir::ModuleOp>(source, &context);
-  }
   static mlir::func::FuncOp lookup(mlir::ModuleOp module,
                                    llvm::StringRef name) {
     return module.lookupSymbol<mlir::func::FuncOp>(name);

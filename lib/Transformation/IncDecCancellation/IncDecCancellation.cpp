@@ -196,19 +196,6 @@ mlir::Operation *findPostDominantAliasedRelease(
   return fusionTarget;
 }
 
-// Whether `op` leaves every count and every stored value alone: it only
-// adds references or at most reads memory.
-bool leavesCountsAlone(mlir::Operation *op) {
-  if (llvm::isa<ReussirRcIncOp>(op) || getRCGMPRetainedValue(op))
-    return true;
-  if (op->getNumRegions() > 0 || llvm::isa<mlir::CallOpInterface>(op))
-    return false;
-  if (mlir::isMemoryEffectFree(op))
-    return true;
-  auto effects = llvm::dyn_cast<mlir::MemoryEffectOpInterface>(op);
-  return effects && effects.onlyHasEffect<mlir::MemoryEffects::Read>();
-}
-
 // A counted word's retain cancels with a release of the same word under the
 // rules `rc.inc` follows: a release in the unique branch of an expanded
 // decrement moves the retain into the shared branch, and a directly
