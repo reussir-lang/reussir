@@ -4395,6 +4395,12 @@ struct ConvertToLLVMPass
   void runOnOperation() override {
     mlir::ModuleOp moduleOp = getOperation();
     mlir::MLIRContext *context = moduleOp.getContext();
+    // Borrowed parameters only mean something while counts are explicit;
+    // LLVM has no such convention, and the parameter is no longer an rc.
+    moduleOp.walk([](mlir::func::FuncOp function) {
+      for (unsigned i = 0, e = function.getNumArguments(); i < e; ++i)
+        function.removeArgAttr(i, BorrowedAttr::name);
+    });
     mlir::LLVMTypeConverter converter(context,
                                       getReussirToLLVMOptions(moduleOp));
     mlir::SymbolTableCollection symbolTables;

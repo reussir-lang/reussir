@@ -29,6 +29,8 @@ def ReussirDialect : Dialect {
   let cppNamespace = "::reussir";
   let useDefaultTypePrinterParser = 0;
   let useDefaultAttributePrinterParser = 0;
+  // Checks where `#reussir.borrowed` may appear (`verifyRegionArgAttribute`).
+  let hasRegionArgAttrVerify = 1;
   let dependentDialects = [
       // arithmetic operations
       "mlir::arith::ArithDialect",

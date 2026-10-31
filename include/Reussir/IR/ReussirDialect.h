@@ -31,6 +31,14 @@ namespace reussir {
 // Dialect translation registration is not exposed here: it would only work
 // once external module linking is in place.
 // void registerReussirDialectTranslation(mlir::DialectRegistry &registry);
+
+/// Whether `value` is a parameter its function receives borrowed: an
+/// entry-block argument carrying `#reussir.borrowed`. Every other counted
+/// parameter is owned (drop functions aside), so a pass that infers
+/// ownership or uniqueness from "this is my argument" must exclude borrowed
+/// ones: a borrowed argument's count can be 1 while the caller still holds
+/// the object.
+bool isBorrowedArgument(mlir::Value value);
 } // namespace reussir
 
 #endif // REUSSIR_IR_REUSSIRDIALECT_H
