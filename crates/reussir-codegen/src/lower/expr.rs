@@ -592,7 +592,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             let op = if inc {
                 dialect::rc_inc(self.context, arg, loc).into()
             } else {
-                dialect::rc_dec(self.context, arg, loc).into()
+                self.build_rc_dec(arg, glue.ty, loc)
             };
             block.append_operation(op);
             block.append_operation(func::r#return(&[], loc));
@@ -3332,6 +3332,25 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         }
     }
 
+    fn build_rc_dec(
+        &self,
+        value: Value<'c, '_>,
+        ty: Ty<'tcx>,
+        location: Location<'c>,
+    ) -> Operation<'c> {
+        let mut builder =
+            dialect::ReussirRcDecOperation::builder(self.context, location).rc_ptr(value);
+        if let Some(record) = self.tys.record_of(ty)
+            && let mir::RecordLayout::Opaque { drop_hook, .. } = record.layout
+        {
+            builder = builder.cleanup(FlatSymbolRefAttribute::new(
+                self.context,
+                self.program.symbol(drop_hook),
+            ));
+        }
+        builder.build().into()
+    }
+
     /// Decrement a value's refcount, the dual of [`emit_inc`](Self::emit_inc): an
     /// `rc` pointer is decremented directly, an inline record is dropped through a
     /// reference (releasing every rc pointer it reaches).
@@ -3345,7 +3364,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         // record, rigid regional record, or closure) is decremented directly, an
         // inline `[value]` record dropped through a reference.
         if self.tys.is_managed_rc(ty) {
-            block.append_operation(dialect::rc_dec(self.context, val, loc).into());
+            block.append_operation(self.build_rc_dec(val, ty, loc));
             Ok(())
         } else if matches!(ty.kind(), TyKind::Record { .. } | TyKind::Tuple(_)) {
             let reference = self.spill(block, val, ty)?;

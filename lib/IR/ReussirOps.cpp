@@ -606,6 +606,15 @@ void ReussirRcDecOp::rematerializeBoundRetains(mlir::OpBuilder &builder) {
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult ReussirRcDecOp::verify() {
   RcType RcType = getRcPtr().getType();
+  if (auto ffi = llvm::dyn_cast<FFIObjectType>(RcType.getElementType())) {
+    if (!getCleanupAttr())
+      return emitOpError("FFI object decrement requires cleanup");
+    if (getCleanupAttr() != ffi.getCleanupHook())
+      return emitOpError("cleanup must match the FFI object's cleanup hook: ")
+             << ffi.getCleanupHook();
+  } else if (getCleanupAttr()) {
+    return emitOpError("cleanup requires an FFI object decrement");
+  }
   if (RcType.getCapability() == reussir::Capability::flex)
     return emitOpError("cannot decrease reference count of a flex RC type");
   if (getDestructureTagAttr() && !getBoundMembersAttr())
@@ -702,11 +711,11 @@ bool ReussirRcDecOp::shouldProduceToken() {
 mlir::LogicalResult
 ReussirRcDecOp::verifySymbolUses(mlir::SymbolTableCollection &symbolTable) {
   RcType rcType = getRcPtr().getType();
-  if (auto eleTy = mlir::dyn_cast<FFIObjectType>(rcType.getElementType())) {
+  if (auto cleanup = getCleanupAttr()) {
     auto funcOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
-        getOperation(), eleTy.getCleanupHook());
+        getOperation(), cleanup);
     if (!funcOp)
-      return emitOpError("cleanup hook not found: ") << eleTy.getCleanupHook();
+      return emitOpError("cleanup hook not found: ") << cleanup;
     if (funcOp.getFunctionType().getNumInputs() != 1 ||
         funcOp.getFunctionType().getNumResults() != 0 ||
         funcOp.getFunctionType().getInput(0) != rcType)
