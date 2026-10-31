@@ -464,16 +464,18 @@ static mlir::func::FuncOp createTrmcHelper(mlir::func::FuncOp funcOp,
     return existing;
 
   auto helperFunc = llvm::cast<mlir::func::FuncOp>(funcOp->clone());
-  mlir::Type resultType = ctxType.getElementType();
-  llvm::SmallVector<mlir::Type> inputs(helperFunc.getArgumentTypes().begin(),
-                                       helperFunc.getArgumentTypes().end());
-  inputs.push_back(ctxType);
   helperFunc.setName(helperName);
-  helperFunc.setFunctionType(
-      mlir::FunctionType::get(context, inputs, {resultType}));
-  helperFunc.getBody().front().addArgument(ctxType, helperFunc.getLoc());
-  helperFunc.setArgAttr(helperFunc.getNumArguments() - 1, "llvm.noundef",
-                        mlir::UnitAttr::get(context));
+  // The context comes last. `insertArgument` keeps the argument attributes
+  // the original may carry (e.g. `reussir.borrowed`) in step with the
+  // arguments, which a bare type change and block argument would not.
+  mlir::NamedAttribute noundef(mlir::StringAttr::get(context, "llvm.noundef"),
+                               mlir::UnitAttr::get(context));
+  if (mlir::failed(helperFunc.insertArgument(
+          helperFunc.getNumArguments(), ctxType,
+          mlir::DictionaryAttr::get(context, noundef), helperFunc.getLoc())))
+    llvm_unreachable("appending an argument cannot make the type invalid");
+  helperFunc.setFunctionType(mlir::FunctionType::get(
+      context, helperFunc.getArgumentTypes(), {ctxType.getElementType()}));
   makeHelperInternal(helperFunc, context);
 
   mlir::IRRewriter rewriter(context);

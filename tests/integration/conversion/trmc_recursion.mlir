@@ -59,4 +59,35 @@ module {
   // CHECK: reussir.scf.yield %[[TAIL]]
   // CHECK: %[[DONE:.+]] = reussir.cctx.apply(%[[CTX]] : !reussir.cctx<{{.+}}) (%[[LIST]] : {{.+}})
   // CHECK: reussir.scf.yield %[[DONE]]
+
+  // A helper keeps the original's argument attributes next to its own
+  // context argument (borrowed clones carry `reussir.borrowed`).
+  // CHECK-LABEL: func.func private @map_borrowed.trmc(
+  // CHECK-SAME: %{{.+}}: !reussir.rc<{{.+}}> {reussir.borrowed = #reussir.borrowed},
+  // CHECK-SAME: %{{.+}}: !reussir.cctx<{{.+}}> {llvm.noundef})
+  func.func private @map_borrowed(%list: !rc_list {reussir.borrowed = #reussir.borrowed}) -> !rc_list {
+    %list_ref = reussir.rc.borrow (%list : !rc_list) : !reussir.ref<!list>
+    %result = reussir.record.dispatch (%list_ref : !reussir.ref<!list>) -> !rc_list {
+      [0] -> {
+        ^bb0(%cons_ref: !reussir.ref<!list_cons>):
+        %head_ref = reussir.ref.project (%cons_ref : !reussir.ref<!list_cons>) [0] : !reussir.ref<i64>
+        %head = reussir.ref.load (%head_ref : !reussir.ref<i64>) : i64
+        %tail_ref = reussir.ref.project (%cons_ref : !reussir.ref<!list_cons>) [1] : !reussir.ref<!rc_list>
+        %tail = reussir.ref.load (%tail_ref : !reussir.ref<!rc_list>) : !rc_list
+        %one = arith.constant 1 : i64
+        %next_head = arith.addi %head, %one : i64
+        %mapped_tail = func.call @map_borrowed(%tail) : (!rc_list) -> !rc_list
+        %new_cons = reussir.record.compound(%next_head, %mapped_tail : i64, !rc_list) : !list_cons
+        %new_variant = reussir.record.variant[0] (%new_cons : !list_cons) : !list
+        %new_list = reussir.rc.create value(%new_variant : !list) : !rc_list
+        reussir.scf.yield %new_list : !rc_list
+      }
+      [1] -> {
+        ^bb1(%nil_ref: !reussir.ref<!list_nil>):
+        reussir.rc.inc (%list : !rc_list)
+        reussir.scf.yield %list : !rc_list
+      }
+    }
+    return %result : !rc_list
+  }
 }
