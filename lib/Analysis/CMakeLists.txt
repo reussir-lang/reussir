@@ -4,6 +4,7 @@ add_mlir_library(MLIRReussirAnalysis
   BorrowAnalysis.cpp
   EquivalenceAnalysis.cpp
   PjrtDonationAnalysis.cpp
+  ValueLiveness.cpp
   LINK_LIBS PUBLIC
     immer
     MLIRAnalysis
