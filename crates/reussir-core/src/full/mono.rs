@@ -724,6 +724,8 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
                     abi: "C".to_owned(),
                     target: symbol,
                     import: true,
+                    span: None,
+                    file: FileId::ROOT,
                 });
                 // A capability introduced by the signature's own binders has
                 // no bounded container instance behind it, so the record scan
@@ -887,6 +889,8 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
             abi: t.abi.clone(),
             target: driver.symbol_of(t.target, tcx.intern_tys(&t.ty_args)),
             import: false,
+            span: t.span,
+            file: t.file,
         })
         .collect();
     trampolines.extend(import_trampolines);

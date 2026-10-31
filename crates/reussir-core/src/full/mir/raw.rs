@@ -210,6 +210,8 @@ pub struct Tramp {
     pub export: String,
     pub target: String,
     pub import: bool,
+    pub file: Option<u32>,
+    pub span: Option<Span>,
 }
 
 /// An `#[ffi(import)]` instance: `ffi import @sym = @boundary "texture";`.

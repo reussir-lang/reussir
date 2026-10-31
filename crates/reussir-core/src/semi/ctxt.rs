@@ -383,6 +383,10 @@ pub struct TrampolineRoot<'tcx> {
     pub target: DefId,
     /// The concrete (ground) type arguments to instantiate the target at.
     pub ty_args: Vec<Ty<'tcx>>,
+    /// Where the trampoline is declared (`#[main]`: the entry function), so
+    /// the exported C entry gets a debug subprogram of its own.
+    pub span: Option<Span>,
+    pub file: FileId,
 }
 
 /// A local variable binding.
@@ -2380,11 +2384,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // assigned DefIds, and through the same trampoline machinery an
         // explicit `extern "C" trampoline` uses — so the entry point is a
         // C-ABI export like any other, and monomorphization roots it.
-        let mains: Vec<(DefId, Option<Span>)> = functions
+        let mains: Vec<(DefId, Option<Span>, FileId)> = functions
             .iter()
             .zip(&function_defs)
-            .filter_map(|((_, span, _, _, _, is_main, _), def)| {
-                (*is_main).then(|| Some(((*def)?, *span))).flatten()
+            .filter_map(|((_, span, scope, _, _, is_main, _), def)| {
+                (*is_main)
+                    .then(|| Some(((*def)?, *span, scope.file)))
+                    .flatten()
             })
             .collect();
         self.register_main_entry(&mains);
@@ -2619,11 +2625,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 
     /// Register the program's entry point: at most one `#[main]`, exported as
     /// [`Self::MAIN_SYMBOL`] through the ordinary trampoline path.
-    fn register_main_entry(&mut self, mains: &[(DefId, Option<Span>)]) {
-        let Some(((target, _), rest)) = mains.split_first() else {
+    fn register_main_entry(&mut self, mains: &[(DefId, Option<Span>, FileId)]) {
+        let Some(((target, span, file), rest)) = mains.split_first() else {
             return;
         };
-        for (_, span) in rest {
+        for (_, span, _) in rest {
             self.error(
                 *span,
                 "a program can have only one `#[main]` function; another is already declared",
@@ -2640,6 +2646,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             abi: "C".to_owned(),
             target: *target,
             ty_args: Vec::new(),
+            span: *span,
+            file: *file,
         });
     }
 
@@ -4540,6 +4548,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             abi: tramp.abi.clone(),
             target,
             ty_args,
+            span,
+            file: self.current_file,
         });
     }
 }

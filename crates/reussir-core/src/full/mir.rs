@@ -245,6 +245,10 @@ pub struct Trampoline {
     pub abi: String,
     pub target: Symbol,
     pub import: bool,
+    /// The export's declaration site, which positions its debug subprogram;
+    /// an import, synthesized rather than declared, has no span.
+    pub span: Option<Span>,
+    pub file: FileId,
 }
 
 /// An `#[ffi(import)]` function instance: `symbol` names the native function

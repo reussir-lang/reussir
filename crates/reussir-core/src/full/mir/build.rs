@@ -100,6 +100,11 @@ pub fn parse_program<'tcx>(tcx: &TyCtxt<'tcx>, text: &str) -> Result<Parsed<'tcx
             return Err(id);
         }
     }
+    for t in &raw.trampolines {
+        if let Some(id) = file_ref_check(&files, t.file) {
+            return Err(id);
+        }
+    }
     let string_literals = raw::string_entries(&raw.strings)?;
     let mut b = Builder {
         tcx,
@@ -237,6 +242,14 @@ impl<'tcx> Builder<'_, 'tcx> {
                 abi: t.abi.clone(),
                 target: self.sym(&t.target),
                 import: t.import,
+                span: t
+                    .span
+                    .map(|(start, end)| crate::surface::Span { start, end }),
+                file: t
+                    .file
+                    .map_or(reussir_syntax::source::FileId::ROOT, |index| {
+                        reussir_syntax::source::FileId::from_index(index)
+                    }),
             })
             .collect();
         let ffi_imports: Vec<mir::FfiImport> = raw
@@ -973,6 +986,13 @@ mod tests {
                     .map(|script| (&script.body, script.file, script.span))
                     .collect::<Vec<_>>()
             );
+            let tramp_locs = |p: &crate::full::mir::Program<'_>| {
+                p.trampolines
+                    .iter()
+                    .map(|t| (p.symbol(t.export).to_owned(), t.file, t.span))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(tramp_locs(&parsed.program), tramp_locs(&full));
             let mut cache2 = SourceCache::new();
             for name in &parsed.files {
                 cache2.add_unavailable(name);
@@ -1150,7 +1170,8 @@ mod tests {
         roundtrip_with_locations(
             "pub fn fib(n: u64) -> u64 { \
              let m = n + 1; \
-             if n <= 1 { m } else { fib(n - 1) + fib(n - 2) } }",
+             if n <= 1 { m } else { fib(n - 1) + fib(n - 2) } }\n\
+             extern \"C\" trampoline \"fib_ffi\" = fib;",
         );
     }
 

@@ -249,6 +249,8 @@ pub struct Tramp {
     pub name: String,
     pub target: String,
     pub ty_args: Vec<Ty>,
+    pub file: Option<u32>,
+    pub span: Option<Span>,
 }
 
 #[derive(Clone, Debug)]

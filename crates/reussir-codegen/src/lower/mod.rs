@@ -513,7 +513,7 @@ pub fn lower_unit<'c, 'tcx>(
             &t.abi,
             program.symbol(t.export),
             program.symbol(t.target),
-            Location::unknown(context),
+            lowerer.trampoline_location(t),
         ));
     }
     // The boundary wrapper texture of each `#[ffi(import)]` instance rides
@@ -1192,6 +1192,61 @@ transform [{
             assert!(printed.contains("\"B\""), "{printed}");
             assert!(printed.contains("\"Nil\""), "{printed}");
             assert!(printed.contains("\"Cons\""), "{printed}");
+        });
+    }
+
+    #[test]
+    fn gives_trampolines_a_debug_subprogram() {
+        use reussir_backend::melior::ir::operation::OperationPrintingFlags;
+        // An `extern "C"` export and `#[main]`'s entry each become a C entry
+        // function; with debug info, its op is positioned at the declaration
+        // and carries a subprogram named by the exported symbol.
+        let src = "fn run(n: i64) -> i64 { n + 1 }\n\
+                   extern \"C\" trampoline \"run_ffi\" = run;\n\
+                   #[main]\n\
+                   fn entry() -> i32 { 0 }\n";
+        let context = crate::testing::context();
+        in_arena(|tcx| {
+            let interner = std::sync::Arc::new(reussir_syntax::new_threaded_interner());
+            let parse = reussir_syntax::parse_with_interner(src, interner.clone());
+            assert!(parse.ok(), "parse errors: {:#?}", parse.errors);
+            let prog = surface::program(&parse.root);
+            let elab = elaborate(tcx, &prog, &interner);
+            assert!(!elab.has_errors(), "elab errors: {:#?}", elab.reports);
+            let (full, reports) = monomorphize(&elab.mono_input());
+            assert!(reports.is_empty(), "mono reports: {reports:#?}");
+            let mut map = crate::source::SourceCache::new();
+            map.add_file("tramp.rr", src);
+            let names: &dyn Resolver<TokenKey> = parse.resolver();
+            for debug in [false, true] {
+                let module = lower_program(
+                    &context,
+                    tcx,
+                    &full,
+                    Some(&map),
+                    debug.then_some(names),
+                    LinkagePolicy::Jit,
+                    &[],
+                )
+                .expect("lowering succeeds");
+                let printed = module
+                    .as_operation()
+                    .to_string_with_flags(
+                        OperationPrintingFlags::new()
+                            .enable_debug_info(true, false)
+                            .use_local_scope(),
+                    )
+                    .expect("print with debug info");
+                for (export, line) in [("run_ffi", 2), ("__reussir_main", 3)] {
+                    let op = printed
+                        .lines()
+                        .find(|l| l.contains("reussir.trampoline") && l.contains(export))
+                        .unwrap_or_else(|| panic!("no `{export}` trampoline:\n{printed}"));
+                    assert!(op.contains(&format!("\"tramp.rr\":{line}:")), "{op}");
+                    let subprogram = format!("dbg_subprogram<raw_name : \"{export}\"");
+                    assert_eq!(op.contains(&subprogram), debug, "{op}");
+                }
+            }
         });
     }
 
