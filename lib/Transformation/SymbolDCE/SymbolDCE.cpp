@@ -8,6 +8,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "Reussir/IR/ReussirTypes.h"
 #include "Reussir/Transformation/Passes.h"
 
 #include <llvm/ADT/SetVector.h>
@@ -33,9 +34,14 @@ struct ReussirSymbolDCEPass
     mlir::ModuleOp module = getOperation();
     module.walk([](mlir::func::FuncOp function) {
       llvm::SmallSetVector<mlir::Attribute, 4> symbols;
+      llvm::SmallVector<mlir::Type> recordMembers;
       mlir::AttrTypeWalker walker;
       walker.addWalk(
           [&](mlir::SymbolRefAttr symbol) { symbols.insert(symbol); });
+      // Mutable record storage does not expose its members as sub-elements.
+      walker.addWalk([&](RecordType record) {
+        llvm::append_range(recordMembers, record.getMembers());
+      });
       function.walk([&](mlir::Operation *op) {
         for (mlir::Type type : op->getResultTypes())
           walker.walk(type);
@@ -44,6 +50,8 @@ struct ReussirSymbolDCEPass
             for (mlir::Type type : block.getArgumentTypes())
               walker.walk(type);
       });
+      while (!recordMembers.empty())
+        walker.walk(recordMembers.pop_back_val());
       // Symbol DCE sees attributes, but not types carried only by SSA values.
       if (!symbols.empty())
         function->setAttr(

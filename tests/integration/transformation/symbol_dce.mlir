@@ -1,13 +1,16 @@
 // RUN: %reussir-opt %s --reussir-symbol-dce | %FileCheck %s --implicit-check-not=@dead --implicit-check-not=reussir.ssa_type_symbols
 
 !handle = !reussir.rc<!reussir.ffi_object<"Handle", @drop>>
+!nested_handle = !reussir.rc<!reussir.ffi_object<"Nested", @nested_drop>>
 !node_ = !reussir.record<compound "Node" incomplete>
-!node = !reussir.record<compound "Node" {!handle, !reussir.nullable<!reussir.rc<!node_>>}>
+!node = !reussir.record<compound "Node" {!nested_handle, !reussir.nullable<!reussir.rc<!node_>>}>
 !dead = !reussir.rc<!reussir.ffi_object<"Dead", @dead_drop>>
 
 module {
   // CHECK: func.func private @drop
   func.func private @drop(!handle)
+  // CHECK: func.func private @nested_drop
+  func.func private @nested_drop(!nested_handle)
   func.func private @dead_drop(!dead)
 
   // CHECK-LABEL: func.func @local

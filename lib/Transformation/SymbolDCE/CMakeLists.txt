@@ -5,6 +5,7 @@ add_mlir_library(MLIRReussirSymbolDCE
   MLIRReussirTransformationPassIncGen
 
   LINK_LIBS PUBLIC
+  MLIRReussir
   MLIRFuncDialect
   MLIRTransforms
 )
