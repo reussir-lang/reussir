@@ -14,6 +14,7 @@ add_subdirectory(UniqueCarryingRecursionAnalysis)
 add_subdirectory(TRMCRecursionAnalysis)
 add_subdirectory(PjrtDonation)
 add_subdirectory(BorrowAnalysisRemark)
+add_subdirectory(BorrowSpecialization)
 
 set(REUSSIR_TRANSFORMATION_AGGREGATE_LIBS
   MLIRReussirClosureBetaReduction
@@ -31,6 +32,7 @@ set(REUSSIR_TRANSFORMATION_AGGREGATE_LIBS
   MLIRReussirTRMCRecursionAnalysis
   MLIRReussirPjrtDonation
   MLIRReussirBorrowAnalysisRemark
+  MLIRReussirBorrowSpecialization
 )
 
 add_library(MLIRReussirTransformation INTERFACE)

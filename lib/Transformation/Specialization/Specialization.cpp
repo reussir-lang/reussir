@@ -20,8 +20,11 @@
 namespace reussir {
 mlir::func::FuncOp clonePrivateSpecialization(mlir::func::FuncOp function,
                                               llvm::StringRef name,
-                                              mlir::SymbolTable &symbolTable) {
-  auto clone = llvm::cast<mlir::func::FuncOp>(function->clone());
+                                              mlir::SymbolTable &symbolTable,
+                                              mlir::IRMapping *mapping) {
+  mlir::IRMapping local;
+  auto clone = llvm::cast<mlir::func::FuncOp>(
+      function->clone(mapping ? *mapping : local));
   clone.setName(name);
   clone.setPrivate();
   clone->removeAttr("llvm.visibility");

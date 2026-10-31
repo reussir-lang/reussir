@@ -92,6 +92,13 @@ private:
 /// it, including the payload references a dispatch binds.
 bool isReadOnlyBorrow(ReussirRcBorrowOp borrow);
 
+/// Whether `use` leaves a counted value unconsumed, so a borrowed clone can
+/// do without a reference to it: a retain, a plain release, a read-only
+/// borrow, or an argument at a position `isBorrowablePosition` accepts.
+bool isNonConsumingUse(mlir::OpOperand &use,
+                       llvm::function_ref<bool(mlir::func::CallOp, unsigned)>
+                           isBorrowablePosition);
+
 /// The single retain right before `call` that gives it its reference to
 /// `value`, if nothing in between can release anything: only ops that leave
 /// counts alone (`leavesCountsAlone`) may lie between.

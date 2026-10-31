@@ -18,6 +18,7 @@
 #define REUSSIR_TRANSFORMATION_SPECIALIZATION_H
 
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/IR/IRMapping.h>
 #include <mlir/IR/SymbolTable.h>
 
 namespace reussir {
@@ -27,10 +28,13 @@ namespace reussir {
 /// name it. It keeps the original's debug locations: lowering gives every
 /// function its own subprogram (the source name, with the copy's symbol as
 /// linkage name), so the copy is as debuggable as the original. The copy is
-/// inserted into `symbolTable`, which renames it on a clash.
-mlir::func::FuncOp clonePrivateSpecialization(mlir::func::FuncOp function,
-                                              llvm::StringRef name,
-                                              mlir::SymbolTable &symbolTable);
+/// inserted into `symbolTable`, which renames it on a clash. If given,
+/// `mapping` receives the original's values and operations mapped to their
+/// copies.
+mlir::func::FuncOp
+clonePrivateSpecialization(mlir::func::FuncOp function, llvm::StringRef name,
+                           mlir::SymbolTable &symbolTable,
+                           mlir::IRMapping *mapping = nullptr);
 
 } // namespace reussir
 
