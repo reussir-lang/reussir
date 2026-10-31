@@ -346,4 +346,25 @@ def ReussirPjrtDonationPass : Pass<"reussir-pjrt-donation", "::mlir::ModuleOp"> 
   let dependentDialects = ["::reussir::ReussirDialect", "::mlir::arith::ArithDialect", "::mlir::func::FuncDialect"];
 }
 
+//===----------------------------------------------------------------------===//
+// BorrowAnalysisRemark
+//===----------------------------------------------------------------------===//
+def ReussirBorrowAnalysisRemarkPass
+    : Pass<"reussir-borrow-analysis-remark", "::mlir::ModuleOp"> {
+  let summary = "report borrowable parameters and live-through call sites";
+  let description = [{
+    `reussir-borrow-analysis-remark` changes nothing. It emits an analysis
+    remark (category `Borrow`, subcategory `Analysis`) for every counted
+    parameter that could be borrowed (`BorrowableParameter`), and for every
+    argument a direct call passes at such a position: `LiveThrough` when the
+    caller keeps its own reference across the call, so the call could pass
+    it borrowed without changing any reuse decision or lifetime, and
+    `LastUse` otherwise (it stays owned). Select them with
+    `--remarks-filter=Borrow`. See `Reussir/Analysis/BorrowAnalysis.h` for
+    the rules.
+  }];
+  let dependentDialects = ["::reussir::ReussirDialect",
+                           "::mlir::func::FuncDialect"];
+}
+
 #endif // REUSSIR_TRANSFORMATION_PASSES_TD
