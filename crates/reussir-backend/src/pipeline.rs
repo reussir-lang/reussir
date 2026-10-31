@@ -400,6 +400,12 @@ pub fn run_lowering_pipeline(
             if options.opt == OptLevel::Aggressive => {
                 func: sys::reussirCreateClosureBetaReductionPass();
             }
+            // Drop the private functions nothing calls any more: the ones
+            // the inliner inlined everywhere, and originals whose calls all
+            // went to a specialized clone (UCRA's `.unique`). Everything after
+            // this point would otherwise process them, and only LLVM would
+            // delete them. `pub` functions are public symbols and stay.
+            module: sys::reussirCreateSymbolDCEPass();
         }
 
         // Simplify extents before instantiating tokens. Cleanup after decrement
@@ -650,6 +656,45 @@ mod tests {
         // After lowering, the function is an llvm.func rather than a func.func.
         let rendered = module.as_operation().to_string();
         assert!(rendered.contains("llvm.func @answer"), "got:\n{rendered}");
+    }
+
+    #[test]
+    fn drops_dead_private_functions_when_optimizing() {
+        let context = crate::context();
+        // `countdown` only calls itself, so its own use keeps it out of the
+        // inliner's dead-callable cleanup; symbol DCE sees that nothing
+        // public reaches it.
+        let source = r#"
+            module {
+              func.func private @countdown(%n: i32) -> i32 {
+                %r = func.call @countdown(%n) : (i32) -> i32
+                func.return %r : i32
+              }
+              func.func @answer() -> i32 {
+                %0 = arith.constant 42 : i32
+                func.return %0 : i32
+              }
+            }
+        "#;
+        for (opt, kept) in [(OptLevel::None, true), (OptLevel::Default, false)] {
+            let mut module = Module::parse(&context, source).expect("module should parse");
+            let options = LoweringOptions {
+                opt,
+                ..LoweringOptions::default()
+            };
+            run_lowering_pipeline(&context, &mut module, &options)
+                .expect("pipeline should succeed");
+            let rendered = module.as_operation().to_string();
+            assert_eq!(
+                rendered.contains("@countdown"),
+                kept,
+                "{opt:?}:\n{rendered}"
+            );
+            assert!(
+                rendered.contains("llvm.func @answer"),
+                "{opt:?}:\n{rendered}"
+            );
+        }
     }
 
     #[test]
