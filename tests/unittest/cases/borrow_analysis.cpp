@@ -127,5 +127,133 @@ TEST_F(BorrowAnalysisTest, BorrowsMayOnlyRead) {
   EXPECT_FALSE(analysis.isBorrowable(lookup(*module, "drop"), 0));
 }
 
+// A call is live-through when a retain right before it feeds it and the
+// caller still uses the value afterwards. The retain of a value loaded from
+// a box the call consumes only takes ownership of it; a release in between
+// may be the caller's last reference.
+TEST_F(BorrowAnalysisTest, LiveThroughNeedsRetainAndLaterUse) {
+  auto module = parse(R"(
+    !list_ = !reussir.record<variant "List" incomplete>
+    !nil = !reussir.record<compound "List::Nil" [value] { }>
+    !cons = !reussir.record<compound "List::Cons" [value] { i64, !list_ }>
+    !list = !reussir.record<variant "List" { !nil, !cons }>
+    !box = !reussir.record<compound "Box" { !list, i64 }>
+    func.func private @read(%x: !reussir.rc<!list>, %b: !reussir.rc<!box>) {
+      reussir.rc.dec(%b : !reussir.rc<!box>)
+      reussir.rc.dec(%x : !reussir.rc<!list>)
+      return
+    }
+    func.func private @kept(%x: !reussir.rc<!list>, %b: !reussir.rc<!box>, %c: i1) {
+      scf.if %c {
+        reussir.rc.inc(%b : !reussir.rc<!box>)
+        reussir.rc.inc(%x : !reussir.rc<!list>)
+        func.call @read(%x, %b) : (!reussir.rc<!list>, !reussir.rc<!box>) -> ()
+      }
+      reussir.rc.dec(%x : !reussir.rc<!list>)
+      reussir.rc.dec(%b : !reussir.rc<!box>)
+      return
+    }
+    func.func private @loaded(%b: !reussir.rc<!box>) {
+      %r = reussir.rc.borrow(%b : !reussir.rc<!box>) : !reussir.ref<!box shared>
+      %f = reussir.ref.project(%r : !reussir.ref<!box shared>) [0] : !reussir.ref<!reussir.rc<!list> shared>
+      %x = reussir.ref.load(%f : !reussir.ref<!reussir.rc<!list> shared>) : !reussir.rc<!list>
+      reussir.rc.inc(%x : !reussir.rc<!list>)
+      func.call @read(%x, %b) : (!reussir.rc<!list>, !reussir.rc<!box>) -> ()
+      return
+    }
+    func.func private @released(%x: !reussir.rc<!list>, %y: !reussir.rc<!list>, %b: !reussir.rc<!box>) {
+      reussir.rc.inc(%x : !reussir.rc<!list>)
+      reussir.rc.dec(%y : !reussir.rc<!list>)
+      func.call @read(%x, %b) : (!reussir.rc<!list>, !reussir.rc<!box>) -> ()
+      reussir.rc.dec(%x : !reussir.rc<!list>)
+      return
+    }
+  )");
+  ASSERT_TRUE(module);
+  BorrowAnalysis analysis(*module);
+  llvm::StringMap<const BorrowAnalysis::CallSite *> sites;
+  for (const auto &site : analysis.getCallSites())
+    sites[site.call->getParentOfType<mlir::func::FuncOp>().getSymName()] =
+        &site;
+  ASSERT_EQ(sites.size(), 3u);
+  EXPECT_TRUE(sites["kept"]->liveThrough.test(0));
+  EXPECT_TRUE(sites["kept"]->liveThrough.test(1));
+  EXPECT_TRUE(sites["loaded"]->lastUse.test(0));
+  EXPECT_TRUE(sites["loaded"]->lastUse.test(1));
+  EXPECT_TRUE(sites["released"]->lastUse.test(0));
+}
+
+// Liveness reaches successor blocks, and a loop that repeats the call uses
+// a value from outside it again; a value defined in the loop body is a new
+// one each iteration.
+TEST_F(BorrowAnalysisTest, LivenessFollowsBlocksAndLoops) {
+  auto module = parse(R"(
+    func.func private @read(%x: !reussir.rc<i64>) {
+      reussir.rc.dec(%x : !reussir.rc<i64>)
+      return
+    }
+    func.func private @blocks(%x: !reussir.rc<i64>, %c: i1) {
+      reussir.rc.inc(%x : !reussir.rc<i64>)
+      func.call @read(%x) : (!reussir.rc<i64>) -> ()
+      cf.cond_br %c, ^use, ^done
+    ^use:
+      func.call @read(%x) : (!reussir.rc<i64>) -> ()
+      return
+    ^done:
+      reussir.rc.dec(%x : !reussir.rc<i64>)
+      return
+    }
+    func.func private @loop(%x: !reussir.rc<i64>, %n: index) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      scf.for %i = %c0 to %n step %c1 {
+        reussir.rc.inc(%x : !reussir.rc<i64>)
+        func.call @read(%x) : (!reussir.rc<i64>) -> ()
+        %v = arith.constant 7 : i64
+        %y = reussir.rc.create value(%v : i64) : !reussir.rc<i64>
+        reussir.rc.inc(%y : !reussir.rc<i64>)
+        func.call @read(%y) : (!reussir.rc<i64>) -> ()
+      }
+      reussir.rc.dec(%x : !reussir.rc<i64>)
+      return
+    }
+  )");
+  ASSERT_TRUE(module);
+  BorrowAnalysis analysis(*module);
+  llvm::StringMap<llvm::SmallVector<const BorrowAnalysis::CallSite *>> sites;
+  for (const auto &site : analysis.getCallSites())
+    sites[site.call->getParentOfType<mlir::func::FuncOp>().getSymName()]
+        .push_back(&site);
+  ASSERT_EQ(sites["blocks"].size(), 2u);
+  ASSERT_EQ(sites["loop"].size(), 2u);
+  EXPECT_TRUE(sites["blocks"][0]->liveThrough.test(0));
+  EXPECT_TRUE(sites["blocks"][1]->lastUse.test(0));
+  EXPECT_TRUE(sites["loop"][0]->liveThrough.test(0));
+  EXPECT_TRUE(sites["loop"][1]->lastUse.test(0));
+}
+
+// A nested module is a separate symbol table: its calls are not resolved
+// against the outer one.
+TEST_F(BorrowAnalysisTest, NestedModulesAreLeftAlone) {
+  auto module = parse(R"(
+    func.func private @read(%x: !reussir.rc<i64>) {
+      reussir.rc.dec(%x : !reussir.rc<i64>)
+      return
+    }
+    module @inner {
+      func.func private @read(%x: !reussir.rc<i64>)
+      func.func private @use(%x: !reussir.rc<i64>) {
+        reussir.rc.inc(%x : !reussir.rc<i64>)
+        func.call @read(%x) : (!reussir.rc<i64>) -> ()
+        reussir.rc.dec(%x : !reussir.rc<i64>)
+        return
+      }
+    }
+  )");
+  ASSERT_TRUE(module);
+  BorrowAnalysis analysis(*module);
+  EXPECT_TRUE(analysis.isBorrowable(lookup(*module, "read"), 0));
+  EXPECT_TRUE(analysis.getCallSites().empty());
+}
 } // namespace
 } // namespace reussir

@@ -9,7 +9,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Borrowable parameters; see BorrowAnalysis.h.
+/// Borrowable parameters and live-through call sites; see BorrowAnalysis.h.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -18,7 +18,9 @@
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
 
+#include <mlir/Analysis/Liveness.h>
 #include <mlir/IR/SymbolTable.h>
+#include <mlir/Interfaces/ControlFlowInterfaces.h>
 #include <mlir/Interfaces/FunctionInterfaces.h>
 
 namespace reussir {
@@ -103,10 +105,46 @@ bool isReadOnlyRef(mlir::Value ref) {
   });
 }
 
+// Whether `value` may be used after `op` runs. `mlir::Liveness` answers
+// within one region (a block's live-out follows that region's control flow),
+// so it is asked at `op` and at each enclosing op up to the region that
+// defines `value`. A region that may run again reaches `op` again, so a
+// value defined outside it stays live.
+bool isLiveAfter(const mlir::Liveness &liveness, mlir::Value value,
+                 mlir::Operation *op) {
+  mlir::Region *home = value.getParentRegion();
+  if (mlir::Region *loop = mlir::getEnclosingRepetitiveRegion(op);
+      loop && !loop->isAncestor(home))
+    return true;
+  for (mlir::Operation *at = op; at; at = at->getParentOp()) {
+    if (!liveness.isDeadAfter(value, at))
+      return true;
+    if (at->getParentRegion() == home)
+      return false;
+  }
+  return false;
+}
+
 } // namespace
 
 bool isReadOnlyBorrow(ReussirRcBorrowOp borrow) {
   return isReadOnlyRef(borrow.getBorrowed());
+}
+
+// Only a single retain counts: a retain by more than one serves several
+// uses, and erasing it would leave them short. Other retains, and ops that
+// at most read memory, cannot release anything (`leavesCountsAlone`).
+ReussirRcIncOp findFeedingRetain(mlir::Value value, mlir::func::CallOp call) {
+  for (mlir::Operation *op = call->getPrevNode(); op; op = op->getPrevNode()) {
+    if (auto retain = llvm::dyn_cast<ReussirRcIncOp>(op)) {
+      if (retain.getRcPtr() == value)
+        return retain.isSingleAcquire() ? retain : ReussirRcIncOp();
+      continue;
+    }
+    if (!leavesCountsAlone(op))
+      return {};
+  }
+  return {};
 }
 
 BorrowAnalysis::BorrowAnalysis(mlir::ModuleOp module) {
@@ -142,6 +180,44 @@ BorrowAnalysis::BorrowAnalysis(mlir::ModuleOp module) {
     }
   }
   borrowable.remove_if([](auto &entry) { return entry.second.none(); });
+
+  // Live-through arguments, see BorrowAnalysis.h. Liveness is computed per
+  // function, and only for functions with an argument that has a feeding
+  // retain.
+  for (auto function : module.getOps<mlir::func::FuncOp>()) {
+    size_t first = callSites.size();
+    llvm::SmallVector<mlir::Value> fed;
+    function.walk([&](mlir::func::CallOp call) {
+      auto callee = symbols.lookup<mlir::func::FuncOp>(call.getCallee());
+      auto it = borrowable.find(callee);
+      if (it == borrowable.end())
+        return;
+      unsigned arity = callee.getNumArguments();
+      CallSite site{call, callee, llvm::BitVector(arity),
+                    llvm::BitVector(arity)};
+      for (unsigned index : it->second.set_bits()) {
+        mlir::Value arg = call.getOperand(index);
+        if (llvm::count(call.getOperands(), arg) == 1 &&
+            findFeedingRetain(arg, call)) {
+          site.liveThrough.set(index);
+          fed.push_back(arg);
+        } else {
+          site.lastUse.set(index);
+        }
+      }
+      callSites.push_back(std::move(site));
+    });
+    if (fed.empty())
+      continue;
+    mlir::Liveness liveness(function);
+    for (CallSite &site : llvm::drop_begin(callSites, first))
+      for (unsigned index :
+           llvm::make_early_inc_range(site.liveThrough.set_bits()))
+        if (!isLiveAfter(liveness, site.call.getOperand(index), site.call)) {
+          site.liveThrough.reset(index);
+          site.lastUse.set(index);
+        }
+  }
 }
 
 llvm::BitVector
