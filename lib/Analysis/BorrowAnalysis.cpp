@@ -18,6 +18,7 @@
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
 
+#include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/Interfaces/FunctionInterfaces.h>
 #include <mlir/Interfaces/LoopLikeInterface.h>
@@ -43,7 +44,7 @@ bool isCandidate(mlir::func::FuncOp function) {
 bool isNonConsuming(mlir::OpOperand &use, mlir::SymbolTable &symbols,
                     const BorrowableMap &borrowable) {
   mlir::Operation *user = use.getOwner();
-  if (llvm::isa<ReussirRcBorrowOp, ReussirRcIncOp>(user))
+  if (llvm::isa<ReussirRcBorrowOp, ReussirRcIncOp>(user) || isForwarding(user))
     return true;
   // A release that only drops the reference keeps the parameter borrowable,
   // because a borrowed clone simply erases it:
@@ -67,6 +68,11 @@ bool isNonConsuming(mlir::OpOperand &use, mlir::SymbolTable &symbols,
 }
 
 } // namespace
+
+bool isForwarding(mlir::Operation *user) {
+  return llvm::isa<mlir::func::ReturnOp, mlir::scf::YieldOp, ReussirScfYieldOp>(
+      user);
+}
 
 // Ops after `op` in its block run after it, including everything nested in
 // them; then the same holds for each ancestor up to the function. Sibling

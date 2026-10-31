@@ -60,8 +60,10 @@ TEST_F(BorrowAnalysisTest, FixedPointOverMutualRecursion) {
       return %y : !reussir.rc<i64>
     }
     func.func private @leaky_odd(%x: !reussir.rc<i64>) -> !reussir.rc<i64> {
-      return %x : !reussir.rc<i64>
+      %y = func.call @sink(%x) : (!reussir.rc<i64>) -> !reussir.rc<i64>
+      return %y : !reussir.rc<i64>
     }
+    func.func private @sink(!reussir.rc<i64>) -> !reussir.rc<i64>
   )");
   ASSERT_TRUE(module);
   BorrowAnalysis analysis(*module);

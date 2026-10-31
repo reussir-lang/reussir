@@ -154,6 +154,20 @@ module {
     return %t : !L
   }
 
+  // Returns its parameter: the clone retains it right before.
+  func.func private @id(%xs: !L) -> !L {
+    return %xs : !L
+  }
+  // CHECK-LABEL: func.func private @dup(
+  // CHECK-NOT: reussir.rc.inc
+  // CHECK: call @id.borrowed_0(
+  func.func private @dup(%xs: !L) -> !L {
+    reussir.rc.inc(%xs : !L)
+    %y = func.call @id(%xs) : (!L) -> !L
+    reussir.rc.dec(%xs : !L)
+    return %y : !L
+  }
+
   // Mutual recursion: each clone calls the other's clone.
   func.func private @even(%x: !L, %n: i64) -> i1 {
     %c0 = arith.constant 0 : i64
@@ -200,6 +214,10 @@ module {
   // CHECK-NEXT: reussir.rc.inc
   // CHECK-NOT: reussir.rc.dec
   // CHECK: return
+
+  // CHECK-LABEL: func.func private @id.borrowed_0(
+  // CHECK-NEXT: reussir.rc.inc(%arg0
+  // CHECK-NEXT: return %arg0
 
   // CHECK-LABEL: func.func private @even.borrowed_0(
   // CHECK-NOT: reussir.rc.dec

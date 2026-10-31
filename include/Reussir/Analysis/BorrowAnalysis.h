@@ -15,12 +15,13 @@
 /// never consumes the parameter itself. Its only uses are `rc.borrow`,
 /// `rc.inc`, non-destructuring `rc.dec`, and arguments at borrowable
 /// positions of direct calls. The last condition is a fixed point that
-/// starts optimistic, so recursion through the parameter is allowed.
-/// Returning, storing, capturing, uniqueness tests and owned call positions
-/// all consume it. Values loaded through the parameter (loans) may be
-/// consumed: a borrowed clone keeps the owned body's retain for them. This
-/// follows Lean's borrow inference (`Lean.IR.Borrow`), restricted to
-/// parameters that are never consumed.
+/// starts optimistic, so recursion through the parameter is allowed. It may
+/// also be returned or yielded out of a region: a borrowed clone retains it
+/// right before, as the caller did. Storing, capturing, uniqueness tests and
+/// owned call positions consume it. Values loaded through the parameter
+/// (loans) may be consumed: a borrowed clone keeps the owned body's retain
+/// for them. This follows Lean's borrow inference (`Lean.IR.Borrow`), which
+/// also keeps returned parameters borrowed and makes stored ones owned.
 ///
 /// A direct call that passes a value at a borrowable position is
 /// *caller-live* when the caller uses the value after the call on the same
@@ -69,6 +70,10 @@ private:
   llvm::DenseMap<mlir::func::FuncOp, llvm::BitVector> borrowable;
   llvm::SmallVector<CallSite> callSites;
 };
+
+/// Whether `user` hands its operand out of the region it is in: a return or
+/// a structured yield.
+bool isForwarding(mlir::Operation *user);
 
 /// Whether `value` is used by an operation that may run after `op`, within
 /// the function containing both.

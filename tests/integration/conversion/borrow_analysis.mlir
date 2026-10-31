@@ -69,8 +69,18 @@ module {
     return %r : i64
   }
 
-  // Returning the parameter consumes it: not borrowable.
-  func.func private @keep(%xs: !L) -> !L {
+  // Storing the parameter consumes it: not borrowable.
+  func.func private @push(%xs: !L) -> !L {
+    %z = arith.constant 0 : i64
+    %c = reussir.record.compound (%z, %xs : i64, !L) : !cons
+    %v = reussir.record.variant [1] (%c : !cons) : !list
+    %e = reussir.rc.create value(%v : !list) : !L
+    return %e : !L
+  }
+
+  // Returning it does not: a borrowed clone retains it right before.
+  // expected-remark @+1 {{parameter #0 is borrowable}}
+  func.func private @self(%xs: !L) -> !L {
     return %xs : !L
   }
 
@@ -82,7 +92,7 @@ module {
       %a = func.call @mem(%x, %xs) : (i64, !L) -> i1
       scf.yield %a : i1
     } else {
-      %k = func.call @keep(%xs) : (!L) -> !L
+      %k = func.call @push(%xs) : (!L) -> !L
       reussir.rc.dec(%k : !L)
       %f = arith.constant false
       scf.yield %f : i1
@@ -103,7 +113,7 @@ module {
       %f = arith.constant false
       scf.yield %f : i1
     }
-    %k = func.call @keep(%xs) : (!L) -> !L
+    %k = func.call @push(%xs) : (!L) -> !L
     reussir.rc.dec(%k : !L)
     return %r : i1
   }

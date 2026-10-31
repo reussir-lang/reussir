@@ -25,8 +25,10 @@
 /// retains and releases are erased, and those calls are switched too (a
 /// pinned argument always outlives the call). A loan that is stored, returned
 /// or passed owned keeps the owned body's retain and its calls stay owned.
-/// The parameters themselves never escape (`BorrowAnalysis`). No release is
-/// ever added after a call, so tail calls stay tail calls.
+/// A parameter is never stored or passed owned (`BorrowAnalysis`); where it
+/// is returned or yielded, the clone retains it right before, as its caller
+/// used to. No release is ever added after a call, so tail calls stay tail
+/// calls.
 ///
 /// Clones are made on demand, one per callee and set of borrowed positions,
 /// and their bodies get the same treatment; this covers recursion, mutual
@@ -184,22 +186,34 @@ private:
                             const llvm::BitVector &positions,
                             llvm::DenseSet<mlir::Value> &pinned) {
     llvm::SmallVector<mlir::Value> candidates;
-    for (unsigned index : positions.set_bits())
-      candidates.push_back(clone.getArgument(index));
+    llvm::SmallVector<mlir::OpOperand *> forwarded;
+    for (unsigned index : positions.set_bits()) {
+      mlir::Value parameter = clone.getArgument(index);
+      for (mlir::OpOperand &use : parameter.getUses()) {
+        if (isForwarding(use.getOwner()))
+          forwarded.push_back(&use);
+        else if (!isPinnedUse(use))
+          return clone.emitError()
+                 << "borrowed parameter #" << index << " escapes its clone";
+      }
+      candidates.push_back(parameter);
+      pinned.insert(parameter);
+    }
     for (size_t i = 0; i < candidates.size(); ++i)
       collectLoans(candidates[i], candidates);
     for (mlir::Value value : candidates)
       if (llvm::all_of(value.getUses(),
                        [&](mlir::OpOperand &use) { return isPinnedUse(use); }))
         pinned.insert(value);
-    for (unsigned index : positions.set_bits())
-      if (!pinned.contains(clone.getArgument(index)))
-        return clone.emitError()
-               << "borrowed parameter #" << index << " escapes its clone";
     for (mlir::Value value : pinned)
       for (mlir::Operation *user : llvm::make_early_inc_range(value.getUsers()))
         if (llvm::isa<ReussirRcIncOp, ReussirRcDecOp>(user))
           user->erase();
+    // A returned parameter leaves with a reference of its own.
+    for (mlir::OpOperand *use : forwarded) {
+      mlir::OpBuilder builder(use->getOwner());
+      ReussirRcIncOp::create(builder, use->getOwner()->getLoc(), use->get());
+    }
     return mlir::success();
   }
 
