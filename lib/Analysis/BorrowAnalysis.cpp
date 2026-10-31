@@ -26,8 +26,6 @@
 namespace reussir {
 namespace {
 
-using BorrowableMap = llvm::DenseMap<mlir::func::FuncOp, llvm::BitVector>;
-
 // A function whose parameters may be borrowed: it has a body, and it is
 // neither a clone that asserts its parameters unique (UCRA's `.unique`) nor
 // one that already borrows.
@@ -39,10 +37,11 @@ bool isCandidate(mlir::func::FuncOp function) {
   });
 }
 
-// Whether `use` leaves the parameter unconsumed, given the positions
-// currently believed borrowable.
-bool isNonConsuming(mlir::OpOperand &use, mlir::SymbolTable &symbols,
-                    const BorrowableMap &borrowable) {
+} // namespace
+
+bool isNonConsumingUse(mlir::OpOperand &use,
+                       llvm::function_ref<bool(mlir::func::CallOp, unsigned)>
+                           isBorrowablePosition) {
   mlir::Operation *user = use.getOwner();
   if (llvm::isa<ReussirRcIncOp>(user))
     return true;
@@ -75,15 +74,12 @@ bool isNonConsuming(mlir::OpOperand &use, mlir::SymbolTable &symbols,
   // reuses or `reussir.token.free` frees.
   if (auto dec = llvm::dyn_cast<ReussirRcDecOp>(user))
     return !dec.isDestructuring() && dec->use_empty();
-  if (auto call = llvm::dyn_cast<mlir::func::CallOp>(user)) {
-    auto it =
-        borrowable.find(symbols.lookup<mlir::func::FuncOp>(call.getCallee()));
-    unsigned index = use.getOperandNumber();
-    return it != borrowable.end() && index < it->second.size() &&
-           it->second.test(index);
-  }
+  if (auto call = llvm::dyn_cast<mlir::func::CallOp>(user))
+    return isBorrowablePosition(call, use.getOperandNumber());
   return false;
 }
+
+namespace {
 
 // Whether the reference is only read: each user leaves every count and
 // stored value alone (`leavesCountsAlone`), and what it derives (a
@@ -171,7 +167,13 @@ BorrowAnalysis::BorrowAnalysis(mlir::ModuleOp module) {
       for (unsigned index : current.set_bits()) {
         auto uses = function.getArgument(index).getUses();
         if (llvm::all_of(uses, [&](mlir::OpOperand &use) {
-              return isNonConsuming(use, symbols, borrowable);
+              return isNonConsumingUse(
+                  use, [&](mlir::func::CallOp call, unsigned index) {
+                    auto it = borrowable.find(
+                        symbols.lookup<mlir::func::FuncOp>(call.getCallee()));
+                    return it != borrowable.end() &&
+                           index < it->second.size() && it->second.test(index);
+                  });
             }))
           continue;
         positions.reset(index);
