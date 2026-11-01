@@ -55,6 +55,7 @@ pub type Path<'tcx> = &'tcx [u32];
 /// instances their layouts need, and exported trampolines — all keyed by
 /// [`Symbol`]. The owning [`Rodeo`] resolves those symbols back to text.
 pub struct Program<'tcx> {
+    pub drop_order: Option<crate::drop_order::DropOrder>,
     pub functions: Vec<Function<'tcx>>,
     pub records: Vec<RecordInstance<'tcx>>,
     pub trampolines: Vec<Trampoline>,

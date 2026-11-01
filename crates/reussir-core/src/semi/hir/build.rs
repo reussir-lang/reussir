@@ -37,6 +37,7 @@ use crate::utils::string::StringToken;
 /// the record declarations, and the trampoline roots — so it can be fed to
 /// [`crate::full::mono::monomorphize`] via a `MonoInput`.
 pub struct Parsed<'tcx> {
+    pub drop_order: Option<crate::drop_order::DropOrder>,
     /// The `.rri` interface header when the dump is a package interface;
     /// `None` for a plain HIR program. Gating (format/producer/package
     /// checks, and rejecting a header where a program is expected) is the
@@ -505,6 +506,7 @@ pub fn parse_program<'tcx>(tcx: &TyCtxt<'tcx>, text: &str) -> Result<Parsed<'tcx
         return Err(error);
     }
     Ok(Parsed {
+        drop_order: raw.drop_order,
         header: raw.header.clone(),
         funcs,
         traits,
