@@ -308,6 +308,7 @@ impl<'tcx> Builder<'_, 'tcx> {
         // Move the freshly-built symbol interner into the program.
         let symbols = std::mem::take(&mut self.symbols);
         mir::Program {
+            drop_order: raw.drop_order,
             functions,
             records,
             trampolines,

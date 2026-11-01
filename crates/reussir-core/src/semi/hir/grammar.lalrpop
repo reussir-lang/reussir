@@ -16,9 +16,10 @@ use crate::semi::ty::{BigIntTy, CellKind};
 
 grammar<'input>;
 
-pub Program: raw::Program = <h:Header?> <items:Item*> => {
+pub Program: raw::Program = <h:Header?> <drop_order:DropOrder?> <items:Item*> => {
     let mut p = raw::Program::from_items(items);
     p.header = h;
+    p.drop_order = drop_order;
     p
 };
 
@@ -32,6 +33,9 @@ Header: raw::InterfaceHeader =
         package: unescape_debug_str(package).into_owned(),
         producer: unescape_debug_str(producer).into_owned(),
     };
+
+DropOrder: crate::drop_order::DropOrder = "drop_order" <l:@L> <s:"quoted"> <r:@R> ";"
+    =>? unescape_debug_str(s).parse().map_err(|_| lalrpop_util::ParseError::User { error: LexError { span: l..r } });
 
 Item: raw::Item = {
     <f:FileDecl> => raw::Item::File(f),
@@ -347,6 +351,7 @@ BoundItem: Bound = <first:Name> <rest:("::" <Name>)*> => {
 Name: &'input str = {
     "while" => "while",
     "async" => "async",
+    "drop_order" => "drop_order",
     "launch" => "launch",
     <name:"ident"> => name,
     "lang" => "lang",
@@ -682,6 +687,7 @@ extern {
         "intu" => Token::IntU(<u16>),
         "fp" => Token::Fp(<u16>),
         "ident" => Token::Ident(<&'input str>),
+        "drop_order" => Token::DropOrder,
         "pub" => Token::Pub,
         "regional" => Token::Regional,
         "fn" => Token::Fn,

@@ -77,6 +77,9 @@ impl<'a> Printer<'a> {
         };
 
         let mut items: Vec<Doc<'static>> = Vec::new();
+        if let Some(order) = program.drop_order {
+            items.push(text(format!("drop_order {:?};", order.as_str())));
+        }
         if let Some(cache) = self.sources {
             items.extend(
                 cache

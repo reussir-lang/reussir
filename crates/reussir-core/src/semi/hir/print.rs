@@ -61,6 +61,7 @@ pub struct Printer<'a> {
     /// only; the compiler's fallback tower never serializes).
     lang: Option<&'a rustc_hash::FxHashMap<DefId, crate::semi::lang::LangItem>>,
     interface: Option<InterfaceEmit<'a>>,
+    drop_order: Option<crate::drop_order::DropOrder>,
 }
 
 /// The `.rri` interface mode of the printer: emit the versioned header first,
@@ -105,6 +106,7 @@ impl<'a> Printer<'a> {
             impl_items: &[],
             lang: None,
             interface: None,
+            drop_order: None,
         }
     }
 
@@ -127,7 +129,13 @@ impl<'a> Printer<'a> {
             impl_items: &[],
             lang: None,
             interface: None,
+            drop_order: None,
         }
+    }
+
+    pub fn with_drop_order(mut self, order: Option<crate::drop_order::DropOrder>) -> Self {
+        self.drop_order = order;
+        self
     }
 
     /// Attach module transform metadata to the next program rendering.
@@ -201,6 +209,9 @@ impl<'a> Printer<'a> {
                 "interface {} package {:?} producer {:?};",
                 i.format, i.package, i.producer
             )));
+        }
+        if let Some(order) = self.drop_order {
+            items.push(text(format!("drop_order {:?};", order.as_str())));
         }
         if let Some(cache) = self.sources {
             items.extend(cache.ids().map(|id| {

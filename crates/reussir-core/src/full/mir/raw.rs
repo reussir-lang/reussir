@@ -63,6 +63,7 @@ pub fn string_entries(
 /// ground layout), functions, exported trampolines.
 #[derive(Clone, Debug)]
 pub struct Program {
+    pub drop_order: Option<crate::drop_order::DropOrder>,
     pub files: Vec<FileEntry>,
     pub strings: Vec<StringEntry>,
     pub records: Vec<RecordDecl>,
@@ -153,6 +154,7 @@ impl Program {
     /// Partition a flat item list into a [`Program`].
     pub fn from_items(items: Vec<Item>) -> Program {
         let mut p = Program {
+            drop_order: None,
             files: Vec::new(),
             strings: Vec::new(),
             records: Vec::new(),
