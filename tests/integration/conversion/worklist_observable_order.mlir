@@ -16,12 +16,27 @@
 !y = !reussir.record<compound "OrderY" { !leaf, !handle }>
 !after = !reussir.record<compound "OrderAfter" { !leaf, !y }>
 !before = !reussir.record<compound "OrderBefore" { !y, !leaf }>
+!pair = !reussir.record<compound "OrderPair" { !handle, !handle }>
 !small_token = !reussir.nullable<!reussir.token<align: 8, size: 16>>
 !pair_token = !reussir.nullable<!reussir.token<align: 8, size: 24>>
 !node_token = !reussir.nullable<!reussir.token<align: 8, size: 32>>
 
 module {
   func.func private @order_handle_drop(!handle)
+
+  func.func @order_replace_pair(%old: !reussir.rc<!pair>, %a: !handle, %b: !handle) -> !reussir.rc<!pair> {
+    %donor = reussir.rc.dec(%old : !reussir.rc<!pair>) : !pair_token
+    %value = reussir.record.compound(%a, %b : !handle, !handle) : !pair
+    %token = reussir.token.alloc : !reussir.token<align: 8, size: 24>
+    %new = reussir.rc.create value(%value : !pair) token(%token : !reussir.token<align: 8, size: 24>) : !reussir.rc<!pair>
+    return %new : !reussir.rc<!pair>
+  }
+
+  func.func @order_drop_pair(%rc: !reussir.rc<!pair>) {
+    %token = reussir.rc.dec(%rc : !reussir.rc<!pair>) : !pair_token
+    reussir.token.free(%token : !pair_token)
+    return
+  }
 
   func.func @order_drop_leaf(%rc: !reussir.rc<!leaf>) {
     %token = reussir.rc.dec(%rc : !reussir.rc<!leaf>) : !small_token

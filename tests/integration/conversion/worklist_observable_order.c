@@ -10,6 +10,8 @@ extern void order_drop_leaf(void *);
 extern void order_drop_node(void *);
 extern void order_drop_after(void *);
 extern void order_drop_before(void *);
+extern void *order_replace_pair(void *, void *, void *);
+extern void order_drop_pair(void *);
 
 typedef struct Handle {
   uint32_t count;
@@ -126,11 +128,22 @@ int main(int argc, char **argv) {
   order_drop_before(make_alias(1));
   if (!expect("alias before", backward_alias, 2))
     return 3;
+  Pair *old = allocate(sizeof(*old));
+  old->a = make_handle(1);
+  old->b = make_handle(2);
+  Pair *replacement = order_replace_pair(old, make_handle(3), make_handle(4));
+  const unsigned forward_old[] = {1, 2}, backward_old[] = {2, 1};
+  if (!expect("donor cleanup", backward ? backward_old : forward_old, 2))
+    return 4;
+  order_drop_pair(replacement);
+  const unsigned forward_new[] = {3, 4}, backward_new[] = {4, 3};
+  if (!expect("replacement cleanup", backward ? backward_new : forward_new, 2))
+    return 5;
   // The public nested drop must finish before its caller records 21.
   nested_leaf = make_leaf(9);
   order_drop_node(make_node(20));
   return expect("nested public drop",
                 backward ? backward_nested : forward_nested, 5)
              ? 0
-             : 4;
+             : 6;
 }

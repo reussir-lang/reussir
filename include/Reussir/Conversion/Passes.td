@@ -207,7 +207,7 @@ def ReussirRcDecrementExpansionPass : Pass<"reussir-rc-decrement-expansion"> {
       Option<"dropOrder", "drop-order", "std::string", /*default=*/"\"\"",
              "member destruction order">,
       Option<"deferNormal", "defer-normal", "bool", /*default=*/"false",
-             "leave ordinary releases for final ownership expansion">];
+             "leave observable ordinary releases for final ownership expansion">];
   let dependentDialects = ["::reussir::ReussirDialect",
                            "::mlir::arith::ArithDialect",
                            "::mlir::scf::SCFDialect"];
