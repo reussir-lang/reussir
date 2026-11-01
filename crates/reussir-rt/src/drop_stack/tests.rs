@@ -185,8 +185,9 @@ unsafe extern "C" fn enqueue_wide(object: *mut u8) {
         unsafe { defer_wide(object.cast(), callback) };
     }
     ACTIVE.with(|context| {
+        assert!(context.active_run.get().is_some());
         let context = context.pending.borrow();
-        assert_eq!(context.work.len(), 1);
+        assert!(context.work.is_empty());
         assert_eq!(context.cells.len(), 1);
     });
 }
@@ -273,8 +274,9 @@ unsafe extern "C" fn bulk(object: *mut u8) {
         unsafe { defer(object, first) };
     }
     ACTIVE.with(|context| {
+        assert!(context.active_run.get().is_some());
         let context = context.pending.borrow();
-        assert_eq!(context.work.len(), 1);
+        assert!(context.work.is_empty());
         assert_eq!(context.cells.len(), 127);
     });
 }
