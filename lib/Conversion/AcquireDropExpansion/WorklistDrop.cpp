@@ -111,40 +111,87 @@ public:
             extents.push_back(size);
             total = mlir::arith::MulIOp::create(builder, loc, total, size);
           }
+          auto callback = llvm::cast<mlir::func::FuncOp>(
+              builder.getInsertionBlock()->getParentOp());
+          auto scheduleNext = [&](mlir::Value next) {
+            ReussirDropDeferIndexedOp::create(
+                builder, loc,
+                mlir::FlatSymbolRefAttr::get(callback.getSymNameAttr()), arg,
+                next);
+          };
+          auto project = [&](mlir::Value cursor) {
+            llvm::SmallVector<mlir::Value> indices(extents.size());
+            mlir::Value remaining = cursor;
+            for (size_t dim = extents.size(); dim-- > 0;) {
+              indices[dim] = mlir::arith::RemUIOp::create(
+                  builder, loc, remaining, extents[dim]);
+              remaining = mlir::arith::DivUIOp::create(builder, loc, remaining,
+                                                       extents[dim]);
+            }
+            mlir::Value element = view;
+            for (auto [dim, index] : llvm::enumerate(indices)) {
+              mlir::Type projected =
+                  dim + 1 == indices.size()
+                      ? mlir::Type(RefType::get(
+                            builder.getContext(), type.getElementType(),
+                            Capability::unspecified, refType.getAtomicKind()))
+                      : mlir::Type(getProjectedArrayViewType(
+                            llvm::cast<mlir::MemRefType>(element.getType())));
+              element = ReussirArrayProjectOp::create(builder, loc, projected,
+                                                      element, index);
+            }
+            return element;
+          };
+          mlir::Value one =
+              mlir::arith::ConstantIndexOp::create(builder, loc, 1);
+          auto elementType = type.getElementType();
+          if (auto nullable = llvm::dyn_cast<NullableType>(elementType))
+            elementType = nullable.getPtrTy();
+          if (auto rc = llvm::dyn_cast<RcType>(elementType);
+              rc && rc.getCapability() == Capability::shared) {
+            auto loop = mlir::scf::WhileOp::create(
+                builder, loc, mlir::TypeRange{builder.getIndexType()},
+                mlir::ValueRange{cursor});
+            mlir::OpBuilder::InsertionGuard guard(builder);
+            auto *before =
+                builder.createBlock(&loop.getBefore(), loop.getBefore().end(),
+                                    {builder.getIndexType()}, {loc});
+            mlir::Value position = before->getArgument(0);
+            mlir::Value present = mlir::arith::CmpIOp::create(
+                builder, loc, mlir::arith::CmpIPredicate::ult, position, total);
+            mlir::scf::ConditionOp::create(builder, loc, present,
+                                           mlir::ValueRange{position});
+            auto *after =
+                builder.createBlock(&loop.getAfter(), loop.getAfter().end(),
+                                    {builder.getIndexType()}, {loc});
+            position = after->getArgument(0);
+            mlir::Value next =
+                mlir::arith::AddIOp::create(builder, loc, position, one);
+            mlir::Value child = ReussirRefLoadOp::create(
+                builder, loc, type.getElementType(), project(position));
+            mlir::Value dead = deadTest(child);
+            auto branch = mlir::scf::IfOp::create(builder, loc, dead, false);
+            {
+              mlir::OpBuilder::InsertionGuard guard(builder);
+              builder.setInsertionPointToStart(branch.thenBlock());
+              scheduleNext(next);
+              if (auto nullable = llvm::dyn_cast<NullableType>(child.getType()))
+                child = ReussirNullableCoerceOp::create(
+                    builder, loc, nullable.getPtrTy(), child);
+              release(child, false);
+            }
+            mlir::Value resume =
+                mlir::arith::SelectOp::create(builder, loc, dead, total, next);
+            mlir::scf::YieldOp::create(builder, loc, mlir::ValueRange{resume});
+            return;
+          }
           mlir::Value present = mlir::arith::CmpIOp::create(
               builder, loc, mlir::arith::CmpIPredicate::ult, cursor, total);
           auto branch = mlir::scf::IfOp::create(builder, loc, present, false);
           mlir::OpBuilder::InsertionGuard guard(builder);
           builder.setInsertionPointToStart(branch.thenBlock());
-          mlir::Value next = mlir::arith::AddIOp::create(
-              builder, loc, cursor,
-              mlir::arith::ConstantIndexOp::create(builder, loc, 1));
-          auto callback = llvm::cast<mlir::func::FuncOp>(
-              branch->getParentOfType<mlir::func::FuncOp>());
-          ReussirDropDeferIndexedOp::create(
-              builder, loc,
-              mlir::FlatSymbolRefAttr::get(callback.getSymNameAttr()), arg,
-              next);
-          llvm::SmallVector<mlir::Value> indices(extents.size());
-          mlir::Value remaining = cursor;
-          for (size_t dim = extents.size(); dim-- > 0;) {
-            indices[dim] = mlir::arith::RemUIOp::create(builder, loc, remaining,
-                                                        extents[dim]);
-            remaining = mlir::arith::DivUIOp::create(builder, loc, remaining,
-                                                     extents[dim]);
-          }
-          for (auto [dim, index] : llvm::enumerate(indices)) {
-            mlir::Type projected =
-                dim + 1 == indices.size()
-                    ? mlir::Type(RefType::get(
-                          builder.getContext(), type.getElementType(),
-                          Capability::unspecified, refType.getAtomicKind()))
-                    : mlir::Type(getProjectedArrayViewType(
-                          llvm::cast<mlir::MemRefType>(view.getType())));
-            view = ReussirArrayProjectOp::create(builder, loc, projected, view,
-                                                 index);
-          }
-          ReussirRefDropOp::create(builder, loc, view);
+          scheduleNext(mlir::arith::AddIOp::create(builder, loc, cursor, one));
+          ReussirRefDropOp::create(builder, loc, project(cursor));
         },
         true);
     ReussirDropDeferIndexedOp::create(
