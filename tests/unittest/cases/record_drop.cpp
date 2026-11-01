@@ -7,9 +7,11 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 //===----------------------------------------------------------------------===//
-#include "Reussir/IR/ReussirTypes.h"
+#include "Reussir/Conversion/Blake3Symbol.h"
 #include "Reussir/IR/ReussirDialect.h"
+#include "Reussir/IR/ReussirTypes.h"
 #include <gtest/gtest.h>
+#include <llvm/Support/raw_ostream.h>
 #ifdef REUSSIR_ENABLE_RCGMP
 #include "RCGMP/IR/RCGMPDialect.h"
 #include "RCGMP/IR/RCGMPTypes.h"
@@ -42,6 +44,19 @@ TEST_F(RecordDropTest, AcyclicBranchingIsDirect) {
   EXPECT_EQ(leaf.classifyRecordDrop(), RecordDropKind::Direct);
   EXPECT_EQ(pair.classifyRecordDrop(), RecordDropKind::Direct);
   EXPECT_FALSE(pair.hasObservableCleanup());
+}
+
+TEST_F(RecordDropTest, ForwardArrayWalkSymbolIsStable) {
+  auto array =
+      ArrayType::get(&context, {2}, mlir::IntegerType::get(&context, 64));
+  auto signature =
+      mlir::FunctionType::get(&context, {RefType::get(&context, array)}, {});
+  std::string text;
+  llvm::raw_string_ostream stream(text);
+  printTypeWithRecordBodiesOnce(signature, stream);
+  EXPECT_EQ(mangledBlake3Symbol("REUSSIR_DROP_walk_forward", text),
+            "_RNvC25REUSSIR_DROP_walk_forward43"
+            "CZhH4niIQwWWLjrUf4yvQevfo0YrPlMeqRG77pTF5I4");
 }
 
 TEST_F(RecordDropTest, ChainAndNullableChainUseTailLoop) {
