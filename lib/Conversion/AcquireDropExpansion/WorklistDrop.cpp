@@ -517,12 +517,23 @@ prepareWorklistDropBridges(mlir::ModuleOp module,
     rewriter.setInsertionPoint(free);
     WorklistGlue(module, rewriter, &symbols, free.getLoc())
         .free(token.getRcPtr());
+    auto target = module->getAttrOfType<mlir::StringAttr>(
+        mlir::LLVM::LLVMDialect::getTargetTripleAttrName());
     for (auto drop : llvm::reverse(drops)) {
       auto branch = drop->getParentOfType<mlir::scf::IfOp>();
       branch->moveBefore(free);
       mlir::OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(drop);
-      emitWorklistDrop(drop.getRef(), drop.getLoc(), rewriter, &symbols);
+      if (drop == drops.front() &&
+          (!target || !llvm::Triple(target.getValue()).isWasm())) {
+        auto walk = WorklistGlue(module, rewriter, &symbols, drop.getLoc())
+                        .walk(drop.getRef().getType());
+        auto call = mlir::func::CallOp::create(rewriter, drop.getLoc(), walk,
+                                               mlir::ValueRange{drop.getRef()});
+        call->setAttr(kMustTailCallAttr, rewriter.getUnitAttr());
+      } else {
+        emitWorklistDrop(drop.getRef(), drop.getLoc(), rewriter, &symbols);
+      }
       rewriter.eraseOp(drop);
     }
     rewriter.eraseOp(free);
