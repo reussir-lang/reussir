@@ -2,6 +2,8 @@
 use core::{ffi::c_void, num::NonZeroUsize, ptr::NonNull};
 use std::cell::{Cell, RefCell};
 
+const RETAINED_BUFFER_CAPACITY: usize = 64;
+
 /// Releases one deferred object.
 pub type Release = unsafe extern "C" fn(*mut u8);
 
@@ -202,11 +204,11 @@ fn execute(context: &DropContext, walk: impl FnOnce()) {
         context.drain();
     }
     let mut context = context.pending.borrow_mut();
-    if context.work.capacity() > 64 {
-        context.work.shrink_to(64);
+    if context.work.capacity() > RETAINED_BUFFER_CAPACITY {
+        context.work.shrink_to(RETAINED_BUFFER_CAPACITY);
     }
-    if context.cells.capacity() > 64 {
-        context.cells.shrink_to(64);
+    if context.cells.capacity() > RETAINED_BUFFER_CAPACITY {
+        context.cells.shrink_to(RETAINED_BUFFER_CAPACITY);
     }
     debug_assert!(context.work.is_empty() && context.cells.is_empty());
 }
