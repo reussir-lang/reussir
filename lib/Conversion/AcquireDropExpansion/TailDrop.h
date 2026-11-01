@@ -12,7 +12,9 @@
 #include "Reussir/IR/ReussirOps.h"
 
 namespace reussir {
+void emitBoxFree(mlir::Value owner, mlir::Location loc, mlir::ModuleOp module,
+                 mlir::OpBuilder &builder);
 bool emitTailDropRelease(mlir::Value rc, mlir::Location loc,
                          mlir::ModuleOp module, mlir::PatternRewriter &rewriter,
                          mlir::SymbolTableCollection *symbols);
-}
+} // namespace reussir

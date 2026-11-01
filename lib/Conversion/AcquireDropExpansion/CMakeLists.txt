@@ -1,6 +1,7 @@
 add_mlir_conversion_library(MLIRReussirAcquireDropExpansion
   AcquireDropExpansion.cpp
   TailDrop.cpp
+  WorklistDrop.cpp
 
   DEPENDS
   MLIRReussirConversionPassIncGen
