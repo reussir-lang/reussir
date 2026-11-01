@@ -385,7 +385,10 @@ fn boxes_link_through_their_headers() {
 #[test]
 fn symbols_are_exported() {
     let symbols = crate::symbols::exported_symbols();
-    for name in ["__reussir_drop_defer", "__reussir_drop_defer_wide", "__reussir_drop_run"] {
+    for name in [
+        "__reussir_drop_defer", "__reussir_drop_defer_wide", "__reussir_drop_run",
+        "__reussir_drop_defer_step", "__reussir_drop_run_step", "__reussir_drop_defer_indexed",
+    ] {
         assert!(symbols.iter().any(|s| s.name == name && !s.address.is_null()));
     }
 }
@@ -418,4 +421,33 @@ unsafe extern "C" fn nested_step_walk(_: *mut u8) {
 fn nested_steps_preserve_the_outer_pending_work() {
     unsafe { run(p(0), nested_step_walk) };
     assert_eq!(take_log(), [('b', 2), ('m', 0), ('w', 0), ('b', 1)]);
+}
+
+unsafe extern "C" fn indexed(object: *mut u8, cursor: usize) {
+    assert_eq!(object, p(42));
+    if cursor < 3 {
+        unsafe { defer_indexed(object, cursor + 1, indexed) };
+    }
+    unsafe { defer(p(cursor), b) };
+}
+
+#[test]
+fn indexed_work_advances_after_each_child() {
+    unsafe { defer_indexed(p(42), 0, indexed) };
+    assert_eq!(take_log(), (0..4).map(|i| ('b', i)).collect::<Vec<_>>());
+    assert!(!releasing() && pending() == 0);
+}
+
+unsafe extern "C" fn indexed_chain(_: *mut u8, cursor: usize) {
+    if cursor != 0 {
+        unsafe { defer_indexed(p(0), cursor - 1, indexed_chain) };
+    }
+}
+
+#[test]
+fn indexed_work_uses_a_bounded_native_stack() {
+    std::thread::Builder::new().stack_size(64 * 1024).spawn(|| {
+        unsafe { defer_indexed(p(0), CHAIN, indexed_chain) };
+        assert!(pending() == 0 && trimmed());
+    }).unwrap().join().unwrap();
 }
