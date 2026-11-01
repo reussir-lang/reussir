@@ -34,11 +34,19 @@ class WorklistGlue {
   mlir::PatternRewriter &builder;
   mlir::SymbolTableCollection *symbols;
   mlir::Location loc;
+  bool tailRecursiveDrops;
 
 public:
   WorklistGlue(mlir::ModuleOp module, mlir::PatternRewriter &builder,
-               mlir::SymbolTableCollection *symbols, mlir::Location loc)
-      : module(module), builder(builder), symbols(symbols), loc(loc) {}
+               mlir::SymbolTableCollection *symbols, mlir::Location loc,
+               bool tailRecursiveDrops = true)
+      : module(module), builder(builder), symbols(symbols), loc(loc),
+        tailRecursiveDrops(tailRecursiveDrops) {
+    auto target = module->getAttrOfType<mlir::StringAttr>(
+        mlir::LLVM::LLVMDialect::getTargetTripleAttrName());
+    this->tailRecursiveDrops &=
+        !target || !llvm::Triple(target.getValue()).isWasm();
+  }
 
   mlir::func::FuncOp function(mlir::Type type, WorklistRole role,
                               llvm::function_ref<void(mlir::Value)> body,
@@ -96,8 +104,94 @@ public:
     });
   }
 
-  mlir::func::FuncOp releaseFunction(RcType type);
-  void release(mlir::Value rc, bool run);
+  bool dispatchLeaf(mlir::Value ref, llvm::function_ref<void()> onLeaf,
+                    llvm::function_ref<void()> onOther) {
+    auto refType = llvm::cast<RefType>(ref.getType());
+    auto record = llvm::dyn_cast<RecordType>(refType.getElementType());
+    if (!record || !record.isVariant() || record.hasObservableCleanup()) {
+      return false;
+    }
+    llvm::SmallVector<bool> leaf;
+    llvm::SmallVector<mlir::Attribute> tags;
+    for (const auto &[i, member, field] :
+         llvm::enumerate(record.getMembers(), record.getMemberIsField())) {
+      leaf.push_back(field || isTriviallyCopyable(getProjectedType(
+                                  member, false, Capability::shared)));
+      tags.push_back(builder.getDenseI64ArrayAttr({int64_t(i)}));
+    }
+    if (!llvm::is_contained(leaf, true)) {
+      return false;
+    }
+    auto dispatch = ReussirRecordDispatchOp::create(
+        builder, loc, mlir::Type{}, ref, builder.getArrayAttr(tags),
+        tags.size());
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    for (const auto &[i, member, field] :
+         llvm::enumerate(record.getMembers(), record.getMemberIsField())) {
+      auto projected = getProjectedType(member, field, Capability::unspecified,
+                                        refType.getAtomicKind());
+      builder.createBlock(
+          &dispatch.getRegions()[i], {},
+          {RefType::get(builder.getContext(), projected,
+                        Capability::unspecified, refType.getAtomicKind())},
+          {loc});
+      if (leaf[i])
+        onLeaf();
+      else
+        onOther();
+      ReussirScfYieldOp::create(builder, loc, nullptr);
+    }
+    return true;
+  }
+
+  void drop(mlir::Value ref, bool run) {
+    auto body = [&](mlir::Value arg) {
+      auto enqueue = [&] { schedule(walk(arg.getType()), arg, run); };
+      if (!dispatchLeaf(arg, [] {}, enqueue))
+        enqueue();
+    };
+    if (run) {
+      auto entry = function(ref.getType(), WorklistRole::Entry, body);
+      mlir::func::CallOp::create(builder, loc, entry, mlir::ValueRange{ref});
+    } else {
+      body(ref);
+    }
+  }
+
+  // Whether cleanup can finish in this frame without a queued continuation.
+  bool canFinishInline(mlir::Type type) const {
+    if (isTriviallyCopyable(type))
+      return true;
+    return llvm::TypeSwitch<mlir::Type, bool>(type)
+        .Case<RecordType>([&](RecordType record) {
+          return !record.hasObservableCleanup() &&
+                 (!record.hasRecursiveCleanup() ||
+                  (tailRecursiveDrops && !record.hasWorklistCleanup()));
+        })
+        .Case<RcType>([&](RcType rc) {
+          if (rc.getCapability() == Capability::rigid)
+            return true;
+          auto record = llvm::dyn_cast<RecordType>(rc.getElementType());
+          if (record &&
+              record.classifyRecordDrop() == RecordDropKind::TailLoop &&
+              !canApplyTailDrop(rc))
+            return false;
+          return canFinishInline(rc.getElementType());
+        })
+        .Case<NullableType>([&](NullableType nullable) {
+          return canFinishInline(nullable.getPtrTy());
+        })
+        .Case<ArrayType>([&](ArrayType array) {
+          return !array.hasTargetAttr() &&
+                 (llvm::is_contained(array.getShape(), 0) ||
+                  canFinishInline(array.getElementType()));
+        })
+        .Case<CellType>([&](CellType cell) {
+          return !cell.getMutex() && !cell.getFlatlock() && !cell.getRwlock() &&
+                 canFinishInline(cell.getElementType());
+        })
+        .Default(false);
+  }
 
   void free(mlir::Value rc) {
     auto task =
@@ -290,7 +384,146 @@ public:
     };
     continueAt(continueAt, children.size());
   }
+
+  // Release a dead box, including its payload and allocation.
+  mlir::func::FuncOp releaseFunction(RcType type) {
+    return function(type, WorklistRole::Release, [&](mlir::Value arg) {
+      if (llvm::isa<FFIObjectType, ClosureType>(type.getElementType())) {
+        if (type.getAtomicKind() == AtomicKind::atomic)
+          ReussirRcIncOp::create(builder, loc, arg);
+        auto dec = ReussirRcDecOp::create(builder, loc, NullableType{}, arg,
+                                          mlir::IntegerAttr{},
+                                          mlir::DenseI64ArrayAttr{});
+        dec->setAttr(REUSSIR_NO_DEFER, builder.getUnitAttr());
+        return;
+      }
+      if (isTriviallyCopyable(type.getElementType())) {
+        emitBoxFree(arg, loc, module, builder);
+        return;
+      }
+      auto refType =
+          RefType::get(builder.getContext(), type.getElementType(),
+                       Capability::unspecified, type.getAtomicKind());
+      mlir::Value ref = ReussirRcBorrowOp::create(builder, loc, refType, arg);
+      if (canFinishInline(type.getElementType())) {
+        ReussirRefDropOp::create(builder, loc, ref, true, nullptr);
+        emitBoxFree(arg, loc, module, builder);
+        return;
+      }
+      auto record = llvm::dyn_cast<RecordType>(type.getElementType());
+      auto target = module->getAttrOfType<mlir::StringAttr>(
+          mlir::LLVM::LLVMDialect::getTargetTripleAttrName());
+      if (record && !record.hasObservableCleanup() && canReleasePure(record) &&
+          (!target || !llvm::Triple(target.getValue()).isWasm())) {
+        releasePure(ref, arg);
+        return;
+      }
+      if (isForwardDrop(module)) {
+        free(arg);
+        auto call = mlir::func::CallOp::create(builder, loc, walk(refType),
+                                               mlir::ValueRange{ref});
+        auto triple = module->getAttrOfType<mlir::StringAttr>(
+            mlir::LLVM::LLVMDialect::getTargetTripleAttrName());
+        if (!triple || !llvm::Triple(triple.getValue()).isWasm())
+          call->setAttr(kMustTailCallAttr, builder.getUnitAttr());
+      } else {
+        ReussirRefDropOp::create(builder, loc, ref, true, nullptr);
+        emitBoxFree(arg, loc, module, builder);
+      }
+    });
+  }
+
+  void release(mlir::Value rc, bool run) {
+    auto type = llvm::cast<RcType>(rc.getType());
+    auto payload = type.getElementType();
+    if (isTriviallyCopyable(payload)) {
+      emitBoxFree(rc, loc, module, builder);
+      return;
+    }
+    auto task = releaseFunction(type);
+    if (canFinishInline(payload)) {
+      mlir::func::CallOp::create(builder, loc, task, mlir::ValueRange{rc});
+      return;
+    }
+    auto enqueue = [&] {
+      if (!run && !llvm::isa<FFIObjectType, ClosureType>(payload))
+        ReussirRcDeferOp::create(
+            builder, loc, mlir::FlatSymbolRefAttr::get(task.getSymNameAttr()),
+            rc);
+      else
+        schedule(task, rc, run);
+    };
+    if (!llvm::isa<RecordType>(payload)) {
+      enqueue();
+      return;
+    }
+    auto refType = RefType::get(builder.getContext(), payload,
+                                Capability::unspecified, type.getAtomicKind());
+    mlir::Value ref = ReussirRcBorrowOp::create(builder, loc, refType, rc);
+    if (!dispatchLeaf(
+            ref, [&] { emitBoxFree(rc, loc, module, builder); }, enqueue))
+      enqueue();
+  }
 };
 } // namespace
 
+void emitWorklistDrop(mlir::Value ref, mlir::Location loc,
+                      mlir::PatternRewriter &rewriter,
+                      mlir::SymbolTableCollection *symbols, bool run) {
+  WorklistGlue(rewriter.getInsertionBlock()
+                   ->getParentOp()
+                   ->getParentOfType<mlir::ModuleOp>(),
+               rewriter, symbols, loc)
+      .drop(ref, run);
+}
+void emitWorklistRelease(mlir::Value rc, mlir::Location loc,
+                         mlir::PatternRewriter &rewriter,
+                         mlir::SymbolTableCollection *symbols, bool run,
+                         bool tailRecursiveDrops) {
+  WorklistGlue(rewriter.getInsertionBlock()
+                   ->getParentOp()
+                   ->getParentOfType<mlir::ModuleOp>(),
+               rewriter, symbols, loc, tailRecursiveDrops)
+      .release(rc, run);
+}
+
+void emitWorklistDecrement(mlir::Value rc, mlir::Location loc,
+                           mlir::PatternRewriter &rewriter,
+                           mlir::SymbolTableCollection *symbols, bool run,
+                           bool tailRecursiveDrops) {
+  auto type = llvm::cast<RcType>(rc.getType());
+  auto module = rewriter.getInsertionBlock()
+                    ->getParentOp()
+                    ->getParentOfType<mlir::ModuleOp>();
+  auto target = module->getAttrOfType<mlir::StringAttr>(
+      mlir::LLVM::LLVMDialect::getTargetTripleAttrName());
+  if (auto record = llvm::dyn_cast<RecordType>(type.getElementType());
+      record && tailRecursiveDrops && !record.hasObservableCleanup() &&
+      (!target || !llvm::Triple(target.getValue()).isWasm()) &&
+      emitTailDropRelease(rc, loc, module, rewriter, symbols))
+    return;
+  mlir::OpBuilder::InsertionGuard guard(rewriter);
+  if (module->hasAttr(kSpecialPtrTagAttr) && type.mayCarrySpecialPointerTag()) {
+    mlir::Value immediate =
+        ReussirRcIsImmediateOp::create(rewriter, loc, rewriter.getI1Type(), rc);
+    auto branch = mlir::scf::IfOp::create(rewriter, loc, immediate, true);
+    rewriter.setInsertionPointToStart(branch.elseBlock());
+  }
+  bool atomic = type.getAtomicKind() == AtomicKind::atomic;
+  mlir::Value count =
+      atomic ? ReussirRcFetchSubOp::create(rewriter, loc, rc).getRefCount()
+             : ReussirRcFetchOp::create(rewriter, loc, rc).getRefCount();
+  mlir::Value one = mlir::arith::ConstantIndexOp::create(rewriter, loc, 1);
+  mlir::Value unique = mlir::arith::CmpIOp::create(
+      rewriter, loc, mlir::arith::CmpIPredicate::eq, count, one);
+  auto branch = mlir::scf::IfOp::create(rewriter, loc, unique, !atomic);
+  if (!atomic) {
+    rewriter.setInsertionPointToStart(branch.elseBlock());
+    ReussirRcSetOp::create(
+        rewriter, loc, rc,
+        mlir::arith::SubIOp::create(rewriter, loc, count, one));
+  }
+  rewriter.setInsertionPointToStart(branch.thenBlock());
+  emitWorklistRelease(rc, loc, rewriter, symbols, run, tailRecursiveDrops);
+}
 } // namespace reussir

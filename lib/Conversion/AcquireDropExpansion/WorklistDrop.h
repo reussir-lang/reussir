@@ -23,11 +23,12 @@ void emitWorklistDrop(mlir::Value ref, mlir::Location loc,
                       mlir::SymbolTableCollection *symbols, bool run = false);
 void emitWorklistRelease(mlir::Value rc, mlir::Location loc,
                          mlir::PatternRewriter &rewriter,
-                         mlir::SymbolTableCollection *symbols,
-                         bool run = false);
+                         mlir::SymbolTableCollection *symbols, bool run = false,
+                         bool tailRecursiveDrops = true);
 void emitWorklistArrayDrop(mlir::Value ref, mlir::Location loc,
                            mlir::PatternRewriter &rewriter,
-                           mlir::SymbolTableCollection *symbols);
+                           mlir::SymbolTableCollection *symbols,
+                           bool tailRecursiveDrops = true);
 void emitWorklistDecrement(mlir::Value rc, mlir::Location loc,
                            mlir::PatternRewriter &rewriter,
                            mlir::SymbolTableCollection *symbols,
