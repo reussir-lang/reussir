@@ -3600,6 +3600,7 @@ dependencies = [
  "paste",
  "reussir-pjrt-sys",
  "reussir-stablehlo",
+ "scoped-tls",
  "serde",
  "serde_json",
  "smallvec",
