@@ -5,16 +5,18 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //===----------------------------------------------------------------------===//
 #include "WorklistDrop.h"
+#include "Reussir/Conversion/Blake3Symbol.h"
 #include "Reussir/Transformation/SpecialPointerTag.h"
 #include "TailDrop.h"
 #include <format>
-#include <string_view>
 #include <llvm/ADT/TypeSwitch.h>
+#include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Triple.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
+#include <string_view>
 
 namespace reussir {
 bool isForwardDrop(mlir::ModuleOp module) {
@@ -44,32 +46,32 @@ public:
     auto direction = isForwardDrop(module) ? WorklistDirection::Forward
                                            : WorklistDirection::Backward;
     auto key = WorklistRoleAttr::get(builder.getContext(), role, direction);
-    for (auto function : module.getOps<mlir::func::FuncOp>())
-      if (function->getAttr(REUSSIR_WORKLIST_ROLE) == key &&
-          function.getNumArguments() == (indexed ? 2 : 1) &&
-          function.getArgumentTypes()[0] == type)
-        return function;
-    mlir::OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPointToStart(module.getBody());
     llvm::SmallVector<mlir::Type> args{type};
     if (indexed)
       args.push_back(builder.getIndexType());
-    auto function = mlir::func::FuncOp::create(
-        builder, loc,
-        std::format("__reussir_drop.{}.{}",
-                    std::string_view(stringifyWorklistRole(role)),
-                    std::string_view(stringifyWorklistDirection(direction))),
-        builder.getFunctionType(args, {}));
+    auto functionType = builder.getFunctionType(args, {});
+    std::string signature;
+    llvm::raw_string_ostream stream(signature);
+    printTypeWithRecordBodiesOnce(functionType, stream);
+    auto nameSpace = std::format(
+        "REUSSIR_DROP_{}_{}", std::string_view(stringifyWorklistRole(role)),
+        std::string_view(stringifyWorklistDirection(direction)));
+    auto name = mangledBlake3Symbol(nameSpace, signature);
+    mlir::SymbolTableCollection ownSymbols;
+    auto &table = (symbols ? *symbols : ownSymbols).getSymbolTable(module);
+    if (auto existing = table.lookup<mlir::func::FuncOp>(name))
+      return existing;
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(module.getBody());
+    auto function =
+        mlir::func::FuncOp::create(builder, loc, name, functionType);
     function.setPrivate();
     function->setAttr(REUSSIR_WORKLIST_ROLE, key);
     function->setAttr(kWorklistGlueAttr, builder.getUnitAttr());
     function->setAttr("llvm.linkage",
                       builder.getAttr<mlir::LLVM::LinkageAttr>(
-                          mlir::LLVM::linkage::Linkage::Private));
-    if (symbols)
-      symbols->getSymbolTable(module).insert(function);
-    else
-      mlir::SymbolTable(module).insert(function);
+                          mlir::LLVM::linkage::Linkage::LinkonceODR));
+    table.insert(function);
     inheritSanitizerPassthrough(module, function);
     function.setArgAttr(0, "llvm.noalias", builder.getUnitAttr());
     function.setArgAttr(0, "llvm.nonnull", builder.getUnitAttr());
