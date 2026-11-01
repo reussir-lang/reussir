@@ -33,7 +33,7 @@ module {
     return
   }
   // CHECK-LABEL: func.func @array_box
-  // CHECK: call @__reussir_drop.release.
+  // CHECK: call @_RNvC{{[0-9]+}}REUSSIR_DROP_release_{{[A-Za-z0-9_]+}}
   // DISABLED-LABEL: func.func @array_box
   // DISABLED: reussir.rc.defer
   func.func @array_box(%ref: !reussir.ref<!reussir.rc<!boxed>>) attributes {reussir.worklist_drop} {
