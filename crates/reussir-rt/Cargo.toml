@@ -42,6 +42,7 @@ libmimalloc-sys = { version = "0.1.44", optional = true, features = ["extended"]
 mlir_sync = { git = "https://github.com/reussir-lang/mlir-sync.git", rev = "018206f4df254fe205f0b63068cd133e5e94ba42", features = ["nightly"] }
 num_enum = "0.7.4"
 smallvec = "1.15.1"
+scoped-tls = "1"
 stacker.workspace = true
 
 [dev-dependencies]
