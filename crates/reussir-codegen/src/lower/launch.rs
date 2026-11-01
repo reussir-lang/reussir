@@ -28,9 +28,9 @@ pub(super) fn contains_launch(expr: &mir::Expr<'_>) -> bool {
     found
 }
 
-pub(super) fn buffer_types<'c>(
-    tys: &TypeCtx<'c, '_, '_>,
-    ty: Ty<'_>,
+pub(super) fn buffer_types<'c, 'tcx>(
+    tys: &TypeCtx<'c, '_, 'tcx>,
+    ty: Ty<'tcx>,
     out: &mut Vec<Type<'c>>,
 ) -> Result<()> {
     match ty.kind() {

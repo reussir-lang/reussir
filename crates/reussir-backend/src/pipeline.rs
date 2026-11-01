@@ -406,7 +406,6 @@ pub fn run_lowering_pipeline(
             // this point would otherwise process them, and only LLVM would
             // delete them. `pub` functions are public symbols and stay.
             module: sys::reussirCreateSymbolDCEPass();
-
         }
 
         // Simplify extents before instantiating tokens. Cleanup after decrement
