@@ -505,6 +505,12 @@ pub fn run_lowering_pipeline(
         // Materialize Cell accesses and their ownership effects before the
         // second inc/dec cancellation phase.
         module: sys::reussirCreateConvertToSTDPass(false);
+        module: sys::reussirCreateAcquireDropExpansionPass(
+            false,
+            false,
+            false,
+            drop_order_ref,
+        );
         func:   sys::reussirCreateIncDecCancellationPass();
         func:   sys::reussirCreateTokenReusePass(
             options.reuse_token_across_call,

@@ -198,7 +198,15 @@ void createLoweringPipeline(mlir::PassManager &pm,
   reussir::ReussirAcquireDropExpansionPassOptions earlyDrops;
   earlyDrops.dropOrder = dropOrder.str();
   pm.addPass(reussir::createReussirAcquireDropExpansionPass(earlyDrops));
-  pm.addPass(reussir::createReussirConvertToSTDPass());
+  reussir::ReussirConvertToSTDPassOptions materialize;
+  materialize.expandArrays = false;
+  pm.addPass(reussir::createReussirConvertToSTDPass(materialize));
+  reussir::ReussirAcquireDropExpansionPassOptions normalizeDrops;
+  normalizeDrops.expandDecrement = false;
+  normalizeDrops.outlineRecord = false;
+  normalizeDrops.tailRecursiveDrops = false;
+  normalizeDrops.dropOrder = dropOrder.str();
+  pm.addPass(reussir::createReussirAcquireDropExpansionPass(normalizeDrops));
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirIncDecCancellationPass());
 
