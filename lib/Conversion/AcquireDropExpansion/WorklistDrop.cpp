@@ -40,7 +40,7 @@ public:
                               llvm::function_ref<void(mlir::Value)> body,
                               bool indexed = false) {
     auto direction = isForwardDrop(module) ? WorklistDirection::Forward
-                                          : WorklistDirection::Backward;
+                                           : WorklistDirection::Backward;
     auto key = WorklistRoleAttr::get(builder.getContext(), role, direction);
     for (auto function : module.getOps<mlir::func::FuncOp>())
       if (function->getAttr(REUSSIR_WORKLIST_ROLE) == key &&
@@ -55,7 +55,8 @@ public:
     auto function = mlir::func::FuncOp::create(
         builder, loc,
         ("__reussir_drop." + stringifyWorklistRole(role) + "." +
-         stringifyWorklistDirection(direction)).str(),
+         stringifyWorklistDirection(direction))
+            .str(),
         builder.getFunctionType(args, {}));
     function.setPrivate();
     function->setAttr(REUSSIR_WORKLIST_ROLE, key);
