@@ -160,7 +160,7 @@ impl DropOrder {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
-    /// `rrc --drop-order`: `forward` (default) or `backward`.
+    /// `rrc --drop-order`: `forward` or `backward` (default).
     pub drop_order: Option<DropOrder>,
     /// `rrc -O`: `none`, `default`, `aggressive`, or `size`.
     pub opt: Option<String>,
