@@ -1,4 +1,30 @@
 // RUN: %reussir-opt %s --split-input-file --verify-diagnostics
+func.func @rc_missing(%box: !reussir.rc<i64>) {
+  // expected-error @+1 {{requires a release function symbol}}
+  reussir.rc.defer @absent(%box : !reussir.rc<i64>)
+  return
+}
+// -----
+func.func private @bad(%box: !reussir.rc<i32>)
+func.func @rc_mismatch(%box: !reussir.rc<i64>) {
+  // expected-error @+1 {{release function must match the operands and return nothing}}
+  reussir.rc.defer @bad(%box : !reussir.rc<i64>)
+  return
+}
+// -----
+func.func private @release(%box: !reussir.rc<i64 exclusive>)
+func.func @rc_exclusive(%box: !reussir.rc<i64 exclusive>) {
+  // expected-error @+1 {{requires a shared RC box}}
+  reussir.rc.defer @release(%box : !reussir.rc<i64 exclusive>)
+  return
+}
+// -----
+func.func @join_missing(%arg: !reussir.ref<i64>) {
+  // expected-error @+1 {{requires a release function symbol}}
+  reussir.drop.join @absent(%arg : !reussir.ref<i64>)
+  return
+}
+// -----
 func.func @missing(%arg: !reussir.ref<i64>) {
   // expected-error @+1 {{requires a release function symbol}}
   reussir.drop.run @absent(%arg : !reussir.ref<i64>)
