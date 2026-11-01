@@ -25,7 +25,10 @@ impl ReleaseTable {
         {
             return Some(cached.index);
         }
-        let position = self.releases.iter().position(|known| ptr::fn_addr_eq(*known, release));
+        let position = self
+            .releases
+            .iter()
+            .position(|known| ptr::fn_addr_eq(*known, release));
         let position = match position {
             Some(position) => position,
             None if self.releases.len() < u8::MAX as usize => {
@@ -47,7 +50,9 @@ impl ReleaseTable {
     pub fn clear(&mut self) {
         self.releases.clear();
         self.cache.fill(None);
-        if self.releases.capacity() > 64 { self.releases.shrink_to_fit(); }
+        if self.releases.capacity() > 64 {
+            self.releases.shrink_to_fit();
+        }
     }
 }
 
@@ -65,7 +70,10 @@ impl WideHeader {
     }
 
     fn upper(&self) -> *mut u16 {
-        self.0.as_ptr().wrapping_add(if cfg!(target_endian = "little") { 6 } else { 4 }).cast()
+        self.0
+            .as_ptr()
+            .wrapping_add(if cfg!(target_endian = "little") { 6 } else { 4 })
+            .cast()
     }
 
     pub unsafe fn mark_cell(&self) {
@@ -98,7 +106,12 @@ impl WideHeader {
         }
         let words = (((upper as u64 & 0xff) << 32) | lower as u64) as i64;
         let words = words << 24 >> 24;
-        let address = self.0.0.as_ptr().addr().wrapping_add((words as usize).wrapping_mul(8));
+        let address = self
+            .0
+            .0
+            .as_ptr()
+            .addr()
+            .wrapping_add((words as usize).wrapping_mul(8));
         let previous = unsafe { Object::new(ptr::with_exposed_provenance_mut(address)) };
         Some(Link { previous, release })
     }
@@ -108,7 +121,9 @@ impl WideHeader {
 mod tests {
     use super::*;
     unsafe extern "C" fn first(_: *mut u8) {}
-    unsafe extern "C" fn second(_: *mut u8) { std::hint::black_box(()); }
+    unsafe extern "C" fn second(_: *mut u8) {
+        std::hint::black_box(());
+    }
 
     #[test]
     fn a_full_function_table_uses_existing_entries_only() {

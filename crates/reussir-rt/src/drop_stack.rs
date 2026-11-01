@@ -1,7 +1,7 @@
 //! Scoped worklists shared by generated drop glue and foreign destructors.
 use core::{ffi::c_void, num::NonZeroUsize, ptr::NonNull};
-use std::cell::{Cell, RefCell};
 use smallvec::SmallVec;
+use std::cell::{Cell, RefCell};
 
 mod wide;
 use wide::{ReleaseTable, WideHeader};
@@ -38,8 +38,15 @@ enum RunStorage {
 #[derive(Clone, Copy)]
 enum Work {
     Run(PendingRun),
-    Indexed { object: Object, cursor: usize, callback: Indexed },
-    Step { object: Object, callback: Step },
+    Indexed {
+        object: Object,
+        cursor: usize,
+        callback: Indexed,
+    },
+    Step {
+        object: Object,
+        callback: Step,
+    },
 }
 
 /// One indexed callback, with a real cursor into its object.
@@ -58,8 +65,16 @@ pub type Step = unsafe extern "C" fn(*mut c_void) -> StepStatus;
 
 enum Action {
     Release(ReleaseTask),
-    Indexed { object: Object, cursor: usize, callback: Indexed },
-    Step { object: Object, callback: Step, position: usize },
+    Indexed {
+        object: Object,
+        cursor: usize,
+        callback: Indexed,
+    },
+    Step {
+        object: Object,
+        callback: Step,
+        position: usize,
+    },
 }
 
 struct ReleaseTask {
@@ -108,7 +123,9 @@ impl DropContext {
                 unsafe { header.mark_cell() };
                 true
             } else {
-                self.releases.index(run.release).is_some_and(|index| unsafe { header.link(run.head, index) })
+                self.releases
+                    .index(run.release)
+                    .is_some_and(|index| unsafe { header.link(run.head, index) })
             };
             if joined {
                 run.head = object;
@@ -118,7 +135,10 @@ impl DropContext {
             }
         }
         self.work.push(Work::Run(PendingRun {
-            head: object, release, len: NonZeroUsize::new(1).unwrap(), storage: RunStorage::Wide,
+            head: object,
+            release,
+            len: NonZeroUsize::new(1).unwrap(),
+            storage: RunStorage::Wide,
         }));
     }
 
@@ -128,32 +148,51 @@ impl DropContext {
         }
         match *self.work.last()? {
             Work::Run(run) => {
-                let task = ReleaseTask { object: run.head, release: run.release };
+                let task = ReleaseTask {
+                    object: run.head,
+                    release: run.release,
+                };
                 if run.len.get() == 1 {
                     self.work.pop();
                 } else {
-                    let Work::Run(top) = self.work.last_mut().unwrap() else { unreachable!() };
+                    let Work::Run(top) = self.work.last_mut().unwrap() else {
+                        unreachable!()
+                    };
                     top.head = match run.storage {
                         RunStorage::Cells => self.cells.pop().unwrap(),
-                        RunStorage::Wide => match unsafe { WideHeader::new(run.head).take_link() } {
-                            Some(link) => { top.release = self.releases.get(link.release); link.previous }
-                            None => self.cells.pop().unwrap(),
-                        },
+                        RunStorage::Wide => {
+                            match unsafe { WideHeader::new(run.head).take_link() } {
+                                Some(link) => {
+                                    top.release = self.releases.get(link.release);
+                                    link.previous
+                                }
+                                None => self.cells.pop().unwrap(),
+                            }
+                        }
                     };
                     top.len = NonZeroUsize::new(run.len.get() - 1).unwrap();
                 }
                 Some(Action::Release(task))
             }
-            Work::Indexed { object, cursor, callback } => {
+            Work::Indexed {
+                object,
+                cursor,
+                callback,
+            } => {
                 self.work.pop();
-                Some(Action::Indexed { object, cursor, callback })
+                Some(Action::Indexed {
+                    object,
+                    cursor,
+                    callback,
+                })
             }
             Work::Step { object, callback } => Some(Action::Step {
-                object, callback, position: self.work.len() - 1,
+                object,
+                callback,
+                position: self.work.len() - 1,
             }),
         }
     }
-
 }
 
 scoped_tls::scoped_thread_local!(static ACTIVE: RefCell<DropContext>);
@@ -166,12 +205,20 @@ fn drain_pending() {
     while let Some(action) = ACTIVE.with(|context| context.borrow_mut().next()) {
         match action {
             Action::Release(task) => unsafe { (task.release)(task.object.as_ptr()) },
-            Action::Indexed { object, cursor, callback } => unsafe {
-                callback(object.as_ptr(), cursor)
-            },
-            Action::Step { object, callback, position } => {
+            Action::Indexed {
+                object,
+                cursor,
+                callback,
+            } => unsafe { callback(object.as_ptr(), cursor) },
+            Action::Step {
+                object,
+                callback,
+                position,
+            } => {
                 if unsafe { callback(object.0.as_ptr()) } == StepStatus::Complete {
-                    ACTIVE.with(|context| { context.borrow_mut().work.remove(position); });
+                    ACTIVE.with(|context| {
+                        context.borrow_mut().work.remove(position);
+                    });
                 }
             }
         }
@@ -190,8 +237,11 @@ fn scoped(walk: impl FnOnce()) {
         ACTIVE.with(|context| context.borrow_mut().boundary = previous);
         return;
     }
-    let context = SPARE.try_with(|slot| slot.borrow_mut().take())
-        .ok().flatten().unwrap_or_default();
+    let context = SPARE
+        .try_with(|slot| slot.borrow_mut().take())
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     let context = RefCell::new(context);
     ACTIVE.set(&context, || {
         walk();
@@ -200,12 +250,18 @@ fn scoped(walk: impl FnOnce()) {
     let mut context = context.into_inner();
     let end_work = context.end_work.take();
     context.releases.clear();
-    if context.work.capacity() > 64 { context.work.shrink_to_fit(); }
-    if context.cells.capacity() > 64 { context.cells.shrink_to_fit(); }
+    if context.work.capacity() > 64 {
+        context.work.shrink_to_fit();
+    }
+    if context.cells.capacity() > 64 {
+        context.cells.shrink_to_fit();
+    }
     debug_assert!(context.cells.is_empty());
     // A late TLS destructor owns and frees its context when the spare is gone.
     let _ = SPARE.try_with(|slot| *slot.borrow_mut() = Some(context));
-    if let Some(callback) = end_work { unsafe { callback() }; }
+    if let Some(callback) = end_work {
+        unsafe { callback() };
+    }
 }
 
 /// Completes a release and its pending work. Nested calls complete their own
@@ -232,7 +288,11 @@ pub unsafe fn join_or_run(object: *mut u8, release: Release) {
 /// Safety: the non-null object must remain valid for `release` until it runs.
 pub unsafe fn defer(object: *mut u8, release: Release) {
     if ACTIVE.is_set() {
-        ACTIVE.with(|context| context.borrow_mut().defer(unsafe { Object::new(object) }, release));
+        ACTIVE.with(|context| {
+            context
+                .borrow_mut()
+                .defer(unsafe { Object::new(object) }, release)
+        });
     } else {
         unsafe { run(object, release) };
     }
@@ -263,16 +323,30 @@ pub fn releasing() -> bool {
 
 /// Number of pending entries, including the currently executing step.
 pub fn depth() -> usize {
-    if ACTIVE.is_set() { ACTIVE.with(|context| context.borrow().work.len()) } else { 0 }
+    if ACTIVE.is_set() {
+        ACTIVE.with(|context| context.borrow().work.len())
+    } else {
+        0
+    }
 }
 
 /// Defers an indexed callback without allocating a cursor object.
 /// Safety: the non-null object must remain valid for its callback.
 pub unsafe fn defer_indexed(object: *mut u8, cursor: usize, callback: Indexed) {
-    let enqueue = || ACTIVE.with(|context| context.borrow_mut().work.push(Work::Indexed {
-        object: unsafe { Object::new(object) }, cursor, callback,
-    }));
-    if ACTIVE.is_set() { enqueue(); } else { scoped(enqueue); }
+    let enqueue = || {
+        ACTIVE.with(|context| {
+            context.borrow_mut().work.push(Work::Indexed {
+                object: unsafe { Object::new(object) },
+                cursor,
+                callback,
+            })
+        })
+    };
+    if ACTIVE.is_set() {
+        enqueue();
+    } else {
+        scoped(enqueue);
+    }
 }
 
 /// Runs an incremental operation and its pending work before returning.
@@ -284,10 +358,19 @@ pub unsafe fn run_step(object: *mut c_void, callback: Step) {
 /// Defers a step; outside a drain, completes it before returning.
 /// Safety: as [`run_step`].
 pub unsafe fn defer_step(object: *mut c_void, callback: Step) {
-    let enqueue = || ACTIVE.with(|context| context.borrow_mut().work.push(Work::Step {
-        object: unsafe { Object::new(object.cast()) }, callback,
-    }));
-    if ACTIVE.is_set() { enqueue(); } else { scoped(enqueue); }
+    let enqueue = || {
+        ACTIVE.with(|context| {
+            context.borrow_mut().work.push(Work::Step {
+                object: unsafe { Object::new(object.cast()) },
+                callback,
+            })
+        })
+    };
+    if ACTIVE.is_set() {
+        enqueue();
+    } else {
+        scoped(enqueue);
+    }
 }
 
 /// Runs incremental host work, joining an existing drain when present.
@@ -299,7 +382,9 @@ pub unsafe fn join_or_run_step(object: *mut c_void, callback: Step) {
 /// C entry point of [`defer_indexed`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __reussir_drop_defer_indexed(
-    object: *mut u8, cursor: usize, callback: Indexed,
+    object: *mut u8,
+    cursor: usize,
+    callback: Indexed,
 ) {
     unsafe { defer_indexed(object, cursor, callback) }
 }
@@ -310,7 +395,11 @@ pub unsafe extern "C" fn __reussir_drop_defer_indexed(
 /// before its release. Header bytes outside the tag may be used while pending.
 pub unsafe fn defer_wide(object: *mut u8, release: Release) {
     if ACTIVE.is_set() {
-        ACTIVE.with(|context| unsafe { context.borrow_mut().defer_wide(Object::new(object), release) });
+        ACTIVE.with(|context| unsafe {
+            context
+                .borrow_mut()
+                .defer_wide(Object::new(object), release)
+        });
     } else {
         unsafe { run(object, release) };
     }

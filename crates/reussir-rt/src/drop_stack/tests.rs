@@ -13,11 +13,18 @@ unsafe extern "C" fn chain(object: *mut u8) {
 
 #[test]
 fn deep_work_uses_a_bounded_native_stack() {
-    std::thread::Builder::new().stack_size(64 * 1024).spawn(|| {
-        let mut object = Chain { remaining: 1_000_000 };
-        unsafe { run((&mut object as *mut Chain).cast(), chain) };
-        assert_eq!(object.remaining, 0);
-    }).unwrap().join().unwrap();
+    std::thread::Builder::new()
+        .stack_size(64 * 1024)
+        .spawn(|| {
+            let mut object = Chain {
+                remaining: 1_000_000,
+            };
+            unsafe { run((&mut object as *mut Chain).cast(), chain) };
+            assert_eq!(object.remaining, 0);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 struct Ordered {
@@ -59,7 +66,10 @@ unsafe extern "C" fn advance(object: *mut c_void) -> StepStatus {
 }
 #[test]
 fn steps_yield_to_the_work_they_enqueue() {
-    let mut cursor = Cursor { next: 0, visited: vec![] };
+    let mut cursor = Cursor {
+        next: 0,
+        visited: vec![],
+    };
     unsafe { run_step((&mut cursor as *mut Cursor).cast(), advance) };
     assert_eq!(cursor.visited, [0, 1, 2, 3]);
 }
@@ -71,7 +81,10 @@ unsafe extern "C" fn indexed(object: *mut u8, index: usize) {
 }
 #[test]
 fn indexed_callbacks_visit_one_child_at_a_time() {
-    let mut cursor = Cursor { next: 0, visited: vec![] };
+    let mut cursor = Cursor {
+        next: 0,
+        visited: vec![],
+    };
     unsafe { defer_indexed((&mut cursor as *mut Cursor).cast(), 0, indexed) };
     assert_eq!(cursor.visited, [0, 1, 2, 3]);
 }
@@ -118,7 +131,9 @@ fn drops_after_the_buffer_cache_destructor_own_their_context() {
         LATE.with(|slot| *slot.borrow_mut() = Some(Late(observed)));
         let mut object = Chain { remaining: 100 };
         unsafe { run((&mut object as *mut Chain).cast(), chain) };
-    }).join().unwrap();
+    })
+    .join()
+    .unwrap();
     assert_eq!(count.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
 
@@ -153,7 +168,12 @@ unsafe extern "C" fn enqueue_wide(object: *mut u8) {
     let first: Release = primary;
     let second: Release = secondary;
     for (id, callback) in [(1, first), (2, first), (3, second), (4, first)] {
-        let object = Box::into_raw(Box::new(Wide { count: 1, tag: id as u32, id, events }));
+        let object = Box::into_raw(Box::new(Wide {
+            count: 1,
+            tag: id as u32,
+            id,
+            events,
+        }));
         unsafe { defer_wide(object.cast(), callback) };
     }
     ACTIVE.with(|context| {
@@ -166,8 +186,15 @@ unsafe extern "C" fn enqueue_wide(object: *mut u8) {
 fn mixed_wide_runs_restore_headers_and_keep_lifo_order() {
     let mut events = vec![];
     unsafe { run((&mut events as *mut Vec<ReleaseEvent>).cast(), enqueue_wide) };
-    assert_eq!(events, [ReleaseEvent::Primary(4), ReleaseEvent::Secondary(3),
-        ReleaseEvent::Primary(2), ReleaseEvent::Primary(1)]);
+    assert_eq!(
+        events,
+        [
+            ReleaseEvent::Primary(4),
+            ReleaseEvent::Secondary(3),
+            ReleaseEvent::Primary(2),
+            ReleaseEvent::Primary(1)
+        ]
+    );
 }
 
 unsafe extern "C" fn enqueue_join(object: *mut u8) {
@@ -185,8 +212,17 @@ fn internal_bridges_join_the_current_drain() {
 #[test]
 fn callback_symbols_are_exported() {
     let symbols = crate::symbols::exported_symbols();
-    for name in ["__reussir_drop_run", "__reussir_drop_join_or_run", "__reussir_drop_defer",
-        "__reussir_drop_defer_wide", "__reussir_drop_defer_indexed"] {
-        assert!(symbols.iter().any(|symbol| symbol.name == name && !symbol.address.is_null()));
+    for name in [
+        "__reussir_drop_run",
+        "__reussir_drop_join_or_run",
+        "__reussir_drop_defer",
+        "__reussir_drop_defer_wide",
+        "__reussir_drop_defer_indexed",
+    ] {
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| symbol.name == name && !symbol.address.is_null())
+        );
     }
 }
