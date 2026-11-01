@@ -1891,25 +1891,6 @@ def ReussirRefDropOp
   let hasVerifier = 1;
 }
 
-def ReussirDtorBeginOp : ReussirOp<"dtor.begin", []> {
-  let arguments = (ins I32Attr:$size, I32Attr:$alignment,
-      LLVM_AnyPointer:$buffer, LLVM_AnyPointer:$prototype,
-      LLVM_AnyPointer:$allocate, LLVM_AnyPointer:$deallocate);
-  let results = (outs LLVM_AnyPointer:$handle);
-  let assemblyFormat = "operands attr-dict `:` functional-type(operands, results)";
-}
-
-def ReussirDtorEndOp : ReussirOp<"dtor.end", [Terminator]> {
-  let arguments = (ins LLVM_AnyPointer:$handle);
-  let assemblyFormat = "$handle attr-dict `:` type($handle)";
-}
-
-def ReussirDtorSuspendOp : ReussirOp<"dtor.suspend", [
-    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
-  let arguments = (ins FlatSymbolRefAttr:$callee, AnyType:$object);
-  let assemblyFormat = "$callee `(` $object `:` type($object) `)` attr-dict";
-}
-
 def ReussirRefAcquireOp
     : ReussirReferenceOp<"acquire", [MemoryEffects<[MemRead, MemWrite]>]> {
   let summary = "Acquire ownership of a reference";

@@ -5,11 +5,11 @@
 !mutex_rc = !reussir.rc<!reussir.cell<!inner mutex> atomic>
 
 module {
-  // Dropping the last reference to a mutex cell releases the managed payload
-  // through the same door every access uses: a critical section over the
-  // mutex view, whose body loads the protected RC and decrements it. A
-  // leading-slot projection would address the lock header instead of the
-  // payload (and is rejected by the ref.project verifier).
+  // The protected slot is released by a helper called under the mutex.
+  // Projecting the cell's leading slot would address the lock header.
+  // DROP-LABEL: func.func private @__reussir_locked_drop(
+  // DROP: %[[INNER:.+]] = reussir.ref.load(
+  // DROP: reussir.rc.dec(%[[INNER]] : !reussir.rc<i64 atomic>)
   // DROP-LABEL: func.func @mutex_cell_drop
   // DROP: reussir.rc.fetch_sub
   // DROP: %[[REF:.+]] = reussir.rc.borrow
@@ -18,27 +18,24 @@ module {
   // DROP: sync.mutex.critical_section %[[VIEW]]
   // DROP: ^bb0(%[[PAYLOAD:.+]]: memref<!reussir.rc<i64 atomic>>):
   // DROP: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]]
-  // DROP: %[[INNER:.+]] = reussir.ref.load(%[[SLOT]]
-  // DROP: reussir.rc.dec(%[[INNER]] : !reussir.rc<i64 atomic>)
+  // DROP: call @__reussir_locked_drop(%[[SLOT]])
   // DROP-NOT: reussir.ref.project
 
-  // Fully lowered: the box count drops first; on the last reference the lock
-  // state word (mutex field 0) is acquired, the payload pointer is loaded
-  // from mutex field 1 — past the lock header — and its count is decremented
-  // under the lock. Both frees happen after the unlock: the inner box token
-  // leaves the critical section, and the cell box itself dies through the
-  // mutex-aware 24-byte layout.
+  // The helper decrements under the lock and synchronously finishes dead
+  // payload cleanup; the cell owner is freed after unlock.
+  // LLVM-LABEL: define private void @__reussir_locked_drop(ptr
+  // LLVM: %[[INNER:.+]] = load ptr, ptr %0
+  // LLVM: atomicrmw sub ptr %[[INNER]], i32 1
+  // LLVM: call void @__reussir_deallocate(ptr %[[INNER]], i64 8, i64 16)
   // LLVM-LABEL: define void @mutex_cell_drop(ptr
   // LLVM: atomicrmw sub ptr %{{.+}}, i32 1
   // LLVM: %[[CELL:.+]] = getelementptr { i32, { i32, ptr } }, ptr %{{.+}}, i32 0, i32 1
   // LLVM: %[[STATE:.+]] = getelementptr { i32, ptr }, ptr %[[CELL]], i32 0, i32 0
   // LLVM: cmpxchg ptr %[[STATE]]
   // LLVM: %[[SLOT:.+]] = getelementptr { i32, ptr }, ptr %[[CELL]], i32 0, i32 1
-  // LLVM: %[[INNER:.+]] = load ptr, ptr %[[SLOT]]
-  // LLVM: atomicrmw sub ptr %[[INNER]], i32 1
+  // LLVM: call void @__reussir_locked_drop(ptr %[[SLOT]])
   // LLVM: atomicrmw xchg ptr %[[STATE]], i32 0
-  // LLVM-DAG: call void @__reussir_deallocate(ptr %{{.+}}, i64 8, i64 24)
-  // LLVM-DAG: call void @__reussir_deallocate(ptr %{{.+}}, i64 8, i64 16)
+  // LLVM: call void @__reussir_deallocate(ptr %{{.+}}, i64 8, i64 24)
   func.func @mutex_cell_drop(%cell: !mutex_rc) {
     %t = reussir.rc.dec (%cell : !mutex_rc) : !reussir.nullable<!reussir.token<align: 8, size: 24>>
     reussir.token.free (%t : !reussir.nullable<!reussir.token<align: 8, size: 24>>)

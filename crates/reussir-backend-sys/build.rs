@@ -63,7 +63,6 @@ const REUSSIR_ARCHIVES: &[&str] = &[
     // The custom LLVM passes run by the JIT codegen helper (Jit.cpp).
     "ReussirLLVMAllocationSimplicationPass",
     "ReussirLLVMLinearRecurrencePass",
-    "ReussirLLVMRetconDropPass",
 ];
 
 // How an optional archive from CMake's manifest is linked.

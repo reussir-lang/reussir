@@ -175,7 +175,10 @@ jobs:
           '
 
       - name: Test standalone cache FFI
-        run: nix develop --command cargo test --locked -p reussir-polyffi-cache
+        run: |
+          nix develop --command env RUSTC_WRAPPER=sccache \
+            CARGO_TARGET_DIR="$PWD/build/target" RUSTFLAGS=-Awarnings \
+            cargo test --locked --release -p reussir-polyffi-cache
 
       # rene lives here rather than in a standalone workflow. The lib-only
       # warm-up defuses the sailfish template-derive race: `--all-targets`
