@@ -83,7 +83,7 @@ module {
 // CHECK-NOT: reussir.drop.defer
 // CHECK: scf.for
 // CHECK: scf.for
-// CHECK: reussir.nullable.check
+// CHECK: reussir.nullable.dispatch
 // CHECK: reussir.rc.fetch_sub
 // CHECK: reussir.token.free
 // CHECK-NOT: reussir.drop.defer
