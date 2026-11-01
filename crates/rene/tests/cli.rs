@@ -1942,3 +1942,65 @@ fi
     assert_eq!(pruning.skipped_busy, 2, "runtime and core share the store");
     assert_eq!(store.prune_before(deadline).unwrap().removed, 2);
 }
+
+#[cfg(unix)]
+#[test]
+fn drop_order_reaches_core_std_and_app_and_separates_cache_entries() {
+    let tmp = tempfile::tempdir().unwrap();
+    package(tmp.path(), "demo");
+    let manifest = write_targets_manifest(tmp.path());
+    let original = std::fs::read_to_string(&manifest).unwrap();
+    let fakes = Fakes::new(tmp.path());
+    let mut selected = Vec::new();
+    for (index, order) in ["forward", "forward", "backward", "backward"]
+        .iter()
+        .enumerate()
+    {
+        std::fs::write(&manifest, original.replacen('{', &format!(
+            "{{ dependencies.std = {{ version = \"^0.1\" }}, profiles.dev.drop_order = \"{order}\","
+        ), 1)).unwrap();
+        let root = tmp.path().join(format!("build-{index}"));
+        let before = fakes.compiles().len();
+        let output = fakes.rene(&["build"], &manifest, &root);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let commands = fakes.compiles();
+        for command in &commands[before..] {
+            assert!(
+                command.contains(&format!("--drop-order {order}")),
+                "{command}"
+            );
+        }
+        let paths: Vec<_> = ["core", "std"]
+            .into_iter()
+            .map(|name| dependency_record(&root, name).archive)
+            .collect();
+        selected.push(paths);
+    }
+    assert_eq!(selected[0], selected[1]);
+    assert_eq!(selected[2], selected[3]);
+    for index in 0..2 {
+        assert_ne!(selected[0][index], selected[2][index]);
+    }
+    for name in ["core", "std"] {
+        let commands: Vec<_> = fakes
+            .compiles()
+            .into_iter()
+            .filter(|line| line.contains(&format!("--package-name {name}")))
+            .collect();
+        assert_eq!(commands.len(), 4, "{commands:#?}");
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|line| line.contains("--drop-order forward"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|line| line.contains("--drop-order backward"))
+                .count(),
+            2
+        );
+    }
+}
