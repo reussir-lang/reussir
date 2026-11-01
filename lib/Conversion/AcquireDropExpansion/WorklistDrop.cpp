@@ -84,8 +84,50 @@ public:
     });
   }
 
+  bool dispatchLeaf(mlir::Value ref, llvm::function_ref<void()> onLeaf,
+                    llvm::function_ref<void()> onOther) {
+    auto refType = llvm::cast<RefType>(ref.getType());
+    auto record = llvm::dyn_cast<RecordType>(refType.getElementType());
+    if (!record || !record.isVariant() || record.hasObservableCleanup()) {
+      return false;
+    }
+    llvm::SmallVector<bool> leaf;
+    llvm::SmallVector<mlir::Attribute> tags;
+    for (const auto &[i, member, field] :
+         llvm::enumerate(record.getMembers(), record.getMemberIsField())) {
+      leaf.push_back(field || isTriviallyCopyable(getProjectedType(
+                                  member, false, Capability::shared)));
+      tags.push_back(builder.getDenseI64ArrayAttr({int64_t(i)}));
+    }
+    if (!llvm::is_contained(leaf, true)) {
+      return false;
+    }
+    auto dispatch = ReussirRecordDispatchOp::create(
+        builder, loc, mlir::Type{}, ref, builder.getArrayAttr(tags),
+        tags.size());
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    for (const auto &[i, member, field] :
+         llvm::enumerate(record.getMembers(), record.getMemberIsField())) {
+      auto projected = getProjectedType(member, field, Capability::unspecified,
+                                        refType.getAtomicKind());
+      builder.createBlock(
+          &dispatch.getRegions()[i], {},
+          {RefType::get(builder.getContext(), projected,
+                        Capability::unspecified, refType.getAtomicKind())},
+          {loc});
+      if (leaf[i])
+        onLeaf();
+      else
+        onOther();
+      ReussirScfYieldOp::create(builder, loc, nullptr);
+    }
+    return true;
+  }
+
   void drop(mlir::Value ref, bool run) {
-    schedule(walk(ref.getType()), ref, run);
+    auto enqueue = [&] { schedule(walk(ref.getType()), ref, run); };
+    if (!dispatchLeaf(ref, [] {}, enqueue))
+      enqueue();
   }
 
   void array(mlir::Value ref) {
@@ -255,7 +297,7 @@ public:
           builder, loc, mlir::Type{}, ref, builder.getArrayAttr(tags),
           tags.size());
       mlir::OpBuilder::InsertionGuard guard(builder);
-      for (auto [i, member, field] :
+      for (const auto &[i, member, field] :
            llvm::enumerate(record.getMembers(), record.getMemberIsField())) {
         auto projected = getProjectedType(
             member, field, Capability::unspecified, refType.getAtomicKind());
@@ -280,7 +322,7 @@ public:
         return;
       if (auto record = llvm::dyn_cast<RecordType>(valueType)) {
         assert(record.isCompound());
-        for (auto [i, member, field] :
+        for (const auto &[i, member, field] :
              llvm::enumerate(record.getMembers(), record.getMemberIsField())) {
           if (field)
             continue;
@@ -398,45 +440,16 @@ public:
       else
         schedule(task, rc, run);
     };
-    auto record = llvm::dyn_cast<RecordType>(payload);
-    if (!record || !record.isVariant() || record.hasObservableCleanup()) {
-      enqueue();
-      return;
-    }
-    llvm::SmallVector<bool> leaf;
-    llvm::SmallVector<mlir::Attribute> tags;
-    for (auto [i, member, field] :
-         llvm::enumerate(record.getMembers(), record.getMemberIsField())) {
-      leaf.push_back(field || isTriviallyCopyable(getProjectedType(
-                                  member, false, Capability::shared)));
-      tags.push_back(builder.getDenseI64ArrayAttr({int64_t(i)}));
-    }
-    if (!llvm::is_contained(leaf, true)) {
+    if (!llvm::isa<RecordType>(payload)) {
       enqueue();
       return;
     }
     auto refType = RefType::get(builder.getContext(), payload,
                                 Capability::unspecified, type.getAtomicKind());
     mlir::Value ref = ReussirRcBorrowOp::create(builder, loc, refType, rc);
-    auto dispatch = ReussirRecordDispatchOp::create(
-        builder, loc, mlir::Type{}, ref, builder.getArrayAttr(tags),
-        tags.size());
-    mlir::OpBuilder::InsertionGuard guard(builder);
-    for (auto [i, member, field] :
-         llvm::enumerate(record.getMembers(), record.getMemberIsField())) {
-      auto projected = getProjectedType(member, field, Capability::unspecified,
-                                        type.getAtomicKind());
-      builder.createBlock(
-          &dispatch.getRegions()[i], {},
-          {RefType::get(builder.getContext(), projected,
-                        Capability::unspecified, type.getAtomicKind())},
-          {loc});
-      if (leaf[i])
-        emitBoxFree(rc, loc, module, builder);
-      else
-        enqueue();
-      ReussirScfYieldOp::create(builder, loc, nullptr);
-    }
+    if (!dispatchLeaf(
+            ref, [&] { emitBoxFree(rc, loc, module, builder); }, enqueue))
+      enqueue();
   }
 };
 } // namespace

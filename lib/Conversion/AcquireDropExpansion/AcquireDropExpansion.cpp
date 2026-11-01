@@ -264,11 +264,12 @@ private:
                       AtomicKind refAtomic, ReussirRefDropOp op,
                       mlir::PatternRewriter &rewriter) const {
     assert(recordType.isCompound());
-    bool defer = outlineRecord && isInsideWorklistGlue(op) &&
-                 isForwardDrop(op->getParentOfType<mlir::ModuleOp>());
+    bool reverse = outlineRecord && isInsideWorklistGlue(op) &&
+                   isForwardDrop(op->getParentOfType<mlir::ModuleOp>());
+    bool defer = reverse && recordType.hasObservableCleanup();
     for (size_t cursor = 0, n = recordType.getMembers().size(); cursor < n;
          ++cursor) {
-      size_t idx = defer ? n - cursor - 1 : cursor;
+      size_t idx = reverse ? n - cursor - 1 : cursor;
       auto memberTy = recordType.getMembers()[idx];
       bool memberIsField = recordType.getMemberIsField()[idx];
       if (memberIsField)
