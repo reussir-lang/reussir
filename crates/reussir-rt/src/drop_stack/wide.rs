@@ -1,5 +1,29 @@
 use super::{Object, RETAINED_BUFFER_CAPACITY, Release};
-use core::{num::NonZeroU8, ptr};
+use core::{
+    hash::{Hash, Hasher},
+    num::NonZeroU8,
+    ptr,
+};
+use indexmap::IndexSet;
+use rustc_hash::FxBuildHasher;
+
+/// Compare and hash callbacks by address while retaining the callable pointer.
+#[derive(Clone, Copy)]
+struct ReleaseKey(Release);
+
+impl PartialEq for ReleaseKey {
+    fn eq(&self, other: &Self) -> bool {
+        ptr::fn_addr_eq(self.0, other.0)
+    }
+}
+
+impl Eq for ReleaseKey {}
+
+impl Hash for ReleaseKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self.0 as usize).hash(state);
+    }
+}
 
 /// One-based callback index; zero is reserved for a pointer-cell link.
 #[derive(Clone, Copy)]
@@ -13,9 +37,10 @@ struct CachedRelease {
 
 /// Callback indices shared by linked runs until the outermost drain finishes.
 /// The small direct-mapped cache avoids repeated searches for recent callbacks.
+/// Entries remain in insertion order until clear so header indices stay valid.
 #[derive(Default)]
 pub(super) struct ReleaseTable {
-    releases: Vec<Release>,
+    releases: IndexSet<ReleaseKey, FxBuildHasher>,
     cache: [Option<CachedRelease>; 16],
 }
 
@@ -29,18 +54,11 @@ impl ReleaseTable {
         {
             return Some(cached.index);
         }
-        let position = self
-            .releases
-            .iter()
-            .position(|known| ptr::fn_addr_eq(*known, release));
-        let position = match position {
-            Some(position) => position,
-            None if self.releases.len() < u8::MAX as usize => {
-                let position = self.releases.len();
-                self.releases.push(release);
-                position
-            }
-            None => return None,
+        let key = ReleaseKey(release);
+        let position = if self.releases.len() < u8::MAX as usize {
+            self.releases.insert_full(key).0
+        } else {
+            self.releases.get_index_of(&key)?
         };
         let index = ReleaseIndex(NonZeroU8::new((position + 1) as u8).unwrap());
         self.cache[slot] = Some(CachedRelease { release, index });
@@ -49,7 +67,7 @@ impl ReleaseTable {
 
     /// Resolve an index issued by this table since its last clear.
     pub fn get(&self, index: ReleaseIndex) -> Release {
-        self.releases[index.0.get() as usize - 1]
+        self.releases[index.0.get() as usize - 1].0
     }
 
     /// Discard indices after all linked runs finish, retaining bounded capacity.

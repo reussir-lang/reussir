@@ -44,6 +44,8 @@ num_enum = "0.7.4"
 smallvec = "1.15.1"
 scoped-tls = "1"
 scopeguard = "1"
+indexmap.workspace = true
+rustc-hash.workspace = true
 stacker.workspace = true
 
 [dev-dependencies]
