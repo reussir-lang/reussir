@@ -4,7 +4,7 @@
 !inner = !reussir.rc<i64 atomic>
 !mutex_rc = !reussir.rc<!reussir.cell<!inner mutex> atomic>
 
-module {
+module attributes {reussir.drop_order = "forward"} {
   // The protected slot is released by a helper called under the mutex.
   // Projecting the cell's leading slot would address the lock header.
   // DROP-LABEL: func.func private @__reussir_locked_drop.forward(

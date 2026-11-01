@@ -4,7 +4,7 @@
 !inner = !reussir.rc<i64 atomic>
 !rwlock_rc = !reussir.rc<!reussir.cell<!inner rwlock> atomic>
 
-module {
+module attributes {reussir.drop_order = "forward"} {
   // The write critical section passes its protected slot to a release helper.
   // A leading-slot projection would address the lock header.
   // DROP-LABEL: func.func private @__reussir_locked_drop.forward(

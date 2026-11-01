@@ -1,6 +1,6 @@
-// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true' --verify-each | %FileCheck %s --implicit-check-not=reussir.drop.defer --implicit-check-not=reussir.rc.defer
+// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='drop-order=forward outline-record=true expand-decrement=true' --verify-each | %FileCheck %s --implicit-check-not=reussir.drop.defer --implicit-check-not=reussir.rc.defer
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true drop-order=backward' --verify-each | %FileCheck %s --implicit-check-not=reussir.drop.defer --implicit-check-not=reussir.rc.defer
-// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true tail-recursive-drops=false' --verify-each | %FileCheck %s --check-prefix=DISABLED --implicit-check-not=tail_release
+// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='drop-order=forward outline-record=true expand-decrement=true tail-recursive-drops=false' --verify-each | %FileCheck %s --check-prefix=DISABLED --implicit-check-not=tail_release
 !list_ = !reussir.record<compound "ArrayList" incomplete>
 !list = !reussir.record<compound "ArrayList" { i64, !reussir.nullable<!reussir.rc<!list_>> }>
 !wrapper = !reussir.record<compound "ListWrapper" [value] { !list }>

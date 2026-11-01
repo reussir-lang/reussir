@@ -5,7 +5,7 @@
 !rc = !reussir.rc<!cell atomic>
 !token = !reussir.nullable<!reussir.token<align: 8, size: 24>>
 
-module {
+module attributes {reussir.drop_order = "forward"} {
   // An ordinary protected release completes before its caller continues.
   // CHECK-LABEL: func.func private @__reussir_locked_drop.forward
   // CHECK: reussir.rc.fetch_sub
