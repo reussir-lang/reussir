@@ -1,11 +1,13 @@
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true' --verify-each | %FileCheck %s
 
 !node_ = !reussir.record<compound "Node" incomplete>
-!node = !reussir.record<compound "Node" { i64, !reussir.nullable<!reussir.rc<!node_ shared>> }>
+!foreign = !reussir.rc<!reussir.ffi_object<"Handle", @handle_drop>>
+!node = !reussir.record<compound "Node" { i64, !reussir.nullable<!reussir.rc<!node_ shared>>, !foreign }>
 !rc = !reussir.rc<!node shared>
-!token = !reussir.nullable<!reussir.token<align: 8, size: 24>>
+!token = !reussir.nullable<!reussir.token<align: 8, size: 32>>
 
 module attributes {reussir.drop_order = "backward"} {
+  func.func private @handle_drop(!foreign)
   // CHECK-NOT: external_release.worklist
   // CHECK: func.func private @external_release(
   func.func private @external_release(!rc) attributes {reussir.foreign_drop}
@@ -27,7 +29,7 @@ module attributes {reussir.drop_order = "backward"} {
   // Public entry points finish their own work before returning, even when
   // called by a foreign hook inside another drain.
   // CHECK-LABEL: func.func @public
-  // CHECK: reussir.drop.run @__reussir_drop.release.backward
+  // CHECK: reussir.drop.run @__reussir_drop.walk.backward
   func.func @public(%rc: !rc) {
     %token = reussir.rc.dec(%rc : !rc) : !token
     reussir.token.free(%token : !token)
