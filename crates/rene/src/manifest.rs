@@ -120,11 +120,25 @@ pub struct Target {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(try_from = "String")]
 pub enum DropOrder {
     #[default]
     Forward,
     Backward,
+}
+
+impl TryFrom<String> for DropOrder {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "forward" => Ok(Self::Forward),
+            "backward" => Ok(Self::Backward),
+            _ => Err(format!(
+                "invalid drop order `{value}`; expected forward or backward"
+            )),
+        }
+    }
 }
 
 impl DropOrder {
