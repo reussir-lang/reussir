@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 
 use melior::Context;
+use melior::ir::attribute::StringAttribute;
 use melior::ir::operation::{OperationLike, OperationMutLike};
 use melior::ir::{BlockLike, Identifier, Module, Operation};
 use melior::pass::{Pass, PassManager};
@@ -135,9 +136,57 @@ impl Anchor {
     }
 }
 
+/// Order in which generated destruction visits managed children.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DropOrder {
+    #[default]
+    Forward,
+    Backward,
+}
+
+impl DropOrder {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Forward => "forward",
+            Self::Backward => "backward",
+        }
+    }
+}
+
+fn resolve_drop_order(
+    module: &Module<'_>,
+    requested: Option<DropOrder>,
+) -> Result<DropOrder, melior::Error> {
+    let saved = module
+        .as_operation()
+        .attribute("reussir.drop_order")
+        .ok()
+        .map(
+            |attribute| match StringAttribute::try_from(attribute)?.value() {
+                "forward" => Ok(DropOrder::Forward),
+                "backward" => Ok(DropOrder::Backward),
+                value => Err(melior::Error::AttributeParse(format!(
+                    "invalid reussir.drop_order `{value}`"
+                ))),
+            },
+        )
+        .transpose()?;
+    if let (Some(requested), Some(saved)) = (requested, saved)
+        && requested != saved
+    {
+        return Err(melior::Error::AttributeParse(
+            "drop order conflicts with serialized module policy".into(),
+        ));
+    }
+    Ok(saved.or(requested).unwrap_or_default())
+}
+
 /// Knobs for [`run_lowering_pipeline`].
 #[derive(Clone, Debug)]
 pub struct LoweringOptions {
+    /// Override destruction order, rejecting conflicts with serialized modules.
+    /// Unset preserves module metadata, or defaults to forward.
+    pub drop_order: Option<DropOrder>,
     /// Optimization level.
     pub opt: OptLevel,
     /// Allow the token-reuse pass to reuse tokens across function calls.
@@ -187,6 +236,7 @@ impl Default for LoweringOptions {
     fn default() -> Self {
         Self {
             opt: OptLevel::Default,
+            drop_order: None,
             reuse_token_across_call: false,
             // Off by default while it is being evaluated.
             borrow_analysis: true,
@@ -297,6 +347,12 @@ pub fn run_lowering_pipeline(
     module: &mut Module,
     options: &LoweringOptions,
 ) -> Result<(), melior::Error> {
+    let drop_order = resolve_drop_order(module, options.drop_order)?;
+    module.as_operation_mut().set_attribute(
+        "reussir.drop_order",
+        StringAttribute::new(context, drop_order.as_str()).into(),
+    );
+    let drop_order_ref = melior::StringRef::new(drop_order.as_str()).to_raw();
     let inline_transform = module.as_operation().has_attribute(INLINE_TRANSFORM_ATTR);
     if inline_transform {
         let _ = module
@@ -422,7 +478,7 @@ pub fn run_lowering_pipeline(
         // move) -- see the producer phase below.
         func:   sys::reussirCreateTokenInstantiationPass(true, false);
         module: sys::reussirCreateClosureOutliningPass();
-        module: sys::reussirCreateRegionPatternsPass();
+        module: sys::reussirCreateRegionPatternsPass(drop_order_ref);
         // Fuse pattern-match consumption into destructuring decrements before
         // the cancellation pass (which cancels `inc; destructuring dec` into
         // borrow semantics) and the decrement expansion (which expands the
@@ -438,12 +494,13 @@ pub fn run_lowering_pipeline(
         func:   sys::reussirCreateTokenInstantiationPass(false, true);
         func:   sys::reussirCreateIncDecCancellationPass();
         module: sys::reussirCreatePjrtDonationPass(options.opt.optimizes_device_kernels());
-        module: sys::reussirCreateRcDecrementExpansionPass();
+        module: sys::reussirCreateRcDecrementExpansionPass(drop_order_ref);
         func:   sys::reussirCreateInferVariantTagPass();
         module: sys::reussirCreateAcquireDropExpansionPass(
             false,
             false,
             false,
+            drop_order_ref,
         );
         // Materialize Cell accesses and their ownership effects before the
         // second inc/dec cancellation phase.
@@ -456,6 +513,7 @@ pub fn run_lowering_pipeline(
             true,
             true,
             options.opt != OptLevel::Tpde,
+            drop_order_ref,
         );
         func:   sys::reussirCreateTokenReusePass(
             options.reuse_token_across_call,
@@ -631,6 +689,36 @@ mod tests {
         let actual = actual.as_operation().to_string();
         assert!(!actual.contains("scf."));
         assert_eq!(actual, reference.as_operation().to_string());
+    }
+
+    #[test]
+    fn drop_order_preserves_module_metadata_and_rejects_conflicts() {
+        let context = crate::context();
+        let module = Module::parse(&context, "module {}").unwrap();
+        assert_eq!(
+            resolve_drop_order(&module, None).unwrap(),
+            DropOrder::Forward
+        );
+        assert_eq!(
+            resolve_drop_order(&module, Some(DropOrder::Backward)).unwrap(),
+            DropOrder::Backward
+        );
+        let module = Module::parse(
+            &context,
+            r#"module attributes {reussir.drop_order = "backward"} {}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_drop_order(&module, None).unwrap(),
+            DropOrder::Backward
+        );
+        assert!(resolve_drop_order(&module, Some(DropOrder::Forward)).is_err());
+        let module = Module::parse(
+            &context,
+            r#"module attributes {reussir.drop_order = "invalid"} {}"#,
+        )
+        .unwrap();
+        assert!(resolve_drop_order(&module, None).is_err());
     }
 
     #[test]
