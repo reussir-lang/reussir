@@ -42,7 +42,7 @@ public:
     auto order = isForwardDrop(module) ? "forward" : "backward";
     auto key = builder.getStringAttr((role + "." + order).str());
     for (auto function : module.getOps<mlir::func::FuncOp>())
-      if (function->getAttr("reussir.worklist_role") == key &&
+      if (function->getAttr(REUSSIR_WORKLIST_ROLE) == key &&
           function.getNumArguments() == (indexed ? 2 : 1) &&
           function.getArgumentTypes()[0] == type)
         return function;
@@ -55,7 +55,7 @@ public:
         builder, loc, ("__reussir_drop." + key.getValue()).str(),
         builder.getFunctionType(args, {}));
     function.setPrivate();
-    function->setAttr("reussir.worklist_role", key);
+    function->setAttr(REUSSIR_WORKLIST_ROLE, key);
     function->setAttr(kWorklistGlueAttr, builder.getUnitAttr());
     function->setAttr("llvm.linkage",
                       builder.getAttr<mlir::LLVM::LinkageAttr>(

@@ -202,6 +202,10 @@ constexpr llvm::StringRef REUSSIR_EXPANDED_ENSURE_ATTR =
 
 // Execute this decrement's release without deferring it again.
 inline constexpr llvm::StringLiteral REUSSIR_NO_DEFER = "reussir.no_defer";
+
+// Generated helper purpose and drop order, such as "walk.forward".
+inline constexpr llvm::StringLiteral REUSSIR_WORKLIST_ROLE =
+    "reussir.worklist_role";
 } // namespace reussir
 
 #endif // REUSSIR_IR_REUSSIROPS_H
