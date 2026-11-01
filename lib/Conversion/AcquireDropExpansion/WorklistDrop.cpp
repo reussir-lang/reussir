@@ -625,6 +625,84 @@ void emitWorklistRelease(mlir::Value rc, mlir::Location loc,
       .release(rc, run);
 }
 
+mlir::LogicalResult
+prepareWorklistDropBridges(mlir::ModuleOp module,
+                           mlir::PatternRewriter &rewriter,
+                           mlir::SymbolTableCollection &symbols) {
+  llvm::SmallVector<mlir::func::FuncOp> functions;
+  for (auto function : module.getOps<mlir::func::FuncOp>())
+    if (!function.isExternal() && (function->hasAttr("reussir.closure_drop") ||
+                                   function->hasAttr("reussir.foreign_drop")))
+      functions.push_back(function);
+  for (auto function : functions) {
+    bool closure = function->hasAttr("reussir.closure_drop");
+    if (closure) {
+      auto rc = llvm::dyn_cast<RcType>(function.getArgument(0).getType());
+      auto box = rc ? llvm::dyn_cast<ClosureBoxType>(rc.getElementType())
+                    : ClosureBoxType{};
+      if (box && llvm::all_of(box.getPayloadTypes(), isTriviallyCopyable)) {
+        function->removeAttr("reussir.closure_drop");
+        continue;
+      }
+    }
+    auto order = isForwardDrop(module) ? ".forward" : ".backward";
+    auto name = (function.getSymName() + ".worklist" + order).str();
+    rewriter.setInsertionPoint(function);
+    auto worker = mlir::func::FuncOp::create(rewriter, function.getLoc(), name,
+                                             function.getFunctionType());
+    worker->setAttrs(function->getAttrs());
+    mlir::SymbolTable::setSymbolName(worker, name);
+    worker.setPrivate();
+    worker->setAttr("llvm.linkage", rewriter.getAttr<mlir::LLVM::LinkageAttr>(
+                                        mlir::LLVM::linkage::Linkage::Private));
+    worker->removeAttr("reussir.closure_drop");
+    worker->removeAttr("reussir.foreign_drop");
+    worker->setAttr(kWorklistGlueAttr, rewriter.getUnitAttr());
+    worker.getBody().takeBody(function.getBody());
+    symbols.getSymbolTable(module).insert(worker);
+    function->removeAttr("reussir.closure_drop");
+    function->removeAttr("reussir.foreign_drop");
+    rewriter.setInsertionPointToStart(function.addEntryBlock());
+    ReussirDropJoinOp::create(
+        rewriter, function.getLoc(),
+        mlir::FlatSymbolRefAttr::get(worker.getSymNameAttr()),
+        function.getArgument(0));
+    mlir::func::ReturnOp::create(rewriter, function.getLoc());
+    if (!closure || !isForwardDrop(module))
+      continue;
+    llvm::SmallVector<ReussirRefDropOp> drops;
+    ReussirTokenFreeOp free;
+    worker.walk([&](ReussirRefDropOp drop) { drops.push_back(drop); });
+    worker.walk([&](ReussirTokenFreeOp op) { free = op; });
+    auto token = free.getToken().getDefiningOp<ReussirRcReinterpretOp>();
+    rewriter.setInsertionPoint(free);
+    WorklistGlue(module, rewriter, &symbols, free.getLoc())
+        .free(token.getRcPtr());
+    auto target = module->getAttrOfType<mlir::StringAttr>(
+        mlir::LLVM::LLVMDialect::getTargetTripleAttrName());
+    for (auto drop : llvm::reverse(drops)) {
+      auto branch = drop->getParentOfType<mlir::scf::IfOp>();
+      branch->moveBefore(free);
+      mlir::OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(drop);
+      if (drop == drops.front() &&
+          (!target || !llvm::Triple(target.getValue()).isWasm())) {
+        auto walk = WorklistGlue(module, rewriter, &symbols, drop.getLoc())
+                        .walk(drop.getRef().getType());
+        auto call = mlir::func::CallOp::create(rewriter, drop.getLoc(), walk,
+                                               mlir::ValueRange{drop.getRef()});
+        call->setAttr(kMustTailCallAttr, rewriter.getUnitAttr());
+      } else {
+        emitWorklistDrop(drop.getRef(), drop.getLoc(), rewriter, &symbols);
+      }
+      rewriter.eraseOp(drop);
+    }
+    rewriter.eraseOp(free);
+    rewriter.eraseOp(token);
+  }
+  return mlir::success();
+}
+
 void emitWorklistArrayDrop(mlir::Value ref, mlir::Location loc,
                            mlir::PatternRewriter &rewriter,
                            mlir::SymbolTableCollection *symbols,
