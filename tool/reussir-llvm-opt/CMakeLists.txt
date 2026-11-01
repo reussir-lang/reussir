@@ -12,6 +12,5 @@ add_llvm_executable(reussir-llvm-opt
 target_link_libraries(reussir-llvm-opt
   PRIVATE
     ReussirLLVMAllocationSimplicationPass
-    ReussirLLVMRetconDropPass
     ReussirLLVMLinearRecurrencePass
 )

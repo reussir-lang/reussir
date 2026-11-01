@@ -1,7 +1,6 @@
 add_mlir_conversion_library(MLIRReussirBasicOpsLowering
   BasicOpsLowering.cpp
   TargetArrayLowering.cpp
-  RetconDropLowering.cpp
   PjrtLowering.cpp
   CABISignatureConversion.cpp
   DbgInfoConversion.cpp

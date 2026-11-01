@@ -149,7 +149,7 @@ mlir::LogicalResult emitArrayElementTraversal(
 mlir::func::FuncOp createDtorIfNotExists(
     mlir::ModuleOp moduleOp, RecordType type, mlir::OpBuilder &builder,
     AtomicKind kind = AtomicKind::normal,
-    mlir::SymbolTableCollection *symbols = nullptr, bool retcon = false);
+    mlir::SymbolTableCollection *symbols = nullptr);
 
 //===----------------------------------------------------------------------===//
 // emitOwnershipAcquisitionFuncIfNotExists

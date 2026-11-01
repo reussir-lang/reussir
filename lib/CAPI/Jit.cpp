@@ -34,7 +34,6 @@
 
 #include "Reussir/LLVMPass/AllocationSimplication.h"
 #include "Reussir/LLVMPass/LinearRecurrence.h"
-#include "Reussir/LLVMPass/RetconDrop.h"
 #include "Reussir/LLVMPass/RuntimeFunctionAttributor.h"
 #include "Reussir/LLVMPass/SizeAttributes.h"
 
@@ -52,7 +51,6 @@ void reussirRunBackendLLVMPipeline(LLVMModuleRef module, ReussirJitOptLevel opt,
     return;
 
   llvm::Module &m = *llvm::unwrap(module);
-  reussir::llvmpass::lowerRetconDrops(m);
   if (opt == ReussirJitOptNone)
     return;
 
@@ -199,7 +197,6 @@ void reussirRunBackendLLVMPipeline(LLVMModuleRef module, ReussirJitOptLevel opt,
     break;
   }
   mpm.addPass(reussir::llvmpass::AllocationSimplicationPass());
-  mpm.addPass(reussir::llvmpass::RetconDropDeferredFreePass());
   mpm.run(m, mam);
 }
 

@@ -5,29 +5,30 @@
 !flatlock_rc = !reussir.rc<!reussir.cell<!inner flatlock> atomic>
 
 module {
-  // Dropping the last reference to a flatlock cell releases the managed
-  // payload through the same door every access uses: a combining-lock
-  // critical section whose body loads the protected RC and decrements it —
-  // never a leading-slot projection, which would address the lock header.
+  // The combining-lock body passes its protected slot to a release helper.
+  // A leading-slot projection would address the lock header.
+  // DROP-LABEL: func.func private @__reussir_locked_drop(
+  // DROP: %[[INNER:.+]] = reussir.ref.load(
+  // DROP: reussir.rc.dec(%[[INNER]] : !reussir.rc<i64 atomic>)
   // DROP-LABEL: func.func @flatlock_cell_drop
   // DROP: reussir.rc.fetch_sub
   // DROP-NOT: reussir.ref.project
   // DROP: %[[VIEW:.+]] = reussir.ref.to_memref{{.*}} : memref<!sync.combining_lock<!reussir.rc<i64 atomic>>>
   // DROP: sync.combining_lock.critical_section %[[VIEW]]
   // DROP: %[[SLOT:.+]] = reussir.ref.from_memref
-  // DROP: %[[INNER:.+]] = reussir.ref.load(%[[SLOT]]
-  // DROP: reussir.rc.dec(%[[INNER]] : !reussir.rc<i64 atomic>)
+  // DROP: call @__reussir_locked_drop(%[[SLOT]])
   // DROP-NOT: reussir.ref.project
 
-  // Fully lowered, the inline path: box count drops, the status flag is
-  // test-and-set (the fast-path acquire), the inner box's count drops and it
-  // is freed under the lock (the combining region cannot thread the token
-  // out), the status is released, and the 32-byte cell box dies last.
+  // The helper decrements under the lock and synchronously finishes dead
+  // payload cleanup; the cell owner is freed after unlock.
+  // LLVM-LABEL: define private void @__reussir_locked_drop(ptr
+  // LLVM: %[[INNER:.+]] = load ptr, ptr %0
+  // LLVM: atomicrmw sub ptr %[[INNER]], i32 1
+  // LLVM: call void @__reussir_deallocate(ptr %[[INNER]], i64 8, i64 16)
   // LLVM-LABEL: define void @flatlock_cell_drop(ptr
   // LLVM: atomicrmw sub ptr %{{.+}}, i32 1
   // LLVM: atomicrmw xchg ptr %{{.+}}, i8 1 acquire
-  // LLVM: atomicrmw sub ptr %{{.+}}, i32 1
-  // LLVM: call void @__reussir_deallocate(ptr %{{.+}}, i64 8, i64 16)
+  // LLVM: call void @__reussir_locked_drop(ptr
   // LLVM: store atomic i8 0, ptr %{{.+}} release
   // LLVM: call void @__reussir_deallocate(ptr %{{.+}}, i64 8, i64 32)
   func.func @flatlock_cell_drop(%cell: !flatlock_rc) {

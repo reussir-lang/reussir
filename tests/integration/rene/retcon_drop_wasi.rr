@@ -1,4 +1,0 @@
-// REQUIRES: wasmer, wasip1
-// RUN: %rene build --manifest-path %S/retcon_drop/rene.ncl --build-dir %t.bdir --target wasm32-wasip1 --profile release
-// RUN: %wasmer %t.bdir/release/retcon_drop.wasm | %FileCheck %s
-// CHECK: deep cleanup complete
