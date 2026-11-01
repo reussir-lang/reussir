@@ -21,7 +21,7 @@
 namespace reussir {
 bool isForwardDrop(mlir::ModuleOp module) {
   auto order = module->getAttrOfType<mlir::StringAttr>("reussir.drop_order");
-  return !order || order.getValue() == "forward";
+  return order && order.getValue() == "forward";
 }
 bool isInsideWorklistGlue(mlir::Operation *site) {
   auto function = site->getParentOfType<mlir::func::FuncOp>();

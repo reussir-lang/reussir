@@ -181,7 +181,7 @@ pub(crate) struct Cli {
     #[arg(long = "polyffi-libdir", value_name = "DIR")]
     pub(crate) polyffi_libdir: Vec<PathBuf>,
 
-    /// Destruction order: forward (default) or backward. Resumed IR keeps its
+    /// Destruction order: forward or backward (default). Resumed IR keeps its
     /// recorded order; an explicit conflicting order is rejected.
     #[arg(long = "drop-order")]
     pub(crate) drop_order: Option<DropOrder>,

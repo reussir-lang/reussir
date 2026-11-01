@@ -2,8 +2,8 @@
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DropOrder {
-    #[default]
     Forward,
+    #[default]
     Backward,
 }
 

@@ -141,8 +141,8 @@ impl Anchor {
 /// Order in which generated destruction visits managed children.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DropOrder {
-    #[default]
     Forward,
+    #[default]
     Backward,
 }
 
@@ -187,7 +187,7 @@ fn resolve_drop_order(
 #[derive(Clone, Debug)]
 pub struct LoweringOptions {
     /// Override destruction order, rejecting conflicts with serialized modules.
-    /// Unset preserves module metadata, or defaults to forward.
+    /// Unset preserves module metadata, or defaults to backward.
     pub drop_order: Option<DropOrder>,
     /// Optimization level.
     pub opt: OptLevel,
@@ -699,22 +699,22 @@ mod tests {
         let module = Module::parse(&context, "module {}").unwrap();
         assert_eq!(
             resolve_drop_order(&module, None).unwrap(),
-            DropOrder::Forward
+            DropOrder::Backward
         );
         assert_eq!(
-            resolve_drop_order(&module, Some(DropOrder::Backward)).unwrap(),
-            DropOrder::Backward
+            resolve_drop_order(&module, Some(DropOrder::Forward)).unwrap(),
+            DropOrder::Forward
         );
         let module = Module::parse(
             &context,
-            r#"module attributes {reussir.drop_order = "backward"} {}"#,
+            r#"module attributes {reussir.drop_order = "forward"} {}"#,
         )
         .unwrap();
         assert_eq!(
             resolve_drop_order(&module, None).unwrap(),
-            DropOrder::Backward
+            DropOrder::Forward
         );
-        assert!(resolve_drop_order(&module, Some(DropOrder::Forward)).is_err());
+        assert!(resolve_drop_order(&module, Some(DropOrder::Backward)).is_err());
         let module = Module::parse(
             &context,
             r#"module attributes {reussir.drop_order = "invalid"} {}"#,

@@ -1386,27 +1386,27 @@ fn borrow_params_keeps_reuse_decisions() {
 #[test]
 fn drop_order_defaults_validates_and_survives_resume() {
     let (dir, src) = source("drop-order");
-    let initial = dir.path().join("forward.hir");
+    let initial = dir.path().join("backward.hir");
     emit(&src, "hir", &initial);
-    assert!(read(&initial).starts_with("drop_order \"forward\";"));
-    let backward = dir.path().join("backward.hir");
+    assert!(read(&initial).starts_with("drop_order \"backward\";"));
+    let forward = dir.path().join("forward.hir");
     let output = rrc(&[
         &src,
         Path::new("-o"),
-        &backward,
-        Path::new("--drop-order=backward"),
+        &forward,
+        Path::new("--drop-order=forward"),
     ]);
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let interface = dir.path().join("backward.rri");
+    let interface = dir.path().join("forward.rri");
     let output = rrc(&[
         &src,
         Path::new("--package-name=demo"),
         Path::new("--emit=rri"),
-        Path::new("--drop-order=backward"),
+        Path::new("--drop-order=forward"),
         Path::new("-o"),
         &interface,
     ]);
@@ -1415,15 +1415,15 @@ fn drop_order_defaults_validates_and_survives_resume() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(read(&interface).contains("drop_order \"backward\";"));
-    let mut input = backward;
+    assert!(read(&interface).contains("drop_order \"forward\";"));
+    let mut input = forward;
     for stage in ["hir", "mir", "mlir"] {
         let out = dir.path().join(format!("resume.{stage}"));
         emit(&input, stage, &out);
         assert!(read(&out).contains(if stage == "mlir" {
-            "reussir.drop_order = \"backward\""
+            "reussir.drop_order = \"forward\""
         } else {
-            "drop_order \"backward\";"
+            "drop_order \"forward\";"
         }));
         let output = rrc(&[
             &out,
@@ -1431,7 +1431,7 @@ fn drop_order_defaults_validates_and_survives_resume() {
             Path::new("-"),
             Path::new("--emit"),
             Path::new(stage),
-            Path::new("--drop-order=forward"),
+            Path::new("--drop-order=backward"),
         ]);
         assert_eq!(output.status.code(), Some(2));
         assert!(

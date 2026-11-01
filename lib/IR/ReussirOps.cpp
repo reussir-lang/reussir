@@ -4736,7 +4736,7 @@ mlir::LogicalResult resolveDropOrder(mlir::ModuleOp module,
     module->setAttr(
         "reussir.drop_order",
         mlir::StringAttr::get(module.getContext(),
-                              configured.empty() ? "forward" : configured));
+                              configured.empty() ? "backward" : configured));
   return mlir::success();
 }
 
@@ -4746,7 +4746,7 @@ void qualifyFfiSymbols(mlir::ModuleOp module, llvm::Module &translated) {
     return;
   auto configured =
       module->getAttrOfType<mlir::StringAttr>("reussir.drop_order");
-  llvm::StringRef order = configured ? configured.getValue() : "forward";
+  llvm::StringRef order = configured ? configured.getValue() : "backward";
   llvm::DenseMap<const llvm::Comdat *, llvm::Comdat *> comdats;
   for (auto attribute : symbols) {
     auto symbol = llvm::cast<mlir::FlatSymbolRefAttr>(attribute);
