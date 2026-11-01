@@ -24,6 +24,7 @@
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/DialectConversion.h>
 
+#include "Reussir/Conversion/Passes.h"
 #include "Reussir/IR/ReussirOps.h"
 
 namespace reussir {
@@ -31,9 +32,6 @@ namespace reussir {
 /// Attribute name used to mark expanded decrement operations
 constexpr llvm::StringLiteral kExpandedDecrementAttr =
     "reussir.expanded_decrement";
-
-#define GEN_PASS_DECL_REUSSIRRCDECREMENTEXPANSIONPASS
-#include "Reussir/Conversion/Passes.h.inc"
 
 mlir::LogicalResult resolveDropOrder(mlir::ModuleOp module,
                                      llvm::StringRef configured);

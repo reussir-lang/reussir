@@ -5,13 +5,14 @@
 #include "Reussir/Conversion/BasicOpsLowering.h"
 #include "Reussir/IR/ReussirOps.h"
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/Interfaces/DataLayoutInterfaces.h>
 
 namespace reussir {
 namespace {
 using namespace mlir;
 
 LLVM::LLVMFuncOp runtimeFunction(Operation *op, StringRef name,
-                                 TypeRange arguments) {
+                                 llvm::ArrayRef<Type> arguments) {
   auto module = op->getParentOfType<ModuleOp>();
   if (auto existing = module.lookupSymbol<LLVM::LLVMFuncOp>(name))
     return existing;
@@ -22,6 +23,24 @@ LLVM::LLVMFuncOp runtimeFunction(Operation *op, StringRef name,
   function->setAttr("passthrough", builder.getStrArrayAttr({"nounwind"}));
   return function;
 }
+
+bool hasWideHeader(RcType type, const LLVMTypeConverter &converter,
+                   Operation *op) {
+  auto record = llvm::dyn_cast<RecordType>(type.getElementType());
+  if (!record || type.getCapability() != Capability::shared)
+    return false;
+  RcBoxType box = type.getInnerBoxType();
+  if (box.isHeaderFused())
+    return record.getMembers().size() <= (1u << 16);
+  if (box.getHeaderTypes().size() != 1)
+    return false;
+  // The box is `{i32, payload}`, not packed: the payload starts at its
+  // alignment (a packed record's is 1).
+  Type payload = converter.convertType(record);
+  return payload &&
+         DataLayout::closest(op).getTypeABIAlignment(payload) >= 8;
+}
+
 
 template <typename Op>
 struct DropStackCall : ConvertOpToLLVMPattern<Op> {
@@ -48,7 +67,11 @@ struct DropStackCall : ConvertOpToLLVMPattern<Op> {
     }
     inputs.push_back(ptr);
     arguments.push_back(address);
-    auto callee = runtimeFunction(op, runtime, inputs);
+    StringRef name = runtime;
+    if constexpr (std::is_same_v<Op, ReussirRcDeferOp>)
+      if (hasWideHeader(op.getBox().getType(), *this->getTypeConverter(), op))
+        name = "__reussir_drop_defer_wide";
+    auto callee = runtimeFunction(op, name, inputs);
     rewriter.replaceOpWithNewOp<LLVM::CallOp>(op, callee, arguments);
     return success();
   }
