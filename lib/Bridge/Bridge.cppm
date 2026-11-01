@@ -219,7 +219,6 @@ void createLoweringPipeline(mlir::PassManager &pm,
         reussir::createReussirTokenReusePass(tokenReuseOpts));
   }
 
-
   pm.addPass(reussir::createReussirConvertToSTDPass());
 #ifdef REUSSIR_ENABLE_RCGMP
   pm.addPass(mlir::rcgmp::createConvertRCGMPToSCFPass());

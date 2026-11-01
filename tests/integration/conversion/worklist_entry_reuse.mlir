@@ -9,11 +9,11 @@
 
 // LOCAL-LABEL: func.func @reuse
 // LOCAL: reussir.token.free
-// LOCAL: call @__reussir_drop.entry.forward
+// LOCAL: call @_RNvC{{[0-9]+}}REUSSIR_DROP_entry_forward{{[A-Za-z0-9_]+}}
 // LOCAL: reussir.token.alloc
 // ACROSS-LABEL: func.func @reuse
 // ACROSS-NOT: reussir.token.free
-// ACROSS: call @__reussir_drop.entry.forward
+// ACROSS: call @_RNvC{{[0-9]+}}REUSSIR_DROP_entry_forward{{[A-Za-z0-9_]+}}
 // ACROSS-NOT: reussir.token.alloc
 // ACROSS: reussir.token.ensure
 module {
