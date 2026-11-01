@@ -175,7 +175,7 @@ public:
           auto [type, field] = member;
           auto projected = getProjectedType(type, field, Capability::shared);
           auto nested = llvm::dyn_cast<RecordType>(projected);
-          return field ||
+          return field || isTriviallyCopyable(projected) ||
                  ((!record.isCompound() || !nested || !nested.isVariant()) &&
                   canReleasePure(projected));
         });
