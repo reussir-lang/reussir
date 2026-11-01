@@ -436,7 +436,7 @@ public:
   matchAndRewrite(ReussirRefDropOp op,
                   mlir::PatternRewriter &rewriter) const override {
     auto parent = op->getParentOfType<mlir::func::FuncOp>();
-    if (!outlineRecord && parent && parent->hasAttr("reussir.closure_drop"))
+    if (!outlineRecord && parent && parent->hasAttr(REUSSIR_CLOSURE_DROP))
       return mlir::failure();
     RefType refType = op.getRef().getType();
     Capability refCap = refType.getCapability();

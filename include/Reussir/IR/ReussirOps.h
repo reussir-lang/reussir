@@ -208,6 +208,12 @@ inline constexpr llvm::StringLiteral REUSSIR_NO_DEFER = "reussir.no_defer";
 inline constexpr llvm::StringLiteral REUSSIR_LOCKED_DROP =
     "reussir.locked_drop";
 
+// Cleanup entry points whose bodies may join an active worklist scope.
+inline constexpr llvm::StringLiteral REUSSIR_CLOSURE_DROP =
+    "reussir.closure_drop";
+inline constexpr llvm::StringLiteral REUSSIR_FOREIGN_DROP =
+    "reussir.foreign_drop";
+
 // WorklistRoleAttr recording a generated helper's purpose and drop order.
 inline constexpr llvm::StringLiteral REUSSIR_WORKLIST_ROLE =
     "reussir.worklist_role";

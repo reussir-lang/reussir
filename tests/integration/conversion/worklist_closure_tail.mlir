@@ -27,14 +27,14 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : 
 
 // Later captures stay pending until the first capture's cleanup finishes.
 // CHECK-LABEL: func.func private @{{.*}}drop.worklist.forward
-// CHECK: reussir.drop.defer @__reussir_drop.free.forward
+// CHECK: reussir.drop.defer @_RNvC{{[0-9]+}}REUSSIR_DROP_free_forward{{[A-Za-z0-9_]+}}
 // CHECK: scf.if
-// CHECK-NEXT: reussir.drop.defer @__reussir_drop.walk.forward
+// CHECK-NEXT: reussir.drop.defer @_RNvC{{[0-9]+}}REUSSIR_DROP_walk_forward{{[A-Za-z0-9_]+}}
 // CHECK: scf.if
-// CHECK-NEXT: func.call @__reussir_drop.walk.forward{{.*}}reussir.musttail
+// CHECK-NEXT: func.call @_RNvC{{[0-9]+}}REUSSIR_DROP_walk_forward{{[A-Za-z0-9_]+}}{{.*}}reussir.musttail
 // CHECK-NOT: reussir.drop.defer
 // CHECK: return
 // NOTAIL-LABEL: func.func private @{{.*}}drop.worklist.forward
-// NOTAIL: func.call @__reussir_drop.walk.forward
-// LLVM: musttail call void @__reussir_drop.walk.forward
+// NOTAIL: func.call @_RNvC{{[0-9]+}}REUSSIR_DROP_walk_forward{{[A-Za-z0-9_]+}}
+// LLVM: musttail call void @_RNvC{{[0-9]+}}REUSSIR_DROP_walk_forward{{[A-Za-z0-9_]+}}
 // LLVM-NEXT: ret void
