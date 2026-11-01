@@ -236,6 +236,10 @@ mod tests {
         };
         for changed in [
             Profile {
+                drop_order: Some(crate::manifest::DropOrder::Backward),
+                ..base.clone()
+            },
+            Profile {
                 opt: Some("aggressive".into()),
                 ..base.clone()
             },

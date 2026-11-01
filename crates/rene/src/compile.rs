@@ -426,6 +426,11 @@ pub(crate) fn profile_flags(
         args.push(flag.to_owned());
         args.push(value.to_owned());
     }
+    push(
+        &mut args,
+        "--drop-order",
+        profile.drop_order.unwrap_or_default().as_str(),
+    );
     if let Some(opt) = &profile.opt {
         push(&mut args, "-O", opt);
     }
