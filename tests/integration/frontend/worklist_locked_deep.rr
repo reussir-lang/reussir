@@ -1,0 +1,21 @@
+// UNSUPPORTED: windows
+// RUN: %rrc %s -o %t.forward.o --drop-order forward --relocation-mode pic -O none
+// RUN: %cc %t.forward.o %S/worklist_locked_deep.c -o %t.forward.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.forward.exe
+// RUN: %rrc %s -o %t.backward.o --drop-order backward --relocation-mode pic -Oaggressive
+// RUN: %cc %t.backward.o %S/worklist_locked_deep.c -o %t.backward.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.backward.exe
+
+import core::intrinsic::cell;
+
+pub struct LockedNode { next: Mutex<Arc<LockedLink>> }
+pub struct LockedLink { next: Nullable<Arc<LockedNode>> }
+pub fn prepend(next: Nullable<Arc<LockedNode>>) -> Nullable<Arc<LockedNode>> {
+    Nullable::NonNull{Arc<LockedNode>{
+        next: cell::alloc<Mutex<Arc<LockedLink>>>(Arc<LockedLink>{next: next})
+    }}
+}
+pub fn discard(node: Nullable<Arc<LockedNode>>) -> i64 { 42 }
+
+extern "C" trampoline "locked_prepend" = prepend;
+extern "C" trampoline "locked_discard" = discard;
