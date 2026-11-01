@@ -185,6 +185,7 @@ impl LlvmLowering {
     ///
     /// `paths` pins the rustc executable and package directories the texture
     /// compile uses; default it to keep the environment/probe discovery.
+    /// Select the module's drop-order policy before compiling foreign templates.
     pub fn prepare(
         module: &Module,
         data_layout: &str,
@@ -247,6 +248,7 @@ impl LlvmLowering {
                 LLVMDisposeModule(main);
                 return Err("failed to link polymorphic-FFI modules into the main module".into());
             }
+            sys::reussirQualifyFfiSymbols(module.to_raw(), main as sys::LLVMModuleRef);
             // Every ODR definition now exists in one module (codegen'd
             // instances, the dialect's drop/acquire glue, linked FFI bitcode),
             // so this is the one seam where the COFF comdat invariant can be
