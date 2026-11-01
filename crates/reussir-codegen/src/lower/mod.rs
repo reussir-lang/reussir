@@ -65,9 +65,11 @@ use xxhash_rust::xxh3::xxh3_64;
 
 use reussir_backend::builders;
 use reussir_backend::melior::Context;
-use reussir_backend::melior::ir::attribute::{ArrayAttribute, Attribute, StringAttribute};
+use reussir_backend::melior::ir::attribute::{
+    ArrayAttribute, Attribute, DictionaryAttribute, FlatSymbolRefAttribute, StringAttribute,
+};
 use reussir_backend::melior::ir::operation::{OperationLike, OperationMutLike};
-use reussir_backend::melior::ir::{BlockLike, Location, Module};
+use reussir_backend::melior::ir::{BlockLike, Identifier, Location, Module};
 use reussir_backend::pipeline::{INLINE_TRANSFORM_ATTR, INLINE_TRANSFORM_ENTRY_POINT};
 
 use reussir_core::full::mir;
@@ -522,36 +524,56 @@ pub fn lower_unit<'c, 'tcx>(
             lowerer.trampoline_location(t),
         ));
     }
+    let polyffi_texture = |text: &str, bindings: &[mir::Symbol]| {
+        let mut texture = builders::polyffi_texture(context, text, Location::unknown(context));
+        if !bindings.is_empty() {
+            let substitutions: Vec<_> = bindings
+                .iter()
+                .map(|symbol| {
+                    let symbol = program.symbol(*symbol);
+                    (
+                        Identifier::new(context, symbol),
+                        FlatSymbolRefAttribute::new(context, symbol).into(),
+                    )
+                })
+                .collect();
+            texture.set_attribute(
+                "substitutions",
+                DictionaryAttribute::new(context, &substitutions).into(),
+            );
+        }
+        texture
+    };
+    let mut required_releases = rustc_hash::FxHashSet::default();
+    let mut ffi_symbols = Vec::new();
     // The boundary wrapper texture of each `#[ffi(import)]` instance rides
     // its native function's home unit, next to the import trampoline.
     for import in &program.ffi_imports {
         if !unit.is_home(program.symbol(import.symbol)) {
             continue;
         }
-        body.append_operation(builders::polyffi_texture(
-            context,
-            &import.texture,
-            Location::unknown(context),
-        ));
+        ffi_symbols.push(program.symbol(import.boundary));
+        required_releases.extend(import.release_bindings.iter().copied());
+        body.append_operation(polyffi_texture(&import.texture, &import.release_bindings));
     }
     // Standalone foreign textures (opaque drop hooks), anchored by symbol.
     for texture in &program.ffi_textures {
         if !unit.is_home(program.symbol(texture.anchor)) {
             continue;
         }
-        body.append_operation(builders::polyffi_texture(
-            context,
-            &texture.texture,
-            Location::unknown(context),
-        ));
+        required_releases.extend(texture.release_bindings.iter().copied());
+        body.append_operation(polyffi_texture(&texture.texture, &texture.release_bindings));
     }
     // Reussir-side rc glue the foreign wrappers link against; one pair per
     // shared-record instance that crosses the boundary, in its home unit.
+    // Other units declare only the glue their textures reference.
     for glue in &program.ffi_rc_glue {
-        if !unit.is_home(program.symbol(glue.acquire)) {
+        let define = unit.is_home(program.symbol(glue.acquire));
+        if !define && !required_releases.contains(&glue.release) {
             continue;
         }
-        for op in lowerer.ffi_rc_glue_pair(glue)? {
+        ffi_symbols.push(program.symbol(glue.release));
+        for op in lowerer.ffi_rc_glue_pair(glue, define)? {
             body.append_operation(op);
         }
     }
@@ -566,11 +588,31 @@ pub fn lower_unit<'c, 'tcx>(
     // Every opaque instance's drop hook is declared in every unit: the
     // `rc.dec` lowering calls it, and its verifier requires the symbol. The
     // definition arrives with the linked foreign bitcode.
+    let owned_hooks: rustc_hash::FxHashSet<_> = program
+        .ffi_textures
+        .iter()
+        .map(|texture| texture.anchor)
+        .collect();
     for record in &program.records {
         let mir::RecordLayout::Opaque { drop_hook, .. } = record.layout else {
             continue;
         };
+        if owned_hooks.contains(&record.symbol) {
+            ffi_symbols.push(program.symbol(drop_hook));
+        }
         body.append_operation(lowerer.ffi_drop_hook_decl(record, drop_hook)?);
+    }
+    if !ffi_symbols.is_empty() {
+        ffi_symbols.sort_unstable();
+        ffi_symbols.dedup();
+        let symbols: Vec<_> = ffi_symbols
+            .into_iter()
+            .map(|symbol| FlatSymbolRefAttribute::new(context, symbol).into())
+            .collect();
+        module.as_operation_mut().set_attribute(
+            "reussir.ffi_symbols",
+            ArrayAttribute::new(context, &symbols).into(),
+        );
     }
     embed_inline_transforms(context, &mut module, &program.transform_scripts)?;
     // TRACE, not DEBUG: this dumps the whole module, and `-v` (DEBUG) is
@@ -1254,6 +1296,69 @@ transform [{
                 }
             }
         });
+    }
+
+    #[test]
+    fn external_opaque_hooks_are_not_policy_qualified() {
+        let text = r#"record @_RC8External : shared ffi External { "::foreign::External", @external_cleanup };"#;
+        let context = crate::testing::context();
+        in_arena(|tcx| {
+            let parsed = parse_program(tcx, text).unwrap();
+            let module = lower_program(
+                &context,
+                tcx,
+                &parsed.program,
+                None,
+                None,
+                LinkagePolicy::Jit,
+                &[],
+            )
+            .unwrap();
+            assert!(module.as_operation().verify());
+            assert!(!module.as_operation().has_attribute("reussir.ffi_symbols"));
+            assert!(
+                module
+                    .as_operation()
+                    .to_string()
+                    .contains("@external_cleanup(")
+            );
+        });
+    }
+
+    #[test]
+    fn foreign_symbol_metadata_is_precise_and_roundtrips() {
+        let source = r#"
+            #[ffi(rust = "::std::vec::Vec")] pub struct Bag<T>;
+            pub struct First { n: i64 }
+            pub struct Second { n: i64 }
+            #[ffi(import)] pub fn own<T>(x: T) -> T [{ x }];
+            pub fn first(x: Bag<First>) -> Bag<First> { own(x) }
+            pub fn second(x: Bag<Second>) -> Bag<Second> { own(x) }
+            extern "C" trampoline "user_entry" = first;
+        "#;
+        let text = lower_source(source);
+        let context = crate::testing::context();
+        let module = Module::parse(&context, &text).unwrap();
+        let symbols = module
+            .as_operation()
+            .attribute("reussir.ffi_symbols")
+            .unwrap()
+            .to_string();
+        assert_eq!(symbols.matches('@').count(), 6, "{symbols}");
+        assert!(symbols.contains("_ffi_release"), "{symbols}");
+        assert!(symbols.contains("_ffi_drop"), "{symbols}");
+        assert!(!symbols.contains("_ffi_acquire"), "{symbols}");
+        assert!(!symbols.contains("user_entry"), "{symbols}");
+        let printed = module.as_operation().to_string();
+        let reparsed = Module::parse(&context, &printed).unwrap();
+        assert_eq!(
+            reparsed
+                .as_operation()
+                .attribute("reussir.ffi_symbols")
+                .unwrap()
+                .to_string(),
+            symbols
+        );
     }
 
     #[test]

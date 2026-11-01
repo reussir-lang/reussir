@@ -579,25 +579,42 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     pub(super) fn ffi_rc_glue_pair(
         &self,
         glue: &mir::FfiRcGlue<'tcx>,
+        define: bool,
     ) -> Result<[Operation<'c>; 2]> {
         let loc = Location::unknown(self.context);
         let ty = self.tys.mlir_ty(glue.ty)?;
-        let attributes = self.ffi_glue_attributes();
+        let attributes = if define {
+            self.ffi_glue_attributes()
+        } else {
+            SmallVec::from_buf([(
+                Identifier::new(self.context, "sym_visibility"),
+                StringAttribute::new(self.context, "private").into(),
+            )])
+        };
         let build = |symbol: &str, inc: bool| -> Result<Operation<'c>> {
-            let block = Block::new(&[(ty, loc)]);
-            let arg = block
-                .argument(0)
-                .map_err(|e| LoweringError(format!("missing glue argument: {e}").into()))?
-                .into();
-            let op = if inc {
-                dialect::rc_inc(self.context, arg, loc).into()
-            } else {
-                self.build_rc_dec(arg, glue.ty, loc)
-            };
-            block.append_operation(op);
-            block.append_operation(func::r#return(&[], loc));
+            let mut attributes = attributes.clone();
+            if !inc {
+                attributes.push((
+                    Identifier::new(self.context, "reussir.foreign_drop"),
+                    Attribute::unit(self.context),
+                ));
+            }
             let region = Region::new();
-            region.append_block(block);
+            if define {
+                let block = Block::new(&[(ty, loc)]);
+                let arg = block
+                    .argument(0)
+                    .map_err(|e| LoweringError(format!("missing glue argument: {e}").into()))?
+                    .into();
+                let op = if inc {
+                    dialect::rc_inc(self.context, arg, loc).into()
+                } else {
+                    self.build_rc_dec(arg, glue.ty, loc)
+                };
+                block.append_operation(op);
+                block.append_operation(func::r#return(&[], loc));
+                region.append_block(block);
+            }
             Ok(func::func(
                 self.context,
                 StringAttribute::new(self.context, symbol),
