@@ -103,3 +103,31 @@ impl WideHeader {
         Some(Link { previous, release })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    unsafe extern "C" fn first(_: *mut u8) {}
+    unsafe extern "C" fn second(_: *mut u8) { std::hint::black_box(()); }
+
+    #[test]
+    fn a_full_function_table_uses_existing_entries_only() {
+        let mut table = ReleaseTable::default();
+        let known: Release = first;
+        table.releases.resize(u8::MAX as usize, known);
+        assert!(table.index(known).is_some());
+        assert!(table.index(second).is_none());
+    }
+
+    #[test]
+    fn links_require_an_aligned_representable_offset() {
+        let mut words = [1_u32, 0, 1, 0];
+        let object = unsafe { Object::new(words.as_mut_ptr().cast()) };
+        let unaligned = unsafe { Object::new(words.as_mut_ptr().add(1).cast()) };
+        let header = unsafe { WideHeader::new(object) };
+        let mut table = ReleaseTable::default();
+        let index = table.index(first).unwrap();
+        assert!(!unsafe { header.link(unaligned, index) });
+        assert_eq!(words, [1, 0, 1, 0]);
+    }
+}

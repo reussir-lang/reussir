@@ -121,3 +121,72 @@ fn drops_after_the_buffer_cache_destructor_own_their_context() {
     }).join().unwrap();
     assert_eq!(count.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
+
+#[derive(Debug, PartialEq, Eq)]
+enum ReleaseEvent {
+    Primary(usize),
+    Secondary(usize),
+}
+#[repr(C, align(8))]
+struct Wide {
+    count: u32,
+    tag: u32,
+    id: usize,
+    events: *mut Vec<ReleaseEvent>,
+}
+unsafe fn take_wide(object: *mut u8) -> Box<Wide> {
+    let object = unsafe { Box::from_raw(object.cast::<Wide>()) };
+    assert_eq!(object.count, 1);
+    assert_eq!(object.tag & 0xffff, object.id as u32);
+    object
+}
+unsafe extern "C" fn primary(object: *mut u8) {
+    let object = unsafe { take_wide(object) };
+    unsafe { (*object.events).push(ReleaseEvent::Primary(object.id)) };
+}
+unsafe extern "C" fn secondary(object: *mut u8) {
+    let object = unsafe { take_wide(object) };
+    unsafe { (*object.events).push(ReleaseEvent::Secondary(object.id)) };
+}
+unsafe extern "C" fn enqueue_wide(object: *mut u8) {
+    let events = object.cast::<Vec<ReleaseEvent>>();
+    let first: Release = primary;
+    let second: Release = secondary;
+    for (id, callback) in [(1, first), (2, first), (3, second), (4, first)] {
+        let object = Box::into_raw(Box::new(Wide { count: 1, tag: id as u32, id, events }));
+        unsafe { defer_wide(object.cast(), callback) };
+    }
+    ACTIVE.with(|context| {
+        let context = context.borrow();
+        assert_eq!(context.work.len(), 1);
+        assert_eq!(context.cells.len(), 1);
+    });
+}
+#[test]
+fn mixed_wide_runs_restore_headers_and_keep_lifo_order() {
+    let mut events = vec![];
+    unsafe { run((&mut events as *mut Vec<ReleaseEvent>).cast(), enqueue_wide) };
+    assert_eq!(events, [ReleaseEvent::Primary(4), ReleaseEvent::Secondary(3),
+        ReleaseEvent::Primary(2), ReleaseEvent::Primary(1)]);
+}
+
+unsafe extern "C" fn enqueue_join(object: *mut u8) {
+    unsafe { defer(object, first) };
+    unsafe { join_or_run(object, first) };
+    unsafe { (*object.cast::<Ordered>()).log.push(2) };
+}
+#[test]
+fn internal_bridges_join_the_current_drain() {
+    let mut object = Ordered { log: vec![] };
+    unsafe { run((&mut object as *mut Ordered).cast(), enqueue_join) };
+    assert_eq!(object.log, [1, 2, 1]);
+}
+
+#[test]
+fn callback_symbols_are_exported() {
+    let symbols = crate::symbols::exported_symbols();
+    for name in ["__reussir_drop_run", "__reussir_drop_join_or_run", "__reussir_drop_defer",
+        "__reussir_drop_defer_wide", "__reussir_drop_defer_indexed"] {
+        assert!(symbols.iter().any(|symbol| symbol.name == name && !symbol.address.is_null()));
+    }
+}
