@@ -164,8 +164,7 @@ public:
   // |---|---|
   // | Trivially copyable | Always |
   // | Nonrecursive record | No observable cleanup |
-  // | Recursive record | No observable cleanup; tailRecursiveDrops enabled;
-  // |                  | no worklist cleanup in the record or its descendants |
+  // | Recursive record | No observable cleanup; tailRecursiveDrops && !hasWorklistCleanup() |
   // | Rigid RC | Always |
   // | Other RC | Payload qualifies; a TailLoop record also needs canApplyTailDrop |
   // | Nullable | Wrapped pointer type qualifies |
