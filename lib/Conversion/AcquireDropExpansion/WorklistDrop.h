@@ -22,6 +22,9 @@ void emitWorklistRelease(mlir::Value rc, mlir::Location loc,
                          mlir::PatternRewriter &rewriter,
                          mlir::SymbolTableCollection *symbols,
                          bool run = false);
+void emitWorklistArrayDrop(mlir::Value ref, mlir::Location loc,
+                           mlir::PatternRewriter &rewriter,
+                           mlir::SymbolTableCollection *symbols);
 void emitWorklistDecrement(mlir::Value rc, mlir::Location loc,
                            mlir::PatternRewriter &rewriter,
                            mlir::SymbolTableCollection *symbols,

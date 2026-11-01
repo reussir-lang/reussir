@@ -129,7 +129,8 @@ mlir::LogicalResult emitArrayElementTraversal(
     mlir::Value view, mlir::OpBuilder &builder, mlir::Location loc,
     llvm::function_ref<mlir::LogicalResult(mlir::OpBuilder &, mlir::Location,
                                            mlir::Value)>
-        emitElement);
+        emitElement,
+    AtomicKind atomic = AtomicKind::normal);
 
 //===----------------------------------------------------------------------===//
 // createDtorIfNotExists

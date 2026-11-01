@@ -88,6 +88,70 @@ public:
     schedule(walk(ref.getType()), ref, run);
   }
 
+  void array(mlir::Value ref) {
+    auto refType = llvm::cast<RefType>(ref.getType());
+    auto type = llvm::cast<ArrayType>(refType.getElementType());
+    auto task = function(
+        refType, "array",
+        [&](mlir::Value arg) {
+          auto cursor = builder.getInsertionBlock()->getArgument(1);
+          mlir::Value view = ReussirArrayViewOp::create(
+              builder, loc, getArrayViewMemRefType(type), arg);
+          llvm::SmallVector<mlir::Value> extents;
+          mlir::Value total =
+              mlir::arith::ConstantIndexOp::create(builder, loc, 1);
+          for (auto [dim, extent] : llvm::enumerate(type.getShape())) {
+            mlir::Value size =
+                mlir::ShapedType::isDynamic(extent)
+                    ? mlir::memref::DimOp::create(builder, loc, view,
+                                                  static_cast<int64_t>(dim))
+                          .getResult()
+                    : mlir::arith::ConstantIndexOp::create(builder, loc, extent)
+                          .getResult();
+            extents.push_back(size);
+            total = mlir::arith::MulIOp::create(builder, loc, total, size);
+          }
+          mlir::Value present = mlir::arith::CmpIOp::create(
+              builder, loc, mlir::arith::CmpIPredicate::ult, cursor, total);
+          auto branch = mlir::scf::IfOp::create(builder, loc, present, false);
+          mlir::OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(branch.thenBlock());
+          mlir::Value next = mlir::arith::AddIOp::create(
+              builder, loc, cursor,
+              mlir::arith::ConstantIndexOp::create(builder, loc, 1));
+          auto callback = llvm::cast<mlir::func::FuncOp>(
+              branch->getParentOfType<mlir::func::FuncOp>());
+          ReussirDropDeferIndexedOp::create(
+              builder, loc,
+              mlir::FlatSymbolRefAttr::get(callback.getSymNameAttr()), arg,
+              next);
+          llvm::SmallVector<mlir::Value> indices(extents.size());
+          mlir::Value remaining = cursor;
+          for (size_t dim = extents.size(); dim-- > 0;) {
+            indices[dim] = mlir::arith::RemUIOp::create(builder, loc, remaining,
+                                                        extents[dim]);
+            remaining = mlir::arith::DivUIOp::create(builder, loc, remaining,
+                                                     extents[dim]);
+          }
+          for (auto [dim, index] : llvm::enumerate(indices)) {
+            mlir::Type projected =
+                dim + 1 == indices.size()
+                    ? mlir::Type(RefType::get(
+                          builder.getContext(), type.getElementType(),
+                          Capability::unspecified, refType.getAtomicKind()))
+                    : mlir::Type(getProjectedArrayViewType(
+                          llvm::cast<mlir::MemRefType>(view.getType())));
+            view = ReussirArrayProjectOp::create(builder, loc, projected, view,
+                                                 index);
+          }
+          ReussirRefDropOp::create(builder, loc, view);
+        },
+        true);
+    ReussirDropDeferIndexedOp::create(
+        builder, loc, mlir::FlatSymbolRefAttr::get(task.getSymNameAttr()), ref,
+        mlir::arith::ConstantIndexOp::create(builder, loc, 0));
+  }
+
   void free(mlir::Value rc) {
     auto task = function(rc.getType(), "free", [&](mlir::Value owner) {
       emitBoxFree(owner, loc, module, builder);
@@ -157,6 +221,16 @@ void emitWorklistRelease(mlir::Value rc, mlir::Location loc,
                    ->getParentOfType<mlir::ModuleOp>(),
                rewriter, symbols, loc)
       .release(rc, run);
+}
+
+void emitWorklistArrayDrop(mlir::Value ref, mlir::Location loc,
+                           mlir::PatternRewriter &rewriter,
+                           mlir::SymbolTableCollection *symbols) {
+  WorklistGlue(rewriter.getInsertionBlock()
+                   ->getParentOp()
+                   ->getParentOfType<mlir::ModuleOp>(),
+               rewriter, symbols, loc)
+      .array(ref);
 }
 
 void emitWorklistDecrement(mlir::Value rc, mlir::Location loc,
