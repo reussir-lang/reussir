@@ -257,10 +257,126 @@ fn steps_inside_a_drain_and_an_empty_drain() {
     assert!(!releasing() && depth() == 0);
 }
 
+// Linked runs: boxes with a wide header (count, then a tag below 2^16),
+// deferred with `defer_wide`. A release checks that its header is back.
+#[repr(C, align(8))]
+struct Wide {
+    count: u32,
+    tag: u32,
+    id: usize,
+}
+fn wide(id: usize) -> *mut u8 {
+    Box::into_raw(Box::new(Wide { count: 1, tag: id as u32 % 7, id })).cast()
+}
+unsafe fn take(cell: *mut u8, kind: char) -> usize {
+    let b = unsafe { Box::from_raw(cell.cast::<Wide>()) };
+    assert_eq!((b.count, b.tag), (1, b.id as u32 % 7));
+    log(kind, b.id);
+    b.id
+}
+// `wa(id)` and `wb(id)` run the plan of `id`: `kids(id)` children, each
+// deferred wide or as a host cell (`DIFF` deferring all as host cells), or
+// a step, or a nested run.
+thread_local! {
+    static WIDE: Cell<bool> = const { Cell::new(true) };
+}
+fn kids(id: usize) -> usize {
+    if id > 2000 { 0 } else { (id.wrapping_mul(2654435761) >> 7) % 4 }
+}
+unsafe fn plan(id: usize) {
+    for k in 0..kids(id) {
+        let c = id * 4 + k;
+        let f: Release = if c % 3 == 0 { wb } else { wa };
+        match (c >> 3) % 5 {
+            0 => unsafe { defer_step(c, wide_step) },
+            1 => unsafe { run(wide(c), f) },
+            2 => unsafe { defer(wide(c), f) },
+            _ if WIDE.with(|w| w.get()) => unsafe { defer_wide(wide(c), f) },
+            _ => unsafe { defer(wide(c), f) },
+        }
+    }
+}
+unsafe extern "C" fn wa(cell: *mut u8) {
+    let id = unsafe { take(cell, 'A') };
+    unsafe { plan(id) };
+}
+unsafe extern "C" fn wb(cell: *mut u8) {
+    let id = unsafe { take(cell, 'B') };
+    unsafe { plan(id) };
+}
+unsafe extern "C" fn wide_step(c: usize) -> bool {
+    log('s', c);
+    unsafe { plan(c + 1) };
+    true
+}
+
+#[test]
+fn linked_runs_keep_the_order() {
+    // The same drops, wide or not: the same events, and linked boxes take
+    // no cells.
+    let mut logs = vec![];
+    for linked in [true, false] {
+        WIDE.with(|w| w.set(linked));
+        for root in 1..if cfg!(miri) { 10 } else { 60 } {
+            unsafe { run(wide(root), if root % 2 == 0 { wb } else { wa }) };
+        }
+        logs.push(take_log());
+        assert!(!releasing() && pending() == 0 && trimmed());
+    }
+    assert!(logs[0].len() > if cfg!(miri) { 20 } else { 300 });
+    assert_eq!(logs[0], logs[1]);
+}
+
+unsafe extern "C" fn la(cell: *mut u8) { unsafe { take(cell, 'A') }; }
+unsafe extern "C" fn lb(cell: *mut u8) { unsafe { take(cell, 'B') }; }
+// A walk deferring wide boxes 1 to 6, alternating two releases, then a
+// host cell 7, a wide box 8, and wide boxes that cannot link: 9 a few bytes
+// off (a new run), 10 after a full table.
+unsafe extern "C" fn alternating(_: *mut u8) {
+    for id in 1..=6 {
+        unsafe { defer_wide(wide(id), if id % 2 == 0 { lb } else { la }) };
+    }
+    let s = state();
+    log('d', s.depth() * 100 + s.cells.len.get());
+    unsafe { defer(p(7), b) };
+    unsafe { defer_wide(wide(8), la) };
+    log('d', s.depth());
+    let off = unsafe { wide(9).add(4) };
+    unsafe { defer_wide(off, off_release) };
+    log('d', s.depth());
+    // Fill the table (its entries in use stay).
+    RELEASES.with(|t| t[s.known.get() as usize..].iter().for_each(|r| r.set(Some(unnamed))));
+    s.known.set(TABLE as u8);
+    // One reified function, so that 11 links to 10 (Miri gives each
+    // reification its own address).
+    let f: Release = lb;
+    unsafe { defer_wide(wide(10), f) };
+    unsafe { defer_wide(wide(11), f) };
+    log('d', s.depth());
+}
+unsafe extern "C" fn off_release(cell: *mut u8) {
+    // Never linked: its "header" (box 9's tag and number) is untouched.
+    let words = cell.cast::<u32>();
+    assert_eq!(unsafe { (words.read(), words.add(1).read()) }, (2, 9));
+    drop(unsafe { Box::from_raw(cell.sub(4).cast::<Wide>()) });
+    log('o', 9);
+}
+
+#[test]
+fn boxes_link_through_their_headers() {
+    let _ = take_log();
+    unsafe { run(p(0), alternating) };
+    let log = take_log();
+    let (a, b2, d) = (|n| ('A', n), |n| ('B', n), |n| ('d', n));
+    let tail = [b2(6), a(5), b2(4), a(3), b2(2), a(1)];
+    assert_eq!(log, [&[d(100), d(3), d(4), d(5), b2(11), b2(10), ('o', 9), a(8), ('b', 7)][..], &tail].concat());
+    assert_eq!(state().known.get(), 0);
+}
+
 #[test]
 fn symbols_are_exported() {
     let symbols = crate::symbols::exported_symbols();
-    for name in ["__reussir_drop_defer", "__reussir_drop_run"] {
+    for name in ["__reussir_drop_defer", "__reussir_drop_defer_wide", "__reussir_drop_run"] {
         assert!(symbols.iter().any(|s| s.name == name && !s.address.is_null()));
     }
 }

@@ -22,6 +22,24 @@
 //! step; [`depth`] tells it whether a release deferred work), and drains
 //! with [`drain`] or [`run_step`].
 //!
+//! Drop glue defers a box whose first 8 bytes are header (a 32-bit count,
+//! then a 32-bit word that is padding or a tag below 2^16) with
+//! [`defer_wide`]: such boxes form one linked run whatever their release
+//! functions, threaded through their headers as Lean's to-do list is through
+//! its objects, so a pending box costs no memory. A box's link takes its
+//! count and the upper 16 bits of the next word: the offset to the box
+//! deferred before it (40 bits, signed, in 8-byte units) and that box's
+//! release function (8 bits: the same as this box's, or an index into a
+//! per-thread table emptied with the stack); both go back (count 1, upper
+//! bits 0) before the box's release runs. A box that cannot link starts a
+//! new run: one with a nonzero top byte (under top-byte tagging, an
+//! immediate's dummy box, which the glue never defers), one too far from
+//! the previous box (or not a multiple of 8 bytes away), or a new function
+//! with the table full. A pop rebuilds the linked box's pointer from its
+//! address, whose provenance was exposed (`-Zmiri-strict-provenance`
+//! rejects that, as expected; Miri's default mode accepts it). The stack never
+//! writes a cell deferred with [`defer`] (a host's).
+//!
 //! A host runtime whose releases may need work that must not run inside a
 //! drain (code that may block or switch contexts, which would leave the
 //! thread's drain suspended) registers one end function ([`set_end_work`]);
@@ -48,7 +66,9 @@ pub type Step = unsafe extern "C" fn(usize) -> bool;
 enum Work {
     /// `n` deferred cells, the last deferred at `head`, to be released with
     /// `release`; the run's other `n - 1` cells are in the cells vector,
-    /// below the cells of the runs above it (see [`State`]).
+    /// below the cells of the runs above it (see [`State`]); in a linked
+    /// run (`n` with [`LINKED`]) they are linked through their headers
+    /// instead ([`defer_wide`]).
     Run { release: Release, head: *mut u8, n: u32 },
     /// Incremental work: `step(p)` runs until it answers that it is done.
     Step(usize, Step),
@@ -56,6 +76,17 @@ enum Work {
 
 /// Capacity each vector keeps after a drain.
 const KEEP: usize = 64;
+
+/// A link's release index meaning "the same function as this box's"; the
+/// table holds the others.
+const SAME: u32 = 0xff;
+const TABLE: usize = SAME as usize;
+/// A run's `n` in the stack vector: whether the run is linked.
+const LINKED: u32 = 1 << 31;
+/// The most cells a run holds.
+const MAX_RUN: u32 = LINKED - 1;
+/// Link offsets, in 8-byte units: 40 bits, signed.
+const OFFSET_BITS: u32 = 40;
 
 /// A `Vec<T>` by its raw parts, in cells (the state has no destructor; the
 /// guard frees the buffers).
@@ -126,7 +157,9 @@ impl<T> Parts<T> {
 /// there, so the vector's last entry, when `n` is 0, is a step). Drops deferred one after the
 /// other with one release function form one run: the run is one entry, and
 /// each cell but its head one pointer in the cells vector (8 bytes while it
-/// waits, as the boxed heads of a list that the glue frees whole). The top
+/// waits, as the boxed heads of a list that the glue frees whole); boxes
+/// deferred with [`defer_wide`] one after the other form one linked run,
+/// whatever their functions, their links in their headers. The top
 /// run is kept in the state itself, so a deferral or a pop that stays in it
 /// touches no vector but the cells'. Also whether the thread drains, whether
 /// a release asked for the end work, and whether its exit guard ran (a later
@@ -136,10 +169,14 @@ struct State {
     releasing: Cell<bool>,
     end_work: Cell<bool>,
     exited: Cell<bool>,
+    /// Whether the run on top is linked.
+    linked: Cell<bool>,
     head: Cell<*mut u8>,
     release: Cell<Release>,
     stack: Parts<Work>,
     cells: Parts<*mut u8>,
+    /// The entries of [`RELEASES`] in use.
+    known: Cell<u8>,
 }
 
 /// No release function (the top run's while no run is on top).
@@ -154,12 +191,17 @@ thread_local! {
             releasing: Cell::new(false),
             end_work: Cell::new(false),
             exited: Cell::new(false),
+            linked: Cell::new(false),
             head: Cell::new(core::ptr::null_mut()),
             release: Cell::new(unnamed as Release),
             stack: Parts::new(),
             cells: Parts::new(),
+            known: Cell::new(0),
         }
     };
+    /// The release functions that links name by index (zero-initialized,
+    /// so it adds nothing to the image a new thread copies).
+    static RELEASES: [Cell<Option<Release>>; TABLE] = const { [const { Cell::new(None) }; TABLE] };
     static GUARD: Guard = const { Guard };
 }
 
@@ -191,7 +233,9 @@ impl State {
         if n == 0 {
             return true;
         }
-        if !self.stack.try_push(Work::Run { release: self.release.get(), head: self.head.get(), n }) {
+        let (release, head) = (self.release.get(), self.head.get());
+        let n = if self.linked.get() { n | LINKED } else { n };
+        if !self.stack.try_push(Work::Run { release, head, n }) {
             return false;
         }
         self.n.set(0);
@@ -208,7 +252,8 @@ impl State {
             if let Work::Run { release, head, n } = last {
                 self.release.set(release);
                 self.head.set(head);
-                self.n.set(n);
+                self.n.set(n & MAX_RUN);
+                self.linked.set(n & LINKED != 0);
                 self.stack.len.set(len - 1);
                 return;
             }
@@ -227,7 +272,7 @@ impl State {
     #[inline(always)]
     fn joins(&self, release: Release) -> bool {
         let n = self.n.get();
-        n != 0 && n < u32::MAX && self.release.get() as usize == release as usize
+        n != 0 && n < MAX_RUN && !self.linked.get() && self.release.get() as usize == release as usize
     }
 
     /// Defers `release(cell)`: adds it to the run on top, or starts a run.
@@ -242,13 +287,98 @@ impl State {
             self.n.set(self.n.get() + 1);
             return true;
         }
+        unsafe { self.try_start(cell, release, false) }
+    }
+
+    /// Starts a run (linked or not) with `cell` on top. Answers false,
+    /// changing nothing, when the stack vector must grow first.
+    #[inline(always)]
+    unsafe fn try_start(&self, cell: *mut u8, release: Release, linked: bool) -> bool {
         if !self.try_spill() {
             return false;
         }
         self.head.set(cell);
         self.release.set(release);
         self.n.set(1);
+        self.linked.set(linked);
         true
+    }
+
+    /// The index a link from a box released with `release` gives `prev`, the
+    /// function of the box it links to; None with the table full.
+    #[inline(always)]
+    fn index(&self, prev: Release, release: Release) -> Option<u32> {
+        if prev as usize == release as usize {
+            return Some(SAME);
+        }
+        let known = self.known.get() as usize;
+        RELEASES.with(|releases| {
+            let same = |r: &Cell<Option<Release>>| r.get().is_some_and(|r| r as usize == prev as usize);
+            if let Some(i) = releases[..known].iter().rposition(same) {
+                return Some(i as u32);
+            }
+            if known == TABLE {
+                return None;
+            }
+            releases[known].set(Some(prev));
+            self.known.set(known as u8 + 1);
+            Some(known as u32)
+        })
+    }
+
+    /// Defers a box with a wide header ([`defer_wide`]): links it to the
+    /// linked run on top, or starts a linked run. Answers false, changing
+    /// nothing, when the stack vector must grow first.
+    #[inline(always)]
+    unsafe fn try_defer_wide(&self, cell: *mut u8, release: Release) -> bool {
+        let (n, head) = (self.n.get(), self.head.get());
+        // The offset to the head, in 8-byte units (modulo the address width,
+        // as the decoding adds it back).
+        let diff = (head as usize).wrapping_sub(cell as usize);
+        let units = (diff as isize >> 3) as i64;
+        let fits = diff & 7 == 0 && units << (64 - OFFSET_BITS) >> (64 - OFFSET_BITS) == units;
+        if n != 0 && n < MAX_RUN && self.linked.get() && cell as u64 >> 56 == 0 && fits {
+            if let Some(index) = self.index(self.release.get(), release) {
+                // The box is the caller's alone until its release: its count
+                // and the upper half of the word after it are free.
+                let words = cell as *mut u32;
+                let units = units as u64 & ((1 << OFFSET_BITS) - 1);
+                let high = (((units >> 32) as u32) << 16) | (index << 24);
+                unsafe {
+                    words.write(units as u32);
+                    words.add(1).write(words.add(1).read() & 0xffff | high);
+                }
+                head.expose_provenance();
+                self.head.set(cell);
+                self.release.set(release);
+                self.n.set(n + 1);
+                return true;
+            }
+        }
+        unsafe { self.try_start(cell, release, true) }
+    }
+
+    /// Takes the head off the linked run on top (it has another box): the
+    /// box it links to is the head now; its header is restored.
+    #[inline(always)]
+    unsafe fn unlink(&self, head: *mut u8, release: Release) {
+        let words = head as *mut u32;
+        let (low, high) = unsafe { (words.read(), words.add(1).read()) };
+        unsafe {
+            words.write(1);
+            words.add(1).write(high & 0xffff);
+        }
+        let units = ((((high >> 16) & 0xff) as u64) << 32 | low as u64) as i64;
+        let units = units << (64 - OFFSET_BITS) >> (64 - OFFSET_BITS);
+        let prev = (head as usize).wrapping_add((units as usize).wrapping_mul(8));
+        self.head.set(core::ptr::with_exposed_provenance_mut(prev));
+        let index = high >> 24;
+        self.release.set(if index == SAME {
+            release
+        } else {
+            RELEASES.with(|releases| releases[index as usize].get().unwrap_or(unnamed))
+        });
+        self.n.set(self.n.get() - 1);
     }
 
     /// Pops and runs the pending drops, last deferred first, until none is
@@ -260,6 +390,8 @@ impl State {
                 let (head, release) = (self.head.get(), self.release.get());
                 if n == 1 {
                     self.unspill();
+                } else if self.linked.get() {
+                    unsafe { self.unlink(head, release) };
                 } else {
                     self.head.set(unsafe { self.cells.pop_unchecked() });
                     self.n.set(n - 1);
@@ -292,6 +424,7 @@ impl State {
             }
         }
         debug_assert_eq!(self.cells.len.get(), 0, "reussir-rt: pending cells left after a drain");
+        self.known.set(0);
         let exited = self.exited.get();
         self.stack.trim(exited);
         self.cells.trim(exited);
@@ -373,6 +506,33 @@ pub unsafe fn defer(cell: *mut u8, release: Release) {
     if !unsafe { state.try_defer(cell, release) } {
         unsafe { defer_slow(cell, release) }
     }
+}
+
+/// Defers `release(cell)` as [`defer`] does, for a box whose first 8 bytes
+/// are header: a 32-bit count, then a 32-bit word whose upper 16 bits are 0
+/// (a tag below 2^16) or padding. The stack may link the box through those
+/// 48 bits while it waits (see the module comment) and writes count 1 and
+/// upper bits 0 back before `release(cell)` runs. Safety: as [`defer`]; the
+/// caller owns the box alone, and nothing reads or writes it until its
+/// release runs; the box is 4-byte aligned.
+#[inline(always)]
+pub unsafe fn defer_wide(cell: *mut u8, release: Release) {
+    let state = state();
+    if !state.releasing.get() {
+        return unsafe { run_outermost(cell, release) };
+    }
+    if !unsafe { state.try_defer_wide(cell, release) } {
+        unsafe { defer_wide_slow(cell, release) }
+    }
+}
+
+#[cold]
+#[inline(never)]
+unsafe extern "C" fn defer_wide_slow(cell: *mut u8, release: Release) {
+    let state = state();
+    state.stack.grow();
+    let deferred = unsafe { state.try_defer_wide(cell, release) };
+    debug_assert!(deferred);
 }
 
 /// Runs `walk(object)` with the thread draining and then, unless a drain was
@@ -466,6 +626,12 @@ unsafe extern "C" fn defer_slow(cell: *mut u8, release: Release) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __reussir_drop_defer(cell: *mut u8, release: Release) {
     unsafe { defer(cell, release) }
+}
+
+/// C entry point of [`defer_wide`], called by compiled drop glue.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_drop_defer_wide(cell: *mut u8, release: Release) {
+    unsafe { defer_wide(cell, release) }
 }
 
 /// C entry point of [`run`], called by compiled drop glue.
