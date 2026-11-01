@@ -259,7 +259,8 @@ struct RcDecrementExpansionPass
           RcDecrementExpansionPass> {
   using Base::Base;
   void runOnOperation() override {
-    if (mlir::failed(resolveDropOrder(getOperation(), dropOrder)))
+    auto module = llvm::cast<mlir::ModuleOp>(getOperation());
+    if (mlir::failed(resolveDropOrder(module, dropOrder)))
       return signalPassFailure();
     mlir::ConversionTarget target(getContext());
     mlir::RewritePatternSet patterns(&getContext());

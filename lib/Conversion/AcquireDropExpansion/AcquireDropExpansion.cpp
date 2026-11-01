@@ -642,7 +642,8 @@ struct AcquireDropExpansionPass
           AcquireDropExpansionPass> {
   using Base::Base;
   void runOnOperation() override {
-    if (mlir::failed(resolveDropOrder(getOperation(), dropOrder)))
+    auto module = llvm::cast<mlir::ModuleOp>(getOperation());
+    if (mlir::failed(resolveDropOrder(module, dropOrder)))
       return signalPassFailure();
     mlir::ConversionTarget target(getContext());
     // Share tables for this run only; the glue helpers register each new
@@ -650,8 +651,7 @@ struct AcquireDropExpansionPass
     mlir::SymbolTableCollection symbols;
     if (outlineRecord) {
       mlir::PatternRewriter rewriter(&getContext());
-      if (mlir::failed(
-              prepareWorklistClosureDrops(getOperation(), rewriter, symbols)))
+      if (mlir::failed(prepareWorklistClosureDrops(module, rewriter, symbols)))
         return signalPassFailure();
     }
     mlir::RewritePatternSet patterns(&getContext());
