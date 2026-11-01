@@ -53,10 +53,12 @@ module {
   // CHECK: %[[HEAD:.*]] = reussir.ref.load
   // CHECK: rcgmp.release %[[HEAD]] : !rcgmp.mpz
   // CHECK: reussir.rc.dec
-  // OUTLINE: func.func private @"{{.*}}drop_in_placeBigList::ConsE"
+  // OUTLINE: func.func private @[[MPZ_DROP:[^ (]+]](%{{.*}}: !reussir.ref<!rcgmp.mpz>)
   // OUTLINE: rcgmp.release
+  // OUTLINE: func.func private @[[CONS_DROP:__reussir_drop.walk.forward[^ (]*]](%{{.*}}: !reussir.ref<!reussir.record<compound "BigList::Cons"
+  // OUTLINE: reussir.drop.defer @[[MPZ_DROP]]
   // OUTLINE-LABEL: func.func @drop_cons
-  // OUTLINE: call @"{{.*}}drop_in_placeBigList::ConsE"
+  // OUTLINE: reussir.drop.run @[[CONS_DROP]]
   func.func @drop_cons(%ref: !reussir.ref<!node>) {
     reussir.ref.drop(%ref : !reussir.ref<!node>) variant [1]
     return
