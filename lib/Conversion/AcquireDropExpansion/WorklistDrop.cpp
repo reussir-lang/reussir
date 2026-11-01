@@ -159,6 +159,19 @@ public:
   }
 
   // Whether cleanup can finish in this frame without a queued continuation.
+  //
+  // | Type (trivial case checked first) | Returns true when |
+  // |---|---|
+  // | Trivially copyable | Always |
+  // | Nonrecursive record | No observable cleanup |
+  // | Recursive record | No observable cleanup; tailRecursiveDrops enabled;
+  // |                  | no worklist cleanup in the record or its descendants |
+  // | Rigid RC | Always |
+  // | Other RC | Payload qualifies; a TailLoop record also needs canApplyTailDrop |
+  // | Nullable | Wrapped pointer type qualifies |
+  // | Array | No target; a zero extent or qualifying element type |
+  // | Cell | No mutex, flatlock, or rwlock; element type qualifies |
+  // | Other | Never |
   bool canFinishInline(mlir::Type type) const {
     if (isTriviallyCopyable(type))
       return true;
