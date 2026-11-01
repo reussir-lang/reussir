@@ -4232,6 +4232,61 @@ void inheritSanitizerPassthrough(mlir::ModuleOp moduleOp,
   func->setAttr(name, mlir::ArrayAttr::get(moduleOp.getContext(), merged));
 }
 
+namespace {
+mlir::LogicalResult verifyDropCallback(mlir::Operation *op,
+                                      mlir::FlatSymbolRefAttr symbol,
+                                      mlir::TypeRange inputs,
+                                      mlir::SymbolTableCollection &symbols) {
+  auto callee = symbols.lookupNearestSymbolFrom<mlir::FunctionOpInterface>(
+      op, symbol);
+  if (!callee)
+    return op->emitOpError("requires a release function symbol");
+  if (!llvm::equal(callee.getArgumentTypes(), inputs) ||
+      !callee.getResultTypes().empty())
+    return op->emitOpError("release function must match the operands and return nothing");
+  return mlir::success();
+}
+
+mlir::LogicalResult verifyDropObject(mlir::Operation *op, mlir::Type type) {
+  if (!mlir::isa<RefType, RcType>(type))
+    return op->emitOpError("requires a reference or RC pointer");
+  return mlir::success();
+}
+} // namespace
+
+mlir::LogicalResult
+ReussirRcDeferOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
+  if (getBox().getType().getCapability() != Capability::shared)
+    return emitOpError("requires a shared RC box");
+  return verifyDropCallback(*this, getReleaseAttr(),
+                            mlir::TypeRange{getBox().getType()}, symbols);
+}
+
+mlir::LogicalResult
+ReussirDropDeferOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
+  if (mlir::failed(verifyDropObject(*this, getObject().getType())))
+    return mlir::failure();
+  return verifyDropCallback(*this, getCalleeAttr(),
+                            mlir::TypeRange{getObject().getType()}, symbols);
+}
+
+mlir::LogicalResult
+ReussirDropRunOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
+  if (mlir::failed(verifyDropObject(*this, getObject().getType())))
+    return mlir::failure();
+  return verifyDropCallback(*this, getCalleeAttr(),
+                            mlir::TypeRange{getObject().getType()}, symbols);
+}
+
+mlir::LogicalResult
+ReussirDropDeferIndexedOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
+  if (mlir::failed(verifyDropObject(*this, getObject().getType())))
+    return mlir::failure();
+  return verifyDropCallback(
+      *this, getCalleeAttr(),
+      mlir::TypeRange{getObject().getType(), getIndex().getType()}, symbols);
+}
+
 //===----------------------------------------------------------------------===//
 // createDtorIfNotExists
 //===----------------------------------------------------------------------===//

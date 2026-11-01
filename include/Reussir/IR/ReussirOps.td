@@ -1891,6 +1891,37 @@ def ReussirRefDropOp
   let hasVerifier = 1;
 }
 
+def ReussirRcDeferOp : ReussirOp<"rc.defer", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "Transfer a dead shared box to the pending drop stack";
+  let arguments = (ins FlatSymbolRefAttr:$release, ReussirRcType:$box);
+  let assemblyFormat =
+      "$release `(` $box `:` qualified(type($box)) `)` attr-dict";
+}
+
+class ReussirDropCallbackOp<string name> : ReussirOp<name, [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let arguments = (ins FlatSymbolRefAttr:$callee, AnyType:$object);
+  let assemblyFormat =
+      "$callee `(` $object `:` qualified(type($object)) `)` attr-dict";
+}
+
+def ReussirDropDeferOp : ReussirDropCallbackOp<"drop.defer"> {
+  let summary = "Defer a release without changing its object's storage";
+}
+
+def ReussirDropRunOp : ReussirDropCallbackOp<"drop.run"> {
+  let summary = "Run a release and complete its pending drops before returning";
+}
+
+def ReussirDropDeferIndexedOp : ReussirOp<"drop.defer_indexed", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "Defer an indexed release step";
+  let arguments = (ins FlatSymbolRefAttr:$callee, AnyType:$object, Index:$index);
+  let assemblyFormat =
+      "$callee `(` $object `:` qualified(type($object)) `,` $index `)` attr-dict";
+}
+
 def ReussirRefAcquireOp
     : ReussirReferenceOp<"acquire", [MemoryEffects<[MemRead, MemWrite]>]> {
   let summary = "Acquire ownership of a reference";
