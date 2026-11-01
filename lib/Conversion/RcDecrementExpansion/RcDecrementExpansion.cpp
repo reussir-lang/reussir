@@ -51,7 +51,7 @@ namespace reussir {
 #include "Reussir/Conversion/Passes.h.inc"
 
 bool canScheduleDecrement(ReussirRcDecOp op) {
-  if (op.isDestructuring() || op->hasAttr("reussir.worklist_raw") ||
+  if (op.isDestructuring() || op->hasAttr(REUSSIR_NO_DEFER) ||
       op.getRcPtr().getType().getCapability() != Capability::shared)
     return false;
   auto token = op.getNullableToken();

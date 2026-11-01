@@ -199,6 +199,9 @@ gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
 
 constexpr llvm::StringRef REUSSIR_EXPANDED_ENSURE_ATTR =
     "reussir.expanded_ensure";
+
+// Execute this decrement's release without deferring it again.
+inline constexpr llvm::StringLiteral REUSSIR_NO_DEFER = "reussir.no_defer";
 } // namespace reussir
 
 #endif // REUSSIR_IR_REUSSIROPS_H
