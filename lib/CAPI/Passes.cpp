@@ -99,14 +99,19 @@ MlirPass reussirCreateTokenInstantiationPass(bool acceptors, bool producers) {
 MlirPass reussirCreateClosureOutliningPass(void) {
   return wrapOwned(reussir::createReussirClosureOutliningPass());
 }
-MlirPass reussirCreateRegionPatternsPass(void) {
-  return wrapOwned(reussir::createReussirRegionPatternsPass());
+MlirPass reussirCreateRegionPatternsPass(MlirStringRef dropOrder) {
+  reussir::ReussirRegionPatternsPassOptions options;
+  options.dropOrder = unwrap(dropOrder).str();
+  return wrapOwned(reussir::createReussirRegionPatternsPass(options));
 }
 MlirPass reussirCreateIncDecCancellationPass(void) {
   return wrapOwned(reussir::createReussirIncDecCancellationPass());
 }
-MlirPass reussirCreateRcDecrementExpansionPass(void) {
-  return wrapOwned(reussir::createReussirRcDecrementExpansionPass());
+MlirPass reussirCreateRcDecrementExpansionPass(MlirStringRef dropOrder) {
+  reussir::ReussirRcDecrementExpansionPassOptions options;
+  options.dropOrder = unwrap(dropOrder).str();
+  options.deferNormal = true;
+  return wrapOwned(reussir::createReussirRcDecrementExpansionPass(options));
 }
 MlirPass reussirCreateInferVariantTagPass(void) {
   return wrapOwned(reussir::createReussirInferVariantTagPass());
@@ -170,11 +175,13 @@ MlirPass reussirCreatePreparePjrtPass(bool optimizeKernels) {
 }
 MlirPass reussirCreateAcquireDropExpansionPass(bool expandDecrement,
                                                bool outlineRecord,
-                                               bool tailRecursiveDrops) {
+                                               bool tailRecursiveDrops,
+                                               MlirStringRef dropOrder) {
   reussir::ReussirAcquireDropExpansionPassOptions options;
   options.expandDecrement = expandDecrement;
   options.outlineRecord = outlineRecord;
   options.tailRecursiveDrops = tailRecursiveDrops;
+  options.dropOrder = unwrap(dropOrder).str();
   return wrapOwned(reussir::createReussirAcquireDropExpansionPass(options));
 }
 MlirPass reussirCreateTokenReusePass(bool reuseAcrossCall, bool emitRemarks) {

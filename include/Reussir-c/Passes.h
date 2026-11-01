@@ -41,11 +41,11 @@ MlirPass reussirCreateUniqueCarryingRecursionAnalysisPass(void);
 MlirPass reussirCreateBorrowSpecializationPass(void);
 MlirPass reussirCreateTokenInstantiationPass(bool acceptors, bool producers);
 MlirPass reussirCreateClosureOutliningPass(void);
-MlirPass reussirCreateRegionPatternsPass(void);
+MlirPass reussirCreateRegionPatternsPass(MlirStringRef dropOrder);
 MlirPass reussirCreateIncDecCancellationPass(void);
 // Explicit contracts are materialized even when optional inference is disabled.
 MlirPass reussirCreatePjrtDonationPass(bool inferDonation);
-MlirPass reussirCreateRcDecrementExpansionPass(void);
+MlirPass reussirCreateRcDecrementExpansionPass(MlirStringRef dropOrder);
 MlirPass reussirCreateInferVariantTagPass(void);
 MlirPass reussirCreateConvertToSTDPass(bool expandArrays);
 // Beta-reduces closure apply/eval chains (inlines fully visible closures,
@@ -82,16 +82,17 @@ MlirPass reussirCreateBasicOpsLoweringPass(bool closureWpd);
 // Packages outlined IFRT kernels as bytecode and rewrites their calls for PJRT
 // JIT compilation. Requires OpenXLA; run before basic lowering and symbol DCE.
 MlirPass reussirCreateIFRTJustInTimeTransformPass(void);
-// Prepares IFRT kernels before host optimization, or leaves ordinary modules alone.
-// optimizeKernels enables optional target-independent StableHLO simplification.
+// Prepares IFRT kernels before host optimization, or leaves ordinary modules
+// alone. optimizeKernels enables optional target-independent StableHLO
+// simplification.
 MlirPass reussirCreatePreparePjrtPass(bool optimizeKernels);
 MlirPass reussirCreateDebugInfoConversionPass(void);
 
-// Acquire/drop expansion has two phases controlled by these options; the
-// pipeline runs it once with both disabled and once with both enabled.
+// Acquire/drop expansion normalizes ownership before outlining record drops.
 MlirPass reussirCreateAcquireDropExpansionPass(bool expandDecrement,
                                                bool outlineRecord,
-                                               bool tailRecursiveDrops);
+                                               bool tailRecursiveDrops,
+                                               MlirStringRef dropOrder);
 // Token reuse can optionally reuse tokens across function calls and emit one
 // structured optimization remark for every allocation/reuse decision.
 MlirPass reussirCreateTokenReusePass(bool reuseAcrossCall, bool emitRemarks);

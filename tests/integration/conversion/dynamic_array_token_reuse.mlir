@@ -1,5 +1,6 @@
 // RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-attach-native-target,func.func(reussir-token-instantiation),reussir-rc-decrement-expansion,reussir-acquire-drop-expansion,reussir-convert-to-std{expand-arrays=false},func.func(reussir-token-reuse))' -o %t.mlir
 // RUN: %FileCheck %s < %t.mlir
+// RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-attach-native-target,func.func(reussir-token-instantiation),reussir-rc-decrement-expansion{defer-normal=true},reussir-acquire-drop-expansion,reussir-convert-to-std{expand-arrays=false},func.func(reussir-inc-dec-cancellation),func.func(reussir-token-reuse))' | %FileCheck %s
 // RUN: %reussir-opt %t.mlir --pass-pipeline='builtin.module(reussir-convert-to-std,convert-scf-to-cf,reussir-lowering-basic-ops,reussir-convert-to-llvm,reconcile-unrealized-casts)' -o %t.llvm.mlir
 // RUN: %reussir-translate --mlir-to-llvmir %t.llvm.mlir -o %t.ll
 

@@ -162,7 +162,8 @@ void addCanonicalizerPassWithoutRegionSimplification(mlir::OpPassManager &pm) {
 void createLoweringPipeline(mlir::PassManager &pm,
                             ReussirOptOption opt = REUSSIR_OPT_DEFAULT,
                             bool reuseTokenAcrossCall = false,
-                            bool enableInvariantAnalysis = false) {
+                            bool enableInvariantAnalysis = false,
+                            llvm::StringRef dropOrder = "") {
   // Keep optional device optimization out of unoptimized/fast compilation.
   // Packaging and explicit donation contracts remain mandatory at every level.
   const bool optimizeDeviceKernels =
@@ -182,26 +183,34 @@ void createLoweringPipeline(mlir::PassManager &pm,
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirTokenInstantiationPass());
   pm.addPass(reussir::createReussirClosureOutliningPass());
-  pm.addPass(reussir::createReussirRegionPatternsPass());
+  reussir::ReussirRegionPatternsPassOptions regions;
+  regions.dropOrder = dropOrder.str();
+  pm.addPass(reussir::createReussirRegionPatternsPass(regions));
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirIncDecCancellationPass());
   reussir::ReussirPjrtDonationPassOptions donation;
   donation.inferDonation = optimizeDeviceKernels;
   pm.addPass(reussir::createReussirPjrtDonationPass(donation));
-  pm.addPass(reussir::createReussirRcDecrementExpansionPass());
+  reussir::ReussirRcDecrementExpansionPassOptions decrements;
+  decrements.dropOrder = dropOrder.str();
+  decrements.deferNormal = true;
+  pm.addPass(reussir::createReussirRcDecrementExpansionPass(decrements));
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirInferVariantTagPass());
   reussir::ReussirAcquireDropExpansionPassOptions earlyDrops;
+  earlyDrops.dropOrder = dropOrder.str();
   pm.addPass(reussir::createReussirAcquireDropExpansionPass(earlyDrops));
-  pm.addPass(reussir::createReussirConvertToSTDPass());
+  reussir::ReussirConvertToSTDPassOptions materialize;
+  materialize.expandArrays = false;
+  pm.addPass(reussir::createReussirConvertToSTDPass(materialize));
+  reussir::ReussirAcquireDropExpansionPassOptions normalizeDrops;
+  normalizeDrops.expandDecrement = false;
+  normalizeDrops.outlineRecord = false;
+  normalizeDrops.tailRecursiveDrops = false;
+  normalizeDrops.dropOrder = dropOrder.str();
+  pm.addPass(reussir::createReussirAcquireDropExpansionPass(normalizeDrops));
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirIncDecCancellationPass());
-
-  reussir::ReussirAcquireDropExpansionPassOptions options;
-  options.expandDecrement = true;
-  options.outlineRecord = true;
-  options.tailRecursiveDrops = opt != REUSSIR_OPT_TPDE;
-  pm.addPass(reussir::createReussirAcquireDropExpansionPass(options));
 
   {
     reussir::ReussirTokenReusePassOptions tokenReuseOpts;
@@ -209,6 +218,14 @@ void createLoweringPipeline(mlir::PassManager &pm,
     pm.addNestedPass<mlir::func::FuncOp>(
         reussir::createReussirTokenReusePass(tokenReuseOpts));
   }
+
+  reussir::ReussirAcquireDropExpansionPassOptions options;
+  options.expandDecrement = true;
+  options.dropOrder = dropOrder.str();
+  options.outlineRecord = true;
+  options.tailRecursiveDrops = opt != REUSSIR_OPT_TPDE;
+  pm.addPass(reussir::createReussirAcquireDropExpansionPass(options));
+
   pm.addPass(reussir::createReussirConvertToSTDPass());
 #ifdef REUSSIR_ENABLE_RCGMP
   pm.addPass(mlir::rcgmp::createConvertRCGMPToSCFPass());
@@ -396,10 +413,11 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
 
 std::unique_ptr<mlir::PassManager> buildPassManager(
     mlir::MLIRContext &context, ReussirOptOption opt = REUSSIR_OPT_DEFAULT,
-    bool reuseTokenAcrossCall = false, bool enableInvariantAnalysis = false) {
+    bool reuseTokenAcrossCall = false, bool enableInvariantAnalysis = false,
+    llvm::StringRef dropOrder = "") {
   auto pm = std::make_unique<mlir::PassManager>(&context);
   createLoweringPipeline(*pm, opt, reuseTokenAcrossCall,
-                         enableInvariantAnalysis);
+                         enableInvariantAnalysis, dropOrder);
   return pm;
 }
 
@@ -462,7 +480,6 @@ translateToModule(llvm::StringRef texture, llvm::LLVMContext &llvmCtx,
     spdlog::error("Failed to translate MLIR module to LLVM IR.");
     return nullptr;
   }
-
 
   // link the compiled modules to the main module
   if (llvm::Linker::linkModules(*mainModule, std::move(compiledModules))) {
