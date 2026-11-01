@@ -18,14 +18,38 @@ impl Object {
     }
 }
 
+#[derive(Clone, Copy)]
 struct PendingRun {
     head: Object,
     release: Release,
     len: NonZeroUsize,
 }
 
+#[derive(Clone, Copy)]
 enum Work {
     Run(PendingRun),
+    Indexed { object: Object, cursor: usize, callback: Indexed },
+    Step { object: Object, callback: Step },
+}
+
+/// One indexed callback, with a real cursor into its object.
+pub type Indexed = unsafe extern "C" fn(*mut u8, usize);
+
+/// The result of one incremental destruction step.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepStatus {
+    Pending,
+    Complete,
+}
+
+/// Performs one step using an object pointer as its state.
+pub type Step = unsafe extern "C" fn(*mut c_void) -> StepStatus;
+
+enum Action {
+    Release(ReleaseTask),
+    Indexed { object: Object, cursor: usize, callback: Indexed },
+    Step { object: Object, callback: Step, position: usize },
 }
 
 struct ReleaseTask {
@@ -59,20 +83,32 @@ impl DropContext {
         }));
     }
 
-    fn next(&mut self) -> Option<ReleaseTask> {
+    fn next(&mut self) -> Option<Action> {
         if self.work.len() == self.boundary {
             return None;
         }
-        let Work::Run(run) = self.work.last_mut()?;
-        let task = ReleaseTask { object: run.head, release: run.release };
-        if run.len.get() == 1 {
-            self.work.pop();
-        } else {
-            run.head = self.cells.pop().unwrap();
-            run.len = NonZeroUsize::new(run.len.get() - 1).unwrap();
+        match *self.work.last()? {
+            Work::Run(run) => {
+                let task = ReleaseTask { object: run.head, release: run.release };
+                if run.len.get() == 1 {
+                    self.work.pop();
+                } else {
+                    let Work::Run(top) = self.work.last_mut().unwrap() else { unreachable!() };
+                    top.head = self.cells.pop().unwrap();
+                    top.len = NonZeroUsize::new(run.len.get() - 1).unwrap();
+                }
+                Some(Action::Release(task))
+            }
+            Work::Indexed { object, cursor, callback } => {
+                self.work.pop();
+                Some(Action::Indexed { object, cursor, callback })
+            }
+            Work::Step { object, callback } => Some(Action::Step {
+                object, callback, position: self.work.len() - 1,
+            }),
         }
-        Some(task)
     }
+
 }
 
 scoped_tls::scoped_thread_local!(static ACTIVE: RefCell<DropContext>);
@@ -81,8 +117,18 @@ thread_local! {
 }
 
 fn drain_pending() {
-    while let Some(task) = ACTIVE.with(|context| context.borrow_mut().next()) {
-        unsafe { (task.release)(task.object.as_ptr()) };
+    while let Some(action) = ACTIVE.with(|context| context.borrow_mut().next()) {
+        match action {
+            Action::Release(task) => unsafe { (task.release)(task.object.as_ptr()) },
+            Action::Indexed { object, cursor, callback } => unsafe {
+                callback(object.as_ptr(), cursor)
+            },
+            Action::Step { object, callback, position } => {
+                if unsafe { callback(object.0.as_ptr()) } == StepStatus::Complete {
+                    ACTIVE.with(|context| { context.borrow_mut().work.remove(position); });
+                }
+            }
+        }
     }
 }
 
@@ -139,6 +185,54 @@ pub unsafe fn defer(object: *mut u8, release: Release) {
     } else {
         unsafe { run(object, release) };
     }
+}
+
+/// Whether this thread has an active destruction scope.
+pub fn releasing() -> bool {
+    ACTIVE.is_set()
+}
+
+/// Number of pending entries, including the currently executing step.
+pub fn depth() -> usize {
+    if ACTIVE.is_set() { ACTIVE.with(|context| context.borrow().work.len()) } else { 0 }
+}
+
+/// Defers an indexed callback without allocating a cursor object.
+/// Safety: the non-null object must remain valid for its callback.
+pub unsafe fn defer_indexed(object: *mut u8, cursor: usize, callback: Indexed) {
+    let enqueue = || ACTIVE.with(|context| context.borrow_mut().work.push(Work::Indexed {
+        object: unsafe { Object::new(object) }, cursor, callback,
+    }));
+    if ACTIVE.is_set() { enqueue(); } else { scoped(enqueue); }
+}
+
+/// Runs an incremental operation and its pending work before returning.
+/// Safety: the non-null object must remain valid until its step completes.
+pub unsafe fn run_step(object: *mut c_void, callback: Step) {
+    scoped(|| unsafe { defer_step(object, callback) });
+}
+
+/// Defers a step; outside a drain, completes it before returning.
+/// Safety: as [`run_step`].
+pub unsafe fn defer_step(object: *mut c_void, callback: Step) {
+    let enqueue = || ACTIVE.with(|context| context.borrow_mut().work.push(Work::Step {
+        object: unsafe { Object::new(object.cast()) }, callback,
+    }));
+    if ACTIVE.is_set() { enqueue(); } else { scoped(enqueue); }
+}
+
+/// Runs incremental host work, joining an existing drain when present.
+/// Safety: as [`run_step`].
+pub unsafe fn join_or_run_step(object: *mut c_void, callback: Step) {
+    unsafe { defer_step(object, callback) };
+}
+
+/// C entry point of [`defer_indexed`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_drop_defer_indexed(
+    object: *mut u8, cursor: usize, callback: Indexed,
+) {
+    unsafe { defer_indexed(object, cursor, callback) }
 }
 
 /// C entry point of [`run`].
