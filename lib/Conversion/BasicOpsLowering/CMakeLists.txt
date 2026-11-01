@@ -1,5 +1,6 @@
 add_mlir_conversion_library(MLIRReussirBasicOpsLowering
   BasicOpsLowering.cpp
+  DropStackLowering.cpp
   TargetArrayLowering.cpp
   PjrtLowering.cpp
   CABISignatureConversion.cpp
