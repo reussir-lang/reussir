@@ -14,7 +14,10 @@ use crate::alloc::{
     __reussir_allocate, __reussir_allocate_small, __reussir_dealloc_unsized, __reussir_deallocate,
     __reussir_realloc_unsized, __reussir_reallocate,
 };
-use crate::drop_stack::{__reussir_drop_defer, __reussir_drop_defer_wide, __reussir_drop_run, __reussir_drop_defer_step, __reussir_drop_run_step, __reussir_drop_defer_indexed};
+use crate::drop_stack::{
+    __reussir_drop_defer, __reussir_drop_defer_indexed, __reussir_drop_defer_step,
+    __reussir_drop_defer_wide, __reussir_drop_run, __reussir_drop_run_step,
+};
 use crate::instrument::__reussir_report_nonlinear_usage;
 use crate::panic::__reussir_panic;
 #[cfg(feature = "pjrt")]

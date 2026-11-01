@@ -75,7 +75,11 @@ enum Work {
     /// below the cells of the runs above it (see [`State`]); in a linked
     /// run (`n` with [`LINKED`]) a box released by another function than
     /// the one before it links to it through its header ([`defer_wide`]).
-    Run { release: Release, head: *mut u8, n: u32 },
+    Run {
+        release: Release,
+        head: *mut u8,
+        n: u32,
+    },
     /// Incremental work: `step(p)` runs until it answers that it is done.
     Step(usize, Step),
     Indexed(*mut u8, usize, Indexed),
@@ -104,14 +108,19 @@ struct Parts<T> {
 
 impl<T> Parts<T> {
     const fn new() -> Self {
-        Parts { len: Cell::new(0), ptr: Cell::new(NonNull::dangling()), cap: Cell::new(0) }
+        Parts {
+            len: Cell::new(0),
+            ptr: Cell::new(NonNull::dangling()),
+            cap: Cell::new(0),
+        }
     }
 
     fn with_vec(&self, f: impl FnOnce(&mut Vec<T>)) {
         let (ptr, len, cap) = (self.ptr.get().as_ptr(), self.len.get(), self.cap.get());
         let mut v = ManuallyDrop::new(unsafe { Vec::from_raw_parts(ptr, len, cap) });
         f(&mut v);
-        self.ptr.set(unsafe { NonNull::new_unchecked(v.as_mut_ptr()) });
+        self.ptr
+            .set(unsafe { NonNull::new_unchecked(v.as_mut_ptr()) });
         self.len.set(v.len());
         self.cap.set(v.capacity());
     }
@@ -160,7 +169,7 @@ impl<T> Parts<T> {
 
 /// The thread's pending drops: the entries of the stack vector, then the run
 /// `(n, head, release)` on top if `n` is not 0 (a run on top is always kept
-/// there, so the vector's last entry, when `n` is 0, is a step). Drops deferred one after the
+/// there; when `n` is 0 the last entry is a step or indexed callback). Drops deferred one after the
 /// other with one release function form one run: the run is one entry, and
 /// each cell but its head one pointer in the cells vector (8 bytes while it
 /// waits, as the boxed heads of a list that the glue frees whole); boxes
@@ -226,7 +235,8 @@ struct Table {
 /// whatever the byte order).
 #[inline(always)]
 fn upper(cell: *mut u8) -> *mut u16 {
-    cell.wrapping_add(if cfg!(target_endian = "little") { 6 } else { 4 }).cast()
+    cell.wrapping_add(if cfg!(target_endian = "little") { 6 } else { 4 })
+        .cast()
 }
 
 /// Frees the buffers at thread exit (registered with the first buffer).
@@ -296,7 +306,10 @@ impl State {
     #[inline(always)]
     fn joins(&self, release: Release) -> bool {
         let n = self.n.get();
-        n != 0 && n < MAX_RUN && !self.linked.get() && self.release.get() as usize == release as usize
+        n != 0
+            && n < MAX_RUN
+            && !self.linked.get()
+            && self.release.get() as usize == release as usize
     }
 
     /// Defers `release(cell)`: adds it to the run on top, or starts a run.
@@ -378,7 +391,8 @@ impl State {
             // The box is the caller's alone until its release: its count and
             // the upper half of the word after it are free.
             let link = if units << (64 - OFFSET_BITS) >> (64 - OFFSET_BITS) == units {
-                self.index(prev).map(|i| ((units >> 32) as u16 & 0xff) | ((i as u16 + 1) << 8))
+                self.index(prev)
+                    .map(|i| ((units >> 32) as u16 & 0xff) | ((i as u16 + 1) << 8))
             } else {
                 None
             };
@@ -418,7 +432,8 @@ impl State {
         let prev = (head as usize).wrapping_add((units as usize).wrapping_mul(8));
         self.head.set(core::ptr::with_exposed_provenance_mut(prev));
         let index = (high >> 8) as usize - 1;
-        self.release.set(TABLE_STATE.with(|t| t.releases[index].get().unwrap_or(unnamed)));
+        self.release
+            .set(TABLE_STATE.with(|t| t.releases[index].get().unwrap_or(unnamed)));
     }
 
     /// Pops and runs the pending drops, last deferred first, until none is
@@ -454,7 +469,8 @@ impl State {
             // The top entry is a step: it stays while it runs, so whatever it
             // pushes is done before its next step.
             let index = len - 1;
-            let Work::Step(p, step) = (unsafe { self.stack.ptr.get().as_ptr().add(index).read() }) else {
+            let Work::Step(p, step) = (unsafe { self.stack.ptr.get().as_ptr().add(index).read() })
+            else {
                 unreachable!("reussir-rt: the stack vector's last entry is a run")
             };
             if unsafe { step(p) } {
@@ -474,7 +490,11 @@ impl State {
     }
 
     fn reset(&self) {
-        debug_assert_eq!(self.cells.len.get(), 0, "reussir-rt: pending cells left after a drain");
+        debug_assert_eq!(
+            self.cells.len.get(),
+            0,
+            "reussir-rt: pending cells left after a drain"
+        );
         if self.known.get() != 0 {
             self.known.set(0);
             TABLE_STATE.with(|t| t.cache.iter().for_each(|slot| slot.set((0, 0))));
@@ -533,9 +553,14 @@ pub unsafe fn defer_indexed(object: *mut u8, cursor: usize, callback: Indexed) {
         let spilled = state.try_spill();
         debug_assert!(spilled);
     }
-    if !state.stack.try_push(Work::Indexed(object, cursor, callback)) {
+    if !state
+        .stack
+        .try_push(Work::Indexed(object, cursor, callback))
+    {
         state.stack.grow();
-        let pushed = state.stack.try_push(Work::Indexed(object, cursor, callback));
+        let pushed = state
+            .stack
+            .try_push(Work::Indexed(object, cursor, callback));
         debug_assert!(pushed);
     }
     if outermost {
@@ -611,7 +636,11 @@ pub unsafe fn defer_wide(cell: *mut u8, release: Release) {
 unsafe extern "C" fn defer_wide_slow(cell: *mut u8, release: Release) {
     let state = state();
     let n = state.n.get();
-    if n != 0 && n < MAX_RUN && state.linked.get() && state.release.get() as usize == release as usize {
+    if n != 0
+        && n < MAX_RUN
+        && state.linked.get()
+        && state.release.get() as usize == release as usize
+    {
         state.cells.grow();
     } else {
         state.stack.grow();

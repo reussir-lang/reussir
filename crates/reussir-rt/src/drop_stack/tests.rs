@@ -45,8 +45,15 @@ unsafe extern "C" fn walk(_: *mut u8) {
     unsafe { defer(p(2), b) };
     unsafe { defer(p(3), a) };
 }
-const WALK: [(char, usize); 7] =
-    [('a', 3), ('b', 31), ('b', 30), ('b', 2), ('a', 1), ('b', 11), ('b', 10)];
+const WALK: [(char, usize); 7] = [
+    ('a', 3),
+    ('b', 31),
+    ('b', 30),
+    ('b', 2),
+    ('a', 1),
+    ('b', 11),
+    ('b', 10),
+];
 
 #[test]
 fn last_deferred_first() {
@@ -69,7 +76,10 @@ unsafe extern "C" fn outer(_: *mut u8) {
 fn a_nested_run_completes_its_suffix() {
     unsafe { run(p(0), outer) };
     let head = [('n', 8), ('w', 0)];
-    assert_eq!(take_log(), [head.as_slice(), &WALK, &[('m', 8), ('b', 7)]].concat());
+    assert_eq!(
+        take_log(),
+        [head.as_slice(), &WALK, &[('m', 8), ('b', 7)]].concat()
+    );
 }
 
 // A chain of CHAIN cells, each release deferring the next (and a `b` for an
@@ -79,7 +89,7 @@ unsafe extern "C" fn chain(cell: *mut u8) {
     if v > 1 {
         unsafe { defer(p(v - 1), chain) };
     }
-    if v % 2 == 0 {
+    if v.is_multiple_of(2) {
         unsafe { defer(p(v), b) };
     }
 }
@@ -97,7 +107,10 @@ fn deep_chains_and_many_pending_entries() {
         assert!(log.windows(2).all(|w| w[0].1 > w[1].1));
         assert!(pending() == 0 && trimmed());
         unsafe { run(p(0), many) };
-        assert_eq!(take_log(), (0..MANY).rev().map(|i| ('b', i)).collect::<Vec<_>>());
+        assert_eq!(
+            take_log(),
+            (0..MANY).rev().map(|i| ('b', i)).collect::<Vec<_>>()
+        );
         assert!(pending() == 0 && trimmed());
     };
     thread.spawn(check).unwrap().join().unwrap();
@@ -124,7 +137,10 @@ fn runs_of_one_release_share_an_entry() {
     unsafe { run(p(0), runs_walk) };
     // Below: the run of b(0..5) and the run of a(5); on top: b(6..9).
     assert_eq!(RUNS.with(|r| r.get()), (2, 3, 4 + 2));
-    let order = [8, 7, 6].map(|i| ('b', i)).into_iter().chain([('a', 5), ('b', 51), ('b', 50)]);
+    let order = [8, 7, 6]
+        .map(|i| ('b', i))
+        .into_iter()
+        .chain([('a', 5), ('b', 51), ('b', 50)]);
     let order: Vec<_> = order.chain((0..5).rev().map(|i| ('b', i))).collect();
     assert_eq!(take_log(), order);
     assert!(pending() == 0 && trimmed());
@@ -184,14 +200,20 @@ fn end_work_runs_once_after_the_outermost_drain() {
     let log = take_log();
     assert_eq!(log.last(), Some(&('e', 0)));
     assert_eq!(log.iter().filter(|e| e.0 == 'e').count(), 1);
-    assert_eq!(ENDS.with(|e| core::mem::take(&mut *e.borrow_mut())), [(false, 0)]);
+    assert_eq!(
+        ENDS.with(|e| core::mem::take(&mut *e.borrow_mut())),
+        [(false, 0)]
+    );
     // A drain that nobody asked: no end work.
     unsafe { run(p(0), walk) };
     assert!(!take_log().contains(&('e', 0)));
     // Outside a drain the end work runs at once.
     want_end_work();
     assert_eq!(take_log(), [('e', 0)]);
-    assert_eq!(ENDS.with(|e| core::mem::take(&mut *e.borrow_mut())), [(false, 0)]);
+    assert_eq!(
+        ENDS.with(|e| core::mem::take(&mut *e.borrow_mut())),
+        [(false, 0)]
+    );
 }
 
 // Steps. `counting(p)`: p = 100 k + left; defers `b(k + left)` and yields
@@ -228,7 +250,10 @@ fn a_step_yields_to_what_it_defers() {
     unsafe { run_step(0, counting_entry) };
     // Each step sees itself as the only entry; its deferral comes next.
     let s = |n| ('s', n);
-    assert_eq!(take_log(), [s(1), ('b', 13), s(1), ('b', 12), s(1), ('b', 11), s(1)]);
+    assert_eq!(
+        take_log(),
+        [s(1), ('b', 13), s(1), ('b', 12), s(1), ('b', 11), s(1)]
+    );
     assert!(!releasing() && pending() == 0 && depth() == 0);
 }
 
@@ -267,7 +292,12 @@ struct Wide {
 }
 fn wide(id: usize) -> *mut u8 {
     let garbage = if id % 2 == 1 { 0xabcd << 16 } else { 0 };
-    Box::into_raw(Box::new(Wide { count: 1, tag: id as u32 % 7 | garbage, id })).cast()
+    Box::into_raw(Box::new(Wide {
+        count: 1,
+        tag: (id as u32 % 7) | garbage,
+        id,
+    }))
+    .cast()
 }
 unsafe fn take(cell: *mut u8, kind: char) -> usize {
     let b = unsafe { Box::from_raw(cell.cast::<Wide>()) };
@@ -284,12 +314,16 @@ thread_local! {
     static CELLS: Cell<usize> = const { Cell::new(0) };
 }
 fn kids(id: usize) -> usize {
-    if id > 2000 { 0 } else { (id.wrapping_mul(2654435761) >> 7) % 4 }
+    if id > 2000 {
+        0
+    } else {
+        (id.wrapping_mul(2654435761) >> 7) % 4
+    }
 }
 unsafe fn plan(id: usize) {
     for k in 0..kids(id) {
         let c = id * 4 + k;
-        let f = if c % 3 == 0 { WB } else { WA };
+        let f = if c.is_multiple_of(3) { WB } else { WA };
         match (c >> 3) % 5 {
             0 => unsafe { defer_step(c, wide_step) },
             1 => unsafe { run(wide(c), f) },
@@ -336,8 +370,12 @@ fn linked_runs_keep_the_order() {
     assert_eq!(logs[0], logs[1]);
 }
 
-unsafe extern "C" fn la(cell: *mut u8) { unsafe { take(cell, 'A') }; }
-unsafe extern "C" fn lb(cell: *mut u8) { unsafe { take(cell, 'B') }; }
+unsafe extern "C" fn la(cell: *mut u8) {
+    unsafe { take(cell, 'A') };
+}
+unsafe extern "C" fn lb(cell: *mut u8) {
+    unsafe { take(cell, 'B') };
+}
 // A walk deferring wide boxes 1 to 6, alternating two releases, then a
 // host cell 7, a wide box 8, and wide boxes that cannot link: 9 a few bytes
 // off (a new run), 10 after a full table.
@@ -354,7 +392,11 @@ unsafe extern "C" fn alternating(_: *mut u8) {
     unsafe { defer_wide(off, off_release) };
     log('d', s.depth());
     // Fill the table (its entries in use stay).
-    TABLE_STATE.with(|t| t.releases[s.known.get() as usize..].iter().for_each(|r| r.set(Some(unnamed))));
+    TABLE_STATE.with(|t| {
+        t.releases[s.known.get() as usize..]
+            .iter()
+            .for_each(|r| r.set(Some(unnamed)))
+    });
     s.known.set(TABLE as u8);
     // One reified function, so that 11 links to 10 (Miri gives each
     // reification its own address).
@@ -366,7 +408,10 @@ unsafe extern "C" fn alternating(_: *mut u8) {
 unsafe extern "C" fn off_release(cell: *mut u8) {
     // Never linked: its "header" (box 9's tag and number) is untouched.
     let words = cell.cast::<u32>();
-    assert_eq!(unsafe { (words.read(), words.add(1).read()) }, (2 | 0xabcd << 16, 9));
+    assert_eq!(
+        unsafe { (words.read(), words.add(1).read()) },
+        (2 | 0xabcd << 16, 9)
+    );
     drop(unsafe { Box::from_raw(cell.sub(4).cast::<Wide>()) });
     log('o', 9);
 }
@@ -378,7 +423,24 @@ fn boxes_link_through_their_headers() {
     let log = take_log();
     let (a, b2, d) = (|n| ('A', n), |n| ('B', n), |n| ('d', n));
     let tail = [b2(6), a(5), b2(4), a(3), b2(2), a(1)];
-    assert_eq!(log, [&[d(100), d(3), d(4), d(5), b2(11), b2(10), ('o', 9), a(8), ('b', 7)][..], &tail].concat());
+    assert_eq!(
+        log,
+        [
+            &[
+                d(100),
+                d(3),
+                d(4),
+                d(5),
+                b2(11),
+                b2(10),
+                ('o', 9),
+                a(8),
+                ('b', 7)
+            ][..],
+            &tail
+        ]
+        .concat()
+    );
     assert_eq!(state().known.get(), 0);
 }
 
@@ -386,10 +448,18 @@ fn boxes_link_through_their_headers() {
 fn symbols_are_exported() {
     let symbols = crate::symbols::exported_symbols();
     for name in [
-        "__reussir_drop_defer", "__reussir_drop_defer_wide", "__reussir_drop_run",
-        "__reussir_drop_defer_step", "__reussir_drop_run_step", "__reussir_drop_defer_indexed",
+        "__reussir_drop_defer",
+        "__reussir_drop_defer_wide",
+        "__reussir_drop_run",
+        "__reussir_drop_defer_step",
+        "__reussir_drop_run_step",
+        "__reussir_drop_defer_indexed",
     ] {
-        assert!(symbols.iter().any(|s| s.name == name && !s.address.is_null()));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name == name && !s.address.is_null())
+        );
     }
 }
 
@@ -446,8 +516,13 @@ unsafe extern "C" fn indexed_chain(_: *mut u8, cursor: usize) {
 
 #[test]
 fn indexed_work_uses_a_bounded_native_stack() {
-    std::thread::Builder::new().stack_size(64 * 1024).spawn(|| {
-        unsafe { defer_indexed(p(0), CHAIN, indexed_chain) };
-        assert!(pending() == 0 && trimmed());
-    }).unwrap().join().unwrap();
+    std::thread::Builder::new()
+        .stack_size(64 * 1024)
+        .spawn(|| {
+            unsafe { defer_indexed(p(0), CHAIN, indexed_chain) };
+            assert!(pending() == 0 && trimmed());
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
