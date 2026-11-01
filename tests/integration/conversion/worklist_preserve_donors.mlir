@@ -8,11 +8,13 @@
 
 module {
   // EARLY-LABEL: func.func @ordinary
-  // EARLY: reussir.rc.dec
+  // EARLY: scf.if
+  // EARLY: reussir.rc.reinterpret
   // EARLY: reussir.token.free
   // FINAL-LABEL: func.func @ordinary
-  // FINAL: reussir.rc.fetch
   // FINAL: reussir.drop.run
+  // FINAL: reussir.rc.reinterpret
+  // FINAL: reussir.token.free
   // FINAL-NOT: reussir.rc.dec
   func.func @ordinary(%rc: !rc) {
     %token = reussir.rc.dec(%rc : !rc) : !token
