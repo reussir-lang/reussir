@@ -2,6 +2,7 @@ import os
 
 config.test_root = r'@CMAKE_CURRENT_SOURCE_DIR@'
 config.binary_path = r'@CMAKE_RUNTIME_OUTPUT_DIRECTORY@'
+config.pointer_size = @CMAKE_SIZEOF_VOID_P@
 config.reussir_features = [f for f in '@REUSSIR_ENABLED_FEATURES@'.split(';') if f]
 config.rcgmp_runtime_flags = r'@rcgmp_runtime_flags@'
 config.filecheck_path = r'@filecheck_path@'
