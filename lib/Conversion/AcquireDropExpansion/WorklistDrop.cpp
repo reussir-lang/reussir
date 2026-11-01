@@ -538,8 +538,11 @@ void emitWorklistDecrement(mlir::Value rc, mlir::Location loc,
   auto module = rewriter.getInsertionBlock()
                     ->getParentOp()
                     ->getParentOfType<mlir::ModuleOp>();
+  auto target = module->getAttrOfType<mlir::StringAttr>(
+      mlir::LLVM::LLVMDialect::getTargetTripleAttrName());
   if (auto record = llvm::dyn_cast<RecordType>(type.getElementType());
       record && tailRecursiveDrops && !record.hasObservableCleanup() &&
+      (!target || !llvm::Triple(target.getValue()).isWasm()) &&
       emitTailDropRelease(rc, loc, module, rewriter, symbols))
     return;
   mlir::OpBuilder::InsertionGuard guard(rewriter);
