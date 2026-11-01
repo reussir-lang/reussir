@@ -38,7 +38,10 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
 void populateTargetArrayLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                          mlir::RewritePatternSet &patterns);
 void populatePjrtLoweringPatterns(mlir::LLVMTypeConverter &converter,
-                                 mlir::RewritePatternSet &patterns);
+                                  mlir::RewritePatternSet &patterns);
+
+void populateDropStackLoweringPatterns(mlir::LLVMTypeConverter &converter,
+                                       mlir::RewritePatternSet &patterns);
 
 void registerReussirBasicOpsLoweringInterface(mlir::DialectRegistry &registry);
 
