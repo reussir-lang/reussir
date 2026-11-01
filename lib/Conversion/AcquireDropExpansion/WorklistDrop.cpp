@@ -7,6 +7,8 @@
 #include "WorklistDrop.h"
 #include "Reussir/Transformation/SpecialPointerTag.h"
 #include "TailDrop.h"
+#include <format>
+#include <string_view>
 #include <llvm/ADT/TypeSwitch.h>
 #include <llvm/TargetParser/Triple.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
@@ -54,9 +56,9 @@ public:
       args.push_back(builder.getIndexType());
     auto function = mlir::func::FuncOp::create(
         builder, loc,
-        ("__reussir_drop." + stringifyWorklistRole(role) + "." +
-         stringifyWorklistDirection(direction))
-            .str(),
+        std::format("__reussir_drop.{}.{}",
+                    std::string_view(stringifyWorklistRole(role)),
+                    std::string_view(stringifyWorklistDirection(direction))),
         builder.getFunctionType(args, {}));
     function.setPrivate();
     function->setAttr(REUSSIR_WORKLIST_ROLE, key);
