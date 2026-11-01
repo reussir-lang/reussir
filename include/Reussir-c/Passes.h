@@ -88,8 +88,7 @@ MlirPass reussirCreateIFRTJustInTimeTransformPass(void);
 MlirPass reussirCreatePreparePjrtPass(bool optimizeKernels);
 MlirPass reussirCreateDebugInfoConversionPass(void);
 
-// Acquire/drop expansion has two phases controlled by these options; the
-// pipeline runs it once with both disabled and once with both enabled.
+// Acquire/drop expansion normalizes ownership before outlining record drops.
 MlirPass reussirCreateAcquireDropExpansionPass(bool expandDecrement,
                                                bool outlineRecord,
                                                bool tailRecursiveDrops,
