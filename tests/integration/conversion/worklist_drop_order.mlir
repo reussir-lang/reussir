@@ -1,6 +1,6 @@
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true drop-order=forward' --verify-each | %FileCheck %s --check-prefix=FORWARD
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true drop-order=backward' --verify-each | %FileCheck %s --check-prefix=BACKWARD
-// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true tail-recursive-drops=false' --verify-each | %FileCheck %s --check-prefix=FORWARD --implicit-check-not=reussir.musttail
+// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true tail-recursive-drops=false drop-order=forward' --verify-each | %FileCheck %s --check-prefix=FORWARD --implicit-check-not=reussir.musttail
 
 !leaf = !reussir.record<compound "Leaf" { i64 }>
 !pair = !reussir.record<compound "Pair" { !leaf, !leaf }>
@@ -51,10 +51,10 @@ module {
   // Opaque cleanup stays pending even though the foreign object is a leaf.
   // FORWARD-LABEL: func.func @foreign
   // FORWARD: reussir.rc.fetch
-  // FORWARD: reussir.drop.defer @__reussir_drop.release.forward
+  // FORWARD: reussir.drop.defer @_RNvC{{[0-9]+}}REUSSIR_DROP_release_forward{{[A-Za-z0-9_]+}}
   // BACKWARD-LABEL: func.func @foreign
   // BACKWARD: reussir.rc.fetch
-  // BACKWARD: reussir.drop.defer @__reussir_drop.release.backward
+  // BACKWARD: reussir.drop.defer @_RNvC{{[0-9]+}}REUSSIR_DROP_release_backward{{[A-Za-z0-9_]+}}
   func.func @foreign(%ref: !reussir.ref<!foreign>) attributes {reussir.worklist_drop} {
     reussir.ref.drop(%ref : !reussir.ref<!foreign>)
     return
