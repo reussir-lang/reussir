@@ -21,12 +21,10 @@ module {
 
   // The helper decrements under the lock and synchronously finishes dead
   // payload cleanup; the cell owner is freed after unlock.
-  // LLVM-LABEL: define linkonce_odr void @_RNvC{{[0-9]+}}REUSSIR_DROP_release_forward{{[A-Za-z0-9_]+}}(
-  // LLVM: call void @__reussir_deallocate(ptr %{{.+}}, i64 8, i64 16)
   // LLVM-LABEL: define private void @__reussir_locked_drop.forward(ptr
   // LLVM: %[[INNER:.+]] = load ptr, ptr %0
   // LLVM: atomicrmw sub ptr %[[INNER]], i32 1
-  // LLVM: call void @__reussir_drop_run(ptr %[[INNER]], ptr @_RNvC{{[0-9]+}}REUSSIR_DROP_release_forward{{[A-Za-z0-9_]+}})
+  // LLVM: call void @__reussir_deallocate(ptr %[[INNER]], i64 8, i64 16)
   // LLVM-LABEL: define void @flatlock_cell_drop(ptr
   // LLVM: atomicrmw sub ptr %{{.+}}, i32 1
   // LLVM: atomicrmw xchg ptr %{{.+}}, i8 1 acquire
