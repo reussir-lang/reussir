@@ -647,8 +647,9 @@ prepareWorklistDropBridges(mlir::ModuleOp module,
         continue;
       }
     }
-    auto order = isForwardDrop(module) ? ".forward" : ".backward";
-    auto name = (function.getSymName() + ".worklist" + order).str();
+    auto order = isForwardDrop(module) ? "forward" : "backward";
+    auto name = std::format("{}.worklist.{}",
+                            std::string_view(function.getSymName()), order);
     rewriter.setInsertionPoint(function);
     auto worker = mlir::func::FuncOp::create(rewriter, function.getLoc(), name,
                                              function.getFunctionType());
