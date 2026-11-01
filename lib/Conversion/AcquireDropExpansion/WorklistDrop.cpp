@@ -36,11 +36,12 @@ public:
                mlir::SymbolTableCollection *symbols, mlir::Location loc)
       : module(module), builder(builder), symbols(symbols), loc(loc) {}
 
-  mlir::func::FuncOp function(mlir::Type type, llvm::StringRef role,
+  mlir::func::FuncOp function(mlir::Type type, WorklistRole role,
                               llvm::function_ref<void(mlir::Value)> body,
                               bool indexed = false) {
-    auto order = isForwardDrop(module) ? "forward" : "backward";
-    auto key = builder.getStringAttr((role + "." + order).str());
+    auto direction = isForwardDrop(module) ? WorklistDirection::Forward
+                                          : WorklistDirection::Backward;
+    auto key = WorklistRoleAttr::get(builder.getContext(), role, direction);
     for (auto function : module.getOps<mlir::func::FuncOp>())
       if (function->getAttr(REUSSIR_WORKLIST_ROLE) == key &&
           function.getNumArguments() == (indexed ? 2 : 1) &&
@@ -52,7 +53,9 @@ public:
     if (indexed)
       args.push_back(builder.getIndexType());
     auto function = mlir::func::FuncOp::create(
-        builder, loc, ("__reussir_drop." + key.getValue()).str(),
+        builder, loc,
+        ("__reussir_drop." + stringifyWorklistRole(role) + "." +
+         stringifyWorklistDirection(direction)).str(),
         builder.getFunctionType(args, {}));
     function.setPrivate();
     function->setAttr(REUSSIR_WORKLIST_ROLE, key);
@@ -83,7 +86,7 @@ public:
   }
 
   mlir::func::FuncOp walk(mlir::Type type) {
-    return function(type, "walk", [&](mlir::Value arg) {
+    return function(type, WorklistRole::Walk, [&](mlir::Value arg) {
       ReussirRefDropOp::create(builder, loc, arg, true, nullptr);
     });
   }

@@ -22,6 +22,8 @@
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/Support/LLVM.h>
 
+#include "Reussir/IR/ReussirEnumAttrs.h"
+
 #define GET_ATTRDEF_CLASSES
 #include "Reussir/IR/ReussirAttrs.h.inc"
 
