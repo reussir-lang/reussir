@@ -274,6 +274,17 @@ pub unsafe fn run(object: *mut u8, release: Release) {
     scoped(|| unsafe { release(object) });
 }
 
+/// Joins the running drain, or starts one. Intended for internal foreign bridges.
+///
+/// Safety: as [`run`].
+pub unsafe fn join_or_run(object: *mut u8, release: Release) {
+    if ACTIVE.is_set() {
+        unsafe { release(object) };
+    } else {
+        unsafe { run(object, release) };
+    }
+}
+
 /// Defers a release without changing its object's storage.
 ///
 /// Safety: the non-null object must remain valid for `release` until it runs.
@@ -407,6 +418,12 @@ pub unsafe extern "C" fn __reussir_drop_defer_wide(object: *mut u8, release: Rel
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __reussir_drop_run(object: *mut u8, release: Release) {
     unsafe { run(object, release) }
+}
+
+/// C entry point of [`join_or_run`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_drop_join_or_run(object: *mut u8, release: Release) {
+    unsafe { join_or_run(object, release) }
 }
 
 /// C entry point of [`defer`].
