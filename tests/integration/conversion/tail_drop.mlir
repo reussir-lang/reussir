@@ -14,8 +14,9 @@
 
 // CHECK-LABEL: func.func private @__reussir_drop.release.forward
 // CHECK-SAME: "Tree"
-// CHECK: reussir.ref.project{{.*}}[0]
-// CHECK: [[LEFT:%[0-9]+]] = reussir.ref.load
+// CHECK: reussir.rc.borrow
+// CHECK-NEXT: reussir.ref.project{{.*}}[0]
+// CHECK-NEXT: [[LEFT:%[0-9]+]] = reussir.ref.load
 // CHECK: reussir.ref.project{{.*}}[1]
 // CHECK: [[RIGHT:%[0-9]+]] = reussir.ref.load
 // CHECK: reussir.token.free
@@ -26,8 +27,9 @@
 // CHECK: return
 // BACKWARD-LABEL: func.func private @__reussir_drop.release.backward
 // BACKWARD-SAME: "Tree"
-// BACKWARD: reussir.ref.project{{.*}}[0]
-// BACKWARD: [[LEFT:%[0-9]+]] = reussir.ref.load
+// BACKWARD: reussir.rc.borrow
+// BACKWARD-NEXT: reussir.ref.project{{.*}}[0]
+// BACKWARD-NEXT: [[LEFT:%[0-9]+]] = reussir.ref.load
 // BACKWARD: reussir.ref.project{{.*}}[1]
 // BACKWARD: [[RIGHT:%[0-9]+]] = reussir.ref.load
 // BACKWARD: reussir.token.free
