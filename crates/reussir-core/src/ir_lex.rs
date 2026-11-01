@@ -16,6 +16,8 @@ use crate::literal::Integer;
 #[logos(skip r"[ \t\r\n]+")]
 pub enum Token<'a> {
     // ----- keywords -----
+    #[token("bindings")]
+    Bindings,
     #[token("drop_order")]
     DropOrder,
     #[token("pub")]

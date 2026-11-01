@@ -717,6 +717,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
                 );
                 let boundary = mir::Symbol(driver.symbols.get_or_intern(&boundary_name));
                 ffi_imports_out.push(mir::FfiImport {
+                    release_bindings: Vec::new(),
                     symbol,
                     boundary,
                     texture,
@@ -816,6 +817,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
                         drop_hook: mir::Symbol(driver.symbols.get_or_intern(&hook_name)),
                     };
                     ffi_textures.push(mir::FfiTexture {
+                        release_bindings: Vec::new(),
                         anchor: symbol,
                         texture,
                     });
