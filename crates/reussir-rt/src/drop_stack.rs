@@ -1,6 +1,5 @@
 //! Scoped worklists shared by generated drop glue and foreign destructors.
 use core::{ffi::c_void, num::NonZeroUsize, ptr::NonNull};
-use smallvec::SmallVec;
 use std::cell::{Cell, RefCell};
 
 mod wide;
@@ -92,8 +91,8 @@ pub struct DropContext {
 
 #[derive(Default)]
 struct Pending {
-    work: SmallVec<[Work; 4]>,
-    cells: SmallVec<[Object; 8]>,
+    work: Vec<Work>,
+    cells: Vec<Object>,
     releases: ReleaseTable,
 }
 
@@ -264,10 +263,10 @@ fn execute(context: &DropContext, walk: impl FnOnce()) -> Option<EndWork> {
     let mut context = context.pending.borrow_mut();
     context.releases.clear();
     if context.work.capacity() > 64 {
-        context.work.shrink_to_fit();
+        context.work.shrink_to(64);
     }
     if context.cells.capacity() > 64 {
-        context.cells.shrink_to_fit();
+        context.cells.shrink_to(64);
     }
     debug_assert!(context.work.is_empty() && context.cells.is_empty());
     end_work
