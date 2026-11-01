@@ -4,7 +4,7 @@
 // https://github.com/reussir-lang/reussir/blob/main/LICENSE
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //===----------------------------------------------------------------------===//
-#include "WorklistDrop.h"
+#include "Reussir/Conversion/WorklistDrop.h"
 #include "Reussir/Transformation/SpecialPointerTag.h"
 #include "TailDrop.h"
 #include <llvm/ADT/TypeSwitch.h>
