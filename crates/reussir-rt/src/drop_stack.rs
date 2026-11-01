@@ -1,6 +1,6 @@
 //! Scoped worklists shared by generated drop glue and foreign destructors.
 use core::{ffi::c_void, num::NonZeroUsize, ptr::NonNull};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use smallvec::SmallVec;
 
 /// Releases one deferred object.
@@ -63,6 +63,7 @@ pub struct DropContext {
     work: SmallVec<[Work; 4]>,
     cells: SmallVec<[Object; 8]>,
     boundary: usize,
+    end_work: Option<EndWork>,
 }
 
 impl DropContext {
@@ -114,6 +115,7 @@ impl DropContext {
 scoped_tls::scoped_thread_local!(static ACTIVE: RefCell<DropContext>);
 thread_local! {
     static SPARE: RefCell<Option<DropContext>> = const { RefCell::new(None) };
+    static END_WORK: Cell<Option<EndWork>> = const { Cell::new(None) };
 }
 
 fn drain_pending() {
@@ -151,10 +153,14 @@ fn scoped(walk: impl FnOnce()) {
         walk();
         drain_pending();
     });
-    let context = context.into_inner();
+    let mut context = context.into_inner();
+    let end_work = context.end_work.take();
+    if context.work.capacity() > 64 { context.work.shrink_to_fit(); }
+    if context.cells.capacity() > 64 { context.cells.shrink_to_fit(); }
     debug_assert!(context.cells.is_empty());
     // A late TLS destructor owns and frees its context when the spare is gone.
     let _ = SPARE.try_with(|slot| *slot.borrow_mut() = Some(context));
+    if let Some(callback) = end_work { unsafe { callback() }; }
 }
 
 /// Completes a release and its pending work. Nested calls complete their own
@@ -184,6 +190,24 @@ pub unsafe fn defer(object: *mut u8, release: Release) {
         ACTIVE.with(|context| context.borrow_mut().defer(unsafe { Object::new(object) }, release));
     } else {
         unsafe { run(object, release) };
+    }
+}
+
+/// Work that runs after the outermost scope releases its context.
+pub type EndWork = unsafe extern "C" fn();
+
+/// Registers this thread's host end callback.
+pub fn set_end_work(callback: EndWork) {
+    END_WORK.set(Some(callback));
+}
+
+/// Requests the registered callback after the outermost drain, or now when idle.
+pub fn want_end_work() {
+    let callback = END_WORK.get();
+    if ACTIVE.is_set() {
+        ACTIVE.with(|context| context.borrow_mut().end_work = callback);
+    } else if let Some(callback) = callback {
+        unsafe { callback() };
     }
 }
 
