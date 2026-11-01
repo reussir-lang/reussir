@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use palc::Parser;
 use reussir_backend::pipeline::{Anchor, OptLevel};
 use reussir_codegen::source::SourceCache;
+use reussir_core::drop_order::DropOrder;
 
 use super::stage::{Lto, RuntimeLinkage, SanitizerCli, Stage, VariantEncoding};
 use crate::RelocMode;
@@ -180,6 +181,11 @@ pub(crate) struct Cli {
     #[arg(long = "polyffi-libdir", value_name = "DIR")]
     pub(crate) polyffi_libdir: Vec<PathBuf>,
 
+    /// Destruction order: forward (default) or backward. Resumed IR keeps its
+    /// recorded order; an explicit conflicting order is rejected.
+    #[arg(long = "drop-order")]
+    pub(crate) drop_order: Option<DropOrder>,
+
     /// Let the token-reuse pass reuse tokens across function calls.
     #[arg(long = "reuse-across-call")]
     pub(crate) reuse_across_call: bool,
@@ -341,6 +347,17 @@ pub(crate) fn resolve_target(cli: &Cli) -> Result<Stage, String> {
         return Err("`rr` is the source input, not an emittable stage".into());
     }
     Ok(stage)
+}
+
+pub(crate) fn resolve_drop_order(cli: &Cli, saved: Option<DropOrder>) -> Result<DropOrder, String> {
+    if let (Some(requested), Some(saved)) = (cli.drop_order, saved)
+        && requested != saved
+    {
+        return Err(format!(
+            "--drop-order={requested} conflicts with serialized drop order `{saved}`"
+        ));
+    }
+    Ok(saved.or(cli.drop_order).unwrap_or_default())
 }
 
 pub(crate) fn parse_opt(s: &str) -> Result<OptLevel, String> {

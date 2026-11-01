@@ -1382,3 +1382,55 @@ fn borrow_params_keeps_reuse_decisions() {
         }
     }
 }
+
+#[test]
+fn drop_order_defaults_validates_and_survives_resume() {
+    let (dir, src) = source("drop-order");
+    let initial = dir.path().join("forward.hir");
+    emit(&src, "hir", &initial);
+    assert!(read(&initial).starts_with("drop_order \"forward\";"));
+    let backward = dir.path().join("backward.hir");
+    let output = rrc(&[
+        &src,
+        Path::new("-o"),
+        &backward,
+        Path::new("--drop-order=backward"),
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut input = backward;
+    for stage in ["hir", "mir", "mlir"] {
+        let out = dir.path().join(format!("resume.{stage}"));
+        emit(&input, stage, &out);
+        assert!(read(&out).contains(if stage == "mlir" {
+            "reussir.drop_order = \"backward\""
+        } else {
+            "drop_order \"backward\";"
+        }));
+        let output = rrc(&[
+            &out,
+            Path::new("-o"),
+            Path::new("-"),
+            Path::new("--emit"),
+            Path::new(stage),
+            Path::new("--drop-order=forward"),
+        ]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("conflicts with serialized drop order")
+        );
+        input = out;
+    }
+    let output = rrc(&[
+        &src,
+        Path::new("-o"),
+        Path::new("-"),
+        Path::new("--emit=hir"),
+        Path::new("--drop-order=invalid"),
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+}

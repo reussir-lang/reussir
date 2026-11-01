@@ -24,7 +24,7 @@ use reussir_syntax::kind::{Resolver, TokenKey};
 use crate::package;
 
 use super::Produced;
-use super::cli::Cli;
+use super::cli::{Cli, resolve_drop_order};
 use super::stage::Stage;
 
 /// The optional features this build includes, and so can lower.
@@ -131,7 +131,8 @@ pub(crate) fn frontend_package<'c, 'tcx>(
         }
         .with_transform_metadata(&elab.transform_anchors, &elab.transform_scripts)
         .with_ffi_metadata(&elab.ffi_preludes, &elab.ffi_imports)
-        .with_bounds(&bounds);
+        .with_bounds(&bounds)
+        .with_drop_order(Some(resolve_drop_order(cli, None)?));
         let (traits, impls) = hir::trait_texts(&elab.traits, &elab.defs, elab.resolver);
         let lang = elab.lang.declared_by_def();
         let printer = printer.with_traits(&traits, &impls).with_lang(&lang);
@@ -198,6 +199,7 @@ pub(crate) fn frontend_package<'c, 'tcx>(
         .with_transform_metadata(&anchors, &scripts)
         .with_ffi_metadata(&ffi_preludes, &ffi_imports)
         .with_bounds(&bounds)
+        .with_drop_order(Some(resolve_drop_order(cli, None)?))
         .with_interface(hir::print::InterfaceEmit {
             format: interface::RRI_FORMAT,
             package: cli.package_name.as_deref().unwrap_or_default(),
@@ -218,7 +220,8 @@ pub(crate) fn frontend_package<'c, 'tcx>(
             .program(&elab.elaborated, &strings, &elab.records, &[]);
         return Ok(Produced::Text(text));
     }
-    let (full, reports) = monomorphize(&elab.mono_input());
+    let (mut full, reports) = monomorphize(&elab.mono_input());
+    full.drop_order = Some(resolve_drop_order(cli, None)?);
     if render_reports(cli, &pkg.cache, &reports) {
         return Err(String::new());
     }
@@ -281,7 +284,8 @@ pub(crate) fn frontend<'c, 'tcx>(
                 }
                 .with_transform_metadata(&elab.transform_anchors, &elab.transform_scripts)
                 .with_ffi_metadata(&elab.ffi_preludes, &elab.ffi_imports)
-                .with_bounds(&bounds);
+                .with_bounds(&bounds)
+                .with_drop_order(Some(resolve_drop_order(cli, None)?));
                 let (traits, impls) = hir::trait_texts(&elab.traits, &elab.defs, elab.resolver);
                 let lang = elab.lang.declared_by_def();
                 let printer = printer.with_traits(&traits, &impls).with_lang(&lang);
@@ -290,7 +294,8 @@ pub(crate) fn frontend<'c, 'tcx>(
                     printer.program(&elab.elaborated, &strings, &elab.records, &elab.trampolines);
                 return Ok(Produced::Text(text));
             }
-            let (full, reports) = monomorphize(&elab.mono_input());
+            let (mut full, reports) = monomorphize(&elab.mono_input());
+            full.drop_order = Some(resolve_drop_order(cli, None)?);
             if render_reports(cli, sources, &reports) {
                 return Err(String::new());
             }
@@ -309,6 +314,7 @@ pub(crate) fn frontend<'c, 'tcx>(
         Stage::Hir => {
             let mut parsed =
                 hir::build::parse_program(tcx, source).map_err(|e| format!("{name}: {e}"))?;
+            parsed.drop_order = Some(resolve_drop_order(cli, parsed.drop_order)?);
             // An interface is not a resumable program: its prototypes have no
             // bodies to compile and its mono roots stayed home. Loading one
             // is `--extern`'s job (a later PR), not pipeline re-entry.
@@ -334,6 +340,7 @@ pub(crate) fn frontend<'c, 'tcx>(
                 .with_transform_metadata(&parsed.transform_anchors, &parsed.transform_scripts)
                 .with_ffi_metadata(&parsed.ffi_preludes, &parsed.ffi_imports)
                 .with_bounds(&parsed.generic_bounds)
+                .with_drop_order(parsed.drop_order)
                 .with_traits(&parsed.traits, &parsed.impls)
                 .with_lang(&parsed.lang);
                 let text = printer.program(
@@ -374,7 +381,8 @@ pub(crate) fn frontend<'c, 'tcx>(
                 lang: parsed.lang.clone(),
                 features: Default::default(),
             };
-            let (full, reports) = monomorphize(&input);
+            let (mut full, reports) = monomorphize(&input);
+            full.drop_order = parsed.drop_order;
             match &dump_sources {
                 Some(cache) => {
                     if render_reports(cli, cache, &reports) {
@@ -400,8 +408,9 @@ pub(crate) fn frontend<'c, 'tcx>(
             )
         }
         Stage::Mir => {
-            let parsed =
+            let mut parsed =
                 mir::build::parse_program(tcx, source).map_err(|e| format!("{name}: {e}"))?;
+            parsed.program.drop_order = Some(resolve_drop_order(cli, parsed.program.drop_order)?);
             let dump_sources = refetch_sources(&parsed.files);
             finish_mir(
                 context,

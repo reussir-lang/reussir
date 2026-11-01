@@ -7,13 +7,15 @@ use std::path::{Path, PathBuf};
 
 use reussir_backend::llvm::LlvmLowering;
 use reussir_backend::melior::ir::Module;
+use reussir_backend::melior::ir::attribute::StringAttribute;
+use reussir_backend::melior::ir::operation::{OperationLike, OperationMutLike};
 use reussir_backend::pipeline::{self, LoweringOptions, OptLevel};
 use reussir_backend_sys as sys;
 
 use crate::{RelocMode, TargetMachine, TargetSpec, emit_to_file};
 
 use super::Produced;
-use super::cli::{Cli, parse_transform_scripts, write_text};
+use super::cli::{Cli, parse_transform_scripts, resolve_drop_order, write_text};
 use super::link::{ScratchMembers, link_product, polyffi_paths};
 use super::stage::Stage;
 
@@ -114,6 +116,21 @@ pub(crate) fn backend_module(
     name: &str,
     output: &Path,
 ) -> Result<bool, String> {
+    let saved_order = module
+        .as_operation()
+        .attribute("reussir.drop_order")
+        .ok()
+        .map(|attribute| {
+            let value = StringAttribute::try_from(attribute)
+                .map_err(|_| "reussir.drop_order must be a string".to_owned())?;
+            value.value().parse()
+        })
+        .transpose()?;
+    let drop_order = resolve_drop_order(cli, saved_order)?;
+    module.as_operation_mut().set_attribute(
+        "reussir.drop_order",
+        StringAttribute::new(context, drop_order.as_str()).into(),
+    );
     // A `.mlir` dump is the module as it stands, before the lowering pipeline.
     if target == Stage::Mlir {
         write_text(output, &module.as_operation().to_string())?;
