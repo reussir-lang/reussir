@@ -33,9 +33,12 @@ struct Ordered {
 unsafe extern "C" fn first(object: *mut u8) {
     unsafe { (*object.cast::<Ordered>()).log.push(1) };
 }
+unsafe extern "C" fn defer_first(object: *mut u8) {
+    unsafe { defer(object, first) };
+}
 unsafe extern "C" fn nested(object: *mut u8) {
     unsafe { defer(object, first) };
-    unsafe { run(object, first) };
+    unsafe { run(object, defer_first) };
     unsafe { (*object.cast::<Ordered>()).log.push(2) };
 }
 
@@ -115,9 +118,12 @@ unsafe extern "C" fn late_release(object: *mut u8) {
     let object = unsafe { &*object.cast::<Late>() };
     object.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
+unsafe extern "C" fn late_enqueue(object: *mut u8) {
+    for _ in 0..128 { unsafe { defer(object, late_release) }; }
+}
 impl Drop for Late {
     fn drop(&mut self) {
-        unsafe { run((self as *mut Late).cast(), late_release) };
+        unsafe { run((self as *mut Late).cast(), late_enqueue) };
     }
 }
 thread_local! {
@@ -134,7 +140,7 @@ fn drops_after_the_buffer_cache_destructor_own_their_context() {
     })
     .join()
     .unwrap();
-    assert_eq!(count.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert_eq!(count.load(std::sync::atomic::Ordering::Relaxed), 128);
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -199,14 +205,14 @@ fn mixed_wide_runs_restore_headers_and_keep_lifo_order() {
 
 unsafe extern "C" fn enqueue_join(object: *mut u8) {
     unsafe { defer(object, first) };
-    unsafe { join_or_run(object, first) };
+    unsafe { join_or_run(object, defer_first) };
     unsafe { (*object.cast::<Ordered>()).log.push(2) };
 }
 #[test]
 fn internal_bridges_join_the_current_drain() {
     let mut object = Ordered { log: vec![] };
     unsafe { run((&mut object as *mut Ordered).cast(), enqueue_join) };
-    assert_eq!(object.log, [1, 2, 1]);
+    assert_eq!(object.log, [2, 1, 1]);
 }
 
 #[test]
@@ -225,4 +231,50 @@ fn callback_symbols_are_exported() {
                 .any(|symbol| symbol.name == name && !symbol.address.is_null())
         );
     }
+}
+
+unsafe extern "C" fn record_drop(object: *mut u8) {
+    unsafe { join_or_run(object, record_walk) };
+}
+unsafe extern "C" fn record_walk(object: *mut u8) {
+    unsafe { defer(object, host_drop) };
+}
+unsafe extern "C" fn host_drop(object: *mut u8) {
+    unsafe { join_or_run_step(object.cast(), host_step) };
+}
+unsafe extern "C" fn host_step(object: *mut c_void) -> StepStatus {
+    let chain = unsafe { &mut *object.cast::<Chain>() };
+    if chain.remaining != 0 {
+        chain.remaining -= 1;
+        unsafe { defer(object.cast(), record_drop) };
+    }
+    StepStatus::Complete
+}
+#[test]
+fn alternating_foreign_and_record_drops_remain_iterative() {
+    std::thread::Builder::new().stack_size(64 * 1024).spawn(|| {
+        let mut object = Chain { remaining: 1_000_000 };
+        unsafe { run((&mut object as *mut Chain).cast(), record_drop) };
+        assert_eq!(object.remaining, 0);
+    }).unwrap().join().unwrap();
+}
+
+unsafe extern "C" fn bulk(object: *mut u8) {
+    for _ in 0..128 { unsafe { defer(object, first) }; }
+    ACTIVE.with(|context| {
+        let context = context.borrow();
+        assert_eq!(context.work.len(), 1);
+        assert_eq!(context.cells.len(), 127);
+    });
+}
+#[test]
+fn large_runs_keep_only_bounded_spare_buffers() {
+    let mut object = Ordered { log: vec![] };
+    unsafe { run((&mut object as *mut Ordered).cast(), bulk) };
+    assert_eq!(object.log.len(), 128);
+    SPARE.with(|slot| {
+        let slot = slot.borrow();
+        let context = slot.as_ref().unwrap();
+        assert!(context.work.capacity() <= 64 && context.cells.capacity() <= 64);
+    });
 }
