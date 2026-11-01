@@ -386,13 +386,59 @@ public:
 
   void release(mlir::Value rc, bool run) {
     auto type = llvm::cast<RcType>(rc.getType());
+    auto payload = type.getElementType();
+    if (isTriviallyCopyable(payload)) {
+      emitBoxFree(rc, loc, module, builder);
+      return;
+    }
     auto task = releaseFunction(type);
-    if (!run && !llvm::isa<FFIObjectType, ClosureType>(type.getElementType()))
-      ReussirRcDeferOp::create(
-          builder, loc, mlir::FlatSymbolRefAttr::get(task.getSymNameAttr()),
-          rc);
-    else
-      schedule(task, rc, run);
+    auto enqueue = [&] {
+      if (!run && !llvm::isa<FFIObjectType, ClosureType>(payload))
+        ReussirRcDeferOp::create(
+            builder, loc, mlir::FlatSymbolRefAttr::get(task.getSymNameAttr()),
+            rc);
+      else
+        schedule(task, rc, run);
+    };
+    auto record = llvm::dyn_cast<RecordType>(payload);
+    if (!record || !record.isVariant() || record.hasObservableCleanup()) {
+      enqueue();
+      return;
+    }
+    llvm::SmallVector<bool> leaf;
+    llvm::SmallVector<mlir::Attribute> tags;
+    for (auto [i, member, field] :
+         llvm::enumerate(record.getMembers(), record.getMemberIsField())) {
+      leaf.push_back(field || isTriviallyCopyable(getProjectedType(
+                                  member, false, Capability::shared)));
+      tags.push_back(builder.getDenseI64ArrayAttr({int64_t(i)}));
+    }
+    if (!llvm::is_contained(leaf, true)) {
+      enqueue();
+      return;
+    }
+    auto refType = RefType::get(builder.getContext(), payload,
+                                Capability::unspecified, type.getAtomicKind());
+    mlir::Value ref = ReussirRcBorrowOp::create(builder, loc, refType, rc);
+    auto dispatch = ReussirRecordDispatchOp::create(
+        builder, loc, mlir::Type{}, ref, builder.getArrayAttr(tags),
+        tags.size());
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    for (auto [i, member, field] :
+         llvm::enumerate(record.getMembers(), record.getMemberIsField())) {
+      auto projected = getProjectedType(member, field, Capability::unspecified,
+                                        type.getAtomicKind());
+      builder.createBlock(
+          &dispatch.getRegions()[i], {},
+          {RefType::get(builder.getContext(), projected,
+                        Capability::unspecified, type.getAtomicKind())},
+          {loc});
+      if (leaf[i])
+        emitBoxFree(rc, loc, module, builder);
+      else
+        enqueue();
+      ReussirScfYieldOp::create(builder, loc, nullptr);
+    }
   }
 };
 } // namespace
@@ -491,6 +537,10 @@ void emitWorklistDecrement(mlir::Value rc, mlir::Location loc,
   auto module = rewriter.getInsertionBlock()
                     ->getParentOp()
                     ->getParentOfType<mlir::ModuleOp>();
+  if (auto record = llvm::dyn_cast<RecordType>(type.getElementType());
+      record && !record.hasObservableCleanup() &&
+      emitTailDropRelease(rc, loc, module, rewriter, symbols))
+    return;
   mlir::OpBuilder::InsertionGuard guard(rewriter);
   if (module->hasAttr(kSpecialPtrTagAttr) && type.mayCarrySpecialPointerTag()) {
     mlir::Value immediate =
