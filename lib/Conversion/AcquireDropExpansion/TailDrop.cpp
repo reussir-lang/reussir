@@ -64,20 +64,7 @@ class TailDropEmitter {
     call->setAttr(kMustTailCallAttr, builder.getUnitAttr());
   }
   void freeOwner(mlir::Value owner) {
-    auto rc = llvm::cast<RcType>(owner.getType());
-    auto box = rc.getInnerBoxType();
-    mlir::DataLayout layout(module);
-    auto align = layout.getTypeABIAlignment(box);
-    auto record = llvm::dyn_cast<RecordType>(rc.getElementType());
-    TokenType tokenType =
-        box.hasDynamicArrayPayload() ||
-                (record && record.isVariant() && box.isHeaderFused() &&
-                 !record.getFixed())
-            ? TokenType::getDynamic(builder.getContext(), align)
-            : TokenType::get(builder.getContext(), align,
-                             layout.getTypeSize(box).getFixedValue());
-    auto token = ReussirRcReinterpretOp::create(builder, loc, tokenType, owner);
-    ReussirTokenFreeOp::create(builder, loc, token.getReinterpreted());
+    emitBoxFree(owner, loc, module, builder);
   }
   void emitPayload(mlir::Value ref, mlir::Value owner) {
     auto refType = llvm::cast<RefType>(ref.getType());
@@ -242,12 +229,35 @@ public:
 };
 } // namespace
 
+void emitBoxFree(mlir::Value owner, mlir::Location loc, mlir::ModuleOp module,
+                 mlir::OpBuilder &builder) {
+  auto rc = llvm::cast<RcType>(owner.getType());
+  auto box = rc.getInnerBoxType();
+  mlir::DataLayout layout(module);
+  auto align = layout.getTypeABIAlignment(box);
+  auto record = llvm::dyn_cast<RecordType>(rc.getElementType());
+  TokenType tokenType =
+      box.hasDynamicArrayPayload() ||
+              (record && record.isVariant() && box.isHeaderFused() &&
+               !record.getFixed())
+          ? TokenType::getDynamic(builder.getContext(), align)
+          : TokenType::get(builder.getContext(), align,
+                           layout.getTypeSize(box).getFixedValue());
+  auto token = ReussirRcReinterpretOp::create(builder, loc, tokenType, owner);
+  ReussirTokenFreeOp::create(builder, loc, token.getReinterpreted());
+}
+
+bool canApplyTailDrop(RcType type) {
+  auto record = llvm::dyn_cast<RecordType>(type.getElementType());
+  return record && record.getName() && canTailRelease(type);
+}
+
 bool emitTailDropRelease(mlir::Value rc, mlir::Location loc,
                          mlir::ModuleOp module, mlir::PatternRewriter &rewriter,
                          mlir::SymbolTableCollection *symbols) {
   auto type = llvm::cast<RcType>(rc.getType());
   auto record = llvm::dyn_cast<RecordType>(type.getElementType());
-  if (!record || !record.getName() || !canTailRelease(type))
+  if (!canApplyTailDrop(type))
     return false;
   std::optional<mlir::SymbolTable> ownTable;
   auto &table =
