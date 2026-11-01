@@ -10,12 +10,14 @@
 module {
   func.func private @foreign_drop(!foreign)
 
-  // A forward member's decrement runs only after earlier member work finishes.
+  // Pure members need no slot callbacks; queue order selects child traversal.
   // FORWARD-LABEL: func.func @record
   // FORWARD: reussir.ref.project{{.*}}[1]
-  // FORWARD-NEXT: reussir.drop.defer
+  // FORWARD: reussir.rc.fetch
+  // FORWARD: reussir.token.free
   // FORWARD: reussir.ref.project{{.*}}[0]
-  // FORWARD-NEXT: reussir.drop.defer
+  // FORWARD: reussir.rc.fetch
+  // FORWARD: reussir.token.free
   // BACKWARD-LABEL: func.func @record
   // BACKWARD: reussir.ref.project{{.*}}[0]
   // BACKWARD: reussir.rc.fetch
