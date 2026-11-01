@@ -355,40 +355,43 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
     }
 
     pub(super) fn cleanup_hooks(&self, root: Ty<'tcx>) -> &'tcx [mir::Symbol] {
-        if let Some(&hooks) = self.cleanup_hooks.borrow().get(&root) {
-            return hooks;
-        }
-        let mut pending = vec![root];
-        let mut visited = FxHashSet::default();
-        let mut hooks = Vec::new();
-        while let Some(ty) = pending.pop() {
-            if !visited.insert(ty) {
-                continue;
-            }
-            if let Some(record) = self.record_of(ty) {
-                match record.layout {
-                    mir::RecordLayout::Opaque { drop_hook, .. } => hooks.push(drop_hook),
-                    mir::RecordLayout::Compound(fields) => {
-                        pending.extend(fields.iter().map(|field| field.ty));
+        *self
+            .cleanup_hooks
+            .borrow_mut()
+            .entry(root)
+            .or_insert_with(|| {
+                let mut pending = vec![root];
+                let mut visited = FxHashSet::default();
+                let mut hooks = Vec::new();
+                while let Some(ty) = pending.pop() {
+                    if !visited.insert(ty) {
+                        continue;
                     }
-                    mir::RecordLayout::Variant(variants) => {
-                        pending.extend(variants.iter().flat_map(|variant| variant.fields));
+                    if let Some(record) = self.record_of(ty) {
+                        match record.layout {
+                            mir::RecordLayout::Opaque { drop_hook, .. } => hooks.push(drop_hook),
+                            mir::RecordLayout::Compound(fields) => {
+                                pending.extend(fields.iter().map(|field| field.ty));
+                            }
+                            mir::RecordLayout::Variant(variants) => {
+                                pending.extend(variants.iter().flat_map(|variant| variant.fields));
+                            }
+                        }
+                    } else {
+                        match *ty.kind() {
+                            TyKind::Tuple(fields) => pending.extend(fields),
+                            TyKind::Nullable(inner) | TyKind::Arc(inner) => pending.push(inner),
+                            TyKind::Cell { elem, .. } | TyKind::Array { elem, .. } => {
+                                pending.push(elem)
+                            }
+                            _ => {}
+                        }
                     }
                 }
-            } else {
-                match *ty.kind() {
-                    TyKind::Tuple(fields) => pending.extend(fields),
-                    TyKind::Nullable(inner) | TyKind::Arc(inner) => pending.push(inner),
-                    TyKind::Cell { elem, .. } | TyKind::Array { elem, .. } => pending.push(elem),
-                    _ => {}
-                }
-            }
-        }
-        hooks.sort_unstable_by_key(|hook| self.program.symbol(*hook));
-        hooks.dedup();
-        let hooks = self.tcx.alloc_slice(&hooks);
-        self.cleanup_hooks.borrow_mut().insert(root, hooks);
-        hooks
+                hooks.sort_unstable_by_key(|hook| self.program.symbol(*hook));
+                hooks.dedup();
+                self.tcx.alloc_slice(&hooks)
+            })
     }
 
     /// Whether `ty` is an opaque `#[ffi]` record instance (a foreign rc box).
