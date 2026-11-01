@@ -56,6 +56,9 @@ struct RecordTypeStorage : public mlir::TypeStorage {
   // value — mirrors `defaultCapability`.
   bool fixed;
   mutable std::optional<RecordDropKind> dropKind;
+  mutable bool observableCleanup = true;
+  mutable bool recursiveCleanup = true;
+  mutable bool worklistCleanup = true;
   mutable std::mutex dropKindMutex;
 
   using KeyTy = RecordTypeStorage;
