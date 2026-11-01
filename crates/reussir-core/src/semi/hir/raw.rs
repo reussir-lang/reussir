@@ -15,6 +15,7 @@ pub use crate::full::mir::raw::{
 /// declarations and trampoline roots mono needs, plus the elaborated functions.
 #[derive(Clone, Debug)]
 pub struct Program {
+    pub drop_order: Option<crate::drop_order::DropOrder>,
     /// The `.rri` interface header, when the dump is a package interface
     /// rather than a plain HIR program: `interface 2 package "demo"
     /// producer "rrc …";`, always the first item.
@@ -139,6 +140,7 @@ pub enum Item {
 impl Program {
     pub fn from_items(items: Vec<Item>) -> Program {
         let mut p = Program {
+            drop_order: None,
             header: None,
             files: Vec::new(),
             strings: Vec::new(),

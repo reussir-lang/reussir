@@ -14,7 +14,14 @@ use crate::literal::{FloatLit, Integer};
 
 grammar<'input>;
 
-pub Program: raw::Program = <items:Item*> => raw::Program::from_items(items);
+pub Program: raw::Program = <drop_order:DropOrder?> <items:Item*> => {
+    let mut p = raw::Program::from_items(items);
+    p.drop_order = drop_order;
+    p
+};
+
+DropOrder: crate::drop_order::DropOrder = "drop_order" <l:@L> <s:"quoted"> <r:@R> ";"
+    =>? unescape_debug_str(s).parse().map_err(|_| lalrpop_util::ParseError::User { error: LexError { span: l..r } });
 
 Item: raw::Item = {
     <f:FileDecl> => raw::Item::File(f),
@@ -136,6 +143,7 @@ Name: &'input str = {
 BareName: &'input str = {
     "while" => "while",
     "async" => "async",
+    "drop_order" => "drop_order",
     "launch" => "launch",
     <name:"ident"> => name,
     "transform" => "transform",
@@ -495,6 +503,7 @@ extern {
         "fp" => Token::Fp(<u16>),
         "ident" => Token::Ident(<&'input str>),
         "quoted" => Token::Quoted(<Cow<'input, str>>),
+        "drop_order" => Token::DropOrder,
         "pub" => Token::Pub,
         "regional" => Token::Regional,
         "fn" => Token::Fn,

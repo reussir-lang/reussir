@@ -931,6 +931,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
     } = driver;
     (
         mir::Program {
+            drop_order: None,
             functions,
             records,
             trampolines,
