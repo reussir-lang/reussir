@@ -173,6 +173,10 @@ public:
         dec->setAttr(kWorklistRawAttr, builder.getUnitAttr());
         return;
       }
+      if (isTriviallyCopyable(type.getElementType())) {
+        emitBoxFree(arg, loc, module, builder);
+        return;
+      }
       auto refType =
           RefType::get(builder.getContext(), type.getElementType(),
                        Capability::unspecified, type.getAtomicKind());
