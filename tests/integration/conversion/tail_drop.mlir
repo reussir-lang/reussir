@@ -6,8 +6,9 @@
 !node_ = !reussir.record<compound "Node" incomplete>
 !node = !reussir.record<compound "Node" { i64, !reussir.nullable<!reussir.rc<!node_ shared>> }>
 !leaf = !reussir.record<compound "Leaf" { i64 }>
+!color = !reussir.record<variant "Color" [value] { i8, i16 }>
 !tree_ = !reussir.record<compound "Tree" incomplete>
-!tree = !reussir.record<compound "Tree" { !tree_, !tree_ }>
+!tree = !reussir.record<compound "Tree" { !tree_, !tree_, !color }>
 !snoc_ = !reussir.record<compound "Snoc" incomplete>
 !snoc = !reussir.record<compound "Snoc" { !snoc_, !leaf }>
 
