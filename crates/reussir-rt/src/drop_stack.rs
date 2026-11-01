@@ -64,6 +64,9 @@ pub type Release = unsafe extern "C" fn(*mut u8);
 /// its entry left.
 pub type Step = unsafe extern "C" fn(usize) -> bool;
 
+/// Releases one indexed part without modifying the object to store its cursor.
+pub type Indexed = unsafe extern "C" fn(*mut u8, usize);
+
 /// An entry below the top of the stack.
 #[derive(Clone, Copy)]
 enum Work {
@@ -75,6 +78,7 @@ enum Work {
     Run { release: Release, head: *mut u8, n: u32 },
     /// Incremental work: `step(p)` runs until it answers that it is done.
     Step(usize, Step),
+    Indexed(*mut u8, usize, Indexed),
 }
 
 /// Capacity each vector keeps after a drain.
@@ -439,6 +443,14 @@ impl State {
             if len == self.floor.get() {
                 break;
             }
+            if let Work::Indexed(object, cursor, callback) =
+                unsafe { self.stack.ptr.get().as_ptr().add(len - 1).read() }
+            {
+                self.stack.len.set(len - 1);
+                self.unspill();
+                unsafe { callback(object, cursor) };
+                continue;
+            }
             // The top entry is a step: it stays while it runs, so whatever it
             // pushes is done before its next step.
             let index = len - 1;
@@ -506,6 +518,28 @@ pub unsafe fn defer_step(p: usize, step: Step) {
         state.stack.grow();
         let pushed = state.stack.try_push(Work::Step(p, step));
         debug_assert!(pushed);
+    }
+}
+
+/// Defers one indexed callback. Enqueue its successor before releasing the
+/// current child to visit children in forward order. Outside a drain, runs
+/// the callback and its pending work before returning.
+/// Safety: `callback(object, cursor)` must be sound whenever it runs.
+pub unsafe fn defer_indexed(object: *mut u8, cursor: usize, callback: Indexed) {
+    let state = state();
+    let outermost = !state.releasing.get();
+    if !state.try_spill() {
+        state.stack.grow();
+        let spilled = state.try_spill();
+        debug_assert!(spilled);
+    }
+    if !state.stack.try_push(Work::Indexed(object, cursor, callback)) {
+        state.stack.grow();
+        let pushed = state.stack.try_push(Work::Indexed(object, cursor, callback));
+        debug_assert!(pushed);
+    }
+    if outermost {
+        drain();
     }
 }
 
@@ -702,6 +736,28 @@ pub unsafe extern "C" fn __reussir_drop_defer_wide(cell: *mut u8, release: Relea
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __reussir_drop_run(object: *mut u8, walk: Release) {
     unsafe { run(object, walk) }
+}
+
+/// C entry point of [`defer_step`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_drop_defer_step(p: usize, step: Step) {
+    unsafe { defer_step(p, step) }
+}
+
+/// C entry point of [`run_step`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_drop_run_step(p: usize, step: Step) {
+    unsafe { run_step(p, step) }
+}
+
+/// C entry point of [`defer_indexed`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_drop_defer_indexed(
+    object: *mut u8,
+    cursor: usize,
+    callback: Indexed,
+) {
+    unsafe { defer_indexed(object, cursor, callback) }
 }
 
 #[cfg(test)]
