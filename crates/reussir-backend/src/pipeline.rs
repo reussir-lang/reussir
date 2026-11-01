@@ -659,6 +659,36 @@ mod tests {
     }
 
     #[test]
+    fn preserves_ffi_cleanup_used_by_record_drop() {
+        let source = r#"
+            !handle = !reussir.rc<!reussir.ffi_object<"T", @drop>>
+            !wrapper = !reussir.rc<!reussir.record<compound "Wrapper" {!handle}>>
+            module {
+              func.func private @drop(!handle)
+              func.func private @make() -> !wrapper
+              func.func @use() {
+                %x = func.call @make() : () -> !wrapper
+                reussir.rc.dec(%x : !wrapper) cleanup(@drop)
+                return
+              }
+            }
+        "#;
+        for opt in [OptLevel::Default, OptLevel::Aggressive] {
+            let context = crate::context();
+            let mut module = Module::parse(&context, source).expect("module should parse");
+            let options = LoweringOptions {
+                opt,
+                ..LoweringOptions::default()
+            };
+            run_lowering_pipeline(&context, &mut module, &options)
+                .expect("record cleanup should retain its FFI hook");
+            assert!(module.as_operation().verify());
+            let rendered = module.as_operation().to_string();
+            assert!(rendered.contains("llvm.call @drop"), "{opt:?}:\n{rendered}");
+        }
+    }
+
+    #[test]
     fn drops_dead_private_functions_when_optimizing() {
         let context = crate::context();
         // `countdown` only calls itself, so its own use keeps it out of the

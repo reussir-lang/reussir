@@ -88,6 +88,32 @@ static void printCompiledModule(mlir::OpAsmPrinter &printer,
   printer.printAttribute(attr);
 }
 
+static mlir::ParseResult parseCleanup(mlir::OpAsmParser &parser,
+                                      mlir::ArrayAttr &cleanup) {
+  if (mlir::failed(parser.parseOptionalKeyword("cleanup")))
+    return mlir::success();
+  llvm::SmallVector<mlir::Attribute> hooks;
+  if (parser.parseCommaSeparatedList(mlir::OpAsmParser::Delimiter::Paren, [&] {
+        mlir::FlatSymbolRefAttr hook;
+        if (parser.parseAttribute(hook))
+          return mlir::failure();
+        hooks.push_back(hook);
+        return mlir::success();
+      }))
+    return mlir::failure();
+  cleanup = parser.getBuilder().getArrayAttr(hooks);
+  return mlir::success();
+}
+
+static void printCleanup(mlir::OpAsmPrinter &printer, mlir::Operation *,
+                         mlir::ArrayAttr cleanup) {
+  if (!cleanup)
+    return;
+  printer << "cleanup(";
+  llvm::interleaveComma(cleanup, printer);
+  printer << ")";
+}
+
 #define GET_OP_CLASSES
 #include "Reussir/IR/ReussirOps.cpp.inc"
 
@@ -701,18 +727,12 @@ bool ReussirRcDecOp::shouldProduceToken() {
 //===----------------------------------------------------------------------===//
 mlir::LogicalResult
 ReussirRcDecOp::verifySymbolUses(mlir::SymbolTableCollection &symbolTable) {
-  RcType rcType = getRcPtr().getType();
-  if (auto eleTy = mlir::dyn_cast<FFIObjectType>(rcType.getElementType())) {
-    auto funcOp = symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
-        getOperation(), eleTy.getCleanupHook());
-    if (!funcOp)
-      return emitOpError("cleanup hook not found: ") << eleTy.getCleanupHook();
-    if (funcOp.getFunctionType().getNumInputs() != 1 ||
-        funcOp.getFunctionType().getNumResults() != 0 ||
-        funcOp.getFunctionType().getInput(0) != rcType)
-      return emitOpError(
-          "cleanup hook must be a function with one argument and no return "
-          "type, and the argument type must match the RC element type");
+  if (auto cleanup = getCleanupAttr()) {
+    for (auto hook : cleanup.getAsRange<mlir::FlatSymbolRefAttr>()) {
+      if (!symbolTable.lookupNearestSymbolFrom<mlir::func::FuncOp>(
+              getOperation(), hook))
+        return emitOpError("cleanup hook not found: ") << hook;
+    }
   }
   return mlir::success();
 }

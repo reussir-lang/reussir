@@ -48,3 +48,11 @@
 - Check skills for existing tools. When implementing Reussir data structures or
   libraries, pay attention to LLVM remarks and Reussir's own remarks, and use
   them to produce high-quality code.
+- Prioritize compatibility with upstream infrastructure and standard fixes over
+  custom replacement passes. For example, if symbol DCE removes a live external
+  cleanup hook, fix its symbol-use declarations. Do not assume a closed world:
+  users may combine Reussir with existing passes, and fixes must work in those
+  pipelines too.
+- For known long-running CI workflows, delegate monitoring to a lightweight
+  model or set up a completion trigger. Do not keep a highly capable model in a
+  polling loop.

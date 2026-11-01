@@ -526,13 +526,16 @@ def ReussirRcDecOp
       !reussir.nullable<!reussir.token<align: 8, size: 8>>
     ```
 
+    `cleanup(@hook, ...)` declares the FFI hooks reachable through this drop.
+
     For rigid RC pointer, this operation is basically a function call to
     __reussir_release_rigid_object. There is no token shall be returned.
   }];
 
   let arguments = (ins Arg<ReussirRcType, "Reference to decrement">:$rcPtr,
       OptionalAttr<IndexAttr>:$destructureTag,
-      OptionalAttr<DenseI64ArrayAttr>:$boundMembers);
+      OptionalAttr<DenseI64ArrayAttr>:$boundMembers,
+      OptionalAttr<FlatSymbolRefArrayAttr>:$cleanup);
   let results = (outs Res<Optional<ReussirNullableTokenType>,
                           "Nullable token">:$nullableToken);
 
@@ -569,8 +572,18 @@ def ReussirRcDecOp
   let assemblyFormat = [{
     `(` $rcPtr `:` qualified(type($rcPtr)) `)` 
     (`:` type($nullableToken)^)? 
-    attr-dict
+    custom<Cleanup>($cleanup) attr-dict
   }];
+
+  let builders = [OpBuilder<(ins "mlir::Type":$nullableToken,
+      "mlir::Value":$rcPtr,
+      CArg<"mlir::IntegerAttr", "{}">:$destructureTag,
+      CArg<"mlir::DenseI64ArrayAttr", "{}">:$boundMembers), [{
+    auto ffi = llvm::dyn_cast<reussir::FFIObjectType>(
+        llvm::cast<reussir::RcType>(rcPtr.getType()).getElementType());
+    build($_builder, $_state, nullableToken, rcPtr, destructureTag, boundMembers,
+          ffi ? $_builder.getArrayAttr({ffi.getCleanupHook()}) : mlir::ArrayAttr{});
+  }]>];
 
   let hasVerifier = 1;
 }

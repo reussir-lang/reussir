@@ -25,15 +25,15 @@ module {
         // single test
         %0 = func.call @__reussir_polyffi_Vec_f64_new() : () -> !Vecf64
         reussir.rc.inc ( %0 : !Vecf64 )
-        reussir.rc.dec ( %0 : !Vecf64 )
-        reussir.rc.dec ( %0 : !Vecf64 )
+        reussir.rc.dec ( %0 : !Vecf64 ) cleanup(@__reussir_polyffi_Vec_f64_drop)
+        reussir.rc.dec ( %0 : !Vecf64 ) cleanup(@__reussir_polyffi_Vec_f64_drop)
         // nested test
         %1 = func.call @__reussir_polyffi_Vec_NestedVec_new() : () -> !VecVec64
         %2 = func.call @__reussir_polyffi_Vec_f64_new() : () -> !Vecf64
         reussir.rc.inc ( %2 : !Vecf64 )
         %3 = func.call @__reussir_polyffi_Vec_NestedVec_push(%1, %2) : (!VecVec64, !Vecf64) -> (!VecVec64)
         %4 = func.call @__reussir_polyffi_Vec_NestedVec_push(%3, %2) : (!VecVec64, !Vecf64) -> (!VecVec64)
-        reussir.rc.dec ( %4 : !VecVec64 )
+        reussir.rc.dec ( %4 : !VecVec64 ) cleanup(@__reussir_polyffi_Vec_NestedVec_drop)
         // return
         %c0 = arith.constant 0 : i32
         func.return %c0 : i32

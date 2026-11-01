@@ -2508,8 +2508,8 @@ struct ReussirRcDecOpConversionPattern
           op, releaseFunc, mlir::ValueRange{adaptor.getRcPtr()});
       return mlir::success();
     }
-    if (auto eleTy = mlir::dyn_cast<FFIObjectType>(rcPtrTy.getElementType())) {
-      mlir::FlatSymbolRefAttr cleanupHook = eleTy.getCleanupHook();
+    if (auto ffi = mlir::dyn_cast<FFIObjectType>(rcPtrTy.getElementType())) {
+      mlir::FlatSymbolRefAttr cleanupHook = ffi.getCleanupHook();
       rewriter.replaceOpWithNewOp<mlir::func::CallOp>(
           op, cleanupHook, mlir::TypeRange{},
           mlir::ValueRange{adaptor.getRcPtr()});

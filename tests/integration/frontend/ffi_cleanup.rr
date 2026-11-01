@@ -1,0 +1,18 @@
+// UNSUPPORTED: darwin
+// RUN: %rrc %s --emit mlir -o %t.mlir
+// RUN: %reussir-opt %t.mlir --symbol-dce | %FileCheck %s
+// RUN: %reussir-opt %t.mlir --emit-bytecode -o %t.bc
+// RUN: %reussir-opt %t.bc --symbol-dce | %FileCheck %s
+
+#[ffi(rust = "::reussir_rt::collections::vec::Vec")]
+pub struct Vec<T>;
+
+pub struct Pair(Vec<u64>, Vec<f64>, Vec<u64>)
+pub enum Chain { Link(Pair, Chain), End }
+
+pub fn discard(chain: Chain) {}
+extern "C" trampoline "discard_chain" = discard;
+
+// CHECK: reussir.rc.dec{{.*}}cleanup(@{{[^, )]+}}, @{{[^, )]+}})
+// CHECK-DAG: func.func private @_RIC3VecyE_ffi_drop(
+// CHECK-DAG: func.func private @_RIC3VecdE_ffi_drop(

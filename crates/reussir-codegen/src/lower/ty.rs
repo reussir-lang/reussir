@@ -40,7 +40,7 @@ use reussir_backend::melior::ir::r#type::{IntegerType, RankedTensorType};
 use reussir_core::full::mir;
 use reussir_core::semi::const_eval::is_const_scalar_ty;
 use reussir_core::semi::ctxt::DefaultCap;
-use reussir_core::semi::ty::{DefId, Flexivity, FpTy, IntTy, Ty, TyKind};
+use reussir_core::semi::ty::{DefId, Flexivity, FpTy, IntTy, Ty, TyCtxt, TyKind};
 
 use super::{LoweringError, Result, err};
 
@@ -60,13 +60,19 @@ type RecordInstanceKey<'tcx> = (DefId, &'tcx [Ty<'tcx>]);
 /// identified type rather than recursing forever.
 pub(super) struct TypeCtx<'c, 'p, 'tcx> {
     context: &'c Context,
+    tcx: &'p TyCtxt<'tcx>,
     program: &'p mir::Program<'tcx>,
     records: FxHashMap<RecordInstanceKey<'tcx>, &'p mir::RecordInstance<'tcx>>,
     building: RefCell<FxHashSet<mir::Symbol>>,
+    cleanup_hooks: RefCell<FxHashMap<Ty<'tcx>, &'tcx [mir::Symbol]>>,
 }
 
 impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
-    pub(super) fn new(context: &'c Context, program: &'p mir::Program<'tcx>) -> Self {
+    pub(super) fn new(
+        context: &'c Context,
+        tcx: &'p TyCtxt<'tcx>,
+        program: &'p mir::Program<'tcx>,
+    ) -> Self {
         let records = program
             .records
             .iter()
@@ -77,9 +83,11 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
             .collect();
         TypeCtx {
             context,
+            tcx,
             program,
             records,
             building: RefCell::new(FxHashSet::default()),
+            cleanup_hooks: RefCell::new(FxHashMap::default()),
         }
     }
 
@@ -344,6 +352,45 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
             TyKind::Cell { .. } => self.cell_inner_of(ty),
             _ => self.mlir_ty(ty),
         }
+    }
+
+    pub(super) fn cleanup_hooks(&self, root: Ty<'tcx>) -> &'tcx [mir::Symbol] {
+        self.cleanup_hooks
+            .borrow_mut()
+            .entry(root)
+            .or_insert_with(|| {
+                let mut pending = vec![root];
+                let mut visited = FxHashSet::default();
+                let mut hooks = Vec::new();
+                while let Some(ty) = pending.pop() {
+                    if !visited.insert(ty) {
+                        continue;
+                    }
+                    if let Some(record) = self.record_of(ty) {
+                        match record.layout {
+                            mir::RecordLayout::Opaque { drop_hook, .. } => hooks.push(drop_hook),
+                            mir::RecordLayout::Compound(fields) => {
+                                pending.extend(fields.iter().map(|field| field.ty));
+                            }
+                            mir::RecordLayout::Variant(variants) => {
+                                pending.extend(variants.iter().flat_map(|variant| variant.fields));
+                            }
+                        }
+                    } else {
+                        match *ty.kind() {
+                            TyKind::Tuple(fields) => pending.extend(fields),
+                            TyKind::Nullable(inner) | TyKind::Arc(inner) => pending.push(inner),
+                            TyKind::Cell { elem, .. } | TyKind::Array { elem, .. } => {
+                                pending.push(elem)
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                hooks.sort_unstable_by_key(|hook| self.program.symbol(*hook));
+                hooks.dedup();
+                self.tcx.alloc_slice(&hooks)
+            })
     }
 
     /// Whether `ty` is an opaque `#[ffi]` record instance (a foreign rc box).
