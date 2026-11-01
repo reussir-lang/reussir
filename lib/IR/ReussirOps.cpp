@@ -4121,7 +4121,7 @@ mlir::LogicalResult emitArrayElementTraversal(
     mlir::Value view, mlir::OpBuilder &builder, mlir::Location loc,
     llvm::function_ref<mlir::LogicalResult(mlir::OpBuilder &, mlir::Location,
                                            mlir::Value)>
-        emitElement) {
+        emitElement, AtomicKind atomic) {
   auto viewType = llvm::cast<mlir::MemRefType>(view.getType());
   ArrayType arrayType = ArrayType::get(
       builder.getContext(), viewType.getShape(), viewType.getElementType());
@@ -4139,7 +4139,7 @@ mlir::LogicalResult emitArrayElementTraversal(
         if (currentType.getRank() == 1) {
           RefType elementRefType = RefType::get(currentBuilder.getContext(),
                                                 currentType.getElementType(),
-                                                Capability::unspecified);
+                                                Capability::unspecified, atomic);
           auto elementRef = ReussirArrayProjectOp::create(
               currentBuilder, loc, elementRefType, currentView, indexValue);
           if (mlir::failed(
@@ -4188,7 +4188,7 @@ mlir::LogicalResult emitArrayElementTraversal(
           if (currentType.getRank() == 1) {
             RefType elementRefType = RefType::get(bodyBuilder.getContext(),
                                                   currentType.getElementType(),
-                                                  Capability::unspecified);
+                                                  Capability::unspecified, atomic);
             currentView = ReussirArrayProjectOp::create(bodyBuilder, bodyLoc,
                                                         elementRefType,
                                                         currentView, index)
