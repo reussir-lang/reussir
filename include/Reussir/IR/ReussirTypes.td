@@ -144,6 +144,9 @@ def ReussirRecordType
   let extraClassDeclaration = [{
       using Base::verifyInvariants;
       reussir::RecordDropKind classifyRecordDrop() const;
+      bool hasObservableCleanup() const;
+      bool hasRecursiveCleanup() const;
+      bool hasWorklistCleanup() const;
       bool isCompound() const { return getKind() == RecordKind::compound; };
       bool isVariant() const { return getKind() == RecordKind::variant; };
       // `getFixed()` (declared from the `fixed` parameter, defined in
