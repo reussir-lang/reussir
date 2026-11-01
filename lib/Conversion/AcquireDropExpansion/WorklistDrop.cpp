@@ -148,6 +148,13 @@ public:
         mlir::arith::ConstantIndexOp::create(builder, loc, 0));
   }
 
+  void free(mlir::Value rc) {
+    auto task = function(rc.getType(), "free", [&](mlir::Value owner) {
+      emitBoxFree(owner, loc, module, builder);
+    });
+    schedule(task, rc, false);
+  }
+
   void release(mlir::Value rc, bool run) {
     auto type = llvm::cast<RcType>(rc.getType());
     auto task = function(type, "release", [&](mlir::Value arg) {
@@ -167,10 +174,7 @@ public:
                        Capability::unspecified, type.getAtomicKind());
       mlir::Value ref = ReussirRcBorrowOp::create(builder, loc, refType, arg);
       if (isForwardDrop(module)) {
-        auto free = function(type, "free", [&](mlir::Value owner) {
-          emitBoxFree(owner, loc, module, builder);
-        });
-        schedule(free, arg, false);
+        free(arg);
         drop(ref, false);
       } else {
         ReussirRefDropOp::create(builder, loc, ref, true, nullptr);
@@ -199,6 +203,45 @@ void emitWorklistRelease(mlir::Value rc, mlir::Location loc,
                    ->getParentOfType<mlir::ModuleOp>(),
                rewriter, symbols, loc)
       .release(rc, run);
+}
+
+mlir::LogicalResult
+prepareWorklistClosureDrops(mlir::ModuleOp module,
+                            mlir::PatternRewriter &rewriter,
+                            mlir::SymbolTableCollection &symbols) {
+  llvm::SmallVector<mlir::func::FuncOp> functions;
+  for (auto function : module.getOps<mlir::func::FuncOp>())
+    if (function->hasAttr("reussir.closure_drop") &&
+        !function->hasAttr(kWorklistGlueAttr))
+      functions.push_back(function);
+  for (auto function : functions) {
+    auto order = isForwardDrop(module) ? ".forward" : ".backward";
+    if (mlir::failed(symbols.getSymbolTable(module).rename(
+            function, (function.getSymName() + order).str())))
+      return function.emitError("cannot rename closure drop glue");
+    function->setAttr(kWorklistGlueAttr, rewriter.getUnitAttr());
+    if (!isForwardDrop(module))
+      continue;
+    llvm::SmallVector<ReussirRefDropOp> drops;
+    ReussirTokenFreeOp free;
+    function.walk([&](ReussirRefDropOp drop) { drops.push_back(drop); });
+    function.walk([&](ReussirTokenFreeOp op) { free = op; });
+    auto token = free.getToken().getDefiningOp<ReussirRcReinterpretOp>();
+    rewriter.setInsertionPoint(free);
+    WorklistGlue(module, rewriter, &symbols, free.getLoc())
+        .free(token.getRcPtr());
+    for (auto drop : llvm::reverse(drops)) {
+      auto branch = drop->getParentOfType<mlir::scf::IfOp>();
+      branch->moveBefore(free);
+      mlir::OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(drop);
+      emitWorklistDrop(drop.getRef(), drop.getLoc(), rewriter, &symbols);
+      rewriter.eraseOp(drop);
+    }
+    rewriter.eraseOp(free);
+    rewriter.eraseOp(token);
+  }
+  return mlir::success();
 }
 
 void emitWorklistArrayDrop(mlir::Value ref, mlir::Location loc,
