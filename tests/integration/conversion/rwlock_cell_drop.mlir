@@ -7,7 +7,7 @@
 module {
   // The write critical section passes its protected slot to a release helper.
   // A leading-slot projection would address the lock header.
-  // DROP-LABEL: func.func private @__reussir_locked_drop(
+  // DROP-LABEL: func.func private @__reussir_locked_drop.forward(
   // DROP: %[[INNER:.+]] = reussir.ref.load(
   // DROP: reussir.rc.dec(%[[INNER]] : !reussir.rc<i64 atomic>)
   // DROP-LABEL: func.func @rwlock_cell_drop
@@ -17,15 +17,17 @@ module {
   // DROP: sync.rwlock.write_critical_section %[[VIEW]]
   // DROP: ^bb0(%[[PAYLOAD:.+]]: memref<!reussir.rc<i64 atomic>>):
   // DROP: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]]
-  // DROP: call @__reussir_locked_drop(%[[SLOT]])
+  // DROP: call @__reussir_locked_drop.forward(%[[SLOT]])
   // DROP-NOT: reussir.ref.project
 
   // The helper decrements under the lock and synchronously finishes dead
   // payload cleanup; the cell owner is freed after unlock.
-  // LLVM-LABEL: define private void @__reussir_locked_drop(ptr
+  // LLVM-LABEL: define private void @__reussir_drop.release.forward(
+  // LLVM: call void @__reussir_deallocate(ptr %{{.+}}, i64 8, i64 16)
+  // LLVM-LABEL: define private void @__reussir_locked_drop.forward(ptr
   // LLVM: %[[INNER:.+]] = load ptr, ptr %0
   // LLVM: atomicrmw sub ptr %[[INNER]], i32 1
-  // LLVM: call void @__reussir_deallocate(ptr %[[INNER]], i64 8, i64 16)
+  // LLVM: call void @__reussir_drop_run(ptr %[[INNER]], ptr @__reussir_drop.release.forward)
   // LLVM-LABEL: define void @rwlock_cell_drop(ptr
   // LLVM: atomicrmw sub ptr %{{.+}}, i32 1
   // LLVM: %[[CELL:.+]] = getelementptr { i32, { { i32, i32 }, ptr } }, ptr %{{.+}}, i32 0, i32 1
@@ -33,7 +35,7 @@ module {
   // LLVM: %[[STATE:.+]] = getelementptr { i32, i32 }, ptr %[[HEADER]], i32 0, i32 0
   // LLVM: cmpxchg ptr %[[STATE]], i32 0, i32 1073741823
   // LLVM: %[[SLOT:.+]] = getelementptr { { i32, i32 }, ptr }, ptr %[[CELL]], i32 0, i32 1
-  // LLVM: call void @__reussir_locked_drop(ptr %[[SLOT]])
+  // LLVM: call void @__reussir_locked_drop.forward(ptr %[[SLOT]])
   // LLVM: atomicrmw sub ptr %{{.+}}, i32 1073741823 release
   // LLVM: call void @__reussir_deallocate(ptr %{{.+}}, i64 8, i64 24)
   func.func @rwlock_cell_drop(%cell: !rwlock_rc) {

@@ -10,31 +10,29 @@
 !snoc_ = !reussir.record<compound "Snoc" incomplete>
 !snoc = !reussir.record<compound "Snoc" { !snoc_, !leaf }>
 
-// CHECK-LABEL: func.func private @{{.*}}NodeE.tail_release
-// CHECK: reussir.rc.fetch
-// CHECK: scf.if
-// CHECK: %[[NEXT:.*]] = reussir.ref.load
-// CHECK: reussir.rc.reinterpret
-// CHECK-NEXT: reussir.token.free
-// CHECK: scf.if
-// CHECK: reussir.nullable.coerce
-// CHECK-NEXT: func.call @{{.*}}NodeE.tail_release{{.*}}reussir.musttail
-// CHECK: reussir.rc.set
+// CHECK-LABEL: func.func private @__reussir_drop.release.forward(
+// CHECK: reussir.rc.borrow
+// CHECK-NOT: reussir.token.free
+// CHECK: reussir.drop.defer @__reussir_drop.free.forward
+// CHECK-NEXT: call @__reussir_drop.walk.forward{{.*}}reussir.musttail
+// CHECK-NEXT: return
 module {
   // UNSPECIALIZED-LABEL: func.func @release
-  // UNSPECIALIZED: reussir.rc.dec
+  // UNSPECIALIZED: reussir.drop.run
   // CHECK-LABEL: func.func @release
-  // CHECK: call @{{.*}}NodeE.tail_release
+  // CHECK-NOT: reussir.drop.run
+  // CHECK: reussir.rc.fetch
+  // CHECK: scf.if
+  // CHECK: reussir.drop.run @__reussir_drop.release.forward
   // EARLY-NOT: tail_release
   func.func @release(%ref: !reussir.ref<!reussir.rc<!node shared>>) {
     reussir.ref.drop (%ref : !reussir.ref<!reussir.rc<!node shared>>)
     return
   }
   // CHECK-LABEL: func.func @other_drops
-  // CHECK-NOT: tail_release
-  // CHECK: reussir.rc.dec
-  // CHECK: reussir.rc.dec
-  // CHECK: reussir.rc.dec
+  // CHECK: reussir.drop.run
+  // CHECK: reussir.drop.run
+  // CHECK: reussir.drop.run
   func.func @other_drops(%a: !reussir.ref<!reussir.rc<!leaf shared>>,
                          %b: !reussir.ref<!reussir.rc<!tree shared>>,
                          %c: !reussir.ref<!reussir.rc<!snoc shared>>) {
@@ -44,9 +42,13 @@ module {
     return
   }
   // CHECK-LABEL: func.func @nullable_release
-  // CHECK: call @{{.*}}NodeE.tail_release
+  // CHECK-NOT: reussir.drop.run
+  // CHECK: reussir.nullable.dispatch
+  // CHECK: reussir.rc.fetch
+  // CHECK: scf.if
+  // CHECK: reussir.drop.run @__reussir_drop.release.forward
   // UNSPECIALIZED-LABEL: func.func @nullable_release
-  // UNSPECIALIZED: reussir.rc.dec
+  // UNSPECIALIZED: reussir.drop.run
   func.func @nullable_release(%ref: !reussir.ref<!reussir.nullable<!reussir.rc<!node shared>>>) {
     reussir.ref.drop (%ref : !reussir.ref<!reussir.nullable<!reussir.rc<!node shared>>>)
     return
