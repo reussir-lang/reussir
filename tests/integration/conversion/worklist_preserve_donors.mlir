@@ -11,8 +11,8 @@ module {
   // EARLY: reussir.rc.dec
   // EARLY: reussir.token.free
   // FINAL-LABEL: func.func @ordinary
-  // FINAL: reussir.rc.fetch
-  // FINAL: reussir.drop.run
+  // FINAL: call @{{.*}}NodeE.tail_release
+  // FINAL-NOT: reussir.drop.run
   // FINAL-NOT: reussir.rc.dec
   func.func @ordinary(%rc: !rc) {
     %token = reussir.rc.dec(%rc : !rc) : !token

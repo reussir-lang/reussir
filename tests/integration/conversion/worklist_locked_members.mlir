@@ -6,17 +6,23 @@
 !token = !reussir.nullable<!reussir.token<align: 8, size: 24>>
 
 module {
-  // A worker's protected payload stays in the current drain.
+  // Scalar payloads are freed directly inside the protected callback.
   // CHECK-LABEL: func.func private @__reussir_locked_drop.worklist.forward
   // CHECK: reussir.rc.fetch_sub
-  // CHECK: reussir.rc.defer
+  // CHECK: reussir.token.free
   // CHECK-NOT: reussir.drop.run
   // CHECK: return
   // An ordinary protected release completes before its caller continues.
   // CHECK-LABEL: func.func private @__reussir_locked_drop.forward
   // CHECK: reussir.rc.fetch_sub
-  // CHECK: reussir.drop.run
+  // CHECK: reussir.token.free
+  // CHECK-NOT: reussir.drop.run
   // CHECK: return
+  // CHECK-LABEL: func.func @public_payload
+  // CHECK: sync.mutex.critical_section
+  // CHECK: call @__reussir_locked_drop.forward
+  // CHECK-LABEL: func.func @owned_cell
+  // CHECK: reussir.drop.run @__reussir_drop.release.forward
   func.func @public_payload(%ref: !reussir.ref<!cell unspecified atomic>) {
     reussir.ref.drop(%ref : !reussir.ref<!cell unspecified atomic>)
     return

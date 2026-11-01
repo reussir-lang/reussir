@@ -19,16 +19,16 @@ module {
   // BACKWARD-LABEL: func.func @record
   // BACKWARD: reussir.ref.project{{.*}}[0]
   // BACKWARD: reussir.rc.fetch
-  // BACKWARD: reussir.rc.defer
+  // BACKWARD: reussir.token.free
   // BACKWARD: reussir.ref.project{{.*}}[1]
   // BACKWARD: reussir.rc.fetch
-  // BACKWARD: reussir.rc.defer
+  // BACKWARD: reussir.token.free
   func.func @record(%ref: !reussir.ref<!pair>) attributes {reussir.worklist_drop} {
     reussir.ref.drop(%ref : !reussir.ref<!pair>) inlined
     return
   }
 
-  // The indexed callback queues its successor before decrementing this element.
+  // Forward arrays enter an indexed callback; backward arrays use nested loops.
   // FORWARD-LABEL: func.func @array
   // FORWARD: reussir.drop.defer_indexed @__reussir_drop.array.forward
   // FORWARD-NOT: scf.for
@@ -37,7 +37,7 @@ module {
   // BACKWARD: scf.for
   // BACKWARD: scf.for
   // BACKWARD: reussir.rc.fetch_sub
-  // BACKWARD: reussir.rc.defer
+  // BACKWARD: reussir.token.free
   func.func @array(%ref: !reussir.ref<!array unspecified atomic>) attributes {reussir.worklist_drop} {
     reussir.ref.drop(%ref : !reussir.ref<!array unspecified atomic>)
     return
