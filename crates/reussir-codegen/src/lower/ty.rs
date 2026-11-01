@@ -40,7 +40,7 @@ use reussir_backend::melior::ir::r#type::{IntegerType, RankedTensorType};
 use reussir_core::full::mir;
 use reussir_core::semi::const_eval::is_const_scalar_ty;
 use reussir_core::semi::ctxt::DefaultCap;
-use reussir_core::semi::ty::{DefId, Flexivity, FpTy, IntTy, Ty, TyKind};
+use reussir_core::semi::ty::{DefId, Flexivity, FpTy, IntTy, Ty, TyCtxt, TyKind};
 
 use super::{LoweringError, Result, err};
 
@@ -60,14 +60,19 @@ type RecordInstanceKey<'tcx> = (DefId, &'tcx [Ty<'tcx>]);
 /// identified type rather than recursing forever.
 pub(super) struct TypeCtx<'c, 'p, 'tcx> {
     context: &'c Context,
+    tcx: &'p TyCtxt<'tcx>,
     program: &'p mir::Program<'tcx>,
     records: FxHashMap<RecordInstanceKey<'tcx>, &'p mir::RecordInstance<'tcx>>,
     building: RefCell<FxHashSet<mir::Symbol>>,
-    cleanup_hooks: RefCell<FxHashMap<Ty<'tcx>, Vec<mir::Symbol>>>,
+    cleanup_hooks: RefCell<FxHashMap<Ty<'tcx>, &'tcx [mir::Symbol]>>,
 }
 
 impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
-    pub(super) fn new(context: &'c Context, program: &'p mir::Program<'tcx>) -> Self {
+    pub(super) fn new(
+        context: &'c Context,
+        tcx: &'p TyCtxt<'tcx>,
+        program: &'p mir::Program<'tcx>,
+    ) -> Self {
         let records = program
             .records
             .iter()
@@ -78,6 +83,7 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
             .collect();
         TypeCtx {
             context,
+            tcx,
             program,
             records,
             building: RefCell::new(FxHashSet::default()),
@@ -348,9 +354,9 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
         }
     }
 
-    pub(super) fn cleanup_hooks(&self, root: Ty<'tcx>) -> Vec<mir::Symbol> {
-        if let Some(hooks) = self.cleanup_hooks.borrow().get(&root) {
-            return hooks.clone();
+    pub(super) fn cleanup_hooks(&self, root: Ty<'tcx>) -> &'tcx [mir::Symbol] {
+        if let Some(&hooks) = self.cleanup_hooks.borrow().get(&root) {
+            return hooks;
         }
         let mut pending = vec![root];
         let mut visited = FxHashSet::default();
@@ -380,7 +386,8 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
         }
         hooks.sort_unstable_by_key(|hook| self.program.symbol(*hook));
         hooks.dedup();
-        self.cleanup_hooks.borrow_mut().insert(root, hooks.clone());
+        let hooks = self.tcx.alloc_slice(&hooks);
+        self.cleanup_hooks.borrow_mut().insert(root, hooks);
         hooks
     }
 

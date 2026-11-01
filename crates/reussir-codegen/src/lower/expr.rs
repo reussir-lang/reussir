@@ -311,7 +311,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             context,
             tcx,
             program,
-            tys: TypeCtx::new(context, program),
+            tys: TypeCtx::new(context, tcx, program),
             records: RecordTable::from_records(&program.records),
             kernel_functions: program
                 .functions
@@ -3343,7 +3343,8 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let hooks = self.tys.cleanup_hooks(ty);
         if !hooks.is_empty() {
             let hooks: Vec<Attribute<'c>> = hooks
-                .into_iter()
+                .iter()
+                .copied()
                 .map(|hook| {
                     FlatSymbolRefAttribute::new(self.context, self.program.symbol(hook)).into()
                 })
