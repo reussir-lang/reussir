@@ -9,5 +9,6 @@ add_mlir_conversion_library(MLIRReussirRegionPatterns
 
   LINK_LIBS PUBLIC
   MLIRReussir
+  MLIRReussirRcDecrementExpansion
   MLIRTransforms
 )
