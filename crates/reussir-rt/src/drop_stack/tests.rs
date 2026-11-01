@@ -14,6 +14,15 @@ fn take_log() -> Vec<(char, usize)> {
 fn p(value: usize) -> *mut u8 {
     core::ptr::without_provenance_mut(value)
 }
+// The pending drops (top run, runs below, their other cells), and whether
+// both buffers are back to `KEEP` after a drain.
+fn pending() -> usize {
+    let s = state();
+    s.n.get() as usize + s.stack.len.get() + s.cells.len.get()
+}
+fn trimmed() -> bool {
+    state().stack.cap.get() <= KEEP && state().cells.cap.get() <= KEEP
+}
 const CHAIN: usize = if cfg!(miri) { 1_000 } else { 1_000_000 };
 const MANY: usize = if cfg!(miri) { 200 } else { 10_000 }; // Miri: smaller
 
@@ -87,19 +96,46 @@ fn deep_chains_and_many_pending_entries() {
         let log = take_log();
         assert_eq!(log.len(), CHAIN / 2);
         assert!(log.windows(2).all(|w| w[0].1 > w[1].1));
-        assert!(state().len.get() == 0 && state().cap.get() <= KEEP);
+        assert!(pending() == 0 && trimmed());
         unsafe { run(p(0), many) };
         assert_eq!(take_log(), (0..MANY).rev().map(|i| ('b', i)).collect::<Vec<_>>());
-        assert!(state().len.get() == 0 && state().cap.get() <= KEEP);
+        assert!(pending() == 0 && trimmed());
     };
     thread.spawn(check).unwrap().join().unwrap();
+}
+
+// Runs: drops deferred one after the other with one release function share
+// one entry, each cell but the run's head one pointer in the cells vector.
+thread_local! {
+    static RUNS: Cell<(usize, u32, usize)> = const { Cell::new((0, 0, 0)) };
+}
+unsafe extern "C" fn runs_walk(_: *mut u8) {
+    // One pointer, reified once: Rust (and Miri) may give a function item a
+    // different address at each reification.
+    let rb: Release = b;
+    (0..5).for_each(|i| unsafe { defer(p(i), rb) });
+    unsafe { defer(p(5), a) };
+    (6..9).for_each(|i| unsafe { defer(p(i), rb) });
+    let s = state();
+    RUNS.with(|r| r.set((s.stack.len.get(), s.n.get(), s.cells.len.get())));
+}
+
+#[test]
+fn runs_of_one_release_share_an_entry() {
+    unsafe { run(p(0), runs_walk) };
+    // Below: the run of b(0..5) and the run of a(5); on top: b(6..9).
+    assert_eq!(RUNS.with(|r| r.get()), (2, 3, 4 + 2));
+    let order = [8, 7, 6].map(|i| ('b', i)).into_iter().chain([('a', 5), ('b', 51), ('b', 50)]);
+    let order: Vec<_> = order.chain((0..5).rev().map(|i| ('b', i))).collect();
+    assert_eq!(take_log(), order);
+    assert!(pending() == 0 && trimmed());
 }
 
 #[test]
 fn defer_outside_a_drain_runs_at_once() {
     unsafe { defer(p(4), a) };
     assert_eq!(take_log(), [('a', 4), ('b', 41), ('b', 40)]);
-    assert!(!releasing() && state().len.get() == 0);
+    assert!(!releasing() && pending() == 0);
 }
 
 // A drop in a thread-local destructor after the guard's: the drain frees the
@@ -128,7 +164,7 @@ thread_local! {
     static ENDS: RefCell<Vec<(bool, usize)>> = const { RefCell::new(Vec::new()) };
 }
 unsafe extern "C" fn end() {
-    ENDS.with(|e| e.borrow_mut().push((releasing(), state().len.get())));
+    ENDS.with(|e| e.borrow_mut().push((releasing(), pending())));
     log('e', 0);
 }
 unsafe extern "C" fn asks(cell: *mut u8) {
