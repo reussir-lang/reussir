@@ -1,0 +1,46 @@
+// RUN: %rrc %s --target-triple aarch64-pc-windows-msvc --drop-order forward -Onone --emit llvm-ir -o %t.aarch64-pc-windows-msvc.forward.ll
+// RUN: %FileCheck %s --check-prefix=FORWARD < %t.aarch64-pc-windows-msvc.forward.ll
+// RUN: %llc %t.aarch64-pc-windows-msvc.forward.ll -filetype=obj -o %t.aarch64-pc-windows-msvc.forward.o
+// RUN: %rrc %s --target-triple aarch64-pc-windows-msvc --drop-order backward -Onone --emit llvm-ir -o %t.aarch64-pc-windows-msvc.backward.ll
+// RUN: %FileCheck %s --check-prefix=BACKWARD < %t.aarch64-pc-windows-msvc.backward.ll
+// RUN: %llc %t.aarch64-pc-windows-msvc.backward.ll -filetype=obj -o %t.aarch64-pc-windows-msvc.backward.o
+// RUN: %rrc %s --target-triple x86_64-pc-windows-msvc --drop-order forward -Onone --emit llvm-ir -o %t.x86_64-pc-windows-msvc.forward.ll
+// RUN: %FileCheck %s --check-prefix=FORWARD < %t.x86_64-pc-windows-msvc.forward.ll
+// RUN: %llc %t.x86_64-pc-windows-msvc.forward.ll -filetype=obj -o %t.x86_64-pc-windows-msvc.forward.o
+// RUN: %rrc %s --target-triple x86_64-pc-windows-msvc --drop-order backward -Onone --emit llvm-ir -o %t.x86_64-pc-windows-msvc.backward.ll
+// RUN: %FileCheck %s --check-prefix=BACKWARD < %t.x86_64-pc-windows-msvc.backward.ll
+// RUN: %llc %t.x86_64-pc-windows-msvc.backward.ll -filetype=obj -o %t.x86_64-pc-windows-msvc.backward.o
+// RUN: %rrc %s --target-triple aarch64-apple-darwin --drop-order forward -Onone --emit llvm-ir -o %t.aarch64-apple-darwin.forward.ll
+// RUN: %FileCheck %s --check-prefix=FORWARD < %t.aarch64-apple-darwin.forward.ll
+// RUN: %llc %t.aarch64-apple-darwin.forward.ll -filetype=obj -o %t.aarch64-apple-darwin.forward.o
+// RUN: %rrc %s --target-triple aarch64-apple-darwin --drop-order backward -Onone --emit llvm-ir -o %t.aarch64-apple-darwin.backward.ll
+// RUN: %FileCheck %s --check-prefix=BACKWARD < %t.aarch64-apple-darwin.backward.ll
+// RUN: %llc %t.aarch64-apple-darwin.backward.ll -filetype=obj -o %t.aarch64-apple-darwin.backward.o
+// RUN: %rrc %s --target-triple i686-unknown-linux-gnu --drop-order forward -Onone --emit llvm-ir -o %t.i686-unknown-linux-gnu.forward.ll
+// RUN: %FileCheck %s --check-prefix=FORWARD < %t.i686-unknown-linux-gnu.forward.ll
+// RUN: %llc %t.i686-unknown-linux-gnu.forward.ll -filetype=obj -o %t.i686-unknown-linux-gnu.forward.o
+// RUN: %rrc %s --target-triple i686-unknown-linux-gnu --drop-order backward -Onone --emit llvm-ir -o %t.i686-unknown-linux-gnu.backward.ll
+// RUN: %FileCheck %s --check-prefix=BACKWARD < %t.i686-unknown-linux-gnu.backward.ll
+// RUN: %llc %t.i686-unknown-linux-gnu.backward.ll -filetype=obj -o %t.i686-unknown-linux-gnu.backward.o
+// RUN: %rrc %s --target-triple wasm32-wasip1 --drop-order forward -Onone --emit llvm-ir -o %t.wasm32-wasip1.forward.ll
+// RUN: %FileCheck %s --check-prefix=FORWARD < %t.wasm32-wasip1.forward.ll
+// RUN: %llc %t.wasm32-wasip1.forward.ll -filetype=obj -o %t.wasm32-wasip1.forward.o
+// RUN: %rrc %s --target-triple wasm32-wasip1 --drop-order backward -Onone --emit llvm-ir -o %t.wasm32-wasip1.backward.ll
+// RUN: %FileCheck %s --check-prefix=BACKWARD < %t.wasm32-wasip1.backward.ll
+// RUN: %llc %t.wasm32-wasip1.backward.ll -filetype=obj -o %t.wasm32-wasip1.backward.o
+// RUN: %rrc %s --target-triple riscv64-unknown-linux-gnu --drop-order forward -Onone --emit llvm-ir -o %t.riscv64-unknown-linux-gnu.forward.ll
+// RUN: %FileCheck %s --check-prefix=FORWARD < %t.riscv64-unknown-linux-gnu.forward.ll
+// RUN: %llc %t.riscv64-unknown-linux-gnu.forward.ll -filetype=obj -o %t.riscv64-unknown-linux-gnu.forward.o
+// RUN: %rrc %s --target-triple riscv64-unknown-linux-gnu --drop-order backward -Onone --emit llvm-ir -o %t.riscv64-unknown-linux-gnu.backward.ll
+// RUN: %FileCheck %s --check-prefix=BACKWARD < %t.riscv64-unknown-linux-gnu.backward.ll
+// RUN: %llc %t.riscv64-unknown-linux-gnu.backward.ll -filetype=obj -o %t.riscv64-unknown-linux-gnu.backward.o
+
+enum Tree { Leaf, Branch(Tree, Tree) }
+fn consume(tree: Tree) -> u64 { match tree { Tree::Leaf => 0, _ => 1 } }
+extern "C" trampoline "consume" = consume;
+
+// FORWARD: define private void @__reussir_drop.release.forward(ptr
+// FORWARD: call void @__reussir_drop_run(ptr
+// BACKWARD: define private void @__reussir_drop.release.backward(ptr
+// BACKWARD: call void @__reussir_drop_defer_wide(ptr
+// BACKWARD: call void @__reussir_drop_run(ptr
