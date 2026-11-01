@@ -90,7 +90,6 @@ module;
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/LLVMPass/AllocationSimplication.h"
 #include "Reussir/LLVMPass/LinearRecurrence.h"
-#include "Reussir/LLVMPass/RetconDrop.h"
 #include "Reussir/LLVMPass/RuntimeFunctionAttributor.h"
 #include "Reussir/LLVMPass/SizeAttributes.h"
 #include "Reussir/Transformation/Passes.h"
@@ -193,7 +192,6 @@ void createLoweringPipeline(mlir::PassManager &pm,
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirInferVariantTagPass());
   reussir::ReussirAcquireDropExpansionPassOptions earlyDrops;
-  earlyDrops.retconDrops = opt != REUSSIR_OPT_TPDE;
   pm.addPass(reussir::createReussirAcquireDropExpansionPass(earlyDrops));
   pm.addPass(reussir::createReussirConvertToSTDPass());
   pm.addNestedPass<mlir::func::FuncOp>(
@@ -203,7 +201,6 @@ void createLoweringPipeline(mlir::PassManager &pm,
   options.expandDecrement = true;
   options.outlineRecord = true;
   options.tailRecursiveDrops = opt != REUSSIR_OPT_TPDE;
-  options.retconDrops = opt != REUSSIR_OPT_TPDE;
   pm.addPass(reussir::createReussirAcquireDropExpansionPass(options));
 
   {
@@ -466,7 +463,6 @@ translateToModule(llvm::StringRef texture, llvm::LLVMContext &llvmCtx,
     return nullptr;
   }
 
-  reussir::llvmpass::lowerRetconDrops(*mainModule);
 
   // link the compiled modules to the main module
   if (llvm::Linker::linkModules(*mainModule, std::move(compiledModules))) {

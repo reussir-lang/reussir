@@ -40,11 +40,6 @@ void populateTargetArrayLoweringPatterns(mlir::LLVMTypeConverter &converter,
 void populatePjrtLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                  mlir::RewritePatternSet &patterns);
 
-void populateRetconDropLoweringPatterns(mlir::LLVMTypeConverter &converter,
-                                       mlir::RewritePatternSet &patterns);
-mlir::LogicalResult lowerRetconDropFunctions(mlir::ModuleOp module,
-                                           const mlir::LLVMTypeConverter &converter);
-
 void registerReussirBasicOpsLoweringInterface(mlir::DialectRegistry &registry);
 
 void lowerFusedDBGAttributeInLocations(mlir::ModuleOp moduleOp);

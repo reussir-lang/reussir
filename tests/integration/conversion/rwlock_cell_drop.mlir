@@ -5,11 +5,11 @@
 !rwlock_rc = !reussir.rc<!reussir.cell<!inner rwlock> atomic>
 
 module {
-  // Dropping the last reference to an rwlock cell releases the managed
-  // payload through the same door every mutation uses: a write critical
-  // section over the rwlock view, whose body loads the protected RC and
-  // decrements it — never a leading-slot projection, which would address the
-  // lock header.
+  // The write critical section passes its protected slot to a release helper.
+  // A leading-slot projection would address the lock header.
+  // DROP-LABEL: func.func private @__reussir_locked_drop(
+  // DROP: %[[INNER:.+]] = reussir.ref.load(
+  // DROP: reussir.rc.dec(%[[INNER]] : !reussir.rc<i64 atomic>)
   // DROP-LABEL: func.func @rwlock_cell_drop
   // DROP: reussir.rc.fetch_sub
   // DROP-NOT: reussir.ref.project
@@ -17,16 +17,15 @@ module {
   // DROP: sync.rwlock.write_critical_section %[[VIEW]]
   // DROP: ^bb0(%[[PAYLOAD:.+]]: memref<!reussir.rc<i64 atomic>>):
   // DROP: %[[SLOT:.+]] = reussir.ref.from_memref(%[[PAYLOAD]]
-  // DROP: %[[INNER:.+]] = reussir.ref.load(%[[SLOT]]
-  // DROP: reussir.rc.dec(%[[INNER]] : !reussir.rc<i64 atomic>)
+  // DROP: call @__reussir_locked_drop(%[[SLOT]])
   // DROP-NOT: reussir.ref.project
 
-  // Fully lowered: the box count drops first; on the last reference the
-  // state word of the two-word raw rwlock header is write-acquired (the
-  // whole writer mask compare-exchanged in), the payload pointer is loaded
-  // from rwlock field 1 — past the lock header — and its count is
-  // decremented under the lock. Both frees happen after the unlock, and the
-  // cell box dies through the rwlock-aware 24-byte layout.
+  // The helper decrements under the lock and synchronously finishes dead
+  // payload cleanup; the cell owner is freed after unlock.
+  // LLVM-LABEL: define private void @__reussir_locked_drop(ptr
+  // LLVM: %[[INNER:.+]] = load ptr, ptr %0
+  // LLVM: atomicrmw sub ptr %[[INNER]], i32 1
+  // LLVM: call void @__reussir_deallocate(ptr %[[INNER]], i64 8, i64 16)
   // LLVM-LABEL: define void @rwlock_cell_drop(ptr
   // LLVM: atomicrmw sub ptr %{{.+}}, i32 1
   // LLVM: %[[CELL:.+]] = getelementptr { i32, { { i32, i32 }, ptr } }, ptr %{{.+}}, i32 0, i32 1
@@ -34,11 +33,9 @@ module {
   // LLVM: %[[STATE:.+]] = getelementptr { i32, i32 }, ptr %[[HEADER]], i32 0, i32 0
   // LLVM: cmpxchg ptr %[[STATE]], i32 0, i32 1073741823
   // LLVM: %[[SLOT:.+]] = getelementptr { { i32, i32 }, ptr }, ptr %[[CELL]], i32 0, i32 1
-  // LLVM: %[[INNER:.+]] = load ptr, ptr %[[SLOT]]
-  // LLVM: atomicrmw sub ptr %[[INNER]], i32 1
+  // LLVM: call void @__reussir_locked_drop(ptr %[[SLOT]])
   // LLVM: atomicrmw sub ptr %{{.+}}, i32 1073741823 release
-  // LLVM-DAG: call void @__reussir_deallocate(ptr %{{.+}}, i64 8, i64 24)
-  // LLVM-DAG: call void @__reussir_deallocate(ptr %{{.+}}, i64 8, i64 16)
+  // LLVM: call void @__reussir_deallocate(ptr %{{.+}}, i64 8, i64 24)
   func.func @rwlock_cell_drop(%cell: !rwlock_rc) {
     %t = reussir.rc.dec (%cell : !rwlock_rc) : !reussir.nullable<!reussir.token<align: 8, size: 24>>
     reussir.token.free (%t : !reussir.nullable<!reussir.token<align: 8, size: 24>>)

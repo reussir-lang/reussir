@@ -1,2 +1,0 @@
-add_library(ReussirLLVMRetconDropPass STATIC RetconDrop.cpp)
-set_target_properties(ReussirLLVMRetconDropPass PROPERTIES POSITION_INDEPENDENT_CODE ON)

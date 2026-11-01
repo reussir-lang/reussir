@@ -178,8 +178,6 @@ def ReussirAcquireDropExpansionPass : Pass<"reussir-acquire-drop-expansion"> {
               "whether to outline record destruction and acquisition">,
        Option<"tailRecursiveDrops", "tail-recursive-drops", "bool",
               /*default=*/"true", "whether to specialize tail-recursive drops">,
-       Option<"retconDrops", "retcon-drops", "bool",
-              /*default=*/"false", "whether to generate returned-continuation cleanup">,
        Option<"expandDecrement", "expand-decrement", "bool",
               /*default=*/"false",
               "whether to expand rc decrement operations (using the "

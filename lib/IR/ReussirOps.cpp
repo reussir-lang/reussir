@@ -4235,25 +4235,10 @@ void inheritSanitizerPassthrough(mlir::ModuleOp moduleOp,
 //===----------------------------------------------------------------------===//
 // createDtorIfNotExists
 //===----------------------------------------------------------------------===//
-mlir::LogicalResult
-ReussirDtorSuspendOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
-  auto parent = (*this)->getParentOfType<mlir::FunctionOpInterface>();
-  if (!parent || !parent->hasAttr("reussir.retcon_drop"))
-    return emitOpError("requires a retcon destructor parent");
-  auto callee = symbols.lookupNearestSymbolFrom<mlir::FunctionOpInterface>(
-      *this, getCalleeAttr());
-  if (!callee || !callee->hasAttr("reussir.retcon_drop"))
-    return emitOpError("requires a retcon destructor callee");
-  if (!llvm::equal(callee.getArgumentTypes(),
-                   mlir::TypeRange{getObject().getType()}))
-    return emitOpError("object type must match the destructor argument");
-  return mlir::success();
-}
-
 mlir::func::FuncOp
 createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
                       mlir::OpBuilder &builder, AtomicKind kind,
-                      mlir::SymbolTableCollection *symbols, bool retcon) {
+                      mlir::SymbolTableCollection *symbols) {
   std::optional<mlir::SymbolTable> ownTable;
   mlir::SymbolTable &symTable = symbols ? symbols->getSymbolTable(moduleOp)
                                       : ownTable.emplace(moduleOp);
@@ -4261,8 +4246,6 @@ createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
   if (!dtorName)
     llvm::report_fatal_error("only named record types have destructors");
   std::string funcName = dtorName.getValue().str();
-  if (retcon)
-    funcName += ".retcon";
   if (auto funcOp = symTable.lookup<mlir::func::FuncOp>(funcName))
     return funcOp;
   mlir::OpBuilder::InsertionGuard guard(builder);
@@ -4281,11 +4264,6 @@ createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
   dtor->setAttr("llvm.passthrough",
                 builder.getStrArrayAttr(
                     {"mustprogress", "nounwind", "willreturn", "nocallback"}));
-  if (retcon) {
-    dtor->setAttr("reussir.retcon_drop", builder.getUnitAttr());
-    dtor->setAttr("llvm.passthrough",
-                  builder.getStrArrayAttr({"nounwind"}));
-  }
   // Drop glue is where a stale box's memory is actually touched; it must be
   // instrumented like the code it was outlined from.
   inheritSanitizerPassthrough(moduleOp, dtor);
