@@ -400,6 +400,12 @@ pub fn run_lowering_pipeline(
             if options.opt == OptLevel::Aggressive => {
                 func: sys::reussirCreateClosureBetaReductionPass();
             }
+            // Drop the private functions nothing calls any more: the ones
+            // the inliner inlined everywhere, and originals whose calls all
+            // went to a specialized clone (UCRA's `.unique`). Everything after
+            // this point would otherwise process them, and only LLVM would
+            // delete them. `pub` functions are public symbols and stay.
+            module: sys::reussirCreateSymbolDCEPass();
 
         }
 
@@ -454,10 +460,6 @@ pub fn run_lowering_pipeline(
             options.opt != OptLevel::Tpde,
             options.opt != OptLevel::Tpde,
         );
-        // Record drops must expose their FFI cleanup uses before symbol DCE.
-        if options.opt.runs_optimization() => {
-            module: sys::reussirCreateSymbolDCEPass();
-        }
         func:   sys::reussirCreateTokenReusePass(
             options.reuse_token_across_call,
             options.emit_token_reuse_remarks,
@@ -667,7 +669,7 @@ mod tests {
               func.func private @make() -> !wrapper
               func.func @use() {
                 %x = func.call @make() : () -> !wrapper
-                reussir.rc.dec(%x : !wrapper)
+                reussir.rc.dec(%x : !wrapper) cleanup(@drop)
                 return
               }
             }

@@ -17,3 +17,17 @@ module {
     return
   }
 }
+
+// CHECK: func.func private @first(
+// CHECK: func.func private @second(
+// CHECK-LABEL: func.func @record_drop(
+// CHECK: reussir.rc.dec{{.*}}cleanup(@first, @second)
+module {
+  func.func private @first(!reussir.rc<!reussir.ffi_object<"A", @first>>)
+  func.func private @second(!reussir.rc<!reussir.ffi_object<"B", @second>>)
+  func.func @record_drop(%raw: i64) {
+    %x = builtin.unrealized_conversion_cast %raw : i64 to !reussir.rc<!reussir.record<compound "Pair" {!reussir.rc<!reussir.ffi_object<"A", @first>>, !reussir.rc<!reussir.ffi_object<"B", @second>>}>>
+    reussir.rc.dec(%x : !reussir.rc<!reussir.record<compound "Pair" {!reussir.rc<!reussir.ffi_object<"A", @first>>, !reussir.rc<!reussir.ffi_object<"B", @second>>}>>) cleanup(@first, @second)
+    return
+  }
+}

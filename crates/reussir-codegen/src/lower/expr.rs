@@ -3340,13 +3340,15 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     ) -> Operation<'c> {
         let mut builder =
             dialect::ReussirRcDecOperation::builder(self.context, location).rc_ptr(value);
-        if let Some(record) = self.tys.record_of(ty)
-            && let mir::RecordLayout::Opaque { drop_hook, .. } = record.layout
-        {
-            builder = builder.cleanup(FlatSymbolRefAttribute::new(
-                self.context,
-                self.program.symbol(drop_hook),
-            ));
+        let hooks = self.tys.cleanup_hooks(ty);
+        if !hooks.is_empty() {
+            let hooks: Vec<Attribute<'c>> = hooks
+                .into_iter()
+                .map(|hook| {
+                    FlatSymbolRefAttribute::new(self.context, self.program.symbol(hook)).into()
+                })
+                .collect();
+            builder = builder.cleanup(ArrayAttribute::new(self.context, &hooks));
         }
         builder.build().into()
     }
