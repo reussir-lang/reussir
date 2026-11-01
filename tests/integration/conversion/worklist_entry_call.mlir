@@ -14,7 +14,7 @@
 // CHECK: return
 // CHECK-LABEL: func.func @drop_root
 // CHECK-NOT: reussir.drop.run
-// CHECK: func.call @__reussir_drop.entry.[[ORDER]]
+// CHECK: call @__reussir_drop.entry.[[ORDER]]
 // CHECK-NEXT: return
 module {
   func.func @drop_root(%ref: !reussir.ref<!node>) {
