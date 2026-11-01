@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --split-input-file --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true' --verify-each | %FileCheck %s
+// RUN: %reussir-opt %s --split-input-file --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true drop-order=forward' --verify-each | %FileCheck %s
 !tree_ = !reussir.record<compound "BranchChild" incomplete>
 !tree = !reussir.record<compound "BranchChild" { !tree_, !tree_ }>
 !list_ = !reussir.record<compound "TailWithBranch" incomplete>
