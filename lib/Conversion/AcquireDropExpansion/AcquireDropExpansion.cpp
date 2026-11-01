@@ -168,6 +168,13 @@ private:
     // Device handle release is lowered with basic ops.
     if (arrayType.getTarget())
       return mlir::failure();
+    if (outlineRecord && isInsideWorklistGlue(op) &&
+        isForwardDrop(op->getParentOfType<mlir::ModuleOp>())) {
+      emitWorklistArrayDrop(op.getRef(), op.getLoc(), rewriter, symbols,
+                            tailRecursiveDrops);
+      rewriter.eraseOp(op);
+      return mlir::success();
+    }
     mlir::Value view = ReussirArrayViewOp::create(
                            rewriter, op.getLoc(),
                            getArrayViewMemRefType(arrayType), op.getRef())
