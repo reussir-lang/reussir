@@ -1,5 +1,5 @@
-// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true' --reussir-token-reuse --verify-each | %FileCheck %s --implicit-check-not=' cf.'
-// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true tail-recursive-drops=false' --reussir-token-reuse --verify-each | %FileCheck %s --check-prefix=UNSPECIALIZED --implicit-check-not=tail_release --implicit-check-not=reussir.musttail
+// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='drop-order=forward outline-record=true expand-decrement=true' --reussir-token-reuse --verify-each | %FileCheck %s --implicit-check-not=' cf.'
+// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='drop-order=forward outline-record=true expand-decrement=true tail-recursive-drops=false' --reussir-token-reuse --verify-each | %FileCheck %s --check-prefix=UNSPECIALIZED --implicit-check-not=tail_release --implicit-check-not=reussir.musttail
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion | %FileCheck %s --check-prefix=EARLY
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true drop-order=backward' --reussir-token-reuse --verify-each | %FileCheck %s --check-prefix=BACKWARD
 

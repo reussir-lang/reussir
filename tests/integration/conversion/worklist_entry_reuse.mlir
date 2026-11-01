@@ -16,7 +16,7 @@
 // ACROSS: call @_RNvC{{[0-9]+}}REUSSIR_DROP_entry_forward{{[A-Za-z0-9_]+}}
 // ACROSS-NOT: reussir.token.alloc
 // ACROSS: reussir.token.ensure
-module {
+module attributes {reussir.drop_order = "forward"} {
   func.func @reuse(%old: !rc, %ref: !reussir.ref<!node>, %value: i64) -> !rc {
     reussir.rc.dec(%old : !rc)
     reussir.ref.drop(%ref : !reussir.ref<!node>)

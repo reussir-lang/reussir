@@ -4,7 +4,7 @@
 !inner = !reussir.rc<i64 atomic>
 !flatlock_rc = !reussir.rc<!reussir.cell<!inner flatlock> atomic>
 
-module {
+module attributes {reussir.drop_order = "forward"} {
   // The combining-lock body passes its protected slot to a release helper.
   // A leading-slot projection would address the lock header.
   // DROP-LABEL: func.func private @__reussir_locked_drop.forward(

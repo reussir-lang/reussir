@@ -39,8 +39,8 @@ enum Tree { Leaf, Branch(Tree, Tree) }
 fn consume(tree: Tree) -> u64 { match tree { Tree::Leaf => 0, _ => 1 } }
 extern "C" trampoline "consume" = consume;
 
-// FORWARD: define private void @__reussir_drop.release.forward(ptr
+// FORWARD: define linkonce_odr void @_RNvC{{[0-9]+}}REUSSIR_DROP_release_forward{{[A-Za-z0-9_]+}}(ptr
 // FORWARD: call void @__reussir_drop_run(ptr
-// BACKWARD: define private void @__reussir_drop.release.backward(ptr
+// BACKWARD: define linkonce_odr void @_RNvC{{[0-9]+}}REUSSIR_DROP_release_backward{{[A-Za-z0-9_]+}}(ptr
 // BACKWARD: call void @__reussir_drop_defer_wide(ptr
 // BACKWARD: call void @__reussir_drop_run(ptr
