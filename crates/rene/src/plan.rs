@@ -151,6 +151,14 @@ pub(crate) fn node_commands(
     } else {
         let rri = deps_dir.join(format!("{name}.rri"));
         let mut interface = package_args(node, &rri, "rri", None);
+        interface.extend([
+            "--drop-order".to_owned(),
+            opts.profile
+                .drop_order
+                .unwrap_or_default()
+                .as_str()
+                .to_owned(),
+        ]);
         interface.extend(externs.iter().cloned());
         let archive = archive_path(&deps_dir, name, opts.target);
         let mut staticlib = package_args(node, &archive, "staticlib", None);
