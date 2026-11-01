@@ -574,6 +574,9 @@ struct AcquireDropExpansionPass
           AcquireDropExpansionPass> {
   using Base::Base;
   void runOnOperation() override {
+    auto module = llvm::cast<mlir::ModuleOp>(getOperation());
+    if (mlir::failed(resolveDropOrder(module, dropOrder)))
+      return signalPassFailure();
     mlir::ConversionTarget target(getContext());
     // Share tables for this run only; the glue helpers register each new
     // symbol, and this pass does not erase or rename functions.

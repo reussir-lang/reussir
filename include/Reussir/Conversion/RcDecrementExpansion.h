@@ -24,7 +24,8 @@
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/DialectConversion.h>
 
-#include "Reussir/IR/ReussirTypes.h"
+#include "Reussir/Conversion/Passes.h"
+#include "Reussir/IR/ReussirOps.h"
 
 namespace reussir {
 
@@ -32,8 +33,7 @@ namespace reussir {
 constexpr llvm::StringLiteral kExpandedDecrementAttr =
     "reussir.expanded_decrement";
 
-#define GEN_PASS_DECL_REUSSIRRCDECREMENTEXPANSIONPASS
-#include "Reussir/Conversion/Passes.h.inc"
+bool canScheduleDecrement(ReussirRcDecOp op);
 
 void populateRcDecrementExpansionConversionPatterns(
     mlir::RewritePatternSet &patterns);

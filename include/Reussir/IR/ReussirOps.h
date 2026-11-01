@@ -151,6 +151,10 @@ mlir::func::FuncOp createDtorIfNotExists(
     AtomicKind kind = AtomicKind::normal,
     mlir::SymbolTableCollection *symbols = nullptr);
 
+// Preserve a saved drop order, reject conflicting options, or default to forward.
+mlir::LogicalResult resolveDropOrder(mlir::ModuleOp module,
+                                    llvm::StringRef configured);
+
 //===----------------------------------------------------------------------===//
 // emitOwnershipAcquisitionFuncIfNotExists
 //===----------------------------------------------------------------------===//

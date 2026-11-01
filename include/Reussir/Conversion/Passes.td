@@ -129,6 +129,8 @@ def ReussirConvertToSTDPass
 // AttachRegionVtables
 //===----------------------------------------------------------------------===//
 def ReussirRegionPatternsPass : ReussirLoweringPass<"region-patterns"> {
+  let options = [Option<"dropOrder", "drop-order", "std::string", /*default=*/"\"\"",
+                        "member destruction order">];
   let summary = "attach vtables to regions";
   let description = [{
     `reussir-lowering-region-patterns` will do the following converions:
@@ -176,6 +178,8 @@ def ReussirAcquireDropExpansionPass : Pass<"reussir-acquire-drop-expansion"> {
   let options =
       [Option<"outlineRecord", "outline-record", "bool", /*default=*/"false",
               "whether to outline record destruction and acquisition">,
+       Option<"dropOrder", "drop-order", "std::string",
+              /*default=*/"\"\"", "member destruction order">,
        Option<"tailRecursiveDrops", "tail-recursive-drops", "bool",
               /*default=*/"true", "whether to specialize tail-recursive drops">,
        Option<"expandDecrement", "expand-decrement", "bool",
@@ -199,6 +203,9 @@ def ReussirRcDecrementExpansionPass : Pass<"reussir-rc-decrement-expansion"> {
     early stages of the pipeline.
   }];
 
+  let options = [
+      Option<"dropOrder", "drop-order", "std::string", /*default=*/"\"\"",
+             "member destruction order">];
   let dependentDialects = ["::reussir::ReussirDialect",
                            "::mlir::arith::ArithDialect",
                            "::mlir::scf::SCFDialect"];

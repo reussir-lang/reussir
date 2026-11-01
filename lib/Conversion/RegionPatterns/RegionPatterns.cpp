@@ -23,6 +23,7 @@
 #include <mlir/Transforms/DialectConversion.h>
 #include <mlir/Transforms/GreedyPatternRewriteDriver.h>
 
+#include "Reussir/Conversion/RcDecrementExpansion.h"
 #include "Reussir/Conversion/RegionPatterns.h"
 #include "Reussir/IR/ReussirDialect.h.inc"
 #include "Reussir/IR/ReussirOps.h"
@@ -141,6 +142,15 @@ struct RegionPatternsPass
     : public impl::ReussirRegionPatternsPassBase<RegionPatternsPass> {
   using Base::Base;
   void runOnOperation() override {
+    auto module = mlir::dyn_cast<mlir::ModuleOp>(getOperation());
+    if (!module)
+      module = getOperation()->getParentOfType<mlir::ModuleOp>();
+    if (!module) {
+      getOperation()->emitError("region ownership lowering requires a module");
+      return signalPassFailure();
+    }
+    if (mlir::failed(resolveDropOrder(module, dropOrder)))
+      return signalPassFailure();
     mlir::RewritePatternSet patterns(&getContext());
     populateRegionPatternsConversionPatterns(patterns);
     if (mlir::failed(
