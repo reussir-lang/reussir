@@ -25,6 +25,8 @@
 #include <llvm/ADT/StringSwitch.h>
 #include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Bitcode/BitcodeReader.h>
+#include <llvm/IR/Comdat.h>
+#include <llvm/IR/GlobalObject.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Linker/Linker.h>
 #include <llvm/Support/ErrorHandling.h>
@@ -3844,6 +3846,19 @@ mlir::LogicalResult ReussirRefAcquireOp::verify() {
 //===----------------------------------------------------------------------===//
 // ReussirPolyFFIOp verification
 //===----------------------------------------------------------------------===//
+mlir::LogicalResult
+ReussirPolyFFIOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
+  if (auto substitutions = getSubstitutions())
+    for (auto entry : *substitutions)
+      if (auto symbol =
+              mlir::dyn_cast<mlir::FlatSymbolRefAttr>(entry.getValue()))
+        if (!symbols.lookupNearestSymbolFrom<mlir::FunctionOpInterface>(*this,
+                                                                        symbol))
+          return emitOpError("substitution requires a function symbol: ")
+                 << symbol;
+  return mlir::success();
+}
+
 mlir::LogicalResult ReussirPolyFFIOp::verify() {
   auto moduleTexture = getModuleTextureAttr();
   auto compiledModule = getCompiledModuleAttr();
@@ -4300,10 +4315,11 @@ mlir::LogicalResult ReussirDropDeferIndexedOp::verifySymbolUses(
 //===----------------------------------------------------------------------===//
 // createDtorIfNotExists
 //===----------------------------------------------------------------------===//
-mlir::func::FuncOp
-createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
-                      mlir::OpBuilder &builder, AtomicKind kind,
-                      mlir::SymbolTableCollection *symbols) {
+mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
+                                         RecordType type,
+                                         mlir::OpBuilder &builder,
+                                         AtomicKind kind,
+                                         mlir::SymbolTableCollection *symbols) {
   std::optional<mlir::SymbolTable> ownTable;
   mlir::SymbolTable &symTable = symbols ? symbols->getSymbolTable(moduleOp)
                                       : ownTable.emplace(moduleOp);
@@ -4722,6 +4738,34 @@ mlir::LogicalResult resolveDropOrder(mlir::ModuleOp module,
         mlir::StringAttr::get(module.getContext(),
                               configured.empty() ? "forward" : configured));
   return mlir::success();
+}
+
+void qualifyFfiSymbols(mlir::ModuleOp module, llvm::Module &translated) {
+  auto symbols = module->getAttrOfType<mlir::ArrayAttr>("reussir.ffi_symbols");
+  if (!symbols)
+    return;
+  auto configured =
+      module->getAttrOfType<mlir::StringAttr>("reussir.drop_order");
+  llvm::StringRef order = configured ? configured.getValue() : "forward";
+  llvm::DenseMap<const llvm::Comdat *, llvm::Comdat *> comdats;
+  for (auto attribute : symbols) {
+    auto symbol = llvm::cast<mlir::FlatSymbolRefAttr>(attribute);
+    auto *value = translated.getNamedValue(symbol.getValue());
+    if (!value)
+      continue;
+    if (auto *object = llvm::dyn_cast<llvm::GlobalObject>(value))
+      if (auto *old = object->getComdat()) {
+        auto *qualified =
+            translated.getOrInsertComdat((old->getName() + "." + order).str());
+        qualified->setSelectionKind(old->getSelectionKind());
+        comdats.try_emplace(old, qualified);
+      }
+    value->setName((symbol.getValue() + "." + order).str());
+  }
+  for (auto &object : translated.global_objects())
+    if (auto *old = object.getComdat())
+      if (auto found = comdats.find(old); found != comdats.end())
+        object.setComdat(found->second);
 }
 
 std::unique_ptr<llvm::Module>

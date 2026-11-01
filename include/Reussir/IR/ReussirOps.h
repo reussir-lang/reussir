@@ -147,10 +147,11 @@ mlir::LogicalResult emitArrayElementTraversal(
 // A caller doing many glue lookups can supply a collection to reuse the
 // module's symbol table. Newly created glue is registered in that table.
 // The caller must keep it consistent with any other symbol mutations.
-mlir::func::FuncOp createDtorIfNotExists(
-    mlir::ModuleOp moduleOp, RecordType type, mlir::OpBuilder &builder,
-    AtomicKind kind = AtomicKind::normal,
-    mlir::SymbolTableCollection *symbols = nullptr);
+mlir::func::FuncOp
+createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
+                      mlir::OpBuilder &builder,
+                      AtomicKind kind = AtomicKind::normal,
+                      mlir::SymbolTableCollection *symbols = nullptr);
 
 //===----------------------------------------------------------------------===//
 // emitOwnershipAcquisitionFuncIfNotExists
@@ -190,6 +191,9 @@ mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
 // the definition).
 mlir::LogicalResult resolveDropOrder(mlir::ModuleOp module,
                                      llvm::StringRef configured);
+
+// Qualify compiler-owned foreign symbols after their LLVM modules are linked.
+void qualifyFfiSymbols(mlir::ModuleOp module, llvm::Module &translated);
 
 std::unique_ptr<llvm::Module>
 gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,

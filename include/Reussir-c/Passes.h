@@ -172,6 +172,9 @@ LLVMModuleRef reussirGatherCompiledModules(MlirModule module,
                                            const char *dataLayout,
                                            const char *targetTriple);
 
+// Qualifies compiler-owned foreign symbols after their bitcode is linked.
+void reussirQualifyFfiSymbols(MlirModule module, LLVMModuleRef translated);
+
 // Rewrites the `{ tag, payload-union }` debug type emitted for each enum into a
 // real DWARF `DW_TAG_variant_part`, so a debugger shows only the active case.
 // Operates in place on the (already debug-info-bearing) LLVM module; a no-op

@@ -2480,7 +2480,8 @@ def ReussirClosureTransferOp : ReussirClosureOp<"transfer", []> {
 // Reussir Poly FFI Operations
 //===----------------------------------------------------------------------===//
 
-def ReussirPolyFFIOp : ReussirOp<"polyffi", []> {
+def ReussirPolyFFIOp : ReussirOp<"polyffi", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "Polymorphic FFI instantiation";
   let description = [{
     `reussir.polyffi` instantiates the FFI format of the type.
