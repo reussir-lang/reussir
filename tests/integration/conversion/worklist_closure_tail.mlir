@@ -1,7 +1,7 @@
 // RUN: %reussir-opt %s --reussir-token-instantiation --reussir-closure-outlining --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true drop-order=forward' --verify-each | %FileCheck %s
 // RUN: %reussir-opt %s --reussir-token-instantiation --reussir-closure-outlining --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true drop-order=forward tail-recursive-drops=false' --verify-each | %FileCheck %s --check-prefix=NOTAIL --implicit-check-not=reussir.musttail
 // RUN: %reussir-opt %s --reussir-token-instantiation --reussir-closure-outlining --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true drop-order=forward' --reussir-convert-to-std --canonicalize --convert-scf-to-cf --reussir-lowering-basic-ops --reussir-convert-to-llvm --reconcile-unrealized-casts --canonicalize --verify-each -o %t.mlir
-// RUN: %reussir-translate --mlir-to-llvmir %t.mlir | %opt -passes=verify -S | %FileCheck %s --check-prefix=LLVM
+// RUN: %reussir-translate --reussir-to-llvmir %t.mlir | %opt -passes=verify -S | %FileCheck %s --check-prefix=LLVM
 
 !foreign = !reussir.rc<!reussir.ffi_object<"Capture", @capture_drop>>
 !plain = !reussir.rc<i64>
