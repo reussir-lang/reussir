@@ -7,6 +7,7 @@
 #include "WorklistDrop.h"
 #include "Reussir/Transformation/SpecialPointerTag.h"
 #include "TailDrop.h"
+#include <llvm/TargetParser/Triple.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
@@ -77,11 +78,14 @@ public:
       ReussirDropDeferOp::create(builder, loc, callee, arg);
   }
 
-  void drop(mlir::Value ref, bool run) {
-    auto task = function(ref.getType(), "walk", [&](mlir::Value arg) {
+  mlir::func::FuncOp walk(mlir::Type type) {
+    return function(type, "walk", [&](mlir::Value arg) {
       ReussirRefDropOp::create(builder, loc, arg, true, nullptr);
     });
-    schedule(task, ref, run);
+  }
+
+  void drop(mlir::Value ref, bool run) {
+    schedule(walk(ref.getType()), ref, run);
   }
 
   void array(mlir::Value ref) {
@@ -175,13 +179,23 @@ public:
       mlir::Value ref = ReussirRcBorrowOp::create(builder, loc, refType, arg);
       if (isForwardDrop(module)) {
         free(arg);
-        drop(ref, false);
+        auto call = mlir::func::CallOp::create(builder, loc, walk(refType),
+                                               mlir::ValueRange{ref});
+        auto triple = module->getAttrOfType<mlir::StringAttr>(
+            mlir::LLVM::LLVMDialect::getTargetTripleAttrName());
+        if (!triple || !llvm::Triple(triple.getValue()).isWasm())
+          call->setAttr(kMustTailCallAttr, builder.getUnitAttr());
       } else {
         ReussirRefDropOp::create(builder, loc, ref, true, nullptr);
         emitBoxFree(arg, loc, module, builder);
       }
     });
-    schedule(task, rc, run);
+    if (!run && !llvm::isa<FFIObjectType, ClosureType>(type.getElementType()))
+      ReussirRcDeferOp::create(
+          builder, loc, mlir::FlatSymbolRefAttr::get(task.getSymNameAttr()),
+          rc);
+    else
+      schedule(task, rc, run);
   }
 };
 } // namespace
