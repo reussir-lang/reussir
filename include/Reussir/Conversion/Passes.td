@@ -176,6 +176,8 @@ def ReussirAcquireDropExpansionPass : Pass<"reussir-acquire-drop-expansion"> {
   let options =
       [Option<"outlineRecord", "outline-record", "bool", /*default=*/"false",
               "whether to outline record destruction and acquisition">,
+       Option<"dropOrder", "drop-order", "std::string",
+              /*default=*/"\"forward\"", "member destruction order">,
        Option<"tailRecursiveDrops", "tail-recursive-drops", "bool",
               /*default=*/"true", "whether to specialize tail-recursive drops">,
        Option<"expandDecrement", "expand-decrement", "bool",

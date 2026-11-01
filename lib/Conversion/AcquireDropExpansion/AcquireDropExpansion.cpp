@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "TailDrop.h"
+#include "WorklistDrop.h"
 
 #include <algorithm>
 #include <llvm/ADT/ArrayRef.h>
@@ -38,8 +39,8 @@
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/GreedyPatternRewriteDriver.h>
 
-#include "Reussir/Conversion/AcquireDropExpansion.h"
 #include "Reussir/Analysis/EquivalenceAnalysis.h"
+#include "Reussir/Conversion/AcquireDropExpansion.h"
 #include "Reussir/Conversion/RcDecrementExpansion.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirEnumAttrs.h"
@@ -119,10 +120,9 @@ private:
             rewriter, op.getLoc(), mlir::TypeRange{}, storageView);
         criticalBody = &critical.getBody();
       } else if (cellType.getFlatlock()) {
-        auto critical =
-            mlir::sync::SyncCombiningLockCriticalSectionOp::create(
-                rewriter, op.getLoc(), storageView,
-                /*combine_limit=*/mlir::IntegerAttr{});
+        auto critical = mlir::sync::SyncCombiningLockCriticalSectionOp::create(
+            rewriter, op.getLoc(), storageView,
+            /*combine_limit=*/mlir::IntegerAttr{});
         criticalBody = &critical.getBody();
       } else if (cellType.getRwlock()) {
         // Releasing the payload mutates managed state behind the slot, so the
@@ -189,9 +189,18 @@ private:
 
   mlir::LogicalResult rewriteDropRc(RcType rcType, ReussirRefDropOp op,
                                     mlir::PatternRewriter &rewriter) const {
-    if (outlineRecord && tailRecursiveDrops) {
-      mlir::Value loaded = ReussirRefLoadOp::create(rewriter, op.getLoc(), rcType,
-                                                  op.getRef());
+    if (outlineRecord && isInsideWorklistGlue(op) &&
+        rcType.getCapability() == Capability::shared) {
+      mlir::Value loaded =
+          ReussirRefLoadOp::create(rewriter, op.getLoc(), rcType, op.getRef());
+      emitWorklistDecrement(loaded, op.getLoc(), rewriter, symbols);
+      rewriter.eraseOp(op);
+      return mlir::success();
+    }
+    if (outlineRecord && tailRecursiveDrops &&
+        !isForwardDrop(op->getParentOfType<mlir::ModuleOp>())) {
+      mlir::Value loaded =
+          ReussirRefLoadOp::create(rewriter, op.getLoc(), rcType, op.getRef());
       if (emitTailDropRelease(loaded, op.getLoc(),
                               op->getParentOfType<mlir::ModuleOp>(), rewriter,
                               symbols)) {
@@ -240,8 +249,13 @@ private:
                       AtomicKind refAtomic, ReussirRefDropOp op,
                       mlir::PatternRewriter &rewriter) const {
     assert(recordType.isCompound());
-    for (auto [idx, memberTy, memberIsField] : llvm::enumerate(
-             recordType.getMembers(), recordType.getMemberIsField())) {
+    bool defer = outlineRecord && isInsideWorklistGlue(op) &&
+                 isForwardDrop(op->getParentOfType<mlir::ModuleOp>());
+    for (size_t cursor = 0, n = recordType.getMembers().size(); cursor < n;
+         ++cursor) {
+      size_t idx = defer ? n - cursor - 1 : cursor;
+      auto memberTy = recordType.getMembers()[idx];
+      bool memberIsField = recordType.getMemberIsField()[idx];
       if (memberIsField)
         continue;
       auto projectedTy = getProjectedType(memberTy, false, refCap, refAtomic);
@@ -252,7 +266,10 @@ private:
       mlir::IntegerAttr index = rewriter.getIndexAttr(idx);
       mlir::Value projectedVal = ReussirRefProjectOp::create(
           rewriter, op.getLoc(), projectedRefTy, op.getRef(), index);
-      ReussirRefDropOp::create(rewriter, op.getLoc(), projectedVal);
+      if (defer)
+        emitWorklistDrop(projectedVal, op.getLoc(), rewriter, symbols);
+      else
+        ReussirRefDropOp::create(rewriter, op.getLoc(), projectedVal);
     }
     rewriter.eraseOp(op);
     return mlir::success();
@@ -325,7 +342,16 @@ private:
           &dispatcher.getNonNullRegion(), dispatcher.getNonNullRegion().begin(),
           {nullableType.getPtrTy()}, {op.getLoc()});
       rewriter.setInsertionPointToStart(nonNullBlock);
+      if (outlineRecord && isInsideWorklistGlue(op) &&
+          rcType.getCapability() == Capability::shared) {
+        emitWorklistDecrement(nonNullBlock->getArgument(0), op.getLoc(),
+                              rewriter, symbols);
+        ReussirScfYieldOp::create(rewriter, op.getLoc(), nullptr);
+        rewriter.eraseOp(op);
+        return mlir::success();
+      }
       if (outlineRecord && tailRecursiveDrops &&
+          !isForwardDrop(op->getParentOfType<mlir::ModuleOp>()) &&
           emitTailDropRelease(nonNullBlock->getArgument(0), op.getLoc(),
                               op->getParentOfType<mlir::ModuleOp>(), rewriter,
                               symbols)) {
@@ -366,7 +392,7 @@ private:
   mlir::SymbolTableCollection *symbols;
 
   bool shouldOutline(ReussirRefDropOp op, RecordType type) const {
-    if (!outlineRecord)
+    if (!outlineRecord || isInsideWorklistGlue(op))
       return false;
 
     if (isTriviallyCopyable(type))
@@ -399,6 +425,12 @@ public:
       return mlir::success();
     }
 
+    if (outlineRecord && !isInsideWorklistGlue(op) && !op.getVariant()) {
+      emitWorklistDrop(op.getRef(), op.getLoc(), rewriter, symbols, true);
+      rewriter.eraseOp(op);
+      return mlir::success();
+    }
+
     mlir::Type elementType = refType.getElementType();
 
     // An integer handle releases its one reference through rcgmp.
@@ -422,10 +454,11 @@ public:
         .Case<RecordType>([&](RecordType recordType) {
           if (shouldOutline(op, recordType)) {
             mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
-            mlir::func::FuncOp dtor = createDtorIfNotExists(
-                moduleOp, recordType, rewriter, refType.getAtomicKind(),
-                symbols);
-            mlir::func::CallOp::create(rewriter, op.getLoc(), dtor, op.getRef());
+            mlir::func::FuncOp dtor =
+                createDtorIfNotExists(moduleOp, recordType, rewriter,
+                                      refType.getAtomicKind(), symbols);
+            mlir::func::CallOp::create(rewriter, op.getLoc(), dtor,
+                                       op.getRef());
             rewriter.eraseOp(op);
             return llvm::success();
           }
@@ -444,6 +477,35 @@ public:
           return rewriteDropNullable(nullableType, op, rewriter);
         })
         .Default([&](mlir::Type) { return mlir::failure(); });
+  }
+};
+
+class WorklistDecrementPattern : public mlir::OpRewritePattern<ReussirRcDecOp> {
+  mlir::SymbolTableCollection *symbols;
+
+public:
+  WorklistDecrementPattern(mlir::MLIRContext *context,
+                           mlir::SymbolTableCollection *symbols)
+      : mlir::OpRewritePattern<ReussirRcDecOp>(context, 2), symbols(symbols) {}
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRcDecOp op,
+                  mlir::PatternRewriter &rewriter) const override {
+    if (op.isDestructuring() || op->hasAttr(kWorklistRawAttr) ||
+        op.getRcPtr().getType().getCapability() != Capability::shared)
+      return mlir::failure();
+    auto token = op.getNullableToken();
+    if (token && !llvm::all_of(token.getUsers(), [](mlir::Operation *user) {
+          return llvm::isa<ReussirTokenFreeOp>(user);
+        }))
+      return mlir::failure();
+    emitWorklistDecrement(op.getRcPtr(), op.getLoc(), rewriter, symbols,
+                          !isInsideWorklistGlue(op));
+    if (token)
+      rewriter.replaceOpWithNewOp<ReussirNullableCreateOp>(op, token.getType(),
+                                                           nullptr);
+    else
+      rewriter.eraseOp(op);
+    return mlir::success();
   }
 };
 
@@ -490,8 +552,10 @@ public:
     if (auto recordType = llvm::dyn_cast<RecordType>(elementType)) {
       if (shouldOutline(op, recordType)) {
         mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
-        mlir::func::FuncOp acquireFunc = emitOwnershipAcquisitionFuncIfNotExists(
-            moduleOp, recordType, rewriter, refType.getAtomicKind(), symbols);
+        mlir::func::FuncOp acquireFunc =
+            emitOwnershipAcquisitionFuncIfNotExists(
+                moduleOp, recordType, rewriter, refType.getAtomicKind(),
+                symbols);
         mlir::Value delta = op.getDelta();
         if (!delta)
           delta = rewriter.createOrFold<mlir::arith::ConstantIndexOp>(
@@ -552,8 +616,7 @@ static void forwardEquivalentLoads(mlir::func::FuncOp func) {
       return candidate.getType() == load.getType() &&
              dominance.properlyDominates(candidate.getOperation(),
                                          load.getOperation()) &&
-             equivalence.areEquivalent(candidate.getResult(),
-                                       load.getResult());
+             equivalence.areEquivalent(candidate.getResult(), load.getResult());
     });
     if (leader == leaders.end()) {
       leaders.push_back(load);
@@ -574,6 +637,13 @@ struct AcquireDropExpansionPass
           AcquireDropExpansionPass> {
   using Base::Base;
   void runOnOperation() override {
+    if (dropOrder != "forward" && dropOrder != "backward") {
+      getOperation().emitError("drop-order must be forward or backward");
+      return signalPassFailure();
+    }
+    if (!getOperation()->hasAttr("reussir.drop_order"))
+      getOperation()->setAttr("reussir.drop_order",
+                              mlir::StringAttr::get(&getContext(), dropOrder));
     mlir::ConversionTarget target(getContext());
     // Share tables for this run only; the glue helpers register each new
     // symbol, and this pass does not erase or rename functions.
@@ -599,8 +669,10 @@ void populateAcquireDropExpansionConversionPatterns(
     mlir::SymbolTableCollection *symbols, bool tailRecursiveDrops) {
   patterns.add<DropExpansionPattern>(patterns.getContext(), outlineRecord,
                                      symbols, tailRecursiveDrops);
+  if (outlineRecord)
+    patterns.add<WorklistDecrementPattern>(patterns.getContext(), symbols);
   patterns.add<AcquireExpansionPattern>(patterns.getContext(), outlineRecord,
-                                     symbols);
+                                        symbols);
 }
 
 } // namespace reussir
