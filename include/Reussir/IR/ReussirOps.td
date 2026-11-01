@@ -1895,7 +1895,7 @@ def ReussirRcDeferOp : ReussirOp<"rc.defer", [
     DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "Transfer a dead shared box to the pending drop stack";
   let description = [{
-    Transfers an exclusively owned, dead box to `release`; it does not decrement
+    Transfers a dead box to `release`; it does not decrement
     the reference count. The RC type must have shared capability. The caller
     must keep the box alive until release and relinquish access to it: eligible
     box headers may store pending links. The callback accepts the box's exact
