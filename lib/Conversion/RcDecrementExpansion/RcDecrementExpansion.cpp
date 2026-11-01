@@ -97,16 +97,11 @@ bool needsImmediateGuard(ReussirRcDecOp op) {
 
 struct RcDecrementExpansionPattern
     : public mlir::OpRewritePattern<ReussirRcDecOp> {
-  bool deferNormal;
-  RcDecrementExpansionPattern(mlir::MLIRContext *context, bool deferNormal)
-      : mlir::OpRewritePattern<ReussirRcDecOp>(context),
-        deferNormal(deferNormal) {}
+  using OpRewritePattern::OpRewritePattern;
 
   mlir::LogicalResult
   matchAndRewrite(ReussirRcDecOp op,
                   mlir::PatternRewriter &rewriter) const override {
-    if (deferNormal && canScheduleDecrement(op))
-      return mlir::failure();
     RcType type = op.getRcPtr().getType();
     // No need to proceed if dec operation is applied to a rigid type.
     // Also delay the FFI object type clean up until basic ops lowering pass.
@@ -243,7 +238,7 @@ struct RcDecrementExpansionPass
       return signalPassFailure();
     mlir::ConversionTarget target(getContext());
     mlir::RewritePatternSet patterns(&getContext());
-    populateRcDecrementExpansionConversionPatterns(patterns, deferNormal);
+    populateRcDecrementExpansionConversionPatterns(patterns);
     if (failed(
             mlir::applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
@@ -252,8 +247,8 @@ struct RcDecrementExpansionPass
 } // namespace
 
 void populateRcDecrementExpansionConversionPatterns(
-    mlir::RewritePatternSet &patterns, bool deferNormal) {
-  patterns.add<RcDecrementExpansionPattern>(patterns.getContext(), deferNormal);
+    mlir::RewritePatternSet &patterns) {
+  patterns.add<RcDecrementExpansionPattern>(patterns.getContext());
 }
 
 } // namespace reussir

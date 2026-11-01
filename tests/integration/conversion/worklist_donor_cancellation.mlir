@@ -1,4 +1,4 @@
-// RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-attach-native-target,reussir-rc-decrement-expansion{defer-normal=false},reussir-acquire-drop-expansion,func.func(reussir-inc-dec-cancellation),reussir-acquire-drop-expansion{outline-record=true expand-decrement=true},func.func(reussir-token-reuse))' --verify-each | %FileCheck %s --implicit-check-not=reussir.drop.run
+// RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-attach-native-target,reussir-rc-decrement-expansion,reussir-acquire-drop-expansion,func.func(reussir-inc-dec-cancellation),reussir-acquire-drop-expansion{outline-record=true expand-decrement=true},func.func(reussir-token-reuse))' --verify-each | %FileCheck %s --implicit-check-not=reussir.drop.run
 
 !leaf = !reussir.record<compound "Leaf" { i64 }>
 !child = !reussir.rc<!leaf>

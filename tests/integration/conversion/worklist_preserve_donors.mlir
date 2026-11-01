@@ -1,5 +1,5 @@
-// RUN: %reussir-opt %s --reussir-rc-decrement-expansion='defer-normal=false' --verify-each | %FileCheck %s --check-prefix=EARLY
-// RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-rc-decrement-expansion{defer-normal=false},reussir-acquire-drop-expansion{outline-record=true expand-decrement=true})' --verify-each | %FileCheck %s --check-prefix=FINAL --implicit-check-not=reussir.drop.run
+// RUN: %reussir-opt %s --reussir-rc-decrement-expansion --verify-each | %FileCheck %s --check-prefix=EARLY
+// RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-rc-decrement-expansion,reussir-acquire-drop-expansion{outline-record=true expand-decrement=true})' --verify-each | %FileCheck %s --check-prefix=FINAL --implicit-check-not=reussir.drop.run
 
 !node_ = !reussir.record<compound "Node" incomplete>
 !node = !reussir.record<compound "Node" { i64, !reussir.nullable<!reussir.rc<!node_ shared>> }>

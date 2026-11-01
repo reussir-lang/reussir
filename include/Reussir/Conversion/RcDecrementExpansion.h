@@ -36,7 +36,7 @@ constexpr llvm::StringLiteral kExpandedDecrementAttr =
 bool canScheduleDecrement(ReussirRcDecOp op);
 
 void populateRcDecrementExpansionConversionPatterns(
-    mlir::RewritePatternSet &patterns, bool deferNormal = false);
+    mlir::RewritePatternSet &patterns);
 
 } // namespace reussir
 
