@@ -3602,6 +3602,7 @@ dependencies = [
  "reussir-stablehlo",
  "serde",
  "serde_json",
+ "scoped-tls",
  "smallvec",
  "stacker",
  "stumpalo",
