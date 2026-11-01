@@ -118,17 +118,19 @@ impl<'a> Printer<'a> {
         }));
         items.extend(program.ffi_imports.iter().map(|import| {
             text(format!(
-                "ffi import @{} = @{} {:?};",
+                "ffi import @{} = @{} {:?}{};",
                 r.sym(import.symbol),
                 r.sym(import.boundary),
                 import.texture,
+                r.release_bindings(&import.release_bindings),
             ))
         }));
         items.extend(program.ffi_textures.iter().map(|texture| {
             text(format!(
-                "ffi texture @{} {:?};",
+                "ffi texture @{} {:?}{};",
                 r.sym(texture.anchor),
                 texture.texture,
+                r.release_bindings(&texture.release_bindings),
             ))
         }));
         items.extend(program.ffi_rc_glue.iter().map(|glue| {
@@ -176,6 +178,18 @@ struct Render<'a> {
 use crate::ir_lex::spell_name;
 
 impl Render<'_> {
+    fn release_bindings(&self, bindings: &[mir::Symbol]) -> String {
+        if bindings.is_empty() {
+            return String::new();
+        }
+        let symbols = bindings
+            .iter()
+            .map(|s| format!("@{}", self.sym(*s)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(" bindings({symbols})")
+    }
+
     fn sym(&self, s: mir::Symbol) -> &str {
         self.symbols.resolve(&s.0)
     }

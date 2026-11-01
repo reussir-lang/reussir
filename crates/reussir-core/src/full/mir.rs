@@ -258,6 +258,7 @@ pub struct Trampoline {
 /// defining `boundary`.
 #[derive(Clone, Debug)]
 pub struct FfiImport {
+    pub release_bindings: Vec<Symbol>,
     pub symbol: Symbol,
     pub boundary: Symbol,
     pub texture: String,
@@ -267,6 +268,7 @@ pub struct FfiImport {
 /// emitted in `anchor`'s home codegen unit.
 #[derive(Clone, Debug)]
 pub struct FfiTexture {
+    pub release_bindings: Vec<Symbol>,
     pub anchor: Symbol,
     pub texture: String,
 }

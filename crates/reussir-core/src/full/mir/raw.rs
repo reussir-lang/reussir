@@ -219,6 +219,7 @@ pub struct Tramp {
 /// An `#[ffi(import)]` instance: `ffi import @sym = @boundary "texture";`.
 #[derive(Clone, Debug)]
 pub struct FfiImport {
+    pub release_bindings: Vec<String>,
     pub symbol: String,
     pub boundary: String,
     pub texture: String,
@@ -227,6 +228,7 @@ pub struct FfiImport {
 /// A standalone foreign texture: `ffi texture @anchor "texture";`.
 #[derive(Clone, Debug)]
 pub struct FfiTexture {
+    pub release_bindings: Vec<String>,
     pub anchor: String,
     pub texture: String,
 }
