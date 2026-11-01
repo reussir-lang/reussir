@@ -664,8 +664,13 @@ struct AcquireDropExpansionPass
       signalPassFailure();
       return;
     }
-    getOperation()->walk(
-        [](mlir::func::FuncOp func) { forwardEquivalentLoads(func); });
+    getOperation()->walk([&](mlir::func::FuncOp func) {
+      if (!tailRecursiveDrops && func->hasAttr(kWorklistGlueAttr))
+        func.walk([](mlir::func::CallOp call) {
+          call->removeAttr(kMustTailCallAttr);
+        });
+      forwardEquivalentLoads(func);
+    });
   }
 };
 } // namespace

@@ -1,5 +1,6 @@
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true drop-order=forward' --verify-each | %FileCheck %s --check-prefix=FORWARD
 // RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true drop-order=backward' --verify-each | %FileCheck %s --check-prefix=BACKWARD
+// RUN: %reussir-opt %s --reussir-acquire-drop-expansion='outline-record=true expand-decrement=true tail-recursive-drops=false' --verify-each | %FileCheck %s --check-prefix=FORWARD --implicit-check-not=reussir.musttail
 
 !leaf = !reussir.record<compound "Leaf" { i64 }>
 !pair = !reussir.record<compound "Pair" { !leaf, !leaf }>
