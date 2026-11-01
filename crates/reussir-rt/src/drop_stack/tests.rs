@@ -49,6 +49,24 @@ fn public_nested_calls_complete_only_their_suffix() {
     assert_eq!(object.log, [1, 2, 1]);
 }
 
+unsafe extern "C" fn merged_nested(object: *mut u8) {
+    unsafe { defer(object, first) };
+    unsafe { defer(object, first) };
+    assert_eq!(depth(), 1);
+    unsafe { run(object, nested) };
+    assert_eq!(depth(), 1);
+    unsafe { (*object.cast::<Ordered>()).log.push(3) };
+    unsafe { defer(object, first) };
+    assert_eq!(depth(), 1);
+}
+
+#[test]
+fn nested_boundaries_preserve_and_restore_merged_runs() {
+    let mut object = Ordered { log: vec![] };
+    unsafe { run((&mut object as *mut Ordered).cast(), merged_nested) };
+    assert_eq!(object.log, [1, 2, 1, 3, 1, 1, 1]);
+}
+
 struct Cursor {
     next: usize,
     visited: Vec<usize>,
