@@ -18,6 +18,8 @@ use reussir_backend_sys as sys;
 
 use crate::features;
 
+const DROP_ORDER_ATTR: &str = "reussir.drop_order";
+
 /// Temporary module marker set by codegen when source contains inline transforms.
 pub const INLINE_TRANSFORM_ATTR: &str = "reussir.inline_transform";
 /// Embedded transform entry point invoked at the kernel anchor.
@@ -159,7 +161,7 @@ fn resolve_drop_order(
 ) -> Result<DropOrder, melior::Error> {
     let saved = module
         .as_operation()
-        .attribute("reussir.drop_order")
+        .attribute(DROP_ORDER_ATTR)
         .ok()
         .map(
             |attribute| match StringAttribute::try_from(attribute)?.value() {
@@ -349,7 +351,7 @@ pub fn run_lowering_pipeline(
 ) -> Result<(), melior::Error> {
     let drop_order = resolve_drop_order(module, options.drop_order)?;
     module.as_operation_mut().set_attribute(
-        "reussir.drop_order",
+        DROP_ORDER_ATTR,
         StringAttribute::new(context, drop_order.as_str()).into(),
     );
     let drop_order_ref = melior::StringRef::new(drop_order.as_str()).to_raw();
