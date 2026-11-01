@@ -111,3 +111,56 @@ fn indexed_callbacks_visit_one_child_at_a_time() {
     unsafe { defer_indexed((&mut cursor as *mut Cursor).cast(), 0, indexed) };
     assert_eq!(cursor.visited, [0, 1, 2, 3]);
 }
+
+thread_local! {
+    static ENDS: Cell<usize> = const { Cell::new(0) };
+}
+unsafe extern "C" fn end_work() {
+    assert!(!releasing());
+    assert_eq!(depth(), 0);
+    ENDS.set(ENDS.get() + 1);
+}
+unsafe extern "C" fn requesting(object: *mut u8) {
+    want_end_work();
+    unsafe { run(object, first) };
+    assert_eq!(ENDS.get(), 0);
+}
+#[test]
+fn end_work_waits_for_the_outermost_scope() {
+    set_end_work(end_work);
+    let mut object = Ordered { log: vec![] };
+    unsafe { run((&mut object as *mut Ordered).cast(), requesting) };
+    assert_eq!(ENDS.get(), 1);
+}
+
+struct Late(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+unsafe extern "C" fn late_release(object: *mut u8) {
+    let object = unsafe { &*object.cast::<Late>() };
+    object.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+unsafe extern "C" fn late_enqueue(object: *mut u8) {
+    for _ in 0..128 {
+        unsafe { defer(object, late_release) };
+    }
+}
+impl Drop for Late {
+    fn drop(&mut self) {
+        unsafe { run((self as *mut Late).cast(), late_enqueue) };
+    }
+}
+thread_local! {
+    static LATE: RefCell<Option<Late>> = const { RefCell::new(None) };
+}
+#[test]
+fn drops_after_the_buffer_cache_destructor_own_their_context() {
+    let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = count.clone();
+    std::thread::spawn(move || {
+        LATE.with(|slot| *slot.borrow_mut() = Some(Late(observed)));
+        let mut object = Chain { remaining: 100 };
+        unsafe { run((&mut object as *mut Chain).cast(), chain) };
+    })
+    .join()
+    .unwrap();
+    assert_eq!(count.load(std::sync::atomic::Ordering::Relaxed), 128);
+}

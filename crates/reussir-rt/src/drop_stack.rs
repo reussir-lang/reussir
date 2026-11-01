@@ -66,6 +66,7 @@ pub struct DropContext {
     active_run: ActiveRun,
     /// First pending-work slot belonging to the current nested scope.
     boundary: Cell<usize>,
+    end_work: Cell<Option<EndWork>>,
 }
 
 /// The current group stays outside the work vector so appending an object
@@ -203,6 +204,7 @@ scoped_tls::scoped_thread_local!(static LATE_CONTEXT: DropContext);
 thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
     static CACHED: DropContext = DropContext::default();
+    static END_WORK: Cell<Option<EndWork>> = const { Cell::new(None) };
 }
 
 /// Select the cached context or the temporary context used during TLS teardown.
@@ -229,29 +231,33 @@ fn scoped(walk: impl FnOnce()) {
         return;
     }
     let mut walk = Some(walk);
-    match CACHED.try_with(|context| execute(context, walk.take().unwrap())) {
-        Ok(()) => (),
+    let end_work = match CACHED.try_with(|context| execute(context, walk.take().unwrap())) {
+        Ok(end_work) => end_work,
         // A late TLS destructor owns a fresh context for this scope.
         Err(_) => execute_fresh(walk.take().unwrap()),
     };
+    if let Some(callback) = end_work {
+        unsafe { callback() };
+    }
 }
 
 /// Own a context for one drop after the thread cache has been destroyed.
 #[cold]
 #[inline(never)]
-fn execute_fresh(walk: impl FnOnce()) {
+fn execute_fresh(walk: impl FnOnce()) -> Option<EndWork> {
     let context = DropContext::default();
     LATE_CONTEXT.set(&context, || execute(&context, walk))
 }
 
 /// Drain while active, then retain bounded buffer capacity for the next scope.
 #[inline]
-fn execute(context: &DropContext, walk: impl FnOnce()) {
+fn execute(context: &DropContext, walk: impl FnOnce()) -> Option<EndWork> {
     {
         let _active = scopeguard::guard(ACTIVE.replace(true), |previous| ACTIVE.set(previous));
         walk();
         context.drain();
     }
+    let end_work = context.end_work.take();
     let mut context = context.pending.borrow_mut();
     if context.work.capacity() > RETAINED_BUFFER_CAPACITY {
         context.work.shrink_to(RETAINED_BUFFER_CAPACITY);
@@ -260,6 +266,7 @@ fn execute(context: &DropContext, walk: impl FnOnce()) {
         context.cells.shrink_to(RETAINED_BUFFER_CAPACITY);
     }
     debug_assert!(context.work.is_empty() && context.cells.is_empty());
+    end_work
 }
 
 /// Completes a release and its pending work. Nested calls complete their own
@@ -278,6 +285,24 @@ pub unsafe fn defer(object: *mut u8, release: Release) {
         with_context(|context| context.defer(unsafe { Object::new(object) }, release));
     } else {
         unsafe { run(object, release) };
+    }
+}
+
+/// Work that runs after the outermost scope releases its context.
+pub type EndWork = unsafe extern "C" fn();
+
+/// Registers this thread's host end callback.
+pub fn set_end_work(callback: EndWork) {
+    END_WORK.set(Some(callback));
+}
+
+/// Requests the registered callback after the outermost drain, or now when idle.
+pub fn want_end_work() {
+    let callback = END_WORK.get();
+    if ACTIVE.get() {
+        with_context(|context| context.end_work.set(callback));
+    } else if let Some(callback) = callback {
+        unsafe { callback() };
     }
 }
 
