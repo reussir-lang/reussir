@@ -4,7 +4,8 @@
 !node_ = !reussir.record<compound "EntryReuse" incomplete>
 !link = !reussir.nullable<!reussir.rc<!node_ shared>>
 !node = !reussir.record<compound "EntryReuse" { i64, !link, !link }>
-!rc = !reussir.rc<i64>
+!leaf = !reussir.record<compound "ReuseLeaf" { i64 }>
+!rc = !reussir.rc<!leaf>
 !token = !reussir.token<align: 8, size: 16>
 !nullable = !reussir.nullable<!token>
 
@@ -21,8 +22,9 @@ module {
   func.func @reuse(%old: !rc, %ref: !reussir.ref<!node>, %value: i64) -> !rc {
     %donor = reussir.rc.dec(%old : !rc) : !nullable
     reussir.ref.drop(%ref : !reussir.ref<!node>)
+    %leaf = reussir.record.compound(%value : i64) : !leaf
     %token = reussir.token.alloc : !token
-    %new = reussir.rc.create value(%value : i64) token(%token : !token) : !rc
+    %new = reussir.rc.create value(%leaf : !leaf) token(%token : !token) : !rc
     return %new : !rc
   }
 }

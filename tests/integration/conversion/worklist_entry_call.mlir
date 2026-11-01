@@ -5,7 +5,8 @@
 !link = !reussir.nullable<!reussir.rc<!node_ shared>>
 !node = !reussir.record<compound "EntryNode" { i64, !link, !link }>
 
-// CHECK-LABEL: func.func private @[[ENTRY:__reussir_drop.entry.[a-z]+]](
+// CHECK-LABEL: func.func private @__reussir_drop.entry.
+// CHECK-SAME: [[ORDER:[a-z]+]](
 // CHECK-SAME: llvm.noalias
 // CHECK-SAME: llvm.nonnull
 // CHECK-SAME: llvm.noundef
@@ -13,7 +14,7 @@
 // CHECK: return
 // CHECK-LABEL: func.func @drop_root
 // CHECK-NOT: reussir.drop.run
-// CHECK: func.call @[[ENTRY]]
+// CHECK: func.call @__reussir_drop.entry.[[ORDER]]
 // CHECK-NEXT: return
 module {
   func.func @drop_root(%ref: !reussir.ref<!node>) {
