@@ -115,12 +115,17 @@ pub struct WrapperDecl<'tcx> {
 }
 
 impl WrapperDecl<'_> {
+    pub fn release_symbol(&self) -> String {
+        format!("{}_ffi_release", self.symbol)
+    }
+
     /// Render the existing one-pointer owner plus the comparison behavior its
     /// enclosing foreign types require. Standard Rust comparison traits live
     /// on `reussir_rt::bridge::Bridge<T>`; this inner type implements only the
     /// local bridge traits, preserving the orphan-rule boundary.
     pub fn render(&self) -> String {
         let sym = &self.symbol;
+        let release = self.release_symbol();
         let mut d = String::new();
         let _ = write!(
             d,
@@ -128,6 +133,7 @@ impl WrapperDecl<'_> {
              pub struct {sym}(*mut ::std::ffi::c_void);\n\
              unsafe extern \"C\" {{\n\
              \x20   unsafe fn {sym}_ffi_acquire(this: *mut ::std::ffi::c_void);\n\
+             \x20   #[link_name = \"[:{release}:]\"]\n\
              \x20   unsafe fn {sym}_ffi_release(this: *mut ::std::ffi::c_void);\n"
         );
         if self.needs.partial_eq() {

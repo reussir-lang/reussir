@@ -717,7 +717,12 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
                 );
                 let boundary = mir::Symbol(driver.symbols.get_or_intern(&boundary_name));
                 ffi_imports_out.push(mir::FfiImport {
-                    release_bindings: Vec::new(),
+                    release_bindings: decls
+                        .values()
+                        .map(|decl| {
+                            mir::Symbol(driver.symbols.get_or_intern(decl.release_symbol()))
+                        })
+                        .collect(),
                     symbol,
                     boundary,
                     texture,
@@ -817,7 +822,12 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
                         drop_hook: mir::Symbol(driver.symbols.get_or_intern(&hook_name)),
                     };
                     ffi_textures.push(mir::FfiTexture {
-                        release_bindings: Vec::new(),
+                        release_bindings: decls
+                            .values()
+                            .map(|decl| {
+                                mir::Symbol(driver.symbols.get_or_intern(decl.release_symbol()))
+                            })
+                            .collect(),
                         anchor: symbol,
                         texture,
                     });
@@ -907,7 +917,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
         .map(|(sym, decl)| mir::FfiRcGlue {
             ty: decl.ty,
             acquire: mir::Symbol(driver.symbols.get_or_intern(format!("{sym}_ffi_acquire"))),
-            release: mir::Symbol(driver.symbols.get_or_intern(format!("{sym}_ffi_release"))),
+            release: mir::Symbol(driver.symbols.get_or_intern(decl.release_symbol())),
         })
         .collect();
 
@@ -3693,6 +3703,41 @@ mod tests {
     /// and its Rust body then compares the rendered values directly. The
     /// texture must carry that bridge — and exactly that one, even though
     /// `Key` implements the whole tower.
+    #[test]
+    fn foreign_textures_bind_only_their_own_release_glue() {
+        let source = r#"
+            #[ffi(rust = "::std::vec::Vec")] pub struct Bag<T>;
+            pub struct First { n: i64 }
+            pub struct Second { n: i64 }
+            #[ffi(import)] pub fn own<T>(x: T) -> T [{ x }];
+            pub fn first(x: Bag<First>) -> Bag<First> { own(x) }
+            pub fn second(x: Bag<Second>) -> Bag<Second> { own(x) }
+        "#;
+        with_full(source, |full| {
+            assert_eq!(full.ffi_rc_glue.len(), 2);
+            let textures = full
+                .ffi_imports
+                .iter()
+                .map(|t| (&t.texture, &t.release_bindings))
+                .chain(
+                    full.ffi_textures
+                        .iter()
+                        .map(|t| (&t.texture, &t.release_bindings)),
+                );
+            let mut count = 0;
+            for (texture, bindings) in textures {
+                assert_eq!(bindings.len(), 1, "{texture}");
+                let release = bindings[0];
+                assert!(full.ffi_rc_glue.iter().any(|glue| glue.release == release));
+                assert!(
+                    texture.contains(&format!("#[link_name = \"[:{}:]\"]", full.symbol(release)))
+                );
+                count += 1;
+            }
+            assert_eq!(count, 4);
+        });
+    }
+
     #[test]
     fn an_import_binder_bound_renders_its_own_bridge() {
         let source = format!(
