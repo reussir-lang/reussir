@@ -24,6 +24,8 @@ pub mod ty;
 // implementation detail; the builders are re-exported below.
 #[allow(non_snake_case, clippy::all)]
 mod generated {
+    include!(concat!(env!("OUT_DIR"), "/tablegen_inputs.rs"));
+
     melior::dialect! {
         name: "reussir",
         files: ["Reussir/IR/ReussirOps.td"],

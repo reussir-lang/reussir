@@ -1,4 +1,6 @@
 use std::env;
+use std::fmt::Write;
+use std::fs;
 use std::path::PathBuf;
 
 // The melior `dialect!` macro that generates the Reussir op builders reads
@@ -27,6 +29,7 @@ fn main() {
     // at compile time, but Cargo otherwise only tracks Rust files. Rebuild when
     // any of them changes so the generated builders never go stale.
     let ir_dir = PathBuf::from(&include_dir).join("Reussir/IR");
+    let mut inputs = String::new();
     for td in [
         "ReussirOps.td",
         "ReussirDialect.td",
@@ -34,6 +37,15 @@ fn main() {
         "ReussirAttrs.td",
         "ReussirInterfaces.td",
     ] {
-        println!("cargo:rerun-if-changed={}", ir_dir.join(td).display());
+        let path = ir_dir.join(td);
+        println!("cargo:rerun-if-changed={}", path.display());
+        writeln!(inputs, "const _: &[u8] = include_bytes!({:?});", path)
+            .expect("writing to a String cannot fail");
     }
+    // rustc's dep-info also needs these inputs so sccache hashes their contents.
+    fs::write(
+        PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("tablegen_inputs.rs"),
+        inputs,
+    )
+    .expect("write TableGen input dependencies");
 }
