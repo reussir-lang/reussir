@@ -205,6 +205,8 @@ public:
         .Default(false);
   }
 
+  // Finish inline elements in this frame. Otherwise, save the next index
+  // before scheduling a child so its cleanup finishes before traversal resumes.
   void array(mlir::Value ref) {
     auto refType = llvm::cast<RefType>(ref.getType());
     auto type = llvm::cast<ArrayType>(refType.getElementType());
@@ -222,7 +224,7 @@ public:
       return;
     }
     auto task = function(
-        refType, "array",
+        refType, WorklistRole::Array,
         [&](mlir::Value arg) {
           auto cursor = builder.getInsertionBlock()->getArgument(1);
           mlir::Value view = ReussirArrayViewOp::create(
