@@ -147,10 +147,11 @@ mlir::LogicalResult emitArrayElementTraversal(
 // A caller doing many glue lookups can supply a collection to reuse the
 // module's symbol table. Newly created glue is registered in that table.
 // The caller must keep it consistent with any other symbol mutations.
-mlir::func::FuncOp createDtorIfNotExists(
-    mlir::ModuleOp moduleOp, RecordType type, mlir::OpBuilder &builder,
-    AtomicKind kind = AtomicKind::normal,
-    mlir::SymbolTableCollection *symbols = nullptr);
+mlir::func::FuncOp
+createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
+                      mlir::OpBuilder &builder,
+                      AtomicKind kind = AtomicKind::normal,
+                      mlir::SymbolTableCollection *symbols = nullptr);
 
 // Preserve a saved drop order, reject conflicting options, or default to
 // forward.
@@ -188,6 +189,9 @@ mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
 //
 
 //===----------------------------------------------------------------------===//
+
+// Qualify compiler-owned foreign symbols after their LLVM modules are linked.
+void qualifyFfiSymbols(mlir::ModuleOp module, llvm::Module &translated);
 
 // Every gathered module is stamped with `dataLayout` and, when it is
 // non-empty, `targetTriple` — the destination module's own spelling of the

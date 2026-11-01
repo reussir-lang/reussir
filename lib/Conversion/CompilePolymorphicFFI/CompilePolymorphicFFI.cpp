@@ -94,9 +94,22 @@ static void formatInto(mlir::ModuleOp moduleOp, llvm::raw_ostream &os,
              << "))]\n";
           os << "struct " << name << "([u8; " << dataLayout.getTypeSize(ty)
              << "]);\n";
+          auto dtor = createDtorIfNotExists(moduleOp, ty, builder);
+          dtor.setPublic();
+          auto symbols =
+              moduleOp->getAttrOfType<mlir::ArrayAttr>("reussir.ffi_symbols");
+          llvm::SmallVector<mlir::Attribute> exports;
+          if (symbols)
+            llvm::append_range(exports, symbols);
+          auto symbol = mlir::FlatSymbolRefAttr::get(dtor.getSymNameAttr());
+          if (!llvm::is_contained(exports, symbol)) {
+            exports.push_back(symbol);
+            moduleOp->setAttr("reussir.ffi_symbols",
+                              builder.getArrayAttr(exports));
+          }
           os << "unsafe extern \"C\" {\n";
           {
-            os << "#[link_name = \"" << ty.getDtorName().getValue() << "\"]\n"
+            os << "#[link_name = \"" << dtor.getSymName() << "\"]\n"
                << "unsafe fn " << "drop_in_place" << "(ptr: *mut " << name
                << ");\n";
             os << "#[link_name = \"" << ty.getAcquireName().getValue()
@@ -119,9 +132,8 @@ static void formatInto(mlir::ModuleOp moduleOp, llvm::raw_ostream &os,
             os << "        unsafe { raw_data.assume_init() }\n";
             os << "    }\n";
             os << "}\n";
-          // clang-format on
-          createDtorIfNotExists(moduleOp, ty, builder);
-          emitOwnershipAcquisitionFuncIfNotExists(moduleOp, ty, builder);
+            // clang-format on
+            emitOwnershipAcquisitionFuncIfNotExists(moduleOp, ty, builder);
         }
       })
       .Default([](mlir::Type) {
@@ -164,6 +176,10 @@ static std::string monomorphize(mlir::ModuleOp moduleOp, ReussirPolyFFIOp op) {
           os << SUBSTART << key << SUBEND;
         } else {
           llvm::TypeSwitch<mlir::Attribute>(attr)
+              .Case<mlir::FlatSymbolRefAttr>(
+                  [&](mlir::FlatSymbolRefAttr symbol) {
+                    os << symbol.getValue();
+                  })
               .Case<mlir::StringAttr>(
                   [&](mlir::StringAttr str) { os << str.getValue(); })
               .Case<mlir::IntegerAttr>(
@@ -207,7 +223,16 @@ compilePolymorphicFFI(mlir::ModuleOp moduleOp, bool optimized,
       uncompiledOps.push_back(op);
   });
 
+  if (!uncompiledOps.empty() && mlir::failed(resolveDropOrder(moduleOp, {})))
+    return mlir::failure();
+  auto policy = moduleOp->getAttrOfType<mlir::StringAttr>("reussir.drop_order");
+  std::string metadata =
+      ("metadata=reussir_drop_order_" +
+       (policy ? policy.getValue() : llvm::StringRef("forward")))
+          .str();
   llvm::SmallVector<llvm::StringRef> additionalArgs;
+  additionalArgs.push_back("-C");
+  additionalArgs.push_back(metadata);
   if (optimized)
     additionalArgs.push_back("-O");
   if (!targetTriple.empty()) {

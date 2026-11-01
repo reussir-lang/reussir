@@ -479,6 +479,7 @@ translateToModule(llvm::StringRef texture, llvm::LLVMContext &llvmCtx,
     spdlog::error("Failed to link compiled modules to main module.");
     return nullptr;
   }
+  reussir::qualifyFfiSymbols(*module, *mainModule);
   spdlog::info("Successfully linked compiled modules to main module.");
   return mainModule;
 }
