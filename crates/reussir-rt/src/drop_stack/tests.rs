@@ -122,6 +122,43 @@ fn a_drop_after_the_thread_exit_guard() {
     thread.join().unwrap();
 }
 
+// The end work: asked for by releases inside a drain, called once after the
+// outermost drain, with the thread no longer draining and nothing pending.
+thread_local! {
+    static ENDS: RefCell<Vec<(bool, usize)>> = const { RefCell::new(Vec::new()) };
+}
+unsafe extern "C" fn end() {
+    ENDS.with(|e| e.borrow_mut().push((releasing(), state().len.get())));
+    log('e', 0);
+}
+unsafe extern "C" fn asks(cell: *mut u8) {
+    log('k', cell as usize);
+    want_end_work();
+}
+unsafe extern "C" fn asking_walk(_: *mut u8) {
+    unsafe { defer(p(1), asks) };
+    unsafe { defer(p(2), b) };
+    unsafe { defer(p(3), asks) };
+    unsafe { run(p(0), walk) };
+}
+
+#[test]
+fn end_work_runs_once_after_the_outermost_drain() {
+    set_end_work(end);
+    unsafe { run(p(0), asking_walk) };
+    let log = take_log();
+    assert_eq!(log.last(), Some(&('e', 0)));
+    assert_eq!(log.iter().filter(|e| e.0 == 'e').count(), 1);
+    assert_eq!(ENDS.with(|e| core::mem::take(&mut *e.borrow_mut())), [(false, 0)]);
+    // A drain that nobody asked: no end work.
+    unsafe { run(p(0), walk) };
+    assert!(!take_log().contains(&('e', 0)));
+    // Outside a drain the end work runs at once.
+    want_end_work();
+    assert_eq!(take_log(), [('e', 0)]);
+    assert_eq!(ENDS.with(|e| core::mem::take(&mut *e.borrow_mut())), [(false, 0)]);
+}
+
 #[test]
 fn symbols_are_exported() {
     let symbols = crate::symbols::exported_symbols();

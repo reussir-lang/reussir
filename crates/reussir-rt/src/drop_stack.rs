@@ -11,9 +11,17 @@
 //! the glue defers. Outside a drain the stack is empty. The stack never reads
 //! or writes a deferred pointer; its buffer shrinks back to `KEEP` entries
 //! after a drain and is freed at thread exit.
+//!
+//! A host runtime whose releases may need work that must not run inside a
+//! drain (code that may block or switch contexts, which would leave the
+//! thread's drain suspended) registers one end function ([`set_end_work`]);
+//! a release asks for it ([`want_end_work`]), and the outermost drain calls
+//! it once it has ended, with the thread no longer draining and nothing
+//! pending. A drain that nobody asked costs one test at its end.
 
 use core::cell::Cell;
 use core::mem::ManuallyDrop;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 /// Releases one deferred pointer.
 pub type Release = unsafe extern "C" fn(*mut u8);
@@ -27,10 +35,12 @@ struct Entry {
 /// Capacity the buffer keeps after a drain.
 const KEEP: usize = 64;
 
-/// Whether the thread drains, whether its exit guard ran (a later drain then
-/// frees its buffer), and its pending drops, a `Vec<Entry>` by raw parts.
+/// Whether the thread drains, whether a release asked for the end work,
+/// whether its exit guard ran (a later drain then frees its buffer), and its
+/// pending drops, a `Vec<Entry>` by raw parts.
 struct State {
     releasing: Cell<bool>,
+    end_work: Cell<bool>,
     exited: Cell<bool>,
     len: Cell<usize>,
     cap: Cell<usize>,
@@ -41,6 +51,7 @@ thread_local! {
     static STATE: State = const {
         State {
             releasing: Cell::new(false),
+            end_work: Cell::new(false),
             exited: Cell::new(false),
             len: Cell::new(0),
             cap: Cell::new(0),
@@ -136,6 +147,48 @@ unsafe extern "C" fn run_outermost(object: *mut u8, walk: Release) {
     unsafe { walk(object) };
     unsafe { state.pop_all() };
     state.releasing.set(false);
+    if state.end_work.get() {
+        end_work(state);
+    }
+}
+
+/// The end function a host registered ([`set_end_work`]), or null.
+static END_WORK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+
+/// The function the end of a drain calls when a release asked for it
+/// ([`want_end_work`]). One per process: a later call replaces it.
+pub fn set_end_work(f: unsafe extern "C" fn()) {
+    END_WORK.store(f as *mut (), Ordering::Release);
+}
+
+/// Asks for the end function once the current thread's outermost drain is
+/// over. Outside a drain, calls it at once, as [`defer`] runs a release.
+#[inline(always)]
+pub fn want_end_work() {
+    let state = state();
+    if state.releasing.get() {
+        state.end_work.set(true);
+    } else {
+        end_work(state);
+    }
+}
+
+/// Uses up the request and calls the end function: the drain is over (the
+/// thread no longer drains, nothing is pending), so it may drop values,
+/// whose drains then end on their own. A drain inside the end function
+/// whose releases ask for the end work again runs it at its own end, inside
+/// this call: one level of nesting per generation, as native Lean's frees
+/// nest inside the dependents they run (deliberate; a host whose end work
+/// can chain without bound bounds it itself).
+#[cold]
+#[inline(never)]
+fn end_work(state: &State) {
+    state.end_work.set(false);
+    let f = END_WORK.load(Ordering::Acquire);
+    if !f.is_null() {
+        let f = unsafe { core::mem::transmute::<*mut (), unsafe extern "C" fn()>(f) };
+        unsafe { f() };
+    }
 }
 
 #[cold]
