@@ -14,6 +14,14 @@
 //! which takes one entry, and one pointer per cell but its head. Its buffers
 //! shrink back to `KEEP` elements after a drain and are freed at thread exit.
 //!
+//! A host runtime with releases of its own (containers whose elements it
+//! frees in a given order) shares the stack, so that one drain pops its work
+//! and the glue's in one order, last deferred first: it defers cells with
+//! [`defer`], incremental work with [`defer_step`] (a step stays on the
+//! stack until it is done, and what it defers is popped before its next
+//! step; [`depth`] tells it whether a release deferred work), and drains
+//! with [`drain`] or [`run_step`].
+//!
 //! A host runtime whose releases may need work that must not run inside a
 //! drain (code that may block or switch contexts, which would leave the
 //! thread's drain suspended) registers one end function ([`set_end_work`]);
@@ -29,14 +37,21 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 /// Releases one deferred pointer.
 pub type Release = unsafe extern "C" fn(*mut u8);
 
-/// A run below the top of the stack: `n` deferred cells, the last deferred
-/// at `head`, to be released with `release`; its other `n - 1` cells are in
-/// the cells vector, below the cells of the runs above it (see [`State`]).
+/// One step of incremental work on `p` ([`defer_step`]); answers whether the
+/// work is done. `extern "C"`, as a release: a step that panics aborts
+/// instead of unwinding out of the drain with the thread still draining and
+/// its entry left.
+pub type Step = unsafe extern "C" fn(usize) -> bool;
+
+/// An entry below the top of the stack.
 #[derive(Clone, Copy)]
-struct Run {
-    release: Release,
-    head: *mut u8,
-    n: u32,
+enum Work {
+    /// `n` deferred cells, the last deferred at `head`, to be released with
+    /// `release`; the run's other `n - 1` cells are in the cells vector,
+    /// below the cells of the runs above it (see [`State`]).
+    Run { release: Release, head: *mut u8, n: u32 },
+    /// Incremental work: `step(p)` runs until it answers that it is done.
+    Step(usize, Step),
 }
 
 /// Capacity each vector keeps after a drain.
@@ -106,8 +121,9 @@ impl<T> Parts<T> {
     }
 }
 
-/// The thread's pending drops: the runs of the stack vector, then the run
-/// `(n, head, release)` on top if `n` is not 0. Drops deferred one after the
+/// The thread's pending drops: the entries of the stack vector, then the run
+/// `(n, head, release)` on top if `n` is not 0 (a run on top is always kept
+/// there, so the vector's last entry, when `n` is 0, is a step). Drops deferred one after the
 /// other with one release function form one run: the run is one entry, and
 /// each cell but its head one pointer in the cells vector (8 bytes while it
 /// waits, as the boxed heads of a list that the glue frees whole). The top
@@ -122,7 +138,7 @@ struct State {
     exited: Cell<bool>,
     head: Cell<*mut u8>,
     release: Cell<Release>,
-    stack: Parts<Run>,
+    stack: Parts<Work>,
     cells: Parts<*mut u8>,
 }
 
@@ -175,25 +191,35 @@ impl State {
         if n == 0 {
             return true;
         }
-        if !self.stack.try_push(Run { release: self.release.get(), head: self.head.get(), n }) {
+        if !self.stack.try_push(Work::Run { release: self.release.get(), head: self.head.get(), n }) {
             return false;
         }
         self.n.set(0);
         true
     }
 
-    /// After the top run's last cell left: the stack vector's last run, if
-    /// any, goes on top.
+    /// After the top entry left: the stack vector's last entry is the top
+    /// now, kept in the state if it is a run.
     #[inline(always)]
     fn unspill(&self) {
-        if self.stack.len.get() == 0 {
-            self.n.set(0);
-            return;
+        let len = self.stack.len.get();
+        if len != 0 {
+            let last = unsafe { self.stack.ptr.get().as_ptr().add(len - 1).read() };
+            if let Work::Run { release, head, n } = last {
+                self.release.set(release);
+                self.head.set(head);
+                self.n.set(n);
+                self.stack.len.set(len - 1);
+                return;
+            }
         }
-        let Run { release, head, n } = unsafe { self.stack.pop_unchecked() };
-        self.release.set(release);
-        self.head.set(head);
-        self.n.set(n);
+        self.n.set(0);
+    }
+
+    /// The number of entries.
+    #[inline(always)]
+    fn depth(&self) -> usize {
+        self.stack.len.get() + (self.n.get() != 0) as usize
     }
 
     /// Whether a drop deferred with `release` joins the run on top (one with
@@ -230,17 +256,40 @@ impl State {
     unsafe fn pop_all(&self) {
         loop {
             let n = self.n.get();
-            if n == 0 {
+            if n != 0 {
+                let (head, release) = (self.head.get(), self.release.get());
+                if n == 1 {
+                    self.unspill();
+                } else {
+                    self.head.set(unsafe { self.cells.pop_unchecked() });
+                    self.n.set(n - 1);
+                }
+                unsafe { release(head) };
+                continue;
+            }
+            let len = self.stack.len.get();
+            if len == 0 {
                 break;
             }
-            let (head, release) = (self.head.get(), self.release.get());
-            if n == 1 {
-                self.unspill();
-            } else {
-                self.head.set(unsafe { self.cells.pop_unchecked() });
-                self.n.set(n - 1);
+            // The top entry is a step: it stays while it runs, so whatever it
+            // pushes is done before its next step.
+            let index = len - 1;
+            let Work::Step(p, step) = (unsafe { self.stack.ptr.get().as_ptr().add(index).read() }) else {
+                unreachable!("reussir-rt: the stack vector's last entry is a run")
+            };
+            if unsafe { step(p) } {
+                // Whatever the step pushed stays above it (its runs' cells are
+                // above every cell of the runs below the step).
+                let now = self.stack.len.get();
+                unsafe {
+                    let at = self.stack.ptr.get().as_ptr().add(index);
+                    core::ptr::copy(at.add(1), at, now - index - 1);
+                }
+                self.stack.len.set(now - 1);
+                if now == len && self.n.get() == 0 {
+                    self.unspill();
+                }
             }
-            unsafe { release(head) };
         }
         debug_assert_eq!(self.cells.len.get(), 0, "reussir-rt: pending cells left after a drain");
         let exited = self.exited.get();
@@ -253,6 +302,63 @@ impl State {
 #[inline(always)]
 pub fn releasing() -> bool {
     state().releasing.get()
+}
+
+/// The number of entries on the stack. Work deferred while a step runs (the
+/// step is then the top entry) makes a new entry, so a step can tell whether
+/// a release it made deferred work. 0 whenever [`releasing`] is false.
+#[inline(always)]
+pub fn depth() -> usize {
+    state().depth()
+}
+
+/// Pushes incremental work: `step(p)` runs, while the entry stays on the
+/// stack, until it answers that it is done; what it defers meanwhile is
+/// popped before its next step. Outside a drain, call [`drain`] right after
+/// ([`run_step`]). Safety: `step(p)` must be sound whenever it runs.
+pub unsafe fn defer_step(p: usize, step: Step) {
+    let state = state();
+    debug_assert!(
+        state.releasing.get() || (state.depth() == 0 && state.cells.len.get() == 0),
+        "reussir-rt: work pushed outside a drain while other work is pending"
+    );
+    if !state.try_spill() {
+        state.stack.grow();
+        let spilled = state.try_spill();
+        debug_assert!(spilled);
+    }
+    if !state.stack.try_push(Work::Step(p, step)) {
+        state.stack.grow();
+        let pushed = state.stack.try_push(Work::Step(p, step));
+        debug_assert!(pushed);
+    }
+}
+
+/// Runs incremental work and everything it defers; inside a drain, only
+/// pushes it ([`defer_step`]). Safety: as [`defer_step`].
+pub unsafe fn run_step(p: usize, step: Step) {
+    unsafe { defer_step(p, step) };
+    drain();
+}
+
+/// Runs the pending drops, last deferred first, then the end work if a
+/// release asked for it. Inside a drain, returns at once: the outermost one
+/// runs whatever is pushed meanwhile.
+#[inline(always)]
+pub fn drain() {
+    let state = state();
+    if state.releasing.get() || state.depth() == 0 {
+        return;
+    }
+    drain_outermost();
+}
+
+#[inline(never)]
+fn drain_outermost() {
+    let state = state();
+    state.releasing.set(true);
+    unsafe { state.pop_all() };
+    finish(state);
 }
 
 /// Defers `release(cell)` until the current thread's drain pops it. Outside
@@ -288,6 +394,13 @@ unsafe extern "C" fn run_outermost(object: *mut u8, walk: Release) {
     state.releasing.set(true);
     unsafe { walk(object) };
     unsafe { state.pop_all() };
+    finish(state);
+}
+
+/// The end of an outermost drain: the thread no longer drains; then the end
+/// work, if a release asked for it.
+#[inline(always)]
+fn finish(state: &State) {
     state.releasing.set(false);
     if state.end_work.get() {
         end_work(state);

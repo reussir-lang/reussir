@@ -195,6 +195,68 @@ fn end_work_runs_once_after_the_outermost_drain() {
     assert_eq!(ENDS.with(|e| core::mem::take(&mut *e.borrow_mut())), [(false, 0)]);
 }
 
+// Steps. `counting(p)`: p = 100 k + left; defers `b(k + left)` and yields
+// while elements are left (each deferral is popped before the next step),
+// as a host's array free does.
+unsafe fn counting(v: usize) -> bool {
+    let (k, left) = (v / 100, v % 100);
+    log('s', depth());
+    if left == 0 {
+        return true;
+    }
+    unsafe { defer(p(k + left), b) };
+    STEP_ARG.with(|c| c.set(v - 1));
+    false
+}
+thread_local! {
+    static STEP_ARG: Cell<usize> = const { Cell::new(0) };
+}
+// The counter's state lives in STEP_ARG: the entry's own argument is fixed.
+unsafe extern "C" fn counting_entry(_: usize) -> bool {
+    unsafe { counting(STEP_ARG.with(|c| c.get())) }
+}
+// A step that defers two drops and is done in the same call: its entry
+// leaves from under them.
+unsafe extern "C" fn done_with_work(_: usize) -> bool {
+    unsafe { defer(p(1), b) };
+    unsafe { defer(p(2), a) };
+    true
+}
+
+#[test]
+fn a_step_yields_to_what_it_defers() {
+    STEP_ARG.with(|c| c.set(1000 + 3));
+    unsafe { run_step(0, counting_entry) };
+    // Each step sees itself as the only entry; its deferral comes next.
+    let s = |n| ('s', n);
+    assert_eq!(take_log(), [s(1), ('b', 13), s(1), ('b', 12), s(1), ('b', 11), s(1)]);
+    assert!(!releasing() && pending() == 0 && depth() == 0);
+}
+
+#[test]
+fn a_step_done_with_work_left_above_it() {
+    unsafe { run_step(0, done_with_work) };
+    assert_eq!(take_log(), [('a', 2), ('b', 21), ('b', 20), ('b', 1)]);
+    assert!(pending() == 0 && trimmed());
+}
+
+// A step deferred by a release inside a drain joins it, below what the
+// release defers after it.
+unsafe extern "C" fn defers_a_step(_: *mut u8) {
+    STEP_ARG.with(|c| c.set(2000 + 1));
+    unsafe { defer_step(0, counting_entry) };
+    unsafe { defer(p(9), b) };
+}
+
+#[test]
+fn steps_inside_a_drain_and_an_empty_drain() {
+    drain();
+    assert!(take_log().is_empty());
+    unsafe { run(p(0), defers_a_step) };
+    assert_eq!(take_log(), [('b', 9), ('s', 1), ('b', 21), ('s', 1)]);
+    assert!(!releasing() && depth() == 0);
+}
+
 #[test]
 fn symbols_are_exported() {
     let symbols = crate::symbols::exported_symbols();
