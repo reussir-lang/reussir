@@ -20,7 +20,10 @@ module {
   // UNSPECIALIZED-LABEL: func.func @release
   // UNSPECIALIZED: reussir.drop.run
   // CHECK-LABEL: func.func @release
-  // CHECK: reussir.drop.run @__reussir_drop.walk.forward
+  // CHECK-NOT: reussir.drop.run
+  // CHECK: reussir.rc.fetch
+  // CHECK: scf.if
+  // CHECK: reussir.drop.run @__reussir_drop.release.forward
   // EARLY-NOT: tail_release
   func.func @release(%ref: !reussir.ref<!reussir.rc<!node shared>>) {
     reussir.ref.drop (%ref : !reussir.ref<!reussir.rc<!node shared>>)
@@ -39,7 +42,11 @@ module {
     return
   }
   // CHECK-LABEL: func.func @nullable_release
-  // CHECK: reussir.drop.run @__reussir_drop.walk.forward
+  // CHECK-NOT: reussir.drop.run
+  // CHECK: reussir.nullable.dispatch
+  // CHECK: reussir.rc.fetch
+  // CHECK: scf.if
+  // CHECK: reussir.drop.run @__reussir_drop.release.forward
   // UNSPECIALIZED-LABEL: func.func @nullable_release
   // UNSPECIALIZED: reussir.drop.run
   func.func @nullable_release(%ref: !reussir.ref<!reussir.nullable<!reussir.rc<!node shared>>>) {

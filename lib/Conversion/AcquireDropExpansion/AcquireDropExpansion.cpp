@@ -196,11 +196,11 @@ private:
 
   mlir::LogicalResult rewriteDropRc(RcType rcType, ReussirRefDropOp op,
                                     mlir::PatternRewriter &rewriter) const {
-    if (outlineRecord && isInsideWorklistGlue(op) &&
-        rcType.getCapability() == Capability::shared) {
+    if (outlineRecord && rcType.getCapability() == Capability::shared) {
       mlir::Value loaded =
           ReussirRefLoadOp::create(rewriter, op.getLoc(), rcType, op.getRef());
-      emitWorklistDecrement(loaded, op.getLoc(), rewriter, symbols);
+      emitWorklistDecrement(loaded, op.getLoc(), rewriter, symbols,
+                            !isInsideWorklistGlue(op));
       rewriter.eraseOp(op);
       return mlir::success();
     }
@@ -349,10 +349,9 @@ private:
           &dispatcher.getNonNullRegion(), dispatcher.getNonNullRegion().begin(),
           {nullableType.getPtrTy()}, {op.getLoc()});
       rewriter.setInsertionPointToStart(nonNullBlock);
-      if (outlineRecord && isInsideWorklistGlue(op) &&
-          rcType.getCapability() == Capability::shared) {
+      if (outlineRecord && rcType.getCapability() == Capability::shared) {
         emitWorklistDecrement(nonNullBlock->getArgument(0), op.getLoc(),
-                              rewriter, symbols);
+                              rewriter, symbols, !isInsideWorklistGlue(op));
         ReussirScfYieldOp::create(rewriter, op.getLoc(), nullptr);
         rewriter.eraseOp(op);
         return mlir::success();
@@ -435,7 +434,8 @@ public:
       return mlir::success();
     }
 
-    if (outlineRecord && !isInsideWorklistGlue(op) && !op.getVariant()) {
+    if (outlineRecord && !isInsideWorklistGlue(op) && !op.getVariant() &&
+        !llvm::isa<RcType, NullableType>(refType.getElementType())) {
       emitWorklistDrop(op.getRef(), op.getLoc(), rewriter, symbols, true);
       rewriter.eraseOp(op);
       return mlir::success();
