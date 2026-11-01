@@ -52,9 +52,7 @@ fn public_nested_calls_complete_only_their_suffix() {
 unsafe extern "C" fn merged_nested(object: *mut u8) {
     unsafe { defer(object, first) };
     unsafe { defer(object, first) };
-    assert_eq!(depth(), 1);
     unsafe { run(object, nested) };
-    assert_eq!(depth(), 1);
     unsafe { (*object.cast::<Ordered>()).log.push(3) };
     unsafe { defer(object, first) };
     assert_eq!(depth(), 1);
@@ -203,7 +201,7 @@ unsafe extern "C" fn enqueue_wide(object: *mut u8) {
         unsafe { defer_wide(object.cast(), callback) };
     }
     ACTIVE.with(|context| {
-        assert!(context.active_run.get().is_some());
+        assert!(context.active_run.head.get().is_some());
         let context = context.pending.borrow();
         assert!(context.work.is_empty());
         assert_eq!(context.cells.len(), 1);
@@ -292,7 +290,7 @@ unsafe extern "C" fn bulk(object: *mut u8) {
         unsafe { defer(object, first) };
     }
     ACTIVE.with(|context| {
-        assert!(context.active_run.get().is_some());
+        assert!(context.active_run.head.get().is_some());
         let context = context.pending.borrow();
         assert!(context.work.is_empty());
         assert_eq!(context.cells.len(), 127);

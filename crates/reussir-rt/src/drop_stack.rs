@@ -28,8 +28,9 @@ struct PendingRun {
     storage: RunStorage,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 enum RunStorage {
+    #[default]
     Cells,
     Wide,
 }
@@ -66,9 +67,33 @@ pub type Step = unsafe extern "C" fn(*mut c_void) -> StepStatus;
 #[derive(Default)]
 pub struct DropContext {
     pending: RefCell<Pending>,
-    active_run: Cell<Option<PendingRun>>,
+    active_run: ActiveRun,
     boundary: Cell<usize>,
     end_work: Cell<Option<EndWork>>,
+}
+
+#[derive(Default)]
+struct ActiveRun {
+    head: Cell<Option<Object>>,
+    release: Cell<Option<Release>>,
+    len: Cell<usize>,
+    storage: Cell<RunStorage>,
+}
+impl ActiveRun {
+    fn take(&self) -> Option<PendingRun> {
+        self.head.take().map(|head| PendingRun {
+            head,
+            release: self.release.get().unwrap(),
+            len: NonZeroUsize::new(self.len.get()).unwrap(),
+            storage: self.storage.get(),
+        })
+    }
+    fn set(&self, run: PendingRun) {
+        self.head.set(Some(run.head));
+        self.release.set(Some(run.release));
+        self.len.set(run.len.get());
+        self.storage.set(run.storage);
+    }
 }
 
 #[derive(Default)]
@@ -91,55 +116,56 @@ impl DropContext {
             && let Some(Work::Run(run)) = pending.work.last().copied()
         {
             pending.work.pop();
-            self.active_run.set(Some(run));
+            self.active_run.set(run);
         }
     }
 
     fn start_run(&self, object: Object, release: Release, storage: RunStorage) {
         self.spill();
-        self.active_run.set(Some(PendingRun {
+        self.active_run.set(PendingRun {
             head: object,
             release,
             len: NonZeroUsize::new(1).unwrap(),
             storage,
-        }));
+        });
     }
 
     fn defer(&self, object: Object, release: Release) {
-        if let Some(mut run) = self.active_run.get()
-            && matches!(run.storage, RunStorage::Cells)
-            && core::ptr::fn_addr_eq(run.release, release)
+        let active = &self.active_run;
+        if let Some(head) = active.head.get()
+            && matches!(active.storage.get(), RunStorage::Cells)
+            && core::ptr::fn_addr_eq(active.release.get().unwrap(), release)
         {
-            self.pending.borrow_mut().cells.push(run.head);
-            run.head = object;
-            run.len = NonZeroUsize::new(run.len.get() + 1).unwrap();
-            self.active_run.set(Some(run));
+            self.pending.borrow_mut().cells.push(head);
+            active.head.set(Some(object));
+            active.len.set(active.len.get() + 1);
             return;
         }
         self.start_run(object, release, RunStorage::Cells);
     }
 
     unsafe fn defer_wide(&self, object: Object, release: Release) {
-        if let Some(mut run) = self.active_run.get()
-            && matches!(run.storage, RunStorage::Wide)
+        let active = &self.active_run;
+        if let Some(head) = active.head.get()
+            && matches!(active.storage.get(), RunStorage::Wide)
         {
+            let previous_release = active.release.get().unwrap();
             let header = unsafe { WideHeader::new(object) };
-            let joined = if core::ptr::fn_addr_eq(run.release, release) {
-                self.pending.borrow_mut().cells.push(run.head);
+            let joined = if core::ptr::fn_addr_eq(previous_release, release) {
+                self.pending.borrow_mut().cells.push(head);
                 unsafe { header.mark_cell() };
                 true
             } else {
                 self.pending
                     .borrow_mut()
                     .releases
-                    .index(run.release)
-                    .is_some_and(|index| unsafe { header.link(run.head, index) })
+                    .index(previous_release)
+                    .is_some_and(|index| unsafe { header.link(head, index) })
             };
             if joined {
-                run.head = object;
-                run.release = release;
-                run.len = NonZeroUsize::new(run.len.get() + 1).unwrap();
-                self.active_run.set(Some(run));
+                active.head.set(Some(object));
+                active.release.set(Some(release));
+                active.len.set(active.len.get() + 1);
                 return;
             }
         }
@@ -148,29 +174,29 @@ impl DropContext {
 
     fn drain(&self) {
         loop {
-            if let Some(run) = self.active_run.get() {
-                if run.len.get() == 1 {
-                    self.active_run.set(None);
+            let active = &self.active_run;
+            if let Some(head) = active.head.get() {
+                let release = active.release.get().unwrap();
+                let remaining = active.len.get() - 1;
+                if remaining == 0 {
+                    active.head.set(None);
                     self.restore();
                 } else {
                     let mut pending = self.pending.borrow_mut();
-                    let mut next = run;
-                    next.head = match run.storage {
+                    let next = match active.storage.get() {
                         RunStorage::Cells => pending.cells.pop().unwrap(),
-                        RunStorage::Wide => {
-                            match unsafe { WideHeader::new(run.head).take_link() } {
-                                Some(link) => {
-                                    next.release = pending.releases.get(link.release);
-                                    link.previous
-                                }
-                                None => pending.cells.pop().unwrap(),
+                        RunStorage::Wide => match unsafe { WideHeader::new(head).take_link() } {
+                            Some(link) => {
+                                active.release.set(Some(pending.releases.get(link.release)));
+                                link.previous
                             }
-                        }
+                            None => pending.cells.pop().unwrap(),
+                        },
                     };
-                    next.len = NonZeroUsize::new(run.len.get() - 1).unwrap();
-                    self.active_run.set(Some(next));
+                    active.head.set(Some(next));
+                    active.len.set(remaining);
                 }
-                unsafe { (run.release)(run.head.as_ptr()) };
+                unsafe { release(head.as_ptr()) };
                 continue;
             }
             let (work, position) = {
@@ -194,7 +220,7 @@ impl DropContext {
                 Work::Step { object, callback } => {
                     if unsafe { callback(object.0.as_ptr()) } == StepStatus::Complete {
                         self.pending.borrow_mut().work.remove(position);
-                        if self.active_run.get().is_none() {
+                        if self.active_run.head.get().is_none() {
                             self.restore();
                         }
                     }
@@ -310,7 +336,8 @@ pub fn releasing() -> bool {
 pub fn depth() -> usize {
     if ACTIVE.is_set() {
         ACTIVE.with(|context| {
-            context.pending.borrow().work.len() + usize::from(context.active_run.get().is_some())
+            context.pending.borrow().work.len()
+                + usize::from(context.active_run.head.get().is_some())
         })
     } else {
         0
