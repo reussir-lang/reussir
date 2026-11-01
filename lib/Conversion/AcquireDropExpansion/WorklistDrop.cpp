@@ -159,9 +159,189 @@ public:
     schedule(task, rc, false);
   }
 
-  void release(mlir::Value rc, bool run) {
-    auto type = llvm::cast<RcType>(rc.getType());
-    auto task = function(type, "release", [&](mlir::Value arg) {
+  static bool canReleasePure(mlir::Type type) {
+    if (isTriviallyCopyable(type))
+      return true;
+    if (auto nullable = llvm::dyn_cast<NullableType>(type))
+      type = nullable.getPtrTy();
+    if (auto rc = llvm::dyn_cast<RcType>(type))
+      return rc.getCapability() == Capability::shared;
+    auto record = llvm::dyn_cast<RecordType>(type);
+    if (!record || record.hasObservableCleanup())
+      return false;
+    return llvm::all_of(
+        llvm::zip(record.getMembers(), record.getMemberIsField()),
+        [&](auto member) {
+          auto [type, field] = member;
+          auto projected = getProjectedType(type, field, Capability::shared);
+          auto nested = llvm::dyn_cast<RecordType>(projected);
+          return field ||
+                 ((!record.isCompound() || !nested || !nested.isVariant()) &&
+                  canReleasePure(projected));
+        });
+  }
+
+  mlir::Value deadTest(mlir::Value child) {
+    auto i1 = builder.getI1Type();
+    // `cond ? value() : false`
+    auto guarded = [&](mlir::Value cond,
+                       llvm::function_ref<mlir::Value()> value) {
+      auto branch = mlir::scf::IfOp::create(builder, loc, mlir::TypeRange{i1},
+                                            cond, true, true);
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(branch.thenBlock());
+      mlir::scf::YieldOp::create(builder, loc, mlir::ValueRange{value()});
+      builder.setInsertionPointToStart(branch.elseBlock());
+      mlir::Value no = mlir::arith::ConstantIntOp::create(builder, loc, i1, 0);
+      mlir::scf::YieldOp::create(builder, loc, mlir::ValueRange{no});
+      return branch.getResult(0);
+    };
+    if (auto nullable = llvm::dyn_cast<NullableType>(child.getType()))
+      return guarded(ReussirNullableCheckOp::create(builder, loc, child), [&] {
+        return deadTest(ReussirNullableCoerceOp::create(
+            builder, loc, nullable.getPtrTy(), child));
+      });
+    auto type = llvm::cast<RcType>(child.getType());
+    auto test = [&]() -> mlir::Value {
+      bool atomic = type.getAtomicKind() == AtomicKind::atomic;
+      mlir::Value count =
+          atomic
+              ? ReussirRcFetchSubOp::create(builder, loc, child).getRefCount()
+              : ReussirRcFetchOp::create(builder, loc, child).getRefCount();
+      mlir::Value one = mlir::arith::ConstantIndexOp::create(builder, loc, 1);
+      mlir::Value unique = mlir::arith::CmpIOp::create(
+          builder, loc, mlir::arith::CmpIPredicate::eq, count, one);
+      if (!atomic) {
+        auto branch = mlir::scf::IfOp::create(builder, loc, unique, true);
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(branch.elseBlock());
+        ReussirRcSetOp::create(
+            builder, loc, child,
+            mlir::arith::SubIOp::create(builder, loc, count, one));
+      }
+      return unique;
+    };
+    // An immediate owns no memory (see emitDecrement).
+    if (module->hasAttr(kSpecialPtrTagAttr) &&
+        type.mayCarrySpecialPointerTag()) {
+      mlir::Value immediate =
+          ReussirRcIsImmediateOp::create(builder, loc, i1, child);
+      mlir::Value yes = mlir::arith::ConstantIntOp::create(builder, loc, i1, 1);
+      return guarded(mlir::arith::XOrIOp::create(builder, loc, immediate, yes),
+                     test);
+    }
+    return test();
+  }
+
+  void tailRelease(mlir::Value child) {
+    if (auto nullable = llvm::dyn_cast<NullableType>(child.getType()))
+      child = ReussirNullableCoerceOp::create(builder, loc, nullable.getPtrTy(),
+                                              child);
+    auto call = mlir::func::CallOp::create(
+        builder, loc, releaseFunction(llvm::cast<RcType>(child.getType())),
+        mlir::ValueRange{child});
+    call->setAttr(kMustTailCallAttr, builder.getUnitAttr());
+  }
+
+  void releasePure(mlir::Value ref, mlir::Value box) {
+    auto refType = llvm::cast<RefType>(ref.getType());
+    auto type = refType.getElementType();
+    if (auto record = llvm::dyn_cast<RecordType>(type);
+        record && record.isVariant()) {
+      llvm::SmallVector<mlir::Attribute> tags;
+      for (size_t i = 0; i < record.getMembers().size(); ++i)
+        tags.push_back(builder.getDenseI64ArrayAttr({int64_t(i)}));
+      auto dispatch = ReussirRecordDispatchOp::create(
+          builder, loc, mlir::Type{}, ref, builder.getArrayAttr(tags),
+          tags.size());
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      for (auto [i, member, field] :
+           llvm::enumerate(record.getMembers(), record.getMemberIsField())) {
+        auto projected = getProjectedType(
+            member, field, Capability::unspecified, refType.getAtomicKind());
+        auto *arm = builder.createBlock(
+            &dispatch.getRegions()[i], {},
+            {RefType::get(builder.getContext(), projected,
+                          Capability::unspecified, refType.getAtomicKind())},
+            {loc});
+        if (field)
+          emitBoxFree(box, loc, module, builder);
+        else
+          releasePure(arm->getArgument(0), box);
+        ReussirScfYieldOp::create(builder, loc, nullptr);
+      }
+      return;
+    }
+    llvm::SmallVector<mlir::Value> children, dead;
+    auto collect = [&](auto &&self, mlir::Value slot) -> void {
+      auto slotType = llvm::cast<RefType>(slot.getType());
+      auto valueType = slotType.getElementType();
+      if (isTriviallyCopyable(valueType))
+        return;
+      if (auto record = llvm::dyn_cast<RecordType>(valueType)) {
+        assert(record.isCompound());
+        for (auto [i, member, field] :
+             llvm::enumerate(record.getMembers(), record.getMemberIsField())) {
+          if (field)
+            continue;
+          auto projected = getProjectedType(
+              member, false, Capability::unspecified, slotType.getAtomicKind());
+          self(self, ReussirRefProjectOp::create(
+                         builder, loc,
+                         RefType::get(builder.getContext(), projected,
+                                      Capability::unspecified,
+                                      slotType.getAtomicKind()),
+                         slot, builder.getIndexAttr(i)));
+        }
+        return;
+      }
+      mlir::Value child =
+          ReussirRefLoadOp::create(builder, loc, valueType, slot);
+      children.push_back(child);
+      dead.push_back(deadTest(child));
+    };
+    collect(collect, ref);
+    emitBoxFree(box, loc, module, builder);
+    if (children.empty())
+      return;
+    if (isForwardDrop(module)) {
+      std::reverse(children.begin(), children.end());
+      std::reverse(dead.begin(), dead.end());
+    }
+    auto defer = [&](size_t i) {
+      auto branch = mlir::scf::IfOp::create(builder, loc, dead[i], false);
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(branch.thenBlock());
+      mlir::Value child = children[i];
+      if (auto nullable = llvm::dyn_cast<NullableType>(child.getType()))
+        child = ReussirNullableCoerceOp::create(builder, loc,
+                                                nullable.getPtrTy(), child);
+      release(child, false);
+    };
+    size_t first = children.size() > 2 ? children.size() - 2 : 0;
+    for (size_t i = 0; i < first; ++i)
+      defer(i);
+    // Leave one continuation in the caller instead of pushing and popping it.
+    auto continueAt = [&](auto &&self, size_t n) -> void {
+      if (n == first)
+        return;
+      auto branch =
+          mlir::scf::IfOp::create(builder, loc, dead[n - 1], n > first + 1);
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(branch.thenBlock());
+      for (size_t i = first; i + 1 < n; ++i)
+        defer(i);
+      tailRelease(children[n - 1]);
+      if (n > first + 1) {
+        builder.setInsertionPointToStart(branch.elseBlock());
+        self(self, n - 1);
+      }
+    };
+    continueAt(continueAt, children.size());
+  }
+
+  mlir::func::FuncOp releaseFunction(RcType type) {
+    return function(type, "release", [&](mlir::Value arg) {
       if (llvm::isa<FFIObjectType, ClosureType>(type.getElementType())) {
         if (type.getAtomicKind() == AtomicKind::atomic)
           ReussirRcSetOp::create(
@@ -181,6 +361,14 @@ public:
           RefType::get(builder.getContext(), type.getElementType(),
                        Capability::unspecified, type.getAtomicKind());
       mlir::Value ref = ReussirRcBorrowOp::create(builder, loc, refType, arg);
+      auto record = llvm::dyn_cast<RecordType>(type.getElementType());
+      auto target = module->getAttrOfType<mlir::StringAttr>(
+          mlir::LLVM::LLVMDialect::getTargetTripleAttrName());
+      if (record && !record.hasObservableCleanup() && canReleasePure(record) &&
+          (!target || !llvm::Triple(target.getValue()).isWasm())) {
+        releasePure(ref, arg);
+        return;
+      }
       if (isForwardDrop(module)) {
         free(arg);
         auto call = mlir::func::CallOp::create(builder, loc, walk(refType),
@@ -194,6 +382,11 @@ public:
         emitBoxFree(arg, loc, module, builder);
       }
     });
+  }
+
+  void release(mlir::Value rc, bool run) {
+    auto type = llvm::cast<RcType>(rc.getType());
+    auto task = releaseFunction(type);
     if (!run && !llvm::isa<FFIObjectType, ClosureType>(type.getElementType()))
       ReussirRcDeferOp::create(
           builder, loc, mlir::FlatSymbolRefAttr::get(task.getSymNameAttr()),
