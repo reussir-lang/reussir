@@ -400,12 +400,7 @@ pub fn run_lowering_pipeline(
             if options.opt == OptLevel::Aggressive => {
                 func: sys::reussirCreateClosureBetaReductionPass();
             }
-            // Drop the private functions nothing calls any more: the ones
-            // the inliner inlined everywhere, and originals whose calls all
-            // went to a specialized clone (UCRA's `.unique`). Everything after
-            // this point would otherwise process them, and only LLVM would
-            // delete them. `pub` functions are public symbols and stay.
-            module: sys::reussirCreateSymbolDCEPass();
+
         }
 
         // Simplify extents before instantiating tokens. Cleanup after decrement
@@ -459,6 +454,10 @@ pub fn run_lowering_pipeline(
             options.opt != OptLevel::Tpde,
             options.opt != OptLevel::Tpde,
         );
+        // Record drops must expose their FFI cleanup uses before symbol DCE.
+        if options.opt.runs_optimization() => {
+            module: sys::reussirCreateSymbolDCEPass();
+        }
         func:   sys::reussirCreateTokenReusePass(
             options.reuse_token_across_call,
             options.emit_token_reuse_remarks,
@@ -656,6 +655,36 @@ mod tests {
         // After lowering, the function is an llvm.func rather than a func.func.
         let rendered = module.as_operation().to_string();
         assert!(rendered.contains("llvm.func @answer"), "got:\n{rendered}");
+    }
+
+    #[test]
+    fn preserves_ffi_cleanup_used_by_record_drop() {
+        let source = r#"
+            !handle = !reussir.rc<!reussir.ffi_object<"T", @drop>>
+            !wrapper = !reussir.rc<!reussir.record<compound "Wrapper" {!handle}>>
+            module {
+              func.func private @drop(!handle)
+              func.func private @make() -> !wrapper
+              func.func @use() {
+                %x = func.call @make() : () -> !wrapper
+                reussir.rc.dec(%x : !wrapper)
+                return
+              }
+            }
+        "#;
+        for opt in [OptLevel::Default, OptLevel::Aggressive] {
+            let context = crate::context();
+            let mut module = Module::parse(&context, source).expect("module should parse");
+            let options = LoweringOptions {
+                opt,
+                ..LoweringOptions::default()
+            };
+            run_lowering_pipeline(&context, &mut module, &options)
+                .expect("record cleanup should retain its FFI hook");
+            assert!(module.as_operation().verify());
+            let rendered = module.as_operation().to_string();
+            assert!(rendered.contains("llvm.call @drop"), "{opt:?}:\n{rendered}");
+        }
     }
 
     #[test]
