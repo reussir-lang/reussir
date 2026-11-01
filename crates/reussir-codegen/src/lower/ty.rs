@@ -355,8 +355,7 @@ impl<'c, 'p, 'tcx> TypeCtx<'c, 'p, 'tcx> {
     }
 
     pub(super) fn cleanup_hooks(&self, root: Ty<'tcx>) -> &'tcx [mir::Symbol] {
-        *self
-            .cleanup_hooks
+        self.cleanup_hooks
             .borrow_mut()
             .entry(root)
             .or_insert_with(|| {
