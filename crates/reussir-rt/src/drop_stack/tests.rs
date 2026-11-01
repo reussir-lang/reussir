@@ -1,5 +1,8 @@
 use super::*;
 
+const TEST_STACK_SIZE: usize = 64 * 1024;
+const DEEP_CHAIN_LENGTH: usize = 1_000_000;
+
 struct Chain {
     remaining: usize,
 }
@@ -14,10 +17,10 @@ unsafe extern "C" fn chain(object: *mut u8) {
 #[test]
 fn deep_work_uses_a_bounded_native_stack() {
     std::thread::Builder::new()
-        .stack_size(64 * 1024)
+        .stack_size(TEST_STACK_SIZE)
         .spawn(|| {
             let mut object = Chain {
-                remaining: 1_000_000,
+                remaining: DEEP_CHAIN_LENGTH,
             };
             unsafe { run((&mut object as *mut Chain).cast(), chain) };
             assert_eq!(object.remaining, 0);
