@@ -1401,6 +1401,21 @@ fn drop_order_defaults_validates_and_survives_resume() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let interface = dir.path().join("backward.rri");
+    let output = rrc(&[
+        &src,
+        Path::new("--package-name=demo"),
+        Path::new("--emit=rri"),
+        Path::new("--drop-order=backward"),
+        Path::new("-o"),
+        &interface,
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(read(&interface).contains("drop_order \"backward\";"));
     let mut input = backward;
     for stage in ["hir", "mir", "mlir"] {
         let out = dir.path().join(format!("resume.{stage}"));
