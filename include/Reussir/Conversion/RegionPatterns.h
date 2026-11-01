@@ -21,10 +21,9 @@
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/DialectConversion.h>
 
-namespace reussir {
+#include "Reussir/Conversion/Passes.h"
 
-#define GEN_PASS_DECL_REUSSIRREGIONPATTERNSPASS
-#include "Reussir/Conversion/Passes.h.inc"
+namespace reussir {
 
 void populateRegionPatternsConversionPatterns(
     mlir::RewritePatternSet &patterns);

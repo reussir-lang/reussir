@@ -4704,6 +4704,27 @@ void ReussirDialect::registerOperations() {
 //===----------------------------------------------------------------------===//
 // gatherCompiledModules
 //===----------------------------------------------------------------------===//
+mlir::LogicalResult resolveDropOrder(mlir::ModuleOp module,
+                                     llvm::StringRef configured) {
+  auto saved = module->getAttrOfType<mlir::StringAttr>("reussir.drop_order");
+  if (module->hasAttr("reussir.drop_order") && !saved)
+    return module.emitError("reussir.drop_order must be a string");
+  auto valid = [](llvm::StringRef value) {
+    return value == "forward" || value == "backward";
+  };
+  if ((!configured.empty() && !valid(configured)) ||
+      (saved && !valid(saved.getValue())))
+    return module.emitError("drop-order must be forward or backward");
+  if (saved && !configured.empty() && saved.getValue() != configured)
+    return module.emitError("drop-order conflicts with saved module policy");
+  if (!saved)
+    module->setAttr(
+        "reussir.drop_order",
+        mlir::StringAttr::get(module.getContext(),
+                              configured.empty() ? "forward" : configured));
+  return mlir::success();
+}
+
 std::unique_ptr<llvm::Module>
 gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
                       llvm::StringRef dataLayout, llvm::StringRef targetTriple) {

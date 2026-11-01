@@ -187,6 +187,9 @@ mlir::func::FuncOp emitOwnershipAcquisitionFuncIfNotExists(
 // non-empty, `targetTriple` — the destination module's own spelling of the
 // machine, which rustc-produced bitcode need not share (see the comment at
 // the definition).
+mlir::LogicalResult resolveDropOrder(mlir::ModuleOp module,
+                                     llvm::StringRef configured);
+
 std::unique_ptr<llvm::Module>
 gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
                       llvm::StringRef dataLayout,

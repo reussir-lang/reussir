@@ -25,12 +25,10 @@
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/DialectConversion.h>
 
+#include "Reussir/Conversion/Passes.h"
 #include "Reussir/IR/ReussirTypes.h"
 
 namespace reussir {
-
-#define GEN_PASS_DECL_REUSSIRACQUIREDROPEXPANSIONPASS
-#include "Reussir/Conversion/Passes.h.inc"
 
 // `symbols`, if given, holds the symbol tables the outlined glue is looked
 // up in (see `createDtorIfNotExists`); it must outlive the patterns.
