@@ -316,11 +316,45 @@ TEST_F(RecordDropTest, RecursiveCleanupIncludesOwnedDescendants) {
   auto wrapper = declare("LeafWrapper");
   complete(wrapper, {leaf});
   EXPECT_TRUE(wrapper.hasRecursiveCleanup());
+  EXPECT_TRUE(wrapper.hasWorklistCleanup());
   complete(leaf, {scalar()});
   auto outer = declare("OuterLeafWrapper");
   complete(outer, {wrapper});
   EXPECT_FALSE(wrapper.hasRecursiveCleanup());
   EXPECT_FALSE(outer.hasRecursiveCleanup());
+  EXPECT_FALSE(outer.hasWorklistCleanup());
+}
+
+TEST_F(RecordDropTest, WorklistCleanupDistinguishesTailDescendants) {
+  auto list = declare("TailChild");
+  complete(list, {scalar(), list});
+  auto wrapper = declare("TailWrapper");
+  complete(wrapper, {list});
+  EXPECT_FALSE(list.hasWorklistCleanup());
+  EXPECT_FALSE(wrapper.hasWorklistCleanup());
+  auto tree = declare("BranchChild");
+  complete(tree, {tree, tree});
+  auto owner = declare("TailWithBranch");
+  complete(owner, {tree, owner});
+  EXPECT_EQ(owner.classifyRecordDrop(), RecordDropKind::TailLoop);
+  EXPECT_TRUE(owner.hasWorklistCleanup());
+  auto outer = declare("BranchWrapper");
+  complete(outer, {owner});
+  EXPECT_TRUE(outer.hasWorklistCleanup());
+}
+
+TEST_F(RecordDropTest, WorklistCleanupRetainsUnsupportedTailEntries) {
+  auto regional = declare("RegionalTail");
+  complete(regional, {RcType::get(&context, regional, Capability::flex)});
+  EXPECT_EQ(regional.classifyRecordDrop(), RecordDropKind::TailLoop);
+  EXPECT_TRUE(regional.hasWorklistCleanup());
+  auto named = declare("NamedTail");
+  auto anonymous =
+      RecordType::get(&context, {named}, {false}, RecordKind::compound,
+                      Capability::shared, false);
+  complete(named, {anonymous});
+  EXPECT_EQ(named.classifyRecordDrop(), RecordDropKind::TailLoop);
+  EXPECT_TRUE(named.hasWorklistCleanup());
 }
 
 TEST_F(RecordDropTest, CachedClassificationIsSharedByTypeHandles) {
