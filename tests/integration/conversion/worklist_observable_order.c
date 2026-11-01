@@ -113,37 +113,32 @@ static int expect(const char *name, const unsigned *expected, size_t count) {
   event_count = 0;
   return matches;
 }
-int main(int argc, char **argv) {
-  int backward = argc == 2 && strcmp(argv[1], "backward") == 0;
-  const unsigned forward_node[] = {1, 2, 3}, backward_node[] = {3, 2, 1};
-  const unsigned forward_alias[] = {10, 20}, backward_alias[] = {20, 10};
-  const unsigned forward_nested[] = {1, 20, 9, 21, 3};
-  const unsigned backward_nested[] = {3, 20, 9, 21, 1};
+int main(void) {
+  const unsigned node_order[] = {1, 2, 3};
+  const unsigned after_order[] = {10, 20}, before_order[] = {20, 10};
+  const unsigned nested_order[] = {1, 20, 9, 21, 3};
   order_drop_node(make_node(2));
-  if (!expect("node", backward ? backward_node : forward_node, 3))
+  if (!expect("node", node_order, 3))
     return 1;
   order_drop_after(make_alias(0));
-  if (!expect("alias after", backward ? backward_alias : forward_alias, 2))
+  if (!expect("alias after", after_order, 2))
     return 2;
   order_drop_before(make_alias(1));
-  if (!expect("alias before", backward_alias, 2))
+  if (!expect("alias before", before_order, 2))
     return 3;
   Pair *old = allocate(sizeof(*old));
   old->a = make_handle(1);
   old->b = make_handle(2);
   Pair *replacement = order_replace_pair(old, make_handle(3), make_handle(4));
-  const unsigned forward_old[] = {1, 2}, backward_old[] = {2, 1};
-  if (!expect("donor cleanup", backward ? backward_old : forward_old, 2))
+  const unsigned old_order[] = {1, 2};
+  if (!expect("donor cleanup", old_order, 2))
     return 4;
   order_drop_pair(replacement);
-  const unsigned forward_new[] = {3, 4}, backward_new[] = {4, 3};
-  if (!expect("replacement cleanup", backward ? backward_new : forward_new, 2))
+  const unsigned new_order[] = {3, 4};
+  if (!expect("replacement cleanup", new_order, 2))
     return 5;
   // The public nested drop must finish before its caller records 21.
   nested_leaf = make_leaf(9);
   order_drop_node(make_node(20));
-  return expect("nested public drop",
-                backward ? backward_nested : forward_nested, 5)
-             ? 0
-             : 6;
+  return expect("nested public drop", nested_order, 5) ? 0 : 6;
 }
