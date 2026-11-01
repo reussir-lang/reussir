@@ -31,7 +31,7 @@ bool hasWideHeader(RcType type, const LLVMTypeConverter &converter,
     return false;
   RcBoxType box = type.getInnerBoxType();
   if (box.isHeaderFused())
-    return record.getMembers().size() <= (1u << 16);
+    return record.getMembers().size() <= (1u << 16u);
   if (box.getHeaderTypes().size() != 1)
     return false;
   // The box is `{i32, payload}`, not packed: the payload starts at its
