@@ -119,6 +119,37 @@ pub struct Target {
     pub path: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub enum DropOrder {
+    #[default]
+    Forward,
+    Backward,
+}
+
+impl TryFrom<String> for DropOrder {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "forward" => Ok(Self::Forward),
+            "backward" => Ok(Self::Backward),
+            _ => Err(format!(
+                "invalid drop order `{value}`; expected forward or backward"
+            )),
+        }
+    }
+}
+
+impl DropOrder {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Forward => "forward",
+            Self::Backward => "backward",
+        }
+    }
+}
+
 /// A named set of build knobs, mirroring `rrc`'s flags one for one — the
 /// values are passed through verbatim, so `rrc --help` is the reference for
 /// what each accepts, and an invalid one fails there with its diagnostic.
@@ -129,6 +160,8 @@ pub struct Target {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
+    /// `rrc --drop-order`: `forward` (default) or `backward`.
+    pub drop_order: Option<DropOrder>,
     /// `rrc -O`: `none`, `default`, `aggressive`, or `size`.
     pub opt: Option<String>,
     /// `rrc -g`: emit DWARF debug info.
@@ -188,6 +221,7 @@ impl Profile {
             };
         }
         take!(
+            drop_order,
             opt,
             debug,
             lto,
@@ -429,6 +463,24 @@ mod tests {
         );
         let err = load(&path).unwrap_err().to_string();
         assert!(err.contains("verison"), "{err}");
+    }
+
+    #[test]
+    fn drop_order_is_typed_and_refines_profiles() {
+        let base = Profile {
+            drop_order: Some(DropOrder::Backward),
+            ..Profile::default()
+        };
+        assert_eq!(
+            base.clone().refined_by(&Profile::default()).drop_order,
+            base.drop_order
+        );
+        let forward: Profile = serde_json::from_str(r#"{"drop_order":"forward"}"#).unwrap();
+        assert_eq!(
+            base.refined_by(&forward).drop_order,
+            Some(DropOrder::Forward)
+        );
+        assert!(serde_json::from_str::<Profile>(r#"{"drop_order":"invalid"}"#).is_err());
     }
 
     #[test]
