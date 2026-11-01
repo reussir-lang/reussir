@@ -73,7 +73,7 @@ impl<'c, 'p, 'tcx> KernelLowerer<'c, 'p, 'tcx> {
             context,
             tcx,
             program,
-            tys: TypeCtx::new(context, program),
+            tys: TypeCtx::new(context, tcx, program),
             source,
             file: Cell::new(FileId::from_index(0)),
         }
