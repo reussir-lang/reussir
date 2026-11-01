@@ -406,10 +406,12 @@ pub fn lower_unit<'c, 'tcx>(
     sanitizers: &[Sanitizer],
 ) -> Result<Module<'c>> {
     let mut module = Module::new(Location::unknown(context));
-    module.as_operation_mut().set_attribute(
-        "reussir.drop_order",
-        StringAttribute::new(context, program.drop_order.unwrap_or_default().as_str()).into(),
-    );
+    if let Some(order) = program.drop_order {
+        module.as_operation_mut().set_attribute(
+            "reussir.drop_order",
+            StringAttribute::new(context, order.as_str()).into(),
+        );
+    }
     let sanitize_attrs = sanitizer_attr_strings(sanitizers);
     let lowerer = Lowerer::new(context, tcx, program, source, names, linkage)
         .with_unit(unit)

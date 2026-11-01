@@ -149,7 +149,7 @@ unsafe extern "C" {
     pub fn reussirCreateClosureOutliningPass() -> MlirPass;
     pub fn reussirCreateRegionPatternsPass() -> MlirPass;
     pub fn reussirCreateIncDecCancellationPass() -> MlirPass;
-    pub fn reussirCreateRcDecrementExpansionPass() -> MlirPass;
+    pub fn reussirCreateRcDecrementExpansionPass(drop_order: MlirStringRef) -> MlirPass;
     pub fn reussirCreateInferVariantTagPass() -> MlirPass;
     pub fn reussirCreateConvertToSTDPass(expand_arrays: bool) -> MlirPass;
     pub fn reussirCreateRcCreateSinkPass() -> MlirPass;
@@ -177,6 +177,7 @@ unsafe extern "C" {
         expand_decrement: bool,
         outline_record: bool,
         tail_recursive_drops: bool,
+        drop_order: MlirStringRef,
     ) -> MlirPass;
     pub fn reussirCreateTokenReusePass(reuse_across_call: bool, emit_remarks: bool) -> MlirPass;
 

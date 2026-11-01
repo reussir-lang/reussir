@@ -157,6 +157,10 @@ pub(crate) fn backend_module(
     // shrinks but nothing breaks.
     let closure_wpd = !cli.no_closure_wpd && matches!(opt, OptLevel::Aggressive | OptLevel::Size);
     let options = LoweringOptions {
+        drop_order: Some(match drop_order {
+            reussir_core::drop_order::DropOrder::Forward => pipeline::DropOrder::Forward,
+            reussir_core::drop_order::DropOrder::Backward => pipeline::DropOrder::Backward,
+        }),
         opt,
         reuse_token_across_call: cli.reuse_across_call,
         borrow_analysis: !cli.disable_borrow_analysis,

@@ -162,7 +162,8 @@ void addCanonicalizerPassWithoutRegionSimplification(mlir::OpPassManager &pm) {
 void createLoweringPipeline(mlir::PassManager &pm,
                             ReussirOptOption opt = REUSSIR_OPT_DEFAULT,
                             bool reuseTokenAcrossCall = false,
-                            bool enableInvariantAnalysis = false) {
+                            bool enableInvariantAnalysis = false,
+                            llvm::StringRef dropOrder = "") {
   // Keep optional device optimization out of unoptimized/fast compilation.
   // Packaging and explicit donation contracts remain mandatory at every level.
   const bool optimizeDeviceKernels =
@@ -188,10 +189,20 @@ void createLoweringPipeline(mlir::PassManager &pm,
   reussir::ReussirPjrtDonationPassOptions donation;
   donation.inferDonation = optimizeDeviceKernels;
   pm.addPass(reussir::createReussirPjrtDonationPass(donation));
-  pm.addPass(reussir::createReussirRcDecrementExpansionPass());
+  {
+    reussir::ReussirTokenReusePassOptions tokenReuseOpts;
+    tokenReuseOpts.reuseAcrossCall = reuseTokenAcrossCall;
+    pm.addNestedPass<mlir::func::FuncOp>(
+        reussir::createReussirTokenReusePass(tokenReuseOpts));
+  }
+  reussir::ReussirRcDecrementExpansionPassOptions decrements;
+  decrements.dropOrder = dropOrder.str();
+  decrements.deferNormal = true;
+  pm.addPass(reussir::createReussirRcDecrementExpansionPass(decrements));
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirInferVariantTagPass());
   reussir::ReussirAcquireDropExpansionPassOptions earlyDrops;
+  earlyDrops.dropOrder = dropOrder.str();
   pm.addPass(reussir::createReussirAcquireDropExpansionPass(earlyDrops));
   pm.addPass(reussir::createReussirConvertToSTDPass());
   pm.addNestedPass<mlir::func::FuncOp>(
@@ -199,16 +210,11 @@ void createLoweringPipeline(mlir::PassManager &pm,
 
   reussir::ReussirAcquireDropExpansionPassOptions options;
   options.expandDecrement = true;
+  options.dropOrder = dropOrder.str();
   options.outlineRecord = true;
   options.tailRecursiveDrops = opt != REUSSIR_OPT_TPDE;
   pm.addPass(reussir::createReussirAcquireDropExpansionPass(options));
 
-  {
-    reussir::ReussirTokenReusePassOptions tokenReuseOpts;
-    tokenReuseOpts.reuseAcrossCall = reuseTokenAcrossCall;
-    pm.addNestedPass<mlir::func::FuncOp>(
-        reussir::createReussirTokenReusePass(tokenReuseOpts));
-  }
   pm.addPass(reussir::createReussirConvertToSTDPass());
 #ifdef REUSSIR_ENABLE_RCGMP
   pm.addPass(mlir::rcgmp::createConvertRCGMPToSCFPass());
@@ -396,10 +402,11 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
 
 std::unique_ptr<mlir::PassManager> buildPassManager(
     mlir::MLIRContext &context, ReussirOptOption opt = REUSSIR_OPT_DEFAULT,
-    bool reuseTokenAcrossCall = false, bool enableInvariantAnalysis = false) {
+    bool reuseTokenAcrossCall = false, bool enableInvariantAnalysis = false,
+    llvm::StringRef dropOrder = "") {
   auto pm = std::make_unique<mlir::PassManager>(&context);
   createLoweringPipeline(*pm, opt, reuseTokenAcrossCall,
-                         enableInvariantAnalysis);
+                         enableInvariantAnalysis, dropOrder);
   return pm;
 }
 
