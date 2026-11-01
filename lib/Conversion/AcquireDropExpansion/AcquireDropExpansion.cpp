@@ -141,13 +141,9 @@ private:
       rewriter.setInsertionPointToStart(body);
       mlir::Value slot = ReussirRefFromMemrefOp::create(
           rewriter, op.getLoc(), slotType, body->getArgument(0));
-      if (retconDrops) {
-        auto function = lockedDrop(slotType, op, rewriter);
-        mlir::func::CallOp::create(rewriter, op.getLoc(), function,
-                                   mlir::ValueRange{slot});
-      } else {
-        ReussirRefDropOp::create(rewriter, op.getLoc(), slot);
-      }
+      auto function = lockedDrop(slotType, op, rewriter);
+      mlir::func::CallOp::create(rewriter, op.getLoc(), function,
+                                 mlir::ValueRange{slot});
       mlir::sync::SyncYieldOp::create(rewriter, op.getLoc());
       rewriter.eraseOp(op);
       return mlir::success();
@@ -262,30 +258,10 @@ private:
     return mlir::success();
   }
 
-  static bool isDirectVariantMember(mlir::Type member, bool isField) {
-    if (isField || isTriviallyCopyable(member))
-      return true;
-    auto record = llvm::dyn_cast<RecordType>(member);
-    return record && record.classifyRecordDrop() == RecordDropKind::Direct;
-  }
-
-  void emitOutlinedDrop(mlir::func::FuncOp dtor, ReussirRefDropOp op,
-                        mlir::PatternRewriter &rewriter) const {
-    auto parent = op->getParentOfType<mlir::func::FuncOp>();
-    if (dtor->hasAttr("reussir.retcon_drop") && parent &&
-        parent->hasAttr("reussir.retcon_drop"))
-      ReussirDtorSuspendOp::create(
-          rewriter, op.getLoc(),
-          mlir::FlatSymbolRefAttr::get(dtor.getSymNameAttr()), op.getRef());
-    else
-      mlir::func::CallOp::create(rewriter, op.getLoc(), dtor, op.getRef());
-  }
-
   mlir::LogicalResult
   rewriteDropVariant(RecordType recordType, Capability refCap,
                      AtomicKind refAtomic, ReussirRefDropOp op,
-                     mlir::PatternRewriter &rewriter,
-                     mlir::func::FuncOp recursiveDtor = {}) const {
+                     mlir::PatternRewriter &rewriter) const {
     assert(recordType.isVariant());
     llvm::SmallVector<mlir::Attribute> tagSets;
     for (auto idx : llvm::seq<int64_t>(0, recordType.getMembers().size()))
@@ -304,9 +280,7 @@ private:
           &dispatcher.getRegions()[idx], dispatcher.getRegions()[idx].begin(),
           {projectedRefTy}, {op.getLoc()});
       rewriter.setInsertionPointToStart(block);
-      if (recursiveDtor && !isDirectVariantMember(memberTy, memberIsField))
-        emitOutlinedDrop(recursiveDtor, op, rewriter);
-      else if (!memberIsField && !isTriviallyCopyable(projectedTy))
+      if (!memberIsField && !isTriviallyCopyable(projectedTy))
         ReussirRefDropOp::create(rewriter, op.getLoc(), block->getArgument(0),
                                  true, nullptr);
 
@@ -389,7 +363,6 @@ private:
 
   bool outlineRecord;
   bool tailRecursiveDrops;
-  bool retconDrops;
   mlir::SymbolTableCollection *symbols;
 
   bool shouldOutline(ReussirRefDropOp op, RecordType type) const {
@@ -411,10 +384,10 @@ private:
 public:
   DropExpansionPattern(mlir::MLIRContext *context, bool outlineRecord,
                        mlir::SymbolTableCollection *symbols,
-                       bool tailRecursiveDrops, bool retconDrops)
+                       bool tailRecursiveDrops)
       : mlir::OpRewritePattern<ReussirRefDropOp>(context),
         outlineRecord(outlineRecord), tailRecursiveDrops(tailRecursiveDrops),
-        retconDrops(retconDrops), symbols(symbols) {}
+        symbols(symbols) {}
 
   mlir::LogicalResult
   matchAndRewrite(ReussirRefDropOp op,
@@ -451,20 +424,8 @@ public:
             mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
             mlir::func::FuncOp dtor = createDtorIfNotExists(
                 moduleOp, recordType, rewriter, refType.getAtomicKind(),
-                symbols,
-                retconDrops && recordType.classifyRecordDrop() ==
-                                   RecordDropKind::Worklist);
-            if (dtor->hasAttr("reussir.retcon_drop") && recordType.isVariant() &&
-                llvm::any_of(llvm::zip(recordType.getMembers(),
-                                       recordType.getMemberIsField()),
-                             [](auto member) {
-                               return isDirectVariantMember(std::get<0>(member),
-                                                            std::get<1>(member));
-                             }))
-              return rewriteDropVariant(recordType, refCap,
-                                        refType.getAtomicKind(), op, rewriter,
-                                        dtor);
-            emitOutlinedDrop(dtor, op, rewriter);
+                symbols);
+            mlir::func::CallOp::create(rewriter, op.getLoc(), dtor, op.getRef());
             rewriter.eraseOp(op);
             return llvm::success();
           }
@@ -619,7 +580,7 @@ struct AcquireDropExpansionPass
     mlir::SymbolTableCollection symbols;
     mlir::RewritePatternSet patterns(&getContext());
     populateAcquireDropExpansionConversionPatterns(
-        patterns, outlineRecord, &symbols, tailRecursiveDrops, retconDrops);
+        patterns, outlineRecord, &symbols, tailRecursiveDrops);
     if (expandDecrement)
       populateRcDecrementExpansionConversionPatterns(patterns);
     if (failed(
@@ -635,10 +596,9 @@ struct AcquireDropExpansionPass
 
 void populateAcquireDropExpansionConversionPatterns(
     mlir::RewritePatternSet &patterns, bool outlineRecord,
-    mlir::SymbolTableCollection *symbols, bool tailRecursiveDrops,
-    bool retconDrops) {
+    mlir::SymbolTableCollection *symbols, bool tailRecursiveDrops) {
   patterns.add<DropExpansionPattern>(patterns.getContext(), outlineRecord,
-                                     symbols, tailRecursiveDrops, retconDrops);
+                                     symbols, tailRecursiveDrops);
   patterns.add<AcquireExpansionPattern>(patterns.getContext(), outlineRecord,
                                      symbols);
 }

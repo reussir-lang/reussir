@@ -1,4 +1,3 @@
 add_subdirectory(AllocationSimplication)
 add_subdirectory(LinearRecurrence)
 
-add_subdirectory(RetconDrop)

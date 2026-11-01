@@ -2,14 +2,12 @@
 // `rrc --emit executable` and `--emit dynlib` have rustc link a
 // position-independent executable or a shared object, so without
 // `--relocation-mode` the driver compiles their code position-independent
-// too. With LLVM's own default on ELF, static code, a table of code addresses
-// (a closure vtable, or a retcon table of a recursive drop) went to the
+// too. With LLVM's own default on ELF, static code, a closure vtable went to
 // read-only `.rodata` with absolute relocations: GNU ld gave the executable
 // text relocations (DT_TEXTREL), and lld, which the dynlib link pins on Linux,
 // refused to link ("relocation R_AARCH64_ABS64 cannot be used against local
 // symbol; recompile with -fPIC"). On x86-64 the code itself also holds
 // absolute addresses. An explicit `--relocation-mode` is kept as given.
-// `executable_pic_default_retcon.rr` checks a program with a retcon table.
 //
 // `-O none` keeps the indirect call, and so the vtable. The vtable must be in
 // writable data (`.data.rel.ro`, which RELRO then makes read-only), not in

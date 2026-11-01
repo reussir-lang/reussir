@@ -444,7 +444,6 @@ pub fn run_lowering_pipeline(
             false,
             false,
             false,
-            options.opt != OptLevel::Tpde,
         );
         // Materialize Cell accesses and their ownership effects before the
         // second inc/dec cancellation phase.
@@ -456,7 +455,6 @@ pub fn run_lowering_pipeline(
         module: sys::reussirCreateAcquireDropExpansionPass(
             true,
             true,
-            options.opt != OptLevel::Tpde,
             options.opt != OptLevel::Tpde,
         );
         func:   sys::reussirCreateTokenReusePass(
