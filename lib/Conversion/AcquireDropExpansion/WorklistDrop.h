@@ -32,5 +32,5 @@ void emitWorklistArrayDrop(mlir::Value ref, mlir::Location loc,
 void emitWorklistDecrement(mlir::Value rc, mlir::Location loc,
                            mlir::PatternRewriter &rewriter,
                            mlir::SymbolTableCollection *symbols,
-                           bool run = false);
+                           bool run = false, bool tailRecursiveDrops = true);
 } // namespace reussir

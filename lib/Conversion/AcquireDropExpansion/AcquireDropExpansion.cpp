@@ -208,7 +208,7 @@ private:
       mlir::Value loaded =
           ReussirRefLoadOp::create(rewriter, op.getLoc(), rcType, op.getRef());
       emitWorklistDecrement(loaded, op.getLoc(), rewriter, symbols,
-                            !isInsideWorklistGlue(op));
+                            !isInsideWorklistGlue(op), tailRecursiveDrops);
       rewriter.eraseOp(op);
       return mlir::success();
     }
@@ -359,7 +359,8 @@ private:
       rewriter.setInsertionPointToStart(nonNullBlock);
       if (outlineRecord && rcType.getCapability() == Capability::shared) {
         emitWorklistDecrement(nonNullBlock->getArgument(0), op.getLoc(),
-                              rewriter, symbols, !isInsideWorklistGlue(op));
+                              rewriter, symbols, !isInsideWorklistGlue(op),
+                              tailRecursiveDrops);
         ReussirScfYieldOp::create(rewriter, op.getLoc(), nullptr);
         rewriter.eraseOp(op);
         return mlir::success();
@@ -500,11 +501,14 @@ public:
 
 class WorklistDecrementPattern : public mlir::OpRewritePattern<ReussirRcDecOp> {
   mlir::SymbolTableCollection *symbols;
+  bool tailRecursiveDrops;
 
 public:
   WorklistDecrementPattern(mlir::MLIRContext *context,
-                           mlir::SymbolTableCollection *symbols)
-      : mlir::OpRewritePattern<ReussirRcDecOp>(context, 2), symbols(symbols) {}
+                           mlir::SymbolTableCollection *symbols,
+                           bool tailRecursiveDrops)
+      : mlir::OpRewritePattern<ReussirRcDecOp>(context, 2), symbols(symbols),
+        tailRecursiveDrops(tailRecursiveDrops) {}
   mlir::LogicalResult
   matchAndRewrite(ReussirRcDecOp op,
                   mlir::PatternRewriter &rewriter) const override {
@@ -512,7 +516,7 @@ public:
       return mlir::failure();
     auto token = op.getNullableToken();
     emitWorklistDecrement(op.getRcPtr(), op.getLoc(), rewriter, symbols,
-                          !isInsideWorklistGlue(op));
+                          !isInsideWorklistGlue(op), tailRecursiveDrops);
     if (token)
       rewriter.replaceOpWithNewOp<ReussirNullableCreateOp>(op, token.getType(),
                                                            nullptr);
@@ -689,7 +693,8 @@ void populateAcquireDropExpansionConversionPatterns(
   patterns.add<DropExpansionPattern>(patterns.getContext(), outlineRecord,
                                      symbols, tailRecursiveDrops);
   if (outlineRecord)
-    patterns.add<WorklistDecrementPattern>(patterns.getContext(), symbols);
+    patterns.add<WorklistDecrementPattern>(patterns.getContext(), symbols,
+                                           tailRecursiveDrops);
   patterns.add<AcquireExpansionPattern>(patterns.getContext(), outlineRecord,
                                         symbols);
 }

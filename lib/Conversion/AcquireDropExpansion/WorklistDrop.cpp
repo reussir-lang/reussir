@@ -532,13 +532,14 @@ void emitWorklistArrayDrop(mlir::Value ref, mlir::Location loc,
 
 void emitWorklistDecrement(mlir::Value rc, mlir::Location loc,
                            mlir::PatternRewriter &rewriter,
-                           mlir::SymbolTableCollection *symbols, bool run) {
+                           mlir::SymbolTableCollection *symbols, bool run,
+                           bool tailRecursiveDrops) {
   auto type = llvm::cast<RcType>(rc.getType());
   auto module = rewriter.getInsertionBlock()
                     ->getParentOp()
                     ->getParentOfType<mlir::ModuleOp>();
   if (auto record = llvm::dyn_cast<RecordType>(type.getElementType());
-      record && !record.hasObservableCleanup() &&
+      record && tailRecursiveDrops && !record.hasObservableCleanup() &&
       emitTailDropRelease(rc, loc, module, rewriter, symbols))
     return;
   mlir::OpBuilder::InsertionGuard guard(rewriter);
