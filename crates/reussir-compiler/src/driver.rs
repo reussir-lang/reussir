@@ -257,7 +257,8 @@ fn run(cli: &Cli) -> Result<bool, String> {
         }
         let interner = std::sync::Arc::new(reussir_syntax::new_threaded_interner());
         let mut pkg =
-            match load_package_or_render(&root, &pkg_name, &interner, cli.builtin, cli.use_color()) {
+            match load_package_or_render(&root, &pkg_name, &interner, cli.builtin, cli.use_color())
+            {
                 Ok(pkg) => pkg,
                 Err(msg) if msg.is_empty() => return Ok(false),
                 Err(msg) => return Err(msg),
@@ -271,12 +272,8 @@ fn run(cli: &Cli) -> Result<bool, String> {
             frontend_package(&context, tcx, target, &mut pkg, &pkg_name, &interner, cli)
         }) {
             Ok(produced) => produced,
-            Err(msg) => {
-                if !msg.is_empty() {
-                    eprintln!("{msg}");
-                }
-                return Ok(false);
-            }
+            Err(msg) if msg.is_empty() => return Ok(false),
+            Err(msg) => return Err(msg),
         };
         return backend(
             cli, &context, produced, target, opt, reloc, &spec, &name, output,
@@ -352,12 +349,8 @@ fn run(cli: &Cli) -> Result<bool, String> {
             .ok_or_else(|| format!("{name}: failed to parse MLIR module"))?,
         _ => match in_arena(|tcx| frontend(&context, tcx, input_stage, target, &sources, cli)) {
             Ok(produced) => produced,
-            Err(msg) => {
-                if !msg.is_empty() {
-                    eprintln!("{msg}");
-                }
-                return Ok(false);
-            }
+            Err(msg) if msg.is_empty() => return Ok(false),
+            Err(msg) => return Err(msg),
         },
     };
     backend(
@@ -412,7 +405,8 @@ fn scan_deps(cli: &Cli, package: Option<&(PackageRoot, String)>) -> Result<bool,
         );
     };
     let interner = std::sync::Arc::new(reussir_syntax::new_threaded_interner());
-    let pkg = match load_package_or_render(root, pkg_name, &interner, cli.builtin, cli.use_color()) {
+    let pkg = match load_package_or_render(root, pkg_name, &interner, cli.builtin, cli.use_color())
+    {
         Ok(pkg) => pkg,
         Err(msg) if msg.is_empty() => return Ok(false),
         Err(msg) => return Err(msg),
