@@ -8,6 +8,7 @@
 // CHECK-NOT: reussir.rc.set
 // CHECK: reussir.rc.defer
 // CHECK-NOT: reussir.token.free
+// CHECK: return
 // CHECK-LABEL: func.func private @__reussir_drop.release.forward(
 // CHECK: reussir.drop.defer @__reussir_drop.free.forward
 // CHECK-NEXT: call {{.*}}reussir.musttail
@@ -52,6 +53,7 @@ module {
 // CHECK: reussir.ref.load
 // CHECK: reussir.rc.defer
 // CHECK-NOT: reussir.token.free
+// CHECK: return
 // CHECK-LABEL: func.func private @__reussir_drop.release.forward
 // CHECK: reussir.drop.defer @__reussir_drop.free.forward
 // CHECK-NEXT: call {{.*}}reussir.musttail

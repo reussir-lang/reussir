@@ -4,7 +4,7 @@
 
 !leaf = !reussir.record<compound "Leaf" { i64 }>
 !pair = !reussir.record<compound "Pair" { !leaf, !leaf }>
-!array = !reussir.array<2x3x!reussir.rc<!leaf shared atomic>>
+!array = !reussir.array<2 x 3 x !reussir.rc<!leaf shared atomic>>
 !foreign = !reussir.rc<!reussir.ffi_object<"Foreign", @foreign_drop>>
 
 module {
