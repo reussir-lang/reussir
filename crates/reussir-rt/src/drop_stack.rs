@@ -9,8 +9,10 @@
 //! thread drains does not drain, its deferrals join the running drain. So the
 //! native stack stays bounded however deep the value is, for the box edges
 //! the glue defers. Outside a drain the stack is empty. The stack never reads
-//! or writes a deferred pointer; its buffer shrinks back to `KEEP` entries
-//! after a drain and is freed at thread exit.
+//! or writes a deferred pointer (its layout is the deferring code's). Drops
+//! deferred one after the other with one release function form one run,
+//! which takes one entry, and one pointer per cell but its head. Its buffers
+//! shrink back to `KEEP` elements after a drain and are freed at thread exit.
 //!
 //! A host runtime whose releases may need work that must not run inside a
 //! drain (code that may block or switch contexts, which would leave the
@@ -21,54 +23,139 @@
 
 use core::cell::Cell;
 use core::mem::ManuallyDrop;
+use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
 /// Releases one deferred pointer.
 pub type Release = unsafe extern "C" fn(*mut u8);
 
+/// A run below the top of the stack: `n` deferred cells, the last deferred
+/// at `head`, to be released with `release`; its other `n - 1` cells are in
+/// the cells vector, below the cells of the runs above it (see [`State`]).
 #[derive(Clone, Copy)]
-struct Entry {
-    cell: *mut u8,
+struct Run {
     release: Release,
+    head: *mut u8,
+    n: u32,
 }
 
-/// Capacity the buffer keeps after a drain.
+/// Capacity each vector keeps after a drain.
 const KEEP: usize = 64;
 
-/// Whether the thread drains, whether a release asked for the end work,
-/// whether its exit guard ran (a later drain then frees its buffer), and its
-/// pending drops, a `Vec<Entry>` by raw parts.
+/// A `Vec<T>` by its raw parts, in cells (the state has no destructor; the
+/// guard frees the buffers).
+struct Parts<T> {
+    len: Cell<usize>,
+    ptr: Cell<NonNull<T>>,
+    cap: Cell<usize>,
+}
+
+impl<T> Parts<T> {
+    const fn new() -> Self {
+        Parts { len: Cell::new(0), ptr: Cell::new(NonNull::dangling()), cap: Cell::new(0) }
+    }
+
+    fn with_vec(&self, f: impl FnOnce(&mut Vec<T>)) {
+        let (ptr, len, cap) = (self.ptr.get().as_ptr(), self.len.get(), self.cap.get());
+        let mut v = ManuallyDrop::new(unsafe { Vec::from_raw_parts(ptr, len, cap) });
+        f(&mut v);
+        self.ptr.set(unsafe { NonNull::new_unchecked(v.as_mut_ptr()) });
+        self.len.set(v.len());
+        self.cap.set(v.capacity());
+    }
+
+    /// Makes room for one more element.
+    #[cold]
+    #[inline(never)]
+    fn grow(&self) {
+        if self.cap.get() == 0 {
+            // Past the guard's destruction the drain frees the buffer (`exited`).
+            let _ = GUARD.try_with(|_| ());
+        }
+        self.with_vec(|v| v.reserve(1));
+    }
+
+    /// Pushes `x`; answers false, changing nothing, when the vector is full.
+    #[inline(always)]
+    fn try_push(&self, x: T) -> bool {
+        let len = self.len.get();
+        if len == self.cap.get() {
+            return false;
+        }
+        unsafe { self.ptr.get().as_ptr().add(len).write(x) };
+        self.len.set(len + 1);
+        true
+    }
+
+    /// The last element, removed. The vector is not empty.
+    #[inline(always)]
+    unsafe fn pop_unchecked(&self) -> T {
+        let len = self.len.get() - 1;
+        self.len.set(len);
+        unsafe { self.ptr.get().as_ptr().add(len).read() }
+    }
+
+    /// After a drain: the buffer back to `KEEP` elements, or freed once the
+    /// thread's exit guard has run.
+    fn trim(&self, exited: bool) {
+        if exited {
+            self.with_vec(|v| *v = Vec::new());
+        } else if self.cap.get() > KEEP {
+            self.with_vec(|v| v.shrink_to(KEEP));
+        }
+    }
+}
+
+/// The thread's pending drops: the runs of the stack vector, then the run
+/// `(n, head, release)` on top if `n` is not 0. Drops deferred one after the
+/// other with one release function form one run: the run is one entry, and
+/// each cell but its head one pointer in the cells vector (8 bytes while it
+/// waits, as the boxed heads of a list that the glue frees whole). The top
+/// run is kept in the state itself, so a deferral or a pop that stays in it
+/// touches no vector but the cells'. Also whether the thread drains, whether
+/// a release asked for the end work, and whether its exit guard ran (a later
+/// drain then frees its buffers).
 struct State {
+    n: Cell<u32>,
     releasing: Cell<bool>,
     end_work: Cell<bool>,
     exited: Cell<bool>,
-    len: Cell<usize>,
-    cap: Cell<usize>,
-    ptr: Cell<*mut Entry>,
+    head: Cell<*mut u8>,
+    release: Cell<Release>,
+    stack: Parts<Run>,
+    cells: Parts<*mut u8>,
+}
+
+/// No release function (the top run's while no run is on top).
+unsafe extern "C" fn unnamed(_: *mut u8) {
+    unreachable!("reussir-rt: a pending drop without a release function")
 }
 
 thread_local! {
     static STATE: State = const {
         State {
+            n: Cell::new(0),
             releasing: Cell::new(false),
             end_work: Cell::new(false),
             exited: Cell::new(false),
-            len: Cell::new(0),
-            cap: Cell::new(0),
-            ptr: Cell::new(core::ptr::dangling_mut()),
+            head: Cell::new(core::ptr::null_mut()),
+            release: Cell::new(unnamed as Release),
+            stack: Parts::new(),
+            cells: Parts::new(),
         }
     };
     static GUARD: Guard = const { Guard };
 }
 
-/// Frees the buffer at thread exit (registered with the first buffer).
+/// Frees the buffers at thread exit (registered with the first buffer).
 struct Guard;
 
 impl Drop for Guard {
     fn drop(&mut self) {
         let _ = STATE.try_with(|state| {
             state.exited.set(true);
-            state.with_vec(|v| *v = Vec::new());
+            state.stack.with_vec(|v| *v = Vec::new());
+            state.cells.with_vec(|v| *v = Vec::new());
         });
     }
 }
@@ -80,27 +167,85 @@ fn state() -> &'static State {
 }
 
 impl State {
-    fn with_vec(&self, f: impl FnOnce(&mut Vec<Entry>)) {
-        let (ptr, len, cap) = (self.ptr.get(), self.len.get(), self.cap.get());
-        let mut v = ManuallyDrop::new(unsafe { Vec::from_raw_parts(ptr, len, cap) });
-        f(&mut v);
-        self.ptr.set(v.as_mut_ptr());
-        self.len.set(v.len());
-        self.cap.set(v.capacity());
+    /// Moves the run on top, if any, to the stack vector (another run goes
+    /// on top). Answers false, changing nothing, when the vector is full.
+    #[inline(always)]
+    fn try_spill(&self) -> bool {
+        let n = self.n.get();
+        if n == 0 {
+            return true;
+        }
+        if !self.stack.try_push(Run { release: self.release.get(), head: self.head.get(), n }) {
+            return false;
+        }
+        self.n.set(0);
+        true
     }
-    /// Pops and runs entries (the thread draining) until none is left.
+
+    /// After the top run's last cell left: the stack vector's last run, if
+    /// any, goes on top.
+    #[inline(always)]
+    fn unspill(&self) {
+        if self.stack.len.get() == 0 {
+            self.n.set(0);
+            return;
+        }
+        let Run { release, head, n } = unsafe { self.stack.pop_unchecked() };
+        self.release.set(release);
+        self.head.set(head);
+        self.n.set(n);
+    }
+
+    /// Whether a drop deferred with `release` joins the run on top (one with
+    /// the same function and room for one more cell).
+    #[inline(always)]
+    fn joins(&self, release: Release) -> bool {
+        let n = self.n.get();
+        n != 0 && n < u32::MAX && self.release.get() as usize == release as usize
+    }
+
+    /// Defers `release(cell)`: adds it to the run on top, or starts a run.
+    /// Answers false, changing nothing, when that needs a vector to grow.
+    #[inline(always)]
+    unsafe fn try_defer(&self, cell: *mut u8, release: Release) -> bool {
+        if self.joins(release) {
+            if !self.cells.try_push(self.head.get()) {
+                return false;
+            }
+            self.head.set(cell);
+            self.n.set(self.n.get() + 1);
+            return true;
+        }
+        if !self.try_spill() {
+            return false;
+        }
+        self.head.set(cell);
+        self.release.set(release);
+        self.n.set(1);
+        true
+    }
+
+    /// Pops and runs the pending drops, last deferred first, until none is
+    /// left (the thread draining).
     unsafe fn pop_all(&self) {
-        while self.len.get() != 0 {
-            let len = self.len.get() - 1;
-            self.len.set(len);
-            let entry = unsafe { self.ptr.get().add(len).read() };
-            unsafe { (entry.release)(entry.cell) };
+        loop {
+            let n = self.n.get();
+            if n == 0 {
+                break;
+            }
+            let (head, release) = (self.head.get(), self.release.get());
+            if n == 1 {
+                self.unspill();
+            } else {
+                self.head.set(unsafe { self.cells.pop_unchecked() });
+                self.n.set(n - 1);
+            }
+            unsafe { release(head) };
         }
-        if self.exited.get() {
-            self.with_vec(|v| *v = Vec::new());
-        } else if self.cap.get() > KEEP {
-            self.with_vec(|v| v.shrink_to(KEEP));
-        }
+        debug_assert_eq!(self.cells.len.get(), 0, "reussir-rt: pending cells left after a drain");
+        let exited = self.exited.get();
+        self.stack.trim(exited);
+        self.cells.trim(exited);
     }
 }
 
@@ -119,12 +264,9 @@ pub unsafe fn defer(cell: *mut u8, release: Release) {
     if !state.releasing.get() {
         return unsafe { run_outermost(cell, release) };
     }
-    let len = state.len.get();
-    if len == state.cap.get() {
-        return unsafe { defer_slow(cell, release) };
+    if !unsafe { state.try_defer(cell, release) } {
+        unsafe { defer_slow(cell, release) }
     }
-    unsafe { state.ptr.get().add(len).write(Entry { cell, release }) };
-    state.len.set(len + 1);
 }
 
 /// Runs `walk(object)` with the thread draining and then, unless a drain was
@@ -191,15 +333,20 @@ fn end_work(state: &State) {
     }
 }
 
+/// [`State::try_defer`] when a vector must grow first: the cells vector if
+/// the drop joins the run on top, else the stack vector (for the run it
+/// spills).
 #[cold]
 #[inline(never)]
 unsafe extern "C" fn defer_slow(cell: *mut u8, release: Release) {
     let state = state();
-    if state.cap.get() == 0 {
-        // Past the guard's destruction the drain frees the buffer (`exited`).
-        let _ = GUARD.try_with(|_| ());
+    if state.joins(release) {
+        state.cells.grow();
+    } else {
+        state.stack.grow();
     }
-    state.with_vec(|v| v.push(Entry { cell, release }));
+    let deferred = unsafe { state.try_defer(cell, release) };
+    debug_assert!(deferred);
 }
 
 /// C entry point of [`defer`], called by compiled drop glue.
