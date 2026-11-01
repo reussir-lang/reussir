@@ -38,7 +38,7 @@ module {
   }
 }
 
-// CHECK-LABEL: func.func private @__reussir_drop.array.forward(
+// CHECK-LABEL: func.func private @_RNvC{{[0-9]+}}REUSSIR_DROP_array_forward{{[A-Za-z0-9_]+}}(
 // CHECK: scf.while
 // CHECK: scf.condition
 // CHECK: reussir.array.project
@@ -48,6 +48,6 @@ module {
 // CHECK: scf.if
 // CHECK-NEXT: reussir.drop.defer_indexed
 // CHECK-NEXT: {{.*}}reussir.nullable.coerce
-// CHECK-NEXT: reussir.drop.defer @__reussir_drop.release.forward
+// CHECK-NEXT: reussir.drop.defer @_RNvC{{[0-9]+}}REUSSIR_DROP_release_forward{{[A-Za-z0-9_]+}}
 // CHECK: arith.select
 // CHECK: scf.yield

@@ -631,17 +631,17 @@ prepareWorklistDropBridges(mlir::ModuleOp module,
                            mlir::SymbolTableCollection &symbols) {
   llvm::SmallVector<mlir::func::FuncOp> functions;
   for (auto function : module.getOps<mlir::func::FuncOp>())
-    if (!function.isExternal() && (function->hasAttr("reussir.closure_drop") ||
-                                   function->hasAttr("reussir.foreign_drop")))
+    if (!function.isExternal() && (function->hasAttr(REUSSIR_CLOSURE_DROP) ||
+                                   function->hasAttr(REUSSIR_FOREIGN_DROP)))
       functions.push_back(function);
   for (auto function : functions) {
-    bool closure = function->hasAttr("reussir.closure_drop");
+    bool closure = function->hasAttr(REUSSIR_CLOSURE_DROP);
     if (closure) {
       auto rc = llvm::dyn_cast<RcType>(function.getArgument(0).getType());
       auto box = rc ? llvm::dyn_cast<ClosureBoxType>(rc.getElementType())
                     : ClosureBoxType{};
       if (box && llvm::all_of(box.getPayloadTypes(), isTriviallyCopyable)) {
-        function->removeAttr("reussir.closure_drop");
+        function->removeAttr(REUSSIR_CLOSURE_DROP);
         continue;
       }
     }
@@ -655,13 +655,13 @@ prepareWorklistDropBridges(mlir::ModuleOp module,
     worker.setPrivate();
     worker->setAttr("llvm.linkage", rewriter.getAttr<mlir::LLVM::LinkageAttr>(
                                         mlir::LLVM::linkage::Linkage::Private));
-    worker->removeAttr("reussir.closure_drop");
-    worker->removeAttr("reussir.foreign_drop");
+    worker->removeAttr(REUSSIR_CLOSURE_DROP);
+    worker->removeAttr(REUSSIR_FOREIGN_DROP);
     worker->setAttr(kWorklistGlueAttr, rewriter.getUnitAttr());
     worker.getBody().takeBody(function.getBody());
     symbols.getSymbolTable(module).insert(worker);
-    function->removeAttr("reussir.closure_drop");
-    function->removeAttr("reussir.foreign_drop");
+    function->removeAttr(REUSSIR_CLOSURE_DROP);
+    function->removeAttr(REUSSIR_FOREIGN_DROP);
     rewriter.setInsertionPointToStart(function.addEntryBlock());
     ReussirDropJoinOp::create(
         rewriter, function.getLoc(),
