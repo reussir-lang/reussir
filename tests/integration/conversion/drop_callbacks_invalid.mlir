@@ -12,10 +12,10 @@ func.func @rc_mismatch(%box: !reussir.rc<i64>) {
   return
 }
 // -----
-func.func private @release(%box: !reussir.rc<i64 exclusive>)
-func.func @rc_exclusive(%box: !reussir.rc<i64 exclusive>) {
+func.func private @release(%box: !reussir.rc<i64 flex>)
+func.func @rc_flex(%box: !reussir.rc<i64 flex>) {
   // expected-error @+1 {{requires a shared RC box}}
-  reussir.rc.defer @release(%box : !reussir.rc<i64 exclusive>)
+  reussir.rc.defer @release(%box : !reussir.rc<i64 flex>)
   return
 }
 // -----
