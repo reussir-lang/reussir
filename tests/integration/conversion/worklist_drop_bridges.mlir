@@ -29,7 +29,7 @@ module attributes {reussir.drop_order = "backward"} {
   // Public entry points finish their own work before returning, even when
   // called by a foreign hook inside another drain.
   // CHECK-LABEL: func.func @public
-  // CHECK: reussir.drop.run @__reussir_drop.walk.backward
+  // CHECK: func.call @__reussir_drop.entry.backward
   func.func @public(%rc: !rc) {
     %token = reussir.rc.dec(%rc : !rc) : !token
     reussir.token.free(%token : !token)

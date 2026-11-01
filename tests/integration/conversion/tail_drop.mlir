@@ -53,8 +53,8 @@ module {
   // CHECK-LABEL: func.func @other_drops
   // CHECK: reussir.rc.fetch
   // CHECK: reussir.token.free
-  // CHECK: reussir.drop.run
-  // CHECK: reussir.drop.run
+  // CHECK: func.call @__reussir_drop.entry.forward
+  // CHECK: func.call @__reussir_drop.entry.forward
   func.func @other_drops(%a: !reussir.ref<!reussir.rc<!leaf shared>>,
                          %b: !reussir.ref<!reussir.rc<!tree shared>>,
                          %c: !reussir.ref<!reussir.rc<!snoc shared>>) {
