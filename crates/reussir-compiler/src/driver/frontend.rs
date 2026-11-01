@@ -358,6 +358,7 @@ pub(crate) fn frontend<'c, 'tcx>(
             // program rather than the serialized one.
             let generic_env = parsed.rebuild_generic_env(&trait_db);
             let input = MonoInput {
+                drop_order: parsed.drop_order,
                 tcx,
                 defs: &parsed.defs,
                 resolver: &parsed.names,
@@ -381,8 +382,7 @@ pub(crate) fn frontend<'c, 'tcx>(
                 lang: parsed.lang.clone(),
                 features: Default::default(),
             };
-            let (mut full, reports) = monomorphize(&input);
-            full.drop_order = parsed.drop_order;
+            let (full, reports) = monomorphize(&input);
             match &dump_sources {
                 Some(cache) => {
                     if render_reports(cli, cache, &reports) {
