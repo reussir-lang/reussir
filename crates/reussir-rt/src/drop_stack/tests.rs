@@ -113,24 +113,56 @@ fn indexed_callbacks_visit_one_child_at_a_time() {
 }
 
 thread_local! {
-    static ENDS: Cell<usize> = const { Cell::new(0) };
+    static EXITS: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
-unsafe extern "C" fn end_work() {
+fn exit_first() {
     assert!(!releasing());
     assert_eq!(depth(), 0);
-    ENDS.set(ENDS.get() + 1);
+    EXITS.with_borrow_mut(|events| events.push(1));
+}
+fn exit_second() {
+    assert!(!releasing());
+    assert_eq!(depth(), 0);
+    EXITS.with_borrow_mut(|events| events.push(2));
+}
+unsafe extern "C" fn requesting_inner(_: *mut u8) {
+    defer_until_scope_exit(exit_second);
 }
 unsafe extern "C" fn requesting(object: *mut u8) {
-    want_end_work();
-    unsafe { run(object, first) };
-    assert_eq!(ENDS.get(), 0);
+    defer_until_scope_exit(exit_first);
+    unsafe { run(object, requesting_inner) };
+    EXITS.with_borrow(|events| assert!(events.is_empty()));
+    defer_until_scope_exit(exit_first);
+    unsafe { defer(object, first) };
 }
 #[test]
-fn end_work_waits_for_the_outermost_scope() {
-    set_end_work(end_work);
+fn scope_exit_callbacks_wait_and_keep_request_order() {
+    EXITS.with_borrow_mut(Vec::clear);
     let mut object = Ordered { log: vec![] };
     unsafe { run((&mut object as *mut Ordered).cast(), requesting) };
-    assert_eq!(ENDS.get(), 1);
+    assert_eq!(object.log, [1]);
+    EXITS.with_borrow(|events| assert_eq!(events, &[1, 2, 1]));
+}
+fn exit_reenters() {
+    assert!(!releasing());
+    let mut object = Ordered { log: vec![] };
+    unsafe { run((&mut object as *mut Ordered).cast(), requesting_inner) };
+    EXITS.with_borrow_mut(|events| events.push(3));
+}
+#[test]
+fn scope_exit_callbacks_can_start_another_drop() {
+    EXITS.with_borrow_mut(Vec::clear);
+    scoped(|| {
+        defer_until_scope_exit(exit_reenters);
+        defer_until_scope_exit(exit_first);
+    });
+    EXITS.with_borrow(|events| assert_eq!(events, &[2, 3, 1]));
+}
+#[test]
+fn scope_exit_callbacks_run_immediately_when_idle() {
+    EXITS.with_borrow_mut(Vec::clear);
+    defer_until_scope_exit(exit_first);
+    EXITS.with_borrow(|events| assert_eq!(events, &[1]));
 }
 
 struct Late(std::sync::Arc<std::sync::atomic::AtomicUsize>);
