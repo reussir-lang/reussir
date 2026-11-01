@@ -55,7 +55,7 @@ module {
   // CHECK: reussir.rc.dec
   // OUTLINE: func.func private @[[MPZ_DROP:[^ (]+]](%{{.*}}: !reussir.ref<!rcgmp.mpz>)
   // OUTLINE: rcgmp.release
-  // OUTLINE: func.func private @[[CONS_DROP:__reussir_drop.walk.forward[^ (]*]](%{{.*}}: !reussir.ref<!reussir.record<compound "BigList::Cons"
+  // OUTLINE: func.func private @[[CONS_DROP:_RNvC[0-9]+REUSSIR_DROP_walk_forward[A-Za-z0-9_]+]](%{{.*}}: !reussir.ref<!reussir.record<compound "BigList::Cons"
   // OUTLINE: reussir.drop.defer @[[MPZ_DROP]]
   // OUTLINE-LABEL: func.func @drop_cons
   // OUTLINE: reussir.drop.run @[[CONS_DROP]]
