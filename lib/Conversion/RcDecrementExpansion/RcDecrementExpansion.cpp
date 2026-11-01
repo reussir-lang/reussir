@@ -105,13 +105,8 @@ struct RcDecrementExpansionPattern
   mlir::LogicalResult
   matchAndRewrite(ReussirRcDecOp op,
                   mlir::PatternRewriter &rewriter) const override {
-    if (deferNormal && !op.isDestructuring()) {
-      auto element = op.getRcPtr().getType().getElementType();
-      auto record = llvm::dyn_cast<RecordType>(element);
-      if (!isTriviallyCopyable(element) &&
-          (!record || record.hasObservableCleanup()))
-        return mlir::failure();
-    }
+    if (deferNormal && canScheduleDecrement(op))
+      return mlir::failure();
     RcType type = op.getRcPtr().getType();
     // No need to proceed if dec operation is applied to a rigid type.
     // Also delay the FFI object type clean up until basic ops lowering pass.

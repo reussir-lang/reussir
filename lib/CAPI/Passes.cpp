@@ -110,7 +110,6 @@ MlirPass reussirCreateIncDecCancellationPass(void) {
 MlirPass reussirCreateRcDecrementExpansionPass(MlirStringRef dropOrder) {
   reussir::ReussirRcDecrementExpansionPassOptions options;
   options.dropOrder = unwrap(dropOrder).str();
-  options.deferNormal = true;
   return wrapOwned(reussir::createReussirRcDecrementExpansionPass(options));
 }
 MlirPass reussirCreateInferVariantTagPass(void) {

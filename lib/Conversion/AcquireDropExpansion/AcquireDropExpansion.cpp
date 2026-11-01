@@ -204,7 +204,8 @@ private:
 
   mlir::LogicalResult rewriteDropRc(RcType rcType, ReussirRefDropOp op,
                                     mlir::PatternRewriter &rewriter) const {
-    if (outlineRecord && rcType.getCapability() == Capability::shared) {
+    if (outlineRecord && isInsideWorklistGlue(op) &&
+        rcType.getCapability() == Capability::shared) {
       mlir::Value loaded =
           ReussirRefLoadOp::create(rewriter, op.getLoc(), rcType, op.getRef());
       emitWorklistDecrement(loaded, op.getLoc(), rewriter, symbols,
@@ -212,8 +213,7 @@ private:
       rewriter.eraseOp(op);
       return mlir::success();
     }
-    if (outlineRecord && tailRecursiveDrops &&
-        !isForwardDrop(op->getParentOfType<mlir::ModuleOp>())) {
+    if (outlineRecord && tailRecursiveDrops) {
       mlir::Value loaded =
           ReussirRefLoadOp::create(rewriter, op.getLoc(), rcType, op.getRef());
       if (emitTailDropRelease(loaded, op.getLoc(),
@@ -358,7 +358,8 @@ private:
           &dispatcher.getNonNullRegion(), dispatcher.getNonNullRegion().begin(),
           {nullableType.getPtrTy()}, {op.getLoc()});
       rewriter.setInsertionPointToStart(nonNullBlock);
-      if (outlineRecord && rcType.getCapability() == Capability::shared) {
+      if (outlineRecord && isInsideWorklistGlue(op) &&
+          rcType.getCapability() == Capability::shared) {
         emitWorklistDecrement(nonNullBlock->getArgument(0), op.getLoc(),
                               rewriter, symbols, !isInsideWorklistGlue(op),
                               tailRecursiveDrops);
@@ -367,7 +368,6 @@ private:
         return mlir::success();
       }
       if (outlineRecord && tailRecursiveDrops &&
-          !isForwardDrop(op->getParentOfType<mlir::ModuleOp>()) &&
           emitTailDropRelease(nonNullBlock->getArgument(0), op.getLoc(),
                               op->getParentOfType<mlir::ModuleOp>(), rewriter,
                               symbols)) {
@@ -444,13 +444,6 @@ public:
       return mlir::success();
     }
 
-    if (outlineRecord && !isInsideWorklistGlue(op) && !op.getVariant() &&
-        !llvm::isa<RcType, NullableType>(refType.getElementType())) {
-      emitWorklistDrop(op.getRef(), op.getLoc(), rewriter, symbols, true);
-      rewriter.eraseOp(op);
-      return mlir::success();
-    }
-
     mlir::Type elementType = refType.getElementType();
 
     // An integer handle releases its one reference through rcgmp.
@@ -472,6 +465,12 @@ public:
           return rewriteDropCell(cellType, op, rewriter);
         })
         .Case<RecordType>([&](RecordType recordType) {
+          if (shouldOutline(op, recordType) &&
+              recordType.classifyRecordDrop() == RecordDropKind::Worklist) {
+            emitWorklistDrop(op.getRef(), op.getLoc(), rewriter, symbols, true);
+            rewriter.eraseOp(op);
+            return mlir::success();
+          }
           if (shouldOutline(op, recordType)) {
             mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
             mlir::func::FuncOp dtor =
@@ -513,7 +512,7 @@ public:
   mlir::LogicalResult
   matchAndRewrite(ReussirRcDecOp op,
                   mlir::PatternRewriter &rewriter) const override {
-    if (!canScheduleDecrement(op))
+    if (!isInsideWorklistGlue(op) || !canScheduleDecrement(op))
       return mlir::failure();
     auto token = op.getNullableToken();
     emitWorklistDecrement(op.getRcPtr(), op.getLoc(), rewriter, symbols,
