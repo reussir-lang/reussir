@@ -177,7 +177,7 @@ def ReussirAcquireDropExpansionPass : Pass<"reussir-acquire-drop-expansion"> {
       [Option<"outlineRecord", "outline-record", "bool", /*default=*/"false",
               "whether to outline record destruction and acquisition">,
        Option<"dropOrder", "drop-order", "std::string",
-              /*default=*/"\"forward\"", "member destruction order">,
+              /*default=*/"\"\"", "member destruction order">,
        Option<"tailRecursiveDrops", "tail-recursive-drops", "bool",
               /*default=*/"true", "whether to specialize tail-recursive drops">,
        Option<"expandDecrement", "expand-decrement", "bool",
@@ -201,6 +201,11 @@ def ReussirRcDecrementExpansionPass : Pass<"reussir-rc-decrement-expansion"> {
     early stages of the pipeline.
   }];
 
+  let options = [
+      Option<"dropOrder", "drop-order", "std::string", /*default=*/"\"\"",
+             "member destruction order">,
+      Option<"deferNormal", "defer-normal", "bool", /*default=*/"false",
+             "leave ordinary releases for final ownership expansion">];
   let dependentDialects = ["::reussir::ReussirDialect",
                            "::mlir::arith::ArithDialect",
                            "::mlir::scf::SCFDialect"];

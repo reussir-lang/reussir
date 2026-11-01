@@ -500,14 +500,9 @@ public:
   mlir::LogicalResult
   matchAndRewrite(ReussirRcDecOp op,
                   mlir::PatternRewriter &rewriter) const override {
-    if (op.isDestructuring() || op->hasAttr(kWorklistRawAttr) ||
-        op.getRcPtr().getType().getCapability() != Capability::shared)
+    if (!canScheduleDecrement(op))
       return mlir::failure();
     auto token = op.getNullableToken();
-    if (token && !llvm::all_of(token.getUsers(), [](mlir::Operation *user) {
-          return llvm::isa<ReussirTokenFreeOp>(user);
-        }))
-      return mlir::failure();
     emitWorklistDecrement(op.getRcPtr(), op.getLoc(), rewriter, symbols,
                           !isInsideWorklistGlue(op));
     if (token)
@@ -647,13 +642,8 @@ struct AcquireDropExpansionPass
           AcquireDropExpansionPass> {
   using Base::Base;
   void runOnOperation() override {
-    if (dropOrder != "forward" && dropOrder != "backward") {
-      getOperation().emitError("drop-order must be forward or backward");
+    if (mlir::failed(resolveDropOrder(getOperation(), dropOrder)))
       return signalPassFailure();
-    }
-    if (!getOperation()->hasAttr("reussir.drop_order"))
-      getOperation()->setAttr("reussir.drop_order",
-                              mlir::StringAttr::get(&getContext(), dropOrder));
     mlir::ConversionTarget target(getContext());
     // Share tables for this run only; the glue helpers register each new
     // symbol, and this pass does not erase or rename functions.

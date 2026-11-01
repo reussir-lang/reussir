@@ -50,6 +50,37 @@ namespace reussir {
 #define GEN_PASS_DEF_REUSSIRRCDECREMENTEXPANSIONPASS
 #include "Reussir/Conversion/Passes.h.inc"
 
+mlir::LogicalResult resolveDropOrder(mlir::ModuleOp module,
+                                     llvm::StringRef configured) {
+  auto saved = module->getAttrOfType<mlir::StringAttr>("reussir.drop_order");
+  if (module->hasAttr("reussir.drop_order") && !saved)
+    return module.emitError("reussir.drop_order must be a string");
+  auto valid = [](llvm::StringRef value) {
+    return value == "forward" || value == "backward";
+  };
+  if ((!configured.empty() && !valid(configured)) ||
+      (saved && !valid(saved.getValue())))
+    return module.emitError("drop-order must be forward or backward");
+  if (saved && !configured.empty() && saved.getValue() != configured)
+    return module.emitError("drop-order conflicts with saved module policy");
+  if (!saved)
+    module->setAttr(
+        "reussir.drop_order",
+        mlir::StringAttr::get(module.getContext(),
+                              configured.empty() ? "forward" : configured));
+  return mlir::success();
+}
+
+bool canScheduleDecrement(ReussirRcDecOp op) {
+  if (op.isDestructuring() || op->hasAttr("reussir.worklist_raw") ||
+      op.getRcPtr().getType().getCapability() != Capability::shared)
+    return false;
+  auto token = op.getNullableToken();
+  return !token || llvm::all_of(token.getUsers(), [](mlir::Operation *user) {
+    return llvm::isa<ReussirTokenFreeOp>(user);
+  });
+}
+
 //===----------------------------------------------------------------------===//
 // Conversion patterns
 //===----------------------------------------------------------------------===//
@@ -87,11 +118,16 @@ bool needsImmediateGuard(ReussirRcDecOp op) {
 
 struct RcDecrementExpansionPattern
     : public mlir::OpRewritePattern<ReussirRcDecOp> {
-  using mlir::OpRewritePattern<ReussirRcDecOp>::OpRewritePattern;
+  bool deferNormal;
+  RcDecrementExpansionPattern(mlir::MLIRContext *context, bool deferNormal)
+      : mlir::OpRewritePattern<ReussirRcDecOp>(context),
+        deferNormal(deferNormal) {}
 
   mlir::LogicalResult
   matchAndRewrite(ReussirRcDecOp op,
                   mlir::PatternRewriter &rewriter) const override {
+    if (deferNormal && canScheduleDecrement(op))
+      return mlir::failure();
     RcType type = op.getRcPtr().getType();
     // No need to proceed if dec operation is applied to a rigid type.
     // Also delay the FFI object type clean up until basic ops lowering pass.
@@ -157,9 +193,9 @@ struct RcDecrementExpansionPattern
                  payload.getMembers(), payload.getMemberIsField())) {
           if (bound.contains(static_cast<int64_t>(idx)) || memberIsField)
             continue;
-          auto projectedTy = getProjectedType(memberTy, memberIsField,
-                                              Capability::unspecified,
-                                              type.getAtomicKind());
+          auto projectedTy =
+              getProjectedType(memberTy, memberIsField, Capability::unspecified,
+                               type.getAtomicKind());
           if (isTriviallyCopyable(projectedTy))
             continue;
           // Unbound members release through `ref.drop` — the same route the
@@ -223,9 +259,11 @@ struct RcDecrementExpansionPass
           RcDecrementExpansionPass> {
   using Base::Base;
   void runOnOperation() override {
+    if (mlir::failed(resolveDropOrder(getOperation(), dropOrder)))
+      return signalPassFailure();
     mlir::ConversionTarget target(getContext());
     mlir::RewritePatternSet patterns(&getContext());
-    populateRcDecrementExpansionConversionPatterns(patterns);
+    populateRcDecrementExpansionConversionPatterns(patterns, deferNormal);
     if (failed(
             mlir::applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
@@ -234,8 +272,8 @@ struct RcDecrementExpansionPass
 } // namespace
 
 void populateRcDecrementExpansionConversionPatterns(
-    mlir::RewritePatternSet &patterns) {
-  patterns.add<RcDecrementExpansionPattern>(patterns.getContext());
+    mlir::RewritePatternSet &patterns, bool deferNormal) {
+  patterns.add<RcDecrementExpansionPattern>(patterns.getContext(), deferNormal);
 }
 
 } // namespace reussir
