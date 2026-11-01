@@ -155,3 +155,78 @@ impl WideHeader {
         Some(Link { previous, release })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    unsafe extern "C" fn first(_: *mut u8) {}
+    unsafe extern "C" fn second(_: *mut u8) {
+        std::hint::black_box(());
+    }
+
+    #[test]
+    fn a_full_function_table_uses_existing_entries_only() {
+        unsafe extern "C" fn callback<const N: usize>(_: *mut u8) {
+            std::hint::black_box(N);
+        }
+        macro_rules! callbacks {
+            ($($n:expr),*) => { [$(callback::<$n> as Release),*] };
+        }
+        let callbacks = callbacks!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+            46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+            68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89,
+            90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108,
+            109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125,
+            126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
+            143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159,
+            160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176,
+            177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193,
+            194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210,
+            211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227,
+            228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244,
+            245, 246, 247, 248, 249, 250, 251, 252, 253, 254
+        );
+        let mut table = ReleaseTable::default();
+        for (position, callback) in callbacks.into_iter().enumerate() {
+            assert_eq!(
+                table.index(callback).unwrap().0.get() as usize,
+                position + 1
+            );
+        }
+        assert!(table.index(second).is_none());
+        for (position, callback) in callbacks.into_iter().enumerate().rev() {
+            let index = table.index(callback).unwrap();
+            assert_eq!(index.0.get() as usize, position + 1);
+            assert!(ptr::fn_addr_eq(table.get(index), callback));
+        }
+    }
+
+    #[test]
+    fn cleared_tables_can_reassign_cached_indices() {
+        let mut table = ReleaseTable::default();
+        let first: Release = first;
+        let second: Release = second;
+        let index = table.index(first).unwrap();
+        assert!(ptr::fn_addr_eq(table.get(index), first));
+        table.clear();
+        table.clear();
+        let index = table.index(second).unwrap();
+        assert!(ptr::fn_addr_eq(table.get(index), second));
+        let index = table.index(first).unwrap();
+        assert!(ptr::fn_addr_eq(table.get(index), first));
+    }
+
+    #[test]
+    fn links_require_an_aligned_representable_offset() {
+        let mut words = [1_u32, 0, 1, 0];
+        let object = unsafe { Object::new(words.as_mut_ptr().cast()) };
+        let unaligned = unsafe { Object::new(words.as_mut_ptr().add(1).cast()) };
+        let header = unsafe { WideHeader::new(object) };
+        let mut table = ReleaseTable::default();
+        let index = table.index(first).unwrap();
+        assert!(!unsafe { header.link(unaligned, index) });
+        assert_eq!(words, [1, 0, 1, 0]);
+    }
+}

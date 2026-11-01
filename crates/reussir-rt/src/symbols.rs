@@ -16,7 +16,7 @@ use crate::alloc::{
 };
 use crate::drop_stack::{
     __reussir_drop_defer, __reussir_drop_defer_indexed, __reussir_drop_defer_wide,
-    __reussir_drop_run,
+    __reussir_drop_join_or_run, __reussir_drop_run,
 };
 use crate::instrument::__reussir_report_nonlinear_usage;
 use crate::panic::__reussir_panic;
@@ -65,6 +65,7 @@ pub fn exported_symbols() -> &'static [RuntimeSymbol] {
         __reussir_drop_defer,
         __reussir_drop_defer_wide,
         __reussir_drop_defer_indexed,
+        __reussir_drop_join_or_run,
         __reussir_drop_run,
         __reussir_panic,
         __reussir_report_nonlinear_usage,
