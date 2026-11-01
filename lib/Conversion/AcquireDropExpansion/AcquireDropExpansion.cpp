@@ -432,6 +432,9 @@ public:
   mlir::LogicalResult
   matchAndRewrite(ReussirRefDropOp op,
                   mlir::PatternRewriter &rewriter) const override {
+    auto parent = op->getParentOfType<mlir::func::FuncOp>();
+    if (!outlineRecord && parent && parent->hasAttr("reussir.closure_drop"))
+      return mlir::failure();
     RefType refType = op.getRef().getType();
     Capability refCap = refType.getCapability();
     if (isTriviallyCopyable(refType.getElementType())) {
@@ -654,6 +657,11 @@ struct AcquireDropExpansionPass
     // Share tables for this run only; the glue helpers register each new
     // symbol, and this pass does not erase or rename functions.
     mlir::SymbolTableCollection symbols;
+    if (outlineRecord) {
+      mlir::PatternRewriter rewriter(&getContext());
+      if (mlir::failed(prepareWorklistDropBridges(module, rewriter, symbols)))
+        return signalPassFailure();
+    }
     mlir::RewritePatternSet patterns(&getContext());
     populateAcquireDropExpansionConversionPatterns(
         patterns, outlineRecord, &symbols, tailRecursiveDrops);
