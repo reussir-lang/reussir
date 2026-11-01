@@ -625,6 +625,8 @@ void emitWorklistRelease(mlir::Value rc, mlir::Location loc,
       .release(rc, run);
 }
 
+// Keep cleanup entry points callable from outside a drain while allowing their
+// worker bodies to enqueue work in an existing scope.
 mlir::LogicalResult
 prepareWorklistDropBridges(mlir::ModuleOp module,
                            mlir::PatternRewriter &rewriter,
@@ -670,6 +672,7 @@ prepareWorklistDropBridges(mlir::ModuleOp module,
     mlir::func::ReturnOp::create(rewriter, function.getLoc());
     if (!closure || !isForwardDrop(module))
       continue;
+    // Queue the box free first, then captures in reverse, for forward LIFO cleanup.
     llvm::SmallVector<ReussirRefDropOp> drops;
     ReussirTokenFreeOp free;
     worker.walk([&](ReussirRefDropOp drop) { drops.push_back(drop); });
