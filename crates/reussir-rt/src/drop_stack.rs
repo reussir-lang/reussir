@@ -5,8 +5,8 @@
 //! zero is deferred onto this stack with the function that releases it
 //! ([`defer`]), and the outermost [`run`] pops the entries, last deferred
 //! first, until none is left, as Lean's `lean_del` does with its to-do list.
-//! A popped release may defer more entries; a [`run`] started while the
-//! thread drains does not drain, its deferrals join the running drain. So the
+//! A popped release may defer more entries. A nested [`run`] completes its
+//! own pending work before returning, leaving earlier work pending. Thus the
 //! native stack stays bounded however deep the value is, for the box edges
 //! the glue defers. Outside a drain the stack is empty. The stack never reads
 //! or writes a deferred pointer (its layout is the deferring code's). Drops
@@ -170,6 +170,7 @@ impl<T> Parts<T> {
 struct State {
     n: Cell<u32>,
     releasing: Cell<bool>,
+    floor: Cell<usize>,
     end_work: Cell<bool>,
     exited: Cell<bool>,
     /// Whether the run on top is linked.
@@ -192,6 +193,7 @@ thread_local! {
         State {
             n: Cell::new(0),
             releasing: Cell::new(false),
+            floor: Cell::new(0),
             end_work: Cell::new(false),
             exited: Cell::new(false),
             linked: Cell::new(false),
@@ -265,7 +267,7 @@ impl State {
     #[inline(always)]
     fn unspill(&self) {
         let len = self.stack.len.get();
-        if len != 0 {
+        if len > self.floor.get() {
             let last = unsafe { self.stack.ptr.get().as_ptr().add(len - 1).read() };
             if let Work::Run { release, head, n } = last {
                 self.release.set(release);
@@ -434,7 +436,7 @@ impl State {
                 continue;
             }
             let len = self.stack.len.get();
-            if len == 0 {
+            if len == self.floor.get() {
                 break;
             }
             // The top entry is a step: it stays while it runs, so whatever it
@@ -457,6 +459,9 @@ impl State {
                 }
             }
         }
+    }
+
+    fn reset(&self) {
         debug_assert_eq!(self.cells.len.get(), 0, "reussir-rt: pending cells left after a drain");
         if self.known.get() != 0 {
             self.known.set(0);
@@ -504,11 +509,15 @@ pub unsafe fn defer_step(p: usize, step: Step) {
     }
 }
 
-/// Runs incremental work and everything it defers; inside a drain, only
-/// pushes it ([`defer_step`]). Safety: as [`defer_step`].
+/// Runs incremental work and everything it defers before returning.
+/// Safety: as [`defer_step`].
 pub unsafe fn run_step(p: usize, step: Step) {
-    unsafe { defer_step(p, step) };
-    drain();
+    if releasing() {
+        nested(|| unsafe { defer_step(p, step) });
+    } else {
+        unsafe { defer_step(p, step) };
+        drain();
+    }
 }
 
 /// Runs the pending drops, last deferred first, then the end work if a
@@ -577,17 +586,29 @@ unsafe extern "C" fn defer_wide_slow(cell: *mut u8, release: Release) {
     debug_assert!(deferred);
 }
 
-/// Runs `walk(object)` with the thread draining and then, unless a drain was
-/// already running, every entry deferred meanwhile. Inside a drain (a drop
-/// made by a release, or by a foreign hook, that the drain runs) it returns
-/// after the walk, before the dead members it deferred are released: the
-/// running drain releases them. Safety: `walk(object)` must be sound now.
+/// Runs `walk(object)` and its pending drops before returning. A nested
+/// call completes only its own work. Safety: `walk(object)` must be sound now.
 #[inline(always)]
 pub unsafe fn run(object: *mut u8, walk: Release) {
     if releasing() {
-        return unsafe { walk(object) };
+        nested(|| unsafe { walk(object) });
+    } else {
+        unsafe { run_outermost(object, walk) };
     }
-    unsafe { run_outermost(object, walk) }
+}
+
+fn nested(walk: impl FnOnce()) {
+    let state = state();
+    if !state.try_spill() {
+        state.stack.grow();
+        let spilled = state.try_spill();
+        debug_assert!(spilled);
+    }
+    let floor = state.floor.replace(state.stack.len.get());
+    walk();
+    unsafe { state.pop_all() };
+    state.floor.set(floor);
+    state.unspill();
 }
 
 #[inline(never)]
@@ -603,6 +624,7 @@ unsafe extern "C" fn run_outermost(object: *mut u8, walk: Release) {
 /// work, if a release asked for it.
 #[inline(always)]
 fn finish(state: &State) {
+    state.reset();
     state.releasing.set(false);
     if state.end_work.get() {
         end_work(state);

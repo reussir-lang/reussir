@@ -54,8 +54,7 @@ fn last_deferred_first() {
     assert_eq!(take_log(), [[('w', 0)].as_slice(), &WALK].concat());
 }
 
-// A release that starts another drop: its walk runs at once and its
-// deferrals join the running drain.
+// A nested public call completes its suffix before the callback resumes.
 unsafe extern "C" fn nested(cell: *mut u8) {
     log('n', cell as usize);
     unsafe { run(p(0), walk) };
@@ -67,10 +66,10 @@ unsafe extern "C" fn outer(_: *mut u8) {
 }
 
 #[test]
-fn a_nested_run_joins_the_drain() {
+fn a_nested_run_completes_its_suffix() {
     unsafe { run(p(0), outer) };
-    let head = [('n', 8), ('w', 0), ('m', 8)];
-    assert_eq!(take_log(), [head.as_slice(), &WALK, &[('b', 7)]].concat());
+    let head = [('n', 8), ('w', 0)];
+    assert_eq!(take_log(), [head.as_slice(), &WALK, &[('m', 8), ('b', 7)]].concat());
 }
 
 // A chain of CHAIN cells, each release deferring the next (and a `b` for an
@@ -389,4 +388,34 @@ fn symbols_are_exported() {
     for name in ["__reussir_drop_defer", "__reussir_drop_defer_wide", "__reussir_drop_run"] {
         assert!(symbols.iter().any(|s| s.name == name && !s.address.is_null()));
     }
+}
+
+unsafe extern "C" fn nested_same_release(_: *mut u8) {
+    unsafe { defer(p(1), b) };
+    unsafe { run(p(2), b) };
+    log('m', 0);
+    unsafe { defer(p(3), b) };
+}
+
+#[test]
+fn nested_calls_do_not_merge_with_an_earlier_run() {
+    unsafe { run(p(0), nested_same_release) };
+    assert_eq!(take_log(), [('b', 2), ('m', 0), ('b', 3), ('b', 1)]);
+}
+
+unsafe extern "C" fn nested_step(_: usize) -> bool {
+    unsafe { run(p(2), b) };
+    log('m', 0);
+    true
+}
+unsafe extern "C" fn nested_step_walk(_: *mut u8) {
+    unsafe { defer(p(1), b) };
+    unsafe { run_step(0, nested_step) };
+    log('w', 0);
+}
+
+#[test]
+fn nested_steps_preserve_the_outer_pending_work() {
+    unsafe { run(p(0), nested_step_walk) };
+    assert_eq!(take_log(), [('b', 2), ('m', 0), ('w', 0), ('b', 1)]);
 }
