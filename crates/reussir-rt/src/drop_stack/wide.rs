@@ -48,6 +48,10 @@ impl ReleaseTable {
     }
 
     pub fn clear(&mut self) {
+        // Every cached index names an entry in releases.
+        if self.releases.is_empty() {
+            return;
+        }
         self.releases.clear();
         self.cache.fill(None);
         if self.releases.capacity() > 64 {
@@ -132,6 +136,21 @@ mod tests {
         table.releases.resize(u8::MAX as usize, known);
         assert!(table.index(known).is_some());
         assert!(table.index(second).is_none());
+    }
+
+    #[test]
+    fn cleared_tables_can_reassign_cached_indices() {
+        let mut table = ReleaseTable::default();
+        let first: Release = first;
+        let second: Release = second;
+        let index = table.index(first).unwrap();
+        assert!(ptr::fn_addr_eq(table.get(index), first));
+        table.clear();
+        table.clear();
+        let index = table.index(second).unwrap();
+        assert!(ptr::fn_addr_eq(table.get(index), second));
+        let index = table.index(first).unwrap();
+        assert!(ptr::fn_addr_eq(table.get(index), first));
     }
 
     #[test]
