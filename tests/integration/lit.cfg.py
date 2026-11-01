@@ -4,6 +4,8 @@ import sys
 
 # The compiler's enabled optional features (cmake/ReussirFeatures.cmake).
 config.available_features.update(config.reussir_features)
+if config.pointer_size == 8:
+    config.available_features.add('pointer64')
 if 'rcgmp' in config.available_features:
     config.substitutions.append((r'%rcgmp_runtime', config.rcgmp_runtime_flags))
 
