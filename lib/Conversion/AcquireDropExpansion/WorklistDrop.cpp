@@ -64,6 +64,9 @@ public:
     else
       mlir::SymbolTable(module).insert(function);
     inheritSanitizerPassthrough(module, function);
+    function.setArgAttr(0, "llvm.noalias", builder.getUnitAttr());
+    function.setArgAttr(0, "llvm.nonnull", builder.getUnitAttr());
+    function.setArgAttr(0, "llvm.noundef", builder.getUnitAttr());
     builder.setInsertionPointToStart(function.addEntryBlock());
     body(function.getArgument(0));
     mlir::func::ReturnOp::create(builder, loc);
@@ -125,9 +128,17 @@ public:
   }
 
   void drop(mlir::Value ref, bool run) {
-    auto enqueue = [&] { schedule(walk(ref.getType()), ref, run); };
-    if (!dispatchLeaf(ref, [] {}, enqueue))
-      enqueue();
+    auto body = [&](mlir::Value arg) {
+      auto enqueue = [&] { schedule(walk(arg.getType()), arg, run); };
+      if (!dispatchLeaf(arg, [] {}, enqueue))
+        enqueue();
+    };
+    if (run) {
+      auto entry = function(ref.getType(), "entry", body);
+      mlir::func::CallOp::create(builder, loc, entry, mlir::ValueRange{ref});
+    } else {
+      body(ref);
+    }
   }
 
   void array(mlir::Value ref) {
