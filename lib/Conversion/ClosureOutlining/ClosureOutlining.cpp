@@ -301,8 +301,7 @@ mlir::func::FuncOp ClosureOutliningPass::createClosureDropFunction(
                   mlir::LLVM::LinkageAttr::get(rewriter.getContext(),
                                                mlir::LLVM::Linkage::Internal));
   funcOp->setAttr("llvm.passthrough",
-                  rewriter.getStrArrayAttr({"mustprogress", "nounwind",
-                                            "willreturn", "nocallback"}));
+                  rewriter.getStrArrayAttr({"nounwind"}));
   inheritSanitizerPassthrough(funcOp->getParentOfType<mlir::ModuleOp>(),
                               funcOp);
 

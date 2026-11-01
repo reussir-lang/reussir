@@ -16,9 +16,9 @@ inline constexpr llvm::StringLiteral kWorklistRawAttr = "reussir.worklist_raw";
 bool isForwardDrop(mlir::ModuleOp module);
 bool isInsideWorklistGlue(mlir::Operation *site);
 mlir::LogicalResult
-prepareWorklistClosureDrops(mlir::ModuleOp module,
-                            mlir::PatternRewriter &rewriter,
-                            mlir::SymbolTableCollection &symbols);
+prepareWorklistDropBridges(mlir::ModuleOp module,
+                           mlir::PatternRewriter &rewriter,
+                           mlir::SymbolTableCollection &symbols);
 void emitWorklistDrop(mlir::Value ref, mlir::Location loc,
                       mlir::PatternRewriter &rewriter,
                       mlir::SymbolTableCollection *symbols, bool run = false);

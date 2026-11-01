@@ -584,6 +584,13 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         let ty = self.tys.mlir_ty(glue.ty)?;
         let attributes = self.ffi_glue_attributes();
         let build = |symbol: &str, inc: bool| -> Result<Operation<'c>> {
+            let mut attributes = attributes.clone();
+            if !inc {
+                attributes.push((
+                    Identifier::new(self.context, "reussir.foreign_drop"),
+                    Attribute::unit(self.context),
+                ));
+            }
             let block = Block::new(&[(ty, loc)]);
             let arg = block
                 .argument(0)

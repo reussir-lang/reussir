@@ -4325,8 +4325,7 @@ createDtorIfNotExists(mlir::ModuleOp moduleOp, RecordType type,
   dtor->setAttr("llvm.linkage", builder.getAttr<mlir::LLVM::LinkageAttr>(
                                     mlir::LLVM::linkage::Linkage::LinkonceODR));
   dtor->setAttr("llvm.passthrough",
-                builder.getStrArrayAttr(
-                    {"mustprogress", "nounwind", "willreturn", "nocallback"}));
+                builder.getStrArrayAttr({"nounwind"}));
   // Drop glue is where a stale box's memory is actually touched; it must be
   // instrumented like the code it was outlined from.
   inheritSanitizerPassthrough(moduleOp, dtor);

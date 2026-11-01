@@ -651,7 +651,7 @@ struct AcquireDropExpansionPass
     mlir::SymbolTableCollection symbols;
     if (outlineRecord) {
       mlir::PatternRewriter rewriter(&getContext());
-      if (mlir::failed(prepareWorklistClosureDrops(module, rewriter, symbols)))
+      if (mlir::failed(prepareWorklistDropBridges(module, rewriter, symbols)))
         return signalPassFailure();
     }
     mlir::RewritePatternSet patterns(&getContext());
