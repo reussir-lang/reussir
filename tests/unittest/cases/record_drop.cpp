@@ -41,6 +41,7 @@ TEST_F(RecordDropTest, AcyclicBranchingIsDirect) {
   complete(pair, {leaf, leaf});
   EXPECT_EQ(leaf.classifyRecordDrop(), RecordDropKind::Direct);
   EXPECT_EQ(pair.classifyRecordDrop(), RecordDropKind::Direct);
+  EXPECT_FALSE(pair.hasObservableCleanup());
 }
 
 TEST_F(RecordDropTest, ChainAndNullableChainUseTailLoop) {
@@ -58,6 +59,7 @@ TEST_F(RecordDropTest, TreeUsesWorklist) {
   auto tree = declare("Tree");
   complete(tree, {tree, tree});
   EXPECT_EQ(tree.classifyRecordDrop(), RecordDropKind::Worklist);
+  EXPECT_FALSE(tree.hasObservableCleanup());
 }
 
 TEST_F(RecordDropTest, MutualRecursionUsesTailLoop) {
@@ -151,13 +153,16 @@ TEST_F(RecordDropTest, BorrowedFieldsDoNotAddDropEdges) {
 TEST_F(RecordDropTest, IncompleteTypesAreNotCached) {
   auto record = declare("Incomplete");
   EXPECT_EQ(record.classifyRecordDrop(), RecordDropKind::Invalid);
+  EXPECT_TRUE(record.hasObservableCleanup());
   complete(record, {record});
   EXPECT_EQ(record.classifyRecordDrop(), RecordDropKind::TailLoop);
+  EXPECT_FALSE(record.hasObservableCleanup());
 }
 
 TEST_F(RecordDropTest, OpaqueAtomicAndRegionalMembersAreClassified) {
   auto record = declare("ClosureOwner");
   complete(record, {ClosureType::get(&context, {}, scalar())});
+  EXPECT_TRUE(record.hasObservableCleanup());
   EXPECT_EQ(record.classifyRecordDrop(), RecordDropKind::Direct);
   auto atomic = declare("Atomic");
   complete(atomic,
@@ -193,6 +198,7 @@ TEST_F(RecordDropTest, RecursiveCellsAccountForLockCleanup) {
     EXPECT_EQ(record.classifyRecordDrop(), kind == CellKind::plain
                                                ? RecordDropKind::TailLoop
                                                : RecordDropKind::Worklist);
+    EXPECT_EQ(record.hasObservableCleanup(), kind != CellKind::plain);
   }
 }
 
@@ -208,6 +214,7 @@ TEST_F(RecordDropTest, ForeignCleanupAfterRecursionUsesWorklist) {
   auto owner = declare("ForeignOwner");
   complete(owner, {link});
   EXPECT_EQ(owner.classifyRecordDrop(), RecordDropKind::Direct);
+  EXPECT_TRUE(owner.hasObservableCleanup());
 }
 
 TEST_F(RecordDropTest, ForeignMemberPositionPreservesTailEligibility) {
@@ -232,6 +239,8 @@ TEST_F(RecordDropTest, ForeignMemberPositionPreservesTailEligibility) {
     complete(after, {afterLink, suffix});
     EXPECT_EQ(before.classifyRecordDrop(), RecordDropKind::TailLoop);
     EXPECT_EQ(after.classifyRecordDrop(), RecordDropKind::Worklist);
+    EXPECT_TRUE(before.hasObservableCleanup());
+    EXPECT_TRUE(after.hasObservableCleanup());
   }
 }
 
@@ -243,10 +252,29 @@ TEST_F(RecordDropTest, ScalarBoxesArraysAndCellsAreDirect) {
             ArrayType::get(&context, {2}, scalar()),
             CellType::get(&context, scalar(), CellKind::plain)});
   EXPECT_EQ(record.classifyRecordDrop(), RecordDropKind::Direct);
+  EXPECT_FALSE(record.hasObservableCleanup());
+}
+
+TEST_F(RecordDropTest, ObservableCleanupPropagatesAcrossMutualRecursion) {
+  auto a = declare("ObservableA");
+  auto b = declare("ObservableB");
+  complete(a, {b});
+  complete(b, {a, ClosureType::get(&context, {}, scalar())});
+  EXPECT_TRUE(a.hasObservableCleanup());
+  EXPECT_TRUE(b.hasObservableCleanup());
+}
+
+TEST_F(RecordDropTest, TargetArrayCleanupIsObservable) {
+  auto record = declare("DeviceArrayOwner");
+  auto target = TargetAttr::get(
+      &context, mlir::DenseI32ArrayAttr::get(&context, {0}), {}, {}, {});
+  complete(record, {ArrayType::get(&context, {0}, scalar(), target)});
+  EXPECT_TRUE(record.hasObservableCleanup());
 }
 
 TEST_F(RecordDropTest, IllFormedRecordsHaveNoClassification) {
   EXPECT_EQ(RecordType{}.classifyRecordDrop(), RecordDropKind::Invalid);
+  EXPECT_TRUE(RecordType{}.hasObservableCleanup());
   auto cycle = declare("InlineCycle");
   complete(cycle, {cycle}, Capability::value);
   EXPECT_EQ(cycle.classifyRecordDrop(), RecordDropKind::Invalid);
@@ -254,9 +282,11 @@ TEST_F(RecordDropTest, IllFormedRecordsHaveNoClassification) {
   auto owner = declare("Owner");
   complete(owner, {incomplete});
   EXPECT_EQ(owner.classifyRecordDrop(), RecordDropKind::Invalid);
+  EXPECT_TRUE(owner.hasObservableCleanup());
   complete(incomplete, {incomplete});
   EXPECT_EQ(owner.classifyRecordDrop(), RecordDropKind::Direct);
   EXPECT_EQ(incomplete.classifyRecordDrop(), RecordDropKind::TailLoop);
+  EXPECT_FALSE(owner.hasObservableCleanup());
 }
 
 TEST_F(RecordDropTest, CachedClassificationIsSharedByTypeHandles) {
@@ -266,6 +296,7 @@ TEST_F(RecordDropTest, CachedClassificationIsSharedByTypeHandles) {
   auto same = declare("Cached");
   EXPECT_EQ(same, record);
   EXPECT_EQ(same.classifyRecordDrop(), RecordDropKind::TailLoop);
+  EXPECT_FALSE(same.hasObservableCleanup());
 }
 
 TEST_F(RecordDropTest, SharedAcyclicGraphDoesNotExpandPaths) {
@@ -289,6 +320,7 @@ TEST_F(RecordDropTest, IntegerMemberPositionPreservesTailEligibility) {
   complete(leaf, {integer, scalar()});
   EXPECT_FALSE(isTriviallyCopyable(leaf));
   EXPECT_EQ(leaf.classifyRecordDrop(), RecordDropKind::Direct);
+  EXPECT_TRUE(leaf.hasObservableCleanup());
   auto before = declare("IntegerBefore");
   complete(before, {integer, before});
   EXPECT_EQ(before.classifyRecordDrop(), RecordDropKind::TailLoop);
