@@ -9,8 +9,8 @@
 //! interner and adds the ground-only invariant and v0 symbol mangling.
 
 pub mod async_check;
+pub mod drop_order;
 pub mod feature;
-pub mod tensor_check;
 pub mod full;
 /// The built-in `core::intrinsic` operation families.
 pub mod intrinsic;
@@ -22,6 +22,7 @@ pub mod launch;
 pub mod literal;
 pub mod semi;
 pub mod surface;
+pub mod tensor_check;
 pub mod utils;
 
 /// Run `f` inside a fresh type-arena scope, handing it an interning

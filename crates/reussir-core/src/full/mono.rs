@@ -83,6 +83,7 @@ use crate::utils::string::StringToken;
 /// textual HIR** — which has no traits/inference/builtins, only the elaborated
 /// functions, records, and trampoline roots — be monomorphized identically.
 pub struct MonoInput<'a, 'tcx> {
+    pub drop_order: Option<crate::drop_order::DropOrder>,
     pub tcx: &'a TyCtxt<'tcx>,
     pub defs: &'a DefTable,
     pub resolver: &'a dyn Resolver<TokenKey>,
@@ -173,6 +174,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// Borrow this elaborator as the [`MonoInput`] mono consumes.
     pub fn mono_input(&self) -> MonoInput<'_, 'tcx> {
         MonoInput {
+            drop_order: None,
             tcx: self.tcx,
             defs: &self.defs,
             resolver: self.resolver,
@@ -931,6 +933,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
     } = driver;
     (
         mir::Program {
+            drop_order: input.drop_order,
             functions,
             records,
             trampolines,
@@ -3815,6 +3818,7 @@ mod tests {
             let trait_db = parsed.rebuild_traits(tcx);
             let generic_env = parsed.rebuild_generic_env(&trait_db);
             let input = MonoInput {
+                drop_order: parsed.drop_order,
                 tcx,
                 defs: &parsed.defs,
                 resolver: &parsed.names,
@@ -4125,18 +4129,22 @@ mod tests {
             assert!(!elab.has_errors(), "{:#?}", elab.reports);
 
             // Monomorphize the original elaboration.
-            let (mir0, r0) = monomorphize(&elab.mono_input());
+            let mut input = elab.mono_input();
+            input.drop_order = Some(crate::drop_order::DropOrder::Backward);
+            let (mir0, r0) = monomorphize(&input);
             assert!(r0.is_empty(), "{r0:#?}");
             let text0 = MirPrinter::new(&elab.defs, elab.resolver).program(&mir0);
 
             // Serialize the HIR, parse it back, and monomorphize *that*.
             let strings = elab.strings.entries();
             let hir_text = HirPrinter::new(&elab.defs, elab.resolver)
+                .with_drop_order(input.drop_order)
                 .with_transform_metadata(&elab.transform_anchors, &elab.transform_scripts)
                 .with_ffi_metadata(&elab.ffi_preludes, &elab.ffi_imports)
                 .program(&elab.elaborated, &strings, &elab.records, &elab.trampolines);
             let parsed = parse_program(tcx, &hir_text).expect("re-parse HIR");
             let input = MonoInput {
+                drop_order: parsed.drop_order,
                 tcx,
                 defs: &parsed.defs,
                 resolver: &parsed.names,
@@ -4154,6 +4162,10 @@ mod tests {
                 features: Default::default(),
             };
             let (mir1, r1) = monomorphize(&input);
+            assert_eq!(
+                mir1.drop_order,
+                Some(crate::drop_order::DropOrder::Backward)
+            );
             assert!(r1.is_empty(), "{r1:#?}");
             let text1 = MirPrinter::new(&parsed.defs, &parsed.names).program(&mir1);
 
@@ -4239,6 +4251,7 @@ mod tests {
             let trait_db = parsed.rebuild_traits(tcx);
             let generic_env = parsed.rebuild_generic_env(&trait_db);
             let input = MonoInput {
+                drop_order: parsed.drop_order,
                 tcx,
                 defs: &parsed.defs,
                 resolver: &parsed.names,
@@ -4300,6 +4313,7 @@ mod tests {
                 .program(&elab.elaborated, &strings, &elab.records, &elab.trampolines);
             let parsed = parse_program(tcx, &hir_text).expect("re-parse HIR");
             let input = MonoInput {
+                drop_order: parsed.drop_order,
                 tcx,
                 defs: &parsed.defs,
                 resolver: &parsed.names,
@@ -4411,6 +4425,7 @@ mod tests {
 
             // ----- resume the *parsed* HIR into full elaboration -----
             let resumed_input = MonoInput {
+                drop_order: hir.drop_order,
                 tcx,
                 defs: &hir.defs,
                 resolver: &hir.names,
