@@ -344,9 +344,7 @@ public:
     return function(type, "release", [&](mlir::Value arg) {
       if (llvm::isa<FFIObjectType, ClosureType>(type.getElementType())) {
         if (type.getAtomicKind() == AtomicKind::atomic)
-          ReussirRcSetOp::create(
-              builder, loc, arg,
-              mlir::arith::ConstantIndexOp::create(builder, loc, 1));
+          ReussirRcIncOp::create(builder, loc, arg);
         auto dec = ReussirRcDecOp::create(builder, loc, NullableType{}, arg,
                                           mlir::IntegerAttr{},
                                           mlir::DenseI64ArrayAttr{});
