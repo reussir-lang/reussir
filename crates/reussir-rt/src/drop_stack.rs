@@ -150,8 +150,18 @@ impl DropContext {
         });
     }
 
-    /// Consecutive objects with the same callback share a run; only their
-    /// pointers are pushed, with the newest object kept in the active slot.
+    /// Enqueue transitions (callback equality compares function addresses):
+    ///
+    /// | Entry | Active run | Action |
+    /// |---|---|---|
+    /// | defer | Cells, same callback | Push old head into cells |
+    /// | defer | Otherwise | Suspend run; start Cells run |
+    /// | defer_wide | Wide, same callback | Push old head into cells; mark index 0 |
+    /// | defer_wide | Wide, different callback | Link old head and callback in header |
+    /// | defer_wide | Otherwise, or link fails | Suspend run; start Wide run |
+    ///
+    /// A Wide run mixes links and cells: index 0 pops a cell with the same
+    /// callback; nonzero decodes a link and selects its callback.
     fn defer(&self, object: Object, release: Release) {
         let active = &self.active_run;
         if let Some(head) = active.head.get()
