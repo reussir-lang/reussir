@@ -4271,6 +4271,14 @@ ReussirDropDeferOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
 }
 
 mlir::LogicalResult
+ReussirDropJoinOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
+  if (mlir::failed(verifyDropObject(*this, getObject().getType())))
+    return mlir::failure();
+  return verifyDropCallback(*this, getCalleeAttr(),
+                            mlir::TypeRange{getObject().getType()}, symbols);
+}
+
+mlir::LogicalResult
 ReussirDropRunOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
   if (mlir::failed(verifyDropObject(*this, getObject().getType())))
     return mlir::failure();

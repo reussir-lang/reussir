@@ -4297,7 +4297,8 @@ struct ReussirConvertToLLVMPatternInterface
                                                     symbolTables);
     target.addIllegalDialect("ifrt");
     target.addIllegalOp<ReussirRcDeferOp, ReussirDropDeferOp,
-                        ReussirDropRunOp, ReussirDropDeferIndexedOp>();
+                        ReussirDropRunOp, ReussirDropJoinOp,
+                        ReussirDropDeferIndexedOp>();
     target.addIllegalOp<
         ReussirPJRTJitCallOp, ReussirPJRTAfterOp, ReussirIFRTBytecodeOp,
         ReussirPanicOp, ReussirExpectOp, ReussirCctxEmptyOp,

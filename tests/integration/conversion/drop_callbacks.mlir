@@ -14,6 +14,7 @@ func.func private @step(%arg: !reussir.ref<i64>, %index: index) {
 }
 func.func @callbacks(%arg: !reussir.ref<i64>) {
   %zero = arith.constant 0 : index
+  reussir.drop.join @release(%arg : !reussir.ref<i64>)
   reussir.drop.run @release(%arg : !reussir.ref<i64>)
   reussir.drop.defer @release(%arg : !reussir.ref<i64>)
   reussir.drop.defer_indexed @step(%arg : !reussir.ref<i64>, %zero)

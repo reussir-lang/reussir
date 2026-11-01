@@ -1910,6 +1910,10 @@ def ReussirDropDeferOp : ReussirDropCallbackOp<"drop.defer"> {
   let summary = "Defer a release without changing its object's storage";
 }
 
+def ReussirDropJoinOp : ReussirDropCallbackOp<"drop.join"> {
+  let summary = "Join the active drop context, or run to completion outside one";
+}
+
 def ReussirDropRunOp : ReussirDropCallbackOp<"drop.run"> {
   let summary = "Run a release and complete its pending drops before returning";
 }

@@ -83,6 +83,8 @@ void populateDropStackLoweringPatterns(mlir::LLVMTypeConverter &converter,
   patterns.add<DropStackCall<ReussirRcDeferOp>,
                DropStackCall<ReussirDropDeferOp>>(converter,
                                                   "__reussir_drop_defer");
+  patterns.add<DropStackCall<ReussirDropJoinOp>>(converter,
+                                                "__reussir_drop_join_or_run");
   patterns.add<DropStackCall<ReussirDropRunOp>>(converter,
                                                "__reussir_drop_run");
   patterns.add<DropStackCall<ReussirDropDeferIndexedOp>>(
