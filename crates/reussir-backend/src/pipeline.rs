@@ -494,10 +494,6 @@ pub fn run_lowering_pipeline(
         func:   sys::reussirCreateTokenInstantiationPass(false, true);
         func:   sys::reussirCreateIncDecCancellationPass();
         module: sys::reussirCreatePjrtDonationPass(options.opt.optimizes_device_kernels());
-        func:   sys::reussirCreateTokenReusePass(
-            options.reuse_token_across_call,
-            options.emit_token_reuse_remarks,
-        );
         module: sys::reussirCreateRcDecrementExpansionPass(drop_order_ref);
         func:   sys::reussirCreateInferVariantTagPass();
         module: sys::reussirCreateAcquireDropExpansionPass(
@@ -510,6 +506,10 @@ pub fn run_lowering_pipeline(
         // second inc/dec cancellation phase.
         module: sys::reussirCreateConvertToSTDPass(false);
         func:   sys::reussirCreateIncDecCancellationPass();
+        func:   sys::reussirCreateTokenReusePass(
+            options.reuse_token_across_call,
+            options.emit_token_reuse_remarks,
+        );
 
         // Second acquire/drop expansion phase: expand decrements and outline
         // record drops.

@@ -189,12 +189,6 @@ void createLoweringPipeline(mlir::PassManager &pm,
   reussir::ReussirPjrtDonationPassOptions donation;
   donation.inferDonation = optimizeDeviceKernels;
   pm.addPass(reussir::createReussirPjrtDonationPass(donation));
-  {
-    reussir::ReussirTokenReusePassOptions tokenReuseOpts;
-    tokenReuseOpts.reuseAcrossCall = reuseTokenAcrossCall;
-    pm.addNestedPass<mlir::func::FuncOp>(
-        reussir::createReussirTokenReusePass(tokenReuseOpts));
-  }
   reussir::ReussirRcDecrementExpansionPassOptions decrements;
   decrements.dropOrder = dropOrder.str();
   decrements.deferNormal = true;
@@ -207,6 +201,13 @@ void createLoweringPipeline(mlir::PassManager &pm,
   pm.addPass(reussir::createReussirConvertToSTDPass());
   pm.addNestedPass<mlir::func::FuncOp>(
       reussir::createReussirIncDecCancellationPass());
+
+  {
+    reussir::ReussirTokenReusePassOptions tokenReuseOpts;
+    tokenReuseOpts.reuseAcrossCall = reuseTokenAcrossCall;
+    pm.addNestedPass<mlir::func::FuncOp>(
+        reussir::createReussirTokenReusePass(tokenReuseOpts));
+  }
 
   reussir::ReussirAcquireDropExpansionPassOptions options;
   options.expandDecrement = true;
