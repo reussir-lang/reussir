@@ -3,7 +3,7 @@
 
 !foreign = !reussir.rc<!reussir.ffi_object<"Capture", @capture_drop>>
 !plain = !reussir.rc<i64>
-!closure = !reussir.rc<!reussir.closure<(!foreign, !plain) -> ()>>
+!closure = !reussir.rc<!reussir.closure<(!foreign, !plain) -> i64>>
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>>} {
   func.func private @capture_drop(!foreign)
@@ -15,7 +15,8 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : 
       ^bb0(%first: !foreign, %second: !plain):
         reussir.rc.dec(%first : !foreign) cleanup(@capture_drop)
         reussir.rc.dec(%second : !plain)
-        reussir.closure.yield
+        %zero = arith.constant 0 : i64
+        reussir.closure.yield %zero : i64
       }
     }
     return %closure : !closure
