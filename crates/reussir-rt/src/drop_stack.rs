@@ -389,8 +389,9 @@ pub unsafe extern "C" fn __reussir_drop_defer_indexed(
     unsafe { defer_indexed(object, cursor, callback) }
 }
 
-/// Defers an owned box whose first eight bytes are a count of one and
-/// padding or a tag below 2^16. Encoded links are restored before release.
+/// Defers an exclusively owned dead box with a count of zero or one and
+/// padding or a tag below 2^16 in its first eight bytes. Encoded links are
+/// restored before release; the callback must not depend on the count.
 /// Safety: as [`defer`]; the box is four-byte aligned and nobody accesses it
 /// before its release. Header bytes outside the tag may be used while pending.
 pub unsafe fn defer_wide(object: *mut u8, release: Release) {

@@ -119,7 +119,9 @@ unsafe extern "C" fn late_release(object: *mut u8) {
     object.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 unsafe extern "C" fn late_enqueue(object: *mut u8) {
-    for _ in 0..128 { unsafe { defer(object, late_release) }; }
+    for _ in 0..128 {
+        unsafe { defer(object, late_release) };
+    }
 }
 impl Drop for Late {
     fn drop(&mut self) {
@@ -252,15 +254,24 @@ unsafe extern "C" fn host_step(object: *mut c_void) -> StepStatus {
 }
 #[test]
 fn alternating_foreign_and_record_drops_remain_iterative() {
-    std::thread::Builder::new().stack_size(64 * 1024).spawn(|| {
-        let mut object = Chain { remaining: 1_000_000 };
-        unsafe { run((&mut object as *mut Chain).cast(), record_drop) };
-        assert_eq!(object.remaining, 0);
-    }).unwrap().join().unwrap();
+    std::thread::Builder::new()
+        .stack_size(64 * 1024)
+        .spawn(|| {
+            let mut object = Chain {
+                remaining: 1_000_000,
+            };
+            unsafe { run((&mut object as *mut Chain).cast(), record_drop) };
+            assert_eq!(object.remaining, 0);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 unsafe extern "C" fn bulk(object: *mut u8) {
-    for _ in 0..128 { unsafe { defer(object, first) }; }
+    for _ in 0..128 {
+        unsafe { defer(object, first) };
+    }
     ACTIVE.with(|context| {
         let context = context.borrow();
         assert_eq!(context.work.len(), 1);
