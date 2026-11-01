@@ -1,7 +1,7 @@
 //! Scoped worklists shared by generated drop glue and foreign destructors.
 use core::{ffi::c_void, num::NonZeroUsize, ptr::NonNull};
 use smallvec::SmallVec;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 /// Releases one deferred object.
 pub type Release = unsafe extern "C" fn(*mut u8);
@@ -78,6 +78,7 @@ pub struct DropContext {
     work: SmallVec<[Work; 4]>,
     cells: SmallVec<[Object; 8]>,
     boundary: usize,
+    end_work: Option<EndWork>,
 }
 
 impl DropContext {
@@ -143,6 +144,7 @@ impl DropContext {
 scoped_tls::scoped_thread_local!(static ACTIVE: RefCell<DropContext>);
 thread_local! {
     static CACHED: RefCell<DropContext> = RefCell::new(DropContext::default());
+    static END_WORK: Cell<Option<EndWork>> = const { Cell::new(None) };
 }
 
 fn drain_pending() {
@@ -182,20 +184,23 @@ fn scoped(walk: impl FnOnce()) {
         return;
     }
     let mut walk = Some(walk);
-    if CACHED
-        .try_with(|context| execute(context, walk.take().unwrap()))
-        .is_err()
-    {
-        execute(&RefCell::new(DropContext::default()), walk.take().unwrap());
+    let end_work = match CACHED.try_with(|context| execute(context, walk.take().unwrap())) {
+        Ok(end_work) => end_work,
+        // A late TLS destructor owns a fresh context for this scope.
+        Err(_) => execute(&RefCell::new(DropContext::default()), walk.take().unwrap()),
+    };
+    if let Some(callback) = end_work {
+        unsafe { callback() };
     }
 }
 
-fn execute(context: &RefCell<DropContext>, walk: impl FnOnce()) {
+fn execute(context: &RefCell<DropContext>, walk: impl FnOnce()) -> Option<EndWork> {
     ACTIVE.set(context, || {
         walk();
         drain_pending();
     });
     let mut context = context.borrow_mut();
+    let end_work = context.end_work.take();
     if context.work.capacity() > 64 {
         context.work.shrink_to_fit();
     }
@@ -203,6 +208,7 @@ fn execute(context: &RefCell<DropContext>, walk: impl FnOnce()) {
         context.cells.shrink_to_fit();
     }
     debug_assert!(context.work.is_empty() && context.cells.is_empty());
+    end_work
 }
 
 /// Completes a release and its pending work. Nested calls complete their own
@@ -225,6 +231,24 @@ pub unsafe fn defer(object: *mut u8, release: Release) {
         });
     } else {
         unsafe { run(object, release) };
+    }
+}
+
+/// Work that runs after the outermost scope releases its context.
+pub type EndWork = unsafe extern "C" fn();
+
+/// Registers this thread's host end callback.
+pub fn set_end_work(callback: EndWork) {
+    END_WORK.set(Some(callback));
+}
+
+/// Requests the registered callback after the outermost drain, or now when idle.
+pub fn want_end_work() {
+    let callback = END_WORK.get();
+    if ACTIVE.is_set() {
+        ACTIVE.with(|context| context.borrow_mut().end_work = callback);
+    } else if let Some(callback) = callback {
+        unsafe { callback() };
     }
 }
 
