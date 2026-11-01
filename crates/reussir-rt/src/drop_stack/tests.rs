@@ -283,9 +283,8 @@ fn large_runs_keep_only_bounded_spare_buffers() {
     let mut object = Ordered { log: vec![] };
     unsafe { run((&mut object as *mut Ordered).cast(), bulk) };
     assert_eq!(object.log.len(), 128);
-    SPARE.with(|slot| {
-        let slot = slot.borrow();
-        let context = slot.as_ref().unwrap();
+    CACHED.with(|context| {
+        let context = context.borrow();
         assert!(context.work.capacity() <= 64 && context.cells.capacity() <= 64);
     });
 }

@@ -197,7 +197,7 @@ impl DropContext {
 
 scoped_tls::scoped_thread_local!(static ACTIVE: RefCell<DropContext>);
 thread_local! {
-    static SPARE: RefCell<Option<DropContext>> = const { RefCell::new(None) };
+    static CACHED: RefCell<DropContext> = RefCell::new(DropContext::default());
     static END_WORK: Cell<Option<EndWork>> = const { Cell::new(None) };
 }
 
@@ -237,17 +237,23 @@ fn scoped(walk: impl FnOnce()) {
         ACTIVE.with(|context| context.borrow_mut().boundary = previous);
         return;
     }
-    let context = SPARE
-        .try_with(|slot| slot.borrow_mut().take())
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let context = RefCell::new(context);
-    ACTIVE.set(&context, || {
+    let mut walk = Some(walk);
+    let end_work = match CACHED.try_with(|context| execute(context, walk.take().unwrap())) {
+        Ok(end_work) => end_work,
+        // A late TLS destructor owns a fresh context for this scope.
+        Err(_) => execute(&RefCell::new(DropContext::default()), walk.take().unwrap()),
+    };
+    if let Some(callback) = end_work {
+        unsafe { callback() };
+    }
+}
+
+fn execute(context: &RefCell<DropContext>, walk: impl FnOnce()) -> Option<EndWork> {
+    ACTIVE.set(context, || {
         walk();
         drain_pending();
     });
-    let mut context = context.into_inner();
+    let mut context = context.borrow_mut();
     let end_work = context.end_work.take();
     context.releases.clear();
     if context.work.capacity() > 64 {
@@ -256,12 +262,8 @@ fn scoped(walk: impl FnOnce()) {
     if context.cells.capacity() > 64 {
         context.cells.shrink_to_fit();
     }
-    debug_assert!(context.cells.is_empty());
-    // A late TLS destructor owns and frees its context when the spare is gone.
-    let _ = SPARE.try_with(|slot| *slot.borrow_mut() = Some(context));
-    if let Some(callback) = end_work {
-        unsafe { callback() };
-    }
+    debug_assert!(context.work.is_empty() && context.cells.is_empty());
+    end_work
 }
 
 /// Completes a release and its pending work. Nested calls complete their own
