@@ -256,6 +256,7 @@ impl<'tcx> Builder<'_, 'tcx> {
             .ffi_imports
             .iter()
             .map(|f| mir::FfiImport {
+                release_bindings: f.release_bindings.iter().map(|s| self.sym(s)).collect(),
                 symbol: self.sym(&f.symbol),
                 boundary: self.sym(&f.boundary),
                 texture: f.texture.clone(),
@@ -265,6 +266,7 @@ impl<'tcx> Builder<'_, 'tcx> {
             .ffi_textures
             .iter()
             .map(|t| mir::FfiTexture {
+                release_bindings: t.release_bindings.iter().map(|s| self.sym(s)).collect(),
                 anchor: self.sym(&t.anchor),
                 texture: t.texture.clone(),
             })
@@ -1263,6 +1265,30 @@ mod tests {
             pub fn use_it() -> Vec<Item> { push(new<Item>(), Item{1}) }
             "#,
         );
+    }
+
+    #[test]
+    fn roundtrips_per_texture_release_bindings() {
+        let text = concat!(
+            "ffi import @entry = @boundary \"import\" bindings(@item_ffi_release);\n\n",
+            "ffi texture @hook \"drop\" bindings(@nested_ffi_release, @item_ffi_release);\n",
+        );
+        with_tcx(|tcx| {
+            let parsed = parse_program(tcx, text).unwrap();
+            let program = &parsed.program;
+            assert_eq!(
+                program.symbol(program.ffi_imports[0].release_bindings[0]),
+                "item_ffi_release"
+            );
+            assert_eq!(program.ffi_textures[0].release_bindings.len(), 2);
+            let printed = Printer::new(&parsed.defs, &parsed.names).program(program);
+            assert_eq!(printed, text);
+            let reparsed = parse_program(tcx, &printed).unwrap();
+            assert_eq!(
+                Printer::new(&reparsed.defs, &reparsed.names).program(&reparsed.program),
+                text
+            );
+        });
     }
 
     #[test]

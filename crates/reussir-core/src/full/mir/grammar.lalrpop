@@ -39,15 +39,17 @@ Item: raw::Item = {
             span: loc.and_then(|l| l.1),
         }),
     <t:TransformDecl> => raw::Item::Transform(t),
-    "ffi" "import" "@" <symbol:Sym> "=" "@" <boundary:Sym> <texture:"quoted"> ";"
+    "ffi" "import" "@" <symbol:Sym> "=" "@" <boundary:Sym> <texture:"quoted"> <bindings:ReleaseBindings?> ";"
         => raw::Item::FfiImport(raw::FfiImport {
             symbol,
             boundary,
+            release_bindings: bindings.unwrap_or_default(),
             texture: unescape_debug_str(texture).into_owned(),
         }),
-    "ffi" "texture" "@" <anchor:Sym> <texture:"quoted"> ";"
+    "ffi" "texture" "@" <anchor:Sym> <texture:"quoted"> <bindings:ReleaseBindings?> ";"
         => raw::Item::FfiTexture(raw::FfiTexture {
             anchor,
+            release_bindings: bindings.unwrap_or_default(),
             texture: unescape_debug_str(texture).into_owned(),
         }),
     "ffi" "glue" "@" <acquire:Sym> "@" <release:Sym> ":" <t:Ty> ";"
@@ -55,6 +57,8 @@ Item: raw::Item = {
     "ffi" "trait" "glue" "@" <entry:Sym> "=" "@" <target:Sym> ":" <t:Ty> "=>" <ret:Ty> ";"
         => raw::Item::FfiTraitGlue(raw::FfiTraitGlue { entry, target, ty: t, ret }),
 };
+
+ReleaseBindings: Vec<String> = "bindings" "(" <symbols:Comma<("@" <Sym>)>> ")" => symbols;
 
 /// One source-file table entry: `0 = "src/lib.rr";`. Spans are byte offsets
 /// into these files; a `<bracketed>` name is a virtual file (unfetchable).
@@ -143,6 +147,7 @@ Name: &'input str = {
 BareName: &'input str = {
     "while" => "while",
     "async" => "async",
+    "bindings" => "bindings",
     "drop_order" => "drop_order",
     "launch" => "launch",
     <name:"ident"> => name,
@@ -503,6 +508,7 @@ extern {
         "fp" => Token::Fp(<u16>),
         "ident" => Token::Ident(<&'input str>),
         "quoted" => Token::Quoted(<Cow<'input, str>>),
+        "bindings" => Token::Bindings,
         "drop_order" => Token::DropOrder,
         "pub" => Token::Pub,
         "regional" => Token::Regional,

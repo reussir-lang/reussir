@@ -351,6 +351,7 @@ BoundItem: Bound = <first:Name> <rest:("::" <Name>)*> => {
 Name: &'input str = {
     "while" => "while",
     "async" => "async",
+    "bindings" => "bindings",
     "drop_order" => "drop_order",
     "launch" => "launch",
     <name:"ident"> => name,
@@ -687,6 +688,7 @@ extern {
         "intu" => Token::IntU(<u16>),
         "fp" => Token::Fp(<u16>),
         "ident" => Token::Ident(<&'input str>),
+        "bindings" => Token::Bindings,
         "drop_order" => Token::DropOrder,
         "pub" => Token::Pub,
         "regional" => Token::Regional,
