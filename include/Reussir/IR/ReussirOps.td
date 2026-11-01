@@ -1894,33 +1894,96 @@ def ReussirRefDropOp
 def ReussirRcDeferOp : ReussirOp<"rc.defer", [
     DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "Transfer a dead shared box to the pending drop stack";
+  let description = [{
+    Transfers an exclusively owned, dead box to `release`; it does not decrement
+    the reference count. The RC type must have shared capability. The caller
+    must keep the box alive until release and relinquish access to it: eligible
+    box headers may store pending links. The callback accepts the box's exact
+    type, returns nothing, and must not depend on its reference count.
+
+    Inside a destruction scope, release is deferred in LIFO order. Outside one,
+    release and its pending work complete before returning.
+
+    ```mlir
+    reussir.rc.defer @release_box(%box : !reussir.rc<i64>)
+    ```
+  }];
   let arguments = (ins FlatSymbolRefAttr:$release, ReussirRcType:$box);
   let assemblyFormat =
       "$release `(` $box `:` qualified(type($box)) `)` attr-dict";
 }
 
-class ReussirDropCallbackOp<string name> : ReussirOp<name, [
+class ReussirDropCallbackOp<string name> : ReussirOp<"drop." # name, [
     DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let arguments = (ins FlatSymbolRefAttr:$callee, AnyType:$object);
   let assemblyFormat =
       "$callee `(` $object `:` qualified(type($object)) `)` attr-dict";
 }
 
-def ReussirDropDeferOp : ReussirDropCallbackOp<"drop.defer"> {
+def ReussirDropDeferOp : ReussirDropCallbackOp<"defer"> {
   let summary = "Defer a release without changing its object's storage";
+  let description = [{
+    Queues `callee(object)` in the active destruction scope, without using the
+    object's storage for pending links. Newer work runs before older work.
+    Outside a scope, starts one and completes the release and its pending work.
+    The reference or RC pointer must remain valid until the callback runs;
+    the callback takes its exact type and returns nothing.
+
+    ```mlir
+    reussir.drop.defer @release(%object : !reussir.ref<i64>)
+    ```
+  }];
 }
 
-def ReussirDropJoinOp : ReussirDropCallbackOp<"drop.join"> {
+def ReussirDropJoinOp : ReussirDropCallbackOp<"join"> {
   let summary = "Join the active drop context, or run to completion outside one";
+  let description = [{
+    Invokes `callee(object)` immediately. In an active destruction scope, any
+    work it defers joins that scope and need not complete before this operation
+    returns. Outside a scope, creates one and drains it before returning.
+    Internal foreign release bridges use this to avoid nested drains.
+    The callback takes the object's exact reference or RC type and returns
+    nothing; storage needed by deferred work must remain alive until it runs.
+
+    ```mlir
+    reussir.drop.join @release(%object : !reussir.ref<i64>)
+    ```
+  }];
 }
 
-def ReussirDropRunOp : ReussirDropCallbackOp<"drop.run"> {
+def ReussirDropRunOp : ReussirDropCallbackOp<"run"> {
   let summary = "Run a release and complete its pending drops before returning";
+  let description = [{
+    Creates a destruction scope, invokes `callee(object)`, and drains work
+    queued in that scope before returning. If a scope already exists, its
+    earlier pending work is suspended and resumed after this nested scope.
+    The callback takes the object's exact reference or RC type and returns
+    nothing. The object must be valid for the callback, and storage needed by
+    deferred work must remain alive until that work completes.
+
+    ```mlir
+    reussir.drop.run @release(%object : !reussir.ref<i64>)
+    ```
+  }];
 }
 
 def ReussirDropDeferIndexedOp : ReussirOp<"drop.defer_indexed", [
     DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "Defer an indexed release step";
+  let description = [{
+    Queues `callee(object, index)` in the active destruction scope. The callback
+    takes the object's exact reference or RC type followed by `index`, and
+    returns nothing. The object must remain valid until the callback runs.
+    Without an active scope, creates one and drains it before returning.
+
+    An array cleanup can queue its next index before queuing a child's release:
+    LIFO execution finishes the child's work before resuming the array. Each
+    callback runs once; further steps must be queued explicitly.
+
+    ```mlir
+    reussir.drop.defer_indexed @release_element(%array : !reussir.ref<i64>, %next)
+    ```
+  }];
   let arguments = (ins FlatSymbolRefAttr:$callee, AnyType:$object, Index:$index);
   let assemblyFormat =
       "$callee `(` $object `:` qualified(type($object)) `,` $index `)` attr-dict";
