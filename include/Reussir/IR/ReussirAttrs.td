@@ -25,6 +25,36 @@ class ReussirAttr<string name, string attrMnemonic, list<Trait> traits = [],
   let mnemonic = attrMnemonic;
 }
 
+def WorklistRole : I32EnumAttr<"WorklistRole", "worklist helper role", [
+    I32EnumAttrCase<"Walk", 0, "walk">,
+    I32EnumAttrCase<"Entry", 1, "entry">,
+    I32EnumAttrCase<"Release", 2, "release">,
+    I32EnumAttrCase<"Array", 3, "array">,
+    I32EnumAttrCase<"Free", 4, "free">]> {
+  let cppNamespace = "::reussir";
+  let genSpecializedAttr = 0;
+}
+def WorklistDirection : I32EnumAttr<"WorklistDirection", "drop direction", [
+    I32EnumAttrCase<"Forward", 0, "forward">,
+    I32EnumAttrCase<"Backward", 1, "backward">]> {
+  let cppNamespace = "::reussir";
+  let genSpecializedAttr = 0;
+}
+def Reussir_WorklistRole : ReussirAttr<"WorklistRole", "worklist_role"> {
+  let summary = "Role and destruction order of a generated worklist helper";
+  let description = [{
+    Identifies a generated helper's purpose and member destruction order.
+    The helper builder also matches argument type and arity before reuse.
+    For example, `#reussir.worklist_role<walk, forward>` identifies a forward
+    payload walk; `#reussir.worklist_role<release, backward>` identifies a
+    backward box release. Entry helpers establish a scope, array helpers
+    resume element cleanup, and free helpers release an allocation.
+  }];
+  let parameters = (ins EnumParameter<WorklistRole>:$role,
+                        EnumParameter<WorklistDirection>:$direction);
+  let assemblyFormat = "`<` $role `,` $direction `>`";
+}
+
 //===----------------------------------------------------------------------===//
 // Array target metadata
 //===----------------------------------------------------------------------===//
