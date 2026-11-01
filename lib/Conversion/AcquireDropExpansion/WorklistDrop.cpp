@@ -91,6 +91,24 @@ public:
   void array(mlir::Value ref) {
     auto refType = llvm::cast<RefType>(ref.getType());
     auto type = llvm::cast<ArrayType>(refType.getElementType());
+    auto element = type.getElementType();
+    if (auto nullable = llvm::dyn_cast<NullableType>(element))
+      element = nullable.getPtrTy();
+    if (auto rc = llvm::dyn_cast<RcType>(element);
+        rc && rc.getCapability() == Capability::shared &&
+        isTriviallyCopyable(rc.getElementType())) {
+      mlir::Value view = ReussirArrayViewOp::create(
+          builder, loc, getArrayViewMemRefType(type), ref);
+      [[maybe_unused]] auto result = emitArrayElementTraversal(
+          view, builder, loc,
+          [](mlir::OpBuilder &body, mlir::Location loc, mlir::Value element) {
+            ReussirRefDropOp::create(body, loc, element);
+            return mlir::success();
+          },
+          refType.getAtomicKind());
+      assert(mlir::succeeded(result));
+      return;
+    }
     auto task = function(
         refType, "array",
         [&](mlir::Value arg) {

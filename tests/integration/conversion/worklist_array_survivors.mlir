@@ -51,3 +51,40 @@ module {
 // CHECK-NEXT: reussir.drop.defer @__reussir_drop.release.forward
 // CHECK: arith.select
 // CHECK: scf.yield
+
+// -----
+
+!array = !reussir.array<? x !reussir.rc<i64>>
+module {
+  func.func @drop_leaves(%ref: !reussir.ref<!array>) attributes {reussir.worklist_drop} {
+    reussir.ref.drop(%ref : !reussir.ref<!array>)
+    return
+  }
+}
+// CHECK-LABEL: func.func @drop_leaves
+// CHECK-NOT: reussir.drop.defer
+// CHECK: scf.for
+// CHECK: reussir.rc.fetch
+// CHECK: reussir.token.free
+// CHECK-NOT: reussir.drop.defer
+// CHECK: return
+
+// -----
+
+!leaf = !reussir.rc<i64 shared atomic>
+!array = !reussir.array<2 x ? x !reussir.nullable<!leaf>>
+module {
+  func.func @drop_nullable_leaves(%ref: !reussir.ref<!array unspecified atomic>) attributes {reussir.worklist_drop} {
+    reussir.ref.drop(%ref : !reussir.ref<!array unspecified atomic>)
+    return
+  }
+}
+// CHECK-LABEL: func.func @drop_nullable_leaves
+// CHECK-NOT: reussir.drop.defer
+// CHECK: scf.for
+// CHECK: scf.for
+// CHECK: reussir.nullable.check
+// CHECK: reussir.rc.fetch_sub
+// CHECK: reussir.token.free
+// CHECK-NOT: reussir.drop.defer
+// CHECK: return
