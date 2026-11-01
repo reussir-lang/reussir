@@ -285,6 +285,10 @@ LLVMModuleRef reussirGatherCompiledModules(MlirModule module,
   return llvm::wrap(result.release());
 }
 
+void reussirQualifyFfiSymbols(MlirModule module, LLVMModuleRef translated) {
+  reussir::qualifyFfiSymbols(unwrap(module), *llvm::unwrap(translated));
+}
+
 void reussirFixupVariantDebugInfo(LLVMModuleRef module) {
   reussir::fixupVariantDebugInfo(*llvm::unwrap(module));
 }

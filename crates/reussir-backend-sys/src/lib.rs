@@ -266,6 +266,9 @@ unsafe extern "C" {
     /// active case. Operates in place; a no-op when `module` has no debug info.
     pub fn reussirFixupVariantDebugInfo(module: LLVMModuleRef);
 
+    /// Qualifies compiler-owned foreign symbols after Rust bitcode is linked.
+    pub fn reussirQualifyFfiSymbols(module: MlirModule, linked: LLVMModuleRef);
+
     /// On COFF targets, attaches a `comdat any` (keyed by the symbol's own
     /// name, as COFF requires) to every function and global variable defined
     /// with weak-for-linker linkage (`weak`/`weak_odr`/`linkonce`/

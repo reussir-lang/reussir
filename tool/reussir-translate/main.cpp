@@ -49,6 +49,7 @@ int main(int argc, char **argv) {
         polyffiModule->setTargetTriple(llvmModule->getTargetTriple());
         if (llvm::Linker::linkModules(*llvmModule, std::move(polyffiModule)))
           return mlir::failure();
+        reussir::qualifyFfiSymbols(moduleOp, *llvmModule);
         llvmModule->removeDebugIntrinsicDeclarations();
         llvmModule->print(output, nullptr);
         return mlir::success();
