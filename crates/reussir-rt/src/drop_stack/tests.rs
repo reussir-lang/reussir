@@ -257,8 +257,9 @@ fn steps_inside_a_drain_and_an_empty_drain() {
     assert!(!releasing() && depth() == 0);
 }
 
-// Linked runs: boxes with a wide header (count, then a tag below 2^16),
-// deferred with `defer_wide`. A release checks that its header is back.
+// Linked runs: boxes with a wide header (count, then a tag below 2^16 or
+// padding: an odd box's upper 16 bits are garbage), deferred with
+// `defer_wide`. A release checks that its count and tag are back.
 #[repr(C, align(8))]
 struct Wide {
     count: u32,
@@ -266,11 +267,12 @@ struct Wide {
     id: usize,
 }
 fn wide(id: usize) -> *mut u8 {
-    Box::into_raw(Box::new(Wide { count: 1, tag: id as u32 % 7, id })).cast()
+    let garbage = if id % 2 == 1 { 0xabcd << 16 } else { 0 };
+    Box::into_raw(Box::new(Wide { count: 1, tag: id as u32 % 7 | garbage, id })).cast()
 }
 unsafe fn take(cell: *mut u8, kind: char) -> usize {
     let b = unsafe { Box::from_raw(cell.cast::<Wide>()) };
-    assert_eq!((b.count, b.tag), (1, b.id as u32 % 7));
+    assert_eq!((b.count, b.tag & 0xffff), (1, b.id as u32 % 7));
     log(kind, b.id);
     b.id
 }
@@ -279,6 +281,8 @@ unsafe fn take(cell: *mut u8, kind: char) -> usize {
 // a step, or a nested run.
 thread_local! {
     static WIDE: Cell<bool> = const { Cell::new(true) };
+    // The most cells pending while a release ran.
+    static CELLS: Cell<usize> = const { Cell::new(0) };
 }
 fn kids(id: usize) -> usize {
     if id > 2000 { 0 } else { (id.wrapping_mul(2654435761) >> 7) % 4 }
@@ -286,7 +290,7 @@ fn kids(id: usize) -> usize {
 unsafe fn plan(id: usize) {
     for k in 0..kids(id) {
         let c = id * 4 + k;
-        let f: Release = if c % 3 == 0 { wb } else { wa };
+        let f = if c % 3 == 0 { WB } else { WA };
         match (c >> 3) % 5 {
             0 => unsafe { defer_step(c, wide_step) },
             1 => unsafe { run(wide(c), f) },
@@ -298,12 +302,16 @@ unsafe fn plan(id: usize) {
 }
 unsafe extern "C" fn wa(cell: *mut u8) {
     let id = unsafe { take(cell, 'A') };
+    CELLS.with(|c| c.set(c.get().max(state().cells.len.get())));
     unsafe { plan(id) };
 }
 unsafe extern "C" fn wb(cell: *mut u8) {
     let id = unsafe { take(cell, 'B') };
     unsafe { plan(id) };
 }
+// Reified once each (Miri gives every reification its own address).
+static WA: Release = wa;
+static WB: Release = wb;
 unsafe extern "C" fn wide_step(c: usize) -> bool {
     log('s', c);
     unsafe { plan(c + 1) };
@@ -312,16 +320,18 @@ unsafe extern "C" fn wide_step(c: usize) -> bool {
 
 #[test]
 fn linked_runs_keep_the_order() {
-    // The same drops, wide or not: the same events, and linked boxes take
-    // no cells.
+    // The same drops, wide or not: the same events. Wide boxes deferred one
+    // after the other with one release join a run of cells; a change of
+    // release links through the header.
     let mut logs = vec![];
     for linked in [true, false] {
         WIDE.with(|w| w.set(linked));
         for root in 1..if cfg!(miri) { 10 } else { 60 } {
-            unsafe { run(wide(root), if root % 2 == 0 { wb } else { wa }) };
+            unsafe { run(wide(root), if root % 2 == 0 { WB } else { WA }) };
         }
         logs.push(take_log());
         assert!(!releasing() && pending() == 0 && trimmed());
+        assert!(CELLS.with(|c| c.replace(0)) > 0);
     }
     assert!(logs[0].len() > if cfg!(miri) { 20 } else { 300 });
     assert_eq!(logs[0], logs[1]);
@@ -345,7 +355,7 @@ unsafe extern "C" fn alternating(_: *mut u8) {
     unsafe { defer_wide(off, off_release) };
     log('d', s.depth());
     // Fill the table (its entries in use stay).
-    RELEASES.with(|t| t[s.known.get() as usize..].iter().for_each(|r| r.set(Some(unnamed))));
+    TABLE_STATE.with(|t| t.releases[s.known.get() as usize..].iter().for_each(|r| r.set(Some(unnamed))));
     s.known.set(TABLE as u8);
     // One reified function, so that 11 links to 10 (Miri gives each
     // reification its own address).
@@ -357,7 +367,7 @@ unsafe extern "C" fn alternating(_: *mut u8) {
 unsafe extern "C" fn off_release(cell: *mut u8) {
     // Never linked: its "header" (box 9's tag and number) is untouched.
     let words = cell.cast::<u32>();
-    assert_eq!(unsafe { (words.read(), words.add(1).read()) }, (2, 9));
+    assert_eq!(unsafe { (words.read(), words.add(1).read()) }, (2 | 0xabcd << 16, 9));
     drop(unsafe { Box::from_raw(cell.sub(4).cast::<Wide>()) });
     log('o', 9);
 }
