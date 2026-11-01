@@ -3,6 +3,9 @@ use core::{ffi::c_void, num::NonZeroUsize, ptr::NonNull};
 use std::cell::{Cell, RefCell};
 use smallvec::SmallVec;
 
+mod wide;
+use wide::{ReleaseTable, WideHeader};
+
 /// Releases one deferred object.
 pub type Release = unsafe extern "C" fn(*mut u8);
 
@@ -23,6 +26,13 @@ struct PendingRun {
     head: Object,
     release: Release,
     len: NonZeroUsize,
+    storage: RunStorage,
+}
+
+#[derive(Clone, Copy)]
+enum RunStorage {
+    Cells,
+    Wide,
 }
 
 #[derive(Clone, Copy)]
@@ -64,12 +74,14 @@ pub struct DropContext {
     cells: SmallVec<[Object; 8]>,
     boundary: usize,
     end_work: Option<EndWork>,
+    releases: ReleaseTable,
 }
 
 impl DropContext {
     fn defer(&mut self, object: Object, release: Release) {
         if self.work.len() > self.boundary
             && let Some(Work::Run(run)) = self.work.last_mut()
+            && matches!(run.storage, RunStorage::Cells)
             && core::ptr::fn_addr_eq(run.release, release)
         {
             self.cells.push(run.head);
@@ -81,6 +93,32 @@ impl DropContext {
             head: object,
             release,
             len: NonZeroUsize::new(1).unwrap(),
+            storage: RunStorage::Cells,
+        }));
+    }
+
+    unsafe fn defer_wide(&mut self, object: Object, release: Release) {
+        if self.work.len() > self.boundary
+            && let Some(Work::Run(run)) = self.work.last_mut()
+            && matches!(run.storage, RunStorage::Wide)
+        {
+            let header = unsafe { WideHeader::new(object) };
+            let joined = if core::ptr::fn_addr_eq(run.release, release) {
+                self.cells.push(run.head);
+                unsafe { header.mark_cell() };
+                true
+            } else {
+                self.releases.index(run.release).is_some_and(|index| unsafe { header.link(run.head, index) })
+            };
+            if joined {
+                run.head = object;
+                run.release = release;
+                run.len = NonZeroUsize::new(run.len.get() + 1).unwrap();
+                return;
+            }
+        }
+        self.work.push(Work::Run(PendingRun {
+            head: object, release, len: NonZeroUsize::new(1).unwrap(), storage: RunStorage::Wide,
         }));
     }
 
@@ -95,7 +133,13 @@ impl DropContext {
                     self.work.pop();
                 } else {
                     let Work::Run(top) = self.work.last_mut().unwrap() else { unreachable!() };
-                    top.head = self.cells.pop().unwrap();
+                    top.head = match run.storage {
+                        RunStorage::Cells => self.cells.pop().unwrap(),
+                        RunStorage::Wide => match unsafe { WideHeader::new(run.head).take_link() } {
+                            Some(link) => { top.release = self.releases.get(link.release); link.previous }
+                            None => self.cells.pop().unwrap(),
+                        },
+                    };
                     top.len = NonZeroUsize::new(run.len.get() - 1).unwrap();
                 }
                 Some(Action::Release(task))
@@ -155,6 +199,7 @@ fn scoped(walk: impl FnOnce()) {
     });
     let mut context = context.into_inner();
     let end_work = context.end_work.take();
+    context.releases.clear();
     if context.work.capacity() > 64 { context.work.shrink_to_fit(); }
     if context.cells.capacity() > 64 { context.cells.shrink_to_fit(); }
     debug_assert!(context.cells.is_empty());
@@ -257,6 +302,24 @@ pub unsafe extern "C" fn __reussir_drop_defer_indexed(
     object: *mut u8, cursor: usize, callback: Indexed,
 ) {
     unsafe { defer_indexed(object, cursor, callback) }
+}
+
+/// Defers an owned box whose first eight bytes are a count of one and
+/// padding or a tag below 2^16. Encoded links are restored before release.
+/// Safety: as [`defer`]; the box is four-byte aligned and nobody accesses it
+/// before its release. Header bytes outside the tag may be used while pending.
+pub unsafe fn defer_wide(object: *mut u8, release: Release) {
+    if ACTIVE.is_set() {
+        ACTIVE.with(|context| unsafe { context.borrow_mut().defer_wide(Object::new(object), release) });
+    } else {
+        unsafe { run(object, release) };
+    }
+}
+
+/// C entry point of [`defer_wide`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __reussir_drop_defer_wide(object: *mut u8, release: Release) {
+    unsafe { defer_wide(object, release) }
 }
 
 /// C entry point of [`run`].
