@@ -129,7 +129,8 @@ mlir::LogicalResult emitArrayElementTraversal(
     mlir::Value view, mlir::OpBuilder &builder, mlir::Location loc,
     llvm::function_ref<mlir::LogicalResult(mlir::OpBuilder &, mlir::Location,
                                            mlir::Value)>
-        emitElement);
+        emitElement,
+    AtomicKind atomic = AtomicKind::normal);
 
 //===----------------------------------------------------------------------===//
 // createDtorIfNotExists
@@ -202,6 +203,10 @@ constexpr llvm::StringRef REUSSIR_EXPANDED_ENSURE_ATTR =
 
 // Execute this decrement's release without deferring it again.
 inline constexpr llvm::StringLiteral REUSSIR_NO_DEFER = "reussir.no_defer";
+
+// Marks an outlined drop helper for a locked cell.
+inline constexpr llvm::StringLiteral REUSSIR_LOCKED_DROP =
+    "reussir.locked_drop";
 
 // WorklistRoleAttr recording a generated helper's purpose and drop order.
 inline constexpr llvm::StringLiteral REUSSIR_WORKLIST_ROLE =

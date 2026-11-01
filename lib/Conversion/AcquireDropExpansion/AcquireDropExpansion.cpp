@@ -70,7 +70,7 @@ private:
       return it->second;
     auto module = op->getParentOfType<mlir::ModuleOp>();
     for (auto function : module.getOps<mlir::func::FuncOp>()) {
-      if (function->hasAttr("reussir.locked_drop") &&
+      if (function->hasAttr(REUSSIR_LOCKED_DROP) &&
           function->hasAttr(kWorklistGlueAttr) == glue &&
           function.getNumArguments() == 1 &&
           function.getArgumentTypes()[0] == type) {
@@ -87,7 +87,7 @@ private:
     auto function = mlir::func::FuncOp::create(
         rewriter, op.getLoc(), name, rewriter.getFunctionType({type}, {}));
     function.setPrivate();
-    function->setAttr("reussir.locked_drop", rewriter.getUnitAttr());
+    function->setAttr(REUSSIR_LOCKED_DROP, rewriter.getUnitAttr());
     if (glue)
       function->setAttr(kWorklistGlueAttr, rewriter.getUnitAttr());
     function->setAttr("llvm.linkage",
