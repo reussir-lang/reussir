@@ -85,16 +85,21 @@ struct ReleaseTask {
 /// Owns pending work; callbacks access it only through the scoped adapter.
 #[derive(Default)]
 pub struct DropContext {
+    pending: RefCell<Pending>,
+    boundary: Cell<usize>,
+    end_work: Cell<Option<EndWork>>,
+}
+
+#[derive(Default)]
+struct Pending {
     work: SmallVec<[Work; 4]>,
     cells: SmallVec<[Object; 8]>,
-    boundary: usize,
-    end_work: Option<EndWork>,
     releases: ReleaseTable,
 }
 
-impl DropContext {
-    fn defer(&mut self, object: Object, release: Release) {
-        if self.work.len() > self.boundary
+impl Pending {
+    fn defer(&mut self, object: Object, release: Release, boundary: usize) {
+        if self.work.len() > boundary
             && let Some(Work::Run(run)) = self.work.last_mut()
             && matches!(run.storage, RunStorage::Cells)
             && core::ptr::fn_addr_eq(run.release, release)
@@ -112,8 +117,8 @@ impl DropContext {
         }));
     }
 
-    unsafe fn defer_wide(&mut self, object: Object, release: Release) {
-        if self.work.len() > self.boundary
+    unsafe fn defer_wide(&mut self, object: Object, release: Release, boundary: usize) {
+        if self.work.len() > boundary
             && let Some(Work::Run(run)) = self.work.last_mut()
             && matches!(run.storage, RunStorage::Wide)
         {
@@ -142,8 +147,8 @@ impl DropContext {
         }));
     }
 
-    fn next(&mut self) -> Option<Action> {
-        if self.work.len() == self.boundary {
+    fn next(&mut self, boundary: usize) -> Option<Action> {
+        if self.work.len() == boundary {
             return None;
         }
         match *self.work.last()? {
@@ -195,14 +200,16 @@ impl DropContext {
     }
 }
 
-scoped_tls::scoped_thread_local!(static ACTIVE: RefCell<DropContext>);
+scoped_tls::scoped_thread_local!(static ACTIVE: DropContext);
 thread_local! {
-    static CACHED: RefCell<DropContext> = RefCell::new(DropContext::default());
+    static CACHED: DropContext = DropContext::default();
     static END_WORK: Cell<Option<EndWork>> = const { Cell::new(None) };
 }
 
 fn drain_pending() {
-    while let Some(action) = ACTIVE.with(|context| context.borrow_mut().next()) {
+    while let Some(action) =
+        ACTIVE.with(|context| context.pending.borrow_mut().next(context.boundary.get()))
+    {
         match action {
             Action::Release(task) => unsafe { (task.release)(task.object.as_ptr()) },
             Action::Indexed {
@@ -217,7 +224,7 @@ fn drain_pending() {
             } => {
                 if unsafe { callback(object.0.as_ptr()) } == StepStatus::Complete {
                     ACTIVE.with(|context| {
-                        context.borrow_mut().work.remove(position);
+                        context.pending.borrow_mut().work.remove(position);
                     });
                 }
             }
@@ -228,33 +235,33 @@ fn drain_pending() {
 fn scoped(walk: impl FnOnce()) {
     if ACTIVE.is_set() {
         let previous = ACTIVE.with(|context| {
-            let mut context = context.borrow_mut();
-            let boundary = context.work.len();
-            core::mem::replace(&mut context.boundary, boundary)
+            context
+                .boundary
+                .replace(context.pending.borrow().work.len())
         });
         walk();
         drain_pending();
-        ACTIVE.with(|context| context.borrow_mut().boundary = previous);
+        ACTIVE.with(|context| context.boundary.set(previous));
         return;
     }
     let mut walk = Some(walk);
     let end_work = match CACHED.try_with(|context| execute(context, walk.take().unwrap())) {
         Ok(end_work) => end_work,
         // A late TLS destructor owns a fresh context for this scope.
-        Err(_) => execute(&RefCell::new(DropContext::default()), walk.take().unwrap()),
+        Err(_) => execute(&DropContext::default(), walk.take().unwrap()),
     };
     if let Some(callback) = end_work {
         unsafe { callback() };
     }
 }
 
-fn execute(context: &RefCell<DropContext>, walk: impl FnOnce()) -> Option<EndWork> {
+fn execute(context: &DropContext, walk: impl FnOnce()) -> Option<EndWork> {
     ACTIVE.set(context, || {
         walk();
         drain_pending();
     });
-    let mut context = context.borrow_mut();
     let end_work = context.end_work.take();
+    let mut context = context.pending.borrow_mut();
     context.releases.clear();
     if context.work.capacity() > 64 {
         context.work.shrink_to_fit();
@@ -291,9 +298,11 @@ pub unsafe fn join_or_run(object: *mut u8, release: Release) {
 pub unsafe fn defer(object: *mut u8, release: Release) {
     if ACTIVE.is_set() {
         ACTIVE.with(|context| {
-            context
-                .borrow_mut()
-                .defer(unsafe { Object::new(object) }, release)
+            context.pending.borrow_mut().defer(
+                unsafe { Object::new(object) },
+                release,
+                context.boundary.get(),
+            )
         });
     } else {
         unsafe { run(object, release) };
@@ -312,7 +321,7 @@ pub fn set_end_work(callback: EndWork) {
 pub fn want_end_work() {
     let callback = END_WORK.get();
     if ACTIVE.is_set() {
-        ACTIVE.with(|context| context.borrow_mut().end_work = callback);
+        ACTIVE.with(|context| context.end_work.set(callback));
     } else if let Some(callback) = callback {
         unsafe { callback() };
     }
@@ -326,7 +335,7 @@ pub fn releasing() -> bool {
 /// Number of pending entries, including the currently executing step.
 pub fn depth() -> usize {
     if ACTIVE.is_set() {
-        ACTIVE.with(|context| context.borrow().work.len())
+        ACTIVE.with(|context| context.pending.borrow().work.len())
     } else {
         0
     }
@@ -337,7 +346,7 @@ pub fn depth() -> usize {
 pub unsafe fn defer_indexed(object: *mut u8, cursor: usize, callback: Indexed) {
     let enqueue = || {
         ACTIVE.with(|context| {
-            context.borrow_mut().work.push(Work::Indexed {
+            context.pending.borrow_mut().work.push(Work::Indexed {
                 object: unsafe { Object::new(object) },
                 cursor,
                 callback,
@@ -362,7 +371,7 @@ pub unsafe fn run_step(object: *mut c_void, callback: Step) {
 pub unsafe fn defer_step(object: *mut c_void, callback: Step) {
     let enqueue = || {
         ACTIVE.with(|context| {
-            context.borrow_mut().work.push(Work::Step {
+            context.pending.borrow_mut().work.push(Work::Step {
                 object: unsafe { Object::new(object.cast()) },
                 callback,
             })
@@ -399,9 +408,11 @@ pub unsafe extern "C" fn __reussir_drop_defer_indexed(
 pub unsafe fn defer_wide(object: *mut u8, release: Release) {
     if ACTIVE.is_set() {
         ACTIVE.with(|context| unsafe {
-            context
-                .borrow_mut()
-                .defer_wide(Object::new(object), release)
+            context.pending.borrow_mut().defer_wide(
+                Object::new(object),
+                release,
+                context.boundary.get(),
+            )
         });
     } else {
         unsafe { run(object, release) };
