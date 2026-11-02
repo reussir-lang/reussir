@@ -123,10 +123,13 @@ module {
   // TWICE-NEXT: call @sink(
 
   // A retain separated from its call by a release of something else might
-  // be what keeps the list alive until the call: the call stays owned.
+  // be what keeps the list alive until the call: keep it when borrowing.
   // CHECK-LABEL: func.func private @unclear(
   // CHECK: reussir.rc.inc(%arg1
-  // CHECK: call @mem(
+  // CHECK-NEXT: reussir.rc.dec(%arg0
+  // CHECK-NEXT: {{.*}}call @mem.borrowed_1(
+  // CHECK-NEXT: reussir.rc.dec(%arg1
+  // CHECK-NEXT: reussir.rc.dec(%arg1
   func.func private @unclear(%xs: !L, %ys: !L) -> i1 {
     %x = arith.constant 1 : i64
     reussir.rc.inc(%ys : !L)

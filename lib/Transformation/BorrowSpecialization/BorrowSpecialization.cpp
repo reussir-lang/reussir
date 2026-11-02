@@ -94,7 +94,8 @@ llvm::BitVector getTraversalParameters(mlir::func::FuncOp function,
         readsOnly = false;
     } else if (auto dec = llvm::dyn_cast<ReussirRcDecOp>(op)) {
       readsOnly &= !dec.isDestructuring() && dec->use_empty();
-    } else if (!op->hasTrait<mlir::OpTrait::HasRecursiveMemoryEffects>() &&
+    } else if (!llvm::isa<ReussirRecordDispatchOp>(op) &&
+               !op->hasTrait<mlir::OpTrait::HasRecursiveMemoryEffects>() &&
                !leavesCountsAlone(op)) {
       readsOnly = false;
     }
