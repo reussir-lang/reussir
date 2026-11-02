@@ -29,7 +29,7 @@ transform [{
     transform.yield
 }];
 
-// EMBED: module attributes {reussir.inline_transform, transform.with_named_sequence}
+// EMBED: module attributes {reussir.drop_order = "backward", reussir.inline_transform, transform.with_named_sequence}
 // EMBED: func.func @_RC6target
 // EMBED-SAME: attributes {no_inline, reussir.transform_anchor}
 // EMBED: transform.named_sequence @__reussir_inline_0

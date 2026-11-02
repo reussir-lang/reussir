@@ -122,8 +122,8 @@ pub struct Target {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
 pub enum DropOrder {
-    #[default]
     Forward,
+    #[default]
     Backward,
 }
 
@@ -467,6 +467,7 @@ mod tests {
 
     #[test]
     fn drop_order_is_typed_and_refines_profiles() {
+        assert_eq!(DropOrder::default(), DropOrder::Backward);
         let base = Profile {
             drop_order: Some(DropOrder::Backward),
             ..Profile::default()
