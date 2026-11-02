@@ -83,8 +83,9 @@ struct DefaultInlinerPass
   void runOnOperation() override {
     // Limit iterations across each SCC. The profitability rule below also
     // limits recursive expansion through calls introduced within a round.
-    const mlir::InlinerConfig config(addCanonicalizerWithoutRegionSimplification,
-                                     /*maxInliningIterations=*/1);
+    const mlir::InlinerConfig config(
+        addCanonicalizerWithoutRegionSimplification,
+        /*maxInliningIterations=*/1);
     mlir::CallGraph &callGraph = getAnalysis<mlir::CallGraph>();
     // The callables on a cycle of the call graph.
     llvm::DenseSet<const mlir::CallGraphNode *> recursive;
@@ -109,8 +110,16 @@ struct DefaultInlinerPass
     mlir::Inliner inliner(
         getOperation(), callGraph, *this, getAnalysisManager(),
         [this](mlir::Pass &, mlir::OpPassManager &pipeline,
-               mlir::Operation *op) { return runPipeline(pipeline, op); },
-        config, [&](const mlir::Inliner::ResolvedCall &call) {
+               mlir::Operation *op) {
+          // Single-use inlining can leave an empty callable pending deletion.
+          // Its body-dependent attributes need not verify as a declaration.
+          auto callable = llvm::dyn_cast<mlir::CallableOpInterface>(op);
+          if (callable && !callable.getCallableRegion())
+            return mlir::success();
+          return runPipeline(pipeline, op);
+        },
+        config,
+        [&](const mlir::Inliner::ResolvedCall &call) {
           if (!calleeIsSmall(call.targetNode->getCallableRegion(),
                              maxCalleeOps))
             return false;

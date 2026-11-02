@@ -1,0 +1,33 @@
+// RUN: %rrc %s -o %t.default.o --relocation-mode pic -Odefault
+// RUN: %cc %t.default.o %S/default_inliner_borrowed.c -o %t.default.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.default.exe
+// RUN: %rrc %s -o %t.size.o --relocation-mode pic -Osize
+// RUN: %cc %t.size.o %S/default_inliner_borrowed.c -o %t.size.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.size.exe
+// RUN: %rrc %s -o %t.aggressive.o --relocation-mode pic -Oaggressive
+// RUN: %cc %t.aggressive.o %S/default_inliner_borrowed.c -o %t.aggressive.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.aggressive.exe
+
+// Regression for #916: moving a borrowed callee must not schedule its empty
+// shell for canonicalization before the inliner deletes it.
+enum Expr { Num(i64), Pi(Expr, Expr) }
+enum Value { Error, U(i64) }
+fn sort(e: Expr) -> i64 { match infer(e) { Value::U(i) => i, _ => -1 } }
+fn infer_binder(a: Expr, b: Expr) -> Value {
+    let i = sort(a);
+    if i < 0 { Value::Error } else {
+        let j = sort(b);
+        if j < 0 { Value::Error } else { Value::U{if i > j { i } else { j }} }
+    }
+}
+fn infer(e: Expr) -> Value {
+    match e {
+        Expr::Num(i) => Value::U{i + 1},
+        Expr::Pi(a, b) => infer_binder(a, b)
+    }
+}
+fn run(n: i64) -> i64 {
+    let e = Expr::Pi{Expr::Num{n}, Expr::Num{n + 1}};
+    sort(e) + sort(e)
+}
+extern "C" trampoline "demo" = run;
