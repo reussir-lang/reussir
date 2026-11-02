@@ -1216,8 +1216,8 @@ fn emits_a_package_interface() {
         Path::new("-o"),
         Path::new("-"),
     ]);
-    // Frontend rejections exit 1 (like a parse error), not 2 (CLI misuse).
-    assert_eq!(reenter.status.code(), Some(1));
+    // A package interface is not a valid pipeline input (usage error).
+    assert_eq!(reenter.status.code(), Some(2));
     assert!(
         String::from_utf8_lossy(&reenter.stderr).contains("package interface"),
         "{}",

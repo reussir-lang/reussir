@@ -319,12 +319,11 @@ pub(crate) fn frontend<'c, 'tcx>(
             // bodies to compile and its mono roots stayed home. Loading one
             // is `--extern`'s job (a later PR), not pipeline re-entry.
             if parsed.header.is_some() {
-                eprintln!(
+                return Err(format!(
                     "{name}: this is a package interface (`.rri`), not a plain HIR \
                      program; an interface describes another package's exports and \
                      cannot re-enter the pipeline"
-                );
-                return Err(String::new());
+                ));
             }
             // The dump's file table names the original sources. Rebuild the
             // same dense ids, but delay opening paths until diagnostics or
