@@ -67,7 +67,7 @@ func.func @observes_count(%value: !R, %other: !R, %found: i1) -> !R {
   %r = scf.if %found -> (!R) {
     scf.yield %value : !R
   } else {
-    %unique = reussir.rc.is_unique(%value : !R)
+    %unique = reussir.rc.is_unique(%value : !R) : i1
     reussir.rc.dec(%value : !R)
     scf.yield %other : !R
   }
