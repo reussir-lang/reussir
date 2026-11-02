@@ -26,9 +26,9 @@
 /// pinned argument always outlives the call). A loan that is stored, returned
 /// or passed owned keeps the owned body's retain and its calls stay owned.
 /// The parameters themselves never escape (`BorrowAnalysis`). Allocation-free
-/// recursive traversals also borrow at last-use entry calls: the caller keeps
-/// the root alive and releases it afterward. Recursive calls still tail-call
-/// the borrowed clone; rebuilding functions keep their owned reuse paths.
+/// recursive traversals also borrow at last-use entry calls when the root is
+/// shared. An entry wrapper keeps it alive and releases it afterward. Unique
+/// roots keep the owned traversal, which frees nodes as it visits them.
 ///
 /// Clones are made on demand, one per callee and set of borrowed positions,
 /// and their bodies get the same treatment; this covers recursion, mutual
@@ -45,6 +45,8 @@
 
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/StringMap.h>
+#include <mlir/Dialect/Arith/IR/Arith.h>
+#include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Interfaces/SideEffectInterfaces.h>
 
 namespace reussir {
@@ -178,6 +180,60 @@ private:
     return clone;
   }
 
+  // A unique root benefits from consuming nodes during the traversal. A
+  // shared root instead pins the traversal and needs just one release.
+  mlir::func::FuncOp getTraversalEntry(const Origin &target,
+                                       const llvm::BitVector &lastUse) {
+    auto function = target.function;
+    const auto &positions = target.positions;
+    auto borrowed = getClone(function, positions);
+    std::string name = (borrowed.getName() + ".entry").str();
+    for (unsigned index : lastUse.set_bits())
+      name += "_" + std::to_string(index);
+    if (auto it = entries.find(name); it != entries.end())
+      return it->second;
+    llvm::BitVector ownedPositions = positions;
+    ownedPositions.reset(lastUse);
+    auto owned =
+        ownedPositions.any() ? getClone(function, ownedPositions) : function;
+    auto entry = clonePrivateSpecialization(function, name, symbols);
+    entry.getBody().getBlocks().clear();
+    auto *block = entry.addEntryBlock();
+    mlir::OpBuilder builder(block, block->begin());
+    auto loc = entry.getLoc();
+    entry->setAttr("reussir.borrow_entry", builder.getUnitAttr());
+    for (unsigned index : ownedPositions.set_bits())
+      entry.setArgAttr(index, BorrowedAttr::name,
+                       BorrowedAttr::get(module.getContext()));
+    mlir::Value unique;
+    for (unsigned index : lastUse.set_bits()) {
+      mlir::Value test = ReussirRcIsUniqueOp::create(
+          builder, loc, builder.getI1Type(), block->getArgument(index));
+      unique = unique ? mlir::arith::OrIOp::create(builder, loc, unique, test)
+                      : test;
+    }
+    auto branch = mlir::scf::IfOp::create(
+        builder, loc, unique,
+        [&](mlir::OpBuilder &body, mlir::Location loc) {
+          auto call = mlir::func::CallOp::create(body, loc, owned,
+                                                 block->getArguments());
+          mlir::scf::YieldOp::create(body, loc, call.getResults());
+        },
+        [&](mlir::OpBuilder &body, mlir::Location loc) {
+          auto call = mlir::func::CallOp::create(body, loc, borrowed,
+                                                 block->getArguments());
+          for (unsigned index : lastUse.set_bits())
+            ReussirRcDecOp::create(
+                body, loc, NullableType{}, block->getArgument(index),
+                mlir::IntegerAttr{}, mlir::DenseI64ArrayAttr{});
+          mlir::scf::YieldOp::create(body, loc, call.getResults());
+        });
+    mlir::func::ReturnOp::create(builder, loc, branch.getResults());
+    entries[name] = entry;
+    origins[entry] = {function, ownedPositions};
+    return entry;
+  }
+
   // A use that leaves a pinned value unconsumed once the calls are switched.
   bool isPinnedUse(mlir::OpOperand &use) {
     return isNonConsumingUse(use, [&](mlir::func::CallOp call, unsigned index) {
@@ -216,6 +272,8 @@ private:
   // pinned ones, and live-through ones whose feeding retain is removed.
   void rewriteCalls(mlir::func::FuncOp function,
                     const llvm::DenseSet<mlir::Value> &pinned) {
+    if (function->hasAttr("reussir.borrow_entry"))
+      return;
     auto caller = function;
     if (auto it = origins.find(function); it != origins.end())
       caller = it->second.function;
@@ -227,7 +285,7 @@ private:
         continue;
       llvm::BitVector positions = origin.positions;
       llvm::SmallVector<ReussirRcIncOp> retains;
-      llvm::SmallVector<mlir::Value> releases;
+      llvm::BitVector lastUse(positions.size());
       // A call in a clone is classified as the call it copies.
       mlir::func::CallOp original = copies.lookup(call);
       const BorrowAnalysis::CallSite *site =
@@ -247,7 +305,7 @@ private:
             traversals.lookup(origin.function).test(index) &&
             llvm::count(call.getOperands(), arg) == 1) {
           positions.set(index);
-          releases.push_back(arg);
+          lastUse.set(index);
         } else if (site->liveThrough.test(index)) {
           if (auto retain = findFeedingRetain(arg, call)) {
             positions.set(index);
@@ -260,15 +318,13 @@ private:
       // Clone before dropping the retains: the callee may be this very
       // function, and its clone must copy a body in which every call and
       // its retains still agree.
-      mlir::func::FuncOp clone = getClone(origin.function, positions);
+      mlir::func::FuncOp clone =
+          lastUse.any()
+              ? getTraversalEntry({origin.function, positions}, lastUse)
+              : getClone(origin.function, positions);
       for (ReussirRcIncOp retain : retains)
         retain.erase();
       call.setCallee(clone.getName());
-      mlir::OpBuilder builder(call);
-      builder.setInsertionPointAfter(call);
-      for (mlir::Value arg : releases)
-        ReussirRcDecOp::create(builder, call.getLoc(), NullableType{}, arg,
-                               mlir::IntegerAttr{}, mlir::DenseI64ArrayAttr{});
     }
   }
 
@@ -277,6 +333,7 @@ private:
   BorrowAnalysis analysis;
   llvm::DenseMap<mlir::func::FuncOp, llvm::BitVector> traversals;
   llvm::StringMap<mlir::func::FuncOp> clones;
+  llvm::StringMap<mlir::func::FuncOp> entries;
   llvm::DenseMap<mlir::func::FuncOp, Origin> origins;
   llvm::DenseMap<mlir::Operation *, const BorrowAnalysis::CallSite *> sites;
   // Calls in clones, mapped to the calls they copy.

@@ -63,9 +63,7 @@ extern "C" trampoline "test_sum_ffi" = test_sum;
 // The borrowed traversal clone inherits them as well.
 // The `; Function Attrs:` comment precedes each define, in emission order.
 // CHECK: Function Attrs: {{.*}}sanitize_address sanitize_thread
-// CHECK-NEXT: define{{.*}}@_RNvC29REUSSIR_DROP_release_backward
-// CHECK: Function Attrs: {{.*}}sanitize_address sanitize_thread
-// CHECK-NEXT: define{{.*}}@_RNvC26REUSSIR_DROP_walk_backward
+// CHECK-NEXT: define{{.*}}@_RC5total(
 // CHECK: Function Attrs: {{.*}}sanitize_address sanitize_thread
 // CHECK-NEXT: define{{.*}}@_RC6insert(
 // CHECK: Function Attrs: {{.*}}sanitize_address sanitize_thread

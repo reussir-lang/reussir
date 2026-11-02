@@ -1,4 +1,5 @@
 // RUN: %reussir-opt %s --reussir-borrow-specialization | %FileCheck %s
+// RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-borrow-specialization,reussir-borrow-specialization)' | %FileCheck %s
 // RUN: %reussir-opt %s --reussir-borrow-specialization | %FileCheck %s --check-prefix=TWICE
 
 !list_ = !reussir.record<variant "List" incomplete>
@@ -76,8 +77,7 @@ module {
   // A traversal's last-use entry keeps the root alive until the search ends.
   // CHECK-LABEL: func.func @last_search(
   // CHECK-SAME: %[[ROOT:.*]]: !reussir.rc
-  // CHECK: %[[RESULT:.*]] = call @mem.borrowed_1
-  // CHECK-NEXT: reussir.rc.dec(%[[ROOT]]
+  // CHECK: %[[RESULT:.*]] = call @mem.borrowed_1.entry_1
   // CHECK-NEXT: return %[[RESULT]]
   func.func @last_search(%xs: !L) -> i1 {
     %key = arith.constant -1 : i64
@@ -127,8 +127,7 @@ module {
   // CHECK-LABEL: func.func private @unclear(
   // CHECK: reussir.rc.inc(%arg1
   // CHECK-NEXT: reussir.rc.dec(%arg0
-  // CHECK-NEXT: {{.*}}call @mem.borrowed_1(
-  // CHECK-NEXT: reussir.rc.dec(%arg1
+  // CHECK-NEXT: {{.*}}call @mem.borrowed_1.entry_1(
   // CHECK-NEXT: reussir.rc.dec(%arg1
   func.func private @unclear(%xs: !L, %ys: !L) -> i1 {
     %x = arith.constant 1 : i64
@@ -231,6 +230,15 @@ module {
   // CHECK-NOT: reussir.rc.dec
   // CHECK: call @mem.borrowed_1(
   // CHECK: return
+
+  // CHECK-LABEL: func.func private @mem.borrowed_1.entry_1(
+  // CHECK: reussir.rc.is_unique
+  // CHECK: scf.if
+  // CHECK: call @mem(
+  // CHECK-NEXT: scf.yield
+  // CHECK: } else {
+  // CHECK: call @mem.borrowed_1(
+  // CHECK-NEXT: reussir.rc.dec
 
   // CHECK-LABEL: func.func private @tail.borrowed_0(
   // CHECK-NOT: reussir.rc.dec

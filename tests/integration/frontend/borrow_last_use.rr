@@ -6,11 +6,18 @@
 // RUN: %cc %t.o %S/borrow_last_use.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
 // RUN: %t.exe
 
-// CHECK: call @_RC6lookup.borrowed_0
-// CHECK-NEXT: reussir.rc.dec
+// CHECK: call @_RC6lookup.borrowed_0.entry_0
 // CHECK-LABEL: func.func private @_RC6lookup.borrowed_0(
 // CHECK: reussir.rc.inc
 // CHECK: call @_RC6lookup.borrowed_0
+// CHECK-LABEL: func.func private @_RC6lookup.borrowed_0.entry_0(
+// CHECK: reussir.rc.is_unique
+// CHECK: scf.if
+// CHECK: call @_RC6lookup(
+// CHECK-NEXT: scf.yield
+// CHECK: } else {
+// CHECK: call @_RC6lookup.borrowed_0(
+// CHECK-NEXT: reussir.rc.dec
 
 // CANCEL-LABEL: func.func private @_RC6lookup.borrowed_0(
 // CANCEL-NOT: reussir.rc.inc
@@ -62,3 +69,15 @@ fn last_rebuild(n: i64, key: i64) -> i64 {
 }
 
 extern "C" trampoline "last_rebuild" = last_rebuild;
+
+fn consume_lookup(env: Env, key: i64) -> i64 {
+    value(lookup(env, key))
+}
+
+// Exercise retained and last-use calls on the same environment.
+fn shared_lookup(n: i64, key: i64) -> i64 {
+    let env = build(n, Env::Nil);
+    consume_lookup(env, key) + consume_lookup(env, key)
+}
+
+extern "C" trampoline "shared_lookup" = shared_lookup;
