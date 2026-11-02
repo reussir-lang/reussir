@@ -1,4 +1,4 @@
-#include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 
 extern int64_t mltt_check_case(int64_t case_id, int64_t size, _Bool bad);
@@ -17,9 +17,9 @@ int main(void) {
       int64_t invalid = mltt_check_case(id, sizes[i], 1);
       if (valid != 1 || invalid != 0) {
         fprintf(stderr,
-                "MLTT case %lld size %lld: expected 1/0, got %lld/%lld\n",
-                (long long)id, (long long)sizes[i], (long long)valid,
-                (long long)invalid);
+                "MLTT case %" PRId64 " size %" PRId64
+                ": expected 1/0, got %" PRId64 "/%" PRId64 "\n",
+                id, sizes[i], valid, invalid);
         return 1;
       }
     }
