@@ -1,5 +1,6 @@
 // RUN: %rrc %s -o %t.mlir
 // RUN: %reussir-opt %t.mlir --reussir-special-pointer-tag --reussir-borrow-specialization | %FileCheck %s
+// RUN: %reussir-opt %t.mlir --reussir-special-pointer-tag --reussir-borrow-specialization | %FileCheck %s --check-prefix=REBUILD
 // RUN: %rrc %s -o %t.o --relocation-mode pic -Oaggressive --reuse-across-call
 // RUN: %cc %t.o %S/borrow_last_use.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
 // RUN: %t.exe
@@ -34,3 +35,19 @@ fn last_use(n: i64, key: i64) -> i64 {
 }
 
 extern "C" trampoline "last_use" = last_use;
+
+// Rebuilding must retain the owned path so released cells remain reusable.
+fn rebuild(env: Env) -> Env {
+    match env {
+        Env::Nil => Env::Nil,
+        Env::Bind(k, value, tail) => Env::Bind{k, value, rebuild(tail)}
+    }
+}
+
+// REBUILD-LABEL: func.func private @_RC12last_rebuild(
+// REBUILD: call @_RC7rebuild(
+fn last_rebuild(n: i64, key: i64) -> i64 {
+    value(lookup(rebuild(build(n, Env::Nil)), key))
+}
+
+extern "C" trampoline "last_rebuild" = last_rebuild;

@@ -10,7 +10,7 @@
 !B = !reussir.rc<!box>
 
 module {
-  // The owned original stays as it is for its last-use callers.
+  // The owned original keeps its recursive tail call.
   // CHECK-LABEL: func.func private @mem(
   // CHECK: reussir.rc.dec
   // CHECK: call @mem(
