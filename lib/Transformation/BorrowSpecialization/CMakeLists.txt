@@ -9,4 +9,6 @@ add_mlir_library(MLIRReussirBorrowSpecialization
   MLIRReussirAnalysis
   MLIRReussirSpecialization
   MLIRFuncDialect
+  MLIRArithDialect
+  MLIRSCFDialect
 )

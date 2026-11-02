@@ -378,16 +378,20 @@ def ReussirBorrowSpecializationPass
     live-through argument at a borrowable position (`BorrowAnalysis`) to a
     private clone of the callee that takes it borrowed (`#reussir.borrowed`).
     The caller's retain feeding the call goes away; the
-    owned original stays for every other call, so last-use calls keep their
-    reuse. In a clone, the borrowed parameters and the counted values loaded
+    owned original preserves reuse. Allocation-free self-recursive traversals
+    also borrow at last-use entry calls when the root is shared; a wrapper
+    checks uniqueness and releases the root after the borrowed call. Unique
+    roots keep the owned path, freeing nodes as they are visited. In a clone, the borrowed parameters and the counted values loaded
     through them are alive for the whole call: those that the body only
     releases or passes at borrowable positions lose their retains and
-    releases, and those calls go to borrowed clones as well. No release is
-    added after a call. The pass is meant to run on frontend IR, before
+    releases, and those calls go to borrowed clones as well. The pass runs
+    on frontend IR, before
     inlining, uniqueness analysis and token instantiation.
   }];
   let dependentDialects = ["::reussir::ReussirDialect",
                            "::mlir::func::FuncDialect",
+                           "::mlir::arith::ArithDialect",
+                           "::mlir::scf::SCFDialect",
                            "::mlir::LLVM::LLVMDialect"];
 }
 

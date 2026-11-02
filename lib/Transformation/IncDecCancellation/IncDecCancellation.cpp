@@ -86,6 +86,39 @@ void eraseOrReplaceDecOp(ReussirRcDecOp decOp) {
   }
 }
 
+// Cancel a retain on paths that immediately release it, keeping the retain
+// at the entry of the other path. In particular, a borrowed lookup need only
+// retain its result when the key matches, not on every node it visits.
+bool cancelIntoIf(ReussirRcIncOp inc, mlir::scf::IfOp branch,
+                  mlir::AliasAnalysis &aliasAnalysis) {
+  if (branch.getElseRegion().empty())
+    return false;
+  auto leadingRelease = [&](mlir::Region &region) {
+    auto dec = llvm::dyn_cast<ReussirRcDecOp>(region.front().front());
+    return dec && !dec.isDestructuring() &&
+                   aliasAnalysis.alias(dec.getRcPtr(), inc.getRcPtr()) ==
+                       mlir::AliasResult::MustAlias
+               ? dec
+               : ReussirRcDecOp{};
+  };
+  auto thenDec = leadingRelease(branch.getThenRegion());
+  auto elseDec = leadingRelease(branch.getElseRegion());
+  if (!thenDec && !elseDec)
+    return false;
+  if (thenDec)
+    eraseOrReplaceDecOp(thenDec);
+  if (elseDec)
+    eraseOrReplaceDecOp(elseDec);
+  if (thenDec && elseDec)
+    inc.erase();
+  else {
+    mlir::Block &kept = thenDec ? branch.getElseRegion().front()
+                                : branch.getThenRegion().front();
+    inc->moveBefore(&kept, kept.begin());
+  }
+  return true;
+}
+
 // Whether `op` is a structured branch whose regions execute at most once
 // with exactly one region taken, and whose results are all trivial (their
 // validity cannot depend on the released box). Loops are excluded, as is an
@@ -258,8 +291,10 @@ llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func) {
     while (next) {
       if (auto ifOp = llvm::dyn_cast<mlir::scf::IfOp>(next)) {
         // This is a similar situation as other aborting cases.
-        if (!ifOp->hasAttr(kExpandedDecrementAttr))
+        if (!ifOp->hasAttr(kExpandedDecrementAttr)) {
+          cancelIntoIf(op, ifOp, aliasAnalysis);
           break;
+        }
         ReussirRcDecOp decOp = findPostDominantAliasedRcDec(
             op.getRcPtr(), aliasAnalysis, postDominanceInfo,
             ifOp.getThenRegion());

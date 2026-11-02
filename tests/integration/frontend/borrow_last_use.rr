@@ -1,0 +1,83 @@
+// RUN: %rrc %s -o %t.mlir
+// RUN: %reussir-opt %t.mlir --reussir-special-pointer-tag --reussir-borrow-specialization | %FileCheck %s
+// RUN: %reussir-opt %t.mlir --reussir-special-pointer-tag --reussir-borrow-specialization | %FileCheck %s --check-prefix=REBUILD
+// RUN: %reussir-opt %t.mlir --reussir-special-pointer-tag --reussir-borrow-specialization --reussir-inc-dec-cancellation | %FileCheck %s --check-prefix=CANCEL
+// RUN: %rrc %s -o %t.o --relocation-mode pic -Oaggressive --reuse-across-call
+// RUN: %cc %t.o %S/borrow_last_use.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+// CHECK: call @_RC6lookup.borrowed_0.entry_0
+// CHECK-LABEL: func.func private @_RC6lookup.borrowed_0(
+// CHECK: reussir.rc.inc
+// CHECK: call @_RC6lookup.borrowed_0
+// CHECK-LABEL: func.func private @_RC6lookup.borrowed_0.entry_0(
+// CHECK: reussir.rc.is_unique
+// CHECK: scf.if
+// CHECK: call @_RC6lookup(
+// CHECK-NEXT: scf.yield
+// CHECK: } else {
+// CHECK: call @_RC6lookup.borrowed_0(
+// CHECK-NEXT: reussir.rc.dec
+
+// CANCEL-LABEL: func.func private @_RC6lookup.borrowed_0(
+// CANCEL-NOT: reussir.rc.inc
+// CANCEL: scf.if
+// CANCEL-NEXT: reussir.rc.inc
+// CANCEL-NEXT: scf.yield
+// CANCEL: } else {
+// CANCEL-NOT: reussir.rc.inc
+// CANCEL-NOT: reussir.rc.dec
+// CANCEL: call @_RC6lookup.borrowed_0
+
+enum Value { Missing, Found(i64) }
+enum Env { Nil, Bind(i64, Value, Env) }
+
+fn lookup(env: Env, key: i64) -> Value {
+    match env {
+        Env::Nil => Value::Missing,
+        Env::Bind(k, value, tail) => if k == key { value } else { lookup(tail, key) }
+    }
+}
+
+fn build(n: i64, tail: Env) -> Env {
+    if n == 0 { tail } else { build(n - 1, Env::Bind{n, Value::Found{n * 3}, tail}) }
+}
+
+fn value(v: Value) -> i64 {
+    match v { Value::Missing => -1, Value::Found(n) => n }
+}
+
+// The returned value must survive releasing the environment that contained it.
+fn last_use(n: i64, key: i64) -> i64 {
+    value(lookup(build(n, Env::Nil), key))
+}
+
+extern "C" trampoline "last_use" = last_use;
+
+// Rebuilding must retain the owned path so released cells remain reusable.
+fn rebuild(env: Env) -> Env {
+    match env {
+        Env::Nil => Env::Nil,
+        Env::Bind(k, value, tail) => Env::Bind{k, value, rebuild(tail)}
+    }
+}
+
+// REBUILD-LABEL: func.func private @_RC12last_rebuild(
+// REBUILD: call @_RC7rebuild(
+fn last_rebuild(n: i64, key: i64) -> i64 {
+    value(lookup(rebuild(build(n, Env::Nil)), key))
+}
+
+extern "C" trampoline "last_rebuild" = last_rebuild;
+
+fn consume_lookup(env: Env, key: i64) -> i64 {
+    value(lookup(env, key))
+}
+
+// Exercise retained and last-use calls on the same environment.
+fn shared_lookup(n: i64, key: i64) -> i64 {
+    let env = build(n, Env::Nil);
+    consume_lookup(env, key) + consume_lookup(env, key)
+}
+
+extern "C" trampoline "shared_lookup" = shared_lookup;

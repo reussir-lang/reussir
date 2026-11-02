@@ -60,6 +60,7 @@ extern "C" trampoline "test_sum_ffi" = test_sum;
 // the backend-CREATED functions — the outlined closure evaluate/clone/drop
 // (born in the closure-outlining pass, after codegen) and the C-ABI
 // trampoline wrapper — via the module-level `reussir.sanitize` inheritance.
+// The borrowed traversal clone inherits them as well.
 // The `; Function Attrs:` comment precedes each define, in emission order.
 // CHECK: Function Attrs: {{.*}}sanitize_address sanitize_thread
 // CHECK-NEXT: define{{.*}}@_RC5total(
@@ -69,6 +70,8 @@ extern "C" trampoline "test_sum_ffi" = test_sum;
 // CHECK-NEXT: define{{.*}}@_RC8test_sum(
 // CHECK: Function Attrs: {{.*}}sanitize_address sanitize_thread
 // CHECK-NEXT: define{{.*}}@test_sum_ffi(
+// CHECK: Function Attrs: {{.*}}sanitize_address sanitize_thread
+// CHECK-NEXT: define{{.*}}@_RC5total.borrowed_0(
 // CHECK: Function Attrs: {{.*}}sanitize_address sanitize_thread
 // CHECK-NEXT: define{{.*}}$closure8evaluate
 // CHECK: Function Attrs: {{.*}}sanitize_address sanitize_thread

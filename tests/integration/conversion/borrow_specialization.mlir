@@ -1,4 +1,5 @@
 // RUN: %reussir-opt %s --reussir-borrow-specialization | %FileCheck %s
+// RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-borrow-specialization,reussir-borrow-specialization)' | %FileCheck %s
 // RUN: %reussir-opt %s --reussir-borrow-specialization | %FileCheck %s --check-prefix=TWICE
 
 !list_ = !reussir.record<variant "List" incomplete>
@@ -10,7 +11,7 @@
 !B = !reussir.rc<!box>
 
 module {
-  // The owned original stays as it is for its last-use callers.
+  // The owned original keeps its recursive tail call.
   // CHECK-LABEL: func.func private @mem(
   // CHECK: reussir.rc.dec
   // CHECK: call @mem(
@@ -73,6 +74,17 @@ module {
     return %r : i64
   }
 
+  // A traversal's last-use entry keeps the root alive until the search ends.
+  // CHECK-LABEL: func.func @last_search(
+  // CHECK-SAME: %[[ROOT:.*]]: !reussir.rc
+  // CHECK: %[[RESULT:.*]] = call @mem.borrowed_1.entry_1
+  // CHECK-NEXT: return %[[RESULT]]
+  func.func @last_search(%xs: !L) -> i1 {
+    %key = arith.constant -1 : i64
+    %r = func.call @mem(%key, %xs) : (i64, !L) -> i1
+    return %r : i1
+  }
+
   // A live-through call from the function to itself: the loaded tail is
   // retained twice, once for the borrowed call and once for the external
   // consumer. The clone must keep exactly the consumer's retain.
@@ -111,10 +123,12 @@ module {
   // TWICE-NEXT: call @sink(
 
   // A retain separated from its call by a release of something else might
-  // be what keeps the list alive until the call: the call stays owned.
+  // be what keeps the list alive until the call: keep it when borrowing.
   // CHECK-LABEL: func.func private @unclear(
   // CHECK: reussir.rc.inc(%arg1
-  // CHECK: call @mem(
+  // CHECK-NEXT: reussir.rc.dec(%arg0
+  // CHECK-NEXT: {{.*}}call @mem.borrowed_1.entry_1(
+  // CHECK-NEXT: reussir.rc.dec(%arg1
   func.func private @unclear(%xs: !L, %ys: !L) -> i1 {
     %x = arith.constant 1 : i64
     reussir.rc.inc(%ys : !L)
@@ -216,6 +230,15 @@ module {
   // CHECK-NOT: reussir.rc.dec
   // CHECK: call @mem.borrowed_1(
   // CHECK: return
+
+  // CHECK-LABEL: func.func private @mem.borrowed_1.entry_1(
+  // CHECK: reussir.rc.is_unique
+  // CHECK: scf.if
+  // CHECK: call @mem(
+  // CHECK-NEXT: scf.yield
+  // CHECK: } else {
+  // CHECK: call @mem.borrowed_1(
+  // CHECK-NEXT: reussir.rc.dec
 
   // CHECK-LABEL: func.func private @tail.borrowed_0(
   // CHECK-NOT: reussir.rc.dec
