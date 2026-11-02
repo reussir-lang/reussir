@@ -30,8 +30,8 @@ pub fn use_dup(x: i64) -> i64 {
     dup(x)
 }
 
-// A recursive enum forces the outlined `linkonce_odr` drop glue
-// (`createDtorIfNotExists`), the other ODR emission path.
+// A branching recursive enum forces outlined worklist cleanup,
+// the other ODR emission path.
 pub struct Leaf { data : i64 }
 
 pub enum Tree {
@@ -44,14 +44,14 @@ pub fn consume(t : Tree) -> i64 {
 }
 
 // COFF-DAG: $_RIC3dupxE = comdat any
-// COFF-DAG: $_RINvNvC4core9intrinsic13drop_in_placeC4TreeE = comdat any
+// COFF-DAG: $[[DROP:_RNvC[0-9]+REUSSIR_DROP_walk_backward[A-Za-z0-9_]+]] = comdat any
 // COFF-DAG: define weak_odr i64 @_RIC3dupxE(i64 %0) comdat
-// COFF-DAG: define linkonce_odr void @_RINvNvC4core9intrinsic13drop_in_placeC4TreeE(ptr noalias noundef nonnull %0) #{{[0-9]+}} comdat
+// COFF-DAG: define linkonce_odr void @[[DROP]](ptr noalias noundef nonnull %0){{.*}} comdat
 
 // Mach-O: same mergeable linkage, natively weak-bound, and not a single
 // comdat anywhere in the module.
 // MACHO-NOT: comdat
-// MACHO: define linkonce_odr void @_RINvNvC4core9intrinsic13drop_in_placeC4TreeE(ptr noalias noundef nonnull %0) #{{[0-9]+}} {
+// MACHO: define linkonce_odr void @_RNvC{{[0-9]+}}REUSSIR_DROP_walk_backward{{[A-Za-z0-9_]+}}(ptr noalias noundef nonnull %0){{.*}} {
 // MACHO-NOT: comdat
 // MACHO: define weak_odr i64 @_RIC3dupxE(i64 %0) {
 // MACHO-NOT: comdat

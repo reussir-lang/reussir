@@ -55,6 +55,8 @@
 // CHECK-NEXT: "rri",
 // CHECK-NEXT: "-o",
 // CHECK-NEXT: "{{.*}}{{[/\\]+}}dev{{[/\\]+}}deps{{[/\\]+}}logs.rri",
+// CHECK-NEXT: "--drop-order",
+// CHECK-NEXT: "backward",
 // CHECK-NEXT: "--extern",
 // CHECK-NEXT: "core={{.*}}core.rri"
 // CHECK: "emit": "rri"
@@ -72,6 +74,8 @@
 // CHECK-NEXT: "rri",
 // CHECK-NEXT: "-o",
 // CHECK-NEXT: "{{.*}}util.rri",
+// CHECK-NEXT: "--drop-order",
+// CHECK-NEXT: "backward",
 // CHECK-NEXT: "--extern",
 // CHECK-NEXT: "core={{.*}}core.rri",
 // CHECK-NEXT: "--extern-src",
