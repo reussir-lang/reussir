@@ -1,6 +1,7 @@
 // RUN: %rrc %s -o %t.mlir
 // RUN: %reussir-opt %t.mlir --reussir-special-pointer-tag --reussir-borrow-specialization | %FileCheck %s
 // RUN: %reussir-opt %t.mlir --reussir-special-pointer-tag --reussir-borrow-specialization | %FileCheck %s --check-prefix=REBUILD
+// RUN: %reussir-opt %t.mlir --reussir-special-pointer-tag --reussir-borrow-specialization --reussir-inc-dec-cancellation | %FileCheck %s --check-prefix=CANCEL
 // RUN: %rrc %s -o %t.o --relocation-mode pic -Oaggressive --reuse-across-call
 // RUN: %cc %t.o %S/borrow_last_use.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
 // RUN: %t.exe
@@ -10,6 +11,16 @@
 // CHECK-LABEL: func.func private @_RC6lookup.borrowed_0(
 // CHECK: reussir.rc.inc
 // CHECK: call @_RC6lookup.borrowed_0
+
+// CANCEL-LABEL: func.func private @_RC6lookup.borrowed_0(
+// CANCEL-NOT: reussir.rc.inc
+// CANCEL: scf.if
+// CANCEL-NEXT: reussir.rc.inc
+// CANCEL-NEXT: scf.yield
+// CANCEL: } else {
+// CANCEL-NOT: reussir.rc.inc
+// CANCEL-NOT: reussir.rc.dec
+// CANCEL: call @_RC6lookup.borrowed_0
 
 enum Value { Missing, Found(i64) }
 enum Env { Nil, Bind(i64, Value, Env) }
