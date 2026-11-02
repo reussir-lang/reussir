@@ -42,7 +42,8 @@
 /// callee's release of it is never the last one: it cannot free the object
 /// or donate its cell for reuse. Switching only those calls to a borrowed
 /// callee therefore changes no reuse decision and extends no lifetime.
-/// Every other call is *last-use* and stays owned.
+/// Every other call is *last-use*. Specialization may keep such an argument
+/// alive across a read-only traversal and release it after the borrowed call.
 ///
 //===----------------------------------------------------------------------===//
 

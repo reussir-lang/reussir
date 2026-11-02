@@ -73,6 +73,18 @@ module {
     return %r : i64
   }
 
+  // A traversal's last-use entry keeps the root alive until the search ends.
+  // CHECK-LABEL: func.func @last_search(
+  // CHECK-SAME: %[[ROOT:.*]]: !reussir.rc
+  // CHECK: %[[RESULT:.*]] = call @mem.borrowed_1
+  // CHECK-NEXT: reussir.rc.dec(%[[ROOT]]
+  // CHECK-NEXT: return %[[RESULT]]
+  func.func @last_search(%xs: !L) -> i1 {
+    %key = arith.constant -1 : i64
+    %r = func.call @mem(%key, %xs) : (i64, !L) -> i1
+    return %r : i1
+  }
+
   // A live-through call from the function to itself: the loaded tail is
   // retained twice, once for the borrowed call and once for the external
   // consumer. The clone must keep exactly the consumer's retain.

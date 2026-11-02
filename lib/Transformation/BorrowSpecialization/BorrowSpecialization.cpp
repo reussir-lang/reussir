@@ -25,8 +25,10 @@
 /// retains and releases are erased, and those calls are switched too (a
 /// pinned argument always outlives the call). A loan that is stored, returned
 /// or passed owned keeps the owned body's retain and its calls stay owned.
-/// The parameters themselves never escape (`BorrowAnalysis`). No release is
-/// ever added after a call, so tail calls stay tail calls.
+/// The parameters themselves never escape (`BorrowAnalysis`). Allocation-free
+/// recursive traversals also borrow at last-use entry calls: the caller keeps
+/// the root alive and releases it afterward. Recursive calls still tail-call
+/// the borrowed clone; rebuilding functions keep their owned reuse paths.
 ///
 /// Clones are made on demand, one per callee and set of borrowed positions,
 /// and their bodies get the same treatment; this covers recursion, mutual
@@ -43,6 +45,7 @@
 
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/StringMap.h>
+#include <mlir/Interfaces/SideEffectInterfaces.h>
 
 namespace reussir {
 
@@ -71,12 +74,56 @@ void collectLoans(mlir::Value root, llvm::SmallVectorImpl<mlir::Value> &out) {
     }
 }
 
+// Restrict lifetime extension to traversals with no allocation/reuse benefit.
+// Only self calls are allowed, so adding a release in an outside caller cannot
+// turn a recursive tail call into an accumulating chain of cleanup frames.
+llvm::BitVector getTraversalParameters(mlir::func::FuncOp function,
+                                       const BorrowAnalysis &analysis) {
+  llvm::BitVector positions = analysis.getBorrowable(function);
+  if (positions.none())
+    return positions;
+  bool readsOnly = true;
+  llvm::SmallVector<mlir::func::CallOp> recursiveCalls;
+  function.walk([&](mlir::Operation *op) {
+    if (op == function.getOperation())
+      return;
+    if (auto call = llvm::dyn_cast<mlir::func::CallOp>(op)) {
+      if (call.getCallee() == function.getSymName())
+        recursiveCalls.push_back(call);
+      else
+        readsOnly = false;
+    } else if (auto dec = llvm::dyn_cast<ReussirRcDecOp>(op)) {
+      readsOnly &= !dec.isDestructuring() && dec->use_empty();
+    } else if (!op->hasTrait<mlir::OpTrait::HasRecursiveMemoryEffects>() &&
+               !leavesCountsAlone(op)) {
+      readsOnly = false;
+    }
+  });
+  if (!readsOnly || recursiveCalls.empty()) {
+    positions.reset();
+    return positions;
+  }
+  for (unsigned index : llvm::make_early_inc_range(positions.set_bits())) {
+    llvm::SmallVector<mlir::Value> loans;
+    collectLoans(function.getArgument(index), loans);
+    for (size_t i = 0; i < loans.size(); ++i)
+      collectLoans(loans[i], loans);
+    if (llvm::none_of(recursiveCalls, [&](mlir::func::CallOp call) {
+          return llvm::is_contained(loans, call.getOperand(index));
+        }))
+      positions.reset(index);
+  }
+  return positions;
+}
+
 class BorrowSpecializer {
 public:
   explicit BorrowSpecializer(mlir::ModuleOp module)
       : module(module), symbols(module), analysis(module) {
     for (const BorrowAnalysis::CallSite &site : analysis.getCallSites())
       sites[site.call] = &site;
+    for (auto function : module.getOps<mlir::func::FuncOp>())
+      traversals[function] = getTraversalParameters(function, analysis);
   }
 
   mlir::LogicalResult run() {
@@ -168,6 +215,9 @@ private:
   // pinned ones, and live-through ones whose feeding retain is removed.
   void rewriteCalls(mlir::func::FuncOp function,
                     const llvm::DenseSet<mlir::Value> &pinned) {
+    auto caller = function;
+    if (auto it = origins.find(function); it != origins.end())
+      caller = it->second.function;
     llvm::SmallVector<mlir::func::CallOp> calls;
     function.walk([&](mlir::func::CallOp call) { calls.push_back(call); });
     for (auto call : calls) {
@@ -176,6 +226,7 @@ private:
         continue;
       llvm::BitVector positions = origin.positions;
       llvm::SmallVector<ReussirRcIncOp> retains;
+      llvm::SmallVector<mlir::Value> releases;
       // A call in a clone is classified as the call it copies.
       mlir::func::CallOp original = copies.lookup(call);
       const BorrowAnalysis::CallSite *site =
@@ -189,11 +240,18 @@ private:
           positions.set(index);
           continue;
         }
-        if (!site || !site->liveThrough.test(index))
+        if (!site)
           continue;
-        if (auto retain = findFeedingRetain(arg, call)) {
+        if (site->lastUse.test(index) && caller != origin.function &&
+            traversals.lookup(origin.function).test(index) &&
+            llvm::count(call.getOperands(), arg) == 1) {
           positions.set(index);
-          retains.push_back(retain);
+          releases.push_back(arg);
+        } else if (site->liveThrough.test(index)) {
+          if (auto retain = findFeedingRetain(arg, call)) {
+            positions.set(index);
+            retains.push_back(retain);
+          }
         }
       }
       if (positions == origin.positions)
@@ -205,12 +263,18 @@ private:
       for (ReussirRcIncOp retain : retains)
         retain.erase();
       call.setCallee(clone.getName());
+      mlir::OpBuilder builder(call);
+      builder.setInsertionPointAfter(call);
+      for (mlir::Value arg : releases)
+        ReussirRcDecOp::create(builder, call.getLoc(), NullableType{}, arg,
+                               mlir::IntegerAttr{}, mlir::DenseI64ArrayAttr{});
     }
   }
 
   mlir::ModuleOp module;
   mlir::SymbolTable symbols;
   BorrowAnalysis analysis;
+  llvm::DenseMap<mlir::func::FuncOp, llvm::BitVector> traversals;
   llvm::StringMap<mlir::func::FuncOp> clones;
   llvm::DenseMap<mlir::func::FuncOp, Origin> origins;
   llvm::DenseMap<mlir::Operation *, const BorrowAnalysis::CallSite *> sites;
