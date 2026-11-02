@@ -236,7 +236,7 @@ mod tests {
         };
         for changed in [
             Profile {
-                drop_order: Some(crate::manifest::DropOrder::Backward),
+                drop_order: Some(crate::manifest::DropOrder::Forward),
                 ..base.clone()
             },
             Profile {
