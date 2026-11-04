@@ -37,6 +37,10 @@ typedef enum ReussirJitOptLevel {
   ReussirJitOptTpde = 4,
 } ReussirJitOptLevel;
 
+// Registers Reussir's native code-generation defaults. Call once before
+// constructing target machines; LLVM command-line options are not modified.
+void reussirInitializeCodeGenPasses(void);
+
 // Runs the Reussir LLVM optimization pipeline on `module` in place: the
 // RuntimeFunctionAttributor pass, the module pipeline at the requested
 // level, then the AllocationSimplification pass. A no-op for the `None` and
