@@ -20,7 +20,7 @@ fn sum(xs: List, acc: i64) -> i64 {
     match xs {
         List::Nil => acc,
         List::Cons(x, t) => {
-            // CHECK: Breakpoint 1, _RC3sum ({{.*}}) at {{.*}}gdb_inlined.rr:[[#STEP:@LINE+1]]
+            // CHECK: Breakpoint 1{{(\.[0-9]+)?}}, _RC3sum ({{.*}}) at {{.*}}gdb_inlined.rr:[[#STEP:@LINE+1]]
             let next = acc + x * 2;
             sum(t, next)
         }
@@ -34,7 +34,7 @@ fn run(n: i64) -> i64 { sum(build(n, List::Nil), 0) }
 // CHECK-NEXT: #2 gdb_inlined_ffi () at {{.*}}gdb_inlined.rr:[[#@LINE+1]]
 extern "C" trampoline "gdb_inlined_ffi" = run;
 
-// CHECK: Breakpoint 1, _RC3sum ({{.*}}) at {{.*}}gdb_inlined.rr:[[#STEP]]
+// CHECK: Breakpoint 1{{(\.[0-9]+)?}}, _RC3sum ({{.*}}) at {{.*}}gdb_inlined.rr:[[#STEP]]
 
 // Optimized variable locations depend on target scheduling and allocation.
 // Check the accumulator on the first two stops in an unoptimized build.
