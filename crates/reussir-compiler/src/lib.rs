@@ -25,6 +25,7 @@ use llvm_sys::core::{
 };
 use llvm_sys::ir_reader::LLVMParseIRInContext2;
 use llvm_sys::prelude::LLVMModuleRef;
+use llvm_sys::support::LLVMParseCommandLineOptions;
 use llvm_sys::target::{
     LLVM_InitializeAllAsmParsers, LLVM_InitializeAllAsmPrinters, LLVM_InitializeAllTargetInfos,
     LLVM_InitializeAllTargetMCs, LLVM_InitializeAllTargets, LLVM_InitializeNativeAsmParser,
@@ -92,6 +93,15 @@ pub struct TargetSpec {
 /// that "it is legal for a client to make multiple calls to this function", so
 /// these are idempotent on every compile.
 fn init_targets(cross: bool) {
+    static CODEGEN_OPTIONS: std::sync::Once = std::sync::Once::new();
+    CODEGEN_OPTIONS.call_once(|| {
+        // SelectOptimize uses IR profitability information before instruction
+        // selection and replaces X86's later cmov-to-branch heuristic.
+        let args = [c"rrc".as_ptr(), c"-disable-select-optimize=false".as_ptr()];
+        unsafe {
+            LLVMParseCommandLineOptions(args.len() as _, args.as_ptr(), std::ptr::null());
+        }
+    });
     unsafe {
         if cross {
             LLVM_InitializeAllTargetInfos();
