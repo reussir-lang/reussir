@@ -198,19 +198,20 @@ MlirAttribute reussirIfrtArrayGetHloSharding(MlirType type) {
 }
 
 MlirType reussirArrayTypeGetWithTarget(intptr_t nDims, int64_t const *shape,
-                                     MlirType elementType,
-                                     MlirAttribute target) {
+                                       MlirType elementType,
+                                       MlirAttribute target) {
   auto ele = unwrap(elementType);
   auto placement = mlir::dyn_cast_or_null<TargetAttr>(unwrap(target));
   if (!placement)
     return MlirType{nullptr};
   auto loc = mlir::UnknownLoc::get(ele.getContext());
   auto array = ArrayType::getChecked(loc, ele.getContext(),
-                                    llvm::ArrayRef<int64_t>(shape, nDims), ele,
-                                    placement);
+                                     llvm::ArrayRef<int64_t>(shape, nDims), ele,
+                                     placement);
   if (!array)
     return MlirType{nullptr};
-  if (placement.getMemoryKind() && placement.getMemoryKind().getValue().empty()) {
+  if (placement.getMemoryKind() &&
+      placement.getMemoryKind().getValue().empty()) {
     mlir::emitError(loc) << "device array memory kind must not be empty";
     return MlirType{nullptr};
   }

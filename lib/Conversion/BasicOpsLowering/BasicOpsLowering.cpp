@@ -160,8 +160,8 @@ TagEncoding specialPtrTagEncoding(mlir::Operation *op) {
 // value land here and observe a well-formed shared box header carrying the
 // immediate's own tag. `rc.set` never writes the refcount (see above); under
 // TBI the unguarded `rc.inc` makes it grow and wrap, under the immortal
-// encoding it stays at its initial value. The dummy mirrors the fused box header exactly:
-// an i32 count and the i32 tag sharing one 8-byte word.
+// encoding it stays at its initial value. The dummy mirrors the fused box
+// header exactly: an i32 count and the i32 tag sharing one 8-byte word.
 mlir::LLVM::GlobalOp tagDummyBox(mlir::ModuleOp module, mlir::Location loc,
                                  uint64_t tag, TagEncoding encoding,
                                  mlir::OpBuilder &builder) {
@@ -321,9 +321,8 @@ mlir::Value taggedBoxAddress(mlir::ConversionPatternRewriter &rewriter,
     return ptr;
   mlir::Value mask = mlir::LLVM::ConstantOp::create(
       rewriter, loc, intTy,
-      rewriter.getIntegerAttr(intTy, (uint64_t(1) << 48) - 1));
-  return mlir::LLVM::PtrMaskOp::create(rewriter, loc, ptr.getType(), ptr,
-                                       mask);
+      rewriter.getIntegerAttr(intTy, llvm::APInt::getLowBitsSet(64, 48)));
+  return mlir::LLVM::PtrMaskOp::create(rewriter, loc, ptr.getType(), ptr, mask);
 }
 
 void ensureRuntimeFunctions(mlir::ModuleOp module,
@@ -856,10 +855,10 @@ struct ReussirRefStoreConversionPattern
 // atomic cell requires an atomic shared RC box (enforced by RcType::verify),
 // so the two are atomic together; the patterns below nevertheless key only
 // on the cell kind.
-static mlir::Value
-cellSlotPtr(RcType rcType, mlir::Value convertedCell, mlir::Location loc,
-            const mlir::TypeConverter *typeConverter,
-            mlir::ConversionPatternRewriter &rewriter) {
+static mlir::Value cellSlotPtr(RcType rcType, mlir::Value convertedCell,
+                               mlir::Location loc,
+                               const mlir::TypeConverter *typeConverter,
+                               mlir::ConversionPatternRewriter &rewriter) {
   auto ptrType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
   RcBoxType boxType = rcType.getInnerBoxType();
   mlir::Value payload = mlir::LLVM::GEPOp::create(
@@ -882,7 +881,8 @@ struct ReussirCellStorePayloadConversionPattern
                   mlir::ConversionPatternRewriter &rewriter) const override {
     auto slot = cellSlotPtr(op.getCell().getType(), adaptor.getCell(),
                             op.getLoc(), getTypeConverter(), rewriter);
-    rewriter.replaceOpWithNewOp<mlir::LLVM::StoreOp>(op, adaptor.getValue(), slot);
+    rewriter.replaceOpWithNewOp<mlir::LLVM::StoreOp>(op, adaptor.getValue(),
+                                                     slot);
     return mlir::success();
   }
 };
@@ -908,8 +908,8 @@ struct ReussirAtomicCellGetConversionPattern
 
     auto *converter =
         static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter());
-    mlir::Value slot =
-        cellSlotPtr(rcType, adaptor.getCell(), op.getLoc(), converter, rewriter);
+    mlir::Value slot = cellSlotPtr(rcType, adaptor.getCell(), op.getLoc(),
+                                   converter, rewriter);
     mlir::Type elementType = converter->convertType(cellType.getElementType());
     mlir::Value loaded = mlir::LLVM::LoadOp::create(
         rewriter, op.getLoc(), elementType, slot,
@@ -936,8 +936,8 @@ struct ReussirAtomicCellSetConversionPattern
 
     auto *converter =
         static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter());
-    mlir::Value slot =
-        cellSlotPtr(rcType, adaptor.getCell(), op.getLoc(), converter, rewriter);
+    mlir::Value slot = cellSlotPtr(rcType, adaptor.getCell(), op.getLoc(),
+                                   converter, rewriter);
     mlir::LLVM::StoreOp::create(
         rewriter, op.getLoc(), adaptor.getValue(), slot,
         atomicElementAlignment(cellType.getElementType(), op, *converter),
@@ -1013,8 +1013,8 @@ struct ReussirAtomicCellRmwConversionPattern
 
     auto *converter =
         static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter());
-    mlir::Value slot =
-        cellSlotPtr(rcType, adaptor.getCell(), op.getLoc(), converter, rewriter);
+    mlir::Value slot = cellSlotPtr(rcType, adaptor.getCell(), op.getLoc(),
+                                   converter, rewriter);
     mlir::Value old = mlir::LLVM::AtomicRMWOp::create(
         rewriter, op.getLoc(), *llvmKind, slot, adaptor.getValue(),
         op.getOrdering().value_or(mlir::LLVM::AtomicOrdering::acq_rel),
@@ -1052,8 +1052,8 @@ struct ReussirCellCmpXchgConversionPattern
       desired =
           mlir::LLVM::BitcastOp::create(rewriter, loc, compareType, desired);
     }
-    mlir::Value slot = cellSlotPtr(op.getCell().getType(), adaptor.getCell(), loc,
-                                   converter, rewriter);
+    mlir::Value slot = cellSlotPtr(op.getCell().getType(), adaptor.getCell(),
+                                   loc, converter, rewriter);
     auto cmpxchg = mlir::LLVM::AtomicCmpXchgOp::create(
         rewriter, loc, slot, expected, desired,
         op.getOrdering().value_or(mlir::LLVM::AtomicOrdering::acq_rel),
@@ -1552,9 +1552,8 @@ struct ReussirArrayViewConversionPattern
             {mlir::LLVM::GEPArg(0), mlir::LLVM::GEPArg(fieldIndex)});
         return mlir::LLVM::LoadOp::create(rewriter, loc, indexType, fieldPtr);
       };
-      auto descriptor =
-          mlir::MemRefDescriptor::poison(rewriter, loc,
-                                         converter->convertType(viewType));
+      auto descriptor = mlir::MemRefDescriptor::poison(
+          rewriter, loc, converter->convertType(viewType));
       descriptor.setAllocatedPtr(rewriter, loc, adaptor.getRef());
       descriptor.setAlignedPtr(rewriter, loc, adaptor.getRef());
       descriptor.setOffset(rewriter, loc, loadHeaderField(1));
@@ -2170,10 +2169,9 @@ struct ReussirRcIsImmediateConversionPattern
       mlir::Value same = mlir::LLVM::ICmpOp::create(
           rewriter, loc, mlir::LLVM::ICmpPredicate::eq, adaptor.getRcPtr(),
           address);
-      result =
-          result ? mlir::LLVM::OrOp::create(rewriter, loc, result, same)
-                       .getResult()
-                 : same;
+      result = result ? mlir::LLVM::OrOp::create(rewriter, loc, result, same)
+                            .getResult()
+                      : same;
     }
     rewriter.replaceOp(op, result);
     return mlir::success();
@@ -2582,7 +2580,7 @@ struct ReussirRcDecOpConversionPattern
     }
     if (auto ffi = mlir::dyn_cast<FFIObjectType>(rcPtrTy.getElementType())) {
       mlir::FlatSymbolRefAttr cleanupHook = ffi.getCleanupHook();
-      if (eleTy.getTagged()) {
+      if (ffi.getTagged()) {
         // An immediate is not a box: only a real one reaches the hook.
         mlir::Block *cont =
             beginRealBoxGuard(rewriter, op.getLoc(), adaptor.getRcPtr());
@@ -3963,7 +3961,8 @@ struct ReussirTrampolineOpConversionPattern
     mlir::Operation *funcOp =
         symbolTables
             ? symbolTables->lookupNearestSymbolFrom(op, op.getTargetAttr())
-            : mlir::SymbolTable::lookupNearestSymbolFrom(op, op.getTargetAttr());
+            : mlir::SymbolTable::lookupNearestSymbolFrom(op,
+                                                         op.getTargetAttr());
     if (!funcOp)
       return mlir::failure();
     // if start is not "C" ABI, return failure
@@ -4084,8 +4083,8 @@ struct ReussirTrampolineOpConversionPattern
     CABISignature cabiSig = evaluateCABISignatureForC(llvmRetTy, llvmParamTys);
 
     // Get-or-declare the external boundary symbol.
-    auto boundaryTy = mlir::LLVM::LLVMFunctionType::get(
-        cabiSig.abiReturnType, cabiSig.abiParamTypes);
+    auto boundaryTy = mlir::LLVM::LLVMFunctionType::get(cabiSig.abiReturnType,
+                                                        cabiSig.abiParamTypes);
     auto module = op->getParentOfType<mlir::ModuleOp>();
     auto boundary = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(
         op.getSymNameAttr().getValue());
@@ -4157,8 +4156,8 @@ struct ReussirTrampolineOpConversionPattern
         mlir::LLVM::CallOp::create(rewriter, op.getLoc(), boundary, callArgs);
 
     if (cabiSig.hasReturnPtr) {
-      mlir::Value result = mlir::LLVM::LoadOp::create(rewriter, op.getLoc(),
-                                                      llvmRetTy, retSlot);
+      mlir::Value result =
+          mlir::LLVM::LoadOp::create(rewriter, op.getLoc(), llvmRetTy, retSlot);
       mlir::LLVM::ReturnOp::create(rewriter, op.getLoc(), result);
     } else if (llvm::isa<mlir::LLVM::LLVMVoidType>(llvmRetTy)) {
       mlir::LLVM::ReturnOp::create(rewriter, op.getLoc(), mlir::ValueRange{});
@@ -4356,10 +4355,11 @@ struct ReussirConvertToLLVMPatternInterface
     populatePatterns(target, typeConverter, patterns);
   }
 
-  static void populatePatterns(
-      mlir::ConversionTarget &target, mlir::LLVMTypeConverter &typeConverter,
-      mlir::RewritePatternSet &patterns,
-      mlir::SymbolTableCollection *symbolTables = nullptr) {
+  static void
+  populatePatterns(mlir::ConversionTarget &target,
+                   mlir::LLVMTypeConverter &typeConverter,
+                   mlir::RewritePatternSet &patterns,
+                   mlir::SymbolTableCollection *symbolTables = nullptr) {
     populateReussirToLLVMTypeConversions(typeConverter);
     populateLLVMInterfaceForDialect<mlir::arith::ArithDialect>(
         patterns.getContext(), target, typeConverter, patterns);
@@ -4377,7 +4377,7 @@ struct ReussirConvertToLLVMPatternInterface
     populateLLVMInterfaceForDialect<mlir::ub::UBDialect>(
         patterns.getContext(), target, typeConverter, patterns);
     populateBasicOpsLoweringToLLVMConversionPatterns(typeConverter, patterns,
-                                                    symbolTables);
+                                                     symbolTables);
     target.addIllegalDialect("ifrt");
     target.addIllegalOp<ReussirRcDeferOp, ReussirDropDeferOp, ReussirDropRunOp,
                         ReussirDropJoinOp, ReussirDropDeferIndexedOp>();
@@ -4386,23 +4386,23 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirPanicOp, ReussirExpectOp, ReussirCctxEmptyOp,
         ReussirCctxExtendOp, ReussirCctxApplyOp, ReussirTokenAllocOp,
         ReussirTokenFreeOp, ReussirTokenReinterpretOp, ReussirTokenReallocOp,
-        ReussirRefLoadOp, ReussirRefStoreOp, ReussirRefSpilledOp, ReussirRefDropOp,
-        ReussirRefToMemrefOp, ReussirRefFromMemrefOp, ReussirRefDiffOp,
-        ReussirRefCmpOp, ReussirRefMemcpyOp, ReussirNullableCheckOp,
-        ReussirNullableCreateOp, ReussirNullableCoerceOp, ReussirRcIncOp,
-        ReussirRcCreateOp, ReussirRcCreateCompoundOp, ReussirRcCreateVariantOp,
-        ReussirRcTaggedOp, ReussirRcDecOp, ReussirRcBorrowOp,
-        ReussirRcIsUniqueOp, ReussirRcAssumeUniqueOp, ReussirRecordCompoundOp,
+        ReussirRefLoadOp, ReussirRefStoreOp, ReussirRefSpilledOp,
+        ReussirRefDropOp, ReussirRefToMemrefOp, ReussirRefFromMemrefOp,
+        ReussirRefDiffOp, ReussirRefCmpOp, ReussirRefMemcpyOp,
+        ReussirNullableCheckOp, ReussirNullableCreateOp,
+        ReussirNullableCoerceOp, ReussirRcIncOp, ReussirRcCreateOp,
+        ReussirRcCreateCompoundOp, ReussirRcCreateVariantOp, ReussirRcTaggedOp,
+        ReussirRcDecOp, ReussirRcBorrowOp, ReussirRcIsUniqueOp,
+        ReussirRcAssumeUniqueOp, ReussirRecordCompoundOp,
         ReussirRecordVariantOp, ReussirRefProjectOp, ReussirArrayProjectOp,
         ReussirArrayViewOp, ReussirArrayCreateOp, ReussirArrayInstantiateOp,
-        ReussirArrayToDeviceOp, ReussirArrayToHostOp,
-        ReussirArrayToIfrtOp, ReussirArrayFromIfrtOp,
-        ReussirArrayFillPatternOp, ReussirRecordTagOp, ReussirRecordExtractOp,
-        ReussirRecordCoerceOp, ReussirRegionVTableOp, ReussirRcFreezeOp,
-        ReussirRegionCleanupOp, ReussirRegionCreateOp, ReussirRcReinterpretOp,
-        ReussirCellCreateOp, ReussirCellGetOp, ReussirCellSetOp,
-        ReussirCellRmwOp, ReussirCellCmpXchgOp, ReussirCellStorePayloadOp,
-        ReussirCellRdlockOp, ReussirCellYieldOp,
+        ReussirArrayToDeviceOp, ReussirArrayToHostOp, ReussirArrayToIfrtOp,
+        ReussirArrayFromIfrtOp, ReussirArrayFillPatternOp, ReussirRecordTagOp,
+        ReussirRecordExtractOp, ReussirRecordCoerceOp, ReussirRegionVTableOp,
+        ReussirRcFreezeOp, ReussirRegionCleanupOp, ReussirRegionCreateOp,
+        ReussirRcReinterpretOp, ReussirCellCreateOp, ReussirCellGetOp,
+        ReussirCellSetOp, ReussirCellRmwOp, ReussirCellCmpXchgOp,
+        ReussirCellStorePayloadOp, ReussirCellRdlockOp, ReussirCellYieldOp,
         ReussirClosureApplyOp, ReussirClosureCloneOp, ReussirClosureEvalOp,
         ReussirClosureInspectPayloadOp, ReussirClosureCursorOp,
         ReussirClosureInstantiateOp, ReussirClosureVtableOp,
@@ -4411,8 +4411,8 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirStrCastOp, ReussirStrLenOp, ReussirStrUnsafeByteAtOp,
         ReussirStrUnsafeStartWithOp, ReussirStrSliceOp, ReussirStrRefEqOp,
         ReussirStrUnsafeMemcmpOp, ReussirConstSeqGlobalOp,
-        ReussirConstSeqLiteralOp, ReussirConstSeqLenOp,
-        ReussirConstSeqGetOp, ReussirTrampolineOp, ReussirTokenLaunderOp>();
+        ReussirConstSeqLiteralOp, ReussirConstSeqLenOp, ReussirConstSeqGetOp,
+        ReussirTrampolineOp, ReussirTokenLaunderOp>();
     // `reussir.closure.wpd_test` is created BY the dispatch conversion
     // patterns above, already in its final form (operand = the loaded vtable
     // pointer), and must survive conversion: the LLVM dialect cannot express
@@ -4538,14 +4538,16 @@ struct ConvertToLLVMPass
       }
       if (!llvm::isa_and_nonnull<mlir::LLVM::ReturnOp>(next) ||
           next->getNumOperands() != 0 || call.getNumResults() != 0) {
-        call.emitError("musttail release must be followed only by a void return");
+        call.emitError(
+            "musttail release must be followed only by a void return");
         signalPassFailure();
         return;
       }
       auto *terminator = call->getNextNode();
       if (!llvm::isa<mlir::LLVM::ReturnOp>(terminator)) {
         mlir::OpBuilder builder(terminator);
-        mlir::LLVM::ReturnOp::create(builder, call.getLoc(), mlir::ValueRange{});
+        mlir::LLVM::ReturnOp::create(builder, call.getLoc(),
+                                     mlir::ValueRange{});
         terminator->erase();
       }
       call->removeAttr(kMustTailCallAttr);
@@ -4597,16 +4599,16 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirCellStorePayloadConversionPattern,
       ReussirAtomicCellGetConversionPattern,
       ReussirAtomicCellSetConversionPattern,
-      ReussirAtomicCellRmwConversionPattern, ReussirCellCmpXchgConversionPattern,
-      ReussirRefSpilledConversionPattern, ReussirRefDiffConversionPattern,
-      ReussirRefCmpConversionPattern, ReussirRefMemcpyConversionPattern,
-      ReussirNullableCheckConversionPattern,
+      ReussirAtomicCellRmwConversionPattern,
+      ReussirCellCmpXchgConversionPattern, ReussirRefSpilledConversionPattern,
+      ReussirRefDiffConversionPattern, ReussirRefCmpConversionPattern,
+      ReussirRefMemcpyConversionPattern, ReussirNullableCheckConversionPattern,
       ReussirNullableCreateConversionPattern,
       ReussirNullableCoerceConversionPattern, ReussirRcIncConversionPattern,
       ReussirRcTaggedConversionPattern,
       ReussirRcCompareImmortalConversionPattern,
-      ReussirRcIsImmediateConversionPattern,
-      ReussirRcDecOpConversionPattern, ReussirRcCreateOpConversionPattern,
+      ReussirRcIsImmediateConversionPattern, ReussirRcDecOpConversionPattern,
+      ReussirRcCreateOpConversionPattern,
       ReussirRcCreateCompoundOpConversionPattern,
       ReussirRcCreateVariantOpConversionPattern,
       ReussirRcBorrowOpConversionPattern, ReussirRcIsUniqueOpConversionPattern,

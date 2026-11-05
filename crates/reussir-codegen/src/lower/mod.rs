@@ -572,7 +572,9 @@ pub fn lower_unit<'c, 'tcx>(
         if !define && !required_releases.contains(&glue.release) {
             continue;
         }
-        ffi_symbols.push(program.symbol(glue.release));
+        if glue.ty.bigint().is_none() {
+            ffi_symbols.push(program.symbol(glue.release));
+        }
         for op in lowerer.ffi_rc_glue(glue, define)? {
             body.append_operation(op);
         }

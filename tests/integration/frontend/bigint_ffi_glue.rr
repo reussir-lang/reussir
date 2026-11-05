@@ -98,7 +98,7 @@ extern "C" trampoline "reussir_main" = main;
 
 // The copy's clone loop and the drop loop each test an element's low bit, and
 // neither calls the glue or the runtime's retain and release.
-// CHURN: define {{.*}}@{{.*}}5churnNvNvC4core3num3NatE_ffi(
+// CHURN: define {{.*}}@{{.*}}5churnNvNvC4core3num3NatE_ffi.backward(
 // CHURN-NOT: call {{.*}}@{{__reussir_rcgmp_ffi_|rcgmp_mpz_retain|rcgmp_mpz_release}}
 // CHURN: and i64 {{.*}}, 1
 // CHURN-NOT: call {{.*}}@{{__reussir_rcgmp_ffi_|rcgmp_mpz_retain|rcgmp_mpz_release}}
@@ -106,13 +106,13 @@ extern "C" trampoline "reussir_main" = main;
 // CHURN-NOT: call {{.*}}@{{__reussir_rcgmp_ffi_|rcgmp_mpz_retain|rcgmp_mpz_release}}
 // CHURN: {{^}}}
 
-// PAIR: define {{.*}}@{{.*}}4pairNvNvC4core3num3NatE_ffi(
+// PAIR: define {{.*}}@{{.*}}4pairNvNvC4core3num3NatE_ffi.backward(
 // PAIR-NOT: call {{.*}}@{{__reussir_rcgmp_ffi_acquire|rcgmp_mpz_retain}}
 // PAIR: and i64 {{.*}}, 1
 // PAIR-NOT: call {{.*}}@{{__reussir_rcgmp_ffi_acquire|rcgmp_mpz_retain}}
 // PAIR: {{^}}}
 
-// DISCARD: define {{.*}}@{{.*}}7discardNvNvC4core3num3NatE_ffi(
+// DISCARD: define {{.*}}@{{.*}}7discardNvNvC4core3num3NatE_ffi.backward(
 // DISCARD-NOT: call {{.*}}@{{__reussir_rcgmp_ffi_|rcgmp_mpz_release}}
 // DISCARD: and i64 {{.*}}, 1
 // DISCARD-NOT: call {{.*}}@{{__reussir_rcgmp_ffi_|rcgmp_mpz_release}}

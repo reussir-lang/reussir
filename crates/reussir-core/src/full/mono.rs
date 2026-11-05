@@ -719,6 +719,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
                 ffi_imports_out.push(mir::FfiImport {
                     release_bindings: decls
                         .values()
+                        .filter(|decl| decl.ty.bigint().is_none())
                         .map(|decl| {
                             mir::Symbol(driver.symbols.get_or_intern(decl.release_symbol()))
                         })
@@ -825,6 +826,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
                     ffi_textures.push(mir::FfiTexture {
                         release_bindings: decls
                             .values()
+                            .filter(|decl| decl.ty.bigint().is_none())
                             .map(|decl| {
                                 mir::Symbol(driver.symbols.get_or_intern(decl.release_symbol()))
                             })

@@ -599,7 +599,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         };
         let build = |symbol: &str, inc: bool| -> Result<Operation<'c>> {
             let mut attributes = attributes.clone();
-            if !inc {
+            if !inc && glue.ty.bigint().is_none() {
                 attributes.push((
                     Identifier::new(self.context, "reussir.foreign_drop"),
                     Attribute::unit(self.context),
