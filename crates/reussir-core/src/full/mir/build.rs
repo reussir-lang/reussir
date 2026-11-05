@@ -911,105 +911,105 @@ mod tests {
     /// Print a program, parse it back, re-print, and assert text equality
     /// (the text-faithful round-trip contract).
     fn roundtrip(source: &str) {
-    with_tcx(|tcx| {
-        let interner = std::sync::Arc::new(reussir_syntax::new_threaded_interner());
-        let parse = reussir_syntax::parse_with_interner(source, interner.clone());
-        assert!(parse.ok(), "parse errors: {:#?}", parse.errors);
-        let prog = surface::program(&parse.root);
-        let elab = elaborate(tcx, &prog, &interner);
-        assert!(!elab.has_errors(), "elab errors: {:#?}", elab.reports);
-        let (full, reports) = monomorphize(&elab.mono_input());
-        assert!(reports.is_empty(), "mono reports: {reports:#?}");
+        with_tcx(|tcx| {
+            let interner = std::sync::Arc::new(reussir_syntax::new_threaded_interner());
+            let parse = reussir_syntax::parse_with_interner(source, interner.clone());
+            assert!(parse.ok(), "parse errors: {:#?}", parse.errors);
+            let prog = surface::program(&parse.root);
+            let elab = elaborate(tcx, &prog, &interner);
+            assert!(!elab.has_errors(), "elab errors: {:#?}", elab.reports);
+            let (full, reports) = monomorphize(&elab.mono_input());
+            assert!(reports.is_empty(), "mono reports: {reports:#?}");
 
-        let text = Printer::new(&elab.defs, elab.resolver).program(&full);
-        let parsed = parse_program(tcx, &text).expect("re-parse");
-        assert_eq!(
-            parsed
-                .program
-                .functions
-                .iter()
-                .filter(|function| function.transform_anchor)
-                .count(),
-            full.functions
-                .iter()
-                .filter(|function| function.transform_anchor)
-                .count()
-        );
-        assert_eq!(
-            parsed
-                .program
-                .transform_scripts
-                .iter()
-                .map(|script| &script.body)
-                .collect::<Vec<_>>(),
-            full.transform_scripts
-                .iter()
-                .map(|script| &script.body)
-                .collect::<Vec<_>>()
-        );
-        let text2 = Printer::new(&parsed.defs, &parsed.names).program(&parsed.program);
-        assert_eq!(
-            text, text2,
-            "round-trip mismatch\n=== printed ===\n{text}\n=== reparsed ===\n{text2}"
-        );
-    });
-}
+            let text = Printer::new(&elab.defs, elab.resolver).program(&full);
+            let parsed = parse_program(tcx, &text).expect("re-parse");
+            assert_eq!(
+                parsed
+                    .program
+                    .functions
+                    .iter()
+                    .filter(|function| function.transform_anchor)
+                    .count(),
+                full.functions
+                    .iter()
+                    .filter(|function| function.transform_anchor)
+                    .count()
+            );
+            assert_eq!(
+                parsed
+                    .program
+                    .transform_scripts
+                    .iter()
+                    .map(|script| &script.body)
+                    .collect::<Vec<_>>(),
+                full.transform_scripts
+                    .iter()
+                    .map(|script| &script.body)
+                    .collect::<Vec<_>>()
+            );
+            let text2 = Printer::new(&parsed.defs, &parsed.names).program(&parsed.program);
+            assert_eq!(
+                text, text2,
+                "round-trip mismatch\n=== printed ===\n{text}\n=== reparsed ===\n{text2}"
+            );
+        });
+    }
 
     /// The lossless form: print WITH the source cache (file table, per-fn
     /// `in <file>`, node spans), parse back, re-print against a cache rebuilt
     /// from the dump's own table, and assert text equality.
     fn roundtrip_with_locations(source: &str) {
-    use reussir_syntax::source::SourceCache;
-    with_tcx(|tcx| {
-        let interner = std::sync::Arc::new(reussir_syntax::new_threaded_interner());
-        let parse = reussir_syntax::parse_with_interner(source, interner.clone());
-        assert!(parse.ok(), "parse errors: {:#?}", parse.errors);
-        let prog = surface::program(&parse.root);
-        let elab = elaborate(tcx, &prog, &interner);
-        assert!(!elab.has_errors(), "elab errors: {:#?}", elab.reports);
-        let (full, reports) = monomorphize(&elab.mono_input());
-        assert!(reports.is_empty(), "mono reports: {reports:#?}");
+        use reussir_syntax::source::SourceCache;
+        with_tcx(|tcx| {
+            let interner = std::sync::Arc::new(reussir_syntax::new_threaded_interner());
+            let parse = reussir_syntax::parse_with_interner(source, interner.clone());
+            assert!(parse.ok(), "parse errors: {:#?}", parse.errors);
+            let prog = surface::program(&parse.root);
+            let elab = elaborate(tcx, &prog, &interner);
+            assert!(!elab.has_errors(), "elab errors: {:#?}", elab.reports);
+            let (full, reports) = monomorphize(&elab.mono_input());
+            assert!(reports.is_empty(), "mono reports: {reports:#?}");
 
-        let cache = SourceCache::single("<test>", source);
-        let text = Printer::with_sources(&elab.defs, elab.resolver, &cache).program(&full);
-        assert!(
-            text.contains("0 = \"<test>\";"),
-            "file table missing:\n{text}"
-        );
-        assert!(text.contains(" in 0"), "fn file reference missing:\n{text}");
-        let parsed = parse_program(tcx, &text).expect("re-parse");
-        assert_eq!(parsed.files, vec!["<test>".to_string()]);
-        assert_eq!(
-            parsed
-                .program
-                .transform_scripts
-                .iter()
-                .map(|script| (&script.body, script.file, script.span))
-                .collect::<Vec<_>>(),
-            full.transform_scripts
-                .iter()
-                .map(|script| (&script.body, script.file, script.span))
-                .collect::<Vec<_>>()
-        );
-        let tramp_locs = |p: &crate::full::mir::Program<'_>| {
-            p.trampolines
-                .iter()
-                .map(|t| (p.symbol(t.export).to_owned(), t.file, t.span))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(tramp_locs(&parsed.program), tramp_locs(&full));
-        let mut cache2 = SourceCache::new();
-        for name in &parsed.files {
-            cache2.add_unavailable(name);
-        }
-        let text2 = Printer::with_sources(&parsed.defs, &parsed.names, &cache2)
-            .program(&parsed.program);
-        assert_eq!(
-            text, text2,
-            "lossless round-trip mismatch\n=== printed ===\n{text}\n=== reparsed ===\n{text2}"
-        );
-    });
-}
+            let cache = SourceCache::single("<test>", source);
+            let text = Printer::with_sources(&elab.defs, elab.resolver, &cache).program(&full);
+            assert!(
+                text.contains("0 = \"<test>\";"),
+                "file table missing:\n{text}"
+            );
+            assert!(text.contains(" in 0"), "fn file reference missing:\n{text}");
+            let parsed = parse_program(tcx, &text).expect("re-parse");
+            assert_eq!(parsed.files, vec!["<test>".to_string()]);
+            assert_eq!(
+                parsed
+                    .program
+                    .transform_scripts
+                    .iter()
+                    .map(|script| (&script.body, script.file, script.span))
+                    .collect::<Vec<_>>(),
+                full.transform_scripts
+                    .iter()
+                    .map(|script| (&script.body, script.file, script.span))
+                    .collect::<Vec<_>>()
+            );
+            let tramp_locs = |p: &crate::full::mir::Program<'_>| {
+                p.trampolines
+                    .iter()
+                    .map(|t| (p.symbol(t.export).to_owned(), t.file, t.span))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(tramp_locs(&parsed.program), tramp_locs(&full));
+            let mut cache2 = SourceCache::new();
+            for name in &parsed.files {
+                cache2.add_unavailable(name);
+            }
+            let text2 = Printer::with_sources(&parsed.defs, &parsed.names, &cache2)
+                .program(&parsed.program);
+            assert_eq!(
+                text, text2,
+                "lossless round-trip mismatch\n=== printed ===\n{text}\n=== reparsed ===\n{text2}"
+            );
+        });
+    }
 
     #[test]
     fn rejects_malformed_tuple_annotations() {

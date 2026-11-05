@@ -945,17 +945,17 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
         symbols, reports, ..
     } = driver;
     let mut program = mir::Program {
-            drop_order: input.drop_order,
-            functions,
-            records,
-            trampolines,
-            string_literals,
-            transform_scripts: input.transform_scripts.to_vec(),
-            ffi_imports: ffi_imports_out,
-            ffi_textures,
-            ffi_rc_glue,
-            ffi_trait_glue: ffi_trait_glue.into_values().collect(),
-            symbols,
+        drop_order: input.drop_order,
+        functions,
+        records,
+        trampolines,
+        string_literals,
+        transform_scripts: input.transform_scripts.to_vec(),
+        ffi_imports: ffi_imports_out,
+        ffi_textures,
+        ffi_rc_glue,
+        ffi_trait_glue: ffi_trait_glue.into_values().collect(),
+        symbols,
     };
     // The owned `Nat`/`Int` handle's glue (`reussir_rt::rcgmp::Mpz`) belongs
     // in every program that uses the integers, not only in those whose
