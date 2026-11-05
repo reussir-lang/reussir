@@ -666,10 +666,31 @@ prepareWorklistDropBridges(mlir::ModuleOp module,
     function->removeAttr(REUSSIR_CLOSURE_DROP);
     function->removeAttr(REUSSIR_FOREIGN_DROP);
     rewriter.setInsertionPointToStart(function.addEntryBlock());
+    auto arg = function.getArgument(0);
+    auto rc = llvm::dyn_cast<RcType>(arg.getType());
+    mlir::scf::IfOp branch;
+    if (!closure && rc && rc.getCapability() == Capability::shared &&
+        rc.getAtomicKind() == AtomicKind::nonatomic &&
+        !llvm::isa<FFIObjectType, ClosureType>(rc.getElementType())) {
+      // Non-final decrements need no destruction scope.
+      auto count = ReussirRcFetchOp::create(rewriter, function.getLoc(), arg);
+      auto one =
+          mlir::arith::ConstantIndexOp::create(rewriter, function.getLoc(), 1);
+      auto unique = mlir::arith::CmpIOp::create(rewriter, function.getLoc(),
+                                                mlir::arith::CmpIPredicate::eq,
+                                                count.getRefCount(), one);
+      branch =
+          mlir::scf::IfOp::create(rewriter, function.getLoc(), unique, true);
+      rewriter.setInsertionPointToStart(branch.elseBlock());
+      mlir::func::CallOp::create(rewriter, function.getLoc(), worker,
+                                 mlir::ValueRange{arg});
+      rewriter.setInsertionPointToStart(branch.thenBlock());
+    }
     ReussirDropJoinOp::create(
         rewriter, function.getLoc(),
-        mlir::FlatSymbolRefAttr::get(worker.getSymNameAttr()),
-        function.getArgument(0));
+        mlir::FlatSymbolRefAttr::get(worker.getSymNameAttr()), arg);
+    if (branch)
+      rewriter.setInsertionPointAfter(branch);
     mlir::func::ReturnOp::create(rewriter, function.getLoc());
     if (!closure || !isForwardDrop(module))
       continue;
