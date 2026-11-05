@@ -17,12 +17,16 @@
 
 #include <llvm-c/Core.h>
 
+#include <llvm/CodeGen/Passes.h>
+#include <llvm/CodeGen/TargetPassConfig.h>
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/MC/TargetRegistry.h>
+#include <llvm/PassRegistry.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CBindingWrapping.h>
+#include <llvm/Target/RegisterTargetPassConfigCallback.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/TargetParser/Host.h>
 #include <llvm/TargetParser/SubtargetFeature.h>
@@ -43,6 +47,33 @@
 
 #include <tpde-llvm/LLVMCompiler.hpp>
 #endif
+
+void reussirInitializeCodeGenPasses() {
+  static llvm::RegisterTargetPassConfigCallback callback(
+      [](llvm::TargetMachine &machine, llvm::PassManagerBase &,
+         llvm::TargetPassConfig *config) {
+        if (machine.getOptLevel() == llvm::CodeGenOptLevel::None ||
+            !llvm::getCGPassBuilderOption().DisableSelectOptimize)
+          return;
+
+        // Match LLVM's insertion point, after reduction expansion and before
+        // instruction selection, without changing its process-wide options.
+        std::unique_ptr<llvm::FunctionPass> reductions(
+            llvm::createExpandReductionsPass());
+        config->insertPass(reductions->getPassID(),
+                           llvm::createSelectOptimizePass());
+
+        // SelectOptimize replaces this later heuristic on X86. Disabling it
+        // in this configuration prevents reconsidering the retained selects.
+        if (machine.getTargetTriple().isX86()) {
+          const llvm::PassInfo *cmov =
+              llvm::PassRegistry::getPassRegistry()->getPassInfo(
+                  llvm::StringRef("x86-cmov-conversion"));
+          assert(cmov && "X86 cmov conversion must be registered");
+          config->disablePass(cmov->getTypeInfo());
+        }
+      });
+}
 
 void reussirRunBackendLLVMPipeline(LLVMModuleRef module, ReussirJitOptLevel opt,
                                    LLVMTargetMachineRef machine,

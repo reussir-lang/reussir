@@ -247,6 +247,20 @@ pub(crate) fn link_product(
         _ => unreachable!("link_product only links executable/dynlib"),
     }
     cmd.arg("-o").arg(output);
+    if cli.lto != Lto::None {
+        // LTO runs instruction selection in a separate linker process, so it
+        // must receive the same SelectOptimize default as native emission.
+        if msvc {
+            cmd.arg("-Clink-arg=/mllvm:-disable-select-optimize=false");
+        } else if apple {
+            cmd.arg("-Clink-arg=-Wl,-mllvm,-disable-select-optimize=false");
+        } else if triple.starts_with("wasm") {
+            cmd.arg("-Clink-arg=-mllvm")
+                .arg("-Clink-arg=-disable-select-optimize=false");
+        } else {
+            cmd.arg("-Clink-arg=-Wl,-plugin-opt=-disable-select-optimize=false");
+        }
+    }
     if let Some(linker) = &cli.linker {
         if !linker.is_file() {
             return Err(format!("--linker `{}` does not exist", linker.display()));

@@ -298,6 +298,9 @@ unsafe extern "C" {
 
     //==-- LLVM-side codegen helpers (Jit.h) --==//
 
+    /// Registers native code-generation defaults before target construction.
+    pub fn reussirInitializeCodeGenPasses();
+
     /// Runs the Reussir LLVM optimization pipeline on `module` in place at the
     /// requested level (a no-op for `None`/`Tpde`). `opt` mirrors the backend's
     /// `ReussirOptOption`/`ReussirJitOptLevel` C enum; `lto` mirrors
