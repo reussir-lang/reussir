@@ -4,8 +4,11 @@
 ; A division feeding the cold select operand should execute only on that
 ; path. The native backend must run SelectOptimize before instruction selection.
 ; CHECK-LABEL: choose:
-; CHECK: test
-; CHECK: j{{e|ne}}
+; CHECK-NOT: div
+; CHECK: testb $1, %dl
+; CHECK-NEXT: je [[COLD:.LBB[0-9_]+]]
+; CHECK-NEXT: retq
+; CHECK: [[COLD]]:
 ; CHECK: div
 ; CHECK: ret
 

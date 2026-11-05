@@ -66,8 +66,9 @@ void reussirInitializeCodeGenPasses() {
         // SelectOptimize replaces this later heuristic on X86. Disabling it
         // in this configuration prevents reconsidering the retained selects.
         if (machine.getTargetTriple().isX86()) {
-          const llvm::PassInfo *cmov = llvm::PassRegistry::getPassRegistry()
-                                          ->getPassInfo("x86-cmov-conversion");
+          const llvm::PassInfo *cmov =
+              llvm::PassRegistry::getPassRegistry()->getPassInfo(
+                  llvm::StringRef("x86-cmov-conversion"));
           assert(cmov && "X86 cmov conversion must be registered");
           config->disablePass(cmov->getTypeInfo());
         }
