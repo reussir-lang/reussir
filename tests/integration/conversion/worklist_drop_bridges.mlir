@@ -18,8 +18,13 @@ module attributes {reussir.drop_order = "backward"} {
   // CHECK-NOT: reussir.drop.run
   // CHECK: return
   // CHECK-LABEL: func.func @bridge
-  // CHECK-NEXT: reussir.drop.join @bridge.worklist.backward
-  // CHECK-NEXT: return
+  // CHECK: reussir.rc.fetch
+  // CHECK: arith.cmpi eq
+  // CHECK: scf.if
+  // CHECK: reussir.drop.join @bridge.worklist.backward
+  // CHECK: } else {
+  // CHECK: func.call @bridge.worklist.backward
+  // CHECK: return
   func.func @bridge(%rc: !rc) attributes {reussir.foreign_drop} {
     %token = reussir.rc.dec(%rc : !rc) : !token
     reussir.token.free(%token : !token)
