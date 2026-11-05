@@ -1,0 +1,159 @@
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin format %rrc_linker
+// RUN: %std_rene_build/release/format%exe_ext | %FileCheck %s
+// CHECK: format tests passed
+
+import std::format::Format;
+import std::format::Display;
+import std::format::Options;
+import std::format::BreakSpec;
+import std::format::Field;
+import std::format::Fields;
+import std::format::PrintSuccess;
+import std::collections::pure::list::List;
+import std::string::String;
+import std::string::RawString;
+import std::option::Option;
+import std::result::Result;
+
+#[ffi(import)]
+fn assert_text(actual: RawString, expected: str) [{
+    assert_eq!(actual.as_str(), &*expected);
+}];
+
+fn expect(doc: Format, width: u64, expected: str) {
+    assert_text(doc.render(Options { width: width, indent: 4 }).to_string().into_raw(), expected)
+}
+fn check(value: bool) {
+    if !value { core::intrinsic::panic::panic() }
+}
+fn two(a: Format, b: Format) -> List<Format> { List::Cons { a, List::Cons { b, List::Nil } } }
+fn three(a: Format, b: Format, c: Format) -> List<Format> {
+    List::Cons { a, two(b, c) }
+}
+
+pub struct Point { pub x: i64, pub y: i64 }
+impl Display for Point {
+    fn fmt(self: Self) -> Format {
+        Format::Struct { String::from_str("Point"), Fields::Named {
+            List::Cons { Field { name: String::from_str("x"), value: self.x.fmt() },
+                List::Cons { Field { name: String::from_str("y"), value: self.y.fmt() }, List::Nil } }
+        } }
+    }
+}
+fn generic<T: Display>(value: T) -> Format { value.fmt() }
+
+fn basic() {
+    expect(Format::Empty, 0, "");
+    expect(Format::Tuple { List::Nil }, 0, "()");
+    expect(Format::Tuple { List::Cons { "x".fmt(), List::Nil } }, 4, "(x,)");
+    expect(Format::Tuple { List::Cons { "x".fmt(), List::Nil } }, 3, "(\n    x,\n)");
+    let pair = Format::Tuple { two("one".fmt(), "two".fmt()) };
+    expect(pair, 10, "(one, two)");
+    expect(pair, 9, "(\n    one,\n    two,\n)");
+    expect(pair, 8, "(\n    one,\n    two,\n)");
+    expect(pair, 0, "(\n    one,\n    two,\n)");
+    expect("long_identifier".fmt().group(), 2, "long_identifier");
+    expect(Format::Hardline.append(Format::Hardline), 80, "\n\n");
+    expect("a".fmt().append(Format::Line), 80, "a");
+    expect("a  ".fmt(), 80, "a  ");
+    expect("a".fmt().append(Format::Hardline).nest(4), 80, "a\n");
+    expect("a\nb".fmt().nest(2).group(), 80, "a\n  b");
+    expect(Format::Character { '\n' }, 80, "\n");
+    let zero_indent = pair.render(Options { width: 1, indent: 0 }).to_string();
+    check(zero_indent.eq_str("(\none,\ntwo,\n)"));
+}
+
+fn groups() {
+    let words = "aa".fmt().append(Format::Line).append("bb".fmt())
+        .append(Format::Line).append("cc".fmt());
+    expect(words.group(), 8, "aa bb cc");
+    expect(words.group(), 7, "aa\nbb\ncc");
+    expect(words.fill(), 5, "aa bb\ncc");
+    expect(words.fill(), 4, "aa\nbb\ncc");
+    expect(words, 5, "aa bb\ncc");
+    let inner = "b".fmt().append(Format::Line).append("c".fmt()).group();
+    expect("aaaa".fmt().append(Format::Line).append(inner).group(), 4, "aaaa\nb c");
+    expect("a".fmt().append(Format::Line).append("b".fmt())
+        .append(Format::Hardline).append("c".fmt()).group(), 80, "a\nb\nc");
+    let punctuation = "left".fmt().append(Format::Break { BreakSpec {
+        flat: " => ", before: " {", after: "> ", offset: -2
+    } }).append("right".fmt()).nest(4).group();
+    expect(punctuation, 13, "left => right");
+    expect(punctuation, 12, "left {\n  > right");
+    expect(std::format::call("f".fmt(), two("a".fmt(), "b".fmt()), 2), 7,
+        "f(a, b)");
+}
+
+fn records() {
+    let point = generic(Point { x: 10, y: 20 });
+    expect(point, 22, "Point { x: 10, y: 20 }");
+    expect(point, 20, "Point {\n    x: 10,\n    y: 20,\n}");
+    expect(Format::Struct { String::from_str("Unit"), Fields::Named { List::Nil } }, 0, "Unit {}");
+    expect(Format::Struct { String::from_str("Pair"), Fields::Positional {
+        two("a".fmt(), "b".fmt()) } }, 13, "Pair { a, b }");
+    expect(Format::Struct { String::from_str("Pair"), Fields::Positional {
+        two("a".fmt(), "b".fmt()) } }, 11, "Pair {\n    a,\n    b,\n}");
+    expect(Format::Tuple { two(point, "ok".fmt()) }, 25,
+        "(\n    Point {\n        x: 10,\n        y: 20,\n    },\n    ok,\n)");
+}
+
+fn strings_and_traits() {
+    let dynamic = String::from_str("λ").push_string(String::from_str("猫"));
+    expect(dynamic.fmt(), 2, "λ猫");
+    expect(Format::Tuple { two(dynamic.fmt(), "x".fmt()) }, 7, "(λ猫, x)");
+    expect(Format::Tuple { two(dynamic.fmt(), "x".fmt()) }, 6, "(\n    λ猫,\n    x,\n)");
+    expect(String::from_str("λ\n猫").fmt().nest(2), 80, "λ\n  猫");
+    let earlier = String::from_str("keep");
+    let changed = earlier.push_string(earlier);
+    check(earlier.eq_str("keep"));
+    check(changed.eq_str("keepkeep"));
+    check(String::new().push_string_range(dynamic, 2, 5).eq_str("猫"));
+    expect(true.fmt(), 80, "true");
+    expect(false.fmt(), 80, "false");
+    expect('λ'.fmt(), 80, "λ");
+    expect((18446744073709551615 as u64).fmt(), 80, "18446744073709551615");
+    expect(((0 as i64) - 9223372036854775807 - 1).fmt(), 80, "-9223372036854775808");
+    expect(((0 as i8) - 127 - 1).fmt(), 80, "-128");
+    expect((0 as u32).fmt(), 80, "0");
+    expect(Option::Some { (12 as i16) }.fmt(), 80, "Some(12)");
+    let values: List<i32> = List::Cons { 1, List::Cons { 2, List::Nil } };
+    expect(values.fmt(), 80, "[1, 2]");
+    expect(values.fmt(), 6, "[1, 2]");
+    expect(values.fmt(), 5, "[1,\n2]");
+    let result: Result<i32, str> = Result::Ok { 3 };
+    check(result.is_ok());
+    check(result.map(|n: i32| n + 2).unwrap_or(0) == 5);
+    expect(result.fmt(), 80, "Ok(3)");
+    let error: Result<i32, str> = Result::Err { "bad" };
+    check(error.is_err());
+    check(error.map(|n: i32| n + 1).unwrap_or(9) == 9);
+    expect(error.map_err(|s: str| s.fmt()).fmt(), 80, "Err(bad)");
+    check(result.and_then(|n: i32| Result::Ok { n * 2 }).unwrap_or(0) == 6);
+}
+
+fn deep() {
+    let (_, doc) = while [i = (0 as i32), doc = "x".fmt()] (i < 10000) {
+        (i + 1, doc.group().nest(0))
+    };
+    expect(doc, 1, "x");
+    let (_, left, right) = while [i = (0 as i32), left = Format::Empty, right = Format::Empty] (i < 10000) {
+        (i + 1, left.append("x".fmt()), "x".fmt().append(right))
+    };
+    let a = left.render(Options::default()).to_string();
+    let b = right.render(Options::default()).to_string();
+    check(a.len() == 10000);
+    check(a == b);
+}
+
+#[main]
+pub fn main() {
+    basic();
+    groups();
+    records();
+    strings_and_traits();
+    deep();
+    match "format tests passed\n".fmt().dump_stdout(Options::default()) {
+        Ok(PrintSuccess::Complete) => {},
+        Err(_) => core::intrinsic::panic::panic()
+    }
+}

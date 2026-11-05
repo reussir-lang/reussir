@@ -1,0 +1,84 @@
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin format_cases %rrc_linker
+// RUN: %python %S/format_reference.py %std_rene_build/release/format_cases%exe_ext
+
+import std::format::Format;
+import std::format::Display;
+import std::format::Options;
+import std::format::PrintSuccess;
+import std::collections::pure::list::List;
+import std::string::String;
+
+fn read() -> i32 { test_utils::io::read_i32() }
+fn atom(id: i32) -> Format {
+    match id {
+        0 => "a".fmt(),
+        1 => "bb".fmt(),
+        2 => "ccc".fmt(),
+        3 => String::from_str("λ猫").fmt(),
+        _ => Format::Empty
+    }
+}
+
+fn build(count: i32) -> Format {
+    let (_, stack) = while [i = (0 as i32), stack = List::Nil] (i < count) {
+        let op = read();
+        let next = match op {
+            0 => List::Cons { atom(read()), stack },
+            1 => List::Cons { Format::Line, stack },
+            2 => List::Cons { Format::Softline, stack },
+            3 => List::Cons { Format::Hardline, stack },
+            4 => {
+                let right = stack.head().unwrap_or_panic();
+                let left = stack.tail().head().unwrap_or_panic();
+                List::Cons { left.append(right), stack.tail().tail() }
+            },
+            5 => List::Cons { stack.head().unwrap_or_panic().nest(read() as u64), stack.tail() },
+            6 => List::Cons { stack.head().unwrap_or_panic().group(), stack.tail() },
+            8 => List::Cons { stack.head().unwrap_or_panic().fill(), stack.tail() },
+            7 => {
+                let n = read();
+                let (_, rest, items) = while [j = (0 as i32), rest = stack, items = List::Nil] (j < n) {
+                    (j + 1, rest.tail(), List::Cons { rest.head().unwrap_or_panic(), items })
+                };
+                List::Cons { Format::Tuple { items }, rest }
+            },
+            _ => core::intrinsic::panic::panic()
+        };
+        (i + 1, next)
+    };
+    stack.head().unwrap_or_panic()
+}
+
+#[main]
+pub fn main() {
+    let cases = read();
+    if cases == -1 {
+        if "stdout λ".fmt().dump_stdout(Options::default()).is_err() { core::intrinsic::panic::panic() }
+    };
+    if cases == -2 {
+        if "stderr 猫".fmt().dump_stderr(Options::default()).is_err() { core::intrinsic::panic::panic() }
+    };
+    if cases == -3 {
+        match "pipe".fmt().dump_stdout(Options::default()) {
+            Ok(_) => core::intrinsic::panic::panic(),
+            Err(error) => match error.kind {
+                BrokenPipe => {
+                    if "broken pipe".fmt().dump_stderr(Options::default()).is_err() {
+                        core::intrinsic::panic::panic()
+                    }
+                },
+                _ => core::intrinsic::panic::panic()
+            }
+        }
+    };
+    let _ = while [i = (0 as i32)] (i < cases) {
+        let width = read() as u64;
+        let count = read();
+        let doc = build(count);
+        match doc.append("\n===\n".fmt()).dump_stdout(Options { width: width, indent: 4 }) {
+            Ok(PrintSuccess::Complete) => {},
+            Err(_) => core::intrinsic::panic::panic()
+        };
+        i + 1
+    };
+}

@@ -8,6 +8,8 @@
     test_utils = { path = "../../../library/test_utils", version = "^0.1" },
   },
   targets = {
+    format_cases = { kind = 'executable, path = "format_cases.rr" },
+    format = { kind = 'executable, path = "format.rr" },
     cow_hash = { kind = 'executable, path = "cow_hash.rr" },
     cow_ordered = { kind = 'executable, path = "cow_ordered.rr" },
     cow_seq = { kind = 'executable, path = "cow_seq.rr" },
