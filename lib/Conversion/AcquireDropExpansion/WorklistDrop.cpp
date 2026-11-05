@@ -670,7 +670,7 @@ prepareWorklistDropBridges(mlir::ModuleOp module,
     auto rc = llvm::dyn_cast<RcType>(arg.getType());
     mlir::scf::IfOp branch;
     if (!closure && rc && rc.getCapability() == Capability::shared &&
-        rc.getAtomicKind() == AtomicKind::nonatomic &&
+        rc.getAtomicKind() == AtomicKind::normal &&
         !llvm::isa<FFIObjectType, ClosureType>(rc.getElementType())) {
       // Non-final decrements need no destruction scope.
       auto count = ReussirRcFetchOp::create(rewriter, function.getLoc(), arg);
