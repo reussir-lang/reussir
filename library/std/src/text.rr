@@ -2,6 +2,8 @@
 
 import std::string::String;
 import std::option::Option;
+import std::format::Display;
+import std::format::Format;
 
 #[ffi(import)]
 fn scalar_to_char(value: u32) -> char [{ char::from_u32(value).unwrap() }];
@@ -226,3 +228,23 @@ impl PartialEq for TextView {
 }
 
 impl Eq for TextView {}
+
+impl Display for TextView {
+    /// Replaces leading UTF-8 continuation bytes with U+FFFD.
+    fn fmt(self: Self) -> Format {
+        let (start, prefix, _) = while [start = (0 as u64), prefix = Format::Empty, scanning = true]
+            (start < self.len() && scanning) {
+            match self.byte_at(start) {
+                Some(byte) => if byte >= 128 && byte <= 191 {
+                    (start + 1, prefix.append(Format::Character { '\u{fffd}' }), true)
+                } else { (start, prefix, false) },
+                None => (start, prefix, false)
+            }
+        };
+        let suffix = self.advance_byte(start).and_then(|view: TextView| view.to_text());
+        prefix.append(match suffix {
+            Some(text) => text.fmt(),
+            None => Format::Empty
+        })
+    }
+}
