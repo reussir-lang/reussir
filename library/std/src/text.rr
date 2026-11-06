@@ -28,9 +28,6 @@ impl Text {
         TextView::new(self)
     }
 
-    /// Iterates over Unicode scalar values without copying the text.
-    pub fn chars(self: Self) -> CharIter { self.view().chars() }
-
     /// Converts into an owned `String`, copying only when `self` is a literal.
     pub fn to_string(self: Self) -> String {
         match self {
@@ -162,9 +159,6 @@ impl TextView {
         else { Option::None }
     }
 
-    /// Iterates over the remaining Unicode scalar values.
-    pub fn chars(self: Self) -> CharIter { CharIter::new(self) }
-
     /// Reads a byte relative to this view, or returns `None` out of bounds.
     pub fn byte_at(self: Self, index: u64) -> Option<u8> {
         if index >= self.len() { Option::None }
@@ -218,29 +212,3 @@ impl PartialEq for TextView {
 }
 
 impl Eq for TextView {}
-
-/// A character iterator retaining its source text and current byte offset.
-pub struct [value] CharIter {
-    view: TextView
-}
-
-impl CharIter {
-    pub fn new(view: TextView) -> Self { CharIter { view: view } }
-
-    /// Returns the unconsumed suffix.
-    pub fn view(self: Self) -> TextView { self.view }
-
-    /// Returns the next Unicode scalar and the updated iterator.
-    /// Returns `None` at the end or on malformed UTF-8.
-    pub fn next(self: Self) -> Option<(char, Self)> {
-        match self.view.base.decode_char(self.view.offset) {
-            Some(decoded) => {
-                let (ch, offset) = decoded;
-                Option::Some { (ch, CharIter { view: TextView {
-                    base: self.view.base, offset: offset
-                } }) }
-            },
-            None => Option::None
-        }
-    }
-}
