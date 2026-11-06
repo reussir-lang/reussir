@@ -9,6 +9,10 @@ fn check(value: bool) {
     if !value { core::intrinsic::panic::panic() }
 }
 
+fn is_literal(text: Text) -> bool {
+    match text { Literal(_) => true, Owned(_) => false }
+}
+
 fn check_view(base: Text) {
     let whole = TextView::new(base);
     let suffix = whole.advance_char(2).unwrap_or_panic().advance_char(1).unwrap_or_panic();
@@ -25,10 +29,9 @@ fn check_view(base: Text) {
     check(suffix.eq_str("λ猫!"));
     check(!suffix.eq_str("λ猫?") && !suffix.eq_str("λ猫"));
     check(suffix.to_string().unwrap_or_panic().eq_str("λ猫!"));
-    match suffix.to_text().unwrap_or_panic() {
-        Owned(value) => check(value.eq_str("λ猫!")),
-        Literal(_) => core::intrinsic::panic::panic()
-    };
+    let suffix_text = suffix.to_text().unwrap_or_panic();
+    check(suffix_text.eq_str("λ猫!"));
+    check(is_literal(suffix_text) == is_literal(base));
     check(suffix.write(String::from_str(">"), 2, 5).unwrap_or_panic().eq_str(">猫"));
     check(suffix.write(String::new(), 0, 7).is_none());
     check(suffix.write(String::new(), 3, 2).is_none());
@@ -64,10 +67,9 @@ fn check_view(base: Text) {
     check(empty.advance_byte(0).unwrap_or_panic().is_empty());
     check(empty.advance_byte(1).is_none());
     check(empty.to_string().unwrap_or_panic().is_empty());
-    match empty.to_text().unwrap_or_panic() {
-        Owned(value) => check(value.is_empty()),
-        Literal(_) => core::intrinsic::panic::panic()
-    };
+    let empty_text = empty.to_text().unwrap_or_panic();
+    check(empty_text.is_empty());
+    check(is_literal(empty_text) == is_literal(base));
     check(empty.write(String::from_str("keep"), 0, 0).unwrap_or_panic().eq_str("keep"));
     check(whole.eq_str("abcλ猫!"));
     check(base.decode_char(4).is_none());
