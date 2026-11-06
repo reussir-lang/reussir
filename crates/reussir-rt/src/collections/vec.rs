@@ -17,6 +17,18 @@ impl<T: Clone> Default for Vec<T> {
     }
 }
 
+impl<T: Clone> From<StdVec<T>> for Vec<T> {
+    fn from(value: StdVec<T>) -> Self {
+        Self(Rc::new(value))
+    }
+}
+
+impl<T: Clone> FromIterator<T> for Vec<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Self(Rc::new(iter.into_iter().collect()))
+    }
+}
+
 impl<T: Clone> Vec<T> {
     pub fn new() -> Self {
         Self(Rc::new(StdVec::new()))

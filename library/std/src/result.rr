@@ -20,3 +20,20 @@ impl<T, E> Result<T, E> {
         match self { Ok(value) => value, Err(_) => default }
     }
 }
+
+impl<T: PartialEq, E: PartialEq> PartialEq for Result<T, E> {
+    fn eq(self: Self, other: Self) -> bool {
+        match self {
+            Ok(lhs) => match other {
+                Ok(rhs) => lhs == rhs,
+                Err(_) => false
+            },
+            Err(lhs) => match other {
+                Ok(_) => false,
+                Err(rhs) => lhs == rhs
+            }
+        }
+    }
+}
+
+impl<T: Eq, E: Eq> Eq for Result<T, E> {}

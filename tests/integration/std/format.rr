@@ -16,6 +16,7 @@ import std::string::String;
 import std::string::RawString;
 import std::option::Option;
 import std::result::Result;
+import std::text::Text;
 
 #[ffi(import)]
 fn assert_text(actual: RawString, expected: str) [{
@@ -39,9 +40,9 @@ fn three(a: Format, b: Format, c: Format) -> List<Format> {
 pub struct Point { pub x: i64, pub y: i64 }
 impl Display for Point {
     fn fmt(self: Self) -> Format {
-        Format::Struct { String::from_str("Point"), Fields::Named {
-            List::Cons { Field { name: String::from_str("x"), value: self.x.fmt() },
-                List::Cons { Field { name: String::from_str("y"), value: self.y.fmt() }, List::Nil } }
+        Format::Struct { Text::from_str("Point"), Fields::Named {
+            List::Cons { Field { name: Text::from_str("x"), value: self.x.fmt() },
+                List::Cons { Field { name: Text::from_str("y"), value: self.y.fmt() }, List::Nil } }
         } }
     }
 }
@@ -93,10 +94,10 @@ fn records() {
     let point = generic(Point { x: 10, y: 20 });
     expect(point, 22, "Point { x: 10, y: 20 }");
     expect(point, 20, "Point {\n    x: 10,\n    y: 20,\n}");
-    expect(Format::Struct { String::from_str("Unit"), Fields::Named { List::Nil } }, 0, "Unit {}");
-    expect(Format::Struct { String::from_str("Pair"), Fields::Positional {
+    expect(Format::Struct { Text::from_str("Unit"), Fields::Named { List::Nil } }, 0, "Unit {}");
+    expect(Format::Struct { Text::from_str("Pair"), Fields::Positional {
         two("a".fmt(), "b".fmt()) } }, 13, "Pair { a, b }");
-    expect(Format::Struct { String::from_str("Pair"), Fields::Positional {
+    expect(Format::Struct { Text::from_str("Pair"), Fields::Positional {
         two("a".fmt(), "b".fmt()) } }, 11, "Pair {\n    a,\n    b,\n}");
     expect(Format::Tuple { two(point, "ok".fmt()) }, 25,
         "(\n    Point {\n        x: 10,\n        y: 20,\n    },\n    ok,\n)");

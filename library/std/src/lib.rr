@@ -1,12 +1,14 @@
 pub mod bigint;
 pub mod collections;
 pub mod console;
+pub mod env;
 pub mod format;
 pub mod hash;
 pub mod option;
 pub mod process;
 pub mod result;
 pub mod string;
+pub mod text;
 
 pub struct [value] LibVersion(i64, i64, i64)
 

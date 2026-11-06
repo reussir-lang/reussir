@@ -19,6 +19,12 @@ impl Default for String {
     }
 }
 
+impl From<StdString> for String {
+    fn from(value: StdString) -> Self {
+        Self(Rc::new(value))
+    }
+}
+
 impl String {
     pub fn new() -> Self {
         Self(Rc::new(StdString::new()))

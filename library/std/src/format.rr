@@ -24,6 +24,7 @@ import std::console::Ansi;
 import std::console::Color;
 import std::console::ColorChoice;
 import std::console::Stream;
+import std::text::Text;
 
 /// How optional breaks owned by a group are chosen.
 pub enum [value] BreakMode { Consistent, Fill }
@@ -48,7 +49,7 @@ pub struct BreakSpec {
 }
 
 pub struct Field {
-    pub name: String,
+    pub name: Text,
     pub value: Format
 }
 
@@ -59,8 +60,7 @@ pub enum Fields {
 
 pub enum Format {
     Empty,
-    Literal(str),
-    Text(String),
+    Text(Text),
     Character(char),
     Line,
     Softline,
@@ -70,7 +70,7 @@ pub enum Format {
     Group(BreakMode, Format),
     Break(BreakSpec),
     Tuple(List<Format>),
-    Struct(String, Fields),
+    Struct(Text, Fields),
     /// A scoped, zero-width ANSI change. Nested nodes restore their parent style.
     Ansi(Ansi, Format)
 }
@@ -143,21 +143,25 @@ pub fn join(separator: Format, items: List<Format>) -> Format {
     }
 }
 
+fn literal(s: str) -> Format {
+    Format::Text { Text::Literal { s } }
+}
+
 pub fn parens(body: Format) -> Format {
-    Format::Literal { "(" }.append(body).append(Format::Literal { ")" })
+    literal("(").append(body).append(literal(")"))
 }
 pub fn brackets(body: Format) -> Format {
-    Format::Literal { "[" }.append(body).append(Format::Literal { "]" })
+    literal("[").append(body).append(literal("]"))
 }
 pub fn braces(body: Format) -> Format {
-    Format::Literal { "{" }.append(body).append(Format::Literal { "}" })
+    literal("{").append(body).append(literal("}"))
 }
 pub fn comma_list(items: List<Format>) -> Format {
     comma_join(items).fill()
 }
 
 fn comma_join(items: List<Format>) -> Format {
-    join(Format::Literal { "," }.append(Format::Line), items)
+    join(literal(",").append(Format::Line), items)
 }
 
 fn closing_break(flat: str, comma: bool) -> Format {
@@ -169,29 +173,29 @@ fn closing_break(flat: str, comma: bool) -> Format {
 fn delimited(open: Format, close: str, items: List<Format>, indent: u64,
              spaces: bool, singleton_comma: bool) -> Format {
     match items {
-        Nil => open.append(Format::Literal { close }),
+        Nil => open.append(literal(close)),
         Cons(_, tail) => {
             let singleton = singleton_comma && tail.is_nil();
             let body = comma_join(items);
-            let body = if singleton { body.append(Format::Literal { "," }) } else { body };
+            let body = if singleton { body.append(literal(",")) } else { body };
             let edge = if spaces { Format::Line } else { Format::Softline };
             open.append(edge.append(body).nest(indent))
                 .append(closing_break(if spaces { " " } else { "" }, !singleton))
-                .append(Format::Literal { close }).group()
+                .append(literal(close)).group()
         }
     }
 }
 
 pub fn call(callee: Format, arguments: List<Format>, indent: u64) -> Format {
-    delimited(callee.append(Format::Literal { "(" }), ")", arguments, indent, false, false)
+    delimited(callee.append(literal("(")), ")", arguments, indent, false, false)
 }
 
 pub fn block(statements: List<Format>, indent: u64) -> Format {
     match statements {
-        Nil => Format::Literal { "{}" },
-        _ => Format::Literal { "{" }
+        Nil => literal("{}"),
+        _ => literal("{")
             .append(Format::Hardline.append(join(Format::Hardline, statements)).nest(indent))
-            .append(Format::Hardline).append(Format::Literal { "}" })
+            .append(Format::Hardline).append(literal("}"))
     }
 }
 
@@ -201,39 +205,16 @@ fn field_formats(fields: List<Field>) -> List<Format> {
         match rest {
             Nil => (rest, out),
             Cons(field, tail) => (tail, List::Cons {
-                Format::Text { field.name }.append(Format::Literal { ": " }).append(field.value), out
+                Format::Text { field.name }.append(literal(": ")).append(field.value), out
             })
         }
     };
     reversed.reverse()
 }
 
-/// Backing storage of a resolved text chunk.
-pub enum TextSource { Literal(str), Owned(String) }
-impl TextSource {
-    fn len(self: Self) -> u64 {
-        match self {
-            Literal(s) => core::intrinsic::str::len(s),
-            Owned(s) => s.len()
-        }
-    }
-    fn byte_at(self: Self, index: u64) -> u8 {
-        match self {
-            Literal(s) => core::intrinsic::str::byte_at(s, index),
-            Owned(s) => s.byte_at(index)
-        }
-    }
-    fn write(self: Self, out: String, start: u64, end: u64) -> String {
-        match self {
-            Literal(s) => out.push_str_range(s, start, end),
-            Owned(s) => out.push_string_range(s, start, end)
-        }
-    }
-}
-
 // Strict UTF-8 decode of the scalar at `index`; panics on malformed input.
 // Returns the scalar and the index of the next one.
-fn decode(text: TextSource, index: u64) -> (u64, u64) {
+fn decode(text: Text, index: u64) -> (u64, u64) {
     let first = text.byte_at(index) as u64;
     // Lead byte ranges: 0x00..0x7F, 0xC2..0xDF, 0xE0..0xEF, 0xF0..0xF4.
     let (count, initial, minimum) =
@@ -254,7 +235,7 @@ fn decode(text: TextSource, index: u64) -> (u64, u64) {
     } else { (scalar, index + count) }
 }
 
-fn text_info(text: TextSource) -> (u64, bool) {
+fn text_info(text: Text) -> (u64, bool) {
     let (_, width, multiline) = while [i = (0 as u64), n = (0 as u64), lines = false] (i < text.len()) {
         let (ch, next) = decode(text, i);
         (next, n + 1, lines || ch == 10)
@@ -263,7 +244,7 @@ fn text_info(text: TextSource) -> (u64, bool) {
 }
 
 fn fragment_width(s: str) -> u64 {
-    let (width, lines) = text_info(TextSource::Literal { s });
+    let (width, lines) = text_info(Text::Literal { s });
     if lines { core::intrinsic::panic::panic() } else { width }
 }
 
@@ -282,7 +263,7 @@ fn plain_break(flat: str) -> BreakSpec {
 }
 
 enum Token {
-    Text(TextSource, u64, u64, u64),
+    Text(Text, u64, u64, u64),
     Character(char),
     Break(BreakSpec, BreakWidths, u64),
     Hardline,
@@ -295,7 +276,7 @@ enum Token {
 }
 enum Task { Visit(Format), Emit(Token) }
 
-fn text_tokens(text: TextSource, out: List<Token>) -> List<Token> {
+fn text_tokens(text: Text, out: List<Token>) -> List<Token> {
     let (end, start, width, tokens) = while [i = (0 as u64), start = (0 as u64),
         width = (0 as u64), tokens = out] (i < text.len()) {
         let (scalar, next) = decode(text, i);
@@ -320,8 +301,7 @@ fn tokenize(document: Format, indent: u64) -> List<Token> {
                 Emit(token) => (rest, List::Cons { token, out }),
                 Visit(doc) => match doc {
                     Empty => (rest, out),
-                    Literal(s) => (rest, text_tokens(TextSource::Literal { s }, out)),
-                    Text(s) => (rest, text_tokens(TextSource::Owned { s }, out)),
+                    Format::Text(text) => (rest, text_tokens(text, out)),
                     Character(ch) => (rest, List::Cons {
                         if ch == '\n' { Token::Hardline } else { Token::Character { ch } }, out }),
                     Hardline => (rest, List::Cons { Token::Hardline, out }),
@@ -340,7 +320,7 @@ fn tokenize(document: Format, indent: u64) -> List<Token> {
                         List::Cons { Task::Emit { Token::PopAnsi }, rest } },
                         List::Cons { Token::PushAnsi { style }, out }),
                     Tuple(items) => (List::Cons { Task::Visit {
-                        delimited(Format::Literal { "(" }, ")", items, indent, false, true)
+                        delimited(literal("("), ")", items, indent, false, true)
                     }, rest }, out),
                     Struct(name, fields) => {
                         let items = match fields {
@@ -348,7 +328,7 @@ fn tokenize(document: Format, indent: u64) -> List<Token> {
                             Positional(fs) => fs
                         };
                         (List::Cons { Task::Visit {
-                            delimited(Format::Text { name }.append(Format::Literal { " {" }),
+                            delimited(Format::Text { name }.append(literal(" {")),
                                       "}", items, indent, true, false)
                         }, rest }, out)
                     }
@@ -384,7 +364,7 @@ fn measure(reversed: List<Token>, cap: u64) -> List<Token> {
                     widths.before, stack,
                     List::Cons { Token::Break { spec, widths, capped_add(widths.flat, segment, cap) }, out }),
                 Hardline => (tail, cap, cap, stack, List::Cons { token, out }),
-                Text(_, _, _, n) => (tail, capped_add(total, n, cap), capped_add(segment, n, cap), stack,
+                Token::Text(_, _, _, n) => (tail, capped_add(total, n, cap), capped_add(segment, n, cap), stack,
                                List::Cons { token, out }),
                 Character(_) => (tail, capped_add(total, 1, cap), capped_add(segment, 1, cap), stack,
                                   List::Cons { token, out }),
@@ -397,7 +377,7 @@ fn measure(reversed: List<Token>, cap: u64) -> List<Token> {
 
 /// Resolved output. Text ranges are UTF-8 byte offsets, with an exclusive end.
 pub enum Chunk {
-    Text(TextSource, u64, u64), Character(char), Spaces(u64), Newline,
+    Text(Text, u64, u64), Character(char), Spaces(u64), Newline,
     PushAnsi(Ansi), PopAnsi
 }
 /// A reusable layout with no remaining optional breaks or group decisions.
@@ -426,7 +406,7 @@ impl RenderedText {
                             Cons(previous, parents) => (tail, previous.restore(out), previous, parents)
                         }
                     } else { (tail, out, style, stack) },
-                    Text(text, start, end) => (tail, text.write(out, start, end), style, stack),
+                    Chunk::Text(text, start, end) => (tail, text.write(out, start, end), style, stack),
                     Character(ch) => (tail, out.push_char(ch), style, stack),
                     Newline => (tail, out.push_char('\n'), style, stack),
                     Spaces(n) => {
@@ -531,10 +511,10 @@ impl Printer {
                 _ => List::Cons { chunk, out }
             })
     }
-    fn text(self: Self, text: TextSource, width: u64) -> Self {
+    fn text(self: Self, text: Text, width: u64) -> Self {
         self.text_range(text, 0, text.len(), width)
     }
-    fn text_range(self: Self, text: TextSource, start: u64, end: u64, width: u64) -> Self {
+    fn text_range(self: Self, text: Text, start: u64, end: u64, width: u64) -> Self {
         if start == end { self } else {
             Printer { out: List::Cons { Chunk::Text { text, start, end }, self.flush_pending(true) },
                 column: capped_add(self.column, width, self.width + 1),
@@ -570,7 +550,7 @@ impl Printer {
                 indent: self.indent,
                 pending: if n == 0 { self.pending } else { List::Cons { Chunk::Spaces { n }, self.pending } },
                 width: self.width }
-        } else { self.text(TextSource::Literal { text }, width) }
+        } else { self.text(Text::Literal { text }, width) }
     }
     fn fits(self: Self, n: u64) -> bool {
         self.column <= self.width && n <= self.width - self.column
@@ -586,7 +566,7 @@ fn print_tokens(tokens: List<Token>, width: u64) -> RenderedText {
         match rest {
             Nil => (rest, p, groups, indents),
             Cons(token, tail) => match token {
-                Text(text, start, end, n) => (tail, p.text_range(text, start, end, n), groups, indents),
+                Token::Text(text, start, end, n) => (tail, p.text_range(text, start, end, n), groups, indents),
                 Character(ch) => (tail, p.scalar(ch), groups, indents),
                 Hardline => (tail, p.newline(0), groups, indents),
                 PushAnsi(style) => (tail, p.control(Chunk::PushAnsi { style }), groups, indents),
@@ -609,9 +589,9 @@ fn print_tokens(tokens: List<Token>, width: u64) -> RenderedText {
                         Fill => p.fits(n)
                     };
                     let next = if flat { p.flat_break(spec.flat, widths.flat) } else {
-                        p.text(TextSource::Literal { spec.before }, widths.before)
+                        p.text(Text::Literal { spec.before }, widths.before)
                             .newline(spec.offset)
-                            .text(TextSource::Literal { spec.after }, widths.after)
+                            .text(Text::Literal { spec.after }, widths.after)
                     };
                     (tail, next, groups, indents)
                 }
@@ -646,15 +626,16 @@ fn write_stderr(text: RawString) -> i32 [{
 }];
 
 impl Display for Format { fn fmt(self: Self) -> Format { self } }
-impl Display for str { fn fmt(self: Self) -> Format { Format::Literal { self } } }
-impl Display for String { fn fmt(self: Self) -> Format { Format::Text { self } } }
+impl Display for Text { fn fmt(self: Self) -> Format { Format::Text { self } } }
+impl Display for str { fn fmt(self: Self) -> Format { literal(self) } }
+impl Display for String { fn fmt(self: Self) -> Format { Format::Text { Text::Owned { self } } } }
 impl Display for char { fn fmt(self: Self) -> Format { Format::Character { self } } }
 impl Display for bool {
-    fn fmt(self: Self) -> Format { Format::Literal { if self { "true" } else { "false" } } }
+    fn fmt(self: Self) -> Format { literal(if self { "true" } else { "false" }) }
 }
 
 fn unsigned_decimal(value: u64) -> Format {
-    if value == 0 { Format::Literal { "0" } } else {
+    if value == 0 { literal("0") } else {
         let (_, out) = while [n = value, out = Format::Empty] (n != 0) {
             (n / 10, Format::Character { match n % 10 {
                 0 => '0', 1 => '1', 2 => '2', 3 => '3', 4 => '4',
@@ -665,7 +646,7 @@ fn unsigned_decimal(value: u64) -> Format {
     }
 }
 fn signed_decimal(value: i64) -> Format {
-    if value < 0 { Format::Literal { "-" }.append(unsigned_decimal((0 as u64) - (value as u64))) }
+    if value < 0 { literal("-").append(unsigned_decimal((0 as u64) - (value as u64))) }
     else { unsigned_decimal(value as u64) }
 }
 
@@ -692,16 +673,16 @@ impl<T: Display> Display for List<T> {
 impl<T: Display> Display for Option<T> {
     fn fmt(self: Self) -> Format {
         match self {
-            None => Format::Literal { "None" },
-            Some(value) => call(Format::Literal { "Some" }, List::Cons { value.fmt(), List::Nil }, 4)
+            None => literal("None"),
+            Some(value) => call(literal("Some"), List::Cons { value.fmt(), List::Nil }, 4)
         }
     }
 }
 impl<T: Display, E: Display> Display for Result<T, E> {
     fn fmt(self: Self) -> Format {
         match self {
-            Ok(value) => call(Format::Literal { "Ok" }, List::Cons { value.fmt(), List::Nil }, 4),
-            Err(error) => call(Format::Literal { "Err" }, List::Cons { error.fmt(), List::Nil }, 4)
+            Ok(value) => call(literal("Ok"), List::Cons { value.fmt(), List::Nil }, 4),
+            Err(error) => call(literal("Err"), List::Cons { error.fmt(), List::Nil }, 4)
         }
     }
 }
