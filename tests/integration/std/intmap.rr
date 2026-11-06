@@ -17,7 +17,7 @@ fn check(value : bool) {
 
 fn basics() -> bool {
     let empty : IntMap<i64> = IntMap::new();
-    let one = IntMap::singleton(4, 40);
+    let one : IntMap<i64> = IntMap::singleton(4, 40);
     let two = one.insert(8, 80);
     let replaced = two.insert(4, 400);
     let removed = replaced.remove(8);
@@ -36,7 +36,7 @@ fn signed_keys() -> bool {
         .insert(0, 4).insert(9223372036854775807, 8)
         .insert(-9223372036854775808, 1).insert(-1, 3)
         .insert(256, 7).insert(1, 5).insert(-256, 2).insert(255, 6);
-    let order = map.fold_left(0, |acc, key, value| acc * 10 + value);
+    let order : i64 = map.fold_left(0, |acc, key, value| acc * 10 + value);
     let reduced = map.remove(-9223372036854775808).remove(9223372036854775807);
     order == 12345678 && reduced.fold_left(0, |a, k, v| a * 10 + v) == 234567
         && map.get_or(-9223372036854775808, 0) == 1
@@ -48,13 +48,13 @@ fn signed_keys() -> bool {
 
 fn powers(map : IntMap<i64>, bit : u64) -> IntMap<i64> {
     if bit == 64 { map } else {
-        powers(map.insert((1u64 << bit) as i64, bit as i64), bit + 1)
+        powers(map.insert(((1 as u64) << bit) as i64, bit as i64), bit + 1)
     }
 }
 
 fn strip_powers(map : IntMap<i64>, bit : u64) -> bool {
     if bit == 64 { map.is_empty() } else {
-        let key = (1u64 << bit) as i64;
+        let key = ((1 as u64) << bit) as i64;
         map.get_or(key, -1) == bit as i64
             && strip_powers(map.remove(key), bit + 1)
     }
@@ -131,7 +131,7 @@ fn generic_values() -> bool {
     let extended = original.insert(4, Payload::Link { 11, original.get_or(-4, Payload::End) });
     let replaced = extended.insert(-4, Payload::End);
     payload_sum(original.get_or(-4, Payload::End)) == 7
-        && payload_sum(extended.get(4).unwrap()) == 18
+        && payload_sum(extended.get(4).unwrap_or(Payload::End)) == 18
         && payload_sum(replaced.get_or(-4, Payload::End)) == 0
         && payload_sum(replaced.remove(-4).get_or(4, Payload::End)) == 18
         && payload_sum(extended.get_or(-4, Payload::End)) == 7
@@ -142,7 +142,7 @@ pub fn entry() {
     check(basics());
     check(signed_keys());
     let all_bits = powers(IntMap::new(), 0);
-    check(strip_powers(all_bits, 0) && all_bits.fold_left(0, |a, k, v| a + 1) == 64);
+    check(strip_powers(all_bits, 0) && all_bits.fold_left(0 as i64, |a, k, v| a + 1) == 64);
     check(churn(IntMap::new(), WavlMap::new(), IntMap::new(), WavlMap::new(), 994, 1000));
     check(generic_values());
 }
