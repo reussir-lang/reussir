@@ -28,6 +28,9 @@ fn expect(doc: Format, width: u64, expected: str) {
 fn check(value: bool) {
     if !value { core::intrinsic::panic::panic() }
 }
+fn escapes(style: Ansi, expected: str) {
+    check(String::from_str(style.escape()).eq_str(expected))
+}
 fn two(a: Format, b: Format) -> List<Format> { List::Cons { a, List::Cons { b, List::Nil } } }
 fn three(a: Format, b: Format, c: Format) -> List<Format> {
     List::Cons { a, two(b, c) }
@@ -147,7 +150,6 @@ fn deep() {
     check(a == b);
 }
 
-
 fn ansi() {
     let red = Ansi::Foreground { Color::Red };
     let blue = Ansi::Foreground { Color::Blue };
@@ -182,47 +184,47 @@ fn ansi() {
     let rendered = deep.render(Options::default());
     check(rendered.to_plain_string().eq_str("x"));
     check(rendered.to_string().len() == 10000 * 5 + 9999 * 9 + 4 + 1);
-    check(String::from_str(Ansi::Foreground { Color::Black }.escape()).eq_str("\u{1b}[30m"));
-    check(String::from_str(Ansi::Foreground { Color::Red }.escape()).eq_str("\u{1b}[31m"));
-    check(String::from_str(Ansi::Foreground { Color::Green }.escape()).eq_str("\u{1b}[32m"));
-    check(String::from_str(Ansi::Foreground { Color::Yellow }.escape()).eq_str("\u{1b}[33m"));
-    check(String::from_str(Ansi::Foreground { Color::Blue }.escape()).eq_str("\u{1b}[34m"));
-    check(String::from_str(Ansi::Foreground { Color::Magenta }.escape()).eq_str("\u{1b}[35m"));
-    check(String::from_str(Ansi::Foreground { Color::Cyan }.escape()).eq_str("\u{1b}[36m"));
-    check(String::from_str(Ansi::Foreground { Color::White }.escape()).eq_str("\u{1b}[37m"));
-    check(String::from_str(Ansi::Foreground { Color::BrightBlack }.escape()).eq_str("\u{1b}[90m"));
-    check(String::from_str(Ansi::Foreground { Color::BrightRed }.escape()).eq_str("\u{1b}[91m"));
-    check(String::from_str(Ansi::Foreground { Color::BrightGreen }.escape()).eq_str("\u{1b}[92m"));
-    check(String::from_str(Ansi::Foreground { Color::BrightYellow }.escape()).eq_str("\u{1b}[93m"));
-    check(String::from_str(Ansi::Foreground { Color::BrightBlue }.escape()).eq_str("\u{1b}[94m"));
-    check(String::from_str(Ansi::Foreground { Color::BrightMagenta }.escape()).eq_str("\u{1b}[95m"));
-    check(String::from_str(Ansi::Foreground { Color::BrightCyan }.escape()).eq_str("\u{1b}[96m"));
-    check(String::from_str(Ansi::Foreground { Color::BrightWhite }.escape()).eq_str("\u{1b}[97m"));
-    check(String::from_str(Ansi::Foreground { Color::Default }.escape()).eq_str("\u{1b}[39m"));
-    check(String::from_str(Ansi::Background { Color::Black }.escape()).eq_str("\u{1b}[40m"));
-    check(String::from_str(Ansi::Background { Color::Red }.escape()).eq_str("\u{1b}[41m"));
-    check(String::from_str(Ansi::Background { Color::Green }.escape()).eq_str("\u{1b}[42m"));
-    check(String::from_str(Ansi::Background { Color::Yellow }.escape()).eq_str("\u{1b}[43m"));
-    check(String::from_str(Ansi::Background { Color::Blue }.escape()).eq_str("\u{1b}[44m"));
-    check(String::from_str(Ansi::Background { Color::Magenta }.escape()).eq_str("\u{1b}[45m"));
-    check(String::from_str(Ansi::Background { Color::Cyan }.escape()).eq_str("\u{1b}[46m"));
-    check(String::from_str(Ansi::Background { Color::White }.escape()).eq_str("\u{1b}[47m"));
-    check(String::from_str(Ansi::Background { Color::BrightBlack }.escape()).eq_str("\u{1b}[100m"));
-    check(String::from_str(Ansi::Background { Color::BrightRed }.escape()).eq_str("\u{1b}[101m"));
-    check(String::from_str(Ansi::Background { Color::BrightGreen }.escape()).eq_str("\u{1b}[102m"));
-    check(String::from_str(Ansi::Background { Color::BrightYellow }.escape()).eq_str("\u{1b}[103m"));
-    check(String::from_str(Ansi::Background { Color::BrightBlue }.escape()).eq_str("\u{1b}[104m"));
-    check(String::from_str(Ansi::Background { Color::BrightMagenta }.escape()).eq_str("\u{1b}[105m"));
-    check(String::from_str(Ansi::Background { Color::BrightCyan }.escape()).eq_str("\u{1b}[106m"));
-    check(String::from_str(Ansi::Background { Color::BrightWhite }.escape()).eq_str("\u{1b}[107m"));
-    check(String::from_str(Ansi::Background { Color::Default }.escape()).eq_str("\u{1b}[49m"));
-    check(String::from_str(Ansi::Bold.escape()).eq_str("\u{1b}[1m"));
-    check(String::from_str(Ansi::Dim.escape()).eq_str("\u{1b}[2m"));
-    check(String::from_str(Ansi::Italic.escape()).eq_str("\u{1b}[3m"));
-    check(String::from_str(Ansi::Underline.escape()).eq_str("\u{1b}[4m"));
-    check(String::from_str(Ansi::Reverse.escape()).eq_str("\u{1b}[7m"));
-    check(String::from_str(Ansi::Strikethrough.escape()).eq_str("\u{1b}[9m"));
-    check(String::from_str(Ansi::Reset.escape()).eq_str("\u{1b}[0m"));
+    escapes(Ansi::Foreground { Color::Black }, "\u{1b}[30m");
+    escapes(Ansi::Foreground { Color::Red }, "\u{1b}[31m");
+    escapes(Ansi::Foreground { Color::Green }, "\u{1b}[32m");
+    escapes(Ansi::Foreground { Color::Yellow }, "\u{1b}[33m");
+    escapes(Ansi::Foreground { Color::Blue }, "\u{1b}[34m");
+    escapes(Ansi::Foreground { Color::Magenta }, "\u{1b}[35m");
+    escapes(Ansi::Foreground { Color::Cyan }, "\u{1b}[36m");
+    escapes(Ansi::Foreground { Color::White }, "\u{1b}[37m");
+    escapes(Ansi::Foreground { Color::BrightBlack }, "\u{1b}[90m");
+    escapes(Ansi::Foreground { Color::BrightRed }, "\u{1b}[91m");
+    escapes(Ansi::Foreground { Color::BrightGreen }, "\u{1b}[92m");
+    escapes(Ansi::Foreground { Color::BrightYellow }, "\u{1b}[93m");
+    escapes(Ansi::Foreground { Color::BrightBlue }, "\u{1b}[94m");
+    escapes(Ansi::Foreground { Color::BrightMagenta }, "\u{1b}[95m");
+    escapes(Ansi::Foreground { Color::BrightCyan }, "\u{1b}[96m");
+    escapes(Ansi::Foreground { Color::BrightWhite }, "\u{1b}[97m");
+    escapes(Ansi::Foreground { Color::Default }, "\u{1b}[39m");
+    escapes(Ansi::Background { Color::Black }, "\u{1b}[40m");
+    escapes(Ansi::Background { Color::Red }, "\u{1b}[41m");
+    escapes(Ansi::Background { Color::Green }, "\u{1b}[42m");
+    escapes(Ansi::Background { Color::Yellow }, "\u{1b}[43m");
+    escapes(Ansi::Background { Color::Blue }, "\u{1b}[44m");
+    escapes(Ansi::Background { Color::Magenta }, "\u{1b}[45m");
+    escapes(Ansi::Background { Color::Cyan }, "\u{1b}[46m");
+    escapes(Ansi::Background { Color::White }, "\u{1b}[47m");
+    escapes(Ansi::Background { Color::BrightBlack }, "\u{1b}[100m");
+    escapes(Ansi::Background { Color::BrightRed }, "\u{1b}[101m");
+    escapes(Ansi::Background { Color::BrightGreen }, "\u{1b}[102m");
+    escapes(Ansi::Background { Color::BrightYellow }, "\u{1b}[103m");
+    escapes(Ansi::Background { Color::BrightBlue }, "\u{1b}[104m");
+    escapes(Ansi::Background { Color::BrightMagenta }, "\u{1b}[105m");
+    escapes(Ansi::Background { Color::BrightCyan }, "\u{1b}[106m");
+    escapes(Ansi::Background { Color::BrightWhite }, "\u{1b}[107m");
+    escapes(Ansi::Background { Color::Default }, "\u{1b}[49m");
+    escapes(Ansi::Bold, "\u{1b}[1m");
+    escapes(Ansi::Dim, "\u{1b}[2m");
+    escapes(Ansi::Italic, "\u{1b}[3m");
+    escapes(Ansi::Underline, "\u{1b}[4m");
+    escapes(Ansi::Reverse, "\u{1b}[7m");
+    escapes(Ansi::Strikethrough, "\u{1b}[9m");
+    escapes(Ansi::Reset, "\u{1b}[0m");
 }
 
 #[main]

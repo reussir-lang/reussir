@@ -1,8 +1,7 @@
 """Compare native formatting with a small, deliberately unoptimized model.
 
 The model recursively computes flat layouts at each group. The production
-renderer instead measures a reversed token stream once. No production code
-or measurement tables are shared with this oracle.
+renderer instead measures a reversed token stream once.
 """
 
 import os

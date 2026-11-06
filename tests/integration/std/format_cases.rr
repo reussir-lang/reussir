@@ -39,8 +39,6 @@ fn build(count: i32) -> Format {
             },
             5 => List::Cons { stack.head().unwrap_or_panic().nest(read() as u64), stack.tail() },
             6 => List::Cons { stack.head().unwrap_or_panic().group(), stack.tail() },
-            8 => List::Cons { stack.head().unwrap_or_panic().fill(), stack.tail() },
-            9 => List::Cons { stack.head().unwrap_or_panic().ansi(Ansi::Foreground { Color::Red }), stack.tail() },
             7 => {
                 let n = read();
                 let (_, rest, items) = while [j = (0 as i32), rest = stack, items = List::Nil] (j < n) {
@@ -48,6 +46,8 @@ fn build(count: i32) -> Format {
                 };
                 List::Cons { Format::Tuple { items }, rest }
             },
+            8 => List::Cons { stack.head().unwrap_or_panic().fill(), stack.tail() },
+            9 => List::Cons { stack.head().unwrap_or_panic().ansi(Ansi::Foreground { Color::Red }), stack.tail() },
             _ => core::intrinsic::panic::panic()
         };
         (i + 1, next)
@@ -55,6 +55,12 @@ fn build(count: i32) -> Format {
     stack.head().unwrap_or_panic()
 }
 
+// A non-negative first input is a case count for `format_reference.py`.
+// Negative inputs select one-shot checks driven by the Python scripts:
+//   -1/-2  dump to stdout/stderr         -3  stdout broken pipe
+//   -4     is_tty for stdin/stdout/stderr
+//   -5/-6  Auto color on stdout/stderr   -7/-8   stdout Always/Never
+//   -9/-10 stderr Always/Never
 #[main]
 pub fn main() {
     let cases = read();

@@ -1,5 +1,5 @@
 //! Terminal detection and ANSI SGR colors and attributes.
-//! Detection delegates to Rust's `std::io::IsTerminal`; unknown terminals return false.
+//! Detection uses Rust's `std::io::IsTerminal`.
 //! Escape sequences follow https://invisible-island.net/xterm/ctlseqs/ctlseqs.html.
 
 pub enum [value] Stream { Stdin, Stdout, Stderr }

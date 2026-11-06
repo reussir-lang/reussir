@@ -16,7 +16,7 @@ impl<T, E> Result<T, E> {
     pub fn and_then<U>(self: Self, f: T -> Result<U, E>) -> Result<U, E> {
         match self { Ok(value) => f(value), Err(error) => Result::Err { error } }
     }
-    pub fn unwrap_or(self: Self, other: T) -> T {
-        match self { Ok(value) => value, Err(_) => other }
+    pub fn unwrap_or(self: Self, default: T) -> T {
+        match self { Ok(value) => value, Err(_) => default }
     }
 }

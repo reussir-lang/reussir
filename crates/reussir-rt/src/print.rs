@@ -2,16 +2,24 @@
 
 use std::io::{self, Write};
 
+// Status codes decoded by `print_result` in `library/std/src/format.rr`.
+const BROKEN_PIPE: i32 = 1;
+const PERMISSION_DENIED: i32 = 2;
+const WRITE_ZERO: i32 = 3;
+const OTHER: i32 = 4;
+const FLUSH_FAILED: i32 = 256;
+
 fn error_code(error: io::Error) -> i32 {
     match error.kind() {
-        io::ErrorKind::BrokenPipe => 1,
-        io::ErrorKind::PermissionDenied => 2,
-        io::ErrorKind::WriteZero => 3,
-        _ => 4,
+        io::ErrorKind::BrokenPipe => BROKEN_PIPE,
+        io::ErrorKind::PermissionDenied => PERMISSION_DENIED,
+        io::ErrorKind::WriteZero => WRITE_ZERO,
+        _ => OTHER,
     }
 }
 
 fn write_and_flush(writer: &mut impl Write, bytes: &[u8]) -> i32 {
+    // `write_all` already retries `Interrupted`; `flush` does not.
     if let Err(error) = writer.write_all(bytes) {
         return error_code(error);
     }
@@ -19,7 +27,7 @@ fn write_and_flush(writer: &mut impl Write, bytes: &[u8]) -> i32 {
         match writer.flush() {
             Ok(()) => return 0,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return 256 + error_code(error),
+            Err(error) => return FLUSH_FAILED + error_code(error),
         }
     }
 }
@@ -95,10 +103,10 @@ mod tests {
     #[test]
     fn distinguishes_write_and_flush_failures() {
         for (kind, code) in [
-            (io::ErrorKind::BrokenPipe, 1),
-            (io::ErrorKind::PermissionDenied, 2),
-            (io::ErrorKind::WriteZero, 3),
-            (io::ErrorKind::Other, 4),
+            (io::ErrorKind::BrokenPipe, BROKEN_PIPE),
+            (io::ErrorKind::PermissionDenied, PERMISSION_DENIED),
+            (io::ErrorKind::WriteZero, WRITE_ZERO),
+            (io::ErrorKind::Other, OTHER),
         ] {
             let mut sink = Sink::new();
             sink.write_error = Some(kind);
@@ -106,7 +114,7 @@ mod tests {
             assert!(!sink.flushed);
             let mut sink = Sink::new();
             sink.flush_error = Some(kind);
-            assert_eq!(write_and_flush(&mut sink, b"hello"), 256 + code);
+            assert_eq!(write_and_flush(&mut sink, b"hello"), FLUSH_FAILED + code);
             assert_eq!(sink.bytes, b"hello");
         }
     }
@@ -122,7 +130,7 @@ mod tests {
                 panic!("must not flush after failure")
             }
         }
-        assert_eq!(write_and_flush(&mut Zero, b"data"), 3);
+        assert_eq!(write_and_flush(&mut Zero, b"data"), WRITE_ZERO);
     }
 
     #[test]
@@ -141,7 +149,7 @@ mod tests {
             }
         }
         let mut sink = Partial(Vec::new());
-        assert_eq!(write_and_flush(&mut sink, b"hello"), 1);
+        assert_eq!(write_and_flush(&mut sink, b"hello"), BROKEN_PIPE);
         assert_eq!(sink.0, b"he");
     }
 

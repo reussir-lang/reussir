@@ -1,26 +1,15 @@
 //! Compositional pretty printing with consistent and filling groups.
 //! `Display::fmt` builds a reusable format; rendering chooses its layout.
 //!
-//! `Text(String)` accepts computed text and `Literal(str)` retains literals
-//! without copying. Both preserve text and treat LF as a hard line break.
 //! `Line` becomes a space when its group fits, and `Softline` becomes empty.
 //! A consistent group breaks all its own breaks together; `fill` packs as
 //! many segments as fit. Nested groups decide independently after a parent
-//! breaks. Width counts Unicode scalars, not terminal display cells.
+//! breaks.
 //!
 //! ```text
 //! let doc = Format::Tuple { List::Cons { value.fmt(), List::Nil } };
-//! let result = doc.dump_stdout(Options { width: 80, indent: 4 });
+//! let result = doc.dump_stdout(Options::default());
 //! ```
-//!
-//! A singleton tuple always keeps its comma. Structs accept named or
-//! positional fields, preserve their order, and add trailing commas when
-//! broken. Dumps flush the stream and return `Result<PrintSuccess, PrintError>`;
-//! they do not add a newline. Append `Hardline` to request one.
-//!
-//! `Ansi(style, body)` adds scoped color or attributes without affecting width.
-//! Dumps auto-detect the destination terminal; `dump_*_with_color` overrides this.
-//! `RenderedText::to_string` includes ANSI; `to_plain_string` omits ANSI nodes.
 //!
 //! Layout uses an iterative batch scan/print algorithm with linear token
 //! storage. It never backtracks through document alternatives. See Oppen,
@@ -117,7 +106,7 @@ impl Format {
     /// Width counts Unicode scalars, not bytes or terminal cells. Literal LF
     /// breaks lines; tabs and other control characters are preserved.
     pub fn render(self: Self, options: Options) -> RenderedText {
-        if options.width > 9223372036854775806 || options.indent > 9223372036854775806 {
+        if options.width > max_column() || options.indent > max_column() {
             core::intrinsic::panic::panic()
         } else {
             let cap = options.width + 1;
@@ -126,7 +115,8 @@ impl Format {
         }
     }
     /// Writes exactly this format, without adding a final newline, then flushes.
-    /// ANSI is enabled when stdout is a terminal.
+    /// ANSI is enabled when the destination stream is a terminal; the
+    /// `_with_color` variants override detection. Stderr variants mirror these.
     pub fn dump_stdout(self: Self, options: Options) -> Result<PrintSuccess, PrintError> {
         self.render(options).dump_stdout()
     }
@@ -163,7 +153,11 @@ pub fn braces(body: Format) -> Format {
     Format::Literal { "{" }.append(body).append(Format::Literal { "}" })
 }
 pub fn comma_list(items: List<Format>) -> Format {
-    join(Format::Literal { "," }.append(Format::Line), items).fill()
+    comma_join(items).fill()
+}
+
+fn comma_join(items: List<Format>) -> Format {
+    join(Format::Literal { "," }.append(Format::Line), items)
 }
 
 fn closing_break(flat: str, comma: bool) -> Format {
@@ -178,7 +172,7 @@ fn delimited(open: Format, close: str, items: List<Format>, indent: u64,
         Nil => open.append(Format::Literal { close }),
         Cons(_, tail) => {
             let singleton = singleton_comma && tail.is_nil();
-            let body = join(Format::Literal { "," }.append(Format::Line), items);
+            let body = comma_join(items);
             let body = if singleton { body.append(Format::Literal { "," }) } else { body };
             let edge = if spaces { Format::Line } else { Format::Softline };
             open.append(edge.append(body).nest(indent))
@@ -201,6 +195,7 @@ pub fn block(statements: List<Format>, indent: u64) -> Format {
     }
 }
 
+// Iterative because `List::map` recurses once per element.
 fn field_formats(fields: List<Field>) -> List<Format> {
     let (_, reversed) = while [rest = fields, out = List::Nil] (!rest.is_nil()) {
         match rest {
@@ -236,12 +231,15 @@ impl TextSource {
     }
 }
 
-// Decode scalars in Reussir; the storage API supplies only bytes.
+// Strict UTF-8 decode of the scalar at `index`; panics on malformed input.
+// Returns the scalar and the index of the next one.
 fn decode(text: TextSource, index: u64) -> (u64, u64) {
     let first = text.byte_at(index) as u64;
-    let (count, initial, minimum) = if first < 128 { ((1 as u64), first, (0 as u64)) }
+    // Lead byte ranges: 0x00..0x7F, 0xC2..0xDF, 0xE0..0xEF, 0xF0..0xF4.
+    let (count, initial, minimum) =
+        if first < 128 { ((1 as u64), first, (0 as u64)) }
         else { if first >= 194 && first <= 223 { ((2 as u64), first - 192, (128 as u64)) }
-        else { if first <= 239 && first >= 224 { ((3 as u64), first - 224, (2048 as u64)) }
+        else { if first >= 224 && first <= 239 { ((3 as u64), first - 224, (2048 as u64)) }
         else { if first >= 240 && first <= 244 { ((4 as u64), first - 240, (65536 as u64)) }
         else { core::intrinsic::panic::panic() } } } };
     if count > text.len() - index { core::intrinsic::panic::panic() };
@@ -250,6 +248,7 @@ fn decode(text: TextSource, index: u64) -> (u64, u64) {
         if byte < 128 || byte > 191 { core::intrinsic::panic::panic() };
         (i + 1, value * 64 + byte - 128)
     };
+    // Reject overlong forms, values above 0x10FFFF, and surrogates 0xD800..0xDFFF.
     if scalar < minimum || scalar > 1114111 || (scalar >= 55296 && scalar <= 57343) {
         core::intrinsic::panic::panic()
     } else { (scalar, index + count) }
@@ -268,10 +267,24 @@ fn fragment_width(s: str) -> u64 {
     if lines { core::intrinsic::panic::panic() } else { width }
 }
 
+struct [value] BreakWidths { flat: u64, before: u64, after: u64 }
+
+fn break_token(spec: BreakSpec) -> Token {
+    Token::Break { spec, BreakWidths {
+        flat: fragment_width(spec.flat),
+        before: fragment_width(spec.before),
+        after: fragment_width(spec.after)
+    }, 0 }
+}
+
+fn plain_break(flat: str) -> BreakSpec {
+    BreakSpec { flat: flat, before: "", after: "", offset: 0 }
+}
+
 enum Token {
     Text(TextSource, u64, u64, u64),
     Character(char),
-    Break(BreakSpec, u64),
+    Break(BreakSpec, BreakWidths, u64),
     Hardline,
     Begin(BreakMode, u64),
     End,
@@ -312,16 +325,9 @@ fn tokenize(document: Format, indent: u64) -> List<Token> {
                     Character(ch) => (rest, List::Cons {
                         if ch == '\n' { Token::Hardline } else { Token::Character { ch } }, out }),
                     Hardline => (rest, List::Cons { Token::Hardline, out }),
-                    Line => (rest, List::Cons { Token::Break {
-                        BreakSpec { flat: " ", before: "", after: "", offset: 0 }, 0 }, out }),
-                    Softline => (rest, List::Cons { Token::Break {
-                        BreakSpec { flat: "", before: "", after: "", offset: 0 }, 0 }, out }),
-                    Break(spec) => {
-                        let _ = fragment_width(spec.flat);
-                        let _ = fragment_width(spec.before);
-                        let _ = fragment_width(spec.after);
-                        (rest, List::Cons { Token::Break { spec, 0 }, out })
-                    },
+                    Line => (rest, List::Cons { break_token(plain_break(" ")), out }),
+                    Softline => (rest, List::Cons { break_token(plain_break("")), out }),
+                    Break(spec) => (rest, List::Cons { break_token(spec), out }),
                     Append(left, right) => (List::Cons { Task::Visit { left },
                         List::Cons { Task::Visit { right }, rest } }, out),
                     Nest(n, body) => (List::Cons { Task::Visit { body },
@@ -374,9 +380,9 @@ fn measure(reversed: List<Token>, cap: u64) -> List<Token> {
                         capped_add(parent.segment, total, cap), parents,
                         List::Cons { Token::Begin { mode, total }, out })
                 },
-                Break(spec, _) => (tail, capped_add(total, fragment_width(spec.flat), cap),
-                    fragment_width(spec.before), stack,
-                    List::Cons { Token::Break { spec, capped_add(fragment_width(spec.flat), segment, cap) }, out }),
+                Break(spec, widths, _) => (tail, capped_add(total, widths.flat, cap),
+                    widths.before, stack,
+                    List::Cons { Token::Break { spec, widths, capped_add(widths.flat, segment, cap) }, out }),
                 Hardline => (tail, cap, cap, stack, List::Cons { token, out }),
                 Text(_, _, _, n) => (tail, capped_add(total, n, cap), capped_add(segment, n, cap), stack,
                                List::Cons { token, out }),
@@ -434,7 +440,7 @@ impl RenderedText {
         };
         output
     }
-    /// Auto-detects stdout independently from stderr.
+    /// Each stream is detected independently; see `Format::dump_stdout`.
     pub fn dump_stdout(self: Self) -> Result<PrintSuccess, PrintError> {
         self.dump_stdout_with_color(ColorChoice::Auto)
     }
@@ -501,8 +507,12 @@ struct Printer {
     width: u64
 }
 
+// Largest accepted width or indentation (i64::MAX - 1), so `width + 1` and
+// signed break offsets cannot overflow.
+fn max_column() -> u64 { 9223372036854775806 }
+
 fn add_indent(a: u64, b: u64) -> u64 {
-    if a > 9223372036854775806 || b > 9223372036854775806 - a {
+    if a > max_column() || b > max_column() - a {
         core::intrinsic::panic::panic()
     } else { a + b }
 }
@@ -550,7 +560,7 @@ impl Printer {
         Printer { out: self.out, column: self.column, indent: indent,
                   pending: self.pending, width: self.width }
     }
-    fn flat_break(self: Self, text: str) -> Self {
+    fn flat_break(self: Self, text: str, width: u64) -> Self {
         let n = core::intrinsic::str::len(text);
         let (_, spaces) = while [i = (0 as u64), spaces = true] (i < n) {
             (i + 1, spaces && core::intrinsic::str::byte_at(text, i) == 32)
@@ -560,7 +570,7 @@ impl Printer {
                 indent: self.indent,
                 pending: if n == 0 { self.pending } else { List::Cons { Chunk::Spaces { n }, self.pending } },
                 width: self.width }
-        } else { self.text(TextSource::Literal { text }, fragment_width(text)) }
+        } else { self.text(TextSource::Literal { text }, width) }
     }
     fn fits(self: Self, n: u64) -> bool {
         self.column <= self.width && n <= self.width - self.column
@@ -569,6 +579,7 @@ impl Printer {
 
 fn print_tokens(tokens: List<Token>, width: u64) -> RenderedText {
     let initial = Printer { out: List::Nil, column: 0, indent: 0, pending: List::Nil, width: width };
+    // The root frame fills, so top-level breaks outside any group pack lines.
     let (_, printer, _, _) = while [rest = tokens, p = initial,
         groups = List::Cons { PrintFrame { flat: false, mode: BreakMode::Fill }, List::Nil },
         indents = List::Nil] (!rest.is_nil()) {
@@ -591,16 +602,16 @@ fn print_tokens(tokens: List<Token>, width: u64) -> RenderedText {
                     (tail, p, List::Cons { PrintFrame { flat: parent.flat || p.fits(n), mode: mode }, groups }, indents)
                 },
                 End => (tail, p, groups.tail(), indents),
-                Break(spec, n) => {
+                Break(spec, widths, n) => {
                     let frame = groups.head().unwrap_or_panic();
                     let flat = frame.flat || match frame.mode {
                         Consistent => false,
                         Fill => p.fits(n)
                     };
-                    let next = if flat { p.flat_break(spec.flat) } else {
-                        p.text(TextSource::Literal { spec.before }, fragment_width(spec.before))
+                    let next = if flat { p.flat_break(spec.flat, widths.flat) } else {
+                        p.text(TextSource::Literal { spec.before }, widths.before)
                             .newline(spec.offset)
-                            .text(TextSource::Literal { spec.after }, fragment_width(spec.after))
+                            .text(TextSource::Literal { spec.after }, widths.after)
                     };
                     (tail, next, groups, indents)
                 }
@@ -610,6 +621,7 @@ fn print_tokens(tokens: List<Token>, width: u64) -> RenderedText {
     RenderedText { chunks: printer.flush_pending(false).reverse() }
 }
 
+// Decodes the status from `reussir_rt::print`; keep the codes in sync.
 fn print_result(code: i32) -> Result<PrintSuccess, PrintError> {
     if code == 0 { Result::Ok { PrintSuccess::Complete } } else {
         Result::Err { PrintError {
@@ -674,7 +686,7 @@ impl<T: Display> Display for List<T> {
                 Cons(value, tail) => (tail, List::Cons { value.fmt(), out })
             }
         };
-        brackets(join(Format::Literal { "," }.append(Format::Line), reversed.reverse())).fill()
+        brackets(comma_join(reversed.reverse())).fill()
     }
 }
 impl<T: Display> Display for Option<T> {
