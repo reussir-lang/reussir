@@ -1,6 +1,12 @@
 //! Static string literals or owned copy-on-write strings.
 
 import std::string::String;
+import std::option::Option;
+import std::format::Display;
+import std::format::Format;
+
+#[ffi(import)]
+fn scalar_to_char(value: u32) -> char [{ char::from_u32(value).unwrap() }];
 
 /// Either an immutable static `str` literal or a growable `String`.
 pub enum Text {
@@ -17,6 +23,11 @@ impl Text {
     /// Wraps an owned string without copying.
     pub fn from_string(value: String) -> Self {
         Text::Owned { value }
+    }
+
+    /// Creates a view over the whole text without copying its bytes.
+    pub fn view(self: Self) -> TextView {
+        TextView::new(self)
     }
 
     /// Converts into an owned `String`, copying only when `self` is a literal.
@@ -54,6 +65,30 @@ impl Text {
         }
     }
 
+    /// Decodes a Unicode scalar and its next byte index.
+    /// Returns `None` at the end, out of bounds, or on malformed UTF-8.
+    pub fn decode_char(self: Self, index: u64) -> Option<(char, u64)> {
+        if index >= self.len() { Option::None } else {
+            let first = self.byte_at(index) as u64;
+            let (count, initial, minimum) =
+                if first < 128 { ((1 as u64), first, (0 as u64)) }
+                else { if first >= 194 && first <= 223 { ((2 as u64), first - 192, (128 as u64)) }
+                else { if first >= 224 && first <= 239 { ((3 as u64), first - 224, (2048 as u64)) }
+                else { if first >= 240 && first <= 244 { ((4 as u64), first - 240, (65536 as u64)) }
+                else { ((0 as u64), (0 as u64), (0 as u64)) } } } };
+            if count == 0 || count > self.len() - index { Option::None } else {
+                let (_, scalar, valid) = while [i = (1 as u64), value = initial, valid = true]
+                    (i < count && valid) {
+                    let byte = self.byte_at(index + i) as u64;
+                    (i + 1, value * 64 + (byte & 63), byte >= 128 && byte <= 191)
+                };
+                if !valid || scalar < minimum || scalar > 1114111 || (scalar >= 55296 && scalar <= 57343) {
+                    Option::None
+                } else { Option::Some { (scalar_to_char(scalar as u32), index + count) } }
+            }
+        }
+    }
+
     /// Appends the UTF-8 byte range `start..end` to `out`.
     pub fn write(self: Self, out: String, start: u64, end: u64) -> String {
         match self {
@@ -84,3 +119,194 @@ impl PartialEq for Text {
 }
 
 impl Eq for Text {}
+
+/// A byte range of a `Text`.
+pub struct [value] TextView {
+    base: Text,
+    offset: u64,
+    length: u64
+}
+
+impl TextView {
+    /// Creates a view over the whole text without copying its bytes.
+    pub fn new(base: Text) -> Self {
+        TextView { base: base, offset: 0, length: base.len() }
+    }
+
+    /// Returns the underlying text.
+    pub fn base(self: Self) -> Text { self.base }
+
+    /// Returns the byte offset into the underlying text.
+    pub fn offset(self: Self) -> u64 { self.offset }
+
+    /// Returns the byte length of the view. O(1).
+    pub fn len(self: Self) -> u64 { self.length }
+
+    /// Returns whether the view has no remaining bytes. O(1).
+    pub fn is_empty(self: Self) -> bool { self.len() == 0 }
+
+    /// Selects a relative byte range `start..end`, or returns `None` out of bounds.
+    pub fn slice_byte(self: Self, start: u64, end: u64) -> Option<Self> {
+        if start > end || end > self.length { Option::None }
+        else { Option::Some { TextView {
+            base: self.base, offset: self.offset + start, length: end - start
+        } } }
+    }
+
+    fn decode_at(self: Self, index: u64) -> Option<(char, u64)> {
+        if index >= self.length { Option::None } else {
+            match self.base.decode_char(self.offset + index) {
+                Some(decoded) => {
+                    let (ch, next) = decoded;
+                    if next - self.offset > self.length { Option::None }
+                    else { Option::Some { (ch, next - self.offset) } }
+                },
+                None => Option::None
+            }
+        }
+    }
+
+    fn decode_last(self: Self) -> Option<(char, u64)> {
+        if self.is_empty() { Option::None } else {
+            let start = while [i = self.length - 1] (i > 0 && self.length - i < 4 && !self.is_char_boundary(i)) {
+                i - 1
+            };
+            match self.decode_at(start) {
+                Some(decoded) => {
+                    let (ch, next) = decoded;
+                    if next == self.length { Option::Some { (ch, start) } }
+                    else { Option::None }
+                },
+                None => Option::None
+            }
+        }
+    }
+
+    /// Returns the first complete Unicode scalar, or `None`.
+    pub fn head_char(self: Self) -> Option<char> {
+        self.decode_at(0).map(|decoded: (char, u64)| { let (ch, _) = decoded; ch })
+    }
+
+    /// Returns the last complete Unicode scalar, or `None`.
+    pub fn last_char(self: Self) -> Option<char> {
+        self.decode_last().map(|decoded: (char, u64)| { let (ch, _) = decoded; ch })
+    }
+
+    /// Removes the first Unicode scalar, or returns `None` if it cannot be decoded.
+    pub fn tail_char(self: Self) -> Option<Self> {
+        self.decode_at(0).and_then(|decoded: (char, u64)| {
+            let (_, next) = decoded;
+            self.slice_byte(next, self.length)
+        })
+    }
+
+    /// Removes the last Unicode scalar, or returns `None` if it cannot be decoded.
+    pub fn init_char(self: Self) -> Option<Self> {
+        self.decode_last().and_then(|decoded: (char, u64)| {
+            let (_, start) = decoded;
+            self.slice_byte(0, start)
+        })
+    }
+
+    pub fn head_byte(self: Self) -> Option<u8> { self.byte_at(0) }
+
+    pub fn last_byte(self: Self) -> Option<u8> {
+        if self.is_empty() { Option::None } else { self.byte_at(self.length - 1) }
+    }
+
+    pub fn tail_byte(self: Self) -> Option<Self> { self.slice_byte(1, self.length) }
+
+    pub fn init_byte(self: Self) -> Option<Self> {
+        if self.is_empty() { Option::None } else { self.slice_byte(0, self.length - 1) }
+    }
+
+    /// Reads a byte relative to this view, or returns `None` out of bounds.
+    pub fn byte_at(self: Self, index: u64) -> Option<u8> {
+        if index >= self.len() { Option::None }
+        else { Option::Some { self.base.byte_at(self.offset + index) } }
+    }
+
+    fn is_char_boundary(self: Self, index: u64) -> bool {
+        if index > self.len() { false }
+        else { if self.offset + index == self.base.len() { true }
+        else {
+            let byte = self.base.byte_at(self.offset + index);
+            byte < 128 || byte >= 192
+        } }
+    }
+
+    /// Appends a relative byte range, or returns `None` for invalid bounds.
+    /// Both endpoints must be UTF-8 character boundaries.
+    pub fn write(self: Self, out: String, start: u64, end: u64) -> Option<String> {
+        if start > end || !self.is_char_boundary(start) || !self.is_char_boundary(end) {
+            Option::None
+        } else {
+            Option::Some { self.base.write(out, self.offset + start, self.offset + end) }
+        }
+    }
+
+    /// Converts the view to a string, or returns `None` at an unaligned boundary.
+    pub fn to_string(self: Self) -> Option<String> {
+        if !self.is_char_boundary(0) || !self.is_char_boundary(self.length) { Option::None }
+        else { if self.offset == 0 && self.length == self.base.len() { Option::Some { self.base.to_string() } }
+        else { self.write(String::new(), 0, self.length) } }
+    }
+
+    /// Slices literal suffixes without copying; materializes other subranges.
+    /// Returns `None` at an unaligned boundary of a subrange.
+    pub fn to_text(self: Self) -> Option<Text> {
+        if self.offset == 0 && self.length == self.base.len() { Option::Some { self.base } }
+        else { if !self.is_char_boundary(0) || !self.is_char_boundary(self.length) { Option::None }
+        else { match self.base {
+            Literal(value) => if self.length == self.base.len() - self.offset {
+                Option::Some { Text::Literal { core::intrinsic::str::slice(value, self.offset) } }
+            } else { self.to_string().map(|value: String| Text::from_string(value)) },
+            Owned(_) => self.to_string().map(|value: String| Text::from_string(value))
+        } } }
+    }
+
+    /// Returns whether the remaining bytes equal `other`.
+    pub fn eq_str(self: Self, other: str) -> bool {
+        self == Text::from_str(other).view()
+    }
+}
+
+impl PartialEq for TextView {
+    fn eq(self: Self, other: Self) -> bool {
+        let len = self.len();
+        if len != other.len() {
+            false
+        } else {
+            let (_, equal) = while [index = (0 as u64), equal = true] (index < len && equal) {
+                (index + 1, self.base.byte_at(self.offset + index) == other.base.byte_at(other.offset + index))
+            };
+            equal
+        }
+    }
+}
+
+impl Eq for TextView {}
+
+impl Display for TextView {
+    /// Replaces incomplete boundary characters with U+FFFD.
+    fn fmt(self: Self) -> Format {
+        let (start, prefix, _) = while [start = (0 as u64), prefix = Format::Empty, scanning = true]
+            (start < self.len() && scanning) {
+            match self.byte_at(start) {
+                Some(byte) => if byte >= 128 && byte <= 191 {
+                    (start + 1, prefix.append(Format::Character { '\u{fffd}' }), true)
+                } else { (start, prefix, false) },
+                None => (start, prefix, false)
+            }
+        };
+        let end = while [end = self.length] (end > start && !self.is_char_boundary(end)) {
+            end - 1
+        };
+        let text = self.slice_byte(start, end).and_then(|view: TextView| view.to_text());
+        let body = prefix.append(match text {
+            Some(value) => value.fmt(),
+            None => Format::Empty
+        });
+        if end < self.length { body.append(Format::Character { '\u{fffd}' }) } else { body }
+    }
+}

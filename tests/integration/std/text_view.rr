@@ -1,0 +1,184 @@
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin text_view %rrc_linker
+// RUN: %std_rene_build/release/text_view%exe_ext
+
+import std::string::String;
+import std::text::Text;
+import std::text::TextView;
+
+fn check(value: bool) {
+    if !value { core::intrinsic::panic::panic() }
+}
+
+fn is_literal(text: Text) -> bool {
+    match text { Literal(_) => true, Owned(_) => false }
+}
+
+fn check_view(base: Text) {
+    let whole = TextView::new(base);
+    let suffix = whole.tail_char().unwrap_or_panic().tail_char().unwrap_or_panic().tail_char().unwrap_or_panic();
+    check(whole.offset() == 0 && whole.len() == 9);
+    check(whole.to_string().unwrap_or_panic().eq_str("abcλ猫!"));
+    check(suffix.base() == base);
+    check(suffix.offset() == 3 && suffix.len() == 6);
+    check(!suffix.is_empty());
+    check(suffix.byte_at(0).unwrap_or_panic() == 206);
+    check(suffix.byte_at(1).unwrap_or_panic() == 187);
+    check(suffix.byte_at(5).unwrap_or_panic() == 33);
+    check(suffix.byte_at(6).is_none());
+    check(suffix.byte_at(18446744073709551615).is_none());
+    check(suffix.eq_str("λ猫!"));
+    check(!suffix.eq_str("λ猫?") && !suffix.eq_str("λ猫"));
+    check(suffix.to_string().unwrap_or_panic().eq_str("λ猫!"));
+    let suffix_text = suffix.to_text().unwrap_or_panic();
+    check(suffix_text.eq_str("λ猫!"));
+    check(is_literal(suffix_text) == is_literal(base));
+    check(suffix.write(String::from_str(">"), 2, 5).unwrap_or_panic().eq_str(">猫"));
+    check(suffix.write(String::new(), 0, 7).is_none());
+    check(suffix.write(String::new(), 3, 2).is_none());
+    check(suffix.write(String::new(), 1, 5).is_none());
+    check(suffix.write(String::new(), 0, 3).is_none());
+    check(suffix.write(String::new(), 0, 18446744073709551615).is_none());
+    check(suffix.tail_char().unwrap_or_panic().offset() == 5);
+    check(suffix.tail_char().unwrap_or_panic().eq_str("猫!"));
+    check(suffix.tail_char().unwrap_or_panic().tail_char().unwrap_or_panic().offset() == 8);
+    check(suffix.tail_char().unwrap_or_panic().tail_char().unwrap_or_panic().eq_str("!"));
+    check(suffix.slice_byte(2, suffix.len()).unwrap_or_panic() == suffix.tail_char().unwrap_or_panic());
+    check(suffix.slice_byte(6, suffix.len()).unwrap_or_panic().is_empty());
+    check(suffix.slice_byte(7, suffix.len()).is_none());
+    check(suffix.slice_byte(18446744073709551615, suffix.len()).is_none());
+    let inside = suffix.tail_byte().unwrap_or_panic();
+    check(inside.offset() == 4 && inside.len() == 5);
+    check(inside.byte_at(0).unwrap_or_panic() == 187);
+    check(inside.tail_char().is_none());
+    check(inside.to_string().is_none());
+    check(inside.to_text().is_none());
+    check(inside.write(String::new(), 0, inside.len()).is_none());
+    check(inside.tail_byte().unwrap_or_panic().eq_str("猫!"));
+    check(inside.write(String::new(), 1, 4).unwrap_or_panic().eq_str("猫"));
+    let empty = suffix.tail_char().unwrap_or_panic().tail_char().unwrap_or_panic().tail_char().unwrap_or_panic();
+    check(empty.is_empty() && empty.offset() == base.len());
+    check(empty.eq_str(""));
+    check(empty.tail_char().is_none() && empty.byte_at(0).is_none());
+    check(empty.tail_byte().is_none());
+    check(empty.to_string().unwrap_or_panic().is_empty());
+    let empty_text = empty.to_text().unwrap_or_panic();
+    check(empty_text.is_empty());
+    check(is_literal(empty_text) == is_literal(base));
+    check(empty.write(String::from_str("keep"), 0, 0).unwrap_or_panic().eq_str("keep"));
+    check(whole.eq_str("abcλ猫!"));
+    check(base.decode_char(4).is_none());
+    check(base.decode_char(base.len()).is_none());
+    check(base.decode_char(18446744073709551615).is_none());
+}
+
+fn check_scalars(base: Text) {
+    let view = base.view();
+    let rest = view.tail_char().unwrap_or_panic();
+    check(rest.offset() == 1);
+    let rest = rest.tail_char().unwrap_or_panic();
+    check(rest.offset() == 2);
+    let rest = rest.tail_char().unwrap_or_panic();
+    check(rest.offset() == 4);
+    let rest = rest.tail_char().unwrap_or_panic();
+    check(rest.offset() == 7);
+    let rest = rest.tail_char().unwrap_or_panic();
+    check(rest.offset() == 11);
+    let rest = rest.tail_char().unwrap_or_panic();
+    check(rest.is_empty() && rest.tail_char().is_none());
+    let (ch, next) = base.decode_char(0).unwrap_or_panic();
+    check(ch == '\0' && next == 1);
+    let (ch, next) = base.decode_char(7).unwrap_or_panic();
+    check(ch == '🦀' && next == 11);
+    let (ch, next) = base.decode_char(11).unwrap_or_panic();
+    check(ch == '\u{10ffff}' && next == 15);
+    check(view.offset() == 0);
+}
+
+fn check_bounded(base: Text) {
+    let whole = base.view();
+    check(whole.head_char().unwrap_or_panic() == 'a');
+    check(whole.last_char().unwrap_or_panic() == 'z');
+    check(whole.head_byte().unwrap_or_panic() == 97);
+    check(whole.last_byte().unwrap_or_panic() == 122);
+    let middle = whole.tail_char().unwrap_or_panic().init_char().unwrap_or_panic();
+    check(middle.offset() == 1 && middle.len() == 9);
+    check(middle.base() == base);
+    check(middle.eq_str("λ猫🦀"));
+    check(middle.to_string().unwrap_or_panic().eq_str("λ猫🦀"));
+    check(middle.to_text().unwrap_or_panic().eq_str("λ猫🦀"));
+    check(middle.write(String::new(), 2, 5).unwrap_or_panic().eq_str("猫"));
+    check(middle.byte_at(9).is_none());
+    check(middle.slice_byte(10, middle.len()).is_none());
+    check(middle.write(String::new(), 0, 10).is_none());
+    check(middle.head_char().unwrap_or_panic() == 'λ');
+    check(middle.last_char().unwrap_or_panic() == '🦀');
+    let trimmed = middle.init_char().unwrap_or_panic();
+    check(trimmed.eq_str("λ猫") && trimmed.len() == 5);
+    check(trimmed.last_char().unwrap_or_panic() == '猫');
+    let trimmed = trimmed.init_char().unwrap_or_panic();
+    check(trimmed.last_char().unwrap_or_panic() == 'λ');
+    check(trimmed.head_char().unwrap_or_panic() == 'λ');
+    check(trimmed.init_char().unwrap_or_panic().is_empty());
+    check(trimmed.tail_char().unwrap_or_panic().is_empty());
+    let empty = whole.slice_byte(1, 1).unwrap_or_panic();
+    check(empty.head_char().is_none() && empty.last_char().is_none());
+    check(empty.tail_char().is_none() && empty.init_char().is_none());
+    check(empty.head_byte().is_none() && empty.last_byte().is_none());
+    check(empty.tail_byte().is_none() && empty.init_byte().is_none());
+    check(empty.to_string().unwrap_or_panic().is_empty());
+    check(empty.to_text().unwrap_or_panic().is_empty());
+    check(whole.slice_byte(3, 2).is_none());
+    check(whole.slice_byte(0, 12).is_none());
+    check(whole.slice_byte(0, 18446744073709551615).is_none());
+    check(whole.slice_byte(18446744073709551615, 18446744073709551615).is_none());
+    check(whole.slice_byte(1, 10).unwrap_or_panic() == middle);
+    check(middle.slice_byte(2, 5).unwrap_or_panic().eq_str("猫"));
+    let short = whole.slice_byte(0, 2).unwrap_or_panic();
+    check(short.head_char().unwrap_or_panic() == 'a');
+    check(short.last_char().is_none() && short.init_char().is_none());
+    check(short.to_string().is_none() && short.to_text().is_none());
+    check(short.write(String::new(), 0, 2).is_none());
+    let fragment = short.tail_char().unwrap_or_panic();
+    check(fragment.len() == 1 && fragment.head_byte().unwrap_or_panic() == 206);
+    check(fragment.head_char().is_none() && fragment.tail_char().is_none());
+    check(fragment.tail_char().is_none());
+    check(middle.init_byte().unwrap_or_panic().last_char().is_none());
+    check(middle.tail_byte().unwrap_or_panic().head_char().is_none());
+    check(middle.init_byte().unwrap_or_panic().len() == 8);
+    check(middle.tail_byte().unwrap_or_panic().len() == 8);
+    check(whole.init_byte().unwrap_or_panic().eq_str("aλ猫🦀"));
+    check(whole.tail_byte().unwrap_or_panic().eq_str("λ猫🦀z"));
+    check(whole.eq_str("aλ猫🦀z"));
+}
+
+#[main]
+pub fn main() {
+    let literal = Text::from_str("abcλ猫!");
+    let owned = Text::from_string(String::from_str("abcλ").push_str("猫!"));
+    check_bounded(Text::from_str("aλ猫🦀z"));
+    check_bounded(Text::from_string(String::from_str("aλ猫🦀z")));
+    check_view(literal);
+    check_view(owned);
+    match literal.view().to_text().unwrap_or_panic() {
+        Literal(value) => check(value == "abcλ猫!"),
+        Owned(_) => core::intrinsic::panic::panic()
+    };
+    match owned.view().to_text().unwrap_or_panic() {
+        Owned(value) => check(value.eq_str("abcλ猫!")),
+        Literal(_) => core::intrinsic::panic::panic()
+    };
+    check_scalars(Text::from_str("\0aé猫🦀\u{10ffff}"));
+    check_scalars(Text::from_string(String::from_str("\0aé猫🦀\u{10ffff}")));
+    check(Text::from_str("a\u{301}").view().tail_char().unwrap_or_panic().eq_str("\u{301}"));
+    check(Text::from_str("a\u{301}").view().tail_char().unwrap_or_panic().tail_char().unwrap_or_panic().is_empty());
+    check(literal.view().tail_char().unwrap_or_panic().tail_char().unwrap_or_panic().tail_char().unwrap_or_panic() == owned.view().tail_char().unwrap_or_panic().tail_char().unwrap_or_panic().tail_char().unwrap_or_panic());
+    check(Text::from_str("").view() == Text::from_string(String::new()).view());
+    let original = String::from_str("abcλ猫!");
+    let view = Text::from_string(original).view().tail_char().unwrap_or_panic().tail_char().unwrap_or_panic().tail_char().unwrap_or_panic();
+    let changed = original.push_str("changed");
+    check(view.eq_str("λ猫!") && changed.eq_str("abcλ猫!changed"));
+    let invalid = Text::from_str(core::intrinsic::str::slice("λ", 1)).view();
+    check(invalid.tail_char().is_none());
+    check(invalid.to_string().is_none());
+    check(invalid.write(String::new(), 0, 1).is_none());
+}

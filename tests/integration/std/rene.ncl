@@ -24,6 +24,7 @@
     option = { kind = 'executable, path = "option.rr" },
     rtqueue = { kind = 'executable, path = "rtqueue.rr" },
     string = { kind = 'executable, path = "string.rr" },
+    text_view = { kind = 'executable, path = "text_view.rr" },
     wavl = { kind = 'executable, path = "wavl.rr" },
   },
 }

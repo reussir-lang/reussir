@@ -212,33 +212,10 @@ fn field_formats(fields: List<Field>) -> List<Format> {
     reversed.reverse()
 }
 
-// Strict UTF-8 decode of the scalar at `index`; panics on malformed input.
-// Returns the scalar and the index of the next one.
-fn decode(text: Text, index: u64) -> (u64, u64) {
-    let first = text.byte_at(index) as u64;
-    // Lead byte ranges: 0x00..0x7F, 0xC2..0xDF, 0xE0..0xEF, 0xF0..0xF4.
-    let (count, initial, minimum) =
-        if first < 128 { ((1 as u64), first, (0 as u64)) }
-        else { if first >= 194 && first <= 223 { ((2 as u64), first - 192, (128 as u64)) }
-        else { if first >= 224 && first <= 239 { ((3 as u64), first - 224, (2048 as u64)) }
-        else { if first >= 240 && first <= 244 { ((4 as u64), first - 240, (65536 as u64)) }
-        else { core::intrinsic::panic::panic() } } } };
-    if count > text.len() - index { core::intrinsic::panic::panic() };
-    let (_, scalar) = while [i = (1 as u64), value = initial] (i < count) {
-        let byte = text.byte_at(index + i) as u64;
-        if byte < 128 || byte > 191 { core::intrinsic::panic::panic() };
-        (i + 1, value * 64 + byte - 128)
-    };
-    // Reject overlong forms, values above 0x10FFFF, and surrogates 0xD800..0xDFFF.
-    if scalar < minimum || scalar > 1114111 || (scalar >= 55296 && scalar <= 57343) {
-        core::intrinsic::panic::panic()
-    } else { (scalar, index + count) }
-}
-
 fn text_info(text: Text) -> (u64, bool) {
     let (_, width, multiline) = while [i = (0 as u64), n = (0 as u64), lines = false] (i < text.len()) {
-        let (ch, next) = decode(text, i);
-        (next, n + 1, lines || ch == 10)
+        let (ch, next) = text.decode_char(i).unwrap_or_panic();
+        (next, n + 1, lines || ch == '\n')
     };
     (width, multiline)
 }
@@ -279,8 +256,8 @@ enum Task { Visit(Format), Emit(Token) }
 fn text_tokens(text: Text, out: List<Token>) -> List<Token> {
     let (end, start, width, tokens) = while [i = (0 as u64), start = (0 as u64),
         width = (0 as u64), tokens = out] (i < text.len()) {
-        let (scalar, next) = decode(text, i);
-        if scalar == 10 {
+        let (scalar, next) = text.decode_char(i).unwrap_or_panic();
+        if scalar == '\n' {
             let tokens = if i == start { tokens } else {
                 List::Cons { Token::Text { text, start, i, width }, tokens }
             };
