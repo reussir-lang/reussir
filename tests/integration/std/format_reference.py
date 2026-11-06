@@ -72,6 +72,8 @@ def render(doc, width):
         doc = expand(doc)
         if doc[0] == "append":
             return scope(doc[1], indent) + scope(doc[2], indent)
+        if doc[0] == "ansi":
+            return scope(doc[1], indent)
         if doc[0] == "nest":
             return scope(doc[2], indent + doc[1])
         return [(doc, indent)]
@@ -102,6 +104,8 @@ def render(doc, width):
         kind = doc[0]
         if kind == "text":
             text(doc[1])
+        elif kind == "ansi":
+            emit(doc[1], indent, flattened)
         elif kind == "append":
             emit(doc[1], indent, flattened)
             emit(doc[2], indent, flattened)
@@ -135,6 +139,8 @@ def commands(doc):
         return [[0, ATOMS.index(doc[1])]]
     if kind in ("line", "soft", "hard"):
         return [[{"line": 1, "soft": 2, "hard": 3}[kind]]]
+    if kind == "ansi":
+        return commands(doc[1]) + [[9]]
     if kind == "append":
         return commands(doc[1]) + commands(doc[2]) + [[4]]
     if kind == "nest":
@@ -145,6 +151,11 @@ def commands(doc):
 
 
 def generate(rng, depth):
+    doc = generate_body(rng, depth)
+    return ("ansi", doc) if rng.randrange(4) == 0 else doc
+
+
+def generate_body(rng, depth):
     if depth == 0:
         return ("text", rng.choice(ATOMS))
     choice = rng.randrange(6)

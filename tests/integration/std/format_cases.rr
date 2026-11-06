@@ -1,7 +1,12 @@
 // RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin format_cases %rrc_linker
 // RUN: %python %S/format_reference.py %std_rene_build/release/format_cases%exe_ext
+// RUN: %python %S/console_reference.py %std_rene_build/release/format_cases%exe_ext
 
 import std::format::Format;
+import std::console::Ansi;
+import std::console::Color;
+import std::console::ColorChoice;
+import std::console::Stream;
 import std::format::Display;
 import std::format::Options;
 import std::format::PrintSuccess;
@@ -35,6 +40,7 @@ fn build(count: i32) -> Format {
             5 => List::Cons { stack.head().unwrap_or_panic().nest(read() as u64), stack.tail() },
             6 => List::Cons { stack.head().unwrap_or_panic().group(), stack.tail() },
             8 => List::Cons { stack.head().unwrap_or_panic().fill(), stack.tail() },
+            9 => List::Cons { stack.head().unwrap_or_panic().ansi(Ansi::Foreground { Color::Red }), stack.tail() },
             7 => {
                 let n = read();
                 let (_, rest, items) = while [j = (0 as i32), rest = stack, items = List::Nil] (j < n) {
@@ -70,6 +76,23 @@ pub fn main() {
                 _ => core::intrinsic::panic::panic()
             }
         }
+    };
+    if cases == -4 {
+        let doc = std::console::is_tty(Stream::Stdin).fmt().append("/".fmt())
+            .append(Stream::Stdout.is_tty().fmt()).append("/".fmt()).append(Stream::Stderr.is_tty().fmt());
+        if doc.dump_stdout(Options::default()).is_err() { core::intrinsic::panic::panic() }
+    };
+    if cases <= -5 {
+        let doc = "red".fmt().ansi(Ansi::Foreground { Color::Red });
+        let result = match cases {
+            -5 => doc.dump_stdout(Options::default()),
+            -6 => doc.dump_stderr(Options::default()),
+            -7 => doc.dump_stdout_with_color(Options::default(), ColorChoice::Always),
+            -8 => doc.dump_stdout_with_color(Options::default(), ColorChoice::Never),
+            -9 => doc.render(Options::default()).dump_stderr_with_color(ColorChoice::Always),
+            _ => doc.render(Options::default()).dump_stderr_with_color(ColorChoice::Never)
+        };
+        if result.is_err() { core::intrinsic::panic::panic() }
     };
     let _ = while [i = (0 as i32)] (i < cases) {
         let width = read() as u64;

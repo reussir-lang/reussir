@@ -3,6 +3,8 @@
 // CHECK: format tests passed
 
 import std::format::Format;
+import std::console::Ansi;
+import std::console::Color;
 import std::format::Display;
 import std::format::Options;
 import std::format::BreakSpec;
@@ -145,6 +147,84 @@ fn deep() {
     check(a == b);
 }
 
+
+fn ansi() {
+    let red = Ansi::Foreground { Color::Red };
+    let blue = Ansi::Foreground { Color::Blue };
+    expect("λ猫".fmt().ansi(red), 2, "\u{1b}[31mλ猫\u{1b}[0m");
+    expect(Format::Ansi { red, Format::Empty }, 0, "\u{1b}[31m\u{1b}[0m");
+    let words = "aa".fmt().ansi(red).append(Format::Line).append("bb".fmt());
+    expect(words.group(), 5, "\u{1b}[31maa\u{1b}[0m bb");
+    expect(words.group(), 4, "\u{1b}[31maa\u{1b}[0m\nbb");
+    expect(words.fill(), 5, "\u{1b}[31maa\u{1b}[0m bb");
+    expect(words.fill(), 4, "\u{1b}[31maa\u{1b}[0m\nbb");
+    let nested = "a".fmt().append("b".fmt().ansi(blue)).append("c".fmt()).ansi(red);
+    expect(nested, 3, "\u{1b}[31ma\u{1b}[34mb\u{1b}[0m\u{1b}[31mc\u{1b}[0m");
+    check(nested.render(Options::default()).to_plain_string().eq_str("abc"));
+    expect("x".fmt().ansi(Ansi::Bold).ansi(red), 1,
+        "\u{1b}[31m\u{1b}[1mx\u{1b}[0m\u{1b}[31m\u{1b}[0m");
+    expect("a".fmt().append("b".fmt().ansi(Ansi::Reset)).append("c".fmt()).ansi(red), 3,
+        "\u{1b}[31ma\u{1b}[0mb\u{1b}[0m\u{1b}[31mc\u{1b}[0m");
+    expect("x".fmt().ansi(Ansi::Background { Color::BrightBlue }).ansi(red), 1,
+        "\u{1b}[31m\u{1b}[104mx\u{1b}[0m\u{1b}[31m\u{1b}[0m");
+    expect("a".fmt().append(Format::Line.ansi(red)), 80, "a\u{1b}[31m\u{1b}[0m");
+    expect(Format::Hardline.append("x".fmt().ansi(red)).nest(2), 80,
+        "\n  \u{1b}[31mx\u{1b}[0m");
+    expect("a".fmt().append(Format::Line).ansi(red).append("b".fmt()), 80,
+        "\u{1b}[31ma \u{1b}[0mb");
+    expect("a".fmt().append(Format::Line).group().ansi(red).append(Format::Hardline), 80,
+        "\u{1b}[31ma\u{1b}[0m\n");
+    expect("a".fmt().append(Format::Line.ansi(blue)).append("b".fmt()).ansi(red), 80,
+        "\u{1b}[31ma\u{1b}[34m \u{1b}[0m\u{1b}[31mb\u{1b}[0m");
+    let (_, deep) = while [i = (0 as i32), doc = "x".fmt()] (i < 10000) {
+        (i + 1, doc.ansi(red))
+    };
+    let rendered = deep.render(Options::default());
+    check(rendered.to_plain_string().eq_str("x"));
+    check(rendered.to_string().len() == 10000 * 5 + 9999 * 9 + 4 + 1);
+    check(String::from_str(Ansi::Foreground { Color::Black }.escape()).eq_str("\u{1b}[30m"));
+    check(String::from_str(Ansi::Foreground { Color::Red }.escape()).eq_str("\u{1b}[31m"));
+    check(String::from_str(Ansi::Foreground { Color::Green }.escape()).eq_str("\u{1b}[32m"));
+    check(String::from_str(Ansi::Foreground { Color::Yellow }.escape()).eq_str("\u{1b}[33m"));
+    check(String::from_str(Ansi::Foreground { Color::Blue }.escape()).eq_str("\u{1b}[34m"));
+    check(String::from_str(Ansi::Foreground { Color::Magenta }.escape()).eq_str("\u{1b}[35m"));
+    check(String::from_str(Ansi::Foreground { Color::Cyan }.escape()).eq_str("\u{1b}[36m"));
+    check(String::from_str(Ansi::Foreground { Color::White }.escape()).eq_str("\u{1b}[37m"));
+    check(String::from_str(Ansi::Foreground { Color::BrightBlack }.escape()).eq_str("\u{1b}[90m"));
+    check(String::from_str(Ansi::Foreground { Color::BrightRed }.escape()).eq_str("\u{1b}[91m"));
+    check(String::from_str(Ansi::Foreground { Color::BrightGreen }.escape()).eq_str("\u{1b}[92m"));
+    check(String::from_str(Ansi::Foreground { Color::BrightYellow }.escape()).eq_str("\u{1b}[93m"));
+    check(String::from_str(Ansi::Foreground { Color::BrightBlue }.escape()).eq_str("\u{1b}[94m"));
+    check(String::from_str(Ansi::Foreground { Color::BrightMagenta }.escape()).eq_str("\u{1b}[95m"));
+    check(String::from_str(Ansi::Foreground { Color::BrightCyan }.escape()).eq_str("\u{1b}[96m"));
+    check(String::from_str(Ansi::Foreground { Color::BrightWhite }.escape()).eq_str("\u{1b}[97m"));
+    check(String::from_str(Ansi::Foreground { Color::Default }.escape()).eq_str("\u{1b}[39m"));
+    check(String::from_str(Ansi::Background { Color::Black }.escape()).eq_str("\u{1b}[40m"));
+    check(String::from_str(Ansi::Background { Color::Red }.escape()).eq_str("\u{1b}[41m"));
+    check(String::from_str(Ansi::Background { Color::Green }.escape()).eq_str("\u{1b}[42m"));
+    check(String::from_str(Ansi::Background { Color::Yellow }.escape()).eq_str("\u{1b}[43m"));
+    check(String::from_str(Ansi::Background { Color::Blue }.escape()).eq_str("\u{1b}[44m"));
+    check(String::from_str(Ansi::Background { Color::Magenta }.escape()).eq_str("\u{1b}[45m"));
+    check(String::from_str(Ansi::Background { Color::Cyan }.escape()).eq_str("\u{1b}[46m"));
+    check(String::from_str(Ansi::Background { Color::White }.escape()).eq_str("\u{1b}[47m"));
+    check(String::from_str(Ansi::Background { Color::BrightBlack }.escape()).eq_str("\u{1b}[100m"));
+    check(String::from_str(Ansi::Background { Color::BrightRed }.escape()).eq_str("\u{1b}[101m"));
+    check(String::from_str(Ansi::Background { Color::BrightGreen }.escape()).eq_str("\u{1b}[102m"));
+    check(String::from_str(Ansi::Background { Color::BrightYellow }.escape()).eq_str("\u{1b}[103m"));
+    check(String::from_str(Ansi::Background { Color::BrightBlue }.escape()).eq_str("\u{1b}[104m"));
+    check(String::from_str(Ansi::Background { Color::BrightMagenta }.escape()).eq_str("\u{1b}[105m"));
+    check(String::from_str(Ansi::Background { Color::BrightCyan }.escape()).eq_str("\u{1b}[106m"));
+    check(String::from_str(Ansi::Background { Color::BrightWhite }.escape()).eq_str("\u{1b}[107m"));
+    check(String::from_str(Ansi::Background { Color::Default }.escape()).eq_str("\u{1b}[49m"));
+    check(String::from_str(Ansi::Bold.escape()).eq_str("\u{1b}[1m"));
+    check(String::from_str(Ansi::Dim.escape()).eq_str("\u{1b}[2m"));
+    check(String::from_str(Ansi::Italic.escape()).eq_str("\u{1b}[3m"));
+    check(String::from_str(Ansi::Underline.escape()).eq_str("\u{1b}[4m"));
+    check(String::from_str(Ansi::Reverse.escape()).eq_str("\u{1b}[7m"));
+    check(String::from_str(Ansi::Strikethrough.escape()).eq_str("\u{1b}[9m"));
+    check(String::from_str(Ansi::Reset.escape()).eq_str("\u{1b}[0m"));
+}
+
 #[main]
 pub fn main() {
     basic();
@@ -152,6 +232,7 @@ pub fn main() {
     records();
     strings_and_traits();
     deep();
+    ansi();
     match "format tests passed\n".fmt().dump_stdout(Options::default()) {
         Ok(PrintSuccess::Complete) => {},
         Err(_) => core::intrinsic::panic::panic()

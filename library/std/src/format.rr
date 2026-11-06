@@ -18,6 +18,10 @@
 //! broken. Dumps flush the stream and return `Result<PrintSuccess, PrintError>`;
 //! they do not add a newline. Append `Hardline` to request one.
 //!
+//! `Ansi(style, body)` adds scoped color or attributes without affecting width.
+//! Dumps auto-detect the destination terminal; `dump_*_with_color` overrides this.
+//! `RenderedText::to_string` includes ANSI; `to_plain_string` omits ANSI nodes.
+//!
 //! Layout uses an iterative batch scan/print algorithm with linear token
 //! storage. It never backtracks through document alternatives. See Oppen,
 //! "Pretty Printing" (1979), and prettyplease's conditional break tokens.
@@ -27,6 +31,10 @@ import std::string::String;
 import std::string::RawString;
 import std::option::Option;
 import std::result::Result;
+import std::console::Ansi;
+import std::console::Color;
+import std::console::ColorChoice;
+import std::console::Stream;
 
 /// How optional breaks owned by a group are chosen.
 pub enum [value] BreakMode { Consistent, Fill }
@@ -73,7 +81,9 @@ pub enum Format {
     Group(BreakMode, Format),
     Break(BreakSpec),
     Tuple(List<Format>),
-    Struct(String, Fields)
+    Struct(String, Fields),
+    /// A scoped, zero-width ANSI change. Nested nodes restore their parent style.
+    Ansi(Ansi, Format)
 }
 
 pub trait Display {
@@ -102,6 +112,7 @@ impl Format {
     pub fn nest(self: Self, amount: u64) -> Self { Format::Nest { amount, self } }
     pub fn group(self: Self) -> Self { Format::Group { BreakMode::Consistent, self } }
     pub fn fill(self: Self) -> Self { Format::Group { BreakMode::Fill, self } }
+    pub fn ansi(self: Self, style: Ansi) -> Self { Format::Ansi { style, self } }
 
     /// Width counts Unicode scalars, not bytes or terminal cells. Literal LF
     /// breaks lines; tabs and other control characters are preserved.
@@ -115,11 +126,18 @@ impl Format {
         }
     }
     /// Writes exactly this format, without adding a final newline, then flushes.
+    /// ANSI is enabled when stdout is a terminal.
     pub fn dump_stdout(self: Self, options: Options) -> Result<PrintSuccess, PrintError> {
         self.render(options).dump_stdout()
     }
     pub fn dump_stderr(self: Self, options: Options) -> Result<PrintSuccess, PrintError> {
         self.render(options).dump_stderr()
+    }
+    pub fn dump_stdout_with_color(self: Self, options: Options, color: ColorChoice) -> Result<PrintSuccess, PrintError> {
+        self.render(options).dump_stdout_with_color(color)
+    }
+    pub fn dump_stderr_with_color(self: Self, options: Options, color: ColorChoice) -> Result<PrintSuccess, PrintError> {
+        self.render(options).dump_stderr_with_color(color)
     }
 }
 
@@ -258,7 +276,9 @@ enum Token {
     Begin(BreakMode, u64),
     End,
     Nest(u64),
-    Unnest
+    Unnest,
+    PushAnsi(Ansi),
+    PopAnsi
 }
 enum Task { Visit(Format), Emit(Token) }
 
@@ -310,6 +330,9 @@ fn tokenize(document: Format, indent: u64) -> List<Token> {
                     Group(mode, body) => (List::Cons { Task::Visit { body },
                         List::Cons { Task::Emit { Token::End }, rest } },
                         List::Cons { Token::Begin { mode, 0 }, out }),
+                    Format::Ansi(style, body) => (List::Cons { Task::Visit { body },
+                        List::Cons { Task::Emit { Token::PopAnsi }, rest } },
+                        List::Cons { Token::PushAnsi { style }, out }),
                     Tuple(items) => (List::Cons { Task::Visit {
                         delimited(Format::Literal { "(" }, ")", items, indent, false, true)
                     }, rest }, out),
@@ -367,37 +390,105 @@ fn measure(reversed: List<Token>, cap: u64) -> List<Token> {
 }
 
 /// Resolved output. Text ranges are UTF-8 byte offsets, with an exclusive end.
-pub enum Chunk { Text(TextSource, u64, u64), Character(char), Spaces(u64), Newline }
+pub enum Chunk {
+    Text(TextSource, u64, u64), Character(char), Spaces(u64), Newline,
+    PushAnsi(Ansi), PopAnsi
+}
 /// A reusable layout with no remaining optional breaks or group decisions.
 pub struct RenderedText { chunks: List<Chunk> }
 
 impl RenderedText {
     pub fn chunks(self: Self) -> List<Chunk> { self.chunks }
-    /// Materializes the resolved chunks into one owned UTF-8 buffer.
-    pub fn to_string(self: Self) -> String {
-        let (_, output) = while [rest = self.chunks, out = String::new()] (!rest.is_nil()) {
+    /// Materializes UTF-8 including explicitly requested ANSI styles.
+    /// Each completed ANSI scope restores its parent, or resets at the root.
+    pub fn to_string(self: Self) -> String { self.materialize(true) }
+    /// Omits ANSI nodes without changing the chosen layout.
+    pub fn to_plain_string(self: Self) -> String { self.materialize(false) }
+
+    fn materialize(self: Self, ansi: bool) -> String {
+        let (_, output, _, _) = while [rest = self.chunks, out = String::new(),
+            style = AnsiState::default(), stack = List::Nil] (!rest.is_nil()) {
             match rest {
-                Nil => (rest, out),
-                Cons(chunk, tail) => (tail, match chunk {
-                    Text(text, start, end) => text.write(out, start, end),
-                    Character(ch) => out.push_char(ch),
-                    Newline => out.push_char('\n'),
+                Nil => (rest, out, style, stack),
+                Cons(chunk, tail) => match chunk {
+                    PushAnsi(change) => if ansi {
+                        (tail, out.push_str(change.escape()), style.apply(change), List::Cons { style, stack })
+                    } else { (tail, out, style, stack) },
+                    PopAnsi => if ansi {
+                        match stack {
+                            Nil => core::intrinsic::panic::panic(),
+                            Cons(previous, parents) => (tail, previous.restore(out), previous, parents)
+                        }
+                    } else { (tail, out, style, stack) },
+                    Text(text, start, end) => (tail, text.write(out, start, end), style, stack),
+                    Character(ch) => (tail, out.push_char(ch), style, stack),
+                    Newline => (tail, out.push_char('\n'), style, stack),
                     Spaces(n) => {
                         let (_, text) = while [i = (0 as u64), text = out] (i < n) {
                             (i + 1, text.push_char(' '))
                         };
-                        text
+                        (tail, text, style, stack)
                     }
-                })
+                }
             }
         };
         output
     }
+    /// Auto-detects stdout independently from stderr.
     pub fn dump_stdout(self: Self) -> Result<PrintSuccess, PrintError> {
-        print_result(write_stdout(self.to_string().into_raw()))
+        self.dump_stdout_with_color(ColorChoice::Auto)
     }
     pub fn dump_stderr(self: Self) -> Result<PrintSuccess, PrintError> {
-        print_result(write_stderr(self.to_string().into_raw()))
+        self.dump_stderr_with_color(ColorChoice::Auto)
+    }
+    pub fn dump_stdout_with_color(self: Self, color: ColorChoice) -> Result<PrintSuccess, PrintError> {
+        print_result(write_stdout(self.materialize(color.enabled(Stream::Stdout)).into_raw()))
+    }
+    pub fn dump_stderr_with_color(self: Self, color: ColorChoice) -> Result<PrintSuccess, PrintError> {
+        print_result(write_stderr(self.materialize(color.enabled(Stream::Stderr)).into_raw()))
+    }
+}
+
+// Save the effective style, so restoration is constant work even for deep scopes.
+struct [value] AnsiState {
+    foreground: Color, background: Color,
+    bold: bool, dim: bool, italic: bool, underline: bool, reverse: bool, strikethrough: bool
+}
+
+impl AnsiState {
+    fn default() -> Self {
+        AnsiState { foreground: Color::Default, background: Color::Default,
+            bold: false, dim: false, italic: false, underline: false, reverse: false, strikethrough: false }
+    }
+    fn apply(self: Self, change: Ansi) -> Self {
+        match change {
+            Reset => AnsiState::default(),
+            _ => AnsiState {
+                foreground: match change { Foreground(c) => c, _ => self.foreground },
+                background: match change { Background(c) => c, _ => self.background },
+                bold: match change { Bold => true, _ => self.bold },
+                dim: match change { Dim => true, _ => self.dim },
+                italic: match change { Italic => true, _ => self.italic },
+                underline: match change { Underline => true, _ => self.underline },
+                reverse: match change { Reverse => true, _ => self.reverse },
+                strikethrough: match change { Strikethrough => true, _ => self.strikethrough }
+            }
+        }
+    }
+    fn restore(self: Self, out: String) -> String {
+        let out = out.push_str(Ansi::Reset.escape());
+        let out = if self.bold { out.push_str(Ansi::Bold.escape()) } else { out };
+        let out = if self.dim { out.push_str(Ansi::Dim.escape()) } else { out };
+        let out = if self.italic { out.push_str(Ansi::Italic.escape()) } else { out };
+        let out = if self.underline { out.push_str(Ansi::Underline.escape()) } else { out };
+        let out = if self.reverse { out.push_str(Ansi::Reverse.escape()) } else { out };
+        let out = if self.strikethrough { out.push_str(Ansi::Strikethrough.escape()) } else { out };
+        let out = match self.foreground {
+            Default => out, _ => out.push_str(Ansi::Foreground { self.foreground }.escape())
+        };
+        match self.background {
+            Default => out, _ => out.push_str(Ansi::Background { self.background }.escape())
+        }
     }
 }
 
@@ -406,7 +497,7 @@ struct Printer {
     out: List<Chunk>,
     column: u64,
     indent: u64,
-    pending: u64,
+    pending: List<Chunk>,
     width: u64
 }
 
@@ -417,31 +508,43 @@ fn add_indent(a: u64, b: u64) -> u64 {
 }
 
 impl Printer {
-    fn flush_pending(self: Self) -> List<Chunk> {
-        if self.pending == 0 { self.out } else { List::Cons { Chunk::Spaces { self.pending }, self.out } }
+    fn control(self: Self, chunk: Chunk) -> Self {
+        Printer { out: self.out, column: self.column, indent: self.indent,
+            pending: List::Cons { chunk, self.pending }, width: self.width }
+    }
+    // Delay controls with layout spaces to preserve their order. At line ends,
+    // discard spaces while retaining controls that close or restore ANSI scopes.
+    fn flush_pending(self: Self, spaces: bool) -> List<Chunk> {
+        self.pending.reverse().fold_left(self.out, |out: List<Chunk>, chunk: Chunk|
+            match chunk {
+                Spaces(_) => if spaces { List::Cons { chunk, out } } else { out },
+                _ => List::Cons { chunk, out }
+            })
     }
     fn text(self: Self, text: TextSource, width: u64) -> Self {
         self.text_range(text, 0, text.len(), width)
     }
     fn text_range(self: Self, text: TextSource, start: u64, end: u64, width: u64) -> Self {
         if start == end { self } else {
-            Printer { out: List::Cons { Chunk::Text { text, start, end }, self.flush_pending() },
+            Printer { out: List::Cons { Chunk::Text { text, start, end }, self.flush_pending(true) },
                 column: capped_add(self.column, width, self.width + 1),
-                indent: self.indent, pending: 0, width: self.width }
+                indent: self.indent, pending: List::Nil, width: self.width }
         }
     }
     fn scalar(self: Self, ch: char) -> Self {
-        Printer { out: List::Cons { Chunk::Character { ch }, self.flush_pending() },
+        Printer { out: List::Cons { Chunk::Character { ch }, self.flush_pending(true) },
             column: capped_add(self.column, 1, self.width + 1),
-            indent: self.indent, pending: 0, width: self.width }
+            indent: self.indent, pending: List::Nil, width: self.width }
     }
     fn newline(self: Self, offset: i64) -> Self {
         let indent = if offset < 0 {
             let magnitude = ((0 as u64) - (offset as u64));
             if magnitude >= self.indent { 0 } else { self.indent - magnitude }
         } else { add_indent(self.indent, offset as u64) };
-        Printer { out: List::Cons { Chunk::Newline, self.out },
-            column: indent, indent: self.indent, pending: indent, width: self.width }
+        Printer { out: List::Cons { Chunk::Newline, self.flush_pending(false) },
+            column: indent, indent: self.indent,
+            pending: if indent == 0 { List::Nil } else { List::Cons { Chunk::Spaces { indent }, List::Nil } },
+            width: self.width }
     }
     fn with_indent(self: Self, indent: u64) -> Self {
         Printer { out: self.out, column: self.column, indent: indent,
@@ -454,7 +557,9 @@ impl Printer {
         };
         if spaces {
             Printer { out: self.out, column: capped_add(self.column, n, self.width + 1),
-                indent: self.indent, pending: add_indent(self.pending, n), width: self.width }
+                indent: self.indent,
+                pending: if n == 0 { self.pending } else { List::Cons { Chunk::Spaces { n }, self.pending } },
+                width: self.width }
         } else { self.text(TextSource::Literal { text }, fragment_width(text)) }
     }
     fn fits(self: Self, n: u64) -> bool {
@@ -463,7 +568,7 @@ impl Printer {
 }
 
 fn print_tokens(tokens: List<Token>, width: u64) -> RenderedText {
-    let initial = Printer { out: List::Nil, column: 0, indent: 0, pending: 0, width: width };
+    let initial = Printer { out: List::Nil, column: 0, indent: 0, pending: List::Nil, width: width };
     let (_, printer, _, _) = while [rest = tokens, p = initial,
         groups = List::Cons { PrintFrame { flat: false, mode: BreakMode::Fill }, List::Nil },
         indents = List::Nil] (!rest.is_nil()) {
@@ -473,6 +578,8 @@ fn print_tokens(tokens: List<Token>, width: u64) -> RenderedText {
                 Text(text, start, end, n) => (tail, p.text_range(text, start, end, n), groups, indents),
                 Character(ch) => (tail, p.scalar(ch), groups, indents),
                 Hardline => (tail, p.newline(0), groups, indents),
+                PushAnsi(style) => (tail, p.control(Chunk::PushAnsi { style }), groups, indents),
+                PopAnsi => (tail, p.control(Chunk::PopAnsi), groups, indents),
                 Nest(n) => (tail, p.with_indent(add_indent(p.indent, n)), groups,
                             List::Cons { p.indent, indents }),
                 Unnest => match indents {
@@ -500,7 +607,7 @@ fn print_tokens(tokens: List<Token>, width: u64) -> RenderedText {
             }
         }
     };
-    RenderedText { chunks: printer.out.reverse() }
+    RenderedText { chunks: printer.flush_pending(false).reverse() }
 }
 
 fn print_result(code: i32) -> Result<PrintSuccess, PrintError> {
