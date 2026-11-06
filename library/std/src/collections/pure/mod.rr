@@ -7,6 +7,7 @@
 //!   splitting, and concatenation.
 //! - `hashmap`, `hashset` — hash-based maps and sets with persistent updates.
 //! - `wavlset`, `wavlmap` — ordered set and map on a balanced tree.
+//! - `intmap` — a signed integer map with persistent Patricia branches.
 //! - `pairing_heap`, `binomial_heap` — min-priority queues.
 //!
 //! The two priority queues implement the same API and differ in which
@@ -22,6 +23,7 @@ pub mod binomial_heap;
 pub mod fingertree;
 pub mod hashmap;
 pub mod hashset;
+pub mod intmap;
 pub mod list;
 pub mod pairing_heap;
 pub mod rtqueue;

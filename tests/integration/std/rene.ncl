@@ -18,6 +18,7 @@
     hashmap = { kind = 'executable, path = "hashmap.rr" },
     hashset = { kind = 'executable, path = "hashset.rr" },
     heap = { kind = 'executable, path = "heap.rr" },
+    intmap = { kind = 'executable, path = "intmap.rr" },
     list = { kind = 'executable, path = "list.rr" },
     option = { kind = 'executable, path = "option.rr" },
     rtqueue = { kind = 'executable, path = "rtqueue.rr" },
