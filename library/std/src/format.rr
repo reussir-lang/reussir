@@ -214,7 +214,7 @@ fn field_formats(fields: List<Field>) -> List<Format> {
 
 fn text_info(text: Text) -> (u64, bool) {
     let (_, width, multiline) = while [i = (0 as u64), n = (0 as u64), lines = false] (i < text.len()) {
-        let (ch, next) = text.decode_char(i);
+        let (ch, next) = text.decode_char(i).unwrap_or_panic();
         (next, n + 1, lines || ch == '\n')
     };
     (width, multiline)
@@ -256,7 +256,7 @@ enum Task { Visit(Format), Emit(Token) }
 fn text_tokens(text: Text, out: List<Token>) -> List<Token> {
     let (end, start, width, tokens) = while [i = (0 as u64), start = (0 as u64),
         width = (0 as u64), tokens = out] (i < text.len()) {
-        let (scalar, next) = text.decode_char(i);
+        let (scalar, next) = text.decode_char(i).unwrap_or_panic();
         if scalar == '\n' {
             let tokens = if i == start { tokens } else {
                 List::Cons { Token::Text { text, start, i, width }, tokens }
