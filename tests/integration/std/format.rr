@@ -106,6 +106,12 @@ fn records() {
 fn strings_and_traits() {
     let dynamic = String::from_str("λ").push_string(String::from_str("猫"));
     expect(dynamic.fmt(), 2, "λ猫");
+    let literal_view = Text::from_str("prefix λ猫").view();
+    expect(generic(literal_view), 80, "prefix λ猫");
+    expect(literal_view.advance_char(7).unwrap_or_panic().fmt(), 2, "λ猫");
+    expect(literal_view.advance_byte(12).unwrap_or_panic().fmt(), 0, "");
+    let owned_view = Text::from_string(String::from_str("prefix λ\n猫")).view();
+    expect(owned_view.advance_char(7).unwrap_or_panic().fmt().nest(2), 80, "λ\n  猫");
     expect(Format::Tuple { two(dynamic.fmt(), "x".fmt()) }, 7, "(λ猫, x)");
     expect(Format::Tuple { two(dynamic.fmt(), "x".fmt()) }, 6, "(\n    λ猫,\n    x,\n)");
     expect(String::from_str("λ\n猫").fmt().nest(2), 80, "λ\n  猫");
