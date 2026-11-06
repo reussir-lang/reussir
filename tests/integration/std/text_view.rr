@@ -1,0 +1,64 @@
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin text_view %rrc_linker
+// RUN: echo 0 | %std_rene_build/release/text_view%exe_ext
+// RUN: echo 1 | %if wine-quirks %{ %not %} %else %{ %not --crash %} %std_rene_build/release/text_view%exe_ext
+// RUN: echo 2 | %if wine-quirks %{ %not %} %else %{ %not --crash %} %std_rene_build/release/text_view%exe_ext
+// RUN: echo 3 | %if wine-quirks %{ %not %} %else %{ %not --crash %} %std_rene_build/release/text_view%exe_ext
+// RUN: echo 4 | %if wine-quirks %{ %not %} %else %{ %not --crash %} %std_rene_build/release/text_view%exe_ext
+
+import std::string::String;
+import std::text::Text;
+import std::text::TextView;
+
+fn check(value: bool) {
+    if !value { core::intrinsic::panic::panic() }
+}
+
+fn check_view(base: Text) {
+    let whole = TextView::new(base);
+    let suffix = whole.advance(2).advance(1);
+    check(whole.offset() == 0 && whole.len() == 9);
+    check(whole.to_string().eq_str("abcλ猫!"));
+    check(suffix.base() == base);
+    check(suffix.offset() == 3 && suffix.len() == 6);
+    check(!suffix.is_empty());
+    check(suffix.byte_at(0) == 206);
+    check(suffix.byte_at(1) == 187);
+    check(suffix.byte_at(5) == 33);
+    check(suffix.eq_str("λ猫!"));
+    check(!suffix.eq_str("λ猫?"));
+    check(!suffix.eq_str("λ猫"));
+    check(suffix.to_string().eq_str("λ猫!"));
+    check(suffix.write(String::from_str(">"), 2, 5).eq_str(">猫"));
+    check(suffix.advance(1).byte_at(0) == 187);
+    check(suffix.advance(0) == suffix);
+    let empty = suffix.advance(suffix.len());
+    check(empty.is_empty() && empty.offset() == base.len());
+    check(empty.eq_str(""));
+    check(empty.to_string().is_empty());
+    check(empty.write(String::from_str("keep"), 0, 0).eq_str("keep"));
+    check(whole.eq_str("abcλ猫!"));
+}
+
+#[main]
+pub fn main() {
+    let literal = Text::from_str("abcλ猫!");
+    let owned = Text::from_string(String::from_str("abcλ").push_str("猫!"));
+    match test_utils::io::read_i32() {
+        0 => {
+            check_view(literal);
+            check_view(owned);
+            check(literal.view().advance(3) == owned.view().advance(3));
+            check(Text::from_str("").view() == Text::from_string(String::new()).view());
+            let original = String::from_str("abcλ猫!");
+            let view = Text::from_string(original).view().advance(3);
+            let changed = original.push_str("changed");
+            check(view.eq_str("λ猫!"));
+            check(changed.eq_str("abcλ猫!changed"));
+        },
+        1 => { literal.view().advance(1).advance(18446744073709551615); },
+        2 => { owned.view().advance(1).byte_at(18446744073709551615); },
+        3 => { literal.view().advance(3).write(String::new(), 0, 7); },
+        4 => { owned.view().advance(3).write(String::new(), 3, 2); },
+        _ => core::intrinsic::panic::panic()
+    }
+}
