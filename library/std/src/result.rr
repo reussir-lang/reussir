@@ -1,0 +1,22 @@
+//! A successful value or an error.
+
+pub enum Result<T, E> { Ok(T), Err(E) }
+
+impl<T, E> Result<T, E> {
+    pub fn is_ok(self: Self) -> bool {
+        match self { Ok(_) => true, Err(_) => false }
+    }
+    pub fn is_err(self: Self) -> bool { !self.is_ok() }
+    pub fn map<U>(self: Self, f: T -> U) -> Result<U, E> {
+        match self { Ok(value) => Result::Ok { f(value) }, Err(error) => Result::Err { error } }
+    }
+    pub fn map_err<F>(self: Self, f: E -> F) -> Result<T, F> {
+        match self { Ok(value) => Result::Ok { value }, Err(error) => Result::Err { f(error) } }
+    }
+    pub fn and_then<U>(self: Self, f: T -> Result<U, E>) -> Result<U, E> {
+        match self { Ok(value) => f(value), Err(error) => Result::Err { error } }
+    }
+    pub fn unwrap_or(self: Self, default: T) -> T {
+        match self { Ok(value) => value, Err(_) => default }
+    }
+}

@@ -42,6 +42,22 @@ fn raw_eq_str(s : RawString, other : str) -> bool [{
     s.as_str().as_bytes() == other.as_bytes()
 }];
 
+#[ffi(import)]
+fn raw_byte_at(s: RawString, index: u64) -> u8 [{ s.as_str().as_bytes()[index as usize] }];
+
+#[ffi(import)]
+fn raw_push_string(s: RawString, tail: RawString) -> RawString [{ s.append(tail) }];
+
+#[ffi(import)]
+fn raw_push_str_range(s: RawString, tail: str, start: u64, end: u64) -> RawString [{
+    s.append_str_range(tail, start as usize, end as usize)
+}];
+
+#[ffi(import)]
+fn raw_push_string_range(s: RawString, tail: RawString, start: u64, end: u64) -> RawString [{
+    s.append_range(tail, start as usize, end as usize)
+}];
+
 /// A growable copy-on-write string.
 pub struct String {
     raw : RawString
@@ -62,6 +78,32 @@ impl String {
     /// Creates a string holding a copy of `value`. O(n).
     pub fn from_str(value : str) -> Self {
         String::new().push_str(value)
+    }
+
+    /// Transfers the owned runtime buffer without copying it.
+    pub fn into_raw(self: Self) -> RawString { self.raw }
+
+    /// Reads a UTF-8 byte. Panics when `index` is out of bounds.
+    pub fn byte_at(self: Self, index: u64) -> u8 {
+        if index >= self.len() { core::intrinsic::panic::panic() }
+        else { raw_byte_at(self.raw, index) }
+    }
+
+    /// Appends owned text, copying the destination only when it is shared.
+    pub fn push_string(self: Self, tail: Self) -> Self {
+        String { raw: raw_push_string(self.raw, tail.raw) }
+    }
+
+    /// Appends a UTF-8 byte range. Bounds must lie on character boundaries.
+    pub fn push_str_range(self: Self, tail: str, start: u64, end: u64) -> Self {
+        if start > end || end > core::intrinsic::str::len(tail) { core::intrinsic::panic::panic() }
+        else { String { raw: raw_push_str_range(self.raw, tail, start, end) } }
+    }
+
+    /// Appends a UTF-8 byte range from an owned string.
+    pub fn push_string_range(self: Self, tail: Self, start: u64, end: u64) -> Self {
+        if start > end || end > tail.len() { core::intrinsic::panic::panic() }
+        else { String { raw: raw_push_string_range(self.raw, tail.raw, start, end) } }
     }
 
     /// Returns the length in bytes (a multi-byte character counts by its

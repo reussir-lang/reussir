@@ -22,6 +22,7 @@ pub mod option;
 pub mod panic;
 #[cfg(feature = "pjrt")]
 pub mod pjrt;
+pub mod print;
 pub mod rc;
 pub mod rcgmp;
 pub mod region;

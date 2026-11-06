@@ -43,6 +43,18 @@ impl String {
         self.make_mut().push_str(&s);
         self
     }
+    pub fn append(mut self, tail: Self) -> Self {
+        self.make_mut().push_str(tail.as_str());
+        self
+    }
+    pub fn append_range(mut self, tail: Self, start: usize, end: usize) -> Self {
+        self.make_mut().push_str(&tail.as_str()[start..end]);
+        self
+    }
+    pub fn append_str_range(mut self, tail: Str<'_>, start: usize, end: usize) -> Self {
+        self.make_mut().push_str(&tail[start..end]);
+        self
+    }
     pub fn len(&self) -> usize {
         self.0.data_ref().len()
     }
@@ -162,6 +174,26 @@ impl std::hash::Hash for Str<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn append_preserves_shared_inputs() {
+        let original = String::new().push('λ').push('猫');
+        let combined = original.clone().append(original.clone());
+        assert_eq!(original.as_str(), "λ猫");
+        assert_eq!(combined.as_str(), "λ猫λ猫");
+        let ranged = original.clone().append_range(original.clone(), 2, 5);
+        assert_eq!(ranged.as_str(), "λ猫猫");
+        assert_eq!(original.as_str(), "λ猫");
+    }
+
+    #[test]
+    fn literal_ranges_preserve_utf8() {
+        let literal = "λ猫";
+        let view = unsafe { Str::new_checked(literal.as_ptr(), literal.len()).unwrap() };
+        assert_eq!(String::new().append_str_range(view, 0, 2).as_str(), "λ");
+        assert_eq!(String::new().append_str_range(view, 2, 5).as_str(), "猫");
+        assert_eq!(String::new().append_str_range(view, 5, 5).as_str(), "");
+    }
 
     #[test]
     fn test_string() {

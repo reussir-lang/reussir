@@ -1,0 +1,707 @@
+//! Compositional pretty printing with consistent and filling groups.
+//! `Display::fmt` builds a reusable format; rendering chooses its layout.
+//!
+//! `Line` becomes a space when its group fits, and `Softline` becomes empty.
+//! A consistent group breaks all its own breaks together; `fill` packs as
+//! many segments as fit. Nested groups decide independently after a parent
+//! breaks.
+//!
+//! ```text
+//! let doc = Format::Tuple { List::Cons { value.fmt(), List::Nil } };
+//! let result = doc.dump_stdout(Options::default());
+//! ```
+//!
+//! Layout uses an iterative batch scan/print algorithm with linear token
+//! storage. It never backtracks through document alternatives. See Oppen,
+//! "Pretty Printing" (1979), and prettyplease's conditional break tokens.
+
+import std::collections::pure::list::List;
+import std::string::String;
+import std::string::RawString;
+import std::option::Option;
+import std::result::Result;
+import std::console::Ansi;
+import std::console::Color;
+import std::console::ColorChoice;
+import std::console::Stream;
+
+/// How optional breaks owned by a group are chosen.
+pub enum [value] BreakMode { Consistent, Fill }
+
+/// Rendering starts at column zero. Width is the available column budget;
+/// indivisible text can exceed it. Zero width and zero indentation are valid.
+pub struct [value] Options {
+    pub width: u64,
+    pub indent: u64
+}
+
+impl Options {
+    pub fn default() -> Self { Options { width: 80, indent: 4 } }
+}
+
+/// Conditional text around one optional line break. Fragments are single-line.
+pub struct BreakSpec {
+    pub flat: str,
+    pub before: str,
+    pub after: str,
+    pub offset: i64
+}
+
+pub struct Field {
+    pub name: String,
+    pub value: Format
+}
+
+pub enum Fields {
+    Named(List<Field>),
+    Positional(List<Format>)
+}
+
+pub enum Format {
+    Empty,
+    Literal(str),
+    Text(String),
+    Character(char),
+    Line,
+    Softline,
+    Hardline,
+    Append(Format, Format),
+    Nest(u64, Format),
+    Group(BreakMode, Format),
+    Break(BreakSpec),
+    Tuple(List<Format>),
+    Struct(String, Fields),
+    /// A scoped, zero-width ANSI change. Nested nodes restore their parent style.
+    Ansi(Ansi, Format)
+}
+
+pub trait Display {
+    fn fmt(self: Self) -> Format;
+}
+
+pub enum [value] PrintSuccess { Complete }
+pub enum [value] PrintOperation { Write, Flush }
+pub enum [value] PrintErrorKind { BrokenPipe, PermissionDenied, WriteZero, Other }
+/// A write or flush failed; some output may already have reached the stream.
+pub struct [value] PrintError {
+    pub operation: PrintOperation,
+    pub kind: PrintErrorKind
+}
+
+impl Format {
+    pub fn append(self: Self, other: Self) -> Self {
+        match self {
+            Empty => other,
+            _ => match other {
+                Empty => self,
+                _ => Format::Append { self, other }
+            }
+        }
+    }
+    pub fn nest(self: Self, amount: u64) -> Self { Format::Nest { amount, self } }
+    pub fn group(self: Self) -> Self { Format::Group { BreakMode::Consistent, self } }
+    pub fn fill(self: Self) -> Self { Format::Group { BreakMode::Fill, self } }
+    pub fn ansi(self: Self, style: Ansi) -> Self { Format::Ansi { style, self } }
+
+    /// Width counts Unicode scalars, not bytes or terminal cells. Literal LF
+    /// breaks lines; tabs and other control characters are preserved.
+    pub fn render(self: Self, options: Options) -> RenderedText {
+        if options.width > max_column() || options.indent > max_column() {
+            core::intrinsic::panic::panic()
+        } else {
+            let cap = options.width + 1;
+            let tokens = measure(tokenize(self, options.indent), cap);
+            print_tokens(tokens, options.width)
+        }
+    }
+    /// Writes exactly this format, without adding a final newline, then flushes.
+    /// ANSI is enabled when the destination stream is a terminal; the
+    /// `_with_color` variants override detection. Stderr variants mirror these.
+    pub fn dump_stdout(self: Self, options: Options) -> Result<PrintSuccess, PrintError> {
+        self.render(options).dump_stdout()
+    }
+    pub fn dump_stderr(self: Self, options: Options) -> Result<PrintSuccess, PrintError> {
+        self.render(options).dump_stderr()
+    }
+    pub fn dump_stdout_with_color(self: Self, options: Options, color: ColorChoice) -> Result<PrintSuccess, PrintError> {
+        self.render(options).dump_stdout_with_color(color)
+    }
+    pub fn dump_stderr_with_color(self: Self, options: Options, color: ColorChoice) -> Result<PrintSuccess, PrintError> {
+        self.render(options).dump_stderr_with_color(color)
+    }
+}
+
+pub fn concat(items: List<Format>) -> Format {
+    items.fold_left(Format::Empty, |acc: Format, item: Format| acc.append(item))
+}
+
+pub fn join(separator: Format, items: List<Format>) -> Format {
+    match items {
+        Nil => Format::Empty,
+        Cons(first, rest) => rest.fold_left(first,
+            |acc: Format, item: Format| acc.append(separator).append(item))
+    }
+}
+
+pub fn parens(body: Format) -> Format {
+    Format::Literal { "(" }.append(body).append(Format::Literal { ")" })
+}
+pub fn brackets(body: Format) -> Format {
+    Format::Literal { "[" }.append(body).append(Format::Literal { "]" })
+}
+pub fn braces(body: Format) -> Format {
+    Format::Literal { "{" }.append(body).append(Format::Literal { "}" })
+}
+pub fn comma_list(items: List<Format>) -> Format {
+    comma_join(items).fill()
+}
+
+fn comma_join(items: List<Format>) -> Format {
+    join(Format::Literal { "," }.append(Format::Line), items)
+}
+
+fn closing_break(flat: str, comma: bool) -> Format {
+    Format::Break { BreakSpec {
+        flat: flat, before: if comma { "," } else { "" }, after: "", offset: 0
+    } }
+}
+
+fn delimited(open: Format, close: str, items: List<Format>, indent: u64,
+             spaces: bool, singleton_comma: bool) -> Format {
+    match items {
+        Nil => open.append(Format::Literal { close }),
+        Cons(_, tail) => {
+            let singleton = singleton_comma && tail.is_nil();
+            let body = comma_join(items);
+            let body = if singleton { body.append(Format::Literal { "," }) } else { body };
+            let edge = if spaces { Format::Line } else { Format::Softline };
+            open.append(edge.append(body).nest(indent))
+                .append(closing_break(if spaces { " " } else { "" }, !singleton))
+                .append(Format::Literal { close }).group()
+        }
+    }
+}
+
+pub fn call(callee: Format, arguments: List<Format>, indent: u64) -> Format {
+    delimited(callee.append(Format::Literal { "(" }), ")", arguments, indent, false, false)
+}
+
+pub fn block(statements: List<Format>, indent: u64) -> Format {
+    match statements {
+        Nil => Format::Literal { "{}" },
+        _ => Format::Literal { "{" }
+            .append(Format::Hardline.append(join(Format::Hardline, statements)).nest(indent))
+            .append(Format::Hardline).append(Format::Literal { "}" })
+    }
+}
+
+// Iterative because `List::map` recurses once per element.
+fn field_formats(fields: List<Field>) -> List<Format> {
+    let (_, reversed) = while [rest = fields, out = List::Nil] (!rest.is_nil()) {
+        match rest {
+            Nil => (rest, out),
+            Cons(field, tail) => (tail, List::Cons {
+                Format::Text { field.name }.append(Format::Literal { ": " }).append(field.value), out
+            })
+        }
+    };
+    reversed.reverse()
+}
+
+/// Backing storage of a resolved text chunk.
+pub enum TextSource { Literal(str), Owned(String) }
+impl TextSource {
+    fn len(self: Self) -> u64 {
+        match self {
+            Literal(s) => core::intrinsic::str::len(s),
+            Owned(s) => s.len()
+        }
+    }
+    fn byte_at(self: Self, index: u64) -> u8 {
+        match self {
+            Literal(s) => core::intrinsic::str::byte_at(s, index),
+            Owned(s) => s.byte_at(index)
+        }
+    }
+    fn write(self: Self, out: String, start: u64, end: u64) -> String {
+        match self {
+            Literal(s) => out.push_str_range(s, start, end),
+            Owned(s) => out.push_string_range(s, start, end)
+        }
+    }
+}
+
+// Strict UTF-8 decode of the scalar at `index`; panics on malformed input.
+// Returns the scalar and the index of the next one.
+fn decode(text: TextSource, index: u64) -> (u64, u64) {
+    let first = text.byte_at(index) as u64;
+    // Lead byte ranges: 0x00..0x7F, 0xC2..0xDF, 0xE0..0xEF, 0xF0..0xF4.
+    let (count, initial, minimum) =
+        if first < 128 { ((1 as u64), first, (0 as u64)) }
+        else { if first >= 194 && first <= 223 { ((2 as u64), first - 192, (128 as u64)) }
+        else { if first >= 224 && first <= 239 { ((3 as u64), first - 224, (2048 as u64)) }
+        else { if first >= 240 && first <= 244 { ((4 as u64), first - 240, (65536 as u64)) }
+        else { core::intrinsic::panic::panic() } } } };
+    if count > text.len() - index { core::intrinsic::panic::panic() };
+    let (_, scalar) = while [i = (1 as u64), value = initial] (i < count) {
+        let byte = text.byte_at(index + i) as u64;
+        if byte < 128 || byte > 191 { core::intrinsic::panic::panic() };
+        (i + 1, value * 64 + byte - 128)
+    };
+    // Reject overlong forms, values above 0x10FFFF, and surrogates 0xD800..0xDFFF.
+    if scalar < minimum || scalar > 1114111 || (scalar >= 55296 && scalar <= 57343) {
+        core::intrinsic::panic::panic()
+    } else { (scalar, index + count) }
+}
+
+fn text_info(text: TextSource) -> (u64, bool) {
+    let (_, width, multiline) = while [i = (0 as u64), n = (0 as u64), lines = false] (i < text.len()) {
+        let (ch, next) = decode(text, i);
+        (next, n + 1, lines || ch == 10)
+    };
+    (width, multiline)
+}
+
+fn fragment_width(s: str) -> u64 {
+    let (width, lines) = text_info(TextSource::Literal { s });
+    if lines { core::intrinsic::panic::panic() } else { width }
+}
+
+struct [value] BreakWidths { flat: u64, before: u64, after: u64 }
+
+fn break_token(spec: BreakSpec) -> Token {
+    Token::Break { spec, BreakWidths {
+        flat: fragment_width(spec.flat),
+        before: fragment_width(spec.before),
+        after: fragment_width(spec.after)
+    }, 0 }
+}
+
+fn plain_break(flat: str) -> BreakSpec {
+    BreakSpec { flat: flat, before: "", after: "", offset: 0 }
+}
+
+enum Token {
+    Text(TextSource, u64, u64, u64),
+    Character(char),
+    Break(BreakSpec, BreakWidths, u64),
+    Hardline,
+    Begin(BreakMode, u64),
+    End,
+    Nest(u64),
+    Unnest,
+    PushAnsi(Ansi),
+    PopAnsi
+}
+enum Task { Visit(Format), Emit(Token) }
+
+fn text_tokens(text: TextSource, out: List<Token>) -> List<Token> {
+    let (end, start, width, tokens) = while [i = (0 as u64), start = (0 as u64),
+        width = (0 as u64), tokens = out] (i < text.len()) {
+        let (scalar, next) = decode(text, i);
+        if scalar == 10 {
+            let tokens = if i == start { tokens } else {
+                List::Cons { Token::Text { text, start, i, width }, tokens }
+            };
+            (next, next, 0, List::Cons { Token::Hardline, tokens })
+        } else { (next, start, width + 1, tokens) }
+    };
+    if start == end { tokens } else {
+        List::Cons { Token::Text { text, start, end, width }, tokens }
+    }
+}
+
+fn tokenize(document: Format, indent: u64) -> List<Token> {
+    let (_, result) = while [work = List::Cons { Task::Visit { document }, List::Nil },
+                            out = List::Nil] (!work.is_nil()) {
+        match work {
+            Nil => (work, out),
+            Cons(task, rest) => match task {
+                Emit(token) => (rest, List::Cons { token, out }),
+                Visit(doc) => match doc {
+                    Empty => (rest, out),
+                    Literal(s) => (rest, text_tokens(TextSource::Literal { s }, out)),
+                    Text(s) => (rest, text_tokens(TextSource::Owned { s }, out)),
+                    Character(ch) => (rest, List::Cons {
+                        if ch == '\n' { Token::Hardline } else { Token::Character { ch } }, out }),
+                    Hardline => (rest, List::Cons { Token::Hardline, out }),
+                    Line => (rest, List::Cons { break_token(plain_break(" ")), out }),
+                    Softline => (rest, List::Cons { break_token(plain_break("")), out }),
+                    Break(spec) => (rest, List::Cons { break_token(spec), out }),
+                    Append(left, right) => (List::Cons { Task::Visit { left },
+                        List::Cons { Task::Visit { right }, rest } }, out),
+                    Nest(n, body) => (List::Cons { Task::Visit { body },
+                        List::Cons { Task::Emit { Token::Unnest }, rest } },
+                        List::Cons { Token::Nest { n }, out }),
+                    Group(mode, body) => (List::Cons { Task::Visit { body },
+                        List::Cons { Task::Emit { Token::End }, rest } },
+                        List::Cons { Token::Begin { mode, 0 }, out }),
+                    Format::Ansi(style, body) => (List::Cons { Task::Visit { body },
+                        List::Cons { Task::Emit { Token::PopAnsi }, rest } },
+                        List::Cons { Token::PushAnsi { style }, out }),
+                    Tuple(items) => (List::Cons { Task::Visit {
+                        delimited(Format::Literal { "(" }, ")", items, indent, false, true)
+                    }, rest }, out),
+                    Struct(name, fields) => {
+                        let items = match fields {
+                            Named(fs) => field_formats(fs),
+                            Positional(fs) => fs
+                        };
+                        (List::Cons { Task::Visit {
+                            delimited(Format::Text { name }.append(Format::Literal { " {" }),
+                                      "}", items, indent, true, false)
+                        }, rest }, out)
+                    }
+                }
+            }
+        }
+    };
+    result
+}
+
+fn capped_add(a: u64, b: u64, cap: u64) -> u64 {
+    if a >= cap || b >= cap || a > cap - b { cap } else { a + b }
+}
+struct [value] Measure { total: u64, segment: u64 }
+
+// Reverse scanning resolves group and next-segment sizes without patching
+// an indexed buffer. Nested groups contribute their complete flat size once.
+fn measure(reversed: List<Token>, cap: u64) -> List<Token> {
+    let (_, _, _, _, out) = while [rest = reversed, total = (0 as u64), segment = (0 as u64),
+                                   stack = List::Nil, out = List::Nil] (!rest.is_nil()) {
+        match rest {
+            Nil => (rest, total, segment, stack, out),
+            Cons(token, tail) => match token {
+                End => (tail, 0, 0, List::Cons { Measure { total: total, segment: segment }, stack },
+                        List::Cons { token, out }),
+                Begin(mode, _) => match stack {
+                    Nil => core::intrinsic::panic::panic(),
+                    Cons(parent, parents) => (tail, capped_add(parent.total, total, cap),
+                        capped_add(parent.segment, total, cap), parents,
+                        List::Cons { Token::Begin { mode, total }, out })
+                },
+                Break(spec, widths, _) => (tail, capped_add(total, widths.flat, cap),
+                    widths.before, stack,
+                    List::Cons { Token::Break { spec, widths, capped_add(widths.flat, segment, cap) }, out }),
+                Hardline => (tail, cap, cap, stack, List::Cons { token, out }),
+                Text(_, _, _, n) => (tail, capped_add(total, n, cap), capped_add(segment, n, cap), stack,
+                               List::Cons { token, out }),
+                Character(_) => (tail, capped_add(total, 1, cap), capped_add(segment, 1, cap), stack,
+                                  List::Cons { token, out }),
+                _ => (tail, total, segment, stack, List::Cons { token, out })
+            }
+        }
+    };
+    out
+}
+
+/// Resolved output. Text ranges are UTF-8 byte offsets, with an exclusive end.
+pub enum Chunk {
+    Text(TextSource, u64, u64), Character(char), Spaces(u64), Newline,
+    PushAnsi(Ansi), PopAnsi
+}
+/// A reusable layout with no remaining optional breaks or group decisions.
+pub struct RenderedText { chunks: List<Chunk> }
+
+impl RenderedText {
+    pub fn chunks(self: Self) -> List<Chunk> { self.chunks }
+    /// Materializes UTF-8 including explicitly requested ANSI styles.
+    /// Each completed ANSI scope restores its parent, or resets at the root.
+    pub fn to_string(self: Self) -> String { self.materialize(true) }
+    /// Omits ANSI nodes without changing the chosen layout.
+    pub fn to_plain_string(self: Self) -> String { self.materialize(false) }
+
+    fn materialize(self: Self, ansi: bool) -> String {
+        let (_, output, _, _) = while [rest = self.chunks, out = String::new(),
+            style = AnsiState::default(), stack = List::Nil] (!rest.is_nil()) {
+            match rest {
+                Nil => (rest, out, style, stack),
+                Cons(chunk, tail) => match chunk {
+                    PushAnsi(change) => if ansi {
+                        (tail, out.push_str(change.escape()), style.apply(change), List::Cons { style, stack })
+                    } else { (tail, out, style, stack) },
+                    PopAnsi => if ansi {
+                        match stack {
+                            Nil => core::intrinsic::panic::panic(),
+                            Cons(previous, parents) => (tail, previous.restore(out), previous, parents)
+                        }
+                    } else { (tail, out, style, stack) },
+                    Text(text, start, end) => (tail, text.write(out, start, end), style, stack),
+                    Character(ch) => (tail, out.push_char(ch), style, stack),
+                    Newline => (tail, out.push_char('\n'), style, stack),
+                    Spaces(n) => {
+                        let (_, text) = while [i = (0 as u64), text = out] (i < n) {
+                            (i + 1, text.push_char(' '))
+                        };
+                        (tail, text, style, stack)
+                    }
+                }
+            }
+        };
+        output
+    }
+    /// Each stream is detected independently; see `Format::dump_stdout`.
+    pub fn dump_stdout(self: Self) -> Result<PrintSuccess, PrintError> {
+        self.dump_stdout_with_color(ColorChoice::Auto)
+    }
+    pub fn dump_stderr(self: Self) -> Result<PrintSuccess, PrintError> {
+        self.dump_stderr_with_color(ColorChoice::Auto)
+    }
+    pub fn dump_stdout_with_color(self: Self, color: ColorChoice) -> Result<PrintSuccess, PrintError> {
+        print_result(write_stdout(self.materialize(color.enabled(Stream::Stdout)).into_raw()))
+    }
+    pub fn dump_stderr_with_color(self: Self, color: ColorChoice) -> Result<PrintSuccess, PrintError> {
+        print_result(write_stderr(self.materialize(color.enabled(Stream::Stderr)).into_raw()))
+    }
+}
+
+// Save the effective style, so restoration is constant work even for deep scopes.
+struct [value] AnsiState {
+    foreground: Color, background: Color,
+    bold: bool, dim: bool, italic: bool, underline: bool, reverse: bool, strikethrough: bool
+}
+
+impl AnsiState {
+    fn default() -> Self {
+        AnsiState { foreground: Color::Default, background: Color::Default,
+            bold: false, dim: false, italic: false, underline: false, reverse: false, strikethrough: false }
+    }
+    fn apply(self: Self, change: Ansi) -> Self {
+        match change {
+            Reset => AnsiState::default(),
+            _ => AnsiState {
+                foreground: match change { Foreground(c) => c, _ => self.foreground },
+                background: match change { Background(c) => c, _ => self.background },
+                bold: match change { Bold => true, _ => self.bold },
+                dim: match change { Dim => true, _ => self.dim },
+                italic: match change { Italic => true, _ => self.italic },
+                underline: match change { Underline => true, _ => self.underline },
+                reverse: match change { Reverse => true, _ => self.reverse },
+                strikethrough: match change { Strikethrough => true, _ => self.strikethrough }
+            }
+        }
+    }
+    fn restore(self: Self, out: String) -> String {
+        let out = out.push_str(Ansi::Reset.escape());
+        let out = if self.bold { out.push_str(Ansi::Bold.escape()) } else { out };
+        let out = if self.dim { out.push_str(Ansi::Dim.escape()) } else { out };
+        let out = if self.italic { out.push_str(Ansi::Italic.escape()) } else { out };
+        let out = if self.underline { out.push_str(Ansi::Underline.escape()) } else { out };
+        let out = if self.reverse { out.push_str(Ansi::Reverse.escape()) } else { out };
+        let out = if self.strikethrough { out.push_str(Ansi::Strikethrough.escape()) } else { out };
+        let out = match self.foreground {
+            Default => out, _ => out.push_str(Ansi::Foreground { self.foreground }.escape())
+        };
+        match self.background {
+            Default => out, _ => out.push_str(Ansi::Background { self.background }.escape())
+        }
+    }
+}
+
+struct [value] PrintFrame { flat: bool, mode: BreakMode }
+struct Printer {
+    out: List<Chunk>,
+    column: u64,
+    indent: u64,
+    pending: List<Chunk>,
+    width: u64
+}
+
+// Largest accepted width or indentation (i64::MAX - 1), so `width + 1` and
+// signed break offsets cannot overflow.
+fn max_column() -> u64 { 9223372036854775806 }
+
+fn add_indent(a: u64, b: u64) -> u64 {
+    if a > max_column() || b > max_column() - a {
+        core::intrinsic::panic::panic()
+    } else { a + b }
+}
+
+impl Printer {
+    fn control(self: Self, chunk: Chunk) -> Self {
+        Printer { out: self.out, column: self.column, indent: self.indent,
+            pending: List::Cons { chunk, self.pending }, width: self.width }
+    }
+    // Delay controls with layout spaces to preserve their order. At line ends,
+    // discard spaces while retaining controls that close or restore ANSI scopes.
+    fn flush_pending(self: Self, spaces: bool) -> List<Chunk> {
+        self.pending.reverse().fold_left(self.out, |out: List<Chunk>, chunk: Chunk|
+            match chunk {
+                Spaces(_) => if spaces { List::Cons { chunk, out } } else { out },
+                _ => List::Cons { chunk, out }
+            })
+    }
+    fn text(self: Self, text: TextSource, width: u64) -> Self {
+        self.text_range(text, 0, text.len(), width)
+    }
+    fn text_range(self: Self, text: TextSource, start: u64, end: u64, width: u64) -> Self {
+        if start == end { self } else {
+            Printer { out: List::Cons { Chunk::Text { text, start, end }, self.flush_pending(true) },
+                column: capped_add(self.column, width, self.width + 1),
+                indent: self.indent, pending: List::Nil, width: self.width }
+        }
+    }
+    fn scalar(self: Self, ch: char) -> Self {
+        Printer { out: List::Cons { Chunk::Character { ch }, self.flush_pending(true) },
+            column: capped_add(self.column, 1, self.width + 1),
+            indent: self.indent, pending: List::Nil, width: self.width }
+    }
+    fn newline(self: Self, offset: i64) -> Self {
+        let indent = if offset < 0 {
+            let magnitude = ((0 as u64) - (offset as u64));
+            if magnitude >= self.indent { 0 } else { self.indent - magnitude }
+        } else { add_indent(self.indent, offset as u64) };
+        Printer { out: List::Cons { Chunk::Newline, self.flush_pending(false) },
+            column: indent, indent: self.indent,
+            pending: if indent == 0 { List::Nil } else { List::Cons { Chunk::Spaces { indent }, List::Nil } },
+            width: self.width }
+    }
+    fn with_indent(self: Self, indent: u64) -> Self {
+        Printer { out: self.out, column: self.column, indent: indent,
+                  pending: self.pending, width: self.width }
+    }
+    fn flat_break(self: Self, text: str, width: u64) -> Self {
+        let n = core::intrinsic::str::len(text);
+        let (_, spaces) = while [i = (0 as u64), spaces = true] (i < n) {
+            (i + 1, spaces && core::intrinsic::str::byte_at(text, i) == 32)
+        };
+        if spaces {
+            Printer { out: self.out, column: capped_add(self.column, n, self.width + 1),
+                indent: self.indent,
+                pending: if n == 0 { self.pending } else { List::Cons { Chunk::Spaces { n }, self.pending } },
+                width: self.width }
+        } else { self.text(TextSource::Literal { text }, width) }
+    }
+    fn fits(self: Self, n: u64) -> bool {
+        self.column <= self.width && n <= self.width - self.column
+    }
+}
+
+fn print_tokens(tokens: List<Token>, width: u64) -> RenderedText {
+    let initial = Printer { out: List::Nil, column: 0, indent: 0, pending: List::Nil, width: width };
+    // The root frame fills, so top-level breaks outside any group pack lines.
+    let (_, printer, _, _) = while [rest = tokens, p = initial,
+        groups = List::Cons { PrintFrame { flat: false, mode: BreakMode::Fill }, List::Nil },
+        indents = List::Nil] (!rest.is_nil()) {
+        match rest {
+            Nil => (rest, p, groups, indents),
+            Cons(token, tail) => match token {
+                Text(text, start, end, n) => (tail, p.text_range(text, start, end, n), groups, indents),
+                Character(ch) => (tail, p.scalar(ch), groups, indents),
+                Hardline => (tail, p.newline(0), groups, indents),
+                PushAnsi(style) => (tail, p.control(Chunk::PushAnsi { style }), groups, indents),
+                PopAnsi => (tail, p.control(Chunk::PopAnsi), groups, indents),
+                Nest(n) => (tail, p.with_indent(add_indent(p.indent, n)), groups,
+                            List::Cons { p.indent, indents }),
+                Unnest => match indents {
+                    Nil => core::intrinsic::panic::panic(),
+                    Cons(n, ns) => (tail, p.with_indent(n), groups, ns)
+                },
+                Begin(mode, n) => {
+                    let parent = groups.head().unwrap_or_panic();
+                    (tail, p, List::Cons { PrintFrame { flat: parent.flat || p.fits(n), mode: mode }, groups }, indents)
+                },
+                End => (tail, p, groups.tail(), indents),
+                Break(spec, widths, n) => {
+                    let frame = groups.head().unwrap_or_panic();
+                    let flat = frame.flat || match frame.mode {
+                        Consistent => false,
+                        Fill => p.fits(n)
+                    };
+                    let next = if flat { p.flat_break(spec.flat, widths.flat) } else {
+                        p.text(TextSource::Literal { spec.before }, widths.before)
+                            .newline(spec.offset)
+                            .text(TextSource::Literal { spec.after }, widths.after)
+                    };
+                    (tail, next, groups, indents)
+                }
+            }
+        }
+    };
+    RenderedText { chunks: printer.flush_pending(false).reverse() }
+}
+
+// Decodes the status from `reussir_rt::print`; keep the codes in sync.
+fn print_result(code: i32) -> Result<PrintSuccess, PrintError> {
+    if code == 0 { Result::Ok { PrintSuccess::Complete } } else {
+        Result::Err { PrintError {
+            operation: if code >= 256 { PrintOperation::Flush } else { PrintOperation::Write },
+            kind: match code % 256 {
+                1 => PrintErrorKind::BrokenPipe,
+                2 => PrintErrorKind::PermissionDenied,
+                3 => PrintErrorKind::WriteZero,
+                _ => PrintErrorKind::Other
+            }
+        } }
+    }
+}
+
+#[ffi(import)]
+fn write_stdout(text: RawString) -> i32 [{
+    reussir_rt::print::write_stdout(text.as_str().as_bytes())
+}];
+#[ffi(import)]
+fn write_stderr(text: RawString) -> i32 [{
+    reussir_rt::print::write_stderr(text.as_str().as_bytes())
+}];
+
+impl Display for Format { fn fmt(self: Self) -> Format { self } }
+impl Display for str { fn fmt(self: Self) -> Format { Format::Literal { self } } }
+impl Display for String { fn fmt(self: Self) -> Format { Format::Text { self } } }
+impl Display for char { fn fmt(self: Self) -> Format { Format::Character { self } } }
+impl Display for bool {
+    fn fmt(self: Self) -> Format { Format::Literal { if self { "true" } else { "false" } } }
+}
+
+fn unsigned_decimal(value: u64) -> Format {
+    if value == 0 { Format::Literal { "0" } } else {
+        let (_, out) = while [n = value, out = Format::Empty] (n != 0) {
+            (n / 10, Format::Character { match n % 10 {
+                0 => '0', 1 => '1', 2 => '2', 3 => '3', 4 => '4',
+                5 => '5', 6 => '6', 7 => '7', 8 => '8', _ => '9'
+            } }.append(out))
+        };
+        out
+    }
+}
+fn signed_decimal(value: i64) -> Format {
+    if value < 0 { Format::Literal { "-" }.append(unsigned_decimal((0 as u64) - (value as u64))) }
+    else { unsigned_decimal(value as u64) }
+}
+
+impl Display for u64 { fn fmt(self: Self) -> Format { unsigned_decimal(self) } }
+impl Display for u32 { fn fmt(self: Self) -> Format { unsigned_decimal(self as u64) } }
+impl Display for u16 { fn fmt(self: Self) -> Format { unsigned_decimal(self as u64) } }
+impl Display for u8 { fn fmt(self: Self) -> Format { unsigned_decimal(self as u64) } }
+impl Display for i64 { fn fmt(self: Self) -> Format { signed_decimal(self) } }
+impl Display for i32 { fn fmt(self: Self) -> Format { signed_decimal(self as i64) } }
+impl Display for i16 { fn fmt(self: Self) -> Format { signed_decimal(self as i64) } }
+impl Display for i8 { fn fmt(self: Self) -> Format { signed_decimal(self as i64) } }
+
+impl<T: Display> Display for List<T> {
+    fn fmt(self: Self) -> Format {
+        let (_, reversed) = while [rest = self, out = List::Nil] (!rest.is_nil()) {
+            match rest {
+                Nil => (rest, out),
+                Cons(value, tail) => (tail, List::Cons { value.fmt(), out })
+            }
+        };
+        brackets(comma_join(reversed.reverse())).fill()
+    }
+}
+impl<T: Display> Display for Option<T> {
+    fn fmt(self: Self) -> Format {
+        match self {
+            None => Format::Literal { "None" },
+            Some(value) => call(Format::Literal { "Some" }, List::Cons { value.fmt(), List::Nil }, 4)
+        }
+    }
+}
+impl<T: Display, E: Display> Display for Result<T, E> {
+    fn fmt(self: Self) -> Format {
+        match self {
+            Ok(value) => call(Format::Literal { "Ok" }, List::Cons { value.fmt(), List::Nil }, 4),
+            Err(error) => call(Format::Literal { "Err" }, List::Cons { error.fmt(), List::Nil }, 4)
+        }
+    }
+}
