@@ -25,6 +25,10 @@ fn check_view(base: Text) {
     check(suffix.eq_str("λ猫!"));
     check(!suffix.eq_str("λ猫?") && !suffix.eq_str("λ猫"));
     check(suffix.to_string().unwrap_or_panic().eq_str("λ猫!"));
+    match suffix.to_text().unwrap_or_panic() {
+        Owned(value) => check(value.eq_str("λ猫!")),
+        Literal(_) => core::intrinsic::panic::panic()
+    };
     check(suffix.write(String::from_str(">"), 2, 5).unwrap_or_panic().eq_str(">猫"));
     check(suffix.write(String::new(), 0, 7).is_none());
     check(suffix.write(String::new(), 3, 2).is_none());
@@ -46,6 +50,7 @@ fn check_view(base: Text) {
     check(inside.byte_at(0).unwrap_or_panic() == 187);
     check(inside.advance_char(1).is_none());
     check(inside.to_string().is_none());
+    check(inside.to_text().is_none());
     check(inside.write(String::new(), 0, inside.len()).is_none());
     check(inside.advance_byte(1).unwrap_or_panic().eq_str("猫!"));
     check(inside.write(String::new(), 1, 4).unwrap_or_panic().eq_str("猫"));
@@ -59,6 +64,10 @@ fn check_view(base: Text) {
     check(empty.advance_byte(0).unwrap_or_panic().is_empty());
     check(empty.advance_byte(1).is_none());
     check(empty.to_string().unwrap_or_panic().is_empty());
+    match empty.to_text().unwrap_or_panic() {
+        Owned(value) => check(value.is_empty()),
+        Literal(_) => core::intrinsic::panic::panic()
+    };
     check(empty.write(String::from_str("keep"), 0, 0).unwrap_or_panic().eq_str("keep"));
     check(whole.eq_str("abcλ猫!"));
     check(base.decode_char(4).is_none());
@@ -90,6 +99,14 @@ pub fn main() {
     let owned = Text::from_string(String::from_str("abcλ").push_str("猫!"));
     check_view(literal);
     check_view(owned);
+    match literal.view().to_text().unwrap_or_panic() {
+        Literal(value) => check(value == "abcλ猫!"),
+        Owned(_) => core::intrinsic::panic::panic()
+    };
+    match owned.view().to_text().unwrap_or_panic() {
+        Owned(value) => check(value.eq_str("abcλ猫!")),
+        Literal(_) => core::intrinsic::panic::panic()
+    };
     check_scalars(Text::from_str("\0aé猫🦀\u{10ffff}"));
     check_scalars(Text::from_string(String::from_str("\0aé猫🦀\u{10ffff}")));
     check(Text::from_str("a\u{301}").view().advance_char(1).unwrap_or_panic().eq_str("\u{301}"));

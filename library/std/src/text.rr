@@ -198,6 +198,13 @@ impl TextView {
         else { self.write(String::new(), 0, self.len()) } }
     }
 
+    /// Keeps the base at offset zero; otherwise converts the suffix to owned text.
+    /// Returns `None` when a nonzero offset splits a character.
+    pub fn to_text(self: Self) -> Option<Text> {
+        if self.offset == 0 { Option::Some { self.base } }
+        else { self.to_string().map(|value: String| Text::from_string(value)) }
+    }
+
     /// Returns whether the remaining bytes equal `other`.
     pub fn eq_str(self: Self, other: str) -> bool {
         self == Text::from_str(other).view()
