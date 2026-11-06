@@ -481,9 +481,11 @@ public:
       mlir::Value child =
           ReussirRefLoadOp::create(builder, loc, valueType, slot);
       children.push_back(child);
-      dead.push_back(deadTest(child));
     };
     collect(collect, ref);
+    // Load sibling pointers first, but keep RC updates ordered for aliases.
+    for (mlir::Value child : children)
+      dead.push_back(deadTest(child));
     emitBoxFree(box, loc, module, builder);
     if (children.empty())
       return;
