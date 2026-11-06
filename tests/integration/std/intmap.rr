@@ -7,7 +7,7 @@
 // CHECK-NEXT: 1
 // CHECK-NEXT: 1
 
-import std::collections::pure::IntMap;
+import std::collections::pure::intmap::IntMap;
 import std::collections::pure::wavlmap::WavlMap;
 import std::option::Option;
 

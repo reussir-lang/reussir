@@ -5,8 +5,20 @@
 //! has two nonempty children, and branching bits decrease toward the leaves.
 
 import core::intrinsic::math;
-import std::collections::pure::IntMap;
 import std::option::Option;
+
+/// A persistent map from signed 64-bit integer keys to values.
+///
+/// Packed Patricia branches skip shared prefixes and require no balancing.
+/// Point operations traverse at most 64 branches; `fold_left` visits entries
+/// in ascending signed key order in O(n) time. Updates preserve retained
+/// versions and share unchanged subtrees. Uniquely owned nodes can be reused.
+/// Use the methods to maintain the internal prefix and nonempty-child invariants.
+pub enum IntMap<V> {
+    Empty,
+    Tip(i64, V),
+    Bin(u64, IntMap<V>, IntMap<V>)
+}
 
 // Flipping the sign bit makes unsigned routing follow signed key order.
 fn ordered(key : i64) -> u64 {
