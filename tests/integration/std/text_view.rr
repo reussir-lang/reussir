@@ -4,10 +4,12 @@
 // RUN: echo 2 | %if wine-quirks %{ %not %} %else %{ %not --crash %} %std_rene_build/release/text_view%exe_ext
 // RUN: echo 3 | %if wine-quirks %{ %not %} %else %{ %not --crash %} %std_rene_build/release/text_view%exe_ext
 // RUN: echo 4 | %if wine-quirks %{ %not %} %else %{ %not --crash %} %std_rene_build/release/text_view%exe_ext
+// RUN: echo 5 | %if wine-quirks %{ %not %} %else %{ %not --crash %} %std_rene_build/release/text_view%exe_ext
 
 import std::string::String;
 import std::text::Text;
 import std::text::TextView;
+import std::text::CharIter;
 
 fn check(value: bool) {
     if !value { core::intrinsic::panic::panic() }
@@ -29,14 +31,50 @@ fn check_view(base: Text) {
     check(!suffix.eq_str("λ猫"));
     check(suffix.to_string().eq_str("λ猫!"));
     check(suffix.write(String::from_str(">"), 2, 5).eq_str(">猫"));
-    check(suffix.advance(1).byte_at(0) == 187);
+    check(suffix.advance(1).offset() == 5);
+    check(suffix.advance(1).eq_str("猫!"));
+    check(suffix.advance(2).offset() == 8);
+    check(suffix.advance(2).eq_str("!"));
     check(suffix.advance(0) == suffix);
-    let empty = suffix.advance(suffix.len());
+    check(suffix.try_advance(0).unwrap_or_panic() == suffix);
+    check(suffix.try_advance(2).unwrap_or_panic().eq_str("!"));
+    check(suffix.try_advance(3).unwrap_or_panic().is_empty());
+    check(suffix.try_advance(4).is_none());
+    check(suffix.try_advance(18446744073709551615).is_none());
+    let empty = suffix.advance(3);
     check(empty.is_empty() && empty.offset() == base.len());
     check(empty.eq_str(""));
+    check(empty.try_advance(0).unwrap_or_panic().is_empty());
+    check(empty.try_advance(1).is_none());
     check(empty.to_string().is_empty());
     check(empty.write(String::from_str("keep"), 0, 0).eq_str("keep"));
     check(whole.eq_str("abcλ猫!"));
+}
+
+fn step(iter: CharIter, expected: char, offset: u64) -> CharIter {
+    let (value, next) = iter.next();
+    check(value.unwrap_or_panic() == expected);
+    check(next.view().offset() == offset);
+    next
+}
+
+fn check_chars(base: Text) {
+    let original = base.chars();
+    let iter = step(original, '\0', 1);
+    let iter = step(iter, 'a', 2);
+    let iter = step(iter, 'é', 4);
+    let iter = step(iter, '猫', 7);
+    let iter = step(iter, '🦀', 11);
+    let iter = step(iter, '\u{10ffff}', 15);
+    let (end, iter) = iter.next();
+    check(end.is_none() && iter.view().is_empty());
+    let (end, iter) = iter.next();
+    check(end.is_none() && iter.view().offset() == 15);
+    check(original.view().offset() == 0);
+    check(base.view().advance(6).is_empty());
+    let suffix = CharIter::new(base.view().advance(3));
+    let suffix = step(suffix, '猫', 7);
+    check(suffix.view().eq_str("🦀\u{10ffff}"));
 }
 
 #[main]
@@ -47,6 +85,12 @@ pub fn main() {
         0 => {
             check_view(literal);
             check_view(owned);
+            check_chars(Text::from_str("\0aé猫🦀\u{10ffff}"));
+            check_chars(Text::from_string(String::from_str("\0aé猫🦀\u{10ffff}")));
+            let (empty, iter) = Text::from_str("").chars().next();
+            check(empty.is_none() && iter.view().is_empty());
+            check(Text::from_str("a\u{301}").view().advance(1).eq_str("\u{301}"));
+            check(Text::from_str("a\u{301}").view().advance(2).is_empty());
             check(literal.view().advance(3) == owned.view().advance(3));
             check(Text::from_str("").view() == Text::from_string(String::new()).view());
             let original = String::from_str("abcλ猫!");
@@ -59,6 +103,7 @@ pub fn main() {
         2 => { owned.view().advance(1).byte_at(18446744073709551615); },
         3 => { literal.view().advance(3).write(String::new(), 0, 7); },
         4 => { owned.view().advance(3).write(String::new(), 3, 2); },
+        5 => { literal.view().advance(3).advance(4); },
         _ => core::intrinsic::panic::panic()
     }
 }

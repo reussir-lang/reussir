@@ -1,6 +1,10 @@
 //! Static string literals or owned copy-on-write strings.
 
 import std::string::String;
+import std::option::Option;
+
+#[ffi(import)]
+fn scalar_to_char(value: u32) -> char [{ char::from_u32(value).unwrap() }];
 
 /// Either an immutable static `str` literal or a growable `String`.
 pub enum Text {
@@ -23,6 +27,9 @@ impl Text {
     pub fn view(self: Self) -> TextView {
         TextView::new(self)
     }
+
+    /// Iterates over Unicode scalar values without copying the text.
+    pub fn chars(self: Self) -> CharIter { self.view().chars() }
 
     /// Converts into an owned `String`, copying only when `self` is a literal.
     pub fn to_string(self: Self) -> String {
@@ -57,6 +64,29 @@ impl Text {
             },
             Owned(s) => s.byte_at(index)
         }
+    }
+
+    /// Decodes a Unicode scalar at a byte index and returns its next byte index.
+    /// Panics on malformed UTF-8 or an out-of-bounds index.
+    pub fn decode_char(self: Self, index: u64) -> (char, u64) {
+        let first = self.byte_at(index) as u64;
+        // Lead byte ranges: 0x00..0x7F, 0xC2..0xDF, 0xE0..0xEF, 0xF0..0xF4.
+        let (count, initial, minimum) =
+            if first < 128 { ((1 as u64), first, (0 as u64)) }
+            else { if first >= 194 && first <= 223 { ((2 as u64), first - 192, (128 as u64)) }
+            else { if first >= 224 && first <= 239 { ((3 as u64), first - 224, (2048 as u64)) }
+            else { if first >= 240 && first <= 244 { ((4 as u64), first - 240, (65536 as u64)) }
+            else { core::intrinsic::panic::panic() } } } };
+        if count > self.len() - index { core::intrinsic::panic::panic() };
+        let (_, scalar) = while [i = (1 as u64), value = initial] (i < count) {
+            let byte = self.byte_at(index + i) as u64;
+            if byte < 128 || byte > 191 { core::intrinsic::panic::panic() };
+            (i + 1, value * 64 + byte - 128)
+        };
+        // Reject overlong forms, values above 0x10FFFF, and surrogates 0xD800..0xDFFF.
+        if scalar < minimum || scalar > 1114111 || (scalar >= 55296 && scalar <= 57343) {
+            core::intrinsic::panic::panic()
+        } else { (scalar_to_char(scalar as u32), index + count) }
     }
 
     /// Appends the UTF-8 byte range `start..end` to `out`.
@@ -114,14 +144,27 @@ impl TextView {
     /// Returns whether the view has no remaining bytes. O(1).
     pub fn is_empty(self: Self) -> bool { self.len() == 0 }
 
-    /// Advances by `count` bytes without copying. Panics past the end.
+    /// Advances by `count` Unicode scalars without copying. O(count).
+    /// Panics past the end or on malformed UTF-8.
     pub fn advance(self: Self, count: u64) -> Self {
-        if count > self.len() {
-            core::intrinsic::panic::panic()
-        } else {
-            TextView { base: self.base, offset: self.offset + count }
-        }
+        self.try_advance(count).unwrap_or_panic()
     }
+
+    /// Advances by `count` Unicode scalars, or returns `None` past the end.
+    /// Panics on malformed UTF-8. O(min(count, remaining characters)).
+    pub fn try_advance(self: Self, count: u64) -> Option<Self> {
+        let len = self.base.len();
+        let (i, offset) = while [i = (0 as u64), offset = self.offset] (i < count && offset < len) {
+            let (_, next) = self.base.decode_char(offset);
+            (i + 1, next)
+        };
+        if i == count {
+            Option::Some { TextView { base: self.base, offset: offset } }
+        } else { Option::None }
+    }
+
+    /// Iterates over the remaining Unicode scalar values.
+    pub fn chars(self: Self) -> CharIter { CharIter::new(self) }
 
     /// Reads a byte relative to this view. Panics when out of bounds.
     pub fn byte_at(self: Self, index: u64) -> u8 {
@@ -171,3 +214,28 @@ impl PartialEq for TextView {
 }
 
 impl Eq for TextView {}
+
+/// A character iterator retaining its source text and current byte offset.
+pub struct [value] CharIter {
+    view: TextView
+}
+
+impl CharIter {
+    pub fn new(view: TextView) -> Self { CharIter { view: view } }
+
+    /// Returns the unconsumed suffix.
+    pub fn view(self: Self) -> TextView { self.view }
+
+    /// Returns the next Unicode scalar and the updated iterator.
+    /// At the end, returns `None` and the exhausted iterator.
+    pub fn next(self: Self) -> (Option<char>, Self) {
+        if self.view.is_empty() {
+            (Option::None, self)
+        } else {
+            let (ch, offset) = self.view.base.decode_char(self.view.offset);
+            (Option::Some { ch }, CharIter { view: TextView {
+                base: self.view.base, offset: offset
+            } })
+        }
+    }
+}
