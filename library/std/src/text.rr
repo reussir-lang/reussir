@@ -182,29 +182,6 @@ impl TextView {
         }
     }
 
-    /// Advances by `count` Unicode scalars without copying the text.
-    /// Returns `None` past the end or on an incomplete or malformed character.
-    pub fn advance_char(self: Self, count: u64) -> Option<Self> {
-        let (_, index, valid) = while [i = (0 as u64), index = (0 as u64), valid = true]
-            (i < count && valid) {
-            match self.decode_at(index) {
-                Some(decoded) => {
-                    let (_, next) = decoded;
-                    (i + 1, next, true)
-                },
-                None => (i, index, false)
-            }
-        };
-        if valid { self.slice_byte(index, self.length) }
-        else { Option::None }
-    }
-
-    /// Advances by `count` bytes, or returns `None` past the end. O(1).
-    /// The resulting offset may lie inside a UTF-8 character.
-    pub fn advance_byte(self: Self, count: u64) -> Option<Self> {
-        self.slice_byte(count, self.length)
-    }
-
     /// Returns the first complete Unicode scalar, or `None`.
     pub fn head_char(self: Self) -> Option<char> {
         self.decode_at(0).map(|decoded: (char, u64)| { let (ch, _) = decoded; ch })
@@ -216,7 +193,12 @@ impl TextView {
     }
 
     /// Removes the first Unicode scalar, or returns `None` if it cannot be decoded.
-    pub fn tail_char(self: Self) -> Option<Self> { self.advance_char(1) }
+    pub fn tail_char(self: Self) -> Option<Self> {
+        self.decode_at(0).and_then(|decoded: (char, u64)| {
+            let (_, next) = decoded;
+            self.slice_byte(next, self.length)
+        })
+    }
 
     /// Removes the last Unicode scalar, or returns `None` if it cannot be decoded.
     pub fn init_char(self: Self) -> Option<Self> {
@@ -232,7 +214,7 @@ impl TextView {
         if self.is_empty() { Option::None } else { self.byte_at(self.length - 1) }
     }
 
-    pub fn tail_byte(self: Self) -> Option<Self> { self.advance_byte(1) }
+    pub fn tail_byte(self: Self) -> Option<Self> { self.slice_byte(1, self.length) }
 
     pub fn init_byte(self: Self) -> Option<Self> {
         if self.is_empty() { Option::None } else { self.slice_byte(0, self.length - 1) }
