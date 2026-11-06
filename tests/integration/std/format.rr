@@ -119,6 +119,13 @@ fn strings_and_traits() {
     expect(Text::from_string(String::from_str("🦀!")).view().advance_byte(1).unwrap_or_panic().fmt(), 80, "���!");
     expect(Text::from_str("λ").view().advance_byte(1).unwrap_or_panic().fmt(), 80, "�");
     expect(Text::from_str(core::intrinsic::str::slice("λ", 1)).view().fmt(), 80, "�");
+    let bounded = Text::from_str("aλ猫🦀z").view();
+    expect(bounded.tail_char().unwrap_or_panic().init_char().unwrap_or_panic().fmt(), 80, "λ猫🦀");
+    expect(bounded.slice_byte(0, 2).unwrap_or_panic().fmt(), 80, "a�");
+    expect(bounded.slice_byte(2, 8).unwrap_or_panic().fmt(), 80, "�猫�");
+    expect(bounded.slice_byte(2, 2).unwrap_or_panic().fmt(), 80, "");
+    let bounded_owned = Text::from_string(String::from_str("aλ猫🦀z")).view();
+    expect(bounded_owned.slice_byte(2, 8).unwrap_or_panic().fmt(), 80, "�猫�");
     expect(Format::Tuple { two(dynamic.fmt(), "x".fmt()) }, 7, "(λ猫, x)");
     expect(Format::Tuple { two(dynamic.fmt(), "x".fmt()) }, 6, "(\n    λ猫,\n    x,\n)");
     expect(String::from_str("λ\n猫").fmt().nest(2), 80, "λ\n  猫");

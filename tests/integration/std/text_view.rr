@@ -95,10 +95,71 @@ fn check_scalars(base: Text) {
     check(view.offset() == 0);
 }
 
+fn check_bounded(base: Text) {
+    let whole = base.view();
+    check(whole.head_char().unwrap_or_panic() == 'a');
+    check(whole.last_char().unwrap_or_panic() == 'z');
+    check(whole.head_byte().unwrap_or_panic() == 97);
+    check(whole.last_byte().unwrap_or_panic() == 122);
+    let middle = whole.tail_char().unwrap_or_panic().init_char().unwrap_or_panic();
+    check(middle.offset() == 1 && middle.len() == 9);
+    check(middle.base() == base);
+    check(middle.eq_str("λ猫🦀"));
+    check(middle.to_string().unwrap_or_panic().eq_str("λ猫🦀"));
+    check(middle.to_text().unwrap_or_panic().eq_str("λ猫🦀"));
+    check(middle.write(String::new(), 2, 5).unwrap_or_panic().eq_str("猫"));
+    check(middle.byte_at(9).is_none());
+    check(middle.advance_byte(10).is_none());
+    check(middle.advance_char(4).is_none());
+    check(middle.write(String::new(), 0, 10).is_none());
+    check(middle.head_char().unwrap_or_panic() == 'λ');
+    check(middle.last_char().unwrap_or_panic() == '🦀');
+    let trimmed = middle.init_char().unwrap_or_panic();
+    check(trimmed.eq_str("λ猫") && trimmed.len() == 5);
+    check(trimmed.last_char().unwrap_or_panic() == '猫');
+    let trimmed = trimmed.init_char().unwrap_or_panic();
+    check(trimmed.last_char().unwrap_or_panic() == 'λ');
+    check(trimmed.head_char().unwrap_or_panic() == 'λ');
+    check(trimmed.init_char().unwrap_or_panic().is_empty());
+    check(trimmed.tail_char().unwrap_or_panic().is_empty());
+    let empty = whole.slice_byte(1, 1).unwrap_or_panic();
+    check(empty.head_char().is_none() && empty.last_char().is_none());
+    check(empty.tail_char().is_none() && empty.init_char().is_none());
+    check(empty.head_byte().is_none() && empty.last_byte().is_none());
+    check(empty.tail_byte().is_none() && empty.init_byte().is_none());
+    check(empty.advance_char(0).unwrap_or_panic().is_empty());
+    check(empty.to_string().unwrap_or_panic().is_empty());
+    check(empty.to_text().unwrap_or_panic().is_empty());
+    check(whole.slice_byte(3, 2).is_none());
+    check(whole.slice_byte(0, 12).is_none());
+    check(whole.slice_byte(0, 18446744073709551615).is_none());
+    check(whole.slice_byte(18446744073709551615, 18446744073709551615).is_none());
+    check(whole.slice_byte(1, 10).unwrap_or_panic() == middle);
+    check(middle.slice_byte(2, 5).unwrap_or_panic().eq_str("猫"));
+    let short = whole.slice_byte(0, 2).unwrap_or_panic();
+    check(short.head_char().unwrap_or_panic() == 'a');
+    check(short.last_char().is_none() && short.init_char().is_none());
+    check(short.to_string().is_none() && short.to_text().is_none());
+    check(short.write(String::new(), 0, 2).is_none());
+    let fragment = short.tail_char().unwrap_or_panic();
+    check(fragment.len() == 1 && fragment.head_byte().unwrap_or_panic() == 206);
+    check(fragment.head_char().is_none() && fragment.tail_char().is_none());
+    check(fragment.advance_char(1).is_none());
+    check(middle.init_byte().unwrap_or_panic().last_char().is_none());
+    check(middle.tail_byte().unwrap_or_panic().head_char().is_none());
+    check(middle.init_byte().unwrap_or_panic().len() == 8);
+    check(middle.tail_byte().unwrap_or_panic().len() == 8);
+    check(whole.init_byte().unwrap_or_panic().eq_str("aλ猫🦀"));
+    check(whole.tail_byte().unwrap_or_panic().eq_str("λ猫🦀z"));
+    check(whole.eq_str("aλ猫🦀z"));
+}
+
 #[main]
 pub fn main() {
     let literal = Text::from_str("abcλ猫!");
     let owned = Text::from_string(String::from_str("abcλ").push_str("猫!"));
+    check_bounded(Text::from_str("aλ猫🦀z"));
+    check_bounded(Text::from_string(String::from_str("aλ猫🦀z")));
     check_view(literal);
     check_view(owned);
     match literal.view().to_text().unwrap_or_panic() {
