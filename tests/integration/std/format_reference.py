@@ -8,7 +8,7 @@ or measurement tables are shared with this oracle.
 import os
 import random
 import subprocess
-import sys
+from format_test_support import ENV, EXE, POSIX_TARGET
 
 
 ATOMS = ["a", "bb", "ccc", "λ猫", ""]
@@ -182,7 +182,7 @@ def main():
         data.extend([str(width), str(len(ops))])
         data.extend(str(value) for op in ops for value in op)
         expected.append(render(doc, width))
-    result = subprocess.run([sys.argv[1]], input="\n".join(data) + "\n", text=True,
+    result = subprocess.run([EXE], input="\n".join(data) + "\n", text=True, encoding="utf-8", env=ENV,
                             capture_output=True, timeout=90, check=True)
     actual = result.stdout.split("\n===\n")
     assert actual[-1] == "", repr(result.stdout[-100:])
@@ -190,15 +190,15 @@ def main():
     for i, (got, want) in enumerate(zip(actual, expected)):
         assert got == want, (i, cases[i], repr(got), repr(want))
     for mode, stdout, stderr in [(-1, "stdout λ", ""), (-2, "", "stderr 猫")]:
-        printed = subprocess.run([sys.argv[1]], input=f"{mode}\n", text=True,
+        printed = subprocess.run([EXE], input=f"{mode}\n", text=True, encoding="utf-8", env=ENV,
                                  capture_output=True, timeout=10, check=True)
-        assert (printed.stdout, printed.stderr) == (stdout, stderr)
-    if os.name == "posix":
+        assert (printed.stdout, printed.stderr) == (stdout, stderr), (mode, printed)
+    if POSIX_TARGET:
         read_fd, write_fd = os.pipe()
         os.close(read_fd)
         try:
             # Keep Python's ignored SIGPIPE disposition so the sink observes EPIPE.
-            failed = subprocess.run([sys.argv[1]], input="-3\n", text=True,
+            failed = subprocess.run([EXE], input="-3\n", text=True, encoding="utf-8", env=ENV,
                                     stdout=write_fd, stderr=subprocess.PIPE,
                                     restore_signals=False, timeout=10, check=True)
         finally:
