@@ -11,7 +11,7 @@ fn check(value: bool) {
 
 fn check_view(base: Text) {
     let whole = TextView::new(base);
-    let suffix = whole.advance(2).unwrap_or_panic().advance(1).unwrap_or_panic();
+    let suffix = whole.advance_char(2).unwrap_or_panic().advance_char(1).unwrap_or_panic();
     check(whole.offset() == 0 && whole.len() == 9);
     check(whole.to_string().unwrap_or_panic().eq_str("abcλ猫!"));
     check(suffix.base() == base);
@@ -31,18 +31,33 @@ fn check_view(base: Text) {
     check(suffix.write(String::new(), 1, 5).is_none());
     check(suffix.write(String::new(), 0, 3).is_none());
     check(suffix.write(String::new(), 0, 18446744073709551615).is_none());
-    check(suffix.advance(1).unwrap_or_panic().offset() == 5);
-    check(suffix.advance(1).unwrap_or_panic().eq_str("猫!"));
-    check(suffix.advance(2).unwrap_or_panic().offset() == 8);
-    check(suffix.advance(2).unwrap_or_panic().eq_str("!"));
-    check(suffix.advance(0).unwrap_or_panic() == suffix);
-    check(suffix.advance(4).is_none());
-    check(suffix.advance(18446744073709551615).is_none());
-    let empty = suffix.advance(3).unwrap_or_panic();
+    check(suffix.advance_char(1).unwrap_or_panic().offset() == 5);
+    check(suffix.advance_char(1).unwrap_or_panic().eq_str("猫!"));
+    check(suffix.advance_char(2).unwrap_or_panic().offset() == 8);
+    check(suffix.advance_char(2).unwrap_or_panic().eq_str("!"));
+    check(suffix.advance_char(0).unwrap_or_panic() == suffix);
+    check(suffix.advance_byte(0).unwrap_or_panic() == suffix);
+    check(suffix.advance_byte(2).unwrap_or_panic() == suffix.advance_char(1).unwrap_or_panic());
+    check(suffix.advance_byte(6).unwrap_or_panic().is_empty());
+    check(suffix.advance_byte(7).is_none());
+    check(suffix.advance_byte(18446744073709551615).is_none());
+    let inside = suffix.advance_byte(1).unwrap_or_panic();
+    check(inside.offset() == 4 && inside.len() == 5);
+    check(inside.byte_at(0).unwrap_or_panic() == 187);
+    check(inside.advance_char(1).is_none());
+    check(inside.to_string().is_none());
+    check(inside.write(String::new(), 0, inside.len()).is_none());
+    check(inside.advance_byte(1).unwrap_or_panic().eq_str("猫!"));
+    check(inside.write(String::new(), 1, 4).unwrap_or_panic().eq_str("猫"));
+    check(suffix.advance_char(4).is_none());
+    check(suffix.advance_char(18446744073709551615).is_none());
+    let empty = suffix.advance_char(3).unwrap_or_panic();
     check(empty.is_empty() && empty.offset() == base.len());
     check(empty.eq_str(""));
-    check(empty.advance(0).unwrap_or_panic().is_empty());
-    check(empty.advance(1).is_none() && empty.byte_at(0).is_none());
+    check(empty.advance_char(0).unwrap_or_panic().is_empty());
+    check(empty.advance_char(1).is_none() && empty.byte_at(0).is_none());
+    check(empty.advance_byte(0).unwrap_or_panic().is_empty());
+    check(empty.advance_byte(1).is_none());
     check(empty.to_string().unwrap_or_panic().is_empty());
     check(empty.write(String::from_str("keep"), 0, 0).unwrap_or_panic().eq_str("keep"));
     check(whole.eq_str("abcλ猫!"));
@@ -53,13 +68,13 @@ fn check_view(base: Text) {
 
 fn check_scalars(base: Text) {
     let view = base.view();
-    check(view.advance(1).unwrap_or_panic().offset() == 1);
-    check(view.advance(2).unwrap_or_panic().offset() == 2);
-    check(view.advance(3).unwrap_or_panic().offset() == 4);
-    check(view.advance(4).unwrap_or_panic().offset() == 7);
-    check(view.advance(5).unwrap_or_panic().offset() == 11);
-    check(view.advance(6).unwrap_or_panic().is_empty());
-    check(view.advance(7).is_none());
+    check(view.advance_char(1).unwrap_or_panic().offset() == 1);
+    check(view.advance_char(2).unwrap_or_panic().offset() == 2);
+    check(view.advance_char(3).unwrap_or_panic().offset() == 4);
+    check(view.advance_char(4).unwrap_or_panic().offset() == 7);
+    check(view.advance_char(5).unwrap_or_panic().offset() == 11);
+    check(view.advance_char(6).unwrap_or_panic().is_empty());
+    check(view.advance_char(7).is_none());
     let (ch, next) = base.decode_char(0).unwrap_or_panic();
     check(ch == '\0' && next == 1);
     let (ch, next) = base.decode_char(7).unwrap_or_panic();
@@ -77,16 +92,16 @@ pub fn main() {
     check_view(owned);
     check_scalars(Text::from_str("\0aé猫🦀\u{10ffff}"));
     check_scalars(Text::from_string(String::from_str("\0aé猫🦀\u{10ffff}")));
-    check(Text::from_str("a\u{301}").view().advance(1).unwrap_or_panic().eq_str("\u{301}"));
-    check(Text::from_str("a\u{301}").view().advance(2).unwrap_or_panic().is_empty());
-    check(literal.view().advance(3).unwrap_or_panic() == owned.view().advance(3).unwrap_or_panic());
+    check(Text::from_str("a\u{301}").view().advance_char(1).unwrap_or_panic().eq_str("\u{301}"));
+    check(Text::from_str("a\u{301}").view().advance_char(2).unwrap_or_panic().is_empty());
+    check(literal.view().advance_char(3).unwrap_or_panic() == owned.view().advance_char(3).unwrap_or_panic());
     check(Text::from_str("").view() == Text::from_string(String::new()).view());
     let original = String::from_str("abcλ猫!");
-    let view = Text::from_string(original).view().advance(3).unwrap_or_panic();
+    let view = Text::from_string(original).view().advance_char(3).unwrap_or_panic();
     let changed = original.push_str("changed");
     check(view.eq_str("λ猫!") && changed.eq_str("abcλ猫!changed"));
     let invalid = Text::from_str(core::intrinsic::str::slice("λ", 1)).view();
-    check(invalid.advance(1).is_none());
+    check(invalid.advance_char(1).is_none());
     check(invalid.to_string().is_none());
     check(invalid.write(String::new(), 0, 1).is_none());
 }

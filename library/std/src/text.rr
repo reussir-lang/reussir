@@ -144,7 +144,7 @@ impl TextView {
 
     /// Advances by `count` Unicode scalars without copying the text.
     /// Returns `None` past the end or on malformed UTF-8.
-    pub fn advance(self: Self, count: u64) -> Option<Self> {
+    pub fn advance_char(self: Self, count: u64) -> Option<Self> {
         let (_, offset, valid) = while [i = (0 as u64), offset = self.offset, valid = true]
             (i < count && valid) {
             match self.base.decode_char(offset) {
@@ -157,6 +157,13 @@ impl TextView {
         };
         if valid { Option::Some { TextView { base: self.base, offset: offset } } }
         else { Option::None }
+    }
+
+    /// Advances by `count` bytes, or returns `None` past the end. O(1).
+    /// The resulting offset may lie inside a UTF-8 character.
+    pub fn advance_byte(self: Self, count: u64) -> Option<Self> {
+        if count > self.len() { Option::None }
+        else { Option::Some { TextView { base: self.base, offset: self.offset + count } } }
     }
 
     /// Reads a byte relative to this view, or returns `None` out of bounds.
