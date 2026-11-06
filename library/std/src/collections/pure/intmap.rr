@@ -1,0 +1,151 @@
+//! Packed big-endian Patricia branches for signed integer keys.
+//!
+//! The least significant set bit of a branch prefix is its branching bit;
+//! higher bits are the shared key prefix and lower bits are zero. A branch
+//! has two nonempty children, and branching bits decrease toward the leaves.
+
+import core::intrinsic::math;
+import std::collections::pure::IntMap;
+import std::option::Option;
+
+// Flipping the sign bit makes unsigned routing follow signed key order.
+fn ordered(key : i64) -> u64 {
+    (key as u64) ^ (1 << 63)
+}
+
+fn outside(key : u64, prefix : u64) -> bool {
+    ((key ^ prefix) & (18446744073709551615 ^ (prefix ^ (prefix - 1)))) != 0
+}
+
+// The two representatives differ above their subtrees' branching bits.
+fn join<V>(k : u64, a : IntMap<V>, q : u64, b : IntMap<V>) -> IntMap<V> {
+    let bit : u64 = 1 << (63 - math::ctlz(k ^ q));
+    let prefix = (k & (18446744073709551615 ^ (bit ^ (bit - 1)))) | bit;
+    if k < prefix {
+        IntMap::Bin { prefix, a, b }
+    } else {
+        IntMap::Bin { prefix, b, a }
+    }
+}
+
+fn branch<V>(prefix : u64, left : IntMap<V>, right : IntMap<V>) -> IntMap<V> {
+    match left {
+        Empty => right,
+        _ => match right {
+            Empty => left,
+            _ => IntMap::Bin { prefix, left, right }
+        }
+    }
+}
+
+impl<V> IntMap<V> {
+    /// Construct an empty map.
+    pub fn new() -> Self {
+        IntMap::Empty
+    }
+
+    /// Construct a map containing one entry.
+    pub fn singleton(key : i64, value : V) -> Self {
+        IntMap::Tip { key, value }
+    }
+
+    /// Whether the map contains no entries.
+    pub fn is_empty(self : Self) -> bool {
+        match self {
+            Empty => true,
+            _ => false
+        }
+    }
+
+    /// Look up a key, returning None if it is absent.
+    pub fn get(self : Self, key : i64) -> Option<V> {
+        match self {
+            Empty => Option::None,
+            Tip(k, value) => if k == key { Option::Some { value } } else { Option::None },
+            Bin(prefix, left, right) => if ordered(key) < prefix {
+                left.get(key)
+            } else {
+                right.get(key)
+            }
+        }
+    }
+
+    /// Look up a key without constructing an Option; return default if absent.
+    pub fn get_or(self : Self, key : i64, default : V) -> V {
+        match self {
+            Empty => default,
+            Tip(k, value) => if k == key { value } else { default },
+            Bin(prefix, left, right) => if ordered(key) < prefix {
+                left.get_or(key, default)
+            } else {
+                right.get_or(key, default)
+            }
+        }
+    }
+
+    /// Whether the map contains the key.
+    pub fn contains_key(self : Self, key : i64) -> bool {
+        match self {
+            Empty => false,
+            Tip(k, _) => k == key,
+            Bin(prefix, left, right) => if ordered(key) < prefix {
+                left.contains_key(key)
+            } else {
+                right.contains_key(key)
+            }
+        }
+    }
+
+    /// Insert a key, replacing its value if it is already present.
+    pub fn insert(self : Self, key : i64, value : V) -> Self {
+        match self {
+            Empty => IntMap::Tip { key, value },
+            Tip(k, previous) => if key == k {
+                IntMap::Tip { key, value }
+            } else {
+                join(ordered(key), IntMap::Tip { key, value }, ordered(k), IntMap::Tip { k, previous })
+            },
+            Bin(prefix, left, right) => {
+                let k = ordered(key);
+                if outside(k, prefix) {
+                    join(k, IntMap::Tip { key, value }, prefix, IntMap::Bin { prefix, left, right })
+                } else {
+                    if k < prefix {
+                        IntMap::Bin { prefix, left.insert(key, value), right }
+                    } else {
+                        IntMap::Bin { prefix, left, right.insert(key, value) }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Remove a key. An absent key leaves the entries unchanged.
+    pub fn remove(self : Self, key : i64) -> Self {
+        match self {
+            Empty => IntMap::Empty,
+            Tip(k, value) => if key == k { IntMap::Empty } else { IntMap::Tip { k, value } },
+            Bin(prefix, left, right) => {
+                let k = ordered(key);
+                if outside(k, prefix) {
+                    IntMap::Bin { prefix, left, right }
+                } else {
+                    if k < prefix {
+                        branch(prefix, left.remove(key), right)
+                    } else {
+                        branch(prefix, left, right.remove(key))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fold entries in ascending signed key order. Takes O(n) time.
+    pub fn fold_left<A>(self : Self, initial : A, f : (A, i64, V) -> A) -> A {
+        match self {
+            Empty => initial,
+            Tip(key, value) => f(initial, key, value),
+            Bin(_, left, right) => right.fold_left(left.fold_left(initial, f), f)
+        }
+    }
+}

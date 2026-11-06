@@ -1,0 +1,148 @@
+// RUN: %rene build --manifest-path %S/rene.ncl --bin intmap --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: release{{[/\\]}}intmap
+// RUN: %std_rene_build/release/intmap%exe_ext | %FileCheck %s
+// CHECK: 1
+// CHECK-NEXT: 1
+// CHECK-NEXT: 1
+// CHECK-NEXT: 1
+// CHECK-NEXT: 1
+
+import std::collections::pure::IntMap;
+import std::collections::pure::wavlmap::WavlMap;
+import std::option::Option;
+
+fn check(value : bool) {
+    test_utils::io::write_i32(if value { 1 } else { 0 })
+}
+
+fn basics() -> bool {
+    let empty : IntMap<i64> = IntMap::new();
+    let one = IntMap::singleton(4, 40);
+    let two = one.insert(8, 80);
+    let replaced = two.insert(4, 400);
+    let removed = replaced.remove(8);
+    empty.is_empty() && empty.remove(3).is_empty() && empty.get(3).is_none()
+        && empty.get_or(3, 99) == 99 && !empty.contains_key(3)
+        && !one.is_empty() && !one.contains_key(8) && one.get_or(4, 0) == 40
+        && two.get_or(4, 0) == 40 && two.get_or(8, 0) == 80
+        && replaced.get_or(4, 0) == 400 && replaced.contains_key(8)
+        && removed.get_or(4, 0) == 400 && !removed.contains_key(8)
+        && removed.remove(4).is_empty() && two.remove(9).get_or(8, 0) == 80
+        && empty.fold_left(123, |acc, key, value| acc + key + value) == 123
+}
+
+fn signed_keys() -> bool {
+    let map : IntMap<i64> = IntMap::new()
+        .insert(0, 4).insert(9223372036854775807, 8)
+        .insert(-9223372036854775808, 1).insert(-1, 3)
+        .insert(256, 7).insert(1, 5).insert(-256, 2).insert(255, 6);
+    let order = map.fold_left(0, |acc, key, value| acc * 10 + value);
+    let reduced = map.remove(-9223372036854775808).remove(9223372036854775807);
+    order == 12345678 && reduced.fold_left(0, |a, k, v| a * 10 + v) == 234567
+        && map.get_or(-9223372036854775808, 0) == 1
+        && map.get_or(9223372036854775807, 0) == 8
+        && reduced.get(-9223372036854775808).is_none()
+        && map.remove(17).fold_left(0, |a, k, v| a * 10 + v) == order
+        && map.get_or(17, 91) == 91
+}
+
+fn powers(map : IntMap<i64>, bit : u64) -> IntMap<i64> {
+    if bit == 64 { map } else {
+        powers(map.insert((1u64 << bit) as i64, bit as i64), bit + 1)
+    }
+}
+
+fn strip_powers(map : IntMap<i64>, bit : u64) -> bool {
+    if bit == 64 { map.is_empty() } else {
+        let key = (1u64 << bit) as i64;
+        map.get_or(key, -1) == bit as i64
+            && strip_powers(map.remove(key), bit + 1)
+    }
+}
+
+struct [value] Order {
+    previous : i64,
+    count : u64,
+    sorted : bool
+}
+
+fn key_at(index : i64) -> i64 {
+    ((index as u64) * 11400714819323198485) as i64
+}
+
+fn agrees(map : IntMap<i64>, model : WavlMap<i64, i64>, index : i64) -> bool {
+    if index == 64 { true } else {
+        let key = key_at(index);
+        let expected = model.get(key).unwrap_or(-1);
+        map.get(key).unwrap_or(-1) == expected && map.get_or(key, -1) == expected
+            && map.contains_key(key) == (expected != -1)
+            && agrees(map, model, index + 1)
+    }
+}
+
+fn valid(map : IntMap<i64>, model : WavlMap<i64, i64>) -> bool {
+    let order = map.fold_left(Order { previous: 0, count: 0, sorted: true }, |acc, key, value|
+        Order {
+            previous: key,
+            count: acc.count + 1,
+            sorted: acc.sorted && (acc.count == 0 || acc.previous < key)
+        });
+    order.sorted && order.count == model.len() && agrees(map, model, 0)
+}
+
+fn churn(
+    map : IntMap<i64>, model : WavlMap<i64, i64>,
+    saved : IntMap<i64>, saved_model : WavlMap<i64, i64>,
+    seed : i64, steps : i64
+) -> bool {
+    if !valid(map, model) || !valid(saved, saved_model) { false } else {
+        if steps == 0 { true } else {
+            let next = (seed * 48271) % 2147483647;
+            let key = key_at(next % 64);
+            let current = if steps % 7 == 0 { saved } else { map };
+            let current_model = if steps % 7 == 0 { saved_model } else { model };
+            let updated = if next % 4 == 0 {
+                current.remove(key)
+            } else {
+                current.insert(key, next)
+            };
+            let updated_model = if next % 4 == 0 {
+                current_model.remove(key)
+            } else {
+                current_model.insert(key, next)
+            };
+            if steps % 3 == 0 {
+                churn(updated, updated_model, map, model, next, steps - 1)
+            } else {
+                churn(updated, updated_model, saved, saved_model, next, steps - 1)
+            }
+        }
+    }
+}
+
+enum Payload { End, Link(i64, Payload) }
+
+fn payload_sum(value : Payload) -> i64 {
+    match value { End => 0, Link(head, tail) => head + payload_sum(tail) }
+}
+
+fn generic_values() -> bool {
+    let original = IntMap::singleton(-4, Payload::Link { 7, Payload::End });
+    let extended = original.insert(4, Payload::Link { 11, original.get_or(-4, Payload::End) });
+    let replaced = extended.insert(-4, Payload::End);
+    payload_sum(original.get_or(-4, Payload::End)) == 7
+        && payload_sum(extended.get(4).unwrap()) == 18
+        && payload_sum(replaced.get_or(-4, Payload::End)) == 0
+        && payload_sum(replaced.remove(-4).get_or(4, Payload::End)) == 18
+        && payload_sum(extended.get_or(-4, Payload::End)) == 7
+}
+
+#[main]
+pub fn entry() {
+    check(basics());
+    check(signed_keys());
+    let all_bits = powers(IntMap::new(), 0);
+    check(strip_powers(all_bits, 0) && all_bits.fold_left(0, |a, k, v| a + 1) == 64);
+    check(churn(IntMap::new(), WavlMap::new(), IntMap::new(), WavlMap::new(), 994, 1000));
+    check(generic_values());
+}
