@@ -606,7 +606,23 @@ fn write_stderr(text: RawString) -> i32 [{
 impl Display for Format { fn fmt(self: Self) -> Format { self } }
 impl Display for Text { fn fmt(self: Self) -> Format { Format::Text { self } } }
 impl Display for TextView {
-    fn fmt(self: Self) -> Format { self.to_text().unwrap_or_panic().fmt() }
+    /// Replaces leading UTF-8 continuation bytes with U+FFFD.
+    fn fmt(self: Self) -> Format {
+        let (start, prefix, _) = while [start = (0 as u64), prefix = Format::Empty, scanning = true]
+            (start < self.len() && scanning) {
+            match self.byte_at(start) {
+                Some(byte) => if byte >= 128 && byte <= 191 {
+                    (start + 1, prefix.append(Format::Character { '\u{fffd}' }), true)
+                } else { (start, prefix, false) },
+                None => (start, prefix, false)
+            }
+        };
+        let suffix = self.advance_byte(start).and_then(|view: TextView| view.to_text());
+        prefix.append(match suffix {
+            Some(text) => text.fmt(),
+            None => Format::Empty
+        })
+    }
 }
 impl Display for str { fn fmt(self: Self) -> Format { literal(self) } }
 impl Display for String { fn fmt(self: Self) -> Format { Format::Text { Text::Owned { self } } } }

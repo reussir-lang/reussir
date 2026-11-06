@@ -112,6 +112,13 @@ fn strings_and_traits() {
     expect(literal_view.advance_byte(12).unwrap_or_panic().fmt(), 0, "");
     let owned_view = Text::from_string(String::from_str("prefix λ\n猫")).view();
     expect(owned_view.advance_char(7).unwrap_or_panic().fmt().nest(2), 80, "λ\n  猫");
+    expect(literal_view.advance_byte(8).unwrap_or_panic().fmt(), 80, "�猫");
+    expect(owned_view.advance_byte(8).unwrap_or_panic().fmt().nest(2), 80, "�\n  猫");
+    expect(Text::from_str("猫!").view().advance_byte(1).unwrap_or_panic().fmt(), 80, "��!");
+    expect(Text::from_str("猫!").view().advance_byte(2).unwrap_or_panic().fmt(), 80, "�!");
+    expect(Text::from_string(String::from_str("🦀!")).view().advance_byte(1).unwrap_or_panic().fmt(), 80, "���!");
+    expect(Text::from_str("λ").view().advance_byte(1).unwrap_or_panic().fmt(), 80, "�");
+    expect(Text::from_str(core::intrinsic::str::slice("λ", 1)).view().fmt(), 80, "�");
     expect(Format::Tuple { two(dynamic.fmt(), "x".fmt()) }, 7, "(λ猫, x)");
     expect(Format::Tuple { two(dynamic.fmt(), "x".fmt()) }, 6, "(\n    λ猫,\n    x,\n)");
     expect(String::from_str("λ\n猫").fmt().nest(2), 80, "λ\n  猫");
