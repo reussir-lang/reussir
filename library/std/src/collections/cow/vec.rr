@@ -63,6 +63,17 @@ impl<T> Vec<T> {
         Vec { raw: raw_new() }
     }
 
+    /// Wraps a raw runtime vector, such as one an `#[ffi(import)]` body
+    /// built. O(1).
+    pub fn from_raw(raw : RawVec<T>) -> Self {
+        Vec { raw: raw }
+    }
+
+    /// Transfers the owned runtime buffer without copying it.
+    pub fn into_raw(self : Self) -> RawVec<T> {
+        self.raw
+    }
+
     /// Creates a one-element vector. O(1).
     pub fn singleton(value : T) -> Self {
         Vec::new().push(value)

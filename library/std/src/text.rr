@@ -1,0 +1,86 @@
+//! Static string literals or owned copy-on-write strings.
+
+import std::string::String;
+
+/// Either an immutable static `str` literal or a growable `String`.
+pub enum Text {
+    Literal(str),
+    Owned(String)
+}
+
+impl Text {
+    /// Wraps a static string literal without copying.
+    pub fn from_str(value: str) -> Self {
+        Text::Literal { value }
+    }
+
+    /// Wraps an owned string without copying.
+    pub fn from_string(value: String) -> Self {
+        Text::Owned { value }
+    }
+
+    /// Converts into an owned `String`, copying only when `self` is a literal.
+    pub fn to_string(self: Self) -> String {
+        match self {
+            Literal(s) => String::from_str(s),
+            Owned(s) => s
+        }
+    }
+
+    /// Returns the length in UTF-8 bytes. O(1).
+    pub fn len(self: Self) -> u64 {
+        match self {
+            Literal(s) => core::intrinsic::str::len(s),
+            Owned(s) => s.len()
+        }
+    }
+
+    /// Returns whether the text has no bytes. O(1).
+    pub fn is_empty(self: Self) -> bool {
+        self.len() == 0
+    }
+
+    /// Reads a UTF-8 byte. Panics when `index` is out of bounds.
+    pub fn byte_at(self: Self, index: u64) -> u8 {
+        match self {
+            Literal(s) => {
+                if index >= core::intrinsic::str::len(s) {
+                    core::intrinsic::panic::panic()
+                } else {
+                    core::intrinsic::str::byte_at(s, index)
+                }
+            },
+            Owned(s) => s.byte_at(index)
+        }
+    }
+
+    /// Appends the UTF-8 byte range `start..end` to `out`.
+    pub fn write(self: Self, out: String, start: u64, end: u64) -> String {
+        match self {
+            Literal(s) => out.push_str_range(s, start, end),
+            Owned(s) => out.push_string_range(s, start, end)
+        }
+    }
+
+    /// Returns whether the contents equal `other`, byte-wise.
+    pub fn eq_str(self: Self, other: str) -> bool {
+        match self {
+            Literal(s) => s == other,
+            Owned(s) => s.eq_str(other)
+        }
+    }
+}
+
+impl PartialEq for Text {
+    fn eq(self: Self, other: Self) -> bool {
+        match self {
+            Literal(lhs) => other.eq_str(lhs),
+            Owned(lhs) => match other {
+                Literal(rhs) => lhs.eq_str(rhs),
+                Owned(rhs) => lhs == rhs
+            }
+        }
+    }
+}
+
+impl Eq for Text {}
