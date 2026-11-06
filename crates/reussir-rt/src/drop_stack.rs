@@ -319,7 +319,11 @@ fn execute(context: &DropContext, walk: impl FnOnce()) -> Vec<fn()> {
     {
         let _active = scopeguard::guard(ACTIVE.replace(true), |previous| ACTIVE.set(previous));
         walk();
-        context.drain();
+        if context.active_run.head.get().is_some()
+            || context.pending.borrow().work.len() != context.boundary.get()
+        {
+            context.drain();
+        }
     }
     let mut context = context.pending.borrow_mut();
     context.releases.clear();
@@ -330,7 +334,11 @@ fn execute(context: &DropContext, walk: impl FnOnce()) -> Vec<fn()> {
         context.cells.shrink_to(RETAINED_BUFFER_CAPACITY);
     }
     debug_assert!(context.work.is_empty() && context.cells.is_empty());
-    std::mem::take(&mut context.on_scope_exit)
+    if context.on_scope_exit.is_empty() {
+        Vec::new()
+    } else {
+        std::mem::take(&mut context.on_scope_exit)
+    }
 }
 
 /// Completes a release and its pending work. Nested calls complete their own
