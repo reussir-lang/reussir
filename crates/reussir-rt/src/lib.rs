@@ -23,10 +23,12 @@ pub mod panic;
 #[cfg(feature = "pjrt")]
 pub mod pjrt;
 pub mod print;
+pub mod random;
 pub mod rc;
 pub mod rcgmp;
 pub mod region;
 pub mod symbols;
+pub use getrandom;
 use panic::panic;
 
 // The `sync` dialect's futex slow paths: lowered lock-guarded cell code calls

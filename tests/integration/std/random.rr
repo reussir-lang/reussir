@@ -1,0 +1,119 @@
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin random %rrc_linker
+// RUN: %std_rene_build/release/random%exe_ext
+
+import std::format::Display;
+import std::format::Options;
+import std::hash::FastHasher;
+import std::hash::Hasher;
+import std::hash::StrongHasher;
+import std::random::MWC192X;
+import std::random::RandomError;
+import std::random::RandomState;
+import std::random::Rng;
+import std::random::Xoshiro256pp;
+import std::result::Result;
+
+fn check(value: bool) {
+    if !value { core::intrinsic::panic::panic() }
+}
+
+fn unwrap_ok<T>(res: Result<T, RandomError>) -> T {
+    match res {
+        Ok(value) => value,
+        Err(_) => core::intrinsic::panic::panic()
+    }
+}
+
+fn test_error() {
+    check(RandomError::Unsupported == RandomError::Unsupported);
+    check(RandomError::Other == RandomError::Other);
+    check(RandomError::OsError { 5 } == RandomError::OsError { 5 });
+    check(RandomError::OsError { 5 } != RandomError::OsError { 6 });
+    check(RandomError::Unsupported != RandomError::Other);
+    check(RandomError::Unsupported != RandomError::OsError { 5 });
+    check(RandomError::Other != RandomError::OsError { 5 });
+
+    let opts = Options::default();
+    check(RandomError::Unsupported.fmt().render(opts).to_string().eq_str("Unsupported"));
+    check(RandomError::Other.fmt().render(opts).to_string().eq_str("Other"));
+    check(RandomError::OsError { 5 }.fmt().render(opts).to_string().eq_str("OsError(5)"));
+    check(RandomError::OsError { 0 - 22 }.fmt().render(opts).to_string().eq_str("OsError(-22)"));
+}
+
+fn test_entropy64() {
+    let a = unwrap_ok(std::random::entropy64());
+    let b = unwrap_ok(std::random::entropy64());
+    let distinct = if a != b {
+        true
+    } else {
+        let c = unwrap_ok(std::random::entropy64());
+        a != c
+    };
+    check(distinct);
+
+    let seed = if a != b { a } else { unwrap_ok(std::random::entropy64()) };
+    check(FastHasher::from_entropy(seed).write_u64(42).finish() ==
+        std::hash::fast_hasher_seeded(seed).write_u64(42).finish());
+    check(StrongHasher::from_entropy(seed).write_u64(42).finish() ==
+        std::hash::strong_hasher_seeded(seed).write_u64(42).finish());
+}
+
+fn check_rng_matches_state<R: RandomState>(seed: u64) {
+    let rng: Rng<R> = Rng::new_from_seed(seed);
+    let rng2: Rng<R> = Rng::new_from_seed(seed);
+    let other: Rng<R> = Rng::new_from_seed(seed + 1);
+
+    let s0 = R::from_seed(seed);
+    let (v0, s1) = s0.next();
+    let (v1, s2) = s1.next();
+    let (v2, s3) = s2.next();
+    let (v3, _) = s3.next();
+
+    check(rng.next() == v0);
+    check(rng.next() == v1);
+    check(rng.next() == v2);
+    check(rng.next() == v3);
+
+    check(rng2.next() == v0);
+    check(rng2.next() == v1);
+    check(other.next() != v0);
+    check(v0 != v1 && v1 != v2 && v2 != v3);
+
+    let from_ent: Rng<R> = unwrap_ok(Rng::new_from_entropy());
+    let e0 = from_ent.next();
+    let e1 = from_ent.next();
+    check(e0 != e1);
+}
+
+fn test_xoshiro256pp() {
+    check_rng_matches_state<Xoshiro256pp>(0);
+    check_rng_matches_state<Xoshiro256pp>(42);
+
+    // Reference vectors: xoshiro256++ seeded via SplitMix64(0).
+    let rng: Rng<Xoshiro256pp> = Rng::new_from_seed(0);
+    check(rng.next() == 5987356902031041503);
+    check(rng.next() == 7051070477665621255);
+    check(rng.next() == 6633766593972829180);
+    check(rng.next() == 211316841551650330);
+}
+
+fn test_mwc192x() {
+    check_rng_matches_state<MWC192X>(0);
+    check_rng_matches_state<MWC192X>(42);
+
+    // Reference vectors: MWC192X (MWC_A2 = 0xff4e24dd418f5433) seeded via
+    // SplitMix64(0) with x = sm(0), y = sm(1), c = 1.
+    let rng: Rng<MWC192X> = Rng::new_from_seed(0);
+    check(rng.next() == 7960286522194355701);
+    check(rng.next() == 3136876846181122791);
+    check(rng.next() == 13675753176678066963);
+    check(rng.next() == 7320853031938515170);
+}
+
+#[main]
+pub fn main() {
+    test_error();
+    test_entropy64();
+    test_xoshiro256pp();
+    test_mwc192x();
+}

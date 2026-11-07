@@ -40,8 +40,8 @@ use crate::kind::SyntaxKind::{self, *};
 /// this set, and their tests iterate it so a new entry cannot silently miss
 /// one of the mirrors.
 pub const PRIM_TYPES: &[&str] = &[
-    "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64", "bfloat16",
-    "float8", "bool", "str", "char", "unit",
+    "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f16", "f32", "f64",
+    "bfloat16", "float8", "bool", "str", "char", "unit",
 ];
 
 /// The contextual capability names, under the same contract as

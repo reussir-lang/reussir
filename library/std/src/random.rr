@@ -1,0 +1,193 @@
+//! Operating-system entropy and pseudorandom number generators.
+
+import core::intrinsic::cell;
+import std::collections::pure::list::List;
+import std::format::Display;
+import std::format::Format;
+import std::format::call;
+import std::result::Result;
+import std::text::Text;
+
+extern "rust" [{
+    use reussir_rt::random::GetRandomResult as RGetRandomResult;
+}];
+
+#[ffi(rust = "::reussir_rt::random::GetRandomResult")]
+struct GetRandomResult;
+
+#[ffi(import)]
+fn raw_entropy64() -> GetRandomResult [{ RGetRandomResult::entropy64() }];
+
+#[ffi(import)]
+fn raw_status(res: GetRandomResult) -> i64 [{ res.status() }];
+
+#[ffi(import)]
+fn raw_value(res: GetRandomResult) -> u64 [{ res.value() }];
+
+/// Reason an operating-system entropy request failed.
+pub enum [value] RandomError {
+    Unsupported,
+    OsError(i32),
+    Other
+}
+
+impl PartialEq for RandomError {
+    fn eq(self: Self, other: Self) -> bool {
+        match self {
+            Unsupported => match other {
+                Unsupported => true,
+                OsError(_) => false,
+                Other => false
+            },
+            OsError(lhs) => match other {
+                Unsupported => false,
+                OsError(rhs) => lhs == rhs,
+                Other => false
+            },
+            Other => match other {
+                Unsupported => false,
+                OsError(_) => false,
+                Other => true
+            }
+        }
+    }
+}
+
+impl Eq for RandomError {}
+
+impl Display for RandomError {
+    fn fmt(self: Self) -> Format {
+        match self {
+            Unsupported => Format::Text { Text::Literal { "Unsupported" } },
+            OsError(code) => call(
+                Format::Text { Text::Literal { "OsError" } },
+                List::Cons { code.fmt(), List::Nil },
+                4
+            ),
+            Other => Format::Text { Text::Literal { "Other" } }
+        }
+    }
+}
+
+// Decodes a non-zero status from `GetRandomResult`.
+fn decode_error(status: i64) -> RandomError {
+    if status == 1 {
+        RandomError::Unsupported
+    } else {
+        if (status & 3) == 3 {
+            RandomError::OsError { (status >> 2) as i32 }
+        } else {
+            RandomError::Other
+        }
+    }
+}
+
+/// Fetches 64 bits of operating-system entropy.
+pub fn entropy64() -> Result<u64, RandomError> {
+    let res = raw_entropy64();
+    let status = raw_status(res);
+    if status == 0 {
+        Result::Ok { raw_value(res) }
+    } else {
+        Result::Err { decode_error(status) }
+    }
+}
+
+/// Pure state transition for a 64-bit pseudorandom number generator.
+pub trait RandomState {
+    fn from_seed(seed: u64) -> Self;
+    fn next(self: Self) -> (u64, Self);
+}
+
+/// Interior-mutable pseudorandom number generator wrapping a [`RandomState`].
+pub struct Rng<R: RandomState>(RefCell<R>)
+
+impl<R: RandomState> Rng<R> {
+    /// Creates a generator initialized from `seed`.
+    pub fn new_from_seed(seed: u64) -> Self {
+        Rng { cell::alloc<RefCell<R>>(R::from_seed(seed)) }
+    }
+
+    /// Creates a generator seeded from operating-system entropy.
+    pub fn new_from_entropy() -> Result<Self, RandomError> {
+        entropy64().map(|seed: u64| Rng::new_from_seed(seed))
+    }
+
+    /// Advances the generator state in place and returns the next 64-bit word.
+    pub fn next(self: Self) -> u64 {
+        let (out, next_state) = cell::get(self.0).next();
+        cell::set(self.0, next_state);
+        out
+    }
+}
+
+// SplitMix64 step used to expand a 64-bit seed into multi-word generator states.
+fn splitmix64(state: u64) -> (u64, u64) {
+    let next = state + 0x9e3779b97f4a7c15;
+    let z = (next ^ (next >> 30)) * 0xbf58476d1ce4e5b9;
+    let z = (z ^ (z >> 27)) * 0x94d049bb133111eb;
+    (z ^ (z >> 31), next)
+}
+
+fn rotl(x: u64, k: u64) -> u64 {
+    (x << k) | (x >> (64 - k))
+}
+
+/// Blackman and Vigna's `xoshiro256++` 64-bit generator state.
+pub struct [value] Xoshiro256pp {
+    s0: u64,
+    s1: u64,
+    s2: u64,
+    s3: u64
+}
+
+impl RandomState for Xoshiro256pp {
+    fn from_seed(seed: u64) -> Self {
+        let (s0, seed1) = splitmix64(seed);
+        let (s1, seed2) = splitmix64(seed1);
+        let (s2, seed3) = splitmix64(seed2);
+        let (s3, _) = splitmix64(seed3);
+        Xoshiro256pp { s0: s0, s1: s1, s2: s2, s3: s3 }
+    }
+
+    fn next(self: Self) -> (u64, Self) {
+        let result = rotl(self.s0 + self.s3, 23) + self.s0;
+        let t = self.s1 << 17;
+        let s2 = self.s2 ^ self.s0;
+        let s3 = self.s3 ^ self.s1;
+        let s1 = self.s1 ^ s2;
+        let s0 = self.s0 ^ s3;
+        let s2 = s2 ^ t;
+        let s3 = rotl(s3, 45);
+        (result, Xoshiro256pp { s0: s0, s1: s1, s2: s2, s3: s3 })
+    }
+}
+
+/// Vigna's 2026 `MWC192X` scrambled multiply-with-carry 64-bit generator state
+/// (`MWC_A2 = 0xff4e24dd418f5433`).
+pub struct [value] MWC192X {
+    x: u64,
+    y: u64,
+    c: u64
+}
+
+impl RandomState for MWC192X {
+    fn from_seed(seed: u64) -> Self {
+        let (x, seed1) = splitmix64(seed);
+        let (y, _) = splitmix64(seed1);
+        MWC192X { x: x, y: y, c: 1 }
+    }
+
+    fn next(self: Self) -> (u64, Self) {
+        let result = self.y ^ self.c;
+        let t: u128 = 0xff4e24dd418f5433 * (self.x as u128) + (self.c as u128);
+        (
+            result,
+            MWC192X {
+                x: self.y,
+                y: t as u64,
+                c: (t >> 64) as u64
+            }
+        )
+    }
+}

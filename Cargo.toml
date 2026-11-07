@@ -161,6 +161,7 @@ tree-sitter-mlir = "=0.1.7"
 # (XDG_DATA_HOME/~/.local/share on Linux, %LOCALAPPDATA% on Windows,
 # ~/Library/Application Support on macOS).
 dirs = "6"
+getrandom = "0.4"
 # IEEE 754 half-precision conversion for the REPL's f16 printing (bf16 is a
 # two-line manual widening; f16 needs the real rebias/subnormal handling).
 half = "2"

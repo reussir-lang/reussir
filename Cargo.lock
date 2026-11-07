@@ -3591,6 +3591,7 @@ dependencies = [
  "blake3",
  "compcache",
  "dirs",
+ "getrandom 0.4.3",
  "hashbrown 0.16.1",
  "indexmap",
  "libc",

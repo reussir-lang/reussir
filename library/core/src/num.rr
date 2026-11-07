@@ -11,7 +11,7 @@
 #[sealed]
 pub trait Num: PartialOrd {}
 
-/// Whole numbers: `i8`…`i64`, `u8`…`u64`, `Nat`, and `Int`.
+/// Whole numbers: `i8`…`i128`, `u8`…`u128`, `Nat`, and `Int`.
 #[lang("integral")]
 #[sealed]
 pub trait Integral: Num {}
@@ -45,10 +45,12 @@ impl Integral for i8 { }
 impl Integral for i16 { }
 impl Integral for i32 { }
 impl Integral for i64 { }
+impl Integral for i128 { }
 impl Integral for u8 { }
 impl Integral for u16 { }
 impl Integral for u32 { }
 impl Integral for u64 { }
+impl Integral for u128 { }
 impl Integral for Nat { }
 impl Integral for Int { }
 impl Integral for Arc<Nat> { }

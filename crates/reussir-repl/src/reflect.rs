@@ -222,6 +222,10 @@ pub fn inline_size_align<'tcx>(
                 16 => scalar(2),
                 32 => scalar(4),
                 64 => scalar(8),
+                128 => Ok(SizeAlign {
+                    size: 16,
+                    align: std::mem::align_of::<u128>() as u64,
+                }),
                 other => Err(format!("unsupported integer width {prefix}{other}")),
             }
         }
@@ -476,21 +480,23 @@ impl<'tcx> Walker<'_, 'tcx> {
                     out.push('\'');
                 }
                 TyKind::Int(IntTy::Signed(w)) => {
-                    let v: i64 = match w {
-                        8 => addr.cast::<i8>().read_unaligned() as i64,
-                        16 => addr.cast::<i16>().read_unaligned() as i64,
-                        32 => addr.cast::<i32>().read_unaligned() as i64,
-                        64 => addr.cast::<i64>().read_unaligned(),
+                    let v: i128 = match w {
+                        8 => addr.cast::<i8>().read_unaligned() as i128,
+                        16 => addr.cast::<i16>().read_unaligned() as i128,
+                        32 => addr.cast::<i32>().read_unaligned() as i128,
+                        64 => addr.cast::<i64>().read_unaligned() as i128,
+                        128 => addr.cast::<i128>().read_unaligned(),
                         other => return Err(format!("unsupported width i{other}")),
                     };
                     out.push_str(&v.to_string());
                 }
                 TyKind::Int(IntTy::Unsigned(w)) => {
-                    let v: u64 = match w {
-                        8 => addr.read() as u64,
-                        16 => addr.cast::<u16>().read_unaligned() as u64,
-                        32 => addr.cast::<u32>().read_unaligned() as u64,
-                        64 => addr.cast::<u64>().read_unaligned(),
+                    let v: u128 = match w {
+                        8 => addr.read() as u128,
+                        16 => addr.cast::<u16>().read_unaligned() as u128,
+                        32 => addr.cast::<u32>().read_unaligned() as u128,
+                        64 => addr.cast::<u64>().read_unaligned() as u128,
+                        128 => addr.cast::<u128>().read_unaligned(),
                         other => return Err(format!("unsupported width u{other}")),
                     };
                     out.push_str(&v.to_string());

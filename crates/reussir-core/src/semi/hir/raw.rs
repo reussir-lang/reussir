@@ -681,6 +681,7 @@ pub(crate) fn signed_segment(w: u16) -> &'static str {
         16 => "i16",
         32 => "i32",
         64 => "i64",
+        128 => "i128",
         _ => "i0",
     }
 }
@@ -692,6 +693,7 @@ pub(crate) fn unsigned_segment(w: u16) -> &'static str {
         16 => "u16",
         32 => "u32",
         64 => "u64",
+        128 => "u128",
         _ => "u0",
     }
 }

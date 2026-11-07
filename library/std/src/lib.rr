@@ -6,6 +6,7 @@ pub mod format;
 pub mod hash;
 pub mod option;
 pub mod process;
+pub mod random;
 pub mod result;
 pub mod string;
 pub mod text;
