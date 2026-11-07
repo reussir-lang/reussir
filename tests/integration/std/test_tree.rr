@@ -1,0 +1,138 @@
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin test_tree %rrc_linker
+// RUN: %std_rene_build/release/test_tree%exe_ext
+
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::text::Text;
+import test::tree::TestTree;
+
+fn check(value: bool) {
+    if !value { core::intrinsic::panic::panic() }
+}
+
+fn path2(a: str, b: str) -> List<Text> {
+    List::Cons { Text::from_str(a), List::Cons { Text::from_str(b), List::Nil } }
+}
+
+fn path3(a: str, b: str, c: str) -> List<Text> {
+    List::Cons { Text::from_str(a), path2(b, c) }
+}
+
+// root
+// ├── a = 1
+// ├── inner
+// │   ├── b = 2
+// │   └── c = 3
+// └── empty
+fn sample() -> TestTree<i64> {
+    TestTree::group("root")
+        .with_case("a", 1)
+        .with_group(TestTree::group("inner").with_case("b", 2).with_case("c", 3))
+        .with_group(TestTree::group("empty"))
+}
+
+fn seven() -> i64 { 7 }
+
+fn empty() -> TestTree<i64> { TestTree::group("g") }
+
+// Number of groups, including the root.
+fn groups(tree: TestTree<i64>) -> u64 {
+    tree.fold_tree(
+        |unused_name: Text, unused_v: i64| 0,
+        |unused_name: Text, children: List<u64>| children.fold_left(1, |a: u64, b: u64| a + b)
+    )
+}
+
+fn test_count_and_name() {
+    check(sample().count() == 3);
+    check(sample().name().eq_str("root"));
+    check(TestTree::group("g").with_case("x", seven()).count() == 1);
+    check(empty().count() == 0);
+    check(groups(sample()) == 3);
+}
+
+fn test_fold_order_and_paths() {
+    // Declaration order: digits concatenate as 1, 2, 3.
+    let order = sample().fold(0, |acc: i64, unused_path: List<Text>, v: i64| acc * 10 + v);
+    check(order == 123);
+
+    // Every path starts at the root; depth matches the shape.
+    let depths = sample().fold(0, |acc: u64, path: List<Text>, unused_v: i64| {
+        check(path.head().unwrap_or(Text::from_str("")).eq_str("root"));
+        acc * 10 + path.len()
+    });
+    check(depths == 233);
+}
+
+fn test_fold_tree() {
+    // Rebuilds the declaration-order digits bottom-up.
+    let digits = sample().fold_tree(
+        |unused_name: Text, v: i64| v,
+        |unused_name: Text, children: List<i64>| children.fold_left(0, |a: i64, b: i64| {
+            if b == 0 { a } else { if b < 10 { a * 10 + b } else { a * 100 + b } }
+        })
+    );
+    check(digits == 123);
+}
+
+fn test_map() {
+    let doubled = sample().map(|v: i64| v * 2);
+    check(doubled.fold(0, |acc: i64, unused_path: List<Text>, v: i64| acc * 10 + v) == 246);
+    check(doubled.find(path3("root", "inner", "c")).unwrap_or(0) == 6);
+}
+
+fn test_find() {
+    check(sample().find(path2("root", "a")).unwrap_or(0) == 1);
+    check(sample().find(path3("root", "inner", "b")).unwrap_or(0) == 2);
+    check(sample().find(path3("root", "inner", "c")).unwrap_or(0) == 3);
+    check(sample().find(path2("root", "inner")).is_none());
+    check(sample().find(path2("root", "missing")).is_none());
+    check(sample().find(path3("root", "a", "b")).is_none());
+    check(sample().find(path2("other", "a")).is_none());
+    check(sample().find(List::Nil).is_none());
+
+    // The first of two same-named siblings wins.
+    let dup: TestTree<i64> = TestTree::group("g").with_case("x", 1).with_case("x", 2);
+    check(dup.find(path2("g", "x")).unwrap_or(0) == 1);
+}
+
+fn test_filter() {
+    let odd = sample().filter(|unused_path: List<Text>, v: i64| v % 2 == 1);
+    check(odd.count() == 2);
+    check(odd.find(path2("root", "a")).is_some());
+    check(odd.find(path3("root", "inner", "c")).is_some());
+    check(odd.find(path3("root", "inner", "b")).is_none());
+
+    // Groups that lose every case are pruned; the root remains.
+    let only_a = sample().filter(|path: List<Text>, unused_v: i64| {
+        path.tail().head().unwrap_or(Text::from_str("")).eq_str("a")
+    });
+    check(only_a.count() == 1);
+    check(groups(only_a) == 1);
+    check(groups(sample().filter(|unused_path: List<Text>, unused_v: i64| true)) == 2);
+
+    let none = sample().filter(|unused_path: List<Text>, unused_v: i64| false);
+    check(none.count() == 0);
+    check(none.name().eq_str("root"));
+}
+
+fn test_closure_cases() {
+    let tree: TestTree<() -> bool> = TestTree::group("closures")
+        .with_case("pass", || true)
+        .with_case("fail", || false);
+    let passed = tree.fold(0, |n: u64, unused_path: List<Text>, body: () -> bool| {
+        if body() { n + 1 } else { n }
+    });
+    check(passed == 1);
+}
+
+#[main]
+pub fn main() {
+    test_count_and_name();
+    test_fold_order_and_paths();
+    test_fold_tree();
+    test_map();
+    test_find();
+    test_filter();
+    test_closure_cases();
+}

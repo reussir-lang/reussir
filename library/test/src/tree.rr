@@ -1,0 +1,231 @@
+//! Test trees: named cases nested in named groups.
+//!
+//! A tree is ordinary data built at runtime, so a runner or a fuzzing
+//! harness can enumerate, select, and invoke cases without compiler support.
+//! The case payload is generic: unit cases, fuzzed properties, or a sum of
+//! both share the same combinators.
+//!
+//! ```text
+//! let tree = TestTree::group("list")
+//!     .with_case("reverse", || check_reverse())
+//!     .with_case("map", || check_map())
+//!     .with_group(TestTree::group("fold")
+//!         .with_case("left", || check_fold_left())
+//!         .with_case("right", || check_fold_right()));
+//! ```
+//!
+//! Every tree is a group, so a case always has a parent. A case is
+//! addressed by its path: the names from the root group to the case, root
+//! first. Paths are the stable identity a runner reports and a fuzzer
+//! selects by; sibling names should be unique, and lookups take the first
+//! match in declaration order.
+
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::text::Text;
+
+/// A named group of cases and subgroups, kept in declaration order.
+pub struct TestTree<T> {
+    name: Text,
+    // Newest first, so appending is O(1); traversals reverse once per group.
+    entries: List<Entry<T>>
+}
+
+/// An entry of a group. Public only because `TestTree`'s private field
+/// names it; trees are built with `TestTree`'s methods.
+pub enum Entry<T> {
+    Case(Text, T),
+    Group(TestTree<T>)
+}
+
+impl<T> TestTree<T> {
+    /// An empty group named `name`.
+    pub fn group(name: str) -> Self {
+        TestTree { name: Text::from_str(name), entries: List::Nil }
+    }
+
+    /// Appends a case named `name`.
+    pub fn with_case(self: Self, name: str, body: T) -> Self {
+        self.with_entry(Entry::Case { Text::from_str(name), body })
+    }
+
+    /// Appends `group` as a subgroup.
+    pub fn with_group(self: Self, group: Self) -> Self {
+        self.with_entry(Entry::Group { group })
+    }
+
+    fn with_entry(self: Self, entry: Entry<T>) -> Self {
+        TestTree { name: self.name, entries: List::Cons { entry, self.entries } }
+    }
+
+    /// The name of this group.
+    pub fn name(self: Self) -> Text {
+        self.name
+    }
+
+    /// Transforms every case payload, keeping names and shape. `f` runs in
+    /// declaration order.
+    pub fn map<U>(self: Self, f: T -> U) -> TestTree<U> {
+        TestTree {
+            name: self.name,
+            entries: self.entries.reverse().fold_left(
+                List::Nil,
+                |acc: List<Entry<U>>, entry: Entry<T>| List::Cons { entry.map(f), acc }
+            )
+        }
+    }
+
+    /// Visits the cases in declaration order with their paths, threading
+    /// an accumulator.
+    pub fn fold<U>(self: Self, initial: U, f: (U, List<Text>, T) -> U) -> U {
+        self.fold_impl(List::Nil, initial, f)
+    }
+
+    // `prefix` holds the ancestors' names, innermost first.
+    fn fold_impl<U>(
+        self: Self,
+        prefix: List<Text>,
+        acc: U,
+        f: (U, List<Text>, T) -> U
+    ) -> U {
+        let prefix = List::Cons { self.name, prefix };
+        self.entries.reverse().fold_left(
+            acc,
+            |acc: U, entry: Entry<T>| entry.fold_impl(prefix, acc, f)
+        )
+    }
+
+    /// Folds the tree bottom-up, preserving its shape: `on_case` sees each
+    /// case, and `on_group` sees each group with its entries' results in
+    /// declaration order. Runners use it to render nested reports.
+    pub fn fold_tree<U>(
+        self: Self,
+        on_case: (Text, T) -> U,
+        on_group: (Text, List<U>) -> U
+    ) -> U {
+        let results = self.entries.reverse().map(
+            |entry: Entry<T>| entry.fold_tree(on_case, on_group)
+        );
+        on_group(self.name, results)
+    }
+
+    /// The number of cases.
+    pub fn count(self: Self) -> u64 {
+        self.fold(0, |n: u64, unused_path: List<Text>, unused_body: T| n + 1)
+    }
+
+    /// Keeps the cases for which `keep` holds, given each case's path and
+    /// payload. Subgroups left without cases are removed; the root group
+    /// always remains.
+    pub fn filter(self: Self, keep: (List<Text>, T) -> bool) -> Self {
+        self.filter_impl(List::Nil, keep)
+    }
+
+    fn filter_impl(self: Self, prefix: List<Text>, keep: (List<Text>, T) -> bool) -> Self {
+        let prefix = List::Cons { self.name, prefix };
+        TestTree {
+            name: self.name,
+            entries: self.entries.reverse().fold_left(
+                List::Nil,
+                |acc: List<Entry<T>>, entry: Entry<T>| match entry.filter_impl(prefix, keep) {
+                    Some(kept) => List::Cons { kept, acc },
+                    None => acc
+                }
+            )
+        }
+    }
+
+    fn is_empty(self: Self) -> bool {
+        self.entries.is_nil()
+    }
+
+    /// The payload of the case at `path`, root first.
+    pub fn find(self: Self, path: List<Text>) -> Option<T> {
+        match path {
+            Nil => Option::None,
+            Cons(head, rest) => {
+                if head == self.name {
+                    find_entries(self.entries.reverse(), rest)
+                } else {
+                    Option::None
+                }
+            }
+        }
+    }
+}
+
+impl<T> Entry<T> {
+    fn map<U>(self: Self, f: T -> U) -> Entry<U> {
+        match self {
+            Case(name, body) => Entry::Case { name, f(body) },
+            Group(group) => Entry::Group { group.map(f) }
+        }
+    }
+
+    fn fold_impl<U>(
+        self: Self,
+        prefix: List<Text>,
+        acc: U,
+        f: (U, List<Text>, T) -> U
+    ) -> U {
+        match self {
+            Case(name, body) => f(acc, List::Cons { name, prefix }.reverse(), body),
+            Group(group) => group.fold_impl(prefix, acc, f)
+        }
+    }
+
+    fn fold_tree<U>(
+        self: Self,
+        on_case: (Text, T) -> U,
+        on_group: (Text, List<U>) -> U
+    ) -> U {
+        match self {
+            Case(name, body) => on_case(name, body),
+            Group(group) => group.fold_tree(on_case, on_group)
+        }
+    }
+
+    fn filter_impl(
+        self: Self,
+        prefix: List<Text>,
+        keep: (List<Text>, T) -> bool
+    ) -> Option<Self> {
+        match self {
+            Case(name, body) => {
+                if keep(List::Cons { name, prefix }.reverse(), body) {
+                    Option::Some { Entry::Case { name, body } }
+                } else {
+                    Option::None
+                }
+            },
+            Group(group) => {
+                let kept = group.filter_impl(prefix, keep);
+                if kept.is_empty() {
+                    Option::None
+                } else {
+                    Option::Some { Entry::Group { kept } }
+                }
+            }
+        }
+    }
+
+    fn find(self: Self, path: List<Text>) -> Option<T> {
+        match self {
+            Case(name, body) => match path {
+                Cons(head, rest) if rest.is_nil() && name == head => Option::Some { body },
+                _ => Option::None
+            },
+            Group(group) => group.find(path)
+        }
+    }
+}
+
+fn find_entries<T>(entries: List<Entry<T>>, path: List<Text>) -> Option<T> {
+    match entries {
+        Nil => Option::None,
+        Cons(entry, rest) => match entry.find(path) {
+            Some(body) => Option::Some { body },
+            None => find_entries(rest, path)
+        }
+    }
+}

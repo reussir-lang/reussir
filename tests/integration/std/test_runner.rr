@@ -1,0 +1,58 @@
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin test_runner %rrc_linker
+// RUN: %std_rene_build/release/test_runner%exe_ext | %FileCheck %s
+
+// CHECK:      spec
+// CHECK-NEXT:   arithmetic
+// CHECK-NEXT:     ✔ add
+// CHECK-NEXT:     ✘ mul FAILED [1]
+// CHECK-NEXT:   text
+// CHECK-NEXT:     ✔ eq
+// CHECK-NEXT:     ✘ len FAILED [2]
+// CHECK-NEXT:   ✔ top-level
+// CHECK-EMPTY:
+// CHECK-NEXT: Failures:
+// CHECK-EMPTY:
+// CHECK-NEXT:   1) spec / arithmetic / mul
+// CHECK-NEXT:        expected: 7
+// CHECK-NEXT:         but got: 6
+// CHECK-EMPTY:
+// CHECK-NEXT:   2) spec / text / len
+// CHECK-NEXT:        text has two bytes
+// CHECK-EMPTY:
+// CHECK-NEXT: 5 examples, 2 failures
+// CHECK-NEXT: summary ok
+
+import std::format::Format;
+import std::format::Options;
+import std::text::Text;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::pass;
+import test::expect::should_be;
+import test::expect::should_not_be;
+import test::tree::TestTree;
+
+fn int(n: i64) -> i64 { n }
+
+fn spec() -> TestTree<() -> Outcome> {
+    TestTree::group("spec")
+        .with_group(TestTree::group("arithmetic")
+            .with_case("add", || should_be(int(2) + 2, 4).and_then(|| should_not_be(int(2) + 2, 5)))
+            .with_case("mul", || should_be(int(2) * 3, 7)))
+        .with_group(TestTree::group("text")
+            .with_case("eq", || expect(Text::from_str("hi").eq_str("hi"), "literal equality"))
+            .with_case("len", || expect(Text::from_str("hi").len() == 3, "text has two bytes")))
+        .with_group(TestTree::group("empty"))
+        .with_case("top-level", || pass())
+}
+
+#[main]
+pub fn main() {
+    let summary = test::runner::run(spec());
+    if summary.examples != 5 || summary.failures != 2 || summary.is_success() {
+        core::intrinsic::panic::panic()
+    };
+    let _ = Format::Text { Text::from_str("summary ok") }
+        .append(Format::Hardline)
+        .dump_stdout(Options::default());
+}

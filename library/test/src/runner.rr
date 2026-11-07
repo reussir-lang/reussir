@@ -1,0 +1,217 @@
+//! Running a test tree and reporting in the style of Haskell's hspec.
+//!
+//! ```text
+//! #[main]
+//! pub fn main() {
+//!     test::runner::run_and_exit(spec())
+//! }
+//! ```
+//!
+//! Cases run in declaration order and stream one line each, nested under
+//! their groups. Failures are numbered and listed at the end with their
+//! paths and messages, followed by a summary:
+//!
+//! ```text
+//! list
+//!   ✔ reverse
+//!   ✘ len FAILED [1]
+//!
+//! Failures:
+//!
+//!   1) list / len
+//!        expected: 1
+//!         but got: 2
+//!
+//! 2 examples, 1 failure
+//! ```
+//!
+//! ANSI styling follows `Config::color`; the default enables it only when
+//! stdout is a terminal, so piped output stays plain.
+
+import std::collections::pure::list::List;
+import std::console::Ansi;
+import std::console::Color;
+import std::console::ColorChoice;
+import std::format::Display;
+import std::format::Format;
+import std::format::Options;
+import std::format::join;
+import std::text::Text;
+import test::expect::Outcome;
+import test::tree::TestTree;
+
+/// How a run renders its report.
+pub struct [value] Config {
+    pub color: ColorChoice,
+    pub width: u64
+}
+
+impl Config {
+    pub fn default() -> Self {
+        Config { color: ColorChoice::Auto, width: 80 }
+    }
+}
+
+/// The counts of a finished run.
+pub struct [value] Summary {
+    pub examples: u64,
+    pub failures: u64
+}
+
+impl Summary {
+    pub fn is_success(self: Self) -> bool {
+        self.failures == 0
+    }
+}
+
+/// Runs every case with the default configuration and prints the report.
+pub fn run(tree: TestTree<() -> Outcome>) -> Summary {
+    run_with(tree, Config::default())
+}
+
+/// Runs every case and exits with status 1 if any failed.
+pub fn run_and_exit(tree: TestTree<() -> Outcome>) {
+    if !run(tree).is_success() {
+        std::process::exit(1)
+    }
+}
+
+/// Runs every case and prints the report under `config`.
+pub fn run_with(tree: TestTree<() -> Outcome>, config: Config) -> Summary {
+    let state = tree.fold(
+        State { groups: List::Nil, failures: List::Nil, examples: 0, failed: 0 },
+        |state: State, path: List<Text>, body: () -> Outcome| step(config, state, path, body)
+    );
+    report_failures(config, state.failures.reverse());
+    let summary = Summary { examples: state.examples, failures: state.failed };
+    emit(config, Format::Hardline.append(summary_line(summary)));
+    summary
+}
+
+struct Failure {
+    path: List<Text>,
+    message: Format
+}
+
+// The previous case's ancestor groups, so each group header prints once,
+// and the failures so far, newest first.
+struct State {
+    groups: List<Text>,
+    failures: List<Failure>,
+    examples: u64,
+    failed: u64
+}
+
+fn step(config: Config, state: State, path: List<Text>, body: () -> Outcome) -> State {
+    let groups = init(path);
+    let depth = groups.len();
+    print_headers(config, groups, common_prefix(state.groups, groups), 0);
+    let name = last(path).fmt();
+    match body() {
+        Pass => {
+            emit(config, indent(depth).append(green(text("✔ "))).append(name));
+            State {
+                groups: groups,
+                failures: state.failures,
+                examples: state.examples + 1,
+                failed: state.failed
+            }
+        },
+        Fail(message) => {
+            let index = state.failed + 1;
+            let marker = text("✘ ").append(name)
+                .append(text(" FAILED [")).append(index.fmt()).append(text("]"));
+            emit(config, indent(depth).append(red(marker)));
+            State {
+                groups: groups,
+                failures: List::Cons { Failure { path: path, message: message }, state.failures },
+                examples: state.examples + 1,
+                failed: index
+            }
+        }
+    }
+}
+
+// Prints the headers of `groups` from depth `from` on, each indented by its
+// depth.
+fn print_headers(config: Config, groups: List<Text>, from: u64, depth: u64) {
+    if groups.is_cons() {
+        if depth >= from {
+            emit(config, indent(depth).append(bold(groups.head().unwrap_or_panic().fmt())))
+        };
+        print_headers(config, groups.tail(), from, depth + 1)
+    }
+}
+
+fn report_failures(config: Config, failures: List<Failure>) {
+    if failures.is_cons() {
+        emit(config, Format::Hardline.append(text("Failures:")));
+        let _ = failures.fold_left(1, |index: u64, failure: Failure| {
+            let header = text("  ").append(index.fmt()).append(text(") "))
+                .append(show_path(failure.path));
+            let body = Format::Hardline.append(failure.message).nest(7);
+            emit(config, Format::Hardline.append(header).append(red(body)));
+            index + 1
+        });
+    }
+}
+
+fn summary_line(summary: Summary) -> Format {
+    let line = plural(summary.examples, "example")
+        .append(text(", "))
+        .append(plural(summary.failures, "failure"));
+    if summary.is_success() { green(line) } else { red(line) }
+}
+
+fn emit(config: Config, doc: Format) {
+    let options = Options { width: config.width, indent: 2 };
+    let _ = doc.append(Format::Hardline).dump_stdout_with_color(options, config.color);
+}
+
+fn text(s: str) -> Format {
+    Format::Text { Text::from_str(s) }
+}
+
+fn plural(n: u64, word: str) -> Format {
+    let suffix = if n == 1 { Format::Empty } else { text("s") };
+    n.fmt().append(text(" ")).append(text(word)).append(suffix)
+}
+
+fn indent(depth: u64) -> Format {
+    if depth == 0 { Format::Empty } else { text("  ").append(indent(depth - 1)) }
+}
+
+fn show_path(path: List<Text>) -> Format {
+    join(text(" / "), path.map(|name: Text| name.fmt()))
+}
+
+fn green(doc: Format) -> Format { doc.ansi(Ansi::Foreground { Color::Green }) }
+fn red(doc: Format) -> Format { doc.ansi(Ansi::Foreground { Color::Red }) }
+fn bold(doc: Format) -> Format { doc.ansi(Ansi::Bold) }
+
+// All but the last element.
+fn init(path: List<Text>) -> List<Text> {
+    match path {
+        Nil => List::Nil,
+        Cons(head, rest) => {
+            if rest.is_nil() { List::Nil } else { List::Cons { head, init(rest) } }
+        }
+    }
+}
+
+fn last(path: List<Text>) -> Text {
+    match path {
+        Nil => Text::from_str(""),
+        Cons(head, rest) => if rest.is_nil() { head } else { last(rest) }
+    }
+}
+
+fn common_prefix(a: List<Text>, b: List<Text>) -> u64 {
+    match a {
+        Nil => 0,
+        Cons(x, xs) => match b {
+            Nil => 0,
+            Cons(y, ys) => if x == y { 1 + common_prefix(xs, ys) } else { 0 }
+        }
+    }
+}
