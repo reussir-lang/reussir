@@ -66,8 +66,8 @@
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SetVector.h>
-#include <llvm/ADT/bit.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/bit.h>
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Analysis/ScalarEvolution.h>
 #include <llvm/Config/llvm-config.h>
@@ -224,10 +224,10 @@ std::optional<LoopCandidate> analyzeLoop(Loop *loop, ScalarEvolution &se) {
     return std::nullopt;
   BasicBlock *header = loop->getHeader();
   BasicBlock *preheader = loop->getLoopPreheader();
-  if (!preheader || !isa<BranchInst>(preheader->getTerminator()))
+  if (!preheader || !isa<UncondBrInst>(preheader->getTerminator()))
     return std::nullopt;
-  auto *latchBranch = dyn_cast<BranchInst>(header->getTerminator());
-  if (!latchBranch || !latchBranch->isConditional())
+  auto *latchBranch = dyn_cast<CondBrInst>(header->getTerminator());
+  if (!latchBranch)
     return std::nullopt;
   BasicBlock *succ0 = latchBranch->getSuccessor(0);
   BasicBlock *succ1 = latchBranch->getSuccessor(1);
@@ -492,7 +492,7 @@ bool rewriteLoop(LoopCandidate &candidate) {
   BasicBlock *done =
       BasicBlock::Create(ctx, "reussir.matexp.done", function, exitBlock);
 
-  auto *preBranch = cast<BranchInst>(preheader->getTerminator());
+  auto *preBranch = cast<UncondBrInst>(preheader->getTerminator());
   preBranch->setSuccessor(0, check);
 
   Value *exponent = candidate.exponent;
@@ -513,8 +513,8 @@ bool rewriteLoop(LoopCandidate &candidate) {
 
   // body: if (e & 1) acc = acc*base mod chi; base = base^2 mod chi; e >>= 1
   builder.SetInsertPoint(body);
-  Value *odd = builder.CreateTrunc(ePhi, Type::getInt1Ty(ctx),
-                                   "reussir.matexp.odd");
+  Value *odd =
+      builder.CreateTrunc(ePhi, Type::getInt1Ty(ctx), "reussir.matexp.odd");
   SmallVector<Value *, 8> accValues(accPhis.begin(), accPhis.end());
   SmallVector<Value *, 8> baseValues(basePhis.begin(), basePhis.end());
   SmallVector<Value *, 8> accTimesBase =
@@ -560,16 +560,17 @@ bool rewriteLoop(LoopCandidate &candidate) {
   SmallVector<Value *, 8> result(dim, nullptr);
   for (unsigned i = 0; i < dim; ++i) {
     for (unsigned r = 0; r < dim; ++r)
-      result[r] = emitAccumulate(
-          builder, result[r], builder.CreateMul(accPhis[i], krylov[r]));
+      result[r] = emitAccumulate(builder, result[r],
+                                 builder.CreateMul(accPhis[i], krylov[r]));
     if (i + 1 == dim)
       break;
     SmallVector<Value *, 8> next(dim, nullptr);
     for (unsigned r = 0; r < dim; ++r) {
       for (unsigned c = 0; c < dim; ++c)
-        next[r] = emitAccumulate(
-            builder, next[r],
-            emitScaled(builder, companion[size_t(r) * dim + c], krylov[c], type));
+        next[r] =
+            emitAccumulate(builder, next[r],
+                           emitScaled(builder, companion[size_t(r) * dim + c],
+                                      krylov[c], type));
       if (!next[r])
         next[r] = ConstantInt::get(type, 0);
     }
@@ -623,8 +624,7 @@ LinearRecurrenceMatExpPass::run(llvm::Function &function,
     if (!expander.isSafeToExpandAt(candidate.backedgeCount, insertion))
       continue;
     candidate.exponent = expander.expandCodeFor(
-        candidate.backedgeCount, candidate.backedgeCount->getType(),
-        insertion);
+        candidate.backedgeCount, candidate.backedgeCount->getType(), insertion);
     expandable.push_back(std::move(candidate));
   }
 

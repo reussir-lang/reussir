@@ -136,15 +136,16 @@ std::optional<llvm::APInt> matchDecrement(llvm::Value *value,
 /// at points the original call tree may never have reached), and free of
 /// memory access. Recursive calls are validated separately and passed in via
 /// `selfCalls`.
-bool isAllowedInstruction(llvm::Instruction &inst,
-                          const llvm::SmallPtrSetImpl<llvm::CallInst *> &selfCalls) {
+bool isAllowedInstruction(
+    llvm::Instruction &inst,
+    const llvm::SmallPtrSetImpl<llvm::CallInst *> &selfCalls) {
   using namespace llvm;
   if (isa<PHINode>(inst) || isa<SelectInst>(inst) || isa<CmpInst>(inst) ||
       isa<CastInst>(inst) || isa<FreezeInst>(inst) ||
       isa<ExtractValueInst>(inst) || isa<InsertValueInst>(inst) ||
       isa<ExtractElementInst>(inst) || isa<InsertElementInst>(inst) ||
       isa<ShuffleVectorInst>(inst) || isa<UnaryOperator>(inst) ||
-      isa<BranchInst>(inst) || isa<ReturnInst>(inst))
+      isa<UncondBrInst>(inst) || isa<CondBrInst>(inst) || isa<ReturnInst>(inst))
     return true;
   if (auto *bin = dyn_cast<BinaryOperator>(&inst)) {
     switch (bin->getOpcode()) {
@@ -197,9 +198,8 @@ computeFloor(llvm::Function &function, llvm::Argument *induction,
     ConstantRange range = ConstantRange::getFull(bits);
     BasicBlock *callBlock = selfCall.call->getParent();
     for (BasicBlock &block : function) {
-      auto *branch = dyn_cast<BranchInst>(block.getTerminator());
-      if (!branch || !branch->isConditional() ||
-          branch->getSuccessor(0) == branch->getSuccessor(1))
+      auto *branch = dyn_cast<CondBrInst>(block.getTerminator());
+      if (!branch || branch->getSuccessor(0) == branch->getSuccessor(1))
         continue;
       auto *cmp = dyn_cast<ICmpInst>(branch->getCondition());
       if (!cmp)
@@ -240,8 +240,8 @@ computeFloor(llvm::Function &function, llvm::Argument *induction,
 
   auto tryLattice =
       [&](bool isSigned) -> std::optional<std::pair<llvm::APInt, bool>> {
-    APInt floor = isSigned ? APInt::getSignedMaxValue(bits)
-                           : APInt::getMaxValue(bits);
+    APInt floor =
+        isSigned ? APInt::getSignedMaxValue(bits) : APInt::getMaxValue(bits);
     for (const ConstantRange &range : ranges) {
       APInt low = isSigned ? range.getSignedMin() : range.getUnsignedMin();
       if (isSigned ? low.slt(floor) : low.ult(floor))
@@ -250,8 +250,8 @@ computeFloor(llvm::Function &function, llvm::Argument *induction,
     // The seeds evaluate `step` at `C - 1 .. C - window`; require that these
     // stay above the lattice minimum so the guard `x < C` covers them and no
     // wrap-around occurs.
-    APInt latticeMin = isSigned ? APInt::getSignedMinValue(bits)
-                                : APInt::getZero(bits);
+    APInt latticeMin =
+        isSigned ? APInt::getSignedMinValue(bits) : APInt::getZero(bits);
     APInt slack = latticeMin + window;
     bool inBounds = isSigned ? floor.sge(slack) : floor.uge(slack);
     if (!inBounds)
@@ -345,8 +345,8 @@ std::optional<RecursionShape> matchRecursion(llvm::Function &function,
       if (!isAllowedInstruction(inst, selfCallSet))
         return std::nullopt;
 
-  auto floor = computeFloor(function, induction, shape.calls, domTree,
-                            shape.window);
+  auto floor =
+      computeFloor(function, induction, shape.calls, domTree, shape.window);
   if (!floor)
     return std::nullopt;
   shape.floor = floor->first;
@@ -434,9 +434,9 @@ void rewriteFunction(llvm::Function &function, const RecursionShape &shape) {
 
   IRBuilder<> builder(entry);
   Constant *floorC = ConstantInt::get(inductionTy, shape.floor);
-  Value *isBase = builder.CreateICmp(
-      shape.isSigned ? ICmpInst::ICMP_SLT : ICmpInst::ICMP_ULT, induction,
-      floorC, "reussir.isbase");
+  Value *isBase = builder.CreateICmp(shape.isSigned ? ICmpInst::ICMP_SLT
+                                                    : ICmpInst::ICMP_ULT,
+                                     induction, floorC, "reussir.isbase");
   builder.CreateCondBr(isBase, baseBlock, seedBlock);
 
   // Below the floor the body is call-free, so the window is dead.
@@ -450,8 +450,8 @@ void rewriteFunction(llvm::Function &function, const RecursionShape &shape) {
   builder.SetInsertPoint(seedBlock);
   SmallVector<Value *, 8> seeds;
   for (uint64_t j = 1; j <= window; ++j) {
-    Constant *seedPoint =
-        ConstantInt::get(inductionTy, shape.floor - APInt(inductionTy->getBitWidth(), j));
+    Constant *seedPoint = ConstantInt::get(
+        inductionTy, shape.floor - APInt(inductionTy->getBitWidth(), j));
     seeds.push_back(builder.CreateCall(step, makeArgs(seedPoint, {}),
                                        "reussir.seed" + Twine(j)));
   }
@@ -462,8 +462,7 @@ void rewriteFunction(llvm::Function &function, const RecursionShape &shape) {
   PHINode *iv = builder.CreatePHI(inductionTy, 2, "reussir.iv");
   SmallVector<PHINode *, 8> windowPhis;
   for (uint64_t j = 1; j <= window; ++j)
-    windowPhis.push_back(
-        builder.CreatePHI(retTy, 2, "reussir.w" + Twine(j)));
+    windowPhis.push_back(builder.CreatePHI(retTy, 2, "reussir.w" + Twine(j)));
   SmallVector<Value *, 8> windowValues(windowPhis.begin(), windowPhis.end());
   CallInst *current =
       builder.CreateCall(step, makeArgs(iv, windowValues), "reussir.cur");
@@ -475,9 +474,8 @@ void rewriteFunction(llvm::Function &function, const RecursionShape &shape) {
   iv->addIncoming(ivNext, loopBlock);
   for (uint64_t j = 0; j < window; ++j) {
     windowPhis[j]->addIncoming(seeds[j], seedBlock);
-    windowPhis[j]->addIncoming(j == 0 ? static_cast<Value *>(current)
-                                      : windowPhis[j - 1],
-                               loopBlock);
+    windowPhis[j]->addIncoming(
+        j == 0 ? static_cast<Value *>(current) : windowPhis[j - 1], loopBlock);
   }
 
   builder.SetInsertPoint(exitBlock);
