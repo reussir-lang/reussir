@@ -22,10 +22,12 @@ fn scalar_ctor(ident: &syn::Ident) -> Option<TokenStream> {
         "i16" => quote!(tcx.mk_int(crate::semi::ty::IntTy::Signed(16))),
         "i32" => quote!(tcx.mk_int(crate::semi::ty::IntTy::Signed(32))),
         "i64" => quote!(tcx.mk_int(crate::semi::ty::IntTy::Signed(64))),
+        "i128" => quote!(tcx.mk_int(crate::semi::ty::IntTy::Signed(128))),
         "u8" => quote!(tcx.mk_int(crate::semi::ty::IntTy::Unsigned(8))),
         "u16" => quote!(tcx.mk_int(crate::semi::ty::IntTy::Unsigned(16))),
         "u32" => quote!(tcx.mk_int(crate::semi::ty::IntTy::Unsigned(32))),
         "u64" => quote!(tcx.mk_int(crate::semi::ty::IntTy::Unsigned(64))),
+        "u128" => quote!(tcx.mk_int(crate::semi::ty::IntTy::Unsigned(128))),
         "f16" => quote!(tcx.mk_fp(crate::semi::ty::FpTy::Ieee(16))),
         "f32" => quote!(tcx.mk_fp(crate::semi::ty::FpTy::Ieee(32))),
         "f64" => quote!(tcx.mk_fp(crate::semi::ty::FpTy::Ieee(64))),
@@ -36,7 +38,8 @@ fn scalar_ctor(ident: &syn::Ident) -> Option<TokenStream> {
     Some(ts)
 }
 
-const KNOWN_SCALARS: &str = "i8, i16, i32, i64, u8, u16, u32, u64, f16, f32, f64, bf16, f8";
+const KNOWN_SCALARS: &str =
+    "i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, f16, f32, f64, bf16, f8";
 
 pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     let input: Input = syn::parse2(input)?;

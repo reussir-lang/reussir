@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 stumpalo.workspace = true
+getrandom.workspace = true
 backtrace = { version = "0.3.75" }
 blake3 = { version = "1", optional = true }
 dirs = { version = "6", optional = true }

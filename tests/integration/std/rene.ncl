@@ -22,6 +22,7 @@
     intmap = { kind = 'executable, path = "intmap.rr" },
     list = { kind = 'executable, path = "list.rr" },
     option = { kind = 'executable, path = "option.rr" },
+    random = { kind = 'executable, path = "random.rr" },
     rtqueue = { kind = 'executable, path = "rtqueue.rr" },
     string = { kind = 'executable, path = "string.rr" },
     text_view = { kind = 'executable, path = "text_view.rr" },

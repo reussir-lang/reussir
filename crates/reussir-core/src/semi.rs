@@ -492,9 +492,9 @@ mod tests {
             };
             assert_eq!(
                 (count(pe), count(po), count(ord), count(eq)),
-                (16, 16, 11, 0),
+                (18, 18, 13, 0),
                 "impl completion: every scalar plus `str` for PartialEq/PartialOrd, \
-                 the ordered eleven for Ord, none for Eq"
+                 the ordered thirteen for Ord, none for Eq"
             );
             assert!(
                 elab.traits
@@ -2845,7 +2845,7 @@ mod tests {
                     .impls()
                     .filter(|i| i.trait_ref.trait_id == pe)
                     .collect();
-                assert_eq!(pe_impls.len(), 20);
+                assert_eq!(pe_impls.len(), 22);
                 assert!(pe_impls.iter().all(|i| !i.compiler_provided()));
             },
         );

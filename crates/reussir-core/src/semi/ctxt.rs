@@ -1875,7 +1875,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         };
         // `str` joins the totally ordered set (byte-wise lexicographic),
         // after the integers so the `ints()` prefix below stays intact.
-        let ordered: Vec<Ty<'tcx>> = [8u16, 16, 32, 64]
+        let ordered: Vec<Ty<'tcx>> = [8u16, 16, 32, 64, 128]
             .into_iter()
             .flat_map(|width| [IntTy::Signed(width), IntTy::Unsigned(width)])
             .map(|int| self.tcx.mk_int(int))
@@ -1897,7 +1897,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // repoint the wired fields, `T: Integral` obligations select
         // against the declared traits — which get their own method-less
         // compiler impls here (idempotent; a no-op in plain sessions).
-        let ints = || ordered.iter().take(8).copied();
+        let ints = || ordered.iter().take(10).copied();
         all()
             .map(|ty| (pe, ty))
             .chain(all().map(|ty| (po, ty)))
@@ -3009,10 +3009,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             "i16" => self.tcx.mk_int(IntTy::Signed(16)),
             "i32" => self.tcx.mk_int(IntTy::Signed(32)),
             "i64" => self.tcx.mk_int(IntTy::Signed(64)),
+            "i128" => self.tcx.mk_int(IntTy::Signed(128)),
             "u8" => self.tcx.mk_int(IntTy::Unsigned(8)),
             "u16" => self.tcx.mk_int(IntTy::Unsigned(16)),
             "u32" => self.tcx.mk_int(IntTy::Unsigned(32)),
             "u64" => self.tcx.mk_int(IntTy::Unsigned(64)),
+            "u128" => self.tcx.mk_int(IntTy::Unsigned(128)),
             "f16" => self.tcx.mk_fp(FpTy::Ieee(16)),
             "f32" => self.tcx.mk_fp(FpTy::Ieee(32)),
             "f64" => self.tcx.mk_fp(FpTy::Ieee(64)),
