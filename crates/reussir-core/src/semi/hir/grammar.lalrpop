@@ -227,7 +227,7 @@ SuperRef: (String, Vec<raw::Ty>) = "#" <p:PathArgs> => p;
 /// receiver), with an `Arc`/`flex` tag disambiguating the receiver form
 /// (absent = by-value `Self`).
 TraitMethodSig: raw::TraitMethodItem =
-    <kernel:KernelAttr?> <r:"regional"?> "fn" <name:Name> <generics:Generics?> <recv:RecvForm?>
+    <kernel:KernelAttr?> <r:"regional"?> "fn" <name:SegName> <generics:Generics?> <recv:RecvForm?>
     "(" <params:Comma<Ty>> ")" "->" <ret:Ty> <sp:Span?> ";"
     => raw::TraitMethodItem {
         kernel: kernel.is_some(),
@@ -294,7 +294,7 @@ Generics: Vec<raw::Generic> = "<" <CommaPlus<Generic>> ">";
 
 /// A fully-qualified item path: `a::b::Name`. Serialized with its segments
 /// joined; the rebuild pass splits them back into module + item name.
-QPath: String = <first:Name> <rest:("::" <Name>)*> => {
+QPath: String = <first:SegName> <rest:("::" <SegName>)*> => {
     let mut s = first.to_string();
     for seg in rest {
         s.push_str("::");
@@ -307,14 +307,14 @@ QPath: String = <first:Name> <rest:("::" <Name>)*> => {
 /// into one recursive production: after each `::` the next token — an
 /// identifier vs `<` — decides between another path segment and the
 /// type-argument list, which keeps the grammar LR(1).
-PathArgs: (String, Vec<raw::Ty>) = <first:Name> <tail:PathArgsTail> => {
+PathArgs: (String, Vec<raw::Ty>) = <first:SegName> <tail:PathArgsTail> => {
     let (rest, args) = tail;
     (format!("{first}{rest}"), args)
 };
 
 PathArgsTail: (String, Vec<raw::Ty>) = {
     => (String::new(), Vec::new()),
-    "::" <seg:Name> <tail:PathArgsTail> => {
+    "::" <seg:SegName> <tail:PathArgsTail> => {
         let (rest, args) = tail;
         (format!("::{seg}{rest}"), args)
     },
@@ -341,7 +341,7 @@ Bounds: Vec<Bound> = <first:BoundItem> <rest:("+" <BoundItem>)*> => {
     v
 };
 
-BoundItem: Bound = <first:Name> <rest:("::" <Name>)*> => {
+BoundItem: Bound = <first:SegName> <rest:("::" <SegName>)*> => {
     let mut segments = vec![first.to_string()];
     segments.extend(rest.iter().map(|s| s.to_string()));
     Bound::Trait(BoundPath { segments })
@@ -397,6 +397,48 @@ Name: &'input str = {
     "bool" => "bool",
     "str" => "str",
     "char" => "char",
+};
+
+/// A path segment or a trait method name. Every IR keyword is unambiguous
+/// in these positions, and a source name may spell one (`Selection::apply`),
+/// so the printer emits it bare.
+SegName: &'input str = {
+    <name:Name> => name,
+    "NonNull" => "NonNull",
+    "Null" => "Null",
+    "apply" => "apply",
+    "as" => "as",
+    "assign" => "assign",
+    "closure" => "closure",
+    "else" => "else",
+    "enum" => "enum",
+    "extern" => "extern",
+    "false" => "false",
+    "field" => "field",
+    "fixed" => "fixed",
+    "flex" => "flex",
+    "fn" => "fn",
+    "if" => "if",
+    "in" => "in",
+    "let" => "let",
+    "match" => "match",
+    "placement" => "placement",
+    "poison" => "poison",
+    "proj" => "proj",
+    "pub" => "pub",
+    "region" => "region",
+    "regional" => "regional",
+    "rigid" => "rigid",
+    "scrut" => "scrut",
+    "shared" => "shared",
+    "struct" => "struct",
+    "switch" => "switch",
+    "then" => "then",
+    "trampoline" => "trampoline",
+    "true" => "true",
+    "uncovered" => "uncovered",
+    "unreachable" => "unreachable",
+    "value" => "value",
 };
 
 /// A user debug name (parameter, let, and variant names). A name that

@@ -144,6 +144,57 @@ Name: &'input str = {
     "DefaultPlacement" => "DefaultPlacement",
 };
 
+/// A path segment or a trait method name. Every IR keyword is unambiguous
+/// in these positions, and a source name may spell one (`Selection::apply`),
+/// so the printer emits it bare.
+SegName: &'input str = {
+    <name:Name> => name,
+    "NonNull" => "NonNull",
+    "Null" => "Null",
+    "apply" => "apply",
+    "array" => "array",
+    "as" => "as",
+    "assign" => "assign",
+    "bool" => "bool",
+    "char" => "char",
+    "closure" => "closure",
+    "else" => "else",
+    "enum" => "enum",
+    "extern" => "extern",
+    "false" => "false",
+    "field" => "field",
+    "fixed" => "fixed",
+    "flex" => "flex",
+    "fn" => "fn",
+    "if" => "if",
+    "in" => "in",
+    "interface" => "interface",
+    "intrinsic" => "intrinsic",
+    "let" => "let",
+    "match" => "match",
+    "package" => "package",
+    "placement" => "placement",
+    "poison" => "poison",
+    "producer" => "producer",
+    "proj" => "proj",
+    "pub" => "pub",
+    "record" => "record",
+    "region" => "region",
+    "regional" => "regional",
+    "rigid" => "rigid",
+    "scrut" => "scrut",
+    "shared" => "shared",
+    "struct" => "struct",
+    "switch" => "switch",
+    "tensor" => "tensor",
+    "then" => "then",
+    "trampoline" => "trampoline",
+    "true" => "true",
+    "uncovered" => "uncovered",
+    "unreachable" => "unreachable",
+    "value" => "value",
+};
+
 BareName: &'input str = {
     "while" => "while",
     "async" => "async",
@@ -276,7 +327,7 @@ TyPathArgs: (String, Vec<raw::Ty>) = <first:BareName> <tail:TyPathArgsTail> => {
 
 TyPathArgsTail: (String, Vec<raw::Ty>) = {
     => (String::new(), Vec::new()),
-    "::" <seg:Name> <tail:TyPathArgsTail> => {
+    "::" <seg:SegName> <tail:TyPathArgsTail> => {
         let (rest, args) = tail;
         (format!("::{seg}{rest}"), args)
     },
@@ -462,7 +513,7 @@ ConstScalar: ConstScalar = {
 
 /// A qualified record path, `a::b::Name`, as a constant record value names
 /// its record.
-QPath: String = <first:Name> <rest:("::" <Name>)*> => {
+QPath: String = <first:SegName> <rest:("::" <SegName>)*> => {
     let mut s = first.to_string();
     for seg in rest {
         s.push_str("::");

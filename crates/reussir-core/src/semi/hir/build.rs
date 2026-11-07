@@ -1509,6 +1509,22 @@ mod tests {
     }
 
     #[test]
+    fn roundtrips_keyword_path_segments() {
+        // Source names that spell IR keywords print bare in paths.
+        roundtrip(
+            r#"
+            pub struct S { x: i64 }
+            pub trait Run { fn apply(self: Self) -> i64; }
+            impl Run for S { fn apply(self: Self) -> i64 { self.x } }
+            impl S {
+                pub fn value(self: Self) -> i64 { self.apply() }
+            }
+            pub fn proj(s: S) -> i64 { s.value() }
+            "#,
+        );
+    }
+
+    #[test]
     fn roundtrips_structural_tuples_and_destructuring() {
         roundtrip(
             r#"
