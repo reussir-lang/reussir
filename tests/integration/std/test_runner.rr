@@ -15,9 +15,11 @@
 // CHECK-NEXT:   1) spec / arithmetic / mul
 // CHECK-NEXT:        expected: 7
 // CHECK-NEXT:         but got: 6
+// CHECK-NEXT:        To rerun use: --match spec/arithmetic/mul
 // CHECK-EMPTY:
 // CHECK-NEXT:   2) spec / text / len
 // CHECK-NEXT:        text has two bytes
+// CHECK-NEXT:        To rerun use: --match spec/text/len
 // CHECK-EMPTY:
 // CHECK-NEXT: 5 examples, 2 failures
 // CHECK-NEXT: summary ok

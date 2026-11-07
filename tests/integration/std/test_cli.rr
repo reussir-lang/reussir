@@ -1,0 +1,137 @@
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin test_cli %rrc_linker
+// RUN: %std_rene_build/release/test_cli%exe_ext | %FileCheck %s --check-prefix=ALL
+// RUN: %std_rene_build/release/test_cli%exe_ext --list | %FileCheck %s --check-prefix=LIST
+// RUN: %std_rene_build/release/test_cli%exe_ext --match cli/selection --skip cli/selection/skip | %FileCheck %s --check-prefix=MATCH
+// RUN: %std_rene_build/release/test_cli%exe_ext --match cli/parse/help --list | %FileCheck %s --check-prefix=ONE
+// RUN: %std_rene_build/release/test_cli%exe_ext --help | %FileCheck %s --check-prefix=HELP
+
+// ALL:      cli
+// ALL-NEXT:   selection
+// ALL-NEXT:     ✔ all
+// ALL-NEXT:     ✔ prefix
+// ALL-NEXT:     ✔ exact names
+// ALL-NEXT:     ✔ skip
+// ALL-NEXT:     ✔ separators
+// ALL-NEXT:   parse
+// ALL-NEXT:     ✔ run
+// ALL-NEXT:     ✔ list
+// ALL-NEXT:     ✔ help
+// ALL-NEXT:     ✔ missing path
+// ALL-NEXT:     ✔ unknown argument
+// ALL-EMPTY:
+// ALL-NEXT: 10 examples, 0 failures
+
+// LIST:      cli/selection/all
+// LIST-NEXT: cli/selection/prefix
+// LIST-NEXT: cli/selection/exact names
+// LIST-NEXT: cli/selection/skip
+// LIST-NEXT: cli/selection/separators
+// LIST-NEXT: cli/parse/run
+// LIST-NEXT: cli/parse/list
+// LIST-NEXT: cli/parse/help
+// LIST-NEXT: cli/parse/missing path
+// LIST-NEXT: cli/parse/unknown argument
+// LIST-NOT:  {{.}}
+
+// MATCH:      cli
+// MATCH-NEXT:   selection
+// MATCH-NEXT:     ✔ all
+// MATCH-NEXT:     ✔ prefix
+// MATCH-NEXT:     ✔ exact names
+// MATCH-NEXT:     ✔ separators
+// MATCH-EMPTY:
+// MATCH-NEXT: 4 examples, 0 failures
+
+// ONE:      cli/parse/help
+// ONE-NOT:  {{.}}
+
+// HELP: Usage: {{.*}}test_cli{{.*}} [--match PATH]... [--skip PATH]... [--list]
+// HELP: --match PATH
+// HELP: --skip PATH
+// HELP: --list
+// HELP: -h, --help
+
+import std::collections::pure::list::List;
+import std::string::String;
+import std::text::Text;
+import test::cli::Command;
+import test::cli::Selection;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::fail;
+import test::expect::pass;
+import test::tree::TestTree;
+
+fn path3(a: str, b: str, c: str) -> List<Text> {
+    List::Cons { Text::from_str(a),
+        List::Cons { Text::from_str(b), List::Cons { Text::from_str(c), List::Nil } } }
+}
+
+fn args(rest: List<String>) -> List<String> {
+    List::Cons { String::from_str("prog"), rest }
+}
+
+fn arg(s: str, rest: List<String>) -> List<String> {
+    List::Cons { String::from_str(s), rest }
+}
+
+fn under(prefix: str) -> Selection {
+    Selection::all().with_match(Text::from_str(prefix))
+}
+
+fn selection_spec() -> TestTree<() -> Outcome> {
+    TestTree::group("selection")
+        .with_case("all", || expect(
+            Selection::all().selects(path3("std", "text", "len")), "all selects everything"))
+        .with_case("prefix", || expect(
+            under("std/text").selects(path3("std", "text", "len"))
+                && under("std/text/len").selects(path3("std", "text", "len"))
+                && !under("std/text").selects(path3("std", "list", "len")),
+            "a group path selects exactly its cases"))
+        .with_case("exact names", || expect(
+            !under("std/te").selects(path3("std", "text", "len"))
+                && !under("std/text/len/x").selects(path3("std", "text", "len")),
+            "names match whole, and a longer path selects nothing"))
+        .with_case("skip", || {
+            let s = under("std").with_skip(Text::from_str("std/text"));
+            expect(
+                s.selects(path3("std", "list", "len")) && !s.selects(path3("std", "text", "len")),
+                "skip removes cases after matching")
+        })
+        .with_case("separators", || expect(
+            under("/std//text/").selects(path3("std", "text", "len")),
+            "empty names are ignored"))
+}
+
+fn parse_spec() -> TestTree<() -> Outcome> {
+    TestTree::group("parse")
+        .with_case("run", || match test::cli::parse(args(List::Nil)) {
+            Run(s) => expect(s.selects(path3("a", "b", "c")), "no options select all"),
+            _ => fail("expected Run")
+        })
+        .with_case("list", || match test::cli::parse(args(arg("--list", arg("--match", arg("a/b", List::Nil))))) {
+            ListPaths(s) => expect(
+                s.selects(path3("a", "b", "c")) && !s.selects(path3("a", "x", "c")),
+                "--list keeps the selection"),
+            _ => fail("expected ListPaths")
+        })
+        .with_case("help", || match test::cli::parse(args(arg("--match", arg("a", arg("-h", List::Nil))))) {
+            Help(program) => expect(program.eq_str("prog"), "help carries the program name"),
+            _ => fail("expected Help")
+        })
+        .with_case("missing path", || match test::cli::parse(args(arg("--skip", List::Nil))) {
+            Invalid(_, _) => pass(),
+            _ => fail("expected Invalid")
+        })
+        .with_case("unknown argument", || match test::cli::parse(args(arg("--bogus", List::Nil))) {
+            Invalid(_, _) => pass(),
+            _ => fail("expected Invalid")
+        })
+}
+
+#[main]
+pub fn main() {
+    test::runner::run_main(TestTree::group("cli")
+        .with_group(selection_spec())
+        .with_group(parse_spec()))
+}

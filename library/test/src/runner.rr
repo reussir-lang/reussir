@@ -3,13 +3,15 @@
 //! ```text
 //! #[main]
 //! pub fn main() {
-//!     test::runner::run_and_exit(spec())
+//!     test::runner::run_main(spec())
 //! }
 //! ```
 //!
-//! Cases run in declaration order and stream one line each, nested under
-//! their groups. Failures are numbered and listed at the end with their
-//! paths and messages, followed by a summary:
+//! `run_main` reads the command line (see `test::cli`) to select cases,
+//! list them, or print help. Cases run in declaration order and stream one
+//! line each, nested under their groups. Failures are numbered and listed at
+//! the end with their paths, messages, and the option that reruns them,
+//! followed by a summary:
 //!
 //! ```text
 //! list
@@ -21,6 +23,7 @@
 //!   1) list / len
 //!        expected: 1
 //!         but got: 2
+//!        To rerun use: --match list/len
 //!
 //! 2 examples, 1 failure
 //! ```
@@ -37,6 +40,8 @@ import std::format::Format;
 import std::format::Options;
 import std::format::join;
 import std::text::Text;
+import test::cli::Command;
+import test::cli::format_path;
 import test::expect::Outcome;
 import test::tree::TestTree;
 
@@ -73,6 +78,34 @@ pub fn run(tree: TestTree<() -> Outcome>) -> Summary {
 pub fn run_and_exit(tree: TestTree<() -> Outcome>) {
     if !run(tree).is_success() {
         std::process::exit(1)
+    }
+}
+
+/// Acts on the process command line: runs the selected cases and exits with
+/// status 1 if any failed, lists their paths, or prints help. A usage error
+/// exits with status 2.
+pub fn run_main(tree: TestTree<() -> Outcome>) {
+    match test::cli::parse(std::env::args()) {
+        Run(selection) => run_and_exit(selection.apply(tree)),
+        ListPaths(selection) => {
+            let config = Config::default();
+            let _ = selection.apply(tree).fold(
+                0,
+                |n: u64, path: List<Text>, unused_body: () -> Outcome| {
+                    emit(config, format_path(path));
+                    n + 1
+                }
+            );
+        },
+        Help(program) => emit(Config::default(), test::cli::usage(program)),
+        Invalid(program, message) => {
+            let error = text("error: ").append(message)
+                .append(Format::Hardline).append(Format::Hardline)
+                .append(test::cli::usage(program))
+                .append(Format::Hardline);
+            let _ = error.dump_stderr(Options { width: 80, indent: 2 });
+            std::process::exit(2)
+        }
     }
 }
 
@@ -150,7 +183,11 @@ fn report_failures(config: Config, failures: List<Failure>) {
             let header = text("  ").append(index.fmt()).append(text(") "))
                 .append(show_path(failure.path));
             let body = Format::Hardline.append(failure.message).nest(7);
-            emit(config, Format::Hardline.append(header).append(red(body)));
+            let rerun = Format::Hardline
+                .append(text("To rerun use: --match "))
+                .append(format_path(failure.path))
+                .nest(7);
+            emit(config, Format::Hardline.append(header).append(red(body)).append(rerun));
             index + 1
         });
     }
