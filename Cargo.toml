@@ -15,6 +15,7 @@ members = [
     "crates/reussir-codegen",
     "crates/reussir-compiler",
     "crates/reussir-repl",
+    "crates/reussir-fuzzer",
     "crates/rene",
     "crates/reussir-trait-dsl",
 ]
@@ -31,6 +32,7 @@ default-members = [
     "crates/reussir-lsp",
     "crates/reussir-vscode-wasm",
     "crates/reussir-core",
+    "crates/reussir-fuzzer",
     "crates/rene",
     "crates/reussir-trait-dsl",
 ]

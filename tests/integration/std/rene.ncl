@@ -27,6 +27,7 @@
     rtqueue = { kind = 'executable, path = "rtqueue.rr" },
     string = { kind = 'executable, path = "string.rr" },
     test_cli = { kind = 'executable, path = "test_cli.rr" },
+    test_fuzz = { kind = 'staticlib, path = "test_fuzz.rr" },
     test_runner = { kind = 'executable, path = "test_runner.rr" },
     test_tree = { kind = 'executable, path = "test_tree.rr" },
     text_view = { kind = 'executable, path = "text_view.rr" },

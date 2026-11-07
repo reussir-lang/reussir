@@ -3513,6 +3513,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "reussir-fuzzer"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "palc",
+]
+
+[[package]]
 name = "reussir-jit"
 version = "0.1.0"
 dependencies = [

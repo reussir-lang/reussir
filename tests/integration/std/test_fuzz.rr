@@ -1,0 +1,94 @@
+// End-to-end test for a static-library Reussir fuzz suite driven by `reussir-fuzzer`:
+// - The Reussir target is compiled as a `staticlib` (`libtest_fuzz.a`) and
+//   exports `reussir_fuzz_init`.
+// - `Inputs/fuzz_driver.rs` invokes `reussir_fuzzer::fuzz_target!()`, providing
+//   `main`, calling `reussir_fuzz_init` to receive the `TestTree` and
+//   serialized `SuiteSpec`, and feeding mutated `Vec<u8>` buffers back into
+//   `reussir_fuzz_run`.
+//
+// UNSUPPORTED: windows
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --lib test_fuzz
+// RUN: %python %S/Inputs/link_fuzz_driver.py --rene %rene --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --staticlib %std_rene_build/release/libtest_fuzz.a --driver %S/Inputs/fuzz_driver.rs --library-path %library_path -o %t.fuzz.exe
+// RUN: %t.fuzz.exe --list | %FileCheck %s --check-prefix=LIST
+// RUN: %t.fuzz.exe --skip broken --iterations 25 --seed 12345 | %FileCheck %s --check-prefix=PASS
+// RUN: %not %t.fuzz.exe --match broken --iterations 40 --seed 7 2>&1 | %FileCheck %s --check-prefix=FAIL
+
+import std::collections::cow::vec::Vec;
+import std::string::String;
+import test::domain::alphanumeric;
+import test::domain::i64_domain;
+import test::domain::tuple2;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
+
+fn suite() -> TestTree {
+    let arithmetic = TestTree::group("arithmetic")
+        .with_case("unit baseline", || should_be((2 as i64) + 2, 4))
+        .with_fuzz(
+            "bounded sum stays in range",
+            tuple2(i64_domain().in_range(-50, 50), i64_domain().in_range(-50, 50)),
+            |pair: (i64, i64)| {
+                let (a, b) = pair;
+                let s = a + b;
+                expect(s >= -100 && s <= 100, "sum out of [-100, 100]")
+            }
+        )
+        .with_fuzz(
+            "non-negative array elements",
+            i64_domain().non_negative().at_most(25).vec().non_empty().max_len(6),
+            |xs: Vec<i64>| {
+                let n = xs.len();
+                let first = xs.get(0).unwrap_or(-1);
+                expect(n >= 1 && n <= 6 && first >= 0 && first <= 25, "vec constraints violated")
+            }
+        );
+
+    let strings = TestTree::group("strings")
+        .with_fuzz(
+            "alphanumeric string length",
+            alphanumeric().with_len_range(2, 8),
+            |s: String| {
+                let bytes = s.len();
+                expect(bytes >= 2 && bytes <= 8, "string length out of [2, 8]")
+            }
+        );
+
+    let broken = TestTree::group("broken")
+        .with_fuzz(
+            "threshold bug",
+            i64_domain().in_range(0, 100),
+            |x: i64| expect(x < 10, "expected < 10")
+        );
+
+    TestTree::group("fuzz_suite")
+        .with_group(arithmetic)
+        .with_group(strings)
+        .with_group(broken)
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
+
+// LIST: fuzz_suite/arithmetic/unit baseline: unit
+// LIST: fuzz_suite/arithmetic/bounded sum stays in range: (i64[-50..=50], i64[-50..=50])
+// LIST: fuzz_suite/arithmetic/non-negative array elements: array(i64[0..=25])[1..=6]
+// LIST: fuzz_suite/strings/alphanumeric string length: string(alnum)[2..=8]
+// LIST: fuzz_suite/broken/threshold bug: i64[0..=100]
+
+// PASS: ✓ fuzz_suite/arithmetic/unit baseline
+// PASS: ✓ fuzz_suite/arithmetic/bounded sum stays in range (25 fuzz runs)
+// PASS: ✓ fuzz_suite/arithmetic/non-negative array elements (25 fuzz runs)
+// PASS: ✓ fuzz_suite/strings/alphanumeric string length (25 fuzz runs)
+// PASS: 4 examples, 0 failures (seed: 12345)
+
+// FAIL: Fuzz failure in fuzz_suite / broken / threshold bug
+// FAIL: counterexample:
+// FAIL: expected < 10
+// FAIL: To rerun use: --match fuzz_suite/broken/threshold bug
+// FAIL: ✗ fuzz_suite/broken/threshold bug
+// FAIL: 1 example, 1 failure (seed: 7)

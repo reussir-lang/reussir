@@ -1,0 +1,184 @@
+//! FFI bridge between a static-library Reussir `TestTree` and `reussir-fuzzer`.
+//!
+//! A fuzzed test target exports `reussir_fuzz_init` as a C trampoline and calls
+//! [`init`] (or [`fuzz_init`]) with its [`TestTree`]:
+//!
+//! ```reussir
+//! pub fn fuzz_entry() {
+//!     fuzz_init(suite());
+//! }
+//!
+//! extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
+//! ```
+//!
+//! During `reussir_fuzz_init`, `test::fuzz` derives the [`SuiteSpec`],
+//! serializes it to bytes, and registers the `TestTree` handle, reference-count
+//! hooks, runner trampoline (`reussir_fuzz_run`), and serialized spec with
+//! `reussir-fuzzer`.
+
+import std::collections::cow::vec::RawVec;
+import std::collections::cow::vec::Vec;
+import std::collections::pure::list::List;
+import std::console::Ansi;
+import std::console::Color;
+import std::console::ColorChoice;
+import std::format::Display;
+import std::format::Format;
+import std::format::Options;
+import std::format::join;
+import std::option::Option;
+import std::text::Text;
+
+import root::cli::format_path;
+import root::spec::SuiteSpec;
+import root::tree::CaseResult;
+import root::tree::TestTree;
+
+/// Conversion into a [`TestTree`] for fuzz target initialization.
+pub trait FuzzSuite {
+    fn into_test_tree(self: Self) -> TestTree;
+}
+
+impl FuzzSuite for TestTree {
+    fn into_test_tree(self: Self) -> TestTree {
+        self
+    }
+}
+
+#[ffi(import)]
+fn register_fuzz_ffi<T>(tree: T, raw_spec: RawVec<u8>) [{
+    unsafe extern "C" {
+        fn __reussir_fuzzer_register(
+            tree: *mut ::std::ffi::c_void,
+            clone_fn: unsafe extern "C" fn(*mut ::std::ffi::c_void) -> *mut ::std::ffi::c_void,
+            drop_fn: unsafe extern "C" fn(*mut ::std::ffi::c_void),
+            run_fn: unsafe extern "C" fn(
+                *mut ::std::ffi::c_void,
+                *const u8,
+                usize,
+            ) -> i32,
+            spec_ptr: *const u8,
+            spec_len: usize,
+        );
+    }
+
+    unsafe extern "C" fn clone_raw<U: Clone>(
+        ptr: *mut ::std::ffi::c_void,
+    ) -> *mut ::std::ffi::c_void {
+        let borrowed: ::std::mem::ManuallyDrop<U> = unsafe { ::std::mem::transmute_copy(&ptr) };
+        let cloned: U = (*borrowed).clone();
+        let out: *mut ::std::ffi::c_void = unsafe { ::std::mem::transmute_copy(&cloned) };
+        ::std::mem::forget(cloned);
+        out
+    }
+
+    unsafe extern "C" fn drop_raw<U>(ptr: *mut ::std::ffi::c_void) {
+        let owned: U = unsafe { ::std::mem::transmute_copy(&ptr) };
+        drop(owned);
+    }
+
+    unsafe extern "C" fn invoke_run(
+        tree: *mut ::std::ffi::c_void,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32 {
+        unsafe extern "C" {
+            fn reussir_fuzz_run(
+                tree: *mut ::std::ffi::c_void,
+                raw_bytes: ::reussir_rt::collections::vec::Vec<u8>,
+            ) -> i32;
+        }
+        let slice = if data_len == 0 {
+            &[]
+        } else {
+            unsafe { ::std::slice::from_raw_parts(data_ptr, data_len) }
+        };
+        let raw_vec = ::reussir_rt::collections::vec::Vec::from(slice.to_vec());
+        unsafe { reussir_fuzz_run(tree, raw_vec) }
+    }
+
+    let spec_vec: ::std::vec::Vec<u8> = (0..r#raw_spec.len())
+        .filter_map(|i| r#raw_spec.get(i))
+        .collect();
+    let tree_ptr: *mut ::std::ffi::c_void = unsafe { ::std::mem::transmute_copy(&r#tree) };
+    ::std::mem::forget(r#tree);
+    unsafe {
+        __reussir_fuzzer_register(
+            tree_ptr,
+            clone_raw::<[:T:]>,
+            drop_raw::<[:T:]>,
+            invoke_run,
+            spec_vec.as_ptr(),
+            spec_vec.len(),
+        );
+    }
+}];
+
+/// Registers `suite` and its derived [`SuiteSpec`] with `reussir-fuzzer`.
+///
+/// Call this inside the target's `reussir_fuzz_init` trampoline function.
+pub fn init<S: FuzzSuite>(suite: S) {
+    let tree = suite.into_test_tree();
+    let spec: SuiteSpec = tree.derive_spec();
+    let spec_bytes = spec.to_bytes();
+    register_fuzz_ffi(tree, spec_bytes.into_raw());
+}
+
+/// Alias for [`init`].
+pub fn fuzz_init<S: FuzzSuite>(suite: S) {
+    init(suite);
+}
+
+/// Executes one suite-level `RawVec<u8>` buffer (8-byte little-endian case
+/// selector followed by the case's input bytes) against `tree`.
+///
+/// Returns `0` on pass, `1` on failure (after printing the counterexample),
+/// and `-1` on malformed input or an empty suite.
+pub fn run_fuzz_bytes(tree: TestTree, raw_bytes: RawVec<u8>) -> i32 {
+    let bytes = Vec::from_raw(raw_bytes);
+    match tree.run_suite_bytes(bytes) {
+        None => -1,
+        Some(path_and_res) => {
+            let (path, res) = path_and_res;
+            match res {
+                Pass => 0,
+                MalformedInput => -1,
+                Fail(input_fmt, msg_fmt) => {
+                    report_fuzz_failure(path, input_fmt, msg_fmt);
+                    1
+                }
+            }
+        }
+    }
+}
+
+extern "C" trampoline "reussir_fuzz_run" = run_fuzz_bytes;
+
+fn report_fuzz_failure(path: List<Text>, counterexample: Format, message: Format) {
+    let header = lit("Fuzz failure in ").append(show_path(path));
+    let input_line = match counterexample {
+        Empty => Format::Empty,
+        doc => Format::Hardline.append(lit("counterexample: ")).append(doc).nest(2)
+    };
+    let body = Format::Hardline.append(message).nest(2);
+    let rerun = Format::Hardline
+        .append(lit("To rerun use: --match "))
+        .append(format_path(path))
+        .nest(2);
+    let doc = Format::Hardline
+        .append(header)
+        .append(input_line)
+        .append(body.ansi(Ansi::Foreground { Color::Red }))
+        .append(rerun)
+        .append(Format::Hardline);
+    let options = Options { width: 80, indent: 2 };
+    let _ = doc.dump_stdout_with_color(options, ColorChoice::Auto);
+}
+
+fn show_path(path: List<Text>) -> Format {
+    join(lit(" / "), path.map(|name: Text| name.fmt()))
+}
+
+fn lit(s: str) -> Format {
+    Format::Text { Text::from_str(s) }
+}
