@@ -94,6 +94,43 @@ pub fn unify_args<'tcx>(
     a.len() == b.len() && a.iter().zip(b).all(|(&x, &y)| unify_ty(x, y, vars, subst))
 }
 
+/// The renaming from `a_vars` to `b_vars` under which `a` equals `b`, or
+/// `None` when the lists differ by more than a bijective renaming of their
+/// generics. Identifies the same impl head loaded twice under fresh generic
+/// ids.
+pub fn alpha_renaming<'tcx>(
+    a: &[Ty<'tcx>],
+    b: &[Ty<'tcx>],
+    a_vars: &FxHashSet<GenericId>,
+    b_vars: &FxHashSet<GenericId>,
+) -> Option<FxHashMap<GenericId, GenericId>> {
+    let vars: FxHashSet<GenericId> = a_vars.union(b_vars).copied().collect();
+    let mut subst = FxHashMap::default();
+    if !unify_args(a, b, &vars, &mut subst) {
+        return None;
+    }
+    // A renaming binds each generic to a generic of the other side, and no
+    // two generics to the same one.
+    let mut renaming = FxHashMap::default();
+    let mut targets = FxHashSet::default();
+    for (&g, &t) in &subst {
+        let TyKind::Generic(h) = *t.kind() else {
+            return None;
+        };
+        let (from, to) = if a_vars.contains(&g) && b_vars.contains(&h) {
+            (g, h)
+        } else if b_vars.contains(&g) && a_vars.contains(&h) {
+            (h, g)
+        } else {
+            return None;
+        };
+        if !targets.insert(to) || renaming.insert(from, to).is_some() {
+            return None;
+        }
+    }
+    Some(renaming)
+}
+
 /// Chase a binding chain to its representative. Shallow: only a `Generic`
 /// *head* is followed; selection grounds whole types by feeding the resolved
 /// bindings through `replace_generics`.
@@ -271,6 +308,33 @@ mod tests {
             let vars: FxHashSet<GenericId> = [t].into_iter().collect();
             let mut subst = FxHashMap::default();
             assert!(!unify_args(&[g], &[wrapped], &vars, &mut subst));
+        });
+    }
+
+    #[test]
+    fn alpha_renaming_identifies_only_renamed_heads() {
+        with_tcx(|tcx: &TyCtxt| {
+            let pair = DefId(0);
+            let flex = crate::semi::ty::Flexivity::Irrelevant;
+            let [t, u, v, w] = [1, 2, 3, 4].map(GenericId);
+            let g = |id| tcx.mk_generic(id);
+            let a_vars: FxHashSet<GenericId> = [t, u].into_iter().collect();
+            let b_vars: FxHashSet<GenericId> = [v, w].into_iter().collect();
+
+            // Pair<T, U> and Pair<V, W>: the same head under fresh ids.
+            let a = tcx.mk_record(pair, &[g(t), g(u)], flex);
+            let b = tcx.mk_record(pair, &[g(v), g(w)], flex);
+            let renaming = alpha_renaming(&[a], &[b], &a_vars, &b_vars).expect("renamed");
+            assert_eq!(renaming.get(&t), Some(&v));
+            assert_eq!(renaming.get(&u), Some(&w));
+
+            // Pair<T, T> and Pair<V, W> overlap but are distinct heads.
+            let same = tcx.mk_record(pair, &[g(t), g(t)], flex);
+            assert!(alpha_renaming(&[same], &[b], &a_vars, &b_vars).is_none());
+
+            // Pair<T, i32> and Pair<V, W> differ by an instantiation.
+            let inst = tcx.mk_record(pair, &[g(t), tcx.mk_int(IntTy::Signed(32))], flex);
+            assert!(alpha_renaming(&[inst], &[b], &a_vars, &b_vars).is_none());
         });
     }
 }

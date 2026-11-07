@@ -27,7 +27,7 @@ use crate::semi::hir::build::Parsed;
 use crate::semi::hir::{ClosureExpr, DecisionTree, Expr, ExprKind, Function, SwitchCases};
 use crate::semi::resolve::DefKind;
 use crate::semi::traits::AssocConstDef;
-use crate::semi::traits::coherence::{head_key, unify_args};
+use crate::semi::traits::coherence::{alpha_renaming, head_key, unify_args};
 use crate::semi::traits::def::MethodSig;
 use crate::semi::traits::{ImplDef, ImplId, Obligation, TraitDef, TraitId, TraitRef};
 use crate::semi::ty::{DefId, GenericId, Ty, TyCtxt, TyKind};
@@ -341,9 +341,26 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                 continue;
             };
             let head = head_key(self_ty).expect("shipped impls have ground heads");
+            // A method-less impl has no method defs to identify it, so a
+            // re-ship is recognized by an alpha-equivalent head with the same
+            // bounds: the loaded generics are fresh ids on every load.
+            let fresh: rustc_hash::FxHashSet<GenericId> = binder.iter().map(|&(_, g)| g).collect();
             let duplicate = self.traits.impls_for(tid, head).iter().any(|&e| {
                 let other = self.traits.impl_def(e);
-                other.methods == methods && (!methods.is_empty() || other.trait_ref.args == args)
+                if other.methods != methods {
+                    return false;
+                }
+                if !methods.is_empty() {
+                    return true;
+                }
+                let registered = other.generics.iter().copied().collect();
+                alpha_renaming(&other.trait_ref.args, &args, &registered, &fresh).is_some_and(
+                    |renaming| {
+                        renaming
+                            .iter()
+                            .all(|(&g, &h)| self.generic_bounds(g) == self.generic_bounds(h))
+                    },
+                )
             });
             if duplicate {
                 continue;
