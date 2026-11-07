@@ -17,6 +17,8 @@ import std::format::join;
 import std::string::String;
 import std::text::Text;
 import std::text::TextView;
+import test::spec::SuiteSpec;
+import test::tree::Case;
 import test::tree::TestTree;
 
 /// Which cases a run includes.
@@ -49,8 +51,13 @@ impl Selection {
     }
 
     /// Keeps the selected cases of `tree`.
-    pub fn apply<T>(self: Self, tree: TestTree<T>) -> TestTree<T> {
-        tree.filter(|path: List<Text>, unused_body: T| self.selects(path))
+    pub fn apply(self: Self, tree: TestTree) -> TestTree {
+        tree.filter(|path: List<Text>, unused_case: Case| self.selects(path))
+    }
+
+    /// Filters `tree` by `self` and derives the resulting [`SuiteSpec`].
+    pub fn derive_spec(self: Self, tree: TestTree) -> SuiteSpec {
+        self.apply(tree).derive_spec()
     }
 }
 

@@ -5,9 +5,11 @@
 // CHECK-NEXT:   arithmetic
 // CHECK-NEXT:     ✔ add
 // CHECK-NEXT:     ✘ mul FAILED [1]
+// CHECK-NEXT:     ✔ commutative (fuzz)
+// CHECK-NEXT:     ✘ bounded (fuzz) FAILED [2]
 // CHECK-NEXT:   text
 // CHECK-NEXT:     ✔ eq
-// CHECK-NEXT:     ✘ len FAILED [2]
+// CHECK-NEXT:     ✘ len FAILED [3]
 // CHECK-NEXT:   ✔ top-level
 // CHECK-EMPTY:
 // CHECK-NEXT: Failures:
@@ -17,30 +19,48 @@
 // CHECK-NEXT:         but got: 6
 // CHECK-NEXT:        To rerun use: --match spec/arithmetic/mul
 // CHECK-EMPTY:
-// CHECK-NEXT:   2) spec / text / len
+// CHECK-NEXT:   2) spec / arithmetic / bounded (fuzz)
+// CHECK-NEXT:        counterexample: 42
+// CHECK-NEXT:        expected < 10
+// CHECK-NEXT:        To rerun use: --match spec/arithmetic/bounded (fuzz)
+// CHECK-EMPTY:
+// CHECK-NEXT:   3) spec / text / len
 // CHECK-NEXT:        text has two bytes
 // CHECK-NEXT:        To rerun use: --match spec/text/len
 // CHECK-EMPTY:
-// CHECK-NEXT: 5 examples, 2 failures
+// CHECK-NEXT: 7 examples, 3 failures
 // CHECK-NEXT: summary ok
 
 import std::format::Format;
 import std::format::Options;
 import std::text::Text;
-import test::expect::Outcome;
+import test::domain::in_range;
 import test::expect::expect;
 import test::expect::pass;
 import test::expect::should_be;
 import test::expect::should_not_be;
+import test::runner::Config;
+import test::runner::run_with;
 import test::tree::TestTree;
 
 fn int(n: i64) -> i64 { n }
 
-fn spec() -> TestTree<() -> Outcome> {
+fn spec() -> TestTree {
     TestTree::group("spec")
         .with_group(TestTree::group("arithmetic")
             .with_case("add", || should_be(int(2) + 2, 4).and_then(|| should_not_be(int(2) + 2, 5)))
-            .with_case("mul", || should_be(int(2) * 3, 7)))
+            .with_case("mul", || should_be(int(2) * 3, 7))
+            .with_fuzz2(
+                "commutative (fuzz)",
+                in_range(-1000, 1000),
+                in_range(-1000, 1000),
+                |a: i64, b: i64| should_be(a + b, b + a)
+            )
+            .with_fuzz(
+                "bounded (fuzz)",
+                in_range(42, 42),
+                |x: i64| expect(x < 10, "expected < 10")
+            ))
         .with_group(TestTree::group("text")
             .with_case("eq", || expect(Text::from_str("hi").eq_str("hi"), "literal equality"))
             .with_case("len", || expect(Text::from_str("hi").len() == 3, "text has two bytes")))
@@ -50,8 +70,9 @@ fn spec() -> TestTree<() -> Outcome> {
 
 #[main]
 pub fn main() {
-    let summary = test::runner::run(spec());
-    if summary.examples != 5 || summary.failures != 2 || summary.is_success() {
+    let config = Config::default().with_seed(12345).with_iterations(32);
+    let summary = run_with(spec(), config);
+    if summary.examples != 7 || summary.failures != 3 || summary.is_success() {
         core::intrinsic::panic::panic()
     };
     let _ = Format::Text { Text::from_str("summary ok") }

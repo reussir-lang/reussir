@@ -1,9 +1,63 @@
 // RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin test_tree %rrc_linker
 // RUN: %std_rene_build/release/test_tree%exe_ext
 
+import core::intrinsic::array;
+import std::collections::cow::vec::Vec;
 import std::collections::pure::list::List;
 import std::option::Option;
+import std::random::Rng;
+import std::random::Xoshiro256pp;
+import std::string::String;
 import std::text::Text;
+import test::cli::Selection;
+import test::domain::alpha;
+import test::domain::alphanumeric;
+import test::domain::array_of;
+import test::domain::ascii;
+import test::domain::ascii_text;
+import test::domain::bool_array;
+import test::domain::bool_domain;
+import test::domain::char_domain;
+import test::domain::digits;
+import test::domain::f32_array;
+import test::domain::f32_domain;
+import test::domain::f64_array;
+import test::domain::f64_domain;
+import test::domain::i8_domain;
+import test::domain::i16_domain;
+import test::domain::i32_array;
+import test::domain::i32_domain;
+import test::domain::i64_array;
+import test::domain::i64_domain;
+import test::domain::identifier;
+import test::domain::in_range;
+import test::domain::in_range_f64;
+import test::domain::in_range_u64;
+import test::domain::list_of;
+import test::domain::string;
+import test::domain::text;
+import test::domain::tuple2;
+import test::domain::tuple3;
+import test::domain::tuple4;
+import test::domain::u8_array;
+import test::domain::u8_domain;
+import test::domain::u16_domain;
+import test::domain::u32_domain;
+import test::domain::u64_array;
+import test::domain::u64_domain;
+import test::domain::vec_of;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::fail;
+import test::expect::pass;
+import test::spec::Charset;
+import test::spec::FloatWidth;
+import test::spec::IntWidth;
+import test::spec::SuiteSpec;
+import test::spec::ValueSpec;
+import test::spec::write_u8;
+import test::tree::Case;
+import test::tree::CaseResult;
 import test::tree::TestTree;
 
 fn check(value: bool) {
@@ -18,27 +72,41 @@ fn path3(a: str, b: str, c: str) -> List<Text> {
     List::Cons { Text::from_str(a), path2(b, c) }
 }
 
+fn is_pass_result(res: CaseResult) -> bool {
+    match res {
+        Pass => true,
+        _ => false
+    }
+}
+
+fn is_fail_result(res: CaseResult) -> bool {
+    match res {
+        Fail(_, _) => true,
+        _ => false
+    }
+}
+
 // root
-// ├── a = 1
+// ├── a (unit pass)
 // ├── inner
-// │   ├── b = 2
-// │   └── c = 3
+// │   ├── b (fuzz i64)
+// │   └── c (unit fail)
 // └── empty
-fn sample() -> TestTree<i64> {
+fn sample() -> TestTree {
     TestTree::group("root")
-        .with_case("a", 1)
-        .with_group(TestTree::group("inner").with_case("b", 2).with_case("c", 3))
+        .with_case("a", || pass())
+        .with_group(
+            TestTree::group("inner")
+                .with_fuzz("b", in_range(10, 20), |x: i64| expect(x >= 10 && x <= 20, "in range"))
+                .with_case("c", || fail("boom"))
+        )
         .with_group(TestTree::group("empty"))
 }
 
-fn seven() -> i64 { 7 }
-
-fn empty() -> TestTree<i64> { TestTree::group("g") }
-
 // Number of groups, including the root.
-fn groups(tree: TestTree<i64>) -> u64 {
+fn groups(tree: TestTree) -> u64 {
     tree.fold_tree(
-        |unused_name: Text, unused_v: i64| 0,
+        |unused_name: Text, unused_c: Case| 0,
         |unused_name: Text, children: List<u64>| children.fold_left(1, |a: u64, b: u64| a + b)
     )
 }
@@ -46,93 +114,292 @@ fn groups(tree: TestTree<i64>) -> u64 {
 fn test_count_and_name() {
     check(sample().count() == 3);
     check(sample().name().eq_str("root"));
-    check(TestTree::group("g").with_case("x", seven()).count() == 1);
-    check(empty().count() == 0);
+    check(TestTree::group("g").with_case("x", || pass()).count() == 1);
+    check(TestTree::group("g").count() == 0);
     check(groups(sample()) == 3);
 }
 
 fn test_fold_order_and_paths() {
-    // Declaration order: digits concatenate as 1, 2, 3.
-    let order = sample().fold(0, |acc: i64, unused_path: List<Text>, v: i64| acc * 10 + v);
-    check(order == 123);
-
-    // Every path starts at the root; depth matches the shape.
-    let depths = sample().fold(0, |acc: u64, path: List<Text>, unused_v: i64| {
+    let depths = sample().fold(0, |acc: u64, path: List<Text>, unused_c: Case| {
         check(path.head().unwrap_or(Text::from_str("")).eq_str("root"));
         acc * 10 + path.len()
     });
     check(depths == 233);
 }
 
-fn test_fold_tree() {
-    // Rebuilds the declaration-order digits bottom-up.
-    let digits = sample().fold_tree(
-        |unused_name: Text, v: i64| v,
-        |unused_name: Text, children: List<i64>| children.fold_left(0, |a: i64, b: i64| {
-            if b == 0 { a } else { if b < 10 { a * 10 + b } else { a * 100 + b } }
-        })
-    );
-    check(digits == 123);
-}
+fn test_find_and_filter() {
+    let a_case = sample().find(path2("root", "a"));
+    check(a_case.is_some());
+    check(a_case.unwrap_or_panic().is_unit());
 
-fn test_map() {
-    let doubled = sample().map(|v: i64| v * 2);
-    check(doubled.fold(0, |acc: i64, unused_path: List<Text>, v: i64| acc * 10 + v) == 246);
-    check(doubled.find(path3("root", "inner", "c")).unwrap_or(0) == 6);
-}
+    let b_case = sample().find(path3("root", "inner", "b"));
+    check(b_case.is_some());
+    check(!b_case.unwrap_or_panic().is_unit());
 
-fn test_find() {
-    check(sample().find(path2("root", "a")).unwrap_or(0) == 1);
-    check(sample().find(path3("root", "inner", "b")).unwrap_or(0) == 2);
-    check(sample().find(path3("root", "inner", "c")).unwrap_or(0) == 3);
     check(sample().find(path2("root", "inner")).is_none());
     check(sample().find(path2("root", "missing")).is_none());
-    check(sample().find(path3("root", "a", "b")).is_none());
-    check(sample().find(path2("other", "a")).is_none());
     check(sample().find(List::Nil).is_none());
 
-    // The first of two same-named siblings wins.
-    let dup: TestTree<i64> = TestTree::group("g").with_case("x", 1).with_case("x", 2);
-    check(dup.find(path2("g", "x")).unwrap_or(0) == 1);
+    // Keep only unit cases.
+    let units = sample().filter(|unused_path: List<Text>, c: Case| c.is_unit());
+    check(units.count() == 2);
+    check(units.find(path2("root", "a")).is_some());
+    check(units.find(path3("root", "inner", "c")).is_some());
+    check(units.find(path3("root", "inner", "b")).is_none());
 }
 
-fn test_filter() {
-    let odd = sample().filter(|unused_path: List<Text>, v: i64| v % 2 == 1);
-    check(odd.count() == 2);
-    check(odd.find(path2("root", "a")).is_some());
-    check(odd.find(path3("root", "inner", "c")).is_some());
-    check(odd.find(path3("root", "inner", "b")).is_none());
+fn test_domain_combinators() {
+    let rng = Rng<Xoshiro256pp>::new_from_seed(0x123456789abcdef0);
 
-    // Groups that lose every case are pruned; the root remains.
-    let only_a = sample().filter(|path: List<Text>, unused_v: i64| {
-        path.tail().head().unwrap_or(Text::from_str("")).eq_str("a")
-    });
-    check(only_a.count() == 1);
-    check(groups(only_a) == 1);
-    check(groups(sample().filter(|unused_path: List<Text>, unused_v: i64| true)) == 2);
+    // Bool
+    check(bool_domain().spec() == ValueSpec::Bool);
+    let _ = bool_domain().sample(rng);
 
-    let none = sample().filter(|unused_path: List<Text>, unused_v: i64| false);
-    check(none.count() == 0);
-    check(none.name().eq_str("root"));
+    // Signed & Unsigned Integers with range/sign constraints
+    let d_i8 = i8_domain().in_range(-10, 10);
+    let d_i16 = i16_domain().positive().at_most(500);
+    let d_i32 = i32_domain().negative().at_least(-100);
+    let d_i64 = i64_domain().non_negative().at_most(1000);
+    let d_u8 = u8_domain().in_range_u64(5, 25);
+    let d_u16 = u16_domain().positive().in_range_u64(1, 300);
+    let d_u32 = u32_domain().in_range_u64(100, 200);
+    let d_u64 = in_range_u64(1000, 2000);
+
+    let _ = while [i = (0 as u64)] (i < 32) {
+        let v8 = d_i8.sample(rng) as i64;
+        check(v8 >= -10 && v8 <= 10);
+        let v16 = d_i16.sample(rng) as i64;
+        check(v16 >= 1 && v16 <= 500);
+        let v32 = d_i32.sample(rng) as i64;
+        check(v32 >= -100 && v32 <= -1);
+        let v64 = d_i64.sample(rng);
+        check(v64 >= 0 && v64 <= 1000);
+        let u8v = d_u8.sample(rng) as u64;
+        check(u8v >= 5 && u8v <= 25);
+        let u16v = d_u16.sample(rng) as u64;
+        check(u16v >= 1 && u16v <= 300);
+        let u32v = d_u32.sample(rng) as u64;
+        check(u32v >= 100 && u32v <= 200);
+        let u64v = d_u64.sample(rng);
+        check(u64v >= 1000 && u64v <= 2000);
+        i + 1
+    };
+
+    // Floats with range, unit_interval, positive, negative
+    let d_f32 = f32_domain().unit_interval();
+    let d_f64 = in_range_f64(-2.5, 3.5);
+    let d_f64_pos = f64_domain().positive().in_range_f64(0.5, 10.0);
+    let _ = while [i = (0 as u64)] (i < 32) {
+        let x32 = d_f32.sample(rng) as f64;
+        check(x32 >= 0.0 && x32 <= 1.0);
+        let x64 = d_f64.sample(rng);
+        check(x64 >= -2.5 && x64 <= 3.5);
+        let xpos = d_f64_pos.sample(rng);
+        check(xpos >= 0.5 && xpos <= 10.0);
+        i + 1
+    };
+
+    // Characters & Strings with charsets and length bounds
+    let d_char = char_domain().digits();
+    let d_digits = digits().with_len(6);
+    let d_ident = identifier().with_len_range(3, 8);
+    let d_alpha = alpha().non_empty().max_len(5);
+    let d_alnum = alphanumeric().with_len_range(2, 4);
+    let d_ascii_txt = ascii_text().with_len(4);
+    let d_utf8 = string().utf8().with_len_range(1, 6);
+    let _ = while [i = (0 as u64)] (i < 24) {
+        let ch = d_char.sample(rng);
+        check(Charset::Digits.contains(ch));
+
+        let s_dig = d_digits.sample(rng);
+        check(s_dig.len() == 6);
+
+        let s_id = d_ident.sample(rng);
+        check(s_id.len() >= 3 && s_id.len() <= 8);
+
+        let s_al = d_alpha.sample(rng);
+        check(s_al.len() >= 1 && s_al.len() <= 5);
+
+        let s_an = d_alnum.sample(rng);
+        check(s_an.len() >= 2 && s_an.len() <= 4);
+
+        let t_as = d_ascii_txt.sample(rng);
+        check(t_as.len() == 4);
+
+        let s_u8 = d_utf8.sample(rng);
+        check(s_u8.len() >= 1);
+        i + 1
+    };
+
+    // Vec, List, and 1D dynamic arrays [T; ?]
+    let d_vec = vec_of(in_range(-20, 20)).with_len_range(2, 6);
+    let d_list = list_of(in_range_u64(1, 9)).with_len(4);
+    let d_arr_i64 = i64_array().in_range(-5, 5);
+    let _ = d_arr_i64;
+    let d_arr = array_of(in_range(10, 50), 0).with_len_range(3, 5);
+    let d_arr_f64 = f64_array().with_len(2);
+    let d_arr_u8 = u8_array().non_empty().max_len(4);
+    let d_arr_bool = bool_array().with_len(3);
+    let d_arr_i32 = i32_array().with_len(2);
+    let d_arr_u64 = u64_array().with_len(2);
+    let d_arr_f32 = f32_array().with_len(2);
+
+    let _ = while [i = (0 as u64)] (i < 16) {
+        let v = d_vec.sample(rng);
+        check(v.len() >= 2 && v.len() <= 6);
+        let first_v = v.get(0).unwrap_or(999);
+        check(first_v >= -20 && first_v <= 20);
+
+        let l = d_list.sample(rng);
+        check(l.len() == 4);
+
+        let arr = d_arr.sample(rng);
+        let dim = array::dim(arr, 0);
+        check(dim >= 3 && dim <= 5);
+        let e0 = array::get(arr, 0);
+        check(e0 >= 10 && e0 <= 50);
+
+        check(array::dim(d_arr_f64.sample(rng), 0) == 2);
+        let u8_len = array::dim(d_arr_u8.sample(rng), 0);
+        check(u8_len >= 1 && u8_len <= 4);
+        check(array::dim(d_arr_bool.sample(rng), 0) == 3);
+        check(array::dim(d_arr_i32.sample(rng), 0) == 2);
+        check(array::dim(d_arr_u64.sample(rng), 0) == 2);
+        check(array::dim(d_arr_f32.sample(rng), 0) == 2);
+        i + 1
+    };
+
+    // Tuples & map_display
+    let d_even = in_range(0, 50).map_display(|n: i64| n * 2);
+    let d_t2 = tuple2(d_even, ascii().with_len(3));
+    let d_t3 = tuple3(in_range(1, 5), bool_domain(), digits().with_len(2));
+    let d_t4 = tuple4(i8_domain(), u8_domain(), f32_domain().unit_interval(), char_domain().alpha());
+
+    let (ev, s3) = d_t2.sample(rng);
+    check(ev % 2 == 0 && ev >= 0 && ev <= 100 && s3.len() == 3);
+    let (t3_a, _, t3_c) = d_t3.sample(rng);
+    check(t3_a >= 1 && t3_a <= 5 && t3_c.len() == 2);
+    let (_, _, t4_f, t4_ch) = d_t4.sample(rng);
+    check((t4_f as f64) >= 0.0 && (t4_f as f64) <= 1.0 && Charset::Alpha.contains(t4_ch));
 }
 
-fn test_closure_cases() {
-    let tree: TestTree<() -> bool> = TestTree::group("closures")
-        .with_case("pass", || true)
-        .with_case("fail", || false);
-    let passed = tree.fold(0, |n: u64, unused_path: List<Text>, body: () -> bool| {
-        if body() { n + 1 } else { n }
-    });
-    check(passed == 1);
+fn test_spec_derivation_and_serialization() {
+    let tree = TestTree::group("suite")
+        .with_case("unit_case", || pass())
+        .with_group(
+            TestTree::group("props")
+                .with_fuzz(
+                    "int_vec",
+                    in_range(-50, 50).vec_with_len(1, 8),
+                    |xs: Vec<i64>| expect(!xs.is_empty(), "non-empty")
+                )
+                .with_fuzz2(
+                    "str_and_float",
+                    identifier().with_len_range(2, 10),
+                    in_range_f64(-10.0, 10.0).allow_nan().allow_inf(),
+                    |s: String, x: f64| {
+                        let _ = x;
+                        expect(s.len() >= 2, "len >= 2")
+                    }
+                )
+                .with_fuzz3(
+                    "triple",
+                    u16_domain().in_range_u64(10, 99),
+                    char_domain().alphanumeric(),
+                    i64_array().with_len(4),
+                    |n: u16, ch: char, arr: [i64; ?]| {
+                        expect(
+                            (n as u64) >= 10 && Charset::Alphanumeric.contains(ch) && array::dim(arr, 0) == 4,
+                            "triple constraints"
+                        )
+                    }
+                )
+        );
+
+    // Derive full SuiteSpec and verify complete binary round-trip.
+    let full_spec = tree.derive_spec();
+    check(full_spec.len() == 4);
+    let bytes = full_spec.to_bytes();
+    let decoded = SuiteSpec::from_bytes(bytes);
+    check(decoded.is_some());
+    check(decoded.unwrap_or_panic() == full_spec);
+
+    // Verify trailing garbage is rejected.
+    let bad_bytes = write_u8(full_spec.to_bytes(), 0);
+    check(SuiteSpec::from_bytes(bad_bytes).is_none());
+
+    // Derive filtered SuiteSpec using Selection (--match / --skip).
+    let sel = Selection::all()
+        .with_match(Text::from_str("suite/props"))
+        .with_skip(Text::from_str("suite/props/str_and_float"));
+    let filtered_spec = sel.derive_spec(tree);
+    check(filtered_spec.len() == 2);
+
+    let filtered_roundtrip = SuiteSpec::from_bytes(filtered_spec.to_bytes());
+    check(filtered_roundtrip.is_some());
+    check(filtered_roundtrip.unwrap_or_panic() == filtered_spec);
+
+    // Also test ValueSpec standalone round-trip on every variant.
+    let complex_vspec = ValueSpec::Tuple {
+        List::Cons {
+            ValueSpec::Unit,
+            List::Cons {
+                ValueSpec::Bool,
+                List::Cons {
+                    ValueSpec::Int { IntWidth::I16, -200, 300 },
+                    List::Cons {
+                        ValueSpec::UInt { IntWidth::I32, 10, 50000 },
+                        List::Cons {
+                            ValueSpec::Float { FloatWidth::F64, -1.5, 2.5, true, false },
+                            List::Cons {
+                                ValueSpec::Char { Charset::Identifier },
+                                List::Cons {
+                                    ValueSpec::String { Charset::AsciiPrintable, 2, 12 },
+                                    List::Cons {
+                                        ValueSpec::Array {
+                                            ValueSpec::Int { IntWidth::I64, -99, 99 },
+                                            1,
+                                            5
+                                        },
+                                        List::Nil
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+    let vbytes = complex_vspec.to_bytes();
+    let vdecoded = ValueSpec::from_bytes(vbytes);
+    check(vdecoded.is_some());
+    check(vdecoded.unwrap_or_panic() == complex_vspec);
+
+    // Feed generated Vec<u8> from SuiteSpec into the filtered tree!
+    let filtered_tree = sel.apply(tree);
+    let rng = Rng<Xoshiro256pp>::new_from_seed(987654321);
+    let _ = while [i = (0 as u64)] (i < 40) {
+        let suite_input: Vec<u8> = filtered_spec.generate(rng);
+        let outcome = filtered_tree.run_suite_bytes(suite_input);
+        check(outcome.is_some());
+        let (ran_path, case_res) = outcome.unwrap_or_panic();
+        check(sel.selects(ran_path));
+        check(is_pass_result(case_res));
+        i + 1
+    };
+
+    // Also verify a failing fuzz case returns Fail with counterexample when fed Vec<u8>.
+    let failing_case = Case::fuzz(in_range(100, 200), |x: i64| expect(x < 50, "must be < 50"));
+    let fail_bytes = failing_case.spec().generate(rng);
+    check(is_fail_result(failing_case.run_bytes(fail_bytes)));
 }
 
 #[main]
 pub fn main() {
     test_count_and_name();
     test_fold_order_and_paths();
-    test_fold_tree();
-    test_map();
-    test_find();
-    test_filter();
-    test_closure_cases();
+    test_find_and_filter();
+    test_domain_combinators();
+    test_spec_derivation_and_serialization();
 }

@@ -79,7 +79,7 @@ fn under(prefix: str) -> Selection {
     Selection::all().with_match(Text::from_str(prefix))
 }
 
-fn selection_spec() -> TestTree<() -> Outcome> {
+fn selection_spec() -> TestTree {
     TestTree::group("selection")
         .with_case("all", || expect(
             Selection::all().selects(path3("std", "text", "len")), "all selects everything"))
@@ -103,7 +103,7 @@ fn selection_spec() -> TestTree<() -> Outcome> {
             "empty names are ignored"))
 }
 
-fn parse_spec() -> TestTree<() -> Outcome> {
+fn parse_spec() -> TestTree {
     TestTree::group("parse")
         .with_case("run", || match test::cli::parse(args(List::Nil)) {
             Run(s) => expect(s.selects(path3("a", "b", "c")), "no options select all"),
