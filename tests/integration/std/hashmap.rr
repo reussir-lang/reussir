@@ -1,34 +1,16 @@
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin hashmap %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: release{{[/\\]}}hashmap
 
-// RUN: %std_rene_build/release/hashmap%exe_ext < %S/Inputs/hashmap/basics.in | %FileCheck %s --check-prefix=BASICS
-// BASICS: 1
-
-// RUN: %std_rene_build/release/hashmap%exe_ext < %S/Inputs/hashmap/adaptive.in | %FileCheck %s --check-prefix=ADAPTIVE
-// ADAPTIVE: 4
-// ADAPTIVE-NEXT: 5
-// ADAPTIVE-NEXT: 4
-// ADAPTIVE-NEXT: 39
-// ADAPTIVE-NEXT: 1
-// ADAPTIVE-NEXT: 1
-// ADAPTIVE-NEXT: 1
-// ADAPTIVE-NEXT: 1
-// ADAPTIVE-NEXT: 1
-// ADAPTIVE-NEXT: 51
-// ADAPTIVE-NEXT: 1
-// ADAPTIVE-NEXT: 40
-// ADAPTIVE-NEXT: 333
-// ADAPTIVE-NEXT: 1
-// ADAPTIVE-NEXT: 1
-
-// RUN: %std_rene_build/release/hashmap%exe_ext < %S/Inputs/hashmap/transforms.in | %FileCheck %s --check-prefix=TRANSFORMS
-// TRANSFORMS: 1
-
-// RUN: %std_rene_build/release/hashmap%exe_ext < %S/Inputs/hashmap/algebra.in | %FileCheck %s --check-prefix=ALGEBRA
-// ALGEBRA: 1
-
-// RUN: %std_rene_build/release/hashmap%exe_ext < %S/Inputs/hashmap/churn.in | %FileCheck %s --check-prefix=CHURN
-// CHURN: 1
+// RUN: %std_rene_build/release/hashmap%exe_ext | %FileCheck %s
+// CHECK:      hashmap
+// CHECK-NEXT:   ✔ basics
+// CHECK-NEXT:   ✔ adaptive
+// CHECK-NEXT:   ✔ transforms
+// CHECK-NEXT:   ✔ algebra
+// CHECK-NEXT:   ✔ churn
+// CHECK-NEXT:   ✔ model equivalence (fuzz)
+// CHECK-EMPTY:
+// CHECK-NEXT: 6 examples, 0 failures
 
 import std::collections::pure::hashmap::Entry;
 import std::collections::pure::hashmap::HashMap;
@@ -39,10 +21,13 @@ import std::collections::pure::wavlmap::WavlMap;
 import std::hash::Hash;
 import std::hash::Hasher;
 import std::option::Option;
-
-fn wb(value : bool) {
-    test_utils::io::write_i32(if value { 1 } else { 0 })
-}
+import test::domain::i64_domain;
+import test::domain::list_of;
+import test::domain::tuple2;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::tree::TestTree;
 
 pub struct [value] Key {
     id : i64,
@@ -77,7 +62,7 @@ fn controlled_value(map : HashMap<Key, i64>, id : i64, digest : u64) -> i64 {
     map.get(controlled(id, digest)).unwrap_or(0 - 1)
 }
 
-fn test_basics() {
+fn test_basics() -> Outcome {
     let empty : HashMap<Key, i64> = HashMap::new();
     let seeded : HashMap<Key, i64> = HashMap::with_seed(77);
     let map = empty.insert(int_key(1), 10)
@@ -112,9 +97,15 @@ fn test_basics() {
     let single = HashMap::singleton(int_key(8), 80);
     let seeded_single : HashMap<Key, i64> =
         HashMap::singleton_seeded(int_key(7), 70, 17);
-    wb(shape && lookup && added && replaced && removed && missing
-        && single.len() == 1 && value_or(single, 8, 0) == 80
-        && seeded_single.hash_seed() == 17);
+    expect(shape, "shape checks failed")
+        .and_then(|| expect(lookup, "lookup checks failed"))
+        .and_then(|| expect(added, "insert_result Added checks failed"))
+        .and_then(|| expect(replaced, "insert_result Replaced checks failed"))
+        .and_then(|| expect(removed, "remove_entry Removed checks failed"))
+        .and_then(|| expect(missing, "remove_entry Missing checks failed"))
+        .and_then(|| should_be(single.len(), 1))
+        .and_then(|| should_be(value_or(single, 8, 0), 80))
+        .and_then(|| should_be(seeded_single.hash_seed(), 17))
 }
 
 fn put_slots(
@@ -179,7 +170,7 @@ fn remove_collisions(
     }
 }
 
-fn test_adaptive() {
+fn test_adaptive() -> Outcome {
     let empty : HashMap<Key, i64> = HashMap::new();
     let four = put_slots(empty, 0, 4);
     let five = put_slots(four, 4, 5);
@@ -189,21 +180,21 @@ fn test_adaptive() {
     let collapsed = remove_collisions(collisions, 100, 111);
     let persistent = five.len() == 5 && five.contains_key(controlled(4, 4))
         && !demoted.contains_key(controlled(4, 4));
-    test_utils::io::write_i32(four.len() as i32);
-    test_utils::io::write_i32(five.len() as i32);
-    test_utils::io::write_i32(demoted.len() as i32);
-    test_utils::io::write_i32(grown.len() as i32);
-    wb(check_slots(four, 0, 4));
-    wb(check_slots(five, 0, 5));
-    wb(check_slots(demoted, 0, 4));
-    wb(check_slots(grown, 0, 4) && check_slots(grown, 5, 40));
-    wb(!demoted.contains_key(controlled(4, 4)));
-    test_utils::io::write_i32(collisions.len() as i32);
-    wb(check_collisions(collisions, 100, 112));
-    test_utils::io::write_i32(collapsed.len() as i32);
-    test_utils::io::write_i32(controlled_value(collapsed, 111, 7) as i32);
-    wb(check_collisions(collisions, 100, 112));
-    wb(persistent);
+    should_be(four.len(), 4)
+        .and_then(|| should_be(five.len(), 5))
+        .and_then(|| should_be(demoted.len(), 4))
+        .and_then(|| should_be(grown.len(), 39))
+        .and_then(|| expect(check_slots(four, 0, 4), "four slots check failed"))
+        .and_then(|| expect(check_slots(five, 0, 5), "five slots check failed"))
+        .and_then(|| expect(check_slots(demoted, 0, 4), "demoted slots check failed"))
+        .and_then(|| expect(check_slots(grown, 0, 4) && check_slots(grown, 5, 40), "grown slots check failed"))
+        .and_then(|| expect(!demoted.contains_key(controlled(4, 4)), "demoted should not contain removed key"))
+        .and_then(|| should_be(collisions.len(), 51))
+        .and_then(|| expect(check_collisions(collisions, 100, 112), "collisions check failed"))
+        .and_then(|| should_be(collapsed.len(), 40))
+        .and_then(|| should_be(controlled_value(collapsed, 111, 7), 333))
+        .and_then(|| expect(check_collisions(collisions, 100, 112), "collisions persistence check failed"))
+        .and_then(|| expect(persistent, "five/demoted persistence check failed"))
 }
 
 fn sample_entries() -> List<Entry<Key, i64>> {
@@ -222,7 +213,7 @@ fn sample_entries() -> List<Entry<Key, i64>> {
     }
 }
 
-fn test_transforms() {
+fn test_transforms() -> Outcome {
     let map : HashMap<Key, i64> = HashMap::from_list_seeded(sample_entries(), 123);
     let adjusted = map.adjust(int_key(1), |value| value + 1)
         .update(int_key(2), |value| Option::None)
@@ -257,10 +248,13 @@ fn test_transforms() {
             Option::Some(entry) => entry.value == 30,
             Option::None => false
         };
-    wb(traversal && edits && mappings && predicates);
+    expect(traversal, "traversal checks failed")
+        .and_then(|| expect(edits, "edits checks failed"))
+        .and_then(|| expect(mappings, "mappings checks failed"))
+        .and_then(|| expect(predicates, "predicates checks failed"))
 }
 
-fn test_algebra() {
+fn test_algebra() -> Outcome {
     let left : HashMap<Key, i64> = HashMap::new()
         .insert(int_key(1), 10).insert(int_key(2), 20).insert(int_key(3), 30);
     let right : HashMap<Key, i64> = HashMap::with_seed(99)
@@ -284,7 +278,8 @@ fn test_algebra() {
         && subset.is_submap(left) && subset.is_proper_submap(left)
         && left.is_disjoint(disjoint) && left.equals(equal)
         && left == equal && left != right;
-    wb(values && relations);
+    expect(values, "algebra values checks failed")
+        .and_then(|| expect(relations, "algebra relations checks failed"))
 }
 
 fn lcg(seed : i64) -> i64 {
@@ -330,19 +325,44 @@ fn churn(
     }
 }
 
-fn test_churn() {
+fn test_churn() -> Outcome {
     let map : HashMap<Key, i64> = HashMap::new();
-    wb(churn(map, WavlMap::new(), 20260810, 1200));
+    expect(churn(map, WavlMap::new(), 20260810, 1200), "HashMap churn should match WavlMap")
+}
+
+fn model_equivalence(ops : List<(i64, i64)>) -> Outcome {
+    let (map, model) = ops.fold_left(
+        (HashMap::new(), WavlMap::new()),
+        |state : (HashMap<Key, i64>, WavlMap<i64, i64>), op : (i64, i64)| {
+            let (m, w) = state;
+            let (k, v) = op;
+            if (v & 3) == 0 {
+                (m.remove(int_key(k)), w.remove(k))
+            } else {
+                (m.insert(int_key(k), v), w.insert(k, v))
+            }
+        }
+    );
+    let all_match = ops.all(|op : (i64, i64)| {
+        let (k, _) = op;
+        map.get(int_key(k)).unwrap_or(-1) == model.get(k).unwrap_or(-1)
+            && map.contains_key(int_key(k)) == model.contains_key(k)
+    });
+    should_be(map.len(), model.len())
+        .and_then(|| expect(all_match, "HashMap and WavlMap lookups should match"))
 }
 
 #[main]
-pub fn entry() {
-    match test_utils::io::read_i32() {
-        0 => test_basics(),
-        1 => test_adaptive(),
-        2 => test_transforms(),
-        3 => test_algebra(),
-        4 => test_churn(),
-        _ => core::intrinsic::panic::panic()
-    }
+pub fn main() {
+    test::runner::run_main(TestTree::group("hashmap")
+        .with_case("basics", || test_basics())
+        .with_case("adaptive", || test_adaptive())
+        .with_case("transforms", || test_transforms())
+        .with_case("algebra", || test_algebra())
+        .with_case("churn", || test_churn())
+        .with_fuzz(
+            "model equivalence (fuzz)",
+            list_of(tuple2(i64_domain(), i64_domain())),
+            |ops : List<(i64, i64)>| model_equivalence(ops)
+        ))
 }
