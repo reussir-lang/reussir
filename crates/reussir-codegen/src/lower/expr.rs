@@ -279,6 +279,7 @@ pub(super) struct Lowerer<'c, 'p, 'tcx> {
     /// files share one module); set by [`function`](Self::function) and, for
     /// a trampoline, by [`trampoline_location`](Self::trampoline_location).
     pub(super) cur_file: std::cell::Cell<FileId>,
+    cur_symbol: std::cell::Cell<Option<mir::Symbol>>,
     /// The codegen unit being emitted; functions outside it lower to
     /// declarations (see [`super::CodegenUnit`]).
     unit: super::CodegenUnit,
@@ -326,6 +327,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             temp_tys: RefCell::new(FxHashMap::default()),
             cur_loc: RefCell::new(Location::unknown(context)),
             cur_file: std::cell::Cell::new(FileId::ROOT),
+            cur_symbol: std::cell::Cell::new(None),
             unit: super::CodegenUnit { index: 0, count: 1 },
             dbg_building: RefCell::new(FxHashSet::default()),
             string_payloads: program
@@ -403,6 +405,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         // The function's spans index its own declaration file; every
         // `location` below resolves against it.
         self.cur_file.set(func.file);
+        self.cur_symbol.set(Some(func.symbol));
         if func.is_kernel {
             return Err(LoweringError::at_source(
                 "a kernel function must use kernel SSA lowering",
@@ -491,7 +494,10 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         // declaration must be `private` (an MLIR `func.func` rule; its LLVM
         // linkage is external either way, which is what cross-unit resolution
         // needs).
-        let mut attributes = Vec::new();
+        let mut attributes = vec![(
+            Identifier::new(self.context, "reussir.coverage_origin"),
+            StringAttribute::new(self.context, symbol).into(),
+        )];
         if func.transform_anchor && emit_body {
             attributes.push((
                 Identifier::new(self.context, "reussir.transform_anchor"),
@@ -1076,6 +1082,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     let saved_vars = self.var_tys.replace(FxHashMap::default());
                     let saved_temps = self.temp_tys.replace(FxHashMap::default());
                     let saved_file = self.cur_file.replace(function.file);
+                    let saved_symbol = self.cur_symbol.replace(Some(function.symbol));
                     let result = (|| {
                         let mut frame = Env::new(None, false);
                         for (parameter, argument) in function.params.iter().zip(arguments) {
@@ -1098,6 +1105,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                         self.expr(block, &mut frame, body)
                     })();
                     self.cur_file.set(saved_file);
+                    self.cur_symbol.set(saved_symbol);
                     self.temp_tys.replace(saved_temps);
                     self.var_tys.replace(saved_vars);
                     self.ownership.replace(saved_ownership);
@@ -1675,10 +1683,14 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         }
         let body_region = Region::new();
         body_region.append_block(body_block);
-        let mut closure = self.append(
-            block,
-            builders::closure_create(created_ty, body_region, loc),
-        );
+        let mut created = builders::closure_create(created_ty, body_region, loc);
+        if let Some(symbol) = self.cur_symbol.get() {
+            created.set_attribute(
+                "reussir.coverage_origin",
+                StringAttribute::new(self.context, self.program.symbol(symbol)).into(),
+            );
+        }
+        let mut closure = self.append(block, created);
 
         // Supply the captured values, consuming the leading inputs in order; each
         // apply drops one input, so after capture `i` the residual closure keeps
