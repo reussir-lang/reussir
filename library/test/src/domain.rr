@@ -93,6 +93,7 @@ impl<T> Domain<T> {
     /// decodes it into a value of type `T`.
     pub fn sample<R: RandomState>(self: Self, rng: Rng<R>) -> T {
         let bytes = self.spec.generate(rng);
+        // `bytes` was generated from `self.spec`, so decoding against the same spec succeeds.
         self.decode_bytes(bytes).unwrap_or_panic()
     }
 
