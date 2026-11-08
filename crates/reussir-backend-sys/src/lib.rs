@@ -114,6 +114,40 @@ pub struct ReussirFeature {
     pub enabled: bool,
 }
 
+/// SanitizerCoverage granularity, mirroring `ReussirSanCovType`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ReussirSanCovType {
+    #[default]
+    None = 0,
+    Function = 1,
+    BB = 2,
+    Edge = 3,
+}
+
+/// SanitizerCoverage instrumentation options, mirroring `ReussirSanCovOptions`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct ReussirSanCovOptions {
+    pub coverage_type: ReussirSanCovType,
+    pub indirect_calls: c_int,
+    pub trace_bb: c_int,
+    pub trace_cmp: c_int,
+    pub trace_div: c_int,
+    pub trace_gep: c_int,
+    pub use_8bit_counters: c_int,
+    pub trace_pc: c_int,
+    pub trace_pc_guard: c_int,
+    pub inline_8bit_counters: c_int,
+    pub inline_bool_flag: c_int,
+    pub pc_table: c_int,
+    pub no_prune: c_int,
+    pub stack_depth: c_int,
+    pub trace_loads: c_int,
+    pub trace_stores: c_int,
+    pub collect_control_flow: c_int,
+}
+
 unsafe extern "C" {
     //==-- Optional features --==//
 
@@ -311,6 +345,21 @@ unsafe extern "C" {
         opt: c_int,
         machine: LLVMTargetMachineRef,
         lto: c_int,
+    );
+
+    //==-- SanitizerCoverage and fuzzing instrumentation (SanCov.h) --==//
+
+    /// Stamps `optforfuzzing` and `no-builtin-*` string/memory comparison
+    /// attributes onto every function definition in `module` (call before
+    /// `reussirRunBackendLLVMPipeline`).
+    pub fn reussirPrepareModuleForFuzzing(module: LLVMModuleRef);
+
+    /// Runs LLVM's `SanitizerCoveragePass` over `module` with `options` (call
+    /// after `reussirRunBackendLLVMPipeline`).
+    pub fn reussirRunSanitizerCoveragePass(
+        module: LLVMModuleRef,
+        machine: LLVMTargetMachineRef,
+        options: *const ReussirSanCovOptions,
     );
 
     //==-- Artifact packaging (Artifact.h) --==//
