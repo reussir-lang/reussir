@@ -598,8 +598,6 @@ pub fn char_domain() -> Domain<char> {
                 let (raw, c1) = raw_and_c;
                 let candidate = cs.map_word(raw as u64);
                 let ch = if raw <= 1114111 && !(raw >= 55296 && raw <= 57343) {
-                    let direct = Charset::Utf8.map_word(0);
-                    let _ = direct;
                     let c = char_from_u32_or(raw, candidate);
                     if cs.contains(c) { c } else { candidate }
                 } else {
@@ -751,27 +749,23 @@ fn decode_string_spec(spec: ValueSpec, cursor: ByteCursor) -> Option<(String, By
         ValueSpec::String(cs, lo, hi) => (cs, lo, hi),
         _ => (Charset::AsciiPrintable, 0, 32)
     };
-    match cursor.read_u64_le() {
-        None => Option::None,
-        Some(len_and_c) => {
-            let (byte_len, c1) = len_and_c;
-            if c1.remaining() < byte_len {
-                Option::None
-            } else {
-                let raw_bytes = slice_cursor_bytes(c1, byte_len);
-                let next_cursor = skip_cursor_bytes(c1, byte_len);
-                let decoded = match decode_utf8_range(raw_bytes, 0, byte_len, String::new()) {
-                    Some(valid) => sanitize_string(valid, charset, min_len, max_len),
-                    None => sanitize_bytes_to_string(raw_bytes, charset, min_len, max_len)
-                };
-                Option::Some { (decoded, next_cursor) }
-            }
+    cursor.read_u64_le().and_then(|len_and_c: (u64, ByteCursor)| {
+        let (byte_len, c1) = len_and_c;
+        if c1.remaining() < byte_len {
+            Option::None
+        } else {
+            let (raw_bytes, next_cursor) = read_cursor_bytes(c1, byte_len);
+            let decoded = match decode_utf8_range(raw_bytes, 0, byte_len, String::new()) {
+                Some(valid) => sanitize_string(valid, charset, min_len, max_len),
+                None => sanitize_bytes_to_string(raw_bytes, charset, min_len, max_len)
+            };
+            Option::Some { (decoded, next_cursor) }
         }
-    }
+    })
 }
 
-fn slice_cursor_bytes(cursor: ByteCursor, count: u64) -> Vec<u8> {
-    let (_, _, out) = while [i = (0 as u64), cur = cursor, buf = Vec::new()] (i < count) {
+fn read_cursor_bytes(cursor: ByteCursor, count: u64) -> (Vec<u8>, ByteCursor) {
+    let (_, next_c, out) = while [i = (0 as u64), cur = cursor, buf = Vec::new()] (i < count) {
         match cur.read_u8() {
             None => (count, cur, buf),
             Some(b_and_c) => {
@@ -780,20 +774,7 @@ fn slice_cursor_bytes(cursor: ByteCursor, count: u64) -> Vec<u8> {
             }
         }
     };
-    out
-}
-
-fn skip_cursor_bytes(cursor: ByteCursor, count: u64) -> ByteCursor {
-    let (_, next_c) = while [i = (0 as u64), cur = cursor] (i < count) {
-        match cur.read_u8() {
-            None => (count, cur),
-            Some(b_and_c) => {
-                let (_, c1) = b_and_c;
-                (i + 1, c1)
-            }
-        }
-    };
-    next_c
+    (out, next_c)
 }
 
 fn sanitize_string(s: String, charset: Charset, min_len: u64, max_len: u64) -> String {
