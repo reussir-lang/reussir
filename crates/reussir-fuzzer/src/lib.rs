@@ -20,6 +20,8 @@ pub use libfuzzer_sys;
 pub use mutatis;
 
 mod budget;
+#[cfg(windows)]
+mod coff_sections;
 pub mod mutator;
 mod selection;
 pub mod spec;
