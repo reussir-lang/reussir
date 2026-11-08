@@ -14,6 +14,7 @@ use llvm_sys::prelude::LLVMModuleRef;
 use melior::ir::{
     Module,
     attribute::{ArrayAttribute, StringAttribute},
+    operation::{OperationLike, OperationMutLike},
 };
 use reussir_backend_sys as sys;
 
@@ -28,15 +29,6 @@ pub enum SanCovType {
 }
 
 impl SanCovType {
-    /// The fuzzing default excludes the test package; explicit includes replace it.
-    pub fn excluded_scopes(&self) -> Vec<String> {
-        let mut scopes = self.exclude.clone();
-        if self.opt_for_fuzzing && self.include.is_empty() {
-            scopes.push("test".into());
-        }
-        scopes
-    }
-
     fn to_sys(&self) -> sys::ReussirSanCovType {
         match self {
             SanCovType::None => sys::ReussirSanCovType::None,
@@ -75,6 +67,15 @@ pub struct SanCovOptions {
 }
 
 impl SanCovOptions {
+    /// The fuzzing default excludes the test package; explicit includes replace it.
+    pub fn excluded_scopes(&self) -> Vec<String> {
+        let mut scopes = self.exclude.clone();
+        if self.opt_for_fuzzing && self.include.is_empty() {
+            scopes.push("test".into());
+        }
+        scopes
+    }
+
     /// Returns the instrumentation preset required by libFuzzer
     /// (matching clang `-fsanitize=fuzzer-no-link`): pre-optimization
     /// `optforfuzzing` + `no-builtin-*` attributes, plus edge-level
@@ -282,9 +283,27 @@ impl SanCovOptions {
 }
 
 /// Records the scope in MLIR before inlining and closure lowering.
-pub fn prepare_module_scope(module: &mut Module<'_>, options: &SanCovOptions) {
-    let context = module.context();
+pub fn prepare_module_scope<'c>(
+    context: &'c melior::Context,
+    module: &mut Module<'c>,
+    options: &SanCovOptions,
+) {
+    if options.include.is_empty()
+        && options.exclude.is_empty()
+        && module
+            .as_operation()
+            .attribute("reussir.coverage.include")
+            .is_ok()
+    {
+        unsafe {
+            sys::reussirPrepareCoverage(module.to_raw());
+        }
+        return;
+    }
     let excluded = options.excluded_scopes();
+    if options.include.is_empty() && excluded.is_empty() {
+        return;
+    }
     for (name, scopes) in [
         ("reussir.coverage.include", &options.include),
         ("reussir.coverage.exclude", &excluded),

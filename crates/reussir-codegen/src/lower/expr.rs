@@ -28,7 +28,7 @@ use reussir_backend::melior::ir::attribute::{
     ArrayAttribute, Attribute, DenseI64ArrayAttribute, FlatSymbolRefAttribute, IntegerAttribute,
     StringAttribute, TypeAttribute,
 };
-use reussir_backend::melior::ir::operation::OperationBuilder;
+use reussir_backend::melior::ir::operation::{OperationBuilder, OperationMutLike};
 use reussir_backend::melior::ir::r#type::{FunctionType, IntegerType, MemRefType};
 use reussir_backend::melior::ir::{
     Block, BlockLike, Identifier, Location, Operation, Region, RegionLike, Type, Value, ValueLike,

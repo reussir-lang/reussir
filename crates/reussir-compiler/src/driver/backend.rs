@@ -108,10 +108,10 @@ pub(crate) fn backend(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn backend_module(
+pub(crate) fn backend_module<'c>(
     cli: &Cli,
-    context: &reussir_backend::melior::Context,
-    mut module: Module<'_>,
+    context: &'c reussir_backend::melior::Context,
+    mut module: Module<'c>,
     target: Stage,
     opt: OptLevel,
     reloc: RelocMode,
@@ -177,7 +177,7 @@ pub(crate) fn backend_module(
         ..LoweringOptions::default()
     };
     if let Some(options) = sancov {
-        reussir_backend::sancov::prepare_module_scope(&mut module, options);
+        reussir_backend::sancov::prepare_module_scope(context, &mut module, options);
     }
     let optimize_ffi = !matches!(opt, OptLevel::None);
     tracing::debug!("gathering polymorphic FFI");

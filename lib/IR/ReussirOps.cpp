@@ -86,8 +86,8 @@ static mlir::ParseResult parseCompiledModule(mlir::OpAsmParser &parser,
   return mlir::success();
 }
 
-static void printCompiledModule(mlir::OpAsmPrinter &printer, mlir::Operation *,
-                                mlir::ElementsAttr attr) {
+static void printCompiledModule(mlir::OpAsmPrinter &printer,
+                                mlir::Operation *, mlir::ElementsAttr attr) {
   printer.printAttribute(attr);
 }
 
@@ -384,7 +384,8 @@ bool fieldMatchesEitherKind(mlir::Type member, bool isField,
                             mlir::Type fieldTy) {
   return fieldTy ==
              reussir::getProjectedType(member, isField, Capability::flex) ||
-         fieldTy == reussir::getProjectedType(member, isField, Capability::flex,
+         fieldTy == reussir::getProjectedType(member, isField,
+                                              Capability::flex,
                                               AtomicKind::atomic);
 }
 
@@ -465,8 +466,7 @@ mlir::LogicalResult ReussirTokenReinterpretOp::verify() {
   TokenType tokenType = getToken().getType();
   RefType resultType = getReinterpreted().getType();
   if (resultType.getCapability() == Capability::field)
-    return emitOpError(
-        "token storage cannot produce a regional field reference");
+    return emitOpError("token storage cannot produce a regional field reference");
   mlir::Type elementType = resultType.getElementType();
   auto dataLayout = mlir::DataLayout::closest(getOperation());
   auto alignment = dataLayout.getTypeABIAlignment(elementType);
@@ -658,9 +658,10 @@ void ReussirRcDecOp::rematerializeBoundRetains(mlir::OpBuilder &builder) {
   RcType rcType = getRcPtr().getType();
   auto [payload, payloadRef] = destructuredPayloadAndRef(builder);
   for (int64_t idx : getBoundMembersAttr().asArrayRef()) {
-    auto projectedTy = getProjectedType(
-        payload.getMembers()[idx], payload.getMemberIsField()[idx],
-        Capability::unspecified, rcType.getAtomicKind());
+    auto projectedTy = getProjectedType(payload.getMembers()[idx],
+                                        payload.getMemberIsField()[idx],
+                                        Capability::unspecified,
+                                        rcType.getAtomicKind());
     auto projectedRefTy = builder.getType<RefType>(
         projectedTy, Capability::unspecified, rcType.getAtomicKind());
     mlir::Value slot =
@@ -892,8 +893,8 @@ ReussirRcDecOp::replaceWithProduced(mlir::PatternRewriter &builder) {
   // `boundMembers`) -- the attributes that determined the token type above
   // and that the decrement expansion needs to release the box shallowly.
   builder.setInsertionPoint(getOperation());
-  auto produced =
-      ReussirRcDecOp::create(builder, getLoc(), nullableTokenType, getRcPtr());
+  auto produced = ReussirRcDecOp::create(builder, getLoc(), nullableTokenType,
+                                         getRcPtr());
   produced->setAttrs(getOperation()->getAttrDictionary());
   builder.replaceOp(getOperation(), produced.getOperation());
 
@@ -1298,7 +1299,8 @@ mlir::LogicalResult ReussirRecordCompoundOp::verify() {
     // box's atomic kind is unknown here, so either link kind is accepted.
     if (!fieldMatchesEitherKind(member, memberCapability, field.getType()))
       return emitOpError("field type must match projected member type, ")
-             << "field type: " << field.getType() << ", projected member type: "
+             << "field type: " << field.getType()
+             << ", projected member type: "
              << reussir::getProjectedType(member, memberCapability,
                                           Capability::flex);
   }
@@ -1326,9 +1328,11 @@ mlir::LogicalResult ReussirRecordVariantOp::verify() {
   if (!fieldMatchesEitherKind(targetVariantType, targetVariantIsIsField,
                               getValue().getType()))
     return emitOpError("value type must match projected type, ")
-           << "value type: " << getValue().getType() << ", projected type: "
-           << reussir::getProjectedType(
-                  targetVariantType, targetVariantIsIsField, Capability::flex);
+           << "value type: " << getValue().getType()
+           << ", projected type: "
+           << reussir::getProjectedType(targetVariantType,
+                                        targetVariantIsIsField,
+                                        Capability::flex);
   // Same as rc.create-variant: field members would need a region nesting
   // check that is not implemented yet, so reject them for now.
   if (targetVariantIsIsField)
@@ -1533,8 +1537,9 @@ mlir::LogicalResult ReussirArrayToDeviceOp::verify() {
   return mlir::success();
 }
 
-static mlir::LogicalResult
-verifyArrayIfrtBridge(mlir::Operation *op, RcType rcType, mlir::Type ifrtType) {
+static mlir::LogicalResult verifyArrayIfrtBridge(mlir::Operation *op,
+                                                RcType rcType,
+                                                mlir::Type ifrtType) {
   auto array = llvm::cast<ArrayType>(rcType.getElementType());
   if (!array.hasTargetAttr())
     return op->emitOpError("requires a target-annotated device array");
@@ -1596,7 +1601,7 @@ mlir::LogicalResult ReussirArrayToIfrtOp::verify() {
 
 mlir::LogicalResult ReussirArrayFromIfrtOp::verify() {
   if (mlir::failed(verifyArrayIfrtBridge(getOperation(), getArray().getType(),
-                                         getSource().getType())))
+                                      getSource().getType())))
     return mlir::failure();
   if (getToken() && getToken().getType() != getTokenType())
     return emitOpError("expected descriptor token type ") << getTokenType();
@@ -1639,7 +1644,7 @@ TokenType ReussirArrayFromIfrtOp::getTokenType() {
   auto layout = mlir::DataLayout::closest(getOperation());
   auto box = getArray().getType().getInnerBoxType();
   return TokenType::get(getContext(), layout.getTypeABIAlignment(box),
-                        layout.getTypeSize(box).getFixedValue());
+                       layout.getTypeSize(box).getFixedValue());
 }
 
 TokenType ReussirArrayToDeviceOp::getTokenType() {
@@ -1744,8 +1749,7 @@ static mlir::Value buildArrayTokenSize(Op op, mlir::OpBuilder &builder) {
   auto headerBytes = builder.createOrFold<mlir::arith::ConstantIndexOp>(
       loc, op.getRcPtr().getType().getInnerBoxType().getDynamicPayloadOffset(
                dataLayout));
-  return builder.createOrFold<mlir::arith::AddIOp>(loc, payloadBytes,
-                                                   headerBytes);
+  return builder.createOrFold<mlir::arith::AddIOp>(loc, payloadBytes, headerBytes);
 }
 
 llvm::SmallVector<mlir::Region *> ReussirArrayCreateOp::getLoopRegions() {
@@ -1814,8 +1818,7 @@ ReussirArrayInstantiateOp::buildTokenSize(mlir::OpBuilder &builder) {
 }
 
 mlir::LogicalResult ReussirArrayInstantiateOp::verify() {
-  if (llvm::cast<ArrayType>(getRcPtr().getType().getElementType())
-          .hasTargetAttr())
+  if (llvm::cast<ArrayType>(getRcPtr().getType().getElementType()).hasTargetAttr())
     return emitOpError("target arrays must be constructed with array.create");
   return verifyArrayConstruction(getOperation(), getRcPtr().getType(),
                                  getExtents(), getToken());
@@ -1862,8 +1865,7 @@ mlir::LogicalResult ReussirArrayProjectOp::verify() {
              << memrefType.getElementType() << ", got "
              << projectedType.getElementType();
     if (projectedType.getCapability() != Capability::unspecified)
-      return emitOpError(
-                 "projected reference capability must be unspecified, got ")
+      return emitOpError("projected reference capability must be unspecified, got ")
              << stringifyCapability(projectedType.getCapability());
     return mlir::success();
   }
@@ -2343,8 +2345,7 @@ mlir::LogicalResult ReussirRefProjectOp::verify() {
       return emitOpError("projected cell slot type mismatch: expected ")
              << expectedSlotType << ", got " << projectedType.getElementType();
     if (projectedType.getCapability() != Capability::unspecified)
-      return emitOpError(
-          "a cell slot projection must have unspecified capability");
+      return emitOpError("a cell slot projection must have unspecified capability");
     if (projectedType.getAtomicKind() != refType.getAtomicKind())
       return emitOpError("projected cell reference atomic kind must match the "
                          "source reference");
@@ -2374,9 +2375,10 @@ mlir::LogicalResult ReussirRefProjectOp::verify() {
   // Calculate the expected projected type based on the member type, member
   // capability, reference capability, and the reference's atomic kind (an
   // atomic parent floods its discipline down — whole-subtree rule)
-  mlir::Type expectedProjectedType = reussir::getProjectedType(
-      memberType, memberIsField, refType.getCapability(),
-      refType.getAtomicKind());
+  mlir::Type expectedProjectedType =
+      reussir::getProjectedType(memberType, memberIsField,
+                                refType.getCapability(),
+                                refType.getAtomicKind());
 
   // Check that the projected type matches the expected type
   if (expectedProjectedType != projectedType.getElementType())
@@ -2652,8 +2654,8 @@ void ReussirNullableDispatchOp::getSuccessorRegions(
   regions.emplace_back(getOperation());
 }
 
-mlir::ValueRange
-ReussirNullableDispatchOp::getSuccessorInputs(mlir::RegionSuccessor successor) {
+mlir::ValueRange ReussirNullableDispatchOp::getSuccessorInputs(
+    mlir::RegionSuccessor successor) {
   if (successor.isOperation())
     return getResults();
   return mlir::ValueRange();
@@ -2856,9 +2858,10 @@ mlir::LogicalResult ReussirRecordDispatchOp::verify() {
                << i << " must have exactly one argument for single tag";
 
       int64_t tag = tagSet[0];
-      mlir::Type expectedType = getProjectedType(
-          members[tag], recordType.getMemberIsField()[tag],
-          variantRefType.getCapability(), variantRefType.getAtomicKind());
+      mlir::Type expectedType =
+          getProjectedType(members[tag], recordType.getMemberIsField()[tag],
+                           variantRefType.getCapability(),
+                           variantRefType.getAtomicKind());
       mlir::Type actualType = block.getArgument(0).getType();
 
       // The argument should be a reference to the member type
@@ -4107,9 +4110,10 @@ emitOwnershipAcquisitionImpl(mlir::Value value, mlir::OpBuilder &builder,
 
               // Create a block for this variant region; the arm reference
               // inherits the scrutinee's atomic kind.
-              RefType projectedRefTy = RefType::get(
-                  builder.getContext(), projectedType, Capability::unspecified,
-                  refType.getAtomicKind());
+              RefType projectedRefTy =
+                  RefType::get(builder.getContext(), projectedType,
+                               Capability::unspecified,
+                               refType.getAtomicKind());
               auto *block = builder.createBlock(
                   &dispatchOp.getRegions()[i],
                   dispatchOp.getRegions()[i].begin(), {projectedRefTy}, {loc});
@@ -4368,8 +4372,8 @@ mlir::func::FuncOp createDtorIfNotExists(mlir::ModuleOp moduleOp,
                                          AtomicKind kind,
                                          mlir::SymbolTableCollection *symbols) {
   std::optional<mlir::SymbolTable> ownTable;
-  mlir::SymbolTable &symTable =
-      symbols ? symbols->getSymbolTable(moduleOp) : ownTable.emplace(moduleOp);
+  mlir::SymbolTable &symTable = symbols ? symbols->getSymbolTable(moduleOp)
+                                      : ownTable.emplace(moduleOp);
   auto dtorName = type.getDtorName(kind);
   if (!dtorName)
     llvm::report_fatal_error("only named record types have destructors");
@@ -4706,7 +4710,8 @@ mlir::LogicalResult ReussirConstSeqLiteralOp::verifySymbolUses(
   return mlir::success();
 }
 
-mlir::Speculation::Speculatability ReussirConstSeqGetOp::getSpeculatability() {
+mlir::Speculation::Speculatability
+ReussirConstSeqGetOp::getSpeculatability() {
   auto literal = getSeq().getDefiningOp<ReussirConstSeqLiteralOp>();
   if (!literal)
     return mlir::Speculation::NotSpeculatable;
@@ -4723,7 +4728,8 @@ void ReussirConstSeqGetOp::getEffects(
   // The data is immutable, so an unchecked read has no effect. A failed
   // bounds check is observable even when the element is unused; model the
   // possible panic as a write to the default resource.
-  if (!getUnsafe() && getSpeculatability() != mlir::Speculation::Speculatable)
+  if (!getUnsafe() &&
+      getSpeculatability() != mlir::Speculation::Speculatable)
     effects.emplace_back(mlir::MemoryEffects::Write::get());
 }
 
@@ -4742,9 +4748,9 @@ mlir::LogicalResult ReussirRecordExtractOp::verify() {
   // the standalone assemble ops.
   auto projectedType = getProjectedType(
       memberType, recordType.getMemberIsField()[indexVal], Capability::value);
-  auto atomicProjectedType =
-      getProjectedType(memberType, recordType.getMemberIsField()[indexVal],
-                       Capability::value, AtomicKind::atomic);
+  auto atomicProjectedType = getProjectedType(
+      memberType, recordType.getMemberIsField()[indexVal], Capability::value,
+      AtomicKind::atomic);
   if (projectedType != getField().getType() &&
       atomicProjectedType != getField().getType())
     return emitOpError("projected type mismatch");
@@ -4815,8 +4821,7 @@ void qualifyFfiSymbols(mlir::ModuleOp module, llvm::Module &translated) {
 
 std::unique_ptr<llvm::Module>
 gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
-                      llvm::StringRef dataLayout,
-                      llvm::StringRef targetTriple) {
+                      llvm::StringRef dataLayout, llvm::StringRef targetTriple) {
   // Collect all polyffi operations with compiledModule
   llvm::SmallVector<ReussirPolyFFIOp> opsWithCompiledModule;
   moduleOp.walk([&](ReussirPolyFFIOp op) {

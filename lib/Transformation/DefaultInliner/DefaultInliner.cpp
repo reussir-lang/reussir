@@ -121,14 +121,14 @@ struct DefaultInlinerPass
         },
         config,
         [&](const mlir::Inliner::ResolvedCall &call) {
+          mlir::CallOpInterface callOp = call.call;
           if (!sameCoverageScope(
-                  call.call.getOperation(),
+                  callOp.getOperation(),
                   call.targetNode->getCallableRegion()->getParentOp()))
             return false;
           if (!calleeIsSmall(call.targetNode->getCallableRegion(),
                              maxCalleeOps))
             return false;
-          mlir::CallOpInterface callOp = call.call;
           return !recursive.contains(call.targetNode) ||
                  !copiedByInlining(callOp.getOperation());
         });

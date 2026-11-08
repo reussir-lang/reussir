@@ -19,6 +19,7 @@
 #include <llvm/Demangle/Demangle.h>
 #include <llvm/IR/Instructions.h>
 #include <mlir/CAPI/IR.h>
+#include <mlir/CAPI/Support.h>
 
 #include <llvm-c/Core.h>
 
@@ -47,6 +48,11 @@ void reussirPrepareCoverageLLVM(LLVMModuleRef module,
         });
   };
   auto &m = *llvm::unwrap(module);
+  if (includeCount == 0 && excludeCount == 0 &&
+      llvm::none_of(m, [](llvm::Function &f) {
+        return f.hasFnAttribute("reussir-coverage");
+      }))
+    return;
   for (auto &f : m) {
     auto origin = f.getFnAttribute("reussir-coverage-origin");
     auto name = llvm::demangle(

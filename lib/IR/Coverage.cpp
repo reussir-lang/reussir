@@ -35,8 +35,7 @@ void annotate(mlir::Operation *op, bool enabled, mlir::StringAttr origin) {
       if (auto pair = llvm::dyn_cast<mlir::ArrayAttr>(attr);
           pair && !pair.empty())
         key = llvm::dyn_cast<mlir::StringAttr>(pair[0]);
-      if (!key || (key.getValue() != "nosanitize_coverage" &&
-                   !key.getValue().starts_with("reussir-coverage")))
+      if (!key || !key.getValue().starts_with("reussir-coverage"))
         attrs.push_back(attr);
     }
   attrs.push_back(
@@ -45,7 +44,8 @@ void annotate(mlir::Operation *op, bool enabled, mlir::StringAttr origin) {
   if (origin)
     attrs.push_back(builder.getArrayAttr(
         {builder.getStringAttr("reussir-coverage-origin"), origin}));
-  if (!enabled)
+  if (!enabled &&
+      !llvm::is_contained(attrs, builder.getStringAttr("nosanitize_coverage")))
     attrs.push_back(builder.getStringAttr("nosanitize_coverage"));
   op->setAttr(name, builder.getArrayAttr(attrs));
 }
@@ -89,9 +89,24 @@ void prepareCoverage(mlir::ModuleOp module) {
 
 void inheritCoverage(mlir::Operation *source, mlir::Operation *function) {
   auto module = source->getParentOfType<mlir::ModuleOp>();
-  if (module && module->hasAttr("reussir.coverage.include"))
+  if (module && module->hasAttr("reussir.coverage.include")) {
+    // Outlined evaluations replace the generated-helper default with their
+    // body.
+    if (auto attrs =
+            function->getAttrOfType<mlir::ArrayAttr>("llvm.passthrough")) {
+      llvm::SmallVector<mlir::Attribute> inherited;
+      llvm::copy_if(attrs, std::back_inserter(inherited),
+                    [](mlir::Attribute attr) {
+                      auto name = llvm::dyn_cast<mlir::StringAttr>(attr);
+                      return !name || name.getValue() != "nosanitize_coverage";
+                    });
+      function->setAttr(
+          "llvm.passthrough",
+          mlir::ArrayAttr::get(function->getContext(), inherited));
+    }
     annotate(function, coverageEnabled(source),
              source->getAttrOfType<mlir::StringAttr>(originAttr));
+  }
 }
 
 void excludeCoverage(mlir::Operation *function) {
