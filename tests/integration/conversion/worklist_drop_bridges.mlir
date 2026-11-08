@@ -13,6 +13,7 @@ module attributes {reussir.drop_order = "backward"} {
   func.func private @external_release(!rc) attributes {reussir.foreign_drop}
 
   // CHECK-LABEL: func.func private @bridge.worklist.backward
+  // CHECK-SAME: llvm.linkage = #llvm.linkage<internal>
   // CHECK: reussir.rc.fetch
   // CHECK: reussir.rc.defer
   // CHECK-NOT: reussir.drop.run

@@ -20,6 +20,8 @@ pub use libfuzzer_sys;
 pub use mutatis;
 
 mod budget;
+#[cfg(windows)]
+mod coff_sections;
 pub mod mutator;
 mod selection;
 pub mod spec;
@@ -348,6 +350,16 @@ macro_rules! fuzz_target {
             );
             ::std::cmp::min(new_size, max_size)
         }
+
+        // On Darwin libFuzzer looks these callbacks up with `dlsym`, so nothing
+        // references them and the linker's `-dead_strip` would remove them.
+        const _: () = {
+            #[used]
+            static CALLBACKS: (
+                extern "C" fn(*const isize, *const *const *const u8) -> isize,
+                unsafe extern "C" fn(*mut u8, usize, usize, ::std::os::raw::c_uint) -> usize,
+            ) = (LLVMFuzzerInitialize, LLVMFuzzerCustomMutator);
+        };
     };
 }
 

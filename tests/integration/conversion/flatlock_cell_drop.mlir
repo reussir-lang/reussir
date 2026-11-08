@@ -21,7 +21,7 @@ module attributes {reussir.drop_order = "forward"} {
 
   // The helper decrements under the lock and synchronously finishes dead
   // payload cleanup; the cell owner is freed after unlock.
-  // LLVM-LABEL: define private void @__reussir_locked_drop.forward(ptr
+  // LLVM-LABEL: define internal void @__reussir_locked_drop.forward(ptr
   // LLVM: %[[INNER:.+]] = load ptr, ptr %0
   // LLVM: atomicrmw sub ptr %[[INNER]], i32 1
   // LLVM: call void @__reussir_deallocate(ptr %[[INNER]], i64 8, i64 16)

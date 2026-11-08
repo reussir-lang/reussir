@@ -657,7 +657,7 @@ prepareWorklistDropBridges(mlir::ModuleOp module,
     mlir::SymbolTable::setSymbolName(worker, name);
     worker.setPrivate();
     worker->setAttr("llvm.linkage", rewriter.getAttr<mlir::LLVM::LinkageAttr>(
-                                        mlir::LLVM::linkage::Linkage::Private));
+                                        mlir::LLVM::linkage::Linkage::Internal));
     worker->removeAttr(REUSSIR_CLOSURE_DROP);
     worker->removeAttr(REUSSIR_FOREIGN_DROP);
     worker->setAttr(kWorklistGlueAttr, rewriter.getUnitAttr());

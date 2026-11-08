@@ -61,8 +61,8 @@ impl SanCovOptions {
     /// Returns the instrumentation preset required by libFuzzer
     /// (matching clang `-fsanitize=fuzzer-no-link`): pre-optimization
     /// `optforfuzzing` + `no-builtin-*` attributes, plus edge-level
-    /// `inline-8bit-counters`, `pc-table`, `trace-cmp`, `indirect-calls`, and
-    /// `stack-depth`.
+    /// `inline-8bit-counters`, `pc-table`, `trace-cmp`, and `indirect-calls`.
+    /// [`Self::for_target`] adds `stack-depth` on Linux.
     pub const fn fuzzer() -> Self {
         Self {
             coverage_type: SanCovType::Edge,
@@ -79,7 +79,7 @@ impl SanCovOptions {
             inline_bool_flag: false,
             pc_table: true,
             no_prune: false,
-            stack_depth: true,
+            stack_depth: false,
             trace_loads: false,
             trace_stores: false,
             collect_control_flow: false,
@@ -123,7 +123,6 @@ impl SanCovOptions {
                         opts.trace_cmp = true;
                         opts.inline_8bit_counters = true;
                         opts.pc_table = true;
-                        opts.stack_depth = true;
                         if opts.coverage_type == SanCovType::None {
                             opts.coverage_type = SanCovType::Edge;
                         }
@@ -207,7 +206,18 @@ impl SanCovOptions {
         self.trace_cmp |= fuzzer.trace_cmp;
         self.inline_8bit_counters |= fuzzer.inline_8bit_counters;
         self.pc_table |= fuzzer.pc_table;
-        self.stack_depth |= fuzzer.stack_depth;
+        self
+    }
+
+    /// Completes the fuzzer preset for `triple`. Like clang, it tracks stack
+    /// depth only on Linux: libFuzzer's thread-local `__sancov_lowest_stack`
+    /// is not available to instrumented code on other targets.
+    pub fn for_target(mut self, triple: &str) -> Self {
+        let linux = triple
+            .split('-')
+            .nth(2)
+            .is_some_and(|os| os.starts_with("linux"));
+        self.stack_depth |= self.opt_for_fuzzing && linux;
         self
     }
 
@@ -309,6 +319,18 @@ mod tests {
             .expect("some options");
         assert_eq!(opts, SanCovOptions::fuzzer());
         assert!(opts.opt_for_fuzzing);
+    }
+
+    #[test]
+    fn fuzzer_preset_tracks_stack_depth_only_on_linux() {
+        let fuzzer = SanCovOptions::fuzzer();
+        assert!(fuzzer.for_target("x86_64-unknown-linux-gnu").stack_depth);
+        assert!(!fuzzer.for_target("arm64-apple-macosx15.0.0").stack_depth);
+        assert!(!fuzzer.for_target("x86_64-pc-windows-msvc").stack_depth);
+        let explicit = SanCovOptions::from_flags(["trace-pc-guard,stack-depth"])
+            .expect("valid flags")
+            .expect("some options");
+        assert!(explicit.for_target("x86_64-pc-windows-msvc").stack_depth);
     }
 
     #[test]
