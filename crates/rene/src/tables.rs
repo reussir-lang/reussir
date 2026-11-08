@@ -36,9 +36,13 @@ pub fn rt_source_hash_key(target: &str) -> String {
 
 /// Status key for a target's baked runtime artifact record, a JSON
 /// [`crate::rt::RtArtifacts`]: target, toolchain identity, and artifact
-/// paths.
-pub fn rt_artifacts_key(target: &str) -> String {
-    format!("rt.{target}.artifacts")
+/// paths. The fuzzer runtime is a separate bake with its own record.
+pub fn rt_artifacts_key(target: &str, fuzzer: bool) -> String {
+    if fuzzer {
+        format!("rt.{target}.fuzzer-artifacts")
+    } else {
+        format!("rt.{target}.artifacts")
+    }
 }
 
 /// The status key of one built product's record, a JSON

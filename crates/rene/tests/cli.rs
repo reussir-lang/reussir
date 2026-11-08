@@ -458,7 +458,7 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
             .is_some()
     );
     assert!(
-        dir.status(&tables::rt_artifacts_key(target))
+        dir.status(&tables::rt_artifacts_key(target, false))
             .unwrap()
             .is_some()
     );
@@ -506,7 +506,7 @@ fn build_bakes_the_runtime_and_prints_the_libdirs() {
 fn runtime_record(build_dir: &Path, target: &str) -> rene::rt::RtArtifacts {
     let dir = BuildDir::open(build_dir).unwrap();
     serde_json::from_str(
-        &dir.status(&tables::rt_artifacts_key(target))
+        &dir.status(&tables::rt_artifacts_key(target, false))
             .unwrap()
             .unwrap(),
     )
@@ -560,7 +560,7 @@ fn build_resolves_the_target_and_keeps_each_runtime_bake() {
         assert!(artifacts.rlib.starts_with(tmp.join("cache/objects")));
         let dir = BuildDir::open(&root).unwrap();
         assert!(
-            dir.status(&tables::rt_artifacts_key(target))
+            dir.status(&tables::rt_artifacts_key(target, false))
                 .unwrap()
                 .is_some()
         );
@@ -2070,7 +2070,14 @@ fn mixed_fuzz_targets_use_separate_dependency_variants() {
         )));
     }
     let count = commands.len();
-    for selection in [&["build"][..], &["build", "--bin", "fuzz"], &["build"]] {
+    // The plain and fuzzer runtimes are separate bakes.
+    assert_eq!(fakes.runs("cargo"), 2);
+    for selection in [
+        &["build"][..],
+        &["build", "--bin", "fuzz"],
+        &["build", "--bin", "app"],
+        &["build"],
+    ] {
         let out = fakes.rene(selection, &manifest, &root);
         assert!(out.status.success(), "{}", stderr(&out));
         assert_eq!(
@@ -2078,6 +2085,7 @@ fn mixed_fuzz_targets_use_separate_dependency_variants() {
             count,
             "cached variants should be reused"
         );
+        assert_eq!(fakes.runs("cargo"), 2, "runtime bakes should be reused");
     }
     let out = fakes.rene(&["inspect", "--frozen", "--commands"], &manifest, &root);
     assert!(out.status.success(), "{}", stderr(&out));
