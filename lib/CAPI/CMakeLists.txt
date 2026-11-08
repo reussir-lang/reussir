@@ -8,7 +8,8 @@
 # development packages (including libpolly-<ver>-dev for the static Polly
 # archives llvm-config references).
 add_library(ReussirCAPI STATIC Dialects.cpp Passes.cpp ReuseRemarks.cpp Types.cpp
-                               Attrs.cpp Jit.cpp Artifact.cpp Features.cpp)
+                               Attrs.cpp Jit.cpp Artifact.cpp Features.cpp
+                               SanCov.cpp)
 
 # Jit.cpp runs the custom Reussir LLVM passes and (when available) TPDE. Linking
 # these as usage requirements gives ReussirCAPI their headers/defines and orders
