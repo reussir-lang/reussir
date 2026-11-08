@@ -1,0 +1,87 @@
+//! Expectations: the result of a test case and the checks that build it.
+//!
+//! A case returns an `Outcome`. Expectations compare values and describe a
+//! mismatch with a `Format`, so the runner can render the failure nested
+//! under the case that produced it.
+//!
+//! ```text
+//! || should_be(List::Cons { 1, List::Nil }.len(), 1)
+//!     .and_then(|| expect(Text::from_str("hi").eq_str("hi"), "literal equality"))
+//! ```
+
+import std::format::Display;
+import std::format::Format;
+import std::text::Text;
+
+/// The result of running one case.
+pub enum [value] Outcome {
+    Pass,
+    Fail(Format)
+}
+
+impl Outcome {
+    pub fn is_pass(self: Self) -> bool {
+        match self {
+            Pass => true,
+            Fail(_) => false
+        }
+    }
+
+    /// Runs `next` only if `self` passed; the first failure is kept.
+    pub fn and_then(self: Self, next: () -> Outcome) -> Outcome {
+        match self {
+            Pass => next(),
+            Fail(_) => self
+        }
+    }
+}
+
+fn text(s: str) -> Format {
+    Format::Text { Text::from_str(s) }
+}
+
+/// Passes unconditionally.
+pub fn pass() -> Outcome {
+    Outcome::Pass
+}
+
+/// Fails with `message`.
+pub fn fail(message: str) -> Outcome {
+    Outcome::Fail { text(message) }
+}
+
+/// Passes when `condition` holds; otherwise fails with `message`.
+pub fn expect(condition: bool, message: str) -> Outcome {
+    if condition { Outcome::Pass } else { fail(message) }
+}
+
+/// Passes when `actual == expected`.
+pub fn should_be<T: PartialEq + Display>(actual: T, expected: T) -> Outcome {
+    if actual == expected {
+        Outcome::Pass
+    } else {
+        Outcome::Fail {
+            text("expected: ").append(expected.fmt())
+                .append(Format::Hardline)
+                .append(text(" but got: ")).append(actual.fmt())
+        }
+    }
+}
+
+/// Passes when `actual != unexpected`.
+pub fn should_not_be<T: PartialEq + Display>(actual: T, unexpected: T) -> Outcome {
+    if actual != unexpected {
+        Outcome::Pass
+    } else {
+        Outcome::Fail { text("not expected: ").append(actual.fmt()) }
+    }
+}
+
+/// Passes when `predicate` holds for `actual`.
+pub fn should_satisfy<T: Display>(actual: T, predicate: T -> bool) -> Outcome {
+    if predicate(actual) {
+        Outcome::Pass
+    } else {
+        Outcome::Fail { text("predicate failed on: ").append(actual.fmt()) }
+    }
+}

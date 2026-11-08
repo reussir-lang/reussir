@@ -1,0 +1,379 @@
+//! Test trees: named unit and fuzz cases nested in named groups.
+//!
+//! A tree is ordinary data built at runtime, so a runner or a fuzzing
+//! harness can enumerate, select, derive input specifications, and invoke
+//! cases without compiler support. Unit cases and domain-driven fuzz cases
+//! live in the same [`TestTree`]:
+//!
+//! ```text
+//! let tree = TestTree::group("list")
+//!     .with_case("empty", || check_empty())
+//!     .with_fuzz("reverse involution", domain::i64_domain().vec(), |xs: Vec<i64>| {
+//!         check_reverse(xs)
+//!     })
+//!     .with_group(TestTree::group("fold")
+//!         .with_case("left", || check_fold_left()));
+//! ```
+
+import std::collections::cow::vec::Vec;
+import std::collections::pure::list::List;
+import std::format::Format;
+import std::option::Option;
+import std::text::Text;
+import test::domain::Domain;
+import test::domain::tuple2;
+import test::domain::tuple3;
+import test::expect::Outcome;
+import test::spec::ByteCursor;
+import test::spec::CaseSpec;
+import test::spec::SuiteSpec;
+import test::spec::ValueSpec;
+import test::spec::project_u64;
+
+/// Result of executing a [`Case`] on a single `Vec<u8>` input buffer.
+pub enum [value] CaseResult {
+    /// The input decoded cleanly and the assertion passed.
+    Pass,
+    /// The input decoded to the first [`Format`] (`Format::Empty` for unit
+    /// cases) and failed with the second [`Format`] as the diagnostic.
+    Fail(Format, Format),
+    /// The input buffer could not be decoded under the case's [`ValueSpec`].
+    MalformedInput
+}
+
+/// A runnable test case: its [`ValueSpec`] and byte-driven executor.
+pub struct Case {
+    spec: ValueSpec,
+    run: Vec<u8> -> CaseResult
+}
+
+impl Case {
+    /// Wraps a zero-argument unit test closure.
+    pub fn unit(body: () -> Outcome) -> Self {
+        Case {
+            spec: ValueSpec::Unit,
+            run: |unused_bytes: Vec<u8>| match body() {
+                Pass => CaseResult::Pass,
+                Fail(msg) => CaseResult::Fail { Format::Empty, msg }
+            }
+        }
+    }
+
+    /// Attaches a single [`Domain<A>`] input combinator to a test closure.
+    pub fn fuzz<A>(domain: Domain<A>, body: A -> Outcome) -> Self {
+        Case {
+            spec: domain.spec(),
+            run: |bytes: Vec<u8>| match domain.decode_bytes(bytes) {
+                None => CaseResult::MalformedInput,
+                Some(value) => match body(value) {
+                    Pass => CaseResult::Pass,
+                    Fail(msg) => CaseResult::Fail { domain.format(value), msg }
+                }
+            }
+        }
+    }
+
+    /// Attaches two input domains `(A, B)` to a two-argument test closure.
+    pub fn fuzz2<A, B>(a: Domain<A>, b: Domain<B>, body: (A, B) -> Outcome) -> Self {
+        Case::fuzz(tuple2(a, b), |pair: (A, B)| {
+            let (va, vb) = pair;
+            body(va, vb)
+        })
+    }
+
+    /// Attaches three input domains `(A, B, C)` to a three-argument test closure.
+    pub fn fuzz3<A, B, C>(
+        a: Domain<A>,
+        b: Domain<B>,
+        c: Domain<C>,
+        body: (A, B, C) -> Outcome
+    ) -> Self {
+        Case::fuzz(tuple3(a, b, c), |triple: (A, B, C)| {
+            let (va, vb, vc) = triple;
+            body(va, vb, vc)
+        })
+    }
+
+    /// Returns the input specification for this test case.
+    pub fn spec(self: Self) -> ValueSpec {
+        self.spec
+    }
+
+    /// Whether this case takes no random inputs (`ValueSpec::Unit`).
+    pub fn is_unit(self: Self) -> bool {
+        self.spec.is_unit()
+    }
+
+    /// Feeds a raw `Vec<u8>` buffer into the test case, decoding the input
+    /// according to its domain and running its assertions.
+    pub fn run_bytes(self: Self, bytes: Vec<u8>) -> CaseResult {
+        (self.run)(bytes)
+    }
+}
+
+/// A named group of cases and subgroups, kept in declaration order.
+pub struct TestTree {
+    name: Text,
+    // Newest first, so appending is O(1); traversals reverse once per group.
+    entries: List<Entry>
+}
+
+/// An entry of a group. Public only because `TestTree`'s private field
+/// names it; trees are built with `TestTree`'s methods.
+pub enum [value] Entry {
+    Case(Text, Case),
+    Group(TestTree)
+}
+
+impl TestTree {
+    /// An empty group named `name`.
+    pub fn group(name: str) -> Self {
+        TestTree { name: Text::from_str(name), entries: List::Nil }
+    }
+
+    /// Appends a unit test case named `name`.
+    pub fn with_case(self: Self, name: str, body: () -> Outcome) -> Self {
+        self.with_test(name, Case::unit(body))
+    }
+
+    /// Appends a domain-driven fuzz test case named `name`.
+    pub fn with_fuzz<A>(self: Self, name: str, domain: Domain<A>, body: A -> Outcome) -> Self {
+        self.with_test(name, Case::fuzz(domain, body))
+    }
+
+    /// Appends a two-argument domain-driven fuzz test case named `name`.
+    pub fn with_fuzz2<A, B>(
+        self: Self,
+        name: str,
+        a: Domain<A>,
+        b: Domain<B>,
+        body: (A, B) -> Outcome
+    ) -> Self {
+        self.with_test(name, Case::fuzz2(a, b, body))
+    }
+
+    /// Appends a three-argument domain-driven fuzz test case named `name`.
+    pub fn with_fuzz3<A, B, C>(
+        self: Self,
+        name: str,
+        a: Domain<A>,
+        b: Domain<B>,
+        c: Domain<C>,
+        body: (A, B, C) -> Outcome
+    ) -> Self {
+        self.with_test(name, Case::fuzz3(a, b, c, body))
+    }
+
+    /// Appends an already constructed [`Case`] named `name`.
+    pub fn with_test(self: Self, name: str, test: Case) -> Self {
+        self.with_entry(Entry::Case { Text::from_str(name), test })
+    }
+
+    /// Appends `group` as a subgroup.
+    pub fn with_group(self: Self, group: Self) -> Self {
+        self.with_entry(Entry::Group { group })
+    }
+
+    fn with_entry(self: Self, entry: Entry) -> Self {
+        TestTree { name: self.name, entries: List::Cons { entry, self.entries } }
+    }
+
+    /// The name of this group.
+    pub fn name(self: Self) -> Text {
+        self.name
+    }
+
+    /// Transforms every case in declaration order, keeping names and shape.
+    pub fn map(self: Self, f: Case -> Case) -> Self {
+        TestTree {
+            name: self.name,
+            entries: self.entries.reverse().fold_left(
+                List::Nil,
+                |acc: List<Entry>, entry: Entry| List::Cons { entry.map(f), acc }
+            )
+        }
+    }
+
+    /// Visits the cases in declaration order with their paths, threading
+    /// an accumulator.
+    pub fn fold<U>(self: Self, initial: U, f: (U, List<Text>, Case) -> U) -> U {
+        self.fold_impl(List::Nil, initial, f)
+    }
+
+    // `prefix` holds the ancestors' names, innermost first.
+    fn fold_impl<U>(
+        self: Self,
+        prefix: List<Text>,
+        acc: U,
+        f: (U, List<Text>, Case) -> U
+    ) -> U {
+        let prefix = List::Cons { self.name, prefix };
+        self.entries.reverse().fold_left(
+            acc,
+            |acc: U, entry: Entry| entry.fold_impl(prefix, acc, f)
+        )
+    }
+
+    /// Folds the tree bottom-up, preserving its shape: `on_case` sees each
+    /// case, and `on_group` sees each group with its entries' results in
+    /// declaration order.
+    pub fn fold_tree<U>(
+        self: Self,
+        on_case: (Text, Case) -> U,
+        on_group: (Text, List<U>) -> U
+    ) -> U {
+        let results = self.entries.reverse().map(
+            |entry: Entry| entry.fold_tree(on_case, on_group)
+        );
+        on_group(self.name, results)
+    }
+
+    /// The number of cases.
+    pub fn count(self: Self) -> u64 {
+        self.fold(0, |n: u64, unused_path: List<Text>, unused_case: Case| n + 1)
+    }
+
+    /// Keeps the cases for which `keep` holds, given each case's path and
+    /// [`Case`]. Subgroups left without cases are removed; the root group
+    /// always remains.
+    pub fn filter(self: Self, keep: (List<Text>, Case) -> bool) -> Self {
+        self.filter_impl(List::Nil, keep)
+    }
+
+    fn filter_impl(self: Self, prefix: List<Text>, keep: (List<Text>, Case) -> bool) -> Self {
+        let prefix = List::Cons { self.name, prefix };
+        TestTree {
+            name: self.name,
+            entries: self.entries.reverse().fold_left(
+                List::Nil,
+                |acc: List<Entry>, entry: Entry| match entry.filter_impl(prefix, keep) {
+                    Some(kept) => List::Cons { kept, acc },
+                    None => acc
+                }
+            )
+        }
+    }
+
+    fn is_empty(self: Self) -> bool {
+        self.entries.is_nil()
+    }
+
+    /// The [`Case`] at `path`, root first.
+    pub fn find(self: Self, path: List<Text>) -> Option<Case> {
+        match path {
+            Cons(head, rest) if head == self.name => find_entries(self.entries.reverse(), rest),
+            _ => Option::None
+        }
+    }
+
+    /// Derives the [`SuiteSpec`] for all cases in this tree in declaration order.
+    pub fn derive_spec(self: Self) -> SuiteSpec {
+        let reversed = self.fold(
+            List::Nil,
+            |acc: List<CaseSpec>, path: List<Text>, test: Case| {
+                List::Cons { CaseSpec { path: path, input: test.spec() }, acc }
+            }
+        );
+        SuiteSpec { cases: reversed.reverse() }
+    }
+
+    /// Executes a suite-level `Vec<u8>` buffer (8-byte little-endian case
+    /// selector followed by that case's input bytes) against this tree,
+    /// returning the selected case path and [`CaseResult`].
+    pub fn run_suite_bytes(self: Self, bytes: Vec<u8>) -> Option<(List<Text>, CaseResult)> {
+        let total = self.count();
+        if total == 0 {
+            Option::None
+        } else {
+            ByteCursor::new(bytes).read_u64_le().and_then(|idx_and_c: (u64, ByteCursor)| {
+                let (raw_idx, rest) = idx_and_c;
+                let target = project_u64(raw_idx, 0, total - 1);
+                let payload = rest.slice_remaining();
+                let (_, found) = self.fold(
+                    ((0 as u64), Option::None),
+                    |state: (u64, Option<(List<Text>, CaseResult)>), path: List<Text>, test: Case| {
+                        let (i, current) = state;
+                        if i == target {
+                            (i + 1, Option::Some { (path, test.run_bytes(payload)) })
+                        } else {
+                            (i + 1, current)
+                        }
+                    }
+                );
+                found
+            })
+        }
+    }
+}
+
+impl Entry {
+    fn map(self: Self, f: Case -> Case) -> Entry {
+        match self {
+            Case(name, body) => Entry::Case { name, f(body) },
+            Group(group) => Entry::Group { group.map(f) }
+        }
+    }
+
+    fn fold_impl<U>(
+        self: Self,
+        prefix: List<Text>,
+        acc: U,
+        f: (U, List<Text>, Case) -> U
+    ) -> U {
+        match self {
+            Case(name, body) => f(acc, List::Cons { name, prefix }.reverse(), body),
+            Group(group) => group.fold_impl(prefix, acc, f)
+        }
+    }
+
+    fn fold_tree<U>(
+        self: Self,
+        on_case: (Text, Case) -> U,
+        on_group: (Text, List<U>) -> U
+    ) -> U {
+        match self {
+            Case(name, body) => on_case(name, body),
+            Group(group) => group.fold_tree(on_case, on_group)
+        }
+    }
+
+    fn filter_impl(
+        self: Self,
+        prefix: List<Text>,
+        keep: (List<Text>, Case) -> bool
+    ) -> Option<Self> {
+        match self {
+            Case(name, body) if keep(List::Cons { name, prefix }.reverse(), body) =>
+                Option::Some { Entry::Case { name, body } },
+            Group(group) => {
+                let kept = group.filter_impl(prefix, keep);
+                if kept.is_empty() {
+                    Option::None
+                } else {
+                    Option::Some { Entry::Group { kept } }
+                }
+            },
+            _ => Option::None
+        }
+    }
+
+    fn find(self: Self, path: List<Text>) -> Option<Case> {
+        match self {
+            Case(name, body) => match path {
+                Cons(head, rest) if rest.is_nil() && name == head => Option::Some { body },
+                _ => Option::None
+            },
+            Group(group) => group.find(path)
+        }
+    }
+}
+
+fn find_entries(entries: List<Entry>, path: List<Text>) -> Option<Case> {
+    match entries {
+        Nil => Option::None,
+        Cons(entry, rest) => match entry.find(path) {
+            Some(body) => Option::Some { body },
+            None => find_entries(rest, path)
+        }
+    }
+}
