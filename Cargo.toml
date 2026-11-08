@@ -178,6 +178,7 @@ ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 ratatui-textarea = "0.9"
 libfuzzer-sys = "0.4"
 mutatis = { version = "0.5.4", features = ["std"] }
+winnow = "1"
 
 [profile.release]
 lto = "thin"

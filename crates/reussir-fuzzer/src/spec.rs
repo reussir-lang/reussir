@@ -3,6 +3,12 @@
 //! All [`ValueSpec`] and [`SuiteSpec`] encodings match `test::spec` in
 //! `library/test/src/spec.rr` byte-for-byte with a complete round-trip guarantee.
 
+use winnow::binary::{le_i64, le_u8, le_u64};
+use winnow::combinator::{eof, fail, repeat};
+use winnow::error::ContextError;
+use winnow::prelude::*;
+use winnow::token::{literal, take};
+
 /// Magic header for a standalone [`ValueSpec`] payload (`"RVSP"`).
 pub const VALUE_SPEC_MAGIC: [u8; 4] = *b"RVSP";
 
@@ -283,16 +289,16 @@ impl ValueSpec {
     }
 
     /// Deserializes a [`ValueSpec`] from bytes produced by [`ValueSpec::to_bytes`].
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let mut cursor = Cursor::new(bytes);
-        if cursor.read_exact(4)? != VALUE_SPEC_MAGIC {
-            return None;
-        }
-        if cursor.read_u8()? != SPEC_VERSION {
-            return None;
-        }
-        let spec = Self::decode_from(&mut cursor)?;
-        cursor.is_eof().then_some(spec)
+    pub fn from_bytes(mut bytes: &[u8]) -> Option<Self> {
+        (
+            literal(VALUE_SPEC_MAGIC.as_slice()),
+            literal([SPEC_VERSION].as_slice()),
+            Self::parse,
+            eof,
+        )
+            .map(|(_, _, spec, _)| spec)
+            .parse_next(&mut bytes)
+            .ok()
     }
 
     pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
@@ -359,73 +365,66 @@ impl ValueSpec {
         }
     }
 
-    pub(crate) fn decode_from(cursor: &mut Cursor<'_>) -> Option<Self> {
-        let tag = cursor.read_u8()?;
-        match tag {
-            0 => Some(Self::Unit),
-            1 => Some(Self::Bool),
+    pub(crate) fn parse(input: &mut &[u8]) -> ModalResult<Self, ContextError> {
+        match le_u8.parse_next(input)? {
+            0 => Ok(Self::Unit),
+            1 => Ok(Self::Bool),
             2 => {
-                let width = IntWidth::from_tag(cursor.read_u8()?)?;
-                let min = cursor.read_u64_le()? as i64;
-                let max = cursor.read_u64_le()? as i64;
-                Some(Self::Int { width, min, max })
+                let width = le_u8.verify_map(IntWidth::from_tag).parse_next(input)?;
+                let min = le_i64.parse_next(input)?;
+                let max = le_i64.parse_next(input)?;
+                Ok(Self::Int { width, min, max })
             }
             3 => {
-                let width = IntWidth::from_tag(cursor.read_u8()?)?;
-                let min = cursor.read_u64_le()?;
-                let max = cursor.read_u64_le()?;
-                Some(Self::UInt { width, min, max })
+                let width = le_u8.verify_map(IntWidth::from_tag).parse_next(input)?;
+                let min = le_u64.parse_next(input)?;
+                let max = le_u64.parse_next(input)?;
+                Ok(Self::UInt { width, min, max })
             }
             4 => {
-                let width = FloatWidth::from_tag(cursor.read_u8()?)?;
-                let min = f64::from_bits(cursor.read_u64_le()?);
-                let max = f64::from_bits(cursor.read_u64_le()?);
-                let nan_flag = cursor.read_u8()?;
-                let inf_flag = cursor.read_u8()?;
-                if nan_flag > 1 || inf_flag > 1 {
-                    return None;
-                }
-                Some(Self::Float {
+                let width = le_u8.verify_map(FloatWidth::from_tag).parse_next(input)?;
+                let min = le_u64.map(f64::from_bits).parse_next(input)?;
+                let max = le_u64.map(f64::from_bits).parse_next(input)?;
+                let allow_nan = parse_bool_flag(input)?;
+                let allow_inf = parse_bool_flag(input)?;
+                Ok(Self::Float {
                     width,
                     min,
                     max,
-                    allow_nan: nan_flag == 1,
-                    allow_inf: inf_flag == 1,
+                    allow_nan,
+                    allow_inf,
                 })
             }
             5 => {
-                let charset = Charset::from_tag(cursor.read_u8()?)?;
-                Some(Self::Char(charset))
+                let charset = le_u8.verify_map(Charset::from_tag).parse_next(input)?;
+                Ok(Self::Char(charset))
             }
             6 => {
-                let charset = Charset::from_tag(cursor.read_u8()?)?;
-                let min_len = cursor.read_u64_le()?;
-                let max_len = cursor.read_u64_le()?;
-                Some(Self::String {
+                let charset = le_u8.verify_map(Charset::from_tag).parse_next(input)?;
+                let min_len = le_u64.parse_next(input)?;
+                let max_len = le_u64.parse_next(input)?;
+                Ok(Self::String {
                     charset,
                     min_len,
                     max_len,
                 })
             }
             7 => {
-                let min_len = cursor.read_u64_le()?;
-                let max_len = cursor.read_u64_le()?;
-                let elem = Box::new(Self::decode_from(cursor)?);
-                Some(Self::Array {
+                let min_len = le_u64.parse_next(input)?;
+                let max_len = le_u64.parse_next(input)?;
+                let elem = Box::new(Self::parse(input)?);
+                Ok(Self::Array {
                     elem,
                     min_len,
                     max_len,
                 })
             }
             8 => {
-                let arity = usize::try_from(cursor.read_u64_le()?).ok()?;
-                let mut items = Vec::with_capacity(arity.min(1024));
-                for _ in 0..arity {
-                    items.push(Self::decode_from(cursor)?);
-                }
-                Some(Self::Tuple(items))
+                let arity = parse_len(input)?;
+                let items = repeat(arity, Self::parse).parse_next(input)?;
+                Ok(Self::Tuple(items))
             }
-            _ => None,
+            _ => fail.parse_next(input),
         }
     }
 }
@@ -470,64 +469,48 @@ impl SuiteSpec {
     }
 
     /// Reconstructs a [`SuiteSpec`] from bytes produced by [`SuiteSpec::to_bytes`].
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let mut cursor = Cursor::new(bytes);
-        if cursor.read_exact(4)? != SUITE_SPEC_MAGIC {
-            return None;
-        }
-        if cursor.read_u8()? != SPEC_VERSION {
-            return None;
-        }
-        let count = usize::try_from(cursor.read_u64_le()?).ok()?;
-        let mut cases = Vec::with_capacity(count.min(1024));
-        for _ in 0..count {
-            let path_len = usize::try_from(cursor.read_u64_le()?).ok()?;
-            let mut path = Vec::with_capacity(path_len.min(128));
-            for _ in 0..path_len {
-                let seg_len = usize::try_from(cursor.read_u64_le()?).ok()?;
-                let raw = cursor.read_exact(seg_len)?;
-                let seg = std::str::from_utf8(raw).ok()?.to_owned();
-                path.push(seg);
-            }
-            let input = ValueSpec::decode_from(&mut cursor)?;
-            cases.push(CaseSpec { path, input });
-        }
-        cursor.is_eof().then_some(Self { cases })
+    pub fn from_bytes(mut bytes: &[u8]) -> Option<Self> {
+        let (_, _, count) = (
+            literal(SUITE_SPEC_MAGIC.as_slice()),
+            literal([SPEC_VERSION].as_slice()),
+            parse_len,
+        )
+            .parse_next(&mut bytes)
+            .ok()?;
+        (repeat(count, parse_case_spec), eof)
+            .map(|(cases, _)| Self { cases })
+            .parse_next(&mut bytes)
+            .ok()
     }
 }
 
-pub(crate) struct Cursor<'a> {
-    bytes: &'a [u8],
-    offset: usize,
+fn parse_bool_flag(input: &mut &[u8]) -> ModalResult<bool, ContextError> {
+    le_u8
+        .verify_map(|b| match b {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        })
+        .parse_next(input)
 }
 
-impl<'a> Cursor<'a> {
-    pub(crate) const fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, offset: 0 }
-    }
+fn parse_len(input: &mut &[u8]) -> ModalResult<usize, ContextError> {
+    le_u64.try_map(usize::try_from).parse_next(input)
+}
 
-    pub(crate) const fn is_eof(&self) -> bool {
-        self.offset >= self.bytes.len()
-    }
+fn parse_utf8_string(input: &mut &[u8]) -> ModalResult<String, ContextError> {
+    let byte_len = parse_len(input)?;
+    take(byte_len)
+        .try_map(|raw: &[u8]| std::str::from_utf8(raw).map(str::to_owned))
+        .parse_next(input)
+}
 
-    pub(crate) fn read_exact(&mut self, len: usize) -> Option<&'a [u8]> {
-        let end = self.offset.checked_add(len)?;
-        if end > self.bytes.len() {
-            return None;
-        }
-        let slice = &self.bytes[self.offset..end];
-        self.offset = end;
-        Some(slice)
-    }
-
-    pub(crate) fn read_u8(&mut self) -> Option<u8> {
-        let b = *self.bytes.get(self.offset)?;
-        self.offset += 1;
-        Some(b)
-    }
-
-    pub(crate) fn read_u64_le(&mut self) -> Option<u64> {
-        let raw: [u8; 8] = self.read_exact(8)?.try_into().ok()?;
-        Some(u64::from_le_bytes(raw))
-    }
+fn parse_case_spec(input: &mut &[u8]) -> ModalResult<CaseSpec, ContextError> {
+    let seg_count = parse_len(input)?;
+    let path = repeat(seg_count, parse_utf8_string).parse_next(input)?;
+    let input_spec = ValueSpec::parse(input)?;
+    Ok(CaseSpec {
+        path,
+        input: input_spec,
+    })
 }
