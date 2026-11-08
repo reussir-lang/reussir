@@ -1,4 +1,8 @@
-//! Structured fuzz input encoding and decoding.
+//! Spec-aware input generation and mutation powered by [`mutatis`].
+
+use mutatis::{
+    Candidates, Context, Generate, Mutate, Result as MutatisResult, Session, mutators as m,
+};
 
 use crate::spec::{Charset, FloatWidth, IntWidth, SuiteSpec, ValueSpec};
 use winnow::binary::{
@@ -98,8 +102,405 @@ impl SuiteInput {
     }
 }
 
+/// [`mutatis`] mutator and generator for characters in a [`Charset`].
+#[derive(Clone, Copy, Debug)]
+pub struct CharsetMutator(pub Charset);
+
+impl Mutate<char> for CharsetMutator {
+    fn mutate(&mut self, c: &mut Candidates<'_>, value: &mut char) -> MutatisResult<()> {
+        match self.0 {
+            Charset::Ascii => m::ascii_char().mutate(c, value),
+            Charset::AsciiPrintable => m::mrange(' '..='~').mutate(c, value),
+            Charset::Digits => m::mrange('0'..='9').mutate(c, value),
+            Charset::Alpha => {
+                if c.shrink() {
+                    if *value > 'a' {
+                        m::mrange('A'..='Z')
+                            .or(m::mrange('a'..='z'))
+                            .mutate(c, value)
+                    } else if *value > 'A' {
+                        m::mrange('A'..='Z').mutate(c, value)
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    m::mrange('A'..='Z')
+                        .or(m::mrange('a'..='z'))
+                        .mutate(c, value)
+                }
+            }
+            Charset::Alphanumeric => {
+                if c.shrink() {
+                    if *value > 'a' {
+                        m::mrange('0'..='9')
+                            .or(m::mrange('A'..='Z'))
+                            .or(m::mrange('a'..='z'))
+                            .mutate(c, value)
+                    } else if *value > 'A' {
+                        m::mrange('0'..='9')
+                            .or(m::mrange('A'..='Z'))
+                            .mutate(c, value)
+                    } else if *value > '0' {
+                        m::mrange('0'..='9').mutate(c, value)
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    m::mrange('0'..='9')
+                        .or(m::mrange('A'..='Z'))
+                        .or(m::mrange('a'..='z'))
+                        .mutate(c, value)
+                }
+            }
+            Charset::Identifier => {
+                if c.shrink() {
+                    if *value > 'a' {
+                        m::mrange('0'..='9')
+                            .or(m::mrange('A'..='Z'))
+                            .or(m::just('_'))
+                            .or(m::mrange('a'..='z'))
+                            .mutate(c, value)
+                    } else if *value > '_' {
+                        m::mrange('0'..='9')
+                            .or(m::mrange('A'..='Z'))
+                            .or(m::just('_'))
+                            .mutate(c, value)
+                    } else if *value > 'A' {
+                        m::mrange('0'..='9')
+                            .or(m::mrange('A'..='Z'))
+                            .mutate(c, value)
+                    } else if *value > '0' {
+                        m::mrange('0'..='9').mutate(c, value)
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    m::mrange('0'..='9')
+                        .or(m::mrange('A'..='Z'))
+                        .or(m::mrange('a'..='z'))
+                        .or(m::just('_'))
+                        .mutate(c, value)
+                }
+            }
+            Charset::Utf8 => m::char().mutate(c, value),
+        }
+    }
+}
+
+impl Generate<char> for CharsetMutator {
+    fn generate(&mut self, ctx: &mut Context) -> MutatisResult<char> {
+        match self.0 {
+            Charset::Ascii => m::ascii_char().generate(ctx),
+            Charset::AsciiPrintable => m::mrange(' '..='~').generate(ctx),
+            Charset::Digits => m::mrange('0'..='9').generate(ctx),
+            Charset::Alpha => m::mrange('A'..='Z').or(m::mrange('a'..='z')).generate(ctx),
+            Charset::Alphanumeric => m::mrange('0'..='9')
+                .or(m::mrange('A'..='Z'))
+                .or(m::mrange('a'..='z'))
+                .generate(ctx),
+            Charset::Identifier => m::mrange('0'..='9')
+                .or(m::mrange('A'..='Z'))
+                .or(m::mrange('a'..='z'))
+                .or(m::just('_'))
+                .generate(ctx),
+            Charset::Utf8 => m::char().generate(ctx),
+        }
+    }
+}
+
+/// [`mutatis`] mutator and generator for a [`ValueSpec`].
+#[derive(Clone, Copy, Debug)]
+pub struct SpecMutator<'a>(pub &'a ValueSpec);
+
+impl Mutate<FuzzValue> for SpecMutator<'_> {
+    fn mutate(&mut self, c: &mut Candidates<'_>, value: &mut FuzzValue) -> MutatisResult<()> {
+        match (self.0, value) {
+            (ValueSpec::Unit, FuzzValue::Unit) => Ok(()),
+            (ValueSpec::Bool, FuzzValue::Bool(b)) => m::bool().mutate(c, b),
+            (ValueSpec::Int { width, min, max }, FuzzValue::Int(w, v)) => {
+                *w = *width;
+                let (lo, hi) = clamped_signed_bounds(*width, *min, *max);
+                m::mrange(lo..=hi).mutate(c, v)
+            }
+            (ValueSpec::UInt { width, min, max }, FuzzValue::UInt(w, v)) => {
+                *w = *width;
+                let (lo, hi) = clamped_unsigned_bounds(*width, *min, *max);
+                m::mrange(lo..=hi).mutate(c, v)
+            }
+            (
+                ValueSpec::Float {
+                    width,
+                    min,
+                    max,
+                    allow_nan,
+                    allow_inf,
+                },
+                FuzzValue::Float(w, v),
+            ) => {
+                *w = *width;
+                let (lo, hi) = if *min <= *max {
+                    (*min, *max)
+                } else {
+                    (*max, *min)
+                };
+                let nan = *allow_nan;
+                let inf = *allow_inf;
+                match width {
+                    FloatWidth::F32 => {
+                        let mut cur = *v as f32;
+                        let mut mutator = m::f32()
+                            .or(m::just(lo as f32))
+                            .or(m::just(hi as f32))
+                            .map(|_ctx, x| {
+                                *x = constrain_f64(*x as f64, lo, hi, nan, inf) as f32;
+                                Ok(())
+                            });
+                        let res = mutator.mutate(c, &mut cur);
+                        *v = cur as f64;
+                        res
+                    }
+                    FloatWidth::F64 => {
+                        let mut mutator =
+                            m::f64().or(m::just(lo)).or(m::just(hi)).map(|_ctx, x| {
+                                *x = constrain_f64(*x, lo, hi, nan, inf);
+                                Ok(())
+                            });
+                        mutator.mutate(c, v)
+                    }
+                }
+            }
+            (ValueSpec::Char(charset), FuzzValue::Char(ch)) => {
+                CharsetMutator(*charset).mutate(c, ch)
+            }
+            (
+                ValueSpec::String {
+                    charset,
+                    min_len,
+                    max_len,
+                },
+                FuzzValue::String(s),
+            ) => {
+                let (lo, hi) = normalized_len_bounds(*min_len, *max_len);
+                let cs = *charset;
+                if c.shrink() && s.chars().count() <= lo {
+                    if !s.is_empty() {
+                        c.mutation(|ctx| {
+                            let mut chars: Vec<char> = s.chars().collect();
+                            let idx = m::mrange(0..=chars.len() - 1).generate(ctx)?;
+                            chars[idx] = CharsetMutator(cs).generate(ctx)?;
+                            *s = chars.into_iter().collect();
+                            Ok(())
+                        })?;
+                    }
+                    Ok(())
+                } else {
+                    let mut mutator = m::string(CharsetMutator(cs))
+                        .map(|ctx, val| constrain_string_len(ctx, val, cs, lo, hi));
+                    mutator.mutate(c, s)
+                }
+            }
+            (
+                ValueSpec::Array {
+                    elem,
+                    min_len,
+                    max_len,
+                },
+                FuzzValue::Array(items),
+            ) => {
+                let (lo, hi) = normalized_len_bounds(*min_len, *max_len);
+                if c.shrink() && items.len() <= lo {
+                    let mut elem_mut = SpecMutator(elem);
+                    for item in items.iter_mut() {
+                        elem_mut.mutate(c, item)?;
+                    }
+                    Ok(())
+                } else {
+                    let mut mutator = m::vec(SpecMutator(elem))
+                        .map(|ctx, vec| constrain_vec_len(ctx, vec, elem, lo, hi));
+                    mutator.mutate(c, items)
+                }
+            }
+            (ValueSpec::Tuple(specs), FuzzValue::Tuple(values)) => {
+                if specs.len() != values.len() {
+                    let spec = self.0;
+                    return c.mutation(|ctx| {
+                        *values = match SpecMutator(spec).generate(ctx)? {
+                            FuzzValue::Tuple(v) => v,
+                            _ => Vec::new(),
+                        };
+                        Ok(())
+                    });
+                }
+                for (spec, item) in specs.iter().zip(values.iter_mut()) {
+                    SpecMutator(spec).mutate(c, item)?;
+                }
+                Ok(())
+            }
+            (spec, mismatched) => c.mutation(|ctx| {
+                *mismatched = SpecMutator(spec).generate(ctx)?;
+                Ok(())
+            }),
+        }
+    }
+}
+
+impl Generate<FuzzValue> for SpecMutator<'_> {
+    fn generate(&mut self, ctx: &mut Context) -> MutatisResult<FuzzValue> {
+        match self.0 {
+            ValueSpec::Unit => Ok(FuzzValue::Unit),
+            ValueSpec::Bool => Ok(FuzzValue::Bool(m::bool().generate(ctx)?)),
+            ValueSpec::Int { width, min, max } => {
+                let (lo, hi) = clamped_signed_bounds(*width, *min, *max);
+                Ok(FuzzValue::Int(*width, m::mrange(lo..=hi).generate(ctx)?))
+            }
+            ValueSpec::UInt { width, min, max } => {
+                let (lo, hi) = clamped_unsigned_bounds(*width, *min, *max);
+                Ok(FuzzValue::UInt(*width, m::mrange(lo..=hi).generate(ctx)?))
+            }
+            ValueSpec::Float {
+                width,
+                min,
+                max,
+                allow_nan,
+                allow_inf,
+            } => {
+                let (lo, hi) = if *min <= *max {
+                    (*min, *max)
+                } else {
+                    (*max, *min)
+                };
+                let raw = match width {
+                    FloatWidth::F32 => m::f32().generate(ctx)? as f64,
+                    FloatWidth::F64 => m::f64().generate(ctx)?,
+                };
+                let v = constrain_f64(raw, lo, hi, *allow_nan, *allow_inf);
+                Ok(FuzzValue::Float(*width, v))
+            }
+            ValueSpec::Char(charset) => {
+                Ok(FuzzValue::Char(CharsetMutator(*charset).generate(ctx)?))
+            }
+            ValueSpec::String {
+                charset,
+                min_len,
+                max_len,
+            } => {
+                let (lo, hi) = normalized_len_bounds(*min_len, *max_len);
+                let len = m::mrange(lo..=hi).generate(ctx)?;
+                let mut s = String::with_capacity(len);
+                let mut char_gen = CharsetMutator(*charset);
+                for _ in 0..len {
+                    s.push(char_gen.generate(ctx)?);
+                }
+                Ok(FuzzValue::String(s))
+            }
+            ValueSpec::Array {
+                elem,
+                min_len,
+                max_len,
+            } => {
+                let (lo, hi) = normalized_len_bounds(*min_len, *max_len);
+                let len = m::mrange(lo..=hi).generate(ctx)?;
+                let mut items = Vec::with_capacity(len);
+                let mut elem_gen = SpecMutator(elem);
+                for _ in 0..len {
+                    items.push(elem_gen.generate(ctx)?);
+                }
+                Ok(FuzzValue::Array(items))
+            }
+            ValueSpec::Tuple(specs) => {
+                let mut items = Vec::with_capacity(specs.len());
+                for spec in specs {
+                    items.push(SpecMutator(spec).generate(ctx)?);
+                }
+                Ok(FuzzValue::Tuple(items))
+            }
+        }
+    }
+}
+
+/// [`mutatis`] mutator and generator for a [`SuiteSpec`].
+#[derive(Clone, Copy, Debug)]
+pub struct SuiteMutator<'a>(pub &'a SuiteSpec);
+
+impl Mutate<SuiteInput> for SuiteMutator<'_> {
+    fn mutate(&mut self, c: &mut Candidates<'_>, value: &mut SuiteInput) -> MutatisResult<()> {
+        if self.0.cases.is_empty() {
+            return Ok(());
+        }
+        let max_idx = self.0.cases.len() - 1;
+        if value.case_idx > max_idx {
+            value.case_idx %= self.0.cases.len();
+        }
+        let case_spec = &self.0.cases[value.case_idx].input;
+        SpecMutator(case_spec).mutate(c, &mut value.payload)?;
+
+        if !c.shrink() && max_idx > 0 {
+            let suite = self.0;
+            c.mutation(|ctx| {
+                let next_idx = m::mrange(0..=max_idx).generate(ctx)?;
+                value.case_idx = next_idx;
+                value.payload = SpecMutator(&suite.cases[next_idx].input).generate(ctx)?;
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl Generate<SuiteInput> for SuiteMutator<'_> {
+    fn generate(&mut self, ctx: &mut Context) -> MutatisResult<SuiteInput> {
+        if self.0.cases.is_empty() {
+            return Ok(SuiteInput {
+                case_idx: 0,
+                payload: FuzzValue::Unit,
+            });
+        }
+        let non_unit: Vec<usize> = self
+            .0
+            .cases
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, c)| (!c.input.is_unit()).then_some(idx))
+            .collect();
+        let case_idx = if non_unit.is_empty() {
+            m::mrange(0..=self.0.cases.len() - 1).generate(ctx)?
+        } else {
+            let pick = m::mrange(0..=non_unit.len() - 1).generate(ctx)?;
+            non_unit[pick]
+        };
+        let payload = SpecMutator(&self.0.cases[case_idx].input).generate(ctx)?;
+        Ok(SuiteInput { case_idx, payload })
+    }
+}
+
 impl ValueSpec {
-    /// Decodes a structured value within this specification’s domain bounds.
+    /// Generates a fresh random byte buffer conforming to this [`ValueSpec`] using [`mutatis`].
+    pub fn generate(&self, session: &mut Session) -> Vec<u8> {
+        let mut mutator = SpecMutator(self);
+        match session.generate_with(&mut mutator) {
+            Ok(val) => val.to_bytes(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Mutates a payload buffer in place according to this [`ValueSpec`] using [`mutatis`].
+    pub fn mutate(&self, buf: &mut Vec<u8>, session: &mut Session) {
+        let mut cursor = buf.as_slice();
+        let mut mutator = SpecMutator(self);
+        let mut val = match self.decode_value(&mut cursor) {
+            Some(v) => v,
+            None => match session.generate_with(&mut mutator) {
+                Ok(v) => v,
+                Err(_) => return,
+            },
+        };
+        let _ = session.mutate_with(&mut mutator, &mut val);
+        buf.clear();
+        val.encode_into(buf);
+    }
+
+    /// Decodes a structured [`FuzzValue`] from `cursor`, projecting any raw bytes
+    /// into this specification's domain bounds.
     pub fn decode_value(&self, cursor: &mut &[u8]) -> Option<FuzzValue> {
         self.parse_value(cursor).ok()
     }
@@ -201,8 +602,40 @@ impl ValueSpec {
     }
 }
 
+/// Callback signature matching [`libfuzzer_sys::fuzzer_mutate`].
+pub type RawMutateFn = fn(&mut [u8], usize, usize) -> usize;
+
 impl SuiteSpec {
-    /// Decodes a case selector and its structured payload.
+    /// Generates a suite-level input buffer for `case_idx` using [`mutatis`].
+    pub fn generate_for_case(&self, case_idx: usize, session: &mut Session) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&(case_idx as u64).to_le_bytes());
+        if let Some(case) = self.cases.get(case_idx) {
+            let mut mutator = SpecMutator(&case.input);
+            if let Ok(val) = session.generate_with(&mut mutator) {
+                val.encode_into(&mut out);
+            }
+        }
+        out
+    }
+
+    /// Mutates a suite-level input buffer for `case_idx` in place using [`mutatis`],
+    /// keeping the 8-byte little-endian case selector prefix intact.
+    pub fn mutate_for_case(&self, case_idx: usize, buf: &mut Vec<u8>, session: &mut Session) {
+        let Some(case) = self.cases.get(case_idx) else {
+            return;
+        };
+        if buf.len() < 8 {
+            *buf = self.generate_for_case(case_idx, session);
+            return;
+        }
+        buf[..8].copy_from_slice(&(case_idx as u64).to_le_bytes());
+        let mut payload = buf.split_off(8);
+        case.input.mutate(&mut payload, session);
+        buf.extend_from_slice(&payload);
+    }
+
+    /// Decodes a suite-level input buffer (`case_idx` + `FuzzValue`).
     pub fn decode_input(&self, mut bytes: &[u8]) -> Option<SuiteInput> {
         if self.cases.is_empty() {
             return None;
@@ -211,6 +644,50 @@ impl SuiteSpec {
         let case_idx = (raw_idx as usize) % self.cases.len();
         let payload = self.cases[case_idx].input.decode_value(&mut bytes)?;
         Some(SuiteInput { case_idx, payload })
+    }
+
+    /// Mutates `data[..size]` in place within `max_size` using [`mutatis`] (and
+    /// falling back to `raw_mutate` from libFuzzer when unstructured or
+    /// exhausted), returning the new buffer size.
+    pub fn mutate_buffer(
+        &self,
+        data: &mut [u8],
+        size: usize,
+        max_size: usize,
+        seed: u32,
+        raw_mutate: Option<RawMutateFn>,
+    ) -> usize {
+        if self.cases.is_empty() || max_size == 0 {
+            return 0;
+        }
+
+        let mut session = Session::new().seed(u64::from(seed)).shrink(max_size < size);
+        let mut suite_mutator = SuiteMutator(self);
+
+        let new_bytes = match self.decode_input(&data[..size.min(data.len())]) {
+            Some(mut input) => match session.mutate_with(&mut suite_mutator, &mut input) {
+                Ok(()) => input.to_bytes(),
+                Err(_) => {
+                    if let Some(fuzzer_mutate) = raw_mutate {
+                        return fuzzer_mutate(data, size, max_size);
+                    }
+                    input.to_bytes()
+                }
+            },
+            None => match session.generate_with(&mut suite_mutator) {
+                Ok(generated) => generated.to_bytes(),
+                Err(_) => {
+                    if let Some(fuzzer_mutate) = raw_mutate {
+                        return fuzzer_mutate(data, size, max_size);
+                    }
+                    return 0;
+                }
+            },
+        };
+
+        let new_size = std::cmp::min(max_size, new_bytes.len()).min(data.len());
+        data[..new_size].copy_from_slice(&new_bytes[..new_size]);
+        new_size
     }
 }
 
@@ -260,6 +737,49 @@ fn constrain_f64(raw: f64, lo: f64, hi: f64, allow_nan: bool, allow_inf: bool) -
         let u = ((raw.to_bits() >> 11) as f64) * (1.0 / 9007199254740992.0);
         ((1.0 - u) * lo + u * hi).clamp(lo, hi)
     }
+}
+
+fn constrain_string_len(
+    ctx: &mut Context,
+    s: &mut String,
+    charset: Charset,
+    min_len: usize,
+    max_len: usize,
+) -> MutatisResult<()> {
+    let mut chars: Vec<char> = s
+        .chars()
+        .take(max_len)
+        .map(|ch| {
+            if charset_contains(charset, ch) {
+                ch
+            } else {
+                project_char(ch as u64, charset)
+            }
+        })
+        .collect();
+    let mut char_gen = CharsetMutator(charset);
+    while chars.len() < min_len {
+        chars.push(char_gen.generate(ctx)?);
+    }
+    *s = chars.into_iter().collect();
+    Ok(())
+}
+
+fn constrain_vec_len(
+    ctx: &mut Context,
+    items: &mut Vec<FuzzValue>,
+    elem_spec: &ValueSpec,
+    min_len: usize,
+    max_len: usize,
+) -> MutatisResult<()> {
+    if items.len() > max_len {
+        items.truncate(max_len);
+    }
+    let mut elem_gen = SpecMutator(elem_spec);
+    while items.len() < min_len {
+        items.push(elem_gen.generate(ctx)?);
+    }
+    Ok(())
 }
 
 fn decode_and_sanitize_string(
@@ -400,5 +920,33 @@ mod length_tests {
         let mut cursor = bytes.as_slice();
         assert_eq!(spec.decode_value(&mut cursor), Some(value));
         assert!(cursor.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod generation_length_tests {
+    use super::*;
+
+    #[test]
+    fn generate_declared_lengths_above_4096() {
+        let mut session = Session::new().seed(42);
+        for spec in [
+            ValueSpec::String {
+                charset: Charset::Ascii,
+                min_len: 5000,
+                max_len: 5000,
+            },
+            ValueSpec::Array {
+                elem: Box::new(ValueSpec::Bool),
+                min_len: 5000,
+                max_len: 5000,
+            },
+        ] {
+            let bytes = spec.generate(&mut session);
+            assert_eq!(u64::from_le_bytes(bytes[..8].try_into().unwrap()), 5000);
+            let mut cursor = bytes.as_slice();
+            assert!(spec.decode_value(&mut cursor).is_some());
+            assert!(cursor.is_empty());
+        }
     }
 }
