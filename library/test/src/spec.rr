@@ -729,6 +729,163 @@ impl Display for ValueSpec {
     }
 }
 
+/// Specification of a single test case within a [`SuiteSpec`].
+pub struct CaseSpec {
+    pub path: List<Text>,
+    pub input: ValueSpec
+}
+
+impl CaseSpec {
+    /// Generates a random input buffer for this case.
+    pub fn generate<R: RandomState>(self: Self, rng: Rng<R>) -> Vec<u8> {
+        self.input.generate(rng)
+    }
+}
+
+impl PartialEq for CaseSpec {
+    fn eq(self: Self, other: Self) -> bool {
+        list_eq(self.path, other.path) && self.input == other.input
+    }
+}
+
+impl Eq for CaseSpec {}
+
+impl Display for CaseSpec {
+    fn fmt(self: Self) -> Format {
+        join(lit("/"), self.path.map(|seg: Text| seg.fmt()))
+            .append(lit(": "))
+            .append(self.input.fmt())
+    }
+}
+
+/// Complete specification derived from a (possibly filtered) `TestTree`.
+pub struct SuiteSpec {
+    pub cases: List<CaseSpec>
+}
+
+impl SuiteSpec {
+    /// Number of cases in this suite specification.
+    pub fn len(self: Self) -> u64 {
+        self.cases.len()
+    }
+
+    /// Whether the suite specification contains no cases.
+    pub fn is_empty(self: Self) -> bool {
+        self.cases.is_nil()
+    }
+
+    /// Generates a suite-level input buffer: an 8-byte little-endian case
+    /// index followed by a random payload for that case's [`ValueSpec`].
+    pub fn generate<R: RandomState>(self: Self, rng: Rng<R>) -> Vec<u8> {
+        let count = self.cases.len();
+        if count == 0 {
+            empty_bytes()
+        } else {
+            let index = sample_u64(rng, 0, count - 1);
+            match nth_case(self.cases, index) {
+                None => empty_bytes(),
+                Some(case_spec) => {
+                    let prefix = write_u64_le(empty_bytes(), index);
+                    case_spec.input.write_random(rng, prefix)
+                }
+            }
+        }
+    }
+
+    /// Serializes this `SuiteSpec` to bytes with a complete round-trip guarantee.
+    pub fn to_bytes(self: Self) -> Vec<u8> {
+        let out = write_u8(write_magic(Vec::new(), 0x52, 0x54, 0x53, 0x50), 1);
+        let out = write_u64_le(out, self.cases.len());
+        self.cases.fold_left(out, |buf: Vec<u8>, c: CaseSpec| {
+            let buf = write_u64_le(buf, c.path.len());
+            let buf = c.path.fold_left(buf, |b: Vec<u8>, seg: Text| write_string_bytes(b, seg));
+            c.input.encode_spec(buf)
+        })
+    }
+
+    /// Reconstructs a `SuiteSpec` from bytes produced by [`SuiteSpec::to_bytes`].
+    pub fn from_bytes(bytes: Vec<u8>) -> Option<Self> {
+        read_magic(ByteCursor::new(bytes), 0x52, 0x54, 0x53, 0x50)
+            .and_then(|c1: ByteCursor| c1.read_u8())
+            .and_then(|ver_and_c: (u8, ByteCursor)| {
+                let (version, c2) = ver_and_c;
+                if version != 1 { Option::None } else { c2.read_u64_le() }
+            })
+            .and_then(|count_and_c: (u64, ByteCursor)| {
+                let (count, c3) = count_and_c;
+                decode_case_specs(c3, count, List::Nil)
+            })
+            .and_then(|cases_and_c: (List<CaseSpec>, ByteCursor)| {
+                let (cases, rest) = cases_and_c;
+                if rest.is_eof() { Option::Some { SuiteSpec { cases: cases } } } else { Option::None }
+            })
+    }
+}
+
+impl PartialEq for SuiteSpec {
+    fn eq(self: Self, other: Self) -> bool {
+        list_eq(self.cases, other.cases)
+    }
+}
+
+impl Eq for SuiteSpec {}
+
+impl Display for SuiteSpec {
+    fn fmt(self: Self) -> Format {
+        join(Format::Hardline, self.cases.map(|c: CaseSpec| c.fmt()))
+    }
+}
+
+fn nth_case(cases: List<CaseSpec>, index: u64) -> Option<CaseSpec> {
+    match cases {
+        Nil => Option::None,
+        Cons(head, _) if index == 0 => Option::Some { head },
+        Cons(_, tail) => nth_case(tail, index - 1)
+    }
+}
+
+fn decode_case_specs(
+    cursor: ByteCursor,
+    remaining: u64,
+    acc: List<CaseSpec>
+) -> Option<(List<CaseSpec>, ByteCursor)> {
+    if remaining == 0 {
+        Option::Some { (acc.reverse(), cursor) }
+    } else {
+        cursor.read_u64_le()
+            .and_then(|plen_and_c: (u64, ByteCursor)| {
+                let (path_len, c1) = plen_and_c;
+                decode_path_segments(c1, path_len, List::Nil)
+            })
+            .and_then(|path_and_c: (List<Text>, ByteCursor)| {
+                let (path, c2) = path_and_c;
+                decode_value_spec(c2).and_then(|spec_and_c: (ValueSpec, ByteCursor)| {
+                    let (input, c3) = spec_and_c;
+                    decode_case_specs(
+                        c3,
+                        remaining - 1,
+                        List::Cons { CaseSpec { path: path, input: input }, acc }
+                    )
+                })
+            })
+    }
+}
+
+fn decode_path_segments(
+    cursor: ByteCursor,
+    remaining: u64,
+    acc: List<Text>
+) -> Option<(List<Text>, ByteCursor)> {
+    if remaining == 0 {
+        Option::Some { (acc.reverse(), cursor) }
+    } else {
+        cursor.read_exact_utf8(acc).and_then(|next_and_c: (List<Text>, ByteCursor)| {
+            let (next_acc, c1) = next_and_c;
+            decode_path_segments(c1, remaining - 1, next_acc)
+        })
+    }
+}
+
 /// Non-allocating cursor over a `Vec<u8>`.
 pub struct [value] ByteCursor {
     bytes: Vec<u8>,
