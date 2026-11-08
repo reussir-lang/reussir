@@ -3,6 +3,9 @@
 
 import core::intrinsic::array;
 import std::collections::cow::vec::Vec;
+import std::collections::cow::vec::RawVec;
+import std::format::Format;
+import std::format::Options;
 import std::collections::pure::list::List;
 import std::option::Option;
 import std::random::Rng;
@@ -56,9 +59,37 @@ import test::spec::IntWidth;
 import test::spec::SuiteSpec;
 import test::spec::ValueSpec;
 import test::spec::write_u8;
+import test::spec::write_u64_le;
 import test::tree::Case;
 import test::tree::CaseResult;
 import test::tree::TestTree;
+
+extern "rust" [{
+    use reussir_rt::rc::Rc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static ELEMENT_CLONES: AtomicUsize = AtomicUsize::new(0);
+    #[repr(transparent)]
+    pub struct CloneProbe(Rc<()>);
+    impl Clone for CloneProbe {
+        fn clone(&self) -> Self {
+            ELEMENT_CLONES.fetch_add(1, Ordering::Relaxed);
+            Self(self.0.clone())
+        }
+    }
+}];
+
+#[ffi(rust = "CloneProbe")]
+pub struct Probe;
+
+#[ffi(import)]
+fn new_probe() -> Probe [{ CloneProbe(Rc::new(())) }];
+
+#[ffi(import)]
+fn update_without_cloning(values: RawVec<Probe>) -> bool [{
+    let before = ELEMENT_CLONES.load(Ordering::Relaxed);
+    let values = values.push(CloneProbe(Rc::new(())));
+    values.len() == 3 && ELEMENT_CLONES.load(Ordering::Relaxed) == before
+}];
 
 fn check(value: bool) {
     if !value { core::intrinsic::panic::panic() }
@@ -146,6 +177,51 @@ fn test_find_and_filter() {
     check(units.find(path2("root", "a")).is_some());
     check(units.find(path3("root", "inner", "c")).is_some());
     check(units.find(path3("root", "inner", "b")).is_none());
+}
+
+fn test_case_input_ownership() {
+    let domain = i64_domain().map(
+        |unused: i64| new_probe(), |unused: Probe| Format::Empty
+    ).vec().with_len(2);
+    let test = Case::fuzz(domain, |values: Vec<Probe>| {
+        expect(update_without_cloning(values.into_raw()), "case input must remain unique")
+    });
+    let bytes = write_u64_le(write_u64_le(write_u64_le(Vec::new(), 2), 10), 20);
+    check(is_pass_result(test.run_bytes(bytes)));
+
+    let failing = Case::fuzz(i64_domain().vec().with_len(2), |values: Vec<i64>| {
+        let changed = values.set(0, 99);
+        expect(changed.get(0).unwrap_or(0) != 99, "changed")
+    });
+    match failing.run_bytes(bytes) {
+        Fail(original, _) => check(original.render(Options::default()).to_plain_string().eq_str("[10, 20]")),
+        _ => check(false)
+    }
+}
+
+fn test_prepared_dispatch() {
+    let tree = sample();
+    let prepared = tree.prepare();
+    check(prepared.derive_spec() == tree.derive_spec());
+    check(prepared.run_bytes(Vec::new()).is_none());
+    check(TestTree::group("empty").prepare().run_bytes(write_u64_le(Vec::new(), 0)).is_none());
+    let (path, result) = prepared.run_bytes(write_u64_le(Vec::new(), 0)).unwrap_or_panic();
+    check(path == path2("root", "a") && is_pass_result(result));
+    let (path, result) = prepared.run_bytes(write_u64_le(Vec::new(), 2)).unwrap_or_panic();
+    check(path == path3("root", "inner", "c") && is_fail_result(result));
+    let (path, result) = prepared.run_bytes(write_u64_le(Vec::new(), 5)).unwrap_or_panic();
+    check(path == path3("root", "inner", "c") && is_fail_result(result));
+    let (_, malformed) = prepared.run_bytes(write_u64_le(Vec::new(), 1)).unwrap_or_panic();
+    check(match malformed { MalformedInput => true, _ => false });
+    let input = write_u64_le(write_u64_le(Vec::new(), 1), 17);
+    let (path, result) = prepared.run_bytes(input).unwrap_or_panic();
+    check(path == path3("root", "inner", "b") && is_pass_result(result));
+    let filtered = tree.filter(|path: List<Text>, unused_case: Case| path == path3("root", "inner", "b"));
+    let filtered_prepared = filtered.prepare();
+    check(filtered_prepared.derive_spec() == filtered.derive_spec());
+    let input = write_u64_le(write_u64_le(Vec::new(), 0), 17);
+    let (path, result) = filtered_prepared.run_bytes(input).unwrap_or_panic();
+    check(path == path3("root", "inner", "b") && is_pass_result(result));
 }
 
 fn test_domain_combinators() {
@@ -415,6 +491,8 @@ pub fn main() {
     test_count_and_name();
     test_fold_order_and_paths();
     test_find_and_filter();
+    test_prepared_dispatch();
+    test_case_input_ownership();
     test_domain_combinators();
     test_spec_derivation_and_serialization();
 }
