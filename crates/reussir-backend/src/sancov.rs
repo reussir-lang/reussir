@@ -29,7 +29,7 @@ pub enum SanCovType {
 }
 
 impl SanCovType {
-    fn to_sys(&self) -> sys::ReussirSanCovType {
+    fn to_sys(self) -> sys::ReussirSanCovType {
         match self {
             SanCovType::None => sys::ReussirSanCovType::None,
             SanCovType::Function => sys::ReussirSanCovType::Function,
@@ -232,13 +232,14 @@ impl SanCovOptions {
     /// Completes the fuzzer preset for `triple`. Like clang, it tracks stack
     /// depth only on Linux: libFuzzer's thread-local `__sancov_lowest_stack`
     /// is not available to instrumented code on other targets.
-    pub fn for_target(mut self, triple: &str) -> Self {
+    pub fn for_target(&self, triple: &str) -> Self {
+        let mut opts = self.clone();
         let linux = triple
             .split('-')
             .nth(2)
             .is_some_and(|os| os.starts_with("linux"));
-        self.stack_depth |= self.opt_for_fuzzing && linux;
-        self
+        opts.stack_depth |= opts.opt_for_fuzzing && linux;
+        opts
     }
 
     fn has_coverage_pass_action(&self) -> bool {
