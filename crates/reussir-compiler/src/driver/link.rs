@@ -187,12 +187,21 @@ pub(crate) fn link_product(
     let main_symbol = reussir_core::semi::Elaborator::MAIN_SYMBOL;
     if target == Stage::Executable
         && let Some(exports) = exports
-        && !exports.iter().any(|e| e == main_symbol)
     {
-        return Err(format!(
-            "an executable needs an entry point: no function is marked `#[main]` \
-             (and no trampoline exports `{main_symbol}`)"
-        ));
+        if cli.fuzzer {
+            if !exports.iter().any(|e| e == "reussir_fuzz_init") {
+                return Err(
+                    "a fuzzer executable needs an initialization entry point: no trampoline \
+                     exports `reussir_fuzz_init`"
+                        .into(),
+                );
+            }
+        } else if !exports.iter().any(|e| e == main_symbol) {
+            return Err(format!(
+                "an executable needs an entry point: no function is marked `#[main]` \
+                 (and no trampoline exports `{main_symbol}`)"
+            ));
+        }
     }
 
     let rustc = resolve_link_rustc(cli)?;
@@ -228,6 +237,15 @@ pub(crate) fn link_product(
         cmd.arg("--target").arg(target);
     }
     match target {
+        Stage::Executable if cli.fuzzer => {
+            let driver = scratch.dir().join("fuzzer_driver.rs");
+            let source = format!(
+                "#![no_main]\n{runtime_extern}extern crate reussir_fuzzer;\nreussir_fuzzer::fuzz_target!();\n"
+            );
+            std::fs::write(&driver, source)
+                .map_err(|e| format!("cannot write the fuzzer driver source: {e}"))?;
+            cmd.arg(driver);
+        }
         Stage::Executable => {
             let launcher = scratch.dir().join("launcher.rs");
             std::fs::write(&launcher, format!("{LAUNCHER_SOURCE}{runtime_extern}"))
@@ -351,6 +369,22 @@ pub(crate) fn link_product(
                     cmd.arg("-L").arg(dir);
                 }
                 cmd.arg("-l").arg("dylib=reussir_rt");
+            }
+        }
+    }
+
+    if target == Stage::Executable && cli.fuzzer {
+        let (fuzzer_rlib, fuzzer_rmeta) = find_rlib_in_libdirs(&libdirs, "reussir_fuzzer")?;
+        cmd.arg(format!("--extern=reussir_fuzzer={}", fuzzer_rlib.display()));
+        if let Some(fuzzer_rmeta) = fuzzer_rmeta {
+            cmd.arg(format!(
+                "--extern=reussir_fuzzer={}",
+                fuzzer_rmeta.display()
+            ));
+        }
+        if linkage != RuntimeLinkage::Static {
+            for dir in &libdirs {
+                cmd.arg("-L").arg(format!("dependency={}", dir.display()));
             }
         }
     }
@@ -513,6 +547,55 @@ pub(crate) fn find_in_libdirs(libdirs: &[PathBuf], name: &str) -> Result<PathBuf
     }
     Err(format!(
         "cannot find `{name}` in {}",
+        libdirs
+            .iter()
+            .map(|d| format!("`{}`", d.display()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
+
+/// Locates `lib<crate_name>.rlib` or `lib<crate_name>-<hash>.rlib` in `libdirs`,
+/// along with its matching `.rmeta` sibling if present.
+pub(crate) fn find_rlib_in_libdirs(
+    libdirs: &[PathBuf],
+    crate_name: &str,
+) -> Result<(PathBuf, Option<PathBuf>), String> {
+    let exact_rlib = format!("lib{crate_name}.rlib");
+    let hashed_prefix = format!("lib{crate_name}-");
+    for dir in libdirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(file_name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let matches = file_name == exact_rlib
+                || (file_name.starts_with(&hashed_prefix) && file_name.ends_with(".rlib"));
+            if !matches {
+                continue;
+            }
+            let mtime = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            if best.as_ref().is_none_or(|(prev, _)| mtime >= *prev) {
+                best = Some((mtime, path));
+            }
+        }
+        if let Some((_, rlib)) = best {
+            let rmeta = rlib.with_extension("rmeta");
+            return Ok((rlib, rmeta.is_file().then_some(rmeta)));
+        }
+    }
+    Err(format!(
+        "cannot find `{exact_rlib}` in {}",
         libdirs
             .iter()
             .map(|d| format!("`{}`", d.display()))

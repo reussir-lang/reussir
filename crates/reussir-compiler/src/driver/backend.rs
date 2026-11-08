@@ -12,7 +12,7 @@ use reussir_backend::melior::ir::operation::{OperationLike, OperationMutLike};
 use reussir_backend::pipeline::{self, LoweringOptions, OptLevel};
 use reussir_backend_sys as sys;
 
-use crate::{RelocMode, TargetMachine, TargetSpec, emit_to_file};
+use crate::{RelocMode, SanCovOptions, TargetMachine, TargetSpec, emit_to_file_with_sancov};
 
 use super::Produced;
 use super::cli::{Cli, parse_transform_scripts, resolve_drop_order, write_text};
@@ -29,6 +29,7 @@ pub(crate) fn backend(
     target: Stage,
     opt: OptLevel,
     reloc: RelocMode,
+    sancov: Option<&SanCovOptions>,
     spec: &TargetSpec,
     name: &str,
     output: &Path,
@@ -73,7 +74,7 @@ pub(crate) fn backend(
             let member = lib.next_member();
             tracing::debug!(unit = index, "compiling codegen unit");
             backend_module(
-                cli, context, module, target, opt, reloc, spec, name, &member,
+                cli, context, module, target, opt, reloc, sancov, spec, name, &member,
             )?;
         }
         let machine = TargetMachine::new(spec, opt, reloc)?;
@@ -99,7 +100,9 @@ pub(crate) fn backend(
         } else {
             output.to_owned()
         };
-        backend_module(cli, context, module, target, opt, reloc, spec, name, &out)?;
+        backend_module(
+            cli, context, module, target, opt, reloc, sancov, spec, name, &out,
+        )?;
     }
     Ok(true)
 }
@@ -112,6 +115,7 @@ pub(crate) fn backend_module(
     target: Stage,
     opt: OptLevel,
     reloc: RelocMode,
+    sancov: Option<&SanCovOptions>,
     spec: &TargetSpec,
     name: &str,
     output: &Path,
@@ -202,7 +206,7 @@ pub(crate) fn backend_module(
         .output_kind(cli.lto)
         .expect("file-emitting or linked target past the mlir-llvm stage");
     tracing::debug!("optimizing and emitting the object");
-    emit_to_file(finalized, &machine, opt, kind, output)?;
+    emit_to_file_with_sancov(finalized, &machine, opt, kind, sancov, output)?;
     tracing::debug!(output = %output.display(), "emitted");
     Ok(true)
 }

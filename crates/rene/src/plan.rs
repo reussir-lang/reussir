@@ -125,6 +125,9 @@ pub(crate) fn node_commands(
                     decl.kind,
                     opts.linker,
                 ));
+                if decl.fuzzer && opts.profile.fuzzer != Some(true) {
+                    args.push("--fuzzer".to_owned());
+                }
                 add_token_reuse_report(&mut args, &out, opts.token_reuse_remarks);
                 args.extend(polyffi_args(bake));
                 args.extend(externs.iter().cloned());

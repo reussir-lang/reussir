@@ -261,6 +261,24 @@ pub(crate) struct Cli {
     #[arg(long = "sanitizer", value_enum)]
     pub(crate) sanitizer: Vec<SanitizerCli>,
 
+    /// Instrument the emitted LLVM IR with SanitizerCoverage (repeatable or
+    /// comma-separated): normal variants (`func`, `bb`, `edge`,
+    /// `trace-pc-guard`, `inline-8bit-counters`, `inline-bool-flag`,
+    /// `trace-pc`, `pc-table`, `trace-cmp`, `trace-div`, `trace-gep`,
+    /// `indirect-calls`, `stack-depth`, `no-prune`, `trace-loads`,
+    /// `trace-stores`, `control-flow`, `opt-for-fuzzing`) or the `fuzzer`
+    /// preset (pre-optimization `optforfuzzing` + `no-builtin-*` attributes
+    /// and post-optimization `edge`, `inline-8bit-counters`, `pc-table`,
+    /// `trace-cmp`, `indirect-calls`, `stack-depth`).
+    #[arg(long = "sancov", value_name = "OPTION")]
+    pub(crate) sancov: Vec<String>,
+
+    /// Instrument for libFuzzer (`--sancov fuzzer`), and when emitting an
+    /// `executable`, link the `reussir-fuzzer` harness around the program's
+    /// `reussir_fuzz_init` entry point instead of `#[main]`.
+    #[arg(long = "fuzzer")]
+    pub(crate) fuzzer: bool,
+
     /// Emit DWARF debug info (source locations, function/variable debug types).
     #[arg(short = 'g', long = "debug")]
     pub(crate) debug: bool,
