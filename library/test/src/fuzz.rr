@@ -11,10 +11,10 @@
 //! extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
 //! ```
 //!
-//! During `reussir_fuzz_init`, `test::fuzz` derives the [`SuiteSpec`],
-//! serializes it to bytes, and registers the `TestTree` handle, reference-count
-//! hooks, runner trampoline (`reussir_fuzz_run`), and serialized spec with
-//! `reussir-fuzzer`.
+//! During `reussir_fuzz_init`, `test::fuzz` prepares indexed dispatch and
+//! derives the [`SuiteSpec`]. It registers the prepared suite handle,
+//! reference-count hooks, runner trampoline (`reussir_fuzz_run`), and
+//! serialized spec with `reussir-fuzzer`.
 
 import std::collections::cow::vec::RawVec;
 import std::collections::cow::vec::Vec;
