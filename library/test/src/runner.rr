@@ -1,0 +1,371 @@
+//! Running a test tree and reporting in the style of Haskell's hspec.
+//!
+//! ```text
+//! #[main]
+//! pub fn main() {
+//!     test::runner::run_main(spec())
+//! }
+//! ```
+//!
+//! `run_main` reads the command line (see `test::cli`) to select cases,
+//! list them, or print help. For each selected case, the runner derives its
+//! [`CaseSpec`](test::spec::CaseSpec), generates `Vec<u8>` inputs according
+//! to that specification (once for unit cases, `Config::iterations` times
+//! for domain-driven fuzz cases), and feeds those byte buffers into
+//! [`Case::run_bytes`](test::tree::Case::run_bytes).
+//!
+//! Failures are numbered and listed at the end with their paths, any
+//! decoded counterexample input, assertion diagnostics, and the `--match`
+//! option that reruns them:
+//!
+//! ```text
+//! list
+//!   ✔ reverse
+//!   ✘ len FAILED [1]
+//!
+//! Failures:
+//!
+//!   1) list / len
+//!        expected: 1
+//!         but got: 2
+//!        To rerun use: --match list/len
+//!
+//! 2 examples, 1 failure
+//! ```
+
+import std::collections::cow::vec::Vec;
+import std::collections::pure::list::List;
+import std::console::Ansi;
+import std::console::Color;
+import std::console::ColorChoice;
+import std::format::Display;
+import std::format::Format;
+import std::format::Options;
+import std::format::join;
+import std::random::RandomState;
+import std::random::Rng;
+import std::random::Xoshiro256pp;
+import std::text::Text;
+import test::cli::Command;
+import test::cli::format_path;
+import test::spec::CaseSpec;
+import test::spec::ValueSpec;
+import test::tree::Case;
+import test::tree::CaseResult;
+import test::tree::TestTree;
+
+/// How a run executes and renders its report.
+pub struct [value] Config {
+    pub color: ColorChoice,
+    pub width: u64,
+    pub iterations: u64,
+    pub seed: u64
+}
+
+impl Config {
+    pub fn default() -> Self {
+        let seed = std::random::entropy64().unwrap_or(0x9e3779b97f4a7c15);
+        Config {
+            color: ColorChoice::Auto,
+            width: 80,
+            iterations: 64,
+            seed: seed
+        }
+    }
+
+    /// Overrides the PRNG seed used to populate `Vec<u8>` fuzz inputs.
+    pub fn with_seed(self: Self, seed: u64) -> Self {
+        Config {
+            color: self.color,
+            width: self.width,
+            iterations: self.iterations,
+            seed: seed
+        }
+    }
+
+    /// Overrides the number of random inputs generated per fuzz test case.
+    pub fn with_iterations(self: Self, iterations: u64) -> Self {
+        Config {
+            color: self.color,
+            width: self.width,
+            iterations: if iterations == 0 { 1 } else { iterations },
+            seed: self.seed
+        }
+    }
+}
+
+/// The counts of a finished run.
+pub struct [value] Summary {
+    pub examples: u64,
+    pub failures: u64
+}
+
+impl Summary {
+    pub fn is_success(self: Self) -> bool {
+        self.failures == 0
+    }
+}
+
+/// Runs every case with the default configuration and prints the report.
+pub fn run(tree: TestTree) -> Summary {
+    run_with(tree, Config::default())
+}
+
+/// Runs every case and exits with status 1 if any failed.
+pub fn run_and_exit(tree: TestTree) {
+    if !run(tree).is_success() {
+        std::process::exit(1)
+    }
+}
+
+/// Acts on the process command line: runs the selected cases and exits with
+/// status 1 if any failed, lists their paths, or prints help. A usage error
+/// exits with status 2.
+pub fn run_main(tree: TestTree) {
+    match test::cli::parse(std::env::args()) {
+        Run(selection) => run_and_exit(selection.apply(tree)),
+        ListPaths(selection) => {
+            let config = Config::default();
+            let _ = selection.apply(tree).fold(
+                0,
+                |n: u64, path: List<Text>, unused_case: Case| {
+                    emit(config, format_path(path));
+                    n + 1
+                }
+            );
+        },
+        Help(program) => emit(Config::default(), test::cli::usage(program)),
+        Invalid(program, message) => {
+            let error = text("error: ").append(message)
+                .append(Format::Hardline).append(Format::Hardline)
+                .append(test::cli::usage(program))
+                .append(Format::Hardline);
+            let _ = error.dump_stderr(Options { width: 80, indent: 2 });
+            std::process::exit(2)
+        }
+    }
+}
+
+/// Derives the [`SuiteSpec`](test::spec::SuiteSpec) for `tree`, populates
+/// `Vec<u8>` buffers from each [`CaseSpec`], feeds them into the cases, and
+/// prints the report under `config`.
+pub fn run_with(tree: TestTree, config: Config) -> Summary {
+    let suite_spec = tree.derive_spec();
+    let rng = Rng<Xoshiro256pp>::new_from_seed(config.seed);
+    let state = tree.fold(
+        State {
+            specs: suite_spec.cases,
+            groups: List::Nil,
+            failures: List::Nil,
+            examples: 0,
+            failed: 0
+        },
+        |state: State, path: List<Text>, test: Case| step(config, rng, state, path, test)
+    );
+    report_failures(config, state.failures.reverse());
+    let summary = Summary { examples: state.examples, failures: state.failed };
+    emit(config, Format::Hardline.append(summary_line(summary)));
+    summary
+}
+
+struct Failure {
+    path: List<Text>,
+    counterexample: Format,
+    message: Format
+}
+
+// Tracks the remaining derived `CaseSpec`s, the previous case's ancestor
+// groups (so each group header prints once), and the failures so far.
+struct State {
+    specs: List<CaseSpec>,
+    groups: List<Text>,
+    failures: List<Failure>,
+    examples: u64,
+    failed: u64
+}
+
+fn step<R: RandomState>(
+    config: Config,
+    rng: Rng<R>,
+    state: State,
+    path: List<Text>,
+    test: Case
+) -> State {
+    let (case_spec, next_specs) = match state.specs {
+        Nil => (CaseSpec { path: path, input: test.spec() }, List::Nil),
+        Cons(head, tail) => (head, tail)
+    };
+    let groups = init(path);
+    let depth = groups.len();
+    print_headers(config, groups, common_prefix(state.groups, groups), 0);
+    let name = last(path).fmt();
+    let rounds = if case_spec.input.is_unit() || config.iterations == 0 { 1 } else { config.iterations };
+    match execute_case_rounds(rng, case_spec, test, rounds) {
+        Pass => {
+            emit(config, indent(depth).append(green(text("✔ "))).append(name));
+            State {
+                specs: next_specs,
+                groups: groups,
+                failures: state.failures,
+                examples: state.examples + 1,
+                failed: state.failed
+            }
+        },
+        Fail(counterexample, message) => {
+            let index = state.failed + 1;
+            let marker = text("✘ ").append(name)
+                .append(text(" FAILED [")).append(index.fmt()).append(text("]"));
+            emit(config, indent(depth).append(red(marker)));
+            let failure = Failure {
+                path: path,
+                counterexample: counterexample,
+                message: message
+            };
+            State {
+                specs: next_specs,
+                groups: groups,
+                failures: List::Cons { failure, state.failures },
+                examples: state.examples + 1,
+                failed: index
+            }
+        },
+        MalformedInput => {
+            let index = state.failed + 1;
+            let marker = text("✘ ").append(name)
+                .append(text(" FAILED [")).append(index.fmt()).append(text("]"));
+            emit(config, indent(depth).append(red(marker)));
+            let failure = Failure {
+                path: path,
+                counterexample: Format::Empty,
+                message: text("malformed input buffer for spec: ").append(case_spec.input.fmt())
+            };
+            State {
+                specs: next_specs,
+                groups: groups,
+                failures: List::Cons { failure, state.failures },
+                examples: state.examples + 1,
+                failed: index
+            }
+        }
+    }
+}
+
+fn execute_case_rounds<R: RandomState>(
+    rng: Rng<R>,
+    case_spec: CaseSpec,
+    test: Case,
+    rounds: u64
+) -> CaseResult {
+    let (_, outcome) = while [i = (0 as u64), result = CaseResult::Pass]
+        (i < rounds && is_case_pass(result)) {
+        let input_bytes: Vec<u8> = case_spec.generate(rng);
+        (i + 1, test.run_bytes(input_bytes))
+    };
+    outcome
+}
+
+fn is_case_pass(result: CaseResult) -> bool {
+    match result {
+        Pass => true,
+        _ => false
+    }
+}
+
+// Prints the headers of `groups` from depth `from` on, each indented by its
+// depth.
+fn print_headers(config: Config, groups: List<Text>, from: u64, depth: u64) {
+    if groups.is_cons() {
+        if depth >= from {
+            emit(config, indent(depth).append(bold(groups.head().unwrap_or_panic().fmt())))
+        };
+        print_headers(config, groups.tail(), from, depth + 1)
+    }
+}
+
+fn report_failures(config: Config, failures: List<Failure>) {
+    if failures.is_cons() {
+        emit(config, Format::Hardline.append(text("Failures:")));
+        let _ = failures.fold_left(1, |index: u64, failure: Failure| {
+            let header = text("  ").append(index.fmt()).append(text(") "))
+                .append(show_path(failure.path));
+            let input_line = match failure.counterexample {
+                Empty => Format::Empty,
+                doc => Format::Hardline.append(text("counterexample: ")).append(doc).nest(7)
+            };
+            let body = Format::Hardline.append(failure.message).nest(7);
+            let rerun = Format::Hardline
+                .append(text("To rerun use: --match "))
+                .append(format_path(failure.path))
+                .nest(7);
+            emit(
+                config,
+                Format::Hardline
+                    .append(header)
+                    .append(input_line)
+                    .append(red(body))
+                    .append(rerun)
+            );
+            index + 1
+        });
+    }
+}
+
+fn summary_line(summary: Summary) -> Format {
+    let line = plural(summary.examples, "example")
+        .append(text(", "))
+        .append(plural(summary.failures, "failure"));
+    if summary.is_success() { green(line) } else { red(line) }
+}
+
+fn emit(config: Config, doc: Format) {
+    let options = Options { width: config.width, indent: 2 };
+    let _ = doc.append(Format::Hardline).dump_stdout_with_color(options, config.color);
+}
+
+fn text(s: str) -> Format {
+    Format::Text { Text::from_str(s) }
+}
+
+fn plural(n: u64, word: str) -> Format {
+    let suffix = if n == 1 { Format::Empty } else { text("s") };
+    n.fmt().append(text(" ")).append(text(word)).append(suffix)
+}
+
+fn indent(depth: u64) -> Format {
+    if depth == 0 { Format::Empty } else { text("  ").append(indent(depth - 1)) }
+}
+
+fn show_path(path: List<Text>) -> Format {
+    join(text(" / "), path.map(|name: Text| name.fmt()))
+}
+
+fn green(doc: Format) -> Format { doc.ansi(Ansi::Foreground { Color::Green }) }
+fn red(doc: Format) -> Format { doc.ansi(Ansi::Foreground { Color::Red }) }
+fn bold(doc: Format) -> Format { doc.ansi(Ansi::Bold) }
+
+// All but the last element.
+fn init(path: List<Text>) -> List<Text> {
+    match path {
+        Nil => List::Nil,
+        Cons(head, rest) => {
+            if rest.is_nil() { List::Nil } else { List::Cons { head, init(rest) } }
+        }
+    }
+}
+
+fn last(path: List<Text>) -> Text {
+    match path {
+        Nil => Text::from_str(""),
+        Cons(head, rest) => if rest.is_nil() { head } else { last(rest) }
+    }
+}
+
+fn common_prefix(a: List<Text>, b: List<Text>) -> u64 {
+    match a {
+        Nil => 0,
+        Cons(x, xs) => match b {
+            Nil => 0,
+            Cons(y, ys) => if x == y { 1 + common_prefix(xs, ys) } else { 0 }
+        }
+    }
+}

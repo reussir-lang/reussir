@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod domain;
 pub mod expect;
+pub mod runner;
 pub mod spec;
 pub mod tree;
