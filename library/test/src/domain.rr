@@ -702,14 +702,11 @@ pub fn vec_of<T>(elem: Domain<T>) -> Domain<Vec<T>> {
         spec: ValueSpec::Array { elem.spec(), 0, 16 },
         decode: |spec: ValueSpec, cursor: ByteCursor| {
             let (elem_spec, min_len, max_len) = array_bounds(spec, elem.spec());
-            match cursor.read_u64_le() {
-                None => Option::None,
-                Some(raw_and_c) => {
-                    let (raw_len, c1) = raw_and_c;
-                    let len = project_u64(raw_len, min_len, max_len);
-                    decode_vec_elems(elem_spec, elem_decode, c1, len, Vec::new())
-                }
-            }
+            cursor.read_u64_le().and_then(|raw_and_c: (u64, ByteCursor)| {
+                let (raw_len, c1) = raw_and_c;
+                let len = project_u64(raw_len, min_len, max_len);
+                decode_vec_elems(elem_spec, elem_decode, c1, len, Vec::new())
+            })
         },
         format: |v: Vec<T>| format_vec(v, elem_fmt)
     }
@@ -723,14 +720,11 @@ pub fn list_of<T>(elem: Domain<T>) -> Domain<List<T>> {
         spec: ValueSpec::Array { elem.spec(), 0, 16 },
         decode: |spec: ValueSpec, cursor: ByteCursor| {
             let (elem_spec, min_len, max_len) = array_bounds(spec, elem.spec());
-            match cursor.read_u64_le() {
-                None => Option::None,
-                Some(raw_and_c) => {
-                    let (raw_len, c1) = raw_and_c;
-                    let len = project_u64(raw_len, min_len, max_len);
-                    decode_list_elems(elem_spec, elem_decode, c1, len, List::Nil)
-                }
-            }
+            cursor.read_u64_le().and_then(|raw_and_c: (u64, ByteCursor)| {
+                let (raw_len, c1) = raw_and_c;
+                let len = project_u64(raw_len, min_len, max_len);
+                decode_list_elems(elem_spec, elem_decode, c1, len, List::Nil)
+            })
         },
         format: |items: List<T>| brackets(comma_list(items.map(elem_fmt)))
     }
@@ -745,15 +739,12 @@ pub fn array_of<T>(elem: Domain<T>, default: T) -> Domain<[T; ?]> {
         spec: ValueSpec::Array { elem.spec(), 0, 16 },
         decode: |spec: ValueSpec, cursor: ByteCursor| {
             let (elem_spec, min_len, max_len) = array_bounds(spec, elem.spec());
-            match cursor.read_u64_le() {
-                None => Option::None,
-                Some(raw_and_c) => {
-                    let (raw_len, c1) = raw_and_c;
-                    let len = project_u64(raw_len, min_len, max_len);
-                    let initial = array::splat<[T; ?]>(len, default);
-                    decode_array_elems(elem_spec, elem_decode, c1, 0, len, initial)
-                }
-            }
+            cursor.read_u64_le().and_then(|raw_and_c: (u64, ByteCursor)| {
+                let (raw_len, c1) = raw_and_c;
+                let len = project_u64(raw_len, min_len, max_len);
+                let initial = array::splat<[T; ?]>(len, default);
+                decode_array_elems(elem_spec, elem_decode, c1, 0, len, initial)
+            })
         },
         format: |arr: [T; ?]| format_array(arr, elem_fmt)
     }
@@ -802,16 +793,13 @@ pub fn tuple2<A, B>(a: Domain<A>, b: Domain<B>) -> Domain<(A, B)> {
     Domain {
         spec: spec,
         decode: |unused_spec: ValueSpec, cursor: ByteCursor| {
-            match a.decode(cursor) {
-                None => Option::None,
-                Some(va_and_c) => {
-                    let (va, c1) = va_and_c;
-                    b.decode(c1).map(|vb_and_c: (B, ByteCursor)| {
-                        let (vb, c2) = vb_and_c;
-                        ((va, vb), c2)
-                    })
-                }
-            }
+            a.decode(cursor).and_then(|va_and_c: (A, ByteCursor)| {
+                let (va, c1) = va_and_c;
+                b.decode(c1).map(|vb_and_c: (B, ByteCursor)| {
+                    let (vb, c2) = vb_and_c;
+                    ((va, vb), c2)
+                })
+            })
         },
         format: |pair: (A, B)| {
             let (va, vb) = pair;
@@ -831,22 +819,16 @@ pub fn tuple3<A, B, C>(a: Domain<A>, b: Domain<B>, c: Domain<C>) -> Domain<(A, B
     Domain {
         spec: spec,
         decode: |unused_spec: ValueSpec, cursor: ByteCursor| {
-            match a.decode(cursor) {
-                None => Option::None,
-                Some(va_and_c) => {
-                    let (va, c1) = va_and_c;
-                    match b.decode(c1) {
-                        None => Option::None,
-                        Some(vb_and_c) => {
-                            let (vb, c2) = vb_and_c;
-                            c.decode(c2).map(|vc_and_c: (C, ByteCursor)| {
-                                let (vc, c3) = vc_and_c;
-                                ((va, vb, vc), c3)
-                            })
-                        }
-                    }
-                }
-            }
+            a.decode(cursor).and_then(|va_and_c: (A, ByteCursor)| {
+                let (va, c1) = va_and_c;
+                b.decode(c1).and_then(|vb_and_c: (B, ByteCursor)| {
+                    let (vb, c2) = vb_and_c;
+                    c.decode(c2).map(|vc_and_c: (C, ByteCursor)| {
+                        let (vc, c3) = vc_and_c;
+                        ((va, vb, vc), c3)
+                    })
+                })
+            })
         },
         format: |triple: (A, B, C)| {
             let (va, vb, vc) = triple;
@@ -877,28 +859,19 @@ pub fn tuple4<A, B, C, D>(
     Domain {
         spec: spec,
         decode: |unused_spec: ValueSpec, cursor: ByteCursor| {
-            match a.decode(cursor) {
-                None => Option::None,
-                Some(va_and_c) => {
-                    let (va, c1) = va_and_c;
-                    match b.decode(c1) {
-                        None => Option::None,
-                        Some(vb_and_c) => {
-                            let (vb, c2) = vb_and_c;
-                            match c.decode(c2) {
-                                None => Option::None,
-                                Some(vc_and_c) => {
-                                    let (vc, c3) = vc_and_c;
-                                    d.decode(c3).map(|vd_and_c: (D, ByteCursor)| {
-                                        let (vd, c4) = vd_and_c;
-                                        ((va, vb, vc, vd), c4)
-                                    })
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            a.decode(cursor).and_then(|va_and_c: (A, ByteCursor)| {
+                let (va, c1) = va_and_c;
+                b.decode(c1).and_then(|vb_and_c: (B, ByteCursor)| {
+                    let (vb, c2) = vb_and_c;
+                    c.decode(c2).and_then(|vc_and_c: (C, ByteCursor)| {
+                        let (vc, c3) = vc_and_c;
+                        d.decode(c3).map(|vd_and_c: (D, ByteCursor)| {
+                            let (vd, c4) = vd_and_c;
+                            ((va, vb, vc, vd), c4)
+                        })
+                    })
+                })
+            })
         },
         format: |quad: (A, B, C, D)| {
             let (va, vb, vc, vd) = quad;
@@ -1076,13 +1049,10 @@ fn decode_vec_elems<T>(
     if remaining == 0 {
         Option::Some { (acc, cursor) }
     } else {
-        match elem_decode(elem_spec, cursor) {
-            None => Option::None,
-            Some(val_and_c) => {
-                let (val, next_c) = val_and_c;
-                decode_vec_elems(elem_spec, elem_decode, next_c, remaining - 1, acc.push(val))
-            }
-        }
+        elem_decode(elem_spec, cursor).and_then(|val_and_c: (T, ByteCursor)| {
+            let (val, next_c) = val_and_c;
+            decode_vec_elems(elem_spec, elem_decode, next_c, remaining - 1, acc.push(val))
+        })
     }
 }
 
@@ -1096,19 +1066,16 @@ fn decode_list_elems<T>(
     if remaining == 0 {
         Option::Some { (acc.reverse(), cursor) }
     } else {
-        match elem_decode(elem_spec, cursor) {
-            None => Option::None,
-            Some(val_and_c) => {
-                let (val, next_c) = val_and_c;
-                decode_list_elems(
-                    elem_spec,
-                    elem_decode,
-                    next_c,
-                    remaining - 1,
-                    List::Cons { val, acc }
-                )
-            }
-        }
+        elem_decode(elem_spec, cursor).and_then(|val_and_c: (T, ByteCursor)| {
+            let (val, next_c) = val_and_c;
+            decode_list_elems(
+                elem_spec,
+                elem_decode,
+                next_c,
+                remaining - 1,
+                List::Cons { val, acc }
+            )
+        })
     }
 }
 
@@ -1123,14 +1090,11 @@ fn decode_array_elems<T>(
     if index >= total {
         Option::Some { (acc, cursor) }
     } else {
-        match elem_decode(elem_spec, cursor) {
-            None => Option::None,
-            Some(val_and_c) => {
-                let (val, next_c) = val_and_c;
-                let updated = array::set(acc, index as i64, val);
-                decode_array_elems(elem_spec, elem_decode, next_c, index + 1, total, updated)
-            }
-        }
+        elem_decode(elem_spec, cursor).and_then(|val_and_c: (T, ByteCursor)| {
+            let (val, next_c) = val_and_c;
+            let updated = array::set(acc, index as i64, val);
+            decode_array_elems(elem_spec, elem_decode, next_c, index + 1, total, updated)
+        })
     }
 }
 
