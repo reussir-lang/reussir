@@ -15,6 +15,7 @@ members = [
     "crates/reussir-codegen",
     "crates/reussir-compiler",
     "crates/reussir-repl",
+    "crates/reussir-fuzzer",
     "crates/rene",
     "crates/reussir-trait-dsl",
 ]
@@ -31,6 +32,7 @@ default-members = [
     "crates/reussir-lsp",
     "crates/reussir-vscode-wasm",
     "crates/reussir-core",
+    "crates/reussir-fuzzer",
     "crates/rene",
     "crates/reussir-trait-dsl",
 ]
@@ -174,6 +176,9 @@ libc = "0.2"
 # ratatui's word wrapping).
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 ratatui-textarea = "0.9"
+libfuzzer-sys = "0.4"
+mutatis = { version = "0.5.4", features = ["std"] }
+winnow = "1"
 
 [profile.release]
 lto = "thin"
