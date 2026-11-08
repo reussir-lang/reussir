@@ -1,17 +1,19 @@
-// End-to-end test for a static-library Reussir fuzz suite driven by `reussir-fuzzer`:
-// - The Reussir target is compiled as a `staticlib` (`libtest_fuzz.a`) and
-//   exports `reussir_fuzz_init`.
-// - `Inputs/fuzz_driver.rs` invokes `reussir_fuzzer::fuzz_target!()`, providing
-//   `main`, calling `reussir_fuzz_init` to receive the `TestTree` and
-//   serialized `SuiteSpec`, and feeding mutated `Vec<u8>` buffers back into
-//   `reussir_fuzz_run`.
+// End-to-end test for a Reussir fuzz suite built and linked by `rene` and `rrc`:
+// - `test_fuzz` is declared as `{ kind = 'executable, path = "test_fuzz.rr", fuzzer = true }`
+//   and exports `reussir_fuzz_init`.
+// - `rene` and `rrc --emit executable --fuzzer` instrument the target and its
+//   dependencies with SanitizerCoverage and link the generated `reussir-fuzzer`
+//   (`libfuzzer-sys` + `mutatis`) harness automatically.
 //
 // UNSUPPORTED: windows
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --lib test_fuzz
-// RUN: %python %S/Inputs/link_fuzz_driver.py --rene %rene --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --staticlib %std_rene_build/release/libtest_fuzz.a --driver %S/Inputs/fuzz_driver.rs --library-path %library_path -o %t.fuzz.exe
-// RUN: env REUSSIR_FUZZ_FILTER=arithmetic %t.fuzz.exe -runs=64 -seed=12345
-// RUN: env REUSSIR_FUZZ_FILTER=strings %t.fuzz.exe -runs=64 -seed=12345
-// RUN: %not env REUSSIR_FUZZ_FILTER=broken %t.fuzz.exe -runs=256 -seed=7 2>&1 | %FileCheck %s --check-prefix=FAIL
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin test_fuzz
+// RUN: %rrc %s -o %t.sancov.ll --emit llvm-ir --package-name std_integration --extern std=%std_rene_build/fuzz/deps/std.rri --extern test=%std_rene_build/fuzz/deps/test.rri --sancov trace-pc-guard
+// RUN: %FileCheck %s --check-prefix=SANCOV < %t.sancov.ll
+// RUN: %rrc %s -o %t.fuzzer.ll --emit llvm-ir --package-name std_integration --extern std=%std_rene_build/fuzz/deps/std.rri --extern test=%std_rene_build/fuzz/deps/test.rri --fuzzer
+// RUN: %FileCheck %s --check-prefix=FUZZIR < %t.fuzzer.ll
+// RUN: env REUSSIR_FUZZ_FILTER=arithmetic %std_rene_build/fuzz/test_fuzz -runs=64 -seed=12345 -artifact_prefix=%t.
+// RUN: env REUSSIR_FUZZ_FILTER=strings %std_rene_build/fuzz/test_fuzz -runs=64 -seed=12345 -artifact_prefix=%t.
+// RUN: %not env REUSSIR_FUZZ_FILTER=broken %std_rene_build/fuzz/test_fuzz -runs=256 -seed=7 -artifact_prefix=%t. 2>&1 | %FileCheck %s --check-prefix=FAIL
 
 import std::collections::cow::vec::Vec;
 import std::string::String;
@@ -74,8 +76,15 @@ pub fn fuzz_entry() {
 
 extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
 
+// SANCOV-NOT: optforfuzzing
+// SANCOV: __sanitizer_cov_trace_pc_guard
+// SANCOV-NOT: optforfuzzing
+
+// FUZZIR: __sanitizer_cov_8bit_counters_init
+// FUZZIR: optforfuzzing
+
 // FAIL: Fuzz failure in fuzz_suite / broken / threshold bug
 // FAIL: counterexample:
 // FAIL: expected < 10
-// FAIL: REUSSIR_FUZZ_FILTER="fuzz_suite/broken/threshold bug"
+// FAIL: Reussir fuzz target `fuzz_suite/broken/threshold bug` failed
 

@@ -20,7 +20,9 @@ use std::process::ExitCode;
 use palc::Parser;
 
 use crate::package;
-use crate::{RelocMode, TargetMachine, TargetSpec, emit_to_file, parse_llvm_ir};
+use crate::{
+    RelocMode, SanCovOptions, TargetMachine, TargetSpec, emit_to_file_with_sancov, parse_llvm_ir,
+};
 use reussir_backend::melior::ir::Module;
 use reussir_codegen::source::FileId;
 use reussir_core::in_arena;
@@ -185,6 +187,27 @@ fn run(cli: &Cli) -> Result<bool, String> {
             ));
         }
     }
+    let parsed_sancov = SanCovOptions::from_flags(&cli.sancov)?;
+    if parsed_sancov.is_some() && target <= Stage::MlirLlvm {
+        return Err(format!(
+            "--sancov instruments LLVM IR, but `{target}` stops before the LLVM pass \
+             pipeline; emit `llvm-ir` or a later stage"
+        ));
+    }
+    if cli.fuzzer && target <= Stage::MlirLlvm {
+        return Err(format!(
+            "--fuzzer instruments LLVM IR, but `{target}` stops before the LLVM pass \
+             pipeline; emit `llvm-ir` or a later stage"
+        ));
+    }
+    let sancov = if cli.fuzzer {
+        Some(match parsed_sancov {
+            Some(opts) => opts.with_fuzzer_defaults(),
+            None => SanCovOptions::fuzzer(),
+        })
+    } else {
+        parsed_sancov
+    };
     // Only the text dumps stream to stdout; the file-emitting and linked
     // targets would write a file literally named `-`.
     if output.as_os_str() == "-" && target.output_kind(cli.lto).is_some() {
@@ -276,7 +299,16 @@ fn run(cli: &Cli) -> Result<bool, String> {
             Err(msg) => return Err(msg),
         };
         return backend(
-            cli, &context, produced, target, opt, reloc, &spec, &name, output,
+            cli,
+            &context,
+            produced,
+            target,
+            opt,
+            reloc,
+            sancov.as_ref(),
+            &spec,
+            &name,
+            output,
         );
     }
 
@@ -327,13 +359,20 @@ fn run(cli: &Cli) -> Result<bool, String> {
         // an executable links a single object.
         if target == Stage::Staticlib || target.is_linked() {
             let mut lib = ScratchMembers::new(output, cli.lto)?;
-            emit_to_file(finalized, &machine, opt, kind, &lib.next_member())?;
+            emit_to_file_with_sancov(
+                finalized,
+                &machine,
+                opt,
+                kind,
+                sancov.as_ref(),
+                &lib.next_member(),
+            )?;
             if target == Stage::Staticlib {
                 return lib.finish(output, machine.triple()).map(|()| true);
             }
             return link_product(cli, target, machine.triple(), None, &lib, output).map(|()| true);
         }
-        emit_to_file(finalized, &machine, opt, kind, output)?;
+        emit_to_file_with_sancov(finalized, &machine, opt, kind, sancov.as_ref(), output)?;
         return Ok(true);
     }
 
@@ -354,7 +393,16 @@ fn run(cli: &Cli) -> Result<bool, String> {
         },
     };
     backend(
-        cli, &context, produced, target, opt, reloc, &spec, &name, output,
+        cli,
+        &context,
+        produced,
+        target,
+        opt,
+        reloc,
+        sancov.as_ref(),
+        &spec,
+        &name,
+        output,
     )
 }
 

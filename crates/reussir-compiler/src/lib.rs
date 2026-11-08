@@ -40,6 +40,7 @@ use llvm_sys::target_machine::{
 
 use reussir_backend::llvm::{Finalized, LtoMode, run_backend_llvm_pipeline};
 use reussir_backend::pipeline::OptLevel;
+pub use reussir_backend::sancov::{SanCovOptions, SanCovType};
 
 /// What `reussir-compiler` writes out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -341,6 +342,19 @@ pub fn emit_to_file(
     kind: OutputKind,
     out_path: &Path,
 ) -> Result<(), String> {
+    emit_to_file_with_sancov(finalized, machine, opt, kind, None, out_path)
+}
+
+/// Like [`emit_to_file`], with optional SanitizerCoverage / fuzzing
+/// instrumentation applied around the LLVM optimization pipeline.
+pub fn emit_to_file_with_sancov(
+    finalized: Finalized,
+    machine: &TargetMachine,
+    opt: OptLevel,
+    kind: OutputKind,
+    sancov: Option<&SanCovOptions>,
+    out_path: &Path,
+) -> Result<(), String> {
     let lto = match kind {
         OutputKind::Bitcode(mode) => mode,
         _ => LtoMode::None,
@@ -351,8 +365,16 @@ pub fn emit_to_file(
         // the TargetTransformInfo the cost-driven passes (vectorization)
         // decide against.
         stamp_target(finalized.module, machine);
+        if sancov.is_some_and(|s| s.opt_for_fuzzing) {
+            tracing::debug!("preparing LLVM module for fuzzing");
+            reussir_backend::sancov::prepare_module_for_fuzzing(finalized.module);
+        }
         tracing::debug!(?opt, "running the LLVM pass pipeline");
         run_backend_llvm_pipeline(finalized.module, opt, machine.machine, lto);
+        if let Some(sancov) = sancov {
+            tracing::debug!(?sancov, "running LLVM SanitizerCoveragePass");
+            reussir_backend::sancov::run_sanitizer_coverage_pass(finalized.module, sancov);
+        }
         tracing::debug!("running LLVM codegen");
         let result = emit(finalized.module, machine, kind, out_path);
         LLVMDisposeModule(finalized.module);

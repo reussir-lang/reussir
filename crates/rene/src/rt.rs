@@ -278,6 +278,8 @@ struct RuntimeRecipe<'a> {
     cargo: &'a Path,
     platform_allocator: bool,
     sanitizers: &'a [String],
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    fuzzer: bool,
     rustflags: Option<std::ffi::OsString>,
     encoded_flags: Option<std::ffi::OsString>,
     codegen_environment: std::collections::BTreeMap<String, std::ffi::OsString>,
@@ -291,6 +293,7 @@ pub async fn prepare(
     requested_target: Option<&str>,
     linker: Option<&Path>,
     sanitizers: &[String],
+    fuzzer: bool,
     progress: &indicatif::MultiProgress,
 ) -> Result<RtArtifacts, Error> {
     let toolchain = Toolchain::resolve(requested_target).await?;
@@ -308,6 +311,7 @@ pub async fn prepare(
                 || platform_allocator_forced()
                 || !sanitizers.is_empty(),
             sanitizers,
+            fuzzer,
             rustflags: std::env::var_os("RUSTFLAGS"),
             encoded_flags: std::env::var_os("CARGO_ENCODED_RUSTFLAGS"),
             codegen_environment: std::env::vars_os()
@@ -345,6 +349,7 @@ pub async fn prepare(
                     &src_dir,
                     linker.as_deref(),
                     &sanitizers,
+                    fuzzer,
                 ));
                 bar.finish_and_clear();
                 progress.remove(&bar);
@@ -419,6 +424,7 @@ async fn cargo_build(
     src_dir: &Path,
     linker: Option<&Path>,
     sanitizers: &[String],
+    fuzzer: bool,
 ) -> Result<(PathBuf, PathBuf, Vec<PathBuf>), Error> {
     let mut cmd = compio::process::Command::new(&toolchain.cargo);
     cmd.args([
@@ -429,6 +435,9 @@ async fn cargo_build(
         "--target",
         toolchain.target.as_str(),
     ]);
+    if fuzzer {
+        cmd.args(["-p", "reussir-rt", "-p", "reussir-fuzzer"]);
+    }
     // The bundled mimalloc backend builds C code and is not yet a WebAssembly
     // allocator. WASI supplies the libc malloc family used by the runtime's
     // size-recovering fallback, so select that backend for wasm targets.

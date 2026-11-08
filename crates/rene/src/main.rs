@@ -359,7 +359,12 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), Error> {
     );
     // Resolve the profile before any work: an unknown name is a usage
     // problem, not something to discover after a runtime bake.
-    let profile = manifest::resolve_profile(&loaded.manifest, &args.profile)?;
+    let mut profile = manifest::resolve_profile(&loaded.manifest, &args.profile)?;
+    if profile.fuzzer.is_none()
+        && all_selected_targets_are_fuzzer(&loaded.manifest, &args.bins, &args.libs)
+    {
+        profile.fuzzer = Some(true);
+    }
     let root = resolve_build_dir(location)?;
     // Builds sharing a directory queue on its database lock. Take it before
     // materializing bundled sources so concurrent invocations serialize all
@@ -395,6 +400,8 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), Error> {
         .target
         .as_deref()
         .or(profile.default_target_triple.as_deref());
+    let needs_fuzzer = profile.fuzzer == Some(true)
+        || any_selected_target_is_fuzzer(&loaded.manifest, &args.bins, &args.libs);
     let cache = rene::cache::Cache::open()?;
     let artifacts = rt::prepare(
         &cache,
@@ -402,6 +409,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), Error> {
         requested_target,
         bake_linker.as_deref(),
         &profile.sanitizers,
+        needs_fuzzer,
         &progress,
     )
     .await?;
@@ -586,7 +594,12 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), Error> {
             });
         }
         if args.commands {
-            let profile = manifest::resolve_profile(&loaded.manifest, &args.profile)?;
+            let mut profile = manifest::resolve_profile(&loaded.manifest, &args.profile)?;
+            if profile.fuzzer.is_none()
+                && all_selected_targets_are_fuzzer(&loaded.manifest, &[], &[])
+            {
+                profile.fuzzer = Some(true);
+            }
             let requested_target = args
                 .target
                 .as_deref()
@@ -628,6 +641,53 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), Error> {
 fn pending_clean(root: &std::path::Path) -> Error {
     Error::PendingClean {
         path: root.to_owned(),
+    }
+}
+
+fn any_selected_target_is_fuzzer(
+    manifest: &manifest::Manifest,
+    bins: &[String],
+    libs: &[String],
+) -> bool {
+    if !libs.is_empty() && bins.is_empty() {
+        return false;
+    }
+    if bins.is_empty() {
+        manifest
+            .targets
+            .values()
+            .any(|t| t.kind == manifest::TargetKind::Executable && t.fuzzer)
+    } else {
+        bins.iter().any(|name| {
+            manifest
+                .targets
+                .get(name)
+                .is_some_and(|t| t.kind == manifest::TargetKind::Executable && t.fuzzer)
+        })
+    }
+}
+
+fn all_selected_targets_are_fuzzer(
+    manifest: &manifest::Manifest,
+    bins: &[String],
+    libs: &[String],
+) -> bool {
+    if !libs.is_empty() {
+        return false;
+    }
+    if bins.is_empty() {
+        !manifest.targets.is_empty()
+            && manifest
+                .targets
+                .values()
+                .all(|t| t.kind == manifest::TargetKind::Executable && t.fuzzer)
+    } else {
+        bins.iter().all(|name| {
+            manifest
+                .targets
+                .get(name)
+                .is_some_and(|t| t.kind == manifest::TargetKind::Executable && t.fuzzer)
+        })
     }
 }
 

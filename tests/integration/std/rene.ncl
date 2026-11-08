@@ -8,6 +8,12 @@
     test_utils = { path = "../../../library/test_utils", version = "^0.1" },
     test = { path = "../../../library/test", version = "^0.1" },
   },
+  profiles = {
+    fuzz = {
+      opt = "aggressive",
+      fuzzer = true,
+    },
+  },
   targets = {
     cow_hash = { kind = 'executable, path = "cow_hash.rr" },
     cow_ordered = { kind = 'executable, path = "cow_ordered.rr" },
@@ -27,7 +33,7 @@
     rtqueue = { kind = 'executable, path = "rtqueue.rr" },
     string = { kind = 'executable, path = "string.rr" },
     test_cli = { kind = 'executable, path = "test_cli.rr" },
-    test_fuzz = { kind = 'staticlib, path = "test_fuzz.rr" },
+    test_fuzz = { kind = 'executable, path = "test_fuzz.rr", fuzzer = true },
     test_runner = { kind = 'executable, path = "test_runner.rr" },
     test_tree = { kind = 'executable, path = "test_tree.rr" },
     text_view = { kind = 'executable, path = "text_view.rr" },
