@@ -424,22 +424,62 @@ pub struct SuiteMutator<'a>(pub &'a SuiteSpec);
 
 impl Mutate<SuiteInput> for SuiteMutator<'_> {
     fn mutate(&mut self, c: &mut Candidates<'_>, value: &mut SuiteInput) -> MutatisResult<()> {
-        if self.0.cases.is_empty() {
+        let indices = fuzz_indices(self.0);
+        SelectedSuiteMutator {
+            suite: self.0,
+            indices: &indices,
+        }
+        .mutate(c, value)
+    }
+}
+
+impl Generate<SuiteInput> for SuiteMutator<'_> {
+    fn generate(&mut self, ctx: &mut Context) -> MutatisResult<SuiteInput> {
+        let indices = fuzz_indices(self.0);
+        SelectedSuiteMutator {
+            suite: self.0,
+            indices: &indices,
+        }
+        .generate(ctx)
+    }
+}
+
+fn fuzz_indices(suite: &SuiteSpec) -> Vec<usize> {
+    suite
+        .cases
+        .iter()
+        .enumerate()
+        .filter_map(|(index, case)| (!case.input.is_unit()).then_some(index))
+        .collect()
+}
+
+struct SelectedSuiteMutator<'a> {
+    suite: &'a SuiteSpec,
+    indices: &'a [usize],
+}
+
+impl Mutate<SuiteInput> for SelectedSuiteMutator<'_> {
+    fn mutate(&mut self, c: &mut Candidates<'_>, value: &mut SuiteInput) -> MutatisResult<()> {
+        if self.indices.is_empty() {
             return Ok(());
         }
-        let max_idx = self.0.cases.len() - 1;
-        if value.case_idx > max_idx {
-            value.case_idx %= self.0.cases.len();
+        if !self.indices.contains(&value.case_idx) {
+            return c.mutation(|ctx| {
+                *value = self.generate(ctx)?;
+                Ok(())
+            });
         }
-        let case_spec = &self.0.cases[value.case_idx].input;
-        SpecMutator(case_spec).mutate(c, &mut value.payload)?;
-
-        if !c.shrink() && max_idx > 0 {
-            let suite = self.0;
+        let shrink = c.shrink();
+        c.mutation(|ctx| {
+            let seed = m::u64().generate(ctx)?;
+            Session::new().seed(seed).shrink(shrink).mutate_with(
+                &mut SpecMutator(&self.suite.cases[value.case_idx].input),
+                &mut value.payload,
+            )
+        })?;
+        if !shrink && self.indices.len() > 1 {
             c.mutation(|ctx| {
-                let next_idx = m::mrange(0..=max_idx).generate(ctx)?;
-                value.case_idx = next_idx;
-                value.payload = SpecMutator(&suite.cases[next_idx].input).generate(ctx)?;
+                *value = self.generate(ctx)?;
                 Ok(())
             })?;
         }
@@ -447,28 +487,17 @@ impl Mutate<SuiteInput> for SuiteMutator<'_> {
     }
 }
 
-impl Generate<SuiteInput> for SuiteMutator<'_> {
+impl Generate<SuiteInput> for SelectedSuiteMutator<'_> {
     fn generate(&mut self, ctx: &mut Context) -> MutatisResult<SuiteInput> {
-        if self.0.cases.is_empty() {
+        if self.indices.is_empty() {
             return Ok(SuiteInput {
                 case_idx: 0,
                 payload: FuzzValue::Unit,
             });
         }
-        let non_unit: Vec<usize> = self
-            .0
-            .cases
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, c)| (!c.input.is_unit()).then_some(idx))
-            .collect();
-        let case_idx = if non_unit.is_empty() {
-            m::mrange(0..=self.0.cases.len() - 1).generate(ctx)?
-        } else {
-            let pick = m::mrange(0..=non_unit.len() - 1).generate(ctx)?;
-            non_unit[pick]
-        };
-        let payload = SpecMutator(&self.0.cases[case_idx].input).generate(ctx)?;
+        let pick = m::mrange(0..=self.indices.len() - 1).generate(ctx)?;
+        let case_idx = self.indices[pick];
+        let payload = SpecMutator(&self.suite.cases[case_idx].input).generate(ctx)?;
         Ok(SuiteInput { case_idx, payload })
     }
 }
@@ -657,12 +686,29 @@ impl SuiteSpec {
         seed: u32,
         raw_mutate: Option<RawMutateFn>,
     ) -> usize {
-        if self.cases.is_empty() || max_size == 0 {
+        self.mutate_buffer_selected(data, size, max_size, seed, raw_mutate, &fuzz_indices(self))
+    }
+
+    /// Mutates only eligible cases, preserving their original suite indices.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mutate_buffer_selected(
+        &self,
+        data: &mut [u8],
+        size: usize,
+        max_size: usize,
+        seed: u32,
+        raw_mutate: Option<RawMutateFn>,
+        indices: &[usize],
+    ) -> usize {
+        if indices.is_empty() || max_size == 0 {
             return 0;
         }
 
         let mut session = Session::new().seed(u64::from(seed)).shrink(max_size < size);
-        let mut suite_mutator = SuiteMutator(self);
+        let mut suite_mutator = SelectedSuiteMutator {
+            suite: self,
+            indices,
+        };
 
         let new_bytes = match self.decode_input(&data[..size.min(data.len())]) {
             Some(mut input) => match session.mutate_with(&mut suite_mutator, &mut input) {
@@ -948,5 +994,47 @@ mod generation_length_tests {
             assert!(spec.decode_value(&mut cursor).is_some());
             assert!(cursor.is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod scheduling_tests {
+    use super::*;
+    use crate::spec::CaseSpec;
+
+    #[test]
+    fn case_switching_does_not_depend_on_payload_candidate_count() {
+        let mut counts = Vec::new();
+        for len in [1, 1000] {
+            let suite = SuiteSpec {
+                cases: vec![
+                    CaseSpec {
+                        path: vec!["array".into()],
+                        input: ValueSpec::Array {
+                            elem: Box::new(ValueSpec::Bool),
+                            min_len: len,
+                            max_len: len,
+                        },
+                    },
+                    CaseSpec {
+                        path: vec!["other".into()],
+                        input: ValueSpec::Bool,
+                    },
+                ],
+            };
+            let mut initial = 0u64.to_le_bytes().to_vec();
+            initial.extend_from_slice(&len.to_le_bytes());
+            initial.resize(16 + len as usize, 0);
+            let mut switched = 0;
+            for seed in 0..512 {
+                let mut bytes = vec![0; 2048];
+                bytes[..initial.len()].copy_from_slice(&initial);
+                let size = suite.mutate_buffer(&mut bytes, initial.len(), 2048, seed, None);
+                switched += usize::from(suite.decode_input(&bytes[..size]).unwrap().case_idx == 1);
+            }
+            assert!(switched > 64);
+            counts.push(switched);
+        }
+        assert_eq!(counts[0], counts[1]);
     }
 }

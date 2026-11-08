@@ -20,6 +20,7 @@ pub use libfuzzer_sys;
 pub use mutatis;
 
 pub mod mutator;
+mod selection;
 pub mod spec;
 
 use spec::SuiteSpec;
@@ -95,7 +96,7 @@ pub struct FuzzSession {
     run_fn: RunFuzzFn,
     spec_bytes: Vec<u8>,
     spec: SuiteSpec,
-    filter: Option<String>,
+    selection: selection::CaseSelection,
 }
 
 impl FuzzSession {
@@ -113,6 +114,7 @@ impl FuzzSession {
         let filter = std::env::var("REUSSIR_FUZZ_FILTER")
             .ok()
             .filter(|s| !s.is_empty());
+        let selection = selection::CaseSelection::new(&spec, filter.as_deref());
         Ok(Self {
             tree: reg.tree as *mut c_void,
             clone_fn: reg.clone_fn,
@@ -120,7 +122,7 @@ impl FuzzSession {
             run_fn: reg.run_fn,
             spec_bytes: reg.spec_bytes,
             spec,
-            filter,
+            selection,
         })
     }
 
@@ -136,13 +138,7 @@ impl FuzzSession {
 
     /// Returns whether the case at `case_idx` is enabled under `REUSSIR_FUZZ_FILTER`.
     pub fn selects_case(&self, case_idx: usize) -> bool {
-        let Some(case) = self.spec.cases.get(case_idx) else {
-            return false;
-        };
-        match &self.filter {
-            Some(pat) => case.joined_path().contains(pat),
-            None => true,
-        }
+        self.selection.contains(case_idx)
     }
 
     /// Feeds one suite-level byte buffer into the Reussir test runner (`reussir_fuzz_run`).
@@ -256,9 +252,14 @@ pub fn libfuzzer_custom_mutator(
         let Some(session) = slot.get() else {
             return 0;
         };
-        session
-            .spec()
-            .mutate_buffer(data, size, max_size, seed, Some(raw_mutate))
+        session.spec().mutate_buffer_selected(
+            data,
+            size,
+            max_size,
+            seed,
+            Some(raw_mutate),
+            &session.selection.fuzz,
+        )
     })
 }
 
