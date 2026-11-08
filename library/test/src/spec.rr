@@ -664,53 +664,35 @@ fn decode_value_spec_list(
 
 impl PartialEq for ValueSpec {
     fn eq(self: Self, other: Self) -> bool {
-        match self {
-            Unit => match other { Unit => true, _ => false },
-            Bool => match other { Bool => true, _ => false },
-            Int(w1, min1, max1) => match other {
-                Int(w2, min2, max2) => w1 == w2 && min1 == min2 && max1 == max2,
-                _ => false
-            },
-            UInt(w1, min1, max1) => match other {
-                UInt(w2, min2, max2) => w1 == w2 && min1 == min2 && max1 == max2,
-                _ => false
-            },
-            Float(w1, min1, max1, nan1, inf1) => match other {
-                Float(w2, min2, max2, nan2, inf2) =>
-                    w1 == w2
-                        && f64_to_bits(min1) == f64_to_bits(min2)
-                        && f64_to_bits(max1) == f64_to_bits(max2)
-                        && nan1 == nan2
-                        && inf1 == inf2,
-                _ => false
-            },
-            Char(cs1) => match other {
-                Char(cs2) => cs1 == cs2,
-                _ => false
-            },
-            ValueSpec::String(cs1, min1, max1) => match other {
-                ValueSpec::String(cs2, min2, max2) => cs1 == cs2 && min1 == min2 && max1 == max2,
-                _ => false
-            },
-            Array(elem1, min1, max1) => match other {
-                Array(elem2, min2, max2) => min1 == min2 && max1 == max2 && elem1 == elem2,
-                _ => false
-            },
-            Tuple(items1) => match other {
-                Tuple(items2) => list_eq(items1, items2),
-                _ => false
-            }
+        match (self, other) {
+            (Unit, Unit) => true,
+            (Bool, Bool) => true,
+            (Int(w1, min1, max1), Int(w2, min2, max2)) =>
+                w1 == w2 && min1 == min2 && max1 == max2,
+            (UInt(w1, min1, max1), UInt(w2, min2, max2)) =>
+                w1 == w2 && min1 == min2 && max1 == max2,
+            (Float(w1, min1, max1, nan1, inf1), Float(w2, min2, max2, nan2, inf2)) =>
+                w1 == w2
+                    && f64_to_bits(min1) == f64_to_bits(min2)
+                    && f64_to_bits(max1) == f64_to_bits(max2)
+                    && nan1 == nan2
+                    && inf1 == inf2,
+            (Char(cs1), Char(cs2)) => cs1 == cs2,
+            (ValueSpec::String(cs1, min1, max1), ValueSpec::String(cs2, min2, max2)) =>
+                cs1 == cs2 && min1 == min2 && max1 == max2,
+            (Array(elem1, min1, max1), Array(elem2, min2, max2)) if min1 == min2 && max1 == max2 =>
+                elem1 == elem2,
+            (Tuple(items1), Tuple(items2)) => list_eq(items1, items2),
+            _ => false
         }
     }
 }
 
 fn list_eq<T: PartialEq>(a: List<T>, b: List<T>) -> bool {
-    match a {
-        Nil => b.is_nil(),
-        Cons(x, xs) => match b {
-            Nil => false,
-            Cons(y, ys) => x == y && list_eq(xs, ys)
-        }
+    match (a, b) {
+        (Nil, Nil) => true,
+        (Cons(x, xs), Cons(y, ys)) if x == y => list_eq(xs, ys),
+        _ => false
     }
 }
 
