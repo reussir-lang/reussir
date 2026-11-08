@@ -31,7 +31,7 @@ import test::spec::ValueSpec;
 import test::spec::project_u64;
 
 /// Result of executing a [`Case`] on a single `Vec<u8>` input buffer.
-pub enum CaseResult {
+pub enum [value] CaseResult {
     /// The input decoded cleanly and the assertion passed.
     Pass,
     /// The input decoded to the first [`Format`] (`Format::Empty` for unit
@@ -120,7 +120,7 @@ pub struct TestTree {
 
 /// An entry of a group. Public only because `TestTree`'s private field
 /// names it; trees are built with `TestTree`'s methods.
-pub enum Entry {
+pub enum [value] Entry {
     Case(Text, Case),
     Group(TestTree)
 }
@@ -261,14 +261,8 @@ impl TestTree {
     /// The [`Case`] at `path`, root first.
     pub fn find(self: Self, path: List<Text>) -> Option<Case> {
         match path {
-            Nil => Option::None,
-            Cons(head, rest) => {
-                if head == self.name {
-                    find_entries(self.entries.reverse(), rest)
-                } else {
-                    Option::None
-                }
-            }
+            Cons(head, rest) if head == self.name => find_entries(self.entries.reverse(), rest),
+            _ => Option::None
         }
     }
 
@@ -291,27 +285,23 @@ impl TestTree {
         if total == 0 {
             Option::None
         } else {
-            let cursor = ByteCursor::new(bytes);
-            match cursor.read_u64_le() {
-                None => Option::None,
-                Some(idx_and_c) => {
-                    let (raw_idx, rest) = idx_and_c;
-                    let target = project_u64(raw_idx, 0, total - 1);
-                    let payload = rest.slice_remaining();
-                    let (_, found) = self.fold(
-                        ((0 as u64), Option::None),
-                        |state: (u64, Option<(List<Text>, CaseResult)>), path: List<Text>, test: Case| {
-                            let (i, current) = state;
-                            if i == target {
-                                (i + 1, Option::Some { (path, test.run_bytes(payload)) })
-                            } else {
-                                (i + 1, current)
-                            }
+            ByteCursor::new(bytes).read_u64_le().and_then(|idx_and_c: (u64, ByteCursor)| {
+                let (raw_idx, rest) = idx_and_c;
+                let target = project_u64(raw_idx, 0, total - 1);
+                let payload = rest.slice_remaining();
+                let (_, found) = self.fold(
+                    ((0 as u64), Option::None),
+                    |state: (u64, Option<(List<Text>, CaseResult)>), path: List<Text>, test: Case| {
+                        let (i, current) = state;
+                        if i == target {
+                            (i + 1, Option::Some { (path, test.run_bytes(payload)) })
+                        } else {
+                            (i + 1, current)
                         }
-                    );
-                    found
-                }
-            }
+                    }
+                );
+                found
+            })
         }
     }
 }
@@ -353,13 +343,8 @@ impl Entry {
         keep: (List<Text>, Case) -> bool
     ) -> Option<Self> {
         match self {
-            Case(name, body) => {
-                if keep(List::Cons { name, prefix }.reverse(), body) {
-                    Option::Some { Entry::Case { name, body } }
-                } else {
-                    Option::None
-                }
-            },
+            Case(name, body) if keep(List::Cons { name, prefix }.reverse(), body) =>
+                Option::Some { Entry::Case { name, body } },
             Group(group) => {
                 let kept = group.filter_impl(prefix, keep);
                 if kept.is_empty() {
@@ -367,7 +352,8 @@ impl Entry {
                 } else {
                     Option::Some { Entry::Group { kept } }
                 }
-            }
+            },
+            _ => Option::None
         }
     }
 

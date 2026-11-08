@@ -14,7 +14,7 @@ import std::format::Format;
 import std::text::Text;
 
 /// The result of running one case.
-pub enum Outcome {
+pub enum [value] Outcome {
     Pass,
     Fail(Format)
 }
