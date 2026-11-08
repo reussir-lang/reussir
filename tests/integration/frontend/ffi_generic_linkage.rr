@@ -1,0 +1,13 @@
+// RUN: %rrc %s --package-name linkage --emit llvm-ir -o %t.ll
+// RUN: %FileCheck %s < %t.ll
+// RUN: %rrc %s --package-name linkage --emit mir -o %t.mir
+// RUN: %rrc %t.mir --emit llvm-ir -o %t.roundtrip.ll
+// RUN: %FileCheck %s < %t.roundtrip.ll
+// CHECK-DAG: define weak_odr {{.*}} @_RINvC7linkage8identityxE(
+// CHECK-DAG: define {{.*}} @linkage_drive(
+
+#[ffi(import)]
+pub fn identity<T>(value: T) -> T [{ r#value }];
+
+pub fn drive(x: i64) -> i64 { identity(x) }
+extern "C" trampoline "linkage_drive" = drive;

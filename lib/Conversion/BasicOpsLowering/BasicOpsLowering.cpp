@@ -4032,6 +4032,8 @@ struct ReussirTrampolineOpConversionPattern
     auto nativeTy = mlir::LLVM::LLVMFunctionType::get(llvmRetTy, llvmParamTys);
     auto native = mlir::LLVM::LLVMFuncOp::create(rewriter, op.getLoc(),
                                                  nativeName, nativeTy);
+    if (auto linkage = op->getAttrOfType<mlir::LLVM::LinkageAttr>("llvm.linkage"))
+      native.setLinkageAttr(linkage);
     if (table)
       table->insert(native);
     inheritSanitizerPassthrough(module, native);
