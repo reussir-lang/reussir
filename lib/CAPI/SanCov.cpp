@@ -15,6 +15,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "Reussir-c/SanCov.h"
+#include "Reussir/IR/Coverage.h"
+#include <llvm/Demangle/Demangle.h>
+#include <llvm/IR/Instructions.h>
+#include <mlir/CAPI/IR.h>
 
 #include <llvm-c/Core.h>
 
@@ -24,6 +28,52 @@
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/Instrumentation/SanitizerCoverage.h>
 
+void reussirPrepareCoverage(MlirModule module) {
+  reussir::prepareCoverage(unwrap(module));
+}
+
+void reussirPrepareCoverageLLVM(LLVMModuleRef module,
+                                const MlirStringRef *includes,
+                                size_t includeCount,
+                                const MlirStringRef *excludes,
+                                size_t excludeCount) {
+  auto matches = [](const MlirStringRef *scopes, size_t count,
+                    llvm::StringRef name) {
+    return llvm::any_of(
+        llvm::ArrayRef(scopes, count), [&](MlirStringRef scope) {
+          auto prefix = unwrap(scope);
+          return name == prefix || name.starts_with((prefix + "::").str()) ||
+                 name.starts_with((prefix + "<").str());
+        });
+  };
+  auto &m = *llvm::unwrap(module);
+  for (auto &f : m) {
+    auto origin = f.getFnAttribute("reussir-coverage-origin");
+    auto name = llvm::demangle(
+        (origin.isValid() ? origin.getValueAsString() : f.getName()).str());
+    auto scope = f.getFnAttribute("reussir-coverage");
+    bool enabled = scope.isValid() ? scope.getValueAsString() == "on"
+                                   : (includeCount == 0 ||
+                                      matches(includes, includeCount, name)) &&
+                                         !matches(excludes, excludeCount, name);
+    if (!enabled)
+      f.addFnAttr(llvm::Attribute::NoSanitizeCoverage);
+  }
+  for (auto &f : m) {
+    bool enabled = !f.hasFnAttribute(llvm::Attribute::NoSanitizeCoverage);
+    for (auto &block : f)
+      for (auto &inst : block)
+        if (auto *call = llvm::dyn_cast<llvm::CallBase>(&inst)) {
+          auto *callee = call->getCalledFunction();
+          if (!callee || enabled == callee->hasFnAttribute(
+                                        llvm::Attribute::NoSanitizeCoverage)) {
+            call->removeFnAttr(llvm::Attribute::AlwaysInline);
+            call->addFnAttr(llvm::Attribute::NoInline);
+          }
+        }
+  }
+}
+
 void reussirPrepareModuleForFuzzing(LLVMModuleRef module) {
   static constexpr llvm::StringLiteral kNoBuiltinAttrs[] = {
       "no-builtin-bcmp",   "no-builtin-memcmp",      "no-builtin-strcasecmp",
@@ -32,7 +82,8 @@ void reussirPrepareModuleForFuzzing(LLVMModuleRef module) {
   };
   llvm::Module &m = *llvm::unwrap(module);
   for (llvm::Function &f : m) {
-    if (f.isDeclaration())
+    if (f.isDeclaration() ||
+        f.hasFnAttribute(llvm::Attribute::NoSanitizeCoverage))
       continue;
     f.addFnAttr(llvm::Attribute::OptForFuzzing);
     for (llvm::StringRef attr : kNoBuiltinAttrs)

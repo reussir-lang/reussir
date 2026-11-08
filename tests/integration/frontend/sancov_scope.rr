@@ -1,0 +1,20 @@
+// RUN: %rrc %s --package-name scope --emit llvm-ir --fuzzer --sancov-exclude scope::harness -o %t.ll
+// RUN: %FileCheck %s < %t.ll
+// RUN: %rrc %s --package-name scope --emit mir -o %t.mir
+// RUN: %rrc %t.mir --emit llvm-ir --fuzzer --sancov-exclude scope::harness -o %t.roundtrip.ll
+// RUN: %FileCheck %s < %t.roundtrip.ll
+//
+// CHECK: "reussir-coverage-origin"="_RNvC5scope7harness"
+// CHECK-SAME: "reussir-coverage"="off"
+// CHECK: nosanitize_coverage
+// CHECK: "reussir-coverage-origin"="_RNvC5scope5drive"
+
+pub fn harness(x: i64, body: i64 -> i64) -> i64 {
+    body(if x == 42 { x + 1 } else { x })
+}
+
+pub fn drive(x: i64) -> i64 {
+    harness(x, |value: i64| if value > 1000 { value * 7 } else { value + 9 })
+}
+
+extern "C" trampoline "scope_drive" = drive;

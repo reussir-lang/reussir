@@ -71,6 +71,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "Reussir/IR/Coverage.h"
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/Support/Casting.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
@@ -149,7 +150,8 @@ struct InlineCreateIntoEvalPattern
   matchAndRewrite(ReussirClosureEvalOp eval,
                   mlir::PatternRewriter &rewriter) const override {
     auto create = eval.getClosure().getDefiningOp<ReussirClosureCreateOp>();
-    if (!create || !create.getClosure().hasOneUse() || !create.isInlined())
+    if (!create || !sameCoverageScope(create, eval) ||
+        !create.getClosure().hasOneUse() || !create.isInlined())
       return mlir::failure();
     // A token producer other than a plain `token.alloc` (impossible today —
     // token reuse runs later — but cheap to guard) would leak if orphaned.
@@ -301,6 +303,9 @@ mlir::LogicalResult structuralBetaReduction(ReussirClosureEvalOp eval,
     return mlir::failure();
   }
   if (incs.size() != 1 || !dec || dec.getNumResults() != 0)
+    return mlir::failure();
+
+  if (!sameCoverageScope(create, eval))
     return mlir::failure();
 
   // Per-execution ownership for the rc-typed captures the box stored:

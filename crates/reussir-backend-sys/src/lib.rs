@@ -353,6 +353,14 @@ unsafe extern "C" {
     /// attributes onto every function definition in `module` (call before
     /// `reussirRunBackendLLVMPipeline`).
     pub fn reussirPrepareModuleForFuzzing(module: LLVMModuleRef);
+    pub fn reussirPrepareCoverage(module: MlirModule);
+    pub fn reussirPrepareCoverageLLVM(
+        module: LLVMModuleRef,
+        includes: *const MlirStringRef,
+        include_count: usize,
+        excludes: *const MlirStringRef,
+        exclude_count: usize,
+    );
 
     /// Runs LLVM's `SanitizerCoveragePass` over `module` with `options` (call
     /// after `reussirRunBackendLLVMPipeline`).

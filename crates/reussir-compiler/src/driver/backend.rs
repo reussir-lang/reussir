@@ -176,6 +176,9 @@ pub(crate) fn backend_module(
         transform_scripts: parse_transform_scripts(&cli.transform_script)?,
         ..LoweringOptions::default()
     };
+    if let Some(options) = sancov {
+        reussir_backend::sancov::prepare_module_scope(&mut module, options);
+    }
     let optimize_ffi = !matches!(opt, OptLevel::None);
     tracing::debug!("gathering polymorphic FFI");
     let prepared = LlvmLowering::prepare(

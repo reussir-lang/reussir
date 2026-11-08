@@ -540,8 +540,12 @@ pub fn lower_unit<'c, 'tcx>(
         }
         body.append_operation(trampoline);
     }
-    let polyffi_texture = |text: &str, bindings: &[mir::Symbol]| {
+    let polyffi_texture = |text: &str, bindings: &[mir::Symbol], origin: mir::Symbol| {
         let mut texture = builders::polyffi_texture(context, text, Location::unknown(context));
+        texture.set_attribute(
+            "reussir.coverage_origin",
+            StringAttribute::new(context, program.symbol(origin)).into(),
+        );
         if !bindings.is_empty() {
             let substitutions: Vec<_> = bindings
                 .iter()
@@ -570,7 +574,11 @@ pub fn lower_unit<'c, 'tcx>(
         }
         ffi_symbols.push(program.symbol(import.boundary));
         required_releases.extend(import.release_bindings.iter().copied());
-        body.append_operation(polyffi_texture(&import.texture, &import.release_bindings));
+        body.append_operation(polyffi_texture(
+            &import.texture,
+            &import.release_bindings,
+            import.symbol,
+        ));
     }
     // Standalone foreign textures (opaque drop hooks), anchored by symbol.
     for texture in &program.ffi_textures {
@@ -578,7 +586,11 @@ pub fn lower_unit<'c, 'tcx>(
             continue;
         }
         required_releases.extend(texture.release_bindings.iter().copied());
-        body.append_operation(polyffi_texture(&texture.texture, &texture.release_bindings));
+        body.append_operation(polyffi_texture(
+            &texture.texture,
+            &texture.release_bindings,
+            texture.anchor,
+        ));
     }
     // Reussir-side rc glue the foreign wrappers link against; one pair per
     // shared-record instance that crosses the boundary, in its home unit.

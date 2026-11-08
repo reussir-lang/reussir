@@ -17,6 +17,7 @@
 #ifndef REUSSIR_C_SANCOV_H
 #define REUSSIR_C_SANCOV_H
 
+#include "mlir-c/IR.h"
 #include "llvm-c/TargetMachine.h"
 #include "llvm-c/Types.h"
 
@@ -54,6 +55,13 @@ typedef struct ReussirSanCovOptions {
   int traceStores;
   int collectControlFlow;
 } ReussirSanCovOptions;
+
+void reussirPrepareCoverage(MlirModule module);
+void reussirPrepareCoverageLLVM(LLVMModuleRef module,
+                                const MlirStringRef *includes,
+                                size_t includeCount,
+                                const MlirStringRef *excludes,
+                                size_t excludeCount);
 
 // Stamps fuzzing attributes (`optforfuzzing` and `no-builtin-*` string/memory
 // comparison exclusions, matching clang `-fsanitize=fuzzer-no-link`) onto every

@@ -200,7 +200,7 @@ fn run(cli: &Cli) -> Result<bool, String> {
              pipeline; emit `llvm-ir` or a later stage"
         ));
     }
-    let sancov = if cli.fuzzer {
+    let mut sancov = if cli.fuzzer {
         Some(match parsed_sancov {
             Some(opts) => opts.with_fuzzer_defaults(),
             None => SanCovOptions::fuzzer(),
@@ -208,6 +208,21 @@ fn run(cli: &Cli) -> Result<bool, String> {
     } else {
         parsed_sancov
     };
+    if !cli.sancov_include.is_empty() || !cli.sancov_exclude.is_empty() {
+        let options = sancov
+            .as_mut()
+            .ok_or("coverage scopes require --fuzzer or --sancov")?;
+        if cli
+            .sancov_include
+            .iter()
+            .chain(&cli.sancov_exclude)
+            .any(|s| s.is_empty() || s.contains('\0'))
+        {
+            return Err("coverage scope paths must be nonempty and contain no NUL".into());
+        }
+        options.include.clone_from(&cli.sancov_include);
+        options.exclude.clone_from(&cli.sancov_exclude);
+    }
     // Only the text dumps stream to stdout; the file-emitting and linked
     // targets would write a file literally named `-`.
     if output.as_os_str() == "-" && target.output_kind(cli.lto).is_some() {

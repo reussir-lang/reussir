@@ -11,6 +11,10 @@
 use std::ffi::c_int;
 
 use llvm_sys::prelude::LLVMModuleRef;
+use melior::ir::{
+    Module,
+    attribute::{ArrayAttribute, StringAttribute},
+};
 use reussir_backend_sys as sys;
 
 /// SanitizerCoverage granularity, mirroring [`sys::ReussirSanCovType`].
@@ -24,7 +28,16 @@ pub enum SanCovType {
 }
 
 impl SanCovType {
-    fn to_sys(self) -> sys::ReussirSanCovType {
+    /// The fuzzing default excludes the test package; explicit includes replace it.
+    pub fn excluded_scopes(&self) -> Vec<String> {
+        let mut scopes = self.exclude.clone();
+        if self.opt_for_fuzzing && self.include.is_empty() {
+            scopes.push("test".into());
+        }
+        scopes
+    }
+
+    fn to_sys(&self) -> sys::ReussirSanCovType {
         match self {
             SanCovType::None => sys::ReussirSanCovType::None,
             SanCovType::Function => sys::ReussirSanCovType::Function,
@@ -35,9 +48,13 @@ impl SanCovType {
 }
 
 /// SanitizerCoverage and fuzzing instrumentation options.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct SanCovOptions {
     pub coverage_type: SanCovType,
+    /// Demangled package, module, or function prefixes to instrument.
+    pub include: Vec<String>,
+    /// Demangled prefixes to exclude, taking precedence over includes.
+    pub exclude: Vec<String>,
     pub opt_for_fuzzing: bool,
     pub indirect_calls: bool,
     pub trace_bb: bool,
@@ -66,6 +83,8 @@ impl SanCovOptions {
     pub const fn fuzzer() -> Self {
         Self {
             coverage_type: SanCovType::Edge,
+            include: Vec::new(),
+            exclude: Vec::new(),
             opt_for_fuzzing: true,
             indirect_calls: true,
             trace_bb: false,
@@ -239,7 +258,7 @@ impl SanCovOptions {
             || self.collect_control_flow
     }
 
-    fn to_sys(self) -> sys::ReussirSanCovOptions {
+    fn to_sys(&self) -> sys::ReussirSanCovOptions {
         sys::ReussirSanCovOptions {
             coverage_type: self.coverage_type.to_sys(),
             indirect_calls: c_int::from(self.indirect_calls),
@@ -259,6 +278,55 @@ impl SanCovOptions {
             trace_stores: c_int::from(self.trace_stores),
             collect_control_flow: c_int::from(self.collect_control_flow),
         }
+    }
+}
+
+/// Records the scope in MLIR before inlining and closure lowering.
+pub fn prepare_module_scope(module: &mut Module<'_>, options: &SanCovOptions) {
+    let context = module.context();
+    let excluded = options.excluded_scopes();
+    for (name, scopes) in [
+        ("reussir.coverage.include", &options.include),
+        ("reussir.coverage.exclude", &excluded),
+    ] {
+        let strings: Vec<_> = scopes
+            .iter()
+            .map(|s| StringAttribute::new(context, s).into())
+            .collect();
+        module
+            .as_operation_mut()
+            .set_attribute(name, ArrayAttribute::new(context, &strings).into());
+    }
+    unsafe {
+        sys::reussirPrepareCoverage(module.to_raw());
+    }
+}
+
+/// Applies scope to linked LLVM definitions and preserves cross-scope calls.
+///
+/// # Safety
+/// `module` must be a valid LLVM module.
+pub unsafe fn prepare_llvm_scope(module: LLVMModuleRef, options: &SanCovOptions) {
+    let excluded = options.excluded_scopes();
+    let refs = |scopes: &[String]| {
+        scopes
+            .iter()
+            .map(|s| sys::mlir_sys::MlirStringRef {
+                data: s.as_ptr().cast(),
+                length: s.len(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let includes = refs(&options.include);
+    let excludes = refs(&excluded);
+    unsafe {
+        sys::reussirPrepareCoverageLLVM(
+            module.cast(),
+            includes.as_ptr(),
+            includes.len(),
+            excludes.as_ptr(),
+            excludes.len(),
+        );
     }
 }
 

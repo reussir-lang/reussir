@@ -13,6 +13,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "Reussir/IR/Coverage.h"
 #include <array>
 #include <optional>
 
@@ -4275,6 +4276,7 @@ mlir::LogicalResult emitArrayElementTraversal(
 //===----------------------------------------------------------------------===//
 void inheritSanitizerPassthrough(mlir::ModuleOp moduleOp,
                                  mlir::Operation *func) {
+  excludeCoverage(func);
   auto attrs = moduleOp->getAttrOfType<mlir::ArrayAttr>(kSanitizeAttr);
   if (!attrs || attrs.empty())
     return;
@@ -4849,6 +4851,8 @@ gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
   // of instances (thousands of instances took more than half an hour).
   std::unique_ptr<llvm::Module> finalModule;
   std::optional<llvm::Linker> linker;
+  llvm::StringSet<> coveredForeignFunctions;
+  const bool scoped = moduleOp->hasAttr("reussir.coverage.include");
   for (auto op : opsWithCompiledModule) {
     // Extract bitcode from DenseElementsAttr
     auto compiledModuleOpt = op.getCompiledModule();
@@ -4876,6 +4880,16 @@ gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
       return nullptr;
     }
     std::unique_ptr<llvm::Module> parsedModule = std::move(*moduleOrErr);
+    if (scoped) {
+      bool enabled = coverageEnabled(op);
+      for (auto &function : *parsedModule) {
+        if (function.isDeclaration())
+          continue;
+        function.addFnAttr("reussir-coverage", enabled ? "on" : "off");
+        if (enabled)
+          coveredForeignFunctions.insert(function.getName());
+      }
+    }
     parsedModule->setDataLayout(dataLayout);
     if (retriple)
       parsedModule->setTargetTriple(triple);
@@ -4892,6 +4906,10 @@ gatherCompiledModules(mlir::ModuleOp moduleOp, llvm::LLVMContext &context,
       }
     }
   }
+  // A shared foreign helper remains covered when a selected texture uses it.
+  for (const auto &name : coveredForeignFunctions)
+    if (auto *function = finalModule->getFunction(name.getKey()))
+      function->addFnAttr("reussir-coverage", "on");
   // Erase all the polyffi operations collected in step 1
   for (auto op : opsWithCompiledModule)
     op.erase();

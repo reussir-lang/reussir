@@ -20,6 +20,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "Reussir/IR/Coverage.h"
 #include "Reussir/Transformation/Passes.h"
 
 #include <utility>
@@ -120,6 +121,10 @@ struct DefaultInlinerPass
         },
         config,
         [&](const mlir::Inliner::ResolvedCall &call) {
+          if (!sameCoverageScope(
+                  call.call.getOperation(),
+                  call.targetNode->getCallableRegion()->getParentOp()))
+            return false;
           if (!calleeIsSmall(call.targetNode->getCallableRegion(),
                              maxCalleeOps))
             return false;

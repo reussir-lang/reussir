@@ -365,6 +365,9 @@ pub fn emit_to_file_with_sancov(
         // the TargetTransformInfo the cost-driven passes (vectorization)
         // decide against.
         stamp_target(finalized.module, machine);
+        if let Some(options) = sancov {
+            reussir_backend::sancov::prepare_llvm_scope(finalized.module, options);
+        }
         if sancov.is_some_and(|s| s.opt_for_fuzzing) {
             tracing::debug!("preparing LLVM module for fuzzing");
             reussir_backend::sancov::prepare_module_for_fuzzing(finalized.module);

@@ -273,6 +273,15 @@ pub(crate) struct Cli {
     #[arg(long = "sancov", value_name = "OPTION")]
     pub(crate) sancov: Vec<String>,
 
+    /// Instrument only these demangled package, module, or function prefixes
+    /// (repeatable). Explicit includes replace the default test-package exclusion.
+    #[arg(long = "sancov-include", value_name = "PATH")]
+    pub(crate) sancov_include: Vec<String>,
+
+    /// Exclude these demangled prefixes from coverage (repeatable).
+    #[arg(long = "sancov-exclude", value_name = "PATH")]
+    pub(crate) sancov_exclude: Vec<String>,
+
     /// Instrument for libFuzzer (`--sancov fuzzer`), and when emitting an
     /// `executable`, link the `reussir-fuzzer` harness around the program's
     /// `reussir_fuzz_init` entry point instead of `#[main]`.

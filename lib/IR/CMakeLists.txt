@@ -8,6 +8,7 @@ add_mlir_dialect_library(MLIRReussir
     ReussirOpsIncGen
   LINK_COMPONENTS
     Core
+    Demangle
   LINK_LIBS PUBLIC
     ${dialect_libs}
     # The dialect's LLVMTranslationDialectInterface (ReussirInterfaces.cpp)
