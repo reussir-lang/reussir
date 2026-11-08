@@ -4,11 +4,13 @@ add_mlir_library(MLIRReussirAnalysis
   BorrowAnalysis.cpp
   EquivalenceAnalysis.cpp
   PjrtDonationAnalysis.cpp
+  TokenCompatibility.cpp
   LINK_LIBS PUBLIC
     immer
     MLIRAnalysis
     MLIRIR
     MLIRSupport
+    MLIRValueBoundsOpInterface
     ${dialect_libs}
 )
 
