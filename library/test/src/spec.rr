@@ -487,27 +487,16 @@ impl ValueSpec {
 
     /// Reconstructs a [`ValueSpec`] from bytes produced by [`ValueSpec::to_bytes`].
     pub fn from_bytes(bytes: Vec<u8>) -> Option<Self> {
-        let cursor = ByteCursor::new(bytes);
-        match read_magic(cursor, 0x52, 0x56, 0x53, 0x50) {
-            None => Option::None,
-            Some(cursor) => match cursor.read_u8() {
-                None => Option::None,
-                Some(ver_and_cursor) => {
-                    let (version, cursor) = ver_and_cursor;
-                    if version != 1 {
-                        Option::None
-                    } else {
-                        match decode_value_spec(cursor) {
-                            None => Option::None,
-                            Some(res) => {
-                                let (spec, rest) = res;
-                                if rest.is_eof() { Option::Some { spec } } else { Option::None }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        read_magic(ByteCursor::new(bytes), 0x52, 0x56, 0x53, 0x50)
+            .and_then(|cursor: ByteCursor| cursor.read_u8())
+            .and_then(|ver_and_cursor: (u8, ByteCursor)| {
+                let (version, cursor) = ver_and_cursor;
+                if version != 1 { Option::None } else { decode_value_spec(cursor) }
+            })
+            .and_then(|res: (ValueSpec, ByteCursor)| {
+                let (spec, rest) = res;
+                if rest.is_eof() { Option::Some { spec } } else { Option::None }
+            })
     }
 
     fn encode_spec(self: Self, out: Vec<u8>) -> Vec<u8> {
@@ -546,165 +535,116 @@ impl ValueSpec {
 }
 
 fn decode_value_spec(cursor: ByteCursor) -> Option<(ValueSpec, ByteCursor)> {
-    match cursor.read_u8() {
-        None => Option::None,
-        Some(tag_and_cursor) => {
-            let (tag, cursor) = tag_and_cursor;
-            match tag {
-                0 => Option::Some { (ValueSpec::Unit, cursor) },
-                1 => Option::Some { (ValueSpec::Bool, cursor) },
-                2 => match cursor.read_u8() {
-                    None => Option::None,
-                    Some(w_and_c) => {
-                        let (w_tag, c1) = w_and_c;
-                        match IntWidth::from_tag(w_tag) {
-                            None => Option::None,
-                            Some(width) => match c1.read_u64_le() {
-                                None => Option::None,
-                                Some(min_and_c) => {
-                                    let (min_u, c2) = min_and_c;
-                                    match c2.read_u64_le() {
-                                        None => Option::None,
-                                        Some(max_and_c) => {
-                                            let (max_u, c3) = max_and_c;
-                                            Option::Some { (ValueSpec::Int { width, min_u as i64, max_u as i64 }, c3) }
-                                        }
+    cursor.read_u8().and_then(|tag_and_cursor: (u8, ByteCursor)| {
+        let (tag, cursor) = tag_and_cursor;
+        match tag {
+            0 => Option::Some { (ValueSpec::Unit, cursor) },
+            1 => Option::Some { (ValueSpec::Bool, cursor) },
+            2 => cursor.read_u8()
+                .and_then(|w_and_c: (u8, ByteCursor)| {
+                    let (w_tag, c1) = w_and_c;
+                    IntWidth::from_tag(w_tag).map(|width: IntWidth| (width, c1))
+                })
+                .and_then(|w_and_c: (IntWidth, ByteCursor)| {
+                    let (width, c1) = w_and_c;
+                    c1.read_u64_le().and_then(|min_and_c: (u64, ByteCursor)| {
+                        let (min_u, c2) = min_and_c;
+                        c2.read_u64_le().map(|max_and_c: (u64, ByteCursor)| {
+                            let (max_u, c3) = max_and_c;
+                            (ValueSpec::Int { width, min_u as i64, max_u as i64 }, c3)
+                        })
+                    })
+                }),
+            3 => cursor.read_u8()
+                .and_then(|w_and_c: (u8, ByteCursor)| {
+                    let (w_tag, c1) = w_and_c;
+                    IntWidth::from_tag(w_tag).map(|width: IntWidth| (width, c1))
+                })
+                .and_then(|w_and_c: (IntWidth, ByteCursor)| {
+                    let (width, c1) = w_and_c;
+                    c1.read_u64_le().and_then(|min_and_c: (u64, ByteCursor)| {
+                        let (min_u, c2) = min_and_c;
+                        c2.read_u64_le().map(|max_and_c: (u64, ByteCursor)| {
+                            let (max_u, c3) = max_and_c;
+                            (ValueSpec::UInt { width, min_u, max_u }, c3)
+                        })
+                    })
+                }),
+            4 => cursor.read_u8()
+                .and_then(|w_and_c: (u8, ByteCursor)| {
+                    let (w_tag, c1) = w_and_c;
+                    FloatWidth::from_tag(w_tag).map(|width: FloatWidth| (width, c1))
+                })
+                .and_then(|w_and_c: (FloatWidth, ByteCursor)| {
+                    let (width, c1) = w_and_c;
+                    c1.read_u64_le().and_then(|min_and_c: (u64, ByteCursor)| {
+                        let (min_bits, c2) = min_and_c;
+                        c2.read_u64_le().and_then(|max_and_c: (u64, ByteCursor)| {
+                            let (max_bits, c3) = max_and_c;
+                            c3.read_u8().and_then(|nan_and_c: (u8, ByteCursor)| {
+                                let (nan_flag, c4) = nan_and_c;
+                                c4.read_u8().and_then(|inf_and_c: (u8, ByteCursor)| {
+                                    let (inf_flag, c5) = inf_and_c;
+                                    if nan_flag > 1 || inf_flag > 1 {
+                                        Option::None
+                                    } else {
+                                        Option::Some { (
+                                            ValueSpec::Float {
+                                                width,
+                                                f64_from_bits(min_bits),
+                                                f64_from_bits(max_bits),
+                                                nan_flag == 1,
+                                                inf_flag == 1
+                                            },
+                                            c5
+                                        ) }
                                     }
-                                }
-                            }
-                        }
-                    }
-                },
-                3 => match cursor.read_u8() {
-                    None => Option::None,
-                    Some(w_and_c) => {
-                        let (w_tag, c1) = w_and_c;
-                        match IntWidth::from_tag(w_tag) {
-                            None => Option::None,
-                            Some(width) => match c1.read_u64_le() {
-                                None => Option::None,
-                                Some(min_and_c) => {
-                                    let (min_u, c2) = min_and_c;
-                                    match c2.read_u64_le() {
-                                        None => Option::None,
-                                        Some(max_and_c) => {
-                                            let (max_u, c3) = max_and_c;
-                                            Option::Some { (ValueSpec::UInt { width, min_u, max_u }, c3) }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                4 => match cursor.read_u8() {
-                    None => Option::None,
-                    Some(w_and_c) => {
-                        let (w_tag, c1) = w_and_c;
-                        match FloatWidth::from_tag(w_tag) {
-                            None => Option::None,
-                            Some(width) => match c1.read_u64_le() {
-                                None => Option::None,
-                                Some(min_and_c) => {
-                                    let (min_bits, c2) = min_and_c;
-                                    match c2.read_u64_le() {
-                                        None => Option::None,
-                                        Some(max_and_c) => {
-                                            let (max_bits, c3) = max_and_c;
-                                            match c3.read_u8() {
-                                                None => Option::None,
-                                                Some(nan_and_c) => {
-                                                    let (nan_flag, c4) = nan_and_c;
-                                                    match c4.read_u8() {
-                                                        None => Option::None,
-                                                        Some(inf_and_c) => {
-                                                            let (inf_flag, c5) = inf_and_c;
-                                                            if nan_flag > 1 || inf_flag > 1 {
-                                                                Option::None
-                                                            } else {
-                                                                Option::Some { (
-                                                                    ValueSpec::Float {
-                                                                        width,
-                                                                        f64_from_bits(min_bits),
-                                                                        f64_from_bits(max_bits),
-                                                                        nan_flag == 1,
-                                                                        inf_flag == 1
-                                                                    },
-                                                                    c5
-                                                                ) }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                5 => match cursor.read_u8() {
-                    None => Option::None,
-                    Some(cs_and_c) => {
-                        let (cs_tag, c1) = cs_and_c;
-                        Charset::from_tag(cs_tag).map(|cs: Charset| (ValueSpec::Char { cs }, c1))
-                    }
-                },
-                6 => match cursor.read_u8() {
-                    None => Option::None,
-                    Some(cs_and_c) => {
-                        let (cs_tag, c1) = cs_and_c;
-                        match Charset::from_tag(cs_tag) {
-                            None => Option::None,
-                            Some(cs) => match c1.read_u64_le() {
-                                None => Option::None,
-                                Some(min_and_c) => {
-                                    let (min_len, c2) = min_and_c;
-                                    match c2.read_u64_le() {
-                                        None => Option::None,
-                                        Some(max_and_c) => {
-                                            let (max_len, c3) = max_and_c;
-                                            Option::Some { (ValueSpec::String { cs, min_len, max_len }, c3) }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                7 => match cursor.read_u64_le() {
-                    None => Option::None,
-                    Some(min_and_c) => {
-                        let (min_len, c1) = min_and_c;
-                        match c1.read_u64_le() {
-                            None => Option::None,
-                            Some(max_and_c) => {
-                                let (max_len, c2) = max_and_c;
-                                decode_value_spec(c2).map(|elem_and_c: (ValueSpec, ByteCursor)| {
-                                    let (elem, c3) = elem_and_c;
-                                    (ValueSpec::Array { elem, min_len, max_len }, c3)
                                 })
-                            }
-                        }
+                            })
+                        })
+                    })
+                }),
+            5 => cursor.read_u8().and_then(|cs_and_c: (u8, ByteCursor)| {
+                let (cs_tag, c1) = cs_and_c;
+                Charset::from_tag(cs_tag).map(|cs: Charset| (ValueSpec::Char { cs }, c1))
+            }),
+            6 => cursor.read_u8()
+                .and_then(|cs_and_c: (u8, ByteCursor)| {
+                    let (cs_tag, c1) = cs_and_c;
+                    Charset::from_tag(cs_tag).map(|cs: Charset| (cs, c1))
+                })
+                .and_then(|cs_and_c: (Charset, ByteCursor)| {
+                    let (cs, c1) = cs_and_c;
+                    c1.read_u64_le().and_then(|min_and_c: (u64, ByteCursor)| {
+                        let (min_len, c2) = min_and_c;
+                        c2.read_u64_le().map(|max_and_c: (u64, ByteCursor)| {
+                            let (max_len, c3) = max_and_c;
+                            (ValueSpec::String { cs, min_len, max_len }, c3)
+                        })
+                    })
+                }),
+            7 => cursor.read_u64_le().and_then(|min_and_c: (u64, ByteCursor)| {
+                let (min_len, c1) = min_and_c;
+                c1.read_u64_le().and_then(|max_and_c: (u64, ByteCursor)| {
+                    let (max_len, c2) = max_and_c;
+                    decode_value_spec(c2).map(|elem_and_c: (ValueSpec, ByteCursor)| {
+                        let (elem, c3) = elem_and_c;
+                        (ValueSpec::Array { elem, min_len, max_len }, c3)
+                    })
+                })
+            }),
+            8 => cursor.read_u64_le().and_then(|arity_and_c: (u64, ByteCursor)| {
+                let (arity, c1) = arity_and_c;
+                decode_value_spec_list(c1, arity, List::Nil).map(
+                    |items_and_c: (List<ValueSpec>, ByteCursor)| {
+                        let (items, c2) = items_and_c;
+                        (ValueSpec::Tuple { items }, c2)
                     }
-                },
-                8 => match cursor.read_u64_le() {
-                    None => Option::None,
-                    Some(arity_and_c) => {
-                        let (arity, c1) = arity_and_c;
-                        decode_value_spec_list(c1, arity, List::Nil).map(
-                            |items_and_c: (List<ValueSpec>, ByteCursor)| {
-                                let (items, c2) = items_and_c;
-                                (ValueSpec::Tuple { items }, c2)
-                            }
-                        )
-                    }
-                },
-                _ => Option::None
-            }
+                )
+            }),
+            _ => Option::None
         }
-    }
+    })
 }
 
 fn decode_value_spec_list(
@@ -715,13 +655,10 @@ fn decode_value_spec_list(
     if remaining == 0 {
         Option::Some { (acc.reverse(), cursor) }
     } else {
-        match decode_value_spec(cursor) {
-            None => Option::None,
-            Some(item_and_c) => {
-                let (item, next_cursor) = item_and_c;
-                decode_value_spec_list(next_cursor, remaining - 1, List::Cons { item, acc })
-            }
-        }
+        decode_value_spec(cursor).and_then(|item_and_c: (ValueSpec, ByteCursor)| {
+            let (item, next_cursor) = item_and_c;
+            decode_value_spec_list(next_cursor, remaining - 1, List::Cons { item, acc })
+        })
     }
 }
 
@@ -893,23 +830,18 @@ impl ByteCursor {
     /// Reads a length-prefixed UTF-8 string and validates that every byte
     /// sequence is well-formed UTF-8.
     fn read_exact_utf8(self: Self, acc: List<Text>) -> Option<(List<Text>, Self)> {
-        match self.read_u64_le() {
-            None => Option::None,
-            Some(len_and_c) => {
-                let (byte_len, c1) = len_and_c;
-                if c1.remaining() < byte_len {
-                    Option::None
-                } else {
-                    match decode_utf8_range(c1.bytes, c1.offset, c1.offset + byte_len, String::new()) {
-                        None => Option::None,
-                        Some(s) => Option::Some { (
-                            List::Cons { Text::from_string(s), acc },
-                            ByteCursor { bytes: c1.bytes, offset: c1.offset + byte_len }
-                        ) }
-                    }
-                }
+        self.read_u64_le().and_then(|len_and_c: (u64, Self)| {
+            let (byte_len, c1) = len_and_c;
+            if c1.remaining() < byte_len {
+                Option::None
+            } else {
+                decode_utf8_range(c1.bytes, c1.offset, c1.offset + byte_len, String::new())
+                    .map(|s: String| (
+                        List::Cons { Text::from_string(s), acc },
+                        ByteCursor { bytes: c1.bytes, offset: c1.offset + byte_len }
+                    ))
             }
-        }
+        })
     }
 }
 
