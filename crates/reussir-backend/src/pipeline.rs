@@ -456,7 +456,7 @@ pub fn run_lowering_pipeline(
             // closure bodies detaches the code from the closure abstraction
             // the programmer wrote, which hurts debuggability.
             if options.opt == OptLevel::Aggressive => {
-                func: sys::reussirCreateClosureBetaReductionPass();
+                module: sys::reussirCreateClosureBetaReductionPass();
             }
             // Drop the private functions nothing calls any more: the ones
             // the inliner inlined everywhere, and originals whose calls all

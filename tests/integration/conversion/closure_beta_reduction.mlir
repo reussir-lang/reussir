@@ -1,5 +1,5 @@
 // RUN: %reussir-opt %s \
-// RUN:   --pass-pipeline='builtin.module(func.func(reussir-closure-beta-reduction))' \
+// RUN:   --pass-pipeline='builtin.module(reussir-closure-beta-reduction)' \
 // RUN: | %FileCheck %s
 
 // Closure beta reduction. The pass walks each eval's operand up the def-use
