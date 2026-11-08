@@ -1,3 +1,4 @@
+import hashlib
 import lit.formats
 import os
 import sys
@@ -82,6 +83,26 @@ if os.environ.get('REUSSIR_LIBRARY_PATH_OVERRIDE'):
     # rrc discovers the polyffi libdir through this env when the RUN line
     # passes no explicit --polyffi-libdir.
     config.environment['REUSSIR_RUSTC_DEPS'] = os.environ['REUSSIR_LIBRARY_PATH_OVERRIDE']
+
+# The polyffi bitcode cache keys on library directory paths, but the build
+# tree rebuilds the runtime in place. Reach it through a path named by the
+# runtime rlib's digest, so a rebuilt runtime never hits stale bitcode.
+def _content_addressed_deps(deps):
+    rlib = os.path.join(deps, 'libreussir_rt.rlib')
+    if not os.path.isfile(rlib):
+        return deps
+    with open(rlib, 'rb') as f:
+        digest = hashlib.file_digest(f, 'blake2b').hexdigest()[:32]
+    link = os.path.join(config.test_output_root, 'polyffi-deps-' + digest)
+    try:
+        os.symlink(deps, link, target_is_directory=True)
+    except FileExistsError:
+        pass
+    return link
+
+if config.environment.get('REUSSIR_RUSTC_DEPS'):
+    config.environment['REUSSIR_RUSTC_DEPS'] = _content_addressed_deps(
+        config.environment['REUSSIR_RUSTC_DEPS'])
 
 # WINEPATH rides along for the Windows cross runs: binfmt-launched PE
 # binaries resolve the conda runtime DLLs through it.
