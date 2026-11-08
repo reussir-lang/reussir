@@ -1,0 +1,419 @@
+//! FuzzTest-style input domain combinators.
+//!
+//! A [`Domain<T>`] pairs a serializable [`ValueSpec`] with a byte-stream
+//! decoder and a counterexample formatter. Constraint methods such as
+//! [`Domain::in_range`], [`Domain::positive`], [`Domain::non_empty`], and
+//! [`Domain::with_len_range`] refine the underlying [`ValueSpec`] directly,
+//! so both the derived [`SuiteSpec`](test::spec::SuiteSpec) and the runtime
+//! decoder stay in lockstep:
+//!
+//! ```text
+//! let tree = TestTree::group("math")
+//!     .with_fuzz(
+//!         "bounded sum",
+//!         domain::tuple2(
+//!             domain::i64().in_range(-100, 100),
+//!             domain::i64().non_negative().at_most(50)
+//!         ),
+//!         |pair: (i64, i64)| {
+//!             let (a, b) = pair;
+//!             expect(a + b >= -100 && a + b <= 150, "within bounds")
+//!         }
+//!     );
+//! ```
+
+import core::intrinsic::array;
+import std::collections::cow::vec::Vec;
+import std::collections::pure::list::List;
+import std::format::Display;
+import std::format::Format;
+import std::format::brackets;
+import std::format::comma_list;
+import std::format::parens;
+import std::option::Option;
+import std::random::RandomState;
+import std::random::Rng;
+import std::string::String;
+import std::text::Text;
+import test::spec::ByteCursor;
+import test::spec::Charset;
+import test::spec::FloatWidth;
+import test::spec::IntWidth;
+import test::spec::ValueSpec;
+import test::spec::decode_utf8_range;
+import test::spec::f32_from_bits;
+import test::spec::f64_from_bits;
+import test::spec::format_f32;
+import test::spec::format_f64;
+import test::spec::project_f64;
+import test::spec::project_i64;
+import test::spec::project_u64;
+
+/// A typed input domain backed by a [`ValueSpec`].
+pub struct Domain<T> {
+    spec: ValueSpec,
+    decode: (ValueSpec, ByteCursor) -> Option<(T, ByteCursor)>,
+    format: T -> Format
+}
+
+impl<T> Domain<T> {
+    /// Creates a domain from its specification, decoder, and formatter.
+    pub fn new(
+        spec: ValueSpec,
+        decode: (ValueSpec, ByteCursor) -> Option<(T, ByteCursor)>,
+        format: T -> Format
+    ) -> Self {
+        Domain { spec: spec, decode: decode, format: format }
+    }
+
+    /// Returns the input specification of this domain.
+    pub fn spec(self: Self) -> ValueSpec {
+        self.spec
+    }
+
+    /// Decodes a value from `cursor`, returning the value and advanced cursor.
+    pub fn decode(self: Self, cursor: ByteCursor) -> Option<(T, ByteCursor)> {
+        (self.decode)(self.spec, cursor)
+    }
+
+    /// Decodes a value from a complete `Vec<u8>` buffer.
+    pub fn decode_bytes(self: Self, bytes: Vec<u8>) -> Option<T> {
+        match self.decode(ByteCursor::new(bytes)) {
+            None => Option::None,
+            Some(val_and_c) => {
+                let (val, _) = val_and_c;
+                Option::Some { val }
+            }
+        }
+    }
+
+    /// Formats a materialized value for failure counterexamples.
+    pub fn format(self: Self, value: T) -> Format {
+        (self.format)(value)
+    }
+
+    /// Generates a random byte buffer from `self.spec()` using `rng` and
+    /// decodes it into a value of type `T`.
+    pub fn sample<R: RandomState>(self: Self, rng: Rng<R>) -> T {
+        let bytes = self.spec.generate(rng);
+        self.decode_bytes(bytes).unwrap_or_panic()
+    }
+
+    fn with_spec(self: Self, spec: ValueSpec) -> Self {
+        Domain { spec: spec, decode: self.decode, format: self.format }
+    }
+
+    /// Restricts a numeric domain to the inclusive signed range `[min, max]`.
+    pub fn in_range(self: Self, min: i64, max: i64) -> Self {
+        let (lo, hi) = if min <= max { (min, max) } else { (max, min) };
+        let next_spec = match self.spec {
+            Int(w, _, _) => ValueSpec::Int {
+                w,
+                clamp_i64(lo, w.signed_min(), w.signed_max()),
+                clamp_i64(hi, w.signed_min(), w.signed_max())
+            },
+            UInt(w, _, _) => {
+                let u_lo = if lo < 0 { 0 } else { lo as u64 };
+                let u_hi = if hi < 0 { 0 } else { hi as u64 };
+                ValueSpec::UInt {
+                    w,
+                    clamp_u64(u_lo, 0, w.unsigned_max()),
+                    clamp_u64(u_hi, 0, w.unsigned_max())
+                }
+            },
+            Float(w, _, _, nan, inf) => ValueSpec::Float { w, lo as f64, hi as f64, nan, inf },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Restricts an unsigned integer domain to `[min, max]`.
+    pub fn in_range_u64(self: Self, min: u64, max: u64) -> Self {
+        let (lo, hi) = if min <= max { (min, max) } else { (max, min) };
+        let next_spec = match self.spec {
+            UInt(w, _, _) => ValueSpec::UInt {
+                w,
+                clamp_u64(lo, 0, w.unsigned_max()),
+                clamp_u64(hi, 0, w.unsigned_max())
+            },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Restricts a floating-point domain to `[min, max]`.
+    pub fn in_range_f64(self: Self, min: f64, max: f64) -> Self {
+        let (lo, hi) = if min <= max { (min, max) } else { (max, min) };
+        let next_spec = match self.spec {
+            Float(w, _, _, nan, inf) => ValueSpec::Float { w, lo, hi, nan, inf },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Sets the inclusive lower bound on a signed integer domain.
+    pub fn at_least(self: Self, min: i64) -> Self {
+        let next_spec = match self.spec {
+            Int(w, _, cur_max) => {
+                let lo = clamp_i64(min, w.signed_min(), w.signed_max());
+                let hi = if cur_max < lo { lo } else { cur_max };
+                ValueSpec::Int { w, lo, hi }
+            },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Sets the inclusive upper bound on a signed integer domain.
+    pub fn at_most(self: Self, max: i64) -> Self {
+        let next_spec = match self.spec {
+            Int(w, cur_min, _) => {
+                let hi = clamp_i64(max, w.signed_min(), w.signed_max());
+                let lo = if cur_min > hi { hi } else { cur_min };
+                ValueSpec::Int { w, lo, hi }
+            },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Restricts a numeric domain to strictly positive values (`> 0`).
+    pub fn positive(self: Self) -> Self {
+        let next_spec = match self.spec {
+            Int(w, _, cur_max) => {
+                let hi = if cur_max < 1 { w.signed_max() } else { cur_max };
+                ValueSpec::Int { w, 1, hi }
+            },
+            UInt(w, _, cur_max) => {
+                let hi = if cur_max < 1 { w.unsigned_max() } else { cur_max };
+                ValueSpec::UInt { w, 1, hi }
+            },
+            Float(w, _, cur_max, _, _) => {
+                let hi = if cur_max <= 0.0 { 1000000.0 } else { cur_max };
+                ValueSpec::Float { w, 0.000001, hi, false, false }
+            },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Restricts a numeric domain to non-negative values (`>= 0`).
+    pub fn non_negative(self: Self) -> Self {
+        let next_spec = match self.spec {
+            Int(w, _, cur_max) => {
+                let hi = if cur_max < 0 { w.signed_max() } else { cur_max };
+                ValueSpec::Int { w, 0, hi }
+            },
+            UInt(w, _, cur_max) => ValueSpec::UInt { w, 0, cur_max },
+            Float(w, _, cur_max, _, _) => {
+                let hi = if cur_max < 0.0 { 1000000.0 } else { cur_max };
+                ValueSpec::Float { w, 0.0, hi, false, false }
+            },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Restricts a numeric domain to strictly negative values (`< 0`).
+    pub fn negative(self: Self) -> Self {
+        let next_spec = match self.spec {
+            Int(w, cur_min, _) => {
+                let lo = if cur_min >= 0 { w.signed_min() } else { cur_min };
+                ValueSpec::Int { w, lo, -1 }
+            },
+            Float(w, cur_min, _, _, _) => {
+                let lo = if cur_min >= 0.0 { -1000000.0 } else { cur_min };
+                ValueSpec::Float { w, lo, -0.000001, false, false }
+            },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Restricts a numeric domain to non-positive values (`<= 0`).
+    pub fn non_positive(self: Self) -> Self {
+        let next_spec = match self.spec {
+            Int(w, cur_min, _) => {
+                let lo = if cur_min > 0 { w.signed_min() } else { cur_min };
+                ValueSpec::Int { w, lo, 0 }
+            },
+            UInt(w, _, _) => ValueSpec::UInt { w, 0, 0 },
+            Float(w, cur_min, _, _, _) => {
+                let lo = if cur_min > 0.0 { -1000000.0 } else { cur_min };
+                ValueSpec::Float { w, lo, 0.0, false, false }
+            },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Excludes `NaN` and `±Inf` from a floating-point domain.
+    pub fn finite(self: Self) -> Self {
+        let next_spec = match self.spec {
+            Float(w, lo, hi, _, _) => ValueSpec::Float { w, lo, hi, false, false },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Permits `NaN` in a floating-point domain.
+    pub fn allow_nan(self: Self) -> Self {
+        let next_spec = match self.spec {
+            Float(w, lo, hi, _, inf) => ValueSpec::Float { w, lo, hi, true, inf },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Permits `±Inf` in a floating-point domain.
+    pub fn allow_inf(self: Self) -> Self {
+        let next_spec = match self.spec {
+            Float(w, lo, hi, nan, _) => ValueSpec::Float { w, lo, hi, nan, true },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Permits both `NaN` and `±Inf` in a floating-point domain.
+    pub fn any_float(self: Self) -> Self {
+        let next_spec = match self.spec {
+            Float(w, lo, hi, _, _) => ValueSpec::Float { w, lo, hi, true, true },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Restricts a floating-point domain to the finite interval `[0.0, 1.0]`.
+    pub fn unit_interval(self: Self) -> Self {
+        let next_spec = match self.spec {
+            Float(w, _, _, _, _) => ValueSpec::Float { w, 0.0, 1.0, false, false },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Sets the character class of a character or string domain.
+    pub fn with_charset(self: Self, charset: Charset) -> Self {
+        let next_spec = match self.spec {
+            Char(_) => ValueSpec::Char { charset },
+            ValueSpec::String(_, lo, hi) => ValueSpec::String { charset, lo, hi },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Restricts a character or string domain to ASCII (`0x00..=0x7F`).
+    pub fn ascii(self: Self) -> Self {
+        self.with_charset(Charset::Ascii)
+    }
+
+    /// Restricts a character or string domain to printable ASCII (`0x20..=0x7E`).
+    pub fn printable(self: Self) -> Self {
+        self.with_charset(Charset::AsciiPrintable)
+    }
+
+    /// Restricts a character or string domain to ASCII letters and digits.
+    pub fn alphanumeric(self: Self) -> Self {
+        self.with_charset(Charset::Alphanumeric)
+    }
+
+    /// Restricts a character or string domain to ASCII letters.
+    pub fn alpha(self: Self) -> Self {
+        self.with_charset(Charset::Alpha)
+    }
+
+    /// Restricts a character or string domain to ASCII decimal digits (`0..=9`).
+    pub fn digits(self: Self) -> Self {
+        self.with_charset(Charset::Digits)
+    }
+
+    /// Restricts a character or string domain to identifier characters (`A-Z`, `a-z`, `0-9`, `_`).
+    pub fn identifier(self: Self) -> Self {
+        self.with_charset(Charset::Identifier)
+    }
+
+    /// Allows arbitrary valid Unicode scalar values in a character or string domain.
+    pub fn utf8(self: Self) -> Self {
+        self.with_charset(Charset::Utf8)
+    }
+
+    /// Fixes the exact length of a string or array/vector/list domain to `len`.
+    pub fn with_len(self: Self, len: u64) -> Self {
+        self.with_len_range(len, len)
+    }
+
+    /// Restricts the length of a string or array/vector/list domain to `[min_len, max_len]`.
+    pub fn with_len_range(self: Self, min_len: u64, max_len: u64) -> Self {
+        let (lo, hi) = if min_len <= max_len { (min_len, max_len) } else { (max_len, min_len) };
+        let next_spec = match self.spec {
+            ValueSpec::String(cs, _, _) => ValueSpec::String { cs, lo, hi },
+            Array(elem, _, _) => ValueSpec::Array { elem, lo, hi },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Requires a string or array/vector/list domain to have length at least 1.
+    pub fn non_empty(self: Self) -> Self {
+        let next_spec = match self.spec {
+            ValueSpec::String(cs, lo, hi) => {
+                let next_lo = if lo < 1 { 1 } else { lo };
+                let next_hi = if hi < next_lo { next_lo } else { hi };
+                ValueSpec::String { cs, next_lo, next_hi }
+            },
+            Array(elem, lo, hi) => {
+                let next_lo = if lo < 1 { 1 } else { lo };
+                let next_hi = if hi < next_lo { next_lo } else { hi };
+                ValueSpec::Array { elem, next_lo, next_hi }
+            },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Caps the maximum length of a string or array/vector/list domain at `max_len`.
+    pub fn max_len(self: Self, max_len: u64) -> Self {
+        let next_spec = match self.spec {
+            ValueSpec::String(cs, lo, _) => {
+                let next_lo = if lo > max_len { max_len } else { lo };
+                ValueSpec::String { cs, next_lo, max_len }
+            },
+            Array(elem, lo, _) => {
+                let next_lo = if lo > max_len { max_len } else { lo };
+                ValueSpec::Array { elem, next_lo, max_len }
+            },
+            other => other
+        };
+        self.with_spec(next_spec)
+    }
+
+    /// Maps values produced by `self` through `f`, using `format` to display
+    /// mapped counterexamples.
+    pub fn map<U>(self: Self, f: T -> U, format: U -> Format) -> Domain<U> {
+        let inner_decode = self.decode;
+        Domain {
+            spec: self.spec,
+            decode: |spec: ValueSpec, cursor: ByteCursor| {
+                inner_decode(spec, cursor).map(|val_and_c: (T, ByteCursor)| {
+                    let (v, next_c) = val_and_c;
+                    (f(v), next_c)
+                })
+            },
+            format: format
+        }
+    }
+
+    /// Maps values produced by `self` through `f` for any `Display` target type.
+    pub fn map_display<U: Display>(self: Self, f: T -> U) -> Domain<U> {
+        self.map(f, |v: U| v.fmt())
+    }
+
+}
+
+fn clamp_i64(v: i64, lo: i64, hi: i64) -> i64 {
+    if v < lo { lo } else { if v > hi { hi } else { v } }
+}
+
+fn clamp_u64(v: u64, lo: u64, hi: u64) -> u64 {
+    if v < lo { lo } else { if v > hi { hi } else { v } }
+}
