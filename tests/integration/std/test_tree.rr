@@ -63,37 +63,18 @@ import test::tree::Case;
 import test::tree::CaseResult;
 import test::tree::TestTree;
 
-extern "rust" [{
-    use reussir_rt::rc::Rc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static ELEMENT_CLONES: AtomicUsize = AtomicUsize::new(0);
-    #[repr(transparent)]
-    pub struct CloneProbe(Rc<()>);
-    #[repr(transparent)]
-    #[derive(Clone)]
-    pub struct ProbeBuffer(reussir_rt::collections::vec::Vec<CloneProbe>);
-    impl Clone for CloneProbe {
-        fn clone(&self) -> Self {
-            ELEMENT_CLONES.fetch_add(1, Ordering::Relaxed);
-            Self(self.0.clone())
-        }
-    }
-}];
-
-#[ffi(rust = "ProbeBuffer")]
+#[ffi(rust = "::reussir_rt::rc::Rc<::std::vec::Vec<i64>>")]
 pub struct ProbeBuffer;
 
 #[ffi(import)]
-fn new_probes() -> ProbeBuffer [{
-    ProbeBuffer(reussir_rt::collections::vec::Vec::new()
-        .push(CloneProbe(Rc::new(()))).push(CloneProbe(Rc::new(()))))
-}];
+fn new_probes() -> ProbeBuffer [{ reussir_rt::rc::Rc::new(vec![10_i64, 20]) }];
 
 #[ffi(import)]
 fn update_without_cloning(values: ProbeBuffer) -> bool [{
-    let before = ELEMENT_CLONES.load(Ordering::Relaxed);
-    let values = values.0.push(CloneProbe(Rc::new(())));
-    values.len() == 3 && ELEMENT_CLONES.load(Ordering::Relaxed) == before
+    let unique = values.is_unique();
+    let mut values = values;
+    values.make_mut().push(30);
+    unique && values.data_ref().len() == 3
 }];
 
 fn check(value: bool) {
