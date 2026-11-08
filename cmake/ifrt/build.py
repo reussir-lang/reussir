@@ -174,6 +174,9 @@ llvm_extension = module_extension(implementation = _impl)
         "--max_idle_secs=60", "build", "--config=clang_local",
         *["--action_env=" + name for name in cache_env],
         *["--host_action_env=" + name for name in cache_env],
+        # Packages such as abseil and gRPC enable layering_check, whose clang
+        # flags (-Xclang -fno-cxx-modules) sccache refuses to cache.
+        "--features=-layering_check",
         "--override_repository=+third_party_ext+stablehlo=" + str(stablehlo),
         *["--cxxopt=" + flag for flag in shlex.split(args.cxx_flags)
           if not flag.startswith("-Werror")],
