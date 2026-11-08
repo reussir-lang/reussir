@@ -408,6 +408,35 @@ impl<T> Domain<T> {
         self.map(f, |v: U| v.fmt())
     }
 
+    /// Lifts `self` into a `Domain<Vec<T>>` with default length `0..=16`.
+    pub fn vec(self: Self) -> Domain<Vec<T>> {
+        vec_of(self)
+    }
+
+    /// Lifts `self` into a `Domain<Vec<T>>` with length in `[min_len, max_len]`.
+    pub fn vec_with_len(self: Self, min_len: u64, max_len: u64) -> Domain<Vec<T>> {
+        vec_of(self).with_len_range(min_len, max_len)
+    }
+
+    /// Lifts `self` into a `Domain<List<T>>` with default length `0..=16`.
+    pub fn list(self: Self) -> Domain<List<T>> {
+        list_of(self)
+    }
+
+    /// Lifts `self` into a `Domain<List<T>>` with length in `[min_len, max_len]`.
+    pub fn list_with_len(self: Self, min_len: u64, max_len: u64) -> Domain<List<T>> {
+        list_of(self).with_len_range(min_len, max_len)
+    }
+
+    /// Lifts `self` into a 1D dynamic array `Domain<[T; ?]>` with default length `0..=16`.
+    pub fn array(self: Self, default: T) -> Domain<[T; ?]> {
+        array_of(self, default)
+    }
+
+    /// Lifts `self` into a 1D dynamic array `Domain<[T; ?]>` with length in `[min_len, max_len]`.
+    pub fn array_with_len(self: Self, min_len: u64, max_len: u64, default: T) -> Domain<[T; ?]> {
+        array_of(self, default).with_len_range(min_len, max_len)
+    }
 }
 
 /// Boolean domain (`true` or `false`).
@@ -665,6 +694,225 @@ pub fn identifier() -> Domain<String> {
     string().identifier().with_len_range(1, 32)
 }
 
+/// Homogeneous `Vec<T>` domain with elements from `elem` (length `0..=16` by default).
+pub fn vec_of<T>(elem: Domain<T>) -> Domain<Vec<T>> {
+    let elem_decode = elem.decode;
+    let elem_fmt = elem.format;
+    Domain {
+        spec: ValueSpec::Array { elem.spec(), 0, 16 },
+        decode: |spec: ValueSpec, cursor: ByteCursor| {
+            let (elem_spec, min_len, max_len) = array_bounds(spec, elem.spec());
+            match cursor.read_u64_le() {
+                None => Option::None,
+                Some(raw_and_c) => {
+                    let (raw_len, c1) = raw_and_c;
+                    let len = project_u64(raw_len, min_len, max_len);
+                    decode_vec_elems(elem_spec, elem_decode, c1, len, Vec::new())
+                }
+            }
+        },
+        format: |v: Vec<T>| format_vec(v, elem_fmt)
+    }
+}
+
+/// Homogeneous `List<T>` domain with elements from `elem` (length `0..=16` by default).
+pub fn list_of<T>(elem: Domain<T>) -> Domain<List<T>> {
+    let elem_decode = elem.decode;
+    let elem_fmt = elem.format;
+    Domain {
+        spec: ValueSpec::Array { elem.spec(), 0, 16 },
+        decode: |spec: ValueSpec, cursor: ByteCursor| {
+            let (elem_spec, min_len, max_len) = array_bounds(spec, elem.spec());
+            match cursor.read_u64_le() {
+                None => Option::None,
+                Some(raw_and_c) => {
+                    let (raw_len, c1) = raw_and_c;
+                    let len = project_u64(raw_len, min_len, max_len);
+                    decode_list_elems(elem_spec, elem_decode, c1, len, List::Nil)
+                }
+            }
+        },
+        format: |items: List<T>| brackets(comma_list(items.map(elem_fmt)))
+    }
+}
+
+/// 1D dynamic-extent array `[T; ?]` domain with elements from `elem` and
+/// length `0..=16` by default. `default` initializes the backing allocation.
+pub fn array_of<T>(elem: Domain<T>, default: T) -> Domain<[T; ?]> {
+    let elem_decode = elem.decode;
+    let elem_fmt = elem.format;
+    Domain {
+        spec: ValueSpec::Array { elem.spec(), 0, 16 },
+        decode: |spec: ValueSpec, cursor: ByteCursor| {
+            let (elem_spec, min_len, max_len) = array_bounds(spec, elem.spec());
+            match cursor.read_u64_le() {
+                None => Option::None,
+                Some(raw_and_c) => {
+                    let (raw_len, c1) = raw_and_c;
+                    let len = project_u64(raw_len, min_len, max_len);
+                    let initial = array::splat<[T; ?]>(len, default);
+                    decode_array_elems(elem_spec, elem_decode, c1, 0, len, initial)
+                }
+            }
+        },
+        format: |arr: [T; ?]| format_array(arr, elem_fmt)
+    }
+}
+
+/// 1D dynamic array `[i64; ?]` domain (`0..=16` elements by default).
+pub fn i64_array() -> Domain<[i64; ?]> {
+    array_of(i64_domain(), 0)
+}
+
+/// 1D dynamic array `[i32; ?]` domain (`0..=16` elements by default).
+pub fn i32_array() -> Domain<[i32; ?]> {
+    array_of(i32_domain(), 0)
+}
+
+/// 1D dynamic array `[u64; ?]` domain (`0..=16` elements by default).
+pub fn u64_array() -> Domain<[u64; ?]> {
+    array_of(u64_domain(), 0)
+}
+
+/// 1D dynamic array `[u8; ?]` domain (`0..=16` elements by default).
+pub fn u8_array() -> Domain<[u8; ?]> {
+    array_of(u8_domain(), 0)
+}
+
+/// 1D dynamic array `[f64; ?]` domain (`0..=16` elements by default).
+pub fn f64_array() -> Domain<[f64; ?]> {
+    array_of(f64_domain(), 0.0)
+}
+
+/// 1D dynamic array `[f32; ?]` domain (`0..=16` elements by default).
+pub fn f32_array() -> Domain<[f32; ?]> {
+    array_of(f32_domain(), 0.0)
+}
+
+/// 1D dynamic array `[bool; ?]` domain (`0..=16` elements by default).
+pub fn bool_array() -> Domain<[bool; ?]> {
+    array_of(bool_domain(), false)
+}
+
+/// Product of two domains.
+pub fn tuple2<A, B>(a: Domain<A>, b: Domain<B>) -> Domain<(A, B)> {
+    let spec = ValueSpec::Tuple {
+        List::Cons { a.spec(), List::Cons { b.spec(), List::Nil } }
+    };
+    Domain {
+        spec: spec,
+        decode: |unused_spec: ValueSpec, cursor: ByteCursor| {
+            match a.decode(cursor) {
+                None => Option::None,
+                Some(va_and_c) => {
+                    let (va, c1) = va_and_c;
+                    b.decode(c1).map(|vb_and_c: (B, ByteCursor)| {
+                        let (vb, c2) = vb_and_c;
+                        ((va, vb), c2)
+                    })
+                }
+            }
+        },
+        format: |pair: (A, B)| {
+            let (va, vb) = pair;
+            parens(comma_list(List::Cons { a.format(va), List::Cons { b.format(vb), List::Nil } }))
+        }
+    }
+}
+
+/// Product of three domains.
+pub fn tuple3<A, B, C>(a: Domain<A>, b: Domain<B>, c: Domain<C>) -> Domain<(A, B, C)> {
+    let spec = ValueSpec::Tuple {
+        List::Cons {
+            a.spec(),
+            List::Cons { b.spec(), List::Cons { c.spec(), List::Nil } }
+        }
+    };
+    Domain {
+        spec: spec,
+        decode: |unused_spec: ValueSpec, cursor: ByteCursor| {
+            match a.decode(cursor) {
+                None => Option::None,
+                Some(va_and_c) => {
+                    let (va, c1) = va_and_c;
+                    match b.decode(c1) {
+                        None => Option::None,
+                        Some(vb_and_c) => {
+                            let (vb, c2) = vb_and_c;
+                            c.decode(c2).map(|vc_and_c: (C, ByteCursor)| {
+                                let (vc, c3) = vc_and_c;
+                                ((va, vb, vc), c3)
+                            })
+                        }
+                    }
+                }
+            }
+        },
+        format: |triple: (A, B, C)| {
+            let (va, vb, vc) = triple;
+            parens(comma_list(List::Cons {
+                a.format(va),
+                List::Cons { b.format(vb), List::Cons { c.format(vc), List::Nil } }
+            }))
+        }
+    }
+}
+
+/// Product of four domains.
+pub fn tuple4<A, B, C, D>(
+    a: Domain<A>,
+    b: Domain<B>,
+    c: Domain<C>,
+    d: Domain<D>
+) -> Domain<(A, B, C, D)> {
+    let spec = ValueSpec::Tuple {
+        List::Cons {
+            a.spec(),
+            List::Cons {
+                b.spec(),
+                List::Cons { c.spec(), List::Cons { d.spec(), List::Nil } }
+            }
+        }
+    };
+    Domain {
+        spec: spec,
+        decode: |unused_spec: ValueSpec, cursor: ByteCursor| {
+            match a.decode(cursor) {
+                None => Option::None,
+                Some(va_and_c) => {
+                    let (va, c1) = va_and_c;
+                    match b.decode(c1) {
+                        None => Option::None,
+                        Some(vb_and_c) => {
+                            let (vb, c2) = vb_and_c;
+                            match c.decode(c2) {
+                                None => Option::None,
+                                Some(vc_and_c) => {
+                                    let (vc, c3) = vc_and_c;
+                                    d.decode(c3).map(|vd_and_c: (D, ByteCursor)| {
+                                        let (vd, c4) = vd_and_c;
+                                        ((va, vb, vc, vd), c4)
+                                    })
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        format: |quad: (A, B, C, D)| {
+            let (va, vb, vc, vd) = quad;
+            parens(comma_list(List::Cons {
+                a.format(va),
+                List::Cons {
+                    b.format(vb),
+                    List::Cons { c.format(vc), List::Cons { d.format(vd), List::Nil } }
+                }
+            }))
+        }
+    }
+}
+
 fn clamp_i64(v: i64, lo: i64, hi: i64) -> i64 {
     if v < lo { lo } else { if v > hi { hi } else { v } }
 }
@@ -809,6 +1057,101 @@ fn sanitize_bytes_to_string(bytes: Vec<u8>, charset: Charset, min_len: u64, max_
         (i + 1, acc.push_char(charset.map_word(word)))
     };
     out
+}
+
+fn array_bounds(spec: ValueSpec, fallback_elem: ValueSpec) -> (ValueSpec, u64, u64) {
+    match spec {
+        Array(elem, lo, hi) => (elem, lo, hi),
+        _ => (fallback_elem, 0, 16)
+    }
+}
+
+fn decode_vec_elems<T>(
+    elem_spec: ValueSpec,
+    elem_decode: (ValueSpec, ByteCursor) -> Option<(T, ByteCursor)>,
+    cursor: ByteCursor,
+    remaining: u64,
+    acc: Vec<T>
+) -> Option<(Vec<T>, ByteCursor)> {
+    if remaining == 0 {
+        Option::Some { (acc, cursor) }
+    } else {
+        match elem_decode(elem_spec, cursor) {
+            None => Option::None,
+            Some(val_and_c) => {
+                let (val, next_c) = val_and_c;
+                decode_vec_elems(elem_spec, elem_decode, next_c, remaining - 1, acc.push(val))
+            }
+        }
+    }
+}
+
+fn decode_list_elems<T>(
+    elem_spec: ValueSpec,
+    elem_decode: (ValueSpec, ByteCursor) -> Option<(T, ByteCursor)>,
+    cursor: ByteCursor,
+    remaining: u64,
+    acc: List<T>
+) -> Option<(List<T>, ByteCursor)> {
+    if remaining == 0 {
+        Option::Some { (acc.reverse(), cursor) }
+    } else {
+        match elem_decode(elem_spec, cursor) {
+            None => Option::None,
+            Some(val_and_c) => {
+                let (val, next_c) = val_and_c;
+                decode_list_elems(
+                    elem_spec,
+                    elem_decode,
+                    next_c,
+                    remaining - 1,
+                    List::Cons { val, acc }
+                )
+            }
+        }
+    }
+}
+
+fn decode_array_elems<T>(
+    elem_spec: ValueSpec,
+    elem_decode: (ValueSpec, ByteCursor) -> Option<(T, ByteCursor)>,
+    cursor: ByteCursor,
+    index: u64,
+    total: u64,
+    acc: [T; ?]
+) -> Option<([T; ?], ByteCursor)> {
+    if index >= total {
+        Option::Some { (acc, cursor) }
+    } else {
+        match elem_decode(elem_spec, cursor) {
+            None => Option::None,
+            Some(val_and_c) => {
+                let (val, next_c) = val_and_c;
+                let updated = array::set(acc, index as i64, val);
+                decode_array_elems(elem_spec, elem_decode, next_c, index + 1, total, updated)
+            }
+        }
+    }
+}
+
+fn format_vec<T>(v: Vec<T>, elem_fmt: T -> Format) -> Format {
+    let n = v.len();
+    let (_, docs) = while [i = n, acc = List::Nil] (i > 0) {
+        let idx = i - 1;
+        let item = v.get(idx).unwrap_or_panic();
+        (idx, List::Cons { elem_fmt(item), acc })
+    };
+    brackets(comma_list(docs))
+}
+
+fn format_array<T>(arr: [T; ?], elem_fmt: T -> Format) -> Format {
+    let n = array::dim(arr, 0);
+    let (_, docs) = while [i = n, acc = List::Nil] (i > 0) {
+        let idx = i - 1;
+        let item = array::get(arr, idx as i64);
+        (idx, List::Cons { elem_fmt(item), acc })
+    };
+    brackets(comma_list(docs))
 }
 
 fn quote_text(t: Text) -> Format {
