@@ -57,6 +57,11 @@ pub fn dep_product_key(profile: &str, name: &str) -> String {
     format!("product.{profile}.dep.{name}")
 }
 
+pub fn dep_variant_key(profile: &str, name: &str, fuzzer: bool) -> String {
+    let key = dep_product_key(profile, name);
+    if fuzzer { format!("{key}.fuzzer") } else { key }
+}
+
 /// The status key of one dependency's recorded source graph, a JSON
 /// `Vec<`[`crate::deps::SourceFile`]`>` — the per-dependency counterpart of
 /// the root's [`SOURCES`] table, compact because dependencies are read-only

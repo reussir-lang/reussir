@@ -359,12 +359,8 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), Error> {
     );
     // Resolve the profile before any work: an unknown name is a usage
     // problem, not something to discover after a runtime bake.
-    let mut profile = manifest::resolve_profile(&loaded.manifest, &args.profile)?;
-    if profile.fuzzer.is_none()
-        && all_selected_targets_are_fuzzer(&loaded.manifest, &args.bins, &args.libs)
-    {
-        profile.fuzzer = Some(true);
-    }
+    let profile = manifest::resolve_profile(&loaded.manifest, &args.profile)?;
+    let groups = compile::target_groups(&loaded.manifest, &profile, &args.bins, &args.libs)?;
     let root = resolve_build_dir(location)?;
     // Builds sharing a directory queue on its database lock. Take it before
     // materializing bundled sources so concurrent invocations serialize all
@@ -401,7 +397,9 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), Error> {
         .as_deref()
         .or(profile.default_target_triple.as_deref());
     let needs_fuzzer = profile.fuzzer == Some(true)
-        || any_selected_target_is_fuzzer(&loaded.manifest, &args.bins, &args.libs);
+        || groups
+            .iter()
+            .any(|group| group.profile.fuzzer == Some(true));
     let cache = rene::cache::Cache::open()?;
     let artifacts = rt::prepare(
         &cache,
@@ -432,71 +430,91 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), Error> {
     // loop, which monitors every child process.
     let pool = pool::Pool::new(args.jobs);
 
-    // The dependency pipeline: every node of the graph but the root, each
-    // dispatched the moment its last dependency finishes, each freshness-
-    // checked, compiled (interface + archive), and recorded.
-    let built = exec::build_deps(
-        &dir,
-        &graph,
-        &artifacts,
-        &exec::Options {
-            profile_name: &args.profile,
-            profile: &profile,
-            target: &target,
-            linker: args.linker.as_deref(),
-            jobs: args.jobs,
-            build_dir: &root,
-            token_reuse_remarks: args.token_reuse_remarks,
-            color,
-        },
-        &compile::Execution {
-            cache: &cache,
-            pool: &pool,
-            progress: &progress,
-        },
-    )
-    .await?;
-    if graph.nodes.len() > 1 {
-        tracing::debug!(
-            built,
-            fresh = graph.nodes.len() - 1 - built,
-            "dependencies ready"
-        );
-    }
+    let mut products = Vec::new();
+    for group in groups {
+        let mut graph = graph.clone();
+        graph
+            .nodes
+            .get_mut(&graph.root)
+            .expect("root package")
+            .loaded
+            .manifest
+            .targets
+            .retain(|name, _| group.contains(name));
+        let profile = group.profile.clone();
+        // The dependency pipeline: every node of the graph but the root, each
+        // dispatched the moment its last dependency finishes, each freshness-
+        // checked, compiled (interface + archive), and recorded.
+        let built = exec::build_deps(
+            &dir,
+            &graph,
+            &artifacts,
+            &exec::Options {
+                profile_name: &args.profile,
+                profile: &profile,
+                target: &target,
+                linker: args.linker.as_deref(),
+                jobs: args.jobs,
+                build_dir: &root,
+                token_reuse_remarks: args.token_reuse_remarks,
+                color,
+            },
+            &compile::Execution {
+                cache: &cache,
+                pool: &pool,
+                progress: &progress,
+            },
+        )
+        .await?;
+        if graph.nodes.len() > 1 {
+            tracing::debug!(
+                built,
+                fresh = graph.nodes.len() - 1 - built,
+                "dependencies ready"
+            );
+        }
 
-    let products = compile::build(
-        &dir,
-        &loaded,
-        &sources,
-        &artifacts,
-        &compile::Options {
-            profile_name: args.profile.clone(),
-            profile,
-            target: target.clone(),
-            bins: args.bins.clone(),
-            libs: args.libs.clone(),
-            linker: args.linker.clone(),
-            // The cone's artifact digests enter the fingerprint, so a
-            // product consuming a changed upstream artifact re-fingerprints.
-            // Computed *after* the dependency pipeline: it hashes the final
-            // artifacts the targets will consume.
-            upstream: rene::fresh::root_upstream_digests(
-                &graph,
-                &root.join(&args.profile).join("deps"),
-                &target,
-            ),
-            jobs: args.jobs,
-            token_reuse_remarks: args.token_reuse_remarks,
-            color,
-        },
-        &graph,
-        &compile::Execution {
-            cache: &cache,
-            pool: &pool,
-            progress: &progress,
-        },
-    )
-    .await?;
+        let built_products = compile::build(
+            &dir,
+            &loaded,
+            &sources,
+            &artifacts,
+            &compile::Options {
+                profile_name: args.profile.clone(),
+                profile: profile.clone(),
+                target: target.clone(),
+                bins: group.bins.clone(),
+                libs: group.libs.clone(),
+                linker: args.linker.clone(),
+                // The cone's artifact digests enter the fingerprint, so a
+                // product consuming a changed upstream artifact re-fingerprints.
+                // Computed *after* the dependency pipeline: it hashes the final
+                // artifacts the targets will consume.
+                upstream: rene::fresh::root_upstream_digests(
+                    &graph,
+                    &plan::dependency_dir(&root, &args.profile, &profile),
+                    &target,
+                ),
+                jobs: args.jobs,
+                token_reuse_remarks: args.token_reuse_remarks,
+                color,
+            },
+            &graph,
+            &compile::Execution {
+                cache: &cache,
+                pool: &pool,
+                progress: &progress,
+            },
+        )
+        .await?;
+        products.extend(built_products);
+    }
+    let order: Vec<_> = if args.bins.is_empty() && args.libs.is_empty() {
+        loaded.manifest.targets.keys().collect()
+    } else {
+        args.bins.iter().chain(&args.libs).collect()
+    };
+    products.sort_by_key(|product| order.iter().position(|name| **name == product.name));
     // Stdout carries the artifact listing, one path per target, in the
     // order they were declared (or selected).
     for product in &products {
@@ -594,44 +612,76 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), Error> {
             });
         }
         if args.commands {
-            let mut profile = manifest::resolve_profile(&loaded.manifest, &args.profile)?;
-            if profile.fuzzer.is_none()
-                && all_selected_targets_are_fuzzer(&loaded.manifest, &[], &[])
-            {
-                profile.fuzzer = Some(true);
-            }
+            let profile = manifest::resolve_profile(&loaded.manifest, &args.profile)?;
+            let groups = compile::target_groups(&loaded.manifest, &profile, &[], &[])?;
             let requested_target = args
                 .target
                 .as_deref()
                 .or(profile.default_target_triple.as_deref());
             let target = rt::resolve_target(requested_target).await?;
             let bake = fresh::recorded_bake(held.as_ref(), &target)?;
-            fresh::recorded_artifacts(&graph, held.as_ref(), &args.profile, &root)?;
-            let states = fresh::states(
-                &graph,
-                &fresh::Context {
-                    dir: held.as_ref(),
-                    profile_name: &args.profile,
-                    profile: &profile,
-                    target: &target,
-                    linker: args.linker.as_deref(),
-                    build_dir: &root,
-                    token_reuse_remarks: args.token_reuse_remarks,
-                },
-            )?;
-            report["plan"] = plan::render(
-                &graph,
-                &plan::Options {
-                    profile_name: &args.profile,
-                    profile: &profile,
-                    target: &target,
-                    linker: args.linker.as_deref(),
-                    build_dir: &root,
-                    token_reuse_remarks: args.token_reuse_remarks,
-                },
-                bake.as_ref(),
-                Some(&states),
-            );
+            let mixed = groups.len() > 1;
+            let groups = if groups.is_empty() {
+                vec![compile::TargetGroup {
+                    profile,
+                    bins: Vec::new(),
+                    libs: Vec::new(),
+                }]
+            } else {
+                groups
+            };
+            let mut rendered_nodes = Vec::new();
+            for group in groups {
+                let mut graph = graph.clone();
+                graph
+                    .nodes
+                    .get_mut(&graph.root)
+                    .expect("root package")
+                    .loaded
+                    .manifest
+                    .targets
+                    .retain(|name, _| group.contains(name));
+                let profile = group.profile;
+                fresh::recorded_artifacts(&graph, held.as_ref(), &args.profile, &profile, &root)?;
+                let states = fresh::states(
+                    &graph,
+                    &fresh::Context {
+                        dir: held.as_ref(),
+                        profile_name: &args.profile,
+                        profile: &profile,
+                        target: &target,
+                        linker: args.linker.as_deref(),
+                        build_dir: &root,
+                        token_reuse_remarks: args.token_reuse_remarks,
+                    },
+                )?;
+                let mut rendered = plan::render(
+                    &graph,
+                    &plan::Options {
+                        profile_name: &args.profile,
+                        profile: &profile,
+                        target: &target,
+                        linker: args.linker.as_deref(),
+                        build_dir: &root,
+                        token_reuse_remarks: args.token_reuse_remarks,
+                    },
+                    bake.as_ref(),
+                    Some(&states),
+                );
+                let mut nodes = rendered["nodes"]
+                    .as_array_mut()
+                    .expect("plan nodes")
+                    .drain(..)
+                    .collect::<Vec<_>>();
+                if mixed {
+                    for node in &mut nodes {
+                        node["fuzzer"] = (profile.fuzzer == Some(true)).into();
+                    }
+                }
+                rendered_nodes.extend(nodes);
+                report["plan"] = rendered;
+            }
+            report["plan"]["nodes"] = rendered_nodes.into();
         }
     }
     println!("{}", serde_json::to_string_pretty(&report)?);
@@ -641,53 +691,6 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), Error> {
 fn pending_clean(root: &std::path::Path) -> Error {
     Error::PendingClean {
         path: root.to_owned(),
-    }
-}
-
-fn any_selected_target_is_fuzzer(
-    manifest: &manifest::Manifest,
-    bins: &[String],
-    libs: &[String],
-) -> bool {
-    if !libs.is_empty() && bins.is_empty() {
-        return false;
-    }
-    if bins.is_empty() {
-        manifest
-            .targets
-            .values()
-            .any(|t| t.kind == manifest::TargetKind::Executable && t.fuzzer)
-    } else {
-        bins.iter().any(|name| {
-            manifest
-                .targets
-                .get(name)
-                .is_some_and(|t| t.kind == manifest::TargetKind::Executable && t.fuzzer)
-        })
-    }
-}
-
-fn all_selected_targets_are_fuzzer(
-    manifest: &manifest::Manifest,
-    bins: &[String],
-    libs: &[String],
-) -> bool {
-    if !libs.is_empty() {
-        return false;
-    }
-    if bins.is_empty() {
-        !manifest.targets.is_empty()
-            && manifest
-                .targets
-                .values()
-                .all(|t| t.kind == manifest::TargetKind::Executable && t.fuzzer)
-    } else {
-        bins.iter().all(|name| {
-            manifest
-                .targets
-                .get(name)
-                .is_some_and(|t| t.kind == manifest::TargetKind::Executable && t.fuzzer)
-        })
     }
 }
 

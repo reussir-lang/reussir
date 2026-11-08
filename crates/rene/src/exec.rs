@@ -68,7 +68,7 @@ pub async fn build_deps(
     if dep_names.is_empty() {
         return Ok(0);
     }
-    let deps_dir = opts.build_dir.join(opts.profile_name).join("deps");
+    let deps_dir = crate::plan::dependency_dir(opts.build_dir, opts.profile_name, opts.profile);
     std::fs::create_dir_all(&deps_dir)
         .map_err(|source| Error::file("create", &deps_dir, source))?;
 

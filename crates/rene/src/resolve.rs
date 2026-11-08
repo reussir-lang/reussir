@@ -22,7 +22,7 @@ use crate::Error;
 use crate::manifest::{self, Loaded};
 
 /// One package of the loaded graph.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Node {
     /// The manifest directory (canonical), the package's identity on disk.
     pub dir: PathBuf,
@@ -39,7 +39,7 @@ pub struct Node {
 /// The transitive path-dependency graph, keyed by package name. One
 /// namespace: two directories claiming one name is an error, as is a
 /// dependency key that differs from the package's own declared name.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Graph {
     /// The root package's name.
     pub root: String,

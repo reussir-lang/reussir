@@ -38,6 +38,16 @@ pub struct Options<'a> {
     pub token_reuse_remarks: bool,
 }
 
+/// Keep instrumented dependency outputs separate from ordinary builds.
+pub fn dependency_dir(build_dir: &Path, profile_name: &str, profile: &Profile) -> PathBuf {
+    let dir = build_dir.join(profile_name).join("deps");
+    if profile.fuzzer == Some(true) {
+        dir.join("fuzzer")
+    } else {
+        dir
+    }
+}
+
 /// The placeholder argv entries for bake-decided paths.
 const RUST_LIBDIR: &str = "<rust-libdir>";
 const RT_DEPS_DIR: &str = "<rt-deps-dir>";
@@ -95,7 +105,7 @@ pub(crate) fn node_commands(
     bake: Option<&RtArtifacts>,
 ) -> Vec<PlannedCommand> {
     let profile_dir = opts.build_dir.join(opts.profile_name);
-    let deps_dir = profile_dir.join("deps");
+    let deps_dir = dependency_dir(opts.build_dir, opts.profile_name, opts.profile);
     let node = &graph.nodes[name];
     let transitive = transitive_deps(graph);
     let externs = extern_args(graph, &transitive[name], &deps_dir, opts.target);

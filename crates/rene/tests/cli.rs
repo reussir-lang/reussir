@@ -2004,3 +2004,88 @@ fn drop_order_reaches_core_std_and_app_and_separates_cache_entries() {
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn mixed_fuzz_targets_use_separate_dependency_variants() {
+    let tmp = tempfile::tempdir().unwrap();
+    let manifest = package(&tmp.path().join("app"), "app");
+    let dep = tmp.path().join("dep");
+    package(&dep, "dep");
+    std::fs::write(
+        dep.join("rene.ncl"),
+        r#"{ package = { name = "dep", version = "0.1.0", no_core = true } }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &manifest,
+        r#"{
+        package = { name = "app", version = "0.1.0", no_core = true },
+        dependencies.dep = { path = "../dep", version = "^0.1" },
+        targets = {
+            app = { kind = 'executable },
+            fuzz = { kind = 'executable, fuzzer = true },
+        },
+    }"#,
+    )
+    .unwrap();
+    let fakes = Fakes::new(tmp.path());
+    let root = tmp.path().join("build");
+    let out = fakes.rene(&["build"], &manifest, &root);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let commands = fakes.compiles();
+    let archives: Vec<_> = commands
+        .iter()
+        .filter(|cmd| cmd.contains("--package-name dep") && cmd.contains("--emit staticlib"))
+        .collect();
+    assert_eq!(archives.len(), 2);
+    assert!(
+        archives
+            .iter()
+            .any(|cmd| cmd.contains("--fuzzer") && cmd.contains("dev/deps/fuzzer/libdep.a"))
+    );
+    assert!(
+        archives
+            .iter()
+            .any(|cmd| !cmd.contains("--fuzzer") && cmd.contains("dev/deps/libdep.a"))
+    );
+    for (target, instrumented) in [("app", false), ("fuzz", true)] {
+        let output = root.join("dev").join(target);
+        let command = commands
+            .iter()
+            .find(|cmd| {
+                cmd.contains("--package-name app")
+                    && cmd.contains(&format!("-o {} ", output.display()))
+            })
+            .unwrap();
+        assert_eq!(command.contains("--fuzzer"), instrumented, "{command}");
+        let deps = if instrumented {
+            "dev/deps/fuzzer"
+        } else {
+            "dev/deps"
+        };
+        assert!(command.contains(&format!(
+            "--extern dep={}",
+            root.join(deps).join("dep.rri").display()
+        )));
+    }
+    let count = commands.len();
+    for selection in [&["build"][..], &["build", "--bin", "fuzz"], &["build"]] {
+        let out = fakes.rene(selection, &manifest, &root);
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert_eq!(
+            fakes.compiles().len(),
+            count,
+            "cached variants should be reused"
+        );
+    }
+    let out = fakes.rene(&["inspect", "--frozen", "--commands"], &manifest, &root);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let nodes = report["plan"]["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 4);
+    assert!(
+        nodes.iter().all(|node| node["state"] == "current"),
+        "{report}"
+    );
+}
