@@ -154,7 +154,7 @@ impl SuiteSpec {
     }
 }
 
-fn wire_size(value: &FuzzValue) -> usize {
+pub(crate) fn wire_size(value: &FuzzValue) -> usize {
     match value {
         FuzzValue::Unit => 0,
         FuzzValue::Bool(_) => 1,
@@ -283,7 +283,9 @@ mod tests {
         };
         assert_eq!(spec.minimum_wire_size(), Some(8));
         let value = generate(&spec, 8, &mut Session::new().seed(1)).unwrap();
-        assert_eq!(value.to_bytes(), 0u64.to_le_bytes());
+        let bytes = value.to_bytes();
+        assert_eq!(bytes, 0u64.to_le_bytes());
+        assert_eq!(spec.decode_value(&mut bytes.as_slice()), Some(value));
     }
 
     #[test]

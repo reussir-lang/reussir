@@ -8,7 +8,6 @@ use crate::spec::{Charset, FloatWidth, IntWidth, SuiteSpec, ValueSpec};
 use winnow::binary::{
     le_f32, le_f64, le_i8, le_i16, le_i32, le_i64, le_u8, le_u16, le_u32, le_u64,
 };
-use winnow::combinator::repeat;
 use winnow::error::ContextError;
 use winnow::prelude::*;
 use winnow::token::take;
@@ -531,35 +530,48 @@ impl ValueSpec {
     /// Decodes a structured [`FuzzValue`] from `cursor`, projecting any raw bytes
     /// into this specification's domain bounds.
     pub fn decode_value(&self, cursor: &mut &[u8]) -> Option<FuzzValue> {
-        self.parse_value(cursor).ok()
+        let mut remaining = usize::MAX;
+        self.decode_value_inner(cursor, &mut remaining, false)
     }
 
-    fn parse_value(&self, input: &mut &[u8]) -> ModalResult<FuzzValue, ContextError> {
-        match self {
-            Self::Unit => Ok(FuzzValue::Unit),
+    fn decode_value_with_budget(&self, cursor: &mut &[u8], mut budget: usize) -> Option<FuzzValue> {
+        self.decode_value_inner(cursor, &mut budget, true)
+    }
+
+    fn decode_value_inner(
+        &self,
+        cursor: &mut &[u8],
+        remaining: &mut usize,
+        bounded: bool,
+    ) -> Option<FuzzValue> {
+        if self.minimum_wire_size()? > *remaining {
+            return None;
+        }
+        let value = match self {
+            Self::Unit => Some(FuzzValue::Unit),
             Self::Bool => {
-                let b = le_u8.parse_next(input)?;
-                Ok(FuzzValue::Bool((b & 1) != 0))
+                let b = le_u8::<_, ContextError>.parse_next(cursor).ok()?;
+                Some(FuzzValue::Bool((b & 1) != 0))
             }
             Self::Int { width, min, max } => {
                 let raw = match width {
-                    IntWidth::I8 => le_i8.parse_next(input)? as i64,
-                    IntWidth::I16 => le_i16.parse_next(input)? as i64,
-                    IntWidth::I32 => le_i32.parse_next(input)? as i64,
-                    IntWidth::I64 => le_i64.parse_next(input)?,
+                    IntWidth::I8 => le_i8::<_, ContextError>.parse_next(cursor).ok()? as i64,
+                    IntWidth::I16 => le_i16::<_, ContextError>.parse_next(cursor).ok()? as i64,
+                    IntWidth::I32 => le_i32::<_, ContextError>.parse_next(cursor).ok()? as i64,
+                    IntWidth::I64 => le_i64::<_, ContextError>.parse_next(cursor).ok()?,
                 };
                 let (lo, hi) = clamped_signed_bounds(*width, *min, *max);
-                Ok(FuzzValue::Int(*width, project_i64(raw, lo, hi)))
+                Some(FuzzValue::Int(*width, project_i64(raw, lo, hi)))
             }
             Self::UInt { width, min, max } => {
                 let raw = match width {
-                    IntWidth::I8 => le_u8.parse_next(input)? as u64,
-                    IntWidth::I16 => le_u16.parse_next(input)? as u64,
-                    IntWidth::I32 => le_u32.parse_next(input)? as u64,
-                    IntWidth::I64 => le_u64.parse_next(input)?,
+                    IntWidth::I8 => le_u8::<_, ContextError>.parse_next(cursor).ok()? as u64,
+                    IntWidth::I16 => le_u16::<_, ContextError>.parse_next(cursor).ok()? as u64,
+                    IntWidth::I32 => le_u32::<_, ContextError>.parse_next(cursor).ok()? as u64,
+                    IntWidth::I64 => le_u64::<_, ContextError>.parse_next(cursor).ok()?,
                 };
                 let (lo, hi) = clamped_unsigned_bounds(*width, *min, *max);
-                Ok(FuzzValue::UInt(*width, project_u64(raw, lo, hi)))
+                Some(FuzzValue::UInt(*width, project_u64(raw, lo, hi)))
             }
             Self::Float {
                 width,
@@ -575,15 +587,15 @@ impl ValueSpec {
                 };
                 match width {
                     FloatWidth::F32 => {
-                        let raw = le_f32.parse_next(input)? as f64;
-                        Ok(FuzzValue::Float(
+                        let raw = le_f32::<_, ContextError>.parse_next(cursor).ok()? as f64;
+                        Some(FuzzValue::Float(
                             FloatWidth::F32,
                             constrain_f64(raw, lo, hi, *allow_nan, *allow_inf),
                         ))
                     }
                     FloatWidth::F64 => {
-                        let raw = le_f64.parse_next(input)?;
-                        Ok(FuzzValue::Float(
+                        let raw = le_f64::<_, ContextError>.parse_next(cursor).ok()?;
+                        Some(FuzzValue::Float(
                             FloatWidth::F64,
                             constrain_f64(raw, lo, hi, *allow_nan, *allow_inf),
                         ))
@@ -591,43 +603,70 @@ impl ValueSpec {
                 }
             }
             Self::Char(charset) => {
-                let raw = le_u32.parse_next(input)?;
+                let raw = le_u32::<_, ContextError>.parse_next(cursor).ok()?;
                 let ch = char::from_u32(raw)
                     .filter(|c| charset_contains(*charset, *c))
                     .unwrap_or_else(|| project_char(raw as u64, *charset));
-                Ok(FuzzValue::Char(ch))
+                Some(FuzzValue::Char(ch))
             }
             Self::String {
                 charset,
                 min_len,
                 max_len,
             } => {
-                let byte_len = le_u64.try_map(usize::try_from).parse_next(input)?;
-                let raw_bytes = take(byte_len).parse_next(input)?;
+                let byte_len = le_u64::<_, ContextError>
+                    .try_map(usize::try_from)
+                    .parse_next(cursor)
+                    .ok()?;
+                if byte_len > remaining.checked_sub(8)? {
+                    return None;
+                }
+                let raw_bytes = take::<_, _, ContextError>(byte_len)
+                    .parse_next(cursor)
+                    .ok()?;
+                if bounded && std::str::from_utf8(raw_bytes).is_err() {
+                    return None;
+                }
                 let (lo, hi) = normalized_len_bounds(*min_len, *max_len);
                 let s = decode_and_sanitize_string(raw_bytes, *charset, lo, hi);
-                Ok(FuzzValue::String(s))
+                Some(FuzzValue::String(s))
             }
             Self::Array {
                 elem,
                 min_len,
                 max_len,
             } => {
-                let raw_len = le_u64.parse_next(input)?;
+                let raw_len = le_u64::<_, ContextError>.parse_next(cursor).ok()?;
                 let (lo, hi) = normalized_len_bounds(*min_len, *max_len);
                 let count = project_u64(raw_len, lo as u64, hi as u64) as usize;
-                let items =
-                    repeat(count, |inp: &mut &[u8]| elem.parse_value(inp)).parse_next(input)?;
-                Ok(FuzzValue::Array(items))
+                *remaining = remaining.checked_sub(8)?;
+                let required = if count == 0 {
+                    0
+                } else {
+                    elem.minimum_wire_size()?.checked_mul(count)?
+                };
+                if required > *remaining {
+                    return None;
+                }
+                let mut items = Vec::new();
+                items.try_reserve_exact(count).ok()?;
+                for _ in 0..count {
+                    items.push(elem.decode_value_inner(cursor, remaining, bounded)?);
+                }
+                Some(FuzzValue::Array(items))
             }
             Self::Tuple(specs) => {
                 let mut items = Vec::with_capacity(specs.len());
                 for spec in specs {
-                    items.push(spec.parse_value(input)?);
+                    items.push(spec.decode_value_inner(cursor, remaining, bounded)?);
                 }
-                Ok(FuzzValue::Tuple(items))
+                Some(FuzzValue::Tuple(items))
             }
+        }?;
+        if !matches!(value, FuzzValue::Array(_) | FuzzValue::Tuple(_)) {
+            *remaining = remaining.checked_sub(crate::budget::wire_size(&value))?;
         }
+        Some(value)
     }
 }
 
@@ -689,7 +728,7 @@ impl SuiteSpec {
         self.mutate_buffer_selected(data, size, max_size, seed, raw_mutate, &fuzz_indices(self))
     }
 
-    /// Mutates only eligible cases, preserving their original suite indices.
+    /// Mutates only eligible cases, supplied in increasing original suite-index order.
     #[allow(clippy::too_many_arguments)]
     pub fn mutate_buffer_selected(
         &self,
@@ -708,7 +747,7 @@ impl SuiteSpec {
         let previous = data.get(..size.min(data.len())).and_then(|bytes| {
             let raw = u64::from_le_bytes(bytes.get(..8)?.try_into().ok()?);
             let index = (raw as usize) % self.cases.len();
-            indices.contains(&index).then_some(index)
+            indices.binary_search(&index).is_ok().then_some(index)
         });
         let switch = session.generate::<bool>().unwrap_or(false);
         let case_idx = match previous {
@@ -723,12 +762,16 @@ impl SuiteSpec {
         let Some(case) = self.cases.get(case_idx) else {
             return 0;
         };
-        let Some(bounded) = case.input.within_budget(limit - 8) else {
+        if case
+            .input
+            .minimum_wire_size()
+            .is_none_or(|minimum| minimum > limit - 8)
+        {
             return 0;
-        };
+        }
         let mut decoded = if !switch && previous == Some(case_idx) {
             let mut cursor = &data[8..size.min(data.len())];
-            bounded.decode_value(&mut cursor)
+            case.input.decode_value_with_budget(&mut cursor, limit - 8)
         } else {
             None
         };
@@ -753,11 +796,11 @@ impl SuiteSpec {
             let next =
                 raw_mutate.unwrap()(&mut data[8..limit], encoded.len(), limit - 8).min(limit - 8);
             let mut cursor = &data[8..8 + next];
-            decoded = bounded.decode_value(&mut cursor);
+            decoded = case.input.decode_value_with_budget(&mut cursor, limit - 8);
         }
         let value = match decoded {
             Some(mut value) => {
-                if !use_raw {
+                if !use_raw && let Some(bounded) = case.input.within_budget(limit - 8) {
                     let _ = session.mutate_with(&mut SpecMutator(&bounded), &mut value);
                 }
                 value
@@ -1156,5 +1199,125 @@ mod guidance_tests {
             assert!((2..=10).contains(&value.len()));
             assert!(value.bytes().all(|b| b.is_ascii_digit()));
         }
+    }
+}
+
+#[cfg(test)]
+mod retained_input_tests {
+    use super::*;
+    use crate::spec::CaseSpec;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static SAW_RETAINED: AtomicBool = AtomicBool::new(false);
+
+    fn uneven_payload() -> Vec<u8> {
+        FuzzValue::Tuple(vec![
+            FuzzValue::String("a".repeat(70)),
+            FuzzValue::String(String::new()),
+        ])
+        .to_bytes()
+    }
+
+    #[test]
+    fn valid_uneven_retained_and_dictionary_inputs_survive() {
+        let suite = SuiteSpec {
+            cases: vec![CaseSpec {
+                path: vec!["strings".into()],
+                input: ValueSpec::Tuple(vec![
+                    ValueSpec::String {
+                        charset: Charset::Ascii,
+                        min_len: 0,
+                        max_len: 1000,
+                    },
+                    ValueSpec::String {
+                        charset: Charset::Ascii,
+                        min_len: 0,
+                        max_len: 1000,
+                    },
+                ]),
+            }],
+        };
+        let payload = uneven_payload();
+        SAW_RETAINED.store(false, Ordering::Relaxed);
+        let mut preserved = false;
+        for seed in 0..64 {
+            let mut bytes = [0; 96];
+            bytes[8..8 + payload.len()].copy_from_slice(&payload);
+            let size = suite.mutate_buffer(
+                &mut bytes,
+                8 + payload.len(),
+                96,
+                seed,
+                Some(|data, size, _| {
+                    let expected = uneven_payload();
+                    if data[..size] == expected {
+                        SAW_RETAINED.store(true, Ordering::Relaxed);
+                    }
+                    data[..expected.len()].copy_from_slice(&expected);
+                    expected.len()
+                }),
+            );
+            preserved |= bytes[8..size] == payload;
+        }
+        assert!(
+            SAW_RETAINED.load(Ordering::Relaxed),
+            "valid retained input must reach the upstream mutator unchanged"
+        );
+        assert!(
+            preserved,
+            "feasible dictionary payload must survive domain repair"
+        );
+    }
+
+    #[test]
+    fn projected_string_arrays_charge_output_size_not_raw_input_size() {
+        let spec = ValueSpec::Array {
+            elem: Box::new(ValueSpec::String {
+                charset: Charset::Digits,
+                min_len: 10,
+                max_len: 10,
+            }),
+            min_len: 1,
+            max_len: 1,
+        };
+        let mut bytes = 1u64.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        let expected = FuzzValue::Array(vec![FuzzValue::String("0123456789".into())]);
+        assert_eq!(
+            spec.decode_value(&mut bytes.as_slice()),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            spec.decode_value_with_budget(&mut bytes.as_slice(), 26),
+            Some(expected)
+        );
+        assert!(
+            spec.decode_value_with_budget(&mut bytes.as_slice(), 25)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn impossible_array_counts_are_rejected_before_allocation() {
+        let spec = ValueSpec::Array {
+            elem: Box::new(ValueSpec::Bool),
+            min_len: 0,
+            max_len: u64::MAX,
+        };
+        let bytes = u64::MAX.to_le_bytes();
+        assert!(
+            spec.decode_value_with_budget(&mut bytes.as_slice(), 64)
+                .is_none()
+        );
+        let zero_sized = ValueSpec::Array {
+            elem: Box::new(ValueSpec::Unit),
+            min_len: 0,
+            max_len: u64::MAX,
+        };
+        assert!(
+            zero_sized
+                .decode_value_with_budget(&mut bytes.as_slice(), 64)
+                .is_none()
+        );
     }
 }
