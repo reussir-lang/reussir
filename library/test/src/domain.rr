@@ -78,13 +78,10 @@ impl<T> Domain<T> {
 
     /// Decodes a value from a complete `Vec<u8>` buffer.
     pub fn decode_bytes(self: Self, bytes: Vec<u8>) -> Option<T> {
-        match self.decode(ByteCursor::new(bytes)) {
-            None => Option::None,
-            Some(val_and_c) => {
-                let (val, _) = val_and_c;
-                Option::Some { val }
-            }
-        }
+        self.decode(ByteCursor::new(bytes)).map(|val_and_c: (T, ByteCursor)| {
+            let (val, _) = val_and_c;
+            val
+        })
     }
 
     /// Formats a materialized value for failure counterexamples.

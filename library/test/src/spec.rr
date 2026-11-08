@@ -805,37 +805,20 @@ impl SuiteSpec {
 
     /// Reconstructs a `SuiteSpec` from bytes produced by [`SuiteSpec::to_bytes`].
     pub fn from_bytes(bytes: Vec<u8>) -> Option<Self> {
-        let cursor = ByteCursor::new(bytes);
-        match read_magic(cursor, 0x52, 0x54, 0x53, 0x50) {
-            None => Option::None,
-            Some(c1) => match c1.read_u8() {
-                None => Option::None,
-                Some(ver_and_c) => {
-                    let (version, c2) = ver_and_c;
-                    if version != 1 {
-                        Option::None
-                    } else {
-                        match c2.read_u64_le() {
-                            None => Option::None,
-                            Some(count_and_c) => {
-                                let (count, c3) = count_and_c;
-                                match decode_case_specs(c3, count, List::Nil) {
-                                    None => Option::None,
-                                    Some(cases_and_c) => {
-                                        let (cases, rest) = cases_and_c;
-                                        if rest.is_eof() {
-                                            Option::Some { SuiteSpec { cases: cases } }
-                                        } else {
-                                            Option::None
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        read_magic(ByteCursor::new(bytes), 0x52, 0x54, 0x53, 0x50)
+            .and_then(|c1: ByteCursor| c1.read_u8())
+            .and_then(|ver_and_c: (u8, ByteCursor)| {
+                let (version, c2) = ver_and_c;
+                if version != 1 { Option::None } else { c2.read_u64_le() }
+            })
+            .and_then(|count_and_c: (u64, ByteCursor)| {
+                let (count, c3) = count_and_c;
+                decode_case_specs(c3, count, List::Nil)
+            })
+            .and_then(|cases_and_c: (List<CaseSpec>, ByteCursor)| {
+                let (cases, rest) = cases_and_c;
+                if rest.is_eof() { Option::Some { SuiteSpec { cases: cases } } } else { Option::None }
+            })
     }
 }
 
@@ -856,7 +839,8 @@ impl Display for SuiteSpec {
 fn nth_case(cases: List<CaseSpec>, index: u64) -> Option<CaseSpec> {
     match cases {
         Nil => Option::None,
-        Cons(head, tail) => if index == 0 { Option::Some { head } } else { nth_case(tail, index - 1) }
+        Cons(head, _) if index == 0 => Option::Some { head },
+        Cons(_, tail) => nth_case(tail, index - 1)
     }
 }
 
@@ -868,29 +852,22 @@ fn decode_case_specs(
     if remaining == 0 {
         Option::Some { (acc.reverse(), cursor) }
     } else {
-        match cursor.read_u64_le() {
-            None => Option::None,
-            Some(plen_and_c) => {
+        cursor.read_u64_le()
+            .and_then(|plen_and_c: (u64, ByteCursor)| {
                 let (path_len, c1) = plen_and_c;
-                match decode_path_segments(c1, path_len, List::Nil) {
-                    None => Option::None,
-                    Some(path_and_c) => {
-                        let (path, c2) = path_and_c;
-                        match decode_value_spec(c2) {
-                            None => Option::None,
-                            Some(spec_and_c) => {
-                                let (input, c3) = spec_and_c;
-                                decode_case_specs(
-                                    c3,
-                                    remaining - 1,
-                                    List::Cons { CaseSpec { path: path, input: input }, acc }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
+                decode_path_segments(c1, path_len, List::Nil)
+            })
+            .and_then(|path_and_c: (List<Text>, ByteCursor)| {
+                let (path, c2) = path_and_c;
+                decode_value_spec(c2).and_then(|spec_and_c: (ValueSpec, ByteCursor)| {
+                    let (input, c3) = spec_and_c;
+                    decode_case_specs(
+                        c3,
+                        remaining - 1,
+                        List::Cons { CaseSpec { path: path, input: input }, acc }
+                    )
+                })
+            })
     }
 }
 
@@ -902,13 +879,10 @@ fn decode_path_segments(
     if remaining == 0 {
         Option::Some { (acc.reverse(), cursor) }
     } else {
-        match cursor.read_exact_utf8(acc) {
-            None => Option::None,
-            Some(next_and_c) => {
-                let (next_acc, c1) = next_and_c;
-                decode_path_segments(c1, remaining - 1, next_acc)
-            }
-        }
+        cursor.read_exact_utf8(acc).and_then(|next_and_c: (List<Text>, ByteCursor)| {
+            let (next_acc, c1) = next_and_c;
+            decode_path_segments(c1, remaining - 1, next_acc)
+        })
     }
 }
 
