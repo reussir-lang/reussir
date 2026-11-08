@@ -455,6 +455,12 @@ pub(crate) fn profile_flags(
     for sanitizer in &profile.sanitizers {
         push(&mut args, "--sanitizer", sanitizer);
     }
+    for sancov in &profile.sancov {
+        push(&mut args, "--sancov", sancov);
+    }
+    if profile.fuzzer == Some(true) {
+        args.push("--fuzzer".to_owned());
+    }
     if let Some(encoding) = &profile.nullary_variant_encoding {
         push(&mut args, "--nullary-variant-encoding", encoding);
     }

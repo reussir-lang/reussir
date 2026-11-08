@@ -35,7 +35,7 @@ fn main() {
         workspace_dir.join(".cargo/config.toml").display()
     );
 
-    let manifest = standalone_manifest(&rt_dir.join("Cargo.toml"), &workspace_toml);
+    let manifest = standalone_manifest(&rt_dir.join("Cargo.toml"), &workspace_toml, true);
     // Seed the standalone graph from the workspace pins. The packaging step
     // below prunes unreachable packages and verifies every surviving pin.
     let lock = fs::read_to_string(&workspace_lock).expect("failed to read Cargo.lock");
@@ -47,6 +47,24 @@ fn main() {
     append_text(&mut tar, "reussir-rt/Cargo.lock", &lock);
     tar.append_dir_all("reussir-rt/src", rt_dir.join("src"))
         .expect("failed to archive reussir-rt/src");
+    // Bundle `reussir-fuzzer` alongside the runtime so `rrc --emit fuzzer` can
+    // link `libreussir_fuzzer.rlib` from the baked runtime's dependency dir.
+    let fuzzer_dir = crates_dir.join("reussir-fuzzer");
+    println!(
+        "cargo::rerun-if-changed={}",
+        fuzzer_dir.join("Cargo.toml").display()
+    );
+    println!(
+        "cargo::rerun-if-changed={}",
+        fuzzer_dir.join("src").display()
+    );
+    append_text(
+        &mut tar,
+        "reussir-fuzzer/Cargo.toml",
+        &standalone_manifest(&fuzzer_dir.join("Cargo.toml"), &workspace_toml, false),
+    );
+    tar.append_dir_all("reussir-fuzzer/src", fuzzer_dir.join("src"))
+        .expect("failed to archive reussir-fuzzer/src");
     // Cargo resolves optional path dependencies even with their feature off.
     // Ship the bindings source beside the runtime.
     let pjrt_dir = crates_dir.join("reussir-pjrt-sys");
@@ -54,7 +72,7 @@ fn main() {
     append_text(
         &mut tar,
         "reussir-pjrt-sys/Cargo.toml",
-        &standalone_manifest(&pjrt_dir.join("Cargo.toml"), &workspace_toml),
+        &standalone_manifest(&pjrt_dir.join("Cargo.toml"), &workspace_toml, true),
     );
     for file in ["build.rs", "header.rs", "README.md"] {
         append_text(
@@ -91,7 +109,7 @@ fn main() {
     append_text(
         &mut tar,
         "reussir-stablehlo/Cargo.toml",
-        &standalone_manifest(&stablehlo_dir.join("Cargo.toml"), &workspace_toml),
+        &standalone_manifest(&stablehlo_dir.join("Cargo.toml"), &workspace_toml, true),
     );
     for file in [
         "reussir-stablehlo/build.rs",
@@ -198,11 +216,11 @@ fn append_text(tar: &mut tar::Builder<Vec<u8>>, path: &str, text: &str) {
 /// manifest, and pin an empty `[workspace]` table so the unpacked copy stays
 /// its own workspace root even when the build directory sits inside some
 /// enclosing cargo workspace (a user project often does).
-fn standalone_manifest(crate_toml: &Path, workspace_toml: &Path) -> String {
+fn standalone_manifest(crate_toml: &Path, workspace_toml: &Path, is_root: bool) -> String {
     let mut doc: DocumentMut = fs::read_to_string(crate_toml)
         .unwrap()
         .parse()
-        .expect("reussir-rt/Cargo.toml is not valid TOML");
+        .expect("crate Cargo.toml is not valid TOML");
     let ws: DocumentMut = fs::read_to_string(workspace_toml)
         .unwrap()
         .parse()
@@ -218,6 +236,7 @@ fn standalone_manifest(crate_toml: &Path, workspace_toml: &Path) -> String {
     let pkg = doc["package"]
         .as_table_mut()
         .expect("[package] must be a table");
+    let pkg_name = pkg["name"].as_str().unwrap_or_default().to_owned();
     let keys: Vec<String> = pkg.iter().map(|(k, _)| k.to_owned()).collect();
     for key in keys {
         if inherits(&pkg[&key]) {
@@ -286,10 +305,24 @@ fn standalone_manifest(crate_toml: &Path, workspace_toml: &Path) -> String {
         }
     }
 
-    // Cut the crate loose from any workspace it might land under: cargo
-    // walks parent directories for a workspace root, and a foreign root
-    // rejects the crate ("believes it's in a workspace when it's not").
-    doc["workspace"] = toml_edit::Item::Table(toml_edit::Table::new());
+    if is_root {
+        // Cut the crate loose from any workspace it might land under: cargo
+        // walks parent directories for a workspace root, and a foreign root
+        // rejects the crate ("believes it's in a workspace when it's not").
+        let mut ws_table = toml_edit::Table::new();
+        if pkg_name == "reussir-rt" {
+            let mut members = toml_edit::Array::new();
+            members.push(".");
+            members.push("../reussir-fuzzer");
+            ws_table.insert("members", toml_edit::value(members));
+            let mut default_members = toml_edit::Array::new();
+            default_members.push(".");
+            ws_table.insert("default-members", toml_edit::value(default_members));
+        }
+        doc["workspace"] = toml_edit::Item::Table(ws_table);
+    } else {
+        doc["package"]["workspace"] = toml_edit::value("../reussir-rt");
+    }
 
     doc.to_string()
 }

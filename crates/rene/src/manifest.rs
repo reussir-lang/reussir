@@ -117,6 +117,10 @@ pub struct Target {
     /// independent programs while sharing dependencies and build state.
     #[serde(default)]
     pub path: Option<PathBuf>,
+    /// Link and instrument this executable target as a libFuzzer harness
+    /// (`rrc --fuzzer`).
+    #[serde(default)]
+    pub fuzzer: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -184,6 +188,11 @@ pub struct Profile {
     /// `rrc --sanitizer`, one per element.
     #[serde(default)]
     pub sanitizers: Vec<String>,
+    /// `rrc --sancov`, one per element.
+    #[serde(default)]
+    pub sancov: Vec<String>,
+    /// `rrc --fuzzer` when true.
+    pub fuzzer: Option<bool>,
     /// `rrc --nullary-variant-encoding`.
     pub nullary_variant_encoding: Option<String>,
     /// Default machine target when `rene build --target` is absent.
@@ -237,10 +246,12 @@ impl Profile {
             disable_borrow_analysis,
             instrument_nonlinear_ffi,
             closure_wpd,
-            pack_record_members
+            pack_record_members,
+            fuzzer
         );
         self.link_args.extend(over.link_args.iter().cloned());
         self.sanitizers.extend(over.sanitizers.iter().cloned());
+        self.sancov.extend(over.sancov.iter().cloned());
         self.extra_flags.extend(over.extra_flags.iter().cloned());
         self
     }

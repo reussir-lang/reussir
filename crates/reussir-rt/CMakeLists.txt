@@ -55,7 +55,7 @@ add_custom_target(reussir-rt ALL
     COMMAND ${CMAKE_COMMAND} -E env
         CARGO_TARGET_DIR=${CMAKE_BINARY_DIR}/target-rt
         RUSTFLAGS=-Awarnings
-        ${REUSSIR_CARGO} build ${REUSSIR_CARGO_TARGET_ARGS} --locked --profile ${CARGO_PROFILE} --quiet
+        ${REUSSIR_CARGO} build ${REUSSIR_CARGO_TARGET_ARGS} -p reussir-rt -p reussir-fuzzer --locked --profile ${CARGO_PROFILE} --quiet
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Building reussir-rt with cargo (${CARGO_PROFILE} profile)"
 )
