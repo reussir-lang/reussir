@@ -398,6 +398,337 @@ impl Display for Charset {
     }
 }
 
+/// Schema and constraints for one test input or sub-value.
+pub enum ValueSpec {
+    /// Zero-argument unit input (0 bytes).
+    Unit,
+    /// Boolean input (1 byte: `0` = false, non-zero = true).
+    Bool,
+    /// Signed integer of `width` in the inclusive range `[min, max]`.
+    Int(IntWidth, i64, i64),
+    /// Unsigned integer of `width` in the inclusive range `[min, max]`.
+    UInt(IntWidth, u64, u64),
+    /// IEEE-754 float of `width` in `[min, max]`, with `(allow_nan, allow_inf)`.
+    Float(FloatWidth, f64, f64, bool, bool),
+    /// Single character from `charset` (4-byte little-endian `u32` scalar).
+    Char(Charset),
+    /// UTF-8 string with character count in `[min_len, max_len]` from `charset`.
+    String(Charset, u64, u64),
+    /// Homogeneous sequence of `elem` with length in `[min_len, max_len]`.
+    Array(ValueSpec, u64, u64),
+    /// Fixed-arity product of values encoded sequentially.
+    Tuple(List<ValueSpec>)
+}
+
+impl ValueSpec {
+    /// Whether this specification is `ValueSpec::Unit`.
+    pub fn is_unit(self: Self) -> bool {
+        match self {
+            Unit => true,
+            _ => false
+        }
+    }
+
+    /// Generates a random byte buffer conforming to this specification.
+    pub fn generate<R: RandomState>(self: Self, rng: Rng<R>) -> Vec<u8> {
+        self.write_random(rng, empty_bytes())
+    }
+
+    /// Appends a random value conforming to `self` onto `out`.
+    pub fn write_random<R: RandomState>(self: Self, rng: Rng<R>, out: Vec<u8>) -> Vec<u8> {
+        match self {
+            Unit => out,
+            Bool => write_u8(out, (rng.next() & 1) as u8),
+            Int(width, min, max) => {
+                let value = sample_i64(rng, min, max);
+                write_int_le(out, width, value)
+            },
+            UInt(width, min, max) => {
+                let value = sample_u64(rng, min, max);
+                write_uint_le(out, width, value)
+            },
+            Float(width, min, max, allow_nan, allow_inf) => {
+                let value = sample_f64(rng, min, max, allow_nan, allow_inf);
+                match width {
+                    F32 => write_u32_le(out, f32_to_bits(value as f32)),
+                    F64 => write_u64_le(out, f64_to_bits(value))
+                }
+            },
+            Char(charset) => {
+                let ch = charset.map_word(rng.next());
+                write_u32_le(out, ch as u32)
+            },
+            ValueSpec::String(charset, min_len, max_len) => {
+                let char_count = sample_u64(rng, min_len, max_len);
+                let (_, generated) = while [i = (0 as u64), s = String::new()] (i < char_count) {
+                    (i + 1, s.push_char(charset.map_word(rng.next())))
+                };
+                write_string_bytes(out, Text::Owned { generated })
+            },
+            Array(elem, min_len, max_len) => {
+                let count = sample_u64(rng, min_len, max_len);
+                let out = write_u64_le(out, count);
+                let (_, out) = while [i = (0 as u64), buf = out] (i < count) {
+                    (i + 1, elem.write_random(rng, buf))
+                };
+                out
+            },
+            Tuple(items) => {
+                items.fold_left(out, |buf: Vec<u8>, item: ValueSpec| item.write_random(rng, buf))
+            }
+        }
+    }
+
+    /// Serializes `self` into a self-contained binary representation.
+    pub fn to_bytes(self: Self) -> Vec<u8> {
+        let header = write_u8(write_magic(Vec::new(), 0x52, 0x56, 0x53, 0x50), 1);
+        self.encode_spec(header)
+    }
+
+    /// Reconstructs a [`ValueSpec`] from bytes produced by [`ValueSpec::to_bytes`].
+    pub fn from_bytes(bytes: Vec<u8>) -> Option<Self> {
+        read_magic(ByteCursor::new(bytes), 0x52, 0x56, 0x53, 0x50)
+            .and_then(|cursor: ByteCursor| cursor.read_u8())
+            .and_then(|ver_and_cursor: (u8, ByteCursor)| {
+                let (version, cursor) = ver_and_cursor;
+                if version != 1 { Option::None } else { decode_value_spec(cursor) }
+            })
+            .and_then(|res: (ValueSpec, ByteCursor)| {
+                let (spec, rest) = res;
+                if rest.is_eof() { Option::Some { spec } } else { Option::None }
+            })
+    }
+
+    fn encode_spec(self: Self, out: Vec<u8>) -> Vec<u8> {
+        match self {
+            Unit => write_u8(out, 0),
+            Bool => write_u8(out, 1),
+            Int(width, min, max) => {
+                let out = write_u8(write_u8(out, 2), width.to_tag());
+                write_u64_le(write_u64_le(out, min as u64), max as u64)
+            },
+            UInt(width, min, max) => {
+                let out = write_u8(write_u8(out, 3), width.to_tag());
+                write_u64_le(write_u64_le(out, min), max)
+            },
+            Float(width, min, max, allow_nan, allow_inf) => {
+                let out = write_u8(write_u8(out, 4), width.to_tag());
+                let out = write_u64_le(write_u64_le(out, f64_to_bits(min)), f64_to_bits(max));
+                let out = write_u8(out, if allow_nan { 1 } else { 0 });
+                write_u8(out, if allow_inf { 1 } else { 0 })
+            },
+            Char(charset) => write_u8(write_u8(out, 5), charset.to_tag()),
+            ValueSpec::String(charset, min_len, max_len) => {
+                let out = write_u8(write_u8(out, 6), charset.to_tag());
+                write_u64_le(write_u64_le(out, min_len), max_len)
+            },
+            Array(elem, min_len, max_len) => {
+                let out = write_u64_le(write_u64_le(write_u8(out, 7), min_len), max_len);
+                elem.encode_spec(out)
+            },
+            Tuple(items) => {
+                let out = write_u64_le(write_u8(out, 8), items.len());
+                items.fold_left(out, |buf: Vec<u8>, item: ValueSpec| item.encode_spec(buf))
+            }
+        }
+    }
+}
+
+fn decode_value_spec(cursor: ByteCursor) -> Option<(ValueSpec, ByteCursor)> {
+    cursor.read_u8().and_then(|tag_and_cursor: (u8, ByteCursor)| {
+        let (tag, cursor) = tag_and_cursor;
+        match tag {
+            0 => Option::Some { (ValueSpec::Unit, cursor) },
+            1 => Option::Some { (ValueSpec::Bool, cursor) },
+            2 => cursor.read_u8()
+                .and_then(|w_and_c: (u8, ByteCursor)| {
+                    let (w_tag, c1) = w_and_c;
+                    IntWidth::from_tag(w_tag).map(|width: IntWidth| (width, c1))
+                })
+                .and_then(|w_and_c: (IntWidth, ByteCursor)| {
+                    let (width, c1) = w_and_c;
+                    c1.read_u64_le().and_then(|min_and_c: (u64, ByteCursor)| {
+                        let (min_u, c2) = min_and_c;
+                        c2.read_u64_le().map(|max_and_c: (u64, ByteCursor)| {
+                            let (max_u, c3) = max_and_c;
+                            (ValueSpec::Int { width, min_u as i64, max_u as i64 }, c3)
+                        })
+                    })
+                }),
+            3 => cursor.read_u8()
+                .and_then(|w_and_c: (u8, ByteCursor)| {
+                    let (w_tag, c1) = w_and_c;
+                    IntWidth::from_tag(w_tag).map(|width: IntWidth| (width, c1))
+                })
+                .and_then(|w_and_c: (IntWidth, ByteCursor)| {
+                    let (width, c1) = w_and_c;
+                    c1.read_u64_le().and_then(|min_and_c: (u64, ByteCursor)| {
+                        let (min_u, c2) = min_and_c;
+                        c2.read_u64_le().map(|max_and_c: (u64, ByteCursor)| {
+                            let (max_u, c3) = max_and_c;
+                            (ValueSpec::UInt { width, min_u, max_u }, c3)
+                        })
+                    })
+                }),
+            4 => cursor.read_u8()
+                .and_then(|w_and_c: (u8, ByteCursor)| {
+                    let (w_tag, c1) = w_and_c;
+                    FloatWidth::from_tag(w_tag).map(|width: FloatWidth| (width, c1))
+                })
+                .and_then(|w_and_c: (FloatWidth, ByteCursor)| {
+                    let (width, c1) = w_and_c;
+                    c1.read_u64_le().and_then(|min_and_c: (u64, ByteCursor)| {
+                        let (min_bits, c2) = min_and_c;
+                        c2.read_u64_le().and_then(|max_and_c: (u64, ByteCursor)| {
+                            let (max_bits, c3) = max_and_c;
+                            c3.read_u8().and_then(|nan_and_c: (u8, ByteCursor)| {
+                                let (nan_flag, c4) = nan_and_c;
+                                c4.read_u8().and_then(|inf_and_c: (u8, ByteCursor)| {
+                                    let (inf_flag, c5) = inf_and_c;
+                                    if nan_flag > 1 || inf_flag > 1 {
+                                        Option::None
+                                    } else {
+                                        Option::Some { (
+                                            ValueSpec::Float {
+                                                width,
+                                                f64_from_bits(min_bits),
+                                                f64_from_bits(max_bits),
+                                                nan_flag == 1,
+                                                inf_flag == 1
+                                            },
+                                            c5
+                                        ) }
+                                    }
+                                })
+                            })
+                        })
+                    })
+                }),
+            5 => cursor.read_u8().and_then(|cs_and_c: (u8, ByteCursor)| {
+                let (cs_tag, c1) = cs_and_c;
+                Charset::from_tag(cs_tag).map(|cs: Charset| (ValueSpec::Char { cs }, c1))
+            }),
+            6 => cursor.read_u8()
+                .and_then(|cs_and_c: (u8, ByteCursor)| {
+                    let (cs_tag, c1) = cs_and_c;
+                    Charset::from_tag(cs_tag).map(|cs: Charset| (cs, c1))
+                })
+                .and_then(|cs_and_c: (Charset, ByteCursor)| {
+                    let (cs, c1) = cs_and_c;
+                    c1.read_u64_le().and_then(|min_and_c: (u64, ByteCursor)| {
+                        let (min_len, c2) = min_and_c;
+                        c2.read_u64_le().map(|max_and_c: (u64, ByteCursor)| {
+                            let (max_len, c3) = max_and_c;
+                            (ValueSpec::String { cs, min_len, max_len }, c3)
+                        })
+                    })
+                }),
+            7 => cursor.read_u64_le().and_then(|min_and_c: (u64, ByteCursor)| {
+                let (min_len, c1) = min_and_c;
+                c1.read_u64_le().and_then(|max_and_c: (u64, ByteCursor)| {
+                    let (max_len, c2) = max_and_c;
+                    decode_value_spec(c2).map(|elem_and_c: (ValueSpec, ByteCursor)| {
+                        let (elem, c3) = elem_and_c;
+                        (ValueSpec::Array { elem, min_len, max_len }, c3)
+                    })
+                })
+            }),
+            8 => cursor.read_u64_le().and_then(|arity_and_c: (u64, ByteCursor)| {
+                let (arity, c1) = arity_and_c;
+                decode_value_spec_list(c1, arity, List::Nil).map(
+                    |items_and_c: (List<ValueSpec>, ByteCursor)| {
+                        let (items, c2) = items_and_c;
+                        (ValueSpec::Tuple { items }, c2)
+                    }
+                )
+            }),
+            _ => Option::None
+        }
+    })
+}
+
+fn decode_value_spec_list(
+    cursor: ByteCursor,
+    remaining: u64,
+    acc: List<ValueSpec>
+) -> Option<(List<ValueSpec>, ByteCursor)> {
+    if remaining == 0 {
+        Option::Some { (acc.reverse(), cursor) }
+    } else {
+        decode_value_spec(cursor).and_then(|item_and_c: (ValueSpec, ByteCursor)| {
+            let (item, next_cursor) = item_and_c;
+            decode_value_spec_list(next_cursor, remaining - 1, List::Cons { item, acc })
+        })
+    }
+}
+
+impl PartialEq for ValueSpec {
+    fn eq(self: Self, other: Self) -> bool {
+        match (self, other) {
+            (Unit, Unit) => true,
+            (Bool, Bool) => true,
+            (Int(w1, min1, max1), Int(w2, min2, max2)) =>
+                w1 == w2 && min1 == min2 && max1 == max2,
+            (UInt(w1, min1, max1), UInt(w2, min2, max2)) =>
+                w1 == w2 && min1 == min2 && max1 == max2,
+            (Float(w1, min1, max1, nan1, inf1), Float(w2, min2, max2, nan2, inf2)) =>
+                w1 == w2
+                    && f64_to_bits(min1) == f64_to_bits(min2)
+                    && f64_to_bits(max1) == f64_to_bits(max2)
+                    && nan1 == nan2
+                    && inf1 == inf2,
+            (Char(cs1), Char(cs2)) => cs1 == cs2,
+            (ValueSpec::String(cs1, min1, max1), ValueSpec::String(cs2, min2, max2)) =>
+                cs1 == cs2 && min1 == min2 && max1 == max2,
+            (Array(elem1, min1, max1), Array(elem2, min2, max2)) if min1 == min2 && max1 == max2 =>
+                elem1 == elem2,
+            (Tuple(items1), Tuple(items2)) => list_eq(items1, items2),
+            _ => false
+        }
+    }
+}
+
+fn list_eq<T: PartialEq>(a: List<T>, b: List<T>) -> bool {
+    match (a, b) {
+        (Nil, Nil) => true,
+        (Cons(x, xs), Cons(y, ys)) if x == y => list_eq(xs, ys),
+        _ => false
+    }
+}
+
+impl Eq for ValueSpec {}
+
+impl Display for ValueSpec {
+    fn fmt(self: Self) -> Format {
+        match self {
+            Unit => lit("unit"),
+            Bool => lit("bool"),
+            Int(width, min, max) => lit("i").append(width.fmt())
+                .append(brackets(min.fmt().append(lit("..=")).append(max.fmt()))),
+            UInt(width, min, max) => lit("u").append(width.fmt())
+                .append(brackets(min.fmt().append(lit("..=")).append(max.fmt()))),
+            Float(width, min, max, allow_nan, allow_inf) => {
+                let base = width.fmt()
+                    .append(brackets(format_f64(min).append(lit("..=")).append(format_f64(max))));
+                let with_nan = if allow_nan { base.append(lit("+nan")) } else { base };
+                if allow_inf { with_nan.append(lit("+inf")) } else { with_nan }
+            },
+            Char(charset) => call(lit("char"), List::Cons { charset.fmt(), List::Nil }, 2),
+            ValueSpec::String(charset, min_len, max_len) => {
+                lit("string").append(parens(charset.fmt()))
+                    .append(brackets(min_len.fmt().append(lit("..=")).append(max_len.fmt())))
+            },
+            Array(elem, min_len, max_len) => {
+                lit("array").append(parens(elem.fmt()))
+                    .append(brackets(min_len.fmt().append(lit("..=")).append(max_len.fmt())))
+            },
+            Tuple(items) => {
+                parens(comma_list(items.map(|item: ValueSpec| item.fmt())))
+            }
+        }
+    }
+}
+
 /// Non-allocating cursor over a `Vec<u8>`.
 pub struct [value] ByteCursor {
     bytes: Vec<u8>,
@@ -481,23 +812,18 @@ impl ByteCursor {
     /// Reads a length-prefixed UTF-8 string and validates that every byte
     /// sequence is well-formed UTF-8.
     fn read_exact_utf8(self: Self, acc: List<Text>) -> Option<(List<Text>, Self)> {
-        match self.read_u64_le() {
-            None => Option::None,
-            Some(len_and_c) => {
-                let (byte_len, c1) = len_and_c;
-                if c1.remaining() < byte_len {
-                    Option::None
-                } else {
-                    match decode_utf8_range(c1.bytes, c1.offset, c1.offset + byte_len, String::new()) {
-                        None => Option::None,
-                        Some(s) => Option::Some { (
-                            List::Cons { Text::from_string(s), acc },
-                            ByteCursor { bytes: c1.bytes, offset: c1.offset + byte_len }
-                        ) }
-                    }
-                }
+        self.read_u64_le().and_then(|len_and_c: (u64, Self)| {
+            let (byte_len, c1) = len_and_c;
+            if c1.remaining() < byte_len {
+                Option::None
+            } else {
+                decode_utf8_range(c1.bytes, c1.offset, c1.offset + byte_len, String::new())
+                    .map(|s: String| (
+                        List::Cons { Text::from_string(s), acc },
+                        ByteCursor { bytes: c1.bytes, offset: c1.offset + byte_len }
+                    ))
             }
-        }
+        })
     }
 }
 
@@ -608,6 +934,103 @@ fn read_magic(cursor: ByteCursor, b0: u8, b1: u8, b2: u8, b3: u8) -> Option<Byte
             Option::None
         }
     }
+}
+
+/// Projects an arbitrary `u64` into `[min, max]`.
+pub fn project_u64(raw: u64, min: u64, max: u64) -> u64 {
+    if min >= max {
+        min
+    } else { if raw >= min && raw <= max {
+        raw
+    } else { if min == 0 && max == 0xffffffffffffffff {
+        raw
+    } else {
+        let span: u128 = (max as u128) - (min as u128) + 1;
+        min + (((raw as u128) % span) as u64)
+    } } }
+}
+
+/// Projects an arbitrary `i64` into `[min, max]`.
+pub fn project_i64(raw: i64, min: i64, max: i64) -> i64 {
+    if min >= max {
+        min
+    } else { if raw >= min && raw <= max {
+        raw
+    } else {
+        let sign_bit: u64 = 0x8000000000000000;
+        let u_min = (min as u64) ^ sign_bit;
+        let u_max = (max as u64) ^ sign_bit;
+        let u_raw = (raw as u64) ^ sign_bit;
+        let projected = project_u64(u_raw, u_min, u_max);
+        (projected ^ sign_bit) as i64
+    } }
+}
+
+/// Projects an arbitrary `f64` (or its raw bits) into `[min, max]`, honoring
+/// `allow_nan` and `allow_inf`.
+pub fn project_f64(raw: f64, bits: u64, min: f64, max: f64, allow_nan: bool, allow_inf: bool) -> f64 {
+    let raw_bits = f64_to_bits(raw);
+    if is_nan_bits(raw_bits) {
+        if allow_nan { raw } else { interpolate_f64(bits, min, max) }
+    } else { if is_inf_bits(raw_bits) {
+        if allow_inf { raw } else { interpolate_f64(bits, min, max) }
+    } else { if raw >= min && raw <= max {
+        raw
+    } else {
+        interpolate_f64(bits, min, max)
+    } } }
+}
+
+fn is_nan_bits(bits: u64) -> bool {
+    ((bits & 0x7ff0000000000000) == 0x7ff0000000000000) && ((bits & 0x000fffffffffffff) != 0)
+}
+
+fn is_inf_bits(bits: u64) -> bool {
+    (bits & 0x7fffffffffffffff) == 0x7ff0000000000000
+}
+
+fn interpolate_f64(bits: u64, min: f64, max: f64) -> f64 {
+    if min >= max {
+        min
+    } else {
+        let u = ((bits >> 11) as f64) * (1.0 / 9007199254740992.0);
+        let v = (1.0 - u) * min + u * max;
+        if v < min { min } else { if v > max { max } else { v } }
+    }
+}
+
+fn sample_u64<R: RandomState>(rng: Rng<R>, min: u64, max: u64) -> u64 {
+    project_u64(rng.next(), min, max)
+}
+
+fn sample_i64<R: RandomState>(rng: Rng<R>, min: i64, max: i64) -> i64 {
+    project_i64(rng.next() as i64, min, max)
+}
+
+fn sample_f64<R: RandomState>(
+    rng: Rng<R>,
+    min: f64,
+    max: f64,
+    allow_nan: bool,
+    allow_inf: bool
+) -> f64 {
+    let pick = rng.next();
+    let tag = pick & 31;
+    if allow_nan && tag == 0 {
+        f64_from_bits(0x7ff8000000000000)
+    } else { if allow_inf && tag == 1 {
+        f64_from_bits(0x7ff0000000000000)
+    } else { if allow_inf && tag == 2 {
+        f64_from_bits(0xfff0000000000000)
+    } else { if tag == 3 {
+        min
+    } else { if tag == 4 {
+        max
+    } else { if tag == 5 && min <= 0.0 && max >= 0.0 {
+        0.0
+    } else {
+        interpolate_f64(rng.next(), min, max)
+    } } } } } }
 }
 
 fn lit(s: str) -> Format {
