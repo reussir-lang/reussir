@@ -645,7 +645,7 @@ impl ValueSpec {
                 } else {
                     elem.minimum_wire_size()?.checked_mul(count)?
                 };
-                if required > cursor.len() || required > *remaining {
+                if required > *remaining {
                     return None;
                 }
                 let mut items = Vec::new();
@@ -1266,6 +1266,34 @@ mod retained_input_tests {
         assert!(
             preserved,
             "feasible dictionary payload must survive domain repair"
+        );
+    }
+
+    #[test]
+    fn projected_string_arrays_charge_output_size_not_raw_input_size() {
+        let spec = ValueSpec::Array {
+            elem: Box::new(ValueSpec::String {
+                charset: Charset::Digits,
+                min_len: 10,
+                max_len: 10,
+            }),
+            min_len: 1,
+            max_len: 1,
+        };
+        let mut bytes = 1u64.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        let expected = FuzzValue::Array(vec![FuzzValue::String("0123456789".into())]);
+        assert_eq!(
+            spec.decode_value(&mut bytes.as_slice()),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            spec.decode_value_with_budget(&mut bytes.as_slice(), 26),
+            Some(expected)
+        );
+        assert!(
+            spec.decode_value_with_budget(&mut bytes.as_slice(), 25)
+                .is_none()
         );
     }
 
