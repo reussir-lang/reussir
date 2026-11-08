@@ -3,7 +3,6 @@
 
 import core::intrinsic::array;
 import std::collections::cow::vec::Vec;
-import std::collections::cow::vec::RawVec;
 import std::format::Format;
 import std::format::Options;
 import std::collections::pure::list::List;
@@ -70,6 +69,9 @@ extern "rust" [{
     static ELEMENT_CLONES: AtomicUsize = AtomicUsize::new(0);
     #[repr(transparent)]
     pub struct CloneProbe(Rc<()>);
+    #[repr(transparent)]
+    #[derive(Clone)]
+    pub struct ProbeBuffer(reussir_rt::collections::vec::Vec<CloneProbe>);
     impl Clone for CloneProbe {
         fn clone(&self) -> Self {
             ELEMENT_CLONES.fetch_add(1, Ordering::Relaxed);
@@ -78,16 +80,19 @@ extern "rust" [{
     }
 }];
 
-#[ffi(rust = "CloneProbe")]
-pub struct Probe;
+#[ffi(rust = "ProbeBuffer")]
+pub struct ProbeBuffer;
 
 #[ffi(import)]
-fn new_probe() -> Probe [{ CloneProbe(Rc::new(())) }];
+fn new_probes() -> ProbeBuffer [{
+    ProbeBuffer(reussir_rt::collections::vec::Vec::new()
+        .push(CloneProbe(Rc::new(()))).push(CloneProbe(Rc::new(()))))
+}];
 
 #[ffi(import)]
-fn update_without_cloning(values: RawVec<Probe>) -> bool [{
+fn update_without_cloning(values: ProbeBuffer) -> bool [{
     let before = ELEMENT_CLONES.load(Ordering::Relaxed);
-    let values = values.push(CloneProbe(Rc::new(())));
+    let values = values.0.push(CloneProbe(Rc::new(())));
     values.len() == 3 && ELEMENT_CLONES.load(Ordering::Relaxed) == before
 }];
 
@@ -181,18 +186,18 @@ fn test_find_and_filter() {
 
 fn test_case_input_ownership() {
     let domain = i64_domain().map(
-        |unused: i64| new_probe(), |unused: Probe| Format::Empty
-    ).vec().with_len(2);
-    let test = Case::fuzz(domain, |values: Vec<Probe>| {
-        expect(update_without_cloning(values.into_raw()), "case input must remain unique")
+        |unused: i64| new_probes(), |unused: ProbeBuffer| Format::Empty
+    );
+    let test = Case::fuzz(domain, |values: ProbeBuffer| {
+        expect(update_without_cloning(values), "case input must remain unique")
     });
-    let bytes = write_u64_le(write_u64_le(write_u64_le(Vec::new(), 2), 10), 20);
-    check(is_pass_result(test.run_bytes(bytes)));
+    check(is_pass_result(test.run_bytes(write_u64_le(Vec::new(), 10))));
 
     let failing = Case::fuzz(i64_domain().vec().with_len(2), |values: Vec<i64>| {
         let changed = values.set(0, 99);
         expect(changed.get(0).unwrap_or(0) != 99, "changed")
     });
+    let bytes = write_u64_le(write_u64_le(write_u64_le(Vec::new(), 2), 10), 20);
     match failing.run_bytes(bytes) {
         Fail(original, _) => check(original.render(Options::default()).to_plain_string().eq_str("[10, 20]")),
         _ => check(false)
