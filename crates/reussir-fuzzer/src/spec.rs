@@ -3,6 +3,7 @@
 //! All [`ValueSpec`] and [`SuiteSpec`] encodings match `test::spec` in
 //! `library/test/src/spec.rr` byte-for-byte with a complete round-trip guarantee.
 
+use std::fmt;
 use winnow::binary::{le_i64, le_u8, le_u64};
 use winnow::combinator::{eof, fail, repeat};
 use winnow::error::ContextError;
@@ -84,6 +85,17 @@ impl IntWidth {
     }
 }
 
+impl fmt::Display for IntWidth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::I8 => f.write_str("8"),
+            Self::I16 => f.write_str("16"),
+            Self::I32 => f.write_str("32"),
+            Self::I64 => f.write_str("64"),
+        }
+    }
+}
+
 /// Width tag for IEEE-754 floating-point input domains.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FloatWidth {
@@ -111,6 +123,15 @@ impl FloatWidth {
             0 => Some(Self::F32),
             1 => Some(Self::F64),
             _ => None,
+        }
+    }
+}
+
+impl fmt::Display for FloatWidth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::F32 => f.write_str("f32"),
+            Self::F64 => f.write_str("f64"),
         }
     }
 }
@@ -150,6 +171,20 @@ impl Charset {
             5 => Some(Self::Identifier),
             6 => Some(Self::Utf8),
             _ => None,
+        }
+    }
+}
+
+impl fmt::Display for Charset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ascii => f.write_str("ascii"),
+            Self::AsciiPrintable => f.write_str("printable"),
+            Self::Alphanumeric => f.write_str("alnum"),
+            Self::Alpha => f.write_str("alpha"),
+            Self::Digits => f.write_str("digits"),
+            Self::Identifier => f.write_str("ident"),
+            Self::Utf8 => f.write_str("utf8"),
         }
     }
 }
@@ -272,6 +307,54 @@ impl PartialEq for ValueSpec {
 }
 
 impl Eq for ValueSpec {}
+
+impl fmt::Display for ValueSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unit => f.write_str("unit"),
+            Self::Bool => f.write_str("bool"),
+            Self::Int { width, min, max } => write!(f, "i{width}[{min}..={max}]"),
+            Self::UInt { width, min, max } => write!(f, "u{width}[{min}..={max}]"),
+            Self::Float {
+                width,
+                min,
+                max,
+                allow_nan,
+                allow_inf,
+            } => {
+                write!(f, "{width}[{min}..={max}]")?;
+                if *allow_nan {
+                    f.write_str("+nan")?;
+                }
+                if *allow_inf {
+                    f.write_str("+inf")?;
+                }
+                Ok(())
+            }
+            Self::Char(cs) => write!(f, "char({cs})"),
+            Self::String {
+                charset,
+                min_len,
+                max_len,
+            } => write!(f, "string({charset})[{min_len}..={max_len}]"),
+            Self::Array {
+                elem,
+                min_len,
+                max_len,
+            } => write!(f, "array({elem})[{min_len}..={max_len}]"),
+            Self::Tuple(items) => {
+                f.write_str("(")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{item}")?;
+                }
+                f.write_str(")")
+            }
+        }
+    }
+}
 
 impl ValueSpec {
     /// Whether this spec represents a zero-argument unit test case.
@@ -443,6 +526,12 @@ impl CaseSpec {
     }
 }
 
+impl fmt::Display for CaseSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.joined_path(), self.input)
+    }
+}
+
 /// Complete specification derived from a `TestTree`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SuiteSpec {
@@ -481,6 +570,18 @@ impl SuiteSpec {
             .map(|(cases, _)| Self { cases })
             .parse_next(&mut bytes)
             .ok()
+    }
+}
+
+impl fmt::Display for SuiteSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, case) in self.cases.iter().enumerate() {
+            if i > 0 {
+                writeln!(f)?;
+            }
+            write!(f, "{case}")?;
+        }
+        Ok(())
     }
 }
 
