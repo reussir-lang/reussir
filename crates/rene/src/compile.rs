@@ -129,6 +129,16 @@ pub fn target_groups(
             group.libs.push(name.to_owned());
         }
     }
+    if groups.is_empty() {
+        groups.insert(
+            profile.fuzzer == Some(true),
+            TargetGroup {
+                profile: profile.clone(),
+                bins: Vec::new(),
+                libs: Vec::new(),
+            },
+        );
+    }
     Ok(groups.into_values().collect())
 }
 

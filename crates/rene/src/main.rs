@@ -621,15 +621,6 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), Error> {
             let target = rt::resolve_target(requested_target).await?;
             let bake = fresh::recorded_bake(held.as_ref(), &target)?;
             let mixed = groups.len() > 1;
-            let groups = if groups.is_empty() {
-                vec![compile::TargetGroup {
-                    profile,
-                    bins: Vec::new(),
-                    libs: Vec::new(),
-                }]
-            } else {
-                groups
-            };
             let mut rendered_nodes = Vec::new();
             for group in groups {
                 let mut graph = graph.clone();
@@ -668,11 +659,8 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), Error> {
                     bake.as_ref(),
                     Some(&states),
                 );
-                let mut nodes = rendered["nodes"]
-                    .as_array_mut()
-                    .expect("plan nodes")
-                    .drain(..)
-                    .collect::<Vec<_>>();
+                let mut nodes =
+                    std::mem::take(rendered["nodes"].as_array_mut().expect("plan nodes"));
                 if mixed {
                     for node in &mut nodes {
                         node["fuzzer"] = (profile.fuzzer == Some(true)).into();
