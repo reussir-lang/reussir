@@ -5,6 +5,7 @@
   },
   dependencies = {
     std = { path = "../../../library/std", version = "^0.1" },
+    test = { path = "../../../library/test", version = "^0.1" },
     test_utils = { path = "../../../library/test_utils", version = "^0.1" },
   },
   targets = {
@@ -25,6 +26,7 @@
     random = { kind = 'executable, path = "random.rr" },
     rtqueue = { kind = 'executable, path = "rtqueue.rr" },
     string = { kind = 'executable, path = "string.rr" },
+    test_tree = { kind = 'executable, path = "test_tree.rr" },
     text_view = { kind = 'executable, path = "text_view.rr" },
     wavl = { kind = 'executable, path = "wavl.rr" },
   },

@@ -1,0 +1,156 @@
+//! Command-line selection of test cases.
+//!
+//! ```text
+//! Usage: PROGRAM [--match PATH]... [--skip PATH]... [--list]
+//! ```
+//!
+//! A `PATH` names groups and then optionally a case, root first, separated
+//! by `/`: `std/text/len`. It selects every case whose path starts with
+//! those names, so `std/text` selects the whole group. Matching is exact
+//! per name. Repeated `--match` options select the union; `--skip` removes
+//! cases afterwards. Without `--match`, every case is selected.
+
+import std::collections::pure::list::List;
+import std::format::Display;
+import std::format::Format;
+import std::format::join;
+import std::string::String;
+import std::text::Text;
+import std::text::TextView;
+import test::spec::SuiteSpec;
+import test::tree::Case;
+import test::tree::TestTree;
+
+/// Which cases a run includes.
+pub struct Selection {
+    matches: List<List<Text>>,
+    skips: List<List<Text>>
+}
+
+impl Selection {
+    /// Selects every case.
+    pub fn all() -> Self {
+        Selection { matches: List::Nil, skips: List::Nil }
+    }
+
+    /// Adds the cases under `path` to the selection.
+    pub fn with_match(self: Self, path: Text) -> Self {
+        Selection { matches: List::Cons { split_path(path), self.matches }, skips: self.skips }
+    }
+
+    /// Removes the cases under `path` from the selection.
+    pub fn with_skip(self: Self, path: Text) -> Self {
+        Selection { matches: self.matches, skips: List::Cons { split_path(path), self.skips } }
+    }
+
+    /// Whether the case at `path` is selected.
+    pub fn selects(self: Self, path: List<Text>) -> bool {
+        let matched = self.matches.is_nil()
+            || self.matches.any(|prefix: List<Text>| is_prefix(prefix, path));
+        matched && !self.skips.any(|prefix: List<Text>| is_prefix(prefix, path))
+    }
+
+    /// Keeps the selected cases of `tree`.
+    pub fn apply(self: Self, tree: TestTree) -> TestTree {
+        tree.filter(|path: List<Text>, unused_case: Case| self.selects(path))
+    }
+
+    /// Filters `tree` by `self` and derives the resulting [`SuiteSpec`].
+    pub fn derive_spec(self: Self, tree: TestTree) -> SuiteSpec {
+        self.apply(tree).derive_spec()
+    }
+}
+
+/// What the command line asks for.
+pub enum [value] Command {
+    Run(Selection),
+    ListPaths(Selection),
+    Help(Text),
+    Invalid(Text, Format)
+}
+
+/// Parses the process arguments, program name first.
+pub fn parse(args: List<String>) -> Command {
+    match args {
+        Nil => parse_options(Text::from_str("test"), List::Nil, Selection::all(), false),
+        Cons(program, rest) => parse_options(Text::from_string(program), rest, Selection::all(), false)
+    }
+}
+
+fn parse_options(program: Text, args: List<String>, selection: Selection, list: bool) -> Command {
+    match args {
+        Nil => if list { Command::ListPaths { selection } } else { Command::Run { selection } },
+        Cons(arg, _) if arg.eq_str("-h") || arg.eq_str("--help") => Command::Help { program },
+        Cons(arg, rest) if arg.eq_str("--list") => parse_options(program, rest, selection, true),
+        Cons(arg, Nil) if arg.eq_str("--match") || arg.eq_str("--skip") => Command::Invalid {
+            program,
+            text("missing PATH after ").append(Text::from_string(arg).fmt())
+        },
+        Cons(arg, Cons(value, tail)) if arg.eq_str("--match") =>
+            parse_options(program, tail, selection.with_match(Text::from_string(value)), list),
+        Cons(arg, Cons(value, tail)) if arg.eq_str("--skip") =>
+            parse_options(program, tail, selection.with_skip(Text::from_string(value)), list),
+        Cons(arg, _) => Command::Invalid {
+            program,
+            text("unknown argument: ").append(Text::from_string(arg).fmt())
+        }
+    }
+}
+
+/// The help text for `program`.
+pub fn usage(program: Text) -> Format {
+    text("Usage: ").append(program.fmt())
+        .append(text(" [--match PATH]... [--skip PATH]... [--list]"))
+        .append(Format::Hardline).append(Format::Hardline)
+        .append(text("Options:")).append(Format::Hardline)
+        .append(text("  --match PATH  Run only the cases under PATH; repeatable")).append(Format::Hardline)
+        .append(text("  --skip PATH   Leave out the cases under PATH; repeatable")).append(Format::Hardline)
+        .append(text("  --list        Print the selected case paths and exit")).append(Format::Hardline)
+        .append(text("  -h, --help    Print this help and exit")).append(Format::Hardline)
+        .append(Format::Hardline)
+        .append(text("PATH names groups and then optionally a case, root first, separated")).append(Format::Hardline)
+        .append(text("by '/', for example std/text/len."))
+}
+
+/// `path` in the form `--match` accepts.
+pub fn format_path(path: List<Text>) -> Format {
+    join(text("/"), path.map(|name: Text| name.fmt()))
+}
+
+fn text(s: str) -> Format {
+    Format::Text { Text::from_str(s) }
+}
+
+fn is_prefix(prefix: List<Text>, path: List<Text>) -> bool {
+    match (prefix, path) {
+        (Nil, _) => true,
+        (Cons(x, xs), Cons(y, ys)) if x == y => is_prefix(xs, ys),
+        _ => false
+    }
+}
+
+// Splits on `/`, dropping empty names so leading, trailing, and doubled
+// separators are harmless.
+fn split_path(path: Text) -> List<Text> {
+    let view = path.view();
+    let n = view.len();
+    let (_, start, names) = while [i = (0 as u64), start = (0 as u64), names = List::Nil] (i < n) {
+        if view.byte_at(i).unwrap_or(0) == 47 {
+            (i + 1, i + 1, push_name(view, start, i, names))
+        } else {
+            (i + 1, start, names)
+        }
+    };
+    push_name(view, start, n, names).reverse()
+}
+
+fn push_name(view: TextView, start: u64, end: u64, names: List<Text>) -> List<Text> {
+    if start == end {
+        names
+    } else {
+        match view.slice_byte(start, end).and_then(|name: TextView| name.to_text()) {
+            Some(name) => List::Cons { name, names },
+            None => names
+        }
+    }
+}
