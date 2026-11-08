@@ -14,6 +14,70 @@
 //!    and [`SuiteSpec::to_bytes`] / [`SuiteSpec::from_bytes`] implement a
 //!    complete binary round trip so an external fuzzing harness can load
 //!    the exact specification derived at startup.
+//!
+//! # Wire Format (CBNF)
+//!
+//! All multi-byte integers and IEEE-754 floats are encoded in little-endian
+//! byte order.
+//!
+//! ```text
+//! <u8>           ::= BYTE
+//! <bool-flag>    ::= 0x00 | 0x01
+//! <u16-le>       ::= <u8>{2}
+//! <u32-le>       ::= <u8>{4}
+//! <u64-le>       ::= <u8>{8}
+//! <i64-le>       ::= <u8>{8}                       ; two's-complement signed i64
+//! <f32-le>       ::= <u8>{4}                       ; IEEE-754 binary32 bits
+//! <f64-le>       ::= <u8>{8}                       ; IEEE-754 binary64 bits
+//! <utf8-string>  ::= <byte-len: u64-le> <utf8-byte: u8>{byte-len}
+//!
+//! <int-width>    ::= 0x00                          ; IntWidth::I8
+//!                  | 0x01                          ; IntWidth::I16
+//!                  | 0x02                          ; IntWidth::I32
+//!                  | 0x03                          ; IntWidth::I64
+//!
+//! <float-width>  ::= 0x00                          ; FloatWidth::F32
+//!                  | 0x01                          ; FloatWidth::F64
+//!
+//! <charset>      ::= 0x00                          ; Charset::Ascii
+//!                  | 0x01                          ; Charset::AsciiPrintable
+//!                  | 0x02                          ; Charset::Alphanumeric
+//!                  | 0x03                          ; Charset::Alpha
+//!                  | 0x04                          ; Charset::Digits
+//!                  | 0x05                          ; Charset::Identifier
+//!                  | 0x06                          ; Charset::Utf8
+//!
+//! ; --- Specification serialization (ValueSpec::to_bytes / SuiteSpec::to_bytes) ---
+//!
+//! <value-spec-blob> ::= "RVSP" 0x01 <value-spec>
+//! <suite-spec-blob> ::= "RTSP" 0x01 <case-count: u64-le> <case-spec>{case-count}
+//! <case-spec>       ::= <seg-count: u64-le> <utf8-string>{seg-count} <value-spec>
+//!
+//! <value-spec>      ::= 0x00                                                                      ; Unit
+//!                     | 0x01                                                                      ; Bool
+//!                     | 0x02 <width: int-width> <min: i64-le> <max: i64-le>                       ; Int
+//!                     | 0x03 <width: int-width> <min: u64-le> <max: u64-le>                       ; UInt
+//!                     | 0x04 <width: float-width> <min: f64-le> <max: f64-le>
+//!                            <allow-nan: bool-flag> <allow-inf: bool-flag>                        ; Float
+//!                     | 0x05 <charset: charset>                                                   ; Char
+//!                     | 0x06 <charset: charset> <min-len: u64-le> <max-len: u64-le>               ; String
+//!                     | 0x07 <min-len: u64-le> <max-len: u64-le> <elem: value-spec>               ; Array
+//!                     | 0x08 <arity: u64-le> <item: value-spec>{arity}                            ; Tuple
+//!
+//! ; --- Test input payload (Vec<u8> consumed by Domain::decode / runner) ---
+//!
+//! <suite-input>     ::= <case-idx: u64-le> <value-payload>
+//! <value-payload>   ::= ""                                                                        ; Unit
+//!                     | <u8>                                                                      ; Bool / Int(I8) / UInt(I8)
+//!                     | <u16-le>                                                                  ; Int(I16) / UInt(I16)
+//!                     | <u32-le>                                                                  ; Int(I32) / UInt(I32) / Char
+//!                     | <f32-le>                                                                  ; Float(F32)
+//!                     | <u64-le>                                                                  ; Int(I64) / UInt(I64)
+//!                     | <f64-le>                                                                  ; Float(F64)
+//!                     | <utf8-string>                                                             ; String
+//!                     | <elem-count: u64-le> <value-payload>{elem-count}                          ; Array
+//!                     | <value-payload>{arity}                                                    ; Tuple
+//! ```
 
 import std::collections::cow::vec::Vec;
 import std::collections::pure::list::List;
