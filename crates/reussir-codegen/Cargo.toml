@@ -32,4 +32,4 @@ reussir-syntax = { path = "../reussir-syntax" }
 [dev-dependencies]
 # JIT-execute the lowered module to check the compiled program's meaning.
 reussir-jit = { path = "../reussir-jit" }
-tracing-subscriber = "0.3.23"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
