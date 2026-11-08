@@ -3543,6 +3543,7 @@ version = "0.1.0"
 dependencies = [
  "libfuzzer-sys",
  "mutatis",
+ "thiserror 2.0.18",
  "winnow 1.0.3",
 ]
 

@@ -19,10 +19,12 @@ use std::ffi::c_void;
 pub use libfuzzer_sys;
 pub use mutatis;
 
+mod budget;
 pub mod mutator;
 mod selection;
 pub mod spec;
 
+pub use budget::InputBudgetError;
 use spec::SuiteSpec;
 
 /// Function pointer that increments the reference count of a bridged Reussir `TestTree`.
@@ -97,6 +99,7 @@ pub struct FuzzSession {
     spec_bytes: Vec<u8>,
     spec: SuiteSpec,
     selection: selection::CaseSelection,
+    budget_checked: Cell<bool>,
 }
 
 impl FuzzSession {
@@ -123,6 +126,7 @@ impl FuzzSession {
             spec_bytes: reg.spec_bytes,
             spec,
             selection,
+            budget_checked: Cell::new(false),
         })
     }
 
@@ -174,6 +178,23 @@ pub fn libfuzzer_initialize(
             std::process::abort();
         }
     };
+    let explicit_budget = std::env::args()
+        .filter_map(|arg| {
+            arg.strip_prefix("-max_len=")
+                .and_then(|value| value.parse::<usize>().ok())
+        })
+        .next_back()
+        .filter(|&limit| limit != 0);
+    if let Some(budget) = explicit_budget {
+        if let Err(error) = session
+            .spec()
+            .validate_input_budget(&session.selection.fuzz, budget)
+        {
+            eprintln!("reussir-fuzzer initialization error: {error}");
+            std::process::abort();
+        }
+        session.budget_checked.set(true);
+    }
     if let Ok(path) = std::env::var("REUSSIR_FUZZ_DUMP_SPEC")
         && !path.is_empty()
         && let Err(err) = std::fs::write(&path, session.spec_bytes())
@@ -252,6 +273,16 @@ pub fn libfuzzer_custom_mutator(
         let Some(session) = slot.get() else {
             return 0;
         };
+        // With automatic max_len, libFuzzer resolves the corpus-derived budget
+        // before the first custom mutation callback.
+        if !session.budget_checked.replace(true)
+            && let Err(error) = session
+                .spec()
+                .validate_input_budget(&session.selection.fuzz, max_size)
+        {
+            eprintln!("reussir-fuzzer input budget error: {error}");
+            std::process::abort();
+        }
         session.spec().mutate_buffer_selected(
             data,
             size,
