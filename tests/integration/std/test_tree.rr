@@ -199,6 +199,10 @@ fn test_case_input_ownership() {
     }
 }
 
+fn path_is(path: List<Text>, expected: str) -> bool {
+    test::cli::format_path(path).render(Options::default()).to_plain_string().eq_str(expected)
+}
+
 fn test_prepared_dispatch() {
     let tree = sample();
     let prepared = tree.prepare();
@@ -206,22 +210,22 @@ fn test_prepared_dispatch() {
     check(prepared.run_bytes(Vec::new()).is_none());
     check(TestTree::group("empty").prepare().run_bytes(write_u64_le(Vec::new(), 0)).is_none());
     let (path, result) = prepared.run_bytes(write_u64_le(Vec::new(), 0)).unwrap_or_panic();
-    check(path == path2("root", "a") && is_pass_result(result));
+    check(path_is(path, "root/a") && is_pass_result(result));
     let (path, result) = prepared.run_bytes(write_u64_le(Vec::new(), 2)).unwrap_or_panic();
-    check(path == path3("root", "inner", "c") && is_fail_result(result));
+    check(path_is(path, "root/inner/c") && is_fail_result(result));
     let (path, result) = prepared.run_bytes(write_u64_le(Vec::new(), 5)).unwrap_or_panic();
-    check(path == path3("root", "inner", "c") && is_fail_result(result));
+    check(path_is(path, "root/inner/c") && is_fail_result(result));
     let (_, malformed) = prepared.run_bytes(write_u64_le(Vec::new(), 1)).unwrap_or_panic();
     check(match malformed { MalformedInput => true, _ => false });
     let input = write_u64_le(write_u64_le(Vec::new(), 1), 17);
     let (path, result) = prepared.run_bytes(input).unwrap_or_panic();
-    check(path == path3("root", "inner", "b") && is_pass_result(result));
-    let filtered = tree.filter(|path: List<Text>, unused_case: Case| path == path3("root", "inner", "b"));
+    check(path_is(path, "root/inner/b") && is_pass_result(result));
+    let filtered = tree.filter(|path: List<Text>, unused_case: Case| path_is(path, "root/inner/b"));
     let filtered_prepared = filtered.prepare();
     check(filtered_prepared.derive_spec() == filtered.derive_spec());
     let input = write_u64_le(write_u64_le(Vec::new(), 0), 17);
     let (path, result) = filtered_prepared.run_bytes(input).unwrap_or_panic();
-    check(path == path3("root", "inner", "b") && is_pass_result(result));
+    check(path_is(path, "root/inner/b") && is_pass_result(result));
 }
 
 fn test_domain_combinators() {
