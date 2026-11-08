@@ -190,7 +190,8 @@ impl<T> Domain<T> {
             },
             Float(w, _, cur_max, _, _) => {
                 let hi = if cur_max <= 0.0 { 1000000.0 } else { cur_max };
-                ValueSpec::Float { w, 0.000001, hi, false, false }
+                let lo = if hi < 0.000001 { hi } else { 0.000001 };
+                ValueSpec::Float { w, lo, hi, false, false }
             },
             other => other
         };
@@ -223,7 +224,8 @@ impl<T> Domain<T> {
             },
             Float(w, cur_min, _, _, _) => {
                 let lo = if cur_min >= 0.0 { -1000000.0 } else { cur_min };
-                ValueSpec::Float { w, lo, -0.000001, false, false }
+                let hi = if lo > -0.000001 { lo } else { -0.000001 };
+                ValueSpec::Float { w, lo, hi, false, false }
             },
             other => other
         };
