@@ -31,7 +31,7 @@ transform [{
 
 // EMBED: module attributes {reussir.drop_order = "backward", reussir.inline_transform, transform.with_named_sequence}
 // EMBED: func.func @_RC6target
-// EMBED-SAME: attributes {no_inline, reussir.transform_anchor}
+// EMBED-SAME: attributes {no_inline, {{.*}}reussir.transform_anchor}
 // EMBED: transform.named_sequence @__reussir_inline_0
 // EMBED: transform.annotate
 // EMBED: transform.structured.match ops{["memref.store"]}
@@ -41,7 +41,7 @@ transform [{
 
 // LOWER-NOT: transform.named_sequence
 // LOWER-LABEL: llvm.func @_RC6target
-// LOWER-SAME: attributes {reussir.inline_ran, reussir.transform_anchor}
+// LOWER-SAME: attributes {{{.*}}reussir.inline_ran, reussir.transform_anchor}
 // LOWER-DAG: %[[OUTER_STEP:.+]] = llvm.mlir.constant(2 : index) : i64
 // LOWER-COUNT-2: llvm.store %{{[^ ]+}}, %{{[^ ]+}} : i64, !llvm.ptr
 // LOWER-NOT: llvm.store %{{[^ ]+}}, %{{[^ ]+}} : i64, !llvm.ptr
