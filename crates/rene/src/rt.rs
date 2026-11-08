@@ -409,7 +409,10 @@ pub async fn prepare(
     let record = serde_json::to_string(&artifacts)?;
     dir.set_status(&[
         (&tables::rt_source_hash_key(&artifacts.target), &hash),
-        (&tables::rt_artifacts_key(&artifacts.target), &record),
+        (
+            &tables::rt_artifacts_key(&artifacts.target, fuzzer),
+            &record,
+        ),
     ])?;
     Ok(artifacts)
 }

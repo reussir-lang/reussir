@@ -47,6 +47,8 @@ pub enum State {
     ProfileChanged,
     /// The baking toolchain changed.
     ToolchainChanged,
+    /// The dependency was compiled against another runtime bake.
+    RuntimeChanged,
     /// A recorded source file moved under the record's feet.
     FileChanged(String),
     /// The recorded artifact is gone.
@@ -73,6 +75,7 @@ impl State {
             State::ConfigChanged => "config-changed",
             State::ProfileChanged => "profile-changed",
             State::ToolchainChanged => "toolchain-changed",
+            State::RuntimeChanged => "runtime-changed",
             State::FileChanged(_) => "file-changed",
             State::ArtifactMissing(_) => "artifact-missing",
             State::UpstreamChanged(_) => "upstream-changed",
@@ -90,6 +93,7 @@ impl std::fmt::Display for State {
             State::ConfigChanged => f.write_str("the evaluated manifest changed"),
             State::ProfileChanged => f.write_str("the profile's knobs changed"),
             State::ToolchainChanged => f.write_str("the baking toolchain changed"),
+            State::RuntimeChanged => f.write_str("the baked runtime changed"),
             State::FileChanged(path) => write!(f, "`{path}` changed"),
             State::ArtifactMissing(path) => write!(f, "artifact `{path}` is missing"),
             State::UpstreamChanged(dep) => write!(f, "`{dep}`'s artifacts changed"),
@@ -110,6 +114,8 @@ pub struct DepRecord {
     pub profile_digest: String,
     /// Rust compiler identity used for polyffi.
     pub toolchain: String,
+    /// The runtime rlib the polyffi compiles linked against.
+    pub runtime: PathBuf,
     /// Per upstream cone member: the digest of the artifacts this node's
     /// compile consumed ([`artifact_digest`]).
     pub upstream: BTreeMap<String, String>,
@@ -140,10 +146,17 @@ pub struct Context<'a> {
 /// The recorded runtime bake, if any — the toolchain identity freshness
 /// compares against, and the real paths the plan dump expands its
 /// placeholders with.
-pub fn recorded_bake(dir: Option<&BuildDir>, target: &str) -> Result<Option<RtArtifacts>, Error> {
+pub fn recorded_bake(
+    dir: Option<&BuildDir>,
+    target: &str,
+    profile: &Profile,
+) -> Result<Option<RtArtifacts>, Error> {
     let Some(dir) = dir else { return Ok(None) };
     Ok(dir
-        .status(&tables::rt_artifacts_key(target))?
+        .status(&tables::rt_artifacts_key(
+            target,
+            profile.fuzzer == Some(true),
+        ))?
         .and_then(|record| serde_json::from_str(&record).ok()))
 }
 
@@ -157,7 +170,7 @@ fn within(path: &Path, dir: &Path) -> bool {
 /// One node's local freshness — no upstream-stale propagation, so at
 /// execution time (when the cone is final) the answer is exact.
 pub fn node_state(graph: &Graph, name: &str, ctx: &Context<'_>) -> Result<State, Error> {
-    let bake = recorded_bake(ctx.dir, ctx.target)?;
+    let bake = recorded_bake(ctx.dir, ctx.target, ctx.profile)?;
     let deps_dir = plan::dependency_dir(ctx.build_dir, ctx.profile_name, ctx.profile);
     if name == graph.root {
         root_state(graph, ctx, bake.as_ref())
@@ -169,7 +182,7 @@ pub fn node_state(graph: &Graph, name: &str, ctx: &Context<'_>) -> Result<State,
 /// The freshness of every node of the graph, keyed by package name.
 pub fn states(graph: &Graph, ctx: &Context<'_>) -> Result<BTreeMap<String, State>, Error> {
     let deps_dir = plan::dependency_dir(ctx.build_dir, ctx.profile_name, ctx.profile);
-    let bake = recorded_bake(ctx.dir, ctx.target)?;
+    let bake = recorded_bake(ctx.dir, ctx.target, ctx.profile)?;
     let cones = plan::transitive_deps(graph);
     let mut states: BTreeMap<String, State> = BTreeMap::new();
     for name in plan::topological(graph) {
@@ -239,6 +252,9 @@ fn dep_state(
     }
     if record.toolchain != bake.rustc_version {
         return Ok(State::ToolchainChanged);
+    }
+    if record.runtime != bake.rlib {
+        return Ok(State::RuntimeChanged);
     }
     // The recorded sources must still be the package's: the bundled `core`
     // unpacks under a content-hashed directory, so a rene upgrade moves its
@@ -357,6 +373,7 @@ pub fn record_dep(
         config_hash: deps::config_hash(&node.loaded.dump),
         profile_digest: profile_digest(ctx.profile_name, ctx.profile, ctx.target),
         toolchain: bake.rustc_version.clone(),
+        runtime: bake.rlib.clone(),
         upstream: graph.nodes[name]
             .dependencies
             .iter()
@@ -565,7 +582,7 @@ mod tests {
         let build_dir = tmp.path().join("build");
         let dir = BuildDir::open(&build_dir).unwrap();
         let bake = fake_bake();
-        let bake_key = tables::rt_artifacts_key(TEST_TARGET);
+        let bake_key = tables::rt_artifacts_key(TEST_TARGET, false);
         dir.set_status(&[(bake_key.as_str(), &serde_json::to_string(&bake).unwrap())])
             .unwrap();
         let deps_dir = build_dir.join("dev").join("deps");
@@ -735,12 +752,21 @@ mod tests {
         // A changed toolchain: toolchain-changed.
         let mut newer = fake_bake();
         newer.rustc_version = "rustc 2.0.0-test".to_owned();
-        let bake_key = tables::rt_artifacts_key(TEST_TARGET);
+        let bake_key = tables::rt_artifacts_key(TEST_TARGET, false);
         f.dir
             .set_status(&[(bake_key.as_str(), &serde_json::to_string(&newer).unwrap())])
             .unwrap();
         let states_now = states(&f.graph, &ctx).unwrap();
         assert_eq!(states_now["util"], State::ToolchainChanged);
+
+        // Another runtime bake under the same toolchain: runtime-changed.
+        let mut rebaked = fake_bake();
+        rebaked.rlib = PathBuf::from("/rebaked/libreussir_rt.rlib");
+        f.dir
+            .set_status(&[(bake_key.as_str(), &serde_json::to_string(&rebaked).unwrap())])
+            .unwrap();
+        let states_now = states(&f.graph, &ctx).unwrap();
+        assert_eq!(states_now["util"], State::RuntimeChanged);
     }
 
     /// A dependent whose record hashed old upstream bytes reports

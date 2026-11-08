@@ -396,26 +396,27 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), Error> {
         .target
         .as_deref()
         .or(profile.default_target_triple.as_deref());
-    let needs_fuzzer = profile.fuzzer == Some(true)
-        || groups
-            .iter()
-            .any(|group| group.profile.fuzzer == Some(true));
     let cache = rene::cache::Cache::open()?;
-    let artifacts = rt::prepare(
-        &cache,
-        &dir,
-        requested_target,
-        bake_linker.as_deref(),
-        &profile.sanitizers,
-        needs_fuzzer,
-        &progress,
-    )
-    .await?;
-    let target = artifacts.target.clone();
+    // Each target group links the runtime bake matching its instrumentation,
+    // so a selection of targets compiles against the same runtime as the
+    // full build.
+    let prepare_runtime = async |profile: &manifest::Profile| {
+        rt::prepare(
+            &cache,
+            &dir,
+            requested_target,
+            bake_linker.as_deref(),
+            &profile.sanitizers,
+            profile.fuzzer == Some(true),
+            &progress,
+        )
+        .await
+    };
 
     // No declared targets: stop after the bake, reporting the libdirs for
     // whoever drives rrc by hand — the pre-target workflow, kept working.
     if loaded.manifest.targets.is_empty() {
+        let artifacts = prepare_runtime(&profile).await?;
         if !sources.rescanned() {
             tracing::debug!(files = sources.files.len(), "nothing to do");
         }
@@ -442,6 +443,8 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), Error> {
             .targets
             .retain(|name, _| group.contains(name));
         let profile = group.profile.clone();
+        let artifacts = prepare_runtime(&profile).await?;
+        let target = artifacts.target.clone();
         // The dependency pipeline: every node of the graph but the root, each
         // dispatched the moment its last dependency finishes, each freshness-
         // checked, compiled (interface + archive), and recorded.
@@ -619,7 +622,6 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), Error> {
                 .as_deref()
                 .or(profile.default_target_triple.as_deref());
             let target = rt::resolve_target(requested_target).await?;
-            let bake = fresh::recorded_bake(held.as_ref(), &target)?;
             let mixed = groups.len() > 1;
             let mut rendered_nodes = Vec::new();
             for group in groups {
@@ -633,6 +635,7 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), Error> {
                     .targets
                     .retain(|name, _| group.contains(name));
                 let profile = group.profile;
+                let bake = fresh::recorded_bake(held.as_ref(), &target, &profile)?;
                 fresh::recorded_artifacts(&graph, held.as_ref(), &args.profile, &profile, &root)?;
                 let states = fresh::states(
                     &graph,
