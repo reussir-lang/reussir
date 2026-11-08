@@ -516,13 +516,29 @@ pub fn lower_unit<'c, 'tcx>(
         } else {
             builders::trampoline_export
         };
-        body.append_operation(build(
+        let mut trampoline = build(
             context,
             &t.abi,
             program.symbol(t.export),
             program.symbol(t.target),
             lowerer.trampoline_location(t),
-        ));
+        );
+        if t.import
+            && program.symbol(t.target).starts_with("_RI")
+            && matches!(
+                linkage,
+                LinkagePolicy::Aot {
+                    dedup_instances: true
+                }
+            )
+        {
+            trampoline.set_attribute(
+                "llvm.linkage",
+                Attribute::parse(context, "#llvm.linkage<weak_odr>")
+                    .expect("valid generic import linkage"),
+            );
+        }
+        body.append_operation(trampoline);
     }
     let polyffi_texture = |text: &str, bindings: &[mir::Symbol]| {
         let mut texture = builders::polyffi_texture(context, text, Location::unknown(context));
