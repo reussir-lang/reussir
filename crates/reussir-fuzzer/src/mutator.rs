@@ -1,6 +1,13 @@
 //! Structured fuzz input encoding and decoding.
 
 use crate::spec::{Charset, FloatWidth, IntWidth, SuiteSpec, ValueSpec};
+use winnow::binary::{
+    le_f32, le_f64, le_i8, le_i16, le_i32, le_i64, le_u8, le_u16, le_u32, le_u64,
+};
+use winnow::combinator::repeat;
+use winnow::error::ContextError;
+use winnow::prelude::*;
+use winnow::token::take;
 
 const PRINTABLE_ASCII: &[u8] =
     b" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
@@ -94,23 +101,35 @@ impl SuiteInput {
 impl ValueSpec {
     /// Decodes a structured value within this specification’s domain bounds.
     pub fn decode_value(&self, cursor: &mut &[u8]) -> Option<FuzzValue> {
+        self.parse_value(cursor).ok()
+    }
+
+    fn parse_value(&self, input: &mut &[u8]) -> ModalResult<FuzzValue, ContextError> {
         match self {
-            Self::Unit => Some(FuzzValue::Unit),
+            Self::Unit => Ok(FuzzValue::Unit),
             Self::Bool => {
-                let b = take_bytes(cursor, 1)?[0];
-                Some(FuzzValue::Bool((b & 1) != 0))
+                let b = le_u8.parse_next(input)?;
+                Ok(FuzzValue::Bool((b & 1) != 0))
             }
             Self::Int { width, min, max } => {
-                let bytes = take_bytes(cursor, width.byte_len())?;
-                let raw = read_int_le(bytes, *width);
+                let raw = match width {
+                    IntWidth::I8 => le_i8.parse_next(input)? as i64,
+                    IntWidth::I16 => le_i16.parse_next(input)? as i64,
+                    IntWidth::I32 => le_i32.parse_next(input)? as i64,
+                    IntWidth::I64 => le_i64.parse_next(input)?,
+                };
                 let (lo, hi) = clamped_signed_bounds(*width, *min, *max);
-                Some(FuzzValue::Int(*width, project_i64(raw, lo, hi)))
+                Ok(FuzzValue::Int(*width, project_i64(raw, lo, hi)))
             }
             Self::UInt { width, min, max } => {
-                let bytes = take_bytes(cursor, width.byte_len())?;
-                let raw = read_uint_le(bytes, *width);
+                let raw = match width {
+                    IntWidth::I8 => le_u8.parse_next(input)? as u64,
+                    IntWidth::I16 => le_u16.parse_next(input)? as u64,
+                    IntWidth::I32 => le_u32.parse_next(input)? as u64,
+                    IntWidth::I64 => le_u64.parse_next(input)?,
+                };
                 let (lo, hi) = clamped_unsigned_bounds(*width, *min, *max);
-                Some(FuzzValue::UInt(*width, project_u64(raw, lo, hi)))
+                Ok(FuzzValue::UInt(*width, project_u64(raw, lo, hi)))
             }
             Self::Float {
                 width,
@@ -126,18 +145,15 @@ impl ValueSpec {
                 };
                 match width {
                     FloatWidth::F32 => {
-                        let bytes = take_bytes(cursor, 4)?;
-                        let raw =
-                            f32::from_bits(u32::from_le_bytes(bytes.try_into().unwrap())) as f64;
-                        Some(FuzzValue::Float(
+                        let raw = le_f32.parse_next(input)? as f64;
+                        Ok(FuzzValue::Float(
                             FloatWidth::F32,
                             constrain_f64(raw, lo, hi, *allow_nan, *allow_inf),
                         ))
                     }
                     FloatWidth::F64 => {
-                        let bytes = take_bytes(cursor, 8)?;
-                        let raw = f64::from_bits(u64::from_le_bytes(bytes.try_into().unwrap()));
-                        Some(FuzzValue::Float(
+                        let raw = le_f64.parse_next(input)?;
+                        Ok(FuzzValue::Float(
                             FloatWidth::F64,
                             constrain_f64(raw, lo, hi, *allow_nan, *allow_inf),
                         ))
@@ -145,46 +161,41 @@ impl ValueSpec {
                 }
             }
             Self::Char(charset) => {
-                let bytes = take_bytes(cursor, 4)?;
-                let raw = u32::from_le_bytes(bytes.try_into().unwrap());
+                let raw = le_u32.parse_next(input)?;
                 let ch = char::from_u32(raw)
                     .filter(|c| charset_contains(*charset, *c))
                     .unwrap_or_else(|| project_char(raw as u64, *charset));
-                Some(FuzzValue::Char(ch))
+                Ok(FuzzValue::Char(ch))
             }
             Self::String {
                 charset,
                 min_len,
                 max_len,
             } => {
-                let len_bytes = take_bytes(cursor, 8)?;
-                let byte_len = u64::from_le_bytes(len_bytes.try_into().unwrap()) as usize;
-                let raw_bytes = take_bytes(cursor, byte_len)?;
+                let byte_len = le_u64.try_map(usize::try_from).parse_next(input)?;
+                let raw_bytes = take(byte_len).parse_next(input)?;
                 let (lo, hi) = normalized_len_bounds(*min_len, *max_len);
                 let s = decode_and_sanitize_string(raw_bytes, *charset, lo, hi);
-                Some(FuzzValue::String(s))
+                Ok(FuzzValue::String(s))
             }
             Self::Array {
                 elem,
                 min_len,
                 max_len,
             } => {
-                let len_bytes = take_bytes(cursor, 8)?;
-                let raw_len = u64::from_le_bytes(len_bytes.try_into().unwrap());
+                let raw_len = le_u64.parse_next(input)?;
                 let (lo, hi) = normalized_len_bounds(*min_len, *max_len);
                 let count = project_u64(raw_len, lo as u64, hi as u64) as usize;
-                let mut items = Vec::with_capacity(count);
-                for _ in 0..count {
-                    items.push(elem.decode_value(cursor)?);
-                }
-                Some(FuzzValue::Array(items))
+                let items = repeat(count, |inp: &mut &[u8]| elem.parse_value(inp))
+                    .parse_next(input)?;
+                Ok(FuzzValue::Array(items))
             }
             Self::Tuple(specs) => {
                 let mut items = Vec::with_capacity(specs.len());
                 for spec in specs {
-                    items.push(spec.decode_value(cursor)?);
+                    items.push(spec.parse_value(input)?);
                 }
-                Some(FuzzValue::Tuple(items))
+                Ok(FuzzValue::Tuple(items))
             }
         }
     }
@@ -192,25 +203,14 @@ impl ValueSpec {
 
 impl SuiteSpec {
     /// Decodes a case selector and its structured payload.
-    pub fn decode_input(&self, bytes: &[u8]) -> Option<SuiteInput> {
-        if self.cases.is_empty() || bytes.len() < 8 {
+    pub fn decode_input(&self, mut bytes: &[u8]) -> Option<SuiteInput> {
+        if self.cases.is_empty() {
             return None;
         }
-        let raw_idx = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+        let raw_idx = le_u64::<_, ContextError>.parse_next(&mut bytes).ok()?;
         let case_idx = (raw_idx as usize) % self.cases.len();
-        let mut cursor = &bytes[8..];
-        let payload = self.cases[case_idx].input.decode_value(&mut cursor)?;
+        let payload = self.cases[case_idx].input.decode_value(&mut bytes)?;
         Some(SuiteInput { case_idx, payload })
-    }
-}
-
-fn take_bytes<'a>(cursor: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
-    if cursor.len() < n {
-        None
-    } else {
-        let (head, tail) = cursor.split_at(n);
-        *cursor = tail;
-        Some(head)
     }
 }
 
@@ -339,30 +339,12 @@ fn write_int_le(out: &mut Vec<u8>, width: IntWidth, value: i64) {
     }
 }
 
-fn read_int_le(bytes: &[u8], width: IntWidth) -> i64 {
-    match width {
-        IntWidth::I8 => (bytes[0] as i8) as i64,
-        IntWidth::I16 => i16::from_le_bytes(bytes[..2].try_into().unwrap()) as i64,
-        IntWidth::I32 => i32::from_le_bytes(bytes[..4].try_into().unwrap()) as i64,
-        IntWidth::I64 => i64::from_le_bytes(bytes[..8].try_into().unwrap()),
-    }
-}
-
 fn write_uint_le(out: &mut Vec<u8>, width: IntWidth, value: u64) {
     match width {
         IntWidth::I8 => out.push(value as u8),
         IntWidth::I16 => out.extend_from_slice(&(value as u16).to_le_bytes()),
         IntWidth::I32 => out.extend_from_slice(&(value as u32).to_le_bytes()),
         IntWidth::I64 => out.extend_from_slice(&value.to_le_bytes()),
-    }
-}
-
-fn read_uint_le(bytes: &[u8], width: IntWidth) -> u64 {
-    match width {
-        IntWidth::I8 => bytes[0] as u64,
-        IntWidth::I16 => u16::from_le_bytes(bytes[..2].try_into().unwrap()) as u64,
-        IntWidth::I32 => u32::from_le_bytes(bytes[..4].try_into().unwrap()) as u64,
-        IntWidth::I64 => u64::from_le_bytes(bytes[..8].try_into().unwrap()),
     }
 }
 
