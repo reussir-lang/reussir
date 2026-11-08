@@ -410,10 +410,427 @@ impl<T> Domain<T> {
 
 }
 
+/// Boolean domain (`true` or `false`).
+pub fn bool_domain() -> Domain<bool> {
+    Domain {
+        spec: ValueSpec::Bool,
+        decode: |unused_spec: ValueSpec, cursor: ByteCursor| {
+            cursor.read_u8().map(|b_and_c: (u8, ByteCursor)| {
+                let (b, c1) = b_and_c;
+                ((b & 1) != 0, c1)
+            })
+        },
+        format: |v: bool| v.fmt()
+    }
+}
+
+/// Signed 8-bit integer domain (`-128..=127` by default).
+pub fn i8_domain() -> Domain<i8> {
+    let w = IntWidth::I8;
+    Domain {
+        spec: ValueSpec::Int { w, w.signed_min(), w.signed_max() },
+        decode: |spec: ValueSpec, cursor: ByteCursor| {
+            decode_signed(spec, cursor).map(|v_and_c: (i64, ByteCursor)| {
+                let (v, c1) = v_and_c;
+                (v as i8, c1)
+            })
+        },
+        format: |v: i8| v.fmt()
+    }
+}
+
+/// Signed 16-bit integer domain (`-32768..=32767` by default).
+pub fn i16_domain() -> Domain<i16> {
+    let w = IntWidth::I16;
+    Domain {
+        spec: ValueSpec::Int { w, w.signed_min(), w.signed_max() },
+        decode: |spec: ValueSpec, cursor: ByteCursor| {
+            decode_signed(spec, cursor).map(|v_and_c: (i64, ByteCursor)| {
+                let (v, c1) = v_and_c;
+                (v as i16, c1)
+            })
+        },
+        format: |v: i16| v.fmt()
+    }
+}
+
+/// Signed 32-bit integer domain (`i32::MIN..=i32::MAX` by default).
+pub fn i32_domain() -> Domain<i32> {
+    let w = IntWidth::I32;
+    Domain {
+        spec: ValueSpec::Int { w, w.signed_min(), w.signed_max() },
+        decode: |spec: ValueSpec, cursor: ByteCursor| {
+            decode_signed(spec, cursor).map(|v_and_c: (i64, ByteCursor)| {
+                let (v, c1) = v_and_c;
+                (v as i32, c1)
+            })
+        },
+        format: |v: i32| v.fmt()
+    }
+}
+
+/// Signed 64-bit integer domain (`i64::MIN..=i64::MAX` by default).
+pub fn i64_domain() -> Domain<i64> {
+    let w = IntWidth::I64;
+    Domain {
+        spec: ValueSpec::Int { w, w.signed_min(), w.signed_max() },
+        decode: decode_signed,
+        format: |v: i64| v.fmt()
+    }
+}
+
+/// Signed 64-bit integer domain restricted to `[min, max]`.
+pub fn in_range(min: i64, max: i64) -> Domain<i64> {
+    i64_domain().in_range(min, max)
+}
+
+/// Unsigned 8-bit integer domain (`0..=255` by default).
+pub fn u8_domain() -> Domain<u8> {
+    let w = IntWidth::I8;
+    Domain {
+        spec: ValueSpec::UInt { w, 0, w.unsigned_max() },
+        decode: |spec: ValueSpec, cursor: ByteCursor| {
+            decode_unsigned(spec, cursor).map(|v_and_c: (u64, ByteCursor)| {
+                let (v, c1) = v_and_c;
+                (v as u8, c1)
+            })
+        },
+        format: |v: u8| v.fmt()
+    }
+}
+
+/// Unsigned 16-bit integer domain (`0..=65535` by default).
+pub fn u16_domain() -> Domain<u16> {
+    let w = IntWidth::I16;
+    Domain {
+        spec: ValueSpec::UInt { w, 0, w.unsigned_max() },
+        decode: |spec: ValueSpec, cursor: ByteCursor| {
+            decode_unsigned(spec, cursor).map(|v_and_c: (u64, ByteCursor)| {
+                let (v, c1) = v_and_c;
+                (v as u16, c1)
+            })
+        },
+        format: |v: u16| v.fmt()
+    }
+}
+
+/// Unsigned 32-bit integer domain (`0..=u32::MAX` by default).
+pub fn u32_domain() -> Domain<u32> {
+    let w = IntWidth::I32;
+    Domain {
+        spec: ValueSpec::UInt { w, 0, w.unsigned_max() },
+        decode: |spec: ValueSpec, cursor: ByteCursor| {
+            decode_unsigned(spec, cursor).map(|v_and_c: (u64, ByteCursor)| {
+                let (v, c1) = v_and_c;
+                (v as u32, c1)
+            })
+        },
+        format: |v: u32| v.fmt()
+    }
+}
+
+/// Unsigned 64-bit integer domain (`0..=u64::MAX` by default).
+pub fn u64_domain() -> Domain<u64> {
+    let w = IntWidth::I64;
+    Domain {
+        spec: ValueSpec::UInt { w, 0, w.unsigned_max() },
+        decode: decode_unsigned,
+        format: |v: u64| v.fmt()
+    }
+}
+
+/// Unsigned 64-bit integer domain restricted to `[min, max]`.
+pub fn in_range_u64(min: u64, max: u64) -> Domain<u64> {
+    u64_domain().in_range_u64(min, max)
+}
+
+/// 32-bit floating-point domain (finite values in `[-1e6, 1e6]` by default).
+pub fn f32_domain() -> Domain<f32> {
+    Domain {
+        spec: ValueSpec::Float { FloatWidth::F32, -1000000.0, 1000000.0, false, false },
+        decode: |spec: ValueSpec, cursor: ByteCursor| {
+            let (min, max, nan, inf) = float_bounds(spec);
+            cursor.read_u32_le().map(|bits_and_c: (u32, ByteCursor)| {
+                let (bits, c1) = bits_and_c;
+                let raw = f32_from_bits(bits) as f64;
+                let ext_bits = (bits as u64) << 32;
+                let projected = project_f64(raw, ext_bits, min, max, nan, inf) as f32;
+                (projected, c1)
+            })
+        },
+        format: |v: f32| format_f32(v)
+    }
+}
+
+/// 64-bit floating-point domain (finite values in `[-1e6, 1e6]` by default).
+pub fn f64_domain() -> Domain<f64> {
+    Domain {
+        spec: ValueSpec::Float { FloatWidth::F64, -1000000.0, 1000000.0, false, false },
+        decode: |spec: ValueSpec, cursor: ByteCursor| {
+            let (min, max, nan, inf) = float_bounds(spec);
+            cursor.read_u64_le().map(|bits_and_c: (u64, ByteCursor)| {
+                let (bits, c1) = bits_and_c;
+                let raw = f64_from_bits(bits);
+                let projected = project_f64(raw, bits, min, max, nan, inf);
+                (projected, c1)
+            })
+        },
+        format: |v: f64| format_f64(v)
+    }
+}
+
+/// 64-bit floating-point domain restricted to `[min, max]`.
+pub fn in_range_f64(min: f64, max: f64) -> Domain<f64> {
+    f64_domain().in_range_f64(min, max)
+}
+
+/// Single-character domain (printable ASCII by default; use `.utf8()`,
+/// `.alphanumeric()`, etc. to change character class).
+pub fn char_domain() -> Domain<char> {
+    Domain {
+        spec: ValueSpec::Char { Charset::AsciiPrintable },
+        decode: |spec: ValueSpec, cursor: ByteCursor| {
+            let cs = match spec {
+                Char(c) => c,
+                _ => Charset::AsciiPrintable
+            };
+            cursor.read_u32_le().map(|raw_and_c: (u32, ByteCursor)| {
+                let (raw, c1) = raw_and_c;
+                let candidate = cs.map_word(raw as u64);
+                let ch = if raw <= 1114111 && !(raw >= 55296 && raw <= 57343) {
+                    let direct = Charset::Utf8.map_word(0);
+                    let _ = direct;
+                    let c = char_from_u32_or(raw, candidate);
+                    if cs.contains(c) { c } else { candidate }
+                } else {
+                    candidate
+                };
+                (ch, c1)
+            })
+        },
+        format: |ch: char| Format::Text { Text::from_str("'") }
+            .append(ch.fmt())
+            .append(Format::Text { Text::from_str("'") })
+    }
+}
+
+/// Growable `String` domain (printable ASCII of length `0..=32` by default).
+pub fn string() -> Domain<String> {
+    Domain {
+        spec: ValueSpec::String { Charset::AsciiPrintable, 0, 32 },
+        decode: decode_string_spec,
+        format: |s: String| quote_text(Text::Owned { s })
+    }
+}
+
+/// `Text` domain (printable ASCII of length `0..=32` by default).
+pub fn text() -> Domain<Text> {
+    Domain {
+        spec: ValueSpec::String { Charset::AsciiPrintable, 0, 32 },
+        decode: |spec: ValueSpec, cursor: ByteCursor| {
+            decode_string_spec(spec, cursor).map(|s_and_c: (String, ByteCursor)| {
+                let (s, c1) = s_and_c;
+                (Text::Owned { s }, c1)
+            })
+        },
+        format: |t: Text| quote_text(t)
+    }
+}
+
+/// Printable ASCII `String` domain (`0..=32` chars by default).
+pub fn ascii() -> Domain<String> {
+    string().printable()
+}
+
+/// Printable ASCII `Text` domain (`0..=32` chars by default).
+pub fn ascii_text() -> Domain<Text> {
+    text().printable()
+}
+
+/// Alphanumeric `String` domain (`A-Z`, `a-z`, `0-9`, length `0..=32`).
+pub fn alphanumeric() -> Domain<String> {
+    string().alphanumeric()
+}
+
+/// Alphabetic `String` domain (`A-Z`, `a-z`, length `0..=32`).
+pub fn alpha() -> Domain<String> {
+    string().alpha()
+}
+
+/// Decimal digit `String` domain (`0-9`, length `0..=32`).
+pub fn digits() -> Domain<String> {
+    string().digits()
+}
+
+/// Identifier `String` domain (`A-Z`, `a-z`, `0-9`, `_`, length `1..=32`).
+pub fn identifier() -> Domain<String> {
+    string().identifier().with_len_range(1, 32)
+}
+
 fn clamp_i64(v: i64, lo: i64, hi: i64) -> i64 {
     if v < lo { lo } else { if v > hi { hi } else { v } }
 }
 
 fn clamp_u64(v: u64, lo: u64, hi: u64) -> u64 {
     if v < lo { lo } else { if v > hi { hi } else { v } }
+}
+
+fn decode_signed(spec: ValueSpec, cursor: ByteCursor) -> Option<(i64, ByteCursor)> {
+    let (width, min, max) = match spec {
+        Int(w, lo, hi) => (w, lo, hi),
+        _ => (IntWidth::I64, IntWidth::I64.signed_min(), IntWidth::I64.signed_max())
+    };
+    let raw_opt = match width {
+        I8 => cursor.read_u8().map(|x: (u8, ByteCursor)| {
+            let (b, c) = x;
+            ((b as i8) as i64, c)
+        }),
+        I16 => cursor.read_u16_le().map(|x: (u16, ByteCursor)| {
+            let (w, c) = x;
+            ((w as i16) as i64, c)
+        }),
+        I32 => cursor.read_u32_le().map(|x: (u32, ByteCursor)| {
+            let (d, c) = x;
+            ((d as i32) as i64, c)
+        }),
+        I64 => cursor.read_u64_le().map(|x: (u64, ByteCursor)| {
+            let (q, c) = x;
+            (q as i64, c)
+        })
+    };
+    raw_opt.map(|x: (i64, ByteCursor)| {
+        let (raw, c1) = x;
+        (project_i64(raw, min, max), c1)
+    })
+}
+
+fn decode_unsigned(spec: ValueSpec, cursor: ByteCursor) -> Option<(u64, ByteCursor)> {
+    let (width, min, max) = match spec {
+        UInt(w, lo, hi) => (w, lo, hi),
+        _ => (IntWidth::I64, 0, IntWidth::I64.unsigned_max())
+    };
+    let raw_opt = match width {
+        I8 => cursor.read_u8().map(|x: (u8, ByteCursor)| {
+            let (b, c) = x;
+            (b as u64, c)
+        }),
+        I16 => cursor.read_u16_le().map(|x: (u16, ByteCursor)| {
+            let (w, c) = x;
+            (w as u64, c)
+        }),
+        I32 => cursor.read_u32_le().map(|x: (u32, ByteCursor)| {
+            let (d, c) = x;
+            (d as u64, c)
+        }),
+        I64 => cursor.read_u64_le()
+    };
+    raw_opt.map(|x: (u64, ByteCursor)| {
+        let (raw, c1) = x;
+        (project_u64(raw, min, max), c1)
+    })
+}
+
+fn float_bounds(spec: ValueSpec) -> (f64, f64, bool, bool) {
+    match spec {
+        Float(_, lo, hi, nan, inf) => (lo, hi, nan, inf),
+        _ => (-1000000.0, 1000000.0, false, false)
+    }
+}
+
+#[ffi(import)]
+fn raw_try_char(value: u32, fallback: char) -> char [{
+    char::from_u32(value).unwrap_or(fallback)
+}];
+
+fn char_from_u32_or(value: u32, fallback: char) -> char {
+    raw_try_char(value, fallback)
+}
+
+fn decode_string_spec(spec: ValueSpec, cursor: ByteCursor) -> Option<(String, ByteCursor)> {
+    let (charset, min_len, max_len) = match spec {
+        ValueSpec::String(cs, lo, hi) => (cs, lo, hi),
+        _ => (Charset::AsciiPrintable, 0, 32)
+    };
+    match cursor.read_u64_le() {
+        None => Option::None,
+        Some(len_and_c) => {
+            let (byte_len, c1) = len_and_c;
+            if c1.remaining() < byte_len {
+                Option::None
+            } else {
+                let raw_bytes = slice_cursor_bytes(c1, byte_len);
+                let next_cursor = skip_cursor_bytes(c1, byte_len);
+                let decoded = match decode_utf8_range(raw_bytes, 0, byte_len, String::new()) {
+                    Some(valid) => sanitize_string(valid, charset, min_len, max_len),
+                    None => sanitize_bytes_to_string(raw_bytes, charset, min_len, max_len)
+                };
+                Option::Some { (decoded, next_cursor) }
+            }
+        }
+    }
+}
+
+fn slice_cursor_bytes(cursor: ByteCursor, count: u64) -> Vec<u8> {
+    let (_, _, out) = while [i = (0 as u64), cur = cursor, buf = Vec::new()] (i < count) {
+        match cur.read_u8() {
+            None => (count, cur, buf),
+            Some(b_and_c) => {
+                let (b, next_c) = b_and_c;
+                (i + 1, next_c, buf.push(b))
+            }
+        }
+    };
+    out
+}
+
+fn skip_cursor_bytes(cursor: ByteCursor, count: u64) -> ByteCursor {
+    let (_, next_c) = while [i = (0 as u64), cur = cursor] (i < count) {
+        match cur.read_u8() {
+            None => (count, cur),
+            Some(b_and_c) => {
+                let (_, c1) = b_and_c;
+                (i + 1, c1)
+            }
+        }
+    };
+    next_c
+}
+
+fn sanitize_string(s: String, charset: Charset, min_len: u64, max_len: u64) -> String {
+    let text = Text::Owned { s };
+    let n = text.len();
+    let (_, count, out) = while [idx = (0 as u64), count = (0 as u64), out = String::new()]
+        (idx < n && count < max_len) {
+        match text.decode_char(idx) {
+            None => (n, count, out),
+            Some(ch_and_next) => {
+                let (ch, next_idx) = ch_and_next;
+                let clean = if charset.contains(ch) {
+                    ch
+                } else {
+                    charset.map_word(ch as u64)
+                };
+                (next_idx, count + 1, out.push_char(clean))
+            }
+        }
+    };
+    let (_, padded) = while [c = count, acc = out] (c < min_len) {
+        (c + 1, acc.push_char(charset.map_word(c)))
+    };
+    padded
+}
+
+fn sanitize_bytes_to_string(bytes: Vec<u8>, charset: Charset, min_len: u64, max_len: u64) -> String {
+    let n = bytes.len();
+    let target = project_u64(n, min_len, max_len);
+    let (_, out) = while [i = (0 as u64), acc = String::new()] (i < target) {
+        let word = if i < n { bytes.get(i).unwrap_or(0) as u64 } else { i };
+        (i + 1, acc.push_char(charset.map_word(word)))
+    };
+    out
+}
+
+fn quote_text(t: Text) -> Format {
+    let quote = Format::Text { Text::from_str("\"") };
+    quote.append(t.fmt()).append(quote)
 }
