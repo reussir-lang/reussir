@@ -726,24 +726,39 @@ impl SuiteSpec {
         let Some(bounded) = case.input.within_budget(limit - 8) else {
             return 0;
         };
-        let decoded = if !switch && previous == Some(case_idx) {
+        let mut decoded = if !switch && previous == Some(case_idx) {
             let mut cursor = &data[8..size.min(data.len())];
             bounded.decode_value(&mut cursor)
         } else {
             None
         };
+        // Keep libFuzzer's CMP, dictionary, and crossover operators active even
+        // when the structured input has a valid mutatis mutation.
+        let use_raw = raw_mutate.is_some() && session.generate::<bool>().unwrap_or(false);
+        if use_raw {
+            let value = decoded
+                .take()
+                .or_else(|| crate::budget::generate(&case.input, limit - 8, &mut session).ok());
+            let Some(value) = value else {
+                return 0;
+            };
+            let mut encoded = value.to_bytes();
+            if encoded.len() > limit - 8 {
+                encoded = match crate::budget::generate(&case.input, limit - 8, &mut session) {
+                    Ok(value) => value.to_bytes(),
+                    Err(_) => return 0,
+                };
+            }
+            data[8..8 + encoded.len()].copy_from_slice(&encoded);
+            let next =
+                raw_mutate.unwrap()(&mut data[8..limit], encoded.len(), limit - 8).min(limit - 8);
+            let mut cursor = &data[8..8 + next];
+            decoded = bounded.decode_value(&mut cursor);
+        }
         let value = match decoded {
             Some(mut value) => {
-                if session
-                    .mutate_with(&mut SpecMutator(&bounded), &mut value)
-                    .is_err()
-                    && let Some(raw_mutate) = raw_mutate
-                {
-                    let next = raw_mutate(data, size.min(limit), limit).min(limit);
-                    let mut cursor = data.get(8..next).unwrap_or(&[]);
-                    if let Some(raw_value) = bounded.decode_value(&mut cursor) {
-                        value = raw_value;
-                    }
+                if !use_raw {
+                    let _ = session.mutate_with(&mut SpecMutator(&bounded), &mut value);
                 }
                 value
             }
@@ -1065,5 +1080,81 @@ mod scheduling_tests {
             counts.push(switched);
         }
         assert_eq!(counts[0], counts[1]);
+    }
+}
+
+#[cfg(test)]
+mod guidance_tests {
+    use super::*;
+    use crate::spec::CaseSpec;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const MAGIC: i64 = 0x123456789abcdef;
+    static RAW_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    fn comparison_dictionary(bytes: &mut [u8], _: usize, _: usize) -> usize {
+        RAW_CALLS.fetch_add(1, Ordering::Relaxed);
+        bytes[..8].copy_from_slice(&MAGIC.to_le_bytes());
+        8
+    }
+
+    #[test]
+    fn successful_structured_inputs_use_comparison_dictionary_values() {
+        let suite = SuiteSpec {
+            cases: vec![CaseSpec {
+                path: vec!["magic".into()],
+                input: ValueSpec::Int {
+                    width: IntWidth::I64,
+                    min: i64::MIN,
+                    max: i64::MAX,
+                },
+            }],
+        };
+        RAW_CALLS.store(0, Ordering::Relaxed);
+        let mut magic_hits = 0;
+        for seed in 0..64 {
+            let mut bytes = [0; 16];
+            let size = suite.mutate_buffer(&mut bytes, 16, 16, seed, Some(comparison_dictionary));
+            let input = suite.decode_input(&bytes[..size]).unwrap();
+            magic_hits += usize::from(input.payload == FuzzValue::Int(IntWidth::I64, MAGIC));
+        }
+        assert!(RAW_CALLS.load(Ordering::Relaxed) > 0);
+        assert!(
+            magic_hits > 0,
+            "the target's magic-value branch must be reachable through the default mutator"
+        );
+    }
+
+    #[test]
+    fn malformed_default_mutations_are_repaired_within_the_domain() {
+        let suite = SuiteSpec {
+            cases: vec![CaseSpec {
+                path: vec!["string".into()],
+                input: ValueSpec::String {
+                    charset: Charset::Digits,
+                    min_len: 2,
+                    max_len: 10,
+                },
+            }],
+        };
+        for seed in 0..64 {
+            let mut bytes = [0; 32];
+            let size = suite.mutate_buffer(
+                &mut bytes,
+                0,
+                32,
+                seed,
+                Some(|bytes, _, _| {
+                    bytes.fill(255);
+                    bytes.len()
+                }),
+            );
+            let input = suite.decode_input(&bytes[..size]).unwrap();
+            let FuzzValue::String(value) = input.payload else {
+                panic!("string domain");
+            };
+            assert!((2..=10).contains(&value.len()));
+            assert!(value.bytes().all(|b| b.is_ascii_digit()));
+        }
     }
 }
