@@ -50,7 +50,7 @@ class TailDropEmitter {
       callee.setPrivate();
       callee->setAttr("llvm.linkage",
                       builder.getAttr<mlir::LLVM::LinkageAttr>(
-                          mlir::LLVM::linkage::Linkage::Private));
+                          mlir::LLVM::linkage::Linkage::Internal));
       inheritSanitizerPassthrough(module, callee);
       it->second = callee;
       pending.push_back(type);

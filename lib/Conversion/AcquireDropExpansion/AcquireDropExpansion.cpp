@@ -92,7 +92,7 @@ private:
       function->setAttr(kWorklistGlueAttr, rewriter.getUnitAttr());
     function->setAttr("llvm.linkage",
                       rewriter.getAttr<mlir::LLVM::LinkageAttr>(
-                          mlir::LLVM::linkage::Linkage::Private));
+                          mlir::LLVM::linkage::Linkage::Internal));
     if (symbols)
       symbols->getSymbolTable(module).insert(function);
     else

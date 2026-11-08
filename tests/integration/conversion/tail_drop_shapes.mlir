@@ -76,7 +76,7 @@ module {
 // LLVM-NEXT: ret void
 // LLVM-LABEL: define void @atomic_release(
 // LLVM: call void @{{.*}}AtomicNodeE.tail_release
-// LLVM-LABEL: define private void @{{.*}}ArrayNodeE.tail_release.2(
+// LLVM-LABEL: define internal void @{{.*}}ArrayNodeE.tail_release.2(
 // LLVM: call void @__reussir_deallocate
 // LLVM: musttail call void @{{.*}}ArrayNodeE.tail_release(
 // LLVM-NEXT: ret void
@@ -85,7 +85,7 @@ module {
 // LLVM-NEXT: ret void
 // LLVM-LABEL: define void @array_release(
 // LLVM: call void @{{.*}}ArrayNodeE.tail_release
-// LLVM-LABEL: define private void @{{.*}}CellNodeE.tail_release.2(
+// LLVM-LABEL: define internal void @{{.*}}CellNodeE.tail_release.2(
 // LLVM: musttail call void @{{.*}}CellNodeE.tail_release(
 // LLVM-NEXT: ret void
 // LLVM-LABEL: define {{.*}}void @{{.*}}CellNodeE.tail_release(
