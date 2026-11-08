@@ -58,8 +58,11 @@ pub fn dep_product_key(profile: &str, name: &str) -> String {
 }
 
 pub fn dep_variant_key(profile: &str, name: &str, fuzzer: bool) -> String {
-    let key = dep_product_key(profile, name);
-    if fuzzer { format!("{key}.fuzzer") } else { key }
+    if fuzzer {
+        format!("fuzzer-dep-product.{profile}.{name}")
+    } else {
+        dep_product_key(profile, name)
+    }
 }
 
 /// The status key of one dependency's recorded source graph, a JSON
@@ -76,3 +79,15 @@ pub fn dep_sources_key(name: &str) -> String {
 /// it and directs the user back to `rene clean`, which is the only thing
 /// that clears the marker (by deleting the directory).
 pub const CLEANING_KEY: &str = "cleaning";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fuzz_dependency_records_do_not_alias_dotted_names() {
+        let fuzz = dep_variant_key("dev", "foo", true);
+        assert_ne!(fuzz, dep_variant_key("dev", "foo.fuzzer", false));
+        assert_ne!(fuzz, product_key("dev", "fuzzer-dep.foo"));
+    }
+}
