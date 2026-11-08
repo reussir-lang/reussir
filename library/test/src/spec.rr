@@ -889,29 +889,85 @@ fn decode_path_segments(
 /// Non-allocating cursor over a `Vec<u8>`.
 pub struct [value] ByteCursor {
     bytes: Vec<u8>,
-    offset: u64
+    offset: u64,
+    limit: u64
 }
 
 impl ByteCursor {
     /// Starts a cursor at the beginning of `bytes`.
     pub fn new(bytes: Vec<u8>) -> Self {
-        ByteCursor { bytes: bytes, offset: 0 }
+        ByteCursor { bytes: bytes, offset: 0, limit: bytes.len() }
     }
 
     /// Number of unread bytes remaining.
     pub fn remaining(self: Self) -> u64 {
-        let len = self.bytes.len();
+        let len = self.limit;
         if self.offset >= len { 0 } else { len - self.offset }
     }
 
     /// Whether all bytes have been consumed.
     pub fn is_eof(self: Self) -> bool {
-        self.offset >= self.bytes.len()
+        self.offset >= self.limit
+    }
+
+    /// Splits off `count` unread bytes without copying the backing buffer.
+    pub fn take(self: Self, count: u64) -> Option<(Self, Self)> {
+        if count > self.remaining() {
+            Option::None
+        } else {
+            let end = self.offset + count;
+            Option::Some { (
+                ByteCursor { bytes: self.bytes, offset: self.offset, limit: end },
+                ByteCursor { bytes: self.bytes, offset: end, limit: self.limit }
+            ) }
+        }
+    }
+
+    /// Advances by `count` bytes in constant time.
+    pub fn skip(self: Self, count: u64) -> Option<Self> {
+        self.take(count).map(|parts: (Self, Self)| {
+            let (_, rest) = parts;
+            rest
+        })
+    }
+
+    /// Reads one Unicode scalar, rejecting malformed or truncated UTF-8.
+    pub fn read_char(self: Self) -> Option<(char, Self)> {
+        self.read_u8().and_then(|first_and_rest: (u8, Self)| {
+            let (first_byte, rest) = first_and_rest;
+            let first = first_byte as u32;
+            if first < 128 {
+                Option::Some { (raw_scalar_to_char(first), rest) }
+            } else {
+                let (count, initial, min_scalar) =
+                    if first >= 194 && first <= 223 { ((2 as u64), first - 192, (128 as u32)) }
+                    else { if first >= 224 && first <= 239 { ((3 as u64), first - 224, (2048 as u32)) }
+                    else { if first >= 240 && first <= 244 { ((4 as u64), first - 240, (65536 as u32)) }
+                    else { ((0 as u64), (0 as u32), (0 as u32)) } } };
+                let (_, scalar, cursor, valid) = while [
+                    i = (1 as u64), scalar = initial, cursor = rest, valid = count > 0
+                ] (i < count && valid) {
+                    match cursor.read_u8() {
+                        None => (i, scalar, cursor, false),
+                        Some(byte_and_rest) => {
+                            let (byte, next) = byte_and_rest;
+                            let b = byte as u32;
+                            (i + 1, (scalar << 6) | (b & 63), next, b >= 128 && b <= 191)
+                        }
+                    }
+                };
+                if valid && scalar >= min_scalar && raw_is_valid_scalar(scalar) {
+                    Option::Some { (raw_scalar_to_char(scalar), cursor) }
+                } else {
+                    Option::None
+                }
+            }
+        })
     }
 
     /// Copies the remaining unread bytes into a fresh `Vec<u8>`.
     pub fn slice_remaining(self: Self) -> Vec<u8> {
-        let len = self.bytes.len();
+        let len = self.limit;
         let (_, out) = while [i = self.offset, out = Vec::new()] (i < len) {
             (i + 1, out.push(self.bytes.get(i).unwrap_or(0)))
         };
@@ -920,11 +976,11 @@ impl ByteCursor {
 
     /// Reads one byte.
     pub fn read_u8(self: Self) -> Option<(u8, Self)> {
-        if self.offset >= self.bytes.len() {
+        if self.offset >= self.limit {
             Option::None
         } else {
             let b = self.bytes.get(self.offset).unwrap_or(0);
-            Option::Some { (b, ByteCursor { bytes: self.bytes, offset: self.offset + 1 }) }
+            Option::Some { (b, ByteCursor { bytes: self.bytes, offset: self.offset + 1, limit: self.limit }) }
         }
     }
 
@@ -935,7 +991,7 @@ impl ByteCursor {
         } else {
             let b0 = self.bytes.get(self.offset).unwrap_or(0) as u16;
             let b1 = self.bytes.get(self.offset + 1).unwrap_or(0) as u16;
-            Option::Some { (b0 | (b1 << 8), ByteCursor { bytes: self.bytes, offset: self.offset + 2 }) }
+            Option::Some { (b0 | (b1 << 8), ByteCursor { bytes: self.bytes, offset: self.offset + 2, limit: self.limit }) }
         }
     }
 
@@ -949,7 +1005,7 @@ impl ByteCursor {
             let b2 = self.bytes.get(self.offset + 2).unwrap_or(0) as u32;
             let b3 = self.bytes.get(self.offset + 3).unwrap_or(0) as u32;
             let value = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
-            Option::Some { (value, ByteCursor { bytes: self.bytes, offset: self.offset + 4 }) }
+            Option::Some { (value, ByteCursor { bytes: self.bytes, offset: self.offset + 4, limit: self.limit }) }
         }
     }
 
@@ -962,7 +1018,7 @@ impl ByteCursor {
                 let b = self.bytes.get(self.offset + i).unwrap_or(0) as u64;
                 (i + 1, acc | (b << (i * 8)))
             };
-            Option::Some { (value, ByteCursor { bytes: self.bytes, offset: self.offset + 8 }) }
+            Option::Some { (value, ByteCursor { bytes: self.bytes, offset: self.offset + 8, limit: self.limit }) }
         }
     }
 
@@ -977,7 +1033,7 @@ impl ByteCursor {
                 decode_utf8_range(c1.bytes, c1.offset, c1.offset + byte_len, String::new())
                     .map(|s: String| (
                         List::Cons { Text::from_string(s), acc },
-                        ByteCursor { bytes: c1.bytes, offset: c1.offset + byte_len }
+                        ByteCursor { bytes: c1.bytes, offset: c1.offset + byte_len, limit: c1.limit }
                     ))
             }
         })
@@ -987,32 +1043,26 @@ impl ByteCursor {
 /// Decodes a UTF-8 byte slice `start..end` in `bytes` into a `String`,
 /// returning `None` on malformed UTF-8.
 pub fn decode_utf8_range(bytes: Vec<u8>, start: u64, end: u64, out: String) -> Option<String> {
-    let (pos, result, ok) = while [i = start, s = out, valid = true] (i < end && valid) {
-        let first = bytes.get(i).unwrap_or(0) as u32;
-        if first < 128 {
-            (i + 1, s.push_char(raw_scalar_to_char(first)), true)
-        } else {
-            let (count, init, min_scalar) =
-                if first >= 194 && first <= 223 { ((2 as u64), first - 192, (128 as u32)) }
-                else { if first >= 224 && first <= 239 { ((3 as u64), first - 224, (2048 as u32)) }
-                else { if first >= 240 && first <= 244 { ((4 as u64), first - 240, (65536 as u32)) }
-                else { ((0 as u64), (0 as u32), (0 as u32)) } } };
-            if count == 0 || i + count > end {
-                (i, s, false)
-            } else {
-                let (_, scalar, cont_ok) = while [k = (1 as u64), val = init, ok = true] (k < count && ok) {
-                    let b = bytes.get(i + k).unwrap_or(0) as u32;
-                    (k + 1, (val << 6) | (b & 63), b >= 128 && b <= 191)
+    if start > end {
+        Option::None
+    } else {
+        ByteCursor::new(bytes).skip(start).and_then(|cursor: ByteCursor| {
+            cursor.take(end - start).and_then(|parts: (ByteCursor, ByteCursor)| {
+                let (input, _) = parts;
+                let (_, result, valid) = while [cursor = input, result = out, valid = true]
+                    (!cursor.is_eof() && valid) {
+                    match cursor.read_char() {
+                        None => (cursor, result, false),
+                        Some(char_and_rest) => {
+                            let (ch, rest) = char_and_rest;
+                            (rest, result.push_char(ch), true)
+                        }
+                    }
                 };
-                if !cont_ok || scalar < min_scalar || !raw_is_valid_scalar(scalar) {
-                    (i, s, false)
-                } else {
-                    (i + count, s.push_char(raw_scalar_to_char(scalar)), true)
-                }
-            }
-        }
-    };
-    if ok && pos == end { Option::Some { result } } else { Option::None }
+                if valid { Option::Some { result } } else { Option::None }
+            })
+        })
+    }
 }
 
 /// Creates an empty `Vec<u8>`.
@@ -1086,7 +1136,7 @@ fn read_magic(cursor: ByteCursor, b0: u8, b1: u8, b2: u8, b3: u8) -> Option<Byte
             && cursor.bytes.get(cursor.offset + 2).unwrap_or(0) == b2
             && cursor.bytes.get(cursor.offset + 3).unwrap_or(0) == b3;
         if ok {
-            Option::Some { ByteCursor { bytes: cursor.bytes, offset: cursor.offset + 4 } }
+            Option::Some { ByteCursor { bytes: cursor.bytes, offset: cursor.offset + 4, limit: cursor.limit } }
         } else {
             Option::None
         }

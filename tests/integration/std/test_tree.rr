@@ -53,6 +53,8 @@ import test::expect::expect;
 import test::expect::fail;
 import test::expect::pass;
 import test::spec::Charset;
+import test::spec::ByteCursor;
+import test::spec::decode_utf8_range;
 import test::spec::FloatWidth;
 import test::spec::IntWidth;
 import test::spec::SuiteSpec;
@@ -187,6 +189,53 @@ fn test_case_input_ownership() {
 
 fn path_is(path: List<Text>, expected: str) -> bool {
     test::cli::format_path(path).render(Options::default()).to_plain_string().eq_str(expected)
+}
+
+fn encoded_string(s: str) -> Vec<u8> {
+    let text = Text::from_str(s);
+    let (_, bytes) = while [i = (0 as u64), bytes = write_u64_le(Vec::new(), text.len())]
+        (i < text.len()) {
+        (i + 1, bytes.push(text.byte_at(i)))
+    };
+    bytes
+}
+
+fn test_bounded_cursor_and_strings() {
+    let bytes = Vec::new().push(1).push(2).push(3).push(4);
+    let cursor = ByteCursor::new(bytes);
+    let (prefix, rest) = cursor.take(2).unwrap_or_panic();
+    check(prefix.remaining() == 2 && rest.remaining() == 2);
+    check(prefix.read_u32_le().is_none());
+    let (word, exhausted) = prefix.read_u16_le().unwrap_or_panic();
+    check(word == 513 && exhausted.is_eof() && exhausted.read_u8().is_none());
+    let (byte, _) = rest.read_u8().unwrap_or_panic();
+    check(byte == 3);
+    check(cursor.take(5).is_none() && cursor.skip(5).is_none());
+    check(cursor.skip(4).unwrap_or_panic().is_eof());
+    check(decode_utf8_range(bytes, 3, 5, String::new()).is_none());
+    check(decode_utf8_range(bytes, 3, 2, String::new()).is_none());
+
+    let unicode = string().utf8().with_len_range(0, 8);
+    let (decoded, rest) = unicode.decode(ByteCursor::new(encoded_string("aé🦀").push(42)))
+        .unwrap_or_panic();
+    check(decoded.eq_str("aé🦀") && rest.remaining() == 1);
+    let (sentinel, _) = rest.read_u8().unwrap_or_panic();
+    check(sentinel == 42);
+    check(ascii().with_len_range(0, 2).decode_bytes(encoded_string("abcd"))
+        .unwrap_or_panic().eq_str("ab"));
+    check(digits().with_len(3).decode_bytes(encoded_string("é"))
+        .unwrap_or_panic().eq_str("312"));
+    let invalid_tail = write_u64_le(Vec::new(), 3).push(195).push(169).push(255);
+    check(string().utf8().with_len(1).decode_bytes(invalid_tail)
+        .unwrap_or_panic().eq_str("0"));
+    let overlong = write_u64_le(Vec::new(), 2).push(192).push(175);
+    check(digits().with_len(2).decode_bytes(overlong).unwrap_or_panic().eq_str("25"));
+    check(unicode.decode_bytes(write_u64_le(Vec::new(), 2).push(195)).is_none());
+    let truncated_scalar = ByteCursor::new(Vec::new().push(195).push(169)).take(1)
+        .unwrap_or_panic();
+    let (prefix, _) = truncated_scalar;
+    check(prefix.read_char().is_none());
+    check(ByteCursor::new(Vec::new().push(237).push(160).push(128)).read_char().is_none());
 }
 
 fn test_prepared_dispatch() {
@@ -482,6 +531,7 @@ pub fn main() {
     test_fold_order_and_paths();
     test_find_and_filter();
     test_prepared_dispatch();
+    test_bounded_cursor_and_strings();
     test_case_input_ownership();
     test_domain_combinators();
     test_spec_derivation_and_serialization();

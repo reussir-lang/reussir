@@ -40,7 +40,6 @@ import test::spec::Charset;
 import test::spec::FloatWidth;
 import test::spec::IntWidth;
 import test::spec::ValueSpec;
-import test::spec::decode_utf8_range;
 import test::spec::f32_from_bits;
 import test::spec::f64_from_bits;
 import test::spec::format_f32;
@@ -970,64 +969,53 @@ fn decode_string_spec(spec: ValueSpec, cursor: ByteCursor) -> Option<(String, By
         ValueSpec::String(cs, lo, hi) => (cs, lo, hi),
         _ => (Charset::AsciiPrintable, 0, 32)
     };
-    cursor.read_u64_le().and_then(|len_and_c: (u64, ByteCursor)| {
-        let (byte_len, c1) = len_and_c;
-        if c1.remaining() < byte_len {
-            Option::None
-        } else {
-            let (raw_bytes, next_cursor) = read_cursor_bytes(c1, byte_len);
-            let decoded = match decode_utf8_range(raw_bytes, 0, byte_len, String::new()) {
-                Some(valid) => sanitize_string(valid, charset, min_len, max_len),
-                None => sanitize_bytes_to_string(raw_bytes, charset, min_len, max_len)
-            };
-            Option::Some { (decoded, next_cursor) }
-        }
+    cursor.read_u64_le().and_then(|len_and_cursor: (u64, ByteCursor)| {
+        let (byte_len, cursor) = len_and_cursor;
+        cursor.take(byte_len).map(|parts: (ByteCursor, ByteCursor)| {
+            let (input, rest) = parts;
+            (sanitize_utf8(input, charset, min_len, max_len), rest)
+        })
     })
 }
 
-fn read_cursor_bytes(cursor: ByteCursor, count: u64) -> (Vec<u8>, ByteCursor) {
-    let (_, next_c, out) = while [i = (0 as u64), cur = cursor, buf = Vec::new()] (i < count) {
-        match cur.read_u8() {
-            None => (count, cur, buf),
-            Some(b_and_c) => {
-                let (b, next_c) = b_and_c;
-                (i + 1, next_c, buf.push(b))
-            }
-        }
-    };
-    (out, next_c)
-}
-
-fn sanitize_string(s: String, charset: Charset, min_len: u64, max_len: u64) -> String {
-    let text = Text::Owned { s };
-    let n = text.len();
-    let (_, count, out) = while [idx = (0 as u64), count = (0 as u64), out = String::new()]
-        (idx < n && count < max_len) {
-        match text.decode_char(idx) {
-            None => (n, count, out),
-            Some(ch_and_next) => {
-                let (ch, next_idx) = ch_and_next;
-                let clean = if charset.contains(ch) {
-                    ch
+fn sanitize_utf8(input: ByteCursor, charset: Charset, min_len: u64, max_len: u64) -> String {
+    let (_, count, out, valid) = while [
+        cursor = input, count = (0 as u64), out = String::new(), valid = true
+    ] (!cursor.is_eof() && valid) {
+        match cursor.read_char() {
+            None => (cursor, count, out, false),
+            Some(char_and_rest) => {
+                let (ch, rest) = char_and_rest;
+                if count < max_len {
+                    let clean = if charset.contains(ch) { ch } else { charset.map_word(ch as u64) };
+                    (rest, count + 1, out.push_char(clean), true)
                 } else {
-                    charset.map_word(ch as u64)
-                };
-                (next_idx, count + 1, out.push_char(clean))
+                    (rest, count, out, true)
+                }
             }
         }
     };
-    let (_, padded) = while [c = count, acc = out] (c < min_len) {
-        (c + 1, acc.push_char(charset.map_word(c)))
-    };
-    padded
+    if valid {
+        let (_, padded) = while [c = count, acc = out] (c < min_len) {
+            (c + 1, acc.push_char(charset.map_word(c)))
+        };
+        padded
+    } else {
+        sanitize_bytes(input, charset, min_len, max_len)
+    }
 }
 
-fn sanitize_bytes_to_string(bytes: Vec<u8>, charset: Charset, min_len: u64, max_len: u64) -> String {
-    let n = bytes.len();
-    let target = project_u64(n, min_len, max_len);
-    let (_, out) = while [i = (0 as u64), acc = String::new()] (i < target) {
-        let word = if i < n { bytes.get(i).unwrap_or(0) as u64 } else { i };
-        (i + 1, acc.push_char(charset.map_word(word)))
+fn sanitize_bytes(input: ByteCursor, charset: Charset, min_len: u64, max_len: u64) -> String {
+    let target = project_u64(input.remaining(), min_len, max_len);
+    let (_, _, out) = while [i = (0 as u64), cursor = input, out = String::new()] (i < target) {
+        let (word, rest) = match cursor.read_u8() {
+            Some(byte_and_rest) => {
+                let (byte, rest) = byte_and_rest;
+                (byte as u64, rest)
+            },
+            None => (i, cursor)
+        };
+        (i + 1, rest, out.push_char(charset.map_word(word)))
     };
     out
 }
