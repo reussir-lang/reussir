@@ -89,6 +89,77 @@ pub struct ProductRecord {
     pub token_reuse_report: Option<PathBuf>,
 }
 
+pub struct TargetGroup {
+    pub profile: Profile,
+    pub bins: Vec<String>,
+    pub libs: Vec<String>,
+}
+
+impl TargetGroup {
+    pub fn contains(&self, name: &str) -> bool {
+        self.bins.iter().chain(&self.libs).any(|n| n == name)
+    }
+}
+
+/// Group targets by instrumentation so each uses matching dependency archives.
+pub fn target_groups(
+    manifest: &crate::manifest::Manifest,
+    profile: &Profile,
+    bins: &[String],
+    libs: &[String],
+) -> Result<Vec<TargetGroup>, Error> {
+    let mut groups = std::collections::BTreeMap::new();
+    for name in selected_targets(manifest, bins, libs)? {
+        let decl = &manifest.targets[name];
+        let fuzzing = decl.fuzzer || profile.fuzzer == Some(true);
+        let group = groups.entry(fuzzing).or_insert_with(|| {
+            let mut profile = profile.clone();
+            if fuzzing {
+                profile.fuzzer = Some(true);
+            }
+            TargetGroup {
+                profile,
+                bins: Vec::new(),
+                libs: Vec::new(),
+            }
+        });
+        if decl.kind == TargetKind::Executable {
+            group.bins.push(name.to_owned());
+        } else {
+            group.libs.push(name.to_owned());
+        }
+    }
+    if groups.is_empty() {
+        groups.insert(
+            profile.fuzzer == Some(true),
+            TargetGroup {
+                profile: profile.clone(),
+                bins: Vec::new(),
+                libs: Vec::new(),
+            },
+        );
+    }
+    Ok(groups.into_values().collect())
+}
+
+fn selected_targets<'a>(
+    manifest: &'a crate::manifest::Manifest,
+    bins: &'a [String],
+    libs: &'a [String],
+) -> Result<Vec<&'a str>, Error> {
+    Ok(if bins.is_empty() && libs.is_empty() {
+        manifest.targets.keys().map(String::as_str).collect()
+    } else {
+        for name in bins {
+            check_selected_bin(manifest, name)?;
+        }
+        for name in libs {
+            check_selected_library(manifest, name)?;
+        }
+        bins.iter().chain(libs).map(String::as_str).collect()
+    })
+}
+
 /// Build the selected targets, reusing whatever the record proves current.
 /// The stale ones compile on the process pool — independent `rrc` processes
 /// over the same baked runtime, at most `-j` of them at once — and are
@@ -104,21 +175,7 @@ pub async fn build(
     execution: &Execution<'_>,
 ) -> Result<Vec<Product>, Error> {
     let manifest = &loaded.manifest;
-    let selected: Vec<&str> = if opts.bins.is_empty() && opts.libs.is_empty() {
-        manifest.targets.keys().map(String::as_str).collect()
-    } else {
-        for name in &opts.bins {
-            check_selected_bin(manifest, name)?;
-        }
-        for name in &opts.libs {
-            check_selected_library(manifest, name)?;
-        }
-        opts.bins
-            .iter()
-            .chain(&opts.libs)
-            .map(String::as_str)
-            .collect()
-    };
+    let selected = selected_targets(manifest, &opts.bins, &opts.libs)?;
 
     let out_dir = dir.root().join(&opts.profile_name);
     std::fs::create_dir_all(&out_dir).map_err(|source| Error::file("create", &out_dir, source))?;
@@ -519,6 +576,10 @@ pub(crate) fn fingerprint(
     hasher.update(deps::config_hash(&loaded.dump).as_bytes());
     hasher.update(opts.profile_name.as_bytes());
     hasher.update(opts.target.as_bytes());
+    for flag in profile_flags(&opts.profile, &opts.target, TargetKind::Staticlib, None) {
+        hasher.update(flag.as_bytes());
+        hasher.update(&[0]);
+    }
     for file in files {
         hasher.update(file.path.as_bytes());
         hasher.update(&file.record.hash);

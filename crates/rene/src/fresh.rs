@@ -158,7 +158,7 @@ fn within(path: &Path, dir: &Path) -> bool {
 /// execution time (when the cone is final) the answer is exact.
 pub fn node_state(graph: &Graph, name: &str, ctx: &Context<'_>) -> Result<State, Error> {
     let bake = recorded_bake(ctx.dir, ctx.target)?;
-    let deps_dir = ctx.build_dir.join(ctx.profile_name).join("deps");
+    let deps_dir = plan::dependency_dir(ctx.build_dir, ctx.profile_name, ctx.profile);
     if name == graph.root {
         root_state(graph, ctx, bake.as_ref())
     } else {
@@ -168,7 +168,7 @@ pub fn node_state(graph: &Graph, name: &str, ctx: &Context<'_>) -> Result<State,
 
 /// The freshness of every node of the graph, keyed by package name.
 pub fn states(graph: &Graph, ctx: &Context<'_>) -> Result<BTreeMap<String, State>, Error> {
-    let deps_dir = ctx.build_dir.join(ctx.profile_name).join("deps");
+    let deps_dir = plan::dependency_dir(ctx.build_dir, ctx.profile_name, ctx.profile);
     let bake = recorded_bake(ctx.dir, ctx.target)?;
     let cones = plan::transitive_deps(graph);
     let mut states: BTreeMap<String, State> = BTreeMap::new();
@@ -210,7 +210,11 @@ fn dep_state(
         return Ok(State::Uninitialized);
     };
     let Some(record) = dir
-        .status(&tables::dep_product_key(ctx.profile_name, name))?
+        .status(&tables::dep_variant_key(
+            ctx.profile_name,
+            name,
+            ctx.profile.fuzzer == Some(true),
+        ))?
         .and_then(|json| serde_json::from_str::<DepRecord>(&json).ok())
     else {
         return Ok(State::Uninitialized);
@@ -290,7 +294,7 @@ fn root_state(
         deps::Staleness::FileChanged { path, .. } => return Ok(State::FileChanged(path)),
     }
     let files = dir.sources()?;
-    let deps_dir = ctx.build_dir.join(ctx.profile_name).join("deps");
+    let deps_dir = plan::dependency_dir(ctx.build_dir, ctx.profile_name, ctx.profile);
     let upstream = graph_upstream_digests(
         graph,
         &deps_dir,
@@ -347,7 +351,7 @@ pub fn record_dep(
 ) -> Result<(), Error> {
     let dir = ctx.dir.ok_or(Error::MissingBuildDirectory)?;
     let node = &graph.nodes[name];
-    let deps_dir = ctx.build_dir.join(ctx.profile_name).join("deps");
+    let deps_dir = plan::dependency_dir(ctx.build_dir, ctx.profile_name, ctx.profile);
     let paths = plan::dependency_artifacts(graph, name, &deps_dir, ctx.target);
     let record = DepRecord {
         config_hash: deps::config_hash(&node.loaded.dump),
@@ -376,7 +380,10 @@ pub fn record_dep(
     let record = serde_json::to_string(&record)?;
     let sources = serde_json::to_string(sources)?;
     dir.set_status(&[
-        (&tables::dep_product_key(ctx.profile_name, name), &record),
+        (
+            &tables::dep_variant_key(ctx.profile_name, name, ctx.profile.fuzzer == Some(true)),
+            &record,
+        ),
         (&tables::dep_sources_key(name), &sources),
     ])
     .map_err(Error::from)
@@ -446,14 +453,19 @@ pub(crate) fn graph_upstream_digests(
 pub fn recorded_artifacts(
     graph: &Graph,
     dir: Option<&BuildDir>,
-    profile: &str,
+    profile_name: &str,
+    profile: &Profile,
     build_dir: &Path,
 ) -> Result<(), Error> {
     let Some(dir) = dir else { return Ok(()) };
-    let deps_dir = build_dir.join(profile).join("deps");
+    let deps_dir = plan::dependency_dir(build_dir, profile_name, profile);
     for (name, node) in &graph.nodes {
         let record = dir
-            .status(&tables::dep_product_key(profile, name))?
+            .status(&tables::dep_variant_key(
+                profile_name,
+                name,
+                profile.fuzzer == Some(true),
+            ))?
             .and_then(|json| serde_json::from_str::<DepRecord>(&json).ok());
         if let Some(record) = record
             && record.rri != deps_dir.join(format!("{name}.rri"))

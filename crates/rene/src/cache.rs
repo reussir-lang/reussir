@@ -99,7 +99,7 @@ impl Request {
         commands: Vec<plan::PlannedCommand>,
         sources: &[deps::SourceFile],
     ) -> Result<Self, Error> {
-        let deps_dir = opts.build_dir.join(opts.profile_name).join("deps");
+        let deps_dir = crate::plan::dependency_dir(opts.build_dir, opts.profile_name, opts.profile);
         let compiler = which::which(deps::resolve_rrc())?;
         let source_root = graph.nodes[name].dir.canonicalize()?;
         let recipe = Recipe {

@@ -7,9 +7,9 @@
 //
 // UNSUPPORTED: windows
 // RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin test_fuzz
-// RUN: %rrc %s -o %t.sancov.ll --emit llvm-ir --package-name std_integration --extern std=%std_rene_build/fuzz/deps/std.rri --extern test=%std_rene_build/fuzz/deps/test.rri --sancov trace-pc-guard
+// RUN: %rrc %s -o %t.sancov.ll --emit llvm-ir --package-name std_integration --extern std=%std_rene_build/fuzz/deps/fuzzer/std.rri --extern test=%std_rene_build/fuzz/deps/fuzzer/test.rri --sancov trace-pc-guard
 // RUN: %FileCheck %s --check-prefix=SANCOV < %t.sancov.ll
-// RUN: %rrc %s -o %t.fuzzer.ll --emit llvm-ir --package-name std_integration --extern std=%std_rene_build/fuzz/deps/std.rri --extern test=%std_rene_build/fuzz/deps/test.rri --fuzzer
+// RUN: %rrc %s -o %t.fuzzer.ll --emit llvm-ir --package-name std_integration --extern std=%std_rene_build/fuzz/deps/fuzzer/std.rri --extern test=%std_rene_build/fuzz/deps/fuzzer/test.rri --fuzzer
 // RUN: %FileCheck %s --check-prefix=FUZZIR < %t.fuzzer.ll
 // RUN: env REUSSIR_FUZZ_FILTER=arithmetic %std_rene_build/fuzz/test_fuzz -runs=64 -seed=12345 -artifact_prefix=%t.
 // RUN: env REUSSIR_FUZZ_FILTER=strings %std_rene_build/fuzz/test_fuzz -runs=64 -seed=12345 -artifact_prefix=%t.
