@@ -1,0 +1,551 @@
+//! Input specifications for test cases and filtered test suites.
+//!
+//! Each test case in a [`TestTree`](test::tree::TestTree) carries a
+//! [`ValueSpec`] describing the wire layout and domain constraints of its
+//! input inside a `Vec<u8>` buffer. Filtering a tree produces a
+//! [`SuiteSpec`] listing the active cases in declaration order together
+//! with their [`ValueSpec`]s.
+//!
+//! A [`ValueSpec`] or [`SuiteSpec`] serves two roles:
+//! 1. **Generation / mutation**: a random generator (or external mutator)
+//!    consumes the spec and produces a `Vec<u8>` conforming to the schema,
+//!    which the runner then feeds back into the test case.
+//! 2. **Serialization**: [`ValueSpec::to_bytes`] / [`ValueSpec::from_bytes`]
+//!    and [`SuiteSpec::to_bytes`] / [`SuiteSpec::from_bytes`] implement a
+//!    complete binary round trip so an external fuzzing harness can load
+//!    the exact specification derived at startup.
+
+import std::collections::cow::vec::Vec;
+import std::collections::pure::list::List;
+import std::format::Display;
+import std::format::Format;
+import std::format::brackets;
+import std::format::call;
+import std::format::comma_list;
+import std::format::join;
+import std::format::parens;
+import std::option::Option;
+import std::random::RandomState;
+import std::random::Rng;
+import std::string::RawString;
+import std::string::String;
+import std::text::Text;
+
+extern "rust" [{
+    use reussir_rt::collections::string::String as RString;
+}];
+
+#[ffi(import)]
+fn raw_f64_to_bits(value: f64) -> u64 [{ value.to_bits() }];
+
+#[ffi(import)]
+fn raw_f64_from_bits(bits: u64) -> f64 [{ f64::from_bits(bits) }];
+
+#[ffi(import)]
+fn raw_f32_to_bits(value: f32) -> u32 [{ value.to_bits() }];
+
+#[ffi(import)]
+fn raw_f32_from_bits(bits: u32) -> f32 [{ f32::from_bits(bits) }];
+
+#[ffi(import)]
+fn raw_format_f64(value: f64) -> RawString [{ RString::from(format!("{value:?}")) }];
+
+#[ffi(import)]
+fn raw_format_f32(value: f32) -> RawString [{ RString::from(format!("{value:?}")) }];
+
+#[ffi(import)]
+fn raw_scalar_to_char(value: u32) -> char [{ char::from_u32(value).unwrap_or('\u{fffd}') }];
+
+#[ffi(import)]
+fn raw_is_valid_scalar(value: u32) -> bool [{ char::from_u32(value).is_some() }];
+
+/// Converts an `f64` to its raw IEEE-754 bits.
+pub fn f64_to_bits(value: f64) -> u64 { raw_f64_to_bits(value) }
+
+/// Reconstructs an `f64` from its raw IEEE-754 bits.
+pub fn f64_from_bits(bits: u64) -> f64 { raw_f64_from_bits(bits) }
+
+/// Converts an `f32` to its raw IEEE-754 bits.
+pub fn f32_to_bits(value: f32) -> u32 { raw_f32_to_bits(value) }
+
+/// Reconstructs an `f32` from its raw IEEE-754 bits.
+pub fn f32_from_bits(bits: u32) -> f32 { raw_f32_from_bits(bits) }
+
+/// Formats an `f64` for diagnostic output.
+pub fn format_f64(value: f64) -> Format {
+    Format::Text { Text::Owned { String::from_raw(raw_format_f64(value)) } }
+}
+
+/// Formats an `f32` for diagnostic output.
+pub fn format_f32(value: f32) -> Format {
+    Format::Text { Text::Owned { String::from_raw(raw_format_f32(value)) } }
+}
+
+/// Bit width of a fixed-size integer domain.
+pub enum [value] IntWidth {
+    I8,
+    I16,
+    I32,
+    I64
+}
+
+impl IntWidth {
+    fn to_tag(self: Self) -> u8 {
+        match self {
+            I8 => 0,
+            I16 => 1,
+            I32 => 2,
+            I64 => 3
+        }
+    }
+
+    fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            0 => Option::Some { IntWidth::I8 },
+            1 => Option::Some { IntWidth::I16 },
+            2 => Option::Some { IntWidth::I32 },
+            3 => Option::Some { IntWidth::I64 },
+            _ => Option::None
+        }
+    }
+
+    /// Minimum signed value representable at this width.
+    pub fn signed_min(self: Self) -> i64 {
+        match self {
+            I8 => -128,
+            I16 => -32768,
+            I32 => -2147483648,
+            I64 => (-9223372036854775807) - 1
+        }
+    }
+
+    /// Maximum signed value representable at this width.
+    pub fn signed_max(self: Self) -> i64 {
+        match self {
+            I8 => 127,
+            I16 => 32767,
+            I32 => 2147483647,
+            I64 => 9223372036854775807
+        }
+    }
+
+    /// Maximum unsigned value representable at this width.
+    pub fn unsigned_max(self: Self) -> u64 {
+        match self {
+            I8 => 255,
+            I16 => 65535,
+            I32 => 4294967295,
+            I64 => 0xffffffffffffffff
+        }
+    }
+}
+
+impl PartialEq for IntWidth {
+    fn eq(self: Self, other: Self) -> bool {
+        self.to_tag() == other.to_tag()
+    }
+}
+
+impl Eq for IntWidth {}
+
+impl Display for IntWidth {
+    fn fmt(self: Self) -> Format {
+        lit(match self {
+            I8 => "8",
+            I16 => "16",
+            I32 => "32",
+            I64 => "64"
+        })
+    }
+}
+
+/// Bit width of an IEEE-754 floating-point domain.
+pub enum [value] FloatWidth {
+    F32,
+    F64
+}
+
+impl FloatWidth {
+    fn to_tag(self: Self) -> u8 {
+        match self {
+            F32 => 0,
+            F64 => 1
+        }
+    }
+
+    fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            0 => Option::Some { FloatWidth::F32 },
+            1 => Option::Some { FloatWidth::F64 },
+            _ => Option::None
+        }
+    }
+}
+
+impl PartialEq for FloatWidth {
+    fn eq(self: Self, other: Self) -> bool {
+        self.to_tag() == other.to_tag()
+    }
+}
+
+impl Eq for FloatWidth {}
+
+impl Display for FloatWidth {
+    fn fmt(self: Self) -> Format {
+        lit(match self {
+            F32 => "f32",
+            F64 => "f64"
+        })
+    }
+}
+
+/// Character class constraint for character and string domains.
+pub enum [value] Charset {
+    /// Any ASCII byte (`0x00..=0x7F`).
+    Ascii,
+    /// Printable ASCII characters (`0x20..=0x7E`, space through `~`).
+    AsciiPrintable,
+    /// ASCII letters and digits (`A-Z`, `a-z`, `0-9`).
+    Alphanumeric,
+    /// ASCII letters (`A-Z`, `a-z`).
+    Alpha,
+    /// ASCII decimal digits (`0-9`).
+    Digits,
+    /// ASCII identifier characters (`A-Z`, `a-z`, `0-9`, `_`).
+    Identifier,
+    /// Arbitrary valid Unicode scalar values.
+    Utf8
+}
+
+impl Charset {
+    fn to_tag(self: Self) -> u8 {
+        match self {
+            Ascii => 0,
+            AsciiPrintable => 1,
+            Alphanumeric => 2,
+            Alpha => 3,
+            Digits => 4,
+            Identifier => 5,
+            Utf8 => 6
+        }
+    }
+
+    fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            0 => Option::Some { Charset::Ascii },
+            1 => Option::Some { Charset::AsciiPrintable },
+            2 => Option::Some { Charset::Alphanumeric },
+            3 => Option::Some { Charset::Alpha },
+            4 => Option::Some { Charset::Digits },
+            5 => Option::Some { Charset::Identifier },
+            6 => Option::Some { Charset::Utf8 },
+            _ => Option::None
+        }
+    }
+
+    /// Whether `ch` belongs to this character set.
+    pub fn contains(self: Self, ch: char) -> bool {
+        let code = ch as u32;
+        match self {
+            Ascii => code <= 127,
+            AsciiPrintable => code >= 32 && code <= 126,
+            Alphanumeric => is_digit(code) || is_alpha(code),
+            Alpha => is_alpha(code),
+            Digits => is_digit(code),
+            Identifier => is_digit(code) || is_alpha(code) || code == 95,
+            Utf8 => true
+        }
+    }
+
+    /// Maps an arbitrary `u64` word into a character of this set.
+    pub fn map_word(self: Self, word: u64) -> char {
+        match self {
+            Ascii => raw_scalar_to_char((word % 128) as u32),
+            AsciiPrintable => raw_scalar_to_char((32 + (word % 95)) as u32),
+            Digits => raw_scalar_to_char((48 + (word % 10)) as u32),
+            Alpha => {
+                let idx = (word % 52) as u32;
+                if idx < 26 {
+                    raw_scalar_to_char(65 + idx)
+                } else {
+                    raw_scalar_to_char(97 + (idx - 26))
+                }
+            },
+            Alphanumeric => {
+                let idx = (word % 62) as u32;
+                if idx < 10 {
+                    raw_scalar_to_char(48 + idx)
+                } else { if idx < 36 {
+                    raw_scalar_to_char(65 + (idx - 10))
+                } else {
+                    raw_scalar_to_char(97 + (idx - 36))
+                } }
+            },
+            Identifier => {
+                let idx = (word % 63) as u32;
+                if idx < 10 {
+                    raw_scalar_to_char(48 + idx)
+                } else { if idx < 36 {
+                    raw_scalar_to_char(65 + (idx - 10))
+                } else { if idx < 62 {
+                    raw_scalar_to_char(97 + (idx - 36))
+                } else {
+                    '_'
+                } } }
+            },
+            Utf8 => {
+                // 0..=0x10ffff excluding surrogates 0xd800..=0xdfff (2048 values)
+                // Total valid scalars = 1_112_064.
+                let mode = word & 3;
+                if mode < 2 {
+                    raw_scalar_to_char((32 + ((word >> 2) % 95)) as u32)
+                } else {
+                    let raw = ((word >> 2) % 1112064) as u32;
+                    let code = if raw >= 55296 { raw + 2048 } else { raw };
+                    raw_scalar_to_char(code)
+                }
+            }
+        }
+    }
+}
+
+fn is_digit(code: u32) -> bool { code >= 48 && code <= 57 }
+fn is_alpha(code: u32) -> bool { (code >= 65 && code <= 90) || (code >= 97 && code <= 122) }
+
+impl PartialEq for Charset {
+    fn eq(self: Self, other: Self) -> bool {
+        self.to_tag() == other.to_tag()
+    }
+}
+
+impl Eq for Charset {}
+
+impl Display for Charset {
+    fn fmt(self: Self) -> Format {
+        lit(match self {
+            Ascii => "ascii",
+            AsciiPrintable => "printable",
+            Alphanumeric => "alphanumeric",
+            Alpha => "alpha",
+            Digits => "digits",
+            Identifier => "identifier",
+            Utf8 => "utf8"
+        })
+    }
+}
+
+/// Non-allocating cursor over a `Vec<u8>`.
+pub struct [value] ByteCursor {
+    bytes: Vec<u8>,
+    offset: u64
+}
+
+impl ByteCursor {
+    /// Starts a cursor at the beginning of `bytes`.
+    pub fn new(bytes: Vec<u8>) -> Self {
+        ByteCursor { bytes: bytes, offset: 0 }
+    }
+
+    /// Number of unread bytes remaining.
+    pub fn remaining(self: Self) -> u64 {
+        let len = self.bytes.len();
+        if self.offset >= len { 0 } else { len - self.offset }
+    }
+
+    /// Whether all bytes have been consumed.
+    pub fn is_eof(self: Self) -> bool {
+        self.offset >= self.bytes.len()
+    }
+
+    /// Copies the remaining unread bytes into a fresh `Vec<u8>`.
+    pub fn slice_remaining(self: Self) -> Vec<u8> {
+        let len = self.bytes.len();
+        let (_, out) = while [i = self.offset, out = Vec::new()] (i < len) {
+            (i + 1, out.push(self.bytes.get(i).unwrap_or(0)))
+        };
+        out
+    }
+
+    /// Reads one byte.
+    pub fn read_u8(self: Self) -> Option<(u8, Self)> {
+        if self.offset >= self.bytes.len() {
+            Option::None
+        } else {
+            let b = self.bytes.get(self.offset).unwrap_or(0);
+            Option::Some { (b, ByteCursor { bytes: self.bytes, offset: self.offset + 1 }) }
+        }
+    }
+
+    /// Reads a 16-bit little-endian unsigned integer.
+    pub fn read_u16_le(self: Self) -> Option<(u16, Self)> {
+        if self.remaining() < 2 {
+            Option::None
+        } else {
+            let b0 = self.bytes.get(self.offset).unwrap_or(0) as u16;
+            let b1 = self.bytes.get(self.offset + 1).unwrap_or(0) as u16;
+            Option::Some { (b0 | (b1 << 8), ByteCursor { bytes: self.bytes, offset: self.offset + 2 }) }
+        }
+    }
+
+    /// Reads a 32-bit little-endian unsigned integer.
+    pub fn read_u32_le(self: Self) -> Option<(u32, Self)> {
+        if self.remaining() < 4 {
+            Option::None
+        } else {
+            let b0 = self.bytes.get(self.offset).unwrap_or(0) as u32;
+            let b1 = self.bytes.get(self.offset + 1).unwrap_or(0) as u32;
+            let b2 = self.bytes.get(self.offset + 2).unwrap_or(0) as u32;
+            let b3 = self.bytes.get(self.offset + 3).unwrap_or(0) as u32;
+            let value = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+            Option::Some { (value, ByteCursor { bytes: self.bytes, offset: self.offset + 4 }) }
+        }
+    }
+
+    /// Reads a 64-bit little-endian unsigned integer.
+    pub fn read_u64_le(self: Self) -> Option<(u64, Self)> {
+        if self.remaining() < 8 {
+            Option::None
+        } else {
+            let (_, value) = while [i = (0 as u64), acc = (0 as u64)] (i < 8) {
+                let b = self.bytes.get(self.offset + i).unwrap_or(0) as u64;
+                (i + 1, acc | (b << (i * 8)))
+            };
+            Option::Some { (value, ByteCursor { bytes: self.bytes, offset: self.offset + 8 }) }
+        }
+    }
+
+    /// Reads a length-prefixed UTF-8 string and validates that every byte
+    /// sequence is well-formed UTF-8.
+    fn read_exact_utf8(self: Self, acc: List<Text>) -> Option<(List<Text>, Self)> {
+        match self.read_u64_le() {
+            None => Option::None,
+            Some(len_and_c) => {
+                let (byte_len, c1) = len_and_c;
+                if c1.remaining() < byte_len {
+                    Option::None
+                } else {
+                    match decode_utf8_range(c1.bytes, c1.offset, c1.offset + byte_len, String::new()) {
+                        None => Option::None,
+                        Some(s) => Option::Some { (
+                            List::Cons { Text::from_string(s), acc },
+                            ByteCursor { bytes: c1.bytes, offset: c1.offset + byte_len }
+                        ) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Decodes a UTF-8 byte slice `start..end` in `bytes` into a `String`,
+/// returning `None` on malformed UTF-8.
+pub fn decode_utf8_range(bytes: Vec<u8>, start: u64, end: u64, out: String) -> Option<String> {
+    let (pos, result, ok) = while [i = start, s = out, valid = true] (i < end && valid) {
+        let first = bytes.get(i).unwrap_or(0) as u32;
+        if first < 128 {
+            (i + 1, s.push_char(raw_scalar_to_char(first)), true)
+        } else {
+            let (count, init, min_scalar) =
+                if first >= 194 && first <= 223 { ((2 as u64), first - 192, (128 as u32)) }
+                else { if first >= 224 && first <= 239 { ((3 as u64), first - 224, (2048 as u32)) }
+                else { if first >= 240 && first <= 244 { ((4 as u64), first - 240, (65536 as u32)) }
+                else { ((0 as u64), (0 as u32), (0 as u32)) } } };
+            if count == 0 || i + count > end {
+                (i, s, false)
+            } else {
+                let (_, scalar, cont_ok) = while [k = (1 as u64), val = init, ok = true] (k < count && ok) {
+                    let b = bytes.get(i + k).unwrap_or(0) as u32;
+                    (k + 1, (val << 6) | (b & 63), b >= 128 && b <= 191)
+                };
+                if !cont_ok || scalar < min_scalar || !raw_is_valid_scalar(scalar) {
+                    (i, s, false)
+                } else {
+                    (i + count, s.push_char(raw_scalar_to_char(scalar)), true)
+                }
+            }
+        }
+    };
+    if ok && pos == end { Option::Some { result } } else { Option::None }
+}
+
+/// Creates an empty `Vec<u8>`.
+pub fn empty_bytes() -> Vec<u8> {
+    Vec::new()
+}
+
+/// Appends one byte to `out`.
+pub fn write_u8(out: Vec<u8>, value: u8) -> Vec<u8> {
+    out.push(value)
+}
+
+/// Appends a 16-bit unsigned integer in little-endian order.
+pub fn write_u16_le(out: Vec<u8>, value: u16) -> Vec<u8> {
+    out.push((value & 255) as u8).push(((value >> 8) & 255) as u8)
+}
+
+/// Appends a 32-bit unsigned integer in little-endian order.
+pub fn write_u32_le(out: Vec<u8>, value: u32) -> Vec<u8> {
+    out.push((value & 255) as u8)
+        .push(((value >> 8) & 255) as u8)
+        .push(((value >> 16) & 255) as u8)
+        .push(((value >> 24) & 255) as u8)
+}
+
+/// Appends a 64-bit unsigned integer in little-endian order.
+pub fn write_u64_le(out: Vec<u8>, value: u64) -> Vec<u8> {
+    let (_, buf) = while [i = (0 as u64), buf = out] (i < 8) {
+        (i + 1, buf.push(((value >> (i * 8)) & 255) as u8))
+    };
+    buf
+}
+
+fn write_int_le(out: Vec<u8>, width: IntWidth, value: i64) -> Vec<u8> {
+    match width {
+        I8 => write_u8(out, (value as i8) as u8),
+        I16 => write_u16_le(out, (value as i16) as u16),
+        I32 => write_u32_le(out, (value as i32) as u32),
+        I64 => write_u64_le(out, value as u64)
+    }
+}
+
+fn write_uint_le(out: Vec<u8>, width: IntWidth, value: u64) -> Vec<u8> {
+    match width {
+        I8 => write_u8(out, value as u8),
+        I16 => write_u16_le(out, value as u16),
+        I32 => write_u32_le(out, value as u32),
+        I64 => write_u64_le(out, value)
+    }
+}
+
+fn write_string_bytes(out: Vec<u8>, text: Text) -> Vec<u8> {
+    let n = text.len();
+    let out = write_u64_le(out, n);
+    let (_, out) = while [i = (0 as u64), buf = out] (i < n) {
+        (i + 1, buf.push(text.byte_at(i)))
+    };
+    out
+}
+
+fn write_magic(out: Vec<u8>, b0: u8, b1: u8, b2: u8, b3: u8) -> Vec<u8> {
+    out.push(b0).push(b1).push(b2).push(b3)
+}
+
+fn read_magic(cursor: ByteCursor, b0: u8, b1: u8, b2: u8, b3: u8) -> Option<ByteCursor> {
+    if cursor.remaining() < 4 {
+        Option::None
+    } else {
+        let ok = cursor.bytes.get(cursor.offset).unwrap_or(0) == b0
+            && cursor.bytes.get(cursor.offset + 1).unwrap_or(0) == b1
+            && cursor.bytes.get(cursor.offset + 2).unwrap_or(0) == b2
+            && cursor.bytes.get(cursor.offset + 3).unwrap_or(0) == b3;
+        if ok {
+            Option::Some { ByteCursor { bytes: cursor.bytes, offset: cursor.offset + 4 } }
+        } else {
+            Option::None
+        }
+    }
+}
+
+fn lit(s: str) -> Format {
+    Format::Text { Text::from_str(s) }
+}
