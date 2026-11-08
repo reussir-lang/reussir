@@ -296,9 +296,9 @@ impl TestTree {
     pub fn prepare(self: Self) -> PreparedSuite {
         let (cases, specs) = self.fold(
             (Vec::new(), List::Nil),
-            |state: (Vec<(List<Text>, Case)>, List<CaseSpec>), path: List<Text>, test: Case| {
+            |state: (Vec<PreparedCase>, List<CaseSpec>), path: List<Text>, test: Case| {
                 let (cases, specs) = state;
-                (cases.push((path, test)),
+                (cases.push(PreparedCase { path: path, test: test }),
                     List::Cons { CaseSpec { path: path, input: test.spec() }, specs })
             }
         );
@@ -312,9 +312,15 @@ impl TestTree {
     }
 }
 
+/// One entry in the prepared dispatch index.
+pub struct PreparedCase {
+    path: List<Text>,
+    test: Case
+}
+
 /// Cases and paths indexed in the same declaration order as their specification.
 pub struct PreparedSuite {
-    cases: Vec<(List<Text>, Case)>,
+    cases: Vec<PreparedCase>,
     spec: SuiteSpec
 }
 
@@ -333,10 +339,7 @@ impl PreparedSuite {
             ByteCursor::new(bytes).read_u64_le().and_then(|index_and_cursor: (u64, ByteCursor)| {
                 let (raw_index, cursor) = index_and_cursor;
                 self.cases.get(project_u64(raw_index, 0, total - 1))
-                    .map(|entry: (List<Text>, Case)| {
-                        let (path, test) = entry;
-                        (path, test.run_cursor(cursor))
-                    })
+                    .map(|entry: PreparedCase| (entry.path, entry.test.run_cursor(cursor)))
             })
         }
     }
