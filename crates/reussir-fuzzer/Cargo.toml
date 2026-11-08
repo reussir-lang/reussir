@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 libfuzzer-sys.workspace = true
 mutatis.workspace = true
+thiserror.workspace = true
 winnow.workspace = true
 
 [lib]

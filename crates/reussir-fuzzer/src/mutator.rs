@@ -700,40 +700,69 @@ impl SuiteSpec {
         raw_mutate: Option<RawMutateFn>,
         indices: &[usize],
     ) -> usize {
-        if indices.is_empty() || max_size == 0 {
+        let limit = max_size.min(data.len());
+        if self.cases.is_empty() || indices.is_empty() || limit < 8 {
             return 0;
         }
-
-        let mut session = Session::new().seed(u64::from(seed)).shrink(max_size < size);
-        let mut suite_mutator = SelectedSuiteMutator {
-            suite: self,
-            indices,
+        let mut session = Session::new().seed(u64::from(seed));
+        let previous = data.get(..size.min(data.len())).and_then(|bytes| {
+            let raw = u64::from_le_bytes(bytes.get(..8)?.try_into().ok()?);
+            let index = (raw as usize) % self.cases.len();
+            indices.contains(&index).then_some(index)
+        });
+        let switch = session.generate::<bool>().unwrap_or(false);
+        let case_idx = match previous {
+            Some(index) if !switch => index,
+            _ => {
+                let pick = session
+                    .generate_with(&mut m::mrange(0..=indices.len() - 1))
+                    .unwrap_or(0);
+                indices[pick]
+            }
         };
-
-        let new_bytes = match self.decode_input(&data[..size.min(data.len())]) {
-            Some(mut input) => match session.mutate_with(&mut suite_mutator, &mut input) {
-                Ok(()) => input.to_bytes(),
-                Err(_) => {
-                    if let Some(fuzzer_mutate) = raw_mutate {
-                        return fuzzer_mutate(data, size, max_size);
+        let Some(case) = self.cases.get(case_idx) else {
+            return 0;
+        };
+        let Some(bounded) = case.input.within_budget(limit - 8) else {
+            return 0;
+        };
+        let decoded = if !switch && previous == Some(case_idx) {
+            let mut cursor = &data[8..size.min(data.len())];
+            bounded.decode_value(&mut cursor)
+        } else {
+            None
+        };
+        let value = match decoded {
+            Some(mut value) => {
+                if session
+                    .mutate_with(&mut SpecMutator(&bounded), &mut value)
+                    .is_err()
+                    && let Some(raw_mutate) = raw_mutate
+                {
+                    let next = raw_mutate(data, size.min(limit), limit).min(limit);
+                    let mut cursor = data.get(8..next).unwrap_or(&[]);
+                    if let Some(raw_value) = bounded.decode_value(&mut cursor) {
+                        value = raw_value;
                     }
-                    input.to_bytes()
                 }
-            },
-            None => match session.generate_with(&mut suite_mutator) {
-                Ok(generated) => generated.to_bytes(),
-                Err(_) => {
-                    if let Some(fuzzer_mutate) = raw_mutate {
-                        return fuzzer_mutate(data, size, max_size);
-                    }
-                    return 0;
-                }
+                value
+            }
+            None => match crate::budget::generate(&case.input, limit - 8, &mut session) {
+                Ok(value) => value,
+                Err(_) => return 0,
             },
         };
-
-        let new_size = std::cmp::min(max_size, new_bytes.len()).min(data.len());
-        data[..new_size].copy_from_slice(&new_bytes[..new_size]);
-        new_size
+        let mut payload = value.to_bytes();
+        if payload.len() > limit - 8 {
+            payload = match crate::budget::generate(&case.input, limit - 8, &mut session) {
+                Ok(value) => value.to_bytes(),
+                Err(_) => return 0,
+            };
+        }
+        debug_assert!(payload.len() <= limit - 8);
+        data[..8].copy_from_slice(&(case_idx as u64).to_le_bytes());
+        data[8..8 + payload.len()].copy_from_slice(&payload);
+        8 + payload.len()
     }
 }
 
