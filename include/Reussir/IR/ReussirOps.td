@@ -579,10 +579,8 @@ def ReussirRcDecOp
       "mlir::Value":$rcPtr,
       CArg<"mlir::IntegerAttr", "{}">:$destructureTag,
       CArg<"mlir::DenseI64ArrayAttr", "{}">:$boundMembers), [{
-    auto ffi = llvm::dyn_cast<reussir::FFIObjectType>(
-        llvm::cast<reussir::RcType>(rcPtr.getType()).getElementType());
     build($_builder, $_state, nullableToken, rcPtr, destructureTag, boundMembers,
-          ffi ? $_builder.getArrayAttr({ffi.getCleanupHook()}) : mlir::ArrayAttr{});
+          collectCleanupHooks($_builder, rcPtr.getType()));
   }]>];
 
   let hasVerifier = 1;
@@ -1858,7 +1856,8 @@ def ReussirRefStoreOp : ReussirReferenceOp<"store", []> {
 
 def ReussirRefDropOp
     : ReussirReferenceOp<"drop",
-                         [MemoryEffects<[MemRead, MemWrite, MemFree]>]> {
+                         [DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+                          MemoryEffects<[MemRead, MemWrite, MemFree]>]> {
   let summary = "Drop a reference";
   let description = [{
     `reussir.ref.drop` destructs the element behind the reference in place.
@@ -1871,9 +1870,12 @@ def ReussirRefDropOp
 
     When variant is specified, the inner element must be a variant record type and
     the index must be inbound.
+
+    `cleanup(@hook, ...)` declares the FFI hooks reachable through this drop.
   }];
   let arguments = (ins Arg<ReussirRefType, "reference to drop">:$ref,
-      UnitAttr:$inlined, OptionalAttr<IndexAttr>:$variant);
+      UnitAttr:$inlined, OptionalAttr<IndexAttr>:$variant,
+      OptionalAttr<FlatSymbolRefArrayAttr>:$cleanup);
 
   let assemblyFormat = [{
     `(` $ref `:` qualified(type($ref)) `)` 
@@ -1881,11 +1883,14 @@ def ReussirRefDropOp
       `inlined` $inlined  | 
       `variant` `[` $variant `]`
     )
-    attr-dict
+    custom<Cleanup>($cleanup) attr-dict
   }];
 
-  let builders = [OpBuilder<(ins "mlir::Value":$ref), [{
-      return build($_builder, $_state, ref, false, nullptr);
+  let builders = [OpBuilder<(ins "mlir::Value":$ref,
+      CArg<"bool", "false">:$inlined,
+      CArg<"mlir::IntegerAttr", "{}">:$variant), [{
+      return build($_builder, $_state, ref, inlined, variant,
+                   collectCleanupHooks($_builder, ref.getType()));
     }]>];
 
   let hasVerifier = 1;

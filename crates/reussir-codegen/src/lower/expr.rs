@@ -3349,6 +3349,19 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         }
     }
 
+    fn cleanup_attr(&self, ty: Ty<'tcx>) -> Option<ArrayAttribute<'c>> {
+        let hooks = self.tys.cleanup_hooks(ty);
+        if hooks.is_empty() {
+            return None;
+        }
+        let hooks: Vec<Attribute<'c>> = hooks
+            .iter()
+            .copied()
+            .map(|hook| FlatSymbolRefAttribute::new(self.context, self.program.symbol(hook)).into())
+            .collect();
+        Some(ArrayAttribute::new(self.context, &hooks))
+    }
+
     fn build_rc_dec(
         &self,
         value: Value<'c, '_>,
@@ -3357,16 +3370,22 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
     ) -> Operation<'c> {
         let mut builder =
             dialect::ReussirRcDecOperation::builder(self.context, location).rc_ptr(value);
-        let hooks = self.tys.cleanup_hooks(ty);
-        if !hooks.is_empty() {
-            let hooks: Vec<Attribute<'c>> = hooks
-                .iter()
-                .copied()
-                .map(|hook| {
-                    FlatSymbolRefAttribute::new(self.context, self.program.symbol(hook)).into()
-                })
-                .collect();
-            builder = builder.cleanup(ArrayAttribute::new(self.context, &hooks));
+        if let Some(cleanup) = self.cleanup_attr(ty) {
+            builder = builder.cleanup(cleanup);
+        }
+        builder.build().into()
+    }
+
+    fn build_ref_drop(
+        &self,
+        reference: Value<'c, '_>,
+        ty: Ty<'tcx>,
+        location: Location<'c>,
+    ) -> Operation<'c> {
+        let mut builder =
+            dialect::ReussirRefDropOperation::builder(self.context, location).r#ref(reference);
+        if let Some(cleanup) = self.cleanup_attr(ty) {
+            builder = builder.cleanup(cleanup);
         }
         builder.build().into()
     }
@@ -3388,7 +3407,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             Ok(())
         } else if matches!(ty.kind(), TyKind::Record { .. } | TyKind::Tuple(_)) {
             let reference = self.spill(block, val, ty)?;
-            block.append_operation(dialect::ref_drop(self.context, reference, loc).into());
+            block.append_operation(self.build_ref_drop(reference, ty, loc));
             Ok(())
         } else if let TyKind::Nullable(inner) = *ty.kind() {
             self.emit_rc_nullable(block, val, inner, false)

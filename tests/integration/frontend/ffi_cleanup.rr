@@ -9,10 +9,13 @@ pub struct Vec<T>;
 
 pub struct Pair(Vec<u64>, Vec<f64>, Vec<u64>)
 pub enum Chain { Link(Pair, Chain), End }
+pub enum [value] Outcome { Pass, Fail(Vec<i32>) }
 
-pub fn discard(chain: Chain) {}
+pub fn discard(chain: Chain, outcome: Outcome) {}
 extern "C" trampoline "discard_chain" = discard;
 
 // CHECK: reussir.rc.dec{{.*}}cleanup(@{{[^, )]+}}, @{{[^, )]+}})
+// CHECK: reussir.ref.drop{{.*}}cleanup(@_RIC3VeclE_ffi_drop)
 // CHECK-DAG: func.func private @_RIC3VecyE_ffi_drop(
 // CHECK-DAG: func.func private @_RIC3VecdE_ffi_drop(
+// CHECK-DAG: func.func private @_RIC3VeclE_ffi_drop(

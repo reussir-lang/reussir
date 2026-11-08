@@ -20,14 +20,18 @@ module {
 
 // CHECK: func.func private @first(
 // CHECK: func.func private @second(
+// CHECK: func.func private @third(
 // CHECK-LABEL: func.func @record_drop(
 // CHECK: reussir.rc.dec{{.*}}cleanup(@first, @second)
+// CHECK: reussir.ref.drop{{.*}}cleanup(@third)
 module {
   func.func private @first(!reussir.rc<!reussir.ffi_object<"A", @first>>)
   func.func private @second(!reussir.rc<!reussir.ffi_object<"B", @second>>)
-  func.func @record_drop(%raw: i64) {
+  func.func private @third(!reussir.rc<!reussir.ffi_object<"C", @third>>)
+  func.func @record_drop(%raw: i64, %ref: !reussir.ref<!reussir.record<compound "Inline" [value] {!reussir.rc<!reussir.ffi_object<"C", @third>>}>>) {
     %x = builtin.unrealized_conversion_cast %raw : i64 to !reussir.rc<!reussir.record<compound "Pair" {!reussir.rc<!reussir.ffi_object<"A", @first>>, !reussir.rc<!reussir.ffi_object<"B", @second>>}>>
     reussir.rc.dec(%x : !reussir.rc<!reussir.record<compound "Pair" {!reussir.rc<!reussir.ffi_object<"A", @first>>, !reussir.rc<!reussir.ffi_object<"B", @second>>}>>) cleanup(@first, @second)
+    reussir.ref.drop(%ref : !reussir.ref<!reussir.record<compound "Inline" [value] {!reussir.rc<!reussir.ffi_object<"C", @third>>}>>) cleanup(@third)
     return
   }
 }
