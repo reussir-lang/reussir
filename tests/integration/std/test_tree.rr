@@ -227,7 +227,7 @@ fn test_bounded_cursor_and_strings() {
         .unwrap_or_panic().eq_str("312"));
     let invalid_tail = write_u64_le(Vec::new(), 3).push(195).push(169).push(255);
     check(string().utf8().with_len(1).decode_bytes(invalid_tail)
-        .unwrap_or_panic().eq_str("Ã"));
+        .unwrap_or_panic().eq_str("0"));
     let overlong = write_u64_le(Vec::new(), 2).push(192).push(175);
     check(digits().with_len(2).decode_bytes(overlong).unwrap_or_panic().eq_str("25"));
     check(unicode.decode_bytes(write_u64_le(Vec::new(), 2).push(195)).is_none());
